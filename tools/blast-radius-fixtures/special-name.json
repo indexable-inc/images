@@ -1,0 +1,4 @@
+{"base":"aaaaaaa","head":"bbbbbbb","total":120,
+ "changed":["rust-test-foo","rust-test-bar"],"added":[],"removed":[],
+ "causes":[{"name":"e67caa006c75181b45b761cd50294cb3c8e18f1a.patch?full_index=1","checks":["rust-test-foo","rust-test-bar"]}],
+ "timings":{},"phaseTimings":{"total":1.0}}

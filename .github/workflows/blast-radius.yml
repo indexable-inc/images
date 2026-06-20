@@ -1,24 +1,37 @@
 name: Blast radius
 
 on:
-  # Disabled on PRs: the per-PR full-catalog eval (~57s "Report blast radius"
-  # step) claims a shared `ix-ci` runner from the one dispatcher pool that
-  # serves the whole team, so every PR queued one more eval-only runner and
-  # slowed the queue. The report is informational (a sticky PR comment), never
-  # a merge gate, so dropping the auto-trigger costs no safety. Re-enable by
-  # uncommenting the `pull_request` block below. `workflow_dispatch` only keeps
-  # `on:` non-empty (the jobs are PR-context gated, so a manual run no-ops).
+  # Opt-in per PR, not on every push. Auto-running on every PR meant the per-PR
+  # full-catalog eval (~57s "Report blast radius" step) claimed a shared `ix-ci`
+  # runner from the one dispatcher pool that serves the whole team, queuing an
+  # eval-only runner each push and slowing the queue (#1384). But fully disabling
+  # it left the report unreachable, so the sticky comment "came up empty" on
+  # every PR. The middle ground: run only when a maintainer adds the
+  # `blast-radius` label. Once labeled, each later push (`synchronize`) and
+  # reopen refreshes the comment. The job `if:` gates EVERY event on the label,
+  # so adding any other label (or pushing to an unlabeled PR) skips `evaluate`
+  # and claims no runner. `workflow_dispatch` is kept for manual reruns (it
+  # no-ops without PR context).
   workflow_dispatch: {}
-  # pull_request:
-  #   branches:
-  #     - main
+  pull_request:
+    types: [labeled, synchronize, reopened]
+    branches:
+      - main
 
 permissions:
   contents: read
 
 concurrency:
   group: blast-radius-${{ github.ref }}
-  cancel-in-progress: true
+  # Only cancel an in-flight run when the new event will itself run an eval: a
+  # push (`synchronize`)/`reopened`, a `workflow_dispatch`, or the `blast-radius`
+  # label being added. An unrelated `labeled` event skips `evaluate` (see the job
+  # `if:`), but concurrency cancellation applies at the workflow level BEFORE any
+  # job `if:`, so an unconditional `cancel-in-progress` would let adding any label
+  # kill an opted-in PR's running eval and leave the sticky comment unrefreshed.
+  # Gating the cancel on the same condition keeps unrelated label events from
+  # interrupting a real run.
+  cancel-in-progress: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'blast-radius' }}
 
 env:
   # The self-hosted runner's Nix daemon owns substituters; the job only sets
@@ -41,10 +54,22 @@ jobs:
   # token-backed step. The report leaves this job only as an artifact (plain
   # data) for the comment job.
   evaluate:
-    # Same-repository, non-Dependabot PRs only (mirroring ai-review-gate.yml).
+    # Same-repository, non-Dependabot PRs only (mirroring ai-review-gate.yml),
+    # and only when the PR carries the `blast-radius` label (the opt-in gate; see
+    # `on:` above). `contains` covers the steady state for every event while the
+    # label remains. The final clause keeps a `labeled` event from running the
+    # expensive eval when the label being added is something *other* than
+    # `blast-radius`: without it, labelling an already opted-in PR with any
+    # unrelated label would re-claim the self-hosted runner and undercut the
+    # opt-in. `synchronize`/`reopened` (action != 'labeled') still refresh the
+    # comment via the `contains` check alone. The `comment` job has
+    # `needs: evaluate`, so it is skipped too whenever this gate is false.
     if: >-
+      github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.user.login != 'dependabot[bot]'
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      contains(github.event.pull_request.labels.*.name, 'blast-radius') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'blast-radius')
     # Same self-hosted dispatcher as check.yml: the `ix-ci-run-*` label is
     # claimed by the org dispatcher, which mints an ephemeral runner with a warm
     # /nix/store. Evaluating .#ciChecks.x86_64-linux forces an x86_64-linux IFD
@@ -125,6 +150,12 @@ jobs:
   # PR cannot influence.
   comment:
     needs: evaluate
+    # Run even when `evaluate` failed (a base/head eval error, often base-side and
+    # unrelated to this PR), so the PR never silently ends up with no blast-radius
+    # comment. `!cancelled()` covers success and failure but not a concurrency
+    # cancel; `result != 'skipped'` keeps it off the unlabeled / fork / Dependabot
+    # case, where `evaluate` itself was skipped (nothing to report).
+    if: ${{ !cancelled() && needs.evaluate.result != 'skipped' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -134,7 +165,12 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      # Only present when `evaluate` succeeded (the upload step is `if: success()`).
+      # continue-on-error so a missing artifact after a failed eval drops through
+      # to the fallback step below instead of failing the job.
       - name: Download report
+        if: ${{ needs.evaluate.result == 'success' }}
+        continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: blast-radius-${{ github.run_id }}
@@ -146,14 +182,30 @@ jobs:
       # Fail closed: require the full schema before rendering. Every field is
       # type-checked, SHAs must be hex, and the `and` chain short-circuits so a
       # non-array `.changed` never reaches the `+`/`test` that would error.
+      #
+      # `&& success()` is load-bearing on every gated step in this job: an
+      # explicit `if` drops the implicit `success()` GitHub adds to an
+      # unconditional step, so without it a failure in an earlier step would not
+      # stop this one. That short-circuit is what makes the validate -> render
+      # fail-closed chain below actually hold, and the gate-wiring test in
+      # tools/blast-radius-test.sh asserts every gated step restates it.
       - name: Validate report schema
+        if: ${{ needs.evaluate.result == 'success' && success() }}
         run: |
           set -euo pipefail
           # Slurp (-s) so the artifact must be exactly one object: `jq -e`
           # otherwise exits on the last value, letting `{}` followed by a valid
           # report pass while the render then emits a null first section.
           jq -e -s '
-            def name_ok: type == "string" and test("^[A-Za-z0-9_./ +():-]+$");
+            # Charset is the legal nix store-path-name set (a-zA-Z0-9 + - . _ ? =)
+            # plus the extra glyphs attr-path normalization can introduce (/,
+            # space, (, ), :). A cause name is a derivation name, and fixed-output
+            # patch/fetch drvs carry `?` and `=` (e.g. `<sha>.patch?full_index=1`,
+            # `webkitgtk-2.52.4+abi=4.1`); omitting them fail-closed the whole
+            # report so no comment posted at all (the "sometimes empty" bug,
+            # #1421). It still rejects every markdown/mention/HTML glyph
+            # (@ < > [ ] ` & | ; * # {).
+            def name_ok: type == "string" and test("^[A-Za-z0-9_./ +()?=:-]+$");
             length == 1 and
             (.[0] |
               (.base    | type == "string" and test("^[0-9a-f]{7,40}$")) and
@@ -185,10 +237,16 @@ jobs:
       # cannot inject mentions, HTML, or spoofed markers into a comment posted
       # with the write token. The trusted job owns the marker.
       - name: Render comment
+        # `&& success()` keeps this skipped if Validate failed (see the note on
+        # the Validate step): a report that did not pass the schema is never
+        # rendered, let alone posted.
+        if: ${{ needs.evaluate.result == 'success' && success() }}
         run: |
           set -euo pipefail
           jq -r '
-            def safename: select(test("^[A-Za-z0-9_./ +():-]+$"));
+            # Lockstep with the validator name_ok above: same charset, so a report
+            # that validated never has a label silently dropped here.
+            def safename: select(test("^[A-Za-z0-9_./ +()?=:-]+$"));
             # Mirror packages/blast-radius/src/report.rs::format_seconds: bucket
             # by magnitude, round to integer. Empty string for a missing entry
             # so a bare label renders when an attr was a substituter hit or new
@@ -261,11 +319,41 @@ jobs:
             printf '\n\n_Comment truncated to fit the GitHub comment size limit._\n' >> comment.md
           fi
 
+      # `evaluate` failed (no report.json): post an explicit "could not compute"
+      # note rather than letting the comment job skip and leave the PR with no
+      # blast-radius comment at all (the "comes up empty" symptom). The eval bail
+      # is frequently base-side (a transiently un-evaluable `main`) or a runner
+      # flake, so the copy says as much. Keyed by the same marker, so the next
+      # successful run overwrites it in place. RUN_URL is passed via env (a GitHub
+      # `${{ }}` expression cannot be evaluated by the shell), which also lets the
+      # test drive this script with a stub URL.
+      - name: Compose fallback comment (eval failed)
+        # `&& success()` so a failure in an earlier comment-job step cannot reach
+        # the fallback either: the only producers are Render (good eval) and this
+        # step (failed eval), and both stay fail-closed.
+        if: ${{ needs.evaluate.result != 'success' && success() }}
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            printf '<!-- blast-radius -->\n'
+            printf '### Blast radius\n\n'
+            printf 'Could not compute the blast radius for this run: the check catalog failed to evaluate at the base or head commit. This is usually a transient base-branch or runner issue rather than a problem with this PR. See the [run logs](%s).\n' "$RUN_URL"
+          } > comment.md
+
       # One sticky comment per PR, keyed by the `<!-- blast-radius -->` marker.
       # Paginate the comment list so the marker is found on busy PRs (no
       # duplicate comments), and restrict the match to comments this token can
       # actually PATCH: a user comment that happens to start with the marker
       # would otherwise be selected and every PATCH would 403 forever.
+      #
+      # Default `success()` gate (no explicit `if:`): exactly one producer runs
+      # (Render on a good eval, Compose fallback otherwise) and the other is
+      # skipped; a skipped step does not trip `success()`, so this posts after
+      # whichever producer ran. Critically it stays FAIL-CLOSED: if Render (or
+      # Validate) errors, `success()` is false and no half-written comment.md is
+      # published.
       - name: Post sticky comment
         run: |
           set -euo pipefail
