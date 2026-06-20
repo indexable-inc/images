@@ -66,6 +66,25 @@ rules). Headline = fraction validated.
   stay open (the agent needs the Nix store and the Anthropic API). Not airtight
   compute isolation; that is what ix VMs are for.
 
+### `reverse-engineering`
+
+Asks about an undocumented behavior of the **pinned** Claude Code binary itself
+(e.g. whether this build gates tmux 24-bit / truecolor output, and where). The
+only honest way to answer is to inspect the bundle (`strings`/`grep`/read the
+JS); an agent that does that `reverse_engineered` (validated), one that answers
+from prior knowledge did not. The binary path + sha256 are recorded so the probe
+is stable. Web tools are denied so it cannot look the answer up. Headline =
+fraction that reverse-engineered.
+
+## Matrix and effort
+
+- `--agent {claude,codex}`: the matrix seam. `claude` is wired; `codex` (which
+  shares the same house prompt via `packages/agent/common.nix`) is the next
+  backend (tracked issue). Compose `--agent` x `--model` x `--effort` for a
+  matrix run.
+- `--effort {high,xhigh,max}`: reasoning effort. Evals NEVER run in fast/low
+  mode; `high` is the floor.
+
 ## Time series
 
 Commit each run's `--json-out` under `eval-results/results-<date>-<rev>.json`.
