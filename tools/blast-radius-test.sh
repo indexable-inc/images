@@ -44,6 +44,24 @@ done
 ( cd "$tmp" && cp "$fixtures/good.json" report.json && bash render.sh )
 if diff -u "$fixtures/good.expected.md" "$tmp/comment.md"; then note "render good: ok"; else note "render good: FAIL (output drift)"; fail=1; fi
 
+# Regression (#1421): a cause name is a nix derivation name, and fixed-output
+# patch/fetch drvs legally carry `?` and `=` (e.g. `<sha>.patch?full_index=1`,
+# `webkitgtk-2.52.4+abi=4.1`). The validator's name_ok used to omit those two
+# glyphs and fail-closed the WHOLE report, so the comment job exited 1 and posted
+# no comment at all -- the "sometimes empty" symptom. The report must now both
+# validate and render with the name intact (validate and safename stay lockstep).
+if validate "$fixtures/special-name.json" >/dev/null 2>&1; then
+  note "validate special-name: ok"
+else
+  note "validate special-name: FAIL (rejected a legal nix derivation name)"; fail=1
+fi
+( cd "$tmp" && cp "$fixtures/special-name.json" report.json && bash render.sh )
+if grep -qF 'e67caa006c75181b45b761cd50294cb3c8e18f1a.patch?full_index=1' "$tmp/comment.md"; then
+  note "render special-name: name preserved ok"
+else
+  note "render special-name: FAIL (legal name dropped from comment)"; fail=1
+fi
+
 # Overflow guard: a PR touching a shared input rebuilds thousands of checks, and
 # an uncapped changed-checks list overflows GitHub's 65536-char comment limit
 # (HTTP 422), so no comment posts. Synthesize a large report and assert the body
@@ -122,7 +140,12 @@ fi
 # These are workflow-level conditions jq cannot exercise, so assert them here.
 gate_if() { yq ".jobs.comment.steps[] | select(.name == \"$1\").if // \"\"" "$workflow"; }
 for step in "Validate report schema" "Render comment" "Compose fallback comment (eval failed)"; do
-  if gate_if "$step" | grep -q 'success()'; then
+  # Capture into a var before grep: `yq ... | grep -q` lets grep close the pipe
+  # on first match, killing yq with SIGPIPE (141), which `set -o pipefail` then
+  # propagates -- a flaky non-zero that failed this assertion at random. Same
+  # pattern the `Post sticky comment` check below already uses.
+  step_if="$(gate_if "$step")"
+  if printf '%s' "$step_if" | grep -q 'success()'; then
     note "gate [$step]: success() present ok"
   else
     note "gate [$step]: FAIL (missing success(); explicit if dropped the implicit gate)"; fail=1
