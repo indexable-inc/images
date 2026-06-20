@@ -23,7 +23,14 @@ nix run .#system-prompt-eval -- run --eval first-principles --sandbox
 # test a candidate prompt edit before committing it
 nix run .#system-prompt-eval -- run --eval behaviors \
   --system-prompt-nix packages/agent/system-prompt.nix
+
+# quiet: no progress ticker or wrote/view-it notes, just the result tables
+nix run .#system-prompt-eval -- run --eval behaviors --quiet
 ```
+
+`--quiet` silences the stderr progress ticker and the `wrote`/`view it` notes;
+the result tables (stdout) and any `FAIL` diagnostics still print. Pair it with
+`--json-out` when scripting so you control the report path.
 
 ## Evals
 

@@ -25,7 +25,7 @@ import tempfile
 from pathlib import Path
 
 from . import behaviors_eval, first_principles_eval, reverse_engineering_eval
-from .core import EvalContext, EvalReport
+from .core import EvalContext, EvalReport, Progress, noop
 from .judge import DEFAULT_JUDGE_MODEL, Judge
 from .render import resolve_prompt
 
@@ -42,6 +42,11 @@ def _progress(message: str) -> None:
     print(f"  … {message}", file=sys.stderr, flush=True)
 
 
+def _make_progress(*, quiet: bool) -> Progress:
+    """The progress sink for a run: silent under ``--quiet``, else the stderr ticker."""
+    return noop if quiet else _progress
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="system-prompt-eval", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -54,6 +59,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default="all",
         choices=("all", *EVALS.keys()),
         help="which eval to run (default: all)",
+    )
+    run.add_argument(
+        "--quiet",
+        action="store_true",
+        help="suppress progress output (the stderr ticker and the wrote/view-it notes); "
+        "the result tables and FAIL diagnostics are still printed",
     )
     run.add_argument("--rollouts", type=int, default=5, help="rollouts per task/case")
     run.add_argument("--max-workers", type=int, default=4, help="concurrent agents")
@@ -146,6 +157,7 @@ def _run(args: argparse.Namespace) -> int:
         )
         return 2
     prompt_file, prompt_sha = resolve_prompt(args.system_prompt_file, args.system_prompt_nix)
+    progress = _make_progress(quiet=args.quiet)
     ctx = EvalContext(
         prompt_file=prompt_file,
         judge=Judge(model=args.judge_model),
@@ -159,12 +171,12 @@ def _run(args: argparse.Namespace) -> int:
         sandbox=args.sandbox,
         timeout=args.timeout,
         limit=args.limit,
-        progress=_progress,
+        progress=progress,
     )
 
     reports: list[EvalReport] = []
     for name in _selected(args.eval):
-        _progress(f"== eval: {name} ==")
+        progress(f"== eval: {name} ==")
         reports.append(_run_one(name, ctx))
 
     for rep in reports:
@@ -192,8 +204,9 @@ def _run(args: argparse.Namespace) -> int:
     json_out = args.json_out or (Path(tempfile.mkdtemp(prefix="sp-eval-")) / "result.json")
     json_out.parent.mkdir(parents=True, exist_ok=True)
     json_out.write_text(json.dumps(full, indent=2), encoding="utf-8")
-    print(f"\nwrote {json_out}", file=sys.stderr)
-    print(f"view it: nix run .#system-prompt-eval-viewer -- {json_out}", file=sys.stderr)
+    if not args.quiet:
+        print(f"\nwrote {json_out}", file=sys.stderr)
+        print(f"view it: nix run .#system-prompt-eval-viewer -- {json_out}", file=sys.stderr)
 
     rc = 0
     if args.fail_under is not None:

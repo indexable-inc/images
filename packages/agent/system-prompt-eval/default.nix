@@ -70,6 +70,13 @@ let
     mkdir -p "$out"
   '';
 
+  # Offline, deterministic: the CLI surface (the --quiet progress wiring),
+  # unit-tested against the installed package with no network or key.
+  cli = pkgs.runCommand "system-prompt-eval-cli" { strictDeps = true; } ''
+    ${unwrapped}/venv/bin/python ${./tests/test_cli.py}
+    mkdir -p "$out"
+  '';
+
   # No network and no API key: `list` and `--help` must work and name the program.
   printsHelp =
     pkgs.runCommand "system-prompt-eval-prints-help"
@@ -89,13 +96,14 @@ let
         esac
         system-prompt-eval list | grep -q behaviors
         system-prompt-eval list | grep -q first-principles
+        system-prompt-eval run --help | grep -q -- --quiet
         mkdir -p "$out"
       '';
 in
 package.overrideAttrs (old: {
   passthru = (old.passthru or { }) // {
     tests = {
-      inherit scoring printsHelp;
+      inherit scoring cli printsHelp;
     };
   };
 })
