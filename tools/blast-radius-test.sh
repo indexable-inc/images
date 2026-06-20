@@ -19,6 +19,7 @@ note() { printf '  %s\n' "$*"; }
 # Extract the exact run-scripts the trusted comment job executes.
 yq '.jobs.comment.steps[] | select(.name == "Validate report schema").run' "$workflow" > "$tmp/validate.sh"
 yq '.jobs.comment.steps[] | select(.name == "Render comment").run' "$workflow" > "$tmp/render.sh"
+yq '.jobs.comment.steps[] | select(.name == "Compose fallback comment (eval failed)").run' "$workflow" > "$tmp/fallback.sh"
 
 validate() { ( cd "$tmp" && cp "$1" report.json && bash validate.sh ); }
 
@@ -92,6 +93,24 @@ if head -c 64 "$tmp/comment.md" | grep -q '^<!-- blast-radius -->'; then
   note "render backstop: marker survived truncation ok"
 else
   note "render backstop: FAIL (marker lost; sticky-comment keying breaks)"; fail=1
+fi
+
+# Fallback comment: when `evaluate` fails there is no report.json, so the
+# comment job posts an explicit "could not compute" note instead of skipping
+# and leaving the PR with no blast-radius comment (the "comes up empty" bug,
+# issue #1415). Assert it produces a marker-prefixed body so the sticky-comment
+# keying still finds and overwrites it on the next successful run.
+( cd "$tmp" && rm -f report.json comment.md && RUN_URL="https://github.com/indexable-inc/index/actions/runs/123" bash fallback.sh )
+if head -c 21 "$tmp/comment.md" | grep -q '^<!-- blast-radius -->'; then
+  note "fallback: marker present ok"
+else
+  note "fallback: FAIL (missing marker; sticky-comment keying breaks)"; fail=1
+fi
+if grep -q 'Could not compute the blast radius' "$tmp/comment.md" \
+   && grep -q 'actions/runs/123' "$tmp/comment.md"; then
+  note "fallback: note + run link ok"
+else
+  note "fallback: FAIL (missing explanation or run link)"; fail=1
 fi
 
 if [ "$fail" -ne 0 ]; then echo "blast-radius-test: FAILED"; exit 1; fi
