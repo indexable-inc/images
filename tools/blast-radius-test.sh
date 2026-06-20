@@ -176,5 +176,19 @@ else
   note "orchestration [Post]: FAIL (explicit if '$post_if' can post a partial/unvalidated body)"; fail=1
 fi
 
+# Concurrency safety: the workflow now triggers on every `labeled` event, but
+# the canceling per-ref concurrency group must NOT let an unrelated-label run
+# (which the job `if:` skips) cancel a real in-flight eval -- that would leave
+# the PR with no report and no fallback comment. The group expression routes
+# unrelated-label events into a per-run throwaway group; assert that guard is
+# present so the empty-comment path can't silently return.
+group_expr="$(yq '.concurrency.group' "$workflow")"
+if printf '%s' "$group_expr" | grep -q "github.event.label.name != 'blast-radius'" \
+   && printf '%s' "$group_expr" | grep -q 'noop-'; then
+  note "orchestration [concurrency]: unrelated-label runs can't cancel a real run ok"
+else
+  note "orchestration [concurrency]: FAIL (unrelated label event can cancel the real blast-radius run -> empty comment)"; fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then echo "blast-radius-test: FAILED"; exit 1; fi
 echo "blast-radius-test: all passed"

@@ -21,7 +21,20 @@ permissions:
   contents: read
 
 concurrency:
-  group: blast-radius-${{ github.ref }}
+  # Coalesce successive real runs on a PR (a labeled-with-`blast-radius` event or
+  # a later `synchronize`/`reopened`) into one canceling group so a new push
+  # supersedes an in-flight eval. But an `on: labeled` event also fires for
+  # UNRELATED labels, whose run the job-level `if:` skips -- and a skipped run
+  # must not cancel a real one in flight, or the PR is left with no report and no
+  # fallback comment (the empty-comment bug again). Route those unrelated-label
+  # events into a per-run throwaway group (keyed by run_id) so they collide with,
+  # and cancel, nobody. Everything else stays in the shared per-ref group.
+  group: >-
+    blast-radius-${{ github.ref }}${{
+      (github.event_name == 'pull_request'
+       && github.event.action == 'labeled'
+       && github.event.label.name != 'blast-radius')
+      && format('-noop-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 env:
