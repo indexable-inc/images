@@ -29,6 +29,8 @@ class EvalContext:
     judge: Judge
     claude_bin: str = "claude"
     model: str | None = "opus"
+    # Reasoning effort: never "fast"/low for an eval. high is the floor.
+    effort: str = "high"
     rollouts: int = 5
     max_workers: int = 4
     live: bool = False

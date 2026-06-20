@@ -5,10 +5,11 @@
 }:
 
 let
-  # The house `claude` (wrapped) for the rollouts, plus git for the fake-clone
-  # shim and coreutils for the shim's cp/basename. The eval passes an explicit
-  # --system-prompt-file, which wins over the wrapper's baked prompt.
-  claudeBin = pkgs.claude-code;
+  # `claude` is resolved from the runtime PATH (not baked): baking pkgs.claude-code
+  # would pull the x86_64-linux rust workspace and break the build on darwin, and
+  # the eval should anyway exercise whatever `claude` the runner actually has. The
+  # eval passes an explicit --system-prompt-file, which wins over claude's baked
+  # prompt. git (for the fake-clone shim) and coreutils ARE baked.
 
   # Datasets and fixtures ship as plain files: the first-principles eval copies a
   # fixture repo at runtime, and the behaviors eval reads JSONL task sets.
@@ -22,7 +23,7 @@ let
   # `nix run .#system-prompt-eval` tests precisely what ships. A candidate edit
   # is tested with --system-prompt-file / --system-prompt-nix instead.
   promptFile = pkgs.writeText "house-system-prompt.txt" (
-    import ../system-prompt.nix { inherit lib; }
+    import (ix.paths.packagesRoot + "/agent/system-prompt.nix") { inherit lib; }
   );
 
   unwrapped = ix.buildUvApplication pkgs {
@@ -54,7 +55,6 @@ let
         makeWrapper ${lib.getExe unwrapped} $out/bin/system-prompt-eval \
           --prefix PATH : ${
             lib.makeBinPath [
-              claudeBin
               pkgs.git
               pkgs.coreutils
             ]
@@ -65,11 +65,10 @@ let
 
   # Offline, deterministic: the scoring math is the CI-gating signal, unit-tested
   # against the installed package with no network or key.
-  scoring =
-    pkgs.runCommand "system-prompt-eval-scoring" { strictDeps = true; } ''
-      ${unwrapped}/venv/bin/python ${./tests/test_scoring.py}
-      mkdir -p "$out"
-    '';
+  scoring = pkgs.runCommand "system-prompt-eval-scoring" { strictDeps = true; } ''
+    ${unwrapped}/venv/bin/python ${./tests/test_scoring.py}
+    mkdir -p "$out"
+  '';
 
   # No network and no API key: `list` and `--help` must work and name the program.
   printsHelp =

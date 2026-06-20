@@ -100,11 +100,12 @@ def summarize(
         "errored": errored,
         "tasks": len(tasks),
         "behaviors": len(behaviors),
+        "cost": cost_summary(results),
     }
 
 
 def cases_json(results: Sequence[RolloutResult]) -> list[dict[str, object]]:
-    """Per-rollout case rows for the JSON report."""
+    """Per-rollout case rows for the JSON report (includes the raw transcript)."""
     return [
         {
             "case_id": r.case_id,
@@ -112,9 +113,25 @@ def cases_json(results: Sequence[RolloutResult]) -> list[dict[str, object]]:
             "error": r.error,
             "present": {bid: v.present for bid, v in sorted(r.verdicts.items())},
             "evidence": {bid: v.evidence for bid, v in sorted(r.verdicts.items())},
+            "duration_ms": r.duration_ms,
+            "input_tokens": r.input_tokens,
+            "output_tokens": r.output_tokens,
+            "cost_usd": r.cost_usd,
+            "transcript": r.transcript,
         }
         for r in results
     ]
+
+
+def cost_summary(results: Sequence[RolloutResult]) -> dict[str, float]:
+    """Aggregate time/token/cost metrics over the rollouts."""
+    n = len(results) or 1
+    return {
+        "mean_duration_s": sum(r.duration_ms for r in results) / 1000.0 / n,
+        "total_input_tokens": float(sum(r.input_tokens for r in results)),
+        "total_output_tokens": float(sum(r.output_tokens for r in results)),
+        "total_cost_usd": sum(r.cost_usd for r in results),
+    }
 
 
 def report(
@@ -151,8 +168,14 @@ def render_table(
     lines.append("-" * len(header))
     lines.append(f"{'OVERALL':<18} {'':<26} {overall:>9.0%}")
     lines.append(f"longest all-pass streak: {streak} (per task: {per_task})")
+    cost = cost_summary(results)
     lines.append(
         f"rollouts: {len(results)} ({errored} errored), "
         f"tasks: {len(tasks)}, behaviors: {len(behaviors)}"
+    )
+    lines.append(
+        f"cost: mean {cost['mean_duration_s']:.0f}s/rollout, "
+        f"{int(cost['total_output_tokens'])} out + {int(cost['total_input_tokens'])} in tokens, "
+        f"${cost['total_cost_usd']:.2f} total"
     )
     return "\n".join(lines)

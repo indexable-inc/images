@@ -21,10 +21,12 @@ import datetime as dt
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from . import behaviors_eval, first_principles_eval
 from .core import EvalContext, EvalReport
+from .html import render_html
 from .judge import DEFAULT_JUDGE_MODEL, Judge
 from .render import resolve_prompt
 
@@ -68,6 +70,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--claude-bin", default="claude", help="`claude` binary (default: PATH)")
     run.add_argument("--model", default="opus", help="model for the agent under test")
+    run.add_argument(
+        "--effort",
+        default="high",
+        choices=("high", "xhigh", "max"),
+        help="reasoning effort (never fast/low for an eval; default: high)",
+    )
     run.add_argument("--judge-model", default=DEFAULT_JUDGE_MODEL, help="LLM judge model")
     run.add_argument("--timeout", type=float, default=600.0, help="per-rollout seconds")
     run.add_argument(
@@ -76,7 +84,13 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--system-prompt-nix", type=Path, default=None, help="render this .nix and test it"
     )
-    run.add_argument("--json-out", type=Path, default=None, help="write the JSON report here")
+    run.add_argument("--json-out", type=Path, default=None, help="write the JSON report (raw data) here")
+    run.add_argument(
+        "--html-out",
+        type=Path,
+        default=None,
+        help="write the HTML scorecard here (default: a temp file, always written)",
+    )
     run.add_argument(
         "--fail-under", type=float, default=None, help="exit 1 if any eval's headline below"
     )
@@ -121,6 +135,7 @@ def _run(args: argparse.Namespace) -> int:
         judge=Judge(model=args.judge_model),
         claude_bin=args.claude_bin,
         model=args.model,
+        effort=args.effort,
         rollouts=args.rollouts,
         max_workers=args.max_workers,
         live=args.live,
@@ -142,8 +157,9 @@ def _run(args: argparse.Namespace) -> int:
     metadata: dict[str, object] = {
         "prompt_sha256": prompt_sha,
         "git_rev": _git_rev(),
-        "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "timestamp": dt.datetime.now(dt.UTC).isoformat(),
         "agent_model": args.model,
+        "effort": args.effort,
         "judge_model": args.judge_model,
         "live": args.live,
         "sandbox": args.sandbox,
@@ -156,7 +172,15 @@ def _run(args: argparse.Namespace) -> int:
     if args.json_out is not None:
         args.json_out.parent.mkdir(parents=True, exist_ok=True)
         args.json_out.write_text(json.dumps(full, indent=2), encoding="utf-8")
-        print(f"\nwrote {args.json_out}", file=sys.stderr)
+        print(f"\nwrote raw JSON {args.json_out}", file=sys.stderr)
+
+    # Always emit an HTML scorecard (dogfooding the deliverable rule).
+    html_out = args.html_out
+    if html_out is None:
+        html_out = Path(tempfile.mkdtemp(prefix="sp-eval-")) / "scorecard.html"
+    html_out.parent.mkdir(parents=True, exist_ok=True)
+    html_out.write_text(render_html(metadata, reports), encoding="utf-8")
+    print(f"wrote HTML scorecard {html_out}", file=sys.stderr)
 
     rc = 0
     if args.fail_under is not None:

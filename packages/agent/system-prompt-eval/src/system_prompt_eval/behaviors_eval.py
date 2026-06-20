@@ -29,6 +29,7 @@ def run(ctx: EvalContext, *, tasks_path: Path | None = None, behaviors_path: Pat
         prompt_file=ctx.prompt_file,
         claude_bin=ctx.claude_bin,
         model=ctx.model,
+        effort=ctx.effort,
         live=ctx.live,
         timeout_seconds=ctx.timeout,
     )

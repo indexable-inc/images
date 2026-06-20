@@ -31,7 +31,7 @@ def retry(
             for attempt in range(1, attempts + 1):
                 try:
                     return fn(*args, **kwargs)
-                except Exception as exc:  # noqa: BLE001 - retry any error
+                except Exception as exc:  # retry on any error
                     last = exc
                     if attempt < attempts:
                         time.sleep(base_delay * attempt)  # linear, not exponential

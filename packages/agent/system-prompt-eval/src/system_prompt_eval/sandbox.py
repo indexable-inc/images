@@ -83,7 +83,7 @@ def _bwrap(args: list[str], *, root: Path) -> list[str]:
         "/",
         "/",
         "--tmpfs",
-        "/tmp",
+        "/tmp",  # noqa: S108 - a tmpfs mount point inside the sandbox, not a host temp path
         "--bind",
         str(root),
         str(root),

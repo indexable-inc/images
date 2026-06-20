@@ -54,6 +54,11 @@ class RolloutResult:
     transcript: str
     verdicts: dict[str, BehaviorVerdict] = field(default_factory=dict)
     error: str | None = None
+    # Cost metrics from the rollout's final result event (0 when unavailable).
+    duration_ms: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
 
     def all_expected_present(self, expected: tuple[str, ...]) -> bool:
         """True iff every expected behavior was judged present (and no error)."""

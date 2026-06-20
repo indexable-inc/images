@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import sandbox as sb
-from .agent import AgentError, _transcript_from_stream
+from .agent import AgentError, RunOutput, parse_stream
 from .core import EvalContext, EvalReport
 from .data import _read_lines
 from .paths import data_root
@@ -68,6 +68,11 @@ class FpResult:
     answer: str = ""
     evidence: str = ""
     error: str | None = None
+    duration_ms: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    transcript: str = ""
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -78,6 +83,11 @@ class FpResult:
             "answer": self.answer,
             "evidence": self.evidence,
             "error": self.error,
+            "duration_ms": self.duration_ms,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "cost_usd": self.cost_usd,
+            "transcript": self.transcript,
         }
 
 
@@ -141,7 +151,7 @@ def _make_sandbox(fixture: Path) -> tuple[Path, dict[str, str]]:
     return workdir, env
 
 
-def _run_case(ctx: EvalContext, case: FpCase) -> str:
+def _run_case(ctx: EvalContext, case: FpCase) -> RunOutput:
     fixture = data_root() / "fixtures" / case.fixture
     if not fixture.exists():
         raise AgentError(f"fixture not found: {fixture}")
@@ -156,6 +166,9 @@ def _run_case(ctx: EvalContext, case: FpCase) -> str:
         "--output-format",
         "stream-json",
         "--verbose",
+        # Never fast mode: full reasoning effort.
+        "--effort",
+        ctx.effort,
         "--dangerously-skip-permissions",
         "--disallowedTools",
         _DENIED,
@@ -184,7 +197,7 @@ def _run_case(ctx: EvalContext, case: FpCase) -> str:
         raise AgentError(
             f"claude exited {proc.returncode}: {proc.stderr.strip()[:400] or '(no stderr)'}"
         )
-    return _transcript_from_stream(proc.stdout)
+    return parse_stream(proc.stdout)
 
 
 def _final_answer(transcript: str) -> str:
@@ -205,10 +218,10 @@ def run(ctx: EvalContext, *, cases_path: Path | None = None) -> EvalReport:
         case, idx = job
         ctx.progress(f"first-principles {case.id}#{idx}")
         try:
-            transcript = _run_case(ctx, case)
+            out = _run_case(ctx, case)
         except AgentError as exc:
             return FpResult(case_id=case.id, rollout=idx, error=str(exc))
-        answer = _final_answer(transcript)
+        answer = _final_answer(out.transcript)
         verdict, evidence = ctx.judge.classify_answer(
             case.question, case.patched_answer, case.naive_answer, answer
         )
@@ -219,6 +232,11 @@ def run(ctx: EvalContext, *, cases_path: Path | None = None) -> EvalReport:
             validated=verdict == "validated",
             answer=answer[:300],
             evidence=evidence,
+            duration_ms=out.metrics.duration_ms,
+            input_tokens=out.metrics.input_tokens,
+            output_tokens=out.metrics.output_tokens,
+            cost_usd=out.metrics.cost_usd,
+            transcript=out.transcript,
         )
 
     with ThreadPoolExecutor(max_workers=ctx.max_workers) as pool:
@@ -228,6 +246,7 @@ def run(ctx: EvalContext, *, cases_path: Path | None = None) -> EvalReport:
     validated = sum(1 for r in scored if r.validated)
     errored = sum(1 for r in results if r.error is not None)
     headline = validated / len(scored) if scored else 0.0
+    n = len(results) or 1
     summary: dict[str, object] = {
         "accuracy": headline,
         "validated": validated,
@@ -236,6 +255,12 @@ def run(ctx: EvalContext, *, cases_path: Path | None = None) -> EvalReport:
         "total": len(results),
         "sandbox": ctx.sandbox,
         "sandbox_backend": sb.available_backend(),
+        "cost": {
+            "mean_duration_s": sum(r.duration_ms for r in results) / 1000.0 / n,
+            "total_input_tokens": float(sum(r.input_tokens for r in results)),
+            "total_output_tokens": float(sum(r.output_tokens for r in results)),
+            "total_cost_usd": sum(r.cost_usd for r in results),
+        },
     }
     return EvalReport(
         name=NAME,

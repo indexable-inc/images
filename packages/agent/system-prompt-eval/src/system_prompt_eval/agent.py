@@ -41,17 +41,46 @@ class AgentError(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
+class RunMetrics:
+    """Cost metrics for one rollout, read from the stream's final result event."""
+
+    duration_ms: int = 0
+    num_turns: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "duration_ms": self.duration_ms,
+            "num_turns": self.num_turns,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "cost_usd": self.cost_usd,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RunOutput:
+    """One rollout's compacted transcript plus its cost metrics."""
+
+    transcript: str
+    metrics: RunMetrics
+
+
+@dataclass(frozen=True, slots=True)
 class Rollout:
     """One headless rollout configuration."""
 
     prompt_file: Path
     claude_bin: str = "claude"
     model: str | None = "opus"
+    effort: str = "high"
     live: bool = False
     timeout_seconds: float = 600.0
 
-    def run(self, task: str) -> str:
-        """Run ``claude -p`` on ``task`` and return a compacted transcript."""
+    def run(self, task: str) -> RunOutput:
+        """Run ``claude -p`` on ``task`` and return its transcript + metrics."""
         args = [
             self.claude_bin,
             "-p",
@@ -61,6 +90,9 @@ class Rollout:
             "--output-format",
             "stream-json",
             "--verbose",
+            # Never fast mode: evals run at full reasoning effort.
+            "--effort",
+            self.effort,
         ]
         if self.model:
             args += ["--model", self.model]
@@ -72,7 +104,7 @@ class Rollout:
             args += ["--allowedTools", ""]
         return self._invoke(args)
 
-    def _invoke(self, args: list[str]) -> str:
+    def _invoke(self, args: list[str]) -> RunOutput:
         try:
             proc = subprocess.run(
                 args,
@@ -91,15 +123,21 @@ class Rollout:
                 f"claude exited {proc.returncode}: "
                 f"{proc.stderr.strip()[:400] or '(no stderr)'}"
             )
-        transcript = _transcript_from_stream(proc.stdout)
-        if not transcript.strip():
+        out = parse_stream(proc.stdout)
+        if not out.transcript.strip():
             raise AgentError(f"empty transcript: {proc.stdout[:300]!r}")
-        return transcript
+        return out
 
 
 def _transcript_from_stream(stdout: str) -> str:
     """Flatten stream-json events into a readable transcript for the judge."""
+    return parse_stream(stdout).transcript
+
+
+def parse_stream(stdout: str) -> RunOutput:
+    """Flatten stream-json into a transcript and pull the final result metrics."""
     parts: list[str] = []
+    metrics = RunMetrics()
     for raw in stdout.splitlines():
         line = raw.strip()
         if not line:
@@ -115,8 +153,31 @@ def _transcript_from_stream(stdout: str) -> str:
             parts.extend(_tool_results(event))
         elif kind == "result":
             parts.append("FINAL: " + str(event.get("result", "")).strip())
+            metrics = _metrics_from_result(event)
     text = "\n".join(p for p in parts if p)
-    return text[:_TRANSCRIPT_CAP]
+    return RunOutput(transcript=text[:_TRANSCRIPT_CAP], metrics=metrics)
+
+
+def _metrics_from_result(event: dict[str, object]) -> RunMetrics:
+    usage = event.get("usage")
+    usage_d = usage if isinstance(usage, dict) else {}
+    return RunMetrics(
+        duration_ms=_int(event.get("duration_ms")),
+        num_turns=_int(event.get("num_turns")),
+        input_tokens=_int(usage_d.get("input_tokens")),
+        output_tokens=_int(usage_d.get("output_tokens")),
+        cost_usd=_float(event.get("total_cost_usd")),
+    )
+
+
+def _int(value: object) -> int:
+    return int(value) if isinstance(value, (int, float)) else 0
+
+
+def _float(value: object) -> float:
+    return float(value) if isinstance(value, (int, float)) else 0.0
+
+
 
 
 def _assistant_blocks(event: dict[str, object]) -> list[str]:

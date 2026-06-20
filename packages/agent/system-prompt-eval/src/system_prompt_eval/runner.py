@@ -43,10 +43,18 @@ def run_eval(
         task, idx = job
         progress(f"rollout {task.id}#{idx}")
         try:
-            transcript = rollout.run(task.task)
+            out = rollout.run(task.task)
         except AgentError as exc:
             return RolloutResult(case_id=task.id, rollout=idx, transcript="", error=str(exc))
-        return RolloutResult(case_id=task.id, rollout=idx, transcript=transcript)
+        return RolloutResult(
+            case_id=task.id,
+            rollout=idx,
+            transcript=out.transcript,
+            duration_ms=out.metrics.duration_ms,
+            input_tokens=out.metrics.input_tokens,
+            output_tokens=out.metrics.output_tokens,
+            cost_usd=out.metrics.cost_usd,
+        )
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         captured = list(pool.map(_capture, jobs))

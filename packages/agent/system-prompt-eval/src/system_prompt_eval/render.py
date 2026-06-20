@@ -69,12 +69,11 @@ def resolve_prompt(
 
 
 def _materialize(text: str) -> tuple[Path, str]:
-    handle = tempfile.NamedTemporaryFile(
-        prefix="house-prompt-", suffix=".txt", delete=False, mode="w", encoding="utf-8"
-    )
-    handle.write(text)
-    handle.close()
-    return Path(handle.name), _sha(text)
+    # A rendered prompt must outlive this function (it is passed to a subprocess),
+    # so write it into a temp dir rather than a self-deleting NamedTemporaryFile.
+    path = Path(tempfile.mkdtemp(prefix="house-prompt-")) / "system-prompt.txt"
+    path.write_text(text, encoding="utf-8")
+    return path, _sha(text)
 
 
 def _sha(text: str) -> str:
