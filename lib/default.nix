@@ -8,6 +8,7 @@
   hermes-agent,
   btop-src,
   drgn-src,
+  perftest-src,
   fff-src,
   launchk-src,
   snix-src,
@@ -452,6 +453,7 @@ let
       ;
     btopSrc = btop-src;
     drgnSrc = drgn-src;
+    perftestSrc = perftest-src;
     fffSrc = fff-src;
     launchkSrc = launchk-src;
     snixSrc = snix-src;

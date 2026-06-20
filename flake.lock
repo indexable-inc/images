@@ -255,6 +255,23 @@
         "type": "github"
       }
     },
+    "perftest-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1780225113,
+        "narHash": "sha256-oNvzQubmslZ4JUNww/wvWd54JDsDLamCDlorHWlNtaY=",
+        "ref": "refs/tags/26.04.17",
+        "rev": "720b61082454e189b1f21835ec175536a944afc3",
+        "revCount": 1432,
+        "type": "git",
+        "url": "https://github.com/linux-rdma/perftest"
+      },
+      "original": {
+        "ref": "refs/tags/26.04.17",
+        "type": "git",
+        "url": "https://github.com/linux-rdma/perftest"
+      }
+    },
     "pyproject-build-systems": {
       "inputs": {
         "nixpkgs": [
@@ -358,6 +375,7 @@
         "images": "images",
         "launchk-src": "launchk-src",
         "nixpkgs": "nixpkgs",
+        "perftest-src": "perftest-src",
         "rust-overlay": "rust-overlay",
         "site": "site",
         "skills": "skills",

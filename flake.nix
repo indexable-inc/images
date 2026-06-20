@@ -97,6 +97,11 @@
       flake = false;
     };
 
+    perftest-src = {
+      url = "git+https://github.com/linux-rdma/perftest?ref=refs/tags/26.04.17";
+      flake = false;
+    };
+
     fff-src = {
       url = "github:dmtrKovalenko/fff/v0.9.1";
       flake = false;
@@ -168,6 +173,7 @@
       hermes-agent,
       btop-src,
       drgn-src,
+      perftest-src,
       fff-src,
       launchk-src,
       snix-src,
@@ -252,6 +258,7 @@
           hermes-agent
           btop-src
           drgn-src
+          perftest-src
           fff-src
           launchk-src
           snix-src
