@@ -28,13 +28,27 @@ validate() { ( cd "$tmp" && cp "$1" report.json && bash validate.sh ); }
 # typed value constraint that keep an attacker from smuggling shapes into
 # the artifact.
 if validate "$fixtures/good.json" >/dev/null 2>&1; then note "validate good: ok"; else note "validate good: FAIL"; fail=1; fi
-for bad in bad-name bad-check missing bad-phase-key bad-phase-value; do
+for bad in bad-name bad-check missing bad-phase-key bad-phase-value bad-injection; do
   if validate "$fixtures/$bad.json" >/dev/null 2>&1; then
     note "validate $bad: FAIL (accepted hostile/old report)"; fail=1
   else
     note "validate $bad: rejected ok"
   fi
 done
+
+# Legal nix derivation names (a cause name IS a derivation name) contain `?` and
+# `=`: fixed-output patch/fetch derivations surface as frontier causes named
+# like `e67caa0....patch?full_index=1` or `webkitgtk-2.52.4+abi=4.1`. The
+# validator charset must accept them, or one such cause fail-closes the whole
+# report and no comment posts (#1421). This passes BEFORE the charset is widened
+# only if the bug is fixed; it is the regression guard for the empty-comment bug.
+if validate "$fixtures/nix-name.json" >/dev/null 2>&1; then note "validate nix-name (?/=): ok"; else note "validate nix-name (?/=): FAIL (rejected legal nix name -> empty comment)"; fail=1; fi
+( cd "$tmp" && cp "$fixtures/nix-name.json" report.json && bash render.sh )
+if grep -qF 'patch?full_index=1' "$tmp/comment.md" && grep -qF 'webkitgtk-2.52.4+abi=4.1' "$tmp/comment.md"; then
+  note "render nix-name (?/=): names survive into body ok"
+else
+  note "render nix-name (?/=): FAIL (legal nix name dropped from body)"; fail=1
+fi
 
 # Render: the good report produces the golden comment (flowchart + list).
 # `phaseTimings` is observability-only and never renders, so the golden

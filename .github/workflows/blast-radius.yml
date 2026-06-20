@@ -153,7 +153,19 @@ jobs:
           # otherwise exits on the last value, letting `{}` followed by a valid
           # report pass while the render then emits a null first section.
           jq -e -s '
-            def name_ok: type == "string" and test("^[A-Za-z0-9_./ +():-]+$");
+            # Charset is the legal nix store-path name set (a cause name is a
+            # derivation name): letters, digits, space, and _ . / + ( ) ? = : -
+            # The ? and = are load-bearing: fixed-output patch/fetch derivations
+            # surface as frontier causes named like
+            # e67caa0....patch?full_index=1 or webkitgtk-2.52.4+abi=4.1, and
+            # without them one such cause fail-closed the WHOLE report so no
+            # comment posted (#1421). Still excludes every markdown/mention/HTML
+            # injection char (at-sign, angle/square brackets, backtick, ampersand,
+            # pipe, semicolon, star, hash, braces, quotes, backslash) since the
+            # body is posted with the write token. Lockstep with safename in the
+            # render step and tools/blast-radius-test.sh. (Keep this jq
+            # apostrophe-free: it is single-quoted in the shell.)
+            def name_ok: type == "string" and test("^[A-Za-z0-9_./ +()?=:-]+$");
             length == 1 and
             (.[0] |
               (.base    | type == "string" and test("^[0-9a-f]{7,40}$")) and
@@ -180,15 +192,18 @@ jobs:
           ' report.json > /dev/null \
             || { echo "::error::malformed blast-radius report.json"; exit 1; }
 
-      # Rebuild the Markdown from the validated data. Check names still pass
-      # through a conservative charset (Nix attr names do) so a malicious PR
-      # cannot inject mentions, HTML, or spoofed markers into a comment posted
+      # Rebuild the Markdown from the validated data. Names still pass through a
+      # conservative charset (the legal nix store-path name set) so a malicious
+      # PR cannot inject mentions, HTML, or spoofed markers into a comment posted
       # with the write token. The trusted job owns the marker.
       - name: Render comment
         run: |
           set -euo pipefail
           jq -r '
-            def safename: select(test("^[A-Za-z0-9_./ +():-]+$"));
+            # Lockstep with name_ok in the validate step: same legal nix
+            # store-path charset, including ? and = for fixed-output patch/fetch
+            # derivation cause names (#1421).
+            def safename: select(test("^[A-Za-z0-9_./ +()?=:-]+$"));
             # Mirror packages/blast-radius/src/report.rs::format_seconds: bucket
             # by magnitude, round to integer. Empty string for a missing entry
             # so a bare label renders when an attr was a substituter hit or new
