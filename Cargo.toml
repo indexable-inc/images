@@ -5,6 +5,7 @@ members = [
   "packages/build-version",
   "packages/agent/claude-hooks",
   "packages/agent/claude-stories",
+  "packages/agent/subagent-cache",
   "packages/code/ast-merge/ast",
   "packages/code/ast-merge/cli",
   "packages/code/ast-merge/diff",
@@ -165,6 +166,7 @@ kitty = { path = "packages/terminal/kitty" }
 lake-iceberg = { path = "packages/search/lake/iceberg" }
 color-eyre = "0.6"
 dashboard-core = { path = "packages/dashboard/dashboard-core" }
+deadpool-postgres = "0.14"
 devicons = "0.6"
 dirs = "6"
 edit-applier = { path = "packages/code/edit-applier" }
@@ -252,6 +254,7 @@ tempfile = "3"
 terminal-light = "1"
 terminal-theme = { path = "packages/terminal/terminal-theme" }
 tokio = "1"
+tokio-postgres = "0.7"
 tokio-stream = "0.1"
 tokio-util = "0.7"
 toml = { version = "1.1.2", default-features = false }
