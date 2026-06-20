@@ -153,5 +153,18 @@ else
   note "gate [Post sticky comment]: FAIL (gate '$post_if' can post an unvalidated/partial body)"; fail=1
 fi
 
+# Opt-in runner gate. The workflow fires on every `labeled` event, but the
+# expensive self-hosted `evaluate` job must only (re-)run when the `blast-radius`
+# label itself is added -- adding any unrelated label to an already opted-in PR
+# must not claim an eval runner. Match the EXACT parenthesized clause so the
+# boolean structure is locked: a presence-only check would pass even if the
+# operands were inverted or `&&`-joined, silently breaking the opt-in gate.
+eval_if="$(yq '.jobs.evaluate.if // ""' "$workflow")"
+if printf '%s' "$eval_if" | grep -qF "(github.event.action != 'labeled' || github.event.label.name == 'blast-radius')"; then
+  note "gate [evaluate]: label-add restricted to blast-radius ok"
+else
+  note "gate [evaluate]: FAIL (any label-add re-runs the self-hosted eval)"; fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then echo "blast-radius-test: FAILED"; exit 1; fi
 echo "blast-radius-test: all passed"

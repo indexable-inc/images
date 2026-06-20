@@ -48,16 +48,19 @@ jobs:
   evaluate:
     # Same-repository, non-Dependabot PRs only (mirroring ai-review-gate.yml),
     # and only when the PR carries the `blast-radius` label (the opt-in gate;
-    # see `on:` above). `labeled` events already carry the new label in
-    # `pull_request.labels`, so `contains` covers both the initial label-add and
-    # every later `synchronize`/`reopened` while the label remains. The `comment`
-    # job has no `if:` of its own but `needs: evaluate`, so it is skipped too
-    # whenever this gate is false.
+    # see `on:` above). `contains` keeps the job running on every later
+    # `synchronize`/`reopened` while the label remains. But the workflow fires on
+    # EVERY `labeled` event, so the final clause restricts label-adds to the
+    # `blast-radius` label itself: adding any other label to an already opted-in
+    # PR must not re-claim a self-hosted eval runner (the whole point of the
+    # opt-in). The `comment` job has no `if:` of its own but `needs: evaluate`,
+    # so it is skipped too whenever this gate is false.
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login != 'dependabot[bot]' &&
-      contains(github.event.pull_request.labels.*.name, 'blast-radius')
+      contains(github.event.pull_request.labels.*.name, 'blast-radius') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'blast-radius')
     # Same self-hosted dispatcher as check.yml: the `ix-ci-run-*` label is
     # claimed by the org dispatcher, which mints an ephemeral runner with a warm
     # /nix/store. Evaluating .#ciChecks.x86_64-linux forces an x86_64-linux IFD
