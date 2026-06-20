@@ -90,7 +90,16 @@ stdenvNoCC.mkDerivation {
   inherit version;
   dontUnpack = true;
 
-  nativeBuildInputs = [ makeWrapper ];
+  nativeBuildInputs = [
+    makeWrapper
+    nodejs_22
+  ];
+
+  # Do not auto-patchelf the platform payload. The Linux package is a Bun
+  # standalone executable with embedded application metadata; patchelfing it
+  # makes it start as generic `bun`, so `humanlayer daemon ...` fails with
+  # "Script not found". The npm JS launcher below executes the payload as
+  # published, which is the form verified on NixOS.
 
   installPhase = ''
     runHook preInstall
