@@ -138,16 +138,23 @@ fi
 # post step (or a missing `success()` on render) would publish a half-written or
 # unvalidated comment.md -- exactly the regression caught in review on #1416.
 # These are workflow-level conditions jq cannot exercise, so assert them here.
-gate_if() { yq ".jobs.comment.steps[] | select(.name == \"$1\").if // \"\"" "$workflow"; }
+#
+# gate_if emits exactly one line (the step's `if`, or "" when absent): the `// ""`
+# wraps the whole `select` stream, not each step. Match it with a pipe-free bash
+# glob (`[[ == *...* ]]`), never `yq | grep -q`: under `set -o pipefail` a `grep
+# -q` that matches closes the pipe and `yq` racing behind it takes SIGPIPE (exit
+# 141), which pipefail surfaces as the pipeline's status -- making the `if` read
+# a real match as a failure intermittently (a timing-dependent flake).
+gate_if() { yq -r "(.jobs.comment.steps[] | select(.name == \"$1\").if) // \"\"" "$workflow"; }
 for step in "Validate report schema" "Render comment" "Compose fallback comment (eval failed)"; do
-  if gate_if "$step" | grep -q 'success()'; then
+  if [[ "$(gate_if "$step")" == *'success()'* ]]; then
     note "gate [$step]: success() present ok"
   else
     note "gate [$step]: FAIL (missing success(); explicit if dropped the implicit gate)"; fail=1
   fi
 done
 post_if="$(gate_if "Post sticky comment")"
-if [ -z "$post_if" ] || printf '%s' "$post_if" | grep -q 'success()'; then
+if [ -z "$post_if" ] || [[ "$post_if" == *'success()'* ]]; then
   note "gate [Post sticky comment]: fail-closed (default/explicit success()) ok"
 else
   note "gate [Post sticky comment]: FAIL (gate '$post_if' can post an unvalidated/partial body)"; fail=1
