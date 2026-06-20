@@ -43,9 +43,9 @@ stdenv.mkDerivation (finalAttrs: {
     '';
     homepage = "https://github.com/linux-rdma/perftest";
     # Dual-licensed GPLv2-or-BSD-2 (see COPYING); record both.
-    license = with lib.licenses; [
-      gpl2Only
-      bsd2
+    license = [
+      lib.licenses.gpl2Only
+      lib.licenses.bsd2
     ];
     mainProgram = "ib_send_bw";
     platforms = [
