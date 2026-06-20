@@ -106,24 +106,53 @@ pub struct RepoSlug {
     pub repo: String,
 }
 
+/// A git remote URL decomposed into its `host`, `owner`, and `repo`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteUrl {
+    /// The remote host (e.g. `github.com`).
+    pub host: String,
+    /// The repository owner (user or org).
+    pub owner: String,
+    /// The repository name.
+    pub repo: String,
+}
+
+/// Parse a git remote URL into its host, owner, and repo.
+///
+/// Handles the URL forms (`https://host/owner/repo`, `http://...`,
+/// `ssh://git@host/owner/repo`) and the scp-like ssh form
+/// (`git@host:owner/repo`), each with or without a trailing `.git`. Returns
+/// `None` if the URL is not a recognized `host`/`owner`/`repo` triple.
+#[must_use]
+pub fn parse_remote_url(url: &str) -> Option<RemoteUrl> {
+    let url = url.trim();
+    let url = url.strip_suffix(".git").unwrap_or(url);
+
+    // The `scheme://` forms put the host in the authority (after the optional
+    // `user@`) and separate the path with `/`; the scp-like `user@host:path`
+    // form has no scheme and separates host from path with the first `:`.
+    let (authority, path) = match url.split_once("://") {
+        Some((_scheme, after)) => after.split_once('/')?,
+        None => url.split_once(':')?,
+    };
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+
+    let (owner, repo) = path.split_once('/')?;
+    (!host.is_empty() && !owner.is_empty() && !repo.is_empty()).then(|| RemoteUrl {
+        host: host.to_string(),
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+    })
+}
+
 /// Parse the [`RepoSlug`] from a GitHub remote URL (https or ssh forms).
 ///
 /// Returns `None` for non-GitHub remotes, so callers can skip the commit-author
 /// lookup entirely off GitHub.
 #[must_use]
 pub fn parse_remote(url: &str) -> Option<RepoSlug> {
-    let url = url.trim();
-    let url = url.strip_suffix(".git").unwrap_or(url);
-    let rest = url
-        .strip_prefix("https://github.com/")
-        .or_else(|| url.strip_prefix("http://github.com/"))
-        .or_else(|| url.strip_prefix("ssh://git@github.com/"))
-        .or_else(|| url.strip_prefix("git@github.com:"))?;
-    let (owner, repo) = rest.split_once('/')?;
-    (!owner.is_empty() && !repo.is_empty()).then(|| RepoSlug {
-        owner: owner.to_string(),
-        repo: repo.to_string(),
-    })
+    let RemoteUrl { host, owner, repo } = parse_remote_url(url)?;
+    (host == "github.com").then_some(RepoSlug { owner, repo })
 }
 
 /// Authenticated response for `GET /repos/{owner}/{repo}/commits/{sha}`; only
@@ -249,7 +278,9 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
-    use super::{RepoSlug, User, is_valid_login, parse_noreply, parse_remote};
+    use super::{
+        RemoteUrl, RepoSlug, User, is_valid_login, parse_noreply, parse_remote, parse_remote_url,
+    };
 
     #[test]
     fn noreply_with_and_without_id() {
@@ -307,5 +338,54 @@ mod tests {
             want
         );
         assert_eq!(parse_remote("https://gitlab.com/foo/bar.git"), None);
+    }
+
+    #[test]
+    fn remote_url_host_owner_repo() {
+        let want = |host: &str| {
+            Some(RemoteUrl {
+                host: host.to_string(),
+                owner: "indexable-inc".to_string(),
+                repo: "index".to_string(),
+            })
+        };
+        // https/http, with and without a trailing `.git`.
+        assert_eq!(
+            parse_remote_url("https://github.com/indexable-inc/index.git"),
+            want("github.com")
+        );
+        assert_eq!(
+            parse_remote_url("https://github.com/indexable-inc/index"),
+            want("github.com")
+        );
+        assert_eq!(
+            parse_remote_url("http://github.com/indexable-inc/index"),
+            want("github.com")
+        );
+        // ssh URL form and scp-like ssh form.
+        assert_eq!(
+            parse_remote_url("ssh://git@github.com/indexable-inc/index.git"),
+            want("github.com")
+        );
+        assert_eq!(
+            parse_remote_url("git@github.com:indexable-inc/index.git"),
+            want("github.com")
+        );
+        assert_eq!(
+            parse_remote_url("git@github.com:indexable-inc/index"),
+            want("github.com")
+        );
+        // The host is preserved for non-GitHub remotes.
+        assert_eq!(
+            parse_remote_url("git@gitlab.com:foo/bar.git"),
+            Some(RemoteUrl {
+                host: "gitlab.com".to_string(),
+                owner: "foo".to_string(),
+                repo: "bar".to_string(),
+            })
+        );
+        // Not a host/owner/repo triple.
+        assert_eq!(parse_remote_url("not-a-url"), None);
+        assert_eq!(parse_remote_url("https://github.com/owner-only"), None);
     }
 }
