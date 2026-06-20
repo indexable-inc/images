@@ -24,9 +24,13 @@ use serde_json::{Value, json};
 use crate::{DenyOutput, emit, flag_set, read_stdin};
 
 /// Read-only investigators whose work is the expensive, reusable unit. Mutating
-/// or open-ended agents are deliberately excluded. Override with the
-/// `SUBAGENT_CACHE_AGENTS` env var (comma-separated).
+/// or open-ended agents are deliberately excluded. Matched case-sensitively
+/// against `subagent_type`, so the built-in explorer is listed under both the
+/// capitalized name Claude Code ships (`Explore`) and the lowercase house
+/// orchestrator (`explore`). Override with the `SUBAGENT_CACHE_AGENTS` env var
+/// (comma-separated).
 const DEFAULT_CACHEABLE_AGENTS: &[&str] = &[
+    "Explore",
     "explore",
     "codebase-locator",
     "codebase-analyzer",
