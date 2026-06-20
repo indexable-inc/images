@@ -311,7 +311,8 @@ pub fn derivation_graph(drv_paths: &[String]) -> Result<Graph> {
 /// the same shape reaches both [`eval_checks`] and [`crate::timings`].
 ///
 /// The trusted workflow schema (`blast-radius.yml` safename regex) allows dots,
-/// slashes, spaces, and parens but rejects `"`, and trimming only the ends
+/// slashes, spaces, parens, `?`, and `=` (the legal nix-name glyphs that reach a
+/// label) but rejects `"`, and trimming only the ends
 /// leaves the quotes around an interior segment in place. Drop every `"` and
 /// split on dots outside quotes, then rejoin with `.`, so the bare path flows
 /// identically through the diff key, the report, and the schema regardless of
