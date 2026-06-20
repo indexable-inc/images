@@ -53,11 +53,18 @@ jobs:
     # every later `synchronize`/`reopened` while the label remains. The `comment`
     # job has no `if:` of its own but `needs: evaluate`, so it is skipped too
     # whenever this gate is false.
+    #
+    # The last clause keeps the runner-cost win the opt-in is for: a `labeled`
+    # event fires for ANY label, so without it, adding an unrelated label to an
+    # already-opted-in PR would re-trigger the full-catalog eval. Gate `labeled`
+    # on the triggering label; `synchronize`/`reopened` carry no `label` and a
+    # non-`labeled` action passes the clause, so the `contains` check governs.
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login != 'dependabot[bot]' &&
-      contains(github.event.pull_request.labels.*.name, 'blast-radius')
+      contains(github.event.pull_request.labels.*.name, 'blast-radius') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'blast-radius')
     # Same self-hosted dispatcher as check.yml: the `ix-ci-run-*` label is
     # claimed by the org dispatcher, which mints an ephemeral runner with a warm
     # /nix/store. Evaluating .#ciChecks.x86_64-linux forces an x86_64-linux IFD

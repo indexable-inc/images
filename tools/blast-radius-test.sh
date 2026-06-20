@@ -153,5 +153,17 @@ else
   note "gate [Post sticky comment]: FAIL (gate '$post_if' can post an unvalidated/partial body)"; fail=1
 fi
 
+# Opt-in runner-cost gate: a `labeled` event fires for EVERY label, so the
+# evaluate `if:` must restrict the `labeled` action to the `blast-radius` label,
+# else adding any unrelated label to an already-opted-in PR re-runs the
+# expensive full-catalog eval (the runner cost the opt-in exists to avoid).
+eval_if="$(yq '.jobs.evaluate.if // ""' "$workflow")"
+if printf '%s' "$eval_if" | grep -q "action != 'labeled'" \
+   && printf '%s' "$eval_if" | grep -q "label.name == 'blast-radius'"; then
+  note "gate [evaluate]: labeled-event restricted to blast-radius label ok"
+else
+  note "gate [evaluate]: FAIL (any label addition re-triggers the eval)"; fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then echo "blast-radius-test: FAILED"; exit 1; fi
 echo "blast-radius-test: all passed"
