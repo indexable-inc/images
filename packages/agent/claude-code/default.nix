@@ -158,109 +158,15 @@ let
   manifest = lib.importJSON ./manifest.json;
   inherit (manifest) version;
 
-  # Env defaults applied through the launcher, declared as data (single source)
-  # and rendered into the spec's `env_defaults` below rather than hand-written
-  # into the install phase. Set by the launcher only when unset (the old
-  # `--set-default`), so an explicit env or settings.json `env` value still
-  # overrides per machine. Three groups:
-  #  - Output-truncation caps raised to the CLI's built-in maxima: we run a
-  #    trusted config (our own CLAUDE.md / AGENTS.md / hooks / MCP servers), so
-  #    prefer full output over pruning. BASH_MAX_OUTPUT_LENGTH default 30000
-  #    chars (binary clamp 150000); TASK_MAX_OUTPUT_LENGTH default 32000 (clamp
-  #    160000); MAX_MCP_OUTPUT_TOKENS default ~25000 tokens (no clamp).
-  #  - Feature toggles on by default fleet-wide: agent teams, still gated behind
-  #    the EXPERIMENTAL_ env var in this build.
+  # Set only when the caller has not already provided an env value.
   wrapperEnvDefaults = {
   };
-  # Rendered into the launcher spec as `env_defaults` (set only when unset), so
-  # an explicit env value still overrides per machine.
 
-  # Settings-key defaults that have no env knob, shipped as a JSON the wrapper
-  # injects via `--settings`. The package wraps the binary, so it can carry env
-  # vars and CLI flags but not a settings.json *key* directly. `--settings` adds
-  # a `flagSettings` layer that merges per-key with the other settings sources
-  # (precedence: managed > flagSettings > local > project > user; arrays concat),
-  # so it overrides a user's settings.json value but leaves every other key
-  # intact, and managed settings can still override it.
-  #
-  # IMPORTANT: between two `--settings` *flags* the CLI is first-wins (they do
-  # NOT merge with each other), so the wrapper injects this file only when the
-  # caller passed no `--settings` of their own (the launcher's `conditional_flags`
-  # in `launchSpec`): a user's CLI `--settings` applies untouched, and ours
-  # applies only when they pass none. Injecting ours unconditionally up front
-  # would silently shadow theirs, and the old approach of appending it after the
-  # user argv put it inside subcommand argv, where a parser that does not define
-  # the option dies (`claude mcp list` -> "error: unknown option '--settings'",
-  # issue #1044).
-  #   cleanupPeriodDays: keep transcripts + the wrapper's --debug logs ~1yr for
-  #     the optimize analysis and troubleshooting (CLI default 30).
-  #   skipDangerousModePermissionPrompt (the default): pre-accept the one-time
-  #     dangerous-mode warning, which the baked `--dangerously-skip-permissions`
-  #     flag alone does not suppress. Honored in every scope except *project* (a
-  #     guard against untrusted repos), so it takes effect from this flagSettings
-  #     layer. The dev image (images/dev/development-base) enforces the same
-  #     posture via managed settings; see its comment for the full rationale.
-  #   hooks.SessionStart (only when personalStartupContext is true): Andrew's
-  #     cached startup notes and local checkout inventory.
-  #   hooks.PreToolUse: the worktree isolation guard for file-edit tools
-  #     (claude-hooks `worktree-guard`), plus the subagent-cache lookup on the
-  #     `Agent` tool (claude-hooks `subagent-cache-lookup`, ENG-4665). Shipped
-  #     from this layer (not a project .claude/settings.json) on purpose: project
-  #     hooks only load for sessions started inside that project, which is
-  #     exactly the bypass the guard closes (ENG-2692) and the reason the cache
-  #     must be non-optional fleet-wide.
-  #   hooks.SubagentStop: the subagent-cache populate (claude-hooks
-  #     `subagent-cache-populate`, ENG-4665). Both cache hooks fail open to a
-  #     cold run when SUBAGENT_CACHE_URL is unset or the daemon is unreachable.
-  #   permissions.deny `gh pr merge --admin`/`--force` (ENG-2688, postmortem
-  #     ENG-2391: agent force-landed a red PR): admin/force merge is forbidden
-  #     outright, not gated. The old `ask` rule was theatre — it only intercepts
-  #     the Bash tool, but the kernel `sh()` path (and Bash itself, denied above)
-  #     reach `gh pr merge --admin` with no permission layer in front, so the
-  #     "pause for confirmation" gate was never real. Deny the Bash patterns
-  #     instead (enforced in every mode, including the baked
-  #     `--dangerously-skip-permissions`); the uncovered kernel `sh()` path is
-  #     bound by the `forceMerge` system-prompt rule's flat prohibition. Always
-  #     on, every configuration: a check-bypassing merge is never allowed.
-  #   permissions.deny WebSearch/WebFetch (only while the exa MCP server is in
-  #     the baked `mcpServers`): one web surface, not two. Exa's
-  #     web_search_exa/web_fetch_exa cover both built-ins, so denying the
-  #     stock pair stops the model from splitting identical lookups across two
-  #     toolsets. Deny rules are enforced in every permission mode, including
-  #     the baked `--dangerously-skip-permissions`. Scoped to `mcpServers ?
-  #     exa` so a consumer who overrides the server set away gets the
-  #     built-ins back instead of no web access at all.
-  #   permissions.deny Bash (only while the index kernel MCP server `index` is in
-  #     the generated `mcpServers`): the kernel's `python_exec`/`sh()` IS the
-  #     shell, so the Bash tool is denied to force every shell call onto the
-  #     kernel (one async event loop, live on the dashboard, clean output instead
-  #     of the raw-pipe ANSI-mangling path). Gated on the CONFIGURED server, not
-  #     `repoPackages ? mcp`: a consumer can keep the `mcp` sibling yet override
-  #     `mcpServers = { }` (or drop `index`), and gating on availability would
-  #     then deny Bash while shipping no kernel server — a session with no shell
-  #     at all. Tying the deny to `mcpServers ? index` means Bash is removed only
-  #     when its replacement is actually present. Like the pair above, deny is the
-  #     ONE wall the dangerous-mode posture cannot punch through: it holds under
-  #     the baked `--dangerously-skip-permissions` (verified two ways — a headless
-  #     run with `--disallowedTools Bash` under the skip-flag is refused with "No
-  #     such tool available: Bash", and the WebSearch/WebFetch deny above is
-  #     already live under the same flag, which is why the model uses exa, not the
-  #     built-ins). It is not an `ask`, which the flag WOULD auto-approve.
-  #     TRADEOFFS: (1) removes the "Bash only when kernel wedged" fallback; a
-  #     wedged kernel is recovered with `kernel_trace` / fresh `python_exec` /
-  #     restart, never Bash. (2) the `Bash(gh pr merge*--admin*/--force*)` ask
-  #     rules below go unreachable when Bash is denied, so for a consumer who sets
-  #     `dangerouslySkipPermissions = false` the permission-level merge gate moves
-  #     entirely onto the baked `forceMerge` system-prompt rule (the operative
-  #     gate fleet-wide anyway, since the default skip-flag already makes `ask`
-  #     inert); the kernel `sh()` path carries no equivalent prompt.
+  # Settings defaults are injected only when the caller passed no `--settings`;
+  # Claude treats repeated settings flags as first-wins.
 
-  # Every hook is a subcommand of one compiled binary, wrapped with its tool
-  # paths and the baked primary-checkout default; each fails open and silent.
-  # ./hooks.nix builds the binary (and its wrapper env); ../hooks.nix is the
-  # neutral declaration list (which subcommand on which event/matcher) shared
-  # with the codex wrapper.
-  claudeHooks = import ./hooks.nix {
+  # Build the hook runner once; shared policy renders it for each wrapper.
+  hookRunner = import ./hooks.nix {
     inherit
       lib
       runCommand
@@ -271,22 +177,18 @@ let
       repoPackages
       ;
   };
-  # The settings.json `hooks` block, rendered for Claude from the shared
-  # declaration list (the same list renders the codex wrapper's hooks). Located
-  # via ix.paths (the no-parent-path house rule forbids a `../` literal), same
-  # as the common.nix import above.
-  sharedHooks = import (ix.paths.packagesRoot + "/agent/hooks.nix") {
+  # Claude settings.json hook block rendered from shared agent policy.
+  sharedHooks = import (ix.paths.packagesRoot + "/agent/policy/hooks.nix") {
     inherit
       lib
-      claudeHooks
+      hookRunner
       primaryCheckouts
       personalStartupContext
       ;
   };
 
-  # Shared permission policy, rendered below into Claude's native
-  # `permissions.deny` settings shape.
-  sharedPermissions = import (ix.paths.packagesRoot + "/agent/permissions.nix") {
+  # Claude-native permission deny list rendered from shared agent policy.
+  sharedPermissions = import (ix.paths.packagesRoot + "/agent/policy/permissions.nix") {
     inherit lib mcpServers;
   };
 
@@ -295,20 +197,17 @@ let
   # keys (hooks, statusLine, ...) pass through.
   settingsDefaults = ix.deepMerge.rhs extraSettings (
     {
+      # Keep transcripts and wrapper debug logs long enough for troubleshooting.
       cleanupPeriodDays = 365;
       permissions = {
-        # Prepend any caller-supplied deny: `ix.deepMerge.rhs` treats a list as a
-        # leaf, so a computed `deny` would REPLACE `extraSettings.permissions.deny`
-        # outright and silently drop a consumer's own policy. Concatenate instead
-        # so package denies are additive to the caller's.
+        # Concatenate manually: deepMerge treats lists as leaves.
         deny = (extraSettings.permissions.deny or [ ]) ++ sharedPermissions.claude.deniedToolPatterns;
       };
-      # The full hook set (context injectors, guards, review pair, friction,
-      # subagent-cache) for Claude, rendered from the shared declaration list in
-      # ../hooks.nix.
+      # Full Claude hook set rendered from shared agent policy.
       hooks = sharedHooks.claude;
     }
     // lib.optionalAttrs dangerouslySkipPermissions {
+      # Suppress the one-time warning that the skip flag alone still shows.
       skipDangerousModePermissionPrompt = true;
     }
   );
@@ -336,61 +235,25 @@ let
     ]
   );
 
-  # Every flag the wrapper injects, PREPENDED before the user argv. Two hard
-  # rules, both learned from real breakage:
-  #
-  #  - Prepend, never append. Root-level options parse before subcommand
-  #    dispatch, so `claude --settings=F mcp list` works; an appended flag lands
-  #    inside the subcommand's argv, where a parser that does not define the
-  #    option dies ("error: unknown option '--settings'", issue #1044).
-  #  - An option-argument always rides in the `=` form, one self-contained argv
-  #    token. The space form is a landmine: `--mcp-config <configs...>` is
-  #    variadic and swallows the next positional (`claude agents` -> "MCP config
-  #    file not found: ./agents"), and an optional-value flag does the same.
-  #
-  # `--debug` is such an optional-value flag (`--debug [filter]`: `--debug
-  # agents` parses "agents" as the filter and then rejects the rest), and it has
-  # no value spelling for "everything", so it cannot take the `=` form. It is
-  # safe ONLY because the unconditional `--thinking-display=...` follows it;
-  # never let an optional-value flag sit last in this list.
-  #
-  # Why each flag:
-  #  - `--debug`: write operational telemetry (HTTP/API timings, auto-mode
-  #    classifier, MCP/LSP lifecycle, startup phases, permission decisions) to
-  #    ~/.claude/debug/ for troubleshooting and the optimize history analysis.
-  #    It does not pollute `claude -p` stdout (verified). Those logs prune on
-  #    the cleanupPeriodDays sweep, so settingsDefaults ships a long retention.
-  #  - `--thinking-display=summarized`: the API default DIFFERS BY MODEL:
-  #    `thinking.display` defaulted to "summarized" through Opus/Sonnet 4.6 but
-  #    Anthropic silently flipped it to "omitted" on Opus 4.7/4.8 (faster
-  #    time-to-first-token, thinking blocks arrive with an empty `thinking`
-  #    field), so on the latest Opus the live UI shows nothing and the
-  #    transcript persists no reasoning. `showThinkingSummaries` does NOT fix it
-  #    (renderer-only; anthropics/claude-code#49268 root cause, #63358 for Opus
-  #    4.8); this hidden flag is the only lever that works (verified on 2.1.159).
-  #    Safe for Haiku (already summarized by default), and unlike
-  #    CLAUDE_CODE_EXTRA_BODY it does not force `type:adaptive`, which Haiku
-  #    rejects. We trade the TTFT win for visible reasoning fleet-wide; an
-  #    explicit later `--thinking-display=omitted` on the CLI still wins
-  #    (single-value options are last-wins).
-  #  - `--dangerously-skip-permissions` (see its arg comment).
-  #  - `--add-dir=<dir>` (per `addDirs` entry): allow tool access to <dir> and
-  #    load any `<dir>/.claude/skills` + `<dir>/CLAUDE.md` under it. The `=` form
-  #    is MANDATORY here, not just preferred: `--add-dir <directories...>` is
-  #    variadic and would swallow the following argv token (the same class of bug
-  #    as `--mcp-config` above). See the `addDirs` arg comment.
-  #  - `--plugin-dir=<dir>` (per `pluginDirs` entry): load a plugin directory for
-  #    every session (namespaced skills/agents/hooks). See the `pluginDirs` arg.
+  # Prepend root flags. Use `--opt=value` for every option that takes a value:
+  # space-form options can be swallowed by subcommands or variadic flags.
   wrapperFlags = [
+    # Write ~/.claude/debug telemetry; cleanupPeriodDays controls retention.
     "--debug"
+    # Opus 4.7+ otherwise omits thinking from the UI/transcript.
     "--thinking-display=summarized"
   ]
+  # Default posture for sandboxed ix environments.
   ++ lib.optional dangerouslySkipPermissions "--dangerously-skip-permissions"
+  # Replace the stock prompt when a house prompt is configured.
   ++ lib.optional (
     systemPrompt != null
   ) "--system-prompt-file=${builtins.toFile "claude-code-system-prompt.txt" systemPrompt}"
+  # Bake the shared MCP server set when present.
   ++ lib.optional (mcpServers != { }) "--mcp-config=${mcpConfigFile}"
+  # `--add-dir` is variadic, so the `=` form is required.
   ++ map (d: "--add-dir=${d}") addDirs
+  # Plugins carry namespaced skills, agents, hooks, and MCP declarations.
   ++ map (d: "--plugin-dir=${d}") pluginDirs;
 
   envEntries = attrs: lib.mapAttrsToList (key: value: { inherit key value; }) attrs;
@@ -454,7 +317,9 @@ stdenv.mkDerivation (finalAttrs: {
   pname = "claude-code";
   inherit version;
 
+  # The source is a single fetched binary, not an archive.
   dontUnpack = true;
+
   # Stripping rewrites the binary and corrupts the trailer Bun appends to its
   # single-file executables, so the stripped CLI aborts on launch.
   dontStrip = true;
@@ -505,7 +370,7 @@ stdenv.mkDerivation (finalAttrs: {
       git
       jq
       repoPackages
-      claudeHooks
+      hookRunner
       launchSpec
       settingsDefaultsFile
       wrapperFlags

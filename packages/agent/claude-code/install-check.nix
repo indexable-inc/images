@@ -14,7 +14,7 @@
   git,
   jq,
   repoPackages,
-  claudeHooks,
+  hookRunner,
   launchSpec,
   settingsDefaultsFile,
   wrapperFlags,
@@ -105,19 +105,19 @@
   # present digest rides additionalContext verbatim, and an oversized digest
   # is hard-capped at 6000 chars.
   mkdir -p digest-home/.cache/ix
-  if got="$(HOME="$PWD/no-such-home" ${claudeHooks}/bin/claude-hooks session-digest </dev/null)" && [ -z "$got" ]; then :; else
+  if got="$(HOME="$PWD/no-such-home" ${hookRunner}/bin/claude-hooks session-digest </dev/null)" && [ -z "$got" ]; then :; else
     printf 'session-digest hook check failed (missing digest): expected silent exit 0, got:\n%s\n' "$got" >&2
     exit 1
   fi
   printf 'Distilled lesson: prefer rg over grep.' > digest-home/.cache/ix/context-digest.md
-  got="$(HOME="$PWD/digest-home" ${claudeHooks}/bin/claude-hooks session-digest </dev/null)"
+  got="$(HOME="$PWD/digest-home" ${hookRunner}/bin/claude-hooks session-digest </dev/null)"
   want='{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Distilled lesson: prefer rg over grep."}}'
   if [ "$got" != "$want" ]; then
     printf 'session-digest hook check failed (digest present)\nexpected:\n%s\ngot:\n%s\n' "$want" "$got" >&2
     exit 1
   fi
   printf 'x%.0s' $(seq 9000) > digest-home/.cache/ix/context-digest.md
-  cap="$(HOME="$PWD/digest-home" ${claudeHooks}/bin/claude-hooks session-digest </dev/null \
+  cap="$(HOME="$PWD/digest-home" ${hookRunner}/bin/claude-hooks session-digest </dev/null \
     | ${lib.getExe jq} -r '.hookSpecificOutput.additionalContext | length')"
   if [ "$cap" != 6000 ]; then
     printf 'session-digest hook check failed (cap): expected 6000 chars, got %s\n' "$cap" >&2
@@ -134,7 +134,7 @@
     mkdir -p no-home
     hook_silent() {
       local desc="$1" input="$2" got
-      if ! got="$(printf '%s' "$input" | HOME="$PWD/no-home" ${claudeHooks}/bin/claude-hooks prompt-priors)" \
+      if ! got="$(printf '%s' "$input" | HOME="$PWD/no-home" ${hookRunner}/bin/claude-hooks prompt-priors)" \
         || [ -n "$got" ]; then
         printf 'prompt-priors hook check failed (%s): expected silent exit 0, got:\n%s\n' \
           "$desc" "$got" >&2
@@ -167,7 +167,7 @@
   guard() {
     local desc="$1" expect="$2" input="$3" got verdict
     got="$(printf '%s' "$input" \
-      | CLAUDE_CODE_PRIMARY_CHECKOUTS="$primary" ${claudeHooks}/bin/claude-hooks worktree-guard)"
+      | CLAUDE_CODE_PRIMARY_CHECKOUTS="$primary" ${hookRunner}/bin/claude-hooks worktree-guard)"
     case "$got" in
     ''') verdict=allow ;;
     *'"permissionDecision":"deny"'*) verdict=deny ;;
@@ -197,7 +197,7 @@
   guard "malformed payload fails open" allow 'not json'
   if [ -n "$(printf '%s' "{\"tool_input\":{\"file_path\":\"$primary/a.txt\"}}" \
     | CLAUDE_CODE_DISABLE_WORKTREE_GUARD=1 \
-      CLAUDE_CODE_PRIMARY_CHECKOUTS="$primary" ${claudeHooks}/bin/claude-hooks worktree-guard)" ]; then
+      CLAUDE_CODE_PRIMARY_CHECKOUTS="$primary" ${hookRunner}/bin/claude-hooks worktree-guard)" ]; then
     printf 'worktree guard check failed: kill switch must allow silently\n' >&2
     exit 1
   fi
@@ -206,7 +206,7 @@
   # deny/allow asserter on the JSON permissionDecision channel.
   pre_guard() {
     local sub="$1" desc="$2" expect="$3" input="$4" got verdict
-    got="$(printf '%s' "$input" | ${claudeHooks}/bin/claude-hooks "$sub")"
+    got="$(printf '%s' "$input" | ${hookRunner}/bin/claude-hooks "$sub")"
     case "$got" in
     ''') verdict=allow ;;
     *'"permissionDecision":"deny"'*) verdict=deny ;;
@@ -246,21 +246,21 @@
   # allows silently (the loop guard).
   rstate="$PWD/review-state"
   printf '%s' '{"session_id":"s1","tool_input":{"file_path":"/a/b.rs"}}' \
-    | CLAUDE_REVIEW_STATE_DIR="$rstate" ${claudeHooks}/bin/claude-hooks review-log-edit
+    | CLAUDE_REVIEW_STATE_DIR="$rstate" ${hookRunner}/bin/claude-hooks review-log-edit
   gate="$(printf '%s' '{"session_id":"s1"}' \
-    | CLAUDE_REVIEW_STATE_DIR="$rstate" ${claudeHooks}/bin/claude-hooks review-gate)"
+    | CLAUDE_REVIEW_STATE_DIR="$rstate" ${hookRunner}/bin/claude-hooks review-gate)"
   case "$gate" in
   *'"decision":"block"'*) : ;;
   *) printf 'review-gate check failed: expected decision:block, got:\n%s\n' "$gate" >&2; exit 1 ;;
   esac
   again="$(printf '%s' '{"session_id":"s1"}' \
-    | CLAUDE_REVIEW_STATE_DIR="$rstate" ${claudeHooks}/bin/claude-hooks review-gate)"
+    | CLAUDE_REVIEW_STATE_DIR="$rstate" ${hookRunner}/bin/claude-hooks review-gate)"
   if [ -n "$again" ]; then
     printf 'review-gate check failed: consumed marker should allow silently, got:\n%s\n' "$again" >&2
     exit 1
   fi
   loop="$(printf '%s' '{"session_id":"s1","stop_hook_active":true}' \
-    | CLAUDE_REVIEW_STATE_DIR="$rstate" ${claudeHooks}/bin/claude-hooks review-gate)"
+    | CLAUDE_REVIEW_STATE_DIR="$rstate" ${hookRunner}/bin/claude-hooks review-gate)"
   if [ -n "$loop" ]; then
     printf 'review-gate check failed: stop_hook_active must allow silently, got:\n%s\n' "$loop" >&2
     exit 1
@@ -270,14 +270,14 @@
   # no git identity, so it must exit 0 silently (never block Stop, never file).
   if [ -n "$(printf '%s' '{"session_id":"s1","transcript_path":"/dev/null"}' \
     | HOME="$PWD/no-home" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
-      ${claudeHooks}/bin/claude-hooks friction-report)" ]; then
+      ${hookRunner}/bin/claude-hooks friction-report)" ]; then
     printf 'friction-report check failed: non-contributor must exit silently\n' >&2
     exit 1
   fi
 
   # session-banner is best-effort host introspection; assert only that it never
   # crashes (fails open) on a minimal HOME.
-  HOME="$PWD/no-home" ${claudeHooks}/bin/claude-hooks session-banner </dev/null >/dev/null
+  HOME="$PWD/no-home" ${hookRunner}/bin/claude-hooks session-banner </dev/null >/dev/null
 
   # Fail-open net for the subagent-cache hooks (ENG-4665): every skip and
   # error path must exit 0 with NO output (a lookup that emits would block the
@@ -287,7 +287,7 @@
   sac() {
     local desc="$1" sub="$2" input="$3" got
     got="$(printf '%s' "$input" \
-      | SUBAGENT_CACHE_URL=http://127.0.0.1:1 ${claudeHooks}/bin/claude-hooks "$sub")"
+      | SUBAGENT_CACHE_URL=http://127.0.0.1:1 ${hookRunner}/bin/claude-hooks "$sub")"
     if [ -n "$got" ]; then
       printf 'subagent-cache %s check failed (%s): expected silent, got:\n%s\n' \
         "$sub" "$desc" "$got" >&2
@@ -305,7 +305,7 @@
     '{"agent_type":"explore","last_assistant_message":"x","agent_transcript_path":"/no/such/transcript"}'
   if [ -n "$(printf '%s' '{"tool_input":{"subagent_type":"explore","prompt":"how does X work"}}' \
     | CLAUDE_CODE_DISABLE_SUBAGENT_CACHE=1 \
-      SUBAGENT_CACHE_URL=http://127.0.0.1:1 ${claudeHooks}/bin/claude-hooks subagent-cache-lookup)" ]; then
+      SUBAGENT_CACHE_URL=http://127.0.0.1:1 ${hookRunner}/bin/claude-hooks subagent-cache-lookup)" ]; then
     printf 'subagent-cache lookup check failed: kill switch must be silent\n' >&2
     exit 1
   fi

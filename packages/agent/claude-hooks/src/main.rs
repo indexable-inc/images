@@ -5,8 +5,8 @@
 //! because a noisy or broken hook is strictly worse than no hook.
 //!
 //! The neutral declaration list that maps each subcommand to its event/matcher
-//! for both agents lives in `packages/agent/hooks.nix`; the claude-code wrapper
-//! bakes the binary's tool paths and primary-checkout default via env
+//! for both agents lives in `packages/agent/policy/hooks.nix`; the wrappers bake
+//! the binary's tool paths and primary-checkout default via env
 //! (`IX_GIT`, `IX_SEARCH`, `IX_DEFAULT_PRIMARY_CHECKOUTS`), while user-facing
 //! knobs keep their `CLAUDE_CODE_*` names.
 
