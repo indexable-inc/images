@@ -55,11 +55,13 @@ let
     dontNpmBuild = true;
     doCheck = true;
     checkPhase = ''
+      # shell
       runHook preCheck
       npm test
       runHook postCheck
     '';
     installPhase = ''
+      # shell
       runHook preInstall
       mkdir -p $out
       cp ix-mcp-bridge.ts env.js package.json $out/
@@ -90,6 +92,7 @@ stdenv.mkDerivation {
   doCheck = true;
 
   buildPhase = ''
+        # shell
         runHook preBuild
 
     ${lib.optionalString isLinux ''
@@ -340,12 +343,14 @@ stdenv.mkDerivation {
   '';
 
   checkPhase = ''
+    # shell
     runHook preCheck
     PYTHONPATH=${./.} ${pythonCommand} ${./room_event_mapper_test.py}
     runHook postCheck
   '';
 
   installPhase = ''
+    # shell
     runHook preInstall
     mkdir -p "$out/bin" "$out/lib"
     cp pi-harness "$out/bin/pi-harness"

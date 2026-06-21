@@ -60,6 +60,7 @@ let
     ix.writeNushellApplication pkgs {
       name = "mc-blocks-apply-init";
       text = ''
+        # nu
         let base = [ "client" "--host" "${clickhouseHost}" "--port" "${toString clickhousePort}" ]
         while (^${lib.getExe pkgs.clickhouse} ...$base --query "SELECT 1" | complete).exit_code != 0 { sleep 1sec }
         open --raw "${initSql}" | ^${lib.getExe pkgs.clickhouse} ...$base --multiquery

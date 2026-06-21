@@ -32,6 +32,7 @@ rustPlatform.buildRustPackage {
   # tarball has no `.git`, so resolve the about-box string to the crate version
   # instead. --replace-fail keeps this guard honest if upstream moves the call.
   postPatch = ''
+    # shell
     substituteInPlace launchk/src/main.rs \
       --replace-fail "git_version!()" 'env!("CARGO_PKG_VERSION")'
   '';

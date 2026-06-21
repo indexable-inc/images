@@ -19,6 +19,7 @@ let
     nixCargoGuard = hookRunnerSubcommand "cargo-guard";
     shellHabitGuard = hookRunnerSubcommand "bash-habits-guard";
     indexedSearchGuard = hookRunnerSubcommand "search-guard";
+    promptPriors = hookRunnerSubcommand "prompt-priors";
     subagentCacheLookup = hookRunnerSubcommand "subagent-cache-lookup";
     reviewEditLogger = hookRunnerSubcommand "review-log-edit";
     stopReviewGate = hookRunnerSubcommand "review-gate";
@@ -75,6 +76,13 @@ let
         matcher = "Agent";
         command = hookCommands.subagentCacheLookup;
         timeout = 15;
+        agents = [ "claude" ];
+      }
+    ];
+
+    UserPromptSubmit = [
+      {
+        command = hookCommands.promptPriors;
         agents = [ "claude" ];
       }
     ];

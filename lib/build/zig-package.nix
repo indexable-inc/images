@@ -140,6 +140,7 @@ pkgs.stdenv.mkDerivation (
     dontBuild = true;
 
     installPhase = ''
+      # shell
       runHook preInstall
 
       ${zigCacheScript}

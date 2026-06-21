@@ -18,6 +18,7 @@
     "elixir-lsp.elixir-ls",
     "sumneko.lua",
     "fwcd.kotlin",
-    "redhat.vscode-xml"
+    "redhat.vscode-xml",
+    "rdfox.rdfox-rdf"
   ]
 }

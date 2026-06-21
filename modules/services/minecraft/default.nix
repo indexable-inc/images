@@ -709,6 +709,7 @@ let
       syncManaged
     ];
     text = ''
+      # nu
       const driver = ${builtins.toJSON autoReloadDriver}
       const socket = ${builtins.toJSON cfg.autoReload.socketPath}
       const plan = ${builtins.toJSON "${dataDir}/.ix-managed-${cfg.dropinDir}.reload-plan"}
@@ -757,6 +758,7 @@ let
     name = "minecraft-world-border";
     runtimeInputs = [ pkgs.minecraft-rcon ];
     text = ''
+      # nu
       def rcon [command: string] {
         minecraft-rcon --host 127.0.0.1 --port ${toString rconPort} --password-file ${builtins.toJSON rconPasswordFile} $command
       }

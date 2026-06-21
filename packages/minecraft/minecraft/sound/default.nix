@@ -26,6 +26,7 @@ symlinkJoin {
   # no Minecraft install. `--set-default` keeps MCSOUND_ASSETS overridable at
   # runtime (e.g. to point at a real Minecraft / Prism install instead).
   postBuild = ''
+    # shell
     wrapProgram $out/bin/minecraft-sound \
       --set-default MCSOUND_ASSETS ${sounds}/sounds
   '';

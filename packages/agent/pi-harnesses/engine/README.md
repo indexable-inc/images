@@ -3,9 +3,10 @@
 The Index-side Pi engine harness (ENG-2262). It runs [Pi](https://pi.dev) as a
 Room-facing engine with **the built-in tools absent**, exposing **only** the
 `ix-mcp` tool surface, selecting the model declaratively, and emitting a
-machine-readable JSON event stream. This is the Pi equivalent of the Claude
-"tools removed" posture in `packages/agent/claude-code` (`restrictToTools`), and it is
-the first task in the ENG-2261 "Pi Room integration" stack.
+machine-readable JSON event stream. This mirrors the Claude Code posture in
+`packages/agent/claude-code`: keep one shell/file/web surface by routing through
+the index MCP server. It is the first task in the ENG-2261 "Pi Room integration"
+stack.
 
 ## What it is
 

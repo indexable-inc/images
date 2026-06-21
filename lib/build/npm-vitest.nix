@@ -61,14 +61,18 @@ let
       inherit version;
       dontUnpack = false;
       buildPhase = ''
+        # shell
         runHook preBuild
         ${preTest}
         ${vitestCli} run
         runHook postBuild
       '';
       installPhase = ''
+        # shell
+        runHook preInstall
         mkdir -p "$out"
         echo passed > "$out/result"
+        runHook postInstall
       '';
     }
   );
@@ -79,14 +83,18 @@ let
       pname = "${pname}-vitest-manifest";
       inherit version;
       buildPhase = ''
+        # shell
         runHook preBuild
         ${preTest}
         ${vitestCli} list --json --static-parse > tests.json
         runHook postBuild
       '';
       installPhase = ''
+        # shell
+        runHook preInstall
         mkdir -p "$out"
         cp tests.json "$out/tests.json"
+        runHook postInstall
       '';
     }
   );
@@ -166,14 +174,18 @@ let
             vitestArgs = caseArgs entry;
           };
           buildPhase = ''
+            # shell
             runHook preBuild
             ${preTest}
             ${vitestCli} run ${lib.escapeShellArgs (caseArgs entry)}
             runHook postBuild
           '';
           installPhase = ''
+            # shell
+            runHook preInstall
             mkdir -p "$out"
             echo passed > "$out/result"
+            runHook postInstall
           '';
         }
       )

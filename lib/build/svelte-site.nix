@@ -78,6 +78,7 @@ let
         derivationAttrs = {
           inherit bunNodeModules;
           configurePhase = ''
+            # shell
             runHook preConfigure
 
             patchShebangs .
@@ -166,6 +167,7 @@ let
       nativeBuildInputs = manager.nativeBuildInputs ++ extraNativeBuildInputs;
 
       buildPhase = ''
+        # shell
         runHook preBuild
         ${preBuild}
         ${lib.escapeShellArgs buildCommand}
@@ -173,6 +175,7 @@ let
       '';
 
       installPhase = ''
+        # shell
         runHook preInstall
         mkdir -p "$out"/${lib.escapeShellArg installDir}
         cp -R ${lib.escapeShellArg (distDir + "/.")} "$out"/${lib.escapeShellArg installDir}/
@@ -249,6 +252,7 @@ let
     inherit (manager) runtimeInputs;
     meta.description = "Run the ${pname} Svelte dev server from a mutable checkout";
     text = ''
+      # nu
       const checkout_subdir = ${builtins.toJSON devConfig.checkoutSubdir}
       const install_argv = ${builtins.toJSON manager.devInstallCommand}
       const run_prefix = ${builtins.toJSON devRunPrefix}

@@ -104,6 +104,7 @@ pkgs.stdenv.mkDerivation {
   '';
 
   buildPhase = ''
+    # shell
     runHook preBuild
     mix compile ${depsCheckFlag} --warnings-as-errors
     runHook postBuild
@@ -111,6 +112,7 @@ pkgs.stdenv.mkDerivation {
 
   doCheck = true;
   checkPhase = ''
+    # shell
     runHook preCheck
     mix format --check-formatted
     mix credo --strict
@@ -119,6 +121,7 @@ pkgs.stdenv.mkDerivation {
   '';
 
   installPhase = ''
+    # shell
     runHook preInstall
     mkdir -p "$out"
     runHook postInstall

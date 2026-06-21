@@ -143,6 +143,7 @@ symlinkJoin {
   # invocation while everything else stays pristine.
   nativeBuildInputs = [ makeBinaryWrapper ];
   postBuild = ''
+    # shell
     rm -f $out/bin/${binName}
     makeBinaryWrapper ${launcher}/bin/config-launch $out/bin/${binName} \
       --inherit-argv0 \

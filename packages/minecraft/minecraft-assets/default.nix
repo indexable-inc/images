@@ -47,6 +47,7 @@ stdenvNoCC.mkDerivation {
   # loudly (`unzip` exits non-zero) if a path stops existing in a future jar, so
   # a silently missing sprite cannot slip through as an empty asset dir.
   buildPhase = ''
+    # shell
     runHook preBuild
 
     mkdir -p "$out/boss_bar" "$out/gui" "$out/font" "$out/entity" "$out/particle"

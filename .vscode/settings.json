@@ -2,6 +2,7 @@
   "java.configuration.updateBuildConfiguration": "automatic",
   "direnv.restart.automatic": true,
   "files.associations": {
+    "*.astlog": "datalog",
     "*.nu": "nushell",
     "common.json": "jsonc",
     "*-mods.json": "jsonc"
@@ -31,7 +32,10 @@
     "tests/fixtures/cargo-unit-hello/Cargo.toml"
   ],
   "rust-analyzer.check.command": "clippy",
-  "rust-analyzer.check.extraArgs": ["--all-targets", "--all-features"],
+  "rust-analyzer.check.extraArgs": [
+    "--all-targets",
+    "--all-features"
+  ],
   "rust-analyzer.cargo.features": "all",
   "rust-analyzer.imports.granularity.group": "module",
   "rust-analyzer.imports.prefix": "crate",
@@ -46,7 +50,17 @@
   "rust-analyzer.diagnostics.experimental.enable": true,
   "nix.serverSettings": {
     "nixd": {
-      "formatting": { "command": ["nixfmt"] }
+      "formatting": {
+        "command": [
+          "nixfmt"
+        ]
+      }
+    }
+  },
+  "nix-embedded-languages.include": {
+    "nu|nushell": {
+      "name": "Nushell",
+      "scopeName": "source.nushell"
     }
   },
   "search.exclude": {

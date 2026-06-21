@@ -1,0 +1,8 @@
+{
+  installPhase = ''
+    # shell
+    runHook preInstall
+    install -Dm755 tool $out/bin/tool
+    runHook postInstall
+  '';
+}

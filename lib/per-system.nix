@@ -46,6 +46,7 @@ let
       repoPackages.astlog
     ];
     text = ''
+      # nu
       def "main nixfmt" [] {
         let nix_files = (fd --extension nix | lines)
         nixfmt --check ...$nix_files
@@ -175,6 +176,7 @@ let
     meta.description = "Run all Nix formatting and lint checks in parallel via dag-runner";
     runtimeInputs = [ repoPackages.dag-runner ];
     text = ''
+      # nu
       def --wrapped main [...args] {
         exec dag-runner ...$args ${lintSpec}
       }
@@ -612,6 +614,7 @@ let
     meta.description = "Refresh every repo content source (Minecraft catalogs + pinned binaries) in parallel via dag-runner";
     runtimeInputs = [ repoPackages.dag-runner ];
     text = ''
+      # nu
       def --wrapped main [...args] {
         exec dag-runner ...$args ${updateSpec}
       }

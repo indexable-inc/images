@@ -1376,6 +1376,7 @@ let
   # darwin guard off macOS. Runs real rg/fd (on the check's PATH); pure local FS,
   # no network, so the build sandbox runs it.
   fsearchTestPy = pkgs.writeText "ix-mcp-fsearch-test.py" ''
+    # python
     import asyncio
     import os
     import subprocess
@@ -1660,6 +1661,7 @@ let
   # slack declaration against the slack module's own constants, so the declared
   # probe can never drift from the resolution order the module actually uses.
   requirementsTestPy = pkgs.writeText "ix-mcp-requirements-test.py" ''
+    # python
     import os
     from pathlib import Path
 
@@ -1783,6 +1785,7 @@ let
   # real tailscale state. The mock is shell, not a subprocess of an actual
   # tailscale, so this test runs in the Nix sandbox.
   bindDefaultTest = pkgs.writeText "ix-mcp-bind-default-test.py" ''
+    # python
     from unittest.mock import patch
     from ix_notebook_mcp import cli
 
@@ -1860,6 +1863,7 @@ let
   # return None on non-darwin platforms. Dependency-free pure Python, so the
   # build sandbox runs it.
   sshAuthSockTest = pkgs.writeText "ix-mcp-ssh-auth-sock-test.py" ''
+    # python
     import os
     import tempfile
     from pathlib import Path
@@ -1931,6 +1935,7 @@ let
   # dead-redirect fix, both pure Python (real loopback sockets, no `dashboard`
   # binary), so the sandbox runs it.
   dashboardLauncherTest = pkgs.writeText "ix-mcp-dashboard-launcher-test.py" ''
+    # python
     import asyncio
     import json
     import os
@@ -2143,6 +2148,7 @@ let
   # result. This is the core "multiple async" contract, provable without a kernel
   # or network, so the sandbox runs it.
   runtimeTestPy = pkgs.writeText "ix-mcp-runtime-test.py" ''
+    # python
     import asyncio
 
     from ix_notebook_mcp import runtime
@@ -2421,6 +2427,7 @@ let
   # streams output, and that `feed.job` fetches one run by the id a python_exec
   # tool result names (and None for a miss).
   feedTestPy = pkgs.writeText "ix-mcp-feed-test.py" ''
+    # python
     import tempfile
     import time
 
@@ -2487,6 +2494,7 @@ let
   # Covers the store singleton row, runtime.Session's label precedence + store
   # mirror, and the reserved `__session__` pane the bridge publishes.
   sessionIdentityTestPy = pkgs.writeText "ix-mcp-session-identity-test.py" ''
+    # python
     import tempfile
 
     from ix_notebook_mcp import pane_bridge, runtime, store
@@ -2566,6 +2574,7 @@ let
   # routes (incl. the by-id lookup an embedder keys off the job id in a tool
   # reply) return the run's nbformat output bundles, cells, and live resources.
   apiTest = pkgs.writeText "ix-mcp-api-test.py" ''
+    # python
     import asyncio, tempfile
     from pathlib import Path
 
@@ -2717,6 +2726,7 @@ let
   # 'running' by the dead server is marked interrupted, and a second reopen has
   # nothing to replay (the restore folds everything into a fresh checkpoint).
   sessionTestPy = pkgs.writeText "ix-mcp-session-test.py" ''
+    # python
     import asyncio
     import tempfile
 
@@ -2802,6 +2812,7 @@ let
   # (await __ix_exec), and ipykernel interrupts async cells by cancelling the
   # asyncio task, which a synchronous call never yields to.
   wedgeTestPy = pkgs.writeText "ix-mcp-wedge-test.py" ''
+    # python
     import asyncio
     import os
     import tempfile
@@ -2923,6 +2934,7 @@ let
   # image payload normalizes to a base64 string. Stands up an InteractiveShell
   # in-process so the formatter runs without booting a kernel; sandbox-safe.
   richTestPy = pkgs.writeText "ix-mcp-rich-test.py" ''
+    # python
     import asyncio
     import json
     import os
@@ -3115,6 +3127,7 @@ let
   # unchanged. In process (a shell, the store), no kernel boot or network, so
   # the sandbox runs it.
   yieldTestPy = pkgs.writeText "ix-mcp-yield-test.py" ''
+    # python
     import asyncio
     import json
     import os
@@ -3240,6 +3253,7 @@ let
   # bindings to the store, which is where the dashboard reads them. In-process, no
   # kernel or network, so the sandbox runs it.
   bindingsTestPy = pkgs.writeText "ix-mcp-bindings-test.py" ''
+    # python
     import asyncio
     import inspect
     import json
@@ -3371,6 +3385,7 @@ let
   # so no real VM (or Virtualization.framework entitlement) is needed; pure
   # in-process, sandbox-safe.
   vmkitResourceTestPy = pkgs.writeText "ix-mcp-vmkit-resource-test.py" ''
+    # python
     import asyncio
     import os
     import time
@@ -3481,6 +3496,7 @@ let
   # builds tiny fixture databases with the real schema subset and round-trips an
   # archived NSAttributedString through Foundation, so the sandbox runs it.
   imessageTestPy = pkgs.writeText "ix-mcp-imessage-test.py" ''
+    # python
 
     import os
     import sqlite3
@@ -3726,6 +3742,7 @@ let
   # math (incl. the latitude cosine correction) and the polars schema shapes, and
   # confirms the public coroutines and MapKit binding are present.
   mapsTestPy = pkgs.writeText "ix-mcp-maps-test.py" ''
+    # python
     import inspect
     import math
 
@@ -3785,6 +3802,7 @@ let
   # (the injection fix), the ps-ancestry parse/walk, and the surfaces readout
   # split, and confirms the public coroutine surface.
   ghosttyTestPy = pkgs.writeText "ix-mcp-ghostty-test.py" ''
+    # python
     import inspect
 
     import ghostty
@@ -3863,6 +3881,7 @@ let
   # and df_html renders the styled table the kernel installs globally. Pure local
   # FS over the bundled view/polars/pygments, so the sandbox runs it.
   viewTestPy = pkgs.writeText "ix-mcp-view-test.py" ''
+    # python
     import polars as pl
 
     import view
@@ -3966,6 +3985,7 @@ let
   # a Result, so a cell can end with it), exit-code capture, and check=True.
   # Pure local subprocess over the bundled ansi2html, so the sandbox runs it.
   shTestPy = pkgs.writeText "ix-mcp-sh-test.py" ''
+    # python
     import asyncio
 
     import sh
@@ -4134,6 +4154,7 @@ let
   # on_error="collect" survives a failing host (recording it in attrs). Pure
   # Python over the bundled asyncssh + polars, so the sandbox runs it.
   fleetTestPy = pkgs.writeText "ix-mcp-fleet-test.py" ''
+    # python
     import asyncio
     import sys
 
@@ -4281,6 +4302,7 @@ let
   # with a child fileTransfer carrying progress, a build with a log line and a set
   # phase, the matching stops, and a trailing error msg.
   nixTestPy = pkgs.writeText "ix-mcp-nix-test.py" ''
+    # python
     import polars as pl
 
     import nix
@@ -4416,6 +4438,7 @@ let
   # and `wt / "x"` joins onto it, commit() stages new files, and remove() drops
   # the tree. Pure git + the bundled sh, so the sandbox runs it.
   worktreeTestPy = pkgs.writeText "ix-mcp-worktree-test.py" ''
+    # python
     import asyncio
     import os
     import pathlib
@@ -4511,6 +4534,7 @@ let
   # never-headless launch argv, the clear error when nothing is on the port, and
   # that api() now lists both the module and the bundled playwright library.
   browserTestPy = pkgs.writeText "ix-mcp-browser-test.py" ''
+    # python
     import asyncio
     import sys
 
@@ -4732,6 +4756,7 @@ let
   # has geometry and a CSS selector that actually resolves, and that the
   # interactive_only / viewport_only lean modes behave.
   browserVdomTestPy = pkgs.writeText "ix-mcp-browser-vdom-test.py" ''
+    # python
     import asyncio
     import sys
 

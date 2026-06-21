@@ -47,6 +47,7 @@ let
         runtimeInputs = [ nix ];
         meta.description = "Refresh packages/yc/manifest.json to the latest YC CLI release";
         text = ''
+          # nu
           const base = "${baseUrl}"
           const slugs = {
             "aarch64-darwin": "darwin-arm64",
@@ -85,6 +86,7 @@ stdenv.mkDerivation {
   nativeBuildInputs = lib.optional stdenv.hostPlatform.isLinux autoPatchelfHook;
 
   installPhase = ''
+    # shell
     runHook preInstall
     install -Dm755 $src $out/bin/yc
     runHook postInstall

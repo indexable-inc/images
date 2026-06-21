@@ -71,6 +71,7 @@ stdenv.mkDerivation (finalAttrs: {
   dontAutoPatchelf = true;
 
   buildPhase = ''
+    # shell
     runHook preBuild
     tar xzf "$src"
     mkdir exploded
@@ -94,6 +95,7 @@ stdenv.mkDerivation (finalAttrs: {
   '';
 
   installPhase = ''
+    # shell
     runHook preInstall
     mkdir -p "$out/share/java"
     ( cd exploded && zip -q -r -1 "$out/share/java/${jarName}" . )

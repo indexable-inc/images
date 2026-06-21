@@ -601,6 +601,7 @@ let
   pythonAppClosureProbe = ix.writePythonApplication pkgs {
     name = "python-app-closure-probe";
     src = pkgs.writeText "python-app-closure-probe.py" ''
+      # python
       print("python app source is in the runtime closure")
     '';
     # `check = false` already skips the checker, so the default flip cannot

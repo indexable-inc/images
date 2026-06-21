@@ -32,6 +32,7 @@ writeNushellApplication {
     gnugrep
   ];
   text = ''
+    # nu
     def main [out?: string] {
       let flake = ($env.IX_CHROME_VM_FLAKE? | default "github:indexable-inc/index")
       let outpath = ($out | default $"($env.PWD)/chrome-vm-shot.png")

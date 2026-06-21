@@ -227,6 +227,7 @@ pkgs.stdenvNoCC.mkDerivation (_: {
   doInstallCheck = check;
 
   installPhase = ''
+    # shell
     runHook preInstall
 
     export HOME="$TMPDIR/home"
@@ -255,6 +256,7 @@ pkgs.stdenvNoCC.mkDerivation (_: {
   '';
 
   installCheckPhase = ''
+    # shell
     runHook preInstallCheck
 
     ${selectedChecker.phase}

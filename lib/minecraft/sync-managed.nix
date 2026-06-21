@@ -52,6 +52,7 @@ in
 writeNushellApplication pkgs {
   name = "minecraft-sync-managed";
   text = ''
+    # nu
     def main [] {
       exec ${lib.getExe package} ${lib.escapeShellArgs args}
     }

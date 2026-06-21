@@ -20,6 +20,7 @@ stdenvNoCC.mkDerivation {
   nativeBuildInputs = [ makeWrapper ];
 
   installPhase = ''
+    # shell
     runHook preInstall
     install -Dm755 $src $out/bin/bossbar
     patchShebangs $out/bin/bossbar

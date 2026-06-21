@@ -20,6 +20,7 @@ stdenvNoCC.mkDerivation {
   strictDeps = true;
 
   installPhase = ''
+    # shell
     runHook preInstall
 
     install -Dm755 "$src" "$out/bin/artifacts"

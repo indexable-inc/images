@@ -48,6 +48,7 @@ stdenv.mkDerivation (finalAttrs: {
   strictDeps = true;
 
   installPhase = ''
+    # shell
     runHook preInstall
     mkdir -p "$out"
     mv * "$out/"

@@ -394,6 +394,7 @@ let
           name = if sub == null then "ix-fleet" else "ix-fleet-${sub}";
           runtimeInputs = [ ixFleet ];
           text = ''
+            # nu
             def --wrapped main [...args] {
               ${userLocalBinPath}
               exec ${lib.getExe ixFleet} --plan ${plan} ${lib.optionalString (sub != null) "${sub} "}...$args

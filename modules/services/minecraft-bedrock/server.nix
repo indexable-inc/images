@@ -42,6 +42,7 @@ stdenv.mkDerivation {
   dontBuild = true;
 
   installPhase = ''
+    # shell
     runHook preInstall
 
     mkdir -p "$out/bin" "$out/share/minecraft-bedrock-server"

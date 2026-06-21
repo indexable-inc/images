@@ -19,6 +19,7 @@ writeNushellApplication {
   ];
   meta.description = "Refresh packages/agent/claude-code/manifest.json to a signed Claude Code release";
   text = ''
+    # nu
     const base = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases"
     const signing_key = "${./release-signing-key.asc}"
     const slugs = {

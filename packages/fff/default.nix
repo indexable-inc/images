@@ -63,6 +63,7 @@ rustPlatform.buildRustPackage {
   # picked up automatically. Copy the unhashed final artifact into lib/ (skip
   # the hashed copy under deps/) for both the Linux .so and the macOS .dylib.
   postInstall = ''
+    # shell
     mkdir -p "$out/lib"
     find target -type f \( -name 'libfff_c.so' -o -name 'libfff_c.dylib' \) \
       -not -path '*/deps/*' -exec install -Dm555 {} "$out/lib/" \;

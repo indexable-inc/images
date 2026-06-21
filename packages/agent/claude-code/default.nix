@@ -160,6 +160,9 @@ let
 
   # Set only when the caller has not already provided an env value.
   wrapperEnvDefaults = {
+    # Drops [1m] variants from /model without touching model selection.
+    # Re-enable 1M per machine: `export CLAUDE_CODE_DISABLE_1M_CONTEXT=`.
+    CLAUDE_CODE_DISABLE_1M_CONTEXT = 1;
   };
 
   # Settings defaults are injected only when the caller passed no `--settings`;

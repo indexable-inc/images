@@ -81,6 +81,7 @@ let
     writeNushellApplication pkgs {
       name = "health-check-${name}";
       text = ''
+        # nu
         def main [] {
           let home = ($env.HOME? | default "")
           if $home != "" {
@@ -143,6 +144,7 @@ let
     meta.description = "Boot every example fleet in parallel, run its health checks, and tear the VMs down";
     runtimeInputs = [ dagRunner ];
     text = ''
+      # nu
       def --wrapped main [...args] {
         exec ${lib.getExe dagRunner} ...$args ${specFile}
       }
@@ -175,6 +177,7 @@ let
     meta.description = "Boot every example fleet, run its health checks, and view each in a zellij pane";
     runtimeInputs = [ pkgs.zellij ];
     text = ''
+      # nu
       def main [] {
         ${ixTokenPrompt}
 

@@ -38,6 +38,7 @@ let
         runtimeInputs = [ nix ];
         meta.description = "Refresh packages/dia/manifest.json to a Dia release";
         text = ''
+          # nu
           const base = "https://releases.diabrowser.com/release"
 
           # Run from the repo root: `nix run .#dia.updateScript -- [version]`.
@@ -78,6 +79,7 @@ stdenv.mkDerivation {
   dontFixup = true;
 
   installPhase = ''
+    # shell
     runHook preInstall
     mkdir -p "$out/Applications" "$out/bin"
     cp -R Dia.app "$out/Applications/Dia.app"

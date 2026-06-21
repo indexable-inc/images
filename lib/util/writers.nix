@@ -214,6 +214,7 @@ let
       ''
       + text;
       checkPhase = ''
+        # shell
         runHook preCheck
         ${lib.getExe' pkgs.bash "bash"} -n "$target"
         ${lib.getExe pkgs.shellcheck} --shell=bash --severity=warning "$target"
@@ -283,6 +284,7 @@ let
           mainProgram = meta.mainProgram or name;
         };
         text = ''
+          # nu
           const process_compose_args = ${builtins.toJSON processComposeArgs}
 
           def main [...args: string] {

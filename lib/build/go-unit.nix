@@ -201,8 +201,11 @@ let
       doCheck = true;
       strictDeps = true;
       installPhase = ''
+        # shell
+        runHook preInstall
         mkdir -p "$out"
         touch "$out/done"
+        runHook postInstall
       '';
       passthru.goUnit = {
         inherit (args)

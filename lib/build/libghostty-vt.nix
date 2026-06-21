@@ -61,11 +61,17 @@ let
   # deps), so these go through the checked Nushell writer.
   xcrunShim = writeNushellApplication pkgs {
     name = "xcrun";
-    text = ''def --wrapped main [...args] { print "${appleSdkRoot}" }'';
+    text = ''
+      # nu
+      def --wrapped main [...args] { print "${appleSdkRoot}" }
+    '';
   };
   xcodeSelectShim = writeNushellApplication pkgs {
     name = "xcode-select";
-    text = ''def --wrapped main [...args] { print "${appleSdk}" }'';
+    text = ''
+      # nu
+      def --wrapped main [...args] { print "${appleSdk}" }
+    '';
   };
 
   darwinSdkInputs = lib.optionals isDarwin [
@@ -103,6 +109,7 @@ stdenv.mkDerivation {
   dontBuild = true;
 
   installPhase = ''
+    # shell
     runHook preInstall
 
     export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"

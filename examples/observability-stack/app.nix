@@ -37,6 +37,7 @@ let
     ix.writeNushellApplication pkgs {
       name = "ix-observability-demo-check";
       text = ''
+        # nu
         let base = [ "client" "--host" "${observability.host}" "--port" "${toString observability.clickhousePort}" "--database" "${observability.database}" ]
         let traces = (^${lib.getExe pkgs.clickhouse} ...$base --query "SELECT count() FROM otel_traces WHERE ServiceName = '${serviceName}' AND SpanName = '${spanName}' AND Timestamp >= now() - INTERVAL 1 DAY" | str trim | into int)
         let logs = (^${lib.getExe pkgs.clickhouse} ...$base --query "SELECT count() FROM otel_logs WHERE Body LIKE '%${marker}%' AND Timestamp >= now() - INTERVAL 1 DAY" | str trim | into int)

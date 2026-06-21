@@ -177,6 +177,7 @@ lib.fix (self: {
         strictDeps = true;
 
         buildPhase = ''
+          # shell
           runHook preBuild
 
           cp ${packageFile} package.json
@@ -195,6 +196,7 @@ lib.fix (self: {
         '';
 
         installPhase = ''
+          # shell
           runHook preInstall
 
           mkdir -p "$out"

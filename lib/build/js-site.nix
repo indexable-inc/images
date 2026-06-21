@@ -80,6 +80,7 @@ let
         derivationAttrs = {
           inherit bunNodeModules;
           configurePhase = ''
+            # shell
             runHook preConfigure
 
             patchShebangs .
@@ -143,6 +144,7 @@ pkgs.stdenvNoCC.mkDerivation (
     nativeBuildInputs = manager.nativeBuildInputs ++ extraNativeBuildInputs;
 
     buildPhase = ''
+      # shell
       runHook preBuild
       ${preBuild}
       ${lib.escapeShellArgs buildCommand}
@@ -150,6 +152,7 @@ pkgs.stdenvNoCC.mkDerivation (
     '';
 
     installPhase = ''
+      # shell
       runHook preInstall
       mkdir -p "$out"/${lib.escapeShellArg installDir}
       cp -R ${lib.escapeShellArg (distDir + "/.")} "$out"/${lib.escapeShellArg installDir}/

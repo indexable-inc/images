@@ -53,6 +53,7 @@ stdenvNoCC.mkDerivation {
   outputHash = lock.packHash;
 
   buildPhase = ''
+    # shell
     runHook preBuild
 
     list="$TMPDIR/sounds.tsv"

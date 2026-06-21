@@ -56,6 +56,7 @@ let
         runtimeInputs = [ nix ];
         meta.description = "Refresh packages/humanlayer/manifest.json to the latest HumanLayer CLI release";
         text = ''
+          # nu
           const base = "https://registry.npmjs.org/@humanlayer"
           const slugs = {
             "x86_64-linux": "linux-x64",
@@ -103,6 +104,7 @@ stdenvNoCC.mkDerivation {
   dontStrip = true;
 
   installPhase = ''
+    # shell
     runHook preInstall
 
     mkdir -p \

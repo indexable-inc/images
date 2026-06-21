@@ -24,6 +24,7 @@ let
       pkgs.xterm
     ];
     text = ''
+      # nu
       def main [] {
         job spawn { ^xterm }
         exec icewm-session
@@ -49,6 +50,7 @@ let
       cfg.package
     ];
     text = ''
+      # nu
       def main [] {
         let args = ${
           builtins.toJSON (

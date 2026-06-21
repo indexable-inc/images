@@ -80,6 +80,7 @@ let
       command = writeNushellApplication pkgs {
         name = "check-secret-refs";
         text = ''
+          # nu
           def check-secret [key: string, field: any, folder: any] {
             let folder_args = if ($folder | is-empty) { [] } else { [--folder $folder] }
             let value_args = if ($field | is-empty) { [--raw] } else { [--field $field] }
@@ -131,6 +132,7 @@ let
       command = writeNushellApplication pkgs {
         name = "materialize-secret-refs";
         text = ''
+          # nu
           def read-secret [key: string, field: any, folder: any] {
             let folder_args = if ($folder | is-empty) { [] } else { [--folder $folder] }
             if ($field | is-empty) {
@@ -264,6 +266,7 @@ let
           materializeSecrets
         ];
         text = ''
+          # nu
           def --wrapped main [...args] {
             check-secret-refs
             materialize-secret-refs

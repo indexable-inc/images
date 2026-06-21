@@ -24,6 +24,7 @@ stdenv.mkDerivation {
   nativeBuildInputs = [ jdk25 ];
 
   buildPhase = ''
+    # shell
     runHook preBuild
 
     mkdir -p classes
@@ -34,6 +35,7 @@ stdenv.mkDerivation {
   '';
 
   installPhase = ''
+    # shell
     runHook preInstall
 
     install -Dm0644 minecraft-hot-reload-agent.jar \

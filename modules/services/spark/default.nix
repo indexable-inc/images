@@ -140,6 +140,7 @@ let
       cfg.package
     ];
     text = ''
+      # nu
       def main [...args: string] {
         let ip = (do --ignore-errors {
           ^tailscale ip -4 | lines | where ($it | str trim | is-not-empty) | first

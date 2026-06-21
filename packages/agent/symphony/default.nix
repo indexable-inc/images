@@ -120,6 +120,7 @@ in
     pkgs.openssh
   ];
   text = ''
+    # nu
     def --wrapped main [...args] {
       exec ${src}/bin/run-nix ...$args
     }

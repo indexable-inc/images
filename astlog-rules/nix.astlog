@@ -1239,6 +1239,74 @@
 (lint keep-phase-hooks error
   "a phase override that drops its `runHook pre<Phase>` / `runHook post<Phase>` calls strips downstream hooks; keep both hooks for that phase")
 
+;; phase-string-syntax-comment: multiline shell phases should opt into editor
+;; shell highlighting with a harmless first-line shell comment.
+(rule (phase-string-syntax-comment n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text-match p "(^|\\.)(prePatch|postPatch|patchPhase|preBuild|postBuild|buildPhase|preInstall|postInstall|installPhase|preCheck|postCheck|checkPhase|preConfigure|postConfigure|configurePhase|preFixup|postFixup|fixupPhase|unpackPhase|distPhase|installCheckPhase|shellHook)$")
+  (text-match v "^''[[:space:]]*# (shell|bash|sh|syntax: (shell|bash|sh))"))
+(rule (phase-string-without-syntax-comment n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text-match p "(^|\\.)(prePatch|postPatch|patchPhase|preBuild|postBuild|buildPhase|preInstall|postInstall|installPhase|preCheck|postCheck|checkPhase|preConfigure|postConfigure|configurePhase|preFixup|postFixup|fixupPhase|unpackPhase|distPhase|installCheckPhase|shellHook)$")
+  (not (phase-string-syntax-comment n)))
+(lint phase-string-without-syntax-comment error
+  "multiline shell phase strings need `# shell` as their first line so editors highlight the embedded shell")
+
+;; nushell-text-without-syntax-comment: embedded Nushell app bodies should opt
+;; into editor highlighting with a harmless first-line Nushell comment.
+(rule (nushell-text-syntax-comment n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text p "text")
+  (text-match v "^''[[:space:]]*# (nu|nushell|syntax: (nu|nushell))"))
+(rule (nushell-looking-text n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text p "text")
+  (text-match v "^''[[:space:]]*(def |def --wrapped |const |let |use |source |export def |module )"))
+(rule (nushell-text-without-syntax-comment n)
+  (nushell-looking-text n)
+  (not (nushell-text-syntax-comment n)))
+(lint nushell-text-without-syntax-comment error
+  "multiline Nushell `text` strings need `# nu` as their first line so editors highlight the embedded Nushell")
+
+;; python-text-without-syntax-comment: embedded Python source files should opt
+;; into editor highlighting with a harmless first-line Python comment.
+(rule (python-text-syntax-comment n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: [(variable_expression) (select_expression)] @f
+        argument: (string_expression) @s)
+      argument: (indented_string_expression) @v) @n")
+  (text-match f "^(pkgs\\.)?writeText$")
+  (text-match s "\\.py\"$")
+  (text-match v "^''[[:space:]]*# (python|py|syntax: (python|py))"))
+(rule (python-text n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: [(variable_expression) (select_expression)] @f
+        argument: (string_expression) @s)
+      argument: (indented_string_expression)) @n")
+  (text-match f "^(pkgs\\.)?writeText$")
+  (text-match s "\\.py\"$"))
+(rule (python-text-without-syntax-comment n)
+  (python-text n)
+  (not (python-text-syntax-comment n)))
+(lint python-text-without-syntax-comment error
+  "multiline Python `writeText \"*.py\"` strings need `# python` as their first line so editors highlight the embedded Python")
+
 ;; prefer-substituteinplace: `sed -i` / `awk` in a phase fails silently when the
 ;; pattern stops matching; use `substituteInPlace ... --replace-fail`.
 (rule (prefer-substituteinplace n)

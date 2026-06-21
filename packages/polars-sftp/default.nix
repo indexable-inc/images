@@ -78,6 +78,7 @@ let
     # for a cdylib-only crate. Replace it: find the cdylib the build hook produced
     # and package the wheel.
     installPhase = ''
+      # shell
       runHook preInstall
       # Match the cdylib in the target's release dir, not the identical copy under
       # release/deps/, so the result is deterministic.

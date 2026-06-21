@@ -113,6 +113,7 @@ let
 
   package = unwrapped.overrideAttrs (old: {
     postInstall = ''
+      # shell
       ${old.postInstall or ""}
       # Drop the prebuilt ix_sdk wheel into the venv site-packages so `import
       # ix_sdk` resolves both at runtime and for the ty install check, without a

@@ -63,6 +63,7 @@ let
     # so a perf job can override the store or pin a baseline without a second
     # entry point.
     text = ''
+      # nu
       def --wrapped main [...args] {
         exec ${exe} run --suite ${lib.escapeShellArg name} --runs ${toString runs} ${cmdFlags} ...$args
       }

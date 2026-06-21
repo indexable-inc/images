@@ -232,6 +232,7 @@ let
       runtimeInputs = [ pkgs.clickhouse ];
       meta.description = "Query the minecraft block_events spatial view in ClickHouse";
       text = ''
+        # nu
         let ch = [
           "client" "--host" "${host}" "--port" "${toString port}"
           "--database" "${schema.database}" "--format" "PrettyCompact"

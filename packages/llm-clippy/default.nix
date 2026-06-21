@@ -54,6 +54,7 @@ ix.buildRustPackage pkgs {
   env.RUSTC_BOOTSTRAP = "1";
 
   postInstall = ''
+    # shell
     for bin in "$out/bin/cargo-clippy" "$out/bin/clippy-driver"; do
       wrapProgram "$bin" \
         --prefix ${rustcLibPathVar} : "${toolchain}/lib"

@@ -70,6 +70,7 @@ in
     erlang
   ];
   text = ''
+    # nu
     def --wrapped main [...args] {
       # mix compiles in place, so stage the read-only source into a writable
       # temp dir before running the demo.

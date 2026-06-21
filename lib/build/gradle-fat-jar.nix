@@ -223,6 +223,7 @@ pkgs.stdenvNoCC.mkDerivation (
     gradleInitScript = localMavenInitScript;
 
     preConfigure = ''
+      # shell
       ${preConfigure}
       rm -rf .gradle build
     '';

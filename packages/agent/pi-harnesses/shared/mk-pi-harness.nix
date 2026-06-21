@@ -104,6 +104,7 @@ stdenv.mkDerivation {
   doCheck = checkFiles != [ ];
 
   buildPhase = ''
+    # shell
     runHook preBuild
     mkdir -p share/${name}/lib
     ${copyInto "share/${name}" extensions}
@@ -124,6 +125,7 @@ stdenv.mkDerivation {
   '';
 
   checkPhase = ''
+    # shell
     runHook preCheck
     cdir=$(mktemp -d)
     ${copyInto "$cdir" checkLib}
@@ -133,6 +135,7 @@ stdenv.mkDerivation {
   '';
 
   installPhase = ''
+    # shell
     runHook preInstall
     mkdir -p "$out/bin"
     cp -r share "$out/share"

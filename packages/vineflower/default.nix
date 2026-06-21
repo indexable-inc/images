@@ -23,6 +23,7 @@ stdenvNoCC.mkDerivation {
   nativeBuildInputs = [ jdk ];
 
   installPhase = ''
+    # shell
     runHook preInstall
     mkdir -p $out/share/java $out/bin
     cp ${jar} $out/share/java/vineflower.jar

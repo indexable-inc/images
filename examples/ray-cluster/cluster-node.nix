@@ -80,6 +80,7 @@ let
       pkgs.coreutils
     ];
     text = ''
+      # nu
       let node_ip = (
         ip -4 -o addr show scope global
         | lines

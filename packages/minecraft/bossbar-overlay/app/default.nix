@@ -71,6 +71,7 @@ rustPlatform.buildRustPackage {
   buildInputs = runtimeLibs;
 
   preBuild = ''
+    # shell
     # Drop the extracted Minecraft art where each crate's `include_bytes!` expects
     # it: the shared font into overlay-core, the sprites into each app.
     mkdir -p crates/overlay-core/assets crates/bossbar/assets/boss_bar \

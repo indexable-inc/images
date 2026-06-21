@@ -56,6 +56,7 @@ let
     name = "ix-observe";
     runtimeInputs = [ cfg.clickhouse.package ];
     text = ''
+      # nu
       let clickhouse_args = [
         "client"
         "--host"

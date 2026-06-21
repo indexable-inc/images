@@ -19,6 +19,7 @@ symlinkJoin {
   ];
   nativeBuildInputs = [ makeWrapper ];
   postBuild = ''
+    # shell
     wrapProgram $out/bin/tmux --add-flags "-f ${./tmux.conf}"
   '';
   meta = tmux.meta // {

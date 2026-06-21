@@ -44,6 +44,7 @@ stdenvNoCC.mkDerivation {
   nativeBuildInputs = [ makeWrapper ];
 
   installPhase = ''
+    # shell
     runHook preInstall
     mkdir -p "$out/bin"
     # Prefix, not suffix: scipql must use its own pinned rust-analyzer/cargo/

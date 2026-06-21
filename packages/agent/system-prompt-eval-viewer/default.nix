@@ -27,6 +27,7 @@ let
     };
     npmDepsHash = "sha256-Y7hsx0h2lMVTSsNYMXfi6TCqc7qBQH6poKptG2HPHfA=";
     installPhase = ''
+      # shell
       runHook preInstall
       cp -r dist $out
       runHook postInstall
@@ -49,6 +50,7 @@ ix.writeNushellApplication ix.pkgs {
     coreutils
   ];
   text = ''
+    # nu
     def main [json?: string] {
       let d = (^mktemp -d | str trim)
       ^cp -r ${site}/. $d

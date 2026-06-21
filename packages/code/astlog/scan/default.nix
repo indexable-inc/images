@@ -32,6 +32,7 @@ writeNushellApplication {
     mainProgram = "astlog-scan";
   };
   text = ''
+    # nu
     def main [] {
       let repo_root = (^git rev-parse --show-toplevel | str trim)
       cd $repo_root
