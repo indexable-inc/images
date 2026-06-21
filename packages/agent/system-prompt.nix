@@ -80,6 +80,11 @@ let
     Match the code around you: comment density, naming, structure, and idioms.
   '';
 
+  rustCollectStyle = ''
+    In Rust, do not use turbofish syntax to type collection results. Prefer a
+    local type annotation over forms like `.collect::<HashSet<_>>()`.
+  '';
+
   inlineComments = ''
     Comment non-obvious context: external constraints, gotchas, postmortems,
     spec quirks, or why-this-way decisions.
@@ -328,6 +333,7 @@ let
     experimentDefault
     promptEval
     matchSurroundingCode
+    rustCollectStyle
     inlineComments
     tieToIssue
     preV1
