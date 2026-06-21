@@ -17,6 +17,11 @@
     "/home/*/ix"
   ],
 
+  # Andrew-only local startup context: cached notes and ~/Projects inventory.
+  # Disabled for the shared wrapper because those hooks print workstation-local
+  # context that is not meaningful for other users.
+  personalStartupContext ? false,
+
   # Sibling repo packages from the flake package set (threaded by
   # lib/packages.nix), used to locate the `ix-mcp` entrypoint for the baked
   # `index` MCP server. `{ }` in the overlay package set, where the `mcp`
@@ -119,7 +124,7 @@ let
           lib
           claudeHooks
           primaryCheckouts
-          repoPackages
+          personalStartupContext
           ;
       }).codex;
   };

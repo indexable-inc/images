@@ -80,6 +80,11 @@
     "/home/*/ix"
   ],
 
+  # Andrew-only local startup context: cached notes and ~/Projects inventory.
+  # Disabled for the shared wrapper because those hooks print workstation-local
+  # context that is not meaningful for other users.
+  personalStartupContext ? false,
+
   # Sibling repo packages from the flake package set. lib/packages.nix threads
   # the lazily-recursive set in under this one name so a repo package can
   # depend on another by id without a flat merge into callPackage's top-level
@@ -204,11 +209,8 @@ let
   #     guard against untrusted repos), so it takes effect from this flagSettings
   #     layer. The dev image (images/dev/development-base) enforces the same
   #     posture via managed settings; see its comment for the full rationale.
-  #   hooks.UserPromptSubmit (only when the `search` sibling is in scope):
-  #     the score-gated ambient-priors hook (claude-hooks `prompt-priors`); see
-  #     `claudeHooks` below and packages/claude-hooks for the design.
-  #   hooks.SessionStart: the context-digest hook (claude-hooks `session-digest`);
-  #     see `claudeHooks` below.
+  #   hooks.SessionStart (only when personalStartupContext is true): Andrew's
+  #     cached startup notes and local checkout inventory.
   #   hooks.PreToolUse: the worktree isolation guard for file-edit tools
   #     (claude-hooks `worktree-guard`), plus the subagent-cache lookup on the
   #     `Agent` tool (claude-hooks `subagent-cache-lookup`, ENG-4665). Shipped
@@ -287,7 +289,7 @@ let
       lib
       claudeHooks
       primaryCheckouts
-      repoPackages
+      personalStartupContext
       ;
   };
 

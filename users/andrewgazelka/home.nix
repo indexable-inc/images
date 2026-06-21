@@ -70,6 +70,9 @@ let
   # place. `indexPkgs.claude-code` is the correctly host-targeted build.
   # See indexable-inc/index#1085.
   indexPkgs = indexPackages pkgs.stdenv.hostPlatform.system;
+  claudeCode = indexPkgs.claude-code.override {
+    personalStartupContext = true;
+  };
 
   isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
 
@@ -107,7 +110,7 @@ let
       pkgs.jq
       pkgs.sqlite
       sayDetached
-      indexPkgs.claude-code
+      claudeCode
       pkgs.coreutils
       pkgs.perl # the intrinsic non-overlap flock guard at the top of the script
       indexPkgs.bossbar
@@ -128,7 +131,7 @@ let
     runtimeInputs = [
       pkgs.gh
       pkgs.jq
-      indexPkgs.claude-code
+      claudeCode
       pkgs.coreutils
     ];
     text = builtins.readFile ./scripts/ci-triage.sh;
