@@ -27,6 +27,9 @@ enum Command {
     /// Merge several Cargo unit-graph JSON files.
     Merge(MergeArgs),
 
+    /// Emit cargo-nextest metadata for one cargo-unit-built test binary.
+    NextestMetadata(NextestMetadataArgs),
+
     /// Render generated Nix from Cargo unit-graph JSON on stdin.
     Render(RenderArgs),
 
@@ -54,6 +57,45 @@ struct MergeArgs {
     /// Cargo unit-graph JSON files to merge.
     #[arg(required = true, value_name = "PATH")]
     graphs: Vec<PathBuf>,
+}
+
+#[derive(Debug, clap::Args)]
+struct NextestMetadataArgs {
+    /// Synthetic workspace root nextest should report in diagnostics.
+    #[arg(long, value_name = "PATH")]
+    workspace_root: PathBuf,
+
+    /// Cargo-unit test target name.
+    #[arg(long, value_name = "NAME")]
+    target_name: String,
+
+    /// Cargo package name that owns the test target.
+    #[arg(long, value_name = "NAME")]
+    package_name: String,
+
+    /// Rust edition from the Cargo package target.
+    #[arg(long, value_name = "EDITION")]
+    edition: String,
+
+    /// Cargo-unit-built libtest binary to run through nextest.
+    #[arg(long, value_name = "PATH")]
+    test_binary: PathBuf,
+
+    /// Rust target triple used to build the test binary.
+    #[arg(long, value_name = "TRIPLE")]
+    target_triple: String,
+
+    /// Rust target libdir for nextest build metadata.
+    #[arg(long, value_name = "PATH")]
+    rust_libdir: PathBuf,
+
+    /// Output path for cargo metadata JSON.
+    #[arg(long, value_name = "PATH")]
+    cargo_metadata: PathBuf,
+
+    /// Output path for nextest binaries metadata JSON.
+    #[arg(long, value_name = "PATH")]
+    binaries_metadata: PathBuf,
 }
 
 #[derive(Debug, clap::Args)]
@@ -107,6 +149,142 @@ fn merge(args: MergeArgs) -> color_eyre::Result<()> {
     println!();
 
     Ok(())
+}
+
+fn nextest_metadata(args: &NextestMetadataArgs) -> color_eyre::Result<()> {
+    let target_directory = args.workspace_root.join("target").display().to_string();
+    let package_id = format!(
+        "path+file://{}#{}@0.0.0",
+        args.workspace_root.display(),
+        args.target_name
+    );
+
+    let cargo_metadata = nextest_cargo_metadata(args, &package_id, &target_directory);
+    let binaries_metadata = nextest_binaries_metadata(args, &package_id, &target_directory);
+
+    write_json(&args.cargo_metadata, &cargo_metadata)?;
+    write_json(&args.binaries_metadata, &binaries_metadata)?;
+
+    Ok(())
+}
+
+fn nextest_cargo_metadata(
+    args: &NextestMetadataArgs,
+    package_id: &str,
+    target_directory: &str,
+) -> serde_json::Value {
+    let manifest_path = args.workspace_root.join("Cargo.toml").display().to_string();
+    let src_path = args.workspace_root.join("src/lib.rs").display().to_string();
+
+    let cargo_target = serde_json::json!({
+        "kind": ["lib"],
+        "crate_types": ["lib"],
+        "name": &args.package_name,
+        "src_path": src_path,
+        "edition": &args.edition,
+        "doc": true,
+        "doctest": false,
+        "test": true
+    });
+    let cargo_package = serde_json::json!({
+        "name": &args.package_name,
+        "version": "0.0.0",
+        "id": package_id,
+        "source": null,
+        "dependencies": [],
+        "features": {},
+        "manifest_path": manifest_path,
+        "edition": &args.edition,
+        "metadata": null,
+        "publish": null,
+        "authors": [],
+        "categories": [],
+        "keywords": [],
+        "license": null,
+        "license_file": null,
+        "description": null,
+        "readme": null,
+        "repository": null,
+        "homepage": null,
+        "documentation": null,
+        "links": null,
+        "default_run": null,
+        "rust_version": null,
+        "targets": [cargo_target]
+    });
+
+    serde_json::json!({
+        "version": 1,
+        "workspace_root": args.workspace_root.display().to_string(),
+        "target_directory": target_directory,
+        "workspace_members": [package_id],
+        "workspace_default_members": [package_id],
+        "resolve": null,
+        "metadata": null,
+        "packages": [cargo_package]
+    })
+}
+
+fn nextest_binaries_metadata(
+    args: &NextestMetadataArgs,
+    package_id: &str,
+    target_directory: &str,
+) -> serde_json::Value {
+    let rust_libdir = args.rust_libdir.display().to_string();
+    let test_binary = args.test_binary.display().to_string();
+
+    let host_platform = serde_json::json!({
+        "platform": {
+            "triple": &args.target_triple,
+            "target-features": "unknown"
+        },
+        "libdir": {
+            "status": "available",
+            "path": rust_libdir
+        }
+    });
+    let build_meta = serde_json::json!({
+        "target-directory": target_directory,
+        "build-directory": target_directory,
+        "base-output-directories": ["debug"],
+        "non-test-binaries": {},
+        "build-script-out-dirs": {},
+        "build-script-info": {},
+        "linked-paths": [],
+        "platforms": {
+            "host": host_platform,
+            "targets": []
+        },
+        "target-platforms": [
+            {
+                "triple": &args.target_triple,
+                "target-features": "unknown"
+            }
+        ],
+        "target-platform": null
+    });
+    let binary = serde_json::json!({
+        "binary-id": &args.target_name,
+        "binary-name": &args.target_name,
+        "package-id": package_id,
+        "kind": "lib",
+        "binary-path": test_binary,
+        "build-platform": "target"
+    });
+
+    serde_json::json!({
+        "rust-build-meta": build_meta,
+        "rust-binaries": {
+            args.target_name.as_str(): binary
+        }
+    })
+}
+
+fn write_json(path: &std::path::Path, value: &serde_json::Value) -> color_eyre::Result<()> {
+    let file = std::fs::File::create(path)
+        .wrap_err_with(|| format!("creating JSON output {}", path.display()))?;
+    serde_json::to_writer_pretty(file, value)
+        .wrap_err_with(|| format!("writing JSON output {}", path.display()))
 }
 
 fn render(args: RenderArgs) -> color_eyre::Result<()> {
@@ -181,7 +359,60 @@ fn main() -> color_eyre::Result<()> {
 
     match Cli::parse().command {
         Command::Merge(args) => merge(args),
+        Command::NextestMetadata(args) => nextest_metadata(&args),
         Command::Render(args) => render(args),
         Command::ScanPanics(args) => scan_panics(args),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nextest_metadata_writes_package_and_binary_metadata() {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let workspace_root = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+        let cargo_metadata = tmp.path().join("cargo-metadata.json");
+        let binaries_metadata = tmp.path().join("binaries-metadata.json");
+
+        nextest_metadata(&NextestMetadataArgs {
+            workspace_root: workspace_root.clone(),
+            target_name: "crate_tests".to_owned(),
+            package_name: "crate-name".to_owned(),
+            edition: "2024".to_owned(),
+            test_binary: PathBuf::from("/nix/store/test-binary/bin/crate_tests"),
+            target_triple: "x86_64-unknown-linux-gnu".to_owned(),
+            rust_libdir: PathBuf::from("/nix/store/rust/lib/rustlib/x86_64-unknown-linux-gnu/lib"),
+            cargo_metadata: cargo_metadata.clone(),
+            binaries_metadata: binaries_metadata.clone(),
+        })
+        .expect("write nextest metadata");
+
+        let cargo: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(cargo_metadata).expect("read cargo metadata"),
+        )
+        .expect("parse cargo metadata");
+        let binaries: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(binaries_metadata).expect("read binaries metadata"),
+        )
+        .expect("parse binaries metadata");
+
+        assert_eq!(cargo["packages"][0]["name"], "crate-name");
+        assert_eq!(cargo["packages"][0]["edition"], "2024");
+        assert_eq!(cargo["packages"][0]["targets"][0]["edition"], "2024");
+        assert_eq!(
+            cargo["packages"][0]["manifest_path"],
+            workspace_root.join("Cargo.toml").display().to_string()
+        );
+        assert_eq!(
+            binaries["rust-binaries"]["crate_tests"]["binary-path"],
+            "/nix/store/test-binary/bin/crate_tests"
+        );
+        assert_eq!(
+            binaries["rust-build-meta"]["platforms"]["host"]["platform"]["triple"],
+            "x86_64-unknown-linux-gnu"
+        );
     }
 }

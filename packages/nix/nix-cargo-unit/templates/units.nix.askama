@@ -713,11 +713,12 @@ let
     );
 
   mkTestEntry =
-    { name, binary, packageName }:
+    { name, binary, packageName, edition }:
     let
       testArgs = testArgsByPackage.${packageName} or [];
     in
     {
+      inherit name binary packageName edition testArgs;
       # Runs the whole test binary in one derivation, mirroring `cargo test`.
       all = pkgs.runCommand "cargo-unit-test-${name}" (packageTestAttrs packageName) ''
         export RUST_TEST_THREADS="$NIX_BUILD_CORES"

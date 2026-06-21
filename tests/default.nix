@@ -4188,6 +4188,20 @@ let
         message = "cargo-unit workspaces should expose test targets as separate checks";
       }
       {
+        assertion = builtins.hasAttr "cargo_unit_hello" cargoUnitWorkspace.nextestByTarget;
+        message = "cargo-unit workspaces should expose cargo-nextest checks per test target";
+      }
+      {
+        assertion =
+          cargoUnitWorkspace.testChecksByTarget.cargo_unit_hello.drvPath
+          == cargoUnitWorkspace.nextestByTarget.cargo_unit_hello.drvPath;
+        message = "cargo-unit testChecksByTarget should use cargo-nextest when policy.tests.useNextest is enabled";
+      }
+      {
+        assertion = lib.isDerivation cargoUnitWorkspace.testChecksAll;
+        message = "cargo-unit workspaces should expose an aggregate test-check derivation";
+      }
+      {
         assertion = cargoUnitWorkspace.doctests != { };
         message = "cargo-unit workspaces should expose doctest targets as separate checks";
       }

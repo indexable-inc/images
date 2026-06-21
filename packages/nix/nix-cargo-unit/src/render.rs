@@ -294,7 +294,9 @@ pub fn render_units_nix(graph: &UnitGraph, options: &RenderOptions) -> Result<St
         source_audit_entries: render_source_audit_entries(&prepared),
         unit_entries: render_unit_entries(graph, options, &prepared)?,
         clippy_unit_entries: render_clippy_unit_entries(graph, options, &prepared)?,
-        clippy_unit_names_by_package: render_clippy_unit_names_by_package(graph, options, &prepared),
+        clippy_unit_names_by_package: render_clippy_unit_names_by_package(
+            graph, options, &prepared,
+        ),
         panic_object_unit_entries: render_panic_object_unit_entries(graph, options, &prepared)?,
         policy_check_entries: render_policy_check_entries(graph, options, &prepared)?,
         unused_crate_dependencies_by_package: render_unused_crate_dependencies_by_package(
@@ -819,8 +821,7 @@ fn render_unit_derivation(
     // the failures seen on the shared CI store. Keep tests and benches
     // input-addressed; they still benefit from upstream CA on their inputs.
     let unit = &graph.units[index];
-    let content_addressed =
-        options.content_addressed && !unit.is_test() && !unit.is_benchmark();
+    let content_addressed = options.content_addressed && !unit.is_test() && !unit.is_benchmark();
     append_content_addressing(&mut attrs, content_addressed);
     attrs.multiline(
         "buildPhase",
@@ -2947,10 +2948,11 @@ fn render_test_entries_for(
         let binary = test_binary_expr(unit, prepared, *index);
         let _ = writeln!(
             entries,
-            "    {} = mkTestEntry {{ name = {}; binary = \"{binary}\"; packageName = {}; }};",
+            "    {} = mkTestEntry {{ name = {}; binary = \"{binary}\"; packageName = {}; edition = {}; }};",
             nix_attr(&key),
             nix_attr(&key),
             nix_attr(&unit.package_name()),
+            nix_attr(&unit.target.edition),
         );
     }
 
@@ -3575,6 +3577,8 @@ mod tests {
         assert!(rendered.contains("packageBuildEnv.${attrs.packageName or \"\"} or {}"));
         assert!(rendered.contains("builtins.removeAttrs attrs [ \"packageName\" ]"));
         assert!(rendered.contains("mkTestEntry ="));
+        assert!(rendered.contains("edition = \"2024\";"));
+        assert!(rendered.contains("inherit name binary packageName edition testArgs;"));
         assert!(rendered.contains("RUST_TEST_THREADS"));
         assert!(rendered.contains("mkTestCases ="));
         assert!(rendered.contains("testTargets = ["));

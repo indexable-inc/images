@@ -365,7 +365,7 @@ let
             ++ lib.optional hasLintPolicy "--"
             ++ clippyLintArgs args.policy;
 
-          rustFlags = lib.escapeShellArgs (
+          rustFlags = lib.concatStringsSep " " (
             rustcArgsForPolicyForPlatform args.policy pkgs.stdenv.hostPlatform.config
           );
         in
@@ -384,25 +384,27 @@ let
             }
             // args.env
           )
-          ''
-            ${configScript}
+          (
+            ''
+              ${configScript}
 
-            export CARGO_TARGET_DIR="$TMPDIR/cargo-target"
+              export CARGO_TARGET_DIR="$TMPDIR/cargo-target"
 
-          ''
-        + (lib.optionalString (rustFlags != "") /* bash */ ''
-          export RUSTFLAGS="''${RUSTFLAGS:+$RUSTFLAGS }${rustFlags}"
-        '')
-        + /* bash */ ''
+            ''
+            + (lib.optionalString (rustFlags != "") /* bash */ ''
+              export RUSTFLAGS="''${RUSTFLAGS:+$RUSTFLAGS }"${lib.escapeShellArg rustFlags}
+            '')
+            + /* bash */ ''
 
-          cd ${args.src}
+              cd ${args.src}
 
-          cargo clippy \
-            --frozen --offline \
-            ${lib.escapeShellArgs clippyArgs}
+              cargo clippy \
+                --frozen --offline \
+                ${lib.escapeShellArgs clippyArgs}
 
-          mkdir -p "$out"
-        '';
+              mkdir -p "$out"
+            ''
+          );
     in
     {
       inherit cargoAuditCheck cargoMacheteCheck cargoClippyCheck;

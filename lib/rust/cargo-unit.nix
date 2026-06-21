@@ -12,6 +12,8 @@ let
     genericClosure
     hasAttr
     head
+    isList
+    isString
     length
     removeAttrs
     replaceStrings
@@ -53,6 +55,45 @@ let
     # Lazy: the `&&` short-circuits, so `config` (hence `importTOML`) is only
     # forced when the file exists and carries rustflags.
     if builtins.pathExists configPath && chosen != null then normalize chosen else [ ];
+
+  emptyTestPolicy = {
+    skip = [ ];
+    testThreads = null;
+  };
+
+  testPolicyFields = attrNames emptyTestPolicy;
+
+  normalizeTestPolicy =
+    packageName: rawPolicy:
+    let
+      unknownFields = filter (field: !(elem field testPolicyFields)) (attrNames rawPolicy);
+      policy = emptyTestPolicy // rawPolicy;
+      nonStringSkips = filter (testName: !(isString testName)) policy.skip;
+    in
+    assert lib.assertMsg (unknownFields == [ ])
+      "cargoUnit.buildWorkspace testPolicyByPackage.${packageName} has unknown fields: ${lib.concatStringsSep ", " unknownFields}";
+    assert lib.assertMsg (
+      isList policy.skip && nonStringSkips == [ ]
+    ) "cargoUnit.buildWorkspace testPolicyByPackage.${packageName}.skip must be a list of strings";
+    assert lib.assertMsg (policy.testThreads == null || isString policy.testThreads)
+      "cargoUnit.buildWorkspace testPolicyByPackage.${packageName}.testThreads must be null or a string";
+    policy;
+
+  libtestArgsForTestPolicy =
+    policy:
+    lib.concatMap (testName: [
+      "--skip"
+      testName
+    ]) policy.skip
+    ++ lib.optionals (policy.testThreads != null) [
+      "--test-threads"
+      policy.testThreads
+    ];
+
+  nextestFilterForTestPolicy =
+    policy:
+    lib.optionalString (policy.skip != [ ])
+      "-E ${escapeShellArg "not (${lib.concatMapStringsSep " | " (testName: "test(~${testName})") policy.skip})"}";
 
   /**
     Build a Rust workspace as one Nix derivation per Cargo rustc unit.
@@ -110,6 +151,12 @@ let
     `policyChecks`, plus the intermediate `unitGraphJson`, `unitsNix`, and `vendorDir`
     derivations for inspection.
 
+    `testPolicyByPackage.<package>` accepts structured test-runner policy:
+    `{ skip = [ "case_name" ]; testThreads = "1"; }`. `buildWorkspace` renders
+    it to libtest args for cargo-unit's per-test runner and to cargo-nextest
+    filters for `testChecksByTarget`. Callers should pass policy data, not
+    runner-specific argv.
+
     `rust.resolveArgs` resolves the shared bundle (context, policy, linker,
     effects, checks) once; the two IFD stages and the unit import below read the
     once-resolved values (configScript, toolchainId, cargoLockPath, render flags,
@@ -157,6 +204,21 @@ let
 
       explicitExtraUnits = rawArgs.extraUnits or { };
       extraLibraries = rawArgs.extraLibraries or { };
+      testPolicyByPackage = lib.mapAttrs normalizeTestPolicy (rawArgs.testPolicyByPackage or { });
+      testArgsFromPolicyByPackage = lib.mapAttrs (
+        _packageName: policy: libtestArgsForTestPolicy policy
+      ) testPolicyByPackage;
+      explicitTestArgsByPackage = rawArgs.testArgsByPackage or { };
+      testArgPolicyOverlap = filter (packageName: hasAttr packageName explicitTestArgsByPackage) (
+        attrNames testArgsFromPolicyByPackage
+      );
+      testArgsByPackage =
+        assert lib.assertMsg (testArgPolicyOverlap == [ ])
+          "cargoUnit.buildWorkspace received both testPolicyByPackage and testArgsByPackage for: ${lib.concatStringsSep ", " testArgPolicyOverlap}";
+        testArgsFromPolicyByPackage // explicitTestArgsByPackage;
+      packageTestInputs = rawArgs.packageTestInputs or { };
+      packageTestEnv = rawArgs.packageTestEnv or { };
+      testRunPrelude = rawArgs.testRunPrelude or "";
 
       # Every injected unit plus everything reachable from one through
       # `passthru.depUnits` (recorded by `mkPrebuiltLibraryUnit`), deduplicated
@@ -366,10 +428,12 @@ let
             # `clippy-driver` links against.
             extraClippyNativeBuildInputs = lib.optional perUnitClippyEnabled args.policy.clippy.package;
             extraEnv = args.env;
-            testRunPrelude = rawArgs.testRunPrelude or "";
-            testArgsByPackage = rawArgs.testArgsByPackage or { };
-            packageTestInputs = rawArgs.packageTestInputs or { };
-            packageTestEnv = rawArgs.packageTestEnv or { };
+            inherit
+              testRunPrelude
+              testArgsByPackage
+              packageTestInputs
+              packageTestEnv
+              ;
             packageBuildEnv = rawArgs.packageBuildEnv or { };
             inherit extraRustcArgsForPlatform;
             # Manifest-derived flags come first so per-call `policy.clippy`
@@ -496,10 +560,121 @@ let
       namedTargetSets = lib.listToAttrs (
         lib.zipListsWith lib.nameValuePair targetSetNames units.targetSets
       );
+      packageTestEnvForPackage = packageName: packageTestEnv.${packageName} or { };
+      nextestTargetTriple = rawArgs.target or pkgs.stdenv.hostPlatform.config;
+      nextestRustLibDir = "${args.rustToolchain}/lib/rustlib/${nextestTargetTriple}/lib";
+      nextestConfigFile = pkgs.writeText "cargo-unit-nextest.toml" ''
+        [profile.default]
+        retries = 0
+        slow-timeout = { period = "${rawArgs.nextestPerTestTimeout or "120s"}", terminate-after = 1 }
+        [profile.default.junit]
+        path = "junit.xml"
+      '';
+      mkNextestForTarget =
+        targetName: entry:
+        let
+          packageName = entry.packageName;
+          packageEnv = packageTestEnvForPackage packageName;
+          packagePolicy = testPolicyByPackage.${packageName} or emptyTestPolicy;
+          testBinary = entry.binary;
+        in
+        pkgs.runCommand "cargo-unit-nextest-${targetName}"
+          (
+            packageEnv
+            // {
+              __structuredAttrs = true;
+              strictDeps = true;
+              nativeBuildInputs = [
+                pkgs.cargo-nextest
+                pkgs.coreutils
+                nixCargoUnit
+              ]
+              ++ (packageTestInputs.${packageName} or [ ]);
+            }
+          )
+          ''
+            ${testRunPrelude}
+
+            workspace_root="$TMPDIR/nextest-ws"
+            mkdir -p "$workspace_root/src" "$workspace_root/target"
+            cat > "$workspace_root/Cargo.toml" <<EOF
+            [package]
+            name = ${escapeShellArg packageName}
+            version = "0.0.0"
+            edition = ${escapeShellArg entry.edition}
+            [lib]
+            EOF
+            : > "$workspace_root/src/lib.rs"
+
+            test_binary="$(readlink -f ${escapeShellArg testBinary})"
+            if [ ! -x "$test_binary" ]; then
+              echo >&2 "error: cargo-unit test binary missing or not executable: $test_binary"
+              exit 1
+            fi
+
+            nix-cargo-unit nextest-metadata \
+              --workspace-root "$workspace_root" \
+              --target-name ${escapeShellArg targetName} \
+              --package-name ${escapeShellArg packageName} \
+              --edition ${escapeShellArg entry.edition} \
+              --test-binary "$test_binary" \
+              --target-triple ${escapeShellArg nextestTargetTriple} \
+              --rust-libdir ${escapeShellArg nextestRustLibDir} \
+              --cargo-metadata "$workspace_root/cargo-metadata.json" \
+              --binaries-metadata "$workspace_root/binaries-metadata.json"
+
+            ${lib.concatStringsSep "\n" (map (name: "export ${name}") (attrNames packageEnv))}
+
+            cargo-nextest nextest run \
+              --config-file ${nextestConfigFile} \
+              --cargo-metadata "$workspace_root/cargo-metadata.json" \
+              --binaries-metadata "$workspace_root/binaries-metadata.json" \
+              --workspace-remap "$workspace_root" \
+              --no-fail-fast \
+              --no-tests=pass \
+              --test-threads ${
+                if packagePolicy.testThreads != null then
+                  packagePolicy.testThreads
+                else
+                  ''"''${NIX_BUILD_CORES:-1}"''
+              } \
+              ${nextestFilterForTestPolicy packagePolicy}
+
+            mkdir -p "$out"
+            if [ -f "$workspace_root/target/nextest/default/junit.xml" ]; then
+              cp "$workspace_root/target/nextest/default/junit.xml" "$out/junit.xml"
+            fi
+            echo "ran ${targetName} test target" > "$out/result"
+          '';
+      nextestByTarget = lib.mapAttrs mkNextestForTarget (units.tests or { });
+      libtestByTarget = lib.mapAttrs (_targetName: target: target.all) (units.tests or { });
+      testChecksByTarget = if args.policy.tests.useNextest then nextestByTarget else libtestByTarget;
+      testChecksAll =
+        pkgs.runCommand "cargo-unit-test-targets"
+          {
+            __structuredAttrs = true;
+            strictDeps = true;
+            deps = builtins.attrValues testChecksByTarget;
+          }
+          ''
+            set -euo pipefail
+            target_names=(${lib.escapeShellArgs (attrNames testChecksByTarget)})
+            mkdir -p "$out"
+            printf '%s\n' "''${target_names[@]}" > "$out/test-targets"
+            echo "ran ''${#target_names[@]} cargo-unit test targets" > "$out/result"
+          '';
     in
     units
     // {
-      inherit unitGraphJson unitsNix vendorDir;
+      inherit
+        unitGraphJson
+        unitsNix
+        vendorDir
+        testPolicyByPackage
+        nextestByTarget
+        testChecksByTarget
+        testChecksAll
+        ;
       targetSets = namedTargetSets;
       inherit (args) policy;
     };
