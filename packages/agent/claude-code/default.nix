@@ -284,15 +284,11 @@ let
       ;
   };
 
-  # Tools denied via the flagSettings `permissions.deny` layer; see the
-  # `permissions.deny` bullets in the doc block above for why each, and why deny
-  # (unlike ask/allow) holds under the baked `--dangerously-skip-permissions`.
-  denyTools =
-    lib.optionals (mcpServers ? exa) [
-      "WebSearch"
-      "WebFetch"
-    ]
-    ++ lib.optional (mcpServers ? index) "Bash";
+  # Shared permission policy, rendered below into Claude's native
+  # `permissions.deny` settings shape.
+  sharedPermissions = import (ix.paths.packagesRoot + "/agent/permissions.nix") {
+    inherit lib mcpServers;
+  };
 
   # Caller's extraSettings first, then the computed defaults recursively merged
   # ON TOP, so the keys below always win a conflict while the caller's other
@@ -305,13 +301,7 @@ let
         # leaf, so a computed `deny` would REPLACE `extraSettings.permissions.deny`
         # outright and silently drop a consumer's own policy. Concatenate instead
         # so package denies are additive to the caller's.
-        deny =
-          (extraSettings.permissions.deny or [ ])
-          ++ [
-            "Bash(gh pr merge*--admin*)"
-            "Bash(gh pr merge*--force*)"
-          ]
-          ++ denyTools;
+        deny = (extraSettings.permissions.deny or [ ]) ++ sharedPermissions.claude.deny;
       };
       # The full hook set (context injectors, guards, review pair, friction,
       # subagent-cache) for Claude, rendered from the shared declaration list in

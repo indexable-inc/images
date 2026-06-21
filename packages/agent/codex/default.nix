@@ -128,6 +128,12 @@ let
           ;
       }).codex;
   };
+
+  # Shared permission policy, exposed for consumers that render Codex managed
+  # requirements. Codex does not use Claude's `permissions.deny` JSON shape.
+  sharedPermissions = import (ix.paths.packagesRoot + "/agent/permissions.nix") {
+    inherit lib;
+  };
 in
 # These baked defaults also reach the Codex GUI app's remote-SSH sessions, not
 # just terminal use. The desktop app does NOT ship its own binary to the remote
@@ -154,7 +160,10 @@ symlinkJoin {
   '';
   # The codex hooks.json rendered from the shared declaration list, for a
   # consumer to deliver to `~/.codex/hooks.json` (see the `hooksJson` comment).
-  passthru = { inherit hooksJson; };
+  passthru = {
+    inherit hooksJson;
+    permissions = sharedPermissions.codex;
+  };
   meta = codex.meta // {
     description = "${codex.meta.description or "OpenAI Codex CLI"} (index wrapper with baked defaults)";
     mainProgram = binName;
