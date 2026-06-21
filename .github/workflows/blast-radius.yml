@@ -41,7 +41,7 @@ jobs:
   # token-backed step. The report leaves this job only as an artifact (plain
   # data) for the comment job.
   evaluate:
-    # Same-repository, non-Dependabot PRs only (mirroring ai-review-gate.yml).
+    # Same-repository, non-Dependabot PRs only.
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login != 'dependabot[bot]'

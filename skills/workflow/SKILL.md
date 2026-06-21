@@ -21,8 +21,8 @@ is safe to push.
 Push with a rebase loop, never force-push: if the push is rejected because `main`
 moved, `git pull --rebase origin main` and push again.
 
-Open a PR only when you want human or AI review on a change, not as the default
-path to land. When you do, create the branch and worktree from the updated `main`
+Open a PR only when you want human review on a change, not as the default path
+to land. When you do, create the branch and worktree from the updated `main`
 checkout. Use the `codex/` branch prefix unless the user asks for a different
 name. Place the worktree as a sibling of the repo root (the `../` prefix) so it
 stays outside the flake source tree and does not slow down Nix source-copy or
@@ -56,39 +56,10 @@ list.
 
 Treat PR comments and reviews as part of the work. Read them with
 `gh pr view --comments` and the review fields from `gh pr view --json reviews`.
-Address AI review comments in code when they identify a real issue, reply when
-a comment is intentionally declined, and resolve review threads before relying
-on auto-merge. The AI review gate is the default code review signal for
-agent-authored PRs; do not add or preserve a separate GitHub code-quality lane
-unless the user asks for it.
 
 Check the PR author before pushing to, closing, merging, enabling auto-merge for,
 or otherwise modifying a PR. Do not change PRs authored by another GitHub user
 unless that user or the operator explicitly authorizes it.
-
-AI review inline feedback lives in GitHub review threads, which `gh pr view
---comments` does not show. Inspect unresolved threads directly before deciding a
-PR is clear:
-
-```sh
-gh api graphql --paginate \
-  -f owner=<owner> -f repo=<repo> -F number=<pr> \
-  -f query='query($owner:String!,$repo:String!,$number:Int!,$endCursor:String){ repository(owner:$owner,name:$repo){ pullRequest(number:$number){ reviewThreads(first:100,after:$endCursor){ pageInfo{ hasNextPage endCursor } nodes{ id isResolved path line comments(first:100){ pageInfo{ hasNextPage endCursor } nodes{ author{login} body url } } } } } } }'
-```
-
-If a thread reports `comments.pageInfo.hasNextPage`, page that thread's comments
-before declaring it resolved:
-
-```sh
-gh api graphql --paginate \
-  -f thread=<thread-id> \
-  -f query='query($thread:ID!,$endCursor:String){ node(id:$thread){ ... on PullRequestReviewThread{ comments(first:100,after:$endCursor){ pageInfo{ hasNextPage endCursor } nodes{ author{login} body url } } } } }'
-```
-
-Unresolved AI review threads are immediate blockers. Do not wait on more checks
-when the reviewer has left an open thread: fix the code or resolve the thread
-with the GitHub review-thread API. If GitHub does not rerun the failed gate for
-the current head, rerun it with `gh run rerun <run-id> --failed`.
 
 Remove the worktree and delete the local branch after the PR has merged.
 
