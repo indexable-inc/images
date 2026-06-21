@@ -60,8 +60,20 @@
     };
     agents.max_depth = 3;
   },
+
+  # The house model/base instructions Codex should run with. Kept outside the
+  # overridable `settings` default so callers that replace `settings` for their
+  # own soft defaults do not silently drop the prompt.
+  modelInstructionsFile ? null,
 }:
 let
+  common = import (ix.paths.packagesRoot + "/agent/common.nix") { inherit lib ix repoPackages; };
+  effectiveModelInstructionsFile =
+    if modelInstructionsFile != null then
+      modelInstructionsFile
+    else
+      builtins.toFile "codex-system-prompt.txt" common.systemPrompt;
+
   # The compiled Rust launcher (packages/config-launch): reads IX_LAUNCH_SPEC
   # (a baked JSON file describing the target binary, config path, forced flags,
   # and soft defaults), performs per-key TOML presence detection against the
@@ -82,17 +94,22 @@ let
   # streamable-HTTP MCP support is gated behind version-specific keys, so the
   # keyless `exa` server stays claude-only rather than baking an unverified HTTP
   # config into every codex session.
-  mcpStdioServers =
-    lib.filterAttrs (_: def: (def.transport or "stdio") == "stdio")
-      (import (ix.paths.packagesRoot + "/agent/common.nix") { inherit lib ix repoPackages; })
-      .houseServers;
+  mcpStdioServers = lib.filterAttrs (
+    _: def: (def.transport or "stdio") == "stdio"
+  ) common.houseServers;
   spec = (formats.json { }).generate "codex-launch-spec.json" {
     target = lib.getExe codex;
     config_dir_env = "CODEX_HOME";
     config_dir_default = "~/.codex";
     config_file = "config.toml";
     forced = entriesOf (ix.attrs.flattenToDotted forcedSettings);
-    soft = entriesOf (ix.attrs.flattenToDotted settings) ++ ix.mcp.toCodexEntries mcpStdioServers;
+    soft =
+      entriesOf (
+        ix.attrs.flattenToDotted (
+          { model_instructions_file = toString effectiveModelInstructionsFile; } // settings
+        )
+      )
+      ++ ix.mcp.toCodexEntries mcpStdioServers;
   };
 
   # Codex reads hooks from config, not from launch flags, so expose the rendered
@@ -153,6 +170,7 @@ symlinkJoin {
   # consumer to deliver to `~/.codex/hooks.json` (see the `hooksJson` comment).
   passthru = {
     inherit hooksJson;
+    modelInstructionsFile = effectiveModelInstructionsFile;
     permissions = sharedPermissions.codex;
   };
   meta = codex.meta // {
