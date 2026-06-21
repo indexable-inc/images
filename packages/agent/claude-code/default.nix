@@ -331,6 +331,7 @@ stdenv.mkDerivation (finalAttrs: {
   ++ lib.optional stdenv.hostPlatform.isElf autoPatchelfHook;
 
   installPhase = ''
+    # shell
     runHook preInstall
     mkdir -p $out/bin $out/libexec $out/share
 

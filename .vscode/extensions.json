@@ -1,6 +1,7 @@
 {
   "recommendations": [
     "jnoortheen.nix-ide",
+    "coopermaruyama.nix-embedded-languages",
     "rust-lang.rust-analyzer",
     "mkhl.direnv",
     "thenuprojectcontributors.vscode-nushell-lang",
