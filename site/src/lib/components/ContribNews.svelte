@@ -1,4 +1,4 @@
-<script lang="ts">
+<script module lang="ts">
   export interface NewsItem {
     headline: string;
     description: string;
@@ -7,7 +7,9 @@
     category: 'Lead' | 'Tooling' | 'Antithesis' | 'Storage' | 'CI' | 'Filesystem';
     timestamp: Date;
   }
+</script>
 
+<script lang="ts">
   export let item: NewsItem;
 
   const categoryColors: Record<NewsItem['category'], { bg: string; text: string }> = {
@@ -37,6 +39,7 @@
   </div>
   <h3 class="headline">{item.headline}</h3>
   <p class="description">{item.description}</p>
+  <!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
   <a href={item.prUrl} target="_blank" rel="noopener noreferrer" class="pr-link">
     #{item.prNumber}
   </a>

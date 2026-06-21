@@ -71,7 +71,7 @@
   </header>
 
   <main class="news-feed">
-    {#each newsItems as item (item.prNumber)}
+    {#each newsItems as item, index (index)}
       <ContribNews {item} />
     {/each}
   </main>
