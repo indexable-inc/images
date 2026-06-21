@@ -170,19 +170,10 @@ let
   #    160000); MAX_MCP_OUTPUT_TOKENS default ~25000 tokens (no clamp).
   #  - Feature toggles on by default fleet-wide: agent teams, still gated behind
   #    the EXPERIMENTAL_ env var in this build.
-  #  - Context window: default every session to standard 200K Opus 4.8, not the
-  #    1M window the `opus` alias is silently auto-upgraded to on
-  #    Max/Team/Enterprise/API (1M reads past 200K are uncached and slower per
-  #    turn). Per the inline note this is the env knob, not a `model` setting.
   wrapperEnvDefaults = {
-    # Drops [1m] variants from /model without touching model selection (a `model`
-    # settings key would, since flagSettings outranks user settings.json).
-    # Re-enable 1M per machine: `export CLAUDE_CODE_DISABLE_1M_CONTEXT=`.
-    CLAUDE_CODE_DISABLE_1M_CONTEXT = 1;
   };
   # Rendered into the launcher spec as `env_defaults` (set only when unset), so
-  # an explicit env value still overrides per machine (e.g.
-  # `export CLAUDE_CODE_DISABLE_1M_CONTEXT=` re-enables 1M).
+  # an explicit env value still overrides per machine.
 
   # Settings-key defaults that have no env knob, shipped as a JSON the wrapper
   # injects via `--settings`. The package wraps the binary, so it can carry env
