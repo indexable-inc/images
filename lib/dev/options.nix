@@ -10,7 +10,7 @@
   Declared in `lib/dev/` (not `modules/`) so it is only in scope where a dev
   image pulls it in - it must not add `claude-code` to every image in the repo.
 */
-{ lib, ... }:
+{ lib, pkgs, ... }:
 let
   inherit (lib)
     mkOption
@@ -41,6 +41,90 @@ in
         Image under `images/dev/` every node is built on. The default,
         `development-base`, carries the build toolchain and the agent CLIs.
       '';
+    };
+
+    profiles = {
+      rust = {
+        enable = mkEnableOption "the recommended Rust development toolchain";
+
+        channel = mkOption {
+          type = types.enum [
+            "stable"
+            "beta"
+            "nightly"
+          ];
+          default = "nightly";
+          description = "Rust release channel for the dev profile toolchain.";
+        };
+
+        version = mkOption {
+          type = types.str;
+          default = "latest";
+          description = ''
+            Rust toolchain version. Use `latest`, a stable semver, or a nightly
+            date accepted by `ix.rustToolchainFor`.
+          '';
+        };
+
+        components = mkOption {
+          type = types.listOf types.str;
+          default = [
+            "cargo"
+            "clippy"
+            "llvm-tools-preview"
+            "rust-analyzer"
+            "rust-src"
+            "rust-std"
+            "rustc"
+            "rustfmt"
+          ];
+          description = "rustup components included in the profile toolchain.";
+        };
+
+        targets = mkOption {
+          type = types.listOf types.str;
+          default = [ ];
+          description = "Extra rustc targets installed with the profile toolchain.";
+        };
+
+        profile = mkOption {
+          type = types.enum [
+            "minimal"
+            "default"
+            "complete"
+          ];
+          default = "minimal";
+          description = "rust-overlay profile baseline for the profile toolchain.";
+        };
+
+        packages = mkOption {
+          type = types.listOf types.package;
+          default = with pkgs; [
+            bacon
+            cargo-audit
+            cargo-deny
+            cargo-edit
+            cargo-expand
+            cargo-flamegraph
+            cargo-nextest
+            cargo-watch
+            clang
+            lldb
+            taplo
+            watchexec
+          ];
+          description = ''
+            Extra Rust-adjacent tools installed by the profile. Extend or
+            override this like any NixOS list option.
+          '';
+        };
+
+        setEnvironment = mkOption {
+          type = types.bool;
+          default = true;
+          description = "Set common Rust development environment variables.";
+        };
+      };
     };
 
     selfSource = mkOption {

@@ -48,6 +48,7 @@ let
   # per-node `defaults`.
   optionsModule = paths.root + "/lib/dev/options.nix";
   agentsModule = paths.root + "/lib/dev/agents.nix";
+  profilesModule = paths.root + "/lib/dev/profiles.nix";
 
   # On-disk export path on the elected server, and the internal SMB share name.
   shareDir = "/var/lib/ix-dev-share";
@@ -103,6 +104,7 @@ let
       defaults = [
         (paths.images + "/dev/${dev.baseImage}")
         agentsModule
+        profilesModule
         (
           { name, ... }:
           {
