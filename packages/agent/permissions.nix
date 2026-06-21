@@ -3,12 +3,12 @@
   mcpServers ? { },
 }:
 let
-  forceMergeDenyTools = [
+  protectedMergeToolPatterns = [
     "Bash(gh pr merge*--admin*)"
     "Bash(gh pr merge*--force*)"
   ];
 
-  replacementToolDenyTools =
+  supersededBuiltinTools =
     lib.optionals (mcpServers ? exa) [
       "WebSearch"
       "WebFetch"
@@ -17,11 +17,11 @@ let
 in
 {
   claude = {
-    deny = forceMergeDenyTools ++ replacementToolDenyTools;
+    deniedToolPatterns = protectedMergeToolPatterns ++ supersededBuiltinTools;
   };
 
   codex = {
-    denyCommands = [
+    protectedMergeCommandPatterns = [
       "gh pr merge*--admin*"
       "gh pr merge*--force*"
     ];

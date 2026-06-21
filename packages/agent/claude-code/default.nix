@@ -301,7 +301,7 @@ let
         # leaf, so a computed `deny` would REPLACE `extraSettings.permissions.deny`
         # outright and silently drop a consumer's own policy. Concatenate instead
         # so package denies are additive to the caller's.
-        deny = (extraSettings.permissions.deny or [ ]) ++ sharedPermissions.claude.deny;
+        deny = (extraSettings.permissions.deny or [ ]) ++ sharedPermissions.claude.deniedToolPatterns;
       };
       # The full hook set (context injectors, guards, review pair, friction,
       # subagent-cache) for Claude, rendered from the shared declaration list in
