@@ -7,7 +7,13 @@ from pathlib import Path
 import duckdb
 import httpx
 from pydantic import BaseModel
-from pydantic_settings import BaseSettings, CliSettingsSource, PydanticBaseSettingsSource, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    CliApp,
+    CliSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
 
 LOGGER = logging.getLogger("daily_scraper")
@@ -136,9 +142,13 @@ def write_parquet(metric: RepoMetric, output_dir: Path) -> Path:
     return output_path
 
 
+def parse_args() -> CliArgs:
+    return CliApp.run(CliArgs)
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    args = CliArgs()
+    args = parse_args()
 
     metric = fetch_repo_metric(
         repo=args.repo,
