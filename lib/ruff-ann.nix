@@ -4,7 +4,7 @@
 #   lib/util/writers.nix          (writePythonApplication scripts)
 #   packages/mcp/default.nix      (bundled-module strict gate)
 #   packages/agent/distiller/default.nix
-#   sdk/python/default.nix
+#   packages/sdk/python/build.nix
 #   lib/per-system.nix            (the repo-wide `ruff` lint stage, over ALL .py)
 #
 # Philosophy: a high-signal "really good lints" set -- every rule family that

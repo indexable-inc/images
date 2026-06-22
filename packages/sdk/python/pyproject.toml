@@ -1,7 +1,7 @@
 # Public Python SDK for ix.
 #
 # Proprietary, source-available: governed by the Indexable SDK License shipped
-# alongside this file (sdk/python/LICENSE, a copy of sdk/LICENSE), which
+# alongside this file (packages/sdk/python/LICENSE, a copy of packages/sdk/LICENSE), which
 # supersedes the repo-root MIT for everything under sdk/. The project metadata
 # below points at that LICENSE and carries the Proprietary classifier so PyPI
 # and packaging tooling surface the real terms, never a permissive identifier.

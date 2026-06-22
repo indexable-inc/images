@@ -125,12 +125,15 @@ nix run .#reel          # regenerate the demo above
 
 | Path | Contents |
 | --- | --- |
-| [`packages/`](packages/) | Repo-owned tools: agent stack, Nix build system, search, PTY driver, MCP server, `reel` |
+| [`packages/`](packages/) | Repo-owned tools and their package-local assets: agent stack, Nix build system, search, PTY driver, MCP server, `reel` |
+| [`packages/agent/skills/`](packages/agent/skills/) | Claude Code skills shipped to agents by the `skills` flake package |
+| [`packages/indexbench/filesystem/`](packages/indexbench/filesystem/) | Filesystem benchmark source for the `bench-filesystem` package |
+| [`packages/sdk/`](packages/sdk/) | Source-available SDK bindings and SDK-specific checks |
+| [`packages/maintainers/scripts/`](packages/maintainers/scripts/) | Repo maintenance scripts that are packaged or called by flake outputs |
 | [`modules/`](modules/) | Opt-in NixOS service modules and profiles, auto-discovered |
-| [`lib/`](lib/) | Shared helper and builder API (Rust workspace graph, `buildUvApplication`, Minecraft/NBT, agent integration) |
+| [`lib/`](lib/) | Shared Nix APIs and reusable builders only; package-specific glue stays with its package |
 | [`doc/`](doc/index.md) | From-source documentation, one page per package |
-| [`examples/`](examples/) | Standalone consumer fleets |
-| [`skills/`](skills/) + [`agents/`](agents/) | Claude Code skills and subagent definitions, shipped to agents |
+| [`examples/`](examples/) | Standalone consumer fleets and copyable `mkDev` composition patterns |
 | [`rfcs/`](rfcs/) | Architecture decision records |
 
 ## Feedback

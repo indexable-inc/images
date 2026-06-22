@@ -74,7 +74,7 @@ downstream:
 - `Client` methods `create_group`, `add_group_member`, `create`, `branches`.
 
 Note: `Group`, `GroupMember`, `create_group`, and `add_group_member` are NOT
-present in the source-available `sdk/python/ix_sdk/__init__.py` in this tree
+present in the source-available `packages/sdk/python/ix_sdk/__init__.py` in this tree
 (verified absent). They exist in the prebuilt wheel, which is compiled from a
 newer/fuller private `crates/ix/sdk-py`. The packaging test therefore validates
 the wheel's surface, which is a superset of the public source mirror. See the

@@ -4,7 +4,7 @@
 // acceptance, and startup automatically via environment variables.
 //
 // Usage:
-//   bun packages/sdk/examples/minecraft/vanilla.ts
+//   bun packages/sdk/typescript/examples/minecraft/vanilla.ts
 
 import { Client, type Region } from '@indexable/sdk'
 

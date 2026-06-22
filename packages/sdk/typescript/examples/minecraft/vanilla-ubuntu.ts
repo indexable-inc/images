@@ -4,7 +4,7 @@
 // starts, waits for the server to be ready, and commits a snapshot.
 //
 // Usage:
-//   bun packages/sdk/examples/minecraft/vanilla-ubuntu.ts
+//   bun packages/sdk/typescript/examples/minecraft/vanilla-ubuntu.ts
 
 import { Client, type Branch, type Region } from '@indexable/sdk'
 

@@ -25,11 +25,11 @@ let
   # Public Rust SDK: validates the prebuilt, R2-hosted ix-sdk-wire artifact
   # pins. The old end-to-end link proof needs a matching published rustc
   # dependency closure before it can be a reliable CI gate.
-  sdkRust = import (paths.root + "/sdk/rust") { inherit lib pkgs ix; };
+  sdkRust = import (paths.root + "/packages/sdk/rust/build.nix") { inherit lib pkgs ix; };
   # Public Python SDK: strict zuban + ruff ANN gate over the shipped ix_sdk
   # sources (ENG-3131). setuptools-built, so it has no pyChecker knob; the check
   # derivation runs the same strict gates as buildUvApplication's zuban mode.
-  sdkPython = import (paths.root + "/sdk/python") { inherit lib pkgs ix; };
+  sdkPython = import (paths.root + "/packages/sdk/python/build.nix") { inherit lib pkgs ix; };
   packageRegistry = import (paths.packagesRoot + "/registry.nix") {
     inherit lib;
     root = paths.packagesRoot;

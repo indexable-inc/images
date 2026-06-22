@@ -12,9 +12,9 @@ ix up
 ```
 
 This example declares a multi-node `ix.dev.fleet`. Omit that block and the same
-`ix.nix` is a **single VM named `dev`** that `ix up` (or `nix run .#up` in the
-forkable [template](../../templates/ix)) builds and creates - the simplest way
-to consume an `ix.nix` for one new VM. The fleet below is the scale-up.
+`ix.nix` is a **single VM named `dev`** that `index.lib.mkDev` builds and
+creates through `nix run .#up`; `default.nix` shows the composition. The fleet
+below is the scale-up.
 
 ## Shape
 

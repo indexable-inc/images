@@ -4,7 +4,7 @@
 //! private `ix-sdk-wire` crate WITHOUT carrying its source: the nix build
 //! injects the prebuilt `ix-sdk-wire` rlib+rmeta (fetched from R2) over a
 //! metadata-faithful stub, so this crate typechecks against the prebuilt rmeta
-//! and links the prebuilt rlib. See `sdk/rust/default.nix`.
+//! and links the prebuilt rlib. See `packages/sdk/rust/build.nix`.
 
 // Re-export the wire surface so SDK consumers get the boundary types through
 // `ix_sdk::*`. This `use` is the typecheck against the prebuilt rmeta: the

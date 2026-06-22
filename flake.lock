@@ -15,11 +15,11 @@
     "bench-filesystem": {
       "flake": false,
       "locked": {
-        "path": "./bench/filesystem",
+        "path": "./packages/indexbench/filesystem",
         "type": "path"
       },
       "original": {
-        "path": "./bench/filesystem",
+        "path": "./packages/indexbench/filesystem",
         "type": "path"
       },
       "parent": []

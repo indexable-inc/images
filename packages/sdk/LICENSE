@@ -2,7 +2,7 @@ Indexable SDK License
 
 Copyright (c) 2026 Indexable Inc. All rights reserved.
 
-This license governs all files in this directory ("sdk/") and its subdirectories, together with any compiled or binary components they fetch, download, link, or bundle (collectively, the "SDK"), including the precompiled ix-sdk libraries distributed by Indexable. For these files this license SUPERSEDES the MIT License at the root of this repository; the root MIT License does not apply to the SDK.
+This license governs all files in the `packages/sdk/` tree and its subdirectories, together with any compiled or binary components they fetch, download, link, or bundle (collectively, the "SDK"), including the precompiled ix-sdk libraries distributed by Indexable. For these files this license SUPERSEDES the MIT License at the root of this repository; the root MIT License does not apply to the SDK.
 
 1. License grant. Subject to your compliance with this license and the Indexable Terms of Service, Indexable Inc. grants you a limited, non-exclusive, non-transferable, non-sublicensable, revocable license to install and use the SDK solely to develop and operate your own applications that access Indexable's hosted "ix" service.
 

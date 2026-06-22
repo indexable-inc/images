@@ -1,6 +1,6 @@
 // Bash REPL: cd / env / shell state persists across exec calls.
 //
-//   bun packages/sdk/examples/sandbox/bash.ts
+//   bun packages/sdk/typescript/examples/sandbox/bash.ts
 
 import { Sandbox } from '@indexable/sdk'
 

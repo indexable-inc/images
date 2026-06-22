@@ -51,7 +51,7 @@
       flake = false;
     };
     bench-filesystem = {
-      url = "path:./bench/filesystem";
+      url = "path:./packages/indexbench/filesystem";
       flake = false;
     };
     site = {
@@ -229,7 +229,7 @@
         };
         # Repo maintenance scripts and package-owned source updaters.
         tools = {
-          ixShellSyncIgnored = ./maintainers/scripts/ix-shell-sync-ignored.py;
+          ixShellSyncIgnored = ./packages/maintainers/scripts/ix-shell-sync-ignored.py;
           mcSource = ./packages/minecraft/tools/mc-source.nu;
           updateSounds = ./packages/minecraft/tools/update-sounds.nu;
           updateLoaders = ./packages/minecraft/tools/update-loaders.py;
@@ -332,10 +332,7 @@
         };
       };
       overlays.default = ix.overlay;
-      templates.ix = {
-        path = ./templates/ix;
-        description = "Forkable ix environment: one ix.nix for a default VM, a fleet, and shared Claude/ix auth";
-      };
+      templates = { };
       packages = collect "packages";
       checks = collect "checks";
       # Sharded keying of the same check derivations for the memory-bounded CI

@@ -1,6 +1,6 @@
 // TypeScript REPL via the bun harness.
 //
-//   bun packages/sdk/examples/sandbox/typescript.ts
+//   bun packages/sdk/typescript/examples/sandbox/typescript.ts
 
 import { Sandbox } from '@indexable/sdk'
 

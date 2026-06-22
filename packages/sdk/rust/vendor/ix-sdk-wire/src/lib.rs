@@ -5,4 +5,4 @@
 //! rlib+rmeta (fetched from R2) over this unit via `extraUnits`, and the
 //! cargo-unit hash is source-independent, so only this crate's Cargo metadata
 //! matters. See ../Cargo.toml for why the metadata must stay faithful to the
-//! real crate, and `sdk/rust/default.nix` for the injection wiring.
+//! real crate, and `packages/sdk/rust/build.nix` for the injection wiring.

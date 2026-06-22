@@ -126,7 +126,7 @@ let
       aarch64-darwin = "aarch64-apple-darwin";
     }
     .${pkgs.stdenv.hostPlatform.system}
-      or (throw "sdk/rust: unsupported host platform ${pkgs.stdenv.hostPlatform.system}");
+      or (throw "packages/sdk/rust: unsupported host platform ${pkgs.stdenv.hostPlatform.system}");
 
   # Source string for the snafu git fork, keyed exactly as it appears in
   # `Cargo.lock`. snafu and snafu-derive share this one source, so one entry

@@ -1,6 +1,6 @@
 // Python REPL: state persists across exec calls on the same Repl.
 //
-//   bun packages/sdk/examples/sandbox/python.ts
+//   bun packages/sdk/typescript/examples/sandbox/python.ts
 
 import { Sandbox } from '@indexable/sdk'
 

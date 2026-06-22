@@ -1,6 +1,6 @@
 // Fork a running sandbox across 10 branches, each with an independent id file.
 //
-//   bun packages/sdk/examples/sandbox/fork.ts
+//   bun packages/sdk/typescript/examples/sandbox/fork.ts
 
 import { Sandbox } from '@indexable/sdk'
 

@@ -479,7 +479,7 @@ let
     meta.description = "Refresh the pinned Minecraft sound pack in packages/minecraft/minecraft/sound";
   };
 
-  benchFilesystem = import paths.bench.filesystem { inherit ix pkgs; };
+  benchFilesystem = import (paths.bench.filesystem + "/build.nix") { inherit ix pkgs; };
 
   # The indexbench CLI built for this system, fed to `mkBenchSuite` and the
   # `apps.bench` perf job. Also surfaced as `packages.indexbench` through the
