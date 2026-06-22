@@ -86,6 +86,12 @@ let
     Do not propose a redesign or broad fix while cheaper discriminating tests
     remain. If the evidence points to an instrumentation gap, add or identify the
     smallest measurement that would decide the next hypothesis.
+
+    Validation should answer a useful question. Before adding a check, name the
+    failure mode it would catch. Prefer behavior, boundary, regression, and
+    integration checks over assertions that merely restate constants, rendered
+    literals, or implementation logic. If a check cannot fail for a real bug,
+    skip it or replace it with one that can.
   '';
 
   experimentDefault = ''
@@ -95,6 +101,11 @@ let
 
     If a measured loop is needed, state the hypothesis, measure a baseline,
     change one thing, compare, then keep or revert.
+
+    Tests should protect outcomes, not prove that the code says what it says.
+    Avoid slow or brittle checks whose only signal is that a value was copied
+    from one representation to another, unless that copy crosses a real
+    integration boundary or guards a known regression.
 
     Rollouts must be safe: no `--dangerously-skip-permissions`, no production,
     no real-world side effects, and no acting tools. Prefer transcript judging.
