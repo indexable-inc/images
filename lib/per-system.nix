@@ -423,6 +423,47 @@ let
     name = "index";
   };
 
+  # Declarative subagents rendered to a symlink-free `.claude/agents` directory.
+  # Keep this outside the Claude plugin: plugins namespace subagent names, but
+  # hooks and skills call these by bare `subagent_type` (`code-reviewer`, etc.).
+  agentsDir =
+    let
+      renderedAgents = {
+        index-action-runner = {
+          frontmatter = {
+            name = "index-action-runner";
+            description =
+              "Offload a long, image-heavy or many-step loop (browser automation, "
+              + "scanning many images or PDFs, multi-step web flows) into an isolated "
+              + "context. Give it an outcome plus the exact fields to return; it drives "
+              + "the whole loop in its own index kernel and returns only the distilled "
+              + "result, keeping screenshots and DOM dumps out of the main thread.";
+            mcpServers = ix.mcp.toAgentMcpServers {
+              index = {
+                transport = "stdio";
+                command = lib.getExe repoPackages.mcp;
+                args = [ "serve" ];
+              };
+            };
+          };
+          body = builtins.readFile (paths.agents + "/index-action-runner.md");
+        };
+      };
+      renderedFiles = map (n: "${n}.md") (builtins.attrNames renderedAgents);
+      entries = builtins.readDir paths.agents;
+      rawMdNames = lib.filter (
+        n: lib.hasSuffix ".md" n && entries.${n} == "regular" && !(lib.elem n renderedFiles)
+      ) (builtins.attrNames entries);
+    in
+    ix.agents.mkAgentsDir {
+      inherit pkgs;
+      agents = renderedAgents;
+      rawFiles = map (n: {
+        name = lib.removeSuffix ".md" n;
+        path = paths.agents + "/${n}";
+      }) rawMdNames;
+    };
+
   mcSource = ix.writeNushellApplication pkgs {
     name = "mc-source";
     text = builtins.readFile paths.tools.mcSource;
@@ -774,10 +815,11 @@ let
           # pre-run at build time so the VM never needs the network; see
           # tests/minecraft-blocks-vm.nix.
           minecraft-blocks-vm = tests.minecraftBlocksVm;
-          # Skills are not committed; they are rendered live by the SessionStart
-          # hook. This gate forces the materialized skills directory to build.
+          # Skills and subagents are rendered live by the SessionStart hook.
+          # This gate forces both materialized directories to build.
           agent-skills = pkgs.runCommand "agent-skills-check" { } ''
             test -d ${skillsDir}
+            test -d ${agentsDir}
             mkdir -p "$out"
           '';
           # Pins the last-applied 3-way merge behind homeModules.mutable-json:
@@ -1069,6 +1111,7 @@ in
     ix-shell-sync-ignored = ixShellSyncIgnored;
     mc-source = mcSource;
     update-sounds = updateSounds;
+    agents = agentsDir;
     skills = skillsDir;
     claude-plugin = claudePluginDir;
   }
