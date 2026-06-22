@@ -3392,8 +3392,11 @@ let
               mcpServers.index = { };
             };
           in
-          policy.codex.deniedToolPatterns == [ "Bash" ];
-        message = "Codex should deny the Bash tool when the index MCP is available";
+          policy.codex.deniedToolPatterns == [
+            "Bash"
+            "exec_command"
+          ];
+        message = "Codex should deny shell tools when the index MCP is available";
       }
       {
         # Bypass-permissions is enforced through Claude's managed-settings layer

@@ -15,7 +15,10 @@ let
     ]
     ++ lib.optional (mcpServers ? index) "Bash";
 
-  supersededCodexTools = lib.optional (mcpServers ? index) "Bash";
+  supersededCodexTools = lib.optionals (mcpServers ? index) [
+    "Bash"
+    "exec_command"
+  ];
 in
 {
   claude = {
