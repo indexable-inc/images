@@ -34,8 +34,10 @@
   # this ONLY for wrapper INVARIANTS the user must not silently lose. The one we
   # bake: turn off the startup update check, since the store binary is read-only
   # and the wrapper owns the version pin, so the check only ever costs a network
-  # round-trip it can never act on. Anything security-shaped (sandbox mode,
-  # approval policy) is left to the user's config and codex's requirements layer.
+  # round-trip it can never act on. Shared house policy also lands here when it
+  # must outrank mutable user config, such as disabling superseded shell tools.
+  # Broader sandbox and approval posture stays in the user's config or Codex's
+  # managed requirements layer.
   forcedSettings ? {
     check_for_update_on_startup = false;
   },
@@ -97,12 +99,23 @@ let
   mcpStdioServers = lib.filterAttrs (
     _: def: (def.transport or "stdio") == "stdio"
   ) common.houseServers;
-  spec = (formats.json { }).generate "codex-launch-spec.json" {
+  sharedPermissions = import (ix.paths.packagesRoot + "/agent/policy/permissions.nix") {
+    inherit lib;
+    mcpServers = mcpStdioServers;
+  };
+  effectiveForcedSettings =
+    forcedSettings
+    // sharedPermissions.codex.forcedSettings
+    // {
+      features =
+        (forcedSettings.features or { }) // (sharedPermissions.codex.forcedSettings.features or { });
+    };
+  specValue = {
     target = lib.getExe codex;
     config_dir_env = "CODEX_HOME";
     config_dir_default = "~/.codex";
     config_file = "config.toml";
-    forced = entriesOf (ix.attrs.flattenToDotted forcedSettings);
+    forced = entriesOf (ix.attrs.flattenToDotted effectiveForcedSettings);
     soft =
       entriesOf (
         ix.attrs.flattenToDotted (
@@ -111,6 +124,7 @@ let
       )
       ++ ix.mcp.toCodexEntries mcpStdioServers;
   };
+  spec = (formats.json { }).generate "codex-launch-spec.json" specValue;
 
   # Codex reads hooks from config, not from launch flags, so expose the rendered
   # shared hook policy for home-manager or managed requirements consumers.
@@ -137,11 +151,6 @@ let
       }).codex;
   };
 
-  # Codex does not use Claude's `permissions.deny` JSON shape.
-  sharedPermissions = import (ix.paths.packagesRoot + "/agent/policy/permissions.nix") {
-    inherit lib;
-    mcpServers = mcpStdioServers;
-  };
 in
 # These baked defaults also reach the Codex GUI app's remote-SSH sessions, not
 # just terminal use. The desktop app does NOT ship its own binary to the remote
@@ -170,7 +179,7 @@ symlinkJoin {
   # The codex hooks.json rendered from the shared declaration list, for a
   # consumer to deliver to `~/.codex/hooks.json` (see the `hooksJson` comment).
   passthru = {
-    inherit hooksJson;
+    inherit hooksJson spec specValue;
     modelInstructionsFile = effectiveModelInstructionsFile;
     permissions = sharedPermissions.codex;
   };

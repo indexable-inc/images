@@ -145,9 +145,7 @@ let
       args = [ "serve" ];
     };
   };
-  sampleCodexMcpEntry =
-    key:
-    lib.findFirst (entry: entry.key == key) null sampleCodexMcpEntries;
+  sampleCodexMcpEntry = key: lib.findFirst (entry: entry.key == key) null sampleCodexMcpEntries;
 
   minecraft =
     let
@@ -2450,8 +2448,7 @@ let
     mcp = [
       {
         assertion =
-          sampleCodexMcpEntry "mcp_servers.index.default_tools_approval_mode"
-          == {
+          sampleCodexMcpEntry "mcp_servers.index.default_tools_approval_mode" == {
             key = "mcp_servers.index.default_tools_approval_mode";
             value = "\"approve\"";
           };
@@ -3425,11 +3422,26 @@ let
               mcpServers.index = { };
             };
           in
-          policy.codex.deniedToolPatterns == [
-            "Bash"
-            "exec_command"
-          ];
-        message = "Codex should deny shell tools when the index MCP is available";
+          policy.codex.forcedSettings.features == {
+            shell_tool = false;
+            unified_exec = false;
+          };
+        message = "Codex policy should disable built-in shell tools when the index MCP is available";
+      }
+      {
+        assertion =
+          let
+            forced = repoPackages.codex.passthru.specValue.forced;
+          in
+          builtins.elem {
+            key = "features.shell_tool";
+            value = "false";
+          } forced
+          && builtins.elem {
+            key = "features.unified_exec";
+            value = "false";
+          } forced;
+        message = "Codex wrapper should render shell-tool disables into forced launch config";
       }
       {
         # Bypass-permissions is enforced through Claude's managed-settings layer

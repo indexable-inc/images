@@ -15,10 +15,12 @@ let
     ]
     ++ lib.optional (mcpServers ? index) "Bash";
 
-  supersededCodexTools = lib.optionals (mcpServers ? index) [
-    "Bash"
-    "exec_command"
-  ];
+  codexForcedSettings = lib.optionalAttrs (mcpServers ? index) {
+    features = {
+      shell_tool = false;
+      unified_exec = false;
+    };
+  };
 in
 {
   claude = {
@@ -26,7 +28,7 @@ in
   };
 
   codex = {
-    deniedToolPatterns = supersededCodexTools;
+    forcedSettings = codexForcedSettings;
     protectedMergeCommandPatterns = [
       "gh pr merge*--admin*"
       "gh pr merge*--force*"

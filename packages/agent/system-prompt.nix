@@ -204,7 +204,8 @@ let
     done when tests pass and the change lands on `origin/main`.
 
     Prefer a PR. Push directly to `main` only if it is genuinely unprotected. If
-    any protection exists, use the PR path and merge queue when configured.
+    any protection exists, use the PR path and merge queue when configured. Open
+    the PR URL in the browser as soon as the PR has been created.
 
     Never bypass required checks, review, CODEOWNERS, signed commits, branch
     protection, or merge queue by any path.
