@@ -1,5 +1,5 @@
 {
-  description = "ix example: nixos-switch";
+  description = "ix example: _non-nix-oci-debian";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -12,10 +12,10 @@
   outputs =
     { index, ... }:
     let
-      fleet = import ./default.nix { inherit index; };
+      image = import ./default.nix { inherit index; };
     in
     {
-      ix.fleets.default = fleet;
-      nixosConfigurations = fleet.nixosConfigurations;
+      ix.images.default = image;
+      packages.x86_64-linux.default = image;
     };
 }

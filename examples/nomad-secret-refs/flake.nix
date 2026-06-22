@@ -1,5 +1,5 @@
 {
-  description = "ix example: nixos-switch";
+  description = "ix example: nomad-secret-refs";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -12,10 +12,10 @@
   outputs =
     { index, ... }:
     let
-      fleet = import ./default.nix { inherit index; };
+      example = import ./example.nix { inherit index; };
     in
     {
-      ix.fleets.default = fleet;
-      nixosConfigurations = fleet.nixosConfigurations;
+      ix.examples.default = example;
+      checks.x86_64-linux.default = example.buildCheck;
     };
 }

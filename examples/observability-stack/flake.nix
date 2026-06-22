@@ -1,5 +1,5 @@
 {
-  description = "ix example: nixos-switch";
+  description = "ix example: observability-stack";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";

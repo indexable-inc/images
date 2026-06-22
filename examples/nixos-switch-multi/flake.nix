@@ -1,7 +1,16 @@
 {
   description = "ix up multi-VM switch: one build VM, several NixOS VMs switched in one command";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
+  inputs = {
+    # https://github.com/indexable-inc/index/issues/1537: every standalone
+    # example points at the public Index flake; this one still demonstrates raw
+    # NixOS attrs, not mkFleet.
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    index = {
+      url = "github:indexable-inc/index";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
 
   outputs =
     { nixpkgs, ... }:
@@ -28,7 +37,7 @@
           ];
         };
     in
-    {
+    rec {
       nixosConfigurations = {
         # The shared build VM. It only needs Nix (every NixOS system has the
         # daemon), so it carries no sentinel; `ix up .#builder` brings it up once.
@@ -40,5 +49,7 @@
         worker = mkSystem (pkgs: [ pkgs.jq ]);
         edge = mkSystem (pkgs: [ pkgs.hello ]);
       };
+
+      ix.nixosConfigurations.default = nixosConfigurations;
     };
 }
