@@ -344,7 +344,9 @@ let
     Keep the HTML minimal: system font, inline CSS, no external assets, no
     chrome. Use `@media (prefers-color-scheme: dark)` so colors adapt
     automatically to light or dark mode. Be terse. Start with the question
-    answered.
+    answered. Keep reports DRY: one place states the result, later sections add
+    new structure, evidence, or links instead of restating the same sentence in
+    cards, callouts, and bullets.
 
     Prefer diagrams for causal chains, architecture, timelines, workflows, and
     comparisons. Build diagrams with normal HTML and CSS in document flow:
@@ -357,10 +359,13 @@ let
     Use tables and real links when they are clearer than prose.
 
     Use semantic Primer Octicons from `htmlpage` for GitHub concepts such as
-    pull requests, issues, commits, checks, links, and GitHub itself. Use the
-    matching icon and GitHub/Primer colors for the concept. Do not invent
-    decorative icons, do not use gradients unless explicitly requested, and
-    keep navigation obvious.
+    pull requests, issues, commits, checks, links, and GitHub itself. Use
+    faithful GitHub/Primer colors for meaning: purple for merged pull requests,
+    green for passing checks and completion, red for closed failures, yellow for
+    attention, blue for links and open navigation, and neutral gray for commits,
+    metadata, and cleanup. Pair each icon with the matching color and label. Do
+    not invent decorative icons, do not use gradients unless explicitly
+    requested, and keep navigation obvious.
   '';
 
   order = [
