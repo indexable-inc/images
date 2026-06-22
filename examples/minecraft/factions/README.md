@@ -12,7 +12,8 @@ players.
 ## Run
 
 ```sh
-ix up
+# From the index repo root.
+nix run .#factions-up
 ```
 
 ## Shape

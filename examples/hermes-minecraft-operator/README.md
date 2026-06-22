@@ -22,7 +22,8 @@ The agent gets exactly one game-facing capability: a typed `run_command(command)
 ## Run
 
 ```sh
-ix up
+# From the index repo root.
+nix run .#hermes-minecraft-operator-up
 ```
 
 Seed the model key and open a chat:
@@ -60,7 +61,7 @@ The cron job lives in Hermes' own scheduler (`$HERMES_HOME/cron/jobs.json`), cre
 
 ## The credential, honestly
 
-RCON is password-authenticated and the password is committed in [`rcon.nix`](rcon.nix). That is acceptable here because the RCON port is only reachable inside the fleet's east-west group (the public internet sees the game port, not the console), and it keeps `ix up` working with zero manual steps. To rotate: edit `rcon.nix`, `ix fleet switch`, then delete `/var/lib/minecraft/.ix-rcon-password` on the minecraft node and restart it (the seed only writes when the file is absent).
+RCON is password-authenticated and the password is committed in [`rcon.nix`](rcon.nix). That is acceptable here because the RCON port is only reachable inside the fleet's east-west group (the public internet sees the game port, not the console), and it keeps the generated up wrapper working with zero manual steps. To rotate: edit `rcon.nix`, `ix fleet switch`, then delete `/var/lib/minecraft/.ix-rcon-password` on the minecraft node and restart it (the seed only writes when the file is absent).
 
 ## Bad fit if
 

@@ -1,8 +1,9 @@
 { index }:
 
-# A one-node NixOS fleet that exists to demonstrate the native `ix up` loop:
-# `ix up` builds this configuration on ix and activates it on the running VM in
-# place. Edit `configuration.nix`, run it again, and the VM converges.
+# A one-node NixOS fleet consumed by flake.nix for the native `ix up` loop:
+# `ix up .#devbox` builds this configuration on ix and activates it on the
+# running VM in place. Edit `configuration.nix`, run it again, and the VM
+# converges.
 index.lib.mkFleet {
   defaults = [ { ix.image.tag = "nixos-switch"; } ];
 

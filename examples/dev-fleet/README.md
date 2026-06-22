@@ -1,15 +1,19 @@
 # ix fleet
 
-A forkable ix environment (RFC 0007). One [`ix.nix`](ix.nix) - an ordinary
-NixOS module - is the source of truth for the per-VM environment, the fleet
+A forkable ix environment (RFC 0007). One [`ix.nix`](ix.nix), an ordinary
+NixOS module, is the source of truth for the per-VM environment, the fleet
 topology, and an opt-in shared SMB volume that gives the whole fleet one Claude
 (and ix) login.
 
 ## Run
 
 ```sh
-ix up
+nix run .#dev-fleet-up
 ```
+
+Run that from this repo root. A copied consumer flake can use `ix up` after it
+exposes the `nixosConfigurations` returned by `index.lib.mkDev`; `ix.nix` is the
+editable module, not the CLI entrypoint.
 
 This example declares a multi-node `ix.dev.fleet`. Omit that block and the same
 `ix.nix` is a **single VM named `dev`** that `index.lib.mkDev` builds and
@@ -23,7 +27,8 @@ below is the scale-up.
   environment; `ix.dev.fleet` is the topology; `ix.dev.shared` turns on the
   identity volume. Claude Code and Codex are installed by default.
 - [`default.nix`](default.nix) hands the module to `index.lib.mkDev`, passing
-  `src = ./.` (the flake source the template wires as `self`).
+  `src = ./.` (the flake source a copied repo wires as `self`). In this repo,
+  fleet discovery imports `default.nix` and exposes `.#dev-fleet-up`.
 
 `mkDev` reads `ix.dev` and desugars this into a `mkFleet` plan:
 
@@ -60,7 +65,7 @@ notes; this example places the source.)
 ## Tradeoffs
 
 - The share is **guest-writable** by default (`ix.dev.shared.guestOk`) so
-  `ix up` works without secrets plumbing, the same tradeoff
+  bring-up works without secrets plumbing, the same tradeoff
   [`multi-client-file-sharing`](../multi-client-file-sharing) documents. It is
   only reachable on the private group, never public. A real shared-auth volume
   should set `guestOk = false`, add a Samba user, and pass `credentials=`

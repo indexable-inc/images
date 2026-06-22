@@ -12,7 +12,8 @@ roughly `y ~2060`.
 ## Run
 
 ```sh
-ix up
+# From the index repo root.
+nix run .#crazy-terrain-up
 ```
 
 ## Shape

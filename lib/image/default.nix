@@ -129,7 +129,7 @@ let
 
   mkFleet = mkFleetFor system;
 
-  # Dev-fleet layer over `mkFleet` (RFC 0007): consumes the forkable `dev.nix`
+  # Dev-fleet layer over `mkFleet` (RFC 0007): consumes the forkable `ix.nix`
   # spec. Curried like `mkFleetFor` so example/flake eval can target a host
   # system.
   inherit

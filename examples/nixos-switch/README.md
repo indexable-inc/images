@@ -13,7 +13,7 @@ configuration, the same contract as `nixos-rebuild switch`.
 ## Run
 
 ```sh
-ix up
+ix up .#devbox
 ```
 
 The first run creates `devbox` from `ix/base:latest` and activates this
@@ -23,7 +23,7 @@ configuration on it.
 
 1. Edit [`configuration.nix`](configuration.nix): add a package to
    `environment.systemPackages` (try `pkgs.ripgrep`).
-2. Run `ix up` again. ix uploads the change, builds the new closure on ix, and
+2. Run `ix up .#devbox` again. ix uploads the change, builds the new closure on ix, and
    switches the running VM to it.
 3. `ix shell devbox` and confirm the new package is on `PATH`.
 
@@ -32,13 +32,16 @@ nothing is recreated.
 
 ## Shape
 
-- [`default.nix`](default.nix) declares a one-node fleet (`devbox`) on the
-  `ix/base` NixOS base image.
+- [`flake.nix`](flake.nix) is the native `ix up` entrypoint. It exposes
+  `nixosConfigurations.devbox`, which `ix up .#devbox` resolves to the NixOS
+  system closure.
+- [`default.nix`](default.nix) keeps the one-node fleet definition reused by the
+  repo example wrappers.
 - [`configuration.nix`](configuration.nix) is the NixOS module you edit.
 
 ## Fork it
 
-Copy this directory into your own repo and change `ix.image.tag` in
+Copy this directory into your own repo, keep `flake.nix` as the entrypoint, and change `ix.image.tag` in
 `default.nix` to your own registry namespace. The switch path needs no admin
 rights: it builds and activates your own system onto your own VM.
 

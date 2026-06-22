@@ -38,6 +38,20 @@ let
   missingPackageMetadata = map (
     dir: lib.removePrefix "${builtins.toString paths.packagesRoot}/" (builtins.toString dir)
   ) packageRegistry.packageDirsWithoutMetadata;
+  fleetWrapperReadmes = [
+    "hermes-agent"
+    "hermes-api-server"
+    "hermes-minecraft-operator"
+    "hermes-telegram"
+    "minecraft/crazy-terrain"
+    "minecraft/factions"
+    "minecraft/survival"
+    "multi-client-file-sharing"
+    "polyglot-dev"
+    "python-daily-scraper"
+    "ray-cluster"
+    "synced-github-auth"
+  ];
 
   versions = import (paths.minecraftCatalogs + "/versions.nix") {
     inherit lib;
@@ -4604,6 +4618,26 @@ let
     ];
 
     fleet = [
+      {
+        assertion = builtins.pathExists (paths.examples + "/nixos-switch/flake.nix");
+        message = "native ix up examples should include the flake.nix entrypoint the CLI resolves";
+      }
+      {
+        assertion =
+          builtins.pathExists (paths.examples + "/dev-fleet/ix.nix")
+          && !(builtins.pathExists (paths.examples + "/dev-fleet/dev.nix"));
+        message = "dev-fleet should expose ix.nix as the editable module without a duplicate dev.nix";
+      }
+      {
+        assertion = lib.all (
+          rel:
+          let
+            text = builtins.readFile (paths.examples + "/${rel}/README.md");
+          in
+          lib.hasInfix "nix run .#" text && !(lib.hasInfix "\nix up\n" text)
+        ) fleetWrapperReadmes;
+        message = "fleet-wrapper examples should point at generated nix run .#<example>-up commands, not bare ix up";
+      }
       {
         assertion = fleet.nodes.db.networking.hostName == "db";
         message = "fleet nodes should default hostName to the node name";

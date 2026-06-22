@@ -9,7 +9,8 @@ Bedrock clients share the same world.
 ## Run
 
 ```sh
-ix up
+# From the index repo root.
+nix run .#survival-up
 ```
 
 ## Shape

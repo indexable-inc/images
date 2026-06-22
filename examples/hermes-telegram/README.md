@@ -18,7 +18,8 @@ The [Hermes operator VM](../hermes-agent/) tuned as a Telegram chat companion: s
 ## Run
 
 ```sh
-ix up
+# From the index repo root.
+nix run .#hermes-telegram-up
 ```
 
 Then drop the secrets and restart the unit:

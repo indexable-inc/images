@@ -12,7 +12,8 @@ mediate locks centrally, so locks coordinate across both clients.
 ## Run
 
 ```sh
-ix up
+# From the index repo root.
+nix run .#multi-client-file-sharing-up
 ```
 
 ## Shape
@@ -46,7 +47,7 @@ the same path via `fcntl` byte-range locks.
 
 ## Tradeoffs
 
-- The share is **guest-writable** by default so `ix up` works without secrets
+- The share is **guest-writable** by default so the generated up wrapper works without secrets
   plumbing. Real deployments should drop `guest ok = yes` from
   [`server.nix`](server.nix), add a Samba user with `smbpasswd`, and pass
   `credentials=` to the CIFS mount through a systemd `LoadCredential` (the

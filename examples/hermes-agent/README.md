@@ -7,7 +7,8 @@ Defaults: OpenRouter for the model, local SQLite memory, Edge TTS, a filesystem 
 ## Run
 
 ```sh
-ix up
+# From the index repo root.
+nix run .#hermes-agent-up
 ```
 
 That brings the VM up with the Hermes daemon running but no API key. The next four lines seed the key, restart the unit, and open a chat:

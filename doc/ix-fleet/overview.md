@@ -75,7 +75,9 @@ each node key matches its `name`; and that every `dependsOn` names a real node.
   the simple attr lets the native multi-VM `ix up .#a .#b --build-vm <builder>`
   derive each VM name. The `<node>-system` package stays as a build alias. Merge
   the fleet's `nixosConfigurations` into your flake's top-level
-  `nixosConfigurations` (see `examples/dev-fleet/default.nix`).
+  `nixosConfigurations` (see `examples/nixos-switch-multi/flake.nix` for a
+  direct `ix up` flake and `examples/dev-fleet/default.nix` for the mkDev
+  wrapper).
 - **`ReplacementImage`** (`:34`): `imageName`, `imageTag`, `destination`,
   `source`, `sourceDrv` (the OCI image derivation to realise and push).
 - **`HealthCheck`** (`:54`): `description`, `command` (argv), `timeoutSec`,

@@ -13,7 +13,8 @@ The Python stays ordinary Python. The ix-specific parts are
 ## Run
 
 ```sh
-ix up
+# From the index repo root.
+nix run .#python-daily-scraper-up
 ```
 
 ## Shape

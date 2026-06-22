@@ -33,7 +33,7 @@ let
   memoryEnvFile = hermes.memoryEnvFile or defaultEnvFile;
   apiServerEnvFile = hermes.apiServerEnvFile or defaultEnvFile;
 
-  # Feature toggles. All default off so a fresh `ix up` boots the agent
+  # Feature toggles. All default off so a fresh fleet up boots the agent
   # with just the model provider key; turning anything else on is a one
   # line edit in the fleet preset that consumes this module.
   telegram = hermes.telegram or false;

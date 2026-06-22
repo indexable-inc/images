@@ -13,7 +13,8 @@ Unlike every other hermes preset this one is inbound: the node claims TCP `9119`
 ## Run
 
 ```sh
-ix up
+# From the index repo root.
+nix run .#hermes-api-server-up
 ```
 
 Then drop the secrets and restart. `API_SERVER_KEY` is the bearer token your frontends will present; generate a long random one:

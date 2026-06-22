@@ -13,7 +13,8 @@ servers travel with their compilers, and the runtime JVM profile keeps
 ## Run
 
 ```sh
-ix up
+# From the index repo root.
+nix run .#polyglot-dev-up
 ```
 
 ## Shape

@@ -7,7 +7,8 @@ wires `git` to use it. Adding a replica needs no extra auth step.
 ## Run
 
 ```sh
-ix up
+# From the index repo root.
+nix run .#synced-github-auth-up
 ```
 
 ## Shape

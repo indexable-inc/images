@@ -7,7 +7,7 @@ A `ray-head` node runs the Ray GCS; two `ray-worker` replicas join it over the
 east-west network. A driver packaged with
 [`ix.buildUvApplication`](../../lib/build-uv-application.nix) attaches to the
 head, fans `@ray.remote` tasks across the cluster, and reports which node ran
-each one. The driver doubles as the head's health check, so `ix up` does not
+each one. The driver doubles as the head's health check, so the generated up wrapper does not
 report healthy until every worker has joined.
 
 The Python stays ordinary Ray. The ix-specific parts are
@@ -17,7 +17,8 @@ The Python stays ordinary Ray. The ix-specific parts are
 ## Run
 
 ```sh
-ix up
+# From the index repo root.
+nix run .#ray-cluster-up
 ```
 
 ## Shape
