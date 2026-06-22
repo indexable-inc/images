@@ -1,4 +1,4 @@
-# Single source of truth for the MCP servers the house wrappers bake in. Define
+# Single source of truth for the MCP servers the agent wrappers bake in. Define
 # a server ONCE in the neutral shape below and render it to each tool's native
 # config with `toClaudeJson` / `toCodexEntries`, so `index` (and any future
 # shared server) is declared in one place instead of copied into the Claude Code
@@ -42,7 +42,7 @@ let
   # config-launch turns into `-c <key>=<value>` flags (so a user's own
   # `mcp_servers.<name>` in config.toml still wins per the per-leaf presence
   # check). Codex keys stdio servers by `command`/`args`/`env` and HTTP servers
-  # by `url`, mirroring `[mcp_servers.<name>]` tables in config.toml. House MCP
+  # by `url`, mirroring `[mcp_servers.<name>]` tables in config.toml. Default MCP
   # tools are trusted defaults, so approve server tools unless the user config
   # sets a stricter `default_tools_approval_mode` or per-tool override.
   codexEntriesOne =
@@ -84,7 +84,7 @@ let
 in
 {
   /**
-    The house MCP server set, defined once for every wrapper that bakes it.
+    The default MCP server set, defined once for every wrapper that bakes it.
     Returns the neutral definitions; each consumer renders them with
     `toClaudeJson` / `toCodexEntries`.
 
@@ -93,7 +93,7 @@ in
       sibling is out of scope (e.g. the overlay package set), in which case only
       the keyless `exa` server is returned.
   */
-  houseServers =
+  defaultServers =
     {
       indexCommand ? null,
     }:

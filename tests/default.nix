@@ -153,11 +153,14 @@ let
   baseFirewallTcpPorts = [ 5001 ];
   baseFirewallUdpPorts = [ 8443 ];
   sampleCodexMcpEntries = ix.mcp.toCodexEntries (
-    ix.mcp.houseServers {
+    ix.mcp.defaultServers {
       indexCommand = "/bin/ix-mcp";
     }
   );
+  sampleCodexMcpEntriesWithoutIndex = ix.mcp.toCodexEntries (ix.mcp.defaultServers { });
   sampleCodexMcpEntry = key: lib.findFirst (entry: entry.key == key) null sampleCodexMcpEntries;
+  sampleCodexMcpEntryWithoutIndex =
+    key: lib.findFirst (entry: entry.key == key) null sampleCodexMcpEntriesWithoutIndex;
   agentCommon = import (paths.packagesRoot + "/agent/common.nix") { inherit lib ix repoPackages; };
   sampleClaudeSystemPrompt = agentCommon.systemPromptFor "claude";
   sampleCodexSystemPrompt = agentCommon.systemPromptFor "codex";
@@ -2460,7 +2463,7 @@ let
             key = "mcp_servers.index.default_tools_approval_mode";
             value = "\"approve\"";
           };
-        message = "Codex MCP entries should approve trusted house server tools by default";
+        message = "Codex MCP entries should approve trusted default server tools by default";
       }
       {
         assertion =
@@ -2469,6 +2472,14 @@ let
             value = "\"https://mcp.exa.ai/mcp\"";
           };
         message = "Codex MCP entries should include the Exa MCP server";
+      }
+      {
+        assertion =
+          sampleCodexMcpEntryWithoutIndex "mcp_servers.exa.url" == {
+            key = "mcp_servers.exa.url";
+            value = "\"https://mcp.exa.ai/mcp\"";
+          };
+        message = "Codex MCP entries should include the Exa MCP server even when index MCP is unavailable";
       }
       {
         assertion = lib.all (

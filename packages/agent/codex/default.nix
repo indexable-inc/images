@@ -88,12 +88,12 @@ let
       value = ix.toml.scalar v;
     }) flat;
 
-  # The house MCP servers, baked as soft `-c mcp_servers.*` defaults from the
-  # shared house server set (../common.nix `houseServers`, the same source the
+  # The default MCP servers, baked as soft `-c mcp_servers.*` defaults from the
+  # shared default server set (../common.nix `defaultServers`, the same source the
   # claude-code wrapper renders), so Codex gets only the index MCP server and
   # the Exa MCP server. Soft, so a user's own `[mcp_servers.<name>]` in
   # config.toml wins per the per-leaf presence check.
-  mcpServers = common.houseServers;
+  mcpServers = common.defaultServers;
   sharedPermissions = import (ix.paths.packagesRoot + "/agent/policy/permissions.nix") {
     inherit lib mcpServers;
   };

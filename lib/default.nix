@@ -241,7 +241,7 @@ let
   toml = import ./util/toml.nix { inherit lib; };
 
   /**
-    Single source of truth for the MCP servers baked into the house wrappers.
+    Single source of truth for the MCP servers baked into the agent wrappers.
     Define a server once in a neutral shape and render it to each tool's native
     config with `mcp.toClaudeJson` (Claude Code's `mcpServers` JSON) and
     `mcp.toCodexEntries` (dotted `mcp_servers.*` codex `-c` flags), so `index`

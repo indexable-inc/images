@@ -105,7 +105,7 @@
   # layers MERGE: a user's own `--mcp-config` and a discovered project
   # `.mcp.json` still load alongside this set, so baking the flag here replaces
   # the old pattern of consumers symlinkJoin-wrapping this wrapper a second time
-  # just to add it. Defaults to the house pair, additions only (no stock tool is
+  # just to add it. Defaults to the default pair, additions only (no stock tool is
   # disabled or overridden):
   #  - `index`: the ix notebook kernel (`ix-mcp serve`, packages/mcp) over
   #    stdio. Present only when the `mcp` sibling is in scope, i.e. in the
@@ -119,7 +119,7 @@
   mcpServers ?
     ix.mcp.toClaudeJson
       (import (ix.paths.packagesRoot + "/agent/common.nix") { inherit lib ix repoPackages; })
-      .houseServers,
+      .defaultServers,
 
   # Text used AS Claude Code's system prompt, REPLACING the stock prompt. The
   # string is materialized to a store file and baked into the wrapper as

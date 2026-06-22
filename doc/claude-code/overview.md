@@ -107,7 +107,7 @@ wrapper injects its defaults file only `unless_present` a caller `--settings`
 Rendered from the shared `ix.mcp` registry (`lib/util/mcp.nix`) so `index` is
 declared once for both this wrapper and codex. CLI `--mcp-config` layers merge,
 so a user's `--mcp-config` and a project `.mcp.json` still load alongside.
-Defaults to the house pair, additions only:
+Defaults to the default pair, additions only:
 
 - `index`: the ix notebook kernel (`ix-mcp serve`, `packages/mcp`) over stdio, present
   only when the `mcp` sibling is in scope (the flake package set, not the

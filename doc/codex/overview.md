@@ -50,7 +50,7 @@ Defaults bump multi-agent fan-out well above stock:
 
 ### Baked MCP servers (`default.nix:62-73`, `80`)
 
-The house MCP servers are added as soft `-c mcp_servers.*` defaults from the same
+The default MCP servers are added as soft `-c mcp_servers.*` defaults from the same
 `ix.mcp` registry the claude-code wrapper renders, so Codex gets only the
 `index` MCP server and the Exa MCP server. The `index` server is present only
 when the `mcp` sibling is in scope (the flake package set, not the overlay;
