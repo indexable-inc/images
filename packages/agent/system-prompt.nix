@@ -73,6 +73,21 @@ let
     contradictory evidence, and report the causal chain from evidence to cause.
   '';
 
+  testedHypotheses = ''
+    Investigate by tested hypotheses, not plausible narratives. For each
+    non-trivial diagnosis, state the competing hypotheses, then test them against
+    direct evidence before acting.
+
+    Prefer measurements that can falsify a hypothesis: live logs, traces,
+    Postgres statistics, query plans, locks, wait events, metrics, ClickHouse or
+    other analytics mirrors, profiles, samples, and minimal repros. Mark each
+    hypothesis as supported, falsified, or still unknown.
+
+    Do not propose a redesign or broad fix while cheaper discriminating tests
+    remain. If the evidence points to an instrumentation gap, add or identify the
+    smallest measurement that would decide the next hypothesis.
+  '';
+
   experimentDefault = ''
     Validate substantive changes with tests and direct checks. Do not run agent
     rollouts or multi-rollout eval loops unless the user asks for an eval,
@@ -375,6 +390,7 @@ let
     liveSystemEvidence
     reproduceClaims
     firstPrinciples
+    testedHypotheses
     experimentDefault
     promptEval
     matchSurroundingCode
