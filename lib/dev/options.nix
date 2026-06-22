@@ -1,7 +1,7 @@
 /**
   The `ix.dev.*` option surface (RFC 0007).
 
-  This is what lets a forked `dev.nix` read like an ordinary NixOS module: you
+  This is what lets a forked `ix.nix` read like an ordinary NixOS module: you
   write `environment.systemPackages` and `programs.git.enable` at the top level
   as usual, and reach for `ix.dev.*` only to describe the agents, the fleet
   shape, and the shared identity volume. `mkDev` reads these options to plan the

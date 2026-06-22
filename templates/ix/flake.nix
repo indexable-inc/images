@@ -1,5 +1,5 @@
 {
-  description = "My ix dev environment (RFC 0007)";
+  description = "My ix environment (RFC 0007)";
 
   inputs.index.url = "github:indexable-inc/index";
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -25,13 +25,13 @@
       # declared); `.#health` / `.#diff` / `.#down` mirror `ix fleet <sub>`.
       # `<node>-system` is each node's system closure.
       #
-      # `module = ./dev.nix` is your config. `src = self` is the source
+      # `module = ./ix.nix` is your config. `src = self` is the source
       # materialized at /ix on every node so a VM can rebuild itself - keep it.
       packages = forEach (
         system:
         let
           dev = index.lib.mkDevFor system {
-            module = ./dev.nix;
+            module = ./ix.nix;
             src = self;
           };
         in
@@ -52,7 +52,7 @@
       # ix VM closures are x86_64-linux, so the configs come from that builder.
       inherit
         (index.lib.mkDevFor "x86_64-linux" {
-          module = ./dev.nix;
+          module = ./ix.nix;
           src = self;
         })
         nixosConfigurations

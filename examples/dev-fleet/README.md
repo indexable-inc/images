@@ -1,6 +1,6 @@
-# Dev fleet
+# ix fleet
 
-A forkable dev environment (RFC 0007). One [`dev.nix`](dev.nix) - an ordinary
+A forkable ix environment (RFC 0007). One [`ix.nix`](ix.nix) - an ordinary
 NixOS module - is the source of truth for the per-VM environment, the fleet
 topology, and an opt-in shared SMB volume that gives the whole fleet one Claude
 (and ix) login.
@@ -12,13 +12,13 @@ ix up
 ```
 
 This example declares a multi-node `ix.dev.fleet`. Omit that block and the same
-`dev.nix` is a **single VM named `dev`** that `ix up` (or `nix run .#up` in the
-forkable [template](../../templates/dev)) builds and creates - the simplest way
-to consume a `dev.nix` for one new VM. The fleet below is the scale-up.
+`ix.nix` is a **single VM named `dev`** that `ix up` (or `nix run .#up` in the
+forkable [template](../../templates/ix)) builds and creates - the simplest way
+to consume an `ix.nix` for one new VM. The fleet below is the scale-up.
 
 ## Shape
 
-- [`dev.nix`](dev.nix) is the module a user edits after `ix dev init`. Top-level
+- [`ix.nix`](ix.nix) is the module a user edits after `ix init`. Top-level
   NixOS config (`environment.systemPackages`, `programs.git.enable`) is the
   environment; `ix.dev.fleet` is the topology; `ix.dev.shared` turns on the
   identity volume. Claude Code and Codex are installed by default.

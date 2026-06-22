@@ -342,9 +342,9 @@
         };
       };
       overlays.default = ix.overlay;
-      templates.dev = {
-        path = ./templates/dev;
-        description = "Forkable ix dev environment: one dev.nix for a default VM, a fleet, and shared Claude/ix auth (RFC 0007)";
+      templates.ix = {
+        path = ./templates/ix;
+        description = "Forkable ix environment: one ix.nix for a default VM, a fleet, and shared Claude/ix auth";
       };
       packages = collect "packages";
       checks = collect "checks";

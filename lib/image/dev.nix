@@ -1,11 +1,11 @@
 /**
   `mkDev`: an opinionated dev-fleet layer over `mkFleet` (RFC 0007).
 
-  Consumes one user-owned NixOS module (the forkable `dev.nix`) and returns the
+  Consumes one user-owned NixOS module (the forkable `ix.nix`) and returns the
   same result shape `mkFleet` does (`.up`, `.health`, `.diff`, `withNodePrefix`,
   …), so it drops straight into the flake/example plumbing.
 
-  The user's `dev.nix` is an ordinary NixOS module: `environment.systemPackages`
+  The user's `ix.nix` is an ordinary NixOS module: `environment.systemPackages`
   and friends at the top level, plus `ix.dev.*` (see `lib/dev/options.nix`) to
   describe the agents, fleet, and shared volume. `mkDev` reads `ix.dev` once via
   a probe eval to plan the fleet, then builds each node with the same module:
@@ -24,7 +24,7 @@
   Curried `mkDevFor hostSystem { module, src }` so flake/example evaluation can
   build the wrapper derivations for the requested system, mirroring `mkFleetFor`.
   `src` is the flake `self`, threaded in by the template's `flake.nix`; it is
-  what gets materialized at `/ix`. The user's `dev.nix` never mentions it.
+  what gets materialized at `/ix`. The user's `ix.nix` never mentions it.
 */
 {
   lib,

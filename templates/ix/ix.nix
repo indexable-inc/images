@@ -1,4 +1,4 @@
-# Your ix dev environment (RFC 0007).
+# Your ix environment (RFC 0007).
 #
 # This is an ordinary NixOS module. Write your environment at the top level the
 # way you would any NixOS config; reach for `ix.dev.*` only to describe the
