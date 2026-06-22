@@ -12,11 +12,38 @@
   ix,
   repoPackages ? { },
 }:
+let
+  providerNames = {
+    claude = "Claude Code";
+    codex = "Codex";
+  };
+  extraSystemPrompts = {
+    claude = ''
+      You are Claude Code. When naming the coding-agent runtime or disclosing AI
+      authorship in outward-facing messages, say Claude Code.
+    '';
+    codex = ''
+      You are Codex. When naming the coding-agent runtime or disclosing AI
+      authorship in outward-facing messages, say Codex.
+    '';
+  };
+  systemPromptFor =
+    provider:
+    lib.concatStringsSep "\n\n" [
+      (import ./system-prompt.nix {
+        inherit lib;
+        agentName = providerNames.${provider};
+      })
+      extraSystemPrompts.${provider}
+    ];
+in
 {
+  inherit extraSystemPrompts systemPromptFor;
+
   # The house system prompt a wrapper bakes for its agent. One paragraph per
   # list element; see ./system-prompt.nix for the authored text and how
   # claude-code bakes it (`systemPrompt`, which REPLACES the stock prompt).
-  systemPrompt = import ./system-prompt.nix { inherit lib; };
+  systemPrompt = systemPromptFor "claude";
 
   # The house MCP servers (the `index` kernel plus `exa` web search), rendered
   # from the shared `ix.mcp` registry with the kernel pointed at the `mcp`

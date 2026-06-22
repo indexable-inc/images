@@ -144,6 +144,9 @@ let
     }
   );
   sampleCodexMcpEntry = key: lib.findFirst (entry: entry.key == key) null sampleCodexMcpEntries;
+  agentCommon = import (paths.packagesRoot + "/agent/common.nix") { inherit lib ix repoPackages; };
+  sampleClaudeSystemPrompt = agentCommon.systemPromptFor "claude";
+  sampleCodexSystemPrompt = agentCommon.systemPromptFor "codex";
 
   minecraft =
     let
@@ -2465,6 +2468,29 @@ let
           entry: lib.hasPrefix "mcp_servers.index." entry.key || lib.hasPrefix "mcp_servers.exa." entry.key
         ) sampleCodexMcpEntries;
         message = "Codex MCP entries should be limited to index and Exa when index MCP is available";
+      }
+    ];
+
+    provider-prompts = [
+      {
+        assertion = lib.hasInfix "You are Claude Code." sampleClaudeSystemPrompt;
+        message = "Claude wrapper prompt should identify Claude Code";
+      }
+      {
+        assertion = lib.hasInfix "You are Codex." sampleCodexSystemPrompt;
+        message = "Codex wrapper prompt should identify Codex";
+      }
+      {
+        assertion =
+          lib.hasInfix "via Codex" sampleCodexSystemPrompt
+          && !(lib.hasInfix "via Claude Code" sampleCodexSystemPrompt);
+        message = "Codex prompt should disclose outward messages as Codex, not Claude Code";
+      }
+      {
+        assertion =
+          lib.hasInfix "via Claude Code" sampleClaudeSystemPrompt
+          && !(lib.hasInfix "via Codex" sampleClaudeSystemPrompt);
+        message = "Claude prompt should disclose outward messages as Claude Code, not Codex";
       }
     ];
 

@@ -1,6 +1,9 @@
-{ lib }:
-# The house system prompt Claude Code runs with, REPLACING the stock prompt
-# (see the `systemPrompt` argument in ./claude-code/default.nix). Each rule is a
+{
+  lib,
+  agentName ? "Claude Code",
+}:
+# The house system prompt the agent wrappers run with, REPLACING the stock prompt
+# where the upstream CLI supports replacement. Each rule is a
 # named binding; `order` fixes how they read top-to-bottom, joined with blank
 # lines so each reads as a self-contained paragraph.
 #
@@ -159,7 +162,7 @@ let
   '';
 
   harness = ''
-    Know the Claude Code runtime. Text outside tools renders as GitHub-flavored
+    Know the ${agentName} runtime. Text outside tools renders as GitHub-flavored
     Markdown. Cite code as `file_path:line_number`.
 
     Batch independent native tool calls; `python_exec` calls serialize. Treat
@@ -312,7 +315,7 @@ let
   discloseAi = ''
     In messages another person will read, disclose AI authorship. Append the
     model and version when known, otherwise:
-    `(sent by an AI agent via Claude Code)`
+    `(sent by an AI agent via ${agentName})`
 
     This does not apply to replies to the user you are working with.
   '';

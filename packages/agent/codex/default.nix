@@ -74,7 +74,7 @@ let
     if modelInstructionsFile != null then
       modelInstructionsFile
     else
-      builtins.toFile "codex-system-prompt.txt" common.systemPrompt;
+      builtins.toFile "codex-system-prompt.txt" (common.systemPromptFor "codex");
 
   # The compiled Rust launcher (packages/config-launch): reads IX_LAUNCH_SPEC
   # (a baked JSON file describing the target binary, config path, forced flags,
