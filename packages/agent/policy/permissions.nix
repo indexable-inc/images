@@ -17,7 +17,13 @@ let
 
   codexForcedSettings = lib.optionalAttrs (mcpServers ? index) {
     features = {
+      browser_use = false;
+      browser_use_external = false;
+      computer_use = false;
+      image_generation = false;
+      in_app_browser = false;
       shell_tool = false;
+      standalone_web_search = false;
       unified_exec = false;
     };
   };

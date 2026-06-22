@@ -138,13 +138,11 @@ let
   # ix guest sidecars are opened by the shared platform base config.
   baseFirewallTcpPorts = [ 5001 ];
   baseFirewallUdpPorts = [ 8443 ];
-  sampleCodexMcpEntries = ix.mcp.toCodexEntries {
-    index = {
-      transport = "stdio";
-      command = "/bin/ix-mcp";
-      args = [ "serve" ];
-    };
-  };
+  sampleCodexMcpEntries = ix.mcp.toCodexEntries (
+    ix.mcp.houseServers {
+      indexCommand = "/bin/ix-mcp";
+    }
+  );
   sampleCodexMcpEntry = key: lib.findFirst (entry: entry.key == key) null sampleCodexMcpEntries;
 
   minecraft =
@@ -2454,6 +2452,20 @@ let
           };
         message = "Codex MCP entries should approve trusted house server tools by default";
       }
+      {
+        assertion =
+          sampleCodexMcpEntry "mcp_servers.exa.url" == {
+            key = "mcp_servers.exa.url";
+            value = "\"https://mcp.exa.ai/mcp\"";
+          };
+        message = "Codex MCP entries should include the Exa MCP server";
+      }
+      {
+        assertion = lib.all (
+          entry: lib.hasPrefix "mcp_servers.index." entry.key || lib.hasPrefix "mcp_servers.exa." entry.key
+        ) sampleCodexMcpEntries;
+        message = "Codex MCP entries should be limited to index and Exa when index MCP is available";
+      }
     ];
 
     ix-ray = [
@@ -3423,25 +3435,41 @@ let
             };
           in
           policy.codex.forcedSettings.features == {
+            browser_use = false;
+            browser_use_external = false;
+            computer_use = false;
+            image_generation = false;
+            in_app_browser = false;
             shell_tool = false;
+            standalone_web_search = false;
             unified_exec = false;
           };
-        message = "Codex policy should disable built-in shell tools when the index MCP is available";
+        message = "Codex policy should disable built-in tools when the index MCP is available";
       }
       {
         assertion =
           let
             forced = repoPackages.codex.passthru.specValue.forced;
           in
-          builtins.elem {
-            key = "features.shell_tool";
-            value = "false";
-          } forced
-          && builtins.elem {
-            key = "features.unified_exec";
-            value = "false";
-          } forced;
-        message = "Codex wrapper should render shell-tool disables into forced launch config";
+          lib.all
+            (
+              key:
+              builtins.elem {
+                key = "features.${key}";
+                value = "false";
+              } forced
+            )
+            [
+              "browser_use"
+              "browser_use_external"
+              "computer_use"
+              "image_generation"
+              "in_app_browser"
+              "shell_tool"
+              "standalone_web_search"
+              "unified_exec"
+            ];
+        message = "Codex wrapper should render built-in tool disables into forced launch config";
       }
       {
         # Bypass-permissions is enforced through Claude's managed-settings layer

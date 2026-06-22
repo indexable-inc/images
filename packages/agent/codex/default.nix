@@ -88,20 +88,14 @@ let
       value = ix.toml.scalar v;
     }) flat;
 
-  # The `index` MCP server, baked as soft `-c mcp_servers.index.*` defaults from
-  # the shared house server set (../common.nix `houseServers`, the same source
-  # the claude-code wrapper renders), so the kernel is declared once for both
-  # tools. Soft, so a user's own `[mcp_servers.index]` in config.toml wins per
-  # the per-leaf presence check. Only stdio servers are baked: codex's
-  # streamable-HTTP MCP support is gated behind version-specific keys, so the
-  # keyless `exa` server stays claude-only rather than baking an unverified HTTP
-  # config into every codex session.
-  mcpStdioServers = lib.filterAttrs (
-    _: def: (def.transport or "stdio") == "stdio"
-  ) common.houseServers;
+  # The house MCP servers, baked as soft `-c mcp_servers.*` defaults from the
+  # shared house server set (../common.nix `houseServers`, the same source the
+  # claude-code wrapper renders), so Codex gets only the index MCP server and
+  # the Exa MCP server. Soft, so a user's own `[mcp_servers.<name>]` in
+  # config.toml wins per the per-leaf presence check.
+  mcpServers = common.houseServers;
   sharedPermissions = import (ix.paths.packagesRoot + "/agent/policy/permissions.nix") {
-    inherit lib;
-    mcpServers = mcpStdioServers;
+    inherit lib mcpServers;
   };
   effectiveForcedSettings =
     forcedSettings
@@ -122,7 +116,7 @@ let
           { model_instructions_file = toString effectiveModelInstructionsFile; } // settings
         )
       )
-      ++ ix.mcp.toCodexEntries mcpStdioServers;
+      ++ ix.mcp.toCodexEntries mcpServers;
   };
   spec = (formats.json { }).generate "codex-launch-spec.json" specValue;
 

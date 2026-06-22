@@ -28,10 +28,11 @@ kinds of `-c key=value` overrides.
 
 Applied on EVERY invocation (`-c` is codex's highest-precedence layer, above
 `~/.codex/config.toml`), so reserved for wrapper invariants the user must not
-silently lose. The only one baked: `check_for_update_on_startup = false`, since
-the store binary is read-only and the wrapper owns the version pin, so the check
-only ever costs a network round-trip it can never act on. Anything
-security-shaped (sandbox mode, approval policy) is left to the user's config.
+silently lose. The wrapper always disables the startup update check because the
+store binary is read-only and the wrapper owns the version pin. When the index
+MCP server is available, shared policy also disables Codex's built-in shell,
+browser, computer-use, image-generation, and standalone web-search tool features
+so the available tool surface stays with the index and Exa MCP servers.
 
 ### Soft defaults (`settings`, `default.nix:41-47`)
 
@@ -47,16 +48,13 @@ Defaults bump multi-agent fan-out well above stock:
 - `agents.max_depth = 3` (parent -> child -> grandchild -> great-grandchild),
   still read under v2.
 
-### Baked MCP server (`default.nix:62-73`, `80`)
+### Baked MCP servers (`default.nix:62-73`, `80`)
 
-The `index` MCP server is added as soft `-c mcp_servers.index.*` defaults from
-the same `ix.mcp` registry the claude-code wrapper renders, so the kernel is
-declared once for both tools. Only stdio servers are baked
-(`mcpStdioServers` filters `transport == "stdio"`): codex's streamable-HTTP MCP
-support is gated behind version-specific keys, so the keyless `exa` HTTP server
-stays claude-only. The `index` server is present only when the `mcp` sibling is
-in scope (the flake package set, not the overlay; `repoPackages`,
-`default.nix:10-15`, `71`).
+The house MCP servers are added as soft `-c mcp_servers.*` defaults from the same
+`ix.mcp` registry the claude-code wrapper renders, so Codex gets only the
+`index` MCP server and the Exa MCP server. The `index` server is present only
+when the `mcp` sibling is in scope (the flake package set, not the overlay;
+`repoPackages`, `default.nix:10-15`, `71`).
 
 ### Remote-SSH reach (`default.nix:83-92`)
 
