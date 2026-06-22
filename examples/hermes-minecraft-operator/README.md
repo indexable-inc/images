@@ -13,7 +13,7 @@ The agent gets exactly one game-facing capability: a typed `run_command(command)
 
 ## Shape
 
-- [`default.nix`](default.nix) — the two-node fleet. Players reach the game over public ipv4; RCON is only routable inside the `hermes-minecraft` group.
+- [`ix.nix`](ix.nix) — the two-node fleet. Players reach the game over public ipv4; RCON is only routable inside the `hermes-minecraft` group.
 - [`minecraft.nix`](minecraft.nix) — Paper with `rcon.enable = true` and whitelist enforcement from first boot.
 - [`operator.nix`](operator.nix) — layers the MCP server and an operator persona on the shared [`../hermes-agent/hermes.nix`](../hermes-agent/hermes.nix) composition. The RCON host/port are read off the minecraft node's evaluated config, so they cannot drift.
 - [`rcon.nix`](rcon.nix) — the shared RCON credential. Committed plaintext like the survival example's forwarding secret: east-west-scoped, obviously a change-me.

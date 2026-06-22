@@ -18,7 +18,7 @@ nix run .#multi-client-file-sharing-up
 
 ## Shape
 
-- [`default.nix`](default.nix) defines the fleet: one server node and two
+- [`ix.nix`](ix.nix) defines the fleet: one server node and two
   client replicas with `dependsOn` so the server is up first.
 - [`server.nix`](server.nix) configures Samba with the locking knobs
   (`strict locking`, `posix locking`, `kernel oplocks = no`,

@@ -6,7 +6,7 @@ Unlike every other hermes preset this one is inbound: the node claims TCP `9119`
 
 ## Shape
 
-- [`default.nix`](default.nix) wraps the node as a one-node fleet in the `hermes-api` east-west group.
+- [`ix.nix`](ix.nix) wraps the node as a one-node fleet in the `hermes-api` east-west group.
 - [`api-server.nix`](api-server.nix) sets `_module.args.hermes.apiServer = true` (plus the port) and adds an HTTP readiness check against the listener.
 - The `apiServer` toggle lives in [`../hermes-agent/hermes.nix`](../hermes-agent/hermes.nix): it sets the gateway's `API_SERVER_ENABLED` / `API_SERVER_HOST=0.0.0.0` / `API_SERVER_PORT` env knobs, claims the port, and wires the env file carrying `API_SERVER_KEY` into the daemon.
 

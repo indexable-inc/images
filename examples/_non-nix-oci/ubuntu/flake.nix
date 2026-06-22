@@ -12,7 +12,7 @@
   outputs =
     { index, ... }:
     let
-      image = import ./default.nix { inherit index; };
+      image = import ./ix.nix { inherit index; };
     in
     {
       ix.images.default = image;

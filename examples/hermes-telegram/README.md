@@ -4,7 +4,7 @@ The [Hermes operator VM](../hermes-agent/) tuned as a Telegram chat companion: s
 
 ## Shape
 
-- [`default.nix`](default.nix) wraps the node as a one-node fleet.
+- [`ix.nix`](ix.nix) wraps the node as a one-node fleet.
 - [`telegram.nix`](telegram.nix) layers two deltas on the shared [`../hermes-agent/hermes.nix`](../hermes-agent/hermes.nix) composition: `_module.args.hermes.telegram = true` and a chat-tuned `SOUL.md`.
 - [`documents/SOUL.md`](documents/SOUL.md) is the persona: short messages, light markdown, conversation register. Everything else (model provider, memory, tools) is inherited from the hermes-agent preset and overridable through the same `_module.args.hermes` toggles.
 

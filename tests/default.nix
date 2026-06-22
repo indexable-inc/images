@@ -1856,7 +1856,7 @@ let
 
   factionsExample =
     let
-      fleet = import (paths.examples + "/minecraft/factions") {
+      fleet = import (paths.examples + "/minecraft/factions/ix.nix") {
         index = {
           lib = ix;
         };
@@ -1877,7 +1877,7 @@ let
 
   survivalExample =
     let
-      fleet = import (paths.examples + "/minecraft/survival") {
+      fleet = import (paths.examples + "/minecraft/survival/ix.nix") {
         index = {
           lib = ix;
         };
@@ -1902,7 +1902,7 @@ let
 
   dailyScraperExample =
     let
-      fleet = import (paths.examples + "/python-daily-scraper") {
+      fleet = import (paths.examples + "/python-daily-scraper/ix.nix") {
         index = {
           lib = ix;
         };
@@ -1918,7 +1918,7 @@ let
 
   nginxLifecycleExample =
     let
-      fleet = import (paths.examples + "/nginx-lifecycle") {
+      fleet = import (paths.examples + "/nginx-lifecycle/ix.nix") {
         index = {
           lib = ix;
         };
@@ -1933,7 +1933,7 @@ let
 
   s3StorageExample =
     let
-      fleet = import (paths.examples + "/s3-storage") {
+      fleet = import (paths.examples + "/s3-storage/ix.nix") {
         index = {
           lib = ix;
         };
@@ -1948,7 +1948,7 @@ let
 
   observabilityStackExample =
     let
-      fleet = import (paths.examples + "/observability-stack") {
+      fleet = import (paths.examples + "/observability-stack/ix.nix") {
         index = {
           lib = ix;
         };
@@ -2301,7 +2301,7 @@ let
       portClaim = noYourkitConfig.ix.networking.portClaims.minestom-yourkit or null;
     };
 
-  nomadSecretRefsExample = import (paths.examples + "/nomad-secret-refs/example.nix") {
+  nomadSecretRefsExample = import (paths.examples + "/nomad-secret-refs/ix.nix") {
     index = {
       lib = ix;
     };
@@ -2309,7 +2309,7 @@ let
 
   minecraftBlocksExample =
     let
-      fleet = import (paths.examples + "/minecraft-blocks") {
+      fleet = import (paths.examples + "/minecraft-blocks/ix.nix") {
         index = {
           lib = ix;
         };
@@ -4625,8 +4625,8 @@ let
       {
         assertion =
           builtins.pathExists (paths.examples + "/dev-fleet/ix.nix")
-          && !(builtins.pathExists (paths.examples + "/dev-fleet/dev.nix"));
-        message = "dev-fleet should expose ix.nix as the editable module without a duplicate dev.nix";
+          && builtins.pathExists (paths.examples + "/dev-fleet/dev.nix");
+        message = "dev-fleet should expose ix.nix as the mkDev entrypoint and dev.nix as the editable module";
       }
       {
         assertion = lib.all (

@@ -28,7 +28,7 @@ for that VM.
 
 ## Shape
 
-- [`default.nix`](default.nix) declares the fleet and places only `service` and
+- [`ix.nix`](ix.nix) declares the fleet and places only `service` and
   `allowed-client` in the east-west group.
 - [`service.nix`](service.nix) runs nginx on port 8080 and opens that port in
   the guest firewall.

@@ -35,14 +35,14 @@ nothing is recreated.
 - [`flake.nix`](flake.nix) is the native `ix up` entrypoint. It exposes
   `nixosConfigurations.devbox`, which `ix up .#devbox` resolves to the NixOS
   system closure.
-- [`default.nix`](default.nix) keeps the one-node fleet definition reused by the
-  repo example wrappers.
+- [`ix.nix`](ix.nix) keeps the one-node fleet definition reused by the repo
+  example wrappers.
 - [`configuration.nix`](configuration.nix) is the NixOS module you edit.
 
 ## Fork it
 
 Copy this directory into your own repo, keep `flake.nix` as the entrypoint, and change `ix.image.tag` in
-`default.nix` to your own registry namespace. The switch path needs no admin
+`ix.nix` to your own registry namespace. The switch path needs no admin
 rights: it builds and activates your own system onto your own VM.
 
 ## Scope

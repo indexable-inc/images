@@ -5,7 +5,7 @@ Nomad job that imports the same secret file as task environment.
 
 ## Shape
 
-[`example.nix`](example.nix) declares a Vaultwarden provider and one secret ref:
+[`ix.nix`](ix.nix) declares a Vaultwarden provider and one secret ref:
 
 ```nix
 secretSet = ix.secrets.normalize {
@@ -56,7 +56,7 @@ lib.getExe pkgs.nomad` from an allowed package set. Switch that final verb to
 `run` when the deployment pipeline should submit the job instead of only
 validating it.
 
-[`example.nix`](example.nix) also exposes `buildCheck`, a pure derivation backed
+[`ix.nix`](ix.nix) also exposes `buildCheck`, a pure derivation backed
 by Nix assertions over structured command metadata. It verifies that the provider
 adapter calls the real `pkgs.rbw` binary, carries the `production` folder and
 `notes` field, and renders the Nomad template path the materializer will create

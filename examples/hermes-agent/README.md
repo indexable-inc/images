@@ -25,7 +25,7 @@ The first command writes the env file at the path the systemd unit reads from. T
 
 ## Shape
 
-- [`default.nix`](default.nix) wraps the node as a one-node fleet.
+- [`ix.nix`](ix.nix) wraps the node as a one-node fleet.
 - [`hermes.nix`](hermes.nix) is the service composition. It includes the upstream `services.hermes-agent` module and reads a `_module.args.hermes` arg-bag for the integration toggles.
 - [`documents/SOUL.md`](documents/SOUL.md) is the agent's persona prompt. It tells the agent it is inside an ix VM, what tooling is on PATH, and which authorities live on the host side.
 - [`documents/USER.md`](documents/USER.md) is the long-running user context Hermes injects every session.
@@ -33,7 +33,7 @@ The first command writes the env file at the path the systemd unit reads from. T
 
 ## Enable more providers
 
-Every Tier 1 integration is one flag in the fleet preset plus matching lines in the env file. The flag goes in your override of [`default.nix`](default.nix) (or in a separate fleet that imports [`hermes.nix`](hermes.nix)):
+Every Tier 1 integration is one flag in the fleet preset plus matching lines in the env file. The flag goes in your override of [`ix.nix`](ix.nix) (or in a separate fleet that imports [`hermes.nix`](hermes.nix)):
 
 ```nix
 nodes.hermes = {

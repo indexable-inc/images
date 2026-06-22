@@ -130,9 +130,9 @@ let
 
   /**
     Discovered example fleets, built for a given host system. Discovery
-    walks two layouts side by side: flat `examples/<name>/default.nix`
-    and nested `examples/<category>/<name>/default.nix`. A directory is
-    treated as a category when it has no `default.nix` of its own. Keys
+    walks two layouts side by side: flat `examples/<name>/ix.nix`
+    and nested `examples/<category>/<name>/ix.nix`. A directory is
+    treated as a category when it has no `ix.nix` of its own. Keys
     in the returned attrset are always the example's own name; the
     Each fleet is imported with `{ index = { lib = ix; }; }` to match
     the contract examples already use, with `mkFleet` swapped for the
@@ -141,7 +141,7 @@ let
     than always pinning to the default.
 
     Adding an example is `mkdir examples/<category>/<name> + edit
-    default.nix`; this aggregator picks it up on the next eval, no
+    ix.nix`; this aggregator picks it up on the next eval, no
     registry edits.
   */
   exampleFleetsFor =
@@ -156,14 +156,25 @@ let
 
       discovered = discoverTree {
         root = paths.examples;
+        requiredFiles = [ "ix.nix" ];
         validate =
           { metadata, ... }:
           assert lib.assertMsg (builtins.length metadata.segments <= 2)
-            "exampleFleetsFor: expected examples/<name>/default.nix or examples/<category>/<name>/default.nix, got examples/${metadata.relativePath}";
+            "exampleFleetsFor: expected examples/<name>/ix.nix or examples/<category>/<name>/ix.nix, got examples/${metadata.relativePath}";
           { };
       };
     in
-    lib.mapAttrs (_: entry: import entry.path { index = indexShim; }) discovered;
+    lib.filterAttrs (_: fleet: fleet != null) (
+      lib.mapAttrs (
+        _: entry:
+        let
+          load = import (entry.path + "/ix.nix");
+          args = builtins.functionArgs load;
+          value = if args ? index then load { index = indexShim; } else null;
+        in
+        if value != null && value ? nodes && value ? planValue then value else null
+      ) discovered
+    );
 in
 {
   inherit

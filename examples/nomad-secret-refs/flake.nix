@@ -12,7 +12,7 @@
   outputs =
     { index, ... }:
     let
-      example = import ./example.nix { inherit index; };
+      example = import ./ix.nix { inherit index; };
     in
     {
       ix.examples.default = example;

@@ -13,7 +13,7 @@ nix run .#synced-github-auth-up
 
 ## Shape
 
-- [`default.nix`](default.nix) defines the fleet: three `agent` replicas and a
+- [`ix.nix`](ix.nix) defines the fleet: three `agent` replicas and a
   `secrets` block that declares one `github/token` ref through `ix.secrets`.
 - [`agent.nix`](agent.nix) consumes `secretRefs."github/token"` and installs a
   `git` credential helper that reads the token from its runtime path on demand.

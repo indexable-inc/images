@@ -25,7 +25,7 @@ nix run .#ray-cluster-up
 
 - [`pyproject.toml`](pyproject.toml), [`uv.lock`](uv.lock), and [`src/`](src/)
   are the Ray driver (`ray-demo`).
-- [`default.nix`](default.nix) defines the fleet: one head and two worker
+- [`ix.nix`](ix.nix) defines the fleet: one head and two worker
   replicas, all in one east-west group, with `dependsOn` so the head comes up
   first.
 - [`cluster-node.nix`](cluster-node.nix) owns one Ray node: the package, the
@@ -56,7 +56,7 @@ address (`RAY_ADDRESS`), so no `--address` flag is needed on a cluster node.
 ## Scale
 
 Worker count is one line. Raise `ray-worker.replicas` in
-[`default.nix`](default.nix); the head's health check waits for the new total
+[`ix.nix`](ix.nix); the head's health check waits for the new total
 because it counts fleet nodes rather than hard-coding three.
 
 ## Ports

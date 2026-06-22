@@ -23,7 +23,7 @@ nix run .#polyglot-dev-up
   `environment.systemPackages`. Languages are grouped by family
   (`jvm`, `native`, `scripting`, `functional`, `beam`) so adding or
   removing one is a single attribute edit.
-- [`default.nix`](default.nix) wraps it as a one-node fleet (`workbench`).
+- [`ix.nix`](ix.nix) wraps it as a one-node fleet (`workbench`).
 
 ## What's on PATH
 

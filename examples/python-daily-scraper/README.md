@@ -21,7 +21,7 @@ nix run .#python-daily-scraper-up
 
 - [`pyproject.toml`](pyproject.toml), [`uv.lock`](uv.lock), and [`src/`](src/)
   are the Python project.
-- [`default.nix`](default.nix) defines one ix fleet node.
+- [`ix.nix`](ix.nix) defines one ix fleet node.
 - [`service.nix`](service.nix) owns the concrete service config, hardening,
   timer, and optional S3 sync.
 - [`package.nix`](package.nix) packages the uv project as a store executable.

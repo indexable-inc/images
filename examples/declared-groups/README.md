@@ -27,7 +27,7 @@ ix shell client -- curl -fsS http://api:8080/
 
 ## Shape
 
-- [`default.nix`](default.nix) declares the fleet; note `api` has no
+- [`ix.nix`](ix.nix) declares the fleet; note `api` has no
   fleet-level `groups` entry.
 - [`api.nix`](api.nix) carries the group in the image
   (`ix.networking.groups`) and exposes port 8080 to group members.

@@ -1,5 +1,5 @@
 # Service composition for the Hermes operator VM. The upstream NixOS
-# module (`services.hermes-agent.*`) is included by `default.nix`; this
+# module (`services.hermes-agent.*`) is included by `ix.nix`; this
 # file only sets options on it.
 #
 # The `_module.args.hermes` surface keeps the on-disk options short for
