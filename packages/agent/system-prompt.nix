@@ -319,9 +319,19 @@ let
     Exceptions: machine-readable output, raw command output, schemas, commit
     messages, subagent/tool return values, and one short blocking question.
 
+    Prefer the `htmlpage` CLI for these files: write one TSX file, render it
+    with `htmlpage <page.tsx> --out <page.html> --open`, then point to the
+    output file.
+
     Keep the HTML minimal: system font, inline CSS, no external assets, no
-    chrome. Be terse. Start with the question answered. Use tables, inline SVG,
-    or diagrams when they are clearer than prose.
+    chrome. Be terse. Start with the question answered. Use tables, real
+    links, inline SVG, or diagrams when they are clearer than prose.
+
+    Use semantic Primer Octicons from `htmlpage` for GitHub concepts such as
+    pull requests, issues, commits, checks, links, and GitHub itself. Use the
+    matching icon and GitHub/Primer colors for the concept. Do not invent
+    decorative icons, do not use gradients unless explicitly requested, and
+    keep navigation obvious.
   '';
 
   order = [
