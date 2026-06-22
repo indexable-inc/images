@@ -1,17 +1,5 @@
 {
   "nodes": {
-    "agents": {
-      "flake": false,
-      "locked": {
-        "path": "./packages/agent/agents",
-        "type": "path"
-      },
-      "original": {
-        "path": "./packages/agent/agents",
-        "type": "path"
-      },
-      "parent": []
-    },
     "bench-filesystem": {
       "flake": false,
       "locked": {
@@ -350,7 +338,6 @@
     },
     "root": {
       "inputs": {
-        "agents": "agents",
         "bench-filesystem": "bench-filesystem",
         "btop-src": "btop-src",
         "clippy-fork": "clippy-fork",

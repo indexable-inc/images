@@ -426,43 +426,19 @@ let
   # Declarative subagents rendered to a symlink-free `.claude/agents` directory.
   # Keep this outside the Claude plugin: plugins namespace subagent names, but
   # hooks and skills call these by bare `subagent_type` (`code-reviewer`, etc.).
-  agentsDir =
-    let
-      renderedAgents = {
-        index-action-runner = {
-          frontmatter = {
-            name = "index-action-runner";
-            description =
-              "Offload a long, image-heavy or many-step loop (browser automation, "
-              + "scanning many images or PDFs, multi-step web flows) into an isolated "
-              + "context. Give it an outcome plus the exact fields to return; it drives "
-              + "the whole loop in its own index kernel and returns only the distilled "
-              + "result, keeping screenshots and DOM dumps out of the main thread.";
-            mcpServers = ix.mcp.toAgentMcpServers {
-              index = {
-                transport = "stdio";
-                command = lib.getExe repoPackages.mcp;
-                args = [ "serve" ];
-              };
-            };
-          };
-          body = builtins.readFile (paths.agents + "/index-action-runner.md");
-        };
-      };
-      renderedFiles = map (n: "${n}.md") (builtins.attrNames renderedAgents);
-      entries = builtins.readDir paths.agents;
-      rawMdNames = lib.filter (
-        n: lib.hasSuffix ".md" n && entries.${n} == "regular" && !(lib.elem n renderedFiles)
-      ) (builtins.attrNames entries);
-    in
-    ix.agents.mkAgentsDir {
-      inherit pkgs;
-      agents = renderedAgents;
-      rawFiles = map (n: {
-        name = lib.removeSuffix ".md" n;
-        path = paths.agents + "/${n}";
-      }) rawMdNames;
-    };
+  agentDefinitions = import (paths.packagesRoot + "/agent/subagents.nix") {
+    inherit
+      ix
+      lib
+      pkgs
+      repoPackages
+      ;
+  };
+  agentsDir = ix.agents.mkAgentsDir {
+    inherit pkgs;
+    agents = agentDefinitions.renderedAgents;
+    rawFiles = agentDefinitions.rawFiles;
+  };
 
   mcSource = ix.writeNushellApplication pkgs {
     name = "mc-source";

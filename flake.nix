@@ -38,10 +38,6 @@
       url = "path:./packages/agent/skills";
       flake = false;
     };
-    agents = {
-      url = "path:./packages/agent/agents";
-      flake = false;
-    };
     examples = {
       url = "path:./examples";
       flake = false;
@@ -175,7 +171,6 @@
       clippy-fork,
       ghostty,
       skills,
-      agents,
       examples,
       tests,
       bench-filesystem,
@@ -211,7 +206,6 @@
       paths = {
         root = ./.;
         skills = skills.outPath;
-        agents = agents.outPath;
         modules = ./modules;
         examples = examples.outPath;
         tests = tests.outPath;

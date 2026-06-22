@@ -141,7 +141,7 @@ def _run(args: argparse.Namespace) -> int:
         print(
             f"agent '{args.agent}' is not implemented yet; only --agent claude works. "
             "See the codex-backend tracking issue. Codex shares the same house "
-            "system prompt (packages/agent/common.nix), so this is the next backend.",
+            "system prompt (packages/agent/prompt.nix), so this is the next backend.",
             file=sys.stderr,
         )
         return 2
