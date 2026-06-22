@@ -138,6 +138,16 @@ let
   # ix guest sidecars are opened by the shared platform base config.
   baseFirewallTcpPorts = [ 5001 ];
   baseFirewallUdpPorts = [ 8443 ];
+  sampleCodexMcpEntries = ix.mcp.toCodexEntries {
+    index = {
+      transport = "stdio";
+      command = "/bin/ix-mcp";
+      args = [ "serve" ];
+    };
+  };
+  sampleCodexMcpEntry =
+    key:
+    lib.findFirst (entry: entry.key == key) null sampleCodexMcpEntries;
 
   minecraft =
     let
@@ -2437,6 +2447,18 @@ let
   ];
 
   groups = {
+    mcp = [
+      {
+        assertion =
+          sampleCodexMcpEntry "mcp_servers.index.default_tools_approval_mode"
+          == {
+            key = "mcp_servers.index.default_tools_approval_mode";
+            value = "\"approve\"";
+          };
+        message = "Codex MCP entries should approve trusted house server tools by default";
+      }
+    ];
+
     ix-ray = [
       {
         # The head runs both daemons (Ray GCS + the ix-mcp engine that drives it).

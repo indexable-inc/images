@@ -42,7 +42,9 @@ let
   # config-launch turns into `-c <key>=<value>` flags (so a user's own
   # `mcp_servers.<name>` in config.toml still wins per the per-leaf presence
   # check). Codex keys stdio servers by `command`/`args`/`env` and HTTP servers
-  # by `url`, mirroring `[mcp_servers.<name>]` tables in config.toml.
+  # by `url`, mirroring `[mcp_servers.<name>]` tables in config.toml. House MCP
+  # tools are trusted defaults, so approve server tools unless the user config
+  # sets a stricter `default_tools_approval_mode` or per-tool override.
   codexEntriesOne =
     name: def:
     let
@@ -52,25 +54,33 @@ let
         value = toml.scalar v;
       }) (def.env or { });
     in
-    if isStdio def then
-      [
-        {
-          key = "${prefix}.command";
-          value = toml.scalar def.command;
-        }
-      ]
-      ++ lib.optional (def ? args) {
-        key = "${prefix}.args";
-        value = tomlArray def.args;
+    [
+      {
+        key = "${prefix}.default_tools_approval_mode";
+        value = toml.scalar "approve";
       }
-      ++ envEntries
-    else
-      [
-        {
-          key = "${prefix}.url";
-          value = toml.scalar def.url;
+    ]
+    ++ (
+      if isStdio def then
+        [
+          {
+            key = "${prefix}.command";
+            value = toml.scalar def.command;
+          }
+        ]
+        ++ lib.optional (def ? args) {
+          key = "${prefix}.args";
+          value = tomlArray def.args;
         }
-      ];
+        ++ envEntries
+      else
+        [
+          {
+            key = "${prefix}.url";
+            value = toml.scalar def.url;
+          }
+        ]
+    );
 in
 {
   /**
