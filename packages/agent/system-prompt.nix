@@ -324,8 +324,10 @@ let
     output file.
 
     Keep the HTML minimal: system font, inline CSS, no external assets, no
-    chrome. Be terse. Start with the question answered. Use tables, real
-    links, inline SVG, or diagrams when they are clearer than prose.
+    chrome. Use `@media (prefers-color-scheme: dark)` so colors adapt
+    automatically to light or dark mode. Be terse. Start with the question
+    answered. Use tables, real links, inline SVG, or diagrams when they are
+    clearer than prose.
 
     Use semantic Primer Octicons from `htmlpage` for GitHub concepts such as
     pull requests, issues, commits, checks, links, and GitHub itself. Use the
