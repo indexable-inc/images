@@ -2186,14 +2186,7 @@ let
   base =
     let
       config = evalConfig [ ];
-      imageConfig = evalConfig [
-        {
-          ix.image = {
-            name = "ix/base";
-            tag = "latest";
-          };
-        }
-      ];
+      imageConfig = evalConfig [ (paths.root + "/images/system/base") ];
     in
     {
       inherit config imageConfig;
@@ -2768,6 +2761,15 @@ let
           && claims.ix-agent.port == 8443
           && claims.ix-agent.address == "*";
         message = "base profile should reserve ix guest sidecar listener ports";
+      }
+      {
+        assertion =
+          base.imageConfig.ix.image.name == "ix/base" && base.imageConfig.ix.image.tag == "latest";
+        message = "base image should publish as ix/base:latest";
+      }
+      {
+        assertion = lib.elemAt base.config.nix.settings.substituters 0 == "https://cache.ix.dev";
+        message = "base profile should route Nix through cache.ix.dev before fallback substituters";
       }
     ];
 

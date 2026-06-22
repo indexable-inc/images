@@ -37,6 +37,13 @@ in
   };
 
   config = lib.mkIf config.ix.profiles.base.enable {
+    # `cache.ix.dev` is the ix pull-through cache for guest Nix operations. Put
+    # it in the auto-enabled base profile so every image gets the same warm
+    # binary-cache path unless an image explicitly disables the profile.
+    nix.settings.substituters = lib.mkBefore [
+      "https://cache.ix.dev"
+    ];
+
     # Cubic halves cwnd on any loss, so a residential last-mile at
     # 30 ms and a couple percent loss caps a single TCP flow far
     # below the path's real capacity. BBR models bottleneck bandwidth

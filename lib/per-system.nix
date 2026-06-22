@@ -763,6 +763,10 @@ let
         exampleNames = lib.attrNames exampleFleets;
       };
 
+  baseImage = ix.mkImage {
+    modules = [ (paths.root + "/images/system/base") ];
+  };
+
   # Non-NixOS OCI example images (ubuntu, debian, ...). They live under
   # `examples/_non-nix-oci` so fleet discovery skips the subtree (leading
   # underscore). Each is imported with the example `{ index }` contract and
@@ -1099,28 +1103,32 @@ let
     );
 in
 {
-  packages = {
-    health-checks = healthChecks.dag;
-    health-checks-zellij = healthChecks.zellij;
-    inherit check lint site;
-    site-dev = site.passthru.devServer;
-    bench-filesystem = benchFilesystem;
-    update-mods = updateMods;
-    update-loaders = updateLoaders;
-    inherit update;
-    ix-shell-sync-ignored = ixShellSyncIgnored;
-    mc-source = mcSource;
-    update-sounds = updateSounds;
-    agents = agentsDir;
-    skills = skillsDir;
-    claude-plugin = claudePluginDir;
-  }
-  // repoFlakePackages
-  // examplePackages
-  // nonNixExampleImages
-  // nonNixExampleDescriptions
-  // crossPackages
-  // healthChecks.lifecyclePackages;
+  packages =
+    lib.optionalAttrs (system == ix.system) {
+      base = baseImage;
+    }
+    // {
+      health-checks = healthChecks.dag;
+      health-checks-zellij = healthChecks.zellij;
+      inherit check lint site;
+      site-dev = site.passthru.devServer;
+      bench-filesystem = benchFilesystem;
+      update-mods = updateMods;
+      update-loaders = updateLoaders;
+      inherit update;
+      ix-shell-sync-ignored = ixShellSyncIgnored;
+      mc-source = mcSource;
+      update-sounds = updateSounds;
+      agents = agentsDir;
+      skills = skillsDir;
+      claude-plugin = claudePluginDir;
+    }
+    // repoFlakePackages
+    // examplePackages
+    // nonNixExampleImages
+    // nonNixExampleDescriptions
+    // crossPackages
+    // healthChecks.lifecyclePackages;
 
   # Flat keying: one derivation per `checks.<system>.<name>`, as the flake schema
   # and `nix flake check` require. The `.#check` gate and blast-radius consume
