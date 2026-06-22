@@ -2339,6 +2339,12 @@ def _type_error_hint(exc: TypeError) -> str:
     try:
         msg = str(exc)
         m = _TYPEERROR_CALL_RE.match(msg)
+        if m is None and msg.startswith("sh() takes 1 positional argument"):
+            return (
+                "\nHint: sh takes one command argument. Use sh(['git', 'status']) for "
+                "argv-list execution with no shell parsing, or sh('git status') when "
+                "shell parsing is intended; pass cwd= instead of cd."
+            )
         if not m:
             return ""
         func_name = m.group(1)
@@ -3252,6 +3258,7 @@ def install(user_ns: dict | None = None) -> None:
         import sh as _sh_module
 
         target["sh"] = _sh_module
+        target["zsh"] = _sh_module.zsh
     # Bind the filesystem-search helpers as top-level callables (`await grep(...)`
     # / `find(...)` / `spotlight(...)`) the way `sh` is bound, so the most common
     # search/listing actions need no import. They live in the bundled `fsearch`

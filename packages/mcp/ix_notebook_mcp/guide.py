@@ -55,8 +55,10 @@ def credentials_note() -> str:
 
 NAMESPACE = (
     "The namespace persists across calls, so variables, functions, classes, and imports you "
-    "define stay defined and are reusable by every later call — define a helper once and call it "
-    "again next turn."
+    "define stay defined and are reusable by every later call: define a helper once and call it "
+    "again next turn. Bind expensive or large outputs to names (`out = await sh(...)`, "
+    "`df = ...`) instead of only printing or returning them, so later calls can inspect, filter, "
+    "or pass that same object to `read` without recomputing."
 )
 
 JOBS = (
@@ -75,10 +77,12 @@ JOBS = (
 PAGING = (
     "Every run is kept in `jobs`, so a truncated reply is never lost: page the run with "
     "jobs['<id>'].tail(n) / .head(n) / .slice(a, b) / .grep('pat') / .lines(a, b), or read "
-    "jobs['<id>'].output (stdout) and, once it has finished, jobs['<id>'].result (the value — "
+    "jobs['<id>'].output (stdout) and, once it has finished, jobs['<id>'].result (the value: "
     "it raises while the job is still running rather than return a misleading None, so `await "
     "jobs['<id>']` to wait for it; `.result` and `.result()` both work, and a finished Result's "
-    "`.text` is its rendered text); history() lists recent runs."
+    "`.text` is its rendered text). Prefer assigning the result to a variable before producing a "
+    "small final expression, e.g. `log = await sh(...); log[-4000:]`, so both the named object and "
+    "the pageable job survive for follow-up calls; history() lists recent runs."
 )
 
 BLOCKING = (
@@ -152,7 +156,10 @@ NO_SHELL = (
     "`view.edit(path, old, new)`, never blind. For meaning-based "
     "recall across a corpus, `import search`. When you genuinely must shell out, use the async "
     "`sh` (it runs off the loop, streams into the job's pageable output, and preserves clean "
-    "color); to run elsewhere pass `cwd=`, never a `cd X && ...` prefix. And shell out for "
+    "color); to run elsewhere pass `cwd=`, never a `cd X && ...` prefix. `sh` accepts either a "
+    "shell string (`await sh('git status --short')`) or an argv list (`await sh(['git', 'commit', "
+    "'-m', msg])`) that bypasses shell parsing. Use `await sh.zsh('setopt ...; ...')` only when "
+    "you intentionally need zsh syntax. And shell out for "
     "DATA, not text: when the CLI has a JSON mode (`gh --json`, `cargo metadata`, `nix "
     "--json`) use it and parse with `.json()` / `.jsonl()` / `.df()` on the Output (`.df()` "
     "is a polars frame ready to filter and render), one command per `sh()` call -- never "

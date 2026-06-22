@@ -269,9 +269,14 @@ BUILTINS: tuple[Builtin, ...] = (
     ),
     Builtin(
         "sh",
-        "shell out on the loop; the Output IS a Result (ANSI as HTML for the human, "
-        "`.text`/`.code`/`.ok` for you), and `.json()`/`.jsonl()`/`.df()` parse a JSON-mode "
-        "CLI straight to data / a polars frame: ask the tool for --json, never scrape TSV",
+        "shell out on the loop; use sh([...]) for argv-list/no shell parsing and sh('...') "
+        "only when shell parsing is intended; the Output IS a Result (ANSI as HTML for the "
+        "human, `.text`/`.code`/`.ok` for you), and `.json()`/`.jsonl()`/`.df()` parse a "
+        "JSON-mode CLI straight to data / a polars frame: ask the tool for --json, never scrape TSV",
+    ),
+    Builtin(
+        "zsh",
+        "explicit zsh -lc escape hatch for zsh-only shell syntax; prefer sh([...]) for normal commands",
     ),
     Builtin("api", "the live catalog of every helper, as a polars frame (`api('grep')` to filter)"),
     Builtin(

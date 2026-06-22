@@ -3987,6 +3987,7 @@ let
   shTestPy = pkgs.writeText "ix-mcp-sh-test.py" ''
     # python
     import asyncio
+    import inspect
 
     import sh
     from ix_notebook_mcp.runtime import Result
@@ -4047,8 +4048,19 @@ let
         # The module object itself is callable: the documented
         # `import sh; await sh(cmd)` works without reaching for `sh.sh`.
         assert callable(sh), "sh module is not callable"
+        assert inspect.signature(sh) == inspect.signature(sh.sh)
+        assert "cmd" in inspect.signature(sh).parameters
         direct = await sh("printf hi", cwd=".")
         assert direct.ok and direct.text == "hi", repr(direct.text)
+        try:
+            sh("git", "status")
+        except TypeError as exc:
+            assert "argv as a single list" in str(exc), exc
+        else:
+            raise SystemExit("expected sh('git', 'status') to explain argv-list form")
+
+        zsh_out = await sh.zsh("print -r -- ''${ZSH_VERSION:+zsh}", cwd=".")
+        assert zsh_out.ok and zsh_out.text.strip() == "zsh", repr(zsh_out.text)
 
         # cwd defaults to the current directory: no required-kwarg TypeError.
         import os
@@ -4128,7 +4140,10 @@ let
   shSmoke =
     pkgs.runCommand "ix-mcp-sh-smoke"
       {
-        nativeBuildInputs = [ mcpPython ];
+        nativeBuildInputs = [
+          mcpPython
+          pkgs.zsh
+        ];
         strictDeps = true;
       }
       ''

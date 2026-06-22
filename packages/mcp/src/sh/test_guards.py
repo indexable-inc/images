@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
+import shutil
 import sys
 from pathlib import Path
 
@@ -25,6 +27,7 @@ import sh as _sh_module
 # sh() is the coroutine function inside the module; when the module is
 # imported standalone _sh_module.sh is the async function.
 sh = _sh_module.sh
+zsh = _sh_module.zsh
 
 
 def run(coro: object) -> object:
@@ -62,6 +65,13 @@ def test_backtick_in_argv_list_not_rejected() -> None:
         raise AssertionError("argv-list form with backticks in an argument should not be rejected") from None
     except Exception:  # noqa: S110 -- non-ValueError errors (git not found, no repo) are acceptable in this test
         pass
+
+
+def test_callable_module_signature_includes_cmd() -> None:
+    """api() sees inspect.signature(sh), so the callable module must expose cmd."""
+    sig = inspect.signature(_sh_module)
+    assert "cmd" in sig.parameters
+    assert str(sig).startswith("(cmd:")
 
 
 # ---------------------------------------------------------------------------
@@ -112,16 +122,41 @@ def test_benign_command_runs() -> None:
     assert "hello" in out.text  # type: ignore[union-attr]
 
 
+def test_zsh_helper_runs_zsh_syntax() -> None:
+    """zsh() is an explicit shell-syntax escape hatch with the same Output type."""
+    if shutil.which("zsh") is None:
+        pytest.skip("zsh is not installed")
+    out = run(zsh("print -r -- ${ZSH_VERSION:+zsh}", cwd="/tmp"))  # noqa: S108 -- test-only
+    assert out.ok, f"Expected exit 0, got {out.code}"  # type: ignore[union-attr]
+    assert "zsh" in out.text  # type: ignore[union-attr]
+
+
+def test_zsh_rejects_cd_prefix() -> None:
+    """zsh() keeps the cwd= guard from string sh() calls."""
+    with pytest.raises(ValueError, match="cwd="):
+        run(zsh("cd /tmp && print ok", cwd="."))
+
+
+def test_zsh_rejects_backticks() -> None:
+    """zsh() keeps the backtick guard; use $(...) for intentional substitution."""
+    with pytest.raises(ValueError, match=r"(?i)backtick|command substitution"):
+        run(zsh("print `pwd`", cwd="."))
+
+
 def _run_tests() -> None:
     tests = [
         test_backtick_in_string_command_raises,
         test_backtick_in_repr_string_raises,
         test_backtick_in_argv_list_not_rejected,
+        test_callable_module_signature_includes_cmd,
         test_commit_message_with_escaped_newline_raises,
         test_commit_message_with_real_newline_raises,
         test_simple_commit_message_not_rejected,
         test_cd_prefix_still_rejected,
         test_benign_command_runs,
+        test_zsh_helper_runs_zsh_syntax,
+        test_zsh_rejects_cd_prefix,
+        test_zsh_rejects_backticks,
     ]
     failed = []
     for t in tests:

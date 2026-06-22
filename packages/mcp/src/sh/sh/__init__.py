@@ -80,14 +80,16 @@ import asyncio
 import codecs
 import contextlib
 import html as _html
+import inspect as _inspect
 import json as _json
 import os
 import re
 import shlex
 import signal
 import sys
+from typing import Any
 
-__all__ = ["Output", "ShellError", "sh"]
+__all__ = ["Output", "ShellError", "sh", "zsh"]
 
 __version__ = "0.1.0"
 
@@ -591,6 +593,26 @@ async def sh(
     return out
 
 
+async def zsh(cmd: str, **kwargs: Any) -> Output:
+    """Run ``cmd`` through ``zsh -lc`` while keeping :func:`sh`'s safety wrapper.
+
+    Use this only when the command intentionally depends on zsh syntax. For
+    prose-bearing arguments, keep using ``sh(['prog', arg])`` so the shell never
+    parses the argument. Pass ``cwd=`` instead of a leading ``cd``.
+    """
+    if re.match(r"\s*cd\b", cmd):
+        raise ValueError(
+            "zsh() takes no `cd ...` prefix: pass the working directory as cwd= and keep "
+            "the command itself clean."
+        )
+    if "`" in cmd:
+        raise ValueError(
+            "zsh(): backticks are shell command substitution. Use $(...) when you "
+            "intentionally want substitution, or sh([...]) when the text is prose."
+        )
+    return await sh(["zsh", "-lc", cmd], **kwargs)
+
+
 # Make the module itself callable, so the documented `import sh; await sh(cmd)`
 # works without reaching for `sh.sh`. The module object's class is swapped for a
 # ModuleType subclass that forwards a call to the sh() coroutine function. The
@@ -606,7 +628,17 @@ import functools as _functools
 class _CallableModule(_types.ModuleType):
     @_functools.wraps(sh)
     def __call__(self, *args: object, **kwargs: object) -> object:
+        if len(args) > 1:
+            raise TypeError(
+                "sh() takes one command argument. Pass argv as a single list, e.g. "
+                "await sh(['git', 'status'], cwd=repo), not sh('git', 'status')."
+            )
         return sh(*args, **kwargs)
 
 
-sys.modules[__name__].__class__ = _CallableModule
+_module = sys.modules[__name__]
+_module.__class__ = _CallableModule
+# `inspect.signature(callable_module)` inspects the bound __call__ method and
+# would otherwise drop `cmd`. Publish the real callable signature so api() shows
+# the load-bearing positional argument and the argv-list type.
+_module.__signature__ = _inspect.signature(sh)  # type: ignore[attr-defined]

@@ -147,7 +147,8 @@ let
   '';
 
   backgroundSubagents = ''
-    Delegate by default with named subagents. Split real work into clear phases
+    Delegate by default with named subagents. Use them frequently whenever
+    independent work can run in parallel, and split real work into clear phases
     such as issue lookup, repro, fix, and verification.
 
     Spawn one subagent per self-contained task, in the background and in its own
