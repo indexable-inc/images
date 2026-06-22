@@ -140,6 +140,7 @@ let
   # Codex does not use Claude's `permissions.deny` JSON shape.
   sharedPermissions = import (ix.paths.packagesRoot + "/agent/policy/permissions.nix") {
     inherit lib;
+    mcpServers = mcpStdioServers;
   };
 in
 # These baked defaults also reach the Codex GUI app's remote-SSH sessions, not

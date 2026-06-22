@@ -3385,6 +3385,17 @@ let
         message = "development-base should keep unrelated unfree CLIs out of the image";
       }
       {
+        assertion =
+          let
+            policy = import (paths.packagesRoot + "/agent/policy/permissions.nix") {
+              inherit lib;
+              mcpServers.index = { };
+            };
+          in
+          policy.codex.deniedToolPatterns == [ "Bash" ];
+        message = "Codex should deny the Bash tool when the index MCP is available";
+      }
+      {
         # Bypass-permissions is enforced through Claude's managed-settings layer
         # (/etc/claude-code/managed-settings.json): read-only, highest precedence,
         # leaving ~/.claude/settings.json app-owned. Pin both keys so a refactor

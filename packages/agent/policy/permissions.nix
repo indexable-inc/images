@@ -14,6 +14,8 @@ let
       "WebFetch"
     ]
     ++ lib.optional (mcpServers ? index) "Bash";
+
+  supersededCodexTools = lib.optional (mcpServers ? index) "Bash";
 in
 {
   claude = {
@@ -21,6 +23,7 @@ in
   };
 
   codex = {
+    deniedToolPatterns = supersededCodexTools;
     protectedMergeCommandPatterns = [
       "gh pr merge*--admin*"
       "gh pr merge*--force*"
