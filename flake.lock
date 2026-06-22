@@ -189,18 +189,6 @@
         "type": "github"
       }
     },
-    "images": {
-      "flake": false,
-      "locked": {
-        "path": "./images",
-        "type": "path"
-      },
-      "original": {
-        "path": "./images",
-        "type": "path"
-      },
-      "parent": []
-    },
     "launchk-src": {
       "flake": false,
       "locked": {
@@ -372,7 +360,6 @@
         "ghostty": "ghostty",
         "hermes-agent": "hermes-agent",
         "home-manager": "home-manager",
-        "images": "images",
         "launchk-src": "launchk-src",
         "nixpkgs": "nixpkgs",
         "perftest-src": "perftest-src",

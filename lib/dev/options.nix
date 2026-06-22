@@ -7,8 +7,8 @@
   shape, and the shared identity volume. `mkDev` reads these options to plan the
   fleet; the per-node build consumes `ix.dev.agents` to install the agent CLIs.
 
-  Declared in `lib/dev/` (not `modules/`) so it is only in scope where a dev
-  image pulls it in - it must not add `claude-code` to every image in the repo.
+  Declared in `lib/dev/` (not `modules/`) so it is only in scope where the dev
+  base imports it. It must not add `claude-code` to every image in the repo.
 */
 { lib, pkgs, ... }:
 let
@@ -32,15 +32,6 @@ in
         default = true;
         description = "Install the Codex CLI.";
       };
-    };
-
-    baseImage = mkOption {
-      type = types.str;
-      default = "development-base";
-      description = ''
-        Image under `images/dev/` every node is built on. The default,
-        `development-base`, carries the build toolchain and the agent CLIs.
-      '';
     };
 
     profiles = {

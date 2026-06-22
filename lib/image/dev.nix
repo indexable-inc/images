@@ -10,7 +10,7 @@
   describe the agents, fleet, and shared volume. `mkDev` reads `ix.dev` once via
   a probe eval to plan the fleet, then builds each node with the same module:
 
-  - `ix.dev.baseImage` + the agent layer + the user's module become `mkFleet`
+  - the dev base module + agent layer + the user's module become `mkFleet`
     `defaults`, so every node is the user's environment and ships the agents.
   - `ix.dev.fleet` becomes `mkFleet` `nodes` (a single `dev` node if empty).
   - `ix.dev.shared.enable` synthesizes a dedicated `file-server` node running
@@ -47,6 +47,7 @@ let
   # `ix.dev` declarations (`optionsModule`); the agent layer is added to
   # per-node `defaults`.
   optionsModule = paths.root + "/lib/dev/options.nix";
+  baseModule = paths.root + "/lib/dev/base";
   agentsModule = paths.root + "/lib/dev/agents.nix";
   profilesModule = paths.root + "/lib/dev/profiles.nix";
 
@@ -97,12 +98,12 @@ let
       onShare = enable && haveSource;
       shareSubdirs = map (b: b.shareSubdir) binds ++ lib.optional onShare "ix";
 
-      # `defaults` apply to EVERY node (workload and server): the base image, the
-      # ix.dev options + agent layer, and the user's module. Dev base images
-      # provide option defaults; this node default is stronger than those but
-      # still weaker than a user-supplied plain `ix.image.name` definition.
+      # `defaults` apply to EVERY node (workload and server): the dev base
+      # module, ix.dev options + agent layer, and the user's module. This node
+      # default is stronger than base defaults but weaker than a user-supplied
+      # plain `ix.image.name` definition.
       defaults = [
-        (paths.images + "/dev/${dev.baseImage}")
+        baseModule
         agentsModule
         profilesModule
         (

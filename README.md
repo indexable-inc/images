@@ -30,8 +30,8 @@ modify. The bet: one repo everyone can edit is the fastest way for all of us to
 move. Add something useful, and everyone gets it.
 
 It is one Nix flake holding ~45 packages (mostly Rust, with Python, Elixir,
-TypeScript, and Svelte where they fit), a corpus of NixOS modules and OCI
-images, and the agent infrastructure that ties them together. Most packages have
+TypeScript, and Svelte where they fit), a corpus of NixOS modules, fleet
+examples, and the agent infrastructure that ties them together. Most packages have
 a from-source page under [`docs/`](docs/index.md). To explore, point Claude at
 this repo and ask whether anything here is useful for you.
 
@@ -100,10 +100,10 @@ past the foreground budget, and sessions checkpoint to disk. Bundled modules
 expose search, the PTY driver, a `fleet` cluster API (Ray, Spark, SSH fan-out to
 Polars frames), browser and screen control, and cloud integrations.
 
-### VMs, images, and fleet
+### VMs, modules, and fleet
 
 The layer [ix](https://ix.dev) publishes on top of its closed-source VM primitives:
-ready-to-run [OCI images](images/) and reusable, auto-discovered [NixOS modules](modules/).
+reusable, auto-discovered [NixOS modules](modules/) and declarative fleet helpers.
 
 | Package | What it does |
 | --- | --- |
@@ -117,7 +117,7 @@ ready-to-run [OCI images](images/) and reusable, auto-discovered [NixOS modules]
 ```sh
 nix flake show          # list every package, module, and check
 nix run .#lint          # nixfmt, statix, deadnix, astlog (nix + rust)
-nix build .#minecraft   # realize one image closure
+nix build .#nginx-lifecycle-up   # realize one example fleet wrapper
 nix run .#reel          # regenerate the demo above
 ```
 
@@ -126,7 +126,6 @@ nix run .#reel          # regenerate the demo above
 | Path | Contents |
 | --- | --- |
 | [`packages/`](packages/) | Repo-owned tools: agent stack, Nix build system, search, PTY driver, MCP server, `reel` |
-| [`images/`](images/) | Runnable NixOS systems packaged as OCI archives |
 | [`modules/`](modules/) | Opt-in NixOS service modules and profiles, auto-discovered |
 | [`lib/`](lib/) | Shared helper and builder API (Rust workspace graph, `buildUvApplication`, Minecraft/NBT, agent integration) |
 | [`docs/`](docs/index.md) | From-source documentation, one page per package |

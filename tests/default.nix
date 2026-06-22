@@ -1,7 +1,5 @@
-# Eval tests. Each image with image-specific assertions has its own group
-# below, exposed as `imageTests.<name>` so it can be attached to the image
-# derivation via `passthru.tests`. `eval` aggregates them along with the
-# cross-image checks (fleet, helpers).
+# Eval tests. Module and example assertions live in `groups`; `eval` aggregates
+# them along with the cross-module checks (fleet, helpers).
 {
   nixpkgs,
   ix,
@@ -41,12 +39,62 @@ let
     dir: lib.removePrefix "${builtins.toString paths.packagesRoot}/" (builtins.toString dir)
   ) packageRegistry.packageDirsWithoutMetadata;
 
-  versions = import (paths.images + "/games/minecraft/versions.nix") {
+  versions = import (paths.minecraftCatalogs + "/versions.nix") {
     inherit lib;
     inherit (ix) artifacts;
   };
   defaultMinecraftVersion = versions.default;
   defaultMinecraftModule = versions.${defaultMinecraftVersion};
+
+  minecraftModule =
+    { ix, lib, ... }:
+    let
+      commonCatalog = ix.artifacts.minecraft.modCatalogs.common;
+    in
+    {
+      ix.image.name = "minecraft";
+
+      services.minecraft = {
+        enable = true;
+        properties.motd = "ix-powered Minecraft";
+        mods = lib.genAttrs (lib.attrNames commonCatalog) (_: { });
+      };
+    };
+
+  minecraftBedrockModule =
+    { config, ... }:
+    {
+      ix.image = {
+        name = "minecraft-bedrock";
+        tag = config.services.minecraft-bedrock.package.version;
+      };
+
+      services.minecraft-bedrock = {
+        enable = true;
+        settings = {
+          server-name = "ix-powered Bedrock";
+          max-players = 20;
+        };
+      };
+    };
+
+  remoteDesktopImageModule =
+    { pkgs, ... }:
+    {
+      ix.image.name = "ix-remote-desktop";
+
+      environment.systemPackages = [
+        pkgs.xterm
+        pkgs.firefox
+      ];
+
+      services.remote-desktop = {
+        enable = true;
+        openFirewall = true;
+        allowUnauthenticated = true;
+      };
+    };
+
   rustToolchainFile = lib.importTOML (paths.root + "/rust-toolchain.toml");
   rustPinnedNightlyDate = lib.removePrefix "nightly-" rustToolchainFile.toolchain.channel;
 
@@ -94,7 +142,7 @@ let
   minecraft =
     let
       config = evalConfig [
-        (paths.images + "/games/minecraft")
+        minecraftModule
         defaultMinecraftModule
       ];
     in
@@ -113,7 +161,7 @@ let
       paper =
         let
           config = evalConfig [
-            (paths.images + "/games/minecraft")
+            minecraftModule
             versions."1.21.11-paper"
           ];
         in
@@ -137,7 +185,7 @@ let
       rcon =
         let
           config = evalConfig [
-            (paths.images + "/games/minecraft")
+            minecraftModule
             defaultMinecraftModule
             {
               services.minecraft.rcon.enable = true;
@@ -152,7 +200,7 @@ let
           openFirewall =
             let
               config = evalConfig [
-                (paths.images + "/games/minecraft")
+                minecraftModule
                 defaultMinecraftModule
                 {
                   services.minecraft.rcon = {
@@ -172,7 +220,7 @@ let
       worldBorder =
         let
           config = evalConfig [
-            (paths.images + "/games/minecraft")
+            minecraftModule
             defaultMinecraftModule
             {
               services.minecraft.worldBorder = {
@@ -195,7 +243,7 @@ let
       paperPlugins =
         let
           config = evalConfig [
-            (paths.images + "/games/minecraft")
+            minecraftModule
             versions."26.1.2-paper"
             {
               services.minecraft.plugins = {
@@ -220,7 +268,7 @@ let
       nestedProperties =
         let
           config = evalConfig [
-            (paths.images + "/games/minecraft")
+            minecraftModule
             defaultMinecraftModule
             {
               services.minecraft.properties = {
@@ -243,7 +291,7 @@ let
         let
           json = pkgs.formats.json { };
           config = evalConfig [
-            (paths.images + "/games/minecraft")
+            minecraftModule
             defaultMinecraftModule
             {
               services.minecraft = {
@@ -369,7 +417,7 @@ let
         let
           tags = ix.minecraft.nbt;
           config = evalConfig [
-            (paths.images + "/games/minecraft")
+            minecraftModule
             defaultMinecraftModule
             {
               services.minecraft = {
@@ -430,7 +478,7 @@ let
       datapacks =
         let
           config = evalConfig [
-            (paths.images + "/games/minecraft")
+            minecraftModule
             defaultMinecraftModule
             {
               services.minecraft = {
@@ -474,7 +522,7 @@ let
 
   bedrock =
     let
-      config = evalConfig [ (paths.images + "/games/minecraft-bedrock") ];
+      config = evalConfig [ minecraftBedrockModule ];
     in
     {
       inherit config;
@@ -491,7 +539,7 @@ let
 
   remoteDesktop =
     let
-      config = evalConfig [ (paths.images + "/desktop/remote-desktop") ];
+      config = evalConfig [ remoteDesktopImageModule ];
     in
     {
       inherit config;
@@ -540,36 +588,14 @@ let
       };
     };
 
-  kernelDev =
-    let
-      config = evalConfig [ (paths.images + "/dev/kernel-dev") ];
-    in
-    {
-      inherit config;
-      git.clone = {
-        service = config.systemd.services.git-clone;
-        timer = config.systemd.timers.git-clone;
-      };
-    };
-
   developmentBase =
     let
-      config = evalConfig [ (paths.images + "/dev/development-base") ];
+      config = evalConfig [ (paths.root + "/lib/dev/base") ];
     in
     {
       inherit config;
       # Outer pkgs has no allowUnfree, so forcing pkgs.claude-code here would
       # throw at eval; use lib.getName over the rendered systemPackages list.
-      packageNames = map lib.getName config.environment.systemPackages;
-    };
-
-  symphonyCodex =
-    let
-      config = evalConfig [ (paths.images + "/dev/symphony-codex") ];
-    in
-    {
-      inherit config;
-      packages = config.environment.systemPackages;
       packageNames = map lib.getName config.environment.systemPackages;
     };
 
@@ -2043,7 +2069,7 @@ let
     ];
 
   minecraftUnsafeManagedPathFailures = failedAssertionsFor [
-    (paths.images + "/games/minecraft")
+    minecraftModule
     defaultMinecraftModule
     {
       services.minecraft = {
@@ -2300,7 +2326,7 @@ let
       }).refs
       true
   );
-  # --- Per-image assertion groups -------------------------------------------
+  # --- Module and example assertion groups ----------------------------------
 
   # --- Idiomatic fleet API (expose / healthChecks.unit / endpoint) ----------
   idiomaticExpose = evalConfig [
@@ -3352,37 +3378,22 @@ let
       }
     ];
 
-    kernel-dev = [
-      {
-        assertion = kernelDev.config.services.git-clone.enable;
-        message = "kernel-dev image should enable first-boot git cloning";
-      }
-      {
-        assertion = kernelDev.git.clone.service.wantedBy == [ ];
-        message = "timer-activated git clone should not be wanted by multi-user.target";
-      }
-      {
-        assertion = kernelDev.git.clone.timer.wantedBy == [ "timers.target" ];
-        message = "timer-activated git clone should be started by timers.target";
-      }
-    ];
-
-    development-base = [
+    dev-base = [
       {
         assertion =
           builtins.elem "claude-code" developmentBase.packageNames
           && builtins.elem "codex" developmentBase.packageNames;
-        message = "development-base should ship the Claude Code and Codex CLIs";
+        message = "dev base should ship the Claude Code and Codex CLIs";
       }
       {
         # Global allowUnfree would let every unfree package slip in. The
         # image is supposed to grant exactly one exception, by name.
         assertion = !(developmentBase.config.nixpkgs.config.allowUnfree or false);
-        message = "development-base should not enable allowUnfree globally; use the predicate";
+        message = "dev base should not enable allowUnfree globally; use the predicate";
       }
       {
         assertion = !(builtins.elem "cursor-cli" developmentBase.packageNames);
-        message = "development-base should keep unrelated unfree CLIs out of the image";
+        message = "dev base should keep unrelated unfree CLIs out of the image";
       }
       {
         assertion =
@@ -3408,7 +3419,7 @@ let
                 developmentBase.config.environment.etc."claude-code/managed-settings.json".text;
           in
           managed.permissions.defaultMode == "bypassPermissions" && managed.skipDangerousModePermissionPrompt;
-        message = "development-base should enforce root's Claude Code bypass via managed-settings.json";
+        message = "dev base should enforce root's Claude Code bypass via managed-settings.json";
       }
     ];
 
@@ -3467,58 +3478,6 @@ let
       }
     ];
 
-    symphony-codex = [
-      # TODO: re-add the room-server-presence assertion once
-      # pkgs.symphony-room-server is restored (the `symphony` flake input pin was
-      # removed; referencing the missing attr would fail eval).
-      {
-        assertion = builtins.elem pkgs.codex symphonyCodex.packages;
-        message = "symphony-codex image should include codex for diagnostic shell sessions";
-      }
-      {
-        assertion =
-          builtins.elem pkgs.gh symphonyCodex.packages && builtins.elem pkgs.git symphonyCodex.packages;
-        message = "symphony-codex image should include GitHub and git tooling";
-      }
-      {
-        assertion =
-          builtins.elem pkgs.direnv symphonyCodex.packages
-          && builtins.elem pkgs.ripgrep symphonyCodex.packages;
-        message = "symphony-codex image should include common agent workspace tools";
-      }
-      {
-        assertion = samePorts symphonyCodex.config.networking.firewall.allowedTCPPorts (
-          baseFirewallTcpPorts ++ [ 8080 ]
-        );
-        message = "symphony-codex image should open room-server HTTP";
-      }
-      {
-        assertion = samePorts symphonyCodex.config.networking.firewall.allowedUDPPorts (
-          baseFirewallUdpPorts ++ [ 4433 ]
-        );
-        message = "symphony-codex image should open room-server WebTransport";
-      }
-      {
-        assertion =
-          let
-            claims = symphonyCodex.config.ix.networking.portClaims;
-          in
-          claims.symphony-room-http.protocol == "tcp"
-          && claims.symphony-room-http.port == 8080
-          && claims.symphony-room-webtransport.protocol == "udp"
-          && claims.symphony-room-webtransport.port == 4433;
-        message = "symphony-codex image should register Room listener port claims";
-      }
-      {
-        assertion =
-          let
-            workspace = symphonyCodex.config.fileSystems."/workspace" or null;
-          in
-          workspace != null && workspace.fsType == "tmpfs" && builtins.elem "size=32g" workspace.options;
-        message = "symphony-codex image should back /workspace with a sized tmpfs so the per-run checkout skips the vmfsd write path";
-      }
-    ];
-
     # The control-plane runtime module that moved in-tree with
     # packages/symphony. These pin the env contract ix's hil deployment and
     # the worker module read off the unit, so a refactor that renames an
@@ -3550,16 +3509,16 @@ let
     minecraft = [
       {
         assertion = minecraft.config.ix.image.tag == defaultMinecraftVersion;
-        message = "default minecraft image tag should follow versions.nix default";
+        message = "default Minecraft module tag should follow versions.nix default";
       }
       {
         assertion = minecraft.cfg.properties."max-players" == 100000;
-        message = "default minecraft image should allow the large ix player ceiling";
+        message = "default Minecraft module should allow the large ix player ceiling";
       }
       {
         assertion =
           minecraft.cfg.properties."online-mode" && minecraft.cfg.properties."enforce-secure-profile";
-        message = "default minecraft image should keep account authentication and secure profiles explicit";
+        message = "default Minecraft module should keep account authentication and secure profiles explicit";
       }
       {
         assertion =
@@ -3578,13 +3537,13 @@ let
           && minecraft.cfg.properties."spawn-protection" == 16
           && !minecraft.cfg.properties."allow-flight"
           && !minecraft.cfg.properties."enable-command-block";
-        message = "default minecraft image should keep conservative gameplay and command defaults";
+        message = "default Minecraft module should keep conservative gameplay and command defaults";
       }
       {
         assertion =
           minecraft.cfg.properties."view-distance" == 32
           && minecraft.cfg.properties."simulation-distance" == 32;
-        message = "default minecraft image should use the high-distance template defaults";
+        message = "default Minecraft module should use the high-distance template defaults";
       }
       {
         assertion = lib.all (slug: builtins.hasAttr slug minecraft.config.services.minecraft.mods) [
@@ -3594,7 +3553,7 @@ let
           "spark"
           "grimac"
         ];
-        message = "default minecraft image should include the 26.1.2 Fabric server mod set";
+        message = "default Minecraft module should include the 26.1.2 Fabric server mod set";
       }
       {
         assertion = lib.getName minecraft.config.services.minecraft.javaPackage == "temurin-jre-bin";
@@ -3658,7 +3617,7 @@ let
             == "end";
         message = "minecraft should label Nether and End region directories through the generic xattr module";
       }
-      # rcon coverage stays on the minecraft default image because the option
+      # rcon coverage stays on the minecraft default module because the option
       # surface lives in `services.minecraft`, not in a paper-specific module.
       {
         assertion = minecraft.rcon.cfg.rcon.enable;
@@ -3812,7 +3771,7 @@ let
     minecraft-bedrock = [
       {
         assertion = bedrock.cfg.enable;
-        message = "minecraft-bedrock image should enable services.minecraft-bedrock";
+        message = "minecraft-bedrock module should enable services.minecraft-bedrock";
       }
       {
         assertion =
@@ -3839,7 +3798,7 @@ let
     remote-desktop = [
       {
         assertion = remoteDesktop.cfg.enable;
-        message = "remote-desktop image should enable services.remote-desktop";
+        message = "remote-desktop fixture should enable services.remote-desktop";
       }
       {
         assertion = lib.getName remoteDesktop.cfg.package == lib.getName pkgs.xpra;
@@ -3847,11 +3806,11 @@ let
       }
       {
         assertion = remoteDesktop.cfg.openFirewall;
-        message = "remote-desktop image should explicitly open the browser port";
+        message = "remote-desktop fixture should explicitly open the browser port";
       }
       {
         assertion = remoteDesktop.cfg.allowUnauthenticated;
-        message = "remote-desktop image should explicitly allow unauthenticated browser access";
+        message = "remote-desktop fixture should explicitly allow unauthenticated browser access";
       }
       {
         assertion = !remoteDesktopModuleDefault.cfg.openFirewall;
@@ -4577,13 +4536,7 @@ let
       }
       {
         assertion =
-          let
-            bootstrap =
-              (ix.evalImageConfig {
-                modules = [ (paths.images + "/system/test-cluster-bootstrap") ];
-              }).ix.image;
-          in
-          fleetPlan.web.bootstrapImage == "registry.ix.dev/${bootstrap.name}:${bootstrap.tag}";
+          fleetPlan.web.bootstrapImage == "registry.ix.dev/ix/test-cluster-bootstrap:zstd-tools-2026-05-12";
         message = "fleet switches should create missing nodes from the shared NixOS bootstrap image";
       }
       {
@@ -4767,7 +4720,7 @@ let
     ];
   };
 
-  # --- Per-image build-time checks ------------------------------------------
+  # --- Build-time checks ----------------------------------------------------
 
   buildScripts = {
     factions = ''
@@ -5204,7 +5157,7 @@ let
       mkdir -p "$out"
     '';
 
-  imageTests = lib.mapAttrs (name: assertions: mkTest name assertions (buildScripts.${name} or "")) (
+  groupTests = lib.mapAttrs (name: assertions: mkTest name assertions (buildScripts.${name} or "")) (
     removeAttrs groups [ "fleet" ]
   );
 
@@ -5225,7 +5178,7 @@ let
 in
 {
   inherit
-    imageTests
+    groupTests
     groups
     cargoUnitRealWorkspaceAssertions
     cargoUnitPrebuiltAssertions
@@ -5239,10 +5192,10 @@ in
   portableServices = portableServicesTest;
   minecraftBlocksVm = minecraftBlocksVmTest;
 
-  # Aggregate. Pulls every per-image test into one derivation so
+  # Aggregate. Pulls every group test into one derivation so
   # `nix flake check` covers the whole suite.
-  eval = pkgs.linkFarmFromDrvs "ix-images-eval-tests" (
-    lib.attrValues imageTests
+  eval = pkgs.linkFarmFromDrvs "ix-eval-tests" (
+    lib.attrValues groupTests
     ++ [
       fleetTest
       helperTest

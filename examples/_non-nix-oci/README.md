@@ -2,7 +2,7 @@
 
 These examples build OCI images on a non-Nix base (ubuntu, debian) with Nix
 packages layered on top, using `index.lib.mkNonNixImage`. They cover the path a
-plain-distro image takes, the one the all-NixOS `images/` tree does not exercise.
+plain-distro image takes, outside the NixOS module/fleet path.
 
 Build one:
 
@@ -12,15 +12,14 @@ nix build .#non-nix-debian
 ```
 
 Each archive is a standard OCI image, so `ix image push <name> registry.ix.dev/...`
-works exactly as it does for the NixOS images.
+works for these standalone archives.
 
 ## Why the leading underscore
 
 The directory is `_non-nix-oci` so the example fleet discovery skips it. The
 entries under `examples/` are NixOS fleets driven by `mkFleet` (each exposes
 `ix fleet up/health/...` wrappers). These images are not fleets and not NixOS
-systems, so they are discovered separately and surfaced as image packages and
-`image-non-nix-*` checks, the same validation path the `images/` tree uses.
+systems, so they are discovered separately and surfaced as opt-in image packages.
 
 ## How it differs from `mkImage`
 

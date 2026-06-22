@@ -28,7 +28,7 @@ to consume an `ix.nix` for one new VM. The fleet below is the scale-up.
 `mkDev` reads `ix.dev` and desugars this into a `mkFleet` plan:
 
 - `agent-0`, `agent-1`, `builder` — workload nodes carrying the module's
-  environment on top of `development-base` (which ships our wrapped
+  environment on top of the dev base module (which ships our wrapped
   `claude-code` and `codex` via `lib/dev/agents.nix`).
 - `file-server` — a dedicated node running `smbd`, exporting the share `dev`
   from `/var/lib/ix-dev-share`. Keeping it separate decouples the canonical

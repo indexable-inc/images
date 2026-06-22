@@ -1,8 +1,7 @@
 {
-  description = "Pre-built OCI images for ix VMs";
+  description = "Index developer tools, modules, and fleet examples";
 
-  # Keep the repo cache available for image closures and repo-owned tools that
-  # CI has already built. Generic nixpkgs paths still substitute from
+  # Keep the repo cache available for repo-owned tools that CI has already built. Generic nixpkgs paths still substitute from
   # cache.nixos.org.
   nixConfig = {
     extra-substituters = [ "https://indexable-inc.cachix.org" ];
@@ -40,10 +39,6 @@
     };
     agents = {
       url = "path:./agents";
-      flake = false;
-    };
-    images = {
-      url = "path:./images";
       flake = false;
     };
     examples = {
@@ -144,12 +139,11 @@
     };
 
     # TODO: re-add the `symphony` flake input that provided
-    # `pkgs.symphony-room-server` for images/dev/symphony-codex. room-server's
-    # real home is the ix monorepo (`crates/room`,
-    # `ix#packages.x86_64-linux.room-server`), but ix already inputs index
-    # (`ix/flake.nix`), so index cannot source it from ix without a circular
-    # flake dependency. Pin removed for now; re-add once that cycle is resolved
-    # or the symphony-codex image moves into ix.
+    # `pkgs.symphony-room-server`. room-server's real home is the ix monorepo
+    # (`crates/room`, `ix#packages.x86_64-linux.room-server`), but ix already
+    # inputs index (`ix/flake.nix`), so index cannot source it from ix without a
+    # circular flake dependency. Pin removed for now; re-add once that cycle is
+    # resolved or room-server moves into this repo.
 
     # Ghostty's terminal VT engine, consumed as a source tree (not a flake) so
     # `packages/tui/vt/libghostty-vt` owns the build. Pinned to the commit the
@@ -181,7 +175,6 @@
       ghostty,
       skills,
       agents,
-      images,
       examples,
       tests,
       bench-filesystem,
@@ -207,36 +200,31 @@
 
       # All path literals the flake exposes. Centralized so lib/ and
       # lib/per-system.nix have a single source of truth.
-      #
-      # The data-subtree entries below resolve to the `outPath` of a
-      # relative-path input (declared `flake = false` above) instead of a
-      # bare `./<dir>` literal, so each consumer's source identity is scoped to
-      # just that subtree. The shape and names of `paths` are unchanged, so no
-      # downstream lib code needs editing. Nix-code roots the flake imports
-      # directly (`modules`, `packagesRoot`) and the whole-repo `root` (the lint
-      # source intentionally covers the entire tree) stay ordinary relative
-      # paths: those are import-time / whole-repo by design, not per-subtree
-      # source identity. The minecraft sub-paths are projections of the `images`
-      # subtree, so they ride the same `images` input rather than each opening a
-      # new whole-repo dependency.
+      # The data-subtree entries below resolve to the `outPath` of relative-path
+      # inputs (declared `flake = false` above) instead of bare `./<dir>`
+      # literals, so each consumer's source identity is scoped to just that
+      # subtree. Nix-code roots the flake imports directly (`modules`,
+      # `packagesRoot`) and the whole-repo `root` (the lint source intentionally
+      # covers the entire tree) stay ordinary relative paths: those are
+      # import-time / whole-repo by design, not per-subtree source identity.
       paths = {
         root = ./.;
         skills = skills.outPath;
         agents = agents.outPath;
-        images = images.outPath;
         modules = ./modules;
         examples = examples.outPath;
         tests = tests.outPath;
         bench.filesystem = bench-filesystem.outPath;
         site = site.outPath;
         packagesRoot = ./packages;
-        minecraftMods = images.outPath + "/games/minecraft/mods";
-        minecraftPaperPlugins = images.outPath + "/games/minecraft/plugins/paper";
-        minecraftVelocityPlugins = images.outPath + "/games/minecraft/plugins/velocity";
+        minecraftCatalogs = ./packages/minecraft/catalogs;
+        minecraftMods = ./packages/minecraft/catalogs/mods;
+        minecraftPaperPlugins = ./packages/minecraft/catalogs/plugins/paper;
+        minecraftVelocityPlugins = ./packages/minecraft/catalogs/plugins/velocity;
         minecraftLoaders = {
-          paper = images.outPath + "/games/minecraft/loaders/paper";
-          velocity = images.outPath + "/games/minecraft/loaders/velocity";
-          fabric = images.outPath + "/games/minecraft/loaders/fabric";
+          paper = ./packages/minecraft/catalogs/loaders/paper;
+          velocity = ./packages/minecraft/catalogs/loaders/velocity;
+          fabric = ./packages/minecraft/catalogs/loaders/fabric;
         };
         tools = {
           ixShellSyncIgnored = ./tools/ix-shell-sync-ignored.py;

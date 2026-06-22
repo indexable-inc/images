@@ -118,7 +118,7 @@
           # already-built store paths) without paying the streamLayeredImage
           # tar+compress pass. The full archive is still this derivation's
           # output, built only where the bytes are consumed (a registry push at
-          # release). See `imageChecks` in lib/per-system.nix.
+          # release). CI checks NixOS system closures directly when a caller opts into one.
           passthru.toplevel = toplevel;
         }
         ''

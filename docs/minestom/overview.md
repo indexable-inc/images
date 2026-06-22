@@ -46,9 +46,8 @@ server, `servers/hello`, built into a runnable fat jar.
 
 ## How it is run
 
-The jar is not a service by itself. The `services.minestom` NixOS module (modules
-domain) runs a user-supplied fat jar under a JVM with no loaders/mods/EULA, and
-the `images/games/minestom` image (images domain) builds a runnable container by
-setting `services.minestom.serverJar = ix.packages.minestom.helloServerJar`
-(`images/games/minestom/default.nix:11`). Both are cross-referenced here, not
-documented in this domain. See common for the domain map.
+The jar is not a service by itself. The `services.minestom` NixOS module
+(modules domain) runs a user-supplied fat jar under a JVM with no
+loaders/mods/EULA. A consumer can make a runnable fleet by setting
+`services.minestom.serverJar = ix.packages.minestom.helloServerJar` in `ix.nix`.
+See common for the domain map.

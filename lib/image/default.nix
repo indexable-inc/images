@@ -31,8 +31,8 @@ let
       - `yourkit-java`: the opt-in `ix.languages.java.yourkit` profiler agent
         an operator turns on for performance work.
         Refs: https://www.yourkit.com/docs/java/help/agent.jsp
-      - `claude-code`: Anthropic's agent CLI baked into the agent dev images
-        (development-base, symphony-codex); ships under commercial terms.
+      - `claude-code`: Anthropic's agent CLI imported by the dev base module;
+        ships under commercial terms.
     The predicate keeps every other unfree (Oracle JDK, Adobe runtimes,
     NVIDIA blobs) failing at eval until the platform allows it explicitly.
   */
@@ -98,13 +98,12 @@ let
   */
   mkImage = args: (evalImageConfig args).ix.build.ociImage;
 
-  # Shared NixOS bootstrap image used to materialize missing fleet nodes.
-  # Reads the canonical name/tag from the image module so the fleet default
-  # and the image being published can't drift.
-  bootstrapImage =
-    (evalImageConfig {
-      modules = [ (paths.images + "/system/test-cluster-bootstrap") ];
-    }).ix.image;
+  # Shared bootstrap OCI reference used to materialize missing fleet nodes.
+  # The archive is built and published outside the default flake checks.
+  bootstrapImage = {
+    name = "ix/test-cluster-bootstrap";
+    tag = "zstd-tools-2026-05-12";
+  };
 
   /**
     Build a fleet plan helper for a given host system. Returns a function

@@ -8,7 +8,7 @@
 # Firefox has managed policies, etc. Enforcing a key there needs no merge logic
 # and no mutable generated file: ship a read-only /nix/store file and leave the
 # app's own config fully app-owned. That is the right tool whenever the app
-# provides it (see issue #491 and images/dev/development-base, which enforces
+# provides it (see issue #491 and lib/dev/base, which enforces
 # Claude's bypass keys through the managed layer rather than this module).
 #
 # This module is for what's left: a key that must live in a file the app ALSO

@@ -144,13 +144,12 @@ let
     value = entry.src;
   }) paperServers;
 
-  # Minecraft version of the default variant declared in
-  # `images/games/minecraft/versions.nix`. Lets per-loader fallback catalogs
-  # follow the image default instead of pinning a literal version that silently
-  # rots once the default moves.
+  # Minecraft version of the default variant declared in the committed
+  # catalog. Lets per-loader fallback catalogs follow the default instead of
+  # pinning a literal version that silently rots once the default moves.
   defaultMinecraftVersion =
     let
-      versionsModule = import (paths.images + "/games/minecraft/versions.nix") {
+      versionsModule = import (paths.minecraftCatalogs + "/versions.nix") {
         inherit lib;
       };
     in
@@ -179,7 +178,7 @@ in
       if builtins.hasAttr defaultMinecraftVersion paperPluginCatalogs then
         paperPluginCatalogs.${defaultMinecraftVersion}
       else
-        throw "ix.lib.artifacts.minecraft.paperPluginCatalog: no Paper plugin catalog generated for Minecraft ${defaultMinecraftVersion} (the default in images/games/minecraft/versions.nix). Run `nix run .#update-mods -- --manifest images/games/minecraft/plugins/paper/manifest.json --version ${defaultMinecraftVersion}` and commit the result.";
+        throw "ix.lib.artifacts.minecraft.paperPluginCatalog: no Paper plugin catalog generated for Minecraft ${defaultMinecraftVersion} (the default in packages/minecraft/catalogs/versions.nix). Run `nix run .#update-mods -- --manifest packages/minecraft/catalogs/plugins/paper/manifest.json --version ${defaultMinecraftVersion}` and commit the result.";
     # Velocity plugins are cross-Minecraft-version: `velocityPluginCatalog`
     # is the unversioned default surfaced to modules. Per-version overrides
     # can still come from `velocityPluginCatalogs.<version>` if added.

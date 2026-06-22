@@ -83,8 +83,7 @@ let
     config = { };
   };
 
-  # Auto-discovered NixOS module registry. The walk lives next to
-  # `discoverImages` for symmetry; see its doc-comment for the discovery rules.
+  # Auto-discovered NixOS module registry.
   nixosModules = discoverModules { root = paths.modules; };
 
   # Portable user-service layer (launchd + systemd from one spec). Lives
@@ -499,15 +498,12 @@ let
       inherit
         lib
         paths
-        artifacts
-        mkImage
         mkFleetFor
         mkDevFor
         ixReturn
         ;
     })
     discoverTree
-    discoverImages
     discoverModules
     exampleFleetsFor
     ;
@@ -520,7 +516,6 @@ let
       appleSdkToolchain
       bunLockFor
       cargoUnitFor
-      discoverImages
       discoverModules
       discoverTree
       errors

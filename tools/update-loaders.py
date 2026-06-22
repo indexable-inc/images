@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Refresh Minecraft loader (Paper / Velocity / Fabric) catalogs.
 
-Reads `images/games/minecraft/loaders/<loader>/manifest.json`, queries the
+Reads `packages/minecraft/catalogs/loaders/<loader>/manifest.json`, queries the
 upstream metadata service for each version listed there, downloads the
 artifact, computes its SHA-256, and writes the per-version lock JSON. The
 manifest is the input; the per-version files are generated.
@@ -203,10 +203,10 @@ def loader_root(loaders_root: Path, loader: str) -> Path:
 
 
 def default_loaders_root() -> Path:
-    cwd_root = Path.cwd() / "images/games/minecraft/loaders"
+    cwd_root = Path.cwd() / "packages/minecraft/catalogs/loaders"
     if cwd_root.exists():
         return cwd_root
-    return Path(__file__).resolve().parent.parent / "images/games/minecraft/loaders"
+    return Path(__file__).resolve().parent.parent / "packages/minecraft/catalogs/loaders"
 
 
 def main() -> None:
@@ -214,7 +214,7 @@ def main() -> None:
     parser.add_argument(
         "--loaders-root",
         type=Path,
-        help="Path to images/games/minecraft/loaders/",
+        help="Path to packages/minecraft/catalogs/loaders/",
     )
     parser.add_argument(
         "--loader",

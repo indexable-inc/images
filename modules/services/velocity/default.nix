@@ -582,7 +582,7 @@ in
       );
       default = ix.artifacts.minecraft.velocityPluginCatalog;
       defaultText = lib.literalExpression "ix.artifacts.minecraft.velocityPluginCatalog";
-      description = "Slug to locked Velocity plugin artifact mapping. Defaults to the generated catalog from `images/games/minecraft/plugins/velocity/`.";
+      description = "Slug to locked Velocity plugin artifact mapping. Defaults to the generated catalog from `packages/minecraft/catalogs/plugins/velocity/`.";
     };
 
     configFiles = mkOption {

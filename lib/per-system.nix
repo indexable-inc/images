@@ -805,21 +805,10 @@ let
         exampleNames = lib.attrNames exampleFleets;
       };
 
-  # Shared between `packages` and the `image-<name>` checks so blast-radius
-  # (which only diffs `.#ciChecks.x86_64-linux`) catches image fanouts via the
-  # check drvPath shift. The `base` image is omitted: its config is just
-  # `ix.image.name`/`tag`, and any base-profile change already fans out into
-  # every discovered image.
-  discoveredImages = ix.discoverImages {
-    root = paths.images;
-    inherit (tests) imageTests;
-  };
-
   # Non-NixOS OCI example images (ubuntu, debian, ...). They live under
   # `examples/_non-nix-oci` so fleet discovery skips the subtree (leading
-  # underscore), and are surfaced here as `non-nix-<name>` packages plus
-  # `image-non-nix-<name>` checks, the same validation path discovered images
-  # use. Each is imported with the example `{ index }` contract.
+  # underscore). Each is imported with the example `{ index }` contract and
+  # exposed as an opt-in package only, not a default CI check.
   nonNixExampleImages = lib.mapAttrs' (
     name: entry:
     lib.nameValuePair "non-nix-${name}" (
@@ -843,7 +832,7 @@ let
   # derivation per `checks.<system>.<name>`, required by the flake schema and
   # `nix flake check`) and `ciChecks` (sharded: one `recurseForDerivations` group
   # per package, what the memory-bounded CI evaluator consumes) share the same
-  # explicit and image checks; only the rust keying differs (ENG-2201). The
+  # explicit checks; only the rust keying differs (ENG-2201). The
   # collision guard runs per keying, so producing `ciChecks` only forces the
   # cheap per-package names, never the flat per-#[test] spine.
   catalogFor =
@@ -1092,7 +1081,7 @@ let
           # timing/RSS, so it earns a flake check; the timing/RSS perf job lives
           # under `apps.bench` instead.
           indexbench-self-demo-alloc = indexbenchSelfDemo.check;
-          lint = pkgs.runCommand "ix-images-lint" { nativeBuildInputs = [ pkgs.coreutils ]; } ''
+          lint = pkgs.runCommand "ix-lint" { nativeBuildInputs = [ pkgs.coreutils ]; } ''
             cp -R ${lintSource} source
             chmod -R u+w source
             cd source
@@ -1146,90 +1135,36 @@ let
           );
           site-test = siteTests.all;
         };
-        # One check per image, built by nix-fast-build in step 1 of `.#check`.
-        # Without this, `.#packages` carries the image derivations but `.#checks`
-        # does not, so blast-radius under-reports any change that rebuilds every
-        # image because the drvPath shift never reaches a check. The `eval`
-        # aggregate at tests/default.nix:3890 only closes over per-image
-        # `extraScript` text, not `config.system.build.toplevel`, so it stays
-        # stable across semantic edits to shared image libs.
-        #
-        # For Nix images the check builds the system *closure*
-        # (`passthru.toplevel`), not the OCI tar the package output is. Packing
-        # the closure into a layered, compressed OCI archive
-        # (`streamLayeredImage`) is ~60-100s of deterministic tar+compress per
-        # image, and the gate consumes none of those bytes: it only needs "this
-        # image's closure builds", and the archive is rebuilt at release where a
-        # registry push actually uploads the layers. Gating on the closure keeps
-        # that signal (and gives blast-radius the toplevel drvPath directly)
-        # while dropping the tar pass, which dominated CI wall-clock because the
-        # closure includes frequently-changing packages (e.g. the base-profile
-        # mcp), so any edit re-packed all ~15 archives. Non-Nix example images
-        # (`mkNonNixImage`: a pulled Debian/Ubuntu base) have no Nix toplevel, so
-        # their check stays the assembled archive.
-        imageChecks =
-          lib.mapAttrs' (n: v: lib.nameValuePair "image-${n}" v.toplevel) discoveredImages
-          // lib.mapAttrs' (n: v: lib.nameValuePair "image-${n}" v) nonNixExampleImages;
-        # Rust crate prefixes can be overridden in `package.nix` and image
-        # names are user-chosen, so a stray collision with an explicit check
-        # would otherwise be silently swallowed by the `//` merge. Two pairwise
-        # intersections cover all three pairs because every offending name is
-        # in at least two sets.
-        checkNameCollisions =
-          lib.intersectLists (lib.attrNames explicitChecks) (lib.attrNames rustChecks)
-          ++ lib.intersectLists (lib.attrNames imageChecks) (lib.attrNames (explicitChecks // rustChecks));
+        checkNameCollisions = lib.intersectLists (lib.attrNames explicitChecks) (lib.attrNames rustChecks);
       in
       assert lib.assertMsg (checkNameCollisions == [ ])
-        "checks: duplicate names across explicit/rust/image sets: ${lib.concatStringsSep ", " checkNameCollisions}";
-      explicitChecks // rustChecks // imageChecks
+        "checks: duplicate names across explicit/rust sets: ${lib.concatStringsSep ", " checkNameCollisions}";
+      explicitChecks // rustChecks
     );
 in
 {
-  packages =
-    discoveredImages
-    // {
-      base =
-        let
-          package = ix.mkImage {
-            modules = [
-              {
-                ix.image = {
-                  name = "ix/base";
-                  tag = "latest";
-                };
-              }
-            ];
-          };
-        in
-        package
-        // {
-          passthru = (package.passthru or { }) // {
-            tests = (package.passthru.tests or { }) // {
-              eval = tests.imageTests.base;
-            };
-          };
-        };
-      health-checks = healthChecks.dag;
-      health-checks-zellij = healthChecks.zellij;
-      inherit check lint site;
-      site-dev = site.passthru.devServer;
-      bench-filesystem = benchFilesystem;
-      update-mods = updateMods;
-      update-loaders = updateLoaders;
-      inherit update;
-      ix-shell-sync-ignored = ixShellSyncIgnored;
-      mc-source = mcSource;
-      update-sounds = updateSounds;
-      agents = agentsDir;
-      skills = skillsDir;
-      claude-plugin = claudePluginDir;
-    }
-    // repoFlakePackages
-    // examplePackages
-    // nonNixExampleImages
-    // nonNixExampleDescriptions
-    // crossPackages
-    // healthChecks.lifecyclePackages;
+  packages = {
+    health-checks = healthChecks.dag;
+    health-checks-zellij = healthChecks.zellij;
+    inherit check lint site;
+    site-dev = site.passthru.devServer;
+    bench-filesystem = benchFilesystem;
+    update-mods = updateMods;
+    update-loaders = updateLoaders;
+    inherit update;
+    ix-shell-sync-ignored = ixShellSyncIgnored;
+    mc-source = mcSource;
+    update-sounds = updateSounds;
+    agents = agentsDir;
+    skills = skillsDir;
+    claude-plugin = claudePluginDir;
+  }
+  // repoFlakePackages
+  // examplePackages
+  // nonNixExampleImages
+  // nonNixExampleDescriptions
+  // crossPackages
+  // healthChecks.lifecyclePackages;
 
   # Flat keying: one derivation per `checks.<system>.<name>`, as the flake schema
   # and `nix flake check` require. The `.#check` gate and blast-radius consume

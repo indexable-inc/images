@@ -1,8 +1,6 @@
 {
   lib,
   paths,
-  artifacts,
-  mkImage,
   mkFleetFor,
   mkDevFor,
   ixReturn,
@@ -78,93 +76,6 @@ let
       entry: lib.nameValuePair entry.metadata.name { inherit (entry) path metadata; }
     );
 
-  # One image directory -> { <name> = pkg; <name>_<ver> = pkg; ... }.
-  # Without versions.nix, the dir is a single module.
-  # With versions.nix, each version is layered on top of the base module and
-  # the `default` key picks which version gets the unsuffixed alias.
-  imagePackages =
-    entry:
-    let
-      inherit (entry) path;
-      inherit (entry.metadata) name;
-      versions = entry.metadata.sidecar;
-    in
-    if versions != null then
-      let
-        defaultVer = versions.default;
-        verMods = builtins.removeAttrs versions [ "default" ];
-        verPkgs = lib.mapAttrs' (
-          ver: mod:
-          lib.nameValuePair "${name}_${ver}" (mkImage {
-            modules = [
-              path
-              mod
-            ];
-          })
-        ) verMods;
-        defaultKey = "${name}_${defaultVer}";
-      in
-      assert lib.assertMsg (builtins.hasAttr defaultKey verPkgs)
-        "image '${name}': versions.nix default = \"${defaultVer}\" but no version with that key";
-      verPkgs // { ${name} = verPkgs.${defaultKey}; }
-    else
-      { ${name} = mkImage { modules = [ path ]; }; };
-
-  /**
-    Walk `images/<category>/<name>/` under `root` and expose every
-    directory as a flake package. A directory with a `versions.nix`
-    sibling produces `<name>_<ver>` for each version key plus a
-    `<name>` alias for the `default` version.
-
-    `imageTests` is an optional attrset keyed by image name (matching
-    the discovered package names). When an image has an entry, it is
-    attached to the image derivation as `passthru.tests.eval` so
-    `nix build .#<image>.passthru.tests.eval` runs it (RFC 0119).
-  */
-  discoverImages =
-    {
-      root,
-      imageTests ? { },
-    }:
-    let
-      discovered = discoverTree {
-        inherit root;
-        metadataFile = "versions.nix";
-        metadataArgs = { inherit artifacts; };
-        validate =
-          { metadata, ... }:
-          let
-            inherit (metadata) name segments sidecar;
-            versionNames = lib.optionals (sidecar != null) (
-              map (version: "${name}_${version}") (
-                builtins.attrNames (builtins.removeAttrs sidecar [ "default" ])
-              )
-            );
-          in
-          assert lib.assertMsg (
-            builtins.length segments == 2
-          ) "discoverImages: expected images/<category>/<name>/default.nix, got ${metadata.relativePath}";
-          {
-            outputNames = versionNames;
-          };
-      };
-      raw = lib.concatMapAttrs (_: imagePackages) discovered;
-      attach =
-        name: pkg:
-        if imageTests ? ${name} then
-          pkg
-          // {
-            passthru = (pkg.passthru or { }) // {
-              tests = (pkg.passthru.tests or { }) // {
-                eval = imageTests.${name};
-              };
-            };
-          }
-        else
-          pkg;
-    in
-    lib.mapAttrs attach raw;
-
   /**
     Walk `modules/<category>/<name>/` under `root` and expose every
     discovered NixOS module as an attrset of paths. Each module is a
@@ -223,9 +134,6 @@ let
     and nested `examples/<category>/<name>/default.nix`. A directory is
     treated as a category when it has no `default.nix` of its own. Keys
     in the returned attrset are always the example's own name; the
-    category is organizational, mirroring how `discoverImages` flattens
-    `images/<cat>/<name>/` into bare names.
-
     Each fleet is imported with `{ index = { lib = ix; }; }` to match
     the contract examples already use, with `mkFleet` swapped for the
     host-system variant so the wrapper derivations under
@@ -260,7 +168,6 @@ in
 {
   inherit
     discoverTree
-    discoverImages
     discoverModules
     exampleFleetsFor
     ;

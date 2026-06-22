@@ -551,11 +551,11 @@ def write_json(path: Path, value: JsonObject) -> None:
 
 
 def default_manifest_path() -> Path:
-    cwd_manifest = Path.cwd() / "images/games/minecraft/mods/manifest.json"
+    cwd_manifest = Path.cwd() / "packages/minecraft/catalogs/mods/manifest.json"
     if cwd_manifest.exists():
         return cwd_manifest
 
-    return Path(__file__).resolve().parent.parent / "images/games/minecraft/mods/manifest.json"
+    return Path(__file__).resolve().parent.parent / "packages/minecraft/catalogs/mods/manifest.json"
 
 
 def main() -> None:

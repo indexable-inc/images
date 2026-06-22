@@ -36,7 +36,7 @@ nix run .#diff
 nix run .#down
 ```
 
-Claude Code and Codex are installed by default (via `development-base`), so the
+Claude Code and Codex are installed by default (via the dev base module), so the
 agents are present from a plain `inputs.index` import. Turn one off with
 `ix.dev.agents.codex = false;`.
 

@@ -63,9 +63,9 @@ in the minecraft module's `formatFor` table.
 
 ## Mod build variants
 
-The mod catalog at `images/games/minecraft/mods/1.21.11.json` pins the
+The mod catalog at `packages/minecraft/catalogs/mods/1.21.11.json` pins the
 **CPU** build of `terrain-diffusion`. Upstream's `v2.1.0` release ships a
 sibling GPU jar; to use it, swap the URL in
-`images/games/minecraft/mods/manifest.json` and regenerate with `nix run
+`packages/minecraft/catalogs/mods/manifest.json` and regenerate with `nix run
 .#update-mods -- --version 1.21.11` on a host that has a CUDA-capable GPU
 exposed to the VM. The CPU build still works, it is just slower per chunk.
