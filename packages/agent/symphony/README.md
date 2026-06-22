@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.svg" width="80" alt="Symphony" />
+  <img src="../../../doc/assets/logo.svg" width="80" alt="Symphony" />
 </p>
 
 # symphony
@@ -15,7 +15,7 @@ Run it from this repo:
 nix run .#symphony
 ```
 
-The launcher requires an authenticated `codex` on PATH and refuses to start without one. It stages this source tree under `~/.local/state/symphony`, fetches mix deps, and boots the dashboard on http://127.0.0.1:4040. Point `SYMPHONY_PRIMARY_REPO` at a local checkout first; [docs/setup.md](docs/setup.md) and [.env.example](.env.example) cover the full configuration surface.
+The launcher requires an authenticated `codex` on PATH and refuses to start without one. It stages this source tree under `~/.local/state/symphony`, fetches mix deps, and boots the dashboard on http://127.0.0.1:4040. Point `SYMPHONY_PRIMARY_REPO` at a local checkout first; [doc/setup.md](doc/setup.md) and [.env.example](.env.example) cover the full configuration surface.
 
 <img alt="Symphony dashboard" src="https://github.com/user-attachments/assets/eb06f062-3b2d-41a4-a679-94c5c2f847aa" />
 
@@ -25,7 +25,7 @@ The launcher requires an authenticated `codex` on PATH and refuses to start with
 - [`workflows/example/`](workflows/example/): the bundled pack, intentionally narrow (one manual-trigger `inspect` workflow plus its read-only skill). Real deployments point `SYMPHONY_PACK_DIR` at their own pack.
 - [`contracts/fixtures/`](contracts/fixtures/): engine wire fixtures shared with the room-server in the ix monorepo. The Elixir contract tests read them from `../../contracts`, so this directory stays beside `elixir/`.
 - [`bin/run-nix`](bin/run-nix): the production entrypoint the `symphony` package wraps.
-- [`docs/`](docs/): setup, engine contract, and quality-gate reference.
+- [`doc/`](doc/): setup, engine contract, and quality-gate reference.
 
 ## Neighbors
 
@@ -42,4 +42,4 @@ make all                 # setup, compile -Werror, fmt-check, credo
 mix test
 ```
 
-CI runs the same required lane sandboxed as the `symphony-elixir` flake check (see [default.nix](default.nix)); after changing `elixir/mix.lock`, refresh the `fetchMixDeps` hash there. The advisory lane (`make quality`: sobelow, deps.audit, dialyzer, coveralls) stays a local run; see [docs/quality.md](docs/quality.md).
+CI runs the same required lane sandboxed as the `symphony-elixir` flake check (see [default.nix](default.nix)); after changing `elixir/mix.lock`, refresh the `fetchMixDeps` hash there. The advisory lane (`make quality`: sobelow, deps.audit, dialyzer, coveralls) stays a local run; see [doc/quality.md](doc/quality.md).

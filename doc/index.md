@@ -4,10 +4,10 @@ From-source documentation for the packages in the `index` repo (a shared, open-s
 
 ## Conventions
 
-- `docs/<package>/` mirrors `packages/<package>/`, one directory per package.
+- `doc/<package>/` mirrors `packages/<package>/`, one directory per package.
 - Each package dir has an `overview.md`; larger packages add concern pages.
 - Pages cite real `path:line` references into the package source.
-- The `docs/demo-*` files are README assets, not documentation pages.
+- The `doc/assets/demo-*` files are README assets, not documentation pages.
 
 ## Packages
 

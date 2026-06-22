@@ -7,7 +7,7 @@ flat palette and a vendored monospace face, and muxes the frames through ffmpeg
 into an animated AVIF (with a WebP fallback). It emits a dark and a light variant
 sized for a GitHub README `<picture>` element (`src/main.rs:1-15`). This is the
 tool that generates the repo's top-of-README demo:
-`docs/demo-{dark,light}.{avif,webp}` (root `README.md:13-19,46-54`). The clip is
+`doc/assets/demo-{dark,light}.{avif,webp}` (root `README.md:13-19,46-54`). The clip is
 not a screen recording; it is rendered from a recorded transcript of real
 programs.
 
@@ -124,7 +124,7 @@ The license is dual MIT + OFL because the binary embeds JetBrains Mono
 and prints `Usage: reel` (`default.nix:72-90`).
 
 Regenerate the README assets with `nix run .#reel` (writes
-`docs/demo-{dark,light}.{avif,webp}`). reel must not be run by docs authoring
+`doc/assets/demo-{dark,light}.{avif,webp}`). reel must not be run by docs authoring
 itself; the demo files are owned outputs and are not edited here.
 
 ## Gotchas

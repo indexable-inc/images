@@ -1,17 +1,5 @@
 {
   "nodes": {
-    "agents": {
-      "flake": false,
-      "locked": {
-        "path": "./agents",
-        "type": "path"
-      },
-      "original": {
-        "path": "./agents",
-        "type": "path"
-      },
-      "parent": []
-    },
     "bench-filesystem": {
       "flake": false,
       "locked": {
@@ -350,7 +338,6 @@
     },
     "root": {
       "inputs": {
-        "agents": "agents",
         "bench-filesystem": "bench-filesystem",
         "btop-src": "btop-src",
         "clippy-fork": "clippy-fork",
@@ -393,11 +380,11 @@
     "site": {
       "flake": false,
       "locked": {
-        "path": "./site",
+        "path": "./packages/site",
         "type": "path"
       },
       "original": {
-        "path": "./site",
+        "path": "./packages/site",
         "type": "path"
       },
       "parent": []
@@ -405,11 +392,11 @@
     "skills": {
       "flake": false,
       "locked": {
-        "path": "./skills",
+        "path": "./packages/agent/skills",
         "type": "path"
       },
       "original": {
-        "path": "./skills",
+        "path": "./packages/agent/skills",
         "type": "path"
       },
       "parent": []

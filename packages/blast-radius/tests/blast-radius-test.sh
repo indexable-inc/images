@@ -8,8 +8,8 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-fixtures="$here/blast-radius-fixtures"
-workflow="$here/../.github/workflows/blast-radius.yml"
+fixtures="$here/fixtures"
+workflow="$here/../../../.github/workflows/blast-radius.yml"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT

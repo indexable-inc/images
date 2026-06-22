@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.svg" width="80" alt="index" />
+  <img src="doc/assets/logo.svg" width="80" alt="index" />
 </p>
 
 <p align="center">
@@ -11,11 +11,11 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)"  srcset="docs/demo-dark.avif"  type="image/avif">
-    <source media="(prefers-color-scheme: light)" srcset="docs/demo-light.avif" type="image/avif">
-    <source media="(prefers-color-scheme: dark)"  srcset="docs/demo-dark.webp">
-    <source media="(prefers-color-scheme: light)" srcset="docs/demo-light.webp">
-    <img alt="A terminal demo: a colored git-log-pretty tree, then driving a live Python REPL." src="docs/demo-dark.webp" width="800">
+    <source media="(prefers-color-scheme: dark)"  srcset="doc/assets/demo-dark.avif"  type="image/avif">
+    <source media="(prefers-color-scheme: light)" srcset="doc/assets/demo-light.avif" type="image/avif">
+    <source media="(prefers-color-scheme: dark)"  srcset="doc/assets/demo-dark.webp">
+    <source media="(prefers-color-scheme: light)" srcset="doc/assets/demo-light.webp">
+    <img alt="A terminal demo: a colored git-log-pretty tree, then driving a live Python REPL." src="doc/assets/demo-dark.webp" width="800">
   </picture>
 </p>
 
@@ -32,7 +32,7 @@ move. Add something useful, and everyone gets it.
 It is one Nix flake holding ~45 packages (mostly Rust, with Python, Elixir,
 TypeScript, and Svelte where they fit), a corpus of NixOS modules, fleet
 examples, and the agent infrastructure that ties them together. Most packages have
-a from-source page under [`docs/`](docs/index.md). To explore, point Claude at
+a from-source page under [`doc/`](doc/index.md). To explore, point Claude at
 this repo and ask whether anything here is useful for you.
 
 ## What's inside
@@ -49,7 +49,7 @@ reviewable bindings rather than a text blob, so behavior changes land as PR diff
 | [`claude-code`](packages/agent/claude-code/) / [`codex`](packages/agent/codex/) | Agent CLIs wrapped with the shared house prompt, MCP servers, and hooks baked in |
 | [`policy`](packages/agent/policy/) | One source of tool-access rules for both wrappers (deny force-merge, block superseded builtins) |
 | [`system-prompt-eval`](packages/agent/system-prompt-eval/) | Spawns sandboxed `claude -p` rollouts, scores them with an LLM judge, commits the scores |
-| [`claude-hooks`](docs/claude-hooks/overview.md) | Lifecycle hooks as one Rust binary; every hook fails open and silent, so a broken hook never blocks a session |
+| [`claude-hooks`](doc/claude-hooks/overview.md) | Lifecycle hooks as one Rust binary; every hook fails open and silent, so a broken hook never blocks a session |
 | [`subagent-cache`](packages/agent/subagent-cache/) | Memoizes read-only investigations across the team, validated by Postgres recall + a Haiku judge + file-freshness hashing |
 | [`symphony`](packages/agent/symphony/) | Elixir/OTP runtime orchestrating multi-repo Codex sessions from a `.sym` DSL, each in its own git worktree |
 | [`distiller`](packages/agent/distiller/) | Turns raw session transcripts into searchable, reusable lessons |
@@ -128,7 +128,7 @@ nix run .#reel          # regenerate the demo above
 | [`packages/`](packages/) | Repo-owned tools: agent stack, Nix build system, search, PTY driver, MCP server, `reel` |
 | [`modules/`](modules/) | Opt-in NixOS service modules and profiles, auto-discovered |
 | [`lib/`](lib/) | Shared helper and builder API (Rust workspace graph, `buildUvApplication`, Minecraft/NBT, agent integration) |
-| [`docs/`](docs/index.md) | From-source documentation, one page per package |
+| [`doc/`](doc/index.md) | From-source documentation, one page per package |
 | [`examples/`](examples/) | Standalone consumer fleets |
 | [`skills/`](skills/) + [`agents/`](agents/) | Claude Code skills and subagent definitions, shipped to agents |
 | [`rfcs/`](rfcs/) | Architecture decision records |

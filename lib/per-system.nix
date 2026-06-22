@@ -423,67 +423,6 @@ let
     name = "index";
   };
 
-  # Declarative subagents rendered to a symlink-free `.claude/agents` directory.
-  # index-action-runner offloads a long, image- or step-heavy loop into its own
-  # context and returns only the conclusion (ENG-2792). Its frontmatter bakes a
-  # FRESH inline `index` server from the shared `ix.mcp` registry, so each
-  # spawned subagent gets its own kernel and browser rather than sharing the
-  # parent's; the server is declared from the same source the wrappers render.
-  agentsDir =
-    let
-      # Agents whose frontmatter is computed in nix rather than written in the
-      # file, so they are rendered (not copied verbatim) and their source `.md`
-      # is body-only. index-action-runner offloads a long, image- or step-heavy
-      # loop into its own context and returns only the conclusion (ENG-2792); its
-      # frontmatter bakes a FRESH inline `index` server from the shared `ix.mcp`
-      # registry, so each spawned subagent gets its own kernel and browser rather
-      # than sharing the parent's, declared from the source the wrappers render.
-      renderedAgents = {
-        index-action-runner = {
-          frontmatter = {
-            name = "index-action-runner";
-            description =
-              "Offload a long, image-heavy or many-step loop (browser automation, "
-              + "scanning many images or PDFs, multi-step web flows) into an isolated "
-              + "context. Give it an outcome plus the exact fields to return; it drives "
-              + "the whole loop in its own index kernel and returns only the distilled "
-              + "result, keeping screenshots and DOM dumps out of the main thread.";
-            mcpServers = ix.mcp.toAgentMcpServers {
-              index = {
-                transport = "stdio";
-                command = lib.getExe repoPackages.mcp;
-                args = [ "serve" ];
-              };
-            };
-          };
-          body = builtins.readFile (paths.agents + "/index-action-runner.md");
-        };
-      };
-      # A rendered agent's source `.md` is body-only and excluded here by name;
-      # every OTHER `agents/*.md` is a complete, hand-authored agent (frontmatter
-      # + body) copied verbatim. A non-rendered file without leading `---` is a
-      # mistake (a missing frontmatter block), so fail loudly with the offenders
-      # rather than silently dropping it from the agent set.
-      renderedFiles = map (n: "${n}.md") (builtins.attrNames renderedAgents);
-      entries = builtins.readDir paths.agents;
-      rawMdNames = lib.filter (
-        n: lib.hasSuffix ".md" n && entries.${n} == "regular" && !(lib.elem n renderedFiles)
-      ) (builtins.attrNames entries);
-      missingFrontmatter = lib.filter (
-        n: !(lib.hasPrefix "---" (builtins.readFile (paths.agents + "/${n}")))
-      ) rawMdNames;
-    in
-    assert lib.assertMsg (missingFrontmatter == [ ])
-      "agentsDir: agents/*.md without YAML frontmatter (add frontmatter, or render it in renderedAgents): ${lib.concatStringsSep ", " missingFrontmatter}";
-    ix.agents.mkAgentsDir {
-      inherit pkgs;
-      agents = renderedAgents;
-      rawFiles = map (n: {
-        name = lib.removeSuffix ".md" n;
-        path = paths.agents + "/${n}";
-      }) rawMdNames;
-    };
-
   mcSource = ix.writeNushellApplication pkgs {
     name = "mc-source";
     text = builtins.readFile paths.tools.mcSource;
@@ -543,29 +482,6 @@ let
   # already scopes source identity to the subtree.
   siteSrc = paths.site;
 
-  siteBuild = ix.buildSvelteSite pkgs {
-    pname = "ix-site";
-    version = "0.1.0";
-    src = siteSrc;
-    distDir = "build";
-    serve = {
-      name = "ix-site";
-      routePrefix = "/index";
-    };
-    devServer = {
-      name = "ix-site-dev";
-      checkoutSubdir = "site";
-    };
-  };
-
-  # The local preview serves the same `/index` build that Pages deploys.
-  site = siteBuild.overrideAttrs (old: {
-    passthru = (old.passthru or { }) // {
-      preview = siteBuild.passthru.serve;
-      static = siteBuild.passthru.staticSite;
-    };
-  });
-
   siteTests = ix.buildNpmVitest pkgs {
     pname = "ix-site";
     version = "0.1.0";
@@ -576,6 +492,7 @@ let
   };
 
   repoPackages = ix.packageSetFor pkgs;
+  site = repoPackages.site;
 
   # One general updater for every content source in the repo, run in parallel
   # via dag-runner (the same engine `lint` uses). The Minecraft catalog and
@@ -857,13 +774,10 @@ let
           # pre-run at build time so the VM never needs the network; see
           # tests/minecraft-blocks-vm.nix.
           minecraft-blocks-vm = tests.minecraftBlocksVm;
-          # Skills and subagents are not committed; they are rendered live by the
-          # SessionStart hook. This gate forces the skills directory and the
-          # subagents directory (both of which evaluate the no-symlink
-          # materialization check) to build.
+          # Skills are not committed; they are rendered live by the SessionStart
+          # hook. This gate forces the materialized skills directory to build.
           agent-skills = pkgs.runCommand "agent-skills-check" { } ''
             test -d ${skillsDir}
-            test -d ${agentsDir}
             mkdir -p "$out"
           '';
           # Pins the last-applied 3-way merge behind homeModules.mutable-json:
@@ -1092,7 +1006,7 @@ let
           # validate/render jq embedded in its workflow, extracted from the YAML so
           # the test can't drift from what the trusted comment job runs. The
           # report-building logic lives in the `blast-radius` Rust crate and is
-          # covered by its own unit tests. See tools/blast-radius-test.sh.
+          # covered by its own unit tests. See packages/blast-radius/tests/blast-radius-test.sh.
           blast-radius-test =
             pkgs.runCommand "blast-radius-test"
               {
@@ -1110,7 +1024,7 @@ let
                 cd source
                 export HOME="$TMPDIR/home"
                 mkdir -p "$HOME"
-                bash tools/blast-radius-test.sh
+                bash packages/blast-radius/tests/blast-radius-test.sh
                 mkdir -p "$out"
               '';
           # Proves the Linux→macOS cross toolchain actually emits a Darwin object,
@@ -1155,7 +1069,6 @@ in
     ix-shell-sync-ignored = ixShellSyncIgnored;
     mc-source = mcSource;
     update-sounds = updateSounds;
-    agents = agentsDir;
     skills = skillsDir;
     claude-plugin = claudePluginDir;
   }

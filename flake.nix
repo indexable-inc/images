@@ -27,18 +27,15 @@
     # file change anywhere re-hashes and re-copies the full tree per eval and
     # invalidates every dependent. Declaring each pure-data subtree as its own
     # `flake = false` path input scopes a consumer's source to just the subtree
-    # it reads, so an edit under `site/` no longer perturbs a `skills`
-    # package's drvPath. nix and nox both resolve these as lock nodes
+    # it reads, so an edit under `packages/site/` no longer perturbs a
+    # `packages/agent/skills` package's drvPath. nix and nox both resolve
+    # these as lock nodes
     # `{ type = "path"; path = "./<dir>"; parent = []; }` against the parent
     # tree, with no separate fetch. Nix-code roots the flake itself imports
     # (`modules`, `packages`) stay ordinary relative paths: they are
     # import-time, not source identity. See ENG-2362.
     skills = {
-      url = "path:./skills";
-      flake = false;
-    };
-    agents = {
-      url = "path:./agents";
+      url = "path:./packages/agent/skills";
       flake = false;
     };
     examples = {
@@ -54,7 +51,7 @@
       flake = false;
     };
     site = {
-      url = "path:./site";
+      url = "path:./packages/site";
       flake = false;
     };
 
@@ -174,7 +171,6 @@
       clippy-fork,
       ghostty,
       skills,
-      agents,
       examples,
       tests,
       bench-filesystem,
@@ -210,7 +206,6 @@
       paths = {
         root = ./.;
         skills = skills.outPath;
-        agents = agents.outPath;
         modules = ./modules;
         examples = examples.outPath;
         tests = tests.outPath;
@@ -226,12 +221,13 @@
           velocity = ./packages/minecraft/catalogs/loaders/velocity;
           fabric = ./packages/minecraft/catalogs/loaders/fabric;
         };
+        # Repo maintenance scripts and package-owned source updaters.
         tools = {
-          ixShellSyncIgnored = ./tools/ix-shell-sync-ignored.py;
-          mcSource = ./tools/mc-source.nu;
-          updateSounds = ./tools/update-sounds.nu;
-          updateLoaders = ./tools/update-loaders.py;
-          updateMods = ./tools/update-mods.py;
+          ixShellSyncIgnored = ./maintainers/scripts/ix-shell-sync-ignored.py;
+          mcSource = ./packages/minecraft/tools/mc-source.nu;
+          updateSounds = ./packages/minecraft/tools/update-sounds.nu;
+          updateLoaders = ./packages/minecraft/tools/update-loaders.py;
+          updateMods = ./packages/minecraft/tools/update-mods.py;
         };
       };
 
