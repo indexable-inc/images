@@ -343,8 +343,17 @@ let
     Keep the HTML minimal: system font, inline CSS, no external assets, no
     chrome. Use `@media (prefers-color-scheme: dark)` so colors adapt
     automatically to light or dark mode. Be terse. Start with the question
-    answered. Use tables, real links, inline SVG, or diagrams when they are
-    clearer than prose.
+    answered.
+
+    Prefer diagrams for causal chains, architecture, timelines, workflows, and
+    comparisons. Build diagrams with normal HTML and CSS in document flow:
+    cards, grids, borders, arrows, labels, and tables. Avoid raw SVG diagrams by
+    default because they are easy to clip, overlap, or scale poorly in the
+    rendered HTML. Use SVG only when it is explicitly requested or when a shape
+    cannot be expressed clearly with HTML and CSS. If SVG is necessary, verify
+    that the rendered page does not clip or overlap at the opened viewport.
+
+    Use tables and real links when they are clearer than prose.
 
     Use semantic Primer Octicons from `htmlpage` for GitHub concepts such as
     pull requests, issues, commits, checks, links, and GitHub itself. Use the
