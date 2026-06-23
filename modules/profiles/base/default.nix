@@ -44,6 +44,14 @@ in
       "https://cache.ix.dev"
     ];
 
+    # Install terminfo for every common terminal emulator so ncurses tools
+    # (`clear`, `tmux`, `vim`, ...) work no matter what `$TERM` an operator's
+    # client propagates in. Without this, shelling in from Ghostty fails with
+    # `'xterm-ghostty': unknown terminal type.` because the guest only ships
+    # ncurses' built-in set. Pulls only the small `terminfo` outputs (ghostty,
+    # kitty, alacritty, wezterm, foot, ...), not the terminal binaries.
+    environment.enableAllTerminfo = true;
+
     # Cubic halves cwnd on any loss, so a residential last-mile at
     # 30 ms and a couple percent loss caps a single TCP flow far
     # below the path's real capacity. BBR models bottleneck bandwidth
