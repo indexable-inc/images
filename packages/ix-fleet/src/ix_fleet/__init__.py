@@ -884,6 +884,14 @@ async def run_up_node_workflow(node: FleetNode, args: argparse.Namespace) -> Non
     if not args.skip_push:
         image = await push_replacement_image(node, dry_run=args.dry_run)
     await up_node(node, image, dry_run=args.dry_run)
+    # `up_node` recreates the VM on a fresh image and returns once `client.create`
+    # has issued the boot, not once the guest is reachable. Wait for the guest to
+    # answer an exec before health-checking, the same gate `ensure_node` gives the
+    # switch path: a `from: guest` check against a still-booting guest raises an
+    # exec RPC error (not a TimeoutError or non-zero exit), which escapes the
+    # retry loop in `run_health_check` and fails the whole `up` on the first
+    # attempt instead of waiting the boot out.
+    await wait_node_ready(node, dry_run=args.dry_run)
     await ensure_node_groups(node, dry_run=args.dry_run)
     if not args.skip_health:
         await run_node_health_checks(node, dry_run=args.dry_run)
