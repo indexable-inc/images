@@ -142,10 +142,11 @@
     (import (ix.paths.packagesRoot + "/agent/common.nix") { inherit lib ix repoPackages; })
     .systemPrompt,
 
-  # Only the flake package set injects the Nushell writer; the overlay eval
-  # context does not. The updater is a maintainer-facing flake output, so the
-  # overlay build of `pkgs.claude-code` simply omits `passthru.updateScript`.
-  writeNushellApplication ? null,
+  # Writer used to build `passthru.updateScript`. Only the flake package set
+  # supplies it (lib/packages.nix); the overlay eval context leaves it null. The
+  # updater is a maintainer-facing flake output, so the overlay build of
+  # `pkgs.claude-code` simply omits `passthru.updateScript`.
+  updateScriptWriter ? null,
 }:
 
 let
@@ -309,13 +310,17 @@ let
 
   # Maintainer-facing updater that refreshes manifest.json from Anthropic's
   # signed per-version manifest (fails closed on a bad GPG signature); see
-  # ./update.nix. Only the flake package set injects the Nushell writer, so the
-  # overlay build of `pkgs.claude-code` omits `passthru.updateScript`.
+  # ./update.nix. Built only when this eval context supplied a writer (the flake
+  # package set), so the overlay build of `pkgs.claude-code` omits
+  # `passthru.updateScript`.
   updateScript =
-    if writeNushellApplication == null then
+    if updateScriptWriter == null then
       null
     else
-      import ./update.nix { inherit writeNushellApplication nix gnupg; };
+      import ./update.nix {
+        writeNushellApplication = updateScriptWriter;
+        inherit nix gnupg;
+      };
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "claude-code";

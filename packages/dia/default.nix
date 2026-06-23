@@ -4,10 +4,11 @@
   fetchurl,
   undmg,
   nix,
-  # Only the flake package set injects the Nushell writer; the overlay eval
-  # context does not. The updater is a maintainer-facing flake output, so the
-  # overlay build of `pkgs.dia` simply omits `passthru.updateScript`.
-  writeNushellApplication ? null,
+  # Writer used to build `passthru.updateScript`. Only the flake package set
+  # supplies it (lib/packages.nix); the overlay eval context leaves it null. The
+  # updater is a maintainer-facing flake output, so the overlay build of
+  # `pkgs.dia` simply omits `passthru.updateScript`.
+  updateScriptWriter ? null,
 }:
 
 let
@@ -30,10 +31,10 @@ let
   # pass a version to pin an exact one. `nix store prefetch-file` downloads the
   # .dmg once and emits the SRI hash the fetcher pins.
   updateScript =
-    if writeNushellApplication == null then
+    if updateScriptWriter == null then
       null
     else
-      writeNushellApplication {
+      updateScriptWriter {
         name = "dia-update";
         runtimeInputs = [ nix ];
         meta.description = "Refresh packages/dia/manifest.json to a Dia release";
