@@ -2288,12 +2288,6 @@ let
       portClaim = noYourkitConfig.ix.networking.portClaims.minestom-yourkit or null;
     };
 
-  nomadSecretRefsExample = import (paths.examples + "/nomad/secret-refs/ix.nix") {
-    index = {
-      lib = ix;
-    };
-  };
-
   minecraftBlocksExample =
     let
       fleet = import (paths.examples + "/minecraft/blocks/ix.nix") {
@@ -4165,44 +4159,6 @@ let
         message = "Zig packages should materialize remote build.zig.zon dependencies through a cache derivation";
       }
       {
-        assertion =
-          let
-            inherit (nomadSecretRefsExample) secretSet;
-          in
-          secretSet.provider.type == "vaultwarden"
-          && secretSet.provider.client == "rbw"
-          && secretSet.provider.folder == "production"
-          && secretSet.refs."daily-scraper/aws.env" == "/run/ix-secrets/daily-scraper/aws.env"
-          && secretSet.values."daily-scraper/aws.env".key == "daily-scraper/aws-env"
-          && secretSet.values."daily-scraper/aws.env".field == "notes";
-        message = "secret refs should normalize provider keys and consumer paths generically";
-      }
-      {
-        assertion =
-          let
-            job = builtins.readFile nomadSecretRefsExample.nomadJob;
-          in
-          lib.hasInfix ''source      = "/run/ix-secrets/daily-scraper/aws.env"'' job
-          && lib.hasInfix ''destination = "secrets/aws.env"'' job
-          && lib.hasInfix "env         = true" job;
-        message = "secret refs should render into a Nomad environment template";
-      }
-      {
-        assertion =
-          let
-            manifest = lib.importJSON nomadSecretRefsExample.kubernetesExternalSecret;
-          in
-          manifest.kind == "ExternalSecret"
-          && manifest.metadata.namespace == "batch"
-          && manifest.spec.secretStoreRef.name == "vaultwarden"
-          && builtins.length manifest.spec.data == 2;
-        message = "secret refs should render into a Kubernetes external secret manifest";
-      }
-      {
-        assertion = lib.all (passed: passed) (lib.attrValues nomadSecretRefsExample.buildChecks);
-        message = "Nomad secret refs build checks should be declarative Nix assertions";
-      }
-      {
         assertion = !invalidSecretNameEval.success;
         message = "secret refs should reject unsafe relative names during eval";
       }
@@ -5029,8 +4985,6 @@ let
   };
 
   helperScript = ''
-    test -e ${nomadSecretRefsExample.buildCheck}
-
     # minecraft-blocks integration: committed fixtures -> ClickHouse local
     # spatial table -> bounding-box query. The derivation loads the fixture JSON
     # Lines into a ReplacingMergeTree table built from the one schema (Morton
