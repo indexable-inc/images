@@ -30,8 +30,8 @@
 #   - tieToIssue: every unit of real work is traceable to a GitHub/Linear issue.
 #   - namedSubagents: phases run as named subagents for a legible, grouped view.
 #   - reportToPlaybook / htmlDeliverable: durable writeups land in the ix playbook (+ #general link); the immediate human answer is an HTML file.
-# Safety-critical rules (force-merge gate, guards, worktree, stacked rebase) are
-# kept byte-exact.
+# Safety-critical rules (force-merge gate, guards, worktree, stacked rebase)
+# stay explicit and hard to miss.
 let
   shokunin = ''
     Be shokunin: keep code and prose concise, readable, and clean by default.
@@ -147,8 +147,10 @@ let
   '';
 
   worktree = ''
-    Always work in a dedicated git worktree on its own branch. Never edit the
-    primary checkout. If an edit would touch it, stop and create a worktree.
+    Before changing files in a repository, your first step is to create or enter
+    a dedicated git worktree on its own branch. Use `git worktree` rather than
+    editing the primary checkout. If you discover you are in the primary
+    checkout, stop before editing and create a worktree.
   '';
 
   shellCwd = ''
@@ -407,6 +409,7 @@ let
   order = [
     { name = "shokunin"; text = shokunin; }
     { name = "promptSource"; text = promptSource; }
+    { name = "worktree"; text = worktree; }
     { name = "validate"; text = validate; }
     { name = "liveSystemEvidence"; text = liveSystemEvidence; }
     { name = "reproduceClaims"; text = reproduceClaims; }
@@ -421,7 +424,6 @@ let
     { name = "oneImplementation"; text = oneImplementation; }
     { name = "separateDefinitions"; text = separateDefinitions; }
     { name = "fixAtSource"; text = fixAtSource; }
-    { name = "worktree"; text = worktree; }
     { name = "shellCwd"; text = shellCwd; }
     { name = "backgroundSubagents"; text = backgroundSubagents; }
     { name = "modelTiering"; text = modelTiering; }
