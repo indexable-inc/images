@@ -57,15 +57,15 @@ a per-node subparser: it batches the switch in-process (see below).
 
 ## The plan schema (pydantic, `__init__.py:34-146`)
 
-A plan is a `FleetPlan`: `order` (list of node names), `nodes` (name -> `FleetNode`),
-and `secrets` (`FleetSecrets`). `validate_graph` (`:122`) enforces that `order`
+A plan is a `FleetPlan`: `order` (list of node names) and `nodes` (name -> `FleetNode`).
+`validate_graph` (`:122`) enforces that `order`
 has no duplicates, references only defined nodes, and covers every node; that
 each node key matches its `name`; and that every `dependsOn` names a real node.
 
 - **`FleetNode`** (`:68`): `name`, `baseName`, optional `replicaIndex`, `system`,
   a `switch` (`SwitchSpec`), `bootstrapImage`, a `replacementImage`
   (`ReplacementImage`), `region`, `ipv4`, `snapshot`, `recreateOnUp` (default
-  false), and the lists/maps `tags`, `groups`, `env`, `l7ProxyPorts`,
+  false), and the lists/maps `tags`, `groups`, `env`, `secrets`, `l7ProxyPorts`,
   `dependsOn`, `healthChecks` (name -> `HealthCheck`).
 - **`SwitchSpec`** (`:44`): `target`, `buildOn` (`auto`|`local`|`remote`,
   default `auto`), optional `buildVm`, `sourceInstallable`, `overrideInputs`.
@@ -83,9 +83,10 @@ each node key matches its `name`; and that every `dependsOn` names a real node.
 - **`HealthCheck`** (`:54`): `description`, `command` (argv), `timeoutSec`,
   `attempts`, `intervalSec`, `requiresIpv4`, and `from` (`guest`|`host`, stored
   as `from_` since `from` is a keyword).
-- **`FleetSecrets`** (`:104`): a `provider` (`type`, `mountRoot`, plus arbitrary
-  extra keys) and `values` (name -> `SecretSpec`: `key`, `path`, extra keys).
-  Default provider is `runtime-directory` at `/run/secrets` (`:116-120`).
+- **`SecretAttachment`**: `name` is the lower snake_case key in the ix account
+  secret store, and `target` describes delivery for this VM: `injectAs = "env"`
+  with an env var name, or `injectAs = "file"` with a path under `/run/secrets`
+  plus optional `owner` and `mode`.
 
 ## Backend: the ix SDK control plane
 

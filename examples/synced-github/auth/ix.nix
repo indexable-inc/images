@@ -2,24 +2,17 @@
 
 index.lib.mkFleet {
 
-  # One GitHub token, declared once for the whole fleet. `ix.secrets`
-  # normalizes this into a runtime path every node sees at the same place
-  # (`/run/secrets/github/token`). Only that path enters the Nix store; the
-  # token bytes are written at runtime by the ix secrets manager
-  # (https://github.com/indexable-inc/index/issues/66), still in progress.
+  # One GitHub token, declared once for the whole fleet. The ix account secret
+  # store owns the lower snake_case key; this fleet declares how VMs receive it
+  # at runtime as `/run/secrets/github/token`.
   #
-  # Point `key` at wherever the token lives in the provider. A fine-grained
-  # GitHub PAT or a GitHub App installation token scoped to the repos the
-  # agents touch is the right credential here, not a personal classic PAT.
-  secrets = {
-    provider = {
-      type = "vaultwarden";
-      client = "rbw";
-      server = "https://vaultwarden.internal.example";
-      mountRoot = "/run/secrets";
-      folder = "production";
-    };
-    "github/token".key = "github/agent-token";
+  # Store it first with `ix secret set github_token`. A fine-grained GitHub PAT
+  # or GitHub App installation token scoped to the repos the agents touch is
+  # the right credential here, not a personal classic PAT.
+  deployment.secrets.github_token = {
+    file = "github/token";
+    owner = "root";
+    mode = "0400";
   };
 
   # Three interchangeable agent VMs. None of them runs `gh auth login`; they

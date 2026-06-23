@@ -38,10 +38,17 @@ let
       region = "us-west-1";
       ipv4 = false;
       snapshot = false;
-      # Exercise the declarative per-VM secret refs through the dry-run create
-      # path (no live call, so the names need not exist in any store here).
-      secrets = [ "GH_TOKEN" ];
-      noDefaultSecrets = true;
+      # Exercise declarative per-VM secret attachments through the dry-run
+      # create path (no live call, so the names need not exist here).
+      secrets = [
+        {
+          name = "github_token";
+          target = {
+            name = "GH_TOKEN";
+            injectAs = "env";
+          };
+        }
+      ];
     };
   };
 

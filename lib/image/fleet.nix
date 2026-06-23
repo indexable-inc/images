@@ -4,13 +4,12 @@
   Curried: the outer function takes the build dependencies (`lib`,
   `pkgs`, `evalImageConfig`, the `ix fleet` script, and the Nushell
   application helper); the inner takes a fleet spec
-  (`defaults`, `deployment`, `secrets`, `nodes`) and returns the
+  (`defaults`, `deployment`, `nodes`) and returns the
   rendered fleet plan, image attrset, and wrapped CLI app.
 */
 {
   lib,
   pkgs,
-  secretsLib,
   evalImageConfig,
   ixFleet,
   writeNushellApplication,
@@ -19,7 +18,6 @@
 {
   defaults ? [ ],
   deployment ? { },
-  secrets ? { },
   nodes,
 }:
 let
@@ -52,8 +50,36 @@ let
     snapshot = true;
     switch.buildOn = "remote";
   };
-  secretSet = secretsLib.normalize secrets;
-  secretRefs = secretSet.refs;
+  isSecretName = name: builtins.match "[a-z][a-z0-9_]*" name != null;
+
+  normalizeSecretAttachment =
+    sourceName: value:
+    assert lib.assertMsg (isSecretName sourceName)
+      "secret key '${sourceName}' must be lower snake_case: [a-z][a-z0-9_]*";
+    assert lib.assertMsg (isAttrs value) "secret '${sourceName}' must be an attrset";
+    if value ? env then
+      assert lib.assertMsg (!(value ? file)) "secret '${sourceName}' cannot set both env and file";
+      {
+        name = sourceName;
+        target = {
+          name = value.env;
+          injectAs = "env";
+        };
+      }
+    else if value ? file then
+      {
+        name = sourceName;
+        target = {
+          name = value.file;
+          injectAs = "file";
+        }
+        // lib.optionalAttrs (value ? owner) { inherit (value) owner; }
+        // lib.optionalAttrs (value ? mode) { inherit (value) mode; };
+      }
+    else
+      throw "secret '${sourceName}' must set either env or file";
+
+  normalizeSecrets = secrets: lib.mapAttrsToList normalizeSecretAttachment secrets;
 
   mergeDeployments =
     parts:
@@ -61,9 +87,9 @@ let
     // {
       env = lib.mergeAttrsList (map (part: part.env or { }) parts);
       l7ProxyPorts = lib.unique (lib.concatMap (part: part.l7ProxyPorts or [ ]) parts);
-      # User-store secret names union across defaults/fleet/node layers (like
-      # l7ProxyPorts), so a fleet-wide default attaches alongside per-node refs.
-      secrets = lib.unique (lib.concatMap (part: part.secrets or [ ]) parts);
+      # User-store secret keys merge by source name; node layers can override a
+      # fleet-wide delivery target while unrelated refs compose.
+      secrets = lib.foldl' lib.recursiveUpdate { } (map (part: part.secrets or { }) parts);
     };
 
   # Every deployment key the plan consumes. `deployment` is a plain attrset
@@ -80,7 +106,6 @@ let
     "env"
     "ipv4"
     "l7ProxyPorts"
-    "noDefaultSecrets"
     "recreateOnUp"
     "region"
     "secrets"
@@ -211,8 +236,6 @@ let
             inherit name;
             nodes = nodeRefs;
             fleet.nodes = nodeRefs;
-            inherit secretRefs;
-            fleet.secretRefs = secretRefs;
           };
 
           ix.image.name = lib.mkDefault name;
@@ -302,10 +325,9 @@ let
       groups = nodeGroups;
       inherit (deploy) env;
       inherit (deploy) l7ProxyPorts;
-      # Per-VM user-store secret references, attached at create like
-      # `ix new --secret NAME`; `ix-fleet` verifies they exist before deploying.
-      secrets = deploy.secrets or [ ];
-      noDefaultSecrets = deploy.noDefaultSecrets or false;
+      # Per-VM user-store secret references plus delivery targets. ix-fleet
+      # verifies the source keys exist before deploying.
+      secrets = normalizeSecrets (deploy.secrets or { });
       dependsOn = expandedDependencies.${name};
       healthChecks = planHealthChecks config;
     }
@@ -314,7 +336,6 @@ let
   planValue = {
     order = attrNames checkedNodeSpecs;
     nodes = nodePlan;
-    secrets = secretSet.plan;
   };
 
   # Rename a fleet's external identities without re-evaluating any NixOS

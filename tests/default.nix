@@ -1686,17 +1686,10 @@ let
 
   fleet = ix.mkFleet {
     deployment.region = "us-west-1";
-    # Fleet-wide per-VM user-store secret default; unions with per-node refs.
-    deployment.secrets = [ "FLEET_DEFAULT" ];
-    secrets = {
-      provider = {
-        type = "vaultwarden";
-        mountRoot = "/run/secrets/fleet";
-        collection = "production";
-      };
-      sessionKey = {
-        key = "web/session-key";
-        generate = true;
+    # Fleet-wide per-VM user-store secret attachment; merges with per-node refs.
+    deployment.secrets = {
+      fleet_default = {
+        env = "FLEET_DEFAULT";
       };
     };
 
@@ -1711,16 +1704,14 @@ let
         deployment = {
           destination = "fleet-web:latest";
           ipv4 = true;
-          secrets = [ "GH_TOKEN" ];
-          noDefaultSecrets = true;
+          secrets.github_token.env = "GH_TOKEN";
         };
         modules = [
           (
-            { nodes, secretRefs, ... }:
+            { nodes, ... }:
             {
               services.remote-desktop.enable = true;
               environment.etc."db-host".text = nodes.db.config.networking.hostName;
-              environment.etc."session-key-ref".text = secretRefs.sessionKey;
             }
           )
         ];
@@ -2339,10 +2330,12 @@ let
     };
   invalidSecretNameEval = builtins.tryEval (
     builtins.deepSeq
-      (ix.secrets.normalize {
-        provider.type = "vaultwarden";
-        values."../aws.env".key = "daily-scraper/aws-env";
-      }).refs
+      (ix.mkFleet {
+        deployment.secrets."BAD_SECRET".env = "BAD_SECRET";
+        nodes.web = {
+          services.openssh.enable = true;
+        };
+      }).planValue
       true
   );
   # --- Module and example assertion groups ----------------------------------
@@ -4796,23 +4789,33 @@ let
       }
       {
         assertion =
-          fleet.planValue.secrets.provider.type == "vaultwarden"
-          && fleet.planValue.secrets.provider.collection == "production"
-          && fleet.planValue.secrets.values.sessionKey.key == "web/session-key"
-          && fleet.planValue.secrets.values.sessionKey.path == "/run/secrets/fleet/sessionKey"
-          && fleet.planValue.secrets.values.sessionKey.generate;
-        message = "fleet plans should carry declarative secret specs";
-      }
-      {
-        assertion =
           fleetPlan.web.secrets == [
-            "FLEET_DEFAULT"
-            "GH_TOKEN"
+            {
+              name = "fleet_default";
+              target = {
+                name = "FLEET_DEFAULT";
+                injectAs = "env";
+              };
+            }
+            {
+              name = "github_token";
+              target = {
+                name = "GH_TOKEN";
+                injectAs = "env";
+              };
+            }
           ]
-          && fleetPlan.web.noDefaultSecrets
-          && fleetPlan.db.secrets == [ "FLEET_DEFAULT" ]
-          && !fleetPlan.db.noDefaultSecrets;
-        message = "per-VM secret refs should union fleet-wide and node-level names and carry the default opt-out";
+          &&
+            fleetPlan.db.secrets == [
+              {
+                name = "fleet_default";
+                target = {
+                  name = "FLEET_DEFAULT";
+                  injectAs = "env";
+                };
+              }
+            ];
+        message = "per-VM secret attachments should merge fleet-wide and node-level refs";
       }
       {
         assertion = fleetPlan."worker-0".baseName == "worker" && fleetPlan."worker-1".replicaIndex == 1;

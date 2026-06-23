@@ -8,7 +8,6 @@
   ixSpecialArgs,
   moduleList,
   writeNushellApplication,
-  secrets,
   packageSetFor,
 }:
 let
@@ -123,7 +122,6 @@ let
         bootstrapImage
         ;
       pkgs = hostPkgs;
-      secretsLib = secrets;
       ixFleet = (packageSetFor hostPkgs).ix-fleet;
     };
 

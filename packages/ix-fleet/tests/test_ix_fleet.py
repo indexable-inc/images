@@ -66,41 +66,33 @@ class FleetPlanValidationTests(unittest.TestCase):
             == ["db", "web"]
         )
 
-    def test_accepts_declarative_secret_backend_and_refs(self) -> None:
-        data = fleet_plan(["web"], [fleet_node("web")])
-        data["secrets"] = {
-            "provider": {
-                "type": "vaultwarden",
-                "mountRoot": "/run/secrets/fleet",
-                "collection": "production",
-            },
-            "values": {
-                "sessionKey": {
-                    "key": "web/session-key",
-                    "path": "/run/secrets/fleet/sessionKey",
-                    "generate": True,
-                },
-            },
-        }
-
-        plan = ix_fleet.FleetPlan.model_validate(data)
-
-        assert plan.secrets.provider.type == "vaultwarden"
-        assert plan.secrets.provider.model_extra == {"collection": "production"}
-        assert plan.secrets.values["sessionKey"].path == "/run/secrets/fleet/sessionKey"
-        assert plan.secrets.values["sessionKey"].model_extra == {"generate": True}
-
-    def test_per_vm_secret_refs_default_empty_and_round_trip(self) -> None:
+    def test_per_vm_secret_attachments_default_empty_and_round_trip(self) -> None:
         bare = ix_fleet.FleetNode.model_validate(fleet_node("web"))
         assert bare.secrets == []
-        assert not bare.noDefaultSecrets
 
         node = fleet_node("api")
-        node["secrets"] = ["GH_TOKEN", "DATABASE_URL"]
-        node["noDefaultSecrets"] = True
+        node["secrets"] = [
+            {
+                "name": "github_token",
+                "target": {
+                    "name": "GH_TOKEN",
+                    "injectAs": "env",
+                },
+            },
+            {
+                "name": "hermes_env",
+                "target": {
+                    "name": "hermes.env",
+                    "injectAs": "file",
+                    "owner": "hermes",
+                    "mode": "0400",
+                },
+            },
+        ]
         parsed = ix_fleet.FleetNode.model_validate(node)
-        assert parsed.secrets == ["GH_TOKEN", "DATABASE_URL"]
-        assert parsed.noDefaultSecrets
+        assert [secret.name for secret in parsed.secrets] == ["github_token", "hermes_env"]
+        assert parsed.secrets[0].target.name == "GH_TOKEN"
+        assert parsed.secrets[1].target.owner == "hermes"
 
 
 class VerifySecretsAvailableTests(unittest.TestCase):
@@ -116,24 +108,33 @@ class VerifySecretsAvailableTests(unittest.TestCase):
 
     def _plan(self, secrets: list[str]) -> typing.Any:  # noqa: ANN401
         node = fleet_node("web")
-        node["secrets"] = secrets
+        node["secrets"] = [
+            {
+                "name": secret,
+                "target": {
+                    "name": secret.upper(),
+                    "injectAs": "env",
+                },
+            }
+            for secret in secrets
+        ]
         return ix_fleet.FleetPlan.model_validate(fleet_plan(["web"], [node]))
 
     def test_passes_when_every_referenced_secret_exists(self) -> None:
-        plan = self._plan(["GH_TOKEN"])
-        with patch.object(ix_fleet, "client", self._fake_client(["GH_TOKEN", "OTHER"])):
+        plan = self._plan(["github_token"])
+        with patch.object(ix_fleet, "client", self._fake_client(["github_token", "other"])):
             asyncio.run(ix_fleet.verify_secrets_available(plan, [], dry_run=False))
 
     def test_raises_listing_missing_secrets(self) -> None:
-        plan = self._plan(["GH_TOKEN", "DATABASE_URL"])
+        plan = self._plan(["github_token", "database_url"])
         with (
-            patch.object(ix_fleet, "client", self._fake_client(["GH_TOKEN"])),
-            pytest.raises(RuntimeError, match=r"missing secret\(s\) in the store: DATABASE_URL"),
+            patch.object(ix_fleet, "client", self._fake_client(["github_token"])),
+            pytest.raises(RuntimeError, match=r"missing secret\(s\) in the store: database_url"),
         ):
             asyncio.run(ix_fleet.verify_secrets_available(plan, [], dry_run=False))
 
     def test_dry_run_makes_no_live_call(self) -> None:
-        plan = self._plan(["MISSING"])
+        plan = self._plan(["missing"])
 
         def fail_client() -> typing.Any:  # noqa: ANN401
             raise AssertionError("dry-run preflight must not touch the store")

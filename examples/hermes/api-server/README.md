@@ -17,14 +17,14 @@ Unlike every other hermes preset this one is inbound: the node claims TCP `9119`
 nix run .#hermes-api-server-up
 ```
 
-Then drop the secrets and restart. `API_SERVER_KEY` is the bearer token your frontends will present; generate a long random one:
+Store the env-file secret before launch. `API_SERVER_KEY` is the bearer token your frontends will present; generate a long random one:
 
 ```sh
-ix shell hermes -- sudo install -m0400 -o hermes -g hermes /dev/stdin /run/secrets/hermes.env <<EOF
+ix secret set hermes_env <<EOF
 OPENROUTER_API_KEY=sk-or-...
 API_SERVER_KEY=$(openssl rand -hex 32)
 EOF
-ix shell hermes -- sudo systemctl restart hermes-agent
+nix run .#hermes-api-server-up
 ```
 
 Smoke-test from inside the VM:

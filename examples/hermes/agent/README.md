@@ -11,17 +11,15 @@ Defaults: OpenRouter for the model, local SQLite memory, Edge TTS, a filesystem 
 nix run .#hermes-agent-up
 ```
 
-That brings the VM up with the Hermes daemon running but no API key. The next four lines seed the key, restart the unit, and open a chat:
+Store the env file first, then bring the VM up and open a chat:
 
 ```sh
-printf 'OPENROUTER_API_KEY=%s\n' "$OPENROUTER_API_KEY" \
-  | ix shell hermes -- sudo install -m0400 -o hermes -g hermes \
-      /dev/stdin /run/secrets/hermes.env
-ix shell hermes -- sudo systemctl restart hermes-agent
+printf 'OPENROUTER_API_KEY=%s\n' "$OPENROUTER_API_KEY" | ix secret set hermes_env
+nix run .#hermes-agent-up
 ix shell hermes -- hermes chat
 ```
 
-The first command writes the env file at the path the systemd unit reads from. The file lives outside `/nix/store` and is readable only by the `hermes` user. To rotate, rewrite it the same way.
+The fleet maps `hermes_env` to `/run/secrets/hermes.env`, owned by the `hermes` user. The file lives outside `/nix/store`. To rotate, run `ix secret set hermes_env` again and restart the unit if the process needs to re-read it.
 
 ## Shape
 
@@ -49,10 +47,11 @@ nodes.hermes = {
 };
 ```
 
-After rebuild, append the matching credentials to `/run/secrets/hermes.env`:
+Update the stored `hermes_env` value with all matching credentials, then restart the unit:
 
 ```sh
-ix shell hermes -- sudo tee -a /run/secrets/hermes.env <<'EOF'
+ix secret set hermes_env <<'EOF'
+OPENROUTER_API_KEY=...
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_ALLOWED_USERS=123456789
 TAVILY_API_KEY=tvly-...

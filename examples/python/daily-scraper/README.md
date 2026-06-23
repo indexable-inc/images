@@ -30,28 +30,25 @@ nix run .#python-daily-scraper-up
 
 The example leaves S3 sync disabled. [`service.nix`](service.nix) reads a
 `dailyScraper` module argument, so a fleet can enable S3 without forking the
-service module. The fleet declares the secret once, then the VM module consumes
-the generated runtime file reference:
+service module. Store the env file with `ix secret set daily_scraper_aws_env`,
+then have the fleet attach it as a runtime file:
 
 ```nix
 {
-  secrets = {
-    provider = {
-      type = "vaultwarden";
-      mountRoot = "/run/secrets";
-      collection = "production";
-    };
-    "daily-scraper/aws.env".key = "daily-scraper/aws-env";
+  deployment.secrets.daily_scraper_aws_env = {
+    file = "daily-scraper/aws.env";
+    owner = "root";
+    mode = "0400";
   };
 
   nodes.scraper.modules = [
     (
-      { secretRefs, ... }:
+      { ... }:
       {
         _module.args.dailyScraper.s3 = {
           uri = "s3://andrew-scraper-output/github";
           deleteRemoved = true;
-          awsEnvironmentFile = secretRefs."daily-scraper/aws.env";
+          awsEnvironmentFile = "/run/secrets/daily-scraper/aws.env";
         };
       }
     )
@@ -68,21 +65,23 @@ AWS_SECRET_ACCESS_KEY=...
 AWS_REGION=us-east-1
 ```
 
-The generated fleet plan carries the provider-facing key and the VM-facing path:
+The generated fleet plan carries the ix store key and VM-facing delivery target:
 
 ```json
 {
-  "secrets": {
-    "provider": {
-      "type": "vaultwarden",
-      "mountRoot": "/run/secrets",
-      "collection": "production"
-    },
-    "values": {
-      "daily-scraper/aws.env": {
-        "key": "daily-scraper/aws-env",
-        "path": "/run/secrets/daily-scraper/aws.env"
-      }
+  "nodes": {
+    "scraper": {
+      "secrets": [
+        {
+          "name": "daily_scraper_aws_env",
+          "target": {
+            "name": "daily-scraper/aws.env",
+            "injectAs": "file",
+            "owner": "root",
+            "mode": "0400"
+          }
+        }
+      ]
     }
   }
 }

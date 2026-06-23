@@ -26,12 +26,11 @@ The agent gets exactly one game-facing capability: a typed `run_command(command)
 nix run .#hermes-minecraft-operator-up
 ```
 
-Seed the model key and open a chat:
+Store the model key env file, bring the fleet up, and open a chat:
 
 ```sh
-printf 'OPENROUTER_API_KEY=%s\n' "$OPENROUTER_API_KEY" \
-  | ix shell hermes -- sudo install -m0400 -o hermes -g hermes /dev/stdin /run/secrets/hermes.env
-ix shell hermes -- sudo systemctl restart hermes-agent
+printf 'OPENROUTER_API_KEY=%s\n' "$OPENROUTER_API_KEY" | ix secret set hermes_env
+nix run .#hermes-minecraft-operator-up
 ix shell hermes -- hermes chat
 ```
 

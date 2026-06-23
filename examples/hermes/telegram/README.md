@@ -22,15 +22,15 @@ The [Hermes operator VM](../agent/) tuned as a Telegram chat companion: same one
 nix run .#hermes-telegram-up
 ```
 
-Then drop the secrets and restart the unit:
+Store the env-file secret, then bring the VM up. To rotate later, run `ix secret set hermes_env` again and restart the unit.
 
 ```sh
-ix shell hermes -- sudo install -m0400 -o hermes -g hermes /dev/stdin /run/secrets/hermes.env <<'EOF'
+ix secret set hermes_env <<'EOF'
 OPENROUTER_API_KEY=sk-or-...
 TELEGRAM_BOT_TOKEN=123456789:ABC...
 TELEGRAM_ALLOWED_USERS=123456789
 EOF
-ix shell hermes -- sudo systemctl restart hermes-agent
+nix run .#hermes-telegram-up
 ```
 
 `TELEGRAM_ALLOWED_USERS` is a comma-separated allowlist of numeric Telegram user IDs. It is the only authentication layer: anyone not on the list is ignored, and anyone on it talks to an agent with root in this VM. Keep it to IDs you control. To add a second user later, append the ID and restart the unit.

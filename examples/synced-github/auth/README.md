@@ -14,17 +14,17 @@ nix run .#synced-github-auth-up
 ## Shape
 
 - [`ix.nix`](ix.nix) defines the fleet: three `agent` replicas and a
-  `secrets` block that declares one `github/token` ref through `ix.secrets`.
-- [`agent.nix`](agent.nix) consumes `secretRefs."github/token"` and installs a
-  `git` credential helper that reads the token from its runtime path on demand.
+  `deployment.secrets.github_token` attachment that delivers the stored value
+  as `/run/secrets/github/token`.
+- [`agent.nix`](agent.nix) installs a `git` credential helper that reads the
+  token from that runtime path on demand.
 
 ## How the token reaches git
 
-`ix.secrets` turns the declaration into a path, `/run/secrets/github/token`,
-that every node sees. Only that path is known at build time. The token bytes
-are written at runtime by the ix secrets manager
-([#66](https://github.com/indexable-inc/index/issues/66)), so nothing secret
-enters the Nix store or the fleet plan.
+Store the value once with `ix secret set github_token`. The fleet declaration
+maps that account key to `/run/secrets/github/token` for every node. Only the
+key and target path enter the fleet plan; the token bytes stay in the ix secret
+store and are materialized when the VM is created.
 
 [`agent.nix`](agent.nix) registers a credential helper in `/etc/gitconfig`
 scoped to `https://github.com`. When `git` needs a credential it runs the

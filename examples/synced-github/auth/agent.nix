@@ -1,14 +1,13 @@
 {
   lib,
   pkgs,
-  secretRefs,
   ...
 }:
 let
-  # The fleet declares this once; every node resolves it to the same runtime
-  # path. Only the path is known at eval time. The token bytes live in the
-  # 0600 file the ix secrets manager writes at runtime.
-  tokenPath = secretRefs."github/token";
+  # The fleet maps the account store key `github_token` to this runtime file.
+  # Only the path is known at eval time. The token bytes live in the file ix
+  # writes when creating the VM.
+  tokenPath = "/run/secrets/github/token";
 
   # A git credential helper that answers `get` for github.com with the token
   # read from `tokenPath` on demand. Three properties carry the design:

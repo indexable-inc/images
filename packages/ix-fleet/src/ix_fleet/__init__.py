@@ -64,6 +64,22 @@ class HealthCheck(BaseModel):
     from_: typing.Literal["guest", "host"] = Field(alias="from")
 
 
+class SecretTarget(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    injectAs: typing.Literal["env", "file"]
+    owner: str | None = None
+    mode: str | int | None = None
+
+
+class SecretAttachment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    target: SecretTarget
+
+
 class FleetNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -81,38 +97,12 @@ class FleetNode(BaseModel):
     tags: list[str] = Field(default_factory=empty_str_list)
     groups: list[str] = Field(default_factory=empty_str_list)
     env: dict[str, str] = Field(default_factory=empty_str_dict)
-    # Names of secrets in the per-user store (`ix secret set NAME`) to attach to
-    # this VM at create time. Resolved server-side and injected as env vars or
-    # files exactly like `ix new --secret NAME`. References only, never values:
-    # plaintext belongs in the store, not the fleet plan.
-    secrets: list[str] = Field(default_factory=empty_str_list)
-    # Skip auto-attach of secrets marked `--default` in the store, matching
-    # `ix new --no-default-secrets`.
-    noDefaultSecrets: bool = False
+    # Secret store keys plus per-VM delivery targets. References only, never
+    # values: plaintext belongs in the ix store, not the fleet plan.
+    secrets: list[SecretAttachment] = Field(default_factory=list)
     l7ProxyPorts: list[int] = Field(default_factory=empty_int_list)
     dependsOn: list[str] = Field(default_factory=empty_str_list)
     healthChecks: dict[str, HealthCheck] = Field(default_factory=dict)
-
-
-class SecretProvider(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    type: str = Field(min_length=1)
-    mountRoot: str = Field(min_length=1)
-
-
-class SecretSpec(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    key: str = Field(min_length=1)
-    path: str = Field(min_length=1)
-
-
-class FleetSecrets(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    provider: SecretProvider
-    values: dict[str, SecretSpec] = Field(default_factory=dict)
 
 
 class FleetPlan(BaseModel):
@@ -120,11 +110,6 @@ class FleetPlan(BaseModel):
 
     order: list[str]
     nodes: dict[str, FleetNode]
-    secrets: FleetSecrets = Field(
-        default_factory=lambda: FleetSecrets(
-            provider=SecretProvider(type="runtime-directory", mountRoot="/run/secrets"),
-        )
-    )
 
     @model_validator(mode="after")
     def validate_graph(self) -> typing.Self:
@@ -380,10 +365,10 @@ async def verify_secrets_available(plan: FleetPlan, selectors: list[str], *, dry
     """
     referenced: set[str] = set()
     for node in selected_nodes(plan, selectors):
-        referenced.update(node.secrets)
+        referenced.update(secret.name for secret in node.secrets)
     if dry_run or not referenced:
         return
-    stored = {secret.name for secret in await client().list_secrets()}
+    stored = {secret.name for secret in await client().list_secrets()}  # type: ignore[attr-defined]
     missing = sorted(referenced - stored)
     if missing:
         raise RuntimeError(
@@ -396,10 +381,23 @@ async def verify_secrets_available(plan: FleetPlan, selectors: list[str], *, dry
 def secrets_note(node: FleetNode) -> str:
     parts: list[str] = []
     if node.secrets:
-        parts.append(f"secrets={sorted(node.secrets)}")
-    if node.noDefaultSecrets:
-        parts.append("no-default-secrets")
+        parts.append(f"secrets={sorted(secret.name for secret in node.secrets)}")
     return f", {', '.join(parts)}" if parts else ""
+
+
+def secret_payload(secret: SecretAttachment) -> dict[str, object]:
+    target: dict[str, object] = {
+        "name": secret.target.name,
+        "injectAs": secret.target.injectAs,
+    }
+    if secret.target.owner is not None:
+        target["owner"] = secret.target.owner
+    if secret.target.mode is not None:
+        target["mode"] = secret.target.mode
+    return {
+        "name": secret.name,
+        "target": target,
+    }
 
 
 async def create_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
@@ -417,8 +415,7 @@ async def create_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
         env=dict(sorted(node.env.items())),
         l7_proxy_ports=list(node.l7ProxyPorts),
         ipv4=node.ipv4,
-        secrets=sorted(node.secrets),
-        no_default_secrets=node.noDefaultSecrets,
+        secrets=[secret_payload(secret) for secret in node.secrets],  # type: ignore[call-arg]
     )
 
 
