@@ -386,7 +386,6 @@ let
           }
         )
       ) planValue.nodes;
-      inherit (planValue) secrets;
     };
 
   userLocalBinPath = ''
