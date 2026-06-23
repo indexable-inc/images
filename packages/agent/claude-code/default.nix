@@ -122,6 +122,13 @@
       (import (ix.paths.packagesRoot + "/agent/common.nix") { inherit lib ix repoPackages; })
       .defaultServers,
 
+  # Rule names dropped from the default house prompt (forwarded to
+  # ../system-prompt.nix's `omitRules`). Only affects the computed `systemPrompt`
+  # default below; ignored when `systemPrompt` is passed explicitly. Lets a
+  # consumer bake a variant minus a rule without restating the whole prompt, e.g.
+  # `claude-code.override { omitRules = [ "htmlDeliverable" ]; }`. `[ ]` keeps all.
+  omitRules ? [ ],
+
   # Text used AS Claude Code's system prompt, REPLACING the stock prompt. The
   # string is materialized to a store file and baked into the wrapper as
   # `--system-prompt-file=<path>`: passing by path (not inline text) keeps
@@ -139,7 +146,10 @@
   # backward-compatibility engineering rule, plus a preference for working in git
   # worktrees); set to `null` to bake no flag and ship the stock prompt alone.
   systemPrompt ?
-    (import (ix.paths.packagesRoot + "/agent/common.nix") { inherit lib ix repoPackages; })
+    (import (ix.paths.packagesRoot + "/agent/common.nix") {
+      inherit lib ix repoPackages;
+      promptOmitRules = omitRules;
+    })
     .systemPrompt,
 
   # Only the flake package set injects the Nushell writer; the overlay eval

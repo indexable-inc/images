@@ -4,9 +4,14 @@
   lib,
   ix,
   repoPackages ? { },
+  # Rule names dropped from the baked house prompt; forwarded to ./prompt.nix.
+  promptOmitRules ? [ ],
 }:
 let
-  prompt = import ./prompt.nix { inherit lib; };
+  prompt = import ./prompt.nix {
+    inherit lib;
+    omitRules = promptOmitRules;
+  };
   mcp = import ./mcp.nix { inherit lib ix repoPackages; };
 in
 prompt // mcp

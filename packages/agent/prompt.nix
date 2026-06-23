@@ -1,5 +1,9 @@
 # House system prompt helpers shared by agent CLI wrappers.
-{ lib }:
+{
+  lib,
+  # Rule names dropped from the baked prompt; forwarded to ./system-prompt.nix.
+  omitRules ? [ ],
+}:
 let
   providerNames = {
     claude = "Claude Code";
@@ -19,7 +23,7 @@ let
     provider:
     lib.concatStringsSep "\n\n" [
       (import ./system-prompt.nix {
-        inherit lib;
+        inherit lib omitRules;
         agentName = providerNames.${provider};
       })
       extraSystemPrompts.${provider}

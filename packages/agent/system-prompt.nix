@@ -1,6 +1,10 @@
 {
   lib,
   agentName ? "Claude Code",
+  # Rule names (the bindings in `order`) to drop from this build's prompt. Lets a
+  # consumer bake a variant without a given rule, e.g.
+  # `claude-code.override { omitRules = [ "htmlDeliverable" ]; }`. Default keeps every rule.
+  omitRules ? [ ],
 }:
 # The house system prompt the agent wrappers run with, REPLACING the stock prompt
 # where the upstream CLI supports replacement. Each rule is a
@@ -398,48 +402,55 @@ let
     requested, and keep navigation obvious.
   '';
 
+  # Each entry pairs a rule's name with its text so a consumer can drop one by name
+  # (via `omitRules`) without string surgery on the joined prompt.
   order = [
-    shokunin
-    promptSource
-    validate
-    liveSystemEvidence
-    reproduceClaims
-    firstPrinciples
-    experimentDefault
-    promptEval
-    matchSurroundingCode
-    rustCollectStyle
-    inlineComments
-    tieToIssue
-    preV1
-    oneImplementation
-    separateDefinitions
-    fixAtSource
-    worktree
-    shellCwd
-    backgroundSubagents
-    modelTiering
-    harness
-    indexKernel
-    structuredPrimitives
-    autonomy
-    agenticBias
-    decisiveness
-    faithfulReporting
-    noMetaNarration
-    byteExact
-    forceMerge
-    surfaceScopeChanges
-    respectGuards
-    blockedPath
-    stackedRebase
-    cleanupMerged
-    landingBanner
-    noEmDashes
-    coordinateBranches
-    discloseAi
-    reportToPlaybook
-    htmlDeliverable
+    { name = "shokunin"; text = shokunin; }
+    { name = "promptSource"; text = promptSource; }
+    { name = "validate"; text = validate; }
+    { name = "liveSystemEvidence"; text = liveSystemEvidence; }
+    { name = "reproduceClaims"; text = reproduceClaims; }
+    { name = "firstPrinciples"; text = firstPrinciples; }
+    { name = "experimentDefault"; text = experimentDefault; }
+    { name = "promptEval"; text = promptEval; }
+    { name = "matchSurroundingCode"; text = matchSurroundingCode; }
+    { name = "rustCollectStyle"; text = rustCollectStyle; }
+    { name = "inlineComments"; text = inlineComments; }
+    { name = "tieToIssue"; text = tieToIssue; }
+    { name = "preV1"; text = preV1; }
+    { name = "oneImplementation"; text = oneImplementation; }
+    { name = "separateDefinitions"; text = separateDefinitions; }
+    { name = "fixAtSource"; text = fixAtSource; }
+    { name = "worktree"; text = worktree; }
+    { name = "shellCwd"; text = shellCwd; }
+    { name = "backgroundSubagents"; text = backgroundSubagents; }
+    { name = "modelTiering"; text = modelTiering; }
+    { name = "harness"; text = harness; }
+    { name = "indexKernel"; text = indexKernel; }
+    { name = "structuredPrimitives"; text = structuredPrimitives; }
+    { name = "autonomy"; text = autonomy; }
+    { name = "agenticBias"; text = agenticBias; }
+    { name = "decisiveness"; text = decisiveness; }
+    { name = "faithfulReporting"; text = faithfulReporting; }
+    { name = "noMetaNarration"; text = noMetaNarration; }
+    { name = "byteExact"; text = byteExact; }
+    { name = "forceMerge"; text = forceMerge; }
+    { name = "surfaceScopeChanges"; text = surfaceScopeChanges; }
+    { name = "respectGuards"; text = respectGuards; }
+    { name = "blockedPath"; text = blockedPath; }
+    { name = "stackedRebase"; text = stackedRebase; }
+    { name = "cleanupMerged"; text = cleanupMerged; }
+    { name = "landingBanner"; text = landingBanner; }
+    { name = "noEmDashes"; text = noEmDashes; }
+    { name = "coordinateBranches"; text = coordinateBranches; }
+    { name = "discloseAi"; text = discloseAi; }
+    { name = "reportToPlaybook"; text = reportToPlaybook; }
+    { name = "htmlDeliverable"; text = htmlDeliverable; }
   ];
+
+  unknownOmits = builtins.filter (name: !(builtins.any (rule: rule.name == name) order)) omitRules;
+  kept = builtins.filter (rule: !(builtins.elem rule.name omitRules)) order;
 in
-lib.concatStringsSep "\n\n" order
+assert lib.assertMsg (unknownOmits == [ ])
+  "system-prompt.nix: omitRules names not found in order: ${lib.concatStringsSep ", " unknownOmits}";
+lib.concatStringsSep "\n\n" (map (rule: rule.text) kept)
