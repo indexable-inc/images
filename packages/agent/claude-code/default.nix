@@ -169,7 +169,7 @@ let
   # Claude treats repeated settings flags as first-wins.
 
   # Build the hook runner once; shared policy renders it for each wrapper.
-  hookRunner = import ./hooks.nix {
+  hookRunner = import (ix.paths.packagesRoot + "/agent/policy/hook-runner.nix") {
     inherit
       lib
       runCommand

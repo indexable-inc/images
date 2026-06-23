@@ -122,7 +122,7 @@ let
 
   # Codex reads hooks from config, not from launch flags, so expose the rendered
   # shared hook policy for home-manager or managed requirements consumers.
-  hookRunner = import (ix.paths.packagesRoot + "/agent/claude-code/hooks.nix") {
+  hookRunner = import (ix.paths.packagesRoot + "/agent/policy/hook-runner.nix") {
     inherit
       lib
       runCommand

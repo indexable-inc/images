@@ -125,12 +125,12 @@ independent work, do work through the index Python kernel and `search` priors,
 gate admin/force merges on a fresh local build, never use em dashes, and more
 (`system-prompt.nix:7-37`). Set to `null` to ship the stock prompt alone.
 
-### Hooks (`hooks.nix`, `default.nix:209-285`)
+### Hooks (`packages/agent/policy/hook-runner.nix`, `default.nix:209-285`)
 
-Three hooks, all subcommands of one compiled binary (`packages/claude-hooks`)
+Lifecycle hooks, all subcommands of one compiled binary (`packages/agent/claude-hooks`)
 wrapped with their tool paths and the baked primary-checkout default; each fails
 open and silent
-(`hooks.nix:1-20`):
+(`packages/agent/policy/hook-runner.nix:1-20`):
 
 - `SessionStart` -> `session-digest`: cats the pre-rendered fleet context digest
   (`~/.cache/ix/context-digest.md`), capped ~6000 chars. Kill switch

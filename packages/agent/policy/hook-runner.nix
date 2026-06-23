@@ -1,5 +1,6 @@
-# The hooks are subcommands of one compiled binary (packages/agent/claude-hooks)
-# rather than hand-rolled shell scripts. Each fails OPEN and SILENT (any
+# Shared hook runner wrapper for Claude Code and Codex. The hooks are
+# subcommands of one compiled binary (packages/agent/claude-hooks) rather than
+# hand-rolled shell scripts. Each fails OPEN and SILENT (any
 # missing input, parse error, or kill-switch exits with no stdout: a noisy or
 # broken hook is strictly worse than no hook). See that crate for the full
 # design and its measured rationale:

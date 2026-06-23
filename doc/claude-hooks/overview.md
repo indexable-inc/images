@@ -1,6 +1,6 @@
 # claude-hooks
 
-`packages/claude-hooks` is one compiled binary with three Claude Code hook
+`packages/agent/claude-hooks` is one compiled binary with Claude Code hook
 subcommands, replacing the old hand-rolled `writeShellScript` hooks in
 `packages/agent/claude-code`. The governing rule: every hook fails OPEN and SILENT.
 Any missing input, parse error, or kill-switch returns with no stdout, because a
@@ -97,16 +97,16 @@ capped to `PRIORS_CAP = 4800` chars (~1200 tokens) (`render_priors`,
 [timestamp] score N` (`provenance`, `src/main.rs:376-396`), matching the old jq
 projection so the model can discount stale content. In claude-code this hook (and
 `IX_SEARCH`) is wired only when the `search` sibling package is in scope
-(`hooks.nix:17-20,35`).
+(`packages/agent/policy/hook-runner.nix:17-20,35`).
 
 ## How it is built and wired
 
 `default.nix` selects the `claude-hooks` binary with
 `ix.cargoUnit.selectBinaryWithTests` (flake output `claude-hooks`,
 `package.nix`). The claude-code layer re-wraps it in
-`packages/agent/claude-code/hooks.nix`: `makeBinaryWrapper` sets `IX_GIT`,
+`packages/agent/policy/hook-runner.nix`: `makeBinaryWrapper` sets `IX_GIT`,
 `IX_DEFAULT_PRIMARY_CHECKOUTS`, and (conditionally) `IX_SEARCH`, then registers
-the three subcommands as hook commands in the generated settings JSON
+the subcommands as hook commands in the generated settings JSON
 (`packages/agent/claude-code/default.nix:244-285`) with generous per-hook timeouts (5s,
 10s, 5s) that sit well past the fail-open budgets. `install-check.nix` asserts
 the fail-open behavior, the digest cap, and the guard deny/allow paths.
