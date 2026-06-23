@@ -5,7 +5,6 @@
 # at /run/secrets/hermes.env), plus the long-poll Telegram platform and
 # a chat-tuned persona. See README.md for the BotFather walkthrough.
 index.lib.mkFleet {
-  defaults = [ { ix.image.tag = "hermes-telegram"; } ];
 
   nodes.hermes = {
     modules = [

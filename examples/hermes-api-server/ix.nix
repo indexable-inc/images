@@ -11,7 +11,6 @@ let
   eastWestGroup = "hermes-api";
 in
 index.lib.mkFleet {
-  defaults = [ { ix.image.tag = "hermes-api-server"; } ];
 
   nodes.hermes = {
     groups = [ eastWestGroup ];

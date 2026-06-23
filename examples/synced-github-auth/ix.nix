@@ -1,7 +1,6 @@
 { index }:
 
 index.lib.mkFleet {
-  defaults = [ { ix.image.tag = "synced-github-auth"; } ];
 
   # One GitHub token, declared once for the whole fleet. `ix.secrets`
   # normalizes this into a runtime path every node sees at the same place

@@ -19,11 +19,6 @@
         type = lib.types.str;
         description = "Image name (the OCI repository).";
       };
-      tag = lib.mkOption {
-        type = lib.types.str;
-        default = "latest";
-        description = "Image tag.";
-      };
     };
     build.ociImage = lib.mkOption {
       type = lib.types.package;
@@ -82,7 +77,8 @@
         '';
 
         stream = pkgs.dockerTools.streamLayeredImage {
-          inherit (config.ix.image) name tag;
+          inherit (config.ix.image) name;
+          tag = "latest";
           # Below the 127-layer registry limit with headroom for systemRoot
           # plus a few user layers.
           maxLayers = 67;

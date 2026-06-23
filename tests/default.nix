@@ -78,10 +78,7 @@ let
   minecraftBedrockModule =
     { config, ... }:
     {
-      ix.image = {
-        name = "minecraft-bedrock";
-        tag = config.services.minecraft-bedrock.package.version;
-      };
+      ix.image.name = "minecraft-bedrock";
 
       services.minecraft-bedrock = {
         enable = true;
@@ -637,10 +634,7 @@ let
     let
       config = evalConfig [
         {
-          ix.image = {
-            name = "test/symphony-module";
-            tag = "test";
-          };
+          ix.image.name = "test/symphony-module";
           services.symphony = {
             enable = true;
             package = pkgs.hello;
@@ -2800,9 +2794,8 @@ let
         message = "base profile should reserve ix guest sidecar listener ports";
       }
       {
-        assertion =
-          base.imageConfig.ix.image.name == "ix/base" && base.imageConfig.ix.image.tag == "latest";
-        message = "base image should publish as ix/base:latest";
+        assertion = base.imageConfig.ix.image.name == "ix/base";
+        message = "base image should publish from the ix/base repository";
       }
       {
         assertion = lib.elemAt base.config.nix.settings.substituters 0 == "https://cache.ix.dev";
@@ -3052,10 +3045,7 @@ let
         message = "python-daily-scraper fleet plan should include a guest-side timer health check";
       }
       {
-        assertion =
-          !dailyScraperExample.plan.ipv4
-          && dailyScraperExample.plan.snapshot
-          && dailyScraperExample.plan.replacementImage.imageTag == "daily-scraper";
+        assertion = !dailyScraperExample.plan.ipv4 && dailyScraperExample.plan.snapshot;
         message = "python-daily-scraper fleet plan should keep the worker private with snapshots on";
       }
       {
@@ -3659,8 +3649,8 @@ let
 
     minecraft = [
       {
-        assertion = minecraft.config.ix.image.tag == defaultMinecraftVersion;
-        message = "default Minecraft module tag should follow versions.nix default";
+        assertion = minecraft.cfg.version == "26.1.2";
+        message = "default Minecraft module should follow versions.nix default runtime version";
       }
       {
         assertion = minecraft.cfg.properties."max-players" == 100000;

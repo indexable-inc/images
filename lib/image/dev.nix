@@ -110,7 +110,6 @@ let
           { name, ... }:
           {
             ix.image.name = lib.mkDefault name;
-            ix.image.tag = lib.mkDefault "ix-dev";
           }
         )
         module

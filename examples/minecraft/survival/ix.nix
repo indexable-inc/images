@@ -1,7 +1,6 @@
 { index }:
 
 index.lib.mkFleet {
-  defaults = [ { ix.image.tag = "survival"; } ];
 
   nodes.survival = {
     # The minecraft module declares `ix.healthChecks.minecraft`; `ix-fleet up`

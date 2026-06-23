@@ -63,14 +63,13 @@ let
   };
 
   mkVariant =
-    tag:
+    _tag:
     {
       loader,
       version,
       mods,
     }:
     {
-      ix.image.tag = tag;
       services.minecraft = {
         inherit version;
         mods = lib.genAttrs mods (_: { });

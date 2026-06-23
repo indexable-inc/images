@@ -3,7 +3,6 @@ let
   eastWestGroup = "east-west-firewall";
 in
 index.lib.mkFleet {
-  defaults = [ { ix.image.tag = "east-west-firewall"; } ];
 
   nodes = {
     service = {

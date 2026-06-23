@@ -3,7 +3,6 @@ let
   eastWestGroup = "ray-cluster";
 in
 index.lib.mkFleet {
-  defaults = [ { ix.image.tag = "ray-cluster"; } ];
 
   nodes = {
     ray-head = {

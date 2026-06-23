@@ -35,7 +35,6 @@ class ReplacementImage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     imageName: str = Field(min_length=1)
-    imageTag: str = Field(min_length=1)
     destination: str = Field(min_length=1)
     source: str = Field(min_length=1)
     sourceDrv: str = Field(min_length=1)

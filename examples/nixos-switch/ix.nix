@@ -5,7 +5,6 @@
 # running VM in place. Edit `configuration.nix`, run it again, and the VM
 # converges.
 index.lib.mkFleet {
-  defaults = [ { ix.image.tag = "nixos-switch"; } ];
 
   nodes.devbox = {
     modules = [ ./configuration.nix ];

@@ -18,7 +18,6 @@ let
   eastWestGroup = "minecraft-blocks";
 in
 index.lib.mkFleet {
-  defaults = [ { ix.image.tag = "minecraft-blocks"; } ];
 
   nodes = {
     # The single durable, replayable source of truth.

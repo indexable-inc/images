@@ -1,6 +1,5 @@
 { index }:
 index.lib.mkFleet {
-  defaults = [ { ix.image.tag = "declared-groups"; } ];
 
   nodes = {
     # No fleet-level `groups`: the api image itself declares

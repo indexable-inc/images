@@ -31,7 +31,6 @@ let
       bootstrapImage = "registry.ix.dev/ix/base:latest";
       replacementImage = {
         imageName = "api";
-        imageTag = "latest";
         destination = "registry.ix.dev/example/api:latest";
         source = "/nix/store/api-image.tar";
         sourceDrv = "/nix/store/api-image.drv";
@@ -84,7 +83,6 @@ let
       bootstrapImage = "registry.ix.dev/ix/base:latest";
       replacementImage = {
         imageName = name;
-        imageTag = "latest";
         destination = "registry.ix.dev/example/${name}:latest";
         source = "/nix/store/${name}-image.tar";
         sourceDrv = "/nix/store/${name}-image.drv";

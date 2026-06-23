@@ -25,7 +25,6 @@ def fleet_node(name: str, *, depends_on: list[str] | None = None) -> dict[str, t
         "bootstrapImage": "registry.ix.dev/ix/base:latest",
         "replacementImage": {
             "imageName": name,
-            "imageTag": "latest",
             "destination": f"registry.ix.dev/example/{name}:latest",
             "source": f"/nix/store/{name}-image.tar",
             "sourceDrv": f"/nix/store/{name}-image.drv",
@@ -179,7 +178,6 @@ class PushReplacementImageTests(unittest.TestCase):
                     "bootstrapImage": "registry.ix.dev/ix/base:latest",
                     "replacementImage": {
                         "imageName": "health-check-nginx",
-                        "imageTag": "nginx-lifecycle",
                         "destination": "health-check-nginx:nginx-lifecycle",
                         "source": str(source),
                         "sourceDrv": "/nix/store/example-image.drv",

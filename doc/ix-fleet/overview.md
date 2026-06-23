@@ -78,7 +78,7 @@ each node key matches its `name`; and that every `dependsOn` names a real node.
   `nixosConfigurations` (see `examples/nixos-switch-multi/flake.nix` for a
   direct `ix up` flake and `examples/dev-fleet/default.nix` for the mkDev
   wrapper).
-- **`ReplacementImage`** (`:34`): `imageName`, `imageTag`, `destination`,
+- **`ReplacementImage`** (`:34`): `imageName`, `destination`,
   `source`, `sourceDrv` (the OCI image derivation to realise and push).
 - **`HealthCheck`** (`:54`): `description`, `command` (argv), `timeoutSec`,
   `attempts`, `intervalSec`, `requiresIpv4`, and `from` (`guest`|`host`, stored
@@ -121,7 +121,7 @@ are what `switch` is for.
   builds a spec `{"nodes": {name: {command, depends_on}}}` where each command
   re-invokes `ix-fleet ... _<verb>-node <name>` with the forwarded flags; it also
   adds a serialization edge between nodes that share a
-  `replacementImage.destination` so the same image tag is not pushed twice
+  `replacementImage.destination` so the same replacement image is not pushed twice
   concurrently. `run_dag_runner` resolves the runner from `IX_FLEET_DAG_RUNNER`
   or `dag-runner` on `PATH`, writes a temp spec, execs it, and turns a nonzero
   exit into the process exit status. `--dry-run` runs the per-node workflows

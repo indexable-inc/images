@@ -41,9 +41,7 @@ nothing is recreated.
 
 ## Fork it
 
-Copy this directory into your own repo, keep `flake.nix` as the entrypoint, and change `ix.image.tag` in
-`ix.nix` to your own registry namespace. The switch path needs no admin
-rights: it builds and activates your own system onto your own VM.
+Copy this directory into your own repo and keep `flake.nix` as the entrypoint. The switch path needs no admin rights: it builds and activates your own system onto your own VM.
 
 ## Scope
 

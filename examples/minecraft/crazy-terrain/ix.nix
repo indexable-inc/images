@@ -1,7 +1,6 @@
 { index }:
 
 index.lib.mkFleet {
-  defaults = [ { ix.image.tag = "crazy-terrain"; } ];
 
   nodes.crazy-terrain = {
     # The minecraft module declares `ix.healthChecks.minecraft`; `ix-fleet up`

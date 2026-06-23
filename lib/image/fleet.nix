@@ -243,9 +243,8 @@ let
     let
       config = nodeConfigs.${name};
       imageName = config.ix.image.name;
-      imageTag = config.ix.image.tag;
       deploy = spec.deployment;
-      replacementDestination = deploy.destination or "${imageName}:${imageTag}";
+      replacementDestination = deploy.destination or "${imageName}:latest";
       switchBuildOn = deploy.switch.buildOn or "remote";
       ipv4HealthChecks = lib.filterAttrs (_: check: check.requiresIpv4) config.ix.healthChecks;
       # ix up expects a system out-path for local copy and a .drv for remote
@@ -290,10 +289,7 @@ let
       };
       inherit (deploy) bootstrapImage;
       replacementImage = {
-        inherit
-          imageName
-          imageTag
-          ;
+        inherit imageName;
         destination = replacementDestination;
         source = unsafeDiscardStringContext "${config.ix.build.ociImage}";
         sourceDrv = unsafeDiscardStringContext config.ix.build.ociImage.drvPath;

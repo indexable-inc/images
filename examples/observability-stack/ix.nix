@@ -3,7 +3,6 @@ let
   eastWestGroup = "observability-stack";
 in
 index.lib.mkFleet {
-  defaults = [ { ix.image.tag = "observability-stack"; } ];
 
   nodes = {
     observability = {

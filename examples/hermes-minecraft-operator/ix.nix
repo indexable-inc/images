@@ -15,7 +15,6 @@ let
   eastWestGroup = "hermes-minecraft";
 in
 index.lib.mkFleet {
-  defaults = [ { ix.image.tag = "hermes-minecraft-operator"; } ];
 
   nodes = {
     minecraft = {
