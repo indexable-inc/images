@@ -30,10 +30,14 @@ let
       ixForPackages
       ;
     ix = ixForPackages;
-    # Capability passed only on the flake-package path: a writer the package can
-    # use to build its `passthru.updateScript`, pre-applied to the caller's pkgs
-    # so flake-output packages need not re-thread `ix` through callPackage. The
-    # overlay path leaves it unset, which is the signal to omit the updater.
+    # The Nushell writer pre-applied to the caller's pkgs, for packages that
+    # build a checked Nushell command directly (e.g. chrome-vm, astlog scan).
+    writeNushellApplication = ixForPackages.writeNushellApplication pkgs;
+    # Same writer, exposed under a capability-oriented name for the nullable
+    # updateScript path: a writer the package can use to build its
+    # `passthru.updateScript`, pre-applied to the caller's pkgs so flake-output
+    # packages need not re-thread `ix` through callPackage. The overlay path
+    # leaves it unset, which is the signal to omit the updater.
     updateScriptWriter = ixForPackages.writeNushellApplication pkgs;
   };
   inherit (import ./util/deep-merge.nix { inherit lib; }) strictList;
