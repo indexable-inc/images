@@ -129,7 +129,7 @@
     # a release tag so routine bumps are review events; `nix flake update
     # hermes-agent` after bumping the tag is the supported intake path.
     # Surfaced through `ix.hermesAgent` and consumed by
-    # `examples/hermes-agent/`.
+    # `examples/hermes/agent/`.
     hermes-agent = {
       url = "github:NousResearch/hermes-agent/v2026.5.16";
       inputs.nixpkgs.follows = "nixpkgs";

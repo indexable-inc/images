@@ -120,7 +120,7 @@ Single node, everything local:
 { services.ix-observability.enable = true; }
 ```
 
-Fleet: one gateway, many agents (the [observability-stack example](../../../examples/observability-stack/)
+Fleet: one gateway, many agents (the [observability-stack example](../../../examples/observability/stack/)
 wires exactly this):
 
 ```nix

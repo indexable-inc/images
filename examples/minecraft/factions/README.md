@@ -13,7 +13,7 @@ players.
 
 ```sh
 # From the index repo root.
-nix run .#factions-up
+nix run .#minecraft-factions-up
 ```
 
 ## Shape

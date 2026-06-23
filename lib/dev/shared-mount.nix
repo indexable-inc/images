@@ -1,7 +1,7 @@
 /**
   SMB share module builders for the dev-fleet identity volume.
 
-  Generalized from `examples/multi-client-file-sharing`: one node runs
+  Generalized from `examples/multi-client/file-sharing`: one node runs
   userspace `smbd` (ix guests share the host `linux-ix` kernel, so the
   server cannot be in-kernel `ksmbd`) and exports a single share; every
   other node mounts it over CIFS with `cifs.ko` from the host kernel. The
@@ -15,7 +15,7 @@
 
   Security note: `guestOk` defaults to `true` so the example fleet comes up
   with `ix up` and no secrets plumbing, the same tradeoff
-  `examples/multi-client-file-sharing` documents. The share is only reachable
+  `examples/multi-client/file-sharing` documents. The share is only reachable
   on the fleet's private east-west group (mkDev joins one), never publicly.
   A production identity volume should set `guestOk = false`, add a Samba user
   with `smbpasswd`, and pass `credentials=` to the client mount through a

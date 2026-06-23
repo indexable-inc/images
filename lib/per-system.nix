@@ -744,19 +744,23 @@ let
   };
 
   # Non-NixOS OCI example images (ubuntu, debian, ...). They live under
-  # `examples/_non-nix-oci` so fleet discovery skips the subtree (leading
-  # underscore). Each is imported with the example `{ index }` contract and
-  # exposed as an opt-in package only, not a default CI check.
+  # `examples/oci` with the same hierarchical shape as fleet examples, but
+  # return images instead of fleet plans and are exposed as opt-in packages only.
   nonNixExampleImages = lib.mapAttrs' (
     name: entry:
     lib.nameValuePair "non-nix-${name}" (
-      import entry.path {
+      import (entry.path + "/ix.nix") {
         index = {
           lib = ix;
         };
       }
     )
-  ) (ix.discoverTree { root = paths.examples + "/_non-nix-oci"; });
+  ) (
+    ix.discoverTree {
+      root = paths.examples + "/oci";
+      requiredFiles = [ "ix.nix" ];
+    }
+  );
 
   # The content-addressed `image.json` for each non-Nix example, surfaced as its
   # own package so the small artifact is buildable directly (`nix build

@@ -8,7 +8,7 @@
 # success line and opened its JSON Lines log) with no enable-time exception in
 # the journal.
 #
-# Why not boot `examples/minecraft-blocks` producer.nix verbatim: that module
+# Why not boot `examples/minecraft/blocks` producer.nix verbatim: that module
 # is a fleet member (it resolves `nodes.log` / `nodes.view` endpoints and ships
 # telemetry), so it cannot evaluate as a standalone machine. The slice under
 # test here is exactly the producer's `services.minecraft` block: same server
@@ -32,9 +32,9 @@
   paths,
 }:
 let
-  packages = import (paths.examples + "/minecraft-blocks/packages.nix") { inherit ix pkgs; };
+  packages = import (paths.examples + "/minecraft/blocks/packages.nix") { inherit ix pkgs; };
 
-  # The producer pins this Minecraft version (examples/minecraft-blocks).
+  # The producer pins this Minecraft version (examples/minecraft/blocks).
   version = "26.1.2";
   paperJar = ix.artifacts.minecraft.servers."${version}-paper";
 
@@ -163,7 +163,7 @@ pkgs.testers.runNixOSTest {
         diskSize = 4096;
       };
 
-      # Mirrors the producer node's server config (examples/minecraft-blocks/
+      # Mirrors the producer node's server config (examples/minecraft/blocks/
       # producer.nix), minus the fleet-only transport/telemetry legs. A flat
       # world keeps first-boot generation fast; the plugin's behavior does not
       # depend on terrain.

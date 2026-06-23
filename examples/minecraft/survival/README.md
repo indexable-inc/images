@@ -10,7 +10,7 @@ Bedrock clients share the same world.
 
 ```sh
 # From the index repo root.
-nix run .#survival-up
+nix run .#minecraft-survival-up
 ```
 
 ## Shape

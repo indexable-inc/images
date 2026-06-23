@@ -39,18 +39,19 @@ let
     dir: lib.removePrefix "${builtins.toString paths.packagesRoot}/" (builtins.toString dir)
   ) packageRegistry.packageDirsWithoutMetadata;
   fleetWrapperReadmes = [
-    "hermes-agent"
-    "hermes-api-server"
-    "hermes-minecraft-operator"
-    "hermes-telegram"
+    "hermes/agent"
+    "hermes/api-server"
+    "hermes/minecraft-operator"
+    "hermes/telegram"
+    "minecraft/blocks"
     "minecraft/crazy-terrain"
     "minecraft/factions"
     "minecraft/survival"
-    "multi-client-file-sharing"
-    "polyglot-dev"
-    "python-daily-scraper"
-    "ray-cluster"
-    "synced-github-auth"
+    "multi-client/file-sharing"
+    "polyglot/dev"
+    "python/daily-scraper"
+    "ray/cluster"
+    "synced-github/auth"
   ];
 
   versions = import (paths.minecraftCatalogs + "/versions.nix") {
@@ -1904,7 +1905,7 @@ let
 
   dailyScraperExample =
     let
-      fleet = import (paths.examples + "/python-daily-scraper/ix.nix") {
+      fleet = import (paths.examples + "/python/daily-scraper/ix.nix") {
         index = {
           lib = ix;
         };
@@ -1920,7 +1921,7 @@ let
 
   nginxLifecycleExample =
     let
-      fleet = import (paths.examples + "/nginx-lifecycle/ix.nix") {
+      fleet = import (paths.examples + "/nginx/lifecycle/ix.nix") {
         index = {
           lib = ix;
         };
@@ -1935,7 +1936,7 @@ let
 
   s3StorageExample =
     let
-      fleet = import (paths.examples + "/s3-storage/ix.nix") {
+      fleet = import (paths.examples + "/s3/storage/ix.nix") {
         index = {
           lib = ix;
         };
@@ -1950,7 +1951,7 @@ let
 
   observabilityStackExample =
     let
-      fleet = import (paths.examples + "/observability-stack/ix.nix") {
+      fleet = import (paths.examples + "/observability/stack/ix.nix") {
         index = {
           lib = ix;
         };
@@ -1992,7 +1993,7 @@ let
   dailyScraperS3 =
     let
       config = evalConfig [
-        (paths.examples + "/python-daily-scraper/service.nix")
+        (paths.examples + "/python/daily-scraper/service.nix")
         {
           _module.args.dailyScraper = {
             s3 = {
@@ -2296,7 +2297,7 @@ let
       portClaim = noYourkitConfig.ix.networking.portClaims.minestom-yourkit or null;
     };
 
-  nomadSecretRefsExample = import (paths.examples + "/nomad-secret-refs/ix.nix") {
+  nomadSecretRefsExample = import (paths.examples + "/nomad/secret-refs/ix.nix") {
     index = {
       lib = ix;
     };
@@ -2304,7 +2305,7 @@ let
 
   minecraftBlocksExample =
     let
-      fleet = import (paths.examples + "/minecraft-blocks/ix.nix") {
+      fleet = import (paths.examples + "/minecraft/blocks/ix.nix") {
         index = {
           lib = ix;
         };
@@ -2312,8 +2313,8 @@ let
       # The buildable artifacts (plugin jar, integration check) built directly
       # so the integration check can be pulled into the `eval` aggregate via
       # `helperScript`.
-      packages = import (paths.examples + "/minecraft-blocks/packages.nix") { inherit ix pkgs; };
-      schema = import (paths.examples + "/minecraft-blocks/schema.nix") { inherit lib; };
+      packages = import (paths.examples + "/minecraft/blocks/packages.nix") { inherit ix pkgs; };
+      schema = import (paths.examples + "/minecraft/blocks/schema.nix") { inherit lib; };
     in
     {
       inherit fleet packages schema;
@@ -3155,7 +3156,7 @@ let
       }
       {
         # The example supplies a configFile, so it must clear that gate.
-        assertion = failedAssertionsFor [ (paths.examples + "/s3-storage/service.nix") ] == [ ];
+        assertion = failedAssertionsFor [ (paths.examples + "/s3/storage/service.nix") ] == [ ];
         message = "s3-storage example should satisfy the ix-seaweedfs credentials assertion";
       }
     ];
@@ -4655,13 +4656,13 @@ let
 
     fleet = [
       {
-        assertion = builtins.pathExists (paths.examples + "/nixos-switch/flake.nix");
+        assertion = builtins.pathExists (paths.examples + "/nixos/switch/flake.nix");
         message = "native ix up examples should include the flake.nix entrypoint the CLI resolves";
       }
       {
         assertion =
-          builtins.pathExists (paths.examples + "/dev-fleet/ix.nix")
-          && builtins.pathExists (paths.examples + "/dev-fleet/dev.nix");
+          builtins.pathExists (paths.examples + "/dev/fleet/ix.nix")
+          && builtins.pathExists (paths.examples + "/dev/fleet/dev.nix");
         message = "dev-fleet should expose ix.nix as the mkDev entrypoint and dev.nix as the editable module";
       }
       {
@@ -5044,8 +5045,8 @@ let
     grep -q 'idempotent_total=2977' ${minecraftBlocksExample.packages.loadFixtures}/result
     grep -qE 'pk_granules=[0-9]+ skip_granules=[0-9]+' ${minecraftBlocksExample.packages.loadFixtures}/result
     test -s ${minecraftBlocksExample.packages.loadFixtures}/events.jsonl
-    test "$(wc -l < ${(paths.examples + "/minecraft-blocks/fixtures.jsonl")})" = "2977"
-    grep -q '"block_type":"minecraft:stone"' ${(paths.examples + "/minecraft-blocks/fixtures.jsonl")}
+    test "$(wc -l < ${(paths.examples + "/minecraft/blocks/fixtures.jsonl")})" = "2977"
+    grep -q '"block_type":"minecraft:stone"' ${(paths.examples + "/minecraft/blocks/fixtures.jsonl")}
     # The query tool reads with FINAL so counts are exact under the idempotent
     # ReplacingMergeTree (merge-time dedup forced at read), not only after a
     # background merge. Grep the rendered helper for the FINAL table reference.

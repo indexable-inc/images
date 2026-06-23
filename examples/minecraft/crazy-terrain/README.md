@@ -13,7 +13,7 @@ roughly `y ~2060`.
 
 ```sh
 # From the index repo root.
-nix run .#crazy-terrain-up
+nix run .#minecraft-crazy-terrain-up
 ```
 
 ## Shape

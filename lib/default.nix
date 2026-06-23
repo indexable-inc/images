@@ -136,6 +136,7 @@ let
   markdown = import ./util/markdown.nix { inherit lib; };
   skills = import ./skills.nix { inherit lib paths; };
   agents = import ./agents.nix { inherit lib markdown; };
+  hermes = import ./hermes { };
   claudePlugin = import ./claude-plugin.nix { inherit lib skills; };
   # Shared JetBrains Islands palette (both variants), the single source of truth
   # for syntax color across the repo: the code-highlight crate embeds this JSON
@@ -430,6 +431,7 @@ let
       claudePlugin
       deepMerge
       goUnit
+      hermes
       languages
       lists
       mcp

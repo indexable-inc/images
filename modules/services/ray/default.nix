@@ -22,7 +22,7 @@
 # The node-level correctness here (pinned inter-node ports, a SHORT `/run/ray`
 # temp-dir so Ray's AF_UNIX plasma socket stays under the 108-byte sun_path
 # limit, and PrivateDevices/PrivateUsers off so an attaching kernel can map the
-# shared-memory object store) mirrors the proven `examples/ray-cluster`
+# shared-memory object store) mirrors the proven `examples/ray/cluster`
 # cluster-node module. Use nixpkgs `python3Packages.ray` -- the same Ray the
 # ix-mcp interpreter imports, so the cluster and the kernels driving it run an
 # identical version (Ray requires matching versions cluster-wide) and the

@@ -130,11 +130,10 @@ let
 
   /**
     Discovered example fleets, built for a given host system. Discovery
-    walks two layouts side by side: flat `examples/<name>/ix.nix`
-    and nested `examples/<category>/<name>/ix.nix`. A directory is
-    treated as a category when it has no `ix.nix` of its own. Keys
-    in the returned attrset are always the example's own name; the
-    Each fleet is imported with `{ index = { lib = ix; }; }` to match
+    walks the hierarchical `examples/<category>/<name>/ix.nix` layout.
+    Keys in the returned attrset join the category and name with `-`, so
+    `examples/hermes/api-server` contributes `hermes-api-server`. Each
+    fleet is imported with `{ index = { lib = ix; }; }` to match
     the contract examples already use, with `mkFleet` swapped for the
     host-system variant so the wrapper derivations under
     `.up`/`.health`/`.replace` build for the requested system rather
@@ -159,9 +158,11 @@ let
         requiredFiles = [ "ix.nix" ];
         validate =
           { metadata, ... }:
-          assert lib.assertMsg (builtins.length metadata.segments <= 2)
-            "exampleFleetsFor: expected examples/<name>/ix.nix or examples/<category>/<name>/ix.nix, got examples/${metadata.relativePath}";
-          { };
+          assert lib.assertMsg (builtins.length metadata.segments == 2)
+            "exampleFleetsFor: expected examples/<category>/<name>/ix.nix, got examples/${metadata.relativePath}";
+          {
+            name = lib.concatStringsSep "-" metadata.segments;
+          };
       };
     in
     lib.filterAttrs (_: fleet: fleet != null) (
