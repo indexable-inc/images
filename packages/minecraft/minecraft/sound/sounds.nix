@@ -6,7 +6,7 @@
 # that DOWNLOADS them from Mojang's official CDN at build time on the building
 # machine; it does not vendor them in this repo. The resulting store path
 # therefore contains Mojang content and MUST NOT be pushed to any shared or
-# public binary cache (e.g. `indexable-inc.cachix.org`), nor included in any
+# public binary cache (e.g. `cache.ix.dev`), nor included in any
 # image closure that gets cached or distributed. Each machine that wants
 # sounds builds this path locally from Mojang. Keep it out of CI cache pushes.
 {

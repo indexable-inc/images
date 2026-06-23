@@ -23,7 +23,7 @@ concurrency:
 env:
   # The self-hosted runner's Nix daemon owns substituters; the job only sets
   # client-side eval knobs (matching check.yml). `accept-flake-config` consumes
-  # the flake's nixConfig (the indexable-inc Cachix substituter) without a
+  # the flake's nixConfig (the cache.ix.dev substituter) without a
   # prompt, which the inner nix-eval-jobs run needs to fetch the IFD closure.
   # `ca-derivations`: the rust units default to contentAddressed = true, so the
   # `.#checks` eval this job forces resolves content-addressed drvs. Without it

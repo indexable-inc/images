@@ -23,13 +23,12 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # The self-hosted runner's Nix daemon owns substituters (the indexable-inc
-  # Cachix plus the host's local cache), so the job only sets client-side eval
-  # knobs here rather than installing Nix or managing a GitHub Actions store
-  # cache.
+  # The self-hosted runner's Nix daemon owns substituters (cache.ix.dev plus the
+  # host's local cache), so the job only sets client-side eval knobs here rather
+  # than installing Nix or managing a GitHub Actions store cache.
   #
-  # `accept-flake-config`: consume the flake's nixConfig (the indexable-inc
-  # Cachix substituter) without an interactive prompt.
+  # `accept-flake-config`: consume the flake's nixConfig (the cache.ix.dev
+  # substituter) without an interactive prompt.
   #
   # `extra-system-features = gccarch-znver5`: every image pins
   # `nixpkgs.hostPlatform.gcc.arch = "znver5"`, marking each derivation in the

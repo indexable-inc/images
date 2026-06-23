@@ -9,7 +9,7 @@ on:
     # discovered from the registry, so adding a package with an updateScript
     # needs no change here. claude-code promotes builds several times a week, so
     # check hourly to advance the open PR within the hour. A no-op run is a
-    # Cachix hit and the updater reuses one branch, so this stays cheap and
+    # cache hit and the updater reuses one branch, so this stays cheap and
     # never stacks PRs. flake.lock is updated by its own reusable workflow
     # (update-flake-lock.yml), not here.
     - cron: "37 * * * *"
@@ -31,18 +31,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      # `accept-flake-config` lets the job consume the flake's indexable-inc
-      # Cachix substituter without a prompt.
+      # `accept-flake-config` lets the job consume the flake's cache.ix.dev
+      # substituter without a prompt.
       - name: Install Determinate Nix
         uses: DeterminateSystems/determinate-nix-action@629b284231c2a82554b724e357e47fc6020833c8 # v3
         with:
+          # Read-only: the updater only needs warm substitutes to verify a freshly
+          # pinned hash builds. Publishing happens when the resulting PR merges and
+          # flake-check rebuilds on the self-hosted runners (which push to ix-ci).
           extra-conf: |
             accept-flake-config = true
-
-      - name: Set up Cachix
-        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
-        with:
-          name: indexable-inc
+            extra-substituters = https://cache.ix.dev
+            extra-trusted-public-keys = ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI=
 
       # Runs every content updater in parallel via dag-runner (see
       # lib/per-system.nix). Each regenerates its own source files relative to

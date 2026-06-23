@@ -18,6 +18,14 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Surfaced at job level so the push step's `if` can gate on the signing key
+    # being configured. That lets this repo's change land before the operator
+    # finishes the ix-side write endpoint + secrets without reddening Pages: the
+    # push is simply skipped until IX_PUBLIC_CI_SIGNING_KEY exists.
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.IX_PUBLIC_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.IX_PUBLIC_S3_SECRET_ACCESS_KEY }}
+      IX_PUBLIC_CI_SIGNING_KEY: ${{ secrets.IX_PUBLIC_CI_SIGNING_KEY }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -25,17 +33,35 @@ jobs:
       - name: Install Determinate Nix
         uses: DeterminateSystems/determinate-nix-action@629b284231c2a82554b724e357e47fc6020833c8 # v3
         with:
+          # Read repo-owned artifacts from the ix public cache (the ix-public
+          # flat cache, with cache.nixos.org fallthrough). accept-flake-config
+          # would pull the same substituter from the flake nixConfig; pinning it
+          # here keeps the step self-describing.
           extra-conf: |
             accept-flake-config = true
-
-      - name: Set up Cachix
-        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
-        with:
-          name: indexable-inc
-          authToken: ${{ github.event_name == 'push' && secrets.CACHIX_AUTH_TOKEN || '' }}
+            extra-substituters = https://cache.ix.dev
+            extra-trusted-public-keys = ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI=
 
       - name: Build site
         run: nix build .#site -L
+
+      # Publish the built closure to the ix public cache so later CI runs and ix
+      # VMs substitute it instead of rebuilding. The public cache.ix.dev vhost is
+      # read-only, so writes go to the S3 API at s3.cache.ix.dev; `secret-key=`
+      # signs each NAR as it is copied (mirrors ix's on-fabric ix-public-cache-push).
+      # `push` (main) only -- PR runs lack secrets and untrusted builds must not
+      # reach the public cache -- and skipped until the signing key is configured,
+      # so this change and the ix write endpoint can land in either order.
+      - name: Push to cache.ix.dev
+        if: github.event_name == 'push' && env.IX_PUBLIC_CI_SIGNING_KEY != ''
+        run: |
+          set -euo pipefail
+          keyfile=$(mktemp)
+          trap 'rm -f "$keyfile"' EXIT
+          printf '%s' "$IX_PUBLIC_CI_SIGNING_KEY" > "$keyfile"
+          nix copy \
+            --to "s3://ix-public?endpoint=s3.cache.ix.dev&scheme=https&region=garage&secret-key=$keyfile&compression=zstd&write-nar-listing=true" \
+            ./result
 
       - name: Prepare Pages artifact
         run: |

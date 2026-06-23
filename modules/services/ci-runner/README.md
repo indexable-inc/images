@@ -2,7 +2,7 @@
 
 Self-hosted GitHub Actions runners for this repository, registered as a small
 static pool on a persistent NixOS host. The point is cache locality: jobs share
-the host's `/nix/store` and the indexable-inc Cachix substituter, so a
+the host's `/nix/store` and the cache.ix.dev public substituter, so a
 `nix build .#...` step substitutes warm artifacts instead of rebuilding from a
 cold store on a throwaway cloud VM.
 
@@ -32,8 +32,8 @@ repository's self-hosted runners. A one-hour registration token does not work
 because ephemeral runners mint a new registration on every restart.
 
 The module wraps NixOS [`services.github-runners`][upstream] and adds the
-indexable-inc Cachix substituter and trusted key to `nix.settings`, plus `git`,
-`gh`, `cachix`, and the host's Nix on each job's PATH.
+cache.ix.dev substituter and its trusted keys to `nix.settings`, plus `git`,
+`gh`, and the host's Nix on each job's PATH.
 
 ## Opt a workflow in
 

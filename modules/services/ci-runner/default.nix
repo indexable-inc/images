@@ -1,7 +1,7 @@
 # Self-hosted GitHub Actions runners for this repository, meant to run on a
 # persistent NixOS host instead of an ephemeral cloud VM. The win is cache
-# locality: jobs reuse the host's global /nix/store and the indexable-inc
-# Cachix substituter, so `nix build .#...` pulls warm artifacts instead of
+# locality: jobs reuse the host's global /nix/store and the cache.ix.dev
+# public substituter, so `nix build .#...` pulls warm artifacts instead of
 # rebuilding from a cold store every run. The per-job work directory is still
 # wiped (see `ephemeral`); only the shared store survives, which is exactly the
 # state that is safe to keep between jobs.
@@ -87,8 +87,8 @@ in
       default = [ ];
       example = lib.literalExpression "[ pkgs.gh pkgs.jq ]";
       description = ''
-        Extra packages on each job's PATH, on top of the git, Nix, and Cachix
-        tooling the module always provides.
+        Extra packages on each job's PATH, on top of the git and Nix tooling
+        the module always provides.
       '';
     };
   };
@@ -106,9 +106,12 @@ in
       # Consume the repo flake's nixConfig substituters without the interactive
       # prompt; `nix flake check` otherwise stalls waiting for confirmation.
       accept-flake-config = true;
-      extra-substituters = [ "https://indexable-inc.cachix.org" ];
+      extra-substituters = [ "https://cache.ix.dev" ];
       extra-trusted-public-keys = [
-        "indexable-inc.cachix.org-1:HQ5mjdOyhgNjLVhjv0qgVMJ5YiO1zEEVMAtF9mTcpiI="
+        "ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI="
+        # TODO(ix-public-ci): at go-live, add "ix-public-ci:<pubkey>" (the
+        # GitHub-hosted-CI signer) here, matching the index flake nixConfig and
+        # ix's nix-settings.nix. See the cache.ix.dev write-path runbook in ../ix.
       ];
       # Index images pin `gcc.arch = znver5`, so every derivation in the closure
       # requires this builder feature; advertise it or the daemon refuses the
@@ -124,7 +127,6 @@ in
       # failing on a name clash with the already-registered runner.
       replace = true;
       extraPackages = [
-        pkgs.cachix
         pkgs.gh
         pkgs.git
         config.nix.package
