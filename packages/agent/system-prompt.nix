@@ -126,6 +126,16 @@ let
     stays in the package.
   '';
 
+  separateDefinitions = ''
+    Keep declarative definitions separate from the machinery that renders,
+    executes, or adapts them. Put registries, schemas, fixtures, and policy data
+    where they can be read as data.
+
+    Implementation modules should consume those definitions through narrow
+    helpers. Mix the two only when the split would add indirection without making
+    the source of truth easier to find or reuse.
+  '';
+
   fixAtSource = ''
     Fix problems at their source. If the cause is upstream, fix it upstream and
     open a PR. Use local workarounds only as a last resort, linked to the
@@ -403,6 +413,7 @@ let
     tieToIssue
     preV1
     oneImplementation
+    separateDefinitions
     fixAtSource
     worktree
     shellCwd
