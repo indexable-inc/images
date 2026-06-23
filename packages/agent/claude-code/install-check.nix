@@ -18,6 +18,8 @@
   launchSpec,
   settingsDefaultsFile,
   wrapperFlags,
+  python3,
+  binName,
 }:
 ''
   runHook preInstallCheck
@@ -99,6 +101,93 @@
       "$dirs_want" "$dirs_got" >&2
     exit 1
   fi
+
+  # Real-binary smoke net for the diagnostic command: `doctor` is an interactive
+  # terminal UI, so stdin redirected from /dev/null hangs and the command is not
+  # a good exit-status contract. Drive it through a local PTY, assert the wrapper
+  # reaches the diagnostic screen, then close the persistent UI process.
+  mkdir -p doctor-home doctor-home/config doctor-home/cache doctor-home/state
+  CLAUDE_DOCTOR_BIN="$out/bin/${binName}" \
+    HOME="$PWD/doctor-home" \
+    XDG_CONFIG_HOME="$PWD/doctor-home/config" \
+    XDG_CACHE_HOME="$PWD/doctor-home/cache" \
+    XDG_STATE_HOME="$PWD/doctor-home/state" \
+    TERM=xterm-256color \
+    ${lib.getExe python3} <<'PY'
+import os
+import pty
+import re
+import select
+import subprocess
+import sys
+import time
+
+master, slave = pty.openpty()
+env = os.environ.copy()
+proc = subprocess.Popen(
+    [env["CLAUDE_DOCTOR_BIN"], "doctor"],
+    cwd=os.getcwd(),
+    env=env,
+    stdin=slave,
+    stdout=slave,
+    stderr=slave,
+    close_fds=True,
+)
+os.close(slave)
+
+chunks = []
+sent_enter = False
+start = time.time()
+deadline = time.time() + 60
+while time.time() < deadline:
+    ready, _, _ = select.select([master], [], [], 0.2)
+    if ready:
+        try:
+            data = os.read(master, 4096)
+        except OSError:
+            break
+        if not data:
+            break
+        chunks.append(data)
+    output = b"".join(chunks)
+    if not sent_enter and (
+        (b"Enter" in output and b"close" in output) or time.time() - start > 25
+    ):
+        os.write(master, b"\r\n")
+        sent_enter = True
+    plain_loop = re.sub(
+        r"\x1b\[[0-?]*[ -/]*[@-~]", "", output.decode("utf-8", "replace")
+    )
+    compact_loop = re.sub(r"\s+", "", plain_loop)
+    if "Diagnostics" in compact_loop and "Search:OK" in compact_loop:
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        break
+    if proc.poll() is not None:
+        break
+
+if proc.poll() is None:
+    proc.terminate()
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+os.close(master)
+raw = b"".join(chunks).decode("utf-8", "replace")
+plain = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw)
+compact = re.sub(r"\s+", "", plain)
+for needle in ("Diagnostics", "Search:OK"):
+    if needle not in compact:
+        sys.stderr.write(f"claude doctor check failed: missing {needle!r}\n")
+        sys.stderr.write(plain[-4000:])
+        sys.exit(1)
+PY
 
   # Session-digest hook net: absent/empty digests stay silent (exit 0, no
   # output, so a host without the ix-context-digest timer loses nothing), a

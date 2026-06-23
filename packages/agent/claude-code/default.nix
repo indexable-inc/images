@@ -15,6 +15,7 @@
   socat,
   nix,
   gnupg,
+  python3,
   formats,
   jq,
   binName ? "claude",
@@ -378,6 +379,8 @@ stdenv.mkDerivation (finalAttrs: {
       launchSpec
       settingsDefaultsFile
       wrapperFlags
+      python3
+      binName
       ;
   };
 
