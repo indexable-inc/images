@@ -64,7 +64,8 @@ function createWorking(): Working {
       workers: [],
       ops: { link: 0, rename: 0, open: 0, write: 0, fsync: 0, stat: 0, unlink: 0, other: 0 },
       opsPerSec: 0,
-      currentPath: null
+      currentPath: null,
+      hotPaths: []
     },
     activation: { active: false, command: '', steps: [], status: '' },
     diff: null,

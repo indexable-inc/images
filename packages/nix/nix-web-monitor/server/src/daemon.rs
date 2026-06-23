@@ -179,10 +179,7 @@ async fn trace_loop(
     let stderr = child.stderr.take();
     let mut lines = BufReader::new(stdout).lines();
 
-    let mut trace = DaemonTrace {
-        workers: pids,
-        ..DaemonTrace::default()
-    };
+    let mut trace = DaemonTrace::with_workers(pids);
     // Counts at the previous tick; the difference over the ~1s window is the
     // per-second rate the panel shows.
     let mut last_total: u64 = 0;
@@ -209,7 +206,8 @@ async fn trace_loop(
                 last_total = total;
                 let worker_count = trace.workers.len();
                 let status = format!("tracing nix-daemon ({worker_count} workers)");
-                let info = trace.info(true, status, ops_per_sec);
+                let info = trace.info(true, status, ops_per_sec, trace.hot_paths(5));
+                trace.clear_window();
                 monitor.write().await.set_daemon(info);
                 let _ = broadcast_deltas(monitor, deltas).await;
             }
@@ -256,7 +254,7 @@ async fn publish_status(
     deltas: &broadcast::Sender<Bytes>,
     status: &str,
 ) {
-    let info = DaemonTrace::default().info(false, status.to_owned(), 0);
+    let info = DaemonTrace::default().info(false, status.to_owned(), 0, Vec::new());
     monitor.write().await.set_daemon(info);
     let _ = broadcast_deltas(monitor, deltas).await;
 }

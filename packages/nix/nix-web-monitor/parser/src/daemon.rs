@@ -10,6 +10,8 @@
 //! the per-tracer line parsers and the rolling aggregator. Spawning the tracer
 //! (privileged, platform-specific, best-effort) lives in the server.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 /// A class of filesystem syscall.
@@ -63,6 +65,17 @@ pub struct DaemonOps {
     pub stat: u64,
     pub unlink: u64,
     pub other: u64,
+}
+
+/// One hot path sampled from daemon syscalls.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaemonHotPath {
+    pub path: String,
+    /// Cumulative path-bearing syscalls since tracing started.
+    pub count: u64,
+    /// Path-bearing syscalls in the last one-second publish window.
+    pub ops_per_sec: u64,
 }
 
 impl DaemonOps {
@@ -128,6 +141,8 @@ pub struct DaemonInfo {
     /// The most recent path the daemon touched, for a "currently working on"
     /// readout. `None` until a path-bearing syscall is seen.
     pub current_path: Option<String>,
+    /// Highest-traffic paths sampled from daemon syscalls, hottest window first.
+    pub hot_paths: Vec<DaemonHotPath>,
 }
 
 /// Rolling aggregator that folds [`SyscallEvent`]s into a [`DaemonInfo`].
@@ -140,13 +155,28 @@ pub struct DaemonTrace {
     pub ops: DaemonOps,
     pub workers: Vec<u32>,
     pub current_path: Option<String>,
+    paths: BTreeMap<String, u64>,
+    window_paths: BTreeMap<String, u64>,
 }
 
 impl DaemonTrace {
+    /// Start a trace for the daemon worker pids the server attached to.
+    #[must_use]
+    pub fn with_workers(workers: Vec<u32>) -> Self {
+        Self {
+            workers,
+            ..Self::default()
+        }
+    }
+
     /// Fold one parsed syscall event into the running totals.
     pub fn record(&mut self, event: SyscallEvent) {
         self.ops.bump(event.op);
         if let Some(path) = event.path {
+            let total = self.paths.entry(path.clone()).or_insert(0);
+            *total = total.saturating_add(1);
+            let window = self.window_paths.entry(path.clone()).or_insert(0);
+            *window = window.saturating_add(1);
             self.current_path = Some(path);
         }
     }
@@ -154,7 +184,13 @@ impl DaemonTrace {
     /// Project the current totals into a wire [`DaemonInfo`]. `ops_per_sec` is
     /// supplied by the caller, which alone knows the wall-clock between samples.
     #[must_use]
-    pub fn info(&self, tracing: bool, status: String, ops_per_sec: u64) -> DaemonInfo {
+    pub fn info(
+        &self,
+        tracing: bool,
+        status: String,
+        ops_per_sec: u64,
+        hot_paths: Vec<DaemonHotPath>,
+    ) -> DaemonInfo {
         DaemonInfo {
             tracing,
             status,
@@ -162,7 +198,36 @@ impl DaemonTrace {
             ops: self.ops,
             ops_per_sec,
             current_path: self.current_path.clone(),
+            hot_paths,
         }
+    }
+
+    /// The highest-traffic paths for the current sampling window.
+    #[must_use]
+    pub fn hot_paths(&self, limit: usize) -> Vec<DaemonHotPath> {
+        let mut paths: Vec<_> = self
+            .paths
+            .iter()
+            .map(|(path, count)| DaemonHotPath {
+                path: path.clone(),
+                count: *count,
+                ops_per_sec: self.window_paths.get(path).copied().unwrap_or(0),
+            })
+            .collect();
+        paths.sort_by(|left, right| {
+            right
+                .ops_per_sec
+                .cmp(&left.ops_per_sec)
+                .then_with(|| right.count.cmp(&left.count))
+                .then_with(|| left.path.cmp(&right.path))
+        });
+        paths.truncate(limit);
+        paths
+    }
+
+    /// Start a new publish window after the server has emitted hot paths.
+    pub fn clear_window(&mut self) {
+        self.window_paths.clear();
     }
 }
 
@@ -307,10 +372,7 @@ mod tests {
 
     #[test]
     fn trace_records_and_projects() {
-        let mut trace = DaemonTrace {
-            workers: vec![10, 11],
-            ..DaemonTrace::default()
-        };
+        let mut trace = DaemonTrace::with_workers(vec![10, 11]);
         trace.record(SyscallEvent {
             op: OpClass::Write,
             path: Some("/nix/store/x".to_owned()),
@@ -319,7 +381,7 @@ mod tests {
             op: OpClass::Fsync,
             path: None,
         });
-        let info = trace.info(true, "tracing".to_owned(), 42);
+        let info = trace.info(true, "tracing".to_owned(), 42, trace.hot_paths(5));
         assert!(info.tracing);
         assert_eq!(info.ops.write, 1);
         assert_eq!(info.ops.fsync, 1);
@@ -327,5 +389,37 @@ mod tests {
         assert_eq!(info.current_path.as_deref(), Some("/nix/store/x"));
         assert_eq!(info.workers, vec![10, 11]);
         assert_eq!(info.ops_per_sec, 42);
+        assert_eq!(
+            info.hot_paths,
+            vec![DaemonHotPath {
+                path: "/nix/store/x".to_owned(),
+                count: 1,
+                ops_per_sec: 1,
+            }]
+        );
+    }
+
+    #[test]
+    fn hot_paths_sort_by_current_window_then_total() {
+        let mut trace = DaemonTrace::default();
+        trace.record(SyscallEvent {
+            op: OpClass::Open,
+            path: Some("/nix/store/cold".to_owned()),
+        });
+        trace.record(SyscallEvent {
+            op: OpClass::Open,
+            path: Some("/nix/store/cold".to_owned()),
+        });
+        trace.clear_window();
+        trace.record(SyscallEvent {
+            op: OpClass::Open,
+            path: Some("/nix/store/hot".to_owned()),
+        });
+
+        let hot_paths = trace.hot_paths(2);
+        assert_eq!(hot_paths[0].path, "/nix/store/hot");
+        assert_eq!(hot_paths[0].ops_per_sec, 1);
+        assert_eq!(hot_paths[1].path, "/nix/store/cold");
+        assert_eq!(hot_paths[1].count, 2);
     }
 }

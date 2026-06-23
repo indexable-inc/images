@@ -67,6 +67,18 @@
           {middleTruncate(daemon.currentPath, 56)}
         </div>
       {/if}
+      {#if daemon.hotPaths.length > 0}
+        <div class="daemon-hot">
+          <div class="daemon-hot-title">hot paths</div>
+          {#each daemon.hotPaths as hot (hot.path)}
+            <div class="daemon-hot-row" title={hot.path}>
+              <span class="daemon-hot-path">{middleTruncate(hot.path, 48)}</span>
+              <span class="daemon-hot-rate">{hot.opsPerSec}/s</span>
+              <span class="daemon-hot-count">{hot.count}</span>
+            </div>
+          {/each}
+        </div>
+      {/if}
     {/if}
   </div>
 </section>

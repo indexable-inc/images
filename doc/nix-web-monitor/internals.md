@@ -100,9 +100,12 @@ prompts, so a user without privilege gets a "needs root" status instead of a
 hang, `:98`). The tracer's stdout lines are parsed by the parser's
 `parse_fs_usage_line`/`parse_strace_line`, folded into a `DaemonTrace`, and a
 `DaemonInfo` is published every `SAMPLE_INTERVAL` (exactly 1s, so the per-window
-syscall delta is the per-second rate with no division, `:30`). Every failure path
-(no daemon, missing tracer, denied attach) degrades to a status string the panel
-shows and the loop retries after `RETRY_INTERVAL` (5s); the probe never returns
-an error (`:41`). `OpClass::classify` (`parser/src/daemon.rs:37`) groups
-syscalls so the panel shows work kind (Link/Rename dominate store optimisation,
-Write/Fsync dominate writing a path).
+syscall delta is the per-second rate with no division, `:30`). Path-bearing
+syscalls also update a one-second hot-path window; the panel lists the busiest
+paths by current rate, then cumulative count, so a silent build has a concrete
+\"what is doing the most\" readout instead of only the latest touched path. Every
+failure path (no daemon, missing tracer, denied attach) degrades to a status
+string the panel shows and the loop retries after `RETRY_INTERVAL` (5s); the
+probe never returns an error (`:41`). `OpClass::classify`
+(`parser/src/daemon.rs:37`) groups syscalls so the panel shows work kind
+(Link/Rename dominate store optimisation, Write/Fsync dominate writing a path).

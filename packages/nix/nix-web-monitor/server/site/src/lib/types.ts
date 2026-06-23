@@ -53,6 +53,13 @@ export const daemonOpsSchema = v.object({
   other: v.number()
 });
 
+/// One hot path sampled from daemon syscalls.
+export const daemonHotPathSchema = v.object({
+  path: v.string(),
+  count: v.number(),
+  opsPerSec: v.number()
+});
+
 /// Live nix-daemon syscall view. `tracing` is false when no tracer is attached
 /// (no daemon, or it needs root), in which case `status` explains why and the
 /// counters are zero. Mirrors the Rust `DaemonInfo`.
@@ -62,7 +69,8 @@ export const daemonInfoSchema = v.object({
   workers: v.array(v.number()),
   ops: daemonOpsSchema,
   opsPerSec: v.number(),
-  currentPath: v.nullable(v.string())
+  currentPath: v.nullable(v.string()),
+  hotPaths: v.array(daemonHotPathSchema)
 });
 
 /// One activation step (a `home`/`os` switch's `activate` run): a named unit of
@@ -190,6 +198,7 @@ export type ActivityType = v.InferOutput<typeof activityTypeSchema>;
 export type ActivityProgress = v.InferOutput<typeof activityProgressSchema>;
 export type OptimiseStats = v.InferOutput<typeof optimiseStatsSchema>;
 export type DaemonOps = v.InferOutput<typeof daemonOpsSchema>;
+export type DaemonHotPath = v.InferOutput<typeof daemonHotPathSchema>;
 export type DaemonInfo = v.InferOutput<typeof daemonInfoSchema>;
 export type ActivationStep = v.InferOutput<typeof activationStepSchema>;
 export type Activation = v.InferOutput<typeof activationSchema>;
@@ -226,10 +235,11 @@ export const EMPTY_SNAPSHOT: MonitorSnapshot = Object.freeze({
     tracing: false,
     status: '',
     workers: [],
-    ops: { link: 0, rename: 0, open: 0, write: 0, fsync: 0, stat: 0, unlink: 0, other: 0 },
-    opsPerSec: 0,
-    currentPath: null
-  },
+      ops: { link: 0, rename: 0, open: 0, write: 0, fsync: 0, stat: 0, unlink: 0, other: 0 },
+      opsPerSec: 0,
+      currentPath: null,
+      hotPaths: []
+    },
   activation: { active: false, command: '', steps: [], status: '' },
   diff: null,
   expected: {},

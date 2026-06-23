@@ -574,6 +574,51 @@ main.dragging-v .splitter-v::after {
   text-overflow: ellipsis;
 }
 
+.daemon-hot {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding-top: 0.2rem;
+  border-top: 1px solid var(--line-soft);
+}
+
+.daemon-hot-title {
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* path | current rate | cumulative count. */
+.daemon-hot-row {
+  display: grid;
+  grid-template-columns: 1fr 3rem 3.5rem;
+  gap: 0.35rem;
+  align-items: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.daemon-hot-path {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.daemon-hot-rate,
+.daemon-hot-count {
+  text-align: right;
+}
+
+.daemon-hot-rate {
+  color: var(--accent);
+}
+
+.daemon-hot-count {
+  color: var(--faint);
+}
+
 /* ---------- activation + diff panels (switch only) ---------- */
 
 /* Both ride at the top of the side pane during a switch and cap their height so

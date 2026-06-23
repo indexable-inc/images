@@ -9,8 +9,9 @@ workspace crates:
   model for Nix's `internal-json` event stream. No I/O. Also exports the
   per-tracer syscall line parsers in its `daemon` module.
 - **`server`** (`nix-web-monitor`): the `axum` binary that spawns `nix`, feeds
-  stderr through the parser, resolves dependency edges, traces the daemon, and
-  streams deltas to browsers over a WebSocket. Wrapped with a built Svelte site.
+  stderr through the parser, resolves dependency edges, samples daemon syscall
+  hot paths, and streams deltas to browsers over a WebSocket. Wrapped with a
+  built Svelte site.
 
 The state-machine, transport, dependency-resolution, and daemon-tracing mechanics
 are in [internals](internals.md).
@@ -70,7 +71,8 @@ rather than serving HTML for the wrong MIME type).
 - `MonitorSnapshot` (`:958`) and `Delta` (`:248`): the seed-once / stream-deltas
   wire model the browser consumes. `BuildNode`/`BuildStatus` (`:1025`),
   `ActivityNode` (`:991`), `LogEntry` (`:1058`), `DerivationEdge` (`:984`),
-  `OptimiseStats` (`:229`), `DaemonInfo` (`daemon::DaemonInfo`).
+  `OptimiseStats` (`:229`), `DaemonInfo` (`daemon::DaemonInfo`, including
+  daemon syscall rates and hot paths).
 - `daemon` module (`parser/src/daemon.rs`): `OpClass::classify`,
   `parse_fs_usage_line` (macOS), `parse_strace_line` (Linux), and the rolling
   `DaemonTrace` -> `DaemonInfo` aggregator.
