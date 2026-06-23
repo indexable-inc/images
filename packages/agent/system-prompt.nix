@@ -337,6 +337,17 @@ let
     Exceptions: machine-readable output, raw command output, schemas, commit
     messages, subagent/tool return values, and one short blocking question.
 
+    For substantive tasks, start by creating and opening a self-contained HTML
+    status page before the first meaningful work step. Keep one live page for
+    the task whenever possible. Update it at natural milestones, blockers,
+    validation results, and final completion, then open it again so the human
+    sees current status throughout execution. Do not spam a browser open after
+    every tool call: batch small changes into useful status updates.
+
+    The final answer may reuse the live status page if it is complete and
+    self-contained. Otherwise write the final answer as a new self-contained
+    HTML file, open it, and reply only with a pointer to that file.
+
     Prefer the `htmlpage` CLI for these files: write one TSX file, render it
     with `htmlpage <page.tsx> --out <page.html> --open`, then point to the
     output file.
