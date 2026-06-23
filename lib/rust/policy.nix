@@ -138,6 +138,11 @@ let
           default = pkgs.stdenv.hostPlatform.isLinux;
           description = "Link with mold on Linux.";
         };
+        useLld = lib.mkOption {
+          type = lib.types.bool;
+          default = pkgs.stdenv.hostPlatform.isDarwin;
+          description = "Link with lld on macOS (the default cctools ld64 is single-threaded and slow).";
+        };
       };
     };
   };
@@ -184,18 +189,36 @@ let
       };
     };
 
-  # `platform` is a rust target triple (e.g. `x86_64-unknown-linux-gnu`); mold is
-  # Linux-only, so the flags are gated on a `-linux-` triple. Host builds pass
-  # `pkgs.stdenv.hostPlatform.config` rather than a sentinel, so there is one
-  # Linux test and a non-triple argument fails loudly instead of defaulting.
+  # `platform` is a rust target triple (e.g. `x86_64-unknown-linux-gnu`); the fast
+  # linker is per-OS, so each branch is gated on the triple: mold for a `-linux-`
+  # triple, lld for an `-apple-darwin` triple. Host builds pass
+  # `pkgs.stdenv.hostPlatform.config` rather than a sentinel, so the tests run on a
+  # real triple and a non-triple argument fails loudly instead of defaulting.
+  #
+  # The lld branch borrows the `-B${pkgs.lld}/bin -fuse-ld=lld` incantation from the
+  # Linux->darwin cross toolchain in `lib/darwin/apple-sdk-toolchain.nix` (the `-B`
+  # makes the clang driver resolve `ld64.lld`), but applies only to a *native* darwin
+  # link: it is additionally gated on a darwin build host. The cross toolchain already
+  # injects `-fuse-ld=lld` via `CARGO_TARGET_<T>_LINKER`, so without this host gate a
+  # future darwin-host darwin-cross would stack the flag on that wrapper.
   rustcArgsForPolicyForPlatform =
     policy: platform:
     lib.optionals (policy.linker.useMold && lib.hasInfix "-linux-" platform) [
       "-C"
       "link-arg=-fuse-ld=mold"
-    ];
+    ]
+    ++
+      lib.optionals
+        (policy.linker.useLld && pkgs.stdenv.hostPlatform.isDarwin && lib.hasInfix "-apple-darwin" platform)
+        [
+          "-C"
+          "link-arg=-fuse-ld=lld"
+          "-C"
+          "link-arg=-B${pkgs.lld}/bin"
+        ];
 
-  nativeBuildInputsForPolicy = policy: lib.optional policy.linker.useMold pkgs.mold;
+  nativeBuildInputsForPolicy =
+    policy: lib.optional policy.linker.useMold pkgs.mold ++ lib.optional policy.linker.useLld pkgs.lld;
 
   clippyLintArgs =
     policy:
