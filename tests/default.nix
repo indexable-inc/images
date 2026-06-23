@@ -2482,6 +2482,15 @@ let
         message = "Codex MCP entries should include the Exa MCP server even when index MCP is unavailable";
       }
       {
+        assertion =
+          ix.mcp.houseServers {
+            indexCommand = "/bin/ix-mcp";
+          } == ix.mcp.defaultServers {
+            indexCommand = "/bin/ix-mcp";
+          };
+        message = "MCP registry should keep houseServers as a compatibility alias for defaultServers";
+      }
+      {
         assertion = lib.all (
           entry: lib.hasPrefix "mcp_servers.index." entry.key || lib.hasPrefix "mcp_servers.exa." entry.key
         ) sampleCodexMcpEntries;

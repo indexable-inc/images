@@ -9,17 +9,7 @@
 #   { transport = "http";  url = <str>; }
 # and `servers` throughout is an attrset from server name to such a definition.
 { lib }:
-{
-  /**
-    The default MCP server set, defined once for every wrapper that bakes it.
-    Returns the neutral definitions; each consumer renders them with
-    `toClaudeJson` / `toCodexEntries`.
-
-    Arguments:
-    - `indexCommand`: path to the `ix-mcp` entrypoint, or `null` when the `mcp`
-      sibling is out of scope (e.g. the overlay package set), in which case only
-      the keyless `exa` server is returned.
-  */
+let
   defaultServers =
     {
       indexCommand ? null,
@@ -37,4 +27,23 @@
         url = "https://mcp.exa.ai/mcp";
       };
     };
+in
+{
+  /**
+    The default MCP server set, defined once for every wrapper that bakes it.
+    Returns the neutral definitions; each consumer renders them with
+    `toClaudeJson` / `toCodexEntries`.
+
+    Arguments:
+    - `indexCommand`: path to the `ix-mcp` entrypoint, or `null` when the `mcp`
+      sibling is out of scope (e.g. the overlay package set), in which case only
+      the keyless `exa` server is returned.
+  */
+  inherit defaultServers;
+
+  /**
+    Compatibility name for consumers pinned to the original MCP registry API.
+    Use `defaultServers` in new code.
+  */
+  houseServers = defaultServers;
 }
