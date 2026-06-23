@@ -5,11 +5,21 @@
 # and Codex wrappers in two different schemas.
 #
 # A neutral server definition is one of:
-#   { transport = "stdio"; command = <str>; args ? [ <str> ]; env ? { <k> = <str>; }; }
+#   { transport = "stdio"; command = <str>; args ? [ <str> ]; env ? { <k> = <str>; }; envVars ? [ <str> ]; }
 #   { transport = "http";  url = <str>; }
 # and `servers` throughout is an attrset from server name to such a definition.
 { lib }:
 let
+  indexApiEnvVars = [
+    "GH_TOKEN"
+    "GITHUB_TOKEN"
+    "IX_TOKEN"
+    "LINEAR_API_KEY"
+    "NOTION_API_KEY"
+    "SLACK_TOKEN"
+    "SLACK_USER_TOKEN"
+  ];
+
   defaultServers =
     {
       indexCommand ? null,
@@ -19,6 +29,7 @@ let
         transport = "stdio";
         command = indexCommand;
         args = [ "serve" ];
+        envVars = indexApiEnvVars;
       };
     }
     // {

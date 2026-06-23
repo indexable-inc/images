@@ -9,13 +9,17 @@ let
   # is `{ type = "stdio"; command; args; env; }` / `{ type = "http"; url; }`).
   claudeOne =
     def:
+    let
+      forwardedEnv = lib.genAttrs (def.envVars or [ ]) (name: "\${${name}:-}");
+      env = forwardedEnv // (def.env or { });
+    in
     if isStdio def then
       {
         type = "stdio";
         inherit (def) command;
       }
       // lib.optionalAttrs (def ? args) { inherit (def) args; }
-      // lib.optionalAttrs (def ? env) { inherit (def) env; }
+      // lib.optionalAttrs (env != { }) { inherit env; }
     else
       {
         type = "http";
@@ -44,6 +48,10 @@ let
         key = "${prefix}.env.${k}";
         value = toml.scalar v;
       }) (def.env or { });
+      envVarEntries = lib.optional (def ? envVars && def.envVars != [ ]) {
+        key = "${prefix}.env_vars";
+        value = tomlArray def.envVars;
+      };
     in
     [
       {
@@ -63,6 +71,7 @@ let
           key = "${prefix}.args";
           value = tomlArray def.args;
         }
+        ++ envVarEntries
         ++ envEntries
       else
         [

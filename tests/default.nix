@@ -157,6 +157,11 @@ let
       indexCommand = "/bin/ix-mcp";
     }
   );
+  sampleClaudeMcpServers = ix.mcp.toClaudeJson (
+    ix.mcp.defaultServers {
+      indexCommand = "/bin/ix-mcp";
+    }
+  );
   sampleCodexMcpEntriesWithoutIndex = ix.mcp.toCodexEntries (ix.mcp.defaultServers { });
   sampleCodexMcpEntry = key: lib.findFirst (entry: entry.key == key) null sampleCodexMcpEntries;
   sampleCodexMcpEntryWithoutIndex =
@@ -2464,6 +2469,18 @@ let
             value = "\"approve\"";
           };
         message = "Codex MCP entries should approve trusted default server tools by default";
+      }
+      {
+        assertion =
+          sampleCodexMcpEntry "mcp_servers.index.env_vars" == {
+            key = "mcp_servers.index.env_vars";
+            value = ''[ "GH_TOKEN", "GITHUB_TOKEN", "IX_TOKEN", "LINEAR_API_KEY", "NOTION_API_KEY", "SLACK_TOKEN", "SLACK_USER_TOKEN" ]'';
+          };
+        message = "Codex MCP entries should explicitly forward API environment variables to index MCP";
+      }
+      {
+        assertion = sampleClaudeMcpServers.index.env.LINEAR_API_KEY == "\${LINEAR_API_KEY:-}";
+        message = "Claude MCP config should forward API environment variables to index MCP";
       }
       {
         assertion =
