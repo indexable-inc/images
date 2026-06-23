@@ -415,7 +415,7 @@ async def create_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
         env=dict(sorted(node.env.items())),
         l7_proxy_ports=list(node.l7ProxyPorts),
         ipv4=node.ipv4,
-        secrets=[secret_payload(secret) for secret in node.secrets],  # type: ignore[call-arg]
+        secrets=[secret_payload(secret) for secret in node.secrets],  # type: ignore[call-arg,misc]
     )
 
 
