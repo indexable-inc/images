@@ -1,52 +1,81 @@
-{ lib }:
+{ lib, markdown }:
 # Render declarative subagent definitions to a `.claude/agents/<name>.md`
-# directory. An agent is `{ frontmatter; body; }`: `frontmatter` is an attrset
+# directory. An agent is `{ frontmatter; content; }`: `frontmatter` is an attrset
 # (its `mcpServers` value comes straight from `ix.mcp.toClaudeJson`, so a
 # subagent's servers are declared from the same registry the wrappers bake, not
-# hand-copied), and `body` is the markdown system prompt. This is the agent
+# hand-copied), and `content` is the markdown system prompt. This is the agent
 # sibling of `skills.mkSkillsDir`.
 let
-  # YAML frontmatter is a superset of JSON, so a nested value (mcpServers, a
-  # tools list) is emitted as inline JSON on one line, which a YAML parser reads
-  # back identically. Plain strings stay bare to match the handwritten skill
-  # frontmatter (`description: Use X: do Y` keeps its colons). The fixed leading
-  # order keeps the rendered file stable and readable; any extra keys follow,
-  # sorted, so the output is deterministic regardless of attrset order.
-  renderValue = v: if builtins.isString v then v else builtins.toJSON v;
-
-  leadKeys = [
+  frontmatterOrder = [
     "name"
     "description"
-    "tools"
     "model"
+    "effort"
+    "color"
+    "tools"
     "mcpServers"
   ];
 
-  renderFrontmatter =
-    fm:
+  knownFrontmatter = frontmatterOrder;
+
+  isStringList = value: builtins.isList value && lib.all builtins.isString value;
+  isMcpServers =
+    value:
+    builtins.isList value && lib.all (entry: builtins.isString entry || builtins.isAttrs entry) value;
+
+  assertOptional =
+    agentName: frontmatter: field: predicate: expected:
+    assert lib.assertMsg (
+      !(builtins.hasAttr field frontmatter) || predicate frontmatter.${field}
+    ) "agents.mkAgentsDir: agent ${agentName} frontmatter.${field} must be ${expected}";
+    true;
+
+  validateAgent =
+    name: agent:
     let
-      present = builtins.attrNames fm;
-      ordered =
-        (builtins.filter (k: builtins.elem k present) leadKeys)
-        ++ lib.sort lib.lessThan (lib.subtractLists leadKeys present);
-      line = k: "${k}: ${renderValue fm.${k}}";
+      frontmatter =
+        agent.frontmatter or (throw "agents.mkAgentsDir: agent ${name} is missing frontmatter");
+      content = agent.content or (throw "agents.mkAgentsDir: agent ${name} is missing content");
+      unknown = lib.subtractLists knownFrontmatter (builtins.attrNames frontmatter);
     in
-    lib.concatStringsSep "\n" (map line ordered);
+    assert lib.assertMsg (builtins.isAttrs frontmatter)
+      "agents.mkAgentsDir: agent ${name} frontmatter must be an attrset";
+    assert lib.assertMsg (builtins.isString content)
+      "agents.mkAgentsDir: agent ${name} content must be a string";
+    assert lib.assertMsg ((frontmatter.name or name) == name)
+      "agents.mkAgentsDir: agent ${name} has frontmatter.name=${frontmatter.name or "?"} (must match its key)";
+    assert lib.assertMsg (unknown == [ ])
+      "agents.mkAgentsDir: agent ${name} has unknown frontmatter key(s): ${lib.concatStringsSep ", " unknown}";
+    assert lib.assertMsg (builtins.hasAttr "description" frontmatter)
+      "agents.mkAgentsDir: agent ${name} frontmatter.description is required";
+    assert assertOptional name frontmatter "name" builtins.isString "a string";
+    assert assertOptional name frontmatter "description" builtins.isString "a string";
+    assert assertOptional name frontmatter "model" builtins.isString "a string";
+    assert assertOptional name frontmatter "effort" builtins.isString "a string";
+    assert assertOptional name frontmatter "color" builtins.isString "a string";
+    assert assertOptional name frontmatter "tools" isStringList "a list of strings";
+    assert assertOptional name frontmatter "mcpServers" isMcpServers
+      "a list of server names or inline server attrsets";
+    {
+      frontmatter = {
+        inherit name;
+      }
+      // frontmatter;
+      inherit content;
+    };
 
   renderAgent =
     name: agent:
-    assert lib.assertMsg (agent.frontmatter.name or name == name)
-      "agents.mkAgentsDir: agent ${name} has frontmatter.name=${agent.frontmatter.name or "?"} (must match its key)";
-    ''
-      ---
-      ${renderFrontmatter agent.frontmatter}
-      ---
-
-      ${agent.body}'';
+    markdown.renderDocument (
+      validateAgent name agent
+      // {
+        order = frontmatterOrder;
+      }
+    );
 
   # The `name:` value from a hand-authored agent file's YAML frontmatter, or
   # null if absent. Used to check a raw file's declared name against its
-  # filename, the same invariant `renderAgent` enforces for rendered agents.
+  # filename, the same invariant `validateAgent` enforces for rendered agents.
   # The file is known to open with `---` (per-system.nix's discovery filters on
   # that first). The scan is restricted to the frontmatter block (between the
   # first two `---` fences) so a `name:` line in the markdown body can't be
@@ -126,11 +155,12 @@ in
 
     Arguments:
     - `pkgs`: the package set used to build the directory.
-    - `agents`: attrset from agent name to `{ frontmatter; body; }`. `frontmatter`
-      is rendered to the agent file's YAML frontmatter (nested values such as
-      `mcpServers` as inline JSON); `body` is the markdown system prompt. A
-      `frontmatter.name`, if present, must equal the attribute key. Use this for
-      agents whose frontmatter is computed (e.g. `mcpServers` from `ix.mcp`).
+    - `agents`: attrset from agent name to `{ frontmatter; content; }`.
+      `frontmatter` is checked against Claude Code's agent metadata shape and
+      rendered by `markdown.renderDocument`; `content` is the markdown system
+      prompt. A `frontmatter.name`, if present, must equal the attribute key. Use
+      this for agents whose frontmatter is computed (e.g. `mcpServers` from
+      `ix.mcp`).
     - `rawFiles`: list of `{ name; path; }` for agents that already ship as a
       complete, hand-authored `.md` (frontmatter + body). The file at `path` is
       copied verbatim to `<name>.md`. Use this for static agents so adding one is

@@ -131,8 +131,11 @@ let
   secrets = import ./util/secrets.nix {
     inherit lib pkgs writeNushellApplication;
   };
+  # Markdown document rendering with JSON-encoded YAML frontmatter. Used by
+  # typed wrappers that generate small `.md` files with parseable metadata.
+  markdown = import ./util/markdown.nix { inherit lib; };
   skills = import ./skills.nix { inherit lib paths; };
-  agents = import ./agents.nix { inherit lib; };
+  agents = import ./agents.nix { inherit lib markdown; };
   claudePlugin = import ./claude-plugin.nix { inherit lib skills; };
   # Shared JetBrains Islands palette (both variants), the single source of truth
   # for syntax color across the repo: the code-highlight crate embeds this JSON
