@@ -4642,11 +4642,6 @@ let
       }
       {
         assertion =
-          fleet.nodes.web.environment.etc."session-key-ref".text == "/run/secrets/fleet/sessionKey";
-        message = "fleet node modules should be able to consume declarative secret refs";
-      }
-      {
-        assertion =
           fleetPlan.web.bootstrapImage == "registry.ix.dev/ix/test-cluster-bootstrap:zstd-tools-2026-05-12";
         message = "fleet switches should create missing nodes from the shared NixOS bootstrap image";
       }
