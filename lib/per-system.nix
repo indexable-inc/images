@@ -802,6 +802,61 @@ let
             test -d ${agentsDir}
             mkdir -p "$out"
           '';
+          # Validates the rendered subagent output, making #1562's by-hand
+          # checks (frontmatter parses as YAML, `name` matches the filename,
+          # `tools` renders as a list) a permanent gate so the Nix-data source
+          # in packages/agent/subagents.nix can't drift from valid output.
+          agents-render =
+            pkgs.runCommand "agents-render-check"
+              {
+                nativeBuildInputs = [
+                  pkgs.yq-go
+                  pkgs.gawk
+                  pkgs.coreutils
+                ];
+              }
+              ''
+                shopt -s nullglob
+                count=0
+                for f in ${agentsDir}/*.md; do
+                  base=$(basename "$f" .md)
+                  # Frontmatter is the block between the first two `---` fences.
+                  fm=$(awk 'NR==1 && $0=="---"{open=1; next} open && $0=="---"{exit} open{print}' "$f")
+                  if [ -z "$fm" ]; then
+                    echo "agents-render: $base.md has no frontmatter block" >&2
+                    exit 1
+                  fi
+                  # Fails the build on malformed YAML.
+                  echo "$fm" | yq -e '.' >/dev/null
+                  name=$(echo "$fm" | yq -r '.name')
+                  if [ "$name" != "$base" ]; then
+                    echo "agents-render: $base.md frontmatter name=$name must match filename" >&2
+                    exit 1
+                  fi
+                  desc=$(echo "$fm" | yq -r '.description // ""')
+                  if [ -z "$desc" ]; then
+                    echo "agents-render: $base.md frontmatter description is required" >&2
+                    exit 1
+                  fi
+                  # tools, when present, must render as a YAML list (not a
+                  # comma-separated string); absent is the `!!null` tag.
+                  toolsTag=$(echo "$fm" | yq -r '.tools | tag')
+                  case "$toolsTag" in
+                    '!!seq' | '!!null') ;;
+                    *)
+                      echo "agents-render: $base.md frontmatter tools must be a list, got $toolsTag" >&2
+                      exit 1
+                      ;;
+                  esac
+                  count=$((count + 1))
+                done
+                if [ "$count" -eq 0 ]; then
+                  echo "agents-render: no rendered agent files found" >&2
+                  exit 1
+                fi
+                echo "agents-render: validated $count agent file(s)"
+                mkdir -p "$out"
+              '';
           # Pins the last-applied 3-way merge behind homeModules.mutable-json:
           # first-install, preserve an app-written key, enforce a key the app
           # changed, prune a key Nix stopped declaring, and keep a sibling key

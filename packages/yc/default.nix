@@ -4,10 +4,11 @@
   fetchurl,
   autoPatchelfHook,
   nix,
-  # Bound to a real builder only on the flake-package path (lib/packages.nix),
-  # which is where `nix run .#yc.updateScript` resolves; the overlay path passes
-  # nothing, so `pkgs.yc` carries no updateScript. Same pattern as claude-code.
-  writeNushellApplication ? null,
+  # Writer used to build `passthru.updateScript`. Bound to a real builder only on
+  # the flake-package path (lib/packages.nix), which is where
+  # `nix run .#yc.updateScript` resolves; the overlay path leaves it null, so
+  # `pkgs.yc` carries no updateScript. Same pattern as claude-code.
+  updateScriptWriter ? null,
 }:
 let
   # Slug map and pinned hashes live in manifest.json as the single owner; this
@@ -39,10 +40,10 @@ let
   # auto-bump PR. The S3 bucket denies ListBucket, hence the `latest` pointer
   # rather than enumerating versions.
   updateScript =
-    if writeNushellApplication == null then
+    if updateScriptWriter == null then
       null
     else
-      writeNushellApplication {
+      updateScriptWriter {
         name = "yc-update";
         runtimeInputs = [ nix ];
         meta.description = "Refresh packages/yc/manifest.json to the latest YC CLI release";

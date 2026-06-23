@@ -5,11 +5,12 @@
   makeWrapper,
   nodejs_22,
   nix,
-  # Bound to a real builder only on the flake-package path (lib/packages.nix),
-  # which is where `nix run .#humanlayer.updateScript` resolves; the overlay path
-  # passes nothing, so `pkgs.humanlayer` carries no updateScript. Same pattern as
+  # Writer used to build `passthru.updateScript`. Bound to a real builder only on
+  # the flake-package path (lib/packages.nix), which is where
+  # `nix run .#humanlayer.updateScript` resolves; the overlay path leaves it
+  # null, so `pkgs.humanlayer` carries no updateScript. Same pattern as
   # packages/yc and packages/agent/claude-code.
-  writeNushellApplication ? null,
+  updateScriptWriter ? null,
 }:
 let
   # Version and per-platform hashes live in manifest.json as the single owner;
@@ -48,10 +49,10 @@ let
   # are authentic, so the real gate is human review of the hash changes in the
   # auto-bump PR. Same posture as packages/yc.
   updateScript =
-    if writeNushellApplication == null then
+    if updateScriptWriter == null then
       null
     else
-      writeNushellApplication {
+      updateScriptWriter {
         name = "humanlayer-update";
         runtimeInputs = [ nix ];
         meta.description = "Refresh packages/humanlayer/manifest.json to the latest HumanLayer CLI release";
