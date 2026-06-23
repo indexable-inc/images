@@ -8,14 +8,13 @@ let
     "Bash(gh pr merge*--force*)"
   ];
 
-  supersededBuiltinTools =
-    lib.optionals (mcpServers ? exa) [
-      "WebSearch"
-      "WebFetch"
-    ]
-    ++ lib.optional (mcpServers ? index) "Bash";
+  supersededBuiltinTools = [
+    "WebSearch"
+    "WebFetch"
+  ]
+  ++ lib.optional (mcpServers ? index) "Bash";
 
-  codexForcedSettings = lib.optionalAttrs (mcpServers ? index) {
+  codexForcedSettings = {
     features = {
       browser_use = false;
       browser_use_external = false;

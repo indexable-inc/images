@@ -97,8 +97,8 @@ wrapper injects its defaults file only `unless_present` a caller `--settings`
   so the local-build gate in the system prompt is applied (postmortem
   ENG-2391); ask rules are not enforced under the baked skip-permissions, so
   this is the practical gate for consumers who turn the flag off.
-- `permissions.deny` `WebSearch` / `WebFetch` (only while the `exa` MCP server
-  is baked): one web surface, not two; deny rules are enforced in every
+- `permissions.deny` `WebSearch` / `WebFetch`: one web surface, not two; use
+  Exa MCP for live web research. Deny rules are enforced in every
   permission mode.
 - `hooks` (below).
 

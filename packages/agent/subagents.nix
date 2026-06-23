@@ -98,7 +98,7 @@ in
       model: opus
       effort: xhigh
       color: red
-      tools: Read, Bash, Glob, Grep, WebFetch, WebSearch
+      tools: Read, Bash, Glob, Grep, mcp__exa__web_search_exa, mcp__exa__web_fetch_exa
       ---
 
       # Code Reviewer
@@ -117,7 +117,7 @@ in
       - **branch** → `git diff <base>...HEAD` (base = the branch's merge base with the default branch).
       - **a path / "the current change"** with no PR → `git diff` and `git diff --staged`; if both empty, `git show HEAD`.
 
-      Then read the **full files** around each hunk, not just the diff — a diff hides the context a bug lives in. Read the repo's `CLAUDE.md` / `AGENTS.md` / `CONTRIBUTING.md` and nearby code so findings match the project's real conventions, not generic best practice. For unfamiliar APIs, dependencies, or CVE-prone areas, use WebSearch/WebFetch to verify behavior rather than guessing.
+      Then read the **full files** around each hunk, not just the diff — a diff hides the context a bug lives in. Read the repo's `CLAUDE.md` / `AGENTS.md` / `CONTRIBUTING.md` and nearby code so findings match the project's real conventions, not generic best practice. For unfamiliar APIs, dependencies, or CVE-prone areas, use Exa (`mcp__exa__web_search_exa`, then `mcp__exa__web_fetch_exa` when needed) to verify behavior rather than guessing.
 
       ## 2. Review in fixed priority order
 
@@ -298,7 +298,7 @@ in
       model: opus
       effort: xhigh
       color: yellow
-      tools: Read, Bash, Glob, Grep, WebFetch, WebSearch, mcp__exa__web_search_exa, mcp__exa__web_fetch_exa
+      tools: Read, Bash, Glob, Grep, mcp__exa__web_search_exa, mcp__exa__web_fetch_exa
       ---
 
       # Synthesis critic

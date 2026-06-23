@@ -3493,20 +3493,27 @@ let
           let
             policy = import (paths.packagesRoot + "/agent/policy/permissions.nix") {
               inherit lib;
-              mcpServers.index = { };
+              mcpServers = { };
             };
           in
-          policy.codex.forcedSettings.features == {
-            browser_use = false;
-            browser_use_external = false;
-            computer_use = false;
-            image_generation = false;
-            in_app_browser = false;
-            shell_tool = false;
-            standalone_web_search = false;
-            unified_exec = false;
-          };
-        message = "Codex policy should disable built-in tools when the index MCP is available";
+          policy.claude.deniedToolPatterns == [
+            "Bash(gh pr merge*--admin*)"
+            "Bash(gh pr merge*--force*)"
+            "WebSearch"
+            "WebFetch"
+          ]
+          &&
+            policy.codex.forcedSettings.features == {
+              browser_use = false;
+              browser_use_external = false;
+              computer_use = false;
+              image_generation = false;
+              in_app_browser = false;
+              shell_tool = false;
+              standalone_web_search = false;
+              unified_exec = false;
+            };
+        message = "agent policy should always disable built-in web search tools";
       }
       {
         assertion =
