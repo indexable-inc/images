@@ -226,6 +226,48 @@ let
     };
 
   /**
+    Package a single-file Rust command as a standalone executable.
+
+    This is for small std-only operational helpers. Use a normal workspace crate
+    when the command needs crates.io dependencies or tests.
+  */
+  writeRustApplication =
+    pkgs:
+    {
+      name,
+      text,
+      edition ? "2024",
+      runtimeInputs ? [ ],
+      rustToolchain ? pkgs.rustc,
+      meta ? { },
+    }:
+    pkgs.runCommand name
+      {
+        inherit text;
+        nativeBuildInputs = [
+          rustToolchain
+          pkgs.stdenv.cc
+        ]
+        ++ lib.optional (runtimeInputs != [ ]) pkgs.makeWrapper;
+        passAsFile = [ "text" ];
+        meta = meta // {
+          mainProgram = meta.mainProgram or name;
+        };
+      }
+      (
+        ''
+          mkdir -p "$out/bin"
+          rustc --edition ${edition} -O --crate-name ${
+            lib.replaceStrings [ "-" ] [ "_" ] name
+          } -o "$out/bin/${name}" "$textPath"
+        ''
+        + lib.optionalString (runtimeInputs != [ ]) ''
+          wrapProgram "$out/bin/${name}" \
+            --prefix PATH : ${lib.makeBinPath runtimeInputs}
+        ''
+      );
+
+  /**
     Package a process-compose specification as a `nix run` application.
 
     Generates a checked YAML config from Nix values and wraps

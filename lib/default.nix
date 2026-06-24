@@ -49,8 +49,13 @@ let
     writePythonApplication
     writeNushellApplication
     writeBashApplication
+    writeRustApplication
     writeProcessComposeApplication
     ;
+  netCidr = import ./util/net-cidr.nix { inherit lib; };
+  publicArtifactsFor = pkgs: import ./util/public-artifacts.nix { inherit lib pkgs; };
+  secretRefs = import ./util/secret-refs.nix { inherit lib; };
+  checks = import ./checks.nix { inherit lib; };
 
   /**
     Repo-local nixpkgs overlay.
@@ -425,6 +430,7 @@ let
       buildUvApplication
       buildZigPackage
       cargoUnit
+      checks
       claudePlugin
       deepMerge
       goUnit
@@ -438,11 +444,14 @@ let
       mkMinecraftNbtFormat
       mkMinecraftSyncManaged
       mutableJson
+      netCidr
       paths
+      publicArtifactsFor
       relativePath
       ruffAnnArgs
       rustWorkspace
       rustWorkspaceFor
+      secretRefs
       skills
       systemdHardening
       toml
@@ -450,6 +459,7 @@ let
       writeNushellApplication
       writeProcessComposeApplication
       writePythonApplication
+      writeRustApplication
       ;
     btopSrc = btop-src;
     drgnSrc = drgn-src;

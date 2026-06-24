@@ -10,6 +10,7 @@ let
     mkDefault
     mkEnableOption
     mkIf
+    mkPackageOption
     mkOption
     types
     ;
@@ -34,6 +35,13 @@ in
     dataDir = mkOption {
       type = types.str;
       default = "/var/lib/postgresql/18";
+    };
+
+    package = mkPackageOption pkgs "postgresql_18_ix" {
+      extraDescription = ''
+        PostgreSQL package to run. The default includes the trusted `uint128`
+        extension so non-superuser database owners can create it in migrations.
+      '';
     };
 
     sharedBuffersMiB = mkOption {
@@ -101,7 +109,7 @@ in
 
     services.postgresql = {
       enable = true;
-      package = pkgs.postgresql_18;
+      inherit (cfg) package;
       inherit (cfg) dataDir port;
       enableJIT = true;
       # Tuned defaults for a dedicated VM. Override any of these by setting

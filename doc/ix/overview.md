@@ -15,7 +15,10 @@ Two repos, one boundary:
   VM images and fleet plans (`lib/`), the ready-made service modules
   (`modules/services/`), the base images (`images/`), and a large set of
   standalone tools (search, mcp, tui, dashboard, `ix-fleet`, ...) under
-  `packages/`. You can read, fork, and run all of it (`LICENSE`).
+  `packages/`. Shared Nix primitives live here too: checked script writers,
+  generic check constructors, PostgreSQL packages such as `postgresql_18_ix`,
+  and reusable `bw://folder/item/field` reference grammar. You can read, fork,
+  and run all of it (`LICENSE`).
 - **The hosted platform (private, proprietary).** The `ix` CLI, the control plane
   it talks to, and the image registry (`registry.ix.dev`) are the hosted product,
   under the Indexable SDK License. The CLI builds your open `index`-based config

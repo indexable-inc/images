@@ -54,6 +54,8 @@ Concrete example, enabling PostgreSQL (option verified at
   imports = [ ../modules/services/postgresql ];
 
   services.ix-postgresql.enable = true;
+  # Optional: override `package`; the default is pkgs.postgresql_18_ix with
+  # the trusted uint128 extension available for CREATE EXTENSION.
 }
 ```
 

@@ -103,6 +103,13 @@
       flake = false;
     };
 
+    # PostgreSQL uint128 extension source. The package marks the extension trusted
+    # so non-superuser database owners can run `CREATE EXTENSION uint128`.
+    pg-uint128-src = {
+      url = "github:pg-uint/pg-uint128/1.2.0";
+      flake = false;
+    };
+
     fff-src = {
       url = "github:dmtrKovalenko/fff/v0.9.1";
       flake = false;
@@ -174,6 +181,7 @@
       btop-src,
       drgn-src,
       perftest-src,
+      pg-uint128-src,
       fff-src,
       launchk-src,
       snix-src,
@@ -220,6 +228,7 @@
         tests = tests.outPath;
         bench.filesystem = bench-filesystem.outPath;
         site = site.outPath;
+        pgUint128Src = pg-uint128-src;
         packagesRoot = ./packages;
         minecraftCatalogs = ./packages/minecraft/catalogs;
         minecraftMods = ./packages/minecraft/catalogs/mods;

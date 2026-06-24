@@ -17,7 +17,13 @@ let
     (they key a grouping). Returned sorted and de-duplicated.
   */
   findDuplicates = findDuplicatesBy lib.id;
+
+  /**
+    Build an attrset from a list by mapping each element to a
+    `lib.nameValuePair`-shaped `{ name; value; }` result.
+  */
+  genAttrs' = xs: f: lib.listToAttrs (map f xs);
 in
 {
-  inherit findDuplicatesBy findDuplicates;
+  inherit findDuplicatesBy findDuplicates genAttrs';
 }

@@ -248,6 +248,23 @@
         "url": "https://github.com/linux-rdma/perftest"
       }
     },
+    "pg-uint128-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1762189440,
+        "narHash": "sha256-D2eTxzVZCQk9Cz4bhSmKu9hfL8r1RwkjS8ajadKb5sY=",
+        "owner": "pg-uint",
+        "repo": "pg-uint128",
+        "rev": "db7a79a0f5ccd3d59404d6b9510e01f0876699ea",
+        "type": "github"
+      },
+      "original": {
+        "owner": "pg-uint",
+        "ref": "1.2.0",
+        "repo": "pg-uint128",
+        "type": "github"
+      }
+    },
     "pyproject-build-systems": {
       "inputs": {
         "nixpkgs": [
@@ -350,6 +367,7 @@
         "launchk-src": "launchk-src",
         "nixpkgs": "nixpkgs",
         "perftest-src": "perftest-src",
+        "pg-uint128-src": "pg-uint128-src",
         "rust-overlay": "rust-overlay",
         "site": "site",
         "skills": "skills",
