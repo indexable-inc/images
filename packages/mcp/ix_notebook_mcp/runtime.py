@@ -397,6 +397,39 @@ class Job:
         return head + ("\n" + out if out else "")
 
 
+def _nuon_key(value: Any) -> str:
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def _nuon(value: Any, *, _depth: int = 0) -> str:
+    """A compact Nushell NUON subset for model-facing structured output."""
+    if _depth > 8:
+        return json.dumps(_safe_repr(value), ensure_ascii=False)
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    if isinstance(value, float):
+        if value == value and value not in (float("inf"), float("-inf")):
+            return repr(value)
+        return json.dumps(str(value), ensure_ascii=False)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, bytes):
+        return json.dumps(base64.b64encode(value).decode("ascii"), ensure_ascii=False)
+    if isinstance(value, Mapping):
+        return "{" + ",".join(f"{_nuon_key(k)}:{_nuon(v, _depth=_depth + 1)}" for k, v in value.items()) + "}"
+    if isinstance(value, (list, tuple)):
+        return "[" + ",".join(_nuon(v, _depth=_depth + 1) for v in value) + "]"
+    iso = getattr(value, "isoformat", None)
+    if callable(iso):
+        with contextlib.suppress(Exception):
+            return json.dumps(iso(), ensure_ascii=False)
+    return json.dumps(_safe_repr(value), ensure_ascii=False)
+
+
 def _llm_text(value: Any) -> str | None:
     """Coerce a model-facing text field to ``str`` (or None to keep a default).
 
@@ -412,7 +445,29 @@ def _llm_text(value: Any) -> str | None:
     inner = getattr(value, "llm_result", None)
     if isinstance(inner, str):
         return inner
-    return _safe_repr(value)
+    return _nuon(value)
+
+
+def _call_value_hook(value: Any, *names: str) -> Any:
+    for name in names:
+        hook = getattr(value, name, None)
+        if hook is None:
+            continue
+        try:
+            return hook() if callable(hook) else hook
+        except Exception:
+            return None
+    return None
+
+
+def _html_output(value: Any) -> str | None:
+    html = _call_value_hook(value, "__ix_html__", "_ix_html_", "_repr_html_", "__html__")
+    return html if isinstance(html, str) else None
+
+
+def _llm_output(value: Any) -> str | None:
+    out = _call_value_hook(value, "__ix_llm__", "_ix_llm_")
+    return _llm_text(out) if out is not None else None
 
 
 def _result_from_text(cls: type, value: Any, *, html: str | None = None) -> Result:
@@ -538,9 +593,9 @@ class Result:
         """Wrap any value: render it richly for the human (a DataFrame as a
         table, a figure as an image, anything else as its display HTML or repr)
         and hand the model concise text. For a polars DataFrame the model text is
-        the frame as compact, untruncated CSV (the human still gets the styled
-        HTML table), so a wide or long-stringed frame is never clipped to the
-        agent the way the boxed text repr clips it. Override with ``llm_result``."""
+        compact NUON (the human still gets the styled HTML table), so a wide or
+        long-stringed frame is never clipped to the agent the way the boxed text
+        repr clips it. Override with ``llm_result`` or define ``__ix_llm__``."""
         if isinstance(value, Result):
             # An existing Result is already split into its two views: copy it
             # faithfully (keeping llm_images) instead of rebuilding it from its
@@ -551,6 +606,13 @@ class Result:
                 llm_result=value.llm_result if llm_result is None else llm_result,
                 llm_images=value.llm_images,
             )
+        if not _is_polars_df(value):
+            llm_hook = _llm_output(value)
+            html_hook = _html_output(value)
+            if html_hook is not None or llm_hook is not None:
+                text_view = llm_result if llm_result is not None else (llm_hook or _nuon(value))
+                user = html_hook if html_hook is not None else f'<pre class="ix-result">{_escape_html(text_view)}</pre>'
+                return cls(user_html=user, llm_result=text_view)
         image_mime = _image_bytes_mime(value)
         if image_mime is not None:
             # Raw PNG/JPEG bytes (e.g. `await page.screenshot()`): show the human
@@ -598,7 +660,7 @@ class Result:
         if frame is not None:
             # A rich result type (fff GrepResult/SearchResult) that exposes a
             # polars frame: render that frame the same as a bare DataFrame -- a
-            # styled table for the human, compact CSV for the model -- so the
+            # styled table for the human, compact NUON for the model -- so the
             # model reads the real rows, not a one-line summary repr.
             text_view = llm_result if llm_result is not None else _df_llm_text(frame)
             try:
@@ -614,11 +676,11 @@ class Result:
         elif _is_polars_df(value):
             text_view = _df_llm_text(value)
         else:
-            text_view = _safe_repr(value)
+            text_view = _nuon(value)
         if _is_polars_df(value):
             # A frame (incl. a dict/records value coerced above) renders as the
             # dashboard's styled table directly -- a table for the human, compact
-            # CSV for you -- and works even without the IPython display formatter.
+            # NUON for you -- and works even without the IPython display formatter.
             try:
                 import view as _view
 
@@ -644,8 +706,7 @@ class Result:
         # server unpacks and the dashboard ignores; text/plain is the fallback.
         bundle: dict = {"text/html": self.user_html, "text/plain": self.llm_result or ""}
         images = [img for img in (_coerce_image(i) for i in self.llm_images) if img]
-        if images:
-            bundle[IX_LLM_MIME] = {"text": self.llm_result or "", "images": images}
+        bundle[IX_LLM_MIME] = {"text": self.llm_result or "", "images": images}
         return bundle
 
     def __call__(self) -> Result:
@@ -664,7 +725,7 @@ class Result:
 def _as_frame_if_tabular(value: Any) -> Any:
     """A mapping (a config dict, counts) or a list of mappings (records) is
     tabular: render it as a polars frame -- a styled table for the human, compact
-    CSV for you -- rather than a raw dict/list repr. Anything else is returned
+    NUON for you -- rather than a raw dict/list repr. Anything else is returned
     unchanged. Keeps `Result({...})` from shoving a dict under text/html (invalid)
     and from collapsing to a bare repr."""
     try:
@@ -692,7 +753,7 @@ def _as_frame_if_tabular(value: Any) -> Any:
             return value
     if isinstance(value, (list, tuple)) and value:
         # A plain list/tuple of scalars is tabular too: one styled `value` column
-        # for the human, compact CSV for you. (Lists of mappings are records above.)
+        # for the human, compact NUON for you. (Lists of mappings are records above.)
         try:
             return pl.DataFrame({"value": list(value)})
         except Exception:
@@ -1796,17 +1857,22 @@ def _ansi_to_html(text: str) -> str:
 
 # How many rows of a DataFrame the model-facing text carries. The human's HTML
 # table is unaffected (it renders the whole frame, paged); this only bounds the
-# CSV handed back to the agent so a million-row frame cannot flood its context.
+# NUON handed back to the agent so a million-row frame cannot flood its context.
 _DF_LLM_ROWS = 200
 
 
 def _is_polars_df(value: Any) -> bool:
-    """True for a polars DataFrame, by duck typing. runtime.py stays import-light
-    (polars is the user's to bring), so it never imports polars to check."""
+    """True for a polars DataFrame, by duck typing.
+
+    runtime.py stays import-light (polars is the user's to bring), and Nix-built
+    wheels may expose extension-backed classes whose module is not simply
+    ``polars.*``.
+    """
     return (
-        type(value).__module__.split(".", 1)[0] == "polars"
-        and hasattr(value, "write_csv")
+        hasattr(value, "iter_rows")
         and hasattr(value, "columns")
+        and hasattr(value, "dtypes")
+        and hasattr(value, "shape")
         and hasattr(value, "height")
     )
 
@@ -1815,7 +1881,7 @@ def _frame_view(value: Any) -> Any:
     """A non-DataFrame value that opts into the table protocol by exposing
     ``_ix_to_frame_()`` returning a polars DataFrame (e.g. an fff ``GrepResult``
     or ``SearchResult``). Returns that frame, else None. Lets a rich result type
-    render as the styled table for the human and compact CSV for the model,
+    render as the styled table for the human and compact NUON for the model,
     instead of falling back to its one-line summary repr."""
     hook = getattr(value, "_ix_to_frame_", None)
     if hook is None:
@@ -1828,19 +1894,27 @@ def _frame_view(value: Any) -> Any:
 
 
 def _df_llm_text(df: Any) -> str:
-    """A polars DataFrame as compact text for the model: a shape + dtype header
-    then CSV, with cell values never truncated (only the row count is bounded by
-    ``_DF_LLM_ROWS``). CSV is denser than the boxed repr and drops no value, so
-    the agent reads the real data instead of a width-clipped table."""
+    """A polars DataFrame as compact NUON for the model.
+
+    Values are never width-truncated (only the row count is bounded by
+    ``_DF_LLM_ROWS``), so the agent reads the real data instead of a boxed repr.
+    """
     try:
-        schema = ", ".join(f"{name}:{dtype}" for name, dtype in zip(df.columns, df.dtypes, strict=False))
         rows, cols = df.shape
-        body = df.head(_DF_LLM_ROWS).write_csv().rstrip("\n")
-        more = f"\n... ({rows - _DF_LLM_ROWS} more rows)" if rows > _DF_LLM_ROWS else ""
-        return f"shape: ({rows}, {cols}) | {schema}\n{body}{more}"
+        head = df.head(_DF_LLM_ROWS)
+        payload = {
+            "shape": [rows, cols],
+            "schema": {name: str(dtype) for name, dtype in zip(df.columns, df.dtypes, strict=False)},
+            "columns": list(df.columns),
+            "rows": [list(row) for row in head.iter_rows()],
+        }
+        if rows > _DF_LLM_ROWS:
+            payload["truncated"] = True
+            payload["shown_rows"] = _DF_LLM_ROWS
+        return _nuon(payload)
     except Exception:
-        # An exotic frame that resists write_csv falls back to its plain repr.
-        return _safe_repr(df)
+        # An exotic frame that resists row iteration falls back to safe NUON text.
+        return _nuon(_safe_repr(df))
 
 
 def _png_bytes(img: Any) -> bytes:

@@ -85,10 +85,23 @@ Result(user_html="<table>…</table>", llm_result="42 rows, mean 3.1")
 
 The dashboard renders `user_html` (a rich HTML view for the human) while your
 `python_exec` tool result receives only `llm_result` (concise text). It is a mime
-bundle under the hood (`text/html` for the dashboard, `text/plain` for you), so a
-large rendered view never costs you tokens. For an ordinary value the two
-audiences share one rendering: a bare trailing expression still shows its rich
-repr on the dashboard and its text to you.
+bundle under the hood (`text/html` for the dashboard, `application/x-ix-llm+json`
+for you), so a large rendered view never costs you tokens.
+
+Objects can opt in directly:
+
+```python
+class Summary:
+    def __ix_html__(self):
+        return "<strong>human table</strong>"
+
+    def __ix_llm__(self):
+        return {"rows": 42, "mean": 3.1}
+```
+
+Non-string `llm_result` / `__ix_llm__` values are serialized as Nushell NUON.
+Polars DataFrames default to compact NUON with shape, schema, columns, and rows,
+while the dashboard still gets the styled HTML table.
 
 ## Asking the human: interactive input
 

@@ -2218,6 +2218,43 @@ let
         d = await run("import polars as pl\npl.DataFrame({'x': [1, 2]})", budget=2.0, name="auto-df")
         assert d.status == "done", (d.status, d.error)
         assert isinstance(d.result, runtime.Result), type(d.result)
+        assert d.result.llm_result.startswith("{\"shape\":[2,1]"), d.result.llm_result
+        assert "\"columns\":[\"x\"]" in d.result.llm_result, d.result.llm_result
+        assert "\"rows\":[[1],[2]]" in d.result.llm_result, d.result.llm_result
+        import json as _json
+        import subprocess as _subprocess
+        import tempfile as _tempfile
+        from pathlib import Path as _Path
+
+        _nuon_path = _Path(_tempfile.mkdtemp()) / "df.nuon"
+        _nuon_path.write_text(d.result.llm_result)
+        _parsed = _json.loads(_subprocess.check_output(
+            ["nu", "-c", f"open --raw {_nuon_path} | from nuon | to json -r"],
+            text=True,
+        ))
+        assert _parsed["shape"] == [2, 1] and _parsed["rows"] == [[1], [2]], _parsed
+
+        class Split:
+            def __ix_html__(self):
+                return "<strong>human</strong>"
+            def __ix_llm__(self):
+                return {"answer": 42, "tags": ["nuon", "llm"]}
+
+        split = runtime.Result.of(Split())
+        assert split.user_html == "<strong>human</strong>", split.user_html
+        _split_path = _Path(_tempfile.mkdtemp()) / "split.nuon"
+        _split_path.write_text(split.llm_result)
+        _split = _json.loads(_subprocess.check_output(
+            ["nu", "-c", f"open --raw {_split_path} | from nuon | to json -r"],
+            text=True,
+        ))
+        assert _split == {"answer": 42, "tags": ["nuon", "llm"]}, (split.llm_result, _split)
+        from ix_notebook_mcp import outputs as _outputs_for_llm
+
+        _bundle = split._repr_mimebundle_()
+        assert runtime.IX_LLM_MIME in _bundle and _bundle["text/html"] == "<strong>human</strong>", _bundle
+        _content = _outputs_for_llm.to_mcp([{"output_type": "display_data", "data": _bundle}])
+        assert len(_content) == 1 and _content[0].text == split.llm_result, _content
         # Jupyter semantics: the last expression IS the result, whatever its type.
         sc = await run("1 + 1", budget=2.0, name="scalar")
         assert sc.status == "done", (sc.status, sc.error)
@@ -2700,6 +2737,7 @@ let
         nativeBuildInputs = [
           mcpPython
           pkgs.git
+          pkgs.nushell
         ];
         strictDeps = true;
       }
