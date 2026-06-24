@@ -115,6 +115,11 @@
       flake = false;
     };
 
+    nu-jupyter-kernel-src = {
+      url = "github:cptpiepmatz/nu-jupyter-kernel/016d5089d9b0c66beb95311e339e252c8b9dd4e4";
+      flake = false;
+    };
+
     launchk-src = {
       url = "github:mach-kernel/launchk/6f5f09e0dfa3fea662e859de5d7d49ac09a9dbe6";
       flake = false;
@@ -183,6 +188,7 @@
       perftest-src,
       pg-uint128-src,
       fff-src,
+      nu-jupyter-kernel-src,
       launchk-src,
       snix-src,
       clippy-fork,
@@ -262,6 +268,7 @@
           drgn-src
           perftest-src
           fff-src
+          nu-jupyter-kernel-src
           launchk-src
           snix-src
           clippy-fork

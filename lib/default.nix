@@ -10,6 +10,7 @@
   drgn-src,
   perftest-src,
   fff-src,
+  nu-jupyter-kernel-src,
   launchk-src,
   snix-src,
   clippy-fork,
@@ -468,6 +469,7 @@ let
     drgnSrc = drgn-src;
     perftestSrc = perftest-src;
     fffSrc = fff-src;
+    nuJupyterKernelSrc = nu-jupyter-kernel-src;
     launchkSrc = launchk-src;
     snixSrc = snix-src;
   };
