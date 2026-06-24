@@ -735,14 +735,7 @@ def _dashboard(*, open_browser: bool = True) -> int:
     """Open the one shared dashboard, starting it if needed. Idempotent: a hub
     already running is reused (no second board), which is the whole point of the
     machine-wide singleton -- repeated runs never pile up dashboards."""
-    # Serialize concurrent launches: without this, two `ix-mcp dashboard` runs can
-    # both see no hub and both spawn one (TOCTOU between the check and the bind).
-    # Holding an exclusive lock around check-or-spawn means the loser blocks, then
-    # finds the winner's hub.json and reuses it.
-    lock_path = runtime_dir() / "hub.lock"
-    with lock_path.open("w") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        state = live_hub() or _spawn_shared_hub()
+    state = ensure_shared_dashboard()
     if state is None:
         return 1
     url = state["url"]
@@ -753,6 +746,30 @@ def _dashboard(*, open_browser: bool = True) -> int:
     if open_browser and sys.stdout.isatty():
         webbrowser.open(url)
     return 0
+
+
+def ensure_shared_dashboard(*, open_browser: bool = False) -> dict | None:
+    """Start or reuse the shared dashboard hub.
+
+    Tool calls use this directly for first-use autostart, where stdout is the MCP
+    protocol stream and must stay untouched. ``ix-mcp dashboard`` remains the
+    user-facing CLI wrapper that prints the URL and applies the TTY browser-open
+    policy.
+    """
+    # Serialize concurrent launches: without this, two `ix-mcp dashboard` runs can
+    # both see no hub and both spawn one (TOCTOU between the check and the bind).
+    # Holding an exclusive lock around check-or-spawn means the loser blocks, then
+    # finds the winner's hub.json and reuses it.
+    lock_path = runtime_dir() / "hub.lock"
+    with lock_path.open("w") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        state = live_hub() or _spawn_shared_hub()
+    if state is None:
+        return None
+    url = state["url"]
+    if open_browser:
+        webbrowser.open(url)
+    return state
 
 
 def _one_shot(code: str) -> int:

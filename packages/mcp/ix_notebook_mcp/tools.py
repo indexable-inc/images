@@ -29,6 +29,7 @@ restates a tool by hand.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -122,6 +123,26 @@ def _session_id(ctx: Context | None) -> str | None:
 # Set once the connecting client has been identified to the kernel, so the
 # session label defaults to it (see runtime.Session). A latch, not per-call work.
 _client_identified = False
+_dashboard_started = False
+
+
+async def _start_dashboard_once() -> None:
+    """Best-effort first-tool dashboard startup.
+
+    `serve` no longer owns a per-server hub, but a first real tool call is the
+    moment a human expects the website to exist. Reuse the shared singleton so
+    abnormal MCP exits do not leave one orphan hub per server.
+    """
+    global _dashboard_started
+    if _dashboard_started:
+        return
+    _dashboard_started = True
+    try:
+        from .cli import ensure_shared_dashboard
+
+        await asyncio.to_thread(ensure_shared_dashboard, open_browser=True)
+    except Exception:
+        logger.exception("dashboard autostart failed")
 
 
 def _client_label(ctx: Context | None) -> str:
@@ -246,6 +267,7 @@ async def python_exec(
     budget: Annotated[float, Field(description="Seconds to wait before backgrounding the run (server-side cap: 120s; larger values are clamped and a notice is appended to the reply)")] = 15.0,
     ctx: Context | None = None,
 ) -> Content:
+    await _start_dashboard_once()
     await _identify_client_once(ctx)
     # A foreground budget is how long the run holds the one shared shell channel
     # before it backgrounds, so cap it: a giant budget (a 15-minute `await
@@ -335,6 +357,7 @@ async def read(
     end: Annotated[int | None, Field(description="Last line to include (inclusive)")] = None,
     ctx: Context | None = None,
 ) -> Content:
+    await _start_dashboard_once()
     await _identify_client_once(ctx)
     sid = _session_id(ctx)
     code = f"await __ix_read({target!r}, {start!r}, {end!r}, session={sid!r})"
@@ -352,6 +375,7 @@ async def read(
 
 @mcp.tool(structured_output=False, description=guide.TRACE)
 async def kernel_trace() -> str:
+    await _start_dashboard_once()
     return await current_kernel().dump_trace()
 
 
@@ -466,6 +490,7 @@ async def tui_act(
     ] = None,
     ctx: Context | None = None,
 ) -> Content:
+    await _start_dashboard_once()
     await _identify_client_once(ctx)
     try:
         ack = await resources_bridge.act(uri, send_keys, peer=peer)
