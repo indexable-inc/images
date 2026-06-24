@@ -3146,8 +3146,22 @@ async def __ix_read(target: Any, start: int | None = None, end: int | None = Non
     else:
         body = full
         span = f"{total} lines"
-    note = f"read {label} \u00b7 {span}, {len(body)} chars"
-    user = f'<div class="ix-ok">{icon} {_escape_html(note)}</div>'
+    note = f"read {label} · {span}, {len(body)} chars"
+    user = (
+        '<section style="font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;" '
+        'class="ix-read">'
+        '<style>.ix-read{display:flex;flex-direction:column;gap:10px;color:#e8e8ee}'
+        '.ix-read header{display:flex;align-items:center;gap:10px}'
+        '.ix-read strong{display:block;font-weight:650;color:#f2f2f6}'
+        '.ix-read span{display:block;color:#8a8a95;font-size:11px;margin-top:2px}'
+        '.ix-read pre{margin:0;max-height:420px;overflow:auto;padding:12px 14px;'
+        'border:1px solid #24242a;border-radius:12px;background:#0b0b0e;color:#ececef}'
+        '.ix-read code{white-space:pre;font:inherit}</style>'
+        f'<header>{icon}<div><strong>{_escape_html(label)}</strong>'
+        f'<span>{_escape_html(span)}, {len(body)} chars</span></div></header>'
+        f'<pre><code>{_escape_html(body)}</code></pre>'
+        '</section>'
+    )
     return Result(user_html=user, llm_result=body)
 
 

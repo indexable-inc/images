@@ -92,13 +92,9 @@
     showResult[key] = !showResult[key];
   }
 
-  // The short run id from a pane key (`scope<0x1f>id`): the trailing id, shown as
-  // quiet meta so a human can still correlate a row to a `jobs['<id>']` without it
-  // being the headline (the title/intent is).
-  function shortId(key: string): string {
+  function paneId(key: string): string {
     const sep = key.indexOf(SCOPE_SEP);
-    const id = sep === -1 ? key : key.slice(sep + 1);
-    return id.includes('/') ? id.slice(id.lastIndexOf('/') + 1) : id;
+    return sep === -1 ? key : key.slice(sep + 1);
   }
 
   // A namespace pane (the kernel's live globals) is not a run — it has its own
@@ -197,8 +193,9 @@
       const p = it.pane;
       return (
         (p.title ?? '').toLowerCase().includes(q) ||
-        shortId(it.key).toLowerCase().includes(q) ||
-        tag(p).toLowerCase().includes(q)
+        paneId(it.key).toLowerCase().includes(q) ||
+        tag(p).toLowerCase().includes(q) ||
+        (p.subtitle ?? '').toLowerCase().includes(q)
       );
     });
   });
@@ -249,6 +246,25 @@
   function openSelected(): void {
     if (selectedKey) showResult[selectedKey] = !showResult[selectedKey];
   }
+
+
+  type FeedItem = { key: string; pane: Pane };
+  type SessionGroup = { scope: string; label: string; items: FeedItem[] };
+  function sessionLabel(scope: string): string {
+    return sessions.find((s) => s.scope === scope)?.label || shortScope(scope);
+  }
+  const grouped = $derived.by<SessionGroup[]>(() => {
+    const groups = new Map<string, FeedItem[]>();
+    for (const it of filtered) {
+      const scope = it.pane.scope || '';
+      const rows = groups.get(scope) ?? [];
+      rows.push(it);
+      groups.set(scope, rows);
+    }
+    return [...groups.entries()]
+      .map(([scope, rows]) => ({ scope, label: sessionLabel(scope), items: rows }))
+      .sort((a, b) => (a.label < b.label ? -1 : 1));
+  });
 
   // Register this view's motions with the global keymap while it is mounted.
   onMount(() => {
@@ -308,26 +324,34 @@
     <!-- Left: the timeline list. One quiet line per run; the rail threads the
          dots. Selecting a row drives the detail panel; it never expands inline. -->
     <ol class="feed-list">
-      {#each filtered as it (it.key)}
-        {@const p = it.pane}
-        {@const running = ledRun(p)}
-        {@const isErr = ledErr(p)}
-        <li class="entry" class:err={isErr} class:selected={selectedKey === it.key} data-key={it.key}>
-          <button class="entry-row" onclick={() => (selectedKey = it.key)} title={`${tag(p)}${p.subtitle ? ' · ' + p.subtitle : ''}`}>
-            <span class="entry-dot" class:live={ledLive(p)} class:run={running} class:err={isErr}></span>
-            <span class="entry-main">
-              <span class="entry-title" title={p.title}>{p.title || '(pane)'}</span>
-              <span class="entry-sub">{shortId(it.key)}<span class="entry-sub-tag"> · {tag(p)}</span></span>
-            </span>
-            {#if running}
-              <span class="entry-now">running</span>
-            {:else if p.duration_ms != null}
-              <span class="entry-age" title="execution time">{humanDuration(p.duration_ms)}</span>
-            {:else}
-              <span class="entry-age">{humanAge(p.created_at, refMs)}</span>
-            {/if}
-          </button>
+      {#each grouped as group (group.scope)}
+        <li class="session-group">
+          <div class="session-label">
+            <span>{group.label}</span>
+            <em>{group.items.length}</em>
+          </div>
         </li>
+        {#each group.items as it (it.key)}
+          {@const p = it.pane}
+          {@const running = ledRun(p)}
+          {@const isErr = ledErr(p)}
+          <li class="entry" class:err={isErr} class:selected={selectedKey === it.key} data-key={it.key}>
+            <button class="entry-row" onclick={() => (selectedKey = it.key)} title={p.subtitle || p.title || ''}>
+              <span class="entry-dot" class:live={ledLive(p)} class:run={running} class:err={isErr}></span>
+              <span class="entry-main">
+                <span class="entry-title" title={p.title}>{p.title || '(pane)'}</span>
+                {#if p.subtitle}<span class="entry-sub">{p.subtitle}</span>{/if}
+              </span>
+              {#if running}
+                <span class="entry-now">running</span>
+              {:else if p.duration_ms != null}
+                <span class="entry-age" title="execution time">{humanDuration(p.duration_ms)}</span>
+              {:else}
+                <span class="entry-age">{humanAge(p.created_at, refMs)}</span>
+              {/if}
+            </button>
+          </li>
+        {/each}
       {/each}
     </ol>
 
@@ -356,7 +380,7 @@
         </div>
         <div class="detail-meta">
           {#if ledRun(p)}running{:else if p.duration_ms != null}{humanDuration(p.duration_ms)}{:else}{humanAge(p.created_at, refMs)}{/if}
-          {#if tag(p)} · {tag(p)}{/if}{#if p.subtitle} · {p.subtitle}{/if}
+          {#if p.subtitle} · {p.subtitle}{/if}
         </div>
 
         <div class="detail-body">
@@ -389,24 +413,25 @@
                 </div>
               {/if}
             {:else}
-              <!-- Output (the point): human-facing stdout/stderr, plus the result
-                   only when it is the run's sole output. A rich table/plot/image
-                   attachment renders separately below, so the box keys on the
-                   captured streams (and a still-running run, to show "running…"). -->
+              {#if hasSource}
+                <div class="detail-section first">
+                  <div class="detail-label">code</div>
+                  <div class="entry-box entry-code"><CodeBlock code={p.source ?? ''} lang={p.lang ?? 'text'} /></div>
+                </div>
+              {/if}
               {#if hasStreamOut || resultIsPrimary || ledRun(p)}
-                <div class="entry-box cell cell-out"><ExecBody pane={p} chrome={false} expanded hideResult={!resultIsPrimary} /></div>
+                <div class="detail-section">
+                  <div class="detail-label">output</div>
+                  <div class="entry-box cell cell-out"><ExecBody pane={p} chrome={false} expanded hideResult={!resultIsPrimary} /></div>
+                </div>
               {/if}
               {#if selectedOut}
                 {@const OutBody = rendererFor(selectedOut.kind, selectedOut.renderer)}
-                <div class="entry-box pane entry-body detail-out">
-                  <div class="body html-body"><OutBody pane={selectedOut} /></div>
-                </div>
-              {/if}
-              <!-- Code, shown by default: the source beside its output. -->
-              {#if hasSource}
                 <div class="detail-section">
-                  <div class="detail-label">code</div>
-                  <div class="entry-box entry-code"><CodeBlock code={p.source ?? ''} lang={p.lang ?? 'text'} /></div>
+                  <div class="detail-label">rich output</div>
+                  <div class="entry-box pane entry-body detail-out">
+                    <div class="body html-body"><OutBody pane={selectedOut} /></div>
+                  </div>
                 </div>
               {/if}
             {/if}
