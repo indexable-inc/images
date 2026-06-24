@@ -437,7 +437,7 @@ let
   agentsDir = ix.agents.mkAgentsDir {
     inherit pkgs;
     agents = agentDefinitions.renderedAgents;
-    rawFiles = agentDefinitions.rawFiles;
+    inherit (agentDefinitions) rawFiles;
   };
 
   mcSource = ix.writeNushellApplication pkgs {
@@ -509,7 +509,7 @@ let
   };
 
   repoPackages = ix.packageSetFor pkgs;
-  site = repoPackages.site;
+  inherit (repoPackages) site;
 
   # One general updater for every content source in the repo, run in parallel
   # via dag-runner (the same engine `lint` uses). The Minecraft catalog and
@@ -746,21 +746,24 @@ let
   # Non-NixOS OCI example images (ubuntu, debian, ...). They live under
   # `examples/oci` with the same hierarchical shape as fleet examples, but
   # return images instead of fleet plans and are exposed as opt-in packages only.
-  nonNixExampleImages = lib.mapAttrs' (
-    name: entry:
-    lib.nameValuePair "non-nix-${name}" (
-      import (entry.path + "/ix.nix") {
-        index = {
-          lib = ix;
-        };
-      }
-    )
-  ) (
-    ix.discoverTree {
-      root = paths.examples + "/oci";
-      requiredFiles = [ "ix.nix" ];
-    }
-  );
+  nonNixExampleImages =
+    lib.mapAttrs'
+      (
+        name: entry:
+        lib.nameValuePair "non-nix-${name}" (
+          import (entry.path + "/ix.nix") {
+            index = {
+              lib = ix;
+            };
+          }
+        )
+      )
+      (
+        ix.discoverTree {
+          root = paths.examples + "/oci";
+          requiredFiles = [ "ix.nix" ];
+        }
+      );
 
   # The content-addressed `image.json` for each non-Nix example, surfaced as its
   # own package so the small artifact is buildable directly (`nix build

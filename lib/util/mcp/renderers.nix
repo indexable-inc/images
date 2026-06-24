@@ -1,8 +1,9 @@
 # Render neutral MCP server definitions to each agent wrapper's native shape.
-{ lib }:
+{
+  lib,
+  toml,
+}:
 let
-  toml = import ../toml.nix { inherit lib; };
-
   isStdio = def: (def.transport or "stdio") == "stdio";
 
   # One neutral def -> the object Claude Code's `mcpServers` expects (its schema

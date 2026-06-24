@@ -19,6 +19,6 @@
     in
     {
       ix.fleets.default = fleet;
-      nixosConfigurations = fleet.nixosConfigurations;
+      inherit (fleet) nixosConfigurations;
     };
 }

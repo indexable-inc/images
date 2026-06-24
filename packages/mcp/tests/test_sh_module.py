@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src" / "sh"))
 
-import sh  # noqa: E402
+import sh
 
 
 def test_callable_module_signature_keeps_cmd_argument() -> None:
@@ -21,7 +21,7 @@ def test_extra_positional_arg_gets_argv_hint() -> None:
         sh("git", "status")
 
 
-def test_zsh_helper_uses_zsh_argv(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_zsh_helper_uses_zsh_argv(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
     seen = {}
 
     async def fake_sh(cmd: list[str], **kwargs: object) -> sh.Output:
@@ -31,10 +31,11 @@ def test_zsh_helper_uses_zsh_argv(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setitem(sh.zsh.__globals__, "sh", fake_sh)
 
-    out = asyncio.run(sh.zsh("print $ZSH_VERSION", cwd="/tmp", timeout=1))
+    cwd = str(tmp_path)
+    out = asyncio.run(sh.zsh("print $ZSH_VERSION", cwd=cwd, timeout=1))
 
     assert out.ok
     assert seen == {
         "cmd": ["zsh", "-lc", "print $ZSH_VERSION"],
-        "kwargs": {"cwd": "/tmp", "timeout": 1},
+        "kwargs": {"cwd": cwd, "timeout": 1},
     }

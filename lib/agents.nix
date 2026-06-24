@@ -48,14 +48,27 @@ let
       "agents.mkAgentsDir: agent ${name} has unknown frontmatter key(s): ${lib.concatStringsSep ", " unknown}";
     assert lib.assertMsg (builtins.hasAttr "description" frontmatter)
       "agents.mkAgentsDir: agent ${name} frontmatter.description is required";
-    assert assertOptional name frontmatter "name" builtins.isString "a string";
-    assert assertOptional name frontmatter "description" builtins.isString "a string";
-    assert assertOptional name frontmatter "model" builtins.isString "a string";
-    assert assertOptional name frontmatter "effort" builtins.isString "a string";
-    assert assertOptional name frontmatter "color" builtins.isString "a string";
-    assert assertOptional name frontmatter "tools" isStringList "a list of strings";
-    assert assertOptional name frontmatter "mcpServers" isMcpServers
-      "a list of server names or inline server attrsets";
+    assert lib.assertMsg (assertOptional name frontmatter "name" builtins.isString
+      "a string"
+    ) "agents.mkAgentsDir: agent ${name} frontmatter.name failed validation";
+    assert lib.assertMsg (assertOptional name frontmatter "description" builtins.isString
+      "a string"
+    ) "agents.mkAgentsDir: agent ${name} frontmatter.description failed validation";
+    assert lib.assertMsg (assertOptional name frontmatter "model" builtins.isString
+      "a string"
+    ) "agents.mkAgentsDir: agent ${name} frontmatter.model failed validation";
+    assert lib.assertMsg (assertOptional name frontmatter "effort" builtins.isString
+      "a string"
+    ) "agents.mkAgentsDir: agent ${name} frontmatter.effort failed validation";
+    assert lib.assertMsg (assertOptional name frontmatter "color" builtins.isString
+      "a string"
+    ) "agents.mkAgentsDir: agent ${name} frontmatter.color failed validation";
+    assert lib.assertMsg (assertOptional name frontmatter "tools" isStringList
+      "a list of strings"
+    ) "agents.mkAgentsDir: agent ${name} frontmatter.tools failed validation";
+    assert lib.assertMsg (assertOptional name frontmatter "mcpServers" isMcpServers
+      "a list of server names or inline server attrsets"
+    ) "agents.mkAgentsDir: agent ${name} frontmatter.mcpServers failed validation";
     {
       frontmatter = {
         inherit name;

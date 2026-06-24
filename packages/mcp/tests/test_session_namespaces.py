@@ -244,8 +244,7 @@ def test_polars_dataframe_defaults_to_compact_nuon_for_llm(monkeypatch: pytest.M
         [nu, "-c", "open --raw /dev/stdin | from nuon | get 1.name"],
         input=body,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=True,
     )
     assert parsed.stdout.strip() == "grace"

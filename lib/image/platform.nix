@@ -535,7 +535,7 @@ in
       # (microvm.nix, Devbox, fleet images) pins this.
       registry.nixpkgs.to = {
         type = "path";
-        path = pkgs.path;
+        inherit (pkgs) path;
       };
       # Also set NIX_PATH so legacy nix-shell / <nixpkgs> imports resolve
       # without a channel subscription or network fetch.

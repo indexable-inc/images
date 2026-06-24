@@ -15,7 +15,7 @@
 let
   cfg = config.ix.dev.profiles;
 
-  rust = cfg.rust;
+  inherit (cfg) rust;
   rustToolchain = ix.rustToolchainFor pkgs {
     inherit (rust)
       channel
@@ -29,14 +29,12 @@ in
 {
   imports = [ ./options.nix ];
 
-  config = lib.mkMerge [
-    (lib.mkIf rust.enable {
-      environment.systemPackages = [ rustToolchain ] ++ rust.packages;
+  config = lib.mkIf rust.enable {
+    environment.systemPackages = [ rustToolchain ] ++ rust.packages;
 
-      environment.variables = lib.mkIf rust.setEnvironment {
-        RUST_BACKTRACE = lib.mkDefault "1";
-        RUST_SRC_PATH = lib.mkDefault "${rustToolchain}/lib/rustlib/src/rust/library";
-      };
-    })
-  ];
+    environment.variables = lib.mkIf rust.setEnvironment {
+      RUST_BACKTRACE = lib.mkDefault "1";
+      RUST_SRC_PATH = lib.mkDefault "${rustToolchain}/lib/rustlib/src/rust/library";
+    };
+  };
 }

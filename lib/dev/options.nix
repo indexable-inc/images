@@ -90,19 +90,19 @@ in
 
         packages = mkOption {
           type = types.listOf types.package;
-          default = with pkgs; [
-            bacon
-            cargo-audit
-            cargo-deny
-            cargo-edit
-            cargo-expand
-            cargo-flamegraph
-            cargo-nextest
-            cargo-watch
-            clang
-            lldb
-            taplo
-            watchexec
+          default = [
+            pkgs.bacon
+            pkgs.cargo-audit
+            pkgs.cargo-deny
+            pkgs.cargo-edit
+            pkgs.cargo-expand
+            pkgs.cargo-flamegraph
+            pkgs.cargo-nextest
+            pkgs.cargo-watch
+            pkgs.clang
+            pkgs.lldb
+            pkgs.taplo
+            pkgs.watchexec
           ];
           description = ''
             Extra Rust-adjacent tools installed by the profile. Extend or

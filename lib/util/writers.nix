@@ -360,6 +360,7 @@ in
     writePythonApplication
     writeNushellApplication
     writeBashApplication
+    writeRustApplication
     writeProcessComposeApplication
     ;
 }

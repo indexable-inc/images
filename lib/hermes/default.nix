@@ -1,4 +1,4 @@
-{ }:
+_:
 
 {
   # Shared Hermes agent profile consumed by examples and downstream fleets.

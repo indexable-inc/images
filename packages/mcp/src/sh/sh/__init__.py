@@ -593,7 +593,7 @@ async def sh(
     return out
 
 
-async def zsh(cmd: str, **kwargs: Any) -> Output:
+async def zsh(cmd: str, **kwargs: object) -> Output:
     """Run ``cmd`` through ``zsh -lc`` while keeping :func:`sh`'s safety wrapper.
 
     Use this only when the command intentionally depends on zsh syntax. For

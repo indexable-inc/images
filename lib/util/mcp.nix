@@ -2,6 +2,9 @@
 { lib }:
 let
   servers = import ./mcp/servers.nix { inherit lib; };
-  renderers = import ./mcp/renderers.nix { inherit lib; };
+  renderers = import ./mcp/renderers.nix {
+    inherit lib;
+    toml = import ./toml.nix { inherit lib; };
+  };
 in
 servers // renderers

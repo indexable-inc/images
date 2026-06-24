@@ -206,7 +206,7 @@ let
       extraLibraries = rawArgs.extraLibraries or { };
       testPolicyByPackage = lib.mapAttrs normalizeTestPolicy (rawArgs.testPolicyByPackage or { });
       testArgsFromPolicyByPackage = lib.mapAttrs (
-        _packageName: policy: libtestArgsForTestPolicy policy
+        _packageName: libtestArgsForTestPolicy
       ) testPolicyByPackage;
       explicitTestArgsByPackage = rawArgs.testArgsByPackage or { };
       testArgPolicyOverlap = filter (packageName: hasAttr packageName explicitTestArgsByPackage) (
@@ -573,7 +573,7 @@ let
       mkNextestForTarget =
         targetName: entry:
         let
-          packageName = entry.packageName;
+          inherit (entry) packageName;
           packageEnv = packageTestEnvForPackage packageName;
           packagePolicy = testPolicyByPackage.${packageName} or emptyTestPolicy;
           testBinary = entry.binary;

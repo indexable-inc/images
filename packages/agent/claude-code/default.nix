@@ -149,8 +149,7 @@
     (import (ix.paths.packagesRoot + "/agent/common.nix") {
       inherit lib ix repoPackages;
       promptOmitRules = omitRules;
-    })
-    .systemPrompt,
+    }).systemPrompt,
 
   # Writer used to build `passthru.updateScript`. Only the flake package set
   # supplies it (lib/packages.nix); the overlay eval context leaves it null. The
