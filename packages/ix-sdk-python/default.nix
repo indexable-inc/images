@@ -23,8 +23,8 @@ let
   # workspace-sdks.nix. Other systems fall through to the loud placeholder below.
   catalog = {
     x86_64-linux = {
-      url = "https://pub-559bccbc8be94bed84821cb943b580f3.r2.dev/wheel/ix-sdk/5azviwv34h5k6s63wj4pvx1y0bw5831v/ix_sdk-0.1.0-cp313-abi3-manylinux_2_34_x86_64.whl";
-      hash = "sha256-jys0Rb8ZeZ7GWDIKTspuc5lt0TmkIQbBNayT0hObgQY=";
+      url = "https://pub-559bccbc8be94bed84821cb943b580f3.r2.dev/wheel/ix-sdk/37h7h93kyfzv69k707ynaibkchjnpnwr/ix_sdk-0.1.0-cp313-abi3-manylinux_2_34_x86_64.whl";
+      hash = "sha256-KYteEHzhGqMcfwLWdyT1wnkzOZDGaux+PJJ6WFkELbo=";
     };
     aarch64-darwin = {
       url = "https://pub-559bccbc8be94bed84821cb943b580f3.r2.dev/wheel/ix-sdk/jmj8q0gsq5lnvv8aap6j7zh874bpzqjh/ix_sdk-0.1.0-cp313-abi3-macosx_11_0_arm64.whl";
