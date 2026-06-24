@@ -2,9 +2,14 @@
   ix,
   lib,
   pkgs,
-  postgresql ? pkgs.postgresql_18,
 }:
 let
+  # Bind PostgreSQL 18 explicitly instead of taking a `postgresql` argument. The
+  # package framework builds this with `lib.callPackageWith (pkgs // ...)` (see
+  # lib/packages.nix), so a `postgresql` formal would be auto-filled from
+  # `pkgs.postgresql`: the unversioned alias, currently PG 17.10. That shadows a
+  # `? pkgs.postgresql_18` default and builds the extension for the wrong major.
+  postgresql = pkgs.postgresql_18;
   postgresqlBuildExtension =
     pkgs.callPackage (pkgs.path + "/pkgs/servers/sql/postgresql/postgresqlBuildExtension.nix")
       {
