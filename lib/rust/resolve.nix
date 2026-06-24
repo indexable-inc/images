@@ -101,7 +101,8 @@ let
       };
 
       effects = {
-        rustcArgsForPlatform = rustcArgsForPolicyForPlatform policy;
+        rustcArgsForPlatform = _platform: [ ];
+        linkRustcArgsForPlatform = rustcArgsForPolicyForPlatform policy;
         rustcArgsForHost = rustcArgsForPolicyForPlatform policy pkgs.stdenv.hostPlatform.config;
         linkerNativeInputs = nativeBuildInputsForPolicy policy;
         clippyLintArgs = clippyLintArgs policy;

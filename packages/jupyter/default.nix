@@ -5,7 +5,7 @@
   repoPackages,
 }:
 let
-  nu-jupyter-kernel = repoPackages.nu-jupyter-kernel;
+  inherit (repoPackages) nu-jupyter-kernel;
   python = pkgs.python3.withPackages (ps: [
     ps.jupyterlab
     ps.notebook

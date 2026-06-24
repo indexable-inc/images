@@ -1314,11 +1314,30 @@ fn cargo_env_segment(value: &str) -> String {
 }
 
 fn append_extra_rustc_args(script: &mut String, unit: &Unit) {
+    let package_name = nix_attr(&unit.package_name());
     let platform = unit
         .platform
         .as_ref()
         .map_or_else(|| "null".to_string(), |platform| nix_attr(platform));
-    let _ = writeln!(script, "${{renderExtraRustcArgs {platform}}}");
+    if !unit.is_custom_build_compile() {
+        let _ = writeln!(
+            script,
+            "${{renderExtraRustcArgs {package_name} {platform}}}"
+        );
+    }
+    if unit_links(unit) {
+        let _ = writeln!(script, "${{renderExtraLinkRustcArgs {platform}}}");
+    }
+}
+
+fn unit_links(unit: &Unit) -> bool {
+    unit.is_bin()
+        || unit.is_test()
+        || unit.is_benchmark()
+        || unit.is_proc_macro()
+        || unit.target.has_crate_type("cdylib")
+        || unit.target.has_crate_type("dylib")
+        || unit.target.has_crate_type("staticlib")
 }
 
 fn append_build_script_flag_reader(script: &mut String, run_ref: &str, unit: &Unit) {
@@ -3235,6 +3254,7 @@ mod tests {
         assert!(rendered.contains("default = withPolicyChecks units."));
         assert!(rendered.contains("policyChecks"));
         assert!(rendered.contains("extraRustcArgs"));
+        assert!(rendered.contains("packageRustcArgs ? {}"));
         assert!(rendered.contains("tests ="));
         assert!(rendered.contains("--json=unused-externs-silent"));
         assert!(rendered.contains("withPolicyChecks"));
@@ -4941,8 +4961,10 @@ version = "4.6.1"
         .unwrap();
 
         assert!(rendered.contains("extraRustcArgsForPlatform ? _platform: []"));
-        assert!(rendered.contains("${renderExtraRustcArgs null}"));
-        assert!(rendered.contains("${renderExtraRustcArgs \"x86_64-apple-darwin\"}"));
+        assert!(rendered.contains("${renderExtraRustcArgs \"host\" null}"));
+        assert!(rendered.contains("${renderExtraRustcArgs \"hello\" \"x86_64-apple-darwin\"}"));
+        assert!(rendered.contains("${renderExtraLinkRustcArgs \"x86_64-apple-darwin\"}"));
+        assert!(!rendered.contains("${renderExtraLinkRustcArgs null}"));
     }
 
     #[test]

@@ -253,20 +253,18 @@ let
           VMKIT_LINK_LIBKRUN = "1";
         }
         // lib.optionalAttrs (appleToolchain != null) appleToolchain.env;
-        # ix-vt-sys links libghostty-vt and the ix-vt test binaries dlopen it, so
-        # its lib dir needs both a link search and a runtime rpath.
-        extraRustcArgs =
+        # Build scripts emit native `-l` flags that propagate to downstream final
+        # links, but their `rustc-link-search` paths do not cross cargo-unit's
+        # per-unit derivation boundary. Keep native search/rpath args on final
+        # link units only, so pure dependency rlibs remain independent of these
+        # host native libraries.
+        extraLinkRustcArgsForPlatform =
+          _platform:
           linkSearchWithRpath ghosttyLibDir
           ++ lib.optionals targetIsLinux [
-            # `alsa-sys`'s build script emits `-lasound`; only the search path is
-            # added here (libasound resolves at runtime via the system loader, so
-            # no rpath like the libghostty-vt / libkrun dirs below).
             "-L"
             "native=${workspacePkgs.alsa-lib}/lib"
           ]
-          # vmkit links `-lkrun`: libkrun-efi on an aarch64-darwin host, classic
-          # libkrun (installed under `lib64`) on a Linux host. Its build script
-          # emits the `-l`; the search path and rpath are added here.
           ++ lib.optionals buildHostIsAarch64Darwin (linkSearchWithRpath libkrunEfiLibDir)
           ++ lib.optionals (buildHostIsLinux && !isCross) (linkSearchWithRpath libkrunLinuxLibDir);
         # The native graph runs every policy check once across the whole

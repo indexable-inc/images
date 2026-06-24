@@ -24,9 +24,14 @@
   # for values that change often (e.g. a git commit baked into one crate) so the
   # churn invalidates that one package's units, not the whole dependency closure.
   packageBuildEnv ? {},
+  # Per-package rustc args, keyed by Cargo package name. Merged onto that
+  # package's own compile units only. Use this for native libraries required by
+  # one package so pure dependency crates do not inherit unrelated link flags.
+  packageRustcArgs ? {},
   extraPolicyChecks ? {},
   extraRustcArgs ? [],
   extraRustcArgsForPlatform ? _platform: [],
+  extraLinkRustcArgsForPlatform ? _platform: [],
   # `-D clippy::xxx` / `-A clippy::xxx` flags appended to every per-unit
   # clippy-driver invocation. Empty by default so the rendered units file
   # is policy-agnostic; cargo-unit.nix derives these from the workspace
@@ -58,10 +63,18 @@ let
   renderRustcArg = arg: "rustc_args+=( ${pkgs.lib.escapeShellArg arg} )";
 
   renderExtraRustcArgs =
-    platform:
+    packageName: platform:
     pkgs.lib.concatStringsSep "\n" (
-      map renderRustcArg (extraRustcArgs ++ extraRustcArgsForPlatform platform)
+      map renderRustcArg (
+        extraRustcArgs
+        ++ (packageRustcArgs.${packageName} or [])
+        ++ extraRustcArgsForPlatform platform
+      )
     );
+
+  renderExtraLinkRustcArgs =
+    platform:
+    pkgs.lib.concatStringsSep "\n" (map renderRustcArg (extraLinkRustcArgsForPlatform platform));
 
   sourceRootPath =
     root:
