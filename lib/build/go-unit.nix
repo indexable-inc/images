@@ -1,5 +1,6 @@
 {
   lib,
+  # astlog-ignore: no-pkgs-in-callpackage
   pkgs,
   go,
 }:

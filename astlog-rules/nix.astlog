@@ -149,6 +149,41 @@
 (lint no-builtins-path-without-name error
   "`builtins.path` without `name` derives the store-path name from the working directory; set `name = \"<stable>\"` so the result is reproducible across clones")
 
+;; package-overlay-intent-explicit: Public package metadata must make the
+;; overlay decision explicit. `flake = true` publishes a CLI/build surface;
+;; `packageSet = true` publishes the repo-internal package-set surface. The
+;; nixpkgs overlay surface is intentionally separate, so write `overlay = false`
+;; for leaf packages that should stay out of `pkgs`, `overlay = true` for
+;; packages that should be available as `pkgs.<id>`, or `overlay.attrName = ...`
+;; when the nixpkgs name needs a repo-owned prefix.
+(rule (package-metadata-id attrs)
+  (match nix "
+    (attrset_expression
+      (binding_set
+        (binding attrpath: (attrpath) @id_path))) @attrs")
+  (text id_path "id"))
+(rule (package-metadata-package-set attrs)
+  (match nix "
+    (attrset_expression
+      (binding_set
+        (binding attrpath: (attrpath) @package_set_path
+          expression: (variable_expression) @package_set_value))) @attrs")
+  (text package_set_path "packageSet")
+  (text package_set_value "true"))
+(rule (package-metadata-flake attrs)
+  (match nix "
+    (attrset_expression
+      (binding_set
+        (binding attrpath: (attrpath) @flake_path))) @attrs")
+  (text-match flake_path "^flake(\\.|$)"))
+(rule (package-overlay-intent-explicit n)
+  (package-metadata-id n)
+  (package-metadata-package-set n)
+  (package-metadata-flake n)
+  (no-descendant n "identifier" "overlay"))
+(lint package-overlay-intent-explicit error
+  "flake-exposed package metadata with `packageSet = true` must make overlay intent explicit: `overlay = false`, `overlay = true`, or `overlay.attrName = ...`")
+
 ;; no-chained-attrset-update: `A // { ... } // { ... }` builds one attrset in
 ;; two steps. Merge the adjacent literals into a single `// { ... }`.
 ;; `//` is right-associative, so the chain parses as `A // ({...} // {...})`

@@ -69,7 +69,10 @@ let
       lib
       packageRegistry
       buildIxRustTool
+      cargoUnitFor
       clippy-fork
+      rustWorkspaceFor
+      writeNushellApplication
       writePythonApplication
       ;
     # Pure cross-cutting helpers (deepMerge, writers, ...) so overlay packages

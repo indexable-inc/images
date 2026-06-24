@@ -6,4 +6,5 @@
   id = "hive";
   packageSet = true;
   flake = true;
+  overlay = false;
 }

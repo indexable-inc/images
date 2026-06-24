@@ -2,7 +2,10 @@
   lib,
   packageRegistry,
   buildIxRustTool,
+  cargoUnitFor,
   clippy-fork,
+  rustWorkspaceFor,
+  writeNushellApplication,
   writePythonApplication,
   # Curated cross-cutting helper surface (`lib`'s `sharedHelpers`), threaded in
   # as the `ix` arg so overlay-built packages can reach pure helpers like
@@ -33,6 +36,8 @@ let
     inherit
       entry
       final
+      prev
+      lib
       buildIxRustTool
       clippy-fork
       ;
@@ -41,9 +46,12 @@ let
     # `pkgs` callPackage formal. Same value as the `pkgs` arg below (`final`).
     ix = ix // {
       pkgs = final;
+      cargoUnit = cargoUnitFor final;
+      rustWorkspace = rustWorkspaceFor final;
     };
     pkgs = final;
     inherit (entry) path;
+    writeNushellApplication = writeNushellApplication final;
     writePythonApplication = writePythonApplication final;
   };
   buildOverlayPackage =

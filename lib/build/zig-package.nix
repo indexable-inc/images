@@ -24,6 +24,7 @@ _:
   - `meta`: standard derivation meta.
 */
 pkgs:
+# astlog-ignore: no-at-pattern-shortcut
 {
   pname,
   version ? "0.0.0",

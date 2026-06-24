@@ -8,6 +8,7 @@
   # no install-name fixups, and the cdylib links on macOS via build.rs. That lets
   # `nix build .#polars-mixedbread` work on darwin for local validation.
   flake = true;
+  overlay = false;
   packageSet = true;
   # Gate the pure-Python predicate-pushdown test (default.nix passthru.tests) in
   # CI as `checks.<system>.polars-mixedbread-pushdown`.
