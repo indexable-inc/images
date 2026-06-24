@@ -1331,13 +1331,14 @@ fn append_extra_rustc_args(script: &mut String, unit: &Unit) {
 }
 
 fn unit_links(unit: &Unit) -> bool {
-    unit.is_bin()
-        || unit.is_test()
-        || unit.is_benchmark()
-        || unit.is_proc_macro()
-        || unit.target.has_crate_type("cdylib")
-        || unit.target.has_crate_type("dylib")
-        || unit.target.has_crate_type("staticlib")
+    !unit.is_custom_build_compile()
+        && (unit.is_bin()
+            || unit.is_test()
+            || unit.is_benchmark()
+            || unit.is_proc_macro()
+            || unit.target.has_crate_type("cdylib")
+            || unit.target.has_crate_type("dylib")
+            || unit.target.has_crate_type("staticlib"))
 }
 
 fn append_build_script_flag_reader(script: &mut String, run_ref: &str, unit: &Unit) {
@@ -4939,9 +4940,22 @@ version = "4.6.1"
                   "dependencies": [
                     { "index": 0, "extern_crate_name": "host" }
                   ]
+                },
+                {
+                  "pkg_id": "path+file:///workspace#build-helper@0.1.0",
+                  "target": {
+                    "kind": ["custom-build"],
+                    "crate_types": ["bin"],
+                    "name": "build-script-build",
+                    "src_path": "/workspace/build.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "mode": "build",
+                  "dependencies": []
                 }
               ],
-              "roots": [1]
+              "roots": [1, 2]
             }"#,
         )
         .unwrap();
@@ -4965,6 +4979,7 @@ version = "4.6.1"
         assert!(rendered.contains("${renderExtraRustcArgs \"hello\" \"x86_64-apple-darwin\"}"));
         assert!(rendered.contains("${renderExtraLinkRustcArgs \"x86_64-apple-darwin\"}"));
         assert!(!rendered.contains("${renderExtraLinkRustcArgs null}"));
+        assert!(!rendered.contains("${renderExtraRustcArgs \"build-helper\" null}"));
     }
 
     #[test]
