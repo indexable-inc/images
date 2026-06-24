@@ -2145,6 +2145,26 @@ let
     }
   ];
 
+  gateForwardingSecretMutexFailures = failedAssertionsFor [
+    {
+      services.gate = {
+        enable = true;
+        forwarding.secret = "inline";
+        forwarding.secretFile = "/run/secrets/gate";
+      };
+    }
+  ];
+  gateConcreteAddress = evalConfig [
+    {
+      services.gate = {
+        enable = true;
+        address = "10.0.0.6";
+        port = 25571;
+        openFirewall = false;
+      };
+    }
+  ];
+
   relativePathUnsafeShellEval = builtins.tryEval (
     builtins.deepSeq (ix.relativePath.shellPath "$out" "../bad") true
   );
@@ -3437,6 +3457,13 @@ let
         ) velocityDuplicatePluginFileNameFailures;
         message = "velocity plugin file names should reject duplicate managed jar names at eval time";
       }
+      {
+        assertion = lib.any (
+          failure:
+          lib.hasInfix "services.gate.forwarding cannot set both secret and secretFile" failure.message
+        ) gateForwardingSecretMutexFailures;
+        message = "gate forwarding should reject setting both inline secret and secretFile at eval time";
+      }
     ];
 
     extended-attributes = [
@@ -3656,6 +3683,14 @@ let
             "10.0.0.5:25570"
           ];
         message = "velocity SLP health checks should probe concrete bind addresses";
+      }
+      {
+        assertion =
+          gateConcreteAddress.ix.healthChecks.gate-status.command == [
+            (lib.getExe repoPackages.mc-probe)
+            "10.0.0.6:25571"
+          ];
+        message = "gate SLP health checks should probe concrete bind addresses";
       }
       {
         assertion =
