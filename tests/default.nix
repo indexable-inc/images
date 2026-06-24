@@ -4259,6 +4259,13 @@ let
         message = "cargo-unit testChecksByTarget should use cargo-nextest when policy.tests.useNextest is enabled";
       }
       {
+        assertion =
+          cargoUnitWorkspace.nextestByTarget.cargo_unit_hello.NEXTEST_HIDE_PROGRESS_BAR == "true"
+          && cargoUnitWorkspace.nextestByTarget.cargo_unit_hello.NEXTEST_NO_INPUT_HANDLER == "true"
+          && cargoUnitWorkspace.nextestByTarget.cargo_unit_hello.NEXTEST_SHOW_PROGRESS == "none";
+        message = "cargo-unit cargo-nextest checks should force non-interactive reporter environment";
+      }
+      {
         assertion = lib.isDerivation cargoUnitWorkspace.testChecksAll;
         message = "cargo-unit workspaces should expose an aggregate test-check derivation";
       }

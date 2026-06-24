@@ -570,6 +570,14 @@ let
         [profile.default.junit]
         path = "junit.xml"
       '';
+      nextestNonInteractiveEnv = {
+        # #1597: Nix builders can attach cargo-nextest to a pseudo-terminal
+        # without carrying the usual CI environment. Force the plain reporter
+        # path so progress redraws cannot stall dispatcher handoffs.
+        NEXTEST_HIDE_PROGRESS_BAR = "true";
+        NEXTEST_NO_INPUT_HANDLER = "true";
+        NEXTEST_SHOW_PROGRESS = "none";
+      };
       mkNextestForTarget =
         targetName: entry:
         let
@@ -581,6 +589,7 @@ let
         pkgs.runCommand "cargo-unit-nextest-${targetName}"
           (
             packageEnv
+            // nextestNonInteractiveEnv
             // {
               __structuredAttrs = true;
               strictDeps = true;
@@ -624,6 +633,7 @@ let
               --binaries-metadata "$workspace_root/binaries-metadata.json"
 
             ${lib.concatStringsSep "\n" (map (name: "export ${name}") (attrNames packageEnv))}
+            ${lib.concatStringsSep "\n" (map (name: "export ${name}") (attrNames nextestNonInteractiveEnv))}
 
             cargo-nextest nextest run \
               --config-file ${nextestConfigFile} \
