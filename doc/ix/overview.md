@@ -1,6 +1,6 @@
 # ix platform
 
-`ix` is a platform for running your own microVMs: boot an image and you get a VM
+`ix` is a platform for running your own VMs: boot an image and you get a VM
 you own, with networking, secrets, logs, snapshots, a shell, and declarative
 config converged by name. You drive it with the `ix` CLI (`ix new`, `ix up`,
 `ix ls`, ...) over a hosted control plane. This page is the map for agents and

@@ -1,9 +1,37 @@
 # ix CLI
 
-`ix` is the platform CLI for running your own microVMs: you create them, attach to
+`ix` is the platform CLI for running your own VMs: you create them, attach to
 them, and tear them down by name. This page is the verb
 map and the mental model, not a flag reference. For flags on any verb, run
 `ix <verb> --help`.
+
+## Install
+
+The official installer drops the `ix` binary on your `PATH`:
+
+```sh
+curl -fsSL https://ix.dev/install.sh | sh
+```
+
+Or install it with Nix from the
+[`ix-cli`](https://github.com/indexable-inc/ix-cli) flake, which pins the same
+`ix.dev` binary by content hash:
+
+```sh
+nix run github:indexable-inc/ix-cli -- ls        # run without installing
+nix profile install github:indexable-inc/ix-cli  # install into your profile
+```
+
+As a flake input:
+
+```nix
+{
+  inputs.ix.url = "github:indexable-inc/ix-cli";
+  # then use ix.packages.${system}.default
+}
+```
+
+Supported platforms: `aarch64-darwin` and `x86_64-linux`.
 
 ## Mental model
 
