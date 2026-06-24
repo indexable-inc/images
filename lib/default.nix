@@ -56,6 +56,7 @@ let
   netCidr = import ./util/net-cidr.nix { inherit lib; };
   publicArtifactsFor = pkgs: import ./util/public-artifacts.nix { inherit lib pkgs; };
   secretRefs = import ./util/secret-refs.nix { inherit lib; };
+  selfVersionFor = self: import ./util/self-version.nix { inherit lib self; };
   checks = import ./checks.nix { inherit lib; };
 
   /**
@@ -456,6 +457,7 @@ let
       rustWorkspace
       rustWorkspaceFor
       secretRefs
+      selfVersionFor
       skills
       systemdHardening
       toml
