@@ -22,7 +22,7 @@ let
     Build an attrset from a list by mapping each element to a
     `lib.nameValuePair`-shaped `{ name; value; }` result.
   */
-  genAttrs' = lib.flip lib.genAttrs';
+  genAttrs' = xs: f: lib.genAttrs' xs f;
 in
 {
   inherit findDuplicatesBy findDuplicates genAttrs';
