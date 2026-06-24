@@ -33,7 +33,9 @@ let
     }
   );
 
-  package = pkgs.nix-output-monitor.override { inherit haskellPackages; };
+  package = pkgs.callPackage (pkgs.path + "/pkgs/by-name/ni/nix-output-monitor/package.nix") {
+    inherit haskellPackages;
+  };
 
   # The override's real risk is the Haskell rebuild linking at all, so the smoke
   # test runs the binary. `nom --help` exits 0 and prints usage without spawning

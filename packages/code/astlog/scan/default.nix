@@ -13,7 +13,7 @@
 {
   ix,
   writeNushellApplication,
-  repoPackages,
+  astlog,
   fd,
   git,
 }:
@@ -23,7 +23,7 @@ in
 writeNushellApplication {
   name = "astlog-scan";
   runtimeInputs = [
-    repoPackages.astlog
+    astlog
     fd
     git
   ];

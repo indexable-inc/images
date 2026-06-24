@@ -67,6 +67,7 @@ let
           --suffix PATH : ${lib.makeBinPath [ pkgs.nvd ]} \
           --set IX_BUILD_REV ${lib.escapeShellArg ix.rev} \
           --set IX_BUILD_EPOCH ${lib.escapeShellArg (toString ix.revEpoch)}
+        ln -s nix-web-monitor "$out/bin/nwm"
       '';
 in
 wrapper
