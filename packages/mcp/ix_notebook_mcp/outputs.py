@@ -9,6 +9,7 @@ text). The kernel-side runtime also emits a structured summary under the
 from __future__ import annotations
 
 import base64
+import json
 import os
 import re
 
@@ -82,6 +83,11 @@ def to_mcp(outputs: list[dict]) -> list[Content]:
             if IX_LLM_MIME in data:
                 # A Result's explicit model view: its text, then its images.
                 spec = data[IX_LLM_MIME]
+                if isinstance(spec, str):
+                    try:
+                        spec = json.loads(spec)
+                    except json.JSONDecodeError:
+                        spec = None
                 if isinstance(spec, dict):
                     if spec.get("text"):
                         content.append(text(spec["text"]))

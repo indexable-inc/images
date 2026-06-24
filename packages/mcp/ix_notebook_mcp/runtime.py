@@ -398,7 +398,19 @@ class Job:
 
 
 def _nuon_key(value: Any) -> str:
-    return json.dumps(str(value), ensure_ascii=False)
+    text = str(value)
+    return text if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", text) else json.dumps(text, ensure_ascii=False)
+
+
+def _nuon_table(columns: list[Any], rows: list[Mapping[Any, Any]], *, _depth: int = 0) -> str:
+    header = ", ".join(_nuon_key(c) for c in columns)
+    if not rows:
+        return f"[[{header}];]"
+    body = ", ".join(
+        "[" + ", ".join(_nuon(row.get(c), _depth=_depth + 1) for c in columns) + "]"
+        for row in rows
+    )
+    return f"[[{header}]; {body}]"
 
 
 def _nuon(value: Any, *, _depth: int = 0) -> str:
@@ -420,9 +432,19 @@ def _nuon(value: Any, *, _depth: int = 0) -> str:
     if isinstance(value, bytes):
         return json.dumps(base64.b64encode(value).decode("ascii"), ensure_ascii=False)
     if isinstance(value, Mapping):
-        return "{" + ",".join(f"{_nuon_key(k)}:{_nuon(v, _depth=_depth + 1)}" for k, v in value.items()) + "}"
+        return "{" + ", ".join(f"{_nuon_key(k)}: {_nuon(v, _depth=_depth + 1)}" for k, v in value.items()) + "}"
     if isinstance(value, (list, tuple)):
-        return "[" + ",".join(_nuon(v, _depth=_depth + 1) for v in value) + "]"
+        if value and all(isinstance(v, Mapping) for v in value):
+            columns: list[Any] = []
+            seen: set[str] = set()
+            for row in value:
+                for key in row:
+                    text = str(key)
+                    if text not in seen:
+                        seen.add(text)
+                        columns.append(key)
+            return _nuon_table(columns, value, _depth=_depth)
+        return "[" + ", ".join(_nuon(v, _depth=_depth + 1) for v in value) + "]"
     iso = getattr(value, "isoformat", None)
     if callable(iso):
         with contextlib.suppress(Exception):
@@ -466,7 +488,7 @@ def _html_output(value: Any) -> str | None:
 
 
 def _llm_output(value: Any) -> str | None:
-    out = _call_value_hook(value, "__ix_llm__", "_ix_llm_")
+    out = _call_value_hook(value, "__ix_llm__", "_ix_llm_", "_repr_llm_")
     return _llm_text(out) if out is not None else None
 
 
@@ -1896,22 +1918,18 @@ def _frame_view(value: Any) -> Any:
 def _df_llm_text(df: Any) -> str:
     """A polars DataFrame as compact NUON for the model.
 
-    Values are never width-truncated (only the row count is bounded by
-    ``_DF_LLM_ROWS``), so the agent reads the real data instead of a boxed repr.
+    The shape + dtype header orients the reader; the body is a Nushell table
+    literal with headers listed once. Values are never width-truncated (only the
+    row count is bounded by ``_DF_LLM_ROWS``), so the agent reads the real data
+    instead of a boxed repr.
     """
     try:
         rows, cols = df.shape
         head = df.head(_DF_LLM_ROWS)
-        payload = {
-            "shape": [rows, cols],
-            "schema": {name: str(dtype) for name, dtype in zip(df.columns, df.dtypes, strict=False)},
-            "columns": list(df.columns),
-            "rows": [list(row) for row in head.iter_rows()],
-        }
-        if rows > _DF_LLM_ROWS:
-            payload["truncated"] = True
-            payload["shown_rows"] = _DF_LLM_ROWS
-        return _nuon(payload)
+        schema = ", ".join(f"{name}:{dtype}" for name, dtype in zip(df.columns, df.dtypes, strict=False))
+        body = _nuon_table(list(head.columns), head.to_dicts())
+        more = f"\n... ({rows - _DF_LLM_ROWS} more rows)" if rows > _DF_LLM_ROWS else ""
+        return f"shape: ({rows}, {cols}) | {schema}\n{body}{more}"
     except Exception:
         # An exotic frame that resists row iteration falls back to safe NUON text.
         return _nuon(_safe_repr(df))

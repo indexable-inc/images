@@ -13,6 +13,8 @@ stdout or a quiet ok.
 from __future__ import annotations
 
 import asyncio
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -208,3 +210,46 @@ def test_an_explicit_result_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> Non
     job = run_cell("print('noise')\nResult.text('explicit')")
     assert job.status == "done"
     assert job.result.llm_result == "explicit"
+
+
+def test_repr_html_and_repr_llm_split_bare_object_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    _wire(monkeypatch, {})
+    job = run_cell(
+        "class Widget:\n"
+        "    def _repr_html_(self):\n"
+        "        return '<strong>human</strong>'\n"
+        "    def _repr_llm_(self):\n"
+        "        return 'model-view'\n"
+        "Widget()"
+    )
+    assert job.status == "done", (job.status, job.error)
+    assert job.result.user_html == "<strong>human</strong>"
+    assert job.result.llm_result == "model-view"
+
+
+def test_polars_dataframe_defaults_to_compact_nuon_for_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    pl = pytest.importorskip("polars")
+    _wire(monkeypatch, {"pl": pl})
+    job = run_cell("pl.DataFrame({'name': ['ada', 'grace'], 'score': [10, 11]})")
+    assert job.status == "done", (job.status, job.error)
+    assert "shape: (2, 2)" in job.result.llm_result
+    assert "[[name, score]; [\"ada\", 10], [\"grace\", 11]]" in job.result.llm_result
+    assert "┌" not in job.result.llm_result
+
+    nu = shutil.which("nu")
+    if nu is None:
+        pytest.skip("nushell is required to parse the NUON e2e")
+    body = job.result.llm_result.split("\n", 1)[1]
+    parsed = subprocess.run(
+        [nu, "-c", "open --raw /dev/stdin | from nuon | get 1.name"],
+        input=body,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    assert parsed.stdout.strip() == "grace"
+
+
+def test_list_of_records_uses_nushell_table_nuon() -> None:
+    assert runtime._nuon([{"a": 1, "b": 2}, {"a": 5, "b": 7}]) == "[[a, b]; [1, 2], [5, 7]]"

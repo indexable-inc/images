@@ -2218,21 +2218,20 @@ let
         d = await run("import polars as pl\npl.DataFrame({'x': [1, 2]})", budget=2.0, name="auto-df")
         assert d.status == "done", (d.status, d.error)
         assert isinstance(d.result, runtime.Result), type(d.result)
-        assert d.result.llm_result.startswith("{\"shape\":[2,1]"), d.result.llm_result
-        assert "\"columns\":[\"x\"]" in d.result.llm_result, d.result.llm_result
-        assert "\"rows\":[[1],[2]]" in d.result.llm_result, d.result.llm_result
+        assert d.result.llm_result.startswith("shape: (2, 1) | x:Int64"), d.result.llm_result
+        assert "[[x]; [1], [2]]" in d.result.llm_result, d.result.llm_result
         import json as _json
         import subprocess as _subprocess
         import tempfile as _tempfile
         from pathlib import Path as _Path
 
         _nuon_path = _Path(_tempfile.mkdtemp()) / "df.nuon"
-        _nuon_path.write_text(d.result.llm_result)
+        _nuon_path.write_text(d.result.llm_result.split("\n", 1)[1])
         _parsed = _json.loads(_subprocess.check_output(
             ["nu", "-c", f"open --raw {_nuon_path} | from nuon | to json -r"],
             text=True,
         ))
-        assert _parsed["shape"] == [2, 1] and _parsed["rows"] == [[1], [2]], _parsed
+        assert _parsed == [{"x": 1}, {"x": 2}], _parsed
 
         class Split:
             def __ix_html__(self):
@@ -3010,9 +3009,10 @@ let
     assert runtime.IX_LLM_MIME in llm_bundle["data"], list(llm_bundle["data"])
     decoded = json.loads(llm_bundle["data"][runtime.IX_LLM_MIME])
     assert decoded["text"] == "a chart of x" and len(decoded["images"]) == 1, decoded
-    # A result with no model images carries no IX_LLM_MIME (text/plain is the text).
+    # A result with no model images still carries IX_LLM_MIME so to_mcp can prefer
+    # the explicit model view over any human HTML fallback.
     plain_bundle = runtime._result_bundle(runtime.Result(user_html="<b>hi</b>", llm_result="hi"))
-    assert runtime.IX_LLM_MIME not in plain_bundle["data"], list(plain_bundle["data"])
+    assert json.loads(plain_bundle["data"][runtime.IX_LLM_MIME]) == {"text": "hi", "images": []}
     # A huge llm_result is clipped to the same cap as any other text mime, so it
     # can never bypass the limit into the store / each dashboard poll.
     big = runtime._result_bundle(
@@ -3027,6 +3027,9 @@ let
     stacked = runtime.Result.of(("GrepResult: 0 matches", pl.DataFrame({"a": [1, 2]})))
     assert stacked.user_html.count("<table") == 1, stacked.user_html[:200]
     assert "GrepResult: 0 matches" in stacked.llm_result and "shape:" in stacked.llm_result, stacked.llm_result
+    direct_df = runtime.Result.of(pl.DataFrame({"a": [1, 2], "b": ["x", "y"]}))
+    assert '[[a, b]; [1, "x"], [2, "y"]]' in direct_df.llm_result, direct_df.llm_result
+    assert "┌" not in direct_df.llm_result, direct_df.llm_result
     # A plain list of scalars is still ONE table (not stacked), unchanged.
     scalars = runtime.Result.of([1, 2, 3])
     assert scalars.user_html.count("<table") == 1, scalars.user_html[:200]
@@ -3037,7 +3040,7 @@ let
     assert len(nested.llm_images) == 1, ("nested Result dropped its images", nested.llm_images)
 
     # The table protocol: a non-DataFrame value exposing _ix_to_frame_() renders
-    # as its polars frame -- a styled table for the human, compact CSV for the
+    # as its polars frame: a styled table for the human, compact NUON for the
     # model -- instead of its one-line summary repr, so a rich result type shows
     # the model the real rows, not just a count.
     class _Framed:
@@ -3051,6 +3054,20 @@ let
     assert "<table" in framed.user_html, framed.user_html[:200]
     assert framed.llm_result.startswith("shape: (1, 2)") and "a.py" in framed.llm_result, framed.llm_result
     assert "summary" not in framed.llm_result, "must render the frame, not the summary repr"
+
+    # Jupyter-style rich hooks can split a bare object's human HTML from its
+    # model-facing text without manually constructing Result(...).
+    class _Widget:
+        def _repr_html_(self):
+            return "<strong>human</strong>"
+
+        def _repr_llm_(self):
+            return "model-view"
+
+    split = runtime.Result.of(_Widget())
+    assert split.user_html == "<strong>human</strong>", split.user_html
+    assert split.llm_result == "model-view", split.llm_result
+    assert runtime._nuon([{"a": 1, "b": 2}, {"a": 5, "b": 7}]) == "[[a, b]; [1, 2], [5, 7]]"
 
     # A hook that raises or returns a non-frame is ignored: fall back to the
     # normal repr path rather than blowing up the result.
@@ -3151,8 +3168,8 @@ let
         assert multi_row["status"] == "done", multi_row["status"]
         multi_text = [out["data"].get("text/plain", "") for out in json.loads(multi_row["outputs"])][-1]
         # Both values are shown: the bool by its repr, the list as its one-column
-        # frame (CSV rows 1/2/3), not collapsed to just the first value.
-        assert "True" in multi_text and "1\n2\n3" in multi_text, ("multi-value dropped a value", multi_text)
+        # frame (NUON rows 1/2/3), not collapsed to just the first value.
+        assert "true" in multi_text and "[[value]; [1], [2], [3]]" in multi_text, ("multi-value dropped a value", multi_text)
 
 
     asyncio.run(main())
