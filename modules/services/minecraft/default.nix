@@ -1207,6 +1207,12 @@ in
 
         minecraft-status = {
           from = "guest";
+          # A cold Paper boot resolves plugin libraries from remote Maven repos
+          # and generates the world before it binds the listener, which on an
+          # ephemeral status VM runs well past the default 30x2s=60s window.
+          # Give it 60x2s=120s so the probe waits for a real cold start instead
+          # of failing a still-initializing server.
+          attempts = 60;
           description =
             "Minecraft answers SLP"
             + lib.optionalString (
@@ -1282,6 +1288,17 @@ in
       preStart = ''
         mkdir -p ${dataDir}/${cfg.dropinDir}
         echo "eula=true" > ${dataDir}/eula.txt
+        # ix-managed datapacks are symlinked from the Nix store into each
+        # world's datapacks/ dir. Minecraft's world content-validation
+        # (>=1.20-pre7) refuses to load a world containing symlinks whose
+        # targets are not on this allow-list and exits before binding its
+        # port, so without it the server never answers SLP. Allow the store
+        # and the managed-datapacks tree the sync script links through.
+        printf '%s\n' \
+          '# ix-managed datapacks live in the read-only Nix store; allow them past world validation.' \
+          '[prefix]/nix/store' \
+          '[prefix]/etc/minecraft/managed-datapacks' \
+          > ${dataDir}/allowed_symlinks.txt
         ${lib.getExe syncManaged}
       '';
     };
