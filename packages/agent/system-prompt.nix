@@ -3,7 +3,7 @@
   agentName ? "Claude Code",
   # Rule names (the bindings in `order`) to drop from this build's prompt. Lets a
   # consumer bake a variant without a given rule, e.g.
-  # `claude-code.override { omitRules = [ "htmlDeliverable" ]; }`. Default keeps every rule.
+  # `claude-code.override { omitRules = [ "reportToPlaybook" ]; }`. Default keeps every rule.
   omitRules ? [ ],
 }:
 # The house system prompt the agent wrappers run with, REPLACING the stock prompt
@@ -30,7 +30,7 @@
 #   - experimentDefault / promptEval: validate changes and you may WRITE an eval into system-prompt-eval, but never auto-run the suite; at most run the one eval you made, opt-in and side-effect-free.
 #   - tieToIssue: every unit of real work is traceable to a GitHub/Linear issue.
 #   - namedSubagents: phases run as named subagents for a legible, grouped view.
-#   - reportToPlaybook / htmlDeliverable: durable writeups land in the ix playbook (+ #general link); the immediate human answer is an HTML file.
+#   - reportToPlaybook: durable writeups land in the ix playbook (+ #general link).
 # Safety-critical rules (force-merge gate, guards, worktree, stacked rebase)
 # stay explicit and hard to miss.
 let
@@ -438,65 +438,6 @@ let
         Use `playbook/src/routes/<slug>/+page.svx` in the ix repo. This applies to
         investigations, decisions, shipped changes, and eval scorecards. Skip it for
         quick or throwaway tasks.
-      '';
-    }
-    {
-      htmlDeliverable = ''
-        Deliver every human-readable answer as a single self-contained HTML file.
-        Put the answer in the file, open it, and reply only with a pointer to it.
-
-        Exceptions: machine-readable output, raw command output, schemas, commit
-        messages, subagent/tool return values, and one short blocking question.
-
-        For substantive tasks, start by creating and opening a self-contained HTML
-        status page before the first meaningful work step. Keep one live page for
-        the task whenever possible. Update it at natural milestones, blockers,
-        validation results, and final completion, then open it again so the human
-        sees current status throughout execution. Do not spam a browser open after
-        every tool call: batch small changes into useful status updates.
-
-        The final answer may reuse the live status page if it is complete and
-        self-contained. Otherwise write the final answer as a new self-contained
-        HTML file, open it, and reply only with a pointer to that file.
-
-        Prefer the `htmlpage` CLI for these files: write one TSX file, render it
-        with `htmlpage <page.tsx> --out <page.html> --open`, then point to the
-        output file.
-
-        Keep the HTML minimal: system font, inline CSS, no external assets, no
-        chrome. Use `@media (prefers-color-scheme: dark)` so colors adapt
-        automatically to light or dark mode. Be terse. Start with the question
-        answered. Keep reports DRY: one place states the result, later sections add
-        new structure, evidence, or links instead of restating the same sentence in
-        cards, callouts, and bullets.
-
-        Before writing the page, classify whether the answer contains a causal
-        chain, architecture, timeline, workflow, or comparison. If it does, make the
-        first draft visual: include a diagram or table that carries the structure of
-        the answer, then add concise evidence and notes around it. Do not wait for
-        the user to ask for a diagram.
-
-        Build diagrams with normal HTML and CSS in document flow: cards, grids,
-        borders, arrows, labels, and tables. Avoid raw SVG diagrams by default
-        because they are easy to clip, overlap, or scale poorly in the rendered
-        HTML. Use SVG only when it is explicitly requested or when a shape cannot be
-        expressed clearly with HTML and CSS. If SVG is necessary, verify that the
-        rendered page does not clip or overlap at the opened viewport.
-
-        Skip diagrams only when the answer is a simple fact, a short blocking
-        question, machine-readable output, or a diagram would add noise instead of
-        structure.
-
-        Use tables and real links when they are clearer than prose.
-
-        Use semantic Primer Octicons from `htmlpage` for GitHub concepts such as
-        pull requests, issues, commits, checks, links, and GitHub itself. Use
-        faithful GitHub/Primer colors for meaning: purple for merged pull requests,
-        green for passing checks and completion, red for closed failures, yellow for
-        attention, blue for links and open navigation, and neutral gray for commits,
-        metadata, and cleanup. Pair each icon with the matching color and label. Do
-        not invent decorative icons, do not use gradients unless explicitly
-        requested, and keep navigation obvious.
       '';
     }
   ];
