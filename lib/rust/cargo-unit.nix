@@ -708,13 +708,31 @@ let
 
   /**
     Select one binary target from a generated workspace graph.
+
+    `meta` is merged onto the selected binary derivation (the same way
+    `selectRootWithTests` applies its `meta`), so a caller can set
+    `meta.mainProgram` and other fields. Without this, `meta` passed to
+    `buildBinary` lands in the `buildWorkspace` arg set and is dropped, so
+    `lib.getExe` on the result warns and only guesses the binary name.
   */
   buildBinary =
-    { binary, ... }@args:
+    {
+      binary,
+      meta ? { },
+      ...
+    }@args:
     let
-      workspace = buildWorkspace (removeAttrs args [ "binary" ]);
+      workspace = buildWorkspace (
+        removeAttrs args [
+          "binary"
+          "meta"
+        ]
+      );
+      root = rootOrThrow "buildBinary" "binary" (workspace.binaries or { }) binary;
     in
-    rootOrThrow "buildBinary" "binary" (workspace.binaries or { }) binary;
+    root.overrideAttrs (old: {
+      meta = (old.meta or { }) // meta;
+    });
 
   /**
     Pick a binary out of a pre-built `buildWorkspace` plus its test
