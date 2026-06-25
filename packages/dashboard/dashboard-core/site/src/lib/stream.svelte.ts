@@ -9,9 +9,10 @@
 // Switching to a saved recording swaps the document for one fetched over HTTP,
 // so live and replay share one rendering path.
 import { LoroDoc, type ChangeMeta, type OpId } from 'https://esm.sh/loro-crdt@1';
+import { paneScope, SCOPE_SEP } from './scope.ts';
 import type { PaneRecord } from './types';
 
-export const SCOPE_SEP = String.fromCharCode(0x1f); // matches dashboard::hub::SCOPE_SEP
+export { SCOPE_SEP };
 
 export const store = $state({
   panes: {} as Record<string, PaneRecord>,
@@ -109,8 +110,7 @@ function readPanes(): void {
   store.panes = panes;
   const scopes = new Set<string>();
   for (const key of Object.keys(panes)) {
-    const sep = key.indexOf(SCOPE_SEP);
-    scopes.add(sep === -1 ? '' : key.slice(0, sep));
+    scopes.add(paneScope(key));
   }
   store.producers = scopes.size;
   const n = Object.keys(panes).length;

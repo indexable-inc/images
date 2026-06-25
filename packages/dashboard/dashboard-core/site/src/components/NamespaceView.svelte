@@ -3,24 +3,15 @@
   // surface instead of interleaved into the run feed. Collects every namespace
   // `data` pane (one per Python session) and renders each as an expandable tree.
   import { onMount } from 'svelte';
-  import { store, SCOPE_SEP } from '$lib/stream.svelte';
+  import { store } from '$lib/stream.svelte';
+  import { namespaceSessions } from '$lib/namespace-sessions';
   import { buildNsItems, parseRows, nsParent, type NsRow as Row } from '$lib/namespace';
   import { setListNav } from '$lib/keys.svelte';
-  import type { Pane } from '$lib/types';
   import NamespaceBody from './NamespaceBody.svelte';
 
-  // Every namespace pane, oldest scope first for a stable order. A namespace pane
+  // Every namespace pane, oldest session first for a stable order. A namespace pane
   // is a `data` pane with the `namespace` renderer (see introspect / pane_bridge).
-  const sessions = $derived(
-    Object.keys(store.panes)
-      .map((key) => {
-        const sep = key.indexOf(SCOPE_SEP);
-        const scope = sep === -1 ? '' : key.slice(0, sep);
-        return { key, pane: { ...store.panes[key], key, scope } as Pane };
-      })
-      .filter((it) => (it.pane.kind ?? 'data') === 'data' && it.pane.renderer === 'namespace')
-      .sort((a, b) => (a.key < b.key ? -1 : 1)),
-  );
+  const sessions = $derived(namespaceSessions(store.panes));
 
   // Selection + expansion are owned here so the keyboard can walk the whole tree
   // across sessions. Each session renders with the same `s<index>` path prefix the

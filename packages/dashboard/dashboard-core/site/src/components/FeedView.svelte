@@ -4,6 +4,8 @@
   import { store, timeline, SCOPE_SEP } from '$lib/stream.svelte';
   import { ui, focusPane, humanAge, humanDuration, setSession } from '$lib/ui.svelte';
   import { setListNav } from '$lib/keys.svelte';
+  import { feedSessions, shortScope } from '$lib/feed-sessions';
+  import { paneScope } from '$lib/scope';
   import { rendererFor } from '$lib/renderers';
   import CodeBlock from './CodeBlock.svelte';
   import ExecBody from './ExecBody.svelte';
@@ -109,39 +111,11 @@
     return (p.kind ?? 'data') === 'data' && p.renderer === 'session';
   }
 
-  // The scope a pane key belongs to (its producer = one MCP session). '' is the
-  // in-process scope; a real MCP producer is "<pid>-<uuid>".
-  function scopeOf(key: string): string {
-    const sep = key.indexOf(SCOPE_SEP);
-    return sep === -1 ? '' : key.slice(0, sep);
-  }
-  // A short, legible label for a scope with no session pane to name it.
-  function shortScope(scope: string): string {
-    return scope ? scope.slice(0, 8) : 'local';
-  }
-
-  // Every live session: one entry per producer scope, labelled by its session
-  // pane's title (the user-set name, else client · workdir), falling back to a
-  // short scope id. Drives the header's session selector.
-  const sessions = $derived.by(() => {
-    const labels = new Map<string, string>();
-    const scopes = new Set<string>();
-    for (const key of Object.keys(store.panes)) {
-      const scope = scopeOf(key);
-      scopes.add(scope);
-      const p = store.panes[key];
-      if ((p.kind ?? 'data') === 'data' && p.renderer === 'session') {
-        labels.set(scope, p.title || 'session');
-      }
-    }
-    return [...scopes]
-      // The in-process scope ('') carries no session pane and its option value
-      // would collide with the "All sessions" option, so it is never a selectable
-      // session; drop it.
-      .filter((scope) => scope !== '')
-      .map((scope) => ({ scope, label: labels.get(scope) || shortScope(scope) }))
-      .sort((a, b) => (a.label < b.label ? -1 : 1));
-  });
+  // Every live session: one entry per producer scope, ordered by when that scope
+  // first appeared. The selector drops the in-process scope because its option
+  // value would collide with "All sessions", but grouped feed rows still use it.
+  const allSessions = $derived(feedSessions(store.panes));
+  const sessions = $derived(allSessions.filter((s) => s.scope !== ''));
 
   // The active session scope, validated against what is live: a saved selection
   // for a session that has since gone falls back to all ('').
@@ -166,7 +140,7 @@
   const items = $derived(
     Object.keys(store.panes)
       .filter((key) => !isOutputAttachment(key))
-      .map((key) => ({ key, pane: { ...store.panes[key], key, scope: scopeOf(key) } as Pane }))
+      .map((key) => ({ key, pane: { ...store.panes[key], key, scope: paneScope(key) } as Pane }))
       .filter((it) => !isNamespace(it.pane) && !isSession(it.pane))
       .sort(
         (a, b) =>
@@ -251,9 +225,10 @@
   type FeedItem = { key: string; pane: Pane };
   type SessionGroup = { scope: string; label: string; items: FeedItem[] };
   function sessionLabel(scope: string): string {
-    return sessions.find((s) => s.scope === scope)?.label || shortScope(scope);
+    return allSessions.find((s) => s.scope === scope)?.label || shortScope(scope);
   }
   const grouped = $derived.by<SessionGroup[]>(() => {
+    const sessionOrder = new Map(allSessions.map((session, index) => [session.scope, index]));
     const groups = new Map<string, FeedItem[]>();
     for (const it of filtered) {
       const scope = it.pane.scope || '';
@@ -263,7 +238,11 @@
     }
     return [...groups.entries()]
       .map(([scope, rows]) => ({ scope, label: sessionLabel(scope), items: rows }))
-      .sort((a, b) => (a.label < b.label ? -1 : 1));
+      .sort(
+        (a, b) =>
+          (sessionOrder.get(a.scope) ?? Number.MAX_SAFE_INTEGER) -
+            (sessionOrder.get(b.scope) ?? Number.MAX_SAFE_INTEGER) || a.scope.localeCompare(b.scope),
+      );
   });
 
   // Register this view's motions with the global keymap while it is mounted.
