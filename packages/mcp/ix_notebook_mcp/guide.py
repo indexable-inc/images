@@ -121,13 +121,14 @@ INTRO = (
 )
 
 SESSION = (
-    "First, name this session: `session.name = '<what you are working on>'` (in a "
-    "`python_exec` cell). Every run you make is grouped under this session on the live "
-    "dashboard, and a human may be watching several agents at once — a clear name is how "
-    "they tell yours apart. It defaults to the connecting client and working directory "
-    "(e.g. `claude-code · index`), which is ambiguous once agents share a repo, so set it. "
-    "Also pass a one-line `intent` on every `python_exec` (it is required): the intent titles "
-    "the run's card, so the board reads as a list of intents, not raw code."
+    "First, call `session_set_name` with a short label for what you are working on. "
+    "Acting tools are blocked until this MCP session is explicitly named. Every run "
+    "you make is grouped under this session on the live dashboard, and a human may "
+    "be watching several agents at once; a clear name is how they tell yours apart. "
+    "It defaults to the connecting client and working directory (e.g. `claude-code · index`), "
+    "which is ambiguous once agents share a repo, so name it. Also pass a one-line "
+    "`intent` on every `python_exec` (it is required): the intent titles the run's "
+    "card, so the board reads as a list of intents, not raw code."
 )
 
 DISCOVER = (

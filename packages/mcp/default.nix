@@ -2925,9 +2925,21 @@ let
             from ix_notebook_mcp import tools
             from ix_notebook_mcp.config import set_config
             from ix_notebook_mcp.kernel import set_kernel
+            from mcp.shared.exceptions import McpError
 
             set_config(config)
             set_kernel(kernel)
+
+            try:
+                await tools.python_exec("Result.ok('blocked')", budget=1.0, intent="blocked first")
+            except McpError as exc:
+                assert "session_set_name" in str(exc), exc
+            else:
+                raise AssertionError("python_exec ran before the session was named")
+
+            named = await tools.session_set_name("wedge smoke")
+            assert "wedge smoke" in " ".join(getattr(c, "text", "") or "" for c in named), named
+
             started = loop.time()
             clamped = await tools.python_exec(
                 "await asyncio.sleep(30)\nResult.ok('done')", budget=600.0, intent="bigbudget"

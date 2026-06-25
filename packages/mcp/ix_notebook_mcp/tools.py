@@ -124,6 +124,7 @@ def _session_id(ctx: Context | None) -> str | None:
 # session label defaults to it (see runtime.Session). A latch, not per-call work.
 _client_identified = False
 _dashboard_started = False
+_named_sessions: set[str] = set()
 
 
 async def _start_dashboard_once() -> None:
@@ -186,6 +187,38 @@ async def _identify_client_once(ctx: Context | None) -> None:
         await current_kernel().set_client(label)
 
 
+def _session_key(ctx: Context | None) -> str:
+    """Stable key for the MCP session that must explicitly name itself."""
+    return _session_id(ctx) or "__stdio__"
+
+
+def _session_name_required() -> bool:
+    """Whether acting tools must be preceded by ``session_set_name``."""
+    return os.environ.get("IX_MCP_REQUIRE_SESSION_NAME", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
+async def _require_session_name(ctx: Context | None, *, intent: str | None = None) -> None:
+    """Fail fast until this MCP session has named its dashboard group."""
+    if not _session_name_required() or _session_key(ctx) in _named_sessions:
+        return
+    suggestion = f" Suggested name from this call: {intent!r}." if intent else ""
+    raise McpError(
+        ErrorData(
+            code=types.INVALID_REQUEST,
+            message=(
+                "Name this dashboard session first: call session_set_name with a "
+                "short human task label before using acting tools."
+                f"{suggestion}"
+            ),
+        )
+    )
+
+
 def _first_sentence(text: str) -> str:
     """The lead clause of a tool's description, for the one-line tool overview the
     server instructions build from the registry. Cuts at the earliest sentence
@@ -244,6 +277,41 @@ mcp._mcp_server.version = os.environ.get("IX_MCP_VERSION") or "dev"
 Content = list[outputs.Content]
 
 
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Name this MCP connection's dashboard session. Call this before acting "
+        "tools such as python_exec, read, kernel_trace, or tui_act; the name "
+        "should be a short human task label, not code or secrets."
+    ),
+)
+async def session_set_name(
+    name: Annotated[
+        str,
+        Field(
+            description=(
+                "Short human task label for this dashboard session, 3 to 80 "
+                "characters, with no code or secrets"
+            )
+        ),
+    ],
+    ctx: Context | None = None,
+) -> Content:
+    await _start_dashboard_once()
+    await _identify_client_once(ctx)
+    clean = " ".join((name or "").split())
+    if not 3 <= len(clean) <= 80:
+        raise McpError(
+            ErrorData(
+                code=types.INVALID_PARAMS,
+                message="Session name must be 3 to 80 non-whitespace characters.",
+            )
+        )
+    await current_kernel().set_session_name(clean)
+    _named_sessions.add(_session_key(ctx))
+    return [outputs.text(f"dashboard session named: {clean}")]
+
+
 # Every tool sets structured_output=False: FastMCP otherwise derives an output
 # schema from the return annotation and DUPLICATES the entire reply as
 # `structuredContent` JSON, so each image block went to the client twice (once
@@ -269,6 +337,7 @@ async def python_exec(
 ) -> Content:
     await _start_dashboard_once()
     await _identify_client_once(ctx)
+    await _require_session_name(ctx, intent=intent)
     # A foreground budget is how long the run holds the one shared shell channel
     # before it backgrounds, so cap it: a giant budget (a 15-minute `await
     # jobs[...]`) would block every other call behind it. The clamp is surfaced
@@ -359,6 +428,7 @@ async def read(
 ) -> Content:
     await _start_dashboard_once()
     await _identify_client_once(ctx)
+    await _require_session_name(ctx, intent=f"read {target}")
     sid = _session_id(ctx)
     code = f"await __ix_read({target!r}, {start!r}, {end!r}, session={sid!r})"
     # Title the run by what it reads (with the line span when given) so its card
@@ -374,8 +444,10 @@ async def read(
 
 
 @mcp.tool(structured_output=False, description=guide.TRACE)
-async def kernel_trace() -> str:
+async def kernel_trace(ctx: Context | None = None) -> str:
     await _start_dashboard_once()
+    await _identify_client_once(ctx)
+    await _require_session_name(ctx, intent="kernel trace")
     return await current_kernel().dump_trace()
 
 
@@ -492,6 +564,7 @@ async def tui_act(
 ) -> Content:
     await _start_dashboard_once()
     await _identify_client_once(ctx)
+    await _require_session_name(ctx, intent=f"drive {uri}")
     try:
         ack = await resources_bridge.act(uri, send_keys, peer=peer)
     except resources_bridge.ResourceNotFoundError as exc:

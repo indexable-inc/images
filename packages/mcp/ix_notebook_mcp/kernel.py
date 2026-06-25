@@ -226,6 +226,14 @@ class Kernel:
         with contextlib.suppress(Exception):  # session label is a convenience; must not break the tool call
             await self._execute(f"session._set_client({client!r})", timeout=10.0)
 
+    async def set_session_name(self, name: str) -> None:
+        """Set the dashboard session label without creating an execution card.
+
+        This is the MCP-side naming handshake, not user code, so it uses the raw
+        shell channel instead of ``__ix_exec``.
+        """
+        await self._execute(f"session.name = {name!r}\nsession._sync()", timeout=10.0)
+
     async def _interrupt(self) -> bool:
         """Break a synchronous call wedging the kernel's event loop. ipykernel's
         own ``interrupt_kernel`` cancels the asyncio task, which a synchronous call
