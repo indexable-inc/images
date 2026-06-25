@@ -1021,6 +1021,7 @@ fn render_driver_build_phase(
         let run_ref = format!("${{units.{}}}", nix_attr(&prepared.names[run_index]));
         append_build_script_flag_reader(&mut script, &run_ref, unit);
     }
+    append_direct_dependency_metadata_exports(&mut script, graph, prepared, index)?;
 
     push_rustc_args(&mut script, unit, &prepared.hashes[index]);
     append_target_linker_arg(&mut script, unit);
@@ -1373,7 +1374,14 @@ fn append_build_script_flag_reader(script: &mut String, run_ref: &str, unit: &Un
         script,
         "if [ -f {quoted_run_ref}/rustc-env ]; then\n  while IFS= read -r line; do\n    [ -n \"$line\" ] && export \"$line\"\n  done < {quoted_run_ref}/rustc-env\nfi",
     );
-    let _ = writeln!(script, "export OUT_DIR={quoted_run_ref}/out-dir\n");
+    let _ = writeln!(
+        script,
+        "if [ -f {quoted_run_ref}/cargo-metadata ]; then\n  cp {quoted_run_ref}/cargo-metadata build/cargo-metadata\nfi",
+    );
+    let _ = writeln!(
+        script,
+        "compile_out_dir=$(mktemp -d)\nif [ -d {quoted_run_ref}/out-dir ]; then\n  cp -R {quoted_run_ref}/out-dir/. \"$compile_out_dir\"/\nfi\nrustc_env+=( OUT_DIR=\"$compile_out_dir\" )\n"
+    );
 }
 
 fn append_link_arg_reader(script: &mut String, quoted_run_ref: &str, file: &str) {
@@ -1400,6 +1408,9 @@ fi
 mkdir -p $out/bin $out/nix-support
 cp {} $out/bin/{}
 chmod 755 $out/bin/{}
+if [ -f build/cargo-metadata ]; then
+  cp build/cargo-metadata $out/nix-support/cargo-metadata
+fi
 {unused_crate_dependencies_install}
 ",
             shell::quote(&format!("build/{}", unit.target.name)),
@@ -1417,6 +1428,9 @@ for build_artifact in build/*; do
   esac
   cp -R \"$build_artifact\" \"$out/lib/\"
 done
+if [ -f build/cargo-metadata ]; then
+  cp build/cargo-metadata $out/nix-support/cargo-metadata
+fi
 extern_path=\"\"
 for artifact in \\
   \"$out/lib/lib{lib_name}-{hash}.rlib\" \\
@@ -1558,15 +1572,25 @@ fn render_build_script_run_phase(
     let mut script = String::new();
     let source = prepared.source_entry(run_index)?;
     let compile_ref = format!("${{units.{}}}", nix_attr(&prepared.names[compile_index]));
+    let manifest_dir = source_path_expr(source, &crate_root_for_unit(run_unit))?;
 
-    script.push_str("mkdir -p $out/out-dir\n");
-    script.push_str("export OUT_DIR=$out/out-dir\n");
-    ensure_source_contains_unit(source, run_unit)?;
+    script.push_str("mkdir -p $out\n");
     writeln!(
         script,
-        "export CARGO_MANIFEST_DIR={}",
-        shell::double_quote(&source_path_expr(source, &crate_root_for_unit(run_unit))?)
+        "build_script_manifest_dir_source={}",
+        shell::double_quote(&manifest_dir)
     )?;
+    script.push_str("build_script_manifest_dir=$out/manifest-dir\n");
+    script.push_str("mkdir -p \"$build_script_manifest_dir\"\n");
+    script.push_str(
+        "cp -RL \"$build_script_manifest_dir_source\"/. \"$build_script_manifest_dir\"/\n",
+    );
+    script.push_str("chmod -R u+w \"$build_script_manifest_dir\"\n");
+    script.push_str("build_script_out_dir=$(mktemp -d)\n");
+    script.push_str("build_script_env=()\n");
+    script.push_str("export OUT_DIR=$build_script_out_dir\n");
+    ensure_source_contains_unit(source, run_unit)?;
+    script.push_str("export CARGO_MANIFEST_DIR=$build_script_manifest_dir\n");
     script.push_str("export RUSTC=\"$(type -p rustc)\"\n");
     script.push_str("HOST_TRIPLE=\"$($RUSTC -vV | sed -n 's/^host: //p')\"\n");
     script.push_str("export HOST=\"$HOST_TRIPLE\"\n");
@@ -1606,7 +1630,7 @@ fn render_build_script_run_phase(
     script.push_str("set +e\n");
     writeln!(
         script,
-        "{}/bin/{} > \"$build_script_stdout\" 2> \"$build_script_stderr\"",
+        "env \"''${{build_script_env[@]}}\" {}/bin/{} > \"$build_script_stdout\" 2> \"$build_script_stderr\"",
         compile_ref,
         shell::quote(&compile_unit.target.name)
     )?;
@@ -1617,9 +1641,21 @@ fn render_build_script_run_phase(
     script.push_str("  cat \"$build_script_stdout\" >&2\n");
     script.push_str("  exit \"$build_script_status\"\n");
     script.push_str("fi\n");
+    script.push_str("cp -R \"$build_script_out_dir\" \"$out/out-dir\"\n");
+    script.push_str(
+        r#"if [ -d "$out/out-dir" ]; then
+  while IFS= read -r -d "" build_script_output_file; do
+    if grep -Iq -- "$build_script_out_dir" "$build_script_output_file"; then
+      substituteInPlace "$build_script_output_file" --replace-fail "$build_script_out_dir" "$out/out-dir"
+    fi
+  done < <(find "$out/out-dir" -type f -print0)
+fi
+"#,
+    );
     script.push_str(
         r#"
 while IFS= read -r line; do
+  line="''${line//$build_script_out_dir/$out/out-dir}"
   case "$line" in
     cargo::*)
       normalized="cargo:''${line#cargo::}"
@@ -2003,6 +2039,44 @@ done < "$cargo_cfg_output"
     );
 }
 
+fn append_direct_dependency_metadata_exports(
+    script: &mut String,
+    graph: &UnitGraph,
+    prepared: &PreparedGraph,
+    index: usize,
+) -> Result<()> {
+    for dep in &graph.units[index].dependencies {
+        let dep_unit = &graph.units[dep.index];
+        if dep_unit.is_run_custom_build() {
+            continue;
+        }
+        let Some(links) = optional_cargo_manifest_package(dep_unit)?.and_then(|package| package.links)
+        else {
+            continue;
+        };
+
+        let dep_ref = format!("${{units.{}}}", nix_attr(&prepared.names[dep.index]));
+        let env_prefix = cargo_links_env_prefix(&links);
+        let _ = writeln!(
+            script,
+            r#"# Cargo exposes dependency build-script metadata through DEP_<links>_*.
+if [ -f "{dep_ref}/nix-support/cargo-metadata" ]; then
+  while IFS= read -r cargo_metadata_line; do
+    case "$cargo_metadata_line" in
+      *=*)
+        cargo_metadata_key="''${{cargo_metadata_line%%=*}}"
+        cargo_metadata_value="''${{cargo_metadata_line#*=}}"
+        rustc_env+=( "DEP_{env_prefix}_$cargo_metadata_key=$cargo_metadata_value" )
+        ;;
+    esac
+  done < "{dep_ref}/nix-support/cargo-metadata"
+fi"#,
+        );
+    }
+
+    Ok(())
+}
+
 fn append_dependency_metadata_exports(
     script: &mut String,
     graph: &UnitGraph,
@@ -2027,7 +2101,8 @@ if [ -f "{dep_run_ref}/cargo-metadata" ]; then
       *=*)
         cargo_metadata_key="''${{cargo_metadata_line%%=*}}"
         cargo_metadata_value="''${{cargo_metadata_line#*=}}"
-        cargo_metadata_env="DEP_{env_prefix}_$(printf '%s' "$cargo_metadata_key" | tr '[:lower:]-' '[:upper:]_')"
+        build_script_env+=( "DEP_{env_prefix}_$cargo_metadata_key=$cargo_metadata_value" )
+        cargo_metadata_env="DEP_{env_prefix}_$(printf '%s' "$cargo_metadata_key" | tr '[:lower:]' '[:upper:]' | sed 's/[^[:alnum:]_]/_/g')"
         export "$cargo_metadata_env=$cargo_metadata_value"
         ;;
     esac
@@ -4072,7 +4147,9 @@ version = "0.1.0"
         assert!(!rendered.contains("rustdoc_args+=( \"''${build_script_flags[@]}\" )"));
         assert!(rendered.contains("done < \"${units."));
         assert!(rendered.contains("/rustc-env"));
-        assert!(rendered.contains("export OUT_DIR=\"${units."));
+        assert!(rendered.contains("compile_out_dir=$(mktemp -d)"));
+        assert!(rendered.contains("/out-dir/. \"$compile_out_dir\"/"));
+        assert!(rendered.contains("rustc_env+=( OUT_DIR=\"$compile_out_dir\" )"));
         assert!(!rendered.contains("--test-args --exact"));
         assert!(rendered.contains("--test-args --include-ignored"));
         assert!(rendered.contains("^running 1 test$"));
@@ -5200,8 +5277,12 @@ links = "nested_native"
         )
         .unwrap();
 
-        assert!(rendered.contains("export CARGO_MANIFEST_DIR=\"$src\""));
-        assert!(!rendered.contains("export CARGO_MANIFEST_DIR=\"$src/builder\""));
+        assert!(rendered.contains("build_script_manifest_dir_source=\"$src\""));
+        assert!(rendered.contains("build_script_manifest_dir=$out/manifest-dir"));
+        assert!(rendered.contains("cp -RL \"$build_script_manifest_dir_source\"/. \"$build_script_manifest_dir\"/"));
+        assert!(rendered.contains("chmod -R u+w \"$build_script_manifest_dir\""));
+        assert!(rendered.contains("export CARGO_MANIFEST_DIR=$build_script_manifest_dir"));
+        assert!(!rendered.contains("build_script_manifest_dir_source=\"$src/builder\""));
         assert!(rendered.contains("export CARGO_MANIFEST_LINKS=\"nested_native\""));
         fs::remove_dir_all(workspace).unwrap();
     }
@@ -5217,8 +5298,8 @@ links = "nested_native"
         ));
         let sys_root = workspace.join("native-sys");
         let app_root = workspace.join("app");
-        fs::create_dir_all(&sys_root).unwrap();
-        fs::create_dir_all(&app_root).unwrap();
+        fs::create_dir_all(sys_root.join("src")).unwrap();
+        fs::create_dir_all(app_root.join("src")).unwrap();
         fs::write(
             sys_root.join("Cargo.toml"),
             r#"[package]
@@ -5238,10 +5319,16 @@ version = "0.1.0"
         .unwrap();
         let sys_build_rs = sys_root.join("build.rs");
         let app_build_rs = app_root.join("build.rs");
+        let sys_lib_rs = sys_root.join("src").join("lib.rs");
+        let app_lib_rs = app_root.join("src").join("lib.rs");
         fs::write(&sys_build_rs, "fn main() {}\n").unwrap();
         fs::write(&app_build_rs, "fn main() {}\n").unwrap();
+        fs::write(&sys_lib_rs, "pub fn native() {}\n").unwrap();
+        fs::write(&app_lib_rs, "pub fn app() {}\n").unwrap();
         let sys_build_rs_path = sys_build_rs.to_string_lossy();
         let app_build_rs_path = app_build_rs.to_string_lossy();
+        let sys_lib_rs_path = sys_lib_rs.to_string_lossy();
+        let app_lib_rs_path = app_lib_rs.to_string_lossy();
         let sys_pkg_id = format!("path+file://{}#native-sys@0.1.0", sys_root.display());
         let app_pkg_id = format!("path+file://{}#app@0.1.0", app_root.display());
         let graph: UnitGraph = serde_json::from_value(serde_json::json!({
@@ -5303,6 +5390,36 @@ version = "0.1.0"
                         { "index": 2, "extern_crate_name": "build_script_build" },
                         { "index": 1, "extern_crate_name": "native_sys" }
                     ]
+                },
+                {
+                    "pkg_id": sys_pkg_id,
+                    "target": {
+                        "kind": ["lib"],
+                        "crate_types": ["lib"],
+                        "name": "native_sys",
+                        "src_path": sys_lib_rs_path,
+                        "edition": "2024"
+                    },
+                    "profile": { "name": "release", "opt_level": "3" },
+                    "mode": "build",
+                    "dependencies": [
+                        { "index": 1, "extern_crate_name": "build_script_build" }
+                    ]
+                },
+                {
+                    "pkg_id": app_pkg_id,
+                    "target": {
+                        "kind": ["lib"],
+                        "crate_types": ["lib"],
+                        "name": "app",
+                        "src_path": app_lib_rs_path,
+                        "edition": "2024"
+                    },
+                    "profile": { "name": "release", "opt_level": "3" },
+                    "mode": "build",
+                    "dependencies": [
+                        { "index": 4, "extern_crate_name": "native_sys" }
+                    ]
                 }
             ],
             "roots": []
@@ -5323,12 +5440,22 @@ version = "0.1.0"
         )
         .unwrap();
 
-        assert!(
-            rendered.contains(
-                "cargo_metadata_env=\"DEP_NATIVE_FFI_$(printf '%s' \"$cargo_metadata_key\""
-            )
-        );
+        assert!(rendered.contains(
+            "cargo_metadata_env=\"DEP_NATIVE_FFI_$(printf '%s' \"$cargo_metadata_key\" | tr '[:lower:]' '[:upper:]' | sed 's/[^[:alnum:]_]/_/g')\""
+        ));
+        assert!(rendered.contains(
+            "build_script_env+=( \"DEP_NATIVE_FFI_$cargo_metadata_key=$cargo_metadata_value\" )"
+        ));
         assert!(rendered.contains("export \"$cargo_metadata_env=$cargo_metadata_value\""));
+        assert!(rendered.contains("env \"''${build_script_env[@]}\""));
+        assert!(rendered.contains("/cargo-metadata build/cargo-metadata"));
+        assert!(rendered.contains("cp build/cargo-metadata $out/nix-support/cargo-metadata"));
+        assert!(rendered.contains(
+            "/nix-support/cargo-metadata\" ]; then"
+        ));
+        assert!(rendered.contains(
+            "rustc_env+=( \"DEP_NATIVE_FFI_$cargo_metadata_key=$cargo_metadata_value\" )"
+        ));
         fs::remove_dir_all(workspace).unwrap();
     }
 
