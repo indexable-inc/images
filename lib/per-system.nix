@@ -743,6 +743,10 @@ let
     modules = [ (paths.root + "/images/system/base") ];
   };
 
+  vcfsGuestEvalImage = ix.mkImage {
+    modules = [ (paths.root + "/images/system/vcfs-guest-eval") ];
+  };
+
   # Non-NixOS OCI example images (ubuntu, debian, ...). They live under
   # `examples/oci` with the same hierarchical shape as fleet examples, but
   # return images instead of fleet plans and are exposed as opt-in packages only.
@@ -1089,6 +1093,7 @@ in
   packages =
     lib.optionalAttrs (system == ix.system) {
       base = baseImage;
+      vcfs-guest-eval = vcfsGuestEvalImage;
     }
     // {
       health-checks = healthChecks.dag;
