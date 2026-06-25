@@ -292,36 +292,46 @@ async def run_cli(
     return stdout
 
 
-BOOTSTRAP_PROBE_SCRIPT = (
-    "set -euo pipefail\n"
-    "export PATH=/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:$PATH\n"
-    "if command -v systemctl >/dev/null 2>&1; then\n"
-    "  systemctl start nix-daemon.socket >/dev/null 2>&1 || true\n"
-    "fi\n"
-    "nix --extra-experimental-features nix-command store info >/dev/null"
-)
+# How long to wait for a node to finish systemd activation before giving up.
+# A module constant so tests can shrink it without monkeypatching the clock.
+_BOOTSTRAP_DEADLINE_SECONDS = 180
 
 
 async def wait_node_ready(node: FleetNode, *, dry_run: bool) -> None:
+    """Block until the node finished guest systemd activation, the point where
+    `/run/current-system` is wired up and the workload's units have started, so
+    health checks can run.
+
+    Readiness is a server-side fact: `branch.system_ready()` is a unary RPC the
+    server forwards live to the VM's orchestrator, which probes the guest. We do
+    not exec a shell here. That is deliberate: bash and the workload's binaries
+    live under `/run/current-system/sw/bin`, which does not exist until
+    activation finishes, so an early `branch.bash(...)` raised "command not
+    found" and failed the deploy. Polling the typed readiness signal rides
+    activation's own edge instead.
+    """
     if dry_run:
-        step(f"+ wait until {node.name} bootstrap is ready (guest nix store probe)")
+        step(f"+ wait until {node.name} finishes systemd activation")
         return
 
     step(f"waiting for {node.name} bootstrap")
     c = client()
-    deadline = asyncio.get_running_loop().time() + 180
-    last_error = ""
+    deadline = asyncio.get_running_loop().time() + _BOOTSTRAP_DEADLINE_SECONDS
+    last_error = "no readiness probe completed"
     while asyncio.get_running_loop().time() < deadline:
-        branch = await c.find_by_name(node.name)
-        if branch is None:
-            last_error = f"{node.name} not found"
-        else:
-            # check=False: a not-yet-ready store info is expected while we poll,
-            # so inspect the exit code instead of raising CommandError.
-            result = await branch.bash(BOOTSTRAP_PROBE_SCRIPT, check=False, quiet=True)
-            if result.exit_code == 0:
-                return
-            last_error = (result.stderr or result.stdout).strip()
+        try:
+            branch = await c.find_by_name(node.name)
+            if branch is None:
+                last_error = f"{node.name} not found"
+            else:
+                status = await branch.system_ready()
+                if status.ready:
+                    return
+                last_error = status.reason or "system not activated"
+        except ix_sdk.IxError as probe_error:
+            # Transient RPC / not-ready errors are expected while the guest is
+            # still coming up; keep polling until the deadline rather than fail.
+            last_error = str(probe_error)
         await asyncio.sleep(2)
 
     raise RuntimeError(f"{node.name} bootstrap did not become ready: {last_error}")

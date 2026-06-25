@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import types
 import typing
 import unittest
 from pathlib import Path
@@ -896,6 +897,77 @@ def async_recorder(
         return result
 
     return record
+
+
+class WaitNodeReadyTests(unittest.TestCase):
+    """`wait_node_ready` polls the server-side `system_ready` signal, treating
+    `NotActivated` and transient SDK errors as keep-polling, not failure."""
+
+    @staticmethod
+    def _node() -> ix_fleet.FleetNode:
+        return ix_fleet.FleetNode.model_validate(fleet_node("web"))
+
+    @staticmethod
+    def _fake_client(outcomes: list[object]) -> type:
+        remaining = list(outcomes)
+
+        class FakeBranch:
+            async def system_ready(self) -> object:
+                outcome = remaining.pop(0) if remaining else outcomes[-1]
+                if isinstance(outcome, BaseException):
+                    raise outcome
+                return outcome
+
+        class FakeClient:
+            async def find_by_name(self, name: str) -> FakeBranch:
+                del name
+                return FakeBranch()
+
+        return FakeClient
+
+    async def _no_sleep(self, _seconds: float) -> None:
+        return None
+
+    def _run(self, outcomes: list[object]) -> None:
+        with (
+            patch.object(ix_fleet, "client", self._fake_client(outcomes)),
+            patch.object(ix_fleet, "step", lambda _message: None),
+            patch.object(asyncio, "sleep", self._no_sleep),
+        ):
+            asyncio.run(ix_fleet.wait_node_ready(self._node(), dry_run=False))
+
+    def test_returns_once_system_ready(self) -> None:
+        ready = types.SimpleNamespace(ready=True, at="2026-01-01T00:00:00Z", reason=None)
+        self._run([ready])
+
+    def test_polls_through_not_activated(self) -> None:
+        not_yet = types.SimpleNamespace(ready=False, at=None, reason="not_activated")
+        ready = types.SimpleNamespace(ready=True, at=None, reason=None)
+        self._run([not_yet, not_yet, ready])
+
+    def test_transient_ixerror_keeps_polling(self) -> None:
+        err = ix_fleet.ix_sdk.IxError("upstream timeout")
+        ready = types.SimpleNamespace(ready=True, at=None, reason=None)
+        self._run([err, ready])
+
+    def test_times_out_when_never_activated(self) -> None:
+        not_yet = types.SimpleNamespace(ready=False, at=None, reason="not_activated")
+        with (
+            patch.object(ix_fleet, "_BOOTSTRAP_DEADLINE_SECONDS", 0.1),
+            patch.object(ix_fleet, "client", self._fake_client([not_yet])),
+            patch.object(ix_fleet, "step", lambda _message: None),
+            patch.object(asyncio, "sleep", self._no_sleep),
+            pytest.raises(RuntimeError) as caught,
+        ):
+            asyncio.run(ix_fleet.wait_node_ready(self._node(), dry_run=False))
+        assert "not_activated" in str(caught.value)
+
+    def test_dry_run_makes_no_live_call(self) -> None:
+        def fail_client() -> typing.NoReturn:
+            self.fail("dry-run readiness wait must not touch the live client")
+
+        with patch.object(ix_fleet, "client", fail_client):
+            asyncio.run(ix_fleet.wait_node_ready(self._node(), dry_run=True))
 
 
 if __name__ == "__main__":
