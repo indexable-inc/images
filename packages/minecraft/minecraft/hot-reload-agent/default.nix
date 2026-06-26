@@ -29,7 +29,13 @@ stdenv.mkDerivation {
 
     mkdir -p classes
     javac --release 21 -d classes $(find src -name '*.java' -print)
-    jar cfm minecraft-hot-reload-agent.jar MANIFEST.MF -C classes .
+    # `jar` stamps every entry with the current wall-clock mtime, so this
+    # input-addressed derivation's NAR content varies per build. That trips
+    # "hash mismatch importing path" whenever two machines cache different
+    # variants of the same store path. Pin every entry to the zip-epoch
+    # minimum (DOS time is 2s-resolution from 1980) for a bit-identical jar.
+    jar --create --file minecraft-hot-reload-agent.jar --manifest MANIFEST.MF \
+      --date "1980-01-01T00:00:02Z" -C classes .
 
     runHook postBuild
   '';
