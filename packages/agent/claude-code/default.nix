@@ -1,6 +1,5 @@
 {
   lib,
-  pkgs ? ix.pkgs,
   ix,
   stdenv,
   fetchurl,
@@ -160,6 +159,12 @@
 }:
 
 let
+  # Read the package set from `ix`, not a `pkgs` callPackage formal: a `pkgs`
+  # arg in the formal set breaks `.override` (astlog no-pkgs-in-callpackage),
+  # and the rebound `ix.pkgs` is the set the rest of this file already uses
+  # (see `inherit (ix) pkgs` below).
+  inherit (ix) pkgs;
+
   # Version and per-platform SRI hashes are generated, never hand-edited. Bump
   # with `nix run .#claude-code.updateScript -- <version>`, which refetches
   # Anthropic's per-version manifest and rewrites manifest.json. We pin by raw
