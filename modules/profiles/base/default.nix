@@ -119,6 +119,16 @@ in
         bash.enable = true;
         zsh.enable = true;
         fish.enable = true;
+        # fish 4.8.0 (current nixpkgs nixos-unstable) removed
+        # share/fish/tools/create_manpage_completions.py, which Home Manager's
+        # default `generateCompletions = true` invokes to derive completions
+        # from man pages. Every `<pkg>-fish-completions` derivation then fails
+        # ("python: can't open file …create_manpage_completions.py"), failing
+        # the whole system closure and breaking `ix up` for every fleet. The
+        # shell rc/integration wiring above is what we want from fish here;
+        # man-page completions are an orthogonal nicety.
+        # https://github.com/indexable-inc/index/issues/1632
+        fish.generateCompletions = false;
         # btop resource monitor, configured natively through the Home
         # Manager module (no opaque btop.conf to hand-maintain) so every
         # VM opens btop with the same tuned layout: 500 ms refresh, just
