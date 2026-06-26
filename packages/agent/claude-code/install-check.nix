@@ -30,6 +30,26 @@
     chmod +x "$stub"
     sed "s|@helper@|$stub|" ${launchSpec} > "$PWD/test-spec.json"
 
+    spec_env() {
+      ${lib.getExe jq} -r --arg key "$1" '.env[] | select(.key == $key) | .value' \
+        "$PWD/test-spec.json"
+    }
+
+    skills_dir="$(spec_env IX_CLAUDE_SKILLS_DIR)"
+    if [ ! -d "$skills_dir" ]; then
+      printf 'claude launcher env check failed: IX_CLAUDE_SKILLS_DIR is not a directory: %s\n' \
+        "$skills_dir" >&2
+      exit 1
+    fi
+    ${lib.optionalString (repoPackages ? mcp) ''
+      agents_dir="$(spec_env IX_CLAUDE_AGENTS_DIR)"
+      if [ ! -d "$agents_dir" ] || [ -z "$(find "$agents_dir" -maxdepth 1 -name '*.md' -print -quit)" ]; then
+        printf 'claude launcher env check failed: IX_CLAUDE_AGENTS_DIR has no agent markdown files: %s\n' \
+          "$agents_dir" >&2
+        exit 1
+      fi
+    ''}
+
     check() {
       local desc="$1" expected="$2"
       shift 2

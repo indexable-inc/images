@@ -1,5 +1,6 @@
 {
   lib,
+  pkgs ? ix.pkgs,
   ix,
   stdenv,
   fetchurl,
@@ -169,6 +170,33 @@ let
   manifest = lib.importJSON ./manifest.json;
   inherit (manifest) version;
 
+  # Prebuilt agent content consumed by the repo SessionStart materializer. Claude
+  # Code can load store-backed skills through `--plugin-dir` / `--add-dir`, but
+  # bare subagents still have to exist under `.claude/agents`; exporting store
+  # paths lets that hook do a plain copy instead of running `nix build` during
+  # interactive startup. The overlay package has no sibling `mcp` package in
+  # scope, so it skips rendered agents whose MCP frontmatter depends on it.
+  agentSkillsDir = ix.skills.mkSkillsDir { inherit pkgs; };
+  agentAgentsDir =
+    if repoPackages ? mcp then
+      let
+        definitions = import (ix.paths.packagesRoot + "/agent/subagents.nix") {
+          inherit
+            ix
+            lib
+            pkgs
+            repoPackages
+            ;
+        };
+      in
+      ix.agents.mkAgentsDir {
+        inherit pkgs;
+        agents = definitions.renderedAgents;
+        inherit (definitions) rawFiles;
+      }
+    else
+      null;
+
   # Set only when the caller has not already provided an env value.
   wrapperEnvDefaults = {
     # Drops [1m] variants from /model without touching model selection.
@@ -284,11 +312,17 @@ let
   # tests below.
   launchSpec = (formats.json { }).generate "claude-code-launch-spec.json" {
     target = "@helper@";
-    env = envEntries {
-      DISABLE_AUTOUPDATER = "1";
-      DISABLE_INSTALLATION_CHECKS = "1";
-      USE_BUILTIN_RIPGREP = "0";
-    };
+    env = envEntries (
+      {
+        DISABLE_AUTOUPDATER = "1";
+        DISABLE_INSTALLATION_CHECKS = "1";
+        USE_BUILTIN_RIPGREP = "0";
+        IX_CLAUDE_SKILLS_DIR = "${agentSkillsDir}";
+      }
+      // lib.optionalAttrs (agentAgentsDir != null) {
+        IX_CLAUDE_AGENTS_DIR = "${agentAgentsDir}";
+      }
+    );
     env_defaults = envEntries (lib.mapAttrs (_: toString) wrapperEnvDefaults);
     path_prepend = pathPrepend;
     flags = wrapperFlags;

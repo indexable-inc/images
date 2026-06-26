@@ -57,15 +57,16 @@ __pycache__/
 .claude/settings.local.json
 CLAUDE.local.md
 
-# Skills are built into the `skills` flake package (one dir per skills/<name>)
-# and copied here by the SessionStart hook (.claude/hooks/agent-instructions.sh)
-# for Claude Code and Codex. Preview with
+# Skills are built into the `skills` flake package (one dir per skills/<name>).
+# The Claude wrapper exports that prebuilt store path to the SessionStart hook,
+# which copies it here for Claude Code and Codex. Preview with
 # `nix build .#skills --print-out-paths | xargs ls`.
 /.claude/skills
 /.agents/
 
-# Subagents are rendered into the `agents` flake package and copied here by the
-# hook for Claude Code (Codex's subagents are config-driven, not files).
+# Subagents are rendered into the `agents` flake package. The wrapper exports
+# that prebuilt store path to the hook for Claude Code (Codex's subagents are
+# config-driven, not files).
 /.claude/agents
 
 # macOS

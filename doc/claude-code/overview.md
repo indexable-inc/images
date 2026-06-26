@@ -46,7 +46,10 @@ Because the store output is read-only, the bundled self-updater could never
 write, so the wrapper turns it off hard (`default.nix:375-381`):
 `DISABLE_AUTOUPDATER=1`, `DISABLE_INSTALLATION_CHECKS=1`, and
 `USE_BUILTIN_RIPGREP=0` (search uses the Nix `ripgrep` on PATH so the wrapper
-owns the version pin).
+owns the version pin). The wrapper also exports `IX_CLAUDE_SKILLS_DIR` and,
+when the full flake package set is in scope, `IX_CLAUDE_AGENTS_DIR`: these are
+prebuilt store paths for the repo SessionStart materializer, so startup copies
+agent content from Nix outputs instead of invoking `nix build` interactively.
 
 ### Soft env defaults (set only when unset)
 
