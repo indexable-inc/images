@@ -1,21 +1,11 @@
 name: Warm public cache
 
-# Publish index's public build closure to the ix-public flat cache
-# (cache.ix.dev) so fleet `ix up` builds and developer machines can substitute
-# index's own artifacts -- including build-time crate FODs (nix-cargo-unit /
-# ix-mcp vendor) that a build sandbox cannot fetch from crates.io. Companion to
-# the ix-repo change that fronts the ix-public bucket through ncps
-# (indexable-inc/ix#5802).
-#
-# Scope: PUBLIC outputs only -- `.#packages.<system>` for every system index
-# exposes. Never ciChecks/tests or any private path. The push goes through the
-# on-fabric `ix-public-cache-push` helper (nix copy -> Garage S3, signed with
-# the fleet `ix-workspace` key).
+# Publish index's public package closures (incl. build-time crate FODs) to the
+# ix-public bucket so fleet `ix up` and dev machines can substitute them.
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -27,35 +17,21 @@ concurrency:
 
 jobs:
   warm:
-    # One job per system index publishes packages for (flake.nix `devSystems`).
-    # x86_64-linux is for fleet `ix up` (Linux VMs); the aarch64-linux and the
-    # two Darwin entries warm the cache for ARM and Mac *developers* pulling
-    # index's dev tools. fail-fast: false so one arch's runner being
-    # unavailable does not drop the others.
     strategy:
       fail-fast: false
       matrix:
         include:
           - system: x86_64-linux
-            # The image base pins nixpkgs.hostPlatform.gcc.arch = znver5, so the
-            # x86_64-linux closure needs the builder to advertise it.
-            extraSystemFeatures: "gccarch-znver5"
+            extraSystemFeatures: gccarch-znver5
           - system: aarch64-linux
             extraSystemFeatures: ""
           - system: aarch64-darwin
             extraSystemFeatures: ""
           - system: x86_64-darwin
             extraSystemFeatures: ""
-    # Per-system self-hosted runner. The ix-ci dispatcher must mint a runner of
-    # the matching arch/OS for this label (today only x86_64-linux is wired for
-    # the check gate -- see review note in the PR); alternatively a single
-    # x86_64-linux runner with darwin/aarch64 remote builders can build all
-    # systems and publish from one host.
     runs-on: ["${{ format('ix-ci-run-{0}-{1}-warm-{2}', github.run_id, github.run_attempt, matrix.system) }}"]
     timeout-minutes: 60
     env:
-      # Same eval knobs as the check gate. extra-system-features is per-system
-      # (znver5 only applies to the x86_64-linux image closure).
       NIX_CONFIG: |-
         experimental-features = nix-command flakes ca-derivations
         accept-flake-config = true
@@ -71,10 +47,6 @@ jobs:
           set -euo pipefail
           system='${{ matrix.system }}'
 
-          # Collect the derivation path of every public package for this system.
-          # The recursive walk descends `recurseForDerivations` catalog groups
-          # and keeps only actual derivations, so the set is exactly
-          # `.#packages.<system>`.
           mapfile -t drvs < <(
             nix eval --raw ".#packages.$system" --apply '
               set:
@@ -87,20 +59,8 @@ jobs:
               in builtins.concatStringsSep "\n" (collect set)
             '
           )
-          printf '%s: %d public package derivations\n' "$system" "${#drvs[@]}"
-
-          # Realize them (warm store -> near no-op) so every output, including
-          # the fixed-output crate tarballs, exists before we enumerate the
-          # closure.
           nix build --no-link "${drvs[@]/%/^*}"
 
-          # Full BUILD closure with outputs: `--include-outputs` is what pulls
-          # the build-time crate FODs in, not just runtime deps. This is the
-          # piece every existing push omits.
+          # --include-outputs captures build-time crate FODs, not just runtime deps.
           mapfile -t paths < <(nix-store --query --requisites --include-outputs "${drvs[@]}")
-          printf '%s: %d store paths to publish\n' "$system" "${#paths[@]}"
-
-          # On-fabric publisher: nix copy -> Garage ix-public bucket, signed
-          # ix-workspace. Needs root to read the secret-store env file; the
-          # runner is granted sudo NOPASSWD for exactly this command (see PR).
           sudo ix-public-cache-push "${paths[@]}"
