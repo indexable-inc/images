@@ -167,6 +167,35 @@ let
   agentCommon = import (paths.packagesRoot + "/agent/common.nix") { inherit lib ix repoPackages; };
   sampleClaudeSystemPrompt = agentCommon.systemPromptFor "claude";
   sampleCodexSystemPrompt = agentCommon.systemPromptFor "codex";
+  sampleCodexAgent = ix.codexAgents.renderAgent "reviewer" {
+    frontmatter = {
+      description = "Review a finished change.";
+      effort = "xhigh";
+      tools = [
+        "Read"
+        "Glob"
+        "Grep"
+      ];
+      mcpServers = ix.mcp.toAgentMcpServers {
+        docs = {
+          transport = "http";
+          url = "https://developers.openai.com/mcp";
+        };
+      };
+      codex.nickname_candidates = [
+        "Atlas"
+        "Delta"
+      ];
+    };
+    content = ''
+      Review code like an owner.
+    '';
+  };
+  sampleCodexMarketplaceEntry = ix.codexPlugin.marketplaceEntry {
+    name = "index";
+    path = "./plugins/index";
+    displayName = "index";
+  };
 
   minecraft =
     let
@@ -2517,6 +2546,28 @@ let
           lib.hasInfix "via Claude Code" sampleClaudeSystemPrompt
           && !(lib.hasInfix "via Codex" sampleClaudeSystemPrompt);
         message = "Claude prompt should disclose outward messages as Claude Code, not Codex";
+      }
+      {
+        assertion =
+          lib.hasInfix ''name = "reviewer"'' sampleCodexAgent
+          && lib.hasInfix ''description = "Review a finished change."'' sampleCodexAgent
+          && lib.hasInfix ''developer_instructions = '' sampleCodexAgent
+          && lib.hasInfix ''model_reasoning_effort = "high"'' sampleCodexAgent
+          && lib.hasInfix ''sandbox_mode = "read-only"'' sampleCodexAgent
+          && lib.hasInfix ''[mcp_servers.docs]'' sampleCodexAgent
+          && lib.hasInfix ''url = "https://developers.openai.com/mcp"'' sampleCodexAgent
+          && lib.hasInfix ''nickname_candidates = [ "Atlas", "Delta" ]'' sampleCodexAgent;
+        message = "Codex agent renderer should emit standalone custom-agent TOML from shared subagent definitions";
+      }
+      {
+        assertion =
+          sampleCodexMarketplaceEntry.source == {
+            source = "local";
+            path = "./plugins/index";
+          }
+          && sampleCodexMarketplaceEntry.policy.installation == "AVAILABLE"
+          && sampleCodexMarketplaceEntry.policy.authentication == "ON_INSTALL";
+        message = "Codex plugin marketplace entries should use the documented local source shape";
       }
     ];
 

@@ -422,6 +422,22 @@ let
     inherit pkgs;
     name = "index";
   };
+  codexPluginDir = ix.codexPlugin.mkPlugin {
+    inherit pkgs;
+    name = "index";
+  };
+  codexPluginMarketplace = ix.codexPlugin.mkMarketplace {
+    inherit pkgs;
+    name = "index-local";
+    plugins = [
+      (ix.codexPlugin.marketplaceEntry {
+        name = "index";
+        path = "./plugins/index";
+        displayName = "index";
+        shortDescription = "Index shared agent skills.";
+      })
+    ];
+  };
 
   # Declarative subagents rendered to a symlink-free `.claude/agents` directory.
   # Keep this outside the Claude plugin: plugins namespace subagent names, but
@@ -438,6 +454,27 @@ let
     inherit pkgs;
     agents = agentDefinitions.renderedAgents;
     inherit (agentDefinitions) rawFiles;
+  };
+  codexAgentsDir = ix.codexAgents.mkAgentsDir {
+    inherit pkgs;
+    agents = agentDefinitions.renderedAgents;
+    inherit (agentDefinitions) rawFiles;
+  };
+  codexRawAgentsFixtureDir = ix.codexAgents.mkAgentsDir {
+    inherit pkgs;
+    rawFiles = [
+      {
+        name = "raw-reviewer";
+        path = pkgs.writeText "raw-reviewer.md" ''
+          ---
+          name: raw-reviewer
+          description: "Review from raw Markdown."
+          tools: Read, Glob, Grep
+          ---
+          Review code from raw Markdown.
+        '';
+      }
+    ];
   };
 
   mcSource = ix.writeNushellApplication pkgs {
@@ -807,6 +844,12 @@ let
           agent-skills = pkgs.runCommand "agent-skills-check" { } ''
             test -d ${skillsDir}
             test -d ${agentsDir}
+            test -d ${codexAgentsDir}
+            test -f ${codexRawAgentsFixtureDir}/raw-reviewer.toml
+            grep -q 'name = "raw-reviewer"' ${codexRawAgentsFixtureDir}/raw-reviewer.toml
+            grep -q 'sandbox_mode = "read-only"' ${codexRawAgentsFixtureDir}/raw-reviewer.toml
+            test -f ${codexPluginDir}/.codex-plugin/plugin.json
+            test -f ${codexPluginMarketplace}/marketplace.json
             mkdir -p "$out"
           '';
           # Pins the last-applied 3-way merge behind homeModules.mutable-json:
@@ -1103,6 +1146,9 @@ in
       mc-source = mcSource;
       update-sounds = updateSounds;
       agents = agentsDir;
+      codex-agents = codexAgentsDir;
+      codex-plugin = codexPluginDir;
+      codex-plugin-marketplace = codexPluginMarketplace;
       skills = skillsDir;
       claude-plugin = claudePluginDir;
     }

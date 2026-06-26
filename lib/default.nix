@@ -143,8 +143,10 @@ let
   markdown = import ./util/markdown.nix { inherit lib; };
   skills = import ./skills.nix { inherit lib paths; };
   agents = import ./agents.nix { inherit lib markdown; };
+  codexAgents = import ./codex-agents.nix { inherit lib toml; };
   hermes = import ./hermes { };
   claudePlugin = import ./claude-plugin.nix { inherit lib skills; };
+  codexPlugin = import ./codex-plugin.nix { inherit lib skills; };
   # Shared JetBrains Islands palette (both variants), the single source of truth
   # for syntax color across the repo: the code-highlight crate embeds this JSON
   # for the search `-c` output, and the base profile generates its
@@ -437,6 +439,8 @@ let
       cargoUnit
       checks
       claudePlugin
+      codexAgents
+      codexPlugin
       deepMerge
       goUnit
       hermes

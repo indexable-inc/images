@@ -16,7 +16,7 @@ let
     "mcpServers"
   ];
 
-  knownFrontmatter = frontmatterOrder;
+  knownFrontmatter = frontmatterOrder ++ [ "codex" ];
 
   isStringList = value: builtins.isList value && lib.all builtins.isString value;
   isMcpServers =
@@ -35,6 +35,7 @@ let
     let
       frontmatter =
         agent.frontmatter or (throw "agents.mkAgentsDir: agent ${name} is missing frontmatter");
+      claudeFrontmatter = builtins.removeAttrs frontmatter [ "codex" ];
       content = agent.content or (throw "agents.mkAgentsDir: agent ${name} is missing content");
       unknown = lib.subtractLists knownFrontmatter (builtins.attrNames frontmatter);
     in
@@ -69,11 +70,14 @@ let
     assert lib.assertMsg (assertOptional name frontmatter "mcpServers" isMcpServers
       "a list of server names or inline server attrsets"
     ) "agents.mkAgentsDir: agent ${name} frontmatter.mcpServers failed validation";
+    assert lib.assertMsg (assertOptional name frontmatter "codex" builtins.isAttrs
+      "an attrset"
+    ) "agents.mkAgentsDir: agent ${name} frontmatter.codex failed validation";
     {
       frontmatter = {
         inherit name;
       }
-      // frontmatter;
+      // claudeFrontmatter;
       inherit content;
     };
 
