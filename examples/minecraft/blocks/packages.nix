@@ -68,7 +68,11 @@ let
         javac --release ${jvmVersion} -classpath "$classpath" -d classes \
           $(find "$src/src/main/java" -name '*.java')
         cp -r "$src/src/main/resources/." classes/
-        jar --create --file "$out" -C classes .
+        # Pin every entry's timestamp to the zip-epoch minimum. `jar` otherwise
+        # stamps entries with the wall-clock mtime, so the jar (and its NAR)
+        # differs per build and trips "hash mismatch importing path" when a
+        # cache holds a different variant.
+        jar --create --file "$out" --date "1980-01-01T00:00:02Z" -C classes .
       '';
 
   # Offline integration check: committed fixtures -> ClickHouse local -> query.
