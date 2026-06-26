@@ -1,0 +1,83 @@
+name: Warm public cache
+
+# Publish index's public build closure to the ix-public flat cache
+# (cache.ix.dev) so fleet `ix up` builds can substitute index's own artifacts
+# -- including build-time crate FODs (nix-cargo-unit / ix-mcp vendor) that the
+# build sandbox cannot fetch from crates.io. Companion to the ix-repo change
+# that fronts the ix-public bucket through ncps (indexable-inc/ix#5802).
+#
+# Scope: PUBLIC outputs only -- `.#packages.x86_64-linux`. Never ciChecks/tests
+# or any private path. The push goes through the on-fabric `ix-public-cache-push`
+# helper (nix copy -> Garage S3, signed with the fleet `ix-workspace` key).
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warm-public-cache
+  cancel-in-progress: false
+
+env:
+  # Same eval knobs as the check gate: CA derivations for the rust units,
+  # the znver5 system feature the image base pins, and accept-flake-config so
+  # the cache.ix.dev substituter from the flake nixConfig is honoured.
+  NIX_CONFIG: |-
+    experimental-features = nix-command flakes ca-derivations
+    accept-flake-config = true
+    extra-system-features = gccarch-znver5
+    max-jobs = auto
+    cores = 1
+
+jobs:
+  warm:
+    # Same self-hosted ix-ci-run-* dispatcher as check.yml: a warm, persistent
+    # /nix/store on a host that already carries the ix-public-cache-push helper
+    # and its secret-store credentials.
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-warm-public-cache', github.run_id, github.run_attempt) }}"]
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Publish public closure to cache.ix.dev
+        run: |
+          set -euo pipefail
+
+          # Collect the derivation path of every public package. The recursive
+          # walk descends `recurseForDerivations` catalog groups and keeps only
+          # actual derivations, so the set is exactly `.#packages.x86_64-linux`.
+          mapfile -t drvs < <(
+            nix eval --raw .#packages.x86_64-linux --apply '
+              set:
+              let
+                collect = v:
+                  if builtins.isAttrs v then
+                    if (v.type or "") == "derivation" then [ v.drvPath ]
+                    else builtins.concatMap collect (builtins.attrValues v)
+                  else [ ];
+              in builtins.concatStringsSep "\n" (collect set)
+            '
+          )
+          printf 'public package derivations: %d\n' "${#drvs[@]}"
+
+          # Realize them (warm store -> near no-op) so every output, including
+          # the fixed-output crate tarballs, exists before we enumerate the
+          # closure.
+          nix build --no-link "${drvs[@]/%/^*}"
+
+          # Full BUILD closure with outputs: `--include-outputs` is what pulls
+          # the build-time crate FODs in, not just runtime deps. This is the
+          # piece every existing push omits.
+          mapfile -t paths < <(nix-store --query --requisites --include-outputs "${drvs[@]}")
+          printf 'store paths to publish: %d\n' "${#paths[@]}"
+
+          # On-fabric publisher: nix copy -> Garage ix-public bucket, signed
+          # ix-workspace. Needs root to read the secret-store env file; the
+          # runner is granted sudo NOPASSWD for exactly this command (see PR).
+          sudo ix-public-cache-push "${paths[@]}"
