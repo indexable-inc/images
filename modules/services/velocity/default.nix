@@ -722,8 +722,6 @@ in
       preStart = ''
         set -eu
 
-        mkdir -p ${lib.escapeShellArg "${dataDir}/plugins"}
-
         if [ -f ${lib.escapeShellArg managedPluginManifest} ]; then
           while IFS= read -r plugin; do
             target=${lib.escapeShellArg "${dataDir}/plugins"}/$plugin
@@ -745,7 +743,12 @@ in
         WorkingDirectory = dataDir;
         ExecStart = lib.escapeShellArgs javaArgs;
         Restart = "on-failure";
-        StateDirectory = "velocity";
+        # `plugins/` is listed explicitly so systemd creates and owns it as the
+        # velocity user (it also re-applies ownership to an existing dir). Without
+        # it the dir is left root-owned, and the velocity-user preStart cannot
+        # symlink managed plugin jars into it, crash-looping the proxy with
+        # `ln: ... Permission denied`.
+        StateDirectory = "velocity velocity/plugins";
       };
     };
   };
