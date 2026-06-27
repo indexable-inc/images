@@ -1,0 +1,100 @@
+name: Publish public cache
+
+# Publish ONLY this repo's (indexable-inc/index, OSS) closure to the ix-public
+# flat cache (cache.ix.dev) so fleet `ix up` substitutes index's artifacts,
+# incl. build-time crate FODs. Scoping is by the FLAKE, not the shared CI store:
+# index has no indexable-inc/ix input, so its closure cannot contain ix-monorepo
+# IP. main only; a guard fails closed if that ever stops being true.
+
+on:
+  workflow_run:
+    workflows: [Check]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-public-cache
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.event == 'push')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { system: x86_64-linux, extraSystemFeatures: gccarch-znver5, withChecks: "1" }
+          - { system: aarch64-linux, extraSystemFeatures: "", withChecks: "" }
+          - { system: aarch64-darwin, extraSystemFeatures: "", withChecks: "" }
+          - { system: x86_64-darwin, extraSystemFeatures: "", withChecks: "" }
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-publish-{2}', github.run_id, github.run_attempt, matrix.system) }}"]
+    timeout-minutes: 60
+    env:
+      NIX_CONFIG: |-
+        experimental-features = nix-command flakes ca-derivations
+        accept-flake-config = true
+        extra-system-features = ${{ matrix.extraSystemFeatures }}
+        max-jobs = auto
+        cores = 1
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Guard - index must not depend on indexable-inc/ix
+        run: |
+          set -euo pipefail
+          if grep -qiE '"repo": *"ix"|indexable-inc/ix' flake.lock; then
+            echo "::error::flake.lock references indexable-inc/ix; publishing its closure could leak IP. Aborting." >&2
+            exit 1
+          fi
+
+      - name: Publish ${{ matrix.system }} index closure to ix-public
+        run: |
+          set -euo pipefail
+          system='${{ matrix.system }}'
+
+          # Scoped write-only ix-public Garage key (root provisions it; NEVER the
+          # default key, which can reach ix-cache). Absent until provisioned ->
+          # skip, like pages.yml self-skips until its signer exists.
+          env_file=/run/ix-secret-store/env/ix-public-publish
+          if [ ! -r "$env_file" ]; then
+            echo "ix-public publish cred absent ($env_file); skipping until provisioned."
+            exit 0
+          fi
+
+          # Enumerate ONLY this repo's public outputs for $system.
+          targets=".#packages.$system"
+          [ -n '${{ matrix.withChecks }}' ] && targets="$targets .#ciChecks.$system"
+          mapfile -t drvs < <(
+            for t in $targets; do
+              nix eval --raw "$t" --apply '
+                set:
+                let collect = v:
+                  if builtins.isAttrs v then
+                    if (v.type or "") == "derivation" then [ v.drvPath ]
+                    else builtins.concatMap collect (builtins.attrValues v)
+                  else [ ];
+                in builtins.concatStringsSep "\n" (collect set)
+              '
+              echo
+            done | sort -u | sed '/^$/d'
+          )
+          printf '%s: %d index derivations\n' "$system" "${#drvs[@]}"
+
+          # Realize (warm post-Check store -> near no-op) and take the full BUILD
+          # closure: --include-outputs is what carries the crate FODs.
+          nix build --no-link "${drvs[@]/%/^*}"
+          mapfile -t paths < <(nix-store --query --requisites --include-outputs "${drvs[@]}")
+          printf '%s: %d store paths to publish\n' "$system" "${#paths[@]}"
+
+          # Push to ix-public through the dispatcher's Garage tunnel (127.0.0.1:3900).
+          # nix copy diffs against the bucket, so steady state pushes only new paths.
+          set -a; . "$env_file"; set +a
+          nix copy --to "s3://ix-public?endpoint=127.0.0.1:3900&scheme=http&region=garage&compression=zstd&write-nar-listing=true" "${paths[@]}"
