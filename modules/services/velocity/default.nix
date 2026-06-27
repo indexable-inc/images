@@ -709,6 +709,15 @@ in
       home = dataDir;
     };
 
+    # The status-VM image bakes `${dataDir}/plugins` root-owned, and systemd's
+    # StateDirectory does not re-chown a pre-existing dir, so the velocity-user
+    # preStart cannot symlink managed plugin jars into it (`ln: ... Permission
+    # denied`, crash-looping the proxy). A tmpfiles `d` rule adjusts the existing
+    # dir to velocity ownership on each boot, before the service starts.
+    systemd.tmpfiles.rules = [
+      "d ${dataDir}/plugins 0755 velocity velocity - -"
+    ];
+
     systemd.services.velocity = {
       description = "Velocity Minecraft proxy";
       after = [ "network-online.target" ];
@@ -743,12 +752,7 @@ in
         WorkingDirectory = dataDir;
         ExecStart = lib.escapeShellArgs javaArgs;
         Restart = "on-failure";
-        # `plugins/` is listed explicitly so systemd creates and owns it as the
-        # velocity user (it also re-applies ownership to an existing dir). Without
-        # it the dir is left root-owned, and the velocity-user preStart cannot
-        # symlink managed plugin jars into it, crash-looping the proxy with
-        # `ln: ... Permission denied`.
-        StateDirectory = "velocity velocity/plugins";
+        StateDirectory = "velocity";
       };
     };
   };
