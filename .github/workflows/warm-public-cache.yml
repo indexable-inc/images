@@ -1,11 +1,12 @@
 name: Warm public cache
 
-# Publish index's public package closures (incl. build-time crate FODs) to the
-# ix-public bucket so fleet `ix up` and dev machines can substitute them.
+# Publish index's public package closures (incl. crate FODs) to the ix-public
+# bucket. Runs after Check so the x86_64-linux workspace is already warm.
 
 on:
-  push:
-    branches: [main]
+  workflow_run:
+    workflows: [Check]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -17,6 +18,11 @@ concurrency:
 
 jobs:
   warm:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.event == 'push')
     strategy:
       fail-fast: false
       matrix:
@@ -50,17 +56,20 @@ jobs:
           mapfile -t drvs < <(
             nix eval --raw ".#packages.$system" --apply '
               set:
-              let
-                collect = v:
-                  if builtins.isAttrs v then
-                    if (v.type or "") == "derivation" then [ v.drvPath ]
-                    else builtins.concatMap collect (builtins.attrValues v)
-                  else [ ];
+              let collect = v:
+                if builtins.isAttrs v then
+                  if (v.type or "") == "derivation" then [ v.drvPath ]
+                  else builtins.concatMap collect (builtins.attrValues v)
+                else [ ];
               in builtins.concatStringsSep "\n" (collect set)
             '
           )
+
+          # Warm store (post-Check): the rust workspace is already built, so this
+          # only realizes the package finals the gate skips; no rebuild.
           nix build --no-link "${drvs[@]/%/^*}"
 
-          # --include-outputs captures build-time crate FODs, not just runtime deps.
+          # nix copy uploads only paths the bucket lacks (diff push);
+          # --include-outputs captures build-time crate FODs.
           mapfile -t paths < <(nix-store --query --requisites --include-outputs "${drvs[@]}")
           sudo ix-public-cache-push "${paths[@]}"
