@@ -110,48 +110,6 @@ jobs:
 
           nix run .#check >"${check_log}" 2>&1
 
-      # Publish the repo-owned Rust-workspace binaries this gate just built to
-      # the ix public cache so `ix up` and later CI runs substitute them instead
-      # of rebuilding the workspace on a remote build VM. `cargo-deps` /
-      # `cargo-vendor-dir` and the per-crate derivations are build-time-only, so
-      # they never enter a runtime closure and the runtime-closure push in
-      # pages.yml never covers them; a node that rebuilds any workspace binary
-      # from source must then refetch every crate from static.crates.io, which a
-      # build VM without crates.io egress cannot do, failing the whole `ix up`
-      # (indexable-inc/index#1639). Caching the binaries keeps them
-      # substitutable, so the build VM never reaches the Rust build.
-      #
-      # `claude-hooks` and `config-launch` are the workspace binaries mkFleet's
-      # dev defaults bake into every node (lib/dev/agents.nix); both are already
-      # built by the `check` gate above (ciChecks rust-claude-hooks /
-      # rust-config-launch share the workspace units), so this only uploads from
-      # the warm store. Add further workspace binaries here as other configs bake
-      # them in.
-      #
-      # Mirrors pages.yml's push: the public cache.ix.dev vhost is read-only, so
-      # writes go to the S3 API at s3.cache.ix.dev; `secret-key=` signs each NAR.
-      # `push` to main only -- PR / merge_group runs lack secrets and untrusted
-      # builds must not reach the public cache -- and skipped until the signing
-      # key is configured, so this change and the ix write endpoint can land in
-      # either order. `continue-on-error` keeps a transient cache outage from
-      # reddening the required `flake-check` status; the build already passed.
-      - name: Push agent workspace closure to cache.ix.dev
-        if: github.event_name == 'push' && env.IX_PUBLIC_CI_SIGNING_KEY != ''
-        continue-on-error: true
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.IX_PUBLIC_S3_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.IX_PUBLIC_S3_SECRET_ACCESS_KEY }}
-          IX_PUBLIC_CI_SIGNING_KEY: ${{ secrets.IX_PUBLIC_CI_SIGNING_KEY }}
-        run: |
-          set -euo pipefail
-          keyfile=$(mktemp)
-          trap 'rm -f "$keyfile"' EXIT
-          printf '%s' "$IX_PUBLIC_CI_SIGNING_KEY" > "$keyfile"
-          nix copy \
-            --to "s3://ix-public?endpoint=s3.cache.ix.dev&scheme=https&region=garage&secret-key=$keyfile&compression=zstd&write-nar-listing=true" \
-            .#packages.x86_64-linux.claude-hooks \
-            .#packages.x86_64-linux.config-launch
-
       # The `check` app writes nix-fast-build per-attr durations to
       # check-results.json in the workspace (see lib/per-system.nix). Upload it
       # so the blast-radius workflow can fetch the most recent successful base

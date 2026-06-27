@@ -1,0 +1,140 @@
+name: Cache push
+
+# Publish every repo-owned x86_64-linux package to the ix public cache
+# (cache.ix.dev) on each push to main, so a remote build never has to rebuild a
+# repo artifact from source.
+#
+# Why this exists (indexable-inc/index#1639): the Rust workspace binaries
+# mkFleet bakes into every node (claude-hooks, config-launch, ...) pull in
+# `cargo-deps` / `cargo-vendor-dir` and ~130 per-crate derivations. Those are
+# build-time-only paths -- they never enter a runtime closure, so pages.yml's
+# runtime-closure push of `.#site` never covers them, and the `check` gate
+# builds them but pushes nothing. On a cache miss a remote `ix up` build VM
+# rebuilds the workspace from source, which needs static.crates.io egress it
+# does not have; a crate fetch fails, cascades through cargo-deps, and the
+# control plane surfaces it as `internal server error`. Publishing the whole
+# package set keeps every binary substitutable, so the build VM never reaches
+# the Rust build.
+#
+# Separate from check.yml on purpose: building the full package set is far more
+# work than the `flake-check` gate (which builds only `.#ciChecks` and evals
+# `.#packages`), so it must not run inside the required status or inflate its
+# timeout. This job is best-effort and blocks nothing.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Serialize so two main pushes do not race the same store / cache; do not cancel
+# an in-flight publish, so every merged commit gets its closure pushed (ix up
+# pins arbitrary merged revs, so each one must be cached).
+concurrency:
+  group: cache-push
+  cancel-in-progress: false
+
+env:
+  # Same client-side eval knobs as check.yml: the self-hosted runner's daemon
+  # owns the substituters (cache.ix.dev + the host's warm store); znver5 system
+  # feature for the image closures; ca-derivations for the floating-CA rust
+  # units. See check.yml for the full rationale.
+  NIX_CONFIG: |-
+    experimental-features = nix-command flakes ca-derivations
+    accept-flake-config = true
+    extra-system-features = gccarch-znver5
+    max-jobs = auto
+    cores = 1
+
+jobs:
+  push:
+    # Same self-hosted, warm-store runner pool as check.yml (vin-compute-1 via
+    # the ix-ci-dispatcher). Reusing the warm /nix/store means this mostly
+    # uploads already-built paths rather than building from scratch.
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-cache-push', github.run_id, github.run_attempt) }}"]
+    timeout-minutes: 180
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.IX_PUBLIC_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.IX_PUBLIC_S3_SECRET_ACCESS_KEY }}
+      IX_PUBLIC_CI_SIGNING_KEY: ${{ secrets.IX_PUBLIC_CI_SIGNING_KEY }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Skipped until an operator provisions the public-cache write secrets
+      # (mirrors pages.yml), so this workflow and the ix-side write endpoint can
+      # land in either order. The public cache.ix.dev vhost is read-only; writes
+      # go to the S3 API at s3.cache.ix.dev and `secret-key=` signs each NAR.
+      - name: Publish all packages to cache.ix.dev
+        if: env.IX_PUBLIC_CI_SIGNING_KEY != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          keyfile=$(mktemp)
+          trap 'rm -f "$keyfile"' EXIT
+          printf '%s' "$IX_PUBLIC_CI_SIGNING_KEY" > "$keyfile"
+
+          # Repo-built, patched tools (packages/nix/*): the patched nix-eval-jobs
+          # resolves floating content-addressed outputs so --skip-cached actually
+          # skips warm CA units instead of rebuilding the lot. Same binaries the
+          # `check` gate uses.
+          fast_build="$(nix build .#nix-fast-build --no-link --print-out-paths)/bin/nix-fast-build"
+          eval_jobs="$(nix build .#nix-eval-jobs --no-link --print-out-paths)/bin/nix-eval-jobs"
+
+          common_opts=(
+            --option accept-flake-config true
+            --option extra-experimental-features ca-derivations
+          )
+
+          # 1. Realize every x86_64-linux package. --skip-cached + the patched
+          #    eval-jobs make a warm run mostly a no-op (cached and warm-store
+          #    paths are skipped). nix-fast-build keeps building after a single
+          #    package fails, so one broken package never blocks caching the
+          #    rest; the run's nonzero exit on any failure is downgraded to a
+          #    warning here because publishing is best-effort.
+          "$fast_build" \
+            --flake .#packages.x86_64-linux \
+            --systems x86_64-linux \
+            --nix-eval-jobs "$eval_jobs" \
+            --eval-workers 16 \
+            --eval-max-memory-size 6144 \
+            --skip-cached \
+            --no-nom \
+            --no-link \
+            "${common_opts[@]}" \
+            || echo "::warning::some packages failed to build; publishing the rest"
+
+          # 2. Enumerate every buildable x86_64-linux package (skip eval errors
+          #    and other systems) and collect its realized output paths. The
+          #    `nix build` here only resolves paths step 1 already realized
+          #    locally, so it is effectively instant; --keep-going drops any
+          #    package that failed step 1 instead of aborting.
+          mapfile -t drvs < <(
+            "$eval_jobs" --flake .#packages.x86_64-linux \
+              --workers 16 --max-memory-size 6144 "${common_opts[@]}" 2>/dev/null \
+            | jq -r 'select(.system == "x86_64-linux" and (.error | not)) | .drvPath'
+          )
+          printf 'enumerated %s x86_64-linux packages\n' "${#drvs[@]}"
+          if ((${#drvs[@]} == 0)); then
+            echo "::warning::no x86_64-linux packages enumerated; nothing to publish"
+            exit 0
+          fi
+
+          mapfile -t outs < <(
+            nix build --no-link --print-out-paths --keep-going \
+              "${common_opts[@]}" "${drvs[@]/%/^*}" 2>/dev/null || true
+          )
+          printf 'publishing %s store paths\n' "${#outs[@]}"
+
+          # 3. Push. `nix copy` is incremental against the destination, so it
+          #    uploads only the paths cache.ix.dev is missing -- exactly the
+          #    warm-store-but-unpushed set that forces remote rebuilds today.
+          if ((${#outs[@]})); then
+            nix copy \
+              --to "s3://ix-public?endpoint=s3.cache.ix.dev&scheme=https&region=garage&secret-key=$keyfile&compression=zstd&write-nar-listing=true" \
+              "${outs[@]}"
+          fi
