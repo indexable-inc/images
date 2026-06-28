@@ -109,9 +109,6 @@ in
       extra-substituters = [ "https://cache.ix.dev" ];
       extra-trusted-public-keys = [
         "ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI="
-        # TODO(ix-public-ci): at go-live, add "ix-public-ci:<pubkey>" (the
-        # GitHub-hosted-CI signer) here, matching the index flake nixConfig and
-        # ix's nix-settings.nix. See the cache.ix.dev write-path runbook in ../ix.
       ];
       # Index images pin `gcc.arch = znver5`, so every derivation in the closure
       # requires this builder feature; advertise it or the daemon refuses the

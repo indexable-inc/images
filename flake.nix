@@ -2,20 +2,16 @@
   description = "Index developer tools, modules, and fleet examples";
 
   # Keep the repo cache available for repo-owned tools that CI has already built.
-  # `cache.ix.dev` is the ix public flat cache (the S3-backed `ix-public` bucket);
-  # it serves repo-owned artifacts and 404-falls-through to cache.nixos.org for
-  # generic nixpkgs paths, so a single substituter covers both. ix's own builds
-  # sign `ix-workspace:`; GitHub-hosted CI pushes (pages.yml) sign with the
-  # dedicated `ix-public-ci:` key.
+  # `cache.ix.dev` is the ix public cache (ncps fronting the `ix-public` atticd
+  # cache); it serves repo-owned artifacts and falls through to cache.nixos.org
+  # for generic nixpkgs paths, so a single substituter covers both. Everything
+  # there is signed `ix-workspace:` (atticd signs served narinfos server-side),
+  # so that one trusted key verifies both ix's builds and index's published
+  # packages (pushed by cache-push.yml).
   nixConfig = {
     extra-substituters = [ "https://cache.ix.dev" ];
     extra-trusted-public-keys = [
       "ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI="
-      # TODO(ix-public-ci): at go-live, add the dedicated GitHub-hosted-CI signer
-      # here as "ix-public-ci:<pubkey>" once an operator runs `nix key
-      # generate-secret --key-name ix-public-ci-1` (see the cache.ix.dev
-      # write-path runbook in ../ix). Until then, paths pushed by pages.yml are
-      # not verifiable by consumers of this flake; ix-workspace-signed reads work.
     ];
     # The rust workspace units default to `contentAddressed = true`
     # (lib/rust/cargo-unit.nix), so evaluating `.#checks` / `.#packages`

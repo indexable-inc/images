@@ -1110,6 +1110,12 @@ in
       agents = agentsDir;
       skills = skillsDir;
       claude-plugin = claudePluginDir;
+      # The attic binary cache client and jq, used by cache-push.yml to publish
+      # index's package closure to the public `ix-public` atticd cache. Pinned to
+      # the flake's nixpkgs so the workflow resolves them with `nix build
+      # .#attic-client` / `.#jq` rather than depending on a tool being on the
+      # runner PATH or a floating `nixpkgs#` registry reference.
+      inherit (pkgs) attic-client jq;
     }
     // repoFlakePackages
     // examplePackages

@@ -33,41 +33,78 @@ env:
 jobs:
   push:
     # Same warm-store self-hosted runner pool as check.yml, so this mostly
-    # uploads already-built paths rather than building from scratch.
+    # uploads already-built paths rather than building from scratch. The ix CI
+    # dispatcher recognises this `-cache-push` job and, for pushes to main of
+    # this (public) repo, attaches the push-only `ix-public` atticd token as a
+    # per-job systemd credential -- no GitHub secret, no signing or S3 key.
     runs-on: ["${{ format('ix-ci-run-{0}-{1}-cache-push', github.run_id, github.run_attempt) }}"]
     timeout-minutes: 180
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.IX_PUBLIC_S3_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.IX_PUBLIC_S3_SECRET_ACCESS_KEY }}
-      IX_PUBLIC_CI_SIGNING_KEY: ${{ secrets.IX_PUBLIC_CI_SIGNING_KEY }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      # Skipped until an operator provisions the public-cache write secrets
-      # (mirrors pages.yml), so this and the ix-side write endpoint can land in
+      # Publishes index's package closure to the public `ix-public` atticd cache
+      # (served at cache.ix.dev through ncps). atticd signs served narinfos
+      # server-side with the fleet ix-workspace key, so the runner needs only a
+      # push-only token -- no signing key, no S3 credentials. The token arrives
+      # as a per-job systemd credential the ix dispatcher attaches to exactly
+      # this job (see ci-dispatcher spawn.rs ix_public_push_eligible); the step
+      # skips cleanly until that is deployed, so it and the ix side can land in
       # either order.
       - name: Publish all packages to cache.ix.dev
-        if: env.IX_PUBLIC_CI_SIGNING_KEY != ''
         shell: bash
         run: |
           set -euo pipefail
 
-          keyfile=$(mktemp)
-          trap 'rm -f "$keyfile"' EXIT
-          printf '%s' "$IX_PUBLIC_CI_SIGNING_KEY" > "$keyfile"
+          # The dispatcher exposes the push token as an env-file credential and
+          # names it in IX_PUBLIC_PUSH_CREDENTIAL_NAME. Absent => not yet
+          # provisioned/deployed; skip without failing (mirrors the old gate).
+          cred="${CREDENTIALS_DIRECTORY:-}/${IX_PUBLIC_PUSH_CREDENTIAL_NAME:-}"
+          if [ -z "${CREDENTIALS_DIRECTORY:-}" ] || [ -z "${IX_PUBLIC_PUSH_CREDENTIAL_NAME:-}" ] || [ ! -r "$cred" ]; then
+            echo "::notice::ix-public push credential not present; skipping (ix side not yet deployed)"
+            exit 0
+          fi
 
-          # Repo-patched tools: nix-eval-jobs resolves floating-CA outputs to
-          # `local`, and nix-fast-build's --skip-cached then uploads those
-          # warm-store-but-unpushed paths via --copy-to without rebuilding them
-          # (packages/nix/nix-fast-build/skip-local.patch).
+          # Materialise ATTIC_IX_PUBLIC_PUSH_TOKEN from the root-delivered
+          # credential (KEY=VALUE env file) without ever putting it on argv.
+          set -a
+          # shellcheck disable=SC1090
+          . "$cred"
+          set +a
+          : "${ATTIC_IX_PUBLIC_PUSH_TOKEN:?credential file missing ATTIC_IX_PUBLIC_PUSH_TOKEN}"
+
+          # Per-job attic client config in a fresh, self-cleaning XDG dir. attic
+          # prefers $XDG_CONFIG_HOME over $HOME/.config, so set it explicitly.
+          # 0600 token file under a 0700 dir; never `attic login <token>` (a token
+          # on argv is world-readable via /proc/<pid>/cmdline to a concurrent
+          # runner). The endpoint is the host's local mTLS atticd proxy (the same
+          # one check.yml reads ix-ci from); the token is scoped to ix-public.
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "$workdir"' EXIT
+          export XDG_CONFIG_HOME="$workdir/config"
+          install -d -m700 "$XDG_CONFIG_HOME/attic"
+          ( umask 077
+            {
+              printf 'default-server = "ix-public-push"\n'
+              printf '[servers.ix-public-push]\n'
+              printf 'endpoint = "http://127.0.0.1:8070/"\n'
+              printf 'token = "%s"\n' "$ATTIC_IX_PUBLIC_PUSH_TOKEN"
+            } > "$XDG_CONFIG_HOME/attic/config.toml"
+          )
+
+          # All tools pinned via the flake so the step does not depend on the
+          # runner PATH. nix-eval-jobs/nix-fast-build are the repo-patched pair
+          # (floating-CA cacheStatus + skip-local); attic is the push client; jq
+          # reads the eval output.
           fast_build="$(nix build .#nix-fast-build --no-link --print-out-paths)/bin/nix-fast-build"
           eval_jobs="$(nix build .#nix-eval-jobs --no-link --print-out-paths)/bin/nix-eval-jobs"
+          attic="$(nix build .#attic-client --no-link --print-out-paths)/bin/attic"
+          # jq is multi-output; select its `bin` output explicitly so the path
+          # resolves to a single store path, not the whole (bin man ...) set.
+          jq="$(nix build '.#jq^bin' --no-link --print-out-paths)/bin/jq"
 
-          # Build every x86_64-linux package and copy each realized output to
-          # cache.ix.dev in one incremental pass: --skip-cached drops paths the
-          # cache already has, the rest upload. Best-effort -- one package's
-          # failure must not block caching the others.
+          # Build the package set (parallel eval + build). Best-effort: one
+          # package's failure must not block publishing the rest.
           "$fast_build" \
             --flake .#packages.x86_64-linux \
             --systems x86_64-linux \
@@ -75,7 +112,40 @@ jobs:
             --eval-workers 16 \
             --eval-max-memory-size 6144 \
             --skip-cached \
-            --copy-to "s3://ix-public?endpoint=s3.cache.ix.dev&scheme=https&region=garage&secret-key=$keyfile&compression=zstd&write-nar-listing=true" \
             --no-nom \
             --no-link \
-            || echo "::warning::some packages failed to build or upload; published the rest"
+            || echo "::warning::some packages failed to build; publishing the rest"
+
+          # Publish to ix-public by DERIVATION, not by eval-time output path: a
+          # floating content-addressed output (the rust workspace defaults to CA)
+          # has no path until it is realised, so nix-eval-jobs reports
+          # `outputs.out: null` at eval time. The drvPath, however, is always
+          # known. So enumerate every package's drvPath, then `nix-store
+          # --realise` each -- which builds or substitutes it and prints the
+          # resolved output path -- and push those. NOT --skip-cached on the
+          # realise: ix-public must hold the whole closure, including paths only
+          # another cache (e.g. ix-ci) has, so they are substituted locally and
+          # published. attic walks each path's closure and dedups server-side, so
+          # re-runs only upload genuinely new paths. The shared host store keeps
+          # this warm across runs.
+          drvs="$workdir/drvs.txt"
+          outs="$workdir/outs.txt"
+          "$eval_jobs" \
+            --flake .#packages.x86_64-linux \
+            --workers 16 \
+            --max-memory-size 6144 \
+            2>"$workdir/eval.err" \
+            | "$jq" -r '.drvPath // empty' | sort -u > "$drvs" || true
+
+          # `nix-store --realise` resolves floating-CA outputs to real paths and
+          # prints them; error/realise diagnostics are surfaced, not hidden.
+          xargs -a "$drvs" -r nix-store --realise > "$outs" 2>"$workdir/realise.err" \
+            || echo "::warning::some derivations failed to realise; publishing the rest"
+
+          if [ -s "$outs" ]; then
+            xargs -a "$outs" -r "$attic" push ix-public \
+              || echo "::warning::some paths failed to push to ix-public"
+          else
+            echo "::warning::no output paths resolved for ix-public; eval/realise logs follow"
+            tail -n 20 "$workdir/eval.err" "$workdir/realise.err" >&2 || true
+          fi
