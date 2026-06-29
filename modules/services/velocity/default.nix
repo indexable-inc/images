@@ -722,6 +722,14 @@ in
       preStart = ''
         set -eu
 
+        # Create the managed-plugins dir as the velocity user so the symlinks
+        # below succeed. `${dataDir}` is a velocity-owned StateDirectory, so this
+        # mkdir creates `plugins/` velocity-owned. A tmpfiles `d` rule cannot do
+        # this (it runs in the host context, leaving the dir root-owned), and a
+        # nested `StateDirectory = "velocity/plugins"` leaf is left root-owned
+        # under PrivateUsers; neither is writable by the sandboxed service.
+        mkdir -p ${lib.escapeShellArg "${dataDir}/plugins"}
+
         if [ -f ${lib.escapeShellArg managedPluginManifest} ]; then
           while IFS= read -r plugin; do
             target=${lib.escapeShellArg "${dataDir}/plugins"}/$plugin
@@ -743,18 +751,7 @@ in
         WorkingDirectory = dataDir;
         ExecStart = lib.escapeShellArgs javaArgs;
         Restart = "on-failure";
-        # `plugins` is a StateDirectory leaf, not a tmpfiles `d` rule: the
-        # service is sandboxed (`ix.systemdHardening`: PrivateUsers,
-        # ProtectSystem=strict), so its preStart symlinks managed plugin jars
-        # into `${dataDir}/plugins` as the velocity user. systemd creates and
-        # chowns each StateDirectory leaf to User=/Group= in the service's user
-        # namespace before preStart runs; a tmpfiles rule runs in the host
-        # context and leaves the dir root-owned and unwritable for the
-        # sandboxed user (`ln: ... Permission denied`, crash-looping the proxy).
-        StateDirectory = [
-          "velocity"
-          "velocity/plugins"
-        ];
+        StateDirectory = "velocity";
       };
     };
   };
