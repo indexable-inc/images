@@ -92,42 +92,28 @@ jobs:
             } > "$XDG_CONFIG_HOME/attic/config.toml"
           )
 
-          # All tools pinned via the flake so the step does not depend on the
-          # runner PATH. nix-eval-jobs/nix-fast-build are the repo-patched pair
-          # (floating-CA cacheStatus + skip-local); attic is the push client; jq
-          # reads the eval output.
-          fast_build="$(nix build .#nix-fast-build --no-link --print-out-paths)/bin/nix-fast-build"
+          # Tools pinned via the flake so the step does not depend on the runner
+          # PATH: nix-eval-jobs is the flake-pinned evaluator, attic is the push
+          # client, jq reads the eval output. (nix-store and nix build come with
+          # the runner's nix.)
           eval_jobs="$(nix build .#nix-eval-jobs --no-link --print-out-paths)/bin/nix-eval-jobs"
           attic="$(nix build .#attic-client --no-link --print-out-paths)/bin/attic"
           # jq is multi-output; select its `bin` output explicitly so the path
           # resolves to a single store path, not the whole (bin man ...) set.
           jq="$(nix build '.#jq^bin' --no-link --print-out-paths)/bin/jq"
 
-          # Build the package set (parallel eval + build). Best-effort: one
-          # package's failure must not block publishing the rest.
-          "$fast_build" \
-            --flake .#packages.x86_64-linux \
-            --systems x86_64-linux \
-            --nix-eval-jobs "$eval_jobs" \
-            --eval-workers 16 \
-            --eval-max-memory-size 6144 \
-            --skip-cached \
-            --no-nom \
-            --no-link \
-            || echo "::warning::some packages failed to build; publishing the rest"
-
           # Publish to ix-public by DERIVATION, not by eval-time output path: a
           # floating content-addressed output (the rust workspace defaults to CA)
           # has no path until it is realised, so nix-eval-jobs reports
           # `outputs.out: null` at eval time. The drvPath, however, is always
           # known. So enumerate every package's drvPath, then `nix-store
-          # --realise` each -- which builds or substitutes it and prints the
-          # resolved output path -- and push those. NOT --skip-cached on the
-          # realise: ix-public must hold the whole closure, including paths only
-          # another cache (e.g. ix-ci) has, so they are substituted locally and
-          # published. attic walks each path's closure and dedups server-side, so
-          # re-runs only upload genuinely new paths. The shared host store keeps
-          # this warm across runs.
+          # --realise` each -- which builds or substitutes the output (whichever
+          # is needed) and prints its resolved path -- and push those. One pass
+          # covers everything: realise both builds genuinely-new paths and pulls
+          # paths only another cache (e.g. ix-ci) has into the local store, so
+          # ix-public ends up holding the whole closure. attic walks each path's
+          # closure and dedups server-side, so re-runs only upload genuinely new
+          # paths. The shared warm host store keeps this cheap across runs.
           drvs="$workdir/drvs.txt"
           outs="$workdir/outs.txt"
           "$eval_jobs" \
@@ -137,9 +123,16 @@ jobs:
             2>"$workdir/eval.err" \
             | "$jq" -r '.drvPath // empty' | sort -u > "$drvs" || true
 
-          # `nix-store --realise` resolves floating-CA outputs to real paths and
-          # prints them; error/realise diagnostics are surfaced, not hidden.
-          xargs -a "$drvs" -r nix-store --realise > "$outs" 2>"$workdir/realise.err" \
+          # Realise one drv per invocation (-n1), 16 in parallel (-P16). This is
+          # deliberate, not the obvious batch: a single `nix-store --realise` of
+          # the whole set prints NOTHING to stdout if any one derivation fails --
+          # it still builds the others into the store, but suppresses every
+          # resolved path -- which would leave $outs empty and publish nothing on
+          # any push where a package fails. -n1 isolates each drv so one failure
+          # drops only its own path; --keep-going finishes the rest of that drv's
+          # closure; -P16 keeps build/substitute parallelism (matches the eval
+          # workers). xargs exits non-zero if any child failed; surfaced below.
+          xargs -a "$drvs" -r -P16 -n1 nix-store --realise --keep-going > "$outs" 2>"$workdir/realise.err" \
             || echo "::warning::some derivations failed to realise; publishing the rest"
 
           if [ -s "$outs" ]; then
