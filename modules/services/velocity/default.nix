@@ -709,15 +709,6 @@ in
       home = dataDir;
     };
 
-    # The status-VM image bakes `${dataDir}/plugins` root-owned, and systemd's
-    # StateDirectory does not re-chown a pre-existing dir, so the velocity-user
-    # preStart cannot symlink managed plugin jars into it (`ln: ... Permission
-    # denied`, crash-looping the proxy). A tmpfiles `d` rule adjusts the existing
-    # dir to velocity ownership on each boot, before the service starts.
-    systemd.tmpfiles.rules = [
-      "d ${dataDir}/plugins 0755 velocity velocity - -"
-    ];
-
     systemd.services.velocity = {
       description = "Velocity Minecraft proxy";
       after = [ "network-online.target" ];
@@ -752,7 +743,18 @@ in
         WorkingDirectory = dataDir;
         ExecStart = lib.escapeShellArgs javaArgs;
         Restart = "on-failure";
-        StateDirectory = "velocity";
+        # `plugins` is a StateDirectory leaf, not a tmpfiles `d` rule: the
+        # service is sandboxed (`ix.systemdHardening`: PrivateUsers,
+        # ProtectSystem=strict), so its preStart symlinks managed plugin jars
+        # into `${dataDir}/plugins` as the velocity user. systemd creates and
+        # chowns each StateDirectory leaf to User=/Group= in the service's user
+        # namespace before preStart runs; a tmpfiles rule runs in the host
+        # context and leaves the dir root-owned and unwritable for the
+        # sandboxed user (`ln: ... Permission denied`, crash-looping the proxy).
+        StateDirectory = [
+          "velocity"
+          "velocity/plugins"
+        ];
       };
     };
   };
