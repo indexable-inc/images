@@ -701,14 +701,6 @@ in
       "velocity/managed-plugins".source = managed.plugins;
     };
 
-    users.groups.velocity = { };
-    users.users.velocity = {
-      description = "Velocity service user";
-      isSystemUser = true;
-      group = "velocity";
-      home = dataDir;
-    };
-
     systemd.services.velocity = {
       description = "Velocity Minecraft proxy";
       after = [ "network-online.target" ];
@@ -722,12 +714,6 @@ in
       preStart = ''
         set -eu
 
-        # Create the managed-plugins dir as the velocity user so the symlinks
-        # below succeed. `${dataDir}` is a velocity-owned StateDirectory, so this
-        # mkdir creates `plugins/` velocity-owned. A tmpfiles `d` rule cannot do
-        # this (it runs in the host context, leaving the dir root-owned), and a
-        # nested `StateDirectory = "velocity/plugins"` leaf is left root-owned
-        # under PrivateUsers; neither is writable by the sandboxed service.
         mkdir -p ${lib.escapeShellArg "${dataDir}/plugins"}
 
         if [ -f ${lib.escapeShellArg managedPluginManifest} ]; then
@@ -746,8 +732,14 @@ in
       '';
       serviceConfig = ix.systemdHardening // {
         Type = "simple";
-        User = "velocity";
-        Group = "velocity";
+        # DynamicUser (not a static velocity user): systemd allocates the uid
+        # per boot and re-chowns the StateDirectory to it, so the managed
+        # plugins dir under `${dataDir}` is owned by the service even after a
+        # golden-snapshot restore changes the uid. A static User= leaves the
+        # snapshot's plugins dir owned by the previous uid (real host-root,
+        # outside the idmapped state mount), unwritable by the new service
+        # (`ln: ... Permission denied`, crash-looping the proxy).
+        DynamicUser = true;
         WorkingDirectory = dataDir;
         ExecStart = lib.escapeShellArgs javaArgs;
         Restart = "on-failure";
