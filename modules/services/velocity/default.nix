@@ -223,6 +223,26 @@ let
         fi
       '';
 
+  # Runs as User=velocity (second ExecStartPre); the first ExecStartPre has
+  # already forced `${dataDir}/plugins` velocity-owned as root.
+  velocityPreStart = pkgs.writeShellScript "velocity-pre-start" ''
+    set -eu
+
+    if [ -f ${lib.escapeShellArg managedPluginManifest} ]; then
+      while IFS= read -r plugin; do
+        target=${lib.escapeShellArg "${dataDir}/plugins"}/$plugin
+        if [ -L "$target" ]; then
+          rm -f "$target"
+        fi
+      done < ${lib.escapeShellArg managedPluginManifest}
+    fi
+
+    : > ${lib.escapeShellArg managedPluginManifest}
+    ${installManagedPlugins}
+    ${installManagedConfigFiles}
+    ${installForwardingSecret}
+  '';
+
   javaArgs = [
     java
     "-XX:MaxRAMPercentage=${toString cfg.maxRAMPercentage}"
@@ -719,31 +739,6 @@ in
         managed.plugins
       ]
       ++ lib.optional (forwardingSecretFile != null) forwardingSecretFile;
-      preStart = ''
-        set -eu
-
-        # Create the managed-plugins dir as the velocity user so the symlinks
-        # below succeed. `${dataDir}` is a velocity-owned StateDirectory, so this
-        # mkdir creates `plugins/` velocity-owned. A tmpfiles `d` rule cannot do
-        # this (it runs in the host context, leaving the dir root-owned), and a
-        # nested `StateDirectory = "velocity/plugins"` leaf is left root-owned
-        # under PrivateUsers; neither is writable by the sandboxed service.
-        mkdir -p ${lib.escapeShellArg "${dataDir}/plugins"}
-
-        if [ -f ${lib.escapeShellArg managedPluginManifest} ]; then
-          while IFS= read -r plugin; do
-            target=${lib.escapeShellArg "${dataDir}/plugins"}/$plugin
-            if [ -L "$target" ]; then
-              rm -f "$target"
-            fi
-          done < ${lib.escapeShellArg managedPluginManifest}
-        fi
-
-        : > ${lib.escapeShellArg managedPluginManifest}
-        ${installManagedPlugins}
-        ${installManagedConfigFiles}
-        ${installForwardingSecret}
-      '';
       serviceConfig = ix.systemdHardening // {
         Type = "simple";
         User = "velocity";
@@ -752,6 +747,17 @@ in
         ExecStart = lib.escapeShellArgs javaArgs;
         Restart = "on-failure";
         StateDirectory = "velocity";
+        # `${dataDir}/plugins` is created root-owned before the service starts
+        # (it persists in the golden-snapshot rootfs and is not re-chowned by a
+        # tmpfiles `d` rule or a nested StateDirectory leaf under PrivateUsers),
+        # so the sandboxed User=velocity script cannot symlink the managed
+        # plugin jars into it (`ln: ... Permission denied`, crash-looping the
+        # proxy). Force the dir velocity-owned as root (`+`) first, then run the
+        # plugin/config install as the velocity user.
+        ExecStartPre = [
+          "+${pkgs.coreutils}/bin/install -d -o velocity -g velocity -m 0755 ${dataDir}/plugins"
+          velocityPreStart
+        ];
       };
     };
   };
