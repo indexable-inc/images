@@ -26,8 +26,9 @@ nix run .#ray-cluster-up
 - [`pyproject.toml`](pyproject.toml), [`uv.lock`](uv.lock), and [`src/`](src/)
   are the Ray driver (`ray-demo`).
 - [`ix.nix`](ix.nix) defines the fleet: one head and two worker
-  replicas, all in one east-west group, with `dependsOn` so the head comes up
-  first.
+  replicas, all in one east-west group. Workers retry their Ray startup until
+  the head is reachable, so the fleet can boot the whole cluster together while
+  the head's health check waits for every node to join.
 - [`cluster-node.nix`](cluster-node.nix) owns one Ray node: the package, the
   pinned ports, the `nix-ld` loader environment, and the hardened long-running
   service. Head and worker differ only by their `ray start` flags.

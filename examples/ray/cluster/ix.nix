@@ -12,7 +12,6 @@ index.lib.mkFleet {
 
     ray-worker = {
       replicas = 2;
-      dependsOn = [ "ray-head" ];
       groups = [ eastWestGroup ];
       modules = [ ./worker.nix ];
     };
