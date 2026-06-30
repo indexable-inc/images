@@ -94,13 +94,18 @@ jobs:
 
           # Tools pinned via the flake so the step does not depend on the runner
           # PATH: nix-eval-jobs is the flake-pinned evaluator, attic is the push
-          # client, jq reads the eval output. (nix-store and nix build come with
+          # client, jq reads the eval output, findutils provides xargs. The
+          # runner PATH carries coreutils + nix but not findutils, so bare
+          # `xargs` is `command not found`. (nix-store and nix build come with
           # the runner's nix.)
           eval_jobs="$(nix build .#nix-eval-jobs --no-link --print-out-paths)/bin/nix-eval-jobs"
           attic="$(nix build .#attic-client --no-link --print-out-paths)/bin/attic"
           # jq is multi-output; select its `bin` output explicitly so the path
           # resolves to a single store path, not the whole (bin man ...) set.
           jq="$(nix build '.#jq^bin' --no-link --print-out-paths)/bin/jq"
+          # findutils is multi-output (out info locate); select `out` (where
+          # xargs lives) so the path resolves to a single store path.
+          xargs="$(nix build '.#findutils^out' --no-link --print-out-paths)/bin/xargs"
 
           # Publish to ix-public by DERIVATION, not by eval-time output path: a
           # floating content-addressed output (the rust workspace defaults to CA)
@@ -132,11 +137,11 @@ jobs:
           # drops only its own path; --keep-going finishes the rest of that drv's
           # closure; -P16 keeps build/substitute parallelism (matches the eval
           # workers). xargs exits non-zero if any child failed; surfaced below.
-          xargs -a "$drvs" -r -P16 -n1 nix-store --realise --keep-going > "$outs" 2>"$workdir/realise.err" \
+          "$xargs" -a "$drvs" -r -P16 -n1 nix-store --realise --keep-going > "$outs" 2>"$workdir/realise.err" \
             || echo "::warning::some derivations failed to realise; publishing the rest"
 
           if [ -s "$outs" ]; then
-            xargs -a "$outs" -r "$attic" push ix-public \
+            "$xargs" -a "$outs" -r "$attic" push ix-public \
               || echo "::warning::some paths failed to push to ix-public"
           else
             echo "::warning::no output paths resolved for ix-public; eval/realise logs follow"
