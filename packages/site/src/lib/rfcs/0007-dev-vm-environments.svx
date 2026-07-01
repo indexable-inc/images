@@ -34,7 +34,7 @@ The concrete pain: a user who wants "my agent box, three of them, all logged int
 
 The unit a user owns is a small flake. `ix dev init` scaffolds it; thereafter the user edits `dev.nix` and commits to their own git remote.
 
-```nix
+```text
 my-ix-dev/                  # user-owned flake, in their git
 ├── flake.nix               # boilerplate: inputs.index + outputs = index.lib.mkDev { module = ./dev.nix; src = self; }
 ├── dev.nix                 # the only file normally edited

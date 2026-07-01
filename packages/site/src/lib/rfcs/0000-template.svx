@@ -9,7 +9,7 @@ updated: YYYY-MM-DD
 trackingIssue: null
 supersedes: null
 supersededBy: null
-description: Template. Copy to `NNNN-short-slug.html`, update `<title>` and the `h1`, fill in frontmatter and body.
+description: Template. Copy to `NNNN-short-slug.svx`, update the `title` frontmatter field, fill in the rest of the frontmatter and the body.
 template: true
 ---
 
