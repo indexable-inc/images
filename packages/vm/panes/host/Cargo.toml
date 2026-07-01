@@ -1,5 +1,11 @@
 # macOS host agent: one native NSWindow (CAMetalLayer) per guest toplevel,
 # input forwarded back over the same stream.
+#
+# `clap`, `lz4_flex` and the protocol crate are unconditional: the built-in
+# mock guest (`--mock-serve`) compiles and runs on any OS, which is also what
+# keeps the Linux clippy pass meaningful for this otherwise Apple-only crate.
+# The Apple-framework crates stay gated to `cfg(target_os = "macos")` (the
+# vmkit pattern), so a Linux build pulls none of them.
 [package]
 name = "panes-host"
 version = "0.1.0"
@@ -8,7 +14,19 @@ description = "macOS agent presenting guest-Linux windows as native NSWindows"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+clap = { workspace = true, features = ["derive"] }
+lz4_flex = "0.13"
 panes-protocol.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Main-queue handoff: the socket reader thread owns the stream and
+# `exec_async`s decoded messages onto the AppKit main thread.
+dispatch2 = "0.3"
+objc2.workspace = true
+objc2-app-kit.workspace = true
+objc2-foundation.workspace = true
+objc2-metal = "0.3"
+objc2-quartz-core = "0.3"
 
 [lints]
 workspace = true

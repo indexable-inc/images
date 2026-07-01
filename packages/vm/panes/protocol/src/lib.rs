@@ -15,6 +15,9 @@
 //! - Windows are xdg_toplevels: title/app_id/min-max map onto NSWindow
 //!   properties; interactive resize is host-side (WSLg lesson) and lands as
 //!   [`ToGuest::Configure`].
+//! - Handshake: both sides send their Hello immediately on connect (no
+//!   speak-first ordering); each validates the peer major before any other
+//!   message and hangs up on mismatch.
 
 use serde::{Deserialize, Serialize};
 
@@ -77,6 +80,8 @@ pub enum ToHost {
         id: WindowId,
         title: String,
     },
+    /// Sizes are buffer pixels at the scale from `WindowNew`/`Configure`
+    /// (the host divides by scale for NSWindow contentMin/MaxSize points).
     WindowMinMax {
         id: WindowId,
         min: Option<(u32, u32)>,
@@ -148,7 +153,10 @@ pub enum ToGuest {
         /// bumps alone: one unadvertised discriminant kills a whole frame.
         encodings: Vec<Encoding>,
     },
-    /// Presented `seq` for window `id`; compositor fires frame callbacks.
+    /// Presented up to `seq` for window `id` (cumulative: the host coalesces
+    /// and acks only the newest frame it presented per display tick, so a
+    /// guest must treat any `seq >= awaited` as satisfying the wait).
+    /// Compositor fires frame callbacks off this.
     Ack {
         id: WindowId,
         seq: u64,

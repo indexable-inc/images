@@ -1,0 +1,116 @@
+# panes-host
+
+macOS window agent for seamless guest-Linux windows (index#1686): connects to
+the guest compositor's stream (unix socket today, fronted by the libkrun vsock
+port map later), presents each guest toplevel as a real `NSWindow`, and
+forwards input back. The wire contract lives in `packages/vm/panes/protocol`.
+
+## Architecture
+
+Three thread roles, one owner per resource:
+
+- **Main thread (AppKit).** Owns every window and all state: `app::APP` is a
+  main-thread `thread_local` holding the window map, the shared Metal
+  renderer, and the outgoing sender. All AppKit/CoreAnimation calls happen
+  here (vmkit's `MainThreadMarker` discipline). AppKit calls that
+  synchronously re-enter delegates (`close`, `makeKeyAndOrderFront`) are
+  deferred until the state borrow is released.
+- **Supervisor/reader thread.** Owns the socket. Connects with backoff
+  (250ms doubling to 5s), refuses a mismatched protocol major and hangs up,
+  then decodes `ToHost` frames and `dispatch_async`s them onto the main
+  queue. On disconnect every guest window closes.
+- **Writer thread.** Drains an mpsc of `ToGuest` messages into the socket
+  (batch per flush), so the main thread never blocks on a stalled guest.
+
+Per `WindowNew` the host builds: a titled/closable/miniaturizable/resizable
+`NSWindow` (content size = buffer px / scale), an input `NSView` subclass
+hosting a `CAMetalLayer` (`framebufferOnly`, `displaySyncEnabled`,
+`maximumDrawableCount = 3`, `contentsScale = backingScaleFactor`), a
+persistent `MTLTexture` holding the current surface, and a per-window
+`CAMetalDisplayLink`. The window is only ordered front on its first
+`WindowFrame`, so an empty window never flashes.
+
+### Frame path and the ack loop
+
+`WindowFrame` tiles are decoded on the main thread (LZ4 via `lz4_flex`) and
+`replaceRegion`ed into the persistent texture (one CPU copy, fine at v1;
+`full` frames blank uncovered pixels first). The window is then dirty.
+
+`CAMetalDisplayLink` (macOS 14+, from `objc2-quartz-core` 0.3, added to the
+main run loop in common modes with `preferredFrameRateRange` {min 60, max
+120, preferred 120}) ticks at the panel rate and hands us the drawable. If
+the window is dirty we encode one fullscreen-triangle pass sampling the
+texture into the drawable (a render pass, not a blit, because
+`framebufferOnly` drawables are render-target-only, and sampling stretches
+stale content for free during resize), present, and only then send
+`ToGuest::Ack { id, seq }`. The compositor fires Wayland frame callbacks off
+that ack, so guest rendering is genlocked to ProMotion instead of running an
+open-loop timer. Coalescing: if several frames land between ticks, only the
+newest is presented and acked; guests should treat an ack as "presented up
+to seq".
+
+### Resize
+
+`windowDidResize` sends `ToGuest::Configure` (view bounds x
+`backingScaleFactor`) and marks the window dirty so the next tick redraws
+immediately, stretching the old texture until the matching-size frame
+arrives. During live resize the layer runs `presentsWithTransaction` so the
+present rides the same CATransaction as the window frame (no edge shimmer);
+outside it the async present path is lower-latency. `windowShouldClose`
+never closes locally: it sends `CloseRequest` and the window dies when
+`WindowGone` comes back (the WSLg lesson: window existence is owned by the
+compositor).
+
+## Input mapping
+
+- **Keyboard**: `keyDown`/`keyUp` map `NSEvent.keyCode` (kVK) to evdev codes
+  via `src/keymap.rs`, generated from the keycodemapdb project by
+  `tools/gen_keymap.py` (same dataset QEMU/libvirt use). `isARepeat` events
+  are dropped: guests auto-repeat from `wl_keyboard.repeat_info`.
+  `flagsChanged` turns into modifier press/release by toggling a held-set
+  keyed on kVK; caps lock (one event per toggle) synthesizes press+release.
+  Cmd+W (CloseRequest) and Cmd+Q (CloseRequest to all, then exit) stay
+  host-side; other Cmd chords are forwarded.
+- **Pointer**: the view is flipped (top-left origin) and multiplies points
+  by `backingScaleFactor`, so protocol coordinates are buffer pixels.
+  Buttons map to evdev (`BTN_LEFT` 0x110, `BTN_RIGHT` 0x111, `BTN_MIDDLE`
+  0x112, side/extra 0x113/0x114); a motion is sent before each button so the
+  press lands where the user clicked. `acceptsFirstMouse` is true (the
+  Parallels/VMware convention) so the activating click reaches the guest.
+- **Scroll**: precise deltas (trackpad) become `AxisSource::Finger` pixel
+  deltas x scale; wheel lines become `AxisSource::Wheel` with 15 axis units
+  per detent plus `v120 = delta * 120`. Both axes are negated
+  (`scrollingDelta*` is positive-up, Wayland axis is positive-down). A
+  momentum-phase end sends an axis `stop`.
+
+## Mock guest
+
+`panes-host --mock` serves a built-in mock guest on a temp socket and
+connects to it: one 800x600-point toplevel with a moving gradient and a
+blocky frame counter, full-damage-tiled in 256px tiles, LZ4 when the host
+advertises it. It renders the next frame when the previous seq is acked
+(exactly one frame in flight, like the real compositor) and logs every input
+event plus a once-a-second ack rate:
+
+```
+panes-host --mock                       # everything in one process
+panes-host --mock-serve /tmp/g.sock     # headless mock only (any OS)
+panes-host --connect /tmp/g.sock        # host against an external socket
+panes-host --tcp 127.0.0.1:7100         # TCP instead of unix (debugging)
+```
+
+Measured on this machine (M-series, ProMotion at
+`maximumFramesPerSecond = 120`, scale 2): steady **120.0 acks/s** at a
+1600x1192 px buffer, host ~11% of one core, mock guest ~17% (render + LZ4
+dominate). The rate held at 120 up to the largest buffer AeroSpace tiled it
+to (1370x2516 px).
+
+## Regenerating the keymap
+
+```
+python3 tools/gen_keymap.py > src/keymap.rs
+```
+
+The script fetches `data/keymaps.csv` from
+<https://gitlab.com/keycodemap/keycodemapdb> (or takes a local path); the
+output is committed so builds never touch the network.
