@@ -1073,7 +1073,7 @@ let
       # from rbw/op per the secrets split), e.g. `Exa(os.environ["EXA_API_KEY"])`.
       ps.exa-py
       # Gmail / Google Workspace, the "third surface" for an integration alongside
-      # the MCP binding and the index CLI (rfcs/0003): a session can drive the
+      # the MCP binding and the index CLI (RFC 0003): a session can drive the
       # Gmail and Calendar APIs directly with no install step. This is the official
       # client. Gmail is a Workspace API with no dedicated Cloud Client Library, so
       # google-api-python-client is the supported path (simplegmail rides on the
