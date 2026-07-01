@@ -79,7 +79,7 @@ stdenvNoCC.mkDerivation {
     # which need --retry-all-errors to be retried at all.
     xargs -P 16 -n 2 bash -c '
       hash="$1"; name="$2"
-      curl -sSfL --retry 5 --retry-all-errors \
+      curl -sSfL --retry 5 --retry-all-errors --retry-max-time 60 \
         "https://resources.download.minecraft.net/''${hash:0:2}/$hash" \
         -o "$out/sounds/$name"
     ' _ < "$list"
