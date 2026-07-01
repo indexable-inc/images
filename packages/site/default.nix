@@ -4,18 +4,9 @@
 }:
 let
   siteBuild = ix.buildSvelteSite pkgs {
-    pname = "ix-site";
-    version = "0.1.0";
-    src = ix.paths.site;
+    sourceRoot = ix.paths.packagesRoot + "/site";
     distDir = "build";
-    serve = {
-      name = "ix-site";
-      routePrefix = "/index";
-    };
-    devServer = {
-      name = "ix-site-dev";
-      checkoutSubdir = "packages/site";
-    };
+    serve.routePrefix = "/index";
   };
 in
 siteBuild.overrideAttrs (old: {

@@ -1676,9 +1676,7 @@ let
   vitestWorkspaceCases = builtins.attrValues vitestWorkspace.cases;
 
   svelteSite = ix.buildSvelteSite pkgs {
-    pname = "svelte-site-fixture";
-    version = "0.1.0";
-    src = npmSiteFixture;
+    sourceRoot = ./fixtures/npm-site;
     buildFlags = [
       "--class"
       "ix svelte"
@@ -1693,8 +1691,6 @@ let
       ];
     };
     devServer = {
-      name = "svelte-site-fixture-dev";
-      checkoutSubdir = "tests/fixtures/npm-site";
       script = "build";
       port = 5177;
     };

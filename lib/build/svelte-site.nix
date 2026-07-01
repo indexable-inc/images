@@ -1,6 +1,7 @@
 {
   bunLockFor,
   errors,
+  paths,
   writeNushellApplication,
 }:
 
@@ -13,8 +14,9 @@
   can write `node_modules`, caches, and HMR state outside the Nix store.
 
   Arguments:
-  - `pname`, `version`: derivation identity.
-  - `src`: project root containing `package.json` and the selected lockfile.
+  - `src`: project root containing `package.json` and the selected lockfile, or
+    `sourceRoot`: a repo path to filter with `fileset.gitTracked`.
+    `package.json`'s `name` and `version` are the derivation identity.
   - `packageManager`: `npm` or `bun`.
   - `buildScript`: package script for the production build.
   - `buildFlags`: arguments passed to the build script after `--`.
@@ -31,15 +33,14 @@
 */
 pkgs:
 {
-  pname,
-  version ? "0.0.0",
-  src,
+  src ? null,
+  sourceRoot ? null,
   packageManager ? "npm",
   buildScript ? "build",
   buildFlags ? [ ],
   preBuild ? "",
   distDir ? "dist",
-  installDir ? "share/${pname}",
+  installDir ? null,
   installFlags ? [ ],
   extraNativeBuildInputs ? [ ],
   serve ? { },
@@ -48,6 +49,36 @@ pkgs:
 }:
 let
   inherit (pkgs) lib;
+  haveSource = src != null || sourceRoot != null;
+  source =
+    assert lib.assertMsg haveSource "ix.buildSvelteSite: pass `sourceRoot` or `src`";
+    if sourceRoot == null then
+      src
+    else
+      lib.fileset.toSource {
+        root = sourceRoot;
+        fileset = lib.fileset.gitTracked sourceRoot;
+      };
+  packageJsonRoot = if sourceRoot == null then src else sourceRoot;
+  packageJson = lib.importJSON (packageJsonRoot + "/package.json");
+  pname =
+    packageJson.name or (throw "ix.buildSvelteSite: ${toString src}/package.json is missing `name`");
+  version =
+    packageJson.version
+      or (throw "ix.buildSvelteSite: ${toString src}/package.json is missing `version`");
+  resolvedInstallDir = if installDir == null then "share/${pname}" else installDir;
+  derivedCheckoutSubdir =
+    if sourceRoot == null then
+      null
+    else
+      let
+        rootPrefix = "${toString paths.root}/";
+        sourceRootString = toString sourceRoot;
+      in
+      if lib.hasPrefix rootPrefix sourceRootString then
+        lib.removePrefix rootPrefix sourceRootString
+      else
+        null;
 
   checkedPackageManager = errors.assertEnum {
     name = "ix.buildSvelteSite.packageManager";
@@ -63,7 +94,7 @@ let
       let
         bunLock = bunLockFor pkgs;
         bunNodeModules = bunLock.buildNodeModules {
-          bunRoot = src;
+          bunRoot = source;
           inherit installFlags;
           derivationArgs = {
             strictDeps = true;
@@ -110,7 +141,7 @@ let
     npm =
       let
         npmDeps = pkgs.importNpmLock.buildNodeModules {
-          npmRoot = src;
+          npmRoot = source;
           inherit (pkgs) nodejs;
           derivationArgs = {
             strictDeps = true;
@@ -159,9 +190,9 @@ let
       inherit
         pname
         version
-        src
         meta
         ;
+      src = source;
 
       strictDeps = true;
       nativeBuildInputs = manager.nativeBuildInputs ++ extraNativeBuildInputs;
@@ -177,8 +208,8 @@ let
       installPhase = ''
         # shell
         runHook preInstall
-        mkdir -p "$out"/${lib.escapeShellArg installDir}
-        cp -R ${lib.escapeShellArg (distDir + "/.")} "$out"/${lib.escapeShellArg installDir}/
+        mkdir -p "$out"/${lib.escapeShellArg resolvedInstallDir}
+        cp -R ${lib.escapeShellArg (distDir + "/.")} "$out"/${lib.escapeShellArg resolvedInstallDir}/
         runHook postInstall
       '';
     }
@@ -212,7 +243,7 @@ let
       serveConfig.routePrefix
     ]
     ++ serveConfig.extraFlags
-    ++ [ "${staticSite}/${installDir}" ];
+    ++ [ "${staticSite}/${resolvedInstallDir}" ];
   serveWrapperFlags = lib.concatMapStringsSep " " (
     arg: "--add-flag ${lib.escapeShellArg arg}"
   ) serveArgs;
@@ -236,7 +267,7 @@ let
     enable = true;
     name = "${pname}-dev";
     script = "dev";
-    checkoutSubdir = null;
+    checkoutSubdir = derivedCheckoutSubdir;
     host = "127.0.0.1";
     port = 5173;
     autoInstall = true;

@@ -83,8 +83,6 @@ let
   };
 
   site = ix.buildSvelteSite pkgs {
-    pname = "resource-monitor-site";
-    version = "0.1.0";
     src = siteSrc;
     preBuild = "cp ${
       (pkgs.formats.json { }).generate "resource-monitor-vm-config.json" metricConfig

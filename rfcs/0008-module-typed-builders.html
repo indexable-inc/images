@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RFC 0008: Module-typed builders · ix images</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fdfdfc;
+    --fg: #1a1a1a;
+    --fg-dim: #5b5b5b;
+    --link: #0050b3;
+    --code-bg: #f3f3ef;
+    --rule: #e4e2dc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161614;
+      --fg: #e8e6df;
+      --fg-dim: #9b9890;
+      --link: #79b8ff;
+      --code-bg: #22221f;
+      --rule: #2e2d2a;
+    }
+  }
+  html { background: var(--bg); color: var(--fg); }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    max-width: 720px;
+    margin: 3rem auto;
+    padding: 0 1.25rem 4rem;
+    font-size: 17px;
+    line-height: 1.55;
+  }
+  h1, h2, h3 { line-height: 1.25; font-weight: 600; }
+  h1 { font-size: 1.9rem; margin: 0 0 0.25rem; }
+  .subtitle { color: var(--fg-dim); font-size: 1rem; margin: 0 0 2rem; }
+  h2 { font-size: 1.35rem; margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--rule); }
+  h3 { font-size: 1.1rem; margin-top: 1.75rem; }
+  p { margin: 0.85rem 0; }
+  a { color: var(--link); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre {
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 0.92em;
+  }
+  code { background: var(--code-bg); padding: 0.08em 0.3em; border-radius: 3px; }
+  pre {
+    background: var(--code-bg);
+    padding: 0.85rem 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    line-height: 1.45;
+  }
+  pre code { background: transparent; padding: 0; }
+  ul, ol { padding-left: 1.4rem; }
+  li { margin: 0.3rem 0; }
+  blockquote {
+    border-left: 3px solid var(--rule);
+    margin: 1rem 0;
+    padding: 0.1rem 0 0.1rem 1rem;
+    color: var(--fg-dim);
+  }
+  dl.frontmatter {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.25rem 1rem;
+    margin: 0 0 2rem;
+    font-size: 0.95rem;
+  }
+  dl.frontmatter dt { font-weight: 600; color: var(--fg-dim); }
+  dl.frontmatter dd { margin: 0; }
+  strong { font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>RFC 0008: Module-typed builders</h1>
+<p class="subtitle"><a href="index.html">&#8617; RFC index</a></p>
+
+<dl class="frontmatter">
+  <dt>Number</dt><dd>0008</dd>
+  <dt>Title</dt><dd>Module-typed builders</dd>
+  <dt>Status</dt><dd>Draft</dd>
+  <dt>Authors</dt><dd>andrewgazelka</dd>
+  <dt>Created</dt><dd>2026-07-01</dd>
+  <dt>Updated</dt><dd>2026-07-01</dd>
+  <dt>Tracking issue</dt><dd>&mdash;</dd>
+  <dt>Supersedes</dt><dd>&mdash;</dd>
+  <dt>Superseded by</dt><dd>&mdash;</dd>
+</dl>
+
+<h2>Summary</h2>
+<p>Type the argument surface of repo-owned builders in <code>lib/build/</code> with the NixOS module system (<code>lib.evalModules</code>), starting with <code>ix.wrapPackage</code>. A typed builder declares its inputs as <code>mkOption</code>s &mdash; type, default, description &mdash; and resolves the caller's argument attrset through <code>evalModules</code>, which yields defaults, argument merging, and typo rejection (no <code>freeformType</code>, so an unknown key throws) from one declaration. The evaluated schema is re-exported as <code>&lt;builder&gt;.options</code>, so every field's type, default, and description is <code>nix eval</code>-able:</p>
+<pre><code>nix eval .#lib.wrapPackage.options.resources.description
+# "Runtime resources bundled into the wrapper output and optionally exposed via env vars."</code></pre>
+<p>This deliberately reverses the de facto "builders are plain functions" convention for the subset of builders whose interfaces are wide enough that self-documentation and validation earn their keep. It does not mandate the pattern everywhere.</p>
+
+<h2>Motivation</h2>
+<p>Builders under <code>lib/build/</code> are today plain functions: a curried <code>pkgs:</code> followed by an argument attrset with <code>?</code> defaults, an RFC-0145 doc-comment above the binding, and occasional targeted asserts from <code>lib/util/errors.nix</code> (<code>requireArg</code>, <code>requireAttr</code>, <code>assertEnum</code>). That shape is cheap and idiomatic, and for a two-argument helper it is the right call. Three things go wrong as a builder's surface grows:</p>
+<ol>
+  <li><strong>Interfaces are not introspectable.</strong> The argument contract lives in a prose doc-comment, not in anything a tool or a human at a REPL can query. There is no way to ask "what arguments does <code>wrapPackage</code> take, and what does each mean" other than opening the source. Defaults are buried in the function head; descriptions, if they exist, are in comments that drift from the code.</li>
+  <li><strong>Optional-argument typos are silent.</strong> A plain function with <code>{ symlinks ? { }, ... }</code> silently ignores a caller that writes <code>symlinkz</code>. Without an explicit assert per field, the misspelled argument is dropped and the builder produces a subtly wrong output rather than a loud error. As <code>wrapPackage</code> accumulated <code>resources</code>, <code>env</code>, <code>pathSuffix</code>, <code>nativePathSuffix</code>, <code>isCross</code>, and <code>symlinks</code>, the odds of a silent typo stopped being negligible.</li>
+  <li><strong>Validation is ad hoc.</strong> The <code>errors.nix</code> helpers cover required-argument and enum cases but are opt-in and per-call; there is no uniform type check. A caller passing a string where a list of packages is expected gets a deep-eval crash somewhere downstream, not a message naming the offending field.</li>
+</ol>
+<p>The repo already contains the fix, applied elsewhere. <code>lib/rust/policy.nix</code> declares the Rust build policy as a module <code>options</code> tree and resolves a caller's partial policy through <code>lib.evalModules</code>, precisely so that "the defaults, the caller-merge, and typo rejection&hellip; all come from one declaration" (its words, at <code>lib/rust/policy.nix:31-34</code>). This RFC generalises that move from one config schema to the builder surface, and adds the introspection export that <code>policy.nix</code> does not need but builders do.</p>
+
+<h2>Detailed design</h2>
+
+<h3>The shape</h3>
+<p>A module-typed builder is a file that declares an options module, evaluates it twice &mdash; once with no caller config to expose the schema, once per call with the caller's args as config &mdash; and returns a <em>functor attrset</em> that is both callable and carries its schema. <code>lib/build/wrap-package.nix</code> is the reference implementation. The option declarations:</p>
+<pre><code>wrapPackageModule = { config, ... }: {
+  options = {
+    package = mkOption {
+      type = types.package;
+      description = "The unwrapped program derivation; must ship `bin/&lt;mainProgram&gt;`.";
+    };
+    mainProgram = mkOption {
+      type = types.str;
+      description = "Name of the wrapper binary (defaults to `package.meta.mainProgram`).";
+    };
+    resources = mkOption {
+      type = types.attrsOf (types.submodule resourceModule);
+      default = { };
+      description = "Runtime resources bundled into the wrapper output and optionally exposed via env vars.";
+    };
+    # env / pathSuffix / nativePathSuffix / isCross / symlinks / passthru / meta ...
+  };
+  # A config default (not an option default) because it reads another option;
+  # mkDefault lets a caller override it, and it is lazy so it only throws when
+  # neither the caller nor the package supplies a name.
+  config.mainProgram = lib.mkDefault (
+    config.package.meta.mainProgram
+      or (throw "ix.wrapPackage: `mainProgram` is unset and `package` has no `meta.mainProgram`")
+  );
+};</code></pre>
+<p>Nested records get their own submodule, so their fields are typed and documented too. A <code>resource</code> is <code>{ source; from ? ""; to; env ? null; }</code>, declared as <code>resourceModule</code> and referenced via <code>types.submodule</code> above.</p>
+
+<h3>Resolution and introspection</h3>
+<p>The builder body resolves the caller's args exactly as <code>policy.nix</code> resolves a policy, and exposes the schema from a no-config evaluation:</p>
+<pre><code># Introspection: `.options` never forces `.config`, so the required `package`
+# option needs no value here.
+schema = (lib.evalModules { modules = [ wrapPackageModule ]; }).options;
+
+build = pkgs: args:
+  let
+    cfg = (lib.evalModules {
+      modules = [ wrapPackageModule { config = args; } ];
+    }).config;
+  in
+  pkgs.runCommand "${cfg.package.pname}-${cfg.package.version}" { /* ... */ } ''
+    # ... uses cfg.resources, cfg.env, cfg.symlinks, cfg.isCross ...
+  '';
+in
+{
+  __functor = _self: build;   # callable: `ix.wrapPackage pkgs { ... }`
+  options = schema;           # introspectable: `ix.wrapPackage.options.&lt;f&gt;.description`
+}</code></pre>
+<p>The <code>__functor</code> attrset is the key to keeping the call site unchanged. <code>ix.wrapPackage pkgs { ... }</code> works because <code>__functor</code> makes the attrset callable, while <code>ix.wrapPackage.options</code> is a plain attribute lookup on the same value. Nothing at a call site changes; the value just gained a queryable schema.</p>
+
+<h3>User-visible surface</h3>
+<p><code>wrapPackage</code> is exported through <code>lib/default.nix</code> into <code>sharedHelpers</code>, which reaches both the per-module <code>specialArgs.ix</code> and the public <code>index.lib</code> (the flake's <code>lib</code> output, <code>flake.nix:304</code>). So the schema is reachable at:</p>
+<pre><code>nix eval .#lib.wrapPackage.options.package.description
+nix eval .#lib.wrapPackage.options.symlinks.description
+nix eval --json .#lib.wrapPackage.options.resources.type.description</code></pre>
+<p>Typo rejection is automatic: <code>ix.wrapPackage pkgs { package = p; symlinkz.hi = "p"; }</code> throws because <code>symlinkz</code> is not a declared option and no <code>freeformType</code> is set.</p>
+
+<h3>Composition with the cross lane</h3>
+<p>The cross-compilation lane in <code>lib/per-system.nix</code> wraps the builder to force <code>isCross = true</code>: <code>wrapPackage = wrapperPkgs: args: ix.wrapPackage wrapperPkgs (args // { isCross = true; });</code>. This keeps working unchanged: the override calls the functor with an extra declared argument, which the module merges like any other. A package definition such as <code>packages/nix/nix-web-monitor/server/default.nix</code> stays target-agnostic and never mentions <code>isCross</code>.</p>
+
+<h3>Migration</h3>
+<p>Opt-in, one builder at a time, no flag day. <code>wrapPackage</code> lands typed as the reference. Other builders convert when someone is already editing them or when their surface justifies it. Because a functor attrset is call-compatible with the old plain function, converting a builder is an internal change: call sites do not move. The candidate list, roughly in descending order of surface width, is <code>buildSvelteSite</code>, <code>buildUvApplication</code>, <code>mkBenchSuite</code>, <code>buildGradleFatJar</code>, and <code>buildJsSite</code>; thin one- or two-argument helpers (<code>buildZigPackage</code>, <code>buildNpmVitest</code>) stay plain functions and that is fine.</p>
+<p>Where a builder already uses <code>errors.nix</code> asserts for required arguments or enums, the module schema subsumes them: a required option (no <code>default</code>) throws when unset, and <code>types.enum</code> replaces <code>assertEnum</code>. The <code>errors.nix</code> helpers remain the right tool for plain-function builders that are not worth typing.</p>
+
+<h2>Drawbacks</h2>
+<ul>
+  <li><strong>Eval cost.</strong> <code>evalModules</code> builds an options tree and runs merge and type checks on every call. For a builder invoked a handful of times per flake evaluation this is negligible, but it is strictly more work than applying a plain function, and it would be a poor fit for a builder called thousands of times in a hot loop. This is a reason to keep the pattern scoped to wide-surface builders rather than blanket-applying it.</li>
+  <li><strong>Two validation idioms coexist.</strong> Until (if ever) every builder converts, the repo has both plain-function-plus-<code>errors.nix</code> builders and module-typed builders. A reader has to know which is which. The mitigation is the reference implementation plus this RFC as the naming of the convention.</li>
+  <li><strong>Escape-hatch fields lose typing.</strong> <code>passthru</code> and <code>meta</code> are declared <code>types.attrs</code> (opaque attribute set) because their contents are arbitrary &mdash; derivations, functions, nested test attrsets. Those fields get merge and presence but not structural typing, so a typo <em>inside</em> <code>passthru</code> is still silent. This matches how the module system treats freeform records elsewhere.</li>
+  <li><strong>The functor attrset is slightly unusual.</strong> Code that maps over the helper set expecting every value to be a function would now see an attrset for <code>wrapPackage</code>. No such consumer exists today (the helper is only called or read as <code>.options</code>), but it is a shape a future contributor could trip on.</li>
+  <li><strong>Module errors can be less direct.</strong> For some mistakes the module system's message ("The option `x' does not exist") is more indirect than a hand-written assert, and its stack traces are deeper. The upside &mdash; getting <em>any</em> loud error for a typo instead of silent wrong output &mdash; dominates, but it is a different debugging surface to learn.</li>
+</ul>
+
+<h2>Alternatives</h2>
+<ul>
+  <li><strong>Do nothing (plain functions + doc-comments).</strong> The status quo. Cheapest, most idiomatic with nixpkgs, and correct for narrow builders. Rejected as the answer for wide builders because it delivers neither introspectable docs nor typo rejection, which is exactly what the wide surfaces need.</li>
+  <li><strong>Lightweight validation via <code>errors.nix</code> only.</strong> Add <code>requireArg</code>/<code>assertEnum</code> calls per builder. Catches required-argument and enum mistakes and is cheap, but it is per-field boilerplate, still does not reject unknown keys, and produces no machine-readable schema. It is the right tool for builders not worth typing, not a substitute for typing the ones that are.</li>
+  <li><strong>A bespoke mini-schema.</strong> A small in-repo "typed args" helper (a map of <code>{ type; default; description; }</code> with a custom checker). This reinvents a worse version of the module system the repo already depends on and already uses in <code>policy.nix</code>. No reason to build it.</li>
+  <li><strong>Doc-comments plus a doc generator.</strong> Keep plain functions but parse RFC-0145 doc-comments into a docs page. Gets introspectable docs without eval cost, but the docs are then decoupled from the actual argument handling (they can lie), and it still gives no typo rejection or type checking. The module schema is a single source of truth for docs <em>and</em> behaviour; a doc generator is docs only.</li>
+</ul>
+
+<h2>Prior art</h2>
+<ul>
+  <li><strong><code>lib/rust/policy.nix</code> (this repo).</strong> Declares a config schema as module <code>options</code> and resolves caller input through <code>evalModules</code> for defaults, merge, and typo rejection. This RFC is that pattern applied to builder arguments, plus a schema export.</li>
+  <li><strong>The NixOS module system.</strong> <code>lib.evalModules</code>, <code>mkOption</code>, <code>types.submodule</code>. The whole point of the system is typed, documented, mergeable option trees; NixOS and home-manager expose their <code>options</code> for exactly the introspection this RFC wants.</li>
+  <li><strong>systemd and home-manager option surfaces.</strong> The user-facing precedent for "every field has a type and a description you can look up," which is the experience this brings to builders.</li>
+  <li><strong>dream2nix.</strong> Deliberately types its builder/package interfaces with the module system to get validation, defaults, and evaluatable documentation. It is the direct precedent for choosing module-typed builders over plain functions, and evidence the trade-off is viable at scale.</li>
+  <li><strong><code>pkgs.formats.*</code>.</strong> nixpkgs' own pattern of returning a small attrset (<code>{ type; generate; }</code>) from a builder-like helper, showing that "a builder that carries structured metadata alongside its callable behaviour" is already an accepted shape.</li>
+</ul>
+
+<h2>Unresolved questions</h2>
+<ol>
+  <li><strong>How far to roll out.</strong> This RFC types <code>wrapPackage</code> and names the candidates but does not commit the rest. Should conversion be demand-driven (convert when editing), or should a specific set (<code>buildSvelteSite</code>, <code>buildUvApplication</code>) convert now for consistency?</li>
+  <li><strong>Raw <code>options</code> vs a flattened doc.</strong> The export is currently the raw <code>evalModules</code> options tree, so <code>nix eval .#lib.wrapPackage.options.&lt;f&gt;.description</code> works but the whole tree contains functions and does not pretty-print. Is a convenience <code>optionsDoc</code> (a flat <code>{ &lt;name&gt; = { type; default; description; }; }</code> of strings) worth adding for nicer whole-schema <code>nix eval --json</code>?</li>
+  <li><strong>Should a lint enforce it?</strong> Once the convention is named, do we add a rule that new <code>lib/build/</code> builders above some argument count must be module-typed, or leave it to review judgement?</li>
+  <li><strong>freeformType posture.</strong> The reference keeps <code>freeformType</code> off, so unknown keys throw. Is strict rejection always right, or do some builders want a pass-through bag (at the cost of losing typo detection)?</li>
+  <li><strong>Eval-cost budget.</strong> Is there any builder currently called often enough that adding <code>evalModules</code> would show up in eval time? A quick measurement on the hottest call sites would set the boundary of where the pattern is inappropriate.</li>
+</ol>
+
+<h2>Future possibilities</h2>
+<ul>
+  <li><strong>Auto-generated builder docs.</strong> With schemas exported as <code>.options</code>, a page under <code>site/</code> (or a <code>nix eval</code>-backed command) could render every typed builder's arguments the way the NixOS options search renders module options &mdash; docs that cannot drift from behaviour.</li>
+  <li><strong>Shared submodule types.</strong> The <code>resource</code> submodule could be lifted into a reusable type consumed by more than one builder, so "install these files and point an env var at them" is declared once.</li>
+  <li><strong>Typed cross metadata.</strong> The cross lane's <code>isCross</code>/<code>target</code>/<code>targetSystem</code> bundle (<code>lib/per-system.nix</code>) is a natural next schema, giving the same introspection to the cross surface that this RFC gives to <code>wrapPackage</code>.</li>
+  <li><strong>Deprecation and renames.</strong> The module system's <code>mkRenamedOptionModule</code>/<code>mkRemovedOptionModule</code> machinery would let a typed builder rename an argument with a migration warning instead of a silent break &mdash; something plain functions cannot do.</li>
+</ul>
+
+</body>
+</html>

@@ -291,6 +291,14 @@
         }
       );
       collect = key: lib.mapAttrs (_: out: out.${key}) perSystem;
+      rawPackages = collect "packages";
+      linuxDarwinAliases = perSystem.x86_64-linux.darwinPackageAliases or { };
+      packages =
+        rawPackages
+        // lib.genAttrs [
+          "aarch64-darwin"
+          "x86_64-darwin"
+        ] (system: rawPackages.${system} // (linuxDarwinAliases.${system} or { }));
     in
     {
       lib = ix;
@@ -319,10 +327,10 @@
         # Agent CLI modules: Home Manager is the user-facing configuration
         # surface, while the package wrappers remain the implementation detail.
         claude-code = import ./packages/agent/home-manager/claude-code.nix {
-          indexPackages = system: (collect "packages").${system};
+          indexPackages = system: packages.${system};
         };
         codex = import ./packages/agent/home-manager/codex.nix {
-          indexPackages = system: (collect "packages").${system};
+          indexPackages = system: packages.${system};
         };
         # Personal-but-shareable workstation module for github:andrewgazelka: the
         # ix.dev downtime watcher + boss bar overlay + the shared say-detached
@@ -330,10 +338,10 @@
         # flake packages so it resolves bossbar / minecraft-sound for the host it
         # runs on. See users/andrewgazelka/home.nix.
         andrewgazelka = import ./users/andrewgazelka/home.nix {
-          indexPackages = system: (collect "packages").${system};
+          indexPackages = system: packages.${system};
           portableServicesModule = ix.portableServices.homeModule;
           claudeCodeModule = import ./packages/agent/home-manager/claude-code.nix {
-            indexPackages = system: (collect "packages").${system};
+            indexPackages = system: packages.${system};
           };
           inherit ix;
         };
@@ -344,7 +352,7 @@
         # per-system packages so it resolves the `bossbar` CLI for the host. See
         # packages/minecraft/bossbar-overlay/ci-bars-home-module.nix.
         ci-bars = import ./packages/minecraft/bossbar-overlay/ci-bars-home-module.nix {
-          indexPackages = system: (collect "packages").${system};
+          indexPackages = system: packages.${system};
           portableServicesModule = ix.portableServices.homeModule;
           inherit ix;
         };
@@ -354,13 +362,13 @@
         # packages so it resolves the `indexer` for the host. See
         # packages/search/indexer/home-module.nix.
         indexer = import ./packages/search/indexer/home-module.nix {
-          indexPackages = system: (collect "packages").${system};
+          indexPackages = system: packages.${system};
           portableServicesModule = ix.portableServices.homeModule;
         };
       };
       overlays.default = ix.overlay;
       templates = { };
-      packages = collect "packages";
+      inherit packages;
       checks = collect "checks";
       # Sharded keying of the same check derivations for the memory-bounded CI
       # evaluator (the `.#check` gate and blast-radius); see lib/per-system.nix

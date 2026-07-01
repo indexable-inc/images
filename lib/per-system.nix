@@ -556,36 +556,79 @@ let
     '';
   };
 
-  # Cross-compiled standalone binaries, exposed as `packages.<host>.<bin>-<triple>`.
-  # Linux-only: the Apple (zig + macOS SDK) and musl cross toolchains run on a
-  # Linux build host; an aarch64-darwin Mac builds Darwin targets natively and
-  # cannot host the Linux→Darwin path, so gating here keeps darwin evaluation
-  # from pulling an unbuildable graph. Start with `dag-runner` (pure Rust, no C
-  # deps); widen `crossBinaries` as crates are confirmed cross-clean.
-  # macOS targets only for now: the zig + SDK toolchain produces a working
-  # linker out of the box. A musl target additionally needs a static musl
-  # linker wrapper (clang + mold against a musl sysroot); until that lands,
-  # `unitsFor` still accepts any triple but no musl package is exposed.
-  crossTargets = [
-    "aarch64-apple-darwin"
-    "x86_64-apple-darwin"
-  ];
-  crossBinaries = [ "dag-runner" ];
+  # Cross-compiled standalone packages, exposed as
+  # `packages.<host>.<attr>-<triple>` and optionally aliased into native Darwin
+  # package namespaces by flake.nix. Linux-only: the Apple (zig + macOS SDK) and
+  # Rust target graph run on a Linux build host; Darwin hosts build native
+  # packages directly and cannot host this Linux→Darwin lane. Package definitions
+  # stay target-agnostic: the cross lane swaps the `ix.rustWorkspace.units`
+  # handle underneath them instead of passing a separate cross API.
+  darwinTargetsBySystem = {
+    aarch64-darwin = "aarch64-apple-darwin";
+    x86_64-darwin = "x86_64-apple-darwin";
+  };
+  targetSystemFor =
+    target:
+    if lib.hasSuffix "-apple-darwin" target then
+      if lib.hasPrefix "aarch64-" target then "aarch64-darwin" else "x86_64-darwin"
+    else
+      throw "cross: unsupported target `${target}`";
+  crossEntries = packageRegistry.crossEntriesFor system;
   crossWorkspace = ix.rustWorkspaceFor pkgs;
+  crossIxFor =
+    target:
+    let
+      targetWorkspace = crossWorkspace // {
+        units = crossWorkspace.unitsFor { inherit target; };
+      };
+    in
+    ix
+    // {
+      inherit pkgs;
+      cargoUnit = ix.cargoUnitFor pkgs;
+      rustWorkspace = targetWorkspace;
+      cross = {
+        isCross = true;
+        inherit target;
+        targetSystem = targetSystemFor target;
+      };
+      wrapPackage = wrapperPkgs: args: ix.wrapPackage wrapperPkgs (args // { isCross = true; });
+    };
+  buildCrossPackage =
+    target: entry:
+    lib.callPackageWith (
+      pkgs
+      // {
+        inherit entry repoPackages;
+        ix = crossIxFor target;
+        writeNushellApplication = ix.writeNushellApplication pkgs;
+        updateScriptWriter = ix.writeNushellApplication pkgs;
+      }
+    ) entry.path { };
   crossPackages = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
-    lib.mergeAttrsList (
-      map (
-        target:
-        let
-          units = crossWorkspace.unitsFor { inherit target; };
-        in
-        lib.genAttrs' crossBinaries (
-          binary:
-          lib.nameValuePair "${binary}-${target}" (
-            units.binaries.${binary} or (throw "cross: workspace has no binary `${binary}` for ${target}")
+    lib.listToAttrs (
+      lib.concatMap (
+        entry:
+        map (
+          target: lib.nameValuePair "${entry.cross.attrName}-${target}" (buildCrossPackage target entry)
+        ) entry.cross.targets
+      ) crossEntries
+    )
+  );
+  darwinPackageAliases = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
+    lib.genAttrs (lib.attrNames darwinTargetsBySystem) (
+      darwinSystem:
+      let
+        target = darwinTargetsBySystem.${darwinSystem};
+      in
+      lib.listToAttrs (
+        lib.concatMap (
+          entry:
+          lib.optional (entry.cross.exposeNativeDarwin && builtins.elem target entry.cross.targets) (
+            lib.nameValuePair entry.cross.attrName crossPackages."${entry.cross.attrName}-${target}"
           )
-        )
-      ) crossTargets
+        ) crossEntries
+      )
     )
   );
 
@@ -1085,6 +1128,31 @@ let
             esac
             mkdir -p "$out"
           '';
+          cross-darwin-web-monitor-smoke =
+            pkgs.runCommand "cross-darwin-web-monitor-smoke" { nativeBuildInputs = [ pkgs.file ]; }
+              ''
+                pkg=${crossPackages."nix-web-monitor-aarch64-apple-darwin"}
+                bin=$pkg/bin/.nix-web-monitor-unwrapped
+                info=$(file -b "$bin")
+                echo "$info"
+                case "$info" in
+                  *Mach-O*arm64*) ;;
+                  *)
+                    echo "expected Mach-O arm64, got: $info" >&2
+                    exit 1
+                    ;;
+                esac
+                read -r shebang < "$pkg/bin/nix-web-monitor"
+                case "$shebang" in
+                  "#!/bin/sh") ;;
+                  *)
+                    echo "expected /bin/sh wrapper, got: $shebang" >&2
+                    exit 1
+                    ;;
+                esac
+                test -f "$pkg/share/nix-web-monitor/index.html"
+                mkdir -p "$out"
+              '';
           site-case-tests = pkgs.linkFarm "site-case-tests" (
             lib.mapAttrsToList (name: path: { inherit name path; }) siteTests.cases
           );
@@ -1167,6 +1235,8 @@ in
       ) exampleFleets;
     in
     imagesAsClosures // exampleNodeToplevels;
+
+  inherit darwinPackageAliases;
 
   # Flat keying: one derivation per `checks.<system>.<name>`, as the flake schema
   # and `nix flake check` require. The `.#check` gate and blast-radius consume

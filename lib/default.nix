@@ -121,7 +121,12 @@ let
     inherit bunLockFor errors;
   };
   buildSvelteSite = import ./build/svelte-site.nix {
-    inherit bunLockFor errors writeNushellApplication;
+    inherit
+      bunLockFor
+      errors
+      paths
+      writeNushellApplication
+      ;
   };
   buildNpmVitest = import ./build/npm-vitest.nix;
   buildZigPackage = import ./build/zig-package.nix { };
@@ -138,6 +143,7 @@ let
   buildElixirCheck = import ./build/elixir-check.nix { credoConfig = ./elixir/credo.exs; };
   buildPyStrictCheck = import ./build/py-strict-check.nix { inherit lib; };
   buildGradleFatJar = import ./build/gradle-fat-jar.nix { inherit lib; };
+  wrapPackage = import ./build/wrap-package.nix { inherit lib; };
   # Markdown document rendering with JSON-encoded YAML frontmatter. Used by
   # typed wrappers that generate small `.md` files with parseable metadata.
   markdown = import ./util/markdown.nix { inherit lib; };
@@ -447,6 +453,7 @@ let
       mkBenchSuite
       mkMinecraftLoader
       mkMinecraftNbtFormat
+      wrapPackage
       mkMinecraftSyncManaged
       mutableJson
       netCidr
