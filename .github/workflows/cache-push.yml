@@ -10,6 +10,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      full_pass:
+        description: "Skip the already-cached probe: realise and push every root (heals holes left by partially-failed pushes)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -56,6 +61,8 @@ jobs:
       # either order.
       - name: Publish all packages to cache.ix.dev
         shell: bash
+        env:
+          FULL_PASS: ${{ inputs.full_pass && '1' || '' }}
         run: |
           set -euo pipefail
 
@@ -138,14 +145,52 @@ jobs:
           # paths. The shared warm host store keeps this cheap across runs.
           drvs="$workdir/drvs.txt"
           outs="$workdir/outs.txt"
+          roots="$workdir/roots.tsv"
           eval_t=$SECONDS
           "$eval_jobs" \
             --flake .#cachePushRoots.x86_64-linux \
             --workers 16 \
             --max-memory-size 6144 \
             2>"$workdir/eval.err" \
-            | "$jq" -r '.drvPath // empty' | sort -u > "$drvs" || true
+            | "$jq" -r 'select(.drvPath != null) | [.drvPath, (.outputs.out // "")] | @tsv' \
+            | sort -u > "$roots" || true
           phase eval "$eval_t"
+
+          # Probe: a root whose eval-time `out` path cache.ix.dev already serves
+          # was pushed -- closure and all -- by a prior run, so skip realising it.
+          # This makes the run O(what this commit changed) instead of O(full
+          # closure): realise used to materialise every root's whole closure
+          # locally only for attic to report ~all of it deduplicated server-side
+          # (realise was 1009s of a 1050s run; push was 6s). `nix path-info
+          # --store` reads the cache from this client process directly, so daemon
+          # substituter trust (the untrusted-user warnings) never applies, and a
+          # probe failure (cache unreachable) counts as a miss, degrading to the
+          # old realise-everything behaviour. CA roots have no eval-time path
+          # (outputs.out is null) and always realise; the warm store and CA early
+          # cutoff keep those cheap.
+          # ponytail: the probe can skip a root whose dep failed to push in an
+          # earlier run; a FULL_PASS=1 manual dispatch re-realises and heals it.
+          probe_t=$SECONDS
+          : > "$workdir/cached.txt"
+          if [ -z "${FULL_PASS:-}" ]; then
+            # xargs drops the blank fields CA roots leave in column 2. bash, not
+            # sh: the runner PATH is spartan (no findutils, see above) but must
+            # carry bash for this very step's `shell: bash`.
+            # shellcheck disable=SC2016  # $1 expands in the child bash, not here
+            cut -f2 "$roots" | sort -u \
+              | "$xargs" -r -P16 -n1 bash -c \
+                  'nix path-info --store https://cache.ix.dev "$1" >/dev/null 2>&1 && printf "%s\n" "$1"' _ \
+              > "$workdir/cached.txt" || true
+          fi
+          declare -A cached=()
+          while IFS= read -r p; do [ -n "$p" ] && cached[$p]=1; done < "$workdir/cached.txt"
+          while IFS=$'\t' read -r drv out; do
+            if [ -z "$out" ] || [ -z "${cached[$out]:-}" ]; then
+              printf '%s\n' "$drv"
+            fi
+          done < "$roots" > "$drvs"
+          phase probe "$probe_t"
+          echo "::notice::cache-push probe: $(wc -l < "$drvs") of $(wc -l < "$roots") roots need realising"
 
           # Realise one drv per invocation (-n1), 16 in parallel (-P16). This is
           # deliberate, not the obvious batch: a single `nix-store --realise` of
@@ -158,7 +203,20 @@ jobs:
           # workers). xargs exits non-zero if any child failed; surfaced below.
           realise_t=$SECONDS
           "$xargs" -a "$drvs" -r -P16 -n1 nix-store --realise --keep-going > "$outs" 2>"$workdir/realise.err" \
-            || echo "::warning::some derivations failed to realise; publishing the rest"
+            || {
+              echo "::warning::some derivations failed to realise; publishing the rest"
+              # Name the failing drvs: a permanently-broken derivation re-pays
+              # its full build-and-fail wall clock on every push to main, and
+              # its dependents never become cacheable, so it never falls out of
+              # the probe's delta either. Pure bash match -- the runner PATH has
+              # no grep/sed (see the tools comment above).
+              while IFS= read -r line; do
+                case $line in
+                  *"error: builder for '"*|*"error: build of '"*)
+                    printf '::warning::realise failed: %s\n' "${line#*error: }" ;;
+                esac
+              done < "$workdir/realise.err" | sort -u | head -n 20
+            }
           phase realise "$realise_t"
 
           if [ -s "$outs" ]; then
@@ -167,7 +225,14 @@ jobs:
             "$xargs" -a "$outs" -r "$attic" push --jobs 16 ix-public \
               || echo "::warning::some paths failed to push to ix-public"
             phase push "$push_t"
-          else
+          elif [ -s "$drvs" ]; then
             echo "::warning::no output paths resolved for ix-public; eval/realise logs follow"
             tail -n 20 "$workdir/eval.err" "$workdir/realise.err" >&2 || true
+          elif [ ! -s "$roots" ]; then
+            # Same warn-don't-fail stance as before: this job gates nothing, and
+            # an eval breakage already fails the required flake-check.
+            echo "::warning::eval produced no roots; eval log follows"
+            tail -n 20 "$workdir/eval.err" >&2 || true
+          else
+            echo "::notice::every root already cached in ix-public; nothing to realise or push"
           fi
