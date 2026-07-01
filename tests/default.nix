@@ -2383,12 +2383,19 @@ let
       }).drvPath
       true
   );
+  # A minimal fixture (not an overridden `hello`) so the only reachable throw
+  # when forcing the wrapper drvPath is the builder's own missing-`mainProgram`
+  # message; a real package's own eval could throw first and pass this
+  # vacuously.
   wrapPackageNoMainProgramEval = builtins.tryEval (
     builtins.seq
       (ix.wrapPackage pkgs {
-        package = pkgs.hello.overrideAttrs (old: {
-          meta = builtins.removeAttrs (old.meta or { }) [ "mainProgram" ];
-        });
+        package = pkgs.stdenv.mkDerivation {
+          pname = "wrap-package-no-main-fixture";
+          version = "0";
+          strictDeps = true;
+          dontUnpack = true;
+        };
       }).drvPath
       true
   );
@@ -2526,8 +2533,12 @@ let
       }
       {
         # `defaultText` stands in for the config-computed default; without it
-        # the doc view would present `mainProgram` as required.
-        assertion = wrapPackageMainProgramDoc.default.text == "package.meta.mainProgram";
+        # the doc view would present `mainProgram` as required. The null guard
+        # keeps a missing entry a clean assertion failure instead of an
+        # attribute-selection crash inside mkTest.
+        assertion =
+          wrapPackageMainProgramDoc != null
+          && wrapPackageMainProgramDoc.default.text == "package.meta.mainProgram";
         message = "wrapPackage optionsDoc should render the computed mainProgram default via defaultText";
       }
     ];

@@ -99,13 +99,15 @@ in
 {
   __functor = _self: build;   # callable: `ix.wrapPackage pkgs { ... }`
   options = schema;           # introspectable: `ix.wrapPackage.options.&lt;f&gt;.description`
-  optionsDoc = lib.optionAttrSetToDocList schema;   # flat, JSON-able
+  optionsDoc =                # flat, JSON-able; drop internal `_module.*` rows
+    lib.filter (opt: opt.visible &amp;&amp; !opt.internal)
+      (lib.optionAttrSetToDocList schema);
 }</code></pre>
 <p>The <code>__functor</code> attrset is the key to keeping the call site unchanged. <code>ix.wrapPackage pkgs { ... }</code> works because <code>__functor</code> makes the attrset callable, while <code>ix.wrapPackage.options</code> is a plain attribute lookup on the same value. Nothing at a call site changes; the value just gained a queryable schema.</p>
 <p>Three details are load-bearing:</p>
 <ul>
   <li><strong>Error attribution.</strong> The <code>_file</code> attribute on the args module makes a typo error read <code>The option `symlinkz' does not exist. Definition values: - In `ix.wrapPackage args'</code> instead of pointing at an anonymous module. Every typed builder sets it.</li>
-  <li><strong><code>optionsDoc</code>.</strong> The raw options tree contains functions and does not pretty-print; <code>lib.optionAttrSetToDocList</code> (the same helper <code>nixosOptionsDoc</code> builds on) flattens it into JSON-able entries, recursing into submodules so <code>resources.&lt;name&gt;.source</code> and friends appear as their own rows. No bespoke flattener is needed.</li>
+  <li><strong><code>optionsDoc</code>.</strong> The raw options tree contains functions and does not pretty-print; <code>lib.optionAttrSetToDocList</code> (the same helper <code>nixosOptionsDoc</code> builds on) flattens it into JSON-able entries, recursing into submodules so <code>resources.&lt;name&gt;.source</code> and friends appear as their own rows. The list is filtered to <code>visible &amp;&amp; !internal</code> &mdash; the same filter <code>nixosOptionsDoc</code> applies &mdash; so the module system's own <code>_module.*</code> plumbing does not appear as schema. No bespoke flattener is needed.</li>
   <li><strong><code>pkgs</code> stays outside the schema.</strong> The curried <code>pkgs:</code> is deliberately not an option: threading it in via <code>specialArgs</code> would fork the per-call evaluation from the no-config schema evaluation and make <code>.options</code> unevaluatable without a package set. Option defaults therefore must not need <code>pkgs</code>; anything that does is computed in the builder body.</li>
 </ul>
 <p>Because caller args land as module config, module priorities work in them: a caller may pass <code>lib.mkForce</code>/<code>lib.mkDefault</code> values and they merge with the declared priorities. This is supported, not incidental &mdash; it is how a wrapper lane can force a field without inventing a side channel.</p>
