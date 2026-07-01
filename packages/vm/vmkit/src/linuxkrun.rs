@@ -84,6 +84,27 @@ unsafe extern "C" {
     fn krun_set_console_output(ctx_id: u32, c_filepath: *const c_char) -> i32;
     fn krun_start_enter(ctx_id: u32) -> i32;
 
+    // Guest<->host IPC over vsock, on both variants (verified exported by the
+    // nixpkgs libkrun-efi 1.18.0 dylib and classic libkrun). `listen = true`
+    // makes libkrun bind and LISTEN on the host unix socket path and forward
+    // each host `connect()` into the guest as a vsock connection to `port`, so
+    // the guest side `listen()`s on AF_VSOCK (libkrun.h on the flag: "true if
+    // guest expects connections to be initiated from host side"). That is the
+    // direction vmkit needs: a guest service listens on a vsock port, a host
+    // agent connects to the unix path. `listen = false` (the plain
+    // `krun_add_vsock_port`) is the reverse: the guest connects to `port` and
+    // libkrun connects out to a host socket that must already be listening.
+    // The vsock device itself is implicit (libkrun adds it unless
+    // `krun_disable_implicit_vsock` was called), and virtio-vsock is a mainline
+    // guest driver, so this works with the stock EFI-guest kernel that TSI
+    // cannot use.
+    fn krun_add_vsock_port2(
+        ctx_id: u32,
+        port: u32,
+        c_filepath: *const c_char,
+        listen: bool,
+    ) -> i32;
+
     // macOS / libkrun-efi: boot an EFI disk under the embedded OVMF firmware.
     #[cfg(target_os = "macos")]
     fn krun_set_firmware(ctx_id: u32, firmware_path: *const c_char) -> i32;
@@ -168,6 +189,12 @@ pub struct BootLinux {
     /// access and exposes the listed ports back to the host (gvproxy on a macOS
     /// host, TSI port-map on Linux). See [`crate::net`].
     pub net: Option<crate::net::Net>,
+    /// Expose guest AF_VSOCK ports as host unix sockets: for each
+    /// `(guest_port, host_path)`, libkrun listens on `host_path` and forwards
+    /// each host `connect()` into the guest's vsock `guest_port` (the guest
+    /// service `listen()`s on AF_VSOCK). Independent of [`Self::net`]: vsock is
+    /// its own device, not the NIC, and needs no TSI-aware guest kernel.
+    pub vsock_ports: Vec<(u32, PathBuf)>,
     /// Capture the guest serial console to this file instead of inheriting the
     /// process stdio. `krun_start_enter` takes over the process, so a file is how
     /// a background/lockstep caller reads the console after the VM stops.
@@ -396,6 +423,51 @@ fn set_net_linux(ctx: u32, boot: &BootLinux) -> Result<(), Error> {
     Ok(())
 }
 
+/// Map guest AF_VSOCK ports to host unix sockets (see [`BootLinux::vsock_ports`]).
+/// Returns the path `CString`s, which must outlive `krun_start_enter`. A no-op
+/// with no ports. Shared across hosts: both libkrun variants export
+/// `krun_add_vsock_port2`.
+#[cfg(have_libkrun)]
+fn set_vsock_ports(ctx: u32, boot: &BootLinux) -> Result<Vec<CString>, Error> {
+    use std::os::unix::fs::FileTypeExt;
+
+    let mut keep = Vec::with_capacity(boot.vsock_ports.len());
+    for (port, path) in &boot.vsock_ports {
+        // libkrun binds the socket itself and refuses an existing path with
+        // -EEXIST, so clear the stale socket a previous run left behind. Only a
+        // socket: refusing to delete anything else catches a mistyped path
+        // before it costs a real file.
+        match std::fs::symlink_metadata(path) {
+            Ok(meta) if meta.file_type().is_socket() => {
+                std::fs::remove_file(path).map_err(|e| Error::Setup {
+                    message: format!("remove stale vsock socket {}: {e}", path.display()),
+                })?;
+            }
+            Ok(_) => {
+                return Err(Error::Source {
+                    path: path.clone(),
+                    message: "vsock socket path already exists and is not a socket".to_owned(),
+                });
+            }
+            // Most likely NotFound, the normal case. Any other error (e.g. a
+            // permission problem) resurfaces from libkrun's own path check.
+            Err(_) => {}
+        }
+        let path_c = cstr(&path.to_string_lossy())?;
+        // Safety: the pointer is valid for the call; krun copies the path. The
+        // CString is still returned to the caller so the host split stays
+        // uniform with the other keepalives.
+        unsafe {
+            check(
+                "krun_add_vsock_port2",
+                krun_add_vsock_port2(ctx, *port, path_c.as_ptr(), true),
+            )?;
+        }
+        keep.push(path_c);
+    }
+    Ok(keep)
+}
+
 /// Stub for builds without the libkrun backend (e.g. a Linux->darwin cross
 /// build, where libkrun-efi is unavailable). Returns a typed error rather than
 /// silently doing nothing, so a caller learns the backend was not compiled in.
@@ -454,6 +526,9 @@ pub fn boot_linux(boot: &BootLinux) -> Result<(), Error> {
         let _net = set_net_macos(ctx, boot)?;
         #[cfg(target_os = "linux")]
         set_net_linux(ctx, boot)?;
+        // Guest vsock ports exposed as host unix sockets; the path CStrings
+        // must outlive krun_start_enter.
+        let _vsock = set_vsock_ports(ctx, boot)?;
         if boot.gpu {
             check(
                 "krun_set_gpu_options2",
