@@ -249,6 +249,16 @@ let
       '';
     }
     {
+      structuredConcurrency = ''
+        Prefer structured concurrency for independent work. When kernel commands do
+        not depend on each other and do not mutate the same resource, run them in
+        parallel inside one `python_exec` with `asyncio.gather` or `asyncio.TaskGroup`.
+
+        Keep dependent commands sequential. Do not parallelize shared-checkout writes,
+        ordered git operations, prompts, or probes whose timing would change the result.
+      '';
+    }
+    {
       backgroundSubagents = ''
         Delegate by default with named subagents. Use them frequently whenever
         independent work can run in parallel, and split real work into clear phases

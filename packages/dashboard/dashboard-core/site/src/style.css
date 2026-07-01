@@ -499,10 +499,20 @@ body {
 .detail-section { margin-top: 16px; }
 .detail-section.first { margin-top: 0; }
 .detail-label {
+  display: flex; align-items: center; gap: 5px;
   margin: 0 0 5px 2px;
   font-family: var(--mono); font-size: 10px; letter-spacing: 0.07em;
   text-transform: uppercase; color: var(--ink-faint);
+  cursor: pointer; user-select: none;
 }
+.detail-label::marker { content: ""; }
+.detail-label::-webkit-details-marker { display: none; }
+.detail-label::before {
+  content: "▾"; font-size: 10px; line-height: 1; color: var(--ink-faint);
+}
+.detail-section:not([open]) > .detail-label::before { content: "▸"; }
+.detail-section:not([open]) > .detail-label { margin-bottom: 0; }
+.detail-label:hover { color: var(--ink-dim); }
 
 /* The `code` toggle in the detail panel: a quiet bordered chip. */
 .entry-code-toggle {

@@ -376,42 +376,45 @@
               </div>
             {/if}
             {#if traced}
-              <!-- Inline trace: source with each line's output beside it — one
+              <!-- Inline trace: source with each line's output beside it, one
                    combined view, so no separate output box (it would duplicate). -->
-              <div class="detail-section">
-                <div class="detail-label">code · output</div>
+              <details class="detail-section" open>
+                <summary class="detail-label">code · output</summary>
                 <div class="entry-box entry-trace-box">
                   <InlineTrace source={p.source ?? ''} lang={p.lang ?? 'text'} trace={traceArr} />
                   {#if p.stderr}<pre class="exec-out err trace-stderr">{stripAnsi(p.stderr)}</pre>{/if}
                 </div>
-              </div>
+              </details>
               {#if selectedOut}
                 {@const OutBody = rendererFor(selectedOut.kind, selectedOut.renderer)}
-                <div class="entry-box pane entry-body detail-out">
-                  <div class="body html-body"><OutBody pane={selectedOut} /></div>
-                </div>
-              {/if}
-            {:else}
-              {#if hasSource}
-                <div class="detail-section first">
-                  <div class="detail-label">code</div>
-                  <div class="entry-box entry-code"><CodeBlock code={p.source ?? ''} lang={p.lang ?? 'text'} /></div>
-                </div>
-              {/if}
-              {#if hasStreamOut || resultIsPrimary || ledRun(p)}
-                <div class="detail-section">
-                  <div class="detail-label">output</div>
-                  <div class="entry-box cell cell-out"><ExecBody pane={p} chrome={false} expanded hideResult={!resultIsPrimary} /></div>
-                </div>
-              {/if}
-              {#if selectedOut}
-                {@const OutBody = rendererFor(selectedOut.kind, selectedOut.renderer)}
-                <div class="detail-section">
-                  <div class="detail-label">rich output</div>
+                <details class="detail-section" open>
+                  <summary class="detail-label">rich output</summary>
                   <div class="entry-box pane entry-body detail-out">
                     <div class="body html-body"><OutBody pane={selectedOut} /></div>
                   </div>
-                </div>
+                </details>
+              {/if}
+            {:else}
+              {#if hasSource}
+                <details class="detail-section first" open>
+                  <summary class="detail-label">code</summary>
+                  <div class="entry-box entry-code"><CodeBlock code={p.source ?? ''} lang={p.lang ?? 'text'} /></div>
+                </details>
+              {/if}
+              {#if hasStreamOut || resultIsPrimary || ledRun(p)}
+                <details class="detail-section" open>
+                  <summary class="detail-label">output</summary>
+                  <div class="entry-box cell cell-out"><ExecBody pane={p} chrome={false} expanded hideResult={!resultIsPrimary} /></div>
+                </details>
+              {/if}
+              {#if selectedOut}
+                {@const OutBody = rendererFor(selectedOut.kind, selectedOut.renderer)}
+                <details class="detail-section" open>
+                  <summary class="detail-label">rich output</summary>
+                  <div class="entry-box pane entry-body detail-out">
+                    <div class="body html-body"><OutBody pane={selectedOut} /></div>
+                  </div>
+                </details>
               {/if}
             {/if}
             <!-- Model view (hidden by default): the result the model received.
