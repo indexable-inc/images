@@ -139,37 +139,26 @@ let
     '';
   };
 
+  # One stage list drives both the dag spec (default human path) and the
+  # `--json` runner inside `lint`, so adding a stage cannot update one path
+  # and silently miss the other.
+  lintStages = [
+    "nixfmt"
+    "statix"
+    "deadnix"
+    "astlog"
+    "astlog-rust"
+    "astlog-elixir"
+    "ruff"
+  ];
+
   lintSpec = (pkgs.formats.json { }).generate "lint-dag.json" {
-    nodes = {
-      nixfmt.command = [
+    nodes = lib.genAttrs lintStages (stage: {
+      command = [
         (lib.getExe lintStage)
-        "nixfmt"
+        stage
       ];
-      statix.command = [
-        (lib.getExe lintStage)
-        "statix"
-      ];
-      deadnix.command = [
-        (lib.getExe lintStage)
-        "deadnix"
-      ];
-      astlog.command = [
-        (lib.getExe lintStage)
-        "astlog"
-      ];
-      "astlog-rust".command = [
-        (lib.getExe lintStage)
-        "astlog-rust"
-      ];
-      "astlog-elixir".command = [
-        (lib.getExe lintStage)
-        "astlog-elixir"
-      ];
-      ruff.command = [
-        (lib.getExe lintStage)
-        "ruff"
-      ];
-    };
+    });
   };
 
   lint = ix.writeNushellApplication pkgs {
@@ -178,7 +167,38 @@ let
     runtimeInputs = [ repoPackages.dag-runner ];
     text = ''
       # nu
+      const stages = ${builtins.toJSON lintStages}
+      const stage_bin = "${lib.getExe lintStage}"
+
       def --wrapped main [...args] {
+        # `--json` (#1683) emits one JSON document — [{check, ok, output}] —
+        # so agents can load lint results as a dataframe instead of grepping
+        # the human log. It runs the same stage binary the dag spec points
+        # at; dag-runner is bypassed only because its json mode is an NDJSON
+        # event stream that drops the captured diagnostics. Exit code matches
+        # the dag-runner contract: the worst stage exit code.
+        if "--json" in $args {
+          if ($args | length) > 1 {
+            error make { msg: "--json takes no other arguments" }
+          }
+          let runs = (
+            $stages
+            | par-each --keep-order {|stage|
+                let r = (do { ^$stage_bin $stage } | complete)
+                {
+                  check: $stage
+                  ok: ($r.exit_code == 0)
+                  # `ansi strip` because the stages color their diagnostics and
+                  # nushell's `to json` passes raw ESC bytes through unescaped,
+                  # which strict parsers (jq) reject as invalid JSON.
+                  output: (($r.stdout + $r.stderr) | ansi strip)
+                  exit_code: $r.exit_code
+                }
+              }
+          )
+          print ($runs | reject exit_code | to json)
+          exit ($runs | get exit_code | math max)
+        }
         exec dag-runner ...$args ${lintSpec}
       }
     '';
