@@ -39,7 +39,6 @@
       "notion"
       "obs@beta"
       "obsidian"
-      "opal-app"
       "postico"
       "prismlauncher"
       "raycast"
