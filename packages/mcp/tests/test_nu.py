@@ -106,7 +106,7 @@ def test_input_scalars_and_datetimes_cross_into_nu() -> None:
 
 
 def test_naive_datetime_input_gets_a_clear_error() -> None:
-    naive = datetime.datetime(2024, 1, 2, 3, 4, 5)
+    naive = datetime.datetime(2024, 1, 2, 3, 4, 5)  # noqa: DTZ001 -- naive on purpose: it IS the case under test
     with pytest.raises(nu.NuError, match="naive datetime"):
         run(nu.value("$in", input=naive))
 
