@@ -145,7 +145,7 @@ zig cc + macOS SDK sysroot (C deps, linker)</code></pre>
   <ul>
     <li><strong>Host nodes stay host nodes.</strong> Build scripts and proc-macro crates compile for and execute on
       the Linux builder; only rlib and bin units target the Apple triple. Per-platform hooks
-      (<code>rustcArgsForPlatform</code>, <code>extraLinkRustcArgsForPlatform</code>) scope target-only flags (the
+      (<code>extraRustcArgsForPlatform</code>, <code>extraLinkRustcArgsForPlatform</code>) scope target-only flags (the
       framework search path, the SDK link args) to matching units, so host units are untouched by cross
       configuration.</li>
     <li><strong>The graph is pruned per target, not patched.</strong> <code>cargo</code> cfg-excludes platform-gated
