@@ -1,13 +1,13 @@
 {
-  "minecraftVersion": "26.1.2",
-  "assetIndexId": "30",
+  "minecraftVersion": "26.2",
+  "assetIndexId": "32",
   "assetIndex": {
-    "url": "https://piston-meta.mojang.com/v1/packages/2866ab0411f8507bf88d81513a08956a2474403f/30.json",
-    "hash": "sha1-KGarBBH4UHv4jYFROgiVaiR0QD8="
+    "url": "https://piston-meta.mojang.com/v1/packages/981aab8147520cdc1f0d4a84f46c161929021fee/32.json",
+    "hash": "sha1-mBqrgUdSDNwfDUqE9GwWGSkCH+4="
   },
   "excludePrefixes": [
     "music",
     "records"
   ],
-  "packHash": "sha256-Km+bbcgu5+x7PYLHEZlJftq8bym+uYlXNCenQk/Zig8="
+  "packHash": "sha256-W6xyCTkRdd/7VKzUxQ0aNiVD2Gp+xw+jO+Y/yq6pX+E="
 }

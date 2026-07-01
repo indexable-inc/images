@@ -1,11 +1,11 @@
 {
   "bluemap": {
-    "hash": "sha512-sUA5DFBWVUkRMPdGU/wOnNlQHzXwAcF0llwTvM9Fu5GQDE7UOezbjYJHI/tXaIogzjdYK3s6SgRiOvCYVPb7LQ==",
-    "url": "https://cdn.modrinth.com/data/swbUV1cr/versions/D9j76thC/bluemap-5.20-fabric.jar"
+    "hash": "sha512-7Fl99+l08fKLqhUyU3NEKWjJZDoVem0mJ81cNviEHDAj8sCAI9IDvPp+DlG85p1GI7pxK6u4Tac71A8ODH9NvQ==",
+    "url": "https://cdn.modrinth.com/data/swbUV1cr/versions/VTvifNPN/bluemap-5.22-fabric.jar"
   },
   "c2me-fabric": {
-    "hash": "sha512-MuWiGRTs0WtFYNLVmkwalr6ShB1kLLJ4rNdkYcD+cOOHWUSRfLnlHaxxlCHXWr/9V7y6/m4pfnR36vNFFIV87Q==",
-    "url": "https://cdn.modrinth.com/data/VSNURh3q/versions/iFyIEVsG/c2me-fabric-mc26.1.2-0.3.7%2Balpha.0.69.jar"
+    "hash": "sha512-5aDaho4oqAg5i/1iwwrB+iid3OWarqwIv8PviGIPeNISaaIWNE23HXh/2ZWq0sWN9VPpwWzPYI+z6EO9Q4EK/g==",
+    "url": "https://cdn.modrinth.com/data/VSNURh3q/versions/1qBYfTmr/c2me-fabric-mc26.1.2-0.4.0-alpha.0.28.jar"
   },
   "chunky": {
     "hash": "sha512-uDv+eyGNCqYjKvl3rnQdwfgrEOUM0Su3WfZc9Ba4tivsy1Q+WH7wuWcKvgOBVmD44JG8aCNiTWXPBzAFcVc1Fg==",
@@ -16,68 +16,68 @@
     "url": "https://cdn.modrinth.com/data/Wnxd13zP/versions/RXNrUIjA/Clumps-fabric-26.1.2-26.1.2.1.jar"
   },
   "distanthorizons": {
-    "hash": "sha512-EbJS3jMI1ymdNGJazmUiPZxdQuUqNAu5yF+gJQwMNUrVlLcvCoJ9nXwEa5XdF6XlAPk5VPFNA9qf2sdZbEG1FA==",
-    "url": "https://cdn.modrinth.com/data/uCdwusMi/versions/FJrLlu3p/DistantHorizons-3.0.3-b-26.1.2-fabric-neoforge.jar"
+    "hash": "sha512-w1Y9e6MQGuV31Go7QYvKb4qMIzEwFT3+K6WNYtcsS5m7UTfya6gP4KrzmkYU4J7TLeQOKHIIq4c98PD5hDNTQg==",
+    "url": "https://cdn.modrinth.com/data/uCdwusMi/versions/SLJu35DT/DistantHorizons-3.1.2-b-26.1.2-fabric-neoforge.jar"
   },
   "fabric-api": {
-    "hash": "sha512-R/+hg2kmDIjqhH9mlMy0MaWqkFHGTo02EYanZ7t2Ldn8+/R0KsZVBetghikAoaPxSQmU50NTdmB96BHquL5EYQ==",
-    "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/BLz7ETCw/fabric-api-0.149.1%2B26.1.2.jar"
+    "hash": "sha512-TjHaPHlnFNJcoHnlJ3mAxUObsJ3K0z0SJMzN/sYAC3drpdFjI6nDEmgudzvd7a51qml6fA9K0rd7WxG6Z5tICg==",
+    "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/WC1KT7Yg/fabric-api-0.153.0%2B26.1.2.jar"
   },
   "ferrite-core": {
     "hash": "sha512-2B+pfhF4TBnUL4nC9DODHQB2A91xk87kX6F35KapxSs4SxmFhuBKD39jzZlv7XEzIleL3pqNtX4RiIVK5cvlhA==",
     "url": "https://cdn.modrinth.com/data/uXXizFIs/versions/d5ddUdiB/ferritecore-9.0.0-fabric.jar"
   },
   "grimac": {
-    "hash": "sha512-qn63YwP84TaNSOqmmQCluyc3oTrdPXGMeUd7OidOWpOH1FlKRqiEIS3yLQZ1qaMjuOIVv3kwNyxXGVl1y8coTw==",
-    "url": "https://cdn.modrinth.com/data/LJNGWSvH/versions/Vy5RMuNR/grimac-fabric-2.3.74-635708a.jar"
+    "hash": "sha512-yn2U5/r6vJ3zVNCe0mIDvNjnuf+fnS2lgZGSGSoRyHgBxcpM3rDlofpYhfW/xFXhpsAuRlP1fq/cXGlxDVURkQ==",
+    "url": "https://cdn.modrinth.com/data/LJNGWSvH/versions/VDYKAEly/grimac-fabric-2.3.74-e454008.jar"
   },
   "krypton": {
     "hash": "sha512-FCMyECg6dvPPQ1o7jdvL1lqFjSsaELiP9kPAoBSG39K/GEO9NFbNT7hsuzsG8t6gxOZjsZdqSOlt4W07WnB+yQ==",
     "url": "https://cdn.modrinth.com/data/fQEb0iXm/versions/kYAGItyj/krypton-0.3.0.jar"
   },
   "lithium": {
-    "hash": "sha512-kjGtBWZ9Tu8DSMcAv1Fgkp4Lcj2eFF/ZfH/O+Th6wubVJPsV2Z9H+Pg48dI1Mk/XUM3LZgO2OqtghdefvqqzGw==",
-    "url": "https://cdn.modrinth.com/data/gvQqBUqZ/versions/R7MxYvuW/lithium-fabric-0.24.2%2Bmc26.1.2.jar"
+    "hash": "sha512-+sNR9bYVCIm5NVoBiJw1tXmBR9S+2ykVlKWQotQZCeuNxJTvAFExe/VYhvL8f+E0q74udVCY3zhHPtsr9DNX6Q==",
+    "url": "https://cdn.modrinth.com/data/gvQqBUqZ/versions/fQBdPR1m/lithium-fabric-0.24.6%2Bmc26.1.2.jar"
   },
   "lithostitched": {
-    "hash": "sha512-2TgRMh1+GxFSXrzDJrq53sBjO4XvOw1CU9vima8JGzXTacXjrOX4pYrJenA9k1E4myLAepF8sATmXCaOWC0GbQ==",
-    "url": "https://cdn.modrinth.com/data/XaDC71GB/versions/dUL7i4Qf/lithostitched-1.7.7-fabric-26.1.jar"
+    "hash": "sha512-bGd0IP8BYCoAAPkPpT/oFRjJ61by78vZ6hL+zkEjNMYqUb4IK2lM6GuouXfoVVm/nPXlmYTdwWy8z3+8DwDN3g==",
+    "url": "https://cdn.modrinth.com/data/XaDC71GB/versions/7gxI2iZP/lithostitched-1.7.12-fabric-26.1.jar"
   },
   "luckperms": {
-    "hash": "sha512-v+nw4OLZ3+PBxFYpjb13ivAjENq6tdf7SlT8xKTowmU7rgvoQVHXxSmSBl2YhM2rl+we6mYH5/fPARJqE76GMA==",
-    "url": "https://cdn.modrinth.com/data/Vebnzrzj/versions/fTIdfb46/LuckPerms-Fabric-5.5.42.jar"
+    "hash": "sha512-b+3zH/TRdxA5RGO3v8l/K+upDqoDJ9bnGKqzGV7HSL+6KDWpr4BFk/wXiOJW26eVNNp/JJQRyNrsR7bh5w5vQg==",
+    "url": "https://cdn.modrinth.com/data/Vebnzrzj/versions/UHUghDkV/LuckPerms-Fabric-5.5.57.jar"
   },
   "servercore": {
-    "hash": "sha512-uZTxSFZYkwJL2edH1HOWsw8lYdVTy66YSdIgMGbbrlpFGUsIOVX2yY0hfQrWs7cCfR2a7dgj+3imF2jTwij1JQ==",
-    "url": "https://cdn.modrinth.com/data/4WWQxlQP/versions/2siue87F/servercore-fabric-1.5.17%2B26.1.2.jar"
+    "hash": "sha512-BW1W10UIvzTyXe2TI6chvpFbknN5YQDugcSoZ3FzZFOShbSul0njYNZpnUheP7oFYVAqjJSXloSwz3nOjoCvzQ==",
+    "url": "https://cdn.modrinth.com/data/4WWQxlQP/versions/H6TboTA2/servercore-fabric-1.5.19%2B26.1.2.jar"
   },
   "simple-voice-chat": {
-    "hash": "sha512-HraHpSEOfhWIfoSpMZXdjrz0XYWitlfSfHEa0B7Y6QlvSZ/LhNZWSFSYntLBO2qABmX7s4IimXfREl4NPrWoNg==",
-    "url": "https://cdn.modrinth.com/data/9eGKb6K1/versions/gVPjsMto/voicechat-fabric-2.6.17%2B26.1.2.jar"
+    "hash": "sha512-l6MtA9jgOrXMS1+omRjEn1ANkJlGsP5u0RRTSjK9nhO+NukLR9haXR5gwvuMCLzM9mqj3ffb2Azq8h/rFuypZA==",
+    "url": "https://cdn.modrinth.com/data/9eGKb6K1/versions/lT9C1Daj/voicechat-fabric-2.6.20%2B26.1.2.jar"
   },
   "spark": {
-    "hash": "sha512-4Gl2Y2icVFm37ZLyHYawGRu+f2MnrH6Jcq2fYxjveoypPaOoSVRZ7m8UQ8rf92VrFQ6g78gfjPEwDJMBSDovsw==",
-    "url": "https://cdn.modrinth.com/data/l6YH9Als/versions/J1GUYyGQ/spark-1.10.172-fabric.jar"
+    "hash": "sha512-Hcvyt2zqzwdSOvrq9j02JbAxgHfMbOWIu3Aa6kpJS8KlF5/SylrtqVE8aiJIwuxZA4forsasn9jj0Bdgu8Pb+w==",
+    "url": "https://cdn.modrinth.com/data/l6YH9Als/versions/iYFOl6lQ/spark-1.10.173-fabric.jar"
   },
   "tectonic": {
-    "hash": "sha512-GHez55Vq9FJe64dYOScZ/qjGJLC4XDb9Pjd4CvSqWCOjvWmBzv/yc2TJmatJKrz+oCRIonpAS8QeO52SThvJcQ==",
-    "url": "https://cdn.modrinth.com/data/lWDHr9jE/versions/jL2ZsTzx/tectonic-3.0.22-fabric-26.1.jar"
+    "hash": "sha512-W/fn0y/BPCh8UowzKP7uKfP8loZFOMYF0Yb4bbe9yN1xszZpzDaXYplIdnR+cfQqSvl72QTRai04FpzfNelUnw==",
+    "url": "https://cdn.modrinth.com/data/lWDHr9jE/versions/SlA5rCvn/tectonic-3.0.25-fabric-26.1.jar"
   },
   "terralith": {
     "hash": "sha512-WjvimGpiREbIKoh5405Mewn2+YoZN/1Nm89TVrgyHwuc67XlZ+jQCugWHSYbEI+3yagOvtYfLtuM2whSszy6zA==",
     "url": "https://cdn.modrinth.com/data/8oi3bsk5/versions/FCzSjHeG/Terralith_26.1_v2.6.2_Fabric.jar"
   },
   "viabackwards": {
-    "hash": "sha512-PdqWj0OKGlqmDChW8Pp2fbZQGiexqOvR3HK6CYBEVu5gjL2CumahxymKCMnw450a464nzBa9+ssuMz6Tr/fsdQ==",
-    "url": "https://cdn.modrinth.com/data/NpvuJQoq/versions/W890fNPl/ViaBackwards-5.9.1.jar"
+    "hash": "sha512-owERMoP/jay18qxMRWMrN63nlWNonuNCyedLzhalyAXXLsZBsF+G/XclWDEoYPkvX9Uq4kbMKHYlNKS+15S+qg==",
+    "url": "https://cdn.modrinth.com/data/NpvuJQoq/versions/YjpKsm6j/ViaBackwards-5.10.0.jar"
   },
   "viarewind": {
-    "hash": "sha512-HB9Nt3XZ374oh3a9vS4LL0kQZDuQNGB9gT7lCdol/EXoTPsBg838MFYLJjLyTHXcxRpKm7Dej/KayeJL2J78lA==",
-    "url": "https://cdn.modrinth.com/data/TbHIxhx5/versions/cOg14EE7/ViaRewind-4.1.1.jar"
+    "hash": "sha512-6IsW3k5c3/wG7+GAdDj4nAf25L/5qNr3WW+Tcg5rpKTOuw3yf1ZzEtjZ8do2qQi8+67IA9WL+OHlxL3v8lvlzQ==",
+    "url": "https://cdn.modrinth.com/data/TbHIxhx5/versions/wzgBAvKl/ViaRewind-4.1.2.jar"
   },
   "viaversion": {
-    "hash": "sha512-e4nyd5xIc0L4p32ydYOpiGi7IBF6T6aKLgfaC7Ytpa70Rru8AXIKCpg6HqLpGmvSb8lHvv7hQP8eTiUev2As+A==",
-    "url": "https://cdn.modrinth.com/data/P1OZGk5p/versions/OGj9YIQN/ViaVersion-5.9.1.jar"
+    "hash": "sha512-O53082YOAnMRru4vae7om2wAEQu2pxmx63hWffXwA/j+nkV0V7QXdBAX7Wialgp5VuoysOpxL0gfK5o73pNVAQ==",
+    "url": "https://cdn.modrinth.com/data/P1OZGk5p/versions/ruzmiBqe/ViaVersion-5.10.0.jar"
   },
   "vmp-fabric": {
     "hash": "sha512-JKDfJAeJOxz7VeJ9wcH+8AjfU1GNEYqjJFkk03tkKifXtq/elQ+/XQfEERxErCZNmuVrjYxqm1Ws37kboKFfFg==",
