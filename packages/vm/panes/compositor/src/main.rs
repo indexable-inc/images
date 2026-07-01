@@ -1,4 +1,4 @@
-//! Guest-side headless Wayland compositor: exports each xdg_toplevel over
+//! Guest-side headless Wayland compositor: exports each `xdg_toplevel` over
 //! vsock (or a unix/TCP socket for off-VM development) to `panes-host` on the
 //! macOS side. The wire contract lives in `packages/vm/panes/protocol`; the
 //! design constraints (ack-paced frame callbacks, damage tiles, host-side
@@ -22,19 +22,19 @@ fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_new(&cli.log_level)?)
         .init();
-    run(cli)
+    run(&cli)
 }
 
 #[cfg(target_os = "linux")]
-fn run(cli: cli::Cli) -> anyhow::Result<()> {
-    compositor::run(&cli)
+fn run(cli: &cli::Cli) -> anyhow::Result<()> {
+    compositor::run(cli)
 }
 
 // smithay (and AF_VSOCK) are Linux-only; this binary has no host-side role,
 // panes-host is the macOS half. The stub keeps `cargo test` for the portable
 // frame logic working on non-Linux development hosts.
 #[cfg(not(target_os = "linux"))]
-fn run(_cli: cli::Cli) -> anyhow::Result<()> {
+fn run(_cli: &cli::Cli) -> anyhow::Result<()> {
     anyhow::bail!(
         "panes-compositor runs inside a Linux guest only (see packages/vm/panes/host for the macOS side)"
     )

@@ -1,10 +1,10 @@
 //! GPU (linux-dmabuf) readback path, compiled only with the `gpu` feature.
 //!
-//! GL/Vulkan clients cannot render into wl_shm, they produce dmabufs. To get
+//! GL/Vulkan clients cannot render into `wl_shm`, they produce dmabufs. To get
 //! their pixels onto the wire the compositor imports each dmabuf as a GLES
 //! texture and reads it back to CPU memory. The context is created
-//! *surfaceless* on an EGLDevice (EGL_MESA_platform_surfaceless /
-//! EGL_EXT_platform_device): no DRM master, no KMS, no output, so it works
+//! *surfaceless* on an `EGLDevice` (`EGL_MESA_platform_surfaceless` /
+//! `EGL_EXT_platform_device`): no DRM master, no KMS, no output, so it works
 //! on a bare render node like virtio-gpu's /dev/dri/renderD128 inside the
 //! VM. libEGL is dlopen'd at runtime (smithay's `backend_egl` uses
 //! `libloading`), so a GPU-less machine still runs the shm-only binary.

@@ -61,10 +61,14 @@ delta if more commits arrived. The guest is thereby genlocked to the host's
 CAMetalDisplayLink (ProMotion and all) with backpressure for free: a slow
 link degrades to fewer, bigger deltas instead of a growing queue.
 
-Two escape hatches keep clients from wedging when no ack can come: a commit
-that produces nothing to send fires its callbacks immediately, and a 10 Hz
-fallback ticker fires callbacks for all windows while no host is connected
-(popup surfaces, which never carry wire frames, always tick).
+Three escape hatches keep clients from wedging when no ack can come: a
+commit that produces nothing to send fires its callbacks immediately (as do
+the commit paths that never reach a pump: popups, cursor surfaces, and the
+pre-configure commit), a 10 Hz fallback ticker fires callbacks for all
+windows while no host is connected (popup surfaces, which never carry wire
+frames, always tick), and a watchdog force-releases pacing after ~1s if an
+in-flight frame's ack never arrives (the mirror is invalidated so the next
+frame ships full).
 
 ## GPU vs shm mode
 

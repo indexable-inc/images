@@ -1,6 +1,6 @@
-//! ToGuest input messages -> smithay seat events.
+//! `ToGuest` input messages -> smithay seat events.
 //!
-//! Coordinates arrive surface-local (the host tracks which NSWindow the
+//! Coordinates arrive surface-local (the host tracks which `NSWindow` the
 //! event hit), so pointer focus is set explicitly per event with the target
 //! surface anchored at the global origin; there is no shared scene the
 //! pointer roams across, which is exactly why no window positions exist
@@ -109,12 +109,12 @@ fn pointer_axis(
     let mut frame = AxisFrame::new(time).source(source);
     // value120 is only defined for wheel steps (wl_pointer v8); smithay
     // derives legacy discrete events from it for older clients.
-    if source == AxisSource::Wheel {
-        if let Some((h120, v120)) = v120 {
-            frame = frame
-                .v120(Axis::Horizontal, h120)
-                .v120(Axis::Vertical, v120);
-        }
+    if source == AxisSource::Wheel
+        && let Some((h120, v120)) = v120
+    {
+        frame = frame
+            .v120(Axis::Horizontal, h120)
+            .v120(Axis::Vertical, v120);
     }
     frame = frame
         .value(Axis::Horizontal, horizontal)

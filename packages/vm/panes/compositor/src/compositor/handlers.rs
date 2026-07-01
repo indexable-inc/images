@@ -1,4 +1,4 @@
-//! smithay handler trait impls: the commit path (buffer intake -> FrameStore),
+//! smithay handler trait impls: the commit path (buffer intake -> `FrameStore`),
 //! xdg-shell lifecycle -> wire messages, seat/cursor, and forced server-side
 //! decorations.
 
@@ -58,6 +58,13 @@ impl CompositorHandler for App {
             return;
         }
 
+        // Every early return below must release the commit's frame callbacks
+        // itself: with a ready host the 10Hz fallback tick does not run, so a
+        // callback left pending on a never-pumped surface would wedge its
+        // client permanently (seen live: weston clients request a callback on
+        // the very first, buffer-less commit).
+        let now = self.now_ms();
+
         // Popups only need their initial configure; their content is not
         // exported (protocol gap, see README).
         if let Some(popup) = self.popups.iter().find(|p| p.wl_surface() == surface) {
@@ -66,6 +73,7 @@ impl CompositorHandler for App {
                 // initial configure.
                 let _ = popup.send_configure();
             }
+            super::fire_frame_callbacks(surface, now);
             return;
         }
 
@@ -74,6 +82,9 @@ impl CompositorHandler for App {
             root = parent;
         }
         let Some(idx) = self.pane_index_of_root(&root) else {
+            // Not a toplevel tree: e.g. a cursor-icon surface. Never pumped,
+            // so release its callbacks here.
+            super::fire_frame_callbacks(surface, now);
             return;
         };
 
@@ -87,17 +98,25 @@ impl CompositorHandler for App {
             })
         });
         if initial_configure_sent == Some(false) {
+            debug!(
+                id = self.panes[idx].id,
+                "initial commit; sending first configure"
+            );
             self.panes[idx].toplevel.send_configure();
+            super::fire_frame_callbacks(surface, now);
             return;
         }
 
-        self.sync_min_max(idx, &root);
-
         // Only the toplevel's own buffer becomes window content; subsurface
-        // pixels are not composited yet (README: known gaps).
+        // pixels are not composited yet (README: known gaps). Buffer intake
+        // must run before the min/max sync: it updates `pane.scale`, and a
+        // commit that changes buffer_scale would otherwise ship WindowMinMax
+        // converted at the stale scale.
         if *surface == root {
             self.intake_buffer(idx);
         }
+
+        self.sync_min_max(idx, &root);
 
         // Send now if pacing allows, or release the frame callbacks if there
         // is nothing to send (pump handles both).
@@ -106,10 +125,14 @@ impl CompositorHandler for App {
 }
 
 impl App {
-    /// xdg_toplevel min/max live in double-buffered surface state, not in a
+    /// `xdg_toplevel` min/max live in double-buffered surface state, not in a
     /// dedicated event, so they are re-read on every commit and diffed. The
     /// xdg values are logical; the wire wants buffer pixels at the window's
-    /// current scale (the host divides by scale for NSWindow min/max points).
+    /// current scale (the host divides by scale for `NSWindow` min/max points).
+    // significant_drop_tightening misfires here: the guard is dropped right
+    // after its two field reads already, and the suggested
+    // `get::<_>().current()` chain borrows a temporary and does not compile.
+    #[allow(clippy::significant_drop_tightening)]
     fn sync_min_max(&mut self, idx: usize, root: &WlSurface) {
         let scale = self.panes[idx].scale.max(1);
         let mm = with_states(root, |states| {
@@ -126,21 +149,24 @@ impl App {
         }
         pane.min = mm.min;
         pane.max = mm.max;
-        if pane.announced {
-            if let Some(host) = &self.host {
-                host.send(ToHost::WindowMinMax {
-                    id: pane.id,
-                    min: pane.min,
-                    max: pane.max,
-                });
-            }
+        if pane.announced
+            && let Some(host) = &self.host
+        {
+            host.send(ToHost::WindowMinMax {
+                id: pane.id,
+                min: pane.min,
+                max: pane.max,
+            });
         }
     }
 
     /// Take the newly attached buffer (if any) out of the surface state,
-    /// copy its pixels into the pane's FrameStore, and release it back to
+    /// copy its pixels into the pane's `FrameStore`, and release it back to
     /// the client immediately (we hold a copy, so the client may reuse it;
     /// this is the classic shm-copy compositor contract).
+    // significant_drop_tightening misfires here, same as sync_min_max: the
+    // guard already spans only the buffer take + scale read.
+    #[allow(clippy::significant_drop_tightening)]
     fn intake_buffer(&mut self, idx: usize) {
         let surface = self.panes[idx].toplevel.wl_surface().clone();
         let intake = with_states(&surface, |states| {
@@ -166,13 +192,14 @@ impl App {
                 // so the pane resets to the never-announced state (a remap
                 // reuses the id; the host sees it as a brand-new window).
                 let pane = &mut self.panes[idx];
-                if pane.announced {
-                    if let Some(host) = &self.host {
-                        host.send(ToHost::WindowGone { id: pane.id });
-                    }
+                if pane.announced
+                    && let Some(host) = &self.host
+                {
+                    host.send(ToHost::WindowGone { id: pane.id });
                 }
                 pane.announced = false;
                 pane.inflight = None;
+                pane.inflight_ticks = 0;
                 pane.store = crate::frame::FrameStore::default();
             }
             None => {}
@@ -221,7 +248,7 @@ impl App {
     }
 }
 
-/// wl_shm pool bytes -> packed BGRA. Only ARGB8888/XRGB8888 are advertised
+/// `wl_shm` pool bytes -> packed BGRA. Only ARGB8888/XRGB8888 are advertised
 /// (`ShmState::new` extra formats = none), matching the wire's premultiplied
 /// BGRA: in little-endian memory both formats already store B,G,R,A(/X).
 fn copy_shm(ptr: *const u8, len: usize, data: &BufferData) -> Option<CopiedFrame> {
@@ -261,7 +288,7 @@ struct SizeBounds {
 }
 
 /// Logical xdg size -> buffer pixels at `scale` (saturating: a hostile
-/// client-supplied size must not overflow, and u32::MAX is "unbounded"
+/// client-supplied size must not overflow, and `u32::MAX` is "unbounded"
 /// anyway).
 fn size_to_opt(size: Size<i32, smithay::utils::Logical>, scale: u32) -> Option<(u32, u32)> {
     if size.w <= 0 || size.h <= 0 {
@@ -368,10 +395,10 @@ impl XdgShellHandler for App {
         };
         let pane = self.panes.remove(idx);
         debug!(id = pane.id, "toplevel destroyed");
-        if pane.announced {
-            if let Some(host) = &self.host {
-                host.send(ToHost::WindowGone { id: pane.id });
-            }
+        if pane.announced
+            && let Some(host) = &self.host
+        {
+            host.send(ToHost::WindowGone { id: pane.id });
         }
         if self.pointer_focus == Some(pane.id) {
             self.pointer_focus = None;
@@ -406,13 +433,13 @@ impl XdgShellHandler for App {
             return;
         }
         pane.title = title;
-        if pane.announced {
-            if let Some(host) = &self.host {
-                host.send(ToHost::WindowTitle {
-                    id: pane.id,
-                    title: pane.title.clone(),
-                });
-            }
+        if pane.announced
+            && let Some(host) = &self.host
+        {
+            host.send(ToHost::WindowTitle {
+                id: pane.id,
+                title: pane.title.clone(),
+            });
         }
     }
 
@@ -439,11 +466,14 @@ impl XdgShellHandler for App {
     fn maximize_request(&mut self, surface: ToplevelSurface) {
         // Sizing is host-side (the WSLg lesson): never resize on our own,
         // but every maximize/minimize request must still be answered with a
-        // configure or the client hangs waiting.
+        // configure or the client hangs waiting. This leans on smithay's
+        // `send_configure` emitting unconditionally even when no pending
+        // state changed (`send_pending_configure` is the change-gated one).
         surface.send_configure();
     }
 
     fn unmaximize_request(&mut self, surface: ToplevelSurface) {
+        // Same unconditional-emit contract as maximize_request above.
         surface.send_configure();
     }
 }

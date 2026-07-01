@@ -9,11 +9,11 @@
 //!   host keeps the previous contents. `Lz4` per-tile because raw 1080p120 is
 //!   ~1 GB/s, at the edge of the libkrun vsock budget.
 //! - Pacing is ack-driven: the host sends [`ToGuest::Ack`] when a frame is
-//!   presented (CAMetalDisplayLink), and the compositor fires Wayland frame
-//!   callbacks off that ack, genlocking guest rendering to ProMotion instead
+//!   presented (`CAMetalDisplayLink`), and the compositor fires Wayland frame
+//!   callbacks off that ack, genlocking guest rendering to `ProMotion` instead
 //!   of running an open-loop 120Hz timer.
-//! - Windows are xdg_toplevels: title/app_id/min-max map onto NSWindow
-//!   properties; interactive resize is host-side (WSLg lesson) and lands as
+//! - Windows are `xdg_toplevels`: title/`app_id`/min-max map onto `NSWindow`
+//!   properties; interactive resize is host-side (`WSLg` lesson) and lands as
 //!   [`ToGuest::Configure`].
 //! - Handshake: both sides send their Hello immediately on connect (no
 //!   speak-first ordering); each validates the peer major before any other
@@ -21,10 +21,12 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Peers refuse a mismatched major and hang up. Postcard has no
-/// unknown-variant fallback (an unrecognized enum discriminant is a decode
-/// error), so ANY additive message/variant change bumps `VERSION_MINOR` and
-/// must only be emitted once the peer's Hello advertised a minor that has it.
+/// Peers refuse a mismatched major and hang up.
+///
+/// Postcard has no unknown-variant fallback (an unrecognized enum discriminant
+/// is a decode error), so ANY additive message/variant change bumps
+/// `VERSION_MINOR` and must only be emitted once the peer's Hello advertised a
+/// minor that has it.
 pub const VERSION_MAJOR: u16 = 1;
 pub const VERSION_MINOR: u16 = 0;
 
@@ -64,19 +66,19 @@ pub enum ToHost {
         major: u16,
         minor: u16,
     },
-    /// A new xdg_toplevel mapped; the host creates its NSWindow on first
+    /// A new `xdg_toplevel` mapped; the host creates its `NSWindow` on first
     /// `WindowFrame`, so an empty window never flashes. `app_id` is
-    /// immutable after map (a post-map change needs a WindowAppId message,
+    /// immutable after map (a post-map change needs a `WindowAppId` message,
     /// minor bump). v1 has no popup/subsurface kind: menus and tooltips get
     /// their configure guest-side but are not exported (needs parent id +
-    /// offset on a future PopupNew, minor bump).
+    /// offset on a future `PopupNew`, minor bump).
     WindowNew {
         id: WindowId,
         title: String,
         app_id: String,
         width: u32,
         height: u32,
-        /// Buffer scale the guest renders at (host backingScaleFactor echoed
+        /// Buffer scale the guest renders at (host `backingScaleFactor` echoed
         /// back through `ToGuest::Configure`).
         scale: u32,
     },
@@ -85,7 +87,7 @@ pub enum ToHost {
         title: String,
     },
     /// Sizes are buffer pixels at the scale from `WindowNew`/`Configure`
-    /// (the host divides by scale for NSWindow contentMin/MaxSize points).
+    /// (the host divides by scale for `NSWindow` `contentMin/MaxSize` points).
     WindowMinMax {
         id: WindowId,
         min: Option<(u32, u32)>,
@@ -106,7 +108,7 @@ pub enum ToHost {
         full: bool,
         tiles: Vec<Tile>,
     },
-    /// Toplevel unmapped/destroyed; host closes the NSWindow.
+    /// Toplevel unmapped/destroyed; host closes the `NSWindow`.
     WindowGone {
         id: WindowId,
     },
@@ -149,10 +151,10 @@ pub enum ToGuest {
     Hello {
         major: u16,
         minor: u16,
-        /// Host display refresh (mHz), e.g. 120000 for ProMotion; the
-        /// compositor advertises it on wl_output.
+        /// Host display refresh (mHz), e.g. 120000 for `ProMotion`; the
+        /// compositor advertises it on `wl_output`.
         refresh_mhz: u32,
-        /// NSWindow backingScaleFactor; guest renders at this scale.
+        /// `NSWindow` `backingScaleFactor`; guest renders at this scale.
         scale: u32,
         /// Tile encodings the host decodes; the guest must only emit these.
         /// Extending `Encoding` is gated on this negotiation, not on minor
@@ -186,7 +188,7 @@ pub enum ToGuest {
     },
     PointerButton {
         id: WindowId,
-        /// evdev button code (BTN_LEFT=0x110, ...).
+        /// evdev button code (`BTN_LEFT`=0x110, ...).
         button: u32,
         state: ButtonState,
     },
@@ -195,7 +197,7 @@ pub enum ToGuest {
         source: AxisSource,
         horizontal: f64,
         vertical: f64,
-        /// wl_pointer v8 value120 wheel steps, when source == Wheel.
+        /// `wl_pointer` v8 value120 wheel steps, when source == Wheel.
         v120: Option<(i32, i32)>,
         stop: bool,
     },
@@ -203,7 +205,7 @@ pub enum ToGuest {
         id: WindowId,
     },
     /// evdev keycode (xkb keycode - 8); repeats are NOT forwarded, guests
-    /// auto-repeat from wl_keyboard.repeat_info.
+    /// auto-repeat from `wl_keyboard.repeat_info`.
     Key {
         id: WindowId,
         keycode: u32,
@@ -224,27 +226,45 @@ pub enum WireError {
     TooLarge(usize),
 }
 
-/// Cap a single message: a full 5K (5120x2880) BGRA frame is ~59 MB and LZ4
-/// only shrinks it, so 64 MB fits the worst legitimate frame with headroom
-/// while bounding what a hostile length prefix can make `read_msg` allocate.
+/// Cap a single message at 64 MB.
+///
+/// A full 5K (5120x2880) BGRA frame is ~59 MB and LZ4 only shrinks it, so this
+/// fits the worst legitimate frame with headroom while bounding what a hostile
+/// length prefix can make `read_msg` allocate.
 pub const MAX_FRAME: usize = 64 * 1024 * 1024;
 
 /// Write one message: `[u32 LE len][postcard bytes]`.
+///
+/// # Errors
+/// [`WireError::Codec`] if `msg` fails to encode, [`WireError::TooLarge`] if
+/// the encoding exceeds [`MAX_FRAME`] (nothing is written to the stream), and
+/// [`WireError::Io`] on a write failure.
 pub fn write_msg<T: Serialize>(w: &mut impl std::io::Write, msg: &T) -> Result<(), WireError> {
     let bytes = postcard::to_stdvec(msg)?;
+    // Redundant with the MAX_FRAME check (which is < u32::MAX), but keeps the
+    // function panic-free by construction rather than by argument.
+    let len = u32::try_from(bytes.len()).map_err(|_| WireError::TooLarge(bytes.len()))?;
     if bytes.len() > MAX_FRAME {
         return Err(WireError::TooLarge(bytes.len()));
     }
-    w.write_all(&u32::try_from(bytes.len()).expect("len checked <= MAX_FRAME < u32::MAX above").to_le_bytes())?;
+    w.write_all(&len.to_le_bytes())?;
     w.write_all(&bytes)?;
     Ok(())
 }
 
 /// Read one message written by [`write_msg`].
+///
+/// # Errors
+/// [`WireError::Io`] on a short or failed read (including clean EOF),
+/// [`WireError::TooLarge`] for a length prefix past [`MAX_FRAME`] (nothing is
+/// allocated), and [`WireError::Codec`] if the payload fails to decode.
 pub fn read_msg<T: for<'de> Deserialize<'de>>(r: &mut impl std::io::Read) -> Result<T, WireError> {
     let mut len = [0u8; 4];
     r.read_exact(&mut len)?;
-    let len = usize::try_from(u32::from_le_bytes(len)).expect("u32 fits usize on 32/64-bit targets");
+    // u32 -> usize only narrows on 16-bit targets the workspace does not
+    // support; saturating to usize::MAX routes that impossibility into the
+    // TooLarge rejection below instead of a panic.
+    let len = usize::try_from(u32::from_le_bytes(len)).unwrap_or(usize::MAX);
     if len > MAX_FRAME {
         return Err(WireError::TooLarge(len));
     }

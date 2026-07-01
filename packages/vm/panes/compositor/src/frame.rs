@@ -190,6 +190,12 @@ fn diff_bands(prev: &[u8], next: &[u8], width: u32, height: u32) -> Vec<Rect> {
 /// at least 10%: shipping near-raw-sized data plus a host-side decode pass is
 /// a pure loss on incompressible content (photos, noise), and the host always
 /// accepts `Raw`.
+///
+/// Wire contract for `Encoding::Lz4`: the payload is a raw LZ4 *block*
+/// (`lz4_flex::compress` / `decompress`); the decoded size is known from the
+/// rect dims (`w * h * 4`), so it is deliberately NOT
+/// `compress_prepend_size` (a size-prefixed payload would misdecode on the
+/// host and vice versa).
 pub fn encode_tile(frame: &[u8], frame_width: u32, rect: Rect, allow_lz4: bool) -> Tile {
     let raw = extract_rect(frame, frame_width, rect);
     if allow_lz4 {
@@ -223,9 +229,9 @@ fn extract_rect(frame: &[u8], frame_width: u32, rect: Rect) -> Vec<u8> {
     out
 }
 
-/// Repack pixel rows from a strided source (e.g. a wl_shm pool slice starting
+/// Repack pixel rows from a strided source (e.g. a `wl_shm` pool slice starting
 /// at the buffer's offset) into tight `width * 4`-byte rows, optionally
-/// forcing alpha opaque (wl_shm `Xrgb8888` leaves the X byte undefined and
+/// forcing alpha opaque (`wl_shm` `Xrgb8888` leaves the X byte undefined and
 /// the wire format is premultiplied BGRA).
 pub fn pack_bgra(
     src: &[u8],

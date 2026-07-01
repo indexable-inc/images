@@ -3,7 +3,7 @@
 //!
 //! There is no rendering and no output device here. Client pixels are copied
 //! out of their buffers on commit, diffed, and shipped as damage tiles; the
-//! only pacing signal clients see is the wl_surface frame callback, fired
+//! only pacing signal clients see is the `wl_surface` frame callback, fired
 //! when the host acks the frame it presented (see `pump` and `on_host_msg`).
 
 mod handlers;
@@ -42,7 +42,7 @@ use crate::cli::Cli;
 use crate::frame::FrameStore;
 use transport::{HostEvent, HostLink, ListenSpec};
 
-/// The advertised wl_output mode. The output is virtual (windows are exported
+/// The advertised `wl_output` mode. The output is virtual (windows are exported
 /// individually and sized by the host), but clients use the mode as a
 /// maximize/bounds hint, so advertise something generous.
 const VIRTUAL_SIZE: (i32, i32) = (3840, 2160);
@@ -52,7 +52,14 @@ const VIRTUAL_SIZE: (i32, i32) = (3840, 2160);
 /// wedging forever on a callback that would never come.
 const FALLBACK_TICK: Duration = Duration::from_millis(100);
 
-/// One exported xdg_toplevel.
+/// Watchdog: ticks (of `FALLBACK_TICK`) an in-flight frame may go unacked
+/// before pacing is force-released (~1s). Pacing is one-frame-in-flight, so a
+/// host that drops a single ack (e.g. the window is removed host-side between
+/// `set_frame` and its next display tick) would otherwise wedge that client
+/// permanently.
+const INFLIGHT_WATCHDOG_TICKS: u32 = 10;
+
+/// One exported `xdg_toplevel`.
 struct Pane {
     id: WindowId,
     toplevel: ToplevelSurface,
@@ -63,6 +70,9 @@ struct Pane {
     /// Frame seq on the wire, unacked. At most one frame is in flight per
     /// window: that is the whole pacing mechanism.
     inflight: Option<u64>,
+    /// Fallback ticks the current in-flight frame has gone unacked; drives
+    /// the `INFLIGHT_WATCHDOG_TICKS` rescue in `on_tick`.
+    inflight_ticks: u32,
     title: String,
     app_id: String,
     min: Option<(u32, u32)>,
@@ -80,6 +90,7 @@ impl Pane {
             announced: false,
             seq: 0,
             inflight: None,
+            inflight_ticks: 0,
             title: String::new(),
             app_id: String::new(),
             min: None,
@@ -111,9 +122,9 @@ pub struct App {
     next_window_id: WindowId,
 
     host: Option<HostLink>,
-    /// Window under the host cursor (last PointerMotion target).
+    /// Window under the host cursor (last `PointerMotion` target).
     pointer_focus: Option<WindowId>,
-    /// Window holding wl_keyboard focus (last activated / keyed window).
+    /// Window holding `wl_keyboard` focus (last activated / keyed window).
     key_focus: Option<WindowId>,
 
     #[cfg(feature = "gpu")]
@@ -146,7 +157,7 @@ pub fn run(cli: &Cli) -> anyhow::Result<()> {
     info!(socket = %cli.socket_name, "wayland socket ready (WAYLAND_DISPLAY)");
     event_loop
         .handle()
-        .insert_source(listening_socket, |client_stream, _, app| {
+        .insert_source(listening_socket, |client_stream, (), app| {
             if let Err(err) = app
                 .display_handle
                 .insert_client(client_stream, Arc::new(ClientState::default()))
@@ -175,7 +186,7 @@ pub fn run(cli: &Cli) -> anyhow::Result<()> {
     transport::spawn(&listen_spec(cli), events_tx).context("start host transport")?;
     event_loop
         .handle()
-        .insert_source(events_rx, |event, _, app| {
+        .insert_source(events_rx, |event, (), app| {
             if let channel::Event::Msg(host_event) = event {
                 app.on_host_event(host_event);
             }
@@ -185,7 +196,7 @@ pub fn run(cli: &Cli) -> anyhow::Result<()> {
     // Fallback pacing when no host is connected.
     event_loop
         .handle()
-        .insert_source(Timer::from_duration(FALLBACK_TICK), |_, _, app| {
+        .insert_source(Timer::from_duration(FALLBACK_TICK), |_, (), app| {
             app.on_tick();
             TimeoutAction::ToDuration(FALLBACK_TICK)
         })
@@ -203,12 +214,12 @@ pub fn run(cli: &Cli) -> anyhow::Result<()> {
 }
 
 fn listen_spec(cli: &Cli) -> ListenSpec {
-    if let Some(path) = &cli.listen_unix {
-        ListenSpec::Unix(path.clone())
-    } else if let Some(addr) = &cli.listen_tcp {
-        ListenSpec::Tcp(addr.clone())
-    } else {
-        ListenSpec::Vsock(cli.listen_vsock)
+    // clap enforces unix/tcp mutual exclusion; unix wins here only to give
+    // the tuple match a total order.
+    match (&cli.listen_unix, &cli.listen_tcp) {
+        (Some(path), _) => ListenSpec::Unix(path.clone()),
+        (None, Some(addr)) => ListenSpec::Tcp(addr.clone()),
+        (None, None) => ListenSpec::Vsock(cli.listen_vsock),
     }
 }
 
@@ -330,15 +341,22 @@ impl App {
     /// Try to move one frame onto the wire for `panes[idx]`, announcing the
     /// window first if this connection has not seen it. When there is
     /// nothing to send, release the window's frame callbacks instead: no
-    /// frame means no ack, and without this the client would stall.
+    /// frame means no ack, and without this the client would stall. The only
+    /// path that leaves callbacks pending is a frame actually in flight
+    /// (that is the throttle; the ack or its watchdog releases them).
     fn pump(&mut self, idx: usize) {
         let now = self.now_ms();
         let Self { host, panes, .. } = self;
+        let pane = &mut panes[idx];
         let Some(host) = host.as_ref().filter(|h| h.ready) else {
+            // No ready host: the 10Hz fallback tick paces this pane.
             return;
         };
-        let pane = &mut panes[idx];
         if !pane.store.has_content() {
+            // Content-less commits (initial pre-map commit, commit after
+            // unmap) never turn into wire frames, so nothing would ever ack
+            // their callbacks; the fallback tick only runs host-less.
+            fire_frame_callbacks(pane.toplevel.wl_surface(), now);
             return;
         }
         if pane.inflight.is_some() {
@@ -361,6 +379,7 @@ impl App {
                 });
             }
             pane.announced = true;
+            tracing::debug!(id = pane.id, "announced WindowNew");
             // This connection has no retained pixels for us yet.
             pane.store.invalidate();
         }
@@ -375,6 +394,8 @@ impl App {
                 tiles: frame.tiles,
             });
             pane.inflight = Some(pane.seq);
+            pane.inflight_ticks = 0;
+            tracing::debug!(id = pane.id, seq = pane.seq, "frame sent");
         } else {
             fire_frame_callbacks(pane.toplevel.wl_surface(), now);
         }
@@ -407,6 +428,7 @@ impl App {
                     self.host = None;
                     for pane in &mut self.panes {
                         pane.inflight = None;
+                        pane.inflight_ticks = 0;
                         pane.announced = false;
                         pane.store.invalidate();
                     }
@@ -522,6 +544,7 @@ impl App {
             _ => return,
         }
         self.panes[idx].inflight = None;
+        self.panes[idx].inflight_ticks = 0;
         // The host presented: let the client draw the next frame.
         fire_frame_callbacks(self.panes[idx].toplevel.wl_surface(), now);
         // And if commits accumulated while this frame was in flight, send
@@ -529,6 +552,11 @@ impl App {
         self.pump(idx);
     }
 
+    // Focus tracking is one-way per window: activated=true steals keyboard
+    // focus here, and the previously active window is only deactivated by
+    // the host's own paired Configure{activated: false} for it (panes-host
+    // sends both on NSWindow key-window changes). A host that omits the
+    // deactivate would leave the old window's Activated state set.
     fn on_configure(&mut self, id: WindowId, width: u32, height: u32, activated: bool) {
         use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
         let Some(idx) = self.pane_index(id) else {
@@ -566,10 +594,38 @@ impl App {
     /// callbacks here. Popups get theirs unconditionally: they are separate
     /// surface trees that never carry wire frames, so no ack ever covers
     /// them.
+    ///
+    /// With a ready host this doubles as the in-flight watchdog: if an ack
+    /// never arrives (a window torn down host-side between `set_frame` and its
+    /// next display tick drops the ack on the floor), pacing is force-
+    /// released after `INFLIGHT_WATCHDOG_TICKS` and the retained-pixel mirror
+    /// invalidated so the next frame ships full (the host's copy can no
+    /// longer be trusted as the diff base).
     fn on_tick(&mut self) {
         let now = self.now_ms();
         let host_ready = self.host.as_ref().is_some_and(|h| h.ready);
-        if !host_ready {
+        if host_ready {
+            for idx in 0..self.panes.len() {
+                let pane = &mut self.panes[idx];
+                if pane.inflight.is_none() {
+                    continue;
+                }
+                pane.inflight_ticks += 1;
+                if pane.inflight_ticks < INFLIGHT_WATCHDOG_TICKS {
+                    continue;
+                }
+                warn!(
+                    id = pane.id,
+                    seq = pane.inflight,
+                    "ack never arrived; releasing pacing and resending full"
+                );
+                pane.inflight = None;
+                pane.inflight_ticks = 0;
+                pane.store.invalidate();
+                fire_frame_callbacks(pane.toplevel.wl_surface(), now);
+                self.pump(idx);
+            }
+        } else {
             for pane in &self.panes {
                 fire_frame_callbacks(pane.toplevel.wl_surface(), now);
             }

@@ -1,15 +1,9 @@
 {
   id = "panes-protocol";
   inRustWorkspace = true;
-  # Shared wire types: built (and unit-tested) on both ends of the stream, the
-  # aarch64-darwin host agent and the aarch64-linux guest compositor.
-  flake.systems = [
-    "aarch64-darwin"
-    "aarch64-linux"
-  ];
-  packageSet.systems = [
-    "aarch64-darwin"
-    "aarch64-linux"
-  ];
+  # Library crate: consumed by panes-compositor (aarch64-linux) and panes-host
+  # (aarch64-darwin) through the workspace unit graph, like ast-merge-ast. No
+  # flake/packageSet systems: advertising them would require a default.nix
+  # target selection for a crate with no standalone artifact.
   passthruTests = true;
 }

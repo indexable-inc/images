@@ -8,7 +8,7 @@ use std::path::PathBuf;
     about = "Headless Wayland compositor exporting each xdg_toplevel to a macOS host over a byte stream"
 )]
 pub struct Cli {
-    /// AF_VSOCK port to listen on: the production transport inside the VM
+    /// `AF_VSOCK` port to listen on: the production transport inside the VM
     /// (panes-host reaches it through libkrun's vsock port map). Ignored when
     /// --listen-unix or --listen-tcp is given.
     #[arg(long, value_name = "PORT", default_value_t = panes_protocol::VSOCK_PORT)]
@@ -29,8 +29,8 @@ pub struct Cli {
     #[arg(long, default_value = "us")]
     pub xkb_layout: String,
 
-    /// Wayland socket name clients connect to (their WAYLAND_DISPLAY),
-    /// created under XDG_RUNTIME_DIR.
+    /// Wayland socket name clients connect to (their `WAYLAND_DISPLAY`),
+    /// created under `XDG_RUNTIME_DIR`.
     #[arg(long, default_value = "wayland-1")]
     pub socket_name: String,
 
