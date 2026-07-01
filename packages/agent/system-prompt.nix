@@ -185,6 +185,17 @@ let
       '';
     }
     {
+      machineReadableInterfaces = ''
+        Machine-readable first: prefer structured interfaces end to end, and ask
+        every tool for its structured mode (`--json` and similar) instead of
+        scraping human-oriented text. When a tool we control lacks one, add it
+        upstream (a `--json` flag, structured output) rather than parsing prose:
+        fix the interface, not the parse. Treat any interface friction the same
+        way (a missing flag, missing structured output, missing helper): improve
+        it or file an issue or PR instead of silently working around it.
+      '';
+    }
+    {
       shellCwd = ''
         The kernel `sh()` has no persistent cwd or shell state. Pass `cwd=<abs path>`
         on every call, or use `git -C <worktree>`. Use argv-list form for commands
