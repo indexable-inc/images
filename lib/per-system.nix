@@ -12,6 +12,7 @@
   nixpkgs,
   paths,
   rust-overlay,
+  home-manager,
 }:
 let
   inherit (nixpkgs) lib;
@@ -686,7 +687,14 @@ let
     fileset = fs.intersection (fs.gitTracked paths.root) (paths.root + "/astlog-rules");
   };
 
-  tests = import paths.tests { inherit nixpkgs ix paths; };
+  tests = import paths.tests {
+    inherit
+      nixpkgs
+      ix
+      paths
+      home-manager
+      ;
+  };
 
   exampleFleets = ix.exampleFleetsFor { hostSystem = system; };
 

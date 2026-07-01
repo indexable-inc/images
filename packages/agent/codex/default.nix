@@ -29,6 +29,11 @@
   # fallback the claude-code wrapper uses).
   repoPackages ? { },
 
+  # Rule names dropped from the default house prompt. Only affects the computed
+  # `systemPrompt` default below; ignored when `systemPrompt` is passed
+  # explicitly.
+  omitRules ? [ ],
+
   # Forced config: codex `-c key=value` overrides applied on EVERY invocation.
   # `-c` is codex's highest-precedence layer (above ~/.codex/config.toml), so use
   # this ONLY for wrapper INVARIANTS the user must not silently lose. The one we
@@ -63,18 +68,35 @@
     agents.max_depth = 3;
   },
 
-  # The house model/base instructions Codex should run with. Kept outside the
-  # overridable `settings` default so callers that replace `settings` for their
-  # own soft defaults do not silently drop the prompt.
+  # MCP servers rendered as soft Codex defaults. A user's own
+  # `[mcp_servers.<name>]` config wins per-key through config-launch.
+  mcpServers ?
+    (import (ix.paths.packagesRoot + "/agent/common.nix") {
+      inherit lib ix repoPackages;
+      promptOmitRules = omitRules;
+    }).defaultServers,
+
+  # The house model/base instructions Codex should run with. This becomes a
+  # store-backed `model_instructions_file` soft default. Null bakes no default.
+  systemPrompt ?
+    (import (ix.paths.packagesRoot + "/agent/common.nix") {
+      inherit lib ix repoPackages;
+      promptOmitRules = omitRules;
+    }).systemPromptFor
+      "codex",
+
+  # Existing prompt file to use instead of materializing `systemPrompt`.
+  # Overrides `systemPrompt` when non-null.
   modelInstructionsFile ? null,
 }:
 let
-  common = import (ix.paths.packagesRoot + "/agent/common.nix") { inherit lib ix repoPackages; };
   effectiveModelInstructionsFile =
     if modelInstructionsFile != null then
       modelInstructionsFile
+    else if systemPrompt != null then
+      builtins.toFile "codex-system-prompt.txt" systemPrompt
     else
-      builtins.toFile "codex-system-prompt.txt" (common.systemPromptFor "codex");
+      null;
 
   # The compiled Rust launcher (packages/config-launch): reads IX_LAUNCH_SPEC
   # (a baked JSON file describing the target binary, config path, forced flags,
@@ -88,12 +110,6 @@ let
       value = ix.toml.scalar v;
     }) flat;
 
-  # The default MCP servers, baked as soft `-c mcp_servers.*` defaults from the
-  # shared default server set (../common.nix `defaultServers`, the same source the
-  # claude-code wrapper renders), so Codex gets only the index MCP server and
-  # the Exa MCP server. Soft, so a user's own `[mcp_servers.<name>]` in
-  # config.toml wins per the per-leaf presence check.
-  mcpServers = common.defaultServers;
   sharedPermissions = import (ix.paths.packagesRoot + "/agent/policy/permissions.nix") {
     inherit lib mcpServers;
   };
@@ -113,7 +129,10 @@ let
     soft =
       entriesOf (
         ix.attrs.flattenToDotted (
-          { model_instructions_file = toString effectiveModelInstructionsFile; } // settings
+          lib.optionalAttrs (effectiveModelInstructionsFile != null) {
+            model_instructions_file = toString effectiveModelInstructionsFile;
+          }
+          // settings
         )
       )
       ++ ix.mcp.toCodexEntries mcpServers;

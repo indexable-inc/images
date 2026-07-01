@@ -286,6 +286,7 @@
             nixpkgs
             paths
             rust-overlay
+            home-manager
             ;
         }
       );
@@ -315,6 +316,14 @@
         # `programs.raycast.focus = { enable = true; ... }`. See
         # modules/home/raycast.nix.
         raycast = ./modules/home/raycast.nix;
+        # Agent CLI modules: Home Manager is the user-facing configuration
+        # surface, while the package wrappers remain the implementation detail.
+        claude-code = import ./packages/agent/home-manager/claude-code.nix {
+          indexPackages = system: (collect "packages").${system};
+        };
+        codex = import ./packages/agent/home-manager/codex.nix {
+          indexPackages = system: (collect "packages").${system};
+        };
         # Personal-but-shareable workstation module for github:andrewgazelka: the
         # ix.dev downtime watcher + boss bar overlay + the shared say-detached
         # sound helper, all as portable services. Closed over the per-system
@@ -323,6 +332,9 @@
         andrewgazelka = import ./users/andrewgazelka/home.nix {
           indexPackages = system: (collect "packages").${system};
           portableServicesModule = ix.portableServices.homeModule;
+          claudeCodeModule = import ./packages/agent/home-manager/claude-code.nix {
+            indexPackages = system: (collect "packages").${system};
+          };
           inherit ix;
         };
         # Reusable workstation module: draw one Minecraft boss bar per in-flight

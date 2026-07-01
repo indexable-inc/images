@@ -4,6 +4,7 @@
   nixpkgs,
   ix,
   paths,
+  home-manager,
 }:
 let
   inherit (nixpkgs) lib;
@@ -167,6 +168,43 @@ let
   agentCommon = import (paths.packagesRoot + "/agent/common.nix") { inherit lib ix repoPackages; };
   sampleClaudeSystemPrompt = agentCommon.systemPromptFor "claude";
   sampleCodexSystemPrompt = agentCommon.systemPromptFor "codex";
+  homeAgentPkgs = import nixpkgs {
+    inherit (pkgs.stdenv.hostPlatform) system;
+    config = {
+      allowUnfreePredicate = pkg: lib.getName pkg == "claude-code";
+    };
+    overlays = [ ];
+  };
+  homeAgentIndexPackages = _: ix.packageSetFor homeAgentPkgs;
+  homeAgentConfig =
+    (home-manager.lib.homeManagerConfiguration {
+      pkgs = homeAgentPkgs;
+      modules = [
+        (import (paths.packagesRoot + "/agent/home-manager/claude-code.nix") {
+          indexPackages = homeAgentIndexPackages;
+        })
+        (import (paths.packagesRoot + "/agent/home-manager/codex.nix") {
+          indexPackages = homeAgentIndexPackages;
+        })
+        {
+          home = {
+            username = "agent";
+            homeDirectory = "/home/agent";
+            stateVersion = "25.05";
+          };
+          programs.claude-code = {
+            enable = true;
+            omitRules = [ "reportToPlaybook" ];
+            personalStartupContext = true;
+          };
+          programs.codex = {
+            enable = true;
+            configDir = ".config/codex-test";
+            defaults.agents.max_depth = 4;
+          };
+        }
+      ];
+    }).config;
 
   minecraft =
     let
@@ -3549,6 +3587,25 @@ let
           in
           managed.permissions.defaultMode == "bypassPermissions" && managed.skipDangerousModePermissionPrompt;
         message = "dev base should enforce root's Claude Code bypass via managed-settings.json";
+      }
+      {
+        assertion =
+          builtins.elem homeAgentConfig.programs.claude-code.finalPackage homeAgentConfig.home.packages
+          && builtins.elem homeAgentConfig.programs.codex.finalPackage homeAgentConfig.home.packages;
+        message = "agent Home Manager modules should install their configured packages when enabled";
+      }
+      {
+        assertion =
+          homeAgentConfig.home.file.".config/codex-test/hooks.json".source
+          == homeAgentConfig.programs.codex.finalPackage.hooksJson;
+        message = "Codex Home Manager module should install the shared hook policy under the configured Codex home";
+      }
+      {
+        assertion = builtins.elem {
+          key = "agents.max_depth";
+          value = "4";
+        } homeAgentConfig.programs.codex.finalPackage.passthru.specValue.soft;
+        message = "Codex Home Manager module should pass soft settings through the package wrapper";
       }
     ];
 

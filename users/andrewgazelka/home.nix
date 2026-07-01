@@ -51,6 +51,7 @@
 {
   indexPackages,
   portableServicesModule,
+  claudeCodeModule,
   ix,
 }:
 {
@@ -67,12 +68,11 @@ let
   # `pkgs.claude-code` carries an x86_64-linux `config-launch` even on an
   # aarch64-darwin host, so its install-check drags the whole x86_64-linux cargo
   # unit graph (alsa-sys et al.) into a Mac home build, which real nix cannot
-  # place. `indexPkgs.claude-code` is the correctly host-targeted build.
+  # place. The agent Home Manager modules use `indexPackages` for the same
+  # host-targeted package selection.
   # See indexable-inc/index#1085.
   indexPkgs = indexPackages pkgs.stdenv.hostPlatform.system;
-  claudeCode = indexPkgs.claude-code.override {
-    personalStartupContext = true;
-  };
+  claudeCode = config.programs.claude-code.finalPackage;
 
   isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
 
@@ -183,6 +183,7 @@ in
   imports = [
     portableServicesModule
     ciBarsModule
+    claudeCodeModule
   ];
 
   options.users.andrewgazelka = {
@@ -479,6 +480,11 @@ in
       enable = true;
       repos = cfg.prWatch.repos;
       inherit (cfg) logDir;
+    };
+
+    programs.claude-code = {
+      enable = true;
+      personalStartupContext = true;
     };
   };
 }
