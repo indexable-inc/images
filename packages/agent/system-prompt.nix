@@ -154,6 +154,15 @@ let
       '';
     }
     {
+      dependencyNonConcerns = ''
+        When weighing a dependency or architecture, two non-concerns: a large
+        dependency tree (Nix builds and caches it once; judge runtime properties
+        such as isolation, cancellation, correctness, and fidelity, not compile
+        weight) and upstream API churn (mechanical migrations are cheap for AI
+        agents; judge whether the API is the correct one, not how often it moves).
+      '';
+    }
+    {
       oneImplementation = ''
         Keep one concept to one implementation. Consolidate duplicated logic into one
         composable path.
