@@ -105,17 +105,34 @@ def test_input_scalars_and_datetimes_cross_into_nu() -> None:
     assert run(nu.value("$in + 1", input=41)) == 42
 
 
+def test_naive_datetime_input_gets_a_clear_error() -> None:
+    naive = datetime.datetime(2024, 1, 2, 3, 4, 5)
+    with pytest.raises(nu.NuError, match="naive datetime"):
+        run(nu.value("$in", input=naive))
+
+
+def test_empty_record_is_one_row_zero_columns() -> None:
+    # Pins the degenerate corner of the record -> 1-row contract so a polars
+    # behavior change is caught here, not by a confused caller.
+    df = run(nu("{}"))
+    assert df.shape == (1, 0)
+
+
 def test_cwd_is_respected(tmp_path: pathlib.Path) -> None:
     (tmp_path / "hello.txt").write_text("hi")
     df = run(nu("ls | get name", cwd=tmp_path))
     assert df["value"].to_list() == ["hello.txt"]
 
 
-def test_timeout_interrupts_a_runaway_pipeline() -> None:
+def test_timeout_interrupts_and_discards_engine_state() -> None:
+    run(nu("let survivor = 'no'"))
     with pytest.raises(TimeoutError):
         run(nu("loop { }", timeout=0.5))
-    # The interrupt leaves the engine healthy for the next call.
+    # The next call gets a FRESH engine (a stuck element could hold the old
+    # one indefinitely), so it works immediately but persistent state is gone.
     assert run(nu.value("2 + 2")) == 4
+    with pytest.raises(nu.NuError):
+        run(nu("$survivor"))
 
 
 def test_reset_discards_state() -> None:

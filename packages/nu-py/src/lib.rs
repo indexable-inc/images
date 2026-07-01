@@ -199,10 +199,14 @@ fn value_to_py(py: Python<'_>, value: Value) -> PyResult<Py<PyAny>> {
         // finite Python shape, so refuse it rather than loop forever (the
         // range iterator itself never checks signals here).
         Value::Range { ref val, .. } => {
+            const MAX_RANGE_ELEMENTS: usize = 1_000_000;
             let span = value.span();
             let list = PyList::empty(py);
-            for item in val.into_range_iter(span, Signals::empty()).take(1_000_001) {
-                if list.len() > 1_000_000 {
+            for item in val
+                .into_range_iter(span, Signals::empty())
+                .take(MAX_RANGE_ELEMENTS + 1)
+            {
+                if list.len() > MAX_RANGE_ELEMENTS {
                     return Err(NuError::new_err(
                         "range is unbounded or has more than 1,000,000 elements; \
                          collect it in nushell first (e.g. `| first 1000`)",
@@ -242,6 +246,15 @@ fn py_to_value(object: &Bound<'_, PyAny>) -> PyResult<Value> {
     }
     if let Ok(val) = object.extract::<DateTime<FixedOffset>>() {
         return Ok(Value::date(val, span));
+    }
+    // A tz-naive datetime would otherwise fall through every branch and hit
+    // the generic type error; name the actual problem instead of guessing a
+    // timezone (assuming UTC or local silently would corrupt data).
+    if object.extract::<chrono::NaiveDateTime>().is_ok() {
+        return Err(NuError::new_err(
+            "naive datetime: nushell dates carry a timezone; attach one first, \
+             e.g. stamp.replace(tzinfo=datetime.UTC)",
+        ));
     }
     if let Ok(val) = object.extract::<TimeDelta>() {
         let nanos = val
@@ -320,10 +333,15 @@ impl Engine {
         let interrupt = Arc::clone(&self.interrupt);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let result = tokio::task::spawn_blocking(move || {
-                interrupt.store(false, Ordering::Relaxed);
                 let mut guard = inner
                     .lock()
                     .map_err(|_| "a previous eval panicked; create a fresh Engine".to_owned())?;
+                // Reset the interrupt only AFTER winning the lock: resetting
+                // before it could erase an interrupt aimed at the eval still
+                // holding the mutex (which would then never stop, wedging
+                // both). Inside the guard, the reset provably applies to this
+                // eval alone.
+                interrupt.store(false, Ordering::Relaxed);
                 guard.eval(&code, input, cwd, env)
             })
             .await

@@ -42,11 +42,20 @@ Contract:
 - A failing pipeline raises :class:`NuError` whose message is nushell's own
   rendered diagnostic (span, label, and "did you mean" hints) -- read it,
   fix the pipeline, retry. ``exit`` raises too; it never ends this process.
-- ``timeout=`` interrupts the evaluation the way ctrl-c would (nushell
-  checks the flag between pipeline elements) and raises ``TimeoutError``;
-  cancelling the awaiting task interrupts the same way. An external command
-  the pipeline already spawned finishes on its own; for long externals
-  prefer ``sh``, which group-kills on timeout.
+- ``timeout=`` REQUESTS a stop the way ctrl-c would (nushell checks the
+  flag between pipeline elements), raises ``TimeoutError``, and abandons
+  the shared engine for a fresh one: a single stuck element (a hung
+  ``http get``, an external that ignores the flag) may hold the old engine
+  arbitrarily long, and abandoning it keeps later ``nu()`` calls from
+  queueing behind the runaway. Persistent state is therefore LOST on a
+  timeout. Cancelling the awaiting task interrupts the same way but keeps
+  the engine (state survives); after cancelling a truly stuck pipeline,
+  ``nu.reset()`` unwedges. An external the pipeline already spawned
+  finishes on its own; for long externals prefer ``sh``, which group-kills
+  on timeout.
+- Calls against the shared engine run one at a time (REPL state needs
+  ordered evaluation); for parallel pipelines, construct separate
+  ``nu.Engine()`` instances.
 - ``nu.reset()`` discards the persistent state for a fresh engine.
 """
 
@@ -129,7 +138,16 @@ async def _run(
         return await asyncio.wait_for(asyncio.ensure_future(coroutine), timeout)
     except TimeoutError:
         engine.interrupt()
-        raise TimeoutError(f"nu pipeline timed out after {timeout}s: {code}") from None
+        # Abandon the engine, don't just interrupt it: the interrupt is only
+        # honored between pipeline elements, so a stuck element could hold
+        # this engine's lock indefinitely and every later nu() would queue
+        # behind it. A fresh engine costs the persistent state (documented);
+        # the abandoned one stops (and drops) whenever its element finishes.
+        if engine is _engine:
+            reset()
+        raise TimeoutError(
+            f"nu pipeline timed out after {timeout}s (engine state discarded): {code}"
+        ) from None
     except asyncio.CancelledError:
         engine.interrupt()
         raise
@@ -167,9 +185,10 @@ async def nu(
     Multi-statement source is fine; the last pipeline's output is the result,
     and ``let``/``def``/``cd`` persist to later calls (REPL semantics).
     ``input`` pipes a value in as ``$in`` -- a polars DataFrame, list, dict,
-    or scalar. ``cwd`` sets ``PWD`` (persistently, like ``cd``); ``env`` adds
-    environment variables; ``timeout`` interrupts the evaluation; ``name``
-    labels the running job in the dashboard.
+    or scalar (datetimes must be tz-aware). ``cwd`` sets ``PWD``
+    (persistently, like ``cd``); ``env`` adds environment variables;
+    ``timeout`` interrupts the evaluation and discards the engine state (see
+    the module docstring); ``name`` labels the running job in the dashboard.
 
     Shape normalization: table -> frame; record -> 1-row frame; list of
     scalars / scalar -> a single ``value`` column; no output -> empty frame.
