@@ -66,6 +66,16 @@ MODULES: tuple[Module, ...] = (
         preimport=True,
     ),
     Module(
+        "nu",
+        "structured shell (an embedded, persistent nushell engine): run a pipeline and get a "
+        'polars DataFrame back, always -- `await nu("ls | where size > 1kb | sort-by size")`, '
+        "`open Cargo.toml`, `from csv`, `http get`; `let`/`def`/`cd` persist across calls like "
+        "a REPL; `input=df` pipes a frame through a pipeline; a failure raises NuError carrying "
+        "nushell's own diagnostic. Prefer it over `sh` + jq/awk/sed whenever you want a "
+        "command's data",
+        preimport=True,
+    ),
+    Module(
         "nix",
         "run a nix build and get its internals as polars (`.events` / `.activities`) plus a live "
         "build DAG; `nix.attrs()` catalogs the flake's buildable attrs",

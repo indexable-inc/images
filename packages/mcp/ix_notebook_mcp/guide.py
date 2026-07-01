@@ -173,6 +173,22 @@ NO_SHELL = (
     "shell parsing entirely, or write the text to a temp file and use `git commit -F <file>`."
 )
 
+NU = (
+    "When you want a command's DATA and the CLI has no JSON mode, reach for `nu` before `sh` + "
+    "jq/awk/sed text munging: `await nu(\"ls | where size > 1kb | sort-by size\")` runs a "
+    "nushell pipeline — structured end to end (`ls`, `ps`, `open Cargo.toml`, `from csv`, "
+    "`http get`, `where`, `group-by`) — and every result comes back as a polars DataFrame "
+    "(a record is one row, a scalar a one-cell `value` column; dates and durations arrive as "
+    "real Datetime/Duration columns, filesize as bytes). The engine is embedded and "
+    "persistent, a REPL: a `let`, a `def`, or a `cd` in one call is visible to the next, so "
+    "bind an expensive fetch once and query it across calls. Pipe a frame THROUGH a pipeline "
+    "with `await nu(\"where a > 1\", input=df)`. A failing pipeline raises NuError carrying "
+    "nushell's own diagnostic (span + 'did you mean'), so read it and fix the pipeline. "
+    "Division of labor: `nu` for data-shaped commands, `sh` for side-effectful ones "
+    "(`git`/`nix`/`gh` writes), long externals, and raw logs, `sh(...).df()` when the CLI "
+    "already speaks `--json`."
+)
+
 VERIFY = (
     "Verify a change by its actual effect, not by a proxy: when you change "
     "something whose result a static check cannot see — an interactive UI, a "

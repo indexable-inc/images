@@ -64,6 +64,7 @@ _KERNEL_GUIDE = guide.compose(
     guide.NAMESPACE,
     guide.DISCOVER,
     guide.NO_SHELL,
+    guide.NU,
     guide.POLARS,
     guide.RESULT_CONTRACT,
     guide.JOBS,

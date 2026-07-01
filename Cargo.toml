@@ -58,6 +58,7 @@ members = [
   "packages/minecraft/minecraft/sync-managed",
   "packages/search/mixedbread",
   "packages/mynoise",
+  "packages/nu-py",
   "packages/nix/nix-web-monitor/parser",
   "packages/nix/nix-web-monitor/server",
   "packages/nix/oci-image-builder",
@@ -200,6 +201,21 @@ napi-derive = "3"
 ndarray = "0.17"
 nix = "0.31"
 nix-web-monitor-parser = { path = "packages/nix/nix-web-monitor/parser" }
+# The embedded nushell engine nu-py wraps. One version for the whole family,
+# aligned with pkgs.nushell so embedded semantics match the CLI on PATH.
+# nu-command drops its default `sqlite` feature (`stor`, `into sqlite`): its
+# rusqlite 0.37 pins libsqlite3-sys 0.35, which collides with source-atuin's
+# rusqlite 0.40 on the one-per-graph `links = "sqlite3"` native library.
+nu-cmd-extra = "0.113.1"
+nu-cmd-lang = "0.113.1"
+nu-command = { version = "0.113.1", default-features = false, features = [
+  "os",
+  "network",
+  "rustls-tls",
+] }
+nu-engine = "0.113.1"
+nu-parser = "0.113.1"
+nu-protocol = "0.113.1"
 numpy = "0.28"
 objc2 = "0.6"
 objc2-app-kit = "0.3"

@@ -93,6 +93,48 @@ let
       ''
   );
 
+  # The embedded nushell engine, baked into the pinned interpreter so every
+  # session can `await nu("ls | where size > 1kb")` and get a polars frame.
+  # Same shape as `searchModule`: the PyO3 cdylib comes from the shared
+  # workspace graph (packages/nu-py), so it works on Linux and macOS dev alike.
+  # In-process, not a subprocess: one persistent engine per kernel, cancellable
+  # through nushell's own interrupt signal.
+  nuPyPythonSource = builtins.path {
+    name = "nu-py-python-source";
+    path = ix.paths.packagesRoot + "/nu-py/python";
+  };
+  nuPyModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-nu-python-module"
+      {
+        strictDeps = true;
+        meta.description = "Embedded nushell engine (nu-py PyO3 module) bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/nu"
+        mkdir -p "$site"
+        cp -r ${nuPyPythonSource}/nu/. "$site/"
+
+        cdylib=""
+        for candidate in \
+          ${ix.rustWorkspace.units.libraries.nu_py}/lib/libnu_py.so \
+          ${ix.rustWorkspace.units.libraries.nu_py}/lib/libnu_py-*.so \
+          ${ix.rustWorkspace.units.libraries.nu_py}/lib/libnu_py.dylib \
+          ${ix.rustWorkspace.units.libraries.nu_py}/lib/libnu_py-*.dylib
+        do
+          if [ -f "$candidate" ]; then
+            cdylib="$candidate"
+            break
+          fi
+        done
+        if [ -z "$cdylib" ]; then
+          echo "nu-py module: no cdylib under ${ix.rustWorkspace.units.libraries.nu_py}/lib" >&2
+          ls -la ${ix.rustWorkspace.units.libraries.nu_py}/lib >&2 || true
+          exit 1
+        fi
+        install -m555 "$cdylib" "$site/_nu.abi3.so"
+      ''
+  );
+
   # The astlog package, baked into the pinned interpreter so every session can
   # `import astlog` and run Datalog queries/rewrites over tree-sitter ASTs with
   # no setup. Same shape as `searchModule`: the PyO3 cdylib comes from the
@@ -1142,6 +1184,7 @@ let
       ps.pypdf
       tuiModule
       searchModule
+      nuPyModule
       astlogModule
       scipqlModule
       flecsQueryModule
@@ -5140,6 +5183,39 @@ let
         cat stdout
         mkdir -p "$out"
       '';
+  nuBundled = importTest "nu" "import nu; print('nu-ok', callable(nu), callable(nu.value), nu.NuError.__name__ == 'NuError', nu.__version__)";
+  # Behavior tests for the embedded nushell engine: the normalization matrix,
+  # persistent REPL state, native datetime/duration crossing, the NuError
+  # diagnostic surface, `exit` safety, and interrupt-based timeout. Everything
+  # runs in-process against the real engine, so the sandbox needs no nushell
+  # binary and no network.
+  nuTestPython = pkgs.python3.withPackages (ps: [
+    ps.pytest
+    ps.polars
+    nuPyModule
+  ]);
+  nuTestSource = builtins.path {
+    name = "ix-mcp-nu-test";
+    path = ./tests/test_nu.py;
+  };
+  nuTests =
+    pkgs.runCommand "ix-mcp-nu-tests"
+      {
+        nativeBuildInputs = [ nuTestPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        cp ${nuTestSource} "$TMPDIR/test_nu.py"
+        ${lib.getExe nuTestPython} -m pytest "$TMPDIR/test_nu.py" -q -p no:cacheprovider >stdout 2>stderr || {
+          echo "ix-mcp nu tests failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        cat stdout
+        mkdir -p "$out"
+      '';
   noxAutotriageBundled = importTest "nox-autotriage" "import nox_autotriage; print('nox-autotriage-ok', callable(nox_autotriage.findings_from_conformance))";
   linearTriageTestPython = pkgs.python3.withPackages (ps: [
     ps.pytest
@@ -5357,6 +5433,8 @@ package.overrideAttrs (old: {
         browserVdomSmoke
         vdomPropertiesSmoke
         xBundled
+        nuBundled
+        nuTests
         linearBundled
         linearTriageTests
         notionBundled
