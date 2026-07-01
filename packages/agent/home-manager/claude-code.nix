@@ -10,6 +10,11 @@ let
   jsonFormat = pkgs.formats.json { };
   pathLike = lib.types.either lib.types.path lib.types.str;
   indexPkgs = indexPackages pkgs.stdenv.hostPlatform.system;
+  systemPromptSource = lib.types.enum [
+    "house"
+    "stock"
+    "text"
+  ];
 
   optionalOverride =
     condition: name: value:
@@ -18,16 +23,16 @@ let
     inherit (cfg)
       addDirs
       dangerouslySkipPermissions
-      omitRules
       personalStartupContext
       pluginDirs
       primaryCheckouts
       ;
+    omitRules = cfg.systemPrompt.omitRules;
     extraSettings = cfg.defaults;
   }
   // optionalOverride (cfg.defaultMcpServers != null) "mcpServers" cfg.defaultMcpServers
-  // optionalOverride (cfg.systemPrompt != null) "systemPrompt" cfg.systemPrompt
-  // optionalOverride cfg.useStockSystemPrompt "systemPrompt" null;
+  // optionalOverride (cfg.systemPrompt.source == "text") "systemPrompt" cfg.systemPrompt.text
+  // optionalOverride (cfg.systemPrompt.source == "stock") "systemPrompt" null;
   defaultedPackage = cfg.basePackage.override packageOverrides;
 in
 {
@@ -93,34 +98,56 @@ in
       '';
     };
 
-    omitRules = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = [ ];
-      description = "Rule names omitted from the default house system prompt.";
-    };
-
     systemPrompt = lib.mkOption {
-      type = lib.types.nullOr lib.types.lines;
-      default = null;
-      description = ''
-        Replacement Claude Code system prompt. Null keeps the package default
-        house prompt. Set {option}`programs.claude-code.useStockSystemPrompt` to
-        run Claude Code without the house prompt wrapper.
-      '';
-    };
+      type = lib.types.submodule {
+        options = {
+          source = lib.mkOption {
+            type = systemPromptSource;
+            default = "house";
+            description = ''
+              Which system prompt the wrapper bakes: `house` renders the
+              structured house prompt, `stock` bakes no prompt flag, and `text`
+              uses {option}`programs.claude-code.systemPrompt.text`.
+            '';
+          };
 
-    useStockSystemPrompt = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
-      description = "Do not bake the house system prompt into the Claude Code wrapper.";
+          text = lib.mkOption {
+            type = lib.types.nullOr lib.types.lines;
+            default = null;
+            description = ''
+              Replacement Claude Code system prompt when
+              {option}`programs.claude-code.systemPrompt.source` is `text`.
+            '';
+          };
+
+          omitRules = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = [ ];
+            description = ''
+              Rule names omitted from the generated house system prompt. Only
+              valid when {option}`programs.claude-code.systemPrompt.source` is
+              `house`.
+            '';
+          };
+        };
+      };
+      default = { };
+      description = ''
+        Structured control for the system prompt baked into the Claude Code
+        wrapper.
+      '';
     };
   };
 
   config = {
     assertions = [
       {
-        assertion = !(cfg.useStockSystemPrompt && cfg.systemPrompt != null);
-        message = "programs.claude-code: systemPrompt and useStockSystemPrompt are mutually exclusive.";
+        assertion = (cfg.systemPrompt.source == "text") == (cfg.systemPrompt.text != null);
+        message = "programs.claude-code.systemPrompt: source = \"text\" requires text, and text requires source = \"text\".";
+      }
+      {
+        assertion = cfg.systemPrompt.source == "house" || cfg.systemPrompt.omitRules == [ ];
+        message = "programs.claude-code.systemPrompt.omitRules only applies when source = \"house\".";
       }
     ];
 

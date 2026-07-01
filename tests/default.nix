@@ -194,13 +194,14 @@ let
           };
           programs.claude-code = {
             enable = true;
-            omitRules = [ "reportToPlaybook" ];
+            systemPrompt.omitRules = [ "reportToPlaybook" ];
             personalStartupContext = true;
           };
           programs.codex = {
             enable = true;
             configDir = ".config/codex-test";
             defaults.agents.max_depth = 4;
+            systemPrompt.omitRules = [ "reportToPlaybook" ];
           };
         }
       ];
@@ -3606,6 +3607,13 @@ let
           value = "4";
         } homeAgentConfig.programs.codex.finalPackage.passthru.specValue.soft;
         message = "Codex Home Manager module should pass soft settings through the package wrapper";
+      }
+      {
+        assertion =
+          !lib.strings.hasInfix "Publish durable writeups" (
+            builtins.readFile homeAgentConfig.programs.codex.finalPackage.passthru.modelInstructionsFile
+          );
+        message = "Codex Home Manager module should thread systemPrompt.omitRules into the package wrapper";
       }
     ];
 
