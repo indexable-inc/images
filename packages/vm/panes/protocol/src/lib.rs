@@ -18,8 +18,12 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Bump on any incompatible change; peers refuse mismatched majors.
-pub const VERSION: u16 = 1;
+/// Peers refuse a mismatched major and hang up. Postcard has no
+/// unknown-variant fallback (an unrecognized enum discriminant is a decode
+/// error), so ANY additive message/variant change bumps `VERSION_MINOR` and
+/// must only be emitted once the peer's Hello advertised a minor that has it.
+pub const VERSION_MAJOR: u16 = 1;
+pub const VERSION_MINOR: u16 = 0;
 
 /// Guest vsock port the compositor listens on.
 pub const VSOCK_PORT: u32 = 7100;
@@ -54,7 +58,8 @@ pub struct Tile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ToHost {
     Hello {
-        version: u16,
+        major: u16,
+        minor: u16,
     },
     /// A new xdg_toplevel mapped; the host creates its NSWindow on first
     /// `WindowFrame`, so an empty window never flashes.
@@ -84,6 +89,12 @@ pub enum ToHost {
         /// Buffer size; differs from the last `Configure` only mid-resize.
         width: u32,
         height: u32,
+        /// True when kept host contents are invalid (first frame and every
+        /// buffer resize): pixels outside `tiles` are undefined, host clears.
+        /// False = incremental damage over the retained buffer. Without this
+        /// flag a partial-damage frame after a resize would composite over
+        /// stale wrongly-sized pixels.
+        full: bool,
         tiles: Vec<Tile>,
     },
     /// Toplevel unmapped/destroyed; host closes the NSWindow.
@@ -125,12 +136,17 @@ pub enum AxisSource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ToGuest {
     Hello {
-        version: u16,
+        major: u16,
+        minor: u16,
         /// Host display refresh (mHz), e.g. 120000 for ProMotion; the
         /// compositor advertises it on wl_output.
         refresh_mhz: u32,
         /// NSWindow backingScaleFactor; guest renders at this scale.
         scale: u32,
+        /// Tile encodings the host decodes; the guest must only emit these.
+        /// Extending `Encoding` is gated on this negotiation, not on minor
+        /// bumps alone: one unadvertised discriminant kills a whole frame.
+        encodings: Vec<Encoding>,
     },
     /// Presented `seq` for window `id`; compositor fires frame callbacks.
     Ack {
@@ -194,9 +210,10 @@ pub enum WireError {
     TooLarge(usize),
 }
 
-/// Cap a single message; a full 5K BGRA frame is ~59 MB, anything past this is
-/// a protocol bug, not data.
-pub const MAX_FRAME: usize = 256 * 1024 * 1024;
+/// Cap a single message: a full 5K (5120x2880) BGRA frame is ~59 MB and LZ4
+/// only shrinks it, so 64 MB fits the worst legitimate frame with headroom
+/// while bounding what a hostile length prefix can make `read_msg` allocate.
+pub const MAX_FRAME: usize = 64 * 1024 * 1024;
 
 /// Write one message: `[u32 LE len][postcard bytes]`.
 pub fn write_msg<T: Serialize>(w: &mut impl std::io::Write, msg: &T) -> Result<(), WireError> {
@@ -204,7 +221,7 @@ pub fn write_msg<T: Serialize>(w: &mut impl std::io::Write, msg: &T) -> Result<(
     if bytes.len() > MAX_FRAME {
         return Err(WireError::TooLarge(bytes.len()));
     }
-    w.write_all(&u32::try_from(bytes.len()).expect("< MAX_FRAME").to_le_bytes())?;
+    w.write_all(&u32::try_from(bytes.len()).expect("len checked <= MAX_FRAME < u32::MAX above").to_le_bytes())?;
     w.write_all(&bytes)?;
     Ok(())
 }
@@ -213,7 +230,7 @@ pub fn write_msg<T: Serialize>(w: &mut impl std::io::Write, msg: &T) -> Result<(
 pub fn read_msg<T: for<'de> Deserialize<'de>>(r: &mut impl std::io::Read) -> Result<T, WireError> {
     let mut len = [0u8; 4];
     r.read_exact(&mut len)?;
-    let len = u32::from_le_bytes(len) as usize;
+    let len = usize::try_from(u32::from_le_bytes(len)).expect("u32 fits usize on 32/64-bit targets");
     if len > MAX_FRAME {
         return Err(WireError::TooLarge(len));
     }
@@ -233,6 +250,7 @@ mod tests {
             seq: 42,
             width: 640,
             height: 480,
+            full: true,
             tiles: vec![Tile {
                 rect: Rect { x: 0, y: 0, w: 2, h: 1 },
                 encoding: Encoding::Raw,
@@ -242,9 +260,55 @@ mod tests {
         let mut buf = Vec::new();
         write_msg(&mut buf, &msg).unwrap();
         let back: ToHost = read_msg(&mut buf.as_slice()).unwrap();
-        let ToHost::WindowFrame { id: 7, seq: 42, tiles, .. } = back else {
+        let ToHost::WindowFrame { id: 7, seq: 42, full: true, tiles, .. } = back else {
             panic!("wrong variant");
         };
         assert_eq!(tiles[0].payload.len(), 8);
+    }
+
+    #[test]
+    fn empty_message_roundtrips() {
+        let mut buf = Vec::new();
+        write_msg(&mut buf, &ToHost::Pong { nonce: 0 }).unwrap();
+        let back: ToHost = read_msg(&mut buf.as_slice()).unwrap();
+        assert!(matches!(back, ToHost::Pong { nonce: 0 }));
+    }
+
+    #[test]
+    fn read_rejects_oversized_length_prefix() {
+        // A hostile 4-GB-ish prefix must fail fast as TooLarge, not allocate.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&u32::try_from(MAX_FRAME + 1).expect("fits u32").to_le_bytes());
+        let err = read_msg::<ToHost>(&mut buf.as_slice()).unwrap_err();
+        assert!(matches!(err, WireError::TooLarge(n) if n == MAX_FRAME + 1));
+    }
+
+    #[test]
+    fn read_truncated_stream_is_io_error() {
+        let mut buf = Vec::new();
+        write_msg(&mut buf, &ToHost::Pong { nonce: 1 }).unwrap();
+        buf.truncate(buf.len() - 1);
+        let err = read_msg::<ToHost>(&mut buf.as_slice()).unwrap_err();
+        assert!(matches!(err, WireError::Io(_)));
+    }
+
+    #[test]
+    fn write_rejects_over_cap_payload() {
+        let msg = ToHost::WindowFrame {
+            id: 1,
+            seq: 1,
+            width: 1,
+            height: 1,
+            full: true,
+            tiles: vec![Tile {
+                rect: Rect { x: 0, y: 0, w: 1, h: 1 },
+                encoding: Encoding::Raw,
+                payload: vec![0u8; MAX_FRAME + 1],
+            }],
+        };
+        let mut buf = Vec::new();
+        let err = write_msg(&mut buf, &msg).unwrap_err();
+        assert!(matches!(err, WireError::TooLarge(_)));
+        assert!(buf.is_empty(), "nothing must hit the stream on failure");
     }
 }
