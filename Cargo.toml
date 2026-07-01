@@ -205,7 +205,7 @@ objc2 = "0.6"
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
 objc2-web-kit = "0.3"
-object_store = { version = "0.13", features = ["aws"] }
+object_store = { version = "0.14", features = ["aws"] }
 parking_lot = "0.12"
 parquet = { version = "59", features = ["arrow"] }
 percent-encoding = "2"
@@ -231,7 +231,7 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 rustc-hash = "2.1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
-scip = "0.8"
+scip = "0.9"
 scipql-core = { path = "packages/code/scipql/core" }
 search-core = { path = "packages/search/search-core" }
 source-meta = { path = "packages/search/source/meta" }
