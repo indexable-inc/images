@@ -13,6 +13,7 @@ launcher.
 | `base/` | `pi-base` | base UX pack: live tok/s, git status widget, `/diff`, `/lg`. No agent behavior change. |
 | `prosecutor/` | `pi-prosecutor` | executor under a skeptical, context-isolated supervisor with earned-trust check-ins. |
 | `beam/` | `pi-beam` | executor that turns a hard decision into a bounded [beam search](beam.md) over isolated worktree branches. |
+| `fusion/` | `pi-fusion` | Fable primary agent delegating bounded work to a `gpt-5.5` low sidekick. |
 
 This is ONE component directory; each member package is documented here, with the
 beam-search executor on its own page ([beam.md](beam.md)).
@@ -45,18 +46,20 @@ template `wrapper.sh.in` resolves the model alias to `PI_PROVIDER`/`PI_MODEL`/
 
 One canonical table (`shared/models.nix`): `claude` = anthropic
 `claude-opus-4-8` (no thinking level; 4.8 is adaptive-only), `codex` = openai
-`gpt-5.5` at `thinking = medium`. Aliases map straight to `pi --provider --model
-[--thinking]`. API keys are NOT stored here: each harness receives them from the
-caller's environment (`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`) and Pi reads the
-named var itself. The harness owns model selection only, not secret lookup. The
-engine keeps its own copy (`engine/models.nix`) rendered into C until the two
-converge.
+`gpt-5.5` at `thinking = medium`, `fable` = anthropic `fable-5`, and
+`codex-low` = openai `gpt-5.5` at `thinking = low`. Aliases map straight to
+`pi --provider --model [--thinking]`. API keys are NOT stored here: each harness
+receives them from the caller's environment (`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`)
+and Pi reads the named var itself. The harness owns model selection only, not
+secret lookup. The engine keeps its own copy (`engine/models.nix`) rendered into
+C until the two converge.
 
 Select a model per run with `PI_HARNESS_MODEL`:
 
 ```
 nix run .#pi-prosecutor -- "your task"               # claude (opus-4-8)
 PI_HARNESS_MODEL=codex nix run .#pi-beam -- "..."    # gpt-5.5 medium
+nix run .#pi-fusion -- "your task"                   # fable primary + gpt-5.5 low sidekick
 ```
 
 ## engine (`pi-harness`)
@@ -145,6 +148,13 @@ the first user message). Built via `mk-pi-harness.nix` with `lockdown = false`
 ## beam (`pi-beam`)
 
 The bounded beam-search executor: see [beam.md](beam.md).
+
+## fusion (`pi-fusion`)
+
+Fusion-style primary/sidekick harness (`fusion/README.md`). The primary defaults
+to `fable` and gets a `delegate` tool for bounded sidekick work. The sidekick
+defaults to OpenAI `gpt-5.5` with `thinking=low`, runs headless in an isolated
+worktree, and returns a summary plus patch for the primary to review/apply.
 
 ## Building
 

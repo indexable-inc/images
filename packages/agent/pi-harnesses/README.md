@@ -17,6 +17,7 @@ pi-harnesses/
   base/                   # id: pi-base       - base UX pack: live tok/s, git widget, /diff, /lg
   prosecutor/             # id: pi-prosecutor - executor under a skeptical, earned-trust supervisor
   beam/                   # id: pi-beam       - executor with beam search over isolated worktree branches
+  fusion/                 # id: pi-fusion     - primary agent delegating to a gpt-5.5-low sidekick
 ```
 
 `engine/` is the original `packages/pi-harness` (ENG-2261/2262), moved here
@@ -45,6 +46,7 @@ work and the child agents must probe real state.
 ```
 nix run .#pi-prosecutor -- "your task"          # opus-4-8 executor + prosecutor (same model)
 nix run .#pi-beam       -- "your task"
+nix run .#pi-fusion     -- "your task"          # fable-5 primary + gpt-5.5-low sidekick
 PI_HARNESS_MODEL=codex nix run .#pi-prosecutor -- "..."   # gpt-5.5 medium
 ```
 
