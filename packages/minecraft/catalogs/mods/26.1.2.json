@@ -20,16 +20,16 @@
     "url": "https://cdn.modrinth.com/data/uCdwusMi/versions/SLJu35DT/DistantHorizons-3.1.2-b-26.1.2-fabric-neoforge.jar"
   },
   "fabric-api": {
-    "hash": "sha512-TjHaPHlnFNJcoHnlJ3mAxUObsJ3K0z0SJMzN/sYAC3drpdFjI6nDEmgudzvd7a51qml6fA9K0rd7WxG6Z5tICg==",
-    "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/WC1KT7Yg/fabric-api-0.153.0%2B26.1.2.jar"
+    "hash": "sha512-D1iFyoBxbe5Ufo6OxsLtoTe1WR1A2PtCTZ0dmaPlx6bYYe8RWQkD+foYg4gG3oh25RKFxdgwz6UPUYwCFxOeeA==",
+    "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/1F9Sl2ke/fabric-api-0.154.0%2B26.1.2.jar"
   },
   "ferrite-core": {
     "hash": "sha512-2B+pfhF4TBnUL4nC9DODHQB2A91xk87kX6F35KapxSs4SxmFhuBKD39jzZlv7XEzIleL3pqNtX4RiIVK5cvlhA==",
     "url": "https://cdn.modrinth.com/data/uXXizFIs/versions/d5ddUdiB/ferritecore-9.0.0-fabric.jar"
   },
   "grimac": {
-    "hash": "sha512-yn2U5/r6vJ3zVNCe0mIDvNjnuf+fnS2lgZGSGSoRyHgBxcpM3rDlofpYhfW/xFXhpsAuRlP1fq/cXGlxDVURkQ==",
-    "url": "https://cdn.modrinth.com/data/LJNGWSvH/versions/VDYKAEly/grimac-fabric-2.3.74-e454008.jar"
+    "hash": "sha512-7oJXcP5gF72aXudpPYcnx9YVPHMwDnRqd10O2D8Pkj764gqePNqUugifd/EOcJajaIIQgypX9OGHEN4a3HqGjg==",
+    "url": "https://cdn.modrinth.com/data/LJNGWSvH/versions/HRAEJbWc/grimac-fabric-2.3.74-882015a.jar"
   },
   "krypton": {
     "hash": "sha512-FCMyECg6dvPPQ1o7jdvL1lqFjSsaELiP9kPAoBSG39K/GEO9NFbNT7hsuzsG8t6gxOZjsZdqSOlt4W07WnB+yQ==",

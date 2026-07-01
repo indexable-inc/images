@@ -18,7 +18,7 @@
           "url": "https://ko-fi.com/sekwah"
         }
       ],
-      "downloads": 98881,
+      "downloads": 98938,
       "followers": 189,
       "gallery": [
         {
@@ -253,7 +253,7 @@
           "url": "https://paypal.me/ajgeiss0702"
         }
       ],
-      "downloads": 100162,
+      "downloads": 100309,
       "followers": 194,
       "gallery": [
         {
@@ -378,7 +378,7 @@
               "project_id": "lKEzGugV"
             }
           ],
-          "downloads": 11279,
+          "downloads": 11453,
           "file": {
             "filename": "ajLeaderboards-2.11.0.jar",
             "hashes": {
@@ -485,7 +485,7 @@
       "date_created": "2024-10-06T07:52:53.443841Z",
       "date_modified": "2026-04-19T09:46:51.200387Z",
       "description": "Almanac is a library used by my mods with mostly loader independent shared code between multiple mods to avoid duplication of code.",
-      "downloads": 15622232,
+      "downloads": 15646164,
       "followers": 417,
       "game_versions": [
         "1.20.1",
@@ -593,7 +593,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 292881,
+          "downloads": 294212,
           "file": {
             "filename": "Almanac-1.21.11-x-fabric-1.6.2.jar",
             "hashes": {
@@ -624,7 +624,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 101708,
+          "downloads": 102509,
           "file": {
             "filename": "almanac-1.26.x-fabric-1.6.2.1.jar",
             "hashes": {
@@ -689,8 +689,8 @@
           "url": "https://github.com/sponsors/squeek502"
         }
       ],
-      "downloads": 72663537,
-      "followers": 16401,
+      "downloads": 72741998,
+      "followers": 16414,
       "game_versions": [
         "1.10.2",
         "1.11.2",
@@ -759,7 +759,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 3903782,
+          "downloads": 3914927,
           "file": {
             "filename": "appleskin-fabric-mc1.21.11-3.0.8.jar",
             "hashes": {
@@ -799,18 +799,18 @@
       "description": "An intermediary api aimed to ease developing multiplatform mods.",
       "donation_urls": [
         {
-          "id": "github",
-          "platform": "Github",
-          "url": "https://github.com/sponsors/MaxNeedsSnacks"
-        },
-        {
           "id": "patreon",
           "platform": "Patreon",
           "url": "https://patreon.com/shedaniel"
+        },
+        {
+          "id": "github",
+          "platform": "Github",
+          "url": "https://github.com/sponsors/MaxNeedsSnacks"
         }
       ],
-      "downloads": 82635826,
-      "followers": 7429,
+      "downloads": 82708069,
+      "followers": 7432,
       "game_versions": [
         "1.16.5",
         "1.17.1",
@@ -900,7 +900,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 4238225,
+          "downloads": 4246182,
           "file": {
             "filename": "architectury-19.0.1-fabric.jar",
             "hashes": {
@@ -940,8 +940,8 @@
       "date_modified": "2026-04-26T13:21:02.224772Z",
       "description": "Adds various treasure items that can be found through exploration",
       "discord_url": "https://discord.gg/87pXJadaRr",
-      "downloads": 11012759,
-      "followers": 1909,
+      "downloads": 11022913,
+      "followers": 1910,
       "gallery": [
         {
           "created": "2022-06-14T16:56:46.582836Z",
@@ -1340,7 +1340,7 @@
               "project_id": "XaT8sLP6"
             }
           ],
-          "downloads": 24650,
+          "downloads": 24815,
           "file": {
             "filename": "artifacts-fabric-14.0.3.jar",
             "hashes": {
@@ -1379,8 +1379,8 @@
       "date_created": "2023-06-07T06:12:44.154539Z",
       "date_modified": "2026-06-18T01:56:23.632447Z",
       "description": "Removes arbitrary limits on Minecraft's attribute system. Fixes MANY mods!",
-      "downloads": 18677183,
-      "followers": 772,
+      "downloads": 18692209,
+      "followers": 773,
       "game_versions": [
         "1.12.2",
         "1.13.2",
@@ -1453,7 +1453,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 53653,
+          "downloads": 53819,
           "file": {
             "filename": "attributefix-fabric-1.21.11-21.11.1.jar",
             "hashes": {
@@ -1509,7 +1509,7 @@
           "url": "https://github.com/sponsors/Archy-X"
         }
       ],
-      "downloads": 184568,
+      "downloads": 184724,
       "followers": 368,
       "game_versions": [
         "1.14.4",
@@ -1574,7 +1574,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-04-06T21:15:12.492402Z",
-          "downloads": 22971,
+          "downloads": 23283,
           "file": {
             "filename": "AuraSkills-2.3.12.jar",
             "hashes": {
@@ -1643,7 +1643,7 @@
       "date_created": "2023-12-22T13:36:04.796703Z",
       "date_modified": "2024-08-22T10:51:21.965135Z",
       "description": "A reliable, stable fork of AuthMe with various bug fixes, new exciting features and Folia support",
-      "downloads": 227337,
+      "downloads": 227597,
       "followers": 158,
       "gallery": [
         {
@@ -1749,7 +1749,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2024-08-22T10:51:21.965135Z",
-          "downloads": 209362,
+          "downloads": 209534,
           "file": {
             "filename": "AuthMe-5.7.0-FORK-Universal.jar",
             "hashes": {
@@ -1880,7 +1880,7 @@
           "url": "https://paypal.me/Maoyue914"
         }
       ],
-      "downloads": 96353,
+      "downloads": 96429,
       "followers": 132,
       "game_versions": [
         "1.17",
@@ -2017,7 +2017,7 @@
       "date_modified": "2026-06-20T09:40:53.033348Z",
       "description": "A lightweight grave (death chest) plugin focused on performance & compatibility.",
       "discord_url": "https://dc.artillex-studios.com/",
-      "downloads": 162594,
+      "downloads": 162771,
       "followers": 327,
       "gallery": [
         {
@@ -2081,7 +2081,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-06-20T09:40:53.033348Z",
-          "downloads": 3993,
+          "downloads": 4363,
           "file": {
             "filename": "AxGraves-1.29.0.jar",
             "hashes": {
@@ -2158,8 +2158,8 @@
           "url": "https://www.patreon.com/moulberry"
         }
       ],
-      "downloads": 9765460,
-      "followers": 5124,
+      "downloads": 9783098,
+      "followers": 5127,
       "gallery": [
         {
           "created": "2023-09-08T13:48:44.312396Z",
@@ -2241,7 +2241,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 194511,
+          "downloads": 195639,
           "file": {
             "filename": "Axiom-5.4.2-for-MC1.21.11.jar",
             "hashes": {
@@ -2284,17 +2284,17 @@
       "discord_url": "https://discord.gg/AxiomTool",
       "donation_urls": [
         {
-          "id": "patreon",
-          "platform": "Patreon",
-          "url": "https://www.patreon.com/moulberry"
-        },
-        {
           "id": "paypal",
           "platform": "Paypal",
           "url": "https://www.paypal.com/paypalme/moulberry"
+        },
+        {
+          "id": "patreon",
+          "platform": "Patreon",
+          "url": "https://www.patreon.com/moulberry"
         }
       ],
-      "downloads": 204709,
+      "downloads": 204894,
       "followers": 287,
       "gallery": [
         {
@@ -2346,7 +2346,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-04-10T05:24:37.359577Z",
-          "downloads": 18248,
+          "downloads": 18535,
           "file": {
             "filename": "AxiomPaperPlugin-5.0.4-for-MC1.21.11.jar",
             "hashes": {
@@ -2397,8 +2397,8 @@
           "url": "https://github.com/BlayTheNinth"
         }
       ],
-      "downloads": 48348780,
-      "followers": 2963,
+      "downloads": 48402412,
+      "followers": 2969,
       "game_versions": [
         "1.18",
         "1.18.1",
@@ -2454,7 +2454,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 69807,
+          "downloads": 71297,
           "file": {
             "filename": "balm-fabric-1.21.11-21.11.9.1.jar",
             "hashes": {
@@ -2502,7 +2502,7 @@
           "url": "https://github.com/sponsors/PrimordialMoros"
         }
       ],
-      "downloads": 122465,
+      "downloads": 122538,
       "followers": 394,
       "gallery": [
         {
@@ -2650,10 +2650,6 @@
           "dependencies": [
             {
               "dependency_type": "optional",
-              "project_id": "Vs77PB2W"
-            },
-            {
-              "dependency_type": "optional",
               "project_id": "Vebnzrzj"
             },
             {
@@ -2662,18 +2658,22 @@
             },
             {
               "dependency_type": "optional",
-              "project_id": "O4o4mKaq"
-            },
-            {
-              "dependency_type": "optional",
               "project_id": "YqbUofZE"
             },
             {
               "dependency_type": "optional",
               "project_id": "HQyibRsN"
+            },
+            {
+              "dependency_type": "optional",
+              "project_id": "O4o4mKaq"
+            },
+            {
+              "dependency_type": "optional",
+              "project_id": "Vs77PB2W"
             }
           ],
-          "downloads": 6226,
+          "downloads": 6235,
           "file": {
             "filename": "bending-paper-3.15.0.jar",
             "hashes": {
@@ -2718,8 +2718,8 @@
       "date_modified": "2026-03-07T00:46:29.830828Z",
       "description": "\u2694\ufe0f Easy, spectacular and fun melee combat system from Minecraft Dungeons.",
       "discord_url": "https://discord.gg/KN9b3pjFTM",
-      "downloads": 14301696,
-      "followers": 4357,
+      "downloads": 14310682,
+      "followers": 4359,
       "gallery": [
         {
           "created": "2022-07-04T19:06:54.784203Z",
@@ -2803,7 +2803,7 @@
               "project_id": "9s6osm5g"
             }
           ],
-          "downloads": 157413,
+          "downloads": 158031,
           "file": {
             "filename": "bettercombat-fabric-3.0.1+1.21.11.jar",
             "hashes": {
@@ -2849,8 +2849,8 @@
           "url": "https://thecsdev.com/fwd/support-me/"
         }
       ],
-      "downloads": 16354583,
-      "followers": 3732,
+      "downloads": 16367892,
+      "followers": 3733,
       "gallery": [
         {
           "created": "2026-02-08T12:14:41.674911Z",
@@ -3016,7 +3016,7 @@
               "project_id": "Eldc1g37"
             }
           ],
-          "downloads": 240100,
+          "downloads": 241120,
           "file": {
             "filename": "betterstats-5.1.0+fabric-1.21.11.jar",
             "hashes": {
@@ -3065,8 +3065,8 @@
           "url": "https://ko-fi.com/forstride"
         }
       ],
-      "downloads": 27030257,
-      "followers": 4653,
+      "downloads": 27085352,
+      "followers": 4656,
       "gallery": [
         {
           "created": "2024-02-16T05:00:18.848684Z",
@@ -3332,14 +3332,14 @@
             },
             {
               "dependency_type": "required",
-              "project_id": "s3dmwKy5"
+              "project_id": "kkmrDlKT"
             },
             {
               "dependency_type": "required",
-              "project_id": "kkmrDlKT"
+              "project_id": "s3dmwKy5"
             }
           ],
-          "downloads": 55675,
+          "downloads": 55757,
           "file": {
             "filename": "BiomesOPlenty-fabric-1.21.11-21.11.0.31.jar",
             "hashes": {
@@ -3384,18 +3384,18 @@
       "discord_url": "https://discord.gg/zmkyJa3",
       "donation_urls": [
         {
-          "id": "ko-fi",
-          "platform": "Ko-fi",
-          "url": "https://ko-fi.com/bluecolored"
-        },
-        {
           "id": "patreon",
           "platform": "Patreon",
           "url": "https://www.patreon.com/bluecolored"
+        },
+        {
+          "id": "ko-fi",
+          "platform": "Ko-fi",
+          "url": "https://ko-fi.com/bluecolored"
         }
       ],
-      "downloads": 394420,
-      "followers": 1383,
+      "downloads": 394869,
+      "followers": 1384,
       "gallery": [
         {
           "created": "2023-02-07T10:59:42.915364Z",
@@ -3497,7 +3497,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-02-13T13:59:43.420539Z",
-          "downloads": 19429,
+          "downloads": 19544,
           "file": {
             "filename": "bluemap-5.16-paper.jar",
             "hashes": {
@@ -3535,7 +3535,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 2365,
+          "downloads": 2423,
           "file": {
             "filename": "bluemap-5.22-fabric.jar",
             "hashes": {
@@ -3580,7 +3580,7 @@
       "date_modified": "2026-06-01T16:07:35.359914Z",
       "description": "Build your dream world in seconds with 10,000+ instant structures",
       "discord_url": "https://discord.gg/jf7TUVybrm",
-      "downloads": 243877,
+      "downloads": 244148,
       "followers": 393,
       "gallery": [
         {
@@ -3764,8 +3764,8 @@
       "date_modified": "2026-06-30T17:54:28.382932Z",
       "description": "A Fabric mod designed to improve the chunk performance of Minecraft.",
       "discord_url": "https://discord.relativitymc.org/",
-      "downloads": 28949886,
-      "followers": 7273,
+      "downloads": 28988980,
+      "followers": 7276,
       "gallery": [
         {
           "created": "2025-12-07T15:48:46.290558Z",
@@ -4060,7 +4060,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2025-12-31T12:42:28.221773Z",
-          "downloads": 1019678,
+          "downloads": 1022067,
           "file": {
             "filename": "c2me-fabric-mc1.21.11-0.3.6.0.0.jar",
             "hashes": {
@@ -4084,7 +4084,7 @@
         },
         "26.1.2+fabric": {
           "date_published": "2026-06-24T16:26:48.409829Z",
-          "downloads": 30880,
+          "downloads": 32569,
           "file": {
             "filename": "c2me-fabric-mc26.1.2-0.4.0-alpha.0.28.jar",
             "hashes": {
@@ -4158,7 +4158,7 @@
           "url": "https://github.com/sponsors/js802025"
         }
       ],
-      "downloads": 2674734,
+      "downloads": 2677694,
       "followers": 729,
       "gallery": [
         {
@@ -4299,7 +4299,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-03-10T17:44:55.264755Z",
-          "downloads": 6584,
+          "downloads": 6603,
           "file": {
             "filename": "calcmod-1.5.0+paper.1.21.10.jar",
             "hashes": {
@@ -4347,7 +4347,7 @@
           "url": "https://ko-fi.com/upcraftlp"
         }
       ],
-      "downloads": 13186521,
+      "downloads": 13195835,
       "followers": 1181,
       "game_versions": [
         "1.18",
@@ -4422,7 +4422,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2026-03-11T23:47:35.539319Z",
-          "downloads": 134924,
+          "downloads": 135225,
           "file": {
             "filename": "cardinal-components-api-7.3.1.jar",
             "hashes": {
@@ -4479,8 +4479,8 @@
           "url": "https://ko-fi.com/tschipp"
         }
       ],
-      "downloads": 21022601,
-      "followers": 4502,
+      "downloads": 21043968,
+      "followers": 4504,
       "gallery": [
         {
           "created": "2022-12-05T22:06:14.867832Z",
@@ -4546,7 +4546,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2025-12-27T22:34:51.235154Z",
-          "downloads": 487634,
+          "downloads": 488642,
           "file": {
             "filename": "carryon-fabric-1.21.11-2.9.0.jar",
             "hashes": {
@@ -4599,7 +4599,7 @@
           "url": "https://www.paypal.com/paypalme/pop4959"
         }
       ],
-      "downloads": 14215042,
+      "downloads": 14232097,
       "followers": 5816,
       "game_versions": [
         "1.13.2",
@@ -4680,7 +4680,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 1163073,
+          "downloads": 1165239,
           "file": {
             "filename": "Chunky-Fabric-1.4.55.jar",
             "hashes": {
@@ -4704,7 +4704,7 @@
         },
         "1.21.11+paper": {
           "date_published": "2025-06-21T08:01:39.060370Z",
-          "downloads": 398877,
+          "downloads": 399899,
           "file": {
             "filename": "Chunky-Bukkit-1.4.40.jar",
             "hashes": {
@@ -4753,7 +4753,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 269353,
+          "downloads": 272084,
           "file": {
             "filename": "Chunky-Fabric-1.5.3.jar",
             "hashes": {
@@ -4801,7 +4801,7 @@
       "date_modified": "2024-12-08T18:30:12.332165Z",
       "description": "An add-on for Chunky which lets you create and manage world borders",
       "discord_url": "https://discord.gg/ZwVJukcNQG",
-      "downloads": 321338,
+      "downloads": 321522,
       "followers": 494,
       "gallery": [
         {
@@ -4902,7 +4902,7 @@
               "project_id": "fALzjamp"
             }
           ],
-          "downloads": 40759,
+          "downloads": 40887,
           "file": {
             "filename": "ChunkyBorder-Bukkit-1.2.23.jar",
             "hashes": {
@@ -4965,7 +4965,7 @@
           "url": "https://ko-fi.com/enjarai"
         }
       ],
-      "downloads": 13289707,
+      "downloads": 13300722,
       "followers": 1198,
       "game_versions": [
         "1.16",
@@ -5030,7 +5030,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 1818064,
+          "downloads": 1820181,
           "file": {
             "filename": "cicada-lib-0.14.3+1.21.9-1.21.10.jar",
             "hashes": {
@@ -5077,7 +5077,7 @@
       "date_modified": "2026-06-29T13:09:07.274252Z",
       "description": "\ud83c\udf86Trusted on 2500+ Servers\ud83c\udf86\u2b50Controlls Mob Spawning \u2b50Limits Armor Stand\u2b50Item Frames\u2b50Laggy Chunkfinder and Unloader\u2b50And many more features\u2b50Check it out Yourself\u2b501.18-26.1.2\u2b50Bukkit/Spigot/Paper/PurPur\u2b50",
       "discord_url": "https://discord.com/invite/zkduHszK2e",
-      "downloads": 132647,
+      "downloads": 132921,
       "followers": 73,
       "gallery": [
         {
@@ -5162,7 +5162,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-06-29T13:09:07.274252Z",
-          "downloads": 615,
+          "downloads": 1205,
           "file": {
             "filename": "ClearLag 1.11.1 VER 1.18-26.2.jar",
             "hashes": {
@@ -5239,7 +5239,7 @@
       "date_modified": "2026-06-21T13:53:07.714012Z",
       "description": "Click to pick up any mob into your inventory and carry\nthem around!",
       "discord_url": "https://discord.gg/zUetzp3Gzk",
-      "downloads": 163400,
+      "downloads": 163788,
       "followers": 248,
       "gallery": [
         {
@@ -5317,7 +5317,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-03-26T18:54:56.423368Z",
-          "downloads": 16878,
+          "downloads": 17094,
           "file": {
             "filename": "ClickMobs-paper-1.3.1.jar",
             "hashes": {
@@ -5382,8 +5382,8 @@
       "date_modified": "2026-06-25T10:52:41.646703Z",
       "description": "Click to pick up villagers, reset their trades, change their biomes, claim them and much more!",
       "discord_url": "https://discord.gg/zUetzp3Gzk",
-      "downloads": 428877,
-      "followers": 500,
+      "downloads": 429723,
+      "followers": 501,
       "gallery": [
         {
           "created": "2025-03-11T21:31:06.283972Z",
@@ -5475,7 +5475,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-06-12T21:08:29.239298Z",
-          "downloads": 14345,
+          "downloads": 15172,
           "file": {
             "filename": "ClickVillagers-paper-1.6.3.jar",
             "hashes": {
@@ -5538,8 +5538,8 @@
           "url": "https://www.patreon.com/shedaniel"
         }
       ],
-      "downloads": 134686668,
-      "followers": 15715,
+      "downloads": 134847111,
+      "followers": 15726,
       "gallery": [
         {
           "created": "2022-04-21T10:31:01.159433Z",
@@ -5626,7 +5626,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2025-12-21T13:12:08.556619Z",
-          "downloads": 11207125,
+          "downloads": 11230029,
           "file": {
             "filename": "cloth-config-21.11.153-fabric.jar",
             "hashes": {
@@ -5673,8 +5673,8 @@
           "url": "https://www.patreon.com/jaredlll08"
         }
       ],
-      "downloads": 30548158,
-      "followers": 5141,
+      "downloads": 30586284,
+      "followers": 5144,
       "game_versions": [
         "1.10.2",
         "1.11.2",
@@ -5750,7 +5750,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 1406294,
+          "downloads": 1409689,
           "file": {
             "filename": "Clumps-fabric-1.21.11-29.0.0.1.jar",
             "hashes": {
@@ -5780,7 +5780,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 424011,
+          "downloads": 425768,
           "file": {
             "filename": "Clumps-fabric-26.1.2-26.1.2.1.jar",
             "hashes": {
@@ -5825,8 +5825,8 @@
           "url": "https://patreon.com/serilum"
         }
       ],
-      "downloads": 54059635,
-      "followers": 4974,
+      "downloads": 54114623,
+      "followers": 4980,
       "game_versions": [
         "1.16.5",
         "1.18.2",
@@ -5876,7 +5876,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2026-06-25T11:38:26.437875Z",
-          "downloads": 66057,
+          "downloads": 69380,
           "file": {
             "filename": "collective-1.21.11-8.32.jar",
             "hashes": {
@@ -5926,8 +5926,8 @@
           "url": "https://ko-fi.com/theillusivec4"
         }
       ],
-      "downloads": 18408074,
-      "followers": 2396,
+      "downloads": 18426664,
+      "followers": 2397,
       "gallery": [
         {
           "created": "2023-02-03T00:37:50.653024Z",
@@ -6021,7 +6021,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 79180,
+          "downloads": 79465,
           "file": {
             "filename": "comforts-fabric-14.0.2+1.21.11.jar",
             "hashes": {
@@ -6068,8 +6068,8 @@
           "url": "https://patreon.com/isxander"
         }
       ],
-      "downloads": 18155866,
-      "followers": 1764,
+      "downloads": 18182416,
+      "followers": 1766,
       "gallery": [
         {
           "created": "2025-08-16T16:32:07.751983Z",
@@ -6256,7 +6256,7 @@
               "project_id": "mOgUt4GM"
             }
           ],
-          "downloads": 241510,
+          "downloads": 244828,
           "file": {
             "filename": "controlify-3.0.0+lts+1.21.11-fabric.jar",
             "hashes": {
@@ -6309,7 +6309,7 @@
           "url": "https://www.patreon.com/coreprotect"
         }
       ],
-      "downloads": 414657,
+      "downloads": 415062,
       "followers": 1069,
       "gallery": [
         {
@@ -6461,7 +6461,7 @@
       "date_created": "2022-10-24T01:31:20.164328Z",
       "date_modified": "2026-03-17T21:19:34.921195Z",
       "description": "A library mod containing code used across Corgi Taco's mods.",
-      "downloads": 12617224,
+      "downloads": 12627869,
       "followers": 284,
       "game_versions": [
         "1.19.2",
@@ -6498,7 +6498,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 99308,
+          "downloads": 99500,
           "file": {
             "filename": "Corgilib-Fabric-1.21.11-9.0.0.0.jar",
             "hashes": {
@@ -6551,7 +6551,7 @@
           "url": "https://ko-fi.com/ryderbelserion"
         }
       ],
-      "downloads": 121190,
+      "downloads": 121284,
       "followers": 106,
       "game_versions": [
         "1.8.8",
@@ -6596,7 +6596,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2025-01-07T17:15:29.427809Z",
-          "downloads": 54128,
+          "downloads": 54293,
           "file": {
             "filename": "CrazyAuctions-1.7.0.jar",
             "hashes": {
@@ -6661,7 +6661,7 @@
           "url": "https://ko-fi.com/ryderbelserion"
         }
       ],
-      "downloads": 290282,
+      "downloads": 290436,
       "followers": 253,
       "gallery": [
         {
@@ -6766,7 +6766,7 @@
           "dependencies": [
             {
               "dependency_type": "optional",
-              "project_id": "w02MKsTg"
+              "project_id": "lKEzGugV"
             },
             {
               "dependency_type": "optional",
@@ -6774,10 +6774,10 @@
             },
             {
               "dependency_type": "optional",
-              "project_id": "lKEzGugV"
+              "project_id": "w02MKsTg"
             }
           ],
-          "downloads": 23809,
+          "downloads": 23937,
           "file": {
             "filename": "CrazyCrates-5.0.0.jar",
             "hashes": {
@@ -6833,7 +6833,7 @@
           "url": "https://ko-fi.com/ryderbelserion"
         }
       ],
-      "downloads": 183590,
+      "downloads": 183704,
       "followers": 259,
       "gallery": [
         {
@@ -6912,7 +6912,7 @@
               "project_id": "DKY9btbd"
             }
           ],
-          "downloads": 11280,
+          "downloads": 11354,
           "file": {
             "filename": "CrazyEnchantments-2.7.2.jar",
             "hashes": {
@@ -6961,8 +6961,8 @@
           "url": "https://www.patreon.com/creativemd"
         }
       ],
-      "downloads": 41388945,
-      "followers": 3418,
+      "downloads": 41437880,
+      "followers": 3419,
       "game_versions": [
         "1.12.2",
         "1.16.5",
@@ -7016,7 +7016,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 1054048,
+          "downloads": 1057796,
           "file": {
             "filename": "CreativeCore_FABRIC_v2.14.11_mc1.21.11.jar",
             "hashes": {
@@ -7058,8 +7058,8 @@
       "date_created": "2023-05-01T17:37:55.454619Z",
       "date_modified": "2026-06-24T06:14:13.387102Z",
       "description": "A Library mod for easy structure config and runtime datapacks.",
-      "downloads": 14750159,
-      "followers": 1082,
+      "downloads": 14763874,
+      "followers": 1083,
       "gallery": [
         {
           "created": "2023-05-01T18:29:24.396580Z",
@@ -7137,7 +7137,7 @@
               "project_id": "9s6osm5g"
             }
           ],
-          "downloads": 18615,
+          "downloads": 19003,
           "file": {
             "filename": "cristellib-fabric-1.21.11-3.1.7.jar",
             "hashes": {
@@ -7185,18 +7185,18 @@
           "url": "https://github.com/sponsors/tom5454"
         },
         {
-          "id": "ko-fi",
-          "platform": "Ko-fi",
-          "url": "https://ko-fi.com/tom5454"
-        },
-        {
           "id": "patreon",
           "platform": "Patreon",
           "url": "https://www.patreon.com/tom5454"
+        },
+        {
+          "id": "ko-fi",
+          "platform": "Ko-fi",
+          "url": "https://ko-fi.com/tom5454"
         }
       ],
-      "downloads": 2512111,
-      "followers": 1592,
+      "downloads": 2513988,
+      "followers": 1593,
       "game_versions": [
         "b1.7.3",
         "1.2.5",
@@ -7332,7 +7332,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-05-22T16:43:33.453494Z",
-          "downloads": 5715,
+          "downloads": 5820,
           "file": {
             "filename": "CustomPlayerModels-Paper-0.6.26a.jar",
             "hashes": {
@@ -7396,8 +7396,8 @@
           "url": "https://patreon.com/isxander"
         }
       ],
-      "downloads": 28880468,
-      "followers": 3369,
+      "downloads": 28913774,
+      "followers": 3371,
       "game_versions": [
         "1.18.2",
         "1.19",
@@ -7457,7 +7457,7 @@
               "project_id": "mOgUt4GM"
             }
           ],
-          "downloads": 760291,
+          "downloads": 764042,
           "file": {
             "filename": "debugify-1.21.11+1.1.jar",
             "hashes": {
@@ -7504,7 +7504,7 @@
           "url": "https://ko-fi.com/d0by1"
         }
       ],
-      "downloads": 195276,
+      "downloads": 195742,
       "followers": 228,
       "gallery": [
         {
@@ -7643,7 +7643,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-06-28T07:10:03.530965Z",
-          "downloads": 1830,
+          "downloads": 2719,
           "file": {
             "filename": "DecentHolograms-2.10.1.jar",
             "hashes": {
@@ -7764,7 +7764,7 @@
           "url": "https://ko-fi.com/itzsave"
         }
       ],
-      "downloads": 103314,
+      "downloads": 103455,
       "followers": 48,
       "game_versions": [
         "1.2.1",
@@ -7818,7 +7818,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-06-04T02:55:08.936584Z",
-          "downloads": 5387,
+          "downloads": 5596,
           "file": {
             "filename": "DeluxeHub-3.8.0.jar",
             "hashes": {
@@ -7894,7 +7894,7 @@
           "url": "https://scarsz.me/donate"
         }
       ],
-      "downloads": 455922,
+      "downloads": 456216,
       "followers": 825,
       "game_versions": [
         "1.7.10",
@@ -7993,7 +7993,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-04-24T12:01:20.640408Z",
-          "downloads": 42233,
+          "downloads": 42899,
           "file": {
             "filename": "DiscordSRV-Build-1.30.5.jar",
             "hashes": {
@@ -8119,8 +8119,8 @@
           "url": "https://ko-fi.com/distanthorizons"
         }
       ],
-      "downloads": 28067869,
-      "followers": 13394,
+      "downloads": 28103404,
+      "followers": 13400,
       "gallery": [
         {
           "created": "2022-06-07T02:51:26.416185Z",
@@ -8304,7 +8304,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2026-06-20T15:41:15.738354Z",
-          "downloads": 103623,
+          "downloads": 107058,
           "file": {
             "filename": "DistantHorizons-3.1.2-b-1.21.11-fabric-neoforge.jar",
             "hashes": {
@@ -8329,7 +8329,7 @@
         },
         "26.1.2+fabric": {
           "date_published": "2026-06-20T15:41:23.331530Z",
-          "downloads": 65788,
+          "downloads": 67751,
           "file": {
             "filename": "DistantHorizons-3.1.2-b-26.1.2-fabric-neoforge.jar",
             "hashes": {
@@ -8377,7 +8377,7 @@
       "date_modified": "2026-06-16T22:20:07.367402Z",
       "description": "Drop a player's head when they die",
       "discord_url": "https://discord.gg/FVq3j5heAc",
-      "downloads": 113956,
+      "downloads": 114093,
       "followers": 211,
       "gallery": [
         {
@@ -8470,7 +8470,7 @@
               "project_id": "o2nO79dr"
             }
           ],
-          "downloads": 50682,
+          "downloads": 50839,
           "file": {
             "filename": "Drop Head 2.0.0 (1.14-1.21.1).jar",
             "hashes": {
@@ -8556,18 +8556,18 @@
       "discord_url": "https://discord.gg/VuyEUz6Ews",
       "donation_urls": [
         {
-          "id": "ko-fi",
-          "platform": "Ko-fi",
-          "url": "https://ko-fi.com/skyevg"
-        },
-        {
           "id": "patreon",
           "platform": "Patreon",
           "url": "https://patreon.com/skyevg"
+        },
+        {
+          "id": "ko-fi",
+          "platform": "Ko-fi",
+          "url": "https://ko-fi.com/skyevg"
         }
       ],
-      "downloads": 18507467,
-      "followers": 3657,
+      "downloads": 18532667,
+      "followers": 3658,
       "game_versions": [
         "1.17",
         "1.17.1",
@@ -8633,7 +8633,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 54603,
+          "downloads": 56358,
           "file": {
             "filename": "e4mc-fabric-6.2.0.jar",
             "hashes": {
@@ -8700,8 +8700,8 @@
       "date_modified": "2026-06-18T12:05:28.423604Z",
       "description": "Overhauled anvils with stored items, fairer costs, and no more frustrating repair penalties.",
       "discord_url": "https://lunapixel.studio/discord",
-      "downloads": 13543843,
-      "followers": 2430,
+      "downloads": 13556368,
+      "followers": 2433,
       "gallery": [
         {
           "created": "2025-07-29T07:35:01.743413Z",
@@ -8755,18 +8755,18 @@
           "dependencies": [
             {
               "dependency_type": "required",
-              "project_id": "QAGBst4M"
-            },
-            {
-              "dependency_type": "required",
               "project_id": "P7dR8mSH"
             },
             {
               "dependency_type": "required",
               "project_id": "ohNO6lps"
+            },
+            {
+              "dependency_type": "required",
+              "project_id": "QAGBst4M"
             }
           ],
-          "downloads": 222854,
+          "downloads": 223348,
           "file": {
             "filename": "EasyAnvils-v21.11.0-mc1.21.11-Fabric.jar",
             "hashes": {
@@ -8805,8 +8805,8 @@
       "date_modified": "2026-06-18T12:11:44.459032Z",
       "description": "Enchanting tables as they always should have been! Items stay after closing, and easy re-rolls.",
       "discord_url": "https://lunapixel.studio/discord",
-      "downloads": 11452061,
-      "followers": 2327,
+      "downloads": 11463053,
+      "followers": 2330,
       "gallery": [
         {
           "created": "2025-07-29T07:35:10.942832Z",
@@ -8861,18 +8861,18 @@
           "dependencies": [
             {
               "dependency_type": "required",
+              "project_id": "QAGBst4M"
+            },
+            {
+              "dependency_type": "required",
               "project_id": "P7dR8mSH"
             },
             {
               "dependency_type": "required",
               "project_id": "ohNO6lps"
-            },
-            {
-              "dependency_type": "required",
-              "project_id": "QAGBst4M"
             }
           ],
-          "downloads": 231779,
+          "downloads": 232152,
           "file": {
             "filename": "EasyMagic-v21.11.0-mc1.21.11-Fabric.jar",
             "hashes": {
@@ -8928,8 +8928,8 @@
           "url": "https://ko-fi.com/dima_dencep"
         }
       ],
-      "downloads": 6278609,
-      "followers": 2272,
+      "downloads": 6284359,
+      "followers": 2273,
       "game_versions": [
         "1.16.5",
         "1.17-rc2",
@@ -9026,8 +9026,8 @@
       "date_created": "2023-06-07T08:19:18.472915Z",
       "date_modified": "2026-06-18T02:49:40.835242Z",
       "description": "Provides a way to get enchantment descriptions from enchanted books.",
-      "downloads": 31256368,
-      "followers": 3200,
+      "downloads": 31286907,
+      "followers": 3203,
       "gallery": [
         {
           "created": "2023-06-07T08:19:03.529946Z",
@@ -9145,7 +9145,7 @@
               "project_id": "aaRl8GiW"
             }
           ],
-          "downloads": 284567,
+          "downloads": 285148,
           "file": {
             "filename": "enchdesc-fabric-1.21.11-21.11.1.jar",
             "hashes": {
@@ -9193,8 +9193,8 @@
           "url": "https://www.patreon.com/creativemd"
         }
       ],
-      "downloads": 14354869,
-      "followers": 834,
+      "downloads": 14381563,
+      "followers": 835,
       "gallery": [
         {
           "created": "2022-11-14T11:21:06.760426Z",
@@ -9254,14 +9254,14 @@
           "dependencies": [
             {
               "dependency_type": "required",
-              "project_id": "OsZiaDHq"
+              "project_id": "P7dR8mSH"
             },
             {
               "dependency_type": "required",
-              "project_id": "P7dR8mSH"
+              "project_id": "OsZiaDHq"
             }
           ],
-          "downloads": 49301,
+          "downloads": 49537,
           "file": {
             "filename": "EnhancedVisuals_FABRIC_v1.8.27_mc1.21.11.jar",
             "hashes": {
@@ -9319,8 +9319,8 @@
           "url": "https://patreon.com/essentialsx"
         }
       ],
-      "downloads": 599626,
-      "followers": 731,
+      "downloads": 600731,
+      "followers": 732,
       "gallery": [
         {
           "created": "2023-01-11T00:31:38.380380Z",
@@ -9410,7 +9410,7 @@
               "project_id": "Vebnzrzj"
             }
           ],
-          "downloads": 60342,
+          "downloads": 62415,
           "file": {
             "filename": "EssentialsX-2.22.0.jar",
             "hashes": {
@@ -9474,17 +9474,17 @@
       "discord_url": "https://essentialsx.net/community.html",
       "donation_urls": [
         {
-          "id": "github",
-          "platform": "Github",
-          "url": "https://github.com/sponsors/EssentialsX"
-        },
-        {
           "id": "patreon",
           "platform": "Patreon",
           "url": "https://patreon.com/essentialsx"
+        },
+        {
+          "id": "github",
+          "platform": "Github",
+          "url": "https://github.com/sponsors/EssentialsX"
         }
       ],
-      "downloads": 149775,
+      "downloads": 150064,
       "followers": 96,
       "game_versions": [
         "1.8.7",
@@ -9536,7 +9536,7 @@
               "project_id": "T6TZJYX4"
             }
           ],
-          "downloads": 16993,
+          "downloads": 17571,
           "file": {
             "filename": "EssentialsXChat-2.22.0.jar",
             "hashes": {
@@ -9599,17 +9599,17 @@
       "discord_url": "https://essentialsx.net/community.html",
       "donation_urls": [
         {
-          "id": "patreon",
-          "platform": "Patreon",
-          "url": "https://patreon.com/essentialsx"
-        },
-        {
           "id": "github",
           "platform": "Github",
           "url": "https://github.com/sponsors/EssentialsX"
+        },
+        {
+          "id": "patreon",
+          "platform": "Patreon",
+          "url": "https://patreon.com/essentialsx"
         }
       ],
-      "downloads": 128703,
+      "downloads": 129006,
       "followers": 87,
       "game_versions": [
         "1.8.8",
@@ -9656,7 +9656,7 @@
               "project_id": "hXiIvTyT"
             }
           ],
-          "downloads": 15625,
+          "downloads": 16211,
           "file": {
             "filename": "EssentialsXSpawn-2.22.0.jar",
             "hashes": {
@@ -9726,7 +9726,7 @@
       "date_modified": "2026-06-22T18:20:35.465588Z",
       "description": "Custom Items, ExecutableItems plugin allows you to fully customize every aspect of your items, and adding unique activators on your items !",
       "discord_url": "https://discord.gg/splugins",
-      "downloads": 110631,
+      "downloads": 110765,
       "followers": 103,
       "game_versions": [
         "1.8",
@@ -9924,8 +9924,8 @@
           "url": "https://www.paypal.com/donate/?business=46ZL2PNVP4XKE"
         }
       ],
-      "downloads": 9431499,
-      "followers": 1292,
+      "downloads": 9441253,
+      "followers": 1294,
       "gallery": [
         {
           "created": "2023-09-10T22:52:54.912687Z",
@@ -9988,7 +9988,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2026-04-09T21:17:16.978642Z",
-          "downloads": 24017,
+          "downloads": 24140,
           "file": {
             "filename": "ExplorersCompass-1.21.11-2.5.1-fabric.jar",
             "hashes": {
@@ -10024,11 +10024,11 @@
       "client_side": "optional",
       "color": 12367004,
       "date_created": "2021-01-22T11:04:41.419169Z",
-      "date_modified": "2026-06-30T15:29:38.261159Z",
+      "date_modified": "2026-07-01T13:10:37.420919Z",
       "description": "Lightweight and modular API providing common hooks and intercompatibility measures utilized by mods using the Fabric toolchain.",
       "discord_url": "https://discord.gg/v6v4pMv",
-      "downloads": 195219144,
-      "followers": 32380,
+      "downloads": 195500848,
+      "followers": 32397,
       "game_versions": [
         "18w49a",
         "18w50a",
@@ -10421,7 +10421,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2026-05-11T12:31:47.864964Z",
-          "downloads": 4272995,
+          "downloads": 4314938,
           "file": {
             "filename": "fabric-api-0.141.4+1.21.11.jar",
             "hashes": {
@@ -10444,60 +10444,60 @@
           "version_type": "release"
         },
         "26.1.2+26.2-snapshot-5+fabric": {
-          "date_published": "2026-06-22T17:25:46.239574Z",
-          "downloads": 484697,
+          "date_published": "2026-07-01T12:59:28.229588Z",
+          "downloads": 1571,
           "file": {
-            "filename": "fabric-api-0.153.0+26.1.2.jar",
+            "filename": "fabric-api-0.154.0+26.1.2.jar",
             "hashes": {
-              "sha512": "4e31da3c796714d25ca079e5277980c5439bb09dcad33d1224cccdfec6000b776ba5d16323a9c312682e773bddedae75aa697a7c0f4ad2b77b5b11ba679b480a"
+              "sha512": "0f5885ca80716dee547e8e8ec6c2eda137b5591d40d8fb424d9d1d99a3e5c7a6d861ef11590903f9fa18838806de8876e51285c5d830cfa50f518c0217139e78"
             },
             "primary": true,
-            "size": 2504357,
-            "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/WC1KT7Yg/fabric-api-0.153.0%2B26.1.2.jar"
+            "size": 2514453,
+            "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/1F9Sl2ke/fabric-api-0.154.0%2B26.1.2.jar"
           },
           "game_versions": [
             "26.1",
             "26.1.1",
             "26.1.2"
           ],
-          "id": "WC1KT7Yg",
+          "id": "1F9Sl2ke",
           "loaders": [
             "fabric"
           ],
-          "name": "[26.1.2] Fabric API 0.153.0+26.1.2",
+          "name": "[26.1.2] Fabric API 0.154.0+26.1.2",
           "project_id": "P7dR8mSH",
-          "version_number": "0.153.0+26.1.2",
+          "version_number": "0.154.0+26.1.2",
           "version_type": "release"
         },
         "26.1.2+fabric": {
-          "date_published": "2026-06-22T17:25:46.239574Z",
-          "downloads": 484697,
+          "date_published": "2026-07-01T12:59:28.229588Z",
+          "downloads": 1571,
           "file": {
-            "filename": "fabric-api-0.153.0+26.1.2.jar",
+            "filename": "fabric-api-0.154.0+26.1.2.jar",
             "hashes": {
-              "sha512": "4e31da3c796714d25ca079e5277980c5439bb09dcad33d1224cccdfec6000b776ba5d16323a9c312682e773bddedae75aa697a7c0f4ad2b77b5b11ba679b480a"
+              "sha512": "0f5885ca80716dee547e8e8ec6c2eda137b5591d40d8fb424d9d1d99a3e5c7a6d861ef11590903f9fa18838806de8876e51285c5d830cfa50f518c0217139e78"
             },
             "primary": true,
-            "size": 2504357,
-            "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/WC1KT7Yg/fabric-api-0.153.0%2B26.1.2.jar"
+            "size": 2514453,
+            "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/1F9Sl2ke/fabric-api-0.154.0%2B26.1.2.jar"
           },
           "game_versions": [
             "26.1",
             "26.1.1",
             "26.1.2"
           ],
-          "id": "WC1KT7Yg",
+          "id": "1F9Sl2ke",
           "loaders": [
             "fabric"
           ],
-          "name": "[26.1.2] Fabric API 0.153.0+26.1.2",
+          "name": "[26.1.2] Fabric API 0.154.0+26.1.2",
           "project_id": "P7dR8mSH",
-          "version_number": "0.153.0+26.1.2",
+          "version_number": "0.154.0+26.1.2",
           "version_type": "release"
         },
         "26.2-snapshot-5+fabric": {
           "date_published": "2026-04-28T15:53:04.261964Z",
-          "downloads": 17555,
+          "downloads": 17562,
           "file": {
             "filename": "fabric-api-0.147.1+26.2.jar",
             "hashes": {
@@ -10537,8 +10537,8 @@
       "date_modified": "2026-06-03T10:40:44.954667Z",
       "description": "This is a mod that enables usage of the Kotlin programming language for Fabric mods.",
       "discord_url": "https://discord.gg/v6v4pMv",
-      "downloads": 91971597,
-      "followers": 10516,
+      "downloads": 92105720,
+      "followers": 10522,
       "game_versions": [
         "18w44a",
         "18w45a",
@@ -10794,7 +10794,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2026-06-03T10:40:44.954667Z",
-          "downloads": 4329072,
+          "downloads": 4406373,
           "file": {
             "filename": "fabric-language-kotlin-1.13.12+kotlin.2.4.0.jar",
             "hashes": {
@@ -10887,8 +10887,8 @@
           "url": "https://github.com/sponsors/RakSrinaNa"
         }
       ],
-      "downloads": 10572734,
-      "followers": 4167,
+      "downloads": 10582305,
+      "followers": 4169,
       "game_versions": [
         "1.16.5",
         "1.17",
@@ -10971,7 +10971,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 452499,
+          "downloads": 453733,
           "file": {
             "filename": "FallingTree-1.21.11-1.21.11.3.jar",
             "hashes": {
@@ -11021,7 +11021,7 @@
           "url": "https://www.buymeacoffee.com/realoliver"
         }
       ],
-      "downloads": 239185,
+      "downloads": 239544,
       "followers": 362,
       "gallery": [
         {
@@ -11115,7 +11115,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-06-16T15:32:37.575936Z",
-          "downloads": 5714,
+          "downloads": 6023,
           "file": {
             "filename": "FancyHolograms-2.11.0.jar",
             "hashes": {
@@ -11176,8 +11176,8 @@
           "url": "https://www.patreon.com/keksuccino"
         }
       ],
-      "downloads": 51614020,
-      "followers": 1825,
+      "downloads": 51689108,
+      "followers": 1826,
       "gallery": [
         {
           "created": "2024-03-18T05:36:59.302729Z",
@@ -11322,7 +11322,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 5758,
+          "downloads": 6536,
           "file": {
             "filename": "fancymenu_fabric_3.9.6_MC_1.21.11.jar",
             "hashes": {
@@ -11374,7 +11374,7 @@
           "url": "https://www.buymeacoffee.com/realoliver"
         }
       ],
-      "downloads": 339404,
+      "downloads": 339893,
       "followers": 496,
       "gallery": [
         {
@@ -11491,7 +11491,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-06-16T15:32:37.003940Z",
-          "downloads": 9669,
+          "downloads": 10145,
           "file": {
             "filename": "FancyNpcs-2.11.0.jar",
             "hashes": {
@@ -11542,8 +11542,8 @@
       "date_modified": "2026-06-25T19:22:26.749366Z",
       "description": "Modern Fabric port of the cooking and farming mod, \"Farmer's Delight\"",
       "discord_url": "https://discord.gg/qdKRTDf8Cv",
-      "downloads": 12455352,
-      "followers": 2773,
+      "downloads": 12471974,
+      "followers": 2775,
       "game_versions": [
         "1.20",
         "1.20.1",
@@ -11588,19 +11588,19 @@
           "date_published": "2026-02-21T20:51:32.771386Z",
           "dependencies": [
             {
-              "dependency_type": "required",
-              "project_id": "P7dR8mSH"
-            },
-            {
               "dependency_type": "optional",
               "project_id": "5VolwT6c"
+            },
+            {
+              "dependency_type": "required",
+              "project_id": "P7dR8mSH"
             },
             {
               "dependency_type": "optional",
               "project_id": "u6dRKJwZ"
             }
           ],
-          "downloads": 258541,
+          "downloads": 259243,
           "file": {
             "filename": "FarmersDelight-1.21.11-3.4.9+refabricated.jar",
             "hashes": {
@@ -11651,7 +11651,7 @@
           "url": "https://github.com/sponsors/IntellectualSites"
         }
       ],
-      "downloads": 410891,
+      "downloads": 411432,
       "followers": 532,
       "gallery": [
         {
@@ -11764,8 +11764,8 @@
       "date_created": "2021-04-03T07:04:43.971189Z",
       "date_modified": "2026-03-24T18:31:50.491773Z",
       "description": "Memory usage optimizations",
-      "downloads": 122617526,
-      "followers": 15075,
+      "downloads": 122754234,
+      "followers": 15084,
       "game_versions": [
         "1.16.5",
         "1.17",
@@ -11819,7 +11819,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2026-01-25T14:07:55.210010Z",
-          "downloads": 7014585,
+          "downloads": 7032395,
           "file": {
             "filename": "ferritecore-8.2.0-fabric.jar",
             "hashes": {
@@ -11843,7 +11843,7 @@
         },
         "26.1.2+fabric": {
           "date_published": "2026-03-24T18:31:50.491773Z",
-          "downloads": 4329588,
+          "downloads": 4359483,
           "file": {
             "filename": "ferritecore-9.0.0-fabric.jar",
             "hashes": {
@@ -11884,7 +11884,7 @@
       "date_created": "2025-02-05T11:44:16.858182Z",
       "date_modified": "2026-06-06T13:28:19.611086Z",
       "description": "> Fokus / Focus API - Library for CoffeeG's datapack/mod/plugin.",
-      "downloads": 125064,
+      "downloads": 125209,
       "followers": 46,
       "game_versions": [
         "1.13",
@@ -12047,8 +12047,8 @@
       "date_modified": "2026-06-21T09:19:05.384665Z",
       "description": "NeoForge's & Forge's config systems provided to other modding ecosystems. Designed for a multiloader architecture.",
       "discord_url": "https://lunapixel.studio/discord",
-      "downloads": 52711504,
-      "followers": 4678,
+      "downloads": 52767273,
+      "followers": 4680,
       "gallery": [
         {
           "created": "2025-07-29T07:36:37.128156Z",
@@ -12123,7 +12123,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 5399945,
+          "downloads": 5409155,
           "file": {
             "filename": "ForgeConfigAPIPort-v21.11.1-mc1.21.11-Fabric.jar",
             "hashes": {
@@ -12164,7 +12164,7 @@
       "date_created": "2022-08-15T22:17:51.457470Z",
       "date_modified": "2026-05-04T03:02:37.443799Z",
       "description": "Liberate your server from the chat-reporting bourgeoisie! The best paper chat report disabler this side of the Mississippi",
-      "downloads": 111881,
+      "downloads": 111950,
       "followers": 361,
       "game_versions": [
         "1.19.1",
@@ -12210,7 +12210,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2025-12-22T20:57:50.828683Z",
-          "downloads": 9843,
+          "downloads": 9877,
           "file": {
             "filename": "FreedomChat-Paper-1.7.7.jar",
             "hashes": {
@@ -12264,7 +12264,7 @@
           "url": "https://www.patreon.com/Faboslav"
         }
       ],
-      "downloads": 9636575,
+      "downloads": 9646350,
       "followers": 2643,
       "gallery": [
         {
@@ -12498,19 +12498,19 @@
               "project_id": "mOgUt4GM"
             },
             {
-              "dependency_type": "optional",
-              "project_id": "1eAoo2KR"
-            },
-            {
               "dependency_type": "required",
               "project_id": "P7dR8mSH"
+            },
+            {
+              "dependency_type": "optional",
+              "project_id": "1eAoo2KR"
             },
             {
               "dependency_type": "required",
               "project_id": "G1hIVOrD"
             }
           ],
-          "downloads": 16103,
+          "downloads": 16270,
           "file": {
             "filename": "friendsandfoes-fabric-4.0.26+mc1.21.11.jar",
             "hashes": {
@@ -12563,8 +12563,8 @@
           "url": "https://ko-fi.com/fzzyhmstrs"
         }
       ],
-      "downloads": 28615617,
-      "followers": 1357,
+      "downloads": 28664962,
+      "followers": 1358,
       "gallery": [
         {
           "created": "2024-04-19T17:33:52.054733Z",
@@ -12688,7 +12688,7 @@
               "project_id": "Ha28R6CL"
             }
           ],
-          "downloads": 1674431,
+          "downloads": 1679704,
           "file": {
             "filename": "fzzy_config-0.7.6+1.21.11.jar",
             "hashes": {
@@ -12728,11 +12728,11 @@
       "client_side": "required",
       "color": 287848,
       "date_created": "2022-08-07T03:30:16.186586Z",
-      "date_modified": "2026-06-27T05:30:18.670760Z",
+      "date_modified": "2026-07-01T03:42:04.254010Z",
       "description": "A 3D animation library for entities, blocks, items, armor, and more!",
       "discord_url": "https://discord.gg/pPEqBgJtZW",
-      "downloads": 54739947,
-      "followers": 3034,
+      "downloads": 54811916,
+      "followers": 3035,
       "gallery": [
         {
           "created": "2024-09-17T10:40:35.846436Z",
@@ -12796,7 +12796,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2026-03-03T11:48:26.134901Z",
-          "downloads": 386737,
+          "downloads": 388621,
           "file": {
             "filename": "geckolib-fabric-1.21.11-5.4.5.jar",
             "hashes": {
@@ -12843,8 +12843,8 @@
           "url": "https://opencollective.com/GeyserMC"
         }
       ],
-      "downloads": 1005726,
-      "followers": 1237,
+      "downloads": 1006987,
+      "followers": 1236,
       "game_versions": [
         "1.16.5",
         "1.17",
@@ -12981,8 +12981,8 @@
           "url": "https://www.paypal.com/donate/?business=AdubbzG@gmail.com&item_name=GlitchCore+(from+modrinth.com)&cy_code=USD"
         }
       ],
-      "downloads": 17508516,
-      "followers": 1272,
+      "downloads": 17531599,
+      "followers": 1274,
       "game_versions": [
         "1.10.2",
         "1.20.1",
@@ -13022,7 +13022,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2026-03-06T20:02:11.753972Z",
-          "downloads": 295072,
+          "downloads": 296033,
           "file": {
             "filename": "GlitchCore-fabric-1.21.11-21.11.0.4.jar",
             "hashes": {
@@ -13073,7 +13073,7 @@
           "url": "https://r.robomwm.com/patreon"
         }
       ],
-      "downloads": 149911,
+      "downloads": 150185,
       "followers": 249,
       "game_versions": [
         "1.17",
@@ -13178,11 +13178,11 @@
       "client_side": "unknown",
       "color": 2631718,
       "date_created": "2024-03-22T20:37:05.089511Z",
-      "date_modified": "2026-06-30T23:48:35.940476Z",
+      "date_modified": "2026-07-01T09:18:38.294958Z",
       "description": "Fully async, multithreaded, predictive, open source, 3.01 reach, 1.005 timer, 0.01% speed, 99.99% antikb, \"bypassable\" 1.8-1.21 anticheat",
       "discord_url": "https://discord.grim.ac",
-      "downloads": 487191,
-      "followers": 431,
+      "downloads": 488201,
+      "followers": 432,
       "game_versions": [
         "1.7.2",
         "1.7.3",
@@ -13289,7 +13289,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-03-09T09:10:05.544421Z",
-          "downloads": 68898,
+          "downloads": 69472,
           "file": {
             "filename": "grimac-bukkit-2.3.73.jar",
             "hashes": {
@@ -13394,22 +13394,22 @@
           "version_type": "release"
         },
         "26.1.2+fabric": {
-          "date_published": "2026-06-30T23:48:33.414013Z",
+          "date_published": "2026-07-01T09:18:35.851194Z",
           "dependencies": [
             {
               "dependency_type": "required",
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 1,
+          "downloads": 0,
           "file": {
-            "filename": "grimac-fabric-2.3.74-e454008.jar",
+            "filename": "grimac-fabric-2.3.74-882015a.jar",
             "hashes": {
-              "sha512": "ca7d94e7fafabc9df354d09ed26203bcd8e7b9ff9f9d2da5819192192a11c87801c5ca4cdeb0e5a1fa5885f5bfc455e1a6c02e4653f57eafdc5c69710d551191"
+              "sha512": "ee825770fe6017bd9a5ee7693d8727c7d6153c73300e746a775d0ed83f0f923efae20a9e3cda94ba089f77f10e7096a3688210832a57f4e18710de1adc7a868e"
             },
             "primary": true,
-            "size": 14410304,
-            "url": "https://cdn.modrinth.com/data/LJNGWSvH/versions/VDYKAEly/grimac-fabric-2.3.74-e454008.jar"
+            "size": 14417920,
+            "url": "https://cdn.modrinth.com/data/LJNGWSvH/versions/HRAEJbWc/grimac-fabric-2.3.74-882015a.jar"
           },
           "game_versions": [
             "1.16.1",
@@ -13448,13 +13448,13 @@
             "1.21.11",
             "26.1.2"
           ],
-          "id": "VDYKAEly",
+          "id": "HRAEJbWc",
           "loaders": [
             "fabric"
           ],
-          "name": "Grim Anticheat (Fabric) 2.3.74-e454008",
+          "name": "Grim Anticheat (Fabric) 2.3.74-882015a",
           "project_id": "LJNGWSvH",
-          "version_number": "2.3.74-e454008",
+          "version_number": "2.3.74-882015a",
           "version_type": "alpha"
         }
       },
@@ -13483,8 +13483,8 @@
           "url": "https://ko-fi.com/enjarai"
         }
       ],
-      "downloads": 118111,
-      "followers": 302,
+      "downloads": 118382,
+      "followers": 304,
       "gallery": [
         {
           "created": "2024-09-06T00:30:14.927065Z",
@@ -13526,7 +13526,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2025-04-14T12:05:40.118784Z",
-          "downloads": 2695,
+          "downloads": 2712,
           "file": {
             "filename": "headpats-plugin-1.0.2+paper.jar",
             "hashes": {
@@ -13591,7 +13591,7 @@
           "url": "https://buymeacoffee.com/William278"
         }
       ],
-      "downloads": 185536,
+      "downloads": 185670,
       "followers": 397,
       "gallery": [
         {
@@ -13684,18 +13684,18 @@
             },
             {
               "dependency_type": "optional",
+              "project_id": "wJQfHhxh"
+            },
+            {
+              "dependency_type": "optional",
               "project_id": "34T8oVNY"
             },
             {
               "dependency_type": "optional",
               "project_id": "swbUV1cr"
-            },
-            {
-              "dependency_type": "optional",
-              "project_id": "wJQfHhxh"
             }
           ],
-          "downloads": 9581,
+          "downloads": 9640,
           "file": {
             "filename": "HuskHomes-Paper-4.10.jar",
             "hashes": {
@@ -13767,7 +13767,7 @@
           "url": "https://www.paypal.com/donate/?business=NYKUAV883JKA2&no_recurring=0&item_name=Thank+you+for+considering+a+donation.+It+helps+to+support+me+by+allowing+me+to+spend+more+time+making+mods+and+games.&currency_code=USD"
         }
       ],
-      "downloads": 30075493,
+      "downloads": 30100516,
       "followers": 1790,
       "game_versions": [
         "1.16.5",
@@ -13817,7 +13817,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 54681,
+          "downloads": 55307,
           "file": {
             "filename": "Iceberg-1.21.11-fabric-1.4.0.1.jar",
             "hashes": {
@@ -13861,18 +13861,18 @@
       "discord_url": "https://loohpjames.com/dev-discord",
       "donation_urls": [
         {
-          "id": "paypal",
-          "platform": "Paypal",
-          "url": "https://paypal.me/loohpjames/5USD"
-        },
-        {
           "id": "github",
           "platform": "Github",
           "url": "https://github.com/sponsors/LOOHP"
+        },
+        {
+          "id": "paypal",
+          "platform": "Paypal",
+          "url": "https://paypal.me/loohpjames/5USD"
         }
       ],
-      "downloads": 209847,
-      "followers": 588,
+      "downloads": 210113,
+      "followers": 589,
       "game_versions": [
         "1.13",
         "1.13.1",
@@ -14034,7 +14034,7 @@
           "url": "https://www.patreon.com/conczin"
         }
       ],
-      "downloads": 12577122,
+      "downloads": 12590406,
       "followers": 2283,
       "gallery": [
         {
@@ -14109,7 +14109,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 12668,
+          "downloads": 12910,
           "file": {
             "filename": "immersive_aircraft-1.4.7+1.21.11-fabric.jar",
             "hashes": {
@@ -14158,7 +14158,7 @@
           "url": "https://github.com/sponsors/spartacus04"
         }
       ],
-      "downloads": 269105,
+      "downloads": 269535,
       "followers": 221,
       "gallery": [
         {
@@ -14342,7 +14342,7 @@
           "url": "https://www.paypal.com/paypalme/catadmirer"
         }
       ],
-      "downloads": 126949,
+      "downloads": 127045,
       "followers": 192,
       "gallery": [
         {
@@ -14404,7 +14404,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-03-08T02:13:39.126878Z",
-          "downloads": 23654,
+          "downloads": 23757,
           "file": {
             "filename": "InfuseSMP-2.4.3.jar",
             "hashes": {
@@ -14463,7 +14463,7 @@
           "url": "https://www.paypal.com/donate/?hosted_button_id=MDMJLRCACKKYS"
         }
       ],
-      "downloads": 110077,
+      "downloads": 110254,
       "followers": 159,
       "gallery": [
         {
@@ -14718,7 +14718,7 @@
           "url": "https://paypal.me/JanBoerman"
         }
       ],
-      "downloads": 273162,
+      "downloads": 273516,
       "followers": 430,
       "game_versions": [
         "1.8.8",
@@ -14767,7 +14767,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-06-16T23:15:01.634905Z",
-          "downloads": 11869,
+          "downloads": 12782,
           "file": {
             "filename": "InvSee++.jar",
             "hashes": {
@@ -14852,7 +14852,7 @@
           "url": "https://www.paypal.me/FlavioLiponi/"
         }
       ],
-      "downloads": 154265,
+      "downloads": 154553,
       "followers": 149,
       "game_versions": [
         "1.8",
@@ -14950,7 +14950,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-06-27T09:53:29.669890Z",
-          "downloads": 1824,
+          "downloads": 2470,
           "file": {
             "filename": "ItemEdit-3.7.10.jar",
             "hashes": {
@@ -15061,18 +15061,18 @@
       "description": "Shows information about what you are looking at. (Hwyla/Waila fork for Minecraft 1.16+)",
       "donation_urls": [
         {
-          "id": "ko-fi",
-          "platform": "Ko-fi",
-          "url": "https://ko-fi.com/snownee"
-        },
-        {
           "id": "patreon",
           "platform": "Patreon",
           "url": "https://www.patreon.com/snownee"
+        },
+        {
+          "id": "ko-fi",
+          "platform": "Ko-fi",
+          "url": "https://ko-fi.com/snownee"
         }
       ],
-      "downloads": 55993088,
-      "followers": 8196,
+      "downloads": 56053192,
+      "followers": 8202,
       "gallery": [
         {
           "created": "2022-12-11T09:22:23.125333Z",
@@ -15219,7 +15219,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 541042,
+          "downloads": 543636,
           "file": {
             "filename": "Jade-1.21.11-Fabric-21.1.6.jar",
             "hashes": {
@@ -15266,8 +15266,8 @@
           "url": "https://ko-fi.com/jamalamdev"
         }
       ],
-      "downloads": 11749110,
-      "followers": 888,
+      "downloads": 11759692,
+      "followers": 889,
       "game_versions": [
         "1.18",
         "1.18.1",
@@ -15326,7 +15326,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 71213,
+          "downloads": 71647,
           "file": {
             "filename": "jamlib-fabric-2.0.0+1.21.11.jar",
             "hashes": {
@@ -15364,7 +15364,7 @@
       "client_side": "optional",
       "color": 9934998,
       "date_created": "2023-01-27T05:19:03.821699Z",
-      "date_modified": "2026-06-30T13:41:05.313692Z",
+      "date_modified": "2026-07-01T12:37:57.744058Z",
       "description": "View Items and Recipes",
       "discord_url": "https://discord.gg/sCQcWU2",
       "donation_urls": [
@@ -15374,8 +15374,8 @@
           "url": "https://www.patreon.com/mezz"
         }
       ],
-      "downloads": 59455354,
-      "followers": 10017,
+      "downloads": 59543289,
+      "followers": 10024,
       "gallery": [
         {
           "created": "2023-01-27T05:18:47.838148Z",
@@ -15491,7 +15491,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2026-06-21T09:33:25.904139Z",
-          "downloads": 79281,
+          "downloads": 82418,
           "file": {
             "filename": "jei-1.21.11-fabric-27.4.0.24.jar",
             "hashes": {
@@ -15532,7 +15532,7 @@
       "date_modified": "2026-06-29T17:17:31.258424Z",
       "description": "Real-time map used for mapping in-game or your browser as you explore.",
       "discord_url": "https://discord.gg/eP8gE69",
-      "downloads": 12074468,
+      "downloads": 12086286,
       "followers": 4594,
       "game_versions": [
         "1.7.10",
@@ -15594,7 +15594,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 10081,
+          "downloads": 10899,
           "file": {
             "filename": "journeymap-fabric-1.21.11-6.0.0.jar",
             "hashes": {
@@ -15647,7 +15647,7 @@
           "url": "https://ko-fi.com/justplayer"
         }
       ],
-      "downloads": 171748,
+      "downloads": 172075,
       "followers": 102,
       "game_versions": [
         "1.19",
@@ -15765,8 +15765,8 @@
       "date_modified": "2026-06-26T04:03:59.908843Z",
       "description": "Just another boring library mod.",
       "discord_url": "https://discord.gg/UzmeWkD",
-      "downloads": 50473041,
-      "followers": 955,
+      "downloads": 50521204,
+      "followers": 957,
       "game_versions": [
         "1.12",
         "1.12.1",
@@ -15826,7 +15826,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 662824,
+          "downloads": 664938,
           "file": {
             "filename": "konkrete_fabric_1.9.18_MC_1.21.11.jar",
             "hashes": {
@@ -15867,18 +15867,18 @@
       "description": "A mod to optimize the Minecraft networking stack",
       "donation_urls": [
         {
-          "id": "paypal",
-          "platform": "Paypal",
-          "url": "https://paypal.me/terminalvelocity1"
-        },
-        {
           "id": "github",
           "platform": "Github",
           "url": "https://github.com/sponsors/astei"
+        },
+        {
+          "id": "paypal",
+          "platform": "Paypal",
+          "url": "https://paypal.me/terminalvelocity1"
         }
       ],
-      "downloads": 34446618,
-      "followers": 5464,
+      "downloads": 34480838,
+      "followers": 5465,
       "game_versions": [
         "1.16.2",
         "1.16.3",
@@ -15932,7 +15932,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2025-10-05T19:06:22.210926Z",
-          "downloads": 3486230,
+          "downloads": 3493576,
           "file": {
             "filename": "krypton-0.2.10.jar",
             "hashes": {
@@ -15958,7 +15958,7 @@
         },
         "26.1.2+fabric": {
           "date_published": "2026-04-21T21:42:30.331431Z",
-          "downloads": 458495,
+          "downloads": 461306,
           "file": {
             "filename": "krypton-0.3.0.jar",
             "hashes": {
@@ -16004,7 +16004,7 @@
       "date_modified": "2026-04-24T22:44:23.714576Z",
       "description": "Speed up your world loading by removing unneeded chunks.",
       "discord_url": "https://discord.gg/Q6saSVSuYQ",
-      "downloads": 6215486,
+      "downloads": 6223336,
       "followers": 1167,
       "game_versions": [
         "1.8",
@@ -16106,7 +16106,7 @@
       "selected_versions": {
         "26.1.2+26.2-snapshot-5+fabric": {
           "date_published": "2026-04-24T22:44:23.714576Z",
-          "downloads": 803104,
+          "downloads": 809365,
           "file": {
             "filename": "Ksyxis-1.4.3.jar",
             "hashes": {
@@ -16243,7 +16243,7 @@
           "url": "https://ko-fi.com/lajczik"
         }
       ],
-      "downloads": 266506,
+      "downloads": 266798,
       "followers": 411,
       "gallery": [
         {
@@ -16333,7 +16333,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-06-26T12:57:05.514351Z",
-          "downloads": 2084,
+          "downloads": 2623,
           "file": {
             "filename": "LagFixer-1.6.5.jar",
             "hashes": {
@@ -16428,8 +16428,8 @@
       "date_modified": "2026-06-17T23:05:04.593834Z",
       "description": "Quick leaf decay from cutting down trees. Built for fast performance and mod compat!",
       "discord_url": "https://lunapixel.studio/discord",
-      "downloads": 10727481,
-      "followers": 1488,
+      "downloads": 10736531,
+      "followers": 1491,
       "gallery": [
         {
           "created": "2025-07-29T07:37:57.490539Z",
@@ -16494,7 +16494,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 154144,
+          "downloads": 154330,
           "file": {
             "filename": "LeavesBeGone-v21.11.0-mc1.21.11-Fabric.jar",
             "hashes": {
@@ -16532,8 +16532,8 @@
       "date_created": "2021-05-15T16:15:55.233649Z",
       "date_modified": "2026-06-17T12:23:04.218318Z",
       "description": "A library for my mods",
-      "downloads": 10345741,
-      "followers": 598,
+      "downloads": 10365331,
+      "followers": 601,
       "game_versions": [
         "1.16.5",
         "1.17",
@@ -16593,7 +16593,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 824733,
+          "downloads": 827754,
           "file": {
             "filename": "libjf-3.19.12.jar",
             "hashes": {
@@ -16635,7 +16635,7 @@
       "date_modified": "2026-05-14T09:39:53.442327Z",
       "description": "LifeStealZ - The Ultimate LifeSteal SMP Plugin!",
       "discord_url": "https://strassburger.org/discord",
-      "downloads": 360849,
+      "downloads": 361143,
       "followers": 338,
       "gallery": [
         {
@@ -16714,7 +16714,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-05-14T09:39:53.442327Z",
-          "downloads": 28851,
+          "downloads": 29071,
           "file": {
             "filename": "lifestealz-2.21.1.jar",
             "hashes": {
@@ -16771,7 +16771,7 @@
       "date_modified": "2026-06-27T14:48:51.734085Z",
       "description": "Anticheat Perfected | 3.0005 reach | 99.999% antikb. Fork of GrimAC that's faster, with better reach checks, interact checks, and numerous bug fixes.",
       "discord_url": "https://discord.gg/JF3SUfq26k",
-      "downloads": 123378,
+      "downloads": 123552,
       "followers": 217,
       "game_versions": [
         "1.7.2",
@@ -17012,8 +17012,8 @@
           "url": "https://www.patreon.com/2No2Name"
         }
       ],
-      "downloads": 103690621,
-      "followers": 22246,
+      "downloads": 103809450,
+      "followers": 22254,
       "game_versions": [
         "1.16.2",
         "1.16.3",
@@ -17071,7 +17071,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2026-03-11T00:39:03.618667Z",
-          "downloads": 4980802,
+          "downloads": 4999793,
           "file": {
             "filename": "lithium-fabric-0.21.4+mc1.21.11.jar",
             "hashes": {
@@ -17096,7 +17096,7 @@
         },
         "26.1.2+fabric": {
           "date_published": "2026-06-16T20:19:24.538671Z",
-          "downloads": 361362,
+          "downloads": 370584,
           "file": {
             "filename": "lithium-fabric-0.24.6+mc26.1.2.jar",
             "hashes": {
@@ -17146,8 +17146,8 @@
           "url": "https://ko-fi.com/apollodev"
         }
       ],
-      "downloads": 17781898,
-      "followers": 1388,
+      "downloads": 17802287,
+      "followers": 1389,
       "game_versions": [
         "1.20",
         "1.20.1",
@@ -17201,7 +17201,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 178235,
+          "downloads": 179313,
           "file": {
             "filename": "lithostitched-1.7.2-fabric-21.11.jar",
             "hashes": {
@@ -17231,7 +17231,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 15012,
+          "downloads": 15871,
           "file": {
             "filename": "lithostitched-1.7.12-fabric-26.1.jar",
             "hashes": {
@@ -17272,8 +17272,8 @@
       "date_created": "2022-08-21T22:24:10.240747Z",
       "date_modified": "2026-04-19T09:47:53.473403Z",
       "description": "Improves performance by tweaking mob despawn rules. Say bye to pesky unintentional persistent mobs.",
-      "downloads": 19287212,
-      "followers": 2048,
+      "downloads": 19309130,
+      "followers": 2049,
       "gallery": [
         {
           "created": "2022-08-22T00:00:04.243531Z",
@@ -17444,7 +17444,7 @@
               "project_id": "Gi02250Z"
             }
           ],
-          "downloads": 102116,
+          "downloads": 102159,
           "file": {
             "filename": "Letmedespawn-1.21.9-fabric-1.5.2b.jar",
             "hashes": {
@@ -17485,14 +17485,14 @@
           "dependencies": [
             {
               "dependency_type": "required",
-              "project_id": "P7dR8mSH"
+              "project_id": "Gi02250Z"
             },
             {
               "dependency_type": "required",
-              "project_id": "Gi02250Z"
+              "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 96687,
+          "downloads": 97449,
           "file": {
             "filename": "letmedespawn-1.26.x-fabric-1.6.2.1.jar",
             "hashes": {
@@ -17558,8 +17558,8 @@
           "url": "https://www.patreon.com/noobanidus"
         }
       ],
-      "downloads": 18495928,
-      "followers": 1284,
+      "downloads": 18511713,
+      "followers": 1285,
       "gallery": [
         {
           "created": "2023-10-09T15:57:14.650542Z",
@@ -17660,7 +17660,7 @@
               "project_id": "9s6osm5g"
             }
           ],
-          "downloads": 40266,
+          "downloads": 40552,
           "file": {
             "filename": "lootr-fabric-1.21.11-1.20.34.104.jar",
             "hashes": {
@@ -17708,7 +17708,7 @@
           "url": "https://github.com/sponsors/lucko"
         }
       ],
-      "downloads": 2159131,
+      "downloads": 2161592,
       "followers": 1558,
       "game_versions": [
         "1.8.8",
@@ -17894,7 +17894,7 @@
         },
         "26.1.2+fabric": {
           "date_published": "2026-06-18T21:16:14.917799Z",
-          "downloads": 5614,
+          "downloads": 5786,
           "file": {
             "filename": "LuckPerms-Fabric-5.5.57.jar",
             "hashes": {
@@ -17937,7 +17937,7 @@
       "date_created": "2022-11-15T16:11:41.802934Z",
       "date_modified": "2026-06-22T11:03:25.208244Z",
       "description": "Paste, share & analyse your Minecraft logs",
-      "downloads": 416724,
+      "downloads": 416925,
       "followers": 167,
       "game_versions": [
         "1.8.3",
@@ -18043,7 +18043,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-02-18T11:23:11.358084Z",
-          "downloads": 1340,
+          "downloads": 1357,
           "file": {
             "filename": "mclogs-bukkit-1.21.11-3.1.1-all.jar",
             "hashes": {
@@ -18085,7 +18085,7 @@
       "date_modified": "2026-06-17T12:37:25.700185Z",
       "description": "Common library providing a lightweight configuration system",
       "discord_url": "https://discord.midnightdust.eu",
-      "downloads": 21816540,
+      "downloads": 21842103,
       "followers": 1580,
       "gallery": [
         {
@@ -18228,7 +18228,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 287714,
+          "downloads": 289950,
           "file": {
             "filename": "midnightlib-fabric-1.9.3+1.21.11.jar",
             "hashes": {
@@ -18277,7 +18277,7 @@
           "url": "https://github.com/sponsors/jpenilla"
         }
       ],
-      "downloads": 204838,
+      "downloads": 205093,
       "followers": 492,
       "gallery": [
         {
@@ -18423,8 +18423,8 @@
           "url": "https://ko-fi.com/mineblock11"
         }
       ],
-      "downloads": 15305476,
-      "followers": 1524,
+      "downloads": 15322818,
+      "followers": 1525,
       "gallery": [
         {
           "created": "2025-02-13T21:09:42.131590Z",
@@ -18510,7 +18510,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2026-01-01T02:11:24.429007Z",
-          "downloads": 949869,
+          "downloads": 952555,
           "file": {
             "filename": "mru-1.0.26+edge+1.21.11-fabric.jar",
             "hashes": {
@@ -18558,17 +18558,17 @@
       "discord_url": "https://discord.gg/NZtfKky",
       "donation_urls": [
         {
-          "id": "other",
-          "platform": "Other",
-          "url": "https://opencollective.com/multiverse-plugins"
-        },
-        {
           "id": "github",
           "platform": "Github",
           "url": "https://github.com/sponsors/Multiverse"
+        },
+        {
+          "id": "other",
+          "platform": "Other",
+          "url": "https://opencollective.com/multiverse-plugins"
         }
       ],
-      "downloads": 647451,
+      "downloads": 648253,
       "followers": 706,
       "gallery": [
         {
@@ -18685,7 +18685,7 @@
               "project_id": "WuErDeI1"
             }
           ],
-          "downloads": 10145,
+          "downloads": 11187,
           "file": {
             "filename": "multiverse-core-5.7.1.jar",
             "hashes": {
@@ -18764,17 +18764,17 @@
       "discord_url": "https://discord.gg/NZtfKky",
       "donation_urls": [
         {
-          "id": "github",
-          "platform": "Github",
-          "url": "https://github.com/sponsors/Multiverse"
-        },
-        {
           "id": "other",
           "platform": "Other",
           "url": "https://opencollective.com/multiverse-plugins"
+        },
+        {
+          "id": "github",
+          "platform": "Github",
+          "url": "https://github.com/sponsors/Multiverse"
         }
       ],
-      "downloads": 223590,
+      "downloads": 223774,
       "followers": 294,
       "game_versions": [
         "1.13",
@@ -18931,17 +18931,17 @@
       "discord_url": "https://discord.gg/NZtfKky",
       "donation_urls": [
         {
-          "id": "other",
-          "platform": "Other",
-          "url": "https://opencollective.com/multiverse-plugins"
-        },
-        {
           "id": "github",
           "platform": "Github",
           "url": "https://github.com/sponsors/Multiverse"
+        },
+        {
+          "id": "other",
+          "platform": "Other",
+          "url": "https://opencollective.com/multiverse-plugins"
         }
       ],
-      "downloads": 116575,
+      "downloads": 116698,
       "followers": 241,
       "gallery": [
         {
@@ -19028,7 +19028,7 @@
               "project_id": "3wmN97b8"
             }
           ],
-          "downloads": 6088,
+          "downloads": 6369,
           "file": {
             "filename": "multiverse-portals-5.2.3.jar",
             "hashes": {
@@ -19111,8 +19111,8 @@
           "url": "https://www.paypal.com/donate/?business=46ZL2PNVP4XKE"
         }
       ],
-      "downloads": 21628501,
-      "followers": 2605,
+      "downloads": 21647991,
+      "followers": 2608,
       "gallery": [
         {
           "created": "2023-09-10T21:48:53.627162Z",
@@ -19186,7 +19186,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2026-03-25T01:20:29.953428Z",
-          "downloads": 61644,
+          "downloads": 61858,
           "file": {
             "filename": "NaturesCompass-1.21.11-2.5.0-fabric.jar",
             "hashes": {
@@ -19225,7 +19225,7 @@
       "date_modified": "2026-04-06T14:15:16.385892Z",
       "description": "Add custom NBT tags to Items/Tiles/Entities without NMS",
       "discord_url": "https://discord.com/invite/yk4caxM",
-      "downloads": 300426,
+      "downloads": 300619,
       "followers": 276,
       "game_versions": [
         "1.7.9",
@@ -19434,7 +19434,7 @@
           "url": "https://www.patreon.com/BlayTheNinth"
         }
       ],
-      "downloads": 19292981,
+      "downloads": 19313033,
       "followers": 1363,
       "game_versions": [
         "1.12.2",
@@ -19489,14 +19489,14 @@
           "dependencies": [
             {
               "dependency_type": "required",
-              "project_id": "P7dR8mSH"
+              "project_id": "MBAkmtvl"
             },
             {
               "dependency_type": "required",
-              "project_id": "MBAkmtvl"
+              "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 143601,
+          "downloads": 143923,
           "file": {
             "filename": "netherportalfix-fabric-1.21.11-21.11.2.jar",
             "hashes": {
@@ -19545,7 +19545,7 @@
           "url": "https://ko-fi.com/synkdev"
         }
       ],
-      "downloads": 132446,
+      "downloads": 132574,
       "followers": 48,
       "gallery": [
         {
@@ -19752,7 +19752,7 @@
           "url": "https://ko-fi.com/synkdev"
         }
       ],
-      "downloads": 129865,
+      "downloads": 129941,
       "followers": 10,
       "gallery": [
         {
@@ -19964,7 +19964,7 @@
           "url": "https://ko-fi.com/nightexpress"
         }
       ],
-      "downloads": 194203,
+      "downloads": 194455,
       "followers": 115,
       "game_versions": [
         "1.19.4",
@@ -20009,7 +20009,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-06-08T15:44:56.917368Z",
-          "downloads": 9734,
+          "downloads": 10201,
           "file": {
             "filename": "nightcore-2.16.2.jar",
             "hashes": {
@@ -20069,7 +20069,7 @@
           "url": "https://www.buymeacoffee.com/aizistral"
         }
       ],
-      "downloads": 47446073,
+      "downloads": 47495011,
       "followers": 3246,
       "gallery": [
         {
@@ -20159,19 +20159,19 @@
           "date_published": "2025-12-25T09:29:48.957828Z",
           "dependencies": [
             {
-              "dependency_type": "optional",
-              "project_id": "mOgUt4GM"
-            },
-            {
               "dependency_type": "required",
               "project_id": "P7dR8mSH"
             },
             {
               "dependency_type": "optional",
               "project_id": "9s6osm5g"
+            },
+            {
+              "dependency_type": "optional",
+              "project_id": "mOgUt4GM"
             }
           ],
-          "downloads": 3988019,
+          "downloads": 3994866,
           "file": {
             "filename": "NoChatReports-FABRIC-1.21.11-v2.18.0.jar",
             "hashes": {
@@ -20211,8 +20211,8 @@
       "date_modified": "2026-05-24T08:20:27.799246Z",
       "description": "When crashing, you can go back to the title screen and keep playing, without needing to restart, alongside other things to make crashes more pleasant.",
       "discord_url": "https://discord.gg/CFaCu97",
-      "downloads": 11928516,
-      "followers": 2016,
+      "downloads": 11941877,
+      "followers": 2015,
       "game_versions": [
         "1.16.5",
         "1.17",
@@ -20263,7 +20263,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2025-12-13T12:21:48.641119Z",
-          "downloads": 325121,
+          "downloads": 325824,
           "file": {
             "filename": "notenoughcrashes-fabric-4.4.9+1.21.11.jar",
             "hashes": {
@@ -20311,7 +20311,7 @@
           "url": "https://boosty.to/marl/donate"
         }
       ],
-      "downloads": 215821,
+      "downloads": 215973,
       "followers": 169,
       "gallery": [
         {
@@ -20556,8 +20556,8 @@
           "url": "https://www.patreon.com/xaero96"
         }
       ],
-      "downloads": 17907438,
-      "followers": 913,
+      "downloads": 17932230,
+      "followers": 915,
       "game_versions": [
         "1.18.2",
         "1.19",
@@ -20626,7 +20626,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 15454,
+          "downloads": 15824,
           "file": {
             "filename": "open-parties-and-claims-fabric-1.21.11-0.27.5.jar",
             "hashes": {
@@ -20666,8 +20666,8 @@
       "date_created": "2023-06-12T14:39:35.704302Z",
       "date_modified": "2026-06-16T23:05:58.770638Z",
       "description": "High-Performance Anti X-Ray plugin",
-      "downloads": 178204,
-      "followers": 220,
+      "downloads": 178434,
+      "followers": 221,
       "gallery": [
         {
           "created": "2023-06-12T15:13:24.335874Z",
@@ -20859,7 +20859,7 @@
           "url": "https://dalink.to/stepan1411"
         }
       ],
-      "downloads": 470862,
+      "downloads": 472017,
       "followers": 215,
       "gallery": [
         {
@@ -20972,7 +20972,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-06-23T13:41:20.117963Z",
-          "downloads": 3122,
+          "downloads": 3627,
           "file": {
             "filename": "OrbitalStrikeCannon-7.0.jar",
             "hashes": {
@@ -21046,8 +21046,8 @@
       "date_modified": "2026-04-29T10:41:06.572479Z",
       "description": "A general utility, GUI and config library for modding on Fabric and Quilt",
       "discord_url": "https://discord.gg/xrwHKktV2d",
-      "downloads": 39481200,
-      "followers": 2102,
+      "downloads": 39519672,
+      "followers": 2103,
       "game_versions": [
         "1.17",
         "1.17.1",
@@ -21108,7 +21108,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 670699,
+          "downloads": 672940,
           "file": {
             "filename": "owo-lib-0.13.0+1.21.11.jar",
             "hashes": {
@@ -21150,7 +21150,7 @@
       "date_modified": "2026-06-17T21:14:21.598635Z",
       "description": "A simple mod to fix various problems with packets, nbt and timeouts.",
       "discord_url": "https://discord.gg/vWBP4P4Yd8",
-      "downloads": 22694053,
+      "downloads": 22721922,
       "followers": 1119,
       "game_versions": [
         "1.12.2",
@@ -21210,7 +21210,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2026-04-22T17:38:16.341503Z",
-          "downloads": 308462,
+          "downloads": 310166,
           "file": {
             "filename": "packetfixer-fabric-3.3.5-1.21.11.jar",
             "hashes": {
@@ -21256,9 +21256,9 @@
       "discord_url": "https://discord.gg/prqzNg9tRU",
       "donation_urls": [
         {
-          "id": "patreon",
-          "platform": "Patreon",
-          "url": "https://patreon.com/retrooper"
+          "id": "github",
+          "platform": "Github",
+          "url": "https://github.com/sponsors/retrooper/"
         },
         {
           "id": "bmac",
@@ -21266,12 +21266,12 @@
           "url": " https://buymeacoffee.com/retrooper"
         },
         {
-          "id": "github",
-          "platform": "Github",
-          "url": "https://github.com/sponsors/retrooper/"
+          "id": "patreon",
+          "platform": "Patreon",
+          "url": "https://patreon.com/retrooper"
         }
       ],
-      "downloads": 637366,
+      "downloads": 638173,
       "followers": 347,
       "gallery": [
         {
@@ -21385,7 +21385,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-06-22T09:39:39.294932Z",
-          "downloads": 12987,
+          "downloads": 14589,
           "file": {
             "filename": "packetevents-spigot-2.13.0.jar",
             "hashes": {
@@ -21507,8 +21507,8 @@
           "url": "https://boosty.to/lopymine/donate"
         }
       ],
-      "downloads": 1325568,
-      "followers": 993,
+      "downloads": 1331831,
+      "followers": 994,
       "gallery": [
         {
           "created": "2024-09-22T04:39:03.611211Z",
@@ -21646,7 +21646,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-02-17T18:39:14.850835Z",
-          "downloads": 35138,
+          "downloads": 35460,
           "file": {
             "filename": "patpat-plugin-1.2.5.jar",
             "hashes": {
@@ -21722,8 +21722,8 @@
       "date_modified": "2026-06-18T12:32:09.032042Z",
       "description": "Be notified about all the things you've just collected.",
       "discord_url": "https://lunapixel.studio/discord",
-      "downloads": 12816181,
-      "followers": 2783,
+      "downloads": 12828814,
+      "followers": 2788,
       "gallery": [
         {
           "created": "2025-07-29T07:40:29.971136Z",
@@ -21777,18 +21777,18 @@
           "dependencies": [
             {
               "dependency_type": "required",
-              "project_id": "ohNO6lps"
+              "project_id": "QAGBst4M"
             },
             {
               "dependency_type": "required",
-              "project_id": "QAGBst4M"
+              "project_id": "ohNO6lps"
             },
             {
               "dependency_type": "required",
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 250321,
+          "downloads": 250701,
           "file": {
             "filename": "PickUpNotifier-v21.11.0-mc1.21.11-Fabric.jar",
             "hashes": {
@@ -21830,8 +21830,8 @@
       "date_created": "2022-12-15T11:35:21.474596Z",
       "date_modified": "2026-04-26T20:43:57.780572Z",
       "description": "Allows players to temporarily mark locations and entities",
-      "downloads": 10357635,
-      "followers": 1209,
+      "downloads": 10371518,
+      "followers": 1210,
       "gallery": [
         {
           "created": "2022-12-15T11:45:58.386248Z",
@@ -21906,7 +21906,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 56792,
+          "downloads": 56894,
           "file": {
             "filename": "Ping-Wheel-1.12.1-fabric-1.21.11.jar",
             "hashes": {
@@ -21955,7 +21955,7 @@
           "url": "https://ko-fi.com/patbox"
         }
       ],
-      "downloads": 46934861,
+      "downloads": 47010516,
       "followers": 1426,
       "game_versions": [
         "1.17",
@@ -22026,7 +22026,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2026-02-01T20:30:10.668511Z",
-          "downloads": 5367377,
+          "downloads": 5381738,
           "file": {
             "filename": "placeholder-api-2.8.2+1.21.10.jar",
             "hashes": {
@@ -22075,7 +22075,7 @@
           "url": "https://github.com/sponsors/PlaceholderAPI"
         }
       ],
-      "downloads": 195353,
+      "downloads": 195944,
       "followers": 231,
       "game_versions": [
         "1.8",
@@ -22295,7 +22295,7 @@
           "url": "https://patreon.com/plasmomc"
         }
       ],
-      "downloads": 3466108,
+      "downloads": 3468386,
       "followers": 2112,
       "game_versions": [
         "1.16.4",
@@ -22361,18 +22361,18 @@
           "dependencies": [
             {
               "dependency_type": "optional",
-              "project_id": "lKEzGugV"
-            },
-            {
-              "dependency_type": "optional",
               "project_id": "Vebnzrzj"
             },
             {
               "dependency_type": "optional",
               "project_id": "rabHya7R"
+            },
+            {
+              "dependency_type": "optional",
+              "project_id": "lKEzGugV"
             }
           ],
-          "downloads": 1918,
+          "downloads": 2281,
           "file": {
             "filename": "PlasmoVoice-Paper-2.1.13.jar",
             "hashes": {
@@ -22447,7 +22447,7 @@
           "url": "https://ko-fi.com/ajneb97"
         }
       ],
-      "downloads": 252774,
+      "downloads": 253068,
       "followers": 147,
       "game_versions": [
         "1.8.9",
@@ -22640,7 +22640,7 @@
       "date_modified": "2026-03-08T13:55:50.651746Z",
       "description": "Plugin manager for Bukkit servers.",
       "discord_url": "https://discord.gg/GxEFhVY6ff",
-      "downloads": 96282,
+      "downloads": 96456,
       "followers": 94,
       "game_versions": [
         "1.20.4",
@@ -22680,7 +22680,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-03-08T13:55:50.651746Z",
-          "downloads": 24564,
+          "downloads": 24866,
           "file": {
             "filename": "PlugManX-3.0.4.jar",
             "hashes": {
@@ -22743,7 +22743,7 @@
           "url": "https://ko-fi.com/iseal"
         }
       ],
-      "downloads": 108021,
+      "downloads": 108070,
       "followers": 102,
       "gallery": [
         {
@@ -22870,7 +22870,7 @@
       "date_created": "2024-08-20T03:21:14.110807Z",
       "date_modified": "2026-06-18T01:00:52.138125Z",
       "description": "Prickle is a JSON based configuration file format brought to Minecraft.",
-      "downloads": 9901554,
+      "downloads": 9915140,
       "followers": 523,
       "gallery": [
         {
@@ -22925,7 +22925,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 336503,
+          "downloads": 337240,
           "file": {
             "filename": "prickle-fabric-1.21.11-21.11.1.jar",
             "hashes": {
@@ -22968,7 +22968,7 @@
       "date_created": "2023-08-13T09:12:09.284896Z",
       "date_modified": "2023-08-29T20:17:13.589991Z",
       "description": "Make yourself completely invisible with /vanish",
-      "downloads": 159431,
+      "downloads": 159611,
       "followers": 156,
       "gallery": [
         {
@@ -23021,7 +23021,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2023-08-29T20:17:13.589991Z",
-          "downloads": 153780,
+          "downloads": 154169,
           "file": {
             "filename": "Vanish.jar",
             "hashes": {
@@ -23082,8 +23082,8 @@
       "date_modified": "2026-06-17T22:57:41.619326Z",
       "description": "Why is it called Puzzles? That's the puzzle.",
       "discord_url": "https://lunapixel.studio/discord",
-      "downloads": 50441953,
-      "followers": 3669,
+      "downloads": 50492840,
+      "followers": 3673,
       "gallery": [
         {
           "created": "2025-07-29T07:41:15.035967Z",
@@ -23146,7 +23146,7 @@
               "project_id": "ohNO6lps"
             }
           ],
-          "downloads": 150402,
+          "downloads": 152125,
           "file": {
             "filename": "PuzzlesLib-v21.11.13-mc1.21.11-Fabric.jar",
             "hashes": {
@@ -23198,7 +23198,7 @@
           "url": "https://github.com/sponsors/PikaMug"
         }
       ],
-      "downloads": 114765,
+      "downloads": 114800,
       "followers": 226,
       "game_versions": [
         "1.8",
@@ -23409,8 +23409,8 @@
       "date_modified": "2026-02-14T01:23:59.624937Z",
       "description": "A shop plugin that allows players to easily sell/buy any items from a chest without any commands.",
       "discord_url": "https://discord.gg/Bu3dVtmsD3",
-      "downloads": 210049,
-      "followers": 450,
+      "downloads": 210208,
+      "followers": 451,
       "gallery": [
         {
           "created": "2022-12-23T13:52:10.190488Z",
@@ -23707,7 +23707,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-02-14T01:23:59.624937Z",
-          "downloads": 32516,
+          "downloads": 32809,
           "file": {
             "filename": "QuickShop-Hikari-6.2.0.11.jar",
             "hashes": {
@@ -23767,7 +23767,7 @@
       "date_modified": "2026-06-18T09:38:00.149452Z",
       "description": "Clean and Customizable. Alternative to Just Enough Items/JEI.",
       "discord_url": "https://discord.gg/Vs9AVkxjYY",
-      "downloads": 21905849,
+      "downloads": 21926049,
       "followers": 4373,
       "gallery": [
         {
@@ -23914,7 +23914,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 70314,
+          "downloads": 72011,
           "file": {
             "filename": "RoughlyEnoughItems-21.11.816-fabric.jar",
             "hashes": {
@@ -23961,7 +23961,7 @@
           "url": "https://ko-fi.com/telepathicgrunt"
         }
       ],
-      "downloads": 10995401,
+      "downloads": 11010570,
       "followers": 1118,
       "gallery": [
         {
@@ -24098,7 +24098,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 34877,
+          "downloads": 35121,
           "file": {
             "filename": "repurposed_structures-7.6.2+1.21.11-fabric.jar",
             "hashes": {
@@ -24137,7 +24137,7 @@
       "date_modified": "2026-06-18T03:50:08.539631Z",
       "description": "Resourceful Config is a mod that allows for developers to make cross-platform configs",
       "discord_url": "https://discord.gg/resourcefulbees",
-      "downloads": 19944957,
+      "downloads": 19965963,
       "followers": 731,
       "game_versions": [
         "1.19.2",
@@ -24184,7 +24184,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2026-03-18T18:48:38.829765Z",
-          "downloads": 166868,
+          "downloads": 167640,
           "file": {
             "filename": "ResourcefulConfig-fabric-1.21.11-3.11.3.jar",
             "hashes": {
@@ -24232,7 +24232,7 @@
           "url": "https://www.patreon.com/resourcefulbees"
         }
       ],
-      "downloads": 28977546,
+      "downloads": 29002717,
       "followers": 1162,
       "game_versions": [
         "1.19.2",
@@ -24285,7 +24285,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 249065,
+          "downloads": 249577,
           "file": {
             "filename": "ResourcefulLib-fabric-1.21.11-3.11.0.jar",
             "hashes": {
@@ -24326,7 +24326,7 @@
       "date_modified": "2026-06-08T22:08:50.636541Z",
       "description": "A fork of Mozilla's Rhino library, modified for use in mods",
       "discord_url": "https://discord.gg/lat",
-      "downloads": 17737871,
+      "downloads": 17757749,
       "followers": 100,
       "game_versions": [
         "1.18.2",
@@ -24369,7 +24369,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2025-10-13T22:23:08.213734Z",
-          "downloads": 528322,
+          "downloads": 529068,
           "file": {
             "filename": "rhino-2101.2.7-build.81.jar",
             "hashes": {
@@ -24434,8 +24434,8 @@
           "url": "https://ko-fi.com/jamalamdev"
         }
       ],
-      "downloads": 10050814,
-      "followers": 2551,
+      "downloads": 10059904,
+      "followers": 2555,
       "game_versions": [
         "1.14",
         "1.14.1",
@@ -24515,7 +24515,7 @@
               "project_id": "lhGA9TYQ"
             }
           ],
-          "downloads": 172960,
+          "downloads": 173305,
           "file": {
             "filename": "rightclickharvest-fabric-4.6.1+1.21.11.jar",
             "hashes": {
@@ -24556,8 +24556,8 @@
       "date_modified": "2026-06-24T12:58:51.451898Z",
       "description": "A mod that aims to optimize the minecraft server.",
       "discord_url": "https://discord.gg/Y9nC7Peq4m",
-      "downloads": 11157073,
-      "followers": 1400,
+      "downloads": 11181781,
+      "followers": 1402,
       "game_versions": [
         "1.17.1",
         "1.18-pre3",
@@ -24615,7 +24615,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2025-12-09T20:03:16.956582Z",
-          "downloads": 598675,
+          "downloads": 600538,
           "file": {
             "filename": "servercore-fabric-1.5.15+1.21.11.jar",
             "hashes": {
@@ -24639,7 +24639,7 @@
         },
         "26.1.2+fabric": {
           "date_published": "2026-06-24T12:56:58.151806Z",
-          "downloads": 6080,
+          "downloads": 6356,
           "file": {
             "filename": "servercore-fabric-1.5.19+26.1.2.jar",
             "hashes": {
@@ -24675,7 +24675,7 @@
       "date_modified": "2026-05-18T19:17:56.658855Z",
       "description": "SetHome is a plugin that allows you to easily create homes",
       "discord_url": "https://discord.gg/y6gGNsBTux",
-      "downloads": 245981,
+      "downloads": 246322,
       "followers": 149,
       "gallery": [
         {
@@ -24808,8 +24808,8 @@
       "date_modified": "2026-06-15T13:45:42.092509Z",
       "description": "Collection of shared code for OctoStudios' mods",
       "discord_url": "https://discord.com/invite/pHren9yxzW",
-      "downloads": 13273187,
-      "followers": 492,
+      "downloads": 13285647,
+      "followers": 494,
       "game_versions": [
         "1.18.2",
         "1.19.2",
@@ -24851,7 +24851,7 @@
               "project_id": "lhGA9TYQ"
             }
           ],
-          "downloads": 344089,
+          "downloads": 345606,
           "file": {
             "filename": "ShatterLib-FABRIC-0.6.0.8+1.21.11.jar",
             "hashes": {
@@ -24890,8 +24890,8 @@
       "date_created": "2022-07-16T03:01:45.246757Z",
       "date_modified": "2026-06-17T20:14:02.823509Z",
       "description": "View the contents of shulker boxes from your inventory",
-      "downloads": 29927548,
-      "followers": 9511,
+      "downloads": 29962482,
+      "followers": 9517,
       "gallery": [
         {
           "created": "2024-06-25T09:35:01.815034Z",
@@ -25011,7 +25011,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 1595811,
+          "downloads": 1602558,
           "file": {
             "filename": "shulkerboxtooltip-fabric-5.2.16+1.21.11.jar",
             "hashes": {
@@ -25058,7 +25058,7 @@
           "url": "https://ko-fi.com/spicymike"
         }
       ],
-      "downloads": 97505,
+      "downloads": 97820,
       "followers": 51,
       "game_versions": [
         "1.17",
@@ -25115,7 +25115,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-04-09T11:41:45.951198Z",
-          "downloads": 32195,
+          "downloads": 32684,
           "file": {
             "filename": "SimpleLogin-1.16.5.jar",
             "hashes": {
@@ -25186,8 +25186,8 @@
       "date_modified": "2026-06-30T17:33:00.827650Z",
       "description": "A working voice chat in Minecraft!",
       "discord_url": "https://discord.gg/4dH2zwTmyX",
-      "downloads": 54378534,
-      "followers": 12665,
+      "downloads": 54450049,
+      "followers": 12672,
       "gallery": [
         {
           "created": "2023-01-12T13:24:04.701172Z",
@@ -25514,14 +25514,6 @@
           "dependencies": [
             {
               "dependency_type": "optional",
-              "project_id": "9s6osm5g"
-            },
-            {
-              "dependency_type": "optional",
-              "project_id": "qyVF9oeo"
-            },
-            {
-              "dependency_type": "optional",
               "project_id": "UL4bJFDY"
             },
             {
@@ -25534,14 +25526,22 @@
             },
             {
               "dependency_type": "optional",
+              "project_id": "qyVF9oeo"
+            },
+            {
+              "dependency_type": "optional",
               "project_id": "mOgUt4GM"
+            },
+            {
+              "dependency_type": "optional",
+              "project_id": "9s6osm5g"
             },
             {
               "dependency_type": "optional",
               "project_id": "SRlzjEBS"
             }
           ],
-          "downloads": 263062,
+          "downloads": 272631,
           "file": {
             "filename": "voicechat-fabric-1.21.11-2.6.20.jar",
             "hashes": {
@@ -25665,7 +25665,7 @@
               "project_id": "YlKdE5VK"
             }
           ],
-          "downloads": 118789,
+          "downloads": 122922,
           "file": {
             "filename": "voicechat-fabric-2.6.20+26.1.2.jar",
             "hashes": {
@@ -25708,7 +25708,7 @@
       "date_created": "2022-11-27T23:34:50.120880Z",
       "date_modified": "2026-06-19T17:43:53.921461Z",
       "description": "A mod and plugin to make a bridge between Simple Voice Chat and Discord to allow for players without the mod to hear and speak.",
-      "downloads": 224463,
+      "downloads": 224720,
       "followers": 485,
       "game_versions": [
         "1.16.5",
@@ -25832,7 +25832,7 @@
           "url": "https://ko-fi.com/shanebee"
         }
       ],
-      "downloads": 204040,
+      "downloads": 204291,
       "followers": 88,
       "gallery": [
         {
@@ -25895,7 +25895,7 @@
               "project_id": "xFNYAvMk"
             }
           ],
-          "downloads": 4002,
+          "downloads": 4415,
           "file": {
             "filename": "SkBee-3.25.0.jar",
             "hashes": {
@@ -25946,18 +25946,18 @@
       "discord_url": "https://skinsrestorer.net/discord",
       "donation_urls": [
         {
-          "id": "paypal",
-          "platform": "Paypal",
-          "url": "https://skinsrestorer.net/donate"
-        },
-        {
           "id": "ko-fi",
           "platform": "Ko-fi",
           "url": "https://ko-fi.com/skinsrestorer"
+        },
+        {
+          "id": "paypal",
+          "platform": "Paypal",
+          "url": "https://skinsrestorer.net/donate"
         }
       ],
-      "downloads": 1235749,
-      "followers": 576,
+      "downloads": 1237943,
+      "followers": 577,
       "gallery": [
         {
           "created": "2025-06-25T18:06:12.946451Z",
@@ -26101,7 +26101,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-06-28T10:19:09.697314Z",
-          "downloads": 7823,
+          "downloads": 11744,
           "file": {
             "filename": "SkinsRestorer.jar",
             "hashes": {
@@ -26227,17 +26227,17 @@
       "discord_url": "https://discord.gg/ZPsZAg6ygu",
       "donation_urls": [
         {
-          "id": "other",
-          "platform": "Other",
-          "url": "https://opencollective.com/skriptlang"
-        },
-        {
           "id": "github",
           "platform": "Github",
           "url": "https://github.com/sponsors/SkriptLang"
+        },
+        {
+          "id": "other",
+          "platform": "Other",
+          "url": "https://opencollective.com/skriptlang"
         }
       ],
-      "downloads": 135685,
+      "downloads": 136163,
       "followers": 106,
       "gallery": [
         {
@@ -26354,7 +26354,7 @@
           "url": "https://ko-fi.com/openvdra"
         }
       ],
-      "downloads": 162291,
+      "downloads": 162564,
       "followers": 133,
       "gallery": [
         {
@@ -26450,7 +26450,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-06-25T06:20:24.037423Z",
-          "downloads": 2172,
+          "downloads": 2578,
           "file": {
             "filename": "SmartSpawner-1.7.0.1.jar",
             "hashes": {
@@ -26502,8 +26502,8 @@
       "date_created": "2022-06-23T14:36:52.813391Z",
       "date_modified": "2026-06-18T06:31:54.338735Z",
       "description": "A Minecraft mod that provides realistic sound attenuation, reverberation, and absorption through blocks.",
-      "downloads": 43902725,
-      "followers": 8939,
+      "downloads": 43944765,
+      "followers": 8944,
       "game_versions": [
         "1.19",
         "1.19.1",
@@ -26554,18 +26554,18 @@
           "dependencies": [
             {
               "dependency_type": "optional",
-              "project_id": "9s6osm5g"
-            },
-            {
-              "dependency_type": "optional",
               "project_id": "9eGKb6K1"
             },
             {
               "dependency_type": "optional",
               "project_id": "mOgUt4GM"
+            },
+            {
+              "dependency_type": "optional",
+              "project_id": "9s6osm5g"
             }
           ],
-          "downloads": 1895265,
+          "downloads": 1898936,
           "file": {
             "filename": "sound-physics-remastered-fabric-1.21.11-1.5.1.jar",
             "hashes": {
@@ -26605,8 +26605,8 @@
       "date_modified": "2026-06-18T21:12:32.814420Z",
       "description": "spark is a performance profiler for Minecraft clients, servers and proxies.",
       "discord_url": "https://discord.gg/PAGT2fu",
-      "downloads": 17554029,
-      "followers": 2020,
+      "downloads": 17573889,
+      "followers": 2021,
       "game_versions": [
         "1.16.5",
         "1.17.1",
@@ -26661,7 +26661,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2026-03-26T07:43:06.831770Z",
-          "downloads": 243558,
+          "downloads": 244561,
           "file": {
             "filename": "spark-1.10.170-fabric.jar",
             "hashes": {
@@ -26685,7 +26685,7 @@
         },
         "26.1.2+fabric": {
           "date_published": "2026-06-18T21:12:12.918302Z",
-          "downloads": 42331,
+          "downloads": 43606,
           "file": {
             "filename": "spark-1.10.173-fabric.jar",
             "hashes": {
@@ -26740,8 +26740,8 @@
           "url": "https://github.com/sponsors/jpenilla"
         }
       ],
-      "downloads": 105346,
-      "followers": 470,
+      "downloads": 105433,
+      "followers": 471,
       "gallery": [
         {
           "created": "2023-02-26T05:00:20.470196Z",
@@ -26808,7 +26808,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2025-12-11T23:26:20.150079Z",
-          "downloads": 8463,
+          "downloads": 8491,
           "file": {
             "filename": "squaremap-paper-mc1.21.11-1.3.12.jar",
             "hashes": {
@@ -26857,11 +26857,6 @@
       "discord_url": "https://discord.gg/VV4bQEdGAd",
       "donation_urls": [
         {
-          "id": "bmac",
-          "platform": "Bmac",
-          "url": "https://www.buymeacoffee.com/usainsrht"
-        },
-        {
           "id": "github",
           "platform": "Github",
           "url": "https://github.com/sponsors/UsainSrht"
@@ -26870,9 +26865,14 @@
           "id": "paypal",
           "platform": "Paypal",
           "url": "https://www.paypal.com/donate/?hosted_button_id=ZNU73U8HY5J88"
+        },
+        {
+          "id": "bmac",
+          "platform": "Bmac",
+          "url": "https://www.buymeacoffee.com/usainsrht"
         }
       ],
-      "downloads": 200535,
+      "downloads": 200706,
       "followers": 291,
       "gallery": [
         {
@@ -27001,7 +27001,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-04-09T04:27:54.112625Z",
-          "downloads": 31271,
+          "downloads": 31638,
           "file": {
             "filename": "sit-1.7.3.jar",
             "hashes": {
@@ -27090,7 +27090,7 @@
       "date_created": "2023-10-21T15:52:37.027318Z",
       "date_modified": "2026-06-27T22:51:47.847245Z",
       "description": "Integrate popular emote/emoji systems from your favorite streamers into Minecraft chat! Twitch, BTTV, FFZ, 7tv, now with server config support!",
-      "downloads": 108587,
+      "downloads": 108653,
       "followers": 167,
       "gallery": [
         {
@@ -27207,8 +27207,8 @@
           "url": "https://ko-fi.com/novinity"
         }
       ],
-      "downloads": 197809,
-      "followers": 79,
+      "downloads": 198495,
+      "followers": 81,
       "gallery": [
         {
           "created": "2025-03-10T12:13:44.530749Z",
@@ -27306,8 +27306,8 @@
       "date_modified": "2026-06-23T17:01:01.307553Z",
       "description": "Config Lib makes dealing with config files just a bit easier.",
       "discord_url": "https://discord.gg/QEbGyUYB2e",
-      "downloads": 26280683,
-      "followers": 1248,
+      "downloads": 26305234,
+      "followers": 1249,
       "game_versions": [
         "1.12",
         "1.12.1",
@@ -27385,7 +27385,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 491813,
+          "downloads": 492754,
           "file": {
             "filename": "supermartijn642configlib-1.1.8-fabric-mc1.21.11.jar",
             "hashes": {
@@ -27425,7 +27425,7 @@
       "date_modified": "2026-03-20T04:20:06.973883Z",
       "description": "SuperMartijn642's Core Lib adds lots of basic implementations that allow for similar code between different Minecraft versions!",
       "discord_url": "https://discord.gg/QEbGyUYB2e",
-      "downloads": 13989627,
+      "downloads": 14004342,
       "followers": 768,
       "game_versions": [
         "1.12",
@@ -27500,7 +27500,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 116116,
+          "downloads": 116544,
           "file": {
             "filename": "supermartijn642corelib-1.1.21-fabric-mc1.21.11.jar",
             "hashes": {
@@ -27539,7 +27539,7 @@
       "date_created": "2022-08-15T23:23:17.532599Z",
       "date_modified": "2026-06-18T16:06:06.207092Z",
       "description": "An all-in-one solution that works",
-      "downloads": 947240,
+      "downloads": 948635,
       "followers": 1353,
       "gallery": [
         {
@@ -27727,7 +27727,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-06-18T16:05:11.851861Z",
-          "downloads": 18122,
+          "downloads": 19741,
           "file": {
             "filename": "TAB v6.1.0.jar",
             "hashes": {
@@ -27813,7 +27813,7 @@
           "url": "https://github.com/sponsors/jpenilla"
         }
       ],
-      "downloads": 296456,
+      "downloads": 296655,
       "followers": 641,
       "gallery": [
         {
@@ -27942,7 +27942,7 @@
           "url": "https://thecsdev.com/fwd/support-me/"
         }
       ],
-      "downloads": 13362886,
+      "downloads": 13377029,
       "followers": 1223,
       "gallery": [
         {
@@ -28009,7 +28009,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 249042,
+          "downloads": 250119,
           "file": {
             "filename": "tcdcommons-5.1.0+fabric-1.21.11.jar",
             "hashes": {
@@ -28057,8 +28057,8 @@
           "url": "https://ko-fi.com/apollodev"
         }
       ],
-      "downloads": 14010717,
-      "followers": 6829,
+      "downloads": 14022371,
+      "followers": 6830,
       "gallery": [
         {
           "created": "2025-05-29T15:35:24.879915Z",
@@ -28216,7 +28216,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2025-12-23T00:39:43.685897Z",
-          "downloads": 451407,
+          "downloads": 452450,
           "file": {
             "filename": "tectonic-3.0.19-fabric-1.21.11.jar",
             "hashes": {
@@ -28243,14 +28243,14 @@
           "dependencies": [
             {
               "dependency_type": "required",
-              "project_id": "P7dR8mSH"
+              "project_id": "XaDC71GB"
             },
             {
               "dependency_type": "required",
-              "project_id": "XaDC71GB"
+              "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 17529,
+          "downloads": 18063,
           "file": {
             "filename": "tectonic-3.0.25-fabric-26.1.jar",
             "hashes": {
@@ -28290,7 +28290,7 @@
       "client_side": "required",
       "color": 10130574,
       "date_created": "2023-03-01T10:32:34.314130Z",
-      "date_modified": "2026-06-27T09:59:47.195670Z",
+      "date_modified": "2026-07-01T07:25:11.644603Z",
       "description": "A library mod for adding biomes in a simple and compatible manner!",
       "discord_url": "https://discord.gg/GyyzU6T",
       "donation_urls": [
@@ -28300,8 +28300,8 @@
           "url": "https://www.patreon.com/Adubbz"
         }
       ],
-      "downloads": 32469250,
-      "followers": 2180,
+      "downloads": 32503215,
+      "followers": 2181,
       "game_versions": [
         "1.18.1",
         "1.18.2",
@@ -28358,7 +28358,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 421354,
+          "downloads": 422028,
           "file": {
             "filename": "TerraBlender-fabric-1.21.11-21.11.0.0.jar",
             "hashes": {
@@ -28426,8 +28426,8 @@
           "url": "https://patreon.com/stardustlabs"
         }
       ],
-      "downloads": 18795820,
-      "followers": 7875,
+      "downloads": 18814921,
+      "followers": 7876,
       "gallery": [
         {
           "created": "2022-11-13T21:53:31.044672Z",
@@ -28498,7 +28498,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2025-12-16T05:15:15.946488Z",
-          "downloads": 290924,
+          "downloads": 290979,
           "file": {
             "filename": "Terralith_1.21.x_v2.5.14.jar",
             "hashes": {
@@ -28531,7 +28531,7 @@
               "project_id": "XaDC71GB"
             }
           ],
-          "downloads": 229036,
+          "downloads": 230092,
           "file": {
             "filename": "Terralith_26.1_v2.6.2_Fabric.jar",
             "hashes": {
@@ -28579,18 +28579,18 @@
           "url": "https://github.com/sponsors/tom5454"
         },
         {
-          "id": "ko-fi",
-          "platform": "Ko-fi",
-          "url": "https://ko-fi.com/tom5454"
-        },
-        {
           "id": "patreon",
           "platform": "Patreon",
           "url": "https://www.patreon.com/tom5454"
+        },
+        {
+          "id": "ko-fi",
+          "platform": "Ko-fi",
+          "url": "https://ko-fi.com/tom5454"
         }
       ],
-      "downloads": 15937543,
-      "followers": 1238,
+      "downloads": 15957004,
+      "followers": 1239,
       "game_versions": [
         "1.15.2",
         "1.16.4",
@@ -28671,7 +28671,7 @@
           "dependencies": [
             {
               "dependency_type": "optional",
-              "project_id": "u6dRKJwZ"
+              "project_id": "5aaWibi9"
             },
             {
               "dependency_type": "optional",
@@ -28679,26 +28679,26 @@
             },
             {
               "dependency_type": "optional",
+              "project_id": "u6dRKJwZ"
+            },
+            {
+              "dependency_type": "embedded",
+              "project_id": "9s6osm5g"
+            },
+            {
+              "dependency_type": "optional",
               "project_id": "tagwiZkJ"
-            },
-            {
-              "dependency_type": "optional",
-              "project_id": "Orvt0mRa"
-            },
-            {
-              "dependency_type": "optional",
-              "project_id": "5aaWibi9"
             },
             {
               "dependency_type": "optional",
               "project_id": "nfn13YXA"
             },
             {
-              "dependency_type": "embedded",
-              "project_id": "9s6osm5g"
+              "dependency_type": "optional",
+              "project_id": "Orvt0mRa"
             }
           ],
-          "downloads": 60326,
+          "downloads": 60491,
           "file": {
             "filename": "toms_storage_fabric-1.21.11-2.8.0.jar",
             "hashes": {
@@ -28738,8 +28738,8 @@
       "date_modified": "2026-06-30T15:02:29.103619Z",
       "description": "Spice up your world with new villages, pillager outposts, and even new ships!",
       "discord_url": "https://discord.com/invite/yJng7sC44x",
-      "downloads": 14376709,
-      "followers": 4302,
+      "downloads": 14390228,
+      "followers": 4309,
       "gallery": [
         {
           "created": "2022-10-30T21:54:09.537419Z",
@@ -28890,7 +28890,7 @@
               "project_id": "cl223EMc"
             }
           ],
-          "downloads": 114540,
+          "downloads": 115084,
           "file": {
             "filename": "t_and_t-fabric-neoforge-1.13.9.jar",
             "hashes": {
@@ -28931,7 +28931,7 @@
       "date_created": "2024-02-15T17:39:47.384379Z",
       "date_modified": "2026-06-08T18:15:19.452340Z",
       "description": "A simple teleportation plugin that supports Folia, compatible with Bukkit/Spigot/Paper/Folia.",
-      "downloads": 114434,
+      "downloads": 114571,
       "followers": 65,
       "gallery": [
         {
@@ -29055,7 +29055,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-06-08T18:15:19.452340Z",
-          "downloads": 6896,
+          "downloads": 7157,
           "file": {
             "filename": "TPA-3.2.9.jar",
             "hashes": {
@@ -29169,7 +29169,7 @@
       "date_created": "2022-04-14T09:21:07.818734Z",
       "date_modified": "2025-10-04T09:08:43.771556Z",
       "description": "A fully customizable mod for fabric that displays the servers tps.",
-      "downloads": 387016,
+      "downloads": 387554,
       "followers": 123,
       "game_versions": [
         "1.18.2",
@@ -29241,7 +29241,7 @@
               "project_id": "mOgUt4GM"
             }
           ],
-          "downloads": 257086,
+          "downloads": 257445,
           "file": {
             "filename": "tps-hud-1.9.0+1.21.9.jar",
             "hashes": {
@@ -29305,8 +29305,8 @@
           "url": "https://www.paypal.com/donate/?hosted_button_id=KE52UJ7TAZAC4"
         }
       ],
-      "downloads": 17278779,
-      "followers": 6377,
+      "downloads": 17293476,
+      "followers": 6381,
       "gallery": [
         {
           "created": "2023-10-30T22:36:35.489288Z",
@@ -29421,30 +29421,6 @@
           "date_published": "2026-03-28T11:54:17.130036Z",
           "dependencies": [
             {
-              "dependency_type": "optional",
-              "project_id": "SaCpeal4"
-            },
-            {
-              "dependency_type": "required",
-              "project_id": "P7dR8mSH"
-            },
-            {
-              "dependency_type": "optional",
-              "project_id": "tagwiZkJ"
-            },
-            {
-              "dependency_type": "optional",
-              "project_id": "yn9u3ypm"
-            },
-            {
-              "dependency_type": "optional",
-              "project_id": "fRiHVvU7"
-            },
-            {
-              "dependency_type": "optional",
-              "project_id": "u6dRKJwZ"
-            },
-            {
               "dependency_type": "required",
               "project_id": "ohNO6lps"
             },
@@ -29458,6 +29434,18 @@
             },
             {
               "dependency_type": "optional",
+              "project_id": "SaCpeal4"
+            },
+            {
+              "dependency_type": "required",
+              "project_id": "P7dR8mSH"
+            },
+            {
+              "dependency_type": "optional",
+              "project_id": "tagwiZkJ"
+            },
+            {
+              "dependency_type": "optional",
               "project_id": "vRYk0bv7"
             },
             {
@@ -29466,14 +29454,26 @@
             },
             {
               "dependency_type": "optional",
+              "project_id": "yn9u3ypm"
+            },
+            {
+              "dependency_type": "optional",
               "project_id": "DMu0oBKf"
             },
             {
               "dependency_type": "optional",
+              "project_id": "fRiHVvU7"
+            },
+            {
+              "dependency_type": "optional",
               "project_id": "nfn13YXA"
+            },
+            {
+              "dependency_type": "optional",
+              "project_id": "u6dRKJwZ"
             }
           ],
-          "downloads": 207668,
+          "downloads": 208645,
           "file": {
             "filename": "travelersbackpack-fabric-1.21.11-10.11.9.jar",
             "hashes": {
@@ -29525,7 +29525,7 @@
           "url": "https://github.com/sponsors/gabber235"
         }
       ],
-      "downloads": 135179,
+      "downloads": 135226,
       "followers": 495,
       "gallery": [
         {
@@ -29604,7 +29604,7 @@
               "project_id": "wKkoqHrH"
             }
           ],
-          "downloads": 1256,
+          "downloads": 1327,
           "file": {
             "filename": "Typewriter-0.9.0-beta-174.jar",
             "hashes": {
@@ -29652,8 +29652,8 @@
       "date_modified": "2026-06-22T23:05:51.638641Z",
       "description": "A modern drop-in Vault fork, with Folia support, and enhanced APIs.",
       "discord_url": "https://discord.gg/WNdwzpy",
-      "downloads": 98736,
-      "followers": 146,
+      "downloads": 98879,
+      "followers": 147,
       "game_versions": [
         "1.1",
         "1.2.1",
@@ -29777,7 +29777,7 @@
       "selected_versions": {
         "1.21.11+paper": {
           "date_published": "2026-06-22T23:05:51.638641Z",
-          "downloads": 2578,
+          "downloads": 2937,
           "file": {
             "filename": "VaultUnlocked-2.20.2.jar",
             "hashes": {
@@ -29933,8 +29933,8 @@
           "url": "https://ko-fi.com/miraculixx"
         }
       ],
-      "downloads": 58333016,
-      "followers": 5240,
+      "downloads": 58445038,
+      "followers": 5243,
       "gallery": [
         {
           "created": "2024-07-05T10:35:35.132611Z",
@@ -30034,7 +30034,7 @@
               "project_id": "dxa0Bm8m"
             }
           ],
-          "downloads": 1688883,
+          "downloads": 1717553,
           "file": {
             "filename": "veinminer-fabric-2.10.3+1.21.11.jar",
             "hashes": {
@@ -30122,8 +30122,8 @@
           "url": "https://ko-fi.com/miraculixx"
         }
       ],
-      "downloads": 14931526,
-      "followers": 1133,
+      "downloads": 14942643,
+      "followers": 1135,
       "gallery": [
         {
           "created": "2024-09-15T13:21:29.011295Z",
@@ -30192,7 +30192,7 @@
               "project_id": "OhduvhIc"
             }
           ],
-          "downloads": 247919,
+          "downloads": 251885,
           "file": {
             "filename": "veinminer-enchant-2.10.3+1.21.11.jar",
             "hashes": {
@@ -30227,7 +30227,7 @@
               "project_id": "OhduvhIc"
             }
           ],
-          "downloads": 247919,
+          "downloads": 251885,
           "file": {
             "filename": "veinminer-enchant-2.10.3+1.21.11.jar",
             "hashes": {
@@ -30278,8 +30278,8 @@
           "url": "https://github.com/sponsors/kennytv"
         }
       ],
-      "downloads": 1603049,
-      "followers": 766,
+      "downloads": 1604975,
+      "followers": 767,
       "game_versions": [
         "1.10",
         "1.10.1",
@@ -30369,14 +30369,14 @@
             },
             {
               "dependency_type": "optional",
-              "project_id": "TbHIxhx5"
+              "project_id": "YlKdE5VK"
             },
             {
               "dependency_type": "optional",
-              "project_id": "YlKdE5VK"
+              "project_id": "TbHIxhx5"
             }
           ],
-          "downloads": 25957,
+          "downloads": 26394,
           "file": {
             "filename": "ViaBackwards-5.10.0.jar",
             "hashes": {
@@ -30468,14 +30468,14 @@
             },
             {
               "dependency_type": "optional",
-              "project_id": "TbHIxhx5"
+              "project_id": "YlKdE5VK"
             },
             {
               "dependency_type": "optional",
-              "project_id": "YlKdE5VK"
+              "project_id": "TbHIxhx5"
             }
           ],
-          "downloads": 25957,
+          "downloads": 26394,
           "file": {
             "filename": "ViaBackwards-5.10.0.jar",
             "hashes": {
@@ -30567,14 +30567,14 @@
             },
             {
               "dependency_type": "optional",
-              "project_id": "TbHIxhx5"
+              "project_id": "YlKdE5VK"
             },
             {
               "dependency_type": "optional",
-              "project_id": "YlKdE5VK"
+              "project_id": "TbHIxhx5"
             }
           ],
-          "downloads": 25957,
+          "downloads": 26394,
           "file": {
             "filename": "ViaBackwards-5.10.0.jar",
             "hashes": {
@@ -30675,17 +30675,17 @@
       "description": "ViaVersion addon to allow 1.8.x and 1.7.x clients on newer server versions.",
       "donation_urls": [
         {
-          "id": "github",
-          "platform": "Github",
-          "url": "https://github.com/sponsors/florianreuth"
-        },
-        {
           "id": "ko-fi",
           "platform": "Ko-fi",
           "url": "https://ko-fi.com/florianreuth"
+        },
+        {
+          "id": "github",
+          "platform": "Github",
+          "url": "https://github.com/sponsors/florianreuth"
         }
       ],
-      "downloads": 502389,
+      "downloads": 502951,
       "followers": 183,
       "game_versions": [
         "1.7.10",
@@ -30798,7 +30798,7 @@
               "project_id": "NpvuJQoq"
             }
           ],
-          "downloads": 4843,
+          "downloads": 5272,
           "file": {
             "filename": "ViaRewind-4.1.2.jar",
             "hashes": {
@@ -30904,7 +30904,7 @@
               "project_id": "NpvuJQoq"
             }
           ],
-          "downloads": 4843,
+          "downloads": 5272,
           "file": {
             "filename": "ViaRewind-4.1.2.jar",
             "hashes": {
@@ -31010,7 +31010,7 @@
               "project_id": "NpvuJQoq"
             }
           ],
-          "downloads": 4843,
+          "downloads": 5272,
           "file": {
             "filename": "ViaRewind-4.1.2.jar",
             "hashes": {
@@ -31124,8 +31124,8 @@
           "url": "https://github.com/sponsors/kennytv"
         }
       ],
-      "downloads": 2350099,
-      "followers": 1149,
+      "downloads": 2353014,
+      "followers": 1150,
       "game_versions": [
         "1.8.9",
         "1.9",
@@ -31228,7 +31228,7 @@
               "project_id": "YlKdE5VK"
             }
           ],
-          "downloads": 37432,
+          "downloads": 38766,
           "file": {
             "filename": "ViaVersion-5.10.0.jar",
             "hashes": {
@@ -31333,7 +31333,7 @@
               "project_id": "YlKdE5VK"
             }
           ],
-          "downloads": 37432,
+          "downloads": 38766,
           "file": {
             "filename": "ViaVersion-5.10.0.jar",
             "hashes": {
@@ -31438,7 +31438,7 @@
               "project_id": "YlKdE5VK"
             }
           ],
-          "downloads": 37432,
+          "downloads": 38766,
           "file": {
             "filename": "ViaVersion-5.10.0.jar",
             "hashes": {
@@ -31558,7 +31558,7 @@
           "url": "https://ko-fi.com/justdoom"
         }
       ],
-      "downloads": 360367,
+      "downloads": 360694,
       "followers": 373,
       "gallery": [
         {
@@ -31723,8 +31723,8 @@
           "url": "https://patreon.com/serilum"
         }
       ],
-      "downloads": 10067133,
-      "followers": 1715,
+      "downloads": 10075273,
+      "followers": 1717,
       "game_versions": [
         "1.16.5",
         "1.18.2",
@@ -31780,7 +31780,7 @@
               "project_id": "e0M1UDsY"
             }
           ],
-          "downloads": 11252,
+          "downloads": 11397,
           "file": {
             "filename": "villagernames-1.21.11-8.5.jar",
             "hashes": {
@@ -31822,8 +31822,8 @@
       "date_modified": "2026-06-21T10:49:40.442648Z",
       "description": "Items stay inside of crafting tables and are also rendered on top. It's really fancy!",
       "discord_url": "https://lunapixel.studio/discord",
-      "downloads": 21765824,
-      "followers": 2567,
+      "downloads": 21786317,
+      "followers": 2570,
       "gallery": [
         {
           "created": "2025-07-29T14:46:13.969745Z",
@@ -31889,7 +31889,7 @@
               "project_id": "ohNO6lps"
             }
           ],
-          "downloads": 240985,
+          "downloads": 241389,
           "file": {
             "filename": "VisualWorkbench-v21.11.1-mc1.21.11-Fabric.jar",
             "hashes": {
@@ -31928,7 +31928,7 @@
       "date_modified": "2026-06-14T13:17:58.856636Z",
       "description": "A Fabric mod designed to improve server performance at high playercounts.",
       "discord_url": "https://discord.relativitymc.org/",
-      "downloads": 13634218,
+      "downloads": 13647878,
       "followers": 1972,
       "game_versions": [
         "1.18",
@@ -32065,7 +32065,7 @@
       "selected_versions": {
         "1.21.11+fabric": {
           "date_published": "2026-02-14T12:33:38.693877Z",
-          "downloads": 897007,
+          "downloads": 901088,
           "file": {
             "filename": "vmp-fabric-mc1.21.11-0.2.0+beta.7.227-all.jar",
             "hashes": {
@@ -32089,7 +32089,7 @@
         },
         "26.1.2+fabric": {
           "date_published": "2026-04-09T12:17:55.663410Z",
-          "downloads": 230887,
+          "downloads": 232167,
           "file": {
             "filename": "vmp-fabric-mc26.1.2-0.2.0+beta.7.234-all.jar",
             "hashes": {
@@ -32141,8 +32141,8 @@
           "url": "https://boosty.to/dimaskama/donate"
         }
       ],
-      "downloads": 206580,
-      "followers": 213,
+      "downloads": 207016,
+      "followers": 214,
       "game_versions": [
         "1.21.1",
         "1.21.3",
@@ -32188,7 +32188,7 @@
               "project_id": "9eGKb6K1"
             }
           ],
-          "downloads": 13242,
+          "downloads": 13317,
           "file": {
             "filename": "voicemessages-paper-1.0.12.jar",
             "hashes": {
@@ -32255,8 +32255,8 @@
           "url": "https://www.patreon.com/BlayTheNinth"
         }
       ],
-      "downloads": 20180185,
-      "followers": 4903,
+      "downloads": 20200426,
+      "followers": 4909,
       "game_versions": [
         "1.16.5",
         "1.18",
@@ -32308,14 +32308,14 @@
           "dependencies": [
             {
               "dependency_type": "required",
-              "project_id": "P7dR8mSH"
+              "project_id": "MBAkmtvl"
             },
             {
               "dependency_type": "required",
-              "project_id": "MBAkmtvl"
+              "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 184818,
+          "downloads": 185351,
           "file": {
             "filename": "waystones-fabric-1.21.11-21.11.9.jar",
             "hashes": {
@@ -32369,8 +32369,8 @@
           "url": "https://github.com/sponsors/EngineHub"
         }
       ],
-      "downloads": 8460117,
-      "followers": 4454,
+      "downloads": 8470977,
+      "followers": 4457,
       "game_versions": [
         "1.17.1",
         "1.18.2",
@@ -32483,7 +32483,7 @@
           "url": "https://github.com/sponsors/EngineHub"
         }
       ],
-      "downloads": 609072,
+      "downloads": 610094,
       "followers": 593,
       "game_versions": [
         "1.21",
@@ -32581,8 +32581,8 @@
           "url": "https://www.patreon.com/xaero96"
         }
       ],
-      "downloads": 89019160,
-      "followers": 16655,
+      "downloads": 89128456,
+      "followers": 16666,
       "game_versions": [
         "1.7.10",
         "1.8.9",
@@ -32654,7 +32654,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 208243,
+          "downloads": 216053,
           "file": {
             "filename": "xaerominimap-fabric-1.21.11-26.1.4.jar",
             "hashes": {
@@ -32701,8 +32701,8 @@
           "url": "https://www.patreon.com/xaero96"
         }
       ],
-      "downloads": 78209992,
-      "followers": 12685,
+      "downloads": 78301925,
+      "followers": 12696,
       "game_versions": [
         "1.7.10",
         "1.8.9",
@@ -32774,7 +32774,7 @@
               "project_id": "gF3BGWvG"
             }
           ],
-          "downloads": 174772,
+          "downloads": 181154,
           "file": {
             "filename": "xaeroworldmap-fabric-1.21.11-1.41.2.jar",
             "hashes": {
@@ -32822,8 +32822,8 @@
           "url": "https://patreon.com/isxander"
         }
       ],
-      "downloads": 97036482,
-      "followers": 8962,
+      "downloads": 97155423,
+      "followers": 8969,
       "gallery": [
         {
           "created": "2024-10-19T16:23:04.212763Z",
@@ -32902,7 +32902,7 @@
               "project_id": "P7dR8mSH"
             }
           ],
-          "downloads": 8156828,
+          "downloads": 8175113,
           "file": {
             "filename": "yet_another_config_lib_v3-3.8.2+1.21.11-fabric.jar",
             "hashes": {
