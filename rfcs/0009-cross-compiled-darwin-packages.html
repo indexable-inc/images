@@ -35,7 +35,7 @@
   </dl>
 
   <h2>Summary</h2>
-  <p>A package opts into macOS with one line. The Linux CI fleet cross-compiles it for both Apple triples through the
+  <p>A package opts into macOS with one line. The Linux CI fleet cross-compiles it for Apple silicon through the
     per-unit Rust build DAG, pushes the closures to <code>cache.ix.dev</code>, and aliases the results into the native
     Darwin package namespaces. A Mac then runs <code>nix build .#&lt;name&gt;</code> and <em>substitutes</em> a
     prebuilt binary instead of compiling anything. The package definition never learns any of this happened.</p>
@@ -103,8 +103,11 @@ cross = {
   attrName = id;               # flake attr stem
   exposeNativeDarwin = true;   # alias into packages.&lt;darwin-system&gt;.&lt;attrName&gt;
   systems = null;              # build-host systems (null = all)
-  targets = [ "aarch64-apple-darwin" "x86_64-apple-darwin" ];
+  targets = [ "aarch64-apple-darwin" ];
 };</code></pre>
+  <p>The default target set is Apple silicon only: the fleet has no Intel-Mac users, and a second triple doubles the
+    cross-build cost for artifacts nobody pulls. A package that needs <code>x86_64-apple-darwin</code> (or any other
+    triple the lane supports) lists it in <code>targets</code>; the machinery below is triple-generic.</p>
   <p>The registry exposes <code>crossEntriesFor system</code>, mirroring <code>packageSetEntriesFor</code> and
     <code>flakeEntriesFor</code>. Deliberately absent: <code>backend</code>, <code>build</code>, or <code>wrap</code>
     knobs. If a package needs those, the lane is wrong, not the tag.</p>
@@ -183,14 +186,14 @@ zig cc + macOS SDK sysroot (C deps, linker)</code></pre>
   <h3>Naming and Darwin aliasing</h3>
   <p>Cross outputs publish under the Linux system, keyed by triple, then alias into the native Darwin namespaces:</p>
   <pre><code>packages.x86_64-linux.dag-runner-aarch64-apple-darwin   # the real derivation
-packages.x86_64-linux.dag-runner-x86_64-apple-darwin
-packages.aarch64-darwin.dag-runner                       # alias -&gt; same drv
-packages.x86_64-darwin.dag-runner</code></pre>
+packages.aarch64-darwin.dag-runner                       # alias -&gt; same drv</code></pre>
   <p><code>flake.nix</code> does the merge in three lines:</p>
   <pre><code>linuxDarwinAliases = perSystem.x86_64-linux.darwinPackageAliases or { };
 packages = rawPackages // lib.genAttrs [ "aarch64-darwin" "x86_64-darwin" ]
   (system: rawPackages.${system} // (linuxDarwinAliases.${system} or { }));</code></pre>
-  <p><code>exposeNativeDarwin = false</code> keeps the triple-suffixed output but skips the alias, for a package that
+  <p>The merge covers both Darwin systems, but with the Apple-silicon-only default the
+    <code>x86_64-darwin</code> alias set is empty until a package opts into that triple.
+    <code>exposeNativeDarwin = false</code> keeps the triple-suffixed output but skips the alias, for a package that
     should be fetched explicitly rather than shadow a native name.</p>
 
   <h3>Substitution</h3>
@@ -216,6 +219,16 @@ packages = rawPackages // lib.genAttrs [ "aarch64-darwin" "x86_64-darwin" ]
     script (a bash-from-the-Linux-store shebang would be dead on a Mac). A regression in the zig/SDK wiring fails a
     check on x86_64-linux CI rather than silently shipping a wrong-arch binary.</p>
 
+  <h3>What does not need this lane: Haskell</h3>
+  <p>GHC Linux&rarr;Darwin cross would be a category problem, but it turns out nothing here needs it.
+    <code>nix-output-monitor</code>, the one Haskell tool in the tree, is a nixpkgs expression
+    (<code>pkgs/by-name/ni/nix-output-monitor</code>) with a single leaf patch on
+    <code>haskellPackages.nix-derivation</code> (<code>packages/nix/nix-output-monitor/default.nix</code>). Unlike the
+    Rust workspace, that path has no Linux-only IFD: on a Mac it evaluates natively, GHC and the unpatched dependency
+    closure substitute from <code>cache.nixos.org</code>, and only the patched leaf and <code>nom</code> itself
+    compile locally. Haskell tools ride nixpkgs' native Darwin path and never enter the cross lane; the lane's scope
+    is repo-owned Rust (plus its C/C++ and Svelte inputs), which is exactly what the unit DAG covers.</p>
+
   <h3>Migration</h3>
   <p>Adding a package to the Mac set: add <code>cross = true</code> to its <code>package.nix</code>. Removing it:
     delete the line. Nothing else changes, because the definition was already target-agnostic (or becomes so by using
@@ -228,8 +241,6 @@ packages = rawPackages // lib.genAttrs [ "aarch64-darwin" "x86_64-darwin" ]
       unit-graph IFD, which is an <code>x86_64-linux</code> derivation and fails with a platform mismatch. If the
       cache has the path, the Mac user gets it; if the cache is cold, there is no slow-but-working local fallback.
       Cache availability is load-bearing.</li>
-    <li><strong>No Haskell.</strong> GHC Linux&rarr;Darwin cross is a category problem for this setup;
-      <code>nix-output-monitor</code> is deliberately excluded and needs a native Darwin path later.</li>
     <li><strong>Trust and provenance.</strong> The artifacts are Mach-O binaries built on Linux with a repackaged SDK,
       unsigned and un-notarized. Gatekeeper friction and "who built this Mac binary" are real and unaddressed
       here.</li>
@@ -239,8 +250,6 @@ packages = rawPackages // lib.genAttrs [ "aarch64-darwin" "x86_64-darwin" ]
     <li><strong>Untested on target.</strong> The smoke checks prove arch and wrapper shape, not runtime behavior. A
       cross build can link clean and still fail at a dlopen or framework version on a real Mac. Confidence comes from
       developers running the tools, not from a gate.</li>
-    <li><strong>x86_64-darwin doubles the cost for little exercise.</strong> Both Apple triples build by default;
-      the Intel output gets few users.</li>
   </ul>
 
   <h2>Alternatives</h2>
@@ -248,8 +257,8 @@ packages = rawPackages // lib.genAttrs [ "aarch64-darwin" "x86_64-darwin" ]
     <li><strong>Do nothing; Mac users build from source.</strong> Always correct, always slow, cache-defeating for
       exactly the tools people want locally. Rejected as the default experience.</li>
     <li><strong>Native Darwin CI builders.</strong> The most robust answer (real toolchain, real ABI, on-target
-      tests, covers Haskell) and the obvious future direction. Rejected <em>for now</em> on cost and operational
-      surface; this lane is the bridge, not the competitor.</li>
+      tests) and the obvious future direction. Rejected <em>for now</em> on cost and operational surface; this lane
+      is the bridge, not the competitor.</li>
     <li><strong>Stock nixpkgs <code>pkgsCross</code>.</strong> Drags in the same SDK-licensing question, needs
       per-package cross plumbing, and does not compose with the <code>nix-cargo-unit</code> per-unit graph as cleanly
       as threading a toolchain <code>env</code> through the existing renderer. The zig toolchain is already proven in
@@ -285,23 +294,19 @@ packages = rawPackages // lib.genAttrs [ "aarch64-darwin" "x86_64-darwin" ]
       accept "merge then wait for the push job"?</li>
     <li><strong>Curation.</strong> The tag makes opting in trivial, which makes over-tagging easy. Is the criterion
       "a developer runs this locally on a Mac", and who enforces it?</li>
-    <li><strong>Keep building x86_64-darwin?</strong> Or make the Intel triple opt-in per package rather than a
-      default target?</li>
     <li><strong>On-target signal.</strong> Without Darwin CI, is a lightweight periodic "does it launch" check worth
       formalizing, or do we accept build-only confidence until native runners exist?</li>
     <li><strong>Signing / notarization.</strong> Do the binaries need codesigning to be pleasant under Gatekeeper,
       and where in the pipeline would that live?</li>
-    <li><strong>The Haskell gap.</strong> Native Darwin build (needs runners), or leave
-      <code>nix-output-monitor</code> Linux-only indefinitely?</li>
   </ol>
 
   <h2>Future possibilities</h2>
   <ul>
     <li><strong>Cross to <code>aarch64-linux</code> and musl.</strong> <code>unitsFor</code> already handles
-      non-Apple triples with the ordinary linker; the tag's <code>targets</code> list could grow beyond the two Apple
-      triples with no new machinery.</li>
+      non-Apple triples with the ordinary linker; the tag's <code>targets</code> list can grow beyond Apple silicon
+      with no new machinery.</li>
     <li><strong>Native Darwin CI runners.</strong> Build and test natively, keep this lane as the fast path or retire
-      it, and cover Haskell.</li>
+      it, and push even the locally-compiled Haskell leaves into <code>cache.ix.dev</code>.</li>
     <li><strong>Codesigning and notarization.</strong> A post-build signing step, credentialed the way the cache-push
       token is, would make the artifacts first-class on locked-down Macs.</li>
     <li><strong>On-target verification.</strong> A single Mac runner doing "substitute the pushed closure, launch it"

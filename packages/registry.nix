@@ -108,10 +108,10 @@ let
   normalizeCross =
     label: id: value:
     let
-      defaultTargets = [
-        "aarch64-apple-darwin"
-        "x86_64-apple-darwin"
-      ];
+      # Apple silicon only: the fleet has no Intel-Mac users, so the second
+      # triple would double cross-build cost for artifacts nobody pulls. A
+      # package that needs it opts in via `cross.targets`.
+      defaultTargets = [ "aarch64-apple-darwin" ];
       normalized =
         if value == null || value == false then
           null
