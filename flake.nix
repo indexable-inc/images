@@ -356,6 +356,11 @@
       # `recurseForDerivations` groups are not derivations, which the flake
       # `checks` schema requires.
       ciChecks = collect "ciChecks";
+      # CI-only view of `packages` with each NixOS image swapped for its
+      # `toplevel` closure; cache-push.yml publishes this instead of the
+      # monolithic `*-oci.tar` archives, which nothing substitutes. Non-schema,
+      # so surfaced through `collect` like `ciChecks`. See lib/per-system.nix.
+      cachePushRoots = collect "cachePushRoots";
       formatter = collect "formatter";
       apps = collect "apps";
       devShells = collect "devShells";

@@ -56,6 +56,10 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Per-phase wall-clock, surfaced as run annotations so a slow phase
+          # (eval / realise / push) is visible without re-timing by hand.
+          phase() { echo "::notice::cache-push phase '$1' took $(( SECONDS - $2 ))s"; }
+
           # The dispatcher exposes the push token as an env-file credential and
           # names it in IX_PUBLIC_PUSH_CREDENTIAL_NAME. Absent => not yet
           # provisioned/deployed; skip without failing (mirrors the old gate).
@@ -98,6 +102,7 @@ jobs:
           # runner PATH carries coreutils + nix but not findutils, so bare
           # `xargs` is `command not found`. (nix-store and nix build come with
           # the runner's nix.)
+          tools_t=$SECONDS
           eval_jobs="$(nix build .#nix-eval-jobs --no-link --print-out-paths)/bin/nix-eval-jobs"
           attic="$(nix build .#attic-client --no-link --print-out-paths)/bin/attic"
           # jq is multi-output; select its `bin` output explicitly so the path
@@ -106,7 +111,16 @@ jobs:
           # findutils is multi-output (out info locate); select `out` (where
           # xargs lives) so the path resolves to a single store path.
           xargs="$(nix build '.#findutils^out' --no-link --print-out-paths)/bin/xargs"
+          phase tools "$tools_t"
 
+          # Enumerate `.#cachePushRoots`, not `.#packages`: it publishes the
+          # closures `ix up` substitutes with the monolithic `*-oci.tar` archives
+          # stripped out (NixOS images reduced to their `toplevel`, the tar-pinning
+          # health-checks dropped in favour of the node closures directly). Each
+          # archive is cold every run (check.yml only eval-validates packages) and,
+          # being one uncompressed blob, never dedups, so building and re-uploading
+          # them used to dominate the run. See lib/per-system.nix.
+          #
           # Publish to ix-public by DERIVATION, not by eval-time output path: a
           # floating content-addressed output (the rust workspace defaults to CA)
           # has no path until it is realised, so nix-eval-jobs reports
@@ -121,12 +135,14 @@ jobs:
           # paths. The shared warm host store keeps this cheap across runs.
           drvs="$workdir/drvs.txt"
           outs="$workdir/outs.txt"
+          eval_t=$SECONDS
           "$eval_jobs" \
-            --flake .#packages.x86_64-linux \
+            --flake .#cachePushRoots.x86_64-linux \
             --workers 16 \
             --max-memory-size 6144 \
             2>"$workdir/eval.err" \
             | "$jq" -r '.drvPath // empty' | sort -u > "$drvs" || true
+          phase eval "$eval_t"
 
           # Realise one drv per invocation (-n1), 16 in parallel (-P16). This is
           # deliberate, not the obvious batch: a single `nix-store --realise` of
@@ -137,12 +153,17 @@ jobs:
           # drops only its own path; --keep-going finishes the rest of that drv's
           # closure; -P16 keeps build/substitute parallelism (matches the eval
           # workers). xargs exits non-zero if any child failed; surfaced below.
+          realise_t=$SECONDS
           "$xargs" -a "$drvs" -r -P16 -n1 nix-store --realise --keep-going > "$outs" 2>"$workdir/realise.err" \
             || echo "::warning::some derivations failed to realise; publishing the rest"
+          phase realise "$realise_t"
 
           if [ -s "$outs" ]; then
-            "$xargs" -a "$outs" -r "$attic" push ix-public \
+            push_t=$SECONDS
+            # --jobs 16 matches the realise fan-out (attic defaults to 5).
+            "$xargs" -a "$outs" -r "$attic" push --jobs 16 ix-public \
               || echo "::warning::some paths failed to push to ix-public"
+            phase push "$push_t"
           else
             echo "::warning::no output paths resolved for ix-public; eval/realise logs follow"
             tail -n 20 "$workdir/eval.err" "$workdir/realise.err" >&2 || true

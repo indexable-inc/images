@@ -1088,9 +1088,7 @@ let
         "checks: duplicate names across explicit/rust sets: ${lib.concatStringsSep ", " checkNameCollisions}";
       explicitChecks // rustChecks
     );
-in
-{
-  packages =
+  packageSet =
     lib.optionalAttrs (system == ix.system) {
       base = baseImage;
       vcfs-guest-eval = vcfsGuestEvalImage;
@@ -1125,6 +1123,42 @@ in
     // nonNixExampleDescriptions
     // crossPackages
     // healthChecks.lifecyclePackages;
+in
+{
+  packages = packageSet;
+
+  # CI-only push roots for cache-push.yml. Two adjustments to `packages` keep the
+  # cache useful to `ix up` while cutting the monolithic `*-oci.tar` archives that
+  # dominate the run -- each is one uncompressed blob that never dedups, cold
+  # every run since check.yml only eval-validates packages:
+  #
+  #   1. Every NixOS image is replaced by its `toplevel` closure -- the artifact
+  #      `ix up` substitutes (consumers reconstruct the archive on demand via
+  #      streamLayeredImage). Non-image packages, and non-NixOS OCI images (which
+  #      expose no `toplevel`), pass through unchanged. See lib/image/oci-layer.nix.
+  #   2. The `health-check-*` packages (and the `health-checks{,-zellij}` runners)
+  #      pin every fleet node's OCI *tar* as a build dep (lib/image/health-checks.nix),
+  #      so realising them would rebuild ~all the archives. Drop them and add the
+  #      fleet node `toplevel` closures directly, so the closures those checks used
+  #      to drag in stay cached without ever building a tar.
+  cachePushRoots =
+    let
+      isHealthCheck =
+        name:
+        lib.hasPrefix "health-check-" name || name == "health-checks" || name == "health-checks-zellij";
+      imagesAsClosures = lib.mapAttrs (_: p: p.passthru.toplevel or p) (
+        lib.filterAttrs (name: _: !isHealthCheck name) packageSet
+      );
+      # `fleet.systemPackages` keys each node's toplevel as `<node>-system`; the
+      # fleet-name prefix keeps nodes sharing a name across fleets distinct.
+      exampleNodeToplevels = lib.concatMapAttrs (
+        fleetName: fleet:
+        lib.mapAttrs' (
+          node: toplevel: lib.nameValuePair "${fleetName}-${node}" toplevel
+        ) fleet.systemPackages
+      ) exampleFleets;
+    in
+    imagesAsClosures // exampleNodeToplevels;
 
   # Flat keying: one derivation per `checks.<system>.<name>`, as the flake schema
   # and `nix flake check` require. The `.#check` gate and blast-radius consume
