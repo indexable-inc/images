@@ -1,5 +1,10 @@
 # Headless smithay compositor for the panes guest: apps connect as normal
 # Wayland clients; each xdg_toplevel is exported over vsock to panes-host.
+#
+# smithay only builds on Linux, so every Wayland-facing dependency lives under
+# `cfg(target_os = "linux")` (the vmkit pattern): the portable half (CLI +
+# damage tiling + LZ4 tile encoding in src/frame.rs) compiles and unit-tests
+# on any host, which is where the pure-logic tests run during development.
 [package]
 name = "panes-compositor"
 version = "0.1.0"
@@ -8,7 +13,39 @@ description = "Guest-side headless Wayland compositor exporting toplevels to a m
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+anyhow.workspace = true
+clap = { version = "4", features = ["derive"] }
+# Block-format LZ4 for damage tiles (the wire's `Encoding::Lz4`). Default
+# features add the frame format + xxhash we never put on the wire.
+lz4_flex = { version = "0.13", default-features = false, features = [
+  "std",
+  "safe-encode",
+  "safe-decode",
+] }
 panes-protocol.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Wayland server library. Default features drag in DRM/udev/libinput/winit
+# backends that a headless exporter never touches; `wayland_frontend` alone
+# provides the protocol plumbing (compositor, shm, xdg-shell/-decoration,
+# seat, output).
+smithay = { version = "0.7", default-features = false, features = [
+  "wayland_frontend",
+] }
+# AF_VSOCK listener for libkrun's vsock port map (std has no vsock support).
+vsock = "0.5"
+
+[features]
+# linux-dmabuf readback for GL/Vulkan clients via a surfaceless GLES context
+# on a DRM render node (/dev/dri/renderD128). Off by default: CI and the
+# first integration run without a GPU, and the shm path must never depend on
+# GL. The GLES/EGL stack loads libEGL at runtime through `libloading`, so
+# even with the feature on there is no link-time GL dependency; without a
+# render node the compositor logs and stays shm-only (no dmabuf global, so
+# clients fall back to shm themselves).
+gpu = ["smithay/backend_drm", "smithay/backend_egl", "smithay/renderer_gl"]
 
 [lints]
 workspace = true

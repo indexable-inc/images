@@ -261,10 +261,17 @@ let
         extraLinkRustcArgsForPlatform =
           _platform:
           linkSearchWithRpath ghosttyLibDir
-          ++ lib.optionals targetIsLinux [
-            "-L"
-            "native=${workspacePkgs.alsa-lib}/lib"
-          ]
+          ++ lib.optionals targetIsLinux (
+            [
+              "-L"
+              "native=${workspacePkgs.alsa-lib}/lib"
+            ]
+            # smithay's wayland_frontend (panes-compositor) links libxkbcommon:
+            # the `-lxkbcommon` flag reaches the final link but, as with alsa
+            # above, the emitting crate's link-search path does not. The rpath
+            # keeps the guest binary loadable without LD_LIBRARY_PATH.
+            ++ linkSearchWithRpath "${workspacePkgs.libxkbcommon}/lib"
+          )
           ++ lib.optionals buildHostIsAarch64Darwin (linkSearchWithRpath libkrunEfiLibDir)
           ++ lib.optionals (buildHostIsLinux && !isCross) (linkSearchWithRpath libkrunLinuxLibDir);
         # The native graph runs every policy check once across the whole

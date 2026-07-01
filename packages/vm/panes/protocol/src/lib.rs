@@ -65,7 +65,11 @@ pub enum ToHost {
         minor: u16,
     },
     /// A new xdg_toplevel mapped; the host creates its NSWindow on first
-    /// `WindowFrame`, so an empty window never flashes.
+    /// `WindowFrame`, so an empty window never flashes. `app_id` is
+    /// immutable after map (a post-map change needs a WindowAppId message,
+    /// minor bump). v1 has no popup/subsurface kind: menus and tooltips get
+    /// their configure guest-side but are not exported (needs parent id +
+    /// offset on a future PopupNew, minor bump).
     WindowNew {
         id: WindowId,
         title: String,
@@ -106,7 +110,9 @@ pub enum ToHost {
     WindowGone {
         id: WindowId,
     },
-    /// Guest-side cursor image for `id` (None = hide, host shows its own).
+    /// Guest-side cursor image for `id`. None = host shows its own cursor;
+    /// v1 cannot express "hide the cursor entirely" (video players), that
+    /// needs a distinct Hide state (minor bump).
     Cursor {
         id: WindowId,
         image: Option<CursorImage>,
