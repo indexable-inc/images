@@ -116,6 +116,10 @@ let
         runtime_path = ${builtins.toJSON runtimePath}
         ambient_path = os.environ.get("PATH", "")
         os.environ["PATH"] = runtime_path + ((":" + ambient_path) if ambient_path else "")
+        # Nix Python does not consistently inherit a platform CA bundle; urllib needs this for HTTPS updaters.
+        ca_bundle = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+        os.environ.setdefault("SSL_CERT_FILE", ca_bundle)
+        os.environ.setdefault("REQUESTS_CA_BUNDLE", os.environ["SSL_CERT_FILE"])
         sys.argv = ${argv} + sys.argv[1:]
         runpy.run_path("${srcPath}", run_name="__main__")
       '';
