@@ -1143,9 +1143,9 @@ in
   #      to drag in stay cached without ever building a tar.
   cachePushRoots =
     let
-      isHealthCheck =
-        name:
-        lib.hasPrefix "health-check-" name || name == "health-checks" || name == "health-checks-zellij";
+      # Per-node `health-check-*` lifecycle packages and the two
+      # `health-checks{,-zellij}` runners all share the `health-check` prefix.
+      isHealthCheck = lib.hasPrefix "health-check";
       imagesAsClosures = lib.mapAttrs (_: p: p.passthru.toplevel or p) (
         lib.filterAttrs (name: _: !isHealthCheck name) packageSet
       );
