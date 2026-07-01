@@ -1,0 +1,18 @@
+# Wire protocol shared by panes-compositor (Linux guest) and panes-host (macOS).
+# Postcard over a length-prefixed stream; pixel payloads ride as serde_bytes so
+# they serialize as one contiguous copy, never element-wise.
+[package]
+name = "panes-protocol"
+version = "0.1.0"
+edition = "2024"
+description = "Wire protocol for seamless guest-Linux windows on a macOS host"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+postcard = { version = "1", features = ["use-std"] }
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+thiserror = "2"
+
+[lints]
+workspace = true

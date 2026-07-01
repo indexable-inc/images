@@ -5959,6 +5959,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d211803b9b6b570f68772237e415a029d5a50c65d382910b879fb19d3271f94d"
 
 [[package]]
+name = "panes-compositor"
+version = "0.1.0"
+dependencies = [
+ "panes-protocol",
+]
+
+[[package]]
+name = "panes-host"
+version = "0.1.0"
+dependencies = [
+ "panes-protocol",
+]
+
+[[package]]
+name = "panes-protocol"
+version = "0.1.0"
+dependencies = [
+ "postcard",
+ "serde",
+ "serde_bytes",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "pango"
 version = "0.18.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

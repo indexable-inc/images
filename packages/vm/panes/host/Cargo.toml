@@ -1,0 +1,14 @@
+# macOS host agent: one native NSWindow (CAMetalLayer) per guest toplevel,
+# input forwarded back over the same stream.
+[package]
+name = "panes-host"
+version = "0.1.0"
+edition = "2024"
+description = "macOS agent presenting guest-Linux windows as native NSWindows"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+panes-protocol.workspace = true
+
+[lints]
+workspace = true

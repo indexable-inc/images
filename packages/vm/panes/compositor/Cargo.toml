@@ -1,0 +1,14 @@
+# Headless smithay compositor for the panes guest: apps connect as normal
+# Wayland clients; each xdg_toplevel is exported over vsock to panes-host.
+[package]
+name = "panes-compositor"
+version = "0.1.0"
+edition = "2024"
+description = "Guest-side headless Wayland compositor exporting toplevels to a macOS host"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+panes-protocol.workspace = true
+
+[lints]
+workspace = true

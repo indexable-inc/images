@@ -85,6 +85,9 @@ members = [
   "packages/tui/tui",
   "packages/tui/tui-node",
   "packages/tui/tui-py",
+  "packages/vm/panes/compositor",
+  "packages/vm/panes/host",
+  "packages/vm/panes/protocol",
   "packages/vm/vmkit",
   "packages/tui/vt/ix-vt",
   "packages/tui/vt/ix-vt-sys",
@@ -206,6 +209,7 @@ objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
 objc2-web-kit = "0.3"
 object_store = { version = "0.14", features = ["aws"] }
+panes-protocol = { path = "packages/vm/panes/protocol" }
 parking_lot = "0.12"
 parquet = { version = "59", features = ["arrow"] }
 percent-encoding = "2"
