@@ -1,0 +1,128 @@
+---
+id: 0004-otel-ingestion-bus
+number: '0004'
+title: OpenTelemetry ingestion bus
+status: Draft
+authors: andrewgazelka
+created: '2026-06-04'
+updated: '2026-06-04'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+description: Make the OpenTelemetry Collector the single ingestion bus for fleet telemetry and the agent/shell history corpus, fanning out to ClickHouse (Grafana), an S3 archive, and Mixedbread (semantic search), and retire the bespoke per-source shippers.
+---
+
+*Written with AI assistance (Claude, Opus 4.8).*
+
+<div class="note">
+
+<strong>Superseded (corpus half).</strong> The corpus ingestion path described
+  here moved off the OpenTelemetry bus to a Parquet log plus materialized-view
+  design: an append-only Parquet log on object storage as the source of truth,
+  with the Mixedbread search index rebuilt from it (the <code>source-parquet</code>
+  and <code>sink-parquet</code> crates). See
+  <a href="https://github.com/indexable-inc/index/issues/736">issue #736</a>. The
+  telemetry half of this RFC (traces, metrics, and logs to ClickHouse and Grafana)
+  still stands.
+
+</div>
+
+## Summary
+
+Today the fleet runs two unrelated ingestion worlds: observability (metrics and traces through the OpenTelemetry Collector, logs through Vector) into ClickHouse, and the search corpus (code plus shell, Claude, and Codex history) through the `indexer` binary into Mixedbread and an S3 parquet archive. This RFC makes the OpenTelemetry Collector the one ingestion bus for everything event-shaped: every host emits shell/agent history and journald to the collector, and the collector fans out to ClickHouse (so Grafana can see history alongside telemetry), to the S3 archive, and onward to Mixedbread for semantic search. The embed path reuses the collector's built-in S3 exporter as a durable buffer that the existing Rust `indexer` consumes, so no custom collector build and no new gRPC stack are introduced. Code repositories stay on the direct `indexer` path, because source files are documents, not events. The bespoke history-scanning paths are removed only after the bus path is deployed fleet-wide and backfilled.
+
+## Motivation
+
+Three concrete problems, all verifiable in the current tree.
+
+**History is invisible to Grafana.** Shell commands and agent transcripts land in Mixedbread and parquet, never in ClickHouse, so the team cannot build a dashboard over "commands run per host", "agent token spend", or correlate a history event with a journald log on one timeline. The observability stack (`otel.otel_traces`, `otel.otel_metrics`, `logs.journald_logs`) and the corpus never share a backend.
+
+**Two ingestion systems, two operational surfaces.** Adding a new data source today means choosing a world and wiring a bespoke path: a Vector source plus VRL transform for a new log shape, or a new `source_*` adapter compiled into the `indexer`. There is no single "emit here and every consumer sees it" entry point.
+
+**The collector already does the hard part for telemetry.** The collector's fan-out model (one pipeline, many exporters) is exactly the bus we want; we just are not routing history through it. The generic observability module (`modules/services/observability/default.nix`) already wires `filelog` and `journald` receivers and a ClickHouse exporter; the production ix config (`ix/nix/services/observability/default.nix`) carries only traces and metrics and routes logs through Vector.
+
+The goal is one bus: a host emits an event once, and ClickHouse (dashboards), the S3 archive (durable replay), and Mixedbread (semantic search) all receive it, with one place to add the next source.
+
+## Detailed design
+
+### Target topology
+
+```text
+shell history ─┐
+journald      ─┼─> OTel Collector ─┬─> ClickHouse exporter ─> Grafana
+agent chats   ─┘   (one bus)       ├─> S3 exporter (awss3) ─> ix-history bucket
+                                   │                             │
+                                   │                             v
+                                   │                      indexer (S3-consume mode)
+                                   │                             │
+                                   │                             v
+                                   └────────────────────> Mixedbread ─> search / mgrep
+
+code repos ───────────────────────────────> indexer (direct scan) ─> Mixedbread
+```
+
+The collector is the single entry point for event-shaped data. It fans out to three sinks. ClickHouse and S3 are built-in collector exporters, used as-is. The Mixedbread leg is fed from the S3 archive rather than directly, for the reasons in the next two sections.
+
+### Why the embed path goes through S3, not a collector exporter
+
+Mixedbread is a document-embedding search engine: the `indexer` uploads whole documents that Mixedbread chunks and embeds server-side, and it relies on content-hash dedup so twenty worktrees of one repo embed once (`packages/search-core/src/sync.rs`). The collector has no Mixedbread exporter, and the OTLP/log data model is event-shaped, not document-shaped. Two ways to bridge that were considered and rejected (see Alternatives): a custom Go exporter inside a custom collector build, and a Rust OTLP gRPC receiver pulling in the protobuf/tonic stack (the workspace currently has no `opentelemetry`/`tonic`/`prost` dependency).
+
+Instead, the collector writes event batches to the existing `ix-history` S3 bucket via the built-in `awss3` exporter, and the `indexer` grows an S3-consume mode that reads those batches and pushes them to Mixedbread with its existing dedup and reconcile. This keeps the collector stock, keeps all embedding and dedup logic in Rust where it already lives and is tested, and makes the buffer durable and replayable: a Mixedbread outage never loses data, the consumer just resumes.
+
+### Code stays on the direct path
+
+Source files are documents, not events. Streaming a 2000-line file as log records and reassembling it downstream is a category error, and code never needs to appear in Grafana. So `--code-repo` ingestion stays exactly as it is: `indexer` reads the checkout content-addressed and pushes to Mixedbread only (`packages/indexer/src/main.rs`, `index_code`). The bus carries the history/telemetry corpus; the indexer keeps owning the code corpus. This split is by data shape, and it is deliberate.
+
+### What the collector receives, and the security hardening it must preserve
+
+journald is a built-in receiver. Agent transcripts (`~/.claude/projects/**`, `~/.codex/history.jsonl`) are line-delimited JSON and fit the `filelog` receiver. Shell history is the open problem: atuin stores it in a SQLite database (`~/.local/share/atuin/history.db`), which `filelog` cannot read; see Unresolved questions.
+
+The current fleet run indexes every account on a host as root, and the `indexer` refuses to follow a symlink at any path component (`safe_path_under` in `packages/indexer/src/main.rs`) to avoid a confused-deputy read of another account's files. Any per-host emitter that replaces this privileged read must carry the same guarantee. This is a hard requirement on the new path, not an optional nicety.
+
+### ClickHouse schema for history
+
+History events land in a dedicated table (e.g. `corpus.history_events`) with the columns the consumers need for dashboards and joins: `Timestamp`, `host`, `user`, `source` (shell/claude/codex/debug), `session`, `body`, and a JSON `attributes` column for source-specific fields (model, tokens, exit code, cwd). This is a plain MergeTree; there is no vector column, because semantic search lives in Mixedbread, not ClickHouse (confirmed: no `Array(Float32)`, HNSW, or `cosineDistance` index anywhere in the stack).
+
+### Migration
+
+The deletion of the bespoke paths is gated on the bus path being live and backfilled, so production search is never broken. Phases:
+
+1. **Additive bus to ClickHouse and S3.** Wire the collector receivers (journald, filelog for chats) and the ClickHouse and S3 exporters. Grafana gains history dashboards. The `indexer` is untouched and keeps feeding Mixedbread. Fully additive; nothing is removed.
+2. **Indexer S3-consume mode.** Add a mode where the `indexer` reads the collector's S3 batches and pushes to Mixedbread, behind a flag, running alongside the existing local-scan path. Validate that records are byte-identical (same `external_id`, same content hashes) so search results do not change.
+3. **Cutover and delete.** Once the bus path is deployed on every host and a backfill confirms parity, switch the fleet to the consume path and delete the local history-scanning sources (`source_atuin`, `source_claude`, `source_codex`, `source_debug` wiring in `indexer`) and the now-dead per-source flags. Code, slack, linear, github, and git sources are unaffected.
+
+## Drawbacks
+
+**It deletes hardened, tested code.** The `indexer`'s privileged multi-user read with symlink refusal and its per-source dedup are battle-tested. The bus path must re-earn those guarantees before the old code is removed, or we trade a known-good reader for a regression.
+
+**Document/event impedance.** Agent transcripts are documents that we are shredding into per-line events on the bus and reassembling for Mixedbread. Per-message granularity may change retrieval behavior versus per-document upload; this needs measurement, not assumption.
+
+**Operational coupling.** One bus is one shared failure domain: a collector misconfiguration can now affect dashboards and search at once, where today they fail independently.
+
+**Backfill cost.** The cutover requires re-emitting historical records through the bus or accepting a gap; either is real work and must be planned, not hand-waved.
+
+## Alternatives
+
+**Custom Go Mixedbread exporter.** Write an exporter inside a custom collector distribution. Rejected: it forces a custom collector build (OCB, pinned versions, a rebuild on every collector bump) forever, and it re-implements the indexer's content-hash dedup and document assembly in Go, violating "implement core logic once in Rust". The S3-buffer reuses the stock collector and the existing Rust logic.
+
+**Rust OTLP gRPC receiver.** Have the collector forward via its built-in OTLP exporter to a Rust gRPC service that pushes to Mixedbread. Rejected for now: it pulls the full `opentelemetry-proto`/`tonic`/`prost` stack into a workspace that has none of it, with protoc codegen under the nix sandbox, to buy real-time delivery the corpus does not need (it is an hourly batch today). The S3-buffer gives the same decoupling with zero new dependencies. This remains the natural upgrade if sub-minute freshness ever matters.
+
+**Add a ClickHouse sink to the indexer, leave the collector alone.** The smallest change: the `indexer` already has a clean sink abstraction (`sink_parquet`, `sink_mixedbread`); a `sink_clickhouse` would put history in Grafana for roughly one new crate, no collector work, no deletion, reusing every source adapter and the security hardening. This is the lowest-cost way to get the one genuinely new capability (history in Grafana). It is recorded here as the cheap option; this RFC chooses the bus instead to standardize ingestion on one entry point for future sources and consumers, accepting the larger cost for the larger payoff. If that payoff does not materialize, this alternative is the fallback.
+
+**Do nothing.** Keep two worlds. Cheapest, and search already works, but history stays out of Grafana and every new source keeps paying the bespoke-wiring tax.
+
+## Prior art
+
+The collector's one-pipeline-many-exporters fan-out is the standard OpenTelemetry deployment pattern. Vector already plays the bus role for journald in ix (`ix/nix/services/observability/vector.nix`), demonstrating receiver-transform-sink for logs. The `indexer`'s existing two-sink fan-out (Mixedbread plus parquet, with the durable sink ordered first so a slow Mixedbread upload never gates the archive) is the same fan-out discipline this RFC generalizes to the collector.
+
+## Unresolved questions
+
+- **Shell history transport.** atuin's SQLite store is not a logfile. Options: a shell hook that emits each command as an OTLP log on execution, an atuin-to-OTLP shim, or keeping `source_atuin` on the indexer for that one source while everything else moves to the bus. Which?
+- **Embedding granularity.** Per-message events versus per-document upload for transcripts: does retrieval quality hold? Needs an eval before cutover.
+- **Backfill mechanism.** Replay existing parquet through the bus, or run the consume path over the existing archive once, or accept a history gap at cutover?
+- **ClickHouse retention.** History TTL: match the corpus (indefinite) or the telemetry tables (30 to 720 hours)? They have different value curves.
+- **Confused-deputy parity.** What is the exact mechanism by which the per-host emitter preserves `safe_path_under`'s symlink refusal under a privileged run?
+
+## Future possibilities
+
+Once the bus exists, new sources (browser history, email, calendar) emit to one endpoint and appear in all three consumers without bespoke wiring. New consumers (a Kafka tap for streaming jobs, a second analytics store) attach as additional exporters. If real-time search ever matters, the S3 buffer can be swapped for the Rust OTLP receiver without touching emitters. None of these are committed by this RFC.
