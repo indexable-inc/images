@@ -47,7 +47,10 @@ stale content for free during resize), present, and only then send
 that ack, so guest rendering is genlocked to ProMotion instead of running an
 open-loop timer. Coalescing: if several frames land between ticks, only the
 newest is presented and acked; guests should treat an ack as "presented up
-to seq".
+to seq". A frame the host cannot take at all (zero-size, texture allocation
+failure) is still acked immediately so the guest's one-in-flight loop never
+wedges on it. The link starts paused, unpauses on content/resize, and
+re-pauses after ~250ms of idle ticks so a quiet window stops costing CPU.
 
 ### Resize
 
@@ -69,6 +72,8 @@ compositor).
   are dropped: guests auto-repeat from `wl_keyboard.repeat_info`.
   `flagsChanged` turns into modifier press/release by toggling a held-set
   keyed on kVK; caps lock (one event per toggle) synthesizes press+release.
+  On resign-key every held modifier is released guest-side and the set
+  cleared (AppKit stops delivering flagsChanged to a non-key window).
   Cmd+W (CloseRequest) and Cmd+Q (CloseRequest to all, then exit) stay
   host-side; other Cmd chords are forwarded.
 - **Pointer**: the view is flipped (top-left origin) and multiplies points

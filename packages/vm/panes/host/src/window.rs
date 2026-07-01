@@ -22,16 +22,24 @@ use objc2_quartz_core::{
     CAFrameRateRange, CAMetalDisplayLink, CAMetalDisplayLinkDelegate, CAMetalDisplayLinkUpdate,
     CAMetalLayer,
 };
-use panes_protocol::{Encoding, Tile, WindowId};
+use panes_protocol::{Encoding, Rect, Tile, WindowId};
 
 use crate::app;
 use crate::render::Renderer;
+use crate::view::PanesView;
 
 /// ProMotion range: let the system drop to 60 when we present nothing, chase
 /// 120 when frames flow (Apple TN3178 / CAFrameRateRange docs: preferred
 /// must sit inside [minimum, maximum]).
 const FRAME_RATE_RANGE: CAFrameRateRange =
     CAFrameRateRange { minimum: 60.0, maximum: 120.0, preferred: 120.0 };
+
+/// Ticks with nothing to present before the display link re-pauses (~250ms
+/// at 120Hz). Pausing immediately after every present would put an unpause
+/// round-trip inside the steady ack loop; a short idle grace keeps the
+/// 120fps path hot while a quiet window stops ticking (and costing CPU)
+/// shortly after its stream goes idle.
+const IDLE_TICKS_TO_PAUSE: u32 = 30;
 
 pub struct WindowParams {
     pub id: WindowId,
@@ -58,6 +66,7 @@ pub struct SurfaceSize {
 pub struct PaneWindow {
     pub id: WindowId,
     pub ns: Retained<NSWindow>,
+    view: Retained<PanesView>,
     layer: Retained<CAMetalLayer>,
     link: Retained<CAMetalDisplayLink>,
     // The window and the display link both hold their delegates weakly
@@ -71,6 +80,9 @@ pub struct PaneWindow {
     guest_scale: u32,
     pending_ack: Option<u64>,
     dirty: bool,
+    /// Consecutive presentable ticks with nothing to draw; drives the idle
+    /// re-pause (see [`IDLE_TICKS_TO_PAUSE`]).
+    idle_ticks: u32,
     pub shown: bool,
     /// Set once `WindowGone` arrived; the next `windowShouldClose` says yes.
     pub closing: bool,
@@ -110,7 +122,7 @@ impl PaneWindow {
         ns.setAcceptsMouseMovedEvents(true);
         ns.center();
 
-        let view = crate::view::PanesView::new(mtm, params.id, content);
+        let view = PanesView::new(mtm, params.id, content);
         let layer = CAMetalLayer::new();
         layer.setDevice(Some(&renderer.device));
         layer.setPixelFormat(objc2_metal::MTLPixelFormat::BGRA8Unorm);
@@ -165,6 +177,7 @@ impl PaneWindow {
         Self {
             id: params.id,
             ns,
+            view,
             layer,
             link,
             _win_delegate: win_delegate,
@@ -174,9 +187,16 @@ impl PaneWindow {
             guest_scale: params.scale.max(1),
             pending_ack: None,
             dirty: false,
+            idle_ticks: 0,
             shown: false,
             closing: false,
         }
+    }
+
+    /// The input view, for calls that must run outside the `APP` borrow
+    /// (they send protocol messages, which re-enters app state).
+    pub fn view_handle(&self) -> Retained<PanesView> {
+        self.view.clone()
     }
 
     pub fn set_title(&self, title_prefix: &str, title: &str) {
@@ -199,9 +219,13 @@ impl PaneWindow {
         }
     }
 
-    /// Decode and upload a `WindowFrame` into the persistent texture. Always
-    /// records `seq` for acking: a malformed tile must not stall the guest's
-    /// frame loop, it is logged instead.
+    /// Decode and upload a `WindowFrame` into the persistent texture.
+    /// Returns true when the frame will be presented (its ack rides the next
+    /// display-link tick). Returns false when the host cannot take the frame
+    /// at all (zero size, texture allocation failure): the caller must ack
+    /// `seq` immediately, because with one-frame-in-flight guest pacing a
+    /// withheld ack wedges that window's frame loop forever. Malformed tiles
+    /// inside an otherwise valid frame are logged and skipped, never stall.
     pub fn apply_frame(
         &mut self,
         renderer: &Renderer,
@@ -210,49 +234,60 @@ impl PaneWindow {
         height: u32,
         full: bool,
         tiles: &[Tile],
-    ) {
-        self.pending_ack = Some(seq);
-        self.dirty = true;
-        self.link.setPaused(false);
-        if width == 0 || height == 0 {
-            eprintln!("panes-host: window {}: zero-sized frame {seq}", self.id);
-            return;
-        }
-
+    ) -> bool {
         let size = BufferSize { width, height };
         let mut fresh_texture = false;
-        if self.texture.is_none() || self.buffer != size {
+        let unpresentable = if width == 0 || height == 0 {
+            eprintln!("panes-host: window {}: zero-sized frame {seq}", self.id);
+            true
+        } else if self.texture.is_none() || self.buffer != size {
             self.texture = renderer.make_texture(width, height);
             self.buffer = size;
             fresh_texture = true;
             if self.texture.is_none() {
                 eprintln!("panes-host: window {}: texture alloc {width}x{height} failed", self.id);
-                return;
             }
+            self.texture.is_none()
+        } else {
+            false
+        };
+        if unpresentable {
+            // Nothing drawable: drop any older pending ack too (the caller's
+            // immediate ack of the newer `seq` supersedes it; acks are
+            // cumulative "presented up to").
+            self.pending_ack = None;
+            self.dirty = false;
+            return false;
         }
         let Some(texture) = self.texture.as_ref() else {
-            return;
+            unreachable!("unpresentable path returned above");
         };
 
-        // A full frame invalidates retained contents. Skip the clear when the
-        // tiles already blanket the buffer (the common case: a resize frame
-        // is one full-surface tile); tiles never overlap, so summed area is
-        // coverage.
-        let covered: u64 = tiles.iter().map(|tile| u64::from(tile.rect.w) * u64::from(tile.rect.h)).sum();
+        let in_bounds = |rect: Rect| {
+            rect.w > 0
+                && rect.h > 0
+                && rect.x.checked_add(rect.w).is_some_and(|right| right <= width)
+                && rect.y.checked_add(rect.h).is_some_and(|bottom| bottom <= height)
+        };
+        // A full frame invalidates retained contents. Skip the clear only
+        // when the accepted tiles already blanket the buffer (the common
+        // case: a resize frame is one full-surface tile); tiles never
+        // overlap, so summed area is coverage. Rejected tiles must not
+        // count, or an out-of-bounds tile could skip the clear while leaving
+        // pixels unwritten.
+        let covered: u64 = tiles
+            .iter()
+            .filter(|tile| in_bounds(tile.rect))
+            .map(|tile| u64::from(tile.rect.w) * u64::from(tile.rect.h))
+            .sum();
         if (full || fresh_texture) && covered < u64::from(width) * u64::from(height) {
             let zeros = vec![0u8; width as usize * height as usize * 4];
-            Renderer::upload(
-                texture,
-                panes_protocol::Rect { x: 0, y: 0, w: width, h: height },
-                &zeros,
-            );
+            Renderer::upload(texture, Rect { x: 0, y: 0, w: width, h: height }, &zeros);
         }
 
         for tile in tiles {
             let rect = tile.rect;
-            let in_bounds = rect.x.checked_add(rect.w).is_some_and(|right| right <= width)
-                && rect.y.checked_add(rect.h).is_some_and(|bottom| bottom <= height);
-            if !in_bounds || rect.w == 0 || rect.h == 0 {
+            if !in_bounds(rect) {
                 eprintln!("panes-host: window {}: tile out of bounds, skipped", self.id);
                 continue;
             }
@@ -276,6 +311,12 @@ impl PaneWindow {
                 },
             }
         }
+
+        self.pending_ack = Some(seq);
+        self.dirty = true;
+        self.idle_ticks = 0;
+        self.link.setPaused(false);
+        true
     }
 
     /// Present on a display-link tick if anything changed. Returns the seq to
@@ -286,12 +327,19 @@ impl PaneWindow {
         update: &CAMetalDisplayLinkUpdate,
     ) -> Option<u64> {
         if !self.dirty {
+            // Quiet stream: stop ticking after a short grace so an idle
+            // window costs nothing; the next frame/resize unpauses.
+            self.idle_ticks = self.idle_ticks.saturating_add(1);
+            if self.idle_ticks >= IDLE_TICKS_TO_PAUSE {
+                self.link.setPaused(true);
+            }
             return None;
         }
         let texture = self.texture.as_ref()?;
         let drawable = update.drawable();
         if renderer.draw(texture, &drawable, self.layer.presentsWithTransaction()) {
             self.dirty = false;
+            self.idle_ticks = 0;
             self.pending_ack.take()
         } else {
             // Keep dirty + pending ack; retry next tick.
@@ -304,6 +352,7 @@ impl PaneWindow {
     pub fn mark_dirty(&mut self) {
         if self.texture.is_some() {
             self.dirty = true;
+            self.idle_ticks = 0;
             self.link.setPaused(false);
         }
     }

@@ -81,6 +81,12 @@ fn connect(target: &Target) -> std::io::Result<Stream> {
 }
 
 fn run_connection(stream: Stream, host: &HostInfo) {
+    // TODO(review P2): this outbound queue is unbounded, so a connected but
+    // stalled peer accumulates messages (pointer motion dominates) until it
+    // drains. Bounding it needs drop-oldest semantics for coalescable
+    // traffic (motion/axis/ack) while never dropping CloseRequest/Configure/
+    // Key, so it wants a small purpose-built queue rather than mpsc;
+    // deferred until the real compositor exists to test against.
     let (tx, rx) = mpsc::channel::<ToGuest>();
     // The writer exits once every sender is gone: ours right below, the main
     // thread's on `Disconnected`. No join needed; it owns nothing shared.

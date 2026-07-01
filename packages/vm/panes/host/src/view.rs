@@ -229,6 +229,18 @@ impl PanesView {
         unsafe { msg_send![super(this), initWithFrame: frame] }
     }
 
+    /// Focus left this window: release every held modifier guest-side and
+    /// forget them. AppKit stops delivering `flagsChanged` once the window
+    /// resigns key, so a modifier held across a Cmd-Tab would otherwise stay
+    /// pressed in the guest forever, and the toggle heuristic would invert
+    /// press/release on its next use.
+    pub fn release_held_modifiers(&self) {
+        let held: Vec<u16> = self.ivars().held_modifiers.borrow_mut().drain().collect();
+        for kvk in held {
+            self.send_key(kvk, ButtonState::Released);
+        }
+    }
+
     /// Event location in surface coordinates (top-left origin, buffer scale).
     fn surface_point(&self, event: &NSEvent) -> NSPoint {
         let local = self.convertPoint_fromView(event.locationInWindow(), None);

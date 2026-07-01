@@ -157,7 +157,16 @@ fn handle_msg(app: &mut App, msg: ToHost) -> Deferred {
                 eprintln!("panes-host: frame for unknown window {id}");
                 return Deferred::default();
             };
-            window.apply_frame(&app.renderer, seq, width, height, full, &tiles);
+            if !window.apply_frame(&app.renderer, seq, width, height, full, &tiles) {
+                // Frame the host could not take (zero-size / texture alloc
+                // failure): ack immediately anyway. With one-frame-in-flight
+                // guest pacing, an ack held hostage to a texture we never
+                // made would wedge that window's frame loop forever.
+                if let Some(out) = &app.out {
+                    let _ = out.send(ToGuest::Ack { id, seq });
+                }
+                return Deferred::default();
+            }
             // First content: order the window in only now, so an empty
             // window never flashes (protocol contract on WindowNew).
             if window.shown {
@@ -275,6 +284,16 @@ pub fn window_live_resize(id: WindowId, active: bool) {
 }
 
 pub fn window_activation(id: WindowId, activated: bool) {
+    if !activated {
+        // Held modifiers must not outlive key status: AppKit stops sending
+        // flagsChanged after resign-key, so release them guest-side before
+        // the deactivated Configure. Outside the with_app borrow because the
+        // view sends protocol messages through app state.
+        let view = with_app(|app| app.windows.get(&id).map(PaneWindow::view_handle)).flatten();
+        if let Some(view) = view {
+            view.release_held_modifiers();
+        }
+    }
     with_app(|app| {
         let Some(window) = app.windows.get(&id) else {
             return;
