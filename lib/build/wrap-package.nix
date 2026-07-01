@@ -14,13 +14,16 @@
   resolved through `lib.evalModules` like `lib/rust/policy.nix`. This gives
   three things from one declaration: defaults, caller-arg merging, and typo
   rejection (no `freeformType`, so an unknown key throws). The evaluated schema
-  is re-exported as `ix.wrapPackage.options`, so every field's type, default,
+  is re-exported as `ix.wrapPackage.options` (raw tree) and
+  `ix.wrapPackage.optionsDoc` (flat, JSON-able), so every field's type, default,
   and description are introspectable:
 
       nix eval .#lib.wrapPackage.options.resources.description
+      nix eval --json .#lib.wrapPackage.optionsDoc
 
   `ix.wrapPackage` is a functor attrset: call it as `ix.wrapPackage pkgs { ... }`
-  and read `ix.wrapPackage.options` for the schema.
+  and read `ix.wrapPackage.options` for the schema. Argument documentation lives
+  only in the `mkOption` descriptions below; this comment covers behaviour.
 */
 let
   inherit (lib) mkOption types;
@@ -61,6 +64,9 @@ let
         };
         mainProgram = mkOption {
           type = types.str;
+          # The default is computed in `config` below, so introspection would
+          # show the option as required without this `defaultText`.
+          defaultText = lib.literalExpression "package.meta.mainProgram";
           description = "Name of the wrapper binary written to `$out/bin` (defaults to `package.meta.mainProgram`).";
         };
         resources = mkOption {
@@ -93,13 +99,16 @@ let
           default = { };
           description = "`<name> = <target>` symlinks created under `$out/bin`.";
         };
+        # `types.raw`, not `types.attrs`: these are opaque bags (derivations,
+        # functions, nested test attrsets) passed through untouched, and `raw`
+        # rejects a second definition instead of silently shallow-merging it.
         passthru = mkOption {
-          type = types.attrs;
+          type = types.raw;
           default = { };
           description = "Extra `passthru` attributes merged onto the wrapper derivation (`unwrapped` is always added).";
         };
         meta = mkOption {
-          type = types.attrs;
+          type = types.raw;
           default = { };
           description = "Extra `meta` attributes merged onto the wrapper derivation over the package's own meta.";
         };
@@ -126,7 +135,13 @@ let
         (lib.evalModules {
           modules = [
             wrapPackageModule
-            { config = args; }
+            {
+              # Names the caller's definitions in module errors ("The option
+              # `x' does not exist. Definition values: - In `ix.wrapPackage
+              # args'"), which otherwise cite `<unknown-file>`.
+              _file = "ix.wrapPackage args";
+              config = args;
+            }
           ];
         }).config;
 
@@ -192,4 +207,9 @@ in
 {
   __functor = _self: build;
   options = schema;
+  # Flat `[ { name; type; description; default?; ... } ]` view of the same
+  # schema for whole-surface queries (`nix eval --json .#lib.wrapPackage.optionsDoc`);
+  # submodule fields appear as `resources.<name>.*` entries. Internal module
+  # plumbing (`_module.*`) is filtered the same way nixosOptionsDoc filters it.
+  optionsDoc = lib.filter (opt: opt.visible && !opt.internal) (lib.optionAttrSetToDocList schema);
 }

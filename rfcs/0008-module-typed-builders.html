@@ -18,15 +18,16 @@
   <dt>Authors</dt><dd>andrewgazelka</dd>
   <dt>Created</dt><dd>2026-07-01</dd>
   <dt>Updated</dt><dd>2026-07-01</dd>
-  <dt>Tracking issue</dt><dd>&mdash;</dd>
+  <dt>Tracking issue</dt><dd><a href="https://github.com/indexable-inc/index/issues/1673">index#1673</a></dd>
   <dt>Supersedes</dt><dd>&mdash;</dd>
   <dt>Superseded by</dt><dd>&mdash;</dd>
 </dl>
 
 <h2>Summary</h2>
-<p>Type the argument surface of repo-owned builders in <code>lib/build/</code> with the NixOS module system (<code>lib.evalModules</code>), starting with <code>ix.wrapPackage</code>. A typed builder declares its inputs as <code>mkOption</code>s &mdash; type, default, description &mdash; and resolves the caller's argument attrset through <code>evalModules</code>, which yields defaults, argument merging, and typo rejection (no <code>freeformType</code>, so an unknown key throws) from one declaration. The evaluated schema is re-exported as <code>&lt;builder&gt;.options</code>, so every field's type, default, and description is <code>nix eval</code>-able:</p>
+<p>Type the argument surface of repo-owned builders in <code>lib/build/</code> with the NixOS module system (<code>lib.evalModules</code>), starting with <code>ix.wrapPackage</code>. A typed builder declares its inputs as <code>mkOption</code>s &mdash; type, default, description &mdash; and resolves the caller's argument attrset through <code>evalModules</code>, which yields defaults, argument merging, and typo rejection (no <code>freeformType</code>, so an unknown key throws) from one declaration. The evaluated schema is re-exported as <code>&lt;builder&gt;.options</code> (the raw tree) and <code>&lt;builder&gt;.optionsDoc</code> (a flat, JSON-able list), so every field's type, default, and description is <code>nix eval</code>-able:</p>
 <pre><code>nix eval .#lib.wrapPackage.options.resources.description
-# "Runtime resources bundled into the wrapper output and optionally exposed via env vars."</code></pre>
+# "Runtime resources bundled into the wrapper output and optionally exposed via env vars."
+nix eval --json .#lib.wrapPackage.optionsDoc</code></pre>
 <p>This deliberately reverses the de facto "builders are plain functions" convention for the subset of builders whose interfaces are wide enough that self-documentation and validation earn their keep. It does not mandate the pattern everywhere.</p>
 
 <h2>Motivation</h2>
@@ -50,6 +51,9 @@
     };
     mainProgram = mkOption {
       type = types.str;
+      # The real default is computed in `config` below; `defaultText` is what
+      # introspection and generated docs show instead of "required".
+      defaultText = lib.literalExpression "package.meta.mainProgram";
       description = "Name of the wrapper binary (defaults to `package.meta.mainProgram`).";
     };
     resources = mkOption {
@@ -68,6 +72,8 @@
   );
 };</code></pre>
 <p>Nested records get their own submodule, so their fields are typed and documented too. A <code>resource</code> is <code>{ source; from ? ""; to; env ? null; }</code>, declared as <code>resourceModule</code> and referenced via <code>types.submodule</code> above.</p>
+<p>Two rules fall out of the shape. First, any default computed in <code>config</code> rather than in the option must carry a matching <code>defaultText</code>, or introspection presents the field as required and generated docs lie by omission. Second, argument documentation lives only in the <code>mkOption</code> descriptions: the RFC-0145 doc-comment above the builder covers behaviour and shape, never per-argument docs, so there is exactly one place for an argument's contract to drift from.</p>
+<p>Escape-hatch fields (<code>passthru</code>, <code>meta</code>) are declared <code>types.raw</code> rather than <code>types.attrs</code>: their contents (derivations, functions, nested test attrsets) pass through untouched, and <code>raw</code> rejects a second definition instead of silently shallow-merging two bags.</p>
 
 <h3>Resolution and introspection</h3>
 <p>The builder body resolves the caller's args exactly as <code>policy.nix</code> resolves a policy, and exposes the schema from a no-config evaluation:</p>
@@ -78,7 +84,12 @@ schema = (lib.evalModules { modules = [ wrapPackageModule ]; }).options;
 build = pkgs: args:
   let
     cfg = (lib.evalModules {
-      modules = [ wrapPackageModule { config = args; } ];
+      modules = [
+        wrapPackageModule
+        # `_file` names the caller's definitions in module errors, which
+        # otherwise cite `&lt;unknown-file&gt;`.
+        { _file = "ix.wrapPackage args"; config = args; }
+      ];
     }).config;
   in
   pkgs.runCommand "${cfg.package.pname}-${cfg.package.version}" { /* ... */ } ''
@@ -88,15 +99,27 @@ in
 {
   __functor = _self: build;   # callable: `ix.wrapPackage pkgs { ... }`
   options = schema;           # introspectable: `ix.wrapPackage.options.&lt;f&gt;.description`
+  optionsDoc = lib.optionAttrSetToDocList schema;   # flat, JSON-able
 }</code></pre>
 <p>The <code>__functor</code> attrset is the key to keeping the call site unchanged. <code>ix.wrapPackage pkgs { ... }</code> works because <code>__functor</code> makes the attrset callable, while <code>ix.wrapPackage.options</code> is a plain attribute lookup on the same value. Nothing at a call site changes; the value just gained a queryable schema.</p>
+<p>Three details are load-bearing:</p>
+<ul>
+  <li><strong>Error attribution.</strong> The <code>_file</code> attribute on the args module makes a typo error read <code>The option `symlinkz' does not exist. Definition values: - In `ix.wrapPackage args'</code> instead of pointing at an anonymous module. Every typed builder sets it.</li>
+  <li><strong><code>optionsDoc</code>.</strong> The raw options tree contains functions and does not pretty-print; <code>lib.optionAttrSetToDocList</code> (the same helper <code>nixosOptionsDoc</code> builds on) flattens it into JSON-able entries, recursing into submodules so <code>resources.&lt;name&gt;.source</code> and friends appear as their own rows. No bespoke flattener is needed.</li>
+  <li><strong><code>pkgs</code> stays outside the schema.</strong> The curried <code>pkgs:</code> is deliberately not an option: threading it in via <code>specialArgs</code> would fork the per-call evaluation from the no-config schema evaluation and make <code>.options</code> unevaluatable without a package set. Option defaults therefore must not need <code>pkgs</code>; anything that does is computed in the builder body.</li>
+</ul>
+<p>Because caller args land as module config, module priorities work in them: a caller may pass <code>lib.mkForce</code>/<code>lib.mkDefault</code> values and they merge with the declared priorities. This is supported, not incidental &mdash; it is how a wrapper lane can force a field without inventing a side channel.</p>
 
 <h3>User-visible surface</h3>
 <p><code>wrapPackage</code> is exported through <code>lib/default.nix</code> into <code>sharedHelpers</code>, which reaches both the per-module <code>specialArgs.ix</code> and the public <code>index.lib</code> (the flake's <code>lib</code> output, <code>flake.nix:304</code>). So the schema is reachable at:</p>
 <pre><code>nix eval .#lib.wrapPackage.options.package.description
 nix eval .#lib.wrapPackage.options.symlinks.description
-nix eval --json .#lib.wrapPackage.options.resources.type.description</code></pre>
+nix eval --json .#lib.wrapPackage.options.resources.type.description
+nix eval --json .#lib.wrapPackage.optionsDoc     # whole schema, flat</code></pre>
 <p>Typo rejection is automatic: <code>ix.wrapPackage pkgs { package = p; symlinkz.hi = "p"; }</code> throws because <code>symlinkz</code> is not a declared option and no <code>freeformType</code> is set.</p>
+
+<h3>Validation</h3>
+<p>The contract is defended by eval-time regression tests, not by assertion in prose: the <code>wrap-package</code> group in <code>tests/default.nix</code> checks that an unknown argument name throws (<code>tryEval</code> over <code>drvPath</code>), that a package without <code>meta.mainProgram</code> and no caller override throws the builder's own message, that <code>mainProgram</code> defaults from the package meta and <code>unwrapped</code> is exposed, that <code>.options</code> descriptions are readable, and that <code>optionsDoc</code> renders the computed <code>mainProgram</code> default via <code>defaultText</code>. A converted builder should land with the equivalent group.</p>
 
 <h3>Composition with the cross lane</h3>
 <p>The cross-compilation lane in <code>lib/per-system.nix</code> wraps the builder to force <code>isCross = true</code>: <code>wrapPackage = wrapperPkgs: args: ix.wrapPackage wrapperPkgs (args // { isCross = true; });</code>. This keeps working unchanged: the override calls the functor with an extra declared argument, which the module merges like any other. A package definition such as <code>packages/nix/nix-web-monitor/server/default.nix</code> stays target-agnostic and never mentions <code>isCross</code>.</p>
@@ -109,9 +132,9 @@ nix eval --json .#lib.wrapPackage.options.resources.type.description</code></pre
 <ul>
   <li><strong>Eval cost.</strong> <code>evalModules</code> builds an options tree and runs merge and type checks on every call. For a builder invoked a handful of times per flake evaluation this is negligible, but it is strictly more work than applying a plain function, and it would be a poor fit for a builder called thousands of times in a hot loop. This is a reason to keep the pattern scoped to wide-surface builders rather than blanket-applying it.</li>
   <li><strong>Two validation idioms coexist.</strong> Until (if ever) every builder converts, the repo has both plain-function-plus-<code>errors.nix</code> builders and module-typed builders. A reader has to know which is which. The mitigation is the reference implementation plus this RFC as the naming of the convention.</li>
-  <li><strong>Escape-hatch fields lose typing.</strong> <code>passthru</code> and <code>meta</code> are declared <code>types.attrs</code> (opaque attribute set) because their contents are arbitrary &mdash; derivations, functions, nested test attrsets. Those fields get merge and presence but not structural typing, so a typo <em>inside</em> <code>passthru</code> is still silent. This matches how the module system treats freeform records elsewhere.</li>
-  <li><strong>The functor attrset is slightly unusual.</strong> Code that maps over the helper set expecting every value to be a function would now see an attrset for <code>wrapPackage</code>. No such consumer exists today (the helper is only called or read as <code>.options</code>), but it is a shape a future contributor could trip on.</li>
-  <li><strong>Module errors can be less direct.</strong> For some mistakes the module system's message ("The option `x' does not exist") is more indirect than a hand-written assert, and its stack traces are deeper. The upside &mdash; getting <em>any</em> loud error for a typo instead of silent wrong output &mdash; dominates, but it is a different debugging surface to learn.</li>
+  <li><strong>Escape-hatch fields lose typing.</strong> <code>passthru</code> and <code>meta</code> are declared <code>types.raw</code> (opaque, passed through untouched) because their contents are arbitrary &mdash; derivations, functions, nested test attrsets. Those fields get presence but not structural typing, so a typo <em>inside</em> <code>passthru</code> is still silent. This matches how the module system treats freeform records elsewhere.</li>
+  <li><strong>The functor attrset is slightly unusual.</strong> Code that maps over the helper set expecting every value to be a function would now see an attrset for <code>wrapPackage</code>. No such consumer exists today (the helper is only called or read as <code>.options</code>), and <code>lib.setFunctionArgs</code> can restore function-arg metadata if one ever appears, but it is a shape a future contributor could trip on.</li>
+  <li><strong>Module errors can be less direct.</strong> For some mistakes the module system's message ("The option `x' does not exist") is more indirect than a hand-written assert, and its stack traces are deeper. The <code>_file</code> attribution narrows this &mdash; the error names <code>ix.wrapPackage args</code> rather than an anonymous module &mdash; and the upside of getting <em>any</em> loud error for a typo instead of silent wrong output dominates, but it is a different debugging surface to learn.</li>
 </ul>
 
 <h2>Alternatives</h2>
@@ -134,10 +157,9 @@ nix eval --json .#lib.wrapPackage.options.resources.type.description</code></pre
 <h2>Unresolved questions</h2>
 <ol>
   <li><strong>How far to roll out.</strong> This RFC types <code>wrapPackage</code> and names the candidates but does not commit the rest. Should conversion be demand-driven (convert when editing), or should a specific set (<code>buildSvelteSite</code>, <code>buildUvApplication</code>) convert now for consistency?</li>
-  <li><strong>Raw <code>options</code> vs a flattened doc.</strong> The export is currently the raw <code>evalModules</code> options tree, so <code>nix eval .#lib.wrapPackage.options.&lt;f&gt;.description</code> works but the whole tree contains functions and does not pretty-print. Is a convenience <code>optionsDoc</code> (a flat <code>{ &lt;name&gt; = { type; default; description; }; }</code> of strings) worth adding for nicer whole-schema <code>nix eval --json</code>?</li>
   <li><strong>Should a lint enforce it?</strong> Once the convention is named, do we add a rule that new <code>lib/build/</code> builders above some argument count must be module-typed, or leave it to review judgement?</li>
   <li><strong>freeformType posture.</strong> The reference keeps <code>freeformType</code> off, so unknown keys throw. Is strict rejection always right, or do some builders want a pass-through bag (at the cost of losing typo detection)?</li>
-  <li><strong>Eval-cost budget.</strong> Is there any builder currently called often enough that adding <code>evalModules</code> would show up in eval time? A quick measurement on the hottest call sites would set the boundary of where the pattern is inappropriate.</li>
+  <li><strong>Eval-cost budget.</strong> Today <code>wrapPackage</code> has one direct call site (<code>nix-web-monitor</code>) plus the cross lane's per-target calls, so the cost is noise. The open question is where the boundary sits for the wider candidates: a builder invoked once per package in the registry pays <code>evalModules</code> per package, and a <code>NIX_SHOW_STATS</code> before/after on the first such conversion should set the budget.</li>
 </ol>
 
 <h2>Future possibilities</h2>
