@@ -5204,14 +5204,14 @@ let
     test -d ${bunSite.bunNodeModules}/node_modules/clsx
     test -x ${bunSite.bunNodeModules.nodeCompat}/bin/node
     grep -q 'class="ix npm"' ${npmSite}/share/npm-site-fixture/index.html
-    grep -q 'class="ix svelte"' ${svelteSite}/share/svelte-site-fixture/index.html
-    test ! -L ${svelteSite}/share/svelte-site-fixture
-    test ! -L ${svelteSite}/share/svelte-site-fixture/index.html
+    grep -q 'class="ix svelte"' ${svelteSite}/share/npm-site-fixture/index.html
+    test ! -L ${svelteSite}/share/npm-site-fixture
+    test ! -L ${svelteSite}/share/npm-site-fixture/index.html
     grep -q -- '--route-prefix' ${svelteSite.passthru.serve}/bin/svelte-site-fixture
     grep -q -- '/fixture' ${svelteSite.passthru.serve}/bin/svelte-site-fixture
     test -x ${svelteSite}/bin/svelte-site-fixture
     grep -q -- "Svelte Site Fixture" ${svelteSite}/bin/svelte-site-fixture
-    test -x ${svelteSite.passthru.devServer}/bin/svelte-site-fixture-dev
+    test -x ${svelteSite.passthru.devServer}/bin/npm-site-fixture-dev
 
     ${uvApplication}/bin/uv-app-fixture > uv-app-fixture.out
     grep -q 'hello from uv app fixture' uv-app-fixture.out
