@@ -21,12 +21,15 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Client-side eval knobs shared with check.yml; the runner daemon owns the
-  # substituters. See check.yml for the rationale.
+  # Client-side eval knobs shared with check.yml. The ci-dispatcher runs each job
+  # as an untrusted DynamicUser and the daemon owns substituters + system-features,
+  # so any restricted setting specified here is ignored with a warning. We omit
+  # extra-system-features because the znver5 host already advertises
+  # gccarch-znver5 daemon-side (ix hardware/znver5.nix); setting it here only
+  # produced a "restricted setting ... not a trusted user" warning. See check.yml.
   NIX_CONFIG: |-
     experimental-features = nix-command flakes ca-derivations
     accept-flake-config = true
-    extra-system-features = gccarch-znver5
     max-jobs = auto
     cores = 1
 

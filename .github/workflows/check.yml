@@ -30,11 +30,12 @@ env:
   # `accept-flake-config`: consume the flake's nixConfig (the cache.ix.dev
   # substituter) without an interactive prompt.
   #
-  # `extra-system-features = gccarch-znver5`: every image pins
-  # `nixpkgs.hostPlatform.gcc.arch = "znver5"`, marking each derivation in the
-  # closure as needing the `gccarch-znver5` system feature. The runner host
-  # must advertise it (daemon `system-features`); otherwise the build aborts
-  # with `missing system features ... Required features: {gccarch-znver5}`.
+  # We do NOT set `extra-system-features = gccarch-znver5` here: every image
+  # pins `nixpkgs.hostPlatform.gcc.arch = "znver5"`, so each derivation needs
+  # the `gccarch-znver5` system feature -- but the runner host advertises it
+  # daemon-side (ix hardware/znver5.nix), which is the layer Nix actually
+  # consults. As a restricted setting from the untrusted CI runner user it was
+  # ignored regardless, emitting only a "not a trusted user" warning.
   #
   # `max-jobs = auto` builds one derivation per core; `cores = 1` keeps each
   # build single-threaded. The closure is wide, so parallelism comes from
@@ -50,7 +51,6 @@ env:
   NIX_CONFIG: |-
     experimental-features = nix-command flakes ca-derivations
     accept-flake-config = true
-    extra-system-features = gccarch-znver5
     max-jobs = auto
     cores = 1
 
