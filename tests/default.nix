@@ -173,7 +173,7 @@ let
     config = {
       allowUnfreePredicate = pkg: lib.getName pkg == "claude-code";
     };
-    overlays = [ ];
+    overlays = [ ix.overlay ];
   };
   homeAgentIndexPackages = _: ix.packageSetFor homeAgentPkgs;
   homeAgentConfig =
