@@ -2373,7 +2373,12 @@ let
   # eval time, and stay introspectable via `.options` / `.optionsDoc`.
   wrappedHello = ix.wrapPackage pkgs {
     package = pkgs.hello;
-    env.WRAP_FIXTURE = "1";
+    # Hostile literal: `$`, backticks, and quotes must reach the wrapper
+    # verbatim (heredoc + runtime-shell escaping), never expand at build time.
+    env.WRAP_FIXTURE = "literal $HOME `code` \"quoted\"";
+    # Exercises the PATH line; the helpers check asserts the wrapper defers
+    # `$PATH` to runtime instead of baking the build sandbox PATH.
+    pathSuffix = [ pkgs.hello ];
   };
   wrapPackageTypoEval = builtins.tryEval (
     builtins.seq
@@ -5212,6 +5217,14 @@ let
     test -x ${svelteSite}/bin/svelte-site-fixture
     grep -q -- "Svelte Site Fixture" ${svelteSite}/bin/svelte-site-fixture
     test -x ${svelteSite.passthru.devServer}/bin/npm-site-fixture-dev
+
+    # wrapPackage wrapper contract: the operator's runtime PATH is preserved
+    # (literal $PATH, not the baked build-sandbox PATH) and hostile env
+    # literals survive both the build heredoc and the runtime sh parse.
+    grep -qF 'export PATH="$PATH:' ${wrappedHello}/bin/hello
+    grep -qF 'literal $HOME `code` "quoted"' ${wrappedHello}/bin/hello
+    ${wrappedHello}/bin/hello > wrapped-hello.out
+    grep -q 'Hello, world!' wrapped-hello.out
 
     ${uvApplication}/bin/uv-app-fixture > uv-app-fixture.out
     grep -q 'hello from uv app fixture' uv-app-fixture.out

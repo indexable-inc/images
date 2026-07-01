@@ -31,6 +31,15 @@ ix.wrapPackage pkgs {
     env = "NIX_WEB_MONITOR_SITE_DIR";
   };
   nativePathSuffix = [ pkgs.nvd ];
+  # Stamp the build revision and commit time for `--version`. These ride the
+  # wrapper env (not `env!`) and the `build-version` crate renders them at
+  # runtime, so a new commit re-stamps this tiny wrapper without rebuilding
+  # the Rust unit. `IX_BUILD_*` are the shared names every ix tool reads; see
+  # `build-version` and `ix.rev` / `ix.revEpoch`.
+  env = {
+    IX_BUILD_REV = ix.rev;
+    IX_BUILD_EPOCH = toString ix.revEpoch;
+  };
   symlinks.nwm = "nix-web-monitor";
   passthru = {
     tests = server.passthru.tests // {

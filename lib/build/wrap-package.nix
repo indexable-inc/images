@@ -165,12 +165,27 @@ let
           resource: lib.optional (resource.env != null) (lib.nameValuePair resource.env "$out/${resource.to}")
         ) resourceList
       );
-      # Resource env values reference `$out` (build-time expansion), so both maps
-      # render through the same double-quoted export.
-      envLines = lib.mapAttrsToList (name: value: "export ${name}=\"${value}\"") (cfg.env // resourceEnv);
+      # The wrapper is written through an UNQUOTED heredoc so `$out` can expand
+      # at build time; anything meant to reach the wrapper verbatim must be
+      # escaped against that pass ($, backtick, backslash).
+      escapeHeredoc = lib.replaceStrings [ "\\" "$" "`" ] [ "\\\\" "\\$" "\\`" ];
+      # Caller `env` values are literals: single-quote them for the runtime
+      # shell AND heredoc-escape them, so `$`, quotes, and backticks survive
+      # both the build-time heredoc and the runtime `sh` parse. A resource env
+      # var of the same name wins, matching the old `cfg.env // resourceEnv`.
+      literalEnvLines = lib.mapAttrsToList (
+        name: value: "export ${name}=${escapeHeredoc (lib.escapeShellArg value)}"
+      ) (removeAttrs cfg.env (lib.attrNames resourceEnv));
+      # Resource env values reference `$out` (build-time expansion), so they
+      # render unescaped through a double-quoted export.
+      resourceEnvLines = lib.mapAttrsToList (name: value: "export ${name}=\"${value}\"") resourceEnv;
+      envLines = literalEnvLines ++ resourceEnvLines;
       finalPathSuffix = cfg.pathSuffix ++ lib.optionals (!cfg.isCross) cfg.nativePathSuffix;
+      # `\$PATH` keeps the expansion at runtime: the operator's own PATH stays
+      # first (their `nix`, `home-manager`, ... win) and the suffix only appends.
+      # An unescaped `$PATH` would bake the build sandbox PATH into the wrapper.
       pathLine = lib.optionalString (finalPathSuffix != [ ]) ''
-        export PATH="$PATH:${lib.makeBinPath finalPathSuffix}"
+        export PATH="\$PATH:${lib.makeBinPath finalPathSuffix}"
       '';
       symlinkLines = lib.mapAttrsToList (
         name: target: "ln -s ${lib.escapeShellArg target} \"$out/bin/${name}\""

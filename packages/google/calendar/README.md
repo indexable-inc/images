@@ -5,7 +5,7 @@ Google Calendar for agents and shells: one Rust crate owns the
 (list, get, create, cancel). OAuth lives in the shared
 [`packages/google/auth`](../auth) crate, which the gmail integration also
 uses; three thin surfaces expose this client per
-[RFC 0003](../../../rfcs/0003-mcp-composable-clis.html): the `gcal` CLI
+[RFC 0003](../../site/src/lib/rfcs/0003-mcp-composable-clis.svx): the `gcal` CLI
 in [`cli/`](./cli), the `calendar_*` tools in the `ix-google-mcp` Rust
 server in [`packages/google/mcp`](../mcp), and the
 `ix_google.calendar.Client` Python class in
