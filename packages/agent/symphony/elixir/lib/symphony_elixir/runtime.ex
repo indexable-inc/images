@@ -175,7 +175,7 @@ defmodule SymphonyElixir.Runtime do
     # first scheduling pass, the BEAM-restart half of #90.
     state =
       if Keyword.get(opts, :recover, false) do
-        recovered = Recovery.reconcile(graph, fn thread_id -> state.engine.status(thread_id) end)
+        recovered = Recovery.reconcile(graph, fn thread_id -> state.engine.status(thread_id) end, state.store_opts)
         %{state | graph: recovered}
       else
         state
@@ -299,6 +299,13 @@ defmodule SymphonyElixir.Runtime do
         # A monitor we already flushed, or an unrelated process. Ignore.
         {:noreply, state}
     end
+  end
+
+  @impl true
+  def handle_info({:attempt_thread_id, node_id, thread_id}, state) do
+    graph = record_attempt_thread_id(state.graph, node_id, thread_id)
+    persist(graph, state)
+    {:noreply, %{state | graph: graph}}
   end
 
   @impl true
@@ -462,6 +469,8 @@ defmodule SymphonyElixir.Runtime do
   # task and must guard recursion and select its workflow there. The other
   # kinds ignore the subrun keys.
   defp run_opts(state, %Node{kind: :subrun} = node, attempt_n) do
+    runtime = self()
+
     %{
       run_id: state.graph.run_id,
       attempt: attempt_n,
@@ -469,7 +478,8 @@ defmodule SymphonyElixir.Runtime do
       store_opts: state.store_opts,
       subrun_depth: state.subrun_depth,
       subrun_ancestors: state.subrun_ancestors,
-      resolved_inputs: resolve_inputs(state.graph, node)
+      resolved_inputs: resolve_inputs(state.graph, node),
+      on_child_started: fn child_run_id -> send(runtime, {:attempt_thread_id, node.id, child_run_id}) end
     }
   end
 
@@ -662,6 +672,24 @@ defmodule SymphonyElixir.Runtime do
       {:ok, node} ->
         attempts = finish_current_attempt(node.attempts, result, thread_id)
         put_node(graph, %{node | attempts: attempts})
+
+      :error ->
+        graph
+    end
+  end
+
+  defp record_attempt_thread_id(%RunGraph{} = graph, node_id, thread_id) do
+    case Map.fetch(graph.nodes, node_id) do
+      {:ok, %Node{attempts: []}} ->
+        graph
+
+      {:ok, %Node{state: :running, attempts: attempts} = node} ->
+        current = Enum.max_by(attempts, & &1.n)
+        updated = Enum.map(attempts, fn a -> if a.n == current.n, do: %{a | thread_id: thread_id}, else: a end)
+        put_node(graph, %{node | attempts: updated})
+
+      {:ok, _node} ->
+        graph
 
       :error ->
         graph

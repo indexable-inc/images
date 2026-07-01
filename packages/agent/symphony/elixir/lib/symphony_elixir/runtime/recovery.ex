@@ -41,7 +41,7 @@ defmodule SymphonyElixir.Runtime.Recovery do
   `:unknown` thread falls through to the strand/retry policy.
   """
 
-  alias SymphonyElixir.IR.{Attempt, Graph, Node, RunGraph}
+  alias SymphonyElixir.IR.{Attempt, Graph, Node, RunGraph, Store}
 
   @doc """
   Rebuild a materialized graph from an AST and an expansion log by
@@ -78,14 +78,21 @@ defmodule SymphonyElixir.Runtime.Recovery do
   returned graph has no `:running` nodes; each has moved to `:succeeded`,
   `:failed`, `:retrying`, or `:stranded` by the rules in the moduledoc.
   """
-  @spec reconcile(RunGraph.t(), (String.t() | nil -> term())) :: RunGraph.t()
-  def reconcile(%RunGraph{} = graph, status_fun) when is_function(status_fun, 1) do
+  @spec reconcile(RunGraph.t(), (String.t() | nil -> term()), keyword()) :: RunGraph.t()
+  def reconcile(%RunGraph{} = graph, status_fun, store_opts \\ []) when is_function(status_fun, 1) do
     graph
     |> Graph.running_nodes()
-    |> Enum.reduce(graph, fn node, acc -> reconcile_node(acc, node, status_fun) end)
+    |> Enum.reduce(graph, fn node, acc -> reconcile_node(acc, node, status_fun, store_opts) end)
   end
 
-  defp reconcile_node(%RunGraph{} = graph, %Node{} = node, status_fun) do
+  defp reconcile_node(%RunGraph{} = graph, %Node{} = node, status_fun, store_opts) do
+    case reconcile_subrun(graph, node, store_opts) do
+      {:ok, reconciled} -> reconciled
+      :not_subrun -> reconcile_engine_node(graph, node, status_fun)
+    end
+  end
+
+  defp reconcile_engine_node(%RunGraph{} = graph, %Node{} = node, status_fun) do
     case status_fun.(current_thread_id(node)) do
       :running ->
         # The engine still owns the turn. Leave it :running; the live
@@ -102,6 +109,55 @@ defmodule SymphonyElixir.Runtime.Recovery do
       :unknown ->
         strand_or_retry(graph, node)
     end
+  end
+
+  defp reconcile_subrun(%RunGraph{} = graph, %Node{} = node, store_opts) do
+    case current_attempt(node) do
+      %Attempt{engine: :subrun, thread_id: child_run_id} when is_binary(child_run_id) and child_run_id != "" ->
+        case Store.load(child_run_id, store_opts) do
+          {:ok, %RunGraph{status: status} = child} when status in [:succeeded, :failed, :cancelled] ->
+            result = subrun_result(child)
+
+            reconciled =
+              graph
+              |> mark_attempt(node.id, attempt_state_for(result), result)
+              |> Graph.apply_output(node.id, result)
+
+            {:ok, reconciled}
+
+          {:ok, %RunGraph{}} ->
+            {:ok, strand_or_retry(graph, node)}
+
+          {:error, _reason} ->
+            {:ok, strand_or_retry(graph, node)}
+        end
+
+      %Attempt{engine: :subrun} ->
+        {:ok, strand_or_retry(graph, node)}
+
+      _ ->
+        :not_subrun
+    end
+  end
+
+  defp subrun_result(%RunGraph{status: :succeeded} = child), do: {:ok, subrun_output(child)}
+
+  defp subrun_result(%RunGraph{status: status, run_id: run_id}) when status in [:failed, :cancelled],
+    do: {:error, {:subrun_failed, run_id, status}}
+
+  defp subrun_output(%RunGraph{} = child) do
+    %{
+      kind: :subrun,
+      run_id: child.run_id,
+      status: child.status,
+      outputs: node_outputs(child)
+    }
+  end
+
+  defp node_outputs(%RunGraph{nodes: nodes}) do
+    nodes
+    |> Enum.filter(fn {_id, node} -> node.state == :succeeded end)
+    |> Map.new(fn {id, node} -> {id, node.output} end)
   end
 
   # The thread is gone. The owning task died without a result, so the

@@ -5,10 +5,11 @@ defmodule SymphonyElixir.IR.Attempt do
   whether a node was retried, by which engine, at what cost, and how each
   attempt ended.
 
-  `thread_id` is the room-server thread/session handle for the attempt.
-  It is the reattach probe used on restart: a node found `:running` after
-  a BEAM restart is reconciled by asking the engine for the status of
-  this thread (see `IR.Node` and the runtime recovery path).
+  `thread_id` is the durable reattach handle for the attempt. For agent
+  turns it is the room-server thread/session id; for subrun attempts it is
+  the child run id. A node found `:running` after a BEAM restart is
+  reconciled from this handle (see `IR.Node` and the runtime recovery
+  path).
 
   `events_ref` points at the streamed event log for the attempt rather
   than inlining it, so the durable run file stays small.

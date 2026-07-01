@@ -140,8 +140,19 @@ defmodule SymphonyElixir.Runtime.SubrunRunner do
     child_opts = child_opts(name, run_opts)
 
     case Runtime.Ingress.start_workflow(entry, trigger, child_opts) do
-      {:ok, %{run_id: run_id, pid: pid}} -> await_child(run_id, pid, run_opts)
-      {:error, reason} -> {:error, {:subrun_start_failed, name, reason}, nil}
+      {:ok, %{run_id: run_id, pid: pid}} ->
+        notify_child_started(run_id, run_opts)
+        await_child(run_id, pid, run_opts)
+
+      {:error, reason} ->
+        {:error, {:subrun_start_failed, name, reason}, nil}
+    end
+  end
+
+  defp notify_child_started(run_id, run_opts) do
+    case Map.get(run_opts, :on_child_started) do
+      callback when is_function(callback, 1) -> callback.(run_id)
+      _ -> :ok
     end
   end
 

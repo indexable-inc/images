@@ -578,6 +578,44 @@ defmodule SymphonyElixir.RuntimeTest do
       assert child.status == :succeeded
     end
 
+    test "restart recovery harvests a completed subrun child instead of deadlocking the parent", %{dir: dir} do
+      child =
+        graph("child-after-restart", [
+          node("c", state: :succeeded)
+        ])
+        |> put_in([Access.key!(:nodes), "c", Access.key!(:output)], %{done: true})
+        |> Map.put(:status, :succeeded)
+
+      :ok = Store.persist(child, dir: dir)
+
+      parent =
+        graph("parent-after-restart", [
+          node("s",
+            state: :running,
+            kind: :subrun,
+            envelope: nil,
+            inputs: %{"source" => {:literal, "child.sym"}},
+            attempts: [Attempt.start(1, :subrun, "child-after-restart")]
+          )
+        ])
+
+      :ok = Store.persist(parent, dir: dir)
+
+      {:ok, pid} = Runtime.start_link(parent, opts(dir) ++ [recover: true])
+      wait_for_exit(pid)
+
+      {:ok, final} = Store.load("parent-after-restart", dir: dir)
+      assert final.status == :succeeded
+      assert final.nodes["s"].state == :succeeded
+      assert final.nodes["s"].output.run_id == "child-after-restart"
+      assert final.nodes["s"].output.outputs["c"] == %{done: true}
+
+      [attempt] = final.nodes["s"].attempts
+      assert attempt.engine == :subrun
+      assert attempt.thread_id == "child-after-restart"
+      assert attempt.state == :succeeded
+    end
+
     test "a self-referential subrun is rejected as a cycle without spawning a child", %{dir: dir} do
       ensure_subrun_substrate()
       put_workflow("child", @child_sym)
