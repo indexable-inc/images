@@ -424,8 +424,10 @@ fn set_net_linux(ctx: u32, boot: &BootLinux) -> Result<(), Error> {
 }
 
 /// Map guest AF_VSOCK ports to host unix sockets (see [`BootLinux::vsock_ports`]).
-/// Returns the path `CString`s, which must outlive `krun_start_enter`. A no-op
-/// with no ports. Shared across hosts: both libkrun variants export
+/// Returns the path `CString`s only to keep the caller uniform with the argv
+/// keepalives; libkrun copies the path into an owned `PathBuf` at call time
+/// (`unix_ipc_port_map`), so no lifetime past this call is actually required.
+/// A no-op with no ports. Shared across hosts: both libkrun variants export
 /// `krun_add_vsock_port2`.
 #[cfg(have_libkrun)]
 fn set_vsock_ports(ctx: u32, boot: &BootLinux) -> Result<Vec<CString>, Error> {
@@ -443,6 +445,9 @@ fn set_vsock_ports(ctx: u32, boot: &BootLinux) -> Result<Vec<CString>, Error> {
                     message: format!("remove stale vsock socket {}: {e}", path.display()),
                 })?;
             }
+            // A symlink lands here too (symlink_metadata never reports a
+            // symlink as a socket): refusing to follow or remove it is the
+            // deliberate safe choice, even for a dangling one.
             Ok(_) => {
                 return Err(Error::Source {
                     path: path.clone(),

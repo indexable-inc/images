@@ -466,6 +466,11 @@ fn build_vsock_ports(specs: &[String]) -> Result<Vec<(u32, std::path::PathBuf)>,
         let port: u32 = port
             .parse()
             .map_err(|_| format!("--vsock-port {spec:?}: invalid guest port"))?;
+        // Port 0 and VMADDR_PORT_ANY are reserved; reject here with a legible
+        // message instead of deferring to a late libkrun -errno at boot.
+        if port == 0 || port == u32::MAX {
+            return Err(format!("--vsock-port {spec:?}: guest port must be 1..u32::MAX-1"));
+        }
         if path.is_empty() {
             return Err(format!("--vsock-port {spec:?} has an empty host socket path"));
         }
@@ -497,7 +502,7 @@ mod tests {
 
     #[test]
     fn vsock_port_rejects_malformed_specs() {
-        for bad in ["7100", "nope:/tmp/x.sock", "7100:", "-1:/tmp/x.sock"] {
+        for bad in ["7100", "nope:/tmp/x.sock", "7100:", "-1:/tmp/x.sock", "0:/tmp/x.sock", "4294967295:/tmp/x.sock"] {
             let specs = [String::from(bad)];
             assert!(build_vsock_ports(&specs).is_err(), "{bad:?} must be rejected");
         }
