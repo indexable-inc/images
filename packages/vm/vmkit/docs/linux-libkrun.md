@@ -25,6 +25,20 @@ nixpkgs only provides libkrun on Darwin as **libkrun-efi** (classic libkrun's `l
 
 The known trap is an old guest Mesa: venus against a MoltenVK host needed Mesa fixes that stable-distro Mesas lacked for a while, which is why krunkit's proven guests (Fedora's podman-machine image) shipped a patched Mesa until the fixes landed upstream. A guest with a current Mesa, including a stock NixOS guest built from this repo's pin, has them ([#709](https://github.com/indexable-inc/index/issues/709)).
 
+The other trap is the guest kernel's page size. venus maps its blob resources
+into the guest through the host's `hv_vm_map`, which rejects any address or
+size not aligned to the fixed 16 KiB Apple Silicon host page. The guest kernel
+`PAGE_ALIGN`s blob sizes and packs blob offsets at its own page granularity, so
+a default 4 KiB-page aarch64 kernel produces 4K-aligned maps that the host
+refuses: the guest sees `ERR_UNSPEC` on `RESOURCE_MAP_BLOB`/`UNMAP_BLOB`
+(`*ERROR* response 0x1200 (command 0x208/0x209)` on the console) and mesa
+falls back to lavapipe even though the venus ICD loaded and the capsets probed
+fine. Build the guest kernel with `CONFIG_ARM64_16K_PAGES=y` (see
+[panes-guest-image](../../panes/guest-image/nixos.nix), and muvm/Asahi as the
+upstream precedent); host-side rounding in libkrun would overlap neighbouring
+4K-packed blobs, so this is a guest requirement, not a vmkit bug
+([#1686](https://github.com/indexable-inc/index/issues/1686)).
+
 ## Linux host: boot a rootfs under classic libkrun (KVM)
 
 `vmkit boot-linux --root <rootfs-dir> [--gpu] -- <cmd> [args...]` shares a host directory into the guest over virtiofs as `/`, boots it under libkrun's bundled `libkrunfw` kernel, and runs `<cmd>` as the guest init. This is the same model `podman --runtime krun` and `crun` use: no firmware, no guest-supplied kernel, no EFI disk.
