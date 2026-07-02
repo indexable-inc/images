@@ -5,7 +5,11 @@
   fetchzip,
   ix,
   lib,
+  nix,
   stdenv,
+  # Writer for `passthru.updateScript` (flake-package path only); null on the
+  # overlay path. Same nullable-writer pattern as claude-code / yc.
+  updateScriptWriter ? null,
 }:
 let
   # Add a target here, with its own release hash, before building on another
@@ -14,8 +18,19 @@ let
     x86_64-linux = "x86_64-unknown-linux-gnu";
   };
   # Version + per-release URL and SRI hash live in the sibling pins.json, never
-  # inline (repo policy). Bump with `nix run .#update`.
+  # inline (repo policy). Bump the version/url in pins.json, then
+  # `nix run .#update` re-pins the hash.
   pin = ix.pins.loadPin ./pins.json "lakekeeper";
+  updateScript =
+    if updateScriptWriter == null then
+      null
+    else
+      ix.pins.mkUpdater {
+        writeNushellApplication = updateScriptWriter;
+        inherit nix;
+        pname = "lakekeeper";
+        relPath = "packages/lakekeeper/pins.json";
+      };
 in
 stdenv.mkDerivation {
   pname = "lakekeeper";
@@ -27,6 +42,8 @@ stdenv.mkDerivation {
     inherit (pin) url hash;
     stripRoot = false;
   };
+
+  passthru = lib.optionalAttrs (updateScript != null) { inherit updateScript; };
 
   nativeBuildInputs = [ autoPatchelfHook ];
   buildInputs = [

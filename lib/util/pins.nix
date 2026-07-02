@@ -36,12 +36,15 @@ let
     pathStr: name: entry:
     if !(builtins.isAttrs entry) then
       throw "ix.lib.loadPins: ${pathStr}: pin `${name}` must be an object, got ${builtins.typeOf entry}"
-    else if (entry ? hash) && !(isSri entry.hash) then
+    else if !(entry ? hash) then
+      # Every pin needs the SRI fetch `hash`: fetchers pin by it, and an OCI
+      # `imageDigest` pin still passes `hash` to dockerTools.pullImage. Requiring
+      # it here fails with the owning path instead of deep inside the fetcher.
+      throw "ix.lib.loadPins: ${pathStr}: pin `${name}` has no `hash` field"
+    else if !(isSri entry.hash) then
       throw "ix.lib.loadPins: ${pathStr}: pin `${name}`.hash must be an `sha256-...` SRI string"
     else if (entry ? imageDigest) && !(isDigest entry.imageDigest) then
       throw "ix.lib.loadPins: ${pathStr}: pin `${name}`.imageDigest must be a `sha256:...` digest string"
-    else if !(entry ? hash) && !(entry ? imageDigest) then
-      throw "ix.lib.loadPins: ${pathStr}: pin `${name}` has no `hash` or `imageDigest` field"
     else
       entry;
 
@@ -74,7 +77,68 @@ let
       pins = loadPins path;
     in
     pins.${name} or (throw "ix.lib.loadPins: ${toString path} has no pin `${name}`");
+
+  /**
+    Build a `passthru.updateScript` that mechanically refreshes the SRI `hash`
+    of every pin in a `pins.json`, so the pin joins `nix run .#update`.
+
+    For each entry carrying a `url`, the script prefetches the URL and rewrites
+    that entry's `hash` in place, preserving every other field (url, version,
+    imageDigest, ...). It does NOT invent a new version or URL: bumping the
+    upstream version is a human edit to `pins.json` (change url/version), after
+    which the updater re-pins the hash — the same "human reviews the bump, the
+    updater re-pins bytes" posture the yc CLI uses (no signed upstream manifest,
+    so no provenance check; the CI build only proves the pinned bytes fetch).
+
+    Arguments:
+    - `writeNushellApplication`: the caller's `updateScriptWriter`.
+    - `nix`: the nix package (for `nix store prefetch-file`).
+    - `pname`: package name, for the script name and messages.
+    - `relPath`: the pins.json path RELATIVE to the repo root (the updater runs
+      from there, as the generated `update` app guarantees), e.g.
+      `packages/vector-bin/pins.json`.
+
+    An `imageDigest` pin is NOT auto-refreshed (its digest and hash both change
+    only on a deliberate base-image bump, which is a human edit); the script
+    leaves such entries untouched and reports them.
+  */
+  mkUpdater =
+    {
+      writeNushellApplication,
+      nix,
+      pname,
+      relPath,
+    }:
+    writeNushellApplication {
+      name = "${pname}-update";
+      runtimeInputs = [ nix ];
+      meta.description = "Re-pin the SRI hashes in ${relPath} from their pinned URLs";
+      text = ''
+        # nu
+        # Run from the repo root: `nix run .#${pname}.updateScript`.
+        def main [] {
+          const out = "${relPath}"
+          let pins = (open $out)
+          let updated = (
+            $pins
+            | transpose name entry
+            | reduce --fold {} {|row acc|
+                let entry = $row.entry
+                if ("url" in ($entry | columns)) {
+                  let sri = (^nix store prefetch-file --json $entry.url | from json | get hash)
+                  $acc | insert $row.name ($entry | upsert hash $sri)
+                } else {
+                  print $"(ansi yellow)skipping ($row.name): no `url` to re-fetch(ansi reset)"
+                  $acc | insert $row.name $entry
+                }
+              }
+          )
+          $updated | to json --indent 2 | save --force $out
+          print $"re-pinned ($out)"
+        }
+      '';
+    };
 in
 {
-  inherit loadPins loadPin;
+  inherit loadPins loadPin mkUpdater;
 }

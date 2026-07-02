@@ -20,18 +20,33 @@
 {
   ix,
   lib,
+  nix,
   stdenv,
   fetchurl,
   autoPatchelfHook,
   patchelf,
   unzip,
   zip,
+  # Writer for `passthru.updateScript` (flake-package path only); null on the
+  # overlay path.
+  updateScriptWriter ? null,
 }:
 let
   # Version + URL and SRI hash live in the sibling pins.json, never inline
-  # (repo policy). Bump with `nix run .#update`.
+  # (repo policy). Bump the version/url in pins.json, then `nix run .#update`
+  # re-pins the hash.
   pin = ix.pins.loadPin ./pins.json "gluten";
   inherit (pin) version;
+  updateScript =
+    if updateScriptWriter == null then
+      null
+    else
+      ix.pins.mkUpdater {
+        writeNushellApplication = updateScriptWriter;
+        inherit nix;
+        pname = "spark-gluten";
+        relPath = "packages/spark/spark-gluten/pins.json";
+      };
   sparkVersion = "3.5";
   scalaVersion = "2.12";
   jarName = "gluten-velox-bundle.jar";
@@ -107,7 +122,8 @@ stdenv.mkDerivation (finalAttrs: {
     inherit sparkVersion scalaVersion;
     # Absolute path consumers put on the Spark driver/executor classpath.
     jar = "${finalAttrs.finalPackage}/share/java/${jarName}";
-  };
+  }
+  // lib.optionalAttrs (updateScript != null) { inherit updateScript; };
 
   meta = {
     description = "Apache Gluten Velox backend bundle for Spark ${sparkVersion}, patched for NixOS";

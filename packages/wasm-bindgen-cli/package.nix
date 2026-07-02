@@ -24,4 +24,5 @@
       "x86_64-darwin"
     ];
   };
+  updateScript = true;
 }

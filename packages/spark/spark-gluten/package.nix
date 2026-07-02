@@ -11,4 +11,5 @@
   packageSet.systems = [ "x86_64-linux" ];
   flake.systems = [ "x86_64-linux" ];
   overlay = true;
+  updateScript = true;
 }
