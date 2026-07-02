@@ -1,9 +1,7 @@
 name: Cache push
 
-# Publish every x86_64-linux package to cache.ix.dev on each push to main, so a
-# remote `ix up` substitutes repo artifacts instead of rebuilding them from
-# source. See indexable-inc/index#1639. Kept out of the required `flake-check`
-# gate because building the full package set is far heavier; this blocks nothing.
+# Publish x86_64-linux packages to cache.ix.dev on push to main so `ix up`
+# substitutes instead of rebuilding (indexable-inc/index#1639). Non-gating.
 
 on:
   push:
@@ -19,19 +17,13 @@ on:
 permissions:
   contents: read
 
-# Serialize and never cancel: `ix up` pins arbitrary merged revs, so every
-# merged commit must get its closure pushed.
+# `ix up` pins arbitrary merged revs, so every merged commit must get pushed.
 concurrency:
   group: cache-push
   cancel-in-progress: false
 
 env:
-  # Client-side eval knobs shared with check.yml. The ci-dispatcher runs each job
-  # as an untrusted DynamicUser and the daemon owns substituters + system-features,
-  # so any restricted setting specified here is ignored with a warning. We omit
-  # extra-system-features because the znver5 host already advertises
-  # gccarch-znver5 daemon-side (ix hardware/znver5.nix); setting it here only
-  # produced a "restricted setting ... not a trusted user" warning. See check.yml.
+  # Shared with check.yml; restricted settings are daemon-owned and ignored here.
   NIX_CONFIG: |-
     experimental-features = nix-command flakes ca-derivations
     accept-flake-config = true
@@ -40,23 +32,15 @@ env:
 
 jobs:
   push:
-    # Same warm-store self-hosted runner pool as check.yml, so this mostly
-    # uploads already-built paths rather than building from scratch. The ix CI
-    # dispatcher recognises this `-cache-push` job and, for pushes to main of
-    # this (public) repo, attaches the push-only `ix-public` atticd token as a
-    # per-job systemd credential -- no GitHub secret, no signing or S3 key.
+    # Warm-store pool shared with check.yml. The dispatcher recognises
+    # `-cache-push` and attaches the push-only ix-public token as a per-job
+    # systemd credential (spawn.rs ix_public_push_eligible).
     runs-on: ["${{ format('ix-ci-run-{0}-{1}-cache-push', github.run_id, github.run_attempt) }}"]
     timeout-minutes: 180
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      # Publishes index's package closure to the public `ix-public` atticd cache
-      # (served at cache.ix.dev through ncps). atticd signs served narinfos
-      # server-side with the fleet ix-workspace key, so the runner needs only a
-      # push-only token -- no signing key, no S3 credentials. The token arrives
-      # as a per-job systemd credential the ix dispatcher attaches to exactly
-      # this job (see ci-dispatcher spawn.rs ix_public_push_eligible).
       - name: Publish all packages to cache.ix.dev
         shell: bash
         env:
@@ -64,35 +48,23 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Per-phase wall-clock, surfaced as run annotations so a slow phase
-          # (eval / realise / push) is visible without re-timing by hand.
           phase() { echo "::notice::cache-push phase '$1' took $(( SECONDS - $2 ))s"; }
 
-          # The dispatcher exposes the push token as an env-file credential and
-          # names it in IX_PUBLIC_PUSH_CREDENTIAL_NAME. It attaches this to
-          # every main push of this repo, so absence is a dispatcher
-          # regression, not a deploy-ordering state: fail loudly rather than
-          # silently letting the public cache go stale.
+          # Attached to every main push; absence is a dispatcher regression.
           cred="${CREDENTIALS_DIRECTORY:-}/${IX_PUBLIC_PUSH_CREDENTIAL_NAME:-}"
           if [ ! -f "$cred" ]; then
             echo "::error::ix-public push credential not delivered (see ci-dispatcher spawn.rs ix_public_push_eligible)"
             exit 1
           fi
 
-          # Materialise ATTIC_IX_PUBLIC_PUSH_TOKEN from the root-delivered
-          # credential (KEY=VALUE env file) without ever putting it on argv.
           set -a
           # shellcheck disable=SC1090
           . "$cred"
           set +a
           : "${ATTIC_IX_PUBLIC_PUSH_TOKEN:?credential file missing ATTIC_IX_PUBLIC_PUSH_TOKEN}"
 
-          # Per-job attic client config in a fresh, self-cleaning XDG dir. attic
-          # prefers $XDG_CONFIG_HOME over $HOME/.config, so set it explicitly.
-          # 0600 token file under a 0700 dir; never `attic login <token>` (a token
-          # on argv is world-readable via /proc/<pid>/cmdline to a concurrent
-          # runner). The endpoint is the host's local mTLS atticd proxy (the same
-          # one check.yml reads ix-ci from); the token is scoped to ix-public.
+          # Token via config file, never `attic login`: argv is world-readable
+          # through /proc/<pid>/cmdline.
           workdir="$(mktemp -d)"
           trap 'rm -rf "$workdir"' EXIT
           export XDG_CONFIG_HOME="$workdir/config"
@@ -106,43 +78,18 @@ jobs:
             } > "$XDG_CONFIG_HOME/attic/config.toml"
           )
 
-          # Tools pinned via the flake so the step does not depend on the runner
-          # PATH: nix-eval-jobs is the flake-pinned evaluator, attic is the push
-          # client, jq reads the eval output, findutils provides xargs. The
-          # runner PATH carries coreutils + nix but not findutils, so bare
-          # `xargs` is `command not found`. (nix-store and nix build come with
-          # the runner's nix.)
+          # Flake-pinned tools: runner PATH has nix + coreutils but no
+          # findutils. ^bin/^out pick one output from multi-output packages.
           tools_t=$SECONDS
           eval_jobs="$(nix build .#nix-eval-jobs --no-link --print-out-paths)/bin/nix-eval-jobs"
           attic="$(nix build .#attic-client --no-link --print-out-paths)/bin/attic"
-          # jq is multi-output; select its `bin` output explicitly so the path
-          # resolves to a single store path, not the whole (bin man ...) set.
           jq="$(nix build '.#jq^bin' --no-link --print-out-paths)/bin/jq"
-          # findutils is multi-output (out info locate); select `out` (where
-          # xargs lives) so the path resolves to a single store path.
           xargs="$(nix build '.#findutils^out' --no-link --print-out-paths)/bin/xargs"
           phase tools "$tools_t"
 
-          # Enumerate `.#cachePushRoots`, not `.#packages`: it publishes the
-          # closures `ix up` substitutes with the monolithic `*-oci.tar` archives
-          # stripped out (NixOS images reduced to their `toplevel`, the tar-pinning
-          # health-checks dropped in favour of the node closures directly). Each
-          # archive is cold every run (check.yml only eval-validates packages) and,
-          # being one uncompressed blob, never dedups, so building and re-uploading
-          # them used to dominate the run. See lib/per-system.nix.
-          #
-          # Publish to ix-public by DERIVATION, not by eval-time output path: a
-          # floating content-addressed output (the rust workspace defaults to CA)
-          # has no path until it is realised, so nix-eval-jobs reports
-          # `outputs.out: null` at eval time. The drvPath, however, is always
-          # known. So enumerate every package's drvPath, then `nix-store
-          # --realise` each -- which builds or substitutes the output (whichever
-          # is needed) and prints its resolved path -- and push those. One pass
-          # covers everything: realise both builds genuinely-new paths and pulls
-          # paths only another cache (e.g. ix-ci) has into the local store, so
-          # ix-public ends up holding the whole closure. attic walks each path's
-          # closure and dedups server-side, so re-runs only upload genuinely new
-          # paths. The shared warm host store keeps this cheap across runs.
+          # cachePushRoots = packages minus the never-dedup *-oci.tar archives
+          # (lib/per-system.nix). Enumerate by drvPath: floating-CA outputs are
+          # null at eval time.
           drvs="$workdir/drvs.txt"
           outs="$workdir/outs.txt"
           roots="$workdir/roots.tsv"
@@ -156,32 +103,15 @@ jobs:
             | sort -u > "$roots" || true
           phase eval "$eval_t"
 
-          # Probe: a root whose eval-time `out` path ix-public already stores
-          # was pushed -- closure and all -- by a prior run, so skip realising
-          # it. This makes the run O(what this commit changed) instead of
-          # O(full closure): realise used to materialise every root's whole
-          # closure locally only for attic to report ~all of it deduplicated
-          # server-side (realise was ~1000s of a ~1050s run; push was ~5s).
-          # Ask the store the push writes to (attic's per-cache binary-cache
-          # API on the local atticd proxy), NOT the public read side:
-          # cache.ix.dev is ncps in front of this cache, so probing it
-          # conflates "was pushed" with "public serving is deployed" -- and it
-          # 404s ix-public paths today, which made this probe miss ~every root
-          # and realise everything on every run. `nix path-info --store` reads
-          # the cache from this client process directly, so daemon substituter
-          # trust (the untrusted-user warnings) never applies; ix-public is a
-          # public cache, so anonymous reads suffice, and a probe failure
-          # counts as a miss, degrading to realise-everything. CA roots have no
-          # eval-time path (outputs.out is null) and always realise; the warm
-          # store and CA early cutoff keep those cheap.
-          # ponytail: the probe can skip a root whose dep failed to push in an
-          # earlier run; a FULL_PASS=1 manual dispatch re-realises and heals it.
+          # Skip roots already pushed: makes the run O(changed), not O(full
+          # closure). Probe the atticd endpoint the push writes to, not
+          # cache.ix.dev (ncps in front 404s ix-public paths, which made every
+          # probe miss). Probe failure counts as a miss; CA roots have no
+          # eval-time path and always realise. FULL_PASS=1 re-realises
+          # everything to heal roots skipped over a failed dep push.
           probe_t=$SECONDS
           : > "$workdir/cached.txt"
           if [ -z "${FULL_PASS:-}" ]; then
-            # xargs drops the blank fields CA roots leave in column 2. bash, not
-            # sh: the runner PATH is spartan (no findutils, see above) but must
-            # carry bash for this very step's `shell: bash`.
             # shellcheck disable=SC2016  # $1 expands in the child bash, not here
             cut -f2 "$roots" | sort -u \
               | "$xargs" -r -P16 -n1 bash -c \
@@ -198,27 +128,14 @@ jobs:
           phase probe "$probe_t"
           echo "::notice::cache-push probe: $(wc -l < "$drvs") of $(wc -l < "$roots") roots need realising"
 
-          # Realise one drv per invocation (-n1), 16 in parallel (-P16). This is
-          # deliberate, not the obvious batch: a single `nix-store --realise` of
-          # the whole set prints NOTHING to stdout if any one derivation fails --
-          # it still builds the others into the store, but suppresses every
-          # resolved path -- which would leave $outs empty and publish nothing on
-          # any push where a package fails. -n1 isolates each drv so one failure
-          # drops only its own path; --keep-going finishes the rest of that drv's
-          # closure; -P16 keeps build/substitute parallelism (matches the eval
-          # workers). xargs exits non-zero if any child failed; surfaced below.
+          # -n1, not one batch: a batched realise prints no paths at all if any
+          # single drv fails, which would publish nothing.
           realise_t=$SECONDS
           "$xargs" -a "$drvs" -r -P16 -n1 nix-store --realise --keep-going > "$outs" 2>"$workdir/realise.err" \
             || {
               echo "::warning::some derivations failed to realise; publishing the rest"
-              # Name the failing drvs: a permanently-broken derivation re-pays
-              # its full build-and-fail wall clock on every push to main, and
-              # its dependents never become cacheable, so it never falls out of
-              # the probe's delta either. Match any error line: nix phrases
-              # failures several ways (builder for / cannot build derivation /
-              # dependencies ... failed to build), and enumerating two of them
-              # matched nothing across real failing runs. Pure bash match --
-              # the runner PATH has no grep/sed (see the tools comment above).
+              # Match any error line (nix phrases failures several ways); pure
+              # bash because the runner PATH has no grep/sed.
               while IFS= read -r line; do
                 case $line in
                   *error:*) printf '::warning::realise failed: %s\n' "${line#*error: }" ;;
@@ -229,7 +146,6 @@ jobs:
 
           if [ -s "$outs" ]; then
             push_t=$SECONDS
-            # --jobs 16 matches the realise fan-out (attic defaults to 5).
             "$xargs" -a "$outs" -r "$attic" push --jobs 16 ix-public \
               || echo "::warning::some paths failed to push to ix-public"
             phase push "$push_t"
@@ -237,8 +153,6 @@ jobs:
             echo "::warning::no output paths resolved for ix-public; eval/realise logs follow"
             tail -n 20 "$workdir/eval.err" "$workdir/realise.err" >&2 || true
           elif [ ! -s "$roots" ]; then
-            # Same warn-don't-fail stance as before: this job gates nothing, and
-            # an eval breakage already fails the required flake-check.
             echo "::warning::eval produced no roots; eval log follows"
             tail -n 20 "$workdir/eval.err" >&2 || true
           else
