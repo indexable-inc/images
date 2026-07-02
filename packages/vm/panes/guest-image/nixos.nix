@@ -125,6 +125,24 @@ in
       # Guest side of the vsock the compositor listens on (port 7100).
       "vmw_vsock_virtio_transport"
     ];
+    # 16 KiB guest pages, required for venus blob mapping under libkrun on
+    # Apple Silicon. The host maps each RESOURCE_MAP_BLOB with hv_vm_map,
+    # which rejects any address/size not 16 KiB-aligned (the fixed macOS host
+    # page size; HV_BAD_ARGUMENT, verified empirically). The guest kernel
+    # PAGE_ALIGNs every blob size (virtgpu_vram.c) and packs blob offsets in
+    # the host-visible window at that same granularity, so with default 4K
+    # pages the very first venus allocation (the 0x21000-byte instance ring
+    # shmem) reaches hv_vm_map 4K-aligned only and fails: the guest sees
+    # ERR_UNSPEC on MAP_BLOB/UNMAP_BLOB (0x208/0x209) and mesa falls back to
+    # lavapipe. 16K pages make every blob size and offset a 16K multiple.
+    # Same configuration as muvm/Asahi, libkrun's reference GPU guests.
+    kernelPatches = [
+      {
+        name = "arm64-16k-pages";
+        patch = null;
+        structuredExtraConfig.ARM64_16K_PAGES = lib.kernel.yes;
+      }
+    ];
   };
 
   # Root is the repart "root"-typed partition, found by its GPT partition label.
