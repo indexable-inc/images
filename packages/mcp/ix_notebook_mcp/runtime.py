@@ -1049,7 +1049,11 @@ def register_resource(
     Each ``ix.act`` queues its payload for the handler; the handler's return value
     (or error) streams back to the page as ``{kind: 'action_result', call, value}``
     on the feed ``ix.events(fn)`` subscribes to, alongside any agent ``reply``.
-    Pair a handler with :func:`notify` to wake the agent session on a click. For a
+    Call :func:`notify` (with ``resource=<id>``) in every handler by default, as
+    above: it is the only way the agent session learns the human acted (the
+    page<->kernel loop runs without the agent, so an unwired handler means the
+    agent must poll kernel state). Skip it only for purely page-local
+    interactions. For a
     simple one-question form, :func:`ask` is still the shortcut; the lower-level
     :class:`Input` + ``.script`` path also still works. A cross-origin ``fetch``
     to the data API DOES work from the sandbox (that is how input flows back);

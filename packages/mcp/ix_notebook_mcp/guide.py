@@ -281,8 +281,10 @@ CHANNEL = (
     "`register_resource(render=..., actions={'name': handler})` serves the HTML with "
     "`ix.act(name, payload)` (queues the payload for the named in-kernel handler) and "
     "`ix.events(fn)` (subscribes the page to handler results, errors, and your replies) "
-    "pre-wired. A handler that calls `notify(..., resource=<id>)` wakes you when the page acts; "
-    "when a <channel> tag carries a `resource` attribute, answer it with the `reply` tool, "
+    "pre-wired. Call `notify(..., resource=<id>)` in every action handler by default: without "
+    "it the page↔kernel loop runs silently and you only learn the human acted by polling kernel "
+    "state. Skip it only when a click is purely page-local (a filter toggle, a re-render). "
+    "When a <channel> tag carries a `resource` attribute, answer it with the `reply` tool, "
     "passing that resource id — your transcript output never reaches the page."
 )
 
