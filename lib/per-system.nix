@@ -1250,14 +1250,19 @@ let
       agents = agentsDir;
       skills = skillsDir;
       claude-plugin = claudePluginDir;
-      # The attic binary cache client, jq, and findutils (xargs), used by
-      # cache-push.yml to publish index's package closure to the public
-      # `ix-public` atticd cache. Pinned to the flake's nixpkgs so the workflow
-      # resolves them with `nix build .#attic-client` / `.#jq` / `.#findutils`
+      # The attic binary cache client, jq, findutils (xargs), and gh, used by
+      # cache-push.yml (attic/jq/xargs) and cve-scan.yml (jq/gh). Pinned to the
+      # flake's nixpkgs so the workflows resolve them with `nix build .#<tool>`
       # rather than depending on a tool being on the runner PATH or a floating
-      # `nixpkgs#` registry reference. The runner PATH carries coreutils + nix
-      # but not findutils, so bare `xargs` is `command not found`.
-      inherit (pkgs) attic-client jq findutils;
+      # `nixpkgs#` registry reference. The self-hosted runner PATH carries
+      # coreutils + nix but not findutils, jq, or gh, so the bare commands are
+      # `command not found` (cve-scan run 28598889924 died on exactly that).
+      inherit (pkgs)
+        attic-client
+        jq
+        findutils
+        gh
+        ;
     }
     // repoFlakePackages
     // examplePackages
