@@ -39,6 +39,12 @@ let
   # a missing source.
   appBinds = lib.unique (lib.concatMap (app: app.binds or [ ]) (lib.attrValues apps));
 
+  # Per-app seed files (apps.nix `files`), flattened to one host path -> source
+  # map. Rendered as tmpfiles `C` rules: copy only when the destination does
+  # not exist yet, and 0644 (not the store's 0444) so the app can rewrite its
+  # own config afterwards (MC persists Video Settings back to options.txt).
+  appSeedFiles = lib.mergeAttrsList (map (app: app.files or { }) (lib.attrValues apps));
+
   # Render one apps.nix entry into a declarative systemd-nspawn container.
   # The container shares the host network namespace (default, no
   # privateNetwork: portablemc needs outbound net through gvproxy) and the
@@ -51,6 +57,11 @@ let
         hostPath = runtimeDir;
         isReadOnly = false;
       };
+    }
+    # Only GPU apps bind /dev/dri: nspawn fails the whole container when a
+    # bind source is missing, and the guest may boot GPU-less (no --gpu, or
+    # the venus stack is down); shm apps must keep working then.
+    // lib.optionalAttrs (app.gpu or false) {
       "/dev/dri" = {
         hostPath = "/dev/dri";
         isReadOnly = false;
@@ -63,12 +74,10 @@ let
     # The bind mount alone is not enough: nspawn's device cgroup policy still
     # denies the node unless whitelisted here. venus/zink renders on the
     # virtio-gpu render node.
-    allowedDevices = [
-      {
-        node = "/dev/dri/renderD128";
-        modifier = "rwm";
-      }
-    ];
+    allowedDevices = lib.optional (app.gpu or false) {
+      node = "/dev/dri/renderD128";
+      modifier = "rwm";
+    };
     config = {
       # /run/opengl-driver inside the container: mesa's venus vulkan ICD plus
       # the zink GL driver for clients that go through the loader.
@@ -197,7 +206,8 @@ in
   systemd.tmpfiles.rules = [
     "d ${runtimeDir} 0777 root root -"
   ]
-  ++ map (bind: "d ${bind} 0755 root root -") appBinds;
+  ++ map (bind: "d ${bind} 0755 root root -") appBinds
+  ++ lib.mapAttrsToList (dest: source: "C ${dest} 0644 root root - ${source}") appSeedFiles;
 
   systemd.services = {
     panes-compositor = {

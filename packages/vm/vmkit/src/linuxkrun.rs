@@ -508,7 +508,14 @@ pub fn boot_linux(boot: &BootLinux) -> Result<(), Error> {
     // the end of this function, and krun copies what it needs); krun_start_enter
     // consumes the context.
     unsafe {
-        check("krun_set_log_level", krun_set_log_level(2))?; // warn
+        // Default warn; VMKIT_KRUN_LOG_LEVEL overrides (0=off..5=trace) so GPU
+        // mapping failures (libkrun logs the hv_vm_map args at debug) are
+        // diagnosable without a rebuild.
+        let krun_log_level = std::env::var("VMKIT_KRUN_LOG_LEVEL")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(2);
+        check("krun_set_log_level", krun_set_log_level(krun_log_level))?;
         let ctx = krun_create_ctx();
         // `krun_create_ctx` returns a non-negative ctx id or `-errno`. `try_from`
         // both narrows to the u32 the rest of the API takes and rejects an error

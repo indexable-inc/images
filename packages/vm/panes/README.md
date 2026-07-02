@@ -53,8 +53,10 @@ Mac's GPU via MoltenVK). The image loads `virtio_gpu`, ships mesa's venus ICD
 through `/run/opengl-driver`, and logs `vulkaninfo --summary` to the serial
 console at boot (the `panes-venus-smoke` oneshot): with `--gpu` it must show a
 `Virtio-GPU Venus` device, lavapipe-only output means the venus path is
-broken. GL clients (Minecraft) run on **zink** on top of venus, which caps out
-at GL 2.1 today. Details: [`vmkit/docs/linux-libkrun.md`](../vmkit/docs/linux-libkrun.md).
+broken. Minecraft (Java 26.2+) uses its first-party Vulkan renderer directly
+on venus, no zink and no mods; the image pre-seeds its `options.txt` with
+`preferredGraphicsBackend:"vulkan"`.
+Details: [`vmkit/docs/linux-libkrun.md`](../vmkit/docs/linux-libkrun.md).
 
 Networking: `--net` runs gvproxy (`192.168.127.0/24`); the image DHCPs its
 NIC. App containers share the host network namespace, so e.g. Minecraft can
