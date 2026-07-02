@@ -16,7 +16,7 @@
     selectionEq,
     type Selection,
   } from '$lib/sidebar';
-  import { kindOf } from '$lib/run';
+  import { kindOf, paneId } from '$lib/run';
 
   const model = $derived(buildSidebar(store.panes, timeline.recordings));
 
@@ -24,22 +24,25 @@
     timeline.source === 'live' && timeline.following ? ui.clock : timeline.position || timeline.maxTs,
   );
 
-  // `/` filter: a case-insensitive substring match over run/resource/recording
-  // titles, so a long tree narrows. Empty query shows everything. A session shows
-  // if it or any of its runs match; a run shows if it or its session matches.
+  // `/` filter: a case-insensitive substring match over a run's title, subtitle,
+  // pane id, and lang (matching the old feed's reach), so a long tree narrows.
+  // Empty query shows everything. A session shows if it or any of its runs match;
+  // a run shows if it or its session matches.
   let query = $state('');
   let filterEl: HTMLInputElement | undefined;
   const q = $derived(query.trim().toLowerCase());
 
-  function runMatches(title: string, subtitle: string | undefined): boolean {
+  function runMatches(r: typeof model.sessions[number]['runs'][number]): boolean {
     if (!q) return true;
-    return title.toLowerCase().includes(q) || (subtitle ?? '').toLowerCase().includes(q);
+    return [r.pane.title, r.pane.subtitle, r.pane.lang, paneId(r.key)].some((v) =>
+      (v ?? '').toLowerCase().includes(q),
+    );
   }
   // A session's visible runs under the filter: all if the session label matches,
   // else only the matching runs.
   function visibleRuns(label: string, runs: typeof model.sessions[number]['runs']) {
     if (!q || label.toLowerCase().includes(q)) return runs;
-    return runs.filter((r) => runMatches(r.pane.title ?? '', r.pane.subtitle));
+    return runs.filter(runMatches);
   }
 
   const sessions = $derived(
@@ -48,7 +51,7 @@
       .filter((s) => s.runs.length > 0),
   );
   const resources = $derived(
-    model.resources.filter((r) => runMatches(r.pane.title ?? '', r.pane.subtitle)),
+    model.resources.filter(runMatches),
   );
   const recordings = $derived(
     model.recordings.filter((rec) => !q || rec.id.toLowerCase().includes(q)),

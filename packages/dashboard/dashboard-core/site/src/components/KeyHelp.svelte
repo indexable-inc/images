@@ -83,7 +83,7 @@
     position: relative;
     width: min(540px, calc(100vw - 48px));
     background: var(--elev, var(--panel));
-    border: 1px solid var(--line);
+    border: 1px solid var(--edge);
     border-radius: 12px;
     box-shadow: 0 18px 48px -18px rgba(0, 0, 0, 0.55);
     padding: 16px 18px 18px;

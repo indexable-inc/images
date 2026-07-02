@@ -6,7 +6,7 @@
   // feed's, refactored here: inline trace when attributed, else a code block, and
   // a parsed failure on top for an error.
   import { stripAnsi } from '$lib/ansi';
-  import { store, timeline, SCOPE_SEP } from '$lib/stream.svelte';
+  import { store, timeline } from '$lib/stream.svelte';
   import { ui, humanDuration, humanTime } from '$lib/ui.svelte';
   import { rendererFor } from '$lib/renderers';
   import { ledOf, kindOf, withKey } from '$lib/run';
