@@ -65,7 +65,9 @@ in
   # (requires Vulkan 1.2 + dynamic_rendering + push_descriptor; MoltenVK
   # provides both and venus passes host features through). portablemc
   # downloads the version jar + assets on first launch (network via gvproxy)
-  # into /var/lib/minecraft, which persists on the image's writable root fs.
+  # into /var/lib/minecraft: the optional second `--disk` when attached (the
+  # guest mounts /dev/vdb there, surviving image swaps; see ../README.md),
+  # else the image's writable root fs.
   minecraft = {
     command = builtins.concatStringsSep " " [
       "${portablemc}/bin/portablemc"

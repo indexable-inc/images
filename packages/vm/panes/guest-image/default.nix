@@ -59,7 +59,15 @@ in
 nixos.pkgs.runCommand "panes-guest.raw"
   {
     __structuredAttrs = true;
-    passthru = lib.optionalAttrs (updateScript != null) { inherit updateScript; };
+    passthru = {
+      # The system closure alone, for the ssh switch-in-place loop (README,
+      # "Iterating on the guest"): build
+      # `.#packages.aarch64-linux.panes-guest-image.toplevel`, `nix copy` it
+      # into the running guest, activate with its switch-to-configuration.
+      # Skips the disk assembly entirely.
+      toplevel = nixos.config.system.build.toplevel;
+    }
+    // lib.optionalAttrs (updateScript != null) { inherit updateScript; };
   }
   ''
     cp --sparse=always "${nixos.config.system.build.image}/${nixos.config.image.filePath}" "$out"

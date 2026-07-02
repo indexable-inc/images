@@ -57,6 +57,22 @@ let
         hostPath = runtimeDir;
         isReadOnly = false;
       };
+      # nixos-containers copies the guest's /etc/resolv.conf into the container
+      # once, in the unit's start script (`cp --remove-destination`). These
+      # autoStart containers race gvproxy's DHCP lease, so that copy is empty
+      # and never refreshed: in-container DNS was dead (MC restart-looped 79
+      # times on "piston-meta.mojang.com: Name or service not known", observed
+      # live). A read-only bind of the file shadows the stale copy with a live
+      # view; openresolv rewrites resolv.conf IN PLACE by default
+      # (resolv_conf_mv=NO in its libc subscriber, explicitly to keep bind
+      # mounts working), so the container sees the lease when it lands. The
+      # container's own resolvconf stays off via nixos' container profile
+      # (networking.useHostResolvConf defaults true there), so nothing inside
+      # fights the mount.
+      "/etc/resolv.conf" = {
+        hostPath = "/etc/resolv.conf";
+        isReadOnly = true;
+      };
     }
     # Only GPU apps bind /dev/dri: nspawn fails the whole container when a
     # bind source is missing, and the guest may boot GPU-less (no --gpu, or
@@ -143,6 +159,17 @@ in
         structuredExtraConfig.ARM64_16K_PAGES = lib.kernel.yes;
       }
     ];
+    # Register the shipped closure in the nix database on first boot: repart's
+    # `storePaths` copies store contents but writes no db, and without a db the
+    # switch-in-place loop (`nix copy` to the guest + switch-to-configuration,
+    # see the README) cannot verify or add paths. Same pattern as
+    # make-disk-image; the registration file is baked by the repart config
+    # below (it cannot live inside the toplevel: closureInfo depends on it).
+    postBootCommands = ''
+      if [ -f /nix-path-registration ]; then
+        ${config.nix.package.out}/bin/nix-store --load-db < /nix-path-registration && rm /nix-path-registration
+      fi
+    '';
   };
 
   # Root is the repart "root"-typed partition, found by its GPT partition label.
@@ -153,6 +180,24 @@ in
     device = "/dev/disk/by-partlabel/root";
     fsType = "ext4";
     autoResize = true;
+  };
+
+  # Optional second disk holding Minecraft's downloads (~700 MB of assets +
+  # jars), so they survive image swaps: `vmkit boot-linux --disk <image>
+  # --disk <data.raw>` attaches it as the second virtio-blk device, /dev/vdb
+  # (device order = --disk order; the boot disk is vda). autoFormat
+  # (x-systemd.makefs) turns a blank `truncate`d file into ext4 on first use;
+  # nofail keeps a data-diskless boot working, MC then just re-downloads onto
+  # the root fs as before. See the README's "Persistent data disk".
+  fileSystems."/var/lib/minecraft" = {
+    device = "/dev/vdb";
+    fsType = "ext4";
+    autoFormat = true;
+    options = [
+      "nofail"
+      # Bound the device wait so a boot without the disk is not held up.
+      "x-systemd.device-timeout=3s"
+    ];
   };
 
   system.image = {
@@ -190,6 +235,11 @@ in
       };
       "root" = {
         storePaths = [ config.system.build.toplevel ];
+        # Closure registration consumed by boot.postBootCommands above (first
+        # boot loads it into the nix db, then deletes it).
+        contents."/nix-path-registration".source = "${
+          pkgs.closureInfo { rootPaths = [ config.system.build.toplevel ]; }
+        }/registration";
         repartConfig = {
           Type = "root";
           Format = "ext4";
@@ -213,10 +263,31 @@ in
   # the .1 gateway; without DHCP the guest has no route out.
   networking.useDHCP = true;
 
-  # Root autologin on the serial console: this guest is a local dev appliance
-  # reachable only through hvc0 (no ssh), and headless debugging (venus state,
-  # container journals, poking the MC launcher) needs a shell there.
+  # Root autologin on the serial console: this guest is a local dev appliance,
+  # and headless debugging (venus state, container journals, poking the MC
+  # launcher) needs a shell on hvc0 even when the network is down.
   services.getty.autologinUser = "root";
+
+  # sshd is what makes the guest iterable without a full image rebuild + fresh
+  # disk (which wipes /var/lib/minecraft): build the toplevel, `nix copy` it in
+  # over ssh, run its switch-to-configuration (README, "Iterating on the
+  # guest"). gvproxy (`--net`) forwards host 127.0.0.1:2222 -> guest :22 by
+  # default (its -ssh-port flag, default 2222; the guest holds a static DHCP
+  # lease at 192.168.127.2), so no vmkit flag is needed.
+  services.openssh = {
+    enable = true;
+    # Key-only root login; the forward is loopback-bound on the host, but a
+    # password prompt on root is still wrong.
+    settings.PermitRootLogin = "prohibit-password";
+  };
+  # The public half of the host's /etc/nix/builder_ed25519 keypair (the
+  # nix-darwin linux-builder key every vmkit host already carries), inlined:
+  # `authorizedKeys.keyFiles` reads files at image BUILD time on the builder,
+  # so a /etc/nix path cannot be referenced, and the sandbox could not read it
+  # anyway. ssh with `-i /etc/nix/builder_ed25519` (root-readable, so sudo).
+  users.users.root.openssh.authorizedKeys.keys = [
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIErpSUpe5rROIu9NBNzCv4dQB0reZ1NHpvPdJveJDMib builder@localhost"
+  ];
 
   # Populates /run/opengl-driver (lib + share/vulkan/icd.d) with mesa, which
   # carries the venus ICD (virtio_icd.aarch64.json) on this nixpkgs pin; the
@@ -228,10 +299,10 @@ in
   # the v1 single-user guest simple.
   systemd.tmpfiles.rules = [
     "d ${runtimeDir} 0777 root root -"
-    # The repart root ships /nix/store contents (storePaths) but no nix
-    # database; nixos-containers' nspawn unit bind-mounts these two read-only
-    # and a missing bind source fails the whole container. Empty dirs satisfy
-    # the binds (nothing runs nix inside the containers).
+    # nixos-containers' nspawn unit bind-mounts these two read-only and a
+    # missing bind source fails the whole container; the dirs must exist even
+    # on a boot where postBootCommands' nix-store --load-db (which creates the
+    # db) did not run. Nothing runs nix inside the containers.
     "d /nix/var/nix/db 0755 root root -"
     "d /nix/var/nix/daemon-socket 0755 root root -"
   ]
