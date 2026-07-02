@@ -453,6 +453,15 @@ let
     name = "cve-scan";
     src = paths.tools.cveScan;
     pyChecker = "zuban";
+    # The committed whitelist of acknowledged advisories is baked in as a store
+    # path so `nix run .#cve-scan` applies it from any working directory; extra
+    # `--whitelist` flags at the CLI add to it (argparse append). Masked
+    # advisories stay visible as a count (vulnix --show-whitelisted), never
+    # silently dropped.
+    args = [
+      "--whitelist"
+      "${paths.packagesRoot + "/cve-scan/whitelist.toml"}"
+    ];
     runtimeInputs = [
       pkgs.vulnix
       pkgs.nix
