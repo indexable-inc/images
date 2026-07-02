@@ -4,5 +4,18 @@
     "repo": "advisory-db",
     "rev": "f2ae5fc8e5d208373b6c838f9676434525327a72",
     "hash": "sha256-iqXYpuCoWoGypnpM5ceXN748QlYeBXDtZx0uI98qFLo="
+  },
+  "libkrun-efi-src": {
+    "owner": "libkrun",
+    "repo": "libkrun",
+    "version": "1.19.3",
+    "url": "https://github.com/libkrun/libkrun/archive/refs/tags/v1.19.3.tar.gz",
+    "hash": "sha256-mDko5fRcjnb3BI6cINr4gm6DiCghUlkIn1ZiQeHxyaE=",
+    "prefetch": "unpack"
+  },
+  "libkrun-efi-cargo-vendor": {
+    "version": "1.19.3",
+    "hash": "sha256-PE8xO8T5TFuGnL+95Y1BAz9EdJVUrxgVtVssAgStW+8=",
+    "prefetch": "manual"
   }
 }

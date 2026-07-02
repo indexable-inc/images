@@ -408,6 +408,7 @@ let
       writeBashApplication
       macosSdk
       appleSdkToolchain
+      pins
       ;
     rustToolchainFor = languages.rust.toolchain;
   };

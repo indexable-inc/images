@@ -13,6 +13,10 @@
   rustToolchainFor,
   appleSdkToolchain,
   macosSdk,
+  # The shared pins reader (lib/util/pins.nix), threaded down from
+  # lib/default.nix so the libkrun-efi 1.19.3 pins load from the sibling
+  # pins.json without a cross-directory `../` import (no-parent-path).
+  pins,
 }:
 workspacePkgs:
 let
@@ -88,8 +92,61 @@ let
   # below because a build script's link-search does not reach the final unit link.
   # Only referenced under `buildHostIsAarch64Darwin`, so non-darwin hosts never
   # force the (host-only) package.
-  libkrunEfiLibDir = "${workspacePkgs.libkrun-efi}/lib";
-  krunEfiFirmware = "${workspacePkgs.libkrun-efi.src}/edk2/KRUN_EFI.silent.fd";
+  #
+  # nixpkgs pins libkrun-efi 1.18.0, whose vsock `from_tx_virtq_head` accepts
+  # only the exact two-descriptor hdr+data TX layout; the combined or split
+  # descriptor chains modern guest kernels emit are silently dropped mid
+  # SOCK_STREAM (upstream containers/libkrun#535/#579), which desyncs the panes
+  # guest->host frame stream (#1719). 1.19.3's packet.rs rewrite handles those
+  # chains, so rebuild the same nixpkgs expression against the 1.19.3 source
+  # until the nixpkgs pin catches up (nixpkgs master already carries this exact
+  # bump; both hashes below match its pkgs/by-name/li/libkrun-efi). Version
+  # deltas the override must carry: the upstream repo moved orgs
+  # (containers -> libkrun), the guest init the vendored `init_blob` crate
+  # embeds moved from `init/` to `src/init_blob/init/`, and the EFI firmware
+  # moved from `edk2/` to `src/vmm/edk2/`.
+  libkrunEfiSrcPin = pins.loadPin ./pins.json "libkrun-efi-src";
+  libkrunEfiSrc = workspacePkgs.fetchFromGitHub {
+    inherit (libkrunEfiSrcPin) owner repo hash;
+    tag = "v${libkrunEfiSrcPin.version}";
+  };
+  # Same recipe as the `initBinary` in nixpkgs' libkrun-efi expression, rebuilt
+  # here because the pinned 1.18.0 one compiles from `init/` in the old source.
+  libkrunEfiInit = workspacePkgs.pkgsCross.aarch64-multiplatform.pkgsStatic.stdenv.mkDerivation {
+    pname = "libkrun-init";
+    inherit (libkrunEfiSrcPin) version;
+    src = libkrunEfiSrc;
+
+    dontConfigure = true;
+
+    buildPhase = ''
+      # shell
+      runHook preBuild
+      cd src/init_blob/init
+      $CC -O2 -static -Wall -o init init.c dhcp.c
+      runHook postBuild
+    '';
+
+    installPhase = ''
+      # shell
+      runHook preInstall
+      install -D init $out/init
+      runHook postInstall
+    '';
+  };
+  libkrunEfi = workspacePkgs.libkrun-efi.overrideAttrs (old: {
+    inherit (libkrunEfiSrcPin) version;
+    src = libkrunEfiSrc;
+    cargoDeps = workspacePkgs.rustPlatform.fetchCargoVendor {
+      src = libkrunEfiSrc;
+      inherit (pins.loadPin ./pins.json "libkrun-efi-cargo-vendor") hash;
+    };
+    env = (old.env or { }) // {
+      KRUN_INIT_BINARY_PATH = "${libkrunEfiInit}/init";
+    };
+  });
+  libkrunEfiLibDir = "${libkrunEfi}/lib";
+  krunEfiFirmware = "${libkrunEfi.src}/src/vmm/edk2/KRUN_EFI.silent.fd";
 
   # Linux host: classic KVM libkrun (no firmware). It boots a rootfs over virtiofs
   # under its bundled libkrunfw kernel, so the core path needs no block/net
