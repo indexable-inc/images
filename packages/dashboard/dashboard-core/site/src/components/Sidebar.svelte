@@ -64,18 +64,32 @@
   // ----- selection -------------------------------------------------------
   function onSelect(sel: Selection): void {
     select(sel);
-    if (sel.kind === 'recording') void loadRecording(sel.id);
+    if (sel.kind === 'recording') {
+      // Mirror the status-bar picker: once the recording's panes are in, land on
+      // its first run so the center stage shows content, not the empty prompt.
+      // If the recording opens with no runs at its start, keep the recording
+      // selected — the prompt to scrub is then accurate.
+      void loadRecording(sel.id).then(() => {
+        const first = flat.find((f) => f.selection.kind !== 'recording');
+        if (first) select(first.selection);
+      });
+    }
   }
 
-  // Keep the selection valid as the tree changes; default to the first visible row
-  // (the newest session's newest run) so a fresh load shows something.
+  // Keep the selection valid as the tree changes; default to the first visible
+  // run or resource so a fresh load shows something. Never repair onto a
+  // recording row: onSelect would loadRecording() and close the live stream
+  // without a user click (e.g. when /recordings wins the race against the
+  // first SSE snapshot, or when filtering folds every run away).
   $effect(() => {
     if (flat.length === 0) {
       if (ui.selection) select(null);
       return;
     }
     if (!flat.some((f) => selectionEq(f.selection, ui.selection))) {
-      onSelect(flat[0].selection);
+      const first = flat.find((f) => f.selection.kind !== 'recording');
+      if (first) onSelect(first.selection);
+      else if (ui.selection) select(null);
     }
   });
 
