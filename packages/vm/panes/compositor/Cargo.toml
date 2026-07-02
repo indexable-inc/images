@@ -38,13 +38,17 @@ smithay = { version = "0.7", default-features = false, features = [
 vsock = "0.5"
 
 [features]
+# `gpu` is a default feature because the guest image is the sole consumer of
+# this binary and its venus Vulkan clients need the linux-dmabuf global for
+# Wayland WSI (VK_KHR_swapchain, index#1686); the cargo unit graph builds
+# with default features, so this is the knob that puts the dmabuf path in
+# the image. GPU-less runs (CI, plain boots) still work: the GLES/EGL stack
+# loads libEGL at runtime through `libloading` (no link-time GL dependency),
+# and without a render node the compositor logs and stays shm-only (no
+# dmabuf global, so clients fall back to shm themselves).
+default = ["gpu"]
 # linux-dmabuf readback for GL/Vulkan clients via a surfaceless GLES context
-# on a DRM render node (/dev/dri/renderD128). Off by default: CI and the
-# first integration run without a GPU, and the shm path must never depend on
-# GL. The GLES/EGL stack loads libEGL at runtime through `libloading`, so
-# even with the feature on there is no link-time GL dependency; without a
-# render node the compositor logs and stays shm-only (no dmabuf global, so
-# clients fall back to shm themselves).
+# on a DRM render node (/dev/dri/renderD128).
 gpu = ["smithay/backend_drm", "smithay/backend_egl", "smithay/renderer_gl"]
 
 [lints]
