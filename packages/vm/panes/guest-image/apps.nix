@@ -25,7 +25,19 @@ let
   # ~1.9 GiB); its package.nix exposes `jvms` exactly to cut that closure.
   # MC 26.2 requires Java SE 25 minimum, so ship exactly jdk25 (the full JDK,
   # not headless: the client needs the AWT/X11 libs headless builds drop).
-  portablemc = pkgs.portablemc.override { jvms = [ pkgs.jdk25 ]; };
+  portablemc = pkgs.portablemc.override {
+    jvms = [ pkgs.jdk25 ];
+    # Keep flite OUT of the wrapper's LD_LIBRARY_PATH: MC's narrator speaks
+    # through flite -> pulse, and with no audio stack in the guest
+    # pa_simple_write aborts the whole client (validated live). Dropping the
+    # lib beats a narrator=off option: nothing to load, nothing to abort.
+    textToSpeechSupport = false;
+  };
+
+  # Mojang ships no linux-arm64 LWJGL natives; ./lwjgl-natives.nix supplies
+  # LWJGL's own Maven builds, injected via the overlay in ./default.nix,
+  # where the ./pins.json hashes live.
+  lwjglNatives = pkgs.lwjgl-natives-linux-arm64;
 in
 {
   # Software (wl_shm) client: proves compositor + container + socket plumbing
@@ -64,6 +76,24 @@ in
       "start"
       # 26.2 requires Java SE 25 minimum (see the portablemc jvms override).
       "--jvm ${pkgs.jdk25}/bin/java"
+      # LWJGL loads its JNI natives from here instead of the (absent)
+      # manifest-provided linux-arm64 ones.
+      "--jvm-arg=-Dorg.lwjgl.librarypath=${lwjglNatives}"
+      # Make blaze3d pick the Wayland GLFW platform: left alone it requests
+      # X11 even under Wayland ("GLFW error 0x1000E X11: DISPLAY missing").
+      # MC 26.2's built-in debug switches (SharedConstants reads
+      # MC_DEBUG_*-prefixed system properties, all gated on MC_DEBUG_ENABLED;
+      # decompiled from 26.2 GLX/SharedConstants) flip the preference with
+      # the stock Maven libglfw.so above, which is wayland-capable and
+      # carries the preedit/IME API blaze3d binds. Validated live end-to-end:
+      # the window maps on the host titled "Minecraft 26.2". If Mojang ever
+      # drops the debug flag, the fallback is a Wayland-only glfw (X11
+      # compiled out; openSUSE home:DarkWav glfw-minecraft recipe on
+      # clear-code/glfw im-support) via -Dorg.lwjgl.glfw.libname; this repo
+      # carried a packaged version of that until the debug flags landed (see
+      # index#1686 and this file's history).
+      "--jvm-arg=-DMC_DEBUG_ENABLED=true"
+      "--jvm-arg=-DMC_DEBUG_PREFER_WAYLAND=true"
       # Offline session: no Microsoft account in the guest.
       "-u Panes"
       "26.2"
@@ -74,13 +104,19 @@ in
       VK_DRIVER_FILES = "${pkgs.mesa}/share/vulkan/icd.d/virtio_icd.aarch64.json";
       MESA_VK_DEVICE_SELECT = "1af4:1050!";
       XDG_SESSION_TYPE = "wayland";
-      # No LD_LIBRARY_PATH needed: the portablemc wrapper already prefixes it
-      # with /run/opengl-driver/lib plus prismlauncher's runtime libs,
-      # including glfw3-minecraft (GLFW 3.4 with Wayland) and vulkan-loader.
+      # nixpkgs openal (the portablemc wrapper's LD_LIBRARY_PATH provides it;
+      # Maven's arm64 libopenal.so SIGSEGVs, so ./lwjgl-natives.nix omits it
+      # and LWJGL falls through to this one) defaults to the pulse backend,
+      # and the guest has no audio stack at all: force the null backend so
+      # OpenAL initializes and MC runs silent instead of erroring (validated
+      # live).
+      ALSOFT_DRIVERS = "null";
       # If Vulkan crashes at startup, 26.2 flips itself to "Prefer OpenGL"
       # (rewriting options.txt); that GL path should land on software
-      # rendering, forceable as a diagnostic by adding
-      # LIBGL_ALWAYS_SOFTWARE = "1" here (data-only toggle, no module change).
+      # rendering. Diagnostic-only, data-only toggles (venus is the intended
+      # renderer, do NOT set these by default):
+      #   LIBGL_ALWAYS_SOFTWARE = "1";
+      #   GALLIUM_DRIVER = "llvmpipe";
     };
     binds = [ "/var/lib/minecraft" ];
     gpu = true;

@@ -45,8 +45,11 @@ nix build .#packages.aarch64-linux.panes-guest-image
 # (boot.growPartition + autoResize). Minecraft downloads land in that space.
 cp --sparse=always ./result /tmp/panes-guest.raw && chmod +w /tmp/panes-guest.raw
 truncate -s 8G /tmp/panes-guest.raw
-nix run .#vmkit -- boot-linux --disk /tmp/panes-guest.raw --gpu --net
+nix run .#vmkit -- boot-linux --disk /tmp/panes-guest.raw --gpu --net --memory-mib 6144 --cpus 6
 ```
+
+Size the guest for Minecraft: it OOMs under ~4 GiB of guest RAM and crawls on
+2 vCPUs; `--memory-mib 6144 --cpus 6` is the validated boot line.
 
 GPU: `--gpu` attaches libkrun's virtio-gpu **venus** device (Vulkan on the
 Mac's GPU via MoltenVK). The image loads `virtio_gpu`, ships mesa's venus ICD
