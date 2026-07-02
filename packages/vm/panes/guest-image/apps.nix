@@ -57,9 +57,10 @@ in
   minecraft = {
     command = builtins.concatStringsSep " " [
       "${portablemc}/bin/portablemc"
-      # Keep every download out of the ephemeral container root.
+      # Keep every download out of the ephemeral container root. This
+      # portablemc build has no separate --work-dir; everything follows
+      # --main-dir.
       "--main-dir /var/lib/minecraft"
-      "--work-dir /var/lib/minecraft"
       "start"
       # 26.2 requires Java SE 25 minimum (see the portablemc jvms override).
       "--jvm ${pkgs.jdk25}/bin/java"
