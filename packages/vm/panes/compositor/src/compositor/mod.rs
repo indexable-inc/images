@@ -32,6 +32,7 @@ use smithay::wayland::compositor::{
     with_surface_tree_downward,
 };
 use smithay::wayland::output::OutputManagerState;
+use smithay::wayland::selection::data_device::DataDeviceState;
 use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
 use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface, XdgShellState};
 use smithay::wayland::shm::ShmState;
@@ -110,6 +111,10 @@ pub struct App {
     _decoration_state: XdgDecorationState,
     _output_manager_state: OutputManagerState,
     shm_state: ShmState,
+    /// Clipboard between guest apps. The pixels never leave the guest, but
+    /// the global must exist: foot (and other toolkits) hard-fail at startup
+    /// when `wl_data_device_manager` is missing.
+    data_device_state: DataDeviceState,
     seat_state: SeatState<Self>,
     seat: Seat<Self>,
     output: Output,
@@ -232,6 +237,7 @@ impl App {
         // the only ones `copy_shm_buffer` converts.
         let shm_state = ShmState::new::<Self>(dh, Vec::new());
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(dh);
+        let data_device_state = DataDeviceState::new::<Self>(dh);
         let mut seat_state = SeatState::new();
 
         let mut seat: Seat<Self> = seat_state.new_wl_seat(dh, "panes");
@@ -299,6 +305,7 @@ impl App {
             _decoration_state: decoration_state,
             _output_manager_state: output_manager_state,
             shm_state,
+            data_device_state,
             seat_state,
             seat,
             output,

@@ -6,7 +6,7 @@ use panes_protocol::ToHost;
 use smithay::input::pointer::CursorImageStatus;
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1;
-use smithay::reexports::wayland_server::Client;
+use smithay::reexports::wayland_server::{Client, Resource as _};
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_shm;
@@ -22,10 +22,15 @@ use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, SurfaceCachedState, ToplevelSurface, XdgShellHandler,
     XdgShellState, XdgToplevelSurfaceData,
 };
+use smithay::wayland::selection::SelectionHandler;
+use smithay::wayland::selection::data_device::{
+    ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
+    set_data_device_focus,
+};
 use smithay::wayland::shm::{BufferData, ShmHandler, ShmState, with_buffer_contents};
 use smithay::{
-    delegate_compositor, delegate_output, delegate_seat, delegate_shm, delegate_xdg_decoration,
-    delegate_xdg_shell,
+    delegate_compositor, delegate_data_device, delegate_output, delegate_seat, delegate_shm,
+    delegate_xdg_decoration, delegate_xdg_shell,
 };
 use tracing::{debug, warn};
 
@@ -336,11 +341,30 @@ impl SeatHandler for App {
         }
     }
 
-    fn focus_changed(&mut self, _seat: &Seat<Self>, _focused: Option<&WlSurface>) {
-        // No data-device/clipboard yet, so focus changes carry no side
-        // effects beyond what the input path already tracks.
+    fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
+        // Route the clipboard to whichever client holds keyboard focus, the
+        // standard data-device contract: without this, apps could bind the
+        // manager but never receive selection offers.
+        let client = focused.and_then(|surface| self.display_handle.get_client(surface.id()).ok());
+        set_data_device_focus(&self.display_handle, seat, client);
     }
 }
+
+// Guest-internal clipboard only (see `App::data_device_state`): selections
+// move between guest apps through smithay's built-in plumbing; nothing is
+// bridged to the macOS pasteboard yet (protocol gap, see README).
+impl SelectionHandler for App {
+    type SelectionUserData = ();
+}
+
+impl DataDeviceHandler for App {
+    fn data_device_state(&self) -> &DataDeviceState {
+        &self.data_device_state
+    }
+}
+
+impl ClientDndGrabHandler for App {}
+impl ServerDndGrabHandler for App {}
 
 impl smithay::wayland::output::OutputHandler for App {}
 
@@ -540,6 +564,7 @@ impl smithay::wayland::dmabuf::DmabufHandler for App {
 }
 
 delegate_compositor!(App);
+delegate_data_device!(App);
 delegate_shm!(App);
 delegate_seat!(App);
 delegate_output!(App);
