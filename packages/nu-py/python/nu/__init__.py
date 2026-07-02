@@ -37,8 +37,13 @@ Contract:
 - ``await nu.value(code)`` is the escape hatch when you want the plain
   Python value (a scalar, a nested dict) instead of a frame.
 - Values cross natively, not as JSON: dates arrive as UTC ``Datetime``
-  columns, durations as ``Duration`` columns, filesize as ``int`` bytes,
+  columns, durations as ``Duration`` columns (microsecond resolution --
+  Python's ``timedelta`` is the carrier, so a sub-microsecond remainder like
+  ``1500ns`` truncates to the microsecond), filesize as ``int`` bytes,
   binary as ``bytes``.
+- Each kernel session gets its OWN engine (stored in the session's
+  namespace), so one agent's ``let``/``cd``/``def`` never leaks into or
+  clobbers another session's pipelines.
 - A failing pipeline raises :class:`NuError` whose message is nushell's own
   rendered diagnostic (span, label, and "did you mean" hints) -- read it,
   fix the pipeline, retry. ``exit`` raises too; it never ends this process.
@@ -85,19 +90,52 @@ except Exception:  # pragma: no cover - exercised only outside the kernel
 
 _engine: Engine | None = None
 
+# The per-session slot: engines live INSIDE the session's namespace dict, so
+# an engine's lifetime is exactly its session's and one agent's `let`/`cd`
+# never leaks into another session (module globals are shared across all
+# session namespaces; the namespace dict itself is not).
+_ENGINE_KEY = "__ix_nu_engine__"
+
+
+def _session_slot() -> dict | None:
+    """The current kernel job's session namespace, or None outside a job."""
+    if _ix_current is None:
+        return None
+    job = _ix_current.get()
+    ns = getattr(job, "_ns", None) if job is not None else None
+    return ns if isinstance(ns, dict) else None
+
 
 def _default_engine() -> Engine:
-    """The shared engine behind module-level calls, created on first use."""
+    """This session's engine, created on first use (module-global fallback
+    outside a kernel job, e.g. tests and plain scripts)."""
+    ns = _session_slot()
+    if ns is not None:
+        engine = ns.get(_ENGINE_KEY)
+        if not isinstance(engine, Engine):
+            engine = Engine()
+            ns[_ENGINE_KEY] = engine
+        return engine
     global _engine
     if _engine is None:
         _engine = Engine()
     return _engine
 
 
-def reset() -> None:
-    """Discard the persistent engine state (bindings, defs, cwd, env)."""
+def _discard_engine(engine: Engine) -> None:
+    """Drop ``engine`` from whichever slot holds it, so the next call gets a
+    fresh one (the abandoned engine finishes and frees itself off-thread)."""
     global _engine
-    _engine = None
+    if _engine is engine:
+        _engine = None
+    ns = _session_slot()
+    if ns is not None and ns.get(_ENGINE_KEY) is engine:
+        del ns[_ENGINE_KEY]
+
+
+def reset() -> None:
+    """Discard this session's persistent engine state (bindings, defs, cwd)."""
+    _discard_engine(_default_engine())
 
 
 def _serialize_input(input: object) -> object:
@@ -128,7 +166,7 @@ async def _run(
         _rename_current_job(name)
 
     engine = _default_engine()
-    coroutine = engine.eval(
+    coroutine, handle = engine.eval(
         code,
         input=_serialize_input(input) if input is not None else None,
         cwd=os.fspath(cwd) if cwd is not None else None,
@@ -137,20 +175,38 @@ async def _run(
     try:
         return await asyncio.wait_for(asyncio.ensure_future(coroutine), timeout)
     except TimeoutError:
-        engine.interrupt()
+        # The handle targets THIS eval only, so a timeout that fires while we
+        # are still queued behind another pipeline can never interrupt it.
+        handle.interrupt()
         # Abandon the engine, don't just interrupt it: the interrupt is only
         # honored between pipeline elements, so a stuck element could hold
         # this engine's lock indefinitely and every later nu() would queue
         # behind it. A fresh engine costs the persistent state (documented);
         # the abandoned one stops (and drops) whenever its element finishes.
-        if engine is _engine:
-            reset()
+        _discard_engine(engine)
         raise TimeoutError(
             f"nu pipeline timed out after {timeout}s (engine state discarded): {code}"
         ) from None
     except asyncio.CancelledError:
-        engine.interrupt()
+        handle.interrupt()
         raise
+
+
+def _rows_frame(rows: list[dict]) -> pl.DataFrame:
+    """Rows -> frame, surviving mixed-type columns.
+
+    infer_schema_length=None scans every row so a column that starts null (or
+    int) and later carries strings still gets one usable dtype; when even the
+    full scan cannot unify (nushell data is legitimately heterogeneous, e.g.
+    an `open`'d JSON with an int-then-string field), strict=False coerces to
+    a supertype instead of breaking the always-a-DataFrame contract.
+    """
+    import polars as pl
+
+    try:
+        return pl.from_dicts(rows, infer_schema_length=None)
+    except (TypeError, pl.exceptions.PolarsError):
+        return pl.DataFrame(rows, infer_schema_length=None, strict=False)
 
 
 def _to_frame(decoded: object) -> pl.DataFrame:
@@ -160,13 +216,16 @@ def _to_frame(decoded: object) -> pl.DataFrame:
     if decoded is None:
         return pl.DataFrame()
     if isinstance(decoded, list) and decoded and all(isinstance(r, dict) for r in decoded):
-        # infer_schema_length=None: scan every row, so a column that starts
-        # null (or int) and later carries strings still gets one usable dtype.
-        return pl.from_dicts(decoded, infer_schema_length=None)
+        return _rows_frame(decoded)
     if isinstance(decoded, dict):
-        return pl.from_dicts([decoded], infer_schema_length=None)
+        return _rows_frame([decoded])
     if isinstance(decoded, list):
-        return pl.DataFrame({"value": pl.Series("value", decoded)})
+        try:
+            series = pl.Series("value", decoded)
+        except (TypeError, pl.exceptions.PolarsError):
+            # Mixed scalars ([1, 2.5], [1, 'x']): supertype, not a crash.
+            series = pl.Series("value", decoded, strict=False)
+        return pl.DataFrame({"value": series})
     return pl.DataFrame({"value": [decoded]})
 
 

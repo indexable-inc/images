@@ -105,6 +105,40 @@ def test_input_scalars_and_datetimes_cross_into_nu() -> None:
     assert run(nu.value("$in + 1", input=41)) == 42
 
 
+def test_int_list_input_stays_a_list_not_binary() -> None:
+    # extract::<Vec<u8>> would have eaten [1, 2, 3] as binary.
+    assert run(nu.value("$in | math sum", input=[1, 2, 3])) == 6
+
+
+def test_bytes_input_arrives_as_binary() -> None:
+    assert run(nu.value("$in | decode", input=b"hi")) == "hi"
+
+
+def test_oversized_int_input_errors_instead_of_rounding() -> None:
+    with pytest.raises(nu.NuError, match="out of range"):
+        run(nu.value("$in", input=2**80))
+
+
+def test_mixed_type_results_still_frame() -> None:
+    assert run(nu("[1, 2.5]"))["value"].to_list() == [1.0, 2.5]
+    df = run(nu("[{a: 1}, {a: 'x'}]"))
+    assert df.height == 2
+
+
+def test_trailing_external_output_is_collected(tmp_path: pathlib.Path) -> None:
+    # Stack::collect_value(): a bare external at the end of the pipeline must
+    # come back as the value, not leak to the host process stdout (which under
+    # MCP stdio transport is the protocol stream). `nu --testbin cococo` is a
+    # cross-platform echo shipped inside the nushell binary itself... which the
+    # embedded engine does not have on PATH; use the interpreter binary we
+    # certainly have: python3 printing a marker.
+    import sys
+
+    out = run(nu.value(f"^{sys.executable} -c 'print(\"collected\")'"))
+    assert isinstance(out, str)
+    assert out.strip() == "collected"
+
+
 def test_naive_datetime_input_gets_a_clear_error() -> None:
     naive = datetime.datetime(2024, 1, 2, 3, 4, 5)  # noqa: DTZ001 -- naive on purpose: it IS the case under test
     with pytest.raises(nu.NuError, match="naive datetime"):

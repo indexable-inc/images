@@ -51,6 +51,11 @@ fn initial_engine_state() -> EngineState {
     engine_state.history_enabled = false;
     engine_state.is_interactive = false;
     engine_state.is_login = false;
+    // This engine lives inside an MCP server process: run_external gives an
+    // external with empty pipeline input a NULL stdin only when is_mcp is set
+    // (run_external.rs); otherwise the child inherits the process stdin and a
+    // prompting CLI could hang on -- or consume -- the MCP stdio transport.
+    engine_state.is_mcp = true;
     engine_state.generate_nu_constant();
 
     // Plain diagnostics: the consumer is a model reading an exception message,
@@ -92,11 +97,18 @@ impl EngineInner {
         input: Option<Value>,
         cwd: Option<String>,
         env: Option<HashMap<String, String>>,
+        interrupt: &Arc<AtomicBool>,
     ) -> Result<Value, String> {
         let Self {
             engine_state,
             stack,
         } = self;
+
+        // Each eval carries its OWN interrupt flag (see EvalHandle): installing
+        // it here, under the engine lock, means an interrupt can only ever stop
+        // the eval it was issued for -- a queued eval can neither erase nor
+        // receive a signal aimed at the one currently running.
+        engine_state.set_signals(Signals::new(Arc::clone(interrupt)));
 
         if let Some(dir) = cwd {
             stack.add_env_var("PWD".into(), Value::string(dir, Span::unknown()));
@@ -206,7 +218,7 @@ fn value_to_py(py: Python<'_>, value: Value) -> PyResult<Py<PyAny>> {
                 .into_range_iter(span, Signals::empty())
                 .take(MAX_RANGE_ELEMENTS + 1)
             {
-                if list.len() > MAX_RANGE_ELEMENTS {
+                if list.len() >= MAX_RANGE_ELEMENTS {
                     return Err(NuError::new_err(
                         "range is unbounded or has more than 1,000,000 elements; \
                          collect it in nushell first (e.g. `| first 1000`)",
@@ -238,8 +250,16 @@ fn py_to_value(object: &Bound<'_, PyAny>) -> PyResult<Value> {
     if let Ok(val) = object.extract::<bool>() {
         return Ok(Value::bool(val, span));
     }
-    if let Ok(val) = object.extract::<i64>() {
-        return Ok(Value::int(val, span));
+    // Guard ints as a TYPE, not by extraction fallthrough: a Python int past
+    // i64 would otherwise fall to the f64 branch and arrive silently rounded.
+    if object.is_instance_of::<pyo3::types::PyInt>() {
+        return match object.extract::<i64>() {
+            Ok(val) => Ok(Value::int(val, span)),
+            Err(_) => Err(NuError::new_err(
+                "integer out of range for a nushell int (i64); pass it as a string \
+                 or a float explicitly if lossy is acceptable",
+            )),
+        };
     }
     if let Ok(val) = object.extract::<f64>() {
         return Ok(Value::float(val, span));
@@ -265,8 +285,14 @@ fn py_to_value(object: &Bound<'_, PyAny>) -> PyResult<Value> {
     if let Ok(val) = object.extract::<String>() {
         return Ok(Value::string(val, span));
     }
-    if let Ok(val) = object.extract::<Vec<u8>>() {
-        return Ok(Value::binary(val, span));
+    // Real bytes objects only: extract::<Vec<u8>> would also accept ANY
+    // sequence of byte-sized ints, turning a documented list input like
+    // [1, 2, 3] into binary before the list branch below could see it.
+    if let Ok(bytes) = object.cast::<PyBytes>() {
+        return Ok(Value::binary(bytes.as_bytes().to_vec(), span));
+    }
+    if let Ok(bytes) = object.cast::<pyo3::types::PyByteArray>() {
+        return Ok(Value::binary(bytes.to_vec(), span));
     }
     if let Ok(dict) = object.cast::<PyDict>() {
         let mut record = Record::new();
@@ -289,35 +315,56 @@ fn py_to_value(object: &Bound<'_, PyAny>) -> PyResult<Value> {
     )))
 }
 
+/// One eval's interrupt token, returned by [`Engine::eval`] next to the
+/// awaitable. Flipping it stops THAT eval (at its next pipeline-element
+/// boundary, ctrl-c semantics) and no other: an engine-wide flag could hit a
+/// different eval than the one that timed out, or be erased by a queued one.
+#[pyclass]
+struct EvalHandle {
+    flag: Arc<AtomicBool>,
+}
+
+#[pymethods]
+impl EvalHandle {
+    /// Ask this eval to stop at its next pipeline-element boundary. Safe to
+    /// call before the eval has started (it will stop immediately once it
+    /// acquires the engine).
+    fn interrupt(&self) {
+        self.flag.store(true, Ordering::Relaxed);
+    }
+}
+
 /// A persistent embedded nushell engine.
 #[pyclass]
 struct Engine {
     inner: Arc<Mutex<EngineInner>>,
-    interrupt: Arc<AtomicBool>,
 }
 
 #[pymethods]
 impl Engine {
     #[new]
     fn new() -> Self {
-        let mut engine_state = initial_engine_state();
-        let interrupt = Arc::new(AtomicBool::new(false));
-        engine_state.set_signals(Signals::new(interrupt.clone()));
         Self {
             inner: Arc::new(Mutex::new(EngineInner {
-                engine_state,
-                stack: Stack::new(),
+                engine_state: initial_engine_state(),
+                // collect_value marks the last command's stdout as
+                // OutDest::Value: a trailing external (or `print`) collects
+                // into the returned value instead of writing to the host
+                // process stdio, which under MCP stdio transport IS the
+                // protocol stream.
+                stack: Stack::new().collect_value(),
             })),
-            interrupt,
         }
     }
 
     /// Evaluate nushell source against the persistent state.
     ///
-    /// Returns an awaitable resolving to the pipeline's output as native
-    /// Python objects. `input` becomes the pipeline's `$in`; `cwd`/`env` set
-    /// `PWD` / environment variables for this and later calls (the stack is
-    /// persistent). Raises `NuError` with nushell's rendered diagnostic.
+    /// Returns `(awaitable, handle)`: the awaitable resolves to the pipeline's
+    /// output as native Python objects; `handle.interrupt()` stops this eval
+    /// (and only this eval) the way ctrl-c would. `input` becomes the
+    /// pipeline's `$in`; `cwd`/`env` set `PWD` / environment variables for
+    /// this and later calls (the stack is persistent). Raises `NuError` with
+    /// nushell's rendered diagnostic.
     #[pyo3(signature = (code, input=None, cwd=None, env=None))]
     fn eval<'py>(
         &self,
@@ -326,23 +373,18 @@ impl Engine {
         input: Option<Bound<'py, PyAny>>,
         cwd: Option<String>,
         env: Option<HashMap<String, String>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    ) -> PyResult<(Bound<'py, PyAny>, EvalHandle)> {
         // Convert under the GIL now; the blocking task must not touch Python.
         let input = input.as_ref().map(py_to_value).transpose()?;
         let inner = Arc::clone(&self.inner);
-        let interrupt = Arc::clone(&self.interrupt);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let flag = Arc::new(AtomicBool::new(false));
+        let interrupt = Arc::clone(&flag);
+        let future = pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let result = tokio::task::spawn_blocking(move || {
                 let mut guard = inner
                     .lock()
                     .map_err(|_| "a previous eval panicked; create a fresh Engine".to_owned())?;
-                // Reset the interrupt only AFTER winning the lock: resetting
-                // before it could erase an interrupt aimed at the eval still
-                // holding the mutex (which would then never stop, wedging
-                // both). Inside the guard, the reset provably applies to this
-                // eval alone.
-                interrupt.store(false, Ordering::Relaxed);
-                guard.eval(&code, input, cwd, env)
+                guard.eval(&code, input, cwd, env, &interrupt)
             })
             .await
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
@@ -350,19 +392,15 @@ impl Engine {
                 Ok(value) => Python::attach(|py| value_to_py(py, value)),
                 Err(diagnostic) => Err(NuError::new_err(diagnostic)),
             }
-        })
-    }
-
-    /// Ask the running evaluation to stop at the next pipeline-element
-    /// boundary (the same mechanism as ctrl-c in the nushell CLI).
-    fn interrupt(&self) {
-        self.interrupt.store(true, Ordering::Relaxed);
+        })?;
+        Ok((future, EvalHandle { flag }))
     }
 }
 
 #[pymodule]
 fn _nu(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Engine>()?;
+    module.add_class::<EvalHandle>()?;
     module.add("NuError", module.py().get_type::<NuError>())?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
