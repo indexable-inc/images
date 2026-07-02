@@ -245,7 +245,17 @@ in
       # The socket dir is a tmpfiles.d entry (see above), not a
       # RuntimeDirectory; order after tmpfiles so it exists on first start.
       after = [ "systemd-tmpfiles-setup.service" ];
-      environment = clientEnv;
+      environment = clientEnv // {
+        # The compositor's `gpu` readback path dlopens `libEGL.so.1` at
+        # runtime (smithay's `backend_egl` via libloading; deliberately no
+        # link-time GL dep, so no rpath to resolve it). That soname is
+        # libglvnd's dispatcher, which nixpkgs compiles with
+        # /run/opengl-driver/share/glvnd/egl_vendor.d as its vendor-config
+        # default and mesa's vendor JSON points at the store absolutely, so
+        # the dispatcher alone is enough to land in the venus EGL driver
+        # hardware.graphics provides.
+        LD_LIBRARY_PATH = lib.makeLibraryPath [ pkgs.libglvnd ];
+      };
       serviceConfig = {
         ExecStart = lib.getExe pkgs.panes-compositor;
         Restart = "on-failure";
