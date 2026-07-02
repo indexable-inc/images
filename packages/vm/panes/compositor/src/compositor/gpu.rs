@@ -10,6 +10,8 @@
 //! `libloading`), so a GPU-less machine still runs the shm-only binary.
 
 use anyhow::Context as _;
+// `Dmabuf::format` comes from the allocator `Buffer` trait.
+use smithay::backend::allocator::Buffer as _;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::format::FormatSet;
