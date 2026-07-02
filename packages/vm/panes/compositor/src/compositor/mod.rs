@@ -60,6 +60,14 @@ const FALLBACK_TICK: Duration = Duration::from_millis(100);
 /// permanently.
 const INFLIGHT_WATCHDOG_TICKS: u32 = 10;
 
+/// Ceiling for the watchdog's exponential backoff (~8s of `FALLBACK_TICK`s).
+/// Every watchdog fire resends a FULL frame -- the largest message on the
+/// wire -- so a fixed 1s period on a congested or slow link is a positive
+/// feedback loop: each rescue adds the traffic that made the ack late.
+/// Consecutive fires double the threshold up to this cap; a real ack resets
+/// it to `INFLIGHT_WATCHDOG_TICKS`.
+const INFLIGHT_WATCHDOG_MAX_TICKS: u32 = 80;
+
 /// One exported `xdg_toplevel`.
 struct Pane {
     id: WindowId,
@@ -74,6 +82,10 @@ struct Pane {
     /// Fallback ticks the current in-flight frame has gone unacked; drives
     /// the `INFLIGHT_WATCHDOG_TICKS` rescue in `on_tick`.
     inflight_ticks: u32,
+    /// Ticks the watchdog currently waits before firing. Doubles on each
+    /// consecutive fire (see `INFLIGHT_WATCHDOG_MAX_TICKS`); reset by a
+    /// real ack.
+    watchdog_ticks: u32,
     title: String,
     app_id: String,
     min: Option<(u32, u32)>,
@@ -92,6 +104,7 @@ impl Pane {
             seq: 0,
             inflight: None,
             inflight_ticks: 0,
+            watchdog_ticks: INFLIGHT_WATCHDOG_TICKS,
             title: String::new(),
             app_id: String::new(),
             min: None,
@@ -436,6 +449,9 @@ impl App {
                     for pane in &mut self.panes {
                         pane.inflight = None;
                         pane.inflight_ticks = 0;
+                        // A reconnect is a fresh link; backoff earned on the
+                        // old one says nothing about it.
+                        pane.watchdog_ticks = INFLIGHT_WATCHDOG_TICKS;
                         pane.announced = false;
                         pane.store.invalidate();
                     }
@@ -549,6 +565,8 @@ impl App {
         }
         self.panes[idx].inflight = None;
         self.panes[idx].inflight_ticks = 0;
+        // A live ack ends any backoff: the link is moving again.
+        self.panes[idx].watchdog_ticks = INFLIGHT_WATCHDOG_TICKS;
         // The host presented: let the client draw the next frame.
         fire_frame_callbacks(self.panes[idx].toplevel.wl_surface(), now);
         // And if commits accumulated while this frame was in flight, send
@@ -625,12 +643,18 @@ impl App {
                     continue;
                 }
                 pane.inflight_ticks += 1;
-                if pane.inflight_ticks < INFLIGHT_WATCHDOG_TICKS {
+                if pane.inflight_ticks < pane.watchdog_ticks {
                     continue;
                 }
+                // Back off before the next rescue: if this full frame also
+                // goes unacked, flooding a struggling link with more fulls
+                // only pushes the ack further out.
+                pane.watchdog_ticks =
+                    (pane.watchdog_ticks * 2).min(INFLIGHT_WATCHDOG_MAX_TICKS);
                 warn!(
                     id = pane.id,
                     seq = pane.inflight,
+                    next_wait_ticks = pane.watchdog_ticks,
                     "ack never arrived; releasing pacing and resending full"
                 );
                 pane.inflight = None;
