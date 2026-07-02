@@ -188,7 +188,10 @@ in
   # (device order = --disk order; the boot disk is vda). autoFormat
   # (x-systemd.makefs) turns a blank `truncate`d file into ext4 on first use;
   # nofail keeps a data-diskless boot working, MC then just re-downloads onto
-  # the root fs as before. See the README's "Persistent data disk".
+  # the root fs as before. Addressing by /dev/vdb assumes exactly one data
+  # disk, in second position: systemd-makefs formats with no label, and this
+  # nixpkgs pin has removed fileSystems.formatOptions, so a by-label device
+  # is not an option here. See the README's "Persistent data disk".
   fileSystems."/var/lib/minecraft" = {
     device = "/dev/vdb";
     fsType = "ext4";
@@ -273,21 +276,17 @@ in
   # over ssh, run its switch-to-configuration (README, "Iterating on the
   # guest"). gvproxy (`--net`) forwards host 127.0.0.1:2222 -> guest :22 by
   # default (its -ssh-port flag, default 2222; the guest holds a static DHCP
-  # lease at 192.168.127.2), so no vmkit flag is needed.
+  # lease at 192.168.127.2), so no vmkit flag is needed. Root's authorized key
+  # comes from the builder through the `sshAuthorizedKey` package arg
+  # (./default.nix); the stock image bakes NO key on purpose (a repo-built,
+  # cacheable image must not ship a static root credential), so out of the box
+  # nothing can log in.
   services.openssh = {
     enable = true;
     # Key-only root login; the forward is loopback-bound on the host, but a
     # password prompt on root is still wrong.
     settings.PermitRootLogin = "prohibit-password";
   };
-  # The public half of the host's /etc/nix/builder_ed25519 keypair (the
-  # nix-darwin linux-builder key every vmkit host already carries), inlined:
-  # `authorizedKeys.keyFiles` reads files at image BUILD time on the builder,
-  # so a /etc/nix path cannot be referenced, and the sandbox could not read it
-  # anyway. ssh with `-i /etc/nix/builder_ed25519` (root-readable, so sudo).
-  users.users.root.openssh.authorizedKeys.keys = [
-    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIErpSUpe5rROIu9NBNzCv4dQB0reZ1NHpvPdJveJDMib builder@localhost"
-  ];
 
   # Populates /run/opengl-driver (lib + share/vulkan/icd.d) with mesa, which
   # carries the venus ICD (virtio_icd.aarch64.json) on this nixpkgs pin; the

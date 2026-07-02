@@ -67,16 +67,32 @@ boot line.
 ## Iterating on the guest
 
 A `nixos.nix`/`apps.nix` tweak does not need a new image + fresh-disk boot
-(which wipes anything not on the data disk). The image runs sshd with the
-host's `/etc/nix/builder_ed25519` key baked in, and gvproxy (`--net`) forwards
-host `127.0.0.1:2222` to guest `:22` by default (its `-ssh-port` flag; the
-guest holds gvproxy's static DHCP lease, `192.168.127.2`). Build just the
-system closure, copy it in, activate:
+(which wipes anything not on the data disk). The image runs sshd, and gvproxy
+(`--net`) forwards host `127.0.0.1:2222` to guest `:22` by default (its
+`-ssh-port` flag; the guest holds gvproxy's static DHCP lease,
+`192.168.127.2`). The stock image bakes **no authorized key** (a repo-built,
+cacheable image must not ship a static root credential), so pass your own
+public key at build time through the `sshAuthorizedKey` package arg. One
+option is the host's nix-darwin linux-builder keypair
+`/etc/nix/builder_ed25519` (shown below; its private half is root-owned,
+hence the `sudo`), but any ssh key works.
 
 ```sh
-nix build .#packages.aarch64-linux.panes-guest-image.toplevel -o result-toplevel
-# The key is root-owned on the host, hence sudo; the guest's host key changes
-# with every fresh disk, hence the known-hosts opt-outs.
+# Bake your key into the image you boot (and into each toplevel you push).
+# `git+file://`, not `path:`/`toString ./.`: the repo's packages filter
+# sources with lib.fileset.gitTracked, which needs the git metadata a plain
+# path copy loses. Nix evaluates the COMMITTED tree, so commit each tweak
+# before building.
+build_with_key() {
+  nix build --impure --expr '((builtins.getFlake ("git+file://" + toString ./.))
+    .packages.aarch64-linux.panes-guest-image.override {
+      sshAuthorizedKey = builtins.readFile /etc/nix/builder_ed25519.pub;
+    })'"$1" -o "$2"
+}
+build_with_key "" result-image   # boot this as above; then, per iteration:
+build_with_key .toplevel result-toplevel
+# The guest's host key changes with every fresh disk, hence the known-hosts
+# opt-outs.
 guest_ssh="sudo ssh -i /etc/nix/builder_ed25519 -p 2222 \
   -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 sudo env NIX_SSHOPTS="-i /etc/nix/builder_ed25519 -p 2222 \
@@ -84,6 +100,11 @@ sudo env NIX_SSHOPTS="-i /etc/nix/builder_ed25519 -p 2222 \
   nix copy --no-check-sigs --to ssh://root@localhost "$(readlink result-toplevel)"
 $guest_ssh root@localhost "$(readlink result-toplevel)/bin/switch-to-configuration test"
 ```
+
+Do not hand ssh a manual `--port ...:22` forward instead: vmkit's gvproxy
+expose API binds forwards on **all** host interfaces (`"local": ":port"`),
+unlike the built-in loopback-only 2222 (which a `--port 2222:22` would also
+collide with).
 
 `test` activates the configuration now (services restart, containers pick up
 new store paths) without touching the boot entry, which is right here: the
