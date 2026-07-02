@@ -127,6 +127,16 @@ let
       '';
     }
     {
+      scopedNaming = ''
+        Name things by what they add to their enclosing scope, never by
+        restating it. A path, crate, module, option, field, or function is
+        always read with its context: `packages/minecraft/assets`, not
+        `packages/minecraft/minecraft-assets`. When siblings share a prefix,
+        that prefix is a missing parent scope: introduce it and drop the
+        prefix from the leaves.
+      '';
+    }
+    {
       rustCollectStyle = ''
         In Rust, type collection results with a local annotation, not turbofish forms
         like `.collect::<HashSet<_>>()`.
