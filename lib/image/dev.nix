@@ -33,7 +33,7 @@
   evalImageConfig,
 }:
 let
-  inherit (import (paths.root + "/lib/dev/shared-mount.nix") { inherit lib; })
+  inherit (import (paths.root + "/lib/dev/shared-mount.nix") { })
     serverModule
     clientModule
     ;

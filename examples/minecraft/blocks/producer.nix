@@ -16,7 +16,6 @@
     the separate collector leg.
 */
 {
-  config,
   ix,
   lib,
   nodes,

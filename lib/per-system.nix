@@ -53,7 +53,12 @@ let
         nixfmt --check ...$nix_files
       }
       def "main statix" [] { statix check . }
-      def "main deadnix" [] { deadnix --fail --no-lambda-pattern-names . }
+      # Strict: no `-L`/`--no-lambda-pattern-names`. That flag exists because
+      # dropping a pattern name is unsafe without `...` in the pattern (it
+      # narrows the callable signature); an unused name here must be deleted
+      # (migrating call sites) or kept behind `...`, matching what the LSP
+      # already flags as unused.
+      def "main deadnix" [] { deadnix --fail . }
       # The Nix style rules as astlog lint declarations
       # (astlog-rules/nix.astlog, #1060/#1062). `astlog scan` emits one
       # finding per lint-declared relation row and exits nonzero on any
@@ -451,7 +456,6 @@ let
     inherit
       ix
       lib
-      pkgs
       repoPackages
       ;
   };

@@ -6,7 +6,6 @@
   buildSvelteSite,
   buildLibghosttyVt,
   ghostty,
-  writeNushellApplication,
   writeBashApplication,
   # Cross-compilation leaves, threaded in so `unitsFor { target }` can build a
   # second unit graph for a non-host triple without `workspace.nix` having

@@ -4,7 +4,6 @@
   ix,
   cmake,
   pkg-config,
-  stdenv,
 }:
 # External-Rust-tool house style: a standalone third-party binary built from a
 # pinned flake source input with `rustPlatform.buildRustPackage`. See

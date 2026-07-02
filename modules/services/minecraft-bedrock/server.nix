@@ -2,7 +2,6 @@
 # (explicit deps, no `pkgs` arg) so it stays `override`-able and the module that
 # consumes it does not build a derivation inline.
 {
-  lib,
   stdenv,
   fetchurl,
   autoPatchelfHook,

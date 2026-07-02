@@ -77,19 +77,17 @@ let
       };
     };
 
-  minecraftBedrockModule =
-    { config, ... }:
-    {
-      ix.image.name = "minecraft-bedrock";
+  minecraftBedrockModule = _: {
+    ix.image.name = "minecraft-bedrock";
 
-      services.minecraft-bedrock = {
-        enable = true;
-        settings = {
-          server-name = "ix-powered Bedrock";
-          max-players = 20;
-        };
+    services.minecraft-bedrock = {
+      enable = true;
+      settings = {
+        server-name = "ix-powered Bedrock";
+        max-players = 20;
       };
     };
+  };
 
   remoteDesktopImageModule =
     { pkgs, ... }:

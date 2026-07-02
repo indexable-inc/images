@@ -394,7 +394,6 @@ let
       buildSvelteSite
       buildLibghosttyVt
       ghostty
-      writeNushellApplication
       writeBashApplication
       macosSdk
       appleSdkToolchain
