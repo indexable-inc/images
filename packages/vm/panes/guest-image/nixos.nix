@@ -15,6 +15,7 @@
   pkgs,
   config,
   modulesPath,
+  utils,
   ...
 }:
 let
@@ -82,11 +83,20 @@ let
         hostPath = "/dev/dri";
         isReadOnly = false;
       };
-    }
-    // lib.genAttrs (app.binds or [ ]) (bind: {
-      hostPath = bind;
-      isReadOnly = false;
-    });
+    };
+    # apps.nix `binds` as raw nspawn --bind flags, deliberately NOT
+    # `bindMounts`: nixos-containers turns every bindMounts source into
+    # unitConfig.RequiresMountsFor on container@<name>, which hard-requires
+    # the nofail data-disk mount (fileSystems."/var/lib/minecraft") and takes
+    # the whole container down when the optional /dev/vdb is absent. A raw
+    # --bind of a dir that always exists (host tmpfiles, below) binds whatever
+    # is mounted there instead: the data disk when attached, the root fs when
+    # not. That raw bind loses the generated ordering, and a nofail mount is
+    # NOT ordered before local-fs.target (systemd.mount(5)), so without the
+    # explicit After= on container@<name> (see the systemd.services merge
+    # below) a first-boot autoFormat could race the container into binding
+    # the root fs underneath the arriving data disk.
+    extraFlags = map (bind: "--bind=${bind}") (app.binds or [ ]);
     # The bind mount alone is not enough: nspawn's device cgroup policy still
     # denies the node unless whitelisted here. venus/zink renders on the
     # virtio-gpu render node.
@@ -308,95 +318,121 @@ in
   ++ map (bind: "d ${bind} 0755 root root -") appBinds
   ++ lib.mapAttrsToList (dest: source: "C ${dest} 0644 root root - ${source}") appSeedFiles;
 
-  systemd.services = {
-    panes-compositor = {
-      description = "panes guest compositor (Wayland toplevels -> vsock 7100)";
-      wantedBy = [ "multi-user.target" ];
-      # The socket dir is a tmpfiles.d entry (see above), not a
-      # RuntimeDirectory; order after tmpfiles so it exists on first start.
-      after = [ "systemd-tmpfiles-setup.service" ];
-      environment = clientEnv;
-      serviceConfig = {
-        ExecStart = lib.getExe pkgs.panes-compositor;
-        Restart = "on-failure";
-        RestartSec = 5;
-        # Mirror to the serial console: `vmkit boot-linux` captures hvc0 and
-        # the boot smoke reads service state off it.
-        StandardOutput = "journal+console";
-        StandardError = "journal+console";
-      };
-    };
+  # escapeSystemdPath silently mis-escapes `.` segments and exotic characters
+  # (nixpkgs#515270), which would make the container@ After= below name a
+  # mount unit that never exists — quietly re-opening the first-boot bind
+  # race. Constrain binds to the simple absolute paths it escapes correctly.
+  assertions = [
+    {
+      assertion = lib.all (bind: builtins.match "(/[a-zA-Z0-9_-]+)+" bind != null) appBinds;
+      message = "apps.nix binds must be simple absolute paths ([a-zA-Z0-9_-] segments): ${toString appBinds}";
+    }
+  ];
 
-    # Boot-time diagnostic kept on purpose: prints the Vulkan device list to
-    # the serial console so a headless `vmkit boot-linux --gpu` smoke run can
-    # assert the venus path end to end. With --gpu it must show a
-    # "Virtio-GPU Venus" deviceName; lavapipe/llvmpipe only means the guest
-    # fell back to software (see packages/vm/vmkit/docs/linux-libkrun.md).
-    panes-venus-smoke = {
-      description = "Log Vulkan devices (expect Virtio-GPU Venus) to the serial console";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "multi-user.target" ];
-      path = [
-        pkgs.vulkan-tools
-        pkgs.gnugrep
-      ];
-      serviceConfig = {
-        Type = "oneshot";
-        StandardOutput = "journal+console";
-        StandardError = "journal+console";
-        TimeoutStartSec = 120;
+  # Each app container starts only after its bind sources' mount attempts have
+  # concluded: a nofail mount is not ordered before local-fs.target
+  # (systemd.mount(5)), so without this a first boot could race the data
+  # disk's autoFormat and --bind the root fs underneath it, silently writing
+  # that boot's app data to the ephemeral root. After= without Requires=
+  # keeps the disk optional: an absent /dev/vdb fails the mount job after its
+  # 3s device timeout and the container proceeds on the root fs as intended.
+  # After= naming a unit that does not exist for a path is inert.
+  systemd.services =
+    lib.mapAttrs' (
+      name: app:
+      lib.nameValuePair "container@${name}" {
+        after = map (bind: "${utils.escapeSystemdPath bind}.mount") (app.binds or [ ]);
+      }
+    ) apps
+    // {
+      panes-compositor = {
+        description = "panes guest compositor (Wayland toplevels -> vsock 7100)";
+        wantedBy = [ "multi-user.target" ];
+        # The socket dir is a tmpfiles.d entry (see above), not a
+        # RuntimeDirectory; order after tmpfiles so it exists on first start.
+        after = [ "systemd-tmpfiles-setup.service" ];
+        environment = clientEnv;
+        serviceConfig = {
+          ExecStart = lib.getExe pkgs.panes-compositor;
+          Restart = "on-failure";
+          RestartSec = 5;
+          # Mirror to the serial console: `vmkit boot-linux` captures hvc0 and
+          # the boot smoke reads service state off it.
+          StandardOutput = "journal+console";
+          StandardError = "journal+console";
+        };
       };
-      script = ''
-        echo "===PANES-VENUS-SMOKE-BEGIN==="
-        out=$(vulkaninfo --summary 2>&1 || true)
-        if printf '%s' "$out" | grep -qi venus; then
-          printf '%s\n' "$out" | grep -iE "venus|deviceName|driverName"
-        else
-          echo "PANES-VENUS-ABSENT"
-          # The full loader output is the diagnostic when venus is missing
-          # (no ICD, no render node, capset mismatch, ...).
-          printf '%s\n' "$out" | head -40
-        fi
-        ls -la /dev/dri 2>&1 || true
-        echo "===PANES-VENUS-SMOKE-END==="
-      '';
-    };
 
-    # Second boot-time diagnostic: dump why anything failed (the app
-    # containers especially) to the serial console, since a headless
-    # `vmkit boot-linux` run has no shell to poke around with.
-    panes-boot-report = {
-      description = "Log failed units and container journals to the serial console";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "multi-user.target" ];
-      path = [
-        pkgs.systemd
-        pkgs.iproute2
-      ];
-      serviceConfig = {
-        Type = "oneshot";
-        StandardOutput = "journal+console";
-        StandardError = "journal+console";
-        TimeoutStartSec = 180;
+      # Boot-time diagnostic kept on purpose: prints the Vulkan device list to
+      # the serial console so a headless `vmkit boot-linux --gpu` smoke run can
+      # assert the venus path end to end. With --gpu it must show a
+      # "Virtio-GPU Venus" deviceName; lavapipe/llvmpipe only means the guest
+      # fell back to software (see packages/vm/vmkit/docs/linux-libkrun.md).
+      panes-venus-smoke = {
+        description = "Log Vulkan devices (expect Virtio-GPU Venus) to the serial console";
+        wantedBy = [ "multi-user.target" ];
+        after = [ "multi-user.target" ];
+        path = [
+          pkgs.vulkan-tools
+          pkgs.gnugrep
+        ];
+        serviceConfig = {
+          Type = "oneshot";
+          StandardOutput = "journal+console";
+          StandardError = "journal+console";
+          TimeoutStartSec = 120;
+        };
+        script = ''
+          echo "===PANES-VENUS-SMOKE-BEGIN==="
+          out=$(vulkaninfo --summary 2>&1 || true)
+          if printf '%s' "$out" | grep -qi venus; then
+            printf '%s\n' "$out" | grep -iE "venus|deviceName|driverName"
+          else
+            echo "PANES-VENUS-ABSENT"
+            # The full loader output is the diagnostic when venus is missing
+            # (no ICD, no render node, capset mismatch, ...).
+            printf '%s\n' "$out" | head -40
+          fi
+          ls -la /dev/dri 2>&1 || true
+          echo "===PANES-VENUS-SMOKE-END==="
+        '';
       };
-      script = ''
-        # Give autoStart containers a moment to attempt their first start.
-        sleep 10
-        echo "===PANES-BOOT-REPORT-BEGIN==="
-        systemctl --failed --no-legend --plain || true
-        for unit in $(systemctl --failed --no-legend --plain | cut -d' ' -f1); do
-          echo "--- journal: $unit ---"
-          journalctl -u "$unit" -n 20 --no-pager || true
-        done
-        # DHCP evidence: gvproxy leases 192.168.127.2/24 with gateway .1.
-        ip -4 addr show || true
-        ip route show default || true
-        ls -la /run/panes 2>&1 || true
-        df -h / || true
-        echo "===PANES-BOOT-REPORT-END==="
-      '';
+
+      # Second boot-time diagnostic: dump why anything failed (the app
+      # containers especially) to the serial console, since a headless
+      # `vmkit boot-linux` run has no shell to poke around with.
+      panes-boot-report = {
+        description = "Log failed units and container journals to the serial console";
+        wantedBy = [ "multi-user.target" ];
+        after = [ "multi-user.target" ];
+        path = [
+          pkgs.systemd
+          pkgs.iproute2
+        ];
+        serviceConfig = {
+          Type = "oneshot";
+          StandardOutput = "journal+console";
+          StandardError = "journal+console";
+          TimeoutStartSec = 180;
+        };
+        script = ''
+          # Give autoStart containers a moment to attempt their first start.
+          sleep 10
+          echo "===PANES-BOOT-REPORT-BEGIN==="
+          systemctl --failed --no-legend --plain || true
+          for unit in $(systemctl --failed --no-legend --plain | cut -d' ' -f1); do
+            echo "--- journal: $unit ---"
+            journalctl -u "$unit" -n 20 --no-pager || true
+          done
+          # DHCP evidence: gvproxy leases 192.168.127.2/24 with gateway .1.
+          ip -4 addr show || true
+          ip route show default || true
+          ls -la /run/panes 2>&1 || true
+          df -h / || true
+          echo "===PANES-BOOT-REPORT-END==="
+        '';
+      };
     };
-  };
 
   containers = lib.mapAttrs mkAppContainer apps;
 
