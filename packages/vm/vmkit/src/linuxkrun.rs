@@ -165,11 +165,13 @@ const FIRMWARE: &[u8] = include_bytes!(env!("KRUN_EFI_FIRMWARE"));
 /// Parameters for booting a Linux guest under libkrun. The payload fields differ
 /// by host (the boot models are fundamentally different); the rest is shared.
 pub struct BootLinux {
-    /// macOS host: a raw EFI-bootable disk image (e.g. a NixOS `raw-efi` image or
-    /// a Fedora CoreOS raw). The guest's own bootloader/kernel live in it; the
-    /// embedded OVMF boots it.
+    /// macOS host: raw disk images, never empty (the CLI enforces at least
+    /// one). The first is the EFI boot disk (e.g. a NixOS `raw-efi` image or a
+    /// Fedora CoreOS raw) whose own bootloader/kernel the embedded OVMF boots;
+    /// the rest attach in order as extra virtio-blk devices the guest sees as
+    /// /dev/vdb, /dev/vdc, ...
     #[cfg(target_os = "macos")]
-    pub disk: PathBuf,
+    pub disks: Vec<PathBuf>,
     /// Linux host: a rootfs directory shared into the guest over virtiofs as `/`.
     /// The bundled `libkrunfw` kernel boots it.
     #[cfg(target_os = "linux")]
@@ -274,42 +276,61 @@ fn check(op: &str, code: i32) -> Result<(), Error> {
 }
 
 /// Set the macOS (libkrun-efi) boot payload: the embedded OVMF firmware plus the
-/// guest's raw EFI disk. The returned `CString`s must outlive the krun calls, so
+/// guest's raw disks (the first is the EFI boot disk, the rest extra virtio-blk
+/// devices in order). The returned `CString`s must outlive the krun calls, so
 /// the caller keeps them alive until `krun_start_enter`.
 #[cfg(all(have_libkrun, target_os = "macos"))]
 fn set_payload(ctx: u32, boot: &BootLinux) -> Result<Vec<CString>, Error> {
-    if !boot.disk.exists() {
-        return Err(Error::Source {
-            path: boot.disk.clone(),
-            message: "disk image does not exist".to_owned(),
+    // clap's `required = true` guarantees this from the CLI; guard for other
+    // callers so the failure is legible rather than a firmware-only boot.
+    if boot.disks.is_empty() {
+        return Err(Error::Setup {
+            message: "boot-linux needs at least one --disk (the EFI boot disk)".to_owned(),
         });
     }
     let firmware = firmware_path()?;
-    let disk = boot
-        .disk
-        .canonicalize()
-        .unwrap_or_else(|_| boot.disk.clone());
     let firmware_c = cstr(&firmware.to_string_lossy())?;
-    let disk_c = cstr(&disk.to_string_lossy())?;
-    let block_id = cstr("root")?;
     // Safety: pointers are valid for the call; krun copies what it needs.
     unsafe {
         check(
             "krun_set_firmware",
             krun_set_firmware(ctx, firmware_c.as_ptr()),
         )?;
-        check(
-            "krun_add_disk2",
-            krun_add_disk2(
-                ctx,
-                block_id.as_ptr(),
-                disk_c.as_ptr(),
-                KRUN_DISK_FORMAT_RAW,
-                false,
-            ),
-        )?;
     }
-    Ok(vec![firmware_c, disk_c, block_id])
+    let mut keep = vec![firmware_c];
+    for (index, disk) in boot.disks.iter().enumerate() {
+        if !disk.exists() {
+            return Err(Error::Source {
+                path: disk.clone(),
+                message: "disk image does not exist".to_owned(),
+            });
+        }
+        let disk = disk.canonicalize().unwrap_or_else(|_| disk.clone());
+        let disk_c = cstr(&disk.to_string_lossy())?;
+        // The block id only labels the device in libkrun's own errors; the
+        // guest sees plain virtio-blk devices in add order (vda, vdb, ...).
+        let block_id = if index == 0 {
+            cstr("root")?
+        } else {
+            cstr(&format!("data{index}"))?
+        };
+        // Safety: pointers are valid for the call; krun copies what it needs.
+        unsafe {
+            check(
+                "krun_add_disk2",
+                krun_add_disk2(
+                    ctx,
+                    block_id.as_ptr(),
+                    disk_c.as_ptr(),
+                    KRUN_DISK_FORMAT_RAW,
+                    false,
+                ),
+            )?;
+        }
+        keep.push(disk_c);
+        keep.push(block_id);
+    }
+    Ok(keep)
 }
 
 /// Set the Linux (classic libkrun) boot payload: a rootfs directory plus the

@@ -51,12 +51,15 @@ enum Command {
     /// is a rootfs directory (`--root`) booted by libkrun's bundled kernel,
     /// running the trailing command as the guest init.
     BootLinux {
-        /// macOS host: path to a raw EFI-bootable disk image (a NixOS `raw-efi`
-        /// image or a Fedora CoreOS raw). The guest's own kernel/bootloader live
-        /// in it; libkrun's embedded OVMF firmware boots it.
+        /// macOS host: path to a raw disk image, repeatable. The first `--disk`
+        /// is the EFI boot disk (a NixOS `raw-efi` image or a Fedora CoreOS
+        /// raw) whose own kernel/bootloader libkrun's embedded OVMF firmware
+        /// boots; each further `--disk` attaches in order as an extra
+        /// virtio-blk device the guest sees as /dev/vdb, /dev/vdc, ... (e.g. a
+        /// persistent data disk that survives boot-image swaps).
         #[cfg(target_os = "macos")]
-        #[arg(long)]
-        disk: std::path::PathBuf,
+        #[arg(long = "disk", value_name = "DISK", required = true)]
+        disks: Vec<std::path::PathBuf>,
         /// Linux host: path to a rootfs directory, shared into the guest over
         /// virtiofs as `/` and booted by libkrun's bundled kernel.
         #[cfg(target_os = "linux")]
@@ -599,7 +602,7 @@ mod imp {
         match command {
             Command::Info => info(),
             Command::BootLinux {
-                disk,
+                disks,
                 gpu,
                 cpus,
                 memory_mib,
@@ -615,7 +618,7 @@ mod imp {
                     .map_err(|message| Error::Args { message })?;
                 let timeout = (timeout_secs != 0).then(|| Duration::from_secs(timeout_secs));
                 crate::linuxkrun::boot_linux(&crate::linuxkrun::BootLinux {
-                    disk,
+                    disks,
                     gpu,
                     cpus,
                     memory_mib,
