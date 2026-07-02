@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::process::ExitCode;
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
@@ -34,7 +34,19 @@ struct App {
     out: Option<mpsc::Sender<ToGuest>>,
     title_prefix: String,
     quitting: bool,
+    /// Per-window ack counters behind the periodic acks/s log: the real-path
+    /// equivalent of mock's rate line, and the 120Hz-genlock evidence
+    /// (index#1686 M6). An entry resets on each report.
+    ack_stats: HashMap<WindowId, AckStat>,
 }
+
+struct AckStat {
+    count: u32,
+    epoch: Instant,
+}
+
+/// How often `display_tick` reports a window's ack rate.
+const ACK_RATE_REPORT_EVERY: Duration = Duration::from_secs(5);
 
 /// AppKit work postponed past the `APP` borrow (see module docs).
 #[derive(Default)]
@@ -89,6 +101,7 @@ pub fn run(target: Target, title_prefix: String) -> ExitCode {
             out: None,
             title_prefix,
             quitting: false,
+            ack_stats: HashMap::new(),
         });
     });
 
@@ -115,6 +128,7 @@ pub fn on_event(event: Event) {
         }
         Event::Disconnected => {
             app.out = None;
+            app.ack_stats.clear();
             // Guest windows cannot outlive the guest connection.
             let close = app.windows.drain().map(|(_, window)| window).collect();
             Deferred { show: None, close }
@@ -178,6 +192,7 @@ fn handle_msg(app: &mut App, msg: ToHost) -> Deferred {
         }
         ToHost::WindowGone { id } => {
             let mut deferred = Deferred::default();
+            app.ack_stats.remove(&id);
             if let Some(mut window) = app.windows.remove(&id) {
                 window.closing = true;
                 deferred.close.push(window);
@@ -216,6 +231,18 @@ pub fn display_tick(id: WindowId, update: &CAMetalDisplayLinkUpdate) {
             && let Some(out) = &app.out
         {
             let _ = out.send(ToGuest::Ack { id, seq });
+            let stat = app
+                .ack_stats
+                .entry(id)
+                .or_insert_with(|| AckStat { count: 0, epoch: Instant::now() });
+            stat.count += 1;
+            let elapsed = stat.epoch.elapsed();
+            if elapsed >= ACK_RATE_REPORT_EVERY {
+                let rate = f64::from(stat.count) / elapsed.as_secs_f64();
+                eprintln!("panes-host: window {id}: {rate:.1} acks/s");
+                stat.count = 0;
+                stat.epoch = Instant::now();
+            }
         }
     });
 }
