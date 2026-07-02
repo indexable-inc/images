@@ -189,7 +189,6 @@ let
           inherit
             ix
             lib
-            pkgs
             repoPackages
             ;
         };

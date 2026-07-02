@@ -1,8 +1,4 @@
-{
-  config,
-  lib,
-  ...
-}:
+_:
 let
   sambaPort = 445;
   shareDir = "/var/lib/file-share";

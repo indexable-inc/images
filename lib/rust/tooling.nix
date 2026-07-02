@@ -7,6 +7,8 @@
   clippy-fork,
   repoRoot,
   lists,
+  # Shared pins reader, threaded through to policy.nix (see its arg doc).
+  pins,
 }:
 let
   inherit (builtins) toString;
@@ -20,7 +22,12 @@ let
   rustFor =
     pkgs:
     import ./build.nix {
-      inherit lib pkgs lists;
+      inherit
+        lib
+        pkgs
+        lists
+        pins
+        ;
       # llm-clippy bootstraps before cargoUnit / rustWorkspace exist, so the
       # `ix` closure it receives carries only `buildRustPackage`.
       # `buildIxRustTool` adds the richer surface for packages that need it.

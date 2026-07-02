@@ -14,20 +14,39 @@
 # rpath are absolute store paths, so they survive Gluten's runtime
 # re-extraction.
 #
-# Bump: change `version`, refresh `src.hash` with `nix-prefetch-url`, and check
-# the tarball against its published `.sha512` on archive.apache.org. Only a
-# linux_amd64 native build is published upstream.
+# Bump: edit pins.json and run `nix run .#update`, then check the tarball
+# against its published `.sha512` on archive.apache.org. Only a linux_amd64
+# native build is published upstream.
 {
+  ix,
   lib,
+  nix,
   stdenv,
   fetchurl,
   autoPatchelfHook,
   patchelf,
   unzip,
   zip,
+  # Writer for `passthru.updateScript` (flake-package path only); null on the
+  # overlay path.
+  updateScriptWriter ? null,
 }:
 let
-  version = "1.6.0";
+  # Version + URL and SRI hash live in the sibling pins.json, never inline
+  # (repo policy). Bump the version/url in pins.json, then `nix run .#update`
+  # re-pins the hash.
+  pin = ix.pins.loadPin ./pins.json "gluten";
+  inherit (pin) version;
+  updateScript =
+    if updateScriptWriter == null then
+      null
+    else
+      ix.pins.mkUpdater {
+        writeNushellApplication = updateScriptWriter;
+        inherit nix;
+        pname = "spark-gluten";
+        relPath = "packages/spark/spark-gluten/pins.json";
+      };
   sparkVersion = "3.5";
   scalaVersion = "2.12";
   jarName = "gluten-velox-bundle.jar";
@@ -38,10 +57,7 @@ stdenv.mkDerivation (finalAttrs: {
 
   # The archive host keeps every release. The tarball holds two files: a
   # DISCLAIMER and the bundle jar.
-  src = fetchurl {
-    url = "https://archive.apache.org/dist/gluten/${version}/apache-gluten-${version}-bin-spark-${sparkVersion}.tar.gz";
-    hash = "sha256-kPnsaslkvNc4k8ZhqRM+Rq/Eb4svqeF8ZH+zk5uLbUM=";
-  };
+  src = fetchurl { inherit (pin) url hash; };
 
   dontUnpack = true;
   strictDeps = true;
@@ -106,7 +122,8 @@ stdenv.mkDerivation (finalAttrs: {
     inherit sparkVersion scalaVersion;
     # Absolute path consumers put on the Spark driver/executor classpath.
     jar = "${finalAttrs.finalPackage}/share/java/${jarName}";
-  };
+  }
+  // lib.optionalAttrs (updateScript != null) { inherit updateScript; };
 
   meta = {
     description = "Apache Gluten Velox backend bundle for Spark ${sparkVersion}, patched for NixOS";

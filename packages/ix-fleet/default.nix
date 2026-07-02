@@ -8,7 +8,7 @@ let
   dagRunner = pkgs.callPackage (ix.paths.packagesRoot + "/dag-runner") { inherit ix; };
   # The ix Python SDK is a prebuilt wheel fetched from R2, not a uv/PyPI
   # dependency, so it is injected into the venv below rather than resolved by uv.
-  ixSdk = pkgs.callPackage (ix.paths.packagesRoot + "/ix-sdk-python") { };
+  ixSdk = pkgs.callPackage (ix.paths.packagesRoot + "/ix-sdk-python") { inherit ix; };
 
   unwrapped = ix.buildUvApplication pkgs {
     pname = "ix-fleet";

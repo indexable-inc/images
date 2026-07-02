@@ -281,6 +281,59 @@ time {
   border-radius: 3px;
 }
 
+.subtitle {
+  color: var(--fg-muted);
+  font-size: 1rem;
+  margin-top: 0.5rem;
+}
+
+/* RFC frontmatter: number/status/authors/etc, one field per row. */
+dl.frontmatter {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+  margin: 2rem 0;
+  font-size: 0.9rem;
+}
+
+dl.frontmatter dt {
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+
+dl.frontmatter dd {
+  margin: 0;
+}
+
+.body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1.25rem 0;
+  font-size: 0.88rem;
+}
+
+.body th,
+.body td {
+  border: 1px solid var(--rule);
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.body th {
+  background: var(--code);
+}
+
+.body .note {
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--fg);
+  background: var(--code);
+  border-radius: 6px;
+  padding: 0.85rem 1rem;
+  margin: 1.5rem 0;
+  font-size: 0.9rem;
+}
+
 @media (max-width: 32rem) {
   header,
   main {

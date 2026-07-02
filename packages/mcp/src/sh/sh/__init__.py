@@ -154,13 +154,29 @@ _STRUCTURED_OWNER = {
 }
 
 
+# A pipe into one of these means the command is scraping text apart. The
+# bundled `nu` module owns that shape: a nushell pipeline is structured end to
+# end and lands as a polars frame.
+_TEXT_MUNGERS = re.compile(r"\|\s*(?:jq|awk|sed|cut|tr|sort|uniq|wc)\b")
+
+
 def _structured_hint(cmd: str | list[str]) -> str | None:
     """A redirect hint when ``cmd`` starts with a tool a bundled module owns."""
     if isinstance(cmd, str):
         first = cmd.strip().split(None, 1)[0] if cmd.strip() else ""
     else:
         first = str(cmd[0]) if cmd else ""
-    return _STRUCTURED_OWNER.get(first.rsplit("/", 1)[-1])
+    first = first.rsplit("/", 1)[-1]
+    owner = _STRUCTURED_OWNER.get(first)
+    if owner is not None:
+        return owner
+    # ssh runs the pipeline remotely, where the local nu cannot see the data.
+    if isinstance(cmd, str) and first != "ssh" and _TEXT_MUNGERS.search(cmd):
+        return (
+            "await nu('<pipeline>') runs a structured (nushell) pipeline and returns a "
+            "polars frame -- prefer it over scraping text apart with jq/awk/sed/cut"
+        )
+    return None
 
 
 class ShellError(RuntimeError):

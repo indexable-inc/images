@@ -6,7 +6,6 @@
   buildSvelteSite,
   buildLibghosttyVt,
   ghostty,
-  writeNushellApplication,
   writeBashApplication,
   # Cross-compilation leaves, threaded in so `unitsFor { target }` can build a
   # second unit graph for a non-host triple without `workspace.nix` having
@@ -37,17 +36,8 @@ let
   # the same shape as `IX_VT_GHOSTTY_LIB_DIR`.
   dashboardSiteRoot = root + "/packages/dashboard/dashboard-core/site";
   dashboardSite = buildSvelteSite workspacePkgs {
-    pname = "dashboard-site";
-    version = "0.1.0";
-    src = lib.fileset.toSource {
-      root = dashboardSiteRoot;
-      fileset = lib.fileset.gitTracked dashboardSiteRoot;
-    };
+    sourceRoot = dashboardSiteRoot;
     serve.enable = false;
-    devServer = {
-      name = "dashboard-site-dev";
-      checkoutSubdir = "packages/dashboard/dashboard-core/site";
-    };
   };
   dashboardSiteHtml = "${dashboardSite}/share/dashboard-site/index.html";
   src =

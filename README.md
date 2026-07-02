@@ -134,7 +134,7 @@ nix run .#reel          # regenerate the demo above
 | [`lib/`](lib/) | Shared Nix APIs and reusable builders only; package-specific glue stays with its package |
 | [`doc/`](doc/index.md) | From-source documentation, one page per package |
 | [`examples/`](examples/) | Standalone consumer fleets and copyable `mkDev` composition patterns |
-| [`rfcs/`](rfcs/) | Architecture decision records |
+| [`packages/site/src/lib/rfcs/`](packages/site/src/lib/rfcs/) | Architecture decision records (RFCs, published on the site) |
 
 ## Feedback
 

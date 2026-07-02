@@ -1,0 +1,8 @@
+{
+  "advisory-db": {
+    "owner": "rustsec",
+    "repo": "advisory-db",
+    "rev": "f2ae5fc8e5d208373b6c838f9676434525327a72",
+    "hash": "sha256-iqXYpuCoWoGypnpM5ceXN748QlYeBXDtZx0uI98qFLo="
+  }
+}

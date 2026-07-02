@@ -1,4 +1,5 @@
 {
+  ix,
   lib,
   pkgs,
   # Match the interpreter of any consumer (ix-fleet builds on pkgs.python3).
@@ -13,36 +14,29 @@ let
   # cdylib is built, stripped, and scanned store-clean by ix's
   # `nix/packages/workspace-sdks.nix`, then uploaded to R2 with `wrangler`.
   #
-  # The URL + SRI live here next to the consumer rather than in flake.lock, so a
-  # routine SDK bump is: re-publish the wheel to R2 and edit this catalog. Each
-  # URL path embeds the wheel's nix-store hash so distinct builds never collide.
+  # The per-system URL + SRI catalog lives in the sibling pins.json (repo
+  # policy: no inline hash literals), next to the consumer rather than in
+  # flake.lock, so a routine SDK bump is: re-publish the wheel to R2 and edit
+  # pins.json. Each URL path embeds the wheel's nix-store hash so distinct
+  # builds never collide.
   #
   # Published for x86_64-linux (health-checks runner) and aarch64-darwin
   # (operators run ix-fleet on their Macs). The darwin wheel repoints its one
   # nix-store dylib (libiconv) at /usr/lib so it loads off-nix; see ix's
   # workspace-sdks.nix. Other systems fall through to the loud placeholder below.
-  catalog = {
-    x86_64-linux = {
-      url = "https://pub-559bccbc8be94bed84821cb943b580f3.r2.dev/wheel/ix-sdk/q7dc3hr07fb49k3bb6bpvdvrw06b70zi/ix_sdk-0.1.0-cp313-abi3-manylinux_2_34_x86_64.whl";
-      hash = "sha256-G01zJOF2IniVv5ioFEQEzoOZdVKF8YBBvJmviQb4Qts=";
-    };
-    aarch64-darwin = {
-      url = "https://pub-559bccbc8be94bed84821cb943b580f3.r2.dev/wheel/ix-sdk/jmj8q0gsq5lnvv8aap6j7zh874bpzqjh/ix_sdk-0.1.0-cp313-abi3-macosx_11_0_arm64.whl";
-      hash = "sha256-KdfnAh0LgHcbApMUsK0x7tPrNe+ol6LIumUqfURyZn8=";
-    };
-  };
+  catalog = ix.pins.loadPins ./pins.json;
 
   inherit (pkgs.stdenv.hostPlatform) system;
   rawEntry = catalog.${system} or null;
-  # Catch a careless bump (an http:// URL or a non-SRI hash) at eval time, the
-  # same guard lib/util/artifacts.nix applies to its loader catalogs.
+  # Catch a careless bump (an http:// URL) at eval time, the same guard
+  # lib/util/artifacts.nix applies to its loader catalogs; loadPins already
+  # rejects a non-SRI hash.
   entry =
     if rawEntry == null then
       null
     else
-      assert lib.assertMsg (
-        lib.hasPrefix "https://" rawEntry.url && lib.hasPrefix "sha256-" rawEntry.hash
-      ) "ix-sdk-python: catalog entry for ${system} needs an https:// url and an sha256- SRI hash";
+      assert lib.assertMsg (lib.hasPrefix "https://" rawEntry.url)
+        "ix-sdk-python: catalog entry for ${system} needs an https:// url";
       rawEntry;
 in
 if entry == null then

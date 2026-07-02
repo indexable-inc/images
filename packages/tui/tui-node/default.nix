@@ -1,6 +1,5 @@
 {
   ix,
-  lib,
   pkgs ? ix.pkgs,
 }:
 let

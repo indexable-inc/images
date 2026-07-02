@@ -16,10 +16,12 @@
 # JAVA_HOME, so this is the JVM Spark actually runs on regardless of the
 # caller's environment.
 #
-# Bump: change `version`, refresh `src.hash` with `nix-prefetch-url`, and check
-# the tarball against its published `.sha512` on archive.apache.org.
+# Bump: edit pins.json and run `nix run .#update`, then check the tarball
+# against its published `.sha512` on archive.apache.org.
 {
+  ix,
   lib,
+  nix,
   stdenv,
   fetchurl,
   makeWrapper,
@@ -28,6 +30,9 @@
   python3,
   procps,
   tzdata,
+  # Writer for `passthru.updateScript` (flake-package path only); null on the
+  # overlay path.
+  updateScriptWriter ? null,
   # Pinned, not a parameter: a `jdk ? jdk17_headless` arg collides with the
   # `pkgs.jdk` callPackage auto-fills (currently openjdk 21, which Spark 3.5 does
   # not support), silently overriding the default. Spark 3.5 and Gluten 1.6 both
@@ -35,14 +40,27 @@
   jdk17_headless,
   pysparkPython ? python3,
 }:
+let
+  # Version + URL and SRI hash live in the sibling pins.json, never inline
+  # (repo policy). Bump the version/url in pins.json, then `nix run .#update`
+  # re-pins the hash.
+  pin = ix.pins.loadPin ./pins.json "spark";
+  updateScript =
+    if updateScriptWriter == null then
+      null
+    else
+      ix.pins.mkUpdater {
+        writeNushellApplication = updateScriptWriter;
+        inherit nix;
+        pname = "spark-hive";
+        relPath = "packages/spark/spark-hive/pins.json";
+      };
+in
 stdenv.mkDerivation (finalAttrs: {
   pname = "spark-hive";
-  version = "3.5.5";
+  inherit (pin) version;
 
-  src = fetchurl {
-    url = "https://archive.apache.org/dist/spark/spark-${finalAttrs.version}/spark-${finalAttrs.version}-bin-hadoop3.tgz";
-    hash = "sha256-jao/f7CvJnD+Eb64oqx52QilNNcpg1PsR0YCWxAtXjE=";
-  };
+  src = fetchurl { inherit (pin) url hash; };
 
   nativeBuildInputs = [ makeWrapper ];
   strictDeps = true;
@@ -79,7 +97,10 @@ stdenv.mkDerivation (finalAttrs: {
   # Velox (via Gluten) calls `discover_tz_dir`, which needs the IANA tz database;
   # NixOS has none at the FHS `/usr/share/zoneinfo`, so the wrappers point TZDIR
   # at the tzdata store path. Executors inherit it from the worker's environment.
-  passthru.jdk = jdk17_headless;
+  passthru = {
+    jdk = jdk17_headless;
+  }
+  // lib.optionalAttrs (updateScript != null) { inherit updateScript; };
 
   meta = {
     description = "Apache Spark ${finalAttrs.version}, official hadoop3 + Hive distribution, JDK 17, packaged for NixOS";

@@ -3,28 +3,51 @@
 {
   autoPatchelfHook,
   fetchzip,
+  ix,
   lib,
+  nix,
   stdenv,
+  # Writer for `passthru.updateScript` (flake-package path only); null on the
+  # overlay path. Same nullable-writer pattern as claude-code / yc.
+  updateScriptWriter ? null,
 }:
 let
-  system = stdenv.hostPlatform.system;
-  # Add a target here, with its own release hash, before building on another arch.
+  # Add a target here, with its own release hash, before building on another
+  # arch. The package-set/flake targets and meta.platforms below gate the arch.
   targets = {
     x86_64-linux = "x86_64-unknown-linux-gnu";
   };
-  target = targets.${system} or (throw "lakekeeper: unsupported system ${system}");
+  # Version + per-release URL and SRI hash live in the sibling pins.json, never
+  # inline (repo policy). The pin is `prefetch = manual`: this fetchzip runs
+  # with `stripRoot = false`, whose output tree no prefetch command reproduces
+  # (verified: both flat and --unpack hashing differ), so after editing the
+  # version/url refresh the hash by building and copying the `got:` hash from
+  # the mismatch error. The updater deliberately skips it rather than write a
+  # wrong hash.
+  pin = ix.pins.loadPin ./pins.json "lakekeeper";
+  updateScript =
+    if updateScriptWriter == null then
+      null
+    else
+      ix.pins.mkUpdater {
+        writeNushellApplication = updateScriptWriter;
+        inherit nix;
+        pname = "lakekeeper";
+        relPath = "packages/lakekeeper/pins.json";
+      };
 in
-stdenv.mkDerivation (finalAttrs: {
+stdenv.mkDerivation {
   pname = "lakekeeper";
-  version = "0.12.3";
+  inherit (pin) version;
 
   # Upstream ships a single bare `lakekeeper` binary in the tarball (no wrapping
   # directory), so stripRoot must stay off.
   src = fetchzip {
-    url = "https://github.com/lakekeeper/lakekeeper/releases/download/v${finalAttrs.version}/lakekeeper-${target}.tar.gz";
-    hash = "sha256-vb+LPLtlpJeKC1HbT70Yrb24SdGTknd09C/MPv/yF1U=";
+    inherit (pin) url hash;
     stripRoot = false;
   };
+
+  passthru = lib.optionalAttrs (updateScript != null) { inherit updateScript; };
 
   nativeBuildInputs = [ autoPatchelfHook ];
   buildInputs = [
@@ -47,4 +70,4 @@ stdenv.mkDerivation (finalAttrs: {
     platforms = builtins.attrNames targets;
     sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
   };
-})
+}

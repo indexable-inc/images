@@ -11,6 +11,8 @@
   rustToolchain,
   writePythonApplication,
   lists,
+  # Shared pins reader, threaded through to policy.nix (see its arg doc).
+  pins,
 }:
 let
   inherit (builtins) removeAttrs;
@@ -27,6 +29,7 @@ let
       rustToolchain
       writePythonApplication
       lists
+      pins
       ;
   };
   inherit (resolve)

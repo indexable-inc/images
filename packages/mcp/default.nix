@@ -8,6 +8,14 @@ let
   # `override` can't reach). `ix.pkgs` is the caller's set, the same value
   # callPackage would have auto-bound to a `pkgs` arg in the flake package set.
   inherit (ix) pkgs;
+
+  # PyPI source pins (version + sdist URL + SRI hash) for the interpreter
+  # overrides below, in the sibling pins.json (repo policy: no inline hash
+  # literals in tracked .nix). Each `url` is fetchPypi's canonical pypi.io
+  # source path (verified byte-identical to the pinned hashes). Re-pin after a
+  # version edit manually (rebuild, copy the `got:` hash): mcp carries no
+  # registry updateScript, so `nix run .#update` does not touch these pins.
+  pypiPins = ix.pins.loadPins ./pins.json;
   # The PTY-driving `tui` package, baked into the pinned interpreter so every
   # session can `import tui` with no setup. The PyO3 cdylib comes from the same
   # shared workspace graph the binary is selected from, dropped next to the
@@ -90,6 +98,48 @@ let
           exit 1
         fi
         install -m555 "$cdylib" "$site/_search.abi3.so"
+      ''
+  );
+
+  # The embedded nushell engine, baked into the pinned interpreter so every
+  # session can `await nu("ls | where size > 1kb")` and get a polars frame.
+  # Same shape as `searchModule`: the PyO3 cdylib comes from the shared
+  # workspace graph (packages/nu-py), so it works on Linux and macOS dev alike.
+  # In-process, not a subprocess: one persistent engine per kernel, cancellable
+  # through nushell's own interrupt signal.
+  nuPyPythonSource = builtins.path {
+    name = "nu-py-python-source";
+    path = ix.paths.packagesRoot + "/nu-py/python";
+  };
+  nuPyModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-nu-python-module"
+      {
+        strictDeps = true;
+        meta.description = "Embedded nushell engine (nu-py PyO3 module) bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/nu"
+        mkdir -p "$site"
+        cp -r ${nuPyPythonSource}/nu/. "$site/"
+
+        cdylib=""
+        for candidate in \
+          ${ix.rustWorkspace.units.libraries.nu_py}/lib/libnu_py.so \
+          ${ix.rustWorkspace.units.libraries.nu_py}/lib/libnu_py-*.so \
+          ${ix.rustWorkspace.units.libraries.nu_py}/lib/libnu_py.dylib \
+          ${ix.rustWorkspace.units.libraries.nu_py}/lib/libnu_py-*.dylib
+        do
+          if [ -f "$candidate" ]; then
+            cdylib="$candidate"
+            break
+          fi
+        done
+        if [ -z "$cdylib" ]; then
+          echo "nu-py module: no cdylib under ${ix.rustWorkspace.units.libraries.nu_py}/lib" >&2
+          ls -la ${ix.rustWorkspace.units.libraries.nu_py}/lib >&2 || true
+          exit 1
+        fi
+        install -m555 "$cdylib" "$site/_nu.abi3.so"
       ''
   );
 
@@ -827,14 +877,14 @@ let
   htpyModule =
     let
       pname = "htpy";
-      version = "26.5.1";
+      inherit (pypiPins.htpy) version;
     in
     pkgs.python3.pkgs.buildPythonPackage {
       inherit pname version;
       pyproject = true;
       src = pkgs.fetchPypi {
         inherit pname version;
-        hash = "sha256-Q6NlwfxnAJTaeBuSOIMBkznOwDE5fWHV/l+OLyJ4tj4=";
+        inherit (pypiPins.htpy) hash;
       };
       # setuptools-scm reads the version from the sdist's PKG-INFO, but pin it so
       # the build never depends on a .git that the sdist does not carry.
@@ -863,11 +913,10 @@ let
   # weight. pyarrow IS required (the client materializes results as Arrow), so it
   # is bundled here, with Spark, rather than for the whole interpreter's sake.
   pysparkConnect = pkgs.python3.pkgs.pyspark.overridePythonAttrs (old: {
-    version = "3.5.5";
+    inherit (pypiPins.pyspark) version;
     src = pkgs.python3.pkgs.fetchPypi {
       pname = "pyspark";
-      version = "3.5.5";
-      hash = "sha256-bv/Jzpjt8jH01oP9FPcnBim/hFjGKNaiYg3tS7NPPLk=";
+      inherit (pypiPins.pyspark) version hash;
     };
     # pyspark 3.5.5 pins py4j==0.10.9.7 exactly; relax it so the patch-newer
     # nixpkgs py4j 0.10.9.9 satisfies the runtime-deps check.
@@ -917,25 +966,23 @@ let
     self = mcpPythonInterp;
     packageOverrides = final: prev: {
       asn1 = prev.asn1.overridePythonAttrs (_: {
-        version = "2.8.0";
+        inherit (pypiPins.asn1) version;
         src = pkgs.fetchPypi {
           pname = "asn1";
-          version = "2.8.0";
-          hash = "sha256-rfd93CcHz0IMDq47me4w6ROvzwk2Rn1CZpggzmt9FQo=";
+          inherit (pypiPins.asn1) version hash;
         };
       });
       # pymobiledevice3 9.27.0 needs ipsw-parser >= 1.6.0; nixpkgs pins 1.5.0.
       # Bump to 1.7.3 (the verified resolution). 1.7.x swaps its click dep for
       # typer, so add it (and relax the floor, since the set's typer is 0.24.0).
       ipsw-parser = prev.ipsw-parser.overridePythonAttrs (old: {
-        version = "1.7.3";
+        inherit (pypiPins.ipsw_parser) version;
         src = pkgs.fetchPypi {
           pname = "ipsw_parser";
-          version = "1.7.3";
-          hash = "sha256-QSu7t3O0NLD5lL0EPNtX2QqxpK5y+oSJtxkAzYVtNuo=";
+          inherit (pypiPins.ipsw_parser) version hash;
         };
         env = (old.env or { }) // {
-          SETUPTOOLS_SCM_PRETEND_VERSION = "1.7.3";
+          SETUPTOOLS_SCM_PRETEND_VERSION = pypiPins.ipsw_parser.version;
         };
         dependencies = (old.dependencies or [ ]) ++ [ final.typer ];
         pythonRelaxDeps = (old.pythonRelaxDeps or [ ]) ++ [ "typer" ];
@@ -950,14 +997,14 @@ let
   pyiosbackupModule =
     let
       pname = "pyiosbackup";
-      version = "0.2.4";
+      inherit (pypiPins.pyiosbackup) version;
     in
     mcpPythonInterp.pkgs.buildPythonPackage {
       inherit pname version;
       pyproject = true;
       src = pkgs.fetchPypi {
         inherit pname version;
-        hash = "sha256-ELTSoRyb7ck6VGfK063b4YvC3ENBVpIOciMibtTQvrc=";
+        inherit (pypiPins.pyiosbackup) hash;
       };
       build-system = [ mcpPythonInterp.pkgs.setuptools ];
       dependencies = [
@@ -979,14 +1026,13 @@ let
   # the version from the sdist's PKG-INFO, pinned so the build never needs a .git.
   # Upstream tests need a device, so checks are off.
   pymobiledevice3_927 = mcpPythonInterp.pkgs.pymobiledevice3.overridePythonAttrs (old: {
-    version = "9.27.0";
+    inherit (pypiPins.pymobiledevice3) version;
     src = pkgs.fetchPypi {
       pname = "pymobiledevice3";
-      version = "9.27.0";
-      hash = "sha256-pYRzvX86tRUjYDuU7fBSD0VCTfE/sITJSId012+O7+8=";
+      inherit (pypiPins.pymobiledevice3) version hash;
     };
     env = (old.env or { }) // {
-      SETUPTOOLS_SCM_PRETEND_VERSION = "9.27.0";
+      SETUPTOOLS_SCM_PRETEND_VERSION = pypiPins.pymobiledevice3.version;
     };
     dependencies =
       (old.dependencies or [ ])
@@ -1073,7 +1119,7 @@ let
       # from rbw/op per the secrets split), e.g. `Exa(os.environ["EXA_API_KEY"])`.
       ps.exa-py
       # Gmail / Google Workspace, the "third surface" for an integration alongside
-      # the MCP binding and the index CLI (rfcs/0003): a session can drive the
+      # the MCP binding and the index CLI (RFC 0003): a session can drive the
       # Gmail and Calendar APIs directly with no install step. This is the official
       # client. Gmail is a Workspace API with no dedicated Cloud Client Library, so
       # google-api-python-client is the supported path (simplegmail rides on the
@@ -1142,6 +1188,7 @@ let
       ps.pypdf
       tuiModule
       searchModule
+      nuPyModule
       astlogModule
       scipqlModule
       flecsQueryModule
@@ -1740,7 +1787,10 @@ let
   serverTools = importTest "server" (
     "import asyncio; from ix_notebook_mcp.tools import mcp; "
     + "names = sorted(t.name for t in asyncio.run(mcp.list_tools())); "
-    + "expected = {'python_exec','read','kernel_trace','tui_act'}; "
+    # session_set_name joined the surface in #1615 but this expected set was
+    # not updated with it; the stale drv kept passing from cache on main until
+    # this package's inputs changed and forced a rebuild.
+    + "expected = {'python_exec','read','kernel_trace','tui_act','session_set_name'}; "
     + "assert set(names) == expected, ('tool surface drifted: %r' % (names,)); "
     + "from ix_notebook_mcp import registry; instr = mcp._mcp_server.instructions; "
     + "assert 'root=' not in instr, 'a parameter/signature leaked into the instructions'; "
@@ -5140,6 +5190,39 @@ let
         cat stdout
         mkdir -p "$out"
       '';
+  nuBundled = importTest "nu" "import nu; print('nu-ok', callable(nu), callable(nu.value), nu.NuError.__name__ == 'NuError', nu.__version__)";
+  # Behavior tests for the embedded nushell engine: the normalization matrix,
+  # persistent REPL state, native datetime/duration crossing, the NuError
+  # diagnostic surface, `exit` safety, and interrupt-based timeout. Everything
+  # runs in-process against the real engine, so the sandbox needs no nushell
+  # binary and no network.
+  nuTestPython = pkgs.python3.withPackages (ps: [
+    ps.pytest
+    ps.polars
+    nuPyModule
+  ]);
+  nuTestSource = builtins.path {
+    name = "ix-mcp-nu-test";
+    path = ./tests/test_nu.py;
+  };
+  nuTests =
+    pkgs.runCommand "ix-mcp-nu-tests"
+      {
+        nativeBuildInputs = [ nuTestPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        cp ${nuTestSource} "$TMPDIR/test_nu.py"
+        ${lib.getExe nuTestPython} -m pytest "$TMPDIR/test_nu.py" -q -p no:cacheprovider >stdout 2>stderr || {
+          echo "ix-mcp nu tests failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        cat stdout
+        mkdir -p "$out"
+      '';
   noxAutotriageBundled = importTest "nox-autotriage" "import nox_autotriage; print('nox-autotriage-ok', callable(nox_autotriage.findings_from_conformance))";
   linearTriageTestPython = pkgs.python3.withPackages (ps: [
     ps.pytest
@@ -5357,6 +5440,8 @@ package.overrideAttrs (old: {
         browserVdomSmoke
         vdomPropertiesSmoke
         xBundled
+        nuBundled
+        nuTests
         linearBundled
         linearTriageTests
         notionBundled

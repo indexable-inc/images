@@ -1,0 +1,144 @@
+---
+id: 0005-cargo-drv
+number: '0005'
+title: cargo-drv — dynamic-derivation backend for the Rust workspace build
+status: Draft
+authors: wyattgill
+created: '2026-06-04'
+updated: '2026-06-04'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+---
+
+## Summary
+
+Replace the two-stage import-from-derivation pipeline in `nix-cargo-unit` with a single dynamic derivation that emits `.drv` files directly into the build graph. Keep the existing cargo unit-graph parser, dependency walker, and rustc command-line construction inside the renderer; delete the askama-templated `cargo-units.nix` file, the `import unitsNix` eval boundary, and the `testManifestDrv` collapse used to work around Nix's single-file IFD evaluator. Cargo-style entry point (`cargoUnitFor pkgs`) stays binary-compatible for ix and any other downstream; the change is an in-place backend swap, not a fork, not a new repo, not an upstream replacement.
+
+## Motivation
+
+The current workspace builder is correct and well-shaped but pays a documented eval-time tax. Three observations force the change:
+
+1. **Cold-build IFD serialisation.** `lib/rust/cargo-unit.nix:183, 241, 375` wires two IFDs in series: `generateUnitGraph` runs `cargo build --unit-graph -Z unstable-options` in a `pkgs.runCommand`, `generateUnitsNix` runs `nix-cargo-unit render` on its JSON output, and `units = import unitsNix { ... }` finally instantiates the attrset. The Nix evaluator walks IFDs single-file and cannot start scheduling realisation of any per-unit derivation until both stages return. ix's CI workflow comment at `.github/workflows/ci.yml:57-61` calls this out by name: *"the per-#[test] derivations evaluate behind import-from-derivation and build serially"*. The wait is tens of seconds on a warm store, longer on a cold one, and it sits on the critical path of every cold CI run and every developer eval after a `Cargo.lock` change.
+2. **The `testManifestDrv` collapse exists only because of that constraint.** The update post at `site/src/lib/updates/cargo-unit-per-test.svx` documents the workaround explicitly: *"Case enumeration would have been N serial IFDs, one per binary, since Nix walks IFDs single-file. They are collapsed into one `testManifestDrv` that depends on every test binary and writes per-target `.list` and `.ignored.list` files."* The collapse works, but it is mechanism in service of dodging an evaluator limitation, not in service of the domain. Dynamic-derivations remove the limitation; the collapse is no longer load-bearing.
+3. **The askama template pipeline is round-trip overhead.** `packages/nix-cargo-unit/templates/units.nix.askama` serialises a fully-realised dependency graph to Nix source text, which Nix then re-parses on `import unitsNix`. The renderer (`packages/nix-cargo-unit/src/render.rs`, 5,305 lines) owns the irreducible logic — cargo workspace feature unification, build-script `OUT_DIR` plumbing, doctest scoping, per-`#[test]` enumeration, cross-compile linker selection, content-addressed vs input-addressed splits — but a substantial slice of that file plus the entire askama template exists only to emit and re-ingest a serialised intermediate representation that nobody reads.
+
+The platform side is already ready. `nix/modules/base/nix-settings.nix:31` lists `dynamic-derivations`, `ca-derivations`, `recursive-nix`, and `blake3-hashes` as enabled experimental features on every fleet host; `lib/image/platform.nix:365-374` enables `ca-derivations` and `dynamic-derivations` for in-VM Nix. `nix-cargo-unit` already opts each compile unit into floating content-addressed outputs (`render.rs:753-760`, `cargo-unit.nix:62-67`), which is half the requirement. The other half — emitting `.drv` files from inside a derivation — is the gap this RFC closes.
+
+## Detailed design
+
+### Scope and naming
+
+The crate at `packages/nix-cargo-unit/` is renamed in place to `packages/cargo-drv/`. The Nix-side helper at `lib/rust/cargo-unit.nix` is renamed to `lib/rust/cargo-drv.nix`. The public `indexLib.cargoUnitFor` entry point is preserved as a deprecation alias and a new `indexLib.cargoDrvFor` is added with the same call signature; downstream callers in ix (`nix/flake/outputs/default.nix:37, 47, 63, 72, 525, 532, 729`) flip on the alias removal milestone, not on the initial landing.
+
+The name signals the architectural shift — the unit-graph attrset (*units*) was the eval-time abstraction; the realisation-time abstraction is the `.drv` — and lets reviewers immediately distinguish call sites built against the old shape from call sites built against the new one during the transition window. The phonetic echo of "dyn-drv" is intentional.
+
+### Single dynamic outer derivation
+
+Dynamic derivations are followed through explicit derivation references, not by scanning an output directory: a derivation whose output is itself a `.drv` file can be consumed with `builtins.outputOf`, which tells the scheduler "build that emitted derivation's output." So the emitter does not produce a flat directory of inert `.drv` files; it registers each per-unit `.drv` in the store (via `nix derivation add` under the fleet's already-enabled `recursive-nix`, `nix/modules/base/nix-settings.nix:31`), then writes one **aggregate** `.drv` whose `inputDrvs` reference every per-unit child, and makes that aggregate file the outer derivation's `$out`. Sketch:
+
+```nix
+cargoDrv.buildWorkspace = args:
+  let
+    emitter = derivation {
+      name = "${args.pname}-units.drv";
+      system = pkgs.stdenv.hostPlatform.system;
+      __structuredAttrs = true;
+      outputs = [ "out" ];
+
+      # $out is a single .drv file: the aggregate derivation whose
+      # inputDrvs are the per-unit .drvs the builder registered.
+      builder = "${cargoDrvBin}/bin/cargo-drv";
+      args = [ "emit"
+               "--workspace" args.workspaceRoot
+               "--cargo-lock" args.cargoLock
+               "--unit-graph-args" (lib.escapeShellArgs args.cargoArgs)
+               "--vendor"   (resolveVendorDir args)
+               "--policy"   (rust.resolvePolicy args.policy)
+               "--out"      "$out" ];
+    };
+  in
+  # The eval-time handle: "the output of the derivation that emitter's
+  # output describes." This is the reference path the scheduler follows
+  # into the per-unit graph.
+  builtins.outputOf emitter.outPath "out";
+```
+
+The builder is the Rust binary itself, invoked with no further Nix orchestration. Inside, it does what `render.rs` does today — runs `cargo build --unit-graph`, parses the JSON, walks the dependency graph, computes each unit's rustc invocation — and then, instead of templating `.nix` source, serialises one canonical `.drv` per unit, registers it, and emits the aggregate. The scheduler follows the `outputOf` reference into the aggregate, sees the per-unit `inputDrvs`, and realises them as ordinary derivations under the daemon's `dynamic-derivations` path. Callers that need a single named unit (a test binary, a clippy check) get a per-unit `outputOf` handle from `passthru.units` rather than the aggregate.
+
+### What the emitter retains
+
+The valuable code in `render.rs` — roughly 70% of the file by my read of the audit in this conversation's exploration — survives unchanged in spirit:
+
+- **Cargo unit-graph JSON parsing.** The `--unit-graph -Z unstable-options` output format is non-trivial: per-unit features, target kinds, profile selection, rmeta vs rlib, proc-macro vs target rustc, build-script-generated rerun-if-changed lists. This stays in Rust.
+- **Per-unit rustc command-line construction.** `render.rs:1018-1044` wires `-L dependency=${units.<dep>}/lib` and `--extern <name>=$(cat .../nix-support/extern-path)` per dep. Same shape; the only change is that `units.<dep>` becomes an in-process store-path resolution against the `.drv` the emitter just wrote, not a Nix attribute lookup.
+- **Content-addressed vs input-addressed split.** Library units stay floating CA (`render.rs:753-760`). Build-script runs (`render.rs:1453-1474`) and tests/benches (`render.rs:800-811`) stay input-addressed because their outputs can contain non-reproducible content (`OUT_DIR` with timestamps, test binaries with embedded paths). The emitter writes both flavours of `.drv`.
+- **Clippy lint policy resolution.** The comment at `cargo-unit.nix:71-78` documents that `cargo build --unit-graph` does not emit `[lints.clippy]` into `lint_rustflags`; the renderer parses the workspace manifest and threads `-D|-W|-A clippy::<lint>` explicitly. Same logic, now invoked from inside the dyn-drv builder.
+- **Vendor resolution.** The `pkgs.linkFarm`-style vendor dir from `build.nix:315-328` is computed by Nix and passed in via `--vendor`, so the emitter sees a stable path. No change to that derivation.
+
+### What the emitter deletes
+
+- **`packages/nix-cargo-unit/templates/units.nix.askama`** goes away entirely. The askama template engine becomes unused; the dependency drops from `packages/nix-cargo-unit/Cargo.toml`.
+- **The `generateUnitGraph` and `generateUnitsNix` derivations** in `cargo-unit.nix:183, 241` collapse into one builder invocation inside the outer dyn-drv.
+- **The `units = import unitsNix { ... }` line** at `cargo-unit.nix:375` is gone. There is no longer an `import-from-derivation` boundary in the workspace build path.
+- **The `allTestCaseChecks` `concatMapAttrs` over `target.cases`** at `ix/nix/packages/workspace-rust-ci.nix:294-305` becomes a direct attribute read, because per-`#[test]` derivations are emitted natively as children of the outer dyn-drv rather than discovered behind an IFD.
+- **The `testManifestDrv` mechanism** documented in `site/src/lib/updates/cargo-unit-per-test.svx` goes away. Each `#[test]` is a real child `.drv` from the moment the outer dyn-drv finishes; Nix's scheduler sees them natively.
+
+### The .drv writer
+
+The store-format `.drv` file is small, canonical, and well-specified (`src/libstore/derivations.cc` in CppNix, `nix-compat/src/derivation/` in tvix). The emitter uses the `nix-compat` crate's derivation serialiser, or, if upstream coverage is incomplete for floating CA outputs, a minimal in-tree writer. Either way the format is fixed and the test surface is small: a golden-file test per derivation shape (library unit, build-script unit, test unit with single-`#[test]` filter, doctest unit, cross-compile unit) is sufficient.
+
+### Migration
+
+One PR against this repo (`index`) lands the rename and the backend swap. A second PR against ix bumps `flake.lock` to the new `index` revision and flips call sites from `indexLib.cargoUnitFor` to `indexLib.cargoDrvFor`. Both PRs are revertable: reverting the ix-side flake bump puts the old builder back in place without further coordination.
+
+Feature configuration needs four changes, not one. The CI runner daemon at `modules/services/ci-runner/default.nix:102-105` currently sets `extra-experimental-features = [ "nix-command" "flakes" ]`; the new builder requires `"ca-derivations"` and `"dynamic-derivations"` on the list. But this repo also hard-codes the eval-side feature set to `ca-derivations` alone in three places, and each must grow `dynamic-derivations` in the same PR or `nix flake check` and the repo check command fail even on a fixed runner: the flake's `nixConfig.extra-experimental-features` (`flake.nix:19`), the check wrapper's pinned `--option extra-experimental-features` for both nix-fast-build and nix-eval-jobs (`lib/per-system.nix:172, 186`), and blast-radius's hard-coded eval options (`packages/blast-radius/src/nix.rs:102, 169`). The `cas-default-blocked` update at `site/src/lib/updates/cas-default-blocked.svx` documents the cost of repo-wide CA at the nixpkgs level; this RFC does not change that posture — the floating CA outputs are confined to workspace Rust units, not the stdenv closure.
+
+No on-disk format changes for the user-visible store. Existing `rust-test-<crate>-<test>` derivation names are preserved by the emitter so cache substitution from the leader's atticd continues to hit for unchanged crates.
+
+### Debug surface
+
+Today a developer can read the IFD output (the `cargo-units.nix` file in the store) to inspect what was generated. The new shape replaces that with `passthru.units`, an attrset exposed on the outer dyn-drv that lists the emitted `.drv` paths with their cargo unit metadata. `nix derivation show` on any listed path gives the equivalent of a single `mkUnit { ... }` stanza. A `cargo-drv inspect <workspace>` subcommand prints the same data as JSON for tooling.
+
+## Drawbacks
+
+- **Reliance on a still-experimental Nix feature.** `dynamic-derivations` is gated and its semantics have moved across Nix releases. Lix and CppNix may diverge; an upstream change could break the builder until the emitter is updated. The mitigation is the in-tree `.drv` writer (so we are not at the mercy of `nix-compat`'s feature coverage) plus the deprecation alias (so reverting to `nix-cargo-unit` is a single-PR escape hatch during the experimental window).
+- **Daemon coupling.** Every host that builds Rust now needs both `ca-derivations` and `dynamic-derivations` in its daemon config. The CI runner module flips first; developer Darwin shells inherit the features through the flake's `nixConfig` block, but a misconfigured local daemon will fail with a less-friendly error than today.
+- **Worse "what did this generate" introspection.** Reading a generated Nix file is more pleasant than reading a directory of binary `.drv` files. `passthru.units` and the `inspect` subcommand close most of the gap but not all of it. Reviewers debugging a cargo-feature-unification edge case have one more tool to learn.
+- **New bug surface in the `.drv` writer.** A bad emitter produces broken `.drv` files for every crate at once. The golden-file tests cover the standard shapes; a missed edge case (an unusual cross-compile target, a build script with a non-UTF-8 environment variable, a feature interaction in a dependency) lands as a CI-wide failure rather than a one-crate regression. Phased rollout (one feature flag, default off for a week, then on) is the answer.
+- **Increased contributor cost on the renderer.** Anyone touching `render.rs` in the new shape needs to reason about Nix store-derivation semantics in addition to Cargo unit-graph semantics. The old shape let you debug by reading the generated `.nix` output; the new shape pushes more debugging into the Rust side.
+
+## Alternatives
+
+- **Do nothing.** The two IFDs are documented, tolerated, and have not broken anything. Wall-clock impact on a warm CI run is small (single-digit percent on the median PR; higher on a `Cargo.lock` bump). But the `testManifestDrv` hack, the askama template surface, and the cold-build serialisation are all real complexity that compounds as the workspace grows past today's 391 ix crates + 63 index crates.
+- **Commit a checked-in `cargo-units.nix` snapshot, regenerated by a bot on `Cargo.lock` change.** Captures most of the cold-build perf win without depending on experimental features. Rejected as the primary path because it preserves the `import unitsNix` boundary, keeps the askama renderer, and does not retire the `testManifestDrv` hack. It is a useful intermediate if dyn-drv migration is deferred but it is not a destination.
+- **Switch to crane, naersk, or `buildRustPackage`.** All three share a single `cargoArtifacts` blob across the workspace, which defeats per-unit deduplication. The repo's own lint at `nix/rules/no-buildrustpackage.yml` rejects `buildRustPackage` by policy. crate2nix and nocargo are closer in shape to `nix-cargo-unit` but neither emits per-`#[test]` derivations and neither has CA-output support; adopting one would mean re-deriving everything `render.rs` already encodes.
+- **Fork to a new repo with a parallel implementation.** Doubles the maintenance surface for no architectural gain. The current `nix-cargo-unit` bootstrap-excludes itself from the workspace it builds (`index/Cargo.toml:70`); the new shape does the same. There is no integration scenario that benefits from coexistence.
+- **Rewrite from scratch.** The 5,305 lines of `render.rs` are not templating boilerplate; most of them encode Cargo's compile model. A rewrite reintroduces bugs the team has already fixed for workspace feature unification, vendored-source overrides, doctest scoping, cross-compile linker selection, and the proc-macro vs target rustc split. The cheaper path is to preserve the parser and graph walker and replace only the emitter.
+- **Defer until `dynamic-derivations` is stable.** Reasonable, but no upstream commitment exists on when "stable" arrives. Fleet hosts already enable it in production. The risk profile of using it for workspace Rust builds is bounded by the deprecation alias and a one-line revert.
+
+## Prior art
+
+- **NixOS RFC 92, dynamic derivations.** The original feature proposal. The eventual implementation in CppNix and Lix is what this RFC depends on. The `dynamic-derivations` entry in `nix/modules/base/nix-settings.nix:31` is the production-side adoption signal.
+- **The existing `nix-cargo-unit` design.** Per-unit content-addressed derivations with explicit store-path dependency sharing is the architecture this RFC keeps. The site updates at `cargo-unit-per-test.svx` and `cargo-unit-clippy-sharing.svx` document the corners that informed it; both stay correct under the new backend.
+- **Buck2 BXL.** A starlark dialect that emits build rules at build time. Same shape as dyn-drv: a "language" runs inside the build graph and produces nodes for the build graph. Different surface (starlark vs Rust), same point.
+- **Bazel repository rules.** Generated build rules from upstream metadata; the rules.lang-style code runs at workspace-load time. Closest comparable in the Bazel ecosystem.
+- **crate2nix, naersk, nocargo, cargo2nix.** All four use IFD-shaped pipelines comparable to current `nix-cargo-unit`. None has migrated to dynamic-derivations as of this RFC. If one does first, the lessons inform our writer; if we ship first, the lessons can flow the other way.
+- **tvix's `nix-compat` crate.** A Rust implementation of the canonical `.drv` serialiser plus the store-path hashing rules. The emitter uses it directly, or, if coverage on floating CA outputs is incomplete, mirrors its format with an in-tree writer.
+
+## Unresolved questions
+
+1. **Nix version floor.** Which CppNix and Lix versions support `dynamic-derivations` with floating CA outputs the way this RFC assumes? The fleet image enables both features (`lib/image/platform.nix:365-374`), but I have not surveyed every downstream consumer of `indexLib.cargoUnitFor`. Need a compatibility matrix before landing.
+2. **Keep `cargoUnitFor` or rename to `cargoDrvFor`?** Pro-rename: it signals the architectural shift and makes call-site review obvious. Pro-keep: ix has nine call sites in one file (`ix/nix/flake/outputs/default.nix`) plus downstream consumers we do not own. Current proposal is "both for one release, drop the old name after," but reviewers may prefer a hard cut.
+3. **Build-script and test units: stay input-addressed?** The current split (`render.rs:1453-1474`, `render.rs:800-811`) keeps non-reproducible leaves out of the CA path. Dyn-drv does not change the underlying reproducibility, but it does make a fully-CA workspace cheaper to express. Worth deciding now whether the migration is a like-for-like backend swap or also pushes more units onto floating CA.
+4. **How is the per-unit attrset surfaced for tooling?** `passthru.units` is the current proposal. An alternative is exposing the emitter's JSON output as a separate `passthru.unitGraph` derivation that callers can `nix eval` against. The shapes are not mutually exclusive but the API surface should be decided in this RFC, not in implementation review.
+5. **Single-PR landing vs feature flag.** The proposal sketches "default off for a week, then on" but does not specify the flag mechanism. Options: a `cargoDrvFor` argument, an environment variable read inside the emitter, or two parallel attributes in `indexLib` (`cargoUnitFor` keeps the IFD path, `cargoDrvFor` is the new one) for the transition window.
+6. **How do we measure the win?** The conversation that motivated this RFC pegged the median wall-clock gain at 5–10% with a 15–25% spike on `Cargo.lock` bumps. Those are estimates against a build whose long pole is rustc compilation, which dyn-drv does not change. A pre-/post-landing benchmark on five representative PR shapes (one-crate edit, fat-crate edit, lockfile bump, test add, cold cache) is the right gate before flipping the default.
+
+## Future possibilities
+
+- **Cross-workspace dependency sharing.** Today ix and index compile their own copies of every shared dependency (serde, tokio, tracing). With both workspaces on the same dyn-drv emitter and identical floating CA hashes, the daemon can substitute one workspace's dep unit into the other's build. This is a substitution-side win, not an emitter-side change, but the new shape makes it tractable.
+- **Per-codegen-unit splitting.** Cargo's `codegen-units` setting fragments each crate's compilation; the unit graph already exposes them. Emitting one `.drv` per codegen unit instead of per crate is a further parallelism win on the fat-crate Amdahl wall (`ix-server`, `ix-db`). Out of scope for v1.
+- **Native cargo-nextest integration.** Each `#[test]` derivation can shell out to `nextest` instead of `cargo test --exact`, picking up retry, fail-fast, and shard semantics without an extra layer. The dyn-drv shape makes this a runner-side swap rather than a graph-shape change.
+- **Affected-only builds.** Combined with `crates/tools/affected` on the ix side, the dyn-drv emitter can take a `--affected` argument and emit only the requested subgraph. That is a CI gating win, separate from this RFC, but it lands cleanly on top of the new backend.
+- **Drop the input-addressed escape hatch.** If the daemon's `auto-allocate-uids` + `cgroups` combination is good enough to make build scripts deterministic in practice, the build-script and test-unit splits can collapse onto floating CA. Bigger cache wins, smaller emitter, less special-casing. Needs a separate measurement campaign.

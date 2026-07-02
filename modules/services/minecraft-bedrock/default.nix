@@ -20,7 +20,7 @@ let
   # The package is `override`-able and built from its own callPackage file
   # (explicit deps) rather than inline in this module, which takes the module
   # `pkgs` for the format generators and the static-asset links below.
-  bedrockServer = pkgs.callPackage ./server.nix { };
+  bedrockServer = pkgs.callPackage ./server.nix { inherit ix; };
 
   cfg = config.services.minecraft-bedrock;
   dataDir = "/var/lib/minecraft-bedrock";

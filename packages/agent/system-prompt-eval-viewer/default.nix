@@ -25,7 +25,10 @@ let
         ./src
       ];
     };
-    npmDepsHash = "sha256-Y7hsx0h2lMVTSsNYMXfi6TCqc7qBQH6poKptG2HPHfA=";
+    # The dep-closure pin lives in the sibling pins.json (repo policy: no
+    # inline hash literals); it is lockfile-derived (no URL), so refresh with
+    # `nix run nixpkgs#prefetch-npm-deps -- package-lock.json` after a lock change.
+    npmDepsHash = (ix.pins.loadPin ./pins.json "npm-deps").hash;
     installPhase = ''
       # shell
       runHook preInstall

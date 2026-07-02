@@ -10,6 +10,10 @@
   clippyPackage,
   vendorConfigScript,
   cargoLockFile,
+  # The shared pins reader (lib/util/pins.nix), threaded down from
+  # lib/default.nix so the advisory-db rev+hash load from the sibling pins.json
+  # without a cross-directory `../` import (no-parent-path).
+  pins,
 }:
 let
   inherit (builtins)
@@ -57,11 +61,15 @@ let
         };
         db = lib.mkOption {
           type = lib.types.package;
+          # The rev + SRI pin lives in the sibling pins.json (repo policy: no
+          # inline hash literals); bump by editing the rev there and re-pinning.
           default = pkgs.fetchFromGitHub {
-            owner = "rustsec";
-            repo = "advisory-db";
-            rev = "f2ae5fc8e5d208373b6c838f9676434525327a72";
-            hash = "sha256-iqXYpuCoWoGypnpM5ceXN748QlYeBXDtZx0uI98qFLo=";
+            inherit (pins.loadPin ./pins.json "advisory-db")
+              owner
+              repo
+              rev
+              hash
+              ;
           };
           description = "The advisory database cargo-audit checks against.";
         };

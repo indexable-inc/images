@@ -22,7 +22,7 @@
   systemd `LoadCredential` (RFC 0007, and the shape `python-daily-scraper`
   uses for AWS keys).
 */
-{ lib }:
+_:
 let
   sambaPort = 445;
 in

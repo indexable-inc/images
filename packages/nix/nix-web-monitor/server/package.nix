@@ -4,5 +4,6 @@
   flake = true;
   overlay = true;
   inRustWorkspace = true;
+  cross = true;
   passthruTests = true;
 }

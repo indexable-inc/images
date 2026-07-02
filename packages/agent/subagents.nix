@@ -3,7 +3,6 @@
 {
   ix,
   lib,
-  pkgs,
   repoPackages,
 }:
 let

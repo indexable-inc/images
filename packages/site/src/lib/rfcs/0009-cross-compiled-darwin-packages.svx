@@ -1,0 +1,217 @@
+---
+id: 0009-cross-compiled-darwin-packages
+number: '0009'
+title: Cross-compiled Darwin packages from Linux
+status: Draft
+authors: andrewgazelka
+created: '2026-07-01'
+updated: '2026-07-01'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+description: 'A package opts into macOS with one `cross = true` line; the Linux CI fleet cross-compiles it for Apple silicon, caches the closure, and a Mac substitutes the prebuilt binary instead of compiling anything.'
+---
+
+## Summary
+
+A package opts into macOS with one line. The Linux CI fleet cross-compiles it for Apple silicon through the per-unit Rust build DAG, pushes the closures to `cache.ix.dev`, and aliases the results into the native Darwin package namespaces. A Mac then runs `nix build .#<name>` and *substitutes* a prebuilt binary instead of compiling anything. The package definition never learns any of this happened.
+
+## The contract
+
+The entire package-side surface is one boolean in `package.nix`:
+
+```nix
+# packages/dag-runner/package.nix
+{
+  id = "dag-runner";
+  packageSet = true;
+  flake = true;
+  overlay = false;
+  inRustWorkspace = true;
+  cross = true;          # <- this line. That's it.
+  passthruTests = true;
+}
+```
+
+And the entire Mac-side experience is:
+
+```console
+$ nix build github:indexable-inc/index#dag-runner   # on an M-series Mac
+copying path '/nix/store/…-dag-runner' from 'https://cache.ix.dev'…
+$ file result/bin/dag-runner
+Mach-O 64-bit executable arm64
+```
+
+No target triples in the definition, no cross `if`s, no second `default.nix`, no Darwin builder anywhere. The tag declares *intent*; the build lane owns *mechanism*. Everything below is the mechanism.
+
+## Motivation
+
+The repo's primary target is `x86_64-linux`: the fleet, the CI runners, the image builds. But several repo-owned tools are exactly the things a developer wants *locally on a Mac*: `nix-web-monitor`, `dag-runner`, more to come. Two facts collide:
+
+1. **CI is Linux.** The warm-store runner pool that builds and caches every package is `x86_64-linux`. There is no Darwin builder in the CI path.
+2. **Building from source on a laptop is the bad outcome.** A cold `nix build` of a Rust tool with a Svelte front-end defeats the entire point of `cache.ix.dev`. Linux users substitute; Darwin users were compiling.
+
+The fix has to be declarative. The moment "make it work on a Mac" means hand-rolling a cross derivation per package, target logic leaks into definitions and every new tool pays the tax again. The toolchain half already exists in the sibling `ix` repo (`nix/lib/apple-sdk-toolchain.nix`); this RFC ports it and reduces opting in to a registry tag.
+
+## Design principles
+
+- **Definitions are target-agnostic.** A `default.nix` consumes `ix.rustWorkspace.units` and `ix.wrapPackage` and never branches on a triple. Cross is achieved by swapping what those handles *mean*, not by asking packages to handle it.
+- **The target lives in the DAG, not the definition.** The per-unit Rust build graph (RFC 0005) is already a DAG of derivations; cross-compilation is the same DAG re-rooted at a different triple.
+- **Darwin consumes, Linux produces.** The Mac path is substitution from the cache, never local compilation. Cache availability is part of the design, not an optimization.
+- **One line in, one line out.** Adding a package to the Mac set is adding `cross = true`; removing it is deleting the line.
+
+## Detailed design
+
+### The tag
+
+`packages/registry.nix` normalizes `cross` exactly like its sibling selectors (`packageSet`, `flake`, `overlay`): `true` expands to the default descriptor, an attrset overrides individual knobs, unknown keys are rejected at eval time:
+
+```nix
+cross = true;
+# expands to
+cross = {
+  attrName = id;               # flake attr stem
+  exposeNativeDarwin = true;   # alias into packages.<darwin-system>.<attrName>
+  systems = null;              # build-host systems (null = all)
+  targets = [ "aarch64-apple-darwin" ];
+};
+```
+
+The default target set is Apple silicon only: the fleet has no Intel-Mac users, and a second triple doubles the cross-build cost for artifacts nobody pulls. A package that needs `x86_64-apple-darwin` (or any other triple the lane supports) lists it in `targets`; the machinery below is triple-generic.
+
+The registry exposes `crossEntriesFor system`, mirroring `packageSetEntriesFor` and `flakeEntriesFor`. Deliberately absent: `backend`, `build`, or `wrap` knobs. If a package needs those, the lane is wrong, not the tag.
+
+### The cross lane: swap `ix`, call the same `default.nix`
+
+All cross building lives in `lib/per-system.nix`, gated on a Linux build host. For each Apple target it constructs a *cross-configured `ix`* and calls the package's ordinary `default.nix` with it:
+
+```nix
+crossIxFor = target: ix // {
+  inherit pkgs;
+  cargoUnit = ix.cargoUnitFor pkgs;
+  rustWorkspace = crossWorkspace // {
+    units = crossWorkspace.unitsFor { inherit target; };   # the DAG, re-rooted
+  };
+  cross = { isCross = true; inherit target; targetSystem = targetSystemFor target; };
+  wrapPackage = wrapperPkgs: args: ix.wrapPackage wrapperPkgs (args // { isCross = true; });
+};
+
+buildCrossPackage = target: entry:
+  lib.callPackageWith (pkgs // { inherit entry repoPackages; ix = crossIxFor target; /* … */ })
+    entry.path { };
+```
+
+This is the whole trick. `packages/nix/nix-web-monitor/server/default.nix` calls `ix.rustWorkspace.units` and `ix.wrapPackage` identically for native and cross builds; the lane has quietly replaced `units` with the target unit graph and forced `wrapPackage` into cross mode (so `nativePathSuffix` host tools drop out of the wrapper). One definition, N targets.
+
+### The builder DAG
+
+RFC 0005's `nix-cargo-unit` renders the Cargo workspace into a graph of one derivation per compilation unit. `unitsFor { target }` renders that same graph for a non-host triple, and the result is a genuinely *mixed-platform* DAG: cargo already distinguishes host units from target units, and the renderer preserves the split.
+
+```text
+build scripts, proc-macros ──run on──▶ x86_64-linux (build host)
+            │
+            ▼ cfg flags, generated code
+rlib units, final link ──emit──▶ Mach-O for aarch64-apple-darwin
+            ▲
+zig cc + macOS SDK sysroot (C deps, linker)
+```
+
+- **Host nodes stay host nodes.** Build scripts and proc-macro crates compile for and execute on the Linux builder; only rlib and bin units target the Apple triple. Per-platform hooks (`extraRustcArgsForPlatform`, `extraLinkRustcArgsForPlatform`) scope target-only flags (the framework search path, the SDK link args) to matching units, so host units are untouched by cross configuration.
+- **The graph is pruned per target, not patched.** `cargo` cfg-excludes platform-gated dependencies during rendering, so a Darwin graph simply never contains `alsa-sys`; there is no "skip this dep on Mac" conditional anywhere in Nix (`lib/rust/workspace.nix` gates ALSA plumbing on `targetIsLinux`, derived from the triple).
+- **Incremental like any DAG.** Each unit is a cached derivation. Touch one crate and CI rebuilds that unit and its dependents in the Darwin graph, not the workspace: the same economics native builds already get from RFC 0005.
+- **Targets are data.** The cross graph takes a toolchain carrying the target's `rust-std` (`rustToolchainFor … { targets = [ target ]; }`) and, for Apple triples only, the zig toolchain below. A musl or `aarch64-linux` triple needs neither zig nor an SDK: the same `unitsFor` call with the ordinary linker.
+
+### The Linux→Darwin toolchain
+
+Two pinned, overridable pieces, ported from the sibling `ix` repo:
+
+- **`lib/darwin/macos-sdk.nix`**: a public repackaged `MacOSX15.4.sdk`, pinned by SRI hash, unpacked to a store path. Sysroot for both the C compile and the Rust link. Override `ix.macosSdk` to supply your own SDK for a stricter licensing posture.
+- **`lib/darwin/apple-sdk-toolchain.nix`**: per-triple compiler/linker wrappers, `zig cc` / `zig c++` as the cross C/C++ compiler and `clang -fuse-ld=lld` as the Rust linker. Returns `{ env, runtimeInputs, rustcArgsForPlatform }`; `env` carries the per-target cargo variables (`CARGO_TARGET_<T>_LINKER`, `CC_<t>`, `SDKROOT`, a CMake toolchain file, …) that the unit renderer threads into each unit.
+
+The wrappers go through the repo's checked-bash writer (`bash -n` + shellcheck at build time) and absorb the toolchain's sharp edges in one place: bridging Apple-vs-zig triple spelling (`arm64-apple-macosx` vs `aarch64-macos`), dropping flags zig rejects (`-arch`, `-m64`), stripping sanitizer flags, and pinning `ZIG_GLOBAL_CACHE_DIR` to a writable path so a sandboxed service user's read-only `HOME` cannot cause a silent `zig cc` failure (ix ENG-1278).
+
+### Naming and Darwin aliasing
+
+Cross outputs publish under the Linux system, keyed by triple, then alias into the native Darwin namespaces:
+
+```text
+packages.x86_64-linux.dag-runner-aarch64-apple-darwin   # the real derivation
+packages.aarch64-darwin.dag-runner                       # alias -> same drv
+```
+
+`flake.nix` does the merge in three lines:
+
+```nix
+linuxDarwinAliases = perSystem.x86_64-linux.darwinPackageAliases or { };
+packages = rawPackages // lib.genAttrs [ "aarch64-darwin" "x86_64-darwin" ]
+  (system: rawPackages.${system} // (linuxDarwinAliases.${system} or { }));
+```
+
+The merge covers both Darwin systems, but with the Apple-silicon-only default the `x86_64-darwin` alias set is empty until a package opts into that triple. `exposeNativeDarwin = false` keeps the triple-suffixed output but skips the alias, for a package that should be fetched explicitly rather than shadow a native name.
+
+### Substitution
+
+The `cache-push` workflow realises `.#cachePushRoots.x86_64-linux` and pushes closures to the public `ix-public` atticd cache at `cache.ix.dev` on every merge to main. The triple-suffixed cross outputs are part of that roots set. Because the Darwin aliases *are* those derivations, a Mac's `nix build .#dag-runner` resolves to a store path CI already pushed: substitution, not compilation. Publication is by derivation, not eval-time output path, because the Rust workspace defaults to floating content-addressed outputs that have no path until realised.
+
+### Proved in CI, on every push
+
+A green build does not prove the toolchain emitted a Darwin object; the smoke checks do. They run on the Linux CI host and read the Mach-O header:
+
+```nix
+cross-darwin-smoke = pkgs.runCommand "cross-darwin-smoke" { nativeBuildInputs = [ pkgs.file ]; } ''
+  bin=${crossPackages."dag-runner-aarch64-apple-darwin"}/bin/dag-runner
+  case "$(file -b "$bin")" in
+    *Mach-O*arm64*) ;;
+    *) echo "expected Mach-O arm64" >&2; exit 1 ;;
+  esac
+  mkdir -p "$out"
+'';
+```
+
+`cross-darwin-web-monitor-smoke` additionally asserts the wrapper is a portable `#!/bin/sh` script (a bash-from-the-Linux-store shebang would be dead on a Mac). A regression in the zig/SDK wiring fails a check on x86_64-linux CI rather than silently shipping a wrong-arch binary.
+
+### What does not need this lane: Haskell
+
+GHC Linux→Darwin cross would be a category problem, but it turns out nothing here needs it. `nix-output-monitor`, the one Haskell tool in the tree, is a nixpkgs expression (`pkgs/by-name/ni/nix-output-monitor`) with a single leaf patch on `haskellPackages.nix-derivation` (`packages/nix/nix-output-monitor/default.nix`). Unlike the Rust workspace, that path has no Linux-only IFD: on a Mac it evaluates natively, GHC and the unpatched dependency closure substitute from `cache.nixos.org`, and only the patched leaf and `nom` itself compile locally. Haskell tools ride nixpkgs' native Darwin path and never enter the cross lane; the lane's scope is repo-owned Rust (plus its C/C++ and Svelte inputs), which is exactly what the unit DAG covers.
+
+### Migration
+
+Adding a package to the Mac set: add `cross = true` to its `package.nix`. Removing it: delete the line. Nothing else changes, because the definition was already target-agnostic (or becomes so by using `ix.rustWorkspace` and `ix.wrapPackage` instead of reaching for `pkgs` directly). The initial set is `dag-runner` and `nix-web-monitor`.
+
+## Drawbacks
+
+- **The Mac path is substitute-or-nothing.** Evaluating a cross output on a Mac forces the Rust unit-graph IFD, which is an `x86_64-linux` derivation and fails with a platform mismatch. If the cache has the path, the Mac user gets it; if the cache is cold, there is no slow-but-working local fallback. Cache availability is load-bearing.
+- **Trust and provenance.** The artifacts are Mach-O binaries built on Linux with a repackaged SDK, unsigned and un-notarized. Gatekeeper friction and "who built this Mac binary" are real and unaddressed here.
+- **SDK licensing.** Apple licenses the macOS SDK for use on Apple hardware. The default fetches a public repackaged tarball (posture inherited from the sibling `ix` repo); the `ix.macosSdk` override exists for consumers who want a stricter stance.
+- **Untested on target.** The smoke checks prove arch and wrapper shape, not runtime behavior. A cross build can link clean and still fail at a dlopen or framework version on a real Mac. Confidence comes from developers running the tools, not from a gate.
+
+## Alternatives
+
+- **Do nothing; Mac users build from source.** Always correct, always slow, cache-defeating for exactly the tools people want locally. Rejected as the default experience.
+- **Native Darwin CI builders.** The most robust answer (real toolchain, real ABI, on-target tests) and the obvious future direction. Rejected *for now* on cost and operational surface; this lane is the bridge, not the competitor.
+- **Stock nixpkgs `pkgsCross`.** Drags in the same SDK-licensing question, needs per-package cross plumbing, and does not compose with the `nix-cargo-unit` per-unit graph as cleanly as threading a toolchain `env` through the existing renderer. The zig toolchain is already proven in the sibling repo.
+- **osxcross / hand-built cctools + ld64.** The traditional route; more moving parts and more brittle than `zig cc` + `lld`, which ship a maintained cross compiler and linker with SDK-sysroot support in one binary.
+- **Per-package bespoke cross derivations.** The thing this design exists to prevent: target logic scattered across definitions, and every new package re-paying the plumbing cost the tag amortizes to one line.
+
+## Prior art
+
+- **RFC 0005 (cargo-drv).** The per-unit workspace DAG whose `unitsFor { target }` hook this lane calls. Cross is a consumer of that renderer's per-platform hooks, not a new build system.
+- **The registry's target selectors.** `packageSet` / `flake` / `overlay` normalization in `packages/registry.nix` established the "tag in `package.nix`, collect in the registry, realize in `per-system.nix`" shape that `cross` follows exactly.
+- **The sibling `ix` repo's `nix/lib/apple-sdk-toolchain.nix`.** Direct source of the toolchain; same SDK tarball and hash, so the SDK store path is shared between repos.
+- **`zig cc` as a cross compiler.** A full clang + sysroot cross toolchain behind one binary; an established pattern well beyond this repo.
+- **nixpkgs `pkgsCross`.** The general build-platform/host-platform model and the `CARGO_TARGET_<T>_*` conventions this lane sets.
+
+## Unresolved questions
+
+1. **Guaranteeing a cache hit before a Mac pulls.** A merged-but-not-yet-pushed package is broken for Mac clients until `cache-push` completes. Gate the Darwin alias on a cache-presence check, or accept "merge then wait for the push job"?
+2. **Curation.** The tag makes opting in trivial, which makes over-tagging easy. Is the criterion "a developer runs this locally on a Mac", and who enforces it?
+3. **On-target signal.** Without Darwin CI, is a lightweight periodic "does it launch" check worth formalizing, or do we accept build-only confidence until native runners exist?
+4. **Signing / notarization.** Do the binaries need codesigning to be pleasant under Gatekeeper, and where in the pipeline would that live?
+
+## Future possibilities
+
+- **Cross to `aarch64-linux` and musl.** `unitsFor` already handles non-Apple triples with the ordinary linker; the tag's `targets` list can grow beyond Apple silicon with no new machinery.
+- **Native Darwin CI runners.** Build and test natively, keep this lane as the fast path or retire it, and push even the locally-compiled Haskell leaves into `cache.ix.dev`.
+- **Codesigning and notarization.** A post-build signing step, credentialed the way the cache-push token is, would make the artifacts first-class on locked-down Macs.
+- **On-target verification.** A single Mac runner doing "substitute the pushed closure, launch it" converts build-only confidence into runtime confidence without a native build pipeline.
+- **Shared cross artifacts across repos.** The SDK store path is already shared with `ix`; identical toolchain inputs could let the repos substitute each other's cross dependency closures.

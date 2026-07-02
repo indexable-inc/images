@@ -1,0 +1,9 @@
+{
+  "lakekeeper": {
+    "version": "0.12.3",
+    "target": "x86_64-unknown-linux-gnu",
+    "url": "https://github.com/lakekeeper/lakekeeper/releases/download/v0.12.3/lakekeeper-x86_64-unknown-linux-gnu.tar.gz",
+    "prefetch": "manual",
+    "hash": "sha256-vb+LPLtlpJeKC1HbT70Yrb24SdGTknd09C/MPv/yF1U="
+  }
+}

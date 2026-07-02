@@ -121,7 +121,12 @@ let
     inherit bunLockFor errors;
   };
   buildSvelteSite = import ./build/svelte-site.nix {
-    inherit bunLockFor errors writeNushellApplication;
+    inherit
+      bunLockFor
+      errors
+      paths
+      writeNushellApplication
+      ;
   };
   buildNpmVitest = import ./build/npm-vitest.nix;
   buildZigPackage = import ./build/zig-package.nix { };
@@ -138,6 +143,7 @@ let
   buildElixirCheck = import ./build/elixir-check.nix { credoConfig = ./elixir/credo.exs; };
   buildPyStrictCheck = import ./build/py-strict-check.nix { inherit lib; };
   buildGradleFatJar = import ./build/gradle-fat-jar.nix { inherit lib; };
+  wrapPackage = import ./build/wrap-package.nix { inherit lib; };
   # Markdown document rendering with JSON-encoded YAML frontmatter. Used by
   # typed wrappers that generate small `.md` files with parseable metadata.
   markdown = import ./util/markdown.nix { inherit lib; };
@@ -183,6 +189,7 @@ let
         rustWorkspaceFor
         clippy-fork
         lists
+        pins
         ;
       repoRoot = paths.root;
     })
@@ -250,6 +257,16 @@ let
     [`lib/util/toml.nix`](lib/util/toml.nix).
   */
   toml = import ./util/toml.nix { inherit lib; };
+
+  /**
+    Read a package's pinned hashes/digests from a sibling `pins.json` instead
+    of inlining `hash = "sha256-..."` in the `.nix`. `loadPins ./pins.json`
+    returns the validated `{ name = { hash; ... }; }` map; `loadPin ./pins.json
+    "src"` returns one named entry. The JSON is the single source of truth an
+    updater rewrites, so a bump touches one data file. See
+    [`lib/util/pins.nix`](lib/util/pins.nix).
+  */
+  pins = import ./util/pins.nix { inherit lib; };
 
   /**
     Single source of truth for the MCP servers baked into the agent wrappers.
@@ -388,7 +405,6 @@ let
       buildSvelteSite
       buildLibghosttyVt
       ghostty
-      writeNushellApplication
       writeBashApplication
       macosSdk
       appleSdkToolchain
@@ -402,7 +418,7 @@ let
     function `{ pkgs }: derivation`; override it to supply your own SDK.
     See [`lib/darwin/macos-sdk.nix`](lib/darwin/macos-sdk.nix).
   */
-  macosSdk = import ./darwin/macos-sdk.nix;
+  macosSdk = import ./darwin/macos-sdk.nix { inherit pins; };
 
   /**
     zig + macOS SDK cross toolchain. `{ appleSdk, lib, pkgs, target }` returns
@@ -447,10 +463,12 @@ let
       mkBenchSuite
       mkMinecraftLoader
       mkMinecraftNbtFormat
+      wrapPackage
       mkMinecraftSyncManaged
       mutableJson
       netCidr
       paths
+      pins
       publicArtifactsFor
       relativePath
       ruffAnnArgs

@@ -1,16 +1,20 @@
 {
   fetchurl,
+  ix,
   jdk,
   lib,
   stdenvNoCC,
 }:
 
 let
-  version = "1.12.0";
-  jar = fetchurl {
-    url = "https://github.com/Vineflower/vineflower/releases/download/${version}/vineflower-${version}.jar";
-    hash = "sha256-Hfz+l0OVc0+kZ85iBmHHYj0FuoNnDeBSmx+9Y/9Ui50=";
-  };
+  # Version + URL and SRI hash live in the sibling pins.json, never inline
+  # (repo policy). vineflower is a bare-callPackage consumer (not in the flake
+  # package set), so it carries no registry updateScript; bump by editing the
+  # version/url in pins.json and re-pinning the hash by hand (or via loadPins in
+  # a scratch eval). The JSON is updater-ready if it later joins the package set.
+  pin = ix.pins.loadPin ./pins.json "vineflower";
+  inherit (pin) version;
+  jar = fetchurl { inherit (pin) url hash; };
 in
 stdenvNoCC.mkDerivation {
   pname = "vineflower";

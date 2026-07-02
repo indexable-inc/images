@@ -1,24 +1,43 @@
 {
   autoPatchelfHook,
   fetchzip,
+  ix,
   lib,
+  nix,
   stdenv,
+  # Writer for `passthru.updateScript`, bound only on the flake-package path
+  # (lib/packages.nix); the overlay path leaves it null so `pkgs.*` carries no
+  # updater. Same nullable-writer pattern as claude-code / yc.
+  updateScriptWriter ? null,
 }:
 let
-  system = stdenv.hostPlatform.system;
+  # Prebuilt binary is x86_64-linux only; the package-set/flake targets and
+  # meta.platforms below gate that, so the unsupported-system throw is redundant.
   targets = {
     x86_64-linux = "x86_64-unknown-linux-gnu";
   };
-  target = targets.${system} or (throw "vector-bin: unsupported system ${system}");
+  # Version + per-release URL and SRI hash live in the sibling pins.json, never
+  # inline here (repo policy: no `hash = "sha256-..."` literals in tracked .nix).
+  # Bump the version/url in pins.json, then `nix run .#update` re-pins the hash.
+  pin = ix.pins.loadPin ./pins.json "vector";
+  updateScript =
+    if updateScriptWriter == null then
+      null
+    else
+      ix.pins.mkUpdater {
+        writeNushellApplication = updateScriptWriter;
+        inherit nix;
+        pname = "vector-bin";
+        relPath = "packages/vector-bin/pins.json";
+      };
 in
-stdenv.mkDerivation (finalAttrs: {
+stdenv.mkDerivation {
   pname = "vector";
-  version = "0.55.0";
+  inherit (pin) version;
 
-  src = fetchzip {
-    url = "https://github.com/vectordotdev/vector/releases/download/v${finalAttrs.version}/vector-${finalAttrs.version}-${target}.tar.gz";
-    hash = "sha256-VbmY+8NBcQRxqB8dXkE1P5OlVEFf4V10aN4podxbavs=";
-  };
+  src = fetchzip { inherit (pin) url hash; };
+
+  passthru = lib.optionalAttrs (updateScript != null) { inherit updateScript; };
 
   nativeBuildInputs = [ autoPatchelfHook ];
   buildInputs = [
@@ -45,4 +64,4 @@ stdenv.mkDerivation (finalAttrs: {
     platforms = builtins.attrNames targets;
     sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
   };
-})
+}

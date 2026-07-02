@@ -53,7 +53,12 @@ let
         nixfmt --check ...$nix_files
       }
       def "main statix" [] { statix check . }
-      def "main deadnix" [] { deadnix --fail --no-lambda-pattern-names . }
+      # Strict: no `-L`/`--no-lambda-pattern-names`. That flag exists because
+      # dropping a pattern name is unsafe without `...` in the pattern (it
+      # narrows the callable signature); an unused name here must be deleted
+      # (migrating call sites) or kept behind `...`, matching what the LSP
+      # already flags as unused.
+      def "main deadnix" [] { deadnix --fail . }
       # The Nix style rules as astlog lint declarations
       # (astlog-rules/nix.astlog, #1060/#1062). `astlog scan` emits one
       # finding per lint-declared relation row and exits nonzero on any
@@ -431,6 +436,47 @@ let
     meta.description = "Copy git-ignored files into an ix shell workspace";
   };
 
+  # `nix run .#cve-scan`: scan the whole Nix closure of the repo's key outputs
+  # for known CVEs (issue #1697). cargoAudit (lib/rust/policy.nix) only covers the
+  # workspace Cargo.lock against RustSec; nothing scanned the closure for a
+  # vulnerable system lib, a stale OpenSSL in an image, or a C dependency of a
+  # tool. This wraps `vulnix` -- the Nix-native NVD closure scanner (chosen over
+  # sbomnix/vulnxscan: leaner, first-class `--json`, caches the NVD feed locally
+  # so only the first/refresh run needs network, and works on both x86_64-linux
+  # and aarch64-darwin). The scan target is `.#cachePushRoots.<system>`: the
+  # registry- and example-fleet-derived roots cache-push.yml publishes (every
+  # package, images as their `toplevel` closure, plus each example fleet node's
+  # system closure), so the closure list grows with the repo rather than being
+  # hardcoded, and it is exactly "the repo's key outputs" a consumer substitutes.
+  #
+  # Advisory data is impure and fresh, so this is an app plus a scheduled workflow
+  # that files a tracking issue (.github/workflows/cve-scan.yml), NOT a blocking
+  # flake check. `vulnix` needs `nix-store` (and `nix build`) on PATH; both come
+  # from the runtime `pkgs.nix`. The wrapper forces a UTF-8 locale (vulnix decodes
+  # NVD text and aborts under the C locale); see cve-scan.py.
+  cveScan = ix.writePythonApplication pkgs {
+    name = "cve-scan";
+    src = paths.tools.cveScan;
+    pyChecker = "zuban";
+    # The committed whitelist of acknowledged advisories is baked in as a store
+    # path so `nix run .#cve-scan` applies it from any working directory; extra
+    # `--whitelist` flags at the CLI add to it (argparse append). Masked
+    # advisories stay visible as a count (vulnix --show-whitelisted), never
+    # silently dropped.
+    args = [
+      "--whitelist"
+      "${paths.packagesRoot + "/cve-scan/whitelist.toml"}"
+    ];
+    runtimeInputs = [
+      pkgs.vulnix
+      pkgs.nix
+    ];
+    # pydantic validates vulnix's --json output at the boundary so an upstream
+    # schema drift fails with a path-precise error rather than a bare KeyError.
+    python = pkgs.python314.withPackages (ps: [ ps.pydantic ]);
+    meta.description = "Scan the Nix closure of the repo's key outputs for CVEs (vulnix)";
+  };
+
   # One symlink-free directory holding every skill under `skills/`, ready to
   # copy into `.claude/skills`.
   skillsDir = ix.skills.mkSkillsDir { inherit pkgs; };
@@ -451,7 +497,6 @@ let
     inherit
       ix
       lib
-      pkgs
       repoPackages
       ;
   };
@@ -465,7 +510,7 @@ let
     name = "mc-source";
     text = builtins.readFile paths.tools.mcSource;
     runtimeInputs = [
-      (pkgs.callPackage packageRegistry.byId.vineflower.path { })
+      (pkgs.callPackage packageRegistry.byId.vineflower.path { inherit ix; })
     ];
     meta.description = "Decompile a Minecraft server jar with Mojang mappings via Vineflower";
   };
@@ -576,36 +621,79 @@ let
     '';
   };
 
-  # Cross-compiled standalone binaries, exposed as `packages.<host>.<bin>-<triple>`.
-  # Linux-only: the Apple (zig + macOS SDK) and musl cross toolchains run on a
-  # Linux build host; an aarch64-darwin Mac builds Darwin targets natively and
-  # cannot host the Linux→Darwin path, so gating here keeps darwin evaluation
-  # from pulling an unbuildable graph. Start with `dag-runner` (pure Rust, no C
-  # deps); widen `crossBinaries` as crates are confirmed cross-clean.
-  # macOS targets only for now: the zig + SDK toolchain produces a working
-  # linker out of the box. A musl target additionally needs a static musl
-  # linker wrapper (clang + mold against a musl sysroot); until that lands,
-  # `unitsFor` still accepts any triple but no musl package is exposed.
-  crossTargets = [
-    "aarch64-apple-darwin"
-    "x86_64-apple-darwin"
-  ];
-  crossBinaries = [ "dag-runner" ];
+  # Cross-compiled standalone packages, exposed as
+  # `packages.<host>.<attr>-<triple>` and optionally aliased into native Darwin
+  # package namespaces by flake.nix. Linux-only: the Apple (zig + macOS SDK) and
+  # Rust target graph run on a Linux build host; Darwin hosts build native
+  # packages directly and cannot host this Linux→Darwin lane. Package definitions
+  # stay target-agnostic: the cross lane swaps the `ix.rustWorkspace.units`
+  # handle underneath them instead of passing a separate cross API.
+  darwinTargetsBySystem = {
+    aarch64-darwin = "aarch64-apple-darwin";
+    x86_64-darwin = "x86_64-apple-darwin";
+  };
+  targetSystemFor =
+    target:
+    if lib.hasSuffix "-apple-darwin" target then
+      if lib.hasPrefix "aarch64-" target then "aarch64-darwin" else "x86_64-darwin"
+    else
+      throw "cross: unsupported target `${target}`";
+  crossEntries = packageRegistry.crossEntriesFor system;
   crossWorkspace = ix.rustWorkspaceFor pkgs;
+  crossIxFor =
+    target:
+    let
+      targetWorkspace = crossWorkspace // {
+        units = crossWorkspace.unitsFor { inherit target; };
+      };
+    in
+    ix
+    // {
+      inherit pkgs;
+      cargoUnit = ix.cargoUnitFor pkgs;
+      rustWorkspace = targetWorkspace;
+      cross = {
+        isCross = true;
+        inherit target;
+        targetSystem = targetSystemFor target;
+      };
+      wrapPackage = wrapperPkgs: args: ix.wrapPackage wrapperPkgs (args // { isCross = true; });
+    };
+  buildCrossPackage =
+    target: entry:
+    lib.callPackageWith (
+      pkgs
+      // {
+        inherit entry repoPackages;
+        ix = crossIxFor target;
+        writeNushellApplication = ix.writeNushellApplication pkgs;
+        updateScriptWriter = ix.writeNushellApplication pkgs;
+      }
+    ) entry.path { };
   crossPackages = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
-    lib.mergeAttrsList (
-      map (
-        target:
-        let
-          units = crossWorkspace.unitsFor { inherit target; };
-        in
-        lib.genAttrs' crossBinaries (
-          binary:
-          lib.nameValuePair "${binary}-${target}" (
-            units.binaries.${binary} or (throw "cross: workspace has no binary `${binary}` for ${target}")
+    lib.listToAttrs (
+      lib.concatMap (
+        entry:
+        map (
+          target: lib.nameValuePair "${entry.cross.attrName}-${target}" (buildCrossPackage target entry)
+        ) entry.cross.targets
+      ) crossEntries
+    )
+  );
+  darwinPackageAliases = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
+    lib.genAttrs (lib.attrNames darwinTargetsBySystem) (
+      darwinSystem:
+      let
+        target = darwinTargetsBySystem.${darwinSystem};
+      in
+      lib.listToAttrs (
+        lib.concatMap (
+          entry:
+          lib.optional (entry.cross.exposeNativeDarwin && builtins.elem target entry.cross.targets) (
+            lib.nameValuePair entry.cross.attrName crossPackages."${entry.cross.attrName}-${target}"
           )
-        )
-      ) crossTargets
+        ) crossEntries
+      )
     )
   );
 
@@ -1105,6 +1193,31 @@ let
             esac
             mkdir -p "$out"
           '';
+          cross-darwin-web-monitor-smoke =
+            pkgs.runCommand "cross-darwin-web-monitor-smoke" { nativeBuildInputs = [ pkgs.file ]; }
+              ''
+                pkg=${crossPackages."nix-web-monitor-aarch64-apple-darwin"}
+                bin=$pkg/bin/.nix-web-monitor-unwrapped
+                info=$(file -b "$bin")
+                echo "$info"
+                case "$info" in
+                  *Mach-O*arm64*) ;;
+                  *)
+                    echo "expected Mach-O arm64, got: $info" >&2
+                    exit 1
+                    ;;
+                esac
+                read -r shebang < "$pkg/bin/nix-web-monitor"
+                case "$shebang" in
+                  "#!/bin/sh") ;;
+                  *)
+                    echo "expected /bin/sh wrapper, got: $shebang" >&2
+                    exit 1
+                    ;;
+                esac
+                test -f "$pkg/share/nix-web-monitor/index.html"
+                mkdir -p "$out"
+              '';
           site-case-tests = pkgs.linkFarm "site-case-tests" (
             lib.mapAttrsToList (name: path: { inherit name path; }) siteTests.cases
           );
@@ -1129,6 +1242,7 @@ let
       bench-filesystem = benchFilesystem;
       update-mods = updateMods;
       update-loaders = updateLoaders;
+      cve-scan = cveScan;
       inherit update;
       ix-shell-sync-ignored = ixShellSyncIgnored;
       mc-source = mcSource;
@@ -1136,14 +1250,19 @@ let
       agents = agentsDir;
       skills = skillsDir;
       claude-plugin = claudePluginDir;
-      # The attic binary cache client, jq, and findutils (xargs), used by
-      # cache-push.yml to publish index's package closure to the public
-      # `ix-public` atticd cache. Pinned to the flake's nixpkgs so the workflow
-      # resolves them with `nix build .#attic-client` / `.#jq` / `.#findutils`
+      # The attic binary cache client, jq, findutils (xargs), and gh, used by
+      # cache-push.yml (attic/jq/xargs) and cve-scan.yml (jq/gh). Pinned to the
+      # flake's nixpkgs so the workflows resolve them with `nix build .#<tool>`
       # rather than depending on a tool being on the runner PATH or a floating
-      # `nixpkgs#` registry reference. The runner PATH carries coreutils + nix
-      # but not findutils, so bare `xargs` is `command not found`.
-      inherit (pkgs) attic-client jq findutils;
+      # `nixpkgs#` registry reference. The self-hosted runner PATH carries
+      # coreutils + nix but not findutils, jq, or gh, so the bare commands are
+      # `command not found` (cve-scan run 28598889924 died on exactly that).
+      inherit (pkgs)
+        attic-client
+        jq
+        findutils
+        gh
+        ;
     }
     // repoFlakePackages
     // examplePackages
@@ -1187,6 +1306,8 @@ in
       ) exampleFleets;
     in
     imagesAsClosures // exampleNodeToplevels;
+
+  inherit darwinPackageAliases;
 
   # Flat keying: one derivation per `checks.<system>.<name>`, as the flake schema
   # and `nix flake check` require. The `.#check` gate and blast-radius consume

@@ -23,7 +23,7 @@
   extraStartArgs,
   rayAddress,
 }:
-{ config, ... }:
+_:
 let
   package = import ./package.nix { inherit ix lib pkgs; };
   rayCli = import ./cli.nix {

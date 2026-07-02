@@ -1,4 +1,5 @@
 {
+  ix,
   lib,
   stdenvNoCC,
   fetchurl,
@@ -15,22 +16,23 @@
 # extraction below is pure: it only unzips the fixed jar and selects the exact
 # texture and bitmap-font paths the overlays embed.
 #
-# Refresh recipe (when bumping `version`): resolve the new client.jar from the
-# manifest and read back the hash Nix wants:
+# Refresh recipe (when bumping `version`): resolve the new client.jar url from
+# the manifest, put it in pins.json, then rebuild and copy the `got:` hash from
+# the mismatch error (this package carries no registry updateScript, so
+# `nix run .#update` does not touch it):
 #   v=$(curl -fsSL https://launchermeta.mojang.com/mc/game/version_manifest_v2.json \
 #        | jq -r '.versions[]|select(.id=="VERSION").url')
-#   url=$(curl -fsSL "$v" | jq -r .downloads.client.url)
-#   nix store prefetch-file --json "$url" | jq -r .hash
+#   curl -fsSL "$v" | jq -r .downloads.client.url   # -> pins.json `url`
 #
 # Mojang's art is NOT redistributed by this repository; it is fetched at build
 # time, the same boundary the rest of the repo uses for upstream binaries.
 let
-  version = "1.21";
+  # Version + client.jar URL and SRI hash live in the sibling pins.json, never
+  # inline (repo policy).
+  pin = ix.pins.loadPin ./pins.json "client-jar";
+  inherit (pin) version;
 
-  clientJar = fetchurl {
-    url = "https://piston-data.mojang.com/v1/objects/0e9a07b9bb3390602f977073aa12884a4ce12431/client.jar";
-    hash = "sha256-S1a8m0Tefoj5+7UucWwYJA2jRGn8uvpe0udbBNYGF+g=";
-  };
+  clientJar = fetchurl { inherit (pin) url hash; };
 
   tex = "assets/minecraft/textures";
 in

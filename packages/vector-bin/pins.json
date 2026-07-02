@@ -1,0 +1,9 @@
+{
+  "vector": {
+    "version": "0.55.0",
+    "target": "x86_64-unknown-linux-gnu",
+    "url": "https://github.com/vectordotdev/vector/releases/download/v0.55.0/vector-0.55.0-x86_64-unknown-linux-gnu.tar.gz",
+    "prefetch": "unpack",
+    "hash": "sha256-VbmY+8NBcQRxqB8dXkE1P5OlVEFf4V10aN4podxbavs="
+  }
+}

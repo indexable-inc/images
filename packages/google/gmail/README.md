@@ -4,7 +4,7 @@ Gmail for agents and shells: one Rust crate owns the
 [Gmail v1 API](https://developers.google.com/gmail/api/reference/rest)
 (messages, threads, labels, drafts, send, attachments) and the MIME
 builder for outgoing mail. Three thin surfaces expose it per
-[RFC 0003](../../../rfcs/0003-mcp-composable-clis.html): the `gmail` CLI
+[RFC 0003](../../site/src/lib/rfcs/0003-mcp-composable-clis.svx): the `gmail` CLI
 in [`cli/`](./cli), the `mail_*` tools in the `ix-google-mcp` Rust server
 in [`packages/google/mcp`](../mcp), and the `ix_google.gmail.Client`
 Python class in [`packages/google/py`](../py). Tracks

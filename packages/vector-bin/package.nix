@@ -7,4 +7,5 @@
     systems = [ "x86_64-linux" ];
   };
   overlay = false;
+  updateScript = true;
 }

@@ -35,6 +35,13 @@ let
     ];
   };
 
+  # SRI pins for the two fixed-output fetches below live in the sibling
+  # pins.json (repo policy: no inline hash literals). `mix-deps` has no URL
+  # (the FOD's content is derived from mix.lock, so refresh it by building
+  # after a lock change and copying the `got:` hash); `lazy-html-nif` pins the
+  # upstream release tarball by URL.
+  pins = ix.pins.loadPins ./pins.json;
+
   # Test-env mix deps as a fixed-output derivation so the sandboxed check
   # runs offline. Refresh the hash whenever elixir/mix.lock changes.
   mixFodDeps = pkgs.beamPackages.fetchMixDeps {
@@ -49,7 +56,7 @@ let
     };
     inherit elixir;
     mixEnv = "test";
-    hash = "sha256-TLRGNPIm3zQKeFt54wrdirYYK81ribfsV92/NVLdQSM=";
+    inherit (pins."mix-deps") hash;
   };
 
   # mix.lock pins lazy_html (a C++ NIF over lexbor) as a test-only dep for
@@ -58,11 +65,8 @@ let
   # allows neither, so the check below seeds elixir_make's artifact cache
   # with the upstream release tarball; elixir_make still verifies it against
   # the checksum.exs pinned inside the dep before unpacking. Refresh the
-  # url/hash when a mix.lock bump moves lazy_html.
-  lazyHtmlNif = pkgs.fetchurl {
-    url = "https://github.com/dashbitco/lazy_html/releases/download/v0.1.10/lazy_html-nif-2.16-x86_64-linux-gnu-0.1.10.tar.gz";
-    hash = "sha256-Ni0JKbP6OJqQ8rT08VnF/KWjiyigoVUjqSZ3LRU9dBo=";
-  };
+  # url/hash in pins.json when a mix.lock bump moves lazy_html.
+  lazyHtmlNif = pkgs.fetchurl { inherit (pins."lazy-html-nif") url hash; };
 
   # The required quality lane the standalone repo ran per PR (make ci:
   # compile --warnings-as-errors, format --check-formatted, credo, test),

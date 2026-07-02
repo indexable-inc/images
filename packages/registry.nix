@@ -7,7 +7,7 @@
 }:
 let
 
-  relativePath = path: lib.removePrefix "${builtins.toString root}/" (builtins.toString path);
+  relativePath = path: lib.removePrefix "${toString root}/" (toString path);
 
   childDirs =
     dir:
@@ -33,6 +33,7 @@ let
   ) defaultPackageDirs;
 
   allowedMetadataKeys = [
+    "cross"
     "flake"
     "id"
     "inRustWorkspace"
@@ -104,6 +105,37 @@ let
     extraKeys = [ "build" ];
   };
 
+  normalizeCross =
+    label: id: value:
+    let
+      # Apple silicon only: the fleet has no Intel-Mac users, so the second
+      # triple would double cross-build cost for artifacts nobody pulls. A
+      # package that needs it opts in via `cross.targets`.
+      defaultTargets = [ "aarch64-apple-darwin" ];
+      normalized =
+        if value == null || value == false then
+          null
+        else if value == true then
+          { }
+        else
+          assertKnownKeys "${label}: cross" [
+            "attrName"
+            "exposeNativeDarwin"
+            "systems"
+            "targets"
+          ] value;
+    in
+    if normalized == null then
+      null
+    else
+      normalized
+      // {
+        attrName = normalized.attrName or id;
+        exposeNativeDarwin = normalized.exposeNativeDarwin or true;
+        systems = normalized.systems or null;
+        targets = normalized.targets or defaultTargets;
+      };
+
   normalizePassthruTests =
     label: id: value:
     if value == null || value == false then
@@ -151,6 +183,7 @@ let
       flake = normalizeFlake label id (raw.flake or null);
       overlay = normalizeOverlay label id (raw.overlay or null);
       inRustWorkspace = normalizeRustWorkspace label (raw.inRustWorkspace or null);
+      cross = normalizeCross label id (raw.cross or null);
       passthruTests = normalizePassthruTests label id (raw.passthruTests or null);
       # `updateScript = true` marks a package that exposes a
       # `passthru.updateScript` (e.g. a pinned prebuilt binary that tracks an
@@ -173,6 +206,8 @@ let
   flakeEntriesFor = system: lib.filter (entry: enabledForSystem system entry.flake) entries;
 
   overlayEntriesFor = system: lib.filter (entry: enabledForSystem system entry.overlay) entries;
+
+  crossEntriesFor = system: lib.filter (entry: enabledForSystem system entry.cross) entries;
 
   # Packages that expose a `passthru.updateScript`, restricted to those actually
   # built for `system` (the flake package-set path is where `updateScript` is
@@ -209,6 +244,7 @@ assert lib.assertMsg (
     packageSetEntriesFor
     flakeEntriesFor
     overlayEntriesFor
+    crossEntriesFor
     updateScriptEntriesFor
     passthruTestEntriesFor
     rustWorkspaceEntries

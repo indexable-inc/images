@@ -127,6 +127,16 @@ let
       '';
     }
     {
+      scopedNaming = ''
+        Name things by what they add to their enclosing scope, never by
+        restating it. A path, crate, module, option, field, or function is
+        always read with its context: `packages/minecraft/assets`, not
+        `packages/minecraft/minecraft-assets`. When siblings share a prefix,
+        that prefix is a missing parent scope: introduce it and drop the
+        prefix from the leaves.
+      '';
+    }
+    {
       rustCollectStyle = ''
         In Rust, type collection results with a local annotation, not turbofish forms
         like `.collect::<HashSet<_>>()`.
@@ -169,6 +179,23 @@ let
       '';
     }
     {
+      updateablePins = ''
+        Never inline a pinned artifact identity (hash, digest, rev, pinned
+        version of something fetched) in source. Keep each pin next to its
+        coordinates in a generated lock file read as data, and wire an updater
+        into the repo's update entry point so the pin refreshes mechanically.
+      '';
+    }
+    {
+      deriveDontEnumerate = ''
+        When code restates structure that already exists (directory contents,
+        sibling names, a list kept elsewhere), derive it from that source of
+        truth via discovery, `readDir`, globs, or generated data. Hand-kept
+        enumerations drift; add an explicit exclude list only with a
+        why-comment per exclusion.
+      '';
+    }
+    {
       separateDefinitions = ''
         Keep declarative definitions separate from machinery that renders, executes,
         or adapts them. Put registries, schemas, fixtures, and policy data where they
@@ -182,6 +209,17 @@ let
         Fix problems at their source. If the cause is upstream, fix it upstream and
         open a PR. Use local workarounds only as a last resort, linked to the upstream
         issue or PR.
+      '';
+    }
+    {
+      machineReadableInterfaces = ''
+        Machine-readable first: prefer structured interfaces end to end, and ask
+        every tool for its structured mode (`--json` and similar) instead of
+        scraping human-oriented text. When a tool we control lacks one, add it
+        upstream (a `--json` flag, structured output) rather than parsing prose:
+        fix the interface, not the parse. Treat any interface friction the same
+        way (a missing flag, missing structured output, missing helper): improve
+        it or file an issue or PR instead of silently working around it.
       '';
     }
     {

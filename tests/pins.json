@@ -1,0 +1,29 @@
+{
+  "go-unit-fixture-vendor": {
+    "hash": "sha256-36P4vOdzJotmVZon5Zud/d/jxzv4ad04aQT2G/EE3U8="
+  },
+  "serde": {
+    "owner": "serde-rs",
+    "repo": "serde",
+    "rev": "fa7da4a93567ed347ad0735c28e439fca688ef26",
+    "hash": "sha256-5Ercr2dCC52VLV9dAZUsMlw+Ovup5Qui6vDQHxl70v4="
+  },
+  "thiserror": {
+    "owner": "dtolnay",
+    "repo": "thiserror",
+    "rev": "d4a2507576d276dbebc4be45c9b3d657216b727f",
+    "hash": "sha256-0DU1KSWZ+T4v9cfTfY8QQ2bMLgko9+c1dOXEk99KvUo="
+  },
+  "indexmap": {
+    "owner": "indexmap-rs",
+    "repo": "indexmap",
+    "rev": "0a5535021aec77a2c9890c0bec273fa446c6593a",
+    "hash": "sha256-7WBUZ1QJ6tywpdmo50QpX01fu7HMkpfoh/TC2LkPxiM="
+  },
+  "regex": {
+    "owner": "rust-lang",
+    "repo": "regex",
+    "rev": "839d16bc65b60e2006d3599d20bfa6efc14049d8",
+    "hash": "sha256-9czj9Oa25H8VhMmZNyS0h9sFn6rYDrEPlOuGm9NJd9A="
+  }
+}
