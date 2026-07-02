@@ -108,8 +108,21 @@ impl Gpu {
             )
             .context("copy texture")?;
         let bytes = self.renderer.map_texture(&mapping).context("map texture")?;
+        let mut bgra = bytes.to_vec();
+        // The copy above is Argb8888, but an alpha-less source format leaves
+        // the A byte undefined (commonly 0). The wire is premultiplied BGRA,
+        // so A=0 would composite the whole window invisible on the host;
+        // force opaque, mirroring the shm path's `force_opaque` for XRGB.
+        if matches!(
+            dmabuf.format().code,
+            Fourcc::Xrgb8888 | Fourcc::Xbgr8888 | Fourcc::Rgbx8888 | Fourcc::Bgrx8888
+        ) {
+            for px in bgra.chunks_exact_mut(4) {
+                px[3] = 0xFF;
+            }
+        }
         Ok(GpuFrame {
-            bgra: bytes.to_vec(),
+            bgra,
             width,
             height,
         })

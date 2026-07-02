@@ -317,10 +317,17 @@ impl PaneWindow {
         full: bool,
         tiles: Vec<Tile>,
     ) -> bool {
+        // Metal's max texture dimension on Apple GPUs; also bounds what a
+        // corrupted stream can demand (the zero-fill below allocates
+        // width*height*4 host bytes, so unchecked wire dims could OOM).
+        const MAX_DIM: u32 = 16_384;
         let size = BufferSize { width, height };
         let mut fresh_surface = false;
         let unpresentable = if width == 0 || height == 0 {
             eprintln!("panes-host: window {}: zero-sized frame {seq}", self.id);
+            true
+        } else if width > MAX_DIM || height > MAX_DIM {
+            eprintln!("panes-host: window {}: {width}x{height} frame exceeds max dim", self.id);
             true
         } else if self.surface.as_ref().is_none_or(|surface| surface.size != size) {
             self.surface = Surface::new(renderer, size);

@@ -58,6 +58,13 @@ on venus, no zink and no mods; the image pre-seeds its `options.txt` with
 `preferredGraphicsBackend:"vulkan"`.
 Details: [`vmkit/docs/linux-libkrun.md`](../vmkit/docs/linux-libkrun.md).
 
+> **Gap**: the shipped `pkgs.panes-compositor` builds without the `gpu` cargo
+> feature (the unit graph has no feature knob yet), so no linux-dmabuf global
+> is advertised and Vulkan/GL clients fall back to shm or software. The venus
+> plumbing above (16K kernel, ICD, `/dev/dri` binds) is ready; enabling the
+> feature in the guest-image build is the remaining step for accelerated
+> window content (index#1686).
+
 Networking: `--net` runs gvproxy (`192.168.127.0/24`); the image DHCPs its
 NIC. App containers share the host network namespace, so e.g. Minecraft can
 download its assets on first launch.
