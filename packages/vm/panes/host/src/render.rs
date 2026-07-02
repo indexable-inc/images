@@ -1,13 +1,15 @@
 //! Shared Metal state: one device/queue/pipeline for every window.
 //!
 //! Frame path (v1, CPU upload): tiles are decompressed and `replaceRegion`ed
-//! into a persistent `MTLTexture` per window, then a fullscreen-triangle
-//! render pass samples that texture into the drawable. A render pass (not a
-//! blit) because `CAMetalLayer.framebufferOnly = true` allows drawables only
-//! as color render targets (Apple: framebufferOnly "allows the system to
-//! apply optimizations"; blit destinations would require turning it off),
-//! and because sampling stretches the stale texture for free during live
-//! resize while the guest catches up.
+//! into one of two per-window `MTLTexture`s (double-buffered in `window`:
+//! `replaceRegion` does not synchronize against GPU access, so uploads must
+//! never touch the texture a still-executing present is sampling), then a
+//! fullscreen-triangle render pass samples that texture into the drawable. A
+//! render pass (not a blit) because `CAMetalLayer.framebufferOnly = true`
+//! allows drawables only as color render targets (Apple: framebufferOnly
+//! "allows the system to apply optimizations"; blit destinations would
+//! require turning it off), and because sampling stretches the stale texture
+//! for free during live resize while the guest catches up.
 
 use core::ptr::NonNull;
 
@@ -90,8 +92,9 @@ impl Renderer {
         Ok(Self { device, queue, pipeline })
     }
 
-    /// Persistent per-window surface texture. `ShaderRead` only: the CPU
-    /// writes it via `replaceRegion`, the GPU samples it.
+    /// One per-window surface texture (a slot of the double buffer).
+    /// `ShaderRead` only: the CPU writes it via `replaceRegion`, the GPU
+    /// samples it.
     pub fn make_texture(
         &self,
         width: u32,
@@ -133,18 +136,18 @@ impl Renderer {
         }
     }
 
-    /// Sample `source` into `drawable` and present. Returns false when Metal
-    /// gave no command buffer/encoder (device loss); the caller keeps the
-    /// frame pending and retries next tick.
+    /// Sample `source` into `drawable` and present. Returns the committed
+    /// command buffer so the caller can tell when the GPU is done reading
+    /// `source` (`replaceRegion` into it before then would race the read).
+    /// Returns None when Metal gave no command buffer/encoder (device loss);
+    /// the caller keeps the frame pending and retries next tick.
     pub fn draw(
         &self,
         source: &ProtocolObject<dyn MTLTexture>,
         drawable: &ProtocolObject<dyn CAMetalDrawable>,
         presents_with_transaction: bool,
-    ) -> bool {
-        let Some(commands) = self.queue.commandBuffer() else {
-            return false;
-        };
+    ) -> Option<Retained<ProtocolObject<dyn MTLCommandBuffer>>> {
+        let commands = self.queue.commandBuffer()?;
         let pass = MTLRenderPassDescriptor::renderPassDescriptor();
         let attachment = unsafe { pass.colorAttachments().objectAtIndexedSubscript(0) };
         let target = drawable.texture();
@@ -153,9 +156,7 @@ impl Renderer {
         // only force a needless restore of undefined drawable contents.
         attachment.setLoadAction(MTLLoadAction::Clear);
         attachment.setStoreAction(MTLStoreAction::Store);
-        let Some(encoder) = commands.renderCommandEncoderWithDescriptor(&pass) else {
-            return false;
-        };
+        let encoder = commands.renderCommandEncoderWithDescriptor(&pass)?;
         encoder.setRenderPipelineState(&self.pipeline);
         unsafe {
             encoder.setFragmentTexture_atIndex(Some(source), 0);
@@ -176,6 +177,6 @@ impl Renderer {
             commands.presentDrawable(ProtocolObject::from_ref(drawable));
             commands.commit();
         }
-        true
+        Some(commands)
     }
 }

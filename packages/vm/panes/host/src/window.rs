@@ -1,5 +1,5 @@
 //! One guest toplevel = one `PaneWindow`: NSWindow + input view +
-//! `CAMetalLayer` + persistent surface texture + `CAMetalDisplayLink`.
+//! `CAMetalLayer` + double-buffered surface textures + `CAMetalDisplayLink`.
 //!
 //! Presentation pacing: the display link ticks at the panel's rate (up to
 //! 120Hz on ProMotion) and hands us the drawable; we only encode/present when
@@ -17,7 +17,7 @@ use objc2_foundation::{
     MainThreadMarker, NSNotification, NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSSize,
     NSString,
 };
-use objc2_metal::MTLTexture;
+use objc2_metal::{MTLCommandBuffer, MTLCommandBufferStatus, MTLTexture};
 use objc2_quartz_core::{
     CAFrameRateRange, CAMetalDisplayLink, CAMetalDisplayLinkDelegate, CAMetalDisplayLinkUpdate,
     CAMetalLayer,
@@ -56,6 +56,89 @@ struct BufferSize {
     height: u32,
 }
 
+/// One decoded damage update, kept in [`Surface::log`] until every slot's
+/// texture has absorbed it.
+struct PendingTile {
+    rect: Rect,
+    bytes: Vec<u8>,
+}
+
+/// One of the window's two surface textures. Double-buffered because
+/// `replaceRegion` does not synchronize against GPU access (Apple,
+/// MTLTexture docs): a CPU upload into the texture a still-executing
+/// command buffer is sampling for the previous present tears. Uploads only
+/// go to a slot whose last draw has drained.
+struct Slot {
+    texture: Retained<ProtocolObject<dyn MTLTexture>>,
+    /// Prefix of [`Surface::log`] already uploaded to this texture.
+    absorbed: usize,
+    /// The command buffer of the last present that sampled this texture;
+    /// see the in-flight rule above.
+    last_draw: Option<Retained<ProtocolObject<dyn MTLCommandBuffer>>>,
+}
+
+impl Slot {
+    /// True while a committed draw sampling this texture may still be
+    /// executing. `Error` counts as drained: the GPU dropped that work.
+    fn in_flight(&self) -> bool {
+        self.last_draw.as_ref().is_some_and(|commands| {
+            !matches!(
+                commands.status(),
+                MTLCommandBufferStatus::Completed | MTLCommandBufferStatus::Error
+            )
+        })
+    }
+}
+
+/// Double-buffered window surface: decoded damage is appended to `log` once
+/// and replayed into a slot's texture right before that slot is drawn, so a
+/// texture that sat out a present still catches up on the damage it missed.
+struct Surface {
+    slots: [Slot; 2],
+    /// Slot the previous present drew; redraws (the live-resize stretch)
+    /// sample it again, new content flips to the other slot.
+    current: usize,
+    log: Vec<PendingTile>,
+    size: BufferSize,
+}
+
+impl Surface {
+    fn new(renderer: &Renderer, size: BufferSize) -> Option<Self> {
+        let slot = || {
+            renderer
+                .make_texture(size.width, size.height)
+                .map(|texture| Slot { texture, absorbed: 0, last_draw: None })
+        };
+        Some(Self { slots: [slot()?, slot()?], current: 0, log: Vec::new(), size })
+    }
+
+    /// Append damage for both textures to absorb. A full-surface rect
+    /// overwrites everything before it, so the backlog is dropped (this also
+    /// re-bounds the log on every full/resize frame).
+    fn push(&mut self, rect: Rect, bytes: Vec<u8>) {
+        if rect.x == 0 && rect.y == 0 && rect.w == self.size.width && rect.h == self.size.height {
+            self.log.clear();
+            for slot in &mut self.slots {
+                slot.absorbed = 0;
+            }
+        }
+        self.log.push(PendingTile { rect, bytes });
+    }
+
+    /// Drop the log prefix every slot has absorbed. With one guest frame in
+    /// flight and alternating presents this keeps the log a frame or two
+    /// long.
+    fn compact(&mut self) {
+        let absorbed = self.slots[0].absorbed.min(self.slots[1].absorbed);
+        if absorbed > 0 {
+            self.log.drain(..absorbed);
+            for slot in &mut self.slots {
+                slot.absorbed -= absorbed;
+            }
+        }
+    }
+}
+
 /// Current window geometry in buffer pixels, sent in `ToGuest::Configure`.
 pub struct SurfaceSize {
     pub width: u32,
@@ -73,8 +156,7 @@ pub struct PaneWindow {
     // (AppKit convention); these fields are the strong references.
     _win_delegate: Retained<WinDelegate>,
     _link_delegate: Retained<LinkDelegate>,
-    texture: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
-    buffer: BufferSize,
+    surface: Option<Surface>,
     /// Guest render scale from `WindowNew`, used to convert protocol pixel
     /// sizes to window points.
     guest_scale: u32,
@@ -182,8 +264,7 @@ impl PaneWindow {
             link,
             _win_delegate: win_delegate,
             _link_delegate: link_delegate,
-            texture: None,
-            buffer: BufferSize { width: 0, height: 0 },
+            surface: None,
             guest_scale: params.scale.max(1),
             pending_ack: None,
             dirty: false,
@@ -219,7 +300,8 @@ impl PaneWindow {
         }
     }
 
-    /// Decode and upload a `WindowFrame` into the persistent texture.
+    /// Decode a `WindowFrame` into the surface damage log; the upload into
+    /// whichever texture is safe to write happens on the presenting tick.
     /// Returns true when the frame will be presented (its ack rides the next
     /// display-link tick). Returns false when the host cannot take the frame
     /// at all (zero size, texture allocation failure): the caller must ack
@@ -233,21 +315,20 @@ impl PaneWindow {
         width: u32,
         height: u32,
         full: bool,
-        tiles: &[Tile],
+        tiles: Vec<Tile>,
     ) -> bool {
         let size = BufferSize { width, height };
-        let mut fresh_texture = false;
+        let mut fresh_surface = false;
         let unpresentable = if width == 0 || height == 0 {
             eprintln!("panes-host: window {}: zero-sized frame {seq}", self.id);
             true
-        } else if self.texture.is_none() || self.buffer != size {
-            self.texture = renderer.make_texture(width, height);
-            self.buffer = size;
-            fresh_texture = true;
-            if self.texture.is_none() {
+        } else if self.surface.as_ref().is_none_or(|surface| surface.size != size) {
+            self.surface = Surface::new(renderer, size);
+            fresh_surface = true;
+            if self.surface.is_none() {
                 eprintln!("panes-host: window {}: texture alloc {width}x{height} failed", self.id);
             }
-            self.texture.is_none()
+            self.surface.is_none()
         } else {
             false
         };
@@ -259,7 +340,7 @@ impl PaneWindow {
             self.dirty = false;
             return false;
         }
-        let Some(texture) = self.texture.as_ref() else {
+        let Some(surface) = self.surface.as_mut() else {
             unreachable!("unpresentable path returned above");
         };
 
@@ -280,9 +361,9 @@ impl PaneWindow {
             .filter(|tile| in_bounds(tile.rect))
             .map(|tile| u64::from(tile.rect.w) * u64::from(tile.rect.h))
             .sum();
-        if (full || fresh_texture) && covered < u64::from(width) * u64::from(height) {
+        if (full || fresh_surface) && covered < u64::from(width) * u64::from(height) {
             let zeros = vec![0u8; width as usize * height as usize * 4];
-            Renderer::upload(texture, Rect { x: 0, y: 0, w: width, h: height }, &zeros);
+            surface.push(Rect { x: 0, y: 0, w: width, h: height }, zeros);
         }
 
         for tile in tiles {
@@ -295,13 +376,13 @@ impl PaneWindow {
             match tile.encoding {
                 Encoding::Raw => {
                     if tile.payload.len() == expected {
-                        Renderer::upload(texture, rect, &tile.payload);
+                        surface.push(rect, tile.payload);
                     } else {
                         eprintln!("panes-host: window {}: raw tile size mismatch", self.id);
                     }
                 }
                 Encoding::Lz4 => match lz4_flex::block::decompress(&tile.payload, expected) {
-                    Ok(bytes) if bytes.len() == expected => Renderer::upload(texture, rect, &bytes),
+                    Ok(bytes) if bytes.len() == expected => surface.push(rect, bytes),
                     Ok(_) => {
                         eprintln!("panes-host: window {}: lz4 tile size mismatch", self.id);
                     }
@@ -335,22 +416,53 @@ impl PaneWindow {
             }
             return None;
         }
-        let texture = self.texture.as_ref()?;
-        let drawable = update.drawable();
-        if renderer.draw(texture, &drawable, self.layer.presentsWithTransaction()) {
-            self.dirty = false;
-            self.idle_ticks = 0;
-            self.pending_ack.take()
+        let surface = self.surface.as_mut()?;
+        // Pick the texture to draw. A caught-up current slot means nothing
+        // new arrived (a pure redraw, e.g. the live-resize stretch): sample
+        // it again, no CPU write, no race. Otherwise flip to the other slot
+        // so the pending uploads never touch the texture the previous
+        // present may still be reading (`replaceRegion` does not
+        // synchronize against the GPU; writing the in-flight texture is the
+        // tearing race this double buffer exists to prevent).
+        let index = if surface.slots[surface.current].absorbed == surface.log.len() {
+            surface.current
         } else {
-            // Keep dirty + pending ack; retry next tick.
-            None
+            surface.current ^ 1
+        };
+        let slot = &mut surface.slots[index];
+        if slot.absorbed != surface.log.len() {
+            if slot.in_flight() {
+                // GPU still reading the write target (two presents behind):
+                // keep dirty + pending ack and retry next tick.
+                return None;
+            }
+            for tile in &surface.log[slot.absorbed..] {
+                Renderer::upload(&slot.texture, tile.rect, &tile.bytes);
+            }
+            slot.absorbed = surface.log.len();
         }
+        let drawable = update.drawable();
+        let Some(commands) =
+            renderer.draw(&slot.texture, &drawable, self.layer.presentsWithTransaction())
+        else {
+            // Keep dirty + pending ack, but keep the slot switch: its
+            // texture already absorbed the damage, so the retry next tick
+            // just redraws it.
+            surface.current = index;
+            return None;
+        };
+        slot.last_draw = Some(commands);
+        surface.current = index;
+        surface.compact();
+        self.dirty = false;
+        self.idle_ticks = 0;
+        self.pending_ack.take()
     }
 
     /// Redraw (stretching the stale texture) on the next tick; used during
     /// resize so the window never shows undefined drawable contents.
     pub fn mark_dirty(&mut self) {
-        if self.texture.is_some() {
+        if self.surface.is_some() {
             self.dirty = true;
             self.idle_ticks = 0;
             self.link.setPaused(false);

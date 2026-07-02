@@ -171,7 +171,7 @@ fn handle_msg(app: &mut App, msg: ToHost) -> Deferred {
                 eprintln!("panes-host: frame for unknown window {id}");
                 return Deferred::default();
             };
-            if !window.apply_frame(&app.renderer, seq, width, height, full, &tiles) {
+            if !window.apply_frame(&app.renderer, seq, width, height, full, tiles) {
                 // Frame the host could not take (zero-size / texture alloc
                 // failure): ack immediately anyway. With one-frame-in-flight
                 // guest pacing, an ack held hostage to a texture we never

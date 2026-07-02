@@ -25,16 +25,20 @@ Three thread roles, one owner per resource:
 Per `WindowNew` the host builds: a titled/closable/miniaturizable/resizable
 `NSWindow` (content size = buffer px / scale), an input `NSView` subclass
 hosting a `CAMetalLayer` (`framebufferOnly`, `displaySyncEnabled`,
-`maximumDrawableCount = 3`, `contentsScale = backingScaleFactor`), a
-persistent `MTLTexture` holding the current surface, and a per-window
-`CAMetalDisplayLink`. The window is only ordered front on its first
-`WindowFrame`, so an empty window never flashes.
+`maximumDrawableCount = 3`, `contentsScale = backingScaleFactor`), two
+surface `MTLTexture`s (double-buffered: `replaceRegion` does not synchronize
+against GPU access, so uploads must never touch the texture a still-executing
+present is sampling), and a per-window `CAMetalDisplayLink`. The window is
+only ordered front on its first `WindowFrame`, so an empty window never
+flashes.
 
 ### Frame path and the ack loop
 
-`WindowFrame` tiles are decoded on the main thread (LZ4 via `lz4_flex`) and
-`replaceRegion`ed into the persistent texture (one CPU copy, fine at v1;
-`full` frames blank uncovered pixels first). The window is then dirty.
+`WindowFrame` tiles are decoded on the main thread (LZ4 via `lz4_flex`) into
+a per-window damage log (`full` frames blank uncovered pixels first). The
+window is then dirty. On the presenting tick the log is `replaceRegion`ed
+into whichever texture is not in flight (each texture replays the damage it
+missed while the other was on screen), and the layer flips to it.
 
 `CAMetalDisplayLink` (macOS 14+, from `objc2-quartz-core` 0.3, added to the
 main run loop in common modes with `preferredFrameRateRange` {min 60, max
