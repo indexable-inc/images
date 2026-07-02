@@ -3,7 +3,7 @@
 //! decorations.
 
 use panes_protocol::ToHost;
-use smithay::input::pointer::CursorImageStatus;
+use smithay::input::pointer::{CursorImageStatus, PointerHandle};
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1;
 use smithay::reexports::wayland_server::{Client, Resource as _};
@@ -11,12 +11,13 @@ use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_shm;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{Serial, Size};
+use smithay::utils::{Logical, Point, Serial, Size};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
     BufferAssignment, CompositorClientState, CompositorHandler, CompositorState, SurfaceAttributes,
     get_parent, is_sync_subsurface, with_states,
 };
+use smithay::wayland::pointer_constraints::{PointerConstraintsHandler, with_pointer_constraint};
 use smithay::wayland::shell::xdg::decoration::XdgDecorationHandler;
 use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, SurfaceCachedState, ToplevelSurface, XdgShellHandler,
@@ -29,8 +30,9 @@ use smithay::wayland::selection::data_device::{
 };
 use smithay::wayland::shm::{BufferData, ShmHandler, ShmState, with_buffer_contents};
 use smithay::{
-    delegate_compositor, delegate_data_device, delegate_output, delegate_seat, delegate_shm,
-    delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_compositor, delegate_data_device, delegate_output, delegate_pointer_constraints,
+    delegate_relative_pointer, delegate_seat, delegate_shm, delegate_xdg_decoration,
+    delegate_xdg_shell,
 };
 use tracing::{debug, warn};
 
@@ -126,6 +128,12 @@ impl CompositorHandler for App {
         // Send now if pacing allows, or release the frame callbacks if there
         // is nothing to send (pump handles both).
         self.pump(idx);
+
+        // A commit is also where a client-destroyed pointer lock surfaces
+        // (GLFW releases the grab by destroying the zwp_locked_pointer, with
+        // no input event to follow it), so reconcile the host here too.
+        self.maybe_activate_constraint();
+        self.sync_pointer_lock();
     }
 }
 
@@ -350,6 +358,34 @@ impl SeatHandler for App {
     }
 }
 
+impl PointerConstraintsHandler for App {
+    fn new_constraint(&mut self, _surface: &WlSurface, _pointer: &PointerHandle<Self>) {
+        // Activate immediately when the constraint's surface already holds
+        // pointer focus (the common case: MC locks in response to a click,
+        // which put focus there); otherwise it stays pending until focus
+        // arrives via PointerMotion.
+        self.maybe_activate_constraint();
+        self.sync_pointer_lock();
+    }
+
+    fn cursor_position_hint(
+        &mut self,
+        surface: &WlSurface,
+        pointer: &PointerHandle<Self>,
+        location: Point<f64, Logical>,
+    ) {
+        let active =
+            with_pointer_constraint(surface, pointer, |constraint| {
+                constraint.is_some_and(|constraint| constraint.is_active())
+            });
+        if active {
+            // Surface-local == global here (every surface anchors at the
+            // origin), so the hint is where the pointer resumes on unlock.
+            pointer.set_location(location);
+        }
+    }
+}
+
 // Guest-internal clipboard only (see `App::data_device_state`): selections
 // move between guest apps through smithay's built-in plumbing; nothing is
 // bridged to the macOS pasteboard yet (protocol gap, see README).
@@ -430,6 +466,9 @@ impl XdgShellHandler for App {
         if self.key_focus == Some(pane.id) {
             self.key_focus = None;
         }
+        // A locked pane dying must release the host cursor (the host also
+        // releases on its own window close; this covers the message anyway).
+        self.sync_pointer_lock();
     }
 
     fn popup_destroyed(&mut self, surface: PopupSurface) {
@@ -570,6 +609,8 @@ delegate_seat!(App);
 delegate_output!(App);
 delegate_xdg_shell!(App);
 delegate_xdg_decoration!(App);
+delegate_pointer_constraints!(App);
+delegate_relative_pointer!(App);
 
 #[cfg(feature = "gpu")]
 smithay::delegate_dmabuf!(App);

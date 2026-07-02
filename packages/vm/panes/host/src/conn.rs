@@ -23,6 +23,10 @@ pub enum Target {
 /// is what lets the writer thread exit.
 pub enum Event {
     Connected(mpsc::Sender<ToGuest>),
+    /// The guest's major-validated Hello. Its minor gates every 1.x message
+    /// we emit (postcard has no unknown-variant tolerance, see the protocol
+    /// crate), so the main thread must know it.
+    Hello { minor: u16 },
     Msg(ToHost),
     Disconnected,
 }
@@ -116,6 +120,7 @@ fn read_loop(read: Box<dyn Read + Send>) {
             Ok(ToHost::Hello { major, minor }) => {
                 if major == VERSION_MAJOR {
                     eprintln!("panes-host: guest speaks protocol {major}.{minor}");
+                    post(Event::Hello { minor });
                 } else {
                     eprintln!(
                         "panes-host: guest protocol major {major} != {VERSION_MAJOR}, hanging up"

@@ -46,6 +46,10 @@ pub struct HostLink {
     pub lz4: bool,
     /// Host backingScaleFactor from Hello.
     pub scale: u32,
+    /// Host protocol minor from Hello: postcard has no unknown-variant
+    /// tolerance, so 1.x messages are only emitted once this says the host
+    /// decodes them.
+    pub minor: u16,
     tx: mpsc::Sender<ToHost>,
     /// A clone of the socket kept purely to force-shutdown a connection we
     /// refuse (second host) or that failed the version handshake; dropping
@@ -223,6 +227,7 @@ fn wire_up(
         ready: false,
         lz4: false,
         scale: 1,
+        minor: 0,
         tx,
         conn,
     })

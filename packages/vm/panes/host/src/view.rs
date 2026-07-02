@@ -9,7 +9,7 @@
 //! right/down (scroll wheel up), while Wayland's axis is positive for a
 //! downward scroll, so both axes are negated on the way out.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 
 use objc2::rc::Retained;
@@ -47,6 +47,19 @@ pub struct ViewIvars {
     /// press and release alike; toggling membership tells them apart without
     /// hardcoding Apple's device-dependent left/right flag bits.
     held_modifiers: RefCell<HashSet<u16>>,
+    /// Pointer capture engaged for this window (`app::sync_capture`): motion
+    /// goes out as `PointerRelative` deltas, and the absolute re-anchor
+    /// before buttons/scrolls is skipped (the frozen cursor position is
+    /// meaningless while dissociated).
+    relative: Cell<bool>,
+    /// Identity (timestamp, eventNumber) of the last relative-forwarded
+    /// event. AppKit delivers each mouseMoved TWICE here -- once to the
+    /// first responder (`acceptsMouseMovedEvents`) and once to the tracking
+    /// area's owner (`MouseMoved` option), the same view (measured live: 4
+    /// posted moves, 8 arrivals). Absolute coordinates absorb the duplicate;
+    /// summed deltas would double mouse-look sensitivity, so duplicates are
+    /// dropped by identity.
+    last_relative: Cell<(f64, isize)>,
 }
 
 define_class!(
@@ -225,8 +238,17 @@ impl PanesView {
             id,
             tracking: RefCell::new(None),
             held_modifiers: RefCell::new(HashSet::new()),
+            relative: Cell::new(false),
+            last_relative: Cell::new((f64::NEG_INFINITY, 0)),
         });
         unsafe { msg_send![super(this), initWithFrame: frame] }
+    }
+
+    /// Switch the motion path between absolute coordinates and relative
+    /// deltas; owned by `app::sync_capture`, always in step with the cursor
+    /// capture.
+    pub fn set_relative(&self, relative: bool) {
+        self.ivars().relative.set(relative);
     }
 
     /// Focus left this window: release every held modifier guest-side and
@@ -249,8 +271,34 @@ impl PanesView {
     }
 
     fn send_motion(&self, event: &NSEvent) {
+        if self.ivars().relative.get() {
+            self.send_relative(event);
+            return;
+        }
         let point = self.surface_point(event);
         app::send(ToGuest::PointerMotion { id: self.ivars().id, x: point.x, y: point.y });
+    }
+
+    /// Motion while captured: `NSEvent` deltas keep flowing after
+    /// `CGAssociateMouseAndMouseCursorPosition(false)` froze the cursor
+    /// (that is the whole point of dissociation). Scaled to buffer pixels
+    /// like every other pointer coordinate; signs already match Wayland
+    /// (positive = right/down, same as the flipped view).
+    fn send_relative(&self, event: &NSEvent) {
+        // Drop the tracking-area duplicate of this event (see
+        // `ViewIvars::last_relative`); distinct events never share a
+        // (timestamp, eventNumber) identity.
+        let identity = (event.timestamp(), event.eventNumber());
+        if self.ivars().last_relative.get() == identity {
+            return;
+        }
+        self.ivars().last_relative.set(identity);
+        let scale = self.window().map_or(1.0, |window| window.backingScaleFactor());
+        let (dx, dy) = (event.deltaX() * scale, event.deltaY() * scale);
+        if dx == 0.0 && dy == 0.0 {
+            return;
+        }
+        app::send(ToGuest::PointerRelative { id: self.ivars().id, dx, dy });
     }
 
     fn send_button(&self, event: &NSEvent, state: ButtonState) {

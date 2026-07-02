@@ -91,6 +91,19 @@ compositor).
   per detent plus `v120 = delta * 120`. Both axes are negated
   (`scrollingDelta*` is positive-up, Wayland axis is positive-down). A
   momentum-phase end sends an axis `stop`.
+- **Pointer lock** (index#1724): on `ToHost::PointerLock { locked: true }`
+  for a window that is key (and while the app is active) the host captures
+  the mouse: `NSCursor.hide()` +
+  `CGAssociateMouseAndMouseCursorPosition(false)` park the cursor while
+  `NSEvent` deltas keep flowing, and the view forwards them as
+  `ToGuest::PointerRelative` (x scale) instead of absolute motion. The
+  capture's release lives in a `Drop` impl and `sync_capture` is called on
+  every transition -- unlock message, resign-key, window close, app
+  deactivate, disconnect, Cmd+Q -- so no path leaves the user's cursor
+  dissociated. A lock for a non-key window is remembered (`wants_lock`) and
+  engages when the window becomes key. AppKit delivers each mouseMoved twice
+  (first responder + tracking area); relative deltas dedupe by event
+  identity, absolute coordinates never cared.
 
 ## Mock guest
 
@@ -99,7 +112,10 @@ connects to it: one 800x600-point toplevel with a moving gradient and a
 blocky frame counter, full-damage-tiled in 256px tiles, LZ4 when the host
 advertises it. It renders the next frame when the previous seq is acked
 (exactly one frame in flight, like the real compositor) and logs every input
-event plus a once-a-second ack rate:
+event plus a once-a-second ack rate. A right-click into the window toggles
+`ToHost::PointerLock`, exercising the host's cursor capture without a VM:
+the cursor hides and freezes, motion arrives in the log as `PointerRelative`
+deltas, a second right-click releases it:
 
 ```
 panes-host --mock                       # everything in one process

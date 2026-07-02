@@ -2,6 +2,11 @@
 //! protocol on a unix socket, maps one toplevel with an animated test pattern
 //! (moving gradient + frame counter), and logs every input event it receives.
 //!
+//! Pointer lock: a right-click press toggles `ToHost::PointerLock` for the
+//! window (gated on the host's Hello minor), exercising the host's cursor
+//! capture end to end; the `PointerRelative` deltas it produces land in the
+//! same input log as everything else.
+//!
 //! Pacing mirrors the real compositor: exactly one frame in flight, the next
 //! render starts when the host acks the previous seq. On a `ProMotion` panel
 //! the ack loop should settle at ~120 acks/s; the rate is logged every
@@ -18,11 +23,13 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use panes_protocol::{
-    Encoding, Rect, Tile, ToGuest, ToHost, VERSION_MAJOR, VERSION_MINOR, WindowId, WireError,
-    read_msg, write_msg,
+    ButtonState, Encoding, MINOR_POINTER_LOCK, Rect, Tile, ToGuest, ToHost, VERSION_MAJOR,
+    VERSION_MINOR, WindowId, WireError, read_msg, write_msg,
 };
 
 const WINDOW_ID: WindowId = 1;
+/// evdev right button (input-event-codes.h); a right-click toggles the lock.
+const BTN_RIGHT: u32 = 0x111;
 /// Window size in points; the buffer is this times the host's scale.
 const LOGICAL_WIDTH: u32 = 800;
 const LOGICAL_HEIGHT: u32 = 600;
@@ -54,11 +61,13 @@ pub fn serve(path: &Path) -> std::io::Result<()> {
 
 /// What the reader thread distills from host messages for the render loop.
 enum HostEvent {
-    Hello { scale: u32, lz4: bool },
+    Hello { scale: u32, lz4: bool, minor: u16 },
     Ack(u64),
     Resize { width: u32, height: u32, scale: u32 },
     Close,
     Ping(u64),
+    /// Right-click pressed: flip the window's pointer lock.
+    LockToggle,
 }
 
 fn handle_conn(stream: UnixStream) -> Result<(), WireError> {
@@ -89,9 +98,17 @@ fn read_host(stream: UnixStream, tx: &mpsc::Sender<HostEvent>) {
                     eprintln!("mock: protocol major mismatch, hanging up");
                     return;
                 }
-                HostEvent::Hello { scale: scale.max(1), lz4: encodings.contains(&Encoding::Lz4) }
+                HostEvent::Hello {
+                    scale: scale.max(1),
+                    lz4: encodings.contains(&Encoding::Lz4),
+                    minor,
+                }
             }
             Ok(ToGuest::Ack { seq, .. }) => HostEvent::Ack(seq),
+            Ok(ToGuest::PointerButton { button: BTN_RIGHT, state: ButtonState::Pressed, id }) => {
+                eprintln!("mock: right click on window {id}: toggling pointer lock");
+                HostEvent::LockToggle
+            }
             Ok(ToGuest::Configure { id, width, height, scale, activated }) => {
                 eprintln!(
                     "mock: configure window {id}: {width}x{height} scale {scale} \
@@ -126,9 +143,9 @@ fn drive(
 ) -> Result<(), WireError> {
     // The host advertises capabilities first; nothing to size buffers on
     // until then.
-    let (mut scale, lz4) = loop {
+    let (mut scale, lz4, host_minor) = loop {
         match rx.recv_timeout(HELLO_TIMEOUT) {
-            Ok(HostEvent::Hello { scale, lz4 }) => break (scale, lz4),
+            Ok(HostEvent::Hello { scale, lz4, minor }) => break (scale, lz4, minor),
             Ok(_) => {}
             Err(_) => {
                 eprintln!("mock: no hello from host, giving up");
@@ -172,6 +189,7 @@ fn drive(
 
     let mut acked_in_window: u32 = 0;
     let mut window_start = Instant::now();
+    let mut locked = false;
     loop {
         let Ok(event) = rx.recv() else {
             return Ok(()); // host disconnected
@@ -213,6 +231,19 @@ fn drive(
             }
             HostEvent::Ping(nonce) => {
                 write_msg(writer, &ToHost::Pong { nonce })?;
+                writer.flush()?;
+            }
+            HostEvent::LockToggle => {
+                // Same negotiation rule as the real compositor: PointerLock
+                // is a 1.1 message, never sent to a host that did not
+                // advertise it.
+                if host_minor < MINOR_POINTER_LOCK {
+                    eprintln!("mock: host minor {host_minor} lacks pointer lock; ignoring");
+                    continue;
+                }
+                locked = !locked;
+                eprintln!("mock: sending PointerLock locked={locked}");
+                write_msg(writer, &ToHost::PointerLock { id: WINDOW_ID, locked })?;
                 writer.flush()?;
             }
             HostEvent::Hello { .. } => {}
@@ -440,6 +471,26 @@ mod tests {
             panic!("expected incremental WindowFrame, got a different message");
         };
         assert_eq!(next_seq, seq + 1);
+
+        // Right-click press toggles the pointer lock on, a second press
+        // toggles it off; releases and other buttons must not toggle.
+        let press = |writer: &mut BufWriter<UnixStream>, button: u32, state: ButtonState| {
+            write_msg(&mut *writer, &ToGuest::PointerButton { id, button, state })
+                .expect("send button");
+            writer.flush().expect("flush");
+        };
+        press(&mut writer, BTN_RIGHT, ButtonState::Pressed);
+        let lock: ToHost = read_msg(&mut reader).expect("pointer lock");
+        assert!(matches!(lock, ToHost::PointerLock { id: WINDOW_ID, locked: true }));
+        press(&mut writer, BTN_RIGHT, ButtonState::Released);
+        // Relative deltas while locked are logged, never answered; the next
+        // wire message after the release-then-press must be the unlock.
+        write_msg(&mut writer, &ToGuest::PointerRelative { id, dx: 3.0, dy: -2.0 })
+            .expect("send relative");
+        writer.flush().expect("flush");
+        press(&mut writer, BTN_RIGHT, ButtonState::Pressed);
+        let unlock: ToHost = read_msg(&mut reader).expect("pointer unlock");
+        assert!(matches!(unlock, ToHost::PointerLock { id: WINDOW_ID, locked: false }));
 
         write_msg(&mut writer, &ToGuest::CloseRequest { id }).expect("close request");
         writer.flush().expect("flush");

@@ -24,6 +24,10 @@ panes-protocol.workspace = true
 dispatch2 = "0.3"
 objc2.workspace = true
 objc2-app-kit.workspace = true
+# Pointer capture for guest pointer locks (index#1724):
+# CGAssociateMouseAndMouseCursorPosition parks the cursor while NSEvent
+# deltas keep flowing. Already in the tree as an objc2-app-kit dependency.
+objc2-core-graphics = "0.3"
 objc2-foundation.workspace = true
 objc2-metal = "0.3"
 objc2-quartz-core = "0.3"

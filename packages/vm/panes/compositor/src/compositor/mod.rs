@@ -17,7 +17,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
-use panes_protocol::{Encoding, ToGuest, ToHost, VERSION_MAJOR, VERSION_MINOR, WindowId};
+use panes_protocol::{
+    Encoding, MINOR_POINTER_LOCK, ToGuest, ToHost, VERSION_MAJOR, VERSION_MINOR, WindowId,
+};
 use smithay::input::{Seat, SeatState};
 use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
 use smithay::reexports::calloop::generic::Generic;
@@ -32,6 +34,10 @@ use smithay::wayland::compositor::{
     with_surface_tree_downward,
 };
 use smithay::wayland::output::OutputManagerState;
+use smithay::wayland::pointer_constraints::{
+    PointerConstraint, PointerConstraintsState, with_pointer_constraint,
+};
+use smithay::wayland::relative_pointer::RelativePointerManagerState;
 use smithay::wayland::selection::data_device::DataDeviceState;
 use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
 use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface, XdgShellState};
@@ -123,6 +129,10 @@ pub struct App {
     // Held only to keep their globals alive: neither trait has an accessor.
     _decoration_state: XdgDecorationState,
     _output_manager_state: OutputManagerState,
+    // Same: pointer-constraints/relative-pointer live in surface/pointer
+    // user data, the state objects only own the globals.
+    _pointer_constraints_state: PointerConstraintsState,
+    _relative_pointer_state: RelativePointerManagerState,
     shm_state: ShmState,
     /// Clipboard between guest apps. The pixels never leave the guest, but
     /// the global must exist: foot (and other toolkits) hard-fail at startup
@@ -144,6 +154,10 @@ pub struct App {
     pointer_focus: Option<WindowId>,
     /// Window holding `wl_keyboard` focus (last activated / keyed window).
     key_focus: Option<WindowId>,
+    /// Window the host was last told holds an active pointer lock
+    /// (`ToHost::PointerLock { locked: true }` without a matching false yet);
+    /// diffed against the live constraint state by `sync_pointer_lock`.
+    locked_pane: Option<WindowId>,
 
     #[cfg(feature = "gpu")]
     gpu: Option<gpu::Gpu>,
@@ -251,6 +265,11 @@ impl App {
         let shm_state = ShmState::new::<Self>(dh, Vec::new());
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(dh);
         let data_device_state = DataDeviceState::new::<Self>(dh);
+        // Pointer lock + relative motion for mouse-look apps (index#1724):
+        // both globals are always advertised; whether an activated lock does
+        // anything host-side is gated on the host's Hello minor instead.
+        let pointer_constraints_state = PointerConstraintsState::new::<Self>(dh);
+        let relative_pointer_state = RelativePointerManagerState::new::<Self>(dh);
         let mut seat_state = SeatState::new();
 
         let mut seat: Seat<Self> = seat_state.new_wl_seat(dh, "panes");
@@ -317,6 +336,8 @@ impl App {
             xdg_shell_state,
             _decoration_state: decoration_state,
             _output_manager_state: output_manager_state,
+            _pointer_constraints_state: pointer_constraints_state,
+            _relative_pointer_state: relative_pointer_state,
             shm_state,
             data_device_state,
             seat_state,
@@ -328,6 +349,7 @@ impl App {
             host: None,
             pointer_focus: None,
             key_focus: None,
+            locked_pane: None,
             #[cfg(feature = "gpu")]
             gpu,
             #[cfg(feature = "gpu")]
@@ -341,6 +363,12 @@ impl App {
         // wl frame callback time wraps at u32 milliseconds by protocol design.
         u32::try_from(self.start.elapsed().as_millis() & u128::from(u32::MAX))
             .expect("masked to 32 bits")
+    }
+
+    fn now_us(&self) -> u64 {
+        // zwp_relative_pointer timestamps are 64-bit microseconds.
+        u64::try_from(self.start.elapsed().as_micros() & u128::from(u64::MAX))
+            .expect("masked to 64 bits")
     }
 
     fn pane_index(&self, id: WindowId) -> Option<usize> {
@@ -446,6 +474,10 @@ impl App {
                     .is_some_and(|h| h.generation == generation)
                 {
                     self.host = None;
+                    // The host releases its cursor capture on disconnect; a
+                    // still-active guest lock is re-announced by the
+                    // sync_pointer_lock call in on_hello.
+                    self.locked_pane = None;
                     for pane in &mut self.panes {
                         pane.inflight = None;
                         pane.inflight_ticks = 0;
@@ -504,7 +536,14 @@ impl App {
                     host.send(ToHost::Pong { nonce });
                 }
             }
-            other => input::handle(self, &other),
+            other => {
+                input::handle(self, &other);
+                // Pointer focus may have moved: activate a pending lock that
+                // just gained focus, and reconcile the host (smithay
+                // auto-deactivates constraints on focus loss).
+                self.maybe_activate_constraint();
+                self.sync_pointer_lock();
+            }
         }
     }
 
@@ -544,10 +583,15 @@ impl App {
             host.ready = true;
             host.lz4 = encodings.contains(&Encoding::Lz4);
             host.scale = scale.max(1);
+            host.minor = minor;
         }
         for idx in 0..self.panes.len() {
             self.pump(idx);
         }
+        // A lock that stayed active across a host reconnect must be
+        // re-announced: the new connection starts with no capture.
+        self.maybe_activate_constraint();
+        self.sync_pointer_lock();
     }
 
     fn on_ack(&mut self, id: WindowId, seq: u64) {
@@ -620,6 +664,89 @@ impl App {
             }
             self.key_focus = None;
         }
+    }
+
+    /// True when the connected host decodes the pointer-lock messages
+    /// (Hello minor >= [`MINOR_POINTER_LOCK`]); locks are never activated for
+    /// an older host, so clients keep a plain cursor instead of a lock that
+    /// silently produces no relative motion.
+    fn host_has_pointer_lock(&self) -> bool {
+        self.host
+            .as_ref()
+            .is_some_and(|h| h.ready && h.minor >= MINOR_POINTER_LOCK)
+    }
+
+    /// Activate the focused pane's pending pointer lock. Activation rule
+    /// (`zwp_pointer_constraints` leaves the policy to the compositor): a
+    /// lock activates when its surface holds pointer focus. Confined pointers
+    /// stay pending: the host cannot fence its cursor to an `NSWindow`, and
+    /// activating one would falsely tell the client its pointer is confined
+    /// (README: known gaps).
+    fn maybe_activate_constraint(&self) {
+        if !self.host_has_pointer_lock() {
+            return;
+        }
+        let Some(id) = self.pointer_focus else {
+            return;
+        };
+        let Some(surface) = self.pane_surface(id) else {
+            return;
+        };
+        let Some(pointer) = self.seat.get_pointer() else {
+            return;
+        };
+        with_pointer_constraint(&surface, &pointer, |constraint| {
+            if let Some(constraint) = constraint
+                && !constraint.is_active()
+                && matches!(&*constraint, PointerConstraint::Locked(_))
+            {
+                constraint.activate();
+            }
+        });
+    }
+
+    /// The pointer-focused pane whose surface holds an ACTIVE lock right now.
+    fn active_locked_pane(&self) -> Option<WindowId> {
+        let id = self.pointer_focus?;
+        let surface = self.pane_surface(id)?;
+        let pointer = self.seat.get_pointer()?;
+        with_pointer_constraint(&surface, &pointer, |constraint| {
+            constraint.is_some_and(|constraint| {
+                constraint.is_active() && matches!(&*constraint, PointerConstraint::Locked(_))
+            })
+        })
+        .then_some(id)
+    }
+
+    /// Diff the live constraint state against what the host was told and send
+    /// the `PointerLock` transitions. Runs after every input message and
+    /// every commit, so all three unlock paths surface here: our own
+    /// activation, smithay's automatic deactivate on focus loss, and the
+    /// client destroying its `zwp_locked_pointer` (how GLFW apps release the
+    /// grab; only a commit, not an input event, may follow that).
+    fn sync_pointer_lock(&mut self) {
+        // `locked_pane` tracks what the HOST believes, so it only advances
+        // while a lock-capable host is listening (it resets to None with the
+        // connection); updating it host-less would swallow the re-announce
+        // on reconnect.
+        if !self.host_has_pointer_lock() {
+            return;
+        }
+        let active = self.active_locked_pane();
+        if active == self.locked_pane {
+            return;
+        }
+        let Some(host) = &self.host else {
+            return;
+        };
+        if let Some(old) = self.locked_pane {
+            host.send(ToHost::PointerLock { id: old, locked: false });
+        }
+        if let Some(new) = active {
+            host.send(ToHost::PointerLock { id: new, locked: true });
+        }
+        info!(from = ?self.locked_pane, to = ?active, "pointer lock changed");
+        self.locked_pane = active;
     }
 
     /// 10Hz fallback: with no ready host nothing acks, so release frame

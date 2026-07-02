@@ -175,6 +175,9 @@ pub struct SurfaceSize {
     pub scale: u32,
 }
 
+// The bools are independent presentation/lifecycle flags, each owned by a
+// different AppKit event path, not an encoded state machine.
+#[allow(clippy::struct_excessive_bools)]
 pub struct PaneWindow {
     pub id: WindowId,
     pub ns: Retained<NSWindow>,
@@ -203,6 +206,11 @@ pub struct PaneWindow {
     pub shown: bool,
     /// Set once `WindowGone` arrived; the next `windowShouldClose` says yes.
     pub closing: bool,
+    /// The guest surface holds an active pointer lock
+    /// (`ToHost::PointerLock`); the host engages the actual cursor capture
+    /// only while this window is also key (see `app::sync_capture`), so the
+    /// intent survives focus round-trips and re-engages on return.
+    pub wants_lock: bool,
 }
 
 impl PaneWindow {
@@ -307,6 +315,7 @@ impl PaneWindow {
             idle_ticks: 0,
             shown: false,
             closing: false,
+            wants_lock: false,
         }
     }
 

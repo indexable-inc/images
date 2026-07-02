@@ -22,7 +22,11 @@ macOS host                          aarch64-linux guest (libkrun-efi, vmkit)
   byte stream (guest vsock port 7100 to a host unix socket) carrying
   length-prefixed postcard frames: damage-tiled window contents up, input and
   configure events down, ack-driven pacing genlocked to the host display. The
-  crate doc comments are the protocol spec.
+  crate doc comments are the protocol spec. Minor 1 (v1.1) adds pointer lock
+  for mouse-look apps (index#1724): `ToHost::PointerLock` when a surface's
+  `zwp_locked_pointer_v1` (de)activates, `ToGuest::PointerRelative` for the
+  raw deltas the host forwards while its cursor is captured; both are gated
+  on the peer's Hello minor (postcard tolerates no unknown variants).
 - [`compositor/`](compositor/) (`panes-compositor`): guest-side headless
   Wayland compositor. Each `xdg_toplevel` becomes a window on the host; no
   DRM output, no seat, no logind, it composites nothing and only exports.

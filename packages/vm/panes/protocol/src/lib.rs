@@ -26,9 +26,14 @@ use serde::{Deserialize, Serialize};
 /// Postcard has no unknown-variant fallback (an unrecognized enum discriminant
 /// is a decode error), so ANY additive message/variant change bumps
 /// `VERSION_MINOR` and must only be emitted once the peer's Hello advertised a
-/// minor that has it.
+/// minor that has it. For the same reason new variants are append-only:
+/// postcard encodes the variant index, so inserting one mid-enum renumbers
+/// everything after it.
 pub const VERSION_MAJOR: u16 = 1;
-pub const VERSION_MINOR: u16 = 0;
+pub const VERSION_MINOR: u16 = 1;
+
+/// Minor that introduced [`ToHost::PointerLock`] / [`ToGuest::PointerRelative`].
+pub const MINOR_POINTER_LOCK: u16 = 1;
 
 /// Guest vsock port the compositor listens on.
 pub const VSOCK_PORT: u32 = 7100;
@@ -122,6 +127,17 @@ pub enum ToHost {
     Pong {
         nonce: u64,
     },
+    /// The window's surface acquired (`locked: true`) or released
+    /// (`locked: false`) a `zwp_locked_pointer_v1` lock while holding pointer
+    /// focus (mouse-look apps: Minecraft, any GLFW "disabled cursor" client).
+    /// While locked the host hides its cursor, dissociates it from mouse
+    /// movement, and forwards deltas as [`ToGuest::PointerRelative`] instead
+    /// of absolute `PointerMotion`. Since minor 1 ([`MINOR_POINTER_LOCK`]);
+    /// only sent once the host's Hello advertised it.
+    PointerLock {
+        id: WindowId,
+        locked: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,6 +229,17 @@ pub enum ToGuest {
     },
     Ping {
         nonce: u64,
+    },
+    /// Relative pointer motion while `id` holds a pointer lock (see
+    /// [`ToHost::PointerLock`]). Deltas are buffer pixels, the same unit as
+    /// `PointerMotion` coordinates, positive right/down; the compositor feeds
+    /// them to `zwp_relative_pointer_v1`. Since minor 1
+    /// ([`MINOR_POINTER_LOCK`]); only sent once the guest's Hello advertised
+    /// it.
+    PointerRelative {
+        id: WindowId,
+        dx: f64,
+        dy: f64,
     },
 }
 
@@ -306,6 +333,22 @@ mod tests {
         write_msg(&mut buf, &ToHost::Pong { nonce: 0 }).unwrap();
         let back: ToHost = read_msg(&mut buf.as_slice()).unwrap();
         assert!(matches!(back, ToHost::Pong { nonce: 0 }));
+    }
+
+    #[test]
+    fn pointer_lock_and_relative_roundtrip() {
+        let mut buf = Vec::new();
+        write_msg(&mut buf, &ToHost::PointerLock { id: 3, locked: true }).unwrap();
+        let back: ToHost = read_msg(&mut buf.as_slice()).unwrap();
+        assert!(matches!(back, ToHost::PointerLock { id: 3, locked: true }));
+
+        let mut buf = Vec::new();
+        write_msg(&mut buf, &ToGuest::PointerRelative { id: 3, dx: -1.5, dy: 2.25 }).unwrap();
+        let back: ToGuest = read_msg(&mut buf.as_slice()).unwrap();
+        let ToGuest::PointerRelative { id: 3, dx, dy } = back else {
+            panic!("wrong variant");
+        };
+        assert!((dx - -1.5).abs() < f64::EPSILON && (dy - 2.25).abs() < f64::EPSILON);
     }
 
     #[test]

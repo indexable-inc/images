@@ -46,7 +46,14 @@ Wayland clients ──commit──> FrameStore (packed BGRA copy per window)
   Coordinates are surface-local, so pointer focus is handed to smithay
   explicitly per event. Keys are evdev codes fed through an xkb keymap
   (`--xkb-layout`, "us" default); the host never forwards OS auto-repeats,
-  clients repeat from `wl_keyboard.repeat_info`.
+  clients repeat from `wl_keyboard.repeat_info`. Pointer lock (index#1724):
+  `zwp_pointer_constraints_v1` + `zwp_relative_pointer_manager_v1` are
+  advertised; a locked-pointer constraint activates when its surface holds
+  pointer focus, the host is told via `ToHost::PointerLock` (gated on its
+  Hello minor >= 1), and the `ToGuest::PointerRelative` deltas it then
+  forwards feed `pointer.relative_motion`. Lock state is reconciled after
+  every input message and every commit, which is where a client destroying
+  its lock (GLFW's ungrab) surfaces.
 
 ## Pacing (no timer)
 
@@ -105,5 +112,9 @@ WAYLAND_DISPLAY=wayland-1 foot            # any client, in another shell
   is global); needs wp_fractional_scale or per-surface preferred scale.
 - Cursor: `ToHost::Cursor` is always sent with `image: None` (host keeps its
   native cursor); serializing the client cursor surface is a TODO.
+- `zwp_confined_pointer` constraints are accepted but never activated: the
+  host cannot fence its cursor to an NSWindow, and a fake activation would
+  tell the client its pointer is confined when it is not. Only locked
+  pointers (all a mouse-look app needs) are honored.
 - The whole-buffer memcmp diff is simple and fast enough for v1; client
   damage hints could bound it later.

@@ -13,11 +13,17 @@ use std::process::ExitCode;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use objc2::MainThreadMarker;
 use objc2::rc::Retained;
-use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSScreen, NSWindow};
+use objc2::runtime::ProtocolObject;
+use objc2::{MainThreadMarker, MainThreadOnly, define_class};
+use objc2_app_kit::{
+    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSCursor, NSScreen,
+    NSWindow,
+};
+use objc2_core_graphics::{CGAssociateMouseAndMouseCursorPosition, CGError};
+use objc2_foundation::{NSNotification, NSObjectProtocol};
 use objc2_quartz_core::CAMetalDisplayLinkUpdate;
-use panes_protocol::{ToGuest, ToHost, WindowId};
+use panes_protocol::{MINOR_POINTER_LOCK, ToGuest, ToHost, WindowId};
 
 use crate::conn::{self, Event, HostInfo, Target};
 use crate::render::Renderer;
@@ -38,6 +44,47 @@ struct App {
     /// equivalent of mock's rate line, and the 120Hz-genlock evidence
     /// (index#1686 M6). An entry resets on each report.
     ack_stats: HashMap<WindowId, AckStat>,
+    /// Guest protocol minor from its Hello; gates `PointerRelative` (a 1.1
+    /// message postcard-decodes to an error on a 1.0 guest). 0 until known.
+    peer_minor: u16,
+    /// The engaged cursor capture, at most one. `Option` assignment is the
+    /// whole engage/release mechanism: dropping the old value restores the
+    /// cursor (see [`CursorCapture`]).
+    capture: Option<CursorCapture>,
+}
+
+/// An engaged pointer capture: cursor hidden and dissociated from mouse
+/// movement so `NSEvent` deltas drive the guest's relative pointer while the
+/// real cursor stays parked. The un-capture lives in `Drop`, so no path can
+/// release the window without also giving the user their cursor back (the
+/// failure mode to be paranoid about).
+struct CursorCapture {
+    id: WindowId,
+}
+
+impl CursorCapture {
+    fn engage(id: WindowId) -> Self {
+        eprintln!("panes-host: window {id}: pointer captured (cursor hidden, relative deltas)");
+        // Hide/unhide nest globally, so exactly one hide per capture,
+        // balanced by the one unhide in Drop.
+        NSCursor::hide();
+        let err = CGAssociateMouseAndMouseCursorPosition(false);
+        if err != CGError::Success {
+            eprintln!("panes-host: window {id}: cursor dissociation failed: {err:?}");
+        }
+        Self { id }
+    }
+}
+
+impl Drop for CursorCapture {
+    fn drop(&mut self) {
+        eprintln!("panes-host: window {}: pointer capture released", self.id);
+        let err = CGAssociateMouseAndMouseCursorPosition(true);
+        if err != CGError::Success {
+            eprintln!("panes-host: window {}: cursor re-association failed: {err:?}", self.id);
+        }
+        NSCursor::unhide();
+    }
 }
 
 struct AckStat {
@@ -102,8 +149,16 @@ pub fn run(target: Target, title_prefix: String) -> ExitCode {
             title_prefix,
             quitting: false,
             ack_stats: HashMap::new(),
+            peer_minor: 0,
+            capture: None,
         });
     });
+
+    // App activation delegate: a deactivated app must never hold the user's
+    // cursor hostage, so capture is released on resign-active and re-engaged
+    // (if the guest still wants it) on reactivation.
+    let delegate = AppDelegate::new(mtm);
+    ns_app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let host = HostInfo {
@@ -129,9 +184,16 @@ pub fn on_event(event: Event) {
             app.out = Some(tx);
             Deferred::default()
         }
+        Event::Hello { minor } => {
+            app.peer_minor = minor;
+            Deferred::default()
+        }
         Event::Disconnected => {
             app.out = None;
             app.ack_stats.clear();
+            app.peer_minor = 0;
+            // The capture cannot outlive the lock-holding guest.
+            app.capture = None;
             // Guest windows cannot outlive the guest connection.
             let close = app.windows.drain().map(|(_, window)| window).collect();
             Deferred { show: None, close }
@@ -200,12 +262,58 @@ fn handle_msg(app: &mut App, msg: ToHost) -> Deferred {
                 window.closing = true;
                 deferred.close.push(window);
             }
+            // A locked window that vanished must release the capture.
+            sync_capture(app);
             deferred
         }
         ToHost::Cursor { .. } => {
             // v1 keeps the host cursor; guest cursor imagery is a follow-up.
             Deferred::default()
         }
+        ToHost::PointerLock { id, locked } => {
+            if let Some(window) = app.windows.get_mut(&id) {
+                window.wants_lock = locked;
+            } else {
+                eprintln!("panes-host: pointer lock for unknown window {id}");
+            }
+            sync_capture(app);
+            Deferred::default()
+        }
+    }
+}
+
+/// Reconcile the engaged cursor capture with what the guest wants and what
+/// the user is looking at: capture exactly when a lock-holding window is the
+/// key window of the active app (and the guest speaks 1.1, so the
+/// `PointerRelative` stream it implies is legal to send). Idempotent, called
+/// from every transition that can change an input: `PointerLock`, key-window
+/// changes, window close, app (de)activation, disconnect.
+fn sync_capture(app: &mut App) {
+    let desired = if app.peer_minor >= MINOR_POINTER_LOCK
+        && NSApplication::sharedApplication(app.mtm).isActive()
+    {
+        app.windows
+            .iter()
+            .find(|(_, window)| window.wants_lock && window.ns.isKeyWindow())
+            .map(|(id, _)| *id)
+    } else {
+        None
+    };
+    if app.capture.as_ref().map(|capture| capture.id) == desired {
+        return;
+    }
+    if let Some(capture) = app.capture.take() {
+        // The window may already be gone (WindowGone/close paths).
+        if let Some(window) = app.windows.get(&capture.id) {
+            window.view_handle().set_relative(false);
+        }
+        // `capture` drops here: cursor re-associated and unhidden.
+    }
+    if let Some(id) = desired
+        && let Some(window) = app.windows.get(&id)
+    {
+        window.view_handle().set_relative(true);
+        app.capture = Some(CursorCapture::engage(id));
     }
 }
 
@@ -275,6 +383,8 @@ pub fn window_closed(id: WindowId) {
         // Normally removed already (WindowGone / disconnect); this catches
         // AppKit-initiated closes so state cannot leak.
         app.windows.remove(&id);
+        // Never leave the cursor dissociated for a window that closed.
+        sync_capture(app);
     });
 }
 
@@ -361,6 +471,9 @@ pub fn window_activation(id: WindowId, activated: bool) {
                 activated,
             });
         }
+        // Key-window changes gate the cursor capture: resign releases it,
+        // become re-engages it when the guest still holds the lock.
+        sync_capture(app);
     });
 }
 
@@ -378,6 +491,8 @@ pub fn request_quit() {
             return true;
         }
         app.quitting = true;
+        // The exit below skips Drop; give the cursor back explicitly.
+        app.capture = None;
         if let Some(out) = &app.out {
             for id in app.windows.keys() {
                 let _ = out.send(ToGuest::CloseRequest { id: *id });
@@ -393,4 +508,35 @@ pub fn request_quit() {
         std::thread::sleep(Duration::from_millis(300));
         std::process::exit(0);
     });
+}
+
+define_class!(
+    #[unsafe(super(objc2_foundation::NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "PanesAppDelegate"]
+    struct AppDelegate;
+
+    unsafe impl NSObjectProtocol for AppDelegate {}
+
+    unsafe impl NSApplicationDelegate for AppDelegate {
+        #[unsafe(method(applicationDidResignActive:))]
+        fn application_did_resign_active(&self, _notification: &NSNotification) {
+            // Belt and braces on top of windowDidResignKey: whatever order
+            // AppKit resigns things in, deactivation always ends with the
+            // cursor released.
+            with_app(sync_capture);
+        }
+
+        #[unsafe(method(applicationDidBecomeActive:))]
+        fn application_did_become_active(&self, _notification: &NSNotification) {
+            with_app(sync_capture);
+        }
+    }
+);
+
+impl AppDelegate {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(());
+        unsafe { objc2::msg_send![super(this), init] }
+    }
 }

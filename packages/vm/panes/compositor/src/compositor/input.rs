@@ -9,7 +9,7 @@
 use panes_protocol::{AxisSource as WireAxisSource, ButtonState as WireButtonState, ToGuest};
 use smithay::backend::input::{Axis, AxisSource, ButtonState, KeyState};
 use smithay::input::keyboard::{FilterResult, Keycode};
-use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent};
+use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent, RelativeMotionEvent};
 use smithay::utils::{Point, SERIAL_COUNTER};
 
 use super::App;
@@ -17,6 +17,7 @@ use super::App;
 pub fn handle(app: &mut App, msg: &ToGuest) {
     match msg {
         ToGuest::PointerMotion { id, x, y } => pointer_motion(app, *id, *x, *y),
+        ToGuest::PointerRelative { id, dx, dy } => pointer_relative(app, *id, *dx, *dy),
         ToGuest::PointerButton { id, button, state } => pointer_button(app, *id, *button, *state),
         ToGuest::PointerAxis {
             id,
@@ -56,6 +57,37 @@ fn pointer_motion(app: &mut App, id: panes_protocol::WindowId, x: f64, y: f64) {
             location: (x / scale, y / scale).into(),
             serial: SERIAL_COUNTER.next_serial(),
             time,
+        },
+    );
+    pointer.frame(app);
+}
+
+/// Relative deltas while `id` holds the pointer lock. The pointer does not
+/// move: focus is pinned on the locked surface (the host stops sending
+/// absolute motion while captured) and only `zwp_relative_pointer` listeners
+/// see the event.
+fn pointer_relative(app: &mut App, id: panes_protocol::WindowId, dx: f64, dy: f64) {
+    let Some(surface) = app.pane_surface(id) else {
+        return;
+    };
+    let Some(pointer) = app.seat.get_pointer() else {
+        return;
+    };
+    // Wire deltas are buffer pixels (same convention as PointerMotion), so
+    // the same pixel->logical division applies.
+    let scale = host_scale(app);
+    let delta = Point::from((dx / scale, dy / scale));
+    let utime = app.now_us();
+    pointer.relative_motion(
+        app,
+        Some((surface, Point::default())),
+        &RelativeMotionEvent {
+            delta,
+            // NSEvent deltas are already pointer-accelerated and macOS
+            // exposes no raw counterpart, so mirror the accelerated vector
+            // (the usual compositor fallback for non-libinput sources).
+            delta_unaccel: delta,
+            utime,
         },
     );
     pointer.frame(app);
