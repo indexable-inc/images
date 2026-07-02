@@ -116,6 +116,35 @@ CREATE TABLE IF NOT EXISTS inputs (
     created_at  REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS inputs_channel ON inputs (channel, seq);
+
+-- Outbox: kernel -> agent push queue behind the Claude Code channel. The kernel's
+-- `notify()` appends one row per event; the MCP transport drains them on its poll
+-- tick and emits each as a `notifications/claude/channel` MCP notification, so
+-- kernel code can wake the connected agent session. Same transient-message
+-- discipline as `inputs`: the drain DELETEs what it delivers, so the table stays
+-- empty between events. `meta` is a JSON object of identifier-keyed strings (they
+-- become attributes on the client's <channel> tag).
+CREATE TABLE IF NOT EXISTS outbox (
+    seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+    content     TEXT NOT NULL,
+    meta        TEXT NOT NULL DEFAULT '{}',
+    created_at  REAL NOT NULL
+);
+
+-- Resource events: the kernel/server -> browser stream behind interactive
+-- resources. Action results and errors (kernel) and agent `reply` messages (MCP
+-- server) append here; the dashboard's SSE endpoint streams rows to every page
+-- subscribed to that resource. Append-only with age-based pruning rather than
+-- delete-on-read, because several pages may subscribe to one resource and each
+-- reads forward from its own seq.
+CREATE TABLE IF NOT EXISTS events (
+    seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+    resource    TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    created_at  REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS events_resource ON events (resource, seq);
 """
 
 
@@ -494,6 +523,88 @@ def delete_inputs(conn: sqlite3.Connection, seqs: list[int]) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Outbox + events: the kernel -> agent and kernel/server -> browser push paths
+# behind the Claude Code channel and interactive resource actions. The kernel
+# writes `outbox` (notify()) and `events` (action results); the MCP transport
+# drains `outbox` into channel notifications; the MCP `reply` tool writes
+# `events`; the dashboard's SSE endpoint reads `events`.
+# --------------------------------------------------------------------------- #
+
+# Events older than this are pruned on write. The stream is a live feed, not
+# history: a page subscribes and reads forward, so a row only matters for as long
+# as a subscriber might still be catching up on a slow poll tick.
+_EVENT_MAX_AGE_SECONDS = 3600.0
+
+
+def add_outbox(conn: sqlite3.Connection, *, content: str, meta: str) -> None:
+    """Queue one channel event (``meta`` is a JSON object of identifier-keyed
+    strings). The kernel is the sole inserter; the MCP transport drains."""
+    conn.execute(
+        "INSERT INTO outbox (content, meta, created_at) VALUES (?, ?, ?)",
+        (content, meta, _now()),
+    )
+
+
+def take_outbox(conn: sqlite3.Connection) -> list[dict]:
+    """Every queued channel event, oldest first, consuming the rows. Like
+    ``_drain_inputs``: DELETE before delivering, so an event can never be emitted
+    twice; a crash between the delete and the send loses at most one batch."""
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT seq, content, meta FROM outbox ORDER BY seq ASC"
+    ).fetchall()
+    if not rows:
+        return []
+    placeholders = ",".join("?" for _ in rows)
+    conn.execute(
+        f"DELETE FROM outbox WHERE seq IN ({placeholders})",  # noqa: S608 -- placeholders are bound params
+        [r["seq"] for r in rows],
+    )
+    return [dict(r) for r in rows]
+
+
+def add_event(conn: sqlite3.Connection, *, resource: str, kind: str, body: str) -> None:
+    """Append one resource event (``body`` is a JSON object) and prune rows past
+    the age cap, so the live feed never grows the store without bound."""
+    now = _now()
+    conn.execute(
+        "INSERT INTO events (resource, kind, body, created_at) VALUES (?, ?, ?, ?)",
+        (resource, kind, body, now),
+    )
+    conn.execute(
+        "DELETE FROM events WHERE created_at < ?", (now - _EVENT_MAX_AGE_SECONDS,)
+    )
+
+
+def latest_event_seq(conn: sqlite3.Connection, resource: str) -> int:
+    """The newest event seq for ``resource`` (0 when none): where a fresh SSE
+    subscriber starts, so it streams new events only, never replayed history."""
+    row = conn.execute(
+        "SELECT MAX(seq) FROM events WHERE resource = ?", (resource,)
+    ).fetchone()
+    return int(row[0]) if row and row[0] is not None else 0
+
+
+def events_after(conn: sqlite3.Connection, resource: str, seq: int) -> list[dict]:
+    """The events for ``resource`` with seq > ``seq``, oldest first."""
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT seq, kind, body, created_at FROM events "
+        "WHERE resource = ? AND seq > ? ORDER BY seq ASC",
+        (resource, seq),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def resource_live(conn: sqlite3.Connection, id: str) -> bool:
+    """Whether ``id`` names a resource not yet closed: the `reply` tool's gate, so
+    a reply to a finished or mistyped resource fails loudly instead of streaming
+    into a feed no page reads."""
+    row = conn.execute("SELECT status FROM resources WHERE id = ?", (id,)).fetchone()
+    return row is not None and row[0] != "closed"
+
+
+# --------------------------------------------------------------------------- #
 # Sessions: the pieces that make one store file a reopenable notebook.
 #
 # A session file carries three things: the execution log (the cells and their
@@ -567,6 +678,11 @@ def mark_interrupted(conn: sqlite3.Connection, *, ended_at: float) -> int:
         (ended_at,),
     )
     conn.execute("DELETE FROM inputs")
+    # A dead kernel's undelivered channel pushes and its resources' event feed
+    # describe state that no longer exists; a reopened session must not fire
+    # stale notifications into a fresh agent session or replay them to a page.
+    conn.execute("DELETE FROM outbox")
+    conn.execute("DELETE FROM events")
     return cur.rowcount
 
 

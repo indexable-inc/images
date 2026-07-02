@@ -34,6 +34,7 @@ import contextlib
 import json
 import logging
 import os
+import sqlite3
 import uuid
 import weakref
 from typing import Annotated
@@ -80,6 +81,7 @@ _KERNEL_GUIDE = guide.compose(
     guide.RESULT_VARIANTS,
     guide.READABLE,
     guide.CELLS,
+    guide.CHANNEL,
 )
 
 
@@ -450,6 +452,54 @@ async def kernel_trace(ctx: Context | None = None) -> str:
     await _identify_client_once(ctx)
     await _require_session_name(ctx, intent="kernel trace")
     return await current_kernel().dump_trace()
+
+
+# The reply tool's store connection, opened lazily on first reply. The tool runs
+# in the server process (the kernel's `events` writes come from its own
+# connection), so it needs its own handle on the shared WAL store.
+_reply_conn: sqlite3.Connection | None = None
+
+
+def _reply_store() -> sqlite3.Connection:
+    global _reply_conn
+    if _reply_conn is None:
+        try:
+            path = config().store_path
+        except RuntimeError as exc:
+            raise McpError(
+                ErrorData(code=types.INTERNAL_ERROR, message="no store configured; reply needs `ix-mcp serve`")
+            ) from exc
+        from . import store
+
+        _reply_conn = store.connect(path)
+    return _reply_conn
+
+
+@mcp.tool(structured_output=False, description=guide.REPLY)
+async def reply(
+    resource: Annotated[
+        str,
+        Field(description='The resource id from the channel event\'s resource="..." attribute'),
+    ],
+    text: Annotated[str, Field(description="The message to show on that resource's page")],
+    ctx: Context | None = None,
+) -> Content:
+    await _start_dashboard_once()
+    await _identify_client_once(ctx)
+    # Deliberately not gated on session_set_name: a reply answers a channel event
+    # (often the session's very first act) and creates no dashboard run to label.
+    from . import store
+
+    conn = _reply_store()
+    if not store.resource_live(conn, resource):
+        raise McpError(
+            ErrorData(
+                code=types.INVALID_PARAMS,
+                message=f"no live resource {resource!r}; pass the id from the <channel resource=...> attribute",
+            )
+        )
+    store.add_event(conn, resource=resource, kind="reply", body=json.dumps({"text": text}))
+    return [outputs.text("sent")]
 
 
 # ---------------------------------------------------------------------------

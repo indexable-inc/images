@@ -828,9 +828,23 @@ class Resource:
     latest HTML to the store every flush tick and the dashboard sidebar shows
     all live resources updating in place. The resource closes itself (leaves the
     sidebar) when its ``alive`` predicate reports the source is gone.
+
+    Pass ``actions={"name": handler}`` to make the resource interactive: its HTML
+    gets ``ix.act(name, payload)`` and ``ix.events(fn)`` injected (see
+    :attr:`script`), each ``act`` runs the named in-kernel handler, and every
+    handler result/error -- plus any agent ``reply`` -- streams back to the page
+    over the resource's live event feed.
     """
 
-    def __init__(self, id: str, title: str, kind: str, render: Any, alive: Any = None) -> None:
+    def __init__(
+        self,
+        id: str,
+        title: str,
+        kind: str,
+        render: Any,
+        alive: Any = None,
+        actions: Mapping[str, Any] | None = None,
+    ) -> None:
         self.id = id
         self.title = title
         self.kind = kind
@@ -840,13 +854,26 @@ class Resource:
         self.created = time.time()
         self.html = ""
         self.error: str | None = None
+        self.actions: dict[str, Any] = dict(actions) if actions else {}
+        self._action_channel: Input | None = None
+        self._dispatcher: asyncio.Task | None = None
+        if self.actions:
+            self._start_actions()
 
     def closed(self) -> bool:
         return self.status == "closed"
 
     def close(self) -> Resource:
-        """Close the resource so the sidebar drops it on the next tick."""
+        """Close the resource so the sidebar drops it on the next tick (and tear
+        down its action channel/dispatcher, so a stale page can no longer queue
+        work for it)."""
         self.status = "closed"
+        if self._dispatcher is not None:
+            self._dispatcher.cancel()
+            self._dispatcher = None
+        if self._action_channel is not None:
+            self._action_channel.close()
+            self._action_channel = None
         return self
 
     def alive(self) -> bool:
@@ -861,18 +888,118 @@ class Resource:
             return False
 
     async def render_html(self) -> str:
-        """The current HTML for this resource (awaits the render if it is async)."""
+        """The current HTML for this resource (awaits the render if it is async).
+        An interactive resource gets its wiring script prepended, so the page's
+        markup can call ``ix.act``/``ix.events`` without including anything."""
         out = self._render() if callable(self._render) else self._render
         if inspect.iscoroutine(out):
             out = await out
-        return out if isinstance(out, str) else str(out)
+        html = out if isinstance(out, str) else str(out)
+        script = self.script
+        return script + html if script else html
+
+    @property
+    def script(self) -> str:
+        """The ``<script>`` an interactive resource's HTML is served with ("" for
+        a plain resource). It extends the shared ``window.ix`` object with:
+
+        - ``ix.act(name, payload) -> Promise``: queue ``payload`` for the named
+          in-kernel action handler (rides the existing ``/api/input`` write path,
+          so it shares that endpoint's network-boundary authorization). Resolves
+          with ``{ok, call}``; the handler's return value arrives on the event
+          feed as ``{kind: 'action_result', call, value}``.
+        - ``ix.events(fn) -> EventSource``: subscribe to this resource's live
+          feed (action results, errors, and agent ``reply`` messages), invoking
+          ``fn(event)`` per event.
+        """
+        channel = self._action_channel
+        if channel is None:
+            return ""
+        base = os.environ.get("IX_MCP_DATA_API_URL", "").rstrip("/")
+        events_url = f"{base}/api/resources/{self.id}/events"
+        # These interpolate into a <script> body. channel.endpoint is env-derived
+        # and channel.id is a secrets token; self.id is validated to [A-Za-z0-9._-]
+        # at register_resource (an interactive resource), so none can carry a
+        # `</script>` breakout. json.dumps still quotes them as JS string literals.
+        return (
+            "<script>(function(){"
+            f"var E={json.dumps(channel.endpoint)},C={json.dumps(channel.id)},"
+            f"S={json.dumps(events_url)};"
+            "var x=(window.ix=window.ix||{});"
+            "x.act=function(a,p){var id=Math.random().toString(36).slice(2,10);"
+            "return fetch(E,{method:'POST',"
+            "headers:{'Content-Type':'text/plain;charset=UTF-8'},"
+            "body:JSON.stringify({channel:C,payload:{action:a,call:id,"
+            "payload:p===undefined?null:p}})})"
+            ".then(function(r){return r.json();})"
+            ".then(function(j){j.call=id;return j;});};"
+            "x.events=function(f){var s=new EventSource(S);"
+            "s.onmessage=function(e){try{f(JSON.parse(e.data));}catch(_){}};"
+            "return s;};"
+            "})();</script>"
+        )
+
+    def _start_actions(self) -> None:
+        """Open the action channel and start the dispatcher consuming it."""
+        self._action_channel = Input(title=f"{self.title} actions")
+        with contextlib.suppress(RuntimeError):  # no loop (sync test context): actions need the kernel loop
+            self._dispatcher = asyncio.get_event_loop().create_task(self._dispatch_actions())
+
+    def _emit_event(self, kind: str, body: dict) -> None:
+        """Append one event to this resource's live feed (best-effort: the page
+        stream is a convenience; a store failure must not abort the handler)."""
+        if _store is None or _store_conn is None:
+            return
+        with contextlib.suppress(Exception):  # best-effort: a store write must not abort user code
+            _store.add_event(
+                _store_conn,
+                resource=self.id,
+                kind=kind,
+                body=json.dumps(body, default=_safe_repr),
+            )
+
+    async def _dispatch_actions(self) -> None:
+        """Consume the action channel: run each queued ``ix.act`` submission's
+        handler and stream its result (or error) back on the event feed."""
+        channel = self._action_channel
+        if channel is None:
+            return
+        async for submission in channel:
+            name = submission.get("action") if isinstance(submission, dict) else None
+            call = submission.get("call") if isinstance(submission, dict) else None
+            handler = self.actions.get(name)
+            if handler is None:
+                self._emit_event("error", {"action": name, "call": call, "error": f"no such action {name!r}"})
+                continue
+            try:
+                out = handler(submission.get("payload") if isinstance(submission, dict) else None)
+                if inspect.isawaitable(out):
+                    out = await out
+            except Exception as exc:
+                self._emit_event(
+                    "error",
+                    {
+                        "action": name,
+                        "call": call,
+                        "error": "".join(traceback.format_exception_only(type(exc), exc)).strip(),
+                    },
+                )
+                continue
+            self._emit_event("action_result", {"action": name, "call": call, "value": out})
 
     def __repr__(self) -> str:
         return f"<Resource {self.id} ({self.title}) [{self.status}] {self.kind}>"
 
 
 def register_resource(
-    source: Any = None, *, title: str | None = None, render: Any = None, id: str | None = None, kind: str = "html", alive: Any = None
+    source: Any = None,
+    *,
+    title: str | None = None,
+    render: Any = None,
+    id: str | None = None,
+    kind: str = "html",
+    alive: Any = None,
+    actions: Mapping[str, Any] | None = None,
 ) -> Resource:
     """Register a live HTML resource: a view the dashboard shows in its sidebar.
 
@@ -905,11 +1032,28 @@ def register_resource(
     close. Move one by dragging its card chrome (the padding around the content);
     it is not resizable (size follows the content).
 
-    Interactive (a form the human fills in): pair the resource with an
-    :class:`Input`, drop its ``.script`` into the HTML, and ``await`` the reply --
-    or just use :func:`ask` for a ready-made form. A cross-origin ``fetch`` to the
-    data API DOES work from the sandbox (that is how input flows back); only
-    *same-origin* access to the embedding page is blocked.
+    Interactive (buttons/forms that run python): pass ``actions`` -- a dict of
+    name -> handler (sync or async, called with the submitted payload). The HTML
+    is served with ``ix.act(name, payload)`` and ``ix.events(fn)`` pre-wired::
+
+        async def on_deploy(payload):
+            run = await start_deploy(payload["env"])
+            await notify(f"deploy requested: {run}", resource="deploy-panel")
+            return {"run": run}
+
+        register_resource(
+            render=lambda: '<button onclick="ix.act(\\'deploy\\', {env: \\'prod\\'})">ship</button>',
+            id="deploy-panel", actions={"deploy": on_deploy},
+        )
+
+    Each ``ix.act`` queues its payload for the handler; the handler's return value
+    (or error) streams back to the page as ``{kind: 'action_result', call, value}``
+    on the feed ``ix.events(fn)`` subscribes to, alongside any agent ``reply``.
+    Pair a handler with :func:`notify` to wake the agent session on a click. For a
+    simple one-question form, :func:`ask` is still the shortcut; the lower-level
+    :class:`Input` + ``.script`` path also still works. A cross-origin ``fetch``
+    to the data API DOES work from the sandbox (that is how input flows back);
+    only *same-origin* access to the embedding page is blocked.
 
     Prefer SELF-CONTAINED HTML. The body is rendered inside a sandboxed,
     opaque-origin ``<iframe>`` (``sandbox="allow-scripts"``, no
@@ -943,13 +1087,37 @@ def register_resource(
             type(source).__name__ if source is not None else "resource"
         )
     rid = id or uuid.uuid4().hex[:8]
-    res = Resource(rid, str(title), kind, render, alive)
+    # An interactive resource's id is interpolated into the injected <script> and
+    # into its `/api/resources/{id}/events` SSE route, so it must be a safe token:
+    # `json.dumps` does NOT escape `</script>` or `/`, so an id carrying `</script>`
+    # would break out of the script tag (XSS in the pane), and a `/` would silently
+    # miss the SSE route. Restrict it to url/path-safe characters -- random ids
+    # (uuid hex) and Input tokens (`secrets.token_urlsafe`) already satisfy this;
+    # an agent-supplied id built from external data (a repo/branch/chat id) is the
+    # one that could smuggle markup. Non-interactive resources never reach either
+    # sink, so they keep accepting any id.
+    if actions and not _RESOURCE_ID_RE.fullmatch(rid):
+        raise ValueError(
+            f"an interactive resource id must match [A-Za-z0-9._-]+ (it is embedded "
+            f"in a <script> and a URL path); got {rid!r}"
+        )
+    # Re-registering an id REPLACES that resource; close the old one first so its
+    # action channel/dispatcher never outlives the pane it served.
+    old = resources.get(rid)
+    if old is not None:
+        old.close()
+    res = Resource(rid, str(title), kind, render, alive, actions=actions)
     resources[rid] = res
     return res
 
 
 jobs: dict[str, Job] = {}
 resources: dict[str, Resource] = {}
+
+# A safe id for an INTERACTIVE resource: it is interpolated into the injected
+# <script> body and into the `/api/resources/{id}/events` URL path, so it must
+# carry no HTML/JS or path metacharacters (see register_resource).
+_RESOURCE_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
 
 
 # --------------------------------------------------------------------------- #
@@ -1197,6 +1365,51 @@ async def ask(
     if fields is None and isinstance(payload, dict) and set(payload) == {"value"}:
         return payload["value"]
     return payload
+
+
+# Claude Code drops <channel> tag attributes whose keys are not identifiers
+# ([A-Za-z0-9_]) -- silently. Validate at the source instead, so a typo'd key is
+# a loud ValueError here rather than a missing attribute there.
+_META_KEY_RE = re.compile(r"[A-Za-z0-9_]+")
+
+
+async def notify(content: str, **meta: Any) -> None:
+    """Push a channel event into the connected agent session.
+
+    This server is a Claude Code channel (research preview): when the client
+    session was launched with the channel enabled (``claude
+    --dangerously-load-development-channels server:<name>``), the event lands in
+    the agent's context as ``<channel source="<name>" key="val">content</channel>``
+    and wakes it. Each keyword becomes a tag attribute (values are stringified)::
+
+        await notify("CI run 1234 failed on main", severity="high", run_id="1234")
+
+    Pass ``resource=<id>`` when the event belongs to an interactive resource, so
+    the agent knows to answer with the ``reply`` tool (its text streams back to
+    that resource's page).
+
+    Fire-and-forget: delivery is not acknowledged, and a client session running
+    WITHOUT the channel enabled drops events silently (Claude Code's documented
+    behavior), so never treat a notify as confirmed-read. Keys must be
+    identifiers (``[A-Za-z0-9_]``); anything else raises here rather than being
+    silently dropped client-side.
+    """
+    bad = [key for key in meta if not _META_KEY_RE.fullmatch(key)]
+    if bad:
+        raise ValueError(
+            f"notify() meta keys must match [A-Za-z0-9_]+ (Claude Code silently "
+            f"drops others); got {bad!r}"
+        )
+    if _store is None or _store_conn is None:
+        raise RuntimeError(
+            "notify() needs the server-managed kernel (no store is configured), "
+            "so there is no channel to deliver to"
+        )
+    _store.add_outbox(
+        _store_conn,
+        content=str(content),
+        meta=json.dumps({key: str(value) for key, value in meta.items()}),
+    )
 
 
 @dataclasses.dataclass
@@ -2471,6 +2684,9 @@ async def _sweep_resources() -> None:
     now = time.time()
     for res in list(resources.values()):
         if not res.alive():
+            # close() also tears down an interactive resource's action channel
+            # and dispatcher, so a dead pane cannot keep accepting ix.act posts.
+            res.close()
             with contextlib.suppress(Exception):  # best-effort: store write must not kill the loop
                 _store.close_resource(_store_conn, id=res.id, updated_at=now)
             resources.pop(res.id, None)
@@ -3350,6 +3566,7 @@ def install(user_ns: dict | None = None) -> None:
     target["register_resource"] = register_resource
     target["Input"] = Input
     target["ask"] = ask
+    target["notify"] = notify
     target["input_channels"] = input_channels
     target["__ix_run"] = __ix_run
     target["__ix_exec"] = __ix_exec

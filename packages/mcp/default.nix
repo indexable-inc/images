@@ -5113,6 +5113,42 @@ let
         mkdir -p "$out"
       '';
 
+  # The Claude Code channel + interactive resource actions
+  # (packages/mcp/tests/test_channel.py): the store outbox/events queues, the
+  # kernel's notify() + action dispatch, the transport pump emitting
+  # notifications/claude/channel, the reply tool, and the dashboard's SSE feed.
+  # Same interpreter needs as inputsTests (ix_notebook_mcp + aiohttp + the mcp
+  # SDK) plus pytest.
+  channelTestPython = mcpPythonInterp.withPackages (
+    ps:
+    mcpPythonPackages ps
+    ++ [
+      ps.pytest
+    ]
+  );
+  channelTestSource = builtins.path {
+    name = "ix-mcp-channel-test";
+    path = ./tests/test_channel.py;
+  };
+  channelTests =
+    pkgs.runCommand "ix-mcp-channel-tests"
+      {
+        nativeBuildInputs = [ channelTestPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        cp ${channelTestSource} "$TMPDIR/test_channel.py"
+        ${lib.getExe channelTestPython} -m pytest "$TMPDIR/test_channel.py" -q -p no:cacheprovider >stdout 2>stderr || {
+          echo "ix-mcp channel tests failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        cat stdout
+        mkdir -p "$out"
+      '';
+
   # End-to-end browser proof of the interactive-input path: a real headless
   # Chromium mounts an `Input`'s HTML in a sandboxed, opaque-origin srcdoc iframe
   # (as HtmlBody.svelte does), clicks the button, and the cross-origin `ixSubmit`
@@ -5422,6 +5458,7 @@ package.overrideAttrs (old: {
         feedSmoke
         apiSmoke
         inputsTests
+        channelTests
         inputBrowserSmoke
         wedgeSmoke
         richSmoke

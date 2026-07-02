@@ -246,10 +246,47 @@ def build_app(config: Config, conn: sqlite3.Connection) -> web.Application:
         store.add_input(conn, channel=channel, payload=json.dumps(body["payload"]))
         return web.json_response({"ok": True}, headers=_CORS_HEADERS)
 
+    async def resource_events(request: web.Request) -> web.StreamResponse:
+        # The live event feed behind an interactive resource: action results and
+        # errors (kernel handlers) plus the agent's `reply` messages, streamed as
+        # SSE so the resource's page updates without polling. A read endpoint
+        # like /api/resources (which already serves the same resource's HTML to
+        # anyone on the bind), so no extra gate; CORS because the subscriber is
+        # the sandboxed, opaque-origin iframe. Subscribers start at the CURRENT
+        # tail (no history replay): the feed is a live stream, not a log.
+        rid = request.match_info["id"]
+        resp = web.StreamResponse(
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                **_CORS_HEADERS,
+            }
+        )
+        await resp.prepare(request)
+        # A comment frame so EventSource sees bytes immediately (open fires).
+        await resp.write(b": connected\n\n")
+        last = store.latest_event_seq(conn, rid)
+        try:
+            while True:
+                for row in store.events_after(conn, rid, last):
+                    last = row["seq"]
+                    try:
+                        body = json.loads(row["body"])
+                    except (ValueError, TypeError):
+                        body = {"raw": row["body"]}
+                    event = {"seq": row["seq"], "kind": row["kind"], **body}
+                    await resp.write(f"data: {json.dumps(event)}\n\n".encode())
+                await asyncio.sleep(0.5)
+        except (ConnectionError, asyncio.CancelledError):
+            # Subscriber went away (tab closed, dashboard reloaded): just stop.
+            pass
+        return resp
+
     app.router.add_get("/", index)
     app.router.add_get("/api/jobs", jobs)
     app.router.add_get("/api/jobs/{id}", job)
     app.router.add_get("/api/resources", resources)
+    app.router.add_get("/api/resources/{id}/events", resource_events)
     app.router.add_get("/api/cells", cells)
     app.router.add_get("/api/snapshot", snapshot)
     app.router.add_post("/api/exec", exec_run)

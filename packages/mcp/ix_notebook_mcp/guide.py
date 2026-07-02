@@ -270,6 +270,22 @@ READABLE = (
     "final `Result(...)` name what it returns rather than wrap one dense expression."
 )
 
+CHANNEL = (
+    "This server is also a Claude Code channel (research preview). When the client session was "
+    "launched with the channel enabled (`claude --dangerously-load-development-channels "
+    "server:<name>`), kernel code can push events into the running agent session with `await "
+    "notify(content, **meta)`: each event arrives in the session as <channel source=\"...\" "
+    "key=\"val\">content</channel>, with each meta kwarg a tag attribute (identifier keys only). "
+    "Delivery is fire-and-forget — a session without the channel enabled drops events silently — "
+    "so never treat a notify as confirmed-read. Interactive resources close the loop: "
+    "`register_resource(render=..., actions={'name': handler})` serves the HTML with "
+    "`ix.act(name, payload)` (queues the payload for the named in-kernel handler) and "
+    "`ix.events(fn)` (subscribes the page to handler results, errors, and your replies) "
+    "pre-wired. A handler that calls `notify(..., resource=<id>)` wakes you when the page acts; "
+    "when a <channel> tag carries a `resource` attribute, answer it with the `reply` tool, "
+    "passing that resource id — your transcript output never reaches the page."
+)
+
 CELLS = (
     "Three dashboard panes show the session live: every running/finished run under executions, "
     "every live view (a terminal, a widget) under resources, and your curated highlight reel "
@@ -318,6 +334,14 @@ TRACE = (
     "channel, so it returns while the loop is still frozen. Use it to see WHERE a wedged or slow "
     "cell is stuck, then fix the blocking call (wrap it in `await asyncio.to_thread(...)` and "
     "background it)."
+)
+
+REPLY = (
+    "Send a message to the page behind an interactive resource. Use it to answer a channel event "
+    "that carries a resource attribute (<channel resource=\"...\">): pass that resource id and "
+    "your text, and the page receives it on its live event feed (`ix.events`). The page's viewer "
+    "reads the page, not this session — anything you want them to see must go through this tool; "
+    "your transcript output never reaches them. Fails when the resource is closed or unknown."
 )
 
 

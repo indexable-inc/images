@@ -278,6 +278,13 @@ BUILTINS: tuple[Builtin, ...] = (
         "have the markup call `ixSubmit(payload)`, then `await` the submission (or `async for`)",
     ),
     Builtin(
+        "notify",
+        "push a channel event into the connected agent session (Claude Code channels): "
+        "`await notify('build failed', severity='high')`; each kwarg becomes a <channel> tag "
+        "attribute (identifier keys only). Fire-and-forget: a session without the channel "
+        "enabled drops it silently",
+    ),
+    Builtin(
         "sh",
         "shell out on the loop; use sh([...]) for argv-list/no shell parsing and sh('...') "
         "only when shell parsing is intended; the Output IS a Result (ANSI as HTML for the "
