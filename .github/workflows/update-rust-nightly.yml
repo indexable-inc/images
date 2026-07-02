@@ -1,0 +1,68 @@
+name: Update Rust nightly
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Nightly ships once a day, so a daily check is enough (unlike the hourly
+    # cargo/flake-lock/content updaters). The minute+hour is offset from
+    # those (:17, :37, :47) so no two updaters start in the same tick.
+    - cron: "23 6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-rust-nightly
+  cancel-in-progress: false
+
+jobs:
+  update-rust-nightly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # rust-overlay resolves the toolchain straight from rust-toolchain.toml,
+      # so rewriting the `channel` line here is the only file that needs to
+      # change. python3's stdlib tomllib parses both the pin and the upstream
+      # manifest properly instead of grepping dates out of TOML by hand.
+      - name: Compute latest available nightly
+        run: python3 .github/scripts/bump-rust-nightly.py
+
+      # Opens (or updates) a single PR, and only when something changed:
+      # create-pull-request no-ops on an empty diff (which is also what the
+      # script above produces when the manifest isn't newer, or when the
+      # newer nightly is missing a component this repo's rust-toolchain.toml
+      # requires). It reuses the `update-rust-nightly` branch so each run
+      # advances the same PR.
+      #
+      # `token`: a PR opened with the default GITHUB_TOKEN does not trigger
+      # the `pull_request` workflows (`flake-check`), so branch protection
+      # would block the merge. Set an `AUTOBUMP_TOKEN` repo secret (a PAT or
+      # GitHub App token) to make the PR run CI; without it this falls back
+      # to GITHUB_TOKEN and a maintainer must re-trigger `flake-check`.
+      - name: Open pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ secrets.AUTOBUMP_TOKEN || github.token }}
+          base: main
+          branch: update-rust-nightly
+          delete-branch: true
+          commit-message: "rust-toolchain: bump nightly"
+          title: "rust-toolchain: bump nightly"
+          body: |
+            Automated bump of the pinned nightly in `rust-toolchain.toml` to the latest date published in [`channel-rust-nightly.toml`](https://static.rust-lang.org/dist/channel-rust-nightly.toml).
+
+            The bump is skipped (no PR, or the rolling PR is left as-is) whenever the newer nightly is missing a component or target this repo's `rust-toolchain.toml` requires, so this never lands a toolchain the repo can't actually install.
+
+            rust-overlay resolves the toolchain straight from `rust-toolchain.toml`, so no other file needs to change.
+
+            `flake-check` is what proves the new toolchain actually builds, so review its result before merging.
+
+            Refs indexable-inc/index#1698.
+
+            (sent by an AI agent via Claude Code)
