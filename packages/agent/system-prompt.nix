@@ -206,9 +206,11 @@ let
     }
     {
       fixAtSource = ''
-        Fix problems at their source. If the cause is upstream, fix it upstream and
-        open a PR. Use local workarounds only as a last resort, linked to the upstream
-        issue or PR.
+        Fix problems at their source. Always choose the best long-term solution
+        and consider if architectural changes can be made to avoid an entire
+        class of bugs rather than fixing one bug at a time. Never write
+        workarounds or add timeouts since these do not address the core bug.
+        If the cause is upstream, fix it upstream and open a PR.
       '';
     }
     {
