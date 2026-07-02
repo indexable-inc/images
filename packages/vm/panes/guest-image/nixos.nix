@@ -205,6 +205,12 @@ in
   # the v1 single-user guest simple.
   systemd.tmpfiles.rules = [
     "d ${runtimeDir} 0777 root root -"
+    # The repart root ships /nix/store contents (storePaths) but no nix
+    # database; nixos-containers' nspawn unit bind-mounts these two read-only
+    # and a missing bind source fails the whole container. Empty dirs satisfy
+    # the binds (nothing runs nix inside the containers).
+    "d /nix/var/nix/db 0755 root root -"
+    "d /nix/var/nix/daemon-socket 0755 root root -"
   ]
   ++ map (bind: "d ${bind} 0755 root root -") appBinds
   ++ lib.mapAttrsToList (dest: source: "C ${dest} 0644 root root - ${source}") appSeedFiles;
