@@ -42,6 +42,10 @@ fn pointer_motion(app: &mut App, id: panes_protocol::WindowId, x: f64, y: f64) {
     };
     app.pointer_focus = Some(id);
     let time = app.now_ms();
+    // Wire coords are drawable pixels (panes-protocol convention); smithay's
+    // pointer space is logical, so divide by the host scale, mirroring the
+    // xdg configure division in `on_configure`.
+    let scale = host_scale(app);
     // Focus is handed over explicitly (second tuple element = the surface's
     // origin in "global" space, which for us is always 0,0), so smithay
     // emits enter/leave pairs as the host moves between windows.
@@ -49,12 +53,20 @@ fn pointer_motion(app: &mut App, id: panes_protocol::WindowId, x: f64, y: f64) {
         app,
         Some((surface, Point::default())),
         &MotionEvent {
-            location: (x, y).into(),
+            location: (x / scale, y / scale).into(),
             serial: SERIAL_COUNTER.next_serial(),
             time,
         },
     );
     pointer.frame(app);
+}
+
+/// The host's global `backingScaleFactor` from Hello, as the divisor that
+/// takes wire pixel coordinates to logical surface coordinates. Input only
+/// flows after Hello, so a missing host (1) is a startup-race fallback, not a
+/// silent unit change.
+fn host_scale(app: &App) -> f64 {
+    f64::from(app.host.as_ref().map_or(1, |host| host.scale.max(1)))
 }
 
 fn pointer_button(
@@ -101,6 +113,16 @@ fn pointer_axis(
         return;
     };
     let time = app.now_ms();
+    // Finger/Continuous deltas arrive in drawable pixels (the host multiplies
+    // precise trackpad deltas by `backingScaleFactor`), so they get the same
+    // pixel->logical division as motion. Wheel values are line-based axis
+    // units (15 per detent) that never were in pixel space.
+    let (horizontal, vertical) = if source == WireAxisSource::Wheel {
+        (horizontal, vertical)
+    } else {
+        let scale = host_scale(app);
+        (horizontal / scale, vertical / scale)
+    };
     let source = match source {
         WireAxisSource::Wheel => AxisSource::Wheel,
         WireAxisSource::Finger => AxisSource::Finger,

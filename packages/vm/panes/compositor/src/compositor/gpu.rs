@@ -15,7 +15,7 @@ use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::format::FormatSet;
 use smithay::backend::egl::{EGLContext, EGLDevice, EGLDisplay};
 use smithay::backend::renderer::gles::GlesRenderer;
-use smithay::backend::renderer::{ExportMem as _, ImportDma as _, Texture as _};
+use smithay::backend::renderer::{ExportMem as _, ImportDma as _, Texture as _, TextureMapping as _};
 use smithay::utils::{Point, Rectangle, Size};
 
 pub struct Gpu {
@@ -109,6 +109,24 @@ impl Gpu {
             .context("copy texture")?;
         let bytes = self.renderer.map_texture(&mapping).context("map texture")?;
         let mut bgra = bytes.to_vec();
+        // GLES readback is bottom-up (smithay's `GlesMapping::flipped()` is
+        // unconditionally true) while the wire is top-down; ship it as-is and
+        // every dmabuf window renders upside down on the host. Repack rows in
+        // reverse, keyed on `flipped()` so a future non-flipped mapping stays
+        // correct.
+        if mapping.flipped() {
+            let stride = usize::try_from(width).context("texture width exceeds usize")? * 4;
+            anyhow::ensure!(
+                stride > 0 && bgra.len() % stride == 0,
+                "readback of {} bytes is not whole {stride}-byte rows",
+                bgra.len()
+            );
+            let mut top_down = Vec::with_capacity(bgra.len());
+            for row in bgra.rchunks_exact(stride) {
+                top_down.extend_from_slice(row);
+            }
+            bgra = top_down;
+        }
         // The copy above is Argb8888, but an alpha-less source format leaves
         // the A byte undefined (commonly 0). The wire is premultiplied BGRA,
         // so A=0 would composite the whole window invisible on the host;

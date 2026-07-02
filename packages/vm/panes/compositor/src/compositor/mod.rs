@@ -475,12 +475,9 @@ impl App {
                 id,
                 width,
                 height,
-                scale: _,
+                scale,
                 activated,
-                // TODO(index#1686): per-window scale. wl_output's scale is
-                // global; honoring a per-Configure scale needs
-                // wp_fractional_scale or per-surface preferred scale.
-            } => self.on_configure(id, width, height, activated),
+            } => self.on_configure(id, width, height, scale, activated),
             ToGuest::CloseRequest { id } => {
                 if let Some(idx) = self.pane_index(id) {
                     self.panes[idx].toplevel.send_close();
@@ -564,15 +561,25 @@ impl App {
     // the host's own paired Configure{activated: false} for it (panes-host
     // sends both on NSWindow key-window changes). A host that omits the
     // deactivate would leave the old window's Activated state set.
-    fn on_configure(&mut self, id: WindowId, width: u32, height: u32, activated: bool) {
+    fn on_configure(&mut self, id: WindowId, width: u32, height: u32, scale: u32, activated: bool) {
         use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
         let Some(idx) = self.pane_index(id) else {
             return;
         };
+        // The wire carries drawable pixels (panes-protocol convention), but
+        // xdg_toplevel.configure takes logical surface coordinates: divide by
+        // the window's scale or a Retina client that honors the advertised
+        // output scale renders a buffer scale^2 the drawable. div_ceil keeps a
+        // stray pixel row covered rather than letterboxed.
+        // TODO(index#1686): wl_output's scale is still global (from Hello);
+        // honoring a per-window scale that differs from it needs
+        // wp_fractional_scale or per-surface preferred scale.
+        let scale = scale.max(1);
         let size_valid = width > 0 && height > 0;
         self.panes[idx].toplevel.with_pending_state(|state| {
             if size_valid {
-                state.size = Some((clamp_i32(width), clamp_i32(height)).into());
+                state.size =
+                    Some((clamp_i32(width.div_ceil(scale)), clamp_i32(height.div_ceil(scale))).into());
             }
             if activated {
                 state.states.set(xdg_toplevel::State::Activated);
