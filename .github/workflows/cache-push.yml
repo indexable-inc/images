@@ -48,8 +48,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          phase() { echo "::notice::cache-push phase '$1' took $(( SECONDS - $2 ))s"; }
-
           # Attached to every main push; absence is a dispatcher regression.
           cred="${CREDENTIALS_DIRECTORY:-}/${IX_PUBLIC_PUSH_CREDENTIAL_NAME:-}"
           if [ ! -f "$cred" ]; then
@@ -80,12 +78,10 @@ jobs:
 
           # Flake-pinned tools: runner PATH has nix + coreutils but no
           # findutils. ^bin/^out pick one output from multi-output packages.
-          tools_t=$SECONDS
           eval_jobs="$(nix build .#nix-eval-jobs --no-link --print-out-paths)/bin/nix-eval-jobs"
           attic="$(nix build .#attic-client --no-link --print-out-paths)/bin/attic"
           jq="$(nix build '.#jq^bin' --no-link --print-out-paths)/bin/jq"
           xargs="$(nix build '.#findutils^out' --no-link --print-out-paths)/bin/xargs"
-          phase tools "$tools_t"
 
           # cachePushRoots = packages minus the never-dedup *-oci.tar archives
           # (lib/per-system.nix). Enumerate by drvPath: floating-CA outputs are
@@ -93,7 +89,6 @@ jobs:
           drvs="$workdir/drvs.txt"
           outs="$workdir/outs.txt"
           roots="$workdir/roots.tsv"
-          eval_t=$SECONDS
           "$eval_jobs" \
             --flake .#cachePushRoots.x86_64-linux \
             --workers 16 \
@@ -101,7 +96,6 @@ jobs:
             2>"$workdir/eval.err" \
             | "$jq" -r 'select(.drvPath != null) | [.drvPath, (.outputs.out // "")] | @tsv' \
             | sort -u > "$roots" || true
-          phase eval "$eval_t"
 
           # Skip roots already pushed: makes the run O(changed), not O(full
           # closure). Probe the atticd endpoint the push writes to, not
@@ -109,7 +103,6 @@ jobs:
           # probe miss). Probe failure counts as a miss; CA roots have no
           # eval-time path and always realise. FULL_PASS=1 re-realises
           # everything to heal roots skipped over a failed dep push.
-          probe_t=$SECONDS
           : > "$workdir/cached.txt"
           if [ -z "${FULL_PASS:-}" ]; then
             # shellcheck disable=SC2016  # $1 expands in the child bash, not here
@@ -125,30 +118,20 @@ jobs:
               printf '%s\n' "$drv"
             fi
           done < "$roots" > "$drvs"
-          phase probe "$probe_t"
           echo "::notice::cache-push probe: $(wc -l < "$drvs") of $(wc -l < "$roots") roots need realising"
 
           # -n1, not one batch: a batched realise prints no paths at all if any
           # single drv fails, which would publish nothing.
-          realise_t=$SECONDS
           "$xargs" -a "$drvs" -r -P16 -n1 nix-store --realise --keep-going > "$outs" 2>"$workdir/realise.err" \
             || {
               echo "::warning::some derivations failed to realise; publishing the rest"
-              # Match any error line (nix phrases failures several ways); pure
-              # bash because the runner PATH has no grep/sed.
-              while IFS= read -r line; do
-                case $line in
-                  *error:*) printf '::warning::realise failed: %s\n' "${line#*error: }" ;;
-                esac
-              done < "$workdir/realise.err" | sort -u | head -n 20
+              # ponytail: raw log tail; per-error ::warning:: extraction if summary triage matters
+              tail -n 20 "$workdir/realise.err" >&2 || true
             }
-          phase realise "$realise_t"
 
           if [ -s "$outs" ]; then
-            push_t=$SECONDS
             "$xargs" -a "$outs" -r "$attic" push --jobs 16 ix-public \
               || echo "::warning::some paths failed to push to ix-public"
-            phase push "$push_t"
           elif [ -s "$drvs" ]; then
             echo "::warning::no output paths resolved for ix-public; eval/realise logs follow"
             tail -n 20 "$workdir/eval.err" "$workdir/realise.err" >&2 || true
