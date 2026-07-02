@@ -56,9 +56,7 @@ jobs:
       # server-side with the fleet ix-workspace key, so the runner needs only a
       # push-only token -- no signing key, no S3 credentials. The token arrives
       # as a per-job systemd credential the ix dispatcher attaches to exactly
-      # this job (see ci-dispatcher spawn.rs ix_public_push_eligible); the step
-      # skips cleanly until that is deployed, so it and the ix side can land in
-      # either order.
+      # this job (see ci-dispatcher spawn.rs ix_public_push_eligible).
       - name: Publish all packages to cache.ix.dev
         shell: bash
         env:
@@ -71,12 +69,14 @@ jobs:
           phase() { echo "::notice::cache-push phase '$1' took $(( SECONDS - $2 ))s"; }
 
           # The dispatcher exposes the push token as an env-file credential and
-          # names it in IX_PUBLIC_PUSH_CREDENTIAL_NAME. Absent => not yet
-          # provisioned/deployed; skip without failing (mirrors the old gate).
+          # names it in IX_PUBLIC_PUSH_CREDENTIAL_NAME. It attaches this to
+          # every main push of this repo, so absence is a dispatcher
+          # regression, not a deploy-ordering state: fail loudly rather than
+          # silently letting the public cache go stale.
           cred="${CREDENTIALS_DIRECTORY:-}/${IX_PUBLIC_PUSH_CREDENTIAL_NAME:-}"
-          if [ -z "${CREDENTIALS_DIRECTORY:-}" ] || [ -z "${IX_PUBLIC_PUSH_CREDENTIAL_NAME:-}" ] || [ ! -r "$cred" ]; then
-            echo "::notice::ix-public push credential not present; skipping (ix side not yet deployed)"
-            exit 0
+          if [ ! -f "$cred" ]; then
+            echo "::error::ix-public push credential not delivered (see ci-dispatcher spawn.rs ix_public_push_eligible)"
+            exit 1
           fi
 
           # Materialise ATTIC_IX_PUBLIC_PUSH_TOKEN from the root-delivered
@@ -156,18 +156,24 @@ jobs:
             | sort -u > "$roots" || true
           phase eval "$eval_t"
 
-          # Probe: a root whose eval-time `out` path cache.ix.dev already serves
-          # was pushed -- closure and all -- by a prior run, so skip realising it.
-          # This makes the run O(what this commit changed) instead of O(full
-          # closure): realise used to materialise every root's whole closure
-          # locally only for attic to report ~all of it deduplicated server-side
-          # (realise was 1009s of a 1050s run; push was 6s). `nix path-info
-          # --store` reads the cache from this client process directly, so daemon
-          # substituter trust (the untrusted-user warnings) never applies, and a
-          # probe failure (cache unreachable) counts as a miss, degrading to the
-          # old realise-everything behaviour. CA roots have no eval-time path
-          # (outputs.out is null) and always realise; the warm store and CA early
-          # cutoff keep those cheap.
+          # Probe: a root whose eval-time `out` path ix-public already stores
+          # was pushed -- closure and all -- by a prior run, so skip realising
+          # it. This makes the run O(what this commit changed) instead of
+          # O(full closure): realise used to materialise every root's whole
+          # closure locally only for attic to report ~all of it deduplicated
+          # server-side (realise was ~1000s of a ~1050s run; push was ~5s).
+          # Ask the store the push writes to (attic's per-cache binary-cache
+          # API on the local atticd proxy), NOT the public read side:
+          # cache.ix.dev is ncps in front of this cache, so probing it
+          # conflates "was pushed" with "public serving is deployed" -- and it
+          # 404s ix-public paths today, which made this probe miss ~every root
+          # and realise everything on every run. `nix path-info --store` reads
+          # the cache from this client process directly, so daemon substituter
+          # trust (the untrusted-user warnings) never applies; ix-public is a
+          # public cache, so anonymous reads suffice, and a probe failure
+          # counts as a miss, degrading to realise-everything. CA roots have no
+          # eval-time path (outputs.out is null) and always realise; the warm
+          # store and CA early cutoff keep those cheap.
           # ponytail: the probe can skip a root whose dep failed to push in an
           # earlier run; a FULL_PASS=1 manual dispatch re-realises and heals it.
           probe_t=$SECONDS
@@ -179,7 +185,7 @@ jobs:
             # shellcheck disable=SC2016  # $1 expands in the child bash, not here
             cut -f2 "$roots" | sort -u \
               | "$xargs" -r -P16 -n1 bash -c \
-                  'nix path-info --store https://cache.ix.dev "$1" >/dev/null 2>&1 && printf "%s\n" "$1"' _ \
+                  'nix path-info --store http://127.0.0.1:8070/ix-public "$1" >/dev/null 2>&1 && printf "%s\n" "$1"' _ \
               > "$workdir/cached.txt" || true
           fi
           declare -A cached=()
@@ -208,12 +214,14 @@ jobs:
               # Name the failing drvs: a permanently-broken derivation re-pays
               # its full build-and-fail wall clock on every push to main, and
               # its dependents never become cacheable, so it never falls out of
-              # the probe's delta either. Pure bash match -- the runner PATH has
-              # no grep/sed (see the tools comment above).
+              # the probe's delta either. Match any error line: nix phrases
+              # failures several ways (builder for / cannot build derivation /
+              # dependencies ... failed to build), and enumerating two of them
+              # matched nothing across real failing runs. Pure bash match --
+              # the runner PATH has no grep/sed (see the tools comment above).
               while IFS= read -r line; do
                 case $line in
-                  *"error: builder for '"*|*"error: build of '"*)
-                    printf '::warning::realise failed: %s\n' "${line#*error: }" ;;
+                  *error:*) printf '::warning::realise failed: %s\n' "${line#*error: }" ;;
                 esac
               done < "$workdir/realise.err" | sort -u | head -n 20
             }
