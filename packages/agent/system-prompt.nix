@@ -179,6 +179,23 @@ let
       '';
     }
     {
+      updateablePins = ''
+        Never inline a pinned artifact identity (hash, digest, rev, pinned
+        version of something fetched) in source. Keep each pin next to its
+        coordinates in a generated lock file read as data, and wire an updater
+        into the repo's update entry point so the pin refreshes mechanically.
+      '';
+    }
+    {
+      deriveDontEnumerate = ''
+        When code restates structure that already exists (directory contents,
+        sibling names, a list kept elsewhere), derive it from that source of
+        truth via discovery, `readDir`, globs, or generated data. Hand-kept
+        enumerations drift; add an explicit exclude list only with a
+        why-comment per exclusion.
+      '';
+    }
+    {
       separateDefinitions = ''
         Keep declarative definitions separate from machinery that renders, executes,
         or adapts them. Put registries, schemas, fixtures, and policy data where they
