@@ -195,6 +195,11 @@ in
   # the .1 gateway; without DHCP the guest has no route out.
   networking.useDHCP = true;
 
+  # Root autologin on the serial console: this guest is a local dev appliance
+  # reachable only through hvc0 (no ssh), and headless debugging (venus state,
+  # container journals, poking the MC launcher) needs a shell there.
+  services.getty.autologinUser = "root";
+
   # Populates /run/opengl-driver (lib + share/vulkan/icd.d) with mesa, which
   # carries the venus ICD (virtio_icd.aarch64.json) on this nixpkgs pin; the
   # patched vulkan-loader looks there.
