@@ -18,8 +18,12 @@ let
     x86_64-linux = "x86_64-unknown-linux-gnu";
   };
   # Version + per-release URL and SRI hash live in the sibling pins.json, never
-  # inline (repo policy). Bump the version/url in pins.json, then
-  # `nix run .#update` re-pins the hash.
+  # inline (repo policy). The pin is `prefetch = manual`: this fetchzip runs
+  # with `stripRoot = false`, whose output tree no prefetch command reproduces
+  # (verified: both flat and --unpack hashing differ), so after editing the
+  # version/url refresh the hash by building and copying the `got:` hash from
+  # the mismatch error. The updater deliberately skips it rather than write a
+  # wrong hash.
   pin = ix.pins.loadPin ./pins.json "lakekeeper";
   updateScript =
     if updateScriptWriter == null then

@@ -45,6 +45,17 @@ let
       throw "ix.lib.loadPins: ${pathStr}: pin `${name}`.hash must be an `sha256-...` SRI string"
     else if (entry ? imageDigest) && !(isDigest entry.imageDigest) then
       throw "ix.lib.loadPins: ${pathStr}: pin `${name}`.imageDigest must be a `sha256:...` digest string"
+    else if
+      (entry ? prefetch)
+      && !(lib.elem entry.prefetch [
+        "file"
+        "unpack"
+        "manual"
+      ])
+    then
+      # `prefetch` tells the generated updater how to recompute `hash` (see
+      # mkUpdater below); reject typos at eval, not mid-update.
+      throw "ix.lib.loadPins: ${pathStr}: pin `${name}`.prefetch must be `file`, `unpack`, or `manual`"
     else
       entry;
 
@@ -90,9 +101,26 @@ let
     updater re-pins bytes" posture the yc CLI uses (no signed upstream manifest,
     so no provenance check; the CI build only proves the pinned bytes fetch).
 
+    The hash a fetcher validates depends on the fetcher, so each pin declares
+    how to recompute it via an optional `prefetch` field:
+
+    - `"file"` (default): flat file hash via `nix store prefetch-file`. Correct
+      for `fetchurl`-consumed pins.
+    - `"unpack"`: unpacked-tree hash via `nix-prefetch-url --unpack`, which
+      matches `fetchzip` with its default `stripRoot = true` (and `fetchCrate`,
+      which unpacks the same way). Verified byte-identical against the existing
+      vector-bin and wasm-bindgen-cli pins.
+    - `"manual"`: the script never rewrites this hash. For pins no prefetch
+      command reproduces — `fetchzip { stripRoot = false; }` post-processes the
+      tree, so neither flat nor `--unpack` hashing matches; refresh by building
+      the package with the new url and copying the `got:` hash from the
+      mismatch error. Writing a best-guess hash here would brick the pin, which
+      is worse than asking the human.
+
     Arguments:
     - `writeNushellApplication`: the caller's `updateScriptWriter`.
-    - `nix`: the nix package (for `nix store prefetch-file`).
+    - `nix`: the nix package (for `nix store prefetch-file`, `nix-prefetch-url`
+      and `nix hash convert`).
     - `pname`: package name, for the script name and messages.
     - `relPath`: the pins.json path RELATIVE to the repo root (the updater runs
       from there, as the generated `update` app guarantees), e.g.
@@ -124,12 +152,25 @@ let
             | transpose name entry
             | reduce --fold {} {|row acc|
                 let entry = $row.entry
-                if ("url" in ($entry | columns)) {
+                let mode = (if ("prefetch" in ($entry | columns)) { $entry.prefetch } else { "file" })
+                if ($mode == "manual") {
+                  print $"(ansi yellow)skipping ($row.name): prefetch=manual; refresh by building with the new url and copying the got: hash(ansi reset)"
+                  $acc | insert $row.name $entry
+                } else if not ("url" in ($entry | columns)) {
+                  print $"(ansi yellow)skipping ($row.name): no `url` to re-fetch(ansi reset)"
+                  $acc | insert $row.name $entry
+                } else if ($mode == "unpack") {
+                  # fetchzip/fetchCrate validate the UNPACKED tree, not the
+                  # archive bytes; `nix-prefetch-url --unpack` reproduces that
+                  # hash (fetchTarball semantics: single root dir stripped).
+                  let b32 = (^nix-prefetch-url --unpack $entry.url | str trim)
+                  let sri = (^nix hash convert --hash-algo sha256 --to sri $b32 | str trim)
+                  $acc | insert $row.name ($entry | upsert hash $sri)
+                } else if ($mode == "file") {
                   let sri = (^nix store prefetch-file --json $entry.url | from json | get hash)
                   $acc | insert $row.name ($entry | upsert hash $sri)
                 } else {
-                  print $"(ansi yellow)skipping ($row.name): no `url` to re-fetch(ansi reset)"
-                  $acc | insert $row.name $entry
+                  error make { msg: $"($out): pin ($row.name) has unknown prefetch mode ($mode); expected file, unpack, or manual" }
                 }
               }
           )
