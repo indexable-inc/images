@@ -5,13 +5,16 @@
 //! 120Hz on `ProMotion`) and hands us the drawable; we only encode/present when
 //! a new guest frame (or a resize) made the window dirty, and the frame's
 //! `seq` is acked right after the present is scheduled. The guest renders its
-//! next frame off that ack, genlocking it to the display.
+//! next frame off that ack, genlocking it to the display. A fully occluded
+//! window downshifts to slow ack-only ticks instead (see
+//! [`PaneWindow::set_occluded`]): presents would be invisible, but a
+//! withheld ack would wedge the guest.
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{AllocAnyThread, DefinedClass, MainThreadOnly, define_class};
 use objc2_app_kit::{
-    NSBackingStoreType, NSWindow, NSWindowDelegate, NSWindowStyleMask,
+    NSBackingStoreType, NSWindow, NSWindowDelegate, NSWindowOcclusionState, NSWindowStyleMask,
 };
 use objc2_foundation::{
     MainThreadMarker, NSNotification, NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSSize,
@@ -33,6 +36,15 @@ use crate::view::PanesView;
 /// must sit inside [minimum, maximum]).
 const FRAME_RATE_RANGE: CAFrameRateRange =
     CAFrameRateRange { minimum: 60.0, maximum: 120.0, preferred: 120.0 };
+
+/// Tick rate while the window is fully occluded. The link keeps running as
+/// the ack pacer, just slowly: pausing it and acking frames on receipt
+/// instead was measured to unthrottle the guest to ~1700 frames/s (each ack
+/// immediately releases the next frame), which burns far more CPU on both
+/// sides than the presents it saves. ~10Hz keeps a covered window's stream
+/// alive and cheap; occluded ticks skip the encode/present entirely.
+const OCCLUDED_RATE_RANGE: CAFrameRateRange =
+    CAFrameRateRange { minimum: 8.0, maximum: 12.0, preferred: 10.0 };
 
 /// Ticks with nothing to present before the display link re-pauses (~250ms
 /// at 120Hz). Pausing immediately after every present would put an unpause
@@ -125,6 +137,23 @@ impl Surface {
         self.log.push(PendingTile { rect, bytes });
     }
 
+    /// Upload the pending log into every slot whose last draw has drained,
+    /// then compact. Used on occluded ticks: no present absorbs the log
+    /// there, and an animated window would grow it without bound while
+    /// covered. Keeping the textures current also makes the un-occlusion
+    /// redraw show the latest frame, not stale pixels.
+    fn absorb_drained(&mut self) {
+        for slot in &mut self.slots {
+            if slot.absorbed < self.log.len() && !slot.in_flight() {
+                for tile in &self.log[slot.absorbed..] {
+                    Renderer::upload(&slot.texture, tile.rect, &tile.bytes);
+                }
+                slot.absorbed = self.log.len();
+            }
+        }
+        self.compact();
+    }
+
     /// Drop the log prefix every slot has absorbed. With one guest frame in
     /// flight and alternating presents this keeps the log a frame or two
     /// long.
@@ -162,6 +191,12 @@ pub struct PaneWindow {
     guest_scale: u32,
     pending_ack: Option<u64>,
     dirty: bool,
+    /// The window is fully covered (occlusion state lost `Visible`).
+    /// `CAMetalDisplayLink` does not stop on its own when the window is
+    /// occluded (measured: a covered `--mock` window keeps presenting and
+    /// acking at the full 120Hz), so occlusion downshifts the link to
+    /// [`OCCLUDED_RATE_RANGE`] and ticks stop presenting; see `present`.
+    occluded: bool,
     /// Consecutive presentable ticks with nothing to draw; drives the idle
     /// re-pause (see [`IDLE_TICKS_TO_PAUSE`]).
     idle_ticks: u32,
@@ -268,6 +303,7 @@ impl PaneWindow {
             guest_scale: params.scale.max(1),
             pending_ack: None,
             dirty: false,
+            occluded: false,
             idle_ticks: 0,
             shown: false,
             closing: false,
@@ -407,6 +443,24 @@ impl PaneWindow {
         true
     }
 
+    /// Occlusion change from the window delegate. The link must never be
+    /// paused here outright: with one-frame-in-flight guest pacing the tick
+    /// is what releases the pending ack, and a withheld ack wedges the guest
+    /// window (its compositor watchdog then resends full frames forever). So
+    /// occlusion only downshifts the tick rate; the occluded branch of
+    /// `present` turns those ticks into ack-only ticks.
+    pub fn set_occluded(&mut self, occluded: bool) {
+        self.occluded = occluded;
+        if occluded {
+            self.link.setPreferredFrameRateRange(OCCLUDED_RATE_RANGE);
+        } else {
+            self.link.setPreferredFrameRateRange(FRAME_RATE_RANGE);
+            // Re-expose shows the freshest guest frame: occluded ticks kept
+            // the textures current but never drew them.
+            self.mark_dirty();
+        }
+    }
+
     /// Present on a display-link tick if anything changed. Returns the seq to
     /// ack, which the caller sends only after the present was scheduled.
     pub fn present(
@@ -424,6 +478,17 @@ impl PaneWindow {
             return None;
         }
         let surface = self.surface.as_mut()?;
+        if self.occluded {
+            // Ack-only tick for a covered window: keep the textures current
+            // (re-expose must show the latest frame) and release the ack so
+            // the guest stays paced, but never encode/present invisible
+            // pixels. The downshifted tick rate (see OCCLUDED_RATE_RANGE) is
+            // what throttles the stream while covered.
+            surface.absorb_drained();
+            self.dirty = false;
+            self.idle_ticks = 0;
+            return self.pending_ack.take();
+        }
         // Pick the texture to draw. A caught-up current slot means nothing
         // new arrived (a pure redraw, e.g. the live-resize stretch): sample
         // it again, no CPU write, no race. Otherwise flip to the other slot
@@ -464,6 +529,12 @@ impl PaneWindow {
         self.dirty = false;
         self.idle_ticks = 0;
         self.pending_ack.take()
+    }
+
+    /// True while any part of the window is on screen (`AppKit` occlusion
+    /// state contains `Visible`).
+    pub fn occlusion_visible(&self) -> bool {
+        self.ns.occlusionState().contains(NSWindowOcclusionState::Visible)
     }
 
     /// Redraw (stretching the stale texture) on the next tick; used during
@@ -557,6 +628,11 @@ define_class!(
         #[unsafe(method(windowDidEndLiveResize:))]
         fn window_did_end_live_resize(&self, _notification: &NSNotification) {
             app::window_live_resize(self.ivars().id, false);
+        }
+
+        #[unsafe(method(windowDidChangeOcclusionState:))]
+        fn window_did_change_occlusion_state(&self, _notification: &NSNotification) {
+            app::window_occlusion_changed(self.ivars().id);
         }
 
         #[unsafe(method(windowDidBecomeKey:))]

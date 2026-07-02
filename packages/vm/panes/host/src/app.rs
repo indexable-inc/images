@@ -278,6 +278,29 @@ pub fn window_closed(id: WindowId) {
     });
 }
 
+/// Occlusion change: a fully covered window keeps presenting and acking at
+/// the full display rate on its own (`CAMetalDisplayLink` does not stop for
+/// occlusion), so downshift it to ack-only ticks; see
+/// [`PaneWindow::set_occluded`].
+pub fn window_occlusion_changed(id: WindowId) {
+    with_app(|app| {
+        let Some(window) = app.windows.get_mut(&id) else {
+            return;
+        };
+        // A window not yet ordered in reports "not visible"; that is not
+        // occlusion, just the pre-show state.
+        if !window.shown {
+            return;
+        }
+        let visible = window.occlusion_visible();
+        eprintln!(
+            "panes-host: window {id}: {}",
+            if visible { "visible; presents resume" } else { "occluded; presents paused" }
+        );
+        window.set_occluded(!visible);
+    });
+}
+
 pub fn window_geometry_changed(id: WindowId) {
     with_app(|app| {
         let Some(window) = app.windows.get_mut(&id) else {
