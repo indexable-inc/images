@@ -177,8 +177,11 @@ let
     }
     {
       oneImplementation = ''
-        Keep one concept to one implementation. Consolidate duplicated logic into one
-        composable path.
+        Keep one concept to one implementation and one fact to one statement.
+        Consolidate duplicated logic into one composable path. In prose (docs,
+        prompts, instructions, this prompt included), state each rule once at its
+        owner and cross-reference instead of restating: duplicates drift and
+        contradict.
       '';
     }
     {
@@ -220,8 +223,9 @@ let
     {
       machineReadableInterfaces = ''
         Machine-readable first: prefer structured interfaces end to end, and ask
-        every tool for its structured mode (`--json` and similar) instead of
-        scraping human-oriented text. When a tool we control lacks one, fix the
+        every tool for its structured mode (`gh --json`, `cargo metadata`,
+        `nix --json`, and similar) instead of scraping human-oriented text.
+        When a tool we control lacks one, fix the
         interface upstream (a `--json` flag, structured output) rather than parsing
         prose. Treat any interface friction the same way (a missing flag, output, or
         helper): improve it or file an issue or PR instead of silently working
@@ -266,8 +270,7 @@ let
     {
       structuredPrimitives = ''
         Prefer structured primitives over text munging: `view.ls`, `view.tree`,
-        `view.cat`, `fff.grep`, `fff.find`, and JSON modes like `gh --json`,
-        `cargo metadata`, and `nix --json`. Parse `sh` output with `.json()`,
+        `view.cat`, `fff.grep`, and `fff.find`. Parse `sh` output with `.json()`,
         `.jsonl()`, or `.df()`. Run one command per `sh()` call and combine results in
         Python. Return tables as polars DataFrames.
       '';
