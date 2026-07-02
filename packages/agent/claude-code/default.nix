@@ -355,6 +355,21 @@ let
     inherit (target) hash;
   };
 
+  stockCli = stdenv.mkDerivation {
+    pname = "claude-code-stock";
+    inherit version;
+    dontUnpack = true;
+    dontStrip = true;
+    strictDeps = true;
+    nativeBuildInputs = lib.optional stdenv.hostPlatform.isElf autoPatchelfHook;
+    installPhase = ''
+      # shell
+      runHook preInstall
+      install -D -m755 ${nativeBinary} $out/bin/claude
+      runHook postInstall
+    '';
+  };
+
   # Maintainer-facing updater that refreshes manifest.json from Anthropic's
   # signed per-version manifest (fails closed on a bad GPG signature); see
   # ./update.nix. Built only when this eval context supplied a writer (the flake
@@ -437,6 +452,15 @@ stdenv.mkDerivation (finalAttrs: {
   };
 
   passthru = {
+    # Same capture path as extractSystemPrompt, but depends only on the fetched
+    # upstream binary so prompt snapshots do not rebuild the wrapped package.
+    extractStockSystemPrompt = import ./extract-system-prompt.nix {
+      inherit ix;
+      inherit (ix) pkgs;
+      name = "claude-code-extract-stock-system-prompt";
+      stockBinary = "${stockCli}/bin/claude";
+    };
+
     # Prints the stock upstream system prompt (no house overrides) by capturing
     # what the unwrapped libexec helper sends to a local ANTHROPIC_BASE_URL
     # server. See ./extract-system-prompt.nix and ./extract-system-prompt.py.
