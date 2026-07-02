@@ -17,17 +17,16 @@
     {
       title: 'Act',
       rows: [
-        ['o  ⏎  l', 'open / expand'],
-        ['h', 'collapse / parent'],
-        ['/', 'filter'],
-        ['esc', 'close / clear'],
+        ['o  ⏎  l', 'open resource / rich output'],
+        ['h', 'fold session'],
+        ['z a', 'toggle fold'],
       ],
     },
     {
-      title: 'Views',
+      title: 'Find',
       rows: [
-        ['1  2  3', 'jobs / namespace / board'],
-        ['[  ]', 'previous / next view'],
+        ['/', 'filter'],
+        ['esc', 'close / clear'],
         ['?', 'this help'],
       ],
     },
