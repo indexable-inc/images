@@ -2,6 +2,7 @@
 # (explicit deps, no `pkgs` arg) so it stays `override`-able and the module that
 # consumes it does not build a derivation inline.
 {
+  ix,
   stdenv,
   fetchurl,
   autoPatchelfHook,
@@ -9,13 +10,17 @@
   curl,
   glibc,
 }:
+let
+  # Version + download URL and SRI hash live in the sibling pins.json, never
+  # inline (repo policy: no hash literals in tracked .nix).
+  pin = ix.pins.loadPin ./pins.json "bedrock-server";
+in
 stdenv.mkDerivation {
   pname = "minecraft-bedrock-server";
-  version = "1.26.14.1";
+  inherit (pin) version;
 
   src = fetchurl {
-    url = "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.26.14.1.zip";
-    hash = "sha256-g9XaCRI8PwtgPFS+kpaOXA5DdbWE1RTWEID2Nuekx3Q=";
+    inherit (pin) url hash;
     curlOptsList = [
       "--http1.1"
       "-A"

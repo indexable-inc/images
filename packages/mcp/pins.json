@@ -1,0 +1,32 @@
+{
+  "htpy": {
+    "version": "26.5.1",
+    "url": "https://pypi.io/packages/source/h/htpy/htpy-26.5.1.tar.gz",
+    "hash": "sha256-Q6NlwfxnAJTaeBuSOIMBkznOwDE5fWHV/l+OLyJ4tj4="
+  },
+  "pyspark": {
+    "version": "3.5.5",
+    "url": "https://pypi.io/packages/source/p/pyspark/pyspark-3.5.5.tar.gz",
+    "hash": "sha256-bv/Jzpjt8jH01oP9FPcnBim/hFjGKNaiYg3tS7NPPLk="
+  },
+  "asn1": {
+    "version": "2.8.0",
+    "url": "https://pypi.io/packages/source/a/asn1/asn1-2.8.0.tar.gz",
+    "hash": "sha256-rfd93CcHz0IMDq47me4w6ROvzwk2Rn1CZpggzmt9FQo="
+  },
+  "ipsw_parser": {
+    "version": "1.7.3",
+    "url": "https://pypi.io/packages/source/i/ipsw_parser/ipsw_parser-1.7.3.tar.gz",
+    "hash": "sha256-QSu7t3O0NLD5lL0EPNtX2QqxpK5y+oSJtxkAzYVtNuo="
+  },
+  "pyiosbackup": {
+    "version": "0.2.4",
+    "url": "https://pypi.io/packages/source/p/pyiosbackup/pyiosbackup-0.2.4.tar.gz",
+    "hash": "sha256-ELTSoRyb7ck6VGfK063b4YvC3ENBVpIOciMibtTQvrc="
+  },
+  "pymobiledevice3": {
+    "version": "9.27.0",
+    "url": "https://pypi.io/packages/source/p/pymobiledevice3/pymobiledevice3-9.27.0.tar.gz",
+    "hash": "sha256-pYRzvX86tRUjYDuU7fBSD0VCTfE/sITJSId012+O7+8="
+  }
+}

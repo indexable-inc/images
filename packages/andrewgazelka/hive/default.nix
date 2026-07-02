@@ -35,7 +35,10 @@ let
   };
 
   # Test-env mix deps (credo + its deps) as a fixed-output derivation so the
-  # sandboxed check runs offline. Refresh the hash whenever elixir/mix.lock changes.
+  # sandboxed check runs offline. The SRI pin lives in the sibling pins.json
+  # (repo policy: no inline hash literals); it has no URL (the FOD content is
+  # derived from mix.lock), so refresh it after a lock change by building and
+  # copying the `got:` hash from the mismatch error.
   mixFodDeps = pkgs.beamPackages.fetchMixDeps {
     pname = "hive-elixir-deps";
     version = "0.1.0"; # keep in sync with elixir/mix.exs
@@ -48,7 +51,7 @@ let
     };
     inherit elixir;
     mixEnv = "test";
-    hash = "sha256-EXaJddUakJETdzPNFWgJRgBWG4VcrP/Z5tOCuE+BXdo=";
+    inherit ((ix.pins.loadPins ./pins.json)."mix-deps") hash;
   };
 
   elixirCheck = ix.buildElixirCheck pkgs {

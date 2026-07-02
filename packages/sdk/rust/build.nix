@@ -59,23 +59,19 @@ let
   wireVersion = "0.1.0";
   wireHash = "a95096d6b0ee69a6";
   wireToolchainId = "iz0mdcq43pxl3fmxmznc6n38sals6q0x-rust-default-1.98.0-nightly-2026-05-27";
-  r2Base = "https://pub-559bccbc8be94bed84821cb943b580f3.r2.dev/rlib/ix-sdk-wire/${wireHash}";
-  wireManifest = pkgs.fetchurl {
-    url = "${r2Base}/manifest.json";
-    hash = "sha256-UV6/vT5zasDrJyIp9o2AvXoqS9H5X+VOvQykxAmaPco=";
-  };
+
+  # The R2 URLs + SRI hashes for the three published artifacts live in the
+  # sibling pins.json (repo policy: no inline hash literals). Each URL embeds
+  # `wireHash` above; a re-publication rewrites pins.json (all three entries)
+  # and, when the unit hash moved, `wireHash` in this file.
+  wirePins = ix.pins.loadPins ./pins.json;
 
   # Fixed-output fetches: the SRI hash is the store-path identity, so the URL
   # carries no secret and substituters can short-circuit. These are the actual
   # compiled artifacts produced in the ix repo, not rebuilt here.
-  wireRlib = pkgs.fetchurl {
-    url = "${r2Base}/libix_sdk_wire-${wireHash}.rlib";
-    hash = "sha256-JCv83V3NQeSuA/oG/zYoX3AmM5u9jKPOxSH6V6OQQDs=";
-  };
-  wireRmeta = pkgs.fetchurl {
-    url = "${r2Base}/libix_sdk_wire-${wireHash}.rmeta";
-    hash = "sha256-Bt37uG3ImMhjt9dPX3W+pIoNAQvUMAFVOIdNMvUcT3E=";
-  };
+  wireManifest = pkgs.fetchurl { inherit (wirePins."wire-manifest") url hash; };
+  wireRlib = pkgs.fetchurl { inherit (wirePins."wire-rlib") url hash; };
+  wireRmeta = pkgs.fetchurl { inherit (wirePins."wire-rmeta") url hash; };
 
   # Wrap the fetched rlib+rmeta as a cargo-unit library unit. The Cargo lib
   # TARGET name for package `ix-sdk-wire` is `ix_sdk_wire` (renderer underscores
@@ -211,8 +207,8 @@ in
         grep -q '"crate": "ix-sdk-wire"' ${wireManifest}
         grep -q '"toolchain-id": "${wireToolchainId}"' ${wireManifest}
         grep -q '"unit-hash": "${wireHash}"' ${wireManifest}
-        grep -q '"sha256-JCv83V3NQeSuA/oG/zYoX3AmM5u9jKPOxSH6V6OQQDs="' ${wireManifest}
-        grep -q '"sha256-Bt37uG3ImMhjt9dPX3W+pIoNAQvUMAFVOIdNMvUcT3E="' ${wireManifest}
+        grep -q '"${wirePins."wire-rlib".hash}"' ${wireManifest}
+        grep -q '"${wirePins."wire-rmeta".hash}"' ${wireManifest}
 
         test -f ${prebuiltWireUnit}/lib/libix_sdk_wire-${wireHash}.rlib
         test -f ${prebuiltWireUnit}/lib/libix_sdk_wire-${wireHash}.rmeta

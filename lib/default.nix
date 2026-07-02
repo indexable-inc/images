@@ -189,6 +189,7 @@ let
         rustWorkspaceFor
         clippy-fork
         lists
+        pins
         ;
       repoRoot = paths.root;
     })
@@ -417,7 +418,7 @@ let
     function `{ pkgs }: derivation`; override it to supply your own SDK.
     See [`lib/darwin/macos-sdk.nix`](lib/darwin/macos-sdk.nix).
   */
-  macosSdk = import ./darwin/macos-sdk.nix;
+  macosSdk = import ./darwin/macos-sdk.nix { inherit pins; };
 
   /**
     zig + macOS SDK cross toolchain. `{ appleSdk, lib, pkgs, target }` returns

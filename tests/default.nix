@@ -11,6 +11,10 @@ let
   inherit (ix) pkgs;
   fs = lib.fileset;
   repoPackages = ix.packageSetFor pkgs;
+  # Fixture pins (rev + SRI hash pairs for the real-workspace snapshots and the
+  # shared go-unit vendor hash) live in the sibling pins.json, never inline
+  # (repo policy: no hash literals in tracked .nix).
+  pins = ix.pins.loadPins ./pins.json;
   portableServicesTest = import ./portable-services.nix { inherit lib pkgs ix; };
   # VM boot smoke test for the minecraft-blocks Paper plugin (ENG-2186). Not
   # part of the `eval` aggregate: it boots a qemu VM, so it is its own check
@@ -1355,7 +1359,7 @@ let
       (ix.goUnit.buildWorkspace {
         pname = "go-unit-missing-go-sum";
         src = goUnitMissingGoSumFixture;
-        vendorHash = "sha256-36P4vOdzJotmVZon5Zud/d/jxzv4ad04aQT2G/EE3U8=";
+        vendorHash = pins."go-unit-fixture-vendor".hash;
         packages = [ "." ];
       }).packages
   );
@@ -1383,7 +1387,7 @@ let
         pname = "go-unit-missing-explicit-go-sum";
         src = goUnitMissingGoSumFixture;
         goSum = goUnitMissingGoSumFixture + "/go.sum";
-        vendorHash = "sha256-36P4vOdzJotmVZon5Zud/d/jxzv4ad04aQT2G/EE3U8=";
+        vendorHash = pins."go-unit-fixture-vendor".hash;
         packages = [ "." ];
       }).packages
   );
@@ -1572,28 +1576,34 @@ let
   cargoUnitRealWorkspaces = {
     serde = cargoUnitRealWorkspace {
       name = "serde";
-      owner = "serde-rs";
-      repo = "serde";
-      rev = "fa7da4a93567ed347ad0735c28e439fca688ef26";
-      hash = "sha256-5Ercr2dCC52VLV9dAZUsMlw+Ovup5Qui6vDQHxl70v4=";
+      inherit (pins.serde)
+        owner
+        repo
+        rev
+        hash
+        ;
       lockFile = ./fixtures/cargo-unit-real-workspaces/serde/Cargo.lock;
     };
 
     thiserror = cargoUnitRealWorkspace {
       name = "thiserror";
-      owner = "dtolnay";
-      repo = "thiserror";
-      rev = "d4a2507576d276dbebc4be45c9b3d657216b727f";
-      hash = "sha256-0DU1KSWZ+T4v9cfTfY8QQ2bMLgko9+c1dOXEk99KvUo=";
+      inherit (pins.thiserror)
+        owner
+        repo
+        rev
+        hash
+        ;
       lockFile = ./fixtures/cargo-unit-real-workspaces/thiserror/Cargo.lock;
     };
 
     indexmap = cargoUnitRealWorkspace {
       name = "indexmap";
-      owner = "indexmap-rs";
-      repo = "indexmap";
-      rev = "0a5535021aec77a2c9890c0bec273fa446c6593a";
-      hash = "sha256-7WBUZ1QJ6tywpdmo50QpX01fu7HMkpfoh/TC2LkPxiM=";
+      inherit (pins.indexmap)
+        owner
+        repo
+        rev
+        hash
+        ;
       lockFile = ./fixtures/cargo-unit-real-workspaces/indexmap/Cargo.lock;
       testArgs = [
         "--workspace"
@@ -1603,10 +1613,12 @@ let
 
     regex = cargoUnitRealWorkspace {
       name = "regex";
-      owner = "rust-lang";
-      repo = "regex";
-      rev = "839d16bc65b60e2006d3599d20bfa6efc14049d8";
-      hash = "sha256-9czj9Oa25H8VhMmZNyS0h9sFn6rYDrEPlOuGm9NJd9A=";
+      inherit (pins.regex)
+        owner
+        repo
+        rev
+        hash
+        ;
       lockFile = ./fixtures/cargo-unit-real-workspaces/regex/Cargo.lock;
       testArgs = [
         "--workspace"

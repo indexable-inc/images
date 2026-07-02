@@ -10,6 +10,8 @@
   rustToolchain,
   writePythonApplication,
   lists,
+  # Shared pins reader, threaded through to policy.nix (see its arg doc).
+  pins,
 }:
 let
   inherit (builtins) baseNameOf toString;
@@ -24,7 +26,12 @@ let
   };
 
   policyLib = import ./policy.nix {
-    inherit lib pkgs clippyPackage;
+    inherit
+      lib
+      pkgs
+      clippyPackage
+      pins
+      ;
     inherit (vendorLib) vendorConfigScript cargoLockFile;
   };
 

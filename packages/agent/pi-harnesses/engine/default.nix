@@ -1,4 +1,5 @@
 {
+  ix,
   lib,
   stdenv,
   buildNpmPackage,
@@ -44,13 +45,14 @@ let
 
   # Build the bridge WITH its npm deps so the shipped extension actually loads:
   # Pi resolves `@modelcontextprotocol/sdk` from node_modules next to the .ts,
-  # the same layout proven to work end-to-end. npmDepsHash pins the dep closure;
-  # refresh it with `nix run nixpkgs#prefetch-npm-deps -- extension/package-lock.json`.
+  # the same layout proven to work end-to-end. npmDepsHash pins the dep closure
+  # in the sibling pins.json (repo policy: no inline hash literals); refresh it
+  # with `nix run nixpkgs#prefetch-npm-deps -- extension/package-lock.json`.
   extension = buildNpmPackage {
     pname = "ix-mcp-bridge";
     version = "0.1.0";
     src = extensionSrc;
-    npmDepsHash = "sha256-Nis7wQLp7wASaEu4n/Cp3pthB3z+9FsTJs5pK3oq77M=";
+    npmDepsHash = (ix.pins.loadPin ./pins.json "npm-deps").hash;
     # No build script: install the source plus production node_modules verbatim.
     dontNpmBuild = true;
     doCheck = true;
