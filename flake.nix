@@ -243,6 +243,7 @@
         };
         # Repo maintenance scripts and package-owned source updaters.
         tools = {
+          cveScan = ./packages/cve-scan/cve-scan.py;
           ixShellSyncIgnored = ./packages/maintainers/scripts/ix-shell-sync-ignored.py;
           mcSource = ./packages/minecraft/tools/mc-source.nu;
           updateSounds = ./packages/minecraft/tools/update-sounds.nu;

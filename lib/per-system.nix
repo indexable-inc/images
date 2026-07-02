@@ -431,6 +431,38 @@ let
     meta.description = "Copy git-ignored files into an ix shell workspace";
   };
 
+  # `nix run .#cve-scan`: scan the whole Nix closure of the repo's key outputs
+  # for known CVEs (issue #1697). cargoAudit (lib/rust/policy.nix) only covers the
+  # workspace Cargo.lock against RustSec; nothing scanned the closure for a
+  # vulnerable system lib, a stale OpenSSL in an image, or a C dependency of a
+  # tool. This wraps `vulnix` -- the Nix-native NVD closure scanner (chosen over
+  # sbomnix/vulnxscan: leaner, first-class `--json`, caches the NVD feed locally
+  # so only the first/refresh run needs network, and works on both x86_64-linux
+  # and aarch64-darwin). The scan target is `.#cachePushRoots.<system>`: the
+  # registry- and example-fleet-derived roots cache-push.yml publishes (every
+  # package, images as their `toplevel` closure, plus each example fleet node's
+  # system closure), so the closure list grows with the repo rather than being
+  # hardcoded, and it is exactly "the repo's key outputs" a consumer substitutes.
+  #
+  # Advisory data is impure and fresh, so this is an app plus a scheduled workflow
+  # that files a tracking issue (.github/workflows/cve-scan.yml), NOT a blocking
+  # flake check. `vulnix` needs `nix-store` (and `nix build`) on PATH; both come
+  # from the runtime `pkgs.nix`. The wrapper forces a UTF-8 locale (vulnix decodes
+  # NVD text and aborts under the C locale); see cve-scan.py.
+  cveScan = ix.writePythonApplication pkgs {
+    name = "cve-scan";
+    src = paths.tools.cveScan;
+    pyChecker = "zuban";
+    runtimeInputs = [
+      pkgs.vulnix
+      pkgs.nix
+    ];
+    # pydantic validates vulnix's --json output at the boundary so an upstream
+    # schema drift fails with a path-precise error rather than a bare KeyError.
+    python = pkgs.python314.withPackages (ps: [ ps.pydantic ]);
+    meta.description = "Scan the Nix closure of the repo's key outputs for CVEs (vulnix)";
+  };
+
   # One symlink-free directory holding every skill under `skills/`, ready to
   # copy into `.claude/skills`.
   skillsDir = ix.skills.mkSkillsDir { inherit pkgs; };
@@ -1197,6 +1229,7 @@ let
       bench-filesystem = benchFilesystem;
       update-mods = updateMods;
       update-loaders = updateLoaders;
+      cve-scan = cveScan;
       inherit update;
       ix-shell-sync-ignored = ixShellSyncIgnored;
       mc-source = mcSource;
