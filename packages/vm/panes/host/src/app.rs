@@ -1,9 +1,9 @@
 //! Main-thread application state. Every window and the outgoing sender live
 //! in a main-thread `thread_local`; the supervisor dispatches events here via
-//! the main queue, and AppKit delegate/view callbacks call the helpers below
+//! the main queue, and `AppKit` delegate/view callbacks call the helpers below
 //! directly (they already run on the main thread).
 //!
-//! Re-entrancy rule: AppKit calls that synchronously fire delegate methods
+//! Re-entrancy rule: `AppKit` calls that synchronously fire delegate methods
 //! (`close`, `makeKeyAndOrderFront`) are deferred until the `APP` borrow is
 //! released, because those delegates call straight back into this module.
 
@@ -48,7 +48,7 @@ struct AckStat {
 /// How often `display_tick` reports a window's ack rate.
 const ACK_RATE_REPORT_EVERY: Duration = Duration::from_secs(5);
 
-/// AppKit work postponed past the `APP` borrow (see module docs).
+/// `AppKit` work postponed past the `APP` borrow (see module docs).
 #[derive(Default)]
 struct Deferred {
     show: Option<Retained<NSWindow>>,
@@ -107,7 +107,10 @@ pub fn run(target: Target, title_prefix: String) -> ExitCode {
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let host = HostInfo {
-        refresh_mhz: u32::try_from(max_fps.max(1)).unwrap_or(60) * 1000,
+        // Clamped into u32 range explicitly: no real panel exceeds 1000Hz,
+        // and the clamp makes the (impossible) fallback a visible policy
+        // rather than a silent unwrap_or.
+        refresh_mhz: u32::try_from(max_fps.clamp(1, 1000)).expect("clamped to 1..=1000") * 1000,
         scale: (backing.round().max(1.0)) as u32,
     };
     conn::spawn(target, host);
@@ -344,8 +347,8 @@ pub fn close_requested(id: WindowId) {
 }
 
 /// Cmd+Q: ask the guest to close everything, then exit. The grace period
-/// lets the writer thread flush the CloseRequests; we do not wait for
-/// WindowGone because a hung guest must not pin the host app open.
+/// lets the writer thread flush the `CloseRequest`s; we do not wait for
+/// `WindowGone` because a hung guest must not pin the host app open.
 pub fn request_quit() {
     let already_quitting = with_app(|app| {
         if app.quitting {

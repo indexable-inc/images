@@ -189,12 +189,12 @@ pub struct BootLinux {
     /// access and exposes the listed ports back to the host (gvproxy on a macOS
     /// host, TSI port-map on Linux). See [`crate::net`].
     pub net: Option<crate::net::Net>,
-    /// Expose guest AF_VSOCK ports as host unix sockets: for each
-    /// `(guest_port, host_path)`, libkrun listens on `host_path` and forwards
-    /// each host `connect()` into the guest's vsock `guest_port` (the guest
-    /// service `listen()`s on AF_VSOCK). Independent of [`Self::net`]: vsock is
-    /// its own device, not the NIC, and needs no TSI-aware guest kernel.
-    pub vsock_ports: Vec<(u32, PathBuf)>,
+    /// Expose guest `AF_VSOCK` ports as host unix sockets: for each mapping,
+    /// libkrun listens on the host path and forwards each host `connect()`
+    /// into the guest's vsock port (the guest service `listen()`s on
+    /// `AF_VSOCK`). Independent of [`Self::net`]: vsock is its own device, not
+    /// the NIC, and needs no TSI-aware guest kernel.
+    pub vsock_ports: Vec<VsockPort>,
     /// Capture the guest serial console to this file instead of inheriting the
     /// process stdio. `krun_start_enter` takes over the process, so a file is how
     /// a background/lockstep caller reads the console after the VM stops.
@@ -203,6 +203,15 @@ pub struct BootLinux {
     /// off (the persistent-server case); `Some` is a watchdog so a background
     /// invocation never hangs.
     pub timeout: Option<Duration>,
+}
+
+/// One guest-vsock-to-host mapping (see [`BootLinux::vsock_ports`]).
+#[derive(Debug, PartialEq, Eq)]
+pub struct VsockPort {
+    /// Guest `AF_VSOCK` port the guest service listens on.
+    pub guest_port: u32,
+    /// Host unix socket path libkrun binds and listens on.
+    pub host_path: PathBuf,
 }
 
 #[cfg(have_libkrun)]
@@ -423,7 +432,7 @@ fn set_net_linux(ctx: u32, boot: &BootLinux) -> Result<(), Error> {
     Ok(())
 }
 
-/// Map guest AF_VSOCK ports to host unix sockets (see [`BootLinux::vsock_ports`]).
+/// Map guest `AF_VSOCK` ports to host unix sockets (see [`BootLinux::vsock_ports`]).
 /// Returns the path `CString`s only to keep the caller uniform with the argv
 /// keepalives; libkrun copies the path into an owned `PathBuf` at call time
 /// (`unix_ipc_port_map`), so no lifetime past this call is actually required.
@@ -434,7 +443,7 @@ fn set_vsock_ports(ctx: u32, boot: &BootLinux) -> Result<Vec<CString>, Error> {
     use std::os::unix::fs::FileTypeExt;
 
     let mut keep = Vec::with_capacity(boot.vsock_ports.len());
-    for (port, path) in &boot.vsock_ports {
+    for VsockPort { guest_port, host_path: path } in &boot.vsock_ports {
         // libkrun binds the socket itself and refuses an existing path with
         // -EEXIST, so clear the stale socket a previous run left behind. Only a
         // socket: refusing to delete anything else catches a mistyped path
@@ -465,7 +474,7 @@ fn set_vsock_ports(ctx: u32, boot: &BootLinux) -> Result<Vec<CString>, Error> {
         unsafe {
             check(
                 "krun_add_vsock_port2",
-                krun_add_vsock_port2(ctx, *port, path_c.as_ptr(), true),
+                krun_add_vsock_port2(ctx, *guest_port, path_c.as_ptr(), true),
             )?;
         }
         keep.push(path_c);

@@ -1,8 +1,8 @@
-//! One guest toplevel = one `PaneWindow`: NSWindow + input view +
+//! One guest toplevel = one `PaneWindow`: `NSWindow` + input view +
 //! `CAMetalLayer` + double-buffered surface textures + `CAMetalDisplayLink`.
 //!
 //! Presentation pacing: the display link ticks at the panel's rate (up to
-//! 120Hz on ProMotion) and hands us the drawable; we only encode/present when
+//! 120Hz on `ProMotion`) and hands us the drawable; we only encode/present when
 //! a new guest frame (or a resize) made the window dirty, and the frame's
 //! `seq` is acked right after the present is scheduled. The guest renders its
 //! next frame off that ack, genlocking it to the display.
@@ -28,8 +28,8 @@ use crate::app;
 use crate::render::Renderer;
 use crate::view::PanesView;
 
-/// ProMotion range: let the system drop to 60 when we present nothing, chase
-/// 120 when frames flow (Apple TN3178 / CAFrameRateRange docs: preferred
+/// `ProMotion` range: let the system drop to 60 when we present nothing, chase
+/// 120 when frames flow (Apple TN3178 / `CAFrameRateRange` docs: preferred
 /// must sit inside [minimum, maximum]).
 const FRAME_RATE_RANGE: CAFrameRateRange =
     CAFrameRateRange { minimum: 60.0, maximum: 120.0, preferred: 120.0 };
@@ -65,7 +65,7 @@ struct PendingTile {
 
 /// One of the window's two surface textures. Double-buffered because
 /// `replaceRegion` does not synchronize against GPU access (Apple,
-/// MTLTexture docs): a CPU upload into the texture a still-executing
+/// `MTLTexture` docs): a CPU upload into the texture a still-executing
 /// command buffer is sampling for the previous present tears. Uploads only
 /// go to a slot whose last draw has drained.
 struct Slot {

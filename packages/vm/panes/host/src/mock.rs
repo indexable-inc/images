@@ -3,7 +3,7 @@
 //! (moving gradient + frame counter), and logs every input event it receives.
 //!
 //! Pacing mirrors the real compositor: exactly one frame in flight, the next
-//! render starts when the host acks the previous seq. On a ProMotion panel
+//! render starts when the host acks the previous seq. On a `ProMotion` panel
 //! the ack loop should settle at ~120 acks/s; the rate is logged every
 //! second.
 //!
@@ -249,6 +249,14 @@ const PALETTE: usize = 512;
 const SCROLL_PER_FRAME: u64 = 3;
 
 impl Pattern {
+    // The gradient math stays in f64 over values that are exact and small
+    // (i < 2 * PALETTE, sin * 110 + 130 lands in 20..=240), so the flagged
+    // precision/sign/truncation cannot actually occur in a test pattern.
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
     fn new() -> Self {
         let mut tiled = Vec::with_capacity(PALETTE * 2 * 4);
         for i in 0..PALETTE * 2 {
@@ -264,6 +272,9 @@ impl Pattern {
         Self { tiled }
     }
 
+    // The scroll shift truncating past 2^64 gradient pixels is beyond any
+    // run's lifetime, and it is reduced mod PALETTE immediately anyway.
+    #[allow(clippy::cast_possible_truncation)]
     fn render(&self, frame: u64, width: u32, height: u32, scale: u32) -> Vec<u8> {
         let width = width as usize;
         let height = height as usize;
@@ -386,7 +397,7 @@ mod tests {
     }
 
     /// Drive a full mock session over a socketpair, acting as the host:
-    /// hello exchange, WindowNew, ack-paced frames, close handshake.
+    /// hello exchange, `WindowNew`, ack-paced frames, close handshake.
     #[test]
     fn mock_speaks_the_protocol_end_to_end() {
         let (host_side, guest_side) = UnixStream::pair().expect("socketpair");

@@ -1,9 +1,9 @@
-//! macOS host agent: presents guest-Linux toplevels as native NSWindows and
+//! macOS host agent: presents guest-Linux toplevels as native `NSWindow`s and
 //! forwards input back to the guest compositor. See index#1686 and
 //! `panes-protocol` for the wire contract.
 //!
-//! Process shape: the AppKit main thread owns every window and all state
-//! (`app::APP` is a main-thread thread_local); a supervisor thread owns the
+//! Process shape: the `AppKit` main thread owns every window and all state
+//! (`app::APP` is a main-thread `thread_local`); a supervisor thread owns the
 //! socket, reconnects with backoff, and `dispatch_async`s decoded [`ToHost`]
 //! messages onto the main queue; a writer thread drains outgoing [`ToGuest`]
 //! messages so the main thread never blocks on the socket.

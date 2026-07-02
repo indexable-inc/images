@@ -29,7 +29,7 @@ use panes_protocol::Rect;
 /// Vertex-id-only fullscreen triangle plus a plain sampler; the whole
 /// presentation shader surface. Compiled at startup with
 /// `newLibraryWithSource:` so there is no offline metallib build step.
-const SHADER_SOURCE: &str = r#"
+const SHADER_SOURCE: &str = r"
 #include <metal_stdlib>
 using namespace metal;
 
@@ -53,7 +53,7 @@ fragment float4 panes_fragment(VOut in [[stage_in]],
     constexpr sampler s(mag_filter::linear, min_filter::linear);
     return tex.sample(s, in.uv);
 }
-"#;
+";
 
 pub struct Renderer {
     pub device: Retained<ProtocolObject<dyn MTLDevice>>,

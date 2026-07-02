@@ -1,6 +1,6 @@
 //! Socket supervisor: connect with backoff, decode [`ToHost`] messages on a
 //! reader thread and hand them to the main thread, drain outgoing [`ToGuest`]
-//! messages on a writer thread. The AppKit main thread never touches the
+//! messages on a writer thread. The `AppKit` main thread never touches the
 //! socket, so a stalled guest can never hitch window presentation.
 
 use std::io::{BufReader, BufWriter, Read, Write};

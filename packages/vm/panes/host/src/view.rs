@@ -1,5 +1,5 @@
 //! The per-window content view: hosts the `CAMetalLayer` and translates every
-//! AppKit input event into protocol messages in surface coordinates.
+//! `AppKit` input event into protocol messages in surface coordinates.
 //!
 //! Coordinates: the view overrides `isFlipped` so its local origin is
 //! top-left like the guest surface; points are multiplied by the window's
@@ -24,7 +24,7 @@ use panes_protocol::{AxisSource, ButtonState, ToGuest, WindowId};
 use crate::app;
 use crate::keymap;
 
-/// evdev button codes (input-event-codes.h), what wl_pointer.button carries.
+/// evdev button codes (input-event-codes.h), what `wl_pointer.button` carries.
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
 const BTN_MIDDLE: u32 = 0x112;
@@ -36,7 +36,7 @@ const KVK_ANSI_Q: u16 = 0x0C;
 const KVK_ANSI_W: u16 = 0x0D;
 const KVK_CAPS_LOCK: u16 = 0x39;
 
-/// One line per wheel click, in wl_pointer axis units. libinput's convention
+/// One line per wheel click, in `wl_pointer` axis units. libinput's convention
 /// (15 units per detent) so guest toolkits scroll the expected distance.
 const WHEEL_AXIS_PER_LINE: f64 = 15.0;
 
@@ -230,7 +230,7 @@ impl PanesView {
     }
 
     /// Focus left this window: release every held modifier guest-side and
-    /// forget them. AppKit stops delivering `flagsChanged` once the window
+    /// forget them. `AppKit` stops delivering `flagsChanged` once the window
     /// resigns key, so a modifier held across a Cmd-Tab would otherwise stay
     /// pressed in the guest forever, and the toggle heuristic would invert
     /// press/release on its next use.
@@ -273,10 +273,21 @@ impl PanesView {
 
     fn send_scroll(&self, event: &NSEvent) {
         let id = self.ivars().id;
+        // wl_pointer.axis carries no position either: the first event over a
+        // window can be a scroll (two-finger scroll without a prior click or
+        // move), so re-anchor pointer focus first, like the button path.
+        self.send_motion(event);
         let momentum = event.momentumPhase();
-        if momentum.contains(NSEventPhase::Ended) || momentum.contains(NSEventPhase::Cancelled) {
-            // End of trackpad momentum: wl_pointer axis_stop, so kinetic
-            // scrolling in the guest halts with the gesture.
+        let phase = event.phase();
+        // Finger-up for an ordinary trackpad gesture arrives as
+        // `phase() == Ended`; `momentumPhase()` only covers the later inertial
+        // tail. Both close a scroll segment with wl_pointer axis_stop, so
+        // kinetic scrolling in the guest halts with the gesture.
+        if momentum.contains(NSEventPhase::Ended)
+            || momentum.contains(NSEventPhase::Cancelled)
+            || phase.contains(NSEventPhase::Ended)
+            || phase.contains(NSEventPhase::Cancelled)
+        {
             app::send(ToGuest::PointerAxis {
                 id,
                 source: AxisSource::Finger,

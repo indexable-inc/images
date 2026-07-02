@@ -92,10 +92,10 @@ enum Command {
         /// NIC (gvproxy on macOS, TSI on Linux) that NATs to the host network.
         #[arg(long)]
         net: bool,
-        /// Expose a guest AF_VSOCK port as a host unix socket,
+        /// Expose a guest `AF_VSOCK` port as a host unix socket,
         /// `GUEST_PORT:HOST_PATH`, repeatable (e.g. `--vsock-port
-        /// 7100:/tmp/guest.sock`). libkrun listens on HOST_PATH and forwards
-        /// each host connect() into the guest's vsock GUEST_PORT, so a guest
+        /// 7100:/tmp/guest.sock`). libkrun listens on `HOST_PATH` and forwards
+        /// each host `connect()` into the guest's vsock `GUEST_PORT`, so a guest
         /// service that listens on vsock is reached from the host by connecting
         /// to the unix socket. Independent of `--net`/`--port` (vsock is its own
         /// device, not the NIC).
@@ -453,11 +453,11 @@ fn build_net(net: bool, ports: &[String]) -> Result<Option<net::Net>, String> {
     Ok(Some(net::Net { forwards }))
 }
 
-/// Parse `--vsock-port GUEST_PORT:HOST_PATH` specs into `(port, path)` pairs
-/// for [`linuxkrun::BootLinux::vsock_ports`]. Split at the *first* `:` only: a
-/// unix path is free to contain `:`. The `String` error is a user-facing CLI
-/// message the caller wraps in its host error type, as in [`build_net`].
-fn build_vsock_ports(specs: &[String]) -> Result<Vec<(u32, std::path::PathBuf)>, String> {
+/// Parse `--vsock-port GUEST_PORT:HOST_PATH` specs into [`linuxkrun::VsockPort`]
+/// mappings for [`linuxkrun::BootLinux::vsock_ports`]. Split at the *first* `:`
+/// only: a unix path is free to contain `:`. The `String` error is a user-facing
+/// CLI message the caller wraps in its host error type, as in [`build_net`].
+fn build_vsock_ports(specs: &[String]) -> Result<Vec<linuxkrun::VsockPort>, String> {
     let mut ports = Vec::with_capacity(specs.len());
     for spec in specs {
         let (port, path) = spec
@@ -474,7 +474,10 @@ fn build_vsock_ports(specs: &[String]) -> Result<Vec<(u32, std::path::PathBuf)>,
         if path.is_empty() {
             return Err(format!("--vsock-port {spec:?} has an empty host socket path"));
         }
-        ports.push((port, std::path::PathBuf::from(path)));
+        ports.push(linuxkrun::VsockPort {
+            guest_port: port,
+            host_path: std::path::PathBuf::from(path),
+        });
     }
     Ok(ports)
 }
@@ -484,12 +487,16 @@ mod tests {
     use std::path::PathBuf;
 
     use super::build_vsock_ports;
+    use super::linuxkrun::VsockPort;
 
     #[test]
     fn vsock_port_spec_parses_port_and_path() {
         let specs = [String::from("7100:/tmp/guest.sock")];
         let ports = build_vsock_ports(&specs).expect("a valid spec parses");
-        assert_eq!(ports, [(7100, PathBuf::from("/tmp/guest.sock"))]);
+        assert_eq!(
+            ports,
+            [VsockPort { guest_port: 7100, host_path: PathBuf::from("/tmp/guest.sock") }]
+        );
     }
 
     #[test]
@@ -497,7 +504,10 @@ mod tests {
         // Only the first `:` separates port from path; the rest is the path.
         let specs = [String::from("7100:/tmp/a:b.sock")];
         let ports = build_vsock_ports(&specs).expect("a colon in the path is legal");
-        assert_eq!(ports, [(7100, PathBuf::from("/tmp/a:b.sock"))]);
+        assert_eq!(
+            ports,
+            [VsockPort { guest_port: 7100, host_path: PathBuf::from("/tmp/a:b.sock") }]
+        );
     }
 
     #[test]

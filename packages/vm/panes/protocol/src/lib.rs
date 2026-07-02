@@ -262,9 +262,9 @@ pub fn read_msg<T: for<'de> Deserialize<'de>>(r: &mut impl std::io::Read) -> Res
     let mut len = [0u8; 4];
     r.read_exact(&mut len)?;
     // u32 -> usize only narrows on 16-bit targets the workspace does not
-    // support; saturating to usize::MAX routes that impossibility into the
-    // TooLarge rejection below instead of a panic.
-    let len = usize::try_from(u32::from_le_bytes(len)).unwrap_or(usize::MAX);
+    // support; mapping that impossibility to TooLarge (the same rejection an
+    // over-cap prefix gets) keeps this panic-free without a lossy fallback.
+    let len = usize::try_from(u32::from_le_bytes(len)).map_err(|_| WireError::TooLarge(usize::MAX))?;
     if len > MAX_FRAME {
         return Err(WireError::TooLarge(len));
     }
