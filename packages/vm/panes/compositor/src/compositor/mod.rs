@@ -790,6 +790,15 @@ impl App {
                 fire_frame_callbacks(pane.toplevel.wl_surface(), now);
                 self.pump(idx);
             }
+            // smithay 0.7's PointerConstraintsHandler has no
+            // constraint-destroyed callback, so a client tearing down its
+            // zwp_locked_pointer with neither a commit nor an input event
+            // following (e.g. it crashed while holding the grab) reaches no
+            // sync_pointer_lock call site and would leave the host cursor
+            // captured forever. The tick is the backstop; both calls
+            // early-return when nothing changed.
+            self.maybe_activate_constraint();
+            self.sync_pointer_lock();
         } else {
             for pane in &self.panes {
                 fire_frame_callbacks(pane.toplevel.wl_surface(), now);

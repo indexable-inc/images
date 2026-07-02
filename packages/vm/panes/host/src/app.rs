@@ -192,8 +192,11 @@ pub fn on_event(event: Event) {
             app.out = None;
             app.ack_stats.clear();
             app.peer_minor = 0;
-            // The capture cannot outlive the lock-holding guest.
-            app.capture = None;
+            // The capture cannot outlive the lock-holding guest. peer_minor
+            // is 0 now, so reconciling releases it through the one shared
+            // path (the view leaves relative mode too) while the windows
+            // still exist, before they are torn down below.
+            sync_capture(app);
             // Guest windows cannot outlive the guest connection.
             let close = app.windows.drain().map(|(_, window)| window).collect();
             Deferred { show: None, close }
