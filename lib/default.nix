@@ -258,6 +258,16 @@ let
   toml = import ./util/toml.nix { inherit lib; };
 
   /**
+    Read a package's pinned hashes/digests from a sibling `pins.json` instead
+    of inlining `hash = "sha256-..."` in the `.nix`. `loadPins ./pins.json`
+    returns the validated `{ name = { hash; ... }; }` map; `loadPin ./pins.json
+    "src"` returns one named entry. The JSON is the single source of truth an
+    updater rewrites, so a bump touches one data file. See
+    [`lib/util/pins.nix`](lib/util/pins.nix).
+  */
+  pins = import ./util/pins.nix { inherit lib; };
+
+  /**
     Single source of truth for the MCP servers baked into the agent wrappers.
     Define a server once in a neutral shape and render it to each tool's native
     config with `mcp.toClaudeJson` (Claude Code's `mcpServers` JSON) and
@@ -458,6 +468,7 @@ let
       mutableJson
       netCidr
       paths
+      pins
       publicArtifactsFor
       relativePath
       ruffAnnArgs

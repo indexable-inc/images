@@ -8,12 +8,14 @@
 let
   inherit (index.lib) pkgs;
 
+  # Base-image digest + fetch hash live in the sibling pins.json, never inline
+  # (repo policy: examples consume pinned data, they don't own hash literals).
+  pin = index.lib.pins.loadPin ./pins.json "base";
+
   base = pkgs.dockerTools.pullImage {
-    imageName = "ubuntu";
-    imageDigest = "sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae77ff1dc54";
-    hash = "sha256-bVHLrY3M5nkQP2BhFRq5wVeW/6V5t0ROMHYHYd6eWDs=";
-    finalImageName = "ubuntu";
-    finalImageTag = "24.04";
+    inherit (pin) imageName imageDigest hash;
+    finalImageName = pin.imageName;
+    inherit (pin) finalImageTag;
   };
 in
 index.lib.mkNonNixImage {

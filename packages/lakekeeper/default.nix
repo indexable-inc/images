@@ -3,26 +3,28 @@
 {
   autoPatchelfHook,
   fetchzip,
+  ix,
   lib,
   stdenv,
 }:
 let
-  system = stdenv.hostPlatform.system;
-  # Add a target here, with its own release hash, before building on another arch.
+  # Add a target here, with its own release hash, before building on another
+  # arch. The package-set/flake targets and meta.platforms below gate the arch.
   targets = {
     x86_64-linux = "x86_64-unknown-linux-gnu";
   };
-  target = targets.${system} or (throw "lakekeeper: unsupported system ${system}");
+  # Version + per-release URL and SRI hash live in the sibling pins.json, never
+  # inline (repo policy). Bump with `nix run .#update`.
+  pin = ix.pins.loadPin ./pins.json "lakekeeper";
 in
-stdenv.mkDerivation (finalAttrs: {
+stdenv.mkDerivation {
   pname = "lakekeeper";
-  version = "0.12.3";
+  inherit (pin) version;
 
   # Upstream ships a single bare `lakekeeper` binary in the tarball (no wrapping
   # directory), so stripRoot must stay off.
   src = fetchzip {
-    url = "https://github.com/lakekeeper/lakekeeper/releases/download/v${finalAttrs.version}/lakekeeper-${target}.tar.gz";
-    hash = "sha256-vb+LPLtlpJeKC1HbT70Yrb24SdGTknd09C/MPv/yF1U=";
+    inherit (pin) url hash;
     stripRoot = false;
   };
 
@@ -47,4 +49,4 @@ stdenv.mkDerivation (finalAttrs: {
     platforms = builtins.attrNames targets;
     sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
   };
-})
+}

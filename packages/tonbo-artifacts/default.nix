@@ -1,19 +1,20 @@
 {
+  ix,
   stdenvNoCC,
   fetchurl,
 }:
 
 let
-  version = "e16636b0e5ce";
+  # Version + URL and SRI hash live in the sibling pins.json, never inline
+  # (repo policy). Bump with `nix run .#update`.
+  pin = ix.pins.loadPin ./pins.json "artifacts";
+  inherit (pin) version;
 in
 stdenvNoCC.mkDerivation {
   pname = "tonbo-artifacts";
   inherit version;
 
-  src = fetchurl {
-    url = "https://artifacts.tonbo.dev/release/${version}/artifacts";
-    hash = "sha256-sYSENVI+l1DOfRtpnROkPY0/hJQoOjP1EsagrXSwIWY=";
-  };
+  src = fetchurl { inherit (pin) url hash; };
 
   dontUnpack = true;
   dontBuild = true;

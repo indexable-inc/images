@@ -6,15 +6,18 @@
 {
   buildWasmBindgenCli,
   fetchCrate,
+  ix,
   rustPlatform,
 }:
 let
-  version = "0.2.123";
+  # Version + crate URL and SRI hash live in the sibling pins.json, never inline
+  # (repo policy). Keep in sync with the `wasm-bindgen` Cargo dep; bump with
+  # `nix run .#update`.
+  pin = ix.pins.loadPin ./pins.json "wasm-bindgen-cli";
+  inherit (pin) version;
   src = fetchCrate {
     pname = "wasm-bindgen-cli";
-    inherit version;
-    url = "https://static.crates.io/crates/wasm-bindgen-cli/wasm-bindgen-cli-${version}.crate";
-    hash = "sha256-ymeAEYsr7OnupWYJWjSeVGvq3+s+zxSNkODbzY62rYs=";
+    inherit (pin) version url hash;
   };
   # `rustPlatform.importCargoLock` materializes the complete cargoDeps shape
   # (per-crate `<name>-<version>` symlinks, `.cargo/config.toml`, and

@@ -1,24 +1,26 @@
 {
   autoPatchelfHook,
   fetchzip,
+  ix,
   lib,
   stdenv,
 }:
 let
-  system = stdenv.hostPlatform.system;
+  # Prebuilt binary is x86_64-linux only; the package-set/flake targets and
+  # meta.platforms below gate that, so the unsupported-system throw is redundant.
   targets = {
     x86_64-linux = "x86_64-unknown-linux-gnu";
   };
-  target = targets.${system} or (throw "vector-bin: unsupported system ${system}");
+  # Version + per-release URL and SRI hash live in the sibling pins.json, never
+  # inline here (repo policy: no `hash = "sha256-..."` literals in tracked .nix).
+  # Bump with `nix run .#update`.
+  pin = ix.pins.loadPin ./pins.json "vector";
 in
-stdenv.mkDerivation (finalAttrs: {
+stdenv.mkDerivation {
   pname = "vector";
-  version = "0.55.0";
+  inherit (pin) version;
 
-  src = fetchzip {
-    url = "https://github.com/vectordotdev/vector/releases/download/v${finalAttrs.version}/vector-${finalAttrs.version}-${target}.tar.gz";
-    hash = "sha256-VbmY+8NBcQRxqB8dXkE1P5OlVEFf4V10aN4podxbavs=";
-  };
+  src = fetchzip { inherit (pin) url hash; };
 
   nativeBuildInputs = [ autoPatchelfHook ];
   buildInputs = [
@@ -45,4 +47,4 @@ stdenv.mkDerivation (finalAttrs: {
     platforms = builtins.attrNames targets;
     sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
   };
-})
+}

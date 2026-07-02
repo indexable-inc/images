@@ -16,9 +16,10 @@
 # JAVA_HOME, so this is the JVM Spark actually runs on regardless of the
 # caller's environment.
 #
-# Bump: change `version`, refresh `src.hash` with `nix-prefetch-url`, and check
-# the tarball against its published `.sha512` on archive.apache.org.
+# Bump: edit pins.json and run `nix run .#update`, then check the tarball
+# against its published `.sha512` on archive.apache.org.
 {
+  ix,
   lib,
   stdenv,
   fetchurl,
@@ -35,14 +36,16 @@
   jdk17_headless,
   pysparkPython ? python3,
 }:
+let
+  # Version + URL and SRI hash live in the sibling pins.json, never inline
+  # (repo policy). Bump with `nix run .#update`.
+  pin = ix.pins.loadPin ./pins.json "spark";
+in
 stdenv.mkDerivation (finalAttrs: {
   pname = "spark-hive";
-  version = "3.5.5";
+  inherit (pin) version;
 
-  src = fetchurl {
-    url = "https://archive.apache.org/dist/spark/spark-${finalAttrs.version}/spark-${finalAttrs.version}-bin-hadoop3.tgz";
-    hash = "sha256-jao/f7CvJnD+Eb64oqx52QilNNcpg1PsR0YCWxAtXjE=";
-  };
+  src = fetchurl { inherit (pin) url hash; };
 
   nativeBuildInputs = [ makeWrapper ];
   strictDeps = true;
