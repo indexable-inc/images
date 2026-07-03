@@ -222,9 +222,13 @@ let
 
   # Set only when the caller has not already provided an env value.
   wrapperEnvDefaults = {
-    # Drops [1m] variants from /model without touching model selection.
-    # Re-enable 1M per machine: `export CLAUDE_CODE_DISABLE_1M_CONTEXT=`.
-    CLAUDE_CODE_DISABLE_1M_CONTEXT = 1;
+    # Agent teams (experimental, off upstream): a lead session can spawn
+    # teammate sessions that coordinate through a shared task list and message
+    # each other directly (https://code.claude.com/docs/en/agent-teams). The
+    # house prompt's `agentTeams` rule says when to reach for one. Disable per
+    # machine: `export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=0` (only
+    # 1/true/yes/on read as truthy).
+    CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = 1;
   };
 
   # Settings defaults are injected only when the caller passed no `--settings`;

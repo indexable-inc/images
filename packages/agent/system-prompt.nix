@@ -499,6 +499,27 @@ let
       };
     }
     {
+      agentTeams = {
+        text = ''
+          Agent teams are enabled (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS): you can
+          spawn teammate sessions that coordinate through a shared task list and
+          message each other directly. Reach for a team only when workers must talk
+          to each other: competing-hypothesis debugging, adversarial review, or
+          cross-layer work with clean per-teammate file ownership. Otherwise stay
+          with subagents: results summarize back and cost far fewer tokens.
+          Teammates get no automatic worktree isolation, so give each editing
+          teammate its own worktree or strictly disjoint files.
+        '';
+        reason = ''
+          Teams shipped enabled with no guidance: sessions either never used them or
+          reached for them where subagents were cheaper, and doc-verified limits
+          (token cost, no teammate worktree isolation, one team per session) were
+          relearned per session. Guidance follows
+          https://code.claude.com/docs/en/agent-teams as of v2.1.197 (2026-07-03).
+        '';
+      };
+    }
+    {
       wallTimeBudget = {
         text = ''
           Treat wall time as a first-class cost. Before launching an operation

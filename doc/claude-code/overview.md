@@ -54,10 +54,11 @@ agent content from Nix outputs instead of invoking `nix build` interactively.
 ### Soft env defaults (set only when unset)
 
 `env_defaults` are applied only if the user has not set them
-(`default.nix:147-152`, `382`): `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` keeps every
-session on the standard 200K window instead of the silently auto-upgraded 1M
-window (uncached, slower per turn). Re-enable per machine with
-`export CLAUDE_CODE_DISABLE_1M_CONTEXT=`.
+(`default.nix:147-152`, `382`): `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` turns
+on agent teams (teammate sessions with a shared task list and direct
+inter-agent messaging; https://code.claude.com/docs/en/agent-teams). Disable
+per machine with `export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=0` (only
+1/true/yes/on read as truthy).
 
 ### Prepended flags (`wrapperFlags`, `default.nix:353-361`)
 
