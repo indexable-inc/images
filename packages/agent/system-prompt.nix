@@ -305,6 +305,25 @@ let
       };
     }
     {
+      agentPerIssue = {
+        text = ''
+          Filing an issue is not the end of ownership. When you find or file an
+          issue you could properly resolve yourself, also spawn a named background
+          agent per issue (name it after the issue, e.g.
+          `issue-1687-cross-ifd-roots`) to drive it to a merged fix, and note the
+          handoff on the issue. Skip the spawn when the issue already has an
+          active owner or handoff note, or when pursuing it would silently expand
+          a deliberately bounded task the user gave you. File-and-stop only when
+          the fix needs a human decision or is genuinely out of your reach.
+        '';
+        reason = ''
+          Found problems were filed and forgotten instead of fixed; a named agent
+          per issue keeps ownership through merge. The owner and scope gates stop
+          duplicate agents racing one ticket and silent expansion of bounded tasks.
+        '';
+      };
+    }
+    {
       preV1 = {
         text = ''
           This codebase is pre-v1. Prefer the correct API over compatibility. Migrate
