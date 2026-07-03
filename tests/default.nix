@@ -4530,6 +4530,15 @@ let
         message = "cargo-unit policy checks should be disableable for generated workspaces";
       }
       {
+        # A Darwin consumer forces the (x86_64-linux) vendor dir at eval
+        # through the cross lane's IFD and can only ever satisfy it by
+        # substitution; linkFarm's `allowSubstitutes = false` default made
+        # that impossible (#1711). Pin the override so a vendor-dir refactor
+        # cannot silently regress Darwin eval of cross packages.
+        assertion = cargoUnitWorkspace.vendorDir.allowSubstitutes or false;
+        message = "the aggregate cargo vendor dir must set allowSubstitutes = true; Darwin cross consumers can only substitute it (#1711)";
+      }
+      {
         assertion = cargoUnitScope.base.alpha.drvPath != cargoUnitScope.alphaChanged.alpha.drvPath;
         message = "cargo-unit should rebuild the changed workspace crate";
       }
