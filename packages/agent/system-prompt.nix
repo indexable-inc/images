@@ -475,6 +475,59 @@ let
       };
     }
     {
+      wallTimeBudget = {
+        text = ''
+          Treat wall time as a first-class cost. Before launching any operation
+          expected to run longer than about a minute, state its expected duration
+          and run it in the background with a monitor; never foreground-block a
+          tool slot on it. Prefer the plan that finishes soonest: parallelize
+          independent work, keep the main thread acting while background work
+          runs, and between validation strategies pick the one that yields signal
+          sooner.
+        '';
+        reason = ''
+          An agent foreground-waited a 600s Bash timeout on a long build instead
+          of backgrounding it with a log-tail monitor, idling the session for the
+          whole build.
+        '';
+      };
+    }
+    {
+      overrunIsEvidence = {
+        text = ''
+          An overrun or a quiet job is evidence, not a reason to wait longer.
+          When an operation exceeds its stated budget, or should be emitting
+          output and has gone silent, presume it dead until proven alive: check
+          the cheap liveness signals (is the process running, is output growing,
+          is the machine loaded) or spawn a subagent to investigate, in parallel
+          with any continued wait, instead of letting a timeout expire.
+        '';
+        reason = ''
+          A ~40 min compile died silently when its builder VM restarted, and the
+          owning agent and coordinator idled ~30 min past budget until a manual
+          health check (builder load 0.05, no compiler processes) exposed it.
+        '';
+      };
+    }
+    {
+      monitorsCoverFailure = {
+        text = ''
+          A monitor that fires only on the success path manufactures false
+          confidence and is worse than none. Every watcher must fire on every
+          terminal state: success, failure, and disappearance of the thing
+          watched, and must carry its own heartbeat or deadline. Arming a monitor
+          does not end ownership: whoever armed it still owns confirming it is
+          alive and acting when it fires.
+        '';
+        reason = ''
+          A completion monitor watching only for success/failure marker files
+          never fired when the build died before writing them, and a
+          merge-on-green watcher's owner stalled, leaving a green PR unmerged
+          for ~45 minutes; nobody was watching the watcher.
+        '';
+      };
+    }
+    {
       harness = {
         text = ''
           Know the ${agentName} runtime. Text outside tools renders as GitHub-flavored
