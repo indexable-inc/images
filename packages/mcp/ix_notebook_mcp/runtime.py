@@ -2907,6 +2907,26 @@ def _session_ns(session: str | None) -> dict:
     return ns
 
 
+def _validate_code_types(code: str) -> tuple[bool, str]:
+    """Validate type hints in code using the bundled typecheck module.
+
+    Returns (is_valid, error_message):
+    - (True, "") if no type errors or no type hints present
+    - (False, error_details) if type errors detected
+    """
+    try:
+        import typecheck
+
+        valid, error = typecheck.validate_types(code)
+        return valid, error
+    except ImportError:
+        # typecheck module not available; allow code to run
+        return True, ""
+    except Exception:
+        # Any error in validation itself; allow code to run
+        return True, ""
+
+
 async def __ix_run(
     code: str,
     budget: float = 15.0,
@@ -3013,7 +3033,20 @@ async def __ix_exec(
 ) -> None:
     """The MCP server's per-call entrypoint: run with a budget, emit the summary.
     ``session`` is the caller's MCP session id (per-session namespace; None for
-    the shared one)."""
+    the shared one). Type checks code for errors before running."""
+    # Run type validation before execution (async, off the event loop)
+    valid, error = await asyncio.to_thread(_validate_code_types, code)
+    if not valid:
+        # Type check failed: create a failed job and return instead of running
+        ns = _session_ns(session)
+        job = Job(code, name, budget=budget)
+        job._ns = ns
+        jobs[job.id] = job
+        job.status = "error"
+        job.error = f"Type check failed:\n{error}"
+        job.ended = time.time()
+        _emit(job)
+        return
     job = await __ix_run(code, budget=budget, name=name, session=session)
     _emit(job)
 

@@ -241,6 +241,27 @@ let
       ''
   );
 
+  # The `typecheck` runtime type validation module: validates type hints in
+  # python_exec code before it runs, so type errors surface with clear diagnostics
+  # instead of runtime TypeErrors. Uses pyright for validation; code without
+  # type hints passes silently (optional strict mode).
+  typecheckPythonSource = builtins.path {
+    name = "ix-mcp-typecheck-python-source";
+    path = ./src/typecheck;
+  };
+  typecheckModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-typecheck-python-module"
+      {
+        strictDeps = true;
+        meta.description = "Runtime type checking for python_exec bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/typecheck"
+        mkdir -p "$site"
+        cp -r ${typecheckPythonSource}/typecheck/. "$site/"
+      ''
+  );
+
   # The `ix_google` package: typed PyO3 bindings for the google-gmail and
   # google-calendar Rust crates, baked into the pinned interpreter as a
   # complement to the (untyped) `google_auth` helper. Notebook users pick
@@ -1146,6 +1167,7 @@ let
       scipqlModule
       flecsQueryModule
       fsearchModule
+      typecheckModule
       googleAuthModule
       ixGoogleModule
       ixNotebookMcpModule
