@@ -12,6 +12,7 @@ re-renders from the ``action_result`` the real dispatcher emits.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import socket
 from pathlib import Path
@@ -50,7 +51,18 @@ def _free_port() -> int:
 def test_bundle_compiles_inline_component() -> None:
     js = asyncio.run(svelte.bundle(COUNTER))
     assert "__IX_STATE__" in js  # the virtual ix module got bundled in
-    assert "</script" not in svelte._inline_safe(js)
+    safe = svelte._inline_js_safe(js)
+    assert "</script" not in safe
+    assert "<!--" not in safe
+
+
+def test_seed_json_blocks_script_data_breakout() -> None:
+    # `<!--<script>` in a state string enters script-data-double-escaped and
+    # swallows the following bundle <script> if emitted verbatim (WHATWG
+    # tokenizer); the seed must never contain a raw `<`.
+    seed = svelte._seed_json({"note": "<!--<script></script>"})
+    assert "<" not in seed
+    assert json.loads(seed) == {"note": "<!--<script></script>"}
 
 
 def test_bundle_reports_compile_errors() -> None:

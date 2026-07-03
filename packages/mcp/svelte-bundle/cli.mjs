@@ -46,8 +46,8 @@ const wrapper = `
   import { mount } from "svelte";
   import App from ${JSON.stringify(entryAbs)};
   const boot = () => mount(App, { target: document.body });
-  if (document.body) boot();
-  else document.addEventListener("DOMContentLoaded", boot);
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+  else boot();
 `;
 
 const ixModule = {

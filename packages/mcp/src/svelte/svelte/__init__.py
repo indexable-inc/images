@@ -34,9 +34,9 @@ build step at view time.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 from collections.abc import Callable, Mapping
@@ -63,45 +63,65 @@ def _bin() -> str:
     return exe
 
 
-def _entry_path(source: str | os.PathLike[str]) -> Path:
+def _entry_path(source: str | os.PathLike[str]) -> tuple[Path, Path | None]:
     """An existing ``.svelte`` file passes through; anything that reads as
-    markup is written to a content-addressed temp file (inline components
-    cannot use relative imports; put multi-file components on disk)."""
+    markup is written into a fresh private ``mkdtemp`` dir (mode 0700,
+    unguessable: a predictable shared-/tmp path would be a symlink/TOCTOU
+    vector and a concurrent-write race). Returns ``(entry, tmpdir-to-delete)``.
+    Inline components cannot use relative imports; put multi-file components
+    on disk."""
     p = Path(source)
     try:
         if p.is_file():
-            return p
+            return p, None
     except OSError:  # a long inline source is not a valid path
         pass
     text = str(source)
     if "<" not in text and "{" not in text:
         raise SvelteError(f"no such .svelte file: {source!r}")
-    digest = hashlib.sha256(text.encode()).hexdigest()[:16]
-    out = Path(tempfile.gettempdir()) / f"ix-svelte-{digest}" / "Component.svelte"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(text)
-    return out
+    tmpdir = Path(tempfile.mkdtemp(prefix="ix-svelte-"))
+    entry = tmpdir / "Component.svelte"
+    entry.write_text(text)
+    return entry, tmpdir
 
 
 async def bundle(source: str | os.PathLike[str], *, minify: bool = False) -> str:
     """Compile a Svelte 5 component to one self-contained IIFE bundle (JS text)."""
-    entry = _entry_path(source)
+    entry, tmpdir = _entry_path(source)
     argv = [_bin(), str(entry), *(["--minify"] if minify else [])]
-    proc = await asyncio.create_subprocess_exec(
-        *argv,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    out, err = await proc.communicate()
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out, err = await proc.communicate()
+    finally:
+        if tmpdir is not None:
+            shutil.rmtree(tmpdir, ignore_errors=True)
     if proc.returncode != 0:
         raise SvelteError(f"svelte-bundle failed for {entry}:\n{err.decode(errors='replace')}")
     return out.decode()
 
 
-def _inline_safe(text: str) -> str:
-    # `</script` inside an inline <script> ends the tag early; `<\/script` is
-    # byte-identical inside JS/JSON strings.
-    return text.replace("</script", "<\\/script")
+def _inline_js_safe(js: str) -> str:
+    # Two HTML script-data sequences can escape an inline <script>: `</script`
+    # (case-insensitive) closes it, and `<!--` enters the escaped state where a
+    # later `<script` swallows following tags. Both rewrites are byte-identical
+    # inside JS strings; outside a string either sequence is (at worst) a loud
+    # syntax error instead of silent tag breakout. The bundle is author-trusted
+    # (same trust domain as kernel code), so this guards accidents, not attacks;
+    # untrusted data belongs in the state seed, which `_seed_json` fully escapes.
+    return re.sub(r"(?i)<(/script)", r"<\\\1", js).replace("<!--", "<\\!--")
+
+
+def _seed_json(value: object) -> str:
+    # In JSON output `<` only ever occurs inside string literals, so escaping
+    # it as `\u003c` is always valid and blocks every script-data breakout
+    # (`</script`, `<!--`, `<script`) regardless of case or context. State may
+    # carry untrusted bytes (handlers fold in external data), so this is the
+    # real injection boundary.
+    return json.dumps(value, default=str).replace("<", "\\u003c")
 
 
 async def component(
@@ -120,15 +140,14 @@ async def component(
     callable re-read on each pane refresh. Re-calling with the same ``id``
     recompiles and replaces the resource (the edit loop).
     """
-    js = _inline_safe(await bundle(source, minify=minify))
+    js = _inline_js_safe(await bundle(source, minify=minify))
     state_fn = state if callable(state) else (lambda: state or {})
 
     async def _render() -> str:
         s = state_fn()
         if asyncio.iscoroutine(s):
             s = await s
-        seed = _inline_safe(json.dumps(s, default=str))
-        return f"<script>window.__IX_STATE__ = {seed};</script><script>{js}</script>"
+        return f"<script>window.__IX_STATE__ = {_seed_json(s)};</script><script>{js}</script>"
 
     from ix_notebook_mcp.runtime import register_resource
 

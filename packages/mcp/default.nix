@@ -5221,6 +5221,7 @@ let
   # iframe renders the kernel-embedded state, `act` rides the real /api/input,
   # and the action_result re-renders the page. Same interpreter + browser needs
   # as inputBrowserSmoke, plus the CLI on IX_SVELTE_BUNDLE_BIN.
+  svelteBundled = importTest "svelte" "import svelte; print('svelte-ok', callable(svelte.bundle), callable(svelte.component))";
   svelteTestPython = mcpPythonInterp.withPackages (
     ps:
     mcpPythonPackages ps
@@ -5527,6 +5528,7 @@ package.overrideAttrs (old: {
         inputsTests
         channelTests
         inputBrowserSmoke
+        svelteBundled
         svelteTests
         wedgeSmoke
         richSmoke
