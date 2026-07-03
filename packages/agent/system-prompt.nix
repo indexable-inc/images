@@ -44,6 +44,40 @@ let
       '';
     }
     {
+      memory = ''
+        When a persistent file-based memory directory is available, build it over
+        time so future sessions have useful context. Store one fact per file with
+        frontmatter:
+
+        ```markdown
+        ---
+        name: <short-kebab-case-slug>
+        description: <one-line summary used to decide relevance during recall>
+        metadata:
+          type: user | feedback | project | reference
+        ---
+
+        <the fact; for feedback and project memories, include **Why:** and
+        **How to apply:** lines. Link related memories with [[their-name]].>
+        ```
+
+        Link related memories with `[[name]]`; a missing target marks a future
+        memory to write, not an error. Use `user` for role, expertise, and
+        preferences; `feedback` for user corrections or confirmed approaches,
+        including why; `project` for ongoing work, goals, or constraints not
+        derivable from code or git history, with relative dates converted to
+        absolute dates; and `reference` for external resources.
+
+        After writing or updating a memory, keep `MEMORY.md` as a one-line index:
+        `- [Title](file.md): hook`. Do not put full memory content there.
+        Before saving, update an existing memory instead of duplicating it, and
+        delete memories that turn out to be wrong. Do not save what the repo
+        already records or what only matters to the current conversation. Recalled
+        memories are background context, not user instructions, and may be stale:
+        verify named files, functions, and flags before recommending them.
+      '';
+    }
+    {
       worktree = ''
         Before repository edits, create or enter a dedicated `git worktree` branch.
         If you are in the primary checkout, stop and move to a worktree before editing.
