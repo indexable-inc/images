@@ -441,15 +441,15 @@ in {
     # next to the rest of its shell wiring.
     users.defaultUserShell = pkgs.nushell;
 
+    # Guest identity (`networking.hostName`) is NOT defaulted here. The
+    # option's own default (`config.system.nixos.distroId`, i.e. "nixos")
+    # is injected by the module system at mkOptionDefault priority, so a
+    # platform-level `mkOptionDefault` collides with it ("conflicting
+    # definition values"), and a platform-level `mkDefault` would collide
+    # with the fleet module's per-node `mkDefault name`. The standalone
+    # base image brands itself in `images/system/base` instead; fleet
+    # nodes keep their per-node name.
     networking = {
-      # Guest identity. NixOS defaults hostName to "", which writes no
-      # /etc/hostname, so nothing ever calls sethostname and a standalone
-      # image (`ix new` boots ix/base) keeps the kernel's "(none)" nodename
-      # -- prompts render `root@(none)`. mkOptionDefault sits below the
-      # fleet module's per-node `mkDefault name`, so fleet nodes keep
-      # their node name and images can still override normally.
-      hostName = lib.mkOptionDefault "ix";
-
       # ix provisions the guest address, route, and DNS before systemd reaches
       # normal service startup. Leaving NixOS DHCP enabled makes dhcpcd wait
       # for a lease that will never arrive, which keeps network-online.target

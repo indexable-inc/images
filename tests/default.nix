@@ -3227,8 +3227,8 @@
         message = "base profile should make root land in zsh (starship-wired via Home Manager)";
       }
       {
-        assertion = base.config.networking.hostName == "ix";
-        message = "standalone images should default the guest hostname to ix so prompts never render root@(none)";
+        assertion = base.imageConfig.networking.hostName == "ix";
+        message = "the standalone ix/base image should default the guest hostname to ix so prompts render root@ix, not root@nixos";
       }
       {
         assertion =
