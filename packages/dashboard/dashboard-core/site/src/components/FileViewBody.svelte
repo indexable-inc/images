@@ -1,9 +1,12 @@
 <script lang="ts">
   import { highlightLines } from '$lib/highlight';
+  import { fileIcon, valueIcon } from '$lib/icons';
+  import palette from '$islands-theme';
   import type { Pane } from '$lib/types';
 
-  // The `file-view` data renderer: a read's structured card — file icon, path,
-  // span meta, then the requested line slice with a real line-number gutter.
+  // The `file-view` data renderer, styled like an editor pane (Zed/IntelliJ):
+  // one slim header line — language icon, filename, dimmed directory, a tiny
+  // right-aligned span — over the code slice on the islands editor background.
   // The producer ships the WHOLE file as highlight context when it fits (see
   // runtime.__ix_read), so a mid-file slice still tokenizes correctly; only the
   // start..end lines are shown.
@@ -40,41 +43,20 @@
   const from = $derived(Math.max(start - contextStart, 0));
   const to = $derived(Math.max(from, Math.min(end - contextStart + 1, rawLines.length)));
   const shown = $derived(rawLines.slice(from, to));
+  const gutterCh = $derived(String(end).length);
 
+  const label = $derived(view.label ?? '');
+  const slash = $derived(label.lastIndexOf('/'));
+  const fileName = $derived(slash >= 0 ? label.slice(slash + 1) : label);
+  const dirPath = $derived(slash >= 0 ? label.slice(0, slash + 1) : '');
+  const icon = $derived(view.file === false ? valueIcon() : fileIcon(fileName));
+
+  // Quiet span meta: the slice when partial, just the length when whole.
   const meta = $derived.by(() => {
-    const chars = (view.chars ?? text.length).toLocaleString();
-    if (view.total != null && start === 1 && end === view.total)
-      return `${view.total} lines · ${chars} chars`;
-    const of = view.total != null ? ` of ${view.total}` : '';
-    return `lines ${start}–${end}${of} · ${chars} chars`;
+    if (view.total != null && start === 1 && end === view.total) return `${view.total} lines`;
+    const of = view.total != null ? ` / ${view.total}` : '';
+    return `${start}–${end}${of}`;
   });
-
-  // Ribbon color by extension for the file icon. Presentation-only, so the map
-  // lives with the renderer, not on the wire.
-  const EXT_COLORS: Record<string, string> = {
-    py: '#3776ab', rs: '#dea584', go: '#00add8',
-    js: '#f1e05a', mjs: '#f1e05a', cjs: '#f1e05a',
-    ts: '#3178c6', tsx: '#3178c6', jsx: '#f1e05a',
-    json: '#cbcb41', jsonl: '#cbcb41', ndjson: '#cbcb41',
-    toml: '#9c4221', yaml: '#cb171e', yml: '#cb171e',
-    ini: '#8a8a92', cfg: '#8a8a92', conf: '#8a8a92', env: '#8a8a92',
-    nix: '#7e7eff',
-    md: '#519aba', rst: '#519aba', txt: '#9aa0a6',
-    sh: '#89e051', bash: '#89e051', zsh: '#89e051', fish: '#89e051', nu: '#3aa675',
-    html: '#e44d26', htm: '#e44d26', xml: '#e37933',
-    css: '#563d7c', scss: '#c6538c',
-    csv: '#41b883', tsv: '#41b883', parquet: '#41b883',
-    log: '#9aa0a6', lock: '#e3c15b', sql: '#dad8d8', pdf: '#e02d2d',
-    png: '#a074c4', jpg: '#a074c4', jpeg: '#a074c4',
-    gif: '#a074c4', svg: '#ffb13b', webp: '#a074c4',
-  };
-  const name = $derived((view.label ?? '').split('/').pop() ?? '');
-  const ext = $derived.by(() => {
-    const dot = name.lastIndexOf('.');
-    const raw = dot > 0 ? name.slice(dot + 1) : name;
-    return raw.toLowerCase().slice(0, 4) || 'txt';
-  });
-  const ribbon = $derived(EXT_COLORS[ext] ?? '#8a8a92');
 
   // Per-line highlighted HTML for the whole context (null until the highlighter
   // loads; raw text shows meanwhile and upgrades in place).
@@ -93,30 +75,20 @@
   });
 </script>
 
-<div class="fv">
+<div
+  class="fv"
+  style="--code-bg: light-dark({palette.light.bg}, {palette.dark.bg}); --code-lnr: light-dark({palette
+    .light.line_nr}, {palette.dark.line_nr})"
+>
   <header class="fv-head">
-    {#if view.file !== false}
-      <svg class="fv-icon" viewBox="0 0 40 50" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path
-          d="M5 2h21l9 9v35a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"
-          class="fv-doc"
-        />
-        <path d="M26 2l9 9h-9z" class="fv-fold" />
-        <rect x="3" y="30" width="34" height="14" rx="2" fill={ribbon} />
-        <text x="20" y="40.5" class="fv-ext" text-anchor="middle">{ext.toUpperCase()}</text>
-      </svg>
-    {:else}
-      <svg class="fv-icon" viewBox="0 0 40 50" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <rect x="3" y="6" width="34" height="38" rx="4" class="fv-doc" />
-        <text x="20" y="33" class="fv-braces" text-anchor="middle">{'{ }'}</text>
-      </svg>
-    {/if}
-    <div class="fv-id">
-      <strong class="fv-label">{view.label || '(text)'}</strong>
-      <span class="fv-meta">{meta}</span>
-    </div>
+    <!-- Vendored static icon markup (see $lib/icons), safe to inject. -->
+    <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+    <span class="fv-icon">{@html icon}</span>
+    <span class="fv-name">{fileName || '(text)'}</span>
+    {#if dirPath}<span class="fv-dir">{dirPath}</span>{/if}
+    <span class="fv-meta">{meta}</span>
   </header>
-  <div class="fv-code">
+  <div class="fv-code" style="--gutter: {gutterCh}ch">
     {#each shown as line, i (from + i)}
       <div class="fv-row">
         <span class="fv-ln">{start + i}</span>
@@ -137,75 +109,64 @@
     display: flex;
     flex-direction: column;
     font-family: var(--mono);
+    background: var(--code-bg);
   }
   .fv-head {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 10px 12px;
+    gap: 7px;
+    padding: 7px 12px;
     border-bottom: 1px solid var(--edge);
-  }
-  .fv-icon {
-    width: 15px;
-    height: 19px;
-    flex: none;
-  }
-  .fv-doc {
-    fill: light-dark(#f2f2f4, #23232a);
-    stroke: light-dark(#c9c9d2, #3a3a42);
-    stroke-width: 1.5;
-  }
-  .fv-fold {
-    fill: light-dark(#c9c9d2, #3a3a42);
-  }
-  .fv-ext {
-    font-family: var(--mono);
-    font-size: 11px;
-    font-weight: 700;
-    fill: #111;
-  }
-  .fv-braces {
-    font-family: var(--mono);
-    font-size: 18px;
-    font-weight: 700;
-    fill: var(--ink-faint);
-  }
-  .fv-id {
     min-width: 0;
   }
-  .fv-label {
+  .fv-icon {
+    flex: none;
+    display: flex;
+    align-items: center;
+  }
+  .fv-icon :global(svg) {
+    width: 15px;
+    height: 15px;
     display: block;
+  }
+  .fv-name {
+    flex: none;
     font-size: 12px;
-    font-weight: 600;
     color: var(--ink);
+  }
+  .fv-dir {
+    font-size: 11.5px;
+    color: var(--ink-faint);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    min-width: 0;
   }
   .fv-meta {
-    display: block;
-    margin-top: 2px;
+    margin-left: auto;
+    flex: none;
     font-size: 10.5px;
     color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
   }
   .fv-code {
     overflow: auto;
     max-height: 60vh;
-    padding: 8px 0;
+    padding: 10px 0;
   }
   .fv-row {
     display: flex;
     align-items: baseline;
-    line-height: 1.45;
+    line-height: 1.55;
     font-size: 11.5px;
     white-space: pre;
   }
   .fv-ln {
     flex: none;
-    min-width: 3.5ch;
-    padding: 0 10px 0 12px;
+    width: calc(var(--gutter) + 3ch);
+    padding-right: 1.5ch;
     text-align: right;
-    color: var(--ink-faint);
+    color: var(--code-lnr);
     font-variant-numeric: tabular-nums;
     user-select: none;
   }

@@ -251,42 +251,35 @@
   }
 
   .panels {
-    padding: 14px clamp(16px, 2.4vw, 24px) 44px;
+    padding: 10px clamp(16px, 2.4vw, 24px) 44px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 2px;
   }
 
-  /* A foldable panel: a header strip (caret + label + hint) over its body. Uses
-     native <details> so folding is free and CSS-only. */
-  .panel {
-    border: 1px solid var(--edge);
-    background: var(--panel);
-  }
+  /* A foldable panel: a quiet caret + label row over its body. Flat — no strip
+     background, no box; the body carries a single hairline frame. Uses native
+     <details> so folding is free and CSS-only. */
   .panel > summary {
     list-style: none;
     cursor: pointer;
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    background: var(--elev, var(--panel));
-    border-bottom: 1px solid transparent;
+    gap: 7px;
+    padding: 6px 2px;
     user-select: none;
-  }
-  .panel[open] > summary {
-    border-bottom-color: var(--edge);
+    min-width: 0;
   }
   .panel > summary::-webkit-details-marker {
     display: none;
   }
   /* A CSS chevron so no glyph font is needed; rotates open. */
   .panel > summary .caret {
-    width: 8px;
-    height: 8px;
+    width: 6px;
+    height: 6px;
     flex: none;
-    border-right: 1.4px solid var(--ink-faint);
-    border-bottom: 1.4px solid var(--ink-faint);
+    border-right: 1.2px solid var(--ink-faint);
+    border-bottom: 1.2px solid var(--ink-faint);
     transform: rotate(-45deg);
     transition: transform 0.12s ease;
   }
@@ -295,26 +288,38 @@
   }
   .panel-label {
     font-family: var(--mono);
-    font-size: 11px;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
+    font-size: 11.5px;
     color: var(--ink-dim);
+  }
+  .panel > summary:hover .panel-label {
+    color: var(--ink);
   }
   .panel-hint {
     margin-left: auto;
     font-family: var(--mono);
-    font-size: 10px;
+    font-size: 10.5px;
     color: var(--ink-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+  /* The hint is the collapsed row's preview; the open body says it better. */
+  .panel[open] > summary .panel-hint {
+    display: none;
   }
   .panel-body {
-    padding: 12px;
+    padding: 10px 2px;
   }
-  /* Renderer bodies (exec output, code, html frame) bring their own padding, so
-     the panel frame sits flush around them. */
+  /* Renderer bodies (exec output, code, html frame) bring their own padding and
+     background; frame them with one hairline. */
   .panel-body-flush {
     padding: 0;
     overflow: auto;
     max-height: 60vh;
+    border: 1px solid var(--edge);
+    border-radius: 4px;
+    margin: 2px 0 8px;
   }
   .panel-body-flush.pane .body.html-body {
     height: 300px;
