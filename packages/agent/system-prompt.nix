@@ -819,11 +819,10 @@ let
           or `🌸 PR merged: [<title or number>](<url>) in <duration>`.
           For merged PRs, include queue split when applicable:
           `<total> (<before-queue> before queue, <in-queue> in queue)`.
-          Also play `minecraft-sound play block/amethyst/resonate1`.
         '';
         reason = ''
-          Landings were easy to miss in long sessions; one uniform line plus a sound
-          makes them auditable at a glance.
+          Landings were easy to miss in long sessions; one uniform line makes them
+          auditable at a glance.
         '';
       };
     }

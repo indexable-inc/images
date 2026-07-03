@@ -10,7 +10,6 @@
   procps,
   ripgrep,
   git,
-  minecraft-sound,
   bubblewrap,
   socat,
   nix,
@@ -268,14 +267,12 @@
   };
 
   # Dirs prepended to PATH at launch (the old `--prefix PATH :`): ps for process
-  # checks, the pinned ripgrep, the house minecraft-sound chime, and the Linux
-  # sandbox helpers. Passed to the launcher as `path_prepend` (it joins them
-  # ahead of the caller's PATH).
+  # checks, the pinned ripgrep, and the Linux sandbox helpers. Passed to the
+  # launcher as `path_prepend` (it joins them ahead of the caller's PATH).
   pathPrepend = map (p: "${lib.getBin p}/bin") (
     [
       procps
       ripgrep
-      minecraft-sound
     ]
     ++ lib.optionals stdenv.hostPlatform.isLinux [
       bubblewrap
