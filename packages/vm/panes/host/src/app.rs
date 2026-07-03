@@ -20,11 +20,12 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSCursor, NSEvent,
     NSScreen, NSWindow,
 };
+use dispatch2::DispatchQueue;
 use objc2_core_graphics::{CGAssociateMouseAndMouseCursorPosition, CGError};
 use objc2_foundation::{NSNotification, NSObjectProtocol};
 use objc2_metal::MTLDrawable as _;
 use objc2_quartz_core::CAMetalDisplayLinkUpdate;
-use panes_protocol::{MINOR_POINTER_LOCK, ToGuest, ToHost, WindowId};
+use panes_protocol::{MINOR_KEY_REPEAT, MINOR_POINTER_LOCK, ToGuest, ToHost, WindowId};
 
 use crate::conn::{self, Event, HostInfo, Target};
 use crate::render::Renderer;
@@ -199,6 +200,7 @@ pub fn on_event(event: Event) {
         }
         Event::Hello { minor } => {
             app.peer_minor = minor;
+            send_key_repeat(app);
             Deferred::default()
         }
         Event::Disconnected => {
@@ -319,6 +321,68 @@ fn handle_msg(app: &mut App, msg: ToHost, recv: f64) -> Deferred {
     }
 }
 
+/// Tell the guest the user's actual macOS key-repeat timing (System
+/// Settings, via `NSEvent`'s class getters) so `wl_keyboard.repeat_info`
+/// matches the host exactly. The host drops `isARepeat` keyDowns, so this
+/// advertisement is the guest's only repeat authority. Sent once per
+/// connection (a mid-session System Settings change applies on reconnect);
+/// gated on the guest speaking 1.2, postcard cannot skip an unknown variant.
+fn send_key_repeat(app: &App) {
+    if app.peer_minor < MINOR_KEY_REPEAT {
+        return;
+    }
+    let Some(out) = &app.out else {
+        return;
+    };
+    let msg = ToGuest::KeyRepeat {
+        delay_ms: whole_ms(NSEvent::keyRepeatDelay()),
+        interval_ms: whole_ms(NSEvent::keyRepeatInterval()),
+    };
+    eprintln!("panes-host: key repeat: {msg:?}");
+    let _ = out.send(msg);
+}
+
+/// Seconds (`NSTimeInterval`) to whole milliseconds. `as` saturates: a
+/// negative or NaN interval becomes 0 (the guest disables repeat for it, see
+/// `panes_protocol::wl_repeat_info`), and macOS "Key Repeat: Off" reports a
+/// minutes-long interval that stays finite here.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn whole_ms(seconds: f64) -> u32 {
+    (seconds * 1000.0).round() as u32
+}
+
+/// Re-hide the cursor when macOS revealed it behind an engaged capture's
+/// back, now and once more after `AppKit` finishes the current event.
+/// `AppKit` spontaneously unhides a hidden cursor on paths of its own -- the
+/// right-mouse-down menu-preparation path is the one guests actually hit
+/// (holding right-click in a pointer-locked game showed the cursor); GLFW
+/// catalogs more (screenshot mode, dock hover: glfw#2648, glfw#2656). Each
+/// such unhide pops one `NSCursor.hide`, so re-hiding only while the cursor
+/// is actually visible keeps hide/unhide balanced: every extra hide matches
+/// one OS-initiated unhide, and the capture's `Drop` still releases cleanly.
+/// The deferred second look exists because the OS unhide lands during event
+/// processing, ordered unpredictably against the view handler that calls
+/// this; the back of the main queue is reliably after both.
+pub fn reassert_capture_cursor() {
+    fn rehide_if_visible(app: &mut App) {
+        if app.capture.is_none() {
+            return;
+        }
+        // CGCursorIsVisible is deprecated without a replacement, and there
+        // is no event for "the OS unhid your cursor": visibility can only
+        // be polled. GLFW ships the same call for the same reason.
+        #[allow(deprecated)]
+        if objc2_core_graphics::CGCursorIsVisible() {
+            eprintln!("panes-host: OS unhid the cursor while captured; re-hiding");
+            NSCursor::hide();
+        }
+    }
+    with_app(rehide_if_visible);
+    DispatchQueue::main().exec_async(|| {
+        with_app(rehide_if_visible);
+    });
+}
+
 /// Reconcile the engaged cursor capture with what the guest wants and what
 /// the user is looking at: capture exactly when a lock-holding window is the
 /// key window of the active app (and the guest speaks 1.1, so the
@@ -351,6 +415,12 @@ fn sync_capture(app: &mut App) {
     {
         window.view_handle().set_relative(true);
         app.capture = Some(CursorCapture::engage(id));
+        // macOS ignores a hide issued while the cursor hovers the dock
+        // (glfw#2656: refocus-over-dock), so double-check once this engage's
+        // event settles. Deferred: we are inside the APP borrow here.
+        DispatchQueue::main().exec_async(|| {
+            reassert_capture_cursor();
+        });
     }
 }
 
@@ -510,13 +580,13 @@ pub fn window_live_resize(id: WindowId, active: bool) {
 
 pub fn window_activation(id: WindowId, activated: bool) {
     if !activated {
-        // Held modifiers must not outlive key status: AppKit stops sending
-        // flagsChanged after resign-key, so release them guest-side before
-        // the deactivated Configure. Outside the with_app borrow because the
-        // view sends protocol messages through app state.
+        // Held keys must not outlive key status: AppKit stops sending
+        // flagsChanged and keyUp after resign-key, so release them
+        // guest-side before the deactivated Configure. Outside the with_app
+        // borrow because the view sends protocol messages through app state.
         let view = with_app(|app| app.windows.get(&id).map(PaneWindow::view_handle)).flatten();
         if let Some(view) = view {
-            view.release_held_modifiers();
+            view.release_held_keys();
         }
     }
     with_app(|app| {

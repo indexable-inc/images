@@ -86,11 +86,19 @@ compositor).
 - **Keyboard**: `keyDown`/`keyUp` map `NSEvent.keyCode` (kVK) to evdev codes
   via `src/keymap.rs`, generated from the keycodemapdb project by
   `tools/gen_keymap.py` (same dataset QEMU/libvirt use). `isARepeat` events
-  are dropped: guests auto-repeat from `wl_keyboard.repeat_info`.
+  are dropped: guests auto-repeat from `wl_keyboard.repeat_info`, and the
+  user's actual macOS repeat timing is shipped once per connection
+  (`ToGuest::KeyRepeat`, from `NSEvent.keyRepeatDelay/Interval`; protocol
+  1.2) so guest repeat matches System Settings exactly.
   `flagsChanged` turns into modifier press/release by toggling a held-set
   keyed on kVK; caps lock (one event per toggle) synthesizes press+release.
-  On resign-key every held modifier is released guest-side and the set
-  cleared (AppKit stops delivering flagsChanged to a non-key window).
+  Forwarded key presses are tracked in a second held-set: keyUps only go
+  out for tracked keys, and on resign-key every held key and modifier is
+  released guest-side (AppKit stops delivering keyUp/flagsChanged to a
+  non-key window; a key stuck down guest-side would auto-repeat forever).
+  The `NSWindow` subclass reroutes Cmd keyUps to the view -- AppKit
+  swallows them as key-equivalent processing, which used to stick e.g.
+  Cmd-Backspace down forever guest-side.
   Cmd+W (CloseRequest) and Cmd+Q (CloseRequest to all, then exit) stay
   host-side; other Cmd chords are forwarded.
 - **Pointer**: the view is flipped (top-left origin) and multiplies points
@@ -116,7 +124,12 @@ compositor).
   dissociated. A lock for a non-key window is remembered (`wants_lock`) and
   engages when the window becomes key. AppKit delivers each mouseMoved twice
   (first responder + tracking area); relative deltas dedupe by event
-  identity, absolute coordinates never cared.
+  identity, absolute coordinates never cared. macOS spontaneously unhides a
+  hidden cursor on paths of its own (right-mouse-down menu preparation --
+  holding right-click in a pointer-locked game showed the cursor -- plus
+  screenshot mode and dock hover, glfw#2648/#2656), so while captured every
+  button event re-checks `CGCursorIsVisible` and re-hides, immediately and
+  once more from the back of the main queue.
 
 ## Mock guest
 

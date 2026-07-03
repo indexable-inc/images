@@ -14,8 +14,9 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{AllocAnyThread, DefinedClass, MainThreadOnly, define_class};
 use objc2_app_kit::{
-    NSBackingStoreType, NSView, NSWindow, NSWindowButton, NSWindowDelegate,
-    NSWindowOcclusionState, NSWindowStyleMask, NSWindowTabbingMode, NSWindowTitleVisibility,
+    NSBackingStoreType, NSEvent, NSEventModifierFlags, NSEventType, NSView, NSWindow,
+    NSWindowButton, NSWindowDelegate, NSWindowOcclusionState, NSWindowStyleMask,
+    NSWindowTabbingMode, NSWindowTitleVisibility,
 };
 use objc2_foundation::{
     MainThreadMarker, NSNotification, NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSSize,
@@ -72,6 +73,59 @@ pub struct WindowParams {
     pub width: u32,
     pub height: u32,
     pub scale: u32,
+}
+
+define_class!(
+    // `NSWindow` subclass whose only job is un-swallowing Cmd keyUps: AppKit
+    // routes a keyUp with Command held into key-equivalent processing and
+    // never delivers it to the responder chain, so the guest would see the
+    // key stuck down and its clients would auto-repeat it until focus is
+    // lost (one Cmd-Backspace tap in a guest editor deleted forever). Hand
+    // those keyUps to the content view like any other key event; the view's
+    // held-key set drops the ones whose press the guest never saw.
+    #[unsafe(super(NSWindow))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "PanesWindow"]
+    struct PanesNSWindow;
+
+    impl PanesNSWindow {
+        #[unsafe(method(sendEvent:))]
+        fn send_event(&self, event: &NSEvent) {
+            if event.r#type() == NSEventType::KeyUp
+                && event.modifierFlags().contains(NSEventModifierFlags::Command)
+                && let Some(view) = self.contentView()
+            {
+                view.keyUp(event);
+                return;
+            }
+            let _: () = unsafe { objc2::msg_send![super(self), sendEvent: event] };
+        }
+    }
+);
+
+impl PanesNSWindow {
+    /// Returns the upcast `NSWindow`: callers only need the base interface
+    /// (the subclass adds behavior, not API).
+    fn new_ns_window(
+        mtm: MainThreadMarker,
+        content: NSRect,
+        style: NSWindowStyleMask,
+    ) -> Retained<NSWindow> {
+        let this = Self::alloc(mtm).set_ivars(());
+        // SAFETY: NSWindow's designated initializer on our subclass;
+        // `defer: false` so the window backing exists immediately (the Metal
+        // layer needs a real backing scale).
+        let window: Retained<Self> = unsafe {
+            objc2::msg_send![
+                super(this),
+                initWithContentRect: content,
+                styleMask: style,
+                backing: NSBackingStoreType::Buffered,
+                defer: false,
+            ]
+        };
+        Retained::into_super(window)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -264,17 +318,7 @@ impl PaneWindow {
         if !native_titlebar {
             style |= NSWindowStyleMask::FullSizeContentView;
         }
-        // SAFETY: standard initializer; `defer: false` so the window backing
-        // exists immediately (the Metal layer needs a real backing scale).
-        let ns = unsafe {
-            NSWindow::initWithContentRect_styleMask_backing_defer(
-                mtm.alloc(),
-                content,
-                style,
-                NSBackingStoreType::Buffered,
-                false,
-            )
-        };
+        let ns = PanesNSWindow::new_ns_window(mtm, content, style);
         // SAFETY: `true` (the default for titled windows) would free the
         // ObjC object under our `Retained` on close.
         unsafe { ns.setReleasedWhenClosed(false) };

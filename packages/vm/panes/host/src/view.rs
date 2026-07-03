@@ -47,6 +47,13 @@ pub struct ViewIvars {
     /// press and release alike; toggling membership tells them apart without
     /// hardcoding Apple's device-dependent left/right flag bits.
     held_modifiers: RefCell<HashSet<u16>>,
+    /// Non-modifier keys whose press was forwarded, keyed by kVK. Two jobs:
+    /// releasing on focus loss (a keyUp after Cmd-Tab never reaches this
+    /// view, so a key held across it would stay pressed guest-side and
+    /// auto-repeat forever), and gating keyUp forwarding to keys the guest
+    /// actually saw pressed (the host-consumed Cmd-W/Q must not leak a
+    /// stray release).
+    held_keys: RefCell<HashSet<u16>>,
     /// Pointer capture engaged for this window (`app::sync_capture`): motion
     /// goes out as `PointerRelative` deltas, and the absolute re-anchor
     /// before buttons/scrolls is skipped (the frozen cursor position is
@@ -199,12 +206,19 @@ define_class!(
                     _ => {}
                 }
             }
+            self.ivars().held_keys.borrow_mut().insert(code);
             self.send_key(code, ButtonState::Pressed);
         }
 
         #[unsafe(method(keyUp:))]
         fn key_up(&self, event: &NSEvent) {
-            self.send_key(event.keyCode(), ButtonState::Released);
+            let code = event.keyCode();
+            // Only keys whose press was forwarded: a release for a key the
+            // guest never saw pressed (host-consumed shortcut, focus gained
+            // mid-hold) would be noise.
+            if self.ivars().held_keys.borrow_mut().remove(&code) {
+                self.send_key(code, ButtonState::Released);
+            }
         }
 
         #[unsafe(method(flagsChanged:))]
@@ -238,6 +252,7 @@ impl PanesView {
             id,
             tracking: RefCell::new(None),
             held_modifiers: RefCell::new(HashSet::new()),
+            held_keys: RefCell::new(HashSet::new()),
             relative: Cell::new(false),
             last_relative: Cell::new((f64::NEG_INFINITY, 0)),
         });
@@ -251,13 +266,20 @@ impl PanesView {
         self.ivars().relative.set(relative);
     }
 
-    /// Focus left this window: release every held modifier guest-side and
-    /// forget them. `AppKit` stops delivering `flagsChanged` once the window
-    /// resigns key, so a modifier held across a Cmd-Tab would otherwise stay
-    /// pressed in the guest forever, and the toggle heuristic would invert
-    /// press/release on its next use.
-    pub fn release_held_modifiers(&self) {
-        let held: Vec<u16> = self.ivars().held_modifiers.borrow_mut().drain().collect();
+    /// Focus left this window: release every held key guest-side and forget
+    /// them. `AppKit` stops delivering `flagsChanged` and `keyUp` once the
+    /// window resigns key, so anything held across a Cmd-Tab would otherwise
+    /// stay pressed in the guest forever (a stuck regular key auto-repeats
+    /// forever via `wl_keyboard.repeat_info`; a stuck modifier also inverts
+    /// the `flagsChanged` toggle heuristic on its next use).
+    pub fn release_held_keys(&self) {
+        let ivars = self.ivars();
+        let held: Vec<u16> = ivars
+            .held_modifiers
+            .borrow_mut()
+            .drain()
+            .chain(ivars.held_keys.borrow_mut().drain())
+            .collect();
         for kvk in held {
             self.send_key(kvk, ButtonState::Released);
         }
@@ -326,6 +348,12 @@ impl PanesView {
         // wl_pointer.button carries no position; re-anchor the pointer first
         // so a click after focus change lands where the user clicked.
         self.send_motion(event);
+        // AppKit unhides a captured (hidden) cursor on its right-mouse-down
+        // menu-preparation path; re-hide around every button so holding
+        // right-click in a pointer-locked game never shows the cursor.
+        if self.ivars().relative.get() {
+            app::reassert_capture_cursor();
+        }
         app::send(ToGuest::PointerButton { id: self.ivars().id, button, state });
     }
 

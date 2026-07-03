@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use anyhow::Context as _;
 use panes_protocol::{
     Encoding, MINOR_POINTER_LOCK, ToGuest, ToHost, VERSION_MAJOR, VERSION_MINOR, WindowId,
+    wl_repeat_info,
 };
 use smithay::input::{Seat, SeatState};
 use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
@@ -288,12 +289,21 @@ impl App {
             layout: &cli.xkb_layout,
             ..smithay::input::keyboard::XkbConfig::default()
         };
-        // repeat_info(delay=400ms, rate=30/s): the host never forwards OS key
-        // repeats, so clients must auto-repeat from this advertisement.
-        if let Err(err) = seat.add_keyboard(xkb, 400, 30) {
+        // The host never forwards OS key repeats, so clients auto-repeat
+        // from this advertisement alone. A 1.2 host overwrites it with the
+        // user's actual macOS timing (`ToGuest::KeyRepeat` ->
+        // `on_key_repeat`); until then, and for a 1.1 host forever, advertise
+        // the macOS factory defaults (delay 375ms, 90ms interval = 11/s)
+        // rather than a Linux-flavored 25-30/s that no Mac keyboard uses.
+        let (repeat_rate, repeat_delay) = wl_repeat_info(375, 90);
+        if let Err(err) = seat.add_keyboard(xkb, repeat_delay, repeat_rate) {
             warn!(%err, layout = %cli.xkb_layout, "xkb keymap failed; falling back to defaults");
-            seat.add_keyboard(smithay::input::keyboard::XkbConfig::default(), 400, 30)
-                .expect("default xkb keymap must compile");
+            seat.add_keyboard(
+                smithay::input::keyboard::XkbConfig::default(),
+                repeat_delay,
+                repeat_rate,
+            )
+            .expect("default xkb keymap must compile");
         }
         seat.add_pointer();
 
@@ -567,6 +577,7 @@ impl App {
                     host.send(ToHost::Pong { nonce });
                 }
             }
+            ToGuest::KeyRepeat { delay_ms, interval_ms } => self.on_key_repeat(delay_ms, interval_ms),
             other => {
                 input::handle(self, &other);
                 // Pointer focus may have moved: activate a pending lock that
@@ -630,6 +641,18 @@ impl App {
         // re-announced: the new connection starts with no capture.
         self.maybe_activate_constraint();
         self.sync_pointer_lock();
+    }
+
+    /// The host user's macOS repeat timing -> `wl_keyboard.repeat_info` for
+    /// every keyboard client, current and future (smithay re-announces on
+    /// bind). Makes the host's System Settings the one repeat authority:
+    /// clients auto-repeat with exactly the Mac's delay and rate.
+    fn on_key_repeat(&mut self, delay_ms: u32, interval_ms: u32) {
+        let (rate, delay) = wl_repeat_info(delay_ms, interval_ms);
+        info!(delay_ms, interval_ms, rate, delay, "key repeat timing from host");
+        if let Some(keyboard) = self.seat.get_keyboard() {
+            keyboard.change_repeat_info(rate, delay);
+        }
     }
 
     fn on_ack(&mut self, id: WindowId, seq: u64) {

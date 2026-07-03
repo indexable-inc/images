@@ -46,7 +46,9 @@ Wayland clients ──commit──> FrameStore (packed BGRA copy per window)
   Coordinates are surface-local, so pointer focus is handed to smithay
   explicitly per event. Keys are evdev codes fed through an xkb keymap
   (`--xkb-layout`, "us" default); the host never forwards OS auto-repeats,
-  clients repeat from `wl_keyboard.repeat_info`. Pointer lock (index#1724):
+  clients repeat from `wl_keyboard.repeat_info`, whose rate/delay come from
+  the host's macOS System Settings (`ToGuest::KeyRepeat`, protocol 1.2;
+  macOS factory defaults until a 1.2 host sends it). Pointer lock (index#1724):
   `zwp_pointer_constraints_v1` + `zwp_relative_pointer_manager_v1` are
   advertised; a locked-pointer constraint activates when its surface holds
   pointer focus, the host is told via `ToHost::PointerLock` (gated on its

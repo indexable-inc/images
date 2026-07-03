@@ -32,10 +32,13 @@ use serde::{Deserialize, Serialize};
 /// postcard encodes the variant index, so inserting one mid-enum renumbers
 /// everything after it.
 pub const VERSION_MAJOR: u16 = 1;
-pub const VERSION_MINOR: u16 = 1;
+pub const VERSION_MINOR: u16 = 2;
 
 /// Minor that introduced [`ToHost::PointerLock`] / [`ToGuest::PointerRelative`].
 pub const MINOR_POINTER_LOCK: u16 = 1;
+
+/// Minor that introduced [`ToGuest::KeyRepeat`].
+pub const MINOR_KEY_REPEAT: u16 = 2;
 
 /// Guest vsock port the compositor listens on.
 pub const VSOCK_PORT: u32 = 7100;
@@ -249,6 +252,47 @@ pub enum ToGuest {
         dx: f64,
         dy: f64,
     },
+    /// The host user's key auto-repeat timing (macOS System Settings, read
+    /// via `NSEvent` `keyRepeatDelay`/`keyRepeatInterval`), sent once after
+    /// the guest's Hello. The compositor re-advertises it as
+    /// `wl_keyboard.repeat_info` (see [`wl_repeat_info`]) so client-side
+    /// auto-repeat matches the host exactly; the host never forwards OS
+    /// repeats (`isARepeat` keyDowns are dropped), making this the one
+    /// repeat authority. Since minor 2 ([`MINOR_KEY_REPEAT`]); only sent
+    /// once the guest's Hello advertised it.
+    KeyRepeat {
+        /// Delay before the first repeat, ms.
+        delay_ms: u32,
+        /// Interval between repeats, ms. macOS reports "Key Repeat: Off" as
+        /// a minutes-long interval, which [`wl_repeat_info`] turns into a
+        /// disabled repeat (rate 0).
+        interval_ms: u32,
+    },
+}
+
+/// [`ToGuest::KeyRepeat`] timing as `wl_keyboard.repeat_info` arguments:
+/// `(rate, delay)` = (repeats per second, ms before the first repeat).
+///
+/// Lives next to the wire type because it pins down what the fields mean to
+/// a consumer, and the protocol crate is the one crate both sides (and both
+/// platforms' tests) share. Rate rounds to the nearest integer per second.
+/// A rate that rounds to 0 (interval >= 2s) disables client repeat, which
+/// is what wl_keyboard defines rate 0 to mean and is only reachable by
+/// macOS "Key Repeat: Off" (the slowest slider stop, 1.8s, still rounds to
+/// 1/s). A zero interval is nonsense from the wire and also maps to
+/// disabled rather than an unbounded rate.
+#[must_use]
+pub fn wl_repeat_info(delay_ms: u32, interval_ms: u32) -> (i32, i32) {
+    let rate = match interval_ms {
+        0 => 0,
+        interval => clamp_to_i32((1000 + interval / 2) / interval),
+    };
+    (rate, clamp_to_i32(delay_ms))
+}
+
+/// Saturate into `wl_keyboard.repeat_info`'s i32 arguments.
+fn clamp_to_i32(value: u32) -> i32 {
+    i32::try_from(value).unwrap_or(i32::MAX)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -373,6 +417,40 @@ mod tests {
             panic!("wrong variant");
         };
         assert!((dx - -1.5).abs() < f64::EPSILON && (dy - 2.25).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn key_repeat_roundtrips() {
+        let mut buf = Vec::new();
+        write_msg(&mut buf, &ToGuest::KeyRepeat { delay_ms: 375, interval_ms: 90 }).unwrap();
+        let back: ToGuest = read_msg(&mut buf.as_slice()).unwrap();
+        assert!(matches!(back, ToGuest::KeyRepeat { delay_ms: 375, interval_ms: 90 }));
+    }
+
+    #[test]
+    fn repeat_info_matches_macos_defaults() {
+        // Factory settings: InitialKeyRepeat=25 (375ms), KeyRepeat=6 (90ms).
+        assert_eq!(wl_repeat_info(375, 90), (11, 375));
+        // Fastest sliders: InitialKeyRepeat=15 (225ms), KeyRepeat=2 (30ms).
+        assert_eq!(wl_repeat_info(225, 30), (33, 225));
+    }
+
+    #[test]
+    fn repeat_info_rounds_to_nearest_rate() {
+        assert_eq!(wl_repeat_info(600, 150).0, 7); // 6.67/s, not a truncated 6
+        assert_eq!(wl_repeat_info(600, 1800).0, 1); // slowest slider stop
+    }
+
+    #[test]
+    fn repeat_info_disables_for_off_and_degenerate_intervals() {
+        // macOS "Key Repeat: Off" reports a minutes-long interval.
+        assert_eq!(wl_repeat_info(375, 4_500_000).0, 0);
+        assert_eq!(wl_repeat_info(375, 0).0, 0);
+    }
+
+    #[test]
+    fn repeat_info_saturates_into_i32() {
+        assert_eq!(wl_repeat_info(u32::MAX, 90), (11, i32::MAX));
     }
 
     #[test]
