@@ -398,12 +398,13 @@ impl PaneWindow {
         };
 
         // A frame that mismatches the drawable presents scaled (the render
-        // pass samples, it never crops), which must never happen silently:
-        // transiently fine mid-resize (the guest's matching frame is in
-        // flight; live resize is skipped because there per-tick mismatch is
-        // the norm), but persistent for a client whose buffer scale differs
-        // from the window's backing scale (a 1x-only client on Retina renders
-        // soft). Once per buffer size change, so a steady stream stays quiet.
+        // pass samples, it never crops), which must never happen silently.
+        // Logged once per settled buffer size (fresh surface, outside live
+        // resize where per-tick mismatch is the norm) and worded as a state
+        // note, not an error: one line per window is the EXPECTED startup
+        // transition when a client that mapped at 1x re-renders 2x after the
+        // host's scale reaches it. Only a persistent repeat (every resize
+        // settles mismatched) means a scale-blind client rendering soft.
         if fresh_surface && !self.view.inLiveResize() {
             let drawable = self.layer.drawableSize();
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -411,8 +412,9 @@ impl PaneWindow {
                 (drawable.width.round().max(0.0) as u32, drawable.height.round().max(0.0) as u32);
             if (width, height) != (dw, dh) {
                 eprintln!(
-                    "panes-host: window {}: {width}x{height} frame scaled onto {dw}x{dh} \
-                     drawable (guest buffer scale != window backing scale?)",
+                    "panes-host: window {}: presenting {width}x{height} frames scaled onto the \
+                     {dw}x{dh} drawable (brief while the guest adopts a scale change; persistent \
+                     only for a client stuck at another buffer scale)",
                     self.id
                 );
             }

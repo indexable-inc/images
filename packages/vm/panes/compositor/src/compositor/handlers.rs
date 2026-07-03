@@ -422,6 +422,9 @@ impl XdgShellHandler for App {
         // skipping this leaves every client at buffer scale 1 (blurry 1x
         // stretched over the Retina drawable). smithay replays the enter to
         // wl_output resources the client binds later, so ordering is safe.
+        // TODO(index#1686): popups and subsurfaces need the same enter (+ the
+        // preferred scale below) once their content is exported (README:
+        // known gaps); today only toplevel buffers reach the host.
         self.output.enter(surface.wl_surface());
         self.send_preferred_scale(surface.wl_surface());
         let id = self.next_window_id;
