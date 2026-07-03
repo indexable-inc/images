@@ -39,9 +39,13 @@ def test_failed_output_is_loud_at_both_ends() -> None:
     assert out.text == "error: ENOSPC\n"
 
 
-def test_failed_output_with_no_output_still_renders_failure() -> None:
+def test_failed_output_with_no_output_still_leads_and_trails() -> None:
+    # Even with no output the model text both leads with the failure line and
+    # ends with the bare marker, so tail-reads see the terminal state.
     out = sh.Output(cmd="false", code=1, raw="", duration=0.01)
-    assert repr(out).startswith("[exit 1]"), repr(out)
+    rendered = repr(out)
+    assert rendered.startswith("[exit 1]"), rendered
+    assert rendered.rstrip().endswith("\n[exit 1]"), rendered
 
 
 def test_successful_output_is_truthy_even_when_empty() -> None:
@@ -68,6 +72,69 @@ def test_long_command_is_truncated_in_failure_line() -> None:
     assert first.startswith("[exit 2]"), first
     assert first.endswith("..."), first
     assert len(first) < 200, first
+
+
+# NOTE: no test below embeds anything resembling a real credential; every
+# fixture token is constructed at test time from repeated filler (the same
+# convention as packages/search/source/meta/src/sanitize.rs tests).
+
+
+def test_failure_line_redacts_bearer_token() -> None:
+    token = "tok9" * 10
+    out = sh.Output(cmd=f'curl -H "Authorization: Bearer {token}" https://api.example.com', code=7, raw="", duration=0.5)
+    first = repr(out).splitlines()[0]
+    assert token not in repr(out), repr(out)
+    assert "[redacted:" in first, first
+    # argv[0] stays, so the command is still identifiable.
+    assert "curl" in first, first
+
+
+def test_failure_line_redacts_credential_kwargs_keeping_key() -> None:
+    secret = "hunter" + "2" * 20
+    out = sh.Output(cmd=f"deploy --host h1 password={secret} token={secret}", code=1, raw="", duration=0.1)
+    rendered = repr(out)
+    assert secret not in rendered, rendered
+    assert "password=[redacted:credential]" in rendered, rendered
+    assert "token=[redacted:credential]" in rendered, rendered
+
+
+def test_failure_line_redacts_known_key_prefixes_and_blobs() -> None:
+    gh = "ghp_" + "Ab1" * 12
+    blob = "QUJD/0+=" * 40
+    out = sh.Output(cmd=f"gh api -H 'X-Tok: {gh}' --input {blob}", code=1, raw="", duration=0.1)
+    rendered = repr(out)
+    assert gh not in rendered, rendered
+    assert blob not in rendered, rendered
+    assert "[redacted:github_token]" in rendered, rendered
+    assert "[blob 320 chars]" in rendered, rendered
+
+
+def test_shell_error_message_is_redacted() -> None:
+    token = "tok9" * 10
+    out = sh.Output(cmd=f"curl -H 'Authorization: Bearer {token}'", code=22, raw="", duration=0.2)
+    err = sh.ShellError(out)
+    assert token not in str(err), str(err)
+    assert "[redacted:" in str(err), str(err)
+    # The Output the error carries keeps the raw command for programmatic use.
+    assert err.output.cmd == out.cmd
+
+
+def test_multiline_command_collapses_to_one_failure_line() -> None:
+    cmd = "set -e\nfor f in a b c; do\n  build $f\ndone"
+    out = sh.Output(cmd=cmd, code=2, raw="", duration=0.3)
+    rendered = repr(out)
+    first = rendered.splitlines()[0]
+    assert first.startswith("[exit 2]"), rendered
+    assert "for f in a b c; do build $f done" in first, first
+    assert rendered.rstrip().endswith("[exit 2]"), rendered
+
+
+def test_redaction_does_not_touch_executed_command_or_text() -> None:
+    token = "tok9" * 10
+    out = sh.Output(cmd=f"echo token={token}", code=1, raw=f"token={token}\n", duration=0.1)
+    # .cmd and .text stay raw (programmatic surfaces); only renders scrub.
+    assert token in out.cmd
+    assert token in out.text
 
 
 def test_zsh_helper_uses_zsh_argv(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:

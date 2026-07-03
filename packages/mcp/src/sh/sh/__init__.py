@@ -53,16 +53,20 @@ stdout and stderr are merged in emission order (terminal-style). A non-zero exit
 is surfaced, never swallowed (issue #1766: a dead 45-minute build once read as
 "still compiling" for 25 minutes because the failure lived only in the output
 text). The model view of a failed Output LEADS with a ``[exit N] command
-failed...`` line and, when the command produced output, also ends with a
-trailing ``[exit N]`` marker, so both a head-read and a tail-read of a long log
-see the failure (an output-less failure IS the single leading line); the same
-line is echoed into the
-streamed job stdout (``jobs['<id>'].output`` / ``.tail()``), so a watcher paging
-a backgrounded build sees the terminal state even when the Output value is never
-bound or rendered; a failed Output is falsy (``if not out:``); and ``await
-sh(cmd, check=True)`` raises :class:`ShellError` instead of returning. ``.text``
-stays the command's own output with no markers, so reading diagnostics off a
-failure (or a ``grep`` that legitimately exits 1) is unchanged.
+failed...`` line and always ENDS with a trailing ``[exit N]`` marker, so both a
+head-read and a tail-read of a long log see the failure; the same line is echoed
+into the streamed job stdout (``jobs['<id>'].output`` / ``.tail()``), so a
+watcher paging a backgrounded build sees the terminal state even when the Output
+value is never bound or rendered; a failed Output is falsy (``if not out:``);
+and ``await sh(cmd, check=True)`` raises :class:`ShellError` instead of
+returning. ``.text`` stays the command's own output with no markers, so reading
+diagnostics off a failure (or a ``grep`` that legitimately exits 1) is
+unchanged. Everywhere a COMMAND string is rendered (the failure line, the
+ShellError message, the dashboard prompt) it passes through :func:`_redact`
+first: credential shapes (Bearer/Authorization values, ``token=``/``password=``
+style kwargs, known API-key prefixes, over-long opaque blobs) become
+``[redacted:<kind>]``, so a command built from secrets cannot leak them into
+model-visible or stored logs when it fails.
 
 **Never pass prose through shell quoting.** Backticks in a string command are
 run as command substitution by the shell even when the string was produced by
@@ -102,7 +106,7 @@ from typing import Any
 
 __all__ = ["Output", "ShellError", "sh", "zsh"]
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 # `Result` is the kernel runtime's human/model split. Importing it lets an
 # `Output` BE a Result, so a cell can end with `await sh(...)` and satisfy the
@@ -190,16 +194,82 @@ def _structured_hint(cmd: str | list[str]) -> str | None:
     return None
 
 
+# Credential shapes scrubbed from any RENDERED command text: the failure line
+# (model view + streamed job stdout), the ShellError message, and the dashboard
+# prompt. A command built from secret values (`curl -H "Authorization: Bearer
+# ..."`) must not leak them into model-visible or stored logs when it fails.
+# Mirrors the ingestion-side table in packages/search/source/meta/src/sanitize.rs:
+# conservative, prefixed, high-precision patterns, each match replaced by
+# `[redacted:<kind>]` (ordered so a recognizable token wins the precise label
+# before the generic header/kwarg catch-alls). The raw command stays available
+# programmatically on ``Output.cmd``; only renders are scrubbed.
+_SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (
+        re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", re.DOTALL),
+        "[redacted:private_key]",
+    ),
+    (re.compile(r"\blin_api_[A-Za-z0-9]+"), "[redacted:linear_api_key]"),
+    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}"), "[redacted:github_token]"),
+    (re.compile(r"\bgithub_pat_[A-Za-z0-9_]+"), "[redacted:github_pat]"),
+    (re.compile(r"\bsk-[A-Za-z0-9_-]{20,}"), "[redacted:sk_api_key]"),
+    (re.compile(r"\bxox[abprs]-[A-Za-z0-9-]+"), "[redacted:slack_token]"),
+    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[redacted:aws_access_key_id]"),
+    (
+        re.compile(r"\beyJ[A-Za-z0-9_-]{40,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"),
+        "[redacted:jwt]",
+    ),
+    (
+        re.compile(r"\bauthorization:\s*(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
+        "[redacted:authorization_header]",
+    ),
+    (
+        re.compile(r"\bauthorization:\s*[A-Za-z0-9._~+/=-]{20,}", re.IGNORECASE),
+        "[redacted:authorization_header]",
+    ),
+    # A bare scheme+token outside a header ("curl -H Bearer <tok>" split across
+    # argv, an env assignment echoed into a command); 16+ chars keeps prose
+    # ("bearer of bad news") out.
+    (re.compile(r"\bbearer\s+[A-Za-z0-9._~+/=-]{16,}", re.IGNORECASE), "[redacted:bearer_token]"),
+    # Generic credential-bearing kwargs/flags: keep the key (the command stays
+    # identifiable and debuggable), drop only the value.
+    (
+        re.compile(r"\b((?:api[_-]?key|access[_-]?key|secret|token|password|passwd|pwd|auth)[=:])\S+", re.IGNORECASE),
+        r"\1[redacted:credential]",
+    ),
+    (
+        re.compile(r"(--?(?:api-?key|access-token|token|secret|password|passwd|auth|bearer)\s+)\S+", re.IGNORECASE),
+        r"\1[redacted:credential]",
+    ),
+]
+
+# Whitespace-free runs longer than this collapse to `[blob N chars]` in rendered
+# command text: an inline base64 payload is both unreadable and a plausible
+# secret the table above has no prefix for. Same threshold as sanitize.rs.
+_BLOB_CHARS = 120
+_BLOB = re.compile(rf"\S{{{_BLOB_CHARS + 1},}}")
+
+
+def _redact(text: str) -> str:
+    """``text`` with credential shapes replaced by ``[redacted:<kind>]`` and
+    over-long opaque tokens collapsed to ``[blob N chars]``. Applied to every
+    rendered command string; never to the command actually executed."""
+    for pattern, replacement in _SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return _BLOB.sub(lambda m: f"[blob {len(m.group())} chars]", text)
+
+
 class ShellError(RuntimeError):
     """Raised by ``await sh(cmd, check=True)`` when the command exits non-zero.
 
     Carries the :class:`Output` so the failing command's text is still
-    inspectable: ``except ShellError as e: print(e.output.text)``.
+    inspectable: ``except ShellError as e: print(e.output.text)``. The message
+    renders the command through :func:`_redact`, so a secret-bearing command
+    cannot leak through a logged/model-visible exception.
     """
 
     def __init__(self, output: Output) -> None:
         self.output = output
-        super().__init__(f"command exited {output.code}: {output.cmd}")
+        super().__init__(f"command exited {output.code}: {_redact(output.cmd)}")
 
 
 class Output(_ResultBase):
@@ -346,8 +416,17 @@ class Output(_ResultBase):
         """One loud line naming the failure: the exit code first, then how long
         the command ran and what it was. It leads the model view and is echoed
         into the streamed job stdout (see :func:`sh`), so a failed command can
-        never render as quiet success or as still-running (issue #1766)."""
-        cmd = self.cmd if len(self.cmd) <= 120 else self.cmd[:117] + "..."
+        never render as quiet success or as still-running (issue #1766).
+
+        The command is rendered through :func:`_redact` (a secret-bearing
+        command must not leak into model-visible/stored text on failure), with
+        whitespace runs collapsed so a multi-line snippet or heredoc stays ONE
+        line (a tail-read must land on a marker, not a command fragment), then
+        truncated. Redact before truncating, so truncation can never bisect a
+        secret into a surviving prefix."""
+        cmd = re.sub(r"\s+", " ", _redact(self.cmd)).strip()
+        if len(cmd) > 120:
+            cmd = cmd[:117] + "..."
         return f"[exit {self.code}] command failed after {self.duration:.1f}s: {cmd}"
 
     def _render_text(self) -> str:
@@ -365,7 +444,7 @@ class Output(_ResultBase):
             # head+tail clip a huge log gets in outputs.text), the trailing
             # marker survives a tail-read. `.text` itself stays marker-free.
             marker = f"[exit {self.code}]"
-            body = f"{self._failure_line()}\n{body}\n{marker}" if body else self._failure_line()
+            body = f"{self._failure_line()}\n{body}\n{marker}" if body else f"{self._failure_line()}\n{marker}"
         return body
 
     def _render_html(self) -> str:
@@ -381,7 +460,9 @@ class Output(_ResultBase):
         prompt = (
             f'<div style="color:#6a6a70;padding:6px 10px 0">'
             f'<span style="color:#7bd88f">$</span> '
-            f'{_html.escape(self.cmd)}</div>'
+            # The dashboard prompt persists in the session store; render the
+            # command through the same secret scrub as the failure line.
+            f'{_html.escape(_redact(self.cmd))}</div>'
         )
         out = (
             f'<pre style="margin:0;padding:6px 10px 10px;white-space:pre-wrap;'
@@ -504,9 +585,9 @@ async def sh(
     :class:`TimeoutError`; ``check=True`` raises :class:`ShellError` on a non-zero
     exit; ``color=False`` suppresses the forced-color environment. A non-zero
     exit that is NOT checked still cannot pass silently: the returned Output is
-    falsy, its rendered text leads with the exit code (and trails with an
-    ``[exit N]`` marker after any output), and the failure line is echoed into
-    the streamed job stdout (see the module docstring).
+    falsy, its rendered text leads with the exit code and ends with an
+    ``[exit N]`` marker, and the failure line (command text redacted, see the
+    module docstring) is echoed into the streamed job stdout.
     ``name`` sets a human-readable label for the running job in the dashboard and
     the ``jobs`` dict (mirrors the same parameter on ``python_exec``); outside
     the kernel it is accepted and silently ignored.

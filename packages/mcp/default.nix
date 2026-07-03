@@ -4266,6 +4266,9 @@ let
         assert bool(failed) is False, "a failed Output must be falsy"
         assert "[exit 1]" in failed.llm_result, failed.llm_result
         assert failed.llm_result.splitlines()[0].startswith("[exit 1]"), failed.llm_result
+        # ...and even an output-less failure both leads and TRAILS with the
+        # marker, so a tail-read never lands on command text.
+        assert failed.llm_result.rstrip().endswith("\n[exit 1]"), failed.llm_result
         noisy = await sh.sh("echo diagnostic-text; exit 3", cwd=".")
         first, *rest = noisy.llm_result.splitlines()
         assert first.startswith("[exit 3]") and "exit 3" in first, noisy.llm_result
@@ -4274,6 +4277,33 @@ let
         # reading diagnostics off a failure is unchanged.
         assert noisy.text.strip() == "diagnostic-text", repr(noisy.text)
         assert "diagnostic-text" in "\n".join(rest), noisy.llm_result
+
+        # Rendered command text is secret-redacted (#1769 post-merge P1): a
+        # failing command whose STRING carries a credential shape must not leak
+        # it into the model view, the ShellError message, or the dashboard
+        # HTML; the raw command stays on .cmd. Fixture token is repeated
+        # filler, not a real credential.
+        tok = "tok9" * 10
+        leak = await sh.sh(f"false Bearer {tok}", cwd=".")
+        assert not leak.ok, leak.code
+        assert tok not in leak.llm_result, leak.llm_result
+        assert "[redacted:bearer_token]" in leak.llm_result.splitlines()[0], leak.llm_result
+        assert leak.llm_result.splitlines()[0].split(": ", 1)[1].startswith("false"), (
+            leak.llm_result)  # argv[0] survives redaction: still identifiable
+        assert tok not in leak._repr_html_() and "[redacted:" in leak._repr_html_()
+        assert tok in leak.cmd  # programmatic surface stays raw
+        try:
+            await sh.sh(f"false token={tok}", check=True, cwd=".")
+        except sh.ShellError as exc:
+            assert tok not in str(exc), str(exc)
+            assert "token=[redacted:credential]" in str(exc), str(exc)
+        else:
+            raise SystemExit("expected ShellError from check=True")
+        # A multi-line command collapses to ONE failure line (tail-reads land
+        # on markers, not command fragments).
+        multi = await sh.sh("false a \\\n  b", cwd=".")
+        assert multi.llm_result.splitlines()[0].startswith("[exit 1]"), multi.llm_result
+        assert multi.llm_result.rstrip().endswith("[exit 1]"), multi.llm_result
 
         # The expected-nonzero class (grep exiting 1 on no match) stays
         # workable: branch on .ok/.code and read .text, nothing raises.
