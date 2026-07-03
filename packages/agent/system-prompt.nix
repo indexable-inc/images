@@ -427,6 +427,26 @@ let
       };
     }
     {
+      noFallbacks = {
+        text = ''
+          Never implement fallbacks: no silent retries onto alternate paths, no
+          defensive defaults, no rescue branches that swallow a failure. This
+          applies to code you write and to how you operate. Fail loudly with a
+          clear, precise error instead: a surfaced error exposes the real bug so
+          the root cause gets fixed properly and shipped as a PR. If a fallback
+          is genuinely unavoidable as a temporary unblock, make it loud (log or
+          alert on every activation), file an issue to remove it, and treat it
+          as debt.
+        '';
+        reason = ''
+          A `fallback = true` Nix setting silently masked a corrupted
+          cache.ix.dev cache (ix#6139); builds kept succeeding on the alternate
+          path, so the root cause went undiagnosed instead of surfacing as a
+          fixable error.
+        '';
+      };
+    }
+    {
       principledEndgame = {
         text = ''
           Prefer endgame. A tactical fix (a restart, a cache bypass, a guard at
