@@ -2163,18 +2163,22 @@
     cfg = config.ix.profiles.base;
   };
 
-  # Regression fence for the guest-nix-slowness bug family (ix #1748/#1749/#1815):
-  # the image must ship a nix store DB that registers the pinned nixpkgs source as
-  # VALID. #1749 locked the registry pin's narHash, but narHash only short-circuits
-  # re-ingest for a path nix already considers valid; the OCI image baked no store
-  # DB at all, so the pinned source (present in the image) read as invalid and the
-  # first in-VM `nix` command re-copied the ~45k-file tree through VCFS (5m40s).
-  # `includeNixDB = true` (oci-layer.nix) fixes it by baking db.sqlite via
-  # closureInfo + `nix-store --load-db` into the customisation layer, which
-  # oci-image-builder copies verbatim. This check builds the real base OCI archive
-  # and asserts db.sqlite registers the nixpkgs source as valid, so it also proves
-  # the DB survives oci-image-builder's re-streaming. It builds an OCI image, so it
-  # is its own check (not the pure-eval `eval` aggregate) and runs on Linux.
+  # Regression fence for the guest-nix-slowness bug family. Do NOT delete as
+  # redundant with the registry-pin assertion: this is the THIRD regression in
+  # the same family, each of which passed the prior guard yet still left a fresh
+  # VM re-ingesting the ~45k-file nixpkgs tree through VCFS on first `nix`:
+  #   1. missing narHash  — unlocked path: pin, re-hashed every eval (#1748/#1749)
+  #   2. missing validity — narHash added, but narHash only short-circuits a path
+  #      nix already considers VALID (#1815)
+  #   3. missing DB       — the OCI image baked no /nix/var/nix/db/db.sqlite at
+  #      all, so the pinned source (present in the image) was never valid; fixed
+  #      by `includeNixDB = true` in oci-layer.nix
+  # The boundary this defends: the built base OCI archive must ship a populated
+  # /nix/var/nix/db/db.sqlite whose ValidPaths includes the nixpkgs -source path.
+  # A bare db.sqlite, or the registry pin alone, is not enough. This check builds
+  # the real base archive and asserts exactly that, so it also proves the DB
+  # survives oci-image-builder's re-streaming. It builds an OCI image, so it is
+  # its own check (not the pure-eval `eval` aggregate) and runs on Linux.
   baseImageNixDb =
     pkgs.runCommand "ix-test-base-image-nix-db" {
       nativeBuildInputs = [
