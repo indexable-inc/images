@@ -277,7 +277,7 @@ pub enum ToGuest {
 /// a consumer, and the protocol crate is the one crate both sides (and both
 /// platforms' tests) share. Rate rounds to the nearest integer per second.
 /// A rate that rounds to 0 (interval >= 2s) disables client repeat, which
-/// is what wl_keyboard defines rate 0 to mean and is only reachable by
+/// is what `wl_keyboard` defines rate 0 to mean and is only reachable by
 /// macOS "Key Repeat: Off" (the slowest slider stop, 1.8s, still rounds to
 /// 1/s). A zero interval is nonsense from the wire and also maps to
 /// disabled rather than an unbounded rate.
