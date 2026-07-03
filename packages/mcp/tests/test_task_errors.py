@@ -94,3 +94,19 @@ def test_install_is_idempotent() -> None:
     assert len(reports) == 1
     assert factory is not None
     assert getattr(factory, "_ix_task_watch", False)
+
+
+def test_second_install_leaves_factory_untouched() -> None:
+    """A double-wrap would produce a NEW factory object that also carries the
+    sentinel and still deduplicates reports, so only object identity catches
+    an accidental re-wrap."""
+
+    async def scenario() -> tuple[object, object]:
+        loop = asyncio.get_running_loop()
+        runtime._install_task_failure_watch(loop)
+        first = loop.get_task_factory()
+        runtime._install_task_failure_watch(loop)
+        return first, loop.get_task_factory()
+
+    first, second = asyncio.run(scenario())
+    assert second is first
