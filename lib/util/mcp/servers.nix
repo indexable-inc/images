@@ -38,6 +38,28 @@ let
         url = "https://mcp.exa.ai/mcp";
       };
     };
+
+  optionalServers =
+    {
+      # Path to the packaged `blender-mcp` binary (`lib.getExe` of the
+      # `packages/blender-mcp` build). A command string rather than the package
+      # itself because this registry is pure lib, out of `pkgs` scope.
+      blenderMcp,
+    }:
+    {
+      # Stdio MCP server that bridges to the BlenderMCP addon socket on
+      # localhost:9876. Only useful on a host where a Blender GUI session has
+      # the matching addon (the package's `passthru.addon`) loaded, which is
+      # why it never enters `defaultServers`.
+      blender = {
+        transport = "stdio";
+        command = blenderMcp;
+        env = {
+          # telemetry.py opt-out; the default phones home per tool call.
+          DISABLE_TELEMETRY = "true";
+        };
+      };
+    };
 in
 {
   /**
@@ -51,6 +73,15 @@ in
       the keyless `exa` server is returned.
   */
   inherit defaultServers;
+
+  /**
+    Opt-in servers that depend on machine-local state (a running GUI app, a
+    local daemon) and so never enter the default set: baking them into every
+    wrapper would hand fleet and CI agents a dead tool surface. Consumers merge
+    what applies, e.g.
+    `defaultServers { ... } // optionalServers { blenderMcp = lib.getExe blender-mcp; }`.
+  */
+  inherit optionalServers;
 
   /**
     Compatibility name for consumers pinned to the original MCP registry API.

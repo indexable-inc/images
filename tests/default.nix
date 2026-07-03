@@ -2609,6 +2609,12 @@ let
         ) sampleCodexMcpEntries;
         message = "Codex MCP entries should be limited to index and Exa when index MCP is available";
       }
+      {
+        assertion =
+          (ix.mcp.toClaudeJson (ix.mcp.optionalServers { blenderMcp = "/bin/blender-mcp"; })).blender.command
+          == "/bin/blender-mcp";
+        message = "Opt-in Blender MCP server should render for Claude with the consumer's binary";
+      }
     ];
 
     provider-prompts = [
