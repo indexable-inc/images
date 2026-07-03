@@ -80,6 +80,10 @@
     "/home/*/index"
     "/home/*/ix"
     # macOS workstations keep the long-lived checkouts under ~/Projects/<org>/.
+    # `*` crosses `/` in this matcher, so these also catch a primary checkout
+    # named exactly `index`/`ix` nested deeper under ~/Projects; accepted, since
+    # the guard only bites primary checkouts of those two repos and
+    # CLAUDE_CODE_PRIMARY_CHECKOUTS overrides per machine.
     "/Users/*/Projects/*/index"
     "/Users/*/Projects/*/ix"
   ],
@@ -285,12 +289,14 @@ let
         pr = "";
       };
       # Worktrees branch from origin/<default>, not the local HEAD, so agent
-      # branches never inherit a machine's drifted checkout state.
+      # branches never inherit a machine's drifted checkout state. Restates the
+      # current upstream default on purpose: a drift-guard, since Anthropic has
+      # flipped EnterWorktree's base before (anthropics/claude-code#57148).
       worktree.baseRef = "fresh";
-      # Persistent cross-session memory on by default; the directory stays a
-      # per-machine choice (autoMemoryDirectory in a consumer's extraSettings).
+      # Persistent cross-session memory on by default (drift-guard, same as
+      # baseRef); the directory stays a per-machine choice (autoMemoryDirectory
+      # in a consumer's extraSettings).
       autoMemoryEnabled = true;
-      skipAutoPermissionPrompt = true;
       # Checkpoint shadow-commits churn large repos for little value when every
       # edit already lands on a dedicated worktree branch.
       fileCheckpointingEnabled = false;

@@ -59,7 +59,11 @@ agent content from Nix outputs instead of invoking `nix build` interactively.
 on agent teams (teammate sessions with a shared task list and direct
 inter-agent messaging; https://code.claude.com/docs/en/agent-teams). Disable
 per machine with `export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=0` (only
-1/true/yes/on read as truthy).
+1/true/yes/on read as truthy). `ENABLE_TOOL_SEARCH=false` loads every MCP tool
+eagerly instead of deferring definitions behind a ToolSearch fetch, and
+`CLAUDE_CODE_DISABLE_CRON=1` drops the self-scheduling tools
+(CronCreate/CronDelete/CronList); re-enable either per machine by exporting
+your own value.
 
 ### Prepended flags (`wrapperFlags`, `default.nix:353-361`)
 
@@ -95,6 +99,16 @@ wrapper injects its defaults file only `unless_present` a caller `--settings`
 (`default.nix:226-293`):
 
 - `cleanupPeriodDays = 365`: keep transcripts and `--debug` logs ~1yr.
+- `attribution` (empty `commit`/`pr`): no AI trailers; outward disclosure is
+  the house prompt's `discloseAi` rule.
+- `worktree.baseRef = "fresh"` and `autoMemoryEnabled = true`: drift-guards
+  restating the upstream defaults (memory directory stays per-machine via
+  `autoMemoryDirectory` in a consumer's `extraSettings`).
+- `fileCheckpointingEnabled = false`: worktree branches already carry every
+  edit; checkpoint shadow-commits just churn large repos.
+- `enabledPlugins` (`ix@ix`, `ix-docs@ix`) + `extraKnownMarketplaces`
+  (Mixedbread-Grep, antithesis-skills, ix): house docs plugins and where they
+  resolve from.
 - `skipDangerousModePermissionPrompt = true` (when
   `dangerouslySkipPermissions`): pre-accept the one-time dangerous-mode warning
   the flag alone does not suppress.
