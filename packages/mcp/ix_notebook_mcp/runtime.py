@@ -223,7 +223,11 @@ class Job:
         # can re-raise it (with its original traceback) instead of handing back a
         # misleading None -- the documented "raises rather than return a
         # misleading None" contract. None while running, done, or cancelled.
+        # `_exc_tb` pins the traceback as captured at failure time: each re-raise
+        # restores it first, so awaiting the same failed job repeatedly does not
+        # keep growing the shared exception object's traceback chain.
         self._exc: BaseException | None = None
+        self._exc_tb: types.TracebackType | None = None
         self._buf: list[str] = []
         self._buflen = 0
         # Rich outputs (mime bundles) display()-ed while this job runs.
@@ -412,7 +416,10 @@ class Job:
                 # Re-raise the original exception object, so its type, message,
                 # and traceback (the cell's own frames) all reach the caller --
                 # the same failure they would have seen running the code inline.
-                raise self._exc
+                # Restore the traceback captured at failure time first, so a
+                # repeated await re-raises from the same baseline instead of
+                # accreting one more raise-frame chain per await.
+                raise self._exc.with_traceback(self._exc_tb)
             return self._result
 
         return _await_result().__await__()
@@ -2016,6 +2023,7 @@ async def _runner(job: Job, ns: dict) -> None:
             job.error = _user_traceback(_kexc)
             job.error_line = _error_line(_kexc, job)
             job._exc = _kexc
+        job._exc_tb = _kexc.__traceback__
         job._append(job.error)
     except (Exception, SystemExit) as _exc:
         # Isolate user code from the kernel: a job's SyntaxError, exception, or
@@ -2033,6 +2041,7 @@ async def _runner(job: Job, ns: dict) -> None:
         # Keep the exception object itself, so `await jobs['<id>']` re-raises it
         # (type + message + the cell's own traceback) instead of yielding None.
         job._exc = _exc
+        job._exc_tb = _exc.__traceback__
         job._append(job.error)
     finally:
         job.ended = time.time()

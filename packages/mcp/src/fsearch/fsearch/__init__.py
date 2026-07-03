@@ -87,6 +87,9 @@ class PartialFrame(pl.DataFrame):
     # (a plain DataFrame returns the False default; a PartialFrame overrides it).
     truncated = True
 
+    # `PartialFrame(existing_frame, ...)` relies on polars accepting a DataFrame
+    # as the `data` argument (DataFrame-from-DataFrame init); the typecheckSmoke
+    # nix test exercises this path, so a polars bump that drops it fails CI.
     def __init__(self, data: object = None, *args: object, reason: str = "", **kwargs: object) -> None:
         super().__init__(data, *args, **kwargs)
         self.reason = reason
@@ -273,11 +276,17 @@ async def _stream_rg(
     scan the whole tree and discarding the tail -- otherwise a broad pattern over
     a huge root pays the full-tree cost for a handful of wanted rows. The scan is
     still a separate process bounded by ``timeout`` (a process-group kill, like
-    ``sh``), so a runaway never wedges the kernel's event loop."""
+    ``sh``), so a runaway never wedges the kernel's event loop.
+
+    A backend failure is an error, not an empty result: rg exits 2 on a bad
+    pattern, an unreadable root, or an invalid glob, and that raises
+    :class:`FsearchError` carrying rg's own stderr -- an empty frame would be
+    indistinguishable from a legitimate "no matches". A kill we initiated (the
+    timeout, or the limit) is not a failure."""
     proc = await asyncio.create_subprocess_exec(
         *argv,
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
         start_new_session=True,  # own process group, so the kill reaps rg's children too
         # One rg --json event is a whole line; a match on a very long line (a
         # minified bundle, a data file) makes that line large, and the default
@@ -288,6 +297,17 @@ async def _stream_rg(
     )
     rows: list[dict[str, Any]] = []
     hit_limit = False
+    stderr_chunks: list[bytes] = []
+
+    async def _drain_stderr() -> None:
+        # Drained concurrently so a chatty rg can never fill the stderr pipe and
+        # deadlock against the stdout reader; the text feeds the failure message.
+        assert proc.stderr is not None
+        while True:
+            block = await proc.stderr.read(8192)
+            if not block:
+                break
+            stderr_chunks.append(block)
 
     async def _read() -> None:
         nonlocal hit_limit
@@ -315,6 +335,7 @@ async def _stream_rg(
                 hit_limit = True
                 return  # stop reading; the finally-block kills rg's whole group
 
+    stderr_task = asyncio.ensure_future(_drain_stderr())
     timed_out = False
     try:
         await asyncio.wait_for(_read(), timeout)
@@ -324,6 +345,15 @@ async def _stream_rg(
         _kill_group(proc)
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(proc.wait(), 2.0)
+        stderr_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await stderr_task
+    # rg's contract: 0 = matches, 1 = no matches, anything else = a real failure
+    # (bad regex, unreadable root, invalid glob). Only a run WE cut short (the
+    # deadline or the limit kill) is exempt.
+    if not timed_out and not hit_limit and proc.returncode not in (0, 1):
+        detail = b"".join(stderr_chunks).decode("utf-8", "replace").strip()
+        raise FsearchError(f"{argv[0]} exited {proc.returncode}: {detail[:500]}")
     return (rows, timed_out, hit_limit)
 
 

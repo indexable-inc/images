@@ -13,6 +13,7 @@ wrapper still collects them; the nix ``typecheckSmoke`` build provides ty.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 
@@ -89,6 +90,57 @@ def test_an_unparseable_cell_is_left_to_the_compile_path() -> None:
     # A SyntaxError is the real compile path's job to report; the checker must not
     # pre-empt it (returns ok so the runner surfaces the SyntaxError normally).
     assert _check("def broken(:\n    pass").ok
+
+
+def test_a_star_import_cell_is_not_blocked() -> None:
+    # `from x import *` is legal at the kernel's module scope but a SyntaxError
+    # inside the `async def` wrapper (confirmed on ty 0.0.40: error[invalid-syntax]
+    # on the cell's own line), so the checker skips such a cell instead of
+    # blocking it.
+    assert _check("from math import *\nx = sqrt(4)").ok
+
+
+def test_deleting_a_prior_cell_name_is_not_flagged() -> None:
+    # `del prior_name` unbinds the module-scope name; without a `global` in the
+    # wrapper it would read as an unbound-local delete.
+    assert _check("del prior_name", {"prior_name": 5}).ok
+
+
+# --------------------------------------------------------------------------- #
+# the checker's own failure never blocks a cell
+# --------------------------------------------------------------------------- #
+
+
+def _install_hung_ty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point IX_MCP_TY_BIN at a stub that sleeps far past any test budget."""
+    stub = tmp_path / "ty"
+    stub.write_text("#!/bin/sh\nsleep 60\n")
+    stub.chmod(0o755)
+    monkeypatch.setenv("IX_MCP_TY_BIN", str(stub))
+
+
+def test_a_hung_checker_reports_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_hung_ty(tmp_path, monkeypatch)
+    result = asyncio.run(typecheck.check("x = 1", {}, timeout=0.3))
+    assert result.ok
+
+
+def test_a_hung_checker_still_lets_the_cell_execute(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The regression this guards: the timeout handler raising (e.g. the missing
+    # contextlib import) propagated into _runner and recorded the cell as FAILED.
+    # With a ty that hangs, the check must give up quietly and the cell must run.
+    _install_hung_ty(tmp_path, monkeypatch)
+    real_check = typecheck.check
+
+    async def fast_check(code: str, namespace: dict) -> typecheck.TypeCheckResult:
+        return await real_check(code, namespace, timeout=0.3)
+
+    monkeypatch.setattr(typecheck, "check", fast_check)
+    ns: dict = {"Result": runtime.Result}
+    _wire(monkeypatch, ns)
+    job = asyncio.run(runtime.__ix_run("ran_anyway = True\nResult.ok('ran')", budget=5.0))
+    assert job.status == "done", (job.status, job.error)
+    assert ns.get("ran_anyway") is True
 
 
 # --------------------------------------------------------------------------- #

@@ -85,6 +85,18 @@ def test_find_recovers_partial_paths_on_timeout(monkeypatch: pytest.MonkeyPatch,
     _ = os  # keep the import used
 
 
+def test_grep_backend_failure_raises_not_empty_frame(tmp_path: object) -> None:
+    # rg exits 2 on a bad pattern (also: unreadable root, invalid glob); that must
+    # surface as FsearchError carrying rg's stderr, never as an empty frame
+    # indistinguishable from "no matches". Skips cleanly if rg is not on PATH.
+    import shutil
+
+    if shutil.which("rg") is None:
+        pytest.skip("ripgrep not on PATH")
+    with pytest.raises(fsearch.FsearchError, match="exited 2"):
+        asyncio.run(fsearch.grep("(", str(tmp_path)))  # type: ignore[arg-type]
+
+
 def test_grep_short_circuits_at_limit(tmp_path: object) -> None:
     # Real ripgrep: plant many matches, cap at 5, and assert the scan stops there
     # and is flagged partial. Skips cleanly if rg is not on PATH.

@@ -29,11 +29,13 @@ from __future__ import annotations
 import ast
 import asyncio
 import builtins
+import contextlib
 import keyword
 import os
 import pathlib
 import re
 import shutil
+import signal
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -127,6 +129,13 @@ def _assigned_names(tree: ast.Module) -> tuple[set[str], set[str]]:
                 annotated.add(node.target.id)
         elif isinstance(node, (ast.AugAssign, ast.For, ast.AsyncFor)):
             add_target(node.target)
+        elif isinstance(node, ast.Delete):
+            # `del name` binds (well, unbinds) at the cell's scope: without a
+            # `global`, the wrapper would treat a deleted prior-cell name as an
+            # unbound local. Treat delete targets like assignments so a
+            # namespaced one gets the `global` and a new one a stub.
+            for target in node.targets:
+                add_target(target)
         elif isinstance(node, (ast.With, ast.AsyncWith)):
             for item in node.items:
                 if item.optional_vars is not None:
@@ -172,14 +181,27 @@ def _preamble(namespace: dict, bound: set[str]) -> tuple[str, int]:
 
 
 def _synthesize(code: str, namespace: dict) -> tuple[str, int] | None:
-    """Turn a cell into a checkable synthetic module, or None if the cell does not
-    parse (a SyntaxError is left for the real compile path to report, unchanged).
+    """Turn a cell into a checkable synthetic module, or None to skip the check:
+    either the cell does not parse (a SyntaxError is left for the real compile
+    path to report, unchanged) or it cannot be represented in the wrapper without
+    false positives (a top-level star-import).
 
     Returns ``(source, cell_line_offset)`` where a diagnostic on synthetic line L
     maps to cell line ``L - cell_line_offset``."""
     try:
         tree = ast.parse(code, "<cell>", "exec")
     except SyntaxError:
+        return None
+    # A top-level `from x import *` is legal in the real cell (it executes at
+    # module scope via PyCF_ALLOW_TOP_LEVEL_AWAIT) but a SyntaxError inside the
+    # `async def` wrapper, so ty would flag a valid cell (confirmed on ty 0.0.40:
+    # error[invalid-syntax] on the cell's own line). Star-imports also make the
+    # bound-name set unknowable statically, so skip the check for such a cell
+    # rather than block it.
+    if any(
+        isinstance(node, ast.ImportFrom) and any(alias.name == "*" for alias in node.names)
+        for node in tree.body
+    ):
         return None
     global_names, all_bound = _assigned_names(tree)
     # Only names that ALREADY live in the namespace need a ``global`` -- those are
@@ -204,6 +226,15 @@ def _synthesize(code: str, namespace: dict) -> tuple[str, int] | None:
     # indent.
     offset = preamble_lines + 1 + (1 if global_decl else 0)
     return source, offset
+
+
+def _kill(proc: asyncio.subprocess.Process) -> None:
+    """SIGKILL the checker's whole process group (best-effort; a race where it
+    already exited is ignored). ``start_new_session`` made it a group leader."""
+    if proc.returncode is not None:
+        return
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(proc.pid, signal.SIGKILL)
 
 
 def _ty_bin() -> str | None:
@@ -248,13 +279,22 @@ async def check(code: str, namespace: dict, *, timeout: float = 10.0) -> TypeChe
     when nothing blocks (clean, checker unavailable, unparseable cell, or the
     checker itself failed to run) -- the feature never turns its own failure into a
     blocked cell. A blocking result carries the remapped diagnostic in ``report``.
+
+    Known race, accepted: ``namespace`` is the live dict, so a concurrent cell
+    rebinding a shared name to a different type mid-check can make its stub stale
+    and flag (or miss) one run spuriously. The exact-type allowlist bounds the
+    blast radius -- only simple builtin scalars/containers ever get a concrete
+    stub, everything else is ``Any`` -- and per-session namespaces (the default on
+    the HTTP transport) keep parallel agents out of each other's names, so a
+    snapshot/lock here would buy little for its cost.
     """
     ty = _ty_bin()
     if ty is None:
         return TypeCheckResult(ok=True)
     synthesized = _synthesize(code, namespace)
     if synthesized is None:
-        # Unparseable: let the real compile path report the SyntaxError.
+        # Unparseable (the real compile path reports the SyntaxError) or
+        # unrepresentable in the wrapper (a star-import): run the cell unchecked.
         return TypeCheckResult(ok=True)
     source, offset = synthesized
     with tempfile.TemporaryDirectory(prefix="ix-typecheck-") as tmp:
@@ -281,6 +321,7 @@ async def check(code: str, namespace: dict, *, timeout: float = 10.0) -> TypeChe
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=tmp,
+                start_new_session=True,  # own process group: a kill reaps ty and any child
             )
         except OSError:
             # The checker could not be spawned: never block a cell on our own
@@ -291,11 +332,17 @@ async def check(code: str, namespace: dict, *, timeout: float = 10.0) -> TypeChe
         except TimeoutError:
             # The checker hung past its own budget: kill it and let the cell run
             # (its own failures never block a cell).
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
-            with contextlib.suppress(Exception):
-                await proc.wait()
+            _kill(proc)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(proc.wait(), 2.0)
             return TypeCheckResult(ok=True)
+        except asyncio.CancelledError:
+            # The awaiting cell was cancelled mid-check: take ty down with it so a
+            # cancelled cell never leaves an orphaned checker running. No await
+            # here (the cancellation would be re-delivered at the next await);
+            # the loop's child watcher reaps the killed process.
+            _kill(proc)
+            raise
         report, had_error = _remap(stdout.decode("utf-8", "replace"), str(path.resolve()), offset)
         if not had_error:
             return TypeCheckResult(ok=True)
