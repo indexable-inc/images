@@ -5652,11 +5652,11 @@ let
 
   # Network-free unit tests for the federated-resources bridge: every path of
   # `resources_bridge` (list/read/act, peer-flag assembly, not-found -> -32002,
-  # graceful empty/clear-error when `ix` is absent) driven against a STUB `ix`
-  # script on PATH plus a nonexistent-binary path -- no real `ix` or peer needed.
-  # The bridge lives in the `ix_notebook_mcp` server package, so the test imports
-  # that module (bundled here) rather than a `src/*` helper; `bash` is on PATH for
-  # the stub script's shebang.
+  # graceful empty/clear-error when `ix-resource-cli` is absent) driven against a
+  # STUB `ix-resource-cli` script on PATH plus a nonexistent-binary path -- no
+  # real CLI or peer needed. The bridge lives in the `ix_notebook_mcp` server
+  # package, so the test imports that module (bundled here) rather than a `src/*`
+  # helper; `bash` is on PATH for the stub script's shebang.
   resourcesBridgeTestPython = pkgs.python3.withPackages (ps: [
     ps.pytest
     ps.pydantic

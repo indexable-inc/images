@@ -1,34 +1,35 @@
 """Bridge the federated TUI *resources* into this MCP server.
 
-The ``ix`` CLI exposes the federated terminal-resource catalog over its
-``resources`` subcommand (``ix resources ls/get/act --json``). This module shells
-out to that CLI at runtime and maps its JSON into the MCP ``resources/list`` /
+The internal ``ix-resource-cli`` binary (the ix repo's ``resource-cli`` crate)
+exposes the federated terminal-resource catalog over its ``list``/``get``/``act``
+verbs, always emitting machine-readable JSON. This module shells out to that CLI
+at runtime and maps its JSON into the MCP ``resources/list`` /
 ``resources/read`` surface plus a ``tui_act`` tool, so an agent (or Claude Code)
 can ``@``-mention a peer's live terminal resource and drive it.
 
-Why shell out instead of linking ``ix``: index cannot take a Nix build-dependency
-on the ``ix`` binary (it would close the ix<->index dependency cycle), and the
-R2/pyo3 distribution path is heavier than this needs to be. Calling ``ix`` from
-``PATH`` at runtime sidesteps both -- and lets the bridge **degrade gracefully**:
-when ``ix`` is not installed (or has no ``resources`` subcommand, or errors), the
+Why shell out instead of linking: index cannot take a Nix build-dependency on
+the ix repo's binaries (it would close the ix<->index dependency cycle), and the
+R2/pyo3 distribution path is heavier than this needs to be. Calling
+``ix-resource-cli`` from ``PATH`` at runtime sidesteps both -- and lets the
+bridge **degrade gracefully**: when the CLI is not installed (or errors), the
 list comes back empty and a read raises a clear error rather than crashing the
 server.
 
 Peers are configured with the ``IX_RESOURCE_PEERS`` environment variable: a
-comma-separated list of peer URLs (each passed to ``ix`` as ``--peer <url>``).
-Unset/empty means local-only for *listing* -- ``ix resources ls`` is run with no
-``--peer`` flag and reports whatever the local node federates.
+comma-separated list of peer URLs (each passed to the CLI as ``--peer <url>``).
+Unset/empty means an empty federation for *listing* -- ``ix-resource-cli list``
+is run with no ``--peer`` flag and reports nothing.
 
-A read/act for a uri targets a single peer **by URL**. The ``ix`` CLI's
-``--peer`` is a full endpoint ``url::Url`` (e.g. ``https://<addr>/rpc``), not a
-bare host or label, so a peer cannot be inferred from the uri's host
-(``ix://<host>/<name>`` -- ``<host>`` is a display label, not an endpoint, and
-fails the CLI's URL parse). Instead: an explicit ``peer=`` URL is used directly;
-otherwise the bridge iterates the configured peer URLs (the same list
-:func:`list_resources` uses) and probes each with ``ix resources get`` until one
-advertises the uri, then reads/acts against that peer. With no explicit peer and
-no configured peers, a read/act raises a clear "no peer configured" error rather
-than silently shelling out a bare host.
+A read/act for a uri targets a single peer **by URL**. The CLI's ``--peer`` is a
+full endpoint ``url::Url`` (e.g. ``https://<addr>/rpc``), not a bare host or
+label, so a peer cannot be inferred from the uri's host (``ix://<host>/<name>``
+-- ``<host>`` is a display label, not an endpoint, and fails the CLI's URL
+parse). Instead: an explicit ``peer=`` URL is used directly; otherwise the
+bridge iterates the configured peer URLs (the same list :func:`list_resources`
+uses) and probes each with ``ix-resource-cli get`` until one advertises the uri,
+then reads/acts against that peer. With no explicit peer and no configured
+peers, a read/act raises a clear "no peer configured" error rather than silently
+shelling out a bare host.
 
 Everything here runs on the kernel's asyncio loop via
 :func:`asyncio.create_subprocess_exec` -- never a blocking ``subprocess.run``,
@@ -74,13 +75,14 @@ __all__ = [
 RESOURCE_NOT_FOUND = -32002
 
 # Environment variable naming the federated peers to query, comma-separated URLs.
-# Unset/empty => local-only (no ``--peer`` flag passed to ``ix``).
+# Unset/empty => no ``--peer`` flag passed to the CLI (an empty federation).
 PEERS_ENV = "IX_RESOURCE_PEERS"
 
 # The CLI the bridge shells out to. Overridable via ``IX_RESOURCES_BIN`` so a test
-# (or a non-PATH install) can point at a specific binary; defaults to ``ix`` on
-# PATH.
+# (or a non-PATH install) can point at a specific binary; defaults to
+# ``ix-resource-cli`` on PATH.
 _IX_BIN_ENV = "IX_RESOURCES_BIN"
+_DEFAULT_BIN = "ix-resource-cli"
 
 # Per-call timeout (seconds) so a hung/unreachable peer cannot wedge a request
 # forever. The CLI has its own network timeouts; this is a backstop.
@@ -96,7 +98,7 @@ class ResourceNotFoundError(ResourceBridgeError):
 
 
 # ---------------------------------------------------------------------------
-# Boundary models -- the shape of `ix resources ... --json` output.
+# Boundary models -- the shape of `ix-resource-cli` JSON output.
 # ---------------------------------------------------------------------------
 #
 # `extra="ignore"` keeps these forward-compatible: the CLI may add fields without
@@ -109,11 +111,11 @@ class _BridgeModel(BaseModel):
 
 
 class ResourceEntry(_BridgeModel):
-    """One federated resource as reported by ``ix resources ls --json``.
+    """One federated resource as reported by ``ix-resource-cli list``.
 
     The ``uri`` (``ix://<host>/<name>`` by convention) is both the federated
     identity and the MCP resource uri, so a client ``@``-mentions exactly what
-    ``ix`` advertises.
+    the CLI advertises.
     """
 
     uri: str
@@ -125,7 +127,7 @@ class ResourceEntry(_BridgeModel):
 
 
 class ResourceSnapshot(_BridgeModel):
-    """A point-in-time read of a resource from ``ix resources get <uri> --json``."""
+    """A point-in-time read of a resource from ``ix-resource-cli get <uri>``."""
 
     uri: str = ""
     text: str = ""
@@ -133,7 +135,7 @@ class ResourceSnapshot(_BridgeModel):
 
 
 class Ack(_BridgeModel):
-    """The acknowledgement ``ix resources act ... --json`` returns for a drive.
+    """The acknowledgement ``ix-resource-cli act ...`` returns for a drive.
 
     Kept permissive (only the common fields are named, ``extra="ignore"`` carries
     the rest) because the Ack shape is the CLI's to define; the tool returns the
@@ -147,15 +149,15 @@ class Ack(_BridgeModel):
 
 
 def _ix_bin() -> str | None:
-    """The ``ix`` executable to run, or ``None`` when it is not installed.
+    """The resource CLI executable to run, or ``None`` when it is not installed.
 
     Honors ``IX_RESOURCES_BIN`` (an explicit path or a name resolved on PATH) and
-    otherwise looks up ``ix`` on PATH. Returning ``None`` -- rather than raising --
-    is what lets :func:`list_resources` degrade to an empty list when the CLI is
-    absent.
+    otherwise looks up ``ix-resource-cli`` on PATH. Returning ``None`` -- rather
+    than raising -- is what lets :func:`list_resources` degrade to an empty list
+    when the CLI is absent.
     """
     override = os.environ.get(_IX_BIN_ENV)
-    candidate = override or "ix"
+    candidate = override or _DEFAULT_BIN
     # An override that is a path to an existing file is used as-is; otherwise
     # resolve it (or the default) on PATH.
     if override and os.path.sep in override:
@@ -168,14 +170,14 @@ def configured_peers() -> list[str]:
 
     Whitespace around each entry is stripped and blanks dropped, so
     ``"a, , b "`` yields ``["a", "b"]`` and an unset/blank var yields ``[]``
-    (local-only).
+    (an empty federation).
     """
     raw = os.environ.get(PEERS_ENV, "")
     return [peer.strip() for peer in raw.split(",") if peer.strip()]
 
 
-async def _run_ix(args: Sequence[str]) -> tuple[int, str, str]:
-    """Run ``ix <args>`` on the loop, returning ``(returncode, stdout, stderr)``.
+async def _run_cli(args: Sequence[str]) -> tuple[int, str, str]:
+    """Run ``ix-resource-cli <args>`` on the loop, returning ``(returncode, stdout, stderr)``.
 
     Raises :class:`ResourceBridgeError` only for an *execution* failure the caller
     cannot inspect (the binary vanished between the PATH check and exec, or the
@@ -184,7 +186,7 @@ async def _run_ix(args: Sequence[str]) -> tuple[int, str, str]:
     """
     binary = _ix_bin()
     if binary is None:
-        raise FileNotFoundError("ix CLI not found on PATH")
+        raise FileNotFoundError(f"{_DEFAULT_BIN} not found on PATH")
     try:
         proc = await asyncio.create_subprocess_exec(
             binary,
@@ -203,7 +205,7 @@ async def _run_ix(args: Sequence[str]) -> tuple[int, str, str]:
         with contextlib.suppress(ProcessLookupError):
             proc.kill()
         await proc.wait()
-        raise ResourceBridgeError(f"ix {' '.join(args)} timed out after {_CALL_TIMEOUT:g}s") from exc
+        raise ResourceBridgeError(f"{_DEFAULT_BIN} {' '.join(args)} timed out after {_CALL_TIMEOUT:g}s") from exc
     return proc.returncode or 0, stdout_b.decode("utf-8", "replace"), stderr_b.decode("utf-8", "replace")
 
 
@@ -216,7 +218,7 @@ def _peer_flags(peers: Sequence[str]) -> list[str]:
 
 
 def _parse_entries(stdout: str) -> list[ResourceEntry]:
-    """Parse ``ix resources ls --json`` stdout into typed entries.
+    """Parse ``ix-resource-cli list`` stdout into typed entries.
 
     Accepts either a bare JSON array of entries or an object with a ``resources``
     (or ``entries``) array, since a CLI may wrap its list. A non-list/!dict
@@ -229,44 +231,45 @@ def _parse_entries(stdout: str) -> list[ResourceEntry]:
     try:
         payload = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise ResourceBridgeError(f"ix resources ls returned invalid JSON: {exc}") from exc
+        raise ResourceBridgeError(f"{_DEFAULT_BIN} list returned invalid JSON: {exc}") from exc
     if isinstance(payload, dict):
         items = payload.get("resources", payload.get("entries", []))
     else:
         items = payload
     if not isinstance(items, list):
-        raise ResourceBridgeError("ix resources ls JSON is not a list of entries")
+        raise ResourceBridgeError(f"{_DEFAULT_BIN} list JSON is not a list of entries")
     try:
         return [ResourceEntry.model_validate(item) for item in items]
     except ValidationError as exc:
-        raise ResourceBridgeError(f"ix resources ls entry failed validation: {exc}") from exc
+        raise ResourceBridgeError(f"{_DEFAULT_BIN} list entry failed validation: {exc}") from exc
 
 
 async def list_resources(peers: Sequence[str] | None = None) -> list[ResourceEntry]:
-    """List federated resources via ``ix resources ls --json``.
+    """List federated resources via ``ix-resource-cli list``.
 
     ``peers`` defaults to :func:`configured_peers` (``IX_RESOURCE_PEERS``); pass an
     explicit list to override. Each peer becomes a ``--peer <url>`` flag; an empty
-    list runs ``ix resources ls`` with no peer flag (local-only).
+    list runs ``ix-resource-cli list`` with no peer flag (an empty federation).
 
-    Degrades gracefully: returns ``[]`` (and logs) when ``ix`` is not installed or
-    the command exits nonzero -- it never raises for an absent/unhealthy CLI, so a
-    ``resources/list`` always answers. A *successful* command with a malformed
-    JSON body still raises (that is a real contract violation, not a missing tool).
+    Degrades gracefully: returns ``[]`` (and logs) when the CLI is not installed
+    or the command exits nonzero -- it never raises for an absent/unhealthy CLI,
+    so a ``resources/list`` always answers. A *successful* command with a
+    malformed JSON body still raises (that is a real contract violation, not a
+    missing tool).
     """
     if peers is None:
         peers = configured_peers()
-    args = ["resources", "ls", "--json", *_peer_flags(peers)]
+    args = ["list", *_peer_flags(peers)]
     try:
-        rc, stdout, stderr = await _run_ix(args)
+        rc, stdout, stderr = await _run_cli(args)
     except FileNotFoundError:
-        logger.info("ix CLI not on PATH; federated resources/list is empty")
+        logger.info("%s not on PATH; federated resources/list is empty", _DEFAULT_BIN)
         return []
     except ResourceBridgeError as exc:
-        logger.warning("ix resources ls failed: %s", exc)
+        logger.warning("%s list failed: %s", _DEFAULT_BIN, exc)
         return []
     if rc != 0:
-        logger.warning("ix resources ls exited %d: %s", rc, stderr.strip() or stdout.strip())
+        logger.warning("%s list exited %d: %s", _DEFAULT_BIN, rc, stderr.strip() or stdout.strip())
         return []
     return _parse_entries(stdout)
 
@@ -327,40 +330,40 @@ class _PeerProbeFailures:
 
 
 async def _get_snapshot(uri: str, peer_url: str) -> ResourceSnapshot:
-    """Probe one peer for ``uri`` via ``ix resources get <uri> --peer <url> --json``.
+    """Probe one peer for ``uri`` via ``ix-resource-cli get <uri> --peer <url>``.
 
     Returns the parsed snapshot, or raises :class:`ResourceNotFoundError` when that
     peer does not advertise the uri (so the caller can try the next peer), and
     :class:`ResourceBridgeError` for any other failure against this peer.
     """
-    args = ["resources", "get", uri, "--json", "--peer", peer_url]
+    args = ["get", uri, "--peer", peer_url]
     try:
-        rc, stdout, stderr = await _run_ix(args)
+        rc, stdout, stderr = await _run_cli(args)
     except FileNotFoundError as exc:
-        raise ResourceBridgeError("ix CLI not found on PATH; cannot read federated resource") from exc
+        raise ResourceBridgeError(f"{_DEFAULT_BIN} not found on PATH; cannot read federated resource") from exc
     if rc != 0:
         message = stderr.strip() or stdout.strip()
         if _looks_not_found(message):
             raise ResourceNotFoundError(f"unknown resource: {uri}")
-        raise ResourceBridgeError(f"ix resources get {uri} exited {rc}: {message}")
+        raise ResourceBridgeError(f"{_DEFAULT_BIN} get {uri} exited {rc}: {message}")
     text = stdout.strip()
     if not text:
         raise ResourceNotFoundError(f"unknown resource: {uri}")
     try:
         payload = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise ResourceBridgeError(f"ix resources get returned invalid JSON: {exc}") from exc
+        raise ResourceBridgeError(f"{_DEFAULT_BIN} get returned invalid JSON: {exc}") from exc
     try:
         return ResourceSnapshot.model_validate(payload)
     except ValidationError as exc:
-        raise ResourceBridgeError(f"ix resources get snapshot failed validation: {exc}") from exc
+        raise ResourceBridgeError(f"{_DEFAULT_BIN} get snapshot failed validation: {exc}") from exc
 
 
 async def read_resource(uri: str, peer: str | None = None) -> tuple[str, str]:
     """Read a snapshot of ``uri``, resolving a real peer endpoint URL.
 
     Returns ``(text, mime)``. With an explicit ``peer`` (a full endpoint URL) the
-    bridge runs one ``ix resources get <uri> --peer <url> --json``. Otherwise it
+    bridge runs one ``ix-resource-cli get <uri> --peer <url>``. Otherwise it
     iterates the configured peer URLs (``IX_RESOURCE_PEERS``), probing each until
     one advertises the uri.
 
@@ -402,6 +405,10 @@ def _looks_not_found(message: str) -> bool:
       message also mentions a resource, so a shell ``"command not found"`` or an
       ``"unknown peer"`` / ``"unknown flag"`` (a config/transport error) is NOT
       swallowed as a resource-not-found.
+
+    ``ix-resource-cli`` reports an absent resource as a nonzero exit whose stderr
+    JSON error line contains ``resource not found: <uri>``, which the first
+    phrase list matches.
     """
     lowered = message.lower()
     resource_phrases = ("resource not found", "no such resource", "unknown resource")
@@ -414,11 +421,11 @@ def _looks_not_found(message: str) -> bool:
 async def _resolve_peer_for(uri: str, peers: Sequence[str]) -> str:
     """Return the single peer URL (from ``peers``) that advertises ``uri``.
 
-    Probes each candidate with ``ix resources get`` (a single explicit ``peers``
-    list short-circuits to that one URL without a probe -- an explicit ``peer=``
-    is the caller's assertion). Raises :class:`ResourceNotFoundError` when no peer
-    advertises the uri, so ``act`` never sends keystrokes to a peer that does not
-    own the resource.
+    Probes each candidate with ``ix-resource-cli get`` (a single explicit
+    ``peers`` list short-circuits to that one URL without a probe -- an explicit
+    ``peer=`` is the caller's assertion). Raises :class:`ResourceNotFoundError`
+    when no peer advertises the uri, so ``act`` never sends keystrokes to a peer
+    that does not own the resource.
     """
     if len(peers) == 1:
         return peers[0]
@@ -436,13 +443,13 @@ async def _resolve_peer_for(uri: str, peers: Sequence[str]) -> str:
 
 
 async def act(uri: str, send_keys: str, peer: str | None = None) -> dict[str, object]:
-    """Drive a resource: ``ix resources act <uri> --send-keys <s> --peer <url>``.
+    """Drive a resource: ``ix-resource-cli act <uri> --send-keys <s> --peer <url>``.
 
     Resolves a real peer endpoint URL the same way :func:`read_resource` does. With
     an explicit ``peer`` (a full endpoint URL) the bridge acts against it directly.
     Otherwise it first probes the configured peer URLs (``IX_RESOURCE_PEERS``) with
-    ``ix resources get`` to find the *one* peer that advertises the uri, then sends
-    the keys only to that peer -- so keystrokes never land on the wrong host.
+    ``ix-resource-cli get`` to find the *one* peer that advertises the uri, then
+    sends the keys only to that peer -- so keystrokes never land on the wrong host.
 
     Returns the parsed Ack as a plain dict (the agent-facing tool hands it back
     verbatim). Raises :class:`ResourceNotFoundError` for an unknown uri (-> -32002,
@@ -453,16 +460,16 @@ async def act(uri: str, send_keys: str, peer: str | None = None) -> dict[str, ob
     if not peers:
         raise _no_peer_error("act on", uri)
     peer_url = await _resolve_peer_for(uri, peers)
-    args = ["resources", "act", uri, "--send-keys", send_keys, "--json", "--peer", peer_url]
+    args = ["act", uri, "--send-keys", send_keys, "--peer", peer_url]
     try:
-        rc, stdout, stderr = await _run_ix(args)
+        rc, stdout, stderr = await _run_cli(args)
     except FileNotFoundError as exc:
-        raise ResourceBridgeError("ix CLI not found on PATH; cannot act on federated resource") from exc
+        raise ResourceBridgeError(f"{_DEFAULT_BIN} not found on PATH; cannot act on federated resource") from exc
     if rc != 0:
         message = stderr.strip() or stdout.strip()
         if _looks_not_found(message):
             raise ResourceNotFoundError(f"unknown resource: {uri}")
-        raise ResourceBridgeError(f"ix resources act {uri} exited {rc}: {message}")
+        raise ResourceBridgeError(f"{_DEFAULT_BIN} act {uri} exited {rc}: {message}")
     text = stdout.strip()
     if not text:
         # An empty body on success is a bare ack.
@@ -470,11 +477,11 @@ async def act(uri: str, send_keys: str, peer: str | None = None) -> dict[str, ob
     try:
         payload = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise ResourceBridgeError(f"ix resources act returned invalid JSON: {exc}") from exc
+        raise ResourceBridgeError(f"{_DEFAULT_BIN} act returned invalid JSON: {exc}") from exc
     try:
         ack = Ack.model_validate(payload)
     except ValidationError as exc:
-        raise ResourceBridgeError(f"ix resources act ack failed validation: {exc}") from exc
+        raise ResourceBridgeError(f"{_DEFAULT_BIN} act ack failed validation: {exc}") from exc
     # Return the parsed-and-revalidated payload (named fields plus anything the CLI
     # added, since the agent may want the extras) rather than only the typed subset.
     merged: dict[str, object] = dict(payload) if isinstance(payload, dict) else {}

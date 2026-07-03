@@ -601,7 +601,7 @@ mcp._mcp_server.read_resource()(_read_resource_handler)
         "'C-c'). `peer` is an optional full endpoint URL (e.g. "
         "'https://<addr>/rpc') targeting one peer directly; omit it to probe the "
         "configured peers (IX_RESOURCE_PEERS) for the one advertising the uri. "
-        "Bridges to `ix resources act` and degrades clearly when `ix` is absent."
+        "Bridges to `ix-resource-cli act` and degrades clearly when the CLI is absent."
     ),
 )
 async def tui_act(

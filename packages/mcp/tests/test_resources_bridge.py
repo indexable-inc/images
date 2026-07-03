@@ -1,12 +1,14 @@
 """Network-free tests for the federated-resources bridge.
 
-These never reach a real ``ix`` or a peer. Two strategies prove every path:
+These never reach a real ``ix-resource-cli`` or a peer. Two strategies prove
+every path:
 
-* A **stub ``ix`` script** put on ``PATH`` (via ``IX_RESOURCES_BIN``) that emits
-  known JSON or a chosen exit code, so the real ``asyncio`` subprocess path --
-  argv assembly, JSON parse, not-found detection -- is exercised end to end.
+* A **stub ``ix-resource-cli`` script** put on ``PATH`` (via
+  ``IX_RESOURCES_BIN``) that emits known JSON or a chosen exit code, so the real
+  ``asyncio`` subprocess path -- argv assembly, JSON parse, not-found detection
+  -- is exercised end to end.
 * For the **graceful-absent** case, point ``IX_RESOURCES_BIN`` at a nonexistent
-  path so the PATH lookup fails exactly as it would with no ``ix`` installed.
+  path so the PATH lookup fails exactly as it would with no CLI installed.
 
 The module shape (exports, full annotations matching the ruff ANN gate) is
 checked too.
@@ -34,8 +36,8 @@ if str(_PKG_PARENT) not in sys.path:
 from ix_notebook_mcp import resources_bridge as rb
 
 # The `stub_ix` fixture hands back a factory: call it with a shell body, get the
-# path to the stub `ix` it installed on PATH. A precise alias keeps the test
-# signatures free of bare `Any` (the repo's ANN401 gate bans it).
+# path to the stub `ix-resource-cli` it installed on PATH. A precise alias keeps
+# the test signatures free of bare `Any` (the repo's ANN401 gate bans it).
 StubIx = Callable[[str], Path]
 
 
@@ -80,20 +82,20 @@ def test_configured_peers_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Stub-ix harness: a real script on PATH so the subprocess path runs for real.
+# Stub-CLI harness: a real script on PATH so the subprocess path runs for real.
 # ---------------------------------------------------------------------------
 
 
 def _write_stub_ix(tmp_path: Path, body: str) -> Path:
-    """Write an executable stub ``ix`` whose behaviour is the given shell body.
+    """Write an executable stub ``ix-resource-cli`` with the given shell body.
 
     The body can read ``$@`` (the args after the binary) and write JSON to stdout
     or a message to stderr with a chosen exit code, standing in for the real CLI.
     """
-    script = tmp_path / "ix"
+    script = tmp_path / "ix-resource-cli"
     # Resolve bash's absolute path for the shebang: the nix build sandbox has no
     # /usr/bin/env (and no /bin/sh), so a `#!/usr/bin/env bash` stub would fail
-    # to exec there ("ix not found"). bash is on PATH via the check's
+    # to exec there ("not found"). bash is on PATH via the check's
     # nativeBuildInputs, so shutil.which finds its store path.
     bash = shutil.which("bash") or "/bin/bash"
     script.write_text(f"#!{bash}\n" + body)
@@ -169,9 +171,9 @@ def test_list_resources_peer_flags_reach_cli(monkeypatch: pytest.MonkeyPatch, tm
     monkeypatch.setenv(rb._IX_BIN_ENV, str(script))
     asyncio.run(rb.list_resources(["http://p1", "http://p2"]))
     args = argfile.read_text().split("\n")
-    assert "resources" in args
-    assert "ls" in args
-    assert "--json" in args
+    assert args[0] == "list"  # the CLI's verb, with no `resources` prefix
+    assert "resources" not in args
+    assert "--json" not in args  # the CLI is always machine-readable
     assert args.count("--peer") == 2
     assert "http://p1" in args
     assert "http://p2" in args
@@ -244,15 +246,15 @@ def test_read_resource_explicit_peer_wins(monkeypatch: pytest.MonkeyPatch, tmp_p
 
 
 def _multi_peer_stub_body(argfile: Path, owner_url: str) -> str:
-    """A stub `ix` body that advertises a uri on exactly ONE peer URL.
+    """A stub CLI body that advertises a uri on exactly ONE peer URL.
 
-    It reads the ``--peer`` value out of ``$@`` and, for ``resources get``, emits a
+    It reads the ``--peer`` value out of ``$@`` and, for ``get``, emits a
     snapshot only when that value equals ``owner_url`` -- otherwise it exits 1 with
-    a resource-not-found message. For ``resources act`` it acks only for the owner.
+    a resource-not-found message. For ``act`` it acks only for the owner.
     This makes the per-peer iteration observable: the bridge must skip the peers
     that 404 and land on the owner. Each invocation logs ONE line
-    ``<subcommand>\\t<peer>`` to ``argfile``, so a test can assert exactly which
-    (subcommand, peer) pairs ran -- e.g. that ``act`` only ever hit the owner.
+    ``<verb>\\t<peer>`` to ``argfile``, so a test can assert exactly which
+    (verb, peer) pairs ran -- e.g. that ``act`` only ever hit the owner.
     """
     return f"""
 peer=""
@@ -260,7 +262,7 @@ sub=""
 prev=""
 for a in "$@"; do
   if [ "$prev" = "--peer" ]; then peer="$a"; fi
-  case "$a" in get|act|ls) [ -z "$sub" ] && sub="$a" ;; esac
+  case "$a" in get|act|list) [ -z "$sub" ] && sub="$a" ;; esac
   prev="$a"
 done
 printf "%s\\t%s\\n" "$sub" "$peer" >> {argfile}
@@ -304,7 +306,7 @@ sub=""
 prev=""
 for a in "$@"; do
   if [ "$prev" = "--peer" ]; then peer="$a"; fi
-  case "$a" in get|act|ls) [ -z "$sub" ] && sub="$a" ;; esac
+  case "$a" in get|act|list) [ -z "$sub" ] && sub="$a" ;; esac
   prev="$a"
 done
 printf "%s\\t%s\\n" "$sub" "$peer" >> {argfile}
@@ -425,7 +427,7 @@ def test_read_resource_other_failure_is_bridge_error(stub_ix: StubIx) -> None:
     [
         "command not found",  # a wrapper/shell error, not a missing resource
         "unknown peer http://p1",  # a transport/config error
-        "unknown flag: --json",  # a CLI usage error
+        "unknown flag: --frobnicate",  # a CLI usage error
         "connection refused",
     ],
 )
@@ -445,7 +447,7 @@ def test_looks_not_found_classification() -> None:
     assert rb._looks_not_found("the resource does not exist")
     assert not rb._looks_not_found("command not found")
     assert not rb._looks_not_found("unknown peer")
-    assert not rb._looks_not_found("unknown flag --json")
+    assert not rb._looks_not_found("unknown flag --frobnicate")
 
 
 def test_read_resource_missing_ix_raises_bridge_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
