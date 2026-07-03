@@ -31,7 +31,7 @@ use smithay::reexports::wayland_server::{Display, DisplayHandle};
 use smithay::utils::{SERIAL_COUNTER, Transform};
 use smithay::wayland::compositor::{
     CompositorClientState, CompositorState, SurfaceAttributes, TraversalAction,
-    with_surface_tree_downward,
+    send_surface_state, with_states, with_surface_tree_downward,
 };
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::pointer_constraints::{
@@ -94,10 +94,18 @@ struct Pane {
     watchdog_ticks: u32,
     title: String,
     app_id: String,
+    /// Logical (surface-coordinate) min/max from the last commit; converted
+    /// to buffer pixels at `announced_scale` on the wire.
     min: Option<(u32, u32)>,
     max: Option<(u32, u32)>,
     /// Buffer scale of the last commit (forwarded in `WindowNew`).
     scale: u32,
+    /// The scale `WindowNew` carried on the current connection: the fixed
+    /// unit for this window's wire min/max (protocol contract). Kept apart
+    /// from `scale` because a client may change buffer scale mid-connection
+    /// (e.g. re-render 2x after the host's Hello raised the output scale)
+    /// and the wire has no per-window scale update to tell the host.
+    announced_scale: u32,
 }
 
 impl Pane {
@@ -116,6 +124,7 @@ impl Pane {
             min: None,
             max: None,
             scale: 1,
+            announced_scale: 1,
         }
     }
 }
@@ -257,7 +266,9 @@ fn listen_spec(cli: &Cli) -> ListenSpec {
 
 impl App {
     fn new(dh: &DisplayHandle, cli: &Cli) -> Self {
-        let compositor_state = CompositorState::new::<Self>(dh);
+        // v6: wl_surface.preferred_buffer_scale tells HiDPI-aware clients
+        // their scale directly (see send_preferred_scale).
+        let compositor_state = CompositorState::new_v6::<Self>(dh);
         let xdg_shell_state = XdgShellState::new::<Self>(dh);
         let decoration_state = XdgDecorationState::new::<Self>(dh);
         // No extra formats beyond the mandatory ARGB8888/XRGB8888: those are
@@ -287,7 +298,12 @@ impl App {
         seat.add_pointer();
 
         // One virtual output. Refresh/scale get overwritten by the host's
-        // Hello; until then a bland 60Hz/1x default.
+        // Hello; until then a bland 60Hz/1x default. Every toplevel enters
+        // this output on map (see `new_toplevel`): wl_output.scale only
+        // applies to outputs a surface entered, so without the enter a
+        // Retina host's scale-2 advertisement would reach no client and
+        // everything would render 1x (measured: GLFW/Minecraft and the
+        // weston demos stay at buffer scale 1 without it).
         let output = Output::new(
             "panes".into(),
             PhysicalProperties {
@@ -386,6 +402,17 @@ impl App {
             .map(|idx| self.panes[idx].toplevel.wl_surface().clone())
     }
 
+    /// Tell one surface the scale it should render at, both ways Wayland can
+    /// say it: `wl_surface.preferred_buffer_scale` (v6, per surface, what
+    /// modern toolkits watch) rides on top of the output scale + enter that
+    /// covers older clients. smithay dedups, so re-sends are free.
+    fn send_preferred_scale(&self, surface: &WlSurface) {
+        let scale = self.output.current_scale().integer_scale();
+        with_states(surface, |states| {
+            send_surface_state(surface, states, scale, Transform::Normal);
+        });
+    }
+
     /// Try to move one frame onto the wire for `panes[idx]`, announcing the
     /// window first if this connection has not seen it. When there is
     /// nothing to send, release the window's frame callbacks instead: no
@@ -411,6 +438,10 @@ impl App {
             return;
         }
         if !pane.announced {
+            // This connection's WindowNew scale is the unit every later
+            // WindowMinMax for this window is converted at (the host divides
+            // by it; there is no per-window scale update message).
+            pane.announced_scale = pane.scale;
             host.send(ToHost::WindowNew {
                 id: pane.id,
                 title: pane.title.clone(),
@@ -422,8 +453,8 @@ impl App {
             if pane.min.is_some() || pane.max.is_some() {
                 host.send(ToHost::WindowMinMax {
                     id: pane.id,
-                    min: pane.min,
-                    max: pane.max,
+                    min: wire_bounds(pane.min, pane.announced_scale),
+                    max: wire_bounds(pane.max, pane.announced_scale),
                 });
             }
             pane.announced = true;
@@ -585,6 +616,13 @@ impl App {
             host.scale = scale.max(1);
             host.minor = minor;
         }
+        // The output scale just changed for clients that mapped before the
+        // host connected (guest apps autostart at boot, the host attaches
+        // later): re-advertise per surface so v6 clients re-render at the
+        // host's real scale.
+        for pane in &self.panes {
+            self.send_preferred_scale(pane.toplevel.wl_surface());
+        }
         for idx in 0..self.panes.len() {
             self.pump(idx);
         }
@@ -633,9 +671,13 @@ impl App {
         // the window's scale or a Retina client that honors the advertised
         // output scale renders a buffer scale^2 the drawable. div_ceil keeps a
         // stray pixel row covered rather than letterboxed.
-        // TODO(index#1686): wl_output's scale is still global (from Hello);
-        // honoring a per-window scale that differs from it needs
-        // wp_fractional_scale or per-surface preferred scale.
+        // Scale advertisement stays global (wl_output + preferred_buffer_scale
+        // both derive from Hello): a per-window Configure scale that differs
+        // (window dragged to a non-Retina external display) is not re-echoed
+        // per surface, so that window's content is host-rescaled until it
+        // returns. Fractional scale is out of scope by design: macOS backing
+        // factors are 1 or 2, and wp_fractional_scale would buy softness at
+        // readback bandwidth the vsock budget cannot spare.
         let scale = scale.max(1);
         let size_valid = width > 0 && height > 0;
         self.panes[idx].toplevel.with_pending_state(|state| {
@@ -808,6 +850,13 @@ impl App {
             fire_frame_callbacks(popup.wl_surface(), now);
         }
     }
+}
+
+/// Logical min/max -> wire buffer pixels at `scale` (saturating: a hostile
+/// client-supplied size must not overflow, and `u32::MAX` is "unbounded"
+/// anyway).
+fn wire_bounds(bounds: Option<(u32, u32)>, scale: u32) -> Option<(u32, u32)> {
+    bounds.map(|(w, h)| (w.saturating_mul(scale), h.saturating_mul(scale)))
 }
 
 /// Host-provided u32s land in i32-typed smithay fields. Clamp before the

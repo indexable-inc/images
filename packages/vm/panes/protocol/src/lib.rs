@@ -83,16 +83,22 @@ pub enum ToHost {
         app_id: String,
         width: u32,
         height: u32,
-        /// Buffer scale the guest renders at (host `backingScaleFactor` echoed
-        /// back through `ToGuest::Configure`).
+        /// Buffer scale the guest renders at when this window was announced
+        /// (the host `backingScaleFactor` echoed back through
+        /// `ToGuest::Configure` when the client honors it, 1 for a
+        /// scale-blind client). Also the fixed unit for this window's
+        /// `WindowMinMax` sizes: a client that changes buffer scale
+        /// mid-connection changes only its frame dimensions, there is no
+        /// per-window scale update message.
         scale: u32,
     },
     WindowTitle {
         id: WindowId,
         title: String,
     },
-    /// Sizes are buffer pixels at the scale from `WindowNew`/`Configure`
-    /// (the host divides by scale for `NSWindow` `contentMin/MaxSize` points).
+    /// Sizes are buffer pixels at the scale this connection's `WindowNew`
+    /// carried (the host divides by that scale for `NSWindow`
+    /// `contentMin/MaxSize` points), NOT the current buffer scale.
     WindowMinMax {
         id: WindowId,
         min: Option<(u32, u32)>,

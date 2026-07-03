@@ -115,10 +115,7 @@ impl CompositorHandler for App {
         }
 
         // Only the toplevel's own buffer becomes window content; subsurface
-        // pixels are not composited yet (README: known gaps). Buffer intake
-        // must run before the min/max sync: it updates `pane.scale`, and a
-        // commit that changes buffer_scale would otherwise ship WindowMinMax
-        // converted at the stale scale.
+        // pixels are not composited yet (README: known gaps).
         if *surface == root {
             self.intake_buffer(idx);
         }
@@ -139,21 +136,24 @@ impl CompositorHandler for App {
 
 impl App {
     /// `xdg_toplevel` min/max live in double-buffered surface state, not in a
-    /// dedicated event, so they are re-read on every commit and diffed. The
-    /// xdg values are logical; the wire wants buffer pixels at the window's
-    /// current scale (the host divides by scale for `NSWindow` min/max points).
+    /// dedicated event, so they are re-read on every commit and diffed
+    /// (logically: a buffer-scale change with the same logical bounds is not
+    /// a change). The xdg values are logical; the wire wants buffer pixels at
+    /// the scale this connection's `WindowNew` carried (the host divides by
+    /// that same scale for `NSWindow` min/max points), NOT the current buffer
+    /// scale: a client that re-renders 2x after Hello raised the output scale
+    /// would otherwise double its min/max points host-side.
     // significant_drop_tightening misfires here: the guard is dropped right
     // after its two field reads already, and the suggested
     // `get::<_>().current()` chain borrows a temporary and does not compile.
     #[allow(clippy::significant_drop_tightening)]
     fn sync_min_max(&mut self, idx: usize, root: &WlSurface) {
-        let scale = self.panes[idx].scale.max(1);
         let mm = with_states(root, |states| {
             let mut guard = states.cached_state.get::<SurfaceCachedState>();
             let current = guard.current();
             SizeBounds {
-                min: size_to_opt(current.min_size, scale),
-                max: size_to_opt(current.max_size, scale),
+                min: size_to_opt(current.min_size),
+                max: size_to_opt(current.max_size),
             }
         });
         let pane = &mut self.panes[idx];
@@ -167,8 +167,8 @@ impl App {
         {
             host.send(ToHost::WindowMinMax {
                 id: pane.id,
-                min: pane.min,
-                max: pane.max,
+                min: super::wire_bounds(pane.min, pane.announced_scale),
+                max: super::wire_bounds(pane.max, pane.announced_scale),
             });
         }
     }
@@ -294,22 +294,22 @@ fn copy_shm(ptr: *const u8, len: usize, data: &BufferData) -> Option<CopiedFrame
     })
 }
 
-/// Min/max as the wire wants them: `None` = unconstrained (xdg uses 0).
+/// Logical min/max bounds: `None` = unconstrained (xdg uses 0).
 struct SizeBounds {
     min: Option<(u32, u32)>,
     max: Option<(u32, u32)>,
 }
 
-/// Logical xdg size -> buffer pixels at `scale` (saturating: a hostile
-/// client-supplied size must not overflow, and `u32::MAX` is "unbounded"
-/// anyway).
-fn size_to_opt(size: Size<i32, smithay::utils::Logical>, scale: u32) -> Option<(u32, u32)> {
+/// Logical xdg size as an optional bound (`None` = unconstrained, xdg uses 0).
+/// Stays logical here; the wire conversion happens at send time with
+/// [`super::wire_bounds`].
+fn size_to_opt(size: Size<i32, smithay::utils::Logical>) -> Option<(u32, u32)> {
     if size.w <= 0 || size.h <= 0 {
         return None;
     }
     let w = u32::try_from(size.w).expect("checked positive");
     let h = u32::try_from(size.h).expect("checked positive");
-    Some((w.saturating_mul(scale), h.saturating_mul(scale)))
+    Some((w, h))
 }
 
 struct BufferIntake {
@@ -417,6 +417,13 @@ impl XdgShellHandler for App {
             state.decoration_mode = Some(zxdg_toplevel_decoration_v1::Mode::ServerSide);
             state.bounds = Some(super::VIRTUAL_SIZE.into());
         });
+        // Enter the virtual output before the first configure:
+        // wl_output.scale only applies to outputs a surface entered, so
+        // skipping this leaves every client at buffer scale 1 (blurry 1x
+        // stretched over the Retina drawable). smithay replays the enter to
+        // wl_output resources the client binds later, so ordering is safe.
+        self.output.enter(surface.wl_surface());
+        self.send_preferred_scale(surface.wl_surface());
         let id = self.next_window_id;
         self.next_window_id += 1;
         debug!(id, "new toplevel");
@@ -454,6 +461,7 @@ impl XdgShellHandler for App {
             return;
         };
         let pane = self.panes.remove(idx);
+        self.output.leave(pane.toplevel.wl_surface());
         debug!(id = pane.id, "toplevel destroyed");
         if pane.announced
             && let Some(host) = &self.host

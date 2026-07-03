@@ -189,8 +189,9 @@ pub struct PaneWindow {
     _win_delegate: Retained<WinDelegate>,
     _link_delegate: Retained<LinkDelegate>,
     surface: Option<Surface>,
-    /// Guest render scale from `WindowNew`, used to convert protocol pixel
-    /// sizes to window points.
+    /// Scale from `WindowNew`: the fixed unit for this window's protocol
+    /// min/max sizes (protocol contract; the guest converts `WindowMinMax`
+    /// at the same announced scale even if the client rescales later).
     guest_scale: u32,
     pending_ack: Option<u64>,
     dirty: bool,
@@ -395,6 +396,27 @@ impl PaneWindow {
         let Some(surface) = self.surface.as_mut() else {
             unreachable!("unpresentable path returned above");
         };
+
+        // A frame that mismatches the drawable presents scaled (the render
+        // pass samples, it never crops), which must never happen silently:
+        // transiently fine mid-resize (the guest's matching frame is in
+        // flight; live resize is skipped because there per-tick mismatch is
+        // the norm), but persistent for a client whose buffer scale differs
+        // from the window's backing scale (a 1x-only client on Retina renders
+        // soft). Once per buffer size change, so a steady stream stays quiet.
+        if fresh_surface && !self.view.inLiveResize() {
+            let drawable = self.layer.drawableSize();
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let (dw, dh) =
+                (drawable.width.round().max(0.0) as u32, drawable.height.round().max(0.0) as u32);
+            if (width, height) != (dw, dh) {
+                eprintln!(
+                    "panes-host: window {}: {width}x{height} frame scaled onto {dw}x{dh} \
+                     drawable (guest buffer scale != window backing scale?)",
+                    self.id
+                );
+            }
+        }
 
         let in_bounds = |rect: Rect| {
             rect.w > 0
