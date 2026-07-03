@@ -30,7 +30,10 @@ env:
   # 28657772825 lost the cross-IFD `cargo-vendor-dir` root exactly this way,
   # leaving Darwin consumers unable to eval cross packages (#1711). Falling
   # back to a source build keeps every root publishable regardless of cache
-  # health.
+  # health. Remove once indexable-inc/ix#6139 closes with the cache serving
+  # verified-complete NARs (the migrate-guard root cause already landed in
+  # indexable-inc/ix#6149); the fallback-detection warning in the realise
+  # phase below goes with it.
   NIX_CONFIG: |-
     experimental-features = nix-command flakes ca-derivations
     accept-flake-config = true
@@ -151,6 +154,24 @@ jobs:
               done < "$workdir/realise.err" | sort -u | head -n 20
             }
           phase realise "$realise_t"
+
+          # `fallback = true` engages silently: nix rebuilds a failed
+          # substitute from source with no distinct log line, so a degraded
+          # cache would surface only as slower runs. Every substitution
+          # failure does leave a download-error line in realise.err even when
+          # the realise itself then succeeds; count those and warn loudly.
+          # Pure bash (no grep on the runner PATH), same as the error loop
+          # above.
+          fallback_hits=0
+          while IFS= read -r line; do
+            case $line in
+              *"Transferred a partial file"* | *"unable to download"* | *"some substitutes for the outputs"*)
+                fallback_hits=$(( fallback_hits + 1 )) ;;
+            esac
+          done < "$workdir/realise.err"
+          if [ "$fallback_hits" -gt 0 ]; then
+            echo "::warning::cache-push: $fallback_hits substitution-failure line(s) during realise; nix fell back to source builds (cache health degraded, see indexable-inc/ix#6139)"
+          fi
 
           if [ -s "$outs" ]; then
             push_t=$SECONDS
