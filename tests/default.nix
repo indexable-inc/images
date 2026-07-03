@@ -2163,6 +2163,60 @@
     cfg = config.ix.profiles.base;
   };
 
+  # Regression fence for the guest-nix-slowness bug family (ix #1748/#1749/#1815):
+  # the image must ship a nix store DB that registers the pinned nixpkgs source as
+  # VALID. #1749 locked the registry pin's narHash, but narHash only short-circuits
+  # re-ingest for a path nix already considers valid; the OCI image baked no store
+  # DB at all, so the pinned source (present in the image) read as invalid and the
+  # first in-VM `nix` command re-copied the ~45k-file tree through VCFS (5m40s).
+  # `includeNixDB = true` (oci-layer.nix) fixes it by baking db.sqlite via
+  # closureInfo + `nix-store --load-db` into the customisation layer, which
+  # oci-image-builder copies verbatim. This check builds the real base OCI archive
+  # and asserts db.sqlite registers the nixpkgs source as valid, so it also proves
+  # the DB survives oci-image-builder's re-streaming. It builds an OCI image, so it
+  # is its own check (not the pure-eval `eval` aggregate) and runs on Linux.
+  baseImageNixDb =
+    pkgs.runCommand "ix-test-base-image-nix-db" {
+      nativeBuildInputs = [
+        pkgs.gnutar
+        pkgs.sqlite
+        pkgs.gnugrep
+        pkgs.coreutils
+      ];
+      archive = base.imageConfig.ix.build.ociImage;
+      nixpkgsSource = nixpkgs.outPath;
+    } ''
+      mkdir extract db
+      # oci-image-builder writes uncompressed tar layers as blobs/sha256/<digest>.
+      # The nix store DB lives in the customisation layer; find whichever blob
+      # carries it and extract just that file.
+      tar -C extract -xf "$archive"
+      found=
+      for blob in extract/blobs/sha256/*; do
+        if tar -tf "$blob" 2>/dev/null | grep -qx './nix/var/nix/db/db.sqlite'; then
+          tar -C db -xf "$blob" ./nix/var/nix/db/db.sqlite
+          found=1
+          break
+        fi
+      done
+      if [ -z "$found" ]; then
+        echo "error: no OCI layer contains nix/var/nix/db/db.sqlite; the image ships no store DB (includeNixDB off?)" >&2
+        exit 1
+      fi
+      dbfile=db/nix/var/nix/db/db.sqlite
+      # The pinned nixpkgs source must be a VALID path in the shipped DB, or the
+      # guest re-ingests it on first eval.
+      count=$(sqlite3 "$dbfile" \
+        "SELECT count(*) FROM ValidPaths WHERE path = '$nixpkgsSource';")
+      if [ "$count" != "1" ]; then
+        echo "error: nixpkgs source $nixpkgsSource is not registered valid in the image nix DB (found $count rows)" >&2
+        echo "ValidPaths sample:" >&2
+        sqlite3 "$dbfile" "SELECT path FROM ValidPaths LIMIT 20;" >&2
+        exit 1
+      fi
+      mkdir -p "$out"
+    '';
+
   # --- Language helpers -----------------------------------------------------
 
   languages = {
@@ -5494,6 +5548,7 @@ in {
   sdkPythonStrict = sdkPython.strictCheck;
   portableServices = portableServicesTest;
   minecraftBlocksVm = minecraftBlocksVmTest;
+  inherit baseImageNixDb;
 
   # Aggregate. Pulls every group test into one derivation so
   # `nix flake check` covers the whole suite.

@@ -82,10 +82,17 @@
         maxLayers = 67;
         contents = [systemRoot];
         config.Entrypoint = ["${toplevel}/init"];
-        # Include the nix database so store validity can be verified inside the image.
-        # This enables fast path validation without requiring a network lookup to the
-        # nixpkgs source. ix#6043: OCI image was missing this, causing VMs to timeout
-        # on first nix command.
+        # Bake `/nix/var/nix/db/db.sqlite` registering the whole closure as
+        # valid. Without it the guest boots with an empty store DB, so the
+        # nixpkgs source the registry pins (present in the image, valid nowhere)
+        # reads as invalid; nix's `narHash` short-circuit only skips re-ingest
+        # for a VALID path, so the first `nix run`/`nix eval` in a fresh VM
+        # re-copies the ~45k-file tree through VCFS: measured 5m40s first eval,
+        # ~1s once registered (2026-07-03). dockerTools runs closureInfo +
+        # `nix-store --load-db` at build time into the customisation layer,
+        # which oci-image-builder copies verbatim. ix#6043, index #1748/#1749/#1815.
+        # The `base-image-nix-db` check asserts the baked DB actually registers
+        # the nixpkgs source as valid (a bare db.sqlite is not enough).
         includeNixDB = true;
       };
 
@@ -121,17 +128,6 @@
       }
       ''
         oci-image-builder ${lib.escapeShellArgs (efficiencyArgs ++ ["${stream.passthru.conf}"])} "$out"
-
-        # Validate that the archive includes the nix database.
-        # This ensures VMs can verify store paths immediately without network roundtrips.
-        echo "Validating nix database inclusion..."
-        if tar -tf "$out" | grep -q 'db\.sqlite'; then
-          echo "✓ Database validation passed: db.sqlite found in OCI archive"
-        else
-          echo "ERROR: db.sqlite not found in OCI archive"
-          echo "This may indicate includeNixDB is not working correctly"
-          exit 1
-        fi
       '';
   };
 }

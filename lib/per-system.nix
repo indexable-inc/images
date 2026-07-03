@@ -967,6 +967,11 @@
           # pre-run at build time so the VM never needs the network; see
           # tests/minecraft-blocks-vm.nix.
           minecraft-blocks-vm = tests.minecraftBlocksVm;
+          # Builds the base OCI archive and asserts its baked nix store DB
+          # registers the pinned nixpkgs source as valid, so a fresh VM's first
+          # `nix` command does not re-copy the tree through VCFS (ix
+          # #1748/#1749/#1815). Its own check because it builds an image.
+          base-image-nix-db = tests.baseImageNixDb;
           # Skills and subagents are rendered live by the SessionStart hook.
           # This gate forces both materialized directories to build.
           agent-skills = pkgs.runCommand "agent-skills-check" {} ''
