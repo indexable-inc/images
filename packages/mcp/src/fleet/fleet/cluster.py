@@ -184,14 +184,18 @@ def _resolve_auto_target(budget: float = 1.5) -> tuple[str | None, str]:
 
     Split from :func:`connect` so the zero-config resolution is testable
     against a fake GCS listener without importing (or starting) Ray.
+
+    An AMBIGUOUS probe (several heads, i.e. several clusters) raises instead
+    of returning ``None``: the no-target fallback chain ends in a private
+    local Ray, and silently computing on one laptop in exactly the case where
+    the operator has two clusters to choose from is the worst possible guess
+    (index#1789 review). The operator must pick via ``IX_FLEET_RAY_ADDRESS``.
     """
     heads = _probe_ray_heads(budget=budget)
     if len(heads) == 1:
         return f"ray://{heads[0]}:{_ray_client_port()}", ""
     if heads:
-        # Two heads means two clusters; guessing would silently compute on the
-        # wrong one, so leave the choice to the operator.
-        return None, (
+        raise RuntimeError(
             f"tailnet probe found {len(heads)} Ray heads ({', '.join(heads)}); "
             "set IX_FLEET_RAY_ADDRESS to pick one"
         )
@@ -213,8 +217,11 @@ def connect(address: str | None = None, *, local: bool = False, **kw: Any) -> No
     which on a fleet node attaches to the local raylet. With ``local=True``, or
     if the target is unreachable, a private single-node Ray is started (with
     one loud stderr line saying so and why) so the same code still runs on a
-    box with no fleet. Safe to call repeatedly; the Ray-using functions here
-    call it for you.
+    box with no fleet. The one hard failure: a probe that finds SEVERAL Ray
+    heads raises (``RuntimeError`` naming every hit) rather than fall back --
+    a silent local Ray is the worst answer to "which of my clusters?"; set
+    ``IX_FLEET_RAY_ADDRESS`` to pick one. Safe to call repeatedly; the
+    Ray-using functions here call it for you.
     """
     import ray
 

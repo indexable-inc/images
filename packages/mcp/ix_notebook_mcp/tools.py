@@ -92,16 +92,13 @@ mcp = FastMCP("ix-mcp")
 _session_ids: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
-def _session_id(ctx: Context | None) -> str | None:
-    """The kernel-side namespace key for this call's MCP session, or None.
+def _http_session(ctx: Context | None) -> object | None:
+    """This call's live MCP session object under the HTTP transport, else None.
 
     Only the HTTP transport multiplexes several client sessions onto the one
-    shared kernel, so only there does each session get its own namespace (the
-    kernel runtime keys per-session globals on this id -- see
-    ``runtime._session_ns``). The stdio transport serves exactly one client per
-    process: its state stays in the shared user namespace, which is also what
-    session checkpoint/restore (``serve --session FILE``) covers, so that
-    contract is untouched.
+    shared kernel, so only there is the session object a useful key. The stdio
+    transport (and an embedder driving the tools directly, which has no config)
+    serves exactly one client per process, reported here as None.
     """
     try:
         if config().transport != "http":
@@ -110,10 +107,22 @@ def _session_id(ctx: Context | None) -> str | None:
         # No config (an embedder driving the tools directly): single client.
         return None
     try:
-        session = ctx.session if ctx is not None else None
+        return ctx.session if ctx is not None else None
     except ValueError:
         # No request context on this call.
-        session = None
+        return None
+
+
+def _session_id(ctx: Context | None) -> str | None:
+    """The kernel-side namespace key for this call's MCP session, or None.
+
+    Each HTTP session gets its own namespace (the kernel runtime keys
+    per-session globals on this id -- see ``runtime._session_ns``). The stdio
+    transport's state stays in the shared user namespace, which is also what
+    session checkpoint/restore (``serve --session FILE``) covers, so that
+    contract is untouched.
+    """
+    session = _http_session(ctx)
     if session is None:
         return None
     sid = _session_ids.get(session)
@@ -127,10 +136,33 @@ def _session_id(ctx: Context | None) -> str | None:
 # session label defaults to it (see runtime.Session). A latch, not per-call work.
 _client_identified = False
 _dashboard_started = False
-# Session key -> the label the client chose via `session_set_name`. Keys gate
-# the acting tools (a session must name itself once); the values are what the
+# The label each client chose via `session_set_name`. A set label gates the
+# acting tools (a session must name itself once); the labels are what the
 # tailnet `/mesh` endpoint advertises (index#1787), read via `session_names`.
-_named_sessions: dict[str, str] = {}
+# HTTP sessions are keyed WEAKLY by the live session object (like
+# `_session_ids` above), so a disconnected client's label vanishes with its
+# session instead of a long-lived `serve --http` advertising it forever
+# (index#1789 review). The one stdio/embedder client has no session object to
+# key on; its label lives in `_solo_session_name` and dies with the process.
+_session_labels: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_solo_session_name: str | None = None
+
+
+def _session_label(ctx: Context | None) -> str | None:
+    """The label this call's session chose, or None until it names itself."""
+    session = _http_session(ctx)
+    if session is None:
+        return _solo_session_name
+    return _session_labels.get(session)
+
+
+def _set_session_label(ctx: Context | None, name: str) -> None:
+    global _solo_session_name
+    session = _http_session(ctx)
+    if session is None:
+        _solo_session_name = name
+    else:
+        _session_labels[session] = name
 
 
 def session_names() -> list[str]:
@@ -141,7 +173,10 @@ def session_names() -> list[str]:
     tool-side map and are deliberately not included: the mesh card is the
     server's own view of its clients (index#1787).
     """
-    return sorted(set(_named_sessions.values()))
+    names = set(_session_labels.values())
+    if _solo_session_name:
+        names.add(_solo_session_name)
+    return sorted(names)
 
 
 async def _start_dashboard_once() -> None:
@@ -204,11 +239,6 @@ async def _identify_client_once(ctx: Context | None) -> None:
         await current_kernel().set_client(label)
 
 
-def _session_key(ctx: Context | None) -> str:
-    """Stable key for the MCP session that must explicitly name itself."""
-    return _session_id(ctx) or "__stdio__"
-
-
 def _session_name_required() -> bool:
     """Whether acting tools must be preceded by ``session_set_name``."""
     return os.environ.get("IX_MCP_REQUIRE_SESSION_NAME", "1").strip().lower() not in (
@@ -221,7 +251,7 @@ def _session_name_required() -> bool:
 
 async def _require_session_name(ctx: Context | None, *, intent: str | None = None) -> None:
     """Fail fast until this MCP session has named its dashboard group."""
-    if not _session_name_required() or _session_key(ctx) in _named_sessions:
+    if not _session_name_required() or _session_label(ctx) is not None:
         return
     suggestion = f" Suggested name from this call: {intent!r}." if intent else ""
     raise McpError(
@@ -324,7 +354,7 @@ async def session_set_name(
             )
         )
     await current_kernel().set_session_name(clean)
-    _named_sessions[_session_key(ctx)] = clean
+    _set_session_label(ctx, clean)
     return [outputs.text(f"dashboard session named: {clean}")]
 
 

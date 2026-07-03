@@ -569,10 +569,6 @@ async def _run(cfg: Config) -> None:
         await locked.wait()
 
     runner = await dashboard.start(cfg)
-    # Advertise this server on the tailnet mesh (`GET /mesh`, index#1787):
-    # default-on and best-effort -- no tailscale, an occupied port, or
-    # IX_MCP_MESH=0 log one line and skip, never blocking the MCP itself.
-    mesh_runner = await mesh.start(cfg, tools.session_names)
     # Always publish this server's runs/resources/namespace as panes into the
     # shared discovery dir; a single standalone `dashboard` (run separately,
     # `nix run .#dashboard`) renders every producer behind one stable URL.
@@ -589,6 +585,14 @@ async def _run(cfg: Config) -> None:
     # Bake the live URL into the MCP instructions before serving, so the client
     # gets it in the `initialize` response -- no tool call to discover it.
     tools.set_dashboard_url(url)
+    # Advertise this server on the tailnet mesh (`GET /mesh`, index#1787):
+    # default-on and best-effort -- no tailscale, an occupied port, or
+    # IX_MCP_MESH=0 log one line and skip, never blocking the MCP itself.
+    # Started only now, AFTER the hub-spawn decision resolved `url`, so the
+    # card advertises the URL a human can actually open (a failed auto hub
+    # falls back to the data API here, not to a dead pre-spawn hub URL --
+    # index#1789 review).
+    mesh_runner = await mesh.start(cfg, tools.session_names, url)
     if hub is not None:
         print(f"[ix-mcp] dashboard (all running things + output): {url}", file=sys.stderr, flush=True)
     else:

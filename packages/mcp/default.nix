@@ -5717,13 +5717,17 @@ let
   # the bundled `mesh` module's peer sweep against a STUB `tailscale` script
   # plus a real loopback server, and fleet.connect's zero-config Ray-head
   # probe against a fake GCS listener. asyncssh rides along because importing
-  # `fleet` pulls it; `bash` backs the stub script's shebang.
+  # `fleet` pulls it; `bash` backs the stub script's shebang. The session-label
+  # tests import `ix_notebook_mcp.tools`, whose import chain needs the mcp SDK
+  # (pydantic rides along) and nbformat (via `outputs`).
   meshTestPython = pkgs.python3.withPackages (ps: [
     ps.pytest
     ps.aiohttp
     ps.httpx
     ps.polars
     ps.asyncssh
+    ps.mcp
+    ps.nbformat
     ixNotebookMcpModule
     meshModule
     fleetModule

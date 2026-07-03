@@ -166,7 +166,12 @@ async def peers(timeout: float = 1.0) -> pl.DataFrame:
     # transport itself is encrypted), so no TLS verification ever happens --
     # and building the default SSL context needs a CA bundle that hermetic
     # environments (the nix sandbox) do not provide.
-    async with httpx.AsyncClient(timeout=timeout, verify=False) as client:  # noqa: S501 -- http-only client, see comment above
+    # trust_env=False: HTTP_PROXY/ALL_PROXY must never route these probes --
+    # tailnet CGNAT addresses are unreachable through a proxy (every probe
+    # would fail, and the sweep would leak tailnet IPs to it), and honoring a
+    # NO_PROXY exemption per box is exactly the zero-config burden the mesh
+    # exists to avoid (index#1789 review). Peers are dialed directly.
+    async with httpx.AsyncClient(timeout=timeout, verify=False, trust_env=False) as client:  # noqa: S501 -- http-only client, see comment above
 
         async def one(host: str, ip: str) -> dict[str, Any] | None:
             try:

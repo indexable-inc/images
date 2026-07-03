@@ -47,6 +47,7 @@ let
     mkIf
     mkOption
     mkPackageOption
+    optional
     optionalAttrs
     optionals
     types
@@ -182,6 +183,7 @@ let
   notebookEnv = {
     IX_MCP_DASHBOARD_PORT = toString cfg.execPort;
     IX_FLEET_EXEC_PORT = toString cfg.execPort;
+    IX_MCP_MESH_PORT = toString cfg.meshPort;
   }
   // optionalAttrs cfg.execTrustNetwork {
     IX_MCP_EXEC_TRUST_NETWORK = "1";
@@ -286,6 +288,19 @@ in
       '';
     };
 
+    meshPort = mkOption {
+      type = types.port;
+      default = 8798;
+      description = ''
+        Port the node's ix-mcp serves its tailnet `/mesh` discovery card on
+        (ix-mcp's DEFAULT_MESH_PORT). Exported to the engine as
+        `IX_MCP_MESH_PORT` so the service and the firewall rule below cannot
+        drift, and opened by {option}`services.ix-ray.openFirewall` when the
+        notebook engine runs -- a firewall that guards the tailscale interface
+        would otherwise silently blind mesh discovery.
+      '';
+    };
+
     objectStoreMemory = mkOption {
       type = types.nullOr types.ints.positive;
       default = null;
@@ -337,7 +352,8 @@ in
       default = false;
       description = ''
         Open the inter-node Ray ports (node/object manager, worker range), the
-        exec port, and on the head the GCS + client-server ports. Usually
+        exec port, the mesh discovery port (when the notebook engine runs),
+        and on the head the GCS + client-server ports. Usually
         unnecessary on a tailnet where peers reach each other directly, but
         required if a firewall guards the tailscale interface.
       '';
@@ -366,6 +382,9 @@ in
         cfg.nodeManagerPort
         cfg.objectManagerPort
       ]
+      # The notebook engine also serves the tailnet `/mesh` discovery card
+      # (index#1787); a firewalled tailscale interface must not blind it.
+      ++ optional cfg.notebook.enable cfg.meshPort
       ++ optionals (cfg.role == "head") [
         cfg.gcsPort
         cfg.clientServerPort

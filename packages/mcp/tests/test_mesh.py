@@ -170,9 +170,13 @@ def _fetch_card(app: web.Application) -> dict[str, Any]:
 
 def test_mesh_card_fields(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("IX_MCP_VERSION", "deadbeef")
-    monkeypatch.setenv("IX_MCP_DASHBOARD_URL", "http://100.1.2.3:4567/")
     cfg = Config(workdir=tmp_path)
-    app = server_mesh.build_app(cfg, lambda: ["fix the build", "triage 1787"], "2026-07-03T00:00:00+00:00")
+    app = server_mesh.build_app(
+        cfg,
+        lambda: ["fix the build", "triage 1787"],
+        "2026-07-03T00:00:00+00:00",
+        "http://100.1.2.3:4567/",
+    )
     card = _fetch_card(app)
     assert card["host"] == socket.gethostname()
     assert card["pid"] == os.getpid()
@@ -183,12 +187,16 @@ def test_mesh_card_fields(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
     assert card["cwd"] == str(tmp_path)
 
 
-def test_mesh_card_dashboard_url_falls_back_to_config(
+def test_mesh_card_dashboard_url_is_injected_not_env(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.delenv("IX_MCP_DASHBOARD_URL", raising=False)
+    # The card must advertise the URL cli._run resolved AFTER the hub-spawn
+    # decision, not the pre-kernel IX_MCP_DASHBOARD_URL env (which points at a
+    # hub that may never have come up -- index#1789 review). The env decoy
+    # here must lose to the injected value.
+    monkeypatch.setenv("IX_MCP_DASHBOARD_URL", "http://100.0.0.1:1/dead-hub/")
     cfg = Config(workdir=tmp_path, advertised_host="100.9.9.9", dashboard_port=7777)
-    app = server_mesh.build_app(cfg, list, "t")
+    app = server_mesh.build_app(cfg, list, "t", cfg.dashboard_url())
     assert _fetch_card(app)["dashboard_url"] == "http://100.9.9.9:7777/"
 
 
@@ -196,7 +204,7 @@ def test_mesh_card_sessions_are_live(tmp_path: Path) -> None:
     # The card reflects names set AFTER the server came up: names arrive at
     # any point in a client's lifetime, so the SAME app must serve both reads.
     names: list[str] = []
-    app = server_mesh.build_app(Config(workdir=tmp_path), lambda: sorted(names), "t")
+    app = server_mesh.build_app(Config(workdir=tmp_path), lambda: sorted(names), "t", "u")
 
     async def go() -> tuple[list[str], list[str]]:
         async with TestClient(TestServer(app)) as client:
@@ -211,6 +219,49 @@ def test_mesh_card_sessions_are_live(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# session_names(): labels live exactly as long as their session
+# ---------------------------------------------------------------------------
+
+
+def test_session_labels_die_with_their_http_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A long-lived `serve --http` must not advertise a disconnected client's
+    # label on /mesh forever (index#1789 review): labels are keyed weakly by
+    # the live session object, so they vanish with it.
+    import gc
+    import weakref
+
+    from ix_notebook_mcp import tools
+
+    monkeypatch.setattr(tools, "_session_labels", weakref.WeakKeyDictionary())
+    monkeypatch.setattr(tools, "_solo_session_name", None)
+
+    class FakeSession:
+        """Stands in for the mcp ServerSession (weakref-able, hashable)."""
+
+    session = FakeSession()
+    tools._session_labels[session] = "ephemeral client"
+    assert tools.session_names() == ["ephemeral client"]
+    del session
+    gc.collect()
+    assert tools.session_names() == []
+
+
+def test_solo_session_label_via_set_and_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    # No config (an embedder) means one client and no session object to key
+    # on: the label lands in the solo slot, gates naming, and is advertised.
+    import weakref
+
+    from ix_notebook_mcp import tools
+
+    monkeypatch.setattr(tools, "_session_labels", weakref.WeakKeyDictionary())
+    monkeypatch.setattr(tools, "_solo_session_name", None)
+    assert tools._session_label(None) is None
+    tools._set_session_label(None, "triage 1787")
+    assert tools._session_label(None) == "triage 1787"
+    assert tools.session_names() == ["triage 1787"]
+
+
+# ---------------------------------------------------------------------------
 # start(): the skip paths must log one line and never raise
 # ---------------------------------------------------------------------------
 
@@ -220,7 +271,7 @@ def test_start_disabled_by_env(
 ) -> None:
     monkeypatch.setenv("IX_MCP_MESH", "0")
     cfg = Config(workdir=tmp_path, mesh_host="127.0.0.1")
-    assert asyncio.run(server_mesh.start(cfg, list)) is None
+    assert asyncio.run(server_mesh.start(cfg, list, "u")) is None
     assert "mesh endpoint disabled" in capsys.readouterr().err
 
 
@@ -229,7 +280,7 @@ def test_start_skips_without_tailscale(
 ) -> None:
     monkeypatch.delenv("IX_MCP_MESH", raising=False)
     cfg = Config(workdir=tmp_path, mesh_host=None)
-    assert asyncio.run(server_mesh.start(cfg, list)) is None
+    assert asyncio.run(server_mesh.start(cfg, list, "u")) is None
     assert "no tailscale" in capsys.readouterr().err
 
 
@@ -239,13 +290,12 @@ def test_start_serves_on_override_port(monkeypatch: pytest.MonkeyPatch, tmp_path
     port = _free_port()
     monkeypatch.delenv("IX_MCP_MESH", raising=False)
     monkeypatch.setenv("IX_MCP_MESH_PORT", str(port))
-    monkeypatch.delenv("IX_MCP_DASHBOARD_URL", raising=False)
     cfg = Config(workdir=tmp_path, mesh_host="127.0.0.1")
 
     async def go() -> dict[str, Any]:
         import aiohttp
 
-        runner = await server_mesh.start(cfg, lambda: ["smoke"])
+        runner = await server_mesh.start(cfg, lambda: ["smoke"], "u")
         assert runner is not None
         try:
             async with (
@@ -271,7 +321,7 @@ def test_start_skips_on_bind_conflict(
         port = holder.getsockname()[1]
         monkeypatch.setenv("IX_MCP_MESH_PORT", str(port))
         cfg = Config(workdir=tmp_path, mesh_host="127.0.0.1")
-        assert asyncio.run(server_mesh.start(cfg, list)) is None
+        assert asyncio.run(server_mesh.start(cfg, list, "u")) is None
     assert "cannot bind" in capsys.readouterr().err
 
 
@@ -292,7 +342,7 @@ def test_wildcard_host_env_never_reaches_mesh_bind(
     if not _system_tailscale_present():
         assert cli._tailscale_ip() is None
     cfg = Config(workdir=tmp_path, mesh_host=None)
-    assert asyncio.run(server_mesh.start(cfg, list)) is None
+    assert asyncio.run(server_mesh.start(cfg, list, "u")) is None
     assert "no tailscale" in capsys.readouterr().err
 
 
@@ -326,13 +376,12 @@ def test_peers_and_sessions_discover_live_server(
     monkeypatch.delenv("IX_MCP_MESH", raising=False)
     monkeypatch.setenv("IX_MCP_MESH_PORT", str(port))
     monkeypatch.setenv("IX_MCP_VERSION", "cafebabe")
-    monkeypatch.setenv("IX_MCP_DASHBOARD_URL", "http://127.0.0.1:9999/")
     stub = _write_stub_tailscale(tmp_path, _status(self_ip="127.0.0.1"))
     monkeypatch.setenv(mesh_client._TAILSCALE_BIN_ENV, str(stub))
     cfg = Config(workdir=tmp_path, mesh_host="127.0.0.1")
 
     async def go() -> tuple[pl.DataFrame, pl.DataFrame]:
-        runner = await server_mesh.start(cfg, lambda: ["alpha", "beta"])
+        runner = await server_mesh.start(cfg, lambda: ["alpha", "beta"], "http://127.0.0.1:9999/")
         assert runner is not None
         try:
             return await mesh_client.peers(), await mesh_client.sessions()
@@ -435,9 +484,11 @@ def test_probe_refuses_multiple_heads_loudly(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # TWO tag:server peers both answering on the probed port (index#1789 C5):
-    # connect() must refuse to guess, and the loud note must name every hit so
-    # the operator can pick one. Both peers point at loopback (the one address
-    # the sandbox can serve), so the note names it twice.
+    # connect() must refuse to guess -- and it must HARD-FAIL, not fall back
+    # to a private local Ray, which in exactly this ambiguous case would
+    # silently compute on one laptop (index#1789 review). The error names
+    # every hit so the operator can pick one. Both peers point at loopback
+    # (the one address the sandbox can serve), so it is named twice.
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen(8)
@@ -445,8 +496,9 @@ def test_probe_refuses_multiple_heads_loudly(
         status = _status(peers=[_server_peer("127.0.0.1"), _server_peer("127.0.0.1")])
         _stub_tailscale_on_path(monkeypatch, tmp_path, status)
         assert cluster._probe_ray_heads() == ["127.0.0.1", "127.0.0.1"]
-        target, note = cluster._resolve_auto_target()
-        assert target is None
+        with pytest.raises(RuntimeError) as excinfo:
+            cluster._resolve_auto_target()
+        note = str(excinfo.value)
         assert "2 Ray heads" in note
         assert "127.0.0.1, 127.0.0.1" in note  # every hit is named
         assert "IX_FLEET_RAY_ADDRESS" in note  # and the remedy

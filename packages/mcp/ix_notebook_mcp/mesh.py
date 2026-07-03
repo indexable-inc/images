@@ -33,13 +33,18 @@ def build_app(
     cfg: Config,
     session_names: Callable[[], list[str]],
     started_at: str,
+    dashboard_url: str,
 ) -> web.Application:
     """Assemble the one-route mesh app over an injected session-name source.
 
     Split from :func:`start` so tests can drive the route without binding a
     socket (mirrors ``dashboard.build_app``); ``session_names`` is a callable
     (``tools.session_names`` in production) so this module never reaches into
-    another module's private state.
+    another module's private state. ``dashboard_url`` is the URL the server
+    actually advertises (``cli._run`` resolves it AFTER the hub-spawn decision,
+    so a failed auto-dashboard hub cannot leave a dead pre-spawn URL on the
+    card -- index#1789 review); it is injected rather than read from the
+    ``IX_MCP_DASHBOARD_URL`` env, which is the pre-kernel value.
     """
     app = web.Application()
 
@@ -53,10 +58,7 @@ def build_app(
                 "version": server_version(),
                 "started_at": started_at,
                 "sessions": session_names(),
-                # The CLI exports IX_MCP_DASHBOARD_URL before the kernel spawns
-                # (see cli._serve); fall back to the config-derived data API so
-                # an embedder that scrubbed the env still gets a usable URL.
-                "dashboard_url": os.environ.get("IX_MCP_DASHBOARD_URL") or cfg.dashboard_url(),
+                "dashboard_url": dashboard_url,
                 "cwd": str(cfg.workdir),
             }
         )
@@ -72,6 +74,7 @@ def _skip(reason: str) -> None:
 async def start(
     cfg: Config,
     session_names: Callable[[], list[str]],
+    dashboard_url: str,
 ) -> web.AppRunner | None:
     """Serve ``/mesh`` on the tailscale IP, or skip (returning ``None``).
 
@@ -89,7 +92,7 @@ async def start(
         _skip("no tailscale IPv4 to bind (the mesh serves the tailnet only)")
         return None
     started_at = datetime.now(UTC).isoformat()
-    runner = web.AppRunner(build_app(cfg, session_names, started_at))
+    runner = web.AppRunner(build_app(cfg, session_names, started_at, dashboard_url))
     await runner.setup()
     port = mesh_port()
     try:
