@@ -50,7 +50,8 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator
+from pydantic_core import PydanticUndefined
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -107,7 +108,32 @@ class ResourceNotFoundError(ResourceBridgeError):
 
 
 class _BridgeModel(BaseModel):
+    """Base for the CLI-boundary models: unknown fields are ignored and an
+    explicit JSON ``null`` collapses to the field's default.
+
+    Pydantic applies a default only to an OMITTED key; a serde layer (or peer)
+    that spells absence as ``"mime": null`` would otherwise raise, and one such
+    entry would take down the ENTIRE federated list (or make an owning peer
+    look transport-dead on a read). Fields WITHOUT a default
+    (:attr:`ResourceEntry.uri`) still reject null: a resource with no identity
+    is a real contract violation, not a stylistic absence.
+    """
+
     model_config = ConfigDict(extra="ignore")
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _null_collapses_to_default(cls, value: object, info: ValidationInfo) -> object:
+        if value is not None or info.field_name is None:
+            return value
+        field = cls.model_fields[info.field_name]
+        if field.default_factory is not None:
+            # The factories used here (`list`) take no arguments.
+            factory = field.default_factory
+            return factory()  # type: ignore[call-arg]
+        if field.default is not PydanticUndefined:
+            return field.default
+        return value
 
 
 class ResourceEntry(_BridgeModel):
@@ -139,10 +165,12 @@ class Ack(_BridgeModel):
 
     Kept permissive (only the common fields are named, ``extra="ignore"`` carries
     the rest) because the Ack shape is the CLI's to define; the tool returns the
-    parsed dict to the agent verbatim.
+    parsed dict to the agent verbatim. ``uri`` defaults to ``None`` (not ``""``)
+    so an ack that omits it does not have an empty string injected into the
+    merged payload (``exclude_none`` drops it instead).
     """
 
-    uri: str = ""
+    uri: str | None = None
     ok: bool = True
     delivered: bool | None = None
     detail: str | None = None
@@ -158,10 +186,13 @@ def _ix_bin() -> str | None:
     """
     override = os.environ.get(_IX_BIN_ENV)
     candidate = override or _DEFAULT_BIN
-    # An override that is a path to an existing file is used as-is; otherwise
-    # resolve it (or the default) on PATH.
+    # An override that is a path must be an executable FILE to be used; anything
+    # else (missing, a directory, mode -x) behaves like an absent CLI, so a bad
+    # override degrades cleanly instead of exploding at exec time with a
+    # PermissionError nothing catches. A bare-name override goes through
+    # which(), which already checks executability.
     if override and os.path.sep in override:
-        return override if Path(override).exists() else None
+        return override if Path(override).is_file() and os.access(override, os.X_OK) else None
     return shutil.which(candidate)
 
 
@@ -330,13 +361,17 @@ class _PeerProbeFailures:
 
 
 async def _get_snapshot(uri: str, peer_url: str) -> ResourceSnapshot:
-    """Probe one peer for ``uri`` via ``ix-resource-cli get <uri> --peer <url>``.
+    """Probe one peer for ``uri`` via ``ix-resource-cli get --peer <url> -- <uri>``.
 
     Returns the parsed snapshot, or raises :class:`ResourceNotFoundError` when that
     peer does not advertise the uri (so the caller can try the next peer), and
     :class:`ResourceBridgeError` for any other failure against this peer.
+
+    Options come first and ``--`` ends option parsing, so a hostile uri that
+    *looks* like a flag (``--peer=https://attacker/rpc``) reaches clap as a plain
+    positional, never as an option.
     """
-    args = ["get", uri, "--peer", peer_url]
+    args = ["get", "--peer", peer_url, "--", uri]
     try:
         rc, stdout, stderr = await _run_cli(args)
     except FileNotFoundError as exc:
@@ -363,7 +398,7 @@ async def read_resource(uri: str, peer: str | None = None) -> tuple[str, str]:
     """Read a snapshot of ``uri``, resolving a real peer endpoint URL.
 
     Returns ``(text, mime)``. With an explicit ``peer`` (a full endpoint URL) the
-    bridge runs one ``ix-resource-cli get <uri> --peer <url>``. Otherwise it
+    bridge runs one ``ix-resource-cli get --peer <url> -- <uri>``. Otherwise it
     iterates the configured peer URLs (``IX_RESOURCE_PEERS``), probing each until
     one advertises the uri.
 
@@ -443,7 +478,7 @@ async def _resolve_peer_for(uri: str, peers: Sequence[str]) -> str:
 
 
 async def act(uri: str, send_keys: str, peer: str | None = None) -> dict[str, object]:
-    """Drive a resource: ``ix-resource-cli act <uri> --send-keys <s> --peer <url>``.
+    """Drive a resource: ``ix-resource-cli act --send-keys=<s> --peer <url> -- <uri>``.
 
     Resolves a real peer endpoint URL the same way :func:`read_resource` does. With
     an explicit ``peer`` (a full endpoint URL) the bridge acts against it directly.
@@ -460,7 +495,10 @@ async def act(uri: str, send_keys: str, peer: str | None = None) -> dict[str, ob
     if not peers:
         raise _no_peer_error("act on", uri)
     peer_url = await _resolve_peer_for(uri, peers)
-    args = ["act", uri, "--send-keys", send_keys, "--peer", peer_url]
+    # Options first, `--` before the positional uri (see `_get_snapshot`), and
+    # the keys attached with `=` so a sequence starting with `-` cannot be read
+    # as a flag either.
+    args = ["act", f"--send-keys={send_keys}", "--peer", peer_url, "--", uri]
     try:
         rc, stdout, stderr = await _run_cli(args)
     except FileNotFoundError as exc:
@@ -484,6 +522,12 @@ async def act(uri: str, send_keys: str, peer: str | None = None) -> dict[str, ob
         raise ResourceBridgeError(f"{_DEFAULT_BIN} act ack failed validation: {exc}") from exc
     # Return the parsed-and-revalidated payload (named fields plus anything the CLI
     # added, since the agent may want the extras) rather than only the typed subset.
-    merged: dict[str, object] = dict(payload) if isinstance(payload, dict) else {}
+    # Nulls are dropped on both sides: a null extra carries no information, and
+    # `exclude_none` keeps the ack from re-injecting an absent uri.
+    merged: dict[str, object] = (
+        {key: value for key, value in payload.items() if value is not None}
+        if isinstance(payload, dict)
+        else {}
+    )
     merged.update(ack.model_dump(exclude_none=True))
     return merged

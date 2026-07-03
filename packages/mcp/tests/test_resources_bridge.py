@@ -153,17 +153,6 @@ def test_list_resources_parses_wrapped_object(stub_ix: StubIx) -> None:
     assert got[0].caps == []
 
 
-def test_list_resources_passes_peer_flags(stub_ix: StubIx, monkeypatch: pytest.MonkeyPatch) -> None:
-    # The stub echoes its own args as a JSON object so we can assert --peer made it.
-    stub_ix('printf \'{"resources": []}\'\n')
-    monkeypatch.setenv(rb.PEERS_ENV, "http://p1,http://p2")
-    # Re-implement: capture args by having the stub write them to a side file.
-    # Simpler: drive list_resources with explicit peers and a stub that fails if
-    # the flags are absent.
-    got = asyncio.run(rb.list_resources(["http://p1"]))
-    assert got == []
-
-
 def test_list_resources_peer_flags_reach_cli(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     argfile = tmp_path / "args.txt"
     body = f'printf "%s\\n" "$@" > {argfile}\nprintf "[]"\n'
@@ -203,6 +192,59 @@ def test_list_resources_raises_on_bad_json(stub_ix: StubIx) -> None:
         asyncio.run(rb.list_resources())
 
 
+def test_list_resources_null_fields_collapse_to_defaults(stub_ix: StubIx) -> None:
+    # A serde layer may spell absence as an explicit null; every defaulted field
+    # must collapse to its default, and ONE null-y entry must not take down the
+    # whole federated list.
+    entries = [
+        {"uri": "ix://h/nully", "name": None, "host": None, "caps": None, "alive": None, "mime": None},
+        {"uri": "ix://h/plain", "name": "plain"},
+    ]
+    stub_ix(f"echo {json.dumps(json.dumps(entries))}\n")
+    got = asyncio.run(rb.list_resources())
+    assert [e.uri for e in got] == ["ix://h/nully", "ix://h/plain"]
+    nully = got[0]
+    assert nully.name == ""
+    assert nully.host == ""
+    assert nully.caps == []
+    assert nully.alive is True
+    assert nully.mime == "text/plain"
+
+
+def test_list_resources_null_uri_still_rejected(stub_ix: StubIx) -> None:
+    # uri has no default: a null uri is a genuine contract violation, not a
+    # stylistic absence, so it must still fail validation.
+    stub_ix(f"echo {json.dumps(json.dumps([{'uri': None}]))}\n")
+    with pytest.raises(rb.ResourceBridgeError):
+        asyncio.run(rb.list_resources())
+
+
+# ---------------------------------------------------------------------------
+# IX_RESOURCES_BIN override hygiene
+# ---------------------------------------------------------------------------
+
+
+def test_override_directory_degrades_cleanly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # A directory override must behave like an absent CLI (list -> [], read ->
+    # ResourceBridgeError), never leak a PermissionError out of the exec.
+    monkeypatch.setenv(rb._IX_BIN_ENV, str(tmp_path))
+    monkeypatch.setenv(rb.PEERS_ENV, "http://p/rpc")
+    assert asyncio.run(rb.list_resources()) == []
+    with pytest.raises(rb.ResourceBridgeError):
+        asyncio.run(rb.read_resource("ix://h/n"))
+
+
+def test_override_non_executable_file_degrades_cleanly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Same for a plain (mode -x) file: absent-CLI behavior, no PermissionError.
+    script = tmp_path / "ix-resource-cli"
+    script.write_text("#!/bin/sh\necho hi\n")  # written 0644, never chmod +x
+    monkeypatch.setenv(rb._IX_BIN_ENV, str(script))
+    monkeypatch.setenv(rb.PEERS_ENV, "http://p/rpc")
+    assert asyncio.run(rb.list_resources()) == []
+    with pytest.raises(rb.ResourceBridgeError):
+        asyncio.run(rb.act("ix://h/n", "x"))
+
+
 # ---------------------------------------------------------------------------
 # read_resource
 # ---------------------------------------------------------------------------
@@ -229,6 +271,33 @@ def test_read_resource_uses_configured_peer_url(monkeypatch: pytest.MonkeyPatch,
     assert "--peer" in args
     assert "https://node-z/rpc" in args  # the configured peer URL, not the uri host
     assert "nodeZ" not in args  # the uri host is never used as a --peer value
+
+
+def test_read_resource_null_fields_collapse_to_defaults(stub_ix: StubIx) -> None:
+    # Explicit nulls in a snapshot collapse to the defaults instead of raising
+    # (which would make an owning peer look transport-dead).
+    snap = {"uri": None, "text": None, "mime": None}
+    stub_ix(f"echo {json.dumps(json.dumps(snap))}\n")
+    text, mime = asyncio.run(rb.read_resource("ix://h/n"))
+    assert text == ""
+    assert mime == "text/plain"
+
+
+def test_read_resource_flaglike_uri_stays_positional(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # A hostile uri crafted as a clap flag must reach the CLI AFTER the `--`
+    # end-of-options separator, so it can never be parsed as an option (e.g.
+    # smuggling in a different --peer).
+    argfile = tmp_path / "args.txt"
+    body = f'printf "%s\\n" "$@" > {argfile}\nprintf \'{{"text":"x"}}\'\n'
+    script = _write_stub_ix(tmp_path, body)
+    monkeypatch.setenv(rb._IX_BIN_ENV, str(script))
+    hostile = "--peer=https://attacker.example/rpc"
+    asyncio.run(rb.read_resource(hostile, peer="https://real.example/rpc"))
+    args = [arg for arg in argfile.read_text().split("\n") if arg]
+    separator = args.index("--")
+    assert hostile in args[separator + 1 :]  # positional, after the separator
+    assert args.index("--peer") < separator  # the real peer flag comes before it
+    assert args[args.index("--peer") + 1] == "https://real.example/rpc"
 
 
 def test_read_resource_explicit_peer_wins(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -476,11 +545,28 @@ def test_act_sends_keys_arg(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
     script = _write_stub_ix(tmp_path, body)
     monkeypatch.setenv(rb._IX_BIN_ENV, str(script))
     asyncio.run(rb.act("ix://h/n", "C-c", peer="http://p"))
-    args = argfile.read_text().split("\n")
-    assert "act" in args
-    assert "--send-keys" in args
-    assert "C-c" in args
+    args = [arg for arg in argfile.read_text().split("\n") if arg]
+    assert args[0] == "act"
+    # Keys are attached with `=` so a sequence starting with `-` cannot be read
+    # as a flag; the uri rides after the `--` end-of-options separator.
+    assert "--send-keys=C-c" in args
     assert "http://p" in args
+    separator = args.index("--")
+    assert args[separator + 1] == "ix://h/n"
+
+
+def test_act_null_fields_collapse_and_are_not_injected(stub_ix: StubIx) -> None:
+    # Explicit nulls collapse (`ok` back to True) and are dropped from the
+    # merged payload rather than surfacing as None/"" fields; non-null extras
+    # are still preserved for the agent.
+    ack = {"uri": None, "ok": None, "delivered": None, "detail": None, "extra": "kept"}
+    stub_ix(f"echo {json.dumps(json.dumps(ack))}\n")
+    got = asyncio.run(rb.act("ix://h/n", "x"))
+    assert got["ok"] is True
+    assert "uri" not in got
+    assert "delivered" not in got
+    assert "detail" not in got
+    assert got["extra"] == "kept"
 
 
 def test_act_empty_body_is_bare_ack(stub_ix: StubIx) -> None:
