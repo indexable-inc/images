@@ -77,8 +77,12 @@ let
       memory = {
         text = ''
           When a persistent file-based memory directory is available, build it over
-          time so future sessions have useful context. Store one fact per file with
-          frontmatter:
+          time so future sessions have useful context. Write at the moment of
+          learning, not at session end: a burned-time discovery, a corrected
+          assumption, a non-obvious gotcha, an undocumented recipe, or a user
+          preference, each paired with its concrete handle (command, path, flag).
+          If it would save a future session time, it is worth a memory now.
+          Store one fact per file with frontmatter:
 
           ```markdown
           ---
@@ -110,6 +114,8 @@ let
         reason = ''
           Sessions relearned the same gotchas and duplicated or contradicted stored
           notes; the schema plus index keeps recall cheap and stale entries deletable.
+          Saves deferred to session end were forgotten, so cross-session facts went
+          unwritten; writing at the moment of learning is the fix.
         '';
       };
     }
@@ -134,17 +140,23 @@ let
           change your confidence; gather it if it can affect the answer, and skip
           probes that are intrusive, noisy, or unlikely to change the decision.
 
+          Success at an intermediate layer is not the outcome. A wrapper's zero
+          exit, an upstream job reporting done, a cache reporting populated, or
+          a green pipeline stage says only that that layer finished; every hop
+          between it and the end state can still fail. Claim an outcome only
+          after reading its terminal artifact: the switched generation, the
+          file on disk, the running process, the served response.
+
           Back "never happens" claims with a fresh check whose observation window
           covers the expected period and retry backoff, and state the window with the
-          claim. Scale the evidence bar to the cost of the conclusion: one that asks a
-          human for a manual or destructive step (reboot, reinstall, replace hardware)
-          is a last resort, claimed only after cheap discriminating experiments are
-          exhausted.
+          claim. Scale the evidence bar to the cost of the conclusion.
         '';
         reason = ''
           Confident answers produced from memory turned out wrong against the live
           file, host, or log; checking the strongest source first is cheaper than a
-          wrong conclusion.
+          wrong conclusion. Separately, a config switch was declared good because
+          an upstream cache publish finished, inferring the end state through
+          untested hops instead of reading the live generation.
         '';
       };
     }
@@ -204,16 +216,32 @@ let
           causal chain rests on one observation, get a second kind of evidence or label
           it a hypothesis.
 
-          Before blaming the platform, OS, or framework, enumerate what can interpose
-          (VPNs, proxies, firewalls, filter and security extensions, hooks, wrappers)
-          and eliminate each with evidence: a mystery at layer N is usually an
-          interposer at layer N+1. When a failure has a clear onset, diff the
-          environment at that moment: process start times, installs, config or
-          connection changes.
+          Blaming a layer you cannot inspect (kernel, OS, hardware, platform,
+          framework) or prescribing a coarse reset (reboot, reinstall, wipe)
+          carries the highest evidence bar. A remembered failure signature that
+          matches the current symptom is a hypothesis to test, not a diagnosis.
+          Run the cheap differentials first; they take minutes, and independent
+          ones fan out to parallel subagents: toggle suspected interferers A/B
+          (VPNs, proxies, firewalls, filter and security extensions, hooks,
+          wrappers: a mystery at layer N is usually an interposer at layer N+1),
+          check whether adjacent components on the same stack still work, read
+          the crash and system logs, retry to separate flaky from deterministic,
+          and when the failure has a clear onset, diff the environment at that
+          moment (process start times, installs, config or connection changes).
+          Once the differentials corner the opaque layer, act decisively, and
+          make the reset an experiment rather than a ritual: pre-register the
+          expected outcome, instrument so a failure that survives the reset is
+          captured, and name the next suspect in advance.
         '';
         reason = ''
           Repeated misdiagnoses blamed the OS or framework when the cause was an
-          interposer (VPN, proxy, hook, wrapper) one layer up.
+          interposer (VPN, proxy, hook, wrapper) one layer up. Separately, an
+          agent prescribed a host reboot for a "kernel wedge" from an hours-stale
+          diagnosis plus a remembered error signature; when the user pushed back,
+          the cheap differentials (interferer off A/B, sibling VM stack healthy,
+          no crash reports, deterministic across retries) took minutes and were
+          what earned the reboot call, made falsifiable by instrumenting the
+          post-reboot path.
         '';
       };
     }
@@ -505,8 +533,10 @@ let
     {
       backgroundSubagents = {
         text = ''
-          Delegate independent work to named subagents by default, split by phase, and
-          give each editing subagent its own worktree. Keep the main agent on
+          Delegate independent work to named subagents by default: split
+          implementation by phase, fan independent questions (diagnostic
+          differentials, research legs, per-component checks) out in parallel,
+          and give each editing subagent its own worktree. Keep the main agent on
           orchestration, quick replies, and trivial one-step work. Match subagent model
           strength to task difficulty: strongest for hard reasoning, planning, and
           high-stakes decisions; cheaper tiers for mechanical edits, search, and

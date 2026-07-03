@@ -30,14 +30,9 @@ nix run .#system-prompt-eval -- run --eval behaviors \
 ### `behaviors`
 
 Do the target **default** behaviors emerge on a neutral task, without being
-asked? Scored behaviors (`datasets/behaviors.jsonl`):
-
-- `reproduce` — reproduce a reported failure into a minimal example before fixing
-- `first_principles` — drive to root cause (5 Whys), not a symptom patch
-- `experiment` — validate a change with several measured rollouts
-- `tie_to_issue` — find or file a GitHub (index) + Linear issue, link it
-- `named_subagents` — delegate phases to named subagents
-- `report_playbook` — publish to the ix playbook + post the link to `#general`
+asked? The scored behaviors live in `datasets/behaviors.jsonl` (one id, name,
+and rubric per line); the tasks that should surface them, and which behaviors
+each expects, live in `datasets/tasks.jsonl`.
 
 Headline = overall pass rate. Also reports the **longest all-behaviors-pass
 streak** (the "N agents in a row" signal).
