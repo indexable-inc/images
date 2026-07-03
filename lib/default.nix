@@ -23,6 +23,12 @@
   # revision. The `build-version` crate renders it. `0` when unknown. Defaulted
   # so a direct `import ./lib` still evaluates.
   revEpoch ? 0,
+  # The flake's own source (`self`), carrying `.outPath` (a `-source` store
+  # path with string context, so it roots into a closure like `nixpkgs`) and
+  # `.narHash`. Only the flake scope sees these, so they are plumbed down to
+  # `lib/image` for the guest `index` registry pin. Defaulted `null` so a bare
+  # `import ./lib` (no flake) still evaluates; `lib/image` guards on it.
+  self ? null,
 }: let
   inherit (nixpkgs) lib;
 
@@ -504,6 +510,7 @@
   inherit
     (import ./image {
       inherit
+        self
         lib
         nixpkgs
         paths

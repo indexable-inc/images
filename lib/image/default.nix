@@ -9,6 +9,10 @@
   moduleList,
   writeNushellApplication,
   packageSetFor,
+  # The index flake's own `self`, for the guest `index` registry pin (see the
+  # `nix.registry.index` module below). `null` when `lib` is imported without a
+  # flake; the pin is then omitted.
+  self ? null,
 }: let
   /**
   One nixpkgs instance shared by every image evaluation. `lib.nixosSystem`
@@ -83,6 +87,28 @@
               inherit (nixpkgs) narHash;
             };
           }
+        ]
+        ++ lib.optional (self != null) {
+          # Same treatment for the `index` flake itself, so an in-guest
+          # `nix run index#<pkg>` (and any flake declaring `index` as an input
+          # at this locked rev) resolves against the source baked in the image
+          # instead of fetching it from GitHub. The base image's nix store DB
+          # (`includeNixDB`, oci-layer.nix) registers this `-source` path as
+          # valid — nix then treats the locked, narHash-matched reference as
+          # already present and never re-fetches or re-ingests it, the same
+          # property nixpkgs got in ix#6043/#1748/#1749/#1815.
+          #
+          # `self.outPath` is the ORIGINAL `-source` path and carries string
+          # context, so it roots into the image closure once (no duplicate
+          # copy — the #1748 trap). `self.narHash` locks the pin. Only this
+          # flake scope sees `self`, so it is plumbed down from `flake.nix`.
+          nix.registry.index.to = {
+            type = "path";
+            path = self.outPath;
+            inherit (self) narHash;
+          };
+        }
+        ++ [
           ./platform.nix
           ./oci-layer.nix
           # Home Manager as a NixOS module. Per-tool XDG config (Nushell,

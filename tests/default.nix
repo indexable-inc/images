@@ -2166,7 +2166,7 @@
   # Regression fence for the guest-nix-slowness bug family. Do NOT delete as
   # redundant with the registry-pin assertion: this is the THIRD regression in
   # the same family, each of which passed the prior guard yet still left a fresh
-  # VM re-ingesting the ~45k-file nixpkgs tree through VCFS on first `nix`:
+  # VM re-ingesting a ~45k-file source tree through VCFS on first `nix`:
   #   1. missing narHash  — unlocked path: pin, re-hashed every eval (#1748/#1749)
   #   2. missing validity — narHash added, but narHash only short-circuits a path
   #      nix already considers VALID (#1815)
@@ -2174,12 +2174,26 @@
   #      all, so the pinned source (present in the image) was never valid; fixed
   #      by `includeNixDB = true` in oci-layer.nix
   # The boundary this defends: the built base OCI archive must ship a populated
-  # /nix/var/nix/db/db.sqlite whose ValidPaths includes the nixpkgs -source path.
-  # A bare db.sqlite, or the registry pin alone, is not enough. This check builds
-  # the real base archive and asserts exactly that, so it also proves the DB
-  # survives oci-image-builder's re-streaming. It builds an OCI image, so it is
-  # its own check (not the pure-eval `eval` aggregate) and runs on Linux.
-  baseImageNixDb =
+  # /nix/var/nix/db/db.sqlite whose ValidPaths includes EVERY path the image's
+  # flake registry pins (nixpkgs and, once baked, index) — otherwise the first
+  # in-guest `nix run nixpkgs#...`/`index#...` re-ingests that source. A bare
+  # db.sqlite, or the registry pin alone, is not enough. Deriving the required
+  # paths from the image's own `nix.registry.*.to.path` means a future pin is
+  # covered automatically and this can never silently drift from what ships.
+  # This check builds the real base archive and asserts exactly that, so it also
+  # proves the DB survives oci-image-builder's re-streaming. It builds an OCI
+  # image, so it is its own check (not the pure-eval `eval` aggregate) and runs
+  # on Linux.
+  baseImageNixDb = let
+    # Every `path`-type registry pin the image ships. Guard on the type so a
+    # non-path entry (e.g. a default indirect/github registry row) can't break
+    # the projection; those don't bake a source and aren't what this defends.
+    registryPaths = lib.pipe base.imageConfig.nix.registry [
+      builtins.attrValues
+      (builtins.filter (entry: (entry.to.type or null) == "path" && entry.to ? path))
+      (map (entry: entry.to.path))
+    ];
+  in
     pkgs.runCommand "ix-test-base-image-nix-db" {
       nativeBuildInputs = [
         pkgs.gnutar
@@ -2188,7 +2202,7 @@
         pkgs.coreutils
       ];
       archive = base.imageConfig.ix.build.ociImage;
-      nixpkgsSource = nixpkgs.outPath;
+      requiredPaths = registryPaths;
     } ''
       mkdir extract db
       # oci-image-builder writes uncompressed tar layers as blobs/sha256/<digest>.
@@ -2208,16 +2222,18 @@
         exit 1
       fi
       dbfile=db/nix/var/nix/db/db.sqlite
-      # The pinned nixpkgs source must be a VALID path in the shipped DB, or the
-      # guest re-ingests it on first eval.
-      count=$(sqlite3 "$dbfile" \
-        "SELECT count(*) FROM ValidPaths WHERE path = '$nixpkgsSource';")
-      if [ "$count" != "1" ]; then
-        echo "error: nixpkgs source $nixpkgsSource is not registered valid in the image nix DB (found $count rows)" >&2
-        echo "ValidPaths sample:" >&2
-        sqlite3 "$dbfile" "SELECT path FROM ValidPaths LIMIT 20;" >&2
-        exit 1
-      fi
+      # Every registry-pinned source must be a VALID path in the shipped DB, or
+      # the guest re-ingests it on first eval.
+      for src in $requiredPaths; do
+        count=$(sqlite3 "$dbfile" \
+          "SELECT count(*) FROM ValidPaths WHERE path = '$src';")
+        if [ "$count" != "1" ]; then
+          echo "error: registry-pinned source $src is not registered valid in the image nix DB (found $count rows)" >&2
+          echo "ValidPaths sample:" >&2
+          sqlite3 "$dbfile" "SELECT path FROM ValidPaths LIMIT 20;" >&2
+          exit 1
+        fi
+      done
       mkdir -p "$out"
     '';
 

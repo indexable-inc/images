@@ -252,6 +252,7 @@
 
     ix = import ./lib {
       inherit
+        self
         rev
         revEpoch
         nixpkgs
