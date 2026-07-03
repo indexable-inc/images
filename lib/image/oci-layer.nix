@@ -82,6 +82,11 @@
         maxLayers = 67;
         contents = [systemRoot];
         config.Entrypoint = ["${toplevel}/init"];
+        # Include the nix database so store validity can be verified inside the image.
+        # This enables fast path validation without requiring a network lookup to the
+        # nixpkgs source. ix#6043: OCI image was missing this, causing VMs to timeout
+        # on first nix command.
+        includeNixDB = true;
       };
 
       efficiency = config.ix.build.ociEfficiency;
@@ -116,6 +121,17 @@
       }
       ''
         oci-image-builder ${lib.escapeShellArgs (efficiencyArgs ++ ["${stream.passthru.conf}"])} "$out"
+
+        # Validate that the archive includes the nix database.
+        # This ensures VMs can verify store paths immediately without network roundtrips.
+        echo "Validating nix database inclusion..."
+        if tar -tf "$out" | grep -q 'db\.sqlite'; then
+          echo "✓ Database validation passed: db.sqlite found in OCI archive"
+        else
+          echo "ERROR: db.sqlite not found in OCI archive"
+          echo "This may indicate includeNixDB is not working correctly"
+          exit 1
+        fi
       '';
   };
 }
