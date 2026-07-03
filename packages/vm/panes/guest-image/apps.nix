@@ -19,6 +19,9 @@
 #   files   : attrset       host path -> store source, seeded once by host
 #                           tmpfiles (`C`, first boot only) so an app starts
 #                           with baked config it can still rewrite at runtime
+#   autoStart : bool        start the container (and thus map its window) at
+#                           boot; default true. Debug scaffolding sets false
+#                           and is started on demand from the guest console.
 { pkgs }:
 let
   inherit (pkgs) lib;
@@ -121,21 +124,28 @@ in
   # Software (wl_shm) client: proves compositor + container + socket plumbing
   # with zero GPU involvement. weston-flower exists because nixpkgs builds
   # weston with -Ddemo-clients=true (weston-simple-shm does not: the pin sets
-  # -Dsimple-clients= empty).
+  # -Dsimple-clients= empty). Debug scaffolding, not a product surface: the
+  # container ships but does not autostart (the bring-up era popped these
+  # windows onto the desktop on every boot); start on the guest console with
+  # `systemctl start container@demo` when debugging the shm path.
   demo = {
     command = "${pkgs.weston}/bin/weston-flower";
     env = { };
     binds = [ ];
     gpu = false;
+    autoStart = false;
   };
 
   # A real interactive app: foot renders CPU-side into shm buffers, so it also
-  # works with no GPU while exercising keyboard focus and resize.
+  # works with no GPU while exercising keyboard focus and resize. Same debug
+  # scaffolding policy as `demo`: `systemctl start container@term` for an
+  # interactive terminal window into the guest.
   term = {
     command = "${pkgs.foot}/bin/foot";
     env = { };
     binds = [ ];
     gpu = false;
+    autoStart = false;
   };
 
   # Minecraft Java 26.2 ("Chaos Cubed"): ships a first-party experimental

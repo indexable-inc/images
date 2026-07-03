@@ -52,7 +52,7 @@ let
   # host /nix/store, and sees the compositor socket + the venus render node
   # via bind mounts.
   mkAppContainer = name: app: {
-    autoStart = true;
+    autoStart = app.autoStart or true;
     bindMounts = {
       ${runtimeDir} = {
         hostPath = runtimeDir;
