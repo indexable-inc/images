@@ -23,8 +23,12 @@ if SLACK_SRC.is_dir() and str(SLACK_SRC) not in sys.path:
 
 import slack
 
-# Public callables = everything exported except the error class.
-_PUBLIC_FUNCS = [getattr(slack, name) for name in slack.__all__ if name != "SlackError"]
+# Public callables = everything exported except the error classes.
+_PUBLIC_FUNCS = [
+    obj
+    for name in slack.__all__
+    if not (isinstance(obj := getattr(slack, name), type) and issubclass(obj, BaseException))
+]
 
 # A channel id resolves without any API call (no _resolve_channel network hop).
 _CHANNEL_ID = "C0123456789"
@@ -284,6 +288,53 @@ def test_poll_drops_watch_on_error_with_notice(
     assert slack._watches == {}
     assert len(fresh_watch_state) == 1
     assert fresh_watch_state[0][1]["slack_event"] == "watch_dropped"
+
+
+def test_poll_keeps_watch_on_transient_error(
+    fresh_watch_state: list[tuple[str, dict[str, str]]],
+    threaded_api: list[tuple[str, dict[str, Any]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    out = asyncio.run(slack.send(_CHANNEL_ID, "rate-limited"))
+
+    def limited_api(
+        method: str, token: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        if method == "auth.test":
+            return {"ok": True, "user_id": _SELF_USER}
+        raise slack.SlackTransientError("Slack API HTTP 429 for conversations.replies")
+
+    monkeypatch.setattr(slack, "_api_call", limited_api)
+    asyncio.run(slack._poll_watches_once())
+    # The watch survives a 429 and nothing spurious is delivered.
+    assert (_CHANNEL_ID, out["ts"]) in slack._watches
+    assert fresh_watch_state == []
+
+
+def test_send_skips_seed_in_dms(
+    fresh_watch_state: list[tuple[str, dict[str, str]]],
+    threaded_api: list[tuple[str, dict[str, Any]]],
+) -> None:
+    out = asyncio.run(slack.send("D0123456789", "hey"))
+    assert len([m for m, _ in threaded_api if m == "chat.postMessage"]) == 1
+    assert out["watching"] is True
+
+
+def test_login_and_logout_reset_identity_and_watches(
+    fresh_watch_state: list[tuple[str, dict[str, str]]],
+    threaded_api: list[tuple[str, dict[str, Any]]],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(slack, "_TOKEN_FILE", tmp_path / "token")
+    asyncio.run(slack.send(_CHANNEL_ID, "before switch"))
+    assert slack._watches
+    monkeypatch.setattr(slack, "_self_user_id", "U0STALE0000")
+    slack.login("xoxp-new-identity")
+    assert slack._self_user_id is None
+    slack.logout()
+    assert slack._self_user_id is None
+    assert slack._watches == {}
 
 
 def test_unwatch_and_watches_frame(
