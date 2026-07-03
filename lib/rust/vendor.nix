@@ -312,7 +312,16 @@ let
           Cargo.lock contains multiple git dependencies with the same name-version: ${join ", " duplicateNameVersions}
           cargo-unit cannot generate an aggregate vendor dir for this lock without losing source identity.
         '';
-        pkgs.linkFarm "cargo-vendor-dir" vendorEntries;
+        (pkgs.linkFarm "cargo-vendor-dir" vendorEntries).overrideAttrs (_old: {
+          # linkFarm hardcodes `allowSubstitutes = false` (a symlink farm is
+          # cheaper to rebuild than to fetch). That default is wrong here: a
+          # Darwin consumer forces this x86_64-linux drv at eval time through
+          # the cross lane's IFD (`import unitsNix` reaches the vendor dir),
+          # cannot build it, and with substitution disallowed cannot use the
+          # pushed cache output either -- eval dies with `platform mismatch`
+          # no matter how healthy cache.ix.dev is (#1711).
+          allowSubstitutes = true;
+        });
     in
     {
       inherit vendorSources vendorDir;
