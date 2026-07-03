@@ -2903,6 +2903,17 @@ let
         assertion = lib.elemAt base.config.nix.settings.substituters 0 == "https://cache.ix.dev";
         message = "base profile should route Nix through cache.ix.dev before fallback substituters";
       }
+      {
+        assertion =
+          let
+            pin = base.config.nix.registry.nixpkgs.to;
+          in
+          pin.type == "path"
+          && pin.path == nixpkgs.outPath
+          && pin.narHash == nixpkgs.narHash
+          && builtins.isString pin.path;
+        message = "image nixpkgs registry pin must carry the input's narHash (an unlocked path: pin makes every in-VM nix eval re-copy the whole tree through VCFS, ~3 min per invocation) and use the outPath string so toJSON does not bake a duplicate nixpkgs into the image";
+      }
     ];
 
     factions = [
