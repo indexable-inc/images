@@ -61,9 +61,11 @@
     '';
 
   # Offline, deterministic: the scoring math is the CI-gating signal, unit-tested
-  # against the installed package with no network or key.
+  # against the installed package with no network or key. SYSTEM_PROMPT_EVAL_DATA_DIR
+  # points the dataset-integrity check (validate_expects over the committed JSONL)
+  # at the real datasets, the same way the wrapped `package` does at runtime.
   scoring = pkgs.runCommand "system-prompt-eval-scoring" {strictDeps = true;} ''
-    ${unwrapped}/venv/bin/python ${./tests/test_scoring.py}
+    SYSTEM_PROMPT_EVAL_DATA_DIR=${data} ${unwrapped}/venv/bin/python ${./tests/test_scoring.py}
     mkdir -p "$out"
   '';
 

@@ -50,3 +50,21 @@ def load_tasks(override: Path | None = None) -> list[TaskCase]:
         )
         for row in _read_lines("tasks.jsonl", override)
     ]
+
+
+def validate_expects(tasks: list[TaskCase], behaviors: list[Behavior]) -> None:
+    """Fail loudly if a task's ``expects`` names a behavior id absent from the catalog.
+
+    A typo'd or stale id would otherwise be silently dropped where ``expects`` is
+    consumed (the runner scores only ids present in the catalog), masking dataset
+    drift as a quietly lower score instead of a load-time error.
+    """
+    known = {b.id for b in behaviors}
+    unknown = sorted(
+        {bid for task in tasks for bid in task.expects if bid not in known}
+    )
+    if unknown:
+        raise ValueError(
+            f"tasks.jsonl expects unknown behavior id(s) not in behaviors.jsonl: "
+            f"{', '.join(unknown)}"
+        )
