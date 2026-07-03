@@ -7650,6 +7650,7 @@ dependencies = [
 name = "panes-host"
 version = "0.1.0"
 dependencies = [
+ "block2",
  "clap",
  "dispatch2",
  "lz4_flex 0.13.1",

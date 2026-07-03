@@ -27,7 +27,10 @@ pub enum Event {
     /// we emit (postcard has no unknown-variant tolerance, see the protocol
     /// crate), so the main thread must know it.
     Hello { minor: u16 },
-    Msg(ToHost),
+    /// `recv` is the trace clock (`trace::now`) right after the wire decode
+    /// on the reader thread, so `PANES_TRACE` frame lines can separate
+    /// main-queue wait from ingest work; costs one timestamp per message.
+    Msg { msg: ToHost, recv: f64 },
     Disconnected,
 }
 
@@ -128,7 +131,7 @@ fn read_loop(read: Box<dyn Read + Send>) {
                     return;
                 }
             }
-            Ok(msg) => post(Event::Msg(msg)),
+            Ok(msg) => post(Event::Msg { msg, recv: crate::trace::now() }),
             Err(error) => {
                 eprintln!("panes-host: connection lost: {error}");
                 return;

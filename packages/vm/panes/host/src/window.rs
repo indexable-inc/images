@@ -21,7 +21,7 @@ use objc2_foundation::{
     MainThreadMarker, NSNotification, NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSSize,
     NSString,
 };
-use objc2_metal::{MTLCommandBuffer, MTLCommandBufferStatus, MTLTexture};
+use objc2_metal::{MTLCommandBuffer, MTLCommandBufferStatus, MTLDrawable, MTLTexture};
 use objc2_quartz_core::{
     CAFrameRateRange, CAMetalDisplayLink, CAMetalDisplayLinkDelegate, CAMetalDisplayLinkUpdate,
     CAMetalLayer,
@@ -32,11 +32,22 @@ use crate::app;
 use crate::render::Renderer;
 use crate::view::PanesView;
 
-/// `ProMotion` range: let the system drop to 60 when we present nothing, chase
-/// 120 when frames flow (Apple TN3178 / `CAFrameRateRange` docs: preferred
-/// must sit inside [minimum, maximum]).
-const FRAME_RATE_RANGE: CAFrameRateRange =
-    CAFrameRateRange { minimum: 60.0, maximum: 120.0, preferred: 120.0 };
+/// The streaming tick range is pinned to a panel's max rate (min == max ==
+/// preferred), not a 60..max span: with the adaptive range, a guest whose
+/// ack-to-frame turnaround hovered near one period measured stretches of
+/// downshifted ticks (probe guest, 2ms simulated render: ~99fps and p99 ack
+/// RTT of 16ms adaptive vs ~116fps and 13.7ms pinned, index#1686). Ticks
+/// only run while frames flow -- idle windows stop entirely via
+/// [`IDLE_TICKS_TO_PAUSE`], which is where the power saving actually is --
+/// so there is nothing for the adaptive range to win. Derived per window
+/// from its own display (falling back to the main screen before placement)
+/// and refreshed on `windowDidChangeScreen:`, so a window dragged between a
+/// 60Hz external and the 120Hz panel chases whichever it is on.
+fn stream_rate_range(screen: Option<&objc2_app_kit::NSScreen>) -> CAFrameRateRange {
+    #[allow(clippy::cast_precision_loss)] // realistic refresh rates are tiny integers
+    let max_fps = screen.map_or(60.0, |screen| screen.maximumFramesPerSecond() as f32);
+    CAFrameRateRange { minimum: max_fps, maximum: max_fps, preferred: max_fps }
+}
 
 /// Tick rate while the window is fully occluded. The link keeps running as
 /// the ack pacer, just slowly: pausing it and acking frames on receipt
@@ -185,6 +196,11 @@ pub struct PaneWindow {
     view: Retained<PanesView>,
     layer: Retained<CAMetalLayer>,
     link: Retained<CAMetalDisplayLink>,
+    /// Tick range while frames flow (the window's panel max rate, pinned;
+    /// see [`stream_rate_range`]); occlusion swaps it for
+    /// [`OCCLUDED_RATE_RANGE`], re-expose restores it, and a display change
+    /// recomputes it ([`PaneWindow::refresh_stream_rate`]).
+    stream_rate: CAFrameRateRange,
     // The window and the display link both hold their delegates weakly
     // (AppKit convention); these fields are the strong references.
     _win_delegate: Retained<WinDelegate>,
@@ -283,13 +299,27 @@ impl PaneWindow {
         // CoreAnimation scan out the drawable directly (Apple, CAMetalLayer
         // docs); we never blit into or sample from them.
         layer.setFramebufferOnly(true);
-        // displaySyncEnabled keeps presents vsynced; the ack loop, not a
-        // free-running present queue, is our pacing mechanism.
-        layer.setDisplaySyncEnabled(true);
-        // 3 drawables (the default, pinned explicitly): 2 starves 120Hz when
-        // CPU encode and scanout overlap, more only adds latency (Apple,
-        // "Reduce Drawable Count" / maximumDrawableCount docs).
-        layer.setMaximumDrawableCount(3);
+        // Present immediately instead of queueing for vsync. Measured with
+        // the latency probe (index#1686): synced presents through the
+        // windowed-compositing path hit glass a constant ~40.6ms after the
+        // display-link tick -- ~5 frames, immovable by maximumDrawableCount
+        // or preferredFrameLatency -- while immediate presents measure
+        // 23.7-32.1ms (`MTLDrawable.presentedTime` ground truth), the
+        // WindowServer sampling floor, at an unchanged 120fps. There is no
+        // tearing exposure on macOS: WindowServer still composites whole
+        // surfaces; and no free-running present loop either, because
+        // presents stay display-link-tick-paced (the ack loop is the
+        // throttle), so "sync off" only stops presents from queueing behind
+        // extra vsyncs.
+        layer.setDisplaySyncEnabled(false);
+        // 2 drawables (the documented minimum), not the default 3: the third
+        // only buys headroom when CPU encode approaches a full frame, and
+        // ours is one fullscreen triangle. Measured either way at a steady
+        // 120fps with the probe guest (index#1686) -- with immediate
+        // presents (displaySyncEnabled false above) the count does not touch
+        // glass latency either -- so the smaller pool just saves one
+        // window-sized surface.
+        layer.setMaximumDrawableCount(2);
         let backing = ns.backingScaleFactor();
         layer.setContentsScale(backing);
         layer.setDrawableSize(NSSize::new(
@@ -312,7 +342,11 @@ impl PaneWindow {
         let link_delegate = LinkDelegate::new(mtm, params.id);
         let link = CAMetalDisplayLink::initWithMetalLayer(CAMetalDisplayLink::alloc(), &layer);
         link.setDelegate(Some(ProtocolObject::from_ref(&*link_delegate)));
-        link.setPreferredFrameRateRange(FRAME_RATE_RANGE);
+        // Before the window is ordered in, `screen()` is None; the main
+        // screen is where `center()` will place it.
+        let stream_rate =
+            stream_rate_range(ns.screen().or_else(|| objc2_app_kit::NSScreen::mainScreen(mtm)).as_deref());
+        link.setPreferredFrameRateRange(stream_rate);
         // Common modes include NSEventTrackingRunLoopMode, so ticks keep
         // coming during live resize (where presentsWithTransaction needs
         // per-tick redraws) and menu tracking.
@@ -333,6 +367,7 @@ impl PaneWindow {
             view,
             layer,
             link,
+            stream_rate,
             _win_delegate: win_delegate,
             _link_delegate: link_delegate,
             surface: None,
@@ -352,6 +387,24 @@ impl PaneWindow {
     /// (they send protocol messages, which re-enters app state).
     pub fn view_handle(&self) -> Retained<PanesView> {
         self.view.clone()
+    }
+
+    /// Re-pin the streaming tick range to the display the window is now on
+    /// (`windowDidChangeScreen:`); applied immediately unless occluded (the
+    /// occlusion path restores `stream_rate` itself on re-expose).
+    pub fn refresh_stream_rate(&mut self, mtm: MainThreadMarker) {
+        self.stream_rate = stream_rate_range(
+            self.ns.screen().or_else(|| objc2_app_kit::NSScreen::mainScreen(mtm)).as_deref(),
+        );
+        if !self.occluded {
+            self.link.setPreferredFrameRateRange(self.stream_rate);
+        }
+    }
+
+    /// Trace-only: what the layer currently claims as its drawable cap
+    /// (`CAMetalDisplayLink` may manage the pool behind our back).
+    pub fn max_drawable_count(&self) -> usize {
+        self.layer.maximumDrawableCount()
     }
 
     pub fn set_title(&self, title_prefix: &str, title: &str) {
@@ -521,7 +574,7 @@ impl PaneWindow {
         if occluded {
             self.link.setPreferredFrameRateRange(OCCLUDED_RATE_RANGE);
         } else {
-            self.link.setPreferredFrameRateRange(FRAME_RATE_RANGE);
+            self.link.setPreferredFrameRateRange(self.stream_rate);
             // Re-expose shows the freshest guest frame: occluded ticks kept
             // the textures current but never drew them.
             self.mark_dirty();
@@ -581,6 +634,26 @@ impl PaneWindow {
             slot.absorbed = surface.log.len();
         }
         let drawable = update.drawable();
+        if crate::trace::enabled()
+            && let Some(seq) = self.pending_ack
+        {
+            // Ground truth for tick-to-glass latency: presentedTime is the
+            // host time the drawable actually hit the screen, reported by
+            // Metal after the fact (registered before the present below, as
+            // the API requires). Trace-only; the block costs nothing when
+            // tracing is off.
+            let block = block2::RcBlock::new(
+                move |presented: core::ptr::NonNull<ProtocolObject<dyn MTLDrawable>>| {
+                    // SAFETY: Metal passes the presented drawable, valid for
+                    // the duration of the handler.
+                    let time = unsafe { presented.as_ref() }.presentedTime();
+                    eprintln!("panes-trace glass seq={seq} presented={time:.6}");
+                },
+            );
+            // SAFETY: as_ptr yields a valid block pointer; Metal copies the
+            // block, so it need not outlive this call.
+            unsafe { drawable.addPresentedHandler(block2::RcBlock::as_ptr(&block)) };
+        }
         let Some(commands) =
             renderer.draw(&slot.texture, &drawable, self.layer.presentsWithTransaction())
         else {
@@ -751,6 +824,12 @@ define_class!(
         #[unsafe(method(windowDidChangeOcclusionState:))]
         fn window_did_change_occlusion_state(&self, _notification: &NSNotification) {
             app::window_occlusion_changed(self.ivars().id);
+        }
+
+        #[unsafe(method(windowDidChangeScreen:))]
+        fn window_did_change_screen(&self, _notification: &NSNotification) {
+            // The pinned tick range chases the display the window is on.
+            app::window_screen_changed(self.ivars().id);
         }
 
         #[unsafe(method(windowDidBecomeKey:))]

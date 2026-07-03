@@ -24,8 +24,11 @@ Three thread roles, one owner per resource:
 
 Per `WindowNew` the host builds: a titled/closable/miniaturizable/resizable
 `NSWindow` (content size = buffer px / scale), an input `NSView` subclass
-hosting a `CAMetalLayer` (`framebufferOnly`, `displaySyncEnabled`,
-`maximumDrawableCount = 3`, `contentsScale = backingScaleFactor`), two
+hosting a `CAMetalLayer` (`framebufferOnly`, `displaySyncEnabled = false`:
+synced presents measured a constant ~40ms tick-to-glass through the windowed
+compositing path vs ~24-32ms immediate, and presents stay tick-paced so
+nothing free-runs (index#1686); `maximumDrawableCount = 2`,
+`contentsScale = backingScaleFactor`), two
 surface `MTLTexture`s (double-buffered: `replaceRegion` does not synchronize
 against GPU access, so uploads must never touch the texture a still-executing
 present is sampling), and a per-window `CAMetalDisplayLink`. The window is
@@ -41,8 +44,11 @@ into whichever texture is not in flight (each texture replays the damage it
 missed while the other was on screen), and the layer flips to it.
 
 `CAMetalDisplayLink` (macOS 14+, from `objc2-quartz-core` 0.3, added to the
-main run loop in common modes with `preferredFrameRateRange` {min 60, max
-120, preferred 120}) ticks at the panel rate and hands us the drawable. If
+main run loop in common modes with `preferredFrameRateRange` pinned to the
+window's own panel max rate -- min == max == preferred, recomputed on
+`windowDidChangeScreen:`; the adaptive 60..120 range measured downshift
+stretches on borderline streams, index#1686) ticks at the panel rate and
+hands us the drawable. If
 the window is dirty we encode one fullscreen-triangle pass sampling the
 texture into the drawable (a render pass, not a blit, because
 `framebufferOnly` drawables are render-target-only, and sampling stretches
@@ -55,6 +61,13 @@ to seq". A frame the host cannot take at all (zero-size, texture allocation
 failure) is still acked immediately so the guest's one-in-flight loop never
 wedges on it. The link starts paused, unpauses on content/resize, and
 re-pauses after ~250ms of idle ticks so a quiet window stops costing CPU.
+
+`PANES_TRACE=1` emits one parseable stderr line per input event, frame
+ingest, and present (plus `MTLDrawable.presentedTime` glass ground truth),
+all on the `NSEvent.timestamp` clock; `tools/latency_probe.py` is the
+matching synthetic guest that drives ack-paced load and reports present RTT
+percentiles. Together they are the before/after evidence for the numbers
+above (index#1686).
 
 ### Resize
 

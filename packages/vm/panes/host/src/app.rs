@@ -17,11 +17,12 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{MainThreadMarker, MainThreadOnly, define_class};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSCursor, NSScreen,
-    NSWindow,
+    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSCursor, NSEvent,
+    NSScreen, NSWindow,
 };
 use objc2_core_graphics::{CGAssociateMouseAndMouseCursorPosition, CGError};
 use objc2_foundation::{NSNotification, NSObjectProtocol};
+use objc2_metal::MTLDrawable as _;
 use objc2_quartz_core::CAMetalDisplayLinkUpdate;
 use panes_protocol::{MINOR_POINTER_LOCK, ToGuest, ToHost, WindowId};
 
@@ -75,6 +76,13 @@ impl CursorCapture {
         if err != CGError::Success {
             eprintln!("panes-host: window {id}: cursor dissociation failed: {err:?}");
         }
+        // Coalescing merges queued mouse-moved events (summed deltas, so no
+        // motion is lost) but delays delivery to the queue drain; measured
+        // at ~21% of a 1kHz delta stream merged under frame load
+        // (index#1686). Mouse-look wants every delta as fresh as the queue
+        // can hand it over, so coalescing is off exactly while captured;
+        // absolute-cursor mode keeps the AppKit default.
+        NSEvent::setMouseCoalescingEnabled(false);
         Self { id }
     }
 }
@@ -82,6 +90,7 @@ impl CursorCapture {
 impl Drop for CursorCapture {
     fn drop(&mut self) {
         eprintln!("panes-host: window {}: pointer capture released", self.id);
+        NSEvent::setMouseCoalescingEnabled(true);
         let err = CGAssociateMouseAndMouseCursorPosition(true);
         if err != CGError::Success {
             eprintln!("panes-host: window {}: cursor re-association failed: {err:?}", self.id);
@@ -205,14 +214,14 @@ pub fn on_event(event: Event) {
             let close = app.windows.drain().map(|(_, window)| window).collect();
             Deferred { show: None, close }
         }
-        Event::Msg(msg) => handle_msg(app, msg),
+        Event::Msg { msg, recv } => handle_msg(app, msg, recv),
     });
     if let Some(deferred) = deferred {
         deferred.run(mtm);
     }
 }
 
-fn handle_msg(app: &mut App, msg: ToHost) -> Deferred {
+fn handle_msg(app: &mut App, msg: ToHost, recv: f64) -> Deferred {
     match msg {
         // The reader consumes Hello during version negotiation.
         ToHost::Hello { .. } | ToHost::Pong { .. } => Deferred::default(),
@@ -245,11 +254,26 @@ fn handle_msg(app: &mut App, msg: ToHost) -> Deferred {
             Deferred::default()
         }
         ToHost::WindowFrame { id, seq, width, height, full, tiles } => {
+            let trace_bytes = crate::trace::enabled()
+                .then(|| (tiles.len(), tiles.iter().map(|tile| tile.payload.len()).sum::<usize>()));
             let Some(window) = app.windows.get_mut(&id) else {
                 eprintln!("panes-host: frame for unknown window {id}");
                 return Deferred::default();
             };
-            if !window.apply_frame(&app.renderer, seq, width, height, full, tiles) {
+            let applied = window.apply_frame(&app.renderer, seq, width, height, full, tiles);
+            if let Some((tiles, bytes)) = trace_bytes {
+                // recv is stamped on the reader thread right after the wire
+                // decode (see conn::read_loop), so recv..done spans the
+                // main-queue wait plus the damage-log ingest: the time a
+                // frame occupies or waits on the main thread that input
+                // events share.
+                eprintln!(
+                    "panes-trace frame id={id} seq={seq} recv={recv:.6} done={:.6} \
+                     tiles={tiles} bytes={bytes}",
+                    crate::trace::now(),
+                );
+            }
+            if !applied {
                 // Frame the host could not take (zero-size / texture alloc
                 // failure): ack immediately anyway. With one-frame-in-flight
                 // guest pacing, an ack held hostage to a texture we never
@@ -354,6 +378,18 @@ pub fn display_tick(id: WindowId, update: &CAMetalDisplayLinkUpdate) {
         if let Some(seq) = window.present(&app.renderer, update)
             && let Some(out) = &app.out
         {
+            if crate::trace::enabled() {
+                // `target - now` is how far ahead of glass this tick runs
+                // (index#1686 latency work); did/dc expose the drawable pool
+                // (drawableID cycling and the layer's claimed cap).
+                eprintln!(
+                    "panes-trace present id={id} seq={seq} now={:.6} target={:.6} did={} dc={}",
+                    crate::trace::now(),
+                    update.targetPresentationTimestamp(),
+                    update.drawable().drawableID(),
+                    window.max_drawable_count(),
+                );
+            }
             let _ = out.send(ToGuest::Ack { id, seq });
             let stat = app
                 .ack_stats
@@ -421,6 +457,19 @@ pub fn window_occlusion_changed(id: WindowId) {
             if visible { "visible; presents resume" } else { "occluded; presents paused" }
         );
         window.set_occluded(!visible);
+    });
+}
+
+/// The window landed on a different display (`windowDidChangeScreen:`): the
+/// pinned streaming tick range must chase that panel's rate, or a window
+/// dragged from a 60Hz external onto the 120Hz panel would stay capped at
+/// 60 for its lifetime (and one dragged the other way would tick uselessly
+/// fast).
+pub fn window_screen_changed(id: WindowId) {
+    with_app(|app| {
+        if let Some(window) = app.windows.get_mut(&id) {
+            window.refresh_stream_rate(app.mtm);
+        }
     });
 }
 

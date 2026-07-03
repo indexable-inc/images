@@ -298,6 +298,16 @@ impl PanesView {
         if dx == 0.0 && dy == 0.0 {
             return;
         }
+        if crate::trace::enabled() {
+            // `now - ev` is the HID-to-handler delay: event-queue wait plus
+            // AppKit coalescing, the main-thread contention under test.
+            eprintln!(
+                "panes-trace input id={} ev={:.6} now={:.6} dx={dx} dy={dy}",
+                self.ivars().id,
+                event.timestamp(),
+                crate::trace::now(),
+            );
+        }
         app::send(ToGuest::PointerRelative { id: self.ivars().id, dx, dy });
     }
 

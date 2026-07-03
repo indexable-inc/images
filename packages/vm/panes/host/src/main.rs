@@ -22,6 +22,8 @@ mod keymap;
 #[cfg(target_os = "macos")]
 mod render;
 #[cfg(target_os = "macos")]
+mod trace;
+#[cfg(target_os = "macos")]
 mod view;
 #[cfg(target_os = "macos")]
 mod window;

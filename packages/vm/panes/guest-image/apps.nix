@@ -186,15 +186,43 @@ in
     binds = [ "/var/lib/minecraft" ];
     gpu = true;
     files = {
-      # Pre-seed the instance options so first launch renders through Vulkan
-      # ("Prefer Vulkan" in Video Settings; key/values per minecraft.wiki
-      # Options.txt, added in 26.2-snapshot-1). The `version` line is 26.2's
-      # data version and is mandatory: the game discards an options.txt that
-      # lacks it and would fall back to the "Default" backend (OpenGL in the
-      # 26.2 release).
+      # Pre-seed the instance options. Seeded by a tmpfiles `C` rule, so
+      # FIRST BOOT ONLY: an existing data disk keeps whatever the user
+      # changed in-game. Every key/value below matches the serialization MC
+      # 26.2 itself writes -- taken verbatim from the game-REWRITTEN
+      # options.txt on the live data disk (the game rewrites the file on any
+      # settings change, so its output is the authoritative grammar,
+      # including `version:4903`, 26.2's data version; without that line the
+      # game discards the file and falls back to the "Default" backend).
+      #
+      # Beyond the Vulkan backend, these are latency-opinionated defaults
+      # (index#1686): MC's frames reach glass through the compositor's
+      # ack-paced stream plus the host's display link, so anything that adds
+      # in-game frame time or a second pacing loop stacks straight onto
+      # mouse-look latency.
+      # - enableVsync:false -- the dominant term, validated live by A/B:
+      #   MC's vsync waits on the swapchain, stacking a second frame of
+      #   pacing on top of the compositor's ack genlock (double vsync).
+      # - maxFps:260 -- the slider's "Unlimited" stop (valid range 10-260).
+      #   Uncapped, the frame the compositor ships is always the freshest
+      #   sample; the ack pacing is what actually bounds the shipped rate.
+      # - rawMouseInput:true -- GLFW raw relative motion (the default,
+      #   pinned against stale instance state): pairs with
+      #   zwp_relative_pointer fed by the host's uncoalesced deltas.
+      # - graphicsPreset:"fancy" -- 26.2 replaced graphics *modes* with
+      #   presets (the rewritten file has no `graphicsMode` key at all);
+      #   fancy guards against Fabulous!, whose post-processing pipeline is
+      #   pure added frame time, i.e. latency, on venus.
+      # - narrator:0 -- off; belt and braces with the flite-less portablemc
+      #   above (the narrator's TTS stack aborts the client without audio).
       "/var/lib/minecraft/options.txt" = pkgs.writeText "panes-mc-options.txt" ''
         version:4903
         preferredGraphicsBackend:"vulkan"
+        enableVsync:false
+        maxFps:260
+        rawMouseInput:true
+        graphicsPreset:"fancy"
+        narrator:0
       '';
     };
   };
