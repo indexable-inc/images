@@ -11,9 +11,9 @@ Nothing here reaches a real tailnet, tailscale daemon, or Ray cluster:
   script via ``IX_MESH_TAILSCALE_BIN`` (the resources_bridge stub pattern)
   whose JSON points at loopback, where a real mesh server (or nothing) runs.
 * The **fleet probe** (``fleet.cluster``) gets a stub ``tailscale`` on PATH
-  plus a fake GCS listener on an ephemeral loopback port selected through
-  ``IX_FLEET_RAY_GCS_PORT``, proving ``connect()``'s zero-config resolution
-  without importing Ray.
+  plus a fake Ray Client listener on an ephemeral loopback port selected
+  through ``IX_FLEET_RAY_CLIENT_PORT``, proving ``connect()``'s zero-config
+  resolution without importing Ray.
 """
 
 from __future__ import annotations
@@ -43,10 +43,12 @@ for _p in (_PKG_PARENT, _PKG_PARENT / "src" / "mesh", _PKG_PARENT / "src" / "fle
 
 import mesh as mesh_client
 from fleet import cluster
+from ix_notebook_mcp import cli
 from ix_notebook_mcp import mesh as server_mesh
 from ix_notebook_mcp.config import (
     DEFAULT_MESH_PORT,
     Config,
+    is_tailnet_ipv4,
     mesh_enabled,
     mesh_port,
     server_version,
@@ -131,6 +133,23 @@ def test_server_version_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert server_version() == "dev"
     monkeypatch.setenv("IX_MCP_VERSION", "abc123")
     assert server_version() == "abc123"
+
+
+def test_is_tailnet_ipv4_gate() -> None:
+    # The defense-in-depth gate on addresses taken from tailscale output
+    # (index#1789 review, S1): only CGNAT 100.64.0.0/10 passes; wildcards,
+    # LAN/loopback addresses, IPv6, and junk are all rejected by real parsing.
+    assert is_tailnet_ipv4("100.64.0.0")
+    assert is_tailnet_ipv4("100.115.233.43")
+    assert is_tailnet_ipv4("100.127.255.255")
+    assert not is_tailnet_ipv4("100.63.255.255")  # just below the range
+    assert not is_tailnet_ipv4("100.128.0.0")  # just above the range
+    assert not is_tailnet_ipv4("0.0.0.0")  # noqa: S104 -- asserting the wildcard is REJECTED
+    assert not is_tailnet_ipv4("127.0.0.1")
+    assert not is_tailnet_ipv4("192.168.1.10")
+    assert not is_tailnet_ipv4("fd7a:115c:a1e0::1")
+    assert not is_tailnet_ipv4("not-an-ip")
+    assert not is_tailnet_ipv4("")
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +275,38 @@ def test_start_skips_on_bind_conflict(
     assert "cannot bind" in capsys.readouterr().err
 
 
+def test_wildcard_host_env_never_reaches_mesh_bind(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The headline bind property (index#1789 review, C4): IX_MCP_HOST steers
+    # the dashboard bind only; the mesh bind host comes solely from tailscale.
+    # With IX_MCP_HOST=0.0.0.0 the tailscale-derived value is unchanged, and
+    # with no tailscale at all the mesh SKIPS rather than widening to the env.
+    monkeypatch.setenv("IX_MCP_HOST", "0.0.0.0")  # noqa: S104 -- asserting the wildcard CANNOT reach the bind
+    _stub_tailscale_on_path(monkeypatch, tmp_path, _status(self_ip="100.99.1.1"))
+    assert cli._tailscale_ip() == "100.99.1.1"
+
+    # No tailscale: mesh_host resolves to None and start() must skip; the env
+    # wildcard must not become a fallback bind host.
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    if not _system_tailscale_present():
+        assert cli._tailscale_ip() is None
+    cfg = Config(workdir=tmp_path, mesh_host=None)
+    assert asyncio.run(server_mesh.start(cfg, list)) is None
+    assert "no tailscale" in capsys.readouterr().err
+
+
+def test_tailscale_ip_rejects_non_cgnat_addresses(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A spoofed/malformed status handing out a wildcard, LAN, or IPv6 address
+    # must not produce a bind host (index#1789 review, S1).
+    bad = _status(self_ip=None)
+    bad["Self"] = {"TailscaleIPs": ["0.0.0.0", "192.168.1.7", "fd7a:115c:a1e0::1", "junk"]}  # noqa: S104 -- hostile input under test, asserting it is rejected
+    _stub_tailscale_on_path(monkeypatch, tmp_path, bad)
+    assert cli._tailscale_ip() is None
+
+
 # ---------------------------------------------------------------------------
 # mesh.peers() / mesh.sessions(): stub tailscale + a real loopback server
 # ---------------------------------------------------------------------------
@@ -323,8 +374,21 @@ def test_peers_skips_offline_and_unresponsive(
     assert df.is_empty()
 
 
+def test_peers_never_probes_non_tailnet_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Spoofed/malformed peer addresses (wildcard, LAN, junk) are dropped by
+    # the CGNAT gate before any probe (index#1789 review, S1); loopback is the
+    # one non-CGNAT address allowed (it is this machine, and the test seam).
+    assert mesh_client._ipv4(["0.0.0.0", "192.168.7.7", "junk"]) is None  # noqa: S104 -- hostile input under test, asserting it is rejected
+    assert mesh_client._ipv4(["fd7a:115c:a1e0::1"]) is None
+    assert mesh_client._ipv4(["100.86.202.115"]) == "100.86.202.115"
+    assert mesh_client._ipv4(["0.0.0.0", "100.86.202.115"]) == "100.86.202.115"  # noqa: S104 -- hostile input under test, asserting it is skipped
+    assert mesh_client._ipv4(["127.0.0.1"]) == "127.0.0.1"
+    assert mesh_client._ipv4("not-a-list") is None
+
+
 # ---------------------------------------------------------------------------
-# fleet.connect() zero-config probe: stub tailscale on PATH + a fake GCS
+# fleet.connect() zero-config probe: stub tailscale on PATH + a fake Ray
+# Client listener
 # ---------------------------------------------------------------------------
 
 
@@ -348,28 +412,53 @@ def _server_peer(ip: str, *, online: bool = True, tags: list[str] | None = None)
     }
 
 
-def test_probe_finds_single_gcs_head(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as gcs:
-        gcs.bind(("127.0.0.1", 0))
+def test_probe_finds_single_ray_client_head(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
         # Backlog > 1: the listener never accept()s, and each probe's completed
         # handshake occupies a queue slot; both probes below must get through.
-        gcs.listen(8)
-        monkeypatch.setenv("IX_FLEET_RAY_GCS_PORT", str(gcs.getsockname()[1]))
+        listener.listen(8)
+        port = listener.getsockname()[1]
+        monkeypatch.setenv("IX_FLEET_RAY_CLIENT_PORT", str(port))
         _stub_tailscale_on_path(monkeypatch, tmp_path, _status(peers=[_server_peer("127.0.0.1")]))
         assert cluster._probe_ray_heads() == ["127.0.0.1"]
-        # connect()'s resolution turns the one head into a Ray Client URL.
+        # connect()'s resolution turns the one head into a Ray Client URL on
+        # the SAME port it just probed (probe what you dial, index#1789 C1).
         target, note = cluster._resolve_auto_target()
-        assert target == f"ray://127.0.0.1:{cluster.RAY_CLIENT_PORT}"
+        assert target == f"ray://127.0.0.1:{port}"
         assert note == ""
+
+
+def test_probe_refuses_multiple_heads_loudly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # TWO tag:server peers both answering on the probed port (index#1789 C5):
+    # connect() must refuse to guess, and the loud note must name every hit so
+    # the operator can pick one. Both peers point at loopback (the one address
+    # the sandbox can serve), so the note names it twice.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(8)
+        monkeypatch.setenv("IX_FLEET_RAY_CLIENT_PORT", str(listener.getsockname()[1]))
+        status = _status(peers=[_server_peer("127.0.0.1"), _server_peer("127.0.0.1")])
+        _stub_tailscale_on_path(monkeypatch, tmp_path, status)
+        assert cluster._probe_ray_heads() == ["127.0.0.1", "127.0.0.1"]
+        target, note = cluster._resolve_auto_target()
+        assert target is None
+        assert "2 Ray heads" in note
+        assert "127.0.0.1, 127.0.0.1" in note  # every hit is named
+        assert "IX_FLEET_RAY_ADDRESS" in note  # and the remedy
 
 
 def test_probe_requires_server_tag_and_online(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as gcs:
-        gcs.bind(("127.0.0.1", 0))
-        gcs.listen(1)
-        monkeypatch.setenv("IX_FLEET_RAY_GCS_PORT", str(gcs.getsockname()[1]))
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        monkeypatch.setenv("IX_FLEET_RAY_CLIENT_PORT", str(listener.getsockname()[1]))
         status = _status(
             peers=[
                 _server_peer("127.0.0.1", tags=[]),  # untagged: never probed
@@ -383,9 +472,10 @@ def test_probe_requires_server_tag_and_online(
 def test_probe_no_listener_yields_loud_note(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # A tagged online peer with a CLOSED GCS port: the probe returns nothing
-    # and the resolution hands connect() the why-line it prints on fallback.
-    monkeypatch.setenv("IX_FLEET_RAY_GCS_PORT", str(_free_port()))
+    # A tagged online peer with a CLOSED Ray Client port: the probe returns
+    # nothing and the resolution hands connect() the why-line it prints on
+    # fallback.
+    monkeypatch.setenv("IX_FLEET_RAY_CLIENT_PORT", str(_free_port()))
     _stub_tailscale_on_path(monkeypatch, tmp_path, _status(peers=[_server_peer("127.0.0.1")]))
     target, note = cluster._resolve_auto_target(budget=0.5)
     assert target is None

@@ -8,12 +8,34 @@ keeps the wiring simple. The object is frozen so nothing mutates after launch.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import socket
 import stat
 from dataclasses import dataclass
 from pathlib import Path
+
+# Every tailscale IPv4 lives in the CGNAT range; anything else claiming to be
+# one is malformed or hostile output. See `is_tailnet_ipv4`.
+_TAILNET_V4 = ipaddress.ip_network("100.64.0.0/10")
+
+
+def is_tailnet_ipv4(value: str) -> bool:
+    """Whether ``value`` is an IPv4 literal in tailscale's CGNAT range
+    (100.64.0.0/10).
+
+    The defense-in-depth gate on every address taken from ``tailscale status``
+    output (index#1789 review): a malformed or spoofed status must not be able
+    to hand ``0.0.0.0`` or a LAN address to a bind or a peer probe. Real
+    parsing (``ipaddress``), not string sniffing, so ``0.0.0.0``, IPv6, and
+    junk all read as False.
+    """
+    try:
+        addr = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return isinstance(addr, ipaddress.IPv4Address) and addr in _TAILNET_V4
 
 
 # The well-known port every ix-mcp serves its tailnet `/mesh` discovery

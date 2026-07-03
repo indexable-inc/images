@@ -43,7 +43,15 @@ import webbrowser
 from collections.abc import Callable
 from pathlib import Path
 
-from .config import Config, hub_state_path, live_hub, port_open, runtime_dir, set_config
+from .config import (
+    Config,
+    hub_state_path,
+    is_tailnet_ipv4,
+    live_hub,
+    port_open,
+    runtime_dir,
+    set_config,
+)
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _WILDCARD_HOSTS = {"0.0.0.0", "::"}  # noqa: S104 -- deliberate set of wildcard host strings for comparison
@@ -181,9 +189,19 @@ def _store_path(dashboard_port: int) -> Path:
     return runtime_dir() / f"store-{dashboard_port}.db"
 
 
+def _stat_exists(path: str) -> bool:
+    """``Path.exists`` that treats an unstatable path as absent: a sandboxed
+    or hardened host can deny even ``stat`` on ``/usr`` (PermissionError, not
+    False), and tailscale discovery must degrade to "none", never crash."""
+    try:
+        return Path(path).exists()
+    except OSError:
+        return False
+
+
 def _tailscale_status() -> dict | None:
     tailscale = shutil.which("tailscale") or next(
-        (p for p in ("/usr/local/bin/tailscale", "/usr/bin/tailscale") if Path(p).exists()), None
+        (p for p in ("/usr/local/bin/tailscale", "/usr/bin/tailscale") if _stat_exists(p)), None
     )
     if not tailscale:
         return None
@@ -214,7 +232,10 @@ def _tailscale_ip() -> str | None:
     if status.get("BackendState") != "Running":
         return None
     for ip in status.get("Self", {}).get("TailscaleIPs", []) or []:
-        if isinstance(ip, str) and "." in ip and ":" not in ip:
+        # CGNAT-only (100.64.0.0/10): a malformed or spoofed status must not be
+        # able to steer a bind to 0.0.0.0 or a LAN address (index#1789 review).
+        # Every real tailscale IPv4 is CGNAT, so nothing legitimate is lost.
+        if isinstance(ip, str) and is_tailnet_ipv4(ip):
             return ip
     return None
 

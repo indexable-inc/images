@@ -84,11 +84,16 @@ SPARK_CONNECT_PORT = int(os.environ.get("IX_FLEET_SPARK_CONNECT_PORT", "15002"))
 RAY_CLIENT_PORT = 10001
 
 
-def _gcs_port() -> int:
-    """The fleet Ray head's GCS port (`modules/services/ray` ``gcsPort``,
-    default 6379). Read per call, not at import, so tests can point the
-    tailnet probe at a fake listener via ``IX_FLEET_RAY_GCS_PORT``."""
-    return int(os.environ.get("IX_FLEET_RAY_GCS_PORT", "6379"))
+def _ray_client_port() -> int:
+    """The Ray Client port the tailnet probe checks AND the resolved
+    ``ray://`` target dials -- one port for both on purpose, because a
+    connectable Client port is the liveness signal for the exact endpoint we
+    would use. Probing the GCS (6379) instead was wrong: redis defaults to
+    6379, so any redis on a tag:server host read as a Ray head, and two of
+    them silently disabled zero-config connect fleet-wide (index#1789 review).
+    Read per call, not at import, so tests can point the probe at a fake
+    listener via ``IX_FLEET_RAY_CLIENT_PORT``."""
+    return int(os.environ.get("IX_FLEET_RAY_CLIENT_PORT", str(RAY_CLIENT_PORT)))
 
 
 class ClusterError(Exception):
@@ -127,14 +132,15 @@ def _tailscale_status_sync(timeout: float = 1.0) -> dict[str, Any] | None:
 
 
 def _probe_ray_heads(budget: float = 1.5) -> list[str]:
-    """Tailscale IPs of online ``tag:server`` peers with a listening Ray GCS.
+    """Tailscale IPs of online ``tag:server`` peers with a listening Ray
+    Client port.
 
     The zero-config leg of :func:`connect`'s resolution (index#1787): with no
     explicit address and no env var, sweep the fleet's server-tagged tailnet
-    peers for a GCS listener, concurrently, spending at most ``budget`` seconds
-    in total. Only ``tag:server`` peers are probed: that is how the fleet marks
-    its service hosts on the tailnet, and probing every phone and laptop would
-    waste the budget on guaranteed misses.
+    peers for a Ray Client listener, concurrently, spending at most ``budget``
+    seconds in total. Only ``tag:server`` peers are probed: that is how the
+    fleet marks its service hosts on the tailnet, and probing every phone and
+    laptop would waste the budget on guaranteed misses.
     """
     status = _tailscale_status_sync()
     if not status:
@@ -152,9 +158,9 @@ def _probe_ray_heads(budget: float = 1.5) -> list[str]:
                 candidates.append(ip)
     if not candidates:
         return []
-    port = _gcs_port()
+    port = _ray_client_port()
 
-    def gcs_open(ip: str) -> bool:
+    def client_port_open(ip: str) -> bool:
         try:
             with socket.create_connection((ip, port), timeout=budget):
                 return True
@@ -166,7 +172,7 @@ def _probe_ray_heads(budget: float = 1.5) -> list[str]:
     # without joining so a straggler socket never stretches past the budget.
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(len(candidates), 32))
     try:
-        futures = {pool.submit(gcs_open, ip): ip for ip in candidates}
+        futures = {pool.submit(client_port_open, ip): ip for ip in candidates}
         done, _not_done = concurrent.futures.wait(futures, timeout=budget)
         return sorted(futures[f] for f in done if f.result())
     finally:
@@ -181,7 +187,7 @@ def _resolve_auto_target(budget: float = 1.5) -> tuple[str | None, str]:
     """
     heads = _probe_ray_heads(budget=budget)
     if len(heads) == 1:
-        return f"ray://{heads[0]}:{RAY_CLIENT_PORT}", ""
+        return f"ray://{heads[0]}:{_ray_client_port()}", ""
     if heads:
         # Two heads means two clusters; guessing would silently compute on the
         # wrong one, so leave the choice to the operator.
@@ -189,7 +195,7 @@ def _resolve_auto_target(budget: float = 1.5) -> tuple[str | None, str]:
             f"tailnet probe found {len(heads)} Ray heads ({', '.join(heads)}); "
             "set IX_FLEET_RAY_ADDRESS to pick one"
         )
-    return None, "tailnet probe found no tag:server peer with a listening Ray GCS"
+    return None, "tailnet probe found no tag:server peer with a listening Ray Client port"
 
 
 def connect(address: str | None = None, *, local: bool = False, **kw: Any) -> None:  # noqa: ANN401 -- forwarded to ray.init
@@ -201,9 +207,9 @@ def connect(address: str | None = None, *, local: bool = False, **kw: Any) -> No
     Client, the supported thin cross-environment path); else ``RAY_ADDRESS``
     (the fleet's NixOS service sets this to the head GCS, since the daemon's
     non-default temp-dir defeats ``"auto"`` discovery); else a tailnet
-    auto-probe (index#1787): online ``tag:server`` peers are TCP-probed for a
-    Ray GCS, and exactly one hit becomes ``ray://<ip>:10001`` -- the Ray Client
-    path, since an off-cluster box cannot join as a raylet; else ``"auto"``,
+    auto-probe (index#1787): online ``tag:server`` peers are TCP-probed on the
+    Ray Client port, and exactly one hit becomes ``ray://<ip>:10001`` -- the
+    Ray Client path, since an off-cluster box cannot join as a raylet; else ``"auto"``,
     which on a fleet node attaches to the local raylet. With ``local=True``, or
     if the target is unreachable, a private single-node Ray is started (with
     one loud stderr line saying so and why) so the same code still runs on a

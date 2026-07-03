@@ -32,10 +32,11 @@ from typing import Any
 
 import polars as pl
 
-# The mesh port constant is owned by the server package (the bind and the
-# probes must agree); this module rides in the same bundled interpreter, so
-# the import is satisfiable wherever `import mesh` itself is.
-from ix_notebook_mcp.config import mesh_port
+# The mesh port constant and the tailnet-address gate are owned by the server
+# package (the bind and the probes must agree on both); this module rides in
+# the same bundled interpreter, so the import is satisfiable wherever
+# `import mesh` itself is.
+from ix_notebook_mcp.config import is_tailnet_ipv4, mesh_port
 
 __version__ = "0.1.0"
 
@@ -101,11 +102,20 @@ async def _tailscale_status() -> dict[str, Any] | None:
 
 
 def _ipv4(ips: object) -> str | None:
-    """The first IPv4 in a TailscaleIPs list, or None."""
+    """The first probeable IPv4 in a TailscaleIPs list, or None.
+
+    Accepts only tailscale's CGNAT range plus loopback: a malformed or spoofed
+    status must not steer the sweep at a LAN or arbitrary address
+    (index#1789 review, mirroring cli._tailscale_ip's bind gate). Loopback is
+    allowed because it is this very machine (harmless to probe) and it is what
+    the hermetic tests stand peers up on.
+    """
     if not isinstance(ips, list):
         return None
     for ip in ips:
-        if isinstance(ip, str) and "." in ip and ":" not in ip:
+        if not isinstance(ip, str):
+            continue
+        if is_tailnet_ipv4(ip) or ip == "127.0.0.1":
             return ip
     return None
 
