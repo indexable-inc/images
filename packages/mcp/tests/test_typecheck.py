@@ -106,6 +106,79 @@ def test_deleting_a_prior_cell_name_is_not_flagged() -> None:
     assert _check("del prior_name", {"prior_name": 5}).ok
 
 
+def test_a_nested_star_import_is_not_blocked() -> None:
+    # `from x import *` under a top-level `if` is still module-scope at runtime
+    # but a SyntaxError inside the wrapper; the skip must see nested statements.
+    assert _check("if True:\n    from math import *").ok
+
+
+def test_internal_helper_cells_are_not_flagged() -> None:
+    # The read MCP tool submits `await __ix_read(...)` through the same runner
+    # path; the runtime's __ix_* entrypoints live in the namespace and must be
+    # stubbed (they are not Python-managed dunders), or every read() is blocked.
+    assert _check("await __ix_read('x', None, None, session=None)", {"__ix_read": object()}).ok
+
+
+def test_single_underscore_prior_names_are_stubbed() -> None:
+    # `_df` is a real prior-cell binding, not an introspection artifact.
+    assert _check("_out = _df", {"_df": object()}).ok
+
+
+def test_a_prior_name_shadowing_a_builtin_uses_the_binding() -> None:
+    # `id = 'abc'` in a prior cell shadows the builtin at runtime, so the stub
+    # must shadow it for the check too: reading the str is fine, and calling it
+    # like the builtin is now the real error it would be at runtime.
+    assert _check("id.upper()", {"id": "abc"}).ok
+    assert not _check("id(5)", {"id": "abc"}).ok
+
+
+def test_a_user_future_import_is_not_blocked() -> None:
+    # Legal at the cell's real module scope; a SyntaxError if indented into the
+    # wrapper, so it is hoisted (blanked; the preamble already carries one).
+    assert _check("from __future__ import annotations\nx: 'int' = 1").ok
+
+
+def test_assignments_inside_compound_statements_bind_the_cell_scope() -> None:
+    # `print(x)` then a conditional `x = 2`: the nested assignment binds the
+    # cell's module scope, so the earlier read must resolve to the prior global
+    # (missing the nested binding made x a wrapper-local, flagging the read).
+    assert _check("print(prior)\nif True:\n    prior = 2", {"prior": 5}).ok
+
+
+def test_annotating_a_prior_name_fails_open() -> None:
+    # `print(x)` then `x: int = 2`: Python forbids `global` on a name annotated
+    # in the same scope, so the wrapper cannot scope this shape correctly; the
+    # checker skips the cell rather than flag the valid read.
+    assert _check("print(prior)\nprior: int = 2", {"prior": 5}).ok
+
+
+def test_workspace_modules_next_to_the_notebook_resolve(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A first-party module in the kernel's working directory imports fine at
+    # runtime (cwd is on sys.path), so the checker must resolve it too.
+    (tmp_path / "myworkmod.py").write_text("VALUE: int = 7\n")
+    monkeypatch.chdir(tmp_path)
+    assert _check("import myworkmod\nprint(myworkmod.VALUE)").ok
+
+
+def test_a_replayed_session_cell_is_never_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Session reopen re-runs already-successful cells (kind="replay"); blocking
+    # one on a checker finding would silently drop its bindings from the
+    # restored namespace.
+    ns: dict = {"Result": runtime.Result}
+    _wire(monkeypatch, ns)
+
+    async def replay() -> runtime.Job:
+        job = runtime.Job("replayed_flag = True\nbad: int = 'nope'", budget=5.0, kind="replay")
+        runtime.jobs[job.id] = job
+        job.task = asyncio.ensure_future(runtime._runner(job, ns))
+        await job.task
+        return job
+
+    job = asyncio.run(replay())
+    assert job.status == "done", (job.status, job.error)
+    assert ns.get("replayed_flag") is True
+
+
 # --------------------------------------------------------------------------- #
 # the checker's own failure never blocks a cell
 # --------------------------------------------------------------------------- #

@@ -38,6 +38,7 @@ import shutil
 import signal
 import sys
 import tempfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 # A name is stubbed with its real type only for these simple, always-importable
@@ -84,26 +85,67 @@ def _stub_type(value: object) -> str:
 
 
 def _stubbable(name: str) -> bool:
-    """Whether ``name`` should get a preamble declaration. Skip dunders and
-    private introspection names, non-identifiers, keywords, and anything that
-    shadows a builtin (``list``, ``print``): ty already knows the builtins, and
-    redeclaring one as ``Any`` would blind the check to it."""
+    """Whether a live namespace ``name`` should get a preamble declaration.
+
+    Everything a cell could legitimately read gets one: helper objects, user
+    variables -- including single-underscore names (``_df`` is a real prior-cell
+    binding) and names that shadow a builtin (``id = 'abc'``: the namespace
+    binding is what the cell reads at runtime, so the stub must shadow the
+    builtin for the check exactly as the binding shadows it at runtime). Skipped
+    are non-identifiers, keywords, and Python-managed dunders (``__name__``,
+    ``__builtins__``); the runtime's own ``__ix_*`` entrypoints are NOT dunders
+    (no trailing underscores) and stay stubbable -- the ``read`` tool submits
+    ``await __ix_read(...)`` cells that must resolve."""
     return (
-        name.isidentifier()
+        isinstance(name, str)
+        and name.isidentifier()
         and not keyword.iskeyword(name)
-        and not name.startswith("_")
-        and name not in _BUILTIN_NAMES
+        and not (name.startswith("__") and name.endswith("__"))
+    )
+
+
+def _scope_statements(body: list[ast.stmt]) -> Iterator[ast.stmt]:
+    """Every statement that executes in the cell's own scope: the top level plus
+    the bodies of top-level compound statements (``if``/``for``/``while``/
+    ``with``/``try``/``match``), recursively -- but never the body of a
+    ``def``/``class``, which is its own scope. An assignment inside a top-level
+    ``if`` binds the cell's scope just like a bare one, so the wrapper's
+    ``global``/stub bookkeeping must see it (missing it turned the name into a
+    wrapper-local and flagged the earlier read as undefined)."""
+    for node in body:
+        yield node
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue  # its own scope; only its NAME binds the cell's scope
+        for field in ("body", "orelse", "finalbody"):
+            inner = getattr(node, field, None)
+            if inner:
+                yield from _scope_statements(inner)
+        for handler in getattr(node, "handlers", []) or []:
+            yield from _scope_statements(handler.body)
+        for case in getattr(node, "cases", []) or []:
+            yield from _scope_statements(case.body)
+
+
+def _has_star_import(tree: ast.Module) -> bool:
+    """True when any statement executing at the cell's scope is a
+    ``from x import *`` -- including one nested in a top-level ``if``/``try``,
+    which is legal at the kernel's module scope but a SyntaxError inside the
+    ``async def`` wrapper."""
+    return any(
+        isinstance(node, ast.ImportFrom) and any(alias.name == "*" for alias in node.names)
+        for node in _scope_statements(tree.body)
     )
 
 
 def _assigned_names(tree: ast.Module) -> tuple[set[str], set[str]]:
-    """The top-level names a cell binds, as ``(global_names, all_names)``.
+    """The names a cell binds at its own scope, as ``(global_names, all_names)``.
 
     ``all_names`` is every binding -- assignment targets, ``for``/``with``
-    bindings, ``def``/``class``/``import`` names, walrus targets -- and each gets
-    a preamble declaration (so a brand-new name is defined rather than flagged,
-    and a ``global`` has a binding to point at). ``global_names`` is the subset
-    that gets a ``global`` in the wrapper (so the cell writes module scope, as it
+    bindings, ``def``/``class``/``import`` names, walrus targets, at the top
+    level or inside a top-level compound statement -- and each gets a preamble
+    declaration (so a brand-new name is defined rather than flagged, and a
+    ``global`` has a binding to point at). ``global_names`` is the subset that
+    gets a ``global`` in the wrapper (so the cell writes module scope, as it
     really does at the kernel's module level). It excludes annotated targets
     (``x: int = ...``): Python forbids ``global`` on a name annotated in the same
     scope, and an annotated binding already lands in the right place."""
@@ -119,7 +161,14 @@ def _assigned_names(tree: ast.Module) -> tuple[set[str], set[str]]:
         elif isinstance(target, ast.Starred):
             add_target(target.value)
 
-    for node in tree.body:
+    def add_pattern(pattern: ast.pattern) -> None:
+        # A `match` case pattern binds its capture names at the cell's scope.
+        for sub in ast.walk(pattern):
+            capture = getattr(sub, "name", None) or getattr(sub, "rest", None)
+            if isinstance(capture, str):
+                names.add(capture)
+
+    for node in _scope_statements(tree.body):
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 add_target(target)
@@ -145,6 +194,9 @@ def _assigned_names(tree: ast.Module) -> tuple[set[str], set[str]]:
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             for alias in node.names:
                 names.add((alias.asname or alias.name).split(".")[0])
+        elif isinstance(node, ast.Match):
+            for case in node.cases:
+                add_pattern(case.pattern)
     # Walrus (:=) anywhere in the cell also binds at the enclosing scope.
     for sub in ast.walk(tree):
         if isinstance(sub, ast.NamedExpr) and isinstance(sub.target, ast.Name):
@@ -173,8 +225,15 @@ def _preamble(namespace: dict, bound: set[str]) -> tuple[str, int]:
         annotation = "Any" if name in bound else _stub_type(value)
         lines.append(f"{name}: {annotation}")
         declared.add(name)
+    # A cell-local extra that shadows a builtin (`list = [...]` in THIS cell) gets
+    # no declaration: it is a wrapper-local whose own assignment binds it, and a
+    # module-level `list: Any` stub would blind the check to the real builtin for
+    # every other use. (A namespaced shadowing name IS declared above: there the
+    # live binding is what the cell reads, exactly as at runtime.)
     lines.extend(
-        f"{name}: Any" for name in sorted(bound) if name not in declared and _stubbable(name)
+        f"{name}: Any"
+        for name in sorted(bound)
+        if name not in declared and _stubbable(name) and name not in _BUILTIN_NAMES
     )
     body = "\n".join(lines) + "\n"
     return body, body.count("\n")
@@ -192,18 +251,24 @@ def _synthesize(code: str, namespace: dict) -> tuple[str, int] | None:
         tree = ast.parse(code, "<cell>", "exec")
     except SyntaxError:
         return None
-    # A top-level `from x import *` is legal in the real cell (it executes at
-    # module scope via PyCF_ALLOW_TOP_LEVEL_AWAIT) but a SyntaxError inside the
+    # A `from x import *` at the cell's scope (top level, or nested in a
+    # top-level `if`/`try`) is legal in the real cell (it executes at module
+    # scope via PyCF_ALLOW_TOP_LEVEL_AWAIT) but a SyntaxError inside the
     # `async def` wrapper, so ty would flag a valid cell (confirmed on ty 0.0.40:
     # error[invalid-syntax] on the cell's own line). Star-imports also make the
     # bound-name set unknowable statically, so skip the check for such a cell
     # rather than block it.
-    if any(
-        isinstance(node, ast.ImportFrom) and any(alias.name == "*" for alias in node.names)
-        for node in tree.body
-    ):
+    if _has_star_import(tree):
         return None
     global_names, all_bound = _assigned_names(tree)
+    annotated = all_bound - global_names
+    if annotated & namespace.keys():
+        # The cell annotates a name that already lives in the namespace
+        # (`print(x)` then `x: int = 2`): Python forbids `global` on a name
+        # annotated in the same scope, so the wrapper cannot both resolve the
+        # earlier read to the live global AND keep the annotation. Rather than
+        # mis-scope it and flag a valid read, fail open for this (rare) shape.
+        return None
     # Only names that ALREADY live in the namespace need a ``global`` -- those are
     # the prior-cell globals a read must resolve to and an assignment must write
     # back. A brand-new name stays a wrapper-local: harmless for the check, and it
@@ -214,10 +279,19 @@ def _synthesize(code: str, namespace: dict) -> tuple[str, int] | None:
     preamble, preamble_lines = _preamble(namespace, all_bound)
     header = "async def __ix_cell__():\n"
     global_decl = f"    global {', '.join(sorted(global_names))}\n" if global_names else ""
+    # A user `from __future__ import ...` is legal at the cell's real module scope
+    # but a SyntaxError inside the wrapper; the preamble already opens with
+    # `from __future__ import annotations`, so blank those lines (preserving the
+    # line count for diagnostics) instead of indenting them into the function.
+    lines = code.splitlines(keepends=True)
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.module == "__future__":
+            for lineno in range(node.lineno, (node.end_lineno or node.lineno) + 1):
+                lines[lineno - 1] = "\n"
     # Indent the cell verbatim (line count preserved 1:1; a constant column shift
     # of 4). Indenting inside a string literal only changes that literal's value,
     # never a type, so it cannot affect the check.
-    indented = "".join("    " + line if line.strip() else line for line in code.splitlines(keepends=True))
+    indented = "".join("    " + line if line.strip() else line for line in lines)
     if indented and not indented.endswith("\n"):
         indented += "\n"
     source = preamble + header + global_decl + indented
@@ -321,6 +395,13 @@ async def check(code: str, namespace: dict, *, timeout: float = 10.0) -> TypeChe
             # that module's real types rather than tripping unresolved-import.
             "--python",
             os.environ.get("IX_MCP_TY_PYTHON", sys.executable),
+            # The synthetic module lives in a private temp dir, but the CELL runs
+            # with the kernel's working directory on sys.path: a first-party
+            # module sitting next to the notebook (`import mymodule`) resolves at
+            # runtime, so it must resolve for the checker too or a valid import
+            # would be flagged unresolved.
+            "--extra-search-path",
+            str(pathlib.Path.cwd()),
             "--output-format",
             "concise",
             "--no-progress",

@@ -41,6 +41,18 @@ def test_partial_frame_is_a_dataframe_that_flags_truncation() -> None:
     assert not hasattr(pl.DataFrame({"a": [1]}), "truncated")
 
 
+def test_partial_frame_truncation_reaches_the_model_text() -> None:
+    # A cell returning a PartialFrame renders through Result.of's NUON path, not
+    # repr(), so the truncation note must ride the model text itself -- otherwise
+    # a timed-out scan reads as a complete result.
+    from ix_notebook_mcp import runtime
+
+    partial = fsearch.PartialFrame({"a": [1]}, reason="stopped early")
+    assert "[partial results: stopped early]" in runtime.Result.of(partial).llm_result
+    # A plain frame carries no note.
+    assert "[partial results" not in runtime.Result.of(pl.DataFrame({"a": [1]})).llm_result
+
+
 def test_grep_recovers_partial_matches_on_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     # `grep` streams ripgrep via `_stream_rg`, so the timeout recovery lives there:
     # on a deadline it returns the rows parsed before the kill with `timed_out=True`,

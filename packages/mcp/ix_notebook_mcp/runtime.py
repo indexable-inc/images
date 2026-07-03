@@ -1936,7 +1936,11 @@ async def _runner(job: Job, ns: dict) -> None:
         # returned as the result -- the cell never executes -- so the agent fixes
         # it and retries instead of hitting it three lines into a side-effecting
         # cell. The checker's own failures never block a cell (see typecheck.check).
-        if _typecheck_enabled():
+        # Replays are exempt: a session reopen re-runs cells that ALREADY executed
+        # successfully (kind="replay", see store.replayable), and blocking one on
+        # a checker finding would silently drop its bindings from the restored
+        # namespace -- the check already had its chance when the cell first ran.
+        if job.kind != "replay" and _typecheck_enabled():
             verdict = await typecheck.check(job.code, ns)
             if not verdict.ok:
                 # Record it like any other failed cell: `error` (the dashboard's
@@ -2240,6 +2244,14 @@ def _df_llm_text(df: Any) -> str:
         schema = ", ".join(f"{name}:{dtype}" for name, dtype in zip(df.columns, df.dtypes, strict=False))
         body = _nuon_table(list(head.columns), head.to_dicts())
         more = f"\n... ({rows - _DF_LLM_ROWS} more rows)" if rows > _DF_LLM_ROWS else ""
+        # A frame flagging an incomplete scan (fsearch's PartialFrame: `truncated`
+        # + `reason`, duck-typed so the runtime stays decoupled) must SAY so in
+        # the model text: this NUON render is what the agent reads, and its repr
+        # banner never reaches this path, so without the note a timed-out search
+        # would read as a complete result.
+        if getattr(df, "truncated", False):
+            reason = getattr(df, "reason", "") or "scan incomplete"
+            return f"[partial results: {reason}]\nshape: ({rows}, {cols}) | {schema}\n{body}{more}"
         return f"shape: ({rows}, {cols}) | {schema}\n{body}{more}"
     except Exception:
         # An exotic frame that resists row iteration falls back to safe NUON text.
