@@ -96,6 +96,9 @@ define_class!(
                 && let Some(view) = self.contentView()
             {
                 view.keyUp(event);
+                // No super on purpose: AppKit's key-equivalent path would
+                // swallow this keyUp anyway, and the view is its only
+                // intended consumer.
                 return;
             }
             let _: () = unsafe { objc2::msg_send![super(self), sendEvent: event] };

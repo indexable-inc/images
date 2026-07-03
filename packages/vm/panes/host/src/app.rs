@@ -96,7 +96,21 @@ impl Drop for CursorCapture {
         if err != CGError::Success {
             eprintln!("panes-host: window {}: cursor re-association failed: {err:?}", self.id);
         }
-        NSCursor::unhide();
+        // NSCursor.hide nests, and the engage-side re-hides
+        // (`reassert_capture_cursor`) may have raised the count past one:
+        // whether the OS-forced show on right-mouse-down decrements the
+        // counter is undocumented, so a single unhide here could strand the
+        // cursor hidden system-wide, the worst failure this struct exists to
+        // prevent. Unhide until the cursor is actually visible; bounded as
+        // paranoia against a wedged visibility query, and stopping at
+        // visible avoids driving the counter needlessly negative.
+        #[allow(deprecated)] // CGCursorIsVisible: see reassert_capture_cursor.
+        for _ in 0..16 {
+            NSCursor::unhide();
+            if objc2_core_graphics::CGCursorIsVisible() {
+                break;
+            }
+        }
     }
 }
 
@@ -357,9 +371,11 @@ fn whole_ms(seconds: f64) -> u32 {
 /// right-mouse-down menu-preparation path is the one guests actually hit
 /// (holding right-click in a pointer-locked game showed the cursor); GLFW
 /// catalogs more (screenshot mode, dock hover: glfw#2648, glfw#2656). Each
-/// such unhide pops one `NSCursor.hide`, so re-hiding only while the cursor
-/// is actually visible keeps hide/unhide balanced: every extra hide matches
-/// one OS-initiated unhide, and the capture's `Drop` still releases cleanly.
+/// such show may or may not decrement the `NSCursor.hide` nesting counter
+/// (undocumented), so the guard only re-hides while the cursor is actually
+/// visible, and the capture's `Drop` symmetrically unhides until visible:
+/// correct under either counter semantic, and release can never strand a
+/// hidden cursor.
 /// The deferred second look exists because the OS unhide lands during event
 /// processing, ordered unpredictably against the view handler that calls
 /// this; the back of the main queue is reliably after both.

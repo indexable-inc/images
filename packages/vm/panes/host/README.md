@@ -129,7 +129,9 @@ compositor).
   holding right-click in a pointer-locked game showed the cursor -- plus
   screenshot mode and dock hover, glfw#2648/#2656), so while captured every
   button event re-checks `CGCursorIsVisible` and re-hides, immediately and
-  once more from the back of the main queue.
+  once more from the back of the main queue; release unhides until the
+  cursor is actually visible, so the (undocumented) hide-nesting counter can
+  never strand a hidden cursor.
 
 ## Mock guest
 
