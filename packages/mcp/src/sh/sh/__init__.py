@@ -24,8 +24,8 @@ the cursor-movement noise a PTY would inject. Pass ``color=False`` to disable it
 
 The :class:`Output` also exposes the parts programmatically::
 
-    out.code     # exit status (int)
-    out.ok       # out.code == 0
+    out.code     # exit status (int); .exit_code / .returncode are aliases
+    out.ok       # out.code == 0 (also `bool(out)`: a failed Output is falsy)
     out.text     # combined stdout+stderr, escape codes stripped
     out.raw      # the same, with the original ANSI color preserved
     out.cmd      # the command that was run
@@ -50,8 +50,17 @@ An ``Output`` also behaves like its text for the common string operations
 ``str(out)``), so composing command output needs no ``str(...)`` wrapping.
 
 stdout and stderr are merged in emission order (terminal-style). A non-zero exit
-is surfaced, never swallowed: the model view appends an ``[exit N]`` marker, and
-``await sh(cmd, check=True)`` raises :class:`ShellError` instead of returning.
+is surfaced, never swallowed (issue #1766: a dead 45-minute build once read as
+"still compiling" for 25 minutes because the failure lived only in the output
+text). The model view of a failed Output LEADS with a ``[exit N] command
+failed...`` line and ends with an ``[exit N]`` marker, so both a head-read and a
+tail-read of a long log see the failure; the same line is echoed into the
+streamed job stdout (``jobs['<id>'].output`` / ``.tail()``), so a watcher paging
+a backgrounded build sees the terminal state even when the Output value is never
+bound or rendered; a failed Output is falsy (``if not out:``); and ``await
+sh(cmd, check=True)`` raises :class:`ShellError` instead of returning. ``.text``
+stays the command's own output with no markers, so reading diagnostics off a
+failure (or a ``grep`` that legitimately exits 1) is unchanged.
 
 **Never pass prose through shell quoting.** Backticks in a string command are
 run as command substitution by the shell even when the string was produced by
@@ -91,7 +100,7 @@ from typing import Any
 
 __all__ = ["Output", "ShellError", "sh", "zsh"]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # `Result` is the kernel runtime's human/model split. Importing it lets an
 # `Output` BE a Result, so a cell can end with `await sh(...)` and satisfy the
@@ -220,6 +229,20 @@ class Output(_ResultBase):
         return self.code == 0
 
     @property
+    def exit_code(self) -> int:
+        """Alias for ``.code``: the child's exit status. Exists so the name a
+        watcher naturally keys on (issue #1766 asked for ``.exit_code``) works
+        without a wasted AttributeError roundtrip."""
+        return self.code
+
+    @property
+    def returncode(self) -> int:
+        """Alias for ``.code``, matching ``subprocess.CompletedProcess``: the
+        conventional attribute name works here too (same rationale as the
+        ``.stdout``/``.stderr`` aliases below)."""
+        return self.code
+
+    @property
     def text(self) -> str:
         """Combined stdout+stderr with ANSI escape codes stripped."""
         return _strip_ansi(self.raw)
@@ -317,12 +340,23 @@ class Output(_ResultBase):
             value = [value]
         return pl.DataFrame(value)
 
+    def _failure_line(self) -> str:
+        """One loud line naming the failure: the exit code first, then how long
+        the command ran and what it was. It leads the model view and is echoed
+        into the streamed job stdout (see :func:`sh`), so a failed command can
+        never render as quiet success or as still-running (issue #1766)."""
+        cmd = self.cmd if len(self.cmd) <= 120 else self.cmd[:117] + "..."
+        return f"[exit {self.code}] command failed after {self.duration:.1f}s: {cmd}"
+
     def _render_text(self) -> str:
         body = self.text
         if self.code != 0:
-            # Flag a failure so the model never reads non-zero output as success.
+            # Flag a failure at BOTH ends so the model never reads non-zero
+            # output as success: the leading line survives a head-read (and the
+            # head+tail clip a huge log gets in outputs.text), the trailing
+            # marker survives a tail-read. `.text` itself stays marker-free.
             marker = f"[exit {self.code}]"
-            body = f"{body}\n{marker}" if body else marker
+            body = f"{self._failure_line()}\n{body}\n{marker}" if body else self._failure_line()
         if self.hint:
             # Model view only: the human's terminal block stays clean. The hint
             # teaches the structured alternative at the exact moment the weaker
@@ -332,6 +366,9 @@ class Output(_ResultBase):
 
     def _render_html(self) -> str:
         body = _ansi_to_html(self.raw)
+        # A failed command's block gets the failure color on its border too, so
+        # the human spots it while scrolling without reading the footer badge.
+        border_color = "#242427" if self.code == 0 else "#fc618d"
         badge_color = "#7bd88f" if self.code == 0 else "#fc618d"
         badge = (
             f'<span style="color:{badge_color}">exit {self.code}</span>'
@@ -348,7 +385,7 @@ class Output(_ResultBase):
         )
         foot = f'<div style="padding:0 10px 6px;font-size:11px">{badge}</div>'
         return (
-            f'<div style="background:#141416;border:1px solid #242427;border-radius:6px;'
+            f'<div style="background:#141416;border:1px solid {border_color};border-radius:6px;'
             f'color:#e6e6e6;font-family:{_MONO};font-size:12px;overflow:auto">'
             f"{prompt}{out}{foot}</div>"
         )
@@ -366,10 +403,13 @@ class Output(_ResultBase):
         return self.text
 
     def __bool__(self) -> bool:
-        # Defining __len__ would otherwise make an empty (but successful) output
-        # falsy; an Output is a result object, so it is always truthy -- test
-        # success with `.ok`, emptiness with `len(out)`.
-        return True
+        # Truthiness is SUCCESS, not emptiness: `if not out:` catches a failed
+        # command the way `if proc.returncode:` would, and an empty-but-
+        # successful output stays truthy (defining __len__ alone would have made
+        # it falsy). Test emptiness with `len(out)`. Before #1766 an Output was
+        # unconditionally truthy, so `if await sh('test -f x'):` read every
+        # failure as success.
+        return self.ok
 
     def __getitem__(self, key: int | slice) -> str:
         return self.text[key]
@@ -458,7 +498,10 @@ async def sh(
     rejected, so the command string stays clean. ``env`` extends the environment;
     ``timeout`` (seconds) kills the child's whole process group and raises
     :class:`TimeoutError`; ``check=True`` raises :class:`ShellError` on a non-zero
-    exit; ``color=False`` suppresses the forced-color environment.
+    exit; ``color=False`` suppresses the forced-color environment. A non-zero
+    exit that is NOT checked still cannot pass silently: the returned Output is
+    falsy, its rendered text leads and ends with the exit code, and the failure
+    line is echoed into the streamed job stdout (see the module docstring).
     ``name`` sets a human-readable label for the running job in the dashboard and
     the ``jobs`` dict (mirrors the same parameter on ``python_exec``); outside
     the kernel it is accepted and silently ignored.
@@ -610,6 +653,14 @@ async def sh(
         duration=duration,
         hint=_structured_hint(cmd),
     )
+    if do_echo and not out.ok:
+        # The failure line also lands in the streamed stdout, so
+        # jobs['<id>'].output / .tail() carry the terminal state: a watcher
+        # paging a backgrounded build sees the death even when the Output value
+        # is never bound or rendered (issue #1766: a build dead on ENOSPC read
+        # as still-compiling for 25 minutes).
+        lead = "" if not out.raw or out.raw.endswith("\n") else "\n"
+        sys.stdout.write(lead + out._failure_line() + "\n")
     if check and not out.ok:
         raise ShellError(out)
     return out

@@ -2383,6 +2383,19 @@ let
             both.result.llm_result
         )
 
+        # A cell ending in a failed sh() is loud on every surface a watcher
+        # reads (issue #1766: a build dead on ENOSPC read as still-compiling):
+        # the streamed stdout carries the failure line, so paging a backgrounded
+        # job's .output/.tail() shows the terminal state, and the result's model
+        # text leads AND ends with the exit marker. The Output itself is falsy.
+        fsh = await run("await sh('echo diag-line; exit 7')", budget=10.0, name="failed-sh")
+        assert fsh.status == "done", (fsh.status, fsh.error)
+        assert "diag-line" in fsh.output and "[exit 7]" in fsh.output, fsh.output
+        assert fsh.result.llm_result.splitlines()[0].startswith("[exit 7]"), fsh.result.llm_result
+        assert fsh.result.llm_result.rstrip().endswith("[exit 7]"), fsh.result.llm_result
+        assert fsh.result.exit_code == 7 and not fsh.result.ok, fsh.result.exit_code
+        assert bool(fsh.result) is False, "a failed sh() Output must be falsy"
+
         # .result raises while the job runs (a misleading None would read as
         # "finished with no value"); .done()/.ok track the lifecycle.
         slow = await run("import asyncio\nawait asyncio.sleep(0.4)\nResult.text('late')", budget=0.02, name="slow")
@@ -2880,9 +2893,7 @@ let
   # tests need ty resolvable and its diagnostics stable, so ty is provided on the
   # env exactly as the wrapper sets it; rg/fd back the fsearch limit assertion.
   # A dedicated interpreter adds pytest (the bare mcpPython omits it).
-  typecheckTestPython = mcpPythonInterp.withPackages (
-    ps: (mcpPythonPackages ps) ++ [ ps.pytest ]
-  );
+  typecheckTestPython = mcpPythonInterp.withPackages (ps: (mcpPythonPackages ps) ++ [ ps.pytest ]);
   typecheckSmoke =
     pkgs.runCommand "ix-mcp-typecheck-smoke"
       {
@@ -4241,10 +4252,30 @@ let
 
         assert sh._strip_ansi is _rt._strip_ansi and sh._ansi_to_html is _rt._ansi_to_html
 
-        # argv form, and a non-zero exit is surfaced (not swallowed).
+        # argv form, and a non-zero exit is surfaced (not swallowed): typed
+        # (.code with the .exit_code/.returncode aliases), falsy, and loud at
+        # BOTH ends of the model view so a head-read of a long log sees the
+        # failure as surely as a tail-read (issue #1766).
         failed = await sh.sh(["false"], cwd=".")
         assert not failed.ok and failed.code == 1, failed.code
+        assert failed.exit_code == 1 and failed.returncode == 1, failed.exit_code
+        assert bool(failed) is False, "a failed Output must be falsy"
         assert "[exit 1]" in failed.llm_result, failed.llm_result
+        assert failed.llm_result.splitlines()[0].startswith("[exit 1]"), failed.llm_result
+        noisy = await sh.sh("echo diagnostic-text; exit 3", cwd=".")
+        first, *rest = noisy.llm_result.splitlines()
+        assert first.startswith("[exit 3]") and "exit 3" in first, noisy.llm_result
+        assert noisy.llm_result.rstrip().endswith("[exit 3]"), noisy.llm_result
+        # ...while .text stays the command's own output, marker-free, so
+        # reading diagnostics off a failure is unchanged.
+        assert noisy.text.strip() == "diagnostic-text", repr(noisy.text)
+        assert "diagnostic-text" in "\n".join(rest), noisy.llm_result
+
+        # The expected-nonzero class (grep exiting 1 on no match) stays
+        # workable: branch on .ok/.code and read .text, nothing raises.
+        nomatch = await sh.sh("grep zzz-no-such /dev/null", cwd=".")
+        assert not nomatch.ok and nomatch.code == 1, nomatch.code
+        assert "[exit" not in nomatch.text, repr(nomatch.text)
 
         # check=True turns a non-zero exit into a typed error carrying the output.
         try:
@@ -4301,7 +4332,9 @@ let
         assert direct[-1:] == "i" and direct[0] == "h", (direct[-1:], direct[0])
         assert direct + "!" == "hi!" and "say " + direct == "say hi"
         assert "hi" in direct and len(direct) == 2 and str(direct) == "hi"
-        assert bool(await sh("true")) is True  # empty but successful: still truthy
+        # Truthiness is success: empty-but-successful stays truthy (test
+        # emptiness with len), and a failed Output is falsy (asserted above).
+        assert bool(await sh("true")) is True
 
         # Output streams to sys.stdout as it arrives (echo=True forces it outside
         # a kernel job), escape-stripped -- so a long command's log lands in the
@@ -4318,6 +4351,14 @@ let
         with contextlib.redirect_stdout(quiet):
             await sh("printf silent")
         assert quiet.getvalue() == "", repr(quiet.getvalue())
+        # A failing command's stream also carries the failure line, so a watcher
+        # paging a backgrounded job's stdout (jobs['<id>'].tail()) sees the
+        # terminal state even if the Output is never bound (issue #1766).
+        fbuf = io.StringIO()
+        with contextlib.redirect_stdout(fbuf):
+            await sh("echo dying; exit 5", echo=True)
+        assert "dying" in fbuf.getvalue(), repr(fbuf.getvalue())
+        assert "[exit 5]" in fbuf.getvalue(), repr(fbuf.getvalue())
 
         # Cancelling the awaiting task kills the child's whole process group:
         # no orphan keeps running (or holding a lock) after a .cancel().
