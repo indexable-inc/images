@@ -285,6 +285,14 @@ let
       '';
     }
     {
+      proactiveIssueResolution = ''
+        When discovering an issue that you can reasonably resolve, spawn a named agent
+        to own and fix it rather than just filing it. Use Agent with a descriptive name
+        and targeted prompt. This keeps discovered problems from lingering and makes
+        progress visible to the user.
+      '';
+    }
+    {
       harness = ''
         Know the ${agentName} runtime. Text outside tools renders as GitHub-flavored
         Markdown. Cite code as `file_path:line_number`. Batch independent native tool
