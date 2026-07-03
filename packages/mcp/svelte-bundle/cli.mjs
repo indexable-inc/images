@@ -38,14 +38,21 @@ if (!fs.existsSync(entryAbs)) {
   process.exit(2);
 }
 
-// Generated wrapper entry: mount the component on the iframe body. Svelte 5
-// `mount` replaces the class-component `new App(...)` API. Resource HTML is
-// often scripts-only, which the parser executes from <head> before <body>
-// exists, so defer the mount until the DOM is ready.
+// Generated wrapper entry. Svelte 5 `mount` replaces the class-component
+// `new App(...)` API. Resource HTML is often scripts-only, which the parser
+// executes from <head> before <body> exists, so defer the mount until the DOM
+// is ready. Mount into the script's containing element when it sits in the
+// body (ix-windows wraps producer HTML in a measured #ix-content div, and a
+// body-mounted app would land outside it and size the window to nothing);
+// scripts hoisted into <head> fall back to document.body.
 const wrapper = `
   import { mount } from "svelte";
   import App from ${JSON.stringify(entryAbs)};
-  const boot = () => mount(App, { target: document.body });
+  const script = document.currentScript;
+  const boot = () => {
+    const host = script?.parentElement;
+    mount(App, { target: host && document.body.contains(host) ? host : document.body });
+  };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
   else boot();
 `;

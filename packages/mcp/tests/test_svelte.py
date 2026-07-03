@@ -42,6 +42,16 @@ COUNTER = """
 """
 
 
+# State-only: imports `data` but wires no actions, so the resource HTML
+# carries no window.ix wiring script at all.
+DISPLAY = """
+<script>
+  import { data } from 'ix';
+</script>
+<p id="msg">{$data.msg}</p>
+"""
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -68,6 +78,47 @@ def test_seed_json_blocks_script_data_breakout() -> None:
 def test_bundle_reports_compile_errors() -> None:
     with pytest.raises(svelte.SvelteError, match="svelte-bundle failed"):
         asyncio.run(svelte.bundle("<h1>{unclosed</h1>"))
+
+
+def test_state_only_component_mounts_inside_container(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No actions -> no window.ix wiring: the ix module must not throw on load,
+    and the app must mount inside the script's containing element (ix-windows
+    measures #ix-content for native window sizing, so a body-level mount would
+    render outside the measured wrapper)."""
+    pytest.importorskip("playwright")
+    from playwright.async_api import async_playwright
+
+    async def run() -> None:
+        conn = store.connect(tmp_path / "svelte.db")
+        monkeypatch.setattr(runtime, "_store", store)
+        monkeypatch.setattr(runtime, "_store_conn", conn)
+
+        res = await svelte.component(DISPLAY, id="svelte-test-display", state={"msg": "hello"})
+        body = await res.render_html()
+        assert "window.ix=window.ix" not in body  # state-only: no wiring script
+        wrapped = f'<div id="ix-content">{body}</div>'
+
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch()
+                try:
+                    page = await browser.new_page()
+                    await page.set_content('<iframe id="f" sandbox="allow-scripts"></iframe>')
+                    await page.eval_on_selector("#f", "(el, html) => { el.srcdoc = html; }", wrapped)
+                    frame = page.frame_locator("#f")
+                    # the guarded ix module survived the missing window.ix and
+                    # rendered the kernel-embedded seed
+                    assert await frame.locator("#msg").text_content() == "hello"
+                    # mounted INSIDE the measured wrapper, not on document.body
+                    assert await frame.locator("#ix-content #msg").count() == 1
+                finally:
+                    await browser.close()
+        finally:
+            res.close()
+
+    asyncio.run(run())
 
 
 def test_component_click_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

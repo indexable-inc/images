@@ -27,10 +27,16 @@ export const error = writable(null);
 
 /** Queue `payload` for the named in-kernel action handler. */
 export function act(name, payload = {}) {
+  if (!globalThis.ix?.act) {
+    throw new Error(`ix.act(${JSON.stringify(name)}): this resource was registered without actions`);
+  }
   return globalThis.ix.act(name, payload);
 }
 
-globalThis.ix.events((ev) => {
+// A state-only component (svelte.component(..., actions=None)) gets no wiring
+// script, so window.ix never exists: its `data` store just keeps the embedded
+// seed and there is no event feed to subscribe to.
+globalThis.ix?.events((ev) => {
   if (!ev || typeof ev !== "object") return;
   if (ev.kind === "action_result") {
     error.set(null);
