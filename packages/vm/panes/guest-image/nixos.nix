@@ -108,6 +108,12 @@ let
       # /run/opengl-driver inside the container: mesa's venus vulkan ICD plus
       # the zink GL driver for clients that go through the loader.
       hardware.graphics.enable = true;
+      # The containers ship no fonts at all, so fontconfig resolved foot's
+      # "monospace" request to proportional DejaVu Sans (foot warned on every
+      # launch and text rendered wide-spaced, observed live). One real mono
+      # family makes the generic "monospace" pattern resolve correctly for
+      # every terminal-class app.
+      fonts.packages = [ pkgs.dejavu_fonts ];
       systemd.services."panes-app-${name}" = {
         description = "panes app: ${name}";
         wantedBy = [ "multi-user.target" ];
