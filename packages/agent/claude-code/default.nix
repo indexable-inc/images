@@ -300,6 +300,12 @@ let
       # Checkpoint shadow-commits churn large repos for little value when every
       # edit already lands on a dedicated worktree branch.
       fileCheckpointingEnabled = false;
+      # Agent-team teammates in split panes (tmux, or iTerm2 via the it2 CLI)
+      # instead of the upstream in-process default: the fleet's long-running
+      # sessions already live in named tmux sessions, and the repo ships a
+      # tmux wrapper with matching defaults (packages/tmux). Per session:
+      # `claude --teammate-mode in-process` (the flag outranks this layer).
+      teammateMode = "tmux";
       # House docs plugins and the marketplaces they resolve from.
       enabledPlugins = {
         "ix-docs@ix" = true;

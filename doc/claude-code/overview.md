@@ -106,6 +106,9 @@ wrapper injects its defaults file only `unless_present` a caller `--settings`
   `autoMemoryDirectory` in a consumer's `extraSettings`).
 - `fileCheckpointingEnabled = false`: worktree branches already carry every
   edit; checkpoint shadow-commits just churn large repos.
+- `teammateMode = "tmux"`: agent-team teammates open in split panes (tmux or
+  iTerm2) instead of in-process; override per session with
+  `claude --teammate-mode in-process`.
 - `enabledPlugins` (`ix@ix`, `ix-docs@ix`) + `extraKnownMarketplaces`
   (Mixedbread-Grep, antithesis-skills, ix): house docs plugins and where they
   resolve from.
