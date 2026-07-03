@@ -588,7 +588,13 @@ async def sh(
         # bound it anyway so a wedged reap can never hang the job past its timeout.
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(proc.wait(), 2.0)
-        raise TimeoutError(f"command timed out after {timeout}s: {shown}") from None
+        exc = TimeoutError(f"command timed out after {timeout}s: {shown}")
+        # Attach whatever the child had already written before the deadline, so a
+        # caller catching the timeout can still recover partial results (fsearch
+        # parses this to return the matches found so far) instead of discarding a
+        # long scan's work. It is the same merged stdout+stderr text `.raw` holds.
+        exc.partial_output = "".join(chunks)  # type: ignore[attr-defined]
+        raise exc from None
     except asyncio.CancelledError:
         # The awaiting task was cancelled (jobs['<id>'].cancel()): take the child
         # and its whole group down with it, so a cancelled cell never leaves an

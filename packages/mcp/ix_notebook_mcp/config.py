@@ -87,6 +87,12 @@ class Config:
     # the kernel, and returning an actionable summary. See ``kernel.python_exec``.
     wedge_grace: float = 15.0
 
+    # Per-cell static type checking (ty) before a cell executes: default on, so a
+    # type error is caught and returned instead of blowing up at runtime. The
+    # ``IX_MCP_TYPECHECK`` env var overrides this at the kernel (see
+    # ``runtime._typecheck_enabled``); set this False to disable it server-wide.
+    typecheck: bool = True
+
     # Hard ceiling on a single ``python_exec`` foreground ``budget``. The budget is
     # how long the ONE shared shell channel is held before the run backgrounds, so
     # an oversized budget (a 15-minute ``await jobs['x']``) wedges every other call

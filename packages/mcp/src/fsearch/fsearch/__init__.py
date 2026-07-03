@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json as _json
 import os
+import signal
 import stat as _stat
 import sys
 from datetime import UTC, datetime
@@ -33,14 +35,18 @@ from pathlib import Path
 from typing import Any
 
 import polars as pl
-from sh import Output, sh as _sh  # the bundled async shell-out helper; `sh.sh` is the function
+from sh import sh as _sh  # the bundled async shell-out helper; `sh.sh` is the function
 
-__all__ = ["FsearchError", "find", "grep", "spotlight"]
+__all__ = ["FsearchError", "PartialFrame", "find", "grep", "spotlight"]
 
 __version__ = "0.1.0"
 
 DEFAULT_LIMIT = 10_000
 DEFAULT_TIMEOUT = 30.0
+# StreamReader buffer for the rg --json line stream (one JSON event per line). A
+# match on a very long line makes that event large; 64 MiB keeps a legitimate
+# long-line hit parseable where the asyncio default (64 KiB) would raise.
+_STREAM_LINE_LIMIT = 64 * 1024 * 1024
 
 _GREP_SCHEMA = {
     "path": pl.Utf8,
@@ -64,6 +70,32 @@ class FsearchError(Exception):
     """A search backend exited with an error (or, for spotlight, is unavailable)."""
 
 
+class PartialFrame(pl.DataFrame):
+    """A search-result frame whose scan did not finish, so the rows are only the
+    matches found before the cut-off (a timeout, or the ``limit`` cap).
+
+    It IS a ``polars.DataFrame`` -- ``.filter``/``.sort``/``.head`` all work -- so
+    a caller that ignores the truncation still gets usable rows. Two things flag
+    the incompleteness so a caller cannot silently mistake a partial scan for a
+    complete one: ``.truncated`` is ``True`` (a plain frame has no such
+    attribute), and ``.reason`` explains the cut-off; the ``repr`` (what the
+    dashboard/model see) leads with a one-line warning. A polars operation that
+    builds a new frame returns a plain ``DataFrame`` -- the flag describes THIS
+    scan, not a derived view, so it deliberately does not propagate."""
+
+    # Class default so `getattr(frame, "truncated", False)` is safe on any frame
+    # (a plain DataFrame returns the False default; a PartialFrame overrides it).
+    truncated = True
+
+    def __init__(self, data: object = None, *args: object, reason: str = "", **kwargs: object) -> None:
+        super().__init__(data, *args, **kwargs)
+        self.reason = reason
+
+    def __repr__(self) -> str:
+        banner = f"[partial results: {self.reason}]\n" if self.reason else "[partial results]\n"
+        return banner + super().__repr__()
+
+
 def _expand(root: str | os.PathLike[str]) -> str:
     """Expand a leading ``~`` to an absolute path. Sync on purpose: ``expanduser``
     only reads ``$HOME`` / the passwd db (no event-loop I/O), and keeping it out
@@ -71,19 +103,26 @@ def _expand(root: str | os.PathLike[str]) -> str:
     return str(Path(root).expanduser())
 
 
-async def _run(argv: list[str], *, timeout: float, ok_codes: tuple[int, ...] = (0,)) -> Output:
+async def _run(argv: list[str], *, timeout: float, ok_codes: tuple[int, ...] = (0,)) -> tuple[str, bool]:
     """Run a search CLI off the event loop with color disabled (so its output is
-    clean, never SGR-corrupted). A non-success exit or a timeout surfaces as
-    FsearchError, so callers have one error type to catch (the timeout is the
-    safety net: a runaway search is killed at the deadline, never wedging the
-    kernel)."""
+    clean, never SGR-corrupted) and return ``(output_text, timed_out)``.
+
+    On a timeout the search is killed at the deadline (the safety net: a runaway
+    search never wedges the kernel), but its output-so-far is NOT discarded --
+    ``sh`` attaches it to the ``TimeoutError`` as ``partial_output``, so this
+    returns that text with ``timed_out=True`` and the caller parses the matches
+    found before the cut-off. A non-success exit (other than the expected codes)
+    still surfaces as FsearchError."""
     try:
         out = await _sh(argv, timeout=timeout, color=False)
     except TimeoutError as exc:
-        raise FsearchError(f"{argv[0]} timed out after {timeout}s") from exc
+        # Recover whatever the child wrote before the deadline (see sh.sh); an
+        # older sh without the attribute yields "" -- an empty partial, not a
+        # crash.
+        return (getattr(exc, "partial_output", "") or "", True)
     if out.code not in ok_codes:
         raise FsearchError(f"{argv[0]} exited {out.code}: {out.text.strip()[:500]}")
-    return out
+    return (out.text, False)
 
 
 def _rg_str(field: dict[str, Any] | None) -> str:
@@ -180,37 +219,137 @@ async def grep(
     if glob:
         argv += ["-g", glob]
     argv += ["--", pattern, _expand(root)]
-    out = await _run(argv, timeout=timeout, ok_codes=(0, 1))  # rg exits 1 on no matches
-    rows: list[dict[str, Any]] = []
-    for raw in out.text.splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        try:
-            event = _json.loads(line)
-        except ValueError:
-            continue  # a non-JSON line (e.g. a stderr warning merged in) — skip it
-        if event.get("type") != "match":
-            continue
-        data = event["data"]
-        path = _rg_str(data.get("path"))
-        line_number = data.get("line_number")
-        text = _rg_str(data.get("lines")).rstrip("\n")
-        abs_offset = data.get("absolute_offset")
-        for sm in data.get("submatches", []):
-            rows.append(
-                {
-                    "path": path,
-                    "line_number": line_number,
-                    "col": sm.get("start"),
-                    "match": _rg_str(sm.get("match")),
-                    "line": text,
-                    "abs_offset": abs_offset,
-                }
-            )
-            if len(rows) >= limit:
-                return pl.DataFrame(rows, schema=_GREP_SCHEMA)
+    rows, timed_out, hit_limit = await _stream_rg(argv, limit=limit, timeout=timeout)
+    if timed_out:
+        return PartialFrame(
+            rows,
+            schema=_GREP_SCHEMA,
+            reason=f"rg timed out after {timeout}s; {len(rows)} match(es) found before the deadline",
+        )
+    if hit_limit:
+        # The scan stopped at `limit` (rg was killed once enough matches were
+        # parsed, rather than left to scan the whole tree): the rows are complete
+        # up to the cap but the search did not exhaust `root`, so flag it.
+        return PartialFrame(
+            rows,
+            schema=_GREP_SCHEMA,
+            reason=f"stopped at limit={limit}; raise limit= to scan further",
+        )
     return pl.DataFrame(rows, schema=_GREP_SCHEMA)
+
+
+def _parse_rg_match(event: dict[str, Any]) -> list[dict[str, Any]]:
+    """The submatch rows for one ripgrep ``--json`` ``match`` event (empty for a
+    non-match event)."""
+    if event.get("type") != "match":
+        return []
+    data = event["data"]
+    path = _rg_str(data.get("path"))
+    line_number = data.get("line_number")
+    text = _rg_str(data.get("lines")).rstrip("\n")
+    abs_offset = data.get("absolute_offset")
+    return [
+        {
+            "path": path,
+            "line_number": line_number,
+            "col": sm.get("start"),
+            "match": _rg_str(sm.get("match")),
+            "line": text,
+            "abs_offset": abs_offset,
+        }
+        for sm in data.get("submatches", [])
+    ]
+
+
+async def _stream_rg(
+    argv: list[str], *, limit: int, timeout: float
+) -> tuple[list[dict[str, Any]], bool, bool]:
+    """Run ripgrep and parse its ``--json`` stream line by line, killing the
+    process group as soon as ``limit`` match rows are collected.
+
+    Returns ``(rows, timed_out, hit_limit)``. ripgrep has no global "stop after N
+    total matches" flag (``--max-count`` is per file), so bounding a ``limit=``
+    query means terminating rg once enough rows are parsed instead of letting it
+    scan the whole tree and discarding the tail -- otherwise a broad pattern over
+    a huge root pays the full-tree cost for a handful of wanted rows. The scan is
+    still a separate process bounded by ``timeout`` (a process-group kill, like
+    ``sh``), so a runaway never wedges the kernel's event loop."""
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+        start_new_session=True,  # own process group, so the kill reaps rg's children too
+        # One rg --json event is a whole line; a match on a very long line (a
+        # minified bundle, a data file) makes that line large, and the default
+        # 64 KiB StreamReader buffer raises LimitOverrunError on it. Give the
+        # buffer room so a legitimate long-line match parses instead of crashing
+        # the search.
+        limit=_STREAM_LINE_LIMIT,
+    )
+    rows: list[dict[str, Any]] = []
+    hit_limit = False
+
+    async def _read() -> None:
+        nonlocal hit_limit
+        assert proc.stdout is not None
+        while True:
+            try:
+                raw = await proc.stdout.readline()
+            except ValueError:
+                # A single line still exceeded the (generous) buffer: skip past it
+                # rather than abort the whole search. readline() consumed the
+                # buffer, so the next read resumes after the oversized line.
+                continue
+            if not raw:
+                break
+            line = raw.decode("utf-8", "replace").strip()
+            if not line:
+                continue
+            try:
+                event = _json.loads(line)
+            except ValueError:
+                continue  # a non-JSON line (e.g. a stderr warning merged in) — skip it
+            rows.extend(_parse_rg_match(event))
+            if len(rows) >= limit:
+                del rows[limit:]
+                hit_limit = True
+                return  # stop reading; the finally-block kills rg's whole group
+
+    timed_out = False
+    try:
+        await asyncio.wait_for(_read(), timeout)
+    except TimeoutError:
+        timed_out = True
+    finally:
+        _kill_group(proc)
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(proc.wait(), 2.0)
+    return (rows, timed_out, hit_limit)
+
+
+def _kill_group(proc: asyncio.subprocess.Process) -> None:
+    """SIGKILL the child's whole process group (best-effort). ``start_new_session``
+    made the child a group leader, so one signal reaps rg and anything it spawned;
+    a race where it already exited is ignored."""
+    if proc.returncode is not None:
+        return
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(proc.pid, signal.SIGKILL)
+
+
+async def _paths_frame(text: str, *, limit: int, timed_out: bool, tool: str, timeout: float) -> pl.DataFrame:
+    """The shared tail of ``find``/``spotlight``: parse the tool's NUL-separated
+    paths, lstat them off the event loop into the find/spotlight frame, cap at
+    ``limit``, and wrap it as a :class:`PartialFrame` when the scan timed out (so
+    the paths found before the deadline are returned, flagged, not discarded)."""
+    paths = [p for p in text.split("\0") if p]
+    frame = (await asyncio.to_thread(_lstat_rows, paths)).head(limit)
+    if timed_out:
+        return PartialFrame(
+            frame,
+            reason=f"{tool} timed out after {timeout}s; {frame.height} path(s) found before the deadline",
+        )
+    return frame
 
 
 async def find(
@@ -248,10 +387,8 @@ async def find(
         argv += ["--max-depth", str(max_depth)]
     argv += ["--max-results", str(limit)]  # cap at the source (limit applies to real hits)
     argv += ["--", pattern, _expand(root)]
-    out = await _run(argv, timeout=timeout)
-    paths = [p for p in out.text.split("\0") if p]
-    # lstat off the event loop (up to `limit` stat syscalls), then cap rows.
-    return (await asyncio.to_thread(_lstat_rows, paths)).head(limit)
+    text, timed_out = await _run(argv, timeout=timeout)
+    return await _paths_frame(text, limit=limit, timed_out=timed_out, tool="fd", timeout=timeout)
 
 
 async def spotlight(
@@ -277,7 +414,6 @@ async def spotlight(
     if literal:
         argv.append("-literal")
     argv.append(query)
-    out = await _run(argv, timeout=timeout)
-    paths = [p for p in out.text.split("\0") if p]
-    # mdfind has no result cap, so lstat all (off-loop) then cap real rows.
-    return (await asyncio.to_thread(_lstat_rows, paths)).head(limit)
+    # mdfind has no result cap, so _paths_frame lstats all (off-loop) then caps.
+    text, timed_out = await _run(argv, timeout=timeout)
+    return await _paths_frame(text, limit=limit, timed_out=timed_out, tool="mdfind", timeout=timeout)

@@ -1271,6 +1271,13 @@ let
   # embedders poll. So there is no committed UI artifact and no Svelte build here.
   dashboardHubBin = ix.rustWorkspace.units.binaries."dashboard";
 
+  # `ty` (astral-sh's Rust type checker) drives the per-cell static type check the
+  # kernel runs before every `python_exec` cell (see ix_notebook_mcp/typecheck.py).
+  # It is a nix-provided dependency baked onto the wrapper env (IX_MCP_TY_BIN), not
+  # fetched at runtime, and it checks against `mcpPython` (IX_MCP_TY_PYTHON) so a
+  # cell importing a bundled module resolves that module's real types.
+  tyBin = lib.getExe pkgs.ty;
+
   package =
     pkgs.runCommand "ix-mcp"
       {
@@ -1291,6 +1298,8 @@ let
           --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
           --set IX_DASHBOARD_BIN ${lib.escapeShellArg (lib.getExe' dashboardHubBin "dashboard")} \
           --set SCIPQL_SOUFFLE ${lib.escapeShellArg (lib.getExe' pkgs.souffle "souffle")} \
+          --set IX_MCP_TY_BIN ${lib.escapeShellArg tyBin} \
+          --set IX_MCP_TY_PYTHON ${lib.escapeShellArg mcpPython.interpreter} \
           --prefix PATH : ${
             lib.makeBinPath [
               pkgs.ripgrep
@@ -1309,6 +1318,8 @@ let
           --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
           --set IX_DASHBOARD_BIN ${lib.escapeShellArg (lib.getExe' dashboardHubBin "dashboard")} \
           --set SCIPQL_SOUFFLE ${lib.escapeShellArg (lib.getExe' pkgs.souffle "souffle")} \
+          --set IX_MCP_TY_BIN ${lib.escapeShellArg tyBin} \
+          --set IX_MCP_TY_PYTHON ${lib.escapeShellArg mcpPython.interpreter} \
           --prefix PATH : ${
             lib.makeBinPath [
               pkgs.ripgrep
@@ -1511,6 +1522,34 @@ let
                 assert "macOS" in str(exc), exc
             else:
                 raise AssertionError("spotlight should raise off macOS")
+
+        # issue #1754 bug 3: limit= short-circuits and flags the partial scan.
+        # Plant a tree with many matches so a small limit truncates it.
+        big = tempfile.mkdtemp()
+        for i in range(50):
+            with open(os.path.join(big, f"f{i}.txt"), "w") as fh:
+                fh.write("needle here\n" * 20)  # 20 matches per file, 1000 total
+        capped = await fsearch.grep("needle", big, limit=5)
+        assert isinstance(capped, pl.DataFrame), type(capped)  # still a usable frame
+        assert isinstance(capped, fsearch.PartialFrame), "a capped scan must be a PartialFrame"
+        assert capped.truncated is True
+        assert capped.height == 5, capped.height
+        assert "limit" in capped.reason, capped.reason
+        assert "partial" in repr(capped).lower(), "the repr must surface truncation"
+
+        # A full scan under the limit is a plain frame with no truncated flag.
+        full = await fsearch.grep("needle", big, limit=100_000)
+        assert full.height == 1000, full.height
+        assert not isinstance(full, fsearch.PartialFrame)
+        assert not hasattr(full, "truncated")
+
+        # A timeout returns the matches found before the deadline, not nothing.
+        # A tiny timeout over the big tree is very likely to trip; if the machine
+        # is fast enough to finish, the assertion below tolerates a complete scan.
+        timed = await fsearch.grep("needle", big, limit=10_000_000, timeout=0.001)
+        if isinstance(timed, fsearch.PartialFrame):
+            assert timed.truncated is True
+            assert "timed out" in timed.reason, timed.reason
 
         print("fsearch-ok", fsearch.__version__)
 
@@ -2832,6 +2871,50 @@ let
           cat stdout stderr >&2
           exit 1
         }
+        mkdir -p "$out"
+      '';
+
+  # Issue #1754: per-cell static type checking (ty) before execution, plus the
+  # bug 1-3 regressions (await-a-failed-job re-raises; Job/Result accessor
+  # symmetry; fsearch partial-on-timeout + limit short-circuit). The type-check
+  # tests need ty resolvable and its diagnostics stable, so ty is provided on the
+  # env exactly as the wrapper sets it; rg/fd back the fsearch limit assertion.
+  # A dedicated interpreter adds pytest (the bare mcpPython omits it).
+  typecheckTestPython = mcpPythonInterp.withPackages (
+    ps: (mcpPythonPackages ps) ++ [ ps.pytest ]
+  );
+  typecheckSmoke =
+    pkgs.runCommand "ix-mcp-typecheck-smoke"
+      {
+        nativeBuildInputs = [
+          typecheckTestPython
+          pkgs.ty
+          pkgs.ripgrep
+          pkgs.fd
+        ];
+        strictDeps = true;
+        meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions";
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        export IX_MCP_TY_BIN=${lib.escapeShellArg tyBin}
+        export IX_MCP_TY_PYTHON=${lib.escapeShellArg mcpPython.interpreter}
+        # The edited ix_notebook_mcp / fsearch / sh live in the interpreter's
+        # site-packages (built from this worktree's source), so the tests import
+        # them from there; only the test files are copied in (a bare store path of
+        # a single .py is read by pytest as a directory).
+        cp ${./tests/test_typecheck.py} test_typecheck.py
+        cp ${./tests/test_job_await_errors.py} test_job_await_errors.py
+        cp ${./tests/test_fsearch_partial.py} test_fsearch_partial.py
+        ${lib.getExe typecheckTestPython} -m pytest \
+          test_typecheck.py test_job_await_errors.py test_fsearch_partial.py \
+          -q -p no:cacheprovider >stdout 2>stderr || {
+          echo "ix-mcp typecheck smoke failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        cat stdout
         mkdir -p "$out"
       '';
 
@@ -5521,6 +5604,7 @@ package.overrideAttrs (old: {
         serverTools
         evalSmoke
         runtimeSmoke
+        typecheckSmoke
         sessionSmoke
         sessionIdentitySmoke
         feedSmoke
