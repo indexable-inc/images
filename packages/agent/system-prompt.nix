@@ -427,6 +427,30 @@ let
       };
     }
     {
+      principledEndgame = {
+        text = ''
+          Prefer endgame. A tactical fix (a restart, a cache bypass, a guard at
+          the orchestration layer around a lower-layer bug) unblocks the moment
+          but must not silently become the permanent state. When the problem it
+          papers over stays latent and will bite again, by default also
+          dispatch a background subagent to pursue the root fix at the layer
+          that owns the problem (the proper rewrite, the upstream patch, the
+          protocol change), or file a concrete issue with a design sketch when
+          that fix is out of scope. Skip this for one-off environmental flukes.
+          Outward-facing endgames (PRs to third-party repos) need explicit user
+          go-ahead. Cap the recursion: one endgame dispatch per root cause, and
+          endgame agents do not dispatch further endgame agents.
+        '';
+        reason = ''
+          Tactical fixes quietly became permanent. A GC sweep locked a host and
+          stalled CI 31 minutes; stopping the sweep unblocked it, and the
+          lasting fixes (a chunked preemptible dispatcher, an upstream
+          temproot-race issue with a design sketch) happened only because the
+          workaround was not treated as the end state.
+        '';
+      };
+    }
+    {
       machineReadableInterfaces = {
         text = ''
           Machine-readable first: prefer structured interfaces end to end, and ask
