@@ -79,6 +79,9 @@
   primaryCheckouts ? [
     "/home/*/index"
     "/home/*/ix"
+    # macOS workstations keep the long-lived checkouts under ~/Projects/<org>/.
+    "/Users/*/Projects/*/index"
+    "/Users/*/Projects/*/ix"
   ],
 
   # Andrew-only local startup context: cached notes and ~/Projects inventory.
@@ -229,6 +232,13 @@ let
     # machine: `export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=0` (only
     # 1/true/yes/on read as truthy).
     CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = 1;
+    # Load every MCP tool eagerly instead of deferring definitions behind a
+    # ToolSearch fetch: the house set is one kernel plus exa, far under the
+    # char cap where deferral would pay for its extra round trip.
+    ENABLE_TOOL_SEARCH = "false";
+    # Drop the scheduling/loop tools (CronCreate/CronDelete/CronList):
+    # unattended self-scheduling is opt-in per machine, not a fleet default.
+    CLAUDE_CODE_DISABLE_CRON = 1;
   };
 
   # Settings defaults are injected only when the caller passed no `--settings`;
@@ -268,6 +278,41 @@ let
     {
       # Keep transcripts and wrapper debug logs long enough for troubleshooting.
       cleanupPeriodDays = 365;
+      # No AI-attribution trailers on commits/PRs; outward disclosure is handled
+      # by the house prompt's discloseAi rule instead.
+      attribution = {
+        commit = "";
+        pr = "";
+      };
+      # Worktrees branch from origin/<default>, not the local HEAD, so agent
+      # branches never inherit a machine's drifted checkout state.
+      worktree.baseRef = "fresh";
+      # Persistent cross-session memory on by default; the directory stays a
+      # per-machine choice (autoMemoryDirectory in a consumer's extraSettings).
+      autoMemoryEnabled = true;
+      skipAutoPermissionPrompt = true;
+      # Checkpoint shadow-commits churn large repos for little value when every
+      # edit already lands on a dedicated worktree branch.
+      fileCheckpointingEnabled = false;
+      # House docs plugins and the marketplaces they resolve from.
+      enabledPlugins = {
+        "ix-docs@ix" = true;
+        "ix@ix" = true;
+      };
+      extraKnownMarketplaces = {
+        Mixedbread-Grep.source = {
+          source = "github";
+          repo = "mixedbread-ai/mgrep";
+        };
+        antithesis-skills.source = {
+          source = "github";
+          repo = "antithesishq/antithesis-skills";
+        };
+        ix.source = {
+          source = "github";
+          repo = "indexable-inc/docs";
+        };
+      };
       permissions = {
         # Concatenate manually: deepMerge treats lists as leaves.
         deny = (extraSettings.permissions.deny or [ ]) ++ sharedPermissions.claude.deniedToolPatterns;
