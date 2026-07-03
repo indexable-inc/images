@@ -300,9 +300,20 @@ async def _poll_watches_once() -> None:
     try:
         token = _token()
         me = await asyncio.to_thread(_self_user, token)
-    except SlackError:
-        # No usable token (logged out mid-session): nothing can be polled.
+    except SlackTransientError:
+        # A blip on auth.test must not cost the whole table: same watches,
+        # next cycle. (Ordered before SlackError -- it is a subclass.)
+        return
+    except SlackError as exc:
+        # Permanently unusable token (logged out / revoked mid-session):
+        # watching is over, so say so ONCE and drain, instead of a silent
+        # drain the agent would misread as "still listening".
+        dropped = len(_watches)
         _watches.clear()
+        await notify(
+            f"slack thread watching stopped, {dropped} watch(es) dropped: {exc}",
+            slack_event="watch_dropped",
+        )
         return
     now = time.time()
     for key, w in list(_watches.items()):

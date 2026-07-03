@@ -311,6 +311,45 @@ def test_poll_keeps_watch_on_transient_error(
     assert fresh_watch_state == []
 
 
+def test_poll_survives_transient_auth_failure(
+    fresh_watch_state: list[tuple[str, dict[str, str]]],
+    threaded_api: list[tuple[str, dict[str, Any]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 429 on the hoisted auth.test must keep the table, not drain it."""
+    out = asyncio.run(slack.send(_CHANNEL_ID, "hold on"))
+    monkeypatch.setattr(slack, "_self_user_id", None)  # force auth.test on next poll
+
+    def flaky_auth(method: str, token: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        raise slack.SlackTransientError("Slack API HTTP 429 for auth.test")
+
+    monkeypatch.setattr(slack, "_api_call", flaky_auth)
+    asyncio.run(slack._poll_watches_once())
+    assert (_CHANNEL_ID, out["ts"]) in slack._watches
+    assert fresh_watch_state == []
+
+
+def test_poll_drains_with_one_notice_on_permanent_auth_failure(
+    fresh_watch_state: list[tuple[str, dict[str, str]]],
+    threaded_api: list[tuple[str, dict[str, Any]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asyncio.run(slack.send(_CHANNEL_ID, "one"))
+    asyncio.run(slack.send(_CHANNEL_ID, "two"))
+    monkeypatch.setattr(slack, "_self_user_id", None)
+
+    def dead_auth(method: str, token: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        raise slack.SlackError("Slack token is invalid or expired (token_revoked).")
+
+    monkeypatch.setattr(slack, "_api_call", dead_auth)
+    asyncio.run(slack._poll_watches_once())
+    assert slack._watches == {}
+    assert len(fresh_watch_state) == 1
+    content, meta = fresh_watch_state[0]
+    assert meta["slack_event"] == "watch_dropped"
+    assert "2 watch(es) dropped" in content
+
+
 def test_send_skips_seed_in_dms(
     fresh_watch_state: list[tuple[str, dict[str, str]]],
     threaded_api: list[tuple[str, dict[str, Any]]],
