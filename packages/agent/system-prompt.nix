@@ -23,6 +23,7 @@ let
     # `reason` records the concrete failure mode or incident that motivated the
     # rule. It is provenance data for auditing and pruning, not prompt text:
     # rendering it would spend context tokens on metadiscussion.
+    # attrNames returns lexicographically sorted names, so `reason` precedes `text`.
     assert lib.assertMsg (
       builtins.attrNames value == [
         "reason"
