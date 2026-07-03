@@ -2904,7 +2904,7 @@ let
           pkgs.fd
         ];
         strictDeps = true;
-        meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions";
+        meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766)";
       }
       ''
         export HOME=$TMPDIR/home
@@ -2918,8 +2918,12 @@ let
         cp ${./tests/test_typecheck.py} test_typecheck.py
         cp ${./tests/test_job_await_errors.py} test_job_await_errors.py
         cp ${./tests/test_fsearch_partial.py} test_fsearch_partial.py
+        # sh Output rendering regressions (issue #1766: a failed build must not
+        # read as success/still-running); imports the site-packages sh module.
+        cp ${./tests/test_sh_module.py} test_sh_module.py
         ${lib.getExe typecheckTestPython} -m pytest \
           test_typecheck.py test_job_await_errors.py test_fsearch_partial.py \
+          test_sh_module.py \
           -q -p no:cacheprovider >stdout 2>stderr || {
           echo "ix-mcp typecheck smoke failed:" >&2
           cat stdout stderr >&2

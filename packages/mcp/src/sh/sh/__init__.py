@@ -53,8 +53,10 @@ stdout and stderr are merged in emission order (terminal-style). A non-zero exit
 is surfaced, never swallowed (issue #1766: a dead 45-minute build once read as
 "still compiling" for 25 minutes because the failure lived only in the output
 text). The model view of a failed Output LEADS with a ``[exit N] command
-failed...`` line and ends with an ``[exit N]`` marker, so both a head-read and a
-tail-read of a long log see the failure; the same line is echoed into the
+failed...`` line and, when the command produced output, also ends with a
+trailing ``[exit N]`` marker, so both a head-read and a tail-read of a long log
+see the failure (an output-less failure IS the single leading line); the same
+line is echoed into the
 streamed job stdout (``jobs['<id>'].output`` / ``.tail()``), so a watcher paging
 a backgrounded build sees the terminal state even when the Output value is never
 bound or rendered; a failed Output is falsy (``if not out:``); and ``await
@@ -502,8 +504,9 @@ async def sh(
     :class:`TimeoutError`; ``check=True`` raises :class:`ShellError` on a non-zero
     exit; ``color=False`` suppresses the forced-color environment. A non-zero
     exit that is NOT checked still cannot pass silently: the returned Output is
-    falsy, its rendered text leads and ends with the exit code, and the failure
-    line is echoed into the streamed job stdout (see the module docstring).
+    falsy, its rendered text leads with the exit code (and trails with an
+    ``[exit N]`` marker after any output), and the failure line is echoed into
+    the streamed job stdout (see the module docstring).
     ``name`` sets a human-readable label for the running job in the dashboard and
     the ``jobs`` dict (mirrors the same parameter on ``python_exec``); outside
     the kernel it is accepted and silently ignored.
