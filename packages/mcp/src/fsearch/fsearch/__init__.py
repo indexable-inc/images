@@ -5,7 +5,7 @@ separate process through the async :mod:`sh` helper, and each returns a
 ``polars.DataFrame`` — so the human watching the dashboard gets the styled HTML
 table while you get a frame to ``.filter`` / ``.sort`` / ``.group_by`` / ``.head``.
 
-    rows = await grep("TODO", "src")           # ripgrep -> path, line_number, col, match, line, abs_offset
+    rows = await grep("TODO", "src")           # ripgrep -> path, line_number, col, match, line, abs_offset, truncated
     files = await find(ext="py", root="src")   # fd       -> path, name, type, size, mtime
     docs = await spotlight("invoice", "~")     # mdfind   -> path, name, type, size, mtime (macOS only)
 
@@ -49,6 +49,7 @@ _GREP_SCHEMA = {
     "match": pl.Utf8,
     "line": pl.Utf8,
     "abs_offset": pl.Int64,
+    "truncated": pl.Boolean,
 }
 _FIND_SCHEMA = {
     "path": pl.Utf8,
@@ -71,19 +72,19 @@ def _expand(root: str | os.PathLike[str]) -> str:
     return str(Path(root).expanduser())
 
 
-async def _run(argv: list[str], *, timeout: float, ok_codes: tuple[int, ...] = (0,)) -> Output:
+async def _run(argv: list[str], *, timeout: float, ok_codes: tuple[int, ...] = (0,)) -> tuple[Output | None, bool]:
     """Run a search CLI off the event loop with color disabled (so its output is
-    clean, never SGR-corrupted). A non-success exit or a timeout surfaces as
-    FsearchError, so callers have one error type to catch (the timeout is the
-    safety net: a runaway search is killed at the deadline, never wedging the
-    kernel)."""
+    clean, never SGR-corrupted). A non-success exit surfaces as FsearchError, so
+    callers have one error type to catch. On timeout, returns (None, True) instead
+    of raising, so the caller can return partial results with truncated=True."""
     try:
         out = await _sh(argv, timeout=timeout, color=False)
-    except TimeoutError as exc:
-        raise FsearchError(f"{argv[0]} timed out after {timeout}s") from exc
+    except TimeoutError:
+        # Timeout: return (None, True) to signal partial results
+        return None, True
     if out.code not in ok_codes:
         raise FsearchError(f"{argv[0]} exited {out.code}: {out.text.strip()[:500]}")
-    return out
+    return out, False
 
 
 def _rg_str(field: dict[str, Any] | None) -> str:
@@ -164,8 +165,9 @@ async def grep(
 ) -> pl.DataFrame:
     """Content search via ripgrep, one row per match. Respects ``.gitignore`` by
     default (``no_ignore=True`` to override) and searches ``root`` (cwd by
-    default). Columns: ``path, line_number, col, match, line, abs_offset``.
-    ``col``/``abs_offset`` are byte offsets. ``fixed`` = literal (no regex)."""
+    default). Columns: ``path, line_number, col, match, line, abs_offset, truncated``.
+    ``col``/``abs_offset`` are byte offsets. ``fixed`` = literal (no regex).
+    ``truncated`` is True when the search timed out and results are partial."""
     argv = ["rg", "--json"]
     if ignore_case:
         argv.append("-i")
@@ -180,36 +182,41 @@ async def grep(
     if glob:
         argv += ["-g", glob]
     argv += ["--", pattern, _expand(root)]
-    out = await _run(argv, timeout=timeout, ok_codes=(0, 1))  # rg exits 1 on no matches
+    out, timed_out = await _run(argv, timeout=timeout, ok_codes=(0, 1))  # rg exits 1 on no matches
     rows: list[dict[str, Any]] = []
-    for raw in out.text.splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        try:
-            event = _json.loads(line)
-        except ValueError:
-            continue  # a non-JSON line (e.g. a stderr warning merged in) — skip it
-        if event.get("type") != "match":
-            continue
-        data = event["data"]
-        path = _rg_str(data.get("path"))
-        line_number = data.get("line_number")
-        text = _rg_str(data.get("lines")).rstrip("\n")
-        abs_offset = data.get("absolute_offset")
-        for sm in data.get("submatches", []):
-            rows.append(
-                {
-                    "path": path,
-                    "line_number": line_number,
-                    "col": sm.get("start"),
-                    "match": _rg_str(sm.get("match")),
-                    "line": text,
-                    "abs_offset": abs_offset,
-                }
-            )
-            if len(rows) >= limit:
-                return pl.DataFrame(rows, schema=_GREP_SCHEMA)
+    if out is not None:
+        for raw in out.text.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                event = _json.loads(line)
+            except ValueError:
+                continue  # a non-JSON line (e.g. a stderr warning merged in) — skip it
+            if event.get("type") != "match":
+                continue
+            data = event["data"]
+            path = _rg_str(data.get("path"))
+            line_number = data.get("line_number")
+            text = _rg_str(data.get("lines")).rstrip("\n")
+            abs_offset = data.get("absolute_offset")
+            for sm in data.get("submatches", []):
+                rows.append(
+                    {
+                        "path": path,
+                        "line_number": line_number,
+                        "col": sm.get("start"),
+                        "match": _rg_str(sm.get("match")),
+                        "line": text,
+                        "abs_offset": abs_offset,
+                        "truncated": timed_out,
+                    }
+                )
+                if len(rows) >= limit:
+                    return pl.DataFrame(rows, schema=_GREP_SCHEMA)
+    # Add truncated column to all rows
+    for row in rows:
+        row["truncated"] = timed_out
     return pl.DataFrame(rows, schema=_GREP_SCHEMA)
 
 
@@ -248,8 +255,8 @@ async def find(
         argv += ["--max-depth", str(max_depth)]
     argv += ["--max-results", str(limit)]  # cap at the source (limit applies to real hits)
     argv += ["--", pattern, _expand(root)]
-    out = await _run(argv, timeout=timeout)
-    paths = [p for p in out.text.split("\0") if p]
+    out, _ = await _run(argv, timeout=timeout)
+    paths = [p for p in out.text.split("\0") if p] if out is not None else []
     # lstat off the event loop (up to `limit` stat syscalls), then cap rows.
     return (await asyncio.to_thread(_lstat_rows, paths)).head(limit)
 
@@ -277,7 +284,7 @@ async def spotlight(
     if literal:
         argv.append("-literal")
     argv.append(query)
-    out = await _run(argv, timeout=timeout)
-    paths = [p for p in out.text.split("\0") if p]
+    out, _ = await _run(argv, timeout=timeout)
+    paths = [p for p in out.text.split("\0") if p] if out is not None else []
     # mdfind has no result cap, so lstat all (off-loop) then cap real rows.
     return (await asyncio.to_thread(_lstat_rows, paths)).head(limit)
