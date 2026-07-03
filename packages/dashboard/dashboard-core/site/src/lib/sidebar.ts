@@ -33,6 +33,9 @@ export interface RunNode {
 export interface SessionNode {
   scope: string;
   label: string;
+  // The session's newest run's created_at; the card renders it as an age and the
+  // sidebar sorts sessions by it (newest first).
+  lastActivity?: number;
   runs: RunNode[];
 }
 
@@ -62,6 +65,26 @@ function compareRunsOldestFirst(a: RunNode, b: RunNode): number {
   return a.key.localeCompare(b.key);
 }
 
+// A session's recency: the newest run it holds (max created_at over runs, not
+// resource/namespace/output panes), so a session sorts and reads by when its
+// last tool call ran. Runs are the isRun-filtered set, already sorted
+// oldest-first, so the last one is the newest.
+function lastRunActivity(runs: RunNode[]): number | undefined {
+  return runs.length ? runs[runs.length - 1].pane.created_at : undefined;
+}
+
+// Newest-activity first (a session whose last run is more recent sorts above one
+// whose last run is older), scope as the stable tie-break. A session with no
+// timed run sorts last.
+function compareSessionsNewestFirst(a: SessionNode, b: SessionNode): number {
+  const at = a.lastActivity;
+  const bt = b.lastActivity;
+  if (at !== undefined && bt !== undefined && at !== bt) return bt - at;
+  if (at !== undefined && bt === undefined) return -1;
+  if (at === undefined && bt !== undefined) return 1;
+  return a.scope.localeCompare(b.scope);
+}
+
 // Build the whole sidebar model from the live pane set plus the recordings list.
 export function buildSidebar(
   panes: Record<string, PaneRecord>,
@@ -69,7 +92,8 @@ export function buildSidebar(
 ): SidebarModel {
   const all = paneList(panes);
 
-  // Sessions in first-appearance order (feedSessions is the shared grouping).
+  // feedSessions groups every scope and resolves its label; the sidebar owns the
+  // ordering (by last run activity), so it is taken here, not there.
   const sessionOrder: FeedSession[] = feedSessions(panes);
   const runsByScope = new Map<string, RunNode[]>();
   for (const { key, pane } of all) {
@@ -79,15 +103,21 @@ export function buildSidebar(
     runsByScope.set(pane.scope, rows);
   }
 
-  // feedSessions lists every scope that has any pane; keep only those holding
-  // runs, so a pure-resource scope doesn't show as an empty session.
+  // Keep only scopes that hold runs (a pure-resource scope isn't a session),
+  // then order sessions newest-run-first so the one you're actively using floats
+  // to the top. Runs within a session stay oldest-first (a log growing downward).
   const sessions: SessionNode[] = sessionOrder
-    .map((s) => ({
-      scope: s.scope,
-      label: s.label,
-      runs: (runsByScope.get(s.scope) ?? []).sort(compareRunsOldestFirst),
-    }))
-    .filter((s) => s.runs.length > 0);
+    .map((s) => {
+      const runs = (runsByScope.get(s.scope) ?? []).sort(compareRunsOldestFirst);
+      return {
+        scope: s.scope,
+        label: s.label,
+        lastActivity: lastRunActivity(runs),
+        runs,
+      };
+    })
+    .filter((s) => s.runs.length > 0)
+    .sort(compareSessionsNewestFirst);
 
   const resources: ResourceNode[] = all
     .filter(({ key, pane }) => isResource(key, pane))

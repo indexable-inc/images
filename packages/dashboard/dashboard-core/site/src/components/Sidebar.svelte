@@ -7,7 +7,7 @@
   // what is visible.
   import { onMount } from 'svelte';
   import { store, timeline, loadRecording } from '$lib/stream.svelte';
-  import { ui, isOpen, toggleFold, setFold, select, focusPane, humanTime, humanClock, runTooltip } from '$lib/ui.svelte';
+  import { ui, isOpen, toggleFold, setFold, select, focusPane, humanTime, humanAge, humanClock, runTooltip } from '$lib/ui.svelte';
   import { setListNav } from '$lib/keys.svelte';
   import {
     buildSidebar,
@@ -88,8 +88,9 @@
       return;
     }
     if (!flat.some((f) => selectionEq(f.selection, ui.selection))) {
-      // Newest by timestamp, not render order: sessions are ordered by first
-      // appearance, so an older session can hold the most recent run.
+      // Newest by timestamp, not render order: runs are oldest-first within a
+      // session, and a filter/fold can hide the globally newest run, so the
+      // first visible row isn't necessarily the most recent one.
       const runs = flat.filter((f) => f.selection.kind === 'run');
       const newest = runs.reduce<(typeof runs)[number] | null>((best, f) => {
         const key = (f.selection as { key: string }).key;
@@ -201,10 +202,16 @@
         {/if}
         {#each sessions as s (s.scope)}
           {@const foldKey = 'sess:' + s.scope}
-          <button class="session-head" onclick={() => toggleFold(foldKey)} aria-expanded={isOpen(foldKey)} title={s.label}>
+          {@const age = humanAge(s.lastActivity, refMs)}
+          <button
+            class="session-head"
+            onclick={() => toggleFold(foldKey)}
+            aria-expanded={isOpen(foldKey)}
+            title={s.label}
+          >
             <span class="caret" class:open={isOpen(foldKey)}></span>
             <span class="session-name">{s.label}</span>
-            <span class="count">{s.runs.length}</span>
+            <span class="session-age">{age ? `active ${age}` : ''}</span>
           </button>
           {#if isOpen(foldKey)}
             {#each s.runs as r (r.key)}
@@ -435,6 +442,13 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .session-age {
+    flex: none;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
   }
 
   .run-row {
