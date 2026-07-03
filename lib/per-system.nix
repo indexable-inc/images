@@ -702,6 +702,13 @@ let
         let
           units = crossWorkspace.unitsFor { inherit target; };
         in
+        # These three ARE the whole eval-time closure: the `import unitsNix`
+        # forces `unitsNix`, which references only `unitGraphJson` and `vendorDir`
+        # (the cargo-lock it also reads is a plain flake source path, always
+        # present). `cargo-vendor-config.toml` is not a fourth root: it is a
+        # build input of the `unitGraphJson` builder, not on the import path and
+        # not in `vendorDir`'s closure, so substituting `unitGraphJson`'s output
+        # makes it moot -- the Mac never runs that builder.
         {
           "cross-ifd-${target}-units-nix" = units.unitsNix;
           "cross-ifd-${target}-unit-graph" = units.unitGraphJson;
