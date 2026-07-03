@@ -17,21 +17,17 @@ import pytest
 import fsearch
 
 
-def _rg_match_line(path: str, line_number: int, text: str) -> str:
-    """One ripgrep ``--json`` ``match`` event line, as `_run`'s parser expects."""
-    import json
-
-    event = {
-        "type": "match",
-        "data": {
-            "path": {"text": path},
-            "lines": {"text": text + "\n"},
-            "line_number": line_number,
-            "absolute_offset": 0,
-            "submatches": [{"match": {"text": "needle"}, "start": 0}],
-        },
+def _grep_row(path: str, line_number: int, text: str) -> dict[str, object]:
+    """One parsed grep result row, the shape `_stream_rg` yields and `grep`
+    wraps into the ``_GREP_SCHEMA`` frame."""
+    return {
+        "path": path,
+        "line_number": line_number,
+        "col": 0,
+        "match": "needle",
+        "line": text,
+        "abs_offset": 0,
     }
-    return json.dumps(event)
 
 
 def test_partial_frame_is_a_dataframe_that_flags_truncation() -> None:
@@ -46,14 +42,16 @@ def test_partial_frame_is_a_dataframe_that_flags_truncation() -> None:
 
 
 def test_grep_recovers_partial_matches_on_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    partial = "\n".join(_rg_match_line(f"f{i}.txt", i + 1, "needle here") for i in range(3))
+    # `grep` streams ripgrep via `_stream_rg`, so the timeout recovery lives there:
+    # on a deadline it returns the rows parsed before the kill with `timed_out=True`,
+    # and `grep` wraps them in a `PartialFrame`. Fake that return (patching `_sh`
+    # would miss the path entirely, since `_stream_rg` calls the subprocess directly).
+    rows = [_grep_row(f"f{i}.txt", i + 1, "needle here") for i in range(3)]
 
-    async def fake_sh(*_args: object, **_kwargs: object) -> object:
-        exc = TimeoutError("command timed out")
-        exc.partial_output = partial  # type: ignore[attr-defined]
-        raise exc
+    async def fake_stream_rg(*_args: object, **_kwargs: object) -> object:
+        return (rows, True, False)  # (rows, timed_out, hit_limit)
 
-    monkeypatch.setattr(fsearch, "_sh", fake_sh)
+    monkeypatch.setattr(fsearch, "_stream_rg", fake_stream_rg)
 
     frame = asyncio.run(fsearch.grep("needle", "."))
     assert isinstance(frame, fsearch.PartialFrame)

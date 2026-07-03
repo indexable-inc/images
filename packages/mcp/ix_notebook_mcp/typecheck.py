@@ -247,18 +247,31 @@ def _ty_bin() -> str | None:
     return shutil.which("ty")
 
 
-def _remap(output: str, synthetic_path: str, offset: int) -> tuple[str, bool]:
+def _remap(output: str, synthetic_path: pathlib.Path, offset: int) -> tuple[str, bool]:
     """Rewrite ty's diagnostics to reference cell lines, and report whether any is
     an ``error`` (only errors block). Non-diagnostic lines (the ``Found N
     diagnostics`` footer, blank lines) are dropped so the report is just the
-    findings the agent must fix."""
+    findings the agent must fix.
+
+    ty prints the diagnostic path RELATIVE to its own cwd when the file sits
+    under it (the common case: ty runs with ``cwd=`` the temp dir holding
+    ``cell.py``) and absolute otherwise (observed when the temp dir is reached
+    through a symlinked prefix, macOS ``/var`` -> ``/private/var``, so the
+    prefixes do not string-match). A relative path must resolve against the
+    synthetic file's own directory: resolving it against the *kernel process's*
+    cwd silently dropped every finding inside the nix build sandbox, whose cwd
+    has no symlink prefix -- which made the whole gate pass vacuously there."""
+    target = synthetic_path.resolve()
     findings: list[str] = []
     had_error = False
     for raw in output.splitlines():
         m = _DIAG_RE.match(raw)
         if m is None:
             continue
-        if str(pathlib.Path(m.group("path")).resolve()) != synthetic_path:
+        diag = pathlib.Path(m.group("path"))
+        if not diag.is_absolute():
+            diag = synthetic_path.parent / diag
+        if diag.resolve() != target:
             continue
         cell_line = int(m.group("line")) - offset
         # A diagnostic on the preamble/wrapper (cell_line < 1) is an artifact of
@@ -343,7 +356,7 @@ async def check(code: str, namespace: dict, *, timeout: float = 10.0) -> TypeChe
             # the loop's child watcher reaps the killed process.
             _kill(proc)
             raise
-        report, had_error = _remap(stdout.decode("utf-8", "replace"), str(path.resolve()), offset)
+        report, had_error = _remap(stdout.decode("utf-8", "replace"), path, offset)
         if not had_error:
             return TypeCheckResult(ok=True)
         header = (
