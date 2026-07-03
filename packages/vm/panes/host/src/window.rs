@@ -14,7 +14,8 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{AllocAnyThread, DefinedClass, MainThreadOnly, define_class};
 use objc2_app_kit::{
-    NSBackingStoreType, NSWindow, NSWindowDelegate, NSWindowOcclusionState, NSWindowStyleMask,
+    NSBackingStoreType, NSView, NSWindow, NSWindowButton, NSWindowDelegate,
+    NSWindowOcclusionState, NSWindowStyleMask, NSWindowTabbingMode, NSWindowTitleVisibility,
 };
 use objc2_foundation::{
     MainThreadMarker, NSNotification, NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSSize,
@@ -211,6 +212,10 @@ pub struct PaneWindow {
     /// only while this window is also key (see `app::sync_capture`), so the
     /// intent survives focus round-trips and re-engages on return.
     pub wants_lock: bool,
+    /// Stock macOS chrome (`--native-titlebar`) instead of the default
+    /// hidden-titlebar style; kept so title updates know whether to re-apply
+    /// the hidden style (see [`PaneWindow::set_title`]).
+    native_titlebar: bool,
 }
 
 impl PaneWindow {
@@ -219,16 +224,29 @@ impl PaneWindow {
         renderer: &Renderer,
         params: &WindowParams,
         title_prefix: &str,
+        native_titlebar: bool,
     ) -> Self {
         let scale = f64::from(params.scale.max(1));
         let content = NSRect::new(
             NSPoint::new(0.0, 0.0),
             NSSize::new(f64::from(params.width) / scale, f64::from(params.height) / scale),
         );
-        let style = NSWindowStyleMask::Titled
+        // `Titled` stays in the mask in both chrome modes: it is what gives
+        // the window a normal frame and the standard accessibility window
+        // role that tiling WMs (AeroSpace) manage; ghostty's hidden-titlebar
+        // style keeps it for the same reason (HiddenTitlebarTerminalWindow.
+        // swift: "We need `titled` in the mask to get the normal window
+        // frame"). The default minimal chrome adds `FullSizeContentView` so
+        // the content view (and the Metal layer sized off its bounds) spans
+        // the full frame, including the strip the titlebar chrome would
+        // have occupied.
+        let mut style = NSWindowStyleMask::Titled
             | NSWindowStyleMask::Closable
             | NSWindowStyleMask::Miniaturizable
             | NSWindowStyleMask::Resizable;
+        if !native_titlebar {
+            style |= NSWindowStyleMask::FullSizeContentView;
+        }
         // SAFETY: standard initializer; `defer: false` so the window backing
         // exists immediately (the Metal layer needs a real backing scale).
         let ns = unsafe {
@@ -244,6 +262,15 @@ impl PaneWindow {
         // ObjC object under our `Retained` on close.
         unsafe { ns.setReleasedWhenClosed(false) };
         ns.setTitle(&NSString::from_str(&format!("{title_prefix}{}", params.title)));
+        if !native_titlebar {
+            apply_hidden_titlebar(&ns);
+        }
+        // Window placement belongs to the tiler (AeroSpace), and a draggable
+        // background would turn guest-bound clicks into window moves in
+        // floating mode; ghostty likewise leaves this off for terminal
+        // windows. Floating windows still move via option-drag on the frame
+        // edges (standard macOS) or the tiler's move commands.
+        ns.setMovableByWindowBackground(false);
         ns.setAcceptsMouseMovedEvents(true);
         ns.center();
 
@@ -316,6 +343,7 @@ impl PaneWindow {
             shown: false,
             closing: false,
             wants_lock: false,
+            native_titlebar,
         }
     }
 
@@ -327,6 +355,12 @@ impl PaneWindow {
 
     pub fn set_title(&self, title_prefix: &str, title: &str) {
         self.ns.setTitle(&NSString::from_str(&format!("{title_prefix}{title}")));
+        // Setting the title re-reveals the native title view on macOS 15+;
+        // ghostty re-applies the hidden style from its `title` override for
+        // exactly this reason (HiddenTitlebarTerminalWindow.swift).
+        if !self.native_titlebar {
+            apply_hidden_titlebar(&self.ns);
+        }
     }
 
     pub fn set_min_max(&self, min: Option<(u32, u32)>, max: Option<(u32, u32)>) {
@@ -591,6 +625,57 @@ impl PaneWindow {
         self.ns.setDelegate(None);
         self.ns.close();
     }
+}
+
+/// Ghostty's `macos-titlebar-style = hidden` recipe
+/// (`HiddenTitlebarTerminalWindow.swift`), the default chrome: the window
+/// keeps its `Titled` frame but every piece of titlebar chrome goes away, so
+/// the guest surface fills a flat, edge-to-edge rectangle. Ghostty keeps the
+/// native shadow and rounded corners in this style deliberately: truly
+/// square corners require removing `Titled` (its `window-decoration = none`
+/// path), which downgrades the accessibility role and stops tiling WMs from
+/// managing the window; ghostty's own config docs steer users to the hidden
+/// style instead. Idempotent; re-applied after every title change.
+fn apply_hidden_titlebar(ns: &NSWindow) {
+    // The title string stays set (Mission Control, the app switcher, and
+    // AeroSpace's window list read it); only its rendering is hidden.
+    ns.setTitleVisibility(NSWindowTitleVisibility::Hidden);
+    ns.setTitlebarAppearsTransparent(true);
+    for kind in
+        [NSWindowButton::CloseButton, NSWindowButton::MiniaturizeButton, NSWindowButton::ZoomButton]
+    {
+        if let Some(button) = ns.standardWindowButton(kind) {
+            button.setHidden(true);
+        }
+    }
+    // No titlebar means nowhere to render a native tab bar (ghostty
+    // disallows tabbing in its hidden style for the same reason).
+    ns.setTabbingMode(NSWindowTabbingMode::Disallowed);
+    // Even transparent, NSTitlebarContainerView sits above the content view
+    // and turns clicks in the top strip into a window drag instead of guest
+    // input. Ghostty hides the container outright ("nuke it from orbit");
+    // same here, so the full frame delivers events to the guest.
+    // SAFETY: superview is a plain accessor; main thread only.
+    if let Some(frame) = ns.contentView().and_then(|view| unsafe { view.superview() }) {
+        hide_titlebar_container(&frame);
+    }
+}
+
+/// Depth-first search for the private `NSTitlebarContainerView` (a child of
+/// the theme frame; the walk is recursive only as cheap insurance against
+/// `AppKit` reshuffling the hierarchy). Matching on the class name is the same
+/// unavoidable private-API touch ghostty ships.
+fn hide_titlebar_container(view: &NSView) -> bool {
+    for subview in view.subviews() {
+        if subview.class().name().to_bytes() == b"NSTitlebarContainerView" {
+            subview.setHidden(true);
+            return true;
+        }
+        if hide_titlebar_container(&subview) {
+            return true;
+        }
+    }
+    false
 }
 
 struct DelegateIvars {

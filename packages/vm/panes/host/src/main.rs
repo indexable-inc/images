@@ -46,6 +46,11 @@ struct Cli {
     #[arg(long, value_name = "PREFIX", default_value = "")]
     title_prefix: String,
 
+    /// Use the stock macOS titlebar (title text + traffic lights) instead of
+    /// the default ghostty-style hidden titlebar.
+    #[arg(long)]
+    native_titlebar: bool,
+
     /// Serve the built-in mock guest on a temp socket and connect to it:
     /// one animated test window, received input logged to stderr.
     #[arg(long, conflicts_with_all = ["connect", "tcp"])]
@@ -94,7 +99,7 @@ fn run_host(cli: Cli) -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    app::run(target, cli.title_prefix)
+    app::run(target, cli.title_prefix, cli.native_titlebar)
 }
 
 #[cfg(not(target_os = "macos"))]

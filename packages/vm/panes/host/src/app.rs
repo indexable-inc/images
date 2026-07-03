@@ -39,6 +39,9 @@ struct App {
     windows: HashMap<WindowId, PaneWindow>,
     out: Option<mpsc::Sender<ToGuest>>,
     title_prefix: String,
+    /// `--native-titlebar`: stock macOS chrome instead of the default
+    /// hidden-titlebar style (see `window::apply_hidden_titlebar`).
+    native_titlebar: bool,
     quitting: bool,
     /// Per-window ack counters behind the periodic acks/s log: the real-path
     /// equivalent of mock's rate line, and the 120Hz-genlock evidence
@@ -116,7 +119,7 @@ impl Deferred {
     }
 }
 
-pub fn run(target: Target, title_prefix: String) -> ExitCode {
+pub fn run(target: Target, title_prefix: String, native_titlebar: bool) -> ExitCode {
     let Some(mtm) = MainThreadMarker::new() else {
         eprintln!("panes-host: must start on the main thread");
         return ExitCode::FAILURE;
@@ -147,6 +150,7 @@ pub fn run(target: Target, title_prefix: String) -> ExitCode {
             windows: HashMap::new(),
             out: None,
             title_prefix,
+            native_titlebar,
             quitting: false,
             ack_stats: HashMap::new(),
             peer_minor: 0,
@@ -218,7 +222,13 @@ fn handle_msg(app: &mut App, msg: ToHost) -> Deferred {
                 return Deferred::default();
             }
             let params = WindowParams { id, title, app_id, width, height, scale };
-            let window = PaneWindow::new(app.mtm, &app.renderer, &params, &app.title_prefix);
+            let window = PaneWindow::new(
+                app.mtm,
+                &app.renderer,
+                &params,
+                &app.title_prefix,
+                app.native_titlebar,
+            );
             app.windows.insert(id, window);
             Deferred::default()
         }
