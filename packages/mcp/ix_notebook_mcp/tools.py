@@ -54,9 +54,9 @@ logger = logging.getLogger(__name__)
 
 # Order matters: clients truncate long instruction blocks from the tail, and a
 # 2026-06-10 session showed exactly that failure: the cut landed inside JOBS, so
-# NO_SHELL and POLARS never reached the model and it shelled out ls/grep and
-# scraped TSV all session. The rules that shape every single call (what to reach
-# for, what shape to return) come first; operational mechanics (job paging,
+# the shell/data rules and POLARS never reached the model and it shelled out
+# ls/grep and scraped TSV all session. The rules that shape every single call
+# (what to reach for, what shape to return) come first; operational mechanics (job paging,
 # blocking, rendering details) follow; the module index and dashboard niceties
 # close. Losing the tail degrades gracefully; losing the head does not.
 _KERNEL_GUIDE = guide.compose(
@@ -66,6 +66,7 @@ _KERNEL_GUIDE = guide.compose(
     guide.DISCOVER,
     guide.NO_SHELL,
     guide.NU,
+    guide.SH,
     guide.POLARS,
     guide.RESULT_CONTRACT,
     guide.JOBS,

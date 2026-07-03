@@ -67,12 +67,13 @@ MODULES: tuple[Module, ...] = (
     ),
     Module(
         "nu",
-        "structured shell (an embedded, persistent nushell engine): run a pipeline and get a "
-        'polars DataFrame back, always -- `await nu("ls | where size > 1kb | sort-by size")`, '
-        "`open Cargo.toml`, `from csv`, `http get`; `let`/`def`/`cd` persist across calls like "
-        "a REPL; `input=df` pipes a frame through a pipeline; a failure raises NuError carrying "
-        "nushell's own diagnostic. Prefer it over `sh` + jq/awk/sed whenever you want a "
-        "command's data",
+        "structured shell, the DEFAULT for shell-ish work (an embedded, persistent nushell "
+        "engine): run a pipeline and get a polars DataFrame back, always -- "
+        '`await nu("ls | where size > 1kb | sort-by size")`, `open Cargo.toml`, `from csv`, '
+        "`http get`; `let`/`def`/`cd` persist across calls like a REPL; `input=df` pipes a frame "
+        "through a pipeline; `nu.value(code)` returns the plain Python value; a failure raises "
+        "NuError carrying nushell's own diagnostic. Prefer it over `sh` + jq/awk/sed for any "
+        "command whose data you want",
         preimport=True,
     ),
     Module(
@@ -293,9 +294,10 @@ BUILTINS: tuple[Builtin, ...] = (
     ),
     Builtin(
         "sh",
-        "shell out on the loop; use sh([...]) for argv-list/no shell parsing and sh('...') "
-        "only when shell parsing is intended; the Output IS a Result (ANSI as HTML for the "
-        "human, `.text`/`.code`/`.ok` for you), and `.json()`/`.jsonl()`/`.df()` parse a "
+        "run an external binary (git/nix/gh/cargo writes, long commands, raw logs) off the loop "
+        "-- the escape hatch when `nu` won't do; use sh([...]) for argv-list/no shell parsing and "
+        "sh('...') only when shell parsing is intended; the Output IS a Result (ANSI as HTML for "
+        "the human, `.text`/`.code`/`.ok` for you), and `.json()`/`.jsonl()`/`.df()` parse a "
         "JSON-mode CLI straight to data / a polars frame: ask the tool for --json, never scrape TSV",
     ),
     Builtin(
