@@ -43,6 +43,10 @@ let
             lwjgl-natives-linux-arm64 = final.callPackage ./lwjgl-natives.nix {
               pins = ix.pins.loadPins ./pins.json;
             };
+            # The checked bash writer, threaded through the overlay because
+            # `ix` is not in module scope; apps.nix uses it for the Minecraft
+            # launch wrapper instead of the unchecked writeShellScript.
+            writeBashApplication = ix.writeBashApplication final;
           })
         ];
         # The builder-chosen root login key (see the sshAuthorizedKey package

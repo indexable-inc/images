@@ -21,6 +21,8 @@
 #                           with baked config it can still rewrite at runtime
 { pkgs }:
 let
+  inherit (pkgs) lib;
+
   # portablemc's default wrapper bundles four full OpenJDKs (25/21/17/8,
   # ~1.9 GiB); its package.nix exposes `jvms` exactly to cut that closure.
   # MC 26.2 requires Java SE 25 minimum, so ship exactly jdk25 (the full JDK,
@@ -38,6 +40,61 @@ let
   # LWJGL's own Maven builds, injected via the overlay in ./default.nix,
   # where the ./pins.json hashes live.
   lwjglNatives = pkgs.lwjgl-natives-linux-arm64;
+
+  # Everything after `start` that both portablemc invocations below share.
+  mcStartArgs = builtins.concatStringsSep " " [
+    # 26.2 requires Java SE 25 minimum (see the portablemc jvms override).
+    "--jvm ${pkgs.jdk25}/bin/java"
+    # LWJGL loads its JNI natives from here instead of the (absent)
+    # manifest-provided linux-arm64 ones.
+    "--jvm-arg=-Dorg.lwjgl.librarypath=${lwjglNatives}"
+    # Make blaze3d pick the Wayland GLFW platform: left alone it requests
+    # X11 even under Wayland ("GLFW error 0x1000E X11: DISPLAY missing").
+    # MC 26.2's built-in debug switches (SharedConstants reads
+    # MC_DEBUG_*-prefixed system properties, all gated on MC_DEBUG_ENABLED;
+    # decompiled from 26.2 GLX/SharedConstants) flip the preference with
+    # the stock Maven libglfw.so above, which is wayland-capable and
+    # carries the preedit/IME API blaze3d binds. Validated live end-to-end:
+    # the window maps on the host titled "Minecraft 26.2". If Mojang ever
+    # drops the debug flag, the fallback is a Wayland-only glfw (X11
+    # compiled out; openSUSE home:DarkWav glfw-minecraft recipe on
+    # clear-code/glfw im-support) via -Dorg.lwjgl.glfw.libname; this repo
+    # carried a packaged version of that until the debug flags landed (see
+    # index#1686 and this file's history).
+    "--jvm-arg=-DMC_DEBUG_ENABLED=true"
+    "--jvm-arg=-DMC_DEBUG_PREFER_WAYLAND=true"
+    # Offline session: no Microsoft account in the guest.
+    "-u Panes"
+    "26.2"
+  ];
+
+  # 26.2 selects its startup renderer from the `--graphicsBackend vulkan`
+  # GAME argument (joptsimple in net.minecraft.client.main.Main; the official
+  # launcher passes it) — the options.txt `preferredGraphicsBackend` seed
+  # below alone does not flip the startup backend (validated live: with only
+  # the seed the game boots GL). portablemc 5.0.3 has no game-arg
+  # passthrough, so inject the argument into the fetched version manifest's
+  # `arguments.game`: the first run prepares every download with `--dry`,
+  # jq appends the pair idempotently, and the real launch passes
+  # `--fetch-exclude 26.2` so portablemc does not re-fetch the manifest over
+  # the injection.
+  mcLaunch = pkgs.writeBashApplication {
+    name = "panes-mc-launch";
+    runtimeInputs = [ pkgs.jq ];
+    text = ''
+      json=/var/lib/minecraft/versions/26.2/26.2.json
+      if [ ! -e "$json" ]; then
+        ${portablemc}/bin/portablemc --main-dir /var/lib/minecraft start --dry ${mcStartArgs}
+      fi
+      jq \
+        'if (.arguments.game | index("--graphicsBackend")) == null
+         then .arguments.game += ["--graphicsBackend", "vulkan"]
+         else . end' "$json" > "$json.tmp"
+      mv "$json.tmp" "$json"
+      exec ${portablemc}/bin/portablemc --main-dir /var/lib/minecraft start --fetch-exclude 26.2 ${mcStartArgs}
+    '';
+    meta.description = "Minecraft 26.2 launcher forcing the Vulkan startup backend (index#1686)";
+  };
 in
 {
   # Software (wl_shm) client: proves compositor + container + socket plumbing
@@ -69,37 +126,11 @@ in
   # guest mounts /dev/vdb there, surviving image swaps; see ../README.md),
   # else the image's writable root fs.
   minecraft = {
-    command = builtins.concatStringsSep " " [
-      "${portablemc}/bin/portablemc"
-      # Keep every download out of the ephemeral container root. This
-      # portablemc build has no separate --work-dir; everything follows
-      # --main-dir.
-      "--main-dir /var/lib/minecraft"
-      "start"
-      # 26.2 requires Java SE 25 minimum (see the portablemc jvms override).
-      "--jvm ${pkgs.jdk25}/bin/java"
-      # LWJGL loads its JNI natives from here instead of the (absent)
-      # manifest-provided linux-arm64 ones.
-      "--jvm-arg=-Dorg.lwjgl.librarypath=${lwjglNatives}"
-      # Make blaze3d pick the Wayland GLFW platform: left alone it requests
-      # X11 even under Wayland ("GLFW error 0x1000E X11: DISPLAY missing").
-      # MC 26.2's built-in debug switches (SharedConstants reads
-      # MC_DEBUG_*-prefixed system properties, all gated on MC_DEBUG_ENABLED;
-      # decompiled from 26.2 GLX/SharedConstants) flip the preference with
-      # the stock Maven libglfw.so above, which is wayland-capable and
-      # carries the preedit/IME API blaze3d binds. Validated live end-to-end:
-      # the window maps on the host titled "Minecraft 26.2". If Mojang ever
-      # drops the debug flag, the fallback is a Wayland-only glfw (X11
-      # compiled out; openSUSE home:DarkWav glfw-minecraft recipe on
-      # clear-code/glfw im-support) via -Dorg.lwjgl.glfw.libname; this repo
-      # carried a packaged version of that until the debug flags landed (see
-      # index#1686 and this file's history).
-      "--jvm-arg=-DMC_DEBUG_ENABLED=true"
-      "--jvm-arg=-DMC_DEBUG_PREFER_WAYLAND=true"
-      # Offline session: no Microsoft account in the guest.
-      "-u Panes"
-      "26.2"
-    ];
+    # All downloads stay out of the ephemeral container root: this portablemc
+    # build has no separate --work-dir; everything follows --main-dir (the
+    # /var/lib/minecraft bind below). The wrapper exists solely to inject the
+    # --graphicsBackend game argument (see mcLaunch above).
+    command = lib.getExe mcLaunch;
     env = {
       # Pin the venus ICD so the loader cannot pick lavapipe, and prefer the
       # virtio-gpu PCI device (1af4:1050) if more than one ICD is visible.
