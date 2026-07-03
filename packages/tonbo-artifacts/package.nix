@@ -1,7 +1,7 @@
 {
   id = "tonbo-artifacts";
   packageSet = true;
-  flake.systems = [ "x86_64-linux" ];
+  flake.systems = ["x86_64-linux"];
   overlay = false;
   updateScript = true;
 }

@@ -5,8 +5,8 @@
   # package-set attr to x86_64-linux to keep `nix flake check` from fetching the
   # ~400 MiB distribution on platforms nothing builds it for. Overlay stays
   # unconditional and lazy, mirroring spark-gluten and drgn.
-  packageSet.systems = [ "x86_64-linux" ];
-  flake.systems = [ "x86_64-linux" ];
+  packageSet.systems = ["x86_64-linux"];
+  flake.systems = ["x86_64-linux"];
   overlay = true;
   updateScript = true;
 }

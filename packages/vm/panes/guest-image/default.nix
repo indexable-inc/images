@@ -24,8 +24,7 @@
   # runs but nothing can log in; bake your own key via
   # `panes-guest-image.override { sshAuthorizedKey = ...; }`.
   sshAuthorizedKey ? null,
-}:
-let
+}: let
   nixos = import "${path}/nixos/lib/eval-config.nix" {
     system = "aarch64-linux";
     modules = [
@@ -62,35 +61,35 @@ let
             # what upstream review sees. `hardware.graphics.enable` in
             # ./nixos.nix consumes `pkgs.mesa`, so this override is what
             # /run/opengl-driver (and the container ICDs) get.
-            mesa =
-              let
-                pin = ix.pins.loadPin ./pins.json "mesa-src";
-              in
+            mesa = let
+              pin = ix.pins.loadPin ./pins.json "mesa-src";
+            in
               prev.mesa.overrideAttrs (old: {
                 # The version assert only catches upstream version bumps; a
                 # nixpkgs change to mesa's own patch set can also stop
                 # applying against the fork tree and force a rebase, and only
                 # the build failure catches that case.
-                src =
-                  assert lib.assertMsg (old.version == pin.version)
-                    "panes-guest-image: mesa fork pin is ${pin.version} but nixpkgs mesa is ${old.version}; rebase indexable-inc/mesa branch ix/venus-driver-side-semaphore onto the new upstream tag and re-pin";
-                  final.fetchzip { inherit (pin) url hash; };
+                src = assert lib.assertMsg (old.version == pin.version)
+                "panes-guest-image: mesa fork pin is ${pin.version} but nixpkgs mesa is ${old.version}; rebase indexable-inc/mesa branch ix/venus-driver-side-semaphore onto the new upstream tag and re-pin";
+                  final.fetchzip {inherit (pin) url hash;};
               });
           })
         ];
         # The builder-chosen root login key (see the sshAuthorizedKey package
         # arg above); an empty list leaves sshd running with no way in.
-        users.users.root.openssh.authorizedKeys.keys = lib.optional (
-          sshAuthorizedKey != null
-        ) sshAuthorizedKey;
+        users.users.root.openssh.authorizedKeys.keys =
+          lib.optional (
+            sshAuthorizedKey != null
+          )
+          sshAuthorizedKey;
       }
     ];
   };
   # Mechanically re-pins the ./pins.json jar hashes from their URLs
   # (`nix run .#update`); bumping the LWJGL version is the human edit.
   updateScript =
-    if updateScriptWriter == null then
-      null
+    if updateScriptWriter == null
+    then null
     else
       ix.pins.mkUpdater {
         writeNushellApplication = updateScriptWriter;
@@ -99,20 +98,21 @@ let
         relPath = "packages/vm/panes/guest-image/pins.json";
       };
 in
-# Expose the raw disk directly as the package output (the repart module
-# produces it at `${system.build.image}/${image.filePath}`).
-nixos.pkgs.runCommand "panes-guest.raw"
+  # Expose the raw disk directly as the package output (the repart module
+  # produces it at `${system.build.image}/${image.filePath}`).
+  nixos.pkgs.runCommand "panes-guest.raw"
   {
     __structuredAttrs = true;
-    passthru = {
-      # The system closure alone, for the ssh switch-in-place loop (README,
-      # "Iterating on the guest"): build
-      # `.#packages.aarch64-linux.panes-guest-image.toplevel`, `nix copy` it
-      # into the running guest, activate with its switch-to-configuration.
-      # Skips the disk assembly entirely.
-      toplevel = nixos.config.system.build.toplevel;
-    }
-    // lib.optionalAttrs (updateScript != null) { inherit updateScript; };
+    passthru =
+      {
+        # The system closure alone, for the ssh switch-in-place loop (README,
+        # "Iterating on the guest"): build
+        # `.#packages.aarch64-linux.panes-guest-image.toplevel`, `nix copy` it
+        # into the running guest, activate with its switch-to-configuration.
+        # Skips the disk assembly entirely.
+        toplevel = nixos.config.system.build.toplevel;
+      }
+      // lib.optionalAttrs (updateScript != null) {inherit updateScript;};
   }
   ''
     cp --sparse=always "${nixos.config.system.build.image}/${nixos.config.image.filePath}" "$out"

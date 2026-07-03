@@ -9,13 +9,12 @@
   # produces the sound-pack-wrapped binary. Surfaces as pkgs.minecraft-sound.
   overlay = {
     attrName = "minecraft-sound";
-    build =
-      {
-        buildIxRustTool,
-        final,
-        path,
-        ...
-      }:
+    build = {
+      buildIxRustTool,
+      final,
+      path,
+      ...
+    }:
       buildIxRustTool final path;
   };
 }

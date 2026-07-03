@@ -2,9 +2,8 @@
 {
   lib,
   # Rule names dropped from the baked prompt; forwarded to ./system-prompt.nix.
-  omitRules ? [ ],
-}:
-let
+  omitRules ? [],
+}: let
   providerNames = {
     claude = "Claude Code";
     codex = "Codex";
@@ -19,8 +18,7 @@ let
       authorship in outward-facing messages, say Codex.
     '';
   };
-  systemPromptFor =
-    provider:
+  systemPromptFor = provider:
     lib.concatStringsSep "\n\n" [
       (import ./system-prompt.nix {
         inherit lib omitRules;
@@ -28,8 +26,7 @@ let
       })
       extraSystemPrompts.${provider}
     ];
-in
-{
+in {
   inherit extraSystemPrompts systemPromptFor;
 
   # The house system prompt a wrapper bakes for Claude Code by default. One

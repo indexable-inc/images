@@ -10,8 +10,7 @@
   # Writer for `passthru.updateScript` (flake-package path only); null on the
   # overlay path. Same nullable-writer pattern as claude-code / yc.
   updateScriptWriter ? null,
-}:
-let
+}: let
   # Add a target here, with its own release hash, before building on another
   # arch. The package-set/flake targets and meta.platforms below gate the arch.
   targets = {
@@ -26,8 +25,8 @@ let
   # wrong hash.
   pin = ix.pins.loadPin ./pins.json "lakekeeper";
   updateScript =
-    if updateScriptWriter == null then
-      null
+    if updateScriptWriter == null
+    then null
     else
       ix.pins.mkUpdater {
         writeNushellApplication = updateScriptWriter;
@@ -36,38 +35,38 @@ let
         relPath = "packages/lakekeeper/pins.json";
       };
 in
-stdenv.mkDerivation {
-  pname = "lakekeeper";
-  inherit (pin) version;
+  stdenv.mkDerivation {
+    pname = "lakekeeper";
+    inherit (pin) version;
 
-  # Upstream ships a single bare `lakekeeper` binary in the tarball (no wrapping
-  # directory), so stripRoot must stay off.
-  src = fetchzip {
-    inherit (pin) url hash;
-    stripRoot = false;
-  };
+    # Upstream ships a single bare `lakekeeper` binary in the tarball (no wrapping
+    # directory), so stripRoot must stay off.
+    src = fetchzip {
+      inherit (pin) url hash;
+      stripRoot = false;
+    };
 
-  passthru = lib.optionalAttrs (updateScript != null) { inherit updateScript; };
+    passthru = lib.optionalAttrs (updateScript != null) {inherit updateScript;};
 
-  nativeBuildInputs = [ autoPatchelfHook ];
-  buildInputs = [
-    stdenv.cc.cc.lib
-    stdenv.cc.libc
-  ];
+    nativeBuildInputs = [autoPatchelfHook];
+    buildInputs = [
+      stdenv.cc.cc.lib
+      stdenv.cc.libc
+    ];
 
-  installPhase = ''
-    # shell
-    runHook preInstall
-    install -Dm755 "$src/lakekeeper" "$out/bin/lakekeeper"
-    runHook postInstall
-  '';
+    installPhase = ''
+      # shell
+      runHook preInstall
+      install -Dm755 "$src/lakekeeper" "$out/bin/lakekeeper"
+      runHook postInstall
+    '';
 
-  meta = {
-    description = "Apache Iceberg REST Catalog written in Rust";
-    homepage = "https://lakekeeper.io";
-    license = lib.licenses.asl20;
-    mainProgram = "lakekeeper";
-    platforms = builtins.attrNames targets;
-    sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
-  };
-}
+    meta = {
+      description = "Apache Iceberg REST Catalog written in Rust";
+      homepage = "https://lakekeeper.io";
+      license = lib.licenses.asl20;
+      mainProgram = "lakekeeper";
+      platforms = builtins.attrNames targets;
+      sourceProvenance = [lib.sourceTypes.binaryNativeCode];
+    };
+  }

@@ -19,15 +19,14 @@
 {
   indexPackages,
   portableServicesModule,
-}:
-{
+}: {
   config,
   lib,
   pkgs,
   ...
-}:
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     mkOption
     mkEnableOption
     mkIf
@@ -66,11 +65,13 @@ let
     ++ concatMap (repo: [
       "--git-repo"
       repo
-    ]) cfg.gitRepos
+    ])
+    cfg.gitRepos
     ++ concatMap (repo: [
       "--code-repo"
       repo
-    ]) cfg.codeRepos;
+    ])
+    cfg.codeRepos;
 
   sinkFlags =
     optionals (cfg.bucket != null) (
@@ -97,9 +98,8 @@ let
         cfg.baseUrl
       ]
     );
-in
-{
-  imports = [ portableServicesModule ];
+in {
+  imports = [portableServicesModule];
 
   options.services.indexer = {
     enable = mkEnableOption "syncing the selected corpus sources to an S3/R2 parquet archive and/or a Mixedbread store";
@@ -149,13 +149,13 @@ in
 
     gitRepos = mkOption {
       type = types.listOf types.str;
-      default = [ ];
+      default = [];
       description = "Git repositories whose commit history to ingest.";
     };
 
     codeRepos = mkOption {
       type = types.listOf types.str;
-      default = [ ];
+      default = [];
       description = "Code checkouts to index (content-addressed; Mixedbread only). Needs mixedbreadStore.";
     };
 
@@ -203,7 +203,7 @@ in
 
     environment = mkOption {
       type = types.attrsOf types.str;
-      default = { };
+      default = {};
       example = {
         AWS_ACCESS_KEY_ID = "...";
       };
@@ -232,15 +232,15 @@ in
           || cfg.atuinDb != null
           || cfg.slackExport != null
           || cfg.linearExport != null
-          || cfg.gitRepos != [ ]
-          || cfg.codeRepos != [ ];
+          || cfg.gitRepos != []
+          || cfg.codeRepos != [];
         message = "services.indexer: select at least one source (local, a *Dir/*File/*Export path, gitRepos, or codeRepos).";
       }
     ];
 
     services.portable.indexer = {
       description = "Sync corpus sources to parquet + Mixedbread";
-      command = [ "${cfg.package}/bin/indexer" ] ++ sourceFlags ++ sinkFlags;
+      command = ["${cfg.package}/bin/indexer"] ++ sourceFlags ++ sinkFlags;
       inherit (cfg) environment interval;
     };
   };

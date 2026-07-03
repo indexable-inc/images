@@ -1,7 +1,4 @@
-{
-  pkgs,
-}:
-let
+{pkgs}: let
   # nix-fast-build's --skip-cached drops a job only when nix-eval-jobs reports
   # its `cacheStatus` as `cached` (present in a configured *remote* substituter).
   # A `local` status (output already realized in *this* runner's store, but not
@@ -22,7 +19,7 @@ let
   # needs (re)building. nix-eval-jobs#403 / nix#12128 fixed the *status*; this
   # fixes what --skip-cached does with it.
   package = pkgs.nix-fast-build.overrideAttrs (old: {
-    patches = (old.patches or [ ]) ++ [ ./skip-local.patch ];
+    patches = (old.patches or []) ++ [./skip-local.patch];
   });
 
   # The patch only touches Python control flow, so the real risk is that the
@@ -33,31 +30,37 @@ let
   # a store or daemon (absent in the sandbox).
   smoke =
     pkgs.runCommand "nix-fast-build-smoke"
-      {
-        nativeBuildInputs = [ package ];
-        strictDeps = true;
-      }
-      ''
-        help=$(nix-fast-build --help 2>&1) || true
-        case "$help" in
-          *"--skip-cached"*) ;;
-          *)
-            echo "nix-fast-build --help did not print usage" >&2
-            printf '%s\n' "$help" >&2
-            exit 1
-            ;;
-        esac
-        mkdir -p "$out"
-      '';
+    {
+      nativeBuildInputs = [package];
+      strictDeps = true;
+    }
+    ''
+      help=$(nix-fast-build --help 2>&1) || true
+      case "$help" in
+        *"--skip-cached"*) ;;
+        *)
+          echo "nix-fast-build --help did not print usage" >&2
+          printf '%s\n' "$help" >&2
+          exit 1
+          ;;
+      esac
+      mkdir -p "$out"
+    '';
 in
-package.overrideAttrs (old: {
-  passthru = (old.passthru or { }) // {
-    tests = (old.passthru.tests or { }) // {
-      inherit smoke;
-    };
-  };
-  meta = (old.meta or { }) // {
-    description = "nix-fast-build patched so --skip-cached also skips locally-realized (floating-CA) outputs, not just remotely-cached ones";
-    mainProgram = "nix-fast-build";
-  };
-})
+  package.overrideAttrs (old: {
+    passthru =
+      (old.passthru or {})
+      // {
+        tests =
+          (old.passthru.tests or {})
+          // {
+            inherit smoke;
+          };
+      };
+    meta =
+      (old.meta or {})
+      // {
+        description = "nix-fast-build patched so --skip-cached also skips locally-realized (floating-CA) outputs, not just remotely-cached ones";
+        mainProgram = "nix-fast-build";
+      };
+  })

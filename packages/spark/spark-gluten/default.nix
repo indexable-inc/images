@@ -30,16 +30,15 @@
   # Writer for `passthru.updateScript` (flake-package path only); null on the
   # overlay path.
   updateScriptWriter ? null,
-}:
-let
+}: let
   # Version + URL and SRI hash live in the sibling pins.json, never inline
   # (repo policy). Bump the version/url in pins.json, then `nix run .#update`
   # re-pins the hash.
   pin = ix.pins.loadPin ./pins.json "gluten";
   inherit (pin) version;
   updateScript =
-    if updateScriptWriter == null then
-      null
+    if updateScriptWriter == null
+    then null
     else
       ix.pins.mkUpdater {
         writeNushellApplication = updateScriptWriter;
@@ -51,85 +50,86 @@ let
   scalaVersion = "2.12";
   jarName = "gluten-velox-bundle.jar";
 in
-stdenv.mkDerivation (finalAttrs: {
-  pname = "spark-gluten";
-  inherit version;
+  stdenv.mkDerivation (finalAttrs: {
+    pname = "spark-gluten";
+    inherit version;
 
-  # The archive host keeps every release. The tarball holds two files: a
-  # DISCLAIMER and the bundle jar.
-  src = fetchurl { inherit (pin) url hash; };
+    # The archive host keeps every release. The tarball holds two files: a
+    # DISCLAIMER and the bundle jar.
+    src = fetchurl {inherit (pin) url hash;};
 
-  dontUnpack = true;
-  strictDeps = true;
+    dontUnpack = true;
+    strictDeps = true;
 
-  nativeBuildInputs = [
-    autoPatchelfHook
-    patchelf
-    unzip
-    zip
-  ];
+    nativeBuildInputs = [
+      autoPatchelfHook
+      patchelf
+      unzip
+      zip
+    ];
 
-  # The CentOS 7 build statically links Velox/Arrow and their third-party deps
-  # (vcpkg static), so the only dynamic dependencies of the bundled `.so`s are
-  # glibc and the intra-bundle libvelox.so -> libgluten.so sibling link. glibc is
-  # provided by the host JVM's already-loaded namespace at runtime; libgcc_s /
-  # libstdc++ are kept here as a defensive rpath entry in case a future bundle
-  # links them dynamically.
-  buildInputs = [
-    (lib.getLib stdenv.cc.cc)
-  ];
+    # The CentOS 7 build statically links Velox/Arrow and their third-party deps
+    # (vcpkg static), so the only dynamic dependencies of the bundled `.so`s are
+    # glibc and the intra-bundle libvelox.so -> libgluten.so sibling link. glibc is
+    # provided by the host JVM's already-loaded namespace at runtime; libgcc_s /
+    # libstdc++ are kept here as a defensive rpath entry in case a future bundle
+    # links them dynamically.
+    buildInputs = [
+      (lib.getLib stdenv.cc.cc)
+    ];
 
-  # libvelox.so is ~246 MiB; stripping a vendored binary is slow and pointless.
-  dontStrip = true;
+    # libvelox.so is ~246 MiB; stripping a vendored binary is slow and pointless.
+    dontStrip = true;
 
-  # We autopatch the libs inside the exploded jar and repack, so there is
-  # nothing left in $out for the automatic fixup pass to find.
-  dontAutoPatchelf = true;
+    # We autopatch the libs inside the exploded jar and repack, so there is
+    # nothing left in $out for the automatic fixup pass to find.
+    dontAutoPatchelf = true;
 
-  buildPhase = ''
-    # shell
-    runHook preBuild
-    tar xzf "$src"
-    mkdir exploded
-    ( cd exploded && unzip -q ../*.jar )
+    buildPhase = ''
+      # shell
+      runHook preBuild
+      tar xzf "$src"
+      mkdir exploded
+      ( cd exploded && unzip -q ../*.jar )
 
-    # Validate every native dependency is satisfiable from buildInputs (this
-    # errors the build if one is missing) and let autoPatchelf resolve them.
-    autoPatchelf exploded
+      # Validate every native dependency is satisfiable from buildInputs (this
+      # errors the build if one is missing) and let autoPatchelf resolve them.
+      autoPatchelf exploded
 
-    # autoPatchelf records absolute build-sandbox paths (e.g. /build/exploded)
-    # for the one intra-bundle link, libvelox.so -> libgluten.so. Those vanish
-    # once Gluten extracts the libraries to a runtime temp dir, exactly like the
-    # dangling /workspace path upstream ships. Re-root each library at $ORIGIN so
-    # a co-extracted sibling resolves, and append the store paths of the external
-    # deps so libstdc++/openssl/numa/zlib resolve wherever the libs land.
-    for so in exploded/linux/amd64/*.so exploded/x86_64/*.so; do
-      patchelf --set-rpath "\$ORIGIN:${lib.makeLibraryPath finalAttrs.buildInputs}" "$so"
-    done
+      # autoPatchelf records absolute build-sandbox paths (e.g. /build/exploded)
+      # for the one intra-bundle link, libvelox.so -> libgluten.so. Those vanish
+      # once Gluten extracts the libraries to a runtime temp dir, exactly like the
+      # dangling /workspace path upstream ships. Re-root each library at $ORIGIN so
+      # a co-extracted sibling resolves, and append the store paths of the external
+      # deps so libstdc++/openssl/numa/zlib resolve wherever the libs land.
+      for so in exploded/linux/amd64/*.so exploded/x86_64/*.so; do
+        patchelf --set-rpath "\$ORIGIN:${lib.makeLibraryPath finalAttrs.buildInputs}" "$so"
+      done
 
-    runHook postBuild
-  '';
+      runHook postBuild
+    '';
 
-  installPhase = ''
-    # shell
-    runHook preInstall
-    mkdir -p "$out/share/java"
-    ( cd exploded && zip -q -r -1 "$out/share/java/${jarName}" . )
-    runHook postInstall
-  '';
+    installPhase = ''
+      # shell
+      runHook preInstall
+      mkdir -p "$out/share/java"
+      ( cd exploded && zip -q -r -1 "$out/share/java/${jarName}" . )
+      runHook postInstall
+    '';
 
-  passthru = {
-    inherit sparkVersion scalaVersion;
-    # Absolute path consumers put on the Spark driver/executor classpath.
-    jar = "${finalAttrs.finalPackage}/share/java/${jarName}";
-  }
-  // lib.optionalAttrs (updateScript != null) { inherit updateScript; };
+    passthru =
+      {
+        inherit sparkVersion scalaVersion;
+        # Absolute path consumers put on the Spark driver/executor classpath.
+        jar = "${finalAttrs.finalPackage}/share/java/${jarName}";
+      }
+      // lib.optionalAttrs (updateScript != null) {inherit updateScript;};
 
-  meta = {
-    description = "Apache Gluten Velox backend bundle for Spark ${sparkVersion}, patched for NixOS";
-    homepage = "https://gluten.apache.org/";
-    license = lib.licenses.asl20;
-    platforms = [ "x86_64-linux" ];
-    sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
-  };
-})
+    meta = {
+      description = "Apache Gluten Velox backend bundle for Spark ${sparkVersion}, patched for NixOS";
+      homepage = "https://gluten.apache.org/";
+      license = lib.licenses.asl20;
+      platforms = ["x86_64-linux"];
+      sourceProvenance = [lib.sourceTypes.binaryNativeCode];
+    };
+  })

@@ -6,13 +6,12 @@
   passthruTests = true;
   overlay = {
     attrName = "oci-image-builder";
-    build =
-      {
-        buildIxRustTool,
-        final,
-        path,
-        ...
-      }:
+    build = {
+      buildIxRustTool,
+      final,
+      path,
+      ...
+    }:
       buildIxRustTool final path;
   };
 }

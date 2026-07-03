@@ -2,8 +2,7 @@
   ix,
   lib,
   pkgs ? ix.pkgs,
-}:
-let
+}: let
   pyproject = lib.importTOML ./pyproject.toml;
   inherit (pyproject.project) version;
 
@@ -19,7 +18,9 @@ let
       x86_64-linux = "manylinux_2_34_x86_64";
       aarch64-linux = "manylinux_2_34_aarch64";
     }
-    .${pkgs.stdenv.hostPlatform.system}
+    .${
+      pkgs.stdenv.hostPlatform.system
+    }
       or (throw "tui-py: wheel is Linux-only, got ${pkgs.stdenv.hostPlatform.system}");
 
   pythonSource = builtins.path {
@@ -33,10 +34,10 @@ let
   pyStrictTest = ix.buildPyStrictCheck pkgs {
     pname = "tui-py";
     pythonSrc = pythonSource;
-    pythonPackages = ps: [ ps.numpy ];
+    pythonPackages = ps: [ps.numpy];
   };
 in
-pkgs.runCommand "ix-tui-wheel"
+  pkgs.runCommand "ix-tui-wheel"
   {
     strictDeps = true;
     nativeBuildInputs = [

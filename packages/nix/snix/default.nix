@@ -29,7 +29,7 @@ let
     # tests/default.nix).
     workspaceRoot = snixDir;
     cargoLock = snixDir + "/Cargo.lock";
-    cargoArgs = [ "--workspace" ];
+    cargoArgs = ["--workspace"];
 
     # snix is third-party: build it, do not lint or audit it. Same relaxed
     # posture as `cargoUnitRealWorkspacePolicy` in tests/default.nix.
@@ -67,12 +67,9 @@ let
     # source string. Refresh with `nix flake update snix-src` then rebuild and
     # copy the corrected hashes from the fetchgit mismatch errors.
     outputHashes = {
-      "git+https://github.com/arianvp/hyper.git?branch=push-ktssyytnyrru#e071325cc75549b37bbcd5be591e93c4c974b4a2" =
-        "sha256-XnUOQYfPa+LKOx7aKz5wv4tL9hXirJ7UkrMBiM7bHb4=";
-      "git+https://github.com/edef1c/tonic.git?branch=push-rosuyzxnysvw#f03397b816b834f78c8b9e1a271c23ac4265d750" =
-        "sha256-bf88XZMzeplglunUDOU5XWFgKpbzoVV1r4Sj3qvhOHQ=";
-      "git+https://github.com/tvlfyi/wu-manber.git#0d5b22bea136659f7de60b102a7030e0daaa503d" =
-        "sha256-7YIttaQLfFC/32utojh2DyOHVsZiw8ul/z0lvOhAE/4=";
+      "git+https://github.com/arianvp/hyper.git?branch=push-ktssyytnyrru#e071325cc75549b37bbcd5be591e93c4c974b4a2" = "sha256-XnUOQYfPa+LKOx7aKz5wv4tL9hXirJ7UkrMBiM7bHb4=";
+      "git+https://github.com/edef1c/tonic.git?branch=push-rosuyzxnysvw#f03397b816b834f78c8b9e1a271c23ac4265d750" = "sha256-bf88XZMzeplglunUDOU5XWFgKpbzoVV1r4Sj3qvhOHQ=";
+      "git+https://github.com/tvlfyi/wu-manber.git#0d5b22bea136659f7de60b102a7030e0daaa503d" = "sha256-7YIttaQLfFC/32utojh2DyOHVsZiw8ul/z0lvOhAE/4=";
     };
   };
 
@@ -92,10 +89,10 @@ let
     "snix-store"
   ];
 in
-runCommand "snix"
+  runCommand "snix"
   {
-    nativeBuildInputs = [ makeWrapper ];
-    passthru = { inherit workspace; };
+    nativeBuildInputs = [makeWrapper];
+    passthru = {inherit workspace;};
     meta = {
       description = "Rust reimplementation of Nix (snix `default` CLI), built via cargo-unit";
       homepage = "https://snix.dev";
@@ -107,8 +104,9 @@ runCommand "snix"
   ''
     mkdir -p "$out/bin" "$out/libexec"
     ${lib.concatMapStringsSep "\n" (
-      name: ''ln -s ${workspace.binaries.${name}}/bin/${name} "$out/libexec/${name}"''
-    ) subcommands}
+        name: ''ln -s ${workspace.binaries.${name}}/bin/${name} "$out/libexec/${name}"''
+      )
+      subcommands}
     makeWrapper ${workspace.binaries.snix}/bin/snix "$out/bin/snix" \
       --suffix SNIX_LIBEXEC_PATH : "$out/libexec"
   ''

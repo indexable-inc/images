@@ -19,13 +19,17 @@ let
   pyStrict = ix.buildPyStrictCheck pkgs {
     pname = "astlog-py";
     pythonSrc = pythonSource;
-    pythonPackages = ps: [ ps.polars ];
+    pythonPackages = ps: [ps.polars];
   };
 in
-pyStrict.overrideAttrs (old: {
-  passthru = (old.passthru or { }) // {
-    tests = (old.passthru.tests or { }) // {
-      inherit pyStrict;
-    };
-  };
-})
+  pyStrict.overrideAttrs (old: {
+    passthru =
+      (old.passthru or {})
+      // {
+        tests =
+          (old.passthru.tests or {})
+          // {
+            inherit pyStrict;
+          };
+      };
+  })

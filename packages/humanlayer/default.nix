@@ -11,8 +11,7 @@
   # null, so `pkgs.humanlayer` carries no updateScript. Same pattern as
   # packages/yc and packages/agent/claude-code.
   updateScriptWriter ? null,
-}:
-let
+}: let
   # Version and per-platform hashes live in manifest.json as the single owner;
   # this file only reads them back. Refresh with
   # `nix run .#humanlayer.updateScript` (see the updateScript below). Mirrors the
@@ -49,12 +48,12 @@ let
   # are authentic, so the real gate is human review of the hash changes in the
   # auto-bump PR. Same posture as packages/yc.
   updateScript =
-    if updateScriptWriter == null then
-      null
+    if updateScriptWriter == null
+    then null
     else
       updateScriptWriter {
         name = "humanlayer-update";
-        runtimeInputs = [ nix ];
+        runtimeInputs = [nix];
         meta.description = "Refresh packages/humanlayer/manifest.json to the latest HumanLayer CLI release";
         text = ''
           # nu
@@ -87,56 +86,56 @@ let
         '';
       };
 in
-stdenvNoCC.mkDerivation {
-  pname = "humanlayer";
-  inherit version;
-  dontUnpack = true;
+  stdenvNoCC.mkDerivation {
+    pname = "humanlayer";
+    inherit version;
+    dontUnpack = true;
 
-  nativeBuildInputs = [
-    makeWrapper
-    nodejs_22
-  ];
+    nativeBuildInputs = [
+      makeWrapper
+      nodejs_22
+    ];
 
-  # Do not auto-patchelf the platform payload. The Linux package is a Bun
-  # standalone executable with embedded application metadata; patchelfing it
-  # makes it start as generic `bun`, so `humanlayer daemon ...` fails with
-  # "Script not found". The npm JS launcher below executes the payload as
-  # published, which is the form verified on NixOS.
-  dontStrip = true;
+    # Do not auto-patchelf the platform payload. The Linux package is a Bun
+    # standalone executable with embedded application metadata; patchelfing it
+    # makes it start as generic `bun`, so `humanlayer daemon ...` fails with
+    # "Script not found". The npm JS launcher below executes the payload as
+    # published, which is the form verified on NixOS.
+    dontStrip = true;
 
-  installPhase = ''
-    # shell
-    runHook preInstall
+    installPhase = ''
+      # shell
+      runHook preInstall
 
-    mkdir -p \
-      "$out/lib/node_modules/@humanlayer/cli" \
-      "$out/lib/node_modules/@humanlayer/cli-${target.slug}" \
-      "$out/bin"
+      mkdir -p \
+        "$out/lib/node_modules/@humanlayer/cli" \
+        "$out/lib/node_modules/@humanlayer/cli-${target.slug}" \
+        "$out/bin"
 
-    tar -xzf ${cliSrc} -C "$out/lib/node_modules/@humanlayer/cli" --strip-components=1
-    tar -xzf ${platformSrc} -C "$out/lib/node_modules/@humanlayer/cli-${target.slug}" --strip-components=1
+      tar -xzf ${cliSrc} -C "$out/lib/node_modules/@humanlayer/cli" --strip-components=1
+      tar -xzf ${platformSrc} -C "$out/lib/node_modules/@humanlayer/cli-${target.slug}" --strip-components=1
 
-    patchShebangs "$out/lib/node_modules/@humanlayer/cli/bin/humanlayer"
-    wrapProgram "$out/lib/node_modules/@humanlayer/cli/bin/humanlayer" \
-      --prefix PATH : "${lib.makeBinPath [ nodejs_22 ]}"
-    ln -s "$out/lib/node_modules/@humanlayer/cli/bin/humanlayer" "$out/bin/humanlayer"
+      patchShebangs "$out/lib/node_modules/@humanlayer/cli/bin/humanlayer"
+      wrapProgram "$out/lib/node_modules/@humanlayer/cli/bin/humanlayer" \
+        --prefix PATH : "${lib.makeBinPath [nodejs_22]}"
+      ln -s "$out/lib/node_modules/@humanlayer/cli/bin/humanlayer" "$out/bin/humanlayer"
 
-    runHook postInstall
-  '';
+      runHook postInstall
+    '';
 
-  passthru = lib.optionalAttrs (updateScript != null) {
-    inherit updateScript;
-  };
+    passthru = lib.optionalAttrs (updateScript != null) {
+      inherit updateScript;
+    };
 
-  meta = {
-    description = "HumanLayer CLI: manage the riptide remote daemon, agents, and HumanLayer API";
-    homepage = "https://humanlayer.com";
-    # License omitted rather than `licenses.unfree` so the per-system flake
-    # package set (which evaluates nixpkgs without `allowUnfree`) can still
-    # `nix run .#humanlayer`. Same posture as packages/yc. Distribution terms are
-    # HumanLayer's; this flake only repackages the published binaries.
-    mainProgram = "humanlayer";
-    platforms = builtins.attrNames manifest.platforms;
-    sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
-  };
-}
+    meta = {
+      description = "HumanLayer CLI: manage the riptide remote daemon, agents, and HumanLayer API";
+      homepage = "https://humanlayer.com";
+      # License omitted rather than `licenses.unfree` so the per-system flake
+      # package set (which evaluates nixpkgs without `allowUnfree`) can still
+      # `nix run .#humanlayer`. Same posture as packages/yc. Distribution terms are
+      # HumanLayer's; this flake only repackages the published binaries.
+      mainProgram = "humanlayer";
+      platforms = builtins.attrNames manifest.platforms;
+      sourceProvenance = [lib.sourceTypes.binaryNativeCode];
+    };
+  }

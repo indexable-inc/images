@@ -1,5 +1,4 @@
-{ ix, ... }:
-
+{ix, ...}:
 ix.cargoUnit.selectBinaryWithTests ix.rustWorkspace.units {
   binary = "gcal";
   # The binary and the Cargo package are named differently; without this the

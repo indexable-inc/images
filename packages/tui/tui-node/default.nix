@@ -1,8 +1,7 @@
 {
   ix,
   pkgs ? ix.pkgs,
-}:
-let
+}: let
   # The N-API addon is already built as a workspace cdylib library, so this is
   # just packaging: rename the shared object to `tui_node.node`, sanitize it,
   # and lay it next to the hand-written JS wrapper and TypeScript types.
@@ -20,10 +19,12 @@ let
       x86_64-linux = "x64";
       aarch64-linux = "arm64";
     }
-    .${pkgs.stdenv.hostPlatform.system}
+    .${
+      pkgs.stdenv.hostPlatform.system
+    }
       or (throw "tui-node: unsupported platform ${pkgs.stdenv.hostPlatform.system}");
 in
-pkgs.runCommand "ix-tui-node"
+  pkgs.runCommand "ix-tui-node"
   {
     strictDeps = true;
     nativeBuildInputs = [
@@ -32,7 +33,7 @@ pkgs.runCommand "ix-tui-node"
       pkgs.patchelf
       pkgs.removeReferencesTo
     ];
-    passthru = { inherit library; };
+    passthru = {inherit library;};
     meta.description = "ix tui Node.js package (N-API bindings for the tui PTY manager)";
   }
   ''

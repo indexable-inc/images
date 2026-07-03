@@ -1,19 +1,19 @@
 /**
-  VIEW node: a materialized projection of the log for spatial queries.
+VIEW node: a materialized projection of the log for spatial queries.
 
-  Reuses the ClickHouse that `services.ix-observability` already provisions (the
-  same server that holds the `otel_*` telemetry tables); it does not stand up a
-  second ClickHouse. It adds a `minecraft` database with:
+Reuses the ClickHouse that `services.ix-observability` already provisions (the
+same server that holds the `otel_*` telemetry tables); it does not stand up a
+second ClickHouse. It adds a `minecraft` database with:
 
-  - `block_events`: the MergeTree spatial view, ordered by a Z-order (Morton)
-    curve over (x, y, z) so 3D bounding-box queries scan contiguous storage.
-  - `block_events_queue`: a Kafka table engine consuming the log topic.
-  - `block_events_mv`: a materialized view that copies each consumed row into
-    `block_events`.
+- `block_events`: the MergeTree spatial view, ordered by a Z-order (Morton)
+  curve over (x, y, z) so 3D bounding-box queries scan contiguous storage.
+- `block_events_queue`: a Kafka table engine consuming the log topic.
+- `block_events_mv`: a materialized view that copies each consumed row into
+  `block_events`.
 
-  The result: a block placed on the server flows producer -> Kafka log -> this
-  ClickHouse view, queryable by space. Telemetry (TPS, JVM heap) flows the
-  separate OTel leg into the `otel_*` tables on the same server.
+The result: a block placed on the server flows producer -> Kafka log -> this
+ClickHouse view, queryable by space. Telemetry (TPS, JVM heap) flows the
+separate OTel leg into the `otel_*` tables on the same server.
 */
 {
   config,
@@ -22,10 +22,9 @@
   nodes,
   pkgs,
   ...
-}:
-let
-  schema = import ./schema.nix { inherit lib; };
-  packages = import ./packages.nix { inherit ix pkgs; };
+}: let
+  schema = import ./schema.nix {inherit lib;};
+  packages = import ./packages.nix {inherit ix pkgs;};
 
   obs = config.services.ix-observability;
   clickhouseHost = obs.clickhouse.host;
@@ -67,8 +66,7 @@ let
       '';
     }
   );
-in
-{
+in {
   # The shared observability stack: ONE ClickHouse holds both the `otel_*`
   # telemetry tables and the `minecraft.*` block-fact view. The collector and
   # Grafana run here too, so the server-telemetry leg has a sink on the same
@@ -92,9 +90,9 @@ in
       "clickhouse.service"
       "network-online.target"
     ];
-    wants = [ "network-online.target" ];
-    requires = [ "clickhouse.service" ];
-    wantedBy = [ "multi-user.target" ];
+    wants = ["network-online.target"];
+    requires = ["clickhouse.service"];
+    wantedBy = ["multi-user.target"];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;

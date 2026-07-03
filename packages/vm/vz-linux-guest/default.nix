@@ -10,23 +10,22 @@
   lib,
   path,
   bossbar-overlay,
-}:
-let
+}: let
   nixos = import "${path}/nixos/lib/eval-config.nix" {
     system = "aarch64-linux";
     modules = [
       ./nixos.nix
       # Inject the overlaid `bossbar-overlay` through the package set rather than
       # `specialArgs`, so the guest module reads it as `pkgs.bossbar-overlay`.
-      { nixpkgs.overlays = [ (_final: _prev: { inherit bossbar-overlay; }) ]; }
+      {nixpkgs.overlays = [(_final: _prev: {inherit bossbar-overlay;})];}
     ];
   };
 in
-import "${path}/nixos/lib/make-disk-image.nix" {
-  inherit lib;
-  inherit (nixos) config pkgs;
-  format = "raw";
-  partitionTableType = "efi";
-  # Headroom over the closure so the ext4 root is not packed to 100%.
-  additionalSpace = "512M";
-}
+  import "${path}/nixos/lib/make-disk-image.nix" {
+    inherit lib;
+    inherit (nixos) config pkgs;
+    format = "raw";
+    partitionTableType = "efi";
+    # Headroom over the closure so the ext4 root is not packed to 100%.
+    additionalSpace = "512M";
+  }

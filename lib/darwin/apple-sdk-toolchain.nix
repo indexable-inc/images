@@ -18,16 +18,21 @@
   # Checked-bash writer, threaded in (not imported across dirs) so the cross
   # wrappers go through the same `bash -n` + shellcheck gate as the rest of the repo.
   writeBashApplication,
-}:
-let
+}: let
   supportedTargets = [
     "aarch64-apple-darwin"
     "x86_64-apple-darwin"
   ];
-  targetEnvName = lib.replaceStrings [ "-" ] [ "_" ] target;
+  targetEnvName = lib.replaceStrings ["-"] ["_"] target;
   cargoTargetEnvName = lib.toUpper targetEnvName;
-  zigTarget = if target == "aarch64-apple-darwin" then "aarch64-macos" else "x86_64-macos";
-  cmakeArch = if target == "aarch64-apple-darwin" then "arm64" else "x86_64";
+  zigTarget =
+    if target == "aarch64-apple-darwin"
+    then "aarch64-macos"
+    else "x86_64-macos";
+  cmakeArch =
+    if target == "aarch64-apple-darwin"
+    then "arm64"
+    else "x86_64";
   targetFlags = "-Wno-error=nullability-completeness -Wno-nullability-completeness -isysroot ${appleSdk} -I${appleSdk}/usr/include -iframework ${appleSdk}/System/Library/Frameworks -F${appleSdk}/System/Library/Frameworks";
 
   # `zig cc` records Apple triples in clang spelling (`arm64-apple-macosx`),
@@ -230,48 +235,46 @@ let
     set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
   '';
 in
-assert lib.assertMsg (builtins.elem target supportedTargets)
-  "ix.appleSdkToolchain: unsupported Apple SDK target: ${target} (supported: ${lib.concatStringsSep ", " supportedTargets})";
-{
-  # `--target`-aware rustc args for this platform. nix-cargo-unit's renderer
-  # calls the workspace `extraRustcArgsForPlatform` hook with each unit's
-  # platform string; return the framework search path only for this Darwin
-  # target so host (platform=null) and other-target units are unaffected.
-  rustcArgsForPlatform =
-    platform:
-    lib.optionals (platform == target) [
-      "-L"
-      "framework=${appleSdk}/System/Library/Frameworks"
+  assert lib.assertMsg (builtins.elem target supportedTargets)
+  "ix.appleSdkToolchain: unsupported Apple SDK target: ${target} (supported: ${lib.concatStringsSep ", " supportedTargets})"; {
+    # `--target`-aware rustc args for this platform. nix-cargo-unit's renderer
+    # calls the workspace `extraRustcArgsForPlatform` hook with each unit's
+    # platform string; return the framework search path only for this Darwin
+    # target so host (platform=null) and other-target units are unaffected.
+    rustcArgsForPlatform = platform:
+      lib.optionals (platform == target) [
+        "-L"
+        "framework=${appleSdk}/System/Library/Frameworks"
+      ];
+
+    runtimeInputs = [
+      appleArPackage
+      appleCcPackage
+      appleCxxPackage
+      appleLinkerPackage
+      appleRanlibPackage
+      appleXcrun
+      pkgs.llvmPackages.bintools-unwrapped
     ];
 
-  runtimeInputs = [
-    appleArPackage
-    appleCcPackage
-    appleCxxPackage
-    appleLinkerPackage
-    appleRanlibPackage
-    appleXcrun
-    pkgs.llvmPackages.bintools-unwrapped
-  ];
-
-  env = {
-    AR = appleAr;
-    CC = appleCc;
-    CFLAGS = targetFlags;
-    CMAKE_TOOLCHAIN_FILE = appleCmakeToolchain;
-    CXX = appleCxx;
-    CXXFLAGS = targetFlags;
-    MACOSX_DEPLOYMENT_TARGET = "11.0";
-    RANLIB = appleRanlib;
-    SDKROOT = appleSdk;
-    "AR_${targetEnvName}" = appleAr;
-    "CC_${targetEnvName}" = appleCc;
-    "CMAKE_TOOLCHAIN_FILE_${targetEnvName}" = appleCmakeToolchain;
-    "CXX_${targetEnvName}" = appleCxx;
-    "CARGO_TARGET_${cargoTargetEnvName}_AR" = appleAr;
-    "CARGO_TARGET_${cargoTargetEnvName}_LINKER" = appleLinker;
-    "CFLAGS_${targetEnvName}" = targetFlags;
-    "CXXFLAGS_${targetEnvName}" = targetFlags;
-    "RANLIB_${targetEnvName}" = appleRanlib;
-  };
-}
+    env = {
+      AR = appleAr;
+      CC = appleCc;
+      CFLAGS = targetFlags;
+      CMAKE_TOOLCHAIN_FILE = appleCmakeToolchain;
+      CXX = appleCxx;
+      CXXFLAGS = targetFlags;
+      MACOSX_DEPLOYMENT_TARGET = "11.0";
+      RANLIB = appleRanlib;
+      SDKROOT = appleSdk;
+      "AR_${targetEnvName}" = appleAr;
+      "CC_${targetEnvName}" = appleCc;
+      "CMAKE_TOOLCHAIN_FILE_${targetEnvName}" = appleCmakeToolchain;
+      "CXX_${targetEnvName}" = appleCxx;
+      "CARGO_TARGET_${cargoTargetEnvName}_AR" = appleAr;
+      "CARGO_TARGET_${cargoTargetEnvName}_LINKER" = appleLinker;
+      "CFLAGS_${targetEnvName}" = targetFlags;
+      "CXXFLAGS_${targetEnvName}" = targetFlags;
+      "RANLIB_${targetEnvName}" = appleRanlib;
+    };
+  }

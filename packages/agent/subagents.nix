@@ -4,8 +4,7 @@
   ix,
   lib,
   repoPackages,
-}:
-let
+}: let
   agents = {
     index-action-runner = {
       frontmatter = {
@@ -19,7 +18,7 @@ let
           index = {
             transport = "stdio";
             command = lib.getExe repoPackages.mcp;
-            args = [ "serve" ];
+            args = ["serve"];
           };
         };
       };
@@ -348,8 +347,7 @@ let
       '';
     };
   };
-in
-{
+in {
   renderedAgents = agents;
-  rawFiles = [ ];
+  rawFiles = [];
 }

@@ -9,8 +9,7 @@
   lib,
   pkgs,
   ...
-}:
-let
+}: let
   # The overlaid aarch64-linux package, injected through `nixpkgs.overlays` by
   # the builder (default.nix) rather than a specialArg.
   inherit (pkgs) bossbar-overlay;
@@ -36,8 +35,7 @@ let
     default_border none
     exec ${bossbarLaunch}
   '';
-in
-{
+in {
   boot = {
     # Boot under VZ's EFI firmware off the raw disk.
     loader = {
@@ -60,7 +58,7 @@ in
     ];
     # virtio-gpu DRM node so the compositor can run on a real (paravirtual)
     # display whose scanout VZ exposes to the host framebuffer.
-    kernelModules = [ "virtio_gpu" ];
+    kernelModules = ["virtio_gpu"];
   };
 
   # make-disk-image (partitionTableType = "efi") labels the partitions ESP/nixos.

@@ -66,7 +66,7 @@
     ];
 
     # `mas` (Mac App Store CLI) is the brew that drives `masApps` below.
-    brews = [ "mas" ];
+    brews = ["mas"];
 
     # Every Mac App Store app installed on the workstation must be listed here:
     # onActivation.cleanup = "zap" uninstalls any MAS app not declared, so an

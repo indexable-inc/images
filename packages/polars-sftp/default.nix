@@ -27,7 +27,9 @@ let
       x86_64-linux = "manylinux_2_34_x86_64";
       aarch64-linux = "manylinux_2_34_aarch64";
     }
-    .${stdenv.hostPlatform.system}
+    .${
+      stdenv.hostPlatform.system
+    }
       or (throw "polars-sftp: unsupported system ${stdenv.hostPlatform.system}");
 
   # Strict type + annotation gate over the Python source (zuban --strict + ruff
@@ -38,7 +40,7 @@ let
   pyStrictTest = ix.buildPyStrictCheck ix.pkgs {
     pname = "polars-sftp";
     pythonSrc = ./python;
-    pythonPackages = ps: [ ps.polars ];
+    pythonPackages = ps: [ps.polars];
   };
 
   wheel = rustPlatform.buildRustPackage {
@@ -113,10 +115,14 @@ let
     };
   };
 in
-wheel.overrideAttrs (old: {
-  passthru = (old.passthru or { }) // {
-    tests = (old.passthru.tests or { }) // {
-      pyStrict = pyStrictTest;
-    };
-  };
-})
+  wheel.overrideAttrs (old: {
+    passthru =
+      (old.passthru or {})
+      // {
+        tests =
+          (old.passthru.tests or {})
+          // {
+            pyStrict = pyStrictTest;
+          };
+      };
+  })

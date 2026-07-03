@@ -30,9 +30,8 @@
   pkgs,
   ix,
   paths,
-}:
-let
-  packages = import (paths.examples + "/minecraft/blocks/packages.nix") { inherit ix pkgs; };
+}: let
+  packages = import (paths.examples + "/minecraft/blocks/packages.nix") {inherit ix pkgs;};
 
   # The producer pins this Minecraft version (examples/minecraft/blocks).
   version = "26.1.2";
@@ -61,60 +60,60 @@ let
   # deterministic.
   prePatched =
     pkgs.runCommand "paper-${version}-prepatched"
-      {
-        nativeBuildInputs = [
-          jre
-          pkgs.unzip
-        ];
-      }
-      ''
-        mkdir -p work/cache
-        cd work
+    {
+      nativeBuildInputs = [
+        jre
+        pkgs.unzip
+      ];
+    }
+    ''
+      mkdir -p work/cache
+      cd work
 
-        # download-context is one tab-separated line (no trailing newline, so
-        # `read` hits EOF and returns nonzero even after filling the fields):
-        # <sha256> <url> <cache file name>.
-        unzip -p ${paperJar} META-INF/download-context > ctx
-        IFS=$'	' read -r sha url fname < ctx || true
-        if [ -z "$sha" ] || [ -z "$fname" ]; then
-          echo "FAIL: could not parse META-INF/download-context from ${paperJar}" >&2
-          exit 1
-        fi
+      # download-context is one tab-separated line (no trailing newline, so
+      # `read` hits EOF and returns nonzero even after filling the fields):
+      # <sha256> <url> <cache file name>.
+      unzip -p ${paperJar} META-INF/download-context > ctx
+      IFS=$'	' read -r sha url fname < ctx || true
+      if [ -z "$sha" ] || [ -z "$fname" ]; then
+        echo "FAIL: could not parse META-INF/download-context from ${paperJar}" >&2
+        exit 1
+      fi
 
-        cp ${vanilla.mojang-server.src} "cache/$fname"
-        if ! echo "$sha  cache/$fname" | sha256sum --check --status -; then
-          echo "FAIL: pinned vanilla server jar does not match this Paper build's download-context" >&2
-          echo "  paperclip wants: $sha  $url" >&2
-          echo "  update tests/minecraft-blocks-vm/vanilla-server.json to that URL + hash" >&2
-          exit 1
-        fi
+      cp ${vanilla.mojang-server.src} "cache/$fname"
+      if ! echo "$sha  cache/$fname" | sha256sum --check --status -; then
+        echo "FAIL: pinned vanilla server jar does not match this Paper build's download-context" >&2
+        echo "  paperclip wants: $sha  $url" >&2
+        echo "  update tests/minecraft-blocks-vm/vanilla-server.json to that URL + hash" >&2
+        exit 1
+      fi
 
-        java -Dpaperclip.patchonly=true -jar ${paperJar}
+      java -Dpaperclip.patchonly=true -jar ${paperJar}
 
-        # Keep the cache too: at every startup paperclip re-verifies the
-        # vanilla jar in cache/ (DownloadContext.download short-circuits only
-        # when the file is present with a matching hash) before checking the
-        # patched outputs, so an empty cache means a network fetch even with
-        # valid versions/ + libraries/ trees.
-        mkdir -p "$out"
-        cp -r versions libraries cache "$out/"
-      '';
+      # Keep the cache too: at every startup paperclip re-verifies the
+      # vanilla jar in cache/ (DownloadContext.download short-circuits only
+      # when the file is present with a matching hash) before checking the
+      # patched outputs, so an empty cache means a network fetch even with
+      # valid versions/ + libraries/ trees.
+      mkdir -p "$out"
+      cp -r versions libraries cache "$out/"
+    '';
 
   blockLog = "/var/lib/minecraft/block-events.jsonl";
 in
-pkgs.testers.runNixOSTest {
-  name = "minecraft-blocks-paper-boot";
+  pkgs.testers.runNixOSTest {
+    name = "minecraft-blocks-paper-boot";
 
-  # The minecraft module tree reads the repo's cross-module helper bundle.
-  # `ix.packages` is normally injected by `evalImageConfig`'s specialArgs; the
-  # public lib surface carries `packageSetFor` instead, so rebuild it here.
-  node.specialArgs.ix = ix // {
-    packages = ix.packageSetFor pkgs;
-  };
+    # The minecraft module tree reads the repo's cross-module helper bundle.
+    # `ix.packages` is normally injected by `evalImageConfig`'s specialArgs; the
+    # public lib surface carries `packageSetFor` instead, so rebuild it here.
+    node.specialArgs.ix =
+      ix
+      // {
+        packages = ix.packageSetFor pkgs;
+      };
 
-  nodes.producer =
-    { ... }:
-    {
+    nodes.producer = {...}: {
       imports = [
         # The full loader family: services/minecraft/default.nix reads every
         # loader's `enable` flag to pick the dropin dir, and the paper loader
@@ -141,15 +140,15 @@ pkgs.testers.runNixOSTest {
           options.ix = {
             extendedAttributes = lib.mkOption {
               type = lib.types.attrsOf lib.types.anything;
-              default = { };
+              default = {};
             };
             healthChecks = lib.mkOption {
               type = lib.types.attrsOf lib.types.anything;
-              default = { };
+              default = {};
             };
             networking.portClaims = lib.mkOption {
               type = lib.types.attrsOf lib.types.anything;
-              default = { };
+              default = {};
             };
           };
         }
@@ -205,40 +204,40 @@ pkgs.testers.runNixOSTest {
       '';
     };
 
-  testScript = ''
-    producer.start()
-    producer.wait_for_unit("minecraft.service")
+    testScript = ''
+      producer.start()
+      producer.wait_for_unit("minecraft.service")
 
-    # onEnable's success line: the plugin opened its JSON Lines log. This is
-    # the exact log the original NoSuchMethodError class of failures would
-    # have prevented.
-    producer.wait_until_succeeds(
-        "journalctl -u minecraft.service --grep 'block-events: logging placements to' --quiet",
-        timeout=900,
-    )
+      # onEnable's success line: the plugin opened its JSON Lines log. This is
+      # the exact log the original NoSuchMethodError class of failures would
+      # have prevented.
+      producer.wait_until_succeeds(
+          "journalctl -u minecraft.service --grep 'block-events: logging placements to' --quiet",
+          timeout=900,
+      )
 
-    # Paper finished booting after plugin enable; a plugin that threw during
-    # onEnable would be disabled before this line.
-    producer.wait_until_succeeds(
-        "journalctl -u minecraft.service --grep 'Done .*For help, type' --quiet",
-        timeout=900,
-    )
+      # Paper finished booting after plugin enable; a plugin that threw during
+      # onEnable would be disabled before this line.
+      producer.wait_until_succeeds(
+          "journalctl -u minecraft.service --grep 'Done .*For help, type' --quiet",
+          timeout=900,
+      )
 
-    # No enable-time stack trace: Paper logs this exact phrase when a plugin
-    # throws out of onEnable, and the plugin's only failure path wraps into
-    # UncheckedIOException.
-    producer.fail(
-        "journalctl -u minecraft.service --grep 'Error occurred while enabling BlockEvents' --quiet"
-    )
-    producer.fail(
-        "journalctl -u minecraft.service --grep 'UncheckedIOException' --quiet"
-    )
+      # No enable-time stack trace: Paper logs this exact phrase when a plugin
+      # throws out of onEnable, and the plugin's only failure path wraps into
+      # UncheckedIOException.
+      producer.fail(
+          "journalctl -u minecraft.service --grep 'Error occurred while enabling BlockEvents' --quiet"
+      )
+      producer.fail(
+          "journalctl -u minecraft.service --grep 'UncheckedIOException' --quiet"
+      )
 
-    # onEnable's side effect, observable outside the journal: the append-only
-    # domain-fact log the Kafka shipper would tail exists at the configured
-    # path, proving the managed config.yml handoff reached getConfig().
-    producer.succeed("test -f ${blockLog}")
+      # onEnable's side effect, observable outside the journal: the append-only
+      # domain-fact log the Kafka shipper would tail exists at the configured
+      # path, proving the managed config.yml handoff reached getConfig().
+      producer.succeed("test -f ${blockLog}")
 
-    producer.shutdown()
-  '';
-}
+      producer.shutdown()
+    '';
+  }

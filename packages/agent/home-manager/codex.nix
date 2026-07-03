@@ -1,14 +1,12 @@
-{ indexPackages }:
-{
+{indexPackages}: {
   config,
   lib,
   pkgs,
   ...
-}:
-let
+}: let
   cfg = config.programs.codex;
-  tomlFormat = pkgs.formats.toml { };
-  jsonFormat = pkgs.formats.json { };
+  tomlFormat = pkgs.formats.toml {};
+  jsonFormat = pkgs.formats.json {};
   pathLike = lib.types.either lib.types.path lib.types.str;
   indexPkgs = indexPackages pkgs.stdenv.hostPlatform.system;
   systemPromptSource = lib.types.enum [
@@ -18,27 +16,28 @@ let
     "file"
   ];
 
-  optionalOverride =
-    condition: name: value:
-    lib.optionalAttrs condition { ${name} = value; };
-  packageOverrides = {
-    inherit (cfg)
-      forcedSettings
-      personalStartupContext
-      primaryCheckouts
-      ;
-    settings = cfg.defaults;
-  }
-  // optionalOverride (cfg.mcpServers != null) "mcpServers" cfg.mcpServers
-  // optionalOverride (
-    cfg.systemPrompt.source == "file"
-  ) "modelInstructionsFile" cfg.systemPrompt.file
-  // optionalOverride (cfg.systemPrompt.source == "text") "systemPrompt" cfg.systemPrompt.text
-  // optionalOverride (cfg.systemPrompt.source == "stock") "systemPrompt" null
-  // optionalOverride (cfg.systemPrompt.source == "house") "omitRules" cfg.systemPrompt.omitRules;
+  optionalOverride = condition: name: value:
+    lib.optionalAttrs condition {${name} = value;};
+  packageOverrides =
+    {
+      inherit
+        (cfg)
+        forcedSettings
+        personalStartupContext
+        primaryCheckouts
+        ;
+      settings = cfg.defaults;
+    }
+    // optionalOverride (cfg.mcpServers != null) "mcpServers" cfg.mcpServers
+    // optionalOverride (
+      cfg.systemPrompt.source == "file"
+    ) "modelInstructionsFile"
+    cfg.systemPrompt.file
+    // optionalOverride (cfg.systemPrompt.source == "text") "systemPrompt" cfg.systemPrompt.text
+    // optionalOverride (cfg.systemPrompt.source == "stock") "systemPrompt" null
+    // optionalOverride (cfg.systemPrompt.source == "house") "omitRules" cfg.systemPrompt.omitRules;
   finalPackage = cfg.basePackage.override packageOverrides;
-in
-{
+in {
   options.programs.codex = {
     basePackage = lib.mkOption {
       type = lib.types.package;
@@ -138,7 +137,7 @@ in
 
           omitRules = lib.mkOption {
             type = lib.types.listOf lib.types.str;
-            default = [ ];
+            default = [];
             description = ''
               Rule names omitted from the generated house system prompt. Only
               valid when {option}`programs.codex.systemPrompt.source` is
@@ -147,7 +146,7 @@ in
           };
         };
       };
-      default = { };
+      default = {};
       description = ''
         Structured control for the system prompt rendered as Codex model
         instructions.
@@ -178,7 +177,7 @@ in
         message = "programs.codex.systemPrompt: source = \"file\" requires file, and file requires source = \"file\".";
       }
       {
-        assertion = cfg.systemPrompt.source == "house" || cfg.systemPrompt.omitRules == [ ];
+        assertion = cfg.systemPrompt.source == "house" || cfg.systemPrompt.omitRules == [];
         message = "programs.codex.systemPrompt.omitRules only applies when source = \"house\".";
       }
     ];

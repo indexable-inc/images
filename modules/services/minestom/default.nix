@@ -8,9 +8,9 @@
   lib,
   pkgs,
   ...
-}:
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     mkEnableOption
     mkIf
     mkOption
@@ -24,18 +24,18 @@ let
   dataDir = "/var/lib/minestom";
   java = lib.getExe' cfg.javaPackage "java";
 
-  javaArgs = [
-    java
-    "-XX:MaxRAMPercentage=${toString cfg.maxRAMPercentage}"
-  ]
-  ++ yourkit.flagsFor pkgs cfg.yourkit
-  ++ cfg.jvmFlags
-  ++ [
-    "-jar"
-    "${cfg.serverJar}"
-  ];
-in
-{
+  javaArgs =
+    [
+      java
+      "-XX:MaxRAMPercentage=${toString cfg.maxRAMPercentage}"
+    ]
+    ++ yourkit.flagsFor pkgs cfg.yourkit
+    ++ cfg.jvmFlags
+    ++ [
+      "-jar"
+      "${cfg.serverJar}"
+    ];
+in {
   options.services.minestom = {
     enable = mkEnableOption "Minestom server";
 
@@ -49,7 +49,7 @@ in
       default = 85;
     };
 
-    javaPackage = mkPackageOption pkgs "temurin-jre-bin-${defaultJvmVersion}" { };
+    javaPackage = mkPackageOption pkgs "temurin-jre-bin-${defaultJvmVersion}" {};
 
     jvmFlags = mkOption {
       type = types.listOf types.str;
@@ -80,7 +80,7 @@ in
 
     yourkit = mkOption {
       type = ix.languages.java.yourkit.type;
-      default = { };
+      default = {};
       description = ''
         YourKit profiler agent. Enable to load `libyjpagent` at JVM
         startup so call counts and allocations are accurate from the
@@ -91,33 +91,36 @@ in
   };
 
   config = mkIf cfg.enable {
-    ix.networking.portClaims = {
-      minestom = {
-        protocol = "tcp";
-        inherit (cfg) port;
-        description = "Minestom server";
+    ix.networking.portClaims =
+      {
+        minestom = {
+          protocol = "tcp";
+          inherit (cfg) port;
+          description = "Minestom server";
+        };
+      }
+      // yourkit.portClaimFor {
+        owner = "minestom";
+        cfg = cfg.yourkit;
       };
-    }
-    // yourkit.portClaimFor {
-      owner = "minestom";
-      cfg = cfg.yourkit;
-    };
 
     networking.firewall.allowedTCPPorts =
       lib.optional cfg.openFirewall cfg.port ++ yourkit.firewallTcpPortsFor cfg.yourkit;
 
     systemd.services.minestom = {
       description = "Minestom server";
-      after = [ "network-online.target" ];
-      wants = [ "network-online.target" ];
-      wantedBy = [ "multi-user.target" ];
-      serviceConfig = ix.systemdHardening // {
-        Type = "simple";
-        WorkingDirectory = dataDir;
-        ExecStart = lib.escapeShellArgs javaArgs;
-        Restart = "on-failure";
-        StateDirectory = "minestom";
-      };
+      after = ["network-online.target"];
+      wants = ["network-online.target"];
+      wantedBy = ["multi-user.target"];
+      serviceConfig =
+        ix.systemdHardening
+        // {
+          Type = "simple";
+          WorkingDirectory = dataDir;
+          ExecStart = lib.escapeShellArgs javaArgs;
+          Restart = "on-failure";
+          StateDirectory = "minestom";
+        };
     };
   };
 }

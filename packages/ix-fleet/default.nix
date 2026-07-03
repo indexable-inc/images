@@ -2,13 +2,11 @@
   ix,
   lib,
   pkgs ? ix.pkgs,
-}:
-
-let
-  dagRunner = pkgs.callPackage (ix.paths.packagesRoot + "/dag-runner") { inherit ix; };
+}: let
+  dagRunner = pkgs.callPackage (ix.paths.packagesRoot + "/dag-runner") {inherit ix;};
   # The ix Python SDK is a prebuilt wheel fetched from R2, not a uv/PyPI
   # dependency, so it is injected into the venv below rather than resolved by uv.
-  ixSdk = pkgs.callPackage (ix.paths.packagesRoot + "/ix-sdk-python") { inherit ix; };
+  ixSdk = pkgs.callPackage (ix.paths.packagesRoot + "/ix-sdk-python") {inherit ix;};
 
   unwrapped = ix.buildUvApplication pkgs {
     pname = "ix-fleet";
@@ -17,9 +15,9 @@ let
     pyChecker = "zuban";
   };
 
-  jsonFormat = pkgs.formats.json { };
+  jsonFormat = pkgs.formats.json {};
   dryRunPlan = jsonFormat.generate "ix-fleet-dry-run-plan.json" {
-    order = [ "api" ];
+    order = ["api"];
     nodes.api = {
       name = "api";
       baseName = "api";
@@ -60,14 +58,14 @@ let
   # the old test did); that path is covered by the example health-checks.
   dryRunUp =
     pkgs.runCommand "ix-fleet-dry-run-up"
-      {
-        nativeBuildInputs = [ package ];
-        strictDeps = true;
-      }
-      ''
-        ix-fleet --plan ${dryRunPlan} up --skip-push --skip-health --dry-run
-        mkdir -p "$out"
-      '';
+    {
+      nativeBuildInputs = [package];
+      strictDeps = true;
+    }
+    ''
+      ix-fleet --plan ${dryRunPlan} up --skip-push --skip-health --dry-run
+      mkdir -p "$out"
+    '';
 
   # Two remote-source nodes that share a build VM, so `switch --dry-run` exercises
   # the native multi-VM batch path: both must land in one `ix up .#web .#worker
@@ -77,7 +75,7 @@ let
       "web"
       "worker"
     ];
-    nodes = lib.genAttrs [ "web" "worker" ] (name: {
+    nodes = lib.genAttrs ["web" "worker"] (name: {
       inherit name;
       baseName = name;
       system = "/nix/store/${name}-system";
@@ -105,16 +103,16 @@ let
   # than one per node. No API calls or network, so it runs in the sandbox.
   dryRunSwitch =
     pkgs.runCommand "ix-fleet-dry-run-switch"
-      {
-        nativeBuildInputs = [ package ];
-        strictDeps = true;
-      }
-      ''
-        ix-fleet --plan ${dryRunSwitchPlan} switch --skip-health --no-snapshot --dry-run | tee switch.log
-        grep -qE '\+ ix up \.#web \.#worker --build-vm builder' switch.log \
-          || { echo "expected a single batched 'ix up .#web .#worker --build-vm builder'" >&2; exit 1; }
-        mkdir -p "$out"
-      '';
+    {
+      nativeBuildInputs = [package];
+      strictDeps = true;
+    }
+    ''
+      ix-fleet --plan ${dryRunSwitchPlan} switch --skip-health --no-snapshot --dry-run | tee switch.log
+      grep -qE '\+ ix up \.#web \.#worker --build-vm builder' switch.log \
+        || { echo "expected a single batched 'ix up .#web .#worker --build-vm builder'" >&2; exit 1; }
+      mkdir -p "$out"
+    '';
 
   package = unwrapped.overrideAttrs (old: {
     postInstall = ''
@@ -129,11 +127,15 @@ let
         --set IX_FLEET_DAG_RUNNER ${lib.escapeShellArg (lib.getExe dagRunner)}
     '';
 
-    passthru = (old.passthru or { }) // {
-      tests = (old.passthru.tests or { }) // {
-        inherit dryRunUp dryRunSwitch;
+    passthru =
+      (old.passthru or {})
+      // {
+        tests =
+          (old.passthru.tests or {})
+          // {
+            inherit dryRunUp dryRunSwitch;
+          };
       };
-    };
   });
 in
-package
+  package

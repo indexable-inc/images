@@ -3,15 +3,13 @@
   nodes,
   pkgs,
   ...
-}:
-let
+}: let
   share = {
     mountPoint = "/mnt/share";
     name = "share";
   };
   serverHost = nodes.file-server.config.ix.networking.eastWest.hostName;
-in
-{
+in {
   # The real dependency is the ix guest kernel: `linux-ix` must build in CIFS
   # support or ship `cifs.ko` in the module tree injected at
   # `/ix-guest/lib/modules`. This image only supplies `mount.cifs`.

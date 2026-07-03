@@ -3,8 +3,7 @@
 # long-poll Telegram platform on; the persona swap is the only option
 # override, because a chat companion reads differently from a terminal
 # operator.
-{ ix, ... }:
-{
+{ix, ...}: {
   # The shared composition reads this bag; `telegram = true` wires the
   # Telegram env file into the daemon. The platform itself activates
   # when TELEGRAM_BOT_TOKEN is present in /run/secrets/hermes.env, so a

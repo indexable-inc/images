@@ -12,8 +12,7 @@
   lists,
   # Shared pins reader, threaded through to policy.nix (see its arg doc).
   pins,
-}:
-let
+}: let
   inherit (builtins) baseNameOf toString;
 
   vendorLib = import ./vendor.nix {
@@ -36,7 +35,8 @@ let
   };
 
   inherit (vendorLib) cargoLockFile vendorConfigScript;
-  inherit (policyLib)
+  inherit
+    (policyLib)
     clippyLintArgs
     clippyLintFlagsFromManifest
     crateChecks
@@ -71,106 +71,102 @@ let
   #   cargoArgs / clippyCargoArgsExplicit — facts the policy merge flattens away.
   # The single-reader knobs (profile, target, cargoTargets, ...) are NOT here;
   # each is read at its one use site.
-  resolveArgs =
-    args:
-    let
-      rustToolchain' = args.rustToolchain or defaultRustToolchain;
-      cargoLock = args.cargoLock or (args.src + "/Cargo.lock");
-      outputHashes = args.outputHashes or { };
-      sourceOverrides = args.sourceOverrides or { };
+  resolveArgs = args: let
+    rustToolchain' = args.rustToolchain or defaultRustToolchain;
+    cargoLock = args.cargoLock or (args.src + "/Cargo.lock");
+    outputHashes = args.outputHashes or {};
+    sourceOverrides = args.sourceOverrides or {};
 
-      policy = resolvePolicy (args.policy or { });
+    policy = resolvePolicy (args.policy or {});
 
-      # Lazy: a lockfile-only consumer never forces these derivations.
-      inherit (vendorLib.mkVendor { inherit cargoLock outputHashes sourceOverrides; })
+    # Lazy: a lockfile-only consumer never forces these derivations.
+    inherit
+      (vendorLib.mkVendor {inherit cargoLock outputHashes sourceOverrides;})
+      vendorSources
+      vendorDir
+      ;
+
+    cargoArgs = args.cargoArgs or ["--workspace"];
+    nativeBuildInputs = args.nativeBuildInputs or [];
+    env = args.env or {};
+    cargoExtraConfig = args.cargoExtraConfig or "";
+
+    context = {
+      inherit (args) src;
+      rustToolchain = rustToolchain';
+      inherit
+        vendorDir
         vendorSources
+        cargoExtraConfig
+        nativeBuildInputs
+        env
+        ;
+      cargoLockPath = cargoLockFile cargoLock;
+      toolchainId = toolchainId rustToolchain';
+      configScript = vendorConfigScript {inherit cargoExtraConfig cargoLock vendorDir;};
+    };
+
+    effects = {
+      rustcArgsForPlatform = _platform: [];
+      linkRustcArgsForPlatform = rustcArgsForPolicyForPlatform policy;
+      rustcArgsForHost = rustcArgsForPolicyForPlatform policy pkgs.stdenv.hostPlatform.config;
+      linkerNativeInputs = nativeBuildInputsForPolicy policy;
+      clippyLintArgs = clippyLintArgs policy;
+      renderFlags =
+        lib.optional policy.denyUnusedCrateDependencies "--deny-unused-crate-dependencies"
+        ++ lib.optional policy.denyPanics "--deny-panics";
+    };
+
+    # The flat record the policy-check builders still consume internally.
+    checkArgs = {
+      inherit (args) src;
+      rustToolchain = rustToolchain';
+      inherit
+        cargoLock
+        cargoArgs
+        nativeBuildInputs
+        env
+        cargoExtraConfig
+        policy
         vendorDir
         ;
-
-      cargoArgs = args.cargoArgs or [ "--workspace" ];
-      nativeBuildInputs = args.nativeBuildInputs or [ ];
-      env = args.env or { };
-      cargoExtraConfig = args.cargoExtraConfig or "";
-
-      context = {
-        inherit (args) src;
-        rustToolchain = rustToolchain';
-        inherit
-          vendorDir
-          vendorSources
-          cargoExtraConfig
-          nativeBuildInputs
-          env
-          ;
-        cargoLockPath = cargoLockFile cargoLock;
-        toolchainId = toolchainId rustToolchain';
-        configScript = vendorConfigScript { inherit cargoExtraConfig cargoLock vendorDir; };
-      };
-
-      effects = {
-        rustcArgsForPlatform = _platform: [ ];
-        linkRustcArgsForPlatform = rustcArgsForPolicyForPlatform policy;
-        rustcArgsForHost = rustcArgsForPolicyForPlatform policy pkgs.stdenv.hostPlatform.config;
-        linkerNativeInputs = nativeBuildInputsForPolicy policy;
-        clippyLintArgs = clippyLintArgs policy;
-        renderFlags =
-          lib.optional policy.denyUnusedCrateDependencies "--deny-unused-crate-dependencies"
-          ++ lib.optional policy.denyPanics "--deny-panics";
-      };
-
-      # The flat record the policy-check builders still consume internally.
-      checkArgs = {
-        inherit (args) src;
-        rustToolchain = rustToolchain';
-        inherit
-          cargoLock
-          cargoArgs
-          nativeBuildInputs
-          env
-          cargoExtraConfig
-          policy
-          vendorDir
-          ;
-      };
-
-      checks = {
-        crate =
-          {
-            pname,
-            clippyCargoArgsSet ? false,
-          }:
-          crateChecks {
-            args = checkArgs;
-            inherit pname clippyCargoArgsSet;
-          };
-        workspace =
-          pname:
-          workspaceChecks {
-            args = checkArgs;
-            inherit pname;
-          };
-      };
-    in
-    {
-      inherit
-        context
-        policy
-        effects
-        checks
-        cargoArgs
-        ;
-      clippyCargoArgsExplicit = (args.policy.clippy or { }) ? cargoArgs;
     };
+
+    checks = {
+      crate = {
+        pname,
+        clippyCargoArgsSet ? false,
+      }:
+        crateChecks {
+          args = checkArgs;
+          inherit pname clippyCargoArgsSet;
+        };
+      workspace = pname:
+        workspaceChecks {
+          args = checkArgs;
+          inherit pname;
+        };
+    };
+  in {
+    inherit
+      context
+      policy
+      effects
+      checks
+      cargoArgs
+      ;
+    clippyCargoArgsExplicit = (args.policy.clippy or {}) ? cargoArgs;
+  };
 in
-# The `rust` surface consumed by the cargo-unit side: the resolver bundle plus
-# the few helpers that operate outside it (toolchain id/default for prebuilt
-# units, the manifest clippy-lint reader, the policy presets).
-{
-  inherit
-    resolveArgs
-    toolchainId
-    defaultRustToolchain
-    clippyLintFlagsFromManifest
-    policyPresets
-    ;
-}
+  # The `rust` surface consumed by the cargo-unit side: the resolver bundle plus
+  # the few helpers that operate outside it (toolchain id/default for prebuilt
+  # units, the manifest clippy-lint reader, the policy presets).
+  {
+    inherit
+      resolveArgs
+      toolchainId
+      defaultRustToolchain
+      clippyLintFlagsFromManifest
+      policyPresets
+      ;
+  }

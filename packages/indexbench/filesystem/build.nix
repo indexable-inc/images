@@ -2,7 +2,6 @@
   ix,
   pkgs,
 }:
-
 ix.writeNushellApplication pkgs {
   name = "ix-bench-filesystem";
   runtimeInputs = [

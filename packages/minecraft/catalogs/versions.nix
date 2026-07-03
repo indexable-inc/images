@@ -8,8 +8,7 @@
 # `ix.artifacts.minecraft.servers."${version}-${loader}"`, and the runtime
 # module defaults `modCatalog` to the matching version catalog plus the
 # `common` cross-version mods.
-{ lib, ... }:
-let
+{lib, ...}: let
   default = "26.1.2-fabric";
 
   variants = {
@@ -42,7 +41,7 @@ let
     "26.1.2-paper" = {
       loader = "paper";
       version = "26.1.2";
-      mods = [ ];
+      mods = [];
     };
 
     "1.21.11-fabric" = {
@@ -58,26 +57,23 @@ let
     "1.21.11-paper" = {
       loader = "paper";
       version = "1.21.11";
-      mods = [ ];
+      mods = [];
     };
   };
 
-  mkVariant =
-    _tag:
-    {
-      loader,
-      version,
-      mods,
-    }:
-    {
-      services.minecraft = {
-        inherit version;
-        mods = lib.genAttrs mods (_: { });
-        ${loader}.enable = true;
-      };
+  mkVariant = _tag: {
+    loader,
+    version,
+    mods,
+  }: {
+    services.minecraft = {
+      inherit version;
+      mods = lib.genAttrs mods (_: {});
+      ${loader}.enable = true;
     };
+  };
 in
-{
-  inherit default;
-}
-// lib.mapAttrs mkVariant variants
+  {
+    inherit default;
+  }
+  // lib.mapAttrs mkVariant variants

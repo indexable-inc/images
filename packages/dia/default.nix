@@ -9,9 +9,7 @@
   # updater is a maintainer-facing flake output, so the overlay build of
   # `pkgs.dia` simply omits `passthru.updateScript`.
   updateScriptWriter ? null,
-}:
-
-let
+}: let
   # Version and content hash are generated, never hand-edited. Bump with
   # `nix run .#dia.updateScript -- [version]`, which resolves the upstream
   # `Dia-latest.dmg` pointer (or a pinned version) and rewrites manifest.json.
@@ -31,12 +29,12 @@ let
   # pass a version to pin an exact one. `nix store prefetch-file` downloads the
   # .dmg once and emits the SRI hash the fetcher pins.
   updateScript =
-    if updateScriptWriter == null then
-      null
+    if updateScriptWriter == null
+    then null
     else
       updateScriptWriter {
         name = "dia-update";
-        runtimeInputs = [ nix ];
+        runtimeInputs = [nix];
         meta.description = "Refresh packages/dia/manifest.json to a Dia release";
         text = ''
           # nu
@@ -60,48 +58,48 @@ let
         '';
       };
 in
-stdenv.mkDerivation {
-  pname = "dia";
-  inherit version;
+  stdenv.mkDerivation {
+    pname = "dia";
+    inherit version;
 
-  src = fetchurl {
-    url = "https://releases.diabrowser.com/release/Dia-${version}.dmg";
-    inherit hash;
-  };
+    src = fetchurl {
+      url = "https://releases.diabrowser.com/release/Dia-${version}.dmg";
+      inherit hash;
+    };
 
-  nativeBuildInputs = [ undmg ];
-  # undmg's unpackCmd hook extracts the .app straight into the build dir.
-  sourceRoot = ".";
+    nativeBuildInputs = [undmg];
+    # undmg's unpackCmd hook extracts the .app straight into the build dir.
+    sourceRoot = ".";
 
-  dontConfigure = true;
-  dontBuild = true;
-  # The bundle is signed and notarized; any byte rewrite (strip, patch, the
-  # default fixup) would void the code signature, so install it verbatim.
-  dontFixup = true;
+    dontConfigure = true;
+    dontBuild = true;
+    # The bundle is signed and notarized; any byte rewrite (strip, patch, the
+    # default fixup) would void the code signature, so install it verbatim.
+    dontFixup = true;
 
-  installPhase = ''
-    # shell
-    runHook preInstall
-    mkdir -p "$out/Applications" "$out/bin"
-    cp -R Dia.app "$out/Applications/Dia.app"
-    # `nix run .#dia` and a PATH `dia` launch the bundle executable directly.
-    ln -s "$out/Applications/Dia.app/Contents/MacOS/Dia" "$out/bin/dia"
-    runHook postInstall
-  '';
+    installPhase = ''
+      # shell
+      runHook preInstall
+      mkdir -p "$out/Applications" "$out/bin"
+      cp -R Dia.app "$out/Applications/Dia.app"
+      # `nix run .#dia` and a PATH `dia` launch the bundle executable directly.
+      ln -s "$out/Applications/Dia.app/Contents/MacOS/Dia" "$out/bin/dia"
+      runHook postInstall
+    '';
 
-  passthru = lib.optionalAttrs (updateScript != null) {
-    inherit updateScript;
-  };
+    passthru = lib.optionalAttrs (updateScript != null) {
+      inherit updateScript;
+    };
 
-  meta = {
-    description = "Dia, The Browser Company's AI browser";
-    homepage = "https://www.diabrowser.com";
-    # License omitted rather than `licenses.unfree`: the per-system flake
-    # package set evaluates nixpkgs without `allowUnfree`, so tagging this
-    # proprietary bundle unfree would block `nix run .#dia`. Distribution terms
-    # are The Browser Company's Dia license.
-    mainProgram = "dia";
-    platforms = [ "aarch64-darwin" ];
-    sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
-  };
-}
+    meta = {
+      description = "Dia, The Browser Company's AI browser";
+      homepage = "https://www.diabrowser.com";
+      # License omitted rather than `licenses.unfree`: the per-system flake
+      # package set evaluates nixpkgs without `allowUnfree`, so tagging this
+      # proprietary bundle unfree would block `nix run .#dia`. Distribution terms
+      # are The Browser Company's Dia license.
+      mainProgram = "dia";
+      platforms = ["aarch64-darwin"];
+      sourceProvenance = [lib.sourceTypes.binaryNativeCode];
+    };
+  }

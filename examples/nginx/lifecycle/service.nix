@@ -2,17 +2,15 @@
   lib,
   pkgs,
   ...
-}:
-let
+}: let
   nginxPort = 80;
-in
-{
+in {
   services.nginx = {
     enable = true;
     virtualHosts.localhost.locations."/".return = "200 'ix nginx lifecycle ok\n'";
   };
 
-  environment.systemPackages = [ pkgs.curl ];
+  environment.systemPackages = [pkgs.curl];
 
   ix.networking.expose.nginx = {
     port = nginxPort;

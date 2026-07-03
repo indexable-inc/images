@@ -1,5 +1,4 @@
-{ ix, ... }:
-let
+{ix, ...}: let
   worldHeight = import ./world-height.nix;
 
   # The diffusion mod's `World Scale` GUI is client-only and saves into a
@@ -10,8 +9,7 @@ let
   # the fallback and locks in scale 6 (≈y ~2060 at the upstream pipeline's
   # 10 km ceiling): the mod loads our value verbatim on first world load.
   worldScale = 6;
-in
-{
+in {
   services.minecraft = {
     enable = true;
     version = "1.21.11";
@@ -29,7 +27,7 @@ in
     };
 
     mods = {
-      fabric-api = { };
+      fabric-api = {};
       distanthorizons = {
         serverSideLodGeneration = true;
         maxRenderDistance = 32;
@@ -39,7 +37,7 @@ in
       # upstream release ships a GPU variant. Swap the manifest URL and
       # regenerate with `nix run .#update-mods -- --version 1.21.11` on a host
       # with a CUDA-capable GPU.
-      terrain-diffusion = { };
+      terrain-diffusion = {};
     };
 
     # Repo-own the mod's config file so the defaults are explicit and the
@@ -71,12 +69,12 @@ in
       # so the lighting, fog, infiniburn, and audio attributes stay sane.
       files."data/terrain-diffusion-mc/dimension_type/terrain_diffusion.json" =
         ix.minecraft.dimensionType.withBase "terrain-diffusion-mc:terrain_diffusion"
-          {
-            base = "minecraft:overworld";
-            min_y = worldHeight.minY;
-            inherit (worldHeight) height;
-            logical_height = worldHeight.height;
-          };
+        {
+          base = "minecraft:overworld";
+          min_y = worldHeight.minY;
+          inherit (worldHeight) height;
+          logical_height = worldHeight.height;
+        };
     };
 
     # Path is relative to the server root. `level-name` defaults to `world`,

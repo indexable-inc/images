@@ -17,9 +17,9 @@
   lib,
   pkgs,
   ...
-}:
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     mkEnableOption
     mkIf
     mkOption
@@ -31,21 +31,22 @@ let
   # Environment selector. The CLI defaults to prod when no flag is passed; the
   # other environments are opt-in for beta/dev/local backends.
   envArg =
-    if cfg.environment == null then
-      ""
+    if cfg.environment == null
+    then ""
     else
       {
         beta = " --beta";
         dev = " --dev";
         local = " --local";
       }
-      .${cfg.environment};
-in
-{
+      .${
+        cfg.environment
+      };
+in {
   options.services.humanlayer = {
     enable = mkEnableOption "the HumanLayer (riptide) remote daemon";
 
-    package = mkPackageOption pkgs "humanlayer" { };
+    package = mkPackageOption pkgs "humanlayer" {};
 
     launchTokenFile = mkOption {
       # A runtime path string, not `types.path`: the file is provided at boot by
@@ -88,14 +89,15 @@ in
   config = mkIf cfg.enable {
     systemd.services.humanlayer-daemon = {
       description = "HumanLayer (riptide) remote daemon";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "network-online.target" ];
-      wants = [ "network-online.target" ];
-      path = [
-        cfg.package
-        pkgs.coreutils
-      ]
-      ++ config.environment.systemPackages;
+      wantedBy = ["multi-user.target"];
+      after = ["network-online.target"];
+      wants = ["network-online.target"];
+      path =
+        [
+          cfg.package
+          pkgs.coreutils
+        ]
+        ++ config.environment.systemPackages;
       environment.HOME = cfg.stateDir;
 
       # The CLI only accepts the launch token as an argument, so read it from the

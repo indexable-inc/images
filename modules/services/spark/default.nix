@@ -37,9 +37,9 @@
   lib,
   pkgs,
   ...
-}:
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     mkEnableOption
     mkIf
     mkOption
@@ -95,17 +95,18 @@ let
 
   # Tuned defaults; `cfg.settings` is merged over the top so a user key wins.
   # Driver/block-manager ports are pinned so a firewalled tailnet works.
-  tunedDefaults = {
-    "spark.master" = "spark://__MASTER__:${toString cfg.master.port}";
-    "spark.sql.adaptive.enabled" = "true";
-    "spark.sql.adaptive.coalescePartitions.enabled" = "true";
-    "spark.serializer" = "org.apache.spark.serializer.KryoSerializer";
-    "spark.local.dir" = "${dataDir}/local";
-    "spark.driver.port" = "7078";
-    "spark.driver.blockManager.port" = "7079";
-    "spark.blockManager.port" = "7080";
-  }
-  // nativeSettings;
+  tunedDefaults =
+    {
+      "spark.master" = "spark://__MASTER__:${toString cfg.master.port}";
+      "spark.sql.adaptive.enabled" = "true";
+      "spark.sql.adaptive.coalescePartitions.enabled" = "true";
+      "spark.serializer" = "org.apache.spark.serializer.KryoSerializer";
+      "spark.local.dir" = "${dataDir}/local";
+      "spark.driver.port" = "7078";
+      "spark.driver.blockManager.port" = "7079";
+      "spark.blockManager.port" = "7080";
+    }
+    // nativeSettings;
 
   finalSettings = tunedDefaults // cfg.settings;
 
@@ -113,7 +114,7 @@ let
     lib.concatMapAttrsStringSep "" (key: value: "${key} ${toString value}\n") finalSettings
   );
 
-  confDir = pkgs.runCommand "spark-conf" { } ''
+  confDir = pkgs.runCommand "spark-conf" {} ''
     mkdir -p "$out"
     cp ${sparkDefaultsConf} "$out/spark-defaults.conf"
   '';
@@ -162,20 +163,22 @@ let
       "network-online.target"
       "tailscaled.service"
     ];
-    wants = [ "network-online.target" ];
-    wantedBy = [ "multi-user.target" ];
+    wants = ["network-online.target"];
+    wantedBy = ["multi-user.target"];
     environment = sparkEnv;
-    serviceConfig = indexLib.systemdHardening // {
-      Type = "simple";
-      User = "spark";
-      Group = "spark";
-      StateDirectory = "spark";
-      WorkingDirectory = dataDir;
-      ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p ${dataDir}/work ${dataDir}/local ${dataDir}/tmp";
-      ExecStart = lib.escapeShellArgs ([ (lib.getExe sparkLauncher) ] ++ argv);
-      Restart = "on-failure";
-      RestartSec = 5;
-    };
+    serviceConfig =
+      indexLib.systemdHardening
+      // {
+        Type = "simple";
+        User = "spark";
+        Group = "spark";
+        StateDirectory = "spark";
+        WorkingDirectory = dataDir;
+        ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p ${dataDir}/work ${dataDir}/local ${dataDir}/tmp";
+        ExecStart = lib.escapeShellArgs ([(lib.getExe sparkLauncher)] ++ argv);
+        Restart = "on-failure";
+        RestartSec = 5;
+      };
   };
 
   workerCoreArgs = lib.optionals (cfg.worker.cores != null) [
@@ -187,8 +190,7 @@ let
     "--memory"
     cfg.worker.memory
   ];
-in
-{
+in {
   options.services.ix-spark = {
     enable = mkEnableOption "Apache Spark standalone cluster with the Gluten/Velox native engine";
 
@@ -292,7 +294,7 @@ in
           isolate a Gluten-specific issue.
         '';
       };
-      package = mkPackageOption pkgs "spark-gluten" { };
+      package = mkPackageOption pkgs "spark-gluten" {};
       offHeapSize = mkOption {
         type = types.str;
         default = "2g";
@@ -319,7 +321,7 @@ in
           types.bool
         ]
       );
-      default = { };
+      default = {};
       example = lib.literalExpression ''{ "spark.sql.shuffle.partitions" = 64; }'';
       description = ''
         Extra `spark-defaults.conf` entries, merged over the tuned defaults this
@@ -357,7 +359,7 @@ in
       home = dataDir;
       description = "Apache Spark";
     };
-    users.groups.spark = { };
+    users.groups.spark = {};
 
     # Scoped to the tailscale interface, never the global firewall: Spark's
     # master RPC and Connect server carry no authentication (submitting a job
@@ -418,7 +420,7 @@ in
               "tailscaled.service"
               "spark-master.service"
             ];
-            requires = [ "spark-master.service" ];
+            requires = ["spark-master.service"];
           };
       }
       # --- Spark Connect server (master role only) ---
@@ -443,15 +445,17 @@ in
             "spark.connect.grpc.binding.port=${toString cfg.connect.port}"
           ]
           // {
-            environment = sparkEnv // {
-              SPARK_NO_DAEMONIZE = "1";
-            };
+            environment =
+              sparkEnv
+              // {
+                SPARK_NO_DAEMONIZE = "1";
+              };
             after = [
               "network-online.target"
               "tailscaled.service"
               "spark-master.service"
             ];
-            requires = [ "spark-master.service" ];
+            requires = ["spark-master.service"];
           };
       }
       # --- Remote worker (worker role only) ---

@@ -40,9 +40,9 @@
   lib,
   pkgs,
   ...
-}:
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     mkEnableOption
     mkIf
     mkOption
@@ -73,40 +73,40 @@ let
   # The head also pins the Ray Client server port so off-cluster `ray://` clients
   # (e.g. a laptop driving the fleet via `fleet.connect()`) reach a known port.
   modeArgs =
-    if cfg.role == "head" then
-      [
-        "--head"
-        "--port"
-        (toString cfg.gcsPort)
-        "--ray-client-server-port"
-        (toString cfg.clientServerPort)
-        "--include-dashboard"
-        "false"
-      ]
-    else
-      [
-        "--address"
-        "${cfg.headAddress}:${toString cfg.gcsPort}"
-      ];
+    if cfg.role == "head"
+    then [
+      "--head"
+      "--port"
+      (toString cfg.gcsPort)
+      "--ray-client-server-port"
+      (toString cfg.clientServerPort)
+      "--include-dashboard"
+      "false"
+    ]
+    else [
+      "--address"
+      "${cfg.headAddress}:${toString cfg.gcsPort}"
+    ];
 
-  commonArgs = [
-    "--node-manager-port"
-    (toString cfg.nodeManagerPort)
-    "--object-manager-port"
-    (toString cfg.objectManagerPort)
-    "--min-worker-port"
-    (toString cfg.workerPortLow)
-    "--max-worker-port"
-    (toString cfg.workerPortHigh)
-    "--temp-dir"
-    "/run/ray"
-    "--object-spilling-config"
-    spillConfig
-  ]
-  ++ optionals (cfg.objectStoreMemory != null) [
-    "--object-store-memory"
-    (toString cfg.objectStoreMemory)
-  ];
+  commonArgs =
+    [
+      "--node-manager-port"
+      (toString cfg.nodeManagerPort)
+      "--object-manager-port"
+      (toString cfg.objectManagerPort)
+      "--min-worker-port"
+      (toString cfg.workerPortLow)
+      "--max-worker-port"
+      (toString cfg.workerPortHigh)
+      "--temp-dir"
+      "/run/ray"
+      "--object-spilling-config"
+      spillConfig
+    ]
+    ++ optionals (cfg.objectStoreMemory != null) [
+      "--object-store-memory"
+      (toString cfg.objectStoreMemory)
+    ];
 
   startArgsNu = "[ ${lib.concatMapStringsSep " " builtins.toJSON (modeArgs ++ commonArgs)} ]";
 
@@ -142,10 +142,9 @@ let
   # a non-default `--temp-dir`, so the launcher hands the kernel an explicit
   # RAY_ADDRESS (which `fleet.connect()` reads).
   rayAddrNu =
-    if cfg.role == "head" then
-      ''$"($ip):${toString cfg.gcsPort}"''
-    else
-      ''"${cfg.headAddress}:${toString cfg.gcsPort}"'';
+    if cfg.role == "head"
+    then ''$"($ip):${toString cfg.gcsPort}"''
+    else ''"${cfg.headAddress}:${toString cfg.gcsPort}"'';
 
   # Resolve this node's tailscale IPv4, bind the dashboard/exec to it
   # (IX_MCP_HOST), point the kernel at the local Ray GCS (RAY_ADDRESS), then exec
@@ -180,19 +179,19 @@ let
   # dashboard data API exposes the `/api/exec` that `fleet.in_kernel` reaches on
   # `execPort`. Tailnet-trust is on by default (the tailnet is the boundary,
   # exactly as Ray's own data plane); set a tokenFile to also require a token.
-  notebookEnv = {
-    IX_MCP_DASHBOARD_PORT = toString cfg.execPort;
-    IX_FLEET_EXEC_PORT = toString cfg.execPort;
-    IX_MCP_MESH_PORT = toString cfg.meshPort;
-  }
-  // optionalAttrs cfg.execTrustNetwork {
-    IX_MCP_EXEC_TRUST_NETWORK = "1";
-  }
-  // optionalAttrs (cfg.tokenFile != null) {
-    IX_MCP_EXEC_TOKEN_FILE = toString cfg.tokenFile;
-  };
-in
-{
+  notebookEnv =
+    {
+      IX_MCP_DASHBOARD_PORT = toString cfg.execPort;
+      IX_FLEET_EXEC_PORT = toString cfg.execPort;
+      IX_MCP_MESH_PORT = toString cfg.meshPort;
+    }
+    // optionalAttrs cfg.execTrustNetwork {
+      IX_MCP_EXEC_TRUST_NETWORK = "1";
+    }
+    // optionalAttrs (cfg.tokenFile != null) {
+      IX_MCP_EXEC_TOKEN_FILE = toString cfg.tokenFile;
+    };
+in {
   options.services.ix-ray = {
     enable = mkEnableOption "Ray cluster node + ix-mcp engine for the `fleet` distributed API";
 
@@ -390,18 +389,19 @@ in
     # interface is exactly where these ports may open. `tailscale0` is
     # tailscaled's default (and the fleet's) interface name.
     networking.firewall.interfaces."tailscale0" = mkIf cfg.openFirewall {
-      allowedTCPPorts = [
-        cfg.execPort
-        cfg.nodeManagerPort
-        cfg.objectManagerPort
-      ]
-      # The notebook engine also serves the tailnet `/mesh` discovery card
-      # (index#1787); a firewalled tailscale interface must not blind it.
-      ++ optional cfg.notebook.enable cfg.meshPort
-      ++ optionals (cfg.role == "head") [
-        cfg.gcsPort
-        cfg.clientServerPort
-      ];
+      allowedTCPPorts =
+        [
+          cfg.execPort
+          cfg.nodeManagerPort
+          cfg.objectManagerPort
+        ]
+        # The notebook engine also serves the tailnet `/mesh` discovery card
+        # (index#1787); a firewalled tailscale interface must not blind it.
+        ++ optional cfg.notebook.enable cfg.meshPort
+        ++ optionals (cfg.role == "head") [
+          cfg.gcsPort
+          cfg.clientServerPort
+        ];
       allowedTCPPortRanges = [
         {
           from = cfg.workerPortLow;
@@ -416,27 +416,29 @@ in
         "network-online.target"
         "tailscaled.service"
       ];
-      wants = [ "network-online.target" ];
-      wantedBy = [ "multi-user.target" ];
+      wants = ["network-online.target"];
+      wantedBy = ["multi-user.target"];
       environment = {
         HOME = "/run/ray";
         RAY_DISABLE_USAGE_STATS = "1";
       };
-      serviceConfig = indexLib.systemdHardening // {
-        Type = "simple";
-        ExecStart = lib.getExe rayLauncher;
-        Restart = "on-failure";
-        RestartSec = 5;
-        DynamicUser = true;
-        RuntimeDirectory = "ray";
-        StateDirectory = "ray";
-        WorkingDirectory = "/run/ray";
-        # Ray's object store is host shared memory and an attaching kernel maps it
-        # from outside this unit's namespace; a private /dev (hence /dev/shm) or
-        # user namespace would block that, so both are disabled here.
-        PrivateDevices = false;
-        PrivateUsers = false;
-      };
+      serviceConfig =
+        indexLib.systemdHardening
+        // {
+          Type = "simple";
+          ExecStart = lib.getExe rayLauncher;
+          Restart = "on-failure";
+          RestartSec = 5;
+          DynamicUser = true;
+          RuntimeDirectory = "ray";
+          StateDirectory = "ray";
+          WorkingDirectory = "/run/ray";
+          # Ray's object store is host shared memory and an attaching kernel maps it
+          # from outside this unit's namespace; a private /dev (hence /dev/shm) or
+          # user namespace would block that, so both are disabled here.
+          PrivateDevices = false;
+          PrivateUsers = false;
+        };
     };
 
     systemd.services.ix-ray-notebook = mkIf cfg.notebook.enable {
@@ -445,22 +447,24 @@ in
         "network-online.target"
         "ix-ray.service"
       ];
-      wants = [ "network-online.target" ];
-      requires = [ "ix-ray.service" ];
-      wantedBy = [ "multi-user.target" ];
+      wants = ["network-online.target"];
+      requires = ["ix-ray.service"];
+      wantedBy = ["multi-user.target"];
       environment = notebookEnv;
-      serviceConfig = indexLib.systemdHardening // {
-        Type = "simple";
-        ExecStart = lib.getExe notebookLauncher;
-        Restart = "on-failure";
-        RestartSec = 5;
-        StateDirectory = "ix-ray-notebook";
-        WorkingDirectory = "/var/lib/ix-ray-notebook";
-        # Same shared-memory reasoning as the ray unit: the engine's kernel maps
-        # the object store, so it cannot run under a private /dev or userns.
-        PrivateDevices = false;
-        PrivateUsers = false;
-      };
+      serviceConfig =
+        indexLib.systemdHardening
+        // {
+          Type = "simple";
+          ExecStart = lib.getExe notebookLauncher;
+          Restart = "on-failure";
+          RestartSec = 5;
+          StateDirectory = "ix-ray-notebook";
+          WorkingDirectory = "/var/lib/ix-ray-notebook";
+          # Same shared-memory reasoning as the ray unit: the engine's kernel maps
+          # the object store, so it cannot run under a private /dev or userns.
+          PrivateDevices = false;
+          PrivateUsers = false;
+        };
     };
   };
 }

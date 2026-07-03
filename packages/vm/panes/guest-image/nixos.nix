@@ -17,9 +17,8 @@
   modulesPath,
   utils,
   ...
-}:
-let
-  apps = import ./apps.nix { inherit pkgs; };
+}: let
+  apps = import ./apps.nix {inherit pkgs;};
 
   # Where the compositor's Wayland socket lives on the host and, bind-mounted,
   # inside every app container. Deliberately not a systemd RuntimeDirectory:
@@ -59,13 +58,13 @@ let
   # Host paths apps want persisted (e.g. /var/lib/minecraft downloads); the
   # host creates them via tmpfiles so the container bind mounts do not fail on
   # a missing source.
-  appBinds = lib.unique (lib.concatMap (app: app.binds or [ ]) (lib.attrValues apps));
+  appBinds = lib.unique (lib.concatMap (app: app.binds or []) (lib.attrValues apps));
 
   # Per-app seed files (apps.nix `files`), flattened to one host path -> source
   # map. Rendered as tmpfiles `C` rules: copy only when the destination does
   # not exist yet, and 0644 (not the store's 0444) so the app can rewrite its
   # own config afterwards (MC persists Video Settings back to options.txt).
-  appSeedFiles = lib.mergeAttrsList (map (app: app.files or { }) (lib.attrValues apps));
+  appSeedFiles = lib.mergeAttrsList (map (app: app.files or {}) (lib.attrValues apps));
 
   # Render one apps.nix entry into a declarative systemd-nspawn container.
   # The container shares the host network namespace (default, no
@@ -74,48 +73,49 @@ let
   # via bind mounts.
   mkAppContainer = name: app: {
     autoStart = app.autoStart or true;
-    bindMounts = {
-      ${runtimeDir} = {
-        hostPath = runtimeDir;
-        isReadOnly = false;
+    bindMounts =
+      {
+        ${runtimeDir} = {
+          hostPath = runtimeDir;
+          isReadOnly = false;
+        };
+        # nixos-containers copies the guest's /etc/resolv.conf into the container
+        # once, in the unit's start script (`cp --remove-destination`). These
+        # autoStart containers race gvproxy's DHCP lease, so that copy is empty
+        # and never refreshed: in-container DNS was dead (MC restart-looped 79
+        # times on "piston-meta.mojang.com: Name or service not known", observed
+        # live). A read-only bind of the file shadows the stale copy with a live
+        # view; openresolv rewrites resolv.conf IN PLACE by default
+        # (resolv_conf_mv=NO in its libc subscriber, explicitly to keep bind
+        # mounts working), so the container sees the lease when it lands. The
+        # container's own resolvconf stays off via nixos' container profile
+        # (networking.useHostResolvConf defaults true there), so nothing inside
+        # fights the mount.
+        "/etc/resolv.conf" = {
+          hostPath = "/etc/resolv.conf";
+          isReadOnly = true;
+        };
+        # The system-wide PipeWire socket dir, for app audio (MC's openal). The
+        # DIR is bound, not the socket file, so a pipewire restart -- which
+        # recreates the socket inside the preserved directory
+        # (RuntimeDirectoryPreserve=yes in the upstream unit) -- stays visible
+        # to running containers. The tmpfiles rule below guarantees the bind
+        # source exists even while pipewire is down (a missing source fails the
+        # whole container).
+        ${pipewireRuntimeDir} = {
+          hostPath = pipewireRuntimeDir;
+          isReadOnly = false;
+        };
+      }
+      # Only GPU apps bind /dev/dri: nspawn fails the whole container when a
+      # bind source is missing, and the guest may boot GPU-less (no --gpu, or
+      # the venus stack is down); shm apps must keep working then.
+      // lib.optionalAttrs (app.gpu or false) {
+        "/dev/dri" = {
+          hostPath = "/dev/dri";
+          isReadOnly = false;
+        };
       };
-      # nixos-containers copies the guest's /etc/resolv.conf into the container
-      # once, in the unit's start script (`cp --remove-destination`). These
-      # autoStart containers race gvproxy's DHCP lease, so that copy is empty
-      # and never refreshed: in-container DNS was dead (MC restart-looped 79
-      # times on "piston-meta.mojang.com: Name or service not known", observed
-      # live). A read-only bind of the file shadows the stale copy with a live
-      # view; openresolv rewrites resolv.conf IN PLACE by default
-      # (resolv_conf_mv=NO in its libc subscriber, explicitly to keep bind
-      # mounts working), so the container sees the lease when it lands. The
-      # container's own resolvconf stays off via nixos' container profile
-      # (networking.useHostResolvConf defaults true there), so nothing inside
-      # fights the mount.
-      "/etc/resolv.conf" = {
-        hostPath = "/etc/resolv.conf";
-        isReadOnly = true;
-      };
-      # The system-wide PipeWire socket dir, for app audio (MC's openal). The
-      # DIR is bound, not the socket file, so a pipewire restart -- which
-      # recreates the socket inside the preserved directory
-      # (RuntimeDirectoryPreserve=yes in the upstream unit) -- stays visible
-      # to running containers. The tmpfiles rule below guarantees the bind
-      # source exists even while pipewire is down (a missing source fails the
-      # whole container).
-      ${pipewireRuntimeDir} = {
-        hostPath = pipewireRuntimeDir;
-        isReadOnly = false;
-      };
-    }
-    # Only GPU apps bind /dev/dri: nspawn fails the whole container when a
-    # bind source is missing, and the guest may boot GPU-less (no --gpu, or
-    # the venus stack is down); shm apps must keep working then.
-    // lib.optionalAttrs (app.gpu or false) {
-      "/dev/dri" = {
-        hostPath = "/dev/dri";
-        isReadOnly = false;
-      };
-    };
     # apps.nix `binds` as raw nspawn --bind flags, deliberately NOT
     # `bindMounts`: nixos-containers turns every bindMounts source into
     # unitConfig.RequiresMountsFor on container@<name>, which hard-requires
@@ -128,7 +128,7 @@ let
     # explicit After= on container@<name> (see the systemd.services merge
     # below) a first-boot autoFormat could race the container into binding
     # the root fs underneath the arriving data disk.
-    extraFlags = map (bind: "--bind=${bind}") (app.binds or [ ]);
+    extraFlags = map (bind: "--bind=${bind}") (app.binds or []);
     # The bind mount alone is not enough: nspawn's device cgroup policy still
     # denies the node unless whitelisted here. venus/zink renders on the
     # virtio-gpu render node.
@@ -145,11 +145,11 @@ let
       # launch and text rendered wide-spaced, observed live). One real mono
       # family makes the generic "monospace" pattern resolve correctly for
       # every terminal-class app.
-      fonts.packages = [ pkgs.dejavu_fonts ];
+      fonts.packages = [pkgs.dejavu_fonts];
       systemd.services."panes-app-${name}" = {
         description = "panes app: ${name}";
-        wantedBy = [ "multi-user.target" ];
-        environment = clientEnv // (app.env or { });
+        wantedBy = ["multi-user.target"];
+        environment = clientEnv // (app.env or {});
         serviceConfig = {
           ExecStart = app.command;
           # The compositor may not be listening yet (or is mid-restart);
@@ -161,9 +161,8 @@ let
       system.stateVersion = "24.11";
     };
   };
-in
-{
-  imports = [ "${modulesPath}/image/repart.nix" ];
+in {
+  imports = ["${modulesPath}/image/repart.nix"];
 
   # Boot path: OVMF (libkrun-efi) -> systemd-boot (EFI removable path) -> UKI.
   # The bootloader + UKI are placed manually via repart, so disable grub.
@@ -176,7 +175,7 @@ in
     # hvc0 is the libkrun serial console vmkit streams/captures; unlike
     # chrome-vm-image we keep kernel printk on it, boot logs are the point of
     # the smoke test.
-    kernelParams = [ "console=hvc0" ];
+    kernelParams = ["console=hvc0"];
     initrd.availableKernelModules = [
       "virtio_pci"
       "virtio_blk"
@@ -262,21 +261,17 @@ in
     sectorSize = 512;
     partitions = {
       "esp" = {
-        contents =
-          let
-            # aarch64-only image (see package.nix), so the EFI arch is fixed.
-            # Avoids depending on `config.nixpkgs.hostPlatform` (unset under
-            # eval-config with a bare `system`).
-            efiArch = "aa64";
-          in
-          {
-            "/EFI/BOOT/BOOT${lib.toUpper efiArch}.EFI".source =
-              "${pkgs.systemd}/lib/systemd/boot/efi/systemd-boot${efiArch}.efi";
-            "/EFI/Linux/${config.system.boot.loader.ukiFile}".source =
-              "${config.system.build.uki}/${config.system.boot.loader.ukiFile}";
-            # Auto-boot the single UKI with no menu/delay.
-            "/loader/loader.conf".source = pkgs.writeText "loader.conf" "timeout 0\n";
-          };
+        contents = let
+          # aarch64-only image (see package.nix), so the EFI arch is fixed.
+          # Avoids depending on `config.nixpkgs.hostPlatform` (unset under
+          # eval-config with a bare `system`).
+          efiArch = "aa64";
+        in {
+          "/EFI/BOOT/BOOT${lib.toUpper efiArch}.EFI".source = "${pkgs.systemd}/lib/systemd/boot/efi/systemd-boot${efiArch}.efi";
+          "/EFI/Linux/${config.system.boot.loader.ukiFile}".source = "${config.system.build.uki}/${config.system.boot.loader.ukiFile}";
+          # Auto-boot the single UKI with no menu/delay.
+          "/loader/loader.conf".source = pkgs.writeText "loader.conf" "timeout 0\n";
+        };
         repartConfig = {
           Type = "esp";
           Format = "vfat";
@@ -285,11 +280,11 @@ in
         };
       };
       "root" = {
-        storePaths = [ config.system.build.toplevel ];
+        storePaths = [config.system.build.toplevel];
         # Closure registration consumed by boot.postBootCommands above (first
         # boot loads it into the nix db, then deletes it).
         contents."/nix-path-registration".source = "${
-          pkgs.closureInfo { rootPaths = [ config.system.build.toplevel ]; }
+          pkgs.closureInfo {rootPaths = [config.system.build.toplevel];}
         }/registration";
         repartConfig = {
           Type = "root";
@@ -403,7 +398,7 @@ in
                 "FL"
                 "FR"
               ];
-              "server.address" = [ "tcp:${audioTapAddr}" ];
+              "server.address" = ["tcp:${audioTapAddr}"];
               "capture.props" = {
                 "target.object" = "panes-sink";
                 # Capture what the sink plays (its monitor), not an input.
@@ -429,21 +424,22 @@ in
   # 0777: the compositor (root on the host) creates the socket here and app
   # processes (container root) connect through the bind mount; wide perms keep
   # the v1 single-user guest simple.
-  systemd.tmpfiles.rules = [
-    "d ${runtimeDir} 0777 root root -"
-    # nixos-containers' nspawn unit bind-mounts these two read-only and a
-    # missing bind source fails the whole container; the dirs must exist even
-    # on a boot where postBootCommands' nix-store --load-db (which creates the
-    # db) did not run. Nothing runs nix inside the containers.
-    "d /nix/var/nix/db 0755 root root -"
-    "d /nix/var/nix/daemon-socket 0755 root root -"
-    # Bind source for the app containers' audio socket dir (see mkAppContainer)
-    # regardless of pipewire's state; ownership matches the upstream unit's
-    # RuntimeDirectory=pipewire so the service adopts it unchanged.
-    "d ${pipewireRuntimeDir} 0755 pipewire pipewire -"
-  ]
-  ++ map (bind: "d ${bind} 0755 root root -") appBinds
-  ++ lib.mapAttrsToList (dest: source: "C ${dest} 0644 root root - ${source}") appSeedFiles;
+  systemd.tmpfiles.rules =
+    [
+      "d ${runtimeDir} 0777 root root -"
+      # nixos-containers' nspawn unit bind-mounts these two read-only and a
+      # missing bind source fails the whole container; the dirs must exist even
+      # on a boot where postBootCommands' nix-store --load-db (which creates the
+      # db) did not run. Nothing runs nix inside the containers.
+      "d /nix/var/nix/db 0755 root root -"
+      "d /nix/var/nix/daemon-socket 0755 root root -"
+      # Bind source for the app containers' audio socket dir (see mkAppContainer)
+      # regardless of pipewire's state; ownership matches the upstream unit's
+      # RuntimeDirectory=pipewire so the service adopts it unchanged.
+      "d ${pipewireRuntimeDir} 0755 pipewire pipewire -"
+    ]
+    ++ map (bind: "d ${bind} 0755 root root -") appBinds
+    ++ lib.mapAttrsToList (dest: source: "C ${dest} 0644 root root - ${source}") appSeedFiles;
 
   # escapeSystemdPath silently mis-escapes `.` segments and exotic characters
   # (nixpkgs#515270), which would make the container@ After= below name a
@@ -467,28 +463,31 @@ in
   systemd.services =
     lib.mapAttrs' (
       name: app:
-      lib.nameValuePair "container@${name}" {
-        after = map (bind: "${utils.escapeSystemdPath bind}.mount") (app.binds or [ ]);
-      }
-    ) apps
+        lib.nameValuePair "container@${name}" {
+          after = map (bind: "${utils.escapeSystemdPath bind}.mount") (app.binds or []);
+        }
+    )
+    apps
     // {
       panes-compositor = {
         description = "panes guest compositor (Wayland toplevels -> vsock 7100)";
-        wantedBy = [ "multi-user.target" ];
+        wantedBy = ["multi-user.target"];
         # The socket dir is a tmpfiles.d entry (see above), not a
         # RuntimeDirectory; order after tmpfiles so it exists on first start.
-        after = [ "systemd-tmpfiles-setup.service" ];
-        environment = clientEnv // {
-          # The compositor's `gpu` readback path dlopens `libEGL.so.1` at
-          # runtime (smithay's `backend_egl` via libloading; deliberately no
-          # link-time GL dep, so no rpath to resolve it). That soname is
-          # libglvnd's dispatcher, which nixpkgs compiles with
-          # /run/opengl-driver/share/glvnd/egl_vendor.d as its vendor-config
-          # default and mesa's vendor JSON points at the store absolutely, so
-          # the dispatcher alone is enough to land in the venus EGL driver
-          # hardware.graphics provides.
-          LD_LIBRARY_PATH = lib.makeLibraryPath [ pkgs.libglvnd ];
-        };
+        after = ["systemd-tmpfiles-setup.service"];
+        environment =
+          clientEnv
+          // {
+            # The compositor's `gpu` readback path dlopens `libEGL.so.1` at
+            # runtime (smithay's `backend_egl` via libloading; deliberately no
+            # link-time GL dep, so no rpath to resolve it). That soname is
+            # libglvnd's dispatcher, which nixpkgs compiles with
+            # /run/opengl-driver/share/glvnd/egl_vendor.d as its vendor-config
+            # default and mesa's vendor JSON points at the store absolutely, so
+            # the dispatcher alone is enough to land in the venus EGL driver
+            # hardware.graphics provides.
+            LD_LIBRARY_PATH = lib.makeLibraryPath [pkgs.libglvnd];
+          };
         serviceConfig = {
           ExecStart = lib.getExe pkgs.panes-compositor;
           Restart = "on-failure";
@@ -502,14 +501,14 @@ in
 
       panes-audio = {
         description = "panes audio pump (PipeWire mix -> vsock 7102)";
-        wantedBy = [ "multi-user.target" ];
+        wantedBy = ["multi-user.target"];
         # The PCM tap is pipewire's own TCP listener, and system-wide
         # pipewire is otherwise only socket-activated (first core-socket
         # client would start it): pull it up at boot so audio does not wait
         # for an app to touch /run/pipewire first. The daemon still retries
         # the tap with backoff, so the ordering is comfort, not correctness.
-        wants = [ "pipewire.service" ];
-        after = [ "pipewire.service" ];
+        wants = ["pipewire.service"];
+        after = ["pipewire.service"];
         serviceConfig = {
           # Flags restate the format bindings at the top of this file: the
           # daemon advertises exactly what the tap is configured to emit.
@@ -535,8 +534,8 @@ in
       # fell back to software (see packages/vm/vmkit/docs/linux-libkrun.md).
       panes-venus-smoke = {
         description = "Log Vulkan devices (expect Virtio-GPU Venus) to the serial console";
-        wantedBy = [ "multi-user.target" ];
-        after = [ "multi-user.target" ];
+        wantedBy = ["multi-user.target"];
+        after = ["multi-user.target"];
         path = [
           pkgs.vulkan-tools
           pkgs.gnugrep
@@ -568,8 +567,8 @@ in
       # `vmkit boot-linux` run has no shell to poke around with.
       panes-boot-report = {
         description = "Log failed units and container journals to the serial console";
-        wantedBy = [ "multi-user.target" ];
-        after = [ "multi-user.target" ];
+        wantedBy = ["multi-user.target"];
+        after = ["multi-user.target"];
         path = [
           pkgs.systemd
           pkgs.iproute2

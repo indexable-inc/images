@@ -5,9 +5,9 @@
   lib,
   pkgs,
   ...
-}:
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     mkEnableOption
     mkIf
     mkOption
@@ -15,16 +15,17 @@ let
     ;
 
   cfg = config.services.floodgate;
-  formatValueType = (pkgs.formats.json { }).type;
+  formatValueType = (pkgs.formats.json {}).type;
   velocityConfigPath = "plugins/floodgate/config.yml";
   velocityProxyConfigPath = "plugins/floodgate/proxy-config.yml";
 
-  metricsConfig = {
-    enabled = cfg.metrics.enable;
-  }
-  // lib.optionalAttrs (cfg.metrics.uuid != null) {
-    inherit (cfg.metrics) uuid;
-  };
+  metricsConfig =
+    {
+      enabled = cfg.metrics.enable;
+    }
+    // lib.optionalAttrs (cfg.metrics.uuid != null) {
+      inherit (cfg.metrics) uuid;
+    };
 
   playerLinkConfig = {
     inherit (cfg.playerLink) allowed type;
@@ -35,31 +36,32 @@ let
     "enable-global-linking" = cfg.playerLink.enableGlobalLinking;
   };
 
-  renderedConfig = {
-    "key-file-name" = cfg.keyFileName;
-    "username-prefix" = cfg.usernamePrefix;
-    "replace-spaces" = cfg.replaceSpaces;
-    disconnect = {
-      "invalid-key" = cfg.disconnect.invalidKey;
-      "invalid-arguments-length" = cfg.disconnect.invalidArgumentsLength;
-    };
-    "player-link" = playerLinkConfig;
-    metrics = metricsConfig;
-    "config-version" = 3;
-  }
-  // cfg.settings;
+  renderedConfig =
+    {
+      "key-file-name" = cfg.keyFileName;
+      "username-prefix" = cfg.usernamePrefix;
+      "replace-spaces" = cfg.replaceSpaces;
+      disconnect = {
+        "invalid-key" = cfg.disconnect.invalidKey;
+        "invalid-arguments-length" = cfg.disconnect.invalidArgumentsLength;
+      };
+      "player-link" = playerLinkConfig;
+      metrics = metricsConfig;
+      "config-version" = 3;
+    }
+    // cfg.settings;
 
-  renderedProxyConfig = {
-    "send-floodgate-data" = cfg.sendFloodgateData;
-  }
-  // cfg.proxySettings;
-in
-{
+  renderedProxyConfig =
+    {
+      "send-floodgate-data" = cfg.sendFloodgateData;
+    }
+    // cfg.proxySettings;
+in {
   options.services.floodgate = {
     enable = mkEnableOption "Floodgate Bedrock identity bridge";
 
     platform = mkOption {
-      type = types.enum [ "velocity" ];
+      type = types.enum ["velocity"];
       default = "velocity";
       description = "Platform integration used for Floodgate.";
     };
@@ -169,13 +171,13 @@ in
 
     settings = mkOption {
       type = types.attrsOf formatValueType;
-      default = { };
+      default = {};
       description = "Raw Floodgate config.yml settings merged over the typed options.";
     };
 
     proxySettings = mkOption {
       type = types.attrsOf formatValueType;
-      default = { };
+      default = {};
       description = "Raw Floodgate proxy-config.yml settings merged over the typed options.";
     };
   };

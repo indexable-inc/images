@@ -19,7 +19,6 @@
   formats,
   jq,
   binName ? "claude",
-
   # Default posture: bake `--dangerously-skip-permissions` into the wrapper so
   # every session starts with the permission layer skipped. We run a trusted
   # config inside disposable sandboxes (ix guest VMs, the dev image, throwaway
@@ -31,7 +30,6 @@
   # managed-settings layer) or turn this off with
   # `claude-code.override { dangerouslySkipPermissions = false; }`.
   dangerouslySkipPermissions ? true,
-
   # Extra settings.json keys to ship through the read-only flagSettings layer
   # (the `--settings` file below), deep-merged UNDER the computed defaults so the
   # keys this package controls always win on a conflict. Lets a consumer keep its whole
@@ -40,8 +38,7 @@
   # merges per-key ABOVE user settings and is a separate read-only layer, so it
   # never occupies (or symlinks) the writable settings.json the CLI churns at
   # runtime. `{ }` (default) ships only the computed defaults.
-  extraSettings ? { },
-
+  extraSettings ? {},
   # Directories baked into the wrapper as `--add-dir=<dir>` flags, one per entry.
   # `--add-dir` grants tool file-access to a directory, AND (the reason this arg
   # exists) Claude Code loads any `<dir>/.claude/skills/` and `<dir>/CLAUDE.md`
@@ -55,8 +52,7 @@
   # alongside; this only adds. `[ ]` (default) bakes no flag. See the `=`-form
   # note in `wrapperFlags`: `--add-dir` is variadic, so the space form would
   # swallow the next argv token.
-  addDirs ? [ ],
-
+  addDirs ? [],
   # Directories baked into the wrapper as `--plugin-dir=<dir>` flags, one per
   # entry: load a Claude Code plugin (a dir with `.claude-plugin/plugin.json`,
   # bundling its own `skills/`, `agents/`, `hooks/`, `.mcp.json`, ...) for every
@@ -64,8 +60,7 @@
   # bare names `addDirs` yields, so reach for this when you want a self-contained,
   # provenance-tagged bundle rather than loose global skills. `[ ]` (default)
   # bakes no flag.
-  pluginDirs ? [ ],
-
+  pluginDirs ? [],
   # Shell glob patterns for the durable primary checkouts the PreToolUse
   # worktree guard protects (the claude-hooks `worktree-guard` subcommand): a file-edit tool call
   # whose target resolves into a PRIMARY checkout (git-dir == git-common-dir,
@@ -80,12 +75,10 @@
     "/home/*/index"
     "/home/*/ix"
   ],
-
   # Andrew-only local startup context: cached notes and ~/Projects inventory.
   # Disabled for the shared wrapper because those hooks print workstation-local
   # context that is not meaningful for other users.
   personalStartupContext ? false,
-
   # Sibling repo packages from the flake package set. lib/packages.nix threads
   # the lazily-recursive set in under this one name so a repo package can
   # depend on another by id without a flat merge into callPackage's top-level
@@ -96,8 +89,7 @@
   # only the flake package set does), so the overlay build of
   # `pkgs.claude-code` falls back to `{ }` and drops the defaults below that
   # need a sibling.
-  repoPackages ? { },
-
+  repoPackages ? {},
   # MCP servers baked into the wrapper as a generated `--mcp-config=<file>`
   # layer, one plain server per entry (tool prefix `mcp__<name>`). This is the
   # final Claude `mcpServers` JSON; the default is rendered from the shared
@@ -119,9 +111,8 @@
   # `{ }` bakes no flag.
   mcpServers ?
     ix.mcp.toClaudeJson
-      (import (ix.paths.packagesRoot + "/agent/common.nix") { inherit lib ix repoPackages; })
+    (import (ix.paths.packagesRoot + "/agent/common.nix") {inherit lib ix repoPackages;})
       .defaultServers,
-
   # Claude Code "channels" (research preview, needs claude-code >= 2.1.80): MCP
   # servers whose events push into the running session, so the agent reacts to
   # things that happen while you are away. Our `index` server (baked above via
@@ -140,14 +131,12 @@
   # policy (`channelsEnabled`) disables channels, or that never receives a push,
   # is unaffected. `[ ]` bakes no flag.
   developmentChannels ? lib.optional (mcpServers ? index) "server:index",
-
   # Rule names dropped from the default house prompt (forwarded to
   # ../system-prompt.nix's `omitRules`). Only affects the computed `systemPrompt`
   # default below; ignored when `systemPrompt` is passed explicitly. Lets a
   # consumer bake a variant minus a rule without restating the whole prompt, e.g.
   # `claude-code.override { omitRules = [ "htmlDeliverable" ]; }`. `[ ]` keeps all.
-  omitRules ? [ ],
-
+  omitRules ? [],
   # Text used AS Claude Code's system prompt, REPLACING the stock prompt. The
   # string is materialized to a store file and baked into the wrapper as
   # `--system-prompt-file=<path>`: passing by path (not inline text) keeps
@@ -169,15 +158,12 @@
       inherit lib ix repoPackages;
       promptOmitRules = omitRules;
     }).systemPrompt,
-
   # Writer used to build `passthru.updateScript`. Only the flake package set
   # supplies it (lib/packages.nix); the overlay eval context leaves it null. The
   # updater is a maintainer-facing flake output, so the overlay build of
   # `pkgs.claude-code` simply omits `passthru.updateScript`.
   updateScriptWriter ? null,
-}:
-
-let
+}: let
   # Read the package set from `ix`, not a `pkgs` callPackage formal: a `pkgs`
   # arg in the formal set breaks `.override` (astlog no-pkgs-in-callpackage),
   # and the rebound `ix.pkgs` is the set the rest of this file already uses
@@ -200,25 +186,24 @@ let
   # paths lets that hook do a plain copy instead of running `nix build` during
   # interactive startup. The overlay package has no sibling `mcp` package in
   # scope, so it skips rendered agents whose MCP frontmatter depends on it.
-  agentSkillsDir = ix.skills.mkSkillsDir { inherit pkgs; };
+  agentSkillsDir = ix.skills.mkSkillsDir {inherit pkgs;};
   agentAgentsDir =
-    if repoPackages ? mcp then
-      let
-        definitions = import (ix.paths.packagesRoot + "/agent/subagents.nix") {
-          inherit
-            ix
-            lib
-            repoPackages
-            ;
-        };
-      in
+    if repoPackages ? mcp
+    then let
+      definitions = import (ix.paths.packagesRoot + "/agent/subagents.nix") {
+        inherit
+          ix
+          lib
+          repoPackages
+          ;
+      };
+    in
       ix.agents.mkAgentsDir {
         inherit pkgs;
         agents = definitions.renderedAgents;
         inherit (definitions) rawFiles;
       }
-    else
-      null;
+    else null;
 
   # Set only when the caller has not already provided an env value.
   wrapperEnvDefaults = {
@@ -266,7 +251,7 @@ let
       cleanupPeriodDays = 365;
       permissions = {
         # Concatenate manually: deepMerge treats lists as leaves.
-        deny = (extraSettings.permissions.deny or [ ]) ++ sharedPermissions.claude.deniedToolPatterns;
+        deny = (extraSettings.permissions.deny or []) ++ sharedPermissions.claude.deniedToolPatterns;
       };
       # Full Claude hook set rendered from shared agent policy.
       hooks = sharedHooks.claude;
@@ -277,10 +262,10 @@ let
     }
   );
   settingsDefaultsFile =
-    (formats.json { }).generate "claude-code-default-settings.json"
-      settingsDefaults;
+    (formats.json {}).generate "claude-code-default-settings.json"
+    settingsDefaults;
 
-  mcpConfigFile = (formats.json { }).generate "claude-code-mcp-config.json" {
+  mcpConfigFile = (formats.json {}).generate "claude-code-mcp-config.json" {
     inherit mcpServers;
   };
 
@@ -302,36 +287,37 @@ let
 
   # Prepend root flags. Use `--opt=value` for every option that takes a value:
   # space-form options can be swallowed by subcommands or variadic flags.
-  wrapperFlags = [
-    # Write ~/.claude/debug telemetry; cleanupPeriodDays controls retention.
-    "--debug"
-  ]
-  # Load our own MCP servers as channels (research preview). This flag is
-  # VARIADIC (it consumes every following non-`--` token as a spec), so it must
-  # be followed by a `--`-prefixed flag — never placed last, where it would
-  # swallow the user's argv (a prompt, a subcommand). It sits here so the always-
-  # present `--thinking-display=` below terminates the spec list.
-  ++ lib.optionals (developmentChannels != [ ]) (
-    [ "--dangerously-load-development-channels" ] ++ developmentChannels
-  )
-  ++ [
-    # Opus 4.7+ otherwise omits thinking from the UI/transcript.
-    "--thinking-display=summarized"
-  ]
-  # Default posture for sandboxed ix environments.
-  ++ lib.optional dangerouslySkipPermissions "--dangerously-skip-permissions"
-  # Replace the stock prompt when a house prompt is configured.
-  ++ lib.optional (
-    systemPrompt != null
-  ) "--system-prompt-file=${builtins.toFile "claude-code-system-prompt.txt" systemPrompt}"
-  # Bake the shared MCP server set when present.
-  ++ lib.optional (mcpServers != { }) "--mcp-config=${mcpConfigFile}"
-  # `--add-dir` is variadic, so the `=` form is required.
-  ++ map (d: "--add-dir=${d}") addDirs
-  # Plugins carry namespaced skills, agents, hooks, and MCP declarations.
-  ++ map (d: "--plugin-dir=${d}") pluginDirs;
+  wrapperFlags =
+    [
+      # Write ~/.claude/debug telemetry; cleanupPeriodDays controls retention.
+      "--debug"
+    ]
+    # Load our own MCP servers as channels (research preview). This flag is
+    # VARIADIC (it consumes every following non-`--` token as a spec), so it must
+    # be followed by a `--`-prefixed flag — never placed last, where it would
+    # swallow the user's argv (a prompt, a subcommand). It sits here so the always-
+    # present `--thinking-display=` below terminates the spec list.
+    ++ lib.optionals (developmentChannels != []) (
+      ["--dangerously-load-development-channels"] ++ developmentChannels
+    )
+    ++ [
+      # Opus 4.7+ otherwise omits thinking from the UI/transcript.
+      "--thinking-display=summarized"
+    ]
+    # Default posture for sandboxed ix environments.
+    ++ lib.optional dangerouslySkipPermissions "--dangerously-skip-permissions"
+    # Replace the stock prompt when a house prompt is configured.
+    ++ lib.optional (
+      systemPrompt != null
+    ) "--system-prompt-file=${builtins.toFile "claude-code-system-prompt.txt" systemPrompt}"
+    # Bake the shared MCP server set when present.
+    ++ lib.optional (mcpServers != {}) "--mcp-config=${mcpConfigFile}"
+    # `--add-dir` is variadic, so the `=` form is required.
+    ++ map (d: "--add-dir=${d}") addDirs
+    # Plugins carry namespaced skills, agents, hooks, and MCP declarations.
+    ++ map (d: "--plugin-dir=${d}") pluginDirs;
 
-  envEntries = attrs: lib.mapAttrsToList (key: value: { inherit key value; }) attrs;
+  envEntries = attrs: lib.mapAttrsToList (key: value: {inherit key value;}) attrs;
 
   # The launch spec consumed by the shared Rust launcher (packages/config-launch):
   # it sets env/PATH, prepends `wrapperFlags`, injects `--settings` only when the
@@ -343,7 +329,7 @@ let
   # `@helper@` placeholder substituted at install time (the real binary lives
   # under `$out/libexec`, unknowable here). Covered by the installCheck argv
   # tests below.
-  launchSpec = (formats.json { }).generate "claude-code-launch-spec.json" {
+  launchSpec = (formats.json {}).generate "claude-code-launch-spec.json" {
     target = "@helper@";
     env = envEntries (
       {
@@ -361,8 +347,8 @@ let
     flags = wrapperFlags;
     conditional_flags = [
       {
-        unless_present = [ "--settings" ];
-        flags = [ "--settings=${settingsDefaultsFile}" ];
+        unless_present = ["--settings"];
+        flags = ["--settings=${settingsDefaultsFile}"];
       }
     ];
   };
@@ -405,116 +391,118 @@ let
   # package set), so the overlay build of `pkgs.claude-code` omits
   # `passthru.updateScript`.
   updateScript =
-    if updateScriptWriter == null then
-      null
+    if updateScriptWriter == null
+    then null
     else
       import ./update.nix {
         writeNushellApplication = updateScriptWriter;
         inherit nix gnupg;
       };
 in
-stdenv.mkDerivation (finalAttrs: {
-  pname = "claude-code";
-  inherit version;
+  stdenv.mkDerivation (finalAttrs: {
+    pname = "claude-code";
+    inherit version;
 
-  # The source is a single fetched binary, not an archive.
-  dontUnpack = true;
+    # The source is a single fetched binary, not an archive.
+    dontUnpack = true;
 
-  # Stripping rewrites the binary and corrupts the trailer Bun appends to its
-  # single-file executables, so the stripped CLI aborts on launch.
-  dontStrip = true;
-  strictDeps = true;
+    # Stripping rewrites the binary and corrupts the trailer Bun appends to its
+    # single-file executables, so the stripped CLI aborts on launch.
+    dontStrip = true;
+    strictDeps = true;
 
-  nativeBuildInputs = [
-    makeBinaryWrapper
-  ]
-  ++ lib.optional stdenv.hostPlatform.isElf autoPatchelfHook;
+    nativeBuildInputs =
+      [
+        makeBinaryWrapper
+      ]
+      ++ lib.optional stdenv.hostPlatform.isElf autoPatchelfHook;
 
-  installPhase = ''
-    # shell
-    runHook preInstall
-    mkdir -p $out/bin $out/libexec $out/share
+    installPhase = ''
+      # shell
+      runHook preInstall
+      mkdir -p $out/bin $out/libexec $out/share
 
-    # 1Password's "CLI access requested" prompt labels the request with the
-    # basename of the process that spawns `op`, which is this real binary rather
-    # than the wrapper. Keep it in libexec (off PATH, no leading-dot wrapper
-    # convention) and name it for the product so the prompt reads "Claude Code"
-    # instead of ".claude-unwrapped". The basename is the human-facing product
-    # label, independent of the command alias, since it is only what macOS shows.
-    # 1Password docs confirm the prompt shows "the process being authorized (for
-    # example, iTerm2 or Terminal)", not the code signature or CFBundleName:
-    # https://developer.1password.com/docs/cli/app-integration-security/
-    helper="$out/libexec/Claude Code"
-    install -m755 ${nativeBinary} "$helper"
+      # 1Password's "CLI access requested" prompt labels the request with the
+      # basename of the process that spawns `op`, which is this real binary rather
+      # than the wrapper. Keep it in libexec (off PATH, no leading-dot wrapper
+      # convention) and name it for the product so the prompt reads "Claude Code"
+      # instead of ".claude-unwrapped". The basename is the human-facing product
+      # label, independent of the command alias, since it is only what macOS shows.
+      # 1Password docs confirm the prompt shows "the process being authorized (for
+      # example, iTerm2 or Terminal)", not the code signature or CFBundleName:
+      # https://developer.1password.com/docs/cli/app-integration-security/
+      helper="$out/libexec/Claude Code"
+      install -m755 ${nativeBinary} "$helper"
 
-    # All flag/env/PATH injection lives in `launchSpec` (see its let-binding and
-    # `wrapperFlags` for the per-flag rationale); bake the helper's real path
-    # into the @helper@ placeholder, then point the launcher at the spec.
-    install -m644 ${launchSpec} $out/share/claude-code-launch-spec.json
-    substituteInPlace $out/share/claude-code-launch-spec.json --subst-var-by helper "$helper"
-    makeBinaryWrapper ${ix.rustWorkspace.units.binaries."config-launch"}/bin/config-launch \
-      $out/bin/${binName} \
-      --inherit-argv0 \
-      --set IX_LAUNCH_SPEC $out/share/claude-code-launch-spec.json
+      # All flag/env/PATH injection lives in `launchSpec` (see its let-binding and
+      # `wrapperFlags` for the per-flag rationale); bake the helper's real path
+      # into the @helper@ placeholder, then point the launcher at the spec.
+      install -m644 ${launchSpec} $out/share/claude-code-launch-spec.json
+      substituteInPlace $out/share/claude-code-launch-spec.json --subst-var-by helper "$helper"
+      makeBinaryWrapper ${ix.rustWorkspace.units.binaries."config-launch"}/bin/config-launch \
+        $out/bin/${binName} \
+        --inherit-argv0 \
+        --set IX_LAUNCH_SPEC $out/share/claude-code-launch-spec.json
 
-    runHook postInstall
-  '';
+      runHook postInstall
+    '';
 
-  # Offline argv + hook regression net driven through the real launcher binary
-  # against a stub target; see ./install-check.nix for what each check guards.
-  doInstallCheck = true;
-  installCheckPhase = import ./install-check.nix {
-    inherit
-      lib
-      runtimeShell
-      ix
-      git
-      jq
-      repoPackages
-      hookRunner
-      launchSpec
-      settingsDefaultsFile
-      wrapperFlags
-      python3
-      binName
-      ;
-  };
-
-  passthru = {
-    # Same capture path as extractSystemPrompt, but depends only on the fetched
-    # upstream binary so prompt snapshots do not rebuild the wrapped package.
-    extractStockSystemPrompt = import ./extract-system-prompt.nix {
-      inherit ix;
-      inherit (ix) pkgs;
-      name = "claude-code-extract-stock-system-prompt";
-      stockBinary = "${stockCli}/bin/claude";
+    # Offline argv + hook regression net driven through the real launcher binary
+    # against a stub target; see ./install-check.nix for what each check guards.
+    doInstallCheck = true;
+    installCheckPhase = import ./install-check.nix {
+      inherit
+        lib
+        runtimeShell
+        ix
+        git
+        jq
+        repoPackages
+        hookRunner
+        launchSpec
+        settingsDefaultsFile
+        wrapperFlags
+        python3
+        binName
+        ;
     };
 
-    # Prints the stock upstream system prompt (no house overrides) by capturing
-    # what the unwrapped libexec helper sends to a local ANTHROPIC_BASE_URL
-    # server. See ./extract-system-prompt.nix and ./extract-system-prompt.py.
-    extractSystemPrompt = import ./extract-system-prompt.nix {
-      inherit ix;
-      # Read the package set from `ix` rather than a `pkgs` callPackage formal
-      # (which `override` can't reach); same value in both build paths.
-      inherit (ix) pkgs;
-      stockBinary = "${finalAttrs.finalPackage}/libexec/Claude Code";
-      wrappedBinary = "${finalAttrs.finalPackage}/bin/${binName}";
-    };
-  }
-  // lib.optionalAttrs (updateScript != null) {
-    inherit updateScript;
-  };
+    passthru =
+      {
+        # Same capture path as extractSystemPrompt, but depends only on the fetched
+        # upstream binary so prompt snapshots do not rebuild the wrapped package.
+        extractStockSystemPrompt = import ./extract-system-prompt.nix {
+          inherit ix;
+          inherit (ix) pkgs;
+          name = "claude-code-extract-stock-system-prompt";
+          stockBinary = "${stockCli}/bin/claude";
+        };
 
-  meta = {
-    description = "Claude Code, Anthropic's agentic coding tool in the terminal";
-    homepage = "https://www.anthropic.com/claude-code";
-    # License omitted rather than `licenses.unfree`: the per-system flake
-    # package set evaluates nixpkgs without `allowUnfree`, so tagging this
-    # vendored binary unfree would block `nix run .#claude-code`. Distribution
-    # terms are Anthropic's commercial Claude Code license.
-    mainProgram = binName;
-    platforms = builtins.attrNames manifest.platforms;
-    sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
-  };
-})
+        # Prints the stock upstream system prompt (no house overrides) by capturing
+        # what the unwrapped libexec helper sends to a local ANTHROPIC_BASE_URL
+        # server. See ./extract-system-prompt.nix and ./extract-system-prompt.py.
+        extractSystemPrompt = import ./extract-system-prompt.nix {
+          inherit ix;
+          # Read the package set from `ix` rather than a `pkgs` callPackage formal
+          # (which `override` can't reach); same value in both build paths.
+          inherit (ix) pkgs;
+          stockBinary = "${finalAttrs.finalPackage}/libexec/Claude Code";
+          wrappedBinary = "${finalAttrs.finalPackage}/bin/${binName}";
+        };
+      }
+      // lib.optionalAttrs (updateScript != null) {
+        inherit updateScript;
+      };
+
+    meta = {
+      description = "Claude Code, Anthropic's agentic coding tool in the terminal";
+      homepage = "https://www.anthropic.com/claude-code";
+      # License omitted rather than `licenses.unfree`: the per-system flake
+      # package set evaluates nixpkgs without `allowUnfree`, so tagging this
+      # vendored binary unfree would block `nix run .#claude-code`. Distribution
+      # terms are Anthropic's commercial Claude Code license.
+      mainProgram = binName;
+      platforms = builtins.attrNames manifest.platforms;
+      sourceProvenance = [lib.sourceTypes.binaryNativeCode];
+    };
+  })

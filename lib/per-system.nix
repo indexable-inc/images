@@ -13,12 +13,11 @@
   paths,
   rust-overlay,
   home-manager,
-}:
-let
+}: let
   inherit (nixpkgs) lib;
   pkgs = import nixpkgs {
     inherit system;
-    config = { };
+    config = {};
     overlays = [
       rust-overlay.overlays.default
       ix.overlay
@@ -157,7 +156,7 @@ let
     "ruff"
   ];
 
-  lintSpec = (pkgs.formats.json { }).generate "lint-dag.json" {
+  lintSpec = (pkgs.formats.json {}).generate "lint-dag.json" {
     nodes = lib.genAttrs lintStages (stage: {
       command = [
         (lib.getExe lintStage)
@@ -169,7 +168,7 @@ let
   lint = ix.writeNushellApplication pkgs {
     name = "lint";
     meta.description = "Run all Nix formatting and lint checks in parallel via dag-runner";
-    runtimeInputs = [ repoPackages.dag-runner ];
+    runtimeInputs = [repoPackages.dag-runner];
     text = ''
       # nu
       const stages = ${builtins.toJSON lintStages}
@@ -411,7 +410,7 @@ let
     pyChecker = "zuban";
     # pydantic validates Modrinth API responses at the boundary so upstream
     # drift fails with a path-precise error rather than a bare KeyError.
-    python = pkgs.python314.withPackages (ps: [ ps.pydantic ]);
+    python = pkgs.python314.withPackages (ps: [ps.pydantic]);
     meta.description = "Regenerate Minecraft mod catalogs";
   };
 
@@ -421,7 +420,7 @@ let
     pyChecker = "zuban";
     # pydantic validates the PaperMC fill v3 response at the boundary so upstream
     # drift fails with a path-precise error rather than a bare KeyError.
-    python = pkgs.python314.withPackages (ps: [ ps.pydantic ]);
+    python = pkgs.python314.withPackages (ps: [ps.pydantic]);
     meta.description = "Refresh Minecraft loader (Paper / Velocity / Fabric) catalogs from upstream";
   };
 
@@ -473,13 +472,13 @@ let
     ];
     # pydantic validates vulnix's --json output at the boundary so an upstream
     # schema drift fails with a path-precise error rather than a bare KeyError.
-    python = pkgs.python314.withPackages (ps: [ ps.pydantic ]);
+    python = pkgs.python314.withPackages (ps: [ps.pydantic]);
     meta.description = "Scan the Nix closure of the repo's key outputs for CVEs (vulnix)";
   };
 
   # One symlink-free directory holding every skill under `skills/`, ready to
   # copy into `.claude/skills`.
-  skillsDir = ix.skills.mkSkillsDir { inherit pkgs; };
+  skillsDir = ix.skills.mkSkillsDir {inherit pkgs;};
 
   # The `index` Claude Code plugin: every index skill bundled for `--plugin-dir`,
   # invoked as `/index:<skill>`. This is the pure-index default (no hooks, no
@@ -510,7 +509,7 @@ let
     name = "mc-source";
     text = builtins.readFile paths.tools.mcSource;
     runtimeInputs = [
-      (pkgs.callPackage packageRegistry.byId.vineflower.path { inherit ix; })
+      (pkgs.callPackage packageRegistry.byId.vineflower.path {inherit ix;})
     ];
     meta.description = "Decompile a Minecraft server jar with Mojang mappings via Vineflower";
   };
@@ -521,7 +520,7 @@ let
     meta.description = "Refresh the pinned Minecraft sound pack in packages/minecraft/minecraft/sound";
   };
 
-  benchFilesystem = import (paths.bench.filesystem + "/build.nix") { inherit ix pkgs; };
+  benchFilesystem = import (paths.bench.filesystem + "/build.nix") {inherit ix pkgs;};
 
   # The indexbench CLI built for this system, fed to `mkBenchSuite` and the
   # `apps.bench` perf job. Also surfaced as `packages.indexbench` through the
@@ -588,31 +587,30 @@ let
   # in CI. Each updater writes relative to the repo root, so `update` must run
   # from the repo root.
   updatableEntries = packageRegistry.updateScriptEntriesFor system;
-  updaterFor =
-    entry:
-    let
-      pkg =
-        lib.attrByPath entry.packageSet.attrPath
-          (throw "update: package `${entry.id}` is flagged `updateScript = true` but is absent from the package set for ${system}")
-          repoPackages;
-    in
+  updaterFor = entry: let
+    pkg =
+      lib.attrByPath entry.packageSet.attrPath
+      (throw "update: package `${entry.id}` is flagged `updateScript = true` but is absent from the package set for ${system}")
+      repoPackages;
+  in
     lib.getExe (
       pkg.updateScript
         or (throw "update: package `${entry.id}` is flagged `updateScript = true` but exposes no `passthru.updateScript`")
     );
-  updateNodes = {
-    mods.command = [ (lib.getExe updateMods) ];
-    loaders.command = [ (lib.getExe updateLoaders) ];
-    sounds.command = [ (lib.getExe updateSounds) ];
-  }
-  // lib.genAttrs' updatableEntries (
-    entry: lib.nameValuePair entry.id { command = [ (updaterFor entry) ]; }
-  );
-  updateSpec = (pkgs.formats.json { }).generate "update-dag.json" { nodes = updateNodes; };
+  updateNodes =
+    {
+      mods.command = [(lib.getExe updateMods)];
+      loaders.command = [(lib.getExe updateLoaders)];
+      sounds.command = [(lib.getExe updateSounds)];
+    }
+    // lib.genAttrs' updatableEntries (
+      entry: lib.nameValuePair entry.id {command = [(updaterFor entry)];}
+    );
+  updateSpec = (pkgs.formats.json {}).generate "update-dag.json" {nodes = updateNodes;};
   update = ix.writeNushellApplication pkgs {
     name = "update";
     meta.description = "Refresh every repo content source (Minecraft catalogs + pinned binaries) in parallel via dag-runner";
-    runtimeInputs = [ repoPackages.dag-runner ];
+    runtimeInputs = [repoPackages.dag-runner];
     text = ''
       # nu
       def --wrapped main [...args] {
@@ -632,21 +630,22 @@ let
     aarch64-darwin = "aarch64-apple-darwin";
     x86_64-darwin = "x86_64-apple-darwin";
   };
-  targetSystemFor =
-    target:
-    if lib.hasSuffix "-apple-darwin" target then
-      if lib.hasPrefix "aarch64-" target then "aarch64-darwin" else "x86_64-darwin"
-    else
-      throw "cross: unsupported target `${target}`";
+  targetSystemFor = target:
+    if lib.hasSuffix "-apple-darwin" target
+    then
+      if lib.hasPrefix "aarch64-" target
+      then "aarch64-darwin"
+      else "x86_64-darwin"
+    else throw "cross: unsupported target `${target}`";
   crossEntries = packageRegistry.crossEntriesFor system;
   crossWorkspace = ix.rustWorkspaceFor pkgs;
-  crossIxFor =
-    target:
-    let
-      targetWorkspace = crossWorkspace // {
-        units = crossWorkspace.unitsFor { inherit target; };
+  crossIxFor = target: let
+    targetWorkspace =
+      crossWorkspace
+      // {
+        units = crossWorkspace.unitsFor {inherit target;};
       };
-    in
+  in
     ix
     // {
       inherit pkgs;
@@ -657,10 +656,9 @@ let
         inherit target;
         targetSystem = targetSystemFor target;
       };
-      wrapPackage = wrapperPkgs: args: ix.wrapPackage wrapperPkgs (args // { isCross = true; });
+      wrapPackage = wrapperPkgs: args: ix.wrapPackage wrapperPkgs (args // {isCross = true;});
     };
-  buildCrossPackage =
-    target: entry:
+  buildCrossPackage = target: entry:
     lib.callPackageWith (
       pkgs
       // {
@@ -669,15 +667,18 @@ let
         writeNushellApplication = ix.writeNushellApplication pkgs;
         updateScriptWriter = ix.writeNushellApplication pkgs;
       }
-    ) entry.path { };
+    )
+    entry.path {};
   crossPackages = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
     lib.listToAttrs (
       lib.concatMap (
         entry:
-        map (
-          target: lib.nameValuePair "${entry.cross.attrName}-${target}" (buildCrossPackage target entry)
-        ) entry.cross.targets
-      ) crossEntries
+          map (
+            target: lib.nameValuePair "${entry.cross.attrName}-${target}" (buildCrossPackage target entry)
+          )
+          entry.cross.targets
+      )
+      crossEntries
     )
   );
   # The eval-time IFD closure of each cross target's unit graph. A Mac cannot
@@ -697,11 +698,9 @@ let
   crossIfdRoots = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
     let
       crossTargets = lib.unique (lib.concatMap (entry: entry.cross.targets) crossEntries);
-      rootsForTarget =
-        target:
-        let
-          units = crossWorkspace.unitsFor { inherit target; };
-        in
+      rootsForTarget = target: let
+        units = crossWorkspace.unitsFor {inherit target;};
+      in
         # These three ARE the whole eval-time closure: the `import unitsNix`
         # forces `unitsNix`, which references only `unitGraphJson` and `vendorDir`
         # (the cargo-lock it also reads is a plain flake source path, always
@@ -715,109 +714,112 @@ let
           "cross-ifd-${target}-vendor-dir" = units.vendorDir;
         };
     in
-    lib.mergeAttrsList (map rootsForTarget crossTargets)
+      lib.mergeAttrsList (map rootsForTarget crossTargets)
   );
   darwinPackageAliases = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
     lib.genAttrs (lib.attrNames darwinTargetsBySystem) (
-      darwinSystem:
-      let
+      darwinSystem: let
         target = darwinTargetsBySystem.${darwinSystem};
       in
-      lib.listToAttrs (
-        lib.concatMap (
-          entry:
-          lib.optional (entry.cross.exposeNativeDarwin && builtins.elem target entry.cross.targets) (
-            lib.nameValuePair entry.cross.attrName crossPackages."${entry.cross.attrName}-${target}"
+        lib.listToAttrs (
+          lib.concatMap (
+            entry:
+              lib.optional (entry.cross.exposeNativeDarwin && builtins.elem target entry.cross.targets) (
+                lib.nameValuePair entry.cross.attrName crossPackages."${entry.cross.attrName}-${target}"
+              )
           )
-        ) crossEntries
-      )
+          crossEntries
+        )
     )
   );
 
   repoFlakePackages = lib.genAttrs' (packageRegistry.flakeEntriesFor system) (
     entry:
-    lib.nameValuePair entry.flake.attrName (
-      lib.attrByPath entry.packageSet.attrPath
+      lib.nameValuePair entry.flake.attrName (
+        lib.attrByPath entry.packageSet.attrPath
         (throw "packages/${entry.relativePath}/package.nix: flake output `${entry.flake.attrName}` needs packageSet.attrPath")
         repoPackages
-    )
+      )
   );
 
-  rustPackageTestSets =
-    let
-      cargoUnit = ix.cargoUnitFor pkgs;
-      rustWorkspace = ix.rustWorkspaceFor pkgs;
-      # A crate with a `packageSet` is built through `repoPackages` and carries
-      # its own `passthru.tests`. A lib-only workspace crate has no `packageSet`
-      # and is not in `repoPackages`, so select its library straight from the
-      # shared unit graph (same path ix-vt's default.nix uses). The library unit
-      # key is the Cargo package name with dashes underscored.
-      packageTestsFor =
-        entry:
-        if entry.packageSet != null then
-          (lib.attrByPath entry.packageSet.attrPath
-            (throw "packages/${entry.relativePath}/package.nix: passthruTests needs packageSet.attrPath")
-            repoPackages
-          ).passthru.tests or { }
-        else
-          (cargoUnit.selectLibraryWithTests rustWorkspace.units {
-            library = lib.replaceStrings [ "-" ] [ "_" ] entry.id;
-            packageName = entry.id;
-          }).passthru.tests or { };
-      # Two keyings of the same leaf test derivations:
-      #
-      #  * `flat` keys each per-#[test] check as its own top-level name
-      #    (`<prefix>-<target>-tests-<case>`). This is what the public `checks`
-      #    output needs: the flake schema requires every `checks.<system>.<name>`
-      #    to be a derivation, so a nested attrset there fails `nix flake check`.
-      #
-      #  * `sharded` nests each package's checks under one `recurseForDerivations`
-      #    attr (`<prefix>.<target>-tests-<case>`). This is what the memory-bounded
-      #    CI evaluator (nix-fast-build / nix-eval-jobs / blast-radius) consumes
-      #    through the separate `ciChecks` output.
-      #
-      # Why the sharded shape exists: nix-eval-jobs hands the root attrpath to one
-      # worker and forces its child names to recurse. With the flat set, that one
-      # worker forces every crate's per-#[test] manifest IFD at once and balloons
-      # to tens of GiB, which earlyoom kills on the shared CI host. The nested
-      # shape makes the root return cheap per-package names and forces each
-      # crate's manifests inside its own worker job, which restarts at the memory
-      # cap between packages (ENG-2201). The nested value must stay a thunk:
-      # filtering empties (e.g. `tests != {}`) would force every manifest during
-      # enumeration and reintroduce the balloon, so empty groups are left in.
-      flatPackageChecks = prefix: tests: lib.mapAttrs' (n: t: lib.nameValuePair "${prefix}-${n}" t) tests;
-      shardedPackageChecks = prefix: tests: {
-        ${prefix} = tests // {
+  rustPackageTestSets = let
+    cargoUnit = ix.cargoUnitFor pkgs;
+    rustWorkspace = ix.rustWorkspaceFor pkgs;
+    # A crate with a `packageSet` is built through `repoPackages` and carries
+    # its own `passthru.tests`. A lib-only workspace crate has no `packageSet`
+    # and is not in `repoPackages`, so select its library straight from the
+    # shared unit graph (same path ix-vt's default.nix uses). The library unit
+    # key is the Cargo package name with dashes underscored.
+    packageTestsFor = entry:
+      if entry.packageSet != null
+      then
+        (
+          lib.attrByPath entry.packageSet.attrPath
+          (throw "packages/${entry.relativePath}/package.nix: passthruTests needs packageSet.attrPath")
+          repoPackages
+        ).passthru.tests or {
+        }
+      else
+        (cargoUnit.selectLibraryWithTests rustWorkspace.units {
+          library = lib.replaceStrings ["-"] ["_"] entry.id;
+          packageName = entry.id;
+        }).passthru.tests or {
+        };
+    # Two keyings of the same leaf test derivations:
+    #
+    #  * `flat` keys each per-#[test] check as its own top-level name
+    #    (`<prefix>-<target>-tests-<case>`). This is what the public `checks`
+    #    output needs: the flake schema requires every `checks.<system>.<name>`
+    #    to be a derivation, so a nested attrset there fails `nix flake check`.
+    #
+    #  * `sharded` nests each package's checks under one `recurseForDerivations`
+    #    attr (`<prefix>.<target>-tests-<case>`). This is what the memory-bounded
+    #    CI evaluator (nix-fast-build / nix-eval-jobs / blast-radius) consumes
+    #    through the separate `ciChecks` output.
+    #
+    # Why the sharded shape exists: nix-eval-jobs hands the root attrpath to one
+    # worker and forces its child names to recurse. With the flat set, that one
+    # worker forces every crate's per-#[test] manifest IFD at once and balloons
+    # to tens of GiB, which earlyoom kills on the shared CI host. The nested
+    # shape makes the root return cheap per-package names and forces each
+    # crate's manifests inside its own worker job, which restarts at the memory
+    # cap between packages (ENG-2201). The nested value must stay a thunk:
+    # filtering empties (e.g. `tests != {}`) would force every manifest during
+    # enumeration and reintroduce the balloon, so empty groups are left in.
+    flatPackageChecks = prefix: tests: lib.mapAttrs' (n: t: lib.nameValuePair "${prefix}-${n}" t) tests;
+    shardedPackageChecks = prefix: tests: {
+      ${prefix} =
+        tests
+        // {
           recurseForDerivations = true;
         };
-      };
-      repoEntries = packageRegistry.passthruTestEntriesFor system;
-      moduleRustPackages = {
-        resource-monitor-stats-writer = cargoUnit.selectBinaryWithTests rustWorkspace.units {
-          binary = "resource-monitor-stats-writer";
-        };
-      };
-      # cargoAudit scans the single workspace Cargo.lock against the advisory DB,
-      # so it is one lockfile-scoped check (it rebuilds only on a Cargo.lock
-      # change, never on a source edit) rather than a per-crate gate. Expose it
-      # once instead of aliasing the same derivation onto every crate.
-      workspaceAuditTests = lib.optionalAttrs (rustWorkspace.units.policyChecks ? cargoAudit) {
-        rust-cargoAudit = rustWorkspace.units.policyChecks.cargoAudit;
-      };
-      collectRust =
-        group:
-        lib.mergeAttrsList (
-          map (entry: group entry.passthruTests.prefix (packageTestsFor entry)) repoEntries
-          ++ lib.mapAttrsToList (
-            packageName: package: group "rust-${packageName}" (package.passthru.tests or { })
-          ) moduleRustPackages
-        )
-        // workspaceAuditTests;
-    in
-    {
-      flat = collectRust flatPackageChecks;
-      sharded = collectRust shardedPackageChecks;
     };
+    repoEntries = packageRegistry.passthruTestEntriesFor system;
+    moduleRustPackages = {
+      resource-monitor-stats-writer = cargoUnit.selectBinaryWithTests rustWorkspace.units {
+        binary = "resource-monitor-stats-writer";
+      };
+    };
+    # cargoAudit scans the single workspace Cargo.lock against the advisory DB,
+    # so it is one lockfile-scoped check (it rebuilds only on a Cargo.lock
+    # change, never on a source edit) rather than a per-crate gate. Expose it
+    # once instead of aliasing the same derivation onto every crate.
+    workspaceAuditTests = lib.optionalAttrs (rustWorkspace.units.policyChecks ? cargoAudit) {
+      rust-cargoAudit = rustWorkspace.units.policyChecks.cargoAudit;
+    };
+    collectRust = group:
+      lib.mergeAttrsList (
+        map (entry: group entry.passthruTests.prefix (packageTestsFor entry)) repoEntries
+        ++ lib.mapAttrsToList (
+          packageName: package: group "rust-${packageName}" (package.passthru.tests or {})
+        )
+        moduleRustPackages
+      )
+      // workspaceAuditTests;
+  in {
+    flat = collectRust flatPackageChecks;
+    sharded = collectRust shardedPackageChecks;
+  };
 
   lintSource = fs.toSource {
     inherit (paths) root;
@@ -841,7 +843,7 @@ let
       ;
   };
 
-  exampleFleets = ix.exampleFleetsFor { hostSystem = system; };
+  exampleFleets = ix.exampleFleetsFor {hostSystem = system;};
 
   # Same fleets with "health-check-" prepended to every external name, so the
   # lifecycle scripts that force-delete VMs by name can never clobber an
@@ -849,55 +851,59 @@ let
   # (`nginx`, `factions`, ...). `withNodePrefix` only rewrites plan data, so
   # both surfaces share one NixOS closure evaluation per node instead of
   # evaluating every example fleet twice (ENG-2411).
-  healthCheckExampleFleets = lib.mapAttrs (
-    _name: fleet: fleet.withNodePrefix "health-check-"
-  ) exampleFleets;
+  healthCheckExampleFleets =
+    lib.mapAttrs (
+      _name: fleet: fleet.withNodePrefix "health-check-"
+    )
+    exampleFleets;
 
   # Surface every example's `ix fleet <sub>` wrapper as a flake package.
   # Each example contributes `packages.<system>.<example>-{up,health,...}`,
   # which lets `nix run .#nginx-lifecycle-up` invoke the existing fleet
   # plumbing through the wrapper's `meta.mainProgram`, and
   # `nix build .#nginx-lifecycle-up` produce the wrapper script on disk.
-  examplePackages =
-    let
-      fleetSubs = [
-        "up"
-        "health"
-        "replace"
-        "switch"
-        "diff"
-      ];
-    in
+  examplePackages = let
+    fleetSubs = [
+      "up"
+      "health"
+      "replace"
+      "switch"
+      "diff"
+    ];
+  in
     lib.concatMapAttrs (
       name: fleet:
-      lib.genAttrs' fleetSubs (sub: {
-        name = "${name}-${sub}";
-        value = fleet.${sub}.overrideAttrs (old: {
-          meta = (old.meta or { }) // {
-            description = "Run `ix fleet ${sub}` against the ${name} example fleet";
-          };
-        });
-      })
-    ) exampleFleets;
+        lib.genAttrs' fleetSubs (sub: {
+          name = "${name}-${sub}";
+          value = fleet.${sub}.overrideAttrs (old: {
+            meta =
+              (old.meta or {})
+              // {
+                description = "Run `ix fleet ${sub}` against the ${name} example fleet";
+              };
+          });
+        })
+    )
+    exampleFleets;
 
   healthChecks =
     import ./image/health-checks.nix
-      {
-        inherit lib pkgs;
-        inherit (ix) writeNushellApplication;
-        dagRunner = repoPackages.dag-runner;
-      }
-      {
-        exampleFleets = healthCheckExampleFleets;
-        exampleNames = lib.attrNames exampleFleets;
-      };
+    {
+      inherit lib pkgs;
+      inherit (ix) writeNushellApplication;
+      dagRunner = repoPackages.dag-runner;
+    }
+    {
+      exampleFleets = healthCheckExampleFleets;
+      exampleNames = lib.attrNames exampleFleets;
+    };
 
   baseImage = ix.mkImage {
-    modules = [ (paths.root + "/images/system/base") ];
+    modules = [(paths.root + "/images/system/base")];
   };
 
   vcfsGuestEvalImage = ix.mkImage {
-    modules = [ (paths.root + "/images/system/vcfs-guest-eval") ];
+    modules = [(paths.root + "/images/system/vcfs-guest-eval")];
   };
 
   # Non-NixOS OCI example images (ubuntu, debian, ...). They live under
@@ -905,8 +911,8 @@ let
   # return images instead of fleet plans and are exposed as opt-in packages only.
   nonNixExampleImages =
     lib.mapAttrs'
-      (
-        name: entry:
+    (
+      name: entry:
         lib.nameValuePair "non-nix-${name}" (
           import (entry.path + "/ix.nix") {
             index = {
@@ -914,21 +920,23 @@ let
             };
           }
         )
-      )
-      (
-        ix.discoverTree {
-          root = paths.examples + "/oci";
-          requiredFiles = [ "ix.nix" ];
-        }
-      );
+    )
+    (
+      ix.discoverTree {
+        root = paths.examples + "/oci";
+        requiredFiles = ["ix.nix"];
+      }
+    );
 
   # The content-addressed `image.json` for each non-Nix example, surfaced as its
   # own package so the small artifact is buildable directly (`nix build
   # .#non-nix-ubuntu-description`) and cached independently of the materialized
   # tar it regenerates. See #679.
-  nonNixExampleDescriptions = lib.mapAttrs' (
-    name: image: lib.nameValuePair "${name}-description" image.passthru.description
-  ) nonNixExampleImages;
+  nonNixExampleDescriptions =
+    lib.mapAttrs' (
+      name: image: lib.nameValuePair "${name}-description" image.passthru.description
+    )
+    nonNixExampleImages;
 
   # Build the check catalog from a rust-package keying. `checks` (flat: one
   # derivation per `checks.<system>.<name>`, required by the flake schema and
@@ -937,20 +945,20 @@ let
   # explicit checks; only the rust keying differs (ENG-2201). The
   # collision guard runs per keying, so producing `ciChecks` only forces the
   # cheap per-package names, never the flat per-#[test] spine.
-  catalogFor =
-    rustPackageSet:
+  catalogFor = rustPackageSet:
     lib.optionalAttrs (system == ix.system) (
       let
-        rustChecks = {
-          cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
-          cargo-unit-prebuilt-library = tests.cargoUnitPrebuiltLibrary;
-          sdk-rust-prebuilt = tests.sdkRustPrebuilt;
-          # Strict zuban + ruff ANN gate over the public ix-sdk Python sources
-          # (ENG-3131); the SDK is setuptools-built, so this is its build-time
-          # enforcement in place of a buildUvApplication pyChecker flag.
-          sdk-python-strict = tests.sdkPythonStrict;
-        }
-        // rustPackageSet;
+        rustChecks =
+          {
+            cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
+            cargo-unit-prebuilt-library = tests.cargoUnitPrebuiltLibrary;
+            sdk-rust-prebuilt = tests.sdkRustPrebuilt;
+            # Strict zuban + ruff ANN gate over the public ix-sdk Python sources
+            # (ENG-3131); the SDK is setuptools-built, so this is its build-time
+            # enforcement in place of a buildUvApplication pyChecker flag.
+            sdk-python-strict = tests.sdkPythonStrict;
+          }
+          // rustPackageSet;
         explicitChecks = {
           inherit (tests) eval;
           # Boots a NixOS VM running the minecraft-blocks producer's Paper
@@ -961,7 +969,7 @@ let
           minecraft-blocks-vm = tests.minecraftBlocksVm;
           # Skills and subagents are rendered live by the SessionStart hook.
           # This gate forces both materialized directories to build.
-          agent-skills = pkgs.runCommand "agent-skills-check" { } ''
+          agent-skills = pkgs.runCommand "agent-skills-check" {} ''
             test -d ${skillsDir}
             test -d ${agentsDir}
             mkdir -p "$out"
@@ -971,45 +979,44 @@ let
           # changed, prune a key Nix stopped declaring, and keep a sibling key
           # while a declared array is replaced atomically.
           mutable-json-merge =
-            pkgs.runCommand "mutable-json-merge-check" { nativeBuildInputs = [ pkgs.jq ]; }
-              ''
-                prog=${ix.mutableJson.mergeProgram}
-                run() { jq -ncS --argjson last "$1" --argjson live "$2" --argjson new "$3" -f "$prog"; }
-                check() {
-                  expected=$(printf '%s' "$2" | jq -cS .)
-                  if [ "$expected" != "$3" ]; then
-                    echo "FAIL $1: expected $expected got $3" >&2
-                    exit 1
-                  fi
-                  echo "ok $1"
-                }
-                check first-install '{"permissions":{"defaultMode":"bypass"}}' \
-                  "$(run '{}' '{}' '{"permissions":{"defaultMode":"bypass"}}')"
-                check preserve-app-key '{"permissions":{"defaultMode":"bypass"},"theme":"dark"}' \
-                  "$(run '{"permissions":{"defaultMode":"bypass"}}' '{"permissions":{"defaultMode":"bypass"},"theme":"dark"}' '{"permissions":{"defaultMode":"bypass"}}')"
-                check enforce-changed '{"permissions":{"defaultMode":"bypass"},"theme":"dark"}' \
-                  "$(run '{"permissions":{"defaultMode":"bypass"}}' '{"permissions":{"defaultMode":"off"},"theme":"dark"}' '{"permissions":{"defaultMode":"bypass"}}')"
-                check prune-dropped '{"a":1,"c":3}' \
-                  "$(run '{"a":1,"b":2}' '{"a":1,"b":2,"c":3}' '{"a":1}')"
-                check nested-atomic-array '{"p":{"allow":["x"]},"t":1}' \
-                  "$(run '{"p":{"allow":["x"]}}' '{"p":{"allow":["x","y"]},"t":1}' '{"p":{"allow":["x"]}}')"
-                # Divergent live shape at a path we stop declaring must not abort:
-                # the app replaced object `permissions` with a scalar, Nix dropped it.
-                check divergent-live-shape '{"permissions":"all"}' \
-                  "$(run '{"permissions":{"defaultMode":"x"}}' '{"permissions":"all"}' '{}')"
-                mkdir -p "$out"
-              '';
+            pkgs.runCommand "mutable-json-merge-check" {nativeBuildInputs = [pkgs.jq];}
+            ''
+              prog=${ix.mutableJson.mergeProgram}
+              run() { jq -ncS --argjson last "$1" --argjson live "$2" --argjson new "$3" -f "$prog"; }
+              check() {
+                expected=$(printf '%s' "$2" | jq -cS .)
+                if [ "$expected" != "$3" ]; then
+                  echo "FAIL $1: expected $expected got $3" >&2
+                  exit 1
+                fi
+                echo "ok $1"
+              }
+              check first-install '{"permissions":{"defaultMode":"bypass"}}' \
+                "$(run '{}' '{}' '{"permissions":{"defaultMode":"bypass"}}')"
+              check preserve-app-key '{"permissions":{"defaultMode":"bypass"},"theme":"dark"}' \
+                "$(run '{"permissions":{"defaultMode":"bypass"}}' '{"permissions":{"defaultMode":"bypass"},"theme":"dark"}' '{"permissions":{"defaultMode":"bypass"}}')"
+              check enforce-changed '{"permissions":{"defaultMode":"bypass"},"theme":"dark"}' \
+                "$(run '{"permissions":{"defaultMode":"bypass"}}' '{"permissions":{"defaultMode":"off"},"theme":"dark"}' '{"permissions":{"defaultMode":"bypass"}}')"
+              check prune-dropped '{"a":1,"c":3}' \
+                "$(run '{"a":1,"b":2}' '{"a":1,"b":2,"c":3}' '{"a":1}')"
+              check nested-atomic-array '{"p":{"allow":["x"]},"t":1}' \
+                "$(run '{"p":{"allow":["x"]}}' '{"p":{"allow":["x","y"]},"t":1}' '{"p":{"allow":["x"]}}')"
+              # Divergent live shape at a path we stop declaring must not abort:
+              # the app replaced object `permissions` with a scalar, Nix dropped it.
+              check divergent-live-shape '{"permissions":"all"}' \
+                "$(run '{"permissions":{"defaultMode":"x"}}' '{"permissions":"all"}' '{}')"
+              mkdir -p "$out"
+            '';
           # Offline schema gate for the loader manifests. `deepSeq` forces
           # every Paper / Velocity / Fabric per-version lock through
           # `readLoaderManifest` in `lib/artifacts.nix`, so malformed JSON or a
           # missing key fires here before any image starts evaluating. The
           # forced surface is the parsed-and-validated manifest data, not the
           # wrapped `fetchurl` derivations, to keep this check pure eval.
-          loader-manifests =
-            let
-              forced = builtins.deepSeq ix.artifacts.minecraft.loaderManifests "ok";
-            in
-            pkgs.runCommand "loader-manifests-check" { } ''
+          loader-manifests = let
+            forced = builtins.deepSeq ix.artifacts.minecraft.loaderManifests "ok";
+          in
+            pkgs.runCommand "loader-manifests-check" {} ''
               printf '%s\n' '${forced}' > "$out"
             '';
           # Rule self-test for the astlog lint rules (nix.astlog + rust.astlog):
@@ -1028,71 +1035,71 @@ let
           # the jq pipelines deliberately take the JSON regardless of exit code.
           astlog-rules =
             pkgs.runCommand "astlog-rules-check"
-              {
-                nativeBuildInputs = [
-                  repoPackages.astlog
-                  pkgs.jq
-                ];
-              }
-              ''
-                root=${astlogRulesSource}/astlog-rules
-                tests="$root/tests"
-                fail=0
-                # Each ruleset paired with the source extension its fixtures take.
-                check_ruleset() {
-                  rules="$1"
-                  ext="$2"
-                  # Rules without a (lint ...) are legitimate helper relations
-                  # (joins/negation need intermediate relations), so they are not
-                  # required to back a lint. The meaningful checks remain: every
-                  # lint has a good/bad fixture pair that fires/stays-clean, and
-                  # every fixture dir backs some lint. `astlog` itself rejects a
-                  # lint that names an undefined relation at parse time.
-                  for rule in $(sed -n 's/^(lint \([a-z0-9-]*\).*/\1/p' "$rules" | sort -u); do
-                    dir="$tests/$rule"
-                    if [ ! -f "$dir/bad.fixture" ] || [ ! -f "$dir/good.fixture" ]; then
-                      echo "lint $rule has no fixture pair under astlog-rules/tests/$rule" >&2
-                      fail=1
-                      continue
-                    fi
-                    work=$(mktemp -d)
-                    cp "$dir/bad.fixture" "$work/bad.$ext"
-                    cp "$dir/good.fixture" "$work/good.$ext"
-                    # `astlog scan` exits nonzero on a violating fixture by
-                    # design; capture its JSON (`|| true` so the by-design exit
-                    # does not abort the `set -o pipefail` build) and count
-                    # separately, rather than piping straight into jq.
-                    bad_json=$(astlog scan "$rules" "$work/bad.$ext" --json || true)
-                    good_json=$(astlog scan "$rules" "$work/good.$ext" --json || true)
-                    bad=$(jq --arg r "$rule" '[.[] | select(.rule == $r)] | length' <<<"$bad_json")
-                    good=$(jq --arg r "$rule" '[.[] | select(.rule == $r)] | length' <<<"$good_json")
-                    if [ "$bad" = 0 ]; then
-                      echo "lint $rule did not fire on its violating fixture" >&2
-                      fail=1
-                    fi
-                    if [ "$good" != 0 ]; then
-                      echo "lint $rule fired $good finding(s) on its valid fixture" >&2
-                      fail=1
-                    fi
-                  done
-                }
-                check_ruleset "$root/nix.astlog" nix
-                check_ruleset "$root/rust.astlog" rs
-                check_ruleset "$root/cargo.astlog" toml
-                check_ruleset "$root/elixir.astlog" ex
-                # Every fixture dir must back a lint in one of the rulesets.
-                for dir in "$tests"/*/; do
-                  rule=$(basename "$dir")
-                  if ! grep -q "^(lint $rule " "$root/nix.astlog" "$root/rust.astlog" "$root/cargo.astlog" "$root/elixir.astlog"; then
-                    echo "fixture dir astlog-rules/tests/$rule matches no lint" >&2
+            {
+              nativeBuildInputs = [
+                repoPackages.astlog
+                pkgs.jq
+              ];
+            }
+            ''
+              root=${astlogRulesSource}/astlog-rules
+              tests="$root/tests"
+              fail=0
+              # Each ruleset paired with the source extension its fixtures take.
+              check_ruleset() {
+                rules="$1"
+                ext="$2"
+                # Rules without a (lint ...) are legitimate helper relations
+                # (joins/negation need intermediate relations), so they are not
+                # required to back a lint. The meaningful checks remain: every
+                # lint has a good/bad fixture pair that fires/stays-clean, and
+                # every fixture dir backs some lint. `astlog` itself rejects a
+                # lint that names an undefined relation at parse time.
+                for rule in $(sed -n 's/^(lint \([a-z0-9-]*\).*/\1/p' "$rules" | sort -u); do
+                  dir="$tests/$rule"
+                  if [ ! -f "$dir/bad.fixture" ] || [ ! -f "$dir/good.fixture" ]; then
+                    echo "lint $rule has no fixture pair under astlog-rules/tests/$rule" >&2
+                    fail=1
+                    continue
+                  fi
+                  work=$(mktemp -d)
+                  cp "$dir/bad.fixture" "$work/bad.$ext"
+                  cp "$dir/good.fixture" "$work/good.$ext"
+                  # `astlog scan` exits nonzero on a violating fixture by
+                  # design; capture its JSON (`|| true` so the by-design exit
+                  # does not abort the `set -o pipefail` build) and count
+                  # separately, rather than piping straight into jq.
+                  bad_json=$(astlog scan "$rules" "$work/bad.$ext" --json || true)
+                  good_json=$(astlog scan "$rules" "$work/good.$ext" --json || true)
+                  bad=$(jq --arg r "$rule" '[.[] | select(.rule == $r)] | length' <<<"$bad_json")
+                  good=$(jq --arg r "$rule" '[.[] | select(.rule == $r)] | length' <<<"$good_json")
+                  if [ "$bad" = 0 ]; then
+                    echo "lint $rule did not fire on its violating fixture" >&2
+                    fail=1
+                  fi
+                  if [ "$good" != 0 ]; then
+                    echo "lint $rule fired $good finding(s) on its valid fixture" >&2
                     fail=1
                   fi
                 done
-                if [ "$fail" != 0 ]; then
-                  exit 1
+              }
+              check_ruleset "$root/nix.astlog" nix
+              check_ruleset "$root/rust.astlog" rs
+              check_ruleset "$root/cargo.astlog" toml
+              check_ruleset "$root/elixir.astlog" ex
+              # Every fixture dir must back a lint in one of the rulesets.
+              for dir in "$tests"/*/; do
+                rule=$(basename "$dir")
+                if ! grep -q "^(lint $rule " "$root/nix.astlog" "$root/rust.astlog" "$root/cargo.astlog" "$root/elixir.astlog"; then
+                  echo "fixture dir astlog-rules/tests/$rule matches no lint" >&2
+                  fail=1
                 fi
-                mkdir -p "$out"
-              '';
+              done
+              if [ "$fail" != 0 ]; then
+                exit 1
+              fi
+              mkdir -p "$out"
+            '';
           # End-to-end proof that scipql resolves SCIP monikers and acts only on
           # the right symbol, exercising all three surfaces (query / fix /
           # rename) of the real pipeline. The wrapped CLI bakes rust-analyzer +
@@ -1103,64 +1110,64 @@ let
           # semantic-disambiguation guarantee.
           scipql-e2e =
             pkgs.runCommand "scipql-e2e-check"
-              {
-                nativeBuildInputs = [ repoPackages.scipql ];
-              }
-              ''
-                export HOME="$TMPDIR/home"
-                mkdir -p "$HOME"
-                cp -r ${
-                  builtins.path {
-                    name = "scipql-two-sockets-fixture";
-                    path = paths.packagesRoot + "/code/scipql/tests/fixtures/two-sockets";
-                  }
-                } work
-                chmod -R u+w work
-                cd work
-                fail=0
+            {
+              nativeBuildInputs = [repoPackages.scipql];
+            }
+            ''
+              export HOME="$TMPDIR/home"
+              mkdir -p "$HOME"
+              cp -r ${
+                builtins.path {
+                  name = "scipql-two-sockets-fixture";
+                  path = paths.packagesRoot + "/code/scipql/tests/fixtures/two-sockets";
+                }
+              } work
+              chmod -R u+w work
+              cd work
+              fail=0
 
-                scipql index . -o index.scip
+              scipql index . -o index.scip
 
-                # query: the two same-named structs resolve to distinct monikers.
-                # (printf, not a heredoc: a heredoc terminator would not sit at
-                # column 0 after Nix strips the indented string's indentation.)
-                printf '%s\n' \
-                  '.decl sockets(sym:symbol)' \
-                  '.output sockets' \
-                  'sockets(s) :- occurrence(s, _, _, _, "definition"), symbol_info(s, _, "Socket").' \
-                  > sockets.dl
-                q=$(scipql query index.scip sockets.dl)
-                echo "$q" | grep -q 'net/Socket#' || { echo "query: missing net/Socket# definition" >&2; fail=1; }
-                echo "$q" | grep -q 'mock/Socket#' || { echo "query: missing mock/Socket# definition" >&2; fail=1; }
+              # query: the two same-named structs resolve to distinct monikers.
+              # (printf, not a heredoc: a heredoc terminator would not sit at
+              # column 0 after Nix strips the indented string's indentation.)
+              printf '%s\n' \
+                '.decl sockets(sym:symbol)' \
+                '.output sockets' \
+                'sockets(s) :- occurrence(s, _, _, _, "definition"), symbol_info(s, _, "Socket").' \
+                > sockets.dl
+              q=$(scipql query index.scip sockets.dl)
+              echo "$q" | grep -q 'net/Socket#' || { echo "query: missing net/Socket# definition" >&2; fail=1; }
+              echo "$q" | grep -q 'mock/Socket#' || { echo "query: missing mock/Socket# definition" >&2; fail=1; }
 
-                # fix: the replacement text is COMPUTED in datalog (cat + a join to
-                # the display name), not a constant, and still scoped to net by moniker.
-                printf '%s\n' \
-                  'edit(path, start, end, cat("Net", name)) :-' \
-                  '  occurrence(sym, path, start, end, _),' \
-                  '  symbol_info(sym, _, name),' \
-                  '  substr(sym, strlen(sym) - strlen("net/Socket#"), strlen("net/Socket#")) = "net/Socket#".' \
-                  > netname.dl
-                d=$(scipql fix index.scip netname.dl)
-                echo "$d" | grep -q 'NetSocket' || { echo "fix: datalog-computed replacement (cat) did not apply" >&2; fail=1; }
-                echo "$d" | grep -q 'src/mock.rs' && { echo "fix: computed edit wrongly touched mock.rs" >&2; fail=1; }
+              # fix: the replacement text is COMPUTED in datalog (cat + a join to
+              # the display name), not a constant, and still scoped to net by moniker.
+              printf '%s\n' \
+                'edit(path, start, end, cat("Net", name)) :-' \
+                '  occurrence(sym, path, start, end, _),' \
+                '  symbol_info(sym, _, name),' \
+                '  substr(sym, strlen(sym) - strlen("net/Socket#"), strlen("net/Socket#")) = "net/Socket#".' \
+                > netname.dl
+              d=$(scipql fix index.scip netname.dl)
+              echo "$d" | grep -q 'NetSocket' || { echo "fix: datalog-computed replacement (cat) did not apply" >&2; fail=1; }
+              echo "$d" | grep -q 'src/mock.rs' && { echo "fix: computed edit wrongly touched mock.rs" >&2; fail=1; }
 
-                # rename: apply to disk, then assert the net struct + its reference
-                # changed while mock::Socket and the net struct's own fd field did not.
-                scipql rename index.scip 'net/Socket#' Stream --write
-                grep -q 'pub struct Stream' src/net.rs || { echo "rename: net::Socket was not renamed" >&2; fail=1; }
-                grep -q 'net::Stream' src/lib.rs || { echo "rename: the net::Socket reference was not renamed" >&2; fail=1; }
-                grep -q 'pub struct Socket' src/mock.rs || { echo "rename: mock::Socket was wrongly changed" >&2; fail=1; }
-                grep -q 'pub fd: i32' src/net.rs || { echo "rename: the struct's own fd field was wrongly renamed" >&2; fail=1; }
+              # rename: apply to disk, then assert the net struct + its reference
+              # changed while mock::Socket and the net struct's own fd field did not.
+              scipql rename index.scip 'net/Socket#' Stream --write
+              grep -q 'pub struct Stream' src/net.rs || { echo "rename: net::Socket was not renamed" >&2; fail=1; }
+              grep -q 'net::Stream' src/lib.rs || { echo "rename: the net::Socket reference was not renamed" >&2; fail=1; }
+              grep -q 'pub struct Socket' src/mock.rs || { echo "rename: mock::Socket was wrongly changed" >&2; fail=1; }
+              grep -q 'pub fd: i32' src/net.rs || { echo "rename: the struct's own fd field was wrongly renamed" >&2; fail=1; }
 
-                if [ "$fail" != 0 ]; then
-                  echo "--- net.rs ---" >&2; cat src/net.rs >&2
-                  echo "--- mock.rs ---" >&2; cat src/mock.rs >&2
-                  echo "--- lib.rs ---" >&2; cat src/lib.rs >&2
-                  exit 1
-                fi
-                mkdir -p "$out"
-              '';
+              if [ "$fail" != 0 ]; then
+                echo "--- net.rs ---" >&2; cat src/net.rs >&2
+                echo "--- mock.rs ---" >&2; cat src/mock.rs >&2
+                echo "--- lib.rs ---" >&2; cat src/lib.rs >&2
+                exit 1
+              fi
+              mkdir -p "$out"
+            '';
           run-records-session = repoPackages.run.passthru.tests.recordsSession;
           # Symphony's required quality lane (compile -Werror, mix format,
           # `mix credo --strict`, mix test), built through the shared
@@ -1181,7 +1188,7 @@ let
           # timing/RSS, so it earns a flake check; the timing/RSS perf job lives
           # under `apps.bench` instead.
           indexbench-self-demo-alloc = indexbenchSelfDemo.check;
-          lint = pkgs.runCommand "ix-lint" { nativeBuildInputs = [ pkgs.coreutils ]; } ''
+          lint = pkgs.runCommand "ix-lint" {nativeBuildInputs = [pkgs.coreutils];} ''
             cp -R ${lintSource} source
             chmod -R u+w source
             cd source
@@ -1195,29 +1202,29 @@ let
           # covered by its own unit tests. See packages/blast-radius/tests/blast-radius-test.sh.
           blast-radius-test =
             pkgs.runCommand "blast-radius-test"
-              {
-                nativeBuildInputs = [
-                  pkgs.bash
-                  pkgs.coreutils
-                  pkgs.diffutils
-                  pkgs.jq
-                  pkgs.yq-go
-                ];
-              }
-              ''
-                cp -R ${lintSource} source
-                chmod -R u+w source
-                cd source
-                export HOME="$TMPDIR/home"
-                mkdir -p "$HOME"
-                bash packages/blast-radius/tests/blast-radius-test.sh
-                mkdir -p "$out"
-              '';
+            {
+              nativeBuildInputs = [
+                pkgs.bash
+                pkgs.coreutils
+                pkgs.diffutils
+                pkgs.jq
+                pkgs.yq-go
+              ];
+            }
+            ''
+              cp -R ${lintSource} source
+              chmod -R u+w source
+              cd source
+              export HOME="$TMPDIR/home"
+              mkdir -p "$HOME"
+              bash packages/blast-radius/tests/blast-radius-test.sh
+              mkdir -p "$out"
+            '';
           # Proves the Linux→macOS cross toolchain actually emits a Darwin object,
           # which a successful build alone does not assert. `file` reads the Mach-O
           # header; a regression in the zig/SDK wiring fails here on x86_64-linux CI
           # rather than silently shipping a wrong-arch binary.
-          cross-darwin-smoke = pkgs.runCommand "cross-darwin-smoke" { nativeBuildInputs = [ pkgs.file ]; } ''
+          cross-darwin-smoke = pkgs.runCommand "cross-darwin-smoke" {nativeBuildInputs = [pkgs.file];} ''
             bin=${crossPackages."dag-runner-aarch64-apple-darwin"}/bin/dag-runner
             info=$(file -b "$bin")
             echo "$info"
@@ -1231,40 +1238,40 @@ let
             mkdir -p "$out"
           '';
           cross-darwin-web-monitor-smoke =
-            pkgs.runCommand "cross-darwin-web-monitor-smoke" { nativeBuildInputs = [ pkgs.file ]; }
-              ''
-                pkg=${crossPackages."nix-web-monitor-aarch64-apple-darwin"}
-                bin=$pkg/bin/.nix-web-monitor-unwrapped
-                info=$(file -b "$bin")
-                echo "$info"
-                case "$info" in
-                  *Mach-O*arm64*) ;;
-                  *)
-                    echo "expected Mach-O arm64, got: $info" >&2
-                    exit 1
-                    ;;
-                esac
-                read -r shebang < "$pkg/bin/nix-web-monitor"
-                case "$shebang" in
-                  "#!/bin/sh") ;;
-                  *)
-                    echo "expected /bin/sh wrapper, got: $shebang" >&2
-                    exit 1
-                    ;;
-                esac
-                test -f "$pkg/share/nix-web-monitor/index.html"
-                mkdir -p "$out"
-              '';
+            pkgs.runCommand "cross-darwin-web-monitor-smoke" {nativeBuildInputs = [pkgs.file];}
+            ''
+              pkg=${crossPackages."nix-web-monitor-aarch64-apple-darwin"}
+              bin=$pkg/bin/.nix-web-monitor-unwrapped
+              info=$(file -b "$bin")
+              echo "$info"
+              case "$info" in
+                *Mach-O*arm64*) ;;
+                *)
+                  echo "expected Mach-O arm64, got: $info" >&2
+                  exit 1
+                  ;;
+              esac
+              read -r shebang < "$pkg/bin/nix-web-monitor"
+              case "$shebang" in
+                "#!/bin/sh") ;;
+                *)
+                  echo "expected /bin/sh wrapper, got: $shebang" >&2
+                  exit 1
+                  ;;
+              esac
+              test -f "$pkg/share/nix-web-monitor/index.html"
+              mkdir -p "$out"
+            '';
           site-case-tests = pkgs.linkFarm "site-case-tests" (
-            lib.mapAttrsToList (name: path: { inherit name path; }) siteTests.cases
+            lib.mapAttrsToList (name: path: {inherit name path;}) siteTests.cases
           );
           site-test = siteTests.all;
         };
         checkNameCollisions = lib.intersectLists (lib.attrNames explicitChecks) (lib.attrNames rustChecks);
       in
-      assert lib.assertMsg (checkNameCollisions == [ ])
+        assert lib.assertMsg (checkNameCollisions == [])
         "checks: duplicate names across explicit/rust sets: ${lib.concatStringsSep ", " checkNameCollisions}";
-      explicitChecks // rustChecks
+          explicitChecks // rustChecks
     );
   packageSet =
     lib.optionalAttrs (system == ix.system) {
@@ -1294,7 +1301,8 @@ let
       # `nixpkgs#` registry reference. The self-hosted runner PATH carries
       # coreutils + nix but not findutils, jq, or gh, so the bare commands are
       # `command not found` (cve-scan run 28598889924 died on exactly that).
-      inherit (pkgs)
+      inherit
+        (pkgs)
         attic-client
         jq
         findutils
@@ -1307,8 +1315,7 @@ let
     // nonNixExampleDescriptions
     // crossPackages
     // healthChecks.lifecyclePackages;
-in
-{
+in {
   packages = packageSet;
 
   # CI-only push roots for cache-push.yml. Two adjustments to `packages` keep the
@@ -1330,23 +1337,25 @@ in
   #      forces at eval when it substitutes a Darwin cross output. These are
   #      build-time deps of the cross packages, so they are absent from those
   #      packages' runtime closures; adding them as roots is the fix for #1687.
-  cachePushRoots =
-    let
-      # Per-node `health-check-*` lifecycle packages and the two
-      # `health-checks{,-zellij}` runners all share the `health-check` prefix.
-      isHealthCheck = lib.hasPrefix "health-check";
-      imagesAsClosures = lib.mapAttrs (_: p: p.passthru.toplevel or p) (
-        lib.filterAttrs (name: _: !isHealthCheck name) packageSet
-      );
-      # `fleet.systemPackages` keys each node's toplevel as `<node>-system`; the
-      # fleet-name prefix keeps nodes sharing a name across fleets distinct.
-      exampleNodeToplevels = lib.concatMapAttrs (
+  cachePushRoots = let
+    # Per-node `health-check-*` lifecycle packages and the two
+    # `health-checks{,-zellij}` runners all share the `health-check` prefix.
+    isHealthCheck = lib.hasPrefix "health-check";
+    imagesAsClosures = lib.mapAttrs (_: p: p.passthru.toplevel or p) (
+      lib.filterAttrs (name: _: !isHealthCheck name) packageSet
+    );
+    # `fleet.systemPackages` keys each node's toplevel as `<node>-system`; the
+    # fleet-name prefix keeps nodes sharing a name across fleets distinct.
+    exampleNodeToplevels =
+      lib.concatMapAttrs (
         fleetName: fleet:
-        lib.mapAttrs' (
-          node: toplevel: lib.nameValuePair "${fleetName}-${node}" toplevel
-        ) fleet.systemPackages
-      ) exampleFleets;
-    in
+          lib.mapAttrs' (
+            node: toplevel: lib.nameValuePair "${fleetName}-${node}" toplevel
+          )
+          fleet.systemPackages
+      )
+      exampleFleets;
+  in
     imagesAsClosures // exampleNodeToplevels // crossIfdRoots;
 
   inherit darwinPackageAliases;
@@ -1363,7 +1372,7 @@ in
   # there fails the flake schema.
   ciChecks = catalogFor rustPackageTestSets.sharded;
 
-  formatter = pkgs.nixfmt;
+  formatter = pkgs.alejandra;
 
   # `nix run .#bench` runs the repo's self-demo perf job (timing + RSS + custom
   # metrics, gated on regressions). The flake's package-with-mainProgram
@@ -1403,8 +1412,8 @@ in
     # nixpkgs CLI; authenticate it before `nix run .#symphony`.
     symphony = pkgs.mkShellNoCC {
       packages = [
-        (ix.languages.elixir.toolchain pkgs { version = "1.19"; })
-        (ix.languages.erlang.toolchain pkgs { version = "28"; })
+        (ix.languages.elixir.toolchain pkgs {version = "1.19";})
+        (ix.languages.erlang.toolchain pkgs {version = "28";})
         pkgs.codex
         pkgs.gh
         pkgs.git

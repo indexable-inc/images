@@ -28,8 +28,7 @@
   # Platform the strict check assumes; the SDK ships for Linux and macOS, and CI
   # gates on Linux, mirroring the writers/uv-application default.
   pythonPlatform ? "linux",
-}:
-let
+}: let
   # Only the package sources matter to the checkers; keep the filtered source
   # tight so unrelated edits (LICENSE, pyproject) do not rebuild the check.
   src = lib.fileset.toSource {
@@ -37,8 +36,7 @@ let
     fileset = ./ix_sdk;
   };
   pythonExecutable = lib.getExe python;
-in
-{
+in {
   # Strict correctness + annotation gate over `ix_sdk`. Runs from the package
   # root so `zuban` discovers `ix_sdk` as a package (resolving the colocated
   # `_ix_sdk.pyi` stub for the native extension). The root is a read-only
@@ -46,27 +44,27 @@ in
   # `.ruff_cache` into cwd.
   strictCheck =
     pkgs.runCommand "ix-sdk-python-strict"
-      {
-        inherit src;
-        nativeBuildInputs = [
-          pkgs.zuban
-          pkgs.ruff
-          python
-        ];
-        strictDeps = true;
-        meta = {
-          description = "Strict zuban + ruff ANN type check over the public ix-sdk Python sources";
-          homepage = "https://github.com/indexable-inc/index";
-        };
-      }
-      ''
-        cd "$src"
-        zuban check --strict \
-          --python-executable ${lib.escapeShellArg pythonExecutable} \
-          --python-version ${python.pythonVersion} \
-          --platform ${pythonPlatform} \
-          ix_sdk
-        ruff check --no-cache ${ix.ruffAnnArgs} ix_sdk
-        touch "$out"
-      '';
+    {
+      inherit src;
+      nativeBuildInputs = [
+        pkgs.zuban
+        pkgs.ruff
+        python
+      ];
+      strictDeps = true;
+      meta = {
+        description = "Strict zuban + ruff ANN type check over the public ix-sdk Python sources";
+        homepage = "https://github.com/indexable-inc/index";
+      };
+    }
+    ''
+      cd "$src"
+      zuban check --strict \
+        --python-executable ${lib.escapeShellArg pythonExecutable} \
+        --python-version ${python.pythonVersion} \
+        --platform ${pythonPlatform} \
+        ix_sdk
+      ruff check --no-cache ${ix.ruffAnnArgs} ix_sdk
+      touch "$out"
+    '';
 }

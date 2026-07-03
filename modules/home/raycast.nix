@@ -17,8 +17,7 @@
   lib,
   pkgs,
   ...
-}:
-let
+}: let
   cfg = config.programs.raycast.focus;
 
   durationJson = builtins.toJSON {
@@ -35,26 +34,22 @@ let
   };
 
   # key -> JSON document Raycast stores as a plist <data> value
-  dataKeys = {
-    "raycast-startFocusSession-duration" = durationJson;
-  }
-  // lib.optionalAttrs (cfg.categoryBlockableItems != null) {
-    "raycast-focus-category-blockable-items" = cfg.categoryBlockableItems;
-  }
-  // lib.optionalAttrs (cfg.blockableItems != null) {
-    "raycast-startFocusSession-blockable-items" = cfg.blockableItems;
-  };
+  dataKeys =
+    {
+      "raycast-startFocusSession-duration" = durationJson;
+    }
+    // lib.optionalAttrs (cfg.categoryBlockableItems != null) {
+      "raycast-focus-category-blockable-items" = cfg.categoryBlockableItems;
+    }
+    // lib.optionalAttrs (cfg.blockableItems != null) {
+      "raycast-startFocusSession-blockable-items" = cfg.blockableItems;
+    };
 
-  writeString =
-    key: val:
-    "$DRY_RUN_CMD /usr/bin/defaults write ${domain} ${lib.escapeShellArg key} ${lib.escapeShellArg val}";
+  writeString = key: val: "$DRY_RUN_CMD /usr/bin/defaults write ${domain} ${lib.escapeShellArg key} ${lib.escapeShellArg val}";
 
   # `defaults write -data` takes contiguous hex; od emits the JSON bytes as hex.
-  writeData =
-    key: json:
-    "$DRY_RUN_CMD /usr/bin/defaults write ${domain} ${lib.escapeShellArg key} -data \"$(printf '%s' ${lib.escapeShellArg json} | /usr/bin/od -An -v -tx1 | /usr/bin/tr -d ' \\n')\"";
-in
-{
+  writeData = key: json: "$DRY_RUN_CMD /usr/bin/defaults write ${domain} ${lib.escapeShellArg key} -data \"$(printf '%s' ${lib.escapeShellArg json} | /usr/bin/od -An -v -tx1 | /usr/bin/tr -d ' \\n')\"";
+in {
   options.programs.raycast.focus = {
     enable = lib.mkEnableOption "declarative Raycast Focus session defaults (macOS)";
 
@@ -119,9 +114,9 @@ in
       }
     ];
 
-    home.activation.raycastFocus = config.lib.dag.entryAfter [ "writeBoundary" ] (
+    home.activation.raycastFocus = config.lib.dag.entryAfter ["writeBoundary"] (
       lib.concatStringsSep "\n" (
-        [ "$VERBOSE_ECHO 'configuring Raycast Focus defaults'" ]
+        ["$VERBOSE_ECHO 'configuring Raycast Focus defaults'"]
         ++ lib.mapAttrsToList writeString stringKeys
         ++ lib.mapAttrsToList writeData dataKeys
       )

@@ -8,17 +8,14 @@
 # `make-disk-image`, this builds on a plain aarch64-linux builder with no
 # /dev/kvm, e.g. hydra's OrbStack remote builder. `path` is `pkgs.path` from the
 # package autoArgs.
-{
-  path,
-}:
-let
+{path}: let
   nixos = import "${path}/nixos/lib/eval-config.nix" {
     system = "aarch64-linux";
-    modules = [ ./nixos.nix ];
+    modules = [./nixos.nix];
   };
 in
-# Expose the raw disk directly as the package output (the repart module produces
-# it at `${system.build.image}/${image.filePath}`).
-nixos.pkgs.runCommand "chrome-vm.raw" { } ''
-  cp "${nixos.config.system.build.image}/${nixos.config.image.filePath}" "$out"
-''
+  # Expose the raw disk directly as the package output (the repart module produces
+  # it at `${system.build.image}/${image.filePath}`).
+  nixos.pkgs.runCommand "chrome-vm.raw" {} ''
+    cp "${nixos.config.system.build.image}/${nixos.config.image.filePath}" "$out"
+  ''

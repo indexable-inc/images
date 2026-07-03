@@ -14,9 +14,8 @@
   lib,
   pkgs,
   ...
-}:
-let
-  hermes = config._module.args.hermes or { };
+}: let
+  hermes = config._module.args.hermes or {};
 
   # One env file holds every credential the daemon needs. Operators
   # using sops-nix or agenix can split it: each `*EnvFile` arg below
@@ -93,20 +92,14 @@ let
   ];
 
   validWebSearch =
-    if webSearch == null then
-      null
-    else
-      assert lib.assertOneOf "hermes.webSearch" webSearch webSearchBackends;
-      webSearch;
-  validTts =
-    assert lib.assertOneOf "hermes.tts" tts ttsBackends;
-    tts;
-  validMemory =
-    assert lib.assertOneOf "hermes.memory" memory memoryBackends;
-    memory;
+    if webSearch == null
+    then null
+    else assert lib.assertOneOf "hermes.webSearch" webSearch webSearchBackends; webSearch;
+  validTts = assert lib.assertOneOf "hermes.tts" tts ttsBackends; tts;
+  validMemory = assert lib.assertOneOf "hermes.memory" memory memoryBackends; memory;
 
   envFiles = lib.unique (
-    [ defaultEnvFile ]
+    [defaultEnvFile]
     ++ lib.optional telegram telegramEnvFile
     ++ lib.optional discord discordEnvFile
     ++ lib.optional (validWebSearch != null) webSearchEnvFile
@@ -116,8 +109,7 @@ let
     ++ lib.optional (validMemory != "holographic") memoryEnvFile
     ++ lib.optional apiServer apiServerEnvFile
   );
-in
-{
+in {
   services.hermes-agent = {
     enable = true;
 
@@ -149,7 +141,8 @@ in
     };
 
     extraPackages = builtins.attrValues {
-      inherit (pkgs)
+      inherit
+        (pkgs)
         # Github CLI is the most common "the agent needs to read or
         # comment on a PR" tool. Other ecosystem-specific binaries
         # belong in deployer-side overrides via `extraPackages`.
@@ -160,40 +153,41 @@ in
     # mkDefault so a sibling preset can swap the persona with a plain assignment.
     documents = lib.mapAttrs (_: lib.mkDefault) documents;
 
-    settings = {
-      model = {
-        default = modelDefault;
-        base_url = modelBaseUrl;
+    settings =
+      {
+        model = {
+          default = modelDefault;
+          base_url = modelBaseUrl;
+        };
+
+        # `all` exposes the full upstream toolset (terminal, files, web,
+        # vision, image, voice, delegation, memory). Narrow this per
+        # deployment by listing toolset names if a node should be more
+        # locked down.
+        toolsets = ["all"];
+
+        terminal = {
+          backend = "local";
+          cwd = ".";
+          timeout = 180;
+        };
+
+        agent = {
+          max_turns = 60;
+          verbose = false;
+        };
+
+        memory = {
+          provider = validMemory;
+          memory_enabled = true;
+          user_profile_enabled = true;
+        };
+
+        compression.enabled = true;
+      }
+      // lib.optionalAttrs (validWebSearch != null) {
+        web.backend = validWebSearch;
       };
-
-      # `all` exposes the full upstream toolset (terminal, files, web,
-      # vision, image, voice, delegation, memory). Narrow this per
-      # deployment by listing toolset names if a node should be more
-      # locked down.
-      toolsets = [ "all" ];
-
-      terminal = {
-        backend = "local";
-        cwd = ".";
-        timeout = 180;
-      };
-
-      agent = {
-        max_turns = 60;
-        verbose = false;
-      };
-
-      memory = {
-        provider = validMemory;
-        memory_enabled = true;
-        user_profile_enabled = true;
-      };
-
-      compression.enabled = true;
-    }
-    // lib.optionalAttrs (validWebSearch != null) {
-      web.backend = validWebSearch;
-    };
 
     # Filesystem MCP server pointed at the workspace so the agent can
     # read and write project files through a typed protocol instead of

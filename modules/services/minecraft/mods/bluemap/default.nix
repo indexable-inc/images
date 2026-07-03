@@ -9,8 +9,7 @@
   lib,
   pkgs,
   ...
-}:
-let
+}: let
   cfg = config.services.minecraft;
   modCfg = cfg.mods.bluemap or null;
   pluginCfg = cfg.plugins.bluemap or null;
@@ -20,10 +19,13 @@ let
     port = 8100;
     mysql = false;
   };
-  modSettings = if modCfg == null then { } else builtins.removeAttrs modCfg [ "enable" ];
+  modSettings =
+    if modCfg == null
+    then {}
+    else builtins.removeAttrs modCfg ["enable"];
   pluginSettings =
-    if pluginCfg == null then
-      { }
+    if pluginCfg == null
+    then {}
     else
       builtins.removeAttrs pluginCfg [
         "enable"
@@ -49,14 +51,13 @@ let
       };
     };
   };
-  prefixedFiles =
-    prefix:
+  prefixedFiles = prefix:
     lib.mapAttrs' (path: value: {
       name = "${prefix}/${path}";
       inherit value;
-    }) bluemapFiles;
-in
-{
+    })
+    bluemapFiles;
+in {
   config = lib.mkIf (modEnabled || pluginEnabled) {
     ix.networking.portClaims.bluemap = {
       protocol = "tcp";
@@ -65,7 +66,7 @@ in
       description = "BlueMap web server";
     };
 
-    networking.firewall.allowedTCPPorts = [ merged.port ];
+    networking.firewall.allowedTCPPorts = [merged.port];
 
     services = {
       minecraft = {
@@ -76,7 +77,7 @@ in
       mysql = lib.mkIf merged.mysql {
         enable = true;
         package = lib.mkDefault pkgs.mariadb;
-        ensureDatabases = [ "bluemap" ];
+        ensureDatabases = ["bluemap"];
         ensureUsers = [
           {
             name = "minecraft";

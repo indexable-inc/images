@@ -4,9 +4,9 @@
   lib,
   pkgs,
   ...
-}:
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     mkEnableOption
     mkIf
     mkOption
@@ -19,7 +19,7 @@ let
   dashboards = pkgs.linkFarm "ix-observability-dashboards" [
     {
       name = "overview.json";
-      path = import ./_dashboards/overview.nix { inherit pkgs; };
+      path = import ./_dashboards/overview.nix {inherit pkgs;};
     }
   ];
 
@@ -28,33 +28,35 @@ let
   collectorEnabled = cfg.collector.enable;
   forwardEnabled = cfg.collector.forward.enable || (agentEnabled && !stackEnabled);
   forwardEndpoint =
-    if cfg.collector.forward.endpoint != null then
-      cfg.collector.forward.endpoint
-    else
-      cfg.agent.endpoint;
+    if cfg.collector.forward.endpoint != null
+    then cfg.collector.forward.endpoint
+    else cfg.agent.endpoint;
   clickhouseExporterEnabled = stackEnabled || cfg.collector.clickhouse.enable;
   exporterNames =
     lib.optional clickhouseExporterEnabled "clickhouse" ++ lib.optional forwardEnabled "otlp";
-  filelogEnabled = agentEnabled && cfg.agent.filelog.paths != [ ];
+  filelogEnabled = agentEnabled && cfg.agent.filelog.paths != [];
   journaldEnabled = agentEnabled && cfg.agent.journal.enable;
   hostMetricsEnabled = agentEnabled && cfg.agent.hostMetrics.enable;
   listenAddress = cfg.collector.listenAddress;
   listenGrpcEndpoint = "${listenAddress}:${toString cfg.collector.grpcPort}";
   listenHttpEndpoint = "${listenAddress}:${toString cfg.collector.httpPort}";
-  resourceAttributes = {
-    "ix.collector.node" = config.networking.hostName;
-    "service.namespace" = "ix";
-    "deployment.environment" = cfg.environment;
-  }
-  // cfg.resourceAttributes;
-  resourceProcessorAttributes = lib.mapAttrsToList (key: value: {
-    inherit key value;
-    action = "insert";
-  }) resourceAttributes;
+  resourceAttributes =
+    {
+      "ix.collector.node" = config.networking.hostName;
+      "service.namespace" = "ix";
+      "deployment.environment" = cfg.environment;
+    }
+    // cfg.resourceAttributes;
+  resourceProcessorAttributes =
+    lib.mapAttrsToList (key: value: {
+      inherit key value;
+      action = "insert";
+    })
+    resourceAttributes;
   clickhouseClient = "${cfg.clickhouse.package}/bin/clickhouse";
   queryTool = ix.writeNushellApplication pkgs {
     name = "ix-observe";
-    runtimeInputs = [ cfg.clickhouse.package ];
+    runtimeInputs = [cfg.clickhouse.package];
     text = ''
       # nu
       let clickhouse_args = [
@@ -108,8 +110,7 @@ let
     '';
     meta.description = "Query ix OpenTelemetry data in ClickHouse as JSONEachRow";
   };
-in
-{
+in {
   options.services.ix-observability = {
     enable = mkEnableOption "a self-hosted OpenTelemetry, ClickHouse, and Grafana stack";
 
@@ -128,7 +129,7 @@ in
           types.str
         ]
       );
-      default = { };
+      default = {};
       description = "Extra resource attributes inserted by the collector when the signal does not already set them.";
     };
 
@@ -293,8 +294,8 @@ in
 
       filelog.paths = mkOption {
         type = types.listOf types.str;
-        default = [ ];
-        example = [ "/var/log/my-service/*.log" ];
+        default = [];
+        example = ["/var/log/my-service/*.log"];
         description = "Log file globs collected with the OTel filelog receiver.";
       };
 
@@ -350,9 +351,15 @@ in
         # Seeded with mkOptionDefault (not a literal `default`, which would tie
         # at priority 1500 and conflict for str) so a downstream mkDefault wins.
         clickhouse.listenAddress = mkOptionDefault (
-          if cfg.clickhouse.openFirewall then "0.0.0.0" else cfg.clickhouse.host
+          if cfg.clickhouse.openFirewall
+          then "0.0.0.0"
+          else cfg.clickhouse.host
         );
-        collector.listenAddress = mkOptionDefault (if cfg.stack.enable then "0.0.0.0" else "127.0.0.1");
+        collector.listenAddress = mkOptionDefault (
+          if cfg.stack.enable
+          then "0.0.0.0"
+          else "127.0.0.1"
+        );
       };
     }
     (mkIf stackEnabled {
@@ -404,7 +411,7 @@ in
     (mkIf collectorEnabled {
       assertions = [
         {
-          assertion = exporterNames != [ ];
+          assertion = exporterNames != [];
           message = "services.ix-observability.collector needs at least one exporter: enable stack, collector.clickhouse, or collector.forward.";
         }
         {
@@ -418,37 +425,38 @@ in
         package = cfg.collector.package;
         validateConfigFile = cfg.collector.validateConfig;
         settings = {
-          receivers = {
-            otlp.protocols = {
-              grpc.endpoint = listenGrpcEndpoint;
-              http.endpoint = listenHttpEndpoint;
-            };
-          }
-          // lib.optionalAttrs hostMetricsEnabled {
-            hostmetrics = {
-              collection_interval = "15s";
-              scrapers = {
-                cpu = { };
-                disk = { };
-                filesystem = { };
-                load = { };
-                memory = { };
-                network = { };
-                paging = { };
-                processes = { };
+          receivers =
+            {
+              otlp.protocols = {
+                grpc.endpoint = listenGrpcEndpoint;
+                http.endpoint = listenHttpEndpoint;
               };
+            }
+            // lib.optionalAttrs hostMetricsEnabled {
+              hostmetrics = {
+                collection_interval = "15s";
+                scrapers = {
+                  cpu = {};
+                  disk = {};
+                  filesystem = {};
+                  load = {};
+                  memory = {};
+                  network = {};
+                  paging = {};
+                  processes = {};
+                };
+              };
+            }
+            // lib.optionalAttrs filelogEnabled {
+              "filelog/app" = {
+                include = cfg.agent.filelog.paths;
+                start_at = "beginning";
+                include_file_path = true;
+              };
+            }
+            // lib.optionalAttrs journaldEnabled {
+              journald = {};
             };
-          }
-          // lib.optionalAttrs filelogEnabled {
-            "filelog/app" = {
-              include = cfg.agent.filelog.paths;
-              start_at = "beginning";
-              include_file_path = true;
-            };
-          }
-          // lib.optionalAttrs journaldEnabled {
-            journald = { };
-          };
 
           processors = {
             memory_limiter = {
@@ -498,10 +506,10 @@ in
           extensions.health_check.endpoint = "127.0.0.1:${toString cfg.collector.healthPort}";
 
           service = {
-            extensions = [ "health_check" ];
+            extensions = ["health_check"];
             pipelines = {
               traces = {
-                receivers = [ "otlp" ];
+                receivers = ["otlp"];
                 processors = [
                   "memory_limiter"
                   "resource"
@@ -510,7 +518,7 @@ in
                 exporters = exporterNames;
               };
               metrics = {
-                receivers = [ "otlp" ] ++ lib.optional hostMetricsEnabled "hostmetrics";
+                receivers = ["otlp"] ++ lib.optional hostMetricsEnabled "hostmetrics";
                 processors = [
                   "memory_limiter"
                   "resource"
@@ -519,11 +527,12 @@ in
                 exporters = exporterNames;
               };
               logs = {
-                receivers = [
-                  "otlp"
-                ]
-                ++ lib.optional filelogEnabled "filelog/app"
-                ++ lib.optional journaldEnabled "journald";
+                receivers =
+                  [
+                    "otlp"
+                  ]
+                  ++ lib.optional filelogEnabled "filelog/app"
+                  ++ lib.optional journaldEnabled "journald";
                 processors = [
                   "memory_limiter"
                   "resource"
@@ -571,7 +580,7 @@ in
     (mkIf cfg.grafana.enable {
       services.grafana = {
         enable = true;
-        declarativePlugins = [ pkgs.grafanaPlugins.grafana-clickhouse-datasource ];
+        declarativePlugins = [pkgs.grafanaPlugins.grafana-clickhouse-datasource];
         openFirewall = cfg.grafana.openFirewall;
         settings = {
           server = {
@@ -674,7 +683,7 @@ in
     })
 
     (mkIf cfg.query.enable {
-      environment.systemPackages = [ queryTool ];
+      environment.systemPackages = [queryTool];
     })
   ];
 }

@@ -9,7 +9,7 @@
   # so that one trusted key verifies both ix's builds and index's published
   # packages (pushed by cache-push.yml).
   nixConfig = {
-    extra-substituters = [ "https://cache.ix.dev" ];
+    extra-substituters = ["https://cache.ix.dev"];
     extra-trusted-public-keys = [
       "ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI="
     ];
@@ -20,7 +20,7 @@
     # disabled". Declared here so any eval against this flake (CI's
     # `accept-flake-config` runs, a local `nix flake check`, `nix build
     # .#checks.<sys>.<name>`) picks it up from one source of truth.
-    extra-experimental-features = [ "ca-derivations" ];
+    extra-experimental-features = ["ca-derivations"];
   };
 
   inputs = {
@@ -172,114 +172,112 @@
     };
   };
 
-  outputs =
-    {
-      self,
-      nixpkgs,
-      rust-overlay,
-      home-manager,
-      hermes-agent,
-      btop-src,
-      drgn-src,
-      perftest-src,
-      pg-uint128-src,
-      fff-src,
-      nu-jupyter-kernel-src,
-      launchk-src,
-      snix-src,
-      clippy-fork,
-      ghostty,
-      skills,
-      examples,
-      tests,
-      bench-filesystem,
-      site,
-      ...
-    }:
-    let
-      inherit (nixpkgs) lib;
+  outputs = {
+    self,
+    nixpkgs,
+    rust-overlay,
+    home-manager,
+    hermes-agent,
+    btop-src,
+    drgn-src,
+    perftest-src,
+    pg-uint128-src,
+    fff-src,
+    nu-jupyter-kernel-src,
+    launchk-src,
+    snix-src,
+    clippy-fork,
+    ghostty,
+    skills,
+    examples,
+    tests,
+    bench-filesystem,
+    site,
+    ...
+  }: let
+    inherit (nixpkgs) lib;
 
-      # The flake's own source revision, threaded into `ix` so packages can
-      # stamp the running build (e.g. the MCP server reports it as its
-      # `serverInfo.version`). Clean tree -> the commit hash; dirty tree ->
-      # `<commit>-dirty`; neither (eval from a non-git source) -> "dev".
-      rev = self.rev or self.dirtyRev or "dev";
+    # The flake's own source revision, threaded into `ix` so packages can
+    # stamp the running build (e.g. the MCP server reports it as its
+    # `serverInfo.version`). Clean tree -> the commit hash; dirty tree ->
+    # `<commit>-dirty`; neither (eval from a non-git source) -> "dev".
+    rev = self.rev or self.dirtyRev or "dev";
 
-      # Commit time of that revision as unix epoch seconds, threaded alongside
-      # `rev` so a build can stamp a human date and relative age. Under
-      # reproducible builds there is no wall-clock compile time; this is the
-      # source date Nix already records (`self.lastModified`): the commit time
-      # on a clean tree, the working-tree mtime on a dirty one. `0` when
-      # evaluated from a non-git source.
-      revEpoch = self.lastModified or 0;
+    # Commit time of that revision as unix epoch seconds, threaded alongside
+    # `rev` so a build can stamp a human date and relative age. Under
+    # reproducible builds there is no wall-clock compile time; this is the
+    # source date Nix already records (`self.lastModified`): the commit time
+    # on a clean tree, the working-tree mtime on a dirty one. `0` when
+    # evaluated from a non-git source.
+    revEpoch = self.lastModified or 0;
 
-      # All path literals the flake exposes. Centralized so lib/ and
-      # lib/per-system.nix have a single source of truth.
-      # The data-subtree entries below resolve to the `outPath` of relative-path
-      # inputs (declared `flake = false` above) instead of bare `./<dir>`
-      # literals, so each consumer's source identity is scoped to just that
-      # subtree. Nix-code roots the flake imports directly (`modules`,
-      # `packagesRoot`) and the whole-repo `root` (the lint source intentionally
-      # covers the entire tree) stay ordinary relative paths: those are
-      # import-time / whole-repo by design, not per-subtree source identity.
-      paths = {
-        root = ./.;
-        skills = skills.outPath;
-        modules = ./modules;
-        examples = examples.outPath;
-        tests = tests.outPath;
-        bench.filesystem = bench-filesystem.outPath;
-        site = site.outPath;
-        pgUint128Src = pg-uint128-src;
-        packagesRoot = ./packages;
-        minecraftCatalogs = ./packages/minecraft/catalogs;
-        minecraftMods = ./packages/minecraft/catalogs/mods;
-        minecraftPaperPlugins = ./packages/minecraft/catalogs/plugins/paper;
-        minecraftVelocityPlugins = ./packages/minecraft/catalogs/plugins/velocity;
-        minecraftLoaders = {
-          paper = ./packages/minecraft/catalogs/loaders/paper;
-          velocity = ./packages/minecraft/catalogs/loaders/velocity;
-          fabric = ./packages/minecraft/catalogs/loaders/fabric;
-        };
-        # Repo maintenance scripts and package-owned source updaters.
-        tools = {
-          cveScan = ./packages/cve-scan/cve-scan.py;
-          ixShellSyncIgnored = ./packages/maintainers/scripts/ix-shell-sync-ignored.py;
-          mcSource = ./packages/minecraft/tools/mc-source.nu;
-          updateSounds = ./packages/minecraft/tools/update-sounds.nu;
-          updateLoaders = ./packages/minecraft/tools/update-loaders.py;
-          updateMods = ./packages/minecraft/tools/update-mods.py;
-        };
+    # All path literals the flake exposes. Centralized so lib/ and
+    # lib/per-system.nix have a single source of truth.
+    # The data-subtree entries below resolve to the `outPath` of relative-path
+    # inputs (declared `flake = false` above) instead of bare `./<dir>`
+    # literals, so each consumer's source identity is scoped to just that
+    # subtree. Nix-code roots the flake imports directly (`modules`,
+    # `packagesRoot`) and the whole-repo `root` (the lint source intentionally
+    # covers the entire tree) stay ordinary relative paths: those are
+    # import-time / whole-repo by design, not per-subtree source identity.
+    paths = {
+      root = ./.;
+      skills = skills.outPath;
+      modules = ./modules;
+      examples = examples.outPath;
+      tests = tests.outPath;
+      bench.filesystem = bench-filesystem.outPath;
+      site = site.outPath;
+      pgUint128Src = pg-uint128-src;
+      packagesRoot = ./packages;
+      minecraftCatalogs = ./packages/minecraft/catalogs;
+      minecraftMods = ./packages/minecraft/catalogs/mods;
+      minecraftPaperPlugins = ./packages/minecraft/catalogs/plugins/paper;
+      minecraftVelocityPlugins = ./packages/minecraft/catalogs/plugins/velocity;
+      minecraftLoaders = {
+        paper = ./packages/minecraft/catalogs/loaders/paper;
+        velocity = ./packages/minecraft/catalogs/loaders/velocity;
+        fabric = ./packages/minecraft/catalogs/loaders/fabric;
       };
-
-      ix = import ./lib {
-        inherit
-          rev
-          revEpoch
-          nixpkgs
-          paths
-          rust-overlay
-          home-manager
-          hermes-agent
-          btop-src
-          drgn-src
-          perftest-src
-          fff-src
-          nu-jupyter-kernel-src
-          launchk-src
-          snix-src
-          clippy-fork
-          ghostty
-          ;
+      # Repo maintenance scripts and package-owned source updaters.
+      tools = {
+        cveScan = ./packages/cve-scan/cve-scan.py;
+        ixShellSyncIgnored = ./packages/maintainers/scripts/ix-shell-sync-ignored.py;
+        mcSource = ./packages/minecraft/tools/mc-source.nu;
+        updateSounds = ./packages/minecraft/tools/update-sounds.nu;
+        updateLoaders = ./packages/minecraft/tools/update-loaders.py;
+        updateMods = ./packages/minecraft/tools/update-mods.py;
       };
-      devSystems = [
-        "x86_64-linux"
-        "aarch64-linux"
-        "aarch64-darwin"
-        "x86_64-darwin"
-      ];
-      perSystem = lib.genAttrs devSystems (
-        system:
+    };
+
+    ix = import ./lib {
+      inherit
+        rev
+        revEpoch
+        nixpkgs
+        paths
+        rust-overlay
+        home-manager
+        hermes-agent
+        btop-src
+        drgn-src
+        perftest-src
+        fff-src
+        nu-jupyter-kernel-src
+        launchk-src
+        snix-src
+        clippy-fork
+        ghostty
+        ;
+    };
+    devSystems = [
+      "x86_64-linux"
+      "aarch64-linux"
+      "aarch64-darwin"
+      "x86_64-darwin"
+    ];
+    perSystem = lib.genAttrs devSystems (
+      system:
         import ./lib/per-system.nix {
           inherit
             system
@@ -290,100 +288,99 @@
             home-manager
             ;
         }
-      );
-      collect = key: lib.mapAttrs (_: out: out.${key}) perSystem;
-      rawPackages = collect "packages";
-      linuxDarwinAliases = perSystem.x86_64-linux.darwinPackageAliases or { };
-      packages =
-        rawPackages
-        // lib.genAttrs [
-          "aarch64-darwin"
-          "x86_64-darwin"
-        ] (system: rawPackages.${system} // (linuxDarwinAliases.${system} or { }));
-    in
-    {
-      lib = ix;
-      inherit (ix) nixosModules;
-      darwinModules = {
-        # Personal-but-shareable nix-darwin module for github:andrewgazelka: the
-        # Homebrew package set (GUI casks, the `mas` brew, Mac App Store apps).
-        # Companion to homeModules.andrewgazelka (which owns the home-manager
-        # services); import it from a darwin host to get the casks merged in. See
-        # users/andrewgazelka/darwin.nix.
-        andrewgazelka = ./users/andrewgazelka/darwin.nix;
-      };
-      homeModules = {
-        # Workstation-facing home-manager module: declare a service once, get a
-        # native launchd agent on macOS and native systemd user units on Linux.
-        portable-services = ix.portableServices.homeModule;
-        # Declarative-but-writable JSON config files (last-applied 3-way merge),
-        # for config an app rewrites at runtime. See lib/mutable-json.nix.
-        mutable-json = ix.mutableJson.homeModule;
-        # Reusable workstation module (macOS): declare Raycast Focus session
-        # defaults (title, filter mode, duration) and have them written to the
-        # com.raycast.macos defaults domain at switch time. Import it and set
-        # `programs.raycast.focus = { enable = true; ... }`. See
-        # modules/home/raycast.nix.
-        raycast = ./modules/home/raycast.nix;
-        # Agent CLI modules: Home Manager is the user-facing configuration
-        # surface, while the package wrappers remain the implementation detail.
-        claude-code = import ./packages/agent/home-manager/claude-code.nix {
-          indexPackages = system: packages.${system};
-        };
-        codex = import ./packages/agent/home-manager/codex.nix {
-          indexPackages = system: packages.${system};
-        };
-        # Personal-but-shareable workstation module for github:andrewgazelka: the
-        # ix.dev downtime watcher + boss bar overlay + the shared say-detached
-        # sound helper, all as portable services. Closed over the per-system
-        # flake packages so it resolves bossbar / minecraft-sound for the host it
-        # runs on. See users/andrewgazelka/home.nix.
-        andrewgazelka = import ./users/andrewgazelka/home.nix {
-          indexPackages = system: packages.${system};
-          portableServicesModule = ix.portableServices.homeModule;
-          claudeCodeModule = import ./packages/agent/home-manager/claude-code.nix {
-            indexPackages = system: packages.${system};
-          };
-          inherit ix;
-        };
-        # Reusable workstation module: draw one Minecraft boss bar per in-flight
-        # GitHub Actions run across a set of repos (green = running, filled by
-        # elapsed / average duration; purple = queued/unpicked). Import it and set
-        # `services.ciBars = { enable = true; repos = [ ... ]; }`. Closed over the
-        # per-system packages so it resolves the `bossbar` CLI for the host. See
-        # packages/minecraft/bossbar-overlay/ci-bars-home-module.nix.
-        ci-bars = import ./packages/minecraft/bossbar-overlay/ci-bars-home-module.nix {
-          indexPackages = system: packages.${system};
-          portableServicesModule = ix.portableServices.homeModule;
-          inherit ix;
-        };
-        # Workstation-facing module to sync corpus sources (agent/shell history,
-        # Slack/Linear exports, git repos) to an S3/R2 parquet archive and/or
-        # Mixedbread, as a portable timer service. Closed over the per-system
-        # packages so it resolves the `indexer` for the host. See
-        # packages/search/indexer/home-module.nix.
-        indexer = import ./packages/search/indexer/home-module.nix {
-          indexPackages = system: packages.${system};
-          portableServicesModule = ix.portableServices.homeModule;
-        };
-      };
-      overlays.default = ix.overlay;
-      templates = { };
-      inherit packages;
-      checks = collect "checks";
-      # Sharded keying of the same check derivations for the memory-bounded CI
-      # evaluator (the `.#check` gate and blast-radius); see lib/per-system.nix
-      # (ENG-2201). Kept separate from `checks` because its per-package
-      # `recurseForDerivations` groups are not derivations, which the flake
-      # `checks` schema requires.
-      ciChecks = collect "ciChecks";
-      # CI-only view of `packages` with each NixOS image swapped for its
-      # `toplevel` closure; cache-push.yml publishes this instead of the
-      # monolithic `*-oci.tar` archives, which nothing substitutes. Non-schema,
-      # so surfaced through `collect` like `ciChecks`. See lib/per-system.nix.
-      cachePushRoots = collect "cachePushRoots";
-      formatter = collect "formatter";
-      apps = collect "apps";
-      devShells = collect "devShells";
+    );
+    collect = key: lib.mapAttrs (_: out: out.${key}) perSystem;
+    rawPackages = collect "packages";
+    linuxDarwinAliases = perSystem.x86_64-linux.darwinPackageAliases or {};
+    packages =
+      rawPackages
+      // lib.genAttrs [
+        "aarch64-darwin"
+        "x86_64-darwin"
+      ] (system: rawPackages.${system} // (linuxDarwinAliases.${system} or {}));
+  in {
+    lib = ix;
+    inherit (ix) nixosModules;
+    darwinModules = {
+      # Personal-but-shareable nix-darwin module for github:andrewgazelka: the
+      # Homebrew package set (GUI casks, the `mas` brew, Mac App Store apps).
+      # Companion to homeModules.andrewgazelka (which owns the home-manager
+      # services); import it from a darwin host to get the casks merged in. See
+      # users/andrewgazelka/darwin.nix.
+      andrewgazelka = ./users/andrewgazelka/darwin.nix;
     };
+    homeModules = {
+      # Workstation-facing home-manager module: declare a service once, get a
+      # native launchd agent on macOS and native systemd user units on Linux.
+      portable-services = ix.portableServices.homeModule;
+      # Declarative-but-writable JSON config files (last-applied 3-way merge),
+      # for config an app rewrites at runtime. See lib/mutable-json.nix.
+      mutable-json = ix.mutableJson.homeModule;
+      # Reusable workstation module (macOS): declare Raycast Focus session
+      # defaults (title, filter mode, duration) and have them written to the
+      # com.raycast.macos defaults domain at switch time. Import it and set
+      # `programs.raycast.focus = { enable = true; ... }`. See
+      # modules/home/raycast.nix.
+      raycast = ./modules/home/raycast.nix;
+      # Agent CLI modules: Home Manager is the user-facing configuration
+      # surface, while the package wrappers remain the implementation detail.
+      claude-code = import ./packages/agent/home-manager/claude-code.nix {
+        indexPackages = system: packages.${system};
+      };
+      codex = import ./packages/agent/home-manager/codex.nix {
+        indexPackages = system: packages.${system};
+      };
+      # Personal-but-shareable workstation module for github:andrewgazelka: the
+      # ix.dev downtime watcher + boss bar overlay + the shared say-detached
+      # sound helper, all as portable services. Closed over the per-system
+      # flake packages so it resolves bossbar / minecraft-sound for the host it
+      # runs on. See users/andrewgazelka/home.nix.
+      andrewgazelka = import ./users/andrewgazelka/home.nix {
+        indexPackages = system: packages.${system};
+        portableServicesModule = ix.portableServices.homeModule;
+        claudeCodeModule = import ./packages/agent/home-manager/claude-code.nix {
+          indexPackages = system: packages.${system};
+        };
+        inherit ix;
+      };
+      # Reusable workstation module: draw one Minecraft boss bar per in-flight
+      # GitHub Actions run across a set of repos (green = running, filled by
+      # elapsed / average duration; purple = queued/unpicked). Import it and set
+      # `services.ciBars = { enable = true; repos = [ ... ]; }`. Closed over the
+      # per-system packages so it resolves the `bossbar` CLI for the host. See
+      # packages/minecraft/bossbar-overlay/ci-bars-home-module.nix.
+      ci-bars = import ./packages/minecraft/bossbar-overlay/ci-bars-home-module.nix {
+        indexPackages = system: packages.${system};
+        portableServicesModule = ix.portableServices.homeModule;
+        inherit ix;
+      };
+      # Workstation-facing module to sync corpus sources (agent/shell history,
+      # Slack/Linear exports, git repos) to an S3/R2 parquet archive and/or
+      # Mixedbread, as a portable timer service. Closed over the per-system
+      # packages so it resolves the `indexer` for the host. See
+      # packages/search/indexer/home-module.nix.
+      indexer = import ./packages/search/indexer/home-module.nix {
+        indexPackages = system: packages.${system};
+        portableServicesModule = ix.portableServices.homeModule;
+      };
+    };
+    overlays.default = ix.overlay;
+    templates = {};
+    inherit packages;
+    checks = collect "checks";
+    # Sharded keying of the same check derivations for the memory-bounded CI
+    # evaluator (the `.#check` gate and blast-radius); see lib/per-system.nix
+    # (ENG-2201). Kept separate from `checks` because its per-package
+    # `recurseForDerivations` groups are not derivations, which the flake
+    # `checks` schema requires.
+    ciChecks = collect "ciChecks";
+    # CI-only view of `packages` with each NixOS image swapped for its
+    # `toplevel` closure; cache-push.yml publishes this instead of the
+    # monolithic `*-oci.tar` archives, which nothing substitutes. Non-schema,
+    # so surfaced through `collect` like `ciChecks`. See lib/per-system.nix.
+    cachePushRoots = collect "cachePushRoots";
+    formatter = collect "formatter";
+    apps = collect "apps";
+    devShells = collect "devShells";
+  };
 }

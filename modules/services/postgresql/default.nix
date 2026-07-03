@@ -4,9 +4,9 @@
   lib,
   pkgs,
   ...
-}:
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     mkDefault
     mkEnableOption
     mkIf
@@ -16,8 +16,7 @@ let
     ;
   cfg = config.services.ix-postgresql;
   pgIsReady = lib.getExe' config.services.postgresql.package "pg_isready";
-in
-{
+in {
   options.services.ix-postgresql = {
     enable = mkEnableOption "PostgreSQL 18";
 

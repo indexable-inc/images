@@ -1,19 +1,19 @@
 /**
-  PRODUCER node: a Paper Minecraft server emitting domain facts, plus the
-  transport that ships them to the log.
+PRODUCER node: a Paper Minecraft server emitting domain facts, plus the
+transport that ships them to the log.
 
-  Two legs run side by side here, and keeping them separate is the point:
+Two legs run side by side here, and keeping them separate is the point:
 
-  - DOMAIN FACTS: the BlockEvents plugin writes one JSON Lines record per
-    placement to a file; a tail-to-Kafka service produces those records to the
-    `minecraft.block_events` topic on the log node. This is the log -> view
-    leg. Block placements are facts to aggregate and range-query, so they go
-    here, not through the telemetry collector.
+- DOMAIN FACTS: the BlockEvents plugin writes one JSON Lines record per
+  placement to a file; a tail-to-Kafka service produces those records to the
+  `minecraft.block_events` topic on the log node. This is the log -> view
+  leg. Block placements are facts to aggregate and range-query, so they go
+  here, not through the telemetry collector.
 
-  - SERVER TELEMETRY: the OTel agent forwards the server's own signals (logs,
-    host metrics, and any OTLP the server emits about TPS or JVM heap) to the
-    observability collector, landing in the `otel_*` ClickHouse tables. This is
-    the separate collector leg.
+- SERVER TELEMETRY: the OTel agent forwards the server's own signals (logs,
+  host metrics, and any OTLP the server emits about TPS or JVM heap) to the
+  observability collector, landing in the `otel_*` ClickHouse tables. This is
+  the separate collector leg.
 */
 {
   ix,
@@ -21,10 +21,9 @@
   nodes,
   pkgs,
   ...
-}:
-let
-  schema = import ./schema.nix { inherit lib; };
-  packages = import ./packages.nix { inherit ix pkgs; };
+}: let
+  schema = import ./schema.nix {inherit lib;};
+  packages = import ./packages.nix {inherit ix pkgs;};
 
   blockLog = "/var/lib/minecraft/block-events.jsonl";
   kafkaBin = "${pkgs.apacheKafka}/bin";
@@ -65,8 +64,7 @@ let
       '';
     }
   );
-in
-{
+in {
   # The Minecraft server with the custom block-events plugin.
   services.minecraft = {
     enable = true;
@@ -103,8 +101,8 @@ in
       "network-online.target"
       "minecraft.service"
     ];
-    wants = [ "network-online.target" ];
-    wantedBy = [ "multi-user.target" ];
+    wants = ["network-online.target"];
+    wantedBy = ["multi-user.target"];
     serviceConfig = {
       ExecStart = "${shipToKafka}";
       Restart = "always";
@@ -134,7 +132,7 @@ in
     resourceAttributes."ix.app" = "minecraft-blocks";
   };
 
-  environment.systemPackages = [ pkgs.apacheKafka ];
+  environment.systemPackages = [pkgs.apacheKafka];
 
   # Prove the producer leg is live: the plugin jar is installed and the
   # transport service is running.

@@ -2,8 +2,7 @@
   lib,
   pkgs,
   ...
-}:
-let
+}: let
   # The fleet maps the account store key `github_token` to this runtime file.
   # Only the path is known at eval time. The token bytes live in the file ix
   # writes when creating the VM.
@@ -76,8 +75,7 @@ let
     test -x ${credentialHelper}
     ${credentialHelper} get </dev/null >/dev/null
   '';
-in
-{
+in {
   # System git config in `/etc/gitconfig`. Credential helpers are additive
   # across scopes, so a user's `~/.config/git/config` can add its own helper but
   # does not replace this one; no user here defines a github helper, so this is
@@ -106,6 +104,6 @@ in
 
   ix.healthChecks.github-credential-helper = {
     description = "git is wired to the synced-token credential helper";
-    command = [ "${credentialHelperCheck}" ];
+    command = ["${credentialHelperCheck}"];
   };
 }

@@ -3,9 +3,9 @@
   lib,
   pkgs,
   ...
-}:
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     mkIf
     mkOption
     types
@@ -23,7 +23,7 @@ let
 
       attributes = mkOption {
         type = types.attrsOf types.str;
-        default = { };
+        default = {};
         description = "Extended attributes to apply to this path. Attribute names must use the `user.` namespace.";
       };
     };
@@ -31,20 +31,20 @@ let
 
   pathSegments = path: lib.drop 1 (lib.splitString "/" path);
   invalidPaths = lib.filter (
-    path:
-    let
+    path: let
       segments = pathSegments path;
     in
-    path == "" || !lib.hasPrefix "/" path || builtins.elem "" segments || builtins.elem ".." segments
+      path == "" || !lib.hasPrefix "/" path || builtins.elem "" segments || builtins.elem ".." segments
   ) (lib.attrNames cfg);
 
   invalidAttributeNames = lib.concatLists (
     lib.mapAttrsToList (
       path: entry:
-      map (name: "${path}: ${name}") (
-        lib.filter (name: !(lib.hasPrefix "user." name) || name == "user.") (lib.attrNames entry.attributes)
-      )
-    ) cfg
+        map (name: "${path}: ${name}") (
+          lib.filter (name: !(lib.hasPrefix "user." name) || name == "user.") (lib.attrNames entry.attributes)
+        )
+    )
+    cfg
   );
 
   setfattr = "${pkgs.attr}/bin/setfattr";
@@ -70,43 +70,40 @@ let
     }
   '';
 
-  applyPath =
-    path: entry:
-    let
-      escapedPath = lib.escapeShellArg path;
-      create = lib.optionalString entry.create ''
-        ${mkdir} -p -- ${escapedPath}
-      '';
-      setAttributes =
-        if entry.attributes == { } then
-          ":"
-        else
-          lib.concatStringsSep "\n" (
-            lib.mapAttrsToList (
-              name: value: "ix_set_xattr ${escapedPath} ${lib.escapeShellArg name} ${lib.escapeShellArg value}"
-            ) entry.attributes
-          );
-    in
-    ''
-      ${create}
-      if [ -L ${escapedPath} ]; then
-        printf '%s\n' ${lib.escapeShellArg "refusing to set extended attributes on symlink: ${path}"} >&2
-        exit 1
-      fi
-
-      if [ -e ${escapedPath} ]; then
-        ${setAttributes}
-      fi
+  applyPath = path: entry: let
+    escapedPath = lib.escapeShellArg path;
+    create = lib.optionalString entry.create ''
+      ${mkdir} -p -- ${escapedPath}
     '';
+    setAttributes =
+      if entry.attributes == {}
+      then ":"
+      else
+        lib.concatStringsSep "\n" (
+          lib.mapAttrsToList (
+            name: value: "ix_set_xattr ${escapedPath} ${lib.escapeShellArg name} ${lib.escapeShellArg value}"
+          )
+          entry.attributes
+        );
+  in ''
+    ${create}
+    if [ -L ${escapedPath} ]; then
+      printf '%s\n' ${lib.escapeShellArg "refusing to set extended attributes on symlink: ${path}"} >&2
+      exit 1
+    fi
+
+    if [ -e ${escapedPath} ]; then
+      ${setAttributes}
+    fi
+  '';
 
   applyScript = lib.concatStringsSep "\n" (
-    [ applyAttributeFunction ] ++ lib.mapAttrsToList applyPath cfg
+    [applyAttributeFunction] ++ lib.mapAttrsToList applyPath cfg
   );
-in
-{
+in {
   options.ix.extendedAttributes = mkOption {
     type = types.attrsOf xattrEntryType;
-    default = { };
+    default = {};
     description = ''
       Extended attributes to apply to runtime filesystem paths during system
       activation. Keys are absolute paths. Missing paths are skipped unless
@@ -117,19 +114,19 @@ in
     '';
   };
 
-  config = mkIf (cfg != { }) {
+  config = mkIf (cfg != {}) {
     assertions = [
       {
-        assertion = invalidPaths == [ ];
+        assertion = invalidPaths == [];
         message = "ix.extendedAttributes keys must be absolute paths without empty or '..' segments: ${lib.concatStringsSep ", " invalidPaths}";
       }
       {
-        assertion = invalidAttributeNames == [ ];
+        assertion = invalidAttributeNames == [];
         message = "ix.extendedAttributes attribute names must use the user.* namespace: ${lib.concatStringsSep ", " invalidAttributeNames}";
       }
     ];
 
-    environment.systemPackages = [ pkgs.attr ];
+    environment.systemPackages = [pkgs.attr];
 
     system.activationScripts.ix-extended-attributes.text = applyScript;
   };

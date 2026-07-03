@@ -3,13 +3,12 @@
   packageSet = true;
   flake = true;
   overlay = {
-    build =
-      {
-        lib,
-        path,
-        prev,
-        ...
-      }:
+    build = {
+      lib,
+      path,
+      prev,
+      ...
+    }:
       lib.callPackageWith prev path {
         pkgs = prev;
       };

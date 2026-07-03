@@ -9,8 +9,7 @@
   # (lib/packages.nix); the overlay path leaves it null so `pkgs.*` carries no
   # updater. Same nullable-writer pattern as claude-code / yc.
   updateScriptWriter ? null,
-}:
-let
+}: let
   # Prebuilt binary is x86_64-linux only; the package-set/flake targets and
   # meta.platforms below gate that, so the unsupported-system throw is redundant.
   targets = {
@@ -21,8 +20,8 @@ let
   # Bump the version/url in pins.json, then `nix run .#update` re-pins the hash.
   pin = ix.pins.loadPin ./pins.json "vector";
   updateScript =
-    if updateScriptWriter == null then
-      null
+    if updateScriptWriter == null
+    then null
     else
       ix.pins.mkUpdater {
         writeNushellApplication = updateScriptWriter;
@@ -31,37 +30,37 @@ let
         relPath = "packages/vector-bin/pins.json";
       };
 in
-stdenv.mkDerivation {
-  pname = "vector";
-  inherit (pin) version;
+  stdenv.mkDerivation {
+    pname = "vector";
+    inherit (pin) version;
 
-  src = fetchzip { inherit (pin) url hash; };
+    src = fetchzip {inherit (pin) url hash;};
 
-  passthru = lib.optionalAttrs (updateScript != null) { inherit updateScript; };
+    passthru = lib.optionalAttrs (updateScript != null) {inherit updateScript;};
 
-  nativeBuildInputs = [ autoPatchelfHook ];
-  buildInputs = [
-    stdenv.cc.cc.lib
-    stdenv.cc.libc
-  ];
+    nativeBuildInputs = [autoPatchelfHook];
+    buildInputs = [
+      stdenv.cc.cc.lib
+      stdenv.cc.libc
+    ];
 
-  installPhase = ''
-    # shell
-    runHook preInstall
+    installPhase = ''
+      # shell
+      runHook preInstall
 
-    install -Dm755 "$src/bin/vector" "$out/bin/vector"
-    install -Dm644 "$src/LICENSE" "$out/share/licenses/vector/LICENSE"
-    install -Dm644 "$src/NOTICE" "$out/share/doc/vector/NOTICE"
+      install -Dm755 "$src/bin/vector" "$out/bin/vector"
+      install -Dm644 "$src/LICENSE" "$out/share/licenses/vector/LICENSE"
+      install -Dm644 "$src/NOTICE" "$out/share/doc/vector/NOTICE"
 
-    runHook postInstall
-  '';
+      runHook postInstall
+    '';
 
-  meta = {
-    description = "High-performance observability data pipeline";
-    homepage = "https://vector.dev";
-    license = lib.licenses.mpl20;
-    mainProgram = "vector";
-    platforms = builtins.attrNames targets;
-    sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
-  };
-}
+    meta = {
+      description = "High-performance observability data pipeline";
+      homepage = "https://vector.dev";
+      license = lib.licenses.mpl20;
+      mainProgram = "vector";
+      platforms = builtins.attrNames targets;
+      sourceProvenance = [lib.sourceTypes.binaryNativeCode];
+    };
+  }

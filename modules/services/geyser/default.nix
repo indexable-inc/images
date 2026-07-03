@@ -5,9 +5,9 @@
   lib,
   pkgs,
   ...
-}:
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     mkEnableOption
     mkIf
     mkOption
@@ -15,70 +15,71 @@ let
     ;
 
   cfg = config.services.geyser;
-  formatValueType = (pkgs.formats.json { }).type;
+  formatValueType = (pkgs.formats.json {}).type;
   velocityPluginPath = "plugins/geyser/config.yml";
 
-  renderedConfig = {
-    bedrock = {
-      inherit (cfg.bedrock)
-        address
-        motd1
-        motd2
-        port
-        ;
-      "clone-remote-port" = cfg.bedrock.cloneRemotePort;
-      "server-name" = cfg.bedrock.serverName;
-      "compression-level" = cfg.bedrock.compressionLevel;
-      "enable-proxy-protocol" = cfg.bedrock.enableProxyProtocol;
-    };
+  renderedConfig =
+    {
+      bedrock = {
+        inherit
+          (cfg.bedrock)
+          address
+          motd1
+          motd2
+          port
+          ;
+        "clone-remote-port" = cfg.bedrock.cloneRemotePort;
+        "server-name" = cfg.bedrock.serverName;
+        "compression-level" = cfg.bedrock.compressionLevel;
+        "enable-proxy-protocol" = cfg.bedrock.enableProxyProtocol;
+      };
 
-    remote = {
-      inherit (cfg.remote) address port;
-      "auth-type" = cfg.remote.authType;
-      "use-proxy-protocol" = cfg.remote.useProxyProtocol;
-      "forward-hostname" = cfg.remote.forwardHostname;
-    };
+      remote = {
+        inherit (cfg.remote) address port;
+        "auth-type" = cfg.remote.authType;
+        "use-proxy-protocol" = cfg.remote.useProxyProtocol;
+        "forward-hostname" = cfg.remote.forwardHostname;
+      };
 
-    "floodgate-key-file" = cfg.floodgateKeyFile;
-    "command-suggestions" = cfg.commandSuggestions;
-    "passthrough-motd" = cfg.passthrough.motd;
-    "passthrough-player-counts" = cfg.passthrough.playerCounts;
-    "legacy-ping-passthrough" = cfg.passthrough.legacyPing;
-    "ping-passthrough-interval" = cfg.passthrough.interval;
-    "forward-player-ping" = cfg.forwardPlayerPing;
-    "max-players" = cfg.maxPlayers;
-    "debug-mode" = cfg.debug;
-    "show-cooldown" = cfg.showCooldown;
-    "show-coordinates" = cfg.showCoordinates;
-    "disable-bedrock-scaffolding" = cfg.disableBedrockScaffolding;
-    "emote-offhand-workaround" = cfg.emoteOffhandWorkaround;
-    "cache-images" = cfg.cacheImages;
-    "allow-custom-skulls" = cfg.allowCustomSkulls;
-    "max-visible-custom-skulls" = cfg.maxVisibleCustomSkulls;
-    "custom-skull-render-distance" = cfg.customSkullRenderDistance;
-    "add-non-bedrock-items" = cfg.addNonBedrockItems;
-    "above-bedrock-nether-building" = cfg.aboveBedrockNetherBuilding;
-    "force-resource-packs" = cfg.forceResourcePacks;
-    "xbox-achievements-enabled" = cfg.xboxAchievements;
-    "log-player-ip-addresses" = cfg.logPlayerIpAddresses;
-    "notify-on-new-bedrock-update" = cfg.notifyOnNewBedrockUpdate;
-    "unusable-space-block" = cfg.unusableSpaceBlock;
-    metrics.enabled = cfg.metrics.enable;
-    "scoreboard-packet-threshold" = cfg.scoreboardPacketThreshold;
-    "enable-proxy-connections" = cfg.enableProxyConnections;
-    inherit (cfg) mtu;
-    "use-direct-connection" = cfg.useDirectConnection;
-    "disable-compression" = cfg.disableCompression;
-    "config-version" = 4;
-  }
-  // cfg.settings;
-in
-{
+      "floodgate-key-file" = cfg.floodgateKeyFile;
+      "command-suggestions" = cfg.commandSuggestions;
+      "passthrough-motd" = cfg.passthrough.motd;
+      "passthrough-player-counts" = cfg.passthrough.playerCounts;
+      "legacy-ping-passthrough" = cfg.passthrough.legacyPing;
+      "ping-passthrough-interval" = cfg.passthrough.interval;
+      "forward-player-ping" = cfg.forwardPlayerPing;
+      "max-players" = cfg.maxPlayers;
+      "debug-mode" = cfg.debug;
+      "show-cooldown" = cfg.showCooldown;
+      "show-coordinates" = cfg.showCoordinates;
+      "disable-bedrock-scaffolding" = cfg.disableBedrockScaffolding;
+      "emote-offhand-workaround" = cfg.emoteOffhandWorkaround;
+      "cache-images" = cfg.cacheImages;
+      "allow-custom-skulls" = cfg.allowCustomSkulls;
+      "max-visible-custom-skulls" = cfg.maxVisibleCustomSkulls;
+      "custom-skull-render-distance" = cfg.customSkullRenderDistance;
+      "add-non-bedrock-items" = cfg.addNonBedrockItems;
+      "above-bedrock-nether-building" = cfg.aboveBedrockNetherBuilding;
+      "force-resource-packs" = cfg.forceResourcePacks;
+      "xbox-achievements-enabled" = cfg.xboxAchievements;
+      "log-player-ip-addresses" = cfg.logPlayerIpAddresses;
+      "notify-on-new-bedrock-update" = cfg.notifyOnNewBedrockUpdate;
+      "unusable-space-block" = cfg.unusableSpaceBlock;
+      metrics.enabled = cfg.metrics.enable;
+      "scoreboard-packet-threshold" = cfg.scoreboardPacketThreshold;
+      "enable-proxy-connections" = cfg.enableProxyConnections;
+      inherit (cfg) mtu;
+      "use-direct-connection" = cfg.useDirectConnection;
+      "disable-compression" = cfg.disableCompression;
+      "config-version" = 4;
+    }
+    // cfg.settings;
+in {
   options.services.geyser = {
     enable = mkEnableOption "Geyser Bedrock-to-Java bridge";
 
     platform = mkOption {
-      type = types.enum [ "velocity" ];
+      type = types.enum ["velocity"];
       default = "velocity";
       description = "Platform integration used for Geyser.";
     };
@@ -376,7 +377,7 @@ in
 
     settings = mkOption {
       type = types.attrsOf formatValueType;
-      default = { };
+      default = {};
       description = "Raw Geyser config.yml settings merged over the typed options.";
     };
   };

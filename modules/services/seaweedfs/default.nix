@@ -15,9 +15,9 @@
   lib,
   pkgs,
   ...
-}:
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     mkEnableOption
     mkIf
     mkOption
@@ -39,22 +39,22 @@ let
   # internal services only ever talk over loopback. `-ip.bind` is the
   # listen address, kept wide so the S3 port is reachable off-host while
   # the firewall (below) is what actually limits exposure to S3 alone.
-  args = [
-    "server"
-    "-dir=${stateDir}"
-    "-ip=127.0.0.1"
-    "-ip.bind=${cfg.bindAddress}"
-    "-s3"
-    "-s3.port=${toString cfg.port}"
-  ]
-  ++ optional (cfg.configFile != null) "-s3.config=${cfg.configFile}"
-  ++ cfg.extraArgs;
-in
-{
+  args =
+    [
+      "server"
+      "-dir=${stateDir}"
+      "-ip=127.0.0.1"
+      "-ip.bind=${cfg.bindAddress}"
+      "-s3"
+      "-s3.port=${toString cfg.port}"
+    ]
+    ++ optional (cfg.configFile != null) "-s3.config=${cfg.configFile}"
+    ++ cfg.extraArgs;
+in {
   options.services.ix-seaweedfs = {
     enable = mkEnableOption "SeaweedFS single-node S3 object storage";
 
-    package = mkPackageOption pkgs "seaweedfs" { };
+    package = mkPackageOption pkgs "seaweedfs" {};
 
     port = mkOption {
       type = types.port;
@@ -97,8 +97,8 @@ in
 
     extraArgs = mkOption {
       type = types.listOf types.str;
-      default = [ ];
-      example = [ "-volume.max=0" ];
+      default = [];
+      example = ["-volume.max=0"];
       description = "Extra arguments appended to `weed server`.";
     };
   };
@@ -144,21 +144,23 @@ in
 
     systemd.services.ix-seaweedfs = {
       description = "SeaweedFS single-node S3 object storage";
-      after = [ "network-online.target" ];
-      wants = [ "network-online.target" ];
-      wantedBy = [ "multi-user.target" ];
-      serviceConfig = ix.systemdHardening // {
-        Type = "simple";
-        ExecStart = "${weed} ${lib.escapeShellArgs args}";
-        Restart = "on-failure";
-        RestartSec = 2;
-        DynamicUser = true;
-        StateDirectory = "seaweedfs";
-        # `ProtectSystem=strict` makes CWD (`/`) read-only. `weed` resolves
-        # optional config files (filer.toml, security.toml) relative to CWD,
-        # so point the working directory at the writable state dir.
-        WorkingDirectory = stateDir;
-      };
+      after = ["network-online.target"];
+      wants = ["network-online.target"];
+      wantedBy = ["multi-user.target"];
+      serviceConfig =
+        ix.systemdHardening
+        // {
+          Type = "simple";
+          ExecStart = "${weed} ${lib.escapeShellArgs args}";
+          Restart = "on-failure";
+          RestartSec = 2;
+          DynamicUser = true;
+          StateDirectory = "seaweedfs";
+          # `ProtectSystem=strict` makes CWD (`/`) read-only. `weed` resolves
+          # optional config files (filer.toml, security.toml) relative to CWD,
+          # so point the working directory at the writable state dir.
+          WorkingDirectory = stateDir;
+        };
     };
   };
 }

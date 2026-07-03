@@ -1,7 +1,4 @@
-{
-  pkgs,
-}:
-let
+{pkgs}: let
   # nix-eval-jobs reports `cacheStatus` per attribute; nix-fast-build's
   # --skip-cached keys off it. For a floating content-addressed derivation
   # (the rust workspace units default to `contentAddressed = true`, see
@@ -24,7 +21,7 @@ let
   # Upstream: https://github.com/NixOS/nix/issues/12128
   #           https://github.com/nix-community/nix-eval-jobs/issues/403
   package = pkgs.nix-eval-jobs.overrideAttrs (old: {
-    patches = (old.patches or [ ]) ++ [ ./ca-output-cache-status.patch ];
+    patches = (old.patches or []) ++ [./ca-output-cache-status.patch];
   });
 
   # The override's real risk is the C++ rebuild against nix's libstore linking
@@ -34,31 +31,37 @@ let
   # daemon (absent in the sandbox).
   smoke =
     pkgs.runCommand "nix-eval-jobs-smoke"
-      {
-        nativeBuildInputs = [ package ];
-        strictDeps = true;
-      }
-      ''
-        help=$(nix-eval-jobs --help 2>&1) || true
-        case "$help" in
-          *"--check-cache-status"*) ;;
-          *)
-            echo "nix-eval-jobs --help did not print usage" >&2
-            printf '%s\n' "$help" >&2
-            exit 1
-            ;;
-        esac
-        mkdir -p "$out"
-      '';
+    {
+      nativeBuildInputs = [package];
+      strictDeps = true;
+    }
+    ''
+      help=$(nix-eval-jobs --help 2>&1) || true
+      case "$help" in
+        *"--check-cache-status"*) ;;
+        *)
+          echo "nix-eval-jobs --help did not print usage" >&2
+          printf '%s\n' "$help" >&2
+          exit 1
+          ;;
+      esac
+      mkdir -p "$out"
+    '';
 in
-package.overrideAttrs (old: {
-  passthru = (old.passthru or { }) // {
-    tests = (old.passthru.tests or { }) // {
-      inherit smoke;
-    };
-  };
-  meta = (old.meta or { }) // {
-    description = "nix-eval-jobs patched to report cacheStatus for floating content-addressed outputs (nix#12128 / nix-eval-jobs#403)";
-    mainProgram = "nix-eval-jobs";
-  };
-})
+  package.overrideAttrs (old: {
+    passthru =
+      (old.passthru or {})
+      // {
+        tests =
+          (old.passthru.tests or {})
+          // {
+            inherit smoke;
+          };
+      };
+    meta =
+      (old.meta or {})
+      // {
+        description = "nix-eval-jobs patched to report cacheStatus for floating content-addressed outputs (nix#12128 / nix-eval-jobs#403)";
+        mainProgram = "nix-eval-jobs";
+      };
+  })

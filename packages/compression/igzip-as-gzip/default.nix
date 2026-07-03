@@ -3,8 +3,7 @@
   lib,
   symlinkJoin,
   isa-l,
-}:
-let
+}: let
   writeBashApplication = ix.writeBashApplication ix.pkgs;
 
   clampLevels = ''
@@ -17,15 +16,14 @@ let
     done
   '';
 
-  mkWrapper =
-    {
-      name,
-      flags ? [ ],
-      description,
-    }:
+  mkWrapper = {
+    name,
+    flags ? [],
+    description,
+  }:
     writeBashApplication {
       inherit name;
-      runtimeInputs = [ isa-l ];
+      runtimeInputs = [isa-l];
       text = ''
         ${clampLevels}
         exec igzip ${lib.escapeShellArgs flags} "''${args[@]}"
@@ -40,7 +38,7 @@ let
 
   gunzip = mkWrapper {
     name = "gunzip";
-    flags = [ "-d" ];
+    flags = ["-d"];
     description = "gunzip-compatible wrapper backed by ISA-L igzip";
   };
 
@@ -53,15 +51,15 @@ let
     description = "zcat-compatible wrapper backed by ISA-L igzip";
   };
 in
-symlinkJoin {
-  name = "igzip-as-gzip";
-  paths = [
-    gzip
-    gunzip
-    zcat
-  ];
-  meta = {
-    description = "Drop-in gzip/gunzip/zcat replacement backed by ISA-L igzip";
-    mainProgram = "gzip";
-  };
-}
+  symlinkJoin {
+    name = "igzip-as-gzip";
+    paths = [
+      gzip
+      gunzip
+      zcat
+    ];
+    meta = {
+      description = "Drop-in gzip/gunzip/zcat replacement backed by ISA-L igzip";
+      mainProgram = "gzip";
+    };
+  }

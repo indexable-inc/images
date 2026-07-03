@@ -1,8 +1,7 @@
 # A forkable ix environment (RFC 0007). This is an ordinary NixOS module: write
 # your environment at the top level, and use `ix.dev.*` for the fleet and the
 # shared volume. After `ix init` this is the one file you edit.
-{ pkgs, ... }:
-{
+{pkgs, ...}: {
   # Your environment: applied to every VM (single or fleet).
   environment.systemPackages = [
     pkgs.ripgrep
@@ -17,7 +16,7 @@
   # shared volume below. Drop `ix.dev.fleet` entirely for a single VM.
   ix.dev.fleet = {
     agent.replicas = 2;
-    builder.dependsOn = [ "agent" ];
+    builder.dependsOn = ["agent"];
   };
 
   # One shared Claude (and ix) login for the fleet, over an SMB volume. The
@@ -25,6 +24,6 @@
   ix.dev.shared = {
     enable = true;
     ix = true; # also share ~/.n so a node can spawn more VMs (claude is shared by default)
-    excludeNodes = [ "builder" ];
+    excludeNodes = ["builder"];
   };
 }

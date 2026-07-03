@@ -4,9 +4,9 @@
   lib,
   pkgs,
   ...
-}:
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     mkEnableOption
     mkIf
     mkOption
@@ -85,7 +85,7 @@ let
   site = ix.buildSvelteSite pkgs {
     src = siteSrc;
     preBuild = "cp ${
-      (pkgs.formats.json { }).generate "resource-monitor-vm-config.json" metricConfig
+      (pkgs.formats.json {}).generate "resource-monitor-vm-config.json" metricConfig
     } src/lib/vm-config.json";
     serve = {
       enable = false;
@@ -117,37 +117,39 @@ let
     lib.mapAttrsToList (name: value: [
       "--${name}"
       (toString value)
-    ]) statsWriterSettings
+    ])
+    statsWriterSettings
   );
-in
-{
-  options.services.resource-monitor = metricOptionAttrs // {
-    enable = mkEnableOption "browser-accessible VM resource monitor";
+in {
+  options.services.resource-monitor =
+    metricOptionAttrs
+    // {
+      enable = mkEnableOption "browser-accessible VM resource monitor";
 
-    port = mkOption {
-      type = types.port;
-      default = 80;
-      description = "TCP port served by nginx.";
-    };
+      port = mkOption {
+        type = types.port;
+        default = 80;
+        description = "TCP port served by nginx.";
+      };
 
-    openFirewall = mkOption {
-      type = types.bool;
-      default = true;
-      description = "Whether to open the nginx port in the in-guest firewall.";
-    };
+      openFirewall = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Whether to open the nginx port in the in-guest firewall.";
+      };
 
-    intervalSeconds = mkOption {
-      type = types.ints.positive;
-      default = 1;
-      description = "Seconds between stats samples.";
-    };
+      intervalSeconds = mkOption {
+        type = types.ints.positive;
+        default = 1;
+        description = "Seconds between stats samples.";
+      };
 
-    runtimeDirectory = mkOption {
-      type = types.str;
-      default = "/run/resource-monitor";
-      description = "Directory where the generated stats JSON is written.";
+      runtimeDirectory = mkOption {
+        type = types.str;
+        default = "/run/resource-monitor";
+        description = "Directory where the generated stats JSON is written.";
+      };
     };
-  };
 
   config = mkIf cfg.enable {
     assertions = [
@@ -166,15 +168,17 @@ in
 
     systemd.services.resource-monitor = {
       description = "VM resource monitor stats";
-      wantedBy = [ "multi-user.target" ];
-      serviceConfig = ix.systemdHardening // {
-        Type = "simple";
-        DynamicUser = true;
-        RuntimeDirectory = runtimeDirectory;
-        RuntimeDirectoryMode = "0755";
-        ExecStart = lib.escapeShellArgs ([ (lib.getExe statsWriter) ] ++ statsWriterArgs);
-        Restart = "on-failure";
-      };
+      wantedBy = ["multi-user.target"];
+      serviceConfig =
+        ix.systemdHardening
+        // {
+          Type = "simple";
+          DynamicUser = true;
+          RuntimeDirectory = runtimeDirectory;
+          RuntimeDirectoryMode = "0755";
+          ExecStart = lib.escapeShellArgs ([(lib.getExe statsWriter)] ++ statsWriterArgs);
+          Restart = "on-failure";
+        };
     };
 
     services.nginx = {

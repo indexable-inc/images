@@ -9,16 +9,17 @@
     };
   };
 
-  outputs =
-    { self, index, ... }:
-    let
-      fleet = import ./ix.nix {
-        inherit index;
-        src = self;
-      };
-    in
-    {
-      ix.fleets.default = fleet;
-      inherit (fleet) nixosConfigurations;
+  outputs = {
+    self,
+    index,
+    ...
+  }: let
+    fleet = import ./ix.nix {
+      inherit index;
+      src = self;
     };
+  in {
+    ix.fleets.default = fleet;
+    inherit (fleet) nixosConfigurations;
+  };
 }

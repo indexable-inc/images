@@ -2,8 +2,7 @@
   ix,
   lib,
   pkgs ? ix.pkgs,
-}:
-let
+}: let
   fs = lib.fileset;
   src = fs.toSource {
     root = ./.;
@@ -14,11 +13,11 @@ let
     ];
   };
 in
-ix.buildUvApplication pkgs {
-  pname = "daily-scraper";
-  version = "0.1.0";
-  inherit src;
-  pyChecker = "zuban";
-  # pyarrow's binary wheel dlopens libstdc++ at import time.
-  runtimeLibraryInputs = [ pkgs.stdenv.cc.cc.lib ];
-}
+  ix.buildUvApplication pkgs {
+    pname = "daily-scraper";
+    version = "0.1.0";
+    inherit src;
+    pyChecker = "zuban";
+    # pyarrow's binary wheel dlopens libstdc++ at import time.
+    runtimeLibraryInputs = [pkgs.stdenv.cc.cc.lib];
+  }

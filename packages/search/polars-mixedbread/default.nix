@@ -2,8 +2,7 @@
   ix,
   lib,
   pkgs ? ix.pkgs,
-}:
-let
+}: let
   pyproject = lib.importTOML ./pyproject.toml;
   inherit (pyproject.project) version;
 
@@ -26,7 +25,9 @@ let
       x86_64-darwin = "macosx_10_12_x86_64";
       aarch64-darwin = "macosx_11_0_arm64";
     }
-    .${system} or (throw "polars-mixedbread: unsupported system ${system}");
+    .${
+      system
+    } or (throw "polars-mixedbread: unsupported system ${system}");
 
   pythonSource = builtins.path {
     name = "polars-mixedbread-python-source";
@@ -35,9 +36,10 @@ let
 
   wheel =
     pkgs.runCommand "polars-mixedbread-wheel"
-      {
-        strictDeps = true;
-        nativeBuildInputs = [
+    {
+      strictDeps = true;
+      nativeBuildInputs =
+        [
           pkgs.coreutils
           pkgs.python3
         ]
@@ -45,54 +47,54 @@ let
           pkgs.patchelf
           pkgs.removeReferencesTo
         ];
-        passthru = { inherit library; };
-        meta.description = "polars-mixedbread Python wheel (PyO3 IO source over Mixedbread search)";
-      }
-      ''
-        set -euo pipefail
+      passthru = {inherit library;};
+      meta.description = "polars-mixedbread Python wheel (PyO3 IO source over Mixedbread search)";
+    }
+    ''
+      set -euo pipefail
 
-        cdylib=""
-        for candidate in \
-          ${library}/lib/libpolars_mixedbread.so \
-          ${library}/lib/libpolars_mixedbread-*.so \
-          ${library}/lib/libpolars_mixedbread.dylib \
-          ${library}/lib/libpolars_mixedbread-*.dylib
-        do
-          if [ -f "$candidate" ]; then
-            cdylib="$candidate"
-            break
-          fi
-        done
-        if [ -z "$cdylib" ]; then
-          echo "polars-mixedbread: no cdylib under ${library}/lib" >&2
-          ls -la ${library}/lib >&2 || true
-          exit 1
+      cdylib=""
+      for candidate in \
+        ${library}/lib/libpolars_mixedbread.so \
+        ${library}/lib/libpolars_mixedbread-*.so \
+        ${library}/lib/libpolars_mixedbread.dylib \
+        ${library}/lib/libpolars_mixedbread-*.dylib
+      do
+        if [ -f "$candidate" ]; then
+          cdylib="$candidate"
+          break
         fi
+      done
+      if [ -z "$cdylib" ]; then
+        echo "polars-mixedbread: no cdylib under ${library}/lib" >&2
+        ls -la ${library}/lib >&2 || true
+        exit 1
+      fi
 
-        sanitized="$TMPDIR/$(basename "$cdylib")"
-        cp "$cdylib" "$sanitized"
-        chmod u+w "$sanitized"
+      sanitized="$TMPDIR/$(basename "$cdylib")"
+      cp "$cdylib" "$sanitized"
+      chmod u+w "$sanitized"
 
-        ${lib.optionalString (!isDarwin) ''
-          # Strip the build-time rpath and nixpkgs toolchain references so the wheel
-          # is not pinned to this store path.
-          if patchelf --print-rpath "$sanitized" >/dev/null 2>&1; then
-            patchelf --remove-rpath "$sanitized"
-          fi
-          remove-references-to \
-            -t ${pkgs.glibc} \
-            -t ${pkgs.stdenv.cc.cc.lib} \
-            "$sanitized"
-        ''}
+      ${lib.optionalString (!isDarwin) ''
+        # Strip the build-time rpath and nixpkgs toolchain references so the wheel
+        # is not pinned to this store path.
+        if patchelf --print-rpath "$sanitized" >/dev/null 2>&1; then
+          patchelf --remove-rpath "$sanitized"
+        fi
+        remove-references-to \
+          -t ${pkgs.glibc} \
+          -t ${pkgs.stdenv.cc.cc.lib} \
+          "$sanitized"
+      ''}
 
-        mkdir -p "$out"
-        python3 ${./wheel/mkwheel.py} \
-          --cdylib "$sanitized" \
-          --python-src ${pythonSource} \
-          --version ${version} \
-          --platform-tag ${platformTag} \
-          --out "$out"
-      '';
+      mkdir -p "$out"
+      python3 ${./wheel/mkwheel.py} \
+        --cdylib "$sanitized" \
+        --python-src ${pythonSource} \
+        --version ${version} \
+        --platform-tag ${platformTag} \
+        --out "$out"
+    '';
 
   # Predicate pushdown is the riskiest logic (a polarity bug here silently drops
   # rows), and it is pure Python: it depends only on Polars, not the cdylib. So
@@ -100,27 +102,27 @@ let
   # asserts the superset invariant, no built wheel or network required.
   pushdownTest =
     pkgs.runCommand "polars-mixedbread-pushdown-test"
-      {
-        strictDeps = true;
-        nativeBuildInputs = [ (pkgs.python3.withPackages (ps: [ ps.polars ])) ];
-      }
-      ''
-        python3 ${./tests/test_pushdown.py} ${./python/polars_mixedbread/_pushdown.py}
-        mkdir -p "$out"
-      '';
+    {
+      strictDeps = true;
+      nativeBuildInputs = [(pkgs.python3.withPackages (ps: [ps.polars]))];
+    }
+    ''
+      python3 ${./tests/test_pushdown.py} ${./python/polars_mixedbread/_pushdown.py}
+      mkdir -p "$out"
+    '';
 
   # Same idea for the `min_results` over-fetch loop: pure logic (driven by an
   # injected fetch), so its termination cases are checked offline.
   overfetchTest =
     pkgs.runCommand "polars-mixedbread-overfetch-test"
-      {
-        strictDeps = true;
-        nativeBuildInputs = [ (pkgs.python3.withPackages (ps: [ ps.polars ])) ];
-      }
-      ''
-        python3 ${./tests/test_overfetch.py} ${./python/polars_mixedbread/_overfetch.py}
-        mkdir -p "$out"
-      '';
+    {
+      strictDeps = true;
+      nativeBuildInputs = [(pkgs.python3.withPackages (ps: [ps.polars]))];
+    }
+    ''
+      python3 ${./tests/test_overfetch.py} ${./python/polars_mixedbread/_overfetch.py}
+      mkdir -p "$out"
+    '';
 
   # Strict type + annotation gate over the Python source (zuban --strict + ruff
   # ANN), mirroring buildUvApplication's pyChecker="zuban" path. polars is the
@@ -128,15 +130,19 @@ let
   pyStrictTest = ix.buildPyStrictCheck pkgs {
     pname = "polars-mixedbread";
     pythonSrc = pythonSource;
-    pythonPackages = ps: [ ps.polars ];
+    pythonPackages = ps: [ps.polars];
   };
 in
-wheel.overrideAttrs (old: {
-  passthru = (old.passthru or { }) // {
-    tests = (old.passthru.tests or { }) // {
-      pushdown = pushdownTest;
-      overfetch = overfetchTest;
-      pyStrict = pyStrictTest;
-    };
-  };
-})
+  wheel.overrideAttrs (old: {
+    passthru =
+      (old.passthru or {})
+      // {
+        tests =
+          (old.passthru.tests or {})
+          // {
+            pushdown = pushdownTest;
+            overfetch = overfetchTest;
+            pyStrict = pyStrictTest;
+          };
+      };
+  })

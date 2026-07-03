@@ -14,12 +14,11 @@
   pkgs,
   ix,
   writeNushellApplication,
-}:
-let
+}: let
   # mise.toml pins Elixir 1.19 on OTP 28; the launcher and the check build
   # against the same pairing so a deploy never runs code the gate did not.
-  elixir = ix.languages.elixir.toolchain pkgs { version = "1.19"; };
-  erlang = ix.languages.erlang.toolchain pkgs { version = "28"; };
+  elixir = ix.languages.elixir.toolchain pkgs {version = "1.19";};
+  erlang = ix.languages.erlang.toolchain pkgs {version = "28";};
 
   # The tree bin/run-nix stages at service start: the mix project, the
   # bundled example pack, and the engine wire fixtures. contracts/ sits
@@ -66,7 +65,7 @@ let
   # with the upstream release tarball; elixir_make still verifies it against
   # the checksum.exs pinned inside the dep before unpacking. Refresh the
   # url/hash in pins.json when a mix.lock bump moves lazy_html.
-  lazyHtmlNif = pkgs.fetchurl { inherit (pins."lazy-html-nif") url hash; };
+  lazyHtmlNif = pkgs.fetchurl {inherit (pins."lazy-html-nif") url hash;};
 
   # The required quality lane the standalone repo ran per PR (make ci:
   # compile --warnings-as-errors, format --check-formatted, credo, test),
@@ -90,7 +89,7 @@ let
       # The precompiled lazy_html .so is a generic linux-gnu build, so the
       # BEAM needs libstdc++ findable at dlopen time when the test suite
       # loads the NIF.
-      LD_LIBRARY_PATH = lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ];
+      LD_LIBRARY_PATH = lib.makeLibraryPath [pkgs.stdenv.cc.cc.lib];
     };
     # The elixir_make cache seed short-circuits the lazy_html NIF download (see
     # lazyHtmlNif above; mix/tasks/compile.elixir_make.ex reuses an existing
@@ -102,34 +101,36 @@ let
     '';
   };
 in
-(writeNushellApplication {
-  name = "symphony";
-  meta = {
-    description = "Elixir runtime for .sym agent workflows (control plane, LiveView dashboard, triggers)";
-    license = lib.licenses.asl20;
-  };
-  # codex is intentionally absent: bin/run-nix requires an authenticated
-  # codex on the operator's PATH and refuses to start otherwise, so the
-  # binary and its credentials stay host-owned.
-  runtimeInputs = [
-    pkgs.bash
-    pkgs.cacert
-    pkgs.coreutils
-    elixir
-    erlang
-    pkgs.gh
-    pkgs.git
-    pkgs.openssh
-  ];
-  text = ''
-    # nu
-    def --wrapped main [...args] {
-      exec ${src}/bin/run-nix ...$args
-    }
-  '';
-}).overrideAttrs
-  (old: {
-    passthru = (old.passthru or { }) // {
-      tests.elixir = elixirCheck;
+  (writeNushellApplication {
+    name = "symphony";
+    meta = {
+      description = "Elixir runtime for .sym agent workflows (control plane, LiveView dashboard, triggers)";
+      license = lib.licenses.asl20;
     };
+    # codex is intentionally absent: bin/run-nix requires an authenticated
+    # codex on the operator's PATH and refuses to start otherwise, so the
+    # binary and its credentials stay host-owned.
+    runtimeInputs = [
+      pkgs.bash
+      pkgs.cacert
+      pkgs.coreutils
+      elixir
+      erlang
+      pkgs.gh
+      pkgs.git
+      pkgs.openssh
+    ];
+    text = ''
+      # nu
+      def --wrapped main [...args] {
+        exec ${src}/bin/run-nix ...$args
+      }
+    '';
+  }).overrideAttrs
+  (old: {
+    passthru =
+      (old.passthru or {})
+      // {
+        tests.elixir = elixirCheck;
+      };
   })

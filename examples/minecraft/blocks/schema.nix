@@ -1,17 +1,16 @@
 /**
-  One source of truth for the block-place event.
+One source of truth for the block-place event.
 
-  The ClickHouse table DDL, the Kafka table-engine view, and the topic name are
-  all generated from the field list below, so those three cannot drift. The
-  Paper plugin writes the same record shape by hand (it is plain Java, not
-  generated), so keep that one writer in lockstep with this file.
+The ClickHouse table DDL, the Kafka table-engine view, and the topic name are
+all generated from the field list below, so those three cannot drift. The
+Paper plugin writes the same record shape by hand (it is plain Java, not
+generated), so keep that one writer in lockstep with this file.
 
-  A block placement is a domain fact. It carries a world, three signed block
-  coordinates, the block type, who placed it, and when. It is not server
-  telemetry, so it travels the log -> view path, never the OTel collector.
+A block placement is a domain fact. It carries a world, three signed block
+coordinates, the block type, who placed it, and when. It is not server
+telemetry, so it travels the log -> view path, never the OTel collector.
 */
-{ lib }:
-let
+{lib}: let
   # Minecraft coordinates are signed (negatives are legal), but ClickHouse
   # `mortonEncode` takes unsigned integers, so each axis is shifted into an
   # unsigned range by adding a fixed offset before encoding and subtracting it
@@ -100,15 +99,12 @@ let
   # world as a SQL fragment, so a query tool could pass a `{world:String}`
   # parameter while the integration check inlines the box's literal world via
   # `boxPredicate`.
-  axisPredicate =
-    axis:
-    "${axis} >= ${toString (builtins.elemAt box.${axis} 0)} AND ${axis} < ${
-      toString (builtins.elemAt box.${axis} 1)
-    }";
-  mkBoxPredicate =
-    world:
+  axisPredicate = axis: "${axis} >= ${toString (builtins.elemAt box.${axis} 0)} AND ${axis} < ${
+    toString (builtins.elemAt box.${axis} 1)
+  }";
+  mkBoxPredicate = world:
     lib.concatStringsSep "\n  AND " (
-      [ "world = ${world}" ]
+      ["world = ${world}"]
       ++ map axisPredicate [
         "x"
         "y"
@@ -146,20 +142,22 @@ let
   # actually prunes a raw-coordinate range query; the ORDER BY alone only sorts
   # the data so the per-granule boxes stay tight. GRANULARITY 1 = one index entry
   # per granule, the finest skip resolution.
-  skipIndexDefs = lib.concatMapStringsSep ",\n  " (
-    f: "INDEX idx_${f.name} ${f.name} TYPE minmax GRANULARITY 1"
-  ) mortonFields;
+  skipIndexDefs =
+    lib.concatMapStringsSep ",\n  " (
+      f: "INDEX idx_${f.name} ${f.name} TYPE minmax GRANULARITY 1"
+    )
+    mortonFields;
 
   # Ingest types for the Kafka engine table. ClickHouse recommends plain types
   # in a Kafka source table and letting the target table (and the implicit cast
   # in the materialized view's SELECT) apply storage encodings like
   # LowCardinality, so strip the LowCardinality wrapper for the queue.
-  ingestType =
-    chType:
-    let
-      m = builtins.match "LowCardinality\\((.*)\\)" chType;
-    in
-    if m == null then chType else builtins.head m;
+  ingestType = chType: let
+    m = builtins.match "LowCardinality\\((.*)\\)" chType;
+  in
+    if m == null
+    then chType
+    else builtins.head m;
   kafkaColumnDefs = lib.concatMapStringsSep ",\n  " (f: "${f.name} ${ingestType f.chType}") fields;
 
   # The view table. The sorting key linearizes (x, y, z) with the Z-order curve
@@ -197,8 +195,7 @@ let
   '';
 
   createDatabaseSql = "CREATE DATABASE IF NOT EXISTS ${database}";
-in
-{
+in {
   inherit
     fields
     mortonFields

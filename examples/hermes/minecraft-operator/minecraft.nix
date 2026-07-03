@@ -2,11 +2,9 @@
 # like examples/minecraft/survival minus the proxy stack; the one
 # operator-specific piece is the seeded RCON password shared with the
 # hermes node (see rcon.nix).
-{ lib, ... }:
-let
+{lib, ...}: let
   rcon = import ./rcon.nix;
-in
-{
+in {
   services.minecraft = {
     enable = true;
     version = "26.1.2";

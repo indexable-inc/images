@@ -1,9 +1,7 @@
 {
   ix,
   lib,
-}:
-
-let
+}: let
   # Read the package set from `ix` rather than a `pkgs` callPackage formal (which
   # `override` can't reach). `ix.pkgs` is the caller's set, the same value
   # callPackage would have auto-bound to a `pkgs` arg in the flake package set.
@@ -29,35 +27,35 @@ let
   };
   tuiModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-tui-python-module"
-      {
-        strictDeps = true;
-        propagatedBuildInputs = [ pkgs.python3.pkgs.numpy ];
-        meta.description = "ix-tui PyO3 module bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/tui"
-        mkdir -p "$site"
-        cp -r ${tuiPythonSource}/tui/. "$site/"
+    {
+      strictDeps = true;
+      propagatedBuildInputs = [pkgs.python3.pkgs.numpy];
+      meta.description = "ix-tui PyO3 module bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/tui"
+      mkdir -p "$site"
+      cp -r ${tuiPythonSource}/tui/. "$site/"
 
-        cdylib=""
-        for candidate in \
-          ${ix.rustWorkspace.units.libraries.tui_py}/lib/libtui_py.so \
-          ${ix.rustWorkspace.units.libraries.tui_py}/lib/libtui_py-*.so \
-          ${ix.rustWorkspace.units.libraries.tui_py}/lib/libtui_py.dylib \
-          ${ix.rustWorkspace.units.libraries.tui_py}/lib/libtui_py-*.dylib
-        do
-          if [ -f "$candidate" ]; then
-            cdylib="$candidate"
-            break
-          fi
-        done
-        if [ -z "$cdylib" ]; then
-          echo "ix-tui module: no cdylib under ${ix.rustWorkspace.units.libraries.tui_py}/lib" >&2
-          ls -la ${ix.rustWorkspace.units.libraries.tui_py}/lib >&2 || true
-          exit 1
+      cdylib=""
+      for candidate in \
+        ${ix.rustWorkspace.units.libraries.tui_py}/lib/libtui_py.so \
+        ${ix.rustWorkspace.units.libraries.tui_py}/lib/libtui_py-*.so \
+        ${ix.rustWorkspace.units.libraries.tui_py}/lib/libtui_py.dylib \
+        ${ix.rustWorkspace.units.libraries.tui_py}/lib/libtui_py-*.dylib
+      do
+        if [ -f "$candidate" ]; then
+          cdylib="$candidate"
+          break
         fi
-        install -m555 "$cdylib" "$site/_tui.abi3.so"
-      ''
+      done
+      if [ -z "$cdylib" ]; then
+        echo "ix-tui module: no cdylib under ${ix.rustWorkspace.units.libraries.tui_py}/lib" >&2
+        ls -la ${ix.rustWorkspace.units.libraries.tui_py}/lib >&2 || true
+        exit 1
+      fi
+      install -m555 "$cdylib" "$site/_tui.abi3.so"
+    ''
   );
 
   # The search package, baked into the pinned interpreter so every
@@ -71,34 +69,34 @@ let
   };
   searchModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-search-python-module"
-      {
-        strictDeps = true;
-        meta.description = "ix-search PyO3 module bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/search"
-        mkdir -p "$site"
-        cp -r ${searchPythonSource}/search/. "$site/"
+    {
+      strictDeps = true;
+      meta.description = "ix-search PyO3 module bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/search"
+      mkdir -p "$site"
+      cp -r ${searchPythonSource}/search/. "$site/"
 
-        cdylib=""
-        for candidate in \
-          ${ix.rustWorkspace.units.libraries.search_py}/lib/libsearch_py.so \
-          ${ix.rustWorkspace.units.libraries.search_py}/lib/libsearch_py-*.so \
-          ${ix.rustWorkspace.units.libraries.search_py}/lib/libsearch_py.dylib \
-          ${ix.rustWorkspace.units.libraries.search_py}/lib/libsearch_py-*.dylib
-        do
-          if [ -f "$candidate" ]; then
-            cdylib="$candidate"
-            break
-          fi
-        done
-        if [ -z "$cdylib" ]; then
-          echo "ix-search module: no cdylib under ${ix.rustWorkspace.units.libraries.search_py}/lib" >&2
-          ls -la ${ix.rustWorkspace.units.libraries.search_py}/lib >&2 || true
-          exit 1
+      cdylib=""
+      for candidate in \
+        ${ix.rustWorkspace.units.libraries.search_py}/lib/libsearch_py.so \
+        ${ix.rustWorkspace.units.libraries.search_py}/lib/libsearch_py-*.so \
+        ${ix.rustWorkspace.units.libraries.search_py}/lib/libsearch_py.dylib \
+        ${ix.rustWorkspace.units.libraries.search_py}/lib/libsearch_py-*.dylib
+      do
+        if [ -f "$candidate" ]; then
+          cdylib="$candidate"
+          break
         fi
-        install -m555 "$cdylib" "$site/_search.abi3.so"
-      ''
+      done
+      if [ -z "$cdylib" ]; then
+        echo "ix-search module: no cdylib under ${ix.rustWorkspace.units.libraries.search_py}/lib" >&2
+        ls -la ${ix.rustWorkspace.units.libraries.search_py}/lib >&2 || true
+        exit 1
+      fi
+      install -m555 "$cdylib" "$site/_search.abi3.so"
+    ''
   );
 
   # The embedded nushell engine, baked into the pinned interpreter so every
@@ -113,34 +111,34 @@ let
   };
   nuPyModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-nu-python-module"
-      {
-        strictDeps = true;
-        meta.description = "Embedded nushell engine (nu-py PyO3 module) bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/nu"
-        mkdir -p "$site"
-        cp -r ${nuPyPythonSource}/nu/. "$site/"
+    {
+      strictDeps = true;
+      meta.description = "Embedded nushell engine (nu-py PyO3 module) bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/nu"
+      mkdir -p "$site"
+      cp -r ${nuPyPythonSource}/nu/. "$site/"
 
-        cdylib=""
-        for candidate in \
-          ${ix.rustWorkspace.units.libraries.nu_py}/lib/libnu_py.so \
-          ${ix.rustWorkspace.units.libraries.nu_py}/lib/libnu_py-*.so \
-          ${ix.rustWorkspace.units.libraries.nu_py}/lib/libnu_py.dylib \
-          ${ix.rustWorkspace.units.libraries.nu_py}/lib/libnu_py-*.dylib
-        do
-          if [ -f "$candidate" ]; then
-            cdylib="$candidate"
-            break
-          fi
-        done
-        if [ -z "$cdylib" ]; then
-          echo "nu-py module: no cdylib under ${ix.rustWorkspace.units.libraries.nu_py}/lib" >&2
-          ls -la ${ix.rustWorkspace.units.libraries.nu_py}/lib >&2 || true
-          exit 1
+      cdylib=""
+      for candidate in \
+        ${ix.rustWorkspace.units.libraries.nu_py}/lib/libnu_py.so \
+        ${ix.rustWorkspace.units.libraries.nu_py}/lib/libnu_py-*.so \
+        ${ix.rustWorkspace.units.libraries.nu_py}/lib/libnu_py.dylib \
+        ${ix.rustWorkspace.units.libraries.nu_py}/lib/libnu_py-*.dylib
+      do
+        if [ -f "$candidate" ]; then
+          cdylib="$candidate"
+          break
         fi
-        install -m555 "$cdylib" "$site/_nu.abi3.so"
-      ''
+      done
+      if [ -z "$cdylib" ]; then
+        echo "nu-py module: no cdylib under ${ix.rustWorkspace.units.libraries.nu_py}/lib" >&2
+        ls -la ${ix.rustWorkspace.units.libraries.nu_py}/lib >&2 || true
+        exit 1
+      fi
+      install -m555 "$cdylib" "$site/_nu.abi3.so"
+    ''
   );
 
   # The astlog package, baked into the pinned interpreter so every session can
@@ -153,34 +151,34 @@ let
   };
   astlogModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-astlog-python-module"
-      {
-        strictDeps = true;
-        meta.description = "astlog PyO3 module bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/astlog"
-        mkdir -p "$site"
-        cp -r ${astlogPythonSource}/astlog/. "$site/"
+    {
+      strictDeps = true;
+      meta.description = "astlog PyO3 module bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/astlog"
+      mkdir -p "$site"
+      cp -r ${astlogPythonSource}/astlog/. "$site/"
 
-        cdylib=""
-        for candidate in \
-          ${ix.rustWorkspace.units.libraries.astlog_py}/lib/libastlog_py.so \
-          ${ix.rustWorkspace.units.libraries.astlog_py}/lib/libastlog_py-*.so \
-          ${ix.rustWorkspace.units.libraries.astlog_py}/lib/libastlog_py.dylib \
-          ${ix.rustWorkspace.units.libraries.astlog_py}/lib/libastlog_py-*.dylib
-        do
-          if [ -f "$candidate" ]; then
-            cdylib="$candidate"
-            break
-          fi
-        done
-        if [ -z "$cdylib" ]; then
-          echo "ix-astlog module: no cdylib under ${ix.rustWorkspace.units.libraries.astlog_py}/lib" >&2
-          ls -la ${ix.rustWorkspace.units.libraries.astlog_py}/lib >&2 || true
-          exit 1
+      cdylib=""
+      for candidate in \
+        ${ix.rustWorkspace.units.libraries.astlog_py}/lib/libastlog_py.so \
+        ${ix.rustWorkspace.units.libraries.astlog_py}/lib/libastlog_py-*.so \
+        ${ix.rustWorkspace.units.libraries.astlog_py}/lib/libastlog_py.dylib \
+        ${ix.rustWorkspace.units.libraries.astlog_py}/lib/libastlog_py-*.dylib
+      do
+        if [ -f "$candidate" ]; then
+          cdylib="$candidate"
+          break
         fi
-        install -m555 "$cdylib" "$site/_astlog.abi3.so"
-      ''
+      done
+      if [ -z "$cdylib" ]; then
+        echo "ix-astlog module: no cdylib under ${ix.rustWorkspace.units.libraries.astlog_py}/lib" >&2
+        ls -la ${ix.rustWorkspace.units.libraries.astlog_py}/lib >&2 || true
+        exit 1
+      fi
+      install -m555 "$cdylib" "$site/_astlog.abi3.so"
+    ''
   );
 
   # The scipql package, baked into the pinned interpreter so every session can
@@ -194,34 +192,34 @@ let
   };
   scipqlModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-scipql-python-module"
-      {
-        strictDeps = true;
-        meta.description = "scipql PyO3 module bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/scipql"
-        mkdir -p "$site"
-        cp -r ${scipqlPythonSource}/scipql/. "$site/"
+    {
+      strictDeps = true;
+      meta.description = "scipql PyO3 module bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/scipql"
+      mkdir -p "$site"
+      cp -r ${scipqlPythonSource}/scipql/. "$site/"
 
-        cdylib=""
-        for candidate in \
-          ${ix.rustWorkspace.units.libraries.scipql_py}/lib/libscipql_py.so \
-          ${ix.rustWorkspace.units.libraries.scipql_py}/lib/libscipql_py-*.so \
-          ${ix.rustWorkspace.units.libraries.scipql_py}/lib/libscipql_py.dylib \
-          ${ix.rustWorkspace.units.libraries.scipql_py}/lib/libscipql_py-*.dylib
-        do
-          if [ -f "$candidate" ]; then
-            cdylib="$candidate"
-            break
-          fi
-        done
-        if [ -z "$cdylib" ]; then
-          echo "ix-scipql module: no cdylib under ${ix.rustWorkspace.units.libraries.scipql_py}/lib" >&2
-          ls -la ${ix.rustWorkspace.units.libraries.scipql_py}/lib >&2 || true
-          exit 1
+      cdylib=""
+      for candidate in \
+        ${ix.rustWorkspace.units.libraries.scipql_py}/lib/libscipql_py.so \
+        ${ix.rustWorkspace.units.libraries.scipql_py}/lib/libscipql_py-*.so \
+        ${ix.rustWorkspace.units.libraries.scipql_py}/lib/libscipql_py.dylib \
+        ${ix.rustWorkspace.units.libraries.scipql_py}/lib/libscipql_py-*.dylib
+      do
+        if [ -f "$candidate" ]; then
+          cdylib="$candidate"
+          break
         fi
-        install -m555 "$cdylib" "$site/_scipql.abi3.so"
-      ''
+      done
+      if [ -z "$cdylib" ]; then
+        echo "ix-scipql module: no cdylib under ${ix.rustWorkspace.units.libraries.scipql_py}/lib" >&2
+        ls -la ${ix.rustWorkspace.units.libraries.scipql_py}/lib >&2 || true
+        exit 1
+      fi
+      install -m555 "$cdylib" "$site/_scipql.abi3.so"
+    ''
   );
 
   # The flecs-query package, baked into the pinned interpreter so every
@@ -235,34 +233,34 @@ let
   };
   flecsQueryModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-flecs-query-python-module"
-      {
-        strictDeps = true;
-        meta.description = "flecs-query PyO3 module bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/flecs_query"
-        mkdir -p "$site"
-        cp -r ${flecsQueryPythonSource}/flecs_query/. "$site/"
+    {
+      strictDeps = true;
+      meta.description = "flecs-query PyO3 module bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/flecs_query"
+      mkdir -p "$site"
+      cp -r ${flecsQueryPythonSource}/flecs_query/. "$site/"
 
-        cdylib=""
-        for candidate in \
-          ${ix.rustWorkspace.units.libraries.flecs_query_py}/lib/libflecs_query_py.so \
-          ${ix.rustWorkspace.units.libraries.flecs_query_py}/lib/libflecs_query_py-*.so \
-          ${ix.rustWorkspace.units.libraries.flecs_query_py}/lib/libflecs_query_py.dylib \
-          ${ix.rustWorkspace.units.libraries.flecs_query_py}/lib/libflecs_query_py-*.dylib
-        do
-          if [ -f "$candidate" ]; then
-            cdylib="$candidate"
-            break
-          fi
-        done
-        if [ -z "$cdylib" ]; then
-          echo "ix-flecs-query module: no cdylib under ${ix.rustWorkspace.units.libraries.flecs_query_py}/lib" >&2
-          ls -la ${ix.rustWorkspace.units.libraries.flecs_query_py}/lib >&2 || true
-          exit 1
+      cdylib=""
+      for candidate in \
+        ${ix.rustWorkspace.units.libraries.flecs_query_py}/lib/libflecs_query_py.so \
+        ${ix.rustWorkspace.units.libraries.flecs_query_py}/lib/libflecs_query_py-*.so \
+        ${ix.rustWorkspace.units.libraries.flecs_query_py}/lib/libflecs_query_py.dylib \
+        ${ix.rustWorkspace.units.libraries.flecs_query_py}/lib/libflecs_query_py-*.dylib
+      do
+        if [ -f "$candidate" ]; then
+          cdylib="$candidate"
+          break
         fi
-        install -m555 "$cdylib" "$site/_flecs_query.abi3.so"
-      ''
+      done
+      if [ -z "$cdylib" ]; then
+        echo "ix-flecs-query module: no cdylib under ${ix.rustWorkspace.units.libraries.flecs_query_py}/lib" >&2
+        ls -la ${ix.rustWorkspace.units.libraries.flecs_query_py}/lib >&2 || true
+        exit 1
+      fi
+      install -m555 "$cdylib" "$site/_flecs_query.abi3.so"
+    ''
   );
 
   # The `fsearch` filesystem-search module: `grep`/`find`/`spotlight`, each
@@ -280,15 +278,15 @@ let
   };
   fsearchModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-fsearch-python-module"
-      {
-        strictDeps = true;
-        meta.description = "rg/fd/Spotlight-backed grep/find/spotlight bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/fsearch"
-        mkdir -p "$site"
-        cp -r ${fsearchPythonSource}/fsearch/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "rg/fd/Spotlight-backed grep/find/spotlight bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/fsearch"
+      mkdir -p "$site"
+      cp -r ${fsearchPythonSource}/fsearch/. "$site/"
+    ''
   );
 
   # The `ix_google` package: typed PyO3 bindings for the google-gmail and
@@ -305,34 +303,34 @@ let
   };
   ixGoogleModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-google-python-module"
-      {
-        strictDeps = true;
-        meta.description = "ix_google PyO3 module bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/ix_google"
-        mkdir -p "$site"
-        cp -r ${ixGooglePythonSource}/ix_google/. "$site/"
+    {
+      strictDeps = true;
+      meta.description = "ix_google PyO3 module bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/ix_google"
+      mkdir -p "$site"
+      cp -r ${ixGooglePythonSource}/ix_google/. "$site/"
 
-        cdylib=""
-        for candidate in \
-          ${ix.rustWorkspace.units.libraries.ix_google_py}/lib/libix_google_py.so \
-          ${ix.rustWorkspace.units.libraries.ix_google_py}/lib/libix_google_py-*.so \
-          ${ix.rustWorkspace.units.libraries.ix_google_py}/lib/libix_google_py.dylib \
-          ${ix.rustWorkspace.units.libraries.ix_google_py}/lib/libix_google_py-*.dylib
-        do
-          if [ -f "$candidate" ]; then
-            cdylib="$candidate"
-            break
-          fi
-        done
-        if [ -z "$cdylib" ]; then
-          echo "ix-google module: no cdylib under ${ix.rustWorkspace.units.libraries.ix_google_py}/lib" >&2
-          ls -la ${ix.rustWorkspace.units.libraries.ix_google_py}/lib >&2 || true
-          exit 1
+      cdylib=""
+      for candidate in \
+        ${ix.rustWorkspace.units.libraries.ix_google_py}/lib/libix_google_py.so \
+        ${ix.rustWorkspace.units.libraries.ix_google_py}/lib/libix_google_py-*.so \
+        ${ix.rustWorkspace.units.libraries.ix_google_py}/lib/libix_google_py.dylib \
+        ${ix.rustWorkspace.units.libraries.ix_google_py}/lib/libix_google_py-*.dylib
+      do
+        if [ -f "$candidate" ]; then
+          cdylib="$candidate"
+          break
         fi
-        install -m555 "$cdylib" "$site/_ix_google.abi3.so"
-      ''
+      done
+      if [ -z "$cdylib" ]; then
+        echo "ix-google module: no cdylib under ${ix.rustWorkspace.units.libraries.ix_google_py}/lib" >&2
+        ls -la ${ix.rustWorkspace.units.libraries.ix_google_py}/lib >&2 || true
+        exit 1
+      fi
+      install -m555 "$cdylib" "$site/_ix_google.abi3.so"
+    ''
   );
 
   # The single-tool MCP server itself, a pure-Python package installed into the
@@ -345,15 +343,15 @@ let
   };
   ixNotebookMcpModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-notebook-mcp-module"
-      {
-        strictDeps = true;
-        meta.description = "The ix notebook-first MCP server package";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/ix_notebook_mcp"
-        mkdir -p "$site"
-        cp -r ${ixNotebookMcpSource}/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "The ix notebook-first MCP server package";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/ix_notebook_mcp"
+      mkdir -p "$site"
+      cp -r ${ixNotebookMcpSource}/. "$site/"
+    ''
   );
 
   # `google_auth`: Gmail + Calendar for the kernel, with self-service sign-in.
@@ -370,15 +368,15 @@ let
   };
   googleAuthModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-google-auth-python-module"
-      {
-        strictDeps = true;
-        meta.description = "Google OAuth credentials helper bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/google_auth"
-        mkdir -p "$site"
-        cp -r ${googleAuthPythonSource}/google_auth/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "Google OAuth credentials helper bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/google_auth"
+      mkdir -p "$site"
+      cp -r ${googleAuthPythonSource}/google_auth/. "$site/"
+    ''
   );
 
   # Native macOS screen capture and cursor control, bundled like `tui` and
@@ -398,15 +396,15 @@ let
   };
   viewModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-view-python-module"
-      {
-        strictDeps = true;
-        meta.description = "Pretty composable file/search views bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/view"
-        mkdir -p "$site"
-        cp -r ${viewPythonSource}/view/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "Pretty composable file/search views bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/view"
+      mkdir -p "$site"
+      cp -r ${viewPythonSource}/view/. "$site/"
+    ''
   );
 
   # `nix`: parse a `nix --log-format internal-json` stream into polars frames (a
@@ -420,15 +418,15 @@ let
   };
   nixModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-nix-python-module"
-      {
-        strictDeps = true;
-        meta.description = "nix internal-json -> polars + live build-DAG, bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/nix"
-        mkdir -p "$site"
-        cp -r ${nixPythonSource}/nix/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "nix internal-json -> polars + live build-DAG, bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/nix"
+      mkdir -p "$site"
+      cp -r ${nixPythonSource}/nix/. "$site/"
+    ''
   );
   # Polars-returning SSH fan-out source: `import fleet`, then `await fleet.scan`
   # runs a command on many hosts in parallel (asyncssh + a bounded semaphore on
@@ -441,15 +439,15 @@ let
   };
   fleetModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-fleet-python-module"
-      {
-        strictDeps = true;
-        meta.description = "Polars-returning SSH fan-out source bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/fleet"
-        mkdir -p "$site"
-        cp -r ${fleetPythonSource}/fleet/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "Polars-returning SSH fan-out source bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/fleet"
+      mkdir -p "$site"
+      cp -r ${fleetPythonSource}/fleet/. "$site/"
+    ''
   );
   # Tailnet mesh discovery (index#1787): `await mesh.peers()` sweeps tailscale
   # peers for live ix-mcp `/mesh` endpoints (served by ix_notebook_mcp.mesh on
@@ -462,15 +460,15 @@ let
   };
   meshModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-mesh-python-module"
-      {
-        strictDeps = true;
-        meta.description = "Tailnet mesh discovery of live ix-mcp servers, bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/mesh"
-        mkdir -p "$site"
-        cp -r ${meshPythonSource}/mesh/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "Tailnet mesh discovery of live ix-mcp servers, bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/mesh"
+      mkdir -p "$site"
+      cp -r ${meshPythonSource}/mesh/. "$site/"
+    ''
   );
   # Async shell-out helper: `import sh`, then `out = await sh("gh run list")`.
   # Runs on the kernel's loop (never blocks it like a bare subprocess.run) and
@@ -483,15 +481,15 @@ let
   };
   shModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-sh-python-module"
-      {
-        strictDeps = true;
-        meta.description = "Async shell-out helper bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/sh"
-        mkdir -p "$site"
-        cp -r ${shPythonSource}/sh/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "Async shell-out helper bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/sh"
+      mkdir -p "$site"
+      cp -r ${shPythonSource}/sh/. "$site/"
+    ''
   );
   # Svelte 5 components as live interactive resources: `import svelte`, then
   # `await svelte.component("Board.svelte", id=..., actions=...)` compiles via
@@ -504,15 +502,15 @@ let
   };
   svelteModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-svelte-python-module"
-      {
-        strictDeps = true;
-        meta.description = "Svelte 5 resource components bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/svelte"
-        mkdir -p "$site"
-        cp -r ${sveltePythonSource}/svelte/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "Svelte 5 resource components bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/svelte"
+      mkdir -p "$site"
+      cp -r ${sveltePythonSource}/svelte/. "$site/"
+    ''
   );
   # Browser automation over CDP: `import browser`, then `await browser.goto(url)`
   # / `await browser.shot()` drive a Chromium-family browser already running with
@@ -526,15 +524,15 @@ let
   };
   browserModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-browser-python-module"
-      {
-        strictDeps = true;
-        meta.description = "Playwright-over-CDP browser helper bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/browser"
-        mkdir -p "$site"
-        cp -r ${browserPythonSource}/browser/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "Playwright-over-CDP browser helper bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/browser"
+      mkdir -p "$site"
+      cp -r ${browserPythonSource}/browser/. "$site/"
+    ''
   );
   # Read recent X (Twitter) posts into polars by driving the logged-in browser:
   # `import x`, then `await x.posts("@handle")` / `x.posts("home")` navigates the
@@ -547,15 +545,15 @@ let
   };
   xModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-x-python-module"
-      {
-        strictDeps = true;
-        meta.description = "Read recent X posts to polars via the logged-in browser, bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/x"
-        mkdir -p "$site"
-        cp -r ${xPythonSource}/x/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "Read recent X posts to polars via the logged-in browser, bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/x"
+      mkdir -p "$site"
+      cp -r ${xPythonSource}/x/. "$site/"
+    ''
   );
   # Slack: read channels, messages, threads; send messages; search -- all per-user
   # with a self-service token flow. Pure Python over stdlib urllib + polars.
@@ -568,15 +566,15 @@ let
   };
   slackModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-slack-python-module"
-      {
-        strictDeps = true;
-        meta.description = "Per-user Slack channels/messages/search bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/slack"
-        mkdir -p "$site"
-        cp -r ${slackPythonSource}/slack/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "Per-user Slack channels/messages/search bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/slack"
+      mkdir -p "$site"
+      cp -r ${slackPythonSource}/slack/. "$site/"
+    ''
   );
   # Beeper: read chats and messages across every connected network, search, and
   # send -- a polars-shaped wrapper over the local Beeper Desktop HTTP API
@@ -590,15 +588,15 @@ let
   };
   beeperModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-beeper-python-module"
-      {
-        strictDeps = true;
-        meta.description = "Per-user Beeper Desktop chats/messages/search/send bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/beeper"
-        mkdir -p "$site"
-        cp -r ${beeperPythonSource}/beeper/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "Per-user Beeper Desktop chats/messages/search/send bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/beeper"
+      mkdir -p "$site"
+      cp -r ${beeperPythonSource}/beeper/. "$site/"
+    ''
   );
   # Git worktrees as the unit of isolated work: `import worktree`, then
   # `wt = await worktree.add("my-fix")` checks out a new branch in its own tree,
@@ -610,15 +608,15 @@ let
   };
   worktreeModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-worktree-python-module"
-      {
-        strictDeps = true;
-        meta.description = "Git-worktree helper bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/worktree"
-        mkdir -p "$site"
-        cp -r ${worktreePythonSource}/worktree/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "Git-worktree helper bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/worktree"
+      mkdir -p "$site"
+      cp -r ${worktreePythonSource}/worktree/. "$site/"
+    ''
   );
   # Example task-dependency graphs generated in Python and stored in SQLite:
   # `import tasks`, then `tasks.seed("tasks.sqlite")` writes a ~100-node DAG and
@@ -630,15 +628,15 @@ let
   };
   tasksModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-tasks-python-module"
-      {
-        strictDeps = true;
-        meta.description = "Task-graph SQLite helper bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/tasks"
-        mkdir -p "$site"
-        cp -r ${tasksPythonSource}/tasks/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "Task-graph SQLite helper bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/tasks"
+      mkdir -p "$site"
+      cp -r ${tasksPythonSource}/tasks/. "$site/"
+    ''
   );
   # Drive the Ghostty terminal over its AppleScript dictionary (Ghostty 1.3.2+):
   # `import ghostty`, then `await ghostty.surfaces()` reads every open surface
@@ -652,15 +650,15 @@ let
   };
   ghosttyModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-ghostty-python-module"
-      {
-        strictDeps = true;
-        meta.description = "Ghostty AppleScript control bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/ghostty"
-        mkdir -p "$site"
-        cp -r ${ghosttyPythonSource}/ghostty/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "Ghostty AppleScript control bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/ghostty"
+      mkdir -p "$site"
+      cp -r ${ghosttyPythonSource}/ghostty/. "$site/"
+    ''
   );
   # Linear issue-tracker GraphQL client: `import linear`, then
   # `await linear.issue("ENG-123")` / `issue_update` / `issue_create` /
@@ -672,15 +670,15 @@ let
   };
   linearModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-linear-python-module"
-      {
-        strictDeps = true;
-        meta.description = "Linear GraphQL client bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/linear"
-        mkdir -p "$site"
-        cp -r ${linearPythonSource}/linear/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "Linear GraphQL client bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/linear"
+      mkdir -p "$site"
+      cp -r ${linearPythonSource}/linear/. "$site/"
+    ''
   );
   # Notion REST client: `import notion`, then `await notion.search(query)` /
   # `page(id)` / `blocks(id)` / `db_query(id)` / `page_create` / `blocks_append`
@@ -692,15 +690,15 @@ let
   };
   notionModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-notion-python-module"
-      {
-        strictDeps = true;
-        meta.description = "Notion REST client bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/notion"
-        mkdir -p "$site"
-        cp -r ${notionPythonSource}/notion/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "Notion REST client bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/notion"
+      mkdir -p "$site"
+      cp -r ${notionPythonSource}/notion/. "$site/"
+    ''
   );
   # `nox_autotriage`: nox-aware adapter that converts a nox conformance report
   # into linear.triage Findings and files them to Linear.  Depends on
@@ -711,15 +709,15 @@ let
   };
   noxAutotriageModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-nox-autotriage-python-module"
-      {
-        strictDeps = true;
-        meta.description = "nox conformance -> Linear triage adapter bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/nox_autotriage"
-        mkdir -p "$site"
-        cp -r ${noxAutotriagePythonSource}/nox_autotriage/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "nox conformance -> Linear triage adapter bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/nox_autotriage"
+      mkdir -p "$site"
+      cp -r ${noxAutotriagePythonSource}/nox_autotriage/. "$site/"
+    ''
   );
   # `mcp_client`: connect to any Model Context Protocol server and call its tools
   # from the kernel. Pure Python over the already-bundled `mcp` SDK (no cdylib),
@@ -732,15 +730,15 @@ let
   };
   mcpClientModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-mcp-client-python-module"
-      {
-        strictDeps = true;
-        meta.description = "MCP client helper bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/mcp_client"
-        mkdir -p "$site"
-        cp -r ${mcpClientPythonSource}/mcp_client/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "MCP client helper bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/mcp_client"
+      mkdir -p "$site"
+      cp -r ${mcpClientPythonSource}/mcp_client/. "$site/"
+    ''
   );
   screenPythonSource = builtins.path {
     name = "ix-mcp-screen-python-source";
@@ -748,15 +746,15 @@ let
   };
   screenModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-screen-python-module"
-      {
-        strictDeps = true;
-        meta.description = "Native macOS screen/cursor helper bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/screen"
-        mkdir -p "$site"
-        cp -r ${screenPythonSource}/screen/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "Native macOS screen/cursor helper bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/screen"
+      mkdir -p "$site"
+      cp -r ${screenPythonSource}/screen/. "$site/"
+    ''
   );
 
   # Native macOS VM control, bundled like `screen` so every session can
@@ -769,15 +767,15 @@ let
   };
   vmkitModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-vmkit-python-module"
-      {
-        strictDeps = true;
-        meta.description = "Native macOS VM control bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/vmkit"
-        mkdir -p "$site"
-        cp -r ${vmkitPythonSource}/vmkit/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "Native macOS VM control bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/vmkit"
+      mkdir -p "$site"
+      cp -r ${vmkitPythonSource}/vmkit/. "$site/"
+    ''
   );
   # Native macOS iMessage access, bundled like `screen`/`vmkit` so every session
   # can `import imessage` on Darwin. Pure Python over the bundled sqlite3/polars
@@ -792,15 +790,15 @@ let
   };
   imessageModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-imessage-python-module"
-      {
-        strictDeps = true;
-        meta.description = "Native macOS iMessage read-to-polars + send bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/imessage"
-        mkdir -p "$site"
-        cp -r ${imessagePythonSource}/imessage/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "Native macOS iMessage read-to-polars + send bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/imessage"
+      mkdir -p "$site"
+      cp -r ${imessagePythonSource}/imessage/. "$site/"
+    ''
   );
 
   # The vmkit binary `vmkit` spawns. Darwin-only; referenced lazily so a Linux
@@ -815,7 +813,7 @@ let
   # The Svelte 5 -> one-IIFE-bundle compiler the `svelte` module spawns
   # (IX_SVELTE_BUNDLE_BIN): esbuild + esbuild-svelte from the lockfile pin in
   # ./svelte-bundle, so resource components need no network at view time.
-  svelteBundleBin = import ./svelte-bundle { inherit ix pkgs; };
+  svelteBundleBin = import ./svelte-bundle {inherit ix pkgs;};
 
   # `import CoreLocation` on Darwin: the pyobjc binding for Apple's Core Location
   # framework, so a session can read the Mac's current location with no install
@@ -829,10 +827,12 @@ let
   coreLocationModule = pkgs.python3.pkgs.pyobjc-framework-Quartz.overridePythonAttrs (old: {
     pname = "pyobjc-framework-CoreLocation";
     sourceRoot = "${old.src.name}/pyobjc-framework-CoreLocation";
-    pythonImportsCheck = [ "CoreLocation" ];
-    meta = old.meta // {
-      description = "PyObjC wrappers for the Core Location framework on macOS";
-    };
+    pythonImportsCheck = ["CoreLocation"];
+    meta =
+      old.meta
+      // {
+        description = "PyObjC wrappers for the Core Location framework on macOS";
+      };
   });
 
   # `import ScriptingBridge` on Darwin: the pyobjc binding for Apple's Scripting
@@ -844,10 +844,12 @@ let
   scriptingBridgeModule = pkgs.python3.pkgs.pyobjc-framework-Quartz.overridePythonAttrs (old: {
     pname = "pyobjc-framework-ScriptingBridge";
     sourceRoot = "${old.src.name}/pyobjc-framework-ScriptingBridge";
-    pythonImportsCheck = [ "ScriptingBridge" ];
-    meta = old.meta // {
-      description = "PyObjC wrappers for the Scripting Bridge framework on macOS";
-    };
+    pythonImportsCheck = ["ScriptingBridge"];
+    meta =
+      old.meta
+      // {
+        description = "PyObjC wrappers for the Scripting Bridge framework on macOS";
+      };
   });
 
   # `import MapKit` on Darwin: the pyobjc binding for Apple's MapKit framework,
@@ -862,14 +864,18 @@ let
   mapKitModule = pkgs.python3.pkgs.pyobjc-framework-Quartz.overridePythonAttrs (old: {
     pname = "pyobjc-framework-MapKit";
     sourceRoot = "${old.src.name}/pyobjc-framework-MapKit";
-    pythonImportsCheck = [ "MapKit" ];
-    propagatedBuildInputs = (old.propagatedBuildInputs or [ ]) ++ [
-      coreLocationModule
-      pkgs.python3.pkgs.pyobjc-framework-Quartz
-    ];
-    meta = old.meta // {
-      description = "PyObjC wrappers for the MapKit framework on macOS";
-    };
+    pythonImportsCheck = ["MapKit"];
+    propagatedBuildInputs =
+      (old.propagatedBuildInputs or [])
+      ++ [
+        coreLocationModule
+        pkgs.python3.pkgs.pyobjc-framework-Quartz
+      ];
+    meta =
+      old.meta
+      // {
+        description = "PyObjC wrappers for the MapKit framework on macOS";
+      };
   });
 
   # Native macOS places & geocoding: places near a point (MapKit `MKLocalSearch`)
@@ -884,15 +890,15 @@ let
   };
   mapsModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-maps-python-module"
-      {
-        strictDeps = true;
-        meta.description = "Native macOS maps/location (MapKit + CoreLocation) bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/maps"
-        mkdir -p "$site"
-        cp -r ${mapsPythonSource}/maps/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "Native macOS maps/location (MapKit + CoreLocation) bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/maps"
+      mkdir -p "$site"
+      cp -r ${mapsPythonSource}/maps/. "$site/"
+    ''
   );
 
   # The `screen` helper is macOS-only, so its dependencies join the interpreter
@@ -901,8 +907,7 @@ let
   # the PIL image type capture returns. `coreLocationModule` adds the Core
   # Location binding so location reads work out of the box, and
   # `scriptingBridgeModule` the Scripting Bridge binding for app automation.
-  darwinExtraPackages =
-    ps:
+  darwinExtraPackages = ps:
     lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
       ps.pyobjc-framework-Quartz
       coreLocationModule
@@ -921,11 +926,10 @@ let
   # which is exactly where escaping is forgotten (the dtype-header XSS this
   # package set just had to patch). Not in nixpkgs; pure Python, one dep
   # (markupsafe). https://htpy.dev
-  htpyModule =
-    let
-      pname = "htpy";
-      inherit (pypiPins.htpy) version;
-    in
+  htpyModule = let
+    pname = "htpy";
+    inherit (pypiPins.htpy) version;
+  in
     pkgs.python3.pkgs.buildPythonPackage {
       inherit pname version;
       pyproject = true;
@@ -942,11 +946,12 @@ let
       ];
       # typing-extensions is only a dep below 3.13 (htpy's own marker); the
       # pinned interpreter is 3.13, so it is conditional rather than always-on.
-      dependencies = [
-        pkgs.python3.pkgs.markupsafe
-      ]
-      ++ lib.optional (lib.versionOlder pkgs.python3.pythonVersion "3.13") pkgs.python3.pkgs.typing-extensions;
-      pythonImportsCheck = [ "htpy" ];
+      dependencies =
+        [
+          pkgs.python3.pkgs.markupsafe
+        ]
+        ++ lib.optional (lib.versionOlder pkgs.python3.pythonVersion "3.13") pkgs.python3.pkgs.typing-extensions;
+      pythonImportsCheck = ["htpy"];
       doCheck = false;
     };
 
@@ -967,22 +972,26 @@ let
     };
     # pyspark 3.5.5 pins py4j==0.10.9.7 exactly; relax it so the patch-newer
     # nixpkgs py4j 0.10.9.9 satisfies the runtime-deps check.
-    pythonRelaxDeps = [ "py4j" ];
+    pythonRelaxDeps = ["py4j"];
     # Keep pyspark's own deps (py4j) and add the Spark Connect client stack.
-    propagatedBuildInputs = (old.propagatedBuildInputs or [ ]) ++ [
-      pkgs.python3.pkgs.grpcio
-      pkgs.python3.pkgs.grpcio-status
-      pkgs.python3.pkgs.googleapis-common-protos
-      pkgs.python3.pkgs.protobuf
-      pkgs.python3.pkgs.pandas
-      pkgs.python3.pkgs.pyarrow
-      pkgs.python3.pkgs.numpy
-    ];
+    propagatedBuildInputs =
+      (old.propagatedBuildInputs or [])
+      ++ [
+        pkgs.python3.pkgs.grpcio
+        pkgs.python3.pkgs.grpcio-status
+        pkgs.python3.pkgs.googleapis-common-protos
+        pkgs.python3.pkgs.protobuf
+        pkgs.python3.pkgs.pandas
+        pkgs.python3.pkgs.pyarrow
+        pkgs.python3.pkgs.numpy
+      ];
     # Strip the bundled Spark/JVM jars: fleet.spark uses only the gRPC Connect
     # client, so the jars (and the local-JVM code paths that need them) are unused.
-    postInstall = (old.postInstall or "") + ''
-      rm -rf "$out/${pkgs.python3.sitePackages}/pyspark/jars"
-    '';
+    postInstall =
+      (old.postInstall or "")
+      + ''
+        rm -rf "$out/${pkgs.python3.sitePackages}/pyspark/jars"
+      '';
     doCheck = false;
     pythonImportsCheck = [
       "pyspark"
@@ -1028,11 +1037,13 @@ let
           pname = "ipsw_parser";
           inherit (pypiPins.ipsw_parser) version hash;
         };
-        env = (old.env or { }) // {
-          SETUPTOOLS_SCM_PRETEND_VERSION = pypiPins.ipsw_parser.version;
-        };
-        dependencies = (old.dependencies or [ ]) ++ [ final.typer ];
-        pythonRelaxDeps = (old.pythonRelaxDeps or [ ]) ++ [ "typer" ];
+        env =
+          (old.env or {})
+          // {
+            SETUPTOOLS_SCM_PRETEND_VERSION = pypiPins.ipsw_parser.version;
+          };
+        dependencies = (old.dependencies or []) ++ [final.typer];
+        pythonRelaxDeps = (old.pythonRelaxDeps or []) ++ ["typer"];
       });
     };
   };
@@ -1041,11 +1052,10 @@ let
   # absent from nixpkgs (the packaged `iosbackup` is an unrelated project). Pure
   # Python; all of its deps are already in the interpreter. Built from the
   # asn1-pinned set so it shares one consistent closure.
-  pyiosbackupModule =
-    let
-      pname = "pyiosbackup";
-      inherit (pypiPins.pyiosbackup) version;
-    in
+  pyiosbackupModule = let
+    pname = "pyiosbackup";
+    inherit (pypiPins.pyiosbackup) version;
+  in
     mcpPythonInterp.pkgs.buildPythonPackage {
       inherit pname version;
       pyproject = true;
@@ -1053,7 +1063,7 @@ let
         inherit pname version;
         inherit (pypiPins.pyiosbackup) hash;
       };
-      build-system = [ mcpPythonInterp.pkgs.setuptools ];
+      build-system = [mcpPythonInterp.pkgs.setuptools];
       dependencies = [
         mcpPythonInterp.pkgs.bpylist2
         mcpPythonInterp.pkgs.cryptography
@@ -1061,7 +1071,7 @@ let
         mcpPythonInterp.pkgs.construct
         mcpPythonInterp.pkgs.click
       ];
-      pythonImportsCheck = [ "pyiosbackup" ];
+      pythonImportsCheck = ["pyiosbackup"];
       doCheck = false;
     };
 
@@ -1078,11 +1088,13 @@ let
       pname = "pymobiledevice3";
       inherit (pypiPins.pymobiledevice3) version hash;
     };
-    env = (old.env or { }) // {
-      SETUPTOOLS_SCM_PRETEND_VERSION = pypiPins.pymobiledevice3.version;
-    };
+    env =
+      (old.env or {})
+      // {
+        SETUPTOOLS_SCM_PRETEND_VERSION = pypiPins.pymobiledevice3.version;
+      };
     dependencies =
-      (old.dependencies or [ ])
+      (old.dependencies or [])
       ++ [
         mcpPythonInterp.pkgs.asn1
         mcpPythonInterp.pkgs.pyimg4
@@ -1091,7 +1103,7 @@ let
         mcpPythonInterp.pkgs.defusedxml
       ]
       ++ lib.optional (!pkgs.stdenv.hostPlatform.isDarwin) mcpPythonInterp.pkgs.av;
-    pythonRelaxDeps = [ "typer" ];
+    pythonRelaxDeps = ["typer"];
     doCheck = false;
   });
 
@@ -1107,15 +1119,15 @@ let
   };
   iphoneModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-iphone-python-module"
-      {
-        strictDeps = true;
-        meta.description = "USB iOS device control (pymobiledevice3) bundled into the ix-mcp interpreter";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/iphone"
-        mkdir -p "$site"
-        cp -r ${iphonePythonSource}/iphone/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "USB iOS device control (pymobiledevice3) bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/iphone"
+      mkdir -p "$site"
+      cp -r ${iphonePythonSource}/iphone/. "$site/"
+    ''
   );
 
   # The interpreter the wrapper pins. Sessions build their venv from this with
@@ -1126,8 +1138,7 @@ let
   # The bundled-package set the pinned interpreter carries. Named so a sibling
   # interpreter (the vdom property-test runner below) can reuse the exact same
   # modules and only add its test deps, instead of duplicating the long list.
-  mcpPythonPackages =
-    ps:
+  mcpPythonPackages = ps:
     [
       ps.asyncssh
       ps.numpy
@@ -1282,7 +1293,7 @@ let
   # has no /etc/fonts and no fonts on disk, so the smoke tests below that launch
   # a real (headless) browser must point fontconfig at a generated config
   # carrying at least one real font family.
-  fontsConf = pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; };
+  fontsConf = pkgs.makeFontsConf {fontDirectories = [pkgs.dejavu_fonts];};
 
   # `ix-mcp` is just the pinned interpreter invoked on the bundled package's CLI.
   # Everything (the entrypoint, the one shared kernel, the data API) runs in this
@@ -1302,79 +1313,78 @@ let
 
   package =
     pkgs.runCommand "ix-mcp"
-      {
-        nativeBuildInputs = [ pkgs.makeWrapper ];
-        strictDeps = true;
-        meta = {
-          description = "Notebook-first MCP server: an agent and a human co-edit one live Jupyter notebook";
-          mainProgram = "ix-mcp";
-        };
-      }
-      ''
-        mkdir -p $out/bin
-        makeWrapper ${lib.getExe mcpPython} $out/bin/ix-mcp \
-          --add-flags "-m ix_notebook_mcp" \
-          --set IX_MCP_VERSION ${lib.escapeShellArg ix.rev} \
-          --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
-          --set IX_SVELTE_BUNDLE_BIN ${lib.escapeShellArg (lib.getExe svelteBundleBin)} \
-          --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
-          --set IX_DASHBOARD_BIN ${lib.escapeShellArg (lib.getExe' dashboardHubBin "dashboard")} \
-          --set SCIPQL_SOUFFLE ${lib.escapeShellArg (lib.getExe' pkgs.souffle "souffle")} \
-          --set IX_MCP_TY_BIN ${lib.escapeShellArg tyBin} \
-          --set IX_MCP_TY_PYTHON ${lib.escapeShellArg mcpPython.interpreter} \
-          --prefix PATH : ${
-            lib.makeBinPath [
-              pkgs.ripgrep
-              pkgs.fd
-            ]
-          } \
-          ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_VMKIT_BIN ${lib.escapeShellArg "${vmkitBin}/bin/vmkit"}"}
-        # The notebook engine alone (kernel + dashboard + session file, no MCP
-        # transport): the same interpreter and env, entered at the `notebook`
-        # subcommand. Our jupyter-shaped serve; the MCP server is one client of it.
-        makeWrapper ${lib.getExe mcpPython} $out/bin/ix-notebook \
-          --add-flags "-m ix_notebook_mcp notebook" \
-          --set IX_MCP_VERSION ${lib.escapeShellArg ix.rev} \
-          --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
-          --set IX_SVELTE_BUNDLE_BIN ${lib.escapeShellArg (lib.getExe svelteBundleBin)} \
-          --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
-          --set IX_DASHBOARD_BIN ${lib.escapeShellArg (lib.getExe' dashboardHubBin "dashboard")} \
-          --set SCIPQL_SOUFFLE ${lib.escapeShellArg (lib.getExe' pkgs.souffle "souffle")} \
-          --set IX_MCP_TY_BIN ${lib.escapeShellArg tyBin} \
-          --set IX_MCP_TY_PYTHON ${lib.escapeShellArg mcpPython.interpreter} \
-          --prefix PATH : ${
-            lib.makeBinPath [
-              pkgs.ripgrep
-              pkgs.fd
-            ]
-          } \
-          ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_VMKIT_BIN ${lib.escapeShellArg "${vmkitBin}/bin/vmkit"}"}
-      '';
+    {
+      nativeBuildInputs = [pkgs.makeWrapper];
+      strictDeps = true;
+      meta = {
+        description = "Notebook-first MCP server: an agent and a human co-edit one live Jupyter notebook";
+        mainProgram = "ix-mcp";
+      };
+    }
+    ''
+      mkdir -p $out/bin
+      makeWrapper ${lib.getExe mcpPython} $out/bin/ix-mcp \
+        --add-flags "-m ix_notebook_mcp" \
+        --set IX_MCP_VERSION ${lib.escapeShellArg ix.rev} \
+        --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
+        --set IX_SVELTE_BUNDLE_BIN ${lib.escapeShellArg (lib.getExe svelteBundleBin)} \
+        --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
+        --set IX_DASHBOARD_BIN ${lib.escapeShellArg (lib.getExe' dashboardHubBin "dashboard")} \
+        --set SCIPQL_SOUFFLE ${lib.escapeShellArg (lib.getExe' pkgs.souffle "souffle")} \
+        --set IX_MCP_TY_BIN ${lib.escapeShellArg tyBin} \
+        --set IX_MCP_TY_PYTHON ${lib.escapeShellArg mcpPython.interpreter} \
+        --prefix PATH : ${
+        lib.makeBinPath [
+          pkgs.ripgrep
+          pkgs.fd
+        ]
+      } \
+        ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_VMKIT_BIN ${lib.escapeShellArg "${vmkitBin}/bin/vmkit"}"}
+      # The notebook engine alone (kernel + dashboard + session file, no MCP
+      # transport): the same interpreter and env, entered at the `notebook`
+      # subcommand. Our jupyter-shaped serve; the MCP server is one client of it.
+      makeWrapper ${lib.getExe mcpPython} $out/bin/ix-notebook \
+        --add-flags "-m ix_notebook_mcp notebook" \
+        --set IX_MCP_VERSION ${lib.escapeShellArg ix.rev} \
+        --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
+        --set IX_SVELTE_BUNDLE_BIN ${lib.escapeShellArg (lib.getExe svelteBundleBin)} \
+        --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
+        --set IX_DASHBOARD_BIN ${lib.escapeShellArg (lib.getExe' dashboardHubBin "dashboard")} \
+        --set SCIPQL_SOUFFLE ${lib.escapeShellArg (lib.getExe' pkgs.souffle "souffle")} \
+        --set IX_MCP_TY_BIN ${lib.escapeShellArg tyBin} \
+        --set IX_MCP_TY_PYTHON ${lib.escapeShellArg mcpPython.interpreter} \
+        --prefix PATH : ${
+        lib.makeBinPath [
+          pkgs.ripgrep
+          pkgs.fd
+        ]
+      } \
+        ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_VMKIT_BIN ${lib.escapeShellArg "${vmkitBin}/bin/vmkit"}"}
+    '';
 
   # Import a module in the pinned interpreter and assert a marker line. Used by
   # the bundled-module tests: the thing each guards is that the module is
   # importable in the very interpreter the kernels run on, which is a plain
   # interpreter import (no kernel, no network), so the build sandbox can prove it.
-  importTest =
-    name: code:
+  importTest = name: code:
     pkgs.runCommand "ix-mcp-${name}"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [mcpPython];
+      strictDeps = true;
+    }
+    ''
+      ${lib.getExe mcpPython} -c ${lib.escapeShellArg code} >stdout 2>stderr || {
+        echo "import test ${name} failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        ${lib.getExe mcpPython} -c ${lib.escapeShellArg code} >stdout 2>stderr || {
-          echo "import test ${name} failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -q '^${name}-ok' stdout || {
-          echo "import test ${name} did not print its ok marker:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -q '^${name}-ok' stdout || {
+        echo "import test ${name} did not print its ok marker:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # Strict type-check gate (ENG-3131). Mirrors lib/build/uv-application.nix's
   # zuban+ruff phase, but this package has no uv project (it is plain source
@@ -1405,43 +1415,42 @@ let
     "worktree"
     "mesh"
   ];
-  strictTypecheck =
-    let
-      # All src module package dirs go on MYPYPATH so first-party cross-imports
-      # resolve; the green subset are the actual check targets.
-      allSrcModules = builtins.attrNames (builtins.readDir ./src);
-      mypypath = lib.concatMapStringsSep ":" (m: "src/${m}") allSrcModules;
-      targets = lib.concatMapStringsSep " " (m: "src/${m}/${m}") strictGreenModules;
-    in
+  strictTypecheck = let
+    # All src module package dirs go on MYPYPATH so first-party cross-imports
+    # resolve; the green subset are the actual check targets.
+    allSrcModules = builtins.attrNames (builtins.readDir ./src);
+    mypypath = lib.concatMapStringsSep ":" (m: "src/${m}") allSrcModules;
+    targets = lib.concatMapStringsSep " " (m: "src/${m}/${m}") strictGreenModules;
+  in
     pkgs.runCommand "ix-mcp-strict-typecheck"
-      {
-        nativeBuildInputs = [
-          pkgs.zuban
-          pkgs.ruff
-          mcpPython
-        ];
-        strictDeps = true;
-        meta.description = "zuban --strict + ruff ANN over the migrated ix-mcp Python sources";
-      }
-      ''
-        cp -r ${ixNotebookMcpSource} ix_notebook_mcp
-        cp -r ${./src} src
-        cp ${./zuban.ini} zuban.ini
-        chmod -R u+w ix_notebook_mcp src
+    {
+      nativeBuildInputs = [
+        pkgs.zuban
+        pkgs.ruff
+        mcpPython
+      ];
+      strictDeps = true;
+      meta.description = "zuban --strict + ruff ANN over the migrated ix-mcp Python sources";
+    }
+    ''
+      cp -r ${ixNotebookMcpSource} ix_notebook_mcp
+      cp -r ${./src} src
+      cp ${./zuban.ini} zuban.ini
+      chmod -R u+w ix_notebook_mcp src
 
-        export MYPYPATH=${lib.escapeShellArg mypypath}:.
-        echo "zuban check --strict over: ${toString strictGreenModules}"
-        zuban check --strict \
-          --config-file zuban.ini \
-          --python-executable ${mcpPython.interpreter} \
-          --python-version ${pkgs.python3.pythonVersion} \
-          --platform linux \
-          ${targets}
-        echo "ruff check (ANN + TID251 no-cast) over: ${toString strictGreenModules}"
-        ruff check ${ix.ruffAnnArgs} ${targets}
+      export MYPYPATH=${lib.escapeShellArg mypypath}:.
+      echo "zuban check --strict over: ${toString strictGreenModules}"
+      zuban check --strict \
+        --config-file zuban.ini \
+        --python-executable ${mcpPython.interpreter} \
+        --python-version ${pkgs.python3.pythonVersion} \
+        --platform linux \
+        ${targets}
+      echo "ruff check (ANN + TID251 no-cast) over: ${toString strictGreenModules}"
+      ruff check ${ix.ruffAnnArgs} ${targets}
 
-        mkdir -p "$out"
-      '';
+      mkdir -p "$out"
+    '';
 
   tuiBundled = importTest "tui" "import tui; print('tui-ok', tui.__version__)";
   # htpy must import and auto-escape: a `<` in a text node comes out as `&lt;`.
@@ -1586,30 +1595,30 @@ let
   fsearchTestPython = mcpPythonInterp.withPackages mcpPythonPackages;
   fsearchBundled =
     pkgs.runCommand "ix-mcp-fsearch"
-      {
-        nativeBuildInputs = [
-          fsearchTestPython
-          pkgs.ripgrep
-          pkgs.fd
-          pkgs.git
-        ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [
+        fsearchTestPython
+        pkgs.ripgrep
+        pkgs.fd
+        pkgs.git
+      ];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      ${lib.getExe fsearchTestPython} ${fsearchTestPy} >stdout 2>stderr || {
+        echo "ix-mcp fsearch test failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        ${lib.getExe fsearchTestPython} ${fsearchTestPy} >stdout 2>stderr || {
-          echo "ix-mcp fsearch test failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -q '^fsearch-ok' stdout || {
-          echo "ix-mcp fsearch test did not print its ok marker:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -q '^fsearch-ok' stdout || {
+        echo "ix-mcp fsearch test did not print its ok marker:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
   dataLibsBundled = importTest "data-libs" (
     "import psycopg, sqlalchemy, duckdb, httpx; "
     + "from sqlalchemy import create_engine; create_engine('postgresql+psycopg://u@h/db'); "
@@ -1832,44 +1841,44 @@ let
   '';
   requirementsSmoke =
     pkgs.runCommand "ix-mcp-requirements-smoke"
-      {
-        nativeBuildInputs = [
-          package
-          mcpPython
-        ];
-        strictDeps = true;
-      }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
+    {
+      nativeBuildInputs = [
+        package
+        mcpPython
+      ];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
 
-        # CLI contract in the credential-less sandbox: non-zero exit so setup
-        # scripts can gate on it, with every remedy named on stdout.
-        if ix-mcp requirements >stdout 2>stderr; then
-          echo "ix-mcp requirements exited 0 without any credential:" >&2
+      # CLI contract in the credential-less sandbox: non-zero exit so setup
+      # scripts can gate on it, with every remedy named on stdout.
+      if ix-mcp requirements >stdout 2>stderr; then
+        echo "ix-mcp requirements exited 0 without any credential:" >&2
+        cat stdout stderr >&2
+        exit 1
+      fi
+      for needle in MXBAI_API_KEY EXA_API_KEY LINEAR_API_KEY NOTION_API_KEY 'mgrep login'; do
+        if ! grep -qF "$needle" stdout; then
+          echo "requirements report is missing $needle:" >&2
           cat stdout stderr >&2
           exit 1
         fi
-        for needle in MXBAI_API_KEY EXA_API_KEY LINEAR_API_KEY NOTION_API_KEY 'mgrep login'; do
-          if ! grep -qF "$needle" stdout; then
-            echo "requirements report is missing $needle:" >&2
-            cat stdout stderr >&2
-            exit 1
-          fi
-        done
+      done
 
-        ${lib.getExe mcpPython} ${requirementsTestPy} >py-stdout 2>py-stderr || {
-          echo "ix-mcp requirements smoke failed:" >&2
-          cat py-stdout py-stderr >&2
-          exit 1
-        }
-        grep -qx 'requirements-ok' py-stdout || {
-          echo "requirements smoke did not print its ok marker:" >&2
-          cat py-stdout py-stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      ${lib.getExe mcpPython} ${requirementsTestPy} >py-stdout 2>py-stderr || {
+        echo "ix-mcp requirements smoke failed:" >&2
+        cat py-stdout py-stderr >&2
+        exit 1
+      }
+      grep -qx 'requirements-ok' py-stdout || {
+        echo "requirements smoke did not print its ok marker:" >&2
+        cat py-stdout py-stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
   engineBundled = importTest "engine" "import ipykernel, jupyter_client, nbformat, aiohttp, mcp; print('engine-ok')";
 
   # The server package imports and registers its full tool surface. Exercises the
@@ -1897,26 +1906,26 @@ let
   # the whole interpreter -> kernelspec -> execution path.
   evalSmoke =
     pkgs.runCommand "ix-mcp-eval-smoke"
-      {
-        nativeBuildInputs = [ package ];
-        strictDeps = true;
-      }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
+    {
+      nativeBuildInputs = [package];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
 
-        ix-mcp eval '1 + 2' >stdout 2>stderr || {
-          echo "ix-mcp eval failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -qx 'result:' stdout && grep -qx '3' stdout || {
-          echo "ix-mcp eval did not return the expected result:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      ix-mcp eval '1 + 2' >stdout 2>stderr || {
+        echo "ix-mcp eval failed:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      grep -qx 'result:' stdout && grep -qx '3' stdout || {
+        echo "ix-mcp eval did not return the expected result:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # Locks the bind-address default: with a working `tailscale status --json`
   # in PATH, `_tailscale_ip()` returns the first IPv4 from `Self.TailscaleIPs`
@@ -1978,25 +1987,25 @@ let
   '';
   bindDefaultSmoke =
     pkgs.runCommand "ix-mcp-bind-default-smoke"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [mcpPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      ${mcpPython}/bin/python3 ${bindDefaultTest} >stdout 2>stderr || {
+        echo "ix-mcp bind-default smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        ${mcpPython}/bin/python3 ${bindDefaultTest} >stdout 2>stderr || {
-          echo "ix-mcp bind-default smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -qx 'bind-default-ok' stdout || {
-          echo "ix-mcp bind-default smoke did not confirm helper behaviour:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -qx 'bind-default-ok' stdout || {
+        echo "ix-mcp bind-default smoke did not confirm helper behaviour:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # Exercises _resolve_ssh_auth_sock: the helper must redirect SSH_AUTH_SOCK to
   # the 1Password agent on darwin when the Apple launchd socket (or no socket)
@@ -2049,25 +2058,25 @@ let
   '';
   sshAuthSockSmoke =
     pkgs.runCommand "ix-mcp-ssh-auth-sock-smoke"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [mcpPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      ${mcpPython}/bin/python3 ${sshAuthSockTest} >stdout 2>stderr || {
+        echo "ix-mcp ssh-auth-sock smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        ${mcpPython}/bin/python3 ${sshAuthSockTest} >stdout 2>stderr || {
-          echo "ix-mcp ssh-auth-sock smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -qx 'ssh-auth-sock-ok' stdout || {
-          echo "ix-mcp ssh-auth-sock smoke did not confirm helper behaviour:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -qx 'ssh-auth-sock-ok' stdout || {
+        echo "ix-mcp ssh-auth-sock smoke did not confirm helper behaviour:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # Exercises the shared-dashboard launcher logic: live_hub() ignores a missing
   # or stale (dead-port) hub-state file and accepts a live one, and the data
@@ -2263,25 +2272,25 @@ let
   '';
   dashboardLauncherSmoke =
     pkgs.runCommand "ix-mcp-dashboard-launcher-smoke"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [mcpPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      ${mcpPython}/bin/python3 ${dashboardLauncherTest} >stdout 2>stderr || {
+        echo "ix-mcp dashboard-launcher smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        ${mcpPython}/bin/python3 ${dashboardLauncherTest} >stdout 2>stderr || {
-          echo "ix-mcp dashboard-launcher smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -qx 'dashboard-launcher-ok' stdout || {
-          echo "ix-mcp dashboard-launcher smoke did not confirm helper behaviour:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -qx 'dashboard-launcher-ok' stdout || {
+        echo "ix-mcp dashboard-launcher smoke did not confirm helper behaviour:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # Exercises the in-kernel runtime (ix_notebook_mcp/runtime.py) in-process: two
   # jobs run concurrently on one event loop, neither blocks the other, each keeps
@@ -2659,25 +2668,25 @@ let
   '';
   feedSmoke =
     pkgs.runCommand "ix-mcp-feed-smoke"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [mcpPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      ${lib.getExe mcpPython} ${feedTestPy} >stdout 2>stderr || {
+        echo "ix-mcp feed smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        ${lib.getExe mcpPython} ${feedTestPy} >stdout 2>stderr || {
-          echo "ix-mcp feed smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -qx 'feed-ok' stdout || {
-          echo "ix-mcp feed smoke did not confirm the embed contract:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -qx 'feed-ok' stdout || {
+        echo "ix-mcp feed smoke did not confirm the embed contract:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # The session identity feature: a run's session label flows kernel -> store ->
   # pane bridge so the dashboard can group and name each MCP client's runs.
@@ -2737,25 +2746,25 @@ let
 
   sessionIdentitySmoke =
     pkgs.runCommand "ix-mcp-session-identity-smoke"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [mcpPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      ${lib.getExe mcpPython} ${sessionIdentityTestPy} >stdout 2>stderr || {
+        echo "ix-mcp session identity smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        ${lib.getExe mcpPython} ${sessionIdentityTestPy} >stdout 2>stderr || {
-          echo "ix-mcp session identity smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -qx 'session-identity-ok' stdout || {
-          echo "ix-mcp session identity smoke did not confirm the contract:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -qx 'session-identity-ok' stdout || {
+        echo "ix-mcp session identity smoke did not confirm the contract:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # The read-only data API is also the embedding contract: a host (the room
   # server runs `ix-mcp` as its agent's only tool) reads the agent's rich
@@ -2861,54 +2870,54 @@ let
   '';
   apiSmoke =
     pkgs.runCommand "ix-mcp-api-smoke"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [mcpPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      ${mcpPython}/bin/python3 ${apiTest} >stdout 2>stderr || {
+        echo "ix-mcp api smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        ${mcpPython}/bin/python3 ${apiTest} >stdout 2>stderr || {
-          echo "ix-mcp api smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -qx 'api-ok' stdout || {
-          echo "ix-mcp api smoke did not confirm the embedding data API:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -qx 'api-ok' stdout || {
+        echo "ix-mcp api smoke did not confirm the embedding data API:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   runtimeSmoke =
     pkgs.runCommand "ix-mcp-runtime-smoke"
-      {
-        # git is on PATH so the view.tree .gitignore-pruning assertion can init a
-        # throwaway repo; without it that path falls back to the denylist (still
-        # covered by the no-git case in the same test).
-        nativeBuildInputs = [
-          mcpPython
-          pkgs.git
-          pkgs.nushell
-        ];
-        strictDeps = true;
+    {
+      # git is on PATH so the view.tree .gitignore-pruning assertion can init a
+      # throwaway repo; without it that path falls back to the denylist (still
+      # covered by the no-git case in the same test).
+      nativeBuildInputs = [
+        mcpPython
+        pkgs.git
+        pkgs.nushell
+      ];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      ${lib.getExe mcpPython} ${runtimeTestPy} >stdout 2>stderr || {
+        echo "ix-mcp runtime smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        ${lib.getExe mcpPython} ${runtimeTestPy} >stdout 2>stderr || {
-          echo "ix-mcp runtime smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -qx 'runtime-ok' stdout || {
-          echo "ix-mcp runtime smoke did not confirm concurrent jobs:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -qx 'runtime-ok' stdout || {
+        echo "ix-mcp runtime smoke did not confirm concurrent jobs:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # Issue #1754: per-cell static type checking (ty) before execution, plus the
   # bug 1-3 regressions (await-a-failed-job re-raises; Job/Result accessor
@@ -2916,45 +2925,45 @@ let
   # tests need ty resolvable and its diagnostics stable, so ty is provided on the
   # env exactly as the wrapper sets it; rg/fd back the fsearch limit assertion.
   # A dedicated interpreter adds pytest (the bare mcpPython omits it).
-  typecheckTestPython = mcpPythonInterp.withPackages (ps: (mcpPythonPackages ps) ++ [ ps.pytest ]);
+  typecheckTestPython = mcpPythonInterp.withPackages (ps: (mcpPythonPackages ps) ++ [ps.pytest]);
   typecheckSmoke =
     pkgs.runCommand "ix-mcp-typecheck-smoke"
-      {
-        nativeBuildInputs = [
-          typecheckTestPython
-          pkgs.ty
-          pkgs.ripgrep
-          pkgs.fd
-        ];
-        strictDeps = true;
-        meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766)";
+    {
+      nativeBuildInputs = [
+        typecheckTestPython
+        pkgs.ty
+        pkgs.ripgrep
+        pkgs.fd
+      ];
+      strictDeps = true;
+      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766)";
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      export IX_MCP_TY_BIN=${lib.escapeShellArg tyBin}
+      export IX_MCP_TY_PYTHON=${lib.escapeShellArg mcpPython.interpreter}
+      # The edited ix_notebook_mcp / fsearch / sh live in the interpreter's
+      # site-packages (built from this worktree's source), so the tests import
+      # them from there; only the test files are copied in (a bare store path of
+      # a single .py is read by pytest as a directory).
+      cp ${./tests/test_typecheck.py} test_typecheck.py
+      cp ${./tests/test_job_await_errors.py} test_job_await_errors.py
+      cp ${./tests/test_fsearch_partial.py} test_fsearch_partial.py
+      # sh Output rendering regressions (issue #1766: a failed build must not
+      # read as success/still-running); imports the site-packages sh module.
+      cp ${./tests/test_sh_module.py} test_sh_module.py
+      ${lib.getExe typecheckTestPython} -m pytest \
+        test_typecheck.py test_job_await_errors.py test_fsearch_partial.py \
+        test_sh_module.py \
+        -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp typecheck smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        export IX_MCP_TY_BIN=${lib.escapeShellArg tyBin}
-        export IX_MCP_TY_PYTHON=${lib.escapeShellArg mcpPython.interpreter}
-        # The edited ix_notebook_mcp / fsearch / sh live in the interpreter's
-        # site-packages (built from this worktree's source), so the tests import
-        # them from there; only the test files are copied in (a bare store path of
-        # a single .py is read by pytest as a directory).
-        cp ${./tests/test_typecheck.py} test_typecheck.py
-        cp ${./tests/test_job_await_errors.py} test_job_await_errors.py
-        cp ${./tests/test_fsearch_partial.py} test_fsearch_partial.py
-        # sh Output rendering regressions (issue #1766: a failed build must not
-        # read as success/still-running); imports the site-packages sh module.
-        cp ${./tests/test_sh_module.py} test_sh_module.py
-        ${lib.getExe typecheckTestPython} -m pytest \
-          test_typecheck.py test_job_await_errors.py test_fsearch_partial.py \
-          test_sh_module.py \
-          -q -p no:cacheprovider >stdout 2>stderr || {
-          echo "ix-mcp typecheck smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        cat stdout
-        mkdir -p "$out"
-      '';
+      cat stdout
+      mkdir -p "$out"
+    '';
 
   # The session-file contract: run cells against a session store, checkpoint,
   # "restart" into a fresh namespace, and reopen -- the checkpoint restores the
@@ -3017,25 +3026,25 @@ let
   '';
   sessionSmoke =
     pkgs.runCommand "ix-mcp-session-smoke"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [mcpPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      ${lib.getExe mcpPython} ${sessionTestPy} >stdout 2>stderr || {
+        echo "ix-mcp session smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        ${lib.getExe mcpPython} ${sessionTestPy} >stdout 2>stderr || {
-          echo "ix-mcp session smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -qx 'session-ok' stdout || {
-          echo "ix-mcp session smoke did not confirm the reopen contract:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -qx 'session-ok' stdout || {
+        echo "ix-mcp session smoke did not confirm the reopen contract:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # Boots a real kernel and proves the two signal-driven recoveries for a cell
   # that blocks the kernel's event loop with a synchronous call:
@@ -3157,25 +3166,25 @@ let
   '';
   wedgeSmoke =
     pkgs.runCommand "ix-mcp-wedge-smoke"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [mcpPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      ${lib.getExe mcpPython} ${wedgeTestPy} >stdout 2>stderr || {
+        echo "ix-mcp wedge smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        ${lib.getExe mcpPython} ${wedgeTestPy} >stdout 2>stderr || {
-          echo "ix-mcp wedge smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -qx 'wedge-ok' stdout || {
-          echo "ix-mcp wedge smoke did not confirm the watchdog:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -qx 'wedge-ok' stdout || {
+        echo "ix-mcp wedge smoke did not confirm the watchdog:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # Exercises the rich-output capture path: a DataFrame result is persisted to the
   # store with its text/html bundle (so the dashboard renders a table, not a repr),
@@ -3471,47 +3480,47 @@ let
 
   yieldSmoke =
     pkgs.runCommand "ix-mcp-yield-smoke"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [mcpPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      ${lib.getExe mcpPython} ${yieldTestPy} >stdout 2>stderr || {
+        echo "ix-mcp yield smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        ${lib.getExe mcpPython} ${yieldTestPy} >stdout 2>stderr || {
-          echo "ix-mcp yield smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -qx 'yield-ok' stdout || {
-          echo "ix-mcp yield smoke did not confirm yielded results:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -qx 'yield-ok' stdout || {
+        echo "ix-mcp yield smoke did not confirm yielded results:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   richSmoke =
     pkgs.runCommand "ix-mcp-rich-smoke"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [mcpPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      ${lib.getExe mcpPython} ${richTestPy} >stdout 2>stderr || {
+        echo "ix-mcp rich smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        ${lib.getExe mcpPython} ${richTestPy} >stdout 2>stderr || {
-          echo "ix-mcp rich smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -qx 'rich-ok' stdout || {
-          echo "ix-mcp rich smoke did not confirm rich-output capture:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -qx 'rich-ok' stdout || {
+        echo "ix-mcp rich smoke did not confirm rich-output capture:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # Exercises the live-value introspection that feeds the dashboard's hover/inlay:
   # describe() classifies scalars, DataFrames, functions (with a source location),
@@ -3626,25 +3635,25 @@ let
   '';
   bindingsSmoke =
     pkgs.runCommand "ix-mcp-bindings-smoke"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [mcpPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      ${lib.getExe mcpPython} ${bindingsTestPy} >stdout 2>stderr || {
+        echo "ix-mcp bindings smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        ${lib.getExe mcpPython} ${bindingsTestPy} >stdout 2>stderr || {
-          echo "ix-mcp bindings smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -qx 'bindings-ok' stdout || {
-          echo "ix-mcp bindings smoke did not confirm value introspection:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -qx 'bindings-ok' stdout || {
+        echo "ix-mcp bindings smoke did not confirm value introspection:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # The vmkit guest surfaces as a live dashboard resource: a booted Driver shows
   # up in Driver.list_all(), renders its framebuffer to inline-PNG HTML, and the
@@ -3738,25 +3747,25 @@ let
   '';
   vmkitResourceSmoke =
     pkgs.runCommand "ix-mcp-vmkit-resource-smoke"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [mcpPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      ${lib.getExe mcpPython} ${vmkitResourceTestPy} >stdout 2>stderr || {
+        echo "ix-mcp vmkit resource smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        ${lib.getExe mcpPython} ${vmkitResourceTestPy} >stdout 2>stderr || {
-          echo "ix-mcp vmkit resource smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -qx 'vmkit-resource-ok' stdout || {
-          echo "ix-mcp vmkit resource smoke did not confirm the resource path:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -qx 'vmkit-resource-ok' stdout || {
+        echo "ix-mcp vmkit resource smoke did not confirm the resource path:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # The imessage module: read the Messages/Contacts SQLite databases into polars
   # and (without sending) validate the AppleScript send path. Hermetic -- it
@@ -3984,25 +3993,25 @@ let
   '';
   imessageSmoke =
     pkgs.runCommand "ix-mcp-imessage-smoke"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [mcpPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      ${lib.getExe mcpPython} ${imessageTestPy} >stdout 2>stderr || {
+        echo "ix-mcp imessage smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        ${lib.getExe mcpPython} ${imessageTestPy} >stdout 2>stderr || {
-          echo "ix-mcp imessage smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -qx 'imessage-ok' stdout || {
-          echo "ix-mcp imessage smoke did not confirm the imessage module:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -qx 'imessage-ok' stdout || {
+        echo "ix-mcp imessage smoke did not confirm the imessage module:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # The maps module: pure-helper checks that need no network or location
   # permission (the nix sandbox has neither). Exercises the radius->region span
@@ -4046,23 +4055,23 @@ let
   '';
   mapsSmoke =
     pkgs.runCommand "ix-mcp-maps-smoke"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [mcpPython];
+      strictDeps = true;
+    }
+    ''
+      ${lib.getExe mcpPython} ${mapsTestPy} >stdout 2>stderr || {
+        echo "ix-mcp maps smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        ${lib.getExe mcpPython} ${mapsTestPy} >stdout 2>stderr || {
-          echo "ix-mcp maps smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -qx 'maps-ok' stdout || {
-          echo "ix-mcp maps smoke did not confirm the maps module:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -qx 'maps-ok' stdout || {
+        echo "ix-mcp maps smoke did not confirm the maps module:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # The ghostty module: pure-logic checks that need no Ghostty, osascript, or
   # display (the nix sandbox has none). Exercises the AppleScript-escape guard
@@ -4125,23 +4134,23 @@ let
   '';
   ghosttySmoke =
     pkgs.runCommand "ix-mcp-ghostty-smoke"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [mcpPython];
+      strictDeps = true;
+    }
+    ''
+      ${lib.getExe mcpPython} ${ghosttyTestPy} >stdout 2>stderr || {
+        echo "ix-mcp ghostty smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        ${lib.getExe mcpPython} ${ghosttyTestPy} >stdout 2>stderr || {
-          echo "ix-mcp ghostty smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -qx 'ghostty-ok' stdout || {
-          echo "ix-mcp ghostty smoke did not confirm the ghostty module:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -qx 'ghostty-ok' stdout || {
+        echo "ix-mcp ghostty smoke did not confirm the ghostty module:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # The view module: tabular helpers return plain polars DataFrames (so they stay
   # composable), the file helpers return a Code view whose repr is the raw text,
@@ -4225,25 +4234,25 @@ let
   '';
   viewSmoke =
     pkgs.runCommand "ix-mcp-view-smoke"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [mcpPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      ${lib.getExe mcpPython} ${viewTestPy} >stdout 2>stderr || {
+        echo "ix-mcp view smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        ${lib.getExe mcpPython} ${viewTestPy} >stdout 2>stderr || {
-          echo "ix-mcp view smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -qx 'view-ok' stdout || {
-          echo "ix-mcp view smoke did not confirm the view module:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -qx 'view-ok' stdout || {
+        echo "ix-mcp view smoke did not confirm the view module:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # The sh module: runs a real subprocess on the loop and proves the human/model
   # split. The command emits ANSI color; the dashboard view (_repr_html_ /
@@ -4470,28 +4479,28 @@ let
   '';
   shSmoke =
     pkgs.runCommand "ix-mcp-sh-smoke"
-      {
-        nativeBuildInputs = [
-          mcpPython
-          pkgs.zsh
-        ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [
+        mcpPython
+        pkgs.zsh
+      ];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      ${lib.getExe mcpPython} ${shTestPy} >stdout 2>stderr || {
+        echo "ix-mcp sh smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        ${lib.getExe mcpPython} ${shTestPy} >stdout 2>stderr || {
-          echo "ix-mcp sh smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -q '^sh-ok' stdout || {
-          echo "ix-mcp sh smoke did not confirm the sh module:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -q '^sh-ok' stdout || {
+        echo "ix-mcp sh smoke did not confirm the sh module:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # The fleet module: a mocked asyncssh connection drives the fan-out so the test
   # never depends on a reachable host or a running sshd. It asserts the contract
@@ -4593,25 +4602,25 @@ let
   '';
   fleetSmoke =
     pkgs.runCommand "ix-mcp-fleet-smoke"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [mcpPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      ${lib.getExe mcpPython} ${fleetTestPy} >stdout 2>stderr || {
+        echo "ix-mcp fleet smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        ${lib.getExe mcpPython} ${fleetTestPy} >stdout 2>stderr || {
-          echo "ix-mcp fleet smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -q '^fleet-ok' stdout || {
-          echo "ix-mcp fleet smoke did not confirm the fleet module:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -q '^fleet-ok' stdout || {
+        echo "ix-mcp fleet smoke did not confirm the fleet module:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # The cluster surface (discovery merge, Ray submit return-shape, /api/exec
   # auth) with the two discovery sources, the Ray remote, and the kernel all
@@ -4619,25 +4628,25 @@ let
   # `ix_notebook_mcp`, so the script imports them with no PYTHONPATH.
   fleetClusterSmoke =
     pkgs.runCommand "ix-mcp-fleet-cluster-smoke"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [mcpPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      ${lib.getExe mcpPython} ${./tests/fleet_cluster_check.py} >stdout 2>stderr || {
+        echo "ix-mcp fleet cluster smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        ${lib.getExe mcpPython} ${./tests/fleet_cluster_check.py} >stdout 2>stderr || {
-          echo "ix-mcp fleet cluster smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -q '^fleet-cluster-ok' stdout || {
-          echo "ix-mcp fleet cluster smoke did not confirm the cluster surface:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -q '^fleet-cluster-ok' stdout || {
+        echo "ix-mcp fleet cluster smoke did not confirm the cluster surface:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # macOS-only modules (`screen`, `vmkit`) are only bundled on Darwin; their
   # import tests only exist there.
@@ -4759,23 +4768,23 @@ let
   '';
   nixSmoke =
     pkgs.runCommand "ix-mcp-nix-smoke"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [mcpPython];
+      strictDeps = true;
+    }
+    ''
+      ${lib.getExe mcpPython} ${nixTestPy} >stdout 2>stderr || {
+        echo "ix-mcp nix smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        ${lib.getExe mcpPython} ${nixTestPy} >stdout 2>stderr || {
-          echo "ix-mcp nix smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -q '^nix-ok' stdout || {
-          echo "ix-mcp nix smoke did not confirm the nix module:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -q '^nix-ok' stdout || {
+        echo "ix-mcp nix smoke did not confirm the nix module:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # The worktree module: drive real `git worktree` against a throwaway repo
   # (git is on PATH in this sandbox). Proves add() creates a new branch in its
@@ -4850,28 +4859,28 @@ let
   '';
   worktreeSmoke =
     pkgs.runCommand "ix-mcp-worktree-smoke"
-      {
-        nativeBuildInputs = [
-          mcpPython
-          pkgs.git
-        ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [
+        mcpPython
+        pkgs.git
+      ];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      ${lib.getExe mcpPython} ${worktreeTestPy} >stdout 2>stderr || {
+        echo "ix-mcp worktree smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        ${lib.getExe mcpPython} ${worktreeTestPy} >stdout 2>stderr || {
-          echo "ix-mcp worktree smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -qx 'worktree-ok' stdout || {
-          echo "ix-mcp worktree smoke did not confirm the worktree module:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -qx 'worktree-ok' stdout || {
+        echo "ix-mcp worktree smoke did not confirm the worktree module:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # The browser module: it drives a Chromium-family browser over CDP with the
   # bundled playwright. A real browser needs a display, and we NEVER run headless,
@@ -5075,25 +5084,25 @@ let
   '';
   browserSmoke =
     pkgs.runCommand "ix-mcp-browser-smoke"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [mcpPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      ${lib.getExe mcpPython} ${browserTestPy} >stdout 2>stderr || {
+        echo "ix-mcp browser smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        ${lib.getExe mcpPython} ${browserTestPy} >stdout 2>stderr || {
-          echo "ix-mcp browser smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -q '^browser-ok' stdout || {
-          echo "ix-mcp browser smoke did not confirm the browser module:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -q '^browser-ok' stdout || {
+        echo "ix-mcp browser smoke did not confirm the browser module:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # The clean-vdom contract, exercised against a real (headless) browser. Unlike
   # the launch smoke above, `vdom()` only reads the DOM, so it can run headless on
@@ -5219,30 +5228,30 @@ let
   '';
   browserVdomSmoke =
     pkgs.runCommand "ix-mcp-browser-vdom-smoke"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [mcpPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      # `vdom()` launches a (headless) browser, so point Playwright at the bundled
+      # browser bundle -- the bare mcpPython has no wrapper to set this (only the
+      # `ix-mcp` entrypoint does).
+      export PLAYWRIGHT_BROWSERS_PATH=${lib.escapeShellArg playwrightBrowsers}
+      export FONTCONFIG_FILE=${fontsConf}
+      ${lib.getExe mcpPython} ${browserVdomTestPy} >stdout 2>stderr || {
+        echo "ix-mcp browser vdom smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        # `vdom()` launches a (headless) browser, so point Playwright at the bundled
-        # browser bundle -- the bare mcpPython has no wrapper to set this (only the
-        # `ix-mcp` entrypoint does).
-        export PLAYWRIGHT_BROWSERS_PATH=${lib.escapeShellArg playwrightBrowsers}
-        export FONTCONFIG_FILE=${fontsConf}
-        ${lib.getExe mcpPython} ${browserVdomTestPy} >stdout 2>stderr || {
-          echo "ix-mcp browser vdom smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -q '^vdom-ok' stdout || {
-          echo "ix-mcp browser vdom smoke did not confirm the clean vdom:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
+      grep -q '^vdom-ok' stdout || {
+        echo "ix-mcp browser vdom smoke did not confirm the clean vdom:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      mkdir -p "$out"
+    '';
 
   # Property-based (Hypothesis) tests for the vdom()/read() snapshot helpers
   # (packages/mcp/tests/test_vdom_properties.py): they generate random HTML
@@ -5257,11 +5266,11 @@ let
   # override), so it must build from the same asn1-pinned interpreter.
   vdomTestPython = mcpPythonInterp.withPackages (
     ps:
-    mcpPythonPackages ps
-    ++ [
-      ps.pytest
-      ps.hypothesis
-    ]
+      mcpPythonPackages ps
+      ++ [
+        ps.pytest
+        ps.hypothesis
+      ]
   );
   vdomPropertiesSource = builtins.path {
     name = "ix-mcp-vdom-properties-test";
@@ -5269,28 +5278,28 @@ let
   };
   vdomPropertiesSmoke =
     pkgs.runCommand "ix-mcp-vdom-properties-smoke"
-      {
-        nativeBuildInputs = [ vdomTestPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [vdomTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      # `vdom()` launches a (headless) browser; point Playwright at the bundled
+      # browser bundle (no wrapper sets it for the bare interpreter).
+      export PLAYWRIGHT_BROWSERS_PATH=${lib.escapeShellArg playwrightBrowsers}
+      export FONTCONFIG_FILE=${fontsConf}
+      # Copy the test into a writable dir so pytest collects it as a plain file
+      # (a bare store path of a single .py is read by pytest as a directory).
+      cp ${vdomPropertiesSource} "$TMPDIR/test_vdom_properties.py"
+      ${lib.getExe vdomTestPython} -m pytest "$TMPDIR/test_vdom_properties.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp vdom property tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        # `vdom()` launches a (headless) browser; point Playwright at the bundled
-        # browser bundle (no wrapper sets it for the bare interpreter).
-        export PLAYWRIGHT_BROWSERS_PATH=${lib.escapeShellArg playwrightBrowsers}
-        export FONTCONFIG_FILE=${fontsConf}
-        # Copy the test into a writable dir so pytest collects it as a plain file
-        # (a bare store path of a single .py is read by pytest as a directory).
-        cp ${vdomPropertiesSource} "$TMPDIR/test_vdom_properties.py"
-        ${lib.getExe vdomTestPython} -m pytest "$TMPDIR/test_vdom_properties.py" -q -p no:cacheprovider >stdout 2>stderr || {
-          echo "ix-mcp vdom property tests failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        cat stdout
-        mkdir -p "$out"
-      '';
+      cat stdout
+      mkdir -p "$out"
+    '';
 
   # Interactive input: the browser -> kernel write path behind interactive
   # resources (packages/mcp/tests/test_inputs.py). Covers the store queue, the
@@ -5299,10 +5308,10 @@ let
   # interpreter (ix_notebook_mcp + aiohttp) plus pytest, which bare mcpPython omits.
   inputsTestPython = mcpPythonInterp.withPackages (
     ps:
-    mcpPythonPackages ps
-    ++ [
-      ps.pytest
-    ]
+      mcpPythonPackages ps
+      ++ [
+        ps.pytest
+      ]
   );
   inputsTestSource = builtins.path {
     name = "ix-mcp-inputs-test";
@@ -5310,22 +5319,22 @@ let
   };
   inputsTests =
     pkgs.runCommand "ix-mcp-inputs-tests"
-      {
-        nativeBuildInputs = [ inputsTestPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [inputsTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${inputsTestSource} "$TMPDIR/test_inputs.py"
+      ${lib.getExe inputsTestPython} -m pytest "$TMPDIR/test_inputs.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp inputs tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        cp ${inputsTestSource} "$TMPDIR/test_inputs.py"
-        ${lib.getExe inputsTestPython} -m pytest "$TMPDIR/test_inputs.py" -q -p no:cacheprovider >stdout 2>stderr || {
-          echo "ix-mcp inputs tests failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        cat stdout
-        mkdir -p "$out"
-      '';
+      cat stdout
+      mkdir -p "$out"
+    '';
 
   # Background-task failure reporting (packages/mcp/tests/test_task_errors.py):
   # a fire-and-forget task that dies with an unretrieved exception must be
@@ -5339,22 +5348,22 @@ let
   };
   taskErrorsTests =
     pkgs.runCommand "ix-mcp-task-errors-tests"
-      {
-        nativeBuildInputs = [ channelTestPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [channelTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${taskErrorsTestSource} "$TMPDIR/test_task_errors.py"
+      ${lib.getExe channelTestPython} -m pytest "$TMPDIR/test_task_errors.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp task-errors tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        cp ${taskErrorsTestSource} "$TMPDIR/test_task_errors.py"
-        ${lib.getExe channelTestPython} -m pytest "$TMPDIR/test_task_errors.py" -q -p no:cacheprovider >stdout 2>stderr || {
-          echo "ix-mcp task-errors tests failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        cat stdout
-        mkdir -p "$out"
-      '';
+      cat stdout
+      mkdir -p "$out"
+    '';
 
   # The Claude Code channel + interactive resource actions
   # (packages/mcp/tests/test_channel.py): the store outbox/events queues, the
@@ -5364,10 +5373,10 @@ let
   # SDK) plus pytest.
   channelTestPython = mcpPythonInterp.withPackages (
     ps:
-    mcpPythonPackages ps
-    ++ [
-      ps.pytest
-    ]
+      mcpPythonPackages ps
+      ++ [
+        ps.pytest
+      ]
   );
   channelTestSource = builtins.path {
     name = "ix-mcp-channel-test";
@@ -5375,22 +5384,22 @@ let
   };
   channelTests =
     pkgs.runCommand "ix-mcp-channel-tests"
-      {
-        nativeBuildInputs = [ channelTestPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [channelTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${channelTestSource} "$TMPDIR/test_channel.py"
+      ${lib.getExe channelTestPython} -m pytest "$TMPDIR/test_channel.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp channel tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        cp ${channelTestSource} "$TMPDIR/test_channel.py"
-        ${lib.getExe channelTestPython} -m pytest "$TMPDIR/test_channel.py" -q -p no:cacheprovider >stdout 2>stderr || {
-          echo "ix-mcp channel tests failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        cat stdout
-        mkdir -p "$out"
-      '';
+      cat stdout
+      mkdir -p "$out"
+    '';
 
   # End-to-end browser proof of the interactive-input path: a real headless
   # Chromium mounts an `Input`'s HTML in a sandboxed, opaque-origin srcdoc iframe
@@ -5400,10 +5409,10 @@ let
   # browser as the vdom smoke, plus pytest.
   inputBrowserTestPython = mcpPythonInterp.withPackages (
     ps:
-    mcpPythonPackages ps
-    ++ [
-      ps.pytest
-    ]
+      mcpPythonPackages ps
+      ++ [
+        ps.pytest
+      ]
   );
   inputBrowserTestSource = builtins.path {
     name = "ix-mcp-input-browser-test";
@@ -5411,24 +5420,24 @@ let
   };
   inputBrowserSmoke =
     pkgs.runCommand "ix-mcp-input-browser-smoke"
-      {
-        nativeBuildInputs = [ inputBrowserTestPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [inputBrowserTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      export PLAYWRIGHT_BROWSERS_PATH=${lib.escapeShellArg playwrightBrowsers}
+      export FONTCONFIG_FILE=${fontsConf}
+      cp ${inputBrowserTestSource} "$TMPDIR/test_input_browser.py"
+      ${lib.getExe inputBrowserTestPython} -m pytest "$TMPDIR/test_input_browser.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp input browser smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        export PLAYWRIGHT_BROWSERS_PATH=${lib.escapeShellArg playwrightBrowsers}
-        export FONTCONFIG_FILE=${fontsConf}
-        cp ${inputBrowserTestSource} "$TMPDIR/test_input_browser.py"
-        ${lib.getExe inputBrowserTestPython} -m pytest "$TMPDIR/test_input_browser.py" -q -p no:cacheprovider >stdout 2>stderr || {
-          echo "ix-mcp input browser smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        cat stdout
-        mkdir -p "$out"
-      '';
+      cat stdout
+      mkdir -p "$out"
+    '';
 
   # The whole Svelte resource path (packages/mcp/tests/test_svelte.py): the
   # nix-built svelte-bundle CLI compiles a Svelte 5 component, a real sandboxed
@@ -5438,10 +5447,10 @@ let
   svelteBundled = importTest "svelte" "import svelte; print('svelte-ok', callable(svelte.bundle), callable(svelte.component))";
   svelteTestPython = mcpPythonInterp.withPackages (
     ps:
-    mcpPythonPackages ps
-    ++ [
-      ps.pytest
-    ]
+      mcpPythonPackages ps
+      ++ [
+        ps.pytest
+      ]
   );
   svelteTestSource = builtins.path {
     name = "ix-mcp-svelte-test";
@@ -5449,25 +5458,25 @@ let
   };
   svelteTests =
     pkgs.runCommand "ix-mcp-svelte-tests"
-      {
-        nativeBuildInputs = [ svelteTestPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [svelteTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      export PLAYWRIGHT_BROWSERS_PATH=${lib.escapeShellArg playwrightBrowsers}
+      export FONTCONFIG_FILE=${fontsConf}
+      export IX_SVELTE_BUNDLE_BIN=${lib.escapeShellArg (lib.getExe svelteBundleBin)}
+      cp ${svelteTestSource} "$TMPDIR/test_svelte.py"
+      ${lib.getExe svelteTestPython} -m pytest "$TMPDIR/test_svelte.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp svelte tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        export PLAYWRIGHT_BROWSERS_PATH=${lib.escapeShellArg playwrightBrowsers}
-        export FONTCONFIG_FILE=${fontsConf}
-        export IX_SVELTE_BUNDLE_BIN=${lib.escapeShellArg (lib.getExe svelteBundleBin)}
-        cp ${svelteTestSource} "$TMPDIR/test_svelte.py"
-        ${lib.getExe svelteTestPython} -m pytest "$TMPDIR/test_svelte.py" -q -p no:cacheprovider >stdout 2>stderr || {
-          echo "ix-mcp svelte tests failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        cat stdout
-        mkdir -p "$out"
-      '';
+      cat stdout
+      mkdir -p "$out"
+    '';
 
   screenBundled = importTest "screen" "import screen; print('screen-ok', all(callable(getattr(screen, n)) for n in ('capture', 'click', 'write', 'press', 'key_down', 'key_up', 'apps', 'frontmost', 'launch', 'activate', 'terminate', 'accessibility_trusted')))";
   coreLocationBundled = importTest "corelocation" "import CoreLocation; print('corelocation-ok', callable(CoreLocation.CLLocationManager.alloc))";
@@ -5493,22 +5502,22 @@ let
   };
   notionTests =
     pkgs.runCommand "ix-mcp-notion-tests"
-      {
-        nativeBuildInputs = [ notionTestPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [notionTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${notionTestSource} "$TMPDIR/test_notion.py"
+      ${lib.getExe notionTestPython} -m pytest "$TMPDIR/test_notion.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp notion tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        cp ${notionTestSource} "$TMPDIR/test_notion.py"
-        ${lib.getExe notionTestPython} -m pytest "$TMPDIR/test_notion.py" -q -p no:cacheprovider >stdout 2>stderr || {
-          echo "ix-mcp notion tests failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        cat stdout
-        mkdir -p "$out"
-      '';
+      cat stdout
+      mkdir -p "$out"
+    '';
   nuBundled = importTest "nu" "import nu; print('nu-ok', callable(nu), callable(nu.value), nu.NuError.__name__ == 'NuError', nu.__version__)";
   # Behavior tests for the embedded nushell engine: the normalization matrix,
   # persistent REPL state, native datetime/duration crossing, the NuError
@@ -5526,22 +5535,22 @@ let
   };
   nuTests =
     pkgs.runCommand "ix-mcp-nu-tests"
-      {
-        nativeBuildInputs = [ nuTestPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [nuTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${nuTestSource} "$TMPDIR/test_nu.py"
+      ${lib.getExe nuTestPython} -m pytest "$TMPDIR/test_nu.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp nu tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        cp ${nuTestSource} "$TMPDIR/test_nu.py"
-        ${lib.getExe nuTestPython} -m pytest "$TMPDIR/test_nu.py" -q -p no:cacheprovider >stdout 2>stderr || {
-          echo "ix-mcp nu tests failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        cat stdout
-        mkdir -p "$out"
-      '';
+      cat stdout
+      mkdir -p "$out"
+    '';
   noxAutotriageBundled = importTest "nox-autotriage" "import nox_autotriage; print('nox-autotriage-ok', callable(nox_autotriage.findings_from_conformance))";
   linearTriageTestPython = pkgs.python3.withPackages (ps: [
     ps.pytest
@@ -5555,22 +5564,22 @@ let
   };
   linearTriageTests =
     pkgs.runCommand "ix-mcp-linear-triage-tests"
-      {
-        nativeBuildInputs = [ linearTriageTestPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [linearTriageTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${linearTriageTestSource} "$TMPDIR/test_linear_triage.py"
+      ${lib.getExe linearTriageTestPython} -m pytest "$TMPDIR/test_linear_triage.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp linear triage tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        cp ${linearTriageTestSource} "$TMPDIR/test_linear_triage.py"
-        ${lib.getExe linearTriageTestPython} -m pytest "$TMPDIR/test_linear_triage.py" -q -p no:cacheprovider >stdout 2>stderr || {
-          echo "ix-mcp linear triage tests failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        cat stdout
-        mkdir -p "$out"
-      '';
+      cat stdout
+      mkdir -p "$out"
+    '';
   noxAutotriageTestPython = pkgs.python3.withPackages (ps: [
     ps.pytest
     ps.httpx
@@ -5588,24 +5597,24 @@ let
   };
   noxAutotriageTests =
     pkgs.runCommand "ix-mcp-nox-autotriage-tests"
-      {
-        nativeBuildInputs = [ noxAutotriageTestPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [noxAutotriageTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      mkdir -p "$TMPDIR/fixtures"
+      cp ${noxAutotriageTestSource} "$TMPDIR/test_nox_autotriage.py"
+      cp -r ${noxAutotriageTestFixtures}/. "$TMPDIR/fixtures/"
+      ${lib.getExe noxAutotriageTestPython} -m pytest "$TMPDIR/test_nox_autotriage.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp nox-autotriage tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        mkdir -p "$TMPDIR/fixtures"
-        cp ${noxAutotriageTestSource} "$TMPDIR/test_nox_autotriage.py"
-        cp -r ${noxAutotriageTestFixtures}/. "$TMPDIR/fixtures/"
-        ${lib.getExe noxAutotriageTestPython} -m pytest "$TMPDIR/test_nox_autotriage.py" -q -p no:cacheprovider >stdout 2>stderr || {
-          echo "ix-mcp nox-autotriage tests failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        cat stdout
-        mkdir -p "$out"
-      '';
+      cat stdout
+      mkdir -p "$out"
+    '';
 
   # The `iphone` helper imports in the real interpreter and exposes its surface.
   # Cross-platform: pulls in the vendored pymobiledevice3 CLI, so it also proves
@@ -5625,22 +5634,22 @@ let
   };
   iphoneTests =
     pkgs.runCommand "ix-mcp-iphone-tests"
-      {
-        nativeBuildInputs = [ iphoneTestPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [iphoneTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${iphoneTestSource} "$TMPDIR/test_iphone.py"
+      ${lib.getExe iphoneTestPython} -m pytest "$TMPDIR/test_iphone.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp iphone tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        cp ${iphoneTestSource} "$TMPDIR/test_iphone.py"
-        ${lib.getExe iphoneTestPython} -m pytest "$TMPDIR/test_iphone.py" -q -p no:cacheprovider >stdout 2>stderr || {
-          echo "ix-mcp iphone tests failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        cat stdout
-        mkdir -p "$out"
-      '';
+      cat stdout
+      mkdir -p "$out"
+    '';
 
   # Network-free unit tests for the `slack` helper: module shape plus that
   # `send` builds the right chat.postMessage params for top-level vs. in-thread
@@ -5657,22 +5666,22 @@ let
   };
   slackTests =
     pkgs.runCommand "ix-mcp-slack-tests"
-      {
-        nativeBuildInputs = [ slackTestPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [slackTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${slackTestSource} "$TMPDIR/test_slack.py"
+      ${lib.getExe slackTestPython} -m pytest "$TMPDIR/test_slack.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp slack tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        cp ${slackTestSource} "$TMPDIR/test_slack.py"
-        ${lib.getExe slackTestPython} -m pytest "$TMPDIR/test_slack.py" -q -p no:cacheprovider >stdout 2>stderr || {
-          echo "ix-mcp slack tests failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        cat stdout
-        mkdir -p "$out"
-      '';
+      cat stdout
+      mkdir -p "$out"
+    '';
 
   # Network-free unit tests for the federated-resources bridge: every path of
   # `resources_bridge` (list/read/act, peer-flag assembly, not-found -> -32002,
@@ -5692,25 +5701,25 @@ let
   };
   resourcesBridgeTests =
     pkgs.runCommand "ix-mcp-resources-bridge-tests"
-      {
-        nativeBuildInputs = [
-          resourcesBridgeTestPython
-          pkgs.bash
-        ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [
+        resourcesBridgeTestPython
+        pkgs.bash
+      ];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${resourcesBridgeTestSource} "$TMPDIR/test_resources_bridge.py"
+      ${lib.getExe resourcesBridgeTestPython} -m pytest "$TMPDIR/test_resources_bridge.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp resources-bridge tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        cp ${resourcesBridgeTestSource} "$TMPDIR/test_resources_bridge.py"
-        ${lib.getExe resourcesBridgeTestPython} -m pytest "$TMPDIR/test_resources_bridge.py" -q -p no:cacheprovider >stdout 2>stderr || {
-          echo "ix-mcp resources-bridge tests failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        cat stdout
-        mkdir -p "$out"
-      '';
+      cat stdout
+      mkdir -p "$out"
+    '';
 
   # Network-free tests for the tailnet auto-mesh (index#1787): the `/mesh`
   # route and its skip paths (IX_MCP_MESH=0, no tailscale IP, bind conflict),
@@ -5738,110 +5747,113 @@ let
   };
   meshTests =
     pkgs.runCommand "ix-mcp-mesh-tests"
-      {
-        nativeBuildInputs = [
-          meshTestPython
-          pkgs.bash
-        ];
-        strictDeps = true;
-        # The tests bind loopback sockets (a real mesh server + a fake GCS
-        # listener); the darwin sandbox denies all binds without this. Linux
-        # sandboxes already provide a private loopback, so it is a no-op there.
-        __darwinAllowLocalNetworking = true;
-      }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        cp ${meshTestSource} "$TMPDIR/test_mesh.py"
-        ${lib.getExe meshTestPython} -m pytest "$TMPDIR/test_mesh.py" -q -p no:cacheprovider >stdout 2>stderr || {
-          echo "ix-mcp mesh tests failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        cat stdout
-        mkdir -p "$out"
-      '';
-in
-package.overrideAttrs (old: {
-  passthru = (old.passthru or { }) // {
-    tests = {
-      inherit
-        strictTypecheck
-        tuiBundled
-        htpyBundled
-        searchBundled
-        astlogBundled
-        fsearchBundled
-        dataLibsBundled
-        gmailLibsBundled
-        exaBundled
-        googleAuthBundled
-        ixGoogleBundled
-        slackBundled
-        slackTests
-        resourcesBridgeTests
-        meshBundled
-        meshTests
-        beeperBundled
-        requirementsSmoke
-        engineBundled
-        serverTools
-        evalSmoke
-        runtimeSmoke
-        typecheckSmoke
-        sessionSmoke
-        sessionIdentitySmoke
-        feedSmoke
-        apiSmoke
-        inputsTests
-        channelTests
-        taskErrorsTests
-        inputBrowserSmoke
-        svelteBundled
-        svelteTests
-        wedgeSmoke
-        richSmoke
-        yieldSmoke
-        bindingsSmoke
-        bindDefaultSmoke
-        sshAuthSockSmoke
-        dashboardLauncherSmoke
-        viewSmoke
-        nixSmoke
-        fleetSmoke
-        fleetClusterSmoke
-        shSmoke
-        worktreeSmoke
-        browserSmoke
-        browserVdomSmoke
-        vdomPropertiesSmoke
-        xBundled
-        nuBundled
-        nuTests
-        linearBundled
-        linearTriageTests
-        notionBundled
-        notionTests
-        noxAutotriageBundled
-        noxAutotriageTests
-        iphoneBundled
-        iphoneTests
-        ;
+    {
+      nativeBuildInputs = [
+        meshTestPython
+        pkgs.bash
+      ];
+      strictDeps = true;
+      # The tests bind loopback sockets (a real mesh server + a fake GCS
+      # listener); the darwin sandbox denies all binds without this. Linux
+      # sandboxes already provide a private loopback, so it is a no-op there.
+      __darwinAllowLocalNetworking = true;
     }
-    // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
-      inherit
-        screenBundled
-        coreLocationBundled
-        scriptingBridgeBundled
-        mapsBundled
-        mapsSmoke
-        vmkitBundled
-        vmkitResourceSmoke
-        imessageBundled
-        imessageSmoke
-        ghosttyBundled
-        ghosttySmoke
-        ;
-    };
-  };
-})
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${meshTestSource} "$TMPDIR/test_mesh.py"
+      ${lib.getExe meshTestPython} -m pytest "$TMPDIR/test_mesh.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp mesh tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      cat stdout
+      mkdir -p "$out"
+    '';
+in
+  package.overrideAttrs (old: {
+    passthru =
+      (old.passthru or {})
+      // {
+        tests =
+          {
+            inherit
+              strictTypecheck
+              tuiBundled
+              htpyBundled
+              searchBundled
+              astlogBundled
+              fsearchBundled
+              dataLibsBundled
+              gmailLibsBundled
+              exaBundled
+              googleAuthBundled
+              ixGoogleBundled
+              slackBundled
+              slackTests
+              resourcesBridgeTests
+              meshBundled
+              meshTests
+              beeperBundled
+              requirementsSmoke
+              engineBundled
+              serverTools
+              evalSmoke
+              runtimeSmoke
+              typecheckSmoke
+              sessionSmoke
+              sessionIdentitySmoke
+              feedSmoke
+              apiSmoke
+              inputsTests
+              channelTests
+              taskErrorsTests
+              inputBrowserSmoke
+              svelteBundled
+              svelteTests
+              wedgeSmoke
+              richSmoke
+              yieldSmoke
+              bindingsSmoke
+              bindDefaultSmoke
+              sshAuthSockSmoke
+              dashboardLauncherSmoke
+              viewSmoke
+              nixSmoke
+              fleetSmoke
+              fleetClusterSmoke
+              shSmoke
+              worktreeSmoke
+              browserSmoke
+              browserVdomSmoke
+              vdomPropertiesSmoke
+              xBundled
+              nuBundled
+              nuTests
+              linearBundled
+              linearTriageTests
+              notionBundled
+              notionTests
+              noxAutotriageBundled
+              noxAutotriageTests
+              iphoneBundled
+              iphoneTests
+              ;
+          }
+          // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
+            inherit
+              screenBundled
+              coreLocationBundled
+              scriptingBridgeBundled
+              mapsBundled
+              mapsSmoke
+              vmkitBundled
+              vmkitResourceSmoke
+              imessageBundled
+              imessageSmoke
+              ghosttyBundled
+              ghosttySmoke
+              ;
+          };
+      };
+  })

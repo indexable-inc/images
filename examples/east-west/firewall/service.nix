@@ -2,11 +2,9 @@
   lib,
   pkgs,
   ...
-}:
-let
+}: let
   httpPort = 8080;
-in
-{
+in {
   services.nginx = {
     enable = true;
     virtualHosts."east-west-firewall" = {
@@ -21,7 +19,7 @@ in
     };
   };
 
-  environment.systemPackages = [ pkgs.curl ];
+  environment.systemPackages = [pkgs.curl];
 
   # One declaration opens the firewall, registers the claim, and lets
   # east-west peers resolve this listener with `ix.endpointOf nodes.service "http"`.

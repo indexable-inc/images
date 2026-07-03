@@ -1,14 +1,10 @@
-{
-  pkgs,
-  ...
-}:
-let
+{pkgs, ...}: let
   # DEMO credentials, baked into the store on purpose so the example runs
   # as-is. For anything real, point `configFile` at a runtime secret file
   # (e.g. /run/secrets/seaweedfs-s3.json) so keys never enter the store.
   demoAccessKey = "ix-demo-access-key";
   demoSecretKey = "ix-demo-secret-key";
-  demoS3Config = (pkgs.formats.json { }).generate "seaweedfs-s3-demo.json" {
+  demoS3Config = (pkgs.formats.json {}).generate "seaweedfs-s3-demo.json" {
     identities = [
       {
         name = "demo";
@@ -28,8 +24,7 @@ let
       }
     ];
   };
-in
-{
+in {
   # The module owns the port claim, firewall opening, and the `/healthz`
   # readiness check; enabling it is all the example needs.
   services.ix-seaweedfs = {
@@ -38,7 +33,7 @@ in
   };
 
   # A small S3 client for the round-trip in the README and ad-hoc pokes.
-  environment.systemPackages = [ pkgs.s5cmd ];
+  environment.systemPackages = [pkgs.s5cmd];
 
   # Surface the demo endpoint and credentials to anyone shelled in, so the
   # round-trip below is copy-paste ready. Production deployments would not

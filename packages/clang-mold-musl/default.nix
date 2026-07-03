@@ -14,22 +14,21 @@
   pkgsCross,
   mold,
   wild,
-}:
-let
+}: let
   writeBashApplication = ix.writeBashApplication ix.pkgs;
 in
-writeBashApplication {
-  name = "clang-mold-musl";
-  runtimeInputs = [
-    pkgsCross.musl64.buildPackages.clang
-    mold
-    wild
-  ];
-  # The linker invocation from rustc includes "-no-pie" which clang warns about
-  # as unused; leave -u/-e/-o defaults alone and don't fail on that.
-  text = ''
-    linker="''${IX_LINKER:-mold}"
-    exec x86_64-unknown-linux-musl-clang "-fuse-ld=$linker" "$@"
-  '';
-  meta.description = "clang driver for the x86_64-unknown-linux-musl Rust target, linking with mold";
-}
+  writeBashApplication {
+    name = "clang-mold-musl";
+    runtimeInputs = [
+      pkgsCross.musl64.buildPackages.clang
+      mold
+      wild
+    ];
+    # The linker invocation from rustc includes "-no-pie" which clang warns about
+    # as unused; leave -u/-e/-o defaults alone and don't fail on that.
+    text = ''
+      linker="''${IX_LINKER:-mold}"
+      exec x86_64-unknown-linux-musl-clang "-fuse-ld=$linker" "$@"
+    '';
+    meta.description = "clang driver for the x86_64-unknown-linux-musl Rust target, linking with mold";
+  }

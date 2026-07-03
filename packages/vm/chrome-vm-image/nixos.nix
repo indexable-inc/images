@@ -15,8 +15,7 @@
   config,
   modulesPath,
   ...
-}:
-let
+}: let
   # A page that proves a real browser + real JS ran in the guest: it prints the
   # Chromium user-agent, a fresh timestamp, and draws a canvas gradient (all via
   # JS at render time), so a blank/placeholder capture is obvious.
@@ -51,9 +50,8 @@ let
       </script>
     </div></body></html>
   '';
-in
-{
-  imports = [ "${modulesPath}/image/repart.nix" ];
+in {
+  imports = ["${modulesPath}/image/repart.nix"];
 
   # Boot path: OVMF (libkrun-efi) -> systemd-boot (EFI removable path) -> UKI.
   # We place the bootloader + UKI manually via repart, so disable grub.
@@ -92,21 +90,17 @@ in
     sectorSize = 512;
     partitions = {
       "esp" = {
-        contents =
-          let
-            # aarch64-only image (see package.nix), so the EFI arch is fixed.
-            # Avoids depending on `config.nixpkgs.hostPlatform` (unset under
-            # eval-config with a bare `system`).
-            efiArch = "aa64";
-          in
-          {
-            "/EFI/BOOT/BOOT${lib.toUpper efiArch}.EFI".source =
-              "${pkgs.systemd}/lib/systemd/boot/efi/systemd-boot${efiArch}.efi";
-            "/EFI/Linux/${config.system.boot.loader.ukiFile}".source =
-              "${config.system.build.uki}/${config.system.boot.loader.ukiFile}";
-            # Auto-boot the single UKI with no menu/delay.
-            "/loader/loader.conf".source = pkgs.writeText "loader.conf" "timeout 0\n";
-          };
+        contents = let
+          # aarch64-only image (see package.nix), so the EFI arch is fixed.
+          # Avoids depending on `config.nixpkgs.hostPlatform` (unset under
+          # eval-config with a bare `system`).
+          efiArch = "aa64";
+        in {
+          "/EFI/BOOT/BOOT${lib.toUpper efiArch}.EFI".source = "${pkgs.systemd}/lib/systemd/boot/efi/systemd-boot${efiArch}.efi";
+          "/EFI/Linux/${config.system.boot.loader.ukiFile}".source = "${config.system.build.uki}/${config.system.boot.loader.ukiFile}";
+          # Auto-boot the single UKI with no menu/delay.
+          "/loader/loader.conf".source = pkgs.writeText "loader.conf" "timeout 0\n";
+        };
         repartConfig = {
           Type = "esp";
           Format = "vfat";
@@ -115,7 +109,7 @@ in
         };
       };
       "root" = {
-        storePaths = [ config.system.build.toplevel ];
+        storePaths = [config.system.build.toplevel];
         repartConfig = {
           Type = "root";
           Format = "ext4";
@@ -130,8 +124,8 @@ in
     # The demo: one oneshot that runs at the end of boot, captures, powers off.
     chrome-shot = {
       description = "Headless Chromium screenshot demo (vmkit chrome-vm)";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "multi-user.target" ];
+      wantedBy = ["multi-user.target"];
+      after = ["multi-user.target"];
       serviceConfig = {
         Type = "oneshot";
         # Mirror stdout/stderr to the serial console so the host's --console-file

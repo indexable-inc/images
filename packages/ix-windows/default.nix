@@ -1,4 +1,8 @@
-{ ix, lib, ... }:
+{
+  ix,
+  lib,
+  ...
+}:
 # A tao+wry desktop consumer of the dashboard producer stream. macOS-first: wry
 # links the system WebKit framework on darwin; Linux (WebKitGTK) is a later add,
 # so the flake output is darwin-only for now.

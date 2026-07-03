@@ -9,11 +9,9 @@
   lib,
   pkgs,
   ...
-}:
-let
+}: let
   cfg = config.ix.profiles.base;
-in
-{
+in {
   options.ix.profiles.base = {
     enable = lib.mkEnableOption "base runtime tools";
 
@@ -443,18 +441,20 @@ in
             # the `claude` binary the dev images bake in. <leader>aa on a line.
             ./nvim/plugins/agent.lua
           ];
-          packages.ix.start = [
-            pkgs.vimPlugins.nvim-treesitter.withAllGrammars
-          ]
-          ++ builtins.attrValues {
-            inherit (pkgs.vimPlugins)
-              plenary-nvim
-              telescope-nvim
-              gitsigns-nvim
-              which-key-nvim
-              oil-nvim
-              ;
-          };
+          packages.ix.start =
+            [
+              pkgs.vimPlugins.nvim-treesitter.withAllGrammars
+            ]
+            ++ builtins.attrValues {
+              inherit
+                (pkgs.vimPlugins)
+                plenary-nvim
+                telescope-nvim
+                gitsigns-nvim
+                which-key-nvim
+                oil-nvim
+                ;
+            };
         };
         # ix-islands colorscheme, generated from the shared islands palette so
         # the editor and the search `-c` highlighter never drift. Both
@@ -465,43 +465,40 @@ in
         # andrewgazelka/vscode-islands for the VS Code variant); init.lua picks
         # the dark variant by default. Both are available via
         # `:colorscheme ix-islands-{dark,light}` at runtime.
-        runtime =
-          let
-            body = builtins.readFile ./nvim/islands-body.lua;
-            colorscheme =
-              variant: slots:
-              let
-                colorTable = lib.concatMapAttrsStringSep "\n" (slot: hex: ''${slot} = "${hex}",'') slots;
-              in
-              pkgs.writeText "ix-islands-${variant}.lua" ''
-                -- ix-islands-${variant}
-                --
-                -- Generated from packages/code/code-highlight/src/islands-theme.json
-                -- and nvim/islands-body.lua. Edit those, not this file.
-                vim.cmd("highlight clear")
-                if vim.fn.exists("syntax_on") == 1 then
-                  vim.cmd("syntax reset")
-                end
-                vim.o.background = "${variant}"
-                vim.g.colors_name = "ix-islands-${variant}"
-
-                local c = {
-                ${colorTable}
-                }
-
-                ${body}
-              '';
+        runtime = let
+          body = builtins.readFile ./nvim/islands-body.lua;
+          colorscheme = variant: slots: let
+            colorTable = lib.concatMapAttrsStringSep "\n" (slot: hex: ''${slot} = "${hex}",'') slots;
           in
-          {
-            "colors/ix-islands-dark.lua".source = colorscheme "dark" ix.islandsTheme.dark;
-            "colors/ix-islands-light.lua".source = colorscheme "light" ix.islandsTheme.light;
-          };
+            pkgs.writeText "ix-islands-${variant}.lua" ''
+              -- ix-islands-${variant}
+              --
+              -- Generated from packages/code/code-highlight/src/islands-theme.json
+              -- and nvim/islands-body.lua. Edit those, not this file.
+              vim.cmd("highlight clear")
+              if vim.fn.exists("syntax_on") == 1 then
+                vim.cmd("syntax reset")
+              end
+              vim.o.background = "${variant}"
+              vim.g.colors_name = "ix-islands-${variant}"
+
+              local c = {
+              ${colorTable}
+              }
+
+              ${body}
+            '';
+        in {
+          "colors/ix-islands-dark.lua".source = colorscheme "dark" ix.islandsTheme.dark;
+          "colors/ix-islands-light.lua".source = colorscheme "light" ix.islandsTheme.light;
+        };
       };
     };
 
     environment.systemPackages =
       (builtins.attrValues {
-        inherit (pkgs)
+        inherit
+          (pkgs)
           ast-grep
           bat
           bpftrace

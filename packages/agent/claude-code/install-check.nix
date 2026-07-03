@@ -20,8 +20,7 @@
   wrapperFlags,
   python3,
   binName,
-}:
-''
+}: ''
     runHook preInstallCheck
 
     launcher=${ix.rustWorkspace.units.binaries."config-launch"}/bin/config-launch
@@ -42,13 +41,13 @@
       exit 1
     fi
     ${lib.optionalString (repoPackages ? mcp) ''
-      agents_dir="$(spec_env IX_CLAUDE_AGENTS_DIR)"
-      if [ ! -d "$agents_dir" ] || [ -z "$(find "$agents_dir" -maxdepth 1 -name '*.md' -print -quit)" ]; then
-        printf 'claude launcher env check failed: IX_CLAUDE_AGENTS_DIR has no agent markdown files: %s\n' \
-          "$agents_dir" >&2
-        exit 1
-      fi
-    ''}
+    agents_dir="$(spec_env IX_CLAUDE_AGENTS_DIR)"
+    if [ ! -d "$agents_dir" ] || [ -z "$(find "$agents_dir" -maxdepth 1 -name '*.md' -print -quit)" ]; then
+      printf 'claude launcher env check failed: IX_CLAUDE_AGENTS_DIR has no agent markdown files: %s\n' \
+        "$agents_dir" >&2
+      exit 1
+    fi
+  ''}
 
     check() {
       local desc="$1" expected="$2"
@@ -64,32 +63,32 @@
 
     check "flags prepend; settings injected when caller passes none" \
       ${
-        lib.escapeShellArg (
-          lib.concatStringsSep "\n" (
-            wrapperFlags
-            ++ [
-              "--settings=${settingsDefaultsFile}"
-              "mcp"
-              "list"
-            ]
-          )
-        )
-      } \
+    lib.escapeShellArg (
+      lib.concatStringsSep "\n" (
+        wrapperFlags
+        ++ [
+          "--settings=${settingsDefaultsFile}"
+          "mcp"
+          "list"
+        ]
+      )
+    )
+  } \
       mcp list
 
     check "caller --settings wins; package defaults stay out" \
       ${
-        lib.escapeShellArg (
-          lib.concatStringsSep "\n" (
-            wrapperFlags
-            ++ [
-              "--settings=/dev/null"
-              "-p"
-              "hi"
-            ]
-          )
-        )
-      } \
+    lib.escapeShellArg (
+      lib.concatStringsSep "\n" (
+        wrapperFlags
+        ++ [
+          "--settings=/dev/null"
+          "-p"
+          "hi"
+        ]
+      )
+    )
+  } \
       --settings=/dev/null -p hi
 
     # addDirs/pluginDirs render as single, prepended `=` tokens. `--add-dir` is
@@ -103,19 +102,19 @@
       "$PWD/test-spec.json" > "$PWD/dirs-spec.json"
     dirs_got="$(IX_LAUNCH_SPEC="$PWD/dirs-spec.json" "$launcher" mcp list)"
     dirs_want=${
-      lib.escapeShellArg (
-        lib.concatStringsSep "\n" (
-          wrapperFlags
-          ++ [
-            "--add-dir=/nix/store/sample-skills"
-            "--plugin-dir=/nix/store/sample-plugin"
-            "--settings=${settingsDefaultsFile}"
-            "mcp"
-            "list"
-          ]
-        )
+    lib.escapeShellArg (
+      lib.concatStringsSep "\n" (
+        wrapperFlags
+        ++ [
+          "--add-dir=/nix/store/sample-skills"
+          "--plugin-dir=/nix/store/sample-plugin"
+          "--settings=${settingsDefaultsFile}"
+          "mcp"
+          "list"
+        ]
       )
-    }
+    )
+  }
     if [ "$dirs_got" != "$dirs_want" ]; then
       printf 'claude launcher argv check failed: add-dir/plugin-dir tokens\nexpected:\n%s\ngot:\n%s\n' \
         "$dirs_want" "$dirs_got" >&2
@@ -234,29 +233,29 @@
     fi
     ${lib.optionalString (repoPackages ? search) ''
 
-      # Fail-open net for the prompt-priors hook: every skip path must exit 0
-      # with NO output (anything else would block or pollute the prompt).
-      # Offline by construction: each input is rejected by a pre-flight gate
-      # (short, no fleet noun, no credential, malformed JSON) before the
-      # network-touching search would run. HOME points at an empty dir so the
-      # credential gate cannot find a real mgrep token.
-      mkdir -p no-home
-      hook_silent() {
-        local desc="$1" input="$2" got
-        if ! got="$(printf '%s' "$input" | HOME="$PWD/no-home" ${hookRunner}/bin/claude-hooks prompt-priors)" \
-          || [ -n "$got" ]; then
-          printf 'prompt-priors hook check failed (%s): expected silent exit 0, got:\n%s\n' \
-            "$desc" "$got" >&2
-          exit 1
-        fi
-      }
-      hook_silent "short prompt skipped" '{"prompt":"fix this typo"}'
-      hook_silent "no fleet noun skipped" \
-        '{"prompt":"please rename this function to something clearer for readability"}'
-      hook_silent "no credential fails open" \
-        '{"prompt":"how do we deploy the fleet with colmena to every host"}'
-      hook_silent "malformed payload fails open" 'not json'
-    ''}
+    # Fail-open net for the prompt-priors hook: every skip path must exit 0
+    # with NO output (anything else would block or pollute the prompt).
+    # Offline by construction: each input is rejected by a pre-flight gate
+    # (short, no fleet noun, no credential, malformed JSON) before the
+    # network-touching search would run. HOME points at an empty dir so the
+    # credential gate cannot find a real mgrep token.
+    mkdir -p no-home
+    hook_silent() {
+      local desc="$1" input="$2" got
+      if ! got="$(printf '%s' "$input" | HOME="$PWD/no-home" ${hookRunner}/bin/claude-hooks prompt-priors)" \
+        || [ -n "$got" ]; then
+        printf 'prompt-priors hook check failed (%s): expected silent exit 0, got:\n%s\n' \
+          "$desc" "$got" >&2
+        exit 1
+      fi
+    }
+    hook_silent "short prompt skipped" '{"prompt":"fix this typo"}'
+    hook_silent "no fleet noun skipped" \
+      '{"prompt":"please rename this function to something clearer for readability"}'
+    hook_silent "no credential fails open" \
+      '{"prompt":"how do we deploy the fleet with colmena to every host"}'
+    hook_silent "malformed payload fails open" 'not json'
+  ''}
 
     # Behavioral net for the worktree guard: a real primary checkout plus a
     # linked worktree, built in the sandbox, with the protected-glob env

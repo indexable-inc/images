@@ -2,17 +2,15 @@
   lib,
   pkgs,
   ...
-}:
-let
+}: let
   httpPort = 8080;
-in
-{
+in {
   # The image carries its own east-west membership: every fleet that
   # deploys this image lands in the deployer's `declared-groups` network
   # without a fleet-level `groups` entry.
   ix = {
     networking = {
-      groups = [ "declared-groups" ];
+      groups = ["declared-groups"];
       expose.http = {
         port = httpPort;
         description = "private HTTP API for east-west group members";
@@ -49,5 +47,5 @@ in
     };
   };
 
-  environment.systemPackages = [ pkgs.curl ];
+  environment.systemPackages = [pkgs.curl];
 }

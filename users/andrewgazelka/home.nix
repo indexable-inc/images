@@ -53,14 +53,12 @@
   portableServicesModule,
   claudeCodeModule,
   ix,
-}:
-{
+}: {
   config,
   lib,
   pkgs,
   ...
-}:
-let
+}: let
   cfg = config.users.andrewgazelka;
 
   # The index flake's package set for the *host* system. Use this (not the
@@ -79,7 +77,10 @@ let
   # macOS speaks through the built-in `say`; Linux falls back to a configurable
   # speech command (speech-dispatcher's `spd-say` by default). Baked into the
   # say-detached body via the @SAY_CMD@ placeholder.
-  sayCommand = if isDarwin then "/usr/bin/say" else cfg.sound.linuxSayCommand;
+  sayCommand =
+    if isDarwin
+    then "/usr/bin/say"
+    else cfg.sound.linuxSayCommand;
 
   # The repo's checked-bash writer (lib/util/writers.nix): these watchers lean
   # on POSIX process control (the perl setsid/flock detach idioms) that is
@@ -94,8 +95,8 @@ let
   # placeholder is baked to the per-OS speech command at build time.
   sayDetached = writeBashApplication pkgs {
     name = "say-detached";
-    runtimeInputs = [ indexPkgs.minecraft-sound ];
-    text = builtins.replaceStrings [ "@SAY_CMD@" ] [ sayCommand ] (
+    runtimeInputs = [indexPkgs.minecraft-sound];
+    text = builtins.replaceStrings ["@SAY_CMD@"] [sayCommand] (
       builtins.readFile ./scripts/say-detached.sh
     );
   };
@@ -154,20 +155,20 @@ let
     ];
     text =
       builtins.replaceStrings
-        [ "@REPOS@" "@ORB_BIN@" "@LOG_DIR@" "@TRIAGE_COOLDOWN@" ]
-        [
-          # escapeShellArg per value: @REPOS@ lands unquoted in `repos=(@REPOS@)`,
-          # so a value with a space or shell metacharacter must carry its own
-          # quoting (the option is author-set, but bake safely rather than rely on
-          # it).
-          (lib.concatMapStringsSep " " lib.escapeShellArg cfg.prWatch.repos)
-          # The feed binary: a merge is queued as an XP orb and a CI failure as a
-          # villager pop (`<orb> push "<repo>: <title>" [--kind villager]`).
-          (lib.getExe' indexPkgs.bossbar-overlay "xp-orb-overlay")
-          cfg.logDir
-          (toString cfg.prWatch.triageCooldown)
-        ]
-        (builtins.readFile ./scripts/pr-watch.sh);
+      ["@REPOS@" "@ORB_BIN@" "@LOG_DIR@" "@TRIAGE_COOLDOWN@"]
+      [
+        # escapeShellArg per value: @REPOS@ lands unquoted in `repos=(@REPOS@)`,
+        # so a value with a space or shell metacharacter must carry its own
+        # quoting (the option is author-set, but bake safely rather than rely on
+        # it).
+        (lib.concatMapStringsSep " " lib.escapeShellArg cfg.prWatch.repos)
+        # The feed binary: a merge is queued as an XP orb and a CI failure as a
+        # villager pop (`<orb> push "<repo>: <title>" [--kind villager]`).
+        (lib.getExe' indexPkgs.bossbar-overlay "xp-orb-overlay")
+        cfg.logDir
+        (toString cfg.prWatch.triageCooldown)
+      ]
+      (builtins.readFile ./scripts/pr-watch.sh);
   };
 
   # The CI progress bars are a standalone reusable component, not personal glue:
@@ -175,11 +176,10 @@ let
   # the same with `services.ciBars = { enable = true; repos = [ ... ]; }`.
   ciBarsModule =
     import (ix.paths.packagesRoot + "/minecraft/bossbar-overlay/ci-bars-home-module.nix")
-      {
-        inherit indexPackages portableServicesModule ix;
-      };
-in
-{
+    {
+      inherit indexPackages portableServicesModule ix;
+    };
+in {
   imports = [
     portableServicesModule
     ciBarsModule
@@ -317,7 +317,7 @@ in
 
       environment = lib.mkOption {
         type = lib.types.attrsOf lib.types.str;
-        default = { };
+        default = {};
         description = ''
           Extra environment for the recorder (e.g. LIFELOG_TOKEN). Rendered
           into the world-readable Nix store, so do not inline real secrets.
@@ -326,7 +326,7 @@ in
 
       extraArgs = lib.mkOption {
         type = lib.types.listOf lib.types.str;
-        default = [ ];
+        default = [];
         example = [
           "--interval-secs"
           "10"
@@ -385,13 +385,13 @@ in
     ];
 
     # Expose the shared speaker on PATH so the user can announce by hand too.
-    home.packages = [ sayDetached ];
+    home.packages = [sayDetached];
 
     services.portable = lib.mkMerge [
       (lib.mkIf cfg.downtime.enable {
         ix-downtime = {
           description = "ix.dev downtime watcher";
-          command = [ (lib.getExe' ixDowntime "ix-downtime") ];
+          command = [(lib.getExe' ixDowntime "ix-downtime")];
           interval = cfg.downtime.interval;
           standardOutPath = "${cfg.logDir}/ix-downtime.log";
           standardErrorPath = "${cfg.logDir}/ix-downtime.log";
@@ -404,7 +404,7 @@ in
       (lib.mkIf cfg.prWatch.enable {
         pr-watch = {
           description = "merged-PR + CI-failure watcher";
-          command = [ (lib.getExe' prWatch "pr-watch") ];
+          command = [(lib.getExe' prWatch "pr-watch")];
           interval = cfg.prWatch.interval;
           standardOutPath = "${cfg.logDir}/pr-watch.log";
           standardErrorPath = "${cfg.logDir}/pr-watch.log";
@@ -430,20 +430,20 @@ in
       (lib.mkIf cfg.lifelog.enable {
         lifelog = {
           description = "lifelog activity recorder";
-          command = [
-            (lib.getExe cfg.lifelog.package)
-            "record"
-          ]
-          ++ (
-            if cfg.lifelog.listen == null then
-              [ "--no-listen" ]
-            else
-              [
+          command =
+            [
+              (lib.getExe cfg.lifelog.package)
+              "record"
+            ]
+            ++ (
+              if cfg.lifelog.listen == null
+              then ["--no-listen"]
+              else [
                 "--listen"
                 cfg.lifelog.listen
               ]
-          )
-          ++ cfg.lifelog.extraArgs;
+            )
+            ++ cfg.lifelog.extraArgs;
           # Long-lived daemon: relaunch on any exit so recording survives
           # crashes; the recorder's gap-aware span logic absorbs the restart.
           restart = "always";

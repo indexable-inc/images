@@ -4,12 +4,10 @@
   nodes,
   pkgs,
   ...
-}:
-let
+}: let
   service = ix.endpointOf nodes.service "http";
-in
-{
-  environment.systemPackages = [ pkgs.curl ];
+in {
+  environment.systemPackages = [pkgs.curl];
 
   ix.healthChecks.private-service-denied = {
     description = "private service is unreachable outside the east-west group";

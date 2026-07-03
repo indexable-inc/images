@@ -15,9 +15,9 @@
   lib,
   pkgs,
   ...
-}:
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     mkEnableOption
     mkIf
     mkOption
@@ -31,48 +31,42 @@ let
   managedRoot = "/etc/minecraft";
   fileExt = path: lib.last (lib.splitString "." path);
 
-  flattenProperties =
-    value:
-    let
-      pairs = lib.mapAttrsToListRecursiveCond (_: as: !lib.isDerivation as) (
+  flattenProperties = value: let
+    pairs =
+      lib.mapAttrsToListRecursiveCond (_: as: !lib.isDerivation as) (
         path: leaf: lib.nameValuePair (lib.concatStringsSep "." path) leaf
-      ) value;
-      names = map (pair: pair.name) pairs;
-      duplicateNames = ix.lists.findDuplicates names;
-    in
+      )
+      value;
+    names = map (pair: pair.name) pairs;
+    duplicateNames = ix.lists.findDuplicates names;
+  in
     assert lib.assertMsg (
-      duplicateNames == [ ]
+      duplicateNames == []
     ) "duplicate .properties keys after flattening: ${lib.concatStringsSep ", " duplicateNames}";
-    lib.listToAttrs pairs;
+      lib.listToAttrs pairs;
 
-  isSafeRelativePathShape =
-    path:
-    let
-      isAbsolute = lib.hasPrefix "/" path;
-      segments = lib.splitString "/" path;
-      hasParent = builtins.elem ".." segments;
-      hasCurrent = builtins.elem "." segments;
-      # Detects internal empty segments (//), leading empty (absolute), or trailing empty (config/).
-      hasEmpty = builtins.elem "" segments;
-    in
+  isSafeRelativePathShape = path: let
+    isAbsolute = lib.hasPrefix "/" path;
+    segments = lib.splitString "/" path;
+    hasParent = builtins.elem ".." segments;
+    hasCurrent = builtins.elem "." segments;
+    # Detects internal empty segments (//), leading empty (absolute), or trailing empty (config/).
+    hasEmpty = builtins.elem "" segments;
+  in
     path != "" && !isAbsolute && !hasParent && !hasCurrent && !hasEmpty;
 
-  isSafeRelativePath =
-    path:
-    let
-      # Managed files are rendered through shell builders and later synced at
-      # runtime, so keep the module and sync-managed character policy aligned.
-      isSafe = builtins.match "^[a-zA-Z0-9._/+-]+$" path != null;
-    in
+  isSafeRelativePath = path: let
+    # Managed files are rendered through shell builders and later synced at
+    # runtime, so keep the module and sync-managed character policy aligned.
+    isSafe = builtins.match "^[a-zA-Z0-9._/+-]+$" path != null;
+  in
     isSafeRelativePathShape path && isSafe;
 
-  isSafeRelativeName =
-    name:
-    let
-      isSafe = builtins.match "^[a-zA-Z0-9._+-]+$" name != null;
-      isParent = name == "..";
-      isCurrent = name == ".";
-    in
+  isSafeRelativeName = name: let
+    isSafe = builtins.match "^[a-zA-Z0-9._+-]+$" name != null;
+    isParent = name == "..";
+    isCurrent = name == ".";
+  in
     isSafe && !isParent && !isCurrent;
 
   unsafePaths = paths: lib.filter (path: !isSafeRelativePath path) paths;
@@ -80,7 +74,7 @@ let
 
   modCatalogType = types.submodule {
     options = {
-      url = mkOption { type = types.str; };
+      url = mkOption {type = types.str;};
       hash = mkOption {
         type = types.str;
         description = "SRI hash of the artifact at `url`. Used by `ix.artifacts.attachArtifactSources` to build the fetchurl derivation.";
@@ -97,7 +91,7 @@ let
     };
   };
 
-  formatValueType = (pkgs.formats.json { }).type;
+  formatValueType = (pkgs.formats.json {}).type;
 
   modConfigType = types.submodule {
     freeformType = formatValueType;
@@ -146,8 +140,7 @@ let
   };
 
   datapackType = types.submodule (
-    { name, ... }:
-    {
+    {name, ...}: {
       options = {
         enable = mkOption {
           type = types.bool;
@@ -170,7 +163,7 @@ let
 
         worlds = mkOption {
           type = types.listOf types.str;
-          default = [ defaultWorldName ];
+          default = [defaultWorldName];
           defaultText = lib.literalMD "the configured `services.minecraft.properties.level-name`, or `world`";
           description = "World directories whose `datapacks/` directory should receive this datapack.";
         };
@@ -190,13 +183,13 @@ let
 
         files = mkOption {
           type = types.attrsOf formatValueType;
-          default = { };
+          default = {};
           description = "Generated datapack files keyed by relative path from the datapack root.";
         };
 
         dimensionTypes = mkOption {
           type = types.attrsOf dimensionTypeType;
-          default = { };
+          default = {};
           description = ''
             Dimension type JSON files generated under `data/minecraft/dimension_type/<name>.json`.
 
@@ -279,8 +272,7 @@ let
   };
 
   playerType = types.submodule (
-    { name, ... }:
-    {
+    {name, ...}: {
       options = {
         uuid = mkOption {
           type = types.str;
@@ -334,21 +326,24 @@ let
   enabledDatapacks = lib.filterAttrs (_: datapack: datapack.enable) cfg.datapacks;
   enabledMods = lib.filterAttrs (_: mod: mod.enable) cfg.mods;
   enabledPlugins = lib.filterAttrs (_: plugin: plugin.enable) cfg.plugins;
-  sourcedGeneratedDatapacks = lib.filterAttrs (
-    _: datapack: datapack.src != null && (datapack.files != { } || datapack.dimensionTypes != { })
-  ) enabledDatapacks;
+  sourcedGeneratedDatapacks =
+    lib.filterAttrs (
+      _: datapack: datapack.src != null && (datapack.files != {} || datapack.dimensionTypes != {})
+    )
+    enabledDatapacks;
   datapackWorldNames = lib.unique (
     lib.concatMap (datapack: datapack.worlds) (lib.attrValues enabledDatapacks)
   );
 
   bukkit = {
-    worlds = lib.filterAttrs (_: world: world != { }) (
+    worlds = lib.filterAttrs (_: world: world != {}) (
       lib.mapAttrs (
         _: world:
-        lib.optionalAttrs (world.generator != null) {
-          inherit (world) generator;
-        }
-      ) cfg.worlds
+          lib.optionalAttrs (world.generator != null) {
+            inherit (world) generator;
+          }
+      )
+      cfg.worlds
     );
   };
 
@@ -366,39 +361,50 @@ let
     "ops.json" = operatorEntries;
   };
 
-  modJars = lib.mapAttrsToList (
-    slug: _:
-    let
-      entry = cfg.modCatalog.${slug} or (throw "mod '${slug}' not in modCatalog");
-      pluginName =
-        cfg.autoReload.plugman.pluginNames.${slug}
-          or (if entry.pluginName == null then slug else entry.pluginName);
-    in
-    {
-      name = "${slug}.jar";
-      path = entry.src;
-      inherit pluginName;
-    }
-  ) enabledMods;
+  modJars =
+    lib.mapAttrsToList (
+      slug: _: let
+        entry = cfg.modCatalog.${slug} or (throw "mod '${slug}' not in modCatalog");
+        pluginName =
+          cfg.autoReload.plugman.pluginNames.${
+            slug
+          }
+          or (
+            if entry.pluginName == null
+            then slug
+            else entry.pluginName
+          );
+      in {
+        name = "${slug}.jar";
+        path = entry.src;
+        inherit pluginName;
+      }
+    )
+    enabledMods;
 
-  pluginJars = lib.mapAttrsToList (
-    slug: plugin:
-    let
-      entry =
-        if plugin.src == null then
-          cfg.pluginCatalog.${slug} or (throw "plugin '${slug}' not in pluginCatalog")
-        else
-          plugin;
-      pluginName =
-        cfg.autoReload.plugman.pluginNames.${slug}
-          or (if entry.pluginName == null then slug else entry.pluginName);
-    in
-    {
-      name = "${slug}.jar";
-      path = entry.src;
-      inherit pluginName;
-    }
-  ) enabledPlugins;
+  pluginJars =
+    lib.mapAttrsToList (
+      slug: plugin: let
+        entry =
+          if plugin.src == null
+          then cfg.pluginCatalog.${slug} or (throw "plugin '${slug}' not in pluginCatalog")
+          else plugin;
+        pluginName =
+          cfg.autoReload.plugman.pluginNames.${
+            slug
+          }
+          or (
+            if entry.pluginName == null
+            then slug
+            else entry.pluginName
+          );
+      in {
+        name = "${slug}.jar";
+        path = entry.src;
+        inherit pluginName;
+      }
+    )
+    enabledPlugins;
 
   loaderEnabled = lib.genAttrs [
     "fabric"
@@ -417,23 +423,30 @@ let
   ];
 
   autoReloadDriver =
-    if cfg.autoReload.driver != "auto" then
-      cfg.autoReload.driver
-    else if loaderEnabled.fabric then
-      "jvm"
-    else if bukkitLoaderEnabled then
-      "plugman"
-    else
-      "none";
+    if cfg.autoReload.driver != "auto"
+    then cfg.autoReload.driver
+    else if loaderEnabled.fabric
+    then "jvm"
+    else if bukkitLoaderEnabled
+    then "plugman"
+    else "none";
 
   autoReloadEnabled = cfg.autoReload.enable && autoReloadDriver != "none";
   jvmReloadEnabled = autoReloadEnabled && autoReloadDriver == "jvm";
   plugmanReloadEnabled = autoReloadEnabled && autoReloadDriver == "plugman";
   rconEnabled = cfg.rcon.enable || plugmanReloadEnabled;
-  rconPort = if cfg.rcon.enable then cfg.rcon.port else cfg.autoReload.rconPort;
+  rconPort =
+    if cfg.rcon.enable
+    then cfg.rcon.port
+    else cfg.autoReload.rconPort;
   rconPasswordFile =
-    if cfg.rcon.enable then cfg.rcon.passwordFile else cfg.autoReload.rconPasswordFile;
-  rconBroadcastToOps = if cfg.rcon.enable then cfg.rcon.broadcastToOps else false;
+    if cfg.rcon.enable
+    then cfg.rcon.passwordFile
+    else cfg.autoReload.rconPasswordFile;
+  rconBroadcastToOps =
+    if cfg.rcon.enable
+    then cfg.rcon.broadcastToOps
+    else false;
   java = lib.getExe' cfg.javaPackage "java";
   yourkit = ix.languages.java.yourkit;
   pluginConfigFiles = lib.optionalAttrs plugmanReloadEnabled {
@@ -467,8 +480,8 @@ let
     };
 
   nbtFormats = {
-    nbt = ix.mkMinecraftNbtFormat pkgs { format = "nbt"; };
-    snbt = ix.mkMinecraftNbtFormat pkgs { format = "snbt"; };
+    nbt = ix.mkMinecraftNbtFormat pkgs {format = "nbt";};
+    snbt = ix.mkMinecraftNbtFormat pkgs {format = "snbt";};
     nbtGzip = ix.mkMinecraftNbtFormat pkgs {
       format = "nbt";
       flavor = "gzip";
@@ -480,40 +493,43 @@ let
   };
 
   # Infer serialization format from file extension.
-  formatFor =
-    path:
-    let
-      ext = fileExt path;
-    in
-    if lib.hasSuffix ".nbt.gz" path then
-      nbtFormats.nbtGzip
-    else if lib.hasSuffix ".nbt.zlib" path then
-      nbtFormats.nbtZlib
+  formatFor = path: let
+    ext = fileExt path;
+  in
+    if lib.hasSuffix ".nbt.gz" path
+    then nbtFormats.nbtGzip
+    else if lib.hasSuffix ".nbt.zlib" path
+    then nbtFormats.nbtZlib
     else
       {
         # BlueMap uses HOCON .conf files; JSON is valid HOCON.
-        conf = pkgs.formats.json { };
-        toml = pkgs.formats.toml { };
-        json = pkgs.formats.json { };
-        yaml = pkgs.formats.yaml { };
-        yml = pkgs.formats.yaml { };
-        properties = pkgs.formats.keyValue { };
-        mcmeta = pkgs.formats.json { };
+        conf = pkgs.formats.json {};
+        toml = pkgs.formats.toml {};
+        json = pkgs.formats.json {};
+        yaml = pkgs.formats.yaml {};
+        yml = pkgs.formats.yaml {};
+        properties = pkgs.formats.keyValue {};
+        mcmeta = pkgs.formats.json {};
         # Vanilla world-state files (level.dat, raids.dat, scoreboard.dat, the
         # mod-side PersistentState dats) are all gzipped NBT, even though the
         # extension hides the compression.
         dat = nbtFormats.nbtGzip;
         inherit (nbtFormats) nbt snbt;
       }
-      .${ext} or (throw "minecraft managed files: unsupported extension .${ext} on '${path}'");
+      .${
+        ext
+      } or (throw "minecraft managed files: unsupported extension .${ext} on '${path}'");
 
-  normalizeFor = path: value: if fileExt path == "properties" then flattenProperties value else value;
+  normalizeFor = path: value:
+    if fileExt path == "properties"
+    then flattenProperties value
+    else value;
 
   serverFiles = cfg.serverFiles // pluginConfigFiles;
 
   defaultWorldName = toString (cfg.properties."level-name" or "world");
   annotatedWorldNames = lib.unique (
-    [ defaultWorldName ] ++ lib.attrNames cfg.worlds ++ datapackWorldNames
+    [defaultWorldName] ++ lib.attrNames cfg.worlds ++ datapackWorldNames
   );
   mkXattrDefaults = kind: attributes: {
     attributes = lib.mapAttrs (_: lib.mkDefault) (
@@ -525,8 +541,7 @@ let
       // attributes
     );
   };
-  mkCreatedXattrDefaults =
-    kind: attributes:
+  mkCreatedXattrDefaults = kind: attributes:
     mkXattrDefaults kind attributes
     // {
       create = lib.mkDefault true;
@@ -548,22 +563,23 @@ let
   worldXattrs = lib.listToAttrs (
     lib.concatMap (
       world:
-      [
-        {
-          name = "${dataDir}/${world}";
-          value = mkCreatedXattrDefaults "minecraft.world" {
+        [
+          {
+            name = "${dataDir}/${world}";
+            value = mkCreatedXattrDefaults "minecraft.world" {
+              "user.ix.minecraft.world" = world;
+            };
+          }
+        ]
+        ++ map (region: {
+          name = region.path;
+          value = mkCreatedXattrDefaults "minecraft.region-directory" {
             "user.ix.minecraft.world" = world;
+            "user.ix.minecraft.dimension" = region.dimension;
           };
-        }
-      ]
-      ++ map (region: {
-        name = region.path;
-        value = mkCreatedXattrDefaults "minecraft.region-directory" {
-          "user.ix.minecraft.world" = world;
-          "user.ix.minecraft.dimension" = region.dimension;
-        };
-      }) (regionDirectoriesFor world)
-    ) annotatedWorldNames
+        }) (regionDirectoriesFor world)
+    )
+    annotatedWorldNames
   );
   datapackXattrs = lib.genAttrs' datapackWorldNames (world: {
     name = "${dataDir}/${world}/datapacks";
@@ -572,52 +588,53 @@ let
     };
   });
 
-  mkManaged =
-    label: source:
-    pkgs.runCommand "minecraft-managed-${label}" { } ''
+  mkManaged = label: source:
+    pkgs.runCommand "minecraft-managed-${label}" {} ''
       mkdir -p "$out"
       ${lib.concatStringsSep "\n" (
         lib.mapAttrsToList (
-          path: value:
-          let
+          path: value: let
             file = (formatFor path).generate (baseNameOf path) (normalizeFor path value);
             target = ix.relativePath.shellPath "$out" path;
             targetDir = ix.relativePath.shellParent "$out" path;
-          in
-          ''
+          in ''
             mkdir -p ${targetDir}
             ln -sf ${lib.escapeShellArg file} ${target}
           ''
-        ) source
+        )
+        source
       )}
     '';
-  datapackFiles =
-    datapack:
+  datapackFiles = datapack:
     {
       "pack.mcmeta" = {
         inherit (datapack) pack;
       };
     }
     // (lib.mapAttrs' (dimension: value: {
-      name = "data/minecraft/dimension_type/${dimension}.json";
-      value = ix.minecraft.dimensionType.withBase dimension value;
-    }) datapack.dimensionTypes)
+        name = "data/minecraft/dimension_type/${dimension}.json";
+        value = ix.minecraft.dimensionType.withBase dimension value;
+      })
+      datapack.dimensionTypes)
     // datapack.files;
-  datapackGeneratedPaths =
-    datapack:
+  datapackGeneratedPaths = datapack:
     lib.attrNames datapack.files
     ++ map (dimension: "data/minecraft/dimension_type/${dimension}.json") (
       lib.attrNames datapack.dimensionTypes
     );
-  datapackFileName = name: datapack: if datapack.fileName == null then name else datapack.fileName;
-  datapackRoots = lib.mapAttrsToList (name: datapack: {
-    fileName = datapackFileName name datapack;
-    root =
-      if datapack.src == null then
-        mkManaged "datapack-${name}" (datapackFiles datapack)
-      else
-        datapack.src;
-  }) enabledDatapacks;
+  datapackFileName = name: datapack:
+    if datapack.fileName == null
+    then name
+    else datapack.fileName;
+  datapackRoots =
+    lib.mapAttrsToList (name: datapack: {
+      fileName = datapackFileName name datapack;
+      root =
+        if datapack.src == null
+        then mkManaged "datapack-${name}" (datapackFiles datapack)
+        else datapack.src;
+    })
+    enabledDatapacks;
   invalidManagedPaths =
     lib.optional (!isSafeRelativeName cfg.dropinDir) "services.minecraft.dropinDir=${cfg.dropinDir}"
     ++ map (path: "services.minecraft.configFiles.${path}") (
@@ -629,62 +646,59 @@ let
     ++ map (path: "services.minecraft.mods.${path}") (unsafeNames (lib.attrNames cfg.mods))
     ++ map (path: "services.minecraft.plugins.${path}") (unsafeNames (lib.attrNames cfg.plugins))
     ++ lib.concatMap (
-      name:
-      let
+      name: let
         fileName = datapackFileName name cfg.datapacks.${name};
       in
-      lib.optional (
-        !isSafeRelativeName fileName
-      ) "services.minecraft.datapacks.${name}.fileName=${fileName}"
+        lib.optional (!isSafeRelativeName fileName) "services.minecraft.datapacks.${name}.fileName=${fileName}"
     ) (lib.attrNames cfg.datapacks)
     ++ lib.concatMap (
       name:
-      map (path: "services.minecraft.datapacks.${name}.files.${path}") (
-        unsafePaths (datapackGeneratedPaths cfg.datapacks.${name})
-      )
+        map (path: "services.minecraft.datapacks.${name}.files.${path}") (
+          unsafePaths (datapackGeneratedPaths cfg.datapacks.${name})
+        )
     ) (lib.attrNames cfg.datapacks)
     ++ map (path: "services.minecraft world directory ${path}") (
       lib.filter (path: !isSafeRelativePathShape path) annotatedWorldNames
     );
 
-  managed =
-    let
-      dropins = pkgs.runCommand "minecraft-managed-${cfg.dropinDir}" { } (
-        ''
-          mkdir -p "$out"
-        ''
-        + lib.concatMapStringsSep "\n" (jar: ''
-          ln -s ${lib.escapeShellArg jar.path} ${ix.relativePath.shellPath "$out" jar.name}
-          printf '%s\n' ${lib.escapeShellArg jar.pluginName} > ${ix.relativePath.shellPath "$out" "${jar.name}.plugin-name"}
-        '') managedJars
-      );
-      datapacks = pkgs.runCommand "minecraft-managed-datapacks" { } (
-        ''
-          mkdir -p "$out"
-        ''
-        + lib.concatMapStringsSep "\n" (datapack: ''
-          ln -s ${lib.escapeShellArg datapack.root} ${ix.relativePath.shellPath "$out" datapack.fileName}
-        '') datapackRoots
-      );
-      configFiles = mkManaged "config" cfg.configFiles;
-      serverRootFiles = mkManaged "server-files" serverFiles;
-      access = mkManaged "access" accessFiles;
-    in
-    {
-      inherit dropins datapacks;
-      config = configFiles;
-      serverFiles = serverRootFiles;
-      inherit access;
-      reloadRoots = [
-        dropins
-        configFiles
-        serverRootFiles
-      ];
-      restartRoots = [
-        access
-        datapacks
-      ];
-    };
+  managed = let
+    dropins = pkgs.runCommand "minecraft-managed-${cfg.dropinDir}" {} (
+      ''
+        mkdir -p "$out"
+      ''
+      + lib.concatMapStringsSep "\n" (jar: ''
+        ln -s ${lib.escapeShellArg jar.path} ${ix.relativePath.shellPath "$out" jar.name}
+        printf '%s\n' ${lib.escapeShellArg jar.pluginName} > ${ix.relativePath.shellPath "$out" "${jar.name}.plugin-name"}
+      '')
+      managedJars
+    );
+    datapacks = pkgs.runCommand "minecraft-managed-datapacks" {} (
+      ''
+        mkdir -p "$out"
+      ''
+      + lib.concatMapStringsSep "\n" (datapack: ''
+        ln -s ${lib.escapeShellArg datapack.root} ${ix.relativePath.shellPath "$out" datapack.fileName}
+      '')
+      datapackRoots
+    );
+    configFiles = mkManaged "config" cfg.configFiles;
+    serverRootFiles = mkManaged "server-files" serverFiles;
+    access = mkManaged "access" accessFiles;
+  in {
+    inherit dropins datapacks;
+    config = configFiles;
+    serverFiles = serverRootFiles;
+    inherit access;
+    reloadRoots = [
+      dropins
+      configFiles
+      serverRootFiles
+    ];
+    restartRoots = [
+      access
+      datapacks
+    ];
+  };
 
   syncManaged = ix.mkMinecraftSyncManaged {
     inherit
@@ -756,7 +770,7 @@ let
 
   worldBorderCommand = ix.writeNushellApplication pkgs {
     name = "minecraft-world-border";
-    runtimeInputs = [ pkgs.minecraft-rcon ];
+    runtimeInputs = [pkgs.minecraft-rcon];
     text = ''
       # nu
       def rcon [command: string] {
@@ -791,20 +805,20 @@ let
 
   autoReloadJvmFlags = lib.optional jvmReloadEnabled "-javaagent:${pkgs.minecraft-hot-reload-agent}/share/minecraft-hot-reload-agent/minecraft-hot-reload-agent.jar=socket=${cfg.autoReload.socketPath}";
 
-  javaArgs = [
-    java
-    "-XX:MaxRAMPercentage=${toString cfg.maxRAMPercentage}"
-  ]
-  ++ yourkit.flagsFor pkgs cfg.yourkit
-  ++ cfg.jvmFlags
-  ++ autoReloadJvmFlags
-  ++ [
-    "-jar"
-    "${cfg.serverJar}"
-    "nogui"
-  ];
-in
-{
+  javaArgs =
+    [
+      java
+      "-XX:MaxRAMPercentage=${toString cfg.maxRAMPercentage}"
+    ]
+    ++ yourkit.flagsFor pkgs cfg.yourkit
+    ++ cfg.jvmFlags
+    ++ autoReloadJvmFlags
+    ++ [
+      "-jar"
+      "${cfg.serverJar}"
+      "nogui"
+    ];
+in {
   options.services.minecraft = {
     enable = mkEnableOption "Minecraft server runtime";
 
@@ -841,30 +855,29 @@ in
 
     mods = mkOption {
       type = types.attrsOf modConfigType;
-      default = { };
+      default = {};
       description = "Mods to install, keyed by Modrinth slug. Empty {} includes the jar with defaults. Attrsets with fields configure the mod (mod modules read these and generate config files).";
     };
 
     plugins = mkOption {
       type = types.attrsOf pluginType;
-      default = { };
+      default = {};
       description = "Bukkit-family plugins to install. Empty {} resolves a pinned catalog plugin by slug; attrsets with src install a local or private plugin jar.";
     };
 
     datapacks = mkOption {
       type = types.attrsOf datapackType;
-      default = { };
+      default = {};
       description = "Datapacks to install into target world `datapacks/` directories. Attrsets can point at a prebuilt `src` or generate a datapack from typed files and dimension type definitions.";
     };
 
     modCatalog = mkOption {
       type = types.attrsOf modCatalogType;
-      default =
-        let
-          catalogs = ix.artifacts.minecraft.modCatalogs;
-        in
-        (catalogs.common or { })
-        // (lib.optionalAttrs (cfg.version != null) (catalogs.${cfg.version} or { }));
+      default = let
+        catalogs = ix.artifacts.minecraft.modCatalogs;
+      in
+        (catalogs.common or {})
+        // (lib.optionalAttrs (cfg.version != null) (catalogs.${cfg.version} or {}));
       defaultText = lib.literalMD ''
         `ix.artifacts.minecraft.modCatalogs.common` merged with
         `ix.artifacts.minecraft.modCatalogs.''${version}` when
@@ -875,13 +888,13 @@ in
 
     pluginCatalog = mkOption {
       type = types.attrsOf modCatalogType;
-      default = { };
+      default = {};
       description = "Slug to locked Bukkit plugin artifact mapping.";
     };
 
     players = mkOption {
       type = types.attrsOf playerType;
-      default = { };
+      default = {};
       description = "Minecraft players keyed by a stable local name. Entries generate whitelist.json and ops.json by UUID, while preserving manual runtime additions during sync.";
     };
 
@@ -899,7 +912,7 @@ in
       };
     };
 
-    javaPackage = mkPackageOption pkgs "temurin-jre-bin-${defaultJvmVersion}" { };
+    javaPackage = mkPackageOption pkgs "temurin-jre-bin-${defaultJvmVersion}" {};
 
     jvmFlags = mkOption {
       type = types.listOf types.str;
@@ -1015,7 +1028,7 @@ in
 
         pluginNames = mkOption {
           type = types.attrsOf types.str;
-          default = { };
+          default = {};
           description = "Managed plugin slug to Bukkit plugin name mapping for PlugManX commands when the jar slug differs from the runtime plugin name.";
         };
       };
@@ -1023,37 +1036,37 @@ in
 
     configFiles = mkOption {
       type = types.attrsOf formatValueType;
-      default = { };
+      default = {};
       description = "Config files to place under config/. Keys are relative paths (format inferred from extension: .conf, .toml, .json, .yaml, .yml, .properties, .snbt, .nbt, .nbt.gz, .nbt.zlib, .dat). Values are Nix attrsets.";
     };
 
     properties = mkOption {
       type = types.attrsOf formatValueType;
-      default = { };
+      default = {};
       description = "Settings written to server.properties. Nested attrsets flatten to dotted properties keys.";
     };
 
     bukkit = mkOption {
       type = types.attrsOf formatValueType;
-      default = { };
+      default = {};
       description = "Settings written to bukkit.yml.";
     };
 
     worlds = mkOption {
       type = types.attrsOf worldType;
-      default = { };
+      default = {};
       description = "Bukkit worlds keyed by world name. Generator settings are rendered to bukkit.yml.";
     };
 
     worldBorder = mkOption {
       type = worldBorderType;
-      default = { };
+      default = {};
       description = "Vanilla world border applied over local RCON after the server starts.";
     };
 
     serverFiles = mkOption {
       type = types.attrsOf formatValueType;
-      default = { };
+      default = {};
       description = "Files to place relative to the server root. Keys are paths and format is inferred from extension. Prefer services.minecraft.properties for server.properties, services.minecraft.bukkit for bukkit.yml, and services.minecraft.players for whitelist.json and ops.json so ix can reconcile Minecraft's mutable access files.";
     };
 
@@ -1070,7 +1083,7 @@ in
 
     yourkit = mkOption {
       type = ix.languages.java.yourkit.type;
-      default = { };
+      default = {};
       description = ''
         YourKit profiler agent. Enable to load `libyjpagent` at JVM
         startup so call counts and allocations are accurate from the
@@ -1081,8 +1094,8 @@ in
 
     health.motdContains = mkOption {
       type = types.listOf types.str;
-      default = [ ];
-      example = [ "Factions" ];
+      default = [];
+      example = ["Factions"];
       description = ''
         Substrings the rendered MOTD must contain for the `minecraft-status`
         health check to pass. Color codes (`§X` and `&X`) are stripped from
@@ -1101,19 +1114,19 @@ in
   config = mkIf cfg.enable {
     assertions = [
       {
-        assertion = duplicatePlayerUUIDs == [ ];
+        assertion = duplicatePlayerUUIDs == [];
         message = "services.minecraft.players contains duplicate UUIDs: ${lib.concatStringsSep ", " duplicatePlayerUUIDs}";
       }
       {
-        assertion = invalidManagedPaths == [ ];
+        assertion = invalidManagedPaths == [];
         message = "services.minecraft managed paths must be relative paths without empty, '.', or '..' segments; managed file paths must also avoid shell-sensitive characters: ${lib.concatStringsSep ", " invalidManagedPaths}";
       }
       {
-        assertion = rawAccessFileNames == [ ];
+        assertion = rawAccessFileNames == [];
         message = "services.minecraft.serverFiles cannot manage ${lib.concatStringsSep ", " rawAccessFileNames}; use services.minecraft.players so ix can reconcile Minecraft's mutable access files by UUID.";
       }
       {
-        assertion = sourcedGeneratedDatapacks == { };
+        assertion = sourcedGeneratedDatapacks == {};
         message = "services.minecraft.datapacks cannot set both src and generated files/dimensionTypes for: ${lib.concatStringsSep ", " (lib.attrNames sourcedGeneratedDatapacks)}";
       }
       {
@@ -1126,7 +1139,7 @@ in
       rcon.enable = lib.mkIf cfg.worldBorder.enable (lib.mkDefault true);
 
       health.motdContains = lib.mkIf (builtins.isString (cfg.properties.motd or null)) (
-        lib.mkDefault [ cfg.properties.motd ]
+        lib.mkDefault [cfg.properties.motd]
       );
 
       properties = lib.mkMerge [
@@ -1151,7 +1164,7 @@ in
         })
       ];
 
-      bukkit = lib.mkIf (bukkit.worlds != { }) {
+      bukkit = lib.mkIf (bukkit.worlds != {}) {
         inherit (bukkit) worlds;
       };
 
@@ -1159,99 +1172,102 @@ in
         {
           "server.properties" = cfg.properties;
         }
-        (lib.mkIf (cfg.bukkit != { }) {
+        (lib.mkIf (cfg.bukkit != {}) {
           "bukkit.yml" = cfg.bukkit;
         })
       ];
-
     };
 
     ix = {
       extendedAttributes = lib.mkMerge [
         {
-          ${dataDir} = mkCreatedXattrDefaults "minecraft.server-root" { };
+          ${dataDir} = mkCreatedXattrDefaults "minecraft.server-root" {};
           "${dataDir}/${cfg.dropinDir}" = mkCreatedXattrDefaults "minecraft.dropins" {
             "user.ix.minecraft.dropin-dir" = cfg.dropinDir;
           };
-          "${dataDir}/config" = mkCreatedXattrDefaults "minecraft.config" { };
+          "${dataDir}/config" = mkCreatedXattrDefaults "minecraft.config" {};
         }
         worldXattrs
         datapackXattrs
       ];
 
-      networking.portClaims = {
-        minecraft = {
-          protocol = "tcp";
-          inherit (cfg) port;
-          description = "Minecraft Java server";
-        };
-      }
-      // lib.optionalAttrs rconEnabled {
-        minecraft-rcon = {
-          protocol = "tcp";
-          port = rconPort;
-          description = "Minecraft RCON";
-        };
-      }
-      // yourkit.portClaimFor {
-        owner = "minecraft";
-        cfg = cfg.yourkit;
-      };
-
-      healthChecks = {
-        minecraft = {
-          from = "guest";
-          description = "Minecraft systemd unit is active";
-          unit = "minecraft";
+      networking.portClaims =
+        {
+          minecraft = {
+            protocol = "tcp";
+            inherit (cfg) port;
+            description = "Minecraft Java server";
+          };
+        }
+        // lib.optionalAttrs rconEnabled {
+          minecraft-rcon = {
+            protocol = "tcp";
+            port = rconPort;
+            description = "Minecraft RCON";
+          };
+        }
+        // yourkit.portClaimFor {
+          owner = "minecraft";
+          cfg = cfg.yourkit;
         };
 
-        minecraft-status = {
-          from = "guest";
-          # A cold Paper boot resolves plugin libraries from remote Maven repos
-          # and generates the world before it binds the listener, which on an
-          # ephemeral status VM runs well past the default 30x2s=60s window.
-          # Give it 60x2s=120s so the probe waits for a real cold start instead
-          # of failing a still-initializing server.
-          attempts = 60;
-          description =
-            "Minecraft answers SLP"
-            + lib.optionalString (
-              cfg.health.motdContains != [ ]
-            ) " and the MOTD contains the configured substrings";
-          # Probes loopback inside the guest so we exercise the in-process
-          # listener even when the public firewall is closed (Paper backends
-          # behind Velocity, for example). `mc-probe` lives in the closure,
-          # so its store path is resolvable from inside the VM.
-          command = [
-            (lib.getExe ix.packages.mc-probe)
-            "127.0.0.1:${toString cfg.port}"
-          ]
-          ++ lib.concatMap (needle: [
-            "--motd-contains"
-            needle
-          ]) cfg.health.motdContains;
+      healthChecks =
+        {
+          minecraft = {
+            from = "guest";
+            description = "Minecraft systemd unit is active";
+            unit = "minecraft";
+          };
+
+          minecraft-status = {
+            from = "guest";
+            # A cold Paper boot resolves plugin libraries from remote Maven repos
+            # and generates the world before it binds the listener, which on an
+            # ephemeral status VM runs well past the default 30x2s=60s window.
+            # Give it 60x2s=120s so the probe waits for a real cold start instead
+            # of failing a still-initializing server.
+            attempts = 60;
+            description =
+              "Minecraft answers SLP"
+              + lib.optionalString (
+                cfg.health.motdContains != []
+              ) " and the MOTD contains the configured substrings";
+            # Probes loopback inside the guest so we exercise the in-process
+            # listener even when the public firewall is closed (Paper backends
+            # behind Velocity, for example). `mc-probe` lives in the closure,
+            # so its store path is resolvable from inside the VM.
+            command =
+              [
+                (lib.getExe ix.packages.mc-probe)
+                "127.0.0.1:${toString cfg.port}"
+              ]
+              ++ lib.concatMap (needle: [
+                "--motd-contains"
+                needle
+              ])
+              cfg.health.motdContains;
+          };
+        }
+        // lib.optionalAttrs cfg.openFirewall {
+          minecraft-reachable = {
+            from = "host";
+            requiresIpv4 = true;
+            description = "Minecraft Java port accepts TCP from operator host";
+            # Runs on the operator host (not inside the Nix store), so the tool
+            # is named, not store-pathed. macOS and normal Linux hosts provide nc.
+            command = [
+              "nc"
+              "-z"
+              "-w"
+              "5"
+              "$IX_NODE_IPV4"
+              (toString cfg.port)
+            ];
+          };
         };
-      }
-      // lib.optionalAttrs cfg.openFirewall {
-        minecraft-reachable = {
-          from = "host";
-          requiresIpv4 = true;
-          description = "Minecraft Java port accepts TCP from operator host";
-          # Runs on the operator host (not inside the Nix store), so the tool
-          # is named, not store-pathed. macOS and normal Linux hosts provide nc.
-          command = [
-            "nc"
-            "-z"
-            "-w"
-            "5"
-            "$IX_NODE_IPV4"
-            (toString cfg.port)
-          ];
-        };
-      };
     };
 
-    environment.systemPackages = [ ix.packages.mc-probe ];
+    environment.systemPackages = [ix.packages.mc-probe];
 
     networking.firewall.allowedTCPPorts =
       lib.optional cfg.openFirewall cfg.port
@@ -1267,9 +1283,9 @@ in
 
     systemd.services.minecraft = {
       description = "Minecraft server";
-      after = [ "network-online.target" ];
-      wants = [ "network-online.target" ];
-      wantedBy = [ "multi-user.target" ];
+      after = ["network-online.target"];
+      wants = ["network-online.target"];
+      wantedBy = ["multi-user.target"];
       reloadTriggers = lib.optionals autoReloadEnabled managed.reloadRoots;
       restartTriggers = lib.optionals (!autoReloadEnabled) managed.reloadRoots ++ managed.restartRoots;
       serviceConfig =
@@ -1305,15 +1321,17 @@ in
 
     systemd.services.minecraft-world-border = lib.mkIf cfg.worldBorder.enable {
       description = "Apply Minecraft world border";
-      after = [ "minecraft.service" ];
-      requires = [ "minecraft.service" ];
-      wantedBy = [ "multi-user.target" ];
-      restartTriggers = [ worldBorderCommand ];
-      serviceConfig = ix.systemdHardening // {
-        Type = "oneshot";
-        ExecStart = lib.getExe worldBorderCommand;
-        RemainAfterExit = true;
-      };
+      after = ["minecraft.service"];
+      requires = ["minecraft.service"];
+      wantedBy = ["multi-user.target"];
+      restartTriggers = [worldBorderCommand];
+      serviceConfig =
+        ix.systemdHardening
+        // {
+          Type = "oneshot";
+          ExecStart = lib.getExe worldBorderCommand;
+          RemainAfterExit = true;
+        };
     };
   };
 }

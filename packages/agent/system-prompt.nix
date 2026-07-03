@@ -3,20 +3,18 @@
   agentName ? "Claude Code",
   # Rule names to drop from this build's prompt, e.g.
   # `claude-code.override { omitRules = [ "reportToPlaybook" ]; }`.
-  omitRules ? [ ],
+  omitRules ? [],
 }:
 # House system prompt for agent wrappers that can replace the upstream prompt.
 # Keep safety-critical rules explicit. Eval and rollouts are opt-in because prior
 # prompt edits caused live `claude -p ... --dangerously-skip-permissions` runs to
 # create real production side effects.
 let
-  singletonRule =
-    rule:
-    let
-      names = builtins.attrNames rule;
-      name = builtins.head names;
-      value = builtins.getAttr name rule;
-    in
+  singletonRule = rule: let
+    names = builtins.attrNames rule;
+    name = builtins.head names;
+    value = builtins.getAttr name rule;
+  in
     assert lib.assertMsg (
       builtins.length names == 1
     ) "system-prompt.nix: each prompt rule entry must have exactly one attribute";
@@ -25,12 +23,12 @@ let
     # rendering it would spend context tokens on metadiscussion.
     # attrNames returns lexicographically sorted names, so `reason` precedes `text`.
     assert lib.assertMsg (
-      builtins.attrNames value == [
+      builtins.attrNames value
+      == [
         "reason"
         "text"
       ]
-    ) "system-prompt.nix: rule `${name}` must have exactly `reason` and `text` fields";
-    {
+    ) "system-prompt.nix: rule `${name}` must have exactly `reason` and `text` fields"; {
       inherit name;
       inherit (value) text reason;
     };
@@ -866,9 +864,9 @@ let
   unknownOmits = builtins.filter (name: !(builtins.any (rule: rule.name == name) order)) omitRules;
   kept = builtins.filter (rule: !(builtins.elem rule.name omitRules)) order;
 in
-assert lib.assertMsg (
-  duplicateNames == [ ]
-) "system-prompt.nix: duplicate rule names in order: ${lib.concatStringsSep ", " duplicateNames}";
-assert lib.assertMsg (unknownOmits == [ ])
+  assert lib.assertMsg (
+    duplicateNames == []
+  ) "system-prompt.nix: duplicate rule names in order: ${lib.concatStringsSep ", " duplicateNames}";
+  assert lib.assertMsg (unknownOmits == [])
   "system-prompt.nix: omitRules names not found in order: ${lib.concatStringsSep ", " unknownOmits}";
-lib.concatStringsSep "\n\n" (map (rule: rule.text) kept)
+    lib.concatStringsSep "\n\n" (map (rule: rule.text) kept)

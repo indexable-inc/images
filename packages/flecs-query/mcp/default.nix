@@ -1,5 +1,8 @@
-{ ix, lib, ... }:
-
+{
+  ix,
+  lib,
+  ...
+}:
 ix.cargoUnit.selectBinaryWithTests ix.rustWorkspace.units {
   binary = "ix-flecs-query-mcp";
   packageName = "flecs-query-mcp";

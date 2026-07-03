@@ -11,13 +11,11 @@
   lib,
   pkgs,
   ...
-}:
-let
+}: let
   cfg = config.ix.profiles.jvm;
   defaultJvmVersion = ix.languages.java.defaultJvmVersion;
   defaultJrePackageName = "temurin-jre-bin-${defaultJvmVersion}";
-in
-{
+in {
   options.ix.profiles.jvm = {
     enable = lib.mkEnableOption "Java runtime (JRE on PATH + JAVA_HOME)";
 
@@ -43,7 +41,7 @@ in
 
   config = lib.mkIf cfg.enable {
     environment = {
-      systemPackages = [ cfg.package ];
+      systemPackages = [cfg.package];
       variables.JAVA_HOME = cfg.package.home or "${cfg.package}";
     };
   };

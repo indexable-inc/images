@@ -5,9 +5,9 @@
   lib,
   pkgs,
   ...
-}:
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     mkEnableOption
     mkIf
     mkOption
@@ -20,22 +20,21 @@ let
   yourkit = ix.languages.java.yourkit;
   dataDir = "/var/lib/velocity";
   java = lib.getExe' cfg.javaPackage "java";
-  tomlFormat = pkgs.formats.toml { };
-  yamlFormat = pkgs.formats.yaml { };
-  jsonFormat = pkgs.formats.json { };
-  propertiesFormat = pkgs.formats.keyValue { };
+  tomlFormat = pkgs.formats.toml {};
+  yamlFormat = pkgs.formats.yaml {};
+  jsonFormat = pkgs.formats.json {};
+  propertiesFormat = pkgs.formats.keyValue {};
   formatValueType = jsonFormat.type;
   fileExt = path: lib.last (lib.splitString "." path);
-  hostPort =
-    address: port:
-    let
-      host = if lib.hasInfix ":" address && !lib.hasPrefix "[" address then "[${address}]" else address;
-    in
-    "${host}:${toString port}";
+  hostPort = address: port: let
+    host =
+      if lib.hasInfix ":" address && !lib.hasPrefix "[" address
+      then "[${address}]"
+      else address;
+  in "${host}:${toString port}";
 
   pluginType = types.submodule (
-    { name, ... }:
-    {
+    {name, ...}: {
       options = {
         enable = mkOption {
           type = types.bool;
@@ -59,8 +58,7 @@ let
     }
   );
 
-  formatFor =
-    path:
+  formatFor = path:
     {
       json = jsonFormat;
       properties = propertiesFormat;
@@ -68,117 +66,120 @@ let
       yaml = yamlFormat;
       yml = yamlFormat;
     }
-    .${fileExt path}
+    .${
+      fileExt path
+    }
     or (throw "velocity managed files: unsupported extension .${fileExt path} on '${path}'");
 
-  renderedSettings = {
-    "config-version" = "2.7";
-    bind = "${cfg.address}:${toString cfg.port}";
-    inherit (cfg)
-      motd
-      ;
-    "show-max-players" = cfg.showMaxPlayers;
-    "online-mode" = cfg.onlineMode;
-    "force-key-authentication" = cfg.forceKeyAuthentication;
-    "prevent-client-proxy-connections" = cfg.preventClientProxyConnections;
-    "player-info-forwarding-mode" = cfg.forwarding.mode;
-    "forwarding-secret-file" = "forwarding.secret";
-    "announce-forge" = cfg.announceForge;
-    "kick-existing-players" = cfg.kickExistingPlayers;
-    "ping-passthrough" = cfg.pingPassthrough;
-    "sample-players-in-ping" = cfg.samplePlayersInPing;
-    "enable-player-address-logging" = cfg.enablePlayerAddressLogging;
+  renderedSettings =
+    {
+      "config-version" = "2.7";
+      bind = "${cfg.address}:${toString cfg.port}";
+      inherit
+        (cfg)
+        motd
+        ;
+      "show-max-players" = cfg.showMaxPlayers;
+      "online-mode" = cfg.onlineMode;
+      "force-key-authentication" = cfg.forceKeyAuthentication;
+      "prevent-client-proxy-connections" = cfg.preventClientProxyConnections;
+      "player-info-forwarding-mode" = cfg.forwarding.mode;
+      "forwarding-secret-file" = "forwarding.secret";
+      "announce-forge" = cfg.announceForge;
+      "kick-existing-players" = cfg.kickExistingPlayers;
+      "ping-passthrough" = cfg.pingPassthrough;
+      "sample-players-in-ping" = cfg.samplePlayersInPing;
+      "enable-player-address-logging" = cfg.enablePlayerAddressLogging;
 
-    servers = cfg.servers // {
-      inherit (cfg) try;
-    };
+      servers =
+        cfg.servers
+        // {
+          inherit (cfg) try;
+        };
 
-    "forced-hosts" = cfg.forcedHosts;
+      "forced-hosts" = cfg.forcedHosts;
 
-    advanced = {
-      "compression-threshold" = cfg.advanced.compressionThreshold;
-      "compression-level" = cfg.advanced.compressionLevel;
-      "login-ratelimit" = cfg.advanced.loginRatelimit;
-      "connection-timeout" = cfg.advanced.connectionTimeout;
-      "read-timeout" = cfg.advanced.readTimeout;
-      "haproxy-protocol" = cfg.advanced.haproxyProtocol;
-      "tcp-fast-open" = cfg.advanced.tcpFastOpen;
-      "bungee-plugin-message-channel" = cfg.advanced.bungeePluginMessageChannel;
-      "show-ping-requests" = cfg.advanced.showPingRequests;
-      "failover-on-unexpected-server-disconnect" = cfg.advanced.failoverOnUnexpectedServerDisconnect;
-      "announce-proxy-commands" = cfg.advanced.announceProxyCommands;
-      "log-command-executions" = cfg.advanced.logCommandExecutions;
-      "log-player-connections" = cfg.advanced.logPlayerConnections;
-      "accepts-transfers" = cfg.advanced.acceptsTransfers;
-      "enable-reuse-port" = cfg.advanced.enableReusePort;
-      "command-rate-limit" = cfg.advanced.commandRateLimit;
-      "forward-commands-if-rate-limited" = cfg.advanced.forwardCommandsIfRateLimited;
-      "kick-after-rate-limited-commands" = cfg.advanced.kickAfterRateLimitedCommands;
-      "tab-complete-rate-limit" = cfg.advanced.tabCompleteRateLimit;
-      "kick-after-rate-limited-tab-completes" = cfg.advanced.kickAfterRateLimitedTabCompletes;
-    };
+      advanced = {
+        "compression-threshold" = cfg.advanced.compressionThreshold;
+        "compression-level" = cfg.advanced.compressionLevel;
+        "login-ratelimit" = cfg.advanced.loginRatelimit;
+        "connection-timeout" = cfg.advanced.connectionTimeout;
+        "read-timeout" = cfg.advanced.readTimeout;
+        "haproxy-protocol" = cfg.advanced.haproxyProtocol;
+        "tcp-fast-open" = cfg.advanced.tcpFastOpen;
+        "bungee-plugin-message-channel" = cfg.advanced.bungeePluginMessageChannel;
+        "show-ping-requests" = cfg.advanced.showPingRequests;
+        "failover-on-unexpected-server-disconnect" = cfg.advanced.failoverOnUnexpectedServerDisconnect;
+        "announce-proxy-commands" = cfg.advanced.announceProxyCommands;
+        "log-command-executions" = cfg.advanced.logCommandExecutions;
+        "log-player-connections" = cfg.advanced.logPlayerConnections;
+        "accepts-transfers" = cfg.advanced.acceptsTransfers;
+        "enable-reuse-port" = cfg.advanced.enableReusePort;
+        "command-rate-limit" = cfg.advanced.commandRateLimit;
+        "forward-commands-if-rate-limited" = cfg.advanced.forwardCommandsIfRateLimited;
+        "kick-after-rate-limited-commands" = cfg.advanced.kickAfterRateLimitedCommands;
+        "tab-complete-rate-limit" = cfg.advanced.tabCompleteRateLimit;
+        "kick-after-rate-limited-tab-completes" = cfg.advanced.kickAfterRateLimitedTabCompletes;
+      };
 
-    query = {
-      enabled = cfg.query.enable;
-      inherit (cfg.query) port map;
-      "show-plugins" = cfg.query.showPlugins;
-    };
-  }
-  // cfg.settings;
+      query = {
+        enabled = cfg.query.enable;
+        inherit (cfg.query) port map;
+        "show-plugins" = cfg.query.showPlugins;
+      };
+    }
+    // cfg.settings;
 
   configFilePaths = lib.attrNames cfg.configFiles;
   invalidConfigFilePaths = ix.relativePath.unsafe configFilePaths;
-  managedConfigFiles = cfg.configFiles // {
-    "velocity.toml" = renderedSettings;
-  };
+  managedConfigFiles =
+    cfg.configFiles
+    // {
+      "velocity.toml" = renderedSettings;
+    };
   enabledPlugins = lib.filterAttrs (_: plugin: plugin.enable) cfg.plugins;
-  pluginJars = lib.mapAttrsToList (
-    slug: plugin:
-    let
-      src =
-        if plugin.src != null then
-          plugin.src
-        else
-          (cfg.pluginCatalog.${slug} or (throw "velocity plugin '${slug}' not in pluginCatalog")).src;
-    in
-    {
-      inherit (plugin) fileName;
-      path = src;
-    }
-  ) enabledPlugins;
+  pluginJars =
+    lib.mapAttrsToList (
+      slug: plugin: let
+        src =
+          if plugin.src != null
+          then plugin.src
+          else (cfg.pluginCatalog.${slug} or (throw "velocity plugin '${slug}' not in pluginCatalog")).src;
+      in {
+        inherit (plugin) fileName;
+        path = src;
+      }
+    )
+    enabledPlugins;
   pluginFileNames = map (plugin: plugin.fileName) pluginJars;
   invalidPluginFileNames = ix.relativePath.unsafeNames pluginFileNames;
   duplicatePluginFileNames = ix.lists.findDuplicates pluginFileNames;
 
-  mkManaged =
-    label: files:
-    let
-      linkEntry =
-        path: value:
-        let
-          file = (formatFor path).generate (baseNameOf path) value;
-          target = ix.relativePath.shellPath "$out" path;
-          targetDir = ix.relativePath.shellParent "$out" path;
-        in
-        ''
-          mkdir -p ${targetDir}
-          ln -sf ${lib.escapeShellArg file} ${target}
-        '';
-    in
-    pkgs.runCommand "velocity-managed-${label}" { } ''
+  mkManaged = label: files: let
+    linkEntry = path: value: let
+      file = (formatFor path).generate (baseNameOf path) value;
+      target = ix.relativePath.shellPath "$out" path;
+      targetDir = ix.relativePath.shellParent "$out" path;
+    in ''
+      mkdir -p ${targetDir}
+      ln -sf ${lib.escapeShellArg file} ${target}
+    '';
+  in
+    pkgs.runCommand "velocity-managed-${label}" {} ''
       mkdir -p "$out"
       ${lib.concatMapAttrsStringSep "\n" linkEntry files}
     '';
 
   managed = {
     config = mkManaged "config" managedConfigFiles;
-    plugins = pkgs.runCommand "velocity-managed-plugins" { } (
+    plugins = pkgs.runCommand "velocity-managed-plugins" {} (
       ''
         mkdir -p "$out"
       ''
       + lib.concatMapStringsSep "\n" (plugin: ''
         ln -s ${lib.escapeShellArg plugin.path} ${ix.relativePath.shellPath "$out" plugin.fileName}
-      '') pluginJars
+      '')
+      pluginJars
     );
   };
   wildcardClientAddresses = [
@@ -187,54 +188,54 @@ let
     "[::]"
   ];
   velocityProbeAddress =
-    if builtins.elem cfg.address wildcardClientAddresses then "127.0.0.1" else cfg.address;
+    if builtins.elem cfg.address wildcardClientAddresses
+    then "127.0.0.1"
+    else cfg.address;
   velocityProbeTarget = hostPort velocityProbeAddress cfg.port;
 
   installManagedConfigFiles = lib.concatMapStringsSep "\n" (
-    path:
-    let
+    path: let
       source = "${managed.config}/${path}";
       target = "${dataDir}/${path}";
-    in
-    "install -Dm0644 ${lib.escapeShellArg source} ${lib.escapeShellArg target}"
+    in "install -Dm0644 ${lib.escapeShellArg source} ${lib.escapeShellArg target}"
   ) (lib.attrNames managedConfigFiles);
 
   managedPluginManifest = "${dataDir}/.ix-managed-velocity-plugins";
-  installManagedPlugins = lib.concatMapStringsSep "\n" (plugin: ''
-    ln -sfn ${lib.escapeShellArg "${managed.plugins}/${plugin.fileName}"} ${lib.escapeShellArg "${dataDir}/plugins/${plugin.fileName}"}
-    printf '%s\n' ${lib.escapeShellArg plugin.fileName} >> ${lib.escapeShellArg managedPluginManifest}
-  '') pluginJars;
+  installManagedPlugins =
+    lib.concatMapStringsSep "\n" (plugin: ''
+      ln -sfn ${lib.escapeShellArg "${managed.plugins}/${plugin.fileName}"} ${lib.escapeShellArg "${dataDir}/plugins/${plugin.fileName}"}
+      printf '%s\n' ${lib.escapeShellArg plugin.fileName} >> ${lib.escapeShellArg managedPluginManifest}
+    '')
+    pluginJars;
 
   forwardingSecretFile =
-    if cfg.forwarding.secret == null then
-      null
-    else
-      pkgs.writeText "velocity-forwarding-secret" cfg.forwarding.secret;
+    if cfg.forwarding.secret == null
+    then null
+    else pkgs.writeText "velocity-forwarding-secret" cfg.forwarding.secret;
   installForwardingSecret =
-    if cfg.forwarding.secret != null then
-      "install -Dm0600 ${lib.escapeShellArg forwardingSecretFile} ${lib.escapeShellArg "${dataDir}/forwarding.secret"}"
-    else if cfg.forwarding.secretFile != null then
-      "install -Dm0600 ${lib.escapeShellArg cfg.forwarding.secretFile} ${lib.escapeShellArg "${dataDir}/forwarding.secret"}"
-    else
-      ''
-        if [ ! -s ${lib.escapeShellArg "${dataDir}/forwarding.secret"} ]; then
-          ${lib.getExe pkgs.openssl} rand -base64 32 > ${lib.escapeShellArg "${dataDir}/forwarding.secret"}
-          chmod 0600 ${lib.escapeShellArg "${dataDir}/forwarding.secret"}
-        fi
-      '';
+    if cfg.forwarding.secret != null
+    then "install -Dm0600 ${lib.escapeShellArg forwardingSecretFile} ${lib.escapeShellArg "${dataDir}/forwarding.secret"}"
+    else if cfg.forwarding.secretFile != null
+    then "install -Dm0600 ${lib.escapeShellArg cfg.forwarding.secretFile} ${lib.escapeShellArg "${dataDir}/forwarding.secret"}"
+    else ''
+      if [ ! -s ${lib.escapeShellArg "${dataDir}/forwarding.secret"} ]; then
+        ${lib.getExe pkgs.openssl} rand -base64 32 > ${lib.escapeShellArg "${dataDir}/forwarding.secret"}
+        chmod 0600 ${lib.escapeShellArg "${dataDir}/forwarding.secret"}
+      fi
+    '';
 
-  javaArgs = [
-    java
-    "-XX:MaxRAMPercentage=${toString cfg.maxRAMPercentage}"
-  ]
-  ++ yourkit.flagsFor pkgs cfg.yourkit
-  ++ cfg.jvmFlags
-  ++ [
-    "-jar"
-    "${cfg.package}"
-  ];
-in
-{
+  javaArgs =
+    [
+      java
+      "-XX:MaxRAMPercentage=${toString cfg.maxRAMPercentage}"
+    ]
+    ++ yourkit.flagsFor pkgs cfg.yourkit
+    ++ cfg.jvmFlags
+    ++ [
+      "-jar"
+      "${cfg.package}"
+    ];
+in {
   options.services.velocity = {
     enable = mkEnableOption "Velocity Minecraft proxy";
 
@@ -257,7 +258,7 @@ in
 
     jvmFlags = mkOption {
       type = types.listOf types.str;
-      default = [ ];
+      default = [];
       description = "JVM flags used after heap sizing and before -jar.";
     };
 
@@ -281,7 +282,7 @@ in
 
     yourkit = mkOption {
       type = ix.languages.java.yourkit.type;
-      default = { };
+      default = {};
       description = ''
         YourKit profiler agent. Enable to load `libyjpagent` at JVM
         startup so call counts and allocations are accurate from the
@@ -298,8 +299,8 @@ in
 
     health.motdContains = mkOption {
       type = types.listOf types.str;
-      default = [ ];
-      example = [ "Survival" ];
+      default = [];
+      example = ["Survival"];
       description = ''
         Substrings the rendered MOTD must contain for the `velocity-status`
         health check to pass. Velocity renders MiniMessage tags into plain
@@ -397,20 +398,20 @@ in
 
     servers = mkOption {
       type = types.attrsOf types.str;
-      default = { };
+      default = {};
       example.survival = "127.0.0.1:25566";
       description = "Backend servers keyed by Velocity server name.";
     };
 
     try = mkOption {
       type = types.listOf types.str;
-      default = [ ];
+      default = [];
       description = "Backend server names Velocity tries when a player joins or is kicked.";
     };
 
     forcedHosts = mkOption {
       type = types.attrsOf (types.listOf types.str);
-      default = { };
+      default = {};
       description = "Host name to backend server order mapping.";
     };
 
@@ -566,7 +567,7 @@ in
 
     plugins = mkOption {
       type = types.attrsOf pluginType;
-      default = { };
+      default = {};
       description = "Velocity plugins installed as jars under the plugins directory. Empty {} resolves a pinned catalog plugin by slug; attrsets with src install a local or private plugin jar.";
     };
 
@@ -587,13 +588,13 @@ in
 
     configFiles = mkOption {
       type = types.attrsOf formatValueType;
-      default = { };
+      default = {};
       description = "Managed config files relative to Velocity's data directory. Supported extensions: .json, .properties, .toml, .yaml, .yml.";
     };
 
     settings = mkOption {
       inherit (tomlFormat) type;
-      default = { };
+      default = {};
       description = "Raw velocity.toml settings merged over the typed options.";
     };
   };
@@ -609,92 +610,98 @@ in
         message = "services.velocity.configFiles cannot manage velocity.toml; use services.velocity.settings or typed options.";
       }
       {
-        assertion = invalidConfigFilePaths == [ ];
+        assertion = invalidConfigFilePaths == [];
         message = "services.velocity.configFiles contains unsafe relative paths: ${lib.concatStringsSep ", " invalidConfigFilePaths}";
       }
       {
-        assertion = invalidPluginFileNames == [ ];
+        assertion = invalidPluginFileNames == [];
         message = "services.velocity.plugins contains unsafe plugin file names: ${lib.concatStringsSep ", " invalidPluginFileNames}";
       }
       {
-        assertion = duplicatePluginFileNames == [ ];
+        assertion = duplicatePluginFileNames == [];
         message = "services.velocity.plugins contains duplicate plugin file names: ${lib.concatStringsSep ", " duplicatePluginFileNames}";
       }
     ];
 
-    ix.networking.portClaims = {
-      velocity = {
-        protocol = "tcp";
-        inherit (cfg) port address;
-        description = "Velocity Minecraft proxy";
+    ix.networking.portClaims =
+      {
+        velocity = {
+          protocol = "tcp";
+          inherit (cfg) port address;
+          description = "Velocity Minecraft proxy";
+        };
+      }
+      // lib.optionalAttrs cfg.query.enable {
+        velocity-query = {
+          protocol = "udp";
+          inherit (cfg.query) port;
+          description = "Velocity query";
+        };
+      }
+      // yourkit.portClaimFor {
+        owner = "velocity";
+        cfg = cfg.yourkit;
       };
-    }
-    // lib.optionalAttrs cfg.query.enable {
-      velocity-query = {
-        protocol = "udp";
-        inherit (cfg.query) port;
-        description = "Velocity query";
-      };
-    }
-    // yourkit.portClaimFor {
-      owner = "velocity";
-      cfg = cfg.yourkit;
-    };
 
     networking.firewall.allowedTCPPorts =
       lib.optional cfg.openFirewall cfg.port ++ yourkit.firewallTcpPortsFor cfg.yourkit;
-    networking.firewall.allowedUDPPorts = lib.optional (
-      cfg.query.enable && cfg.query.openFirewall
-    ) cfg.query.port;
+    networking.firewall.allowedUDPPorts =
+      lib.optional (
+        cfg.query.enable && cfg.query.openFirewall
+      )
+      cfg.query.port;
 
-    ix.healthChecks = {
-      velocity = {
-        from = "guest";
-        description = "Velocity systemd unit is active";
-        unit = "velocity";
+    ix.healthChecks =
+      {
+        velocity = {
+          from = "guest";
+          description = "Velocity systemd unit is active";
+          unit = "velocity";
+        };
+
+        velocity-status = {
+          from = "guest";
+          description =
+            "Velocity answers SLP"
+            + lib.optionalString (
+              cfg.health.motdContains != []
+            ) " and the MOTD contains the configured substrings";
+          # Probe the actual bind address for concrete listeners, and loopback
+          # for wildcard binds. Velocity speaks the standard Java SLP handshake
+          # even though it routes traffic to backends, so an SLP success here
+          # proves Velocity itself is healthy independent of any individual Paper
+          # backend's state.
+          command =
+            [
+              (lib.getExe ix.packages.mc-probe)
+              velocityProbeTarget
+            ]
+            ++ lib.concatMap (needle: [
+              "--motd-contains"
+              needle
+            ])
+            cfg.health.motdContains;
+        };
+      }
+      // lib.optionalAttrs cfg.openFirewall {
+        velocity-reachable = {
+          from = "host";
+          requiresIpv4 = true;
+          description = "Velocity client port accepts TCP from operator host";
+          # Runs on the operator host (not inside the Nix store), so the tool
+          # is named, not store-pathed. macOS and normal Linux hosts provide nc.
+          command = [
+            "nc"
+            "-z"
+            "-w"
+            "5"
+            "$IX_NODE_IPV4"
+            (toString cfg.port)
+          ];
+        };
       };
 
-      velocity-status = {
-        from = "guest";
-        description =
-          "Velocity answers SLP"
-          + lib.optionalString (
-            cfg.health.motdContains != [ ]
-          ) " and the MOTD contains the configured substrings";
-        # Probe the actual bind address for concrete listeners, and loopback
-        # for wildcard binds. Velocity speaks the standard Java SLP handshake
-        # even though it routes traffic to backends, so an SLP success here
-        # proves Velocity itself is healthy independent of any individual Paper
-        # backend's state.
-        command = [
-          (lib.getExe ix.packages.mc-probe)
-          velocityProbeTarget
-        ]
-        ++ lib.concatMap (needle: [
-          "--motd-contains"
-          needle
-        ]) cfg.health.motdContains;
-      };
-    }
-    // lib.optionalAttrs cfg.openFirewall {
-      velocity-reachable = {
-        from = "host";
-        requiresIpv4 = true;
-        description = "Velocity client port accepts TCP from operator host";
-        # Runs on the operator host (not inside the Nix store), so the tool
-        # is named, not store-pathed. macOS and normal Linux hosts provide nc.
-        command = [
-          "nc"
-          "-z"
-          "-w"
-          "5"
-          "$IX_NODE_IPV4"
-          (toString cfg.port)
-        ];
-      };
-    };
-
-    environment.systemPackages = [ ix.packages.mc-probe ];
+    environment.systemPackages = [ix.packages.mc-probe];
 
     environment.etc = {
       "velocity/managed-config".source = managed.config;
@@ -703,14 +710,15 @@ in
 
     systemd.services.velocity = {
       description = "Velocity Minecraft proxy";
-      after = [ "network-online.target" ];
-      wants = [ "network-online.target" ];
-      wantedBy = [ "multi-user.target" ];
-      restartTriggers = [
-        managed.config
-        managed.plugins
-      ]
-      ++ lib.optional (forwardingSecretFile != null) forwardingSecretFile;
+      after = ["network-online.target"];
+      wants = ["network-online.target"];
+      wantedBy = ["multi-user.target"];
+      restartTriggers =
+        [
+          managed.config
+          managed.plugins
+        ]
+        ++ lib.optional (forwardingSecretFile != null) forwardingSecretFile;
       preStart = ''
         set -eu
 
@@ -730,21 +738,23 @@ in
         ${installManagedConfigFiles}
         ${installForwardingSecret}
       '';
-      serviceConfig = ix.systemdHardening // {
-        Type = "simple";
-        # DynamicUser (not a static velocity user): systemd allocates the uid
-        # per boot and re-chowns the StateDirectory to it, so the managed
-        # plugins dir under `${dataDir}` is owned by the service even after a
-        # golden-snapshot restore changes the uid. A static User= leaves the
-        # snapshot's plugins dir owned by the previous uid (real host-root,
-        # outside the idmapped state mount), unwritable by the new service
-        # (`ln: ... Permission denied`, crash-looping the proxy).
-        DynamicUser = true;
-        WorkingDirectory = dataDir;
-        ExecStart = lib.escapeShellArgs javaArgs;
-        Restart = "on-failure";
-        StateDirectory = "velocity";
-      };
+      serviceConfig =
+        ix.systemdHardening
+        // {
+          Type = "simple";
+          # DynamicUser (not a static velocity user): systemd allocates the uid
+          # per boot and re-chowns the StateDirectory to it, so the managed
+          # plugins dir under `${dataDir}` is owned by the service even after a
+          # golden-snapshot restore changes the uid. A static User= leaves the
+          # snapshot's plugins dir owned by the previous uid (real host-root,
+          # outside the idmapped state mount), unwritable by the new service
+          # (`ln: ... Permission denied`, crash-looping the proxy).
+          DynamicUser = true;
+          WorkingDirectory = dataDir;
+          ExecStart = lib.escapeShellArgs javaArgs;
+          Restart = "on-failure";
+          StateDirectory = "velocity";
+        };
     };
   };
 }

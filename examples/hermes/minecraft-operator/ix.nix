@@ -1,5 +1,4 @@
-{ index }:
-
+{index}:
 # A Hermes agent operating a Paper Minecraft server. Two nodes:
 #
 #   minecraft (Paper + RCON)  <-east-west-  hermes (agent + RCON MCP server)
@@ -14,31 +13,30 @@ let
   # the console.
   eastWestGroup = "hermes-minecraft";
 in
-index.lib.mkFleet {
-
-  nodes = {
-    minecraft = {
-      groups = [ eastWestGroup ];
-      # Every declared ix.healthChecks entry (the minecraft module's unit
-      # check included) is serialized into the plan and waited on by
-      # `ix fleet up`; there is no per-node selector (ENG-2416).
-      deployment.ipv4 = true;
-      modules = [ ./minecraft.nix ];
-    };
-
-    hermes = {
-      dependsOn = [ "minecraft" ];
-      groups = [ eastWestGroup ];
-      deployment.secrets.hermes_env = {
-        file = "hermes.env";
-        owner = "hermes";
-        mode = "0400";
+  index.lib.mkFleet {
+    nodes = {
+      minecraft = {
+        groups = [eastWestGroup];
+        # Every declared ix.healthChecks entry (the minecraft module's unit
+        # check included) is serialized into the plan and waited on by
+        # `ix fleet up`; there is no per-node selector (ENG-2416).
+        deployment.ipv4 = true;
+        modules = [./minecraft.nix];
       };
-      modules = [
-        index.lib.hermesAgent.nixosModules.default
-        index.lib.hermes.profile
-        ./operator.nix
-      ];
+
+      hermes = {
+        dependsOn = ["minecraft"];
+        groups = [eastWestGroup];
+        deployment.secrets.hermes_env = {
+          file = "hermes.env";
+          owner = "hermes";
+          mode = "0400";
+        };
+        modules = [
+          index.lib.hermesAgent.nixosModules.default
+          index.lib.hermes.profile
+          ./operator.nix
+        ];
+      };
     };
-  };
-}
+  }

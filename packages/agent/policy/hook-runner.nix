@@ -34,7 +34,7 @@
   primaryCheckouts,
   repoPackages,
 }:
-runCommand "claude-hooks-wrapped" { nativeBuildInputs = [ makeBinaryWrapper ]; } ''
+runCommand "claude-hooks-wrapped" {nativeBuildInputs = [makeBinaryWrapper];} ''
   makeBinaryWrapper ${ix.rustWorkspace.units.binaries."claude-hooks"}/bin/claude-hooks \
     $out/bin/claude-hooks \
     --set IX_GIT ${lib.getExe git} \

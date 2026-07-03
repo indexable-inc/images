@@ -1,19 +1,19 @@
 /**
-  One Ray cluster node as a NixOS module.
+One Ray cluster node as a NixOS module.
 
-  Head and worker nodes share everything except the `ray start` mode: the same
-  package, the same pinned ports, the same `nix-ld` environment, and the same
-  long-running service. Callers pass `role` (the systemd unit suffix) and
-  `extraStartArgs` for the mode-specific flags (`--head` and the GCS port on the
-  head, `--address` on a worker). `rayAddress` is the head's `host:port`, used by
-  the wrapped CLI on this node.
+Head and worker nodes share everything except the `ray start` mode: the same
+package, the same pinned ports, the same `nix-ld` environment, and the same
+long-running service. Callers pass `role` (the systemd unit suffix) and
+`extraStartArgs` for the mode-specific flags (`--head` and the GCS port on the
+head, `--address` on a worker). `rayAddress` is the head's `host:port`, used by
+the wrapped CLI on this node.
 
-  Ports are pinned rather than left to Ray's default random high range so the
-  guest firewall can name the inter-node ones. `node-manager`, `object-manager`,
-  and the worker port range are opened here because every node listens on them;
-  the head opens its GCS and client ports in `head.nix`. Ray also runs node-local
-  agents (dashboard agent, metrics, runtime-env) on other ports; those are not
-  reached across nodes here, so they are left unexposed.
+Ports are pinned rather than left to Ray's default random high range so the
+guest firewall can name the inter-node ones. `node-manager`, `object-manager`,
+and the worker port range are opened here because every node listens on them;
+the head opens its GCS and client ports in `head.nix`. Ray also runs node-local
+agents (dashboard agent, metrics, runtime-env) on other ports; those are not
+reached across nodes here, so they are left unexposed.
 */
 {
   ix,
@@ -22,10 +22,8 @@
   role,
   extraStartArgs,
   rayAddress,
-}:
-_:
-let
-  package = import ./package.nix { inherit ix lib pkgs; };
+}: _: let
+  package = import ./package.nix {inherit ix lib pkgs;};
   rayCli = import ./cli.nix {
     inherit
       ix
@@ -34,7 +32,7 @@ let
       rayAddress
       ;
   };
-  loader = import ./loader.nix { inherit lib pkgs; };
+  loader = import ./loader.nix {inherit lib pkgs;};
 
   ports = {
     nodeManager = 6380;
@@ -48,22 +46,23 @@ let
   # enough to overflow it once Ray appends its session and socket names.
   tempDir = "/run/ray";
 
-  rayStartArgs = [
-    "start"
-  ]
-  ++ extraStartArgs
-  ++ [
-    "--node-manager-port"
-    (toString ports.nodeManager)
-    "--object-manager-port"
-    (toString ports.objectManager)
-    "--min-worker-port"
-    (toString ports.workerLow)
-    "--max-worker-port"
-    (toString ports.workerHigh)
-    "--temp-dir"
-    tempDir
-  ];
+  rayStartArgs =
+    [
+      "start"
+    ]
+    ++ extraStartArgs
+    ++ [
+      "--node-manager-port"
+      (toString ports.nodeManager)
+      "--object-manager-port"
+      (toString ports.objectManager)
+      "--min-worker-port"
+      (toString ports.workerLow)
+      "--max-worker-port"
+      (toString ports.workerHigh)
+      "--temp-dir"
+      tempDir
+    ];
 
   # Render the arg list as a Nushell list literal so the start script can splat
   # it; each element is JSON-quoted, which is valid Nu string syntax.
@@ -97,15 +96,14 @@ let
       exec ${package}/venv/bin/ray ...$ray_args
     '';
   };
-in
-{
-  environment.systemPackages = [ rayCli ];
+in {
+  environment.systemPackages = [rayCli];
 
   systemd.services."ray-${role}" = {
     description = "Ray cluster ${role}";
-    wantedBy = [ "multi-user.target" ];
-    after = [ "network-online.target" ];
-    wants = [ "network-online.target" ];
+    wantedBy = ["multi-user.target"];
+    after = ["network-online.target"];
+    wants = ["network-online.target"];
     environment = {
       LD_LIBRARY_PATH = loader.libraryPath;
       NIX_LD = loader.nixLd;
@@ -113,23 +111,25 @@ in
       HOME = tempDir;
       RAY_DISABLE_USAGE_STATS = "1";
     };
-    serviceConfig = ix.systemdHardening // {
-      ExecStart = lib.getExe startScript;
-      # SIGTERM to the foreground `--block` process is Ray's shutdown path;
-      # `ray stop` cannot see its own processes under ProtectProc and races
-      # the RuntimeDirectory teardown, so there is no ExecStop.
-      Restart = "on-failure";
-      RestartSec = 5;
-      DynamicUser = true;
-      RuntimeDirectory = "ray";
-      WorkingDirectory = tempDir;
-      # Ray's object store is host shared memory, and the health-check driver
-      # attaches from outside this unit's namespace. A private /dev (hence a
-      # private /dev/shm) or a private user namespace would stop that driver
-      # from mapping the store, so both are disabled for this service.
-      PrivateDevices = false;
-      PrivateUsers = false;
-    };
+    serviceConfig =
+      ix.systemdHardening
+      // {
+        ExecStart = lib.getExe startScript;
+        # SIGTERM to the foreground `--block` process is Ray's shutdown path;
+        # `ray stop` cannot see its own processes under ProtectProc and races
+        # the RuntimeDirectory teardown, so there is no ExecStop.
+        Restart = "on-failure";
+        RestartSec = 5;
+        DynamicUser = true;
+        RuntimeDirectory = "ray";
+        WorkingDirectory = tempDir;
+        # Ray's object store is host shared memory, and the health-check driver
+        # attaches from outside this unit's namespace. A private /dev (hence a
+        # private /dev/shm) or a private user namespace would stop that driver
+        # from mapping the store, so both are disabled for this service.
+        PrivateDevices = false;
+        PrivateUsers = false;
+      };
   };
 
   ix.networking.expose = {

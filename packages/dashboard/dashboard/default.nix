@@ -1,8 +1,4 @@
-{
-  ix,
-  ...
-}:
-let
+{ix, ...}: let
   # The dashboard UI is a Svelte/Vite app under dashboard-core/site. Nix builds
   # it to one self-contained index.html (viteSingleFile) and the dashboard-core
   # build script embeds it at compile time via IX_DASHBOARD_SITE_HTML (wired in
@@ -13,11 +9,15 @@ let
     meta.mainProgram = "dashboard";
   };
 in
-unit.overrideAttrs (old: {
-  passthru = (old.passthru or { }) // {
-    tests = (old.passthru.tests or { }) // {
-      # Expose the nix-built site for inspection / as a build check.
-      site = ix.rustWorkspace.dashboardSite;
-    };
-  };
-})
+  unit.overrideAttrs (old: {
+    passthru =
+      (old.passthru or {})
+      // {
+        tests =
+          (old.passthru.tests or {})
+          // {
+            # Expose the nix-built site for inspection / as a build check.
+            site = ix.rustWorkspace.dashboardSite;
+          };
+      };
+  })

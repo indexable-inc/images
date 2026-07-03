@@ -4,9 +4,7 @@
   stdenvNoCC,
   makeWrapper,
   souffle,
-}:
-
-let
+}: let
   unwrapped = ix.cargoUnit.selectBinaryWithTests ix.rustWorkspace.units {
     binary = "scipql";
     meta = {
@@ -35,33 +33,33 @@ let
     ];
   };
 in
-stdenvNoCC.mkDerivation {
-  pname = "scipql";
-  inherit (unwrapped) version;
+  stdenvNoCC.mkDerivation {
+    pname = "scipql";
+    inherit (unwrapped) version;
 
-  dontUnpack = true;
-  strictDeps = true;
-  nativeBuildInputs = [ makeWrapper ];
+    dontUnpack = true;
+    strictDeps = true;
+    nativeBuildInputs = [makeWrapper];
 
-  installPhase = ''
-    # shell
-    runHook preInstall
-    mkdir -p "$out/bin"
-    # Prefix, not suffix: scipql must use its own pinned rust-analyzer/cargo/
-    # souffle, never an ambient rustup shim that would shadow them on PATH.
-    makeWrapper ${lib.getExe unwrapped} "$out/bin/scipql" \
-      --prefix PATH : ${
+    installPhase = ''
+      # shell
+      runHook preInstall
+      mkdir -p "$out/bin"
+      # Prefix, not suffix: scipql must use its own pinned rust-analyzer/cargo/
+      # souffle, never an ambient rustup shim that would shadow them on PATH.
+      makeWrapper ${lib.getExe unwrapped} "$out/bin/scipql" \
+        --prefix PATH : ${
         lib.makeBinPath [
           rustToolchain
           souffle
         ]
       }
-    runHook postInstall
-  '';
+      runHook postInstall
+    '';
 
-  meta = {
-    description = "Soufflé datalog + find/replace over a SCIP semantic index";
-    license = lib.licenses.mit;
-    mainProgram = "scipql";
-  };
-}
+    meta = {
+      description = "Soufflé datalog + find/replace over a SCIP semantic index";
+      license = lib.licenses.mit;
+      mainProgram = "scipql";
+    };
+  }

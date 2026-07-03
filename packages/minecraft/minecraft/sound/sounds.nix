@@ -16,8 +16,7 @@
   cacert,
   curl,
   jq,
-}:
-let
+}: let
   lock = lib.importJSON ./sounds/lock.json;
 
   # The asset index lists every sound object with its content hash. Pinned by
@@ -31,67 +30,67 @@ let
   # player never needs. Widen `excludePrefixes` in lock.json to trim more.
   excludeRegex = "^(" + lib.concatStringsSep "|" lock.excludePrefixes + ")/";
 in
-stdenvNoCC.mkDerivation {
-  pname = "minecraft-sound-assets";
-  version = lock.minecraftVersion;
+  stdenvNoCC.mkDerivation {
+    pname = "minecraft-sound-assets";
+    version = lock.minecraftVersion;
 
-  dontUnpack = true;
-  strictDeps = true;
-  nativeBuildInputs = [
-    curl
-    jq
-  ];
+    dontUnpack = true;
+    strictDeps = true;
+    nativeBuildInputs = [
+      curl
+      jq
+    ];
 
-  SSL_CERT_FILE = "${cacert}/etc/ssl/certs/ca-bundle.crt";
+    SSL_CERT_FILE = "${cacert}/etc/ssl/certs/ca-bundle.crt";
 
-  # Fixed-output derivation: network access is permitted because the whole
-  # assembled tree is content-addressed by `outputHash`, which is the integrity
-  # guarantee for every downloaded file together. Refresh it with
-  # `nix run .#update-sounds` after bumping the pinned Minecraft version.
-  outputHashMode = "recursive";
-  outputHashAlgo = "sha256";
-  outputHash = lock.packHash;
+    # Fixed-output derivation: network access is permitted because the whole
+    # assembled tree is content-addressed by `outputHash`, which is the integrity
+    # guarantee for every downloaded file together. Refresh it with
+    # `nix run .#update-sounds` after bumping the pinned Minecraft version.
+    outputHashMode = "recursive";
+    outputHashAlgo = "sha256";
+    outputHash = lock.packHash;
 
-  buildPhase = ''
-    # shell
-    runHook preBuild
+    buildPhase = ''
+      # shell
+      runHook preBuild
 
-    list="$TMPDIR/sounds.tsv"
-    jq -r --arg ex ${lib.escapeShellArg excludeRegex} '
-      .objects
-      | to_entries[]
-      | select((.key | startswith("minecraft/sounds/")) and (.key | endswith(".ogg")))
-      | (.key | ltrimstr("minecraft/sounds/")) as $name
-      | select(($name | test($ex)) | not)
-      | "\(.value.hash) \($name)"
-    ' ${assetIndex} > "$list"
+      list="$TMPDIR/sounds.tsv"
+      jq -r --arg ex ${lib.escapeShellArg excludeRegex} '
+        .objects
+        | to_entries[]
+        | select((.key | startswith("minecraft/sounds/")) and (.key | endswith(".ogg")))
+        | (.key | ltrimstr("minecraft/sounds/")) as $name
+        | select(($name | test($ex)) | not)
+        | "\(.value.hash) \($name)"
+      ' ${assetIndex} > "$list"
 
-    echo "downloading $(wc -l < "$list") Minecraft sounds from Mojang's CDN..."
+      echo "downloading $(wc -l < "$list") Minecraft sounds from Mojang's CDN..."
 
-    mkdir -p "$out/sounds"
-    cut -d' ' -f2 "$list" | xargs -n1 dirname | sort -u | while read -r dir; do
-      mkdir -p "$out/sounds/$dir"
-    done
+      mkdir -p "$out/sounds"
+      cut -d' ' -f2 "$list" | xargs -n1 dirname | sort -u | while read -r dir; do
+        mkdir -p "$out/sounds/$dir"
+      done
 
-    export out
-    # --retry alone only covers timeouts and 408/429/5xx; Mojang's CDN sheds
-    # 16-way parallel load with TLS-level connection resets (curl exit 35),
-    # which need --retry-all-errors to be retried at all.
-    xargs -P 16 -n 2 bash -c '
-      hash="$1"; name="$2"
-      curl -sSfL --retry 5 --retry-all-errors --retry-max-time 60 \
-        "https://resources.download.minecraft.net/''${hash:0:2}/$hash" \
-        -o "$out/sounds/$name"
-    ' _ < "$list"
+      export out
+      # --retry alone only covers timeouts and 408/429/5xx; Mojang's CDN sheds
+      # 16-way parallel load with TLS-level connection resets (curl exit 35),
+      # which need --retry-all-errors to be retried at all.
+      xargs -P 16 -n 2 bash -c '
+        hash="$1"; name="$2"
+        curl -sSfL --retry 5 --retry-all-errors --retry-max-time 60 \
+          "https://resources.download.minecraft.net/''${hash:0:2}/$hash" \
+          -o "$out/sounds/$name"
+      ' _ < "$list"
 
-    runHook postBuild
-  '';
+      runHook postBuild
+    '';
 
-  dontInstall = true;
+    dontInstall = true;
 
-  meta = {
-    description = "Minecraft sound effects (downloaded from Mojang's CDN at build time)";
-    # License intentionally omitted: these are Mojang's proprietary assets.
-    # See the DO NOT UPLOAD banner at the top of this file.
-  };
-}
+    meta = {
+      description = "Minecraft sound effects (downloaded from Mojang's CDN at build time)";
+      # License intentionally omitted: these are Mojang's proprietary assets.
+      # See the DO NOT UPLOAD banner at the top of this file.
+    };
+  }

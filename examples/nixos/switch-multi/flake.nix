@@ -12,13 +12,10 @@
     };
   };
 
-  outputs =
-    { nixpkgs, ... }:
-    let
-      example = import ./ix.nix { inherit nixpkgs; };
-    in
-    {
-      inherit (example) nixosConfigurations;
-      ix.nixosConfigurations.default = example.nixosConfigurations;
-    };
+  outputs = {nixpkgs, ...}: let
+    example = import ./ix.nix {inherit nixpkgs;};
+  in {
+    inherit (example) nixosConfigurations;
+    ix.nixosConfigurations.default = example.nixosConfigurations;
+  };
 }

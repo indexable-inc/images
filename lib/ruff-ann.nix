@@ -29,8 +29,7 @@
 # Config is passed inline (`--config`/`--select`/`--ignore`) rather than via a
 # checked-in ruff.toml because per-package builds run ruff inside sandboxes that
 # do not contain the repo root, so an on-disk config would never be discovered.
-{ lib }:
-let
+{lib}: let
   banMessage =
     "typing.cast defeats the type checker (no runtime check), so a wrong cast "
     + "is a latent bug. Parse untrusted/JSON data into a pydantic model at the "
@@ -95,8 +94,7 @@ let
     "UP047"
     "UP049"
   ];
-in
-{
+in {
   inherit
     banMessage
     banConfig

@@ -2,14 +2,13 @@
 {
   lib,
   hookRunner,
-  primaryCheckouts ? [ ],
+  primaryCheckouts ? [],
   personalStartupContext ? false,
-}:
-let
+}: let
   hookRunnerSubcommand = sub: {
     package = hookRunner;
     exeName = "claude-hooks";
-    args = [ sub ];
+    args = [sub];
   };
 
   hookCommands = {
@@ -27,8 +26,7 @@ let
     subagentCachePopulate = hookRunnerSubcommand "subagent-cache-populate";
   };
 
-  renderCommand =
-    command:
+  renderCommand = command:
     lib.escapeShellArgs (
       [
         (lib.getExe' command.package command.exeName)
@@ -56,8 +54,8 @@ let
         matcher = "Edit|MultiEdit|Write|NotebookEdit";
         command = hookCommands.protectedCheckoutGuard;
         timeout = 10;
-        agents = [ "claude" ];
-        enable = primaryCheckouts != [ ];
+        agents = ["claude"];
+        enable = primaryCheckouts != [];
       }
       {
         matcher = "Bash";
@@ -70,20 +68,20 @@ let
       {
         matcher = "^Search$";
         command = hookCommands.indexedSearchGuard;
-        agents = [ "claude" ];
+        agents = ["claude"];
       }
       {
         matcher = "Agent";
         command = hookCommands.subagentCacheLookup;
         timeout = 15;
-        agents = [ "claude" ];
+        agents = ["claude"];
       }
     ];
 
     UserPromptSubmit = [
       {
         command = hookCommands.promptPriors;
-        agents = [ "claude" ];
+        agents = ["claude"];
       }
     ];
 
@@ -92,14 +90,14 @@ let
       {
         matcher = "Write|Edit|MultiEdit|NotebookEdit";
         command = hookCommands.reviewEditLogger;
-        agents = [ "claude" ];
+        agents = ["claude"];
       }
     ];
 
     Stop = [
       {
         command = hookCommands.stopReviewGate;
-        agents = [ "claude" ];
+        agents = ["claude"];
       }
       {
         command = hookCommands.frictionIssueReporter;
@@ -110,7 +108,7 @@ let
       {
         command = hookCommands.subagentCachePopulate;
         timeout = 30;
-        agents = [ "claude" ];
+        agents = ["claude"];
       }
     ];
   };
@@ -126,34 +124,31 @@ let
   };
 
   withDefaults = lib.mapAttrs (_: map (d: defaults // d)) declarations;
-  unique = lib.foldl' (acc: x: if lib.elem x acc then acc else acc ++ [ x ]) [ ];
+  unique = lib.foldl' (acc: x:
+    if lib.elem x acc
+    then acc
+    else acc ++ [x]) [];
 
-  forAgent =
-    agent:
-    let
-      groupsFor =
-        hooks:
-        let
-          mine = builtins.filter (d: d.enable && lib.elem agent d.agents) hooks;
-          group =
-            matcher:
-            {
-              hooks = map (
-                d:
-                {
-                  type = "command";
-                  command = renderCommand d.command;
-                }
-                // lib.optionalAttrs (d.timeout != null) { inherit (d) timeout; }
-              ) (builtins.filter (d: d.matcher == matcher) mine);
-            }
-            // lib.optionalAttrs (matcher != null) { inherit matcher; };
-        in
-        map group (unique (map (d: d.matcher) mine));
+  forAgent = agent: let
+    groupsFor = hooks: let
+      mine = builtins.filter (d: d.enable && lib.elem agent d.agents) hooks;
+      group = matcher:
+        {
+          hooks = map (
+            d:
+              {
+                type = "command";
+                command = renderCommand d.command;
+              }
+              // lib.optionalAttrs (d.timeout != null) {inherit (d) timeout;}
+          ) (builtins.filter (d: d.matcher == matcher) mine);
+        }
+        // lib.optionalAttrs (matcher != null) {inherit matcher;};
     in
-    lib.filterAttrs (_: groups: groups != [ ]) (lib.mapAttrs (_: groupsFor) withDefaults);
-in
-{
+      map group (unique (map (d: d.matcher) mine));
+  in
+    lib.filterAttrs (_: groups: groups != []) (lib.mapAttrs (_: groupsFor) withDefaults);
+in {
   claude = forAgent "claude";
   codex = forAgent "codex";
 }

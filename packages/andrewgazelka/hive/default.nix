@@ -16,12 +16,11 @@
   pkgs,
   ix,
   writeNushellApplication,
-}:
-let
+}: let
   # mix.exs declares `~> 1.18`; the launcher and the check build against the
   # same toolchain so a run never executes code the gate did not.
-  elixir = ix.languages.elixir.toolchain pkgs { version = "1.18"; };
-  erlang = ix.languages.erlang.toolchain pkgs { version = "27"; };
+  elixir = ix.languages.elixir.toolchain pkgs {version = "1.18";};
+  erlang = ix.languages.erlang.toolchain pkgs {version = "27";};
 
   src = lib.fileset.toSource {
     root = ./elixir;
@@ -61,40 +60,44 @@ let
     mixDeps = mixFodDeps;
   };
 in
-(writeNushellApplication {
-  name = "hive";
-  meta = {
-    description = "A tiny fully-connected mesh of Elixir agent actors; `hive` runs the demo";
-    license = lib.licenses.asl20;
-  };
-  runtimeInputs = [
-    pkgs.coreutils
-    elixir
-    erlang
-  ];
-  text = ''
-    # nu
-    def --wrapped main [...args] {
-      # mix compiles in place, so stage the read-only source into a writable
-      # temp dir before running the demo.
-      let work = (^mktemp -d | str trim)
-      ^cp -rL --no-preserve=mode ${src}/. $"($work)/"
-      cd $work
-      with-env {
-        MIX_ENV: "dev"
-        HEX_OFFLINE: "1"
-        MIX_HOME: $"($work)/.mix"
-        HEX_HOME: $"($work)/.hex"
-      } {
-        ^mix run -e "Hive.demo()"
-      }
-    }
-  '';
-}).overrideAttrs
-  (old: {
-    passthru = (old.passthru or { }) // {
-      tests = (old.passthru.tests or { }) // {
-        elixir = elixirCheck;
-      };
+  (writeNushellApplication {
+    name = "hive";
+    meta = {
+      description = "A tiny fully-connected mesh of Elixir agent actors; `hive` runs the demo";
+      license = lib.licenses.asl20;
     };
+    runtimeInputs = [
+      pkgs.coreutils
+      elixir
+      erlang
+    ];
+    text = ''
+      # nu
+      def --wrapped main [...args] {
+        # mix compiles in place, so stage the read-only source into a writable
+        # temp dir before running the demo.
+        let work = (^mktemp -d | str trim)
+        ^cp -rL --no-preserve=mode ${src}/. $"($work)/"
+        cd $work
+        with-env {
+          MIX_ENV: "dev"
+          HEX_OFFLINE: "1"
+          MIX_HOME: $"($work)/.mix"
+          HEX_HOME: $"($work)/.hex"
+        } {
+          ^mix run -e "Hive.demo()"
+        }
+      }
+    '';
+  }).overrideAttrs
+  (old: {
+    passthru =
+      (old.passthru or {})
+      // {
+        tests =
+          (old.passthru.tests or {})
+          // {
+            elixir = elixirCheck;
+          };
+      };
   })

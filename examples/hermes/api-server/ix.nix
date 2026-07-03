@@ -1,5 +1,4 @@
-{ index }:
-
+{index}:
 # The Hermes operator VM exposing the OpenAI-compatible `hermes
 # api-server` to sibling VMs. Chat frontends (LobeChat, Open WebUI,
 # LibreChat) running in the same east-west group point their OpenAI
@@ -10,19 +9,18 @@ let
   # outside it has no east-west route or DNS name to the listener.
   eastWestGroup = "hermes-api";
 in
-index.lib.mkFleet {
-
-  nodes.hermes = {
-    groups = [ eastWestGroup ];
-    deployment.secrets.hermes_env = {
-      file = "hermes.env";
-      owner = "hermes";
-      mode = "0400";
+  index.lib.mkFleet {
+    nodes.hermes = {
+      groups = [eastWestGroup];
+      deployment.secrets.hermes_env = {
+        file = "hermes.env";
+        owner = "hermes";
+        mode = "0400";
+      };
+      modules = [
+        index.lib.hermesAgent.nixosModules.default
+        index.lib.hermes.profile
+        ./api-server.nix
+      ];
     };
-    modules = [
-      index.lib.hermesAgent.nixosModules.default
-      index.lib.hermes.profile
-      ./api-server.nix
-    ];
-  };
-}
+  }

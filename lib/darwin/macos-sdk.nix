@@ -12,13 +12,11 @@
 # Two-stage signature: lib/default.nix applies the shared `pins` reader once at
 # import (a cross-directory `../util` import here is banned by no-parent-path);
 # the public `ix.macosSdk` surface stays `{ pkgs }: derivation`.
-{ pins }:
-{ pkgs }:
-let
+{pins}: {pkgs}: let
   pin = pins.loadPin ./pins.json "macos-sdk";
-  tarball = pkgs.fetchurl { inherit (pin) url hash; };
+  tarball = pkgs.fetchurl {inherit (pin) url hash;};
 in
-pkgs.runCommand "MacOSX${pin.version}.sdk" { } ''
-  mkdir -p "$out"
-  tar xf ${tarball} --strip-components=1 -C "$out"
-''
+  pkgs.runCommand "MacOSX${pin.version}.sdk" {} ''
+    mkdir -p "$out"
+    tar xf ${tarball} --strip-components=1 -C "$out"
+  ''

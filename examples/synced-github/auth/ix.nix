@@ -1,7 +1,5 @@
-{ index }:
-
+{index}:
 index.lib.mkFleet {
-
   # One GitHub token, declared once for the whole fleet. The ix account secret
   # store owns the lower snake_case key; this fleet declares how VMs receive it
   # at runtime as `/run/secrets/github/token`.
@@ -20,6 +18,6 @@ index.lib.mkFleet {
   # nothing.
   nodes.agent = {
     replicas = 3;
-    modules = [ ./agent.nix ];
+    modules = [./agent.nix];
   };
 }

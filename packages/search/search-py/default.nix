@@ -2,8 +2,7 @@
   ix,
   lib,
   pkgs ? ix.pkgs,
-}:
-let
+}: let
   pyproject = lib.importTOML ./pyproject.toml;
   inherit (pyproject.project) version;
 
@@ -19,7 +18,9 @@ let
       x86_64-linux = "manylinux_2_34_x86_64";
       aarch64-linux = "manylinux_2_34_aarch64";
     }
-    .${pkgs.stdenv.hostPlatform.system}
+    .${
+      pkgs.stdenv.hostPlatform.system
+    }
       or (throw "search-py: wheel is Linux-only, got ${pkgs.stdenv.hostPlatform.system}");
 
   pythonSource = builtins.path {
@@ -33,10 +34,10 @@ let
   pyStrictTest = ix.buildPyStrictCheck pkgs {
     pname = "search-py";
     pythonSrc = pythonSource;
-    pythonPackages = ps: [ ps.polars ];
+    pythonPackages = ps: [ps.polars];
   };
 in
-pkgs.runCommand "ix-search-wheel"
+  pkgs.runCommand "ix-search-wheel"
   {
     strictDeps = true;
     nativeBuildInputs = [

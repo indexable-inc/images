@@ -1,29 +1,28 @@
 /**
-  The Ray command line wrapped for the ix guest.
+The Ray command line wrapped for the ix guest.
 
-  `buildUvApplication` wraps only the `ray-demo` entry point, and the bare `ray`
-  console script in the venv has neither the loader path its `_raylet.so` needs
-  nor a default cluster address. This builds both `ray` and `ray-demo` with the
-  same `nix-ld` loader environment the services use, plus a default
-  `RAY_ADDRESS` so `ray status` and `ray-demo` attach to the head without flags.
+`buildUvApplication` wraps only the `ray-demo` entry point, and the bare `ray`
+console script in the venv has neither the loader path its `_raylet.so` needs
+nor a default cluster address. This builds both `ray` and `ray-demo` with the
+same `nix-ld` loader environment the services use, plus a default
+`RAY_ADDRESS` so `ray status` and `ray-demo` attach to the head without flags.
 
-  `ix shell ray-head -- ray status` runs non-interactively and may not source
-  the login profile, so the wrapper sets every variable rather than leaning on
-  the session environment.
+`ix shell ray-head -- ray status` runs non-interactively and may not source
+the login profile, so the wrapper sets every variable rather than leaning on
+the session environment.
 */
 {
   ix,
   lib,
   pkgs,
   rayAddress,
-}:
-let
-  package = import ./package.nix { inherit ix lib pkgs; };
-  loader = import ./loader.nix { inherit lib pkgs; };
+}: let
+  package = import ./package.nix {inherit ix lib pkgs;};
+  loader = import ./loader.nix {inherit lib pkgs;};
 in
-pkgs.runCommand "ray-cli"
+  pkgs.runCommand "ray-cli"
   {
-    nativeBuildInputs = [ pkgs.makeWrapper ];
+    nativeBuildInputs = [pkgs.makeWrapper];
     meta.mainProgram = "ray-demo";
   }
   ''

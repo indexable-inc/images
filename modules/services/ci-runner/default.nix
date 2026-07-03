@@ -13,9 +13,9 @@
   lib,
   pkgs,
   ...
-}:
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     mkEnableOption
     mkIf
     mkOption
@@ -23,8 +23,7 @@ let
     ;
   cfg = config.services.ci-runner;
   runnerNames = map (index: "index-${toString index}") (lib.range 1 cfg.count);
-in
-{
+in {
   options.services.ci-runner = {
     enable = mkEnableOption "self-hosted GitHub Actions runners for this repository";
 
@@ -63,7 +62,7 @@ in
 
     labels = mkOption {
       type = types.listOf types.str;
-      default = [ "nix" ];
+      default = ["nix"];
       description = ''
         Extra labels appended to every runner. A workflow opts in by setting
         {option}`runs-on` to `self-hosted` plus these labels.
@@ -84,7 +83,7 @@ in
 
     packages = mkOption {
       type = types.listOf types.package;
-      default = [ ];
+      default = [];
       example = lib.literalExpression "[ pkgs.gh pkgs.jq ]";
       description = ''
         Extra packages on each job's PATH, on top of the git and Nix tooling
@@ -106,14 +105,14 @@ in
       # Consume the repo flake's nixConfig substituters without the interactive
       # prompt; `nix flake check` otherwise stalls waiting for confirmation.
       accept-flake-config = true;
-      extra-substituters = [ "https://cache.ix.dev" ];
+      extra-substituters = ["https://cache.ix.dev"];
       extra-trusted-public-keys = [
         "ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI="
       ];
       # Index images pin `gcc.arch = znver5`, so every derivation in the closure
       # requires this builder feature; advertise it or the daemon refuses the
       # builds before they evaluate.
-      extra-system-features = [ "gccarch-znver5" ];
+      extra-system-features = ["gccarch-znver5"];
     };
 
     services.github-runners = lib.genAttrs runnerNames (_name: {
@@ -123,12 +122,13 @@ in
       # Re-register under the same name after a host config change instead of
       # failing on a name clash with the already-registered runner.
       replace = true;
-      extraPackages = [
-        pkgs.gh
-        pkgs.git
-        config.nix.package
-      ]
-      ++ cfg.packages;
+      extraPackages =
+        [
+          pkgs.gh
+          pkgs.git
+          config.nix.package
+        ]
+        ++ cfg.packages;
     });
   };
 }

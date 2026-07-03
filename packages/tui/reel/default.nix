@@ -3,9 +3,7 @@
   lib,
   pkgs,
   ...
-}:
-
-let
+}: let
   # The repo tools the demo runs, built from the shared workspace unit graph for
   # this pkgs (the same way their own packages build them), so the wrapper gets
   # host-correct binaries without depending on the repo overlay.
@@ -58,41 +56,45 @@ let
 
   wrapped =
     pkgs.runCommand "reel"
-      {
-        nativeBuildInputs = [ pkgs.makeWrapper ];
-        strictDeps = true;
-        inherit meta;
-      }
-      ''
-        mkdir -p $out/bin
-        makeWrapper ${lib.getExe unwrapped} $out/bin/reel \
-          --prefix PATH : ${lib.makeBinPath runtimeInputs}
-      '';
+    {
+      nativeBuildInputs = [pkgs.makeWrapper];
+      strictDeps = true;
+      inherit meta;
+    }
+    ''
+      mkdir -p $out/bin
+      makeWrapper ${lib.getExe unwrapped} $out/bin/reel \
+        --prefix PATH : ${lib.makeBinPath runtimeInputs}
+    '';
 
   printsHelp =
     pkgs.runCommand "reel-prints-help"
-      {
-        nativeBuildInputs = [ wrapped ];
-        strictDeps = true;
-      }
-      ''
-        # No display, no scenes recorded: --help must exit 0 and print usage.
-        help=$(reel --help)
-        case "$help" in
-          *"Usage: reel"*) ;;
-          *)
-            echo "reel --help did not print usage" >&2
-            printf '%s\n' "$help" >&2
-            exit 1
-            ;;
-        esac
-        mkdir -p "$out"
-      '';
+    {
+      nativeBuildInputs = [wrapped];
+      strictDeps = true;
+    }
+    ''
+      # No display, no scenes recorded: --help must exit 0 and print usage.
+      help=$(reel --help)
+      case "$help" in
+        *"Usage: reel"*) ;;
+        *)
+          echo "reel --help did not print usage" >&2
+          printf '%s\n' "$help" >&2
+          exit 1
+          ;;
+      esac
+      mkdir -p "$out"
+    '';
 in
-wrapped.overrideAttrs (old: {
-  passthru = (old.passthru or { }) // {
-    tests = (unwrapped.passthru.tests or { }) // {
-      inherit printsHelp;
-    };
-  };
-})
+  wrapped.overrideAttrs (old: {
+    passthru =
+      (old.passthru or {})
+      // {
+        tests =
+          (unwrapped.passthru.tests or {})
+          // {
+            inherit printsHelp;
+          };
+      };
+  })

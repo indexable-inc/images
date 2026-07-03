@@ -4,6 +4,6 @@
   # path boots under Apple Virtualization.framework on Apple Silicon. Gate the
   # flake output and package-set attr to that system so `nix flake check` never
   # forces it elsewhere.
-  flake.systems = [ "aarch64-linux" ];
-  packageSet.systems = [ "aarch64-linux" ];
+  flake.systems = ["aarch64-linux"];
+  packageSet.systems = ["aarch64-linux"];
 }

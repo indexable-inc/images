@@ -22,19 +22,17 @@
   # ./default.nix (this file is data for the guest image, not a registry
   # package, so `ix` is not an autoArg here).
   pins,
-}:
-let
+}: let
   versions = lib.unique (lib.mapAttrsToList (_: pin: pin.version) pins);
-  version =
-    assert lib.assertMsg (
-      builtins.length versions == 1
-    ) "lwjgl-natives: pins.json entries must share one LWJGL version, got ${toString versions}";
+  version = assert lib.assertMsg (
+    builtins.length versions == 1
+  ) "lwjgl-natives: pins.json entries must share one LWJGL version, got ${toString versions}";
     builtins.head versions;
-  jars = lib.mapAttrsToList (_: pin: fetchurl { inherit (pin) url hash; }) pins;
+  jars = lib.mapAttrsToList (_: pin: fetchurl {inherit (pin) url hash;}) pins;
 in
-runCommand "lwjgl-natives-linux-arm64-${version}"
+  runCommand "lwjgl-natives-linux-arm64-${version}"
   {
-    nativeBuildInputs = [ unzip ];
+    nativeBuildInputs = [unzip];
     inherit jars;
     strictDeps = true;
     __structuredAttrs = true;
@@ -45,8 +43,8 @@ runCommand "lwjgl-natives-linux-arm64-${version}"
       # libraries they bind (glfw, jemalloc, freetype, ...), each under its
       # own permissive license.
       license = lib.licenses.bsd3;
-      sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
-      platforms = [ "aarch64-linux" ];
+      sourceProvenance = [lib.sourceTypes.binaryNativeCode];
+      platforms = ["aarch64-linux"];
     };
   }
   ''

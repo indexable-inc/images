@@ -17,8 +17,7 @@ let
     inherit height;
     logical_height = height;
   };
-in
-{
+in {
   inherit minY height;
   topY = minY + height - 1;
 

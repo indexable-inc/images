@@ -11,13 +11,15 @@
 # this is a trivial symlink derivation depending on the already-built package, so
 # there is genuinely no second build.
 runCommand "book-overlay"
-  {
-    meta = bossbar-overlay.meta // {
+{
+  meta =
+    bossbar-overlay.meta
+    // {
       description = "Minecraft-style book desktop overlay (wgpu, SQLite-driven)";
       mainProgram = "book-overlay";
     };
-  }
-  ''
-    mkdir -p "$out/bin"
-    ln -s ${lib.getExe' bossbar-overlay "book-overlay"} "$out/bin/book-overlay"
-  ''
+}
+''
+  mkdir -p "$out/bin"
+  ln -s ${lib.getExe' bossbar-overlay "book-overlay"} "$out/bin/book-overlay"
+''

@@ -4,12 +4,14 @@
   lib,
   pkgs,
   ...
-}:
-let
+}: let
   # `ix.healthChecks.<name>.unit` sugar: probe a systemd unit with
   # `systemctl is-active`. A bare name gets the `.service` suffix; pass an
   # explicit `foo.socket`/`foo.timer` to probe another unit type.
-  unitName = unit: if lib.hasInfix "." unit then unit else "${unit}.service";
+  unitName = unit:
+    if lib.hasInfix "." unit
+    then unit
+    else "${unit}.service";
   mkUnitCommand = unit: [
     (lib.getExe' config.systemd.package "systemctl")
     "is-active"
@@ -18,8 +20,11 @@ let
   ];
 
   healthCheckType = lib.types.submodule (
-    { name, config, ... }:
     {
+      name,
+      config,
+      ...
+    }: {
       options = {
         description = lib.mkOption {
           type = lib.types.str;
@@ -118,8 +123,7 @@ let
   );
 
   portClaimType = lib.types.submodule (
-    { name, ... }:
-    {
+    {name, ...}: {
       options = {
         protocol = lib.mkOption {
           type = lib.types.enum [
@@ -155,49 +159,53 @@ let
     }
   );
 
-  portClaims = lib.mapAttrsToList (
-    name: claim: claim // { inherit name; }
-  ) config.ix.networking.portClaims;
+  portClaims =
+    lib.mapAttrsToList (
+      name: claim: claim // {inherit name;}
+    )
+    config.ix.networking.portClaims;
   claimKey = claim: "${claim.namespace}/${claim.protocol}/${toString claim.port}";
   portClaimGroups = builtins.groupBy claimKey portClaims;
   isIpv4Address = address: lib.hasInfix "." address;
   isIpv6Address = address: lib.hasInfix ":" address;
-  addressOverlaps =
-    left: right:
-    left == "*"
+  addressOverlaps = left: right:
+    left
+    == "*"
     || right == "*"
     || left == right
     || (left == "0.0.0.0" && !(isIpv6Address right))
     || (right == "0.0.0.0" && !(isIpv6Address left))
     || (left == "::" && !(isIpv4Address right))
     || (right == "::" && !(isIpv4Address left));
-  groupConflicts =
-    claims:
+  groupConflicts = claims:
     lib.any (
       left: lib.any (right: left.name != right.name && addressOverlaps left.address right.address) claims
-    ) claims;
+    )
+    claims;
   conflictingPortClaimGroups = lib.filterAttrs (_: groupConflicts) portClaimGroups;
   renderPortClaim = claim: "${claim.name} (${claim.address}, ${claim.description})";
-  renderPortClaimConflict =
-    key: claims: "${key}: ${lib.concatMapStringsSep ", " renderPortClaim claims}";
-  ipv4GuestHealthChecks = lib.filterAttrs (
-    _name: check: check.requiresIpv4 && check.from != "host"
-  ) config.ix.healthChecks;
+  renderPortClaimConflict = key: claims: "${key}: ${lib.concatMapStringsSep ", " renderPortClaim claims}";
+  ipv4GuestHealthChecks =
+    lib.filterAttrs (
+      _name: check: check.requiresIpv4 && check.from != "host"
+    )
+    config.ix.healthChecks;
 
   # Health checks that set `unit` must not also override `command`: the whole
   # point of `unit` is that it derives the command, so a custom command means
   # `unit` is silently ignored. Flag it instead of letting them disagree.
-  overSpecifiedHealthChecks = lib.filterAttrs (
-    _name: check: check.unit != null && check.command != mkUnitCommand check.unit
-  ) config.ix.healthChecks;
+  overSpecifiedHealthChecks =
+    lib.filterAttrs (
+      _name: check: check.unit != null && check.command != mkUnitCommand check.unit
+    )
+    config.ix.healthChecks;
 
   # `ix.networking.expose.<name>` is the one declaration for "this image listens
   # here": it registers the port in the claim registry (so collisions are caught
   # at eval time) and, by default, opens the in-guest firewall for it. It also
   # makes the listener discoverable across the fleet via `ix.endpointOf`.
   exposeType = lib.types.submodule (
-    { name, ... }:
-    {
+    {name, ...}: {
       options = {
         port = lib.mkOption {
           type = lib.types.port;
@@ -247,23 +255,24 @@ let
   );
 
   exposeList = lib.attrValues config.ix.networking.expose;
-  exposePortClaims = lib.mapAttrs (_name: e: {
-    inherit (e)
-      protocol
-      port
-      address
-      namespace
-      description
-      ;
-  }) config.ix.networking.expose;
-  exposeFirewallPorts =
-    proto: map (e: e.port) (lib.filter (e: e.firewall && e.protocol == proto) exposeList);
-in
-{
+  exposePortClaims =
+    lib.mapAttrs (_name: e: {
+      inherit
+        (e)
+        protocol
+        port
+        address
+        namespace
+        description
+        ;
+    })
+    config.ix.networking.expose;
+  exposeFirewallPorts = proto: map (e: e.port) (lib.filter (e: e.firewall && e.protocol == proto) exposeList);
+in {
   options.ix = {
     healthChecks = lib.mkOption {
       type = lib.types.attrsOf healthCheckType;
-      default = { };
+      default = {};
       description = ''
         Commands that prove this image's important services are ready.
 
@@ -279,7 +288,7 @@ in
     networking = {
       portClaims = lib.mkOption {
         type = lib.types.attrsOf portClaimType;
-        default = { };
+        default = {};
         description = ''
           Sockets claimed by repo-owned service modules inside this image.
 
@@ -291,7 +300,7 @@ in
 
       expose = lib.mkOption {
         type = lib.types.attrsOf exposeType;
-        default = { };
+        default = {};
         example = lib.literalExpression ''
           {
             http = {
@@ -326,7 +335,7 @@ in
 
       groups = lib.mkOption {
         type = lib.types.listOf lib.types.str;
-        default = [ ];
+        default = [];
         example = lib.literalExpression ''[ "shared-db" ]'';
         description = ''
           East-west group slugs this image's VM joins at creation.
@@ -347,25 +356,27 @@ in
   };
 
   config = {
-    ix.networking.portClaims = exposePortClaims // {
-      ix-console = {
-        protocol = "tcp";
-        port = 5001;
-        address = "*";
-        description = "ix-console shell and terminal snapshot listener";
-      };
+    ix.networking.portClaims =
+      exposePortClaims
+      // {
+        ix-console = {
+          protocol = "tcp";
+          port = 5001;
+          address = "*";
+          description = "ix-console shell and terminal snapshot listener";
+        };
 
-      ix-agent = {
-        protocol = "udp";
-        port = 8443;
-        address = "*";
-        description = "ix-agent WebTransport direct-connect endpoint";
+        ix-agent = {
+          protocol = "udp";
+          port = 8443;
+          address = "*";
+          description = "ix-agent WebTransport direct-connect endpoint";
+        };
       };
-    };
 
     assertions = [
       {
-        assertion = conflictingPortClaimGroups == { };
+        assertion = conflictingPortClaimGroups == {};
         message = ''
           ix.networking.portClaims has same-namespace port collisions:
             ${lib.concatMapAttrsStringSep "\n  " renderPortClaimConflict conflictingPortClaimGroups}
@@ -374,14 +385,14 @@ in
         '';
       }
       {
-        assertion = ipv4GuestHealthChecks == { };
+        assertion = ipv4GuestHealthChecks == {};
         message = ''
           ix.healthChecks can only set requiresIpv4 on host checks:
             ${lib.concatStringsSep ", " (lib.attrNames ipv4GuestHealthChecks)}
         '';
       }
       {
-        assertion = overSpecifiedHealthChecks == { };
+        assertion = overSpecifiedHealthChecks == {};
         message = ''
           ix.healthChecks set both `unit` and a custom `command`, which conflict
           (a custom command makes `unit` a no-op):
@@ -453,14 +464,16 @@ in
       nftables.enable = true;
       firewall = {
         enable = lib.mkDefault true;
-        allowedTCPPorts = [
-          5001 # ix-console shell and terminal snapshot listener.
-        ]
-        ++ exposeFirewallPorts "tcp";
-        allowedUDPPorts = [
-          8443 # ix-agent WebTransport direct-connect endpoint.
-        ]
-        ++ exposeFirewallPorts "udp";
+        allowedTCPPorts =
+          [
+            5001 # ix-console shell and terminal snapshot listener.
+          ]
+          ++ exposeFirewallPorts "tcp";
+        allowedUDPPorts =
+          [
+            8443 # ix-agent WebTransport direct-connect endpoint.
+          ]
+          ++ exposeFirewallPorts "udp";
       };
     };
 
@@ -532,7 +545,7 @@ in
       #
       # NIX_PATH so legacy nix-shell / <nixpkgs> imports resolve without a
       # channel subscription or network fetch.
-      nixPath = [ "nixpkgs=${pkgs.path}" ];
+      nixPath = ["nixpkgs=${pkgs.path}"];
       settings = {
         experimental-features = [
           "nix-command"

@@ -1,9 +1,7 @@
-_:
-let
+_: let
   sambaPort = 445;
   shareDir = "/var/lib/file-share";
-in
-{
+in {
   # Userspace `smbd` rather than in-kernel `ksmbd`: ix images are
   # `boot.isContainer = true` and share the host `linux-ix` kernel, so
   # the SMB server has to live in userspace. Linux clients still use

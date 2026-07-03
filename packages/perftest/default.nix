@@ -7,7 +7,6 @@
   rdma-core,
   pciutils,
 }:
-
 stdenv.mkDerivation {
   pname = "perftest";
   version = "26.04.17";

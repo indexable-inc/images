@@ -1,13 +1,11 @@
-{ indexPackages }:
-{
+{indexPackages}: {
   config,
   lib,
   pkgs,
   ...
-}:
-let
+}: let
   cfg = config.programs.claude-code;
-  jsonFormat = pkgs.formats.json { };
+  jsonFormat = pkgs.formats.json {};
   pathLike = lib.types.either lib.types.path lib.types.str;
   indexPkgs = indexPackages pkgs.stdenv.hostPlatform.system;
   systemPromptSource = lib.types.enum [
@@ -16,26 +14,26 @@ let
     "text"
   ];
 
-  optionalOverride =
-    condition: name: value:
-    lib.optionalAttrs condition { ${name} = value; };
-  packageOverrides = {
-    inherit (cfg)
-      addDirs
-      dangerouslySkipPermissions
-      personalStartupContext
-      pluginDirs
-      primaryCheckouts
-      ;
-    omitRules = cfg.systemPrompt.omitRules;
-    extraSettings = cfg.defaults;
-  }
-  // optionalOverride (cfg.defaultMcpServers != null) "mcpServers" cfg.defaultMcpServers
-  // optionalOverride (cfg.systemPrompt.source == "text") "systemPrompt" cfg.systemPrompt.text
-  // optionalOverride (cfg.systemPrompt.source == "stock") "systemPrompt" null;
+  optionalOverride = condition: name: value:
+    lib.optionalAttrs condition {${name} = value;};
+  packageOverrides =
+    {
+      inherit
+        (cfg)
+        addDirs
+        dangerouslySkipPermissions
+        personalStartupContext
+        pluginDirs
+        primaryCheckouts
+        ;
+      omitRules = cfg.systemPrompt.omitRules;
+      extraSettings = cfg.defaults;
+    }
+    // optionalOverride (cfg.defaultMcpServers != null) "mcpServers" cfg.defaultMcpServers
+    // optionalOverride (cfg.systemPrompt.source == "text") "systemPrompt" cfg.systemPrompt.text
+    // optionalOverride (cfg.systemPrompt.source == "stock") "systemPrompt" null;
   defaultedPackage = cfg.basePackage.override packageOverrides;
-in
-{
+in {
   options.programs.claude-code = {
     basePackage = lib.mkOption {
       type = lib.types.package;
@@ -46,7 +44,7 @@ in
 
     defaults = lib.mkOption {
       inherit (jsonFormat) type;
-      default = { };
+      default = {};
       description = ''
         Lower-priority Claude Code settings passed through the wrapper's
         read-only default layer. Runtime user settings are still managed by
@@ -62,13 +60,13 @@ in
 
     addDirs = lib.mkOption {
       type = lib.types.listOf pathLike;
-      default = [ ];
+      default = [];
       description = "Directories baked as Claude Code {command}`--add-dir=<dir>` flags.";
     };
 
     pluginDirs = lib.mkOption {
       type = lib.types.listOf pathLike;
-      default = [ ];
+      default = [];
       description = "Directories baked as Claude Code {command}`--plugin-dir=<dir>` flags.";
     };
 
@@ -122,7 +120,7 @@ in
 
           omitRules = lib.mkOption {
             type = lib.types.listOf lib.types.str;
-            default = [ ];
+            default = [];
             description = ''
               Rule names omitted from the generated house system prompt. Only
               valid when {option}`programs.claude-code.systemPrompt.source` is
@@ -131,7 +129,7 @@ in
           };
         };
       };
-      default = { };
+      default = {};
       description = ''
         Structured control for the system prompt baked into the Claude Code
         wrapper.
@@ -146,7 +144,7 @@ in
         message = "programs.claude-code.systemPrompt: source = \"text\" requires text, and text requires source = \"text\".";
       }
       {
-        assertion = cfg.systemPrompt.source == "house" || cfg.systemPrompt.omitRules == [ ];
+        assertion = cfg.systemPrompt.source == "house" || cfg.systemPrompt.omitRules == [];
         message = "programs.claude-code.systemPrompt.omitRules only applies when source = \"house\".";
       }
     ];

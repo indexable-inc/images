@@ -7,22 +7,23 @@
   lib,
   pkgs,
   ...
-}:
-let
+}: let
   modCfg = config.services.minecraft.mods.luckperms or null;
   modEnabled = modCfg != null && modCfg.enable;
   defaults = {
     mysql = false;
   };
-  modSettings = if modCfg == null then { } else builtins.removeAttrs modCfg [ "enable" ];
+  modSettings =
+    if modCfg == null
+    then {}
+    else builtins.removeAttrs modCfg ["enable"];
   merged = defaults // modSettings;
-in
-{
+in {
   config = lib.mkIf modEnabled {
     services.mysql = lib.mkIf merged.mysql {
       enable = true;
       package = lib.mkDefault pkgs.mariadb;
-      ensureDatabases = [ "luckperms" ];
+      ensureDatabases = ["luckperms"];
       ensureUsers = [
         {
           name = "minecraft";

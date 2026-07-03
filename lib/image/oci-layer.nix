@@ -11,8 +11,7 @@
   pkgs,
   lib,
   ...
-}:
-{
+}: {
   options.ix = {
     image = {
       name = lib.mkOption {
@@ -56,69 +55,67 @@
   config.ix = {
     profiles.base.enable = lib.mkDefault true;
 
-    build.ociImage =
-      let
-        inherit (config.system.build) toplevel;
+    build.ociImage = let
+      inherit (config.system.build) toplevel;
 
-        # FHS layout pointing into the NixOS toplevel. Keep activation-owned
-        # paths writable: NixOS first boot populates /etc and creates /bin/sh
-        # and /usr/bin/env, so those cannot be symlinks into the immutable store.
-        systemRoot = pkgs.runCommand "system-root" { } ''
-          mkdir -p $out
-          ln -s ${toplevel}/init $out/init
-          mkdir -p $out/etc
-          mkdir -p $out/bin
-          ln -s ${toplevel}/sw/sbin $out/sbin
-          ln -s ${toplevel}/sw/lib $out/lib
-          mkdir -p $out/usr/bin
-          ln -s ${toplevel}/sw/lib $out/usr/lib
-          ln -s ${toplevel}/sw/sbin $out/usr/sbin
-          mkdir -p $out/tmp $out/var $out/run $out/proc $out/sys $out/dev $out/root
-        '';
+      # FHS layout pointing into the NixOS toplevel. Keep activation-owned
+      # paths writable: NixOS first boot populates /etc and creates /bin/sh
+      # and /usr/bin/env, so those cannot be symlinks into the immutable store.
+      systemRoot = pkgs.runCommand "system-root" {} ''
+        mkdir -p $out
+        ln -s ${toplevel}/init $out/init
+        mkdir -p $out/etc
+        mkdir -p $out/bin
+        ln -s ${toplevel}/sw/sbin $out/sbin
+        ln -s ${toplevel}/sw/lib $out/lib
+        mkdir -p $out/usr/bin
+        ln -s ${toplevel}/sw/lib $out/usr/lib
+        ln -s ${toplevel}/sw/sbin $out/usr/sbin
+        mkdir -p $out/tmp $out/var $out/run $out/proc $out/sys $out/dev $out/root
+      '';
 
-        stream = pkgs.dockerTools.streamLayeredImage {
-          inherit (config.ix.image) name;
-          tag = "latest";
-          # Below the 127-layer registry limit with headroom for systemRoot
-          # plus a few user layers.
-          maxLayers = 67;
-          contents = [ systemRoot ];
-          config.Entrypoint = [ "${toplevel}/init" ];
-        };
+      stream = pkgs.dockerTools.streamLayeredImage {
+        inherit (config.ix.image) name;
+        tag = "latest";
+        # Below the 127-layer registry limit with headroom for systemRoot
+        # plus a few user layers.
+        maxLayers = 67;
+        contents = [systemRoot];
+        config.Entrypoint = ["${toplevel}/init"];
+      };
 
-        efficiency = config.ix.build.ociEfficiency;
-        efficiencyArgs =
-          if efficiency.enable then
-            [
-              "--min-efficiency"
-              (toString efficiency.minEfficiency)
-              "--max-wasted-bytes"
-              (toString efficiency.maxWastedBytes)
-              "--max-wasted-percent"
-              (toString efficiency.maxWastedPercent)
-              "--efficiency-top-paths"
-              (toString efficiency.reportTopPaths)
-            ]
-          else
-            [ "--skip-efficiency-check" ];
-      in
+      efficiency = config.ix.build.ociEfficiency;
+      efficiencyArgs =
+        if efficiency.enable
+        then [
+          "--min-efficiency"
+          (toString efficiency.minEfficiency)
+          "--max-wasted-bytes"
+          (toString efficiency.maxWastedBytes)
+          "--max-wasted-percent"
+          (toString efficiency.maxWastedPercent)
+          "--efficiency-top-paths"
+          (toString efficiency.reportTopPaths)
+        ]
+        else ["--skip-efficiency-check"];
+    in
       pkgs.runCommand "${config.ix.image.name}-oci.tar"
-        {
-          nativeBuildInputs = [
-            pkgs.coreutils
-            pkgs.gnutar
-            pkgs.oci-image-builder
-          ];
-          # Expose the NixOS system closure the OCI archive is packed from, so
-          # CI can gate on "the image's closure builds" (cheap: a relink over
-          # already-built store paths) without paying the streamLayeredImage
-          # tar+compress pass. The full archive is still this derivation's
-          # output, built only where the bytes are consumed (a registry push at
-          # release). CI checks NixOS system closures directly when a caller opts into one.
-          passthru.toplevel = toplevel;
-        }
-        ''
-          oci-image-builder ${lib.escapeShellArgs (efficiencyArgs ++ [ "${stream.passthru.conf}" ])} "$out"
-        '';
+      {
+        nativeBuildInputs = [
+          pkgs.coreutils
+          pkgs.gnutar
+          pkgs.oci-image-builder
+        ];
+        # Expose the NixOS system closure the OCI archive is packed from, so
+        # CI can gate on "the image's closure builds" (cheap: a relink over
+        # already-built store paths) without paying the streamLayeredImage
+        # tar+compress pass. The full archive is still this derivation's
+        # output, built only where the bytes are consumed (a registry push at
+        # release). CI checks NixOS system closures directly when a caller opts into one.
+        passthru.toplevel = toplevel;
+      }
+      ''
+        oci-image-builder ${lib.escapeShellArgs (efficiencyArgs ++ ["${stream.passthru.conf}"])} "$out"
+      '';
   };
 }

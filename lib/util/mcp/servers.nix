@@ -8,8 +8,7 @@
 #   { transport = "stdio"; command = <str>; args ? [ <str> ]; env ? { <k> = <str>; }; envVars ? [ <str> ]; }
 #   { transport = "http";  url = <str>; }
 # and `servers` throughout is an attrset from server name to such a definition.
-{ lib }:
-let
+{lib}: let
   indexApiEnvVars = [
     "GH_TOKEN"
     "GITHUB_TOKEN"
@@ -20,15 +19,12 @@ let
     "SLACK_USER_TOKEN"
   ];
 
-  defaultServers =
-    {
-      indexCommand ? null,
-    }:
+  defaultServers = {indexCommand ? null}:
     lib.optionalAttrs (indexCommand != null) {
       index = {
         transport = "stdio";
         command = indexCommand;
-        args = [ "serve" ];
+        args = ["serve"];
         envVars = indexApiEnvVars;
       };
     }
@@ -43,17 +39,16 @@ let
   # plus an addon socket inside a Blender GUI session, so each is emitted only
   # when the consumer passes its binary. Command strings rather than packages
   # because this registry is pure lib, out of `pkgs` scope.
-  optionalServers =
-    {
-      # `lib.getExe` of the `packages/blender-mcp` build (community bridge,
-      # ahujasid): broad automation surface (objects, materials, Poly Haven,
-      # code execution). Its addon owns localhost:9876.
-      blenderMcp ? null,
-      # `lib.getExe` of the `packages/blender-lab-mcp` build (official Blender
-      # Lab): docs/analysis surface (blendfile summaries, API + manual lookup,
-      # screenshots, code execution).
-      blenderLabMcp ? null,
-    }:
+  optionalServers = {
+    # `lib.getExe` of the `packages/blender-mcp` build (community bridge,
+    # ahujasid): broad automation surface (objects, materials, Poly Haven,
+    # code execution). Its addon owns localhost:9876.
+    blenderMcp ? null,
+    # `lib.getExe` of the `packages/blender-lab-mcp` build (official Blender
+    # Lab): docs/analysis surface (blendfile summaries, API + manual lookup,
+    # screenshots, code execution).
+    blenderLabMcp ? null,
+  }:
     lib.optionalAttrs (blenderMcp != null) {
       blender = {
         transport = "stdio";
@@ -77,39 +72,38 @@ let
         };
       };
     };
-in
-{
+in {
   /**
-    The default MCP server set, defined once for every wrapper that bakes it.
-    Returns the neutral definitions; each consumer renders them with
-    `toClaudeJson` / `toCodexEntries`.
+  The default MCP server set, defined once for every wrapper that bakes it.
+  Returns the neutral definitions; each consumer renders them with
+  `toClaudeJson` / `toCodexEntries`.
 
-    Arguments:
-    - `indexCommand`: path to the `ix-mcp` entrypoint, or `null` when the `mcp`
-      sibling is out of scope (e.g. the overlay package set), in which case only
-      the keyless `exa` server is returned.
+  Arguments:
+  - `indexCommand`: path to the `ix-mcp` entrypoint, or `null` when the `mcp`
+    sibling is out of scope (e.g. the overlay package set), in which case only
+    the keyless `exa` server is returned.
   */
   inherit defaultServers;
 
   /**
-    Opt-in servers that depend on machine-local state (a running GUI app, a
-    local daemon) and so never enter the default set: baking them into every
-    wrapper would hand fleet and CI agents a dead tool surface. Consumers merge
-    what applies (packages come from the flake package set / `packageSetFor`,
-    not the overlay), e.g.
-    `defaultServers { ... } // optionalServers { blenderMcp = lib.getExe repoPackages.blender-mcp; }`.
+  Opt-in servers that depend on machine-local state (a running GUI app, a
+  local daemon) and so never enter the default set: baking them into every
+  wrapper would hand fleet and CI agents a dead tool surface. Consumers merge
+  what applies (packages come from the flake package set / `packageSetFor`,
+  not the overlay), e.g.
+  `defaultServers { ... } // optionalServers { blenderMcp = lib.getExe repoPackages.blender-mcp; }`.
 
-    Caution: both Blender servers expose arbitrary-code-execution tools, and
-    `toCodexEntries` stamps `default_tools_approval_mode = "approve"` on every
-    rendered server. A consumer wiring these into an agent accepts
-    auto-approved code execution against its local Blender; keep that opt-in
-    per machine, never fleet policy.
+  Caution: both Blender servers expose arbitrary-code-execution tools, and
+  `toCodexEntries` stamps `default_tools_approval_mode = "approve"` on every
+  rendered server. A consumer wiring these into an agent accepts
+  auto-approved code execution against its local Blender; keep that opt-in
+  per machine, never fleet policy.
   */
   inherit optionalServers;
 
   /**
-    Compatibility name for consumers pinned to the original MCP registry API.
-    Use `defaultServers` in new code.
+  Compatibility name for consumers pinned to the original MCP registry API.
+  Use `defaultServers` in new code.
   */
   houseServers = defaultServers;
 }
