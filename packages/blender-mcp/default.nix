@@ -9,9 +9,9 @@
   ix,
   lib,
   pkgs,
-  # Writer for `passthru.updateScript` (flake-package path only); null on the
-  # overlay path so `pkgs.*` carries no updater. Same nullable-writer pattern
-  # as vector-bin / wasm-bindgen-cli.
+  # Writer for `passthru.updateScript` (flake-package path only; the package
+  # is not registered in the overlay). Same nullable-writer pattern as
+  # vector-bin / wasm-bindgen-cli.
   updateScriptWriter ? null,
 }:
 let

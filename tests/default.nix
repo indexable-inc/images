@@ -2615,6 +2615,15 @@ let
           == "/bin/blender-mcp";
         message = "Opt-in Blender MCP server should render for Claude with the consumer's binary";
       }
+      {
+        assertion =
+          let
+            servers = ix.mcp.optionalServers { blenderLabMcp = "/bin/blender-lab-mcp"; };
+          in
+          builtins.attrNames servers == [ "blender-lab" ]
+          && servers.blender-lab.env.BLENDER_MCP_PORT == "9877";
+        message = "Opt-in Blender Lab server should render alone with its non-default port";
+      }
     ];
 
     provider-prompts = [

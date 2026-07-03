@@ -39,24 +39,41 @@ let
       };
     };
 
+  # Both Blender bridges share one shape: a stdio server the client spawns
+  # plus an addon socket inside a Blender GUI session, so each is emitted only
+  # when the consumer passes its binary. Command strings rather than packages
+  # because this registry is pure lib, out of `pkgs` scope.
   optionalServers =
     {
-      # Path to the packaged `blender-mcp` binary (`lib.getExe` of the
-      # `packages/blender-mcp` build). A command string rather than the package
-      # itself because this registry is pure lib, out of `pkgs` scope.
-      blenderMcp,
+      # `lib.getExe` of the `packages/blender-mcp` build (community bridge,
+      # ahujasid): broad automation surface (objects, materials, Poly Haven,
+      # code execution). Its addon owns localhost:9876.
+      blenderMcp ? null,
+      # `lib.getExe` of the `packages/blender-lab-mcp` build (official Blender
+      # Lab): docs/analysis surface (blendfile summaries, API + manual lookup,
+      # screenshots, code execution).
+      blenderLabMcp ? null,
     }:
-    {
-      # Stdio MCP server that bridges to the BlenderMCP addon socket on
-      # localhost:9876. Only useful on a host where a Blender GUI session has
-      # the matching addon (the package's `passthru.addon`) loaded, which is
-      # why it never enters `defaultServers`.
+    lib.optionalAttrs (blenderMcp != null) {
       blender = {
         transport = "stdio";
         command = blenderMcp;
         env = {
           # telemetry.py opt-out; the default phones home per tool call.
           DISABLE_TELEMETRY = "true";
+        };
+      };
+    }
+    // lib.optionalAttrs (blenderLabMcp != null) {
+      blender-lab = {
+        transport = "stdio";
+        command = blenderLabMcp;
+        env = {
+          # One up from the community addon's 9876 so both bridges can run in
+          # the same Blender. This value is the source of truth for the port:
+          # consumers configure the Lab addon's port preference FROM this env
+          # (read it back off this definition) rather than restating 9877.
+          BLENDER_MCP_PORT = "9877";
         };
       };
     };
@@ -78,8 +95,15 @@ in
     Opt-in servers that depend on machine-local state (a running GUI app, a
     local daemon) and so never enter the default set: baking them into every
     wrapper would hand fleet and CI agents a dead tool surface. Consumers merge
-    what applies, e.g.
-    `defaultServers { ... } // optionalServers { blenderMcp = lib.getExe blender-mcp; }`.
+    what applies (packages come from the flake package set / `packageSetFor`,
+    not the overlay), e.g.
+    `defaultServers { ... } // optionalServers { blenderMcp = lib.getExe repoPackages.blender-mcp; }`.
+
+    Caution: both Blender servers expose arbitrary-code-execution tools, and
+    `toCodexEntries` stamps `default_tools_approval_mode = "approve"` on every
+    rendered server. A consumer wiring these into an agent accepts
+    auto-approved code execution against its local Blender; keep that opt-in
+    per machine, never fleet policy.
   */
   inherit optionalServers;
 
