@@ -32,6 +32,7 @@ import ast
 import asyncio
 import base64
 import binascii
+import collections
 import contextlib
 import contextvars
 import dataclasses
@@ -58,6 +59,76 @@ _ix_current: contextvars.ContextVar = contextvars.ContextVar("ix_current_job", d
 # and the dashboard). A chatty/runaway job keeps only the most recent slice, so
 # memory, store writes, and poll payloads all stay bounded.
 _MAX_OUTPUT_CHARS = 256_000
+
+# Bounded record of background-task failures, newest last; bound into the user
+# namespace as `task_errors`. asyncio only reports a failed, never-awaited task
+# at garbage collection, and never reports one a namespace variable keeps alive
+# -- which is exactly the fire-and-forget watcher pattern this kernel invites
+# (`asyncio.create_task(...)` bound to a name). One such watcher died on an
+# AttributeError on 2026-07-02 and starved its monitors for 90 minutes with no
+# trace anywhere. The task factory below reports at completion instead.
+task_errors: collections.deque[str] = collections.deque(maxlen=50)
+
+# The namespace-install flusher task (see _install), module-held so it cannot
+# be garbage-collected mid-flight.
+_flusher_task: asyncio.Task | None = None
+
+# Grace period between a task finishing with an exception and the failure being
+# reported: a parent that promptly retrieves it (`await task`, `gather`,
+# `.exception()`) wins the race and nothing is reported; a task nobody checks
+# within this window is treated as fire-and-forget and surfaced. A parent that
+# retrieves *later* still gets the exception raised normally -- it just also
+# left a (harmless) report behind.
+_TASK_FAILURE_GRACE_S = 2.0
+
+
+def _report_task_failure(task: asyncio.Task) -> None:
+    exc = task.exception()  # also clears the interpreter's own GC-time warning, which this report replaces
+    if exc is None:
+        return
+    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    coro = task.get_coro()
+    where = getattr(coro, "__qualname__", None) or repr(coro)
+    msg = f"[task_errors] background task {task.get_name()!r} ({where}) died unhandled:\n{tb}"
+    task_errors.append(msg)
+    # Tasks copy the spawning cell's context, so the job that created this task
+    # is reachable and its buffer is where the model will look first.
+    job = task.get_context().get(_ix_current)
+    if job is not None:
+        job._append(msg)
+    with contextlib.suppress(Exception):  # reporting must never take the loop down
+        print(msg, file=sys.__stderr__, flush=True)
+
+
+def _on_task_done(task: asyncio.Task) -> None:
+    if task.cancelled():
+        return
+    with contextlib.suppress(RuntimeError):  # loop already closed: nowhere left to report
+        task.get_loop().call_later(
+            _TASK_FAILURE_GRACE_S,
+            # `_log_traceback` is the interpreter's own "exception not yet
+            # retrieved" flag (cleared by `await`/`.result()`/`.exception()`);
+            # private, but it is precisely the signal CPython's GC-time
+            # warning keys on, and there is no public completion-time
+            # equivalent.
+            lambda: getattr(task, "_log_traceback", False) and _report_task_failure(task),
+        )
+
+
+def _install_task_failure_watch(loop: asyncio.AbstractEventLoop) -> None:
+    """Report every task that finishes with an unretrieved exception (see
+    `task_errors`). Installed as a task factory because a done-callback is the
+    only completion-time hook asyncio offers, and wrapping the factory is the
+    only way to attach one to every task, including ones third-party code
+    spawns."""
+    prior = loop.get_task_factory()
+
+    def factory(loop: asyncio.AbstractEventLoop, coro: Any, **kwargs: Any) -> asyncio.Task:
+        task = prior(loop, coro, **kwargs) if prior is not None else asyncio.Task(coro, loop=loop, **kwargs)
+        task.add_done_callback(_on_task_done)
+        return task
+
+    loop.set_task_factory(factory)
 
 # Longest edge (px) of an image returned to the model. A full-page screenshot or
 # hi-DPI figure otherwise spends vision tokens scaling with its resolution for no
@@ -601,6 +672,17 @@ class Result:
     # returned the bound constructor, a guessing-game error when inspecting a
     # finished job.
     text = _TextDescriptor()
+
+    @property
+    def output(self) -> str:
+        """The rendered model text, under the name ``Job.output`` and ``sh()``'s
+        ``Output.output`` already answer to. ``await jobs['id']`` yields a
+        Result while the un-awaited handle is a Job, so paging code holding
+        "whichever one finished" reaches ``.output`` either way; before this
+        alias that exact access died with an AttributeError, and inside a
+        fire-and-forget watcher task it died silently (2026-07-02, 90 minutes
+        of starved monitors -- the incident behind ``task_errors``)."""
+        return self.llm_result or ""
 
     @classmethod
     def ok(cls, message: str = "done") -> Result:
@@ -3621,6 +3703,10 @@ def install(user_ns: dict | None = None) -> None:
 
         target["pl"] = _polars_mod
     target["api"] = api
+    # Failures of fire-and-forget tasks, newest last (see the deque's comment).
+    # A report also lands in the spawning job's output, tagged `[task_errors]`,
+    # which is how the name advertises itself.
+    target["task_errors"] = task_errors
 
     # Everything in the namespace up to here is the runtime's own surface plus
     # the kernel preamble -- not user state. Session checkpoints cover only the
@@ -3644,5 +3730,11 @@ def install(user_ns: dict | None = None) -> None:
     # user names; refs accumulate as runs touch them).
     _name_refs.clear()
 
-    with contextlib.suppress(RuntimeError):  # no event loop yet (sync context): flusher is optional
-        asyncio.get_event_loop().create_task(_flusher())
+    with contextlib.suppress(RuntimeError):  # no event loop yet (sync context): flusher and task watch are optional
+        loop = asyncio.get_event_loop()
+        # Held in a global so the flusher can never be garbage-collected
+        # mid-flight (RUF006) -- the exact fire-and-forget hazard
+        # _install_task_failure_watch exists to surface.
+        global _flusher_task
+        _flusher_task = loop.create_task(_flusher())
+        _install_task_failure_watch(loop)

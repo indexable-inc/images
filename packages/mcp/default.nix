@@ -5142,6 +5142,35 @@ let
         mkdir -p "$out"
       '';
 
+  # Background-task failure reporting (packages/mcp/tests/test_task_errors.py):
+  # a fire-and-forget task that dies with an unretrieved exception must be
+  # reported at completion into `task_errors` (asyncio's own warning only fires
+  # at GC, and never for a task a namespace variable keeps alive -- the exact
+  # watcher pattern that starved monitors silently on 2026-07-02), plus the
+  # `Result.output` alias that AttributeError'd that watcher.
+  taskErrorsTestSource = builtins.path {
+    name = "ix-mcp-task-errors-test";
+    path = ./tests/test_task_errors.py;
+  };
+  taskErrorsTests =
+    pkgs.runCommand "ix-mcp-task-errors-tests"
+      {
+        nativeBuildInputs = [ channelTestPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        cp ${taskErrorsTestSource} "$TMPDIR/test_task_errors.py"
+        ${lib.getExe channelTestPython} -m pytest "$TMPDIR/test_task_errors.py" -q -p no:cacheprovider >stdout 2>stderr || {
+          echo "ix-mcp task-errors tests failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        cat stdout
+        mkdir -p "$out"
+      '';
+
   # The Claude Code channel + interactive resource actions
   # (packages/mcp/tests/test_channel.py): the store outbox/events queues, the
   # kernel's notify() + action dispatch, the transport pump emitting
@@ -5527,6 +5556,7 @@ package.overrideAttrs (old: {
         apiSmoke
         inputsTests
         channelTests
+        taskErrorsTests
         inputBrowserSmoke
         svelteBundled
         svelteTests
