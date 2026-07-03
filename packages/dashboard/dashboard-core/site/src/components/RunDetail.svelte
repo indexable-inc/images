@@ -1,10 +1,12 @@
 <script lang="ts">
   // The center stage for a selected run: a header (LED, intent, status pill,
   // duration, start time, session breadcrumb) over stacked foldable panels —
-  // code (collapsed), output (open), result (when it diverges from stdout), and
-  // rich output (the `<key>/out` attachment). The exec-detail behaviour is the
-  // feed's, refactored here: inline trace when attributed, else a code block, and
-  // a parsed failure on top for an error.
+  // code, stdout, result (only when it diverges from stdout AND there is no
+  // rich attachment), and output (the `<key>/out` attachment). Panels default
+  // collapsed with a one-line preview in each summary, so a run scans without
+  // opening anything. The exec-detail behaviour is the feed's, refactored here:
+  // inline trace when attributed, else a code block, and a parsed failure on
+  // top for an error.
   import { stripAnsi } from '$lib/ansi';
   import { store, timeline } from '$lib/stream.svelte';
   import { ui, humanDuration, humanTime } from '$lib/ui.svelte';
@@ -49,7 +51,36 @@
   const hasStreamOut = $derived(!!stdoutTxt || !!stripAnsi(pane.stderr ?? '').trim());
   const resultIsPrimary = $derived(!hasStreamOut && !outPane && !!resultTxt);
   const resultShownInline = $derived(!traced && resultIsPrimary);
-  const resultIsExtra = $derived(!!resultTxt && resultTxt !== stdoutTxt && !resultShownInline);
+  // The result text is the model's view of the rich attachment when one exists,
+  // so showing both would duplicate the output — the attachment wins.
+  const resultIsExtra = $derived(
+    !!resultTxt && resultTxt !== stdoutTxt && !resultShownInline && !outPane,
+  );
+
+  // One-line summary previews so a collapsed panel still scans.
+  function firstLine(text: string): string {
+    const line = text.slice(0, 200).split('\n', 1)[0] ?? '';
+    return line.length > 80 ? line.slice(0, 80) + '…' : line;
+  }
+  const outputHint = $derived(firstLine(stdoutTxt || resultTxt) || 'stdout');
+  // The attachment's summary: a file-view names its file and span; anything else
+  // names its renderer/kind.
+  const outHint = $derived.by(() => {
+    if (!outPane) return '';
+    if (outPane.kind === 'data' && outPane.renderer === 'file-view') {
+      try {
+        const v: unknown = JSON.parse(outPane.body ?? '');
+        if (v && typeof v === 'object') {
+          const fv = v as { label?: string; start?: number; end?: number };
+          const span = fv.start != null && fv.end != null ? ` · ${fv.start}–${fv.end}` : '';
+          return `${fv.label ?? 'file'}${span}`;
+        }
+      } catch {
+        // fall through to the generic hint
+      }
+    }
+    return outPane.renderer ?? outPane.kind ?? '';
+  });
 </script>
 
 <div class="run-detail">
@@ -86,7 +117,7 @@
       {#if traced}
         <!-- Inline trace: source with each line's output beside it, one combined
              view, so it stands in for both the code and output panels. -->
-        <details class="panel" open>
+        <details class="panel">
           <summary><span class="caret"></span><span class="panel-label">code · output</span></summary>
           <div class="panel-body panel-body-flush">
             <InlineTrace source={pane.source ?? ''} lang={pane.lang ?? 'text'} trace={traceArr} />
@@ -105,8 +136,10 @@
           </details>
         {/if}
         {#if hasStreamOut || resultIsPrimary || running}
-          <details class="panel" open>
-            <summary><span class="caret"></span><span class="panel-label">output</span><span class="panel-hint">stdout</span></summary>
+          <details class="panel">
+            <!-- Labelled `stdout` when a rich attachment exists, so the run never
+                 shows two panels both called `output`. -->
+            <summary><span class="caret"></span><span class="panel-label">{outPane ? 'stdout' : 'output'}</span><span class="panel-hint">{outputHint}</span></summary>
             <div class="panel-body panel-body-flush">
               <ExecBody {pane} chrome={false} expanded hideResult={!resultIsPrimary} />
             </div>
@@ -125,10 +158,10 @@
 
       {#if outPane}
         {@const OutBody = rendererFor(outPane.kind, outPane.renderer)}
-        <details class="panel" open>
-          <summary><span class="caret"></span><span class="panel-label">rich output</span></summary>
+        <details class="panel">
+          <summary><span class="caret"></span><span class="panel-label">output</span><span class="panel-hint">{outHint}</span></summary>
           <div class="panel-body panel-body-flush pane">
-            <div class="body html-body"><OutBody pane={outPane} /></div>
+            <div class="body" class:html-body={outPane.kind === 'html'}><OutBody pane={outPane} /></div>
           </div>
         </details>
       {/if}

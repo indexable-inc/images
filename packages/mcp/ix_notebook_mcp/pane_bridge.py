@@ -22,6 +22,7 @@ import sqlite3
 from pathlib import Path
 
 from . import store
+from .outputs import IX_VIEW_MIME
 from .produce import PaneProducer, data_pane, exec_pane, html_pane
 
 # How often to resample the store. Local SQLite in WAL mode, so a poll is cheap;
@@ -63,6 +64,25 @@ def _render_outputs(outputs: list) -> str:
     """A list of mime bundles as one HTML fragment, each output in its own block."""
     blocks = [rendered for out in (outputs or []) if (rendered := _output_html(out))]
     return "".join(f'<div style="margin:6px 0">{b}</div>' for b in blocks)
+
+
+def _view_spec(outputs: list) -> dict | None:
+    """The first structured-view spec (``{"renderer", "data"}``) carried by an
+    output's ``IX_VIEW_MIME``, or None. The store JSON-encodes custom mimes, so
+    the spec arrives as a string here."""
+    for out in outputs or []:
+        data = out.get("data") if isinstance(out, dict) else None
+        if not isinstance(data, dict):
+            continue
+        spec = data.get(IX_VIEW_MIME)
+        if isinstance(spec, str):
+            try:
+                spec = json.loads(spec)
+            except json.JSONDecodeError:
+                spec = None
+        if isinstance(spec, dict) and isinstance(spec.get("renderer"), str) and "data" in spec:
+            return spec
+    return None
 
 
 def _is_rich(out: dict) -> bool:
@@ -118,10 +138,22 @@ def _panes(conn: sqlite3.Connection) -> list[dict]:
                 title=intent,
             )
         )
-        # Rich outputs (tables, plots, images) get their own html pane beside the
-        # exec text -- the parity with the retired UI the exec pane alone lacks.
+        # Rich outputs get their own pane beside the exec text. A structured
+        # view spec (IX_VIEW_MIME) becomes a native `data` pane routed through
+        # the frontend's renderer registry; anything else (tables, plots,
+        # images) keeps the sandboxed html pane.
         outputs = row.get("outputs") or []
-        if any(_is_rich(out) for out in outputs) and (rendered := _render_outputs(outputs)):
+        if (spec := _view_spec(outputs)) is not None:
+            panes.append(
+                data_pane(
+                    f"{row['id']}/out",
+                    intent or "output",
+                    spec["renderer"],
+                    spec["data"],
+                    subtitle="output",
+                )
+            )
+        elif any(_is_rich(out) for out in outputs) and (rendered := _render_outputs(outputs)):
             panes.append(
                 html_pane(f"{row['id']}/out", intent or "output", rendered, subtitle="output")
             )

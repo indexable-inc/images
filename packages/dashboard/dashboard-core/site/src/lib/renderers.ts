@@ -9,6 +9,7 @@
 import type { Component } from 'svelte';
 import DataBody from '$components/DataBody.svelte';
 import ExecBody from '$components/ExecBody.svelte';
+import FileViewBody from '$components/FileViewBody.svelte';
 import HtmlBody from '$components/HtmlBody.svelte';
 import NamespaceBody from '$components/NamespaceBody.svelte';
 import TermBody from '$components/TermBody.svelte';
@@ -28,6 +29,8 @@ export const renderers: Record<string, Component<{ pane: Pane }>> = {
 // aggregator change. `namespace` (a Python session's live globals) is the first.
 const dataRenderers: Record<string, Component<{ pane: Pane }>> = {
   namespace: NamespaceBody,
+  // A read's highlighted file card (the kernel's `read` tool / `view.cat`).
+  'file-view': FileViewBody,
 };
 
 export const fallback: Component<{ pane: Pane }> = DataBody;

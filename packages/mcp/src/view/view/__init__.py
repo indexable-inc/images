@@ -429,10 +429,17 @@ def _highlight(text: str, lang: str | None, start_line: int) -> str:
     return str(highlight(text, lexer, formatter))
 
 
+# The structured-view mime the dashboard's pane bridge republishes as a native
+# `data` pane (mirrors ix_notebook_mcp.outputs.IX_VIEW_MIME; duplicated so this
+# bundled module stays standalone).
+_IX_VIEW_MIME = "application/x-ix-view+json"
+
+
 class Code:
     """A syntax-highlighted view of text. ``repr`` is the raw text (what the
-    agent reads); ``_repr_html_`` is the highlighted render (what the human sees
-    on the dashboard)."""
+    agent reads); the dashboard renders the structured ``file-view`` spec from
+    ``_repr_mimebundle_`` natively (shiki-highlighted card), and
+    ``_repr_html_`` keeps a pygments render for plain HTML hosts."""
 
     def __init__(
         self,
@@ -449,6 +456,27 @@ class Code:
 
     def __repr__(self) -> str:
         return self.text
+
+    def _repr_mimebundle_(self, **_kwargs: object) -> dict:
+        lines = self.text.splitlines()
+        return {
+            _IX_VIEW_MIME: {
+                "renderer": "file-view",
+                "data": {
+                    "label": self.title or "",
+                    "file": bool(self.title),
+                    "lang": self.lang,
+                    "text": self.text,
+                    "context_start": self.start_line,
+                    "start": self.start_line,
+                    "end": self.start_line + max(len(lines) - 1, 0),
+                    "total": None,  # Code holds only the slice; the file total is unknown
+                    "chars": len(self.text),
+                },
+            },
+            "text/html": self._repr_html_(),
+            "text/plain": self.text,
+        }
 
     def _repr_html_(self) -> str:
         body = _highlight(self.text, self.lang, self.start_line)

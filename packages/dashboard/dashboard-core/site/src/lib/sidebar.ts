@@ -53,9 +53,11 @@ function paneList(panes: Record<string, PaneRecord>): { key: string; pane: Pane 
   return Object.keys(panes).map((key) => ({ key, pane: withKey(key, panes[key], paneScope(key)) }));
 }
 
-// Newest-first within a session (created_at desc, key as the stable tie-break).
-function compareRunsNewestFirst(a: RunNode, b: RunNode): number {
-  const byCreated = compareCreatedAt(b.pane.created_at, a.pane.created_at);
+// Oldest-first within a session (created_at asc, key as the stable tie-break):
+// the run list reads as a log that grows downward, so a new run appends at the
+// bottom instead of pushing everything else down from the top.
+function compareRunsOldestFirst(a: RunNode, b: RunNode): number {
+  const byCreated = compareCreatedAt(a.pane.created_at, b.pane.created_at);
   if (byCreated !== 0) return byCreated;
   return a.key.localeCompare(b.key);
 }
@@ -83,7 +85,7 @@ export function buildSidebar(
     .map((s) => ({
       scope: s.scope,
       label: s.label,
-      runs: (runsByScope.get(s.scope) ?? []).sort(compareRunsNewestFirst),
+      runs: (runsByScope.get(s.scope) ?? []).sort(compareRunsOldestFirst),
     }))
     .filter((s) => s.runs.length > 0);
 

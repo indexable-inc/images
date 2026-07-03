@@ -50,6 +50,11 @@ JOB_MIME = "application/x-ix-job+json"
 # server unpacks it to real content blocks; it never reaches the dashboard.
 IX_LLM_MIME = "application/x-ix-llm+json"
 
+# The mime a Result uses to carry a structured human view: a
+# ``{"renderer": <name>, "data": <json>}`` spec pane_bridge republishes as a
+# `data` pane, rendered by the dashboard's matching frontend component.
+IX_VIEW_MIME = "application/x-ix-view+json"
+
 Content = mcp_types.TextContent | mcp_types.ImageContent
 
 

@@ -181,6 +181,13 @@ JOB_MIME = "application/x-ix-job+json"
 # this. Mirrors outputs.IX_LLM_MIME.
 IX_LLM_MIME = "application/x-ix-llm+json"
 
+# The custom mime a Result uses to carry a STRUCTURED human view — a
+# ``{"renderer": <name>, "data": <json>}`` spec the dashboard renders natively
+# (pane_bridge republishes it as a `data` pane routed through the frontend's
+# renderer registry) instead of a baked HTML string in a sandboxed frame.
+# Mirrors outputs.IX_VIEW_MIME.
+IX_VIEW_MIME = "application/x-ix-view+json"
+
 # Rich display capture: which mimes we keep for the dashboard, and per-mime size
 # caps. Truncating a base64 image yields a corrupt data URI, so an oversize image
 # is dropped whole rather than clipped; text mimes clip with a marker.
@@ -681,7 +688,11 @@ class Result:
     tokens at all. It is a mime bundle under the hood:
     ``text/html`` carries ``user_html`` and, when present, ``IX_LLM_MIME`` carries
     the model's text+images (unpacked by the server); ``text/plain`` carries the
-    text as a fallback for plain hosts.
+    text as a fallback for plain hosts. ``user_view`` is the structured
+    alternative to ``user_html``: a ``{"renderer": name, "data": ...}`` spec
+    (carried as ``IX_VIEW_MIME``) the dashboard renders with a native component
+    instead of a sandboxed HTML frame — prefer it when a registered renderer
+    (e.g. ``file-view``) fits.
 
     On an instance, ``.text`` returns the already-rendered model text (same as
     ``.llm_result``), so ``(await jobs['id']).text[-100:]`` works. On the class,
@@ -697,10 +708,11 @@ class Result:
     # value (so you never lose one to a silent positional). For full control give
     # the keywords, which always win: `Result(user_html=..., llm_result=...,
     # llm_images=[...])`.
-    def __init__(self, *values: Any, user_html: str | None = None, llm_result: str | None = None, llm_images: list | None = None) -> None:
+    def __init__(self, *values: Any, user_html: str | None = None, user_view: dict | None = None, llm_result: str | None = None, llm_images: list | None = None) -> None:
         llm_result = _llm_text(llm_result)
-        if user_html is not None:
-            self.user_html = user_html
+        self.user_view = user_view
+        if user_html is not None or user_view is not None:
+            self.user_html = user_html or ""
             self.llm_result = llm_result if llm_result is not None else ""
             self.llm_images = list(llm_images) if llm_images else []
             return
@@ -716,6 +728,7 @@ class Result:
             else _result_from_values(values, llm_result=llm_result)
         )
         self.user_html = built.user_html
+        self.user_view = built.user_view
         self.llm_result = built.llm_result
         self.llm_images = list(llm_images) if llm_images else built.llm_images
 
@@ -760,6 +773,7 @@ class Result:
             # preserves images when a nested Result is stacked below.
             return cls(
                 user_html=value.user_html,
+                user_view=value.user_view,
                 llm_result=value.llm_result if llm_result is None else llm_result,
                 llm_images=value.llm_images,
             )
@@ -859,9 +873,13 @@ class Result:
 
     def _repr_mimebundle_(self, **_kwargs: Any) -> dict:
         # IPython's display protocol: html is the human view (the dashboard
-        # prefers it); IX_LLM_MIME carries the model's text+images, which the
-        # server unpacks and the dashboard ignores; text/plain is the fallback.
+        # prefers it); IX_VIEW_MIME carries a structured human view the
+        # dashboard renders natively (preferred over the html when present);
+        # IX_LLM_MIME carries the model's text+images, which the server unpacks
+        # and the dashboard ignores; text/plain is the fallback.
         bundle: dict = {"text/html": self.user_html, "text/plain": self.llm_result or ""}
+        if self.user_view is not None:
+            bundle[IX_VIEW_MIME] = self.user_view
         images = [img for img in (_coerce_image(i) for i in self.llm_images) if img]
         bundle[IX_LLM_MIME] = {"text": self.llm_result or "", "images": images}
         return bundle
@@ -2569,6 +2587,15 @@ def _normalize_bundle(data: dict, metadata: dict | None = None) -> dict:
         if len(encoded) > _MAX_IMAGE_BUNDLE:
             encoded = json.dumps({"text": text, "images": []})
         out[IX_LLM_MIME] = encoded
+    # Carry the structured human view (IX_VIEW_MIME) so pane_bridge can publish
+    # it as a native `data` pane. JSON cannot be clipped without corrupting it,
+    # so an oversize spec is dropped whole and the text/html fallback renders
+    # instead; producers keep their payloads under the cap (see _READ_CONTEXT_MAX).
+    view = data.get(IX_VIEW_MIME)
+    if isinstance(view, dict):
+        encoded = json.dumps(view)
+        if len(encoded) <= _MAX_TEXT_BUNDLE:
+            out[IX_VIEW_MIME] = encoded
     return {"data": out, "metadata": metadata or {}}
 
 
@@ -3475,72 +3502,44 @@ def _tilde(path: Any) -> str:
     return text
 
 
-# File-type icons for the read note, rendered as inline SVG so the dashboard
-# (which trusts agent HTML/SVG -- see RichOutput.svelte) shows a real document
-# glyph with the extension on a colored ribbon, not an emoji. The color is keyed
-# by lowercased extension; any unknown extension still gets the document shape
-# with a neutral ribbon, so every file reads as a file.
-_EXT_COLORS = {
-    "py": "#3776ab", "rs": "#dea584", "go": "#00add8",
-    "js": "#f1e05a", "mjs": "#f1e05a", "cjs": "#f1e05a",
-    "ts": "#3178c6", "tsx": "#3178c6", "jsx": "#f1e05a",
-    "json": "#cbcb41", "jsonl": "#cbcb41", "ndjson": "#cbcb41",
-    "toml": "#9c4221", "yaml": "#cb171e", "yml": "#cb171e",
-    "ini": "#8a8a92", "cfg": "#8a8a92", "conf": "#8a8a92", "env": "#8a8a92",
-    "nix": "#7e7eff",
-    "md": "#519aba", "rst": "#519aba", "txt": "#9aa0a6",
-    "sh": "#89e051", "bash": "#89e051", "zsh": "#89e051", "fish": "#89e051", "nu": "#3aa675",
-    "html": "#e44d26", "htm": "#e44d26", "xml": "#e37933",
-    "css": "#563d7c", "scss": "#c6538c",
-    "csv": "#41b883", "tsv": "#41b883", "parquet": "#41b883",
-    "log": "#9aa0a6", "lock": "#e3c15b", "sql": "#dad8d8", "pdf": "#e02d2d",
-    "png": "#a074c4", "jpg": "#a074c4", "jpeg": "#a074c4",
-    "gif": "#a074c4", "svg": "#ffb13b", "webp": "#a074c4",
-}
-_NAMED_EXTS = {"dockerfile": "docker", "makefile": "make"}
-_DEFAULT_EXT_COLOR = "#8a8a92"
+# Cap on the highlight context shipped to the dashboard for one read. The
+# frontend tokenizes the WHOLE file so a mid-file slice still highlights
+# correctly (open strings, nested blocks); past this size only the slice
+# travels, so a huge file never rides every dashboard poll. Stays under
+# _MAX_TEXT_BUNDLE even after JSON escaping so _normalize_bundle never drops it.
+_READ_CONTEXT_MAX = 128 * 1024
+
+# Well-known extensionless files -> highlight grammar. Anything else hints its
+# bare extension; the frontend aliases (py -> python) and falls back to plain.
+_NAMED_LANGS = {"dockerfile": "docker", "makefile": "make"}
 
 
-def _file_icon_svg(path: Any, *, px: int = 16) -> str:
-    """An inline-SVG file icon for the read note: a document with a folded corner
-    and the extension on a category-colored ribbon. Works for any extension."""
-    name = pathlib.Path(path).name
-    ext = (_NAMED_EXTS.get(name.lower()) or pathlib.Path(name).suffix.lstrip(".") or "txt").lower()
-    color = _EXT_COLORS.get(ext, _DEFAULT_EXT_COLOR)
-    label = _escape_html(ext[:4].upper())
-    width = round(px * 0.8)
-    return (
-        f'<svg width="{width}" height="{px}" viewBox="0 0 40 50" fill="none" '
-        f'xmlns="http://www.w3.org/2000/svg" style="vertical-align:-3px;flex:none">'
-        f'<path d="M5 2h21l9 9v35a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" '
-        f'fill="#23232a" stroke="#3a3a42" stroke-width="1.5"/>'
-        f'<path d="M26 2l9 9h-9z" fill="#3a3a42"/>'
-        f'<rect x="3" y="30" width="34" height="14" rx="2" fill="{color}"/>'
-        f'<text x="20" y="40.5" font-family="ui-monospace,Menlo,monospace" font-size="11" '
-        f'font-weight="700" text-anchor="middle" fill="#111">{label}</text></svg>'
-    )
+def _read_lang(path: Any) -> str | None:
+    """The dashboard highlight hint for a file: a named grammar for well-known
+    extensionless files, else the lowercased bare extension."""
+    name = pathlib.Path(path).name.lower()
+    return _NAMED_LANGS.get(name) or pathlib.Path(name).suffix.lstrip(".").lower() or None
 
 
-def _value_icon_svg(*, px: int = 16) -> str:
-    """An inline-SVG icon for a read of a kernel value (not a file): braces, to
-    distinguish a value/object dump from a file read."""
-    width = round(px * 0.8)
-    return (
-        f'<svg width="{width}" height="{px}" viewBox="0 0 40 50" fill="none" '
-        f'xmlns="http://www.w3.org/2000/svg" style="vertical-align:-3px;flex:none">'
-        f'<rect x="3" y="6" width="34" height="38" rx="4" fill="#23232a" '
-        f'stroke="#3a3a42" stroke-width="1.5"/>'
-        f'<text x="20" y="33" font-family="ui-monospace,Menlo,monospace" font-size="18" '
-        f'font-weight="700" text-anchor="middle" fill="#9aa0a6">{{ }}</text></svg>'
-    )
+def _clip_lines(lines: list[str], budget: int) -> list[str]:
+    """The longest line-boundary prefix whose joined size fits ``budget``."""
+    out: list[str] = []
+    used = 0
+    for line in lines:
+        used += len(line) + 1
+        if used > budget:
+            break
+        out.append(line)
+    return out
 
 
 async def __ix_read(target: Any, start: int | None = None, end: int | None = None, session: str | None = None) -> Result:
     """Read a file (or evaluate a kernel value) FOR THE MODEL, quietly.
 
     Returns a Result whose ``llm_result`` is the full text the model receives and
-    whose ``user_html`` is a one-line note the human sees, so a large read informs
-    the model without flooding the dashboard. ``target`` is read as a file when it
+    whose ``user_view`` is a structured ``file-view`` spec the dashboard renders
+    natively (highlighted card with the read span), so a large read informs the
+    model without flooding the dashboard. ``target`` is read as a file when it
     names an existing file, otherwise evaluated as a Python expression in the user
     namespace (e.g. ``jobs['ab12'].output``, a variable you bound). ``start`` and
     ``end`` select a 1-based inclusive line range. ``session`` evaluates the
@@ -3562,11 +3561,11 @@ async def __ix_read(target: Any, start: int | None = None, end: int | None = Non
         # freezes every other job on the shared event loop.
         full = await asyncio.to_thread(path.read_text, errors="replace")
         label = _tilde(path)
-        icon = _file_icon_svg(path)
+        lang = _read_lang(path)
     else:
         full = value if isinstance(value, str) else _safe_repr(value)
         label = target if isinstance(target, str) else _safe_repr(target)
-        icon = _value_icon_svg()
+        lang = None
     lines = full.splitlines()
     total = len(lines)
     if start is not None or end is not None:
@@ -3574,27 +3573,37 @@ async def __ix_read(target: Any, start: int | None = None, end: int | None = Non
         hi = total if end is None else min(end, total)
         selected = lines[lo:hi]
         body = "\n".join(selected)
-        span = f"lines {lo + 1}-{lo + len(selected)} of {total}"
+        first, last = lo + 1, lo + len(selected)
     else:
+        selected = lines
         body = full
-        span = f"{total} lines"
-    note = f"read {label} · {span}, {len(body)} chars"
-    user = (
-        '<section style="font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;" '
-        'class="ix-read">'
-        '<style>.ix-read{display:flex;flex-direction:column;gap:10px;color:#e8e8ee}'
-        '.ix-read header{display:flex;align-items:center;gap:10px}'
-        '.ix-read strong{display:block;font-weight:650;color:#f2f2f6}'
-        '.ix-read span{display:block;color:#8a8a95;font-size:11px;margin-top:2px}'
-        '.ix-read pre{margin:0;max-height:420px;overflow:auto;padding:12px 14px;'
-        'border:1px solid #24242a;border-radius:12px;background:#0b0b0e;color:#ececef}'
-        '.ix-read code{white-space:pre;font:inherit}</style>'
-        f'<header>{icon}<div><strong>{_escape_html(label)}</strong>'
-        f'<span>{_escape_html(span)}, {len(body)} chars</span></div></header>'
-        f'<pre><code>{_escape_html(body)}</code></pre>'
-        '</section>'
+        first, last = 1, total
+    # Display context: the whole file when it fits, else the slice, else a
+    # line-clipped head of the slice. `start`/`end`/`total`/`chars` always
+    # describe what the model received; `text`+`context_start` describe display.
+    if len(full) <= _READ_CONTEXT_MAX:
+        text, context_start = full, 1
+    elif len(body) <= _READ_CONTEXT_MAX:
+        text, context_start = body, first
+    else:
+        text, context_start = "\n".join(_clip_lines(selected, _READ_CONTEXT_MAX)), first
+    return Result(
+        user_view={
+            "renderer": "file-view",
+            "data": {
+                "label": label,
+                "file": path is not None,
+                "lang": lang,
+                "text": text,
+                "context_start": context_start,
+                "start": first,
+                "end": last,
+                "total": total,
+                "chars": len(body),
+            },
+        },
+        llm_result=body,
     )
-    return Result(user_html=user, llm_result=body)
 
 
 

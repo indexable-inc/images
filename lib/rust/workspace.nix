@@ -42,6 +42,12 @@ let
   dashboardSite = buildSvelteSite workspacePkgs {
     sourceRoot = dashboardSiteRoot;
     serve.enable = false;
+    # The islands palette (single source of truth, owned by code-highlight)
+    # lives outside the filtered site source; hand the build that one file so
+    # vite's `$islands-theme` alias resolves (see the site's vite.config.js).
+    preBuild = "export IX_ISLANDS_THEME=${
+      root + "/packages/code/code-highlight/src/islands-theme.json"
+    }";
   };
   dashboardSiteHtml = "${dashboardSite}/share/dashboard-site/index.html";
   src =

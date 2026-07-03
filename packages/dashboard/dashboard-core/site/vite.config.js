@@ -5,6 +5,15 @@ import { viteSingleFile } from 'vite-plugin-singlefile';
 
 const src = fileURLToPath(new URL('./src', import.meta.url));
 
+// The islands palette is owned by packages/code/code-highlight (the single
+// source of truth, also consumed by the tree-sitter highlighter and Neovim).
+// In dev the repo-relative path resolves directly; the nix site build filters
+// the source to site/ only, so it hands the store path of that one file in via
+// IX_ISLANDS_THEME (see lib/rust/workspace.nix).
+const islandsTheme =
+  process.env.IX_ISLANDS_THEME ??
+  fileURLToPath(new URL('../../../code/code-highlight/src/islands-theme.json', import.meta.url));
+
 // The dashboard ships as ONE self-contained HTML embedded into the
 // dashboard-core Rust crate via include_str! and served by both the standalone
 // aggregator and the in-process tui.serve(). viteSingleFile inlines the JS and
@@ -33,7 +42,8 @@ export default defineConfig({
   resolve: {
     alias: {
       $lib: `${src}/lib`,
-      $components: `${src}/components`
+      $components: `${src}/components`,
+      '$islands-theme': islandsTheme
     }
   },
   plugins: [svelte(), viteSingleFile()]
