@@ -451,6 +451,27 @@ let
         cp -r ${fleetPythonSource}/fleet/. "$site/"
       ''
   );
+  # Tailnet mesh discovery (index#1787): `await mesh.peers()` sweeps tailscale
+  # peers for live ix-mcp `/mesh` endpoints (served by ix_notebook_mcp.mesh on
+  # the well-known mesh port) and returns one polars row per responding server;
+  # `mesh.sessions()` flattens to (host, session). Pure Python over the bundled
+  # httpx + polars; cross-platform.
+  meshPythonSource = builtins.path {
+    name = "ix-mcp-mesh-python-source";
+    path = ./src/mesh;
+  };
+  meshModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-mesh-python-module"
+      {
+        strictDeps = true;
+        meta.description = "Tailnet mesh discovery of live ix-mcp servers, bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/mesh"
+        mkdir -p "$site"
+        cp -r ${meshPythonSource}/mesh/. "$site/"
+      ''
+  );
   # Async shell-out helper: `import sh`, then `out = await sh("gh run list")`.
   # Runs on the kernel's loop (never blocks it like a bare subprocess.run) and
   # returns an Output that IS a Result, so the dashboard sees the command's ANSI
@@ -1225,6 +1246,7 @@ let
       viewModule
       nixModule
       fleetModule
+      meshModule
       shModule
       svelteModule
       worktreeModule
@@ -1381,6 +1403,7 @@ let
     "beeper"
     "view"
     "worktree"
+    "mesh"
   ];
   strictTypecheck =
     let
@@ -5454,6 +5477,7 @@ let
   imessageBundled = importTest "imessage" "import imessage; print('imessage-ok', all(callable(getattr(imessage, n)) for n in ('messages', 'chats', 'contacts', 'send')))";
   ghosttyBundled = importTest "ghostty" "import ghostty; print('ghostty-ok', all(callable(getattr(ghostty, n)) for n in ('surfaces', 'my_tty', 'my_surface', 'close', 'close_me', 'focus', 'activate', 'is_running')), ghostty.__version__)";
   xBundled = importTest "x" "import x; print('x-ok', callable(x.posts), x.__version__)";
+  meshBundled = importTest "mesh" "import mesh, asyncio; print('mesh-ok', all(asyncio.iscoroutinefunction(getattr(mesh, n)) for n in ('peers', 'sessions')), mesh.__version__)";
   linearBundled = importTest "linear" "import linear; print('linear-ok', all(callable(getattr(linear, n)) for n in ('issue', 'issue_update', 'issue_create', 'issue_search', 'comment_create', 'project_create')), linear.__version__)";
   notionBundled = importTest "notion" "import notion, asyncio; print('notion-ok', all(asyncio.iscoroutinefunction(getattr(notion, n)) for n in ('search', 'page', 'blocks', 'db_query', 'page_create', 'blocks_append', 'page_update')), notion.__version__)";
   notionTestPython = pkgs.python3.withPackages (ps: [
@@ -5687,6 +5711,52 @@ let
         cat stdout
         mkdir -p "$out"
       '';
+
+  # Network-free tests for the tailnet auto-mesh (index#1787): the `/mesh`
+  # route and its skip paths (IX_MCP_MESH=0, no tailscale IP, bind conflict),
+  # the bundled `mesh` module's peer sweep against a STUB `tailscale` script
+  # plus a real loopback server, and fleet.connect's zero-config Ray-head
+  # probe against a fake GCS listener. asyncssh rides along because importing
+  # `fleet` pulls it; `bash` backs the stub script's shebang.
+  meshTestPython = pkgs.python3.withPackages (ps: [
+    ps.pytest
+    ps.aiohttp
+    ps.httpx
+    ps.polars
+    ps.asyncssh
+    ixNotebookMcpModule
+    meshModule
+    fleetModule
+  ]);
+  meshTestSource = builtins.path {
+    name = "ix-mcp-mesh-test";
+    path = ./tests/test_mesh.py;
+  };
+  meshTests =
+    pkgs.runCommand "ix-mcp-mesh-tests"
+      {
+        nativeBuildInputs = [
+          meshTestPython
+          pkgs.bash
+        ];
+        strictDeps = true;
+        # The tests bind loopback sockets (a real mesh server + a fake GCS
+        # listener); the darwin sandbox denies all binds without this. Linux
+        # sandboxes already provide a private loopback, so it is a no-op there.
+        __darwinAllowLocalNetworking = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        cp ${meshTestSource} "$TMPDIR/test_mesh.py"
+        ${lib.getExe meshTestPython} -m pytest "$TMPDIR/test_mesh.py" -q -p no:cacheprovider >stdout 2>stderr || {
+          echo "ix-mcp mesh tests failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        cat stdout
+        mkdir -p "$out"
+      '';
 in
 package.overrideAttrs (old: {
   passthru = (old.passthru or { }) // {
@@ -5706,6 +5776,8 @@ package.overrideAttrs (old: {
         slackBundled
         slackTests
         resourcesBridgeTests
+        meshBundled
+        meshTests
         beeperBundled
         requirementsSmoke
         engineBundled

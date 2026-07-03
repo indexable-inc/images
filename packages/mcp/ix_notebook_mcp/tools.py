@@ -47,7 +47,7 @@ from mcp.types import ErrorData
 from pydantic import AnyUrl, Field
 
 from . import guide, outputs, resources_bridge
-from .config import config
+from .config import config, server_version
 from .kernel import current_kernel
 
 logger = logging.getLogger(__name__)
@@ -127,7 +127,21 @@ def _session_id(ctx: Context | None) -> str | None:
 # session label defaults to it (see runtime.Session). A latch, not per-call work.
 _client_identified = False
 _dashboard_started = False
-_named_sessions: set[str] = set()
+# Session key -> the label the client chose via `session_set_name`. Keys gate
+# the acting tools (a session must name itself once); the values are what the
+# tailnet `/mesh` endpoint advertises (index#1787), read via `session_names`.
+_named_sessions: dict[str, str] = {}
+
+
+def session_names() -> list[str]:
+    """The labels live MCP sessions gave themselves, for the mesh endpoint.
+
+    Names only, sorted and deduplicated -- never code, outputs, or session
+    keys. Labels set kernel-side (``session.name = ...`` in a cell) bypass this
+    tool-side map and are deliberately not included: the mesh card is the
+    server's own view of its clients (index#1787).
+    """
+    return sorted(set(_named_sessions.values()))
 
 
 async def _start_dashboard_once() -> None:
@@ -271,11 +285,10 @@ def set_dashboard_url(url: str) -> None:
 _dashboard_url: str | None = None
 
 # Report the build's source revision as the MCP `serverInfo.version` so a client
-# can see exactly which commit of the server it is talking to. The nix wrapper
-# sets `IX_MCP_VERSION` to the flake rev (`<commit>` / `<commit>-dirty` / "dev");
-# FastMCP does not take a version, so stamp the low-level server directly. Absent
-# the env var (a bare `python -m ix_notebook_mcp`) it falls back to "dev".
-mcp._mcp_server.version = os.environ.get("IX_MCP_VERSION") or "dev"
+# can see exactly which commit of the server it is talking to. FastMCP does not
+# take a version, so stamp the low-level server directly. The derivation lives
+# in `config.server_version` so the `/mesh` endpoint reports the same value.
+mcp._mcp_server.version = server_version()
 
 Content = list[outputs.Content]
 
@@ -311,7 +324,7 @@ async def session_set_name(
             )
         )
     await current_kernel().set_session_name(clean)
-    _named_sessions.add(_session_key(ctx))
+    _named_sessions[_session_key(ctx)] = clean
     return [outputs.text(f"dashboard session named: {clean}")]
 
 

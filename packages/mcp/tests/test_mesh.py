@@ -1,0 +1,415 @@
+"""Network-free tests for the tailnet auto-mesh (index#1787).
+
+Nothing here reaches a real tailnet, tailscale daemon, or Ray cluster:
+
+* The **server side** (``ix_notebook_mcp.mesh``) is driven through aiohttp's
+  in-process ``TestClient`` and, for the bind paths, real sockets on loopback
+  only. Env overrides (``IX_MCP_MESH=0``, ``IX_MCP_MESH_PORT``), the
+  no-tailscale skip, and the bind-conflict skip are all asserted to log one
+  line and return ``None`` instead of raising.
+* The **client side** (the bundled ``mesh`` module) gets a stub ``tailscale``
+  script via ``IX_MESH_TAILSCALE_BIN`` (the resources_bridge stub pattern)
+  whose JSON points at loopback, where a real mesh server (or nothing) runs.
+* The **fleet probe** (``fleet.cluster``) gets a stub ``tailscale`` on PATH
+  plus a fake GCS listener on an ephemeral loopback port selected through
+  ``IX_FLEET_RAY_GCS_PORT``, proving ``connect()``'s zero-config resolution
+  without importing Ray.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import inspect
+import json
+import os
+import shutil
+import socket
+import stat
+import sys
+from pathlib import Path
+from typing import Any
+
+import polars as pl
+import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
+
+# Prefer the bundled packages (the nix check installs them into the
+# interpreter); fall back to the source tree for a dev run.
+_PKG_PARENT = Path(__file__).resolve().parents[1]
+for _p in (_PKG_PARENT, _PKG_PARENT / "src" / "mesh", _PKG_PARENT / "src" / "fleet"):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+import mesh as mesh_client
+from fleet import cluster
+from ix_notebook_mcp import mesh as server_mesh
+from ix_notebook_mcp.config import (
+    DEFAULT_MESH_PORT,
+    Config,
+    mesh_enabled,
+    mesh_port,
+    server_version,
+)
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def _write_stub_tailscale(tmp_path: Path, status: dict[str, Any]) -> Path:
+    """An executable stub ``tailscale`` that prints ``status`` for any args.
+
+    Shebang resolved to bash's absolute path: the nix build sandbox has no
+    /usr/bin/env, and bash is on PATH via the check's nativeBuildInputs.
+    """
+    bash = shutil.which("bash") or "/bin/bash"
+    script = tmp_path / "tailscale"
+    script.write_text(f"#!{bash}\ncat <<'IXEOF'\n{json.dumps(status)}\nIXEOF\n")
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return script
+
+
+def _status(
+    self_ip: str | None = "127.0.0.1",
+    peers: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    status: dict[str, Any] = {"BackendState": "Running", "Self": {}, "Peer": {}}
+    if self_ip:
+        status["Self"] = {"DNSName": "self.example.ts.net.", "TailscaleIPs": [self_ip]}
+    for i, peer in enumerate(peers or []):
+        status["Peer"][f"key{i}"] = peer
+    return status
+
+
+# ---------------------------------------------------------------------------
+# Shape (mirrors the resources_bridge shape tests / the ruff ANN gate)
+# ---------------------------------------------------------------------------
+
+
+def test_all_names_exist() -> None:
+    for name in mesh_client.__all__:
+        assert hasattr(mesh_client, name), f"{name} in __all__ but missing from module"
+
+
+def test_public_async_funcs_annotated() -> None:
+    for name in ("peers", "sessions"):
+        func = getattr(mesh_client, name)
+        assert asyncio.iscoroutinefunction(func)
+        sig = inspect.signature(func)
+        assert sig.return_annotation is not inspect.Signature.empty
+        for pname, param in sig.parameters.items():
+            assert param.annotation is not inspect.Parameter.empty, f"{name}({pname})"
+
+
+# ---------------------------------------------------------------------------
+# Config knobs
+# ---------------------------------------------------------------------------
+
+
+def test_mesh_port_default_and_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("IX_MCP_MESH_PORT", raising=False)
+    assert mesh_port() == DEFAULT_MESH_PORT == 8798
+    monkeypatch.setenv("IX_MCP_MESH_PORT", "9123")
+    assert mesh_port() == 9123
+
+
+def test_mesh_enabled_default_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("IX_MCP_MESH", raising=False)
+    assert mesh_enabled()
+    for value in ("0", "false", "no", "off", " OFF "):
+        monkeypatch.setenv("IX_MCP_MESH", value)
+        assert not mesh_enabled(), f"IX_MCP_MESH={value!r} must disable the mesh"
+    monkeypatch.setenv("IX_MCP_MESH", "1")
+    assert mesh_enabled()
+
+
+def test_server_version_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("IX_MCP_VERSION", raising=False)
+    assert server_version() == "dev"
+    monkeypatch.setenv("IX_MCP_VERSION", "abc123")
+    assert server_version() == "abc123"
+
+
+# ---------------------------------------------------------------------------
+# The /mesh route (no socket: aiohttp TestClient)
+# ---------------------------------------------------------------------------
+
+
+def _fetch_card(app: web.Application) -> dict[str, Any]:
+    async def go() -> dict[str, Any]:
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/mesh")
+            assert resp.status == 200
+            card: dict[str, Any] = await resp.json()
+            return card
+
+    return asyncio.run(go())
+
+
+def test_mesh_card_fields(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("IX_MCP_VERSION", "deadbeef")
+    monkeypatch.setenv("IX_MCP_DASHBOARD_URL", "http://100.1.2.3:4567/")
+    cfg = Config(workdir=tmp_path)
+    app = server_mesh.build_app(cfg, lambda: ["fix the build", "triage 1787"], "2026-07-03T00:00:00+00:00")
+    card = _fetch_card(app)
+    assert card["host"] == socket.gethostname()
+    assert card["pid"] == os.getpid()
+    assert card["version"] == "deadbeef"
+    assert card["started_at"] == "2026-07-03T00:00:00+00:00"
+    assert card["sessions"] == ["fix the build", "triage 1787"]
+    assert card["dashboard_url"] == "http://100.1.2.3:4567/"
+    assert card["cwd"] == str(tmp_path)
+
+
+def test_mesh_card_dashboard_url_falls_back_to_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("IX_MCP_DASHBOARD_URL", raising=False)
+    cfg = Config(workdir=tmp_path, advertised_host="100.9.9.9", dashboard_port=7777)
+    app = server_mesh.build_app(cfg, list, "t")
+    assert _fetch_card(app)["dashboard_url"] == "http://100.9.9.9:7777/"
+
+
+def test_mesh_card_sessions_are_live(tmp_path: Path) -> None:
+    # The card reflects names set AFTER the server came up: names arrive at
+    # any point in a client's lifetime, so the SAME app must serve both reads.
+    names: list[str] = []
+    app = server_mesh.build_app(Config(workdir=tmp_path), lambda: sorted(names), "t")
+
+    async def go() -> tuple[list[str], list[str]]:
+        async with TestClient(TestServer(app)) as client:
+            first = (await (await client.get("/mesh")).json())["sessions"]
+            names.append("late namer")
+            second = (await (await client.get("/mesh")).json())["sessions"]
+            return first, second
+
+    first, second = asyncio.run(go())
+    assert first == []
+    assert second == ["late namer"]
+
+
+# ---------------------------------------------------------------------------
+# start(): the skip paths must log one line and never raise
+# ---------------------------------------------------------------------------
+
+
+def test_start_disabled_by_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("IX_MCP_MESH", "0")
+    cfg = Config(workdir=tmp_path, mesh_host="127.0.0.1")
+    assert asyncio.run(server_mesh.start(cfg, list)) is None
+    assert "mesh endpoint disabled" in capsys.readouterr().err
+
+
+def test_start_skips_without_tailscale(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("IX_MCP_MESH", raising=False)
+    cfg = Config(workdir=tmp_path, mesh_host=None)
+    assert asyncio.run(server_mesh.start(cfg, list)) is None
+    assert "no tailscale" in capsys.readouterr().err
+
+
+def test_start_serves_on_override_port(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # mesh_host is normally a tailscale IP; loopback here keeps the test
+    # network-free while exercising the real bind + HTTP round trip.
+    port = _free_port()
+    monkeypatch.delenv("IX_MCP_MESH", raising=False)
+    monkeypatch.setenv("IX_MCP_MESH_PORT", str(port))
+    monkeypatch.delenv("IX_MCP_DASHBOARD_URL", raising=False)
+    cfg = Config(workdir=tmp_path, mesh_host="127.0.0.1")
+
+    async def go() -> dict[str, Any]:
+        import aiohttp
+
+        runner = await server_mesh.start(cfg, lambda: ["smoke"])
+        assert runner is not None
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(f"http://127.0.0.1:{port}/mesh") as resp,
+            ):
+                assert resp.status == 200
+                card: dict[str, Any] = await resp.json()
+                return card
+        finally:
+            await runner.cleanup()
+
+    assert asyncio.run(go())["sessions"] == ["smoke"]
+
+
+def test_start_skips_on_bind_conflict(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("IX_MCP_MESH", raising=False)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as holder:
+        holder.bind(("127.0.0.1", 0))
+        holder.listen(1)
+        port = holder.getsockname()[1]
+        monkeypatch.setenv("IX_MCP_MESH_PORT", str(port))
+        cfg = Config(workdir=tmp_path, mesh_host="127.0.0.1")
+        assert asyncio.run(server_mesh.start(cfg, list)) is None
+    assert "cannot bind" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# mesh.peers() / mesh.sessions(): stub tailscale + a real loopback server
+# ---------------------------------------------------------------------------
+
+
+def test_peers_empty_without_tailscale(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv(mesh_client._TAILSCALE_BIN_ENV, str(tmp_path / "missing-tailscale"))
+    df = asyncio.run(mesh_client.peers())
+    assert df.is_empty()
+    assert set(df.columns) >= {"host", "ip", "version", "sessions", "dashboard_url"}
+
+
+def test_peers_and_sessions_discover_live_server(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    port = _free_port()
+    monkeypatch.delenv("IX_MCP_MESH", raising=False)
+    monkeypatch.setenv("IX_MCP_MESH_PORT", str(port))
+    monkeypatch.setenv("IX_MCP_VERSION", "cafebabe")
+    monkeypatch.setenv("IX_MCP_DASHBOARD_URL", "http://127.0.0.1:9999/")
+    stub = _write_stub_tailscale(tmp_path, _status(self_ip="127.0.0.1"))
+    monkeypatch.setenv(mesh_client._TAILSCALE_BIN_ENV, str(stub))
+    cfg = Config(workdir=tmp_path, mesh_host="127.0.0.1")
+
+    async def go() -> tuple[pl.DataFrame, pl.DataFrame]:
+        runner = await server_mesh.start(cfg, lambda: ["alpha", "beta"])
+        assert runner is not None
+        try:
+            return await mesh_client.peers(), await mesh_client.sessions()
+        finally:
+            await runner.cleanup()
+
+    peers_df, sessions_df = asyncio.run(go())
+    assert peers_df.height == 1
+    row = peers_df.to_dicts()[0]
+    assert row["host"] == socket.gethostname()  # the card's hostname wins over DNSName
+    assert row["ip"] == "127.0.0.1"
+    assert row["version"] == "cafebabe"
+    assert row["sessions"] == ["alpha", "beta"]
+    assert row["dashboard_url"] == "http://127.0.0.1:9999/"
+    assert row["pid"] == os.getpid()
+    # sessions() flattens to one row per (host, session label).
+    assert sessions_df.height == 2
+    assert sessions_df["session"].to_list() == ["alpha", "beta"]
+    assert set(sessions_df.columns) == {"host", "session", "dashboard_url", "ip"}
+
+
+def test_peers_skips_offline_and_unresponsive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # One offline peer (never probed) and one online peer with nothing
+    # listening on the mesh port: both contribute no row, and neither raises.
+    port = _free_port()
+    monkeypatch.setenv("IX_MCP_MESH_PORT", str(port))
+    status = _status(
+        self_ip=None,
+        peers=[
+            {"HostName": "offline-box", "Online": False, "TailscaleIPs": ["127.0.0.1"]},
+            {"HostName": "no-mcp-box", "Online": True, "TailscaleIPs": ["127.0.0.1"]},
+        ],
+    )
+    stub = _write_stub_tailscale(tmp_path, status)
+    monkeypatch.setenv(mesh_client._TAILSCALE_BIN_ENV, str(stub))
+    df = asyncio.run(mesh_client.peers(timeout=0.5))
+    assert df.is_empty()
+
+
+# ---------------------------------------------------------------------------
+# fleet.connect() zero-config probe: stub tailscale on PATH + a fake GCS
+# ---------------------------------------------------------------------------
+
+
+def _stub_tailscale_on_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, status: dict[str, Any]
+) -> None:
+    # cluster._find_tailscale resolves via shutil.which, so the stub goes on
+    # PATH (prepended: bash and friends stay resolvable for the shebang).
+    bin_dir = tmp_path / "stub-bin"
+    bin_dir.mkdir(exist_ok=True)
+    _write_stub_tailscale(bin_dir, status)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+
+def _server_peer(ip: str, *, online: bool = True, tags: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "HostName": "fleet-node",
+        "Online": online,
+        "Tags": ["tag:server"] if tags is None else tags,
+        "TailscaleIPs": [ip],
+    }
+
+
+def test_probe_finds_single_gcs_head(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as gcs:
+        gcs.bind(("127.0.0.1", 0))
+        # Backlog > 1: the listener never accept()s, and each probe's completed
+        # handshake occupies a queue slot; both probes below must get through.
+        gcs.listen(8)
+        monkeypatch.setenv("IX_FLEET_RAY_GCS_PORT", str(gcs.getsockname()[1]))
+        _stub_tailscale_on_path(monkeypatch, tmp_path, _status(peers=[_server_peer("127.0.0.1")]))
+        assert cluster._probe_ray_heads() == ["127.0.0.1"]
+        # connect()'s resolution turns the one head into a Ray Client URL.
+        target, note = cluster._resolve_auto_target()
+        assert target == f"ray://127.0.0.1:{cluster.RAY_CLIENT_PORT}"
+        assert note == ""
+
+
+def test_probe_requires_server_tag_and_online(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as gcs:
+        gcs.bind(("127.0.0.1", 0))
+        gcs.listen(1)
+        monkeypatch.setenv("IX_FLEET_RAY_GCS_PORT", str(gcs.getsockname()[1]))
+        status = _status(
+            peers=[
+                _server_peer("127.0.0.1", tags=[]),  # untagged: never probed
+                _server_peer("127.0.0.1", online=False),  # offline: never probed
+            ]
+        )
+        _stub_tailscale_on_path(monkeypatch, tmp_path, status)
+        assert cluster._probe_ray_heads() == []
+
+
+def test_probe_no_listener_yields_loud_note(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A tagged online peer with a CLOSED GCS port: the probe returns nothing
+    # and the resolution hands connect() the why-line it prints on fallback.
+    monkeypatch.setenv("IX_FLEET_RAY_GCS_PORT", str(_free_port()))
+    _stub_tailscale_on_path(monkeypatch, tmp_path, _status(peers=[_server_peer("127.0.0.1")]))
+    target, note = cluster._resolve_auto_target(budget=0.5)
+    assert target is None
+    assert "no tag:server peer" in note
+
+
+def _system_tailscale_present() -> bool:
+    # Path.exists can raise PermissionError under the darwin nix sandbox
+    # (stat on /usr is denied); that hermetic case is exactly "not present".
+    for p in ("/usr/local/bin/tailscale", "/usr/bin/tailscale"):
+        try:
+            if Path(p).exists():
+                return True
+        except OSError:
+            continue
+    return False
+
+
+@pytest.mark.skipif(
+    _system_tailscale_present(),
+    reason="a system tailscale shadows the empty-PATH case (dev box); the nix sandbox has neither",
+)
+def test_probe_without_tailscale(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # An empty PATH: shutil.which finds no tailscale, and the hardcoded
+    # /usr/{local/,}bin fallbacks are absent in the build sandbox.
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    assert cluster._probe_ray_heads() == []

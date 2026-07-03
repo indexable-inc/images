@@ -16,6 +16,36 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+# The well-known port every ix-mcp serves its tailnet `/mesh` discovery
+# endpoint on (index#1787), adjacent to the fleet's fixed `/api/exec` port 8799
+# (src/fleet/fleet/cluster.py EXEC_PORT). The one definition: the server bind
+# (ix_notebook_mcp.mesh) and the bundled `mesh` module's peer probes both read
+# it through :func:`mesh_port`, so the two sides cannot drift.
+DEFAULT_MESH_PORT = 8798
+
+
+def mesh_port() -> int:
+    """The mesh port; ``IX_MCP_MESH_PORT`` overrides the well-known default."""
+    return int(os.environ.get("IX_MCP_MESH_PORT") or DEFAULT_MESH_PORT)
+
+
+def mesh_enabled() -> bool:
+    """Whether this server should advertise itself on the tailnet mesh.
+
+    Default ON: joining the mesh must need zero config (index#1787), so the env
+    var is an opt-out only. ``IX_MCP_MESH=0`` (or false/no/off) disables it.
+    """
+    return os.environ.get("IX_MCP_MESH", "").strip().lower() not in ("0", "false", "no", "off")
+
+
+def server_version() -> str:
+    """The build's source revision. The nix wrapper sets ``IX_MCP_VERSION`` to
+    the flake rev (``<commit>`` / ``<commit>-dirty``); a bare run reads "dev".
+    Both the MCP ``serverInfo.version`` (tools.py) and the ``/mesh`` payload
+    report this one value, so a client and a mesh peer see the same commit."""
+    return os.environ.get("IX_MCP_VERSION") or "dev"
+
+
 @dataclass(frozen=True)
 class Config:
     # Directory the kernel runs in and notebooks/files are resolved against.
@@ -52,6 +82,13 @@ class Config:
     # True when the session file already existed at launch, so the server must
     # restore (load the checkpoint, replay the gap) before running new cells.
     session_resume: bool = False
+
+    # This machine's tailscale IPv4, resolved once by the CLI, or None when
+    # tailscale is absent or its backend is down. The `/mesh` endpoint binds
+    # ONLY this address (index#1787): the tailnet is the trust boundary, and
+    # with no tailnet there is nothing to mesh over, so mesh serving is skipped
+    # rather than widened to a LAN or wildcard bind.
+    mesh_host: str | None = None
 
     # "stdio" (the default; what an MCP client launches), "http", or "none"
     # (the standalone notebook engine: kernel + dashboard, no MCP transport).

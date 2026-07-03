@@ -82,6 +82,13 @@ MODULES: tuple[Module, ...] = (
     ),
     Module("fleet", "async polars SSH fan-out across hosts (`read_ndjson` / `scan`)"),
     Module(
+        "mesh",
+        "tailnet mesh of live ix-mcp servers, zero config: `await mesh.peers()` is one polars "
+        "row per reachable server (host, version, named sessions, dashboard URL) discovered "
+        "via tailscale; `await mesh.sessions()` flattens to one row per (host, session)",
+        preimport=True,
+    ),
+    Module(
         "search",
         "meaning-based recall across the fleet corpus (code + agent/shell history): "
         "`await search.semantic(q, since='7d', compact=True)` / `grep(pattern)` / "

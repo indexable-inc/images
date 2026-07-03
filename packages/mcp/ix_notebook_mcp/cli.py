@@ -424,6 +424,11 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
         advertised_host=advertised_host,
         dashboard_port=dashboard_port,
         hub_port=hub_port,
+        # The `/mesh` endpoint binds ONLY the tailscale IP (index#1787): unlike
+        # `bind_host` above there is no loopback fallback, because a
+        # loopback-only mesh card is unreachable by every peer and a wider bind
+        # would leave the trust boundary. None -> mesh.start skips serving.
+        mesh_host=_tailscale_ip(),
         auto_dashboard=_auto_dashboard(),
         store_path=store_path,
         session_path=session_path,
@@ -513,7 +518,7 @@ def _spawn_hub(cfg: Config) -> subprocess.Popen | None:
 
 
 async def _run(cfg: Config) -> None:
-    from . import dashboard, pane_bridge, tools, transport
+    from . import dashboard, mesh, pane_bridge, tools, transport
     from .kernel import Kernel, set_kernel
 
     kernel = Kernel(cfg)
@@ -543,6 +548,10 @@ async def _run(cfg: Config) -> None:
         await locked.wait()
 
     runner = await dashboard.start(cfg)
+    # Advertise this server on the tailnet mesh (`GET /mesh`, index#1787):
+    # default-on and best-effort -- no tailscale, an occupied port, or
+    # IX_MCP_MESH=0 log one line and skip, never blocking the MCP itself.
+    mesh_runner = await mesh.start(cfg, tools.session_names)
     # Always publish this server's runs/resources/namespace as panes into the
     # shared discovery dir; a single standalone `dashboard` (run separately,
     # `nix run .#dashboard`) renders every producer behind one stable URL.
@@ -591,6 +600,8 @@ async def _run(cfg: Config) -> None:
             # Final checkpoint so the last cells' state reopens instantly even
             # when the debounced checkpoint had not fired yet.
             await kernel.snapshot_session()
+        if mesh_runner is not None:
+            await mesh_runner.cleanup()
         await runner.cleanup()
         await kernel.shutdown()
 
