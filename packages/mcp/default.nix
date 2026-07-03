@@ -4180,6 +4180,18 @@
 
     out = view.df_html(lsdf)
     assert "<table" in out and "rows" in out and "tabular-nums" in out, out[:120]
+    # The modern grid ships a client-side filter box, a sortable (clickable,
+    # aria-sort) sticky header, and dtype-classed cells -- inline JS/CSS, no CDN.
+    assert 'input class="q"' in out and "aria-sort" in out and "sticky" in out, out[:200]
+    # Coloring lives in the ONE shared stylesheet keyed by dtype class, not a
+    # per-cell style= attribute -- that keeps a wide frame's body small enough
+    # for the dashboard's Loro pane diff. A 40x40 int frame must stay well under
+    # the ~200KB range that wedged the aggregator, and far below the old build
+    # (which repeated a full inline style on every cell).
+    wide = pl.DataFrame({f"c{j}": range(40) for j in range(40)})
+    wout = view.df_html(wide)
+    assert 'style="color:' not in wout, "cells must be class-styled, not inline"
+    assert len(wout) < 130_000, len(wout)
 
     # Nested List(Struct)/Struct cells render as boxed sub-tables, not a
     # truncated str(value): the inner field values must reach the HTML.

@@ -134,6 +134,11 @@ _THEME_CLASS = "ixv"
 _CODE_CLASS = "ixv-hl"
 
 
+def _escape_attr(text: str) -> str:
+    """Escape a string for an HTML double-quoted attribute value."""
+    return _html.escape(str(text), quote=True)
+
+
 def _c(key: str) -> str:
     """A CSS color reference for ``key``: the themeable ``--ixv-*`` variable with
     the dark value as its fallback. So a fragment renders dark on its own (no
@@ -244,11 +249,14 @@ def _nested_table(headers: list[str] | None, rows: list[list[str]], *, key_col: 
 _MAX_NESTED_ROWS = 50
 
 
+_NULL_SPAN = '<span class="z">null</span>'
+
+
 def _fmt_nested(value: Any, dtype: pl.DataType | pl.datatypes.DataTypeClass) -> str | None:  # noqa: ANN401 -- a dynamic polars cell value
     """Render a Struct/List/Array cell as a nested table; None if not nested."""
     if isinstance(dtype, pl.Struct):
         if value is None:
-            return f'<span style="color:{_c("null")};font-style:italic">null</span>'
+            return _NULL_SPAN
         fields = {f.name: f.dtype for f in dtype.fields}
         rows = [
             [
@@ -260,17 +268,14 @@ def _fmt_nested(value: Any, dtype: pl.DataType | pl.datatypes.DataTypeClass) -> 
         return _nested_table(None, rows, key_col=True)
     if isinstance(dtype, (pl.List, pl.Array)):
         if value is None:
-            return f'<span style="color:{_c("null")};font-style:italic">null</span>'
+            return _NULL_SPAN
         inner = dtype.inner
         items = list(value)
         more = ""
         if len(items) > _MAX_NESTED_ROWS:
             extra = len(items) - _MAX_NESTED_ROWS
             items = items[:_MAX_NESTED_ROWS]
-            more = (
-                f'<div style="color:{_c("muted")};padding:2px 8px;'
-                f'font-size:10px">… {extra:,} more</div>'
-            )
+            more = f'<div class="more">… {extra:,} more</div>'
         if isinstance(inner, pl.Struct):
             # List[Struct] -> a real table: one column per field, one row each.
             cols = [f.name for f in inner.fields]
@@ -287,14 +292,20 @@ def _fmt_nested(value: Any, dtype: pl.DataType | pl.datatypes.DataTypeClass) -> 
 
 
 def _fmt_cell(value: Any, dtype: pl.DataType | pl.datatypes.DataTypeClass) -> tuple[str, str]:  # noqa: ANN401 -- a dynamic polars cell value
-    """Render one cell to (html, align), colored and aligned by dtype."""
+    """Render one cell to (html, align), classed and aligned by dtype.
+
+    The color/emphasis lives in the shared stylesheet (see :func:`_grid_css`) via
+    the ``n``/``s``/``b``/``z`` classes (number/string/bool/null), not in a
+    per-cell ``style=`` attribute -- that keeps the emitted body small enough for
+    the dashboard's Loro pane diff on a wide frame.
+    """
     nested = _fmt_nested(value, dtype)
     if nested is not None:
         return nested, "l"
     if value is None:
-        return f'<span style="color:{_c("null")};font-style:italic">null</span>', "c"
+        return _NULL_SPAN, "c"
     if dtype == pl.Boolean:
-        return f'<span style="color:{_c("bool")}">{str(value).lower()}</span>', "c"
+        return f'<span class="b">{str(value).lower()}</span>', "c"
     try:
         numeric = dtype.is_numeric()
     except Exception:
@@ -306,14 +317,11 @@ def _fmt_cell(value: Any, dtype: pl.DataType | pl.datatypes.DataTypeClass) -> tu
             text = f"{value:,.4g}"
         else:
             text = str(value)
-        return f'<span style="color:{_c("num")}">{_html.escape(text)}</span>', "r"
+        return f'<span class="n">{_html.escape(text)}</span>', "r"
     text = str(value)
     short = text if len(text) <= 60 else text[:57] + "…"
-    return (
-        f'<span style="color:{_c("str")}" title="{_html.escape(text)}">'
-        f"{_html.escape(short)}</span>",
-        "l",
-    )
+    title = f' title="{_escape_attr(text)}"' if len(text) > 60 else ""
+    return f'<span class="s"{title}>{_html.escape(short)}</span>', "l"
 
 
 def df_html(df: pl.DataFrame, max_rows: int = 50) -> str:
@@ -334,6 +342,110 @@ def df_html(df: pl.DataFrame, max_rows: int = 50) -> str:
         )
 
 
+def _grid_css() -> str:
+    """One shared stylesheet for the DataFrame grid: an IDE-style data grid
+    (sticky header, compact rows, zebra + hover, dtype-aware token colors, a
+    tabular-numeric monospace face). Class-based rather than per-cell inline
+    styles so a wide frame's body stays small enough for the dashboard's Loro
+    pane diff. Dark is the default (the ``var(...)`` fallbacks in :func:`_c`);
+    a single ``prefers-color-scheme: light`` block flips the palette. Every rule
+    is scoped to ``.ixdf`` so it never leaks past the grid's own iframe body.
+    """
+    dark = "".join(f"--ixv-{k}:{v};" for k, v in _PAL.items())
+    light = ";".join(f"--ixv-{k}:{v}" for k, v in _PAL_LIGHT.items())
+    accent = "var(--ixv-str)"
+    return (
+        "<style>"
+        # Root: the palette vars live here so the light media query can flip them.
+        f".ixdf{{{dark}display:inline-flex;flex-direction:column;max-width:100%;"
+        f"background:{_c('panel')};color:{_c('text')};font-family:{_MONO};"
+        f"font-size:12px;border:1px solid {_c('border')};border-radius:6px;"
+        "overflow:hidden;line-height:1.45}"
+        # Toolbar: row/col count on the left, live search box on the right.
+        f".ixdf .bar{{display:flex;align-items:center;gap:8px;padding:5px 10px;"
+        f"border-bottom:1px solid {_c('border')};color:{_c('muted')}}}"
+        ".ixdf .meta{letter-spacing:.3px;white-space:nowrap}"
+        ".ixdf .sp{flex:1}"
+        f".ixdf input.q{{width:11em;max-width:40vw;background:{_c('alt')};"
+        f"color:{_c('text')};border:1px solid {_c('border')};border-radius:4px;"
+        f"padding:2px 7px;font:inherit;outline:none}}"
+        f".ixdf input.q:focus{{border-color:{accent}}}"
+        f".ixdf input.q::placeholder{{color:{_c('null')}}}"
+        f".ixdf .hits{{color:{_c('null')};white-space:nowrap;min-width:3.5em;"
+        "text-align:right}"
+        # Scroll region holds the table so the header can stick to its top.
+        ".ixdf .scroll{overflow:auto;max-height:70vh}"
+        ".ixdf table{border-collapse:separate;border-spacing:0;margin:0}"
+        f".ixdf thead th{{position:sticky;top:0;z-index:1;background:{_c('head')};"
+        f"color:{_c('text')};text-align:left;padding:4px 14px;white-space:nowrap;"
+        "cursor:pointer;user-select:none;-webkit-user-select:none}"
+        f".ixdf thead th .ty{{color:{_c('muted')};font-size:10px;font-weight:400}}"
+        ".ixdf thead th .nm{font-weight:600}"
+        # Sort caret: hidden by default, shown on the actively sorted column.
+        f'.ixdf thead th .ar{{color:{_c("muted")};font-size:9px;visibility:hidden}}'
+        ".ixdf thead th[aria-sort] .ar{visibility:visible}"
+        f".ixdf tbody td{{padding:2px 14px;border-top:1px solid {_c('border')};"
+        "font-variant-numeric:tabular-nums;vertical-align:top}"
+        ".ixdf tbody td.r{text-align:right}"
+        ".ixdf tbody td.c{text-align:center}"
+        f".ixdf tbody tr:nth-child(even){{background:{_c('alt')}}}"
+        f".ixdf tbody tr:hover td{{background:{_c('head')}}}"
+        f".ixdf tbody tr.h{{display:none}}"
+        # dtype tokens: numbers brightest, strings, bools, null (italic, faint).
+        f".ixdf .n{{color:{_c('num')}}}"
+        f".ixdf .s{{color:{_c('str')}}}"
+        f".ixdf .b{{color:{_c('bool')}}}"
+        f".ixdf .z{{color:{_c('null')};font-style:italic}}"
+        f".ixdf .more,.ixdf .foot{{color:{_c('muted')};padding:4px 14px;"
+        "font-size:11px}"
+        f".ixdf .foot{{border-top:1px solid {_c('border')}}}"
+        f"@media(prefers-color-scheme:light){{.ixdf{{{light}}}}}"
+        "</style>"
+    )
+
+
+# Client-side search + column sort for the grid. Self-contained, no globals: it
+# scopes to the nearest `.ixdf` root, so it is safe even if several grids share a
+# document. Search hides non-matching rows (case-insensitive substring over the
+# row's text) and updates the hit count; clicking a header sorts by the cell text
+# and toggles direction. A column sorts numerically when every cell parses as a
+# number after commas are stripped (so ``1,234`` sorts as 1234, not lexically);
+# this is why no per-cell ``data-s`` sort key is emitted -- keeping the body small
+# on a wide numeric frame. Kept tiny -- it ships in every grid body.
+_GRID_JS = (
+    "<script>(function(){var s=document.currentScript,"
+    "r=(s&&s.previousElementSibling&&s.previousElementSibling.classList"
+    ".contains('ixdf'))?s.previousElementSibling:null;"
+    # Fallback for hosts that null out currentScript (e.g. a script re-inserted
+    # via innerHTML): take the last not-yet-initialized grid in the document.
+    "if(!r){var g=document.querySelectorAll('.ixdf');"
+    "for(var k=g.length-1;k>=0;k--){if(!g[k]._i){r=g[k];break}}}"
+    "if(!r||r._i)return;r._i=1;"
+    "var tb=r.querySelector('tbody'),rows=[].slice.call(tb.children),"
+    "q=r.querySelector('input.q'),hits=r.querySelector('.hits'),"
+    "th=[].slice.call(r.querySelectorAll('thead th'));"
+    "function filt(){var v=(q.value||'').toLowerCase(),m=0;"
+    "rows.forEach(function(tr){var s=v&&tr.textContent.toLowerCase().indexOf(v)<0;"
+    "tr.classList.toggle('h',s);if(!s)m++});"
+    "hits.textContent=v?m+'/'+rows.length:''}"
+    "if(q)q.addEventListener('input',filt);"
+    "function txt(tr,i){var c=tr.children[i];return c?c.textContent.trim():''}"
+    "function nm(s){return s.replace(/,/g,'')}"
+    "th.forEach(function(h,i){h.addEventListener('click',function(){"
+    "var asc=h.getAttribute('aria-sort')!=='ascending';"
+    "th.forEach(function(o){o.removeAttribute('aria-sort');"
+    "var a=o.querySelector('.ar');if(a)a.textContent=''});"
+    "h.setAttribute('aria-sort',asc?'ascending':'descending');"
+    "var a=h.querySelector('.ar');if(a)a.textContent=asc?'\\u2191':'\\u2193';"
+    "var num=rows.every(function(tr){var k=nm(txt(tr,i));return k===''||!isNaN(k)});"
+    "rows.sort(function(a,b){var x=txt(a,i),y=txt(b,i);"
+    "if(num){x=parseFloat(nm(x));y=parseFloat(nm(y));"
+    "if(isNaN(x))return 1;if(isNaN(y))return -1;return asc?x-y:y-x}"
+    "return asc?(x<y?-1:x>y?1:0):(x>y?-1:x<y?1:0)});"
+    "rows.forEach(function(tr){tb.appendChild(tr)})})})})();</script>"
+)
+
+
 def _df_html_impl(df: pl.DataFrame, max_rows: int) -> str:
     """The dashboard's styled HTML for a polars DataFrame.
 
@@ -344,41 +456,35 @@ def _df_html_impl(df: pl.DataFrame, max_rows: int) -> str:
     """
     cols, dtypes, n = df.columns, df.dtypes, df.height
     head = "".join(
-        f'<th style="text-align:left;padding:5px 14px;border-bottom:2px solid '
-        f'{_c("head")};white-space:nowrap">'
-        f'<div style="color:{_c("text")};font-weight:600">{_html.escape(c)}</div>'
-        f'<div style="color:{_c("muted")};font-size:10px">{_html.escape(str(dt))}</div></th>'
+        f'<th><span class="nm">{_html.escape(c)}</span> '
+        f'<span class="ty">{_html.escape(str(dt))}</span>'
+        f'<span class="ar"></span></th>'
         for c, dt in zip(cols, dtypes, strict=True)
     )
     body = []
-    for i, row in enumerate(df.head(max_rows).iter_rows()):
-        bg = _c("alt") if i % 2 else _c("panel")
+    for row in df.head(max_rows).iter_rows():
         cells = ""
         for value, dtype in zip(row, dtypes, strict=True):
             cell, align = _fmt_cell(value, dtype)
-            a = {"l": "left", "r": "right", "c": "center"}[align]
-            cells += (
-                f'<td style="padding:3px 14px;text-align:{a};'
-                f'font-variant-numeric:tabular-nums;'
-                f'border-bottom:1px solid {_c("border")}">{cell}</td>'
-            )
-        body.append(f'<tr style="background:{bg}">{cells}</tr>')
-    more = (
-        f'<div style="color:{_c("muted")};padding:6px 14px;font-size:11px">'
-        f"… {n - max_rows:,} more rows</div>"
+            cls = "" if align == "l" else f' class="{align}"'
+            cells += f"<td{cls}>{cell}</td>"
+        body.append(f"<tr>{cells}</tr>")
+    foot = (
+        f'<div class="foot">… {n - max_rows:,} more rows (query returns full frame; '
+        f"page with .head(n) / .slice(a, b))</div>"
         if n > max_rows
         else ""
     )
     return (
-        f'{_theme_style()}<div class="{_THEME_CLASS}" '
-        f'style="display:inline-block;background:{_c("panel")};'
-        f'border:1px solid {_c("border")};font-family:{_MONO};font-size:12px;'
-        f'color:{_c("text")}">'
-        f'<div style="padding:6px 14px;color:{_c("muted")};'
-        f'border-bottom:1px solid {_c("border")};letter-spacing:.3px">'
-        f"{n:,} rows × {len(cols)} cols</div>"
-        f'<table style="border-collapse:collapse;margin:0"><thead><tr>{head}</tr>'
-        f"</thead><tbody>{''.join(body)}</tbody></table>{more}</div>"
+        f"{_grid_css()}"
+        f'<div class="ixdf">'
+        f'<div class="bar"><span class="meta">{n:,} rows × {len(cols)} cols</span>'
+        f'<span class="sp"></span>'
+        f'<input class="q" type="search" placeholder="filter rows" '
+        f'aria-label="filter rows"><span class="hits"></span></div>'
+        f'<div class="scroll"><table><thead><tr>{head}</tr></thead>'
+        f"<tbody>{''.join(body)}</tbody></table></div>{foot}</div>"
+        f"{_GRID_JS}"
     )
 
 
