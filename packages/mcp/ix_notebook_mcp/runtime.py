@@ -103,6 +103,12 @@ def _report_task_failure(task: asyncio.Task) -> None:
     job = task.get_context().get(_ix_current)
     if job is not None:
         job._append(msg)
+        # The common fire-and-forget case dies AFTER its spawning cell
+        # finished, i.e. after _persist_final already wrote the store row; a
+        # bare _append would then be visible to `jobs[id].output` but never
+        # reach the dashboard card. Re-persist so the stored row carries it.
+        if not job.running():
+            _persist_final(job)
     with contextlib.suppress(Exception):  # reporting must never take the loop down
         print(msg, file=sys.__stderr__, flush=True)
 
@@ -1950,6 +1956,12 @@ def _error_line(exc: BaseException, job: Job) -> int | None:
 
 async def _runner(job: Job, ns: dict) -> None:
     token = _ix_current.set(job)
+    # (Re-)arm the task-failure watch on the loop actually running jobs.
+    # `install()` may have run in a sync context where `get_event_loop()`
+    # handed back a dormant default loop that is not this one; installing
+    # here (idempotent, sentinel-guarded) guarantees every task a cell spawns
+    # is watched regardless of how the kernel was embedded.
+    _install_task_failure_watch(asyncio.get_running_loop())
     if _store is not None and _store_conn is not None:
         with contextlib.suppress(Exception):  # best-effort: store write must not abort the job
             _store.start(
@@ -3744,9 +3756,9 @@ def install(user_ns: dict | None = None) -> None:
 
     with contextlib.suppress(RuntimeError):  # no event loop yet (sync context): flusher and task watch are optional
         loop = asyncio.get_event_loop()
-        # Held in a global so the flusher can never be garbage-collected
-        # mid-flight (RUF006) -- the exact fire-and-forget hazard
-        # _install_task_failure_watch exists to surface.
+        # Watch first, then spawn: the flusher must itself be a watched task,
+        # and its module-global reference (which prevents GC, RUF006) is
+        # exactly what would otherwise keep a crashed flusher silent forever.
+        _install_task_failure_watch(loop)
         global _flusher_task
         _flusher_task = loop.create_task(_flusher())
-        _install_task_failure_watch(loop)
