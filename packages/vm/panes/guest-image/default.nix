@@ -38,15 +38,40 @@ let
       # outside apps.nix (see ./lwjgl-natives.nix).
       {
         nixpkgs.overlays = [
-          (final: _prev: {
+          (final: prev: {
             inherit (repoPackages) panes-compositor;
+            # ./pins.json also carries the mesa src pin, so hand
+            # lwjgl-natives.nix only the lwjgl-* entries (it asserts one
+            # shared LWJGL version across its pins).
             lwjgl-natives-linux-arm64 = final.callPackage ./lwjgl-natives.nix {
-              pins = ix.pins.loadPins ./pins.json;
+              pins = lib.filterAttrs (name: _: lib.hasPrefix "lwjgl" name) (ix.pins.loadPins ./pins.json);
             };
             # The checked bash writer, threaded through the overlay because
             # `ix` is not in module scope; apps.nix uses it for the Minecraft
             # launch wrapper instead of the unchecked writeShellScript.
             writeBashApplication = ix.writeBashApplication final;
+            # Venus (virtio-gpu Vulkan) with the mesa fork's driver-side
+            # external-semaphore patch (index#1742): MoltenVK hosts never
+            # support SYNC_FD semaphore import, so stock mesa masks
+            # VK_KHR_synchronization2 (clamping the device to Vulkan 1.2) and
+            # VK_KHR_swapchain. Only `src` is swapped; the fork is upstream
+            # tag mesa-26.1.2 plus the patch commit, so nixpkgs' recipe and
+            # patches still apply. The fork branch is the single source of
+            # truth for the patch (rather than an in-tree .patch file): its
+            # history carries the upstreamable commit and the pinned tree is
+            # what upstream review sees. `hardware.graphics.enable` in
+            # ./nixos.nix consumes `pkgs.mesa`, so this override is what
+            # /run/opengl-driver (and the container ICDs) get.
+            mesa =
+              let
+                pin = ix.pins.loadPin ./pins.json "mesa-src";
+              in
+              prev.mesa.overrideAttrs (old: {
+                src =
+                  assert lib.assertMsg (old.version == pin.version)
+                    "panes-guest-image: mesa fork pin is ${pin.version} but nixpkgs mesa is ${old.version}; rebase indexable-inc/mesa branch ix/venus-driver-side-semaphore onto the new upstream tag and re-pin";
+                  final.fetchzip { inherit (pin) url hash; };
+              });
           })
         ];
         # The builder-chosen root login key (see the sshAuthorizedKey package

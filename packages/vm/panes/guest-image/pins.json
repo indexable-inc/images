@@ -1,4 +1,11 @@
 {
+  "mesa-src": {
+    "version": "26.1.2",
+    "url": "https://github.com/indexable-inc/mesa/archive/838b14a367e84d8c9dd353e8417776d4bf1e1d7f.tar.gz",
+    "branch": "ix/venus-driver-side-semaphore",
+    "hash": "sha256-UZ1wCXczDFHxFZmwmwdCFuew6P/20sIXqtfTjUsWaNM=",
+    "prefetch": "unpack"
+  },
   "lwjgl": {
     "version": "3.4.1",
     "url": "https://repo1.maven.org/maven2/org/lwjgl/lwjgl/3.4.1/lwjgl-3.4.1-natives-linux-arm64.jar",
