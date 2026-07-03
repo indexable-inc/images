@@ -53,7 +53,7 @@ pub struct ViewIvars {
     /// meaningless while dissociated).
     relative: Cell<bool>,
     /// Identity (timestamp, eventNumber) of the last relative-forwarded
-    /// event. AppKit delivers each mouseMoved TWICE here -- once to the
+    /// event. `AppKit` delivers each mouseMoved TWICE here -- once to the
     /// first responder (`acceptsMouseMovedEvents`) and once to the tracking
     /// area's owner (`MouseMoved` option), the same view (measured live: 4
     /// posted moves, 8 arrivals). Absolute coordinates absorb the duplicate;
