@@ -70,7 +70,7 @@ class TypeCheckResult:
     report: str = ""
 
 
-def _stub_type(value: Any) -> str:
+def _stub_type(value: object) -> str:
     """The annotation to stub ``value`` with: its real builtin type where cheap
     and safe (an exact-type match on a simple scalar/container), else ``Any``.
     Anything unusual -- a subclass, an instance of some class, a module -- is
