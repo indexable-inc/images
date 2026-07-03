@@ -51,10 +51,13 @@
   const hasStreamOut = $derived(!!stdoutTxt || !!stripAnsi(pane.stderr ?? '').trim());
   const resultIsPrimary = $derived(!hasStreamOut && !outPane && !!resultTxt);
   const resultShownInline = $derived(!traced && resultIsPrimary);
-  // The result text is the model's view of the rich attachment when one exists,
-  // so showing both would duplicate the output — the attachment wins.
+  // A file-view attachment IS the result rendered (the read's body), so showing
+  // the result panel beside it would duplicate the output. Other attachments (a
+  // displayed plot, a table) can coexist with a genuinely distinct result —
+  // `display(df); "done"` — so only the file-view case suppresses it.
+  const outIsResultView = $derived(outPane?.kind === 'data' && outPane?.renderer === 'file-view');
   const resultIsExtra = $derived(
-    !!resultTxt && resultTxt !== stdoutTxt && !resultShownInline && !outPane,
+    !!resultTxt && resultTxt !== stdoutTxt && !resultShownInline && !outIsResultView,
   );
 
   // One-line summary previews so a collapsed panel still scans.

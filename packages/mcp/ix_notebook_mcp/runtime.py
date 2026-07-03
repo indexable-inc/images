@@ -861,6 +861,18 @@ class Result:
                 return cls(user_html=user, llm_result=text_view)
         bundle = _result_bundle(value)
         data = (bundle or {}).get("data", {})
+        # Preserve a structured view riding the value's display bundle (e.g. a
+        # view.Code as the cell's trailing expression), so wrapping in Result
+        # never downgrades the dashboard render to the HTML fallback. The
+        # normalized bundle JSON-encodes custom mimes.
+        view_spec = data.get(IX_VIEW_MIME)
+        if isinstance(view_spec, str):
+            try:
+                view_spec = json.loads(view_spec)
+            except json.JSONDecodeError:
+                view_spec = None
+        if not isinstance(view_spec, dict):
+            view_spec = None
         if "text/html" in data:
             user = data["text/html"]
         elif "image/png" in data:
@@ -869,15 +881,19 @@ class Result:
             user = data["image/svg+xml"]
         else:
             user = f'<pre class="ix-result">{_escape_html(text_view)}</pre>'
-        return cls(user_html=user, llm_result=text_view)
+        return cls(user_html=user, user_view=view_spec, llm_result=text_view)
 
     def _repr_mimebundle_(self, **_kwargs: Any) -> dict:
         # IPython's display protocol: html is the human view (the dashboard
         # prefers it); IX_VIEW_MIME carries a structured human view the
         # dashboard renders natively (preferred over the html when present);
         # IX_LLM_MIME carries the model's text+images, which the server unpacks
-        # and the dashboard ignores; text/plain is the fallback.
-        bundle: dict = {"text/html": self.user_html, "text/plain": self.llm_result or ""}
+        # and the dashboard ignores; text/plain is the fallback. An EMPTY html
+        # view is omitted, not advertised — a host that ranks text/html above
+        # text/plain would otherwise render a blank result.
+        bundle: dict = {"text/plain": self.llm_result or ""}
+        if self.user_html:
+            bundle["text/html"] = self.user_html
         if self.user_view is not None:
             bundle[IX_VIEW_MIME] = self.user_view
         images = [img for img in (_coerce_image(i) for i in self.llm_images) if img]
@@ -3522,7 +3538,10 @@ def _read_lang(path: Any) -> str | None:
 
 
 def _clip_lines(lines: list[str], budget: int) -> list[str]:
-    """The longest line-boundary prefix whose joined size fits ``budget``."""
+    """The longest line-boundary prefix whose joined size fits ``budget``. When
+    even the first line alone exceeds the budget (minified JSON, a giant log
+    line), a character prefix of it is returned rather than nothing, so a
+    clipped view is never blank."""
     out: list[str] = []
     used = 0
     for line in lines:
@@ -3530,6 +3549,8 @@ def _clip_lines(lines: list[str], budget: int) -> list[str]:
         if used > budget:
             break
         out.append(line)
+    if not out and lines:
+        out.append(lines[0][:budget])
     return out
 
 
@@ -3586,13 +3607,17 @@ async def __ix_read(target: Any, start: int | None = None, end: int | None = Non
         first, last = 1, total
     # Display context: the whole file when it fits, else the slice, else a
     # line-clipped head of the slice. `start`/`end`/`total`/`chars` always
-    # describe what the model received; `text`+`context_start` describe display.
+    # describe what the model received; `text`+`context_start` describe display,
+    # and `truncated` marks a display copy that omits part of the read span so
+    # the card never silently poses as the full range.
+    truncated = False
     if len(full) <= _READ_CONTEXT_MAX:
         text, context_start = full, 1
     elif len(body) <= _READ_CONTEXT_MAX:
         text, context_start = body, first
     else:
         text, context_start = "\n".join(_clip_lines(selected, _READ_CONTEXT_MAX)), first
+        truncated = True
     return Result(
         user_view={
             "renderer": "file-view",
@@ -3606,8 +3631,12 @@ async def __ix_read(target: Any, start: int | None = None, end: int | None = Non
                 "end": last,
                 "total": total,
                 "chars": len(body),
+                "truncated": truncated,
             },
         },
+        # Plain-HTML fallback for hosts (and the mixed-rich-output pane path)
+        # that do not render the structured view; the display context, escaped.
+        user_html=f'<pre class="ix-result">{_escape_html(text)}</pre>',
         llm_result=body,
     )
 

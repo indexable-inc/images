@@ -88,8 +88,16 @@
       return;
     }
     if (!flat.some((f) => selectionEq(f.selection, ui.selection))) {
+      // Newest by timestamp, not render order: sessions are ordered by first
+      // appearance, so an older session can hold the most recent run.
       const runs = flat.filter((f) => f.selection.kind === 'run');
-      const fallback = runs[runs.length - 1] ?? flat.find((f) => f.selection.kind === 'resource');
+      const newest = runs.reduce<(typeof runs)[number] | null>((best, f) => {
+        const key = (f.selection as { key: string }).key;
+        const t = store.panes[key]?.created_at ?? 0;
+        const bt = best ? (store.panes[(best.selection as { key: string }).key]?.created_at ?? 0) : -1;
+        return t >= bt ? f : best;
+      }, null);
+      const fallback = newest ?? flat.find((f) => f.selection.kind === 'resource');
       if (fallback) onSelect(fallback.selection);
       else if (ui.selection) select(null);
     }

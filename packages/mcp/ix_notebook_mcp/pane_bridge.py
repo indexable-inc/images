@@ -66,6 +66,11 @@ def _render_outputs(outputs: list) -> str:
     return "".join(f'<div style="margin:6px 0">{b}</div>' for b in blocks)
 
 
+def _has_view(out: dict) -> bool:
+    data = out.get("data") if isinstance(out, dict) else None
+    return isinstance(data, dict) and IX_VIEW_MIME in data
+
+
 def _view_spec(outputs: list) -> dict | None:
     """The first structured-view spec (``{"renderer", "data"}``) carried by an
     output's ``IX_VIEW_MIME``, or None. The store JSON-encodes custom mimes, so
@@ -140,10 +145,13 @@ def _panes(conn: sqlite3.Connection) -> list[dict]:
         )
         # Rich outputs get their own pane beside the exec text. A structured
         # view spec (IX_VIEW_MIME) becomes a native `data` pane routed through
-        # the frontend's renderer registry; anything else (tables, plots,
-        # images) keeps the sandboxed html pane.
+        # the frontend's renderer registry — but only when it is the run's SOLE
+        # rich output: a run that also displayed a plot or table keeps the
+        # sandboxed html pane so nothing beside the view is dropped (the view
+        # bundle's text/html fallback renders it there).
         outputs = row.get("outputs") or []
-        if (spec := _view_spec(outputs)) is not None:
+        others_rich = any(_is_rich(out) for out in outputs if not _has_view(out))
+        if not others_rich and (spec := _view_spec(outputs)) is not None:
             panes.append(
                 data_pane(
                     f"{row['id']}/out",

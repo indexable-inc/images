@@ -22,6 +22,7 @@
     end?: number;
     total?: number | null;
     chars?: number;
+    truncated?: boolean;
   }
 
   const view = $derived.by<FileView>(() => {
@@ -56,11 +57,15 @@
   const dirPath = $derived(slash >= 0 ? label.slice(0, slash + 1) : '');
   const icon = $derived(view.file === false ? valueIcon() : fileIcon(fileName));
 
-  // Quiet span meta: the slice when partial, just the length when whole.
+  // Quiet span meta: the slice when partial, just the length when whole. A
+  // display copy clipped below the read span says so instead of posing as it.
+  const clipped = $derived(view.truncated === true || shown.length < end - start + 1);
   const meta = $derived.by(() => {
-    if (view.total != null && start === 1 && end === view.total) return `${view.total} lines`;
+    const note = clipped ? ` · first ${shown.length} shown` : '';
+    if (view.total != null && start === 1 && end === view.total)
+      return `${view.total} lines${note}`;
     const of = view.total != null ? ` / ${view.total}` : '';
-    return `${start}–${end}${of}`;
+    return `${start}–${end}${of}${note}`;
   });
 
   // Per-line highlighted HTML for the whole context (null until the highlighter
