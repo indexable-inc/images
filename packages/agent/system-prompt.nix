@@ -741,11 +741,20 @@ let
     {
       noEmDashes = {
         text = ''
-          Never use an em dash. Use a colon, comma, parentheses, or a new sentence.
+          Never emit an em or en dash: not as a prose pause, not as a
+          name-value or header separator in formatted text, and not inside
+          strings built in tool calls (messages, clipboard payloads, docs).
+          Restructure the sentence so no dash is wanted, varying among a
+          colon, comma, parentheses, and a new sentence; leaning on one
+          substitute everywhere reads just as unnatural.
         '';
         reason = ''
-          User preference: em dash cadence reads as generated prose; the ban keeps
-          writing in the house voice.
+          User preference: em dash cadence reads as generated prose; the ban
+          keeps writing in the house voice. Separators and tool-call strings
+          are named because the bare "never use an em dash" rule failed
+          exactly there ("Name — 93" scorecard headers and pbcopy payloads
+          slipped through while prose stayed clean), and mechanical
+          colon-for-dash swaps produced a new repetitive tic.
         '';
       };
     }
