@@ -19,9 +19,16 @@ lz4_flex = "0.13"
 panes-protocol.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# Error plumbing for the audio connection path only; the window path keeps
+# its original log-and-return style.
+anyhow.workspace = true
 # `RcBlock` for the trace-only MTLDrawable presented handler (tick-to-glass
 # ground truth, see src/trace.rs).
 block2 = "0.6"
+# CoreAudio playback for the guest's PCM stream (vsock port 7102, the
+# protocol crate's `audio` module). Already vendored in the workspace lock
+# via minecraft-sound's rodio.
+cpal = "0.17"
 # Main-queue handoff: the socket reader thread owns the stream and
 # `exec_async`s decoded messages onto the AppKit main thread.
 dispatch2 = "0.3"

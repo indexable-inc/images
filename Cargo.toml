@@ -86,6 +86,7 @@ members = [
   "packages/tui/tui",
   "packages/tui/tui-node",
   "packages/tui/tui-py",
+  "packages/vm/panes/audio",
   "packages/vm/panes/compositor",
   "packages/vm/panes/host",
   "packages/vm/panes/protocol",

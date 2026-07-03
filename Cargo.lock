@@ -7633,6 +7633,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "panes-audio"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "panes-protocol",
+ "tracing",
+ "tracing-subscriber",
+ "vsock",
+]
+
+[[package]]
 name = "panes-compositor"
 version = "0.1.0"
 dependencies = [
@@ -7650,8 +7662,10 @@ dependencies = [
 name = "panes-host"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "block2",
  "clap",
+ "cpal",
  "dispatch2",
  "lz4_flex 0.13.1",
  "objc2",

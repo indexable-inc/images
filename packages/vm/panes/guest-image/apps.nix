@@ -181,11 +181,16 @@ in
       XDG_SESSION_TYPE = "wayland";
       # nixpkgs openal (the portablemc wrapper's LD_LIBRARY_PATH provides it;
       # Maven's arm64 libopenal.so SIGSEGVs, so ./lwjgl-natives.nix omits it
-      # and LWJGL falls through to this one) defaults to the pulse backend,
-      # and the guest has no audio stack at all: force the null backend so
-      # OpenAL initializes and MC runs silent instead of erroring (validated
-      # live).
-      ALSOFT_DRIVERS = "null";
+      # and LWJGL falls through to this one) is built with the native
+      # pipewire backend linked in (ALSOFT_DLOPEN=false, so libpipewire
+      # resolves through the store rpath, no loader help needed). Pin that
+      # backend: the guest's ONLY audio path is the PipeWire graph
+      # (panes-sink -> vsock 7102 -> host CoreAudio, see ./nixos.nix), and
+      # alsoft's other compiled-in backends (pulse, alsa) are dead ends
+      # here -- its pulse probe once aborted the whole client via flite
+      # (see textToSpeechSupport above). The container reaches the socket
+      # through the /run/pipewire bind + PIPEWIRE_RUNTIME_DIR from clientEnv.
+      ALSOFT_DRIVERS = "pipewire";
       # If Vulkan crashes at startup, 26.2 flips itself to "Prefer OpenGL"
       # (rewriting options.txt); that GL path should land on software
       # rendering. Diagnostic-only, data-only toggles (venus is the intended

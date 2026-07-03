@@ -16,7 +16,14 @@ mod mock;
 #[cfg(target_os = "macos")]
 mod app;
 #[cfg(target_os = "macos")]
+mod audio;
+#[cfg(target_os = "macos")]
 mod conn;
+// The jitter buffer is pure logic and compiles everywhere so its unit tests
+// run on any development host; outside macOS nothing calls it, hence the
+// dead_code allow (the compositor's `frame` module pattern).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod jitter;
 #[cfg(target_os = "macos")]
 mod keymap;
 #[cfg(target_os = "macos")]
@@ -43,6 +50,18 @@ struct Cli {
     /// TCP address to connect to instead of a unix socket (debugging).
     #[arg(long, value_name = "ADDR", conflicts_with = "connect")]
     tcp: Option<String>,
+
+    /// Unix socket for the guest's audio stream (the host side of vsock port
+    /// 7102, `--vsock-port 7102:PATH` on the vmkit boot line). Optional: with
+    /// no audio flag the guest runs silent, exactly as before the audio
+    /// channel existed.
+    #[arg(long, value_name = "PATH", conflicts_with = "audio_tcp")]
+    audio_connect: Option<PathBuf>,
+
+    /// TCP address for the guest's audio stream instead of a unix socket
+    /// (debugging, e.g. against `panes-audio --listen-tcp`).
+    #[arg(long, value_name = "ADDR")]
+    audio_tcp: Option<String>,
 
     /// Prefix prepended to every window title.
     #[arg(long, value_name = "PREFIX", default_value = "")]
@@ -100,6 +119,15 @@ fn run_host(cli: Cli) -> ExitCode {
         eprintln!("panes-host: one of --connect, --tcp, --mock, --mock-serve is required");
         return ExitCode::FAILURE;
     };
+
+    // The audio stream rides its own socket (vsock 7102) with its own
+    // supervisor thread; window presentation neither waits for it nor learns
+    // about it.
+    if let Some(path) = cli.audio_connect {
+        audio::spawn(audio::Target::Unix(path));
+    } else if let Some(addr) = cli.audio_tcp {
+        audio::spawn(audio::Target::Tcp(addr));
+    }
 
     app::run(target, cli.title_prefix, cli.native_titlebar)
 }

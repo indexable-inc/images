@@ -28,11 +28,32 @@ let
   runtimeDir = "/run/panes";
   waylandDisplay = "wayland-1";
 
+  # Audio: one fixed PCM format end to end. The PipeWire graph clock, the
+  # protocol-simple tap, and the format panes-audio advertises to the host
+  # must all agree, and these bindings are the single source of truth.
+  audioRate = 48000;
+  audioChannels = 2;
+  # The tap is loopback TCP, not a unix socket, because
+  # module-protocol-simple's unix accept path is dead code in PipeWire 1.6
+  # (module-protocol-simple.c rejects unix clients with `goto error`). App
+  # containers share the guest netns, so loopback keeps it guest-internal.
+  # 7103 continues the panes port numbering (7100 windows, 7102 audio vsock)
+  # even though this one is guest TCP, purely for legibility.
+  audioTapAddr = "127.0.0.1:7103";
+  # The system-wide PipeWire runtime dir (upstream unit: RuntimeDirectory=
+  # pipewire, i.e. %t/pipewire with %t=/run for system units); clients find
+  # the core socket through PIPEWIRE_RUNTIME_DIR.
+  pipewireRuntimeDir = "/run/pipewire";
+
   # Environment every Wayland client container gets; per-app env from apps.nix
   # is merged on top and wins.
   clientEnv = {
     WAYLAND_DISPLAY = waylandDisplay;
     XDG_RUNTIME_DIR = runtimeDir;
+    # Every app gets the audio socket dir too: audio is part of the desktop
+    # contract (like the Wayland socket), and a client that plays nothing
+    # simply never dials it.
+    PIPEWIRE_RUNTIME_DIR = pipewireRuntimeDir;
   };
 
   # Host paths apps want persisted (e.g. /var/lib/minecraft downloads); the
@@ -73,6 +94,17 @@ let
       "/etc/resolv.conf" = {
         hostPath = "/etc/resolv.conf";
         isReadOnly = true;
+      };
+      # The system-wide PipeWire socket dir, for app audio (MC's openal). The
+      # DIR is bound, not the socket file, so a pipewire restart -- which
+      # recreates the socket inside the preserved directory
+      # (RuntimeDirectoryPreserve=yes in the upstream unit) -- stays visible
+      # to running containers. The tmpfiles rule below guarantees the bind
+      # source exists even while pipewire is down (a missing source fails the
+      # whole container).
+      ${pipewireRuntimeDir} = {
+        hostPath = pipewireRuntimeDir;
+        isReadOnly = false;
       };
     }
     # Only GPU apps bind /dev/dri: nspawn fails the whole container when a
@@ -282,26 +314,111 @@ in
   # the .1 gateway; without DHCP the guest has no route out.
   networking.useDHCP = true;
 
-  # Root autologin on the serial console: this guest is a local dev appliance,
-  # and headless debugging (venus state, container journals, poking the MC
-  # launcher) needs a shell on hvc0 even when the network is down.
-  services.getty.autologinUser = "root";
+  services = {
+    # Root autologin on the serial console: this guest is a local dev
+    # appliance, and headless debugging (venus state, container journals,
+    # poking the MC launcher) needs a shell on hvc0 even when the network is
+    # down.
+    getty.autologinUser = "root";
 
-  # sshd is what makes the guest iterable without a full image rebuild + fresh
-  # disk (which wipes /var/lib/minecraft): build the toplevel, `nix copy` it in
-  # over ssh, run its switch-to-configuration (README, "Iterating on the
-  # guest"). gvproxy (`--net`) forwards host 127.0.0.1:2222 -> guest :22 by
-  # default (its -ssh-port flag, default 2222; the guest holds a static DHCP
-  # lease at 192.168.127.2), so no vmkit flag is needed. Root's authorized key
-  # comes from the builder through the `sshAuthorizedKey` package arg
-  # (./default.nix); the stock image bakes NO key on purpose (a repo-built,
-  # cacheable image must not ship a static root credential), so out of the box
-  # nothing can log in.
-  services.openssh = {
-    enable = true;
-    # Key-only root login; the forward is loopback-bound on the host, but a
-    # password prompt on root is still wrong.
-    settings.PermitRootLogin = "prohibit-password";
+    # sshd is what makes the guest iterable without a full image rebuild +
+    # fresh disk (which wipes /var/lib/minecraft): build the toplevel, `nix
+    # copy` it in over ssh, run its switch-to-configuration (README,
+    # "Iterating on the guest"). gvproxy (`--net`) forwards host
+    # 127.0.0.1:2222 -> guest :22 by default (its -ssh-port flag, default
+    # 2222; the guest holds a static DHCP lease at 192.168.127.2), so no
+    # vmkit flag is needed. Root's authorized key comes from the builder
+    # through the `sshAuthorizedKey` package arg (./default.nix); the stock
+    # image bakes NO key on purpose (a repo-built, cacheable image must not
+    # ship a static root credential), so out of the box nothing can log in.
+    openssh = {
+      enable = true;
+      # Key-only root login; the forward is loopback-bound on the host, but a
+      # password prompt on root is still wrong.
+      settings.PermitRootLogin = "prohibit-password";
+    };
+
+    # The guest audio stack (index#1686): PipeWire is the mixer, a null sink
+    # is the guest's one "output device" (libkrun-efi exposes no sound
+    # hardware: its virtio-snd was PipeWire-backend/Linux-host-only, never in
+    # the efi feature set, and is deleted upstream in 2.0), and
+    # module-protocol-simple taps that sink's monitor as raw PCM on loopback
+    # TCP. panes-audio (below) pumps the tap to the macOS host over vsock
+    # 7102, where panes-host plays it on CoreAudio. Apps reach PipeWire
+    # through the /run/pipewire bind + PIPEWIRE_RUNTIME_DIR in clientEnv;
+    # nixpkgs openal links the native pipewire backend directly
+    # (ALSOFT_DLOPEN=false), so no ALSA emulation and no PulseAudio shim is
+    # enabled.
+    pipewire = {
+      enable = true;
+      # No user sessions in this guest: the compositor and app containers run
+      # as system units, so the sound server must too.
+      systemWide = true;
+      extraConfig.pipewire."60-panes-audio" = {
+        "context.properties" = {
+          # Graph clock. 512/48000 ~= 10.7 ms: small enough that the tap (and
+          # so the host jitter buffer) is fed well inside the <50 ms budget,
+          # big enough that a non-realtime VM vCPU (no rtkit in the guest)
+          # does not xrun on every scheduling hiccup.
+          "default.clock.rate" = audioRate;
+          "default.clock.quantum" = 512;
+          "default.clock.min-quantum" = 256;
+          "default.clock.max-quantum" = 1024;
+        };
+        "context.objects" = [
+          {
+            # The virtual output device. Present from boot (unlike a
+            # protocol-simple `media.class = Audio/Sink` stream, which would
+            # exist only while the tap client is connected), so app audio
+            # init never depends on the daemon being up.
+            factory = "adapter";
+            args = {
+              "factory.name" = "support.null-audio-sink";
+              "node.name" = "panes-sink";
+              "node.description" = "panes host audio";
+              "media.class" = "Audio/Sink";
+              "audio.rate" = audioRate;
+              "audio.channels" = audioChannels;
+              "audio.position" = [
+                "FL"
+                "FR"
+              ];
+            };
+          }
+        ];
+        "context.modules" = [
+          {
+            # Raw-PCM tap on the sink's monitor: each client connecting to
+            # server.address is fed the mix as s16le with NO protocol around
+            # it. This is what lets panes-audio be a dumb framing pump with
+            # no audio-library dependency in the Rust workspace.
+            name = "libpipewire-module-protocol-simple";
+            args = {
+              capture = true;
+              playback = false;
+              "audio.format" = "S16LE";
+              "audio.rate" = audioRate;
+              "audio.channels" = audioChannels;
+              "audio.position" = [
+                "FL"
+                "FR"
+              ];
+              "server.address" = [ "tcp:${audioTapAddr}" ];
+              "capture.props" = {
+                "target.object" = "panes-sink";
+                # Capture what the sink plays (its monitor), not an input.
+                "stream.capture.sink" = true;
+                "node.name" = "panes-pcm-tap";
+              };
+            };
+          }
+        ];
+      };
+    };
+
+    # pipewire.service is `BindsTo=dbus.service` (upstream unit) and nothing
+    # else in this headless guest enables dbus.
+    dbus.enable = true;
   };
 
   # Populates /run/opengl-driver (lib + share/vulkan/icd.d) with mesa, which
@@ -320,6 +437,10 @@ in
     # db) did not run. Nothing runs nix inside the containers.
     "d /nix/var/nix/db 0755 root root -"
     "d /nix/var/nix/daemon-socket 0755 root root -"
+    # Bind source for the app containers' audio socket dir (see mkAppContainer)
+    # regardless of pipewire's state; ownership matches the upstream unit's
+    # RuntimeDirectory=pipewire so the service adopts it unchanged.
+    "d ${pipewireRuntimeDir} 0755 pipewire pipewire -"
   ]
   ++ map (bind: "d ${bind} 0755 root root -") appBinds
   ++ lib.mapAttrsToList (dest: source: "C ${dest} 0644 root root - ${source}") appSeedFiles;
@@ -379,6 +500,34 @@ in
         };
       };
 
+      panes-audio = {
+        description = "panes audio pump (PipeWire mix -> vsock 7102)";
+        wantedBy = [ "multi-user.target" ];
+        # The PCM tap is pipewire's own TCP listener, and system-wide
+        # pipewire is otherwise only socket-activated (first core-socket
+        # client would start it): pull it up at boot so audio does not wait
+        # for an app to touch /run/pipewire first. The daemon still retries
+        # the tap with backoff, so the ordering is comfort, not correctness.
+        wants = [ "pipewire.service" ];
+        after = [ "pipewire.service" ];
+        serviceConfig = {
+          # Flags restate the format bindings at the top of this file: the
+          # daemon advertises exactly what the tap is configured to emit.
+          ExecStart = builtins.concatStringsSep " " [
+            (lib.getExe pkgs.panes-audio)
+            "--pcm-tcp ${audioTapAddr}"
+            "--rate ${toString audioRate}"
+            "--channels ${toString audioChannels}"
+          ];
+          Restart = "on-failure";
+          RestartSec = 2;
+          # Mirror to the serial console like the compositor: the boot smoke
+          # reads service state off hvc0.
+          StandardOutput = "journal+console";
+          StandardError = "journal+console";
+        };
+      };
+
       # Boot-time diagnostic kept on purpose: prints the Vulkan device list to
       # the serial console so a headless `vmkit boot-linux --gpu` smoke run can
       # assert the venus path end to end. With --gpu it must show a
@@ -424,6 +573,8 @@ in
         path = [
           pkgs.systemd
           pkgs.iproute2
+          # pw-cli, for the audio-graph evidence below.
+          pkgs.pipewire
         ];
         serviceConfig = {
           Type = "oneshot";
@@ -445,6 +596,12 @@ in
           ip route show default || true
           ls -la /run/panes 2>&1 || true
           df -h / || true
+          # Audio evidence: services up, and the graph shows the null sink +
+          # protocol-simple tap (grep for their node.names). A headless smoke
+          # run asserts on PANES-AUDIO-NODES-ABSENT never appearing.
+          systemctl is-active pipewire panes-audio || true
+          PIPEWIRE_RUNTIME_DIR=/run/pipewire pw-cli ls Node 2>&1 \
+            | grep -E "node.name|media.class" || echo "PANES-AUDIO-NODES-ABSENT"
           echo "===PANES-BOOT-REPORT-END==="
         '';
       };
@@ -452,10 +609,12 @@ in
 
   containers = lib.mapAttrs mkAppContainer apps;
 
-  # For live poking at the GPU stack over the serial console.
+  # For live poking at the GPU and audio stacks over the serial console
+  # (pw-cli/pw-top need PIPEWIRE_RUNTIME_DIR=/run/pipewire, system-wide mode).
   environment.systemPackages = [
     pkgs.vulkan-tools
     pkgs.pciutils
+    pkgs.pipewire
   ];
 
   # Trim the image; the compositor is the UI, there is no doc consumer.

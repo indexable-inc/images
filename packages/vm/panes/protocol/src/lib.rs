@@ -19,6 +19,8 @@
 //!   speak-first ordering); each validates the peer major before any other
 //!   message and hangs up on mismatch.
 
+pub mod audio;
+
 use serde::{Deserialize, Serialize};
 
 /// Peers refuse a mismatched major and hang up.
@@ -292,13 +294,29 @@ pub fn write_msg<T: Serialize>(w: &mut impl std::io::Write, msg: &T) -> Result<(
 /// [`WireError::TooLarge`] for a length prefix past [`MAX_FRAME`] (nothing is
 /// allocated), and [`WireError::Codec`] if the payload fails to decode.
 pub fn read_msg<T: for<'de> Deserialize<'de>>(r: &mut impl std::io::Read) -> Result<T, WireError> {
+    read_msg_bounded(r, MAX_FRAME)
+}
+
+/// [`read_msg`] with a caller-chosen frame cap.
+///
+/// The audio stream's biggest legitimate message is a few KiB of PCM (see
+/// [`audio::MAX_FRAME`]), so its readers bound a hostile length prefix far
+/// below the window stream's 64 MB.
+///
+/// # Errors
+/// As [`read_msg`], with [`WireError::TooLarge`] against `cap` instead of
+/// [`MAX_FRAME`].
+pub fn read_msg_bounded<T: for<'de> Deserialize<'de>>(
+    r: &mut impl std::io::Read,
+    cap: usize,
+) -> Result<T, WireError> {
     let mut len = [0u8; 4];
     r.read_exact(&mut len)?;
     // u32 -> usize only narrows on 16-bit targets the workspace does not
     // support; mapping that impossibility to TooLarge (the same rejection an
     // over-cap prefix gets) keeps this panic-free without a lossy fallback.
     let len = usize::try_from(u32::from_le_bytes(len)).map_err(|_| WireError::TooLarge(usize::MAX))?;
-    if len > MAX_FRAME {
+    if len > cap {
         return Err(WireError::TooLarge(len));
     }
     let mut buf = vec![0u8; len];

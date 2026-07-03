@@ -39,7 +39,7 @@ let
       {
         nixpkgs.overlays = [
           (final: prev: {
-            inherit (repoPackages) panes-compositor;
+            inherit (repoPackages) panes-compositor panes-audio;
             # ./pins.json also carries the mesa src pin, so hand
             # lwjgl-natives.nix only the lwjgl-* entries (it asserts one
             # shared LWJGL version across its pins).

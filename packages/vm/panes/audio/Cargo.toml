@@ -1,0 +1,28 @@
+# Guest-side audio pump: reads the raw PCM mix from PipeWire's
+# protocol-simple tap and ships it to panes-host over vsock port 7102 with
+# panes-protocol's audio framing (see that crate's `audio` module for the wire
+# contract and index#1686 for the design).
+#
+# Like the compositor, the Linux-only transport (AF_VSOCK) is target-gated so
+# the portable core (handshake + pump + framing) compiles and unit-tests on
+# any development host, which also keeps the Linux clippy pass meaningful.
+[package]
+name = "panes-audio"
+version = "0.1.0"
+edition = "2024"
+description = "Guest daemon shipping the PipeWire PCM mix to the macOS host over vsock"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive"] }
+panes-protocol.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# AF_VSOCK listener for libkrun's vsock port map (std has no vsock support).
+vsock = "0.5"
+
+[lints]
+workspace = true

@@ -13,8 +13,12 @@ macOS host                          aarch64-linux guest (libkrun-efi, vmkit)
 |  one NSWindow    |  panes-protocol|   socket: /run/panes/wayland-1       |
 |  per toplevel,   |  postcard      +--------------------------------------+
 |  input forwarded |  frames        | nspawn containers, one per app       |
-+------------------+                |   demo | term | minecraft | ...      |
-                                    |   each binds /run/panes + /dev/dri   |
+|                  |                |   demo | term | minecraft | ...      |
+|  CoreAudio out   |   vsock 7102   |   each binds /run/panes + /dev/dri   |
+|  (jitter buffer) |<---------------|     + /run/pipewire                  |
++------------------+   s16le PCM    +--------------------------------------+
+                                    | pipewire (system-wide): null sink    |
+                                    |   "panes-sink" -> panes-audio pump   |
                                     +--------------------------------------+
 ```
 
@@ -31,7 +35,12 @@ macOS host                          aarch64-linux guest (libkrun-efi, vmkit)
   Wayland compositor. Each `xdg_toplevel` becomes a window on the host; no
   DRM output, no seat, no logind, it composites nothing and only exports.
 - [`host/`](host/) (`panes-host`): macOS agent that owns the NSWindows and
-  forwards input back.
+  forwards input back; with `--audio-connect` it also plays the guest's PCM
+  stream on the default CoreAudio output through a small jitter buffer.
+- [`audio/`](audio/) (`panes-audio`): guest daemon pumping the PipeWire mix
+  (raw s16le PCM from a `module-protocol-simple` tap) to the host over vsock
+  port 7102. Its wire contract is the protocol crate's `audio` module: same
+  framing, separate versioning, so the window protocol never changes.
 - [`guest-image/`](guest-image/) (`panes-guest-image`): the bootable
   aarch64-linux NixOS raw-efi disk wiring it all up: the compositor as a
   systemd service plus one autostarted systemd-nspawn container per app.
@@ -55,7 +64,10 @@ truncate -s 8G /tmp/panes-guest.raw
 # mounts it nofail, so booting without it still works.
 truncate -s 10G /tmp/panes-data.raw
 nix run .#vmkit -- boot-linux --disk /tmp/panes-guest.raw --disk /tmp/panes-data.raw \
-  --gpu --net --memory-mib 6144 --cpus 6 --timeout-secs 0
+  --gpu --net --memory-mib 6144 --cpus 6 --timeout-secs 0 \
+  --vsock-port 7100:/tmp/panes.sock --vsock-port 7102:/tmp/panes-audio.sock
+# Then, on the host:
+nix run .#panes-host -- --connect /tmp/panes.sock --audio-connect /tmp/panes-audio.sock
 ```
 
 `--disk` is repeatable: the first is the boot disk (guest `/dev/vda`), each
@@ -131,6 +143,32 @@ Details: [`vmkit/docs/linux-libkrun.md`](../vmkit/docs/linux-libkrun.md).
 > plumbing above (16K kernel, ICD, `/dev/dri` binds) is ready; enabling the
 > feature in the guest-image build is the remaining step for accelerated
 > window content (index#1686).
+
+## Audio
+
+Sound from guest apps plays on the Mac (index#1686). libkrun has no usable
+sound device on macOS (1.19.3's virtio-snd is PipeWire-host-only, absent from
+the `efi` feature set, and deleted upstream in 2.0), so audio rides a second
+vsock port instead, end to end:
+
+```
+app (openal, ALSOFT_DRIVERS=pipewire)
+  -> pipewire (system-wide) null sink "panes-sink"     guest mixer
+  -> module-protocol-simple tap (raw s16le, tcp:127.0.0.1:7103)
+  -> panes-audio (frames PCM, vsock port 7102)
+  -> panes-host --audio-connect (jitter buffer ~24 ms -> CoreAudio)
+```
+
+Boot with `--vsock-port 7102:/tmp/panes-audio.sock` and point
+`panes-host --audio-connect` at that socket (see the boot line above); both
+ends reconnect with backoff, and a host without `--audio-connect` (or a guest
+without the daemon) just runs silent. Latency budget: ~10.7 ms PipeWire
+quantum + 24 ms host jitter-buffer target + ~10 ms CoreAudio output buffer,
+under 50 ms end to end; the jitter buffer trades continuity for latency
+(underrun plays silence and re-primes, overrun drops the oldest audio) as
+game sound wants. On the serial console, `panes-boot-report` prints the
+PipeWire node list (`panes-sink` must appear; `PANES-AUDIO-NODES-ABSENT`
+means the audio graph is down).
 
 Networking: `--net` runs gvproxy (`192.168.127.0/24`); the image DHCPs its
 NIC. App containers share the host network namespace, so e.g. Minecraft can
