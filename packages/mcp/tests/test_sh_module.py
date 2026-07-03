@@ -51,6 +51,16 @@ def test_successful_output_is_truthy_even_when_empty() -> None:
     assert "[exit" not in repr(out)
 
 
+def test_hint_rides_inside_the_failure_markers() -> None:
+    # A hinted failure (e.g. a bare `grep` exiting 1) must still END with the
+    # exit marker: the hint sits between the output and the trailing marker.
+    out = sh.Output(cmd="grep foo bar.txt", code=1, raw="", duration=0.1, hint="use grep()")
+    rendered = repr(out)
+    assert rendered.splitlines()[0].startswith("[exit 1]"), rendered
+    assert "[hint: use grep()]" in rendered, rendered
+    assert rendered.rstrip().endswith("[exit 1]"), rendered
+
+
 def test_long_command_is_truncated_in_failure_line() -> None:
     cmd = "nix build " + " ".join(f".#pkg{i}" for i in range(60))
     out = sh.Output(cmd=cmd, code=2, raw="boom\n", duration=1.0)

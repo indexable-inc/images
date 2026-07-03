@@ -4276,6 +4276,10 @@ let
         nomatch = await sh.sh("grep zzz-no-such /dev/null", cwd=".")
         assert not nomatch.ok and nomatch.code == 1, nomatch.code
         assert "[exit" not in nomatch.text, repr(nomatch.text)
+        # grep also carries a structured-owner hint; it rides INSIDE the
+        # failure markers, so the model text still ends with [exit N].
+        assert "[hint:" in nomatch.llm_result, nomatch.llm_result
+        assert nomatch.llm_result.rstrip().endswith("[exit 1]"), nomatch.llm_result
 
         # check=True turns a non-zero exit into a typed error carrying the output.
         try:

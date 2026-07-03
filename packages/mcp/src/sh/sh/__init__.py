@@ -350,6 +350,13 @@ class Output(_ResultBase):
 
     def _render_text(self) -> str:
         body = self.text
+        if self.hint:
+            # Model view only: the human's terminal block stays clean. The hint
+            # teaches the structured alternative at the exact moment the weaker
+            # tool was reached for, which survives instruction truncation. It
+            # rides INSIDE the failure markers (below), so a failed Output's
+            # model text still ends with `[exit N]` as documented.
+            body = f"{body}\n[hint: {self.hint}]" if body else f"[hint: {self.hint}]"
         if self.code != 0:
             # Flag a failure at BOTH ends so the model never reads non-zero
             # output as success: the leading line survives a head-read (and the
@@ -357,11 +364,6 @@ class Output(_ResultBase):
             # marker survives a tail-read. `.text` itself stays marker-free.
             marker = f"[exit {self.code}]"
             body = f"{self._failure_line()}\n{body}\n{marker}" if body else self._failure_line()
-        if self.hint:
-            # Model view only: the human's terminal block stays clean. The hint
-            # teaches the structured alternative at the exact moment the weaker
-            # tool was reached for, which survives instruction truncation.
-            body = f"{body}\n[hint: {self.hint}]" if body else f"[hint: {self.hint}]"
         return body
 
     def _render_html(self) -> str:
@@ -659,7 +661,11 @@ async def sh(
         # paging a backgrounded build sees the death even when the Output value
         # is never bound or rendered (issue #1766: a build dead on ENOSPC read
         # as still-compiling for 25 minutes).
-        lead = "" if not out.raw or out.raw.endswith("\n") else "\n"
+        # Decide the separator from the STRIPPED tail: the echoed stream is
+        # escape-stripped, so raw ending in a bare color-reset escape (no
+        # newline) must not produce a spurious blank line before the marker.
+        tail = _strip_ansi(out.raw[-64:])
+        lead = "" if not tail or tail.endswith("\n") else "\n"
         sys.stdout.write(lead + out._failure_line() + "\n")
     if check and not out.ok:
         raise ShellError(out)
