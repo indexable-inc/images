@@ -157,16 +157,15 @@ in
       # virtio-gpu PCI device (1af4:1050) if more than one ICD is visible.
       VK_DRIVER_FILES = "${pkgs.mesa}/share/vulkan/icd.d/virtio_icd.aarch64.json";
       MESA_VK_DEVICE_SELECT = "1af4:1050!";
-      # 26.2's Vulkan backend hard-requires VK_KHR_synchronization2, which
-      # venus can never pass through on this host stack: mesa's venus driver
-      # (vn_physical_device.c, vn_physical_device_get_passthrough_extensions)
-      # gates sync2 on renderer-side SYNC_FD semaphore import, and the
-      # macOS/MoltenVK renderer has no sync files — no virglrenderer/MoltenVK
-      # pin bump changes that (MoltenVK itself has had sync2 since 1.2.6).
-      # Khronos' emulation layer advertises the extension and translates
-      # sync2 calls onto the core 1.2 venus device instead. The manifest's
-      # library_path is store-absolute, so VK_LAYER_PATH alone is enough for
-      # the loader inside the container.
+      # 26.2's Vulkan backend hard-requires VK_KHR_synchronization2. The
+      # guest mesa (indexable-inc/mesa fork, see ../guest-image/default.nix
+      # and index#1742) now exposes sync2 natively by handling temporary sync
+      # fd semaphore imports driver-side, so Khronos' emulation layer is a
+      # passthrough no-op here: with force_enable unset it self-retires when
+      # the driver advertises the extension. It stays wired as the fallback
+      # if the driver ever masks sync2 again (e.g. a mesa bump without the
+      # rebased fork patch). The manifest's library_path is store-absolute,
+      # so VK_LAYER_PATH alone is enough for the loader inside the container.
       VK_LAYER_PATH = "${pkgs.vulkan-extension-layer}/share/vulkan/explicit_layer.d";
       VK_INSTANCE_LAYERS = "VK_LAYER_KHRONOS_synchronization2";
       XDG_SESSION_TYPE = "wayland";
