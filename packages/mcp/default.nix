@@ -2880,9 +2880,7 @@ let
   # tests need ty resolvable and its diagnostics stable, so ty is provided on the
   # env exactly as the wrapper sets it; rg/fd back the fsearch limit assertion.
   # A dedicated interpreter adds pytest (the bare mcpPython omits it).
-  typecheckTestPython = mcpPythonInterp.withPackages (
-    ps: (mcpPythonPackages ps) ++ [ ps.pytest ]
-  );
+  typecheckTestPython = mcpPythonInterp.withPackages (ps: (mcpPythonPackages ps) ++ [ ps.pytest ]);
   typecheckSmoke =
     pkgs.runCommand "ix-mcp-typecheck-smoke"
       {
