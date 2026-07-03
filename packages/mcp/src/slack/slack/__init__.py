@@ -31,11 +31,13 @@ human reply into the connected agent session as a channel event (the kernel's
 ``notify()``), so a session that posts a question hears the answer without
 polling. A top-level post is also seeded with a one-dot (``"."``) threaded
 reply so the channel shows a thread and nudges people to answer in-thread
-(where the watcher listens) instead of scattering replies in the channel. Opt
-out per call with ``send(..., watch=False)`` / ``seed_thread=False``, manage
-watches with :func:`watch` / :func:`unwatch` / :func:`watches`. Watching needs
-the server-managed kernel (the notification channel); elsewhere ``send`` still
-posts and reports ``watching=False``.
+(where the watcher listens) instead of scattering replies in the channel --
+but only when a watcher will actually consume it (or ``watch=False``
+explicitly asked for the nudge anyway), so a seed never lands with nothing
+listening. Opt out per call with ``send(..., watch=False)`` /
+``seed_thread=False``, manage watches with :func:`watch` / :func:`unwatch` /
+:func:`watches`. Watching needs the server-managed kernel (the notification
+channel); elsewhere ``send`` still posts and reports ``watching=False``.
 
 The token's reach is whatever OAuth scopes the Slack app was granted, so a
 search or DM read can fail with ``missing_scope``; the error names the scope to
@@ -206,6 +208,15 @@ _WATCH_TTL_SECONDS = 48 * 3600.0
 # Hard cap on concurrently watched threads; the oldest-expiring watch is evicted
 # first. High enough that a real session never hits it.
 _WATCH_MAX = 32
+
+# Page cap when watch() bootstraps last_seen_ts from an existing thread's
+# replies. 50 pages * 100/page = 5000 replies -- beyond any sane watch
+# bootstrap. If a thread is that deep, last_seen_ts falls back to the max ts
+# seen across the pages walked so far, which can be older than replies still
+# unread on later pages: the next poll then re-delivers at most that unread
+# tail as "new". Accepted, because it is the safe direction (duplicates over
+# silently losing replies), and it can only happen on a thread this size.
+_WATCH_BOOTSTRAP_MAX_PAGES = 50
 
 
 @dataclasses.dataclass
@@ -390,17 +401,24 @@ async def watch(channel: str, thread_ts: str) -> dict[str, Any]:
     _require_incognito()
     token = _token()
     channel_id = await asyncio.to_thread(_resolve_channel, channel, token)
-    # Start from "now": the newest ts already in the thread.
-    data = await asyncio.to_thread(
-        _api_call,
-        "conversations.replies",
-        token,
-        {"channel": channel_id, "ts": thread_ts, "limit": 100},
-    )
-    newest = max(
-        (str(m.get("ts", "")) for m in data.get("messages", [])),
-        default=thread_ts,
-    )
+    # Start from "now": the newest ts already in the thread. Slack pages
+    # conversations.replies oldest-first, so the true newest reply can land on
+    # any page -- walk every page (capped) instead of trusting the first
+    # page's max, which would misdate last_seen_ts and cause the next poll to
+    # re-deliver already-seen replies as new.
+    newest = thread_ts
+    cursor = ""
+    for _ in range(_WATCH_BOOTSTRAP_MAX_PAGES):
+        params: dict[str, Any] = {"channel": channel_id, "ts": thread_ts, "limit": 100}
+        if cursor:
+            params["cursor"] = cursor
+        data = await asyncio.to_thread(_api_call, "conversations.replies", token, params)
+        page_ts = [str(m.get("ts", "")) for m in data.get("messages", [])]
+        if page_ts:
+            newest = max(newest, *page_ts)
+        cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
+        if not cursor:
+            break
     watching = _register_watch(channel_id, thread_ts, newest)
     return {"watching": watching, "channel": channel_id, "thread_ts": thread_ts}
 
@@ -1002,8 +1020,11 @@ async def send(
     (``watch=False`` opts out; ``watching`` in the return says whether a
     delivery channel exists). A top-level post is also seeded with a ``"."``
     threaded reply so the channel shows a thread and answers land in it, where
-    the watcher listens (``seed_thread=False`` opts out; a failed seed never
-    fails the send -- the error comes back as ``seed_error``).
+    the watcher listens -- but only when either a watcher will consume it (a
+    delivery channel exists) or ``watch=False`` explicitly asked for the nudge
+    anyway; otherwise no seed is posted, since a "." with nothing listening is
+    a spurious reply (``seed_thread=False`` opts out unconditionally; a failed
+    seed never fails the send -- the error comes back as ``seed_error``).
 
     Returns ``{"ok": True, "ts": "<timestamp>", "channel": "<id>",
     "thread_ts": "<parent ts, or "">", "watching": bool}`` on success
@@ -1040,10 +1061,21 @@ async def send(
     # message otherwise. Replies newer than what we just wrote notify.
     watch_root = thread_ts or str(out["ts"])
     last_seen = str(out["ts"])
+    delivery_available = _resolve_notify() is not None
 
     # No seed in DMs: a one-on-one already reads as a conversation, and a
-    # trailing "." there is just noise.
-    seedable = seed_thread and not thread_ts and str(out["ts"]) and not channel_id.startswith("D")
+    # trailing "." there is just noise. Otherwise seed only when either a
+    # watcher will actually consume it (delivery_available) or the caller
+    # explicitly asked for the thread nudge regardless of watching
+    # (watch=False, seed_thread=True): a "." with no watcher and no explicit
+    # ask is a spurious reply nobody reads.
+    seedable = (
+        seed_thread
+        and not thread_ts
+        and str(out["ts"])
+        and not channel_id.startswith("D")
+        and (delivery_available or not watch)
+    )
     if seedable:
         try:
             seed = await asyncio.to_thread(

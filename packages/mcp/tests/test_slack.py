@@ -350,6 +350,69 @@ def test_poll_drains_with_one_notice_on_permanent_auth_failure(
     assert "2 watch(es) dropped" in content
 
 
+def test_watch_pages_through_replies_for_true_newest(
+    fresh_watch_state: list[tuple[str, dict[str, str]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """watch() must not trust the first page's max ts: the true newest reply
+    can land on a later page, and stopping early would misdate last_seen_ts
+    (causing already-seen replies past page 1 to be redelivered as new)."""
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-test")
+    monkeypatch.delenv(slack.SHARED_ENV, raising=False)
+    calls: list[dict[str, Any]] = []
+
+    def fake_api(method: str, token: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        params = params or {}
+        assert method == "conversations.replies"
+        calls.append(params)
+        if not params.get("cursor"):
+            return {
+                "ok": True,
+                "messages": [{"ts": _PARENT_TS}, {"ts": "1781738600.000001"}],
+                "response_metadata": {"next_cursor": "page2"},
+            }
+        assert params["cursor"] == "page2"
+        return {
+            "ok": True,
+            "messages": [{"ts": "1781739900.000002"}],
+            "response_metadata": {"next_cursor": ""},
+        }
+
+    monkeypatch.setattr(slack, "_api_call", fake_api)
+    out = asyncio.run(slack.watch(_CHANNEL_ID, _PARENT_TS))
+    assert len(calls) == 2
+    assert out["watching"] is True
+    assert slack._watches[(_CHANNEL_ID, _PARENT_TS)].last_seen_ts == "1781739900.000002"
+
+
+def test_send_without_delivery_channel_skips_seed_when_watching(
+    monkeypatch: pytest.MonkeyPatch,
+    threaded_api: list[tuple[str, dict[str, Any]]],
+) -> None:
+    """No delivery channel + watch=True (the default): the seed would have no
+    watcher to consume it, so it must not be posted."""
+    monkeypatch.setattr(slack, "_watches", {})
+    monkeypatch.setattr(slack, "_resolve_notify", lambda: None)
+    out = asyncio.run(slack.send(_CHANNEL_ID, "hello"))
+    assert len([m for m, _ in threaded_api if m == "chat.postMessage"]) == 1
+    assert out["watching"] is False
+    assert "seed_error" not in out
+
+
+def test_send_without_delivery_channel_seeds_when_watch_explicitly_false(
+    monkeypatch: pytest.MonkeyPatch,
+    threaded_api: list[tuple[str, dict[str, Any]]],
+) -> None:
+    """No delivery channel but watch=False + seed_thread=True: the caller
+    explicitly asked for the thread nudge regardless of watching, so the seed
+    still posts."""
+    monkeypatch.setattr(slack, "_watches", {})
+    monkeypatch.setattr(slack, "_resolve_notify", lambda: None)
+    out = asyncio.run(slack.send(_CHANNEL_ID, "hello", watch=False))
+    assert len([m for m, _ in threaded_api if m == "chat.postMessage"]) == 2
+    assert out["watching"] is False
+
+
 def test_send_skips_seed_in_dms(
     fresh_watch_state: list[tuple[str, dict[str, str]]],
     threaded_api: list[tuple[str, dict[str, Any]]],
