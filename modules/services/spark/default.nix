@@ -359,7 +359,13 @@ in
     };
     users.groups.spark = { };
 
-    networking.firewall = mkIf cfg.openFirewall {
+    # Scoped to the tailscale interface, never the global firewall: Spark's
+    # master RPC and Connect server carry no authentication (submitting a job
+    # is code execution), and a fleet host can also have a PUBLIC interface --
+    # a global `allowedTCPPorts` would have exposed them to the internet
+    # (index#1800 review, same class as ix-ray). The daemons bind the
+    # tailscale IPv4, so that interface is exactly where these ports may open.
+    networking.firewall.interfaces."tailscale0" = mkIf cfg.openFirewall {
       allowedTCPPorts =
         # Pinned inter-node data-plane ports (driver + block managers), opened on
         # every node so executors and the driver reach each other over the tailnet.

@@ -2657,24 +2657,48 @@ let
       }
       {
         # The head opens the GCS (workers join), the Ray Client server
-        # (off-cluster `ray://` drivers), exec, and pinned inter-node ports.
+        # (off-cluster `ray://` drivers), exec, and pinned inter-node ports --
+        # on the tailscale interface only.
         assertion =
           let
-            ports = ixRayHead.networking.firewall.allowedTCPPorts;
+            ports = ixRayHead.networking.firewall.interfaces."tailscale0".allowedTCPPorts;
           in
           builtins.elem 6379 ports
           && builtins.elem 10001 ports
           && builtins.elem 8799 ports
           && builtins.elem 6380 ports
           && builtins.elem 6381 ports;
-        message = "ix-ray head should open the GCS, client-server, exec, and inter-node manager ports";
+        message = "ix-ray head should open the GCS, client-server, exec, and inter-node manager ports on tailscale0";
+      }
+      {
+        # Ray's GCS and Client server are unauthenticated (reaching them is
+        # arbitrary code execution), so NOTHING may open them on the global
+        # firewall: a fleet host can also face the internet, and a global
+        # `allowedTCPPorts` would have published `ray://<public-ip>:10001`
+        # (index#1800 review).
+        assertion =
+          let
+            globalPorts = ixRayHead.networking.firewall.allowedTCPPorts;
+            globalRanges = ixRayHead.networking.firewall.allowedTCPPortRanges;
+            rayPorts = [
+              6379
+              6380
+              6381
+              8798
+              8799
+              10001
+            ];
+          in
+          builtins.all (p: !(builtins.elem p globalPorts)) rayPorts
+          && builtins.all (r: !(r.from == 10002 && r.to == 10031)) globalRanges;
+        message = "ix-ray must never open its ports on the global firewall, only on tailscale0";
       }
       {
         # A worker opens its inter-node + exec ports, but neither the GCS nor the
         # client-server port (only the head serves those).
         assertion =
           let
-            ports = ixRayWorker.networking.firewall.allowedTCPPorts;
+            ports = ixRayWorker.networking.firewall.interfaces."tailscale0".allowedTCPPorts;
           in
           builtins.elem 8799 ports
           && builtins.elem 6380 ports
@@ -2765,20 +2789,38 @@ let
         message = "ix-spark master should run master + worker + connect daemons";
       }
       {
-        # Connect (15002) and master RPC (7077) are opened on the master.
+        # Connect (15002) and master RPC (7077) are opened on the master, on
+        # the tailscale interface only.
         assertion =
           let
-            ports = ixSparkMaster.networking.firewall.allowedTCPPorts;
+            ports = ixSparkMaster.networking.firewall.interfaces."tailscale0".allowedTCPPorts;
           in
           builtins.elem 15002 ports && builtins.elem 7077 ports;
-        message = "ix-spark master should open the Connect (15002) and master (7077) ports";
+        message = "ix-spark master should open the Connect (15002) and master (7077) ports on tailscale0";
+      }
+      {
+        # Spark's master RPC and Connect server are unauthenticated (a job
+        # submission is code execution), so nothing may open them on the GLOBAL
+        # firewall -- same exposure class as ix-ray (index#1800 review).
+        assertion =
+          let
+            globalPorts = ixSparkMaster.networking.firewall.allowedTCPPorts;
+          in
+          builtins.all (p: !(builtins.elem p globalPorts)) [
+            7077
+            7078
+            7079
+            7080
+            15002
+          ];
+        message = "ix-spark must never open its ports on the global firewall, only on tailscale0";
       }
       {
         # A worker only runs a worker joining the remote master: no master, no
         # connect, and it must not open the master's ports.
         assertion =
           let
-            ports = ixSparkWorker.networking.firewall.allowedTCPPorts;
+            ports = ixSparkWorker.networking.firewall.interfaces."tailscale0".allowedTCPPorts;
           in
           (ixSparkWorker.systemd.services ? spark-worker)
           && !(ixSparkWorker.systemd.services ? spark-master)

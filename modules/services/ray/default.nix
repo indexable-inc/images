@@ -205,7 +205,10 @@ in
       description = ''
         This node's role in the single cluster. Exactly one node must be `head`
         (it runs the GCS); every other node is a `worker` and must set
-        {option}`services.ix-ray.headAddress`.
+        {option}`services.ix-ray.headAddress`. The GCS is not HA (no external
+        Redis), so a head restart resets cluster state: in-flight tasks and
+        object refs are lost, and every raylet re-registers on its
+        `Restart=on-failure` -- a reset, not an orphaned cluster.
       '';
     };
 
@@ -353,9 +356,11 @@ in
       description = ''
         Open the inter-node Ray ports (node/object manager, worker range), the
         exec port, the mesh discovery port (when the notebook engine runs),
-        and on the head the GCS + client-server ports. Usually
-        unnecessary on a tailnet where peers reach each other directly, but
-        required if a firewall guards the tailscale interface.
+        and on the head the GCS + client-server ports -- on the tailscale
+        interface ONLY, never the global firewall (Ray has no per-call auth,
+        so these ports must stay unreachable from any public interface).
+        Usually unnecessary on a tailnet where peers reach each other
+        directly, but required if a firewall guards the tailscale interface.
       '';
     };
   };
@@ -376,7 +381,15 @@ in
       }
     ];
 
-    networking.firewall = mkIf cfg.openFirewall {
+    # Scoped to the tailscale interface, never the global firewall: Ray's GCS
+    # and Client server carry NO authentication (any peer that can reach them
+    # runs arbitrary code), and a fleet host can also have a PUBLIC interface.
+    # A global `allowedTCPPorts` would have exposed `ray://<public-ip>:10001`
+    # to the internet (index#1800 review). The daemons bind the tailscale IPv4,
+    # and the tailnet is the module's stated trust boundary, so the tailscale
+    # interface is exactly where these ports may open. `tailscale0` is
+    # tailscaled's default (and the fleet's) interface name.
+    networking.firewall.interfaces."tailscale0" = mkIf cfg.openFirewall {
       allowedTCPPorts = [
         cfg.execPort
         cfg.nodeManagerPort
