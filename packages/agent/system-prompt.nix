@@ -477,35 +477,39 @@ let
     {
       wallTimeBudget = {
         text = ''
-          Treat wall time as a first-class cost. Before launching any operation
-          expected to run longer than about a minute, state its expected duration
-          and run it in the background with a monitor; never foreground-block a
-          tool slot on it. Prefer the plan that finishes soonest: parallelize
-          independent work, keep the main thread acting while background work
-          runs, and between validation strategies pick the one that yields signal
-          sooner.
+          Treat wall time as a first-class cost. Before launching an operation
+          expected to run longer than about a minute, state its expected
+          duration, and when other work can proceed meanwhile, run it in the
+          background with a monitor instead of foreground-blocking a tool slot.
+          A blocking critical-path operation with nothing to parallelize may run
+          foreground. Among strategies of equal rigor, pick the one that yields
+          signal soonest.
         '';
         reason = ''
-          An agent foreground-waited a 600s Bash timeout on a long build instead
-          of backgrounding it with a log-tail monitor, idling the session for the
-          whole build.
+          Foreground-blocking on long operations idles the whole session. An
+          agent foreground-waited a 600s Bash timeout on a long build instead of
+          backgrounding it with a log-tail monitor.
         '';
       };
     }
     {
       overrunIsEvidence = {
         text = ''
-          An overrun or a quiet job is evidence, not a reason to wait longer.
-          When an operation exceeds its stated budget, or should be emitting
-          output and has gone silent, presume it dead until proven alive: check
-          the cheap liveness signals (is the process running, is output growing,
-          is the machine loaded) or spawn a subagent to investigate, in parallel
-          with any continued wait, instead of letting a timeout expire.
+          Distinguish slow from dead. An operation past its stated budget but
+          still emitting progress just needs a revised estimate; one past budget
+          that has also gone quiet (no new output, no process activity) is
+          presumed dead until proven alive. When the budget blows, probe the
+          cheap liveness signals (is the process running, is output growing, is
+          the machine loaded) rather than waiting for a timeout. Investigating
+          liveness never means killing the job: if it is still progressing, let
+          it run while you probe.
         '';
         reason = ''
-          A ~40 min compile died silently when its builder VM restarted, and the
-          owning agent and coordinator idled ~30 min past budget until a manual
-          health check (builder load 0.05, no compiler processes) exposed it.
+          Waiting past a blown budget hides dead jobs behind the appearance of
+          slow ones. A ~40 min compile died silently when its builder VM
+          restarted, and the owning agent and coordinator idled another ~30 min
+          until a manual health check (idle builder, no compiler processes)
+          exposed it.
         '';
       };
     }
@@ -515,15 +519,15 @@ let
           A monitor that fires only on the success path manufactures false
           confidence and is worse than none. Every watcher must fire on every
           terminal state: success, failure, and disappearance of the thing
-          watched, and must carry its own heartbeat or deadline. Arming a monitor
-          does not end ownership: whoever armed it still owns confirming it is
-          alive and acting when it fires.
+          watched, and must carry its own heartbeat or deadline so a stalled
+          watcher is itself detected.
         '';
         reason = ''
-          A completion monitor watching only for success/failure marker files
-          never fired when the build died before writing them, and a
-          merge-on-green watcher's owner stalled, leaving a green PR unmerged
-          for ~45 minutes; nobody was watching the watcher.
+          Success-only watchers turn silent failures into indefinite waits. A
+          completion monitor watching only for marker files never fired when the
+          build died before writing them, and a green PR sat unmerged ~45
+          minutes after its merge-on-green watcher's owner stalled; nobody was
+          watching the watcher.
         '';
       };
     }
