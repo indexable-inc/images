@@ -1,0 +1,3 @@
+{
+  id = "svelte-bundle";
+}

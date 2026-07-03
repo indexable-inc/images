@@ -525,20 +525,13 @@ in
     # keeps recent results for repeat invocations and bounds disk growth.
     # Optimise hardlinks duplicate store paths so the savings compound.
     nix = {
-      # Pin the system flake registry so `nix shell nixpkgs#foo` resolves
-      # against the nixpkgs bundled in the image instead of fetching a
-      # fresh tarball from GitHub on every invocation. Without this pin,
-      # the global registry's `github:NixOS/nixpkgs/nixpkgs-unstable`
-      # entry wins: nix downloads ~40 MB, extracts 100k files into
-      # /nix/store, and evaluates the entire tree — 20+ minutes on VCFS
-      # vs ~1 second with the pin. Every production NixOS VM deployment
-      # (microvm.nix, Devbox, fleet images) pins this.
-      registry.nixpkgs.to = {
-        type = "path";
-        inherit (pkgs) path;
-      };
-      # Also set NIX_PATH so legacy nix-shell / <nixpkgs> imports resolve
-      # without a channel subscription or network fetch.
+      # The system flake registry pin for `nixpkgs` lives in
+      # lib/image/default.nix (an inline module next to `nixpkgs.pkgs`),
+      # because locking it needs the flake input's `narHash`, which only
+      # that scope has.
+      #
+      # NIX_PATH so legacy nix-shell / <nixpkgs> imports resolve without a
+      # channel subscription or network fetch.
       nixPath = [ "nixpkgs=${pkgs.path}" ];
       settings = {
         experimental-features = [

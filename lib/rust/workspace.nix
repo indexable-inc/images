@@ -342,6 +342,17 @@ let
       }
       // lib.optionalAttrs isCross {
         inherit target;
+        # Input-address the cross graph (the native graph keeps cargo-unit's
+        # `contentAddressed = true` default). A floating-CA output has no
+        # eval-time path, so substituting it requires the substituter's
+        # `/realisations` build trace to map drv hash -> output path -- and
+        # cache.ix.dev (atticd behind ncps) serves narinfos only, 404ing that
+        # endpoint. A Mac evaluating a Darwin cross alias therefore planned a
+        # local x86_64-linux cross build it cannot run (#1755). Input-addressed
+        # drvs carry concrete out paths at eval, so the Mac substitutes via
+        # plain narinfo, and cache-push's probe can skip already-pushed cross
+        # roots instead of always re-realising them.
+        contentAddressed = false;
         # rust-overlay toolchain carrying the cross target's `rust-std`. The
         # native graph keeps `cargo-unit`'s default (nixpkgs cargo + rustc).
         rustToolchain = rustToolchainFor workspacePkgs {

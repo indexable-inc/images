@@ -122,6 +122,25 @@
       (import (ix.paths.packagesRoot + "/agent/common.nix") { inherit lib ix repoPackages; })
       .defaultServers,
 
+  # Claude Code "channels" (research preview, needs claude-code >= 2.1.80): MCP
+  # servers whose events push into the running session, so the agent reacts to
+  # things that happen while you are away. Our `index` server (baked above via
+  # `mcpServers`, packages/mcp) is a channel: kernel `notify(...)` and
+  # interactive-resource actions emit `notifications/claude/channel` events. It
+  # is our OWN stdio server, not on Anthropic's curated preview allowlist, so it
+  # loads with `--dangerously-load-development-channels` rather than `--channels`
+  # (the "dangerous" name is because a channel injects text into the session's
+  # context — a trust decision; here the source is our own baked server). Each
+  # entry is a channel spec: `server:<mcpServersKey>` or
+  # `plugin:<name>@<marketplace>`; baked as
+  # `--dangerously-load-development-channels <spec>...`. Defaults to the `index`
+  # server WHEN it is baked (so notify()/interactive resources reach a session
+  # with no per-launch flag), and to nothing otherwise (the overlay build has no
+  # `index` server, so referencing it would be a dead flag). A session whose org
+  # policy (`channelsEnabled`) disables channels, or that never receives a push,
+  # is unaffected. `[ ]` bakes no flag.
+  developmentChannels ? lib.optional (mcpServers ? index) "server:index",
+
   # Rule names dropped from the default house prompt (forwarded to
   # ../system-prompt.nix's `omitRules`). Only affects the computed `systemPrompt`
   # default below; ignored when `systemPrompt` is passed explicitly. Lets a
@@ -286,6 +305,16 @@ let
   wrapperFlags = [
     # Write ~/.claude/debug telemetry; cleanupPeriodDays controls retention.
     "--debug"
+  ]
+  # Load our own MCP servers as channels (research preview). This flag is
+  # VARIADIC (it consumes every following non-`--` token as a spec), so it must
+  # be followed by a `--`-prefixed flag — never placed last, where it would
+  # swallow the user's argv (a prompt, a subcommand). It sits here so the always-
+  # present `--thinking-display=` below terminates the spec list.
+  ++ lib.optionals (developmentChannels != [ ]) (
+    [ "--dangerously-load-development-channels" ] ++ developmentChannels
+  )
+  ++ [
     # Opus 4.7+ otherwise omits thinking from the UI/transcript.
     "--thinking-display=summarized"
   ]

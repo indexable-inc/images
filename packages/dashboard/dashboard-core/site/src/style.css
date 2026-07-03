@@ -57,71 +57,35 @@ body {
   /* A hair of negative tracking reads as more refined at UI sizes. */
   letter-spacing: -0.01em;
   -webkit-font-smoothing: antialiased;
-  /* The board owns panning; the page itself never scrolls. */
+  /* The shell owns its own scrolling; the page itself never scrolls. */
   overflow: hidden;
-  /* Disable the browser's own two-finger back/forward and rubber-banding so the
-     board can use wheel events for panning. */
-  overscroll-behavior: none;
 }
-/* The shell is a row: a fixed icon rail, then the workspace column (active
-   surface + the shared timeline at its foot). The workspace owns all scrolling
-   and panning within its own box. */
-#app { height: 100%; display: flex; flex-direction: row; }
-.workspace { position: relative; flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+#app { height: 100%; }
 ::selection { background: var(--accent-soft); }
 
-/* ----- icon rail -------------------------------------------------------- */
-/* The one piece of persistent chrome: a thin column that drives the top-level
-   view. A logo, the view tabs (each a quiet glyph that lights up when active),
-   then a pulsing health dot pinned to the foot. */
-.rail {
-  flex: none; width: 56px;
-  display: flex; flex-direction: column; align-items: center;
-  gap: 4px; padding: 14px 0;
-  background: var(--bg); border-right: 1px solid var(--edge);
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--edge); border: 2px solid var(--panel); }
+
+/* ----- shared status LED ------------------------------------------------ */
+/* One primitive for run/resource status, used by the sidebar and run detail.
+   Only a live run (amber pulse) and a failure (red) get a filled dot; success
+   and idle stay a hollow ring so a column of "fine" doesn't compete for the eye. */
+.led {
+  flex: none;
+  width: 7px; height: 7px; border-radius: 50%;
+  display: inline-block;
 }
-.rail-logo {
-  width: 28px; height: 28px; margin-bottom: 10px;
-  display: grid; place-items: center;
-  background: var(--ink); color: var(--bg);
-  font-family: var(--mono); font-weight: 700; font-size: 12px; letter-spacing: 0.2px;
-  border-radius: 8px;
-}
-.rail-btn {
-  position: relative; width: 36px; height: 36px;
-  display: grid; place-items: center;
-  background: none; border: 0; border-radius: 9px;
-  color: var(--ink-faint); cursor: pointer;
-  transition: color 0.12s ease, background 0.12s ease;
-}
-.rail-btn svg { width: 18px; height: 18px; }
-.rail-btn:hover { color: var(--ink-dim); background: var(--panel); }
-.rail-btn.on { color: var(--ink); }
-/* The active tab is marked by a short accent bar on the rail's edge, the one
-   place the accent appears in the chrome. */
-.rail-btn.on::before {
-  content: ""; position: absolute; left: -14px; top: 9px; bottom: 9px;
-  width: 2px; border-radius: 0 2px 2px 0; background: var(--accent);
-}
-.rail-spacer { flex: 1; }
-.rail-health { display: grid; place-items: center; padding-bottom: 2px; }
-.rail-pulse {
-  width: 7px; height: 7px; border-radius: 50%; background: var(--ink-faint);
-}
-.rail-pulse.live { background: var(--live); animation: rail-breathe 2.6s ease-in-out infinite; }
-@keyframes rail-breathe {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--live) 45%, transparent); }
-  70% { box-shadow: 0 0 0 5px transparent; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .rail-pulse.live { animation: none; }
-}
+.led-ok { border: 1px solid var(--live); background: transparent; }
+.led-running { background: var(--k-amber); animation: led-pulse 1.4s ease-in-out infinite; }
+.led-error { background: var(--dead); }
+@keyframes led-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .led-running { animation: none; } }
 
 /* ----- pane body -------------------------------------------------------- */
-/* The `.pane` wrapper carries no chrome of its own any more: it is just the box
-   the kind's renderer (terminal/html/json/exec) is scoped under, reused by the
-   feed detail, the focus view, and the board's tiles, each of which supplies its
-   own framing and sizing. */
+/* The `.pane` wrapper carries no chrome of its own: it is just the box the kind's
+   renderer (terminal/html/json/exec) is scoped under, reused by the run detail,
+   the focus view, and the resource stage, each of which supplies its own framing. */
 .pane {
   display: flex; flex-direction: column;
   overflow: hidden;
@@ -132,8 +96,8 @@ body {
   margin: 0; padding: 8px 12px;
   font-family: var(--mono); line-height: 1.35;
   color: var(--ink);
-  /* The card is sized to the terminal's natural width, so content fits with no
-     scroll; clip any sub-pixel remainder rather than show a scrollbar. */
+  /* Sized to the terminal's natural width; clip any sub-pixel remainder rather
+     than show a scrollbar. */
   white-space: pre; overflow: hidden; tab-size: 8;
 }
 .pane pre .b { font-weight: 700; }
@@ -152,8 +116,8 @@ body {
 .pane .placeholder { color: var(--ink-faint); font-style: italic; }
 
 /* ----- html body -------------------------------------------------------- */
-/* A producer-rendered document in a sandboxed frame. Fixed viewport height so
-   the card stays a card; the producer owns everything inside. */
+/* A producer-rendered document in a sandboxed frame. Fixed viewport height so the
+   card stays a card; the producer owns everything inside. */
 .pane .body.html-body { height: 240px; }
 .html-frame { display: block; width: 100%; height: 100%; border: 0; background: var(--panel); }
 
@@ -178,8 +142,7 @@ body {
 
 /* ----- namespace kind icon ---------------------------------------------- */
 /* The lead glyph on a namespace row (KindIcon), an IDE-autocomplete-style icon
-   tinted by kind. Lives in global scope because KindIcon is its own component.
-   currentColor drives the SVG, so the data-kind rules below just set the hue. */
+   tinted by kind. Lives in global scope because KindIcon is its own component. */
 .ns-icon {
   display: inline-flex; align-items: center; justify-content: center;
   width: 16px; height: 16px; color: var(--ink-dim);
@@ -196,25 +159,12 @@ body {
 .ns-icon[data-kind='scalar'] { color: var(--accent); }
 .ns-icon[data-kind='text'] { color: var(--ink-dim); }
 
-/* The rich-output pane folded into a run's detail (no longer a duplicate feed
-   row), set apart from the text output above it. */
-.detail-out { margin-top: 10px; }
-
-/* ----- stage (board + focus overlay) ------------------------------------ */
-/* Holds the board and, when a pane is focused, the fullscreen view over it. The
-   timeline bar sits below the stage, so both share one set of time controls. */
-.stage { position: relative; flex: 1 1 auto; min-height: 0; display: flex; }
-
-@keyframes led-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-
 /* ----- exec body -------------------------------------------------------- */
-/* A captured run: a small bar (source toggle, language, status), the source when
-   revealed, then the captured stdout/stderr/result streams. */
+/* A captured run's streams, rendered by ExecBody (chrome off in the run detail).
+   Output keeps its own whitespace and scrolls sideways rather than wrapping, so
+   aligned columns stay aligned and nothing is clipped. */
 .exec { display: flex; flex-direction: column; max-height: 360px; overflow-y: auto; overflow-x: hidden; }
 .exec.expanded { max-height: none; }
-/* Output keeps its own whitespace and scrolls sideways rather than wrapping:
-   aligned columns (file listings, tables) stay aligned instead of folding into an
-   unreadable zigzag, and nothing is clipped — a long line scrolls into view. */
 .exec-out {
   margin: 0; padding: 8px 12px;
   font-family: var(--mono); font-size: 11.5px; line-height: 1.4; color: var(--ink);
@@ -230,8 +180,8 @@ body {
 }
 .exec-json .cb-raw { color: var(--ink); }
 .exec-empty { padding: 8px 12px; color: var(--ink-faint); font-style: italic; font-family: var(--mono); font-size: 11.5px; }
-/* The source toggle and status are a quiet footer under the output, not a bar
-   above it — the output stays the first and heaviest thing in the block. */
+/* The source toggle + status footer, drawn only when ExecBody has chrome on
+   (the focus view); the run detail shows the source in its own panel instead. */
 .exec-foot {
   display: flex; align-items: baseline; gap: 8px;
   padding: 4px 12px 8px;
@@ -283,272 +233,10 @@ body {
 .focus-pane .exec { max-height: none; }
 .focus-absent { color: var(--ink-faint); font-family: var(--mono); align-self: center; }
 
-/* ----- timeline (auto-hiding overlay) ----------------------------------- */
-/* The replay scrubber floats over the foot of the workspace and stays hidden
-   until reached for, so an idle session (no recording — just 0:00 / 0:00) shows
-   no permanent bar. A thin hover strip along the bottom edge, hovering the pill,
-   or focusing a control reveals it. */
-.timeline-dock {
-  position: absolute; left: 0; right: 0; bottom: 0; z-index: 30;
-  display: flex; justify-content: center; align-items: flex-end;
-  height: 26px; padding-bottom: 8px; pointer-events: none;
-}
-/* Invisible catch strip along the very bottom that triggers the reveal. */
-.timeline-dock::before {
-  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 16px;
-  pointer-events: auto;
-}
-.timeline {
-  pointer-events: auto;
-  display: flex; align-items: center; gap: 8px;
-  width: max-content; max-width: min(880px, calc(100% - 24px));
-  padding: 6px 10px;
-  background: color-mix(in srgb, var(--panel) 86%, transparent);
-  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
-  border: 1px solid var(--edge); border-radius: 12px;
-  box-shadow: 0 8px 28px -10px rgba(0, 0, 0, 0.5);
-  font-family: var(--mono); font-size: 11.5px; color: var(--ink-dim);
-  opacity: 0; transform: translateY(14px);
-  transition: opacity 0.18s ease, transform 0.18s ease;
-}
-.timeline-dock:hover .timeline,
-.timeline:hover,
-.timeline:focus-within { opacity: 1; transform: none; }
-@media (prefers-reduced-motion: reduce) { .timeline { transition: none; } }
-.tl-btn {
-  font: inherit; color: var(--ink-dim);
-  background: var(--panel); border: 1px solid var(--edge); border-radius: 7px;
-  padding: 3px 9px; cursor: pointer; min-width: 28px;
-}
-.tl-btn:hover:not(:disabled) { color: var(--ink); border-color: var(--edge-strong); }
-.tl-btn:disabled { opacity: 0.4; cursor: default; }
-.tl-btn.on { color: var(--bg); background: var(--accent); border-color: var(--accent); }
-.tl-btn.live.on { background: var(--live); border-color: var(--live); }
-.tl-range { flex: 1 1 auto; min-width: 120px; accent-color: var(--accent); cursor: pointer; }
-.tl-time { font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 76px; text-align: center; }
-.tl-speed { display: flex; gap: 3px; }
-.tl-rec {
-  font: inherit; color: var(--ink-dim);
-  background: var(--panel); border: 1px solid var(--edge); padding: 3px 6px; cursor: pointer; max-width: 180px;
-}
-@media (prefers-reduced-motion: reduce) {
-  .entry-dot.run { animation: none; }
-}
-
-/* ----- feed view -------------------------------------------------------- */
-/* The default surface: a chronological timeline of panes, newest first. Each
-   block is input | output side by side — for an exec, source on the left and its
-   captured output on the right. The output is the larger, fuller column; the code
-   is the supporting one. Click a block's meta row to open it fullscreen. */
-/* Master-detail: a fixed timeline list on the left, a detail panel on the right,
-   each scrolling on its own. */
-/* min-width:0 lets the split shrink to the viewport so a long, unwrapped output
-   line scrolls inside its own box (.cell has overflow:auto) instead of widening
-   the whole page. Without it the flex row sizes to the longest line's content. */
-/* A view's slim header strip: the view name, a quiet count, optional active
-   badge. Shared by the feed and the namespace view so both read as one app. */
-.view-head {
-  flex: none; display: flex; align-items: baseline; gap: 12px;
-  height: 52px; padding: 0 clamp(14px, 2vw, 22px);
-  border-bottom: 1px solid var(--edge);
-}
-.view-title { font-size: 14.5px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); margin: 0; }
-.view-meta { font-family: var(--mono); font-size: 11.5px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
-.view-active {
-  margin-left: auto; display: inline-flex; align-items: center; gap: 7px;
-  font-family: var(--mono); font-size: 11.5px; color: var(--ink-dim);
-}
-.view-active i {
-  width: 6px; height: 6px; border-radius: 50%; background: var(--k-amber);
-  animation: led-pulse 1.1s ease-in-out infinite;
-}
-.view-empty {
-  flex: 1 1 auto; display: grid; place-content: center;
-  color: var(--ink-faint); font-family: var(--mono); font-size: 13px;
-}
-@media (prefers-reduced-motion: reduce) { .view-active i { animation: none; } }
-/* Pushes the `/` filter to the far right of the header. */
-.view-spacer { flex: 1 1 auto; }
-/* The `/`-focusable filter box: a quiet pill that only asserts itself (accent
-   hairline) while focused, so an empty filter is nearly invisible. */
-.view-filter {
-  align-self: center; width: clamp(120px, 16vw, 200px);
-  padding: 5px 10px; font-family: var(--mono); font-size: 11.5px;
-  color: var(--ink); background: var(--panel);
-  border: 1px solid var(--line); border-radius: 8px; outline: none;
-  transition: border-color 0.12s ease, background 0.12s ease;
-}
-.view-filter::placeholder { color: var(--ink-faint); }
-.view-filter:focus {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
-  background: var(--bg);
-}
-
-/* The session picker: a quiet pill matching the filter box, sitting just left of
-   it. Each MCP client is a session; this scopes the feed to one. */
-.view-session {
-  align-self: center; max-width: 220px;
-  padding: 5px 8px; font-family: var(--mono); font-size: 11.5px;
-  color: var(--ink); background: var(--panel);
-  border: 1px solid var(--line); border-radius: 8px; outline: none; cursor: pointer;
-  transition: border-color 0.12s ease, background 0.12s ease;
-}
-.view-session:hover { border-color: var(--ink-faint); }
-.view-session:focus { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
-
-/* The feed view fills the stage as a column: the header, then the split below. */
-.feedview { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
-.feed { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; background: var(--bg); }
-.feed-empty {
-  flex: 1 1 auto; display: grid; place-content: center;
-  color: var(--ink-faint); font-family: var(--mono); font-size: 13px;
-}
-
-/* Left list: status dots threaded on one continuous rail, the intent beside each
-   and its duration on the right. Selecting a row drives the detail panel. */
-.feed-list {
-  flex: 0 0 clamp(300px, 32%, 420px); min-width: 0; overflow: auto;
-  border-right: 1px solid var(--edge);
-  list-style: none; margin: 0; padding: 10px 8px 40px;
-}
-.session-group { position: sticky; top: 0; z-index: 2; padding: 12px 8px 6px; background: color-mix(in srgb, var(--bg) 92%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
-.session-label { display: flex; align-items: center; gap: 8px; color: var(--ink-dim); font-size: 12px; font-weight: 650; letter-spacing: -0.01em; }
-.session-label::before { content: ""; width: 7px; height: 7px; border-radius: 999px; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.session-label em { margin-left: auto; font-style: normal; font-family: var(--mono); font-size: 10px; color: var(--ink-faint); }
-
-/* Each row: a status dot, a two-line main column (the intent/title headline over a
-   quiet `id · tag` sub-line), and the duration/age on the right. */
-.entry { position: relative; }
-.entry-row {
-  display: grid; grid-template-columns: 9px minmax(0, 1fr) auto;
-  align-items: center; column-gap: 12px; width: 100%;
-  font: inherit; text-align: left; color: var(--ink);
-  background: none; border: 0; cursor: pointer; padding: 10px 12px;
-  border-radius: 12px;
-  transition: background 0.12s ease, box-shadow 0.12s ease;
-}
-.entry-row:hover { background: var(--panel); }
-/* The selected row: a modern Raycast-style filled pill — a soft accent-tinted
-   fill across the whole rounded row, no left bar. The fill alone reads as
-   "selected" against the plain hover. */
-.entry.selected > .entry-row {
-  background: color-mix(in srgb, var(--accent) 13%, var(--panel));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
-}
-.entry.selected > .entry-row:hover {
-  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
-}
-
-/* Only failure (red) and the transient running pulse (amber) get a filled dot;
-   success and idle stay a faint ring, so a column of "fine" doesn't compete with
-   the few states that actually want the eye. */
-.entry-dot {
-  grid-column: 1; align-self: center; justify-self: center;
-  width: 7px; height: 7px; border-radius: 50%;
-  background: transparent; box-shadow: inset 0 0 0 1px var(--edge-strong);
-}
-.entry-dot.err { background: var(--dead); box-shadow: none; }
-.entry-dot.run { background: var(--k-amber); box-shadow: none; animation: led-pulse 1.1s ease-in-out infinite; }
-
-.entry-main { grid-column: 2; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.entry-title {
-  min-width: 0; font-size: 13px; color: var(--ink); letter-spacing: -0.012em;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.entry.err .entry-title { color: light-dark(#c4314b, #f0a0ad); }
-.entry-sub {
-  min-width: 0; font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.entry-sub-tag { color: var(--ink-faint); opacity: 0.7; }
-
-.entry-now {
-  grid-column: 3; align-self: center;
-  font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em;
-  color: var(--k-amber); text-transform: uppercase;
-}
-.entry-age {
-  grid-column: 3; align-self: center;
-  font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint);
-  font-variant-numeric: tabular-nums;
-}
-
-/* Right detail panel: header (dot + intent), a meta line, then the body. */
-.feed-detail {
-  flex: 1 1 auto; min-width: 0; overflow: auto;
-  padding: 22px clamp(16px, 3vw, 34px) 56px;
-}
-.detail-empty {
-  color: var(--ink-faint); font-family: var(--mono); font-size: 13px; padding: 24px 4px;
-}
-.detail-head { display: flex; align-items: center; gap: 9px; }
-.detail-title {
-  font-size: 15px; color: var(--ink); min-width: 0;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.detail-title.err { color: light-dark(#c4314b, #f0a0ad); }
-.detail-meta {
-  margin: 3px 0 14px 18px;
-  font-family: var(--mono); font-size: 11px; color: var(--ink-faint);
-}
-.detail-body .entry-fail { margin-bottom: 10px; }
-
-/* A titled section in the detail panel (e.g. "code", "code · output"): a quiet
-   uppercase label over its box, so the panel reads as labelled regions rather
-   than a stack of anonymous slabs. */
-.detail-section { margin-top: 16px; }
-.detail-section.first { margin-top: 0; }
-.detail-label {
-  display: flex; align-items: center; gap: 5px;
-  margin: 0 0 5px 2px;
-  font-family: var(--mono); font-size: 10px; letter-spacing: 0.07em;
-  text-transform: uppercase; color: var(--ink-faint);
-  cursor: pointer; user-select: none;
-}
-.detail-label::marker { content: ""; }
-.detail-label::-webkit-details-marker { display: none; }
-.detail-label::before {
-  content: "▾"; font-size: 10px; line-height: 1; color: var(--ink-faint);
-}
-.detail-section:not([open]) > .detail-label::before { content: "▸"; }
-.detail-section:not([open]) > .detail-label { margin-bottom: 0; }
-.detail-label:hover { color: var(--ink-dim); }
-
-/* The `code` toggle in the detail panel: a quiet bordered chip. */
-.entry-code-toggle {
-  display: inline-block; margin: 6px 0 0;
-  font-family: var(--mono); font-size: 10.5px; color: var(--ink-dim);
-  background: none; border: 1px solid var(--edge); border-radius: 0;
-  padding: 1px 6px; cursor: pointer; line-height: 1.4;
-}
-.entry-code-toggle:hover { color: var(--ink); border-color: var(--ink-faint); }
-.entry-code-toggle.on { color: var(--ink); border-color: var(--ink-faint); background: var(--edge); }
-/* The revealed source sits below the output, set apart as a quieter slab. */
-.entry-code-reveal { margin-top: 6px; border-style: dashed; }
-
-/* Compact parsed failure shown by default for an errored run: the message, then
-   the source line(s) it came from. No box; it reads as a quiet annotation. */
-.entry-fail { display: flex; flex-direction: column; gap: 3px; padding-top: 2px; }
-.fail-msg {
-  font-family: var(--mono); font-size: 12px;
-  color: light-dark(#c4314b, #f0a0ad); white-space: pre-wrap; word-break: break-word;
-}
-.fail-frame { display: flex; align-items: baseline; gap: 10px; font-family: var(--mono); font-size: 12px; }
-.fail-line {
-  flex: none; min-width: 1.6em; text-align: right;
-  color: var(--ink-faint); font-variant-numeric: tabular-nums;
-}
-.fail-line::before { content: "line "; color: var(--ink-faint); }
-.fail-src { color: var(--ink-dim); white-space: pre; overflow: hidden; text-overflow: ellipsis; }
-
-/* The block: a flat bordered box. Split blocks lay the code and output columns
-   side by side with a divider; the output column is the wider one. */
-.entry-box { border: 1px solid var(--edge); background: var(--panel); overflow: hidden; border-radius: 12px; }
-.entry-cols { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
-.cell { min-width: 0; max-height: 460px; overflow: auto; }
-/* shiki output (code blocks and auto-detected JSON output) sits flush on the
-   panel and uses the dashboard's mono font; every token carries both palettes as
-   CSS vars and the right one is picked from the OS color-scheme. */
+/* ----- shiki (code blocks + JSON output) -------------------------------- */
+/* shiki output sits flush on the panel and uses the dashboard's mono font; every
+   token carries both palettes as CSS vars and the right one is picked from the OS
+   color-scheme. */
 .shiki { background: transparent !important; }
 .shiki code { font-family: inherit; }
 .shiki, .shiki span { color: var(--shiki-light); }
@@ -556,29 +244,11 @@ body {
   .shiki, .shiki span { color: var(--shiki-dark); }
 }
 
-/* Untraced exec (older producer / subprocess output): the code, syntax-highlighted
-   and full width, with its output stacked directly below — no fake side gutter. */
-.entry-code { padding: 12px 14px; user-select: text; overflow-x: auto; }
-.entry-code pre,
-.entry-code .shiki {
-  margin: 0; padding: 0;
-  font-family: var(--mono); font-size: 11.5px; line-height: 1.5; white-space: pre;
-}
-.entry-code .cb-raw { color: var(--ink-dim); }
-.entry-stack .exec { max-height: none; }
-.entry-stack .exec-out.res { font-size: 14px; }
-
-/* Non-exec panes: output spans the block. Renderer CSS is scoped under `.pane`;
-   undo the board card's grab cursor and no-select so output stays selectable. */
-.entry-body { width: 100%; border: 0; background: none; overflow: visible; cursor: auto; user-select: text; }
-.entry-body.term { width: max-content; max-width: 100%; }
-
 /* ----- inline-trace view ------------------------------------------------ */
 /* The code shown once, full width. Each line that produced output shows its first
    output line inline in gray; a line whose output has more lines is hoverable to
-   reveal the full output in a popover that *overlays* the code below it
-   (absolute-positioned), so nothing ever shifts. Imports fold away by default. */
-.entry-trace-box { overflow: visible; }
+   reveal the full output in a popover that overlays the code below it, so nothing
+   ever shifts. Imports fold away by default. */
 .trace { padding: 6px 0; user-select: text; }
 .trace-fold {
   display: block; width: 100%; text-align: left; cursor: pointer;
@@ -587,9 +257,6 @@ body {
 }
 .trace-fold:hover { color: var(--ink-dim); }
 .trace-row { position: relative; min-height: 19px; padding: 0 12px; }
-/* Code (natural width) then the output's first line inline in gray; the row
-   scrolls sideways if the pair is long. The gray text itself marks a line that
-   produced output — no separate dot needed. */
 .trace-content {
   display: flex; align-items: baseline; gap: 16px; min-width: 0; overflow-x: auto;
   line-height: 1.6;

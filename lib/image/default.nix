@@ -66,6 +66,27 @@ let
       specialArgs.ix = ixSpecialArgs;
       modules = [
         { nixpkgs.pkgs = imagePkgs; }
+        {
+          # Pin the system flake registry so `nix shell nixpkgs#foo` resolves
+          # against the nixpkgs bundled in the image instead of fetching a
+          # fresh tarball from GitHub on every invocation (~40 MB download,
+          # 100k files extracted, 20+ minutes on VCFS).
+          #
+          # `narHash` locks the pin. Without it nix treats the `path:` input
+          # as mutable and re-hashes AND re-copies the whole ~45k-file tree
+          # into /nix/store on every eval; through the guest's virtiofs/VCFS
+          # store that is ~3 minutes per `nix eval`/`nix run`, ~1 s locked
+          # (measured in an `ix new` VM, 2026-07-02). `outPath` (a string)
+          # rather than the path value also keeps `toJSON` from copying a
+          # duplicate nixpkgs tree into the image closure. Lives here, not
+          # platform.nix, because only this scope sees the flake input's
+          # `narHash`.
+          nix.registry.nixpkgs.to = {
+            type = "path";
+            path = nixpkgs.outPath;
+            inherit (nixpkgs) narHash;
+          };
+        }
         ./platform.nix
         ./oci-layer.nix
         # Home Manager as a NixOS module. Per-tool XDG config (Nushell,

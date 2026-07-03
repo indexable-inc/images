@@ -680,6 +680,43 @@ let
       ) crossEntries
     )
   );
+  # The eval-time IFD closure of each cross target's unit graph. A Mac cannot
+  # *build* a Linux→Darwin cross output, but the Darwin package aliases force it
+  # to *evaluate* the cross derivation, and that eval imports the rendered
+  # `cargo-units.nix` (which is generated from `cargo-unit-graph.json`, itself
+  # generated from the vendor dir). Those three are build-time deps of the cross
+  # outputs, so `attic push` of the outputs' *runtime* closures never carries
+  # them (RFC 0009's substitute-or-nothing trap: #1687). Publishing them lets a
+  # Mac substitute the IFD outputs instead of trying to build x86_64-linux drvs
+  # at eval; because these are input-addressed drvs, their eval-time out paths
+  # are known, so cache-push's probe sees the same paths a Mac's eval demands.
+  # Keyed by distinct cross target (the unit graph is shared per target, not per
+  # package), derived from `crossEntries` so a new cross target or entry joins
+  # this set with no hand-kept list. Same Linux-host gate as `crossPackages`:
+  # the cross graphs only build on the Linux host that owns the cross lane.
+  crossIfdRoots = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
+    let
+      crossTargets = lib.unique (lib.concatMap (entry: entry.cross.targets) crossEntries);
+      rootsForTarget =
+        target:
+        let
+          units = crossWorkspace.unitsFor { inherit target; };
+        in
+        # These three ARE the whole eval-time closure: the `import unitsNix`
+        # forces `unitsNix`, which references only `unitGraphJson` and `vendorDir`
+        # (the cargo-lock it also reads is a plain flake source path, always
+        # present). `cargo-vendor-config.toml` is not a fourth root: it is a
+        # build input of the `unitGraphJson` builder, not on the import path and
+        # not in `vendorDir`'s closure, so substituting `unitGraphJson`'s output
+        # makes it moot -- the Mac never runs that builder.
+        {
+          "cross-ifd-${target}-units-nix" = units.unitsNix;
+          "cross-ifd-${target}-unit-graph" = units.unitGraphJson;
+          "cross-ifd-${target}-vendor-dir" = units.vendorDir;
+        };
+    in
+    lib.mergeAttrsList (map rootsForTarget crossTargets)
+  );
   darwinPackageAliases = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
     lib.genAttrs (lib.attrNames darwinTargetsBySystem) (
       darwinSystem:
@@ -1288,6 +1325,11 @@ in
   #      so realising them would rebuild ~all the archives. Drop them and add the
   #      fleet node `toplevel` closures directly, so the closures those checks used
   #      to drag in stay cached without ever building a tar.
+  #   3. The cross lane's eval-time IFD outputs (`crossIfdRoots`): the rendered
+  #      `cargo-units.nix`, its `cargo-unit-graph.json`, and the vendor dir a Mac
+  #      forces at eval when it substitutes a Darwin cross output. These are
+  #      build-time deps of the cross packages, so they are absent from those
+  #      packages' runtime closures; adding them as roots is the fix for #1687.
   cachePushRoots =
     let
       # Per-node `health-check-*` lifecycle packages and the two
@@ -1305,7 +1347,7 @@ in
         ) fleet.systemPackages
       ) exampleFleets;
     in
-    imagesAsClosures // exampleNodeToplevels;
+    imagesAsClosures // exampleNodeToplevels // crossIfdRoots;
 
   inherit darwinPackageAliases;
 

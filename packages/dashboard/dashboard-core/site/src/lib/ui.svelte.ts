@@ -1,66 +1,89 @@
-// Cross-component UI state: which pane is focused (the fullscreen single-resource
-// view) and a once-a-second clock so every card's age stays current without each
-// card holding its own timer.
+// Cross-component UI state for the Ledger shell: the current center-stage
+// selection, the sidebar's fold state, the right rail's collapse, the fullscreen
+// focus overlay, and a once-a-second clock so every start-stamp stays live
+// without each row holding its own timer.
+import type { Selection } from './sidebar';
 
-// The top-level surface: the run feed (a chronological master-detail of runs),
-// the namespace browser (the kernel's live globals, recursively expandable), or
-// the board (free canvas). Feed is the default: most of the time you just want to
-// read the stream of runs, with nothing competing for attention. Persisted.
-export type View = 'feed' | 'namespace' | 'board';
-const VIEW_KEY = 'dash-view-v1';
-const VIEWS: readonly View[] = ['feed', 'namespace', 'board'];
+// Re-export the pure time formatters so components keep one import site (`ui`)
+// for both the reactive clock and the labels it drives.
+export { humanAge, humanTime, humanDuration, runTooltip, humanClock } from './time';
 
-function loadView(): View {
+// ----- fold state (persisted) --------------------------------------------
+// One boolean per fold key: a section id ('sessions'/'resources'/'recordings')
+// or a session scope prefixed 'sess:'. Persisted so the tree stays how you left
+// it. Sections default open; individual sessions default open too, so a fresh
+// load shows the newest session's runs without a click.
+const FOLD_KEY = 'dash-folds-v1';
+
+function loadFolds(): Record<string, boolean> {
   try {
-    const saved = localStorage.getItem(VIEW_KEY) as View | null;
-    return saved && VIEWS.includes(saved) ? saved : 'feed';
+    const raw = localStorage.getItem(FOLD_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, boolean>) : {};
   } catch {
-    return 'feed';
+    return {};
   }
 }
 
-// The selected session in the feed: a producer scope to show alone, or '' for
-// all sessions (the default). Each MCP client is its own scope, so this narrows
-// the feed to one agent's runs. Persisted, falling back to all if the saved
-// session is gone next time. Note: a real MCP scope is "<pid>-<uuid>" (never
-// empty), so '' is an unambiguous "all" sentinel.
-const SESSION_KEY = 'dash-session-v1';
+// ----- right rail collapse (persisted) -----------------------------------
+const RAIL_KEY = 'dash-rail-collapsed-v1';
 
-function loadSession(): string {
+function loadRailCollapsed(): boolean {
   try {
-    return localStorage.getItem(SESSION_KEY) ?? '';
+    return localStorage.getItem(RAIL_KEY) === '1';
   } catch {
-    return '';
+    return false;
   }
 }
 
 export const ui = $state({
-  // The active top-level view.
-  view: loadView() as View,
+  // The center-stage target: a run, a resource, or a recording (null = none yet).
+  selection: null as Selection | null,
   // The key (scope<0x1f>id) of the focused pane in the fullscreen single-pane
-  // view (opened from a feed entry or a board card), or null for none.
+  // overlay (opened with o/Enter on a resource or rich output), or null.
   focusKey: null as string | null,
-  // The feed's selected session scope ('' = all sessions).
-  sessionScope: loadSession(),
-  // Wall-clock milliseconds, ticked every second; cards derive their age from it.
+  // Fold state by key; missing keys fall back to the per-key default (see isOpen).
+  folds: loadFolds() as Record<string, boolean>,
+  // Whether the right-rail namespace inspector is collapsed.
+  railCollapsed: loadRailCollapsed(),
+  // Wall-clock milliseconds, ticked every second; rows derive their age from it.
   clock: Date.now(),
 });
 
-export function setView(view: View): void {
-  ui.view = view;
+// A fold key's open state, with the default applied for keys never toggled. Every
+// section and session defaults open.
+export function isOpen(foldKey: string): boolean {
+  return ui.folds[foldKey] ?? true;
+}
+
+export function toggleFold(foldKey: string): void {
+  ui.folds[foldKey] = !isOpen(foldKey);
+  persistFolds();
+}
+
+export function setFold(foldKey: string, open: boolean): void {
+  ui.folds[foldKey] = open;
+  persistFolds();
+}
+
+function persistFolds(): void {
   try {
-    localStorage.setItem(VIEW_KEY, view);
+    localStorage.setItem(FOLD_KEY, JSON.stringify(ui.folds));
   } catch {
-    // Non-persistent is fine; the view just resets to the default next load.
+    // Non-persistent is fine; folds reset to defaults next load.
   }
 }
 
-export function setSession(scope: string): void {
-  ui.sessionScope = scope;
+export function select(selection: Selection | null): void {
+  ui.selection = selection;
+}
+
+export function toggleRail(): void {
+  ui.railCollapsed = !ui.railCollapsed;
   try {
-    localStorage.setItem(SESSION_KEY, scope);
+    localStorage.setItem(RAIL_KEY, ui.railCollapsed ? '1' : '0');
   } catch {
-    // Non-persistent is fine; the selection just resets to all next load.
+    // Non-persistent is fine.
   }
 }
 
@@ -82,43 +105,3 @@ export function clearFocus(): void {
   ui.focusKey = null;
 }
 
-// A compact human age ("now", "3s ago", "2m ago", "4h ago", "3d ago") for a
-// `created_at` relative to a reference time.
-export function humanAge(createdMs: number | undefined, refMs: number): string {
-  if (!createdMs) return '';
-  const seconds = Math.max(0, Math.round((refMs - createdMs) / 1000));
-  if (seconds < 1) return 'now';
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
-
-// A compact run-duration label ("420ms", "1.3s", "9.8s", "1m4s") for how long an
-// exec took, so the feed can show duration in place of an age.
-export function humanDuration(ms: number | undefined): string {
-  if (ms == null || ms < 0) return '';
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  const s = ms / 1000;
-  if (s < 10) return `${s.toFixed(1)}s`;
-  if (s < 60) return `${Math.round(s)}s`;
-  const m = Math.floor(s / 60);
-  return `${m}m${Math.round(s % 60)}s`;
-}
-
-// A wall-clock label for a timeline position.
-export function humanClock(ms: number): string {
-  if (!ms) return '—';
-  return new Date(ms).toLocaleTimeString();
-}
-
-// A short elapsed label ("1:23", "0:05") for the scrubber, measuring from the
-// recording's start.
-export function humanElapsed(ms: number): string {
-  const total = Math.max(0, Math.round(ms / 1000));
-  const minutes = Math.floor(total / 60);
-  const seconds = total % 60;
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-}

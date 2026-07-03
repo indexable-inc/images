@@ -472,6 +472,27 @@ let
         cp -r ${shPythonSource}/sh/. "$site/"
       ''
   );
+  # Svelte 5 components as live interactive resources: `import svelte`, then
+  # `await svelte.component("Board.svelte", id=..., actions=...)` compiles via
+  # the svelte-bundle CLI and registers the result, with the virtual `ix`
+  # module (`data`/`act`/`replies`) wired to the resource event feed. Pure
+  # Python; the compiler is the wrapped Node CLI above.
+  sveltePythonSource = builtins.path {
+    name = "ix-mcp-svelte-python-source";
+    path = ./src/svelte;
+  };
+  svelteModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-svelte-python-module"
+      {
+        strictDeps = true;
+        meta.description = "Svelte 5 resource components bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/svelte"
+        mkdir -p "$site"
+        cp -r ${sveltePythonSource}/svelte/. "$site/"
+      ''
+  );
   # Browser automation over CDP: `import browser`, then `await browser.goto(url)`
   # / `await browser.shot()` drive a Chromium-family browser already running with
   # --remote-debugging-port (the standard 9222 by default). Pure Python over the
@@ -769,6 +790,11 @@ let
   # the google-calendar crate (packages/google/calendar), so the MCP binding
   # carries no calendar logic of its own (RFC 0003).
   gcalBin = ix.rustWorkspace.units.binaries."gcal";
+
+  # The Svelte 5 -> one-IIFE-bundle compiler the `svelte` module spawns
+  # (IX_SVELTE_BUNDLE_BIN): esbuild + esbuild-svelte from the lockfile pin in
+  # ./svelte-bundle, so resource components need no network at view time.
+  svelteBundleBin = import ./svelte-bundle { inherit ix pkgs; };
 
   # `import CoreLocation` on Darwin: the pyobjc binding for Apple's Core Location
   # framework, so a session can read the Mac's current location with no install
@@ -1200,6 +1226,7 @@ let
       nixModule
       fleetModule
       shModule
+      svelteModule
       worktreeModule
       browserModule
       xModule
@@ -1260,6 +1287,7 @@ let
           --add-flags "-m ix_notebook_mcp" \
           --set IX_MCP_VERSION ${lib.escapeShellArg ix.rev} \
           --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
+          --set IX_SVELTE_BUNDLE_BIN ${lib.escapeShellArg (lib.getExe svelteBundleBin)} \
           --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
           --set IX_DASHBOARD_BIN ${lib.escapeShellArg (lib.getExe' dashboardHubBin "dashboard")} \
           --set SCIPQL_SOUFFLE ${lib.escapeShellArg (lib.getExe' pkgs.souffle "souffle")} \
@@ -1277,6 +1305,7 @@ let
           --add-flags "-m ix_notebook_mcp notebook" \
           --set IX_MCP_VERSION ${lib.escapeShellArg ix.rev} \
           --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
+          --set IX_SVELTE_BUNDLE_BIN ${lib.escapeShellArg (lib.getExe svelteBundleBin)} \
           --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
           --set IX_DASHBOARD_BIN ${lib.escapeShellArg (lib.getExe' dashboardHubBin "dashboard")} \
           --set SCIPQL_SOUFFLE ${lib.escapeShellArg (lib.getExe' pkgs.souffle "souffle")} \
@@ -5187,6 +5216,45 @@ let
         mkdir -p "$out"
       '';
 
+  # The whole Svelte resource path (packages/mcp/tests/test_svelte.py): the
+  # nix-built svelte-bundle CLI compiles a Svelte 5 component, a real sandboxed
+  # iframe renders the kernel-embedded state, `act` rides the real /api/input,
+  # and the action_result re-renders the page. Same interpreter + browser needs
+  # as inputBrowserSmoke, plus the CLI on IX_SVELTE_BUNDLE_BIN.
+  svelteBundled = importTest "svelte" "import svelte; print('svelte-ok', callable(svelte.bundle), callable(svelte.component))";
+  svelteTestPython = mcpPythonInterp.withPackages (
+    ps:
+    mcpPythonPackages ps
+    ++ [
+      ps.pytest
+    ]
+  );
+  svelteTestSource = builtins.path {
+    name = "ix-mcp-svelte-test";
+    path = ./tests/test_svelte.py;
+  };
+  svelteTests =
+    pkgs.runCommand "ix-mcp-svelte-tests"
+      {
+        nativeBuildInputs = [ svelteTestPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        export PLAYWRIGHT_BROWSERS_PATH=${lib.escapeShellArg playwrightBrowsers}
+        export FONTCONFIG_FILE=${fontsConf}
+        export IX_SVELTE_BUNDLE_BIN=${lib.escapeShellArg (lib.getExe svelteBundleBin)}
+        cp ${svelteTestSource} "$TMPDIR/test_svelte.py"
+        ${lib.getExe svelteTestPython} -m pytest "$TMPDIR/test_svelte.py" -q -p no:cacheprovider >stdout 2>stderr || {
+          echo "ix-mcp svelte tests failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        cat stdout
+        mkdir -p "$out"
+      '';
+
   screenBundled = importTest "screen" "import screen; print('screen-ok', all(callable(getattr(screen, n)) for n in ('capture', 'click', 'write', 'press', 'key_down', 'key_up', 'apps', 'frontmost', 'launch', 'activate', 'terminate', 'accessibility_trusted')))";
   coreLocationBundled = importTest "corelocation" "import CoreLocation; print('corelocation-ok', callable(CoreLocation.CLLocationManager.alloc))";
   scriptingBridgeBundled = importTest "scriptingbridge" "import ScriptingBridge; print('scriptingbridge-ok', callable(ScriptingBridge.SBApplication.applicationWithBundleIdentifier_))";
@@ -5460,6 +5528,8 @@ package.overrideAttrs (old: {
         inputsTests
         channelTests
         inputBrowserSmoke
+        svelteBundled
+        svelteTests
         wedgeSmoke
         richSmoke
         yieldSmoke

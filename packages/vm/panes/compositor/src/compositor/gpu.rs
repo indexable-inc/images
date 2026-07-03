@@ -7,9 +7,13 @@
 //! `EGL_EXT_platform_device`): no DRM master, no KMS, no output, so it works
 //! on a bare render node like virtio-gpu's /dev/dri/renderD128 inside the
 //! VM. libEGL is dlopen'd at runtime (smithay's `backend_egl` uses
-//! `libloading`), so a GPU-less machine still runs the shm-only binary.
+//! `libloading`), and `Gpu::try_new` degrades gracefully, so the same binary
+//! (built with this feature, the default) runs shm-only on a GPU-less
+//! machine: no render node means no linux-dmabuf global is advertised.
 
 use anyhow::Context as _;
+// `Dmabuf::format` comes from the allocator `Buffer` trait.
+use smithay::backend::allocator::Buffer as _;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::format::FormatSet;
@@ -71,11 +75,29 @@ impl Gpu {
         Ok(Self { renderer })
     }
 
-    /// Formats to advertise on the linux-dmabuf global: exactly what the
-    /// GLES renderer can import, so a client-created buffer is importable by
-    /// construction.
+    /// Formats to advertise on the linux-dmabuf global: the renderer's
+    /// importable set restricted to the 32-bpp RGBA family `readback` can
+    /// actually serve. The renderer imports far more (10/16-bit, YUV), but a
+    /// client that picked one of those would hit a readback error and show a
+    /// permanently black window — dmabuf clients don't fall back to shm once
+    /// they've bound the global.
     pub fn formats(&self) -> FormatSet {
-        self.renderer.dmabuf_formats()
+        const SERVABLE: [Fourcc; 8] = [
+            Fourcc::Argb8888,
+            Fourcc::Xrgb8888,
+            Fourcc::Abgr8888,
+            Fourcc::Xbgr8888,
+            Fourcc::Rgba8888,
+            Fourcc::Rgbx8888,
+            Fourcc::Bgra8888,
+            Fourcc::Bgrx8888,
+        ];
+        self.renderer
+            .dmabuf_formats()
+            .iter()
+            .filter(|format| SERVABLE.contains(&format.code))
+            .copied()
+            .collect()
     }
 
     /// Validation import for `DmabufHandler::dmabuf_imported`.
@@ -109,18 +131,23 @@ impl Gpu {
             .context("copy texture")?;
         let bytes = self.renderer.map_texture(&mapping).context("map texture")?;
         let mut bgra = bytes.to_vec();
+        // Everything downstream (row repack, force-opaque, FrameStore::commit)
+        // assumes tightly packed width*height*4; commit's debug_assert is
+        // stripped in release, so this is the only guard between a padded or
+        // truncated readback and a corrupt frame on the wire.
+        let stride = usize::try_from(width).context("texture width exceeds usize")? * 4;
+        let expected = stride * usize::try_from(height).context("texture height exceeds usize")?;
+        anyhow::ensure!(
+            stride > 0 && bgra.len() == expected,
+            "readback of {} bytes is not tightly packed {width}x{height}x4",
+            bgra.len()
+        );
         // GLES readback is bottom-up (smithay's `GlesMapping::flipped()` is
         // unconditionally true) while the wire is top-down; ship it as-is and
         // every dmabuf window renders upside down on the host. Repack rows in
         // reverse, keyed on `flipped()` so a future non-flipped mapping stays
         // correct.
         if mapping.flipped() {
-            let stride = usize::try_from(width).context("texture width exceeds usize")? * 4;
-            anyhow::ensure!(
-                stride > 0 && bgra.len() % stride == 0,
-                "readback of {} bytes is not whole {stride}-byte rows",
-                bgra.len()
-            );
             let mut top_down = Vec::with_capacity(bgra.len());
             for row in bgra.rchunks_exact(stride) {
                 top_down.extend_from_slice(row);
