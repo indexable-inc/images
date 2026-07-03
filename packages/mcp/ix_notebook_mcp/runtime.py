@@ -3566,7 +3566,13 @@ async def __ix_read(target: Any, start: int | None = None, end: int | None = Non
         full = value if isinstance(value, str) else _safe_repr(value)
         label = target if isinstance(target, str) else _safe_repr(target)
         lang = None
-    lines = full.splitlines()
+    # '\n' is the ONE line boundary, matching the renderer's split — str.splitlines
+    # would also break on \f/\v/\x85/U+2028..., desyncing the gutter numbers and
+    # span meta from the rows actually displayed. A trailing newline is a
+    # terminator, not a phantom last line.
+    lines = full.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
     total = len(lines)
     if start is not None or end is not None:
         lo = max((start or 1) - 1, 0)

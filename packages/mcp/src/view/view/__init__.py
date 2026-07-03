@@ -458,7 +458,10 @@ class Code:
         return self.text
 
     def _repr_mimebundle_(self, **_kwargs: object) -> dict:
-        lines = self.text.splitlines()
+        # '\n' only, matching the renderer's split (see runtime.__ix_read).
+        lines = self.text.split("\n")
+        if lines and lines[-1] == "":
+            lines.pop()
         return {
             _IX_VIEW_MIME: {
                 "renderer": "file-view",
@@ -640,7 +643,8 @@ def cat(
     start = 1
     if lines is not None:
         a, b = lines
-        all_lines = text.splitlines()
+        # '\n' only, the same boundary the dashboard renderer counts by.
+        all_lines = text.split("\n")
         text = "\n".join(all_lines[a - 1 : b])
         start = a
     return Code(text, lang or _lang_for(p), title=str(p), start_line=start)

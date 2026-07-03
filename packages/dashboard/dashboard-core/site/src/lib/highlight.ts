@@ -15,11 +15,20 @@ import { islandsDark, islandsLight } from './theme/islands';
 type CodeToHtml = (code: string, options: any) => Promise<string>;
 
 let loading: Promise<CodeToHtml> | null = null;
+let attempts = 0;
 
 function load(): Promise<CodeToHtml> {
-  loading ??= import('https://esm.sh/shiki@4').then(
-    (m) => (m as { codeToHtml: CodeToHtml }).codeToHtml,
-  );
+  if (!loading) {
+    // Retry after a failed load instead of caching the rejection forever (one
+    // offline blip used to disable highlighting for the whole session). The
+    // browser module map also memoizes a FAILED import by specifier, so a
+    // retry needs a cache-busting query to actually re-fetch.
+    const url = attempts++ ? `https://esm.sh/shiki@4?retry=${attempts}` : 'https://esm.sh/shiki@4';
+    loading = import(url).then((m) => (m as { codeToHtml: CodeToHtml }).codeToHtml);
+    loading.catch(() => {
+      loading = null;
+    });
+  }
   return loading;
 }
 

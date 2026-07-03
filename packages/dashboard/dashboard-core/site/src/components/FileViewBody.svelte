@@ -34,6 +34,11 @@
   });
 
   const text = $derived(view.text ?? '');
+  // String-valued deriveds so the highlight effect below value-compares (===)
+  // and skips re-runs: `view` itself is a fresh object every SSE frame (the
+  // pane store is reassigned per frame), and subscribing the effect to it
+  // would re-tokenize the whole context on every frame.
+  const lang = $derived(view.lang ?? 'text');
   const rawLines = $derived(text.split('\n'));
   const contextStart = $derived(view.context_start ?? 1);
   const start = $derived(view.start ?? contextStart);
@@ -63,7 +68,7 @@
   let lineHtml = $state<string[] | null>(null);
   $effect(() => {
     const src = text;
-    const l = view.lang ?? 'text';
+    const l = lang;
     let alive = true;
     lineHtml = null;
     void highlightLines(src, l).then((out) => {
