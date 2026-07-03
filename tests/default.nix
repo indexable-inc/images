@@ -2745,6 +2745,20 @@
         message = "ix-ray daemon should use /run/ray and leave the shared-memory object store mappable";
       }
       {
+        # Both roles must exec `ray start <flags>`: the launcher builds its arg
+        # list from `["start"] ++ modeArgs`, so the rendered script must carry
+        # the `start` subcommand ahead of the mode flag. Regressed once when the
+        # list began with `--head`/`--address` and Ray crash-looped on
+        # `No such option: --head` (index#1800 crash-loop).
+        assertion = let
+          headScript = builtins.readFile ixRayHead.systemd.services.ix-ray.serviceConfig.ExecStart;
+          workerScript = builtins.readFile ixRayWorker.systemd.services.ix-ray.serviceConfig.ExecStart;
+        in
+          lib.hasInfix "\"start\" \"--head\"" headScript
+          && lib.hasInfix "\"start\" \"--address\"" workerScript;
+        message = "ix-ray launcher must exec `ray start` (the `start` subcommand ahead of --head/--address), never `ray --head`";
+      }
+      {
         # A worker with no headAddress cannot know where to join: fail eval.
         assertion = let
           failures = failedAssertionsFor [

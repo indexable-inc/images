@@ -108,7 +108,7 @@
       (toString cfg.objectStoreMemory)
     ];
 
-  startArgsNu = "[ ${lib.concatMapStringsSep " " builtins.toJSON (modeArgs ++ commonArgs)} ]";
+  startArgsNu = "[ ${lib.concatMapStringsSep " " builtins.toJSON (["start"] ++ modeArgs ++ commonArgs)} ]";
 
   # Resolve this node's tailscale IPv4 at runtime (it is host state, not a Nix
   # value), fail loudly if tailscale is not up, then exec `ray start` bound to
