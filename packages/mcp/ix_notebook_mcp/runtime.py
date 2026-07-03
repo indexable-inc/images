@@ -1034,7 +1034,11 @@ def register_resource(
 
     Interactive (buttons/forms that run python): pass ``actions`` -- a dict of
     name -> handler (sync or async, called with the submitted payload). The HTML
-    is served with ``ix.act(name, payload)`` and ``ix.events(fn)`` pre-wired::
+    is served with ``ix.act(name, payload)`` and ``ix.events(fn)`` pre-wired.
+    For any non-trivial UI prefer ``svelte.component(...)`` (module ``svelte``)
+    over hand-written HTML/JS strings: it compiles a real Svelte 5 component to
+    a self-contained bundle over this same wiring, with one reactive renderer
+    instead of a server template plus a hand-rolled ``ix.events`` redraw. ::
 
         async def on_deploy(payload):
             run = await start_deploy(payload["env"])

@@ -285,7 +285,12 @@ CHANNEL = (
     "it the page↔kernel loop runs silently and you only learn the human acted by polling kernel "
     "state. Skip it only when a click is purely page-local (a filter toggle, a re-render). "
     "When a <channel> tag carries a `resource` attribute, answer it with the `reply` tool, "
-    "passing that resource id — your transcript output never reaches the page."
+    "passing that resource id — your transcript output never reaches the page. For any "
+    "non-trivial UI, author a real Svelte 5 component instead of hand-rolled HTML/JS strings: "
+    "`await svelte.component(\"Board.svelte\", id=..., state=..., actions=...)` (module "
+    "`svelte`) compiles it to one self-contained bundle; the component imports "
+    "`{ data, act } from 'ix'` and re-renders reactively from the dict each handler returns, "
+    "so there is one renderer and kernel state stays the single source of truth."
 )
 
 CELLS = (
