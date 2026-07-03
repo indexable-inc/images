@@ -295,15 +295,11 @@ impl App {
         // `on_key_repeat`); until then, and for a 1.1 host forever, advertise
         // the macOS factory defaults (delay 375ms, 90ms interval = 11/s)
         // rather than a Linux-flavored 25-30/s that no Mac keyboard uses.
-        let (repeat_rate, repeat_delay) = wl_repeat_info(375, 90);
-        if let Err(err) = seat.add_keyboard(xkb, repeat_delay, repeat_rate) {
+        let repeat = wl_repeat_info(375, 90);
+        if let Err(err) = seat.add_keyboard(xkb, repeat.delay, repeat.rate) {
             warn!(%err, layout = %cli.xkb_layout, "xkb keymap failed; falling back to defaults");
-            seat.add_keyboard(
-                smithay::input::keyboard::XkbConfig::default(),
-                repeat_delay,
-                repeat_rate,
-            )
-            .expect("default xkb keymap must compile");
+            seat.add_keyboard(smithay::input::keyboard::XkbConfig::default(), repeat.delay, repeat.rate)
+                .expect("default xkb keymap must compile");
         }
         seat.add_pointer();
 
@@ -648,10 +644,10 @@ impl App {
     /// bind). Makes the host's System Settings the one repeat authority:
     /// clients auto-repeat with exactly the Mac's delay and rate.
     fn on_key_repeat(&mut self, delay_ms: u32, interval_ms: u32) {
-        let (rate, delay) = wl_repeat_info(delay_ms, interval_ms);
-        info!(delay_ms, interval_ms, rate, delay, "key repeat timing from host");
+        let repeat = wl_repeat_info(delay_ms, interval_ms);
+        info!(delay_ms, interval_ms, rate = repeat.rate, delay = repeat.delay, "key repeat timing from host");
         if let Some(keyboard) = self.seat.get_keyboard() {
-            keyboard.change_repeat_info(rate, delay);
+            keyboard.change_repeat_info(repeat.rate, repeat.delay);
         }
     }
 

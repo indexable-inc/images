@@ -270,8 +270,18 @@ pub enum ToGuest {
     },
 }
 
-/// [`ToGuest::KeyRepeat`] timing as `wl_keyboard.repeat_info` arguments:
-/// `(rate, delay)` = (repeats per second, ms before the first repeat).
+/// `wl_keyboard.repeat_info` arguments derived from [`ToGuest::KeyRepeat`]
+/// by [`wl_repeat_info`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RepeatInfo {
+    /// Repeats per second; 0 disables client-side repeat (`wl_keyboard`'s
+    /// own convention).
+    pub rate: i32,
+    /// Delay before the first repeat, ms.
+    pub delay: i32,
+}
+
+/// [`ToGuest::KeyRepeat`] timing as `wl_keyboard.repeat_info` arguments.
 ///
 /// Lives next to the wire type because it pins down what the fields mean to
 /// a consumer, and the protocol crate is the one crate both sides (and both
@@ -282,15 +292,19 @@ pub enum ToGuest {
 /// 1/s). A zero interval is nonsense from the wire and also maps to
 /// disabled rather than an unbounded rate.
 #[must_use]
-pub fn wl_repeat_info(delay_ms: u32, interval_ms: u32) -> (i32, i32) {
+pub fn wl_repeat_info(delay_ms: u32, interval_ms: u32) -> RepeatInfo {
     let rate = match interval_ms {
         0 => 0,
         interval => clamp_to_i32((1000 + interval / 2) / interval),
     };
-    (rate, clamp_to_i32(delay_ms))
+    RepeatInfo { rate, delay: clamp_to_i32(delay_ms) }
 }
 
 /// Saturate into `wl_keyboard.repeat_info`'s i32 arguments.
+// Clamping is the contract: a value past i32::MAX (only reachable from a
+// degenerate or hostile peer) pins to the maximum instead of failing the
+// connection over repeat timing.
+#[allow(clippy::fallible_int_fallback)]
 fn clamp_to_i32(value: u32) -> i32 {
     i32::try_from(value).unwrap_or(i32::MAX)
 }
@@ -430,27 +444,27 @@ mod tests {
     #[test]
     fn repeat_info_matches_macos_defaults() {
         // Factory settings: InitialKeyRepeat=25 (375ms), KeyRepeat=6 (90ms).
-        assert_eq!(wl_repeat_info(375, 90), (11, 375));
+        assert_eq!(wl_repeat_info(375, 90), RepeatInfo { rate: 11, delay: 375 });
         // Fastest sliders: InitialKeyRepeat=15 (225ms), KeyRepeat=2 (30ms).
-        assert_eq!(wl_repeat_info(225, 30), (33, 225));
+        assert_eq!(wl_repeat_info(225, 30), RepeatInfo { rate: 33, delay: 225 });
     }
 
     #[test]
     fn repeat_info_rounds_to_nearest_rate() {
-        assert_eq!(wl_repeat_info(600, 150).0, 7); // 6.67/s, not a truncated 6
-        assert_eq!(wl_repeat_info(600, 1800).0, 1); // slowest slider stop
+        assert_eq!(wl_repeat_info(600, 150).rate, 7); // 6.67/s, not a truncated 6
+        assert_eq!(wl_repeat_info(600, 1800).rate, 1); // slowest slider stop
     }
 
     #[test]
     fn repeat_info_disables_for_off_and_degenerate_intervals() {
         // macOS "Key Repeat: Off" reports a minutes-long interval.
-        assert_eq!(wl_repeat_info(375, 4_500_000).0, 0);
-        assert_eq!(wl_repeat_info(375, 0).0, 0);
+        assert_eq!(wl_repeat_info(375, 4_500_000).rate, 0);
+        assert_eq!(wl_repeat_info(375, 0).rate, 0);
     }
 
     #[test]
     fn repeat_info_saturates_into_i32() {
-        assert_eq!(wl_repeat_info(u32::MAX, 90), (11, i32::MAX));
+        assert_eq!(wl_repeat_info(u32::MAX, 90), RepeatInfo { rate: 11, delay: i32::MAX });
     }
 
     #[test]
