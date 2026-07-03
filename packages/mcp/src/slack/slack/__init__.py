@@ -25,6 +25,18 @@ Each call returns a polars DataFrame with a fixed schema so empty results stay
 typed. Raises :exc:`SlackError` when no token is configured; the message names
 the next step (``slack.login(token)``).
 
+**Replies come back to the agent.** By default every :func:`send` registers the
+message's thread with a background watcher that polls Slack and pushes each
+human reply into the connected agent session as a channel event (the kernel's
+``notify()``), so a session that posts a question hears the answer without
+polling. A top-level post is also seeded with a one-dot (``"."``) threaded
+reply so the channel shows a thread and nudges people to answer in-thread
+(where the watcher listens) instead of scattering replies in the channel. Opt
+out per call with ``send(..., watch=False)`` / ``seed_thread=False``, manage
+watches with :func:`watch` / :func:`unwatch` / :func:`watches`. Watching needs
+the server-managed kernel (the notification channel); elsewhere ``send`` still
+posts and reports ``watching=False``.
+
 The token's reach is whatever OAuth scopes the Slack app was granted, so a
 search or DM read can fail with ``missing_scope``; the error names the scope to
 add to the app (then re-mint the token). Common scopes: ``channels:history`` /
@@ -39,13 +51,17 @@ personal workspace never reaches state other participants can see.
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 import json
 import os
 import pathlib
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
+from collections.abc import Awaitable, Callable
 
 import polars as pl
 from pydantic import BaseModel, ConfigDict
@@ -61,9 +77,12 @@ __all__ = [
     "send",
     "status",
     "thread",
+    "unwatch",
+    "watch",
+    "watches",
 ]
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 # The env var a shared (multiplayer) room sets on the one MCP it replicates
 # across participants. Incognito is the default: an unset (or empty) value means
@@ -153,6 +172,229 @@ _SEARCH_SCHEMA: dict[str, pl.DataType | type[pl.DataType]] = {
     "text": pl.Utf8,
     "permalink": pl.Utf8,
 }
+
+_WATCHES_SCHEMA: dict[str, pl.DataType | type[pl.DataType]] = {
+    "channel_id": pl.Utf8,
+    "thread_ts": pl.Utf8,
+    "last_seen_ts": pl.Utf8,
+    "expires_at": pl.Float64,
+}
+
+# --- thread watching -------------------------------------------------------
+#
+# Every send() registers its thread here (opt out with watch=False); a single
+# background task polls each watched thread and pushes new human replies into
+# the connected agent session through the kernel's notify() channel, so the
+# agent hears answers without polling Slack itself.
+
+# The text of the auto-posted thread starter: visibly starts a thread (the
+# channel shows "1 reply") so people answer in-thread -- where the watcher
+# listens -- without adding content anyone has to read.
+_THREAD_SEED_TEXT = "."
+
+# conversations.replies is Tier 3 (50+/min); one call per watched thread per
+# cycle keeps a full watch table well under that.
+_WATCH_POLL_SECONDS = 20.0
+
+# A thread nobody replies to stops being watched after this long so the poll
+# table cannot grow without bound across a long-lived kernel. Activity renews it.
+_WATCH_TTL_SECONDS = 48 * 3600.0
+
+# Hard cap on concurrently watched threads; the oldest-expiring watch is evicted
+# first. High enough that a real session never hits it.
+_WATCH_MAX = 32
+
+
+@dataclasses.dataclass
+class _Watch:
+    channel_id: str
+    thread_ts: str
+    # Replies with ts <= last_seen_ts are already delivered (or are our own
+    # post/seed); only strictly-newer messages notify.
+    last_seen_ts: str
+    expires_at: float
+
+
+_watches: dict[tuple[str, str], _Watch] = {}
+_watcher_task: asyncio.Task[None] | None = None
+_self_user_id: str | None = None
+
+
+def _resolve_notify() -> Callable[..., Awaitable[None]] | None:
+    """The kernel's ``notify()`` when this module runs inside the server-managed
+    kernel, else None (standalone import, or a kernel without a store). Resolved
+    per call so tests can monkeypatch and so a late-configured store is picked
+    up."""
+    try:
+        from ix_notebook_mcp import runtime  # imported here: optional, kernel-only dependency
+    except ImportError:
+        return None
+    if getattr(runtime, "_store", None) is None:
+        return None
+    return runtime.notify
+
+
+def _self_user(token: str) -> str:
+    """This token's own user id (cached): the watcher must not report our own
+    posts (including the thread seed) as replies."""
+    global _self_user_id
+    if _self_user_id is None:
+        _self_user_id = str(_api_call("auth.test", token).get("user_id", ""))
+    return _self_user_id
+
+
+def _register_watch(channel_id: str, thread_ts: str, last_seen_ts: str) -> bool:
+    """Track ``thread_ts`` for reply notifications; True iff a delivery channel
+    exists (the watcher is pointless without one). Re-registering renews the
+    TTL and keeps the newer last-seen mark."""
+    if _resolve_notify() is None:
+        return False
+    key = (channel_id, thread_ts)
+    prior = _watches.get(key)
+    seen = max(last_seen_ts, prior.last_seen_ts) if prior else last_seen_ts
+    _watches[key] = _Watch(
+        channel_id=channel_id,
+        thread_ts=thread_ts,
+        last_seen_ts=seen,
+        expires_at=time.time() + _WATCH_TTL_SECONDS,
+    )
+    while len(_watches) > _WATCH_MAX:
+        oldest = min(_watches, key=lambda k: _watches[k].expires_at)
+        del _watches[oldest]
+    _ensure_watcher()
+    return True
+
+
+def _ensure_watcher() -> None:
+    global _watcher_task
+    if _watcher_task is None or _watcher_task.done():
+        _watcher_task = asyncio.get_running_loop().create_task(
+            _watch_loop(), name="slack-thread-watcher"
+        )
+
+
+async def _watch_loop() -> None:
+    global _watcher_task
+    try:
+        while _watches:
+            await asyncio.sleep(_WATCH_POLL_SECONDS)
+            await _poll_watches_once()
+    finally:
+        # The loop exits when the watch table drains; the next register restarts it.
+        _watcher_task = None
+
+
+async def _poll_watches_once() -> None:
+    """One poll pass over every watched thread; each new reply from someone else
+    becomes one agent notification. A failing watch notifies once and is
+    dropped (never silently retried forever); a missing token drains the table.
+    """
+    notify = _resolve_notify()
+    if notify is None:
+        _watches.clear()
+        return
+    now = time.time()
+    for key, w in list(_watches.items()):
+        if now > w.expires_at:
+            del _watches[key]
+            continue
+        try:
+            token = _token()
+            me = await asyncio.to_thread(_self_user, token)
+            data = await asyncio.to_thread(
+                _api_call,
+                "conversations.replies",
+                token,
+                {
+                    "channel": w.channel_id,
+                    "ts": w.thread_ts,
+                    "oldest": w.last_seen_ts,
+                    "limit": 100,
+                },
+            )
+        except SlackError as exc:
+            del _watches[key]
+            await notify(
+                f"slack thread watch dropped for {w.channel_id}/{w.thread_ts}: {exc}",
+                slack_channel=w.channel_id,
+                slack_thread_ts=w.thread_ts,
+                slack_event="watch_dropped",
+            )
+            continue
+        for msg in data.get("messages", []):
+            ts = str(msg.get("ts", ""))
+            # `oldest` is inclusive and the parent message rides along; keep
+            # strictly-newer messages only.
+            if ts <= w.last_seen_ts:
+                continue
+            w.last_seen_ts = ts
+            user = str(msg.get("user") or msg.get("username") or msg.get("bot_id") or "")
+            text = str(msg.get("text", ""))
+            if user == me:
+                continue
+            w.expires_at = time.time() + _WATCH_TTL_SECONDS
+            await notify(
+                f"Slack reply from {user} in {w.channel_id} "
+                f"(thread {w.thread_ts}): {text}\n"
+                f"Respond with: await slack.send({w.channel_id!r}, <text>, "
+                f"thread_ts={w.thread_ts!r})",
+                slack_event="thread_reply",
+                slack_channel=w.channel_id,
+                slack_thread_ts=w.thread_ts,
+                slack_ts=ts,
+                slack_user=user,
+            )
+
+
+async def watch(channel: str, thread_ts: str) -> dict[str, Any]:
+    """Watch an existing thread: new replies notify the connected agent session.
+
+    ``channel`` resolves like :func:`messages`; ``thread_ts`` is the parent
+    message's Slack timestamp. Replies already visible are not re-delivered:
+    only messages arriving after this call notify. :func:`send` registers its
+    thread automatically, so this is for threads you did not post to.
+
+    Returns ``{"watching": bool, "channel": id, "thread_ts": ts}``;
+    ``watching=False`` means this kernel has no notification channel (not
+    server-managed), so there is nowhere to deliver replies.
+    """
+    _require_incognito()
+    token = _token()
+    channel_id = _resolve_channel(channel, token)
+    # Start from "now": the newest ts already in the thread.
+    data = await asyncio.to_thread(
+        _api_call,
+        "conversations.replies",
+        token,
+        {"channel": channel_id, "ts": thread_ts, "limit": 100},
+    )
+    newest = max(
+        (str(m.get("ts", "")) for m in data.get("messages", [])),
+        default=thread_ts,
+    )
+    watching = _register_watch(channel_id, thread_ts, newest)
+    return {"watching": watching, "channel": channel_id, "thread_ts": thread_ts}
+
+
+def unwatch(channel_id: str, thread_ts: str) -> dict[str, Any]:
+    """Stop watching one thread (ids as returned by :func:`watches`).
+
+    Idempotent: returns ``{"removed": bool}``.
+    """
+    removed = _watches.pop((channel_id, thread_ts), None) is not None
+    return {"removed": removed}
+
+
+def watches() -> pl.DataFrame:
+    """The active thread watches, as a polars DataFrame.
+
+    Columns: ``channel_id``, ``thread_ts``, ``last_seen_ts``, ``expires_at``
+    (unix seconds; activity renews it).
+    """
+    rows = [dataclasses.asdict(w) for w in _watches.values()]
+    if not rows:
+        return pl.DataFrame(schema=_WATCHES_SCHEMA)
+    return pl.DataFrame(rows, schema_overrides=_WATCHES_SCHEMA).select(list(_WATCHES_SCHEMA))
 
 
 class _SlackProfile(BaseModel):
@@ -688,6 +930,8 @@ async def send(
     *,
     thread_ts: str | None = None,
     reply_broadcast: bool = False,
+    watch: bool = True,
+    seed_thread: bool = True,
 ) -> dict[str, Any]:
     """Post ``text`` to ``channel`` and return Slack's response metadata.
 
@@ -699,10 +943,19 @@ async def send(
     ``reply_broadcast=True`` to also surface a threaded reply to the whole
     channel; it is only valid with ``thread_ts`` and raises otherwise.
 
+    By default the posted message's thread is **watched**: new replies from
+    other people are pushed into the connected agent session as channel events
+    (``watch=False`` opts out; ``watching`` in the return says whether a
+    delivery channel exists). A top-level post is also seeded with a ``"."``
+    threaded reply so the channel shows a thread and answers land in it, where
+    the watcher listens (``seed_thread=False`` opts out; a failed seed never
+    fails the send -- the error comes back as ``seed_error``).
+
     Returns ``{"ok": True, "ts": "<timestamp>", "channel": "<id>",
-    "thread_ts": "<parent ts, or "">"}`` on success (``thread_ts`` is non-empty
-    for a threaded reply). Needs ``chat:write``. Raises :exc:`SlackError` on
-    failure or in a shared room.
+    "thread_ts": "<parent ts, or "">", "watching": bool}`` on success
+    (``thread_ts`` is non-empty for a threaded reply), plus ``seed_error`` when
+    seeding failed. Needs ``chat:write``. Raises :exc:`SlackError` on failure or
+    in a shared room.
     """
     _require_incognito()
     if reply_broadcast and not thread_ts:
@@ -720,12 +973,35 @@ async def send(
     # chat.postMessage echoes the stored message; a threaded reply carries its
     # parent's `thread_ts`, so surface it (empty for a top-level post).
     posted: dict[str, Any] = data.get("message") or {}
-    return {
+    out: dict[str, Any] = {
         "ok": True,
         "ts": data.get("ts", ""),
-        "channel": data.get("channel", ""),
+        "channel": data.get("channel", "") or channel_id,
         "thread_ts": posted.get("thread_ts", "") or "",
     }
+
+    # The thread this send belongs to: the parent when replying, our own new
+    # message otherwise. Replies newer than what we just wrote notify.
+    watch_root = thread_ts or str(out["ts"])
+    last_seen = str(out["ts"])
+
+    if seed_thread and not thread_ts and str(out["ts"]):
+        try:
+            seed = _api_call(
+                "chat.postMessage",
+                token,
+                {"channel": channel_id, "text": _THREAD_SEED_TEXT, "thread_ts": watch_root},
+            )
+            last_seen = max(last_seen, str(seed.get("ts", "")))
+        except SlackError as exc:
+            # The message itself is posted; a seed failure must not turn that
+            # into a reported send failure. Surfaced, not swallowed.
+            out["seed_error"] = str(exc)
+
+    out["watching"] = (
+        _register_watch(channel_id, watch_root, last_seen) if watch and watch_root else False
+    )
+    return out
 
 
 async def search(
