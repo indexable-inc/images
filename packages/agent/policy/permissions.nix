@@ -1,18 +1,13 @@
-{
-  lib,
-  mcpServers ? {},
-}: let
+_: let
   protectedMergeToolPatterns = [
     "Bash(gh pr merge*--admin*)"
     "Bash(gh pr merge*--force*)"
   ];
 
-  supersededBuiltinTools =
-    [
-      "WebSearch"
-      "WebFetch"
-    ]
-    ++ lib.optional (mcpServers ? index) "Bash";
+  supersededBuiltinTools = [
+    "WebSearch"
+    "WebFetch"
+  ];
 
   codexForcedSettings = {
     features = {

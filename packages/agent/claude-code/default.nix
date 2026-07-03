@@ -238,9 +238,7 @@
   };
 
   # Claude-native permission deny list rendered from shared agent policy.
-  sharedPermissions = import (ix.paths.packagesRoot + "/agent/policy/permissions.nix") {
-    inherit lib mcpServers;
-  };
+  sharedPermissions = import (ix.paths.packagesRoot + "/agent/policy/permissions.nix") {};
 
   # Caller's extraSettings first, then the computed defaults recursively merged
   # ON TOP, so the keys below always win a conflict while the caller's other

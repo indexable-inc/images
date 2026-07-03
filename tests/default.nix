@@ -3602,10 +3602,7 @@
       }
       {
         assertion = let
-          policy = import (paths.packagesRoot + "/agent/policy/permissions.nix") {
-            inherit lib;
-            mcpServers = {};
-          };
+          policy = import (paths.packagesRoot + "/agent/policy/permissions.nix") {};
         in
           policy.claude.deniedToolPatterns
           == [
@@ -3625,7 +3622,7 @@
             standalone_web_search = false;
             unified_exec = false;
           };
-        message = "agent policy should always disable built-in web search tools";
+        message = "agent policy should deny only protected merges and built-in web search tools";
       }
       {
         assertion = let

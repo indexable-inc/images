@@ -99,9 +99,7 @@
     })
     flat;
 
-  sharedPermissions = import (ix.paths.packagesRoot + "/agent/policy/permissions.nix") {
-    inherit lib mcpServers;
-  };
+  sharedPermissions = import (ix.paths.packagesRoot + "/agent/policy/permissions.nix") {};
   effectiveForcedSettings =
     forcedSettings
     // sharedPermissions.codex.forcedSettings
