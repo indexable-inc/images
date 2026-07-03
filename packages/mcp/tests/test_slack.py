@@ -123,7 +123,7 @@ def fresh_watch_state(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[s
     """Reset module watch state and route notify() into a recorder."""
     monkeypatch.setattr(slack, "_watches", {})
     monkeypatch.setattr(slack, "_watcher_task", None)
-    monkeypatch.setattr(slack, "_self_user_id", None)
+    monkeypatch.setattr(slack, "_self_ids", None)
     delivered: list[tuple[str, dict[str, str]]] = []
 
     async def record(content: str, **meta: str) -> None:
@@ -176,8 +176,10 @@ def test_send_seeds_thread_and_watches(
     assert "seed_error" not in out
     key = (_CHANNEL_ID, out["ts"])
     assert key in slack._watches
-    # The seed itself is already "seen": it must never come back as a reply.
-    assert slack._watches[key].last_seen_ts > out["ts"]
+    # The cursor stays at the root post, NOT the seed: a reply landing in the
+    # root-to-seed race window must still be delivered (the poller skips the
+    # seed itself as self-authored).
+    assert slack._watches[key].last_seen_ts == out["ts"]
 
 
 def test_send_in_thread_watches_parent(
@@ -306,8 +308,9 @@ def test_poll_notify_failure_keeps_cursor_for_retry(
         }
 
     monkeypatch.setattr(slack, "_api_call", fake_api)
-    with pytest.raises(RuntimeError, match="notify channel down"):
-        asyncio.run(slack._poll_watches_once())
+    # The failure is contained (the watch loop must survive to retry), the
+    # cursor stays put, and the watch is kept.
+    asyncio.run(slack._poll_watches_once())
     assert slack._watches[(_CHANNEL_ID, root)].last_seen_ts == before
 
 
@@ -358,7 +361,7 @@ def test_poll_survives_transient_auth_failure(
 ) -> None:
     """A 429 on the hoisted auth.test must keep the table, not drain it."""
     out = asyncio.run(slack.send(_CHANNEL_ID, "hold on"))
-    monkeypatch.setattr(slack, "_self_user_id", None)  # force auth.test on next poll
+    monkeypatch.setattr(slack, "_self_ids", None)  # force auth.test on next poll
 
     def flaky_auth(method: str, token: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         raise slack.SlackTransientError("Slack API HTTP 429 for auth.test")
@@ -376,7 +379,7 @@ def test_poll_drains_with_one_notice_on_permanent_auth_failure(
 ) -> None:
     asyncio.run(slack.send(_CHANNEL_ID, "one"))
     asyncio.run(slack.send(_CHANNEL_ID, "two"))
-    monkeypatch.setattr(slack, "_self_user_id", None)
+    monkeypatch.setattr(slack, "_self_ids", None)
 
     def dead_auth(method: str, token: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         raise slack.SlackError("Slack token is invalid or expired (token_revoked).")
@@ -471,17 +474,65 @@ def test_login_and_logout_reset_identity_and_watches(
     monkeypatch.setattr(slack, "_TOKEN_FILE", tmp_path / "token")
     asyncio.run(slack.send(_CHANNEL_ID, "before switch"))
     assert slack._watches
-    monkeypatch.setattr(slack, "_self_user_id", "U0STALE0000")
+    monkeypatch.setattr(slack, "_self_ids", ("U0STALE0000", ""))
     slack.login("xoxp-new-identity")
-    assert slack._self_user_id is None
+    assert slack._self_ids is None
     # login() also drops old watches: they belong to the prior identity and
     # would be misattributed (or fail outright) polled under the new token.
     assert slack._watches == {}
     asyncio.run(slack.send(_CHANNEL_ID, "after switch"))
     assert slack._watches
     slack.logout()
-    assert slack._self_user_id is None
+    assert slack._self_ids is None
     assert slack._watches == {}
+
+
+def test_resend_into_watched_thread_keeps_older_cursor(
+    fresh_watch_state: list[tuple[str, dict[str, str]]],
+    threaded_api: list[tuple[str, dict[str, Any]]],
+) -> None:
+    """Sending again into a watched thread must not advance the cursor past
+    not-yet-delivered replies that arrived before our new message."""
+    out = asyncio.run(slack.send(_CHANNEL_ID, "first"))
+    root = out["ts"]
+    before = slack._watches[(_CHANNEL_ID, root)].last_seen_ts
+    asyncio.run(slack.send(_CHANNEL_ID, "second, later", thread_ts=root))
+    assert slack._watches[(_CHANNEL_ID, root)].last_seen_ts == before
+
+
+def test_poll_suppresses_own_bot_identity(
+    fresh_watch_state: list[tuple[str, dict[str, str]]],
+    threaded_api: list[tuple[str, dict[str, Any]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With an xoxb token, own posts can carry bot_id instead of user."""
+    out = asyncio.run(slack.send(_CHANNEL_ID, "as a bot"))
+    monkeypatch.setattr(slack, "_self_ids", None)  # re-resolve with bot identity
+
+    def bot_api(method: str, token: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        if method == "auth.test":
+            return {"ok": True, "user_id": _SELF_USER, "bot_id": "B0SELFBOT00"}
+        assert method == "conversations.replies"
+        return {
+            "ok": True,
+            "messages": [{"ts": "1781739999.000009", "bot_id": "B0SELFBOT00", "text": "own bot post"}],
+        }
+
+    monkeypatch.setattr(slack, "_api_call", bot_api)
+    asyncio.run(slack._poll_watches_once())
+    assert fresh_watch_state == []
+    assert slack._watches[(_CHANNEL_ID, out["ts"])].last_seen_ts == "1781739999.000009"
+
+
+def test_watch_without_delivery_channel_makes_no_api_calls(
+    threaded_api: list[tuple[str, dict[str, Any]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(slack, "_watches", {})
+    monkeypatch.setattr(slack, "_resolve_notify", lambda: None)
+    out = asyncio.run(slack.watch(_CHANNEL_ID, _PARENT_TS))
+    assert out["watching"] is False
+    assert threaded_api == []
 
 
 def test_unwatch_and_watches_frame(
