@@ -67,6 +67,10 @@ let
                 pin = ix.pins.loadPin ./pins.json "mesa-src";
               in
               prev.mesa.overrideAttrs (old: {
+                # The version assert only catches upstream version bumps; a
+                # nixpkgs change to mesa's own patch set can also stop
+                # applying against the fork tree and force a rebase, and only
+                # the build failure catches that case.
                 src =
                   assert lib.assertMsg (old.version == pin.version)
                     "panes-guest-image: mesa fork pin is ${pin.version} but nixpkgs mesa is ${old.version}; rebase indexable-inc/mesa branch ix/venus-driver-side-semaphore onto the new upstream tag and re-pin";
