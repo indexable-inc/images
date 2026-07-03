@@ -24,11 +24,19 @@ concurrency:
 
 env:
   # Shared with check.yml; restricted settings are daemon-owned and ignored here.
+  # `fallback` is push-only (not in check.yml): a poisoned substitute -- a
+  # truncated HTTP 200 NAR from a cache incident (ix#6139) -- otherwise aborts
+  # realising a push root, and that root silently never publishes. Run
+  # 28657772825 lost the cross-IFD `cargo-vendor-dir` root exactly this way,
+  # leaving Darwin consumers unable to eval cross packages (#1711). Falling
+  # back to a source build keeps every root publishable regardless of cache
+  # health.
   NIX_CONFIG: |-
     experimental-features = nix-command flakes ca-derivations
     accept-flake-config = true
     max-jobs = auto
     cores = 1
+    fallback = true
 
 jobs:
   push:
