@@ -194,6 +194,16 @@ let
       '';
     }
     {
+      agentPerIssue = ''
+        Filing an issue is not the end of ownership. When you find or file an
+        issue you could properly resolve yourself, also spawn a named background
+        agent per issue (name it after the issue, e.g.
+        `issue-1687-cross-ifd-roots`) to drive it to a merged fix, and note the
+        handoff on the issue. File-and-stop only when the fix needs a human
+        decision or is genuinely out of your reach.
+      '';
+    }
+    {
       preV1 = ''
         This codebase is pre-v1. Prefer the correct API over compatibility. Migrate
         every call site in the same change. Add aliases, shims, or deprecated paths
