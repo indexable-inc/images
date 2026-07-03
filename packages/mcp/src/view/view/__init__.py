@@ -457,7 +457,7 @@ class Code:
     def __repr__(self) -> str:
         return self.text
 
-    def _repr_mimebundle_(self, **_kwargs: object) -> dict:
+    def _repr_mimebundle_(self, **_kwargs: object) -> dict[str, Any]:
         # '\n' only, matching the renderer's split (see runtime.__ix_read).
         lines = self.text.split("\n")
         if lines and lines[-1] == "":
