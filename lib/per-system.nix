@@ -36,20 +36,20 @@
   # up in the `lint` derivation build, not at `nix run` time.
   lintStage = ix.writeNushellApplication pkgs {
     name = "lint-stage";
-    meta.description = "One lint stage (nixfmt | statix | deadnix | astlog | astlog-rust | astlog-elixir | ruff); driven by `lint`";
+    meta.description = "One lint stage (alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | ruff); driven by `lint`";
     runtimeInputs = [
+      pkgs.alejandra
       pkgs.deadnix
       pkgs.fd
-      pkgs.nixfmt
       pkgs.ruff
       pkgs.statix
       repoPackages.astlog
     ];
     text = ''
       # nu
-      def "main nixfmt" [] {
+      def "main alejandra" [] {
         let nix_files = (fd --extension nix | lines)
-        nixfmt --check ...$nix_files
+        alejandra --check ...$nix_files
       }
       def "main statix" [] { statix check . }
       # Strict: no `-L`/`--no-lambda-pattern-names`. That flag exists because
@@ -138,7 +138,7 @@
         }
       }
       def main [] {
-        error make { msg: "specify a stage: nixfmt | statix | deadnix | astlog | astlog-rust | astlog-elixir | ruff" }
+        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | ruff" }
       }
     '';
   };
@@ -147,7 +147,7 @@
   # `--json` runner inside `lint`, so adding a stage cannot update one path
   # and silently miss the other.
   lintStages = [
-    "nixfmt"
+    "alejandra"
     "statix"
     "deadnix"
     "astlog"
@@ -1027,7 +1027,7 @@
           # a missing or non-firing fixture fails the build, as does a rule
           # without a lint declaration (it would silently drop out of the gate).
           # Fixtures are stored as `.fixture` (not `.nix`/`.rs`) so the repo lint
-          # stages (nixfmt / statix / deadnix / astlog itself) never scan the
+          # stages (alejandra / statix / deadnix / astlog itself) never scan the
           # deliberately-violating snippets; the check stages each back to its
           # ruleset's extension (`.nix` for nix.astlog, `.rs` for rust.astlog —
           # astlog selects the grammar by file extension) before running the
@@ -1393,7 +1393,7 @@ in {
     default = pkgs.mkShellNoCC {
       packages = [
         repoPackages.astlog
-        pkgs.nixfmt
+        pkgs.alejandra
       ];
     };
 

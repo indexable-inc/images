@@ -58,13 +58,14 @@ rendered fleet plan, image attrset, and wrapped CLI app.
     "secret key '${sourceName}' must be lower snake_case: [a-z][a-z0-9_]*";
     assert lib.assertMsg (isAttrs value) "secret '${sourceName}' must be an attrset";
       if value ? env
-      then assert lib.assertMsg (!(value ? file)) "secret '${sourceName}' cannot set both env and file"; {
-        name = sourceName;
-        target = {
-          name = value.env;
-          injectAs = "env";
-        };
-      }
+      then
+        assert lib.assertMsg (!(value ? file)) "secret '${sourceName}' cannot set both env and file"; {
+          name = sourceName;
+          target = {
+            name = value.env;
+            injectAs = "env";
+          };
+        }
       else if value ? file
       then {
         name = sourceName;

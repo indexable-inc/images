@@ -116,7 +116,7 @@ reusable, auto-discovered [NixOS modules](modules/) and declarative fleet helper
 
 ```sh
 nix flake show          # list every package, module, and check
-nix run .#lint          # nixfmt, statix, deadnix, astlog (nix + rust)
+nix run .#lint          # alejandra, statix, deadnix, astlog (nix + rust)
 nix build .#nginx-lifecycle-up   # realize one example fleet wrapper
 nix run .#reel          # regenerate the demo above
 ```

@@ -8,7 +8,7 @@
 # `astlog scan`; the binary's exit code is the gate.
 #
 # Index's own `lib/per-system.nix` keeps using `lintStage` for the
-# four-stage local lint run (nixfmt | statix | deadnix | astlog | astlog-rust);
+# four-stage local lint run (alejandra | statix | deadnix | astlog | astlog-rust);
 # this package is the externally consumable surface.
 {
   ix,

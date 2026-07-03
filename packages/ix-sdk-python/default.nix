@@ -32,8 +32,9 @@
   entry =
     if rawEntry == null
     then null
-    else assert lib.assertMsg (lib.hasPrefix "https://" rawEntry.url)
-    "ix-sdk-python: catalog entry for ${system} needs an https:// url"; rawEntry;
+    else
+      assert lib.assertMsg (lib.hasPrefix "https://" rawEntry.url)
+      "ix-sdk-python: catalog entry for ${system} needs an https:// url"; rawEntry;
 in
   if entry == null
   then
