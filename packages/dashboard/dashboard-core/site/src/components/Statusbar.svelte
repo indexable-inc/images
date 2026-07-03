@@ -16,7 +16,7 @@
     leaveRecording,
     shareUrl,
   } from '$lib/stream.svelte';
-  import { humanClock } from '$lib/ui.svelte';
+  import { humanClock, recordingLabel } from '$lib/ui.svelte';
 
   let { sessionCount, runCount }: { sessionCount: number; runCount: number } = $props();
 
@@ -66,8 +66,9 @@
     <button
       class="scrub-tag"
       class:live={following && isLive}
+      class:seeking={timeline.seeking}
       onclick={() => (controlsOpen = !controlsOpen)}
-      title="timeline controls"
+      title={timeline.seeking ? 'loading frame…' : 'timeline controls'}
     >{following ? (isLive ? 'LIVE' : 'END') : humanClock(value)}</button>
     <input
       class="scrubber"
@@ -96,10 +97,10 @@
           {/each}
         </span>
         {#if timeline.recordings.length}
-          <select class="tl-rec" onchange={onPick} value={timeline.source}>
+          <select class="tl-rec" onchange={onPick} value={timeline.source} title="replay a saved session">
             <option value="live">● live</option>
             {#each timeline.recordings as rec (rec.id)}
-              <option value={rec.id}>{humanClock(rec.started_ms)} · {(rec.bytes / 1024).toFixed(0)}kb</option>
+              <option value={rec.id}>{recordingLabel(rec.started_ms, rec.updated_ms, Date.now())}</option>
             {/each}
           </select>
         {/if}
@@ -193,6 +194,20 @@
   }
   .scrub-tag.live {
     color: var(--live);
+  }
+  .scrub-tag.seeking {
+    color: var(--accent);
+    animation: seek-pulse 1s ease-in-out infinite;
+  }
+  @keyframes seek-pulse {
+    50% {
+      opacity: 0.45;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .scrub-tag.seeking {
+      animation: none;
+    }
   }
   .scrub-tag:hover {
     color: var(--ink);

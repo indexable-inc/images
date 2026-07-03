@@ -7,7 +7,7 @@
   // what is visible.
   import { onMount } from 'svelte';
   import { store, timeline, loadRecording } from '$lib/stream.svelte';
-  import { ui, isOpen, toggleFold, setFold, select, focusPane, humanTime, humanAge, humanClock, runTooltip } from '$lib/ui.svelte';
+  import { ui, isOpen, toggleFold, setFold, select, focusPane, humanTime, humanAge, humanClock, humanDate, recordingLabel, runTooltip } from '$lib/ui.svelte';
   import { setListNav } from '$lib/keys.svelte';
   import {
     buildSidebar,
@@ -65,14 +65,10 @@
   function onSelect(sel: Selection): void {
     select(sel);
     if (sel.kind === 'recording') {
-      // Mirror the status-bar picker: once the recording's panes are in, land on
-      // its first run so the center stage shows content, not the empty prompt.
-      // If the recording opens with no runs at its start, keep the recording
-      // selected — the prompt to scrub is then accurate.
-      void loadRecording(sel.id).then(() => {
-        const first = flat.find((f) => f.selection.kind !== 'recording');
-        if (first) select(first.selection);
-      });
+      // The recording replays in a worker; its panes arrive asynchronously. Once
+      // they land in `store.panes` the selection-repair effect below lands the
+      // center stage on the newest run, so there is nothing to chain here.
+      void loadRecording(sel.id);
     }
   }
 
@@ -270,7 +266,9 @@
       </button>
       {#if isOpen('recordings')}
         {#if recordings.length === 0}
-          <div class="section-empty">none</div>
+          <div class="section-empty">no saved sessions yet</div>
+        {:else}
+          <div class="section-note">saved session replays — click to scrub the timeline</div>
         {/if}
         {#each recordings as rec (rec.id)}
           <button
@@ -278,11 +276,10 @@
             class:selected={ui.selection?.kind === 'recording' && ui.selection.id === rec.id}
             data-nav={'rec:' + rec.id}
             onclick={() => onSelect({ kind: 'recording', id: rec.id })}
-            title={rec.id}
+            title={`replay session from ${humanDate(rec.started_ms, refMs)} ${humanClock(rec.started_ms)} · ${(rec.bytes / 1024 / 1024).toFixed(1)} MB`}
           >
-            <span class="res-icon">●</span>
-            <span class="res-name">{humanClock(rec.started_ms)}</span>
-            <span class="res-meta">{(rec.bytes / 1024).toFixed(0)}kb</span>
+            <span class="res-icon">▶</span>
+            <span class="res-name">{recordingLabel(rec.started_ms, rec.updated_ms, refMs)}</span>
           </button>
         {/each}
       {/if}
@@ -398,6 +395,15 @@
     font-size: 11px;
     color: var(--ink-faint);
     font-style: italic;
+  }
+  /* One-line explainer under the recordings header, so a first-time viewer knows
+     these rows are replayable session snapshots, not live resources. */
+  .section-note {
+    padding: 2px 12px 6px 26px;
+    font-family: var(--mono);
+    font-size: 10px;
+    line-height: 1.3;
+    color: var(--ink-faint);
   }
 
   /* A shared CSS chevron; rotates open. */

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { humanTime, humanDuration, runTooltip, humanAge } from '../src/lib/time.ts';
+import { humanTime, humanDuration, runTooltip, humanAge, humanDate, recordingLabel } from '../src/lib/time.ts';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -68,6 +68,51 @@ describe('runTooltip', () => {
 
   it('is empty for a finished run with no duration', () => {
     assert.equal(runTooltip(false, undefined, ref, ref), '');
+  });
+});
+
+describe('humanDate', () => {
+  // Anchor the reference at a fixed local wall-clock so the today/yesterday
+  // windows are calendar-day based, not a rolling 24h.
+  const ref = new Date('2026-07-02T14:32:00').getTime();
+
+  it('labels the reference day "today" and the prior day "yesterday"', () => {
+    assert.equal(humanDate(new Date('2026-07-02T09:00:00').getTime(), ref), 'today');
+    assert.equal(humanDate(new Date('2026-07-01T23:00:00').getTime(), ref), 'yesterday');
+  });
+
+  it('shows a short date within the year and adds the year otherwise', () => {
+    assert.equal(humanDate(new Date('2026-06-20T10:00:00').getTime(), ref), 'Jun 20');
+    assert.match(humanDate(new Date('2025-06-20T10:00:00').getTime(), ref), /2025/);
+  });
+
+  it('is empty for a missing timestamp', () => {
+    assert.equal(humanDate(0, ref), '');
+  });
+
+  it('counts calendar days across a DST boundary (whole-day, not 24h math)', () => {
+    // US spring-forward 2026 is Mar 8; the day before is only 23h long, which a
+    // naive (midnight - midnight)/86_400_000 floor would count as 0 days and
+    // mislabel as "today". Anchor "now" on Mar 9 and the start on Mar 8.
+    const now = new Date('2026-03-09T10:00:00').getTime();
+    assert.equal(humanDate(new Date('2026-03-09T01:00:00').getTime(), now), 'today');
+    assert.equal(humanDate(new Date('2026-03-08T23:30:00').getTime(), now), 'yesterday');
+  });
+});
+
+describe('recordingLabel', () => {
+  const ref = new Date('2026-07-02T14:32:00').getTime();
+  const start = new Date('2026-07-02T11:53:00').getTime();
+
+  it('joins the start (date + clock) with the run duration', () => {
+    const out = recordingLabel(start, start + 47 * MIN + 12_000, ref);
+    assert.match(out, /^today \d{1,2}:\d{2} · 47m12s$/);
+  });
+
+  it('omits a sub-second span (a single-snapshot recording)', () => {
+    const out = recordingLabel(start, start + 200, ref);
+    assert.match(out, /^today \d{1,2}:\d{2}$/);
+    assert.doesNotMatch(out, /·/);
   });
 });
 
