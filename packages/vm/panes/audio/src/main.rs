@@ -27,24 +27,13 @@ fn main() -> anyhow::Result<()> {
     } else if let Some(addr) = cli.listen_tcp {
         serve::ListenSpec::Tcp(addr)
     } else {
-        vsock_listen_spec(cli.listen_vsock)?
+        // Binding this is Linux-only; serve::run rejects it with a legible
+        // error on a non-Linux development host (only unix/TCP work there).
+        serve::ListenSpec::Vsock(cli.listen_vsock)
     };
     serve::run(
         &listen,
         &cli.pcm_tcp,
         &serve::StreamFormat { rate: cli.rate, channels: cli.channels },
     )
-}
-
-#[cfg(target_os = "linux")]
-fn vsock_listen_spec(port: u32) -> anyhow::Result<serve::ListenSpec> {
-    Ok(serve::ListenSpec::Vsock(port))
-}
-
-/// The daemon has no host-side role (playback lives in panes-host); this stub
-/// keeps `cargo test` for the portable pump/handshake logic working on
-/// non-Linux development hosts, where only the unix/TCP listeners exist.
-#[cfg(not(target_os = "linux"))]
-fn vsock_listen_spec(_port: u32) -> anyhow::Result<serve::ListenSpec> {
-    anyhow::bail!("AF_VSOCK is Linux-only; use --listen-unix or --listen-tcp on a development host")
 }

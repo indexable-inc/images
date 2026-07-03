@@ -27,7 +27,10 @@ use vsock::{VMADDR_CID_ANY, VsockListener, VsockStream};
 
 /// Where to accept the (single) host connection.
 pub enum ListenSpec {
-    #[cfg(target_os = "linux")]
+    /// `AF_VSOCK` port, the production transport. The variant exists on
+    /// every platform (so the CLI needs no cfg), but binding it outside
+    /// Linux fails with a legible error: the daemon has no host-side role
+    /// there, only the unix/TCP dev listeners.
     Vsock(u32),
     Unix(PathBuf),
     Tcp(String),
@@ -98,16 +101,26 @@ enum Acceptor {
     Tcp(TcpListener),
 }
 
+/// The Linux half of [`ListenSpec::Vsock`]'s contract.
+#[cfg(target_os = "linux")]
+fn bind_vsock(port: u32) -> anyhow::Result<Acceptor> {
+    let listener = VsockListener::bind_with_cid_port(VMADDR_CID_ANY, port)
+        .with_context(|| format!("bind vsock port {port}"))?;
+    info!(port, "listening on vsock");
+    Ok(Acceptor::Vsock(listener))
+}
+
+/// The non-Linux half: `AF_VSOCK` does not exist here, and pretending would
+/// only defer the failure to accept time.
+#[cfg(not(target_os = "linux"))]
+fn bind_vsock(_port: u32) -> anyhow::Result<Acceptor> {
+    anyhow::bail!("AF_VSOCK is Linux-only; use --listen-unix or --listen-tcp on a development host")
+}
+
 impl Acceptor {
     fn bind(spec: &ListenSpec) -> anyhow::Result<Self> {
         match spec {
-            #[cfg(target_os = "linux")]
-            ListenSpec::Vsock(port) => {
-                let listener = VsockListener::bind_with_cid_port(VMADDR_CID_ANY, *port)
-                    .with_context(|| format!("bind vsock port {port}"))?;
-                info!(port, "listening on vsock");
-                Ok(Self::Vsock(listener))
-            }
+            ListenSpec::Vsock(port) => bind_vsock(*port),
             ListenSpec::Unix(path) => {
                 // A previous run's socket file would fail the bind with
                 // EADDRINUSE even though nothing is listening.

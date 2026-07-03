@@ -46,7 +46,7 @@ pub struct Cli {
     pub channels: u16,
 
     /// Log filter: a level ("info") or tracing directives
-    /// ("info,panes_audio=debug").
+    /// (`info,panes_audio=debug`).
     #[arg(long, default_value = "info")]
     pub log_level: String,
 }

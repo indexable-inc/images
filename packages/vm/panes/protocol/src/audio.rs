@@ -36,10 +36,12 @@ pub const VERSION_MINOR: u16 = 0;
 /// by smoke tests.
 pub const VSOCK_PORT: u32 = 7102;
 
-/// Cap one audio message at 256 KiB: the daemon sends PCM in ~10 ms chunks
-/// (a few KiB), so this fits any legitimate frame with two orders of
-/// magnitude of headroom while keeping what a hostile length prefix can make
-/// a reader allocate far below the window stream's 64 MB [`crate::MAX_FRAME`].
+/// Cap one audio message at 256 KiB.
+///
+/// The daemon sends PCM in ~10 ms chunks (a few KiB), so this fits any
+/// legitimate frame with two orders of magnitude of headroom while keeping
+/// what a hostile length prefix can make a reader allocate far below the
+/// window stream's 64 MB [`crate::MAX_FRAME`].
 pub const MAX_FRAME: usize = 256 * 1024;
 
 /// Encoding of one PCM sample on the wire. Explicitly little-endian: both
