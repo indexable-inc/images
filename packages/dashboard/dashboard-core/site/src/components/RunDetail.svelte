@@ -2,11 +2,13 @@
   // The center stage for a selected run: a header (LED, intent, status pill,
   // duration, start time, session breadcrumb) over stacked foldable panels —
   // code, stdout, result (only when it diverges from stdout AND there is no
-  // rich attachment), and output (the `<key>/out` attachment). Panels default
-  // collapsed with a one-line preview in each summary, so a run scans without
-  // opening anything. The exec-detail behaviour is the feed's, refactored here:
-  // inline trace when attributed, else a code block, and a parsed failure on
-  // top for an error.
+  // rich attachment), and output (the `<key>/out` attachment). Code and result
+  // (including the rich output attachment) open by default — a run reads as its
+  // source plus what it produced — while raw stdout stays folded one click away
+  // with a one-line preview in its summary, so the primary story is visible
+  // without the stream crowding it. The exec-detail behaviour is the feed's,
+  // refactored here: inline trace when attributed, else a code block, and a
+  // parsed failure on top for an error.
   import { stripAnsi } from '$lib/ansi';
   import { store, timeline } from '$lib/stream.svelte';
   import { ui, humanDuration, humanTime } from '$lib/ui.svelte';
@@ -119,8 +121,9 @@
 
       {#if traced}
         <!-- Inline trace: source with each line's output beside it, one combined
-             view, so it stands in for both the code and output panels. -->
-        <details class="panel">
+             view, so it stands in for both the code and output panels. Open by
+             default: it carries the code and the result inline. -->
+        <details class="panel" open>
           <summary><span class="caret"></span><span class="panel-label">code · output</span></summary>
           <div class="panel-body panel-body-flush">
             <InlineTrace source={pane.source ?? ''} lang={pane.lang ?? 'text'} trace={traceArr} />
@@ -129,8 +132,8 @@
         </details>
       {:else}
         {#if hasSource}
-          <!-- Code collapsed by default: you usually read output, not the source. -->
-          <details class="panel">
+          <!-- Code expanded by default: a run reads as the code plus its result. -->
+          <details class="panel" open>
             <summary>
               <span class="caret"></span><span class="panel-label">code</span>
               <span class="panel-hint">{pane.lang || 'source'}</span>
@@ -139,7 +142,14 @@
           </details>
         {/if}
         {#if hasStreamOut || resultIsPrimary || running}
-          <details class="panel">
+          <!-- Open only when this panel IS the result (no stream stdout, so the
+               result renders inline here); when it carries real stdout it stays
+               folded one click away rather than crowding the result. `open` keys
+               off the stable `resultIsPrimary`, not `running`, so the panel never
+               snaps shut when a run finishes (running→false would flip a
+               `running`-gated open to closed on the frame the output is most
+               interesting). -->
+          <details class="panel" open={resultIsPrimary}>
             <!-- Labelled `stdout` when a rich attachment exists, so the run never
                  shows two panels both called `output`. -->
             <summary><span class="caret"></span><span class="panel-label">{outPane ? 'stdout' : 'output'}</span><span class="panel-hint">{outputHint}</span></summary>
@@ -152,8 +162,9 @@
 
       {#if resultIsExtra}
         <!-- The result the model received, shown only when it adds something
-             beyond stdout so the common case never duplicates the output above. -->
-        <details class="panel">
+             beyond stdout so the common case never duplicates the output above.
+             Expanded by default: the result is a primary section, not stdout. -->
+        <details class="panel" open>
           <summary><span class="caret"></span><span class="panel-label">result</span><span class="panel-hint">model view</span></summary>
           <div class="panel-body panel-body-flush"><pre class="exec-out res">{pane.result}</pre></div>
         </details>
@@ -161,7 +172,9 @@
 
       {#if outPane}
         {@const OutBody = rendererFor(outPane.kind, outPane.renderer)}
-        <details class="panel">
+        <!-- The rich result (a table, a plot, a file view): a primary section,
+             expanded by default alongside the code. -->
+        <details class="panel" open>
           <summary><span class="caret"></span><span class="panel-label">output</span><span class="panel-hint">{outHint}</span></summary>
           <div class="panel-body panel-body-flush pane">
             <div class="body" class:html-body={outPane.kind === 'html'}><OutBody pane={outPane} /></div>
