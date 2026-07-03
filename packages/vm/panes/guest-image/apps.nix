@@ -41,6 +41,13 @@ let
   # where the ./pins.json hashes live.
   lwjglNatives = pkgs.lwjgl-natives-linux-arm64;
 
+  # One binding for every place the version appears (positional arg, manifest
+  # path, --fetch-exclude): a bump that misses one of them would silently let
+  # portablemc re-fetch the manifest over the injection below. The paired
+  # manual edit on a bump is options.txt's `version:` data-version (files
+  # below).
+  mcVersion = "26.2";
+
   # Everything after `start` that both portablemc invocations below share.
   mcStartArgs = builtins.concatStringsSep " " [
     # 26.2 requires Java SE 25 minimum (see the portablemc jvms override).
@@ -65,7 +72,7 @@ let
     "--jvm-arg=-DMC_DEBUG_PREFER_WAYLAND=true"
     # Offline session: no Microsoft account in the guest.
     "-u Panes"
-    "26.2"
+    mcVersion
   ];
 
   # 26.2 selects its startup renderer from the `--graphicsBackend vulkan`
@@ -80,20 +87,34 @@ let
   # the injection.
   mcLaunch = pkgs.writeBashApplication {
     name = "panes-mc-launch";
-    runtimeInputs = [ pkgs.jq ];
+    runtimeInputs = [
+      pkgs.jq
+      # `mv` below: pinned rather than inherited from the service PATH, like
+      # everything else in this file.
+      pkgs.coreutils
+    ];
     text = ''
-      json=/var/lib/minecraft/versions/26.2/26.2.json
-      if [ ! -e "$json" ]; then
+      json=/var/lib/minecraft/versions/${mcVersion}/${mcVersion}.json
+      # Re-fetch when the manifest is missing OR unparseable: a launch killed
+      # mid-write leaves a truncated file that an existence-only guard would
+      # accept, wedging the container in a jq-fail restart loop that never
+      # re-downloads.
+      if ! jq -e . "$json" >/dev/null 2>&1; then
+        rm -f "$json"
         ${portablemc}/bin/portablemc --main-dir /var/lib/minecraft start --dry ${mcStartArgs}
+        if [ ! -e "$json" ]; then
+          echo "portablemc --dry did not produce $json" >&2
+          exit 1
+        fi
       fi
       jq \
         'if (.arguments.game | index("--graphicsBackend")) == null
          then .arguments.game += ["--graphicsBackend", "vulkan"]
          else . end' "$json" > "$json.tmp"
       mv "$json.tmp" "$json"
-      exec ${portablemc}/bin/portablemc --main-dir /var/lib/minecraft start --fetch-exclude 26.2 ${mcStartArgs}
+      exec ${portablemc}/bin/portablemc --main-dir /var/lib/minecraft start --fetch-exclude ${mcVersion} ${mcStartArgs}
     '';
-    meta.description = "Minecraft 26.2 launcher forcing the Vulkan startup backend (index#1686)";
+    meta.description = "Minecraft ${mcVersion} launcher forcing the Vulkan startup backend (index#1686)";
   };
 in
 {
