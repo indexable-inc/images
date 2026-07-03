@@ -314,7 +314,10 @@ let
           handoff on the issue. Skip the spawn when the issue already has an
           active owner or handoff note, or when pursuing it would silently expand
           a deliberately bounded task the user gave you. File-and-stop only when
-          the fix needs a human decision or is genuinely out of your reach.
+          the fix needs a human decision or is genuinely out of your reach. If a
+          spawned agent makes no progress in 2 hours (stuck CI, blocked upstream,
+          dependency issues), report the blocker on the issue and mark the agent
+          inactive.
         '';
         reason = ''
           Found problems were filed and forgotten instead of fixed; a named agent
@@ -416,9 +419,11 @@ let
           Fix problems at their source. Choose the best long-term solution and prefer
           architectural changes that remove a class of bugs over fixing one bug at a
           time. Never write workarounds or add timeouts that mask the core bug. If the
-          cause is upstream, fix it upstream and open a PR. When the same anomaly
-          interrupts your task a second time, stop patching inline: give it a dedicated
-          root-cause deep-dive, with a subagent where available.
+          cause is upstream, fix it upstream and open a PR. For long-running builds or
+          deployments (>10 min), spawn a background agent to monitor them: use Monitor
+          or tail a log file and act on completion, errors, or timeout. Do not sit
+          polling. When the same anomaly interrupts your task a second time, stop
+          patching inline: give it a dedicated root-cause deep-dive, with a subagent.
         '';
         reason = ''
           Workarounds and timeout bumps masked root causes that kept resurfacing; the
@@ -522,8 +527,11 @@ let
         text = ''
           Complete tasks autonomously. A task is done when tests pass and the change
           lands on `origin/main`. Prefer a PR; push directly to `main` only if it is
-          genuinely unprotected. Own PRs through merge: push, watch CI, fix failures,
-          resolve review, rebase, and re-queue until landed or truly blocked.
+          genuinely unprotected. Own PRs through merge: push, watch CI (background it
+          with Monitor if >2 min), fix failures, resolve review, rebase, and re-queue
+          until landed or truly blocked. If a PR is green for >10 min and not merging,
+          spawn a named background agent to investigate and merge (queue stuck, missing
+          approvals, etc.).
         '';
         reason = ''
           Tasks were reported done at an open PR that never landed; done means merged
