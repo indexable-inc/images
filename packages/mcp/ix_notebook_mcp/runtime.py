@@ -89,7 +89,14 @@ def _report_task_failure(task: asyncio.Task) -> None:
     tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
     coro = task.get_coro()
     where = getattr(coro, "__qualname__", None) or repr(coro)
-    msg = f"[task_errors] background task {task.get_name()!r} ({where}) died unhandled:\n{tb}"
+    # "unretrieved after Ns", not "crashed": a parent that awaits this task
+    # later than the grace window still gets the exception raised normally --
+    # this report then just flagged it early, it is not a second failure.
+    msg = (
+        f"[task_errors] background task {task.get_name()!r} ({where}) failed and nothing "
+        f"retrieved the exception within {_TASK_FAILURE_GRACE_S:g}s (a later `await` "
+        f"still raises it):\n{tb}"
+    )
     task_errors.append(msg)
     # Tasks copy the spawning cell's context, so the job that created this task
     # is reachable and its buffer is where the model will look first.
@@ -103,16 +110,17 @@ def _report_task_failure(task: asyncio.Task) -> None:
 def _on_task_done(task: asyncio.Task) -> None:
     if task.cancelled():
         return
+
+    def check() -> None:
+        # `_log_traceback` is the interpreter's own "exception not yet
+        # retrieved" flag (cleared by `await`/`.result()`/`.exception()`);
+        # private, but it is precisely the signal CPython's GC-time warning
+        # keys on, and there is no public completion-time equivalent.
+        if getattr(task, "_log_traceback", False):
+            _report_task_failure(task)
+
     with contextlib.suppress(RuntimeError):  # loop already closed: nowhere left to report
-        task.get_loop().call_later(
-            _TASK_FAILURE_GRACE_S,
-            # `_log_traceback` is the interpreter's own "exception not yet
-            # retrieved" flag (cleared by `await`/`.result()`/`.exception()`);
-            # private, but it is precisely the signal CPython's GC-time
-            # warning keys on, and there is no public completion-time
-            # equivalent.
-            lambda: getattr(task, "_log_traceback", False) and _report_task_failure(task),
-        )
+        task.get_loop().call_later(_TASK_FAILURE_GRACE_S, check)
 
 
 def _install_task_failure_watch(loop: asyncio.AbstractEventLoop) -> None:
@@ -120,7 +128,10 @@ def _install_task_failure_watch(loop: asyncio.AbstractEventLoop) -> None:
     `task_errors`). Installed as a task factory because a done-callback is the
     only completion-time hook asyncio offers, and wrapping the factory is the
     only way to attach one to every task, including ones third-party code
-    spawns."""
+    spawns. Idempotent: re-running `install()` on the same loop must not stack
+    watchers (each stack would double the per-task callback and 2s timer)."""
+    if getattr(loop.get_task_factory(), "_ix_task_watch", False):
+        return
     prior = loop.get_task_factory()
 
     def factory(loop: asyncio.AbstractEventLoop, coro: Any, **kwargs: Any) -> asyncio.Task:
@@ -128,6 +139,7 @@ def _install_task_failure_watch(loop: asyncio.AbstractEventLoop) -> None:
         task.add_done_callback(_on_task_done)
         return task
 
+    factory._ix_task_watch = True  # our own sentinel, read back by the guard above
     loop.set_task_factory(factory)
 
 # Longest edge (px) of an image returned to the model. A full-page screenshot or
