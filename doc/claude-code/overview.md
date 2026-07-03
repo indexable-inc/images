@@ -54,7 +54,8 @@ agent content from Nix outputs instead of invoking `nix build` interactively.
 ### Soft env defaults (set only when unset)
 
 `env_defaults` are applied only if the user has not set them
-(`default.nix:147-152`, `382`): `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` turns
+(`wrapperEnvDefaults` in `default.nix`, rendered into the launch spec's
+`env_defaults`): `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` turns
 on agent teams (teammate sessions with a shared task list and direct
 inter-agent messaging; https://code.claude.com/docs/en/agent-teams). Disable
 per machine with `export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=0` (only
