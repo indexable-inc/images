@@ -44,9 +44,9 @@ fn pointer_motion(app: &mut App, id: panes_protocol::WindowId, x: f64, y: f64) {
     app.pointer_focus = Some(id);
     let time = app.now_ms();
     // Wire coords are drawable pixels (panes-protocol convention); smithay's
-    // pointer space is logical, so divide by the host scale, mirroring the
-    // xdg configure division in `on_configure`.
-    let scale = host_scale(app);
+    // pointer space is logical, so divide by the window's scale, mirroring
+    // the xdg configure division in `on_configure`.
+    let scale = wire_scale(app, id);
     // Focus is handed over explicitly (second tuple element = the surface's
     // origin in "global" space, which for us is always 0,0), so smithay
     // emits enter/leave pairs as the host moves between windows.
@@ -75,7 +75,7 @@ fn pointer_relative(app: &mut App, id: panes_protocol::WindowId, dx: f64, dy: f6
     };
     // Wire deltas are buffer pixels (same convention as PointerMotion), so
     // the same pixel->logical division applies.
-    let scale = host_scale(app);
+    let scale = wire_scale(app, id);
     let delta = Point::from((dx / scale, dy / scale));
     let utime = app.now_us();
     pointer.relative_motion(
@@ -93,12 +93,21 @@ fn pointer_relative(app: &mut App, id: panes_protocol::WindowId, dx: f64, dy: f6
     pointer.frame(app);
 }
 
-/// The host's global `backingScaleFactor` from Hello, as the divisor that
-/// takes wire pixel coordinates to logical surface coordinates. Input only
-/// flows after Hello, so a missing host (1) is a startup-race fallback, not a
-/// silent unit change.
-fn host_scale(app: &App) -> f64 {
-    f64::from(app.host.as_ref().map_or(1, |host| host.scale.max(1)))
+/// The divisor that takes one window's wire pixel coordinates to logical
+/// surface coordinates: that window's own backing scale from the host's last
+/// `Configure`. Per window because displays mix scales -- dividing a
+/// 1x-screen window's coordinates by a global scale of 2 puts its cursor at
+/// half the true position (the index#1686 mixed-scale skew). Falls back to
+/// the global Hello scale for a window the host has not configured yet, and
+/// to 1 before Hello (a startup race, not a silent unit change: input only
+/// flows after Hello).
+fn wire_scale(app: &App, id: panes_protocol::WindowId) -> f64 {
+    let scale = app
+        .pane_index(id)
+        .and_then(|idx| app.panes[idx].configured_scale)
+        .or_else(|| app.host.as_ref().map(|host| host.scale))
+        .unwrap_or(1);
+    f64::from(scale.max(1))
 }
 
 fn pointer_button(
@@ -152,7 +161,7 @@ fn pointer_axis(
     let (horizontal, vertical) = if source == WireAxisSource::Wheel {
         (horizontal, vertical)
     } else {
-        let scale = host_scale(app);
+        let scale = wire_scale(app, id);
         (horizontal / scale, vertical / scale)
     };
     let source = match source {

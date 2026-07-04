@@ -7,7 +7,8 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::net::TcpStream;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use dispatch2::DispatchQueue;
@@ -34,17 +35,22 @@ pub enum Event {
     Disconnected,
 }
 
-/// Host facts advertised in [`ToGuest::Hello`], captured from `NSScreen` on
-/// the main thread before the supervisor starts.
+/// Host facts advertised in [`ToGuest::Hello`]. Read from `NSScreen` on the
+/// main thread, and re-written there on every screen-parameters change
+/// (displays attach/detach/change mode mid-session); the supervisor loads
+/// the current values at each (re)connect, so a Hello sent after a display
+/// change advertises the topology that exists, not the one from launch.
 pub struct HostInfo {
-    pub refresh_mhz: u32,
-    pub scale: u32,
+    /// Main-screen refresh in mHz (e.g. 120000 for `ProMotion`).
+    pub refresh_mhz: AtomicU32,
+    /// Highest `backingScaleFactor` of any attached display.
+    pub scale: AtomicU32,
 }
 
 const BACKOFF_START: Duration = Duration::from_millis(250);
 const BACKOFF_MAX: Duration = Duration::from_secs(5);
 
-pub fn spawn(target: Target, host: HostInfo) {
+pub fn spawn(target: Target, host: Arc<HostInfo>) {
     std::thread::spawn(move || supervise(&target, &host));
 }
 
@@ -103,8 +109,10 @@ fn run_connection(stream: Stream, host: &HostInfo) {
     let hello = ToGuest::Hello {
         major: VERSION_MAJOR,
         minor: VERSION_MINOR,
-        refresh_mhz: host.refresh_mhz,
-        scale: host.scale,
+        // Relaxed: single u32 facts, no ordering relationship between them
+        // worth paying for (each is independently valid slightly stale).
+        refresh_mhz: host.refresh_mhz.load(Ordering::Relaxed),
+        scale: host.scale.load(Ordering::Relaxed),
         encodings: vec![Encoding::Raw, Encoding::Lz4],
     };
     if tx.send(hello).is_err() {

@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use panes_protocol::{
-    Encoding, MINOR_POINTER_LOCK, ToGuest, ToHost, VERSION_MAJOR, VERSION_MINOR, WindowId,
-    wl_repeat_info,
+    Encoding, MINOR_POINTER_LOCK, MINOR_WINDOW_SCALE, ToGuest, ToHost, VERSION_MAJOR,
+    VERSION_MINOR, WindowId, wl_repeat_info,
 };
 use smithay::input::{Seat, SeatState};
 use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
@@ -101,12 +101,20 @@ struct Pane {
     max: Option<(u32, u32)>,
     /// Buffer scale of the last commit (forwarded in `WindowNew`).
     scale: u32,
-    /// The scale `WindowNew` carried on the current connection: the fixed
-    /// unit for this window's wire min/max (protocol contract). Kept apart
-    /// from `scale` because a client may change buffer scale mid-connection
-    /// (e.g. re-render 2x after the host's Hello raised the output scale)
-    /// and the wire has no per-window scale update to tell the host.
+    /// The unit this window's wire min/max are in: seeded by its `WindowNew`
+    /// and re-announced by `ToHost::WindowScale` whenever `scale` changes
+    /// afterwards (1.3+ host). Against a pre-1.3 host it stays frozen at the
+    /// `WindowNew` value for the connection (the protocol's old contract),
+    /// which is why it is kept apart from `scale`.
     announced_scale: u32,
+    /// This window's `NSWindow` `backingScaleFactor` from the host's last
+    /// `Configure`: the live per-window unit of every wire pixel coordinate
+    /// the host sends for it (pointer motion/deltas, sizes). `None` until
+    /// the first Configure; input mapping then falls back to the global
+    /// Hello scale. Kept per window because displays mix scales: dividing a
+    /// 1x-screen window's coordinates by a global scale of 2 halves its
+    /// cursor position (the index#1686 mixed-scale skew).
+    configured_scale: Option<u32>,
 }
 
 impl Pane {
@@ -126,6 +134,7 @@ impl Pane {
             max: None,
             scale: 1,
             announced_scale: 1,
+            configured_scale: None,
         }
     }
 }
@@ -439,6 +448,33 @@ impl App {
         }
     }
 
+    /// Re-announce `panes[idx]`'s wire unit when its buffer scale drifted
+    /// from the last announcement (the client re-rendered at a new scale,
+    /// e.g. adopting a raised output scale). A 1.3+ host takes
+    /// `ToHost::WindowScale` and re-interprets later `WindowMinMax` sizes in
+    /// the new unit; against an older host nothing is sent and
+    /// `announced_scale` stays frozen at the `WindowNew` value, the old
+    /// protocol contract.
+    fn sync_window_scale(&mut self, idx: usize) {
+        let pane = &mut self.panes[idx];
+        if !pane.announced || pane.scale == pane.announced_scale {
+            return;
+        }
+        let Some(host) = self
+            .host
+            .as_ref()
+            .filter(|h| h.ready && h.minor >= MINOR_WINDOW_SCALE)
+        else {
+            return;
+        };
+        pane.announced_scale = pane.scale;
+        info!(id = pane.id, scale = pane.scale, "window scale re-announced");
+        host.send(ToHost::WindowScale {
+            id: pane.id,
+            scale: pane.scale,
+        });
+    }
+
     /// Try to move one frame onto the wire for `panes[idx]`, announcing the
     /// window first if this connection has not seen it. When there is
     /// nothing to send, release the window's frame callbacks instead: no
@@ -542,6 +578,10 @@ impl App {
                         // old one says nothing about it.
                         pane.watchdog_ticks = INFLIGHT_WATCHDOG_TICKS;
                         pane.announced = false;
+                        // The next host's Configures speak for its own
+                        // NSWindows; a scale from the dead connection must
+                        // not map its input.
+                        pane.configured_scale = None;
                         pane.store.invalidate();
                     }
                     info!("host disconnected; windows re-announce on reconnect");
@@ -722,6 +762,9 @@ impl App {
         // factors are 1 or 2, and wp_fractional_scale would buy softness at
         // readback bandwidth the vsock budget cannot spare.
         let scale = scale.max(1);
+        // Live per-window unit for the host's pixel coordinates (input
+        // mapping divides by it; see `Pane::configured_scale`).
+        self.panes[idx].configured_scale = Some(scale);
         self.raise_output_scale(scale);
         let size_valid = width > 0 && height > 0;
         self.panes[idx].toplevel.with_pending_state(|state| {

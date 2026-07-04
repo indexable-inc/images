@@ -120,6 +120,10 @@ impl CompositorHandler for App {
             self.intake_buffer(idx);
         }
 
+        // Unit re-announcement must precede the min/max that may follow in
+        // this same commit: a 1.3 host interprets WindowMinMax in the most
+        // recently announced scale.
+        self.sync_window_scale(idx);
         self.sync_min_max(idx, &root);
 
         // Send now if pacing allows, or release the frame callbacks if there

@@ -263,9 +263,10 @@ pub struct PaneWindow {
     _win_delegate: Retained<WinDelegate>,
     _link_delegate: Retained<LinkDelegate>,
     surface: Option<Surface>,
-    /// Scale from `WindowNew`: the fixed unit for this window's protocol
-    /// min/max sizes (protocol contract; the guest converts `WindowMinMax`
-    /// at the same announced scale even if the client rescales later).
+    /// The unit for this window's protocol min/max sizes: seeded by
+    /// `WindowNew`, re-announced by `WindowScale` when a 1.3 guest's client
+    /// re-renders at a new buffer scale (a 1.2 guest keeps it frozen for the
+    /// connection, the old contract).
     guest_scale: u32,
     pending_ack: Option<u64>,
     dirty: bool,
@@ -462,6 +463,12 @@ impl PaneWindow {
         if !self.native_titlebar {
             apply_hidden_titlebar(&self.ns);
         }
+    }
+
+    /// Adopt a `ToHost::WindowScale` re-announcement (protocol minor 3):
+    /// every later `WindowMinMax` for this window arrives in this unit.
+    pub fn set_guest_scale(&mut self, scale: u32) {
+        self.guest_scale = scale.max(1);
     }
 
     pub fn set_min_max(&self, min: Option<(u32, u32)>, max: Option<(u32, u32)>) {

@@ -32,13 +32,16 @@ use serde::{Deserialize, Serialize};
 /// postcard encodes the variant index, so inserting one mid-enum renumbers
 /// everything after it.
 pub const VERSION_MAJOR: u16 = 1;
-pub const VERSION_MINOR: u16 = 2;
+pub const VERSION_MINOR: u16 = 3;
 
 /// Minor that introduced [`ToHost::PointerLock`] / [`ToGuest::PointerRelative`].
 pub const MINOR_POINTER_LOCK: u16 = 1;
 
 /// Minor that introduced [`ToGuest::KeyRepeat`].
 pub const MINOR_KEY_REPEAT: u16 = 2;
+
+/// Minor that introduced [`ToHost::WindowScale`].
+pub const MINOR_WINDOW_SCALE: u16 = 3;
 
 /// Guest vsock port the compositor listens on.
 pub const VSOCK_PORT: u32 = 7100;
@@ -91,19 +94,19 @@ pub enum ToHost {
         /// Buffer scale the guest renders at when this window was announced
         /// (the host `backingScaleFactor` echoed back through
         /// `ToGuest::Configure` when the client honors it, 1 for a
-        /// scale-blind client). Also the fixed unit for this window's
-        /// `WindowMinMax` sizes: a client that changes buffer scale
-        /// mid-connection changes only its frame dimensions, there is no
-        /// per-window scale update message.
+        /// scale-blind client). Also the unit for this window's
+        /// `WindowMinMax` sizes until a [`ToHost::WindowScale`] re-announces
+        /// it; on a pre-1.3 host the unit stays frozen at this value for the
+        /// connection (the guest never sends the update).
         scale: u32,
     },
     WindowTitle {
         id: WindowId,
         title: String,
     },
-    /// Sizes are buffer pixels at the scale this connection's `WindowNew`
-    /// carried (the host divides by that scale for `NSWindow`
-    /// `contentMin/MaxSize` points), NOT the current buffer scale.
+    /// Sizes are buffer pixels at the window's announced scale (its
+    /// `WindowNew`, updated by any later [`ToHost::WindowScale`]; the host
+    /// divides by that scale for `NSWindow` `contentMin/MaxSize` points).
     WindowMinMax {
         id: WindowId,
         min: Option<(u32, u32)>,
@@ -148,6 +151,18 @@ pub enum ToHost {
     PointerLock {
         id: WindowId,
         locked: bool,
+    },
+    /// The window's buffer scale changed after `WindowNew` (the client
+    /// re-rendered at a new scale, e.g. adopting the compositor's raised
+    /// output scale, or moving between 1x and 2x-backed content). Re-announces
+    /// the unit later `WindowMinMax` sizes for this window are in; ordered on
+    /// the same stream, so the host applies it before any `WindowMinMax` that
+    /// follows. Since minor 3 ([`MINOR_WINDOW_SCALE`]); only sent once the
+    /// host's Hello advertised it (a 1.2 host keeps the frozen-per-connection
+    /// `WindowNew` unit).
+    WindowScale {
+        id: WindowId,
+        scale: u32,
     },
 }
 
@@ -431,6 +446,14 @@ mod tests {
             panic!("wrong variant");
         };
         assert!((dx - -1.5).abs() < f64::EPSILON && (dy - 2.25).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn window_scale_roundtrips() {
+        let mut buf = Vec::new();
+        write_msg(&mut buf, &ToHost::WindowScale { id: 9, scale: 2 }).unwrap();
+        let back: ToHost = read_msg(&mut buf.as_slice()).unwrap();
+        assert!(matches!(back, ToHost::WindowScale { id: 9, scale: 2 }));
     }
 
     #[test]

@@ -10,7 +10,8 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::process::ExitCode;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use objc2::rc::Retained;
@@ -27,7 +28,7 @@ use objc2_metal::MTLDrawable as _;
 use objc2_quartz_core::CAMetalDisplayLinkUpdate;
 use panes_protocol::{MINOR_KEY_REPEAT, MINOR_POINTER_LOCK, ToGuest, ToHost, WindowId};
 
-use crate::conn::{self, Event, HostInfo, Target};
+use crate::conn::{self, Event, Target};
 use crate::render::Renderer;
 use crate::window::{PaneWindow, WindowParams};
 
@@ -56,6 +57,10 @@ struct App {
     /// whole engage/release mechanism: dropping the old value restores the
     /// cursor (see [`CursorCapture`]).
     capture: Option<CursorCapture>,
+    /// Shared with the connection supervisor, which reads it for each
+    /// (re)connect's Hello; rewritten by [`screens_changed`] so the facts
+    /// track the live screen table.
+    host_info: Arc<conn::HostInfo>,
 }
 
 /// An engaged pointer capture: cursor hidden and dissociated from mouse
@@ -153,25 +158,12 @@ pub fn run(target: Target, title_prefix: String, native_titlebar: bool) -> ExitC
     // presence and Cmd-Tab participation.
     ns_app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
-    let screen = NSScreen::mainScreen(mtm);
-    let max_fps = screen.as_ref().map_or(60, |screen| screen.maximumFramesPerSecond());
-    // Hello advertises the HIGHEST backing scale of any attached display, not
-    // the startup main screen's: this read happens once per process, and a
-    // host launched while a 1x display was frontmost would otherwise say
-    // scale=1 for the whole session, pinning every guest client to 1x buffers
-    // stretched over Retina drawables (seen live with GLFW/Minecraft,
-    // index#1686). Windows that land on a lower-scale screen are still
-    // handled per window: their Configure carries that screen's real backing
-    // scale. Fallback 2.0 (headless/no screens) errs toward sharp.
-    let backing = NSScreen::screens(mtm)
-        .iter()
-        .map(|screen| screen.backingScaleFactor())
-        .fold(0.0_f64, f64::max);
-    let backing = if backing > 0.0 { backing } else { 2.0 };
-    eprintln!(
-        "panes-host: max screen backingScaleFactor={backing}, main screen \
-         maximumFramesPerSecond={max_fps}"
-    );
+    log_screens(mtm);
+    let facts = read_screen_facts(mtm);
+    let host_info = Arc::new(conn::HostInfo {
+        refresh_mhz: AtomicU32::new(facts.refresh_mhz),
+        scale: AtomicU32::new(facts.scale),
+    });
 
     let renderer = match Renderer::new() {
         Ok(renderer) => renderer,
@@ -192,27 +184,118 @@ pub fn run(target: Target, title_prefix: String, native_titlebar: bool) -> ExitC
             ack_stats: HashMap::new(),
             peer_minor: 0,
             capture: None,
+            host_info: host_info.clone(),
         });
     });
 
     // App activation delegate: a deactivated app must never hold the user's
     // cursor hostage, so capture is released on resign-active and re-engaged
-    // (if the guest still wants it) on reactivation.
+    // (if the guest still wants it) on reactivation. Also the screen-change
+    // hook (see `screens_changed`).
     let delegate = AppDelegate::new(mtm);
     ns_app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
 
+    conn::spawn(target, host_info);
+
+    ns_app.run();
+    ExitCode::SUCCESS
+}
+
+/// One line per attached screen with the facts presentation depends on
+/// (backing scale, max refresh, frame, which one is main); logged at startup
+/// and again on every screen-parameters change. Replaces a one-shot startup
+/// summary that kept being read as current truth hours later: a live 1x/60Hz
+/// incident was misdiagnosed as a bad `NSScreen` read when the host had
+/// simply been launched while a 1x external display was the main screen
+/// (index#1686).
+fn log_screens(mtm: MainThreadMarker) {
+    // Frame equality marks the main screen: screens never overlap exactly,
+    // and it avoids leaning on NSScreen instance identity across the two
+    // accessors.
+    let main_frame = NSScreen::mainScreen(mtm).map(|screen| screen.frame());
+    for screen in NSScreen::screens(mtm) {
+        let frame = screen.frame();
+        eprintln!(
+            "panes-host: screen {}x{} at ({}, {}): backingScaleFactor={} \
+             maximumFramesPerSecond={}{}",
+            frame.size.width,
+            frame.size.height,
+            frame.origin.x,
+            frame.origin.y,
+            screen.backingScaleFactor(),
+            screen.maximumFramesPerSecond(),
+            if main_frame == Some(frame) { " (main)" } else { "" },
+        );
+    }
+}
+
+/// Snapshot of the screen-derived facts [`ToGuest::Hello`] advertises.
+struct ScreenFacts {
+    refresh_mhz: u32,
+    scale: u32,
+}
+
+/// Facts [`ToGuest::Hello`] advertises, from the current screen table:
+/// refresh from the main screen, scale = the HIGHEST `backingScaleFactor` of
+/// any attached display, not the main screen's. A host launched (or
+/// reconnecting) while a 1x display is frontmost must not pin every guest
+/// client to 1x buffers stretched over Retina drawables (seen live with
+/// GLFW/Minecraft, index#1686); windows that land on a lower-scale screen
+/// are corrected per window by their Configure. Fallback 2.0 (headless / no
+/// screens) errs toward sharp.
+fn read_screen_facts(mtm: MainThreadMarker) -> ScreenFacts {
+    let max_fps =
+        NSScreen::mainScreen(mtm).map_or(60, |screen| screen.maximumFramesPerSecond());
+    let backing = NSScreen::screens(mtm)
+        .iter()
+        .map(|screen| screen.backingScaleFactor())
+        .fold(0.0_f64, f64::max);
+    let backing = if backing > 0.0 { backing } else { 2.0 };
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let host = HostInfo {
+    ScreenFacts {
         // Clamped into u32 range explicitly: no real panel exceeds 1000Hz,
         // and the clamp makes the (impossible) fallback a visible policy
         // rather than a silent unwrap_or.
         refresh_mhz: u32::try_from(max_fps.clamp(1, 1000)).expect("clamped to 1..=1000") * 1000,
         scale: (backing.round().max(1.0)) as u32,
-    };
-    conn::spawn(target, host);
+    }
+}
 
-    ns_app.run();
-    ExitCode::SUCCESS
+/// `applicationDidChangeScreenParameters:`: displays attach, detach, or
+/// change mode/scale in place, with no reliable per-window signal
+/// (`windowDidChangeScreen:` only fires when a window lands on a different
+/// screen object; an in-place mode switch fires nothing window-level). Seen
+/// live (index#1686): a window left on the built-in panel after a 1x/60Hz
+/// external detached kept ticking at ~60 acks/s. Re-derive everything
+/// screen-dependent: refresh the Hello facts for future reconnects, re-pin
+/// every window's stream rate, and re-sync layer geometry so the guest gets
+/// a Configure with the window's current backing scale.
+fn screens_changed() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    log_screens(mtm);
+    let facts = read_screen_facts(mtm);
+    with_app(|app| {
+        // Relaxed matches the reader (conn.rs): independent u32 facts.
+        app.host_info.refresh_mhz.store(facts.refresh_mhz, Ordering::Relaxed);
+        app.host_info.scale.store(facts.scale, Ordering::Relaxed);
+        for (id, window) in &mut app.windows {
+            window.refresh_stream_rate(mtm);
+            let size = window.sync_layer_geometry();
+            window.mark_dirty();
+            let activated = window.ns.isKeyWindow();
+            if let Some(out) = &app.out {
+                let _ = out.send(ToGuest::Configure {
+                    id: *id,
+                    width: size.width,
+                    height: size.height,
+                    scale: size.scale,
+                    activated,
+                });
+            }
+        }
+    });
 }
 
 /// Entry point for supervisor events, always on the main queue.
@@ -343,6 +426,12 @@ fn handle_msg(app: &mut App, msg: ToHost, recv: f64) -> Deferred {
                 eprintln!("panes-host: pointer lock for unknown window {id}");
             }
             sync_capture(app);
+            Deferred::default()
+        }
+        ToHost::WindowScale { id, scale } => {
+            if let Some(window) = app.windows.get_mut(&id) {
+                window.set_guest_scale(scale);
+            }
             Deferred::default()
         }
     }
@@ -691,6 +780,11 @@ define_class!(
         #[unsafe(method(applicationDidBecomeActive:))]
         fn application_did_become_active(&self, _notification: &NSNotification) {
             with_app(sync_capture);
+        }
+
+        #[unsafe(method(applicationDidChangeScreenParameters:))]
+        fn application_did_change_screen_parameters(&self, _notification: &NSNotification) {
+            screens_changed();
         }
     }
 );
