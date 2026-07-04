@@ -121,12 +121,7 @@ let
       inherit name;
       # Use a package-shaped source root for each local unit so one workspace
       # crate edit does not invalidate its siblings.
-      path =
-        if builtins.hasContext (builtins.toString workspaceRoot) then
-          builtins.toString workspaceRoot + pkgs.lib.optionalString (relative != "") "/${relative}"
-        else
-          workspaceRoot + pkgs.lib.optionalString (relative != "") "/${relative}";
-      filter = path: type: true;
+      path = sourceRootPath workspaceRoot + pkgs.lib.optionalString (relative != "") "/${relative}";
     };
 
   scopedWorkspaceClosureSource = name: includes: scopedClosureSource workspaceRoot name includes;
@@ -167,15 +162,6 @@ let
     dontUnpack = true;
     dontConfigure = true;
     env = (attrs.env or {}) // extraEnv // (packageBuildEnv.${attrs.packageName or ""} or {});
-  });
-
-  # Shape-identical to `mkUnit`. Kept distinct so per-unit clippy derivation
-  # store paths read as `*-clippy-*` instead of being indistinguishable from
-  # their sibling build units.
-  mkClippyUnit = attrs: pkgs.stdenv.mkDerivation (attrs // {
-    dontUnpack = true;
-    dontConfigure = true;
-    env = (attrs.env or {}) // extraEnv;
   });
 
   # `extraUnits` is merged over the generated set (not inside the `rec`) so a

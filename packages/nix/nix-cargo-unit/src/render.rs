@@ -6,9 +6,9 @@ use std::path::{Component, Path, PathBuf};
 use crate::hash;
 use crate::model::{Unit, UnitGraph, UnitMode};
 use crate::shell;
-use askama::Template as _;
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use serde::Deserialize;
+use url::Url;
 
 pub struct RenderOptions {
     pub workspace_root: PathBuf,
@@ -172,7 +172,6 @@ struct BuildScriptRun {
 struct SourceEntry {
     name: String,
     base: SourceBase,
-    scope: SourceScope,
     root: PathBuf,
     relative: String,
     include_relatives: Vec<String>,
@@ -213,6 +212,13 @@ impl SourceBase {
             Self::Workspace | Self::WorkspaceClosure => "workspace",
             Self::VendorPackage => "vendor-package",
             Self::VendorClosure => "vendor-closure",
+        }
+    }
+
+    const fn scope(self) -> SourceScope {
+        match self {
+            Self::Workspace | Self::VendorPackage => SourceScope::Package,
+            Self::WorkspaceClosure | Self::VendorClosure => SourceScope::Closure,
         }
     }
 }
@@ -260,64 +266,102 @@ impl SourceEntry {
     }
 }
 
-#[derive(askama::Template)]
-#[template(path = "units.nix.askama", escape = "none")]
-struct UnitsNixTemplate {
-    source_entries: String,
-    source_audit_entries: String,
-    unit_entries: String,
-    clippy_unit_entries: String,
-    clippy_unit_names_by_package: String,
-    panic_object_unit_entries: String,
-    policy_check_entries: String,
-    unused_crate_dependencies_by_package: String,
-    roots: String,
-    checked_roots: String,
-    package_entries: String,
-    binary_entries: String,
-    library_entries: String,
-    benchmark_entries: String,
-    test_entries: String,
-    doctest_entries: String,
-    test_target_entries: String,
-    doctest_target_entries: String,
-    benchmark_target_entries: String,
-    target_set_entries: String,
-    default_entry: String,
-}
+const UNITS_TEMPLATE: &str = include_str!("../templates/units.nix.askama");
 
 pub fn render_units_nix(graph: &UnitGraph, options: &RenderOptions) -> Result<String> {
     graph.ensure_supported()?;
     let prepared = prepare_graph(graph, options)?;
-    let template = UnitsNixTemplate {
-        source_entries: render_source_entries(&prepared),
-        source_audit_entries: render_source_audit_entries(&prepared),
-        unit_entries: render_unit_entries(graph, options, &prepared)?,
-        clippy_unit_entries: render_clippy_unit_entries(graph, options, &prepared)?,
-        clippy_unit_names_by_package: render_clippy_unit_names_by_package(
-            graph, options, &prepared,
+    let slots = [
+        ("source_entries", render_source_entries(&prepared)),
+        (
+            "source_audit_entries",
+            render_source_audit_entries(&prepared),
         ),
-        panic_object_unit_entries: render_panic_object_unit_entries(graph, options, &prepared)?,
-        policy_check_entries: render_policy_check_entries(graph, options, &prepared)?,
-        unused_crate_dependencies_by_package: render_unused_crate_dependencies_by_package(
-            graph, options, &prepared,
+        (
+            "unit_entries",
+            render_unit_entries(graph, options, &prepared)?,
         ),
-        roots: render_roots(graph, &prepared),
-        checked_roots: render_checked_roots(graph, &prepared),
-        package_entries: render_root_entries(graph, &prepared, |_| true),
-        binary_entries: render_root_entries(graph, &prepared, Unit::is_bin),
-        library_entries: render_root_entries(graph, &prepared, Unit::is_library),
-        benchmark_entries: render_benchmark_entries(graph, &prepared),
-        test_entries: render_test_entries(graph, &prepared),
-        doctest_entries: render_doctest_entries(graph, &prepared),
-        test_target_entries: render_test_target_entries(graph, &prepared),
-        doctest_target_entries: render_doctest_target_entries(graph, &prepared)?,
-        benchmark_target_entries: render_benchmark_target_entries(graph, &prepared),
-        target_set_entries: render_target_sets(graph, &prepared),
-        default_entry: render_default_entry(graph, &prepared),
-    };
+        (
+            "clippy_unit_entries",
+            render_clippy_unit_entries(graph, options, &prepared)?,
+        ),
+        (
+            "clippy_unit_names_by_package",
+            render_clippy_unit_names_by_package(graph, &prepared),
+        ),
+        (
+            "panic_object_unit_entries",
+            render_panic_object_unit_entries(graph, options, &prepared)?,
+        ),
+        (
+            "policy_check_entries",
+            render_policy_check_entries(graph, options, &prepared)?,
+        ),
+        (
+            "unused_crate_dependencies_by_package",
+            render_unused_crate_dependencies_by_package(graph, options, &prepared),
+        ),
+        ("roots", render_roots(graph, &prepared)),
+        ("checked_roots", render_checked_roots(graph, &prepared)),
+        (
+            "package_entries",
+            render_root_entries(graph, &prepared, |_| true),
+        ),
+        (
+            "binary_entries",
+            render_root_entries(graph, &prepared, Unit::is_bin),
+        ),
+        (
+            "library_entries",
+            render_root_entries(graph, &prepared, Unit::is_library),
+        ),
+        (
+            "benchmark_entries",
+            render_benchmark_entries(graph, &prepared),
+        ),
+        ("test_entries", render_test_entries(graph, &prepared)),
+        ("doctest_entries", render_doctest_entries(graph, &prepared)),
+        (
+            "test_target_entries",
+            render_test_target_entries(graph, &prepared),
+        ),
+        (
+            "doctest_target_entries",
+            render_doctest_target_entries(graph, &prepared)?,
+        ),
+        (
+            "benchmark_target_entries",
+            render_benchmark_target_entries(graph, &prepared),
+        ),
+        ("target_set_entries", render_target_sets(graph, &prepared)),
+        ("default_entry", render_default_entry(graph, &prepared)),
+    ];
 
-    Ok(template.render()?)
+    Ok(fill_template(UNITS_TEMPLATE, &slots))
+}
+
+// The template's only syntax is `{{ slot }}` substitution -- no loops or
+// conditionals -- so a single pass is the whole engine. Spliced values are
+// never rescanned, matching template-engine semantics.
+fn fill_template(template: &str, slots: &[(&str, String)]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(start) = rest.find("{{") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let end = after
+            .find("}}")
+            .expect("template placeholder is unterminated");
+        let key = after[..end].trim();
+        let (_, value) = slots
+            .iter()
+            .find(|(slot, _)| *slot == key)
+            .unwrap_or_else(|| panic!("template placeholder {key} has no rendered slot"));
+        out.push_str(value);
+        rest = &after[end + 2..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn render_unit_entries(
@@ -363,7 +407,7 @@ fn render_clippy_unit_entries(
         }
         write!(
             entries,
-            "    {} = mkClippyUnit {};\n\n",
+            "    {} = mkUnit {};\n\n",
             prepared.unit_attr(index),
             render_clippy_unit(graph, options, prepared, index)?
         )?;
@@ -523,7 +567,7 @@ fn render_source_audit_entries(prepared: &PreparedGraph) -> String {
             "    {} = {{ base = {}; scope = {}; relative = {}; includeRelatives = {}; sourceKey = {}; }};",
             nix_attr(key),
             nix_attr(source.base.audit_label()),
-            nix_attr(source.scope.audit_label()),
+            nix_attr(source.base.scope().audit_label()),
             nix_attr(&source.relative),
             nix_string_list(&source.include_relatives),
             nix_attr(&source.source_key),
@@ -572,7 +616,7 @@ impl PreparedGraph {
 fn prepare_graph(graph: &UnitGraph, options: &RenderOptions) -> Result<PreparedGraph> {
     let mut hashes = vec![None; graph.units.len()];
     for index in 0..graph.units.len() {
-        compute_hash(graph, options, index, &mut hashes)?;
+        compute_hash(graph, options, index, &mut hashes);
     }
     let hashes: Vec<String> = hashes.into_iter().map(Option::unwrap).collect();
 
@@ -599,13 +643,13 @@ fn prepare_graph(graph: &UnitGraph, options: &RenderOptions) -> Result<PreparedG
         })
         .collect();
 
-    let transitive_unit_deps = (0..graph.units.len())
+    let transitive_unit_deps: Vec<BTreeSet<usize>> = (0..graph.units.len())
         .map(|index| {
             let mut deps = BTreeSet::new();
-            collect_transitive_unit_deps(graph, index, &mut deps)?;
-            Ok(deps)
+            collect_transitive_unit_deps(graph, index, &mut deps);
+            deps
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect();
 
     let mut source_refs = Vec::with_capacity(graph.units.len());
     let mut source_entries = BTreeMap::new();
@@ -666,21 +710,22 @@ fn prepare_graph(graph: &UnitGraph, options: &RenderOptions) -> Result<PreparedG
     })
 }
 
+// Infallible: `render_units_nix` validates the graph up front, so all indexes
+// are in bounds.
 fn compute_hash(
     graph: &UnitGraph,
     options: &RenderOptions,
     index: usize,
     hashes: &mut [Option<String>],
-) -> Result<String> {
+) -> String {
     if let Some(hash) = &hashes[index] {
-        return Ok(hash.clone());
+        return hash.clone();
     }
 
-    let unit = graph.unit(index)?;
+    let unit = &graph.units[index];
     let mut dependency_hashes = Vec::new();
     for dependency in &unit.dependencies {
-        let dependency_unit = graph.unit(dependency.index)?;
-        if dependency_unit.is_run_custom_build() {
+        if graph.units[dependency.index].is_run_custom_build() {
             continue;
         }
         dependency_hashes.push(format!(
@@ -688,32 +733,24 @@ fn compute_hash(
             dependency.extern_crate_name,
             dependency.public,
             dependency.noprelude,
-            compute_hash(graph, options, dependency.index, hashes)?
+            compute_hash(graph, options, dependency.index, hashes)
         ));
     }
 
     let hash = unit.identity_hash(&dependency_hashes, options.toolchain_id.as_deref());
     hashes[index] = Some(hash.clone());
-    Ok(hash)
+    hash
 }
 
-fn collect_transitive_unit_deps(
-    graph: &UnitGraph,
-    index: usize,
-    deps: &mut BTreeSet<usize>,
-) -> Result<()> {
-    let unit = graph.unit(index)?;
-    for dependency in &unit.dependencies {
-        let dependency_unit = graph.unit(dependency.index)?;
-        if dependency_unit.is_run_custom_build() {
+fn collect_transitive_unit_deps(graph: &UnitGraph, index: usize, deps: &mut BTreeSet<usize>) {
+    for dependency in &graph.units[index].dependencies {
+        if graph.units[dependency.index].is_run_custom_build() {
             continue;
         }
         if deps.insert(dependency.index) {
-            collect_transitive_unit_deps(graph, dependency.index, deps)?;
+            collect_transitive_unit_deps(graph, dependency.index, deps);
         }
     }
-
-    Ok(())
 }
 
 // `Rustc` produces the build artifacts (rlib, bin, test binary).
@@ -1796,11 +1833,7 @@ fn render_unused_crate_dependencies_by_package(
 // Maps each cargo package name to the attr names of its per-unit clippy
 // derivations, so the template can join just that package's clippy units into
 // one per-crate gate instead of one whole-workspace aggregate.
-fn render_clippy_unit_names_by_package(
-    graph: &UnitGraph,
-    _options: &RenderOptions,
-    prepared: &PreparedGraph,
-) -> String {
+fn render_clippy_unit_names_by_package(graph: &UnitGraph, prepared: &PreparedGraph) -> String {
     let mut by_package: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (index, unit) in graph.units.iter().enumerate() {
         if !is_clippy_unit_candidate(unit) {
@@ -1898,19 +1931,14 @@ fn shell_env_value(value: &str) -> String {
 }
 
 fn shell_double_quote_literal(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('"');
-    for ch in value.chars() {
-        match ch {
-            '"' | '\\' | '$' | '`' => {
-                out.push('\\');
-                out.push(ch);
-            }
-            _ => out.push(ch),
-        }
-    }
-    out.push('"');
-    out
+    format!(
+        "\"{}\"",
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('$', "\\$")
+            .replace('`', "\\`")
+    )
 }
 
 fn nix_indented_string_fragment(value: &str) -> String {
@@ -2050,7 +2078,8 @@ fn append_direct_dependency_metadata_exports(
         if dep_unit.is_run_custom_build() {
             continue;
         }
-        let Some(links) = optional_cargo_manifest_package(dep_unit)?.and_then(|package| package.links)
+        let Some(links) =
+            optional_cargo_manifest_package(dep_unit)?.and_then(|package| package.links)
         else {
             continue;
         };
@@ -2174,7 +2203,6 @@ fn source_entry_for_unit(unit: &Unit, options: &RenderOptions) -> Result<SourceE
         return Ok(SourceEntry {
             name: source_name(base, unit, &source_key, &scoped.relative),
             base,
-            scope: scoped.scope,
             root: scoped.root,
             relative: scoped.relative,
             include_relatives: scoped.include_relatives,
@@ -2192,7 +2220,6 @@ fn source_entry_for_unit(unit: &Unit, options: &RenderOptions) -> Result<SourceE
             SourceScope::Package => SourceBase::Workspace,
             SourceScope::Closure => SourceBase::WorkspaceClosure,
         },
-        scope: scoped.scope,
         root: scoped.root,
         relative: scoped.relative,
         include_relatives: scoped.include_relatives,
@@ -2352,40 +2379,20 @@ fn external_source_from_pkg_id(pkg_id: &str) -> Option<String> {
 fn local_package_root_from_pkg_id(pkg_id: &str) -> Option<PathBuf> {
     if let Some(rest) = pkg_id.strip_prefix("path+file://") {
         let (path, _) = rest.split_once('#')?;
-        return percent_decode_path(path).map(PathBuf::from);
+        return file_url_path(path);
     }
 
     let (_, rest) = pkg_id.split_once("(path+file://")?;
     let (path, _) = rest.split_once(')')?;
-    percent_decode_path(path).map(PathBuf::from)
+    file_url_path(path)
 }
 
-fn percent_decode_path(path: &str) -> Option<String> {
-    let bytes = path.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            let hi = hex_value(*bytes.get(index + 1)?)?;
-            let lo = hex_value(*bytes.get(index + 2)?)?;
-            out.push((hi << 4) | lo);
-            index += 3;
-        } else {
-            out.push(bytes[index]);
-            index += 1;
-        }
-    }
-
-    String::from_utf8(out).ok()
-}
-
-const fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
+// `Url::to_file_path` percent-decodes the path from the package id.
+fn file_url_path(path: &str) -> Option<PathBuf> {
+    Url::parse(&format!("file://{path}"))
+        .ok()?
+        .to_file_path()
+        .ok()
 }
 
 fn source_closure_relatives(root: &Path, source_boundary: &Path) -> Result<Vec<String>> {
@@ -2543,7 +2550,7 @@ fn extract_include_macro_paths(source: &str) -> Vec<String> {
                 continue;
             };
             let tail = tail.trim_start();
-            if let Some((literal, _)) = parse_rust_string_literal(tail) {
+            if let Some(literal) = parse_rust_string_literal(tail) {
                 if !literal.is_empty() {
                     paths.push(literal);
                 }
@@ -2556,7 +2563,7 @@ fn extract_include_macro_paths(source: &str) -> Vec<String> {
             let Some(concat_body) = concat_tail.trim_start().strip_prefix('(') else {
                 continue;
             };
-            if let Some((literal, _)) = parse_rust_string_literal(concat_body.trim_start())
+            if let Some(literal) = parse_rust_string_literal(concat_body.trim_start())
                 && let Some(directory) = literal.strip_suffix('/')
                 && !directory.is_empty()
             {
@@ -2567,20 +2574,20 @@ fn extract_include_macro_paths(source: &str) -> Vec<String> {
     paths
 }
 
-fn parse_rust_string_literal(source: &str) -> Option<(String, &str)> {
+fn parse_rust_string_literal(source: &str) -> Option<String> {
     let (source, is_raw) = match source.strip_prefix('r') {
         Some(after_r) if after_r.starts_with('"') => (after_r, true),
         _ => (source, false),
     };
     let body = source.strip_prefix('"')?;
-    let mut chars = body.char_indices();
+    let mut chars = body.chars();
     let mut literal = String::new();
-    while let Some((index, c)) = chars.next() {
+    while let Some(c) = chars.next() {
         if c == '"' {
-            return Some((literal, &body[index + c.len_utf8()..]));
+            return Some(literal);
         }
         if c == '\\' && !is_raw {
-            match chars.next().map(|(_, escaped)| escaped) {
+            match chars.next() {
                 Some('n') => literal.push('\n'),
                 Some('t') => literal.push('\t'),
                 Some('r') => literal.push('\r'),
@@ -3337,7 +3344,7 @@ mod tests {
         // Per-unit clippy: the same local unit gets a sibling clippy-driver
         // derivation in `clippyUnits`, grouped per crate by `clippyByPackage`.
         assert!(rendered.contains("clippyUnits = rec"));
-        assert!(rendered.contains("mkClippyUnit"));
+        assert!(rendered.contains("pname = \"hello-clippy\""));
         assert!(rendered.contains("env \"''${rustc_env[@]}\" clippy-driver"));
         assert!(rendered.contains("extraClippyLintArgs"));
         assert!(rendered.contains("clippyByPackage ="));
@@ -3609,13 +3616,11 @@ mod tests {
         .unwrap();
 
         // `clippyUnits = rec { };` rendered empty proves no per-unit clippy
-        // derivations were emitted. The template's `mkClippyUnit` helper is
-        // template-literal and always present; the driver invocation only
-        // appears inside a rendered clippy unit's build phase, so it's the
-        // load-bearing tell.
+        // derivations were emitted; the driver invocation only appears inside a
+        // rendered clippy unit's build phase, so it's the load-bearing tell.
         assert!(rendered.contains("clippyUnits = rec {\n  };"));
         assert!(!rendered.contains("env \"''${rustc_env[@]}\" clippy-driver"));
-        assert!(!rendered.contains("mkClippyUnit {\n      pname ="));
+        assert!(!rendered.contains("pname = \"serde-clippy\""));
     }
 
     #[test]
@@ -5279,7 +5284,9 @@ links = "nested_native"
 
         assert!(rendered.contains("build_script_manifest_dir_source=\"$src\""));
         assert!(rendered.contains("build_script_manifest_dir=$out/manifest-dir"));
-        assert!(rendered.contains("cp -RL \"$build_script_manifest_dir_source\"/. \"$build_script_manifest_dir\"/"));
+        assert!(rendered.contains(
+            "cp -RL \"$build_script_manifest_dir_source\"/. \"$build_script_manifest_dir\"/"
+        ));
         assert!(rendered.contains("chmod -R u+w \"$build_script_manifest_dir\""));
         assert!(rendered.contains("export CARGO_MANIFEST_DIR=$build_script_manifest_dir"));
         assert!(!rendered.contains("build_script_manifest_dir_source=\"$src/builder\""));
@@ -5450,9 +5457,7 @@ version = "0.1.0"
         assert!(rendered.contains("env \"''${build_script_env[@]}\""));
         assert!(rendered.contains("/cargo-metadata build/cargo-metadata"));
         assert!(rendered.contains("cp build/cargo-metadata $out/nix-support/cargo-metadata"));
-        assert!(rendered.contains(
-            "/nix-support/cargo-metadata\" ]; then"
-        ));
+        assert!(rendered.contains("/nix-support/cargo-metadata\" ]; then"));
         assert!(rendered.contains(
             "rustc_env+=( \"DEP_NATIVE_FFI_$cargo_metadata_key=$cargo_metadata_value\" )"
         ));

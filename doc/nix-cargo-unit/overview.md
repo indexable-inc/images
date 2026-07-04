@@ -111,7 +111,7 @@ in [internals](internals.md).
 
 ## Dependencies
 
-`askama` (template), `clap` (CLI), `color-eyre` (errors), `object` (rlib/object
+`clap` (CLI), `color-eyre` (errors), `object` (rlib/object
 parsing for the panic scan), `serde`/`serde_json` (unit graph), `sha2` (identity
 hashing), `toml` (`Cargo.lock` and manifests), `url` (package-id parsing).
 

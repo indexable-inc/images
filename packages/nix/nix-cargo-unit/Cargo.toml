@@ -10,7 +10,6 @@ publish = false
 workspace = true
 
 [dependencies]
-askama = { version = "0.16.0", default-features = false, features = ["derive", "std"] }
 clap = { version = "4", features = ["derive"] }
 color-eyre = "0.6"
 object = { version = "0.37", default-features = false, features = ["read", "write", "std"] }
@@ -18,7 +17,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 toml = { version = "1.1.2", default-features = false, features = ["parse", "serde"] }
-url = { version = "2.5.8", default-features = false }
+url = { version = "2.5.8", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tempfile = "3"

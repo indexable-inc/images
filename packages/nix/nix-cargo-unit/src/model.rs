@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use std::collections::BTreeMap;
 
-use color_eyre::eyre::{Result as EyreResult, bail, ensure, eyre};
+use color_eyre::eyre::{Result as EyreResult, bail, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 use url::Url;
@@ -309,7 +309,7 @@ impl UnitGraph {
             graph.ensure_supported()?;
             let mut hashes = vec![None; graph.units.len()];
             for index in 0..graph.units.len() {
-                merge_identity_hash(&graph, index, &mut hashes)?;
+                merge_identity_hash(&graph, index, &mut hashes);
             }
 
             let mut index_map = vec![None; graph.units.len()];
@@ -321,7 +321,7 @@ impl UnitGraph {
                     &mut index_map,
                     &mut merged,
                     &mut merged_by_hash,
-                )?;
+                );
             }
 
             let mut root_set = Vec::new();
@@ -351,23 +351,12 @@ impl UnitGraph {
     }
 
     pub fn validate(&self) -> EyreResult<()> {
-        for root in &self.roots {
+        for root in self.roots.iter().chain(self.root_sets.iter().flatten()) {
             if *root >= self.units.len() {
                 bail!(
                     "root unit index {root} is outside the unit graph with {} units",
                     self.units.len()
                 );
-            }
-        }
-
-        for root_set in &self.root_sets {
-            for root in root_set {
-                if *root >= self.units.len() {
-                    bail!(
-                        "root set unit index {root} is outside the unit graph with {} units",
-                        self.units.len()
-                    );
-                }
             }
         }
 
@@ -386,14 +375,10 @@ impl UnitGraph {
 
         Ok(())
     }
-
-    pub fn unit(&self, index: usize) -> EyreResult<&Unit> {
-        self.units
-            .get(index)
-            .ok_or_else(|| eyre!("unit index {index} is outside the unit graph"))
-    }
 }
 
+// Infallible: `merge` validates every graph up front, so all indexes are in
+// bounds.
 fn merge_unit(
     graph: &UnitGraph,
     hashes: &[Option<String>],
@@ -401,37 +386,33 @@ fn merge_unit(
     index_map: &mut [Option<usize>],
     merged: &mut UnitGraph,
     merged_by_hash: &mut BTreeMap<String, usize>,
-) -> EyreResult<usize> {
+) -> usize {
     if let Some(merged_index) = index_map[index] {
-        return Ok(merged_index);
+        return merged_index;
     }
 
-    let unit = graph.unit(index)?;
     let hash = hashes[index].clone().expect("unit hash was computed");
     let merged_index = if let Some(merged_index) = merged_by_hash.get(&hash) {
         *merged_index
     } else {
-        let mut unit = unit.clone();
+        let mut unit = graph.units[index].clone();
         unit.dependencies = unit
             .dependencies
             .iter()
-            .map(|dependency| {
-                let index = merge_unit(
+            .map(|dependency| Dependency {
+                index: merge_unit(
                     graph,
                     hashes,
                     dependency.index,
                     index_map,
                     merged,
                     merged_by_hash,
-                )?;
-                Ok(Dependency {
-                    index,
-                    extern_crate_name: dependency.extern_crate_name.clone(),
-                    public: dependency.public,
-                    noprelude: dependency.noprelude,
-                })
+                ),
+                extern_crate_name: dependency.extern_crate_name.clone(),
+                public: dependency.public,
+                noprelude: dependency.noprelude,
             })
-            .collect::<EyreResult<Vec<_>>>()?;
+            .collect();
         let merged_index = merged.units.len();
         merged.units.push(unit);
         merged_by_hash.insert(hash, merged_index);
@@ -439,35 +420,31 @@ fn merge_unit(
     };
 
     index_map[index] = Some(merged_index);
-    Ok(merged_index)
+    merged_index
 }
 
-fn merge_identity_hash(
-    graph: &UnitGraph,
-    index: usize,
-    hashes: &mut [Option<String>],
-) -> EyreResult<String> {
+fn merge_identity_hash(graph: &UnitGraph, index: usize, hashes: &mut [Option<String>]) -> String {
     if let Some(hash) = &hashes[index] {
-        return Ok(hash.clone());
+        return hash.clone();
     }
 
-    let unit = graph.unit(index)?;
-    let dependency_hashes = unit
+    let unit = &graph.units[index];
+    let dependency_hashes: Vec<String> = unit
         .dependencies
         .iter()
         .map(|dependency| {
-            Ok(format!(
+            format!(
                 "{}:{}:{}:{}",
                 dependency.extern_crate_name,
                 dependency.public,
                 dependency.noprelude,
-                merge_identity_hash(graph, dependency.index, hashes)?
-            ))
+                merge_identity_hash(graph, dependency.index, hashes)
+            )
         })
-        .collect::<EyreResult<Vec<_>>>()?;
+        .collect();
     let hash = unit.identity_hash(&dependency_hashes, None);
     hashes[index] = Some(hash.clone());
-    Ok(hash)
+    hash
 }
 
 #[derive(Debug, Clone)]
@@ -723,6 +700,14 @@ impl Lto {
             Self::Fat => b'2',
         }
     }
+
+    pub const fn rustc_value(self) -> Option<&'static str> {
+        match self {
+            Self::Off => None,
+            Self::Thin => Some("thin"),
+            Self::Fat => Some("fat"),
+        }
+    }
 }
 
 impl DebugInfo {
@@ -781,16 +766,6 @@ impl Strip {
             Self::None => None,
             Self::Debuginfo => Some("debuginfo"),
             Self::Symbols => Some("symbols"),
-        }
-    }
-}
-
-impl Lto {
-    pub const fn rustc_value(self) -> Option<&'static str> {
-        match self {
-            Self::Off => None,
-            Self::Thin => Some("thin"),
-            Self::Fat => Some("fat"),
         }
     }
 }
