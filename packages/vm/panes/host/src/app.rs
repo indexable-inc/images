@@ -155,9 +155,22 @@ pub fn run(target: Target, title_prefix: String, native_titlebar: bool) -> ExitC
 
     let screen = NSScreen::mainScreen(mtm);
     let max_fps = screen.as_ref().map_or(60, |screen| screen.maximumFramesPerSecond());
-    let backing = screen.as_ref().map_or(2.0, |screen| screen.backingScaleFactor());
+    // Hello advertises the HIGHEST backing scale of any attached display, not
+    // the startup main screen's: this read happens once per process, and a
+    // host launched while a 1x display was frontmost would otherwise say
+    // scale=1 for the whole session, pinning every guest client to 1x buffers
+    // stretched over Retina drawables (seen live with GLFW/Minecraft,
+    // index#1686). Windows that land on a lower-scale screen are still
+    // handled per window: their Configure carries that screen's real backing
+    // scale. Fallback 2.0 (headless/no screens) errs toward sharp.
+    let backing = NSScreen::screens(mtm)
+        .iter()
+        .map(|screen| screen.backingScaleFactor())
+        .fold(0.0_f64, f64::max);
+    let backing = if backing > 0.0 { backing } else { 2.0 };
     eprintln!(
-        "panes-host: main screen maximumFramesPerSecond={max_fps} backingScaleFactor={backing}"
+        "panes-host: max screen backingScaleFactor={backing}, main screen \
+         maximumFramesPerSecond={max_fps}"
     );
 
     let renderer = match Renderer::new() {

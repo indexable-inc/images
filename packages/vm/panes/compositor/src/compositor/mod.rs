@@ -419,6 +419,26 @@ impl App {
         });
     }
 
+    /// Ratchet the advertised output scale up to `scale` and re-advertise per
+    /// surface. The host's Hello scale is read once at its startup from the
+    /// then-main screen, so it can undershoot the screen a window actually
+    /// lands on (host launched while a 1x display was frontmost); the
+    /// per-window Configure scale is live truth from that window's own
+    /// `NSWindow`, so a higher value corrects the global advertisement.
+    /// Monotonic within a connection (a window dragged to a 1x display must
+    /// not flip every other client back to 1x); a fresh Hello resets it.
+    fn raise_output_scale(&self, scale: u32) {
+        let scale = clamp_i32(scale.max(1));
+        if scale <= self.output.current_scale().integer_scale() {
+            return;
+        }
+        info!(scale, "output scale raised by per-window configure");
+        self.output.change_current_state(None, None, Some(Scale::Integer(scale)), None);
+        for pane in &self.panes {
+            self.send_preferred_scale(pane.toplevel.wl_surface());
+        }
+    }
+
     /// Try to move one frame onto the wire for `panes[idx]`, announcing the
     /// window first if this connection has not seen it. When there is
     /// nothing to send, release the window's frame callbacks instead: no
@@ -690,14 +710,19 @@ impl App {
         // the window's scale or a Retina client that honors the advertised
         // output scale renders a buffer scale^2 the drawable. div_ceil keeps a
         // stray pixel row covered rather than letterboxed.
-        // Scale advertisement stays global (wl_output + preferred_buffer_scale
-        // both derive from Hello): a per-window Configure scale that differs
-        // (window dragged to a non-Retina external display) is not re-echoed
-        // per surface, so that window's content is host-rescaled until it
+        // Scale advertisement stays global (wl_output + preferred_buffer_scale),
+        // seeded by Hello and ratcheted UP by any higher per-window Configure
+        // scale (raise_output_scale): a stale Hello scale=1 with Retina
+        // Configures at scale=2 otherwise pins every client to buffer scale 1,
+        // rendering half the drawable forever (measured live with
+        // GLFW/Minecraft, index#1686). A LOWER per-window scale (window
+        // dragged to a non-Retina external display) is not re-echoed per
+        // surface, so that window's content is host-rescaled until it
         // returns. Fractional scale is out of scope by design: macOS backing
         // factors are 1 or 2, and wp_fractional_scale would buy softness at
         // readback bandwidth the vsock budget cannot spare.
         let scale = scale.max(1);
+        self.raise_output_scale(scale);
         let size_valid = width > 0 && height > 0;
         self.panes[idx].toplevel.with_pending_state(|state| {
             if size_valid {
