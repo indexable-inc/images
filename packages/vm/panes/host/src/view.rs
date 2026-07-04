@@ -113,6 +113,11 @@ pub struct ViewIvars {
     /// (`translate_chord`) instead of forwarding raw Super chords; from
     /// `app::RunOptions` (`--no-chord-translation` clears it).
     chord_translation: bool,
+    /// The synthetic left-ctrl for translated chords is currently pressed
+    /// guest-side. Explicit state, not inferred from `held_keys`: the guard
+    /// against a physically-held ctrl (see `key_down`) means a ctrl-wrapped
+    /// entry does not always imply we pressed one.
+    synthetic_ctrl: Cell<bool>,
     /// Pointer capture engaged for this window (`app::sync_capture`): motion
     /// goes out as `PointerRelative` deltas, and the absolute re-anchor
     /// before buttons/scrolls is skipped (the frozen cursor position is
@@ -282,14 +287,15 @@ define_class!(
                 };
                 ForwardedKey { keycode, ctrl: false, chorded: cmd }
             };
-            let mut held = self.ivars().held_keys.borrow_mut();
             // One synthetic ctrl serves however many translated chords are
-            // down; engage it only for the first.
-            if forwarded.ctrl && !held.values().any(|key| key.ctrl) {
+            // down; engage it only for the first, and not at all while the
+            // user physically holds ctrl (same evdev keycode: a second press
+            // would later release ctrl out from under their real hold).
+            if forwarded.ctrl && !self.ivars().synthetic_ctrl.get() && !self.real_ctrl_held() {
+                self.ivars().synthetic_ctrl.set(true);
                 self.send_keycode(KEY_LEFTCTRL, ButtonState::Pressed);
             }
-            held.insert(code, forwarded);
-            drop(held);
+            self.ivars().held_keys.borrow_mut().insert(code, forwarded);
             self.send_keycode(forwarded.keycode, ButtonState::Pressed);
         }
 
@@ -432,6 +438,7 @@ impl PanesView {
             held_modifiers: RefCell::new(HashSet::new()),
             held_keys: RefCell::new(HashMap::new()),
             chord_translation,
+            synthetic_ctrl: Cell::new(false),
             relative: Cell::new(false),
             last_relative: Cell::new((f64::NEG_INFINITY, 0)),
         });
@@ -472,9 +479,19 @@ impl PanesView {
             (key, held.values().any(|other| other.ctrl))
         };
         self.send_keycode(key.keycode, ButtonState::Released);
-        if key.ctrl && !ctrl_still_needed {
+        // Only release a ctrl we pressed (`synthetic_ctrl`): a chord that
+        // rode a physically-held ctrl must leave that ctrl to the user's own
+        // `flagsChanged` release.
+        if key.ctrl && !ctrl_still_needed && self.ivars().synthetic_ctrl.get() {
+            self.ivars().synthetic_ctrl.set(false);
             self.send_keycode(KEY_LEFTCTRL, ButtonState::Released);
         }
+    }
+
+    /// A physical ctrl key's forwarded press is still outstanding.
+    fn real_ctrl_held(&self) -> bool {
+        let held = self.ivars().held_modifiers.borrow();
+        held.contains(&KVK_CONTROL) || held.contains(&KVK_RIGHT_CONTROL)
     }
 
     /// Cmd went fully up: release every key that went down inside the chord.
