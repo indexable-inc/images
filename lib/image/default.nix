@@ -1,6 +1,7 @@
 {
   lib,
   nixpkgs,
+  rust-overlay,
   paths,
   system,
   home-manager,
@@ -50,6 +51,33 @@
   };
 
   /**
+  Locked flake-input sources baked into the base image but NOT reachable
+  through a `nix.registry.*` pin, so `system.extraDependencies` roots them
+  into the system closure (and `includeNixDB` in oci-layer.nix registers
+  everything in that closure as valid). Single source of truth: the module
+  below sets `system.extraDependencies` to this list, and the
+  `base-image-nix-db` check (tests/default.nix) reads it back off the
+  evaluated `system.extraDependencies` to assert each path ships valid — the
+  registry-derived projection there cannot catch these, precisely because
+  they are not registry pins.
+
+  Measurement-driven exception to the "don't bake the flake inputs" hold
+  (index #1748/#1815): on the current base image the FIRST `nix run index#jq`
+  in a fresh ix VM took 2m44.8s, its log showing `unpacking
+  'github:oxalica/rust-overlay/107c334f...' into the Git cache` — evaluating
+  index's flake under `nix run` forces the `rust-overlay` input source, which
+  the image does not ship, so nix fetches and unpacks it through VCFS. Baking
+  it drops that to the warm ~2.6s. rust-overlay is ~19M; home-manager and
+  hermes-agent stay unbaked until a measurement justifies each.
+
+  `.outPath` is the ORIGINAL `-source` store path with string context, so it
+  roots into the closure once (no duplicate copy — the #1748 trap); the path
+  must be the LOCKED input so it matches what index's `flake.lock` narHash
+  resolves to during in-guest eval.
+  */
+  extraBakedSources = [rust-overlay.outPath];
+
+  /**
   Run the platform config, OCI packaging, base profile, the full module
   registry, and the caller's `modules` through `lib.nixosSystem`, then
   return the evaluated `config`. This is the evaluation path every
@@ -86,6 +114,13 @@
               path = nixpkgs.outPath;
               inherit (nixpkgs) narHash;
             };
+          }
+          {
+            # Root the extra baked sources (see `extraBakedSources` above) into
+            # the system closure so `includeNixDB` registers them as valid and
+            # an in-guest `nix run index#...` finds rust-overlay already present
+            # instead of unpacking it through VCFS (measured 2m44.8s -> ~2.6s).
+            system.extraDependencies = extraBakedSources;
           }
         ]
         ++ lib.optional (self != null) {

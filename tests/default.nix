@@ -2174,16 +2174,23 @@
   #      all, so the pinned source (present in the image) was never valid; fixed
   #      by `includeNixDB = true` in oci-layer.nix
   # The boundary this defends: the built base OCI archive must ship a populated
-  # /nix/var/nix/db/db.sqlite whose ValidPaths includes EVERY path the image's
-  # flake registry pins (nixpkgs and, once baked, index) — otherwise the first
-  # in-guest `nix run nixpkgs#...`/`index#...` re-ingests that source. A bare
-  # db.sqlite, or the registry pin alone, is not enough. Deriving the required
-  # paths from the image's own `nix.registry.*.to.path` means a future pin is
-  # covered automatically and this can never silently drift from what ships.
-  # This check builds the real base archive and asserts exactly that, so it also
-  # proves the DB survives oci-image-builder's re-streaming. It builds an OCI
-  # image, so it is its own check (not the pure-eval `eval` aggregate) and runs
-  # on Linux.
+  # /nix/var/nix/db/db.sqlite whose ValidPaths includes EVERY source the image
+  # bakes for in-guest eval — otherwise the first in-guest `nix` re-ingests it.
+  # Two classes of baked source, both covered here:
+  #   - flake registry pins (nixpkgs and, once baked, index), read off
+  #     `nix.registry.*.to.path`; and
+  #   - sources baked WITHOUT a registry pin via `system.extraDependencies`
+  #     (rust-overlay — forced when index's flake evaluates under `nix run`,
+  #     but reached through no registry row), read off that option. The
+  #     registry-derived projection cannot catch these, precisely because they
+  #     are not registry pins, so they need their own list.
+  # A bare db.sqlite, or the registry pin alone, is not enough. Deriving the
+  # required paths from the image's OWN config (the registry and
+  # `system.extraDependencies`) means a future pin or baked source is covered
+  # automatically and this can never silently drift from what ships. This check
+  # builds the real base archive and asserts exactly that, so it also proves the
+  # DB survives oci-image-builder's re-streaming. It builds an OCI image, so it
+  # is its own check (not the pure-eval `eval` aggregate) and runs on Linux.
   baseImageNixDb = let
     # Every `path`-type registry pin the image ships. Guard on the type so a
     # non-path entry (e.g. a default indirect/github registry row) can't break
@@ -2193,6 +2200,10 @@
       (builtins.filter (entry: (entry.to.type or null) == "path" && entry.to ? path))
       (map (entry: entry.to.path))
     ];
+    # Sources baked into the system closure without a registry pin (the
+    # `extraBakedSources` list in lib/image/default.nix). `toString` so a path
+    # value renders as its store path for the sqlite lookup below.
+    extraBakedPaths = map toString base.imageConfig.system.extraDependencies;
   in
     pkgs.runCommand "ix-test-base-image-nix-db" {
       nativeBuildInputs = [
@@ -2202,7 +2213,7 @@
         pkgs.coreutils
       ];
       archive = base.imageConfig.ix.build.ociImage;
-      requiredPaths = registryPaths;
+      requiredPaths = registryPaths ++ extraBakedPaths;
     } ''
       mkdir extract db
       # oci-image-builder writes uncompressed tar layers as blobs/sha256/<digest>.

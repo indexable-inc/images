@@ -513,6 +513,7 @@
         self
         lib
         nixpkgs
+        rust-overlay
         paths
         system
         home-manager
