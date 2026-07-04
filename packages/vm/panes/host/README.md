@@ -104,17 +104,31 @@ compositor).
   user's actual macOS repeat timing is shipped once per connection
   (`ToGuest::KeyRepeat`, from `NSEvent.keyRepeatDelay/Interval`; protocol
   1.2) so guest repeat matches System Settings exactly.
-  `flagsChanged` turns into modifier press/release by toggling a held-set
-  keyed on kVK; caps lock (one event per toggle) synthesizes press+release.
-  Forwarded key presses are tracked in a second held-set: keyUps only go
-  out for tracked keys, and on resign-key every held key and modifier is
-  released guest-side (AppKit stops delivering keyUp/flagsChanged to a
-  non-key window; a key stuck down guest-side would auto-repeat forever).
-  The `NSWindow` subclass reroutes Cmd keyUps to the view -- AppKit
-  swallows them as key-equivalent processing, which used to stick e.g.
-  Cmd-Backspace down forever guest-side.
+  `flagsChanged` turns into modifier press/release by checking the event's
+  device-independent class flag against a held-set keyed on kVK: a key we
+  saw press is releasing, an unseen key with its class down is pressing,
+  and an unseen key with its class up is the release of a press from
+  before this window had focus and is dropped (the old membership toggle
+  guessed "press" there, latching the modifier in the guest's xkb state so
+  text input went dead until the next focus loss). Caps lock (one event
+  per toggle) synthesizes press+release.
+  Forwarded key presses are tracked in a map recording exactly what went
+  on the wire: keyUps release precisely that, only for tracked keys, and
+  on resign-key everything held is released guest-side (AppKit stops
+  delivering keyUp/flagsChanged to a non-key window; a key stuck down
+  guest-side auto-repeats forever). `NSApplication.sendEvent` discards
+  keyUps while Cmd is held (key-equivalent processing, above the window),
+  so a local event monitor re-delivers them to the key window (GLFW's
+  workaround) whose `sendEvent` override hands them to the view; when Cmd
+  itself goes up, any key still marked as pressed-during-the-chord is
+  released defensively.
   Cmd+W (CloseRequest) and Cmd+Q (CloseRequest to all, then exit) stay
-  host-side; other Cmd chords are forwarded.
+  host-side. Other Cmd chords are translated to their Linux equivalents by
+  default (Cmd+A/C/V/X/Z -> Ctrl+same via one synthetic left-ctrl,
+  Cmd+Backspace -> Ctrl+Backspace, Cmd+Left/Right -> Home/End; Shift rides
+  along, unmapped Cmd chords are swallowed and Super never reaches the
+  guest). `--no-chord-translation` restores raw Super-chord forwarding for
+  Linux-native muscle memory.
 - **Pointer**: the view is flipped (top-left origin) and multiplies points
   by `backingScaleFactor`, so protocol coordinates are buffer pixels.
   Buttons map to evdev (`BTN_LEFT` 0x110, `BTN_RIGHT` 0x111, `BTN_MIDDLE`

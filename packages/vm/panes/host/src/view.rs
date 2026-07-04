@@ -10,7 +10,7 @@
 //! downward scroll, so both axes are negated on the way out.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -36,24 +36,83 @@ const KVK_ANSI_Q: u16 = 0x0C;
 const KVK_ANSI_W: u16 = 0x0D;
 const KVK_CAPS_LOCK: u16 = 0x39;
 
+/// kVK codes for the Cmd editing chords translated to their Linux
+/// equivalents (`HIToolbox` Events.h), plus the modifier keys themselves.
+const KVK_ANSI_A: u16 = 0x00;
+const KVK_ANSI_Z: u16 = 0x06;
+const KVK_ANSI_X: u16 = 0x07;
+const KVK_ANSI_C: u16 = 0x08;
+const KVK_ANSI_V: u16 = 0x09;
+const KVK_DELETE: u16 = 0x33; // backspace
+const KVK_LEFT_ARROW: u16 = 0x7B;
+const KVK_RIGHT_ARROW: u16 = 0x7C;
+const KVK_SHIFT: u16 = 0x38;
+const KVK_RIGHT_SHIFT: u16 = 0x3C;
+const KVK_CONTROL: u16 = 0x3B;
+const KVK_RIGHT_CONTROL: u16 = 0x3E;
+const KVK_OPTION: u16 = 0x3A;
+const KVK_RIGHT_OPTION: u16 = 0x3D;
+const KVK_COMMAND: u16 = 0x37;
+const KVK_RIGHT_COMMAND: u16 = 0x36;
+const KVK_FUNCTION: u16 = 0x3F;
+
+/// evdev keycodes (input-event-codes.h) for translation targets that have no
+/// kVK on the Mac keyboard, plus the synthetic chord modifier.
+const KEY_LEFTCTRL: u32 = 29;
+const KEY_HOME: u32 = 102;
+const KEY_END: u32 = 107;
+
 /// One line per wheel click, in `wl_pointer` axis units. libinput's convention
 /// (15 units per detent) so guest toolkits scroll the expected distance.
 const WHEEL_AXIS_PER_LINE: f64 = 15.0;
 
+/// What actually went out on the wire for one key press, so its release
+/// mirrors the press exactly no matter which modifiers are down by then (a
+/// user may release Cmd before or after the chorded key, and a translated
+/// press must never be un-pressed as its untranslated self).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ForwardedKey {
+    /// evdev keycode sent in the press.
+    keycode: u32,
+    /// The press was wrapped in a synthetic left-ctrl (Cmd chord
+    /// translation); the release drops the ctrl once no other forwarded key
+    /// still needs it.
+    ctrl: bool,
+    /// Pressed while Cmd was down: released defensively when Cmd goes up
+    /// (`release_cmd_chords`), because `AppKit` swallows chorded keyUps at
+    /// the `NSApplication` layer and the un-swallow monitor
+    /// (`app::install_key_up_monitor`) is behavior we do not control.
+    chorded: bool,
+}
+
+/// How one Cmd chord is presented to the guest (see [`translate_chord`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Translation {
+    keycode: u32,
+    ctrl: bool,
+}
+
 pub struct ViewIvars {
     id: WindowId,
     tracking: RefCell<Option<Retained<NSTrackingArea>>>,
-    /// Modifier keys currently held, keyed by kVK. `flagsChanged` fires for
-    /// press and release alike; toggling membership tells them apart without
-    /// hardcoding Apple's device-dependent left/right flag bits.
+    /// Modifier keys currently held, keyed by kVK. Press vs release is
+    /// decided against the event's device-independent class flag (see
+    /// `flags_changed`); membership exists to catch the release of a key
+    /// whose class stays down (two Cmds held, one released) and to release
+    /// everything on focus loss.
     held_modifiers: RefCell<HashSet<u16>>,
-    /// Non-modifier keys whose press was forwarded, keyed by kVK. Two jobs:
-    /// releasing on focus loss (a keyUp after Cmd-Tab never reaches this
-    /// view, so a key held across it would stay pressed guest-side and
-    /// auto-repeat forever), and gating keyUp forwarding to keys the guest
-    /// actually saw pressed (the host-consumed Cmd-W/Q must not leak a
-    /// stray release).
-    held_keys: RefCell<HashSet<u16>>,
+    /// Non-modifier keys whose press was forwarded, keyed by kVK, with what
+    /// was forwarded. Jobs: releasing on focus loss (a keyUp after Cmd-Tab
+    /// never reaches this view, so a key held across it would stay pressed
+    /// guest-side and auto-repeat forever), gating keyUp forwarding to keys
+    /// the guest actually saw pressed (the host-consumed Cmd-W/Q must not
+    /// leak a stray release), and releasing exactly what the press sent
+    /// (chord translation).
+    held_keys: RefCell<HashMap<u16, ForwardedKey>>,
+    /// Translate macOS editing chords to their Linux equivalents
+    /// (`translate_chord`) instead of forwarding raw Super chords; from
+    /// `app::RunOptions` (`--no-chord-translation` clears it).
+    chord_translation: bool,
     /// Pointer capture engaged for this window (`app::sync_capture`): motion
     /// goes out as `PointerRelative` deltas, and the absolute re-anchor
     /// before buttons/scrolls is skipped (the frozen cursor position is
@@ -192,7 +251,8 @@ define_class!(
                 return;
             }
             let code = event.keyCode();
-            if event.modifierFlags().contains(NSEventModifierFlags::Command) {
+            let cmd = event.modifierFlags().contains(NSEventModifierFlags::Command);
+            if cmd {
                 // App-level shortcuts stay host-side, like any native app.
                 match code {
                     KVK_ANSI_W => {
@@ -206,19 +266,40 @@ define_class!(
                     _ => {}
                 }
             }
-            self.ivars().held_keys.borrow_mut().insert(code);
-            self.send_key(code, ButtonState::Pressed);
+            let forwarded = if cmd && self.ivars().chord_translation {
+                let Some(translation) = translate_chord(code) else {
+                    // An unmapped Cmd chord does nothing, like a native app
+                    // that lacks the shortcut; forwarding the bare key would
+                    // type a stray character instead (Super itself is not
+                    // forwarded in translation mode).
+                    return;
+                };
+                ForwardedKey { keycode: translation.keycode, ctrl: translation.ctrl, chorded: true }
+            } else {
+                let Some(keycode) = keymap::evdev_from_kvk(code) else {
+                    eprintln!("panes-host: no evdev mapping for kVK {code:#x}");
+                    return;
+                };
+                ForwardedKey { keycode, ctrl: false, chorded: cmd }
+            };
+            let mut held = self.ivars().held_keys.borrow_mut();
+            // One synthetic ctrl serves however many translated chords are
+            // down; engage it only for the first.
+            if forwarded.ctrl && !held.values().any(|key| key.ctrl) {
+                self.send_keycode(KEY_LEFTCTRL, ButtonState::Pressed);
+            }
+            held.insert(code, forwarded);
+            drop(held);
+            self.send_keycode(forwarded.keycode, ButtonState::Pressed);
         }
 
         #[unsafe(method(keyUp:))]
         fn key_up(&self, event: &NSEvent) {
-            let code = event.keyCode();
             // Only keys whose press was forwarded: a release for a key the
             // guest never saw pressed (host-consumed shortcut, focus gained
-            // mid-hold) would be noise.
-            if self.ivars().held_keys.borrow_mut().remove(&code) {
-                self.send_key(code, ButtonState::Released);
-            }
+            // mid-hold, chord already swept by release_cmd_chords) would be
+            // noise.
+            self.release_forwarded(event.keyCode());
         }
 
         #[unsafe(method(flagsChanged:))]
@@ -234,25 +315,123 @@ define_class!(
             }
             let state = {
                 let mut held = self.ivars().held_modifiers.borrow_mut();
-                if held.insert(code) {
-                    ButtonState::Pressed
-                } else {
-                    held.remove(&code);
-                    ButtonState::Released
+                let transition = modifier_class(code).map_or_else(
+                    // Unmapped modifier key: membership toggling is the only
+                    // signal left (no class flag to consult).
+                    || {
+                        Some(if held.contains(&code) {
+                            ButtonState::Released
+                        } else {
+                            ButtonState::Pressed
+                        })
+                    },
+                    |class| {
+                        modifier_transition(
+                            held.contains(&code),
+                            event.modifierFlags().contains(class),
+                        )
+                    },
+                );
+                // None: release of a key pressed before this window had key
+                // focus (Cmd-Tab back with the modifier still down); the
+                // guest never saw the press. The old membership toggle
+                // guessed "press" here, latching the modifier in the guest's
+                // xkb state so every letter became a dead chord and text
+                // input stopped until the next focus loss.
+                let Some(state) = transition else {
+                    eprintln!(
+                        "panes-host: ignoring release of modifier kVK {code:#x} pressed \
+                         before focus"
+                    );
+                    return;
+                };
+                match state {
+                    ButtonState::Pressed => {
+                        held.insert(code);
+                    }
+                    ButtonState::Released => {
+                        held.remove(&code);
+                    }
                 }
+                state
             };
+            let cmd_key = code == KVK_COMMAND || code == KVK_RIGHT_COMMAND;
+            // Cmd went fully up: defensively release everything pressed
+            // inside the chord (see release_cmd_chords).
+            if cmd_key && !event.modifierFlags().contains(NSEventModifierFlags::Command) {
+                self.release_cmd_chords();
+            }
+            // In translation mode Super never reaches the guest: chords are
+            // presented as their Linux equivalents, and a bare Super press
+            // would turn them back into Super chords.
+            if cmd_key && self.ivars().chord_translation {
+                return;
+            }
             self.send_key(code, state);
         }
     }
 );
 
+/// The device-independent `NSEventModifierFlags` class bit a modifier key
+/// contributes to (`HIToolbox` Events.h kVK codes).
+const fn modifier_class(kvk: u16) -> Option<NSEventModifierFlags> {
+    match kvk {
+        KVK_SHIFT | KVK_RIGHT_SHIFT => Some(NSEventModifierFlags::Shift),
+        KVK_CONTROL | KVK_RIGHT_CONTROL => Some(NSEventModifierFlags::Control),
+        KVK_OPTION | KVK_RIGHT_OPTION => Some(NSEventModifierFlags::Option),
+        KVK_COMMAND | KVK_RIGHT_COMMAND => Some(NSEventModifierFlags::Command),
+        KVK_FUNCTION => Some(NSEventModifierFlags::Function),
+        _ => None,
+    }
+}
+
+/// What a `flagsChanged` for one modifier key means, given whether we saw
+/// its press (`held`) and whether its modifier class is down after the event
+/// (`class_down`). `None` = forward nothing.
+///
+/// A key we saw press can only be releasing (a second press cannot arrive
+/// without an intervening release, even with its sibling holding the class
+/// flag down). A key we did not see press is a press when its class is down;
+/// when the class is up it is the release of a press this window never saw
+/// (modifier held across a focus change), which must be dropped, not
+/// toggle-guessed into a press.
+const fn modifier_transition(held: bool, class_down: bool) -> Option<ButtonState> {
+    match (held, class_down) {
+        (true, _) => Some(ButtonState::Released),
+        (false, true) => Some(ButtonState::Pressed),
+        (false, false) => None,
+    }
+}
+
+/// macOS editing chords -> what a Linux app expects, so guest apps respond
+/// to Mac muscle memory (on by default; `--no-chord-translation` restores
+/// raw Super chords): Cmd+A/C/V/X/Z -> Ctrl+same, Cmd+Backspace ->
+/// Ctrl+Backspace (delete word), Cmd+Left/Right -> Home/End. Shift rides
+/// along natively (Cmd+Shift+Z -> Ctrl+Shift+Z).
+fn translate_chord(kvk: u16) -> Option<Translation> {
+    match kvk {
+        KVK_ANSI_A | KVK_ANSI_C | KVK_ANSI_V | KVK_ANSI_X | KVK_ANSI_Z | KVK_DELETE => {
+            Some(Translation { keycode: keymap::evdev_from_kvk(kvk)?, ctrl: true })
+        }
+        KVK_LEFT_ARROW => Some(Translation { keycode: KEY_HOME, ctrl: false }),
+        KVK_RIGHT_ARROW => Some(Translation { keycode: KEY_END, ctrl: false }),
+        _ => None,
+    }
+}
+
 impl PanesView {
-    pub fn new(mtm: MainThreadMarker, id: WindowId, frame: NSRect) -> Retained<Self> {
+    pub fn new(
+        mtm: MainThreadMarker,
+        id: WindowId,
+        frame: NSRect,
+        chord_translation: bool,
+    ) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(ViewIvars {
             id,
             tracking: RefCell::new(None),
             held_modifiers: RefCell::new(HashSet::new()),
-            held_keys: RefCell::new(HashSet::new()),
+            held_keys: RefCell::new(HashMap::new()),
+            chord_translation,
             relative: Cell::new(false),
             last_relative: Cell::new((f64::NEG_INFINITY, 0)),
         });
@@ -270,18 +449,52 @@ impl PanesView {
     /// them. `AppKit` stops delivering `flagsChanged` and `keyUp` once the
     /// window resigns key, so anything held across a Cmd-Tab would otherwise
     /// stay pressed in the guest forever (a stuck regular key auto-repeats
-    /// forever via `wl_keyboard.repeat_info`; a stuck modifier also inverts
-    /// the `flagsChanged` toggle heuristic on its next use).
+    /// forever via `wl_keyboard.repeat_info`).
     pub fn release_held_keys(&self) {
-        let ivars = self.ivars();
-        let held: Vec<u16> = ivars
-            .held_modifiers
-            .borrow_mut()
-            .drain()
-            .chain(ivars.held_keys.borrow_mut().drain())
-            .collect();
-        for kvk in held {
+        let modifiers: Vec<u16> = self.ivars().held_modifiers.borrow_mut().drain().collect();
+        for kvk in modifiers {
             self.send_key(kvk, ButtonState::Released);
+        }
+        let keys: Vec<u16> = self.ivars().held_keys.borrow().keys().copied().collect();
+        for kvk in keys {
+            self.release_forwarded(kvk);
+        }
+    }
+
+    /// Release exactly what the press for `kvk` forwarded (see
+    /// [`ForwardedKey`]); a no-op for keys the guest never saw pressed.
+    fn release_forwarded(&self, kvk: u16) {
+        let (key, ctrl_still_needed) = {
+            let mut held = self.ivars().held_keys.borrow_mut();
+            let Some(key) = held.remove(&kvk) else {
+                return;
+            };
+            (key, held.values().any(|other| other.ctrl))
+        };
+        self.send_keycode(key.keycode, ButtonState::Released);
+        if key.ctrl && !ctrl_still_needed {
+            self.send_keycode(KEY_LEFTCTRL, ButtonState::Released);
+        }
+    }
+
+    /// Cmd went fully up: release every key that went down inside the chord.
+    /// Their real keyUps are normally re-delivered by the un-swallow monitor
+    /// (`app::install_key_up_monitor`), but that leans on `AppKit` dispatch
+    /// details; this sweep guarantees no chorded key outlives its chord (a
+    /// latched Backspace auto-repeats guest-side forever). A chord key still
+    /// physically held after Cmd-up stops repeating early, the safe side of
+    /// the trade.
+    fn release_cmd_chords(&self) {
+        let chorded: Vec<u16> = self
+            .ivars()
+            .held_keys
+            .borrow()
+            .iter()
+            .filter(|(_, key)| key.chorded)
+            .map(|(kvk, _)| *kvk)
+            .collect();
+        for kvk in chorded {
+            self.release_forwarded(kvk);
         }
     }
 
@@ -422,6 +635,72 @@ impl PanesView {
             eprintln!("panes-host: no evdev mapping for kVK {kvk:#x}");
             return;
         };
+        self.send_keycode(keycode, state);
+    }
+
+    fn send_keycode(&self, keycode: u32, state: ButtonState) {
         app::send(ToGuest::Key { id: self.ivars().id, keycode, state });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn modifier_release_after_focus_gain_is_dropped() {
+        // The latch bug: modifier physically released after Cmd-Tab back,
+        // press never seen -> must forward nothing, not a phantom press.
+        assert_eq!(modifier_transition(false, false), None);
+    }
+
+    #[test]
+    fn modifier_press_and_release_round_trip() {
+        assert_eq!(modifier_transition(false, true), Some(ButtonState::Pressed));
+        assert_eq!(modifier_transition(true, false), Some(ButtonState::Released));
+    }
+
+    #[test]
+    fn modifier_sibling_release_keeps_class_down() {
+        // Left and right Cmd held, one releases: class flag still set, but a
+        // key we saw press can only be releasing.
+        assert_eq!(modifier_transition(true, true), Some(ButtonState::Released));
+    }
+
+    #[test]
+    fn modifier_classes_cover_both_sides() {
+        for (left, right, class) in [
+            (KVK_SHIFT, KVK_RIGHT_SHIFT, NSEventModifierFlags::Shift),
+            (KVK_CONTROL, KVK_RIGHT_CONTROL, NSEventModifierFlags::Control),
+            (KVK_OPTION, KVK_RIGHT_OPTION, NSEventModifierFlags::Option),
+            (KVK_COMMAND, KVK_RIGHT_COMMAND, NSEventModifierFlags::Command),
+        ] {
+            assert_eq!(modifier_class(left), Some(class));
+            assert_eq!(modifier_class(right), Some(class));
+        }
+        assert_eq!(modifier_class(KVK_FUNCTION), Some(NSEventModifierFlags::Function));
+        assert_eq!(modifier_class(KVK_ANSI_A), None);
+    }
+
+    #[test]
+    fn chord_translation_table() {
+        // Ctrl-wrapped: same physical key, synthetic ctrl.
+        for kvk in [KVK_ANSI_A, KVK_ANSI_C, KVK_ANSI_V, KVK_ANSI_X, KVK_ANSI_Z, KVK_DELETE] {
+            let translation = translate_chord(kvk).expect("mapped chord");
+            assert!(translation.ctrl);
+            assert_eq!(Some(translation.keycode), keymap::evdev_from_kvk(kvk));
+        }
+        // Line motion: different key, no ctrl.
+        assert_eq!(
+            translate_chord(KVK_LEFT_ARROW),
+            Some(Translation { keycode: KEY_HOME, ctrl: false })
+        );
+        assert_eq!(
+            translate_chord(KVK_RIGHT_ARROW),
+            Some(Translation { keycode: KEY_END, ctrl: false })
+        );
+        // Everything else is swallowed, never typed raw.
+        assert_eq!(translate_chord(KVK_ANSI_W), None);
+        assert_eq!(translate_chord(0x0F), None); // R
     }
 }
