@@ -118,6 +118,13 @@
     runtimeInputs = [
       pkgs.tailscale
       cfg.package
+      # Ray execs its runtime-env worker wrappers via `os.execvp("bash", ...)`
+      # (ray._private.runtime_env.context.exec_worker) -- the head's Ray Client
+      # server spawns its default worker through that path on startup, and any
+      # runtime_env task does the same on workers. The hardened unit gets only
+      # this PATH, so without bash the subprocess dies with FileNotFoundError,
+      # `--block` sees it exit, and the daemon flaps (~70s cycle on the head).
+      pkgs.bash
     ];
     text = ''
       # nu
