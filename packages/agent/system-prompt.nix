@@ -101,8 +101,13 @@ let
           derivable from code or git history, with relative dates converted to
           absolute dates; and `reference` for external resources.
 
-          After writing or updating a memory, keep `MEMORY.md` as a one-line index:
-          `- [Title](file.md): hook`. Do not put full memory content there.
+          After writing or updating a memory, add or fix only its own line in
+          `MEMORY.md`, the index: one line per file, `- file.md: <hook>`, where the
+          hook is a short trigger phrase (a handful of words), not the memory's full
+          description. Edit that single line in place; never regenerate the whole
+          index, reformat lines you did not touch, or paste each file's frontmatter
+          description into it. The index must stay compact enough to load whole, so
+          keep total size small even as files grow into the hundreds.
           Before saving, update an existing memory instead of duplicating it, and
           delete memories that turn out to be wrong. Do not save what the repo
           already records or what only matters to the current conversation. Recalled
@@ -113,7 +118,12 @@ let
           Sessions relearned the same gotchas and duplicated or contradicted stored
           notes; the schema plus index keeps recall cheap and stale entries deletable.
           Saves deferred to session end were forgotten, so cross-session facts went
-          unwritten; writing at the moment of learning is the fix.
+          unwritten; writing at the moment of learning is the fix. The old wording
+          ("keep MEMORY.md as a one-line index") led agents to regenerate the whole
+          index from scratch, title-casing each filename and pasting its full
+          frontmatter description, which at hundreds of files ballooned past the
+          context cap and destroyed the curated file; scoping edits to the one
+          touched line with a short hook keeps it bounded.
         '';
       };
     }
