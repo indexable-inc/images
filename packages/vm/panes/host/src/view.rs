@@ -373,6 +373,21 @@ define_class!(
             if cmd_key && self.ivars().chord_translation {
                 return;
             }
+            // A real LEFT ctrl pressed while the synthetic chord ctrl is
+            // down: both are evdev KEY_LEFTCTRL, so forwarding this press
+            // would double-press an already-down key, and the chord's
+            // release would then drop ctrl out from under the user's
+            // physical hold. Adopt instead: the key is already pressed
+            // guest-side, and this real key's release (tracked in
+            // held_modifiers above) now owns the eventual release. Right
+            // ctrl is a different evdev key (KEY_RIGHTCTRL) and coexists.
+            if state == ButtonState::Pressed
+                && code == KVK_CONTROL
+                && self.ivars().synthetic_ctrl.get()
+            {
+                self.ivars().synthetic_ctrl.set(false);
+                return;
+            }
             self.send_key(code, state);
         }
     }
