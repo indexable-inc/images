@@ -2,6 +2,14 @@
   ix,
   lib,
 }: let
+  # The headless Nix build-tree emitter. The `nix` module's live-pane path spawns
+  # it (`nix-web-monitor --emit ndjson`) so the parser stays the single owner of
+  # internal-json; baked onto the wrapper env (IX_NIX_WEB_MONITOR_BIN) rather than
+  # resolved from PATH. It rides the ix overlay (`overlay = true` in its
+  # package.nix), so it is on the overlaid `pkgs` under its id -- read it there,
+  # not via a `repoPackages` formal, because mcp is also called through
+  # callPackage paths (e.g. pi-harness) that do not bind one.
+  nixWebMonitorBin = pkgs.nix-web-monitor;
   # Read the package set from `ix` rather than a `pkgs` callPackage formal (which
   # `override` can't reach). `ix.pkgs` is the caller's set, the same value
   # callPackage would have auto-bound to a `pkgs` arg in the flake package set.
@@ -1333,6 +1341,7 @@
         --set SCIPQL_SOUFFLE ${lib.escapeShellArg (lib.getExe' pkgs.souffle "souffle")} \
         --set IX_MCP_TY_BIN ${lib.escapeShellArg tyBin} \
         --set IX_MCP_TY_PYTHON ${lib.escapeShellArg mcpPython.interpreter} \
+        --set IX_NIX_WEB_MONITOR_BIN ${lib.escapeShellArg (lib.getExe nixWebMonitorBin)} \
         --prefix PATH : ${
         lib.makeBinPath [
           pkgs.ripgrep
@@ -1353,6 +1362,7 @@
         --set SCIPQL_SOUFFLE ${lib.escapeShellArg (lib.getExe' pkgs.souffle "souffle")} \
         --set IX_MCP_TY_BIN ${lib.escapeShellArg tyBin} \
         --set IX_MCP_TY_PYTHON ${lib.escapeShellArg mcpPython.interpreter} \
+        --set IX_NIX_WEB_MONITOR_BIN ${lib.escapeShellArg (lib.getExe nixWebMonitorBin)} \
         --prefix PATH : ${
         lib.makeBinPath [
           pkgs.ripgrep

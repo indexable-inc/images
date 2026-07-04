@@ -21,25 +21,29 @@ derived from it.
 Two ways in:
 
 * :func:`parse` -- pure, synchronous, over text or an iterable of lines. No
-  subprocess, so it is trivially testable and works on a captured log.
-* :func:`run` / :func:`build` -- async: spawn ``nix`` with ``--log-format
-  internal-json`` on the shared event loop, feed a :class:`NixLog` line by line,
-  and (in a kernel session) register it as a live dashboard **Resource** so the
-  human watches the DAG grow and self-close when the build finishes. The model
-  gets the finished :class:`NixLog` back -- ``log.activities`` / ``log.events``
-  are polars frames, ``log.tree()`` is the rendered DAG.
+  subprocess, so it is trivially testable and works on a captured log. Returns a
+  :class:`NixLog` (``.events`` / ``.activities`` polars frames, ``.tree()``).
+* :func:`run` / :func:`build` -- async: the *live* path. Rather than re-parsing
+  internal-json in Python, they spawn the Rust ``nix-web-monitor`` emitter
+  (``--emit ndjson``), the single owner of that parsing, which folds the stream
+  into a build tree and streams a compact ``BuildView`` per state change. Each
+  line updates a :class:`BuildRun`, and (in a kernel session) a live dashboard
+  pane rendered by the native ``nix-build`` renderer shows the tree grow and
+  self-close when the build finishes. The model gets the :class:`BuildRun` back
+  (``.builds`` is a polars frame, ``.ok`` / ``.errors`` / ``.tree()``).
 
 Run it as a background job (``await nix.build(".#foo")`` runs past the budget and
-backgrounds); next turn ``await jobs['..']`` yields the finished :class:`NixLog`
-(``log.activities`` / ``log.events`` / ``log.tree()``), while the dashboard
-Resource shows the DAG growing live as it builds.
+backgrounds); next turn ``await jobs['..']`` yields the finished :class:`BuildRun`,
+while the dashboard pane shows the tree growing live as it builds.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html as _html
 import json as _json
+import os
 import re
 import time
 from collections.abc import Iterable
@@ -50,7 +54,17 @@ import polars as pl
 if TYPE_CHECKING:
     from ix_notebook_mcp.runtime import Resource
 
-__all__ = ["ACTIVITY_TYPES", "RESULT_TYPES", "NixLog", "attrs", "build", "eval", "parse", "run"]
+__all__ = [
+    "ACTIVITY_TYPES",
+    "RESULT_TYPES",
+    "BuildRun",
+    "NixLog",
+    "attrs",
+    "build",
+    "eval",
+    "parse",
+    "run",
+]
 
 __version__ = "0.1.0"
 
@@ -343,21 +357,164 @@ def parse(source: str | Iterable[str]) -> NixLog:
     return log
 
 
-def _register_live(log: NixLog) -> Resource | None:
-    """Register ``log`` as a live dashboard Resource, if running in a kernel.
+# The BuildView renderer registered in the dashboard frontend (see
+# packages/dashboard/dashboard-core/site/src/lib/renderers.ts). A live `data`
+# resource with this renderer draws the build tree natively.
+_NIX_BUILD_RENDERER = "nix-build"
 
-    Decoupled on purpose: outside the kernel (a test, a plain interpreter) the
-    runtime is absent and this is a silent no-op, so the parser stays pure.
+
+def _nix_web_monitor_bin() -> str:
+    """The `nix-web-monitor` binary the emitter runs. The mcp wrapper bakes its
+    path onto the env (``IX_NIX_WEB_MONITOR_BIN``); outside that wrapper (a bare
+    interpreter, a test) fall back to the name on PATH, so a dev shell with the
+    package installed still works."""
+    return os.environ.get("IX_NIX_WEB_MONITOR_BIN") or "nix-web-monitor"
+
+
+class BuildRun:
+    """A live record of one ``nix`` invocation, driven by the Rust
+    ``nix-web-monitor`` emitter (the single owner of internal-json parsing).
+
+    Where :class:`NixLog` parses a *captured* stream in Python, a ``BuildRun`` is
+    the *live* path: :func:`run` spawns ``nix-web-monitor --emit ndjson``, which
+    streams a compact ``BuildView`` (one JSON object per line) as the build
+    progresses, and each line replaces :attr:`view` here. A handle to it is a
+    live view of the in-flight build; in a kernel it also shows up as a
+    self-closing dashboard pane rendered by the native ``nix-build`` renderer.
     """
+
+    def __init__(self, *, label: str | None = None) -> None:
+        self.label = label
+        # The latest BuildView the emitter sent (its camelCase JSON shape, owned
+        # by the parser crate). None until the first line lands.
+        self.view: dict[str, Any] | None = None
+        self.done = False
+        self.returncode: int | None = None
+        self.started = time.time()
+        # Set when the emitter binary could not be spawned at all (so there is no
+        # process and no BuildView), surfaced through :attr:`error`.
+        self._spawn_error: str | None = None
+
+    def feed(self, line: str) -> None:
+        """Consume one NDJSON line from the emitter, replacing :attr:`view`.
+
+        A blank line (or one that is not a JSON object with the BuildView shape)
+        is ignored, so a stray diagnostic on the channel never corrupts state.
+        """
+        line = line.strip()
+        if not line:
+            return
+        try:
+            obj = _json.loads(line)
+        except _json.JSONDecodeError:
+            return
+        if isinstance(obj, dict) and "builds" in obj and "counts" in obj:
+            self.view = obj
+
+    @property
+    def error(self) -> str | None:
+        """The build's first error message, or a synthetic one for a non-zero
+        exit that reported none. Mirrors :attr:`NixLog.error`."""
+        if self._spawn_error is not None:
+            return self._spawn_error
+        errors: list[Any] = (self.view or {}).get("errors") or []
+        if errors:
+            return str(errors[0])
+        if self.done and self.returncode not in (0, None):
+            return f"nix exited with code {self.returncode}"
+        return None
+
+    @property
+    def ok(self) -> bool:
+        """True once the build finished successfully (done, exit 0, no error),
+        matching :attr:`NixLog.ok` and ``sh()``'s ``Output.ok`` so callers can
+        branch on success the same way across all three."""
+        return self.done and self.returncode == 0 and not (self.view or {}).get("errors")
+
+    @property
+    def builds(self) -> pl.DataFrame:
+        """One row per derivation (name, status, phase, log count), from the
+        latest ``BuildView``. A well-typed empty frame before the first line."""
+        rows: list[dict[str, Any]] = (self.view or {}).get("builds") or []
+        schema = {
+            "derivation": pl.Utf8,
+            "name": pl.Utf8,
+            "status": pl.Utf8,
+            "phase": pl.Utf8,
+            "host": pl.Utf8,
+            "logCount": pl.Int64,
+            "contentAddressed": pl.Boolean,
+        }
+        return pl.DataFrame([{k: r.get(k) for k in schema} for r in rows], schema=schema)
+
+    @property
+    def errors(self) -> list[str]:
+        """The error messages in the latest ``BuildView`` (capped by the emitter)."""
+        return [str(e) for e in ((self.view or {}).get("errors") or [])]
+
+    def resource_view(self) -> dict[str, Any]:
+        """The structured view for a live ``data`` dashboard resource: the
+        ``nix-build`` renderer plus the latest ``BuildView`` as its data. Before
+        the first line lands, a minimal placeholder so the pane renders at once."""
+        data = self.view or {
+            "command": f"nix {self.label}" if self.label else "nix",
+            "builds": [],
+            "activities": [],
+            "counts": {"planned": 0, "running": 0, "stopped": 0, "succeeded": 0, "failed": 0},
+            "errors": [],
+            "finished": self.done,
+            "exitCode": self.returncode,
+        }
+        return {"renderer": _NIX_BUILD_RENDERER, "data": data}
+
+    def tree(self) -> str:
+        """A compact text summary of the build (rows and status counts), for a
+        model-facing repr away from the dashboard."""
+        view = self.view or {}
+        counts: dict[str, int] = view.get("counts") or {}
+        head = " · ".join(
+            f"{n} {label}"
+            for label, key in (
+                ("running", "running"),
+                ("done", "succeeded"),
+                ("failed", "failed"),
+                ("planned", "planned"),
+            )
+            if (n := counts.get(key))
+        )
+        lines = [head or "(starting…)"]
+        for build in view.get("builds") or []:
+            mark = {"succeeded": "✓", "failed": "✗", "running": "▶"}.get(build.get("status"), "·")
+            phase = f" [{build['phase']}]" if build.get("phase") else ""
+            lines.append(f"  {mark} {build.get('name', '?')}{phase}")
+        return "\n".join(lines)
+
+    def _repr_html_(self) -> str:
+        state = "error" if self.error else "done" if self.done else "building…"
+        return (
+            "<pre style='font:12px ui-monospace,monospace;margin:0'>"
+            f"{_html.escape(state)}\n{_html.escape(self.tree())}</pre>"
+        )
+
+    def __repr__(self) -> str:
+        counts: dict[str, int] = (self.view or {}).get("counts") or {}
+        state = "error" if self.error else "done" if self.done else "building…"
+        return f"<BuildRun {self.label or ''} [{state}] {counts.get('succeeded', 0)} built>"
+
+
+def _register_live(run_state: BuildRun) -> Resource | None:
+    """Register ``run_state`` as a live ``data`` dashboard resource, if running in
+    a kernel. Decoupled on purpose: outside the kernel (a test, a plain
+    interpreter) the runtime is absent and this is a silent no-op."""
     try:
         from ix_notebook_mcp.runtime import register_resource
     except Exception:
         return None
     return register_resource(
-        render=log.resource_html,
-        title=f"nix {log.label}" if log.label else "nix",
-        kind="html",
-        alive=lambda: not log.done,
+        render=run_state.resource_view,
+        title=f"nix {run_state.label}" if run_state.label else "nix",
+        kind="data",
+        alive=lambda: not run_state.done,
     )
 
 
@@ -367,36 +524,56 @@ async def run(
     cwd: str | None = None,
     live: bool = True,
     label: str | None = None,
-) -> NixLog:
-    """Run ``nix <args>`` with ``internal-json`` logging, returning a NixLog.
+) -> BuildRun:
+    """Run ``nix <args>`` under the ``nix-web-monitor`` emitter, returning a
+    :class:`BuildRun`.
 
     Streams onto the shared event loop (never blocks it). ``args`` is everything
-    after ``nix`` (e.g. ``["build", ".#mcp"]``); ``--log-format internal-json`` is
-    appended. With ``live`` (the default) the in-flight log shows up as a
-    self-closing dashboard Resource. Run it as a background job for a long build
-    and sample the returned NixLog between turns.
+    after ``nix`` (e.g. ``["build", ".#mcp"]``). The emitter (the single owner of
+    internal-json parsing) spawns nix, folds the event stream into a build tree,
+    and streams a compact ``BuildView`` per state change; each line updates the
+    returned :class:`BuildRun`. With ``live`` (the default) the in-flight build
+    shows up as a self-closing dashboard pane drawn by the native ``nix-build``
+    renderer. Run it as a background job for a long build and sample the returned
+    handle between turns.
 
     ``cwd`` defaults to the kernel process's working directory; pass ``cwd=`` to
     resolve a flake ref (``.#foo``) against a specific worktree.
     """
-    log = NixLog(label=label or (args[1] if len(args) > 1 else args[0] if args else "nix"))
+    run_state = BuildRun(label=label or (args[1] if len(args) > 1 else args[0] if args else "nix"))
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            _nix_web_monitor_bin(),
+            "--emit",
+            "ndjson",
+            "--",
+            *args,
+            cwd=cwd,
+            stdout=asyncio.subprocess.PIPE,
+            # The emitter routes nix's own stdout to its stderr; keep it out of our
+            # NDJSON parse by draining it to the parent's stderr (not merged into
+            # stdout, which carries the BuildView lines).
+            stderr=None,
+        )
+    except OSError as exc:
+        # The emitter binary is missing or not executable (e.g. a bare interpreter
+        # with IX_NIX_WEB_MONITOR_BIN unset and nothing on PATH). Settle the run so
+        # a caller sees the failure and, critically, so a live resource registered
+        # below would self-close -- but register only AFTER a successful spawn, so
+        # a failed spawn leaks no forever-alive pane.
+        run_state.done = True
+        run_state.returncode = None
+        run_state._spawn_error = f"could not run {_nix_web_monitor_bin()}: {exc}"
+        return run_state
+    # Register the live pane only now that the process exists: a spawn failure
+    # above returns early, so `alive` (keyed off `done`) can never pin a pane open.
     if live:
-        _register_live(log)
-    proc = await asyncio.create_subprocess_exec(
-        "nix",
-        *args,
-        "--log-format",
-        "internal-json",
-        cwd=cwd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
+        _register_live(run_state)
     assert proc.stdout is not None
-    # Read raw chunks and split on newlines ourselves: a single `buildLogLine`
-    # (a compiler/test/minified line) can exceed asyncio's default 64 KiB
-    # StreamReader limit, which would make `async for`/`readline` raise and
-    # abort mid-stream. `finally` guarantees the process is reaped and the live
-    # Resource self-closes (`alive` keys off `log.done`) on every exit path.
+    # Read raw chunks and split on newlines ourselves: a build-log line folded
+    # into a BuildView can exceed asyncio's default 64 KiB StreamReader limit,
+    # which would make `readline` raise and abort mid-stream. `finally` reaps the
+    # process and lets the live resource self-close (`alive` keys off `done`).
     buf = b""
     try:
         while True:
@@ -406,18 +583,23 @@ async def run(
             buf += chunk
             *complete, buf = buf.split(b"\n")
             for line in complete:
-                log.feed(line.decode(errors="replace"))
+                run_state.feed(line.decode(errors="replace"))
         if buf:
-            log.feed(buf.decode(errors="replace"))
+            run_state.feed(buf.decode(errors="replace"))
     finally:
-        log.returncode = await proc.wait()
-        log.done = True
-        if log.returncode and not log.error:
-            log.error = f"nix exited with code {log.returncode}"
-    return log
+        # On cancellation (or any early exit) the child must be signaled, not just
+        # awaited: a bare `await proc.wait()` would let a cancelled build keep
+        # running to completion while this coroutine parks in the finally. Kill it
+        # if it has not already exited, then reap.
+        if proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                proc.terminate()
+        run_state.returncode = await proc.wait()
+        run_state.done = True
+    return run_state
 
 
-async def build(attr: str, *flags: str, cwd: str | None = None, live: bool = True) -> NixLog:
+async def build(attr: str, *flags: str, cwd: str | None = None, live: bool = True) -> BuildRun:
     """Convenience for :func:`run` of ``nix build <attr> [flags]``."""
     return await run(["build", attr, *flags], cwd=cwd, live=live, label=attr)
 

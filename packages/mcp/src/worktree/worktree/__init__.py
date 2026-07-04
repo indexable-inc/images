@@ -132,12 +132,12 @@ class Worktree:
             await _sh(["git", "-C", str(self.path), "add", "-A"], check=True, cwd=str(self.path))
         return await _sh(["git", "-C", str(self.path), "commit", "-m", message], cwd=str(self.path))
 
-    async def build(self, attr: str, *flags: str, add: bool = True, **kwargs: Any) -> _nix_mod.NixLog:  # noqa: ANN401 -- forwarded to nix.build()
+    async def build(self, attr: str, *flags: str, add: bool = True, **kwargs: Any) -> _nix_mod.BuildRun:  # noqa: ANN401 -- forwarded to nix.build()
         """``nix build`` this worktree's flake (bundled ``nix``, ``cwd`` threaded).
 
         With ``add`` (the default) ``git add -A`` runs first, because a flake only
         sees files git tracks -- an unstaged new file would be invisible and the
-        build would silently use the old tree. Returns the :class:`nix.NixLog`.
+        build would silently use the old tree. Returns the :class:`nix.BuildRun`.
         """
         import nix as _nix
 

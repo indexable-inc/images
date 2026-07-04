@@ -78,8 +78,10 @@ MODULES: tuple[Module, ...] = (
     ),
     Module(
         "nix",
-        "run a nix build and get its internals as polars (`.events` / `.activities`) plus a live "
-        "build DAG; `nix.attrs()` catalogs the flake's buildable attrs",
+        "run a nix build with a live dashboard build-tree pane; the returned BuildRun exposes "
+        "`.ok` / `.errors` / `.builds` (a polars frame). `nix.eval()` returns a flake value and "
+        "`nix.attrs()` catalogs the flake's buildable attrs; `nix.parse()` folds a captured "
+        "internal-json log into polars frames",
     ),
     Module("fleet", "async polars SSH fan-out across hosts (`read_ndjson` / `scan`)"),
     Module(

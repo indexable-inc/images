@@ -101,6 +101,27 @@ def _is_rich(out: dict) -> bool:
     )
 
 
+def _resource_pane(res: dict) -> dict:
+    """One live resource as a pane. A ``data`` resource carries a JSON
+    ``{"renderer", "data"}`` spec in its ``html`` field (see runtime._sweep_resources)
+    and becomes a native `data` pane routed through the frontend renderer registry;
+    every other resource is an html pane in a sandboxed frame. A `data` resource
+    whose spec fails to decode (e.g. a render error stored the HTML error string in
+    the same field) falls back to an html pane so the error is still shown."""
+    pane_id = f"resource/{res['id']}"
+    title = res.get("title") or res["id"]
+    kind = res.get("kind") or ""
+    body = res.get("html") or ""
+    if kind == "data":
+        try:
+            spec = json.loads(body)
+        except (json.JSONDecodeError, TypeError):
+            spec = None
+        if isinstance(spec, dict) and isinstance(spec.get("renderer"), str) and "data" in spec:
+            return data_pane(pane_id, title, spec["renderer"], spec["data"], subtitle=kind)
+    return html_pane(pane_id, title, body, subtitle=kind)
+
+
 def _panes(conn: sqlite3.Connection) -> list[dict]:
     """The MCP's current pane set, mapped from the store."""
     panes: list[dict] = []
@@ -173,15 +194,8 @@ def _panes(conn: sqlite3.Connection) -> list[dict]:
             panes.append(
                 html_pane(f"cell/{cell['id']}", cell.get("title") or "cell", rendered, subtitle="cell")
             )
-    panes.extend(
-        html_pane(
-            f"resource/{res['id']}",
-            res.get("title") or res["id"],
-            res.get("html") or "",
-            subtitle=res.get("kind") or "",
-        )
-        for res in store.live_resources(conn)
-    )
+    for res in store.live_resources(conn):
+        panes.append(_resource_pane(res))
     rows = store.latest_namespace(conn)
     if rows:
         panes.append(data_pane("namespace", "Namespace", "namespace", rows))

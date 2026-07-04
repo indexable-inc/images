@@ -1067,16 +1067,39 @@ class Resource:
             # A source whose liveness check raises is treated as gone.
             return False
 
+    async def _render_out(self) -> Any:
+        """Invoke the render, awaiting it if it is a coroutine. The raw output,
+        before any HTML coercion: an html resource stringifies it, a `data`
+        resource keeps the structure (a ``{"renderer", "data"}`` spec)."""
+        out = self._render() if callable(self._render) else self._render
+        if inspect.iscoroutine(out):
+            out = await out
+        return out
+
     async def render_html(self) -> str:
         """The current HTML for this resource (awaits the render if it is async).
         An interactive resource gets its wiring script prepended, so the page's
         markup can call ``ix.act``/``ix.events`` without including anything."""
-        out = self._render() if callable(self._render) else self._render
-        if inspect.iscoroutine(out):
-            out = await out
+        out = await self._render_out()
         html = out if isinstance(out, str) else str(out)
         script = self.script
         return script + html if script else html
+
+    async def render_view(self) -> dict:
+        """The current structured view for a ``kind="data"`` resource: a
+        ``{"renderer": name, "data": <json>}`` spec the dashboard renders with a
+        native component (via the frontend renderer registry) instead of a
+        sandboxed HTML frame. The counterpart to :meth:`render_html`, for a live,
+        self-updating pane that wants a real renderer rather than baked markup
+        (e.g. the `nix` module's live build tree). The render must return that
+        dict; anything else is an error the sweep surfaces on the pane."""
+        out = await self._render_out()
+        if not (isinstance(out, dict) and isinstance(out.get("renderer"), str) and "data" in out):
+            raise TypeError(
+                "a data resource's render must return {'renderer': str, 'data': ...}; "
+                f"got {type(out).__name__}"
+            )
+        return out
 
     @property
     def script(self) -> str:
@@ -2953,7 +2976,14 @@ async def _sweep_resources() -> None:
         status = "live"
         try:
             # Bound each render so one wedged source cannot stall the whole loop.
-            res.html = await asyncio.wait_for(res.render_html(), timeout=2.0)
+            # A `data` resource renders a structured {renderer, data} spec, stored
+            # as JSON in the same `html` column (the pane bridge decodes it into a
+            # native `data` pane); an html resource renders markup as before.
+            if res.kind == "data":
+                spec = await asyncio.wait_for(res.render_view(), timeout=2.0)
+                res.html = json.dumps(spec, default=_safe_repr)
+            else:
+                res.html = await asyncio.wait_for(res.render_html(), timeout=2.0)
             res.error = None
         except Exception as exc:
             status = "error"

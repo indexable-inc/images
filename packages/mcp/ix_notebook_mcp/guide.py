@@ -177,15 +177,16 @@ NU = (
 )
 
 SH = (
-    "`sh` is the escape hatch for what `nu` should not do: running a real external binary "
-    "(`git`/`nix`/`gh`/`cargo` and other writes and side effects), a long-running command, or "
-    "one whose raw text/log you want verbatim. It runs the child off the loop in its own "
+    "`sh` is the escape hatch for what `nu` (and `nix`) should not do: running a real external "
+    "binary (`git`/`gh`/`cargo` and other writes and side effects; for `nix` use the `nix` module "
+    "above, not `sh(['nix', ...])`), a long-running command, or one whose raw text/log you want "
+    "verbatim. It runs the child off the loop in its own "
     "session, streams into the job's pageable output, enforces a timeout with a process-group "
     "kill (so it can't hang in `running` after the command finished but a child held the pipe "
     "open — the exact failure a raw async subprocess gives you), and preserves clean color. To "
     "run elsewhere pass `cwd=`, never a `cd X && ...` prefix; one command per call, never "
     "`cmd1; echo ===; cmd2` chains scraped apart with string splitting. Prefer DATA over text "
-    "even here: when the CLI speaks JSON (`gh --json`, `cargo metadata`, `nix --json`) use it "
+    "even here: when the CLI speaks JSON (`gh --json`, `cargo metadata`, `kubectl -o json`) use it "
     "and parse the Output with `.json()` / `.jsonl()` / `.df()` (a polars frame ready to filter "
     "and render). `sh` takes a shell string (`await sh('git status --short')`) or an argv list "
     "(`await sh(['git', 'commit', '-m', msg])`) that bypasses shell parsing; `await sh.zsh(...)` "
@@ -195,6 +196,20 @@ SH = (
     "into the message), and a repr'd multi-line string loses its newlines — for any prose "
     "argument (a commit message, a PR body) use the argv-list form so it bypasses shell parsing, "
     "or write it to a temp file and `git commit -F <file>`."
+)
+
+NIX = (
+    "For any `nix` command, use the bundled `nix` module — NEVER `sh(['nix', ...])` or "
+    "`nu('nix ...')`. `await nix.run(['build', '.#foo'])` (or the shorthand `await "
+    "nix.build('.#foo')`) runs the build through the nix-web-monitor emitter and, for free, "
+    "publishes a LIVE build-tree pane to the dashboard — every derivation with its phase and "
+    "status, in-flight fetches with progress bars, failures highlighted — that updates as the "
+    "build runs and self-closes when it finishes. The returned handle exposes `.ok`, `.errors`, "
+    "and `.builds` (a polars frame), so branch on the outcome the same way as `sh().ok`. `await "
+    "nix.eval('.#x', apply='...')` returns a native Python value without hand-quoting a Nix "
+    "function through the shell, and `await nix.attrs('.')` catalogs a flake's buildable outputs "
+    "as a frame. Run a long build as a background job and sample the handle between turns. Drop to "
+    "`sh` for nix ONLY when you need its raw stdout verbatim (e.g. `nix eval --raw`)."
 )
 
 VERIFY = (
