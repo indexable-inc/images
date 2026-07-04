@@ -194,8 +194,7 @@ def _panes(conn: sqlite3.Connection) -> list[dict]:
             panes.append(
                 html_pane(f"cell/{cell['id']}", cell.get("title") or "cell", rendered, subtitle="cell")
             )
-    for res in store.live_resources(conn):
-        panes.append(_resource_pane(res))
+    panes.extend(_resource_pane(res) for res in store.live_resources(conn))
     rows = store.latest_namespace(conn)
     if rows:
         panes.append(data_pane("namespace", "Namespace", "namespace", rows))
