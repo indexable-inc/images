@@ -57,12 +57,11 @@
 
   # Spill target lives on real disk (the StateDirectory), NOT under the tmpfs
   # `/run/ray` temp-dir -- otherwise "spill to disk under memory pressure" would
-  # just consume RAM. directory_path is created by Ray under the StateDirectory.
+  # just consume RAM. Ray creates the directory itself. Passed via
+  # `--object-spilling-directory`: the JSON `--object-spilling-config` flag does
+  # not exist on `ray start` in ray 2.55 (the daemon rejects it and the unit
+  # crash-loops fleet-wide, ix deploy 2026-07-04).
   spillDir = "/var/lib/ray/spill";
-  spillConfig = builtins.toJSON {
-    type = "filesystem";
-    params.directory_path = spillDir;
-  };
 
   ray = lib.getExe' cfg.package "ray";
 
@@ -100,8 +99,8 @@
       (toString cfg.workerPortHigh)
       "--temp-dir"
       "/run/ray"
-      "--object-spilling-config"
-      spillConfig
+      "--object-spilling-directory"
+      spillDir
     ]
     ++ optionals (cfg.objectStoreMemory != null) [
       "--object-store-memory"
@@ -184,6 +183,12 @@
       IX_MCP_DASHBOARD_PORT = toString cfg.execPort;
       IX_FLEET_EXEC_PORT = toString cfg.execPort;
       IX_MCP_MESH_PORT = toString cfg.meshPort;
+      # The unit runs as root under systemdHardening's ProtectHome=true, which
+      # masks /root. Without an explicit HOME both the nushell launcher (plugin
+      # cache under $HOME/.config/nushell) and the engine ($HOME/.mgrep) resolve
+      # root's passwd home and die on EACCES. Point HOME at the unit's own
+      # writable StateDirectory, mirroring the ray unit's HOME=/run/ray.
+      HOME = "/var/lib/ix-ray-notebook";
     }
     // optionalAttrs cfg.execTrustNetwork {
       IX_MCP_EXEC_TRUST_NETWORK = "1";
