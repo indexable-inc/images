@@ -450,6 +450,17 @@ in {
           # user namespace would block that, so both are disabled here.
           PrivateDevices = false;
           PrivateUsers = false;
+          # getifaddrs needs an AF_NETLINK route socket. libzmq's ip_resolver
+          # calls it and ABORTS the whole process (SIGABRT) on EAFNOSUPPORT,
+          # which killed the notebook kernel on hosts with certain interface
+          # sets; ray's own psutil/grpc interface enumeration walks the same
+          # path. Extend the hardening default (AF_INET/AF_INET6/AF_UNIX).
+          RestrictAddressFamilies = [
+            "AF_INET"
+            "AF_INET6"
+            "AF_UNIX"
+            "AF_NETLINK"
+          ];
         };
     };
 
@@ -476,6 +487,16 @@ in {
           # the object store, so it cannot run under a private /dev or userns.
           PrivateDevices = false;
           PrivateUsers = false;
+          # Same AF_NETLINK reasoning as the ray unit: the engine's Jupyter
+          # kernel dies by libzmq SIGABRT when getifaddrs cannot open a netlink
+          # socket (observed live: ip_resolver.cpp:542 EAFNOSUPPORT on
+          # vin-compute-1/hil-compute-1; A/B-verified fix).
+          RestrictAddressFamilies = [
+            "AF_INET"
+            "AF_INET6"
+            "AF_UNIX"
+            "AF_NETLINK"
+          ];
         };
     };
   };
