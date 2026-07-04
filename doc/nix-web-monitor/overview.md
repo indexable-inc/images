@@ -33,8 +33,20 @@ own origin, so off-host access (LAN/Tailscale) needs no certificate.
 ```
 nix-web-monitor [--host H] [--port N] [--exit-when-done]
                 [--terminal-output summary|logs|quiet] [--nix-verbose]
+                [--emit ndjson]
                 -- <nix args...>
 ```
+
+- `--emit ndjson` (`server/src/emit.rs`): run headless. Instead of serving the
+  web UI, spawn the nix command, feed the parser, and stream a compact
+  [`BuildView`](../../packages/nix/nix-web-monitor/parser/src/build_view.rs) as
+  one JSON object per line on stdout (throttled to ~2 Hz, plus a final
+  authoritative snapshot after nix exits). This is the machine-readable
+  counterpart to the browser feed, consumed by the kernel `nix` module's live
+  build pane; it keeps the parser the single owner of internal-json rather than
+  re-deriving the render model in Python. Only the passthrough `nix …` command
+  has a headless form (a switch is a UI-only orchestration); the process exits
+  with nix's status.
 
 - `--host` (default `0.0.0.0`, `:49`) / `--port` (default `7532`, `:53`): the UI,
   the `/api/state` JSON snapshot, and the `/ws` delta feed all share this port.

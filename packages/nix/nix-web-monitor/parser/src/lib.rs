@@ -8,8 +8,10 @@ use serde_json::Value;
 use snafu::Snafu;
 
 pub mod activation;
+pub mod build_view;
 pub mod daemon;
 pub use activation::{Activation, ActivationStatus, ActivationStep};
+pub use build_view::{ActivityRow, BuildCounts, BuildRow, BuildView};
 pub use daemon::{DaemonInfo, DaemonOps, OpClass};
 
 const NIX_JSON_PREFIX: &str = "@nix ";
@@ -370,6 +372,13 @@ impl MonitorState {
             command,
             ..Self::default()
         }
+    }
+
+    /// The Nix invocation label this monitor was constructed with (`nix build
+    /// .#ix`), shown as the build tree's root. Read by [`build_view`](Self::build_view).
+    #[must_use]
+    pub fn command_label(&self) -> &str {
+        &self.command
     }
 
     #[must_use]

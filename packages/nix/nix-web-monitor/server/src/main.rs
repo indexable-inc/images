@@ -27,6 +27,7 @@ use tower_http::services::ServeDir;
 
 mod daemon;
 mod dependencies;
+mod emit;
 mod reasons;
 use daemon::run_daemon_probe;
 use dependencies::resolve_dependencies;
@@ -59,8 +60,10 @@ struct Args {
     /// Static UI directory. The Nix package wrapper fills this in. Always comes
     /// from the env the wrapper sets, so it is never passed after a subcommand
     /// and need not be `global` (which clap forbids on a required argument).
+    /// Optional so the headless `--emit` path (which serves no UI) runs without
+    /// it; the web-UI path validates it is present in [`validate_site_dir`].
     #[arg(long, env = "NIX_WEB_MONITOR_SITE_DIR")]
-    site_dir: PathBuf,
+    site_dir: Option<PathBuf>,
 
     /// Exit when the Nix command finishes instead of keeping the web UI alive.
     #[arg(long, global = true)]
@@ -74,8 +77,23 @@ struct Args {
     #[arg(long, global = true)]
     nix_verbose: bool,
 
+    /// Run headless: emit the build tree as NDJSON on stdout instead of serving
+    /// the web UI. One compact JSON `BuildView` per line, throttled, for a
+    /// programmatic consumer (the kernel `nix` module's live pane). Only the
+    /// passthrough `nix …` subcommand is supported; a switch has no headless
+    /// form. Exits with nix's status.
+    #[arg(long, value_enum, global = true)]
+    emit: Option<EmitFormat>,
+
     #[command(subcommand)]
     command: NwmCommand,
+}
+
+/// Machine-readable output format for the headless emitter (`--emit`).
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum EmitFormat {
+    /// One JSON `BuildView` object per line (newline-delimited JSON).
+    Ndjson,
 }
 
 /// What `nwm` runs under the monitor. The named subcommands wrap the
@@ -157,14 +175,29 @@ async fn main() -> Result<()> {
         .version(build_version::version_static(env!("CARGO_PKG_VERSION")))
         .get_matches();
     let args = Args::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
-    validate_site_dir(&args.site_dir)?;
+
+    // Headless emitter: no UI, no daemon probe -- spawn nix, stream the build
+    // tree as NDJSON, exit with nix's status. Only the passthrough `nix …`
+    // subcommand has a headless form; a switch is a UI-only orchestration.
+    if args.emit.is_some() {
+        let NwmCommand::Nix(nix_args) = args.command else {
+            bail!("--emit supports only the passthrough `nix …` command, not a switch");
+        };
+        let exit_code = emit::run(nix_args, args.nix_verbose).await?;
+        std::process::exit(exit_code.unwrap_or(1));
+    }
+
+    let site_dir = args
+        .site_dir
+        .context("--site-dir (or NIX_WEB_MONITOR_SITE_DIR) is required to serve the web UI")?;
+    validate_site_dir(&site_dir)?;
 
     // Record startup before any build runs: the "what changed" reason baseline
     // uses it to exclude outputs registered during this run (see `reasons`).
     reasons::record_start_time();
 
     let index_html =
-        Bytes::from(std::fs::read(args.site_dir.join("index.html")).context("reading index.html")?);
+        Bytes::from(std::fs::read(site_dir.join("index.html")).context("reading index.html")?);
 
     let job = build_job(args.command).await.context("planning job")?;
     let monitor = Arc::new(RwLock::new(MonitorState::new(job.command_label.clone())));
@@ -179,7 +212,7 @@ async fn main() -> Result<()> {
         deltas: deltas.clone(),
         index_html,
     };
-    let http_server = serve(http_addr, args.site_dir, state).await?;
+    let http_server = serve(http_addr, site_dir, state).await?;
 
     eprintln!("nix-web-monitor: http://{http_addr}");
 
