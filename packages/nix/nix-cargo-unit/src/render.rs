@@ -266,7 +266,7 @@ impl SourceEntry {
     }
 }
 
-const UNITS_TEMPLATE: &str = include_str!("../templates/units.nix.askama");
+const UNITS_TEMPLATE: &str = include_str!("../templates/units.nix.in");
 
 pub fn render_units_nix(graph: &UnitGraph, options: &RenderOptions) -> Result<String> {
     graph.ensure_supported()?;
