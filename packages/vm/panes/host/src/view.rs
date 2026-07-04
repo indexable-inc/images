@@ -460,6 +460,13 @@ impl PanesView {
     pub fn release_held_keys(&self) {
         let modifiers: Vec<u16> = self.ivars().held_modifiers.borrow_mut().drain().collect();
         for kvk in modifiers {
+            // Tracked for chord classification but never forwarded in
+            // translation mode (see flags_changed): releasing it here would
+            // hand the guest a Super release for a press it never saw.
+            if self.ivars().chord_translation && (kvk == KVK_COMMAND || kvk == KVK_RIGHT_COMMAND)
+            {
+                continue;
+            }
             self.send_key(kvk, ButtonState::Released);
         }
         let keys: Vec<u16> = self.ivars().held_keys.borrow().keys().copied().collect();
