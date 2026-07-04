@@ -130,7 +130,6 @@ impl Gpu {
             )
             .context("copy texture")?;
         let bytes = self.renderer.map_texture(&mapping).context("map texture")?;
-        let mut bgra = bytes.to_vec();
         // Everything downstream (row repack, force-opaque, FrameStore::commit)
         // assumes tightly packed width*height*4; commit's debug_assert is
         // stripped in release, so this is the only guard between a padded or
@@ -138,21 +137,23 @@ impl Gpu {
         let stride = usize::try_from(width).context("texture width exceeds usize")? * 4;
         let expected = stride * usize::try_from(height).context("texture height exceeds usize")?;
         anyhow::ensure!(
-            stride > 0 && bgra.len() == expected,
+            stride > 0 && bytes.len() == expected,
             "readback of {} bytes is not tightly packed {width}x{height}x4",
-            bgra.len()
+            bytes.len()
         );
         // GLES readback is bottom-up (smithay's `GlesMapping::flipped()` is
         // unconditionally true) while the wire is top-down; ship it as-is and
-        // every dmabuf window renders upside down on the host. Repack rows in
-        // reverse, keyed on `flipped()` so a future non-flipped mapping stays
-        // correct.
+        // every dmabuf window renders upside down on the host. Build the
+        // owned copy directly in wire order (one pass over the mapping, no
+        // intermediate to_vec: this runs once per wire frame on the loop
+        // thread, and a 2x fullscreen frame is tens of MB).
+        let mut bgra = Vec::with_capacity(expected);
         if mapping.flipped() {
-            let mut top_down = Vec::with_capacity(bgra.len());
-            for row in bgra.rchunks_exact(stride) {
-                top_down.extend_from_slice(row);
+            for row in bytes.rchunks_exact(stride) {
+                bgra.extend_from_slice(row);
             }
-            bgra = top_down;
+        } else {
+            bgra.extend_from_slice(bytes);
         }
         // The copy above is Argb8888, but an alpha-less source format leaves
         // the A byte undefined (commonly 0). The wire is premultiplied BGRA,

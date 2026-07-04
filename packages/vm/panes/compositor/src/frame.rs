@@ -7,6 +7,7 @@
 //! [`Tile`]s covering just the rows that changed, updating the mirror.
 
 use panes_protocol::{Encoding, Rect, Tile};
+use rayon::prelude::*;
 
 /// Tiles never exceed this many rows: banding bounds a tile's payload (a
 /// 3840-wide band is ~3.9 MB raw) so per-tile LZ4 can fan out across cores
@@ -104,8 +105,14 @@ impl FrameStore {
         if rects.is_empty() {
             return None;
         }
+        // Bands encode in parallel: this runs on the compositor's event-loop
+        // thread once per wire frame, and LZ4 over a 2x fullscreen frame is
+        // multiple milliseconds serial -- at a 120Hz ack budget of 8.3ms per
+        // frame that alone halves the achievable rate. Banding exists for
+        // exactly this fan-out (see BAND_ROWS); indexed par_iter keeps tile
+        // order.
         let tiles: Vec<Tile> = rects
-            .iter()
+            .par_iter()
             .map(|rect| encode_tile(&current.data, current.width, *rect, allow_lz4))
             .collect();
         // Update the mirror. The full path clones; the incremental path only
@@ -152,38 +159,39 @@ fn full_bands(width: u32, height: u32) -> Vec<Rect> {
 /// Compare two equally sized packed frames band by band; a changed band is
 /// tightened to its first..=last changed rows. Unchanged interior rows within
 /// a changed span are re-sent (row-granular tracking is not worth the
-/// bookkeeping at <=256-row bands).
+/// bookkeeping at <=256-row bands). Bands scan in parallel (same budget
+/// argument as the tile encode in `take_frame`: a full-motion 2x frame reads
+/// both copies end to end); the indexed collect keeps band order.
 fn diff_bands(prev: &[u8], next: &[u8], width: u32, height: u32) -> Vec<Rect> {
     let row_len = width as usize * BYTES_PER_PIXEL;
     let row_changed = |row: u32| {
         let start = row as usize * row_len;
         prev[start..start + row_len] != next[start..start + row_len]
     };
-    let mut rects = Vec::new();
-    let mut band = 0;
-    while band < height {
-        let end = (band + BAND_ROWS).min(height);
-        let mut first = None;
-        let mut last = 0;
-        for row in band..end {
-            if row_changed(row) {
-                if first.is_none() {
-                    first = Some(row);
+    let bands = height.div_ceil(BAND_ROWS);
+    (0..bands)
+        .into_par_iter()
+        .filter_map(|index| {
+            let band = index * BAND_ROWS;
+            let end = (band + BAND_ROWS).min(height);
+            let mut first = None;
+            let mut last = 0;
+            for row in band..end {
+                if row_changed(row) {
+                    if first.is_none() {
+                        first = Some(row);
+                    }
+                    last = row;
                 }
-                last = row;
             }
-        }
-        if let Some(first) = first {
-            rects.push(Rect {
+            first.map(|first| Rect {
                 x: 0,
                 y: first,
                 w: width,
                 h: last - first + 1,
-            });
-        }
-        band = end;
-    }
-    rects
+            })
+        })
+        .collect()
 }
 
 /// Encode one damage rect from a packed frame. LZ4 is only kept when it saves

@@ -177,10 +177,13 @@ impl App {
         }
     }
 
-    /// Take the newly attached buffer (if any) out of the surface state,
-    /// copy its pixels into the pane's `FrameStore`, and release it back to
-    /// the client immediately (we hold a copy, so the client may reuse it;
-    /// this is the classic shm-copy compositor contract).
+    /// Take the newly attached buffer (if any) out of the surface state.
+    /// shm pixels are copied into the pane's `FrameStore` and the buffer is
+    /// released immediately (the classic shm-copy compositor contract). A
+    /// dmabuf is only HELD: its GPU readback is deferred until pacing allows
+    /// a send (`App::absorb_pending_gpu`), because a mailbox client commits
+    /// far faster than the wire drains and a per-commit readback saturates
+    /// the event loop (see `Pane::pending_gpu`).
     // significant_drop_tightening misfires here, same as sync_min_max: the
     // guard already spans only the buffer take + scale read.
     #[allow(clippy::significant_drop_tightening)]
@@ -196,9 +199,27 @@ impl App {
         });
         match intake.assignment {
             Some(BufferAssignment::NewBuffer(buffer)) => {
+                let scale = u32::try_from(intake.scale.max(1)).expect("clamped positive");
+                #[cfg(feature = "gpu")]
+                if self.gpu.is_some()
+                    && let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(&buffer)
+                {
+                    let dmabuf = dmabuf.clone();
+                    let pane = &mut self.panes[idx];
+                    if let Some(old) = pane.pending_gpu.take()
+                        && old.buffer != buffer
+                    {
+                        // Superseded before it was read: hand it back
+                        // untouched. That frame is skipped, never shown late
+                        // (mailbox semantics).
+                        old.buffer.release();
+                    }
+                    pane.pending_gpu = Some(super::HeldGpuBuffer { buffer, dmabuf, scale });
+                    return;
+                }
                 if let Some(frame) = self.copy_buffer(&buffer) {
                     let pane = &mut self.panes[idx];
-                    pane.scale = u32::try_from(intake.scale.max(1)).expect("clamped positive");
+                    pane.scale = scale;
                     pane.store.commit(frame.bgra, frame.width, frame.height);
                 }
                 buffer.release();
@@ -209,6 +230,10 @@ impl App {
                 // so the pane resets to the never-announced state (a remap
                 // reuses the id; the host sees it as a brand-new window).
                 let pane = &mut self.panes[idx];
+                #[cfg(feature = "gpu")]
+                if let Some(held) = pane.pending_gpu.take() {
+                    held.buffer.release();
+                }
                 if pane.announced
                     && let Some(host) = &self.host
                 {

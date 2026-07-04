@@ -115,6 +115,28 @@ struct Pane {
     /// 1x-screen window's coordinates by a global scale of 2 halves its
     /// cursor position (the index#1686 mixed-scale skew).
     configured_scale: Option<u32>,
+    /// Latest committed dmabuf, not yet read back. GPU readback is deferred
+    /// to send time (see [`App::absorb_pending_gpu`]): a mailbox client
+    /// (mesa's Wayland WSI commits once per `vkQueuePresentKHR`) can commit
+    /// hundreds of frames a second, and a per-commit readback of a 2x buffer
+    /// saturates the event-loop thread -- measured live with Minecraft
+    /// (index#1686): internal render at ~347fps, wire cadence collapsed to a
+    /// tick-quantized ~30 acks/s. Held unreleased so the client cannot write
+    /// into it while a readback may still happen; a superseding commit
+    /// releases it untouched (that frame is simply never sent, which is
+    /// mailbox semantics).
+    #[cfg(feature = "gpu")]
+    pending_gpu: Option<HeldGpuBuffer>,
+}
+
+/// A committed-but-not-yet-read-back dmabuf (see [`Pane::pending_gpu`]).
+#[cfg(feature = "gpu")]
+struct HeldGpuBuffer {
+    buffer: smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer,
+    dmabuf: smithay::backend::allocator::dmabuf::Dmabuf,
+    /// The commit's buffer scale; applied to [`Pane::scale`] when absorbed,
+    /// so the scale always describes the pixels actually on the wire.
+    scale: u32,
 }
 
 impl Pane {
@@ -135,6 +157,8 @@ impl Pane {
             scale: 1,
             announced_scale: 1,
             configured_scale: None,
+            #[cfg(feature = "gpu")]
+            pending_gpu: None,
         }
     }
 }
@@ -475,6 +499,39 @@ impl App {
         });
     }
 
+    /// One readback per WIRE frame: take the newest held dmabuf (see
+    /// [`Pane::pending_gpu`]) into the frame store, releasing the buffer to
+    /// its client. Called only when pacing allows a send, so however many
+    /// commits piled up while a frame was in flight, exactly the newest one
+    /// pays for a GPU readback.
+    #[cfg(feature = "gpu")]
+    fn absorb_pending_gpu(&mut self, idx: usize) {
+        let Some(held) = self.panes[idx].pending_gpu.take() else {
+            return;
+        };
+        let frame = self.gpu.as_mut().and_then(|gpu| match gpu.readback(&held.dmabuf) {
+            Ok(frame) => Some(frame),
+            Err(err) => {
+                warn!(%err, "dmabuf readback failed; skipping frame");
+                None
+            }
+        });
+        // Released only now: the client was not allowed to write into the
+        // buffer while a readback could still sample it.
+        held.buffer.release();
+        if let Some(frame) = frame {
+            let pane = &mut self.panes[idx];
+            pane.scale = held.scale;
+            pane.store.commit(frame.bgra, frame.width, frame.height);
+        }
+        // The absorbed commit may carry a new buffer scale; re-announce the
+        // wire unit before the frame this pump is about to send.
+        self.sync_window_scale(idx);
+    }
+
+    #[cfg(not(feature = "gpu"))]
+    fn absorb_pending_gpu(&mut self, _idx: usize) {}
+
     /// Try to move one frame onto the wire for `panes[idx]`, announcing the
     /// window first if this connection has not seen it. When there is
     /// nothing to send, release the window's frame callbacks instead: no
@@ -483,10 +540,21 @@ impl App {
     /// (that is the throttle; the ack or its watchdog releases them).
     fn pump(&mut self, idx: usize) {
         let now = self.now_ms();
+        if self.host.as_ref().is_none_or(|h| !h.ready) {
+            // No ready host: the 10Hz fallback tick paces this pane.
+            return;
+        }
+        if self.panes[idx].inflight.is_some() {
+            // A frame is pacing the wire. Any held dmabuf stays held (and
+            // keeps being superseded by newer commits) so the readback below
+            // captures the newest content once the ack lands.
+            return;
+        }
+        // Pacing allows a send: absorb the newest held dmabuf now.
+        self.absorb_pending_gpu(idx);
         let Self { host, panes, .. } = self;
         let pane = &mut panes[idx];
         let Some(host) = host.as_ref().filter(|h| h.ready) else {
-            // No ready host: the 10Hz fallback tick paces this pane.
             return;
         };
         if !pane.store.has_content() {
@@ -496,13 +564,10 @@ impl App {
             fire_frame_callbacks(pane.toplevel.wl_surface(), now);
             return;
         }
-        if pane.inflight.is_some() {
-            return;
-        }
         if !pane.announced {
             // This connection's WindowNew scale is the unit every later
-            // WindowMinMax for this window is converted at (the host divides
-            // by it; there is no per-window scale update message).
+            // WindowMinMax for this window is converted at, until a
+            // WindowScale re-announces it (1.3+; see sync_window_scale).
             pane.announced_scale = pane.scale;
             host.send(ToHost::WindowNew {
                 id: pane.id,

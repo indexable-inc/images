@@ -7652,6 +7652,7 @@ dependencies = [
  "clap",
  "lz4_flex 0.13.1",
  "panes-protocol",
+ "rayon",
  "smithay",
  "tracing",
  "tracing-subscriber",
