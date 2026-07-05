@@ -105,6 +105,7 @@ fn main() {
                 event: WindowEvent::CursorEntered { .. },
                 ..
             } => {
+                eprintln!("ix-windows: cursor entered {window_id:?}");
                 manager.set_hovered(window_id, true);
             }
             Event::WindowEvent {
@@ -112,6 +113,7 @@ fn main() {
                 event: WindowEvent::CursorLeft { .. },
                 ..
             } => {
+                eprintln!("ix-windows: cursor left {window_id:?}");
                 manager.set_hovered(window_id, false);
             }
             _ => {}
