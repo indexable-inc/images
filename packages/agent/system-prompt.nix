@@ -548,11 +548,13 @@ let
           orchestration, quick replies, and trivial one-step work. Match subagent model
           strength to task difficulty: strongest for hard reasoning, planning, and
           high-stakes decisions; cheaper tiers for mechanical edits, search, and
-          settled execution.
+          settled execution. For simple delegated questions, use the MCP subagent
+          tool to spawn Codex with low reasoning.
         '';
         reason = ''
           Serial main-thread editing wasted wall clock on independent work and bloated
-          the orchestrating context.
+          the orchestrating context. Simple lookup questions do not need expensive
+          reasoning, but still benefit from separate context.
         '';
       };
     }
