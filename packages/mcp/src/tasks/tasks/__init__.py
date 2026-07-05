@@ -1,6 +1,6 @@
 """Example task-dependency graphs, generated in Python and stored in SQLite.
 
-Bundled like ``view``/``sh``/``fff`` so every session can ``import tasks`` with no
+Bundled like ``view``/``sh``/``search`` so every session can ``import tasks`` with no
 setup. It is the single source of truth for the task-graph demo site
 (``packages/mcp/task-graph``): Python generates a ~100-node dependency DAG and
 writes it to a SQLite file, and the website reads that very file (via sql.js) and

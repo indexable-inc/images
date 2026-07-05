@@ -562,6 +562,7 @@ async def pr_watch(
         str,
         Field(description="Repository worktree where gh should run."),
     ],
+    *,
     auto_merge: Annotated[
         bool,
         Field(description="Enable gh auto merge for this PR before watching."),

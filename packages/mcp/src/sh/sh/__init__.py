@@ -1,6 +1,6 @@
 """Run a shell command on the kernel's async loop and render it two ways.
 
-Bundled like ``view``/``fff``/``fleet`` so every session can ``import sh`` with no
+Bundled like ``view``/``search``/``fleet`` so every session can ``import sh`` with no
 setup. The point: when you genuinely need to shell out (a ``gh``/``git``/``nix``
 invocation with no Python binding), do it without blocking the one shared event
 loop and without leaking terminal escape codes into your own context.

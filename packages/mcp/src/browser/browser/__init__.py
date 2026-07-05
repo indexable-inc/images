@@ -1,6 +1,6 @@
 """Drive a running browser over the Chrome DevTools Protocol (CDP) with Playwright.
 
-Bundled like ``view``/``fff``/``sh``, and Playwright itself is bundled in the
+Bundled like ``view``/``search``/``sh``, and Playwright itself is bundled in the
 interpreter, so a session can ``import browser`` and drive a real browser with no
 ``pip``/``uv install`` and no ``playwright install`` step.
 

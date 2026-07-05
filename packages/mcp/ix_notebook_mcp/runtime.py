@@ -14,8 +14,8 @@ namespace has:
 Concurrency model (validated): each execution runs as an asyncio task on the
 kernel's own event loop, so many run at once and none blocks the others. Per-job
 stdout/stderr is captured by routing writes through a ``ContextVar`` set inside
-each task, so interleaved prints land in the right job. A blocking call (fff,
-numpy, a subprocess) stays non-blocking by going through ``asyncio.to_thread``
+each task, so interleaved prints land in the right job. A blocking call (numpy,
+a subprocess) stays non-blocking by going through ``asyncio.to_thread``
 (its GIL-releasing native work then runs off the loop).
 
 Every job also writes itself to the SQLite store at ``IX_MCP_STORE`` (start, a
@@ -842,7 +842,7 @@ class Result:
             return _result_from_values(list(value), llm_result=llm_result)
         frame = _frame_view(value)
         if frame is not None:
-            # A rich result type (fff GrepResult/SearchResult) that exposes a
+            # A rich result type (anything with ``_ix_to_frame_``) that exposes a
             # polars frame: render that frame the same as a bare DataFrame -- a
             # styled table for the human, compact NUON for the model -- so the
             # model reads the real rows, not a one-line summary repr.
@@ -1643,7 +1643,7 @@ def _parse_github_time(value: Any) -> datetime.datetime | None:
     if not isinstance(value, str) or not value or value.startswith("0001-"):
         return None
     try:
-        return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return datetime.datetime.fromisoformat(value)
     except ValueError:
         return None
 
@@ -2601,8 +2601,8 @@ def _is_polars_df(value: Any) -> bool:
 
 def _frame_view(value: Any) -> Any:
     """A non-DataFrame value that opts into the table protocol by exposing
-    ``_ix_to_frame_()`` returning a polars DataFrame (e.g. an fff ``GrepResult``
-    or ``SearchResult``). Returns that frame, else None. Lets a rich result type
+    ``_ix_to_frame_()`` returning a polars DataFrame. Returns that frame, else
+    None. Lets a rich result type
     render as the styled table for the human and compact NUON for the model,
     instead of falling back to its one-line summary repr."""
     hook = getattr(value, "_ix_to_frame_", None)
@@ -3142,7 +3142,7 @@ def _type_error_hint(exc: TypeError) -> str:
       - ``grep() missing 1 required keyword-only argument: 'mode'``
 
     Looks the callable up in the user namespace (and a set of well-known module
-    prefixes like ``fff.``) so the hint shows the live signature. Returns an
+    prefixes like ``view.``) so the hint shows the live signature. Returns an
     empty string on any failure so callers can unconditionally append it.
     """
     try:
@@ -4155,7 +4155,7 @@ def install(user_ns: dict | None = None) -> None:
     # for asyncio (ensure_future / sleep), json (every CLI's --json output), and
     # pl within its first cells, and a NameError on `asyncio` in an async kernel
     # is pure friction (observed twice in one 2026-06-10 session). Bound like
-    # sh/fff/view; an explicit import returns the same module.
+    # sh/view; an explicit import returns the same module.
     target["asyncio"] = asyncio
     target["json"] = json
     with contextlib.suppress(Exception):  # polars may be absent; skip binding pl
@@ -4174,7 +4174,7 @@ def install(user_ns: dict | None = None) -> None:
     global _baseline_names, _lazy_module_names
     _baseline_names = frozenset(target)
     # Bind every other bundled module behind a lazy proxy, so `await maps.nearby(...)`
-    # works with no `import maps` just like fff/view -- but deferring the import to
+    # works with no `import maps` just like sh/view -- but deferring the import to
     # first use, so framework-heavy modules (maps pulls in MapKit + CoreLocation,
     # ~120ms) and platform-absent ones cost nothing at startup. Bound AFTER the
     # baseline snapshot on purpose: these names must NOT count as runtime surface,

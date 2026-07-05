@@ -1,6 +1,6 @@
 """Polars-returning SSH fan-out source for the ix-mcp kernel.
 
-Bundled like ``view``/``fff``/``search`` so every session can ``import fleet``
+Bundled like ``view``/``sh``/``search`` so every session can ``import fleet``
 with no setup. The point: a ``python_exec`` cell often wants the same file or the
 same command's output from *many* fleet hosts at once (every node's journald
 tail, every host's disk usage, a config that should be identical everywhere),

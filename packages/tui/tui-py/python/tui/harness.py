@@ -517,7 +517,7 @@ class Codex(Agent):
         out: list[str] = []
         for line in lines[starts[-1]:]:
             stripped = line.strip()
-            if out and (stripped.startswith("›") or " · " in stripped and "gpt-" in stripped):
+            if out and (stripped.startswith("›") or (" · " in stripped and "gpt-" in stripped)):
                 break
             out.append(line.lstrip("• ").rstrip())
         return "\n".join(out).strip()

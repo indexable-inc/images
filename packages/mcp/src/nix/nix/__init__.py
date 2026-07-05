@@ -1,6 +1,6 @@
 """Parse a ``nix --log-format internal-json`` stream into polars + a live DAG.
 
-Bundled like ``view``/``fff``/``search`` so every session can ``import nix`` with
+Bundled like ``view``/``sh``/``search`` so every session can ``import nix`` with
 no setup. Nix's ``internal-json`` logger emits one ``@nix {...}`` line per event
 (an activity starting/stopping, a progress tick, a build-log line, an error).
 Reading that by hand is miserable; this turns it into the two things an agent and

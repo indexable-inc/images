@@ -701,7 +701,7 @@ let
       indexKernel = {
         text = ''
           Work through the index Python kernel (`python_exec`) and reuse its namespace.
-          Search with `fff.grep` and `fff.find`; run `api()` for helpers. Do not shell
+          Search with the kernel `grep` and `find` builtins; run `api()` for helpers. Do not shell
           out to `rg` or `fd` inside the kernel. Run independent non-mutating commands
           concurrently with `asyncio.gather` or `asyncio.TaskGroup`. If the kernel
           wedges, restart it or report the blocker. Set a dashboard topic before
@@ -719,7 +719,7 @@ let
       structuredPrimitives = {
         text = ''
           Prefer structured primitives over text munging: `view.ls`, `view.tree`,
-          `view.cat`, `fff.grep`, `fff.find`, and `nu` pipelines. For command output
+          `view.cat`, `grep`, `find`, and `nu` pipelines. For command output
           you plan to filter or parse, use `nu` first so the result arrives as a Polars
           DataFrame; use `sh().json()`, `.jsonl()`, or `.df()` only when `sh` is the
           right tool. Return tables as Polars DataFrames.
