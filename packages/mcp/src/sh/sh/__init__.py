@@ -102,6 +102,7 @@ import re
 import shlex
 import signal
 import sys
+import time
 from typing import Any
 
 __all__ = ["Output", "ShellError", "sh", "zsh"]
@@ -588,7 +589,7 @@ def _command_title(kind: str, shown: str) -> str:
 
 
 def _sh_resource_html(state: dict[str, object]) -> str:
-    now = asyncio.get_running_loop().time()
+    now = time.monotonic()
     ended = state.get("ended")
     end_time = ended if isinstance(ended, float) else now
     started = state.get("started")

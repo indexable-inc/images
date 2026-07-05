@@ -72,6 +72,7 @@ import html as _html
 import inspect as _inspect
 import os
 import re
+import time
 from typing import TYPE_CHECKING
 
 from ._nu import Engine, NuError
@@ -149,7 +150,7 @@ def _short_repr(value: object) -> str:
 
 
 def _nu_resource_html(state: dict[str, object]) -> str:
-    now = asyncio.get_running_loop().time()
+    now = time.monotonic()
     ended = state.get("ended")
     end_time = ended if isinstance(ended, float) else now
     started = state.get("started")
