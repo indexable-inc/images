@@ -140,11 +140,21 @@ jobs:
           echo "::notice::cache-push probe: $(wc -l < "$drvs") of $(wc -l < "$roots") roots need realising"
 
           # -n1, not one batch: a batched realise prints no paths at all if any
-          # single drv fails, which would publish nothing.
+          # single drv fails, which would publish nothing. The per-drv wrapper
+          # additionally records WHICH root failed (bare xargs only reports
+          # "something failed" via its exit status): nix does not cache
+          # failures, so a broken root re-realises and re-fails on every
+          # merge, and two such roots once taxed every run ~16 min while
+          # staying warning-level invisible (indexable-inc/index#1863). The
+          # error annotation below names them so a chronic failure is loud.
+          failed_roots="$workdir/failed-roots.txt"
+          : > "$failed_roots"
           realise_t=$SECONDS
-          "$xargs" -a "$drvs" -r -P16 -n1 nix-store --realise --keep-going > "$outs" 2>"$workdir/realise.err" \
+          # shellcheck disable=SC2016  # $1/$2 expand in the child bash, not here
+          "$xargs" -a "$drvs" -r -P16 -n1 bash -c \
+              'nix-store --realise --keep-going "$2" || { printf "%s\n" "$2" >> "$1"; exit 1; }' _ "$failed_roots" \
+            > "$outs" 2>"$workdir/realise.err" \
             || {
-              echo "::warning::some derivations failed to realise; publishing the rest"
               # Match any error line (nix phrases failures several ways); pure
               # bash because the runner PATH has no grep/sed.
               while IFS= read -r line; do
@@ -154,6 +164,17 @@ jobs:
               done < "$workdir/realise.err" | sort -u | head -n 20
             }
           phase realise "$realise_t"
+
+          if [ -s "$failed_roots" ]; then
+            # /nix/store/<hash>-<name>.drv -> <name>, joined on one line.
+            names=""
+            while IFS= read -r drv; do
+              name="${drv##*/}"
+              name="${name#*-}"
+              names="$names ${name%.drv}"
+            done < "$failed_roots"
+            echo "::error::cache-push: $(wc -l < "$failed_roots") root(s) failed to realise (rebuilt and re-failed on every merge until fixed):$names"
+          fi
 
           # `fallback = true` engages silently: nix rebuilds a failed
           # substitute from source with no distinct log line, so a degraded
