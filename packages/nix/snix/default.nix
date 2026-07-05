@@ -1,11 +1,13 @@
 {
   lib,
   ix,
+  stdenv,
   protobuf,
   pkg-config,
   cmake,
   perl,
   makeWrapper,
+  pkgsStatic,
   runCommand,
 }:
 # snix is the Rust reimplementation of Nix (TVL depot `git.snix.dev/snix/snix`).
@@ -62,6 +64,20 @@ let
       # at the whole snix checkout (the repo root that contains `snix/`).
       PROTO_ROOT = "${ix.snixSrc}";
     };
+
+    # snix-build resolves its sandbox shell at rustc time:
+    # `const SANDBOX_SHELL: &str = env!("SNIX_BUILD_SANDBOX_SHELL")` in
+    # build/src/buildservice/{bwrap,oci}.rs, so the crate does not compile
+    # without it and every merge re-built the whole dependency graph up to this
+    # unit only to fail (indexable-inc/index#1863). Mirror upstream's crate
+    # override (snix/utils.nix): a static busybox `sh` on Linux (copied into
+    # the build sandbox, so it must not carry runtime deps), the system shell
+    # on darwin. Scoped to the one package so the busybox store path does not
+    # perturb every other unit's identity.
+    packageBuildEnv.snix-build.SNIX_BUILD_SANDBOX_SHELL =
+      if stdenv.hostPlatform.isLinux
+      then "${pkgsStatic.busybox}/bin/sh"
+      else "/bin/sh";
 
     # Git dependencies pinned in snix's Cargo.lock, keyed by the exact lock
     # source string. Refresh with `nix flake update snix-src` then rebuild and
