@@ -823,7 +823,9 @@ let
           necessarily need a list, I need your intuition first and then maybe
           a list if I ask". Sibling of noMetaNarration, which owns leading
           with the result for task status; this rule owns aiming at intent
-          and verdict-first shape for Q&A.
+          and verdict-first shape for Q&A. Distinct from decisiveness's "no
+          option menus", which governs choosing an action; this governs how
+          an answer is shaped.
         '';
       };
     }
