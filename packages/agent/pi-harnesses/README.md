@@ -18,6 +18,7 @@ pi-harnesses/
   prosecutor/             # id: pi-prosecutor - executor under a skeptical, earned-trust supervisor
   beam/                   # id: pi-beam       - executor with beam search over isolated worktree branches
   fusion/                 # id: pi-fusion     - primary agent delegating to a gpt-5.5-low sidekick
+  omp/                    # id: omp           - oh-my-pi: pinned upstream release binary + Claude bridges (not mk-pi-harness)
 ```
 
 `engine/` is the original `packages/pi-harness` (ENG-2261/2262), moved here
