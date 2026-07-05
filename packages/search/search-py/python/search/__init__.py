@@ -50,6 +50,23 @@ per-query price, and may return fewer than ``top_k`` hits.
 
 Authentication mirrors the ``search`` CLI: ``MXBAI_API_KEY``, or the token
 written by ``mgrep login``.
+
+Three BM25 verbs, backed by the local ``file-search`` (Tantivy) engine, sit
+alongside the corpus queries. They do no network I/O, so unlike the three
+above they are plain synchronous functions returning lists/dicts (no
+``await``, no DataFrame):
+
+* ``bm25_rerank(query, texts, limit=None)`` reranks a batch of in-memory
+  strings, returning dicts ``{index, score, text}``.
+* ``bm25_index(path, index_dir)`` builds/updates an on-disk index.
+* ``bm25_search(query, index_dir, limit=10, filter=None)`` searches it,
+  returning dicts ``{path, score, snippet, chunk_offset}``.
+
+All three inherit the shared ``code-tokenizer`` (camelCase / snake_case /
+kebab-case / whitespace splitting plus stemming), so ``"widget factory"``
+matches both ``makeWidgetFactory`` and ``make_widget_factory``::
+
+    hits = search.bm25_rerank("retry backoff", candidate_texts, limit=5)
 """
 
 from __future__ import annotations
@@ -58,6 +75,7 @@ import functools
 from typing import TYPE_CHECKING
 
 from ._search import __version__
+from ._search import bm25_index, bm25_rerank, bm25_search
 from ._search import grep as _grep
 from ._search import recent as _recent
 from ._search import semantic as _semantic
@@ -77,7 +95,15 @@ if TYPE_CHECKING:
     _Raw = Callable[..., Awaitable[list[Hit]]]
     _Framed = Callable[..., Awaitable[pl.DataFrame]]
 
-__all__ = ["__version__", "grep", "recent", "semantic"]
+__all__ = [
+    "__version__",
+    "bm25_index",
+    "bm25_rerank",
+    "bm25_search",
+    "grep",
+    "recent",
+    "semantic",
+]
 
 # The stable column set, in display order: the six fields every hit carries,
 # then the provenance fields a record may or may not carry. Enforced on every

@@ -160,6 +160,7 @@ clone-pragma = { path = "packages/code/clone-detect/pragma" }
 clone-scanner = { path = "packages/code/clone-detect/scanner" }
 code-highlight = { path = "packages/code/code-highlight" }
 code-tokenizer = { path = "packages/search/code-tokenizer" }
+file-search = { path = "packages/search/file-search" }
 github-avatar = { path = "packages/github-avatar" }
 google-auth = { path = "packages/google/auth" }
 google-calendar = { path = "packages/google/calendar" }

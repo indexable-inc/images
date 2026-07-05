@@ -9557,6 +9557,7 @@ dependencies = [
 name = "search-py"
 version = "0.1.0"
 dependencies = [
+ "file-search",
  "mixedbread",
  "pyo3",
  "pyo3-async-runtimes",

@@ -85,6 +85,39 @@ df = await search.recent(source=["shell"], since="6h")
 df.select("timestamp", "text")
 ```
 
+## BM25 (`file-search`)
+
+Three synchronous verbs run the local Tantivy BM25 engine
+([`file-search`](../file-search)) instead of the corpus store. They do no
+network I/O, so — unlike the three above — they are plain functions returning
+lists/dicts (no `await`, no DataFrame). All route through `file-search`'s own
+constructors, so they inherit the shared
+[`code-tokenizer`](../code-tokenizer) (camelCase / snake_case / kebab-case /
+whitespace splitting plus stemming): `"widget factory"` matches both
+`makeWidgetFactory` and `make_widget_factory`.
+
+```python
+# rerank a batch of texts in memory
+hits = search.bm25_rerank("retry backoff", candidate_texts, limit=5)
+# [{"index": 3, "score": 4.2, "text": "..."}, ...]
+
+# build an on-disk index, then search it
+search.bm25_index("/path/to/repo", index_dir="/tmp/idx")
+hits = search.bm25_search("async runtime", index_dir="/tmp/idx", limit=10)
+# [{"path": "...", "score": 2.1, "snippet": "...", "chunk_offset": 0}, ...]
+```
+
+- `bm25_rerank(query, texts, limit=None)`: rank in-memory strings; `limit`
+  defaults to the whole batch. Texts that match nothing are omitted. Each hit
+  is `{index, score, text}` where `index` is the position in the input list.
+- `bm25_index(path, index_dir, no_gitignore=False)`: walk `path` and index
+  text files into `index_dir`, creating it if absent. Honors `.gitignore`
+  unless `no_gitignore=True`. Returns `{files_indexed, files_skipped, errors}`.
+- `bm25_search(query, index_dir, limit=10, filter=None)`: search the index
+  (read-only, so it can run alongside indexing) in Tantivy query syntax;
+  `filter` restricts to files under a directory. Each hit is
+  `{path, score, snippet, chunk_offset}`.
+
 ## Scope selectors
 
 All optional; with none set the whole corpus is searched. List selectors accept
