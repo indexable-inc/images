@@ -45,6 +45,23 @@
         "type": "github"
       }
     },
+    "codex-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1783282574,
+        "narHash": "sha256-st9kcagTH5YDBmWDx1MzOPqel+MFtCQNe1W9R0wl8cU=",
+        "owner": "indexable-inc",
+        "repo": "codex",
+        "rev": "7d08748d54f3be979371e1d7b8659ab134d4189a",
+        "type": "github"
+      },
+      "original": {
+        "owner": "indexable-inc",
+        "ref": "indexable/mcp-channel-notifications",
+        "repo": "codex",
+        "type": "github"
+      }
+    },
     "drgn-src": {
       "flake": false,
       "locked": {
@@ -375,6 +392,7 @@
         "bench-filesystem": "bench-filesystem",
         "btop-src": "btop-src",
         "clippy-fork": "clippy-fork",
+        "codex-src": "codex-src",
         "drgn-src": "drgn-src",
         "examples": "examples",
         "fff-src": "fff-src",

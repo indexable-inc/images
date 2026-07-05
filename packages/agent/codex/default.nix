@@ -25,6 +25,7 @@
   # sibling is out of scope, so the wrapper bakes no MCP server there (the same
   # fallback the claude-code wrapper uses).
   repoPackages ? {},
+  codexSrc ? ix.codexSrc,
   # Rule names dropped from the default house prompt. Only affects the computed
   # `systemPrompt` default below; ignored when `systemPrompt` is passed
   # explicitly.
@@ -108,7 +109,7 @@
         (forcedSettings.features or {}) // (sharedPermissions.codex.forcedSettings.features or {});
     };
   specValue = {
-    target = lib.getExe codex;
+    target = lib.getExe codexWithNotifications;
     config_dir_env = "CODEX_HOME";
     config_dir_default = "~/.codex";
     config_file = "config.toml";
@@ -150,6 +151,34 @@
           ;
       }).codex;
   };
+  codexWithNotifications = codex.overrideAttrs (finalAttrs: previousAttrs: {
+    version = "0.0.0";
+    src = codexSrc;
+    sourceRoot = "source/codex-rs";
+    cargoHash = "sha256-mLpfLi5Wu/t/D8il/5xkDqCTHIeaJZ2OYMZmMIsg7E0=";
+    # buildRustPackage carries cargoDeps through overrideAttrs, so retarget the
+    # nested fixed-output staging derivation when swapping the upstream source.
+    cargoDeps = previousAttrs.cargoDeps.overrideAttrs (_: previousCargoAttrs: {
+      vendorStaging = previousCargoAttrs.vendorStaging.overrideAttrs (_: {
+        inherit (finalAttrs) src sourceRoot;
+        outputHash = finalAttrs.cargoHash;
+      });
+    });
+    postPatch = ''
+      # shell
+      substituteInPlace $cargoDepsCopy/*/webrtc-sys-*/build.rs \
+        --replace-fail "cargo:rustc-link-lib=static=webrtc" "cargo:rustc-link-lib=dylib=webrtc"
+      substituteInPlace Cargo.toml \
+        --replace-fail 'lto = "thin"' "" \
+        --replace-fail 'codegen-units = 4' ""
+    '';
+    meta =
+      previousAttrs.meta
+      // {
+        homepage = "https://github.com/indexable-inc/codex";
+        changelog = "https://github.com/indexable-inc/codex/commits/indexable/mcp-channel-notifications";
+      };
+  });
 in
   # These baked defaults also reach the Codex GUI app's remote-SSH sessions, not
   # just terminal use. The desktop app does NOT ship its own binary to the remote
@@ -162,8 +191,8 @@ in
   # uses `$SHELL -lc`, which skips ~/.bashrc/~/.zshrc), and a stale already-running
   # `codex app-server` is reused without re-injecting, so kill it once after a bump.
   symlinkJoin {
-    name = "codex-${codex.version}";
-    paths = [codex];
+    name = "codex-${codexWithNotifications.version}";
+    paths = [codexWithNotifications];
     # symlinkJoin links the whole codex output (libexec, completions, ...); we only
     # replace the entrypoint with our wrapper so the baked defaults ride every
     # invocation while everything else stays pristine.
@@ -183,9 +212,9 @@ in
       permissions = sharedPermissions.codex;
     };
     meta =
-      codex.meta
+      codexWithNotifications.meta
       // {
-        description = "${codex.meta.description or "OpenAI Codex CLI"} (index wrapper with baked defaults)";
+        description = "${codexWithNotifications.meta.description or "OpenAI Codex CLI"} (index wrapper with baked defaults)";
         mainProgram = binName;
       };
   }

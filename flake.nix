@@ -84,6 +84,11 @@
       flake = false;
     };
 
+    codex-src = {
+      url = "github:indexable-inc/codex?ref=indexable/mcp-channel-notifications";
+      flake = false;
+    };
+
     btop-src = {
       url = "github:indexable-inc/btop/711f4a128b1b7009ee9cf0fa179a586c82586613";
       flake = false;
@@ -187,6 +192,7 @@
     launchk-src,
     snix-src,
     clippy-fork,
+    codex-src,
     ghostty,
     skills,
     examples,
@@ -268,6 +274,7 @@
         launchk-src
         snix-src
         clippy-fork
+        codex-src
         ghostty
         ;
     };

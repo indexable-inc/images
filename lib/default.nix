@@ -14,6 +14,7 @@
   launchk-src,
   snix-src,
   clippy-fork,
+  codex-src,
   ghostty,
   # Flake source revision, stamped into builds that want to report it (see
   # `sharedHelpers.rev`). Defaulted so a direct `import ./lib` still evaluates.
@@ -487,6 +488,7 @@
       writeRustApplication
       ;
     btopSrc = btop-src;
+    codexSrc = codex-src;
     drgnSrc = drgn-src;
     perftestSrc = perftest-src;
     fffSrc = fff-src;
