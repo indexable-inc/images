@@ -967,8 +967,9 @@ fn install_blur(window: &Window) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
-    // SAFETY: on the main thread `tao` hands back a live, retained `NSWindow`
-    // pointer; `Retained::retain` balances the +1 when this scope ends.
+    // SAFETY: on the main thread `tao` hands back a live *borrowed* (+0)
+    // `NSWindow` pointer; `Retained::retain` takes its own +1 and releases it
+    // when the `Retained` drops, so ownership stays balanced.
     let ns_window = unsafe { Retained::retain(window.ns_window().cast::<NSWindow>()) };
     let Some(ns_window): Option<Retained<NSWindow>> = ns_window else {
         return;
