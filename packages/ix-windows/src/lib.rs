@@ -591,7 +591,11 @@ fn escape_attr(text: &str) -> String {
 /// transparent and chrome-less; the outer script sizes it to the content size the
 /// inner document reports, so `#ix-root` shrink-wraps it.
 const STYLE: &str = "\
-:root { color-scheme: dark; }
+/* No `color-scheme: dark` here or in INNER_STYLE: WKWebView paints an opaque
+   canvas when the document opts into dark color-scheme, even with
+   `drawsBackground` off (the tauri/wry transparent-window gotcha), which would
+   hide the NSVisualEffectView blur entirely. Dark styling is done with explicit
+   colors instead. */
 html, body { margin: 0; padding: 0; background: transparent; }
 #ix-root {
   position: relative;
@@ -666,7 +670,8 @@ html.ix-hover #ix-close { opacity: 1; pointer-events: auto; }
 /// the true intrinsic width; `max-width` caps runaway width (the OS window resize
 /// is clamped to the monitor on top of that).
 const INNER_STYLE: &str = "\
-:root { color-scheme: dark; }
+/* No `color-scheme: dark`: it would opaque the canvas and hide the window blur
+   (see STYLE). */
 html, body { margin: 0; padding: 0; background: transparent; }
 body {
   color: rgba(255, 255, 255, 0.92);
