@@ -30,6 +30,13 @@ Quick start, exactly the shape of a Playwright test:
     # or the one-liner: submit, wait for the turn to finish, return the reply
     answer = await agent.run("summarize CONTRIBUTING.md", timeout=180)
 
+    # or fan out across mixed agents through the shared AgentLike interface
+    claude, codex = await Claude.launch(cwd="/repo"), await Codex.launch(cwd="/repo")
+    replies = await asyncio.gather(
+        claude.run_to_completion("find one risk"),
+        codex.run_to_completion("find one risk"),
+    )
+
 Why drive the real TUI instead of `claude -p`? A headless `-p` run is invisible
 and uninterruptible. A harness drives the actual TUI in a PTY, so the session
 shows up live on the `tui` web dashboard (`nix run .#tui-dashboard`) just like a
@@ -63,11 +70,51 @@ import hashlib
 import re
 from collections.abc import Awaitable, Callable, Sequence
 from types import TracebackType
-from typing import ClassVar, Self
+from typing import ClassVar, Protocol, Self
 
 from . import Key, Pattern, Snapshot, Tui, WaitTimeout
 
-__all__ = ["Agent", "AgentAssertions", "Claude", "Codex", "Gate", "Keyboard", "expect"]
+__all__ = [
+    "Agent",
+    "AgentAssertions",
+    "AgentLike",
+    "Claude",
+    "Codex",
+    "Gate",
+    "Keyboard",
+    "expect",
+]
+
+
+class AgentLike(Protocol):
+    """Shared async interface implemented by `Agent`, `Claude`, and `Codex`.
+
+    Use this for orchestration code that should not care which coding agent is
+    behind the PTY:
+
+        agents: list[AgentLike] = [
+            await Claude.launch(cwd="/repo"),
+            await Codex.launch(cwd="/repo"),
+        ]
+        replies = await asyncio.gather(
+            *(agent.run_to_completion("summarize this repo") for agent in agents)
+        )
+
+    The concrete classes expose more Playwright-style controls, but these are
+    the stable high-level operations for mixed-agent fan-out.
+    """
+
+    async def send_message(self, text: str) -> None:
+        """Submit a message without waiting for the turn to finish."""
+
+    async def run_to_completion(
+        self,
+        text: str,
+        *,
+        timeout: float = 180.0,
+        settle: float = 0.6,
+    ) -> str:
+        """Submit a message, wait for idle, and return the parsed reply."""
 
 
 class Gate:
@@ -269,6 +316,14 @@ class Agent:
         if not await self._turn_started():
             await self.keyboard.press(Key.ENTER)
 
+    async def send_message(self, text: str) -> None:
+        """Submit `text` without waiting for the agent to finish the turn.
+
+        High-level interface alias for `prompt`, shared by `Claude` and `Codex`
+        so orchestrators can type against `AgentLike`.
+        """
+        await self.prompt(text)
+
     async def run(self, text: str, *, timeout: float = 180.0, settle: float = 0.6) -> str:
         """Submit `text`, wait for the turn to finish, return the agent's reply.
 
@@ -282,13 +337,27 @@ class Agent:
         delta = _tail_delta(before, await self._lines())
         return self.parse_reply(delta)
 
+    async def run_to_completion(
+        self,
+        text: str,
+        *,
+        timeout: float = 180.0,
+        settle: float = 0.6,
+    ) -> str:
+        """Submit `text`, wait for idle, and return the parsed reply.
+
+        This is the agent-interface name for `run`, meant for mixed fan-out:
+        `await asyncio.gather(claude.run_to_completion(q), codex.run_to_completion(q))`.
+        """
+        return await self.run(text, timeout=timeout, settle=settle)
+
     async def ask(self, text: str, *, timeout: float = 180.0, settle: float = 0.6) -> str:
         """Submit one question and return the parsed reply.
 
         `ask` is the high-level name for simple delegation; it keeps the visible
         resource open, unlike a headless one-shot command.
         """
-        return await self.run(text, timeout=timeout, settle=settle)
+        return await self.run_to_completion(text, timeout=timeout, settle=settle)
 
     # -- waiting (Playwright-style) -----------------------------------------
 
