@@ -323,6 +323,16 @@ in {
         # baked into every image.
         git = {
           enable = true;
+          # Route SQLite database files to the sqlmerge driver instead of
+          # mergiraf's global `* merge=mergiraf`. gitattributes resolves each
+          # attribute by the LAST matching line, and the mergiraf HM module
+          # contributes its wildcard line at default order, so pin these after
+          # it with mkAfter or the wildcard would win for .db files too.
+          attributes = lib.mkAfter [
+            "*.db merge=sqlite"
+            "*.sqlite merge=sqlite"
+            "*.sqlite3 merge=sqlite"
+          ];
           settings = {
             alias = {
               # Compact log: subject + short hash, one per line.
@@ -332,7 +342,29 @@ in {
               # Delete local branches whose remote-tracking branch is gone.
               cleanup = "!git fetch --prune && git branch -vv | grep \": gone]\" | grep -v \"\\\\*\" | awk \"{print \\$1}\" | xargs -r git branch -d";
             };
-            init.defaultBranch = "main";
+            init = {
+              defaultBranch = "main";
+              # Git 3.0 flips new repos to SHA-256 objects; adopt ahead of the
+              # default flip. GitHub started hosting sha256 repos in mid-2026
+              # (actions/checkout and gh already handle them). The object
+              # format is per-repo and fixed at init, so existing SHA-1 clones
+              # are untouched.
+              defaultObjectFormat = "sha256";
+              # reftable (also the Git 3.0 direction) replaces the loose-file
+              # + packed-refs backend: atomic multi-ref transactions and no
+              # D/F or case-sensitivity ref-name collisions, which matters on
+              # VMs that script branch churn. Per-repo and fixed at init,
+              # like the object format.
+              defaultRefFormat = "reftable";
+            };
+            # Refuse to operate on a bare repository unless it is named
+            # explicitly (--git-dir / GIT_DIR). A cloned repo can embed a
+            # bare repo with a malicious config in a subdirectory; without
+            # this, any git command that walks into it executes that config's
+            # hooks and aliases (the attack safe.bareRepository was added
+            # for). Agents cd through untrusted checkouts constantly, so the
+            # hardening default is worth the rare explicit --git-dir.
+            safe.bareRepository = "explicit";
             pull.rebase = true;
             push = {
               autoSetupRemote = true;
@@ -360,6 +392,15 @@ in {
               # three-way merge output; we set ff/renormalize alongside.
               ff = "only";
               renormalize = true;
+              # Three-way merge for SQLite database files (repo crate
+              # `packages/sqlmerge`, via the session extension). Without a
+              # driver a .db file is binary to git and every concurrent edit
+              # is a full-file conflict. The `attributes` lines above route
+              # *.db/*.sqlite/*.sqlite3 here; mergiraf keeps everything else.
+              sqlite = {
+                name = "SQLite three-way merge (sqlmerge)";
+                driver = "${lib.getExe pkgs.sqlmerge} %O %A %B";
+              };
             };
             diff = {
               algorithm = "histogram";
