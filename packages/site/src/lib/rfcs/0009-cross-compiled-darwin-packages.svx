@@ -153,6 +153,8 @@ The merge covers both Darwin systems, but with the Apple-silicon-only default th
 
 The `cache-push` workflow realises `.#cachePushRoots.x86_64-linux` and pushes closures to the public `ix-public` atticd cache at `cache.ix.dev` on every merge to main. The triple-suffixed cross outputs are part of that roots set. Because the Darwin aliases *are* those derivations, a Mac's `nix build .#dag-runner` resolves to a store path CI already pushed: substitution, not compilation. The cross unit graph is input-addressed (unlike the native workspace's floating content-addressed default), so every cross output path is known at eval and the Mac substitutes it via a plain narinfo lookup — the cache serves no `/realisations` build trace, which a floating content-addressed output would need to map its derivation to an output path (#1755).
 
+That push takes 15-25 minutes, so `main` briefly points at revs whose cross closure is not yet on the cache; a Mac that pins main inside that window hits the substitute-or-nothing wall (#1862). After the push succeeds, the workflow fast-forwards the `cache-ready` branch to the pushed commit. Consumers should pin `github:indexable-inc/index/cache-ready` instead of `main`: the ref trails main by one cache-push run, moves only forward along main history, and only ever points at revs whose darwin closure is already published.
+
 ### Proved in CI, on every push
 
 A green build does not prove the toolchain emitted a Darwin object; the smoke checks do. They run on the Linux CI host and read the Mach-O header:

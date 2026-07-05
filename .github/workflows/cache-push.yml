@@ -187,3 +187,62 @@ jobs:
           else
             echo "::notice::every root already cached in ix-public; nothing to realise or push"
           fi
+
+  # Consumers pinning `github:indexable-inc/index/main` can `nix flake update`
+  # inside the 15-25 min window between a merge and the push above finishing,
+  # locking a rev whose darwin cross closure is not yet on cache.ix.dev; the
+  # substitute-only darwin packages (RFC 0009) then fail with "Required
+  # system: 'x86_64-linux'" (indexable-inc/index#1862). Fast-forwarding
+  # `cache-ready` only after a successful push gives consumers a pin target
+  # whose closure is always published. Downstream of `push`, so a failure
+  # here never gates the cache publish itself.
+  advance-cache-ready:
+    needs: push
+    # workflow_dispatch can target any ref; only main commits may move the
+    # consumer pin.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Fast-forward cache-ready to the pushed commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # Stderr stays on the job log: a 404 here is the expected first-run
+          # path, anything else explains itself in the log.
+          if ! current="$(gh api "repos/$REPOSITORY/git/ref/heads/cache-ready" --jq .object.sha)"; then
+            gh api -X POST "repos/$REPOSITORY/git/refs" \
+              -f ref=refs/heads/cache-ready -f "sha=$SHA" > /dev/null
+            echo "::notice::created cache-ready at $SHA"
+            exit 0
+          fi
+
+          if [ "$current" = "$SHA" ]; then
+            echo "::notice::cache-ready already at $SHA"
+            exit 0
+          fi
+
+          # force=false makes the update fast-forward-only: the API rejects
+          # any non-ancestor move, so a re-run of an older commit's workflow
+          # (or a full-pass dispatch racing a newer merge) can never drag the
+          # ref backwards past closures already published.
+          if gh api -X PATCH "repos/$REPOSITORY/git/refs/heads/cache-ready" \
+               -f "sha=$SHA" -F force=false > /dev/null; then
+            echo "::notice::cache-ready advanced: $current -> $SHA"
+            exit 0
+          fi
+
+          # Distinguish the expected rejection (this run's commit is already
+          # behind the ref) from a real failure that strands consumers.
+          status="$(gh api "repos/$REPOSITORY/compare/$SHA...cache-ready" --jq .status || echo unknown)"
+          if [ "$status" = "ahead" ] || [ "$status" = "identical" ]; then
+            echo "::notice::cache-ready ($current) is already at or past $SHA; not moving it backwards"
+          else
+            echo "::error::could not fast-forward cache-ready to $SHA (compare status: $status); darwin consumers tracking cache-ready stay pinned at $current (indexable-inc/index#1862)"
+            exit 1
+          fi
