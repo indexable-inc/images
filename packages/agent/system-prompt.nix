@@ -447,6 +447,63 @@ let
       };
     }
     {
+      typedSerialization = {
+        text = ''
+          Never hand-write a serialized form a tool will parse: argv option
+          strings, connection URLs, query fragments, embedded mini-languages.
+          Keep each fact in a named, typed binding, and give the format one
+          renderer that serializes structured values (attrsets, lists) at the
+          boundary. A renderer that accepts pre-joined string fragments is the
+          same bug moved down a level. Two call sites assembling the same string
+          shape means the renderer is missing. A general-purpose utility like
+          this (a format renderer, encoder, or protocol wrapper) is born at a
+          reusable owner the next consumer imports, in the repo's lib from day
+          one even with a single consumer today: its shape is fixed by the
+          format it owns, so extraction costs nothing and first use is the
+          extraction point. This is the exception, not license to hoist every
+          helper: a domain abstraction still waits for a real second consumer
+          before it earns a shared home.
+        '';
+        reason = ''
+          Inline serialized forms (a socat `"TCP:''${host}:''${toString
+          port},connect-timeout=5"` argv assembled by hand, even inside a
+          helper) buried each field in string syntax where nothing could type
+          or reuse it; the fix is a `mkSocatAddress { kind, args, options }`
+          renderer that alone owns the colon and comma syntax, so the timeout
+          is `connect-timeout = 5;` as a typed key. Sibling of
+          separateDefinitions and deriveDontEnumerate: one source of truth, one
+          renderer at the boundary.
+        '';
+      };
+    }
+    {
+      rootAnchoredReferences = {
+        text = ''
+          Imports and path references never climb with `../`. They reach down
+          from an explicitly threaded root, or arrive as injected arguments.
+          An upward path encodes the importer's own location, so moving the
+          file silently breaks it or rebinds it to a new neighbor; a
+          root-anchored or injected reference keeps refactors mechanical.
+          Downward relative (`./child`) inside a directory the file owns is
+          fine. This is the reference-direction case of threading definitions
+          through narrow injected seams rather than reaching across the tree.
+        '';
+        reason = ''
+          Upward relative references broke on file moves and resolved to the
+          wrong neighbor. The repos already anchor downward: ix threads
+          `nixRoot` as an injected argument and writes
+          `import (nixRoot + "/lib/service-discovery.nix")`
+          (`nix/modules/services/default.nix`); index injects via `callPackage`
+          rather than sibling imports, and a snix build script defaulting
+          `PROTO_ROOT` to `../..` "only resolves in a full checkout"
+          (`packages/nix/snix/default.nix`) until it was repointed at an
+          explicit root; nixpkgs injects dependencies through `callPackage`
+          for the same reason. Sibling of separateDefinitions and
+          typedSerialization.
+        '';
+      };
+    }
+    {
       fixAtSource = {
         text = ''
           Fix problems at their source. Choose the best long-term solution and prefer
