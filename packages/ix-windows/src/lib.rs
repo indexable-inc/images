@@ -69,6 +69,14 @@ pub enum UserEvent {
     /// `×` and posts `"close"`, which the loop routes to
     /// [`WindowManager::window_closed`].
     Close { window: WindowId },
+    /// The page saw pointer activity; reveal this window's close control. Only
+    /// the ON edge comes from the page: these always-on-top windows of a
+    /// never-activated background app get no AppKit tracking-area events, so
+    /// tao's `CursorEntered`/`CursorLeft` never fire, and the page's own
+    /// `mouseleave` misses fast exits. The OFF edge is Rust polling the cursor
+    /// against the window frame ([`WindowManager::sweep_hover`]) while anything
+    /// is hovered.
+    Hover { window: WindowId },
 }
 
 /// A pane's global identity across producers: `(producer id, pane id)`. A pane id
@@ -139,6 +147,10 @@ pub struct WindowManager {
     /// How many windows have been opened, used to cascade each new overlay so
     /// they do not stack exactly on top of each other.
     opened: u32,
+    /// Windows whose close control is currently revealed. Fed by page-reported
+    /// hover ([`UserEvent::Hover`]), cleared by [`sweep_hover`](Self::sweep_hover)
+    /// when the OS cursor is measured outside the window frame.
+    hovered: HashSet<WindowId>,
 }
 
 impl WindowManager {
@@ -153,6 +165,7 @@ impl WindowManager {
             failed: HashSet::new(),
             dismissed_keys,
             opened: 0,
+            hovered: HashSet::new(),
         }
     }
 
@@ -228,6 +241,7 @@ impl WindowManager {
         let Some(key) = self.by_window.remove(&window) else {
             return false;
         };
+        self.hovered.remove(&window);
         // Persist on first sighting of this key; the file is an append-only log, so
         // a no-op insert must not append a duplicate line.
         if self.dismissed_keys.insert(key.clone()) {
@@ -299,20 +313,80 @@ impl WindowManager {
         }
     }
 
-    /// Show or hide a window's close control. Driven by the OS cursor
-    /// enter/leave events (`main.rs`), not page script: the sandboxed iframe
-    /// swallows pointer events over content, and a fast exit can skip the page's
-    /// final `mouseleave` entirely, leaving a JS-tracked reveal stuck on. The
-    /// class toggle is idempotent, so repeated or crossed events are harmless.
-    pub fn set_hovered(&self, window: WindowId, hovered: bool) {
-        let Some(key) = self.by_window.get(&window) else {
+    /// Show or hide a window's close control (idempotent; only a state change
+    /// touches the page). See [`UserEvent::Hover`] for why the ON edge comes
+    /// from the page and the OFF edge from [`sweep_hover`](Self::sweep_hover).
+    pub fn set_hovered(&mut self, window: WindowId, hovered: bool) {
+        if !self.by_window.contains_key(&window) {
+            return;
+        }
+        let changed = if hovered {
+            self.hovered.insert(window)
+        } else {
+            self.hovered.remove(&window)
+        };
+        if !changed {
+            return;
+        }
+        let Some(open) = self.by_window.get(&window).and_then(|key| self.windows.get(key)) else {
             return;
         };
-        if let Some(open) = self.windows.get(key) {
-            let js = format!(
-                "document.documentElement.classList.toggle('ix-hover', {hovered});"
-            );
-            let _ = open.webview.evaluate_script(&js);
+        let js = format!("document.documentElement.classList.toggle('ix-hover', {hovered});");
+        let _ = open.webview.evaluate_script(&js);
+    }
+
+    /// Whether any window's close control is revealed; while true the event loop
+    /// wakes on a short timer to run [`sweep_hover`](Self::sweep_hover), so a
+    /// missed leave event can never stick a control on.
+    #[must_use]
+    pub fn any_hovered(&self) -> bool {
+        !self.hovered.is_empty()
+    }
+
+    /// Hide the close control of every hovered window the cursor is no longer
+    /// over, by measuring the global cursor against each window's frame. This is
+    /// the only reliable OFF edge on macOS: the page can miss its final
+    /// `mouseleave` on a fast exit, and no tracking-area events reach a
+    /// never-key background window. Both `NSEvent::mouseLocation` and
+    /// `NSWindow::frame` are in the same bottom-left global coordinate space, so
+    /// containment is a plain rect test. Non-macOS builds clear all (no blur
+    /// styling there either; the overlay is currently a Darwin-only output).
+    pub fn sweep_hover(&mut self) {
+        #[cfg(target_os = "macos")]
+        {
+            use objc2_app_kit::{NSEvent, NSWindow};
+            use tao::platform::macos::WindowExtMacOS;
+
+            let cursor = NSEvent::mouseLocation();
+            let stale: Vec<WindowId> = self
+                .hovered
+                .iter()
+                .copied()
+                .filter(|id| {
+                    let Some(open) = self.by_window.get(id).and_then(|key| self.windows.get(key))
+                    else {
+                        return true; // window is gone; drop its hover state
+                    };
+                    // SAFETY: on the main thread `tao` hands back a live NSWindow
+                    // pointer; we only read its frame, without retaining.
+                    let frame =
+                        unsafe { (*open.window.ns_window().cast::<NSWindow>()).frame() };
+                    !(cursor.x >= frame.origin.x
+                        && cursor.x <= frame.origin.x + frame.size.width
+                        && cursor.y >= frame.origin.y
+                        && cursor.y <= frame.origin.y + frame.size.height)
+                })
+                .collect();
+            for id in stale {
+                self.set_hovered(id, false);
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let all: Vec<WindowId> = self.hovered.iter().copied().collect();
+            for id in all {
+                self.set_hovered(id, false);
+            }
         }
     }
 
@@ -397,6 +471,11 @@ impl WindowManager {
                 let body = request.body().as_str();
                 if body == "drag" {
                     let _ = proxy.send_event(UserEvent::Drag { window: id });
+                } else if body == "hover" {
+                    // Unforgeable-ness doesn't matter here (worst case producer
+                    // script reveals a close control the user can ignore), so no
+                    // token, unlike `close`.
+                    let _ = proxy.send_event(UserEvent::Hover { window: id });
                 } else if body == close_msg {
                     let _ = proxy.send_event(UserEvent::Close { window: id });
                 } else if let Some((w, h)) = parse_size(body) {
@@ -441,10 +520,11 @@ impl WindowManager {
         );
     }
 
-    /// Close one window and clear both indexes.
+    /// Close one window and clear every index holding it.
     fn close(&mut self, key: &PaneKey) {
         if let Some(open) = self.windows.remove(key) {
             self.by_window.remove(&open.window.id());
+            self.hovered.remove(&open.window.id());
             // `open` drops here, closing the OS window.
         }
     }
@@ -724,9 +804,19 @@ const OUTER_JS: &str = "\
   var close = document.getElementById('ix-close');
   if (!frame || !root) return;
   function ipc(msg) { if (window.ipc && window.ipc.postMessage) window.ipc.postMessage(msg); }
-  // The close control's reveal (`html.ix-hover`) is toggled from Rust off the
-  // OS cursor enter/leave events, not tracked here: page-side tracking cannot
-  // see pointer events over the sandboxed iframe and misses fast window exits.
+  // Hover ON edge: report pointer activity to Rust (throttled; Rust reveals the
+  // close control). The OFF edge is NOT tracked here -- Rust polls the cursor
+  // against the window frame -- because this document never sees events over
+  // the sandboxed iframe and a fast window exit can skip the final mouseleave.
+  var lastHover = 0;
+  function hover() {
+    var now = Date.now();
+    if (now - lastHover < 150) return;
+    lastHover = now;
+    ipc('hover');
+  }
+  document.addEventListener('mousemove', hover, true);
+  document.addEventListener('mouseover', hover, true);
   // Drag the borderless window by any bare card chrome: a mousedown that reaches
   // this (outer, trusted) document landed outside the iframe (which captures its
   // own events). With zero padding the card shrink-wraps the content, so this
@@ -752,6 +842,8 @@ const OUTER_JS: &str = "\
     // The iframe relays a Cmd-press (or a press on its empty background) so the
     // window stays movable even though content fills the card edge to edge.
     if (data && data.t === 'ixdrag') { ipc('drag'); return; }
+    // Pointer activity inside the iframe (this document never sees it directly).
+    if (data && data.t === 'ixhover') { hover(); return; }
     if (!data || data.t !== 'ixsize') return;
     var w = Number(data.w), h = Number(data.h);
     // Reject only garbage and negatives. Zero is a valid report (an empty resource,
@@ -812,6 +904,18 @@ const INNER_JS: &str = "\
     if (bare && !event.metaKey) event.preventDefault();
     parent.postMessage({ t: 'ixdrag' }, '*');
   }, true);
+  // Hover ON edge over content: relay pointer activity out (throttled). Capture
+  // phase so producer content calling stopPropagation cannot starve it. The
+  // sandbox permits postMessage; the payload carries no content data.
+  var lastHover = 0;
+  function hover() {
+    var now = Date.now();
+    if (now - lastHover < 150) return;
+    lastHover = now;
+    parent.postMessage({ t: 'ixhover' }, '*');
+  }
+  document.addEventListener('mousemove', hover, true);
+  document.addEventListener('mouseover', hover, true);
   var lastW = -1, lastH = -1, pending = false;
   function report() {
     pending = false;
