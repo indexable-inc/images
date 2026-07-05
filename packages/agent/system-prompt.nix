@@ -679,6 +679,9 @@ let
           lands on `origin/main`. Prefer a PR; push directly to `main` only if it is
           genuinely unprotected. Own PRs through merge: push, watch CI, fix failures,
           resolve review, rebase, and re-queue until landed or truly blocked.
+          When the MCP `pr_watch` tool is available, use it for PR CI ownership:
+          it creates a live PR resource, shows check durations, enables auto
+          merge by default, and notifies the CLI on merge, failure, or timeout.
         '';
         reason = ''
           Tasks were reported done at an open PR that never landed; done means merged
