@@ -1249,6 +1249,22 @@ def register_resource(
     close. Move one by dragging its card chrome (the padding around the content);
     it is not resizable (size follows the content).
 
+    STYLING: write content, not a page. The host (dashboard pane and overlay
+    window alike) already provides the card: a translucent, rounded surface that
+    on macOS blurs whatever is behind the window, plus the close control and the
+    system font (SF via ``-apple-system``, antialiased; ``code``/``pre`` are
+    monospace). For a native look:
+
+    - Do NOT set a background on ``html``/``body`` or paint a full-bleed
+      wrapper: an opaque background covers the blur and the card reads as a flat
+      rectangle. Leave the page transparent; tint only small elements
+      (badges, rows) and prefer translucent tints (``rgba``) over solid fills.
+    - Do NOT add your own card chrome: no page-level ``border-radius``,
+      ``box-shadow``, or outer border; the host draws those.
+    - Add your own padding (the host renders content edge to edge), size
+      intrinsically (the window auto-fits the content; avoid ``100vw``/fixed
+      page widths), and inherit the host font instead of restating one.
+
     Interactive (buttons/forms that run python): pass ``actions`` -- a dict of
     name -> handler (sync or async, called with the submitted payload). The HTML
     is served with ``ix.act(name, payload)`` and ``ix.events(fn)`` pre-wired.

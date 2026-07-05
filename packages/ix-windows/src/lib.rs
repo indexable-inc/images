@@ -336,8 +336,8 @@ impl WindowManager {
         // It stays movable: `OUTER_JS` starts a window drag on mousedown over the
         // card chrome (`UserEvent::Drag` -> `drag_window`), since a borderless,
         // non-resizable window has no native title bar to grab.
-        // The overlay is a square card: a borderless window has square corners by
-        // default and `install_blur` adds no layer rounding.
+        // The card is rounded like a native macOS panel: `install_blur` rounds
+        // the blur layer and the CSS `#ix-root` radius clips the HTML to match.
         let builder = tao::window::WindowBuilder::new()
             .with_title(&pane.title)
             .with_decorations(false)
@@ -603,8 +603,10 @@ html, body { margin: 0; padding: 0; background: transparent; }
      mostly-transparent, click-intercepting always-on-top window. */
   min-width: 120px;
   min-height: 80px;
-  /* Square card (no border-radius). `overflow:hidden` still clips producer
-     content to the card bounds. */
+  /* Native macOS card rounding; matches the CALayer cornerRadius on the blur
+     view (`install_blur`), so the HTML clip and the blur clip coincide.
+     `overflow:hidden` clips producer content to the rounded card bounds. */
+  border-radius: 12px;
   overflow: hidden;
 }
 #ix-frame {
@@ -614,40 +616,45 @@ html, body { margin: 0; padding: 0; background: transparent; }
   width: 120px;
   height: 80px;
 }
-/* Borderless windows have no native close control, so the card paints its own.
-   It floats over the top-right corner at a faint base opacity, brightening on
-   hover. A faint *always-on* base (not reveal-on-card-hover) is deliberate: the
-   content fills the card via a sandboxed iframe, and hovering inside that opaque-
-   origin iframe does not set `:hover` on the parent card, so a pure
-   `#ix-root:hover` reveal would only ever show while the cursor sat on the button
-   itself -- undiscoverable.
-   `position: fixed` (not absolute) pins it to the webview viewport's top-right:
+/* Borderless windows have no native close control, so the card paints its own:
+   a macOS traffic-light red dot at the top-LEFT (where native windows put it),
+   revealed only while the pointer is over the window. CSS `:hover` on the card
+   cannot drive the reveal (hovering inside the sandboxed opaque-origin iframe
+   does not set `:hover` on the parent), so `OUTER_JS` toggles `html.ix-hover`
+   from its own enter/leave events plus an `ixhover` relay the iframe posts.
+   While hidden it is also `pointer-events: none`, so it never intercepts a
+   click meant for content.
+   The `\u{00d7}` glyph rides in the markup but is transparent until the dot
+   itself is hovered, matching the native traffic-light behavior.
+   `position: fixed` (not absolute) pins it to the webview viewport's corner:
    when a resource is wider/taller than the monitor clamp the window shows scroll-
    bars over the oversized `#ix-root`, and an absolutely-positioned control would
    sit at the off-screen content edge. `#ix-root` sets no transform/filter, so the
    fixed control also escapes its `overflow:hidden` clip. */
 #ix-close {
   position: fixed;
-  top: 4px;
-  right: 4px;
+  top: 6px;
+  left: 6px;
   z-index: 2;
-  width: 16px;
-  height: 16px;
+  width: 12px;
+  height: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font: 13px/1 ui-monospace, 'SF Mono', Menlo, monospace;
-  color: #cdd6f4;
-  background: rgba(40, 40, 60, 0.55);
+  font: 700 9px/1 -apple-system, system-ui, sans-serif;
+  color: transparent;
+  background: #ff5f57;
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.2);
   border-radius: 50%;
-  cursor: pointer;
-  opacity: 0.4;
-  transition: opacity 0.12s ease, background 0.12s ease;
+  cursor: default;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
   -webkit-user-select: none;
   user-select: none;
 }
-#ix-root:hover #ix-close { opacity: 0.75; }
-#ix-close:hover { background: rgba(220, 80, 90, 0.9); opacity: 1; }
+html.ix-hover #ix-close { opacity: 1; pointer-events: auto; }
+#ix-close:hover { color: rgba(77, 0, 0, 0.8); }
 ";
 
 /// Inner (sandboxed) document styling: transparent so the outer card tint shows;
@@ -662,9 +669,15 @@ const INNER_STYLE: &str = "\
 :root { color-scheme: dark; }
 html, body { margin: 0; padding: 0; background: transparent; }
 body {
-  color: #cdd6f4;
-  font: 14px/1.5 ui-monospace, 'SF Mono', Menlo, monospace;
+  color: rgba(255, 255, 255, 0.92);
+  /* Native default: the system font (SF on macOS), antialiased. WebKit turns
+     off subpixel smoothing on transparent webviews, which leaves un-hinted
+     text looking fuzzy; forcing grayscale antialiasing keeps it crisp on the
+     blur. Code content opts back into mono below. */
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
+code, pre, kbd, samp { font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
 #ix-content {
   display: inline-block;
   width: max-content;
@@ -689,6 +702,26 @@ const OUTER_JS: &str = "\
   var close = document.getElementById('ix-close');
   if (!frame || !root) return;
   function ipc(msg) { if (window.ipc && window.ipc.postMessage) window.ipc.postMessage(msg); }
+  // Reveal the close control only while the pointer is over the window. Two
+  // sources feed the state because no single one covers the whole card: this
+  // document's own events fire over the chrome but not over the iframe (the
+  // iframe's document receives those), and the iframe relays its enter/leave
+  // as `ixhover` messages (handled below). The off side is debounced so an
+  // iframe->chrome crossing (leave then enter within one gesture) cannot
+  // flicker the control.
+  var hoverTimer = null;
+  function hoverOn() {
+    if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
+    document.documentElement.classList.add('ix-hover');
+  }
+  function hoverOff() {
+    if (hoverTimer) clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(function () {
+      document.documentElement.classList.remove('ix-hover');
+    }, 120);
+  }
+  document.addEventListener('mouseover', hoverOn);
+  document.documentElement.addEventListener('mouseleave', hoverOff);
   // Drag the borderless window by any bare card chrome: a mousedown that reaches
   // this (outer, trusted) document landed outside the iframe (which captures its
   // own events). With zero padding the card shrink-wraps the content, so this
@@ -714,6 +747,9 @@ const OUTER_JS: &str = "\
     // The iframe relays a Cmd-press (or a press on its empty background) so the
     // window stays movable even though content fills the card edge to edge.
     if (data && data.t === 'ixdrag') { ipc('drag'); return; }
+    // The iframe's hover relay: the only signal that the pointer is over the
+    // content area (this document never sees those events).
+    if (data && data.t === 'ixhover') { if (data.on) hoverOn(); else hoverOff(); return; }
     if (!data || data.t !== 'ixsize') return;
     var w = Number(data.w), h = Number(data.h);
     // Reject only garbage and negatives. Zero is a valid report (an empty resource,
@@ -774,6 +810,16 @@ const INNER_JS: &str = "\
     if (bare && !event.metaKey) event.preventDefault();
     parent.postMessage({ t: 'ixdrag' }, '*');
   }, true);
+  // Relay pointer presence so the outer document can reveal its close control:
+  // mouse events over the content land in this document only, so without this
+  // relay the outer document would never learn the window is hovered. postMessage
+  // is sandbox-permitted; the payload carries no content data.
+  document.documentElement.addEventListener('mouseenter', function () {
+    parent.postMessage({ t: 'ixhover', on: true }, '*');
+  });
+  document.documentElement.addEventListener('mouseleave', function () {
+    parent.postMessage({ t: 'ixhover', on: false }, '*');
+  });
   var lastW = -1, lastH = -1, pending = false;
   function report() {
     pending = false;
@@ -814,7 +860,12 @@ fn install_blur(window: &Window) {
         NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowCollectionBehavior,
         NSWindowOrderingMode,
     };
+    use objc2_quartz_core::kCACornerCurveContinuous;
     use tao::platform::macos::WindowExtMacOS;
+
+    /// Card corner radius in points; must match the CSS `#ix-root` border-radius
+    /// so the HTML clip and the blur clip coincide.
+    const CORNER_RADIUS: f64 = 12.0;
 
     let Some(mtm) = MainThreadMarker::new() else {
         return;
@@ -847,10 +898,20 @@ fn install_blur(window: &Window) {
         effect.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
         );
+        // Round the blur like a native macOS panel (continuous "squircle" curve,
+        // the post-Big-Sur system corner). The webview's HTML is clipped to the
+        // same radius by the CSS `#ix-root` border-radius, so blur and content
+        // share one rounded silhouette and the window shadow follows it.
+        effect.setWantsLayer(true);
+        if let Some(layer) = effect.layer() {
+            layer.setCornerRadius(CORNER_RADIUS);
+            layer.setMasksToBounds(true);
+            // SAFETY: reading a CoreAnimation constant (an extern NSString), valid
+            // for the process lifetime.
+            layer.setCornerCurve(unsafe { kCACornerCurveContinuous });
+        }
         // Place the blur beneath the webview (added as the content view's first
-        // subview), so the rendered HTML paints on top of it. A borderless window
-        // is square by default, and we keep it square: no layer cornerRadius on
-        // the blur or the content view.
+        // subview), so the rendered HTML paints on top of it.
         content.addSubview_positioned_relativeTo(&effect, NSWindowOrderingMode::Below, None);
 
         ns_window.setHasShadow(true);

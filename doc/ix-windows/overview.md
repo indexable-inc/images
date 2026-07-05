@@ -128,8 +128,24 @@ Public surface:
   joins all spaces and floats over fullscreen apps (`NSWindowCollectionBehavior`).
 - **Blur behind.** `install_blur` (macOS) inserts an `NSVisualEffectView`
   (`HUDWindow` material, `BehindWindow` blending) as the content view's first
-  subview, beneath the transparent webview, with a rounded, shadowed layer. The
-  rendered HTML paints on top of it.
+  subview, beneath the transparent webview, with a shadowed layer rounded at 12pt
+  with the continuous system corner curve (`kCACornerCurveContinuous`). The
+  rendered HTML paints on top of it, clipped to the same radius by the CSS
+  `#ix-root` `border-radius`, so blur and content share one rounded silhouette.
+  Resource HTML that paints its own opaque page background covers the blur; leave
+  the page background transparent (see `register_resource`'s styling guidance).
+- **Hover-revealed close.** The card paints a macOS traffic-light red dot at the
+  top-left, visible only while the pointer is over the window (glyph on direct
+  hover, `pointer-events: none` while hidden). CSS `:hover` on the card cannot
+  drive the reveal (hover inside the sandboxed iframe does not set `:hover` on
+  the parent), so `OUTER_JS` toggles `html.ix-hover` from its own enter/leave
+  events plus an `ixhover` relay `INNER_JS` posts, debounced so an
+  iframe-to-chrome crossing does not flicker.
+- **Native typography.** The inner document defaults to the system font
+  (`-apple-system`, SF on macOS) with grayscale antialiasing forced
+  (`-webkit-font-smoothing`), since WebKit disables subpixel smoothing on
+  transparent webviews and un-hinted text looks fuzzy on the blur; `code`/`pre`
+  opt back into `ui-monospace`.
 - **Sandboxed shell.** `shell(title, body)` builds a fully transparent trusted
   outer document whose `#ix-root` panel (the `STYLE` constant) shrink-wraps a
   single child: a `sandbox="allow-scripts"` (no `allow-same-origin`) `<iframe>`

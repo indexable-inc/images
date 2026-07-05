@@ -35,4 +35,6 @@ wry.workspace = true
 objc2 = { workspace = true }
 objc2-app-kit = { workspace = true }
 objc2-foundation = { workspace = true }
+# CALayer corner rounding (continuous curve) on the blur view.
+objc2-quartz-core = { workspace = true }
 objc2-web-kit = { workspace = true }
