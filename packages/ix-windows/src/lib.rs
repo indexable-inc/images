@@ -299,6 +299,23 @@ impl WindowManager {
         }
     }
 
+    /// Show or hide a window's close control. Driven by the OS cursor
+    /// enter/leave events (`main.rs`), not page script: the sandboxed iframe
+    /// swallows pointer events over content, and a fast exit can skip the page's
+    /// final `mouseleave` entirely, leaving a JS-tracked reveal stuck on. The
+    /// class toggle is idempotent, so repeated or crossed events are harmless.
+    pub fn set_hovered(&self, window: WindowId, hovered: bool) {
+        let Some(key) = self.by_window.get(&window) else {
+            return;
+        };
+        if let Some(open) = self.windows.get(key) {
+            let js = format!(
+                "document.documentElement.classList.toggle('ix-hover', {hovered});"
+            );
+            let _ = open.webview.evaluate_script(&js);
+        }
+    }
+
     /// Begin an interactive move of the window whose chrome the user pressed.
     /// `OUTER_JS` posts `"drag"` on mousedown over the card chrome; `drag_window`
     /// hands the rest of the gesture to the OS so the overlay tracks the cursor.
@@ -624,8 +641,8 @@ html, body { margin: 0; padding: 0; background: transparent; }
    a macOS traffic-light red dot at the top-LEFT (where native windows put it),
    revealed only while the pointer is over the window. CSS `:hover` on the card
    cannot drive the reveal (hovering inside the sandboxed opaque-origin iframe
-   does not set `:hover` on the parent), so `OUTER_JS` toggles `html.ix-hover`
-   from its own enter/leave events plus an `ixhover` relay the iframe posts.
+   does not set `:hover` on the parent), so Rust toggles `html.ix-hover` from
+   the OS cursor enter/leave events (`WindowManager::set_hovered`).
    While hidden it is also `pointer-events: none`, so it never intercepts a
    click meant for content.
    The `\u{00d7}` glyph rides in the markup but is transparent until the dot
@@ -707,26 +724,9 @@ const OUTER_JS: &str = "\
   var close = document.getElementById('ix-close');
   if (!frame || !root) return;
   function ipc(msg) { if (window.ipc && window.ipc.postMessage) window.ipc.postMessage(msg); }
-  // Reveal the close control only while the pointer is over the window. Two
-  // sources feed the state because no single one covers the whole card: this
-  // document's own events fire over the chrome but not over the iframe (the
-  // iframe's document receives those), and the iframe relays its enter/leave
-  // as `ixhover` messages (handled below). The off side is debounced so an
-  // iframe->chrome crossing (leave then enter within one gesture) cannot
-  // flicker the control.
-  var hoverTimer = null;
-  function hoverOn() {
-    if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
-    document.documentElement.classList.add('ix-hover');
-  }
-  function hoverOff() {
-    if (hoverTimer) clearTimeout(hoverTimer);
-    hoverTimer = setTimeout(function () {
-      document.documentElement.classList.remove('ix-hover');
-    }, 120);
-  }
-  document.addEventListener('mouseover', hoverOn);
-  document.documentElement.addEventListener('mouseleave', hoverOff);
+  // The close control's reveal (`html.ix-hover`) is toggled from Rust off the
+  // OS cursor enter/leave events, not tracked here: page-side tracking cannot
+  // see pointer events over the sandboxed iframe and misses fast window exits.
   // Drag the borderless window by any bare card chrome: a mousedown that reaches
   // this (outer, trusted) document landed outside the iframe (which captures its
   // own events). With zero padding the card shrink-wraps the content, so this
@@ -752,9 +752,6 @@ const OUTER_JS: &str = "\
     // The iframe relays a Cmd-press (or a press on its empty background) so the
     // window stays movable even though content fills the card edge to edge.
     if (data && data.t === 'ixdrag') { ipc('drag'); return; }
-    // The iframe's hover relay: the only signal that the pointer is over the
-    // content area (this document never sees those events).
-    if (data && data.t === 'ixhover') { if (data.on) hoverOn(); else hoverOff(); return; }
     if (!data || data.t !== 'ixsize') return;
     var w = Number(data.w), h = Number(data.h);
     // Reject only garbage and negatives. Zero is a valid report (an empty resource,
@@ -815,16 +812,6 @@ const INNER_JS: &str = "\
     if (bare && !event.metaKey) event.preventDefault();
     parent.postMessage({ t: 'ixdrag' }, '*');
   }, true);
-  // Relay pointer presence so the outer document can reveal its close control:
-  // mouse events over the content land in this document only, so without this
-  // relay the outer document would never learn the window is hovered. postMessage
-  // is sandbox-permitted; the payload carries no content data.
-  document.documentElement.addEventListener('mouseenter', function () {
-    parent.postMessage({ t: 'ixhover', on: true }, '*');
-  });
-  document.documentElement.addEventListener('mouseleave', function () {
-    parent.postMessage({ t: 'ixhover', on: false }, '*');
-  });
   var lastW = -1, lastH = -1, pending = false;
   function report() {
     pending = false;
@@ -900,10 +887,6 @@ fn install_blur(window: &Window) {
             // Loud: a silent None here leaves a light-gray card under white text.
             None => eprintln!("ix-windows: darkAqua appearance unavailable; card stays light"),
         }
-        eprintln!(
-            "ix-windows: window effectiveAppearance = {:?}",
-            ns_window.effectiveAppearance().name()
-        );
 
         let Some(content) = ns_window.contentView() else {
             return;

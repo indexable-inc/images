@@ -136,11 +136,12 @@ Public surface:
   the page background transparent (see `register_resource`'s styling guidance).
 - **Hover-revealed close.** The card paints a macOS traffic-light red dot at the
   top-left, visible only while the pointer is over the window (glyph on direct
-  hover, `pointer-events: none` while hidden). CSS `:hover` on the card cannot
-  drive the reveal (hover inside the sandboxed iframe does not set `:hover` on
-  the parent), so `OUTER_JS` toggles `html.ix-hover` from its own enter/leave
-  events plus an `ixhover` relay `INNER_JS` posts, debounced so an
-  iframe-to-chrome crossing does not flicker.
+  hover, `pointer-events: none` while hidden). The reveal is driven from Rust:
+  `main.rs` maps the OS `CursorEntered`/`CursorLeft` window events to
+  `WindowManager::set_hovered`, which toggles `html.ix-hover` via
+  `evaluate_script`. Page-side tracking cannot work here: CSS `:hover` and mouse
+  events do not cross the sandboxed iframe, and a fast pointer exit can skip the
+  page's final `mouseleave`, sticking the control visible.
 - **Native typography.** The inner document defaults to the system font
   (`-apple-system`, SF on macOS) with grayscale antialiasing forced
   (`-webkit-font-smoothing`), since WebKit disables subpixel smoothing on

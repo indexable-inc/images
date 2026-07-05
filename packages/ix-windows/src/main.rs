@@ -95,6 +95,25 @@ fn main() {
             } => {
                 manager.window_closed(window_id);
             }
+            // Hover state for the close control comes from the OS, not the page:
+            // AppKit tracking areas deliver enter/leave reliably even when the
+            // pointer flicks out of the window so fast the page never sees a
+            // final mouseleave (which left the control stuck visible when this
+            // was JS-tracked).
+            Event::WindowEvent {
+                window_id,
+                event: WindowEvent::CursorEntered { .. },
+                ..
+            } => {
+                manager.set_hovered(window_id, true);
+            }
+            Event::WindowEvent {
+                window_id,
+                event: WindowEvent::CursorLeft { .. },
+                ..
+            } => {
+                manager.set_hovered(window_id, false);
+            }
             _ => {}
         }
     });
