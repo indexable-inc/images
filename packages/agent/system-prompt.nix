@@ -447,6 +447,28 @@ let
       };
     }
     {
+      noHandWrittenSerializations = {
+        text = ''
+          Never hand-write a serialized form a tool will parse (argv option strings,
+          connection URLs, query fragments, embedded mini-languages). Keep each fact
+          in a named, typed binding, and give the format one renderer that serializes
+          structured values (attrsets, lists) at the boundary; a renderer that accepts
+          pre-joined string fragments is the same bug moved down a level. Two call
+          sites assembling the same string shape means the renderer is missing. This
+          applies to: socat addresses, systemd units, Docker Compose files, Nix
+          expressions built as strings, shell argv, SQL queries, config file
+          fragments, API payloads, and any other format a downstream parser consumes.
+        '';
+        reason = ''
+          Hand-written socat addresses (kind + options as separate strings) drifted
+          across call sites until a unified renderer consolidated facts into structured
+          attrsets and produced byte-identical output. The same pattern appeared in
+          systemd units, query parameters, and shell argv scattered across the codebase
+          instead of rendered from one place.
+        '';
+      };
+    }
+    {
       fixAtSource = {
         text = ''
           Fix problems at their source. Choose the best long-term solution and prefer
