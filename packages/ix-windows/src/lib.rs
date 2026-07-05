@@ -861,6 +861,7 @@ fn install_blur(window: &Window) {
     use objc2::MainThreadMarker;
     use objc2::rc::Retained;
     use objc2_app_kit::{
+        NSAppearance, NSAppearanceCustomization as _, NSAppearanceNameDarkAqua,
         NSAutoresizingMaskOptions, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
         NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowCollectionBehavior,
         NSWindowOrderingMode,
@@ -886,6 +887,17 @@ fn install_blur(window: &Window) {
     // thread/ownership requirements in the types), so no `unsafe` is needed; only
     // the raw `Retained::retain` above is.
     {
+        // Pin the window to dark appearance: the card's palette is dark (white
+        // text on the HUD material), and without this the NSVisualEffectView
+        // follows the system appearance, rendering a milky light-gray card in
+        // light mode under white text. The CSS deliberately does not set
+        // `color-scheme: dark` (it would opaque the canvas, see `STYLE`), so the
+        // appearance must be pinned here at the window level.
+        // SAFETY: reading an AppKit appearance-name constant (an extern
+        // NSString), valid for the process lifetime.
+        let dark = NSAppearance::appearanceNamed(unsafe { NSAppearanceNameDarkAqua });
+        ns_window.setAppearance(dark.as_deref());
+
         let Some(content) = ns_window.contentView() else {
             return;
         };
