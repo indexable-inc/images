@@ -30,7 +30,7 @@ Quick start, exactly the shape of a Playwright test:
     # or the one-liner: submit, wait for the turn to finish, return the reply
     answer = await agent.run("summarize CONTRIBUTING.md", timeout=180)
 
-    # or fan out across mixed agents through the shared AgentLike interface
+    # or fan out across mixed agents through the shared Agent interface
     claude, codex = await Claude.launch(cwd="/repo"), await Codex.launch(cwd="/repo")
     replies = await asyncio.gather(
         claude.run_to_completion("find one risk"),
@@ -70,51 +70,19 @@ import hashlib
 import re
 from collections.abc import Awaitable, Callable, Sequence
 from types import TracebackType
-from typing import ClassVar, Protocol, Self
+from typing import ClassVar, Self
 
 from . import Key, Pattern, Snapshot, Tui, WaitTimeout
 
 __all__ = [
     "Agent",
     "AgentAssertions",
-    "AgentLike",
     "Claude",
     "Codex",
     "Gate",
     "Keyboard",
     "expect",
 ]
-
-
-class AgentLike(Protocol):
-    """Shared async interface implemented by `Agent`, `Claude`, and `Codex`.
-
-    Use this for orchestration code that should not care which coding agent is
-    behind the PTY:
-
-        agents: list[AgentLike] = [
-            await Claude.launch(cwd="/repo"),
-            await Codex.launch(cwd="/repo"),
-        ]
-        replies = await asyncio.gather(
-            *(agent.run_to_completion("summarize this repo") for agent in agents)
-        )
-
-    The concrete classes expose more Playwright-style controls, but these are
-    the stable high-level operations for mixed-agent fan-out.
-    """
-
-    async def send_message(self, text: str) -> None:
-        """Submit a message without waiting for the turn to finish."""
-
-    async def run_to_completion(
-        self,
-        text: str,
-        *,
-        timeout: float = 180.0,
-        settle: float = 0.6,
-    ) -> str:
-        """Submit a message, wait for idle, and return the parsed reply."""
 
 
 class Gate:
