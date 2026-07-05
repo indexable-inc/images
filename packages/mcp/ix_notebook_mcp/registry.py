@@ -295,6 +295,11 @@ BUILTINS: tuple[Builtin, ...] = (
         "enabled drops it silently",
     ),
     Builtin(
+        "watch_pr",
+        "watch a GitHub PR as a live resource, show required checks with elapsed time, enable "
+        "auto merge by default, and notify when it merges, fails, or times out",
+    ),
+    Builtin(
         "sh",
         "run an external binary (git/nix/gh/cargo writes, long commands, raw logs) off the loop "
         "-- the escape hatch when `nu` won't do; use sh([...]) for argv-list/no shell parsing and "

@@ -139,6 +139,13 @@ SESSION = (
     "the intent titles the run's card, so the board reads as a list of intents, not raw code."
 )
 
+PR_WATCH = (
+    "For pull requests, use `pr_watch` instead of a hand-written polling loop. It creates a "
+    "live PR resource under the current task, shows each required check or action with elapsed "
+    "time, enables auto merge by default, and notifies the CLI when the PR merges, fails, or "
+    "times out."
+)
+
 DISCOVER = (
     "`api()` is your reference (always in the namespace, no import): it lists every helper — the "
     "kernel builtins and each bundled module's public surface — with its live signature and a "

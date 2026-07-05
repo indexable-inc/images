@@ -457,6 +457,7 @@ async def topic_set(
         guide.NAMESPACE,
         guide.BLOCKING,
         guide.RESULT_CONTRACT,
+        guide.PR_WATCH,
         guide.SEE_INSTRUCTIONS,
     ),
 )
@@ -541,6 +542,71 @@ async def python_exec(
             )
         )
     return parts
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Watch a GitHub pull request in the dashboard. Creates a live PR resource "
+        "nested under this task, lists required checks and actions with elapsed "
+        "time, enables auto merge by default, and notifies the CLI when the PR "
+        "merges, fails, or times out. Use this instead of hand-written PR polling."
+    ),
+)
+async def pr_watch(
+    pr: Annotated[
+        str,
+        Field(description="PR number, URL, or branch understood by gh, for example 1856."),
+    ],
+    cwd: Annotated[
+        str,
+        Field(description="Repository worktree where gh should run."),
+    ],
+    auto_merge: Annotated[
+        bool,
+        Field(description="Enable gh auto merge for this PR before watching."),
+    ] = True,
+    interval: Annotated[
+        float,
+        Field(description="Seconds between GitHub status refreshes."),
+    ] = 15.0,
+    timeout: Annotated[
+        float,
+        Field(description="Seconds to watch before the resource closes as timed out."),
+    ] = 3600.0,
+    ctx: Context | None = None,
+) -> Content:
+    await _start_dashboard_once()
+    await _identify_client_once(ctx)
+    await _require_session_name(ctx, intent=f"watch PR {pr}")
+    await _require_topic(ctx, intent=f"watch PR {pr}")
+    code = (
+        "await watch_pr("
+        f"{pr!r}, cwd={cwd!r}, auto_merge={auto_merge!r}, "
+        f"interval={interval!r}, timeout={timeout!r}"
+        ")"
+    )
+    cell_outputs, summary = await current_kernel().python_exec(
+        code,
+        min(5.0, config().max_budget),
+        f"watch PR {pr}",
+        session=_session_id(ctx),
+        topic=_session_topic(ctx),
+    )
+    rendered = outputs.to_mcp(cell_outputs)
+    resource = f"pr-{re.sub(r'[^A-Za-z0-9._-]+', '-', str(pr)).strip('-')}"
+    header = outputs.text(
+        json.dumps(
+            {
+                "job": summary.get("id") if summary else None,
+                "status": summary.get("status") if summary else None,
+                "running": summary.get("running") if summary else None,
+                "elapsed_s": summary.get("elapsed_s") if summary else None,
+                "resource": resource,
+            }
+        )
+    )
+    return [header, *(item for item in rendered if getattr(item, "text", None) != "(no output)")]
 
 
 @mcp.tool(structured_output=False, description=guide.READ)
