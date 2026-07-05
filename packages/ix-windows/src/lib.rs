@@ -895,8 +895,15 @@ fn install_blur(window: &Window) {
         // appearance must be pinned here at the window level.
         // SAFETY: reading an AppKit appearance-name constant (an extern
         // NSString), valid for the process lifetime.
-        let dark = NSAppearance::appearanceNamed(unsafe { NSAppearanceNameDarkAqua });
-        ns_window.setAppearance(dark.as_deref());
+        match NSAppearance::appearanceNamed(unsafe { NSAppearanceNameDarkAqua }) {
+            Some(dark) => ns_window.setAppearance(Some(&dark)),
+            // Loud: a silent None here leaves a light-gray card under white text.
+            None => eprintln!("ix-windows: darkAqua appearance unavailable; card stays light"),
+        }
+        eprintln!(
+            "ix-windows: window effectiveAppearance = {:?}",
+            ns_window.effectiveAppearance().name()
+        );
 
         let Some(content) = ns_window.contentView() else {
             return;
