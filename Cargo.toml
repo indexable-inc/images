@@ -76,6 +76,7 @@ members = [
   "packages/search/source/parquet",
   "packages/search/search-py",
   "packages/skill-lint",
+  "packages/sqlmerge",
   "packages/search/source/slack",
   "packages/search/sink/mixedbread",
   "packages/search/sink/parquet",

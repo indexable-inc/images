@@ -1,0 +1,18 @@
+[package]
+name = "sqlmerge"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "git merge driver for SQLite databases: three-way merge via the session extension"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The workspace entry pins `bundled` (SQLite compiled into the binary, so the
+# merge semantics are identical on every machine); `session` adds the
+# sqlite3session_* changeset API this driver is built on.
+rusqlite = { workspace = true, features = ["session"] }
+
+[dev-dependencies]
+tempfile.workspace = true

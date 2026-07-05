@@ -5547,6 +5547,7 @@ version = "0.38.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6c19a05435c21ac299d71b6a9c13db3e3f47c520517d58990a462a1397a61db"
 dependencies = [
+ "bindgen",
  "cc",
  "pkg-config",
  "vcpkg",
@@ -10320,6 +10321,14 @@ dependencies = [
  "js-sys",
  "rsqlite-vfs",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "sqlmerge"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "tempfile",
 ]
 
 [[package]]
