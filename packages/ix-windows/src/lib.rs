@@ -898,10 +898,18 @@ fn install_blur(window: &Window) {
         effect.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
         );
+        // Place the blur beneath the webview (added as the content view's first
+        // subview), so the rendered HTML paints on top of it.
+        content.addSubview_positioned_relativeTo(&effect, NSWindowOrderingMode::Below, None);
+
         // Round the blur like a native macOS panel (continuous "squircle" curve,
         // the post-Big-Sur system corner). The webview's HTML is clipped to the
         // same radius by the CSS `#ix-root` border-radius, so blur and content
-        // share one rounded silhouette and the window shadow follows it.
+        // share one rounded silhouette and the window shadow follows it. Runs
+        // after addSubview: AppKit creates the backing layer lazily, and before
+        // insertion into the (layer-backed) window hierarchy `layer()` can be
+        // nil. Loud on failure -- a missing layer means square corners, and a
+        // silent skip here cost a debugging round.
         effect.setWantsLayer(true);
         if let Some(layer) = effect.layer() {
             layer.setCornerRadius(CORNER_RADIUS);
@@ -909,10 +917,9 @@ fn install_blur(window: &Window) {
             // SAFETY: reading a CoreAnimation constant (an extern NSString), valid
             // for the process lifetime.
             layer.setCornerCurve(unsafe { kCACornerCurveContinuous });
+        } else {
+            eprintln!("ix-windows: no backing layer on the blur view; corners stay square");
         }
-        // Place the blur beneath the webview (added as the content view's first
-        // subview), so the rendered HTML paints on top of it.
-        content.addSubview_positioned_relativeTo(&effect, NSWindowOrderingMode::Below, None);
 
         ns_window.setHasShadow(true);
         ns_window.invalidateShadow();
