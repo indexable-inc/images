@@ -174,3 +174,48 @@ def test_reset_discards_state() -> None:
     nu.reset()
     with pytest.raises(nu.NuError):
         run(nu("$doomed"))
+
+
+def test_nu_registers_job_resource(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Job:
+        id = "job456"
+
+    class Current:
+        def get(self) -> Job:
+            return Job()
+
+    class Resource:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    calls: list[dict[str, object]] = []
+    resource = Resource()
+
+    def register_resource(**kwargs: object) -> Resource:
+        calls.append(kwargs)
+        return resource
+
+    monkeypatch.setattr(nu, "_ix_current", Current())
+    monkeypatch.setattr(nu, "_register_resource", register_resource)
+    monkeypatch.setattr(nu, "_resource_counts", {})
+
+    df = run(nu("1 + 1"))
+
+    assert df["value"].item() == 2
+    assert resource.closed
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["id"] == "nu-job456-1"
+    assert call["kind"] == "nu"
+    assert str(call["title"]).startswith("nu: ")
+    render = call["render"]
+    assert callable(render)
+    html = render()
+    assert "done" in html
+    assert "2" in html
+    alive = call["alive"]
+    assert callable(alive)
+    assert alive() is False

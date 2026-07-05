@@ -67,8 +67,11 @@ Contract:
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import html as _html
 import inspect as _inspect
 import os
+import re
 from typing import TYPE_CHECKING
 
 from ._nu import Engine, NuError
@@ -84,11 +87,15 @@ __version__ = "0.1.0"
 # the dashboard. Outside (plain `import nu` in a test), it is silently ignored.
 try:
     from ix_notebook_mcp.runtime import _ix_current, _rename_current_job
+    from ix_notebook_mcp.runtime import register_resource as _register_resource
 except Exception:  # pragma: no cover - exercised only outside the kernel
     _ix_current = None
+    _register_resource = None
     _rename_current_job = None
 
 _engine: Engine | None = None
+_RESOURCE_TAIL_CHARS = 120_000
+_resource_counts: dict[str, int] = {}
 
 # The per-session slot: engines live INSIDE the session's namespace dict, so
 # an engine's lifetime is exactly its session's and one agent's `let`/`cd`
@@ -104,6 +111,91 @@ def _session_slot() -> dict | None:
     job = _ix_current.get()
     ns = getattr(job, "_ns", None) if job is not None else None
     return ns if isinstance(ns, dict) else None
+
+
+def _in_kernel_job() -> bool:
+    return _ix_current is not None and _ix_current.get() is not None
+
+
+def _next_resource_id(kind: str) -> str | None:
+    if _ix_current is None:
+        return None
+    job = _ix_current.get()
+    job_id = getattr(job, "id", None) if job is not None else None
+    if not job_id:
+        return None
+    key = str(job_id)
+    count = _resource_counts.get(key, 0) + 1
+    _resource_counts[key] = count
+    return f"{kind}-{key}-{count}"
+
+
+def _title(code: str) -> str:
+    clean = re.sub(r"\s+", " ", code).strip()
+    if len(clean) > 72:
+        clean = clean[:69] + "..."
+    return f"nu: {clean or 'pipeline'}"
+
+
+def _short_repr(value: object) -> str:
+    rows = getattr(value, "to_dicts", None)
+    if callable(rows):
+        with contextlib.suppress(Exception):
+            return repr(rows())
+    text = repr(value)
+    if len(text) > _RESOURCE_TAIL_CHARS:
+        return "... truncated to tail\n" + text[-_RESOURCE_TAIL_CHARS:]
+    return text
+
+
+def _nu_resource_html(state: dict[str, object]) -> str:
+    now = asyncio.get_running_loop().time()
+    ended = state.get("ended")
+    end_time = ended if isinstance(ended, float) else now
+    started = state.get("started")
+    started_time = started if isinstance(started, float) else end_time
+    duration = max(0.0, end_time - started_time)
+    status = str(state.get("status") or "running")
+    bad = status in {"failed", "timed out", "cancelled"}
+    cls = "bad" if bad else "ok" if status == "done" else "running"
+    code = _html.escape(str(state.get("code") or ""))
+    cwd = state.get("cwd")
+    cwd_html = f'<span class="cwd">{_html.escape(os.fspath(cwd))}</span>' if cwd else ""
+    body_value = state.get("error") if bad else state.get("result")
+    body = _html.escape("" if body_value is None else _short_repr(body_value))
+    return (
+        "<style>"
+        "body{margin:0;background:#0f1117;color:#e5e7eb;font:12px ui-monospace,SFMono-Regular,Menlo,monospace}"
+        ".wrap{padding:10px}.meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}"
+        ".pill{border-radius:999px;padding:2px 8px;background:#334155}.ok{background:#064e3b;color:#a7f3d0}"
+        ".bad{background:#7f1d1d;color:#fecaca}.running{background:#78350f;color:#fde68a}"
+        ".cmd{color:#93c5fd;white-space:pre-wrap;word-break:break-word;margin-bottom:6px}"
+        ".cwd{color:#9ca3af}pre{margin:0;white-space:pre-wrap;word-break:break-word}"
+        "</style>"
+        '<div class="wrap">'
+        '<div class="meta">'
+        f'<span class="pill {cls}">{_html.escape(status)}</span>'
+        f"<span>{duration:.2f}s</span>{cwd_html}"
+        "</div>"
+        f'<div class="cmd">nu&gt; {code}</div>'
+        f"<pre>{body}</pre>"
+        "</div>"
+    )
+
+
+def _register_nu_resource(state: dict[str, object]) -> object | None:
+    if _register_resource is None or not _in_kernel_job():
+        return None
+    rid = _next_resource_id("nu")
+    if rid is None:
+        return None
+    return _register_resource(
+        render=lambda: _nu_resource_html(state),
+        id=rid,
+        title=_title(str(state.get("code") or "")),
+        kind="nu",
+        alive=lambda: state.get("status") == "running",
+    )
 
 
 def _default_engine() -> Engine:
@@ -166,6 +258,17 @@ async def _run(
         _rename_current_job(name)
 
     engine = _default_engine()
+    loop = asyncio.get_running_loop()
+    state: dict[str, object] = {
+        "code": code,
+        "cwd": os.fspath(cwd) if cwd is not None else None,
+        "status": "running",
+        "result": None,
+        "error": None,
+        "started": loop.time(),
+        "ended": None,
+    }
+    resource = _register_nu_resource(state)
     coroutine, handle = engine.eval(
         code,
         input=_serialize_input(input) if input is not None else None,
@@ -173,7 +276,7 @@ async def _run(
         env=env,
     )
     try:
-        return await asyncio.wait_for(asyncio.ensure_future(coroutine), timeout)
+        decoded = await asyncio.wait_for(asyncio.ensure_future(coroutine), timeout)
     except TimeoutError:
         # The handle targets THIS eval only, so a timeout that fires while we
         # are still queued behind another pipeline can never interrupt it.
@@ -184,12 +287,39 @@ async def _run(
         # behind it. A fresh engine costs the persistent state (documented);
         # the abandoned one stops (and drops) whenever its element finishes.
         _discard_engine(engine)
+        state["status"] = "timed out"
+        state["error"] = f"nu pipeline timed out after {timeout}s (engine state discarded): {code}"
+        state["ended"] = loop.time()
+        close = getattr(resource, "close", None)
+        if callable(close):
+            close()
         raise TimeoutError(
             f"nu pipeline timed out after {timeout}s (engine state discarded): {code}"
         ) from None
     except asyncio.CancelledError:
         handle.interrupt()
+        state["status"] = "cancelled"
+        state["ended"] = loop.time()
+        close = getattr(resource, "close", None)
+        if callable(close):
+            close()
         raise
+    except Exception as exc:
+        state["status"] = "failed"
+        state["error"] = str(exc)
+        state["ended"] = loop.time()
+        close = getattr(resource, "close", None)
+        if callable(close):
+            close()
+        raise
+    else:
+        state["status"] = "done"
+        state["result"] = decoded
+        state["ended"] = loop.time()
+        close = getattr(resource, "close", None)
+        if callable(close):
+            close()
+        return decoded
 
 
 def _rows_frame(rows: list[dict]) -> pl.DataFrame:

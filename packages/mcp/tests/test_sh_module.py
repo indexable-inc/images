@@ -155,3 +155,87 @@ def test_zsh_helper_uses_zsh_argv(monkeypatch: pytest.MonkeyPatch, tmp_path: pat
         "cmd": ["zsh", "-lc", "print $ZSH_VERSION"],
         "kwargs": {"cwd": cwd, "timeout": 1},
     }
+
+
+def test_sh_registers_job_resource(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Job:
+        id = "job123"
+
+    class Current:
+        def get(self) -> Job:
+            return Job()
+
+    class Resource:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    calls: list[dict[str, object]] = []
+    resource = Resource()
+
+    def register_resource(**kwargs: object) -> Resource:
+        calls.append(kwargs)
+        return resource
+
+    monkeypatch.setattr(sh, "_ix_current", Current())
+    monkeypatch.setattr(sh, "_register_resource", register_resource)
+    monkeypatch.setattr(sh, "_resource_counts", {})
+
+    out = asyncio.run(sh.sh([sys.executable, "-c", "print('resource-ok')"], echo=False))
+
+    assert out.ok
+    assert resource.closed
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["id"] == "sh-job123-1"
+    assert call["kind"] == "sh"
+    assert str(call["title"]).startswith("sh: ")
+    assert callable(call["render"])
+    html = call["render"]()
+    assert "resource-ok" in html
+    assert "done" in html
+    alive = call["alive"]
+    assert callable(alive)
+    assert alive() is False
+
+
+def test_sh_startup_failure_registers_terminal_resource(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Job:
+        id = "job404"
+
+    class Current:
+        def get(self) -> Job:
+            return Job()
+
+    class Resource:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    calls: list[dict[str, object]] = []
+    resource = Resource()
+
+    def register_resource(**kwargs: object) -> Resource:
+        calls.append(kwargs)
+        return resource
+
+    monkeypatch.setattr(sh, "_ix_current", Current())
+    monkeypatch.setattr(sh, "_register_resource", register_resource)
+    monkeypatch.setattr(sh, "_resource_counts", {})
+
+    with pytest.raises(FileNotFoundError):
+        asyncio.run(sh.sh(["__ix_missing_executable_for_resource_test__"], echo=False))
+
+    assert resource.closed
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["id"] == "sh-job404-1"
+    render = call["render"]
+    assert callable(render)
+    html = render()
+    assert "FileNotFoundError" in html
+    assert "failed" in html

@@ -117,6 +117,7 @@ try:
     from ix_notebook_mcp.runtime import Result as _ResultBase
     from ix_notebook_mcp.runtime import _ANSI, _ansi_to_html, _ix_current, _strip_ansi
     from ix_notebook_mcp.runtime import _rename_current_job
+    from ix_notebook_mcp.runtime import register_resource as _register_resource
 
     _HAS_RESULT = True
 except Exception:  # pragma: no cover - exercised only outside the kernel
@@ -126,6 +127,7 @@ except Exception:  # pragma: no cover - exercised only outside the kernel
     _ResultBase = object
     _HAS_RESULT = False
     _ix_current = None
+    _register_resource = None
     _rename_current_job = None  # type: ignore[assignment]
     # SGR color only; the full escape grammar is the runtime's to own.
     _ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -149,6 +151,8 @@ _COLOR_ENV = {
 }
 
 _MONO = "ui-monospace,SFMono-Regular,Menlo,monospace"
+_RESOURCE_TAIL_CHARS = 160_000
+_resource_counts: dict[str, int] = {}
 
 
 # Local file listing / reading / searching has a bundled, polars-first owner.
@@ -563,6 +567,87 @@ def _in_kernel_job() -> bool:
     return _ix_current is not None and _ix_current.get() is not None
 
 
+def _next_resource_id(kind: str) -> str | None:
+    if _ix_current is None:
+        return None
+    job = _ix_current.get()
+    job_id = getattr(job, "id", None) if job is not None else None
+    if not job_id:
+        return None
+    key = str(job_id)
+    count = _resource_counts.get(key, 0) + 1
+    _resource_counts[key] = count
+    return f"{kind}-{key}-{count}"
+
+
+def _command_title(kind: str, shown: str) -> str:
+    clean = re.sub(r"\s+", " ", _redact(shown)).strip()
+    if len(clean) > 72:
+        clean = clean[:69] + "..."
+    return f"{kind}: {clean or 'command'}"
+
+
+def _sh_resource_html(state: dict[str, object]) -> str:
+    now = asyncio.get_running_loop().time()
+    ended = state.get("ended")
+    end_time = ended if isinstance(ended, float) else now
+    started = state.get("started")
+    started_time = started if isinstance(started, float) else end_time
+    duration = max(0.0, end_time - started_time)
+    status = str(state.get("status") or "running")
+    code = state.get("code")
+    live_chunks = state.get("chunks")
+    if isinstance(live_chunks, list):
+        raw = "".join(str(chunk) for chunk in live_chunks)
+    else:
+        raw = str(state.get("raw") or "")
+    omitted = ""
+    if len(raw) > _RESOURCE_TAIL_CHARS:
+        omitted = f"... truncated to last {_RESOURCE_TAIL_CHARS:,} chars\n"
+        raw = raw[-_RESOURCE_TAIL_CHARS:]
+    body = _ansi_to_html(omitted + raw)
+    cmd = _html.escape(_redact(str(state.get("cmd") or "")))
+    cwd = state.get("cwd")
+    cwd_html = f'<span class="cwd">{_html.escape(os.fspath(cwd))}</span>' if cwd else ""
+    ok = status == "done" and code == 0
+    bad = status in {"failed", "timed out", "cancelled"} or (status == "done" and code != 0)
+    cls = "ok" if ok else "bad" if bad else "running"
+    code_html = "" if code is None else f'<span class="code">exit {code}</span>'
+    return (
+        "<style>"
+        "body{margin:0;background:#0f1117;color:#e5e7eb;font:12px ui-monospace,SFMono-Regular,Menlo,monospace}"
+        ".wrap{padding:10px}.meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}"
+        ".pill{border-radius:999px;padding:2px 8px;background:#334155}.ok{background:#064e3b;color:#a7f3d0}"
+        ".bad{background:#7f1d1d;color:#fecaca}.running{background:#78350f;color:#fde68a}"
+        ".cmd{color:#93c5fd;white-space:pre-wrap;word-break:break-word;margin-bottom:6px}"
+        ".cwd{color:#9ca3af}.code{color:#9ca3af}pre{margin:0;white-space:pre-wrap;word-break:break-word}"
+        "</style>"
+        '<div class="wrap">'
+        '<div class="meta">'
+        f'<span class="pill {cls}">{_html.escape(status)}</span>'
+        f'<span>{duration:.2f}s</span>{code_html}{cwd_html}'
+        "</div>"
+        f'<div class="cmd">$ {cmd}</div>'
+        f"<pre>{body}</pre>"
+        "</div>"
+    )
+
+
+def _register_sh_resource(state: dict[str, object]) -> object | None:
+    if _register_resource is None or not _in_kernel_job():
+        return None
+    rid = _next_resource_id("sh")
+    if rid is None:
+        return None
+    return _register_resource(
+        render=lambda: _sh_resource_html(state),
+        id=rid,
+        title=_command_title("sh", str(state.get("cmd") or "")),
+        kind="sh",
+        alive=lambda: state.get("status") == "running",
+    )
+
+
 async def sh(
     cmd: str | list[str],
     *,
@@ -659,32 +744,55 @@ async def sh(
     if env:
         full_env.update(env)
 
-    if isinstance(cmd, (list, tuple)):
-        argv = [str(part) for part in cmd]
-        shown = shlex.join(argv)
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=cwd,
-            env=full_env,
-            start_new_session=True,
-        )
-    else:
-        shown = cmd
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=cwd,
-            env=full_env,
-            start_new_session=True,
-        )
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    argv: list[str] | None = [str(part) for part in cmd] if isinstance(cmd, (list, tuple)) else None
+    shown = shlex.join(argv) if argv is not None else str(cmd)
+    state: dict[str, object] = {
+        "cmd": shown,
+        "cwd": os.fspath(cwd) if cwd is not None else None,
+        "status": "running",
+        "code": None,
+        "raw": "",
+        "started": started,
+        "ended": None,
+    }
+    resource = _register_sh_resource(state)
+
+    try:
+        if argv is not None:
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=cwd,
+                env=full_env,
+                start_new_session=True,
+            )
+        else:
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=cwd,
+                env=full_env,
+                start_new_session=True,
+            )
+    except Exception as exc:
+        state["status"] = "failed"
+        state["code"] = -1
+        state["raw"] = f"{type(exc).__name__}: {exc}\n"
+        state["ended"] = loop.time()
+        close = getattr(resource, "close", None)
+        if callable(close):
+            close()
+        raise
 
     do_echo = _in_kernel_job() if echo is None else echo
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
     stripper = _EchoStripper()
     chunks: list[str] = []
+    state["chunks"] = chunks
 
     def _keep(text: str) -> None:
         chunks.append(text)
@@ -704,8 +812,6 @@ async def sh(
             sys.stdout.write(stripper.flush())
         await proc.wait()
 
-    loop = asyncio.get_running_loop()
-    started = loop.time()
     try:
         if timeout is not None:
             await asyncio.wait_for(_drain(), timeout)
@@ -723,19 +829,38 @@ async def sh(
         # parses this to return the matches found so far) instead of discarding a
         # long scan's work. It is the same merged stdout+stderr text `.raw` holds.
         exc.partial_output = "".join(chunks)  # type: ignore[attr-defined]
+        state["status"] = "timed out"
+        state["raw"] = exc.partial_output
+        state["ended"] = loop.time()
+        close = getattr(resource, "close", None)
+        if callable(close):
+            close()
         raise exc from None
     except asyncio.CancelledError:
         # The awaiting task was cancelled (jobs['<id>'].cancel()): take the child
         # and its whole group down with it, so a cancelled cell never leaves an
         # orphan still running (and holding locks) in the background.
         _terminate(proc)
+        state["status"] = "cancelled"
+        state["ended"] = loop.time()
+        close = getattr(resource, "close", None)
+        if callable(close):
+            close()
         raise
 
     duration = loop.time() - started
+    code = proc.returncode if proc.returncode is not None else -1
+    state["status"] = "done" if code == 0 else "failed"
+    state["code"] = code
+    state["raw"] = "".join(chunks)
+    state["ended"] = loop.time()
+    close = getattr(resource, "close", None)
+    if callable(close):
+        close()
     out = Output(
         cmd=shown,
-        code=proc.returncode if proc.returncode is not None else -1,
-        raw="".join(chunks),
+        code=code,
+        raw=str(state["raw"]),
         duration=duration,
         hint=_structured_hint(cmd),
     )

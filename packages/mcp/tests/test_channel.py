@@ -163,6 +163,28 @@ def test_interactive_resource_id_must_be_script_safe(tmp_path: Path, monkeypatch
     asyncio.run(run())
 
 
+def test_closed_before_first_sweep_keeps_final_resource(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def run() -> None:
+        conn = store.connect(tmp_path / "r.db")
+        _wire_runtime(monkeypatch, conn)
+        res = runtime.register_resource(render=lambda: "<p>terminal</p>", id="blink", title="blink")
+        res.close()
+
+        await runtime._sweep_resources()
+
+        row = conn.execute(
+            "SELECT title, html, status FROM resources WHERE id = ?",
+            ("blink",),
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "blink"
+        assert row[1] == "<p>terminal</p>"
+        assert row[2] == "closed"
+        assert "blink" not in runtime.resources
+
+    asyncio.run(run())
+
+
 def test_action_dispatch_runs_handler_and_streams_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     async def run() -> None:
         conn = store.connect(tmp_path / "r.db")

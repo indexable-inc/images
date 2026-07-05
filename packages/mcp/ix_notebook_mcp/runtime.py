@@ -3191,7 +3191,35 @@ async def _sweep_resources() -> None:
             # close() also tears down an interactive resource's action channel
             # and dispatcher, so a dead pane cannot keep accepting ix.act posts.
             res.close()
+            try:
+                # Very short-lived resources can open and close between flush
+                # ticks. Render one terminal snapshot before closing so they
+                # still appear under the job that created them.
+                if res.kind == "data":
+                    spec = await asyncio.wait_for(res.render_view(), timeout=2.0)
+                    res.html = json.dumps(spec, default=_safe_repr)
+                else:
+                    res.html = await asyncio.wait_for(res.render_html(), timeout=2.0)
+                res.error = None
+            except Exception as exc:
+                res.error = "".join(traceback.format_exception_only(type(exc), exc)).strip()
+                res.html = (
+                    '<pre style="color:#f7768e;margin:0">resource render failed:\n'
+                    + _escape_html(res.error)
+                    + "</pre>"
+                )
             with contextlib.suppress(Exception):  # best-effort: store write must not kill the loop
+                _store.upsert_resource(
+                    _store_conn,
+                    id=res.id,
+                    title=res.title,
+                    kind=res.kind,
+                    html=res.html,
+                    status="closed",
+                    created_at=res.created,
+                    updated_at=now,
+                    execution_id=res.execution_id,
+                )
                 _store.close_resource(_store_conn, id=res.id, updated_at=now)
             resources.pop(res.id, None)
             continue
