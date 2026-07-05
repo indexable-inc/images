@@ -285,6 +285,29 @@
         nativeBuildInputs =
           lib.optional targetIsLinux workspacePkgs.pkg-config
           ++ lib.optionals (appleToolchain != null) appleToolchain.runtimeInputs;
+        # rusqlite's `session` feature (pulled in by `sqlmerge`, and unified
+        # across the workspace by cargo's feature resolution) switches
+        # libsqlite3-sys to `buildtime_bindgen`: the pregenerated bundled
+        # bindings do not cover the sqlite3session_* API, so its build script
+        # runs bindgen, which dlopens libclang at runtime and parses the
+        # bundled sqlite3 headers. macOS's relaxed sandbox lets clang-sys find
+        # a system libclang, but the Linux sandbox has none, so hand it
+        # nixpkgs' libclang plus clang's builtin and libc include dirs.
+        # Scoped per-package so the env does not invalidate every other unit
+        # in the dependency closure (see cargo-unit's buildWorkspace docs).
+        packageBuildEnv = lib.optionalAttrs targetIsLinux {
+          libsqlite3-sys = {
+            LIBCLANG_PATH = "${workspacePkgs.llvmPackages.libclang.lib}/lib";
+            BINDGEN_EXTRA_CLANG_ARGS = lib.concatStringsSep " " [
+              "-isystem"
+              "${workspacePkgs.llvmPackages.libclang.lib}/lib/clang/${
+                lib.versions.major workspacePkgs.llvmPackages.libclang.version
+              }/include"
+              "-isystem"
+              "${workspacePkgs.stdenv.cc.libc.dev}/include"
+            ];
+          };
+        };
         env =
           {
             # ix-vt-sys's build script reads this to emit the libghostty-vt link
