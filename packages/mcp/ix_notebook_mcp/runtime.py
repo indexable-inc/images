@@ -291,12 +291,12 @@ class Job:
         name: str | None = None,
         budget: float = 15.0,
         kind: str = "cell",
-        theme: str = "",
+        topic: str = "",
     ) -> None:
         self.id = uuid.uuid4().hex[:8]
         self.code = code
         self.name = name or self.id
-        self.theme = theme
+        self.topic = topic
         # 'cell' for a normal execution; 'replay' for a re-run performed while
         # reopening a session file. Replays never feed future replays
         # (store.replayable filters on this), so a session cannot double-run
@@ -1485,7 +1485,7 @@ def _ask_form_html(
     submit_label: str,
 ) -> str:
     """The self-contained form HTML :func:`ask` renders: a prompt, the inputs, and
-    a wiring script that gathers the values and calls ``ixSubmit``. Themed for the
+    a wiring script that gathers the values and calls ``ixSubmit``. Arranged for the
     dashboard's light/dark surface; every agent-supplied string is escaped."""
     if choices is not None:
         body = "".join(
@@ -1792,7 +1792,7 @@ class Session:
         self._name = ""  # explicit, user-set via `session.name = ...`
         self._client = ""  # the connecting MCP client's reported identity
         self._workdir = ""  # this kernel's cwd basename, for the default label
-        self._theme = ""  # current fold group for runs in this session
+        self._topic = ""  # current fold group for runs in this session
         self._rev = 0
         self._synced = -1
 
@@ -1810,13 +1810,13 @@ class Session:
         self._rev += 1
 
     @property
-    def theme(self) -> str:
+    def topic(self) -> str:
         """The current dashboard fold group for future runs."""
-        return self._theme or "unfiled"
+        return self._topic or "unfiled"
 
-    @theme.setter
-    def theme(self, value: str) -> None:
-        self._theme = " ".join((value or "").split())
+    @topic.setter
+    def topic(self, value: str) -> None:
+        self._topic = " ".join((value or "").split())
         self._rev += 1
 
     @property
@@ -1834,8 +1834,8 @@ class Session:
 
     def __repr__(self) -> str:
         tail = f" · {self._client}" if self._client and self._client != self.name else ""
-        theme = f" theme={self.theme!r}" if self._theme else ""
-        return f"<Session {self.name!r}{tail}{theme}>"
+        topic = f" topic={self.topic!r}" if self._topic else ""
+        return f"<Session {self.name!r}{tail}{topic}>"
 
     def _sync(self) -> None:
         """Mirror the session label to the store when it has changed, so the
@@ -2118,7 +2118,7 @@ async def _runner(job: Job, ns: dict) -> None:
                 started_at=job.started,
                 budget=job.budget,
                 kind=job.kind,
-                theme=job.theme,
+                topic=job.topic,
             )
     try:
         # Static type check BEFORE running (default on; IX_MCP_TYPECHECK=0 or the
@@ -2249,7 +2249,7 @@ async def _runner(job: Job, ns: dict) -> None:
                     job_id=job.id,
                     job_name=job.name,
                     status=job.status,
-                    theme=job.theme,
+                    topic=job.topic,
                 )
 
 
@@ -3455,13 +3455,13 @@ async def __ix_run(
     name: str | None = None,
     kind: str = "cell",
     session: str | None = None,
-    theme: str | None = None,
+    topic: str | None = None,
 ) -> Job:
     """Run ``code`` as a task; wait up to ``budget`` for it; return the Job either
     way (done, or still running in the background). ``session`` selects the
     namespace the code runs in (see :func:`_session_ns`)."""
     ns = _session_ns(session)
-    job = Job(code, name, budget=budget, kind=kind, theme=theme or globals()["session"].theme)
+    job = Job(code, name, budget=budget, kind=kind, topic=topic or globals()["session"].topic)
     job._ns = ns
     jobs[job.id] = job
     job.task = asyncio.ensure_future(_runner(job, ns))
@@ -3500,7 +3500,7 @@ def _job_summary(job: Job) -> dict:
     return {
         "id": job.id,
         "name": job.name,
-        "theme": job.theme,
+        "topic": job.topic,
         "status": job.status,
         "running": job.running(),
         "output": job.tail(_SUMMARY_CHARS),
@@ -3559,12 +3559,12 @@ async def __ix_exec(
     budget: float = 15.0,
     name: str | None = None,
     session: str | None = None,
-    theme: str | None = None,
+    topic: str | None = None,
 ) -> None:
     """The MCP server's per-call entrypoint: run with a budget, emit the summary.
     ``session`` is the caller's MCP session id (per-session namespace; None for
     the shared one)."""
-    job = await __ix_run(code, budget=budget, name=name, session=session, theme=theme)
+    job = await __ix_run(code, budget=budget, name=name, session=session, topic=topic)
     _emit(job)
 
 

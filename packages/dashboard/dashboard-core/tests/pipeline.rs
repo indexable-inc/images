@@ -26,7 +26,7 @@ fn exec_pane() -> Pane {
             running: false,
             ok: Some(true),
             duration_ms: Some(7),
-            theme: Some("test".to_owned()),
+            topic: Some("test".to_owned()),
             line: None,
             error_line: None,
             trace: Vec::new(),

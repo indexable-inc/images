@@ -147,9 +147,9 @@ _dashboard_started = False
 # (index#1789 review). The one stdio/embedder client has no session object to
 # key on; its label lives in `_solo_session_name` and dies with the process.
 _session_labels: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
-_session_themes: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_session_topics: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _solo_session_name: str | None = None
-_solo_theme: str | None = None
+_solo_topic: str | None = None
 
 
 def _session_label(ctx: Context | None) -> str | None:
@@ -171,26 +171,26 @@ def _set_session_label(ctx: Context | None, name: str) -> None:
 
 
 
-def _session_theme(ctx: Context | None) -> str | None:
-    """The current fold theme this call's session chose."""
+def _session_topic(ctx: Context | None) -> str | None:
+    """The current fold topic this call's session chose."""
     session = _http_session(ctx)
     if session is None:
-        return _solo_theme
-    return _session_themes.get(session)
+        return _solo_topic
+    return _session_topics.get(session)
 
 
-def _set_session_theme(ctx: Context | None, theme: str) -> None:
-    global _solo_theme
+def _set_session_topic(ctx: Context | None, topic: str) -> None:
+    global _solo_topic
     session = _http_session(ctx)
     if session is None:
-        _solo_theme = theme
+        _solo_topic = topic
     else:
-        _session_themes[session] = theme
+        _session_topics[session] = topic
 
 
-def _theme_required() -> bool:
-    """Whether python_exec requires an explicit theme first."""
-    return os.environ.get("IX_MCP_REQUIRE_THEME", "1").strip().lower() not in (
+def _topic_required() -> bool:
+    """Whether python_exec requires an explicit topic first."""
+    return os.environ.get("IX_MCP_REQUIRE_TOPIC", "1").strip().lower() not in (
         "0",
         "false",
         "no",
@@ -198,16 +198,16 @@ def _theme_required() -> bool:
     )
 
 
-async def _require_theme(ctx: Context | None, *, intent: str | None = None) -> None:
-    """Fail fast until this MCP session has named the current dashboard theme."""
-    if not _theme_required() or _session_theme(ctx) is not None:
+async def _require_topic(ctx: Context | None, *, intent: str | None = None) -> None:
+    """Fail fast until this MCP session has named the current dashboard topic."""
+    if not _topic_required() or _session_topic(ctx) is not None:
         return
-    suggestion = f" Suggested theme from this call: {intent!r}." if intent else ""
+    suggestion = f" Suggested topic from this call: {intent!r}." if intent else ""
     raise McpError(
         ErrorData(
             code=types.INVALID_REQUEST,
             message=(
-                "Set a dashboard theme first: call theme_set with a short label for "
+                "Set a dashboard topic first: call topic_set with a short label for "
                 "the current cluster of related tool calls."
                 f"{suggestion}"
             ),
@@ -410,13 +410,13 @@ async def session_set_name(
 @mcp.tool(
     structured_output=False,
     description=(
-        "Set the current dashboard theme for this MCP connection. Call this before "
+        "Set the current dashboard topic for this MCP connection. Call this before "
         "a related cluster of python_exec calls, and change it when the work moves "
-        "to a new phase; runs fold under the theme inside the session."
+        "to a new phase; runs fold under the topic inside the session."
     ),
 )
-async def theme_set(
-    theme: Annotated[
+async def topic_set(
+    topic: Annotated[
         str,
         Field(
             description=(
@@ -429,18 +429,18 @@ async def theme_set(
 ) -> Content:
     await _start_dashboard_once()
     await _identify_client_once(ctx)
-    await _require_session_name(ctx, intent=theme)
-    clean = " ".join((theme or "").split())
+    await _require_session_name(ctx, intent=topic)
+    clean = " ".join((topic or "").split())
     if not 3 <= len(clean) <= 80:
         raise McpError(
             ErrorData(
                 code=types.INVALID_PARAMS,
-                message="Theme must be 3 to 80 non-whitespace characters.",
+                message="Topic must be 3 to 80 non-whitespace characters.",
             )
         )
-    await current_kernel().set_theme(clean)
-    _set_session_theme(ctx, clean)
-    return [outputs.text(f"dashboard theme set: {clean}")]
+    await current_kernel().set_topic(clean)
+    _set_session_topic(ctx, clean)
+    return [outputs.text(f"dashboard topic set: {clean}")]
 
 
 # Every tool sets structured_output=False: FastMCP otherwise derives an output
@@ -469,7 +469,7 @@ async def python_exec(
     await _start_dashboard_once()
     await _identify_client_once(ctx)
     await _require_session_name(ctx, intent=intent)
-    await _require_theme(ctx, intent=intent)
+    await _require_topic(ctx, intent=intent)
     # A foreground budget is how long the run holds the one shared shell channel
     # before it backgrounds, so cap it: a giant budget (a 15-minute `await
     # jobs[...]`) would block every other call behind it. The clamp is surfaced
@@ -479,7 +479,7 @@ async def python_exec(
     # `intent` is the run's human label (the dashboard feed's title); it flows to
     # the kernel as the job name and lands in the store's `name` column.
     cell_outputs, summary = await current_kernel().python_exec(
-        code, effective_budget, intent, session=_session_id(ctx), theme=_session_theme(ctx)
+        code, effective_budget, intent, session=_session_id(ctx), topic=_session_topic(ctx)
     )
     rendered = outputs.to_mcp(cell_outputs)
     if summary is None:

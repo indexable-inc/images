@@ -257,7 +257,7 @@ fn demo_panes(tick: u64) -> Vec<Pane> {
             running,
             ok: if running { None } else { Some(true) },
             duration_ms: if running { None } else { Some(420) },
-            theme: Some("demo".to_owned()),
+            topic: Some("demo".to_owned()),
             line: if running { Some(2) } else { None },
             error_line: None,
             // The loop's prints all come from the second source line.

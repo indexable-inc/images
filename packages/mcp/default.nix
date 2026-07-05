@@ -1900,7 +1900,7 @@
     # session_set_name joined the surface in #1615 but this expected set was
     # not updated with it; the stale drv kept passing from cache on main until
     # this package's inputs changed and forced a rebuild.
-    + "expected = {'python_exec','read','kernel_trace','tui_act','session_set_name','theme_set','reply'}; "
+    + "expected = {'python_exec','read','kernel_trace','tui_act','session_set_name','topic_set','reply'}; "
     + "assert set(names) == expected, ('tool surface drifted: %r' % (names,)); "
     + "from ix_notebook_mcp import registry; instr = mcp._mcp_server.instructions; "
     + "assert 'root=' not in instr, 'a parameter/signature leaked into the instructions'; "
@@ -3158,8 +3158,8 @@
 
             named = await tools.session_set_name("wedge smoke")
             assert "wedge smoke" in " ".join(getattr(c, "text", "") or "" for c in named), named
-            themed = await tools.theme_set("wedge validation")
-            assert "wedge validation" in " ".join(getattr(c, "text", "") or "" for c in themed), themed
+            topic = await tools.topic_set("wedge validation")
+            assert "wedge validation" in " ".join(getattr(c, "text", "") or "" for c in topic), topic
 
             started = loop.time()
             clamped = await tools.python_exec(

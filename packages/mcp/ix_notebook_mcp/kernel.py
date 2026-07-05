@@ -194,7 +194,7 @@ class Kernel:
         budget: float,
         name: str | None = None,
         session: str | None = None,
-        theme: str | None = None,
+        topic: str | None = None,
     ) -> tuple[list[dict], dict | None]:
         """Run user ``code`` with a foreground budget; return (outputs, summary).
 
@@ -211,10 +211,10 @@ class Kernel:
         """
         name_arg = "None" if name is None else repr(name)
         session_arg = "None" if session is None else repr(session)
-        theme_arg = "None" if theme is None else repr(theme)
+        topic_arg = "None" if topic is None else repr(topic)
         wrapper = (
             f"await __ix_exec({code!r}, budget={float(budget)!r}, "
-            f"name={name_arg}, session={session_arg}, theme={theme_arg})"
+            f"name={name_arg}, session={session_arg}, topic={topic_arg})"
         )
         grace = self._config.wedge_grace
         deadline = float(budget) + grace
@@ -240,9 +240,9 @@ class Kernel:
         """
         await self._execute(f"session.name = {name!r}\nsession._sync()", timeout=10.0)
 
-    async def set_theme(self, theme: str) -> None:
-        """Set the dashboard theme without creating an execution card."""
-        await self._execute(f"session.theme = {theme!r}", timeout=10.0)
+    async def set_topic(self, topic: str) -> None:
+        """Set the dashboard topic without creating an execution card."""
+        await self._execute(f"session.topic = {topic!r}", timeout=10.0)
 
     async def _interrupt(self) -> bool:
         """Break a synchronous call wedging the kernel's event loop. ipykernel's

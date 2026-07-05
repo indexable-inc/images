@@ -39,7 +39,7 @@ export interface ResourceNode {
   parent?: string;
 }
 
-export interface ThemeNode {
+export interface TopicNode {
   key: string;
   label: string;
   runs: RunNode[];
@@ -53,7 +53,7 @@ export interface SessionNode {
   // sidebar sorts sessions by it (newest first).
   lastActivity?: number;
   resources: ResourceNode[];
-  themes: ThemeNode[];
+  topics: TopicNode[];
   runs: RunNode[];
 }
 
@@ -85,26 +85,26 @@ function lastRunActivity(runs: RunNode[]): number | undefined {
   return runs.length ? runs[runs.length - 1].pane.created_at : undefined;
 }
 
-function themeLabel(run: RunNode): string {
-  const raw = run.pane.theme?.trim();
-  return raw || 'unthemed';
+function topicLabel(run: RunNode): string {
+  const raw = run.pane.topic?.trim();
+  return raw || 'unfiled';
 }
 
-function groupRunsByTheme(runs: RunNode[]): ThemeNode[] {
-  const themes: ThemeNode[] = [];
-  const byKey = new Map<string, ThemeNode>();
+function groupRunsByTopic(runs: RunNode[]): TopicNode[] {
+  const topics: TopicNode[] = [];
+  const byKey = new Map<string, TopicNode>();
   for (const run of runs) {
-    const label = themeLabel(run);
-    let theme = byKey.get(label);
-    if (!theme) {
-      theme = { key: label, label, runs: [], lastActivity: undefined };
-      byKey.set(label, theme);
-      themes.push(theme);
+    const label = topicLabel(run);
+    let topic = byKey.get(label);
+    if (!topic) {
+      topic = { key: label, label, runs: [], lastActivity: undefined };
+      byKey.set(label, topic);
+      topics.push(topic);
     }
-    theme.runs.push(run);
-    theme.lastActivity = run.pane.created_at;
+    topic.runs.push(run);
+    topic.lastActivity = run.pane.created_at;
   }
-  return themes;
+  return topics;
 }
 
 // Newest-activity first (a session whose last run is more recent sorts above one
@@ -164,7 +164,7 @@ export function buildSidebar(
         label: s.label,
         lastActivity: lastRunActivity(runs),
         resources,
-        themes: groupRunsByTheme(runs),
+        topics: groupRunsByTopic(runs),
         runs,
       };
     })
@@ -214,8 +214,8 @@ export function flattenVisible(
     for (const s of model.sessions) {
       if (!open('sess:' + s.scope)) continue;
       for (const r of s.resources) out.push({ selection: { kind: 'resource', key: r.key } });
-      for (const t of s.themes) {
-        if (!open('theme:' + s.scope + ':' + t.key)) continue;
+      for (const t of s.topics) {
+        if (!open('topic:' + s.scope + ':' + t.key)) continue;
         for (const r of t.runs) {
           out.push({ selection: { kind: 'run', key: r.key } });
           for (const resource of r.resources) out.push({ selection: { kind: 'resource', key: resource.key } });

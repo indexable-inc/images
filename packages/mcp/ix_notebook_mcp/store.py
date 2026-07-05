@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS executions (
     bindings    TEXT NOT NULL DEFAULT '{}',
     kind        TEXT NOT NULL DEFAULT 'cell',
     namespace   TEXT NOT NULL DEFAULT '[]',
-    theme       TEXT NOT NULL DEFAULT ''
+    topic       TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS executions_started ON executions (started_at);
 
@@ -193,9 +193,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "namespace" not in have:
         with contextlib.suppress(sqlite3.OperationalError):
             conn.execute("ALTER TABLE executions ADD COLUMN namespace TEXT NOT NULL DEFAULT '[]'")
-    if "theme" not in have:
+    if "topic" not in have:
         with contextlib.suppress(sqlite3.OperationalError):
-            conn.execute("ALTER TABLE executions ADD COLUMN theme TEXT NOT NULL DEFAULT ''")
+            conn.execute("ALTER TABLE executions ADD COLUMN topic TEXT NOT NULL DEFAULT ''")
     resource_have = {row[1] for row in conn.execute("PRAGMA table_info(resources)")}
     if "execution_id" not in resource_have:
         with contextlib.suppress(sqlite3.OperationalError):
@@ -211,12 +211,12 @@ def start(
     started_at: float,
     budget: float = 15.0,
     kind: str = "cell",
-    theme: str = "",
+    topic: str = "",
 ) -> None:
     conn.execute(
-        "INSERT OR REPLACE INTO executions (id, name, code, status, started_at, budget, output, kind, theme) "
+        "INSERT OR REPLACE INTO executions (id, name, code, status, started_at, budget, output, kind, topic) "
         "VALUES (?, ?, ?, 'running', ?, ?, '', ?, ?)",
-        (id, name, code, started_at, budget, kind, theme),
+        (id, name, code, started_at, budget, kind, topic),
     )
 
 
@@ -289,7 +289,7 @@ def finish(
 # `get` return the identical shape (the embed contract in feed.py depends on it).
 _EXEC_COLUMNS = (
     "id, name, code, status, started_at, ended_at, budget, output, result, error, "
-    "line, error_line, outputs, bindings, kind, theme"
+    "line, error_line, outputs, bindings, kind, topic"
 )
 
 

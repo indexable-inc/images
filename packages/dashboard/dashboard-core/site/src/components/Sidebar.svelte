@@ -38,16 +38,16 @@
       (v ?? '').toLowerCase().includes(q),
     );
   }
-  function themeMatches(t: typeof model.sessions[number]['themes'][number]): boolean {
+  function topicMatches(t: typeof model.sessions[number]['topics'][number]): boolean {
     return !q || t.label.toLowerCase().includes(q);
   }
   // A session's visible children under the filter: all if the session label
   // matches, else only matching resources and runs.
   function visibleSession(s: typeof model.sessions[number]) {
     if (!q || s.label.toLowerCase().includes(q)) return s;
-    const themes = s.themes
+    const topics = s.topics
       .map((t) => {
-        if (themeMatches(t)) return t;
+        if (topicMatches(t)) return t;
         const runs = t.runs
           .map((r) => {
             if (paneMatches(r)) return r;
@@ -61,8 +61,8 @@
     return {
       ...s,
       resources: s.resources.filter(paneMatches),
-      themes,
-      runs: themes.flatMap((t) => t.runs),
+      topics,
+      runs: topics.flatMap((t) => t.runs),
     };
   }
 
@@ -78,26 +78,26 @@
     model.recordings.filter((rec) => !q || rec.id.toLowerCase().includes(q)),
   );
 
-  function themeFoldKey(s: typeof sessions[number], t: typeof s.themes[number]): string {
-    return 'theme:' + s.scope + ':' + t.key;
+  function topicFoldKey(s: typeof sessions[number], t: typeof s.topics[number]): string {
+    return 'topic:' + s.scope + ':' + t.key;
   }
-  const themeDefaults = $derived(
+  const topicDefaults = $derived(
     new Map(
       sessions.flatMap((s) => {
-        const newest = s.themes.reduce<typeof s.themes[number] | null>(
+        const newest = s.topics.reduce<typeof s.topics[number] | null>(
           (best, t) => (best && (best.lastActivity ?? 0) >= (t.lastActivity ?? 0) ? best : t),
           null,
         );
-        return s.themes.map((t) => [themeFoldKey(s, t), t.key === newest?.key] as const);
+        return s.topics.map((t) => [topicFoldKey(s, t), t.key === newest?.key] as const);
       }),
     ),
   );
   function openFold(foldKey: string): boolean {
-    return ui.folds[foldKey] ?? themeDefaults.get(foldKey) ?? isOpen(foldKey);
+    return ui.folds[foldKey] ?? topicDefaults.get(foldKey) ?? isOpen(foldKey);
   }
 
-  // The filtered model the keyboard walks. Theme folds default to opening only
-  // the newest theme in each session, so completed earlier phases stay tucked away.
+  // The filtered model the keyboard walks. Topic folds default to opening only
+  // the newest topic in each session, so completed earlier phases stay tucked away.
   const filteredModel = $derived({ ...model, sessions, resources, recordings });
   const flat = $derived(flattenVisible(filteredModel, openFold));
 
@@ -162,17 +162,17 @@
   }
 
   // The fold key of the selection's closest owner. Resources live under the
-  // session, while runs live under the theme inside that session.
+  // session, while runs live under the topic inside that session.
   function ownerFoldKeyOf(sel: Selection | null): string | null {
     if (!sel || (sel.kind !== 'run' && sel.kind !== 'resource')) return null;
     for (const s of sessions) {
       if (s.resources.some((r) => r.key === sel.key)) {
         return 'sess:' + s.scope;
       }
-      for (const t of s.themes) {
-        if (t.runs.some((r) => r.key === sel.key)) return themeFoldKey(s, t);
+      for (const t of s.topics) {
+        if (t.runs.some((r) => r.key === sel.key)) return topicFoldKey(s, t);
         if (t.runs.some((r) => r.resources.some((resource) => resource.key === sel.key))) {
-          return themeFoldKey(s, t);
+          return topicFoldKey(s, t);
         }
       }
     }
@@ -280,19 +280,19 @@
                 <span class="res-meta">{resourceMeta(r.pane)}</span>
               </button>
             {/each}
-            {#each s.themes as t (t.key)}
-              {@const themeKey = themeFoldKey(s, t)}
+            {#each s.topics as t (t.key)}
+              {@const topicKey = topicFoldKey(s, t)}
               <button
-                class="theme-head"
-                onclick={() => toggleFold(themeKey)}
-                aria-expanded={openFold(themeKey)}
+                class="topic-head"
+                onclick={() => toggleFold(topicKey)}
+                aria-expanded={openFold(topicKey)}
                 title={t.label}
               >
-                <span class="caret" class:open={openFold(themeKey)}></span>
-                <span class="theme-name">{t.label}</span>
-                <span class="theme-count">{t.runs.length}</span>
+                <span class="caret" class:open={openFold(topicKey)}></span>
+                <span class="topic-name">{t.label}</span>
+                <span class="topic-count">{t.runs.length}</span>
               </button>
-              {#if openFold(themeKey)}
+              {#if openFold(topicKey)}
                 {#each t.runs as r (r.key)}
                   {@const running = r.led === 'running'}
                   <button
@@ -557,7 +557,7 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .theme-head {
+  .topic-head {
     width: 100%;
     display: flex;
     align-items: center;
@@ -572,17 +572,17 @@
     cursor: pointer;
     text-align: left;
   }
-  .theme-head:hover {
+  .topic-head:hover {
     background: var(--elev, var(--panel));
   }
-  .theme-name {
+  .topic-name {
     flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .theme-count {
+  .topic-count {
     flex: none;
     font-size: 10px;
     color: var(--ink-faint);

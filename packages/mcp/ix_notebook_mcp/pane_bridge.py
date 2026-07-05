@@ -164,7 +164,7 @@ def _panes(conn: sqlite3.Connection) -> list[dict]:
                 result=row.get("result") or "",
                 ok=_ok(status),
                 duration_ms=duration_ms,
-                theme=row.get("theme"),
+                topic=row.get("topic"),
                 line=row.get("line"),
                 error_line=row.get("error_line"),
                 title=intent,

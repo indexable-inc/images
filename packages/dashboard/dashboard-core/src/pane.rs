@@ -238,7 +238,7 @@ pub struct ExecView {
     pub duration_ms: Option<u64>,
     /// Fold group label inside the producer session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub theme: Option<String>,
+    pub topic: Option<String>,
     /// 1-based source line currently executing while running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<u32>,
@@ -399,7 +399,7 @@ mod tests {
                         running: false,
                         ok: Some(true),
                         duration_ms: Some(12),
-                        theme: Some("test".to_owned()),
+                        topic: Some("test".to_owned()),
                         line: None,
                         error_line: None,
                         trace: Vec::new(),
@@ -433,7 +433,7 @@ mod tests {
                 running: true,
                 ok: None,
                 duration_ms: None,
-                theme: None,
+                topic: None,
                 line: None,
                 error_line: None,
                 trace: Vec::new(),

@@ -72,7 +72,7 @@ def exec_pane(
     ok: bool | None = None,
     lang: str = "python",
     duration_ms: int | None = None,
-    theme: str | None = None,
+    topic: str | None = None,
     line: int | None = None,
     error_line: int | None = None,
     trace: list[dict] | None = None,
@@ -95,8 +95,8 @@ def exec_pane(
         view["ok"] = ok
     if duration_ms is not None:
         view["duration_ms"] = duration_ms
-    if theme:
-        view["theme"] = theme
+    if topic:
+        view["topic"] = topic
     if line is not None:
         view["line"] = line
     if error_line is not None:

@@ -39,7 +39,7 @@ export interface PaneRecord {
   // feed shows this instead of an age so a row reads as "how long it took".
   duration_ms?: number;
   // exec-only: fold group inside the session.
-  theme?: string;
+  topic?: string;
   // exec-only: 1-based source line currently executing or where an error raised.
   line?: number;
   error_line?: number;

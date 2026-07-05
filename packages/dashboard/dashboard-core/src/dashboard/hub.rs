@@ -109,7 +109,7 @@ fn view_scalars(view: &View) -> Vec<ScalarField> {
             field("lang", Scalar::Str(e.lang.clone())),
             field("running", Scalar::Bool(e.running)),
             field("ok", e.ok.map_or(Scalar::Absent, Scalar::Bool)),
-            field("theme", e.theme.clone().map_or(Scalar::Absent, Scalar::Str)),
+            field("topic", e.topic.clone().map_or(Scalar::Absent, Scalar::Str)),
             field(
                 "duration_ms",
                 e.duration_ms.map_or(Scalar::Absent, |ms| {
@@ -698,7 +698,7 @@ mod tests {
                     running: false,
                     ok: Some(true),
                     duration_ms: Some(9),
-                    theme: Some("test".to_owned()),
+                    topic: Some("test".to_owned()),
                     line: None,
                     error_line: None,
                     trace: Vec::new(),
@@ -743,7 +743,7 @@ mod tests {
                 running: true,
                 ok: None,
                 duration_ms: None,
-                theme: None,
+                topic: None,
                 line: None,
                 error_line: None,
                 trace: Vec::new(),
@@ -765,7 +765,7 @@ mod tests {
                 running: false,
                 ok: Some(true),
                 duration_ms: Some(4),
-                theme: Some("test".to_owned()),
+                topic: Some("test".to_owned()),
                 line: None,
                 error_line: None,
                 trace: vec![ExecTraceLine {

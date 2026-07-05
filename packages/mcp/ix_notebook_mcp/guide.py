@@ -131,10 +131,10 @@ SESSION = (
     "you make is grouped under this session on the live dashboard, and a human may "
     "be watching several agents at once; a clear name is how they tell yours apart. "
     "It defaults to the connecting client and working directory (e.g. `claude-code · index`), "
-    "which is ambiguous once agents share a repo, so name it. Then call `theme_set` "
-    "before the first `python_exec` call and whenever you switch phases. A theme "
+    "which is ambiguous once agents share a repo, so name it. Then call `topic_set` "
+    "before the first `python_exec` call and whenever you switch phases. A topic "
     "groups a handful of related runs under one fold in the dashboard, so use labels "
-    "like `inspect diff`, `patch sidebar`, or `validate build`, not one theme per "
+    "like `inspect diff`, `patch sidebar`, or `validate build`, not one topic per "
     "call. Also pass a one-line `intent` on every `python_exec` (it is required): "
     "the intent titles the run's card, so the board reads as a list of intents, not raw code."
 )

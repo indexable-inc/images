@@ -640,9 +640,9 @@ let
           Search with `fff.grep` and `fff.find`; run `api()` for helpers. Do not shell
           out to `rg` or `fd` inside the kernel. Run independent non-mutating commands
           concurrently with `asyncio.gather` or `asyncio.TaskGroup`. If the kernel
-          wedges, restart it or report the blocker. Set a dashboard theme before
+          wedges, restart it or report the blocker. Set a dashboard topic before
           clusters of related kernel work and change it at phase boundaries; keep
-          several related tool calls under one theme so completed phases can fold
+          several related tool calls under one topic so completed phases can fold
           away as one group.
         '';
         reason = ''
