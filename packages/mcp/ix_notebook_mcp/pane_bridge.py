@@ -111,15 +111,18 @@ def _resource_pane(res: dict) -> dict:
     pane_id = f"resource/{res['id']}"
     title = res.get("title") or res["id"]
     kind = res.get("kind") or ""
+    status = res.get("status") or "live"
+    subtitle = f"{kind} · {status}" if kind else status
     body = res.get("html") or ""
+    parent = res.get("execution_id") or None
     if kind == "data":
         try:
             spec = json.loads(body)
         except (json.JSONDecodeError, TypeError):
             spec = None
         if isinstance(spec, dict) and isinstance(spec.get("renderer"), str) and "data" in spec:
-            return data_pane(pane_id, title, spec["renderer"], spec["data"], subtitle=kind)
-    return html_pane(pane_id, title, body, subtitle=kind)
+            return data_pane(pane_id, title, spec["renderer"], spec["data"], subtitle=subtitle, parent=parent)
+    return html_pane(pane_id, title, body, subtitle=subtitle, parent=parent)
 
 
 def _panes(conn: sqlite3.Connection) -> list[dict]:
@@ -161,6 +164,9 @@ def _panes(conn: sqlite3.Connection) -> list[dict]:
                 result=row.get("result") or "",
                 ok=_ok(status),
                 duration_ms=duration_ms,
+                theme=row.get("theme"),
+                line=row.get("line"),
+                error_line=row.get("error_line"),
                 title=intent,
             )
         )
@@ -180,12 +186,11 @@ def _panes(conn: sqlite3.Connection) -> list[dict]:
                     spec["renderer"],
                     spec["data"],
                     subtitle="output",
+                    parent=row["id"],
                 )
             )
         elif any(_is_rich(out) for out in outputs) and (rendered := _render_outputs(outputs)):
-            panes.append(
-                html_pane(f"{row['id']}/out", intent or "output", rendered, subtitle="output")
-            )
+            panes.append(html_pane(f"{row['id']}/out", intent or "output", rendered, subtitle="output", parent=row["id"]))
     # The agent's curated presentation cells (the highlight reel the old UI's
     # cells pane showed), each rendered as an html pane in position order.
     for cell in store.cells(conn):

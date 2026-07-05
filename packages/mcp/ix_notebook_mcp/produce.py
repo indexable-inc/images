@@ -72,6 +72,9 @@ def exec_pane(
     ok: bool | None = None,
     lang: str = "python",
     duration_ms: int | None = None,
+    theme: str | None = None,
+    line: int | None = None,
+    error_line: int | None = None,
     trace: list[dict] | None = None,
     title: str | None = None,
     subtitle: str = "",
@@ -92,6 +95,12 @@ def exec_pane(
         view["ok"] = ok
     if duration_ms is not None:
         view["duration_ms"] = duration_ms
+    if theme:
+        view["theme"] = theme
+    if line is not None:
+        view["line"] = line
+    if error_line is not None:
+        view["error_line"] = error_line
     if trace:
         view["trace"] = trace
     return {
@@ -102,25 +111,44 @@ def exec_pane(
     }
 
 
-def data_pane(pane_id: str, title: str, renderer: str, data: object, subtitle: str = "") -> dict:
+def data_pane(
+    pane_id: str,
+    title: str,
+    renderer: str,
+    data: object,
+    subtitle: str = "",
+    parent: str | None = None,
+) -> dict:
     """A ``data`` pane: structured JSON rendered by the named frontend ``renderer``
     (an unknown name falls back to the generic JSON tree)."""
-    return {
+    pane = {
         "id": pane_id,
         "title": title,
         "subtitle": subtitle,
         "view": {"kind": "data", "renderer": renderer, "data": data},
     }
+    if parent:
+        pane["parent"] = parent
+    return pane
 
 
-def html_pane(pane_id: str, title: str, html: str, subtitle: str = "") -> dict:
+def html_pane(
+    pane_id: str,
+    title: str,
+    html: str,
+    subtitle: str = "",
+    parent: str | None = None,
+) -> dict:
     """An ``html`` pane: the producer ships its own UI, mounted in a sandboxed frame."""
-    return {
+    pane = {
         "id": pane_id,
         "title": title,
         "subtitle": subtitle,
         "view": {"kind": "html", "html": html},
     }
+    if parent:
+        pane["parent"] = parent
+    return pane
 
 
 class PaneProducer:

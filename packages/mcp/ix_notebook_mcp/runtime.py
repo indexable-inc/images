@@ -285,10 +285,18 @@ class Job:
     """A single ``python_exec`` execution: an awaitable handle over the asyncio
     task running the code, with its captured output, result, and status."""
 
-    def __init__(self, code: str, name: str | None = None, budget: float = 15.0, kind: str = "cell") -> None:
+    def __init__(
+        self,
+        code: str,
+        name: str | None = None,
+        budget: float = 15.0,
+        kind: str = "cell",
+        theme: str = "",
+    ) -> None:
         self.id = uuid.uuid4().hex[:8]
         self.code = code
         self.name = name or self.id
+        self.theme = theme
         # 'cell' for a normal execution; 'replay' for a re-run performed while
         # reopening a session file. Replays never feed future replays
         # (store.replayable filters on this), so a session cannot double-run
@@ -336,6 +344,9 @@ class Job:
         # a per-session namespace -- see _session_ns). Set by __ix_run so the
         # bindings snapshot reads the namespace the cell actually wrote to.
         self._ns: dict | None = None
+        # Set once __ix_run returns before the task finishes. When such a job
+        # reaches a terminal state later, notify the agent session.
+        self.backgrounded = False
 
     def _append(self, s: str) -> None:
         """Append output, trimming to the most recent _MAX_OUTPUT_CHARS so a
@@ -1006,8 +1017,9 @@ class Resource:
     widget, anything with a current HTML representation. Register one with
     :func:`register_resource`; while it stays alive the runtime mirrors its
     latest HTML to the store every flush tick and the dashboard sidebar shows
-    all live resources updating in place. The resource closes itself (leaves the
-    sidebar) when its ``alive`` predicate reports the source is gone.
+    all resources updating in place. The resource closes itself (switches to a
+    closed indicator while keeping its final pane) when its ``alive`` predicate
+    reports the source is gone.
 
     Pass ``actions={"name": handler}`` to make the resource interactive: its HTML
     gets ``ix.act(name, payload)`` and ``ix.events(fn)`` injected (see
@@ -1024,10 +1036,12 @@ class Resource:
         render: Any,
         alive: Any = None,
         actions: Mapping[str, Any] | None = None,
+        execution_id: str = "",
     ) -> None:
         self.id = id
         self.title = title
         self.kind = kind
+        self.execution_id = execution_id
         self._render = render
         self._alive = alive
         self.status = "live"
@@ -1044,9 +1058,7 @@ class Resource:
         return self.status == "closed"
 
     def close(self) -> Resource:
-        """Close the resource so the sidebar drops it on the next tick (and tear
-        down its action channel/dispatcher, so a stale page can no longer queue
-        work for it)."""
+        """Close the resource and tear down any action channel/dispatcher."""
         self.status = "closed"
         if self._dispatcher is not None:
             self._dispatcher.cancel()
@@ -1223,7 +1235,7 @@ def register_resource(
       updating one view), instead of spawning a new pane each call. Omitted -> a
       random id, i.e. a new resource every time.
     - ``alive``: optional predicate; when it returns False the resource closes
-      itself and leaves the sidebar. Else call ``.close()`` on the returned handle.
+      itself but keeps its final pane. Else call ``.close()`` on the returned handle.
 
     Viewing it as a native overlay window (macOS): besides the web dashboard, the
     ``ix-windows`` consumer renders each live resource as its own floating, blurred,
@@ -1317,7 +1329,9 @@ def register_resource(
     old = resources.get(rid)
     if old is not None:
         old.close()
-    res = Resource(rid, str(title), kind, render, alive, actions=actions)
+    current = _ix_current.get()
+    execution_id = getattr(current, "id", "") if current is not None else ""
+    res = Resource(rid, str(title), kind, render, alive, actions=actions, execution_id=execution_id)
     resources[rid] = res
     return res
 
@@ -1778,6 +1792,7 @@ class Session:
         self._name = ""  # explicit, user-set via `session.name = ...`
         self._client = ""  # the connecting MCP client's reported identity
         self._workdir = ""  # this kernel's cwd basename, for the default label
+        self._theme = ""  # current fold group for runs in this session
         self._rev = 0
         self._synced = -1
 
@@ -1795,6 +1810,16 @@ class Session:
         self._rev += 1
 
     @property
+    def theme(self) -> str:
+        """The current dashboard fold group for future runs."""
+        return self._theme or "unfiled"
+
+    @theme.setter
+    def theme(self, value: str) -> None:
+        self._theme = " ".join((value or "").split())
+        self._rev += 1
+
+    @property
     def client(self) -> str:
         """The connecting MCP client's reported identity (read-only)."""
         return self._client
@@ -1809,7 +1834,8 @@ class Session:
 
     def __repr__(self) -> str:
         tail = f" · {self._client}" if self._client and self._client != self.name else ""
-        return f"<Session {self.name!r}{tail}>"
+        theme = f" theme={self.theme!r}" if self._theme else ""
+        return f"<Session {self.name!r}{tail}{theme}>"
 
     def _sync(self) -> None:
         """Mirror the session label to the store when it has changed, so the
@@ -2092,6 +2118,7 @@ async def _runner(job: Job, ns: dict) -> None:
                 started_at=job.started,
                 budget=job.budget,
                 kind=job.kind,
+                theme=job.theme,
             )
     try:
         # Static type check BEFORE running (default on; IX_MCP_TYPECHECK=0 or the
@@ -2215,6 +2242,15 @@ async def _runner(job: Job, ns: dict) -> None:
         _ix_current.reset(token)
         _persist_final(job)
         _mark_snapshot_dirty()
+        if job.backgrounded and job.kind != "replay":
+            with contextlib.suppress(Exception):
+                await notify(
+                    f"Background job {job.name} finished with status {job.status}.",
+                    job_id=job.id,
+                    job_name=job.name,
+                    status=job.status,
+                    theme=job.theme,
+                )
 
 
 def _persist_final(job: Job) -> None:
@@ -3003,6 +3039,7 @@ async def _sweep_resources() -> None:
                 status=status,
                 created_at=res.created,
                 updated_at=now,
+                execution_id=res.execution_id,
             )
 
 
@@ -3418,16 +3455,19 @@ async def __ix_run(
     name: str | None = None,
     kind: str = "cell",
     session: str | None = None,
+    theme: str | None = None,
 ) -> Job:
     """Run ``code`` as a task; wait up to ``budget`` for it; return the Job either
     way (done, or still running in the background). ``session`` selects the
     namespace the code runs in (see :func:`_session_ns`)."""
     ns = _session_ns(session)
-    job = Job(code, name, budget=budget, kind=kind)
+    job = Job(code, name, budget=budget, kind=kind, theme=theme or globals()["session"].theme)
     job._ns = ns
     jobs[job.id] = job
     job.task = asyncio.ensure_future(_runner(job, ns))
     await asyncio.wait({job.task}, timeout=budget)
+    if not job.task.done():
+        job.backgrounded = True
     return job
 
 
@@ -3460,6 +3500,7 @@ def _job_summary(job: Job) -> dict:
     return {
         "id": job.id,
         "name": job.name,
+        "theme": job.theme,
         "status": job.status,
         "running": job.running(),
         "output": job.tail(_SUMMARY_CHARS),
@@ -3514,12 +3555,16 @@ def _emit(job: Job) -> None:
 
 
 async def __ix_exec(
-    code: str, budget: float = 15.0, name: str | None = None, session: str | None = None
+    code: str,
+    budget: float = 15.0,
+    name: str | None = None,
+    session: str | None = None,
+    theme: str | None = None,
 ) -> None:
     """The MCP server's per-call entrypoint: run with a budget, emit the summary.
     ``session`` is the caller's MCP session id (per-session namespace; None for
     the shared one)."""
-    job = await __ix_run(code, budget=budget, name=name, session=session)
+    job = await __ix_run(code, budget=budget, name=name, session=session, theme=theme)
     _emit(job)
 
 

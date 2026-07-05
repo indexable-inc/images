@@ -1,10 +1,11 @@
-// The unified sidebar's data model: sessions (each holding its runs), resources,
-// and recordings, grouped under foldable sections. Building the tree once — and
-// reading it for both rendering and keyboard navigation — guarantees that what
+// The unified sidebar's data model: sessions (each holding resources and runs),
+// global resources, and recordings, grouped under foldable sections. Building
+// the tree once and reading it for both rendering and keyboard navigation
+// guarantees that what
 // `j`/`k` walk is exactly what the eye sees, honouring every fold.
 import { paneScope, compareCreatedAt } from './scope.ts';
 import { feedSessions, shortScope, type FeedSession } from './feed-sessions.ts';
-import { isRun, isResource, ledOf, kindOf, withKey, type Led } from './run.ts';
+import { isRun, isResource, ledOf, kindOf, paneId, withKey, type Led } from './run.ts';
 import type { Pane, PaneRecord } from './types.ts';
 import type { RecordingInfo } from './stream.svelte.ts';
 
@@ -28,6 +29,21 @@ export interface RunNode {
   key: string;
   pane: Pane;
   led: Led;
+  resources: ResourceNode[];
+}
+
+export interface ResourceNode {
+  key: string;
+  pane: Pane;
+  led: Led;
+  parent?: string;
+}
+
+export interface ThemeNode {
+  key: string;
+  label: string;
+  runs: RunNode[];
+  lastActivity?: number;
 }
 
 export interface SessionNode {
@@ -36,13 +52,9 @@ export interface SessionNode {
   // The session's newest run's created_at; the card renders it as an age and the
   // sidebar sorts sessions by it (newest first).
   lastActivity?: number;
+  resources: ResourceNode[];
+  themes: ThemeNode[];
   runs: RunNode[];
-}
-
-export interface ResourceNode {
-  key: string;
-  pane: Pane;
-  led: Led;
 }
 
 export interface SidebarModel {
@@ -73,6 +85,28 @@ function lastRunActivity(runs: RunNode[]): number | undefined {
   return runs.length ? runs[runs.length - 1].pane.created_at : undefined;
 }
 
+function themeLabel(run: RunNode): string {
+  const raw = run.pane.theme?.trim();
+  return raw || 'unthemed';
+}
+
+function groupRunsByTheme(runs: RunNode[]): ThemeNode[] {
+  const themes: ThemeNode[] = [];
+  const byKey = new Map<string, ThemeNode>();
+  for (const run of runs) {
+    const label = themeLabel(run);
+    let theme = byKey.get(label);
+    if (!theme) {
+      theme = { key: label, label, runs: [], lastActivity: undefined };
+      byKey.set(label, theme);
+      themes.push(theme);
+    }
+    theme.runs.push(run);
+    theme.lastActivity = run.pane.created_at;
+  }
+  return themes;
+}
+
 // Newest-activity first (a session whose last run is more recent sorts above one
 // whose last run is older), scope as the stable tie-break. A session with no
 // timed run sorts last.
@@ -96,11 +130,17 @@ export function buildSidebar(
   // ordering (by last run activity), so it is taken here, not there.
   const sessionOrder: FeedSession[] = feedSessions(panes);
   const runsByScope = new Map<string, RunNode[]>();
+  const resourcesByScope = new Map<string, ResourceNode[]>();
   for (const { key, pane } of all) {
-    if (!isRun(key, pane)) continue;
-    const rows = runsByScope.get(pane.scope) ?? [];
-    rows.push({ key, pane, led: ledOf(pane) });
-    runsByScope.set(pane.scope, rows);
+    if (isRun(key, pane)) {
+      const rows = runsByScope.get(pane.scope) ?? [];
+      rows.push({ key, pane, led: ledOf(pane), resources: [] });
+      runsByScope.set(pane.scope, rows);
+    } else if (isResource(key, pane)) {
+      const rows = resourcesByScope.get(pane.scope) ?? [];
+      rows.push({ key, pane, led: ledOf(pane), parent: pane.parent });
+      resourcesByScope.set(pane.scope, rows);
+    }
   }
 
   // Keep only scopes that hold runs (a pure-resource scope isn't a session),
@@ -109,10 +149,22 @@ export function buildSidebar(
   const sessions: SessionNode[] = sessionOrder
     .map((s) => {
       const runs = (runsByScope.get(s.scope) ?? []).sort(compareRunsOldestFirst);
+      const allResources = (resourcesByScope.get(s.scope) ?? []).sort(
+        (a, b) =>
+          compareCreatedAt(a.pane.created_at, b.pane.created_at) || a.key.localeCompare(b.key),
+      );
+      const runsByPaneId = new Map(runs.map((run) => [paneId(run.key), run]));
+      for (const resource of allResources) {
+        const parent = resource.parent ? runsByPaneId.get(resource.parent) : undefined;
+        if (parent) parent.resources.push(resource);
+      }
+      const resources = allResources.filter((resource) => !resource.parent || !runsByPaneId.has(resource.parent));
       return {
         scope: s.scope,
         label: s.label,
         lastActivity: lastRunActivity(runs),
+        resources,
+        themes: groupRunsByTheme(runs),
         runs,
       };
     })
@@ -121,7 +173,7 @@ export function buildSidebar(
 
   const resources: ResourceNode[] = all
     .filter(({ key, pane }) => isResource(key, pane))
-    .map(({ key, pane }) => ({ key, pane, led: ledOf(pane) }))
+    .map(({ key, pane }) => ({ key, pane, led: ledOf(pane), parent: pane.parent }))
     .sort(
       (a, b) =>
         compareCreatedAt(a.pane.created_at, b.pane.created_at) || a.key.localeCompare(b.key),
@@ -143,7 +195,7 @@ export function resourceMeta(p: Pane): string {
   return p.subtitle || p.kind || 'html';
 }
 
-// One flattened, currently-visible selectable row, in render order — exactly what
+// One flattened, currently-visible selectable row in render order, exactly what
 // `j`/`k` step through. Session headers and section headers are not selectable
 // targets (folding them is a separate motion), so only runs, resources, and
 // recordings appear here.
@@ -161,7 +213,14 @@ export function flattenVisible(
   if (open('sessions')) {
     for (const s of model.sessions) {
       if (!open('sess:' + s.scope)) continue;
-      for (const r of s.runs) out.push({ selection: { kind: 'run', key: r.key } });
+      for (const r of s.resources) out.push({ selection: { kind: 'resource', key: r.key } });
+      for (const t of s.themes) {
+        if (!open('theme:' + s.scope + ':' + t.key)) continue;
+        for (const r of t.runs) {
+          out.push({ selection: { kind: 'run', key: r.key } });
+          for (const resource of r.resources) out.push({ selection: { kind: 'resource', key: resource.key } });
+        }
+      }
     }
   }
   if (open('resources')) {

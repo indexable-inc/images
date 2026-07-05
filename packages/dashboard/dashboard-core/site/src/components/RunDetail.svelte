@@ -138,7 +138,7 @@
               <span class="caret"></span><span class="panel-label">code</span>
               <span class="panel-hint">{pane.lang || 'source'}</span>
             </summary>
-            <div class="panel-body"><CodeBlock code={pane.source ?? ''} lang={pane.lang ?? 'text'} /></div>
+            <div class="panel-body"><CodeBlock code={pane.source ?? ''} lang={pane.lang ?? 'text'} line={pane.line ?? null} errorLine={pane.error_line ?? null} /></div>
           </details>
         {/if}
         {#if hasStreamOut || resultIsPrimary || running}

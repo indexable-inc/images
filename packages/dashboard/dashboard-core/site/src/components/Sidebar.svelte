@@ -1,6 +1,6 @@
 <script lang="ts">
   // The unified left sidebar: the ix logotype + live dot, a filter box, then three
-  // foldable sections — SESSIONS (each session foldable, its runs nested
+  // foldable sections: SESSIONS (each session foldable, its runs nested
   // oldest-first, a log growing downward), RESOURCES, and RECORDINGS. It owns the center-stage selection
   // and the vim keyboard nav; fold state is persisted in ui. Folding is driven by
   // ui.folds (not native <details>) so the flattened keyboard walk matches exactly
@@ -32,34 +32,74 @@
   let filterEl: HTMLInputElement | undefined;
   const q = $derived(query.trim().toLowerCase());
 
-  function runMatches(r: typeof model.sessions[number]['runs'][number]): boolean {
+  function paneMatches(r: typeof model.resources[number]): boolean {
     if (!q) return true;
     return [r.pane.title, r.pane.subtitle, r.pane.lang, paneId(r.key)].some((v) =>
       (v ?? '').toLowerCase().includes(q),
     );
   }
-  // A session's visible runs under the filter: all if the session label matches,
-  // else only the matching runs.
-  function visibleRuns(label: string, runs: typeof model.sessions[number]['runs']) {
-    if (!q || label.toLowerCase().includes(q)) return runs;
-    return runs.filter(runMatches);
+  function themeMatches(t: typeof model.sessions[number]['themes'][number]): boolean {
+    return !q || t.label.toLowerCase().includes(q);
+  }
+  // A session's visible children under the filter: all if the session label
+  // matches, else only matching resources and runs.
+  function visibleSession(s: typeof model.sessions[number]) {
+    if (!q || s.label.toLowerCase().includes(q)) return s;
+    const themes = s.themes
+      .map((t) => {
+        if (themeMatches(t)) return t;
+        const runs = t.runs
+          .map((r) => {
+            if (paneMatches(r)) return r;
+            const resources = r.resources.filter(paneMatches);
+            return resources.length > 0 ? { ...r, resources } : null;
+          })
+          .filter((r) => r !== null);
+        return { ...t, runs };
+      })
+      .filter((t) => t.runs.length > 0);
+    return {
+      ...s,
+      resources: s.resources.filter(paneMatches),
+      themes,
+      runs: themes.flatMap((t) => t.runs),
+    };
   }
 
   const sessions = $derived(
     model.sessions
-      .map((s) => ({ ...s, runs: visibleRuns(s.label, s.runs) }))
-      .filter((s) => s.runs.length > 0),
+      .map(visibleSession)
+      .filter((s) => s.resources.length > 0 || s.runs.length > 0),
   );
   const resources = $derived(
-    model.resources.filter(runMatches),
+    model.resources.filter(paneMatches),
   );
   const recordings = $derived(
     model.recordings.filter((rec) => !q || rec.id.toLowerCase().includes(q)),
   );
 
-  // The filtered model the keyboard walks. Fold checks read ui via isOpen.
+  function themeFoldKey(s: typeof sessions[number], t: typeof s.themes[number]): string {
+    return 'theme:' + s.scope + ':' + t.key;
+  }
+  const themeDefaults = $derived(
+    new Map(
+      sessions.flatMap((s) => {
+        const newest = s.themes.reduce<typeof s.themes[number] | null>(
+          (best, t) => (best && (best.lastActivity ?? 0) >= (t.lastActivity ?? 0) ? best : t),
+          null,
+        );
+        return s.themes.map((t) => [themeFoldKey(s, t), t.key === newest?.key] as const);
+      }),
+    ),
+  );
+  function openFold(foldKey: string): boolean {
+    return ui.folds[foldKey] ?? themeDefaults.get(foldKey) ?? isOpen(foldKey);
+  }
+
+  // The filtered model the keyboard walks. Theme folds default to opening only
+  // the newest theme in each session, so completed earlier phases stay tucked away.
   const filteredModel = $derived({ ...model, sessions, resources, recordings });
-  const flat = $derived(flattenVisible(filteredModel, isOpen));
+  const flat = $derived(flattenVisible(filteredModel, openFold));
 
   // ----- selection -------------------------------------------------------
   function onSelect(sel: Selection): void {
@@ -121,11 +161,21 @@
     selectIndex((i < 0 ? 0 : i) + delta);
   }
 
-  // The fold key of the selection's owning session (runs live under one), for
-  // h/za to act on the enclosing session.
-  function sessionFoldKeyOf(sel: Selection | null): string | null {
-    if (!sel || sel.kind !== 'run') return null;
-    for (const s of sessions) if (s.runs.some((r) => r.key === sel.key)) return 'sess:' + s.scope;
+  // The fold key of the selection's closest owner. Resources live under the
+  // session, while runs live under the theme inside that session.
+  function ownerFoldKeyOf(sel: Selection | null): string | null {
+    if (!sel || (sel.kind !== 'run' && sel.kind !== 'resource')) return null;
+    for (const s of sessions) {
+      if (s.resources.some((r) => r.key === sel.key)) {
+        return 'sess:' + s.scope;
+      }
+      for (const t of s.themes) {
+        if (t.runs.some((r) => r.key === sel.key)) return themeFoldKey(s, t);
+        if (t.runs.some((r) => r.resources.some((resource) => resource.key === sel.key))) {
+          return themeFoldKey(s, t);
+        }
+      }
+    }
     return null;
   }
 
@@ -144,13 +194,19 @@
   }
   // `h`: fold the enclosing session (if a run is selected), else fold the section.
   function back(): void {
-    const foldKey = sessionFoldKeyOf(ui.selection);
+    const foldKey = ownerFoldKeyOf(ui.selection);
     if (foldKey) setFold(foldKey, false);
   }
   // `za`: toggle the enclosing session's fold.
   function fold(): void {
-    const foldKey = sessionFoldKeyOf(ui.selection);
+    const foldKey = ownerFoldKeyOf(ui.selection);
     if (foldKey) toggleFold(foldKey);
+  }
+
+  function durationHeat(ms: number | undefined): string {
+    if (!ms) return '';
+    const pct = Math.min(24, Math.max(4, Math.round(Math.log10(ms + 1) * 5)));
+    return `--dur-heat: ${pct}%`;
   }
 
   onMount(() => {
@@ -210,19 +266,63 @@
             <span class="session-age">{age ? `active ${age}` : ''}</span>
           </button>
           {#if isOpen(foldKey)}
-            {#each s.runs as r (r.key)}
-              {@const running = r.led === 'running'}
+            {#each s.resources as r (r.key)}
               <button
-                class="run-row"
-                class:selected={ui.selection?.kind === 'run' && ui.selection.key === r.key}
+                class="res-row in-session"
+                class:selected={ui.selection?.kind === 'resource' && ui.selection.key === r.key}
                 data-nav={r.key}
-                onclick={() => onSelect({ kind: 'run', key: r.key })}
-                title={runTooltip(running, r.pane.duration_ms, r.pane.created_at, refMs) || r.pane.title || ''}
+                onclick={() => onSelect({ kind: 'resource', key: r.key })}
+                title={r.pane.title || ''}
               >
+                <span class="res-icon">{kindOf(r.pane) === 'terminal' ? '▮' : '▤'}</span>
+                <span class="res-name">{r.pane.title || '(resource)'}</span>
                 <span class="led led-{r.led}"></span>
-                <span class="run-intent">{r.pane.title || '(run)'}</span>
-                <span class="run-time">{humanTime(r.pane.created_at, refMs)}</span>
+                <span class="res-meta">{resourceMeta(r.pane)}</span>
               </button>
+            {/each}
+            {#each s.themes as t (t.key)}
+              {@const themeKey = themeFoldKey(s, t)}
+              <button
+                class="theme-head"
+                onclick={() => toggleFold(themeKey)}
+                aria-expanded={openFold(themeKey)}
+                title={t.label}
+              >
+                <span class="caret" class:open={openFold(themeKey)}></span>
+                <span class="theme-name">{t.label}</span>
+                <span class="theme-count">{t.runs.length}</span>
+              </button>
+              {#if openFold(themeKey)}
+                {#each t.runs as r (r.key)}
+                  {@const running = r.led === 'running'}
+                  <button
+                    class="run-row"
+                    class:selected={ui.selection?.kind === 'run' && ui.selection.key === r.key}
+                    data-nav={r.key}
+                    onclick={() => onSelect({ kind: 'run', key: r.key })}
+                    style={durationHeat(r.pane.duration_ms)}
+                    title={runTooltip(running, r.pane.duration_ms, r.pane.created_at, refMs) || r.pane.title || ''}
+                  >
+                    <span class="led led-{r.led}"></span>
+                    <span class="run-intent">{r.pane.title || '(run)'}</span>
+                    <span class="run-time">{humanTime(r.pane.created_at, refMs)}</span>
+                  </button>
+                  {#each r.resources as child (child.key)}
+                    <button
+                      class="res-row in-run"
+                      class:selected={ui.selection?.kind === 'resource' && ui.selection.key === child.key}
+                      data-nav={child.key}
+                      onclick={() => onSelect({ kind: 'resource', key: child.key })}
+                      title={child.pane.title || ''}
+                    >
+                      <span class="res-icon">{kindOf(child.pane) === 'terminal' ? '▮' : '▤'}</span>
+                      <span class="res-name">{child.pane.title || '(resource)'}</span>
+                      <span class="led led-{child.led}"></span>
+                      <span class="res-meta">{resourceMeta(child.pane)}</span>
+                    </button>
+                  {/each}
+                {/each}
+              {/if}
             {/each}
           {/if}
         {/each}
@@ -457,14 +557,46 @@
     font-variant-numeric: tabular-nums;
   }
 
+  .theme-head {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px 5px 28px;
+    font: inherit;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-faint);
+    background: none;
+    border: 0;
+    cursor: pointer;
+    text-align: left;
+  }
+  .theme-head:hover {
+    background: var(--elev, var(--panel));
+  }
+  .theme-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .theme-count {
+    flex: none;
+    font-size: 10px;
+    color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+  }
+
   .run-row {
     width: 100%;
     display: flex;
     align-items: center;
     gap: 7px;
-    padding: 5px 10px 5px 34px;
+    padding: 5px 10px 5px 42px;
     font: inherit;
-    background: none;
+    background: color-mix(in srgb, var(--accent) var(--dur-heat, 0%), transparent);
     border: 0;
     border-left: 2px solid transparent;
     cursor: pointer;
@@ -520,6 +652,12 @@
   .rec-row.selected {
     background: var(--accent-soft);
     border-left-color: var(--accent);
+  }
+  .res-row.in-session {
+    padding-left: 28px;
+  }
+  .res-row.in-run {
+    padding-left: 54px;
   }
   .res-icon {
     flex: none;

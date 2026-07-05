@@ -147,7 +147,9 @@ _dashboard_started = False
 # (index#1789 review). The one stdio/embedder client has no session object to
 # key on; its label lives in `_solo_session_name` and dies with the process.
 _session_labels: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_session_themes: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _solo_session_name: str | None = None
+_solo_theme: str | None = None
 
 
 def _session_label(ctx: Context | None) -> str | None:
@@ -166,6 +168,51 @@ def _set_session_label(ctx: Context | None, name: str) -> None:
     else:
         _session_labels[session] = name
 
+
+
+
+def _session_theme(ctx: Context | None) -> str | None:
+    """The current fold theme this call's session chose."""
+    session = _http_session(ctx)
+    if session is None:
+        return _solo_theme
+    return _session_themes.get(session)
+
+
+def _set_session_theme(ctx: Context | None, theme: str) -> None:
+    global _solo_theme
+    session = _http_session(ctx)
+    if session is None:
+        _solo_theme = theme
+    else:
+        _session_themes[session] = theme
+
+
+def _theme_required() -> bool:
+    """Whether python_exec requires an explicit theme first."""
+    return os.environ.get("IX_MCP_REQUIRE_THEME", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
+async def _require_theme(ctx: Context | None, *, intent: str | None = None) -> None:
+    """Fail fast until this MCP session has named the current dashboard theme."""
+    if not _theme_required() or _session_theme(ctx) is not None:
+        return
+    suggestion = f" Suggested theme from this call: {intent!r}." if intent else ""
+    raise McpError(
+        ErrorData(
+            code=types.INVALID_REQUEST,
+            message=(
+                "Set a dashboard theme first: call theme_set with a short label for "
+                "the current cluster of related tool calls."
+                f"{suggestion}"
+            ),
+        )
+    )
 
 def session_names() -> list[str]:
     """The labels live MCP sessions gave themselves, for the mesh endpoint.
@@ -360,6 +407,42 @@ async def session_set_name(
     return [outputs.text(f"dashboard session named: {clean}")]
 
 
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Set the current dashboard theme for this MCP connection. Call this before "
+        "a related cluster of python_exec calls, and change it when the work moves "
+        "to a new phase; runs fold under the theme inside the session."
+    ),
+)
+async def theme_set(
+    theme: Annotated[
+        str,
+        Field(
+            description=(
+                "Short label for the current cluster of related tool calls, 3 to "
+                "80 characters, with no code or secrets"
+            )
+        ),
+    ],
+    ctx: Context | None = None,
+) -> Content:
+    await _start_dashboard_once()
+    await _identify_client_once(ctx)
+    await _require_session_name(ctx, intent=theme)
+    clean = " ".join((theme or "").split())
+    if not 3 <= len(clean) <= 80:
+        raise McpError(
+            ErrorData(
+                code=types.INVALID_PARAMS,
+                message="Theme must be 3 to 80 non-whitespace characters.",
+            )
+        )
+    await current_kernel().set_theme(clean)
+    _set_session_theme(ctx, clean)
+    return [outputs.text(f"dashboard theme set: {clean}")]
+
+
 # Every tool sets structured_output=False: FastMCP otherwise derives an output
 # schema from the return annotation and DUPLICATES the entire reply as
 # `structuredContent` JSON, so each image block went to the client twice (once
@@ -386,6 +469,7 @@ async def python_exec(
     await _start_dashboard_once()
     await _identify_client_once(ctx)
     await _require_session_name(ctx, intent=intent)
+    await _require_theme(ctx, intent=intent)
     # A foreground budget is how long the run holds the one shared shell channel
     # before it backgrounds, so cap it: a giant budget (a 15-minute `await
     # jobs[...]`) would block every other call behind it. The clamp is surfaced
@@ -395,7 +479,7 @@ async def python_exec(
     # `intent` is the run's human label (the dashboard feed's title); it flows to
     # the kernel as the job name and lands in the store's `name` column.
     cell_outputs, summary = await current_kernel().python_exec(
-        code, effective_budget, intent, session=_session_id(ctx)
+        code, effective_budget, intent, session=_session_id(ctx), theme=_session_theme(ctx)
     )
     rendered = outputs.to_mcp(cell_outputs)
     if summary is None:

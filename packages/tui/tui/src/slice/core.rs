@@ -3,7 +3,7 @@ use crate::{Error, Result};
 /// A resolved 1-indexed inclusive range, with optional endpoints filled in from
 /// the available extent.
 #[derive(Debug, Clone, Copy)]
-struct Bounds {
+pub(super) struct Bounds {
     /// First selected index (1-indexed, inclusive).
     from: usize,
     /// Last selected index (1-indexed, inclusive).

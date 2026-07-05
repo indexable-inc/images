@@ -527,14 +527,18 @@ let
     {
       shellCwd = {
         text = ''
-          The kernel `sh()` has no persistent cwd or shell state. Pass `cwd=<abs path>`
+          Prefer `nu` for shell-shaped work whose output you will filter, reshape, or
+          parse; it preserves structure and returns Polars DataFrames. Use `sh()` for
+          raw logs, writes, or external commands whose text must stay verbatim. The
+          kernel `sh()` has no persistent cwd or shell state. Pass `cwd=<abs path>`
           on every call, or use `git -C <worktree>`. Use argv-list form for commands
           containing backticks or `$(...)`: `sh([...])`. Before commit or branch work,
           verify the repo root and branch match the assigned worktree.
         '';
         reason = ''
           Kernel shells carry no cwd between calls; commit and branch work landed in
-          the wrong repo or branch.
+          the wrong repo or branch. DataFrame-shaped command results are easier to
+          inspect in the dashboard than dicts or scraped text.
         '';
       };
     }
@@ -549,7 +553,7 @@ let
           strength to task difficulty: strongest for hard reasoning, planning, and
           high-stakes decisions; cheaper tiers for mechanical edits, search, and
           settled execution. For simple delegated questions, use the MCP subagent
-          tool to spawn Codex with low reasoning.
+          tool to spawn Codex on `gpt-5.5` with low reasoning.
         '';
         reason = ''
           Serial main-thread editing wasted wall clock on independent work and bloated
@@ -636,7 +640,10 @@ let
           Search with `fff.grep` and `fff.find`; run `api()` for helpers. Do not shell
           out to `rg` or `fd` inside the kernel. Run independent non-mutating commands
           concurrently with `asyncio.gather` or `asyncio.TaskGroup`. If the kernel
-          wedges, restart it or report the blocker.
+          wedges, restart it or report the blocker. Set a dashboard theme before
+          clusters of related kernel work and change it at phase boundaries; keep
+          several related tool calls under one theme so completed phases can fold
+          away as one group.
         '';
         reason = ''
           Shelling out to `rg`/`fd` or sync subprocesses froze the kernel's single
@@ -648,9 +655,16 @@ let
       structuredPrimitives = {
         text = ''
           Prefer structured primitives over text munging: `view.ls`, `view.tree`,
-          `view.cat`, `fff.grep`, and `fff.find`. Parse `sh` output with `.json()`,
-          `.jsonl()`, or `.df()`. Run one command per `sh()` call and combine results in
-          Python. Return tables as polars DataFrames.
+          `view.cat`, `fff.grep`, `fff.find`, and `nu` pipelines. For command output
+          you plan to filter or parse, use `nu` first so the result arrives as a Polars
+          DataFrame; use `sh().json()`, `.jsonl()`, or `.df()` only when `sh` is the
+          right tool. Return tables as Polars DataFrames.
+
+
+          For reusable Python, write explicit annotations at function and data
+          boundaries. For package Python edits, run the repo's type-checking
+          entry point when one exists; do not treat an untyped compile-only
+          check as equivalent.
         '';
         reason = ''
           Ad hoc text munging of command output was fragile, and combining commands in

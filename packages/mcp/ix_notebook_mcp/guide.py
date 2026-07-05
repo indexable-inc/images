@@ -104,14 +104,19 @@ BLOCKING = (
 RESULT_CONTRACT = (
     "Cells behave like a notebook: the last expression is the result, whatever its type (`2+2` "
     "returns 4, `df` returns the styled table with compact CSV to you, a string returns "
-    "verbatim, a dict/list renders as a table), and anything the cell printed comes back with "
+    "verbatim, a dict/list renders as a table). Prefer returning a Polars DataFrame for "
+    "structured facts you expect to inspect, sort, filter, or show on the dashboard. Anything "
+    "the cell printed comes back with "
     "it. A cell whose last statement is None (an assignment, a side-effecting call) returns its "
     "stdout, or a quiet ok. `yield` streams: each yielded value reaches both the human and you "
     "the moment it is produced, so yield as you go to report progress and partial results. "
     "`Result` is the opt-in for splitting the two views, `Result(user_html=..., llm_result=..., "
     "llm_images=...)`, when the human should see something rich that you should not pay tokens "
     "for (note: an explicit Result suppresses the automatic stdout echo; page "
-    "jobs['<id>'].output instead)."
+    "jobs['<id>'].output instead). For reusable Python in the kernel, write explicit "
+    "annotations at function and data boundaries. For package Python edits, run the repo's "
+    "type-checking entry point when one exists, and do not treat an untyped compile-only "
+    "check as equivalent."
 )
 
 # --- kernel guide only ---
@@ -126,9 +131,12 @@ SESSION = (
     "you make is grouped under this session on the live dashboard, and a human may "
     "be watching several agents at once; a clear name is how they tell yours apart. "
     "It defaults to the connecting client and working directory (e.g. `claude-code · index`), "
-    "which is ambiguous once agents share a repo, so name it. Also pass a one-line "
-    "`intent` on every `python_exec` (it is required): the intent titles the run's "
-    "card, so the board reads as a list of intents, not raw code."
+    "which is ambiguous once agents share a repo, so name it. Then call `theme_set` "
+    "before the first `python_exec` call and whenever you switch phases. A theme "
+    "groups a handful of related runs under one fold in the dashboard, so use labels "
+    "like `inspect diff`, `patch sidebar`, or `validate build`, not one theme per "
+    "call. Also pass a one-line `intent` on every `python_exec` (it is required): "
+    "the intent titles the run's card, so the board reads as a list of intents, not raw code."
 )
 
 DISCOVER = (
@@ -156,15 +164,18 @@ NO_SHELL = (
 )
 
 NU = (
-    "For everything else a shell would do — running a command and shaping its output, a "
-    "pipeline, listing/filtering/transforming, reaching into files or the web — reach for `nu` "
+    "For everything else a shell would do: running a command and shaping its output, a "
+    "pipeline, listing/filtering/transforming, reaching into files or the web, reach for `nu` "
     "FIRST, before `sh`. `await nu(\"ls | where size > 1kb | sort-by size\")` runs a real "
-    "nushell pipeline and every result comes back as a polars DataFrame, structured end to end "
+    "nushell pipeline and every result comes back as a Polars DataFrame, structured end to end "
     "(`ls`, `ps`, `sys`, `open Cargo.toml`, `from csv`, `http get`, `where`, `group-by`, "
     "`select`) — no jq/awk/sed/cut text munging and no scraping columns out of a text dump. A "
     "record is one row, a scalar a one-cell `value` column; dates and durations arrive as real "
     "Datetime/Duration columns and filesize as bytes, so you filter and sort on typed values, "
-    "not strings. The engine is embedded and PERSISTENT, a REPL: a `let`, a `def`, or a `cd` in "
+    "not strings. For `gh ... --json`, clear color forcing before `from json`: "
+    "`with-env {NO_COLOR: \"1\" CLICOLOR: \"0\" CLICOLOR_FORCE: \"0\" FORCE_COLOR: \"0\"} "
+    "{ gh pr view 1 --json state | complete | get stdout | from json }`. "
+    "The engine is embedded and PERSISTENT, a REPL: a `let`, a `def`, or a `cd` in "
     "one call is visible to the next, so bind an expensive fetch once (`let data = http get "
     "...`) and query it across calls; `nu.reset()` clears that state. Pipe a polars frame you "
     "already have THROUGH a pipeline with `await nu(\"where a > 1 | sort-by a\", input=df)`. Use "
@@ -251,7 +262,7 @@ OUTPUT_HTML = (
 )
 
 POLARS = (
-    "Prefer polars for any tabular data: return a DataFrame (or `Result.of(df)`) and the human "
+    "Prefer Polars for any tabular data: return a DataFrame (or `Result.of(df)`) and the human "
     "gets the styled HTML table for free while you get the frame as compact, untruncated CSV — so "
     "you never hand-build a table and a wide/long-stringed frame is never clipped to you. Use "
     "`pl`; pandas is not bundled. Even key/value data — environment variables, a config dict, "

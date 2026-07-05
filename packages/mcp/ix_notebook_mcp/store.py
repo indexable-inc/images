@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS executions (
     outputs     TEXT NOT NULL DEFAULT '[]',
     bindings    TEXT NOT NULL DEFAULT '{}',
     kind        TEXT NOT NULL DEFAULT 'cell',
-    namespace   TEXT NOT NULL DEFAULT '[]'
+    namespace   TEXT NOT NULL DEFAULT '[]',
+    theme       TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS executions_started ON executions (started_at);
 
@@ -69,6 +70,7 @@ CREATE TABLE IF NOT EXISTS resources (
     kind        TEXT NOT NULL DEFAULT 'html',
     html        TEXT NOT NULL DEFAULT '',
     status      TEXT NOT NULL DEFAULT 'live',
+    execution_id TEXT NOT NULL DEFAULT '',
     created_at  REAL NOT NULL,
     updated_at  REAL NOT NULL
 );
@@ -191,6 +193,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "namespace" not in have:
         with contextlib.suppress(sqlite3.OperationalError):
             conn.execute("ALTER TABLE executions ADD COLUMN namespace TEXT NOT NULL DEFAULT '[]'")
+    if "theme" not in have:
+        with contextlib.suppress(sqlite3.OperationalError):
+            conn.execute("ALTER TABLE executions ADD COLUMN theme TEXT NOT NULL DEFAULT ''")
+    resource_have = {row[1] for row in conn.execute("PRAGMA table_info(resources)")}
+    if "execution_id" not in resource_have:
+        with contextlib.suppress(sqlite3.OperationalError):
+            conn.execute("ALTER TABLE resources ADD COLUMN execution_id TEXT NOT NULL DEFAULT ''")
 
 
 def start(
@@ -202,11 +211,12 @@ def start(
     started_at: float,
     budget: float = 15.0,
     kind: str = "cell",
+    theme: str = "",
 ) -> None:
     conn.execute(
-        "INSERT OR REPLACE INTO executions (id, name, code, status, started_at, budget, output, kind) "
-        "VALUES (?, ?, ?, 'running', ?, ?, '', ?)",
-        (id, name, code, started_at, budget, kind),
+        "INSERT OR REPLACE INTO executions (id, name, code, status, started_at, budget, output, kind, theme) "
+        "VALUES (?, ?, ?, 'running', ?, ?, '', ?, ?)",
+        (id, name, code, started_at, budget, kind, theme),
     )
 
 
@@ -279,7 +289,7 @@ def finish(
 # `get` return the identical shape (the embed contract in feed.py depends on it).
 _EXEC_COLUMNS = (
     "id, name, code, status, started_at, ended_at, budget, output, result, error, "
-    "line, error_line, outputs, bindings, kind"
+    "line, error_line, outputs, bindings, kind, theme"
 )
 
 
@@ -434,20 +444,21 @@ def upsert_resource(
     status: str,
     created_at: float,
     updated_at: float,
+    execution_id: str = "",
 ) -> None:
     """Insert a resource or refresh its rendered HTML/status in place."""
     conn.execute(
-        "INSERT INTO resources (id, title, kind, html, status, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "INSERT INTO resources (id, title, kind, html, status, execution_id, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(id) DO UPDATE SET "
         "title = excluded.title, kind = excluded.kind, html = excluded.html, "
-        "status = excluded.status, updated_at = excluded.updated_at",
-        (id, title, kind, html, status, created_at, updated_at),
+        "status = excluded.status, execution_id = excluded.execution_id, updated_at = excluded.updated_at",
+        (id, title, kind, html, status, execution_id, created_at, updated_at),
     )
 
 
 def close_resource(conn: sqlite3.Connection, *, id: str, updated_at: float) -> None:
-    """Mark a resource closed so the sidebar drops it (the row stays for history)."""
+    """Mark a resource closed while keeping its final pane visible."""
     conn.execute(
         "UPDATE resources SET status = 'closed', updated_at = ? WHERE id = ?",
         (updated_at, id),
@@ -710,10 +721,10 @@ def replayable(conn: sqlite3.Connection, since: float | None) -> list[dict]:
 
 
 def live_resources(conn: sqlite3.Connection) -> list[dict]:
-    """Every resource not yet closed, oldest first, as plain dicts for the sidebar."""
+    """Every resource, oldest first, as plain dicts for the sidebar."""
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT id, title, kind, html, status, created_at, updated_at "
-        "FROM resources WHERE status != 'closed' ORDER BY created_at ASC"
+        "SELECT id, title, kind, html, status, execution_id, created_at, updated_at "
+        "FROM resources ORDER BY created_at ASC"
     ).fetchall()
     return [dict(r) for r in rows]
