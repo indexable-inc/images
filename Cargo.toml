@@ -320,6 +320,9 @@ tui = { path = "packages/tui/tui" }
 url = { version = "2.5.8", default-features = false }
 uuid = "1"
 webpki-roots = "1"
-wry = "0.55"
+# `transparent` is a non-default feature: without it `with_transparent(true)`
+# is a silent no-op and the webview paints an opaque canvas, hiding the
+# ix-windows blur behind a flat card.
+wry = { version = "0.55", features = ["transparent"] }
 x509-parser = "0.18"
 xxhash-rust = { version = "0.8", default-features = false }
