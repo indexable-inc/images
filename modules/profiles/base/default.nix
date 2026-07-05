@@ -566,6 +566,10 @@ in {
           ripgrep
           strace
           tcpdump
+          # Complements ripgrep with what it lacks: boolean queries
+          # (-%), fuzzy match (-Z), and searching inside archives and
+          # compressed files (-z).
+          ugrep
           # Pane and tab multiplexer for one session. Connection survival
           # across SSH drops is handled by ix itself (AGENTS.md "VM
           # assumptions"), so zellij is shipped for splits, not reattach.
