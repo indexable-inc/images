@@ -611,11 +611,18 @@ let
           high-stakes decisions; cheaper tiers for mechanical edits, search, and
           settled execution. For simple delegated questions, use the MCP subagent
           tool to spawn Codex on `gpt-5.5` with low reasoning.
+          When a request branches off the current conversation (a side task,
+          fix, or change that is not the thread's main line), dispatch it to a
+          named background subagent by default and keep the main thread
+          conversational; do the work inline only when it is the conversation's
+          actual subject or trivially quick.
         '';
         reason = ''
           Serial main-thread editing wasted wall clock on independent work and bloated
           the orchestrating context. Simple lookup questions do not need expensive
-          reasoning, but still benefit from separate context.
+          reasoning, but still benefit from separate context. Doing a mid-conversation
+          side task inline blocks the user's follow-ups; a background subagent keeps the
+          live conversation fluid.
         '';
       };
     }
