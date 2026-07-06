@@ -50,10 +50,10 @@ jobs:
       # skipped and the shell guard below skips loudly instead of half-running.
       - name: Mint mirror token
         id: mirror-token
-        if: ${{ vars.MIRROR_APP_ID != '' }}
+        if: ${{ vars.MIRROR_APP_CLIENT_ID != '' }}
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ vars.MIRROR_APP_ID }}
+          client-id: ${{ vars.MIRROR_APP_CLIENT_ID }}
           private-key: ${{ secrets.MIRROR_APP_PRIVATE_KEY }}
           owner: indexable-inc
 
@@ -101,10 +101,10 @@ jobs:
       # skipped and the shell guard below skips loudly instead of half-running.
       - name: Mint mirror token
         id: mirror-token
-        if: ${{ vars.MIRROR_APP_ID != '' }}
+        if: ${{ vars.MIRROR_APP_CLIENT_ID != '' }}
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ vars.MIRROR_APP_ID }}
+          client-id: ${{ vars.MIRROR_APP_CLIENT_ID }}
           private-key: ${{ secrets.MIRROR_APP_PRIVATE_KEY }}
           owner: indexable-inc
 

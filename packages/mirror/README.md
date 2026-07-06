@@ -98,8 +98,8 @@ org with
 - Contents: **write** (push `main` / `ix-patched`),
 - Metadata: **read** (implicit baseline).
 
-The app id lives in the `MIRROR_APP_ID` repository variable and its private
-key in the `MIRROR_APP_PRIVATE_KEY` secret; `actions/create-github-app-token`
+The app's client id lives in the `MIRROR_APP_CLIENT_ID` repository variable
+and its private key in the `MIRROR_APP_PRIVATE_KEY` secret; `actions/create-github-app-token`
 turns them into a short-lived installation token each run. Scoped, revocable,
 and not tied to a person's account. Fallback if the app is ever unavailable:
 
