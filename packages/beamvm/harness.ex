@@ -125,7 +125,7 @@ defmodule BeamVM.Harness do
     Map.new(apps, fn {app, spec} ->
       {String.to_atom(app),
        %{
-         paths: expand_code_paths(Map.fetch!(spec, "code_path_globs")),
+         code_path_globs: Map.fetch!(spec, "code_path_globs"),
          start: Map.get(spec, "start", true),
          sys_config: expand_globs(Map.get(spec, "sys_config_globs", [])),
          runtime_config: expand_globs(Map.get(spec, "runtime_config_globs", []))
@@ -135,13 +135,17 @@ defmodule BeamVM.Harness do
 
   defp expand_globs(globs), do: Enum.flat_map(globs, &Path.wildcard/1)
 
-  defp expand_code_paths(globs) do
-    # Enum.filter, not a `for` with an `app = ...` binding: a nil binding
-    # would act as a comprehension filter and silently drop every ebin dir
-    # whose parent is not shaped `<app>-<vsn>`.
+  # Expanded against the tenant's PREVIOUS path set: a library this tenant
+  # itself brought last time is being replaced, not double-claimed, so it must
+  # not be skipped just because it is loaded. Only libraries loaded from
+  # somewhere OUTSIDE the tenant's own previous dirs (the harness toolchain,
+  # another tenant) are skipped. Enum.filter, not a `for` with an `app = ...`
+  # binding: a nil binding would act as a comprehension filter and silently
+  # drop every ebin dir whose parent is not shaped `<app>-<vsn>`.
+  defp expand_code_paths(globs, previous_paths) do
     globs
     |> expand_globs()
-    |> Enum.filter(fn dir -> keep_code_path?(ebin_app_name(dir), dir) end)
+    |> Enum.filter(fn dir -> keep_code_path?(ebin_app_name(dir), dir, previous_paths) end)
   end
 
   # lib/<app>-<vsn>/ebin -> :"<app>"; nil for layouts that do not encode one.
@@ -153,15 +157,16 @@ defmodule BeamVM.Harness do
   end
 
   # Drop a release-bundled library when the VM already has that application
-  # loaded and it is not one of ours: those are the toolchain apps (elixir,
-  # stdlib, logger, kernel, ...) the harness itself booted from the same
-  # Nix-pinned toolchain, or a library another tenant already claimed. First
-  # tenant wins on shared deps; a version conflict between tenants is a
-  # packaging decision for the manifest author, surfaced by the log line.
-  defp keep_code_path?(nil, _dir), do: true
+  # loaded from OUTSIDE this tenant's own previous dirs: those are the
+  # toolchain apps (elixir, stdlib, logger, kernel, ...) the harness itself
+  # booted from the same Nix-pinned toolchain, or a library another tenant
+  # already claimed. First tenant wins on shared deps; a version conflict
+  # between tenants is a packaging decision for the manifest author, surfaced
+  # by the log line.
+  defp keep_code_path?(nil, _dir, _previous_paths), do: true
 
-  defp keep_code_path?(app, dir) do
-    if loaded?(app) and not on_path_owned_by?(dir, app) do
+  defp keep_code_path?(app, dir, previous_paths) do
+    if loaded?(app) and not loaded_from_previous?(app, previous_paths) do
       log("skipping #{dir}: application #{app} already loaded in this VM")
       false
     else
@@ -173,10 +178,17 @@ defmodule BeamVM.Harness do
     Enum.any?(Application.loaded_applications(), fn {name, _, _} -> name == app end)
   end
 
-  defp on_path_owned_by?(dir, app) do
+  # Whether the loaded copy of `app` came from one of this tenant's previous
+  # ebin dirs (checked before those dirs are removed from the code path, so
+  # `:code.lib_dir/1` still resolves to the old location).
+  defp loaded_from_previous?(app, previous_paths) do
     case :code.lib_dir(app) do
-      {:error, _} -> false
-      lib_dir -> Path.expand(to_string(lib_dir)) == Path.expand(Path.dirname(dir))
+      {:error, _} ->
+        false
+
+      lib_dir ->
+        expanded = Path.expand(to_string(lib_dir))
+        Enum.any?(previous_paths, fn p -> Path.expand(Path.dirname(p)) == expanded end)
     end
   end
 
@@ -196,26 +208,29 @@ defmodule BeamVM.Harness do
     Enum.each(entry.paths, &:code.del_path(String.to_charlist(&1)))
   end
 
-  # Same paths: the store path did not change, nothing to do.
-  defp converge_app(app, %{paths: paths}, %{paths: paths} = spec) do
-    if spec.start and not started?(app), do: start_app(app)
-    spec
-  end
-
   defp converge_app(app, previous, spec) do
-    old_paths = if previous, do: previous.paths, else: []
-    Enum.each(old_paths -- spec.paths, &:code.del_path(String.to_charlist(&1)))
-    Enum.each(spec.paths -- old_paths, &:code.add_pathz(String.to_charlist(&1)))
+    previous_paths = if previous, do: previous.paths, else: []
+    new_paths = expand_code_paths(spec.code_path_globs, previous_paths)
+    entry = %{paths: new_paths, start: spec.start}
 
-    if previous do
-      hot_swap_modules(app)
+    if new_paths == previous_paths do
+      # Same expanded dirs: the store paths did not change, nothing to swap.
+      if spec.start and not started?(app), do: start_app(app)
+      entry
     else
-      log("loading #{app} (#{length(spec.paths)} code paths)")
-    end
+      Enum.each(previous_paths -- new_paths, &:code.del_path(String.to_charlist(&1)))
+      Enum.each(new_paths -- previous_paths, &:code.add_pathz(String.to_charlist(&1)))
 
-    apply_release_config(app, spec)
-    if spec.start and not started?(app), do: start_app(app)
-    spec
+      if previous do
+        hot_swap_modules(app)
+      else
+        log("loading #{app} (#{length(new_paths)} code paths)")
+      end
+
+      apply_release_config(app, spec)
+      if spec.start and not started?(app), do: start_app(app)
+      entry
+    end
   end
 
   # Replay the release boot's config pipeline: sys.config (the baked
