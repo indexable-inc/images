@@ -13,34 +13,29 @@ nix-daemon (SIGABRT). The interrupt flag is process-global, so any client
 disconnecting mid-operation while a collectGarbage() runs crashes the daemon --
 frequent on a busy multi-client daemon (CI cancelling/timing-out builds).
 
-Broaden the catch to `catch (...)` and swallow via ignoreExceptionInDestructor(),
-mirroring the auto-GC worker thread in the same file.
+Widen the existing handler from `Error` to `BaseError` so Interrupted is caught
+too, rather than adding a blanket `catch (...)`: this is a deliberate exception
+to the usual "catch Error, not BaseError, so Interrupted can propagate" rule.
+At the top-level body of a std::thread nothing may escape, and dropping the one
+client connection is the right outcome. Non-Nix throwables (std::bad_alloc and
+friends) still terminate exactly as before.
 
-Origin: indexable-inc/nix branch fix-gc-roots-client-interrupt-crash (commit
-4a2e137b3), rebased onto the 2.34.7 base.
----
+Assisted-by: Claude <noreply@anthropic.com>
 
 diff --git a/src/libstore/gc.cc b/src/libstore/gc.cc
-index 16b81ab..3e959c8 100644
+index 16b81ab..efab447 100644
 --- a/src/libstore/gc.cc
 +++ b/src/libstore/gc.cc
-@@ -495,6 +495,19 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
-                         } catch (Error & e) {
+@@ -492,7 +492,11 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)
+                             } else
+                                 printError("received garbage instead of a root from client");
+                             writeFull(fdClient.get(), "1", false);
+-                        } catch (Error & e) {
++                        } catch (BaseError & e) {
++                            /* Catch BaseError, not Error, so an Interrupted
++                               (which derives from BaseError, not Error) does not
++                               escape this thread's top-level body and terminate
++                               the daemon. */
                              debug("reading GC root from client: %s", e.msg());
                              break;
-+                        } catch (...) {
-+                            /* This is the top-level body of a std::thread, so any
-+                               exception that escapes it calls std::terminate() and
-+                               aborts the whole daemon (true whether the thread is
-+                               later joined or detached). readLine() throws
-+                               Interrupted, which derives from BaseError, not Error,
-+                               when the interrupt flag is set -- e.g. when another
-+                               client disconnects mid-operation while this GC runs
-+                               -- so the catch above does not catch it. Swallow it
-+                               and drop this connection instead of crashing,
-+                               mirroring the auto-GC worker thread below. */
-+                            ignoreExceptionInDestructor();
-+                            break;
                          }
-                     }
-                 });
