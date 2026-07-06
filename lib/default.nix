@@ -37,11 +37,22 @@
 
   system = "x86_64-linux";
 
-  packageRegistry = import (paths.packagesRoot + "/registry.nix") {
-    inherit lib;
-    root = paths.packagesRoot;
-    inherit (lists) findDuplicates;
-  };
+  # Registry-driven package discovery, exposed as a factory over any packages
+  # root so a downstream consumer (ix) discovers its own `packages/<name>/
+  # {package.nix,default.nix}` tree with index's `package.nix`-marker walker
+  # (`packages/registry.nix`) rather than re-forking it. index's own registry
+  # below is one call of this factory.
+  mkPackageRegistry = {root}:
+    import (paths.packagesRoot + "/registry.nix") {
+      inherit lib root;
+      inherit (lists) findDuplicates;
+    };
+  # The generic registry-driven assembly loop (callPackage each entry, place it
+  # at its `packageSet.attrPath`), the shared core `lib/packages.nix` uses for
+  # index and a consumer reuses for its own registry + context. See
+  # lib/mk-package-set.nix.
+  mkPackageSet = import ./mk-package-set.nix {inherit lib;};
+  packageRegistry = mkPackageRegistry {root = paths.packagesRoot;};
   packagePath = id: let
     entry = packageRegistry.byId.${id} or (throw "ix.lib: package registry has no `${id}` entry");
   in
@@ -616,6 +627,8 @@
         mkFleetFor
         mkImage
         mkNonNixImage
+        mkPackageRegistry
+        mkPackageSet
         nixosModules
         overlay
         overlays

@@ -44,24 +44,19 @@
     # leaves it unset, which is the signal to omit the updater.
     updateScriptWriter = ixForPackages.writeNushellApplication pkgs;
   };
-  inherit (import ./util/deep-merge.nix {inherit lib;}) strictList;
-  buildEntry = entry: let
-    # `repoPackages` is the package set itself (a lazy fix-point), so an
-    # entry can depend on a sibling by id (e.g. packages/agent/claude-code reads
-    # `repoPackages.mcp`). Threaded under one name rather than merged flat
-    # into autoArgs: a flat merge would let ids that shadow nixpkgs attrs
-    # (`btop`, `kitty`, ...) hijack other packages' arguments, and a
-    # same-named nixpkgs override would resolve to itself.
-    autoArgs =
+  mkPackageSet = import ./mk-package-set.nix {inherit lib;};
+in
+  # index's own package set, assembled through the shared registry-driven loop
+  # (`lib/mk-package-set.nix`). The only index-specific part is `autoArgsFor`:
+  # `repoPackages` is threaded under one name (not merged flat) so ids that
+  # shadow nixpkgs attrs (`btop`, `kitty`, ...) cannot hijack another package's
+  # arguments and a same-named nixpkgs override does not resolve to itself.
+  mkPackageSet {
+    inherit packageRegistry pkgs;
+    autoArgsFor = entry: repoPackages:
       pkgs
       // context
       // {
-        inherit entry;
-        repoPackages = packageSet;
+        inherit entry repoPackages;
       };
-  in
-    lib.callPackageWith autoArgs entry.path {};
-  packageTreeFor = entry: lib.setAttrByPath entry.packageSet.attrPath (buildEntry entry);
-  packageSet = strictList (map packageTreeFor (packageRegistry.packageSetEntriesFor packageSystem));
-in
-  packageSet
+  }
