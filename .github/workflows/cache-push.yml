@@ -240,8 +240,13 @@ jobs:
     # downloads instead of doomed platform-mismatch builds.
     needs: push
     # A cold codex (full codex-rs workspace rustc build) is 40-80 min on this
-    # runner; warm runs are probe + substitution only.
-    timeout-minutes: 240
+    # runner; warm runs are probe + substitution only. Since #1916 the roots
+    # also carry nix-ix (the full modular nixComponents_2_34 C++ closure):
+    # even with its test suites disabled (#1967), a cold nix-ix plus a cold
+    # codex plus the ~27 min eval can brush the old 240-minute budget on
+    # 3 cores, and run 28772327218 showed a timeout here silently freezes
+    # cache-ready. 330 leaves margin under GitHub's 360-minute job hard cap.
+    timeout-minutes: 330
     env:
       # Replaces the workflow-level NIX_CONFIG: `cores = 1` there fits the
       # shared self-hosted pool, but this runner is dedicated, so each build
