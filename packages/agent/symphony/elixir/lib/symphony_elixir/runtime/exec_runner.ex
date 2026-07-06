@@ -10,6 +10,13 @@ defmodule SymphonyElixir.Runtime.ExecRunner do
   relative to the active pack directory so a pack references its own
   scripts without carrying absolute deployment paths.
 
+  Timeouts are wall-clock: `timeout <seconds>` (default 300) bounds the
+  attempt in elapsed real time, re-checked on a bounded tick because BEAM
+  timers pause while the host sleeps. On expiry the runner SIGKILLs the
+  script's whole process group (the port program runs in its own session),
+  so grandchildren the script spawned cannot outlive the node, and the
+  attempt fails with `{:exec_timeout, seconds, output_tail}`.
+
   Declared inputs reach the script as environment variables: each key of
   `run_opts.resolved_inputs` (the runtime resolves `{ name: value }` DSL
   inputs, including `${node.path}` references, before the attempt) is
