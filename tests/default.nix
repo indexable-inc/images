@@ -2199,6 +2199,11 @@
   # builds the real base archive and asserts exactly that, so it also proves the
   # DB survives oci-image-builder's re-streaming. It builds an OCI image, so it
   # is its own check (not the pure-eval `eval` aggregate) and runs on Linux.
+  # It also defends the self-contained invariant: every layer blob the manifest
+  # references must be embedded in the archive as a regular file. The builder
+  # once wrote the customisation blob as a symlink into /nix/store, so the
+  # archive depended on out-of-tar store state and this check failed whenever
+  # the referenced path was not visible at read time (index#2058).
   baseImageNixDb = let
     # Every `path`-type registry pin the image ships. Guard on the type so a
     # non-path entry (e.g. a default indirect/github registry row) can't break
@@ -2219,21 +2224,32 @@
         pkgs.sqlite
         pkgs.gnugrep
         pkgs.coreutils
+        pkgs.jq
       ];
       archive = base.imageConfig.ix.build.ociImage;
       requiredPaths = registryPaths ++ extraBakedPaths;
     } ''
       mkdir extract db
-      # oci-image-builder writes uncompressed tar layers as blobs/sha256/<digest>.
-      # The nix store DB lives in the customisation layer; find whichever blob
-      # carries it and extract just that file.
       tar -C extract -xf "$archive"
+      # Walk only the layer blobs the manifest declares: config/manifest JSON
+      # blobs share blobs/sha256/ and are not tars, so globbing the dir would
+      # need tar errors suppressed, and that suppression is what let a dangling
+      # store-symlink blob read as "db not here" instead of failing (index#2058).
+      manifest_digest=$(jq -r '.manifests[0].digest' extract/index.json | cut -d: -f2)
+      layer_digests=$(jq -r '.layers[].digest' "extract/blobs/sha256/$manifest_digest" | cut -d: -f2)
       found=
-      for blob in extract/blobs/sha256/*; do
-        if tar -tf "$blob" 2>/dev/null | grep -qx './nix/var/nix/db/db.sqlite'; then
+      for digest in $layer_digests; do
+        blob="extract/blobs/sha256/$digest"
+        if [ -L "$blob" ] || [ ! -f "$blob" ]; then
+          echo "error: layer blob sha256:$digest is missing or not a regular file; the archive is not self-contained (index#2058)" >&2
+          exit 1
+        fi
+        # No stderr suppression: a layer that cannot be listed is a corrupt
+        # archive and must fail loudly, not read as "db not here".
+        listing=$(tar -tf "$blob")
+        if grep -qx './nix/var/nix/db/db.sqlite' <<< "$listing"; then
           tar -C db -xf "$blob" ./nix/var/nix/db/db.sqlite
           found=1
-          break
         fi
       done
       if [ -z "$found" ]; then
