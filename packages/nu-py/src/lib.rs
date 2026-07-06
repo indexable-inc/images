@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, FixedOffset, TimeDelta, Utc};
+use nu_protocol::ast::{Block, Expr, Expression, ListItem, RecordItem};
 use nu_protocol::debugger::WithoutDebug;
 use nu_protocol::engine::{EngineState, Stack, StateWorkingSet};
 use nu_protocol::{
@@ -172,55 +173,214 @@ impl EngineInner {
             block
         };
 
-        let input = input.map_or_else(PipelineData::empty, |value| PipelineData::value(value, None));
-        // eval_ir_block, NOT eval_block: eval_block maps a user's `exit` to
-        // std::process::exit, which would take the whole embedding process
-        // (the kernel) down. Here `exit` surfaces as ShellError::Exit and
-        // becomes a raised NuError like any other failure.
-        let mut executed =
-            nu_engine::eval_ir_block::<WithoutDebug>(engine_state, stack, &block, input)
-                .map_err(|error| render_shell_error(engine_state, stack, &error))?;
-        // check=false: the raise-on-non-zero happens inside into_value
-        // (ChildProcess::into_bytes collects stdout and THEN checks the exit
-        // status, dropping the output on the error path), so flip the child's
-        // ignore_error flag before collecting and read the status afterwards
-        // through a cloned handle -- the future caches Finished once
-        // into_bytes has waited, so the second wait is a lookup, not a block.
-        let mut exit_status = None;
-        if !check {
-            if let PipelineData::ByteStream(stream, _) = &mut executed.body {
-                if let ByteStreamSource::Child(child) = stream.source_mut() {
-                    child.ignore_error(true);
-                    exit_status = Some((child.clone_exit_status_future(), child.span()));
+        // Bash redirection tokens the parser handed to an external as literal
+        // argv (`2>/dev/null` and friends), detected up front and reported
+        // only if the evaluation then fails. The failing span is deliberately
+        // not matched to the external: when a pipeline fails while such a
+        // token sits in an external's argv, the bash-ism is almost certainly
+        // the mistake, and the downstream error ("ls: cannot access
+        // '2>/dev/null'") never names it (issue #2111).
+        let bash_redirections = bash_redirection_args(engine_state, &block);
+        let mut result = run_block(engine_state, stack, &block, input, check);
+        if let (Err(diagnostic), Some(token)) = (result.as_mut(), bash_redirections.first()) {
+            diagnostic.push('\n');
+            diagnostic.push_str(&bash_redirection_hint(token));
+        }
+        result
+    }
+}
+
+/// Evaluate an already-parsed block against the persistent state: the
+/// post-parse half of [`EngineInner::eval`], split out so `eval` can append
+/// the bash-redirection hint to whatever diagnostic a failure renders.
+fn run_block(
+    engine_state: &mut EngineState,
+    stack: &mut Stack,
+    block: &Block,
+    input: Option<Value>,
+    check: bool,
+) -> Result<(Value, i64), String> {
+    let input = input.map_or_else(PipelineData::empty, |value| {
+        PipelineData::value(value, None)
+    });
+    // eval_ir_block, NOT eval_block: eval_block maps a user's `exit` to
+    // std::process::exit, which would take the whole embedding process
+    // (the kernel) down. Here `exit` surfaces as ShellError::Exit and
+    // becomes a raised NuError like any other failure.
+    let mut executed = nu_engine::eval_ir_block::<WithoutDebug>(engine_state, stack, block, input)
+        .map_err(|error| render_shell_error(engine_state, stack, &error))?;
+    // check=false: the raise-on-non-zero happens inside into_value
+    // (ChildProcess::into_bytes collects stdout and THEN checks the exit
+    // status, dropping the output on the error path), so flip the child's
+    // ignore_error flag before collecting and read the status afterwards
+    // through a cloned handle -- the future caches Finished once
+    // into_bytes has waited, so the second wait is a lookup, not a block.
+    let mut exit_status = None;
+    if !check {
+        if let PipelineData::ByteStream(stream, _) = &mut executed.body {
+            if let ByteStreamSource::Child(child) = stream.source_mut() {
+                child.ignore_error(true);
+                exit_status = Some((child.clone_exit_status_future(), child.span()));
+            }
+        }
+    }
+    let value = executed
+        .body
+        .into_value(Span::unknown())
+        .map_err(|error| render_shell_error(engine_state, stack, &error))?;
+    if let Value::Error { error, .. } = value {
+        return Err(render_shell_error(engine_state, stack, &error));
+    }
+    // ExitStatus::code() follows the subprocess convention: a plain exit
+    // is its code, a signal-terminated child is the negative signal.
+    let exit_code = match exit_status {
+        Some((future, span)) => i64::from(
+            future
+                .lock()
+                .map_err(|_| {
+                    "a previous eval panicked while waiting on an external; \
+                     create a fresh Engine"
+                        .to_owned()
+                })?
+                .wait(span)
+                .map_err(|error| render_shell_error(engine_state, stack, &error))?
+                .code(),
+        ),
+        None => 0,
+    };
+    Ok((value, exit_code))
+}
+
+/// True when a literal external argv element looks like a bash redirection
+/// token: `2>/dev/null`, `2>&1`, `>>log`, `>out`, `&>all`. Nushell has no
+/// bash-style redirection (it spells these `err>`, `out>`, `out+err>|`), so
+/// such a token reaches the external verbatim and the failure surfaces as
+/// the external's own confusing error (issue #2111).
+fn is_bash_redirection_token(arg: &str) -> bool {
+    // Optional bash fd prefix: `2>`, `12>`, or `&>` (both streams).
+    let rest = arg
+        .strip_prefix('&')
+        .unwrap_or_else(|| arg.trim_start_matches(|c: char| c.is_ascii_digit()));
+    let Some(target) = rest.strip_prefix('>') else {
+        return false;
+    };
+    // `>>` appends; peel it so the target check sees the path/fd part.
+    let target = target.strip_prefix('>').unwrap_or(target);
+    // `>=` is a comparison, not a redirection (`^jq "select(.n >= 1)"` style
+    // arguments must not trip the hint).
+    !target.starts_with('=')
+}
+
+/// Collect the literal external-argv tokens in `block` that look like bash
+/// redirections, in source order and deduplicated. Walks every external call
+/// reachable from the block: pipelines, subexpressions, blocks, closures, and
+/// command arguments. Best-effort by design -- expression kinds that cannot
+/// plausibly carry an external call are skipped, and a missed one only costs
+/// the hint, never correctness.
+fn bash_redirection_args(engine_state: &EngineState, block: &Block) -> Vec<String> {
+    let mut found = Vec::new();
+    collect_block(engine_state, block, &mut found);
+    found
+}
+
+fn collect_block(engine_state: &EngineState, block: &Block, found: &mut Vec<String>) {
+    for pipeline in &block.pipelines {
+        for element in &pipeline.elements {
+            collect_expression(engine_state, &element.expr, found);
+        }
+    }
+}
+
+fn collect_expression(
+    engine_state: &EngineState,
+    expression: &Expression,
+    found: &mut Vec<String>,
+) {
+    match &expression.expr {
+        Expr::ExternalCall(head, args) => {
+            collect_expression(engine_state, head, found);
+            for arg in args.iter() {
+                let arg = arg.expr();
+                if let Expr::String(val) | Expr::GlobPattern(val, _) | Expr::RawString(val) =
+                    &arg.expr
+                    && is_bash_redirection_token(val)
+                    && !found.contains(val)
+                {
+                    found.push(val.clone());
+                }
+                collect_expression(engine_state, arg, found);
+            }
+        }
+        Expr::Call(call) => {
+            for arg in &call.arguments {
+                if let Some(arg) = arg.expr() {
+                    collect_expression(engine_state, arg, found);
                 }
             }
         }
-        let value = executed
-            .body
-            .into_value(Span::unknown())
-            .map_err(|error| render_shell_error(engine_state, stack, &error))?;
-        if let Value::Error { error, .. } = value {
-            return Err(render_shell_error(engine_state, stack, &error));
+        Expr::AttributeBlock(attributed) => {
+            collect_expression(engine_state, &attributed.item, found);
         }
-        // ExitStatus::code() follows the subprocess convention: a plain exit
-        // is its code, a signal-terminated child is the negative signal.
-        let exit_code = match exit_status {
-            Some((future, span)) => i64::from(
-                future
-                    .lock()
-                    .map_err(|_| {
-                        "a previous eval panicked while waiting on an external; \
-                         create a fresh Engine"
-                            .to_owned()
-                    })?
-                    .wait(span)
-                    .map_err(|error| render_shell_error(engine_state, stack, &error))?
-                    .code(),
-            ),
-            None => 0,
-        };
-        Ok((value, exit_code))
+        Expr::Block(id) | Expr::Closure(id) | Expr::Subexpression(id) | Expr::RowCondition(id) => {
+            collect_block(engine_state, engine_state.get_block(*id), found);
+        }
+        Expr::UnaryNot(inner) | Expr::Collect(_, inner) => {
+            collect_expression(engine_state, inner, found);
+        }
+        Expr::BinaryOp(lhs, op, rhs) => {
+            collect_expression(engine_state, lhs, found);
+            collect_expression(engine_state, op, found);
+            collect_expression(engine_state, rhs, found);
+        }
+        Expr::FullCellPath(cell_path) => {
+            collect_expression(engine_state, &cell_path.head, found);
+        }
+        Expr::Keyword(keyword) => {
+            collect_expression(engine_state, &keyword.expr, found);
+        }
+        Expr::List(items) => {
+            for item in items {
+                let (ListItem::Item(item) | ListItem::Spread(_, item)) = item;
+                collect_expression(engine_state, item, found);
+            }
+        }
+        Expr::Record(items) => {
+            for item in items {
+                match item {
+                    RecordItem::Pair(key, val) => {
+                        collect_expression(engine_state, key, found);
+                        collect_expression(engine_state, val, found);
+                    }
+                    RecordItem::Spread(_, spread) => {
+                        collect_expression(engine_state, spread, found);
+                    }
+                }
+            }
+        }
+        Expr::StringInterpolation(parts) | Expr::GlobInterpolation(parts, _) => {
+            for part in parts {
+                collect_expression(engine_state, part, found);
+            }
+        }
+        Expr::MatchBlock(arms) => {
+            for (_, arm) in arms {
+                collect_expression(engine_state, arm, found);
+            }
+        }
+        // Leaves (literals, variables, operators) and kinds that cannot carry
+        // an external call.
+        _ => {}
     }
+}
+
+/// The one-line hint appended to a failing eval's rendered diagnostic when an
+/// external's argv carries a bash redirection token.
+fn bash_redirection_hint(token: &str) -> String {
+    format!(
+        "hint: '{token}' was passed to the external as a literal argument; nushell spells \
+         redirection err> /dev/null (stderr), out> (stdout), or out+err>| (pipe both), not \
+         bash's 2>/dev/null / 2>&1"
+    )
 }
 
 /// Render a `ShellError` exactly the way the nushell CLI would (minus color:
@@ -462,10 +622,7 @@ impl Engine {
                         // so keep the historical value-only shape.
                         Ok(value)
                     } else {
-                        Ok((value, exit_code)
-                            .into_pyobject(py)?
-                            .unbind()
-                            .into_any())
+                        Ok((value, exit_code).into_pyobject(py)?.unbind().into_any())
                     }
                 }),
                 Err(diagnostic) => Err(NuError::new_err(diagnostic)),
@@ -500,4 +657,132 @@ fn _nu(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("NuError", module.py().get_type::<NuError>())?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bash_redirection_tokens_are_detected() {
+        for token in [
+            "2>/dev/null",
+            "2>&1",
+            "1>>build.log",
+            ">>build.log",
+            ">out.txt",
+            "&>/dev/null",
+            ">",
+            ">>",
+        ] {
+            assert!(is_bash_redirection_token(token), "should flag {token:?}");
+        }
+    }
+
+    #[test]
+    fn ordinary_arguments_are_not_flagged() {
+        for arg in [
+            "", "2", "-2", "--flag", "a>b", "->", "=>", ">=", ">=5", "&1", "file.txt",
+        ] {
+            assert!(!is_bash_redirection_token(arg), "should not flag {arg:?}");
+        }
+    }
+
+    /// Parse a snippet the way [`EngineInner::eval`] does and return the
+    /// collected redirection tokens.
+    fn tokens_in(code: &str) -> Vec<String> {
+        let mut engine_state = initial_engine_state();
+        let block = {
+            let mut working_set = StateWorkingSet::new(&engine_state);
+            let block = nu_parser::parse(&mut working_set, Some("test"), code.as_bytes(), false);
+            assert!(
+                working_set.parse_errors.is_empty(),
+                "{:?}",
+                working_set.parse_errors
+            );
+            let delta = working_set.render();
+            engine_state.merge_delta(delta).expect("merge delta");
+            block
+        };
+        bash_redirection_args(&engine_state, &block)
+    }
+
+    #[test]
+    fn external_argv_redirections_are_collected_from_the_parsed_block() {
+        assert_eq!(
+            tokens_in("^ls -d ./missing 2>/dev/null"),
+            ["2>/dev/null"],
+            "the motivating case from issue #2111"
+        );
+    }
+
+    // `2>&1` is absent here on purpose: nushell's parser already rejects it
+    // (`ShellOutErrRedirect`, with its own out+err> hint) before it could
+    // reach an external's argv. This walk covers the tokens the parser lets
+    // through as barewords.
+    #[test]
+    fn nested_and_repeated_redirections_are_collected_once_in_source_order() {
+        assert_eq!(
+            tokens_in("if true { ^cat missing 2>/dev/null } else { do { ^ls 2>/dev/null >>log } }"),
+            ["2>/dev/null", ">>log"]
+        );
+    }
+
+    #[test]
+    fn clean_externals_and_internal_pipelines_collect_nothing() {
+        assert!(tokens_in("^ls -la | lines | where $it != ''").is_empty());
+    }
+
+    #[test]
+    fn eval_failure_with_redirection_argv_appends_the_hint() {
+        let mut inner = EngineInner {
+            engine_state: initial_engine_state(),
+            stack: Stack::new().collect_value(),
+        };
+        let interrupt = Arc::new(AtomicBool::new(false));
+        // `error make` fails before the external ever runs, so the test needs
+        // no subprocess; the hint keys off the parsed argv, not the failing
+        // span (see the comment in `EngineInner::eval`).
+        let diagnostic = inner
+            .eval(
+                "error make {msg: 'boom'}; ^ls 2>/dev/null",
+                None,
+                None,
+                None,
+                &interrupt,
+                true,
+            )
+            .expect_err("error make must fail the eval");
+        assert!(
+            diagnostic.contains("out+err>|"),
+            "hint missing: {diagnostic}"
+        );
+        assert!(
+            diagnostic.contains("2>/dev/null"),
+            "token missing: {diagnostic}"
+        );
+    }
+
+    #[test]
+    fn eval_failure_without_redirection_argv_stays_unannotated() {
+        let mut inner = EngineInner {
+            engine_state: initial_engine_state(),
+            stack: Stack::new().collect_value(),
+        };
+        let interrupt = Arc::new(AtomicBool::new(false));
+        let diagnostic = inner
+            .eval(
+                "error make {msg: 'boom'}",
+                None,
+                None,
+                None,
+                &interrupt,
+                true,
+            )
+            .expect_err("error make must fail the eval");
+        assert!(
+            !diagnostic.contains("out+err>|"),
+            "spurious hint: {diagnostic}"
+        );
+    }
 }
