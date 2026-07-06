@@ -5,6 +5,14 @@
 # declarative intent, tracks the live state of the PRs we open, spots duplicate
 # upstream PRs, and retires patches that land upstream.
 #
+#
+# `nix run .#upstream-sync -- drift [--json|--markdown] [name]` is the read-only
+# companion report (RFC 0010, #2098): per fork, how far the pinned base trails
+# upstream's default branch (commits behind + base age), the declared patch
+# stances, how many tracked patches are retired-awaiting-drop, and a one-word
+# next action. The fork-sync cron surfaces it in its step summary and rolling
+# PR body.
+#
 # The two-sided design the user set:
 #   - DECLARATIVE INTENT lives in nix (lib/fork-packages.nix), hand-written: each
 #     patch's `upstream = attempt|hold|never` + one-line reason, and a per-repo
@@ -246,6 +254,187 @@
         | first
         | default "Subject: (none)"
         | str replace --regex '^Subject:\s*(\[PATCH[^\]]*\]\s*)?' ""
+      }
+
+      # --- drift report (read-only; RFC 0010, #2098) ----------------------------
+
+      # The pinned base rev of a fork's input from the committed flake.lock in
+      # the CWD (the tool runs from the repo root; a downstream --mapping repo
+      # reads its own lock the same way). Null when the lock or input is absent.
+      def "lock rev" [input: string]: nothing -> any {
+        if not ("flake.lock" | path exists) { return null }
+        let node = (open --raw flake.lock | from json | get -o nodes | default {} | get -o $input)
+        if $node == null { return null }
+        $node | get -o locked.rev
+      }
+
+      # Is this upstream on a GitLab host (e.g. mesa on gitlab.freedesktop.org)?
+      def "is gitlab" [url: string]: nothing -> bool {
+        $url | str contains "gitlab."
+      }
+
+      # A gh api read that DEGRADES instead of failing: a forge error becomes a
+      # stderr warning and a null cell, so one unreachable forge cannot take the
+      # whole drift table down.
+      def "gh read" [ctx: string, path: string, jq: string]: nothing -> any {
+        let res = (do { gh api $path --jq $jq } | complete)
+        if $res.exit_code != 0 {
+          print -e $"(ansi yellow)upstream-sync: drift: ($ctx): gh api ($path) failed; cell left unknown(ansi reset)"
+          return null
+        }
+        $res.stdout | str trim
+      }
+
+      # Base-commit committer date on a GitLab host, or null. GitLab drift is
+      # DELIBERATELY base-age-only: the compare API enumerates every commit in
+      # the range (thousands on a months-old mesa pin), so the cheap single-commit
+      # lookup is the reliable unauthenticated read and commits-behind stays
+      # unknown (the RFC allows exactly this degradation).
+      def "gitlab base-date" [url: string, rev: string]: nothing -> any {
+        let u = ($url | url parse)
+        let project = ($u.path | str trim --left --char "/" | str replace --regex '\.git$' "" | url encode --all)
+        let endpoint = $"https://($u.host)/api/v4/projects/($project)/repository/commits/($rev)"
+        try {
+          http get $endpoint | get committed_date
+        } catch {
+          print -e $"(ansi yellow)upstream-sync: drift: ($endpoint) unreachable; base age left unknown(ansi reset)"
+          null
+        }
+      }
+
+      # One fork's drift facts. A null cell means "unknown" (forge unreachable or
+      # input not in flake.lock), never a crash: the report must survive a broken
+      # forge and still render the other rows.
+      def "drift row" [fork: record]: nothing -> record {
+        let slug = (url slug $fork.url)
+        let rev = (lock rev $fork.input)
+        if $rev == null {
+          print -e $"(ansi yellow)upstream-sync: drift: ($fork.name): input ($fork.input) has no locked rev in flake.lock(ansi reset)"
+        }
+        let forge = (
+          if (is github $fork.url) { "github" }
+          else if (is gitlab $fork.url) { "gitlab" }
+          else { "other" }
+        )
+
+        # Commits behind = ahead_by of `pinned...default_branch`: how many
+        # commits upstream's default branch has that our pinned base does not.
+        let behind = (
+          if $forge != "github" or $rev == null { null } else {
+            let branch = (gh read $fork.name $"repos/($slug.owner)/($slug.repo)" ".default_branch")
+            if $branch == null { null } else {
+              let n = (gh read $fork.name $"repos/($slug.owner)/($slug.repo)/compare/($rev)...($branch)" ".ahead_by")
+              if $n == null { null } else { $n | into int }
+            }
+          }
+        )
+        let base_date = (
+          if $rev == null { null } else if $forge == "github" {
+            gh read $fork.name $"repos/($slug.owner)/($slug.repo)/commits/($rev)" ".commit.committer.date"
+          } else if $forge == "gitlab" {
+            gitlab base-date $fork.url $rev
+          } else { null }
+        )
+        let age_days = (
+          if $base_date == null { null } else {
+            ((date now) - ($base_date | into datetime)) / 1day | math floor | into int
+          }
+        )
+
+        # Patch stances walk dag.json node order (the canonical series, same as
+        # the sync loop); an unclassified patch defaults to hold (fail-safe).
+        let intent = ($fork.patches? | default {})
+        let dag_file = ($fork.patchDir | path expand | path join "dag.json")
+        let series = (
+          if ($dag_file | path exists) { open --raw $dag_file | from json | get nodes | get patch }
+          else { $intent | columns }
+        )
+        let stances = (
+          $series | each {|p|
+            let mark = ($intent | get -o $p)
+            $mark.upstream? | default "hold"
+          }
+        )
+        let retired = ((status load $fork).patches | values | where {|p| $p.retired? | default false } | length)
+
+        # Next-action heuristic, deliberately simple:
+        #   retired > 0            -> rebase-shrinks-series: a base bump drops the
+        #                             retired patches as empty cherries.
+        #   drift fully unknown    -> unknown: no basis to recommend anything.
+        #   >= 200 commits behind
+        #   or base >= 90 days old -> rebase-recommended: in practice this bites
+        #                             the manual pins (nix/clippy/mesa); autoUpdate
+        #                             forks are cron-freshened before they get here.
+        #   else                   -> ok
+        let action = (
+          if $retired > 0 { "rebase-shrinks-series" }
+          else if $behind == null and $age_days == null { "unknown" }
+          else if (($behind | default 0) >= 200) or (($age_days | default 0) >= 90) { "rebase-recommended" }
+          else { "ok" }
+        )
+        {
+          name: $fork.name
+          forge: $forge
+          input: $fork.input
+          rev: $rev
+          behind: $behind
+          baseDate: $base_date
+          ageDays: $age_days
+          attempt: ($stances | where {|s| $s == "attempt" } | length)
+          hold: ($stances | where {|s| $s == "hold" } | length)
+          never: ($stances | where {|s| $s == "never" } | length)
+          retired: $retired
+          action: $action
+          note: (
+            if $forge == "gitlab" { "base-age only (gitlab compare skipped)" }
+            else if $forge == "other" { "unsupported forge" }
+            else { "" }
+          )
+        }
+      }
+
+      # `nix run .#upstream-sync -- drift [--json|--markdown] [name]`: the
+      # read-only drift report. Network reads only; no status file is written.
+      def "main drift" [
+        name?: string     # one fork package (nix | btop | ...); all if omitted
+        --json            # machine-readable JSON to stdout, nothing else
+        --markdown        # GitHub-flavored markdown table (step summaries, PR bodies)
+        --mapping: string # fork-package JSON to drive (default: index's baked-in list)
+      ] {
+        if $json and $markdown {
+          error make {msg: "upstream-sync: drift: --json and --markdown are mutually exclusive"}
+        }
+        let rows = (fork select $name $mapping | each {|fork| drift row $fork })
+        if $json {
+          print ($rows | to json --indent 2)
+          return
+        }
+        # Human/markdown view: "?" marks an unknown cell (forge unreachable or no
+        # locked rev) so a degraded row is visibly degraded, not silently zero.
+        let view = (
+          $rows | each {|r|
+            {
+              fork: $r.name
+              base: (if $r.rev == null { "?" } else { $r.rev | str substring 0..11 })
+              behind: ($r.behind | default "?")
+              "age (days)": ($r.ageDays | default "?")
+              # action before the stance counts so an 80-column pipe still shows
+              # the verdict (nu truncates trailing table columns off-tty).
+              action: $r.action
+              attempt: $r.attempt
+              hold: $r.hold
+              never: $r.never
+              retired: $r.retired
+              note: $r.note
+            }
+          }
+        )
+        if $markdown {
+          print ($view | to md --pretty)
+        } else {
+          print $"(ansi cyan)== fork drift: pinned base vs upstream default branch ==(ansi reset)"
+          print ($view | table --index false)
+        }
       }
 
       # --- the loop -------------------------------------------------------------
@@ -579,11 +768,86 @@
 
     touch "$out"
   '';
+  # Drift-report test for the pure parts no live run pins deterministically:
+  # flake.lock rev extraction, stance + retired counting, the next-action
+  # heuristic, and the degrade path (a failing forge yields unknown cells and a
+  # zero exit, never a crashed report). gh is stubbed with fixed `--jq`'d
+  # responses; nothing elaborate, the forge is not what is under test.
+  drift = runCommand "upstream-sync-drift-test" {nativeBuildInputs = [nushell];} ''
+    mkdir -p stubs work/repo/patches work/bad/patches
+    export HOME="$PWD"
+
+    # Stub gh: `gh api <path> --jq <expr>` keyed on the path. Every bad-fork
+    # endpoint fails, exercising degrade-to-unknown.
+    cat > stubs/gh <<STUB
+    #!$(command -v bash)
+    case "\$2" in
+      repos/fakeorg/fakerepo) echo "main" ;;
+      repos/fakeorg/fakerepo/compare/*) echo "123" ;;
+      repos/fakeorg/fakerepo/commits/*) echo "2026-01-01T00:00:00Z" ;;
+      *) echo "stub gh: unexpected: \$*" >&2; exit 1 ;;
+    esac
+    STUB
+    chmod +x stubs/gh
+
+    cat > work/flake.lock <<'EOF'
+    {"nodes": {"fake-src": {"locked": {"rev": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+               "bad-src": {"locked": {"rev": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}}
+    EOF
+    echo '{"comment":"t","base":"deadbeef","nodes":[{"patch":"0001-sent.patch","deps":[]},{"patch":"0002-kept.patch","deps":[]},{"patch":"0003-unclassified.patch","deps":[]}]}' \
+      > work/repo/patches/dag.json
+    cat > work/repo/patches/upstream-status.json <<'EOF'
+    {"comment":"t","lastChecked":"2026-01-01T00:00:00Z","patches":{"0001-sent.patch":{"upstream":"attempt","pr":{"url":"u","number":1,"state":"merged","checkedAt":"t"},"retired":true,"duplicates":[]}},"log":[]}
+    EOF
+    echo '{"comment":"t","base":"deadbeef","nodes":[{"patch":"0001-x.patch","deps":[]}]}' > work/bad/patches/dag.json
+    cat > work/mapping.json <<'EOF'
+    [{"name":"fake","input":"fake-src","url":"https://github.com/fakeorg/fakerepo.git",
+      "patchDir":"repo/patches","autoUpdate":false,
+      "patches":{"0001-sent.patch":{"upstream":"attempt","reason":"t"},"0002-kept.patch":{"upstream":"never","reason":"t"}}},
+     {"name":"bad","input":"bad-src","url":"https://github.com/badorg/badrepo.git",
+      "patchDir":"bad/patches","autoUpdate":false,"patches":{}}]
+    EOF
+
+    awk '/^# nu$/,0' ${package}/bin/upstream-sync > script.nu
+    export PATH="$PWD/stubs:$PATH"
+    cd work
+
+    # --json is the machine surface: stdout must parse as JSON alone (warnings
+    # go to stderr), the fake row carries the stubbed forge facts plus the
+    # retired-driven action, and the bad row (gh failing) is unknown, not fatal.
+    nu ../script.nu drift --json --mapping "$PWD/mapping.json" > drift.json
+    nu -c '
+      let rows = (open --raw drift.json | from json)
+      let fake = ($rows | where name == "fake" | first)
+      if $fake.rev != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" or $fake.behind != 123 or $fake.ageDays < 1 {
+        error make {msg: $"fake drift facts: ($fake | to json)"}
+      }
+      if $fake.attempt != 1 or $fake.hold != 1 or $fake.never != 1 or $fake.retired != 1 {
+        error make {msg: $"fake stance counts: ($fake | to json)"}
+      }
+      if $fake.action != "rebase-shrinks-series" {
+        error make {msg: $"fake action: ($fake | to json)"}
+      }
+      let bad = ($rows | where name == "bad" | first)
+      if $bad.behind != null or $bad.ageDays != null or $bad.action != "unknown" {
+        error make {msg: $"bad row should degrade to unknown: ($bad | to json)"}
+      }'
+
+    # The markdown surface renders every fork as a table row, "?" for unknowns.
+    nu ../script.nu drift --markdown --mapping "$PWD/mapping.json" > drift.md
+    nu -c '
+      let md = (open --raw drift.md)
+      if not ((($md | str contains "| fake") and ($md | str contains "| bad")) and ($md | str contains "?")) {
+        error make {msg: $"markdown table missing rows: ($md)"}
+      }'
+
+    touch "$out"
+  '';
 in
   package.overrideAttrs (old: {
     passthru =
       (old.passthru or {})
       // {
-        tests = (old.passthru.tests or {}) // {inherit lifecycle;};
+        tests = (old.passthru.tests or {}) // {inherit drift lifecycle;};
       };
   })

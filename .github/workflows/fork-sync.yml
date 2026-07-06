@@ -87,6 +87,42 @@ jobs:
       # re-trigger flake-check. Repo admins may also need to enable "Allow GitHub
       # Actions to create and approve pull requests" once under Settings ->
       # Actions -> General.
+      # Drift visibility (RFC 0010, #2098): how far each pinned base trails its
+      # upstream default branch, patch stances, and retired-awaiting-drop counts.
+      # Read-only. Forge errors degrade to unknown cells inside the tool (it
+      # never fails the report over one unreachable forge), so this step fails
+      # only when the tool itself cannot run. The table lands in the job's step
+      # summary and in the rolling PR body (`body-path` below); the body file is
+      # written outside the workspace so create-pull-request cannot commit it.
+      - name: Fork drift report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          nix run .#upstream-sync -- drift --markdown > "$RUNNER_TEMP/drift.md"
+          {
+            echo "## Fork drift"
+            echo ""
+            cat "$RUNNER_TEMP/drift.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+          {
+            cat <<'BODY'
+          Automated fork-sync: bump each auto-updatable de-forked package's upstream base and regenerate its in-repo patch series through a real `git rebase`.
+
+          Driven by `lib/fork-packages.nix` (`autoUpdate = true`): currently **codex** (`openai/codex`) and **btop** (`aristocratos/btop`). Excluded (`autoUpdate = false`, bumped by hand via `nix run .#rebase-patches -- <name>`): **clippy** is nightly-toolchain-coupled and rev-pinned, bumped alongside the rust toolchain; **nix** is our daemon toolchain, pinned at the rev the fleet daemon runs, bumped only when we deliberately move the daemon version.
+
+          Each `patched-src-<name>` check was built against the freshly bumped base in this job, so the series still applies. The PR's `flake-check` CI rebuilds the full packages.
+
+          If this PR shows no `flake-check` run, the repo needs the `AUTOBUMP_TOKEN` secret and/or "Allow GitHub Actions to create and approve pull requests" enabled once.
+
+          ### Fork drift
+
+          BODY
+            cat "$RUNNER_TEMP/drift.md"
+            echo ""
+            echo "Auto-bump, made with Claude Opus 4.8."
+          } > "$RUNNER_TEMP/pr-body.md"
+
       - name: Open pull request
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
@@ -96,13 +132,6 @@ jobs:
           delete-branch: true
           commit-message: "fork-sync: bump upstream bases and regenerate patches"
           title: "fork-sync: bump upstream bases and regenerate patches"
-          body: |
-            Automated fork-sync: bump each auto-updatable de-forked package's upstream base and regenerate its in-repo patch series through a real `git rebase`.
-
-            Driven by `lib/fork-packages.nix` (`autoUpdate = true`): currently **codex** (`openai/codex`) and **btop** (`aristocratos/btop`). Excluded (`autoUpdate = false`, bumped by hand via `nix run .#rebase-patches -- <name>`): **clippy** is nightly-toolchain-coupled and rev-pinned, bumped alongside the rust toolchain; **nix** is our daemon toolchain, pinned at the rev the fleet daemon runs, bumped only when we deliberately move the daemon version.
-
-            Each `patched-src-<name>` check was built against the freshly bumped base in this job, so the series still applies. The PR's `flake-check` CI rebuilds the full packages.
-
-            If this PR shows no `flake-check` run, the repo needs the `AUTOBUMP_TOKEN` secret and/or "Allow GitHub Actions to create and approve pull requests" enabled once.
-
-            Auto-bump, made with Claude Opus 4.8.
+          # The body (preamble + live fork-drift table) is assembled by the
+          # "Fork drift report" step above; body-path keeps this step dumb.
+          body-path: ${{ runner.temp }}/pr-body.md
