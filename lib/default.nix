@@ -103,6 +103,13 @@
         if entry.mirror.homepage != null
         then entry.mirror.homepage
         else "https://github.com/${repoMetadataConfig.monorepo.repo}/tree/main/packages/${entry.relativePath}";
+      # The monorepo flake output attr (`nix run .#<attr>`) when the package
+      # is flake-exposed, so the generated mirror README can print a real run
+      # command instead of guessing.
+      flakeAttr =
+        if entry.flake != null
+        then entry.flake.attrName
+        else null;
     })
     packageRegistry.mirrorEntries;
   # Declarative GitHub About-sidebar metadata (description / homepage /

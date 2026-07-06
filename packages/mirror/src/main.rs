@@ -13,11 +13,13 @@
 //!
 //! CI drives both from `.github/workflows/mirror-sync.yml`.
 
+mod changelog;
 mod exec;
 mod fork;
 mod generate;
 mod lockfile;
 mod manifest;
+mod mirrors;
 mod publish;
 mod readme;
 mod workspace;
@@ -59,6 +61,12 @@ enum Command {
         /// Mirror repo `owner/name`, named in the generated README banner.
         #[arg(long)]
         repo: Option<String>,
+        /// Mirror manifest as a JSON file (the rendered `.#lib.mirrorPackages`
+        /// list), sourcing the repo, description, and flake attr for the
+        /// generated README; without it the README falls back to the crate's
+        /// own metadata (`publish` always resolves the manifest itself).
+        #[arg(long)]
+        mirror_json: Option<PathBuf>,
     },
     /// Generate a package's tree and snapshot-sync it into its mirror repo.
     Publish {
@@ -99,13 +107,26 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let workspace = Workspace::locate(cli.root.as_deref())?;
     match cli.command {
-        Command::Gen { package, out, repo } => {
+        Command::Gen {
+            package,
+            out,
+            repo,
+            mirror_json,
+        } => {
+            let entry = mirror_json
+                .as_deref()
+                .map(|json| mirrors::entry_for(&workspace, &package, Some(json)))
+                .transpose()?;
             let generated = generate::run(
                 &workspace,
                 &generate::Request {
                     package: &package,
                     out: &out,
-                    mirror_repo: repo.as_deref(),
+                    mirror_repo: repo
+                        .as_deref()
+                        .or_else(|| entry.as_ref().map(|entry| entry.repo.as_str())),
+                    description: entry.as_ref().and_then(|entry| entry.description.as_deref()),
+                    flake_attr: entry.as_ref().and_then(|entry| entry.flake_attr.as_deref()),
                 },
             )?;
             println!(

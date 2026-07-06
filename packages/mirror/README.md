@@ -54,10 +54,27 @@ tree:
   a mirror's first `cargo build` may drop entries the mirrored crate never
   activates, but it never changes a version and never touches the network for
   resolution.
-- The README leads with a banner naming the mirror a read-only generated
-  artifact, linking the exact monorepo tree (path + commit) it came from and
-  pointing issues/PRs at the monorepo. Below it: the package's own README
-  when it has one, else a minimal generated body from the crate metadata.
+- The README and changelog are generated, never hand-written per mirror
+  (house style: the `creating-a-readme` skill). The README: a symbolic
+  `.github/hero.svg` (name, tagline, deterministic mark; dark/light via CSS
+  `prefers-color-scheme` embedded in the SVG), the banner naming the mirror
+  a read-only generated artifact (exact monorepo tree link, issues/PRs to
+  the monorepo), a hook question and pitch from the declarative
+  `mirror.description` (crate `[package] description` as fallback), an
+  Install section derived from what the package *is* (flake-exposed ->
+  `nix run github:indexable-inc/index#<attr>`, binary -> `cargo install
+  --git`, library -> a git-dependency snippet), the package's own README
+  when it has one (duplicate title stripped; else a minimal generated Use
+  section), and a one-line pointer to `CHANGELOG.md`. Pass `gen`
+  `--mirror-json` (the rendered `.#lib.mirrorPackages`) to source the
+  repo/description/flake attr; `publish` resolves it automatically.
+- `CHANGELOG.md` is derived from the monorepo commits that touched the
+  package path (`git log -- packages/<pkg>`): Keep a Changelog section
+  names picked from conventional-commit prefixes, grouped by month (a
+  mirror tracks the monorepo continuously; there are no versioned releases),
+  every entry linking its monorepo commit. It needs full history, so the
+  generator refuses a shallow clone and mirror-sync checks out with
+  `fetch-depth: 0`.
 
 `mirror publish --package packages/<path> [--create]` runs `gen` into a
 scratch directory, clones the mirror repo, swaps its working tree for the
