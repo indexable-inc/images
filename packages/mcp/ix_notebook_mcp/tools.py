@@ -200,21 +200,17 @@ def _topic_required() -> bool:
     )
 
 
-async def _require_topic(ctx: Context | None, *, intent: str | None = None) -> None:
-    """Fail fast until this MCP session has named the current dashboard topic."""
+def _missing_topic(ctx: Context | None, *, intent: str | None = None) -> str | None:
+    """The topic gate's error message, or None once this session has set one."""
     if not _topic_required() or _session_topic(ctx) is not None:
-        return
+        return None
     suggestion = f" Suggested topic from this call: {intent!r}." if intent else ""
-    raise McpError(
-        ErrorData(
-            code=types.INVALID_REQUEST,
-            message=(
-                "Set a dashboard topic first: call topic_set with a short label for "
-                "the current cluster of related tool calls."
-                f"{suggestion}"
-            ),
-        )
+    return (
+        "Set a dashboard topic first: call topic_set with a short label for "
+        "the current cluster of related tool calls."
+        f"{suggestion}"
     )
+
 
 def session_names() -> list[str]:
     """The labels live MCP sessions gave themselves, for the mesh endpoint.
@@ -300,21 +296,41 @@ def _session_name_required() -> bool:
     )
 
 
+def _missing_session_name(ctx: Context | None, *, intent: str | None = None) -> str | None:
+    """The session-name gate's error message, or None once this session is named."""
+    if not _session_name_required() or _session_label(ctx) is not None:
+        return None
+    suggestion = f" Suggested name from this call: {intent!r}." if intent else ""
+    return (
+        "Name this dashboard session first: call session_set_name with a "
+        "short human task label before using acting tools."
+        f"{suggestion}"
+    )
+
+
 async def _require_session_name(ctx: Context | None, *, intent: str | None = None) -> None:
     """Fail fast until this MCP session has named its dashboard group."""
-    if not _session_name_required() or _session_label(ctx) is not None:
-        return
-    suggestion = f" Suggested name from this call: {intent!r}." if intent else ""
-    raise McpError(
-        ErrorData(
-            code=types.INVALID_REQUEST,
-            message=(
-                "Name this dashboard session first: call session_set_name with a "
-                "short human task label before using acting tools."
-                f"{suggestion}"
-            ),
+    message = _missing_session_name(ctx, intent=intent)
+    if message is not None:
+        raise McpError(ErrorData(code=types.INVALID_REQUEST, message=message))
+
+
+async def _require_acting_gates(ctx: Context | None, *, intent: str | None = None) -> None:
+    """Fail fast until this MCP session has both named itself and set a topic.
+
+    Every unmet gate is reported in the ONE error, so a fresh session satisfies
+    both in a single corrective pass instead of tripping them serially -- one
+    rejected round trip per gate (index#1983)."""
+    missing = [
+        message
+        for message in (
+            _missing_session_name(ctx, intent=intent),
+            _missing_topic(ctx, intent=intent),
         )
-    )
+        if message is not None
+    ]
+    if missing:
+        raise McpError(ErrorData(code=types.INVALID_REQUEST, message=" ".join(missing)))
 
 
 def _first_sentence(text: str) -> str:
@@ -471,8 +487,7 @@ async def python_exec(
 ) -> Content:
     await _start_dashboard_once()
     await _identify_client_once(ctx)
-    await _require_session_name(ctx, intent=intent)
-    await _require_topic(ctx, intent=intent)
+    await _require_acting_gates(ctx, intent=intent)
     # A foreground budget is how long the run holds the one shared shell channel
     # before it backgrounds, so cap it: a giant budget (a 15-minute `await
     # jobs[...]`) would block every other call behind it. The clamp is surfaced
@@ -581,8 +596,7 @@ async def pr_watch(
 ) -> Content:
     await _start_dashboard_once()
     await _identify_client_once(ctx)
-    await _require_session_name(ctx, intent=f"watch PR {pr}")
-    await _require_topic(ctx, intent=f"watch PR {pr}")
+    await _require_acting_gates(ctx, intent=f"watch PR {pr}")
     code = (
         "await watch_pr("
         f"{pr!r}, cwd={cwd!r}, auto_merge={auto_merge!r}, "
