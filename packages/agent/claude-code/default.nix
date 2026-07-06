@@ -401,7 +401,10 @@
         inherit nix gnupg;
       };
 in
-  stdenv.mkDerivation (finalAttrs: {
+  # `allowVendoredUnfree` strips the honest `meta.license` tag below so the
+  # per-system flake package set (evaluated without `allowUnfree`) can build
+  # `nix run .#claude-code`; see lib/util/vendored-unfree.nix.
+  ix.allowVendoredUnfree (stdenv.mkDerivation (finalAttrs: {
     pname = "claude-code";
     inherit version;
 
@@ -499,12 +502,13 @@ in
     meta = {
       description = "Claude Code, Anthropic's agentic coding tool in the terminal";
       homepage = "https://www.anthropic.com/claude-code";
-      # License omitted rather than `licenses.unfree`: the per-system flake
-      # package set evaluates nixpkgs without `allowUnfree`, so tagging this
-      # vendored binary unfree would block `nix run .#claude-code`. Distribution
-      # terms are Anthropic's commercial Claude Code license.
+      # Stripped by the `ix.allowVendoredUnfree` wrapping the whole derivation
+      # above, so the tag stays honest here without blocking the per-system
+      # flake package set. Distribution terms are Anthropic's commercial
+      # Claude Code license.
+      license = lib.licenses.unfree;
       mainProgram = binName;
       platforms = builtins.attrNames manifest.platforms;
       sourceProvenance = [lib.sourceTypes.binaryNativeCode];
     };
-  })
+  }))

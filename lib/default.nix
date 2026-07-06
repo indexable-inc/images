@@ -326,6 +326,15 @@
   */
   mcp = import ./util/mcp.nix {inherit lib;};
 
+  /**
+  Drop the `meta.license` marker on a vendored proprietary binary, so the
+  per-system flake package set (evaluated without `allowUnfree`) can build a
+  wrapper around it. Shared by the vendored-agent wrappers (claude-code,
+  cursor-cli); see [`lib/util/vendored-unfree.nix`](lib/util/vendored-unfree.nix)
+  for the full rationale.
+  */
+  allowVendoredUnfree = import ./util/vendored-unfree.nix {};
+
   mkMinecraftLoader = import ./minecraft/loader.nix;
 
   /**
@@ -487,6 +496,7 @@
       rev
       revEpoch
       agents
+      allowVendoredUnfree
       artifacts
       attrs
       buildElixirCheck
