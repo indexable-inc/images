@@ -1,7 +1,21 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="@indexable/sdk loads a native binding on Node and Bun or a wasm binding in browsers, both driving ix VMs"></p>
+
 # @indexable/sdk
 
-Modern TypeScript bindings for ix. The package loads the native N-API binding
-on Node.js and Bun, and the wasm/WebTransport binding in browsers.
+Want a disposable VM running your code from TypeScript in three lines? These
+are the TypeScript bindings for ix: the package loads the native N-API binding
+on Node.js and Bun, and the wasm/WebTransport binding in browsers, so the same
+code drives sandboxes from a server or a web page.
+
+## Install
+
+```sh
+npm install @indexable/sdk
+```
+
+Node.js >= 22 or Bun; browsers pick up the wasm build automatically.
+
+## Usage
 
 ```ts
 import { Sandbox } from '@indexable/sdk'
