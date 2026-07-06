@@ -1,0 +1,193 @@
+name: Cache push watchdog
+
+# cache-push publishes packages to cache.ix.dev and advances `cache-ready`, the
+# ref darwin consumers pin (RFC 0009, #1862). On 2026-07-06 (#1968) it wedged
+# silently for 13h: GitHub materialized ZERO jobs for every cache-push run, so
+# each run sat `pending` holding the concurrency group until the next merge's
+# run superseded and auto-cancelled it. Nothing failed, so nothing alerted --
+# silence looked like success. Job-level `timeout-minutes` cannot catch this:
+# the timeout clock only starts once a job is `in_progress`, and these runs
+# never reached a single job.
+#
+# This watchdog is the out-of-band detector cache-push cannot be for itself. It
+# runs on a short cron and checks two independent liveness signals, each with
+# its own loud channel and self-heal:
+#
+#   1. A cache-push run stuck `queued`/`in_progress` with zero jobs past a
+#      grace window (the GitHub materialization stall). Cancel it, redispatch a
+#      fresh run, and file a tracking issue.
+#   2. `cache-ready` drifted too far behind `main` (the publish is not keeping
+#      up for any reason). File a tracking issue and dispatch one self-heal run.
+#
+# Every terminal path is loud: a detected wedge files/updates a tracking issue
+# AND fails the job (red in the Actions tab); a clean check closes the tracking
+# issue. There is no success-only path. Alerts go through the repo's
+# find-or-update tracking-issue channel (same mechanism as cve-scan.yml /
+# blast-radius.yml), because this repo has no Slack webhook secret; the issue is
+# the reliable, self-contained channel.
+
+on:
+  schedule:
+    # Every 15 min. cache-push runs on every merge (minutes apart at peak), and
+    # the stall window that matters is "pending with 0 jobs for STALL_GRACE_MIN
+    # minutes", so 15 min sampling catches a wedge within one grace window plus
+    # one tick without spamming the Actions queue.
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report findings only: never cancel, redispatch, or file/close issues"
+        type: boolean
+        default: false
+
+# Read runs/jobs, cancel + redispatch cache-push, and maintain the tracking
+# issue. `actions: write` covers both `gh run cancel` and `gh workflow run`
+# (workflow_dispatch); issue writes do not need a PAT (#1968), unlike PR
+# creation, which the enterprise blocks for GITHUB_TOKEN.
+permissions:
+  contents: read
+  actions: write
+  issues: write
+
+concurrency:
+  # One watchdog at a time; a slow API pass must not overlap the next tick and
+  # double-cancel. cancel-in-progress keeps the newest check authoritative.
+  group: cache-push-watchdog
+  cancel-in-progress: true
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      # A run pending with zero jobs beyond this is the materialization stall.
+      # Healthy runs dispatch a job within ~1 min (the dispatcher recovery loop
+      # polls every ~66s); 20 min is comfortably past any normal queue wait and
+      # short enough that a wedge self-heals well inside an hour.
+      STALL_GRACE_MIN: "20"
+      # cache-ready this many commits behind main is a drift alert even if no
+      # single run is currently stalled (e.g. a chain of auto-cancelled runs
+      # each cleared before this watchdog sampled it).
+      DRIFT_MAX_COMMITS: "10"
+      DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+    steps:
+      - name: Detect and heal cache-push wedges
+        run: |
+          set -euo pipefail
+
+          issue_marker="<!-- cache-push-watchdog-tracking -->"
+          issue_title="cache-push watchdog: publish pipeline wedged"
+          now_epoch="$(date -u +%s)"
+
+          note() { echo "::notice::watchdog: $*"; }
+          finding=""   # non-empty => something is wrong; body accumulates here
+          add_finding() { finding="${finding}$1"$'\n'; }
+
+          : > /tmp/stalled.txt
+
+          # --- Signal 1: a cache-push run stuck with zero jobs -----------------
+          # A run is a stall suspect when it is queued/in_progress/pending AND
+          # has created no jobs yet. jobs.total_count==0 is the exact
+          # fingerprint from #1968. Read the id list first, then loop in the
+          # parent shell (a `while` on a pipe would run in a subshell and lose
+          # the appends).
+          mapfile -t suspect_runs < <(gh api \
+            "repos/${REPOSITORY}/actions/workflows/cache-push.yml/runs?per_page=20" \
+            --jq '.workflow_runs[] | select(.status=="queued" or .status=="in_progress" or .status=="pending") | "\(.id) \(.created_at)"')
+
+          for run in "${suspect_runs[@]}"; do
+            [ -n "$run" ] || continue
+            id="${run%% *}"
+            created="${run#* }"
+            njobs="$(gh api "repos/${REPOSITORY}/actions/runs/${id}/jobs" --jq '.total_count')"
+            created_epoch="$(date -u -d "$created" +%s)"
+            age_min=$(( (now_epoch - created_epoch) / 60 ))
+            if [ "$njobs" -eq 0 ] && [ "$age_min" -ge "${STALL_GRACE_MIN}" ]; then
+              echo "$id $age_min" >> /tmp/stalled.txt
+            fi
+          done
+
+          if [ -s /tmp/stalled.txt ]; then
+            while read -r id age_min; do
+              echo "::error::run ${id} pending with 0 jobs for ${age_min} min (>= ${STALL_GRACE_MIN} min grace): GitHub never materialized a job (see #1968)"
+              add_finding "- **Stalled run**: [${id}](https://github.com/${REPOSITORY}/actions/runs/${id}) pending with 0 jobs for ${age_min} min."
+              if [ -z "${DRY_RUN}" ]; then
+                # Cancel the wedged run so it stops holding the cache-push
+                # concurrency group.
+                gh run cancel "${id}" --repo "${REPOSITORY}" || echo "::warning::could not cancel ${id} (may have just completed)"
+              fi
+            done < /tmp/stalled.txt
+            if [ -z "${DRY_RUN}" ]; then
+              # full_pass heals any holes the cancelled runs left behind.
+              gh workflow run cache-push.yml --repo "${REPOSITORY}" --ref main -f full_pass=true \
+                && add_finding "- **Self-heal**: dispatched a fresh \`cache-push\` (full_pass) on main." \
+                || echo "::error::watchdog failed to redispatch cache-push"
+            fi
+          else
+            note "no cache-push run stalled with zero jobs"
+          fi
+
+          # --- Signal 2: cache-ready drifted behind main ----------------------
+          # Independent of signal 1: a chain of auto-cancelled runs can leave
+          # cache-ready stale even when nothing is stalled at sample time.
+          main_sha="$(gh api "repos/${REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          if ready_sha="$(gh api "repos/${REPOSITORY}/git/ref/heads/cache-ready" --jq '.object.sha' 2>/dev/null)"; then
+            # ahead_by counts commits main has that cache-ready lacks.
+            behind="$(gh api "repos/${REPOSITORY}/compare/${ready_sha}...${main_sha}" --jq '.ahead_by')"
+            note "cache-ready is ${behind} commit(s) behind main (ready=${ready_sha:0:8}, main=${main_sha:0:8})"
+            if [ "${behind}" -ge "${DRIFT_MAX_COMMITS}" ]; then
+              echo "::error::cache-ready is ${behind} commits behind main (>= ${DRIFT_MAX_COMMITS}); consumers pinning cache-ready are stale (see #1862, #1968)"
+              add_finding "- **cache-ready drift**: ${behind} commits behind main (\`${ready_sha:0:8}\` vs \`${main_sha:0:8}\`)."
+              # Self-heal only if signal 1 did not already redispatch, to avoid
+              # queuing two heals in one tick.
+              if [ -z "${DRY_RUN}" ] && [ ! -s /tmp/stalled.txt ]; then
+                gh workflow run cache-push.yml --repo "${REPOSITORY}" --ref main -f full_pass=true \
+                  && add_finding "- **Self-heal**: dispatched a fresh \`cache-push\` (full_pass) on main." \
+                  || echo "::error::watchdog failed to redispatch cache-push"
+              fi
+            fi
+          else
+            note "cache-ready ref does not exist yet; nothing to compare"
+          fi
+
+          # --- Maintain the tracking issue ------------------------------------
+          number="$(gh issue list --repo "${REPOSITORY}" --state open \
+                      --search "in:body \"${issue_marker}\"" \
+                      --json number --jq '.[0].number // empty')"
+
+          if [ -n "${finding}" ]; then
+            {
+              echo "${issue_marker}"
+              echo "## cache-push watchdog detected a wedge"
+              echo
+              echo "Last checked: \`$(date -u +'%Y-%m-%dT%H:%M:%SZ')\` by run [${GITHUB_RUN_ID}](https://github.com/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID})."
+              echo
+              echo "${finding}"
+              echo
+              echo "The watchdog cancels stalled runs and redispatches automatically. If this issue keeps reopening, GitHub's job scheduler is repeatedly failing to materialize cache-push jobs (root cause is GitHub-side, see #1968); the self-heal is working but the underlying flakiness persists."
+              echo
+              echo "_Filed by cache-push-watchdog.yml. Made with Claude Opus 4.8._"
+            } > /tmp/watchdog-issue.md
+            if [ -n "${DRY_RUN}" ]; then
+              note "DRY_RUN: would file/update tracking issue with findings"
+              cat /tmp/watchdog-issue.md
+            elif [ -n "${number}" ]; then
+              gh issue edit "${number}" --repo "${REPOSITORY}" --body-file /tmp/watchdog-issue.md
+              gh issue comment "${number}" --repo "${REPOSITORY}" \
+                --body "Re-detected at \`$(date -u +'%Y-%m-%dT%H:%M:%SZ')\` (run ${GITHUB_RUN_ID}); self-heal re-triggered."
+            else
+              gh issue create --repo "${REPOSITORY}" --title "${issue_title}" \
+                --label bug --label github_actions --body-file /tmp/watchdog-issue.md
+            fi
+            # Fail the watchdog job so the wedge is red in the Actions tab too,
+            # not only in the issue. The self-heal already ran above.
+            exit 1
+          else
+            note "cache-push pipeline healthy"
+            if [ -z "${DRY_RUN}" ] && [ -n "${number}" ]; then
+              gh issue comment "${number}" --repo "${REPOSITORY}" \
+                --body "Resolved: cache-push pipeline healthy at \`$(date -u +'%Y-%m-%dT%H:%M:%SZ')\` (run ${GITHUB_RUN_ID}). Closing."
+              gh issue close "${number}" --repo "${REPOSITORY}"
+            fi
+          fi
