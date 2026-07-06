@@ -403,3 +403,46 @@ def test_reply_tool_appends_event_for_live_resource(tmp_path: Path, monkeypatch:
         assert [(r["kind"], json.loads(r["body"])["text"]) for r in rows] == [("reply", "deployed ✓")]
 
     asyncio.run(run())
+
+
+def test_pr_watch_tool_returns_header_with_slugged_resource(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """pr_watch's happy path up to the header (regression: NameError on `re`, #1900)."""
+
+    async def run() -> None:
+        from ix_notebook_mcp import tools
+
+        cfg = Config(workdir=tmp_path, store_path=tmp_path / "w.db")
+        monkeypatch.setattr("ix_notebook_mcp.tools.config", lambda: cfg)
+
+        async def gate(*_args: object, **_kwargs: object) -> None:
+            return None
+
+        monkeypatch.setattr(tools, "_start_dashboard_once", gate)
+        monkeypatch.setattr(tools, "_identify_client_once", gate)
+        monkeypatch.setattr(tools, "_require_session_name", gate)
+        monkeypatch.setattr(tools, "_require_topic", gate)
+
+        class FakeKernel:
+            async def python_exec(
+                self,
+                code: str,
+                budget: float,
+                intent: str,
+                *,
+                session: str | None = None,
+                topic: str | None = None,
+            ) -> tuple[list, dict]:
+                assert "watch_pr" in code
+                return [], {"id": "ab12", "status": "running", "running": True, "elapsed_s": 0.1}
+
+        monkeypatch.setattr(tools, "current_kernel", FakeKernel)
+
+        out = await tools.pr_watch("https://github.com/o/r/pull/1856", cwd=str(tmp_path))
+        header = json.loads(out[0].text)
+        # The URL is slugged into a resource id safe for the dashboard route.
+        assert header["resource"] == "pr-https-github.com-o-r-pull-1856"
+        assert header["job"] == "ab12"
+
+    asyncio.run(run())

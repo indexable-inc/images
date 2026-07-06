@@ -34,6 +34,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import sqlite3
 import uuid
 import weakref
