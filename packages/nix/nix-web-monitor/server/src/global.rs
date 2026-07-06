@@ -163,12 +163,13 @@ pub async fn log_file_for(monitor: &Arc<RwLock<MonitorState>>, drv_path: &str) -
 pub async fn read_log_tail(path: PathBuf) -> std::io::Result<String> {
     tokio::task::spawn_blocking(move || {
         let bytes = std::fs::read(&path)?;
-        let text = if path.extension().is_some_and(|extension| extension == "bz2") {
+        let (text, prefix_dropped) = if path.extension().is_some_and(|extension| extension == "bz2")
+        {
             decompress_prefix(&bytes)
         } else {
-            bytes
+            (bytes, false)
         };
-        Ok(tail_lines(&text, LOG_TAIL_BYTES))
+        Ok(tail_lines(&text, LOG_TAIL_BYTES, prefix_dropped))
     })
     .await
     // The closure neither panics nor is cancelled; a join error here is a bug.
@@ -184,9 +185,19 @@ pub async fn read_log_tail(path: PathBuf) -> std::io::Result<String> {
 /// so a decode error just ends the read: everything decoded so far *is* the
 /// live log. Only the last [`LOG_TAIL_BYTES`]-ish bytes are retained while
 /// decoding, so a huge log never balloons memory.
-fn decompress_prefix(bytes: &[u8]) -> Vec<u8> {
+///
+/// bzip2 is a block format (the BWT inverse needs the whole block), so the
+/// live tail advances one *completed* block at a time: nix compresses at the
+/// default 900 KB block size, meaning a quiet build's log decodes to nothing
+/// until its first 900 KB of output. That granularity is inherent to reading
+/// what nix wrote; the panel shows "no log output yet" until then.
+/// Returns the retained bytes plus whether earlier decoded bytes were dropped
+/// by the rolling cap, so the caller knows the buffer no longer starts at the
+/// log's true beginning (and must cut forward to a line boundary either way).
+fn decompress_prefix(bytes: &[u8]) -> (Vec<u8>, bool) {
     let mut decoder = bzip2::read::BzDecoder::new(bytes);
     let mut out = Vec::new();
+    let mut dropped = false;
     let mut chunk = vec![0_u8; 64 * 1024];
     loop {
         match decoder.read(&mut chunk) {
@@ -195,21 +206,25 @@ fn decompress_prefix(bytes: &[u8]) -> Vec<u8> {
                 out.extend_from_slice(&chunk[..read]);
                 if out.len() > LOG_TAIL_BYTES * 2 {
                     out.drain(..out.len() - LOG_TAIL_BYTES);
+                    dropped = true;
                 }
             }
             // A truncated live stream (or garbage): keep what decoded.
             Err(_) => break,
         }
     }
-    out
+    (out, dropped)
 }
 
 /// The last `keep` bytes as text, cut forward to a line boundary so the tail
-/// never opens mid-line. Lossy decode: build logs are not guaranteed UTF-8.
-fn tail_lines(bytes: &[u8], keep: usize) -> String {
+/// never opens mid-line. `prefix_dropped` marks a buffer whose head was already
+/// discarded upstream (the decoder's rolling cap cuts at an arbitrary byte), so
+/// the cut applies even when the buffer is under `keep`. Lossy decode: build
+/// logs are not guaranteed UTF-8.
+fn tail_lines(bytes: &[u8], keep: usize, prefix_dropped: bool) -> String {
     let start = bytes.len().saturating_sub(keep);
     let mut tail = &bytes[start..];
-    if start > 0
+    if (start > 0 || prefix_dropped)
         && let Some(newline) = tail.iter().position(|&byte| byte == b'\n')
     {
         tail = &tail[newline + 1..];
@@ -223,10 +238,12 @@ mod tests {
 
     use super::*;
 
-    /// Compress `text` the way Nix writes build logs, for fixture files.
-    fn compress_bzip2(text: &str) -> Vec<u8> {
+    /// Compress `text` as a bzip2 stream. `level` also sets the block size
+    /// (`level * 100 KB`): nix writes at the default level 9, but the
+    /// truncation test uses level 1 so a modest fixture spans several blocks.
+    fn compress_bzip2(text: &str, level: u32) -> Vec<u8> {
         use std::io::Write;
-        let mut encoder = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::default());
+        let mut encoder = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::new(level));
         encoder.write_all(text.as_bytes()).expect("compress log");
         encoder.finish().expect("finish bzip2 stream")
     }
@@ -301,45 +318,73 @@ mod tests {
     #[test]
     fn bz2_log_round_trips_and_tails() {
         let text = "configuring\nbuilding\ninstalling\n";
-        let compressed = compress_bzip2(text);
-        assert_eq!(decompress_prefix(&compressed), text.as_bytes());
-        assert_eq!(tail_lines(text.as_bytes(), 1 << 20), text);
+        let (decoded, dropped) = decompress_prefix(&compress_bzip2(text, 9));
+        assert_eq!(decoded, text.as_bytes());
+        assert!(!dropped, "a small log keeps its whole prefix");
+        assert_eq!(tail_lines(text.as_bytes(), 1 << 20, false), text);
     }
 
     /// A log truncated mid-stream (the live-write case: no bzip2 footer, last
-    /// block cut short) still yields every fully-decoded byte instead of an
+    /// block cut short) still yields every *completed* block instead of an
     /// error. This is the exact case `nix log` refuses and the reason the
-    /// server decompresses the file itself.
+    /// server decompresses the file itself. Level 1 (100 KB blocks) keeps the
+    /// fixture small while spanning several blocks; nix's level-9 stream
+    /// behaves identically at 900 KB granularity.
     #[test]
-    fn truncated_bz2_stream_yields_decoded_prefix() {
-        let line = "log line with enough text to span compressed blocks\n";
-        let text = line.repeat(4096);
-        let compressed = compress_bzip2(&text);
+    fn truncated_bz2_stream_yields_completed_blocks() {
+        let line = "log line with some incompressible entropy 8d1f4a2c\n";
+        // ~500 KB uncompressed -> ~5 level-1 blocks, and enough decoded output
+        // to exercise the rolling cap.
+        let text = line.repeat(10_000);
+        let compressed = compress_bzip2(&text, 1);
         let truncated = &compressed[..compressed.len() / 2];
 
-        let decoded = decompress_prefix(truncated);
-        assert!(!decoded.is_empty(), "half the stream decodes to something");
-        assert!(decoded.len() < text.len(), "but not to the whole log");
+        let (decoded, _) = decompress_prefix(truncated);
+        assert!(!decoded.is_empty(), "completed blocks decode");
+        assert!(decoded.len() < text.len(), "but not the whole log");
         assert!(
-            decoded.starts_with(line.as_bytes()),
-            "decoded prefix is the log's real prefix"
+            String::from_utf8_lossy(&decoded).contains("incompressible entropy 8d1f4a2c"),
+            "decoded bytes are real log content"
         );
+    }
+
+    /// A truncated stream whose first block never completed (a quiet build's
+    /// live log) decodes to nothing, and must not error: the panel shows
+    /// "no log output yet".
+    #[test]
+    fn truncated_first_block_decodes_to_empty() {
+        let compressed = compress_bzip2(&"short log\n".repeat(100), 9);
+        let truncated = &compressed[..compressed.len() / 2];
+        assert!(decompress_prefix(truncated).0.is_empty());
     }
 
     /// Garbage that is not bzip2 at all decodes to nothing rather than failing.
     #[test]
     fn non_bzip2_bytes_decode_to_empty() {
-        assert!(decompress_prefix(b"error: not a log").is_empty());
+        assert!(decompress_prefix(b"error: not a log").0.is_empty());
     }
 
     /// The tail is bounded and opens on a line boundary, never mid-line.
     #[test]
     fn tail_is_bounded_and_line_aligned() {
         let text: String = (0..1000).map(|i| format!("line {i}\n")).collect();
-        let tail = tail_lines(text.as_bytes(), 100);
+        let tail = tail_lines(text.as_bytes(), 100, false);
         assert!(tail.len() <= 100);
         assert!(tail.starts_with("line "), "tail begins at a line start");
         assert!(tail.ends_with("line 999\n"), "tail keeps the newest lines");
+    }
+
+    /// When the decoder already dropped the head (rolling cap), the cut to a
+    /// line boundary must happen even though the buffer is under the cap:
+    /// the buffer's first line is a fragment cut at an arbitrary byte.
+    #[test]
+    fn dropped_prefix_forces_line_boundary_cut() {
+        assert_eq!(tail_lines(b"ragment\nwhole line\n", 1 << 20, true), "whole line\n");
+        // Without the marker the same buffer is a complete log and keeps line 1.
+        assert_eq!(
+            tail_lines(b"ragment\nwhole line\n", 1 << 20, false),
+            "ragment\nwhole line\n"
+        );
     }
 
     /// `log_file_for` only resolves builds the status view currently lists:
@@ -378,7 +423,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("nwm-global-log-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("create scratch dir");
         let path = dir.join("test.drv.bz2");
-        std::fs::write(&path, compress_bzip2("hello from the builder\n"))
+        std::fs::write(&path, compress_bzip2("hello from the builder\n", 9))
             .expect("write fixture log");
 
         let tail = read_log_tail(path).await.expect("fixture log reads");
