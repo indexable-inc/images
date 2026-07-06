@@ -460,6 +460,12 @@
     # `recurseForDerivations` groups are not derivations, which the flake
     # `checks` schema requires.
     ciChecks = collect "ciChecks";
+    # Registry-derived map of package directory -> flake attr for every
+    # `updateScript` package exposed on a system. update.yml's "Build changed
+    # packages" step evaluates this to find which attr owns each file the
+    # updaters changed, instead of deriving an attr from path segments
+    # (#2036). Non-schema, so surfaced through `collect` like `ciChecks`.
+    updatablePackages = collect "updatablePackages";
     # CI-only view of `packages` with each NixOS image swapped for its
     # `toplevel` closure; cache-push.yml publishes this instead of the
     # monolithic `*-oci.tar` archives, which nothing substitutes. Non-schema,

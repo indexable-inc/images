@@ -47,7 +47,8 @@ jobs:
       # Runs every content updater in parallel via dag-runner (see
       # lib/per-system.nix). Each regenerates its own source files relative to
       # the repo root: the Minecraft catalogs/sound pack, and each pinned
-      # package's packages/<id>/manifest.json.
+      # package's sources under its own directory (manifest.json, pins.json,
+      # ...).
       #
       # `|| true`: a content updater talks to an independent upstream (papermc,
       # fabric, mojang, the yc/claude-code release hosts). One flaky upstream
@@ -60,27 +61,45 @@ jobs:
       - name: Run updaters
         run: nix run .#update || true
 
-      # Build every changed package's x86_64-linux output. This proves the
-      # freshly pinned hash actually fetches and the package builds; it does NOT
-      # prove provenance. claude-code's updater already verified a GPG signature
-      # over all four platform checksums, but yc has no upstream signature and
-      # this step only builds the runner's platform, so for yc the four hash
-      # changes in the diff are trusted on the strength of human PR review, not a
-      # cryptographic check. Catalog updaters are validated by the PR's own
-      # flake-check CI. Assumes a package's directory name equals its flake attr
-      # (its registry `id`), which holds for every flagged package today.
+      # Build every changed updater package's x86_64-linux output. This proves
+      # the freshly pinned hash actually fetches and the package builds; it does
+      # NOT prove provenance. An updater that verifies an upstream signature
+      # (claude-code checks Anthropic's detached GPG signature over all four
+      # platform checksums) is fail-closed at write time, but most pins have no
+      # upstream signature and this step only builds the runner's platform, so
+      # those hash changes are trusted on the strength of human PR review, not a
+      # cryptographic check.
+      #
+      # Which attr to build comes from the registry, never from a manifest's
+      # path segments: `.#updatablePackages` (lib/per-system.nix) maps each
+      # `updateScript` package's directory to its flake attr for this platform.
+      # A changed file with no owner in that map (the nested Minecraft catalog
+      # manifests under packages/minecraft/catalogs/, or a platform-gated
+      # updater like the aarch64-darwin-only dia) is skipped here and validated
+      # by the PR's own flake-check CI instead (#2036).
       - name: Build changed packages
         run: |
           set -euo pipefail
-          changed=$(git diff --name-only -- 'packages/*/manifest.json' || true)
+          changed=$(git diff --name-only -- packages/)
           if [ -z "$changed" ]; then
-            echo "no package manifests changed"
+            echo "no package sources changed"
             exit 0
           fi
-          for manifest in $changed; do
-            id=$(basename "$(dirname "$manifest")")
-            echo "::group::nix build .#$id"
-            nix build ".#$id"
+          owners=$(nix eval --json ".#updatablePackages.x86_64-linux")
+          attrs=$(jq -nr --argjson owners "$owners" --arg changed "$changed" '
+            $changed | split("\n")[] as $file
+            | $owners
+            | to_entries[]
+            | select(.key as $dir | $file | startswith($dir + "/"))
+            | .value
+          ' | sort -u)
+          if [ -z "$attrs" ]; then
+            echo "no changed file is owned by an updater package on this platform"
+            exit 0
+          fi
+          for attr in $attrs; do
+            echo "::group::nix build .#$attr"
+            nix build ".#$attr"
             echo "::endgroup::"
           done
 
@@ -105,8 +124,8 @@ jobs:
           body: |
             Automated refresh of every repo content source.
 
-            `nix run .#update` ran all content updaters in parallel: the Minecraft mod / loader / sound catalogs and every package whose `package.nix` sets `updateScript = true` (currently claude-code and yc). flake.lock is handled by its own workflow.
+            `nix run .#update` ran all content updaters in parallel: the Minecraft mod / loader / sound catalogs and every package whose `package.nix` sets `updateScript = true` (discovered from packages/registry.nix). flake.lock is handled by its own workflow.
 
-            Each changed package also built on `x86_64-linux`, which proves the new hash fetches and builds but **not** that it is authentic. claude-code's updater verified Anthropic's detached GPG signature over all four platform checksums before writing. **yc has no upstream signature**, so please eyeball the yc hash changes before merging: the build only covers x86_64-linux, and the updater pins whatever bytes the release host served.
+            Each changed updater package also built on `x86_64-linux`, which proves the new hash fetches and builds but **not** that it is authentic. claude-code's updater verified Anthropic's detached GPG signature over all four platform checksums before writing. **Most pins have no upstream signature**, so please eyeball those hash changes before merging: the build only covers x86_64-linux, and the updater pins whatever bytes the release host served.
 
             Auto-bump, made with Claude Opus 4.8.

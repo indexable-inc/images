@@ -649,6 +649,17 @@
       entry: lib.nameValuePair entry.id {command = [(updaterFor entry)];}
     );
   updateSpec = (pkgs.formats.json {}).generate "update-dag.json" {nodes = updateNodes;};
+  # Machine-readable registry view for update.yml's "Build changed packages"
+  # step: repo-relative package directory -> the flake attr that builds it on
+  # this system. The workflow maps each file the updaters changed to its owning
+  # package through this table instead of guessing an attr from path segments,
+  # which breaks for nested catalog manifests (#2036). Restricted to entries
+  # with a `flake` target enabled here, so a platform-gated updater (dia is
+  # aarch64-darwin-only) is absent from the Linux map and gets skipped rather
+  # than built as a missing attr.
+  updatablePackages = lib.genAttrs' (
+    lib.filter (entry: entry.updateScript) (packageRegistry.flakeEntriesFor system)
+  ) (entry: lib.nameValuePair "packages/${entry.relativePath}" entry.flake.attrName);
   update = ix.writeNushellApplication pkgs {
     name = "update";
     meta.description = "Refresh every repo content source (Minecraft catalogs + pinned binaries) in parallel via dag-runner";
@@ -1364,6 +1375,10 @@
     // healthChecks.lifecyclePackages;
 in {
   packages = packageSet;
+
+  # Non-schema output consumed by update.yml via `nix eval --json`; see the
+  # binding above for what it maps.
+  inherit updatablePackages;
 
   # CI-only push roots for cache-push.yml. Two adjustments to `packages` keep the
   # cache useful to `ix up` while cutting the monolithic `*-oci.tar` archives that
