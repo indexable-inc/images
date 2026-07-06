@@ -1,14 +1,23 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="source files become relations via tree-sitter query matches, Datalog rules join them into derived rows, and derived rows become lint findings or rewrite edits"></p>
+
 # astlog
 
-Datalog over tree-sitter syntax trees: tree-sitter query matches become
-relations, Datalog rules join them, and rewrites turn derived rows into edits.
+How do you grep for an `unwrap()` call *inside a function whose return type is `Result`*, or a call passing a variable *that was assigned from `getenv`*? Pattern tools (ast-grep, Semgrep, tree-sitter queries) answer "does this node match this shape"; those questions are joins, the first on tree position, the second on identifier text across two unrelated subtrees. astlog is Datalog over tree-sitter syntax trees: query matches become relations, rules join them, and rewrites turn derived rows into edits. Both questions are one rule.
 
-Pattern tools (ast-grep, Semgrep, tree-sitter queries) answer "does this node
-match this shape". The questions that actually need answering during a
-migration or audit are joins: *an `unwrap()` call **inside a function whose
-return type is `Result`***, or *a call passing a variable **that was assigned
-from `getenv`***. The first is a join on tree position, the second a join on
-identifier text across two unrelated subtrees. astlog makes both one rule.
+## Get it
+
+```sh
+nix run github:indexable-inc/index#astlog -- --help
+```
+
+With cargo (the CLI crate is `astlog`):
+
+```sh
+cargo install --git https://github.com/indexable-inc/index astlog
+```
+
+The Python surface ships inside the ix kernel (`import astlog`). Source lives
+in the monorepo: `git clone https://github.com/indexable-inc/index`.
 
 ## The language
 
@@ -95,7 +104,7 @@ the Datalog layer subsumes.
   value fills only `text`); `astlog.scan(...)`, `astlog.fixes(...)`, and
   `astlog.suppressed(...)` each return a `pl.DataFrame`; `astlog.fix(...,
   write=True)` returns the unified diff. The Rust bindings are
-  conversion-only — they hand back records and the Python wrapper builds the
+  conversion-only: they hand back records and the Python wrapper builds the
   frames.
 
 ## Suppression
