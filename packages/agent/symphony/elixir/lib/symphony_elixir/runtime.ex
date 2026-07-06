@@ -47,7 +47,7 @@ defmodule SymphonyElixir.Runtime do
   use GenServer, restart: :transient
 
   alias SymphonyElixir.GithubApp
-  alias SymphonyElixir.IR.{Attempt, Graph, Materializer, Node, RunGraph, RunNotifier, Store}
+  alias SymphonyElixir.IR.{Graph, Materializer, Node, RunGraph, RunNotifier, Store}
   alias SymphonyElixir.Runtime.{Events, ExecRunner, Placement, Recovery, SubrunRunner}
 
   require Logger
@@ -95,9 +95,7 @@ defmodule SymphonyElixir.Runtime do
 
   @doc "Read the current graph snapshot. Used by tests and the operator surface."
   @spec graph(pid() | String.t()) :: RunGraph.t()
-  @spec graph(pid()) :: RunGraph.t()
   def graph(pid) when is_pid(pid), do: GenServer.call(pid, :graph)
-  @spec graph(binary()) :: RunGraph.t()
   def graph(run_id) when is_binary(run_id), do: GenServer.call(via(run_id), :graph)
 
   @typedoc "Who requested an operator action, recorded in the audit log."
@@ -215,7 +213,7 @@ defmodule SymphonyElixir.Runtime do
 
     cancelled =
       Enum.reduce(state.graph.nodes, state.graph, fn {id, node}, acc ->
-        if Node.terminal?(node), do: acc, else: transition(acc, id, :cancelled)
+        if Node.terminal?(node), do: acc, else: Graph.transition(acc, id, :cancelled)
       end)
 
     finished =
@@ -269,7 +267,7 @@ defmodule SymphonyElixir.Runtime do
   @impl true
   def handle_info({:node_done, node_id, result, thread_id}, state) do
     state = drop_task_for(state, node_id)
-    graph = record_finished_attempt(state.graph, node_id, result, thread_id)
+    graph = Graph.record_finished_attempt(state.graph, node_id, result, thread_id)
     graph = Graph.apply_output(graph, node_id, result)
     # A succeeded node may unlock a gate or fan-out: its output is now in
     # known_outputs, so re-expand the AST to emit any newly-justified
@@ -303,7 +301,7 @@ defmodule SymphonyElixir.Runtime do
 
   @impl true
   def handle_info({:attempt_thread_id, node_id, thread_id}, state) do
-    graph = record_attempt_thread_id(state.graph, node_id, thread_id)
+    graph = Graph.record_attempt_thread_id(state.graph, node_id, thread_id)
     persist(graph, state)
     {:noreply, %{state | graph: graph}}
   end
@@ -343,7 +341,7 @@ defmodule SymphonyElixir.Runtime do
 
     failed =
       Enum.reduce(graph.nodes, graph, fn {id, node}, acc ->
-        if Node.terminal?(node), do: acc, else: transition(acc, id, :upstream_failed)
+        if Node.terminal?(node), do: acc, else: Graph.transition(acc, id, :upstream_failed)
       end)
 
     failed = %{failed | status: :failed}
@@ -430,7 +428,7 @@ defmodule SymphonyElixir.Runtime do
     # Mark + persist the attempt as running before provisioning so the node
     # is observable during a slow placement acquire. The turn task is only
     # spawned after placement resolves (it reads the per-run base_url).
-    graph = mark_running(state.graph, node, attempt_n)
+    graph = Graph.mark_running(state.graph, node, attempt_n)
     persist(graph, state)
     state = ensure_placement(%{state | graph: graph}, node)
     graph = state.graph
@@ -631,61 +629,15 @@ defmodule SymphonyElixir.Runtime do
 
   defp dig(_value, _path), do: nil
 
-  # --- graph transitions ----------------------------------------------
+  # --- crash routing ----------------------------------------------------
 
-  defp mark_running(%RunGraph{} = graph, %Node{} = node, attempt_n) do
-    attempt = Attempt.start(attempt_n, attempt_engine(node))
-    updated = %{node | state: :running, attempts: node.attempts ++ [attempt], updated_at: DateTime.utc_now()}
-    %{graph | nodes: Map.put(graph.nodes, node.id, updated), updated_at: DateTime.utc_now()}
-  end
-
-  defp record_finished_attempt(%RunGraph{} = graph, node_id, result, thread_id) do
-    case Map.fetch(graph.nodes, node_id) do
-      {:ok, %Node{attempts: []} = node} ->
-        attempt =
-          attempt_n_seed()
-          |> Attempt.start(attempt_engine(node), thread_id)
-          |> Attempt.finish(attempt_state_for(result), outcome_for(result), cost_for(result))
-
-        put_node(graph, %{node | attempts: [attempt]})
-
-      {:ok, node} ->
-        attempts = finish_current_attempt(node.attempts, result, thread_id)
-        put_node(graph, %{node | attempts: attempts})
-
-      :error ->
-        graph
-    end
-  end
-
-  defp record_attempt_thread_id(%RunGraph{} = graph, node_id, thread_id) do
-    case Map.fetch(graph.nodes, node_id) do
-      {:ok, %Node{attempts: []}} ->
-        graph
-
-      {:ok, %Node{state: :running, attempts: attempts} = node} ->
-        current = Enum.max_by(attempts, & &1.n)
-        updated = Enum.map(attempts, fn a -> if a.n == current.n, do: %{a | thread_id: thread_id}, else: a end)
-        put_node(graph, %{node | attempts: updated})
-
-      {:ok, _node} ->
-        graph
-
-      :error ->
-        graph
-    end
-  end
-
-  defp finish_current_attempt(attempts, result, thread_id) do
-    current = Enum.max_by(attempts, & &1.n)
-    finished = %{Attempt.finish(current, attempt_state_for(result), outcome_for(result), cost_for(result)) | thread_id: thread_id}
-    Enum.map(attempts, fn a -> if a.n == current.n, do: finished, else: a end)
-  end
-
+  # Record the strand on the attempt (via Graph), then route by the
+  # non-idempotent retry policy: this is the decision the GenServer owns,
+  # so it stays here rather than in the pure graph algebra.
   defp strand_node(%RunGraph{} = graph, node_id) do
     case Map.fetch(graph.nodes, node_id) do
       {:ok, node} ->
-        graph = mark_attempt_stranded(graph, node)
+        graph = Graph.mark_attempt_stranded(graph, node)
         node = graph.nodes[node_id]
 
         if Recovery.auto_retryable?(node) do
@@ -693,38 +645,14 @@ defmodule SymphonyElixir.Runtime do
           # (`Graph.ready_nodes/1` treats :retrying as schedulable). The
           # attempt history, including the stranded attempt just recorded,
           # is preserved so the retry budget and audit trail survive.
-          transition(graph, node_id, :retrying)
+          Graph.transition(graph, node_id, :retrying)
         else
-          transition(graph, node_id, :stranded)
+          Graph.transition(graph, node_id, :stranded)
         end
 
       :error ->
         graph
     end
-  end
-
-  defp mark_attempt_stranded(%RunGraph{} = graph, %Node{attempts: []} = node) do
-    attempt = Attempt.start(1, attempt_engine(node)) |> Attempt.finish(:stranded, :stranded)
-    put_node(graph, %{node | attempts: [attempt]})
-  end
-
-  defp mark_attempt_stranded(%RunGraph{} = graph, %Node{attempts: attempts} = node) do
-    current = Enum.max_by(attempts, & &1.n)
-    finished = Attempt.finish(current, :stranded, :stranded)
-    updated = Enum.map(attempts, fn a -> if a.n == current.n, do: finished, else: a end)
-    put_node(graph, %{node | attempts: updated})
-  end
-
-  defp transition(%RunGraph{} = graph, node_id, state) do
-    case Map.fetch(graph.nodes, node_id) do
-      {:ok, node} -> put_node(graph, %{node | state: state})
-      :error -> graph
-    end
-  end
-
-  defp put_node(%RunGraph{} = graph, %Node{} = node) do
-    updated = %{node | updated_at: DateTime.utc_now()}
-    %{graph | nodes: Map.put(graph.nodes, node.id, updated), updated_at: DateTime.utc_now()}
   end
 
   defp drop_task_for(state, node_id) do
@@ -814,8 +742,6 @@ defmodule SymphonyElixir.Runtime do
 
   # --- helpers --------------------------------------------------------
 
-  defp attempt_n_seed, do: 1
-
   # Dispatch one attempt by node kind. Only `:agent` nodes are engine
   # turns and go through the injected engine client; `:exec` runs a pack
   # script locally; `:subrun` launches a nested run through `SubrunRunner`
@@ -824,34 +750,4 @@ defmodule SymphonyElixir.Runtime do
   defp run_attempt(%Node{kind: :agent} = node, engine, run_opts), do: engine.run_node(node, run_opts)
   defp run_attempt(%Node{kind: :exec} = node, _engine, run_opts), do: ExecRunner.run(node, run_opts)
   defp run_attempt(%Node{kind: :subrun} = node, _engine, run_opts), do: SubrunRunner.run(node, run_opts)
-
-  # An attempt records what executed it. Agent attempts carry the engine;
-  # exec/subrun carry the executor kind so the run record is honest about a
-  # node that never touched an engine.
-  defp attempt_engine(%Node{kind: :agent, envelope: %{engine: engine}}) when engine in [:codex, :claude, :pi],
-    do: engine
-
-  defp attempt_engine(%Node{kind: :exec}), do: :exec
-  defp attempt_engine(%Node{kind: :subrun}), do: :subrun
-  defp attempt_engine(_node), do: :codex
-
-  defp attempt_state_for({:ok, _}), do: :succeeded
-  defp attempt_state_for({:error, _}), do: :failed
-
-  defp outcome_for({:ok, _}), do: :ok
-  defp outcome_for({:error, reason}), do: {:error, reason}
-
-  # Per-turn cost rides on the successful result's output map (the engine
-  # client lowers the room-server `usage` totals to the `Attempt.cost`
-  # shape there). A failure carries only the error reason on the
-  # synchronous path, so its cost is unknown (nil), and an exec/subrun
-  # output without a cost key is also nil.
-  defp cost_for({:ok, output}) when is_map(output) do
-    case Map.get(output, :cost) do
-      cost when is_map(cost) -> cost
-      _ -> nil
-    end
-  end
-
-  defp cost_for(_), do: nil
 end

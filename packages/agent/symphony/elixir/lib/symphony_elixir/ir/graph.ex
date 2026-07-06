@@ -17,10 +17,13 @@ defmodule SymphonyElixir.IR.Graph do
     is left alone; the runtime reconciles those through the task path.
 
   `ready_nodes/1` is the scheduler's input, `apply_output/3` is the
-  scheduler's commit step, and `reset_node/2` is the retry path.
+  scheduler's commit step, and `reset_node/2` is the retry path. The
+  attempt bookkeeping (`mark_running/3`, `record_finished_attempt/4`,
+  `mark_attempt_stranded/2`, ...) lives here too: how a node's attempt
+  history evolves is graph algebra, even though the runtime decides when.
   """
 
-  alias SymphonyElixir.IR.{Node, RunGraph}
+  alias SymphonyElixir.IR.{Attempt, Node, RunGraph}
 
   @doc """
   Nodes that may start now: state `:pending`, `:ready`, or `:retrying`,
@@ -165,6 +168,151 @@ defmodule SymphonyElixir.IR.Graph do
         graph
     end
   end
+
+  # --- attempt bookkeeping --------------------------------------------
+
+  @doc """
+  Mark a node `:running` and open attempt `attempt_n` on it. The attempt
+  records what will execute it (engine for agent turns, executor kind
+  otherwise), so the run record is honest even before the attempt ends.
+  """
+  @spec mark_running(RunGraph.t(), Node.t(), pos_integer()) :: RunGraph.t()
+  def mark_running(%RunGraph{} = graph, %Node{} = node, attempt_n) do
+    attempt = Attempt.start(attempt_n, attempt_engine(node))
+    updated = %{node | state: :running, attempts: node.attempts ++ [attempt], updated_at: DateTime.utc_now()}
+    %{graph | nodes: Map.put(graph.nodes, node.id, updated), updated_at: DateTime.utc_now()}
+  end
+
+  @doc """
+  Close the node's current attempt with `result` and stamp the attempt's
+  reattach handle to `thread_id`. A node with no open attempt (its
+  `:running` mark never persisted before the result arrived) gets one
+  synthesized so the run record still explains the outcome. An unknown
+  node id is a no-op.
+  """
+  @spec record_finished_attempt(RunGraph.t(), String.t(), {:ok, term()} | {:error, term()}, String.t() | nil) ::
+          RunGraph.t()
+  def record_finished_attempt(%RunGraph{} = graph, node_id, result, thread_id) do
+    case Map.fetch(graph.nodes, node_id) do
+      {:ok, %Node{attempts: []} = node} ->
+        attempt =
+          attempt_n_seed()
+          |> Attempt.start(attempt_engine(node), thread_id)
+          |> Attempt.finish(attempt_state_for(result), outcome_for(result), cost_for(result))
+
+        put_node(graph, %{node | attempts: [attempt]})
+
+      {:ok, node} ->
+        attempts = finish_current_attempt(node.attempts, result, thread_id)
+        put_node(graph, %{node | attempts: attempts})
+
+      :error ->
+        graph
+    end
+  end
+
+  @doc """
+  Stamp the current attempt's reattach handle mid-flight (an executor
+  reports its engine thread or child run id as soon as it opens one, so a
+  crash before the result still leaves a handle to reconcile against).
+  Only a `:running` node with an open attempt is stamped; anything else is
+  a no-op because the terminal path already recorded the handle.
+  """
+  @spec record_attempt_thread_id(RunGraph.t(), String.t(), String.t()) :: RunGraph.t()
+  def record_attempt_thread_id(%RunGraph{} = graph, node_id, thread_id) do
+    case Map.fetch(graph.nodes, node_id) do
+      {:ok, %Node{attempts: []}} ->
+        graph
+
+      {:ok, %Node{state: :running, attempts: attempts} = node} ->
+        current = Enum.max_by(attempts, & &1.n)
+        updated = Enum.map(attempts, fn a -> if a.n == current.n, do: %{a | thread_id: thread_id}, else: a end)
+        put_node(graph, %{node | attempts: updated})
+
+      {:ok, _node} ->
+        graph
+
+      :error ->
+        graph
+    end
+  end
+
+  @doc """
+  Close the node's current attempt as `:stranded`: its owning task died
+  without reporting a result, so the attempt may or may not have acted. A
+  node with no recorded attempt gets one synthesized so the run record
+  still explains the strand. Routing (retry vs human review) is the
+  caller's policy; this only records the fact.
+  """
+  @spec mark_attempt_stranded(RunGraph.t(), Node.t()) :: RunGraph.t()
+  def mark_attempt_stranded(%RunGraph{} = graph, %Node{attempts: []} = node) do
+    attempt = Attempt.start(1, attempt_engine(node)) |> Attempt.finish(:stranded, :stranded)
+    put_node(graph, %{node | attempts: [attempt]})
+  end
+
+  def mark_attempt_stranded(%RunGraph{} = graph, %Node{attempts: attempts} = node) do
+    current = Enum.max_by(attempts, & &1.n)
+    finished = Attempt.finish(current, :stranded, :stranded)
+    updated = Enum.map(attempts, fn a -> if a.n == current.n, do: finished, else: a end)
+    put_node(graph, %{node | attempts: updated})
+  end
+
+  @doc """
+  Set a node's state without touching its output or attempts. The bare
+  transition the runtime uses for states no result carries (`:cancelled`,
+  `:upstream_failed`, `:retrying`, `:stranded`). An unknown node id is a
+  no-op.
+  """
+  @spec transition(RunGraph.t(), String.t(), Node.state()) :: RunGraph.t()
+  def transition(%RunGraph{} = graph, node_id, state) do
+    case Map.fetch(graph.nodes, node_id) do
+      {:ok, node} -> put_node(graph, %{node | state: state})
+      :error -> graph
+    end
+  end
+
+  defp put_node(%RunGraph{} = graph, %Node{} = node) do
+    updated = %{node | updated_at: DateTime.utc_now()}
+    %{graph | nodes: Map.put(graph.nodes, node.id, updated), updated_at: DateTime.utc_now()}
+  end
+
+  defp finish_current_attempt(attempts, result, thread_id) do
+    current = Enum.max_by(attempts, & &1.n)
+    finished = %{Attempt.finish(current, attempt_state_for(result), outcome_for(result), cost_for(result)) | thread_id: thread_id}
+    Enum.map(attempts, fn a -> if a.n == current.n, do: finished, else: a end)
+  end
+
+  defp attempt_n_seed, do: 1
+
+  # An attempt records what executed it. Agent attempts carry the engine;
+  # exec/subrun carry the executor kind so the run record is honest about a
+  # node that never touched an engine.
+  defp attempt_engine(%Node{kind: :agent, envelope: %{engine: engine}}) when engine in [:codex, :claude, :pi],
+    do: engine
+
+  defp attempt_engine(%Node{kind: :exec}), do: :exec
+  defp attempt_engine(%Node{kind: :subrun}), do: :subrun
+  defp attempt_engine(_node), do: :codex
+
+  defp attempt_state_for({:ok, _}), do: :succeeded
+  defp attempt_state_for({:error, _}), do: :failed
+
+  defp outcome_for({:ok, _}), do: :ok
+  defp outcome_for({:error, reason}), do: {:error, reason}
+
+  # Per-turn cost rides on the successful result's output map (the engine
+  # client lowers the room-server `usage` totals to the `Attempt.cost`
+  # shape there). A failure carries only the error reason on the
+  # synchronous path, so its cost is unknown (nil), and an exec/subrun
+  # output without a cost key is also nil.
+  defp cost_for({:ok, output}) when is_map(output) do
+    case Map.get(output, :cost) do
+      cost when is_map(cost) -> cost
+      _ -> nil
+    end
+  end
+
+  defp cost_for(_), do: nil
 
   @doc "Nodes currently `:running`. The runtime owns the live task for each of these."
   @spec running_nodes(RunGraph.t()) :: [Node.t()]
