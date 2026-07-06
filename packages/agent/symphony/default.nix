@@ -100,6 +100,41 @@
       cp "${lazyHtmlNif}" "$ELIXIR_MAKE_CACHE_DIR/${lazyHtmlNif.name}"
     '';
   };
+
+  # Prod-env mix deps for the compiled release below: runtime deps only, so a
+  # separate FOD from the test-env `mixFodDeps` (different dep set, different
+  # hash). Refresh `mix-deps-prod` in pins.json whenever mix.lock changes.
+  prodMixFodDeps = pkgs.beamPackages.fetchMixDeps {
+    pname = "symphony-elixir-prod-deps";
+    version = "0.2.0"; # keep in sync with elixir/mix.exs
+    src = lib.fileset.toSource {
+      root = ./elixir;
+      fileset = lib.fileset.unions [
+        ./elixir/mix.exs
+        ./elixir/mix.lock
+      ];
+    };
+    inherit elixir;
+    mixEnv = "prod";
+    inherit (pins."mix-deps-prod") hash;
+  };
+
+  # Compiled BEAM release, the artifact the persistent-VM runtime
+  # (homeModules.beamvm) code-loads: `lib/<app>-<vsn>/ebin` for symphony and
+  # every runtime dep, plus `releases/*/runtime.exs` for the harness to replay
+  # as the config provider. The standalone launcher path (bin/run-nix) keeps
+  # staging + compiling at boot; this is the no-compile-at-boot artifact hot
+  # reload needs. Same elixir toolchain as the beamvm harness so the bytecode
+  # and stdlib the release bundles are exactly what that VM booted.
+  release = (pkgs.beamPackages.mixRelease.override {inherit elixir;}) {
+    pname = "symphony-release";
+    version = "0.2.0"; # keep in sync with elixir/mix.exs
+    src = lib.fileset.toSource {
+      root = ./elixir;
+      fileset = ./elixir;
+    };
+    mixFodDeps = prodMixFodDeps;
+  };
 in
   (writeNushellApplication {
     name = "symphony";
@@ -134,6 +169,11 @@ in
     passthru =
       (old.passthru or {})
       // {
+        inherit release;
         tests.elixir = elixirCheck;
+        # Building the release IS its test at this layer: it proves the prod
+        # dep set resolves offline and the project compiles as a release.
+        # Boot behavior is covered by beamvm's consumer smoke test.
+        tests.release = release;
       };
   })
