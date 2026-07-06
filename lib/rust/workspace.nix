@@ -166,6 +166,18 @@
   };
   libkrunLinuxLibDir = "${libkrunLinux}/lib64";
 
+  # pyo3 extension modules must leave Python symbols undefined so the host
+  # interpreter resolves them when it loads the module; macOS refuses
+  # undefined symbols in a dylib without `-undefined dynamic_lookup`, while
+  # Linux allows them. Injected below for every registry `pyExtension`
+  # package, replacing the per-crate build.rs copies of these two flags.
+  pyExtensionLinkArgs = [
+    "-C"
+    "link-arg=-undefined"
+    "-C"
+    "link-arg=dynamic_lookup"
+  ];
+
   # One workspace-wide unit graph for every repo-owned Rust crate. Each
   # crate's `default.nix` picks its binary and test targets out of the native
   # graph via `ix.cargoUnit.selectBinaryWithTests`, so the unit graph + vendor
@@ -181,6 +193,12 @@
       if target == null
       then workspacePkgs.stdenv.hostPlatform.isLinux
       else lib.hasInfix "-linux-" target;
+    # Same target-OS gate for the pyo3 link-arg injection below: the darwin
+    # *target* decides whether the cdylib link needs `dynamic_lookup`.
+    targetIsDarwin =
+      if target == null
+      then workspacePkgs.stdenv.hostPlatform.isDarwin
+      else lib.hasSuffix "-apple-darwin" target;
     targetSystem =
       if target == null
       then workspacePkgs.stdenv.hostPlatform.system
@@ -316,6 +334,16 @@
             ];
           };
         };
+        # Per-package rustc args for pyo3 extension-module cdylibs (registry
+        # `pyExtension`). Scoped per package so the relaxed link cannot mask
+        # genuine undefined-symbol errors elsewhere in the workspace. rustc
+        # only forwards `-C link-arg` to actual link units, so the args are
+        # inert for the package's rlib/rmeta compiles.
+        packageRustcArgs = lib.optionalAttrs targetIsDarwin (
+          lib.genAttrs (map (entry: entry.id) packageRegistry.pyExtensionEntries) (
+            _id: pyExtensionLinkArgs
+          )
+        );
         env =
           {
             # ix-vt-sys's build script reads this to emit the libghostty-vt link
