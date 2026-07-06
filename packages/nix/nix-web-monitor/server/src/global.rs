@@ -212,16 +212,16 @@ fn decompress_prefix(bytes: &[u8]) -> DecodedTail {
     let mut chunk = vec![0_u8; 64 * 1024];
     loop {
         match decoder.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(read) => {
+            Ok(read) if read > 0 => {
                 out.extend_from_slice(&chunk[..read]);
                 if out.len() > LOG_TAIL_BYTES * 2 {
                     out.drain(..out.len() - LOG_TAIL_BYTES);
                     dropped = true;
                 }
             }
-            // A truncated live stream (or garbage): keep what decoded.
-            Err(_) => break,
+            // Clean EOF, or a truncated live stream / garbage: either way,
+            // everything decoded so far is the readable log.
+            Ok(_) | Err(_) => break,
         }
     }
     DecodedTail {
@@ -381,7 +381,11 @@ mod tests {
     /// The tail is bounded and opens on a line boundary, never mid-line.
     #[test]
     fn tail_is_bounded_and_line_aligned() {
-        let text: String = (0..1000).map(|i| format!("line {i}\n")).collect();
+        use std::fmt::Write;
+        let text = (0..1000).fold(String::new(), |mut log, i| {
+            let _ = writeln!(log, "line {i}");
+            log
+        });
         let tail = tail_lines(text.as_bytes(), 100, false);
         assert!(tail.len() <= 100);
         assert!(tail.starts_with("line "), "tail begins at a line start");
