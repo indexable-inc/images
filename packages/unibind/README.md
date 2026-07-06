@@ -1,10 +1,8 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="an annotated Rust module is lowered by syn into an Interface IR, which renders through pyo3 today and napi-rs and rustler in planned phases"></p>
+
 # unibind
 
-One Rust attribute surface, one language-agnostic interface representation,
-one code generator per target language. A crate annotates the functions,
-records, and errors it wants to expose; unibind lowers that surface into an
-IR at macro time and renders bindings through the incumbent binding library
-of each enabled language backend.
+Why should every language binding pay a C-ABI serialization tax when pyo3, napi-rs, and rustler already exist? unibind is one Rust attribute surface, one language-agnostic interface representation, and one code generator per target language: a crate annotates the functions, records, and errors it wants to expose, unibind lowers that surface into an IR at macro time, and each backend renders bindings through the incumbent binding library of its ecosystem.
 
 ## The bet
 
@@ -16,6 +14,21 @@ ecosystem (pyo3 for Python, napi-rs for TypeScript, rustler for Elixir), so
 every language gets native semantics: real exception hierarchies, native
 async and cancellation, RAII-shaped resource cleanup, and types that flow end
 to end with no RustBuffer tax.
+
+## Use it
+
+unibind is a proc-macro library consumed inside this workspace. Depend on it
+with the backend you want as a feature, plus the binding library the backend
+targets:
+
+```toml
+[dependencies]
+unibind = { workspace = true, features = ["py"] }
+pyo3 = { workspace = true, features = ["extension-module"] }
+```
+
+(`packages/code/scipql/py` is the reference consumer.) The workspace lives in
+the monorepo: `git clone https://github.com/indexable-inc/index`.
 
 ## Surface
 
