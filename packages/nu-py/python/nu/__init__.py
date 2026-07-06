@@ -1,17 +1,18 @@
 """An embedded nushell engine; every pipeline result is a polars DataFrame.
 
-Bundled like ``sh``/``view`` so every session can ``await nu(...)`` with no
-setup. The point: ``sh`` + ``.json()/.df()`` only speaks structured data when
-the CLI has a JSON mode; everything else decays into jq/awk/sed text
-scraping. Nushell's pipelines are structured end to end (``ls``, ``ps``,
-``open``, ``from csv|toml|yaml``, ``where``, ``group-by``), so ``nu()`` is
-the bridge from "shell pipeline" to "typed frame" for any data-shaped
-command::
+Bundled like ``view`` so every session can ``await nu(...)`` with no setup.
+``nu`` is the ONE shell-out path (the old ``sh``/``zsh`` are retired). Nushell's
+pipelines are structured end to end (``ls``, ``ps``, ``open``,
+``from csv|toml|yaml``, ``where``, ``group-by``), so ``nu()`` is the bridge from
+"shell pipeline" to "typed frame" for any data-shaped command, and an external
+binary runs with ``^cmd``::
 
     df = await nu("ls | where size > 1kb | sort-by size")
     df = await nu("ps | where cpu > 5 | sort-by cpu")
     df = await nu("open Cargo.toml | get package")          # record -> 1-row frame
     df = await nu("http get https://api.github.com/repos/nushell/nushell")
+    df = await nu("^git status --short")                    # external binary via ^
+    df = await nu("^gh pr list --json number,title | from json")  # JSON-mode CLI
 
 This is not a subprocess: the engine (PyO3 bindings over nu-engine) lives in
 this process and its state is persistent, like a REPL. A ``let``, a ``def``,
@@ -25,9 +26,11 @@ A DataFrame (or list/dict/scalar) can be piped THROUGH a pipeline: pass
 
     df = await nu("where size > 1kb | sort-by size", input=df)
 
-Prefer ``nu()`` over ``sh`` whenever you want a command's *data*. ``sh``
-remains the tool for side-effectful commands (``git``/``nix``/``gh`` writes)
-and raw logs, and ``sh(...).df()`` for CLIs with a native ``--json`` mode.
+``nu()`` is the single shell-out path: side-effectful commands
+(``git``/``gh`` writes) run as externals with ``^cmd``, and a CLI with a native
+``--json`` mode decodes end to end (``^gh ... --json | from json``). For a nix
+build, use the bundled ``nix`` module (a live dashboard build-tree pane), not
+``^nix``.
 
 Contract:
 
@@ -56,8 +59,8 @@ Contract:
   timeout. Cancelling the awaiting task interrupts the same way but keeps
   the engine (state survives); after cancelling a truly stuck pipeline,
   ``nu.reset()`` unwedges. An external the pipeline already spawned
-  finishes on its own; for long externals prefer ``sh``, which group-kills
-  on timeout.
+  finishes on its own; run a genuinely long external as a background job
+  you poll, or in its own ``nu.Engine()`` so a stuck one is isolated.
 - Calls against the shared engine run one at a time (REPL state needs
   ordered evaluation); for parallel pipelines, construct separate
   ``nu.Engine()`` instances.

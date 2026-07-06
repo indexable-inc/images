@@ -92,7 +92,7 @@ MCP client --stdio/HTTP--> ix-mcp server (kernel.py)  --execute_request-->  one 
   `config.py:86`). A run that outlives its budget keeps going as `jobs['<id>']`.
 - Never block the loop. A synchronous wait (`subprocess.run`, `time.sleep`,
   `requests`, a long CPU op) freezes every job; wrap it in
-  `await asyncio.to_thread(...)` or use an async API (`sh`, `httpx`). A cell that
+  `await asyncio.to_thread(...)` or use an async API (`nu`, `httpx`). A cell that
   wedges the loop past `budget + wedge_grace` (15s, `config.py:78`) is rescued by
   a SIGUSR2 watchdog (`kernel.py:216`, `runtime.py:2744`).
 - stdio owns fd 0/1. In stdio mode the CLI dups the real stdin/stdout to private

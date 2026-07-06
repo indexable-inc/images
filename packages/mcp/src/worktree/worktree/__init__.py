@@ -1,6 +1,6 @@
 """Git worktrees as the unit of isolated work for the ix-mcp kernel.
 
-Bundled like ``view``/``sh``/``nix`` so every session can ``import worktree`` with
+Bundled like ``view``/``nu``/``nix`` so every session can ``import worktree`` with
 no setup. The point: do risky or parallel work on a throwaway branch in its own
 checked-out tree, so the main working copy is never disturbed and two lines of
 work never stomp each other. Built on async ``git worktree`` (so checking out a
@@ -56,7 +56,7 @@ def _run(repo: str | os.PathLike[str], *args: str) -> subprocess.CompletedProces
 
     Synchronous and used only for the fast, metadata-only reads (``rev-parse``,
     ``worktree list``); the mutating operations go through the async, non-blocking
-    bundled ``sh`` instead so a checkout never freezes the kernel's event loop.
+    kernel process runner instead so a checkout never freezes the event loop.
     """
     return subprocess.run(
         ["git", "-C", str(repo), *args],
@@ -117,8 +117,12 @@ class Worktree:
         return self.path / other
 
     async def sh(self, cmd: str | builtins.list[str], **kwargs: Any) -> _sh_mod.Output:  # noqa: ANN401 -- forwarded to sh()
-        """Run a shell command in this worktree (bundled ``sh``, ``cwd`` threaded)."""
-        from sh import sh as _sh
+        """Run a command in this worktree via the kernel runner (``cwd`` threaded).
+
+        A worktree-scoped convenience for git and other side-effectful commands
+        (it returns an :class:`sh.Output`); for a command whose data you want,
+        prefer ``await nu(...)``."""
+        from sh import _exec as _sh
 
         return await _sh(cmd, cwd=str(self.path), **kwargs)
 
@@ -126,7 +130,7 @@ class Worktree:
         """Commit this worktree. With ``all`` (the default) stage everything first
         (``git add -A``), so new files are included; returns the ``git commit``
         :class:`sh.Output`."""
-        from sh import sh as _sh
+        from sh import _exec as _sh
 
         if all:
             await _sh(["git", "-C", str(self.path), "add", "-A"], check=True, cwd=str(self.path))
@@ -142,7 +146,7 @@ class Worktree:
         import nix as _nix
 
         if add:
-            from sh import sh as _sh
+            from sh import _exec as _sh
 
             await _sh(["git", "-C", str(self.path), "add", "-A"], check=True, cwd=str(self.path))
         return await _nix.build(attr, *flags, cwd=str(self.path), **kwargs)
@@ -255,7 +259,7 @@ async def add(
     out elsewhere. Raises :class:`sh.ShellError` (carrying git's output) on
     failure, so a clash never half-creates a tree.
     """
-    from sh import sh as _sh
+    from sh import _exec as _sh
 
     top = _toplevel(repo)
     dest = pathlib.Path(path) if path is not None else _default_path(top, branch)
@@ -285,7 +289,7 @@ async def remove(
     ``force`` discards uncommitted changes in the tree. Returns the ``git worktree
     remove`` :class:`sh.Output`.
     """
-    from sh import sh as _sh
+    from sh import _exec as _sh
 
     top = _toplevel(repo)
     argv = ["git", "-C", str(top), "worktree", "remove"]
@@ -300,7 +304,7 @@ async def prune(repo: str | os.PathLike[str] = ".") -> _sh_mod.Output:
 
     Returns the ``git worktree prune`` :class:`sh.Output`.
     """
-    from sh import sh as _sh
+    from sh import _exec as _sh
 
     top = _toplevel(repo)
     return await _sh(["git", "-C", str(top), "worktree", "prune", "-v"], cwd=str(top))

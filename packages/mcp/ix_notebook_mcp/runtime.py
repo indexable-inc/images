@@ -4140,9 +4140,11 @@ def install(user_ns: dict | None = None) -> None:
     target["__ix_snapshot"] = __ix_snapshot
     target["__ix_restore"] = __ix_restore
     target["DASHBOARD_URL"] = os.environ.get("IX_MCP_DASHBOARD_URL", "")
-    # `sh` is a bundled, callable module (see packages/mcp/src/sh). Bind it here
-    # so `await sh(cmd)` works with no import, the way Result/cells/jobs do; an
-    # explicit `import sh` returns the same object, so both styles agree.
+    # `sh`/`zsh` are RETIRED (agents shell out through `await nu(...)`; the sh
+    # module's public entry points now raise a migration hint). Bind them anyway
+    # so a stale `await sh(cmd)` in an old transcript fails LOUDLY with that hint
+    # rather than a bare NameError. The kernel's own internals reach the private
+    # runner via `from sh import _exec`, which is never bound into the namespace.
     with contextlib.suppress(Exception):  # sh may be absent outside the bundled interpreter; skip it
         import sh as _sh_module
 

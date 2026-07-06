@@ -273,13 +273,14 @@
 
   # The `fsearch` filesystem-search module: `grep`/`find`/`spotlight`, each
   # backed by a battle-tested CLI (ripgrep / fd / macOS Spotlight) run as a
-  # SEPARATE process via the bundled `sh`, returning polars frames. Pure Python
-  # over the bundled sh/polars; cross-platform (spotlight is darwin-only and
-  # guards itself). Unlike its predecessor `fff` (a ctypes cdylib that walked the
-  # tree in-process and could pin the cores for an hour with no way to interrupt
-  # short of killing the kernel), a runaway here is process-isolated and bounded
-  # by `sh()`'s timeout + process-group kill. `ripgrep`/`fd` are put on the
-  # interpreter wrapper's PATH below so `sh("rg ...")` / `sh("fd ...")` resolve.
+  # SEPARATE process via the kernel-private `sh._exec` runner, returning polars
+  # frames. Pure Python over the sh runner/polars; cross-platform (spotlight is
+  # darwin-only and guards itself). Unlike its predecessor `fff` (a ctypes cdylib
+  # that walked the tree in-process and could pin the cores for an hour with no
+  # way to interrupt short of killing the kernel), a runaway here is
+  # process-isolated and bounded by `_exec`'s timeout + process-group kill.
+  # `ripgrep`/`fd` are put on the interpreter wrapper's PATH below so the runner
+  # resolves them.
   fsearchPythonSource = builtins.path {
     name = "ix-mcp-fsearch-python-source";
     path = ./src/fsearch;
@@ -478,11 +479,14 @@
       cp -r ${meshPythonSource}/mesh/. "$site/"
     ''
   );
-  # Async shell-out helper: `import sh`, then `out = await sh("gh run list")`.
-  # Runs on the kernel's loop (never blocks it like a bare subprocess.run) and
-  # returns an Output that IS a Result, so the dashboard sees the command's ANSI
-  # color rendered to HTML while the model gets the same text escape-stripped.
-  # Pure Python over the bundled ansi2html; cross-platform.
+  # The kernel's process runner. The public `sh()`/`zsh()` are RETIRED (agents
+  # shell out through `await nu(...)`); they stay importable as disabled shims
+  # that raise a migration hint. The private `sh._exec` runs on the kernel's loop
+  # (never blocks it like a bare subprocess.run) and returns an Output that IS a
+  # Result, so the dashboard sees the command's ANSI color rendered to HTML while
+  # the model gets the same text escape-stripped. Kernel internals (the
+  # grep/find search helpers, worktree plumbing) use `_exec`. Pure Python over the
+  # bundled ansi2html; cross-platform.
   shPythonSource = builtins.path {
     name = "ix-mcp-sh-python-source";
     path = ./src/sh;
@@ -2436,18 +2440,20 @@
             both.result.llm_result
         )
 
-        # A cell ending in a failed sh() is loud on every surface a watcher
-        # reads (issue #1766: a build dead on ENOSPC read as still-compiling):
-        # the streamed stdout carries the failure line, so paging a backgrounded
-        # job's .output/.tail() shows the terminal state, and the result's model
-        # text leads AND ends with the exit marker. The Output itself is falsy.
-        fsh = await run("await sh('echo diag-line; exit 7')", budget=10.0, name="failed-sh")
+        # A cell ending in a failed process Output is loud on every surface a
+        # watcher reads (issue #1766: a build dead on ENOSPC read as
+        # still-compiling): the streamed stdout carries the failure line, so
+        # paging a backgrounded job's .output/.tail() shows the terminal state,
+        # and the result's model text leads AND ends with the exit marker. The
+        # Output itself is falsy. (`sh` is retired; the runner is the private
+        # `_exec` the kernel's own internals still use.)
+        fsh = await run("from sh import _exec\nawait _exec('echo diag-line; exit 7')", budget=10.0, name="failed-exec")
         assert fsh.status == "done", (fsh.status, fsh.error)
         assert "diag-line" in fsh.output and "[exit 7]" in fsh.output, fsh.output
         assert fsh.result.llm_result.splitlines()[0].startswith("[exit 7]"), fsh.result.llm_result
         assert fsh.result.llm_result.rstrip().endswith("[exit 7]"), fsh.result.llm_result
         assert fsh.result.exit_code == 7 and not fsh.result.ok, fsh.result.exit_code
-        assert bool(fsh.result) is False, "a failed sh() Output must be falsy"
+        assert bool(fsh.result) is False, "a failed Output must be falsy"
 
         # .result raises while the job runs (a misleading None would read as
         # "finished with no value"); .done()/.ok track the lifecycle.
@@ -2508,18 +2514,32 @@
         assert via_val.llm_result == "42", repr(via_val.llm_result)
 
     asyncio.run(main())
-    # api(): a discoverable catalog of kernel builtins + bundled modules.
+    # api(): a discoverable catalog of kernel builtins + bundled modules. `nu`
+    # is the catalogued shell-out path; the retired `sh` is NOT listed (though it
+    # stays bound as a disabled shim so a stale call fails loudly, tested below).
     cat = ns["api"]()
     names = set(cat["name"].to_list())
-    assert {"Result", "cells", "jobs", "sh", "api"} <= names, names
+    assert {"Result", "cells", "jobs", "nu", "api"} <= names, names
+    assert "sh" not in names and "zsh" not in names, names
     filt = ns["api"]("cells")
     assert 1 <= filt.height <= cat.height, (filt.height, cat.height)
 
     # grep/find/spotlight (the fsearch search helpers) and view are pre-bound in
-    # the namespace (no import needed), the way Result/cells/jobs/sh are, so
+    # the namespace (no import needed), the way Result/cells/jobs are, so
     # `await grep(...)` / `view.tree(...)` just work.
     assert callable(ns.get("grep")) and callable(ns.get("find")), (ns.get("grep"), ns.get("find"))
     assert callable(ns.get("spotlight")), ns.get("spotlight")
+
+    # `sh`/`zsh` stay bound but are DISABLED: calling either raises a migration
+    # hint pointing at `await nu(...)`, so an old transcript fails loudly rather
+    # than with a bare NameError.
+    async def _sh_disabled() -> None:
+        for expr in ("await sh('echo hi')", "await zsh('echo hi')", "await sh(['echo', 'hi'])"):
+            r = await run(expr, budget=2.0, name="sh-disabled")
+            assert r.status == "error", (expr, r.status)
+            assert "await nu" in (r.error or ""), (expr, r.error)
+
+    asyncio.run(_sh_disabled())
     assert callable(getattr(ns.get("view"), "tree", None)), ns.get("view")
 
     # Result.llm_images downscale a large raster to <= _IMAGE_MAX_DIM on its
@@ -4298,7 +4318,6 @@
   shTestPy = pkgs.writeText "ix-mcp-sh-test.py" ''
     # python
     import asyncio
-    import inspect
 
     import sh
     from ix_notebook_mcp.runtime import Result
@@ -4306,7 +4325,7 @@
 
     async def main():
         # A command that emits an SGR color escape around its output.
-        colored = await sh.sh(r"printf '\033[31mred\033[0m\n'", cwd=".")
+        colored = await sh._exec(r"printf '\033[31mred\033[0m\n'", cwd=".")
         assert colored.ok and colored.code == 0, colored.code
         # Model view: no escape bytes, the word survives.
         assert "\x1b" not in colored.text and "red" in colored.text, repr(colored.text)
@@ -4327,7 +4346,7 @@
         # (.code with the .exit_code/.returncode aliases), falsy, and loud at
         # BOTH ends of the model view so a head-read of a long log sees the
         # failure as surely as a tail-read (issue #1766).
-        failed = await sh.sh(["false"], cwd=".")
+        failed = await sh._exec(["false"], cwd=".")
         assert not failed.ok and failed.code == 1, failed.code
         assert failed.exit_code == 1 and failed.returncode == 1, failed.exit_code
         assert bool(failed) is False, "a failed Output must be falsy"
@@ -4336,7 +4355,7 @@
         # ...and even an output-less failure both leads and TRAILS with the
         # marker, so a tail-read never lands on command text.
         assert failed.llm_result.rstrip().endswith("\n[exit 1]"), failed.llm_result
-        noisy = await sh.sh("echo diagnostic-text; exit 3", cwd=".")
+        noisy = await sh._exec("echo diagnostic-text; exit 3", cwd=".")
         first, *rest = noisy.llm_result.splitlines()
         assert first.startswith("[exit 3]") and "exit 3" in first, noisy.llm_result
         assert noisy.llm_result.rstrip().endswith("[exit 3]"), noisy.llm_result
@@ -4351,7 +4370,7 @@
         # HTML; the raw command stays on .cmd. Fixture token is repeated
         # filler, not a real credential.
         tok = "tok9" * 10
-        leak = await sh.sh(f"false Bearer {tok}", cwd=".")
+        leak = await sh._exec(f"false Bearer {tok}", cwd=".")
         assert not leak.ok, leak.code
         assert tok not in leak.llm_result, leak.llm_result
         assert "[redacted:bearer_token]" in leak.llm_result.splitlines()[0], leak.llm_result
@@ -4360,7 +4379,7 @@
         assert tok not in leak._repr_html_() and "[redacted:" in leak._repr_html_()
         assert tok in leak.cmd  # programmatic surface stays raw
         try:
-            await sh.sh(f"false token={tok}", check=True, cwd=".")
+            await sh._exec(f"false token={tok}", check=True, cwd=".")
         except sh.ShellError as exc:
             assert tok not in str(exc), str(exc)
             assert "token=[redacted:credential]" in str(exc), str(exc)
@@ -4368,13 +4387,13 @@
             raise SystemExit("expected ShellError from check=True")
         # A multi-line command collapses to ONE failure line (tail-reads land
         # on markers, not command fragments).
-        multi = await sh.sh("false a \\\n  b", cwd=".")
+        multi = await sh._exec("false a \\\n  b", cwd=".")
         assert multi.llm_result.splitlines()[0].startswith("[exit 1]"), multi.llm_result
         assert multi.llm_result.rstrip().endswith("[exit 1]"), multi.llm_result
 
         # The expected-nonzero class (grep exiting 1 on no match) stays
         # workable: branch on .ok/.code and read .text, nothing raises.
-        nomatch = await sh.sh("grep zzz-no-such /dev/null", cwd=".")
+        nomatch = await sh._exec("grep zzz-no-such /dev/null", cwd=".")
         assert not nomatch.ok and nomatch.code == 1, nomatch.code
         assert "[exit" not in nomatch.text, repr(nomatch.text)
         # grep also carries a structured-owner hint; it rides INSIDE the
@@ -4384,7 +4403,7 @@
 
         # check=True turns a non-zero exit into a typed error carrying the output.
         try:
-            await sh.sh("exit 3", check=True, cwd=".")
+            await sh._exec("exit 3", check=True, cwd=".")
         except sh.ShellError as exc:
             assert exc.output.code == 3, exc.output.code
         else:
@@ -4392,7 +4411,7 @@
 
         # An OSC-8 hyperlink (what gh/eza emit under FORCE_COLOR) is a non-CSI
         # escape: the stripper must remove its \x1b bytes too, not just SGR color.
-        osc = await sh.sh(r"printf '\033]8;;https://x\033\\link\033]8;;\033\\\n'", cwd=".")
+        osc = await sh._exec(r"printf '\033]8;;https://x\033\\link\033]8;;\033\\\n'", cwd=".")
         assert "\x1b" not in osc.text and "link" in osc.text, repr(osc.text)
         assert "\x1b" not in osc.llm_result, repr(osc.llm_result)
 
@@ -4402,7 +4421,7 @@
         loop = asyncio.get_running_loop()
         start = loop.time()
         try:
-            await sh.sh("sleep 30 & echo started; wait", timeout=0.5, cwd=".")
+            await sh._exec("sleep 30 & echo started; wait", timeout=0.5, cwd=".")
         except TimeoutError:
             pass
         else:
@@ -4410,26 +4429,25 @@
         elapsed = loop.time() - start
         assert elapsed < 10, f"timeout did not return promptly: {elapsed:.1f}s"
 
-        # The module object itself is callable: the documented
-        # `import sh; await sh(cmd)` works without reaching for `sh.sh`.
-        assert callable(sh), "sh module is not callable"
-        assert inspect.signature(sh) == inspect.signature(sh.sh)
-        assert "cmd" in inspect.signature(sh).parameters
-        direct = await sh("printf hi", cwd=".")
-        assert direct.ok and direct.text == "hi", repr(direct.text)
-        try:
-            sh("git", "status")
-        except TypeError as exc:
-            assert "argv as a single list" in str(exc), exc
-        else:
-            raise SystemExit("expected sh('git', 'status') to explain argv-list form")
+        # The PUBLIC entry points are retired: `sh()`, `sh.sh()`, `sh.zsh()`,
+        # and calling the module all raise a migration hint pointing at
+        # `await nu(...)`, so a stale transcript fails loudly rather than
+        # shelling out. The private `_exec` (exercised above) is what remains.
+        for call in (lambda: sh("printf hi"), lambda: sh.sh("printf hi"), lambda: sh.zsh("print hi")):
+            try:
+                await call()
+            except RuntimeError as exc:
+                assert "await nu" in str(exc), exc
+            else:
+                raise SystemExit("expected a disabled sh()/zsh() to raise a migration hint")
 
-        zsh_out = await sh.zsh("print -r -- ''${ZSH_VERSION:+zsh}", cwd=".")
-        assert zsh_out.ok and zsh_out.text.strip() == "zsh", repr(zsh_out.text)
+        # A direct runner handle for the composition/streaming checks below.
+        direct = await sh._exec("printf hi", cwd=".")
+        assert direct.ok and direct.text == "hi", repr(direct.text)
 
         # cwd defaults to the current directory: no required-kwarg TypeError.
         import os
-        here = await sh("pwd")
+        here = await sh._exec("pwd")
         assert here.ok and here.text.strip() == os.path.realpath(os.getcwd()), (
             here.text, os.getcwd())
 
@@ -4439,7 +4457,7 @@
         assert "hi" in direct and len(direct) == 2 and str(direct) == "hi"
         # Truthiness is success: empty-but-successful stays truthy (test
         # emptiness with len), and a failed Output is falsy (asserted above).
-        assert bool(await sh("true")) is True
+        assert bool(await sh._exec("true")) is True
 
         # Output streams to sys.stdout as it arrives (echo=True forces it outside
         # a kernel job), escape-stripped -- so a long command's log lands in the
@@ -4448,20 +4466,20 @@
         import io
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            echoed = await sh(r"printf '\033[31mstreamed\033[0m\n'", echo=True)
+            echoed = await sh._exec(r"printf '\033[31mstreamed\033[0m\n'", echo=True)
         assert "streamed" in buf.getvalue() and "\x1b" not in buf.getvalue(), repr(buf.getvalue())
         assert "streamed" in echoed.text, repr(echoed.text)
         # And echo stays off by default outside a kernel job.
         quiet = io.StringIO()
         with contextlib.redirect_stdout(quiet):
-            await sh("printf silent")
+            await sh._exec("printf silent")
         assert quiet.getvalue() == "", repr(quiet.getvalue())
         # A failing command's stream also carries the failure line, so a watcher
         # paging a backgrounded job's stdout (jobs['<id>'].tail()) sees the
         # terminal state even if the Output is never bound (issue #1766).
         fbuf = io.StringIO()
         with contextlib.redirect_stdout(fbuf):
-            await sh("echo dying; exit 5", echo=True)
+            await sh._exec("echo dying; exit 5", echo=True)
         assert "dying" in fbuf.getvalue(), repr(fbuf.getvalue())
         assert "[exit 5]" in fbuf.getvalue(), repr(fbuf.getvalue())
 
@@ -4470,7 +4488,7 @@
         import signal
         import tempfile
         pidfile = tempfile.mktemp()
-        task = asyncio.ensure_future(sh(f"echo $$ > {pidfile}; sleep 30", cwd="."))
+        task = asyncio.ensure_future(sh._exec(f"echo $$ > {pidfile}; sleep 30", cwd="."))
         for _ in range(100):
             await asyncio.sleep(0.05)
             try:
@@ -4495,13 +4513,13 @@
             raise SystemExit(f"cancel orphaned the child (pid {pid} still alive)")
 
         # Structured stdout decodes straight to Python (the polars on-ramp).
-        doc = await sh.sh("printf '%s' '{\"a\": 1, \"b\": [2, 3]}'", cwd=".")
+        doc = await sh._exec("printf '%s' '{\"a\": 1, \"b\": [2, 3]}'", cwd=".")
         assert doc.json() == {"a": 1, "b": [2, 3]}, doc.json()
-        rows = await sh.sh("printf '%s\\n%s\\n' '{\"n\": 1}' '{\"n\": 2}'", cwd=".")
+        rows = await sh._exec("printf '%s\\n%s\\n' '{\"n\": 1}' '{\"n\": 2}'", cwd=".")
         assert rows.jsonl() == [{"n": 1}, {"n": 2}], rows.jsonl()
         # A failed command raises ShellError from json(), never a decode error.
         try:
-            (await sh.sh("echo nope; exit 4", cwd=".")).json()
+            (await sh._exec("echo nope; exit 4", cwd=".")).json()
         except sh.ShellError as exc:
             assert exc.output.code == 4, exc.output.code
         else:

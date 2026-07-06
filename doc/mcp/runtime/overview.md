@@ -18,7 +18,9 @@ rich formatters on the shell, open the SQLite store at `IX_MCP_STORE`
 (`runtime.py:2798-2848`): `jobs`, `history`, `doc`, `Job`, `Result`, `cells`,
 `Cells`, `resources`, `Resource`, `register_resource`, `api`, the `__ix_*`
 functions, `DASHBOARD_URL`, the pre-imported modules from
-`registry.preimport_names()` (`fff`, `view`), and `sh`/`asyncio`/`json`/`pl`.
+`registry.preimport_names()` (`fff`, `view`), `asyncio`/`json`/`pl`, and the
+retired-but-still-bound `sh`/`zsh` disabled shims (they raise a migration hint
+pointing at `await nu(...)`).
 Everything bound up to this point is the runtime baseline (`_baseline_names`,
 `runtime.py:2853`); only names a user binds AFTER it are covered by session
 checkpoints. A second startup script, `ipython/01-ix-polars.py`, widens polars'
@@ -137,7 +139,7 @@ each variable's live value, type, and shape.
 `registry.py` is the single source of truth for what the kernel offers: `MODULES`
 (first-party bundled modules catalogued by `api()`, with `preimport` and optional
 `credential`), `BUILTINS` (names always present: `Result`, `cells`, `jobs`,
-`history`, `doc`, `resources`, `register_resource`, `sh`, `api`, `asyncio`,
+`history`, `doc`, `resources`, `register_resource`, `api`, `asyncio`,
 `json`, `pl`, `DASHBOARD_URL`), and `LIBRARIES` (bundled third-party libs:
 numpy, polars, duckdb, httpx, matplotlib, pypdf, playwright, exa_py). `fff` and
 `view` are pre-imported (`registry.py:62-73`). Credentialed entries declare an

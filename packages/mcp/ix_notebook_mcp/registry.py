@@ -67,13 +67,14 @@ MODULES: tuple[Module, ...] = (
     ),
     Module(
         "nu",
-        "structured shell, the DEFAULT for shell-ish work (an embedded, persistent nushell "
+        "structured shell, the ONE shell-out path (an embedded, persistent nushell "
         "engine): run a pipeline and get a polars DataFrame back, always -- "
         '`await nu("ls | where size > 1kb | sort-by size")`, `open Cargo.toml`, `from csv`, '
-        "`http get`; `let`/`def`/`cd` persist across calls like a REPL; `input=df` pipes a frame "
-        "through a pipeline; `nu.value(code)` returns the plain Python value; a failure raises "
-        "NuError carrying nushell's own diagnostic. Prefer it over `sh` + jq/awk/sed for any "
-        "command whose data you want",
+        "`http get`; run an external binary with `^cmd` (`^git status`, `^gh pr list --json .. "
+        "| from json`); `let`/`def`/`cd` persist across calls like a REPL; `input=df` pipes a "
+        "frame through a pipeline; `nu.value(code)` returns the plain Python value; a failure "
+        "raises NuError carrying nushell's own diagnostic. Replaces jq/awk/sed text munging and "
+        "the retired `sh`",
         preimport=True,
     ),
     Module(
@@ -298,18 +299,6 @@ BUILTINS: tuple[Builtin, ...] = (
         "watch_pr",
         "watch a GitHub PR as a live resource, show required checks with elapsed time, enable "
         "auto merge by default, and notify when it merges, fails, or times out",
-    ),
-    Builtin(
-        "sh",
-        "run an external binary (git/nix/gh/cargo writes, long commands, raw logs) off the loop "
-        "-- the escape hatch when `nu` won't do; use sh([...]) for argv-list/no shell parsing and "
-        "sh('...') only when shell parsing is intended; the Output IS a Result (ANSI as HTML for "
-        "the human, `.text`/`.code`/`.ok` for you), and `.json()`/`.jsonl()`/`.df()` parse a "
-        "JSON-mode CLI straight to data / a polars frame: ask the tool for --json, never scrape TSV",
-    ),
-    Builtin(
-        "zsh",
-        "explicit zsh -lc escape hatch for zsh-only shell syntax; prefer sh([...]) for normal commands",
     ),
     Builtin("api", "the live catalog of every helper, as a polars frame (`api('grep')` to filter)"),
     Builtin(

@@ -591,12 +591,11 @@ let
     {
       shellCwd = {
         text = ''
-          Prefer `nu` for shell-shaped work whose output you will filter, reshape, or
-          parse; it preserves structure and returns Polars DataFrames. Use `sh()` for
-          raw logs, writes, or external commands whose text must stay verbatim. The
-          kernel `sh()` has no persistent cwd or shell state. Pass `cwd=<abs path>`
-          on every call, or use `git -C <worktree>`. Use argv-list form for commands
-          containing backticks or `$(...)`: `sh([...])`. Before commit or branch work,
+          `nu` is the one shell-out path: `await nu('<pipeline>')` returns a Polars
+          DataFrame, and an external binary runs with `^cmd` (`await nu('^git status')`).
+          The retired `sh()`/`zsh()` now raise a migration hint. The kernel carries no
+          persistent cwd or shell state between calls, so pass `cwd=<abs path>` where a
+          helper accepts it (or use `git -C <worktree>`). Before commit or branch work,
           verify the repo root and branch match the assigned worktree.
         '';
         reason = ''
@@ -726,10 +725,11 @@ let
       structuredPrimitives = {
         text = ''
           Prefer structured primitives over text munging: `view.ls`, `view.tree`,
-          `view.cat`, `grep`, `find`, and `nu` pipelines. For command output
-          you plan to filter or parse, use `nu` first so the result arrives as a Polars
-          DataFrame; use `sh().json()`, `.jsonl()`, or `.df()` only when `sh` is the
-          right tool. Return tables as Polars DataFrames.
+          `view.cat`, `grep`, `find`, and `nu` pipelines. For command output you plan
+          to filter or parse, run it through `nu` so the result arrives as a Polars
+          DataFrame — pipe a `--json` mode through `from json`, or reshape text with
+          nushell pipeline commands rather than jq/awk/sed. Return tables as Polars
+          DataFrames.
 
 
           For reusable Python, write explicit annotations at function and data
@@ -739,7 +739,7 @@ let
         '';
         reason = ''
           Ad hoc text munging of command output was fragile, and combining commands in
-          one `sh()` call lost individual errors.
+          one shell call lost individual errors.
         '';
       };
     }

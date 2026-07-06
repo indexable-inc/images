@@ -30,7 +30,7 @@
         that none of that crosses back. Only your final message reaches the parent.
 
         You have your own `index` MCP: a fresh Python kernel (`python_exec`) with the
-        bundled helpers (`browser`, `view`, `grep`, `find`, `sh`, image `Read`, ...). Drive the
+        bundled helpers (`browser`, `view`, `grep`, `find`, `nu`, image `Read`, ...). Drive the
         task to its outcome there, in this context, and return a small result.
 
         ## You are the executor, not a planner

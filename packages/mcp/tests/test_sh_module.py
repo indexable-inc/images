@@ -1,5 +1,4 @@
 import asyncio
-import inspect
 import pathlib
 import sys
 
@@ -11,14 +10,24 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src" / "sh
 import sh
 
 
-def test_callable_module_signature_keeps_cmd_argument() -> None:
-    assert "cmd" in inspect.signature(sh).parameters
-    assert inspect.signature(sh) == inspect.signature(sh.sh)
+def test_public_sh_is_disabled_with_migration_hint() -> None:
+    # `sh` is retired; agents shell out through `await nu(...)`. The public
+    # entry points stay importable/callable so a stale call fails LOUDLY with a
+    # migration hint rather than a NameError.
+    with pytest.raises(RuntimeError, match="await nu"):
+        sh("git status")
+    with pytest.raises(RuntimeError, match="await nu"):
+        sh.sh("git status")
 
 
-def test_extra_positional_arg_gets_argv_hint() -> None:
-    with pytest.raises(TypeError, match="argv as a single list"):
-        sh("git", "status")
+def test_calling_the_module_is_disabled() -> None:
+    with pytest.raises(RuntimeError, match="await nu"):
+        sh(["git", "status"])
+
+
+def test_zsh_is_disabled_with_migration_hint() -> None:
+    with pytest.raises(RuntimeError, match="await nu"):
+        sh.zsh("print $ZSH_VERSION")
 
 
 def test_failed_output_is_loud_at_both_ends() -> None:
@@ -137,24 +146,12 @@ def test_redaction_does_not_touch_executed_command_or_text() -> None:
     assert token in out.text
 
 
-def test_zsh_helper_uses_zsh_argv(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
-    seen = {}
-
-    async def fake_sh(cmd: list[str], **kwargs: object) -> sh.Output:
-        seen["cmd"] = cmd
-        seen["kwargs"] = kwargs
-        return sh.Output(cmd="zsh -lc print", code=0, raw="ok\n", duration=0)
-
-    monkeypatch.setitem(sh.zsh.__globals__, "sh", fake_sh)
-
-    cwd = str(tmp_path)
-    out = asyncio.run(sh.zsh("print $ZSH_VERSION", cwd=cwd, timeout=1))
-
+def test_exec_runs_and_returns_output(tmp_path: pathlib.Path) -> None:
+    # The private runner still backs the kernel-owned internals (grep/find,
+    # worktree). It is not part of the public namespace.
+    out = asyncio.run(sh._exec([sys.executable, "-c", "print('exec-ok')"], echo=False))
     assert out.ok
-    assert seen == {
-        "cmd": ["zsh", "-lc", "print $ZSH_VERSION"],
-        "kwargs": {"cwd": cwd, "timeout": 1},
-    }
+    assert "exec-ok" in out.text
 
 
 def test_sh_registers_job_resource(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -183,7 +180,7 @@ def test_sh_registers_job_resource(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sh, "_register_resource", register_resource)
     monkeypatch.setattr(sh, "_resource_counts", {})
 
-    out = asyncio.run(sh.sh([sys.executable, "-c", "print('resource-ok')"], echo=False))
+    out = asyncio.run(sh._exec([sys.executable, "-c", "print('resource-ok')"], echo=False))
 
     assert out.ok
     assert resource.closed
@@ -228,7 +225,7 @@ def test_sh_startup_failure_registers_terminal_resource(monkeypatch: pytest.Monk
     monkeypatch.setattr(sh, "_resource_counts", {})
 
     with pytest.raises(FileNotFoundError):
-        asyncio.run(sh.sh(["__ix_missing_executable_for_resource_test__"], echo=False))
+        asyncio.run(sh._exec(["__ix_missing_executable_for_resource_test__"], echo=False))
 
     assert resource.closed
     assert len(calls) == 1

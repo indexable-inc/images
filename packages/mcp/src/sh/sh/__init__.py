@@ -1,16 +1,21 @@
-"""Run a shell command on the kernel's async loop and render it two ways.
+"""The kernel's process runner: escape-stripped model text, colored dashboard HTML.
 
-Bundled like ``view``/``search``/``fleet`` so every session can ``import sh`` with no
-setup. The point: when you genuinely need to shell out (a ``gh``/``git``/``nix``
-invocation with no Python binding), do it without blocking the one shared event
-loop and without leaking terminal escape codes into your own context.
+The public ``sh()`` / ``zsh()`` helpers are **disabled** (issue: retire ``sh`` in
+favour of ``nu``): calling either raises :class:`RuntimeError` naming the
+replacement, so an old transcript that reaches for ``await sh(...)`` fails loudly
+with a migration hint instead of quietly shelling out. The one shell-out path
+agents use is ``await nu('<pipeline>')`` (bundled nushell, structured output);
+external binaries run fine from nushell via ``^cmd``, and for a CLI with a native
+``--json`` mode ``nu`` decodes it end to end.
 
-    import sh
-    out = await sh("gh run list --limit 5")
-    out                       # last expr: dashboard shows the COLORED terminal
-                              # block, you get the escape-stripped plain text
+What remains here is :func:`_exec`, the private async process runner the kernel
+still owns for its own internals (the ripgrep/fd-backed ``grep``/``find``
+helpers, git worktree plumbing) — it is NOT part of the public namespace. It runs
+a child on the kernel's async loop and renders it two ways, without blocking the
+one shared event loop and without leaking terminal escape codes into model
+context.
 
-``sh`` is async (built on :func:`asyncio.create_subprocess_shell`), so it never
+``_exec`` is async (built on :func:`asyncio.create_subprocess_shell`), so it never
 freezes the kernel the way a bare ``subprocess.run`` does. The value it returns is
 an :class:`Output`, which is a ``Result`` subclass: ending a cell with it
 satisfies the kernel's Result contract directly, the human watching the dashboard
@@ -33,17 +38,9 @@ The :class:`Output` also exposes the parts programmatically::
     out.json()   # parse out.text as one JSON document
     out.jsonl()  # parse out.text as JSON Lines (one value per line)
 
-For a command that emits structured output, decode it straight into a polars
-DataFrame without a hand-written ``json.loads``::
-
-    import polars as pl
-    prs = (await sh("gh pr list --json number,title,state", cwd=".")).json()
-    pl.DataFrame(prs)
-    # JSON Lines (cargo --message-format json, nix --log-format internal-json) -> .jsonl()
-    msgs = (await sh("cargo build --message-format json", cwd=".")).jsonl()
-
 ``json``/``jsonl`` raise :class:`ShellError` when the command failed, so a broken
-``gh ... --json`` surfaces its real error instead of a confusing decode failure.
+``--json`` invocation surfaces its real error instead of a confusing decode
+failure.
 
 An ``Output`` also behaves like its text for the common string operations
 (``out[-4000:]``, ``out + "..."``, ``"error" in out``, ``len(out)``,
@@ -58,7 +55,7 @@ head-read and a tail-read of a long log see the failure; the same line is echoed
 into the streamed job stdout (``jobs['<id>'].output`` / ``.tail()``), so a
 watcher paging a backgrounded build sees the terminal state even when the Output
 value is never bound or rendered; a failed Output is falsy (``if not out:``);
-and ``await sh(cmd, check=True)`` raises :class:`ShellError` instead of
+and ``await _exec(cmd, check=True)`` raises :class:`ShellError` instead of
 returning. ``.text`` stays the command's own output with no markers, so reading
 diagnostics off a failure (or a ``grep`` that legitimately exits 1) is
 unchanged. Everywhere a COMMAND string is rendered (the failure line, the
@@ -73,7 +70,7 @@ run as command substitution by the shell even when the string was produced by
 Python ``repr()`` (the backticks survive the quoting), and a multi-line string
 repr'd as a single-quoted argument loses its newlines (they become literal
 ``\\n``). For any argument that contains prose -- a commit message, a PR body --
-use the argv-list form ``sh(['git', 'commit', '-m', msg])`` so the argument is
+use the argv-list form ``_exec(['git', 'commit', '-m', msg])`` so the argument is
 passed verbatim with no shell parsing, or write the text to a file and use
 ``git commit -F <file>``.
 
@@ -86,7 +83,7 @@ process group, never orphaning it.
 Pass ``name=`` to label the job in the dashboard and the ``jobs`` dict, mirroring
 the same parameter on ``python_exec``::
 
-    build = await sh("nix build .#mcp ...", cwd=wt, timeout=600, name="nix-build-mcp")
+    build = await _exec("nix build .#mcp ...", cwd=wt, timeout=600, name="nix-build-mcp")
 """
 
 from __future__ import annotations
@@ -95,7 +92,6 @@ import asyncio
 import codecs
 import contextlib
 import html as _html
-import inspect as _inspect
 import json as _json
 import os
 import re
@@ -107,7 +103,18 @@ from typing import Any
 
 __all__ = ["Output", "ShellError", "sh", "zsh"]
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
+
+# The message every disabled entry point raises. Names the one supported
+# shell-out path (nushell) and how to run an external binary from it, so a stale
+# `await sh(...)` fails loudly with a migration hint rather than a bare NameError.
+_DISABLED_MSG = (
+    "sh() is disabled: use `await nu('<command>')` -- the bundled nushell engine, "
+    "which returns structured output as a polars DataFrame. Run an external binary "
+    "from nushell with `^cmd` (e.g. `await nu('^git status')`), and for a CLI with a "
+    "native --json mode let nushell decode it: `await nu('^gh pr list --json number | "
+    "from json')`. See `api('nu')`."
+)
 
 # `Result` is the kernel runtime's human/model split. Importing it lets an
 # `Output` BE a Result, so a cell can end with `await sh(...)` and satisfy the
@@ -264,7 +271,7 @@ def _redact(text: str) -> str:
 
 
 class ShellError(RuntimeError):
-    """Raised by ``await sh(cmd, check=True)`` when the command exits non-zero.
+    """Raised by ``await _exec(cmd, check=True)`` when the command exits non-zero.
 
     Carries the :class:`Output` so the failing command's text is still
     inspectable: ``except ShellError as e: print(e.output.text)``. The message
@@ -332,7 +339,7 @@ class Output(_ResultBase):
         separate stderr channel. This alias exists so the conventional
         subprocess attribute name works without a wasted AttributeError roundtrip;
         ``.text`` and ``.stdout`` are identical. For separate streams, redirect
-        in the command, e.g. ``await sh("cmd 2>err.txt")`` and read the file.
+        in the command, e.g. ``await _exec("cmd 2>err.txt")`` and read the file.
         """
         return self.text
 
@@ -342,7 +349,7 @@ class Output(_ResultBase):
 
         Returns the same value as ``.stdout`` and ``.text``. The streams cannot
         be separated after the fact; if you need stderr alone, redirect it in
-        the command, e.g. ``await sh("cmd 2>&1 1>/dev/null")``.
+        the command, e.g. ``await _exec("cmd 2>&1 1>/dev/null")``.
         """
         return self.text
 
@@ -352,7 +359,7 @@ class Output(_ResultBase):
 
         The docstring above and the kernel instructions teach
         ``jobs['<id>'].output`` as the way to read a run's stdout; this alias
-        makes the direct ``(await sh(...))`` return symmetric so the same
+        makes the direct ``(await _exec(...))`` return symmetric so the same
         attribute works whether the call ran in the foreground or in a tracked
         background job.
         """
@@ -366,7 +373,7 @@ class Output(_ResultBase):
         """Parse the command's output (``.text``) as a single JSON document.
 
         For a tool with a JSON mode (``gh ... --json``, ``cargo metadata``,
-        ``nix eval --json``): ``(await sh(...)).json()`` hands back the decoded
+        ``nix eval --json``): ``(await _exec(...)).json()`` hands back the decoded
         Python value, ready for ``pl.DataFrame(...)``. Raises :class:`ShellError`
         if the command exited non-zero (so the real failure surfaces, not a
         :class:`json.JSONDecodeError` over an error message), and
@@ -398,7 +405,7 @@ class Output(_ResultBase):
         """The command's JSON output as a polars DataFrame: the one-liner for any
         CLI with a JSON mode.
 
-        ``(await sh("gh run list --json status,conclusion,displayTitle")).df()``
+        ``(await _exec("gh run list --json status,conclusion,displayTitle")).df()``
         hands back a frame ready to ``.filter`` / ``.sort`` / render, instead of
         TSV text to scrape. Accepts a top-level JSON array of objects, a single
         object (one row), or JSON Lines. Same non-zero guard as :meth:`json`, and
@@ -649,7 +656,7 @@ def _register_sh_resource(state: dict[str, object]) -> object | None:
     )
 
 
-async def sh(
+async def _exec(
     cmd: str | list[str],
     *,
     cwd: str | os.PathLike | None = None,
@@ -661,6 +668,11 @@ async def sh(
     name: str | None = None,
 ) -> Output:
     """Run ``cmd`` on the shared async loop and return its :class:`Output`.
+
+    PRIVATE: the kernel's own process runner. The public ``sh()`` is disabled
+    (agents use ``await nu(...)``); this backs the kernel-owned internals that
+    still shell out (the ``grep``/``find`` search helpers, git worktree plumbing).
+    Not bound into the user namespace and not in ``api()``.
 
     ``cmd`` is a string (run through the shell, so pipes and globs work) or an
     argv list (executed directly, no shell parsing). stdout and stderr are merged
@@ -706,34 +718,34 @@ async def sh(
     message repr'd as a single-quoted string loses its newlines (they become
     literal ``\\n``). For any command argument that contains prose -- a commit
     message, a PR body, a description -- use the argv-list form
-    ``sh(['git', 'commit', '-m', msg])`` so the argument is passed verbatim
+    ``_exec(['git', 'commit', '-m', msg])`` so the argument is passed verbatim
     with no shell parsing, or write the text to a temporary file and pass
     ``git commit -F <file>``.
     """
     if isinstance(cmd, str) and re.match(r"\s*cd\b", cmd):
         raise ValueError(
-            "sh() takes no `cd ...` prefix: pass the working directory as cwd= and keep "
-            "the command itself clean, e.g. await sh('ix trace <id>', cwd='/path/to/repo')."
+            "_exec() takes no `cd ...` prefix: pass the working directory as cwd= and keep "
+            "the command itself clean, e.g. await _exec('git status', cwd='/path/to/repo')."
         )
     if isinstance(cmd, str) and "`" in cmd:
         raise ValueError(
-            "sh(): backticks in a string command are shell command substitution -- they run "
+            "_exec(): backticks in a string command are shell command substitution -- they run "
             "even inside Python repr'd strings (the backticks survive repr quoting, then the "
             "shell executes them when it processes the argument). This is how `git commit -m "
             "{msg!r}` ended up executing `ix-mcp dashboard` and splicing its URL into the "
             "commit message. If you want $(...) substitution, write it as $(...) explicitly. "
             "If the backticks are prose (e.g. a commit message), use the argv-list form "
-            "instead: sh(['git', 'commit', '-m', msg]) runs with no shell parsing and passes "
+            "instead: _exec(['git', 'commit', '-m', msg]) runs with no shell parsing and passes "
             "msg verbatim, or write the message to a temp file and use git commit -F <file>."
         )
     if isinstance(cmd, str) and re.search(
         r"git\s+commit\b.*\s(-m|--message)\s*['\"].*(?:\\n|\n).*['\"]", cmd, re.DOTALL
     ):
         raise ValueError(
-            "sh(): a git commit -m/--message argument containing a newline (real or "
+            "_exec(): a git commit -m/--message argument containing a newline (real or "
             "escaped \\n) will be flattened by the shell into a single line full of literal "
             r"'\n' characters when passed through Python repr. Use the argv-list form "
-            "sh(['git', 'commit', '-m', msg]) to pass the message verbatim without shell "
+            "_exec(['git', 'commit', '-m', msg]) to pass the message verbatim without shell "
             "parsing, or write it to a temp file and use git commit -F <file>."
         )
     if name is not None and _in_kernel_job() and _rename_current_job is not None:
@@ -882,52 +894,38 @@ async def sh(
     return out
 
 
-async def zsh(cmd: str, **kwargs: object) -> Output:
-    """Run ``cmd`` through ``zsh -lc`` while keeping :func:`sh`'s safety wrapper.
-
-    Use this only when the command intentionally depends on zsh syntax. For
-    prose-bearing arguments, keep using ``sh(['prog', arg])`` so the shell never
-    parses the argument. Pass ``cwd=`` instead of a leading ``cd``.
-    """
-    if re.match(r"\s*cd\b", cmd):
-        raise ValueError(
-            "zsh() takes no `cd ...` prefix: pass the working directory as cwd= and keep "
-            "the command itself clean."
-        )
-    if "`" in cmd:
-        raise ValueError(
-            "zsh(): backticks are shell command substitution. Use $(...) when you "
-            "intentionally want substitution, or sh([...]) when the text is prose."
-        )
-    return await sh(["zsh", "-lc", cmd], **kwargs)
+# --- public entry points: disabled ---------------------------------------
+#
+# `sh()` and `zsh()` are retired. Agents shell out through `await nu(...)`
+# (bundled nushell, structured output); externals run from nushell via `^cmd`.
+# These names stay importable and callable so a stale `await sh(...)` in an old
+# transcript fails LOUDLY with a migration hint (`_DISABLED_MSG`) rather than a
+# bare NameError -- the same reason the module stays callable below. The private
+# `_exec` above is what the kernel's own internals (grep/find, worktree) use; it
+# is not bound into the namespace and not in api().
 
 
-# Make the module itself callable, so the documented `import sh; await sh(cmd)`
-# works without reaching for `sh.sh`. The module object's class is swapped for a
-# ModuleType subclass that forwards a call to the sh() coroutine function. The
-# kernel binds this same module object as `sh` in the user namespace too (see
-# ix_notebook_mcp.runtime.install), so `await sh(...)` works with or without an
-# explicit import, while `sh.Output` / `sh.ShellError` stay reachable as attrs.
+def sh(*_args: object, **_kwargs: object) -> Output:
+    """Disabled. Use ``await nu('<command>')`` -- see :data:`_DISABLED_MSG`."""
+    raise RuntimeError(_DISABLED_MSG)
+
+
+def zsh(*_args: object, **_kwargs: object) -> Output:
+    """Disabled. Use ``await nu('<command>')`` -- see :data:`_DISABLED_MSG`."""
+    raise RuntimeError(_DISABLED_MSG)
+
+
+# The module stays callable so `await sh(cmd)` (with or without `import sh`)
+# hits the disabled path with the migration hint, not a NameError. `sh.Output`
+# and `sh.ShellError` remain reachable as attrs for the kernel-internal callers
+# that type against them.
 import types as _types
 
 
-import functools as _functools
-
-
 class _CallableModule(_types.ModuleType):
-    @_functools.wraps(sh)
-    def __call__(self, *args: object, **kwargs: object) -> object:
-        if len(args) > 1:
-            raise TypeError(
-                "sh() takes one command argument. Pass argv as a single list, e.g. "
-                "await sh(['git', 'status'], cwd=repo), not sh('git', 'status')."
-            )
-        return sh(*args, **kwargs)
+    def __call__(self, *_args: object, **_kwargs: object) -> object:
+        raise RuntimeError(_DISABLED_MSG)
 
 
 _module = sys.modules[__name__]
 _module.__class__ = _CallableModule
-# `inspect.signature(callable_module)` inspects the bound __call__ method and
-# would otherwise drop `cmd`. Publish the real callable signature so api() shows
-# the load-bearing positional argument and the argv-list type.
-_module.__signature__ = _inspect.signature(sh)  # type: ignore[attr-defined]

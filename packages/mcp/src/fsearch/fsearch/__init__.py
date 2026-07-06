@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any
 
 import polars as pl
-from sh import sh as _sh  # the bundled async shell-out helper; `sh.sh` is the function
+from sh import _exec as _sh  # the kernel-private process runner (public sh() is disabled; agents use nu)
 
 __all__ = ["FsearchError", "PartialFrame", "find", "grep", "spotlight"]
 
