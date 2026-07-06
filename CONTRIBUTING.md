@@ -174,6 +174,22 @@ The full style guide lives in [AGENTS.md](AGENTS.md). Skim the section that matc
 
 The lint app enforces the mechanical Nix rules. Reviewers enforce the prose and architecture rules.
 
+## READMEs
+
+A README is the front page a stranger judges the project by, so it is held to a higher bar than other prose: minimal, easy to understand, and it shows the thing working. The shape, top to bottom:
+
+1. **One-line pitch** — what it is and why it exists, in the first sentence.
+2. **What it does** — a short paragraph or two of the mental model. No feature laundry list.
+3. **Quickstart** — the smallest real, runnable example: the exact commands or code a reader copies to see the tool do its job, and one line saying what they should see. A README without a working example is a brochure.
+4. **Pointers** — where the deeper docs live (`doc/<package>/overview.md`), nothing duplicated from them.
+
+Prefer deleting a section to padding it. The repo root [README.md](README.md) is the exemplar of the shape at monorepo scale; [packages/sqlmerge](packages/sqlmerge/README.md) at single-package scale.
+
+Two rules are load-bearing rather than advisory:
+
+- A **mirror-enabled package** (a `mirror` attr in its `package.nix`, see [packages/mirror](packages/mirror/README.md)) must have a `README.md`: it becomes the standalone GitHub repo's front page, and the repo-metadata check (`.github/workflows/repo-metadata.yml`) fails without one.
+- The GitHub About sidebar (description, homepage, topics) is declared in nix — `mirror.description` / `mirror.topics` for mirrors, [lib/repo-metadata.nix](lib/repo-metadata.nix) for the monorepo — and synced by CI on every push to `main`. Don't edit it in the GitHub UI; the sync reverts manual edits.
+
 ## Commit messages
 
 One logical change per commit; see the [Workflow](AGENTS.md#workflow) section for the full convention. The summary:
