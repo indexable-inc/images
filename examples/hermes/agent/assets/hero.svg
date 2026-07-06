@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 160" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    svg { color: #1f2328; }
+    text { fill: currentColor; }
+    .muted { fill: #656d76; }
+    .box { stroke: currentColor; fill: none; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    .arrow { fill: #1f2328; }
+    .group { stroke: #8250df; fill: none; stroke-dasharray: 6 4; }
+    .accent { fill: #8250df; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .arrow { fill: #e6edf3; }
+      .group { stroke: #a371f7; }
+      .accent { fill: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="arrow"/>
+    </marker>
+  </defs>
+  <rect x="30" y="56" width="130" height="48" rx="6" class="box"/>
+  <text x="95" y="77" font-size="13" text-anchor="middle">you</text>
+  <text x="95" y="94" font-size="11" text-anchor="middle" class="muted">hermes chat</text>
+  <rect x="240" y="30" width="250" height="100" rx="6" class="box"/>
+  <text x="365" y="52" font-size="13" text-anchor="middle">hermes VM</text>
+  <text x="365" y="74" font-size="11" text-anchor="middle" class="muted">hermes-agent daemon</text>
+  <text x="365" y="92" font-size="11" text-anchor="middle" class="muted">SOUL.md persona</text>
+  <text x="365" y="110" font-size="11" text-anchor="middle" class="muted">/run/secrets/hermes.env</text>
+  <rect x="570" y="56" width="120" height="48" rx="6" class="box"/>
+  <text x="630" y="77" font-size="13" text-anchor="middle">OpenRouter</text>
+  <text x="630" y="94" font-size="11" text-anchor="middle" class="muted">model API</text>
+  <line x1="160" y1="80" x2="232" y2="80" class="edge"/>
+  <text x="196" y="72" font-size="11" text-anchor="middle" class="muted">chat</text>
+  <line x1="490" y1="80" x2="562" y2="80" class="edge"/>
+  <text x="526" y="72" font-size="11" text-anchor="middle" class="muted">outbound</text>
+</svg>
