@@ -14,7 +14,10 @@ real dispatch against the host GPU over AF_VSOCK port 5010.
   pkgs,
   ...
 }: let
-  demo = import ./package.nix {inherit ix lib pkgs;};
+  demo = import ./package.nix {
+    inherit ix lib;
+    inherit (pkgs) rustPlatform;
+  };
 in {
   # On the PATH for interactive runs: `ix shell compute -- wgpu-compute-demo`.
   environment.systemPackages = [demo];

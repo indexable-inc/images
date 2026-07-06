@@ -11,7 +11,7 @@ The compute path is ordinary wgpu v30; the only platform seam is
 {
   ix,
   lib,
-  pkgs ? ix.pkgs,
+  rustPlatform ? ix.pkgs.rustPlatform,
 }: let
   fs = lib.fileset;
   src = fs.toSource {
@@ -23,7 +23,7 @@ The compute path is ordinary wgpu v30; the only platform seam is
     ];
   };
 in
-  pkgs.rustPlatform.buildRustPackage {
+  rustPlatform.buildRustPackage {
     pname = "wgpu-compute-demo";
     inherit ((lib.importTOML ./Cargo.toml).package) version;
     inherit src;
