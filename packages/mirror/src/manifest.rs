@@ -98,7 +98,12 @@ pub fn inherited_dependency_names(manifest: &str) -> Result<Vec<String>> {
 }
 
 /// The `name` and `description` of a manifest's `[package]`.
-pub fn package_info(manifest: &str) -> Result<(String, Option<String>)> {
+pub struct PackageInfo {
+    pub name: String,
+    pub description: Option<String>,
+}
+
+pub fn package_info(manifest: &str) -> Result<PackageInfo> {
     let doc: DocumentMut = manifest.parse().context("parsing member Cargo.toml")?;
     let package = doc
         .get("package")
@@ -113,7 +118,7 @@ pub fn package_info(manifest: &str) -> Result<(String, Option<String>)> {
         .get("description")
         .and_then(Item::as_str)
         .map(str::to_owned);
-    Ok((name, description))
+    Ok(PackageInfo { name, description })
 }
 
 fn inline_package(doc: &mut DocumentMut, defaults: &Table) -> Result<()> {

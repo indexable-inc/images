@@ -34,7 +34,10 @@ const SKIP_TOP_LEVEL: [&str; 3] = ["default.nix", "package.nix", "target"];
 pub fn run(workspace: &Workspace, request: &Request<'_>) -> Result<Generated> {
     let package_dir = workspace.root.join(request.package);
     let primary_manifest = read_manifest(&package_dir)?;
-    let (crate_name, description) = manifest::package_info(&primary_manifest)?;
+    let manifest::PackageInfo {
+        name: crate_name,
+        description,
+    } = manifest::package_info(&primary_manifest)?;
     let internal = dependency_closure(workspace, &primary_manifest)?;
 
     ensure_empty(request.out)?;
