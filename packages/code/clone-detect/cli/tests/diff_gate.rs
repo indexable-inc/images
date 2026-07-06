@@ -57,9 +57,15 @@ fn git(dir: &Path, args: &[&str]) -> Output {
     output
 }
 
+/// The parsed result of a `clone` invocation.
+struct CloneRun {
+    json: Value,
+    success: bool,
+}
+
 /// Run the `clone` binary in `dir` with the given args, returning parsed JSON
 /// stdout and the exit success flag.
-fn run_clone(dir: &Path, args: &[&str]) -> (Value, bool) {
+fn run_clone(dir: &Path, args: &[&str]) -> CloneRun {
     let output = Command::new(env!("CARGO_BIN_EXE_clone"))
         .current_dir(dir)
         .args(args)
@@ -68,7 +74,10 @@ fn run_clone(dir: &Path, args: &[&str]) -> (Value, bool) {
     let stdout = String::from_utf8(output.stdout).expect("clone stdout is UTF-8");
     let json: Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("clone stdout is not JSON ({e}): {stdout}"));
-    (json, output.status.success())
+    CloneRun {
+        json,
+        success: output.status.success(),
+    }
 }
 
 #[test]
@@ -97,7 +106,8 @@ fn diff_gate_fails_on_duplicated_change_while_global_passes() {
     // Global budget is permissive (100%), diff budget is 0%. Diff base is HEAD:
     // merge-base(HEAD, HEAD) == HEAD, so the diff is HEAD-tree vs the worktree,
     // i.e. the uncommitted duplicate.
-    let (json, success) = run_clone(dir, &["--diff", "HEAD", ".", "--pretty"]);
+    let run = run_clone(dir, &["--diff", "HEAD", ".", "--pretty"]);
+    let json = &run.json;
 
     let global = &json["gate"]["global"];
     assert_eq!(
@@ -120,7 +130,10 @@ fn diff_gate_fails_on_duplicated_change_while_global_passes() {
     );
 
     // Exit code follows the worst gate: a failing diff gate means failure.
-    assert!(!success, "clone should exit nonzero when the diff gate fails");
+    assert!(
+        !run.success,
+        "clone should exit nonzero when the diff gate fails"
+    );
 }
 
 #[test]
@@ -147,13 +160,14 @@ fn diff_gate_passes_when_change_is_not_duplicated() {
     )
     .unwrap();
 
-    let (json, success) = run_clone(dir, &["--diff", "HEAD", "."]);
+    let run = run_clone(dir, &["--diff", "HEAD", "."]);
+    let json = &run.json;
     assert_eq!(
         json["gate"]["diff"]["pass"],
         Value::Bool(true),
         "diff gate should pass when the change is not duplicated: {json:#}"
     );
-    assert!(success, "clone should exit zero when all gates pass");
+    assert!(run.success, "clone should exit zero when all gates pass");
 }
 
 #[test]

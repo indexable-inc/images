@@ -62,6 +62,13 @@ struct Args {
     /// Enable the diff gate against a git base rev (default resolution:
     /// `[budget] diff_base`, else `origin/main`). Fails if duplication over the
     /// lines changed since the merge base exceeds `--max-diff-pct`.
+    // `Option<Option<T>>` is clap's idiom for an optional flag with an optional
+    // value: outer `None` = flag absent (gate off), `Some(None)` = `--diff` with
+    // no base (resolve from config/default), `Some(Some(b))` = `--diff b`.
+    #[expect(
+        clippy::option_option,
+        reason = "clap encodes flag-present-vs-value-present as Option<Option<_>>"
+    )]
     #[arg(long, value_name = "BASE")]
     diff: Option<Option<String>>,
 
@@ -286,10 +293,14 @@ fn evaluate_gates(
         .diff
         .as_ref()
         .map(|cfg| {
-            let (base_sha, changed) =
-                diff::changed_lines(&repo_dir, &cfg.base).context(DiffSnafu)?;
-            let gate =
-                DiffGate::evaluate(result, &changed, cfg.budget_pct, cfg.base.clone(), base_sha);
+            let diff = diff::changed_lines(&repo_dir, &cfg.base).context(DiffSnafu)?;
+            let gate = DiffGate::evaluate(
+                result,
+                &diff.changed,
+                cfg.budget_pct,
+                cfg.base.clone(),
+                diff.base_sha,
+            );
             log_diff_gate(&gate);
             Ok(gate)
         })

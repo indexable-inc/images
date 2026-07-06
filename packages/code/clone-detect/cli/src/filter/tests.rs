@@ -39,12 +39,20 @@ fn duplicated_lines_dedups_overlapping_ranges_per_file() {
 }
 
 #[test]
+#[expect(
+    clippy::float_cmp,
+    reason = "0.0 is exactly representable and the guard returns it verbatim"
+)]
 fn ratio_pct_zero_denominator_is_zero() {
     assert_eq!(ratio_pct(5, 0), 0.0);
     assert_eq!(ratio_pct(0, 0), 0.0);
 }
 
 #[test]
+#[expect(
+    clippy::float_cmp,
+    reason = "0.0 is exactly representable and 0/100 yields it verbatim"
+)]
 fn ratio_pct_basic() {
     assert!((ratio_pct(1, 4) - 25.0).abs() < 1e-9);
     assert_eq!(ratio_pct(0, 100), 0.0);

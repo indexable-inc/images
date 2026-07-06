@@ -26,6 +26,13 @@ use snafu::{OptionExt as _, ResultExt as _, ensure};
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChangedLines(pub BTreeMap<PathBuf, BTreeSet<usize>>);
 
+/// The resolved diff for the gate: the merge-base commit it was taken against
+/// and the changed lines on the working-tree side.
+pub struct RepoDiff {
+    pub base_sha: String,
+    pub changed: ChangedLines,
+}
+
 #[derive(Debug, snafu::Snafu)]
 pub enum DiffError {
     #[snafu(display("failed to run `git {args}`: is git installed and on PATH?"))]
@@ -141,7 +148,7 @@ pub fn merge_base(dir: &Path, base: &str) -> Result<String, DiffError> {
 ///
 /// Line numbers are the git-native 1-indexed new-side lines; the gate converts
 /// tree-sitter's 0-indexed fragment lines to match (see [`crate::gate`]).
-pub fn changed_lines(dir: &Path, base: &str) -> Result<(String, ChangedLines), DiffError> {
+pub fn changed_lines(dir: &Path, base: &str) -> Result<RepoDiff, DiffError> {
     let base_sha = merge_base(dir, base)?;
     // `--unified=0` so every hunk header's new-side range is exactly the
     // added/modified lines; `--no-ext-diff`/`--no-textconv` keep the payload a
@@ -177,7 +184,7 @@ pub fn changed_lines(dir: &Path, base: &str) -> Result<(String, ChangedLines), D
     // count all their lines so a duplicated new file cannot slip past the gate.
     add_untracked(dir, &root, &mut changed)?;
 
-    Ok((base_sha, changed))
+    Ok(RepoDiff { base_sha, changed })
 }
 
 /// The repository's top-level directory (canonicalized), the anchor for git's
@@ -244,10 +251,10 @@ pub fn parse_unified_diff(diff: &str) -> Result<ChangedLines, DiffError> {
             let Some(path) = current.clone() else {
                 continue;
             };
-            let (start, count) = parse_hunk_new_range(line)?;
+            let range = parse_hunk_new_range(line)?;
             let entry = out.entry(path).or_default();
-            for offset in 0..count {
-                entry.insert(start + offset);
+            for offset in 0..range.count {
+                entry.insert(range.start + offset);
             }
         }
     }
@@ -268,10 +275,17 @@ fn new_side_path(rest: &str) -> Option<PathBuf> {
     Some(PathBuf::from(stripped))
 }
 
+/// The new-side line range of a hunk header: `count` lines starting at 1-indexed
+/// `start`. A `count` of 0 is a pure deletion (no new-side lines).
+struct HunkRange {
+    start: usize,
+    count: usize,
+}
+
 /// Parse the new-side `+new[,count]` range from a hunk header
 /// `@@ -old[,n] +new[,m] @@ ...`. A `count` of 0 (pure deletion at that point)
 /// yields an empty range.
-fn parse_hunk_new_range(line: &str) -> Result<(usize, usize), DiffError> {
+fn parse_hunk_new_range(line: &str) -> Result<HunkRange, DiffError> {
     let new_field = line
         .split_whitespace()
         .find_map(|token| token.strip_prefix('+'))
@@ -286,7 +300,7 @@ fn parse_hunk_new_range(line: &str) -> Result<(usize, usize), DiffError> {
         Some(c) => c.parse().ok().context(BadHunkHeaderSnafu { line })?,
         None => 1,
     };
-    Ok((start, count))
+    Ok(HunkRange { start, count })
 }
 
 #[cfg(test)]

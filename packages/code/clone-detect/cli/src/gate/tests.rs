@@ -68,6 +68,10 @@ fn global_gate_passes_at_or_below_budget() {
 }
 
 #[test]
+#[expect(
+    clippy::float_cmp,
+    reason = "diff_pct is exactly 0.0 when there are no changed lines"
+)]
 fn diff_gate_zero_changed_lines_passes() {
     // No changed lines => diff_pct is 0, which passes even a 0.0 budget.
     let r = result(50.0, vec![group("a.rs", 1, 100)]);
@@ -79,6 +83,10 @@ fn diff_gate_zero_changed_lines_passes() {
 }
 
 #[test]
+#[expect(
+    clippy::float_cmp,
+    reason = "100.0 is exact when every changed line is duplicated"
+)]
 fn diff_gate_all_changed_lines_duplicated() {
     // A clone at rows 10..=20 covers 1-indexed lines 11..=21; the change touches
     // 12,13,14 — all inside it.
@@ -118,6 +126,10 @@ fn diff_gate_partial_overlap() {
 }
 
 #[test]
+#[expect(
+    clippy::float_cmp,
+    reason = "diff_pct is exactly 0.0 when no changed line is duplicated"
+)]
 fn diff_gate_ignores_clones_in_unchanged_files() {
     // The clone is in b.rs but the change touched a.rs: nothing duplicated.
     let r = result(0.0, vec![group("b.rs", 1, 100)]);
