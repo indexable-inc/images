@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 250" role="img" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13">
+  <style>
+    svg { color: #1f2328; }
+    text { fill: currentColor; }
+    .muted { fill: #656d76; }
+    .box { stroke: currentColor; fill: none; stroke-width: 1.2; }
+    .accent { stroke: #8250df; fill: none; stroke-width: 1.4; }
+    .edge { stroke: currentColor; fill: none; stroke-width: 1.2; marker-end: url(#arrow); }
+    .head { fill: currentColor; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { stroke: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="head"/>
+    </marker>
+  </defs>
+  <rect class="box" x="20" y="30" width="140" height="34" rx="6"/>
+  <text x="90" y="51" text-anchor="middle">micro closure</text>
+  <rect class="box" x="20" y="98" width="140" height="34" rx="6"/>
+  <text x="90" y="119" text-anchor="middle">macro command</text>
+  <rect class="box" x="20" y="166" width="140" height="34" rx="6"/>
+  <text x="90" y="187" text-anchor="middle">@bench lines</text>
+
+  <path class="edge" d="M160,47 C210,49 210,106 236,110"/>
+  <path class="edge" d="M160,115 L236,115"/>
+  <path class="edge" d="M160,183 C210,181 210,124 236,120"/>
+  <text class="muted" x="198" y="98" text-anchor="middle" font-size="11">measure</text>
+
+  <rect class="accent" x="240" y="98" width="150" height="34" rx="6"/>
+  <text x="315" y="119" text-anchor="middle">Run { metrics }</text>
+
+  <path class="edge" d="M390,107 C440,98 440,49 476,47"/>
+  <text class="muted" x="440" y="34" text-anchor="middle" font-size="11">append</text>
+
+  <rect class="box" x="480" y="30" width="200" height="34" rx="6"/>
+  <text x="580" y="51" text-anchor="middle">bench-history branch</text>
+
+  <path class="edge" d="M580,64 L580,162"/>
+  <text class="muted" x="623" y="116" text-anchor="middle" font-size="11">baseline run</text>
+
+  <path class="edge" d="M390,124 C440,132 440,181 476,183"/>
+  <text class="muted" x="428" y="200" text-anchor="middle" font-size="11">current run</text>
+
+  <rect class="box" x="480" y="166" width="200" height="34" rx="6"/>
+  <text x="580" y="187" text-anchor="middle">comparator</text>
+  <text class="muted" x="580" y="222" text-anchor="middle" font-size="11">exit non-zero on regression</text>
+</svg>
