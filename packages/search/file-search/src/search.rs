@@ -27,6 +27,12 @@ pub fn search(
     limit: usize,
     filter_directory: Option<&Path>,
 ) -> Result<Vec<SearchResult>> {
+    // `TopDocs::with_limit` asserts `limit != 0` (tantivy 0.26.1), so a zero
+    // limit would panic. Asking for zero hits is well-defined: return none.
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+
     reader.reload().context(error::SearchSnafu)?;
     let searcher = reader.searcher();
 

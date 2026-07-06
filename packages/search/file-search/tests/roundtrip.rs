@@ -175,6 +175,44 @@ fn search_index_reader_opens_without_writer_lock() {
 }
 
 #[test]
+fn search_with_limit_zero_returns_empty() {
+    let workdir = TempDir::new().expect("workdir");
+    let index_dir = TempDir::new().expect("index dir");
+
+    fs::write(workdir.path().join("note.md"), "alpha bravo charlie").expect("write");
+
+    let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
+    index.index_directory(workdir.path(), false).expect("index");
+
+    // `TopDocs::with_limit(0)` panics; a zero limit must return no hits, not
+    // abort. Regression for the PanicException surfaced through search-py.
+    let hits = index.search("alpha", 0, None).expect("limit=0 must not panic");
+    assert!(hits.is_empty(), "limit=0 should return no hits: {hits:?}");
+}
+
+#[test]
+fn ephemeral_search_with_limit_zero_returns_empty() {
+    let search = EphemeralSearch::from_texts([
+        "fibonacci runs in exponential time without memoization".to_string(),
+    ])
+    .expect("build ephemeral");
+
+    // Guards the empty-batch rerank path in search-py, where `limit` is derived
+    // from the (possibly empty) text batch and would reach `with_limit(0)`.
+    let results = search.search("fibonacci", 0).expect("limit=0 must not panic");
+    assert!(results.is_empty(), "limit=0 should return no hits: {results:?}");
+}
+
+#[test]
+fn ephemeral_from_empty_texts_ranks_empty() {
+    let search = EphemeralSearch::from_texts(std::iter::empty()).expect("build empty ephemeral");
+    // An empty corpus with a matching-limit derived from `texts.len() == 0`
+    // must not panic.
+    let results = search.search("anything", 0).expect("empty corpus must not panic");
+    assert!(results.is_empty(), "empty corpus should return no hits: {results:?}");
+}
+
+#[test]
 fn ephemeral_reranks_matching_text_higher() {
     let search = EphemeralSearch::from_texts([
         "totally unrelated content".to_string(),

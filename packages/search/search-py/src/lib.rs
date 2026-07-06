@@ -518,7 +518,12 @@ fn bm25_rerank(
     // Default to ranking the whole batch; the search never returns more hits
     // than documents, so an oversized limit is harmless.
     let limit = limit.unwrap_or(texts.len());
-    let ranked = rerank(query, texts, limit).map_err(|error| PyRuntimeError::new_err(error))?;
+    // Build and query the in-memory Tantivy index off the GIL; a large batch
+    // would otherwise freeze the caller's asyncio loop. `rerank` uses no pyo3
+    // types, so it runs cleanly detached; re-attach only to build the dicts.
+    let ranked = py
+        .detach(|| rerank(query, texts, limit))
+        .map_err(PyRuntimeError::new_err)?;
 
     let out = pyo3::types::PyList::empty(py);
     for hit in ranked {
@@ -543,10 +548,14 @@ fn bm25_rerank(
 #[pyfunction]
 #[pyo3(signature = (path, index_dir, no_gitignore = false))]
 fn bm25_index(py: Python<'_>, path: &str, index_dir: &str, no_gitignore: bool) -> PyResult<Py<PyAny>> {
-    let mut index =
-        SearchIndex::open_or_create(index_dir).map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-    let stats = index
-        .index_directory(std::path::Path::new(path), !no_gitignore)
+    // Walking and indexing a directory is all disk/CPU work with no pyo3
+    // types; run it off the GIL so a large index does not freeze the caller's
+    // asyncio loop, then re-attach only to build the result dict.
+    let stats = py
+        .detach(|| {
+            let mut index = SearchIndex::open_or_create(index_dir)?;
+            index.index_directory(std::path::Path::new(path), !no_gitignore)
+        })
         .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
 
     let dict = PyDict::new(py);
@@ -580,10 +589,14 @@ fn bm25_search(
     limit: usize,
     filter: Option<&str>,
 ) -> PyResult<Py<PyAny>> {
-    let reader =
-        SearchIndexReader::open(index_dir).map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-    let hits = reader
-        .search(query, limit, filter.map(std::path::Path::new))
+    // Opening the index and searching is all disk/CPU work with no pyo3 types;
+    // run it off the GIL so it does not freeze the caller's asyncio loop, then
+    // re-attach only to build the result dicts.
+    let hits = py
+        .detach(|| {
+            let reader = SearchIndexReader::open(index_dir)?;
+            reader.search(query, limit, filter.map(std::path::Path::new))
+        })
         .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
 
     let out = pyo3::types::PyList::empty(py);
@@ -665,5 +678,24 @@ mod tests {
             !matched.contains(&2),
             "unrelated text should not match; got {matched:?}"
         );
+    }
+
+    /// `bm25_rerank(query, [])` derives `limit = texts.len() = 0`, which used
+    /// to reach `TopDocs::with_limit(0)` and panic (re-raised as a pyo3
+    /// `PanicException` across the FFI boundary). An empty batch must rank to
+    /// an empty result.
+    #[test]
+    fn rerank_empty_batch_is_empty() {
+        let hits = rerank("anything", Vec::new(), 0).expect("empty batch must not panic");
+        assert!(hits.is_empty(), "empty batch should rank empty");
+    }
+
+    /// An explicit `limit == 0` on a non-empty batch must also return empty
+    /// rather than panic.
+    #[test]
+    fn rerank_limit_zero_is_empty() {
+        let texts = vec!["fn makeWidgetFactory() {}".to_owned()];
+        let hits = rerank("widget factory", texts, 0).expect("limit=0 must not panic");
+        assert!(hits.is_empty(), "limit=0 should rank empty");
     }
 }

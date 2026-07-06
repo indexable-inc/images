@@ -88,6 +88,13 @@ impl EphemeralSearch {
     ///
     /// Returns an error if the query cannot be parsed or the search fails.
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<RankResult>> {
+        // `TopDocs::with_limit` asserts `limit != 0` (tantivy 0.26.1), so a
+        // zero limit would panic. This also covers reranking an empty corpus,
+        // where the caller derives `limit` from the (empty) text batch.
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
         let parser = QueryParser::for_index(&self.index, vec![self.content_field]);
         let parsed = parser.parse_query(query).context(QueryParseSnafu)?;
 
