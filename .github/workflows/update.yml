@@ -31,18 +31,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      # `accept-flake-config` lets the job consume the flake's cache.ix.dev
-      # substituter without a prompt.
+      # Read-only: the updater only needs warm substitutes to verify a freshly
+      # pinned hash builds. Publishing happens when the resulting PR merges and
+      # flake-check rebuilds on the self-hosted runners (which push to ix-ci).
       - name: Install Determinate Nix
-        uses: DeterminateSystems/determinate-nix-action@629b284231c2a82554b724e357e47fc6020833c8 # v3
-        with:
-          # Read-only: the updater only needs warm substitutes to verify a freshly
-          # pinned hash builds. Publishing happens when the resulting PR merges and
-          # flake-check rebuilds on the self-hosted runners (which push to ix-ci).
-          extra-conf: |
-            accept-flake-config = true
-            extra-substituters = https://cache.ix.dev
-            extra-trusted-public-keys = ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI=
+        uses: ./.github/actions/install-nix
 
       # Runs every content updater in parallel via dag-runner (see
       # lib/per-system.nix). Each regenerates its own source files relative to
