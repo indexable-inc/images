@@ -48,6 +48,7 @@ fn function(name: &str, py: Option<&str>, doc_lines: &[&str], args: Vec<ir::Arg>
         names: names(py),
         docs: docs(doc_lines),
         asyncness: ir::Asyncness::Sync,
+        blocking: false,
         args,
         ret: None,
         throws: None,
@@ -107,7 +108,21 @@ fn sample_functions() -> Vec<ir::Function> {
             ],
         )
     };
-    vec![rows, write, find, greet]
+    let tail = ir::Function {
+        ret: Some(ir::Type::Stream(Box::new(owned_string()))),
+        ..function(
+            "tail",
+            None,
+            &["Follow appended rows."],
+            vec![arg("store", ir::Type::String { owned: false }, None)],
+        )
+    };
+    let ping = ir::Function {
+        asyncness: ir::Asyncness::Async,
+        ret: Some(ir::Type::Bool),
+        ..function("ping", None, &["Probe the store."], vec![])
+    };
+    vec![rows, write, find, greet, tail, ping]
 }
 
 fn sample_records() -> Vec<ir::Record> {

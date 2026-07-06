@@ -1,7 +1,8 @@
 //! Render the `.pyi` stub for one interface.
 //!
-//! Ordering is deterministic: module docstring, `import os` (only when an
-//! argument accepts a path), errors, records, functions, and the trailing
+//! Ordering is deterministic: module docstring, imports (`collections.abc`
+//! when a stream return needs it, `os` when an argument accepts a path),
+//! errors, records, functions, and the trailing
 //! `__version__` the generated `pymodule` sets. Everything keeps the
 //! interface's declaration order within its group, so the stub diffs the way
 //! the Rust module does.
@@ -18,8 +19,9 @@ pub fn render(interface: &ir::Interface) -> String {
     if !interface.docs.is_empty() {
         blocks.push(docstring(&interface.docs, 0));
     }
-    if needs_os_import(interface) {
-        blocks.push("import os".to_owned());
+    let imports = imports(interface);
+    if !imports.is_empty() {
+        blocks.push(imports.join("\n"));
     }
     for error in &interface.errors {
         error_classes(error, &mut blocks);
@@ -61,8 +63,30 @@ pub fn docstring(lines: &[String], indent: usize) -> String {
     out
 }
 
-/// `import os` is needed exactly when a path can appear in argument position:
-/// function arguments and record constructor arguments (fields).
+/// The stub's imports, alphabetized: `collections.abc` exactly when a
+/// function returns a stream (its annotation is
+/// `collections.abc.AsyncIterator`), `os` exactly when a path can appear in
+/// argument position.
+fn imports(interface: &ir::Interface) -> Vec<String> {
+    let mut imports = Vec::new();
+    if needs_abc_import(interface) {
+        imports.push("import collections.abc".to_owned());
+    }
+    if needs_os_import(interface) {
+        imports.push("import os".to_owned());
+    }
+    imports
+}
+
+fn needs_abc_import(interface: &ir::Interface) -> bool {
+    interface
+        .functions
+        .iter()
+        .any(|function| matches!(function.ret, Some(ir::Type::Stream(_))))
+}
+
+/// A path in argument position: function arguments and record constructor
+/// arguments (fields).
 fn needs_os_import(interface: &ir::Interface) -> bool {
     let function_args = interface
         .functions
@@ -141,7 +165,9 @@ fn record_class(interface: &ir::Interface, record: &ir::Record) -> String {
 
 /// A function stub: literal defaults, `None` for undefaulted `Option`
 /// arguments, and a docstring that names the raised exception base when the
-/// function throws (stub signatures cannot express `raises`).
+/// function throws (stub signatures cannot express `raises`). Async functions
+/// render `async def`: the extension returns a coroutine resolving to the
+/// annotated type.
 fn function_def(interface: &ir::Interface, function: &ir::Function) -> String {
     let name = types::py_name(&function.names, &function.name);
     let params: Vec<String> = function.args.iter().map(|arg| parameter(interface, arg)).collect();
@@ -149,7 +175,11 @@ fn function_def(interface: &ir::Interface, function: &ir::Function) -> String {
         || "None".to_owned(),
         |ty| types::annotation(interface, ty, Position::Return),
     );
-    let header = format!("def {name}({}) -> {ret}:", params.join(", "));
+    let def = match function.asyncness {
+        ir::Asyncness::Async => "async def",
+        ir::Asyncness::Sync => "def",
+    };
+    let header = format!("{def} {name}({}) -> {ret}:", params.join(", "));
 
     let mut doc_lines = function.docs.clone();
     if let Some(throws) = &function.throws {

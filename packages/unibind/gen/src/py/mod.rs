@@ -9,7 +9,7 @@ mod stub;
 mod types;
 mod wrapper;
 
-use unibind_core::ir::{Asyncness, Interface};
+use unibind_core::ir::Interface;
 
 use crate::host::{EmitError, HostEmitter, HostFile};
 
@@ -57,13 +57,13 @@ impl HostEmitter for PyEmitter {
     }
 }
 
-/// Refuse the IR surface the phase 1 stub emitter does not render, with the
+/// Refuse the IR surface the stub emitter does not render yet, with the
 /// same pointers the pyo3 backend gives.
 fn reject_unrendered_surface(interface: &Interface) -> Result<(), EmitError> {
     if let Some(object) = interface.objects.first() {
         return Err(EmitError {
             message: format!(
-                "`{}` is a #[unibind::object]; objects land in phase 2 (issue #1992)",
+                "`{}` is a #[unibind::object]; class stubs are not rendered yet (issue #1991)",
                 object.name
             ),
         });
@@ -71,18 +71,6 @@ fn reject_unrendered_surface(interface: &Interface) -> Result<(), EmitError> {
     if let Some(data_enum) = interface.enums.first() {
         return Err(EmitError {
             message: format!("`{}` is a data enum, which phase 1 does not render", data_enum.name),
-        });
-    }
-    if let Some(function) = interface
-        .functions
-        .iter()
-        .find(|function| matches!(function.asyncness, Asyncness::Async))
-    {
-        return Err(EmitError {
-            message: format!(
-                "`{}` is async; async functions land in phase 2 (issue #1992)",
-                function.name
-            ),
         });
     }
     Ok(())

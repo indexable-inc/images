@@ -12,7 +12,9 @@ from ._sample import (
     __version__,
     find,
     greet,
+    ping,
     rows,
+    tail,
     write_file,
 )
 
@@ -25,6 +27,8 @@ __all__ = [
     "__version__",
     "find",
     "greet",
+    "ping",
     "rows",
+    "tail",
     "write_file",
 ]

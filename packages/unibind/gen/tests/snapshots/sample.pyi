@@ -4,6 +4,7 @@ Everything the phase 1 generator renders appears here once.
 """
 
 
+import collections.abc
 import os
 
 
@@ -65,4 +66,13 @@ def find(pattern: str, root: str | os.PathLike[str] | None = None) -> dict[str, 
 def greet(name: str = "hello \"world\"\n", ratio: float = 1.0, note: str | None = None) -> str: ...
 
 
+def tail(store: str) -> collections.abc.AsyncIterator[str]:
+    """Follow appended rows."""
+
+
+async def ping() -> bool:
+    """Probe the store."""
+
+
 __version__: str
+

@@ -35,6 +35,12 @@ pub fn annotation(interface: &ir::Interface, ty: &ir::Type, position: Position) 
             annotation(interface, value, position)
         ),
         ir::Type::Named(name) => record_py_name(interface, name),
+        // Stream items are always produced, never accepted, so the item
+        // renders in return position regardless of where the stream sits.
+        ir::Type::Stream(item) => format!(
+            "collections.abc.AsyncIterator[{}]",
+            annotation(interface, item, Position::Return)
+        ),
     }
 }
 
@@ -43,7 +49,9 @@ pub fn annotation(interface: &ir::Interface, ty: &ir::Type, position: Position) 
 pub fn mentions_path(ty: &ir::Type) -> bool {
     match ty {
         ir::Type::Path { .. } => true,
-        ir::Type::Option(inner) | ir::Type::Vec(inner) => mentions_path(inner),
+        ir::Type::Option(inner) | ir::Type::Vec(inner) | ir::Type::Stream(inner) => {
+            mentions_path(inner)
+        }
         ir::Type::Map { key, value } => mentions_path(key) || mentions_path(value),
         ir::Type::Bool
         | ir::Type::Int(_)
