@@ -362,10 +362,24 @@ jobs:
           # (#1863). Individual root failures warn without failing the job,
           # matching the linux lane's temperament; job-level failures (empty
           # eval, relay upload) are what block `cache-ready`.
+          #
+          # Each root is realised, copied into the relay cache, and then GC'd
+          # in the same child, so the Nix store never holds more than one
+          # root's closure at a time. The store grew monotonically before
+          # (realise all, copy all at the end): on the ~14 GB hosted mac the
+          # accumulated closures of ~100 roots plus a cold codex build's
+          # scratch overran the disk and every remaining root died ENOSPC
+          # (run 28770353669, 17 roots "failed" purely on `No space left`).
+          # The relay dir is a plain NAR directory, so once a root is copied
+          # there its store paths are redundant; `nix store gc` reclaims the
+          # closure (no GC roots are held), and any dependency a later root
+          # shares simply re-substitutes as a cheap download.
           failed_roots="$workdir/failed-roots.txt"
           : > "$failed_roots"
           outs="$workdir/outs.txt"
           : > "$outs"
+          relay_cache="file://$PWD/relay/cache?compression=zstd"
+          mkdir -p relay
           realise_t=$SECONDS
           if [ -s "$drvs" ]; then
             # -P 1, not -P 3: the runner's scratch disk is the binding
@@ -374,10 +388,25 @@ jobs:
             # died ENOSPC with 43 MB free (run 28762717645); serial roots cap
             # peak scratch at one build while `max-jobs`/`cores` still use
             # every core inside it.
-            # shellcheck disable=SC2016  # $1/$2 expand in the child bash, not here
-            xargs -P 1 -n 1 bash -c \
-                'nix-store --realise --keep-going "$2" || { printf "%s\n" "$2" >> "$1"; exit 1; }' _ "$failed_roots" \
-              < "$drvs" > "$outs" 2>"$workdir/realise.err" \
+            # shellcheck disable=SC2016  # positional args expand in the child
+            xargs -P 1 -n 1 bash -c '
+                failed="$1"; outs="$2"; relay="$3"; drv="$4"
+                # Realise, then immediately copy the closure into the relay
+                # and drop it from the store. A realise OR a relay-copy failure
+                # records the root as failed (the copy is what darwin-push
+                # relays, so a lost copy is as bad as a lost build).
+                if out="$(nix-store --realise --keep-going "$drv")" \
+                   && printf "%s\n" "$out" | xargs -r nix copy --to "$relay"; then
+                  printf "%s\n" "$out" >> "$outs"
+                  # gc keeps anything still referenced (later roots re-fetch
+                  # it), so reclaiming here never breaks a subsequent realise.
+                  nix store gc >/dev/null 2>&1 || true
+                else
+                  printf "%s\n" "$drv" >> "$failed"
+                  exit 1
+                fi
+              ' _ "$failed_roots" "$outs" "$relay_cache" \
+              < "$drvs" 2>"$workdir/realise.err" \
               || {
                 grep -F 'error:' "$workdir/realise.err" | sort -u | head -n 20 \
                   | while IFS= read -r line; do
@@ -406,15 +435,12 @@ jobs:
             echo "::warning::darwin-build: $fallback_hits substitution-failure line(s) during realise; nix fell back to source builds (cache health degraded, see indexable-inc/ix#6139)"
           fi
 
-          # Stage the relay: the realised closures as a zstd file:// binary
-          # cache plus the root list darwin-push feeds to attic. An empty
-          # roots.txt tells darwin-push there is nothing to relay.
-          mkdir -p relay
+          # Stage the relay: each realised root was already copied into the
+          # zstd file:// cache above (per-root, to keep the store flat), so
+          # here we only record the root list darwin-push feeds to attic. An
+          # empty roots.txt tells darwin-push there is nothing to relay.
           sort -u "$outs" > relay/roots.txt
           if [ -s relay/roots.txt ]; then
-            copy_t=$SECONDS
-            xargs -n 64 nix copy --to "file://$PWD/relay/cache?compression=zstd" < relay/roots.txt
-            phase copy "$copy_t"
             echo "::notice::relay cache size: $(du -sh relay | cut -f1)"
           else
             echo "::notice::every darwin root already cached; empty relay"
