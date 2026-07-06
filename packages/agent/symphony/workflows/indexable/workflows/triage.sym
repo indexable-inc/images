@@ -1,0 +1,8 @@
+# Daily issue triage across index and ix: close clear duplicates, flag
+# stale issues. The run notifier posts the script's {"slack_summary": ...}
+# output to Slack: allowlist "triage" in SYMPHONY_SLACK_NOTIFY_CRON_WORKFLOWS
+# and point SYMPHONY_SLACK_NOTIFY_CHANNEL at the target channel. Zoned
+# schedule: 9am Pacific year-round (DST-proof).
+workflow "triage" on cron "0 9 * * *" tz "America/Los_Angeles" {
+  triage <- exec "./scripts/triage.sh" timeout 3600
+}

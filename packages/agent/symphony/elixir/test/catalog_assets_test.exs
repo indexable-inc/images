@@ -45,6 +45,19 @@ defmodule SymphonyElixir.CatalogAssetsTest do
     assert binds == ["insights"]
   end
 
+  test "indexable pack triage workflow fires daily via cron" do
+    source = File.read!(Path.join([@root, "workflows", "indexable", "workflows", "triage.sym"]))
+    assert {:ok, workflow} = Parser.parse(source, file: "triage.sym")
+
+    assert workflow.name == "triage"
+    # The cron kind and zone are the load-bearing contract: Triggers.Cron
+    # selects on them, and the zone keeps 9am Pacific across DST.
+    assert %{kind: :cron, schedule: "0 9" <> _, timezone: "America/Los_Angeles"} = workflow.trigger
+
+    binds = for {:bind, name, _expr} <- workflow.statements, do: name
+    assert binds == ["triage"]
+  end
+
   test "example workflow pack is safe and manual-only" do
     source = File.read!(Path.join(@example_workflows_dir, "inspect.sym"))
     assert {:ok, workflow} = Parser.parse(source, file: "inspect.sym")
