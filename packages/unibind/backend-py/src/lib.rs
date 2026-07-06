@@ -17,7 +17,6 @@ mod ty;
 pub use module::render;
 
 /// The rendered output for one interface.
-#[derive(Debug)]
 pub struct RenderedInterface {
     /// Sibling items for the exported module: the hidden glue module with
     /// the exception types, `From` impls, `pyfunction` wrappers, record
@@ -29,7 +28,6 @@ pub struct RenderedInterface {
 }
 
 /// `#[pyclass]`-shaped attributes for one record struct.
-#[derive(Debug)]
 pub struct RenderedRecord {
     /// Outer attributes for the struct itself.
     pub outer: Vec<syn::Attribute>,
