@@ -290,6 +290,34 @@ contract you meant.
 
 The default Tailscale-IP bind keeps the trust boundary at the tailnet.
 
+### MCP over HTTP
+
+`serve --http HOST:PORT` serves the MCP protocol itself over streamable HTTP at
+`http://HOST:PORT/mcp` (the transport an off-tailnet client -- e.g. a remotely
+hosted agent -- connects to). Auth is a static API key:
+
+- `IX_MCP_API_KEY` (or `IX_MCP_API_KEY_FILE`, a file holding the key -- how a
+  deployment keeps the secret out of the unit definition): when set, every
+  request must carry the key in an `X-Api-Key` header, or in
+  `Authorization: Bearer` for clients whose path preserves that header (some
+  egress proxies strip `Authorization` for allowlisted domains, which is why
+  `X-Api-Key` is the documented one). Anything else is refused 401.
+- `GET /health` is always unauthenticated, so a fronting proxy or uptime
+  monitor can probe liveness without holding the key.
+- Without a key the server refuses to bind beyond loopback/tailnet: an open
+  MCP endpoint is arbitrary code execution on this machine.
+
+Generate a key with `openssl rand -hex 32`; nothing in the repo ever contains
+a real one. Smoke test:
+
+```
+IX_MCP_API_KEY=$(openssl rand -hex 32) ix-mcp serve --http 127.0.0.1:8000
+curl -sS -X POST http://127.0.0.1:8000/mcp \
+  -H "X-Api-Key: $IX_MCP_API_KEY" \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'
+```
+
 ## Bad fit if
 
 - You need multi-core parallelism for **pure-Python** CPU work: one kernel means

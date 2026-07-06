@@ -304,6 +304,54 @@ def _exec_token() -> str | None:
     return None
 
 
+def _api_key() -> str | None:
+    """The static API key gating the MCP streamable-HTTP transport.
+
+    From ``IX_MCP_API_KEY`` directly, or a file named by ``IX_MCP_API_KEY_FILE``
+    (a deployment keeps the secret in a root-only file or env unit and points
+    the server at it; the key is never baked into a config in the repo). Every
+    HTTP request must then carry it in ``X-Api-Key`` (or ``Authorization:
+    Bearer`` where that header survives the client's path). Unset, the HTTP
+    transport stays unauthenticated, which :func:`_http_bind_error` only allows
+    on a loopback/tailnet bind. stdio mode never reads this.
+    """
+    key = os.environ.get("IX_MCP_API_KEY")
+    if key:
+        return key.strip()
+    path = os.environ.get("IX_MCP_API_KEY_FILE")
+    if path and Path(path).exists():
+        return Path(path).read_text().strip()
+    return None
+
+
+def _http_bind_error(host: str, api_key: str | None) -> str | None:
+    """Why serving MCP over HTTP at ``host`` must be refused, or None if allowed.
+
+    With an API key configured every bind is fine: each request authenticates
+    itself, so the reachability of the port is not the trust boundary. Without
+    one, only binds whose reachability already IS a trust boundary are allowed
+    -- loopback (a local client or a fronting reverse proxy) or this node's
+    tailnet interface (the same model the dashboard and `/api/exec` use). A
+    wildcard, LAN, or public bind with no key would hand the kernel to anyone
+    who can reach the port, so it is refused outright rather than served open.
+    """
+    if api_key is not None:
+        return None
+    if host not in _WILDCARD_HOSTS:
+        if host == "localhost" or is_tailnet_ipv4(host):
+            return None
+        try:
+            if ipaddress.ip_address(host).is_loopback:
+                return None
+        except ValueError:
+            pass  # a hostname we cannot classify is treated as public
+    return (
+        f"refusing --http on {host!r} without an API key: the MCP endpoint would "
+        "expose the kernel to anyone who can reach the port. Set IX_MCP_API_KEY "
+        "(or IX_MCP_API_KEY_FILE), or bind loopback/tailnet instead"
+    )
+
+
 def _exec_trust_network() -> bool:
     """Whether to trust the bound network (the tailnet) as the `/api/exec` auth
     boundary, so a peer's `fleet.in_kernel` works without a shared token -- the
@@ -366,6 +414,13 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
         transport = "http"
         host, _, port = http.partition(":")
         mcp_http_host, mcp_http_port = host or "127.0.0.1", int(port) if port else 8000
+
+    api_key = _api_key() if transport == "http" else None
+    if transport == "http":
+        bind_error = _http_bind_error(mcp_http_host, api_key)
+        if bind_error:
+            print(f"[ix-mcp] {bind_error}", file=sys.stderr)
+            return 2
 
     dashboard_port = _dashboard_port()
 
@@ -459,6 +514,7 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
         mcp_http_port=mcp_http_port,
         stdin_fd=stdin_fd,
         stdout_fd=stdout_fd,
+        api_key=api_key,
         exec_token=_exec_token(),
         exec_trust_network=_exec_trust_network(),
     )
