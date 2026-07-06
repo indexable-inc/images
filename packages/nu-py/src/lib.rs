@@ -78,6 +78,22 @@ fn initial_engine_state() -> EngineState {
         );
     }
 
+    // Externals write into captured pipes here, never a TTY, so default color
+    // OFF -- overriding whatever the host process carries. An inherited
+    // color-forcing var (the retired `sh` helper exported FORCE_COLOR=1 /
+    // CLICOLOR_FORCE=1) makes `gh --json ... | from json` fail on ANSI
+    // escapes embedded in the JSON (index#2005). A caller who really wants
+    // color can still override per call (`env=` / `with-env`) or persistently
+    // (`$env.FORCE_COLOR = "1"`): stack env vars win over these defaults.
+    for (key, value) in [
+        ("NO_COLOR", "1"),
+        ("CLICOLOR", "0"),
+        ("CLICOLOR_FORCE", "0"),
+        ("FORCE_COLOR", "0"),
+    ] {
+        engine_state.add_env_var(key.into(), Value::string(value, Span::unknown()));
+    }
+
     engine_state
 }
 

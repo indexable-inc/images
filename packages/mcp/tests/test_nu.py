@@ -165,6 +165,24 @@ def test_cd_does_not_outlive_its_call(tmp_path: pathlib.Path) -> None:
     assert run(nu.value("2 + 2")) == 4
 
 
+def test_externals_default_to_no_color(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A color-forcing var inherited from the host process (the retired `sh`
+    # helper exported FORCE_COLOR=1 / CLICOLOR_FORCE=1) made `gh --json ... |
+    # from json` fail on ANSI escapes embedded in the JSON (index#2005): a
+    # fresh engine must pin externals to color OFF despite the host env...
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.setenv("CLICOLOR_FORCE", "1")
+    nu.reset()  # the next call builds a fresh engine under the patched environ
+    try:
+        assert run(nu.value("$env.NO_COLOR")) == "1"
+        cleared = run(nu.value("[$env.CLICOLOR, $env.CLICOLOR_FORCE, $env.FORCE_COLOR]"))
+        assert cleared == ["0", "0", "0"]
+        # ...while an explicit per-call `env=` still wins over the default.
+        assert run(nu.value("$env.FORCE_COLOR", env={"FORCE_COLOR": "1"})) == "1"
+    finally:
+        nu.reset()  # `env=` persists on the stack; drop it for later tests
+
+
 def test_cwd_is_respected(tmp_path: pathlib.Path) -> None:
     (tmp_path / "hello.txt").write_text("hi")
     df = run(nu("ls | get name", cwd=tmp_path))

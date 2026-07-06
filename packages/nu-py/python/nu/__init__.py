@@ -29,7 +29,11 @@ A DataFrame (or list/dict/scalar) can be piped THROUGH a pipeline: pass
 
 ``nu()`` is the single shell-out path: side-effectful commands
 (``git``/``gh`` writes) run as externals with ``^cmd``, and a CLI with a native
-``--json`` mode decodes end to end (``^gh ... --json | from json``). For a nix
+``--json`` mode decodes end to end (``^gh ... --json | from json``). Externals
+see ``NO_COLOR=1`` (with ``CLICOLOR``/``CLICOLOR_FORCE``/``FORCE_COLOR`` pinned
+to ``0``) by default -- their output lands in a captured pipe, never a TTY --
+so ``--json | from json`` never trips over ANSI escapes; pass ``env=`` (or use
+``with-env``) to re-enable color for a call. For a nix
 build, use the bundled ``nix`` module (a live dashboard build-tree pane), not
 ``^nix``.
 
