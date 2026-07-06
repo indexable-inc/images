@@ -3701,27 +3701,39 @@
       }
       {
         assertion = let
-          policy = import (paths.packagesRoot + "/agent/policy/permissions.nix") {};
+          policy = gates:
+            import (paths.packagesRoot + "/agent/policy/permissions.nix") ({inherit lib;} // gates);
+          bare = policy {};
+          baked = policy {
+            indexKernelBaked = true;
+            exaSearchBaked = true;
+          };
         in
-          policy.claude.deniedToolPatterns
+          # Without baked MCP servers only the merge protections remain: the
+          # stock tools are the agent's whole surface there.
+          bare.claude.deniedToolPatterns
           == [
             "Bash(gh pr merge*--admin*)"
             "Bash(gh pr merge*--force*)"
+          ]
+          && !(bare.codex.forcedSettings.features ? shell_tool)
+          # With the index kernel + exa baked, every superseded native tool is
+          # folded in, in each agent's own vocabulary.
+          && builtins.all (tool: builtins.elem tool baked.claude.deniedToolPatterns) [
+            "Bash"
+            "Read"
+            "Write"
+            "Edit"
+            "NotebookEdit"
+            "Glob"
+            "Grep"
             "WebSearch"
             "WebFetch"
           ]
-          && policy.codex.forcedSettings.features
-          == {
-            browser_use = false;
-            browser_use_external = false;
-            computer_use = false;
-            image_generation = false;
-            in_app_browser = false;
-            shell_tool = false;
-            standalone_web_search = false;
-            unified_exec = false;
-          };
-        message = "agent policy should deny only protected merges and built-in web search tools";
+          && baked.codex.forcedSettings.features.shell_tool == false
+          && baked.codex.forcedSettings.features.unified_exec == false
+          && baked.codex.forcedSettings.features.standalone_web_search == false;
+        message = "agent policy should gate kernel/exa-superseded native tools on the baked MCP servers";
       }
       {
         assertion = let

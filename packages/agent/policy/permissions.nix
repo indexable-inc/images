@@ -1,36 +1,95 @@
-_: let
-  protectedMergeToolPatterns = [
-    "Bash(gh pr merge*--admin*)"
-    "Bash(gh pr merge*--force*)"
+# Shared agent permission policy: one agent-neutral fact per row, rendered per
+# agent CLI. The tool vocabularies differ (Claude Code denies tool names via
+# settings `permissions.deny`; codex disables `features.*` leaves via the
+# forced `-c` layer), so each capability row carries both handles and the
+# renderers at the bottom fold in the rows a wrapper's baked MCP servers make
+# redundant.
+{
+  lib,
+  # True when the wrapper bakes the `index` MCP server (the ix kernel,
+  # packages/mcp). The kernel owns shell, file IO, and code search
+  # (python_exec/nu, read, grep/find), so the stock native tools are disabled
+  # wherever it is present. A wrapper without the kernel (the overlay package
+  # set) keeps them: denying them there would leave the agent with no hands.
+  indexKernelBaked ? false,
+  # True when the wrapper bakes the `exa` MCP server, which supersedes the
+  # stock web search/fetch surface.
+  exaSearchBaked ? false,
+}: let
+  # One list of protected-merge command globs; the Claude render wraps them in
+  # Bash(...) deny patterns, the codex render ships them verbatim for hook use.
+  protectedMergeCommandPatterns = [
+    "gh pr merge*--admin*"
+    "gh pr merge*--force*"
   ];
 
-  supersededBuiltinTools = [
-    "WebSearch"
-    "WebFetch"
-  ];
-
-  codexForcedSettings = {
-    features = {
-      browser_use = false;
-      browser_use_external = false;
-      computer_use = false;
-      image_generation = false;
-      in_app_browser = false;
-      shell_tool = false;
-      standalone_web_search = false;
-      unified_exec = false;
+  # Native capabilities the index kernel supersedes. `claudeTools` are Claude
+  # Code tool names for `permissions.deny`; `codexFeatures` are codex
+  # `features.*` leaves for the forced `-c` layer. The file IO and search rows
+  # carry no codex handle: codex reads, writes, and searches through its shell
+  # (covered by the `shell` row), and its `apply_patch` tool is enabled
+  # per-model upstream with no config toggle to reach it.
+  kernelSuperseded = {
+    shell = {
+      claudeTools = ["Bash"];
+      codexFeatures = {
+        shell_tool = false;
+        unified_exec = false;
+      };
     };
+    fileRead = {
+      claudeTools = ["Read"];
+      codexFeatures = {};
+    };
+    fileWrite = {
+      claudeTools = ["Write" "NotebookEdit"];
+      codexFeatures = {};
+    };
+    fileEdit = {
+      claudeTools = ["Edit"];
+      codexFeatures = {};
+    };
+    fileSearch = {
+      claudeTools = ["Glob" "Grep"];
+      codexFeatures = {};
+    };
+  };
+  kernelClaudeTools = lib.concatMap (row: row.claudeTools) (lib.attrValues kernelSuperseded);
+  kernelCodexFeatures = lib.mergeAttrsList (
+    map (row: row.codexFeatures) (lib.attrValues kernelSuperseded)
+  );
+
+  # Web search/fetch superseded by the exa server.
+  exaSuperseded = {
+    claudeTools = [
+      "WebSearch"
+      "WebFetch"
+    ];
+    codexFeatures.standalone_web_search = false;
+  };
+
+  # Unconditional house policy: no browser/computer/media surfaces in baked
+  # wrappers, independent of which MCP servers ride along.
+  codexHouseFeatures = {
+    browser_use = false;
+    browser_use_external = false;
+    computer_use = false;
+    image_generation = false;
+    in_app_browser = false;
   };
 in {
   claude = {
-    deniedToolPatterns = protectedMergeToolPatterns ++ supersededBuiltinTools;
+    deniedToolPatterns =
+      map (pattern: "Bash(${pattern})") protectedMergeCommandPatterns
+      ++ lib.optionals exaSearchBaked exaSuperseded.claudeTools
+      ++ lib.optionals indexKernelBaked kernelClaudeTools;
   };
 
   codex = {
-    forcedSettings = codexForcedSettings;
-    protectedMergeCommandPatterns = [
-      "gh pr merge*--admin*"
-      "gh pr merge*--force*"
-    ];
+    forcedSettings.features =
+      codexHouseFeatures
+      // lib.optionalAttrs exaSearchBaked exaSuperseded.codexFeatures
+      // lib.optionalAttrs indexKernelBaked kernelCodexFeatures;
+    inherit protectedMergeCommandPatterns;
   };
 }

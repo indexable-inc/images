@@ -236,8 +236,15 @@
       ;
   };
 
-  # Claude-native permission deny list rendered from shared agent policy.
-  sharedPermissions = import (ix.paths.packagesRoot + "/agent/policy/permissions.nix") {};
+  # Claude-native permission deny list rendered from shared agent policy. The
+  # gates fold in the native tools each baked MCP server supersedes: with the
+  # `index` kernel present the stock shell/file/search tools are denied, and
+  # the overlay build (no kernel) keeps them.
+  sharedPermissions = import (ix.paths.packagesRoot + "/agent/policy/permissions.nix") {
+    inherit lib;
+    indexKernelBaked = mcpServers ? index;
+    exaSearchBaked = mcpServers ? exa;
+  };
 
   # Caller's extraSettings first, then the computed defaults recursively merged
   # ON TOP, so the keys below always win a conflict while the caller's other

@@ -114,7 +114,14 @@
     })
     flat;
 
-  sharedPermissions = import (ix.paths.packagesRoot + "/agent/policy/permissions.nix") {};
+  # Gates fold in the native tools each baked MCP server supersedes: with the
+  # `index` kernel present the codex shell is force-disabled, and the overlay
+  # build (no kernel baked) keeps its shell rather than losing every tool.
+  sharedPermissions = import (ix.paths.packagesRoot + "/agent/policy/permissions.nix") {
+    inherit lib;
+    indexKernelBaked = mcpServers ? index;
+    exaSearchBaked = mcpServers ? exa;
+  };
   effectiveForcedSettings =
     forcedSettings
     // sharedPermissions.codex.forcedSettings
