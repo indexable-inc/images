@@ -24,7 +24,7 @@ Keep all CI watching inside the fork, and even there make it event-driven (see b
 
 > You own PR #<N> in <owner/repo> from now until it is merged or you are genuinely stuck. Loop:
 >
-> 1. **Watch CI fail-fast.** Run `gh pr checks <N> --watch --fail-fast --interval 20` so you wake the instant ANY check fails (not after all finish). Do NOT block a foreground Bash slot on it: launch it with `run_in_background: true` and wait on it with the `Monitor` tool / an `until` condition, so the watch returns the moment a check fails or all pass. `--fail-fast` needs gh ≥ 2.42; if it is rejected, drop the flag and parse `gh pr checks <N> --json name,state,bucket` on each wake instead.
+> 1. **Watch CI fail-fast, silently.** Arm exactly ONE event-driven watch and let it be the only thing that wakes you. It must complete only on a terminal or changed state — a check result (any fail / all pass), a new head sha, a merge or close event, or your own deadline — never on a timer tick that re-reports "pending". Run `gh pr checks <N> --watch --fail-fast --interval 20` with `run_in_background: true` (never a foreground Bash slot) so it returns the instant ANY check fails or all pass. `--fail-fast` needs gh ≥ 2.42; if it is rejected, drop the flag and run a background `until` loop over `gh pr checks <N> --json name,state,bucket` that exits only when the aggregate state differs from when you armed it.
 > 2. **If all checks pass → merge.** Use the repo's merge norm: for `indexable-inc/index` and `indexable-inc/ix`, admin force-merge immediately (`gh pr merge <N> --admin --squash`; merge queue is on, so do NOT pass `--delete-branch`). For other repos, enable auto-merge (`gh pr merge <N> --auto --squash`) unless the user said force-merge. Then report "merged" with the squash commit sha and stop.
 > 3. **If a check failed → diagnose and fix.**
 >    - Pull the failing logs: `gh pr checks <N>` to find the failed check, then `gh run view <run-id> --log-failed` (or `--log` for the failing job) to read the actual error. Read the real error, do not guess.
@@ -37,6 +37,8 @@ Keep all CI watching inside the fork, and even there make it event-driven (see b
 > **Escalate, do not guess, when:** the fix needs a product decision, the failure is in code you did not touch and the right fix is ambiguous, a required check needs human approval, or merging is blocked by a review the user must give. Report the specific blocker.
 >
 > **Watch the clock.** If a single CI round runs far longer than that repo's checks normally take, investigate the long-pole step rather than waiting it out (in index/ix, treat any check over ~1 min as a problem to look at, not wait on).
+>
+> **Report only on state change.** Every turn-end message you write lands as a task notification in the parent session, so a "still pending, waiting" update is pure noise. Never emit a no-change status report; if you wake and nothing changed, re-arm and yield silently. Batch progress into state-change reports only (a check failed, you pushed a fix, merged, stuck, blocked). Yielding silently never means stopping: keep a live watch armed whenever the outcome is pending, and re-arm it BEFORE ending the turn.
 >
 > Report concisely when done: final state (merged + sha / stopped-stuck / blocked), and for anything you fixed, one line per fix.
 
