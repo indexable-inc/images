@@ -7,6 +7,10 @@ description = "Write-once binding attributes: lower an annotated module to the u
 
 [lib]
 proc-macro = true
+# The doctest pipeline compiles the crate as a plain lib to extract examples,
+# which cannot link `proc_macro`; the usage example in lib.rs is `ignore`d
+# anyway.
+doctest = false
 
 [lints]
 workspace = true
