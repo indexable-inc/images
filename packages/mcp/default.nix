@@ -1353,7 +1353,8 @@
       mkdir -p $out/bin
       makeWrapper ${lib.getExe mcpPython} $out/bin/ix-mcp \
         --add-flags "-m ix_notebook_mcp" \
-        --set IX_MCP_VERSION ${lib.escapeShellArg ix.rev} \
+        --set IX_BUILD_REV ${lib.escapeShellArg ix.rev} \
+        --set IX_BUILD_EPOCH ${lib.escapeShellArg (toString ix.revEpoch)} \
         --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
         --set IX_SVELTE_BUNDLE_BIN ${lib.escapeShellArg (lib.getExe svelteBundleBin)} \
         --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
@@ -1374,7 +1375,8 @@
       # subcommand. Our jupyter-shaped serve; the MCP server is one client of it.
       makeWrapper ${lib.getExe mcpPython} $out/bin/ix-notebook \
         --add-flags "-m ix_notebook_mcp notebook" \
-        --set IX_MCP_VERSION ${lib.escapeShellArg ix.rev} \
+        --set IX_BUILD_REV ${lib.escapeShellArg ix.rev} \
+        --set IX_BUILD_EPOCH ${lib.escapeShellArg (toString ix.revEpoch)} \
         --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
         --set IX_SVELTE_BUNDLE_BIN ${lib.escapeShellArg (lib.getExe svelteBundleBin)} \
         --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
@@ -2999,7 +3001,7 @@
         pkgs.fd
       ];
       strictDeps = true;
-      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366)";
+      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110)";
     }
     ''
       export HOME=$TMPDIR/home
@@ -3017,10 +3019,14 @@
       # sh Output rendering regressions (issue #1766: a failed build must not
       # read as success/still-running); imports the site-packages sh module.
       cp ${./tests/test_sh_module.py} test_sh_module.py
+      # In-band kernel build staleness (#2110): the api() header row and the
+      # TypeError-hint build stamp; imports the site-packages ix_notebook_mcp.
+      cp ${./tests/test_build_info.py} test_build_info.py
       ${lib.getExe typecheckTestPython} -m pytest \
         test_typecheck.py test_job_await_errors.py test_fsearch_partial.py \
         test_fsearch_glob.py \
         test_sh_module.py \
+        test_build_info.py \
         -q -p no:cacheprovider >stdout 2>stderr || {
         echo "ix-mcp typecheck smoke failed:" >&2
         cat stdout stderr >&2
