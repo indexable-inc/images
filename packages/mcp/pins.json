@@ -28,5 +28,25 @@
     "version": "9.27.0",
     "url": "https://pypi.io/packages/source/p/pymobiledevice3/pymobiledevice3-9.27.0.tar.gz",
     "hash": "sha256-pYRzvX86tRUjYDuU7fBSD0VCTfE/sITJSId012+O7+8="
+  },
+  "cursor_sdk-aarch64-darwin": {
+    "version": "0.1.9",
+    "url": "https://files.pythonhosted.org/packages/dd/6d/41851a2ee1c56e541d720fab9837b4c74222af5a0d5d1f8a35a40111a014/cursor_sdk-0.1.9-py3-none-macosx_11_0_arm64.whl",
+    "hash": "sha256-J4yuFyim24nq0DNs03JBnSTvGGrtv/6bct8t2iektDs="
+  },
+  "cursor_sdk-x86_64-darwin": {
+    "version": "0.1.9",
+    "url": "https://files.pythonhosted.org/packages/1b/cc/233da13e0d6b58728db8c288aa78c15f82a1e771379b5933adf7e0f585cf/cursor_sdk-0.1.9-py3-none-macosx_11_0_x86_64.whl",
+    "hash": "sha256-F+pff3S1sgN8bfULmJg2VE6PiNuKRQU2uqN6rWNWl80="
+  },
+  "cursor_sdk-aarch64-linux": {
+    "version": "0.1.9",
+    "url": "https://files.pythonhosted.org/packages/43/05/15da63d82878f4329888fc3ffbf5f3cd05a49656b56beeb8200b112432d4/cursor_sdk-0.1.9-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl",
+    "hash": "sha256-ZkyJE6hm7MNUWPKr3Si60aslLDOm9WVQkNCoAzgSBtw="
+  },
+  "cursor_sdk-x86_64-linux": {
+    "version": "0.1.9",
+    "url": "https://files.pythonhosted.org/packages/e8/a0/3e5962967ce1b2c52013314799dbe9946b4699dfe90a4424d8c89a38c022/cursor_sdk-0.1.9-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+    "hash": "sha256-oKk+1FvnZCGkuXI9pALq1iJJDdDtuhcbXAxpMZ/X9sc="
   }
 }

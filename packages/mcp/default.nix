@@ -967,6 +967,38 @@
       doCheck = false;
     };
 
+  # cursor-sdk: Cursor's official Python SDK -- script the same agent that runs
+  # in the Cursor IDE/CLI (local or cloud runtimes) from a session, e.g.
+  # Composer as a cheap delegated codebase-search agent
+  # (`from cursor_sdk import AsyncAgent`). Wheel-only on PyPI (the sdist is a
+  # stub; each wheel bundles that platform's SDK bridge binary), so pins.json
+  # carries one wheel per nix system. Its one runtime dep is the bundled httpx.
+  # No credentials ship: the caller brings CURSOR_API_KEY or a logged-in
+  # cursor-agent. License is Cursor's proprietary SDK beta license; the marker
+  # is omitted for the same allowUnfree reason as the cursor-cli/claude-code
+  # vendored binaries.
+  cursorSdkModule = let
+    pin =
+      pypiPins."cursor_sdk-${pkgs.stdenv.hostPlatform.system}"
+        or (throw "cursor-sdk: no pinned wheel for ${pkgs.stdenv.hostPlatform.system}");
+  in
+    pkgs.python3.pkgs.buildPythonPackage {
+      pname = "cursor-sdk";
+      inherit (pin) version;
+      format = "wheel";
+      src = pkgs.fetchurl {inherit (pin) url hash;};
+      # The manylinux wheel's bridge binary needs its interpreter/rpaths
+      # rewritten to run from the store on NixOS.
+      nativeBuildInputs = lib.optional pkgs.stdenv.hostPlatform.isElf pkgs.autoPatchelfHook;
+      buildInputs = lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+        pkgs.stdenv.cc.cc.lib
+        pkgs.zlib
+      ];
+      dependencies = [pkgs.python3.pkgs.httpx];
+      pythonImportsCheck = ["cursor_sdk"];
+      doCheck = false;
+    };
+
   # The Spark Connect client `fleet.spark()` drives, pinned to the cluster's Spark
   # version (3.5.x, via spark-hive + spark-gluten in services.ix-spark). A Connect
   # client MUST match the server's minor, and nixpkgs' default pyspark is 4.x, so
@@ -1188,6 +1220,10 @@
       # REST API. No key is bundled: the caller brings `EXA_API_KEY` (sourced
       # from rbw/op per the secrets split), e.g. `Exa(os.environ["EXA_API_KEY"])`.
       ps.exa-py
+      # cursor-sdk: Cursor's official agent SDK (see the module definition
+      # above) so a session can run local/cloud Cursor agents with no install
+      # step.
+      cursorSdkModule
       # Gmail / Google Workspace, the "third surface" for an integration alongside
       # the MCP binding and the index CLI (RFC 0003): a session can drive the
       # Gmail and Calendar APIs directly with no install step. This is the official
@@ -1655,6 +1691,11 @@
     + "import google_auth_oauthlib, google_auth_httplib2; "
     + "build('gmail', 'v1', credentials=Credentials(token='x'), static_discovery=True); "
     + "print('gmail-libs-ok')"
+  );
+  cursorSdkBundled = importTest "cursor-sdk" (
+    "import cursor_sdk; from cursor_sdk import AsyncAgent, AsyncClient; "
+    + "assert callable(getattr(AsyncAgent, 'create', None)); "
+    + "print('cursor-sdk-ok')"
   );
   exaBundled = importTest "exa" (
     "from exa_py import Exa; e = Exa('dummy-key'); "
@@ -5869,6 +5910,7 @@ in
               dataLibsBundled
               gmailLibsBundled
               exaBundled
+              cursorSdkBundled
               googleAuthBundled
               ixGoogleBundled
               slackBundled

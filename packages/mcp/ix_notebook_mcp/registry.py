@@ -367,6 +367,18 @@ LIBRARIES: tuple[Library, ...] = (
             url="https://dashboard.exa.ai/api-keys",
         ),
     ),
+    Library(
+        "cursor_sdk",
+        # Cursor's official agent SDK: run the same agent as the Cursor IDE/CLI
+        # (local or cloud) from a cell, e.g. Composer as a cheap delegated
+        # codebase-search agent. No key is bundled; local runs also honor a
+        # logged-in `cursor-agent`.
+        credential=Credential(
+            service="Cursor",
+            env=("CURSOR_API_KEY",),
+            url="https://cursor.com/dashboard",
+        ),
+    ),
 )
 
 
