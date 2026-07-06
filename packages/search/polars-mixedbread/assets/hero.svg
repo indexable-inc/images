@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 230" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13">
+  <style>
+    svg { color: #1f2328; }
+    .muted { fill: #656d76; }
+    .accent { stroke: #8250df; }
+    .accent-t { fill: #8250df; }
+    .box { stroke: currentColor; fill: none; }
+    text { fill: currentColor; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    .pushdown { fill: none; stroke-dasharray: 5 4; marker-end: url(#arrow-accent); }
+    .mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12px; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { stroke: #a371f7; }
+      .accent-t { fill: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+    </marker>
+    <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="accent-t" d="M 0 0 L 10 5 L 0 10 z"/>
+    </marker>
+  </defs>
+  <rect class="box" x="20" y="60" width="210" height="60" rx="6"/>
+  <text class="mono" x="125" y="85" text-anchor="middle">scan_mixedbread(query)</text>
+  <text class="muted" x="125" y="105" text-anchor="middle" font-size="11">lazy IO source</text>
+  <path class="edge" d="M 230 90 L 288 90"/>
+  <text class="muted" x="259" y="78" text-anchor="middle" font-size="11">search</text>
+  <rect class="box" x="290" y="60" width="170" height="60" rx="6"/>
+  <text x="375" y="85" text-anchor="middle">Mixedbread store</text>
+  <text class="muted" x="375" y="105" text-anchor="middle" font-size="11">ranks top_k hits</text>
+  <path class="edge" d="M 460 90 L 518 90"/>
+  <text class="muted" x="489" y="78" text-anchor="middle" font-size="11">hits</text>
+  <rect class="box" x="520" y="60" width="180" height="60" rx="6"/>
+  <text class="mono" x="610" y="85" text-anchor="middle">pl.LazyFrame</text>
+  <text class="muted" x="610" y="105" text-anchor="middle" font-size="11">filter &#183; group_by &#183; agg</text>
+  <path class="accent pushdown" d="M 610 120 C 610 185 375 185 375 122"/>
+  <text class="accent-t" x="493" y="190" text-anchor="middle" font-size="11">string == filters pushed down, applied before ranking</text>
+</svg>
