@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 240" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    svg { color: #1f2328; }
+    .muted { fill: #656d76; }
+    .accent { fill: #8250df; }
+    .accent-stroke { stroke: #8250df; }
+    .box { stroke: currentColor; fill: none; }
+    text { fill: currentColor; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    .dashed { stroke: currentColor; fill: none; stroke-dasharray: 4 3; marker-end: url(#arrow); }
+    .arrowhead { fill: currentColor; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { fill: #a371f7; }
+      .accent-stroke { stroke: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arrowhead"/>
+    </marker>
+  </defs>
+
+  <rect class="box" x="20" y="40" width="180" height="60" rx="8"/>
+  <text x="110" y="65" text-anchor="middle" font-size="13">conf.json</text>
+  <text x="110" y="84" text-anchor="middle" font-size="11" class="muted">streamLayeredImage plan</text>
+
+  <path class="edge" d="M 200 70 L 268 70"/>
+  <text x="234" y="58" text-anchor="middle" font-size="11">describe</text>
+
+  <rect class="box accent-stroke" x="270" y="40" width="190" height="60" rx="8"/>
+  <text x="365" y="65" text-anchor="middle" font-size="13" class="accent">image.json</text>
+  <text x="365" y="84" text-anchor="middle" font-size="11" class="muted">a few KiB: digests + recipes</text>
+
+  <path class="edge" d="M 460 70 L 528 70"/>
+  <text x="494" y="58" text-anchor="middle" font-size="11">materialize</text>
+
+  <rect class="box" x="530" y="40" width="170" height="60" rx="8"/>
+  <text x="615" y="65" text-anchor="middle" font-size="13">image.tar (OCI)</text>
+  <text x="615" y="84" text-anchor="middle" font-size="11" class="muted">bytes, verified vs digests</text>
+
+  <rect class="box" x="80" y="170" width="120" height="40" rx="8"/>
+  <text x="140" y="195" text-anchor="middle" font-size="12">base-desc</text>
+  <rect class="box" x="220" y="170" width="140" height="40" rx="8"/>
+  <text x="290" y="195" text-anchor="middle" font-size="12">layer-desc × N</text>
+
+  <path class="edge" d="M 200 178 L 300 106"/>
+  <path class="edge" d="M 330 168 L 358 106"/>
+  <text x="366" y="140" font-size="11" class="muted">assemble-desc: one cached derivation per layer</text>
+</svg>
