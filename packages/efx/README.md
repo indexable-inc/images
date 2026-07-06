@@ -53,10 +53,10 @@ program terminates.
 ## Demo
 
 ```sh
-./examples/demo.sh /tmp/efx-demo /tmp/efx-demo.html
+./cli/examples/demo.sh /tmp/efx-demo /tmp/efx-demo.html
 ```
 
-Applies [`examples/site.efx`](examples/site.efx) (everything executes),
+Applies [`cli/examples/site.efx`](cli/examples/site.efx) (everything executes),
 applies again (all cache hits), retitles the page and re-plans (only the
 changed effect and its dependents invalidate), then renders the run history —
 DAG, cache hits vs executions, and what invalidated — as one self-contained

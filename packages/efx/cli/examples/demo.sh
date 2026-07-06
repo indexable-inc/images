@@ -9,7 +9,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 workdir="${1:-$(mktemp -d)}"
 report="${2:-$workdir/efx-report.html}"
-efx=(cargo run --quiet --manifest-path "$here/../../../Cargo.toml" -p efx --)
+efx=(cargo run --quiet --manifest-path "$here/../../../../Cargo.toml" -p efx --)
 
 cp "$here/site.efx" "$workdir/site.efx"
 cd "$workdir"

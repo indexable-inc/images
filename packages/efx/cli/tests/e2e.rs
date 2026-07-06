@@ -4,7 +4,10 @@
 use std::path::Path;
 use std::process::Command;
 
-const SITE: &str = include_str!("../../examples/site.efx");
+// Inside this crate's directory: cargo-unit scopes each workspace crate's
+// units to their own package root (lib/rust/cargo-unit.nix), so a fixture
+// outside `packages/efx/cli/` would not exist in the nix build sandbox.
+const SITE: &str = include_str!("../examples/site.efx");
 
 struct Run {
     stdout: String,
