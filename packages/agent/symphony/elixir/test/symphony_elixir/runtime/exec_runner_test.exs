@@ -8,7 +8,10 @@ defmodule SymphonyElixir.Runtime.ExecRunnerTest do
     pack = Path.join(System.tmp_dir!(), "exec_runner_#{System.unique_integer([:positive])}")
     File.mkdir_p!(Path.join(pack, "scripts"))
     on_exit(fn -> File.rm_rf(pack) end)
-    {:ok, pack: pack}
+    # The port's cd resolves symlinks (macOS /tmp is a symlink to
+    # /private/tmp), so hand tests the physical path a script's pwd reports.
+    {physical, 0} = System.cmd("pwd", [], cd: pack)
+    {:ok, pack: String.trim(physical)}
   end
 
   defp write_script!(pack, rel, body, mode \\ 0o755) do

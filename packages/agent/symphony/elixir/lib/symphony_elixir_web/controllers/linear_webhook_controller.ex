@@ -15,16 +15,9 @@ defmodule SymphonyElixirWeb.LinearWebhookController do
   - Copy the signing secret into `LINEAR_WEBHOOK_SECRET` on the
     symphony host
 
-  Security:
-
-  - Every request must carry a `Linear-Signature` header that is
-    `hex(hmac_sha256(secret, raw_body))`. Mismatched signatures get
-    `401`. The raw body is preserved by
-    `SymphonyElixirWeb.RawBodyReader` so HMAC is over the exact bytes
-    Linear signed.
-  - Absent secret -> we refuse to authenticate any request and return
-    `401`; this fail-closed default keeps an empty-secret deployment
-    from silently accepting unsigned traffic.
+  Security: every request must carry a `Linear-Signature` header that is
+  `hex(hmac_sha256(secret, raw_body))`, verified fail-closed by
+  `SymphonyElixirWeb.WebhookAuth` over the exact bytes Linear signed.
 
   Dedupe: an issue with an active run (status `:pending` or
   `:running`) is skipped, matching the previous poller's contract.
@@ -32,14 +25,14 @@ defmodule SymphonyElixirWeb.LinearWebhookController do
 
   use Phoenix.Controller, formats: [:json]
 
-  alias SymphonyElixir.Config
-  alias SymphonyElixir.Runtime.Ingress
+  alias SymphonyElixir.Runtime.{Ingress, Trigger}
+  alias SymphonyElixirWeb.WebhookAuth
 
   require Logger
 
   @spec accept(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def accept(conn, params) do
-    case verify_signature(conn) do
+    case WebhookAuth.verify(conn, :linear) do
       :ok ->
         handle_event(params)
         json(conn, %{ok: true})
@@ -51,41 +44,6 @@ defmodule SymphonyElixirWeb.LinearWebhookController do
         |> put_status(status)
         |> json(%{error: reason})
     end
-  end
-
-  defp verify_signature(conn) do
-    cond do
-      is_nil(Config.get().linear_webhook_secret) ->
-        {:error, :unauthorized, "linear webhook secret not configured"}
-
-      is_nil(conn.assigns[:raw_body]) ->
-        {:error, :bad_request, "missing raw body"}
-
-      true ->
-        provided =
-          conn
-          |> Plug.Conn.get_req_header("linear-signature")
-          |> List.first()
-
-        cond do
-          is_nil(provided) ->
-            {:error, :unauthorized, "missing Linear-Signature header"}
-
-          not Plug.Crypto.secure_compare(provided, expected_signature(conn.assigns.raw_body)) ->
-            {:error, :unauthorized, "signature mismatch"}
-
-          true ->
-            :ok
-        end
-    end
-  end
-
-  defp expected_signature(raw_body) do
-    secret = Config.get().linear_webhook_secret
-
-    :hmac
-    |> :crypto.mac(:sha256, secret, raw_body)
-    |> Base.encode16(case: :lower)
   end
 
   defp handle_event(%{"type" => "Issue", "action" => action} = event)
@@ -101,7 +59,7 @@ defmodule SymphonyElixirWeb.LinearWebhookController do
   defp extract_labels(%{"labels" => labels}) when is_list(labels) do
     labels
     |> Enum.map(fn
-      %{"name" => name} when is_binary(name) -> String.downcase(String.trim(name))
+      %{"name" => name} when is_binary(name) -> Trigger.normalize_label(name)
       _ -> nil
     end)
     |> Enum.reject(&is_nil/1)

@@ -63,6 +63,7 @@ defmodule SymphonyElixir.DSL.Parser do
 
   alias SymphonyElixir.DSL.AST
   alias SymphonyElixir.DSL.Parser.Lexer
+  alias SymphonyElixir.Runtime.Trigger
 
   @type diagnostic :: %{
           message: String.t(),
@@ -165,7 +166,7 @@ defmodule SymphonyElixir.DSL.Parser do
 
   defp parse_trigger_kind("linear", state) do
     with {:ok, label, s1} <- labeled_string(state, "label") do
-      {:ok, %{kind: :linear, label: normalize_label(label)}, s1}
+      {:ok, %{kind: :linear, label: Trigger.normalize_label(label)}, s1}
     end
   end
 
@@ -184,7 +185,7 @@ defmodule SymphonyElixir.DSL.Parser do
   defp parse_trigger_kind("github_pr_label", state) do
     with {:ok, repo, s1} <- labeled_string(state, "repo"),
          {:ok, label, s2} <- labeled_string(s1, "label") do
-      {:ok, %{kind: :github_pr_label, repo: String.trim(repo), label: normalize_label(label)}, s2}
+      {:ok, %{kind: :github_pr_label, repo: String.trim(repo), label: Trigger.normalize_label(label)}, s2}
     end
   end
 
@@ -248,8 +249,6 @@ defmodule SymphonyElixir.DSL.Parser do
       other -> error(state, "expected a string for #{what}", token_value(other))
     end
   end
-
-  defp normalize_label(label), do: label |> String.trim() |> String.downcase()
 
   defp parse_statements(state, acc) do
     case peek(state) do

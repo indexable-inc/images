@@ -80,6 +80,19 @@ defmodule SymphonyElixir.Runtime.Trigger do
   @spec matches?(declared(), event()) :: boolean()
   def matches?(_declared, _event), do: false
 
+  @doc """
+  Normalize a label to this matcher's vocabulary: trimmed and lowercased.
+
+  Both sides of a label comparison route through here (the DSL parser for
+  a workflow's declared `label`, the webhook controllers for an inbound
+  event's labels), so `"Bug "` and `"bug"` select the same workflows. A
+  non-string (a malformed event payload) normalizes to `""`, which
+  matches no declared label.
+  """
+  @spec normalize_label(term()) :: String.t()
+  def normalize_label(label) when is_binary(label), do: label |> String.trim() |> String.downcase()
+  def normalize_label(_label), do: ""
+
   # A Slack producer resolves the declared channel name (`#general`) to an
   # id once and stamps both `channel` and `channel_id` on the event, so the
   # declared name compares equal to either. Comparing against both keeps
