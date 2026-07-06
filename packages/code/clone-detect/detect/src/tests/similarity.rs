@@ -1,4 +1,4 @@
-use crate::compute_similarity;
+use crate::{Type3Metric, compute_similarity_with};
 
 fn make_node_with_features(node_count: usize, features: Vec<u64>) -> clone_hash::NodeInfo {
     clone_hash::NodeInfo {
@@ -14,89 +14,104 @@ fn make_node_with_features(node_count: usize, features: Vec<u64>) -> clone_hash:
     }
 }
 
-/// Two nodes with identical feature multisets should have similarity 1.0
+fn jaccard(a: &clone_hash::NodeInfo, b: &clone_hash::NodeInfo) -> f64 {
+    compute_similarity_with(a, b, Type3Metric::Jaccard)
+}
+
+fn overlap(a: &clone_hash::NodeInfo, b: &clone_hash::NodeInfo) -> f64 {
+    compute_similarity_with(a, b, Type3Metric::Overlap)
+}
+
+/// Two nodes with identical feature multisets should have similarity 1.0 under
+/// either metric.
 #[test]
 fn identical_children() {
     let a = make_node_with_features(50, vec![100, 200, 300]);
     let b = make_node_with_features(50, vec![100, 200, 300]);
-    let sim = compute_similarity(&a, &b);
-    assert!(
-        (sim - 1.0).abs() < 0.001,
-        "Identical features should give similarity 1.0, got {sim}"
-    );
+    assert!((jaccard(&a, &b) - 1.0).abs() < 0.001);
+    assert!((overlap(&a, &b) - 1.0).abs() < 0.001);
 }
 
-/// Two nodes with completely different features should have similarity 0.0
+/// Two nodes with completely different features should have similarity 0.0.
 #[test]
 fn completely_different_children() {
     let a = make_node_with_features(50, vec![100, 200, 300]);
     let b = make_node_with_features(50, vec![400, 500, 600]);
-    let sim = compute_similarity(&a, &b);
-    assert!(
-        sim < 0.01,
-        "Completely different features should give similarity ~0.0, got {sim}"
-    );
+    assert!(jaccard(&a, &b) < 0.01);
+    assert!(overlap(&a, &b) < 0.01);
 }
 
-/// Partial overlap: 2 out of 3 features match
+/// Partial overlap: 2 of 3 features match. Jaccard = 2/4 = 0.5;
+/// overlap = 2/min(3,3) = 0.667.
 #[test]
 fn partial_overlap() {
     let a = make_node_with_features(50, vec![100, 200, 300]);
     let b = make_node_with_features(55, vec![100, 200, 400]);
-    let sim = compute_similarity(&a, &b);
-    // Jaccard of {100,200,300} and {100,200,400}: intersection=2, union=4 → 0.5
     assert!(
-        (sim - 0.5).abs() < 0.01,
-        "2/4 Jaccard overlap should give ~0.5, got {sim}"
+        (jaccard(&a, &b) - 0.5).abs() < 0.01,
+        "jaccard = {}",
+        jaccard(&a, &b)
+    );
+    assert!(
+        (overlap(&a, &b) - 2.0 / 3.0).abs() < 0.01,
+        "overlap = {}",
+        overlap(&a, &b)
     );
 }
 
-/// One node has an extra feature (superset): 3 matching, 1 extra
+/// One node is a superset (3 matching, 1 extra) — the containment case.
+/// Jaccard = 3/4 = 0.75 (penalizes the extra feature); overlap = 3/3 = 1.0.
+/// This asymmetry is what the overlap metric exists for.
 #[test]
 fn one_extra_child() {
     let a = make_node_with_features(50, vec![100, 200, 300]);
     let b = make_node_with_features(60, vec![100, 200, 300, 400]);
-    let sim = compute_similarity(&a, &b);
-    // Jaccard: intersection=3, union=4 → 0.75
     assert!(
-        (sim - 0.75).abs() < 0.01,
-        "3/4 Jaccard overlap should give ~0.75, got {sim}"
+        (jaccard(&a, &b) - 0.75).abs() < 0.01,
+        "jaccard = {}",
+        jaccard(&a, &b)
+    );
+    assert!(
+        (overlap(&a, &b) - 1.0).abs() < 0.01,
+        "containment should give overlap 1.0, got {}",
+        overlap(&a, &b)
     );
 }
 
-/// Both nodes have no features — fallback to node count ratio
+/// Both nodes have no features — fallback to node count ratio (min/max), which
+/// is metric-independent.
 #[test]
 fn no_children_fallback() {
     let a = make_node_with_features(50, vec![]);
     let b = make_node_with_features(60, vec![]);
-    let sim = compute_similarity(&a, &b);
-    // Fallback: min/max = 50/60 ≈ 0.833
-    assert!(
-        (sim - 0.833).abs() < 0.01,
-        "Empty features should fallback to node count ratio, got {sim}"
-    );
+    assert!((jaccard(&a, &b) - 0.833).abs() < 0.01);
+    assert!((overlap(&a, &b) - 0.833).abs() < 0.01);
 }
 
-/// Zero nodes in both — similarity 0.0
+/// Zero nodes in both — similarity 0.0.
 #[test]
 fn zero_nodes() {
     let a = make_node_with_features(0, vec![]);
     let b = make_node_with_features(0, vec![]);
-    let sim = compute_similarity(&a, &b);
-    assert!(sim.abs() < 0.001, "Zero nodes should give 0.0, got {sim}");
+    assert!(jaccard(&a, &b).abs() < 0.001);
+    assert!(overlap(&a, &b).abs() < 0.001);
 }
 
-/// Duplicate features should be treated as multiset (counted individually)
+/// Duplicate features are treated as a multiset. `{100,100,200}` vs
+/// `{100,200,200}`: intersection = min(2,1) + min(1,2) = 2. Jaccard = 2/4 = 0.5;
+/// overlap = 2/min(3,3) = 0.667.
 #[test]
 fn multiset_duplicates() {
     let a = make_node_with_features(50, vec![100, 100, 200]);
     let b = make_node_with_features(50, vec![100, 200, 200]);
-    let sim = compute_similarity(&a, &b);
-    // Multiset intersection: min(2,1) for 100 = 1, min(1,2) for 200 = 1 → 2
-    // Multiset union: max(2,1) for 100 = 2, max(1,2) for 200 = 2 → 4
-    // Jaccard: 2/4 = 0.5
     assert!(
-        (sim - 0.5).abs() < 0.01,
-        "Multiset Jaccard with duplicate features should be 0.5, got {sim}"
+        (jaccard(&a, &b) - 0.5).abs() < 0.01,
+        "jaccard = {}",
+        jaccard(&a, &b)
+    );
+    assert!(
+        (overlap(&a, &b) - 2.0 / 3.0).abs() < 0.01,
+        "overlap = {}",
+        overlap(&a, &b)
     );
 }

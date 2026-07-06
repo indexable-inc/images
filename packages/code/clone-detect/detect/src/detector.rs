@@ -62,7 +62,7 @@ pub fn instances(scan: &Output, config: &DetectConfig) -> DetectionResult {
     }
 
     let type3_groups = if config.enable_type3 {
-        find(scan, config.type3_threshold)
+        find(scan, config.type3_threshold, config.type3_metric)
     } else {
         Vec::new()
     };
@@ -146,9 +146,35 @@ fn dedup_subsumed(groups: &mut Vec<CloneGroup>) {
     // are checked as potential containers before inner groups.
     groups.sort_by_key(|g| std::cmp::Reverse(total_byte_span(g)));
 
+    // Intern file paths to integer ids up front: the O(n^2) subsumption scan
+    // below compares fragment files pairwise, and `PathBuf` equality re-walks
+    // path components each time — profiling showed it dominating whole-repo
+    // runs once Type-3 group counts reach the thousands. With interned ids,
+    // each comparison is a single integer branch.
+    let keys: Vec<Vec<FragKey>> = {
+        let mut path_ids: FxHashMap<&PathBuf, usize> = FxHashMap::default();
+        groups
+            .iter()
+            .map(|group| {
+                group
+                    .fragments
+                    .iter()
+                    .map(|frag| {
+                        let next = path_ids.len();
+                        FragKey {
+                            file_id: *path_ids.entry(&frag.file).or_insert(next),
+                            start: frag.byte_range.start,
+                            end: frag.byte_range.end,
+                        }
+                    })
+                    .collect()
+            })
+            .collect()
+    };
+
     let mut subsumed = vec![false; n];
 
-    for i in 0..n {
+    for (i, outer) in keys.iter().enumerate() {
         let Some(&already) = subsumed.get(i) else {
             break;
         };
@@ -156,21 +182,13 @@ fn dedup_subsumed(groups: &mut Vec<CloneGroup>) {
             continue;
         }
 
-        let Some(outer) = groups.get(i) else {
-            break;
-        };
-
-        for j in (i + 1)..n {
+        for (j, inner) in keys.iter().enumerate().skip(i + 1) {
             let Some(&already_j) = subsumed.get(j) else {
                 break;
             };
             if already_j {
                 continue;
             }
-
-            let Some(inner) = groups.get(j) else {
-                break;
-            };
 
             if is_subsumed_by(inner, outer)
                 && let Some(flag) = subsumed.get_mut(j)
@@ -189,14 +207,23 @@ fn dedup_subsumed(groups: &mut Vec<CloneGroup>) {
     *groups = kept;
 }
 
+/// A fragment reduced to integers for the subsumption scan: interned file id
+/// plus byte range.
+#[derive(Clone, Copy)]
+struct FragKey {
+    file_id: usize,
+    start: usize,
+    end: usize,
+}
+
 /// Check if every fragment in `inner` is byte-range contained within
 /// some fragment of `outer` from the same file.
-fn is_subsumed_by(inner: &CloneGroup, outer: &CloneGroup) -> bool {
-    inner.fragments.iter().all(|inner_frag| {
-        outer.fragments.iter().any(|outer_frag| {
-            outer_frag.file == inner_frag.file
-                && outer_frag.byte_range.start <= inner_frag.byte_range.start
-                && outer_frag.byte_range.end >= inner_frag.byte_range.end
+fn is_subsumed_by(inner: &[FragKey], outer: &[FragKey]) -> bool {
+    inner.iter().all(|inner_frag| {
+        outer.iter().any(|outer_frag| {
+            outer_frag.file_id == inner_frag.file_id
+                && outer_frag.start <= inner_frag.start
+                && outer_frag.end >= inner_frag.end
         })
     })
 }

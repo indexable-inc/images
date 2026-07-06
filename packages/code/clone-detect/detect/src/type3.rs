@@ -4,14 +4,34 @@ use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 
 use crate::{
-    jaccard::multiset_sorted,
-    lsh::{LshEntry, LshIndex, NodeLocation, estimated_jaccard, minhash_signature},
-    types::{CloneGroup, Fragment, Kind},
+    jaccard::{multiset_sorted, overlap_sorted},
+    lsh::{
+        LshEntry, LshIndex, NodeLocation, banding_for_threshold, estimated_jaccard,
+        estimated_overlap, minhash_signature,
+    },
+    types::{CloneGroup, Fragment, Kind, Type3Metric},
 };
 
-/// Margin for the `MinHash` estimate pre-check. The estimate approximates
-/// set Jaccard which can differ from multiset Jaccard, so we allow some slack.
+/// Margin for the `MinHash` estimate pre-check. The estimates approximate the
+/// set-based metric while confirmation is multiset-based, so we allow slack and
+/// only prune what is clearly below threshold.
 const ESTIMATION_MARGIN: f64 = 0.1;
+
+/// Size-compatibility floor for the overlap metric: `min(|A|, |B|) / max(|A|,
+/// |B|)` must be at least this (fragments within 2.5x of each other).
+///
+/// Overlap divides by the smaller multiset, so without a size bound a tiny
+/// generic fragment whose features happen to be swallowed by a much larger
+/// node scores 1.0 — a false positive — and, worse, defeats the `MinHash`
+/// pre-check: `estimated_overlap` scales the Jaccard estimate by
+/// `(|A|+|B|)/min`, so at high size skew a single noisy matching slot (1/64)
+/// saturates the estimate and every such pair pays the exact merge (measured
+/// as a timeout over this repo versus ~1s with the floor).
+///
+/// 0.4 admits an edited copy that grew up to 2.5x — well beyond the
+/// "insert a few statements" clones overlap targets (`BigCloneBench` MT3) —
+/// while excluding the degenerate containment pairs.
+const OVERLAP_SIZE_RATIO_FLOOR: f64 = 0.4;
 
 /// A scanned node with its position in the file list.
 struct IndexedNode<'a> {
@@ -20,7 +40,12 @@ struct IndexedNode<'a> {
     node: &'a NodeInfo,
 }
 
-pub fn find(scan: &Output, threshold: f64) -> Vec<CloneGroup> {
+pub fn find(scan: &Output, threshold: f64, metric: Type3Metric) -> Vec<CloneGroup> {
+    // Banding derived once from the threshold: shared by every kind group so the
+    // LSH S-curve matches the configured similarity floor (see
+    // `banding_for_threshold`).
+    let banding = banding_for_threshold(threshold);
+
     let mut by_kind: FxHashMap<&str, Vec<IndexedNode<'_>>> = FxHashMap::default();
 
     for (file_id, file) in scan.files.iter().enumerate() {
@@ -70,15 +95,35 @@ pub fn find(scan: &Output, threshold: f64) -> Vec<CloneGroup> {
                 return Vec::new();
             }
 
-            let index = LshIndex::build(&entries);
+            let index = LshIndex::build(&entries, banding);
             let mut groups = Vec::new();
 
             for pair in index.candidate_pairs() {
-                // Fast pre-check: estimate Jaccard from MinHash signatures
+                // Fast pre-check: estimate the confirmation metric from the
+                // MinHash signatures and prune clearly-too-dissimilar pairs
+                // before the exact O(n+m) merge. This prune carries the whole
+                // pipeline's performance: without it every LSH candidate pays
+                // the exact merge, which measured >500x slower over this repo.
+                //
+                // The estimate must match the metric. Overlap >= Jaccard
+                // (containment), so pruning overlap candidates on a Jaccard
+                // estimate would silently drop the very insert/delete clones
+                // overlap exists to catch; `estimated_overlap` reconstructs
+                // containment from the Jaccard estimate plus exact sizes.
                 if let (Some(sig_a), Some(sig_b)) =
                     (index.signature(&pair.first), index.signature(&pair.second))
                 {
-                    let estimate = estimated_jaccard(sig_a, sig_b);
+                    let estimate = match metric {
+                        Type3Metric::Jaccard => estimated_jaccard(sig_a, sig_b),
+                        Type3Metric::Overlap => {
+                            let len_a = feature_len(scan, &pair.first);
+                            let len_b = feature_len(scan, &pair.second);
+                            if !size_compatible(len_a, len_b) {
+                                continue;
+                            }
+                            estimated_overlap(sig_a, sig_b, len_a, len_b)
+                        }
+                    };
                     if estimate < threshold - ESTIMATION_MARGIN {
                         continue;
                     }
@@ -90,6 +135,7 @@ pub fn find(scan: &Output, threshold: f64) -> Vec<CloneGroup> {
                         loc_a: pair.first,
                         loc_b: pair.second,
                         threshold,
+                        metric,
                     },
                 ) else {
                     continue;
@@ -102,10 +148,32 @@ pub fn find(scan: &Output, threshold: f64) -> Vec<CloneGroup> {
         .collect()
 }
 
+/// Feature-multiset size of the node at `loc`, `0` when the location is stale.
+/// LSH entries are built only from nodes with non-empty features, so a `0` here
+/// makes the overlap estimate `0.0` and the pair is pruned rather than panicking.
+fn feature_len(scan: &Output, loc: &NodeLocation) -> usize {
+    scan.files
+        .get(loc.file_id)
+        .and_then(|file| file.nodes.get(loc.node_idx))
+        .map_or(0, |node| node.subtree_features.len())
+}
+
+/// Enforce [`OVERLAP_SIZE_RATIO_FLOOR`] on a pair of feature counts.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "feature counts are far below f64 mantissa precision"
+)]
+fn size_compatible(len_a: usize, len_b: usize) -> bool {
+    let min = len_a.min(len_b) as f64;
+    let max = len_a.max(len_b) as f64;
+    max > 0.0 && min / max >= OVERLAP_SIZE_RATIO_FLOOR
+}
+
 struct CandidatePair {
     loc_a: NodeLocation,
     loc_b: NodeLocation,
     threshold: f64,
+    metric: Type3Metric,
 }
 
 /// Try to build a Type-3 clone group from two node locations.
@@ -123,13 +191,27 @@ fn try_make_group(scan: &Output, pair: &CandidatePair) -> Option<CloneGroup> {
         return None;
     }
 
-    let similarity = compute_similarity(node_a, node_b);
+    // Ground-truth enforcement of the overlap size floor (the candidate loop
+    // also prunes on it, but only inside the estimate fast path).
+    if pair.metric == Type3Metric::Overlap
+        && !size_compatible(
+            node_a.subtree_features.len(),
+            node_b.subtree_features.len(),
+        )
+    {
+        return None;
+    }
+
+    let similarity = compute_similarity_with(node_a, node_b, pair.metric);
     if similarity < pair.threshold {
         return None;
     }
 
     Some(CloneGroup {
-        clone_type: Kind::Type3 { similarity },
+        clone_type: Kind::Type3 {
+            similarity,
+            metric: pair.metric,
+        },
         fragments: vec![
             Fragment::from_node(file_a, node_a),
             Fragment::from_node(file_b, node_b),
@@ -137,15 +219,31 @@ fn try_make_group(scan: &Output, pair: &CandidatePair) -> Option<CloneGroup> {
     })
 }
 
-/// Compute structural similarity between two AST nodes.
+/// Compute structural similarity between two AST nodes using the default
+/// (Jaccard) metric. Kept for external callers; new code should prefer
+/// [`compute_similarity_with`] to be explicit about the metric.
+#[must_use]
+pub fn compute_similarity(a: &NodeInfo, b: &NodeInfo) -> f64 {
+    compute_similarity_with(a, b, Type3Metric::default())
+}
+
+/// Compute structural similarity between two AST nodes under `metric`.
+///
+/// When both nodes carry subtree features, the score is the chosen multiset
+/// metric over those features. Otherwise (features unavailable) both metrics
+/// fall back to the node-count ratio `min/max` — a coarse structural bound,
+/// not a feature comparison, so there is nothing metric-specific to compute.
 #[must_use]
 #[expect(
     clippy::cast_precision_loss,
     reason = "AST node counts are far below f64 mantissa precision"
 )]
-pub fn compute_similarity(a: &NodeInfo, b: &NodeInfo) -> f64 {
+pub fn compute_similarity_with(a: &NodeInfo, b: &NodeInfo, metric: Type3Metric) -> f64 {
     if !a.subtree_features.is_empty() && !b.subtree_features.is_empty() {
-        return multiset_sorted(&a.subtree_features, &b.subtree_features);
+        return match metric {
+            Type3Metric::Jaccard => multiset_sorted(&a.subtree_features, &b.subtree_features),
+            Type3Metric::Overlap => overlap_sorted(&a.subtree_features, &b.subtree_features),
+        };
     }
 
     let count_a = a.node_count as f64;

@@ -85,23 +85,30 @@ skipping symlinks/non-UTF-8/`ignore-file` files, and collecting
   fully covered by Type-1 (`detector.rs:38-62`).
 - **Type-3** (`--type3`, `detect/src/type3.rs`): per node-kind, dedup by
   normalized hash, build a MinHash signature over `subtree_features`, bucket
-  with LSH (`lsh.rs`), pre-filter candidate pairs by estimated Jaccard, then
-  confirm with multiset Jaccard against `type3_threshold` (default `0.7`).
+  with LSH (`lsh.rs`; bands x rows are derived from the threshold so the
+  S-curve inflection sits just below it — a fixed banding silently drops every
+  pair under its inflection), pre-filter candidate pairs by the estimated
+  metric, then confirm against `type3_threshold` (default `0.7`) with the
+  configured `type3_metric` (`jaccard.rs`): `jaccard` (default,
+  `|A∩B| / |A∪B|`) or `overlap` (containment, `|A∩B| / min(|A|,|B|)`), which
+  catches copy-then-insert clones Jaccard misses but also nets structural
+  boilerplate, so pair it with a higher threshold (`>= 0.8`).
   `rayon`-parallel across kinds.
 - **Sequence** (`--sequences`, `sequences.rs`): sliding window of statements.
 - `dedup_subsumed` drops groups whose fragments are byte-range contained in a
   larger group (e.g. a function and its block, `detector.rs:139-202`).
 
-`DetectionResult` (`types.rs:65-84`) is `{ instances: Vec<CloneGroup>, stats }`;
-`Kind` is `Type1 | Type2 | Type3 { similarity } | Sequence { statements }`;
+`DetectionResult` (`types.rs`) is `{ instances: Vec<CloneGroup>, stats }`;
+`Kind` is `Type1 | Type2 | Type3 { similarity, metric } | Sequence
+{ statements }` (`metric` labels which similarity the score means);
 `stats.duplication_pct` is deduplicated duplicated lines over total lines. All
 types are `serde`-serializable (the JSON output schema).
 
 ## cli (`clone`) config and flags
 
-Flags (`cli/src/main.rs`): `[PATH]` (default `.`), `--type3`, `--threshold`,
-`--min-lines`, `--min-nodes`, `--sequences`, `--window-size`, `--ignore`
-(repeatable glob), `--pretty`, `--badge PATH`, plus the gate flags
+Flags (`cli/src/main.rs`): `[PATH]` (default `.`), `--type3`, `--type3-metric`,
+`--threshold`, `--min-lines`, `--min-nodes`, `--sequences`, `--window-size`,
+`--ignore` (repeatable glob), `--pretty`, `--badge PATH`, plus the gate flags
 `--max-global-pct`, `--max-diff-pct`, and `--diff [BASE]` (see [Gates](#gates)).
 `clone.toml` mirrors these keys (`FileConfig`) and adds a `[budget]` table; CLI
 flags win, booleans OR, ignore lists concatenate (`resolve_config`). The repo's

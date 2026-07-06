@@ -8,8 +8,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use clap::Parser;
-use clone_detect::{DetectConfig, DetectionResult, instances};
+use clap::{Parser, ValueEnum};
+use clone_detect::{DetectConfig, DetectionResult, Type3Metric, instances};
 use clone_scanner::{Config, Scanner};
 use gate::{DiffGate, GateReport, GlobalGate};
 use serde_json::Value;
@@ -17,6 +17,23 @@ use snafu::ResultExt as _;
 
 /// Config file name discovered by walking up from the scan target directory.
 const CONFIG_FILENAME: &str = "clone.toml";
+
+/// CLI/config spelling of the Type-3 metric, mapped to [`Type3Metric`].
+#[derive(Debug, Clone, Copy, ValueEnum, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum MetricArg {
+    Jaccard,
+    Overlap,
+}
+
+impl From<MetricArg> for Type3Metric {
+    fn from(m: MetricArg) -> Self {
+        match m {
+            MetricArg::Jaccard => Self::Jaccard,
+            MetricArg::Overlap => Self::Overlap,
+        }
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "clone", version, about)]
@@ -26,6 +43,12 @@ struct Args {
 
     #[arg(long)]
     type3: bool,
+
+    /// Type-3 confirmation metric: `jaccard` (symmetric, precise; default) or
+    /// `overlap` (containment: catches copy-then-insert clones but also nets
+    /// boilerplate, so pair it with a higher threshold).
+    #[arg(long, value_enum)]
+    type3_metric: Option<MetricArg>,
 
     #[arg(long)]
     threshold: Option<f64>,
@@ -86,6 +109,7 @@ struct FileConfig {
     min_nodes: Option<usize>,
     threshold: Option<f64>,
     type3: Option<bool>,
+    type3_metric: Option<MetricArg>,
     sequences: Option<bool>,
     window_size: Option<usize>,
     pretty: Option<bool>,
@@ -111,6 +135,7 @@ struct ResolvedConfig {
     min_nodes: usize,
     threshold: f64,
     type3: bool,
+    type3_metric: Type3Metric,
     sequences: bool,
     window_size: usize,
     pretty: bool,
@@ -236,6 +261,7 @@ fn run() -> Result<bool, RunError> {
     let detect_config = DetectConfig {
         enable_type3: config.type3,
         type3_threshold: config.threshold,
+        type3_metric: config.type3_metric,
         enable_sequences: config.sequences,
         sequence_window_size: config.window_size,
     };
@@ -379,6 +405,7 @@ fn resolve_config(args: &Args, file: Option<FileConfig>) -> ResolvedConfig {
         min_nodes: None,
         threshold: None,
         type3: None,
+        type3_metric: None,
         sequences: None,
         window_size: None,
         pretty: None,
@@ -425,6 +452,10 @@ fn resolve_config(args: &Args, file: Option<FileConfig>) -> ResolvedConfig {
             .or(file.threshold)
             .unwrap_or(DEFAULT_THRESHOLD),
         type3: args.type3 || file.type3.unwrap_or(false),
+        type3_metric: args
+            .type3_metric
+            .or(file.type3_metric)
+            .map_or_else(Type3Metric::default, Type3Metric::from),
         sequences: args.sequences || file.sequences.unwrap_or(false),
         window_size: args
             .window_size
