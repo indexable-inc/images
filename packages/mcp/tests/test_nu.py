@@ -44,6 +44,29 @@ def test_scalar_and_list_become_value_column() -> None:
     assert run(nu("[1, 2, 3]"))["value"].to_list() == [1, 2, 3]
 
 
+def test_lone_string_round_trips_as_plain_text() -> None:
+    # Issue #2068: a lone string is text, not data -- framing it as a 1x1
+    # DataFrame made every print of it show polars' width-clipped box repr,
+    # and the full multiline text was unrecoverable from the captured stdout.
+    lines = [f"---VERIFY {i}: a fairly long line of stdout text, step {i} in detail---" for i in range(10)]
+    joined = " ".join(f"'{line}'" for line in lines)
+    text = run(nu(f"[{joined}] | str join (char nl)"))
+    assert isinstance(text, str)
+    assert text.splitlines() == lines
+
+
+def test_external_stdout_is_the_full_string() -> None:
+    # The reported shape (issue #2068): `^cmd` multiline stdout must come back
+    # verbatim as str, not as a frame that clips at repr time.
+    import sys
+
+    script = "print(chr(10).join('section %d: ' % i + 'x' * 60 for i in range(10)))"
+    out = run(nu(f'^{sys.executable} -c "{script}"'))
+    assert isinstance(out, str)
+    body = out.strip().splitlines()
+    assert body == [f"section {i}: " + "x" * 60 for i in range(10)]
+
+
 def test_null_and_empty_become_empty_frames() -> None:
     assert run(nu("null")).is_empty()
     assert run(nu("[] | where true")).is_empty()

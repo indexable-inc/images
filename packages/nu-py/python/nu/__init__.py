@@ -11,7 +11,7 @@ binary runs with ``^cmd``::
     df = await nu("ps | where cpu > 5 | sort-by cpu")
     df = await nu("open Cargo.toml | get package")          # record -> 1-row frame
     df = await nu("http get https://api.github.com/repos/nushell/nushell")
-    df = await nu("^git status --short")                    # external binary via ^
+    text = await nu("^git status --short")                  # external binary via ^ (stdout str)
     df = await nu("^gh pr list --json number,title | from json")  # JSON-mode CLI
 
 This is not a subprocess: the engine (PyO3 bindings over nu-engine) lives in
@@ -35,9 +35,12 @@ build, use the bundled ``nix`` module (a live dashboard build-tree pane), not
 
 Contract:
 
-- ``await nu(code)`` returns a ``pl.DataFrame``, always: a table maps
-  directly, a record becomes one row, a list of scalars / a scalar become a
-  single ``value`` column, no output (``null``) an empty frame.
+- ``await nu(code)`` returns a ``pl.DataFrame`` for structured output: a
+  table maps directly, a record becomes one row, a list of scalars / a
+  non-str scalar become a single ``value`` column, no output (``null``) an
+  empty frame. A lone string -- an external's stdout, ``to text`` -- comes
+  back as the plain ``str``: multiline text round-trips verbatim instead of
+  hiding in a 1x1 frame whose printed repr clips the cell (issue #2068).
 - ``await nu.value(code)`` is the escape hatch when you want the plain
   Python value (a scalar, a nested dict) instead of a frame.
 - Values cross natively, not as JSON: dates arrive as UTC ``Datetime``
@@ -355,7 +358,8 @@ def _rows_frame(rows: list[dict]) -> pl.DataFrame:
 
 
 def _to_frame(decoded: object) -> pl.DataFrame:
-    """Normalize any pipeline value into a ``pl.DataFrame``."""
+    """Normalize a pipeline value into a ``pl.DataFrame`` (a lone ``str``
+    never reaches here: ``nu()`` returns it verbatim, issue #2068)."""
     import polars as pl
 
     if decoded is None:
@@ -382,9 +386,10 @@ async def nu(
     env: dict[str, str] | None = None,
     timeout: float | None = None,
     name: str | None = None,
-) -> pl.DataFrame:
+) -> pl.DataFrame | str:
     """Run ``code`` as nushell source and return the result as a polars
-    DataFrame.
+    DataFrame, or as the plain ``str`` when the pipeline's value is a lone
+    string.
 
     Multi-statement source is fine; the last pipeline's output is the result,
     and ``let``/``def`` persist to later calls (REPL semantics). ``PWD`` does
@@ -396,10 +401,19 @@ async def nu(
     the module docstring); ``name`` labels the running job in the dashboard.
 
     Shape normalization: table -> frame; record -> 1-row frame; list of
-    scalars / scalar -> a single ``value`` column; no output -> empty frame.
-    A failure raises :class:`NuError` carrying nushell's diagnostic.
+    scalars / non-str scalar -> a single ``value`` column; a lone string ->
+    the plain ``str`` (an external's stdout round-trips verbatim); no output
+    -> empty frame. A failure raises :class:`NuError` carrying nushell's
+    diagnostic.
     """
     decoded = await _run(code, input=input, cwd=cwd, env=env, timeout=timeout, name=name)
+    if isinstance(decoded, str):
+        # A lone string is TEXT (an external's stdout, `to text`), not a table:
+        # hand it back verbatim. Framing it as a 1x1 DataFrame made every
+        # `print()` of it write polars' width-clipped box repr into the
+        # captured stdout, and the full text was unrecoverable afterwards
+        # (issue #2068).
+        return decoded
     return _to_frame(decoded)
 
 

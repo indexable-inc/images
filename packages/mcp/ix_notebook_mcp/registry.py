@@ -68,13 +68,14 @@ MODULES: tuple[Module, ...] = (
     Module(
         "nu",
         "structured shell, the ONE shell-out path (an embedded, persistent nushell "
-        "engine): run a pipeline and get a polars DataFrame back, always -- "
+        "engine): run a pipeline and get a polars DataFrame back -- "
         '`await nu("ls | where size > 1kb | sort-by size")`, `open Cargo.toml`, `from csv`, '
         "`http get`; run an external binary with `^cmd` (`^git status`, `^gh pr list --json .. "
-        "| from json`); `let`/`def`/`cd` persist across calls like a REPL; `input=df` pipes a "
-        "frame through a pipeline; `nu.value(code)` returns the plain Python value; a failure "
-        "raises NuError carrying nushell's own diagnostic. Replaces jq/awk/sed text munging and "
-        "the retired `sh`",
+        "| from json`); a lone string result (an external's plain stdout) returns as the full "
+        "`str`, never a clipped 1x1 frame; `let`/`def`/`cd` persist across calls like a REPL; "
+        "`input=df` pipes a frame through a pipeline; `nu.value(code)` returns the plain Python "
+        "value; a failure raises NuError carrying nushell's own diagnostic. Replaces jq/awk/sed "
+        "text munging and the retired `sh`",
         preimport=True,
     ),
     Module(

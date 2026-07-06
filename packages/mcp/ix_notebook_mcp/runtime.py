@@ -490,7 +490,10 @@ class Job:
         ``Job.result`` is a **property** (not a method), but since ``Result``
         is callable, both ``job.result`` and ``job.result()`` hand back the
         value. The returned Result's ``.text`` attribute is the rendered model
-        text (same as ``.llm_result``), so ``job.result.text[-100:]`` pages it."""
+        text (same as ``.llm_result``), so ``job.result.text[-100:]`` pages it.
+        Its ``.value`` is the ORIGINAL trailing-expression value (the DataFrame
+        itself, not its rendered text), and subscripting delegates to it, so
+        ``jobs['<id>'].result[0, 0]`` reads the real cell (issue #2068)."""
         if self.running():
             dur = time.time() - self.started
             raise JobStillRunning(
@@ -729,6 +732,13 @@ class Result:
     def __init__(self, *values: Any, user_html: str | None = None, user_view: dict | None = None, llm_result: str | None = None, llm_images: list | None = None) -> None:
         llm_result = _llm_text(llm_result)
         self.user_view = user_view
+        # The original Python value this Result was built from (set by
+        # `Result.of`, which also auto-wraps a cell's trailing expression), so
+        # a finished job's REAL value -- the DataFrame itself, not its rendered
+        # text -- stays reachable: `jobs['<id>'].result.value`, and
+        # subscripting delegates to it (`jobs['<id>'].result[0, 0]`). None for
+        # a Result built purely from keyword views (issue #2068).
+        self.value: Any = None
         if user_html is not None or user_view is not None:
             self.user_html = user_html or ""
             self.llm_result = llm_result if llm_result is not None else ""
@@ -747,6 +757,7 @@ class Result:
         )
         self.user_html = built.user_html
         self.user_view = built.user_view
+        self.value = built.value
         self.llm_result = built.llm_result
         self.llm_images = list(llm_images) if llm_images else built.llm_images
 
@@ -783,7 +794,21 @@ class Result:
         and hand the model concise text. For a polars DataFrame the model text is
         compact NUON (the human still gets the styled HTML table), so a wide or
         long-stringed frame is never clipped to the agent the way the boxed text
-        repr clips it. Override with ``llm_result`` or define ``__ix_llm__``."""
+        repr clips it. Override with ``llm_result`` or define ``__ix_llm__``.
+
+        The built Result also keeps ``value`` itself reachable as ``.value``
+        (and through subscripting), so the rendered wrapper never strands the
+        original: ``jobs['<id>'].result[0, 0]`` reads the real DataFrame cell
+        instead of dying inside the wrapper (issue #2068)."""
+        built = cls._of(value, llm_result=llm_result)
+        # A nested Result carries ITS original forward; anything else is the
+        # original itself.
+        built.value = value.value if isinstance(value, Result) else value
+        return built
+
+    @classmethod
+    def _of(cls, value: Any, *, llm_result: str | None = None) -> Result:
+        """The rendering body of :meth:`of` (which records ``.value`` on top)."""
         if isinstance(value, Result):
             # An existing Result is already split into its two views: copy it
             # faithfully (keeping llm_images) instead of rebuilding it from its
@@ -935,6 +960,18 @@ class Result:
         polling a finished job -- used to die with "'Result' object is not
         callable". Property and call now both hand over the value."""
         return self
+
+    def __getitem__(self, key: Any) -> Any:
+        """Subscript through to the wrapped original value: ``jobs['<id>']
+        .result[0, 0]`` -- the natural way to reach a finished cell's DataFrame
+        cell -- reads the real value instead of dying on the rendered-text
+        wrapper (issue #2068). A Result that carries no original (built purely
+        from keyword views) raises a TypeError that points at ``.text``."""
+        if self.value is not None:
+            return self.value[key]
+        raise TypeError(
+            "this Result wraps no subscriptable value; read `.text` for its rendered text"
+        )
 
     def __repr__(self) -> str:
         # Plain-text fallback (the stored result repr, non-rich hosts): the model
@@ -2149,11 +2186,15 @@ def _merge_stdout(job: Job, result: Result) -> Result:
     text = _strip_ansi(body)
     if not text.endswith("\n"):
         text += "\n"
-    return Result(
+    merged = Result(
         user_html=f'<pre class="ix-result">{_ansi_to_html(body)}</pre>' + result.user_html,
         llm_result=text + (result.llm_result or ""),
         llm_images=result.llm_images,
     )
+    # Merging stdout replaces the WRAPPER, not the value: keep the trailing
+    # expression's original reachable (`jobs['<id>'].result.value` / `[i, j]`).
+    merged.value = result.value
+    return merged
 
 
 # Cap on the stdout an auto-returned Result (see _auto_result) hands the model.

@@ -3018,7 +3018,7 @@
         pkgs.fd
       ];
       strictDeps = true;
-      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766)";
+      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068)";
     }
     ''
       export HOME=$TMPDIR/home
