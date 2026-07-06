@@ -53,6 +53,16 @@
 #                      prExtra  : OPTIONAL upstream-specific PR-template content
 #                                 (issue refs, checklists) that does not belong in
 #                                 a commit message; appended after the PR body.
+#                      prSeries : OPTIONAL series slug. Patches sharing a slug are
+#                                 ONE unit: one upstream PR carrying every member
+#                                 (the DAG's textual independence deliberately does
+#                                 not split a semantic feature series into
+#                                 per-commit PRs). Members must share one `upstream`
+#                                 mark; the `patch-dag-<name>` check enforces it.
+#                      prSeriesHead : exactly ONE member per series sets this true;
+#                                 its commit message titles/describes the series PR
+#                                 (the user-facing member reads best; the rest are
+#                                 visible as the PR's commits).
 #                    A patch with no entry defaults to `hold` with an "unclassified"
 #                    reason (fail-safe: an unclassified patch is never sent upstream
 #                    automatically). `upstream-sync` treats a repo whose
@@ -289,36 +299,46 @@
         };
         # The build-status directory series: the user flagged this as a strong
         # attempt candidate. It is a coherent feature (experimental feature flag,
-        # writer, daemon plumbing, command, tests, release note) so the PR is the
-        # whole series (the DAG closure drags the ancestors), which is the honest
-        # shape of the contribution.
+        # writer, daemon plumbing, command, tests, release note), so `prSeries`
+        # groups it into ONE upstream PR carrying all seven commits; the patches
+        # are textually independent in the DAG, and per-commit PRs would be the
+        # dishonest shape. 0007 (the `nix store builds` command) is the
+        # user-facing member, so its commit message titles the PR.
         "0003-libutil-add-build-status-dir-experimental-feature.patch" = {
           upstream = "attempt";
           reason = "Build-status-dir feature series (user-flagged strong candidate); the experimental-feature flag that gates the rest.";
+          prSeries = "build-status-dir";
         };
         "0004-libstore-add-build-status-directory-writer.patch" = {
           upstream = "attempt";
           reason = "Build-status-dir feature series: the status-directory writer.";
+          prSeries = "build-status-dir";
         };
         "0005-libstore-write-status-files-from-build-and-substitut.patch" = {
           upstream = "attempt";
           reason = "Build-status-dir feature series: write status files from build and substitution.";
+          prSeries = "build-status-dir";
         };
         "0006-libstore-daemon-record-client-uid-and-user-for-build.patch" = {
           upstream = "attempt";
           reason = "Build-status-dir feature series: daemon records client uid/user for build attribution.";
+          prSeries = "build-status-dir";
         };
         "0007-nix-add-nix-store-builds-command.patch" = {
           upstream = "attempt";
           reason = "Build-status-dir feature series: the `nix store builds` command surfacing the status dir.";
+          prSeries = "build-status-dir";
+          prSeriesHead = true;
         };
         "0008-tests-functional-test-build-status-directory.patch" = {
           upstream = "attempt";
           reason = "Build-status-dir feature series: functional tests for the feature.";
+          prSeries = "build-status-dir";
         };
         "0009-doc-release-note-for-build-status-directory-and-nix-.patch" = {
           upstream = "attempt";
           reason = "Build-status-dir feature series: release note for the feature.";
+          prSeries = "build-status-dir";
         };
       };
     }

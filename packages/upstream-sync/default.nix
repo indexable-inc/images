@@ -18,23 +18,33 @@
 #     state + last-checked, detected duplicate upstream PRs, and retirement
 #     status, plus an append-only human-readable transition `log`.
 #
-# The loop, per `attempt` patch of each selected fork:
+# The walk is by UNIT: a `prSeries` intent group (a multi-patch feature series,
+# e.g. nix's build-status-dir set) is one unit and one upstream PR carrying every
+# member; the DAG's textual independence deliberately does not split a semantic
+# series into per-commit PRs. Everything else is a single-patch unit. Per unit of
+# each selected fork:
 #   1. If we already track a PR: refresh its state via `gh pr view` (open / draft
-#      / merged / closed). If merged, mark `retired = true` and record it: the
-#      NEXT base bump's `rebase-patches` run should drop the patch (it becomes an
-#      empty cherry against the new base), and this tool wires a retirement note
-#      into the plan so a human/agent verifies the drop.
-#   2. Else search the upstream repo for a DUPLICATE/related PR by the patch's
-#      title keywords. If found, RECORD it and SKIP loudly (a human or agent can
-#      comment on the existing PR instead of opening a competing one).
+#      / merged / closed) FIRST, regardless of intent or repo blocks, because a
+#      refresh is read-only and intent gates only NEW outward acts (a patch
+#      demoted to hold/never after its PR opened must keep tracking it). If
+#      merged, mark every member `retired = true` and record it: the NEXT base
+#      bump's `rebase-patches` run should drop the patch (it becomes an empty
+#      cherry against the new base), and this tool wires a retirement note into
+#      the plan so a human/agent verifies the drop.
+#   2. Else (attempt units on non-blocked repos) search the upstream repo for a
+#      DUPLICATE/related PR by the unit head's title keywords. If found, RECORD
+#      it and SKIP loudly (a human or agent can comment on the existing PR
+#      instead of opening a competing one).
 #   3. Else, if `--open` was passed, open the PR by delegating to
-#      `upstream-pr --open` (its DAG-closure/am/push/draft-PR mechanism, one owner).
-#      The PR body carries AI attribution (outward-message policy) and a link back
-#      to our patch file. Opening a PR is the outward act, DOUBLY gated: the patch
-#      must be marked `attempt` in nix (intent gate) AND `--open` must be passed
-#      (invocation gate). Without `--open`, the safe default, the tool still
-#      refreshes/searches/retires and writes the status file, and reports which
-#      patches WOULD open. `--dry-run` additionally suppresses the status write.
+#      `upstream-pr --open` (its DAG-closure/am/push/draft-PR mechanism, one
+#      owner), passing every member and `--message-from` the series head. The PR
+#      title/body come from the head's commit message plus AI attribution and a
+#      link back to our patch file. Opening a PR is the outward act, DOUBLY
+#      gated: the patch must be marked `attempt` in nix (intent gate) AND
+#      `--open` must be passed (invocation gate). Without `--open`, the safe
+#      default, the tool still refreshes/searches/retires and writes the status
+#      file, and reports which patches WOULD open. `--dry-run` suppresses the
+#      status write too and is mutually exclusive with `--open`.
 #
 # Repos where PRs are unwelcome (`prsWelcome = false`) or AI PRs are banned
 # (`aiPrsAllowed = "false"`) are skipped at the repo level: the tool refuses to
@@ -70,6 +80,10 @@
 }: let
   inherit (repoPackages) upstream-pr;
   forkData = (formats.json {}).generate "fork-packages.json" ix.forkPackages;
+  # Shared patch-selector + subject helpers from their one owner (rebase-patches'
+  # dag-lib), referenced through the package registry root rather than a `../`
+  # literal, so this tool and upstream-pr cannot diverge on selector semantics.
+  dagLib = ix.paths.packagesRoot + "/rebase-patches/dag-lib.nu";
   package = writeNushellApplication {
     name = "upstream-sync";
     meta = {
@@ -85,6 +99,8 @@
     text = ''
       # nu
       # Run from the repo root: `nix run .#upstream-sync [-- <pkg> [<patch>]]`.
+      use ${dagLib} *
+
       const fork_data = "${forkData}"
 
       # --- mapping + resolution (shared idioms with upstream-pr) ----------------
@@ -211,48 +227,44 @@
       }
 
       # Search the upstream repo for OPEN PRs that plausibly DUPLICATE this patch,
-      # to record and skip rather than open a competing one. gh's PR search is a
-      # fuzzy OR over tokens, so we (1) query only distinctive title tokens with
-      # `in:title`, then (2) post-filter to hits whose title shares >= 2 of our
-      # distinctive tokens. This trades a few missed near-matches for far fewer
-      # false positives (the skip is conservative-safe: a real dup we miss just
-      # gets an extra PR a human can dedupe, whereas a false dup that BLOCKS an
-      # attempt is a silent no-op we do NOT want). Best-effort: any failure or a
-      # tokenless subject returns [] so the loop never stalls.
+      # to record and skip rather than open a competing one. GitHub's issue/PR
+      # search treats a bare space as AND, which would miss a duplicate that
+      # rewords or drops one token, so the query ORs the distinctive title tokens
+      # (capped at 6: GitHub allows at most five boolean operators per query) for
+      # broad recall, and a MAJORITY title-overlap post-filter (>= 60% of our
+      # tokens, floor 2) restores precision. A flat 2-token floor was measurably
+      # too loose under OR recall: "don't crash the daemon when a GC roots
+      # client" matched an unrelated client-settings PR on {daemon, client}, and
+      # "inaccessible default lookup-path entries" matched a docs-only PR on
+      # {lookup, path}. Real duplicates of the same change share most distinctive
+      # words. The tension is deliberate: a missed dup just costs a human dedupe,
+      # while a false dup silently BLOCKS an attempt, so precision wins ties.
+      # Best-effort: any failure or a tokenless subject returns [] so the loop
+      # never stalls.
       def "pr find-duplicates" [slug: record, subject: string]: nothing -> list<record> {
         let tokens = (subject tokens $subject)
         if ($tokens | is-empty) { return [] }
-        let query = $"(($tokens | str join ' ')) in:title"
+        let query = $"(($tokens | first 6 | str join ' OR ')) in:title"
         let res = (
           do {
             gh search prs $query --repo $"($slug.owner)/($slug.repo)" --state open --limit 20 --json url,number,title
           } | complete
         )
         if $res.exit_code != 0 { return [] }
+        # ceil(0.6 * n) via integer math, floored at 2.
+        let need = ([2, ((($tokens | length) * 3 + 4) // 5)] | math max)
         ($res.stdout | from json)
         | where {|hit|
           let ht = (subject tokens $hit.title)
-          (($tokens | where {|t| $t in $ht }) | length) >= 2
+          (($tokens | where {|t| $t in $ht }) | length) >= $need
         }
-      }
-
-      # The subject line of a patch file (its commit message summary), used both as
-      # duplicate-search keywords and to describe the patch in the plan.
-      def "patch subject" [patch_dir: string, patch: string]: nothing -> string {
-        let f = ($patch_dir | path join $patch)
-        open --raw $f
-        | lines
-        | where {|l| $l | str starts-with "Subject:" }
-        | first
-        | default "Subject: (none)"
-        | str replace --regex '^Subject:\s*(\[PATCH[^\]]*\]\s*)?' ""
       }
 
       # --- the loop -------------------------------------------------------------
 
       def main [
         pkg?: string    # one fork package (nix | btop | ...); all if omitted
-        patch?: string  # restrict to one patch file (name/prefix/substring); optional
+        patch?: string  # restrict to one patch (name/prefix/unique substring); a series member selects its whole series
         --open          # OPEN real upstream PRs for attempt patches (the outward act). Default: refresh + plan only.
         --dry-run       # plan only: refresh + search but write NO status files (pure validation)
         --check-stale   # additionally warn if a fork has attempt patches but no status file, or a stale lastChecked
@@ -263,7 +275,12 @@
         # caller must pass `--open` (the human invocation gate). Without `--open`
         # the tool refreshes tracked PR state, searches duplicates, retires merged
         # patches, writes the status file, and reports which patches WOULD open.
-        # `--dry-run` additionally suppresses the status write for pure validation.
+        # `--dry-run` additionally suppresses the status write for pure validation,
+        # so the two flags contradict each other; refuse the combination rather
+        # than letting a "dry run" perform the outward act.
+        if $dry_run and $open {
+          error make { msg: "upstream-sync: --dry-run and --open are mutually exclusive; a dry run never opens PRs" }
+        }
         let forks = (fork select $pkg $mapping)
         mut plan = []  # accumulate {fork, patch, intent, action, detail} for the summary
 
@@ -271,6 +288,11 @@
           let slug = (url slug $fork.url)
           let patch_dir = ($fork.patchDir | path expand)
           let policy = ($fork.upstreamPolicy? | default {prsWelcome: true, aiPrsAllowed: "unknown", citation: "", notes: ""})
+          # The documented forms are true | "false" | "unknown"; a mapping may use
+          # the JSON boolean, so normalize through `into string` (false -> "false")
+          # before gating. A missed boolean here would let PRs leak to an AI-banned
+          # upstream.
+          let ai_allowed = (($policy.aiPrsAllowed? | default "unknown") | into string)
           let intent = ($fork.patches? | default {})
 
           # Repo-level gates: a non-github host has no gh path; PRs unwelcome or AI
@@ -278,12 +300,12 @@
           # any outward act. Reported once per fork so the plan is legible.
           let gh_ok = (is github $fork.url)
           let repo_blocked = (
-            (not $policy.prsWelcome) or ($policy.aiPrsAllowed == "false") or (not $gh_ok)
+            (not $policy.prsWelcome) or ($ai_allowed == "false") or (not $gh_ok)
           )
           let repo_block_reason = (
             if not $gh_ok { $"upstream is not GitHub (($slug.owner)/($slug.repo)); gh path N/A" }
             else if not $policy.prsWelcome { "policy: prsWelcome = false" }
-            else if ($policy.aiPrsAllowed == "false") { $"policy: aiPrsAllowed = false; see ($policy.citation)" }
+            else if ($ai_allowed == "false") { $"policy: aiPrsAllowed = false; see ($policy.citation)" }
             else { "" }
           )
 
@@ -291,7 +313,7 @@
           if $repo_blocked {
             print $"(ansi yellow)upstream-sync: ($fork.name): repo-level block: ($repo_block_reason). No PR will be opened here.(ansi reset)"
           }
-          if $policy.aiPrsAllowed == "unknown" and $gh_ok and $policy.prsWelcome {
+          if $ai_allowed == "unknown" and $gh_ok and $policy.prsWelcome {
             print $"(ansi yellow)upstream-sync: ($fork.name): AI-PR policy is UNSTATED upstream; proceeding for attempt patches with AI attribution in the PR body. Citation: ($policy.citation)(ansi reset)"
           }
 
@@ -301,115 +323,184 @@
           # than the file this run is about to write.
           let pre_existed = (status path $fork | path exists)
           let pre_last_checked = $doc.lastChecked
-          $doc = ($doc | update lastChecked (date now | format date "%Y-%m-%dT%H:%M:%SZ"))
+          # Only a FULL sync may stamp the fork-level lastChecked: a targeted run
+          # (patch selector given) refreshes a subset, and stamping it as a full
+          # refresh would mask stale state for every patch it skipped.
+          if $patch == null {
+            $doc = ($doc | update lastChecked (date now | format date "%Y-%m-%dT%H:%M:%SZ"))
+          }
 
-          # The patch set to walk: dag.json node order (canonical), filtered by the
-          # optional `patch` arg.
+          # The patch set to walk: dag.json node order (canonical). A selector
+          # resolves to exactly ONE patch via the shared resolver (ambiguity
+          # errors loudly rather than fanning an outward act across matches).
           let dag_file = ($patch_dir | path join "dag.json")
           if not ($dag_file | path exists) {
             print $"(ansi yellow)upstream-sync: ($fork.name): no dag.json; run `nix run .#rebase-patches -- dag ($fork.name)`. Skipping.(ansi reset)"
             continue
           }
           let all_patches = (open --raw $dag_file | from json | get nodes | get patch)
-          let selected_patches = (
-            if $patch == null { $all_patches } else {
-              $all_patches | where {|p| ($p == $patch) or ($p | str starts-with $patch) or ($p | str contains $patch) }
-            }
+          let selected = (
+            if $patch == null { $all_patches } else { [(patch resolve $patch $all_patches)] }
           )
-          if ($selected_patches | is-empty) and ($patch != null) {
-            print $"(ansi yellow)upstream-sync: ($fork.name): no patch matching '($patch)'.(ansi reset)"
-          }
 
-          for pf in $selected_patches {
-            let mark = ($intent | get -o $pf)
-            # Fail-safe default: an unclassified patch is `hold`, never sent.
-            let upstream = ($mark.upstream? | default "hold")
-            let reason = ($mark.reason? | default "unclassified (no intent entry in lib/fork-packages.nix)")
+          # Group the walk into UNITS: a `prSeries` intent group is ONE unit (one
+          # upstream PR carrying every member; the DAG's textual independence
+          # deliberately does not split a semantic feature series into per-commit
+          # PRs), everything else is a single-patch unit. Selecting any member of
+          # a series acts on the whole series. `uniq` preserves first-occurrence
+          # order, so units stay in NNNN order.
+          let unit_keys = (
+            $all_patches
+            | each {|p|
+                let s = ($intent | get -o $p | default {} | get -o prSeries)
+                if $s == null { $"patch:($p)" } else { $"series:($s)" }
+              }
+            | uniq
+          )
+          let units = (
+            $unit_keys
+            | each {|k|
+                if ($k | str starts-with "series:") {
+                  let sname = ($k | str replace "series:" "")
+                  let members = ($all_patches | where {|p| ($intent | get -o $p | default {} | get -o prSeries) == $sname })
+                  {series: $sname, patches: $members}
+                } else {
+                  {series: null, patches: [($k | str replace "patch:" "")]}
+                }
+              }
+            | where {|u| $u.patches | any {|p| $p in $selected } }
+          )
 
-            # Ensure a status entry exists (mirror intent for legibility).
-            let existing = ($doc.patches | get -o $pf)
-            let entry = (
-              $existing | default {upstream: $upstream, pr: null, retired: false, duplicates: []}
-              | update upstream $upstream
+          for unit in $units {
+            # A series must be intent-coherent: uniform mark, exactly one head.
+            # The patch-dag-<name> check enforces this in CI; failing loudly here
+            # too keeps a downstream mapping without that check honest.
+            let marks = (
+              $unit.patches
+              | each {|p| $intent | get -o $p | default {} | get -o upstream | default "hold" }
+              | uniq
             )
-            # Set the patch entry (upsert: the key may already exist from status
-            # load). The value pipeline is evaluated first, so nothing mutable is
-            # captured in a closure (nushell forbids that).
-            $doc = ($doc | upsert patches ($doc.patches | upsert $pf $entry))
-
-            if $upstream != "attempt" {
-              # Not authorized for the outward act; record intent, no action.
-              $plan = ($plan | append {fork: $fork.name, patch: $pf, intent: $upstream, action: "skip", detail: $reason})
-              continue
+            if ($marks | length) > 1 {
+              error make { msg: $"upstream-sync: ($fork.name): series ($unit.series) has mixed upstream marks [($marks | str join ', ')]; make them uniform in the fork mapping" }
             }
-
-            # attempt patch. Repo-level block still wins (defense in depth).
-            if $repo_blocked {
-              $plan = ($plan | append {fork: $fork.name, patch: $pf, intent: "attempt", action: "blocked", detail: $repo_block_reason})
-              continue
+            let upstream = ($marks | first)
+            let head = (
+              if $unit.series == null { $unit.patches | first } else {
+                let heads = ($unit.patches | where {|p| $intent | get -o $p | default {} | get -o prSeriesHead | default false })
+                if ($heads | length) != 1 {
+                  error make { msg: $"upstream-sync: ($fork.name): series ($unit.series) must declare exactly one prSeriesHead; found (($heads | length))" }
+                }
+                $heads | first
+              }
+            )
+            let label = (
+              if $unit.series == null { $head } else {
+                $"($head) [series ($unit.series): (($unit.patches | length)) patches]"
+              }
+            )
+            if $unit.series != null and $patch != null {
+              print $"(ansi yellow)upstream-sync: ($fork.name): selector matched a member of series ($unit.series); acting on the whole series.(ansi reset)"
             }
+            let reason = ($intent | get -o $head | default {} | get -o reason | default "unclassified (no intent entry in lib/fork-packages.nix)")
 
-            # 1. Already tracking a PR? Refresh its state.
-            let tracked = ($doc.patches | get $pf | get pr)
+            # Ensure a status entry per member (mirror intent for legibility).
+            # reduce closures capture only immutable lets (nushell forbids mut).
+            let seeded = (
+              $unit.patches | reduce --fold $doc.patches {|nm, acc|
+                let m = ($intent | get -o $nm | default {} | get -o upstream | default "hold")
+                $acc | upsert $nm (
+                  ($acc | get -o $nm | default {upstream: $m, pr: null, retired: false, duplicates: []})
+                  | update upstream $m
+                )
+              }
+            )
+            $doc = ($doc | upsert patches $seeded)
+
+            # 1. Refresh a tracked PR FIRST, regardless of intent or repo blocks:
+            # intent gates only NEW outward acts, and refreshing is read-only.
+            # Without this, demoting an already-opened patch to hold/never would
+            # freeze its status forever and its merge would never retire it.
+            # Series members share one PR record; the head's is authoritative.
+            let tracked = ($doc.patches | get $head | get pr)
             if $tracked != null {
               let fresh = (pr refresh $slug $tracked.number)
               if $fresh == null {
-                $doc = (log append $doc $"($pf): tracked PR #($tracked.number) no longer readable, deleted or renamed; leaving last-known state")
-                $plan = ($plan | append {fork: $fork.name, patch: $pf, intent: "attempt", action: "stale-pr", detail: $"PR #($tracked.number) unreadable"})
+                $doc = (log append $doc $"($label): tracked PR #($tracked.number) no longer readable, deleted or renamed; leaving last-known state")
+                $plan = ($plan | append {fork: $fork.name, patch: $label, intent: $upstream, action: "stale-pr", detail: $"PR #($tracked.number) unreadable"})
                 continue
               }
-              # Log a state transition when it changed.
               if $fresh.state != $tracked.state {
-                $doc = (log append $doc $"($pf): PR #($fresh.number) ($tracked.state) -> ($fresh.state) (($fresh.url))")
+                $doc = (log append $doc $"($label): PR #($fresh.number) ($tracked.state) -> ($fresh.state) (($fresh.url))")
               }
-              mut new_entry = ($doc.patches | get $pf | update pr $fresh)
-              # 1b. Merged upstream -> retire. Next base bump's rebase-patches run
-              # should drop the patch (it cherries empty against the new base); we
-              # wire that verification into the plan for a human/agent to confirm.
-              if $fresh.state == "merged" and (not ($doc.patches | get $pf | get retired)) {
-                $new_entry = ($new_entry | update retired true)
-                $doc = (log append $doc $"($pf): merged upstream in PR #($fresh.number); marked retired. Verify the next base bump drops it as an empty cherry.")
+              # Merged upstream -> retire every member. The next base bump's
+              # rebase-patches run should drop them as empty cherries; the plan
+              # notes it for a human/agent to verify.
+              let retire = ($fresh.state == "merged")
+              if $retire and (not ($doc.patches | get $head | get retired)) {
+                $doc = (log append $doc $"($label): merged upstream in PR #($fresh.number); marked retired. Verify the next base bump drops it as an empty cherry.")
               }
-              $doc = ($doc | upsert patches ($doc.patches | upsert $pf $new_entry))
-              let action = (if $fresh.state == "merged" { "retired" } else { $"tracked:($fresh.state)" })
-              $plan = ($plan | append {fork: $fork.name, patch: $pf, intent: "attempt", action: $action, detail: $fresh.url})
+              let updated = (
+                $unit.patches | reduce --fold $doc.patches {|nm, acc|
+                  let cur = (($acc | get $nm) | update pr $fresh)
+                  $acc | upsert $nm (if $retire { $cur | update retired true } else { $cur })
+                }
+              )
+              $doc = ($doc | upsert patches $updated)
+              let action = (if $retire { "retired" } else { $"tracked:($fresh.state)" })
+              $plan = ($plan | append {fork: $fork.name, patch: $label, intent: $upstream, action: $action, detail: $fresh.url})
               continue
             }
 
-            # 2. No tracked PR: search for a duplicate before opening.
-            let subject = (patch subject $patch_dir $pf)
+            if $upstream != "attempt" {
+              # Not authorized for the outward act; record intent, no action.
+              $plan = ($plan | append {fork: $fork.name, patch: $label, intent: $upstream, action: "skip", detail: $reason})
+              continue
+            }
+
+            # attempt unit. Repo-level block still wins (defense in depth).
+            if $repo_blocked {
+              $plan = ($plan | append {fork: $fork.name, patch: $label, intent: "attempt", action: "blocked", detail: $repo_block_reason})
+              continue
+            }
+
+            # 2. No tracked PR: search for a duplicate before opening, keyed on
+            # the head's (unfolded) subject.
+            let subject = (patch subject ($patch_dir | path join $head))
             let dupes = (pr find-duplicates $slug $subject)
             if ($dupes | is-not-empty) {
-              $doc = ($doc | upsert patches ($doc.patches | upsert $pf (($doc.patches | get $pf) | update duplicates $dupes)))
-              $doc = (log append $doc $"($pf): found (($dupes | length)) possible duplicate upstream PRs; NOT opening. First: (($dupes | first).url)")
-              $plan = ($plan | append {fork: $fork.name, patch: $pf, intent: "attempt", action: "duplicate", detail: (($dupes | first).url)})
+              $doc = ($doc | upsert patches ($doc.patches | upsert $head (($doc.patches | get $head) | update duplicates $dupes)))
+              $doc = (log append $doc $"($label): found (($dupes | length)) possible duplicate upstream PRs; NOT opening. First: (($dupes | first).url)")
+              $plan = ($plan | append {fork: $fork.name, patch: $label, intent: "attempt", action: "duplicate", detail: (($dupes | first).url)})
               continue
             }
 
             # 3. No PR, no duplicate: open one ONLY when --open was passed.
             # Without it (the safe default) this is a would-open plan entry: the
             # status file still records the pending attempt, but no PR is created.
+            let open_cmd = $"upstream-pr --open --message-from ($head) ($fork.name) (($unit.patches | str join ' '))"
             if not $open {
-              $plan = ($plan | append {fork: $fork.name, patch: $pf, intent: "attempt", action: "would-open", detail: $"run with --open to create: upstream-pr --open ($fork.name) ($pf)"})
+              $plan = ($plan | append {fork: $fork.name, patch: $label, intent: "attempt", action: "would-open", detail: $"run with --open to create: ($open_cmd)"})
               continue
             }
 
-            # The outward act, only for attempt patches on a non-blocked repo, only
+            # The outward act, only for attempt units on a non-blocked repo, only
             # when --open was passed. upstream-pr owns the branch/am/push/draft-PR
-            # mechanism; --mapping is threaded so a downstream repo's list is used.
-            print $"(ansi green)upstream-sync: ($fork.name): opening upstream PR for ($pf) via upstream-pr --open(ansi reset)"
+            # mechanism (one PR for the whole unit); --mapping is threaded so a
+            # downstream repo's list is used.
+            print $"(ansi green)upstream-sync: ($fork.name): opening upstream PR for ($label) via ($open_cmd)(ansi reset)"
             let args = (
-              ["--open"]
+              ["--open" "--message-from" $head]
               | append (if $mapping != null { ["--mapping" $mapping] } else { [] })
-              | append [$fork.name $pf]
+              | append [$fork.name]
+              | append $unit.patches
             )
             let opened = (do { ^upstream-pr ...$args } | complete)
             print ($opened.stdout)
             if $opened.exit_code != 0 {
-              print $"(ansi red)upstream-sync: ($fork.name): upstream-pr failed for ($pf):(ansi reset)"
+              print $"(ansi red)upstream-sync: ($fork.name): upstream-pr failed for ($label):(ansi reset)"
               print ($opened.stderr)
-              $doc = (log append $doc $"($pf): upstream-pr --open FAILED; see output above")
-              $plan = ($plan | append {fork: $fork.name, patch: $pf, intent: "attempt", action: "open-failed", detail: "upstream-pr error"})
+              $doc = (log append $doc $"($label): upstream-pr --open FAILED; see output above")
+              $plan = ($plan | append {fork: $fork.name, patch: $label, intent: "attempt", action: "open-failed", detail: "upstream-pr error"})
               continue
             }
             # Parse the created PR URL from upstream-pr's output (gh prints it on
@@ -426,12 +517,17 @@
             if $pr_url != null {
               let pr_num = ($pr_url | parse --regex '/pull/(?<n>[0-9]+)' | get n.0? | default "0" | into int)
               let fresh = {url: ($pr_url | str trim), number: $pr_num, state: "draft", checkedAt: (date now | format date "%Y-%m-%dT%H:%M:%SZ")}
-              $doc = ($doc | upsert patches ($doc.patches | upsert $pf (($doc.patches | get $pf) | update pr $fresh)))
-              $doc = (log append $doc $"($pf): opened draft PR ($fresh.url)")
+              let recorded = (
+                $unit.patches | reduce --fold $doc.patches {|nm, acc|
+                  $acc | upsert $nm (($acc | get $nm) | update pr $fresh)
+                }
+              )
+              $doc = ($doc | upsert patches $recorded)
+              $doc = (log append $doc $"($label): opened draft PR ($fresh.url)")
             } else {
-              $doc = (log append $doc $"($pf): upstream-pr --open succeeded but PR URL was not parseable from output")
+              $doc = (log append $doc $"($label): upstream-pr --open succeeded but PR URL was not parseable from output")
             }
-            $plan = ($plan | append {fork: $fork.name, patch: $pf, intent: "attempt", action: "opened", detail: ($pr_url | default "unknown")})
+            $plan = ($plan | append {fork: $fork.name, patch: $label, intent: "attempt", action: "opened", detail: ($pr_url | default "unknown")})
           }
 
           status save $fork $doc $dry_run
@@ -516,64 +612,97 @@
     STUB
 
     # Stub upstream-pr: mimic the real output shape (compare URL, then the
-    # `gh pr create` URL line the parser must pick).
+    # `gh pr create` URL line the parser must pick) and journal each invocation
+    # so the test can assert the series unit arrives as ONE call with every
+    # member and --message-from the head.
     cat > stubs/upstream-pr <<STUB
     #!$(command -v bash)
+    echo "\$*" >> "\$UPSTREAM_PR_CALLS"
     echo "upstream-pr: stub invoked with: \$*"
     echo "  https://github.com/fakeorg/fakerepo/compare/main...indexable-inc:fakerepo:branch?expand=1"
     echo "https://github.com/fakeorg/fakerepo/pull/99999"
     STUB
     chmod +x stubs/gh stubs/upstream-pr
 
-    cat > work/repo/patches/0001-fake-fix.patch <<'EOF'
+    # Three patches: 0001 is a single-patch unit; 0002+0003 form a prSeries
+    # ("frob-suite") whose head is 0003, exercising the one-PR-per-series path.
+    for p in "0001-fake-fix:repair the frobnicator widget alignment" \
+             "0002-frob-core:add the frob suite core" \
+             "0003-frob-cli:add the frob suite cli"; do
+      name="''${p%%:*}"; subj="''${p#*:}"
+      cat > "work/repo/patches/$name.patch" <<EOF
     From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
     From: Test <t@t>
     Date: Mon, 1 Jan 2026 00:00:00 +0000
-    Subject: [PATCH] fakefix: repair the frobnicator widget alignment
+    Subject: [PATCH] $subj
 
     ---
     EOF
-    echo '{"comment":"t","base":"deadbeef","nodes":[{"patch":"0001-fake-fix.patch","deps":[]}]}' \
-      > work/repo/patches/dag.json
+    done
+    nu -c '{comment: "t", base: "deadbeef", nodes: [
+      {patch: "0001-fake-fix.patch", deps: []},
+      {patch: "0002-frob-core.patch", deps: []},
+      {patch: "0003-frob-cli.patch", deps: []}
+    ]} | to json | save work/repo/patches/dag.json'
     cat > work/mapping.json <<'EOF'
     [{"name":"fake","input":"fake-src","url":"https://github.com/fakeorg/fakerepo.git",
       "patchDir":"repo/patches","autoUpdate":false,
       "upstreamPolicy":{"prsWelcome":true,"aiPrsAllowed":"unknown","citation":"https://example.com","notes":"t"},
-      "patches":{"0001-fake-fix.patch":{"upstream":"attempt","reason":"lifecycle test"}}}]
+      "patches":{
+        "0001-fake-fix.patch":{"upstream":"attempt","reason":"lifecycle test"},
+        "0002-frob-core.patch":{"upstream":"attempt","reason":"series member","prSeries":"frob-suite"},
+        "0003-frob-cli.patch":{"upstream":"attempt","reason":"series head","prSeries":"frob-suite","prSeriesHead":true}
+      }}]
     EOF
 
     # The shipped script body, from the `# nu` marker on (past the PATH preamble).
     awk '/^# nu$/,0' ${package}/bin/upstream-sync > script.nu
     export PATH="$PWD/stubs:$PATH"
+    export UPSTREAM_PR_CALLS="$PWD/upstream-pr-calls.log"
     cd work
 
-    echo "--- stage 1: --open records the created PR ---"
+    echo "--- stage 1: --open records the created PRs (single + series-as-one) ---"
     nu ../script.nu --open --mapping "$PWD/mapping.json" fake
     nu -c '
-      let p = (open repo/patches/upstream-status.json | get patches."0001-fake-fix.patch")
-      if $p.pr.number != 99999 or $p.pr.state != "draft" or $p.retired {
-        error make {msg: $"stage 1: PR not recorded: ($p | to json)"}
+      let d = (open repo/patches/upstream-status.json)
+      for nm in ["0001-fake-fix.patch" "0002-frob-core.patch" "0003-frob-cli.patch"] {
+        let p = ($d.patches | get $nm)
+        if $p.pr.number != 99999 or $p.pr.state != "draft" or $p.retired {
+          error make {msg: $"stage 1: PR not recorded on ($nm): ($p | to json)"}
+        }
+      }
+      let calls = (open --raw $env.UPSTREAM_PR_CALLS | lines)
+      if ($calls | length) != 2 {
+        error make {msg: $"stage 1: expected 2 upstream-pr calls \(single + series\), got: ($calls | to json)"}
+      }
+      # The series call carries BOTH members and --message-from its head.
+      let series_call = ($calls | where {|c| $c | str contains "0002-frob-core.patch" } | first)
+      if not (($series_call | str contains "0003-frob-cli.patch") and ($series_call | str contains "--message-from 0003-frob-cli.patch")) {
+        error make {msg: $"stage 1: series call malformed: ($series_call)"}
       }'
 
-    echo "--- stage 2: merged upstream -> retired ---"
+    echo "--- stage 2: merged upstream -> every member retired ---"
     echo '{"state":"MERGED","isDraft":false,"url":"https://github.com/fakeorg/fakerepo/pull/99999","number":99999}' > pr-view.json
     export GH_PR_VIEW_RESPONSE="$PWD/pr-view.json"
     nu ../script.nu --mapping "$PWD/mapping.json" fake
     nu -c '
       let d = (open repo/patches/upstream-status.json)
-      let p = ($d.patches."0001-fake-fix.patch")
-      if $p.pr.state != "merged" or (not $p.retired) {
-        error make {msg: $"stage 2: not retired: ($p | to json)"}
+      for nm in ["0001-fake-fix.patch" "0002-frob-core.patch" "0003-frob-cli.patch"] {
+        let p = ($d.patches | get $nm)
+        if $p.pr.state != "merged" or (not $p.retired) {
+          error make {msg: $"stage 2: ($nm) not retired: ($p | to json)"}
+        }
       }
-      if ($d.log | length) != 3 {
-        error make {msg: $"stage 2: expected 3 log transitions, got ($d.log | to json)"}
+      # 2 opened + per-unit (state change + retire) x 2 units = 6 transitions.
+      if ($d.log | length) != 6 {
+        error make {msg: $"stage 2: expected 6 log transitions, got ($d.log | to json)"}
       }'
 
     echo "--- stage 3: re-run is idempotent (no duplicate transitions) ---"
     nu ../script.nu --mapping "$PWD/mapping.json" fake
     nu -c '
       let d = (open repo/patches/upstream-status.json)
-      if ($d.log | length) != 3 {
+      if ($d.log | length) != 6 {
         error make {msg: $"stage 3: log grew on a no-change re-run: ($d.log | to json)"}
       }'
 

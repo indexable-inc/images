@@ -301,6 +301,42 @@ export def "dag closure" [deps_of: record, patch: string] {
   $seen | uniq
 }
 
+# Resolve a user-provided patch reference to exactly one node name: exact match,
+# else unique NNNN-prefix, else unique substring; ambiguity or no match errors
+# loudly. One owner for selector semantics so `upstream-pr` and `upstream-sync`
+# cannot diverge: an ambiguous selector silently acting on MULTIPLE patches
+# would turn a targeted outward act into several.
+export def "patch resolve" [ref: string, names: list<string>] {
+  if $ref in $names { return $ref }
+  let by_prefix = ($names | where {|n| $n | str starts-with $ref })
+  if ($by_prefix | length) == 1 { return ($by_prefix | first) }
+  let by_sub = ($names | where {|n| $n | str contains $ref })
+  if ($by_sub | length) == 1 { return ($by_sub | first) }
+  let candidates = (($by_prefix | append $by_sub) | uniq)
+  if ($candidates | is-empty) {
+    error make { msg: $"no patch matching '($ref)'. Known: (($names) | str join ', ')" }
+  }
+  error make { msg: $"'($ref)' is ambiguous; matches: (($candidates) | str join ', ')" }
+}
+
+# The commit-message subject of a format-patch file, with RFC 2822 folded
+# continuation lines unfolded (a wrapped subject would otherwise lose its tail,
+# e.g. `Subject: ... 'nix\n store builds'` losing "store builds" and starving a
+# title-keyword search). Strips the `[PATCH n/m]` prefix.
+export def "patch subject" [patch_file: string]: nothing -> string {
+  let ls = (open --raw $patch_file | lines)
+  let hit = ($ls | enumerate | where {|e| $e.item | str starts-with "Subject:" })
+  if ($hit | is-empty) { return "" }
+  let idx = ($hit | first | get index)
+  let cont = (
+    $ls | skip ($idx + 1)
+    | take while {|l| ($l | str starts-with " ") or ($l | str starts-with "\t") }
+    | each {|l| $l | str trim }
+  )
+  ([($ls | get $idx)] | append $cont | str join " ")
+  | str replace --regex '^Subject:\s*(\[PATCH[^\]]*\]\s*)?' ""
+}
+
 # The set of repo-relative file paths a patch touches (its hunk footprint), read
 # from the patch's `diff --git a/<path> b/<path>` headers. Used by the commute
 # fast path to skip disjoint pairs.

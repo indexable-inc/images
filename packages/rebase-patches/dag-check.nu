@@ -123,6 +123,36 @@ def main [src_dir: string, patch_dir: string, expected_base: string, intent_json
     }
   }
 
+  # (d-series) prSeries groups must be coherent: members share one upstream mark
+  # (a series is contributed as ONE PR, so a mixed mark is unactionable) and
+  # exactly one member is prSeriesHead (its commit message titles the series PR).
+  # A prSeriesHead without a prSeries is dead intent and fails too.
+  let series_rows = (
+    $intent | items {|k, v| {
+      name: $k
+      mark: ($v.upstream? | default "hold")
+      head: ($v.prSeriesHead? | default false)
+      series: $v.prSeries?
+    } }
+  )
+  for s in ($series_rows | where {|r| $r.series != null } | get series | uniq) {
+    let members = ($series_rows | where series == $s)
+    let marks = ($members | get mark | uniq)
+    if ($marks | length) > 1 {
+      print $"patch-dag check: series ($s) has mixed upstream marks [($marks | str join ', ')]; a series is one PR and must carry one mark."
+      $failed = true
+    }
+    let heads = ($members | where head)
+    if ($heads | length) != 1 {
+      print $"patch-dag check: series ($s) must declare exactly one prSeriesHead \(found (($heads | length))\); the head's commit message titles the series PR."
+      $failed = true
+    }
+  }
+  for e in ($series_rows | where {|r| $r.head and ($r.series == null) }) {
+    print $"patch-dag check: (($e.name)) sets prSeriesHead without a prSeries; remove it or declare the series."
+    $failed = true
+  }
+
   # Best-effort cleanup. git marks pack/object files read-only, so a plain `rm`
   # can hit permission-denied; the OS/Nix reaps the tempdir regardless, so we do
   # not let cleanup failure mask the check result.
