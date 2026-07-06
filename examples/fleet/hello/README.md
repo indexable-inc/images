@@ -1,13 +1,13 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="three worker replicas resolving one web node by name inside the fleet-hello east-west group"></p>
+
 # Fleet hello
 
-The smallest multi-node fleet: one `web` node and three `worker` replicas,
-the ix analog of a Kubernetes Service plus a 3-replica Deployment.
-
-`web` serves a static page over HTTP and exposes it to the fleet's east-west
-group. Each worker resolves the listener by name with
-`ix.endpointOf nodes.web "http"` and proves reachability through its health
-check, so the generated up wrapper only reports healthy once every worker can
-reach the web node.
+What does a Kubernetes Service plus a three-replica Deployment look like as
+one Nix file? This is the smallest multi-node fleet: one `web` node serving a
+static page and three `worker` replicas that resolve it by name with
+`ix.endpointOf nodes.web "http"` and curl it as their health check. The
+generated up wrapper reports healthy only once every worker can reach the web
+node.
 
 ## Run
 
@@ -15,6 +15,8 @@ reach the web node.
 # From the index repo root.
 nix run .#fleet-hello-up
 ```
+
+Need the repo first? `git clone https://github.com/indexable-inc/index`.
 
 ## Shape
 
