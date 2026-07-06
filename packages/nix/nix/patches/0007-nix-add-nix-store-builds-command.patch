@@ -1,0 +1,250 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew@ix.dev>
+Date: Sun, 5 Jul 2026 20:12:45 -0700
+Subject: [PATCH 5/7] nix: add 'nix store builds' command
+
+Adds `nix store builds`, which reports the builds and substitutions currently
+in progress by reading the status directory directly, *without* connecting to
+a Nix daemon. It derives the directory from `settings.nixStateDir`, so it
+honors `NIX_STATE_DIR` exactly like the writer.
+
+For each `*.json` file it parses the entry and checks that the recorded worker
+pid is still alive (via `kill(pid, 0)`); stale files left by a crashed worker
+are skipped and removed. Output is a human-readable summary, or a JSON array
+with `--json`.
+
+Gated behind the `build-status-dir` experimental feature.
+
+diff --git a/src/nix/meson.build b/src/nix/meson.build
+index 039b202..69fdb6c 100644
+--- a/src/nix/meson.build
++++ b/src/nix/meson.build
+@@ -99,6 +99,7 @@ nix_sources = [ config_priv_h ] + files(
+   'search.cc',
+   'self-exe.cc',
+   'sigs.cc',
++  'store-builds.cc',
+   'store-copy-log.cc',
+   'store-delete.cc',
+   'store-gc.cc',
+diff --git a/src/nix/store-builds.cc b/src/nix/store-builds.cc
+new file mode 100644
+index 0000000..c509e41
+--- /dev/null
++++ b/src/nix/store-builds.cc
+@@ -0,0 +1,132 @@
++#include "nix/cmd/command.hh"
++#include "nix/main/common-args.hh"
++#include "nix/store/globals.hh"
++#include "nix/util/experimental-features.hh"
++#include "nix/util/file-system.hh"
++#include "nix/util/logging.hh"
++
++#include <nlohmann/json.hpp>
++
++#include <csignal>
++
++using namespace nix;
++
++/**
++ * The status directory, i.e. `<store-state-dir>/status`. Kept in sync with
++ * `buildStatusDir()` in libstore, but computed here from `settings.nixStateDir`
++ * so this command never has to link against or open a store: it honors
++ * `NIX_STATE_DIR` just like the writer.
++ */
++static std::filesystem::path statusDir()
++{
++    return settings.nixStateDir / "status";
++}
++
++/**
++ * Is the process @p pid still alive? A status file whose writer has died
++ * (e.g. after a crash) is stale and should be ignored/removed.
++ */
++static bool pidAlive(pid_t pid)
++{
++    if (pid <= 0)
++        return false;
++    if (::kill(pid, 0) == 0)
++        return true;
++    return errno != ESRCH;
++}
++
++struct CmdStoreBuilds : Command, MixJSON
++{
++    std::string description() override
++    {
++        return "show the builds and substitutions currently in progress";
++    }
++
++    std::string doc() override
++    {
++        return
++#include "store-builds.md"
++            ;
++    }
++
++    Category category() override
++    {
++        return catUtility;
++    }
++
++    std::optional<ExperimentalFeature> experimentalFeature() override
++    {
++        return Xp::BuildStatusDir;
++    }
++
++    void run() override
++    {
++        /* The `experimentalFeature()` override advertises the gate (e.g. in
++           `nix __dump-cli`), but the multi-command dispatcher does not enforce
++           a subcommand's feature automatically, so require it here too. */
++        experimentalFeatureSettings.require(Xp::BuildStatusDir);
++
++        auto dir = statusDir();
++
++        std::vector<nlohmann::json> entries;
++
++        if (std::filesystem::exists(dir)) {
++            for (auto & entry : std::filesystem::directory_iterator{dir}) {
++                auto & p = entry.path();
++                if (p.extension() != ".json")
++                    continue;
++
++                nlohmann::json j;
++                try {
++                    j = nlohmann::json::parse(readFile(p.string()));
++                } catch (...) {
++                    /* A half-written or corrupt file; skip it. */
++                    continue;
++                }
++
++                /* Drop entries whose writer is no longer alive. */
++                auto pidIt = j.find("pid");
++                if (pidIt != j.end() && pidIt->is_number()) {
++                    if (!pidAlive(pidIt->get<pid_t>())) {
++                        try {
++                            std::filesystem::remove(p);
++                        } catch (...) {
++                        }
++                        continue;
++                    }
++                }
++
++                entries.push_back(std::move(j));
++            }
++        }
++
++        if (json) {
++            printJSON(nlohmann::json(entries));
++            return;
++        }
++
++        if (entries.empty()) {
++            notice("No builds or substitutions are currently in progress.");
++            return;
++        }
++
++        for (auto & j : entries) {
++            auto type = j.value("type", "?");
++            auto pid = j.value("pid", 0);
++            auto user = j.contains("user") && !j["user"].is_null() ? j["user"].get<std::string>() : "<unknown>";
++            if (type == "substitution")
++                logger->cout("%s  substituting %s  (pid %d, user %s)", type, j.value("storePath", "?"), pid, user);
++            else
++                logger->cout("%s  building %s  (pid %d, user %s)", type, j.value("drvPath", "?"), pid, user);
++            if (j.contains("why") && j["why"].contains("chain")) {
++                auto & chain = j["why"]["chain"];
++                if (chain.is_array() && !chain.empty())
++                    logger->cout("    because %s wants it (%s)",
++                        chain.front().get<std::string>(),
++                        j["why"].value("cause", "?"));
++            }
++        }
++    }
++};
++
++static auto rCmdStoreBuilds = registerCommand2<CmdStoreBuilds>({"store", "builds"});
+diff --git a/src/nix/store-builds.md b/src/nix/store-builds.md
+new file mode 100644
+index 0000000..62eaba0
+--- /dev/null
++++ b/src/nix/store-builds.md
+@@ -0,0 +1,77 @@
++R""(
++
++# Examples
++
++* Show what the local Nix daemon is currently building or substituting:
++
++  ```console
++  # nix store builds
++  build  building /nix/store/…-hello-2.12.drv  (pid 12345, user alice)
++      because /nix/store/…-app.drv wants it (outputsMissing)
++  ```
++
++* Get the same information as JSON, for consumption by another program:
++
++  ```console
++  # nix store builds --json
++  [
++    {
++      "drvPath": "/nix/store/…-hello-2.12.drv",
++      "storePath": null,
++      "outputs": ["out"],
++      "type": "build",
++      "pid": 12345,
++      "startTime": 1720200000,
++      "user": "alice",
++      "uid": 1000,
++      "logFile": "/nix/var/log/nix/drvs/ab/cdef….drv.bz2",
++      "why": {
++        "rootDrvPath": "/nix/store/…-app.drv",
++        "chain": ["/nix/store/…-app.drv", "/nix/store/…-hello-2.12.drv"],
++        "cause": "outputsMissing"
++      }
++    }
++  ]
++  ```
++
++# Description
++
++This command reports the builds and substitutions that are *currently in
++progress*, giving global, daemon-independent observability into what Nix is
++doing and *why*.
++
++Unlike most `nix store` subcommands, `nix store builds` does **not** connect to
++a Nix daemon. Instead it reads the *status directory*
++`<store-state-dir>/status` (e.g. `/nix/var/nix/status`), where each active
++build or substitution goal writes one JSON file while it is doing real work and
++removes it on completion. The directory location is derived from the Nix state
++directory, so it honors the `NIX_STATE_DIR` environment variable.
++
++Because each daemon worker is a separate process, a status file can be left
++behind if its writer crashes. `nix store builds` treats a file whose recorded
++`pid` is no longer alive as stale: it ignores such files and removes them.
++
++Each status file, and each element of the `--json` array, has the following
++fields:
++
++- `drvPath`: the derivation being built, or `null` for a substitution.
++- `storePath`: the store path being substituted, or `null` for a build.
++- `outputs`: the wanted output names (builds only).
++- `type`: `"build"` or `"substitution"`.
++- `pid`: the daemon worker process building/substituting this path.
++- `startTime`: when the work began, in seconds since the Unix epoch.
++- `user` / `uid`: the client that requested the work, if known (otherwise
++  `null`, e.g. for a local store used without a daemon).
++- `logFile`: the on-disk build log path (builds only), if build logs are kept.
++- `why`: the chain of goals leading to this one:
++  - `rootDrvPath`: the top-level goal the client asked for.
++  - `chain`: the goals from the root down to this one, root first.
++  - `cause`: a best-effort reason this goal exists (e.g. `"requested"`,
++    `"outputsMissing"`, `"outputInvalid"`).
++
++This command is only available with the
++[`build-status-dir`](@docroot@/development/experimental-features.md#xp-feature-build-status-dir)
++experimental feature enabled. That same feature gates the writing of status
++files, so both the producer and this consumer must have it enabled.
++
++)""

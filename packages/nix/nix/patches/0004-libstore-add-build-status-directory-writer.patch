@@ -1,0 +1,390 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew@ix.dev>
+Date: Sun, 5 Jul 2026 20:12:16 -0700
+Subject: [PATCH 2/7] libstore: add build status directory writer
+
+Adds a `BuildStatus` RAII writer that records what a goal is doing to a JSON
+file under `<store-state-dir>/status/` (e.g. `/nix/var/nix/status/`). The
+constructor writes the file atomically (write-to-temp + rename); the
+destructor removes it. Since the daemon forks one worker per client, this
+shared filesystem state is how a build becomes globally observable.
+
+Each file records the derivation/store path, wanted outputs, worker pid,
+start time, the requesting client's uid/user (see the following daemon
+commit), the on-disk log file, and a why-chain walked up through the goal's
+`waiters` to the root goal the client requested.
+
+Also factors out `logFileFor()`, mirroring the build log path formula so the
+status file's `logFile` field points at the real log, and a per-process
+`setBuildStatusClientInfo()` for the daemon to record client identity.
+
+Writing is a no-op unless the `build-status-dir` experimental feature is
+enabled.
+
+diff --git a/src/libstore/build/build-status.cc b/src/libstore/build/build-status.cc
+new file mode 100644
+index 0000000..329a9c9
+--- /dev/null
++++ b/src/libstore/build/build-status.cc
+@@ -0,0 +1,230 @@
++#include "nix/store/build/build-status.hh"
++#include "nix/store/build/derivation-building-goal.hh"
++#include "nix/store/build/derivation-goal.hh"
++#include "nix/store/build/derivation-trampoline-goal.hh"
++#include "nix/store/build/substitution-goal.hh"
++#include "nix/store/build/worker.hh"
++#include "nix/store/local-fs-store.hh"
++#include "nix/store/local-store.hh"
++#include "nix/store/globals.hh"
++#include "nix/util/experimental-features.hh"
++#include "nix/util/file-system.hh"
++#include "nix/util/logging.hh"
++
++#include <nlohmann/json.hpp>
++
++#include <filesystem>
++#include <set>
++#include <unistd.h>
++
++namespace nix {
++
++/**
++ * Per-process client identity, set once per daemon connection in the forked
++ * worker. Each worker is its own process, so a process-global is the natural
++ * fit (and mirrors how the daemon already stuffs the client pid into argv[1]).
++ */
++static BuildStatusClientInfo currentClientInfo;
++
++void setBuildStatusClientInfo(BuildStatusClientInfo info)
++{
++    currentClientInfo = std::move(info);
++}
++
++std::filesystem::path buildStatusDir()
++{
++    return settings.nixStateDir / "status";
++}
++
++std::optional<std::filesystem::path> logFileFor(Store & store, const StorePath & drvPath, bool compress)
++{
++    /* Mirror the formula used by `LogFile` in derivation-building-goal.cc so
++       the status file points at the real log. */
++    auto baseName = std::string(baseNameOf(store.printStorePath(drvPath)));
++
++    std::filesystem::path logDir;
++    if (auto * localStore = dynamic_cast<LocalStore *>(&store))
++        logDir = localStore->config->logDir.get();
++    else if (dynamic_cast<LocalFSStore *>(&store))
++        logDir = settings.getLogFileSettings().nixLogDir;
++    else
++        return std::nullopt;
++
++    auto dir = logDir / LocalFSStore::drvsLogDir / baseName.substr(0, 2);
++    return dir / (baseName.substr(2) + (compress ? ".bz2" : ""));
++}
++
++namespace {
++
++/**
++ * The store path a goal is working on, for display in the why-chain.
++ */
++std::optional<StorePath> goalPath(const Goal & goal)
++{
++    if (auto * g = dynamic_cast<const DerivationBuildingGoal *>(&goal))
++        return g->getDrvPath();
++    if (auto * g = dynamic_cast<const DerivationGoal *>(&goal))
++        return g->drvPath;
++    if (auto * g = dynamic_cast<const DerivationTrampolineGoal *>(&goal))
++        return g->drvReq->getBaseStorePath();
++    if (auto * g = dynamic_cast<const PathSubstitutionGoal *>(&goal))
++        return g->storePath;
++    return std::nullopt;
++}
++
++/**
++ * Walk `waiters` transitively from @p goal until we reach a root goal (one
++ * with no waiters, i.e. the top goal the client asked for). The chain is
++ * returned root-first: `chain.front()` is the root, `chain.back()` is @p goal.
++ *
++ * `waiters` are goals waiting *on* this one, so following any waiter ascends
++ * towards a root; a goal that nothing waits on is itself a root.
++ */
++std::vector<StorePath> whyChain(Goal & goal)
++{
++    std::vector<StorePath> chainLeafFirst;
++    std::set<const Goal *> visited;
++
++    Goal * cur = &goal;
++    while (cur && !visited.contains(cur)) {
++        visited.insert(cur);
++
++        /* Consecutive goals often share a path (the same derivation's
++           trampoline, per-output, and building goals all stack up); collapse
++           them so the chain reads as one hop per derivation. */
++        if (auto p = goalPath(*cur))
++            if (chainLeafFirst.empty() || chainLeafFirst.back() != *p)
++                chainLeafFirst.push_back(*p);
++
++        /* Ascend to a waiter (a goal waiting on this one). Any waiter leads to
++           a root, so following one is enough for the why-chain. A goal with no
++           live waiters is a root; stop there. */
++        Goal * next = nullptr;
++        for (auto & weak : cur->waiters)
++            if (auto w = weak.lock()) {
++                next = w.get();
++                break;
++            }
++        cur = next;
++    }
++
++    std::reverse(chainLeafFirst.begin(), chainLeafFirst.end());
++    return chainLeafFirst;
++}
++
++nlohmann::json whyJSON(Goal & goal, Store & store, std::string_view cause)
++{
++    auto chain = whyChain(goal);
++
++    nlohmann::json chainJSON = nlohmann::json::array();
++    for (auto & p : chain)
++        chainJSON.push_back(store.printStorePath(p));
++
++    nlohmann::json why;
++    why["rootDrvPath"] = chain.empty() ? nlohmann::json(nullptr) : nlohmann::json(store.printStorePath(chain.front()));
++    why["chain"] = std::move(chainJSON);
++    why["cause"] = cause;
++    return why;
++}
++
++/**
++ * Is @p goal a root goal the client asked for directly? A root is a goal that
++ * nothing else is waiting on.
++ */
++bool isTopGoal(Goal & goal)
++{
++    for (auto & weak : goal.waiters)
++        if (weak.lock())
++            return false;
++    return true;
++}
++
++} // namespace
++
++std::unique_ptr<BuildStatus> BuildStatus::forBuild(
++    Goal & goal,
++    Store & store,
++    const StorePath & drvPath,
++    std::vector<std::string> outputs,
++    std::optional<std::filesystem::path> logFile)
++{
++    if (!experimentalFeatureSettings.isEnabled(Xp::BuildStatusDir))
++        return nullptr;
++
++    auto self = std::unique_ptr<BuildStatus>(new BuildStatus());
++    try {
++        nlohmann::json j;
++        j["drvPath"] = store.printStorePath(drvPath);
++        j["storePath"] = nullptr;
++        j["outputs"] = outputs;
++        j["type"] = "build";
++        j["pid"] = getpid();
++        j["startTime"] = time(nullptr);
++        j["user"] = currentClientInfo.user ? nlohmann::json(*currentClientInfo.user) : nlohmann::json(nullptr);
++        j["uid"] = currentClientInfo.uid ? nlohmann::json(*currentClientInfo.uid) : nlohmann::json(nullptr);
++        j["logFile"] = logFile ? nlohmann::json(logFile->string()) : nlohmann::json(nullptr);
++        j["why"] = whyJSON(goal, store, isTopGoal(goal) ? "requested" : "outputsMissing");
++
++        self->path = buildStatusDir() / (std::string(drvPath.to_string()) + "-" + std::to_string(getpid()) + ".json");
++        self->write(j.dump());
++    } catch (...) {
++        /* Observability must never break a build. */
++        ignoreExceptionExceptInterrupt();
++        return nullptr;
++    }
++    return self;
++}
++
++std::unique_ptr<BuildStatus> BuildStatus::forSubstitution(Goal & goal, Store & store, const StorePath & storePath)
++{
++    if (!experimentalFeatureSettings.isEnabled(Xp::BuildStatusDir))
++        return nullptr;
++
++    auto self = std::unique_ptr<BuildStatus>(new BuildStatus());
++    try {
++        nlohmann::json j;
++        j["drvPath"] = nullptr;
++        j["storePath"] = store.printStorePath(storePath);
++        j["outputs"] = nlohmann::json::array();
++        j["type"] = "substitution";
++        j["pid"] = getpid();
++        j["startTime"] = time(nullptr);
++        j["user"] = currentClientInfo.user ? nlohmann::json(*currentClientInfo.user) : nlohmann::json(nullptr);
++        j["uid"] = currentClientInfo.uid ? nlohmann::json(*currentClientInfo.uid) : nlohmann::json(nullptr);
++        j["logFile"] = nullptr;
++        j["why"] = whyJSON(goal, store, isTopGoal(goal) ? "requested" : "outputInvalid");
++
++        self->path =
++            buildStatusDir() / (std::string(storePath.to_string()) + "-" + std::to_string(getpid()) + ".json");
++        self->write(j.dump());
++    } catch (...) {
++        ignoreExceptionExceptInterrupt();
++        return nullptr;
++    }
++    return self;
++}
++
++void BuildStatus::write(std::string_view json)
++{
++    createDirs(buildStatusDir());
++    /* Write to a temp file and rename so a reader never sees a half-written
++       file. */
++    auto tmp = path;
++    tmp += ".tmp";
++    writeFile(tmp, json);
++    std::filesystem::rename(tmp, path);
++    active = true;
++}
++
++BuildStatus::~BuildStatus()
++{
++    if (!active)
++        return;
++    try {
++        std::filesystem::remove(path);
++    } catch (...) {
++        ignoreExceptionInDestructor();
++    }
++}
++
++} // namespace nix
+diff --git a/src/libstore/include/nix/store/build/build-status.hh b/src/libstore/include/nix/store/build/build-status.hh
+new file mode 100644
+index 0000000..a1855ed
+--- /dev/null
++++ b/src/libstore/include/nix/store/build/build-status.hh
+@@ -0,0 +1,101 @@
++#pragma once
++///@file
++
++#include "nix/store/path.hh"
++#include "nix/store/build/goal.hh"
++
++#include <optional>
++#include <string>
++#include <vector>
++
++namespace nix {
++
++class Store;
++
++/**
++ * Identity of the client that requested the work a goal is doing.
++ *
++ * The daemon forks one worker process per client connection, so this is
++ * recorded once per connection as a process-global (see @ref
++ * setBuildStatusClientInfo) and read back by every goal running in that
++ * worker.
++ */
++struct BuildStatusClientInfo
++{
++    std::optional<uid_t> uid;
++    std::optional<std::string> user;
++};
++
++/**
++ * Record the identity of the client for the current process. Called once per
++ * connection in the forked daemon worker. Safe to leave unset (e.g. for a
++ * local store with no daemon), in which case the recorded uid/user are null.
++ */
++void setBuildStatusClientInfo(BuildStatusClientInfo info);
++
++/**
++ * The directory into which status files are written, i.e.
++ * `<store-state-dir>/status`. Derived from `settings.nixStateDir`, so it
++ * honors `NIX_STATE_DIR`.
++ */
++std::filesystem::path buildStatusDir();
++
++/**
++ * Compute the path of the build log file for @p drvPath, using the exact same
++ * formula as the build log writer (see `LogFile` in
++ * derivation-building-goal.cc). Returns `std::nullopt` if build logs are not
++ * being kept.
++ */
++std::optional<std::filesystem::path> logFileFor(Store & store, const StorePath & drvPath, bool compress);
++
++/**
++ * RAII writer for a single goal's status file under @ref buildStatusDir.
++ *
++ * The constructor writes one JSON file atomically (write-to-temp + rename)
++ * describing the goal that is now doing real work; the destructor removes it.
++ * Instantiate a `BuildStatus` at the point a goal starts a build or
++ * substitution, and store it as a goal member so RAII removes the file when
++ * the goal finishes or is destroyed.
++ *
++ * Writing is gated behind the `build-status-dir` experimental feature: if the
++ * feature is disabled the writer is a no-op.
++ */
++class BuildStatus
++{
++    std::filesystem::path path;
++    bool active = false;
++
++public:
++    /**
++     * Write the status file for a build goal.
++     *
++     * @param goal The goal doing the work; its `waiters` are walked to
++     * compute the why-chain up to the root goal the client requested.
++     * @param drvPath The derivation being built.
++     * @param outputs The wanted output names.
++     * @param logFile The on-disk build log path, if any.
++     */
++    static std::unique_ptr<BuildStatus> forBuild(
++        Goal & goal,
++        Store & store,
++        const StorePath & drvPath,
++        std::vector<std::string> outputs,
++        std::optional<std::filesystem::path> logFile);
++
++    /**
++     * Write the status file for a substitution goal.
++     */
++    static std::unique_ptr<BuildStatus> forSubstitution(Goal & goal, Store & store, const StorePath & storePath);
++
++    BuildStatus(const BuildStatus &) = delete;
++    BuildStatus & operator=(const BuildStatus &) = delete;
++
++    ~BuildStatus();
++
++private:
++    BuildStatus() = default;
++
++    void write(std::string_view json);
++};
++
++} // namespace nix
+diff --git a/src/libstore/include/nix/store/meson.build b/src/libstore/include/nix/store/meson.build
+index 93be592..f49b322 100644
+--- a/src/libstore/include/nix/store/meson.build
++++ b/src/libstore/include/nix/store/meson.build
+@@ -14,6 +14,7 @@ headers = [ config_pub_h ] + files(
+   'binary-cache-store.hh',
+   'build-result.hh',
+   'build/build-log.hh',
++  'build/build-status.hh',
+   'build/derivation-builder.hh',
+   'build/derivation-building-goal.hh',
+   'build/derivation-building-misc.hh',
+diff --git a/src/libstore/meson.build b/src/libstore/meson.build
+index edc476a..1439fc1 100644
+--- a/src/libstore/meson.build
++++ b/src/libstore/meson.build
+@@ -276,6 +276,7 @@ sources = files(
+   'binary-cache-store.cc',
+   'build-result.cc',
+   'build/build-log.cc',
++  'build/build-status.cc',
+   'build/derivation-builder.cc',
+   'build/derivation-building-goal.cc',
+   'build/derivation-check.cc',

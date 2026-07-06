@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew@ix.dev>
+Date: Sun, 5 Jul 2026 20:12:08 -0700
+Subject: [PATCH 1/7] libutil: add build-status-dir experimental feature
+
+Introduces the `build-status-dir` experimental feature. It gates the
+daemon-independent build status directory: when enabled, build and
+substitution goals write JSON status files under `<store-state-dir>/status/`,
+and the `nix store builds` command reads them.
+
+This commit only adds the feature flag; the producer and consumer are
+wired up in following commits.
+
+diff --git a/src/libutil/experimental-features.cc b/src/libutil/experimental-features.cc
+index 5ce1183..e4f8b30 100644
+--- a/src/libutil/experimental-features.cc
++++ b/src/libutil/experimental-features.cc
+@@ -25,7 +25,7 @@ struct ExperimentalFeatureDetails
+  * feature, we either have no issue at all if few features are not added
+  * at the end of the list, or a proper merge conflict if they are.
+  */
+-constexpr size_t numXpFeatures = 1 + static_cast<size_t>(Xp::BLAKE3Hashes);
++constexpr size_t numXpFeatures = 1 + static_cast<size_t>(Xp::BuildStatusDir);
+ 
+ constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails = {{
+     {
+@@ -279,6 +279,20 @@ constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails
+         )",
+         .trackingUrl = "https://github.com/NixOS/nix/milestone/60",
+     },
++    {
++        .tag = Xp::BuildStatusDir,
++        .name = "build-status-dir",
++        .description = R"(
++            Makes each build and substitution goal write a JSON status file
++            to `<store-state-dir>/status/` (e.g. `/nix/var/nix/status/`) while
++            it is doing real work, and removes it on completion. This gives
++            global, daemon-independent observability into what a Nix daemon is
++            building and why: the [`nix store builds`](@docroot@/command-ref/new-cli/nix3-store-builds.md)
++            command reads that directory directly, without connecting to the
++            daemon.
++        )",
++        .trackingUrl = "https://github.com/NixOS/nix/milestone/60",
++    },
+ }};
+ 
+ static_assert(
+diff --git a/src/libutil/include/nix/util/experimental-features.hh b/src/libutil/include/nix/util/experimental-features.hh
+index 1a97f26..4a245d2 100644
+--- a/src/libutil/include/nix/util/experimental-features.hh
++++ b/src/libutil/include/nix/util/experimental-features.hh
+@@ -38,6 +38,7 @@ enum struct ExperimentalFeature {
+     PipeOperators,
+     ExternalBuilders,
+     BLAKE3Hashes,
++    BuildStatusDir,
+ };
+ 
+ /**

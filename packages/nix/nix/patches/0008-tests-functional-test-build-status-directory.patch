@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew@ix.dev>
+Date: Sun, 5 Jul 2026 20:21:14 -0700
+Subject: [PATCH 6/7] tests/functional: test build status directory
+
+Adds `build-status.sh`: with the `build-status-dir` feature enabled it starts
+a sleeping build, polls `nix store builds --json` until the build's status
+file appears, and asserts the entry's type, drvPath, non-empty why-chain and
+live pid. After killing the build it asserts the status directory drains back
+to empty. The test uses the direct (non-daemon) store, so it also confirms the
+command honors `NIX_STATE_DIR`.
+
+diff --git a/tests/functional/build-status.nix b/tests/functional/build-status.nix
+new file mode 100644
+index 0000000..bfce0df
+--- /dev/null
++++ b/tests/functional/build-status.nix
+@@ -0,0 +1,11 @@
++with import ./config.nix;
++
++# A derivation whose builder sleeps, so the build stays "running" long enough
++# for `nix store builds` to observe its status file.
++mkDerivation {
++  name = "build-status-sleeper";
++  buildCommand = ''
++    sleep 30
++    echo hi > $out
++  '';
++}
+diff --git a/tests/functional/build-status.sh b/tests/functional/build-status.sh
+new file mode 100644
+index 0000000..2001ab0
+--- /dev/null
++++ b/tests/functional/build-status.sh
+@@ -0,0 +1,75 @@
++#!/usr/bin/env bash
++
++source common.sh
++
++# The build status directory is daemon-independent shared state on the
++# filesystem, so this test exercises the direct (non-daemon) store: it starts a
++# sleeping build and checks that `nix store builds` sees it without connecting
++# to a daemon.
++TODO_NixOS
++
++enableFeatures "build-status-dir"
++
++clearStore
++
++nixExpr=build-status.nix
++
++drvPath=$(nix-instantiate "$nixExpr")
++echo "derivation is $drvPath"
++
++# Start the (sleeping) build in the background.
++nix build --file "$nixExpr" --no-link &
++buildPid=$!
++
++cleanup() {
++    kill "$buildPid" 2> /dev/null || true
++    wait "$buildPid" 2> /dev/null || true
++}
++trap cleanup EXIT
++
++# The status file is written exactly when the build starts doing real work, so
++# poll `nix store builds` until our build shows up (or time out).
++found=
++for _ in $(seq 1 100); do
++    if nix store builds --json | jq -e --arg drv "$drvPath" \
++        'any(.[]; .type == "build" and (.drvPath | endswith("build-status-sleeper.drv")))' > /dev/null; then
++        found=1
++        break
++    fi
++    sleep 0.2
++done
++[[ -n $found ]]
++
++# Grab the entry and assert its shape.
++entry=$(nix store builds --json | jq --arg drv "$drvPath" \
++    'map(select(.drvPath | endswith("build-status-sleeper.drv"))) | .[0]')
++echo "$entry" | jq .
++
++[[ $(echo "$entry" | jq -r '.type') == build ]]
++[[ $(echo "$entry" | jq -r '.storePath') == null ]]
++[[ $(echo "$entry" | jq -r '.drvPath') == *build-status-sleeper.drv ]]
++# The why-chain must be non-empty and end at this derivation.
++[[ $(echo "$entry" | jq '.why.chain | length') -ge 1 ]]
++[[ $(echo "$entry" | jq -r '.why.chain | last') == *build-status-sleeper.drv ]]
++# The pid must be set and refer to a live process.
++pid=$(echo "$entry" | jq -r '.pid')
++[[ -n $pid && $pid != null ]]
++kill -0 "$pid"
++
++# Stop the build; the status directory must drain.
++cleanup
++trap - EXIT
++
++# The worker removes its status file on exit, so the directory should now be
++# empty (`nix store builds` also prunes any stale files as it reads).
++empty=
++for _ in $(seq 1 100); do
++    if [[ $(nix store builds --json | jq 'length') == 0 ]]; then
++        empty=1
++        break
++    fi
++    sleep 0.2
++done
++[[ -n $empty ]]
++
++echo "build-status.sh: OK"
+diff --git a/tests/functional/meson.build b/tests/functional/meson.build
+index bc4d264..08e346e 100644
+--- a/tests/functional/meson.build
++++ b/tests/functional/meson.build
+@@ -152,6 +152,7 @@ suites = [
+       'placeholders.sh',
+       'ssh-relay.sh',
+       'build.sh',
++      'build-status.sh',
+       'build-cores.sh',
+       'build-delete.sh',
+       'output-normalization.sh',

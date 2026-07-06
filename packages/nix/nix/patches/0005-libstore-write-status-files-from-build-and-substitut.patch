@@ -1,0 +1,174 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew@ix.dev>
+Date: Sun, 5 Jul 2026 20:12:30 -0700
+Subject: [PATCH 3/7] libstore: write status files from build and substitution
+ goals
+
+Instantiate a `BuildStatus` at the point each goal starts doing real work:
+both `mcRunningBuilds` sites in DerivationBuildingGoal (build hook / remote,
+and local build) and the `runningSubstitutions` site in PathSubstitutionGoal.
+
+The writer is held as a goal member, so RAII removes the status file when the
+goal completes; the file is also reset explicitly on the goal's done/cleanup
+paths so it is gone before the worker process can be reused.
+
+DerivationBuildingGoal gains a `getDrvPath()` accessor so the why-chain walker
+can identify a build goal's path.
+
+diff --git a/src/libstore/build/derivation-building-goal.cc b/src/libstore/build/derivation-building-goal.cc
+index 60ca549..fea6e05 100644
+--- a/src/libstore/build/derivation-building-goal.cc
++++ b/src/libstore/build/derivation-building-goal.cc
+@@ -9,6 +9,7 @@
+ #include "nix/util/environment-variables.hh"
+ #include "nix/util/config-global.hh"
+ #include "nix/store/build/worker.hh"
++#include "nix/store/build/build-status.hh"
+ #include "nix/util/util.hh"
+ #include "nix/util/compression.hh"
+ #include "nix/store/common-protocol.hh"
+@@ -50,6 +51,18 @@ std::string DerivationBuildingGoal::key()
+     return "dd$" + std::string(drvPath.name()) + "$" + worker.store.printStorePath(drvPath);
+ }
+ 
++/**
++ * The names of the outputs a build goal is producing, for the status file.
++ */
++static std::vector<std::string> wantedOutputNames(const std::map<std::string, InitialOutput> & initialOutputs)
++{
++    std::vector<std::string> names;
++    names.reserve(initialOutputs.size());
++    for (auto & [name, _] : initialOutputs)
++        names.push_back(name);
++    return names;
++}
++
+ std::string showKnownOutputs(const StoreDirConfig & store, const Derivation & drv)
+ {
+     std::string msg;
+@@ -641,6 +654,12 @@ Goal::Co DerivationBuildingGoal::buildWithHook(
+             msg,
+             Logger::Fields{worker.store.printStorePath(drvPath), hook->machineName, 1, 1}));
+     mcRunningBuilds = std::make_unique<MaintainCount<uint64_t>>(worker.runningBuilds);
++    buildStatus = BuildStatus::forBuild(
++        *this,
++        worker.store,
++        drvPath,
++        wantedOutputNames(initialOutputs),
++        logFileFor(worker.store, drvPath, settings.getLogFileSettings().compressLog));
+     worker.updateProgress();
+ 
+     std::string currentHookLine;
+@@ -807,6 +826,12 @@ Goal::Co DerivationBuildingGoal::buildLocally(
+             std::make_unique<Activity>(
+                 *logger, lvlInfo, actBuild, msg, Logger::Fields{worker.store.printStorePath(drvPath), "", 1, 1}));
+         mcRunningBuilds = std::make_unique<MaintainCount<uint64_t>>(worker.runningBuilds);
++        buildStatus = BuildStatus::forBuild(
++            *this,
++            worker.store,
++            drvPath,
++            wantedOutputNames(initialOutputs),
++            logFileFor(worker.store, drvPath, settings.getLogFileSettings().compressLog));
+         worker.updateProgress();
+     };
+ 
+@@ -1322,6 +1347,7 @@ DerivationBuildingGoal::checkPathValidity(std::map<std::string, InitialOutput> &
+ Goal::Done DerivationBuildingGoal::doneSuccess(BuildResult::Success::Status status, SingleDrvOutputs builtOutputs)
+ {
+     mcRunningBuilds.reset();
++    buildStatus.reset();
+ 
+     if (status == BuildResult::Success::Built)
+         worker.doneBuilds++;
+@@ -1338,6 +1364,7 @@ Goal::Done DerivationBuildingGoal::doneSuccess(BuildResult::Success::Status stat
+ Goal::Done DerivationBuildingGoal::doneFailure(BuildError ex)
+ {
+     mcRunningBuilds.reset();
++    buildStatus.reset();
+ 
+     worker.exitStatusFlags.updateFromStatus(ex.status);
+     if (ex.status != BuildResult::Failure::DependencyFailed)
+diff --git a/src/libstore/build/substitution-goal.cc b/src/libstore/build/substitution-goal.cc
+index d58bec8..7d7d194 100644
+--- a/src/libstore/build/substitution-goal.cc
++++ b/src/libstore/build/substitution-goal.cc
+@@ -202,6 +202,7 @@ Goal::Co PathSubstitutionGoal::tryToRun(
+     }
+ 
+     auto maintainRunningSubstitutions = std::make_unique<MaintainCount<uint64_t>>(worker.runningSubstitutions);
++    buildStatus = BuildStatus::forSubstitution(*this, worker.store, storePath);
+     worker.updateProgress();
+ 
+ #ifndef _WIN32
+@@ -309,6 +310,8 @@ Goal::Co PathSubstitutionGoal::tryToRun(
+ void PathSubstitutionGoal::cleanup()
+ {
+     try {
++        buildStatus.reset();
++
+         if (thr.joinable()) {
+             // FIXME: signal worker thread to quit.
+             thr.join();
+diff --git a/src/libstore/include/nix/store/build/derivation-building-goal.hh b/src/libstore/include/nix/store/build/derivation-building-goal.hh
+index 826cf2c..9295066 100644
+--- a/src/libstore/include/nix/store/build/derivation-building-goal.hh
++++ b/src/libstore/include/nix/store/build/derivation-building-goal.hh
+@@ -10,6 +10,7 @@
+ #include "nix/store/pathlocks.hh"
+ #include "nix/store/build/goal.hh"
+ #include "nix/store/build/build-log.hh"
++#include "nix/store/build/build-status.hh"
+ 
+ namespace nix {
+ 
+@@ -44,6 +45,12 @@ struct DerivationBuildingGoal : public Goal
+         const StorePath & drvPath, const Derivation & drv, Worker & worker, BuildMode buildMode, bool storeDerivation);
+     ~DerivationBuildingGoal();
+ 
++    /** The path of the derivation being built. */
++    const StorePath & getDrvPath() const
++    {
++        return drvPath;
++    }
++
+ private:
+ 
+     /** The path of the derivation. */
+@@ -62,6 +69,12 @@ private:
+ 
+     std::unique_ptr<MaintainCount<uint64_t>> mcRunningBuilds;
+ 
++    /**
++     * Daemon-independent status file for this build, present while the build
++     * is actually running (see the `build-status-dir` experimental feature).
++     */
++    std::unique_ptr<BuildStatus> buildStatus;
++
+     std::string key() override;
+ 
+     struct LocalBuildCapability
+diff --git a/src/libstore/include/nix/store/build/substitution-goal.hh b/src/libstore/include/nix/store/build/substitution-goal.hh
+index 7ce28d1..52144c2 100644
+--- a/src/libstore/include/nix/store/build/substitution-goal.hh
++++ b/src/libstore/include/nix/store/build/substitution-goal.hh
+@@ -4,6 +4,7 @@
+ #include "nix/store/build/worker.hh"
+ #include "nix/store/store-api.hh"
+ #include "nix/store/build/goal.hh"
++#include "nix/store/build/build-status.hh"
+ #include "nix/util/muxable-pipe.hh"
+ #include <coroutine>
+ #include <future>
+@@ -36,6 +37,12 @@ struct PathSubstitutionGoal : public Goal
+     std::unique_ptr<MaintainCount<uint64_t>> maintainExpectedSubstitutions, maintainRunningSubstitutions,
+         maintainExpectedNar, maintainExpectedDownload;
+ 
++    /**
++     * Daemon-independent status file for this substitution, present while it
++     * is actually running (see the `build-status-dir` experimental feature).
++     */
++    std::unique_ptr<BuildStatus> buildStatus;
++
+     /**
+      * Content address for recomputing store path
+      */

@@ -10,18 +10,20 @@
 # De-forking replacement for a standalone `indexable-inc/nix` fork checkout:
 # instead of tracking a whole fork branch, the delta lives as an ordered
 # `patches/` series applied on top of the exact upstream rev the daemon runs.
-# The current series carries two patches: the GC-roots client-interrupt
-# daemon crash fix (extracted from the fork's
-# `fix-gc-roots-client-interrupt-crash` branch, complete and clean against
-# 2.34.7), and an eval fix treating inaccessible default lookup-path entries
-# as absent (found while validating this build: the macOS sandbox denies the
-# host's root-channels dir with EPERM, which aborted the C API unit tests and
-# the recursive-nix functional test on any darwin host with root channels;
-# clean CI builders lack the path, which is why caches carry the stock drvs
-# green). The fork's
+# The current series carries the GC-roots client-interrupt daemon crash fix
+# (extracted from the fork's `fix-gc-roots-client-interrupt-crash` branch,
+# complete and clean against 2.34.7), an eval fix treating inaccessible
+# default lookup-path entries as absent (found while validating this build:
+# the macOS sandbox denies the host's root-channels dir with EPERM, which
+# aborted the C API unit tests and the recursive-nix functional test on any
+# darwin host with root channels; clean CI builders lack the path, which is
+# why caches carry the stock drvs green), and the `build-status-dir` global
+# build-observability series (patches 0003..0009): behind an experimental
+# feature of that name, every active build/substitution goal writes a JSON
+# status file under `<nixStateDir>/status/`, readable daemonlessly via the
+# new `nix store builds [--json]` command. The fork's
 # `codex/flake-check-eval-cache` branch (draft PR indexable-inc/nix#1) is
 # deliberately excluded: it is self-declared WIP, untested, and incomplete.
-# A parallel change lands a global build-observability series into this folder.
 let
   # Read `pkgs` from `ix` rather than a `pkgs` callPackage formal: a `src`/`pkgs`
   # formal is fragile against `callPackage` auto-binding, and the rest of the

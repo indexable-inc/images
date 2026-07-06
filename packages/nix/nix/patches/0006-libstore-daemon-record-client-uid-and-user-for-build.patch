@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew@ix.dev>
+Date: Sun, 5 Jul 2026 20:12:38 -0700
+Subject: [PATCH 4/7] libstore/daemon: record client uid and user for build
+ status
+
+Thread the connecting client's uid and user name from the daemon's
+`authPeer`/fork path into the per-process `setBuildStatusClientInfo()`, so
+each build and substitution status file is attributed to the client that
+requested the work. Each daemon worker is its own process, so a process-global
+set once per connection is the natural place for this (mirroring how the
+daemon already stuffs the client pid into argv[1]).
+
+When no daemon is involved (e.g. a local store), the recorded uid/user are
+null.
+
+diff --git a/src/nix/unix/daemon.cc b/src/nix/unix/daemon.cc
+index 5b41d42..a5e1023 100644
+--- a/src/nix/unix/daemon.cc
++++ b/src/nix/unix/daemon.cc
+@@ -17,6 +17,7 @@
+ #include "nix/cmd/legacy.hh"
+ #include "nix/cmd/unix-socket-server.hh"
+ #include "nix/store/daemon.hh"
++#include "nix/store/build/build-status.hh"
+ #include "man-pages.hh"
+ 
+ #include <algorithm>
+@@ -348,6 +349,10 @@ static void daemonLoop(ref<const StoreConfig> storeConfig, std::optional<Trusted
+                             strncpy(savedArgv[1], processName.c_str(), strlen(savedArgv[1]));
+                         }
+ 
++                        // Record the client identity so build/substitution
++                        // goals can attribute their status files to it.
++                        setBuildStatusClientInfo({.uid = peer.uid, .user = userName});
++
+                         // Handle the connection.
+                         auto store = storeConfig->openStore();
+                         store->init();
