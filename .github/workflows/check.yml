@@ -120,6 +120,46 @@ jobs:
             exit "${status}"
           }
 
+      # TEMPORARY (revert before merge): dissect the base OCI image on the
+      # runner when the gate fails, to debug the base-image-nix-db failure.
+      - name: TEMP debug base-image-nix-db
+        if: failure()
+        run: |
+          set -uo pipefail
+          flags=(--option accept-flake-config true --option extra-experimental-features ca-derivations)
+          attr='.#ciChecks.x86_64-linux.base-image-nix-db'
+          drv=$(nix eval --raw "${flags[@]}" "$attr.drvPath") || exit 0
+          echo "check drv: $drv"
+          archive=$(nix derivation show "$drv" | sed -n 's/.*"archive": "\(.*\)",*/\1/p' | head -1)
+          echo "archive: $archive"
+          ls -la "$archive" || exit 0
+          workdir=$(mktemp -d)
+          tar -C "$workdir" -xf "$archive"
+          echo "::group::blob listing (symlinks show their targets)"
+          ls -la "$workdir/blobs/sha256" | head -100
+          echo "::endgroup::"
+          echo "::group::per-blob nix/var/nix entries"
+          for blob in "$workdir"/blobs/sha256/*; do
+            size=$(stat -Lc%s "$blob" 2>&1)
+            printf '== %s (%s bytes)\n' "$(basename "$blob")" "$size"
+            if [ -L "$blob" ]; then
+              printf '   symlink -> %s\n' "$(readlink "$blob")"
+            fi
+            tar -tf "$blob" 2>&1 | grep -i 'nix/var/nix' | head -5
+          done
+          echo "::endgroup::"
+          echo "::group::customisation layer contents"
+          cust=$(for blob in "$workdir"/blobs/sha256/*; do
+            [ -L "$blob" ] && readlink "$blob"
+          done | grep 'customisation-layer' | head -1)
+          echo "customisation layer.tar: $cust"
+          if [ -n "$cust" ]; then
+            ls -la "$(dirname "$cust")"
+            tar -tf "$cust" 2>&1 | grep -i 'nix/var/nix' | head -10
+            tar -tf "$cust" 2>&1 | head -20
+          fi
+          echo "::endgroup::"
+
       # The `check` app writes nix-fast-build per-attr durations to
       # check-results.json in the workspace (see lib/per-system.nix). Upload it
       # so the blast-radius workflow can fetch the most recent successful base
