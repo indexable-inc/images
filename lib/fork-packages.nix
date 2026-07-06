@@ -75,6 +75,16 @@
 #                      prExtra  : OPTIONAL upstream-specific PR-template content
 #                                 (issue refs, checklists) that does not belong in
 #                                 a commit message; appended after the PR body.
+#                      prSeries : OPTIONAL series slug. Patches sharing a slug are
+#                                 ONE unit: one upstream PR carrying every member
+#                                 (the DAG's textual independence deliberately does
+#                                 not split a semantic feature series into
+#                                 per-commit PRs). Members must share one `upstream`
+#                                 mark; the `patch-dag-<name>` check enforces it.
+#                      prSeriesHead : exactly ONE member per series sets this true;
+#                                 its commit message titles/describes the series PR
+#                                 (the user-facing member reads best; the rest are
+#                                 visible as the PR's commits).
 #                    A patch with no entry defaults to `hold` with an "unclassified"
 #                    reason (fail-safe: an unclassified patch is never sent upstream
 #                    automatically). `upstream-sync` treats a repo whose
@@ -378,34 +388,44 @@
         # THERE with our complementary daemon-less, file-based angle (honors
         # NIX_STATE_DIR, works when the daemon is wedged / the store lock is
         # contended -- exactly where `nix ps` hangs) rather than opening a rival
-        # PR. Held pending that conversation.
+        # PR. Held pending that conversation. `prSeries` still declares the
+        # one-unit/one-PR grouping (0007, the user-facing command, titles it)
+        # so the series stays coherent whenever it is submitted.
         "0003-libutil-add-build-status-dir-experimental-feature.patch" = {
           upstream = "hold";
           reason = "Build-status series overlaps edolstra's active #15979 (nix ps); engage there with the daemon-less file-based angle instead of filing a competing series.";
+          prSeries = "build-status-dir";
         };
         "0004-libstore-add-build-status-directory-writer.patch" = {
           upstream = "hold";
           reason = "Build-status series: engage on #15979 rather than open a competing PR.";
+          prSeries = "build-status-dir";
         };
         "0005-libstore-write-status-files-from-build-and-substitut.patch" = {
           upstream = "hold";
           reason = "Build-status series: engage on #15979 rather than open a competing PR.";
+          prSeries = "build-status-dir";
         };
         "0006-libstore-daemon-record-client-uid-and-user-for-build.patch" = {
           upstream = "hold";
           reason = "Build-status series: engage on #15979 rather than open a competing PR.";
+          prSeries = "build-status-dir";
         };
         "0007-nix-add-nix-store-builds-command.patch" = {
           upstream = "hold";
           reason = "Build-status series: engage on #15979 rather than open a competing PR.";
+          prSeries = "build-status-dir";
+          prSeriesHead = true;
         };
         "0008-tests-functional-test-build-status-directory.patch" = {
           upstream = "hold";
           reason = "Build-status series: engage on #15979 rather than open a competing PR.";
+          prSeries = "build-status-dir";
         };
         "0009-doc-release-note-for-build-status-directory-and-nix-.patch" = {
           upstream = "hold";
           reason = "Build-status series: engage on #15979 rather than open a competing PR.";
+          prSeries = "build-status-dir";
         };
         # Structured git history export (RFC 0011). Designed to be
         # upstreamable (deterministic, opt-in, experimental-feature gated,
