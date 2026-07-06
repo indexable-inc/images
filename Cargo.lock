@@ -12185,6 +12185,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "unibind-gen"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "object",
+ "serde_json",
+ "unibind-core",
+]
+
+[[package]]
 name = "unicase"
 version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -95,6 +95,7 @@ members = [
   "packages/tui/tui-py",
   "packages/unibind/backend-py",
   "packages/unibind/core",
+  "packages/unibind/gen",
   "packages/unibind/macros",
   "packages/vm/panes/audio",
   "packages/vm/panes/compositor",
@@ -245,6 +246,7 @@ objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
 objc2-quartz-core = "0.3"
 objc2-web-kit = "0.3"
+object = { version = "0.37", default-features = false, features = ["read"] }
 object_store = { version = "0.14", features = ["aws"] }
 panes-protocol = { path = "packages/vm/panes/protocol" }
 parking_lot = "0.12"
