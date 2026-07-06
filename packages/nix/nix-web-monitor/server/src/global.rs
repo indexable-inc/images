@@ -163,13 +163,19 @@ pub async fn log_file_for(monitor: &Arc<RwLock<MonitorState>>, drv_path: &str) -
 pub async fn read_log_tail(path: PathBuf) -> std::io::Result<String> {
     tokio::task::spawn_blocking(move || {
         let bytes = std::fs::read(&path)?;
-        let (text, prefix_dropped) = if path.extension().is_some_and(|extension| extension == "bz2")
-        {
+        let decoded = if path.extension().is_some_and(|extension| extension == "bz2") {
             decompress_prefix(&bytes)
         } else {
-            (bytes, false)
+            DecodedTail {
+                bytes,
+                prefix_dropped: false,
+            }
         };
-        Ok(tail_lines(&text, LOG_TAIL_BYTES, prefix_dropped))
+        Ok(tail_lines(
+            &decoded.bytes,
+            LOG_TAIL_BYTES,
+            decoded.prefix_dropped,
+        ))
     })
     .await
     // The closure neither panics nor is cancelled; a join error here is a bug.
@@ -191,10 +197,15 @@ pub async fn read_log_tail(path: PathBuf) -> std::io::Result<String> {
 /// default 900 KB block size, meaning a quiet build's log decodes to nothing
 /// until its first 900 KB of output. That granularity is inherent to reading
 /// what nix wrote; the panel shows "no log output yet" until then.
-/// Returns the retained bytes plus whether earlier decoded bytes were dropped
-/// by the rolling cap, so the caller knows the buffer no longer starts at the
-/// log's true beginning (and must cut forward to a line boundary either way).
-fn decompress_prefix(bytes: &[u8]) -> (Vec<u8>, bool) {
+/// What the tolerant decode retained: the newest decoded bytes, plus whether
+/// the rolling cap discarded earlier bytes (so the buffer no longer starts at
+/// the log's true beginning and the caller must cut to a line boundary).
+struct DecodedTail {
+    bytes: Vec<u8>,
+    prefix_dropped: bool,
+}
+
+fn decompress_prefix(bytes: &[u8]) -> DecodedTail {
     let mut decoder = bzip2::read::BzDecoder::new(bytes);
     let mut out = Vec::new();
     let mut dropped = false;
@@ -213,7 +224,10 @@ fn decompress_prefix(bytes: &[u8]) -> (Vec<u8>, bool) {
             Err(_) => break,
         }
     }
-    (out, dropped)
+    DecodedTail {
+        bytes: out,
+        prefix_dropped: dropped,
+    }
 }
 
 /// The last `keep` bytes as text, cut forward to a line boundary so the tail
@@ -318,9 +332,9 @@ mod tests {
     #[test]
     fn bz2_log_round_trips_and_tails() {
         let text = "configuring\nbuilding\ninstalling\n";
-        let (decoded, dropped) = decompress_prefix(&compress_bzip2(text, 9));
-        assert_eq!(decoded, text.as_bytes());
-        assert!(!dropped, "a small log keeps its whole prefix");
+        let decoded = decompress_prefix(&compress_bzip2(text, 9));
+        assert_eq!(decoded.bytes, text.as_bytes());
+        assert!(!decoded.prefix_dropped, "a small log keeps its whole prefix");
         assert_eq!(tail_lines(text.as_bytes(), 1 << 20, false), text);
     }
 
@@ -339,11 +353,11 @@ mod tests {
         let compressed = compress_bzip2(&text, 1);
         let truncated = &compressed[..compressed.len() / 2];
 
-        let (decoded, _) = decompress_prefix(truncated);
-        assert!(!decoded.is_empty(), "completed blocks decode");
-        assert!(decoded.len() < text.len(), "but not the whole log");
+        let decoded = decompress_prefix(truncated);
+        assert!(!decoded.bytes.is_empty(), "completed blocks decode");
+        assert!(decoded.bytes.len() < text.len(), "but not the whole log");
         assert!(
-            String::from_utf8_lossy(&decoded).contains("incompressible entropy 8d1f4a2c"),
+            String::from_utf8_lossy(&decoded.bytes).contains("incompressible entropy 8d1f4a2c"),
             "decoded bytes are real log content"
         );
     }
@@ -355,13 +369,13 @@ mod tests {
     fn truncated_first_block_decodes_to_empty() {
         let compressed = compress_bzip2(&"short log\n".repeat(100), 9);
         let truncated = &compressed[..compressed.len() / 2];
-        assert!(decompress_prefix(truncated).0.is_empty());
+        assert!(decompress_prefix(truncated).bytes.is_empty());
     }
 
     /// Garbage that is not bzip2 at all decodes to nothing rather than failing.
     #[test]
     fn non_bzip2_bytes_decode_to_empty() {
-        assert!(decompress_prefix(b"error: not a log").0.is_empty());
+        assert!(decompress_prefix(b"error: not a log").bytes.is_empty());
     }
 
     /// The tail is bounded and opens on a line boundary, never mid-line.
