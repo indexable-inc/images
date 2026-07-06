@@ -17,7 +17,7 @@ Several processes can now share one `tui` web dashboard instead of each starting
 Run the standalone aggregator once to watch all of them:
 
 ```sh
-nix run .#tui-dashboard
+nix run .#dashboard
 ```
 
 It scans the discovery directory, connects to every producer socket, folds each producer's stream into one Loro document under its own scope, and serves the grid over Server-Sent Events. No producer owns the server and exactly one process binds a TCP port, so agents come and go behind a single stable URL; a producer's terminals leave the grid when it disconnects.

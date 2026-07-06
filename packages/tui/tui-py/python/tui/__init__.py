@@ -21,7 +21,7 @@ its methods cell by cell, and `await t.close()` when done. Evaluating
 color via `Snapshot._repr_html_`.
 
 Every spawned terminal auto-shows in the web dashboard. The first `Tui(...)`
-binds a process-global producer, so running `nix run .#tui-dashboard` (it
+binds a process-global producer, so running `nix run .#dashboard` (it
 watches `socket_dir()`) renders this process's terminals with no explicit
 `tui.publish()`. Opt out by setting `IX_TUI_AUTOPUBLISH=0`.
 
@@ -510,7 +510,7 @@ def _build_predicate(pattern: Pattern) -> Callable[[Snapshot], bool]:
 def _ensure_autopublish() -> None:
     """Bind the process-global dashboard producer once, on first `Tui(...)`.
 
-    Spawned terminals then appear in `nix run .#tui-dashboard` with no explicit
+    Spawned terminals then appear in `nix run .#dashboard` with no explicit
     `tui.publish()`. Idempotency (bind at most once per process) and the
     `IX_TUI_AUTOPUBLISH=0` opt-out both live in the Rust `ensure_published`, so
     this stays a thin call into it rather than re-implementing either guard here.
@@ -543,7 +543,7 @@ class Tui:
     are the only synchronous surface; everything else is a coroutine to await.
 
     The first `Tui(...)` auto-publishes this process to the web dashboard, so
-    `nix run .#tui-dashboard` shows the terminal without an explicit
+    `nix run .#dashboard` shows the terminal without an explicit
     `tui.publish()`. Set `IX_TUI_AUTOPUBLISH=0` to opt out.
 
     `kill()` sends SIGKILL; `interrupt()` sends a cooperative Ctrl+C; `close()`
