@@ -1,4 +1,4 @@
-//! `sqlmerge <base> <ours> <theirs>`: a git merge driver for SQLite files.
+//! `sqlmerge <base> <ours> <theirs>`: a git merge driver for `SQLite` files.
 //!
 //! git invokes this as the `%O %A %B` triple: `%O` is the common ancestor
 //! (base), `%A` is our version (rewritten in place with the merge result), and

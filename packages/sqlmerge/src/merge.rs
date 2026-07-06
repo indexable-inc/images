@@ -1,6 +1,6 @@
 //! The three-way merge engine.
 //!
-//! Strategy: the SQLite session extension can compute a *changeset* describing
+//! Strategy: the `SQLite` session extension can compute a *changeset* describing
 //! how one database differs from another (`sqlite3session_diff`, exposed as
 //! `Session::diff`). We compute the changeset `base -> theirs` and apply it to
 //! `ours`. The result is `ours` with theirs's changes layered on top, which is
@@ -41,15 +41,15 @@ fn render_value(v: ValueRef<'_>) -> String {
         ValueRef::Null => "NULL".to_string(),
         ValueRef::Integer(i) => i.to_string(),
         ValueRef::Real(f) => f.to_string(),
-        ValueRef::Text(bytes) => match std::str::from_utf8(bytes) {
-            Ok(s) => format!("'{s}'"),
-            Err(_) => format!("<{} bytes text>", bytes.len()),
-        },
+        ValueRef::Text(bytes) => std::str::from_utf8(bytes).map_or_else(
+            |_| format!("<{} bytes text>", bytes.len()),
+            |s| format!("'{s}'"),
+        ),
         ValueRef::Blob(bytes) => format!("<blob {} bytes>", bytes.len()),
     }
 }
 
-/// SQLite-value equality for conflict resolution: same type, same payload.
+/// `SQLite`-value equality for conflict resolution: same type, same payload.
 /// `Real` compares bitwise via `to_bits` so NaN-vs-NaN and -0.0 are handled
 /// deterministically; two rows written identically compare equal.
 fn values_equal(a: ValueRef<'_>, b: ValueRef<'_>) -> bool {
@@ -109,7 +109,7 @@ fn is_benign_duplicate_insert(kind: &ConflictType, item: &ChangesetItem) -> bool
 /// columns we read the value: on an UPDATE/DELETE the PK lives in `old`, on an
 /// INSERT it lives in `new`. We try old first, then new, and fall back to a
 /// placeholder so reporting never fails the merge on its own.
-fn extract_primary_key(item: &ChangesetItem, action: &Action, ncols: usize) -> PrimaryKey {
+fn extract_primary_key(item: &ChangesetItem, action: Action, ncols: usize) -> PrimaryKey {
     let mask = item.pk().map(<[u8]>::to_vec).unwrap_or_default();
     let mut parts = Vec::new();
     for col in 0..ncols {
@@ -154,7 +154,7 @@ fn conflict_values(item: &ChangesetItem, ncols: usize) -> ConflictValues {
 /// Build the per-row conflict report for a conflict-handler callback.
 ///
 /// The set of valid [`ChangesetItem`] accessors depends on the conflict type
-/// (SQLite session docs). `FOREIGN_KEY` has no current row or operation; only
+/// (`SQLite` session docs). `FOREIGN_KEY` has no current row or operation; only
 /// `fk_conflicts()` is legal, and calling `op()`/`pk()`/value accessors on it
 /// dereferences a null pointer and crashes. `conflict()` values exist only for
 /// `DATA` and `CONFLICT`.
@@ -170,21 +170,20 @@ fn describe_conflict(kind: &ConflictType, item: &ChangesetItem) -> RowConflict {
         };
     }
 
-    let (table, action, ncols) = match item.op() {
-        Ok(o) => {
-            // A negative column count cannot occur (it is a length from
-            // SQLite); treat an impossible value as zero columns rather than
-            // panicking inside the C callback, where unwinding would abort.
-            let ncols = match usize::try_from(o.number_of_columns()) {
-                Ok(n) => n,
-                Err(_) => 0,
-            };
-            (o.table_name().to_string(), o.code(), ncols)
-        }
-        Err(_) => ("<unknown>".to_string(), Action::UNKNOWN, 0),
-    };
+    // A negative column count cannot occur (it is a length from SQLite); fold
+    // that impossible case into the op-unavailable fallback rather than
+    // panicking inside the C callback, where unwinding would abort.
+    let (table, action, ncols) = item
+        .op()
+        .ok()
+        .and_then(|o| {
+            usize::try_from(o.number_of_columns())
+                .ok()
+                .map(|ncols| (o.table_name().to_string(), o.code(), ncols))
+        })
+        .unwrap_or_else(|| ("<unknown>".to_string(), Action::UNKNOWN, 0));
 
-    let primary_key = extract_primary_key(item, &action, ncols);
+    let primary_key = extract_primary_key(item, action, ncols);
     let values = match kind {
         ConflictType::SQLITE_CHANGESET_DATA | ConflictType::SQLITE_CHANGESET_CONFLICT => {
             conflict_values(item, ncols)
@@ -221,7 +220,7 @@ fn describe_conflict(kind: &ConflictType, item: &ChangesetItem) -> RowConflict {
 /// - [`MergeError::Conflicts`]: row-level conflicts under the abort policy.
 /// - [`MergeError::IntegrityCheckFailed`] / [`MergeError::ForeignKeyCheckFailed`]:
 ///   the post-merge `PRAGMA` sweeps found violations.
-/// - [`MergeError::Sqlite`]: any underlying SQLite failure.
+/// - [`MergeError::Sqlite`]: any underlying `SQLite` failure.
 pub fn merge(
     base_path: &str,
     ours_path: &str,

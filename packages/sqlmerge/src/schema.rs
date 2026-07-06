@@ -11,7 +11,7 @@
 //!   2. The merge base must share that schema too: `sqlite3session_diff`
 //!      requires identical table definitions on both ends of the diff, so a
 //!      base behind a DDL migration (even one both sides applied identically)
-//!      is a typed refusal, not a raw SQLite error.
+//!      is a typed refusal, not a raw `SQLite` error.
 //!   3. The session extension silently skips any table without an explicit
 //!      `PRIMARY KEY`. Merging such a table would drop changes with no error,
 //!      so we refuse loudly instead.
@@ -92,7 +92,7 @@ fn normalize_sql(sql: &str) -> String {
 ///
 /// We read from `sqlite_schema` (aka `sqlite_master`). Rows with NULL `sql`
 /// (auto-created indexes for `PRIMARY KEY` / `UNIQUE`) are excluded: they are
-/// derived from the table definitions we already compare, and SQLite does not
+/// derived from the table definitions we already compare, and `SQLite` does not
 /// store SQL for them.
 fn schema_objects(conn: &Connection) -> Result<BTreeMap<String, String>> {
     let mut stmt = conn.prepare(
@@ -151,10 +151,11 @@ pub fn assert_schema_matches(ours: &Connection, theirs: &Connection) -> Result<(
     }
 }
 
-/// Refuse if the merge base's schema differs from the (already matching)
-/// sides. `sqlite3session_diff` requires the same table definition on both
-/// ends, so without this gate a schema-migrated base surfaces as a raw
-/// `SQLITE_SCHEMA` error mid-diff instead of a typed refusal.
+/// Refuse if the merge base's schema differs from the (matching) sides.
+///
+/// `sqlite3session_diff` requires the same table definition on both ends, so
+/// without this gate a schema-migrated base surfaces as a raw `SQLITE_SCHEMA`
+/// error mid-diff instead of a typed refusal.
 ///
 /// # Errors
 ///

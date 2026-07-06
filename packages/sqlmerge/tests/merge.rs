@@ -1,6 +1,6 @@
 //! Integration tests for the merge engine.
 //!
-//! Each test builds base/ours/theirs SQLite fixtures in a tempdir, runs the
+//! Each test builds base/ours/theirs `SQLite` fixtures in a tempdir, runs the
 //! merge, and asserts either a clean merge (with the expected row state) or a
 //! specific typed refusal.
 
@@ -24,7 +24,7 @@ impl Fixture {
         let base = dir.path().join("base.db");
         let ours = dir.path().join("ours.db");
         let theirs = dir.path().join("theirs.db");
-        Fixture {
+        Self {
             _dir: dir,
             base,
             ours,

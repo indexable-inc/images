@@ -1,6 +1,6 @@
-//! sqlmerge: a git merge driver for SQLite database files.
+//! sqlmerge: a git merge driver for `SQLite` database files.
 //!
-//! Three-way merge via the SQLite session extension. The public surface is
+//! Three-way merge via the `SQLite` session extension. The public surface is
 //! [`merge::merge`] plus the typed [`error::MergeError`]; the `sqlmerge` binary
 //! is a thin argv wrapper over it. See the crate README for git wiring and
 //! semantics.
