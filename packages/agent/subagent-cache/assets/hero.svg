@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 210" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    svg { color: #1f2328; }
+    .muted { fill: #656d76; }
+    .accent { fill: #8250df; }
+    .box { stroke: currentColor; fill: none; }
+    text { fill: currentColor; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { fill: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+            orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <rect class="box" x="16" y="70" width="112" height="50" rx="8"/>
+  <text x="72" y="91" text-anchor="middle" font-size="12" font-weight="600">lookup</text>
+  <text x="72" y="108" text-anchor="middle" font-size="10" class="muted">question</text>
+
+  <line class="edge" x1="128" y1="95" x2="166" y2="95"/>
+
+  <rect class="box" x="168" y="70" width="128" height="50" rx="8"/>
+  <text x="232" y="91" text-anchor="middle" font-size="12" font-weight="600">FTS recall</text>
+  <text x="232" y="108" text-anchor="middle" font-size="10" class="muted">Postgres ts_rank</text>
+
+  <line class="edge" x1="296" y1="95" x2="334" y2="95"/>
+
+  <rect class="box" x="336" y="70" width="128" height="50" rx="8"/>
+  <text x="400" y="91" text-anchor="middle" font-size="12" font-weight="600">Haiku judge</text>
+  <text x="400" y="108" text-anchor="middle" font-size="10" class="muted">answers it?</text>
+
+  <line class="edge" x1="464" y1="95" x2="502" y2="95"/>
+
+  <rect class="box" x="504" y="70" width="128" height="50" rx="8"/>
+  <text x="568" y="91" text-anchor="middle" font-size="12" font-weight="600">freshness</text>
+  <text x="568" y="108" text-anchor="middle" font-size="10" class="muted">file_deps hashes</text>
+
+  <line class="edge" x1="632" y1="95" x2="672" y2="95"/>
+  <text x="690" y="100" text-anchor="middle" font-size="13" class="accent">hit</text>
+
+  <line class="edge" x1="232" y1="120" x2="232" y2="158"/>
+  <line class="edge" x1="400" y1="120" x2="400" y2="158"/>
+  <line class="edge" x1="568" y1="120" x2="568" y2="158"/>
+  <text x="400" y="180" text-anchor="middle" font-size="12">any gate fails → cold run → <tspan class="accent">POST /populate</tspan></text>
+</svg>
