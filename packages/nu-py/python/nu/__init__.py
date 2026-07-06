@@ -256,6 +256,8 @@ async def _run(
     name: str | None = None,
 ) -> object:
     """Evaluate ``code`` on the shared engine; return the plain Python value."""
+    if cwd is None:
+        cwd = os.getcwd()
     if name is not None and _rename_current_job is not None and (
         _ix_current is not None and _ix_current.get() is not None
     ):
