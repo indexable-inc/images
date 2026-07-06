@@ -1,21 +1,31 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="the monorepo feeds two generators: mirror gen plus publish syncs a read-only mirror repo, and mirror fork-branch regenerates a fork repo's ix-patched branch"></p>
+
 # mirror
 
-Opt-in standalone GitHub repos, generated from this monorepo. Two products,
-one source-generation core:
+How does one crate in a monorepo get its own GitHub repo that a stranger can clone and `cargo build`, without the repo drifting from the source? mirror generates opt-in standalone repos from this monorepo and keeps them equal to it in CI. Two products, one source-generation core:
 
 - **Package mirrors**: a package under `packages/` opts in via its
   `package.nix` and gets a self-contained, read-only GitHub repo that a
   visitor can clone and `cargo build` without ever seeing the monorepo. The
   monorepo stays the single source of truth; CI keeps the mirror equal to it.
 - **Fork branches**: a de-forked package (lib/fork-packages.nix) can opt into
-  a real GitHub fork repo whose `ix-patched` branch is defined declaratively —
-  the upstream base pinned in `flake.lock` plus the in-repo `patches/` series
-  applied as commits — so opening an upstream PR is one push away.
+  a real GitHub fork repo whose `ix-patched` branch is defined declaratively
+  (the upstream base pinned in `flake.lock` plus the in-repo `patches/` series
+  applied as commits), so opening an upstream PR is one push away.
 
 Rust packages are what the generator understands today, but the interface
 (the `mirror` manifest attr, `.#lib.mirrorPackages`, the sync workflow) is
 language-neutral by design; another ecosystem adds a generator, not a new
 pipeline.
+
+## Run it
+
+```sh
+nix run github:indexable-inc/index#mirror -- --help
+```
+
+Every subcommand takes `--package packages/<path>` relative to a monorepo
+checkout, so get one first: `git clone https://github.com/indexable-inc/index`.
 
 ## How a mirror is made
 
@@ -32,16 +42,16 @@ tree:
   version with member feature additions merged (cargo's own inheritance
   semantics), internal deps become `path = "crates/<name>"`, `publish =
   false` is pinned, `license = "MIT"` is injected (the root LICENSE rides
-  along), and the `[lints]` table is dropped — the workspace lint set names
-  lints only the org's patched clippy knows. Comments survive; the rewrite is
+  along), and the `[lints]` table is dropped (the workspace lint set names
+  lints only the org's patched clippy knows). Comments survive; the rewrite is
   format-preserving.
 - The `Cargo.lock` is **pruned, never re-resolved**: the subset of the root
   lock reachable from the mirrored crates, so a mirror builds against exactly
   the versions the monorepo builds against. `rust-toolchain.toml` is copied
   for the same reason. One nuance: the monorepo lock records feature-union
   dependency edges (an optional dep activated by *any* workspace member shows
-  up on the shared entry), so the pruned lock is a version-exact **superset**
-  — a mirror's first `cargo build` may drop entries the mirrored crate never
+  up on the shared entry), so the pruned lock is a version-exact **superset**:
+  a mirror's first `cargo build` may drop entries the mirrored crate never
   activates, but it never changes a version and never touches the network for
   resolution.
 - The README leads with a banner naming the mirror a read-only generated
@@ -60,7 +70,7 @@ creates the GitHub repo via `gh repo create` when it does not exist yet.
 `mirror fork-branch --name <fork> [--push]` reads the fork mapping
 (`.#lib.forkPackages`, or `--mapping <json>`), fetches the upstream repo at
 the rev `flake.lock` pins for the fork's input, applies the `patches/` series
-with `git am --3way` onto branch `ix-patched`, and — with `--push` — force
+with `git am --3way` onto branch `ix-patched`, and, with `--push`, force
 pushes that branch to the entry's `forkRepo`. Without `--push` it is a pure
 verification that the series still applies. The branch is regenerated, never
 merged into, so it is always a clean, properly rebased serialization of the
@@ -86,9 +96,9 @@ patch DAG.
    that into a red PR status). (`mirror publish` itself still falls back to
    the crate's `[package] description` when a hand-written manifest entry
    omits one, but registry entries must be explicit.) The package also needs
-   a `README.md` -- it
-   becomes the mirror repo's front page (see CONTRIBUTING.md, READMEs). The
-   entry surfaces in `nix eval --json '.#lib.mirrorPackages'`.
+   a `README.md`: it becomes the mirror repo's front page (see
+   CONTRIBUTING.md, READMEs). The entry surfaces in
+   `nix eval --json '.#lib.mirrorPackages'`.
 
 2. That's it. The mirror-sync workflow (`.github/workflows/mirror-sync.yml`)
    publishes on the next push to `main` touching `packages/**` (plus a daily
