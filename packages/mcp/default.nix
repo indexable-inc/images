@@ -3240,7 +3240,9 @@
             )
             elapsed = loop.time() - started
             assert elapsed < 10, ("budget was not clamped", elapsed)
-            note = " ".join(getattr(c, "text", "") or "" for c in clamped)
+            # python_exec returns a CallToolResult (MCP Apps: the human view
+            # rides its _meta); the model-facing blocks live on .content.
+            note = " ".join(getattr(c, "text", "") or "" for c in clamped.content)
             assert "clamped" in note, note
         finally:
             await kernel.shutdown()

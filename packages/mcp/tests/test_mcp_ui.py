@@ -17,10 +17,9 @@ spec (github.com/modelcontextprotocol/ext-apps, specification/2026-01-26):
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
-
-import pytest
 from mcp import types as mcp_types
 from mcp.server.fastmcp import FastMCP
 
@@ -44,19 +43,18 @@ def test_tool_meta_links_resource_via_meta_ui() -> None:
     assert mcp_ui.VIEWER_URI.startswith("ui://")
 
 
-@pytest.mark.anyio
-async def test_register_viewer_declares_ui_resource() -> None:
+def test_register_viewer_declares_ui_resource() -> None:
     server = FastMCP("test")
     meta = mcp_ui.register_viewer(server)
     assert meta == mcp_ui.tool_meta()
 
-    listed = await server.list_resources()
+    listed = asyncio.run(server.list_resources())
     (resource,) = [r for r in listed if str(r.uri).startswith("ui://")]
     assert str(resource.uri) == mcp_ui.VIEWER_URI
     # Spec "Content Requirements": mimeType MUST be text/html;profile=mcp-app.
     assert resource.mimeType == mcp_ui.UI_MIME
 
-    (contents,) = await server.read_resource(mcp_ui.VIEWER_URI)
+    (contents,) = asyncio.run(server.read_resource(mcp_ui.VIEWER_URI))
     assert contents.mime_type == mcp_ui.UI_MIME
     assert isinstance(contents.content, str)
     document = contents.content
@@ -252,8 +250,7 @@ def test_tools_declare_ui_resource_in_meta() -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.anyio
-async def test_api_job_ui_serves_embedded_view(tmp_path: Path) -> None:
+def test_api_job_ui_serves_embedded_view(tmp_path: Path) -> None:
     from aiohttp.test_utils import TestClient, TestServer
 
     from ix_notebook_mcp import dashboard, store
@@ -273,23 +270,27 @@ async def test_api_job_ui_serves_embedded_view(tmp_path: Path) -> None:
         outputs=[{"output_type": "display_data", "data": {"text/html": "<table></table>"}}],
     )
     cfg = Config(workdir=tmp_path, store_path=db)
-    client = TestClient(TestServer(dashboard.build_app(cfg, conn)))
-    await client.start_server()
-    try:
-        resp = await client.get("/api/jobs/ab12/ui")
-        assert resp.status == 200
-        assert resp.content_type == "text/html"
-        document = await resp.text()
-        assert 'id="ix-embedded-payload">null<' not in document
-        start = document.index('id="ix-embedded-payload">') + len('id="ix-embedded-payload">')
-        payload = json.loads(document[start : document.index("</script>", start)])
-        assert payload["_meta"][mcp_ui.RESULT_META_KEY]["html"] == ["<table></table>"]
-        assert json.loads(payload["content"][0]["text"])["job"] == "ab12"
-        # Unknown job: a loud 404, never a blank page.
-        missing = await client.get("/api/jobs/nope/ui")
-        assert missing.status == 404
-    finally:
-        await client.close()
+
+    async def run() -> None:
+        client = TestClient(TestServer(dashboard.build_app(cfg, conn)))
+        await client.start_server()
+        try:
+            resp = await client.get("/api/jobs/ab12/ui")
+            assert resp.status == 200
+            assert resp.content_type == "text/html"
+            document = await resp.text()
+            assert 'id="ix-embedded-payload">null<' not in document
+            start = document.index('id="ix-embedded-payload">') + len('id="ix-embedded-payload">')
+            payload = json.loads(document[start : document.index("</script>", start)])
+            assert payload["_meta"][mcp_ui.RESULT_META_KEY]["html"] == ["<table></table>"]
+            assert json.loads(payload["content"][0]["text"])["job"] == "ab12"
+            # Unknown job: a loud 404, never a blank page.
+            missing = await client.get("/api/jobs/nope/ui")
+            assert missing.status == 404
+        finally:
+            await client.close()
+
+    asyncio.run(run())
 
 
 # --------------------------------------------------------------------------- #
@@ -297,16 +298,19 @@ async def test_api_job_ui_serves_embedded_view(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.anyio
-async def test_wire_tool_result_meta_and_resource_roundtrip() -> None:
-    from mcp.shared.memory import create_connected_server_and_client_session
-
+def test_wire_tool_result_meta_and_resource_roundtrip() -> None:
     server = FastMCP("wire-test")
     ui_meta = mcp_ui.register_viewer(server)
 
     @server.tool(structured_output=False, meta=ui_meta)
     def show() -> mcp_types.CallToolResult:
         return mcp_ui.ui_result([text('{"status": "done"}')], fragments=["<p>hi</p>"], title="show")
+
+    asyncio.run(_wire_roundtrip(server))
+
+
+async def _wire_roundtrip(server: FastMCP) -> None:
+    from mcp.shared.memory import create_connected_server_and_client_session
 
     async with create_connected_server_and_client_session(server._mcp_server) as session:
         tools = await session.list_tools()
@@ -331,7 +335,3 @@ async def test_wire_tool_result_meta_and_resource_roundtrip() -> None:
         assert result.meta is not None
         assert result.meta[mcp_ui.RESULT_META_KEY] == {"title": "show", "html": ["<p>hi</p>"]}
 
-
-@pytest.fixture
-def anyio_backend() -> str:
-    return "asyncio"

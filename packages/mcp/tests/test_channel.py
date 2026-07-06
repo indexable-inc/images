@@ -441,7 +441,9 @@ def test_pr_watch_tool_returns_header_with_slugged_resource(
         monkeypatch.setattr(tools, "current_kernel", FakeKernel)
 
         out = await tools.pr_watch("https://github.com/o/r/pull/1856", cwd=str(tmp_path))
-        header = json.loads(out[0].text)
+        # pr_watch now returns a CallToolResult (MCP Apps: the human view rides
+        # its _meta); the model-facing blocks live on .content, same as before.
+        header = json.loads(out.content[0].text)
         # The URL is slugged into a resource id safe for the dashboard route.
         assert header["resource"] == "pr-https-github.com-o-r-pull-1856"
         assert header["job"] == "ab12"
