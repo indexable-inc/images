@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 2 Jul 2026 18:31:24 -0700
-Subject: [PATCH 2/3] README.ix: document snapshot fork layout
+Subject: [PATCH] README.ix: document snapshot fork layout
 
 Refs: indexable-inc/index#1686
 

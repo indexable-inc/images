@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Andrew Gazelka <andrew@ix.dev>
 Date: Sun, 5 Jul 2026 20:12:08 -0700
-Subject: [PATCH 1/7] libutil: add build-status-dir experimental feature
+Subject: [PATCH] libutil: add build-status-dir experimental feature
 
 Introduces the `build-status-dir` experimental feature. It gates the
 daemon-independent build status directory: when enabled, build and

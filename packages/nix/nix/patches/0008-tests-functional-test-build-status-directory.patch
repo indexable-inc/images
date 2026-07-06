@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Andrew Gazelka <andrew@ix.dev>
 Date: Sun, 5 Jul 2026 20:21:14 -0700
-Subject: [PATCH 6/7] tests/functional: test build status directory
+Subject: [PATCH] tests/functional: test build status directory
 
 Adds `build-status.sh`: with the `build-status-dir` feature enabled it starts
 a sleeping build, polls `nix store builds --json` until the build's status

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Andrew Gazelka <andrew@ix.dev>
 Date: Sun, 5 Jul 2026 20:12:45 -0700
-Subject: [PATCH 5/7] nix: add 'nix store builds' command
+Subject: [PATCH] nix: add 'nix store builds' command
 
 Adds `nix store builds`, which reports the builds and substitutions currently
 in progress by reading the status directory directly, *without* connecting to

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Andrew Gazelka <andrew@ix.dev>
 Date: Sun, 5 Jul 2026 20:12:16 -0700
-Subject: [PATCH 2/7] libstore: add build status directory writer
+Subject: [PATCH] libstore: add build status directory writer
 
 Adds a `BuildStatus` RAII writer that records what a goal is doing to a JSON
 file under `<store-state-dir>/status/` (e.g. `/nix/var/nix/status/`). The

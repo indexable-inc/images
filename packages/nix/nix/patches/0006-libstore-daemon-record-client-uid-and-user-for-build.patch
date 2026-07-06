@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Andrew Gazelka <andrew@ix.dev>
 Date: Sun, 5 Jul 2026 20:12:38 -0700
-Subject: [PATCH 4/7] libstore/daemon: record client uid and user for build
+Subject: [PATCH] libstore/daemon: record client uid and user for build
  status
 
 Thread the connecting client's uid and user name from the daemon's

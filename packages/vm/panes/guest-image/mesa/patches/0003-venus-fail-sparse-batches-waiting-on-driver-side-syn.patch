@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 2 Jul 2026 20:12:59 -0700
-Subject: [PATCH 3/3] venus: fail sparse batches waiting on driver-side sync fd
+Subject: [PATCH] venus: fail sparse batches waiting on driver-side sync fd
  imports
 
 The previous fallback relied on an assert that compiles out under NDEBUG (nixpkgs release builds), leaving a silent renderer hang on the (currently unreachable) sparse+imported+non-importable combination. Log and return VK_ERROR_DEVICE_LOST explicitly; keep the assert for debug builds. Review follow-up for indexable-inc/index#1763.

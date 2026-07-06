@@ -23,14 +23,47 @@
   name,
   src,
   patchDir,
-}:
-applyPatches {
-  name = "${name}-patched";
-  inherit src;
-  patches = lib.pipe (builtins.readDir patchDir) [
-    (lib.filterAttrs (f: t: t == "regular" && lib.hasSuffix ".patch" f))
-    builtins.attrNames
-    lib.naturalSort
-    (map (f: patchDir + "/${f}"))
-  ];
-}
+}: let
+  # `rebase-patches` exports the series with `git format-patch --zero-commit
+  # --no-signature --no-stat -N`, so a conforming file is byte-stable across
+  # regenerations: no commit-hash, `[PATCH N/M]` count, diffstat, or
+  # git-version churn in the diff. Hand-added patches drift from that shape,
+  # so assert it at eval and fail with the regeneration command.
+  zeroFrom = "From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001";
+  assertCanonical = fileName: path: let
+    lines = lib.splitString "\n" (builtins.readFile path);
+    nonEmpty = lib.filter (l: l != "") lines;
+    # Diffstat can only appear in the header, between the `---` separator
+    # and the first `diff --git`; scoping the scan there keeps diff content
+    # that merely mentions "files changed" from tripping the check.
+    firstDiffLine = lib.lists.findFirstIndex (lib.hasPrefix "diff --git ") (lib.length lines) lines;
+    header = lib.take firstDiffLine lines;
+    fail = why:
+      throw ''
+        ${name}: ${fileName}: ${why}.
+        The series must match its writer, `git format-patch --zero-commit
+        --no-signature --no-stat -N`; regenerate it with `nix run .#rebase-patches`.
+      '';
+  in
+    if builtins.match "[0-9]{4}-.*" fileName == null
+    then fail "filename lacks the NNNN- series prefix"
+    else if lib.head lines != zeroFrom
+    then fail "first line is not the zeroed `From ` header (--zero-commit)"
+    else if !(lib.any (lib.hasPrefix "Subject: [PATCH] ") lines)
+    then fail "missing unnumbered `Subject: [PATCH] ` header (-N; `[PATCH N/M]` renumbers the whole series on insert)"
+    else if lib.any (l: builtins.match " [0-9]+ files? changed.*" l != null) header
+    then fail "diffstat block in the header (--no-stat)"
+    else if lib.length nonEmpty >= 2 && lib.elemAt nonEmpty (lib.length nonEmpty - 2) == "-- "
+    then fail "trailing signature block (--no-signature)"
+    else path;
+in
+  applyPatches {
+    name = "${name}-patched";
+    inherit src;
+    patches = lib.pipe (builtins.readDir patchDir) [
+      (lib.filterAttrs (f: t: t == "regular" && lib.hasSuffix ".patch" f))
+      builtins.attrNames
+      lib.naturalSort
+      (map (f: assertCanonical f (patchDir + "/${f}")))
+    ];
+  }

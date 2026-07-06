@@ -1,4 +1,4 @@
-From 365d8c7d194cbd3eba674c18c19242c9e2dfa45f Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Andrew Gazelka <andrew@ix.dev>
 Date: Sun, 5 Jul 2026 19:54:54 -0700
 Subject: [PATCH] fix(libstore): don't crash the daemon when a GC roots client
@@ -19,8 +19,6 @@ mirroring the auto-GC worker thread in the same file.
 Origin: indexable-inc/nix branch fix-gc-roots-client-interrupt-crash (commit
 4a2e137b3), rebased onto the 2.34.7 base.
 ---
- src/libstore/gc.cc | 13 +++++++++++++
- 1 file changed, 13 insertions(+)
 
 diff --git a/src/libstore/gc.cc b/src/libstore/gc.cc
 index 16b81ab..3e959c8 100644
@@ -46,6 +44,3 @@ index 16b81ab..3e959c8 100644
                          }
                      }
                  });
--- 
-2.54.0
-
