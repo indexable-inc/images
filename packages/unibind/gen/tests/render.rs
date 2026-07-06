@@ -38,8 +38,132 @@ fn field(name: &str, py: Option<&str>, doc_lines: &[&str], ty: ir::Type) -> ir::
     }
 }
 
-fn owned_string() -> ir::Type {
+const fn owned_string() -> ir::Type {
     ir::Type::String { owned: true }
+}
+
+fn function(name: &str, py: Option<&str>, doc_lines: &[&str], args: Vec<ir::Arg>) -> ir::Function {
+    ir::Function {
+        name: name.to_owned(),
+        names: names(py),
+        docs: docs(doc_lines),
+        asyncness: ir::Asyncness::Sync,
+        args,
+        ret: None,
+        throws: None,
+    }
+}
+
+fn sample_functions() -> Vec<ir::Function> {
+    let rows = ir::Function {
+        ret: Some(ir::Type::Vec(Box::new(ir::Type::Named("Row".to_owned())))),
+        throws: Some("SampleError".to_owned()),
+        ..function(
+            "rows",
+            None,
+            &["Fetch rows.", "", "Docs become docstrings."],
+            vec![
+                arg("store", ir::Type::String { owned: false }, None),
+                arg("limit", ir::Type::Int(ir::IntKind::Usize), Some(ir::Literal::Int(10))),
+            ],
+        )
+    };
+    let write = function(
+        "write",
+        Some("write_file"),
+        &["Write `data` to `path`."],
+        vec![
+            arg("path", ir::Type::Path { owned: false }, None),
+            arg("data", ir::Type::Bytes { owned: false }, None),
+            arg("overwrite", ir::Type::Bool, Some(ir::Literal::Bool(false))),
+        ],
+    );
+    let find = ir::Function {
+        ret: Some(ir::Type::Map {
+            key: Box::new(owned_string()),
+            value: Box::new(ir::Type::Named("Row".to_owned())),
+        }),
+        throws: Some("SampleError".to_owned()),
+        ..function(
+            "find",
+            None,
+            &[],
+            vec![
+                arg("pattern", owned_string(), None),
+                arg("root", ir::Type::Option(Box::new(ir::Type::Path { owned: false })), None),
+            ],
+        )
+    };
+    let greet = ir::Function {
+        ret: Some(owned_string()),
+        ..function(
+            "greet",
+            None,
+            &[],
+            vec![
+                arg("name", owned_string(), Some(ir::Literal::Str("hello \"world\"\n".to_owned()))),
+                arg("ratio", ir::Type::Float(ir::FloatKind::F64), Some(ir::Literal::Float(1.0))),
+                arg("note", ir::Type::Option(Box::new(owned_string())), Some(ir::Literal::None)),
+            ],
+        )
+    };
+    vec![rows, write, find, greet]
+}
+
+fn sample_records() -> Vec<ir::Record> {
+    vec![
+        ir::Record {
+            name: "Row".to_owned(),
+            names: names(None),
+            docs: docs(&["One result row."]),
+            fields: vec![
+                field("id", None, &["Identifier."], ir::Type::Int(ir::IntKind::U64)),
+                field("name", Some("label"), &[], owned_string()),
+                field("tags", None, &[], ir::Type::Vec(Box::new(owned_string()))),
+                field(
+                    "scores",
+                    None,
+                    &[],
+                    ir::Type::Map {
+                        key: Box::new(owned_string()),
+                        value: Box::new(ir::Type::Float(ir::FloatKind::F64)),
+                    },
+                ),
+            ],
+        },
+        ir::Record {
+            name: "Source".to_owned(),
+            names: names(None),
+            docs: docs(&[]),
+            fields: vec![field(
+                "path",
+                None,
+                &["Where the row came from."],
+                ir::Type::Path { owned: true },
+            )],
+        },
+    ]
+}
+
+fn sample_errors() -> Vec<ir::ErrorType> {
+    vec![ir::ErrorType {
+        name: "SampleError".to_owned(),
+        names: names(None),
+        docs: docs(&["Everything the sample boundary raises."]),
+        py_base: Some("ValueError".to_owned()),
+        variants: vec![
+            ir::ErrorVariant {
+                name: "Parse".to_owned(),
+                names: names(Some("ParseError")),
+                docs: docs(&["The input did not parse."]),
+            },
+            ir::ErrorVariant {
+                name: "Io".to_owned(),
+                names: names(None),
+                docs: docs(&[]),
+            },
+        ],
+    }]
 }
 
 fn interface() -> ir::Interface {
@@ -52,124 +176,10 @@ fn interface() -> ir::Interface {
             "",
             "Everything the phase 1 generator renders appears here once.",
         ]),
-        functions: vec![
-            ir::Function {
-                name: "rows".to_owned(),
-                names: names(None),
-                docs: docs(&["Fetch rows.", "", "Docs become docstrings."]),
-                asyncness: ir::Asyncness::Sync,
-                args: vec![
-                    arg("store", ir::Type::String { owned: false }, None),
-                    arg("limit", ir::Type::Int(ir::IntKind::Usize), Some(ir::Literal::Int(10))),
-                ],
-                ret: Some(ir::Type::Vec(Box::new(ir::Type::Named("Row".to_owned())))),
-                throws: Some("SampleError".to_owned()),
-            },
-            ir::Function {
-                name: "write".to_owned(),
-                names: names(Some("write_file")),
-                docs: docs(&["Write `data` to `path`."]),
-                asyncness: ir::Asyncness::Sync,
-                args: vec![
-                    arg("path", ir::Type::Path { owned: false }, None),
-                    arg("data", ir::Type::Bytes { owned: false }, None),
-                    arg("overwrite", ir::Type::Bool, Some(ir::Literal::Bool(false))),
-                ],
-                ret: None,
-                throws: None,
-            },
-            ir::Function {
-                name: "find".to_owned(),
-                names: names(None),
-                docs: docs(&[]),
-                asyncness: ir::Asyncness::Sync,
-                args: vec![
-                    arg("pattern", owned_string(), None),
-                    arg(
-                        "root",
-                        ir::Type::Option(Box::new(ir::Type::Path { owned: false })),
-                        None,
-                    ),
-                ],
-                ret: Some(ir::Type::Map {
-                    key: Box::new(owned_string()),
-                    value: Box::new(ir::Type::Named("Row".to_owned())),
-                }),
-                throws: Some("SampleError".to_owned()),
-            },
-            ir::Function {
-                name: "greet".to_owned(),
-                names: names(None),
-                docs: docs(&[]),
-                asyncness: ir::Asyncness::Sync,
-                args: vec![
-                    arg(
-                        "name",
-                        owned_string(),
-                        Some(ir::Literal::Str("hello \"world\"\n".to_owned())),
-                    ),
-                    arg("ratio", ir::Type::Float(ir::FloatKind::F64), Some(ir::Literal::Float(1.0))),
-                    arg(
-                        "note",
-                        ir::Type::Option(Box::new(owned_string())),
-                        Some(ir::Literal::None),
-                    ),
-                ],
-                ret: Some(owned_string()),
-                throws: None,
-            },
-        ],
-        records: vec![
-            ir::Record {
-                name: "Row".to_owned(),
-                names: names(None),
-                docs: docs(&["One result row."]),
-                fields: vec![
-                    field("id", None, &["Identifier."], ir::Type::Int(ir::IntKind::U64)),
-                    field("name", Some("label"), &[], owned_string()),
-                    field("tags", None, &[], ir::Type::Vec(Box::new(owned_string()))),
-                    field(
-                        "scores",
-                        None,
-                        &[],
-                        ir::Type::Map {
-                            key: Box::new(owned_string()),
-                            value: Box::new(ir::Type::Float(ir::FloatKind::F64)),
-                        },
-                    ),
-                ],
-            },
-            ir::Record {
-                name: "Source".to_owned(),
-                names: names(None),
-                docs: docs(&[]),
-                fields: vec![field(
-                    "path",
-                    None,
-                    &["Where the row came from."],
-                    ir::Type::Path { owned: true },
-                )],
-            },
-        ],
+        functions: sample_functions(),
+        records: sample_records(),
         enums: vec![],
-        errors: vec![ir::ErrorType {
-            name: "SampleError".to_owned(),
-            names: names(None),
-            docs: docs(&["Everything the sample boundary raises."]),
-            py_base: Some("ValueError".to_owned()),
-            variants: vec![
-                ir::ErrorVariant {
-                    name: "Parse".to_owned(),
-                    names: names(Some("ParseError")),
-                    docs: docs(&["The input did not parse."]),
-                },
-                ir::ErrorVariant {
-                    name: "Io".to_owned(),
-                    names: names(None),
-                    docs: docs(&[]),
-                },
-            ],
-        }],
+        errors: sample_errors(),
         objects: vec![],
     }
 }

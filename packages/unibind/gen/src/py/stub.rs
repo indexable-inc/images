@@ -128,13 +128,11 @@ fn record_class(interface: &ir::Interface, record: &ir::Record) -> String {
         }
     }
 
-    let mut out = format!("class {name}:");
-    if record.docs.is_empty() {
-        out.push('\n');
-    } else {
-        out = format!("{out}\n{}\n", docstring(&record.docs, 1));
+    let mut out = format!("class {name}:\n");
+    if !record.docs.is_empty() {
+        out.push_str(&docstring(&record.docs, 1));
+        out.push_str("\n\n");
     }
-    out.push('\n');
     out.push_str(&members.join("\n\n"));
     out
 }
