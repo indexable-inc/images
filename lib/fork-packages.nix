@@ -49,5 +49,20 @@
       patchDir = "packages/llm-clippy/patches";
       autoUpdate = false;
     }
+    {
+      # mesa is panes-GPU-coupled: its input is pinned by rev (upstream tag
+      # mesa-26.1.2) and must move only under a deliberate bump, never a blanket
+      # `nix flake update` or the scheduled fork-sync. The venus driver-side
+      # sync-fd patch (index#1742) is validated by BOOTING the panes guest on a
+      # linux GPU host and exercising the WSI acquire path, not by CI, so a base
+      # bump is a rebase-plus-boot event, not a routine cron. `url` is the
+      # gitlab git remote so `rebase-patches`' scratch-clone fetch works; the
+      # build consumes `ix.mesaSrc` (the shallow git input) through patchedSrc.
+      name = "mesa";
+      input = "mesa-src";
+      url = "https://gitlab.freedesktop.org/mesa/mesa.git";
+      patchDir = "packages/vm/panes/guest-image/mesa/patches";
+      autoUpdate = false;
+    }
   ];
 }

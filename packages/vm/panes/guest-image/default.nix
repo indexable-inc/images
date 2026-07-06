@@ -39,9 +39,11 @@
         nixpkgs.overlays = [
           (final: prev: {
             inherit (repoPackages) panes-compositor panes-audio;
-            # ./pins.json also carries the mesa src pin, so hand
-            # lwjgl-natives.nix only the lwjgl-* entries (it asserts one
-            # shared LWJGL version across its pins).
+            # ./pins.json carries only the lwjgl-* jar pins now (mesa is a
+            # de-forked patch series, not a pin; see the `mesa` override below
+            # and index#1894), but keep the prefix filter as a guard so an
+            # unrelated future pin cannot leak into lwjgl-natives.nix, which
+            # asserts one shared LWJGL version across its pins.
             lwjgl-natives-linux-arm64 = final.callPackage ./lwjgl-natives.nix {
               pins = lib.filterAttrs (name: _: lib.hasPrefix "lwjgl" name) (ix.pins.loadPins ./pins.json);
             };
@@ -49,30 +51,35 @@
             # `ix` is not in module scope; apps.nix uses it for the Minecraft
             # launch wrapper instead of the unchecked writeShellScript.
             writeBashApplication = ix.writeBashApplication final;
-            # Venus (virtio-gpu Vulkan) with the mesa fork's driver-side
-            # external-semaphore patch (index#1742): MoltenVK hosts never
-            # support SYNC_FD semaphore import, so stock mesa masks
-            # VK_KHR_synchronization2 (clamping the device to Vulkan 1.2) and
-            # VK_KHR_swapchain. Only `src` is swapped; the fork is upstream
-            # tag mesa-26.1.2 plus the patch commit, so nixpkgs' recipe and
-            # patches still apply. The fork branch is the single source of
-            # truth for the patch (rather than an in-tree .patch file): its
-            # history carries the upstreamable commit and the pinned tree is
-            # what upstream review sees. `hardware.graphics.enable` in
-            # ./nixos.nix consumes `pkgs.mesa`, so this override is what
-            # /run/opengl-driver (and the container ICDs) get.
-            mesa = let
-              pin = ix.pins.loadPin ./pins.json "mesa-src";
-            in
-              prev.mesa.overrideAttrs (old: {
-                # The version assert only catches upstream version bumps; a
-                # nixpkgs change to mesa's own patch set can also stop
-                # applying against the fork tree and force a rebase, and only
-                # the build failure catches that case.
-                src = assert lib.assertMsg (old.version == pin.version)
-                "panes-guest-image: mesa fork pin is ${pin.version} but nixpkgs mesa is ${old.version}; rebase indexable-inc/mesa branch ix/venus-driver-side-semaphore onto the new upstream tag and re-pin";
-                  final.fetchzip {inherit (pin) url hash;};
-              });
+            # Venus (virtio-gpu Vulkan) with the driver-side external-semaphore
+            # delta (index#1742): MoltenVK hosts never support SYNC_FD semaphore
+            # import, so stock mesa masks VK_KHR_synchronization2 (clamping the
+            # device to Vulkan 1.2) and VK_KHR_swapchain. Only `src` is swapped;
+            # the patched tree is upstream tag mesa-26.1.2 plus the venus
+            # commits, so nixpkgs' recipe and patches still apply.
+            #
+            # De-forked (index#1894): the delta is an in-repo patch series
+            # (./mesa/patches) applied to the upstream `mesa-src` input through
+            # `ix.patchedSrc`, replacing the old `indexable-inc/mesa` snapshot
+            # fork tarball. `packages/rebase-patches` regenerates the series on a
+            # base bump; `checks.<system>.patched-src-mesa` gates that it still
+            # applies. `hardware.graphics.enable` in ./nixos.nix consumes
+            # `pkgs.mesa`, so this override is what /run/opengl-driver (and the
+            # container ICDs) get.
+            mesa = prev.mesa.overrideAttrs (old: {
+              # The pinned base is upstream mesa-26.1.2, so the patched tree's
+              # version equals nixpkgs mesa only when both track 26.1.2. A
+              # nixpkgs mesa bump ahead of the pin can also stop the nixpkgs
+              # patch set applying against the pinned tree; the assert catches
+              # the version skew, the build failure catches the patch skew.
+              src = assert lib.assertMsg (old.version == "26.1.2")
+              "panes-guest-image: mesa patch series is pinned at 26.1.2 (mesa-src input) but nixpkgs mesa is ${old.version}; bump the mesa-src tag in flake.nix, run `nix run .#rebase-patches -- mesa`, and boot-validate the panes guest on a linux GPU host";
+                ix.patchedSrc {
+                  name = "mesa";
+                  src = ix.mesaSrc;
+                  patchDir = ./mesa/patches;
+                };
+            });
           })
         ];
         # The builder-chosen root login key (see the sshAuthorizedKey package

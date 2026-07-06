@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 2 Jul 2026 20:12:59 -0700
+Subject: [PATCH 3/3] venus: fail sparse batches waiting on driver-side sync fd
+ imports
+
+The previous fallback relied on an assert that compiles out under NDEBUG (nixpkgs release builds), leaving a silent renderer hang on the (currently unreachable) sparse+imported+non-importable combination. Log and return VK_ERROR_DEVICE_LOST explicitly; keep the assert for debug builds. Review follow-up for indexable-inc/index#1763.
+
+diff --git a/src/virtio/vulkan/vn_queue.c b/src/virtio/vulkan/vn_queue.c
+index 61d4583a5d5..f9c03d58010 100644
+--- a/src/virtio/vulkan/vn_queue.c
++++ b/src/virtio/vulkan/vn_queue.c
+@@ -429,14 +429,28 @@ vn_queue_submission_fix_batch_semaphores(struct vn_queue_submission *submit,
+           * Sparse batches are excluded: they bypass the temp batch storage.
+           * No renderer lacking sync fd import is known to expose sparse
+           * binding (MoltenVK has none), so an imported payload should never
+-          * reach a sparse queue; if one ever does, the pre-existing path
+-          * below keeps the renderer-side payload fix, which fails loudly
+-          * (assert / unserviceable renderer call) rather than hanging.
++          * reach a sparse queue; if one ever does, the explicit check below
++          * returns VK_ERROR_DEVICE_LOST rather than handing the renderer an
++          * import it cannot service.
+           */
+          batch_has_elided_waits = true;
+          continue;
+       }
+ 
++      if (!dev->physical_device->renderer_sync_fd.semaphore_importable) {
++         /* Only reachable for sparse batches (non-sparse imported waits were
++          * elided above).  The renderer-side payload fix below would hand a
++          * vkImportSemaphoreResourceMESA to a renderer that cannot service
++          * it, which hangs in release builds where the assert compiles out;
++          * fail loudly instead.
++          */
++         vn_log(dev->instance,
++                "sparse batch waits on a temporarily imported sync fd "
++                "semaphore, but the renderer cannot import sync fds");
++         assert(!"sparse batch wait on driver-side sync fd import");
++         return VK_ERROR_DEVICE_LOST;
++      }
++
+       if (!vn_semaphore_wait_external(dev, sem))
+          return VK_ERROR_DEVICE_LOST;
+ 

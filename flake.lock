@@ -210,6 +210,24 @@
         "type": "github"
       }
     },
+    "mesa-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1780475834,
+        "narHash": "sha256-IkfRd98uHODgnISpaxnEZi83IPis62cacJEierMiAvU=",
+        "ref": "refs/tags/mesa-26.1.2",
+        "rev": "b3d356db66d92ff99ad5b3274569761290232899",
+        "shallow": true,
+        "type": "git",
+        "url": "https://gitlab.freedesktop.org/mesa/mesa"
+      },
+      "original": {
+        "ref": "refs/tags/mesa-26.1.2",
+        "shallow": true,
+        "type": "git",
+        "url": "https://gitlab.freedesktop.org/mesa/mesa"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1780749050,
@@ -399,6 +417,7 @@
         "hermes-agent": "hermes-agent",
         "home-manager": "home-manager",
         "launchk-src": "launchk-src",
+        "mesa-src": "mesa-src",
         "nixpkgs": "nixpkgs",
         "nu-jupyter-kernel-src": "nu-jupyter-kernel-src",
         "perftest-src": "perftest-src",

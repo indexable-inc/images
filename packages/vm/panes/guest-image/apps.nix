@@ -166,9 +166,10 @@ in {
       VK_DRIVER_FILES = "${pkgs.mesa}/share/vulkan/icd.d/virtio_icd.aarch64.json";
       MESA_VK_DEVICE_SELECT = "1af4:1050!";
       # 26.2's Vulkan backend hard-requires VK_KHR_synchronization2. The
-      # guest mesa (indexable-inc/mesa fork, see ../guest-image/default.nix
-      # and index#1742) now exposes sync2 natively by handling temporary sync
-      # fd semaphore imports driver-side, so Khronos' emulation layer is a
+      # guest mesa (upstream mesa + the in-repo venus patch series, see
+      # ../guest-image/default.nix and index#1742/#1894) now exposes sync2
+      # natively by handling temporary sync fd semaphore imports driver-side,
+      # so Khronos' emulation layer is a
       # passthrough no-op here: with force_enable unset it self-retires when
       # the driver advertises the extension. It stays wired as the fallback
       # if the driver ever masks sync2 again (e.g. a mesa bump without the

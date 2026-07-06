@@ -196,6 +196,27 @@
       url = "github:ghostty-org/ghostty/fd49716ea2084108aa098db390931c007495a1ab";
       flake = false;
     };
+
+    # Upstream mesa (gitlab.freedesktop.org), patched in-repo for the panes GPU
+    # guest (packages/vm/panes/guest-image/mesa/patches): the venus driver-side
+    # external-semaphore delta (index#1742). De-forking replacement for the old
+    # `indexable-inc/mesa` snapshot fork tarball; pinned by the `mesa-26.1.2`
+    # tag, so the patched tree is the upstream tag tree plus the venus commits.
+    #
+    # `shallow=1` is load-bearing (same reason as snix-src): mesa's git history
+    # is huge, and only the source tree at the pinned tag is ever used (through
+    # `ix.mesaSrc` -> patchedSrc), never history or revCount. Without it the
+    # lock records `revCount`, forcing a full-history clone on every cold
+    # `nix flake archive` / direnv load. `flake.lock` still records the rev, so
+    # `rebase-patches` can read the base rev; the URL is a real git remote so
+    # its scratch-clone fetch works. Pinned by rev (autoUpdate = false in
+    # lib/fork-packages.nix): a mesa bump must be rebased AND boot-validated on
+    # a linux GPU host (the venus patch is validated by running the guest, not
+    # by CI), so it moves only under a deliberate manual bump, never the cron.
+    mesa-src = {
+      url = "git+https://gitlab.freedesktop.org/mesa/mesa?ref=refs/tags/mesa-26.1.2&shallow=1";
+      flake = false;
+    };
   };
 
   outputs = {
@@ -215,6 +236,7 @@
     clippy-src,
     codex-src,
     ghostty,
+    mesa-src,
     skills,
     examples,
     tests,
@@ -297,6 +319,7 @@
         clippy-src
         codex-src
         ghostty
+        mesa-src
         ;
     };
     devSystems = [

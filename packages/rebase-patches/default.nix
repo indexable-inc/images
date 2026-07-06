@@ -114,7 +114,7 @@ in
       }
 
       def main [
-        name?: string # one fork package (codex | btop | clippy); all changed if omitted
+        name?: string # one fork package (codex | btop | clippy | mesa); all changed if omitted
       ] {
         let forks = (open $fork_data)
         let selected = if $name != null {

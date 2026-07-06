@@ -16,6 +16,7 @@
   clippy-src,
   codex-src,
   ghostty,
+  mesa-src,
   # Flake source revision, stamped into builds that want to report it (see
   # `sharedHelpers.rev`). Defaulted so a direct `import ./lib` still evaluates.
   rev ? "dev",
@@ -521,6 +522,7 @@
     nuJupyterKernelSrc = nu-jupyter-kernel-src;
     launchkSrc = launchk-src;
     snixSrc = snix-src;
+    mesaSrc = mesa-src;
   };
 
   /**

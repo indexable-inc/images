@@ -1,0 +1,498 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 2 Jul 2026 17:34:18 -0700
+Subject: [PATCH 1/3] venus: handle temporary sync fd semaphore imports
+ driver-side
+
+When the renderer cannot import sync fd semaphores (no SYNC_FD import in
+the renderer-side vkGetPhysicalDeviceExternalSemaphoreProperties, e.g.
+MoltenVK hosts behind virglrenderer), venus used to mask
+VK_KHR_synchronization2 (clamping the device to Vulkan 1.2) and every
+WSI extension, because the temporary sync fd import performed by wsi
+acquire was resolved by fixing the renderer-side semaphore payload with
+vkImportSemaphoreResourceMESA, which the renderer services with the
+renderer-side VK_KHR_external_semaphore_fd.
+
+Handle the temporary payload purely on the driver side instead, as
+suggested by the existing comment in
+vn_physical_device_get_passthrough_extensions: at submission time the
+guest waits on the sync fd and the then-satisfied semaphore wait is
+elided from the renderer submission, reusing the temp batch storage that
+already exists for the feedback machinery.  Waiting the temporary
+payload restores the permanent payload, so the renderer-side semaphore
+state stays consistent with temporary import semantics.  The renderer
+path is kept when sync fd import is available.
+
+With the wsi wait semaphores taken care of either way:
+- expose VK_KHR_synchronization2 (and thus Vulkan 1.3) unconditionally
+- expose the WSI extensions without renderer sync fd import
+- only force-enable the renderer-side VK_KHR_external_semaphore_fd for
+  wsi when the renderer supports sync fd import (it is neither needed
+  nor necessarily available otherwise)
+
+Two supporting fixes for renderers without sync fd support:
+- stop advertising SYNC_FD external binary semaphore handles when the
+  renderer cannot service vn_GetSemaphoreFdKHR
+  (vkWait/ImportSemaphoreResourceMESA); common wsi keys its dma-buf
+  implicit out fence path off this query and must not be led into it
+- wait inside the wsi queue submit when common wsi cannot install the
+  implicit out fence, as previously done for vtest only
+
+Refs: indexable-inc/index#1686
+
+diff --git a/src/virtio/vulkan/vn_device.c b/src/virtio/vulkan/vn_device.c
+index f7a1f1cc6a0..01a850204d7 100644
+--- a/src/virtio/vulkan/vn_device.c
++++ b/src/virtio/vulkan/vn_device.c
+@@ -326,11 +326,16 @@ vn_device_fix_create_info(const struct vn_device *dev,
+       }
+    }
+ 
+-   /* see vn_queue_submission_count_batch_semaphores */
+-   if (!app_exts->KHR_external_semaphore_fd && has_wsi) {
+-      assert(physical_dev->renderer_sync_fd.semaphore_importable);
++   /* Needed by vn_queue_submission_fix_batch_semaphores to fix the
++    * renderer-side wsi acquire semaphore payload at submission time.  When
++    * the renderer lacks semaphore sync fd import (e.g. MoltenVK hosts), the
++    * wait is elided on the driver side instead
++    * (vn_queue_submission_scrub_batch_waits) and the renderer-side extension
++    * is neither needed nor necessarily available.
++    */
++   if (!app_exts->KHR_external_semaphore_fd && has_wsi &&
++       physical_dev->renderer_sync_fd.semaphore_importable)
+       extra_exts[extra_count++] = VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME;
+-   }
+ 
+    /* see vn_cmd_set_external_acquire_unmodified */
+    if (VN_PRESENT_SRC_INTERNAL_LAYOUT != VK_IMAGE_LAYOUT_PRESENT_SRC_KHR &&
+diff --git a/src/virtio/vulkan/vn_physical_device.c b/src/virtio/vulkan/vn_physical_device.c
+index 2d2e22b500e..e524fb155fa 100644
+--- a/src/virtio/vulkan/vn_physical_device.c
++++ b/src/virtio/vulkan/vn_physical_device.c
+@@ -1151,7 +1151,18 @@ vn_physical_device_init_external_semaphore_handles(
+    physical_dev->external_binary_semaphore_handles = 0;
+    physical_dev->external_timeline_semaphore_handles = 0;
+ 
+-   if (physical_dev->instance->renderer->info.has_external_sync) {
++   /* Sync fd export (vn_GetSemaphoreFdKHR) requires renderer-side semaphore
++    * sync fd export and import (vkWaitSemaphoreResourceMESA and
++    * vkImportSemaphoreResourceMESA are serviced with the renderer-side
++    * VK_KHR_external_semaphore_fd).  Do not advertise SYNC_FD handles
++    * without them: common wsi keys its dma-buf implicit out fence path off
++    * vkGetPhysicalDeviceExternalSemaphoreProperties, which must not lead it
++    * into vn_GetSemaphoreFdKHR on renderers that cannot service it (e.g.
++    * MoltenVK hosts).
++    */
++   if (physical_dev->instance->renderer->info.has_external_sync &&
++       physical_dev->renderer_sync_fd.semaphore_exportable &&
++       physical_dev->renderer_sync_fd.semaphore_importable) {
+ #if !DETECT_OS_WINDOWS
+       physical_dev->external_binary_semaphore_handles =
+          VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+@@ -1216,20 +1227,24 @@ vn_physical_device_get_native_extensions(
+ #endif /* VK_USE_PLATFORM_ANDROID_KHR */
+ 
+ #ifdef VN_USE_WSI_PLATFORM
+-   if (physical_dev->renderer_sync_fd.semaphore_importable) {
+-      exts->KHR_incremental_present = true;
++   /* The wsi acquire semaphore and fence waits are handled either by fixing
++    * the renderer-side semaphore payload at submission time (renderer
++    * supports semaphore sync fd import) or purely on the driver side (see
++    * vn_queue_submission_scrub_batch_waits), so swapchain support no longer
++    * requires renderer sync fd import.
++    */
++   exts->KHR_incremental_present = true;
+ #ifndef VK_USE_PLATFORM_WIN32_KHR
+-      exts->KHR_present_id = true;
+-      exts->KHR_present_id2 = true;
+-      exts->KHR_present_wait = true;
+-      exts->KHR_present_wait2 = true;
++   exts->KHR_present_id = true;
++   exts->KHR_present_id2 = true;
++   exts->KHR_present_wait = true;
++   exts->KHR_present_wait2 = true;
+ #endif /* VK_USE_PLATFORM_WIN32_KHR */
+-      exts->KHR_swapchain = true;
+-      exts->KHR_swapchain_maintenance1 = true;
+-      exts->KHR_swapchain_mutable_format = true;
+-      exts->EXT_hdr_metadata = true;
+-      exts->EXT_swapchain_maintenance1 = true;
+-   }
++   exts->KHR_swapchain = true;
++   exts->KHR_swapchain_maintenance1 = true;
++   exts->KHR_swapchain_mutable_format = true;
++   exts->EXT_hdr_metadata = true;
++   exts->EXT_swapchain_maintenance1 = true;
+ 
+    /* VK_EXT_pci_bus_info is required by common wsi to decide whether native
+     * image or prime blit is used. Meanwhile, venus must stay on native image
+@@ -1266,16 +1281,17 @@ vn_physical_device_get_passthrough_extensions(
+ {
+    struct vn_renderer *renderer = physical_dev->instance->renderer;
+ 
+-#if defined(VK_USE_PLATFORM_ANDROID_KHR) || defined(VN_USE_WSI_PLATFORM)
+-   /* WSI support currently requires semaphore sync fd import for
+-    * VK_KHR_synchronization2 for code simplicity. This requirement can be
+-    * dropped by implementing external semaphore purely on the driver side
+-    * (aka no corresponding renderer side object).
++   /* WSI acquire creates temporary sync fd imports on the acquire semaphore
++    * and fence.  When the renderer supports semaphore sync fd import, the
++    * import is resolved by fixing the renderer-side semaphore payload at
++    * submission time.  Otherwise, the temporary payload is handled purely on
++    * the driver side: the guest waits on the sync fd and the semaphore wait
++    * is elided from the renderer submission (see
++    * vn_queue_submission_scrub_batch_waits).  Either way the wsi wait
++    * semaphores are taken care of, so sync2 no longer depends on renderer
++    * sync fd support.
+     */
+-   const bool can_sync2 = physical_dev->renderer_sync_fd.semaphore_importable;
+-#else
+    static const bool can_sync2 = true;
+-#endif
+ 
+    *exts = (struct vk_device_extension_table){
+       /* promoted to VK_VERSION_1_1 */
+diff --git a/src/virtio/vulkan/vn_queue.c b/src/virtio/vulkan/vn_queue.c
+index b22f2469ea4..61d4583a5d5 100644
+--- a/src/virtio/vulkan/vn_queue.c
++++ b/src/virtio/vulkan/vn_queue.c
+@@ -50,6 +50,16 @@ struct vn_queue_submission {
+    uint32_t pnext_count;
+    uint32_t dev_mask_count;
+    bool has_zink_sync_batch;
++   /* wait semaphores with temporary sync fd payloads that the renderer
++    * cannot import: the guest waits on the sync fd and the semaphore wait is
++    * elided from the renderer submission
++    */
++   bool has_elided_waits;
++   /* total (not just elided) wait semaphore count of the batches that have
++    * at least one elided wait: each such batch gets a full copy of its wait
++    * arrays in temp storage for compaction
++    */
++   uint32_t scrub_wait_count;
+    struct vn_sync_payload_external external_payload;
+ 
+    /* Temporary storage allocation for submission
+@@ -66,6 +76,9 @@ struct vn_queue_submission {
+     *    - a single cmd for query feedback (qfb)
+     *    - one cmd for each signal semaphore that has feedback (sfb)
+     *    - if last batch, a single cmd for ffb
++    * scrub
++    *  - for each batch with elided waits: compacted copies of the batch wait
++    *    semaphore arrays (see vn_queue_submission_scrub_batch_waits)
+     */
+    struct {
+       void *storage;
+@@ -82,6 +95,8 @@ struct vn_queue_submission {
+          VkCommandBufferSubmitInfo *cmd_infos;
+       };
+ 
++      void *scrub;
++
+       struct vn_submit_info_pnext_fix *pnexts;
+       uint32_t *dev_masks;
+    } temp;
+@@ -391,6 +406,7 @@ vn_queue_submission_fix_batch_semaphores(struct vn_queue_submission *submit,
+    VkDevice dev_handle = vk_device_to_handle(queue_vk->base.device);
+    struct vn_device *dev = vn_device_from_handle(dev_handle);
+ 
++   bool batch_has_elided_waits = false;
+    const uint32_t wait_count =
+       vn_get_wait_semaphore_count(submit, batch_index);
+    for (uint32_t i = 0; i < wait_count; i++) {
+@@ -401,6 +417,26 @@ vn_queue_submission_fix_batch_semaphores(struct vn_queue_submission *submit,
+       if (payload->type != VN_SYNC_TYPE_IMPORTED_SYNC_FD)
+          continue;
+ 
++      if (!dev->physical_device->renderer_sync_fd.semaphore_importable &&
++          submit->batch_type != VK_STRUCTURE_TYPE_BIND_SPARSE_INFO) {
++         /* The renderer cannot import sync fds (e.g. MoltenVK hosts), so the
++          * temporary payload lives purely on the driver side.  Defer the
++          * guest-side wait to vn_queue_submission_scrub_batch_waits, which
++          * waits on the sync fd and elides this semaphore wait from the
++          * renderer submission after the batches have been copied to temp
++          * storage.
++          *
++          * Sparse batches are excluded: they bypass the temp batch storage.
++          * No renderer lacking sync fd import is known to expose sparse
++          * binding (MoltenVK has none), so an imported payload should never
++          * reach a sparse queue; if one ever does, the pre-existing path
++          * below keeps the renderer-side payload fix, which fails loudly
++          * (assert / unserviceable renderer call) rather than hanging.
++          */
++         batch_has_elided_waits = true;
++         continue;
++      }
++
+       if (!vn_semaphore_wait_external(dev, sem))
+          return VK_ERROR_DEVICE_LOST;
+ 
+@@ -415,6 +451,22 @@ vn_queue_submission_fix_batch_semaphores(struct vn_queue_submission *submit,
+                                              &res_info);
+    }
+ 
++   if (batch_has_elided_waits) {
++      submit->has_elided_waits = true;
++      submit->scrub_wait_count += wait_count;
++
++      /* compacting the wait arrays requires fixed copies of the pnext
++       * structs that carry per-wait-semaphore arrays
++       */
++      if (submit->batch_type == VK_STRUCTURE_TYPE_SUBMIT_INFO) {
++         const VkSubmitInfo *batch = &submit->submit_batches[batch_index];
++         if (vk_find_struct_const(batch->pNext,
++                                  TIMELINE_SEMAPHORE_SUBMIT_INFO) ||
++             vk_find_struct_const(batch->pNext, DEVICE_GROUP_SUBMIT_INFO))
++            submit->pnext_count++;
++      }
++   }
++
+    return VK_SUCCESS;
+ }
+ 
+@@ -536,7 +588,7 @@ vn_queue_submission_alloc_storage(struct vn_queue_submission *submit)
+ {
+    struct vn_queue *queue = vn_queue_from_handle(submit->queue_handle);
+ 
+-   if (!submit->feedback_types)
++   if (!submit->feedback_types && !submit->has_elided_waits)
+       return VK_SUCCESS;
+ 
+    /* for original batches or a new batch to hold feedback fence cmd */
+@@ -545,23 +597,37 @@ vn_queue_submission_alloc_storage(struct vn_queue_submission *submit)
+    /* for fence, timeline semaphore and query feedback cmds */
+    const size_t total_cmd_size =
+       vn_get_cmd_size(submit) * MAX2(submit->cmd_count, 1);
++   /* for compacted copies of the wait semaphore arrays of batches with
++    * elided waits: wait infos for VkSubmitInfo2 batches, or semaphores plus
++    * timeline values, wait stages and device indices for VkSubmitInfo
++    * batches (each a multiple of 8 bytes, keeping the sections aligned)
++    */
++   const size_t total_scrub_size =
++      submit->batch_type == VK_STRUCTURE_TYPE_SUBMIT_INFO_2
++         ? submit->scrub_wait_count * sizeof(VkSemaphoreSubmitInfo)
++         : submit->scrub_wait_count *
++              (sizeof(VkSemaphore) + sizeof(uint64_t) +
++               sizeof(VkPipelineStageFlags) + sizeof(uint32_t));
+    /* for fixing command buffer counts in device group info, if it exists */
+    const size_t total_pnext_size =
+       submit->pnext_count * sizeof(struct vn_submit_info_pnext_fix);
+    const size_t total_dev_mask_size =
+       submit->dev_mask_count * sizeof(uint32_t);
+    submit->temp.storage = vn_cached_storage_get(
+-      &queue->storage, total_batch_size + total_cmd_size + total_pnext_size +
+-                          total_dev_mask_size);
++      &queue->storage, total_batch_size + total_cmd_size + total_scrub_size +
++                          total_pnext_size + total_dev_mask_size);
+    if (!submit->temp.storage)
+       return VK_ERROR_OUT_OF_HOST_MEMORY;
+ 
+    submit->temp.batches = submit->temp.storage;
+    submit->temp.cmds = submit->temp.storage + total_batch_size;
+-   submit->temp.pnexts =
++   submit->temp.scrub =
+       submit->temp.storage + total_batch_size + total_cmd_size;
++   submit->temp.pnexts = submit->temp.storage + total_batch_size +
++                         total_cmd_size + total_scrub_size;
+    submit->temp.dev_masks = submit->temp.storage + total_batch_size +
+-                            total_cmd_size + total_pnext_size;
++                            total_cmd_size + total_scrub_size +
++                            total_pnext_size;
+ 
+    return VK_SUCCESS;
+ }
+@@ -883,13 +949,153 @@ vn_queue_submission_setup_batch(struct vn_queue_submission *submit,
+    return VK_SUCCESS;
+ }
+ 
++/* Elide the waits on semaphores with driver-side-only temporary sync fd
++ * payloads from the renderer submission.
++ *
++ * When the renderer cannot import sync fds, a temporary sync fd import (e.g.
++ * from wsi acquire) has no renderer-side effect: the renderer-side semaphore
++ * has no pending signal operation for the wait to consume.  So the guest
++ * waits on the sync fd here instead, and the then-satisfied semaphore wait
++ * is dropped from the batch's wait array before encoding.  Waiting the
++ * temporary payload also restores the permanent payload, keeping the
++ * renderer-side semaphore state consistent with temporary import semantics.
++ */
++static VkResult
++vn_queue_submission_scrub_batch_waits(struct vn_queue_submission *submit,
++                                      uint32_t batch_index)
++{
++   struct vk_queue *queue_vk = vk_queue_from_handle(submit->queue_handle);
++   struct vn_device *dev = vn_device_from_vk(queue_vk->base.device);
++
++   const uint32_t wait_count =
++      vn_get_wait_semaphore_count(submit, batch_index);
++   bool batch_has_elided_waits = false;
++   for (uint32_t i = 0; i < wait_count; i++) {
++      struct vn_semaphore *sem = vn_semaphore_from_handle(
++         vn_get_wait_semaphore(submit, batch_index, i));
++      if (sem->payload->type == VN_SYNC_TYPE_IMPORTED_SYNC_FD) {
++         batch_has_elided_waits = true;
++         break;
++      }
++   }
++   if (!batch_has_elided_waits)
++      return VK_SUCCESS;
++
++   assert(!dev->physical_device->renderer_sync_fd.semaphore_importable);
++
++   if (submit->batch_type == VK_STRUCTURE_TYPE_SUBMIT_INFO_2) {
++      VkSubmitInfo2 *batch = &submit->temp.submit2_batches[batch_index];
++      VkSemaphoreSubmitInfo *infos = submit->temp.scrub;
++      submit->temp.scrub += wait_count * sizeof(*infos);
++
++      uint32_t count = 0;
++      for (uint32_t i = 0; i < wait_count; i++) {
++         struct vn_semaphore *sem = vn_semaphore_from_handle(
++            batch->pWaitSemaphoreInfos[i].semaphore);
++         if (sem->payload->type == VN_SYNC_TYPE_IMPORTED_SYNC_FD) {
++            if (!vn_semaphore_wait_external(dev, sem))
++               return VK_ERROR_DEVICE_LOST;
++            continue;
++         }
++         infos[count++] = batch->pWaitSemaphoreInfos[i];
++      }
++      batch->pWaitSemaphoreInfos = infos;
++      batch->waitSemaphoreInfoCount = count;
++      return VK_SUCCESS;
++   }
++
++   assert(submit->batch_type == VK_STRUCTURE_TYPE_SUBMIT_INFO);
++   VkSubmitInfo *batch = &submit->temp.submit_batches[batch_index];
++
++   const VkTimelineSemaphoreSubmitInfo *timeline =
++      vk_find_struct_const(batch->pNext, TIMELINE_SEMAPHORE_SUBMIT_INFO);
++   const VkDeviceGroupSubmitInfo *group =
++      vk_find_struct_const(batch->pNext, DEVICE_GROUP_SUBMIT_INFO);
++   const bool has_wait_values = timeline && timeline->waitSemaphoreValueCount;
++   const bool has_wait_dev_indices = group && group->waitSemaphoreCount;
++
++   VkSemaphore *sems = submit->temp.scrub;
++   uint64_t *values = (void *)&sems[wait_count];
++   VkPipelineStageFlags *stages = (void *)&values[wait_count];
++   uint32_t *dev_indices = (void *)&stages[wait_count];
++   submit->temp.scrub +=
++      wait_count * (sizeof(VkSemaphore) + sizeof(uint64_t) +
++                    sizeof(VkPipelineStageFlags) + sizeof(uint32_t));
++
++   uint32_t count = 0;
++   for (uint32_t i = 0; i < wait_count; i++) {
++      struct vn_semaphore *sem =
++         vn_semaphore_from_handle(batch->pWaitSemaphores[i]);
++      if (sem->payload->type == VN_SYNC_TYPE_IMPORTED_SYNC_FD) {
++         if (!vn_semaphore_wait_external(dev, sem))
++            return VK_ERROR_DEVICE_LOST;
++         continue;
++      }
++      sems[count] = batch->pWaitSemaphores[i];
++      stages[count] = batch->pWaitDstStageMask[i];
++      if (has_wait_values)
++         values[count] = timeline->pWaitSemaphoreValues[i];
++      if (has_wait_dev_indices)
++         dev_indices[count] = group->pWaitSemaphoreDeviceIndices[i];
++      count++;
++   }
++   batch->pWaitSemaphores = sems;
++   batch->pWaitDstStageMask = stages;
++   batch->waitSemaphoreCount = count;
++
++   if (!has_wait_values && !has_wait_dev_indices)
++      return VK_SUCCESS;
++
++   /* Rebuild the pnext chain with fixed copies of the structs that carry
++    * per-wait-semaphore arrays.  The chain may already point at fixed copies
++    * installed by vn_fix_device_group_cmd_count, so copy from the current
++    * chain rather than the original batch.
++    */
++   struct vn_submit_info_pnext_fix *pnext_fix = submit->temp.pnexts++;
++   VkBaseOutStructure *dst = (void *)batch;
++   vk_foreach_struct_const(src, batch->pNext) {
++      void *pnext = NULL;
++      switch (src->sType) {
++      case VK_STRUCTURE_TYPE_DEVICE_GROUP_SUBMIT_INFO:
++         memcpy(&pnext_fix->group, src, sizeof(pnext_fix->group));
++         if (has_wait_dev_indices) {
++            pnext_fix->group.waitSemaphoreCount = count;
++            pnext_fix->group.pWaitSemaphoreDeviceIndices = dev_indices;
++         }
++         pnext = &pnext_fix->group;
++         break;
++      case VK_STRUCTURE_TYPE_PROTECTED_SUBMIT_INFO:
++         memcpy(&pnext_fix->protected, src, sizeof(pnext_fix->protected));
++         pnext = &pnext_fix->protected;
++         break;
++      case VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO:
++         memcpy(&pnext_fix->timeline, src, sizeof(pnext_fix->timeline));
++         if (has_wait_values) {
++            pnext_fix->timeline.waitSemaphoreValueCount = count;
++            pnext_fix->timeline.pWaitSemaphoreValues = values;
++         }
++         pnext = &pnext_fix->timeline;
++         break;
++      default:
++         break;
++      }
++
++      if (pnext) {
++         dst->pNext = pnext;
++         dst = pnext;
++      }
++   }
++
++   return VK_SUCCESS;
++}
++
+ static VkResult
+ vn_queue_submission_setup_batches(struct vn_queue_submission *submit)
+ {
+    assert(submit->batch_type == VK_STRUCTURE_TYPE_SUBMIT_INFO_2 ||
+           submit->batch_type == VK_STRUCTURE_TYPE_SUBMIT_INFO);
+ 
+-   if (!submit->feedback_types)
++   if (!submit->feedback_types && !submit->has_elided_waits)
+       return VK_SUCCESS;
+ 
+    /* For a submission that is:
+@@ -922,6 +1128,14 @@ vn_queue_submission_setup_batches(struct vn_queue_submission *submit)
+ 
+    submit->batches = submit->temp.batches;
+ 
++   if (submit->has_elided_waits) {
++      for (uint32_t i = 0; i < submit->batch_count; i++) {
++         VkResult result = vn_queue_submission_scrub_batch_waits(submit, i);
++         if (result != VK_SUCCESS)
++            return result;
++      }
++   }
++
+    return VK_SUCCESS;
+ }
+ 
+diff --git a/src/virtio/vulkan/vn_wsi.c b/src/virtio/vulkan/vn_wsi.c
+index f64cabae8d1..1efef235105 100644
+--- a/src/virtio/vulkan/vn_wsi.c
++++ b/src/virtio/vulkan/vn_wsi.c
+@@ -390,12 +390,15 @@ vn_wsi_validate_image_format_info(struct vn_physical_device *physical_dev,
+ VkResult
+ vn_wsi_fence_wait(struct vn_device *dev, struct vn_queue *queue)
+ {
+-   /* External sync is supported by virtgpu backend but not vtest backend. For
+-    * vtest, common wsi will skip the implicit out fence installation due to
+-    * the lack of external SYNC_FD semaphore support. So we'll detect async
+-    * present thread and properly wait inside the wsi queue submit.
++   /* Common wsi installs the implicit out fence via the dma-buf sync file
++    * export path only when the driver advertises SYNC_FD binary semaphore
++    * export (see wsi_signal_dma_buf_from_semaphore), which requires
++    * renderer-side sync fd support on top of the virtgpu backend.  When the
++    * out fence cannot be installed (vtest, or renderers without semaphore
++    * sync fd support such as MoltenVK hosts), detect the async present
++    * thread and properly wait inside the wsi queue submit.
+     */
+-   if (dev->renderer->info.has_external_sync ||
++   if (dev->physical_device->external_binary_semaphore_handles ||
+        dev->renderer->info.has_implicit_fencing)
+       return VK_SUCCESS;
+ 

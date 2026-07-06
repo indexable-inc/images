@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 2 Jul 2026 18:31:24 -0700
+Subject: [PATCH 2/3] README.ix: document snapshot fork layout
+
+Refs: indexable-inc/index#1686
+
+diff --git a/README.ix.md b/README.ix.md
+new file mode 100644
+index 00000000000..432a318d42f
+--- /dev/null
++++ b/README.ix.md
+@@ -0,0 +1,29 @@
++# indexable-inc/mesa
++
++Snapshot fork of [mesa](https://gitlab.freedesktop.org/mesa/mesa) carrying the
++venus (virtio-gpu Vulkan) driver-side external semaphore patch for the panes
++GPU guest (indexable-inc/index#1686, tracking issue indexable-inc/index#1742).
++
++## Layout
++
++- Branch `ix/venus-driver-side-semaphore`: the base snapshot plus the patch
++  commits.
++- The base commit is a **snapshot** of the upstream `mesa-26.1.2` tag
++  (`git archive` of gitlab.freedesktop.org/mesa/mesa @ mesa-26.1.2), not the
++  full upstream history: upstream history is ~2 GB and the fork only needs to
++  pin a patched source tree for a nix `fetchFromGitHub` src override. The
++  version must match the mesa recipe of the nixpkgs pin used by
++  indexable-inc/index (26.1.2).
++
++## Why
++
++On macOS hosts (vmkit/libkrun -> virglrenderer -> MoltenVK), MoltenVK never
++supports SYNC_FD semaphore import, so upstream venus masks
++VK_KHR_synchronization2 (clamping the guest device to Vulkan 1.2) and all WSI
++extensions. The patch implements mesa's own suggested fix: handle temporary
++sync fd semaphore imports purely on the driver side (guest-side wait plus
++eliding the semaphore wait from the renderer submission), so sync2, Vulkan
++1.3, and VK_KHR_swapchain no longer depend on renderer sync fd import.
++
++Intended to be upstreamed to mesa; this fork exists so the guest image can
++pin it meanwhile.
