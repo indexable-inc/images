@@ -47,8 +47,17 @@ defmodule SymphonyElixir.Runtime do
   use GenServer, restart: :transient
 
   alias SymphonyElixir.GithubApp
-  alias SymphonyElixir.IR.{Graph, Materializer, Node, RunGraph, RunNotifier, Store}
-  alias SymphonyElixir.Runtime.{Events, ExecRunner, Placement, Recovery, SubrunRunner}
+  alias SymphonyElixir.IR.Graph
+  alias SymphonyElixir.IR.Materializer
+  alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.IR.RunGraph
+  alias SymphonyElixir.IR.RunNotifier
+  alias SymphonyElixir.IR.Store
+  alias SymphonyElixir.Runtime.Events
+  alias SymphonyElixir.Runtime.ExecRunner
+  alias SymphonyElixir.Runtime.Placement
+  alias SymphonyElixir.Runtime.Recovery
+  alias SymphonyElixir.Runtime.SubrunRunner
 
   require Logger
 
@@ -125,8 +134,7 @@ defmodule SymphonyElixir.Runtime do
   def retry_node(pid, node_id, actor) when is_pid(pid), do: GenServer.call(pid, {:retry_node, node_id, actor})
 
   @spec retry_node(binary(), String.t(), actor()) :: :ok
-  def retry_node(run_id, node_id, actor) when is_binary(run_id),
-    do: GenServer.call(via(run_id), {:retry_node, node_id, actor})
+  def retry_node(run_id, node_id, actor) when is_binary(run_id), do: GenServer.call(via(run_id), {:retry_node, node_id, actor})
 
   @doc """
   Re-run the whole graph from scratch: reset every node to `:pending` and
@@ -216,9 +224,7 @@ defmodule SymphonyElixir.Runtime do
         if Node.terminal?(node), do: acc, else: Graph.transition(acc, id, :cancelled)
       end)
 
-    finished =
-      %{cancelled | status: :cancelled}
-      |> RunGraph.append_audit(:cancel, nil, actor, %{})
+    finished = RunGraph.append_audit(%{cancelled | status: :cancelled}, :cancel, nil, actor, %{})
 
     persist(finished, state)
     release_placement(state)
@@ -241,9 +247,7 @@ defmodule SymphonyElixir.Runtime do
     graph =
       Enum.reduce(Map.keys(state.graph.nodes), state.graph, fn id, acc -> Graph.reset_node(acc, id) end)
 
-    graph =
-      %{graph | status: :running}
-      |> RunGraph.append_audit(:rerun, nil, actor, %{})
+    graph = RunGraph.append_audit(%{graph | status: :running}, :rerun, nil, actor, %{})
 
     persist(graph, state)
     advance_reply(%{state | graph: graph})
@@ -534,8 +538,7 @@ defmodule SymphonyElixir.Runtime do
   # failure. Teardown at run end releases whatever was acquired.
   defp ensure_placement(%{placement_acquired?: true} = state, _node), do: state
 
-  defp ensure_placement(state, %Node{kind: :agent, envelope: %{location: location}})
-       when location == :ixvm or (is_tuple(location) and elem(location, 0) == :host) do
+  defp ensure_placement(state, %Node{kind: :agent, envelope: %{location: location}}) when location == :ixvm or (is_tuple(location) and elem(location, 0) == :host) do
     case state.placement.acquire(state.graph.run_id, location, acquire_opts(state)) do
       {:ok, _base_url} ->
         graph = stamp_placement(state.graph, state.placement, location)
@@ -681,7 +684,7 @@ defmodule SymphonyElixir.Runtime do
     # (clear_failed/retry/rerun may schedule more agent turns against the
     # same placement), so keep it until the run truly ends through cancel
     # or a later success.
-    unless status == :failed, do: release_placement(finished)
+    if status != :failed, do: release_placement(finished)
     finished
   end
 

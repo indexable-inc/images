@@ -12,7 +12,8 @@ defmodule SymphonyElixir.Linear.Client do
   `{:error, :missing_linear_api_token}`.
   """
 
-  alias SymphonyElixir.{Config, Linear.Issue}
+  alias SymphonyElixir.Config
+  alias SymphonyElixir.Linear.Issue
 
   require Logger
 

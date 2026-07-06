@@ -3,7 +3,9 @@ defmodule SymphonyElixir.IR.MaterializerTest do
 
   alias SymphonyElixir.DSL.Parser
   alias SymphonyElixir.Engine.Envelope
-  alias SymphonyElixir.IR.{Graph, Materializer, RunGraph}
+  alias SymphonyElixir.IR.Graph
+  alias SymphonyElixir.IR.Materializer
+  alias SymphonyElixir.IR.RunGraph
 
   defp parse!(source) do
     {:ok, ast} = Parser.parse(source)
@@ -111,7 +113,7 @@ defmodule SymphonyElixir.IR.MaterializerTest do
       {:ok, twice, second_ids} = Materializer.expand_dynamic(once)
 
       assert second_ids == []
-      assert Map.keys(once.nodes) |> Enum.sort() == Map.keys(twice.nodes) |> Enum.sort()
+      assert once.nodes |> Map.keys() |> Enum.sort() == twice.nodes |> Map.keys() |> Enum.sort()
     end
 
     test "a map fan-out emits one child per element and retires the placeholder" do
@@ -170,7 +172,7 @@ defmodule SymphonyElixir.IR.MaterializerTest do
       # re-emitting children on each pass merges idempotently.
       {:ok, twice, second_ids} = Materializer.expand_dynamic(once)
       assert second_ids == []
-      assert Map.keys(once.nodes) |> Enum.sort() == Map.keys(twice.nodes) |> Enum.sort()
+      assert once.nodes |> Map.keys() |> Enum.sort() == twice.nodes |> Map.keys() |> Enum.sort()
     end
 
     test "a map over an empty list emits no children and retires the placeholder" do

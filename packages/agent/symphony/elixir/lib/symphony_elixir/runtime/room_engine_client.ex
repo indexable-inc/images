@@ -39,9 +39,11 @@ defmodule SymphonyElixir.Runtime.RoomEngineClient do
 
   @behaviour SymphonyElixir.Runtime.EngineClient
 
-  alias SymphonyElixir.{Catalog, Prompt}
-  alias SymphonyElixir.Engine.{Client, Envelope}
+  alias SymphonyElixir.Catalog
+  alias SymphonyElixir.Engine.Client
+  alias SymphonyElixir.Engine.Envelope
   alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.Prompt
 
   @impl true
   def run_node(%Node{kind: :agent, envelope: %Envelope{} = envelope} = node, run_opts) do
@@ -134,14 +136,16 @@ defmodule SymphonyElixir.Runtime.RoomEngineClient do
   # `:ixvm` envelope to the run's own provisioned room-server. Drop nils
   # so the client's own defaults apply.
   defp client_opts(run_opts) do
-    [
-      room_server_url: Map.get(run_opts, :room_server_url),
-      req_options: Map.get(run_opts, :req_options, []),
-      timeout_ms: Map.get(run_opts, :timeout_ms),
-      run_id: Map.get(run_opts, :run_id),
-      placement: Map.get(run_opts, :placement)
-    ]
-    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    Enum.reject(
+      [
+        room_server_url: Map.get(run_opts, :room_server_url),
+        req_options: Map.get(run_opts, :req_options, []),
+        timeout_ms: Map.get(run_opts, :timeout_ms),
+        run_id: Map.get(run_opts, :run_id),
+        placement: Map.get(run_opts, :placement)
+      ],
+      fn {_k, v} -> is_nil(v) end
+    )
   end
 
   defp to_result({:ok, %{thread_id: thread_id} = output}), do: {:ok, output, thread_id}

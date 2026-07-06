@@ -23,7 +23,9 @@ defmodule SymphonyElixir.IR.View do
     and output, plus the expansion and audit logs.
   """
 
-  alias SymphonyElixir.IR.{Attempt, Node, RunGraph}
+  alias SymphonyElixir.IR.Attempt
+  alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.IR.RunGraph
 
   @doc "Compact row for a run index: status and aggregate counts/cost."
   @spec summary(RunGraph.t()) :: map()
@@ -158,8 +160,7 @@ defmodule SymphonyElixir.IR.View do
   end
 
   defp state_counts(nodes) do
-    nodes
-    |> Enum.frequencies_by(fn node -> Atom.to_string(node.state) end)
+    Enum.frequencies_by(nodes, fn node -> Atom.to_string(node.state) end)
   end
 
   # Sum the per-attempt usd cost across every node's every attempt. nil when
@@ -193,7 +194,7 @@ defmodule SymphonyElixir.IR.View do
   defp placement_view(%{declared: declared, effective: effective}) do
     %{
       "declared" => placement_location_string(declared),
-      "effective" => if(effective, do: Atom.to_string(effective), else: nil)
+      "effective" => if(effective, do: Atom.to_string(effective))
     }
   end
 

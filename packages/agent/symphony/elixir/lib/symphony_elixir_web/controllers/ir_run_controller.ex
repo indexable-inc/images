@@ -23,7 +23,8 @@ defmodule SymphonyElixirWeb.IRRunController do
   use Phoenix.Controller, formats: [:json]
 
   alias SymphonyElixir.DSL.Schema
-  alias SymphonyElixir.IR.{Store, View}
+  alias SymphonyElixir.IR.Store
+  alias SymphonyElixir.IR.View
   alias SymphonyElixir.Runtime
 
   # The runtime's single source of truth for the form's option lists:
@@ -95,12 +96,10 @@ defmodule SymphonyElixirWeb.IRRunController do
   def rerun(conn, %{"run_id" => run_id}), do: operate(conn, run_id, &Runtime.rerun(&1, actor(conn)))
 
   @spec clear_failed(Plug.Conn.t(), map()) :: Plug.Conn.t()
-  def clear_failed(conn, %{"run_id" => run_id}),
-    do: operate(conn, run_id, &Runtime.clear_failed(&1, actor(conn)))
+  def clear_failed(conn, %{"run_id" => run_id}), do: operate(conn, run_id, &Runtime.clear_failed(&1, actor(conn)))
 
   @spec retry_node(Plug.Conn.t(), map()) :: Plug.Conn.t()
-  def retry_node(conn, %{"run_id" => run_id, "node_id" => node_id}),
-    do: operate(conn, run_id, &Runtime.retry_node(&1, node_id, actor(conn)))
+  def retry_node(conn, %{"run_id" => run_id, "node_id" => node_id}), do: operate(conn, run_id, &Runtime.retry_node(&1, node_id, actor(conn)))
 
   # Apply an operator action to the live run, then return its current
   # persisted detail. A run with no live process (already stopped) returns

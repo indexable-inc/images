@@ -142,7 +142,7 @@ defmodule SymphonyElixir.WorkflowCatalog do
       {:ok, raw} ->
         hash = :crypto.hash(:sha256, raw)
 
-        unless current_hash(name) == hash do
+        if current_hash(name) != hash do
           parse_and_store(name, path, raw, hash)
         end
 
@@ -195,7 +195,7 @@ defmodule SymphonyElixir.WorkflowCatalog do
     (table_names(@table) ++ table_names(@errors))
     |> Enum.uniq()
     |> Enum.each(fn name ->
-      unless MapSet.member?(seen, name) do
+      if !MapSet.member?(seen, name) do
         :ets.delete(@table, name)
         :ets.delete(@errors, name)
         Logger.info("WorkflowCatalog removed workflow=#{name} (file deleted)")

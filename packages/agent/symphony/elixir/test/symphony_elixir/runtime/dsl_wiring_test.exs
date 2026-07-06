@@ -9,7 +9,9 @@ defmodule SymphonyElixir.Runtime.DSLWiringTest do
   use ExUnit.Case, async: false
 
   alias SymphonyElixir.DSL.Parser
-  alias SymphonyElixir.IR.{Materializer, Node, Store}
+  alias SymphonyElixir.IR.Materializer
+  alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.IR.Store
   alias SymphonyElixir.Runtime
 
   @moduletag capture_log: true
@@ -18,6 +20,7 @@ defmodule SymphonyElixir.Runtime.DSLWiringTest do
   # dependency returns `%{"ok" => true}` so the gate opens; every other
   # node returns a trivial success.
   defmodule FakeEngine do
+    @moduledoc false
     @behaviour SymphonyElixir.Runtime.EngineClient
 
     @table :dsl_wiring_fake

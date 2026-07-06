@@ -81,8 +81,7 @@ defmodule SymphonyElixir.IR.Attempt do
   def engines, do: @engines
 
   @spec start(pos_integer(), engine(), String.t() | nil) :: t()
-  def start(n, engine, thread_id \\ nil)
-      when is_integer(n) and n > 0 and engine in @engines do
+  def start(n, engine, thread_id \\ nil) when is_integer(n) and n > 0 and engine in @engines do
     %__MODULE__{
       n: n,
       engine: engine,

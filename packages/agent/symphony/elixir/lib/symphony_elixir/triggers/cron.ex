@@ -78,8 +78,11 @@ defmodule SymphonyElixir.Triggers.Cron do
 
   use GenServer
 
-  alias SymphonyElixir.{Config, CronExpression, CronState, WorkflowCatalog}
+  alias SymphonyElixir.Config
+  alias SymphonyElixir.CronExpression
+  alias SymphonyElixir.CronState
   alias SymphonyElixir.Runtime.Ingress
+  alias SymphonyElixir.WorkflowCatalog
 
   require Logger
 
@@ -127,7 +130,8 @@ defmodule SymphonyElixir.Triggers.Cron do
   defp tick_once(run_opts) do
     now = DateTime.utc_now()
 
-    WorkflowCatalog.for_trigger_kind(:cron)
+    :cron
+    |> WorkflowCatalog.for_trigger_kind()
     |> Enum.each(fn entry -> evaluate_workflow(entry, now, run_opts) end)
   end
 
@@ -184,7 +188,7 @@ defmodule SymphonyElixir.Triggers.Cron do
     with {:ok, last_local} <- DateTime.shift_zone(last_fired, timezone),
          {:ok, wall_next} <- CronExpression.next_fire_after(parsed, DateTime.to_naive(last_local)),
          {:ok, scheduled_for} <- wall_to_absolute(wall_next, timezone) do
-      if DateTime.compare(scheduled_for, now) == :gt do
+      if DateTime.after?(scheduled_for, now) do
         :not_due
       else
         {:fire, scheduled_for}

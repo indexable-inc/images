@@ -2,7 +2,10 @@ defmodule SymphonyElixir.IR.RunNotifierTest do
   use ExUnit.Case, async: true
 
   alias SymphonyElixir.Config
-  alias SymphonyElixir.IR.{Attempt, Node, RunGraph, RunNotifier}
+  alias SymphonyElixir.IR.Attempt
+  alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.IR.RunGraph
+  alias SymphonyElixir.IR.RunNotifier
 
   defp graph(attrs) do
     defaults = %{run_id: "triage-1780166452589-58", source_hash: "hash", status: :succeeded, nodes: %{}}

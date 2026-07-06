@@ -173,7 +173,7 @@ defmodule SymphonyElixirWeb.Components.IRGraphTest do
     end
 
     test "node without label field falls back to the id" do
-      node = mk_node("fallback-id") |> Map.delete("label")
+      node = "fallback-id" |> mk_node() |> Map.delete("label")
       %{nodes: nodes} = IRGraph.layout([node])
       [n] = nodes
       assert n.label == "fallback-id"

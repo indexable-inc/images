@@ -6,9 +6,12 @@ defmodule SymphonyElixir.Triggers.CronTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{CronExpression, CronState, WorkflowCatalog}
-  alias SymphonyElixir.IR.{Node, Store}
+  alias SymphonyElixir.CronExpression
+  alias SymphonyElixir.CronState
+  alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.IR.Store
   alias SymphonyElixir.Triggers.Cron
+  alias SymphonyElixir.WorkflowCatalog
 
   # US DST in 2026: spring forward Sun Mar 8 (02:00 PST -> 03:00 PDT),
   # fall back Sun Nov 1 (02:00 PDT -> 01:00 PST). PST=UTC-8, PDT=UTC-7.
@@ -138,6 +141,7 @@ defmodule SymphonyElixir.Triggers.CronTest do
 
   describe "tick firing (full stack, fake engine)" do
     defmodule FakeEngine do
+      @moduledoc false
       @behaviour SymphonyElixir.Runtime.EngineClient
 
       @impl true

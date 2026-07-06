@@ -8,8 +8,10 @@ defmodule SymphonyElixirWeb.SlackEventsController do
   use Phoenix.Controller, formats: [:json]
 
   alias SymphonyElixir.Runtime.Ingress
-  alias SymphonyElixir.{Slack, WorkflowCatalog}
-  alias SymphonyElixirWeb.{TriggerResponse, WebhookAuth}
+  alias SymphonyElixir.Slack
+  alias SymphonyElixir.WorkflowCatalog
+  alias SymphonyElixirWeb.TriggerResponse
+  alias SymphonyElixirWeb.WebhookAuth
 
   require Logger
 
@@ -82,7 +84,8 @@ defmodule SymphonyElixirWeb.SlackEventsController do
   # equal. The candidate names come from the loaded `:slack_app_mention`
   # workflows, so this only resolves names symphony actually watches.
   defp resolved_channel_name(channel_id) do
-    WorkflowCatalog.for_trigger_kind(:slack_app_mention)
+    :slack_app_mention
+    |> WorkflowCatalog.for_trigger_kind()
     |> Enum.map(& &1.trigger.channel)
     |> Enum.uniq()
     |> Enum.find(fn declared -> channel_matches?(declared, channel_id) end)

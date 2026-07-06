@@ -16,8 +16,10 @@ defmodule SymphonyElixir.Triggers.Slack do
 
   use GenServer
 
-  alias SymphonyElixir.{Config, Slack.Client, WorkflowCatalog}
+  alias SymphonyElixir.Config
   alias SymphonyElixir.Runtime.Ingress
+  alias SymphonyElixir.Slack.Client
+  alias SymphonyElixir.WorkflowCatalog
 
   require Logger
 
@@ -48,7 +50,8 @@ defmodule SymphonyElixir.Triggers.Slack do
     if is_nil(Config.get().slack_bot_token) do
       state
     else
-      WorkflowCatalog.for_trigger_kind(:slack_huddle_completed)
+      :slack_huddle_completed
+      |> WorkflowCatalog.for_trigger_kind()
       |> Enum.reduce(state, &poll_workflow/2)
     end
   end

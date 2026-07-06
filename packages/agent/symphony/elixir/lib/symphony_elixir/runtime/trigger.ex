@@ -55,24 +55,19 @@ defmodule SymphonyElixir.Runtime.Trigger do
   workflow of that kind.
   """
   @spec matches?(declared(), event()) :: boolean()
-  def matches?(%{kind: :cron, schedule: schedule}, %{schedule: event_schedule}),
-    do: schedule == event_schedule
+  def matches?(%{kind: :cron, schedule: schedule}, %{schedule: event_schedule}), do: schedule == event_schedule
 
   @spec matches?(declared(), event()) :: boolean()
-  def matches?(%{kind: :linear, label: label}, %{labels: labels}) when is_list(labels),
-    do: label in labels
+  def matches?(%{kind: :linear, label: label}, %{labels: labels}) when is_list(labels), do: label in labels
 
   @spec matches?(declared(), event()) :: boolean()
-  def matches?(%{kind: :github_pr_label, repo: repo, label: label}, event),
-    do: event[:repo] == repo and event[:label] == label
+  def matches?(%{kind: :github_pr_label, repo: repo, label: label}, event), do: event[:repo] == repo and event[:label] == label
 
   @spec matches?(declared(), event()) :: boolean()
-  def matches?(%{kind: :slack_huddle_completed, channel: channel}, event),
-    do: channel_matches?(channel, event)
+  def matches?(%{kind: :slack_huddle_completed, channel: channel}, event), do: channel_matches?(channel, event)
 
   @spec matches?(declared(), event()) :: boolean()
-  def matches?(%{kind: :slack_app_mention, channel: channel}, event),
-    do: channel_matches?(channel, event)
+  def matches?(%{kind: :slack_app_mention, channel: channel}, event), do: channel_matches?(channel, event)
 
   @spec matches?(declared(), event()) :: boolean()
   def matches?(%{kind: :manual}, _event), do: true

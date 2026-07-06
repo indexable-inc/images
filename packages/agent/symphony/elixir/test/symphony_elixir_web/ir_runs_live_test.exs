@@ -6,10 +6,13 @@ defmodule SymphonyElixirWeb.IRRunsLiveTest do
 
   use ExUnit.Case, async: false
 
-  import Phoenix.{ConnTest, LiveViewTest}
+  import Phoenix.ConnTest
+  import Phoenix.LiveViewTest
 
   alias SymphonyElixir.Engine.Envelope
-  alias SymphonyElixir.IR.{Node, RunGraph, Store}
+  alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.IR.RunGraph
+  alias SymphonyElixir.IR.Store
   alias SymphonyElixir.Runtime
 
   @endpoint SymphonyElixirWeb.Endpoint
@@ -18,6 +21,7 @@ defmodule SymphonyElixirWeb.IRRunsLiveTest do
   # stays :running while the test exercises operator actions. Using async:
   # false and a named table so concurrent suites do not interfere.
   defmodule FakeEngine do
+    @moduledoc false
     @behaviour SymphonyElixir.Runtime.EngineClient
 
     @table :ir_runs_live_fake
@@ -60,11 +64,11 @@ defmodule SymphonyElixirWeb.IRRunsLiveTest do
   setup do
     FakeEngine.setup()
 
-    unless Process.whereis(SymphonyElixir.Runtime.Registry) do
+    if !Process.whereis(SymphonyElixir.Runtime.Registry) do
       start_supervised!({Registry, keys: :unique, name: SymphonyElixir.Runtime.Registry})
     end
 
-    unless Process.whereis(SymphonyElixir.TaskSupervisor) do
+    if !Process.whereis(SymphonyElixir.TaskSupervisor) do
       start_supervised!({Task.Supervisor, name: SymphonyElixir.TaskSupervisor})
     end
 
@@ -98,7 +102,8 @@ defmodule SymphonyElixirWeb.IRRunsLiveTest do
   end
 
   defp build_graph(run_id, nodes) do
-    RunGraph.new(run_id, "hash", nil)
+    run_id
+    |> RunGraph.new("hash", nil)
     |> RunGraph.put_nodes(nodes)
     |> Map.put(:status, :running)
   end
@@ -107,7 +112,8 @@ defmodule SymphonyElixirWeb.IRRunsLiveTest do
     run_id = "live-show-#{System.unique_integer([:positive])}"
 
     graph =
-      build_graph(run_id, [agent_node("a"), agent_node("b", inputs: %{"x" => {:node, "a", []}})])
+      run_id
+      |> build_graph([agent_node("a"), agent_node("b", inputs: %{"x" => {:node, "a", []}})])
       |> Map.put(:trigger, %{kind: :manual})
 
     persist_graph(graph)
@@ -157,7 +163,8 @@ defmodule SymphonyElixirWeb.IRRunsLiveTest do
     run_id = "live-no-cancel-#{System.unique_integer([:positive])}"
 
     graph =
-      build_graph(run_id, [agent_node("a")])
+      run_id
+      |> build_graph([agent_node("a")])
       |> Map.put(:status, :succeeded)
 
     persist_graph(graph)
@@ -172,7 +179,8 @@ defmodule SymphonyElixirWeb.IRRunsLiveTest do
     node = %{agent_node("a") | state: :failed}
 
     graph =
-      build_graph(run_id, [node])
+      run_id
+      |> build_graph([node])
       |> Map.put(:status, :failed)
 
     persist_graph(graph)
@@ -272,7 +280,8 @@ defmodule SymphonyElixirWeb.IRRunsLiveTest do
     run_id = "live-placement-#{System.unique_integer([:positive])}"
 
     graph =
-      build_graph(run_id, [agent_node("a")])
+      run_id
+      |> build_graph([agent_node("a")])
       |> Map.put(:placement, %{declared: :ixvm, effective: :host})
 
     persist_graph(graph)

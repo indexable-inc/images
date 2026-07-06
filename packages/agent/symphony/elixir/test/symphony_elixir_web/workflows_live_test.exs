@@ -7,7 +7,8 @@ defmodule SymphonyElixirWeb.WorkflowsLiveTest do
 
   use ExUnit.Case, async: false
 
-  import Phoenix.{ConnTest, LiveViewTest}
+  import Phoenix.ConnTest
+  import Phoenix.LiveViewTest
 
   alias SymphonyElixir.DSL.Parser
 

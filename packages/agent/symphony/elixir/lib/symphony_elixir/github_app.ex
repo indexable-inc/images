@@ -177,14 +177,11 @@ defmodule SymphonyElixir.GithubApp do
     end
   end
 
-  defp ensure_configured(%Config{github_app_id: id, github_app_private_key_pem: pem})
-       when is_binary(id) and is_binary(pem),
-       do: :ok
+  defp ensure_configured(%Config{github_app_id: id, github_app_private_key_pem: pem}) when is_binary(id) and is_binary(pem), do: :ok
 
   defp ensure_configured(_), do: {:error, :not_configured}
 
-  defp ensure_owner_repo(%Config{github_app_owner_repo: repo}) when is_binary(repo) and repo != "",
-    do: :ok
+  defp ensure_owner_repo(%Config{github_app_owner_repo: repo}) when is_binary(repo) and repo != "", do: :ok
 
   defp ensure_owner_repo(_), do: {:error, :missing_owner_repo}
 
@@ -259,8 +256,7 @@ defmodule SymphonyElixir.GithubApp do
     end
   end
 
-  defp parse_token_response(%{"token" => token, "expires_at" => expires_at_iso}, installation_id)
-       when is_binary(token) and is_binary(expires_at_iso) do
+  defp parse_token_response(%{"token" => token, "expires_at" => expires_at_iso}, installation_id) when is_binary(token) and is_binary(expires_at_iso) do
     case DateTime.from_iso8601(expires_at_iso) do
       {:ok, expires_at, _offset} ->
         {:ok, %{token: token, expires_at: expires_at, installation_id: installation_id}}

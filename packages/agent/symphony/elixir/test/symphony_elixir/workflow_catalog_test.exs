@@ -30,7 +30,7 @@ defmodule SymphonyElixir.WorkflowCatalogTest do
     assert impl.trigger == %{kind: :linear, label: "[sym] implement"}
     assert is_binary(impl.hash)
 
-    assert Enum.map(WorkflowCatalog.workflows(), & &1.name) |> Enum.sort() == ["implement", "nightly"]
+    assert WorkflowCatalog.workflows() |> Enum.map(& &1.name) |> Enum.sort() == ["implement", "nightly"]
     assert [%{name: "implement"}] = WorkflowCatalog.for_trigger_kind(:linear)
     assert [%{name: "nightly"}] = WorkflowCatalog.for_trigger_kind(:cron)
   end

@@ -25,7 +25,8 @@ defmodule SymphonyElixirWeb.LinearWebhookController do
 
   use Phoenix.Controller, formats: [:json]
 
-  alias SymphonyElixir.Runtime.{Ingress, Trigger}
+  alias SymphonyElixir.Runtime.Ingress
+  alias SymphonyElixir.Runtime.Trigger
   alias SymphonyElixirWeb.WebhookAuth
 
   require Logger
@@ -46,8 +47,7 @@ defmodule SymphonyElixirWeb.LinearWebhookController do
     end
   end
 
-  defp handle_event(%{"type" => "Issue", "action" => action} = event)
-       when action in ["create", "update"] do
+  defp handle_event(%{"type" => "Issue", "action" => action} = event) when action in ["create", "update"] do
     data = Map.get(event, "data", %{})
     labels = extract_labels(data)
 

@@ -4,7 +4,8 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
   # same snapshot.
   use ExUnit.Case, async: false
 
-  import Plug.{Conn, Test}
+  import Plug.Conn
+  import Plug.Test
 
   @opts SymphonyElixirWeb.Endpoint.init([])
   @secret "linear-controller-secret"

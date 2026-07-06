@@ -23,7 +23,9 @@ defmodule SymphonyElixir.IR.Graph do
   history evolves is graph algebra, even though the runtime decides when.
   """
 
-  alias SymphonyElixir.IR.{Attempt, Node, RunGraph}
+  alias SymphonyElixir.IR.Attempt
+  alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.IR.RunGraph
 
   @doc """
   Nodes that may start now: state `:pending`, `:ready`, or `:retrying`,
@@ -246,7 +248,7 @@ defmodule SymphonyElixir.IR.Graph do
   """
   @spec mark_attempt_stranded(RunGraph.t(), Node.t()) :: RunGraph.t()
   def mark_attempt_stranded(%RunGraph{} = graph, %Node{attempts: []} = node) do
-    attempt = Attempt.start(1, attempt_engine(node)) |> Attempt.finish(:stranded, :stranded)
+    attempt = 1 |> Attempt.start(attempt_engine(node)) |> Attempt.finish(:stranded, :stranded)
     put_node(graph, %{node | attempts: [attempt]})
   end
 
@@ -287,8 +289,7 @@ defmodule SymphonyElixir.IR.Graph do
   # An attempt records what executed it. Agent attempts carry the engine;
   # exec/subrun carry the executor kind so the run record is honest about a
   # node that never touched an engine.
-  defp attempt_engine(%Node{kind: :agent, envelope: %{engine: engine}}) when engine in [:codex, :claude, :pi],
-    do: engine
+  defp attempt_engine(%Node{kind: :agent, envelope: %{engine: engine}}) when engine in [:codex, :claude, :pi], do: engine
 
   defp attempt_engine(%Node{kind: :exec}), do: :exec
   defp attempt_engine(%Node{kind: :subrun}), do: :subrun

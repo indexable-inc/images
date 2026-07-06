@@ -2,6 +2,7 @@ defmodule SymphonyElixirWeb.Router do
   @moduledoc "Routes for the runs dashboard and the JSON API."
 
   use Phoenix.Router
+
   import Phoenix.LiveView.Router
 
   pipeline :browser do

@@ -108,17 +108,7 @@ defmodule SymphonyElixir.IR.RunNotifier do
     summary = summary(graph, workflow)
     header_text = "#{status_icon(status)} #{workflow} #{status_word(status)}"
 
-    blocks =
-      ([
-         header(header_text),
-         section(summary)
-       ] ++
-         content_sections(graph) ++
-         [
-           context(context_text(graph)),
-           actions(graph, room_base_url)
-         ])
-      |> Enum.reject(&is_nil/1)
+    blocks = Enum.reject([header(header_text), section(summary)] ++ content_sections(graph) ++ [context(context_text(graph)), actions(graph, room_base_url)], &is_nil/1)
 
     %{
       "text" => fallback_text(workflow, status, summary),
@@ -284,8 +274,7 @@ defmodule SymphonyElixir.IR.RunNotifier do
   defp fallback_text(workflow, status, summary) do
     # Slack flattens blocks to this text in push/desktop/sidebar previews, and
     # mrkdwn does not render there, so keep it plain.
-    "Symphony: #{workflow} #{status_word(status)} - #{plain(summary)}"
-    |> truncate(200)
+    truncate("Symphony: #{workflow} #{status_word(status)} - #{plain(summary)}", 200)
   end
 
   defp header(text) do
@@ -302,8 +291,7 @@ defmodule SymphonyElixir.IR.RunNotifier do
   end
 
   defp button(text, url, style) do
-    %{"type" => "button", "text" => %{"type" => "plain_text", "text" => text, "emoji" => true}, "url" => url}
-    |> maybe_put_style(style)
+    maybe_put_style(%{"type" => "button", "text" => %{"type" => "plain_text", "text" => text, "emoji" => true}, "url" => url}, style)
   end
 
   defp maybe_put_style(button, nil), do: button

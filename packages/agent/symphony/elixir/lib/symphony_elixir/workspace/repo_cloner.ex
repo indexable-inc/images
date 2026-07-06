@@ -7,7 +7,8 @@ defmodule SymphonyElixir.Workspace.RepoCloner do
   with shared objects for speed; otherwise fall back to a shallow GitHub clone.
   """
 
-  alias SymphonyElixir.{Config, RepositoryCatalog}
+  alias SymphonyElixir.Config
+  alias SymphonyElixir.RepositoryCatalog
 
   @spec clone_all(Config.t(), Path.t(), String.t()) :: {:ok, Path.t()} | {:error, term()}
   def clone_all(%Config{} = config, workspace_path, run_id) when is_binary(workspace_path) do
@@ -40,9 +41,10 @@ defmodule SymphonyElixir.Workspace.RepoCloner do
   end
 
   defp ensure_absent(path) do
-    case File.exists?(path) do
-      false -> :ok
-      true -> {:error, {:repo_workspace_already_exists, path}}
+    if File.exists?(path) do
+      {:error, {:repo_workspace_already_exists, path}}
+    else
+      :ok
     end
   end
 
@@ -62,8 +64,7 @@ defmodule SymphonyElixir.Workspace.RepoCloner do
     end
   end
 
-  defp local_checkout(%Config{primary_repo: primary_repo}, %{primary?: true})
-       when is_binary(primary_repo) do
+  defp local_checkout(%Config{primary_repo: primary_repo}, %{primary?: true}) when is_binary(primary_repo) do
     if File.dir?(primary_repo), do: {:ok, primary_repo}, else: :error
   end
 

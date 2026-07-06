@@ -1,7 +1,8 @@
 defmodule SymphonyElixir.DSL.InterpreterTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.DSL.{Interpreter, Parser}
+  alias SymphonyElixir.DSL.Interpreter
+  alias SymphonyElixir.DSL.Parser
   alias SymphonyElixir.IR.Node
 
   defp parse!(source) do
@@ -87,7 +88,7 @@ defmodule SymphonyElixir.DSL.InterpreterTest do
       {delta, _pending, _log} = Interpreter.expand(ast, %{}, [])
 
       assert Enum.all?(delta, &(&1.deps == []))
-      assert Enum.map(delta, & &1.id) |> Enum.sort() == ["agent-0", "agent-1"]
+      assert delta |> Enum.map(& &1.id) |> Enum.sort() == ["agent-0", "agent-1"]
     end
   end
 

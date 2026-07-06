@@ -61,9 +61,14 @@ defmodule SymphonyElixir.Runtime.Placement do
 
   use GenServer
 
-  alias SymphonyElixir.Codex.{Provision, RoomRegistry}
-  alias SymphonyElixir.{Command, Config, RepositoryCatalog}
-  alias SymphonyElixir.Runtime.{HostRuntime, RuntimeRegistry, WorkerDispatch}
+  alias SymphonyElixir.Codex.Provision
+  alias SymphonyElixir.Codex.RoomRegistry
+  alias SymphonyElixir.Command
+  alias SymphonyElixir.Config
+  alias SymphonyElixir.RepositoryCatalog
+  alias SymphonyElixir.Runtime.HostRuntime
+  alias SymphonyElixir.Runtime.RuntimeRegistry
+  alias SymphonyElixir.Runtime.WorkerDispatch
 
   require Logger
 
@@ -242,8 +247,7 @@ defmodule SymphonyElixir.Runtime.Placement do
          {:ok, home} <- HostRuntime.host_home(config, driver, user) do
       host = %{config: config, driver: driver, user: user, home: home}
 
-      driver.systemctl_list_host_units.()
-      |> Enum.each(&reconcile_unit(&1, host, live))
+      Enum.each(driver.systemctl_list_host_units.(), &reconcile_unit(&1, host, live))
     else
       {:error, reason} ->
         Logger.warning("Placement: reconcile skipped, host identity unresolved: #{inspect(reason)}")

@@ -20,7 +20,8 @@ defmodule SymphonyElixir.Runtime.Events do
   subscriber pattern-matches one shape regardless of which topic delivered it.
   """
 
-  alias SymphonyElixir.IR.{RunGraph, View}
+  alias SymphonyElixir.IR.RunGraph
+  alias SymphonyElixir.IR.View
 
   @index_topic "ir_runs"
 
@@ -41,8 +42,7 @@ defmodule SymphonyElixir.Runtime.Events do
 
   @doc "Subscribe the calling process to one run's topic."
   @spec subscribe_run(String.t()) :: :ok | {:error, term()}
-  def subscribe_run(run_id) when is_binary(run_id),
-    do: Phoenix.PubSub.subscribe(pubsub(), run_topic(run_id))
+  def subscribe_run(run_id) when is_binary(run_id), do: Phoenix.PubSub.subscribe(pubsub(), run_topic(run_id))
 
   @doc """
   Broadcast a run transition to both the index and the per-run topic. The

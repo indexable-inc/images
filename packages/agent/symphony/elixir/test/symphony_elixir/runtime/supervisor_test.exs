@@ -2,12 +2,15 @@ defmodule SymphonyElixir.Runtime.SupervisorTest do
   use ExUnit.Case, async: false
 
   alias SymphonyElixir.Engine.Envelope
-  alias SymphonyElixir.IR.{Node, RunGraph, Store}
+  alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.IR.RunGraph
+  alias SymphonyElixir.IR.Store
   alias SymphonyElixir.Runtime
 
   @moduletag capture_log: true
 
   defmodule FakeEngine do
+    @moduledoc false
     @behaviour SymphonyElixir.Runtime.EngineClient
 
     @impl true
@@ -45,7 +48,7 @@ defmodule SymphonyElixir.Runtime.SupervisorTest do
 
   defp one_node_graph(run_id) do
     node = agent_node("n0")
-    RunGraph.new(run_id, "hash", nil) |> RunGraph.put_nodes([node]) |> Map.put(:status, :running)
+    run_id |> RunGraph.new("hash", nil) |> RunGraph.put_nodes([node]) |> Map.put(:status, :running)
   end
 
   test "start_run schedules a graph under supervision and it runs to terminal", %{store_opts: store_opts} do
@@ -64,7 +67,7 @@ defmodule SymphonyElixir.Runtime.SupervisorTest do
     # Persist a run left :running with a node :running (an orphaned run, as
     # if the BEAM died mid-flight). resume_pending should reattach/recover.
     node = agent_node("n0", state: :running)
-    graph = RunGraph.new("run_resume", "hash", nil) |> RunGraph.put_nodes([node]) |> Map.put(:status, :running)
+    graph = "run_resume" |> RunGraph.new("hash", nil) |> RunGraph.put_nodes([node]) |> Map.put(:status, :running)
     :ok = Store.persist(graph, store_opts)
 
     Runtime.Supervisor.resume_pending(engine: FakeEngine, store_opts: store_opts)
@@ -79,7 +82,7 @@ defmodule SymphonyElixir.Runtime.SupervisorTest do
 
   test "resume_pending skips terminal runs", %{store_opts: store_opts} do
     node = agent_node("n0", state: :succeeded)
-    graph = RunGraph.new("run_done", "hash", nil) |> RunGraph.put_nodes([node]) |> Map.put(:status, :succeeded)
+    graph = "run_done" |> RunGraph.new("hash", nil) |> RunGraph.put_nodes([node]) |> Map.put(:status, :succeeded)
     :ok = Store.persist(graph, store_opts)
 
     Runtime.Supervisor.resume_pending(engine: FakeEngine, store_opts: store_opts)

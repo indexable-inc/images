@@ -548,13 +548,13 @@ defmodule SymphonyElixir.Config do
   end
 
   defp validate_pack_asset_dir!(env_name, path) do
-    unless File.dir?(path) do
+    if !File.dir?(path) do
       raise "#{env_name} must point at an existing directory, got #{inspect(path)}"
     end
   end
 
   defp validate_pack_asset_file!(env_name, path) do
-    unless File.regular?(path) do
+    if !File.regular?(path) do
       raise "#{env_name} must point at an existing file, got #{inspect(path)}"
     end
   end
@@ -577,7 +577,7 @@ defmodule SymphonyElixir.Config do
 
   defp repo_root_env(opts, primary_repo) do
     case Keyword.get(opts, :repo_root) || System.get_env("SYMPHONY_REPO_ROOT") do
-      nil -> if is_binary(primary_repo), do: Path.dirname(primary_repo), else: nil
+      nil -> if is_binary(primary_repo), do: Path.dirname(primary_repo)
       "" -> nil
       value -> Path.expand(value)
     end

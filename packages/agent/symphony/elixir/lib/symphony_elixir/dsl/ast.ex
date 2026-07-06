@@ -195,8 +195,7 @@ defmodule SymphonyElixir.DSL.AST do
 
   @doc "Build a workflow do-block from an ordered statement list and an optional trigger."
   @spec workflow(String.t() | nil, trigger(), [statement()], String.t()) :: workflow()
-  def workflow(name, trigger, statements, id)
-      when is_list(statements) and is_binary(id) and (is_nil(trigger) or is_map(trigger)) do
+  def workflow(name, trigger, statements, id) when is_list(statements) and is_binary(id) and (is_nil(trigger) or is_map(trigger)) do
     %{kind: :workflow, id: id, name: name, trigger: trigger, statements: statements}
   end
 
@@ -210,8 +209,7 @@ defmodule SymphonyElixir.DSL.AST do
 
   @doc "An agent-call node carrying an envelope spec map and a prompt ref."
   @spec agent(map(), prompt_ref(), %{optional(String.t()) => pure()}, String.t()) :: agent()
-  def agent(envelope, prompt, inputs, id)
-      when is_map(envelope) and is_map(inputs) and is_binary(id) do
+  def agent(envelope, prompt, inputs, id) when is_map(envelope) and is_map(inputs) and is_binary(id) do
     %{kind: :agent, id: id, envelope: envelope, prompt: prompt, inputs: inputs}
   end
 
@@ -235,8 +233,7 @@ defmodule SymphonyElixir.DSL.AST do
 
   @doc "An `every_nth n counter do body` gate keyed on a persisted counter."
   @spec every_nth(pos_integer(), String.t(), expr(), String.t()) :: every_nth()
-  def every_nth(n, counter, body, id)
-      when is_integer(n) and n > 0 and is_binary(counter) and is_binary(id) do
+  def every_nth(n, counter, body, id) when is_integer(n) and n > 0 and is_binary(counter) and is_binary(id) do
     %{kind: :every_nth, id: id, n: n, counter: counter, body: body}
   end
 

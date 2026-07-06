@@ -76,13 +76,7 @@ defmodule SymphonyElixir.Slack.Client do
   end
 
   defp walk_channel_list(token, name, cursor) do
-    params =
-      %{
-        "limit" => 1000,
-        "exclude_archived" => "true",
-        "types" => "public_channel,private_channel"
-      }
-      |> maybe_put_cursor(cursor)
+    params = maybe_put_cursor(%{"limit" => 1000, "exclude_archived" => "true", "types" => "public_channel,private_channel"}, cursor)
 
     case slack_get(token, "conversations.list", params) do
       {:ok, %{"channels" => channels} = body} ->

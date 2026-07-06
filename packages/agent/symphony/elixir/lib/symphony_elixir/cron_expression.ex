@@ -168,8 +168,7 @@ defmodule SymphonyElixir.CronExpression do
         []
 
       [first | _] ->
-        sorted_values
-        |> Enum.filter(fn v -> rem(v - first, step) == 0 end)
+        Enum.filter(sorted_values, fn v -> rem(v - first, step) == 0 end)
     end
   end
 

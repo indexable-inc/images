@@ -120,12 +120,9 @@ defmodule SymphonyElixir.Skill do
   end
 
   @spec from_parts(map(), String.t(), Path.t()) :: {:ok, t()} | {:error, term()}
-  defp from_parts(frontmatter, body, path)
-       when is_map(frontmatter) and is_binary(body) and is_binary(path) do
+  defp from_parts(frontmatter, body, path) when is_map(frontmatter) and is_binary(body) and is_binary(path) do
     with {:ok, tools} <- fetch_string_list(frontmatter, "tools") do
-      name =
-        path
-        |> Path.basename(".md")
+      name = Path.basename(path, ".md")
 
       {:ok,
        %__MODULE__{

@@ -62,6 +62,7 @@ defmodule SymphonyElixir.MixProject do
       # /worker socket and serves provision/teardown over it.
       {:slipstream, "~> 1.1"},
       {:lazy_html, ">= 0.1.0", only: :test},
+      {:styler, "~> 1.11", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:sobelow, "~> 0.13", only: [:dev, :test], runtime: false},

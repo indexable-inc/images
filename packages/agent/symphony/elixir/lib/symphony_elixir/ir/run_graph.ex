@@ -128,8 +128,7 @@ defmodule SymphonyElixir.IR.RunGraph do
   id for a node-scoped action or `nil` for a run-wide one.
   """
   @spec append_audit(t(), atom(), String.t() | nil, term(), term()) :: t()
-  def append_audit(%__MODULE__{audit_log: log} = graph, action, target, actor, detail)
-      when is_atom(action) do
+  def append_audit(%__MODULE__{audit_log: log} = graph, action, target, actor, detail) when is_atom(action) do
     event = %{action: action, target: target, actor: actor, detail: detail, at: DateTime.utc_now()}
     %{graph | audit_log: log ++ [event], updated_at: DateTime.utc_now()}
   end

@@ -1,7 +1,10 @@
 defmodule SymphonyElixir.IR.GraphTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.IR.{Attempt, Graph, Node, RunGraph}
+  alias SymphonyElixir.IR.Attempt
+  alias SymphonyElixir.IR.Graph
+  alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.IR.RunGraph
 
   defp node(id, opts) do
     Node.new(
@@ -11,7 +14,7 @@ defmodule SymphonyElixir.IR.GraphTest do
   end
 
   defp graph(nodes) do
-    RunGraph.new("run-1", "hash", nil) |> RunGraph.put_nodes(nodes)
+    "run-1" |> RunGraph.new("hash", nil) |> RunGraph.put_nodes(nodes)
   end
 
   describe "ready_nodes/1" do
@@ -63,7 +66,7 @@ defmodule SymphonyElixir.IR.GraphTest do
 
   describe "apply_output/3" do
     test "success marks the node succeeded and records output" do
-      g = graph([node("a", state: :running)]) |> Graph.apply_output("a", {:ok, :done})
+      g = [node("a", state: :running)] |> graph() |> Graph.apply_output("a", {:ok, :done})
       assert g.nodes["a"].state == :succeeded
       assert g.nodes["a"].output == :done
     end
@@ -133,7 +136,7 @@ defmodule SymphonyElixir.IR.GraphTest do
 
       assert [attempt] = g.nodes["a"].attempts
       assert %Attempt{n: 1, state: :succeeded, outcome: :ok, cost: ^cost, thread_id: "thread-1"} = attempt
-      assert attempt.finished_at != nil
+      assert attempt.finished_at
     end
 
     test "a failed result closes the attempt :failed with the error and no cost" do

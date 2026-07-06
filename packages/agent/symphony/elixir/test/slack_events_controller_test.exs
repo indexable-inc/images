@@ -1,6 +1,8 @@
 defmodule SymphonyElixirWeb.SlackEventsControllerTest do
   use ExUnit.Case, async: true
-  import Plug.{Conn, Test}
+
+  import Plug.Conn
+  import Plug.Test
 
   @opts SymphonyElixirWeb.Endpoint.init([])
 

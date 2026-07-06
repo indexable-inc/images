@@ -15,7 +15,8 @@ defmodule SymphonyElixirWeb.WorkflowsLive do
 
   use Phoenix.LiveView
 
-  alias SymphonyElixir.IR.{Materializer, View}
+  alias SymphonyElixir.IR.Materializer
+  alias SymphonyElixir.IR.View
   alias SymphonyElixir.WorkflowCatalog
 
   @impl true
@@ -155,11 +156,11 @@ defmodule SymphonyElixirWeb.WorkflowsLive do
   end
 
   defp load_workflows do
-    WorkflowCatalog.workflows() |> Enum.sort_by(& &1.name)
+    Enum.sort_by(WorkflowCatalog.workflows(), & &1.name)
   end
 
   defp load_workflow_errors do
-    WorkflowCatalog.errors() |> Enum.sort_by(& &1.name)
+    Enum.sort_by(WorkflowCatalog.errors(), & &1.name)
   end
 
   # `file:line:column`, the shape an editor jumps to from a build log.

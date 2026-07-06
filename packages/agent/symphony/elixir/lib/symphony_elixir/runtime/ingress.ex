@@ -16,9 +16,12 @@ defmodule SymphonyElixir.Runtime.Ingress do
   runtime tests do.
   """
 
-  alias SymphonyElixir.IR.{Materializer, RunGraph, Store}
-  alias SymphonyElixir.{Runtime, WorkflowCatalog}
+  alias SymphonyElixir.IR.Materializer
+  alias SymphonyElixir.IR.RunGraph
+  alias SymphonyElixir.IR.Store
+  alias SymphonyElixir.Runtime
   alias SymphonyElixir.Runtime.Trigger
+  alias SymphonyElixir.WorkflowCatalog
 
   @typedoc "A started run: its generated id and the supervised runtime pid."
   @type started :: %{run_id: String.t(), pid: pid()}
@@ -33,7 +36,7 @@ defmodule SymphonyElixir.Runtime.Ingress do
 
   def start_workflow(%{ast: ast, hash: hash} = entry, trigger_context, opts) do
     run_id = Keyword.get_lazy(opts, :run_id, fn -> generate_run_id(entry) end)
-    start_opts = Keyword.drop(opts, [:run_id])
+    start_opts = Keyword.delete(opts, :run_id)
 
     with {:ok, graph} <- Materializer.materialize(run_id, hash, ast) do
       graph = %{graph | trigger: trigger_context}

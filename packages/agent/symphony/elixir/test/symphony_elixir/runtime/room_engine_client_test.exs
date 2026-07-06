@@ -151,7 +151,7 @@ defmodule SymphonyElixir.Runtime.RoomEngineClientTest do
     assert prompt =~ "<input>"
     assert prompt =~ "</input>"
     # The block carries the verbatim trigger envelope the skill reads.
-    assert prompt =~ "\"scheduled_for\": \"2026-06-03T07:00:00Z\""
+    assert prompt =~ ~s("scheduled_for": "2026-06-03T07:00:00Z")
     assert prompt =~ "\"lookback_hours\": 5"
   end
 

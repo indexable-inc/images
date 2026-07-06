@@ -26,7 +26,9 @@ defmodule SymphonyElixir.IR.Store do
 
   alias SymphonyElixir.Config
   alias SymphonyElixir.Engine.Envelope
-  alias SymphonyElixir.IR.{Attempt, Node, RunGraph}
+  alias SymphonyElixir.IR.Attempt
+  alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.IR.RunGraph
 
   require Logger
 
@@ -157,7 +159,7 @@ defmodule SymphonyElixir.IR.Store do
   defp encode_placement(%{declared: declared, effective: effective}) do
     %{
       "declared" => encode_placement_location(declared),
-      "effective" => if(effective, do: Atom.to_string(effective), else: nil)
+      "effective" => if(effective, do: Atom.to_string(effective))
     }
   end
 

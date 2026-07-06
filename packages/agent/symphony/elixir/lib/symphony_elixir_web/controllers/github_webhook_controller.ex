@@ -11,8 +11,10 @@ defmodule SymphonyElixirWeb.GithubWebhookController do
 
   use Phoenix.Controller, formats: [:json]
 
-  alias SymphonyElixir.Runtime.{Ingress, Trigger}
-  alias SymphonyElixirWeb.{TriggerResponse, WebhookAuth}
+  alias SymphonyElixir.Runtime.Ingress
+  alias SymphonyElixir.Runtime.Trigger
+  alias SymphonyElixirWeb.TriggerResponse
+  alias SymphonyElixirWeb.WebhookAuth
 
   require Logger
 
@@ -39,8 +41,7 @@ defmodule SymphonyElixirWeb.GithubWebhookController do
     end
   end
 
-  defp handle_event(%{"action" => "labeled", "pull_request" => pr, "repository" => repo, "label" => label})
-       when is_map(pr) and is_map(repo) and is_map(label) do
+  defp handle_event(%{"action" => "labeled", "pull_request" => pr, "repository" => repo, "label" => label}) when is_map(pr) and is_map(repo) and is_map(label) do
     repo_name = Map.get(repo, "full_name")
     label_name = label |> Map.get("name", "") |> Trigger.normalize_label()
     pr_number = Map.get(pr, "number")

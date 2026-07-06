@@ -20,9 +20,11 @@ defmodule SymphonyElixirWeb.IRRunsLive do
 
   use Phoenix.LiveView
 
-  alias SymphonyElixir.IR.{Store, View}
-  alias SymphonyElixir.{Runtime, WorkflowCatalog}
+  alias SymphonyElixir.IR.Store
+  alias SymphonyElixir.IR.View
+  alias SymphonyElixir.Runtime
   alias SymphonyElixir.Runtime.Events
+  alias SymphonyElixir.WorkflowCatalog
 
   # The runs table paginates at this many rows per page, navigated via the
   # `?page=N` query param. The full sorted list still loads on every render
@@ -362,12 +364,12 @@ defmodule SymphonyElixirWeb.IRRunsLive do
     if connected?(socket) do
       current = socket.assigns[:subscribed_run]
 
-      if current != run_id do
+      if current == run_id do
+        socket
+      else
         if is_binary(current), do: Phoenix.PubSub.unsubscribe(SymphonyElixir.PubSub, Events.run_topic(current))
         if is_binary(run_id), do: Events.subscribe_run(run_id)
         assign(socket, subscribed_run: run_id)
-      else
-        socket
       end
     else
       socket
@@ -409,11 +411,11 @@ defmodule SymphonyElixirWeb.IRRunsLive do
   defp page_path(path, page), do: path <> "?page=" <> Integer.to_string(page)
 
   defp load_workflows do
-    WorkflowCatalog.workflows() |> Enum.sort_by(& &1.name)
+    Enum.sort_by(WorkflowCatalog.workflows(), & &1.name)
   end
 
   defp load_workflow_errors do
-    WorkflowCatalog.errors() |> Enum.sort_by(& &1.name)
+    Enum.sort_by(WorkflowCatalog.errors(), & &1.name)
   end
 
   # `file:line:column`, the shape an editor jumps to from a build log. The
@@ -461,8 +463,7 @@ defmodule SymphonyElixirWeb.IRRunsLive do
   # recorded (e.g. a local-only run or a run predating the placement stamp).
   defp placement_label(nil), do: "-"
 
-  defp placement_label(%{"declared" => declared, "effective" => effective})
-       when declared == effective or is_nil(effective) do
+  defp placement_label(%{"declared" => declared, "effective" => effective}) when declared == effective or is_nil(effective) do
     declared || "-"
   end
 

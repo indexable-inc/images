@@ -1,7 +1,9 @@
 defmodule SymphonyElixir.Codex.ProvisionTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.{Codex.Provision, Config, RepositoryCatalog}
+  alias SymphonyElixir.Codex.Provision
+  alias SymphonyElixir.Config
+  alias SymphonyElixir.RepositoryCatalog
 
   defp config_with_repos(extra \\ %{}) do
     dir = Path.join(System.tmp_dir!(), "provision_#{System.unique_integer([:positive])}")

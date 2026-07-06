@@ -294,16 +294,14 @@ defmodule SymphonyElixir.Runtime.PlacementTest do
   describe "ixvm -> host fallback" do
     test "an ixvm setup failure falls back to a host room-server under the same run id" do
       failing_ixvm =
-        Map.merge(host_driver(self()), %{
-          ix_cmd: fn _config, args, _timeout ->
-            send(self(), {:ix_cmd, args})
+        Map.put(host_driver(self()), :ix_cmd, fn _config, args, _timeout ->
+          send(self(), {:ix_cmd, args})
 
-            case args do
-              ["new" | _] -> {:error, {:ix_cli_failed, args, 1, "no capacity"}}
-              _ -> :ok
-            end
+          case args do
+            ["new" | _] -> {:error, {:ix_cli_failed, args, 1, "no capacity"}}
+            _ -> :ok
           end
-        })
+        end)
 
       opts = [config: config(placement_fallback: :host), driver: failing_ixvm]
 
@@ -316,14 +314,12 @@ defmodule SymphonyElixir.Runtime.PlacementTest do
 
     test "fallback :local resolves to no per-run placement (the client uses the default url)" do
       failing_ixvm =
-        Map.merge(host_driver(self()), %{
-          ix_cmd: fn _config, args, _timeout ->
-            case args do
-              ["new" | _] -> {:error, {:ix_cli_failed, args, 1, "boom"}}
-              _ -> :ok
-            end
+        Map.put(host_driver(self()), :ix_cmd, fn _config, args, _timeout ->
+          case args do
+            ["new" | _] -> {:error, {:ix_cli_failed, args, 1, "boom"}}
+            _ -> :ok
           end
-        })
+        end)
 
       opts = [config: config(placement_fallback: :local), driver: failing_ixvm]
 
@@ -333,14 +329,12 @@ defmodule SymphonyElixir.Runtime.PlacementTest do
 
     test "fallback :none leaves the original ixvm setup failure standing" do
       failing_ixvm =
-        Map.merge(host_driver(self()), %{
-          ix_cmd: fn _config, args, _timeout ->
-            case args do
-              ["new" | _] -> {:error, {:ix_cli_failed, args, 1, "boom"}}
-              _ -> :ok
-            end
+        Map.put(host_driver(self()), :ix_cmd, fn _config, args, _timeout ->
+          case args do
+            ["new" | _] -> {:error, {:ix_cli_failed, args, 1, "boom"}}
+            _ -> :ok
           end
-        })
+        end)
 
       opts = [config: config(placement_fallback: :none), driver: failing_ixvm]
 
@@ -474,14 +468,12 @@ defmodule SymphonyElixir.Runtime.PlacementTest do
 
     test "an ixvm node that fell back to host resolves the host checkout" do
       failing_ixvm =
-        Map.merge(host_driver(self()), %{
-          ix_cmd: fn _config, args, _timeout ->
-            case args do
-              ["new" | _] -> {:error, {:ix_cli_failed, args, 1, "no capacity"}}
-              _ -> :ok
-            end
+        Map.put(host_driver(self()), :ix_cmd, fn _config, args, _timeout ->
+          case args do
+            ["new" | _] -> {:error, {:ix_cli_failed, args, 1, "no capacity"}}
+            _ -> :ok
           end
-        })
+        end)
 
       opts = [config: config(placement_fallback: :host), driver: failing_ixvm]
       assert {:ok, _url} = Placement.acquire("run_cwd_fb", :ixvm, opts)
@@ -531,7 +523,7 @@ defmodule SymphonyElixir.Runtime.PlacementTest do
       assert_received {:systemctl_stop, "symphony-host-dead.service"}
       refute_received {:systemctl_stop, "symphony-host-live.service"}
       assert_received {:systemd_run, clean_args}
-      assert Enum.member?(clean_args, "--unit=symphony-host-dead-clean.service")
+      assert "--unit=symphony-host-dead-clean.service" in clean_args
 
       # The live run is re-attached so a resumed acquire resolves to the
       # existing server instead of provisioning a duplicate.

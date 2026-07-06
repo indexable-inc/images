@@ -52,7 +52,7 @@ defmodule SymphonyElixir.Engine.Client do
 
   alias SymphonyElixir.Engine.Envelope
 
-  @default_timeout_ms :timer.minutes(60)
+  @default_timeout_ms to_timeout(hour: 1)
 
   @typedoc """
   Everything a turn needs beyond the envelope: the prompt text the engine
@@ -207,14 +207,7 @@ defmodule SymphonyElixir.Engine.Client do
     timeout = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
     req_options = Keyword.get(opts, :req_options, [])
 
-    request =
-      [
-        url: join(base_url, "/api/agent/turns"),
-        json: body,
-        receive_timeout: timeout,
-        connect_options: [timeout: 30_000]
-      ]
-      |> Keyword.merge(req_options)
+    request = Keyword.merge([url: join(base_url, "/api/agent/turns"), json: body, receive_timeout: timeout, connect_options: [timeout: 30_000]], req_options)
 
     case Req.post(request) do
       {:ok, %{status: status, body: response}} when status in 200..299 ->
@@ -256,14 +249,13 @@ defmodule SymphonyElixir.Engine.Client do
   # when the engine did not price the turn, so a present `:usd` always
   # means a real number.
   defp parse_cost(usage) when is_map(usage) do
-    %{
+    drop_nil(%{
       usd: Map.get(usage, "costUsd"),
       tokens_in: Map.get(usage, "tokensIn", 0),
       tokens_out: Map.get(usage, "tokensOut", 0),
       cache_read: Map.get(usage, "cacheRead", 0),
       cache_creation: Map.get(usage, "cacheCreation", 0)
-    }
-    |> drop_nil()
+    })
   end
 
   defp parse_cost(_), do: nil

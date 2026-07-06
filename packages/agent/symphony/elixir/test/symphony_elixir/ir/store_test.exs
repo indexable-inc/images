@@ -2,7 +2,10 @@ defmodule SymphonyElixir.IR.StoreTest do
   use ExUnit.Case, async: true
 
   alias SymphonyElixir.Engine.Envelope
-  alias SymphonyElixir.IR.{Attempt, Node, RunGraph, Store}
+  alias SymphonyElixir.IR.Attempt
+  alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.IR.RunGraph
+  alias SymphonyElixir.IR.Store
 
   setup do
     dir = Path.join(System.tmp_dir!(), "ir_store_test_#{System.unique_integer([:positive])}")
@@ -26,7 +29,7 @@ defmodule SymphonyElixir.IR.StoreTest do
         state: :running
       )
 
-    attempt = Attempt.start(1, :codex, "thread-abc") |> Attempt.finish(:succeeded, :ok, %{usd: 0.12, tokens_in: 100})
+    attempt = 1 |> Attempt.start(:codex, "thread-abc") |> Attempt.finish(:succeeded, :ok, %{usd: 0.12, tokens_in: 100})
     agent = %{agent | attempts: [attempt]}
 
     exec =
@@ -38,7 +41,8 @@ defmodule SymphonyElixir.IR.StoreTest do
         state: :pending
       )
 
-    RunGraph.new("run-store-1", "deadbeef", {:ast, [:root]})
+    "run-store-1"
+    |> RunGraph.new("deadbeef", {:ast, [:root]})
     |> RunGraph.put_nodes([agent, exec])
     |> RunGraph.append_expansion({:gate, "g1"}, {:observed, true}, ["exec-1"])
   end
@@ -109,7 +113,8 @@ defmodule SymphonyElixir.IR.StoreTest do
 
   test "round-trips a graph with a placement map (ixvm declared, host effective)", %{dir: dir} do
     graph =
-      RunGraph.new("run-placement", "deadbeef", nil)
+      "run-placement"
+      |> RunGraph.new("deadbeef", nil)
       |> Map.put(:placement, %{declared: :ixvm, effective: :host})
 
     assert :ok = Store.persist(graph, dir: dir)
@@ -120,7 +125,8 @@ defmodule SymphonyElixir.IR.StoreTest do
 
   test "round-trips a graph with a remote effective placement (ixvm -> remote fallback)", %{dir: dir} do
     graph =
-      RunGraph.new("run-placement-remote", "deadbeef", nil)
+      "run-placement-remote"
+      |> RunGraph.new("deadbeef", nil)
       |> Map.put(:placement, %{declared: :ixvm, effective: :remote})
 
     assert :ok = Store.persist(graph, dir: dir)
@@ -131,7 +137,8 @@ defmodule SymphonyElixir.IR.StoreTest do
 
   test "round-trips a graph with a host-named declared placement", %{dir: dir} do
     graph =
-      RunGraph.new("run-placement-host-named", "deadbeef", nil)
+      "run-placement-host-named"
+      |> RunGraph.new("deadbeef", nil)
       |> Map.put(:placement, %{declared: {:host, "box1"}, effective: :host})
 
     assert :ok = Store.persist(graph, dir: dir)

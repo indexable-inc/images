@@ -40,7 +40,8 @@ defmodule SymphonyElixir.Runtime.ExecRunner do
   conservative stance of the pre-overhaul exec path.
   """
 
-  alias SymphonyElixir.{Config, GithubApp}
+  alias SymphonyElixir.Config
+  alias SymphonyElixir.GithubApp
   alias SymphonyElixir.IR.Node
 
   require Logger
@@ -169,7 +170,7 @@ defmodule SymphonyElixir.Runtime.ExecRunner do
   defp check_executable(absolute, rel_path) do
     case File.stat(absolute) do
       {:ok, %File.Stat{mode: mode}} ->
-        if Bitwise.band(mode, 0o111) != 0, do: :ok, else: {:error, {:exec_not_executable, rel_path}}
+        if Bitwise.band(mode, 0o111) == 0, do: {:error, {:exec_not_executable, rel_path}}, else: :ok
 
       _ ->
         {:error, {:exec_not_executable, rel_path}}
@@ -242,7 +243,6 @@ defmodule SymphonyElixir.Runtime.ExecRunner do
   end
 
   defp inherited_env do
-    System.get_env()
-    |> Enum.map(fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)
+    Enum.map(System.get_env(), fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)
   end
 end

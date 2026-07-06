@@ -1,7 +1,8 @@
 defmodule SymphonyElixir.Engine.ClientTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.Engine.{Client, Envelope}
+  alias SymphonyElixir.Engine.Client
+  alias SymphonyElixir.Engine.Envelope
 
   describe "request_body/2" do
     test "lowers a codex envelope to the camelCase TurnRequest wire shape" do
@@ -76,6 +77,7 @@ defmodule SymphonyElixir.Engine.ClientTest do
       # systemd-run unit) and registered its loopback URL under run_id. The
       # client reads it back the same way it resolves :ixvm; no real unit.
       defmodule HostPlacement do
+        @moduledoc false
         def base_url("run_host"), do: {:ok, "http://127.0.0.1:41234"}
         def base_url(_), do: :error
       end
@@ -100,6 +102,7 @@ defmodule SymphonyElixir.Engine.ClientTest do
 
     test "a host location with no acquired placement fails loudly rather than routing to the default" do
       defmodule UnresolvedHostPlacement do
+        @moduledoc false
         def base_url(_run_id), do: :error
       end
 
@@ -127,6 +130,7 @@ defmodule SymphonyElixir.Engine.ClientTest do
       # provisioned this URL before the first agent turn. No real VM is
       # created; the client just reads the resolved per-run base URL.
       defmodule StubPlacement do
+        @moduledoc false
         def base_url("run_42"), do: {:ok, "http://run-42-vm.test:8080"}
         def base_url(_), do: :error
       end
@@ -151,6 +155,7 @@ defmodule SymphonyElixir.Engine.ClientTest do
 
     test "an ixvm location with no acquired placement fails loudly rather than routing to the default" do
       defmodule UnresolvedPlacement do
+        @moduledoc false
         def base_url(_run_id), do: :error
       end
 

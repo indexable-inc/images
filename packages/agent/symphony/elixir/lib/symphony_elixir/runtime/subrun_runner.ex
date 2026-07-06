@@ -40,8 +40,12 @@ defmodule SymphonyElixir.Runtime.SubrunRunner do
   in-memory snapshot, so the mapped result reflects the persisted truth.
   """
 
-  alias SymphonyElixir.{Config, Runtime, WorkflowCatalog}
-  alias SymphonyElixir.IR.{Node, RunGraph, Store}
+  alias SymphonyElixir.Config
+  alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.IR.RunGraph
+  alias SymphonyElixir.IR.Store
+  alias SymphonyElixir.Runtime
+  alias SymphonyElixir.WorkflowCatalog
 
   require Logger
 
@@ -167,9 +171,7 @@ defmodule SymphonyElixir.Runtime.SubrunRunner do
     literals =
       for {key, {:literal, value}} <- inputs, key != "source", into: %{}, do: {key, value}
 
-    context =
-      literals
-      |> Map.merge(Map.drop(resolved, ["source"]))
+    context = Map.merge(literals, Map.delete(resolved, "source"))
 
     if context == %{}, do: nil, else: context
   end

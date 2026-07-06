@@ -11,7 +11,8 @@ defmodule SymphonyElixir.Codex.Provision do
   here means the load-bearing git auth header has a single owner.
   """
 
-  alias SymphonyElixir.{Config, RepositoryCatalog}
+  alias SymphonyElixir.Config
+  alias SymphonyElixir.RepositoryCatalog
 
   @ix_workspace_root "/workspace/symphony"
   @ix_room_state_root "/var/lib/symphony-room"
@@ -190,7 +191,8 @@ defmodule SymphonyElixir.Codex.Provision do
 
   defp append_name_hash(slug, run_id, node_id) do
     hash =
-      :crypto.hash(:sha256, run_id <> ":" <> node_id)
+      :sha256
+      |> :crypto.hash(run_id <> ":" <> node_id)
       |> Base.encode16(case: :lower)
       |> String.slice(0, 10)
 
@@ -251,7 +253,8 @@ defmodule SymphonyElixir.Codex.Provision do
   @spec host_unit_base(String.t(), String.t()) :: String.t()
   def host_unit_base(run_id, node_id) when is_binary(run_id) and is_binary(node_id) do
     hash =
-      :crypto.hash(:sha256, run_id <> ":" <> node_id)
+      :sha256
+      |> :crypto.hash(run_id <> ":" <> node_id)
       |> Base.encode16(case: :lower)
       |> String.slice(0, 16)
 
@@ -266,8 +269,7 @@ defmodule SymphonyElixir.Codex.Provision do
   """
   @spec host_run_sync_args(Config.t(), String.t(), Path.t(), String.t(), [{String.t(), String.t()}], [String.t()]) ::
           [String.t()]
-  def host_run_sync_args(%Config{} = config, user, home, unit, env, command)
-      when is_binary(user) and is_binary(home) and is_binary(unit) and is_list(env) and is_list(command) do
+  def host_run_sync_args(%Config{} = config, user, home, unit, env, command) when is_binary(user) and is_binary(home) and is_binary(unit) and is_list(env) and is_list(command) do
     host_base_run_args(config, user, home, env) ++ ["--unit=" <> unit, "--pipe", "--wait", "--"] ++ command
   end
 
@@ -278,8 +280,7 @@ defmodule SymphonyElixir.Codex.Provision do
   """
   @spec host_run_unit_args(Config.t(), String.t(), Path.t(), String.t(), [{String.t(), String.t()}], [String.t()]) ::
           [String.t()]
-  def host_run_unit_args(%Config{} = config, user, home, unit, env, command)
-      when is_binary(user) and is_binary(home) and is_binary(unit) and is_list(env) and is_list(command) do
+  def host_run_unit_args(%Config{} = config, user, home, unit, env, command) when is_binary(user) and is_binary(home) and is_binary(unit) and is_list(env) and is_list(command) do
     host_base_run_args(config, user, home, env) ++ ["--unit=" <> unit, "--"] ++ command
   end
 
@@ -307,8 +308,7 @@ defmodule SymphonyElixir.Codex.Provision do
           String.t() | nil,
           [RepositoryCatalog.t()] | nil
         ) :: String.t()
-  def host_workspace_script(%Config{} = config, run_root, state_dir, run_id, token, repositories \\ nil)
-      when is_binary(run_root) and is_binary(state_dir) and is_binary(run_id) do
+  def host_workspace_script(%Config{} = config, run_root, state_dir, run_id, token, repositories \\ nil) when is_binary(run_root) and is_binary(state_dir) and is_binary(run_id) do
     blocks = repo_blocks(config, run_root, "symphony/#{run_id}", token, repositories)
 
     """
@@ -332,8 +332,7 @@ defmodule SymphonyElixir.Codex.Provision do
   one host.
   """
   @spec host_room_server_command(Config.t(), String.t(), pos_integer(), Path.t()) :: [String.t()]
-  def host_room_server_command(%Config{host_room_server_command: command}, host, port, state_dir)
-      when is_binary(host) and is_integer(port) and is_binary(state_dir) do
+  def host_room_server_command(%Config{host_room_server_command: command}, host, port, state_dir) when is_binary(host) and is_integer(port) and is_binary(state_dir) do
     [exe | rest] =
       case String.split(command, ~r/\s+/, trim: true) do
         [head | rest] -> [System.find_executable(head) || head | rest]
@@ -403,8 +402,7 @@ defmodule SymphonyElixir.Codex.Provision do
   def repo_blocks(%Config{} = config, run_root, branch, token, repositories \\ nil) do
     basic = if is_binary(token), do: Base.encode64("x-access-token:" <> token)
 
-    (repositories || RepositoryCatalog.all(config))
-    |> Enum.map_join("\n", &clone_repo_block(&1, run_root, branch, basic, config))
+    Enum.map_join(repositories || RepositoryCatalog.all(config), "\n", &clone_repo_block(&1, run_root, branch, basic, config))
   end
 
   defp clone_repo_block(repo, run_root, branch, basic, config) do
@@ -475,8 +473,7 @@ defmodule SymphonyElixir.Codex.Provision do
       end
 
     passthrough =
-      config.ix_env_passthrough
-      |> Enum.flat_map(fn name ->
+      Enum.flat_map(config.ix_env_passthrough, fn name ->
         case System.get_env(name) do
           nil -> []
           "" -> []
@@ -507,8 +504,7 @@ defmodule SymphonyElixir.Codex.Provision do
 
   @doc "Human-facing backend name shown in the room backend picker."
   @spec backend_name(context(), String.t(), String.t()) :: String.t()
-  def backend_name(%{identifier: id, title: title}, _run_id, node_id)
-      when is_binary(id) and is_binary(title) do
+  def backend_name(%{identifier: id, title: title}, _run_id, node_id) when is_binary(id) and is_binary(title) do
     "#{id}: #{title} / #{node_id}"
   end
 

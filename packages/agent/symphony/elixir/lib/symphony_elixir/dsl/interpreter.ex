@@ -65,8 +65,7 @@ defmodule SymphonyElixir.DSL.Interpreter do
   expansion log. Pure; same inputs always produce the same result.
   """
   @spec expand(AST.workflow(), known_outputs(), expansion_log()) :: result()
-  def expand(%{kind: :workflow, statements: statements}, known_outputs \\ %{}, expansion_log \\ [])
-      when is_map(known_outputs) and is_list(expansion_log) do
+  def expand(%{kind: :workflow, statements: statements}, known_outputs \\ %{}, expansion_log \\ []) when is_map(known_outputs) and is_list(expansion_log) do
     counters = counters_from_log(expansion_log)
 
     acc = %{
@@ -590,8 +589,7 @@ defmodule SymphonyElixir.DSL.Interpreter do
     expand_effect_keyed(expr, key, acc)
   end
 
-  defp expand_effect_keyed(%{kind: kind} = expr, key, acc)
-       when kind in [:agent, :exec, :subrun] do
+  defp expand_effect_keyed(%{kind: kind} = expr, key, acc) when kind in [:agent, :exec, :subrun] do
     id = node_id(expr.id, key)
 
     {inputs, pending_ids, prompt_ref, envelope} = keyed_node_parts(expr, acc)

@@ -41,7 +41,11 @@ defmodule SymphonyElixir.Runtime.Recovery do
   `:unknown` thread falls through to the strand/retry policy.
   """
 
-  alias SymphonyElixir.IR.{Attempt, Graph, Node, RunGraph, Store}
+  alias SymphonyElixir.IR.Attempt
+  alias SymphonyElixir.IR.Graph
+  alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.IR.RunGraph
+  alias SymphonyElixir.IR.Store
 
   @doc """
   Rebuild a materialized graph from an AST and an expansion log by
@@ -58,8 +62,7 @@ defmodule SymphonyElixir.Runtime.Recovery do
   @spec replay(RunGraph.t(), (term(), term(), %{String.t() => Node.t()} -> [Node.t()])) ::
           RunGraph.t()
   def replay(%RunGraph{} = graph, expand_fun \\ &default_expand/3) when is_function(expand_fun, 3) do
-    graph.expansion_log
-    |> Enum.reduce(graph, fn event, acc ->
+    Enum.reduce(graph.expansion_log, graph, fn event, acc ->
       emitted = expand_fun.(event.origin, event.observed, acc.nodes)
       RunGraph.put_nodes(acc, emitted)
     end)
@@ -142,8 +145,7 @@ defmodule SymphonyElixir.Runtime.Recovery do
 
   defp subrun_result(%RunGraph{status: :succeeded} = child), do: {:ok, subrun_output(child)}
 
-  defp subrun_result(%RunGraph{status: status, run_id: run_id}) when status in [:failed, :cancelled],
-    do: {:error, {:subrun_failed, run_id, status}}
+  defp subrun_result(%RunGraph{status: status, run_id: run_id}) when status in [:failed, :cancelled], do: {:error, {:subrun_failed, run_id, status}}
 
   defp subrun_output(%RunGraph{} = child) do
     %{
@@ -237,7 +239,7 @@ defmodule SymphonyElixir.Runtime.Recovery do
         # No attempt was ever recorded (persisted :running before the
         # attempt struct was appended). Synthesize one so the run record
         # still explains the strand.
-        attempt = Attempt.start(1, attempt_engine(node)) |> Attempt.finish(:stranded, :stranded)
+        attempt = 1 |> Attempt.start(attempt_engine(node)) |> Attempt.finish(:stranded, :stranded)
         put_attempts(graph, node, [attempt])
 
       {:ok, node} ->
@@ -260,8 +262,7 @@ defmodule SymphonyElixir.Runtime.Recovery do
     Enum.map(attempts, fn a -> if a.n == current.n, do: finished, else: a end)
   end
 
-  defp attempt_engine(%Node{envelope: %{engine: engine}}) when engine in [:codex, :claude, :pi],
-    do: engine
+  defp attempt_engine(%Node{envelope: %{engine: engine}}) when engine in [:codex, :claude, :pi], do: engine
 
   defp attempt_engine(_node), do: :codex
 

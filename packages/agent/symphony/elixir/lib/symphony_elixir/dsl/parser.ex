@@ -127,7 +127,7 @@ defmodule SymphonyElixir.DSL.Parser do
          {:ok, _, s4} <- expect(s3, :lbrace, "{"),
          {:ok, statements, s5} <- parse_statements(s4, []),
          {:ok, _, s6} <- expect(s5, :rbrace, "}") do
-      name = if name_tok, do: name_tok.value, else: nil
+      name = if name_tok, do: name_tok.value
       {:ok, AST.workflow(name, trigger, statements, "workflow"), s6}
     end
   end
@@ -189,8 +189,7 @@ defmodule SymphonyElixir.DSL.Parser do
     end
   end
 
-  defp parse_trigger_kind(other, state),
-    do: error(state, "unknown trigger kind #{inspect(other)}", other)
+  defp parse_trigger_kind(other, state), do: error(state, "unknown trigger kind #{inspect(other)}", other)
 
   # `<name> "<value>"`: a labeled string param such as `label "..."` or
   # `repo "..."`. The label is a bare identifier; the value is a string.
@@ -405,7 +404,7 @@ defmodule SymphonyElixir.DSL.Parser do
         end
 
       other ->
-        error(state, "expected a prompt (skill \"name\" or inline \"text\")", token_value(other))
+        error(state, ~s{expected a prompt (skill "name" or inline "text")}, token_value(other))
     end
   end
 
@@ -625,8 +624,7 @@ defmodule SymphonyElixir.DSL.Parser do
 
   # --- token helpers ------------------------------------------------------
 
-  defp require_prompt(%{prompt: nil}, state),
-    do: error(state, "agent is missing a prompt field", :missing_prompt)
+  defp require_prompt(%{prompt: nil}, state), do: error(state, "agent is missing a prompt field", :missing_prompt)
 
   defp require_prompt(%{prompt: prompt}, _state), do: {:ok, prompt}
 
