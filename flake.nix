@@ -298,14 +298,22 @@
         }
     );
     collect = key: lib.mapAttrs (_: out: out.${key}) perSystem;
-    rawPackages = collect "packages";
     linuxDarwinAliases = perSystem.x86_64-linux.darwinPackageAliases or {};
-    packages =
-      rawPackages
+    # Graft the Linux->Darwin cross aliases over a collected per-system set, so
+    # a Darwin namespace resolves an aliased attr to the cross-compiled
+    # x86_64-linux derivation instead of a native rebuild. Applied to both
+    # `packages` (the consumer surface) and `cachePushRoots` (what
+    # cache-push.yml publishes): the darwin cache lane realises the post-alias
+    # set filtered to native aarch64-darwin drvs, so an alias-shadowed native
+    # variant (e.g. dag-runner) is neither built nor published -- consumers can
+    # never install it (#1890).
+    withDarwinAliases = raw:
+      raw
       // lib.genAttrs [
         "aarch64-darwin"
         "x86_64-darwin"
-      ] (system: rawPackages.${system} // (linuxDarwinAliases.${system} or {}));
+      ] (system: raw.${system} // (linuxDarwinAliases.${system} or {}));
+    packages = withDarwinAliases (collect "packages");
   in {
     lib = ix;
     inherit (ix) nixosModules;
@@ -386,7 +394,7 @@
     # `toplevel` closure; cache-push.yml publishes this instead of the
     # monolithic `*-oci.tar` archives, which nothing substitutes. Non-schema,
     # so surfaced through `collect` like `ciChecks`. See lib/per-system.nix.
-    cachePushRoots = collect "cachePushRoots";
+    cachePushRoots = withDarwinAliases (collect "cachePushRoots");
     formatter = collect "formatter";
     apps = collect "apps";
     devShells = collect "devShells";

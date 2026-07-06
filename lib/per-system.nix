@@ -1342,6 +1342,13 @@ in {
   #      forces at eval when it substitutes a Darwin cross output. These are
   #      build-time deps of the cross packages, so they are absent from those
   #      packages' runtime closures; adding them as roots is the fix for #1687.
+  #   4. On Darwin hosts, the native lane's eval-time IFD outputs
+  #      (`nativeIfdRoots`): the same three unit-graph artifacts as (3) but for
+  #      the host's own target, which a Darwin consumer forces at eval when it
+  #      evaluates any native wrapper (codex, claude-code) against the workspace
+  #      unit graph. Runtime closures never carry them, so without explicit
+  #      roots every Darwin consumer re-vendors and re-renders the graph at
+  #      eval -- the same trap as (3), for the darwin cache lane (#1890).
   cachePushRoots = let
     # Per-node `health-check-*` lifecycle packages and the two
     # `health-checks{,-zellij}` runners all share the `health-check` prefix.
@@ -1360,8 +1367,16 @@ in {
           fleet.systemPackages
       )
       exampleFleets;
+    # Native analog of `crossIfdRoots` (adjustment 4). `crossWorkspace` with no
+    # target override IS the host workspace, so these are exactly the drvs a
+    # Darwin consumer's eval of the native wrappers imports.
+    nativeIfdRoots = lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
+      native-ifd-units-nix = crossWorkspace.units.unitsNix;
+      native-ifd-unit-graph = crossWorkspace.units.unitGraphJson;
+      native-ifd-vendor-dir = crossWorkspace.units.vendorDir;
+    };
   in
-    imagesAsClosures // exampleNodeToplevels // crossIfdRoots;
+    imagesAsClosures // exampleNodeToplevels // crossIfdRoots // nativeIfdRoots;
 
   inherit darwinPackageAliases;
 
