@@ -92,7 +92,9 @@ mcp = FastMCP("ix-mcp")
 
 # One short id per live MCP session, keyed weakly by the session object so an id
 # is stable for a client's whole session and the map never pins a closed one.
-_session_ids: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+# Keys are typed `object`: the session is only ever used as an identity key here
+# (see `_http_session`), never through the ServerSession API.
+_session_ids: weakref.WeakKeyDictionary[object, str] = weakref.WeakKeyDictionary()
 
 
 def _http_session(ctx: Context | None) -> object | None:
@@ -147,8 +149,8 @@ _dashboard_started = False
 # session instead of a long-lived `serve --http` advertising it forever
 # (index#1789 review). The one stdio/embedder client has no session object to
 # key on; its label lives in `_solo_session_name` and dies with the process.
-_session_labels: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
-_session_topics: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_session_labels: weakref.WeakKeyDictionary[object, str] = weakref.WeakKeyDictionary()
+_session_topics: weakref.WeakKeyDictionary[object, str] = weakref.WeakKeyDictionary()
 _solo_session_name: str | None = None
 _solo_topic: str | None = None
 
@@ -660,12 +662,16 @@ _reply_conn: sqlite3.Connection | None = None
 def _reply_store() -> sqlite3.Connection:
     global _reply_conn
     if _reply_conn is None:
+        # `store_path` is None outside `serve` (e.g. an embedder driving the
+        # tools directly), which needs the same error as having no config at all.
         try:
             path = config().store_path
-        except RuntimeError as exc:
+        except RuntimeError:
+            path = None
+        if path is None:
             raise McpError(
                 ErrorData(code=types.INTERNAL_ERROR, message="no store configured; reply needs `ix-mcp serve`")
-            ) from exc
+            )
         from . import store
 
         _reply_conn = store.connect(path)
@@ -783,9 +789,13 @@ async def _read_resource_handler(uri: AnyUrl) -> list[ReadResourceContents]:
 
 
 # Register on the wrapped low-level server (overriding FastMCP's, which the
-# handlers above delegate back to for static resources).
-mcp._mcp_server.list_resources()(_list_resources_handler)
-mcp._mcp_server.read_resource()(_read_resource_handler)
+# handlers above delegate back to for static resources). The mcp SDK defines
+# these decorator factories with no annotations at all, so each call trips
+# disallow-untyped-calls under --strict; the handlers themselves are fully
+# typed and the returned decorators annotate their `func` parameter, so the
+# registration is still checked.
+mcp._mcp_server.list_resources()(_list_resources_handler)  # type: ignore[no-untyped-call]
+mcp._mcp_server.read_resource()(_read_resource_handler)  # type: ignore[no-untyped-call]
 
 
 @mcp.tool(

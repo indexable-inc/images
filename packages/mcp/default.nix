@@ -1425,12 +1425,23 @@
     "worktree"
     "mesh"
   ];
+  # The `ix_notebook_mcp` server package is migrated file-by-file (the package
+  # as a whole is still ~200 errors from strict-clean, index#1902): each file
+  # here is a check target inside the copied `ix_notebook_mcp/` tree. zuban
+  # only reports errors in the named targets, so a listed file's imports of
+  # still-unmigrated siblings do not drag their errors in.
+  strictGreenServerFiles = [
+    "tools.py"
+  ];
   strictTypecheck = let
     # All src module package dirs go on MYPYPATH so first-party cross-imports
     # resolve; the green subset are the actual check targets.
     allSrcModules = builtins.attrNames (builtins.readDir ./src);
     mypypath = lib.concatMapStringsSep ":" (m: "src/${m}") allSrcModules;
-    targets = lib.concatMapStringsSep " " (m: "src/${m}/${m}") strictGreenModules;
+    targets = lib.concatStringsSep " " (
+      map (m: "src/${m}/${m}") strictGreenModules
+      ++ map (f: "ix_notebook_mcp/${f}") strictGreenServerFiles
+    );
   in
     pkgs.runCommand "ix-mcp-strict-typecheck"
     {
@@ -1449,14 +1460,14 @@
       chmod -R u+w ix_notebook_mcp src
 
       export MYPYPATH=${lib.escapeShellArg mypypath}:.
-      echo "zuban check --strict over: ${toString strictGreenModules}"
+      echo "zuban check --strict over: ${toString strictGreenModules} + ix_notebook_mcp: ${toString strictGreenServerFiles}"
       zuban check --strict \
         --config-file zuban.ini \
         --python-executable ${mcpPython.interpreter} \
         --python-version ${pkgs.python3.pythonVersion} \
         --platform linux \
         ${targets}
-      echo "ruff check (ANN + TID251 no-cast) over: ${toString strictGreenModules}"
+      echo "ruff check (ANN + TID251 no-cast) over: ${toString strictGreenModules} + ix_notebook_mcp: ${toString strictGreenServerFiles}"
       ruff check ${ix.ruffAnnArgs} ${targets}
 
       mkdir -p "$out"
