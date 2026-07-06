@@ -1,9 +1,13 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="two agent VMs mount one SMB identity volume from file-server; builder opts out"></p>
+
 # ix fleet
 
-A forkable ix environment (RFC 0007). [`ix.nix`](ix.nix) is the runnable ix
-entrypoint, and [`dev.nix`](dev.nix) is the ordinary NixOS module for the
-per-VM environment, fleet topology, and opt-in shared SMB volume that gives the
-whole fleet one Claude (and ix) login.
+How do you give a whole fleet of agent VMs one Claude login? This is the
+forkable ix environment from RFC 0007: [`dev.nix`](dev.nix) is the ordinary
+NixOS module you edit (per-VM environment, fleet topology, opt-in shared SMB
+volume), and [`ix.nix`](ix.nix) hands it to `index.lib.mkDev`. The shared
+volume carries `~/.claude` and `~/.n`, so the first `claude login` on any
+agent logs in the whole fleet.
 
 ## Run
 
@@ -11,7 +15,8 @@ whole fleet one Claude (and ix) login.
 ix up
 ```
 
-Run that from a copied example flake. In this repo root, the aggregate example
+Run that from a copied example flake. In this repo root
+(`git clone https://github.com/indexable-inc/index`), the aggregate example
 wrapper still exposes `nix run .#dev-fleet-up`; the standalone example shape is
 what `ix up` consumes.
 
@@ -31,10 +36,10 @@ scale-up.
 
 `mkDev` reads `ix.dev` and desugars this into a `mkFleet` plan:
 
-- `agent-0`, `agent-1`, `builder` — workload nodes carrying the module's
+- `agent-0`, `agent-1`, `builder`: workload nodes carrying the module's
   environment on top of the dev base module (which ships our wrapped
   `claude-code` and `codex` via `lib/dev/agents.nix`).
-- `file-server` — a dedicated node running `smbd`, exporting the share `dev`
+- `file-server`: a dedicated node running `smbd`, exporting the share `dev`
   from `/var/lib/ix-dev-share`. Keeping it separate decouples the canonical
   credentials' lifecycle from the workload VMs, so recreating an agent never
   blips the share.
@@ -46,7 +51,7 @@ scale-up.
 `agent-0` and `agent-1` bind `~/.claude` and `~/.n` onto the volume, so the
 first `claude login` on either agent logs in the whole fleet; a new replica
 costs no extra auth. `builder` is in `ix.dev.shared.excludeNodes`, so it gets
-neither the mount nor the shared identity - the per-VM opt-out - but it still
+neither the mount nor the shared identity (the per-VM opt-out), but it still
 has the agents.
 
 Only `~/.claude` and `~/.n` are shared, never the whole `~/.config`. The image's
