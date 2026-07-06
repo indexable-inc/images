@@ -2911,6 +2911,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "efx"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "efx-engine",
+ "efx-ir",
+ "efx-lang",
+ "tempfile",
+]
+
+[[package]]
+name = "efx-engine"
+version = "0.1.0"
+dependencies = [
+ "efx-ir",
+ "serde",
+ "serde_json",
+ "snafu",
+ "tempfile",
+]
+
+[[package]]
+name = "efx-ir"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "snafu",
+]
+
+[[package]]
+name = "efx-lang"
+version = "0.1.0"
+dependencies = [
+ "efx-ir",
+ "snafu",
+]
+
+[[package]]
 name = "either"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
