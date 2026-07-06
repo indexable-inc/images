@@ -12156,6 +12156,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "unibind-conformance"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "pyo3",
+ "tokio",
+ "unibind",
+ "unibind-runtime",
+]
+
+[[package]]
 name = "unibind-core"
 version = "0.1.0"
 dependencies = [

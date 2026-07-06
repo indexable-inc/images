@@ -94,6 +94,7 @@ members = [
   "packages/tui/tui-node",
   "packages/tui/tui-py",
   "packages/unibind/backend-py",
+  "packages/unibind/conformance",
   "packages/unibind/core",
   "packages/unibind/gen",
   "packages/unibind/macros",

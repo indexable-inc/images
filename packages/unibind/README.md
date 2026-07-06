@@ -70,8 +70,11 @@ mod _mylib {
   class under one base class named after the enum; `py(base = "...")` picks
   the built-in the base extends. The enum implements `Display`, and the
   raised exception carries that text.
-- `#[unibind::object]` reserves the surface for stateful handles; it errors
-  until phase 2 (#1992).
+- `#[unibind::object]` marks a stateful handle: inherent methods (implicit
+  `&self`) become methods on a native class, and `#[unibind(constructor)]`
+  names the receiver-less constructor. `object(resource)` adds
+  deterministic cleanup: a generated `close()`, `async with` support, and
+  a `ResourceWarning` when the handle is dropped unclosed.
 - `#[unibind(py(name = "..."))]` renames a module, function, argument, field,
   or error variant for Python. `#[unibind(default = ...)]` gives an argument
   a default; `Option` arguments default to `None` automatically.
@@ -109,8 +112,8 @@ Crates:
 
 - `core`: the IR types (`Interface`, functions, records, enums, errors,
   objects, the boundary `Type`), the syn lowering, and the link-section
-  embed. Enums, objects, and async exist in the IR but phase 0 rejects them
-  with pointers at the phase that ships them.
+  embed. Phase 2 turned on async, streams, and
+  objects; plain (non-error) enums still wait for their phase.
 - `gen`: the `unibind-gen` binary. Reads the embedded IR out of a compiled
   artifact and emits the host-language files above; run at build time by
   `unibind.lib.build`, never at macro time.
@@ -146,13 +149,41 @@ argument-only; returns and record fields own their data.
 Phase 1 changes nothing in this table: the `.pyi` emitter renders these same
 rules (argument vs return position included) from the untouched IR.
 
+## Phase 2 surface
+
+- `pub async fn` exports as a real asyncio coroutine on the shared tokio
+  runtime. Cancellation is true cancellation: cancelling the Python task
+  drops the in-flight Rust future, so guards, locks, and connections
+  release immediately instead of leaking on a detached task.
+- `fn ... -> UniStream<T>` (bare or behind `async fn`/`Result`) exports as
+  an async iterator. It is pull-based: each `__anext__` polls exactly one
+  item, so a consumer that stops early stops the producer with it.
+- `#[unibind(blocking)]` runs the call with the GIL released, for
+  CPU-bound or thread-sleeping work that must not stall the interpreter.
+- `&[u8]` arguments cross through the buffer protocol with no copy:
+  `bytes`, `bytearray`, and contiguous `memoryview` all alias the caller's
+  memory for the duration of the call.
+- A crate exporting async functions, streams, or objects adds
+  `unibind-runtime` with the `py` feature next to its `unibind` dependency;
+  sync-only crates (scipql-py) do not need it.
+
+## Conformance suite
+
+`packages/unibind/conformance` is the runtime proof for everything above:
+a cdylib exporting the full phase-2 surface plus a stdlib-only `runner.py`
+that asserts the semantics from Python with quantitative evidence, such as
+live/dropped guard counts around `task.cancel()`, produced-vs-consumed
+stream counters, exactly one `ResourceWarning` per leaked resource, and
+`ctypes.addressof` equality for zero-copy buffers. It runs in CI as
+`checks.<system>.unibind-conformance-run`.
+
 ## Phases
 
 | Phase | Issue | Scope |
 | ----- | ----- | ----- |
 | 0     | #1990 | core IR, macro skeleton, pyo3 backend for sync functions, records, errors; proven by porting `packages/code/scipql/py` |
 | 1     | #1991 | `unibind-gen`: host files (`.pyi`) from the embedded IR, `unibind.lib.build` nix glue |
-| 2     | #1992 | async, cancellation, streams, resources/objects (Python backend) |
+| 2     | #1992 | async, cancellation, streams, resources/objects (Python backend); proven by `packages/unibind/conformance` |
 | 3     | #1993 | TypeScript backend (napi-rs) with enriched `.d.ts` |
 | 4     | #1994 | Rust client backend over a stable ABI |
 | 5     | #1995 | Elixir backend (rustler, generated `.ex`, `@spec`) |
