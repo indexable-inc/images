@@ -112,10 +112,12 @@ fn record_class(interface: &ir::Interface, record: &ir::Record) -> String {
             format!("{py}: {ty}")
         })
         .collect();
-    members.push(format!(
-        "    def __init__(self{}) -> None: ...",
-        params.iter().map(|param| format!(", {param}")).collect::<String>()
-    ));
+    let mut init_params = String::from("self");
+    for param in &params {
+        init_params.push_str(", ");
+        init_params.push_str(param);
+    }
+    members.push(format!("    def __init__({init_params}) -> None: ..."));
 
     for field in &record.fields {
         let py = types::py_name(&field.names, &field.name);

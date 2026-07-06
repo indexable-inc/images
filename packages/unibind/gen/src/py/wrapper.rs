@@ -5,6 +5,8 @@
 //! layers hand-written Python over the extension (the scipql shape) keeps
 //! its own `__init__.py` and the caller passes `--skip-init` instead.
 
+use std::fmt::Write as _;
+
 use unibind_core::ir;
 
 use crate::py::stub;
@@ -21,13 +23,13 @@ pub fn render(interface: &ir::Interface, module_name: &str) -> String {
         out.push_str(&stub::docstring(&interface.docs, 0));
         out.push_str("\n\n");
     }
-    out.push_str(&format!("from .{module_name} import (\n"));
+    writeln!(out, "from .{module_name} import (").expect("write to string");
     for name in &names {
-        out.push_str(&format!("    {name},\n"));
+        writeln!(out, "    {name},").expect("write to string");
     }
     out.push_str(")\n\n__all__ = [\n");
     for name in &names {
-        out.push_str(&format!("    \"{name}\",\n"));
+        writeln!(out, "    \"{name}\",").expect("write to string");
     }
     out.push_str("]\n");
     out

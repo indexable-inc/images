@@ -65,15 +65,12 @@ pub fn read(path: &Path) -> anyhow::Result<EmbeddedInterfaces> {
 pub fn parse_ir_bytes(bytes: &[u8]) -> anyhow::Result<Vec<Interface>> {
     let mut interfaces = Vec::new();
     let mut rest = bytes;
-    loop {
-        // The linker pads and concatenates the embedded statics, so skip any
-        // NUL (or stray whitespace) run before the next JSON document.
-        let Some(start) = rest
-            .iter()
-            .position(|byte| *byte != 0 && !byte.is_ascii_whitespace())
-        else {
-            break;
-        };
+    // The linker pads and concatenates the embedded statics, so skip the NUL
+    // (or stray whitespace) run before each JSON document.
+    while let Some(start) = rest
+        .iter()
+        .position(|byte| *byte != 0 && !byte.is_ascii_whitespace())
+    {
         rest = &rest[start..];
 
         let mut stream = serde_json::Deserializer::from_slice(rest).into_iter::<Interface>();
