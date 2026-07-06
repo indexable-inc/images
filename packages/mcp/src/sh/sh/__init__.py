@@ -104,7 +104,7 @@ import shlex
 import signal
 import sys
 import time
-from typing import Any
+from typing import IO
 
 __all__ = ["Output", "ShellError", "sh", "zsh"]
 
@@ -671,7 +671,7 @@ async def _exec(
     color: bool = True,
     echo: bool | None = None,
     name: str | None = None,
-    stdin: Any = asyncio.subprocess.DEVNULL,
+    stdin: int | IO[bytes] | None = asyncio.subprocess.DEVNULL,
 ) -> Output:
     """Run ``cmd`` on the shared async loop and return its :class:`Output`.
 
