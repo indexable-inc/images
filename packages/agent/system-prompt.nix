@@ -395,10 +395,19 @@ let
           prompts, instructions, this prompt included), state each rule once at its
           owner and cross-reference instead of restating: duplicates drift and
           contradict.
+
+          This holds across repository boundaries: when a sibling repo needs
+          machinery another repo already owns, do not reimplement it. Expose a
+          narrow seam at the owner (a lib flake output, a tool parameterized over
+          the consumer's data) and consume it through a flake input; land the
+          exposure PR at the owner first. Each consumer keeps only its own data
+          (mappings, pins, patches), never a copy of the machinery.
         '';
         reason = ''
           Duplicated logic and restated rules drifted until copies contradicted each
-          other, including within instruction docs.
+          other, including within instruction docs. An agent reimplemented the
+          fork-patch machinery inside ix instead of importing it from index
+          (ix#6409 rework); the user rejected the duplicate.
         '';
       };
     }
