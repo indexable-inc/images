@@ -469,9 +469,7 @@ let
           reusable owner the next consumer imports, in the repo's lib from day
           one even with a single consumer today: its shape is fixed by the
           format it owns, so extraction costs nothing and first use is the
-          extraction point. This is the exception, not license to hoist every
-          helper: a domain abstraction still waits for a real second consumer
-          before it earns a shared home.
+          extraction point.
         '';
         reason = ''
           Inline serialized forms (a socat `"TCP:''${host}:''${toString
