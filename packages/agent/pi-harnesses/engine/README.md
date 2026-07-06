@@ -1,21 +1,24 @@
+<p align="center"><img src="assets/hero.svg" width="640" alt="Room sends a prompt to the locked-down pi-harness, whose event mapper streams Room-shaped JSON events back"></p>
+
 # pi-harness
 
-The Index-side Pi engine harness (ENG-2262). It runs [Pi](https://pi.dev) as a
+How do you hand a model to a server without handing it a shell? pi-harness is
+the Index-side Pi engine harness (ENG-2262): it runs [Pi](https://pi.dev) as a
 Room-facing engine with **the built-in tools absent**, exposing **only** the
 `ix-mcp` tool surface, selecting the model declaratively, and emitting a
 machine-readable JSON event stream. This mirrors the Claude Code posture in
-`packages/agent/claude-code`: keep one shell/file/web surface by routing through
-the index MCP server. It is the first task in the ENG-2261 "Pi Room integration"
-stack.
+`packages/agent/claude-code`: keep one shell/file/web surface by routing
+through the index MCP server. It is the first task in the ENG-2261 "Pi Room
+integration" stack.
 
 ## What it is
 
 A declarative wrapper around `pi` plus one bridge extension. You import the
 package, you get a `pi-harness` command that launches Pi already locked down.
 
-```
-pi-harness "your prompt"                 # claude (opus-4-8), JSON event stream
-PI_HARNESS_MODEL=codex pi-harness "..."  # gpt-5.5 via OpenAI
+```sh
+nix run github:indexable-inc/index#pi-harness -- "your prompt"      # claude (opus-4-8), JSON event stream
+PI_HARNESS_MODEL=codex pi-harness "..."                             # gpt-5.5 via OpenAI
 ```
 
 ## How the lockdown works
@@ -37,9 +40,9 @@ PI_HARNESS_MODEL=codex pi-harness "..."  # gpt-5.5 via OpenAI
 - **Pi SDK vs CLI** → CLI subprocess in `--mode json`. Clean OS process boundary
   Room can spawn or call; headless-testable; no Node embedding. The SDK
   (`@earendil-works/pi-coding-agent`) stays a later option.
-- **Guaranteeing built-ins are absent** → `--no-builtin-tools` makes them absent,
-  not merely denied. The smoke test asserts no `bash`/`read`/`write`/`edit` tool
-  appears in the stream.
+- **Guaranteeing built-ins are absent** → `--no-builtin-tools` makes them
+  absent, not merely denied. The smoke test asserts no `bash`/`read`/`write`/
+  `edit` tool appears in the stream.
 - **Model/key ownership** → the harness owns model *selection* (`models.nix`);
   the caller owns *keys* (env), matching the ENG-2261 secret-store plan.
 - **Session** → `--no-session` (ephemeral per turn) for this first cut. A
@@ -97,9 +100,9 @@ ix-mcp store updates emit the dashboard-shaped payloads directly:
 
 Those payloads preserve the MCP dashboard interpretations for source/code,
 stdout tail, status, final result, rich mime outputs, bindings, curated cells,
-and live HTML resources. `code_html` is intentionally empty in the harness feed;
-the MCP UI already falls back to raw `code`, and final Room rendering owns
-syntax highlighting.
+and live HTML resources. `code_html` is intentionally empty in the harness
+feed; the MCP UI already falls back to raw `code`, and final Room rendering
+owns syntax highlighting.
 
 ## Validation
 
@@ -108,8 +111,8 @@ the **shipped** `bin/pi-harness`, and asserts: built-ins absent, `python_exec`
 exposed, JSON turn events emitted. It needs network + an API key, so run it
 yourself:
 
-```
-ANTHROPIC_API_KEY=... ./packages/pi-harness/smoke/run.sh
+```sh
+ANTHROPIC_API_KEY=... ./packages/agent/pi-harnesses/engine/smoke/run.sh
 ```
 
 The bridge is packaged with `buildNpmPackage`, so the store extension ships its
@@ -124,8 +127,8 @@ when listed there.
 
 The Room event mapper has a pure stdlib test:
 
-```
-python3 packages/pi-harness/room_event_mapper_test.py
+```sh
+python3 packages/agent/pi-harnesses/engine/room_event_mapper_test.py
 ```
 
 The process hardening is part of the shipped `pi-harness` binary. On Linux,
@@ -133,6 +136,9 @@ the launcher hardens itself first, then sets `LD_PRELOAD` for Pi so the
 post-`exec` Pi process reapplies the same non-dumpable boundary. The MCP child
 still gets the explicit scrubbed env from the bridge and does not inherit
 provider keys.
+
+Repo-local commands assume a clone:
+`git clone https://github.com/indexable-inc/index`.
 
 ## Follow-ups (intentionally deferred)
 
