@@ -152,6 +152,19 @@ def test_empty_record_is_one_row_zero_columns() -> None:
     assert df.shape == (1, 0)
 
 
+def test_cd_does_not_outlive_its_call(tmp_path: pathlib.Path) -> None:
+    # PWD re-syncs to the process cwd on every call (index#1986/#1999): a
+    # `cd` in one call must not leak into the next, and deleting a dir a
+    # previous call cd'ed into must not break later calls.
+    target = tmp_path / "transient"
+    target.mkdir()
+    run(nu(f"cd {target}"))
+    assert run(nu.value("$env.PWD")) == str(pathlib.Path.cwd())
+    run(nu(f"cd {target}"))
+    target.rmdir()
+    assert run(nu.value("2 + 2")) == 4
+
+
 def test_cwd_is_respected(tmp_path: pathlib.Path) -> None:
     (tmp_path / "hello.txt").write_text("hi")
     df = run(nu("ls | get name", cwd=tmp_path))

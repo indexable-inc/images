@@ -96,7 +96,8 @@ BLOCKING = (
     "them), and run anything slow as a background job you "
     "poll, never inline. To shell out, reach for `nu(...)` rather than a hand-rolled "
     "`asyncio.create_subprocess_exec/_shell` + `communicate()`, which runs synchronously on the "
-    "one loop and hands back ANSI-corrupted output."
+    "one loop and hands back ANSI-corrupted output. Run independent non-mutating commands "
+    "concurrently inside one cell with `asyncio.gather` or `asyncio.TaskGroup`."
 )
 
 RESULT_CONTRACT = (
@@ -111,10 +112,7 @@ RESULT_CONTRACT = (
     "`Result` is the opt-in for splitting the two views, `Result(user_html=..., llm_result=..., "
     "llm_images=...)`, when the human should see something rich that you should not pay tokens "
     "for (note: an explicit Result suppresses the automatic stdout echo; page "
-    "jobs['<id>'].output instead). For reusable Python in the kernel, write explicit "
-    "annotations at function and data boundaries. For package Python edits, run the repo's "
-    "type-checking entry point when one exists, and do not treat an untyped compile-only "
-    "check as equivalent."
+    "jobs['<id>'].output instead)."
 )
 
 # --- kernel guide only ---
@@ -182,9 +180,12 @@ NU = (
     "json')`); pass arguments as separate tokens so nushell never re-parses prose, and for `gh "
     "... --json` clear color forcing before `from json`: `with-env {NO_COLOR: \"1\" CLICOLOR: "
     "\"0\" CLICOLOR_FORCE: \"0\" FORCE_COLOR: \"0\"} { ^gh pr view 1 --json state | complete | "
-    "get stdout | from json }`. The engine is embedded and PERSISTENT, a REPL: a `let`, a `def`, "
-    "or a `cd` in one call is visible to the next, so bind an expensive fetch once (`let data = "
-    "http get ...`) and query it across calls; `nu.reset()` clears that state. Pipe a polars "
+    "get stdout | from json }`. The engine is embedded and PERSISTENT, a REPL: a `let` or a `def` "
+    "in one call is visible to the next, so bind an expensive fetch once (`let data = "
+    "http get ...`) and query it across calls; `nu.reset()` clears that state. PWD is the "
+    "exception: every call re-syncs it to the kernel process's cwd unless you pass `cwd=`, "
+    "so a `cd` does not outlive its call; address paths explicitly (`git -C <path>`, "
+    "absolute paths, `cwd=`). Pipe a polars "
     "frame you already have THROUGH a pipeline with `await nu(\"where a > 1 | sort-by a\", "
     "input=df)`. Use `await nu.value(code)` when you want the plain Python value (a scalar, a "
     "list, a dict) rather than a frame. A failing pipeline raises `NuError` carrying nushell's "

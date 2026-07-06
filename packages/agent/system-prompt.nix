@@ -147,6 +147,8 @@ let
         text = ''
           Before repository edits, create or enter a dedicated `git worktree` branch.
           If you are in the primary checkout, stop and move to a worktree before editing.
+          Before commit or branch work, verify the repo root and branch match the
+          assigned worktree.
         '';
         reason = ''
           Edits in the primary checkout collided with the user's and other agents'
@@ -662,27 +664,22 @@ let
       };
     }
     {
-      shellCwd = {
+      mcpGuidanceOwnership = {
         text = ''
-          `nu` is the one shell-out path: `await nu('<pipeline>')` returns a Polars
-          DataFrame, and an external binary runs with `^cmd` (`await nu('^git status')`).
-          The retired `sh()`/`zsh()` now raise a migration hint. The nu engine is a
-          persistent REPL: `cd`, `let`, `def`, and `$env` survive across calls, so a
-          later call inherits the previous call's PWD. Address paths explicitly
-          (`git -C <worktree>`, `cwd=<abs path>`) instead of relying on inherited
-          state, and never delete a directory an earlier call `cd`'ed into without
-          moving the engine out first: the next external spawn dies with `$env.PWD
-          points to a non-existent directory` (recover with an explicit `cwd=`).
-          Before commit or branch work, verify the repo root and branch match the
-          assigned worktree.
+          Guidance for driving the index MCP surface (`python_exec` mechanics, `nu`,
+          jobs, dashboard sessions, topics, and cells, bundled modules, `pr_watch`)
+          is authored in the MCP server's own instructions
+          (`packages/mcp/ix_notebook_mcp/guide.py`) and arrives with the connection.
+          This prompt only routes work to the kernel. When editing these
+          instructions, put MCP how-to in `guide.py`, never here.
         '';
         reason = ''
-          The prompt used to claim the kernel carried no cwd between calls; the
-          engine actually persists PWD (index#1986), so a `git worktree remove` of a
-          previously `cd`'ed dir broke the following call mid-block. Relying on
-          inherited cwd also landed commit and branch work in the wrong repo.
-          DataFrame-shaped command results are easier to inspect in the dashboard
-          than dicts or scraped text.
+          Restated MCP mechanics drifted twice in one day: the prompt claimed the
+          kernel kept no cwd while the engine persisted it (index#1986), then the
+          engine changed (index#1999) and the freshly corrected prompt text was
+          stale again within hours. Non-Claude MCP clients never see this prompt,
+          so the server instructions are the only owner that reaches every
+          consumer.
         '';
       };
     }
@@ -792,14 +789,10 @@ let
     {
       indexKernel = {
         text = ''
-          Work through the index Python kernel (`python_exec`) and reuse its namespace.
-          Search with the kernel `grep` and `find` builtins; run `api()` for helpers. Do not shell
-          out to `rg` or `fd` inside the kernel. Run independent non-mutating commands
-          concurrently with `asyncio.gather` or `asyncio.TaskGroup`. If the kernel
-          wedges, restart it or report the blocker. Set a dashboard topic before
-          clusters of related kernel work and change it at phase boundaries; keep
-          several related tool calls under one topic so completed phases can fold
-          away as one group.
+          Work through the index Python kernel (`python_exec`) for shell, search,
+          and data work, and reuse its namespace across calls. If the kernel
+          wedges, restart it or report the blocker. How to drive it comes from
+          the MCP server instructions, not this prompt.
         '';
         reason = ''
           Shelling out to `rg`/`fd` or sync subprocesses froze the kernel's single
@@ -808,24 +801,16 @@ let
       };
     }
     {
-      structuredPrimitives = {
+      pythonTypes = {
         text = ''
-          Prefer structured primitives over text munging: `view.ls`, `view.tree`,
-          `view.cat`, `grep`, `find`, and `nu` pipelines. For command output you plan
-          to filter or parse, run it through `nu` so the result arrives as a Polars
-          DataFrame — pipe a `--json` mode through `from json`, or reshape text with
-          nushell pipeline commands rather than jq/awk/sed. Return tables as Polars
-          DataFrames.
-
-
           For reusable Python, write explicit annotations at function and data
           boundaries. For package Python edits, run the repo's type-checking
           entry point when one exists; do not treat an untyped compile-only
           check as equivalent.
         '';
         reason = ''
-          Ad hoc text munging of command output was fragile, and combining commands in
-          one shell call lost individual errors.
+          Untyped kernel snippets promoted into packages shipped boundary bugs a
+          type-checker would have caught.
         '';
       };
     }
@@ -839,9 +824,6 @@ let
           After pushing to a PR branch with auto-merge armed, re-read the PR
           state: if it merged without the push, the commit is unlanded, so open
           a follow-up. Claim landed only when the merge oid contains the push.
-          When the MCP `pr_watch` tool is available, use it for PR CI ownership:
-          it creates a live PR resource, shows check durations, enables auto
-          merge by default, and notifies the CLI on merge, failure, or timeout.
         '';
         reason = ''
           Tasks were reported done at an open PR that never landed; done means merged

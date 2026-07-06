@@ -15,8 +15,9 @@ binary runs with ``^cmd``::
     df = await nu("^gh pr list --json number,title | from json")  # JSON-mode CLI
 
 This is not a subprocess: the engine (PyO3 bindings over nu-engine) lives in
-this process and its state is persistent, like a REPL. A ``let``, a ``def``,
-or a ``cd`` in one call is visible to the next::
+this process and its state is persistent, like a REPL. A ``let`` or a ``def``
+in one call is visible to the next (``PWD`` is the exception: it re-syncs to
+the process cwd each call, so a ``cd`` never outlives its call)::
 
     await nu("let prs = (http get $url)")
     await nu("$prs | where author.login == 'andrewgazelka'")
@@ -230,7 +231,8 @@ def _discard_engine(engine: Engine) -> None:
 
 
 def reset() -> None:
-    """Discard this session's persistent engine state (bindings, defs, cwd)."""
+    """Discard this session's persistent engine state (bindings and defs;
+    PWD is per-call, synced from the process cwd)."""
     _discard_engine(_default_engine())
 
 
@@ -378,10 +380,11 @@ async def nu(
     DataFrame.
 
     Multi-statement source is fine; the last pipeline's output is the result,
-    and ``let``/``def``/``cd`` persist to later calls (REPL semantics).
-    ``input`` pipes a value in as ``$in`` -- a polars DataFrame, list, dict,
-    or scalar (datetimes must be tz-aware). ``cwd`` sets ``PWD``
-    (persistently, like ``cd``); ``env`` adds environment variables;
+    and ``let``/``def`` persist to later calls (REPL semantics). ``PWD`` does
+    not: each call re-syncs it to the process cwd, so a ``cd`` never outlives
+    its call. ``input`` pipes a value in as ``$in`` -- a polars DataFrame,
+    list, dict, or scalar (datetimes must be tz-aware). ``cwd`` sets ``PWD``
+    for this call only; ``env`` adds environment variables;
     ``timeout`` interrupts the evaluation and discards the engine state (see
     the module docstring); ``name`` labels the running job in the dashboard.
 
