@@ -1,0 +1,720 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Sun, 17 May 2026 12:20:26 -0700
+Subject: [PATCH] Add ix metadata to Cargo manifests
+
+
+diff --git a/Cargo.toml b/Cargo.toml
+index ca80c3fad..1b50a1156 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -73,3 +73,7 @@ harness = false
+ [lints.rust.unexpected_cfgs]
+ level = "warn"
+ check-cfg = ['cfg(bootstrap)']
++
++[package.metadata.ix.inputs]
++compile = ["."]
++build = ["."]
+diff --git a/clippy_config/Cargo.toml b/clippy_config/Cargo.toml
+index 3d5b425ac..12e8de4c3 100644
+--- a/clippy_config/Cargo.toml
++++ b/clippy_config/Cargo.toml
+@@ -18,3 +18,7 @@ walkdir = "2.3"
+ [package.metadata.rust-analyzer]
+ # This crate uses #[feature(rustc_private)]
+ rustc_private = true
++
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/clippy_dev/Cargo.toml b/clippy_dev/Cargo.toml
+index 49dc5c9f1..f33cbee26 100644
+--- a/clippy_dev/Cargo.toml
++++ b/clippy_dev/Cargo.toml
+@@ -16,3 +16,7 @@ walkdir = "2.3"
+ [package.metadata.rust-analyzer]
+ # This package uses #[feature(rustc_private)]
+ rustc_private = true
++
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/clippy_dummy/Cargo.toml b/clippy_dummy/Cargo.toml
+index 61bdd421c..379e7c473 100644
+--- a/clippy_dummy/Cargo.toml
++++ b/clippy_dummy/Cargo.toml
+@@ -14,3 +14,6 @@ categories = ["development-tools", "development-tools::cargo-plugins"]
+ 
+ [build-dependencies]
+ term = "0.7"
++[package.metadata.ix.inputs]
++compile = ["."]
++build = ["."]
+diff --git a/clippy_lints/Cargo.toml b/clippy_lints/Cargo.toml
+index 52b851032..9511deb88 100644
+--- a/clippy_lints/Cargo.toml
++++ b/clippy_lints/Cargo.toml
+@@ -39,3 +39,7 @@ check-cfg = ['cfg(bootstrap)']
+ [package.metadata.rust-analyzer]
+ # This crate uses #[feature(rustc_private)]
+ rustc_private = true
++
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/clippy_lints_internal/Cargo.toml b/clippy_lints_internal/Cargo.toml
+index 16b45322e..f7c326f0c 100644
+--- a/clippy_lints_internal/Cargo.toml
++++ b/clippy_lints_internal/Cargo.toml
+@@ -13,3 +13,6 @@ rustc-semver = "1.1"
+ [package.metadata.rust-analyzer]
+ # This crate uses #[feature(rustc_private)]
+ rustc_private = true
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/clippy_test_deps/Cargo.toml b/clippy_test_deps/Cargo.toml
+index e449b48bc..b457fd170 100644
+--- a/clippy_test_deps/Cargo.toml
++++ b/clippy_test_deps/Cargo.toml
+@@ -18,3 +18,6 @@ itertools = "0.12"
+ 
+ # Make sure we are not part of the rustc workspace.
+ [workspace]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/clippy_utils/Cargo.toml b/clippy_utils/Cargo.toml
+index 3d87129e8..4c56abda7 100644
+--- a/clippy_utils/Cargo.toml
++++ b/clippy_utils/Cargo.toml
+@@ -23,3 +23,7 @@ check-cfg = ['cfg(bootstrap)']
+ [package.metadata.rust-analyzer]
+ # This crate uses #[feature(rustc_private)]
+ rustc_private = true
++
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/declare_clippy_lint/Cargo.toml b/declare_clippy_lint/Cargo.toml
+index d350af46d..818240d37 100644
+--- a/declare_clippy_lint/Cargo.toml
++++ b/declare_clippy_lint/Cargo.toml
+@@ -8,3 +8,7 @@ license = "MIT OR Apache-2.0"
+ [package.metadata.rust-analyzer]
+ # This crate uses #[feature(rustc_private)]
+ rustc_private = true
++
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/lintcheck/Cargo.toml b/lintcheck/Cargo.toml
+index 197a8574a..baf53aaee 100644
+--- a/lintcheck/Cargo.toml
++++ b/lintcheck/Cargo.toml
+@@ -25,3 +25,7 @@ tar = "0.4.45"
+ toml = "0.9.7"
+ ureq = { version = "2.2", features = ["json"] }
+ walkdir = "2.3"
++
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/rustc_tools_util/Cargo.toml b/rustc_tools_util/Cargo.toml
+index 716b1ed61..cc8e19c23 100644
+--- a/rustc_tools_util/Cargo.toml
++++ b/rustc_tools_util/Cargo.toml
+@@ -10,3 +10,6 @@ categories = ["development-tools"]
+ edition = "2021" # Keep this, for this crate's MSRV to stay low
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/cargo_common_metadata/fail/Cargo.toml b/tests/ui-cargo/cargo_common_metadata/fail/Cargo.toml
+index bc8e428f8..b740ad3ec 100644
+--- a/tests/ui-cargo/cargo_common_metadata/fail/Cargo.toml
++++ b/tests/ui-cargo/cargo_common_metadata/fail/Cargo.toml
+@@ -4,3 +4,6 @@ version = "0.1.0"
+ publish = false
+ 
+ [workspace]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/cargo_common_metadata/fail_publish/Cargo.toml b/tests/ui-cargo/cargo_common_metadata/fail_publish/Cargo.toml
+index 5005b83f5..c771b62c8 100644
+--- a/tests/ui-cargo/cargo_common_metadata/fail_publish/Cargo.toml
++++ b/tests/ui-cargo/cargo_common_metadata/fail_publish/Cargo.toml
+@@ -4,3 +4,6 @@ version = "0.1.0"
+ publish = ["some-registry-name"]
+ 
+ [workspace]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/cargo_common_metadata/fail_publish_true/Cargo.toml b/tests/ui-cargo/cargo_common_metadata/fail_publish_true/Cargo.toml
+index 51858eecd..a982c7834 100644
+--- a/tests/ui-cargo/cargo_common_metadata/fail_publish_true/Cargo.toml
++++ b/tests/ui-cargo/cargo_common_metadata/fail_publish_true/Cargo.toml
+@@ -4,3 +4,6 @@ version = "0.1.0"
+ publish = true
+ 
+ [workspace]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/cargo_common_metadata/pass/Cargo.toml b/tests/ui-cargo/cargo_common_metadata/pass/Cargo.toml
+index 9f6e51fb4..e2e7fb54a 100644
+--- a/tests/ui-cargo/cargo_common_metadata/pass/Cargo.toml
++++ b/tests/ui-cargo/cargo_common_metadata/pass/Cargo.toml
+@@ -10,3 +10,6 @@ keywords = ["metadata", "lint", "clippy"]
+ categories = ["development-tools::testing"]
+ 
+ [workspace]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/cargo_common_metadata/pass_publish_empty/Cargo.toml b/tests/ui-cargo/cargo_common_metadata/pass_publish_empty/Cargo.toml
+index 828efee3a..70668875c 100644
+--- a/tests/ui-cargo/cargo_common_metadata/pass_publish_empty/Cargo.toml
++++ b/tests/ui-cargo/cargo_common_metadata/pass_publish_empty/Cargo.toml
+@@ -4,3 +4,6 @@ version = "0.1.0"
+ publish = []
+ 
+ [workspace]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/cargo_common_metadata/pass_publish_false/Cargo.toml b/tests/ui-cargo/cargo_common_metadata/pass_publish_false/Cargo.toml
+index 45a5bf7c5..f0f9ddb7b 100644
+--- a/tests/ui-cargo/cargo_common_metadata/pass_publish_false/Cargo.toml
++++ b/tests/ui-cargo/cargo_common_metadata/pass_publish_false/Cargo.toml
+@@ -4,3 +4,6 @@ version = "0.1.0"
+ publish = false
+ 
+ [workspace]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/cargo_rust_version/fail_both_diff/Cargo.toml b/tests/ui-cargo/cargo_rust_version/fail_both_diff/Cargo.toml
+index 946d1b366..e0d0480db 100644
+--- a/tests/ui-cargo/cargo_rust_version/fail_both_diff/Cargo.toml
++++ b/tests/ui-cargo/cargo_rust_version/fail_both_diff/Cargo.toml
+@@ -7,3 +7,6 @@ publish = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/cargo_rust_version/fail_both_same/Cargo.toml b/tests/ui-cargo/cargo_rust_version/fail_both_same/Cargo.toml
+index 46b92a105..e50e13c6d 100644
+--- a/tests/ui-cargo/cargo_rust_version/fail_both_same/Cargo.toml
++++ b/tests/ui-cargo/cargo_rust_version/fail_both_same/Cargo.toml
+@@ -7,3 +7,6 @@ publish = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/cargo_rust_version/fail_cargo/Cargo.toml b/tests/ui-cargo/cargo_rust_version/fail_cargo/Cargo.toml
+index 189cc9f68..0f09b2e26 100644
+--- a/tests/ui-cargo/cargo_rust_version/fail_cargo/Cargo.toml
++++ b/tests/ui-cargo/cargo_rust_version/fail_cargo/Cargo.toml
+@@ -7,3 +7,6 @@ publish = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/cargo_rust_version/fail_clippy/Cargo.toml b/tests/ui-cargo/cargo_rust_version/fail_clippy/Cargo.toml
+index bdb7f261d..5d3bacdcf 100644
+--- a/tests/ui-cargo/cargo_rust_version/fail_clippy/Cargo.toml
++++ b/tests/ui-cargo/cargo_rust_version/fail_clippy/Cargo.toml
+@@ -6,3 +6,6 @@ publish = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/cargo_rust_version/fail_file_attr/Cargo.toml b/tests/ui-cargo/cargo_rust_version/fail_file_attr/Cargo.toml
+index 84448ea41..243f5975c 100644
+--- a/tests/ui-cargo/cargo_rust_version/fail_file_attr/Cargo.toml
++++ b/tests/ui-cargo/cargo_rust_version/fail_file_attr/Cargo.toml
+@@ -7,3 +7,6 @@ publish = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/cargo_rust_version/pass_both_same/Cargo.toml b/tests/ui-cargo/cargo_rust_version/pass_both_same/Cargo.toml
+index 809c0e748..cd4adae9d 100644
+--- a/tests/ui-cargo/cargo_rust_version/pass_both_same/Cargo.toml
++++ b/tests/ui-cargo/cargo_rust_version/pass_both_same/Cargo.toml
+@@ -7,3 +7,6 @@ publish = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/cargo_rust_version/pass_cargo/Cargo.toml b/tests/ui-cargo/cargo_rust_version/pass_cargo/Cargo.toml
+index 32d404f84..ce40b5db7 100644
+--- a/tests/ui-cargo/cargo_rust_version/pass_cargo/Cargo.toml
++++ b/tests/ui-cargo/cargo_rust_version/pass_cargo/Cargo.toml
+@@ -7,3 +7,6 @@ publish = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/cargo_rust_version/pass_clippy/Cargo.toml b/tests/ui-cargo/cargo_rust_version/pass_clippy/Cargo.toml
+index cc937d6e6..b43377345 100644
+--- a/tests/ui-cargo/cargo_rust_version/pass_clippy/Cargo.toml
++++ b/tests/ui-cargo/cargo_rust_version/pass_clippy/Cargo.toml
+@@ -6,3 +6,6 @@ publish = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/cargo_rust_version/pass_file_attr/Cargo.toml b/tests/ui-cargo/cargo_rust_version/pass_file_attr/Cargo.toml
+index 8ef689880..b81355204 100644
+--- a/tests/ui-cargo/cargo_rust_version/pass_file_attr/Cargo.toml
++++ b/tests/ui-cargo/cargo_rust_version/pass_file_attr/Cargo.toml
+@@ -7,3 +7,6 @@ publish = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/cargo_rust_version/warn_both_diff/Cargo.toml b/tests/ui-cargo/cargo_rust_version/warn_both_diff/Cargo.toml
+index e9f94594f..56ab9174d 100644
+--- a/tests/ui-cargo/cargo_rust_version/warn_both_diff/Cargo.toml
++++ b/tests/ui-cargo/cargo_rust_version/warn_both_diff/Cargo.toml
+@@ -7,3 +7,6 @@ publish = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/duplicate_mod/fail/Cargo.toml b/tests/ui-cargo/duplicate_mod/fail/Cargo.toml
+index bf3c817de..324f4f808 100644
+--- a/tests/ui-cargo/duplicate_mod/fail/Cargo.toml
++++ b/tests/ui-cargo/duplicate_mod/fail/Cargo.toml
+@@ -3,3 +3,6 @@ name = "duplicate_mod"
+ edition = "2021"
+ publish = false
+ version = "0.1.0"
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/feature_name/fail/Cargo.toml b/tests/ui-cargo/feature_name/fail/Cargo.toml
+index 97d51462a..8b16afe22 100644
+--- a/tests/ui-cargo/feature_name/fail/Cargo.toml
++++ b/tests/ui-cargo/feature_name/fail/Cargo.toml
+@@ -19,3 +19,6 @@ no-qaq = []
+ no_qaq = []
+ not-orz = []
+ not_orz = []
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/feature_name/pass/Cargo.toml b/tests/ui-cargo/feature_name/pass/Cargo.toml
+index cf947312b..7a1e6ed16 100644
+--- a/tests/ui-cargo/feature_name/pass/Cargo.toml
++++ b/tests/ui-cargo/feature_name/pass/Cargo.toml
+@@ -7,3 +7,6 @@ version = "0.1.0"
+ publish = false
+ 
+ [workspace]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/lint_groups_priority/fail/Cargo.toml b/tests/ui-cargo/lint_groups_priority/fail/Cargo.toml
+index c87662f82..c95055f07 100644
+--- a/tests/ui-cargo/lint_groups_priority/fail/Cargo.toml
++++ b/tests/ui-cargo/lint_groups_priority/fail/Cargo.toml
+@@ -22,3 +22,6 @@ bare_trait_objects = "allow"
+ [workspace.lints.clippy]
+ pedantic = "warn"
+ similar_names = "allow"
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/lint_groups_priority/pass/Cargo.toml b/tests/ui-cargo/lint_groups_priority/pass/Cargo.toml
+index 979c915cf..26d19698c 100644
+--- a/tests/ui-cargo/lint_groups_priority/pass/Cargo.toml
++++ b/tests/ui-cargo/lint_groups_priority/pass/Cargo.toml
+@@ -15,3 +15,6 @@ pedantic = { level = "warn", priority = -1 }
+ style = { level = "warn", priority = 1 }
+ similar_names = "allow"
+ dbg_macro = { level = "warn", priority = 2 }
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/module_file_count/fail/Cargo.toml b/tests/ui-cargo/module_file_count/fail/Cargo.toml
+index bcec1d0ca..7cbbc3685 100644
+--- a/tests/ui-cargo/module_file_count/fail/Cargo.toml
++++ b/tests/ui-cargo/module_file_count/fail/Cargo.toml
+@@ -3,3 +3,6 @@ name = "module_file_count"
+ edition = "2021"
+ publish = false
+ version = "0.1.0"
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/module_style/duplicated_mod_names_14697/Cargo.toml b/tests/ui-cargo/module_style/duplicated_mod_names_14697/Cargo.toml
+index 569082f2f..b3b2388bf 100644
+--- a/tests/ui-cargo/module_style/duplicated_mod_names_14697/Cargo.toml
++++ b/tests/ui-cargo/module_style/duplicated_mod_names_14697/Cargo.toml
+@@ -9,3 +9,6 @@ publish = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/module_style/fail_mod/Cargo.toml b/tests/ui-cargo/module_style/fail_mod/Cargo.toml
+index b3d36a9fb..a3511b582 100644
+--- a/tests/ui-cargo/module_style/fail_mod/Cargo.toml
++++ b/tests/ui-cargo/module_style/fail_mod/Cargo.toml
+@@ -7,3 +7,6 @@ publish = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/module_style/fail_mod_remap/Cargo.toml b/tests/ui-cargo/module_style/fail_mod_remap/Cargo.toml
+index a822fad38..4d39bfac4 100644
+--- a/tests/ui-cargo/module_style/fail_mod_remap/Cargo.toml
++++ b/tests/ui-cargo/module_style/fail_mod_remap/Cargo.toml
+@@ -7,3 +7,6 @@ publish = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/module_style/fail_no_mod/Cargo.toml b/tests/ui-cargo/module_style/fail_no_mod/Cargo.toml
+index 3610d13c1..905205dde 100644
+--- a/tests/ui-cargo/module_style/fail_no_mod/Cargo.toml
++++ b/tests/ui-cargo/module_style/fail_no_mod/Cargo.toml
+@@ -7,3 +7,6 @@ publish = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/module_style/pass_mod/Cargo.toml b/tests/ui-cargo/module_style/pass_mod/Cargo.toml
+index 1c2991695..f8483ff65 100644
+--- a/tests/ui-cargo/module_style/pass_mod/Cargo.toml
++++ b/tests/ui-cargo/module_style/pass_mod/Cargo.toml
+@@ -7,3 +7,6 @@ publish = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/module_style/pass_no_mod/Cargo.toml b/tests/ui-cargo/module_style/pass_no_mod/Cargo.toml
+index 4180aaf51..22fe6221d 100644
+--- a/tests/ui-cargo/module_style/pass_no_mod/Cargo.toml
++++ b/tests/ui-cargo/module_style/pass_no_mod/Cargo.toml
+@@ -7,3 +7,6 @@ publish = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/module_style/segment_with_mod_name_10271_11916/Cargo.toml b/tests/ui-cargo/module_style/segment_with_mod_name_10271_11916/Cargo.toml
+index 5c2fabd22..8774ccae5 100644
+--- a/tests/ui-cargo/module_style/segment_with_mod_name_10271_11916/Cargo.toml
++++ b/tests/ui-cargo/module_style/segment_with_mod_name_10271_11916/Cargo.toml
+@@ -7,4 +7,7 @@ edition = "2024"
+ publish = false
+ 
+ [workspace]
+-members = ["foo/bar"]
+\ No newline at end of file
++members = ["foo/bar"]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/module_style/segment_with_mod_name_10271_11916/foo/bar/Cargo.toml b/tests/ui-cargo/module_style/segment_with_mod_name_10271_11916/foo/bar/Cargo.toml
+index 1f68c0dcc..0c5c0fe6b 100644
+--- a/tests/ui-cargo/module_style/segment_with_mod_name_10271_11916/foo/bar/Cargo.toml
++++ b/tests/ui-cargo/module_style/segment_with_mod_name_10271_11916/foo/bar/Cargo.toml
+@@ -3,3 +3,6 @@ name = "bar"
+ version = "0.1.0"
+ edition = "2024"
+ publish = false
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/module_style/with_path_attr_mod/Cargo.toml b/tests/ui-cargo/module_style/with_path_attr_mod/Cargo.toml
+index d86737754..0d73ce280 100644
+--- a/tests/ui-cargo/module_style/with_path_attr_mod/Cargo.toml
++++ b/tests/ui-cargo/module_style/with_path_attr_mod/Cargo.toml
+@@ -8,3 +8,6 @@ publish = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/module_style/with_path_attr_no_mod/Cargo.toml b/tests/ui-cargo/module_style/with_path_attr_no_mod/Cargo.toml
+index ddf2ac394..93eea9d03 100644
+--- a/tests/ui-cargo/module_style/with_path_attr_no_mod/Cargo.toml
++++ b/tests/ui-cargo/module_style/with_path_attr_no_mod/Cargo.toml
+@@ -8,3 +8,6 @@ publish = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/multiple_config_files/no_warn/Cargo.toml b/tests/ui-cargo/multiple_config_files/no_warn/Cargo.toml
+index 7eb56cc4e..df678671e 100644
+--- a/tests/ui-cargo/multiple_config_files/no_warn/Cargo.toml
++++ b/tests/ui-cargo/multiple_config_files/no_warn/Cargo.toml
+@@ -7,3 +7,6 @@ publish = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/multiple_config_files/warn/Cargo.toml b/tests/ui-cargo/multiple_config_files/warn/Cargo.toml
+index b4847d070..4b25fc3a3 100644
+--- a/tests/ui-cargo/multiple_config_files/warn/Cargo.toml
++++ b/tests/ui-cargo/multiple_config_files/warn/Cargo.toml
+@@ -7,3 +7,6 @@ publish = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/multiple_crate_versions/12145_with_dashes/Cargo.toml b/tests/ui-cargo/multiple_crate_versions/12145_with_dashes/Cargo.toml
+index d39ad6c90..b9789a350 100644
+--- a/tests/ui-cargo/multiple_crate_versions/12145_with_dashes/Cargo.toml
++++ b/tests/ui-cargo/multiple_crate_versions/12145_with_dashes/Cargo.toml
+@@ -12,3 +12,6 @@ publish = false
+ [dependencies]
+ winapi = "0.2"
+ ansi_term = "=0.11.0"
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/multiple_crate_versions/12176_allow_duplicate_crates/Cargo.toml b/tests/ui-cargo/multiple_crate_versions/12176_allow_duplicate_crates/Cargo.toml
+index 79317659a..02c4203a8 100644
+--- a/tests/ui-cargo/multiple_crate_versions/12176_allow_duplicate_crates/Cargo.toml
++++ b/tests/ui-cargo/multiple_crate_versions/12176_allow_duplicate_crates/Cargo.toml
+@@ -8,3 +8,6 @@ publish = false
+ [dependencies]
+ winapi = "0.2"
+ ansi_term = "=0.11.0"
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/multiple_crate_versions/5041_allow_dev_build/Cargo.toml b/tests/ui-cargo/multiple_crate_versions/5041_allow_dev_build/Cargo.toml
+index 278bebbbd..815713051 100644
+--- a/tests/ui-cargo/multiple_crate_versions/5041_allow_dev_build/Cargo.toml
++++ b/tests/ui-cargo/multiple_crate_versions/5041_allow_dev_build/Cargo.toml
+@@ -17,3 +17,6 @@ ansi_term = "=0.11.0"
+ [build-dependencies]
+ ctrlc = "=3.1.0"
+ ansi_term = "=0.11.0"
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/multiple_crate_versions/fail/Cargo.toml b/tests/ui-cargo/multiple_crate_versions/fail/Cargo.toml
+index 79317659a..02c4203a8 100644
+--- a/tests/ui-cargo/multiple_crate_versions/fail/Cargo.toml
++++ b/tests/ui-cargo/multiple_crate_versions/fail/Cargo.toml
+@@ -8,3 +8,6 @@ publish = false
+ [dependencies]
+ winapi = "0.2"
+ ansi_term = "=0.11.0"
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/multiple_crate_versions/pass/Cargo.toml b/tests/ui-cargo/multiple_crate_versions/pass/Cargo.toml
+index 6c46571c5..454561b31 100644
+--- a/tests/ui-cargo/multiple_crate_versions/pass/Cargo.toml
++++ b/tests/ui-cargo/multiple_crate_versions/pass/Cargo.toml
+@@ -8,3 +8,6 @@ publish = false
+ [dependencies]
+ regex = "1.3.7"
+ serde = "1.0.110"
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/multiple_inherent_impl/config_fail/Cargo.toml b/tests/ui-cargo/multiple_inherent_impl/config_fail/Cargo.toml
+index 0a4cb6e36..ce172baf7 100644
+--- a/tests/ui-cargo/multiple_inherent_impl/config_fail/Cargo.toml
++++ b/tests/ui-cargo/multiple_inherent_impl/config_fail/Cargo.toml
+@@ -5,3 +5,6 @@ edition = "2024"
+ publish = false
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/multiple_inherent_impl/crate_fail/Cargo.toml b/tests/ui-cargo/multiple_inherent_impl/crate_fail/Cargo.toml
+index a280da1bd..42e9f9b13 100644
+--- a/tests/ui-cargo/multiple_inherent_impl/crate_fail/Cargo.toml
++++ b/tests/ui-cargo/multiple_inherent_impl/crate_fail/Cargo.toml
+@@ -5,3 +5,6 @@ edition = "2024"
+ publish = false
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/multiple_inherent_impl/file_fail/Cargo.toml b/tests/ui-cargo/multiple_inherent_impl/file_fail/Cargo.toml
+index 7f767c65b..05dcd8e21 100644
+--- a/tests/ui-cargo/multiple_inherent_impl/file_fail/Cargo.toml
++++ b/tests/ui-cargo/multiple_inherent_impl/file_fail/Cargo.toml
+@@ -5,3 +5,6 @@ edition = "2024"
+ publish = false
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/multiple_inherent_impl/module_fail/Cargo.toml b/tests/ui-cargo/multiple_inherent_impl/module_fail/Cargo.toml
+index 4b57af0d8..686401e19 100644
+--- a/tests/ui-cargo/multiple_inherent_impl/module_fail/Cargo.toml
++++ b/tests/ui-cargo/multiple_inherent_impl/module_fail/Cargo.toml
+@@ -5,3 +5,6 @@ edition = "2024"
+ publish = false
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/undocumented_unsafe_blocks/fail/Cargo.toml b/tests/ui-cargo/undocumented_unsafe_blocks/fail/Cargo.toml
+index 36bb3472d..c9d1e1b97 100644
+--- a/tests/ui-cargo/undocumented_unsafe_blocks/fail/Cargo.toml
++++ b/tests/ui-cargo/undocumented_unsafe_blocks/fail/Cargo.toml
+@@ -10,3 +10,6 @@ version = "0.1.0"
+ 
+ [lints.clippy]
+ unnecessary_safety_comment = "deny"
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/wildcard_dependencies/fail/Cargo.toml b/tests/ui-cargo/wildcard_dependencies/fail/Cargo.toml
+index 3e1a02cbb..b82181ce4 100644
+--- a/tests/ui-cargo/wildcard_dependencies/fail/Cargo.toml
++++ b/tests/ui-cargo/wildcard_dependencies/fail/Cargo.toml
+@@ -7,3 +7,6 @@ publish = false
+ 
+ [dependencies]
+ regex = "*"
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/ui-cargo/wildcard_dependencies/pass/Cargo.toml b/tests/ui-cargo/wildcard_dependencies/pass/Cargo.toml
+index f844cab09..4eb2f874c 100644
+--- a/tests/ui-cargo/wildcard_dependencies/pass/Cargo.toml
++++ b/tests/ui-cargo/wildcard_dependencies/pass/Cargo.toml
+@@ -7,3 +7,6 @@ publish = false
+ 
+ [dependencies]
+ regex = "1"
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/workspace_test/Cargo.toml b/tests/workspace_test/Cargo.toml
+index d24b278cc..602a7f9f8 100644
+--- a/tests/workspace_test/Cargo.toml
++++ b/tests/workspace_test/Cargo.toml
+@@ -5,3 +5,6 @@ edition = "2018"
+ 
+ [workspace]
+ members = ["subcrate", "module_style/pass_no_mod_with_dep_in_subdir", "module_style/pass_mod_with_dep_in_subdir"]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = ["."]
+diff --git a/tests/workspace_test/module_style/pass_mod_with_dep_in_subdir/Cargo.toml b/tests/workspace_test/module_style/pass_mod_with_dep_in_subdir/Cargo.toml
+index 15dcde4e3..6808e4c7e 100644
+--- a/tests/workspace_test/module_style/pass_mod_with_dep_in_subdir/Cargo.toml
++++ b/tests/workspace_test/module_style/pass_mod_with_dep_in_subdir/Cargo.toml
+@@ -8,3 +8,6 @@ publish = false
+ 
+ [dependencies]
+ dep-no-mod = { path = "dep_no_mod"}
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/workspace_test/module_style/pass_mod_with_dep_in_subdir/dep_no_mod/Cargo.toml b/tests/workspace_test/module_style/pass_mod_with_dep_in_subdir/dep_no_mod/Cargo.toml
+index 55569bc25..9d2a3f03e 100644
+--- a/tests/workspace_test/module_style/pass_mod_with_dep_in_subdir/dep_no_mod/Cargo.toml
++++ b/tests/workspace_test/module_style/pass_mod_with_dep_in_subdir/dep_no_mod/Cargo.toml
+@@ -7,3 +7,6 @@ publish = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/workspace_test/module_style/pass_no_mod_with_dep_in_subdir/Cargo.toml b/tests/workspace_test/module_style/pass_no_mod_with_dep_in_subdir/Cargo.toml
+index 060cb18dc..ac3521ee2 100644
+--- a/tests/workspace_test/module_style/pass_no_mod_with_dep_in_subdir/Cargo.toml
++++ b/tests/workspace_test/module_style/pass_no_mod_with_dep_in_subdir/Cargo.toml
+@@ -8,3 +8,6 @@ publish = false
+ 
+ [dependencies]
+ dep-with-mod = { path = "dep_with_mod"}
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/workspace_test/module_style/pass_no_mod_with_dep_in_subdir/dep_with_mod/Cargo.toml b/tests/workspace_test/module_style/pass_no_mod_with_dep_in_subdir/dep_with_mod/Cargo.toml
+index b25725cd5..33d94ed72 100644
+--- a/tests/workspace_test/module_style/pass_no_mod_with_dep_in_subdir/dep_with_mod/Cargo.toml
++++ b/tests/workspace_test/module_style/pass_no_mod_with_dep_in_subdir/dep_with_mod/Cargo.toml
+@@ -7,3 +7,6 @@ publish = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
+ [dependencies]
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/workspace_test/path_dep/Cargo.toml b/tests/workspace_test/path_dep/Cargo.toml
+index 98b4fb7aa..459f96530 100644
+--- a/tests/workspace_test/path_dep/Cargo.toml
++++ b/tests/workspace_test/path_dep/Cargo.toml
+@@ -4,3 +4,6 @@ version = "0.1.0"
+ 
+ [features]
+ primary_package_test = []
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []
+diff --git a/tests/workspace_test/subcrate/Cargo.toml b/tests/workspace_test/subcrate/Cargo.toml
+index 45362c11b..6e6e5479b 100644
+--- a/tests/workspace_test/subcrate/Cargo.toml
++++ b/tests/workspace_test/subcrate/Cargo.toml
+@@ -4,3 +4,6 @@ version = "0.1.0"
+ 
+ [dependencies]
+ path_dep = { path = "../path_dep" }
++[package.metadata.ix.inputs]
++compile = ["."]
++build = []

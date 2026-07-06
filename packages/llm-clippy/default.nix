@@ -2,9 +2,9 @@
   ix,
   lib,
   makeWrapper,
-  clippy-fork ? null,
+  clippy-src ? null,
 }:
-# The fork source comes in as `clippy-fork`, never a `src` argument: a `src`
+# The upstream source comes in as `clippy-src`, never a `src` argument: a `src`
 # formal collides with `pkgs.src`, which `callPackage` auto-binds over the
 # default. nixpkgs renamed that package to a throw (2025-11-19), so an auto-
 # bound `src` turned the discovered `packages.<system>.llm-clippy` output into
@@ -13,14 +13,23 @@ let
   # `ix.buildRustPackage` is curried on the full package set; read `pkgs` from
   # `ix` rather than taking a `pkgs` callPackage formal (unreachable by `override`).
   inherit (ix) pkgs;
+  # De-forking: `clippy-src` is now upstream rust-lang/rust-clippy pinned by rev,
+  # and the LLM-tuned lint series lives in ./patches (applied via the shared
+  # patched-src util). The patched tree carries the toolchain file and Cargo.lock
+  # the build reads below, exactly as the old fork tree did.
   source =
-    if clippy-fork == null
-    then throw "llm-clippy: clippy-fork is required"
-    else clippy-fork;
-  # Drive the toolchain from the fork's `rust-toolchain.toml` so a
-  # `nix flake update clippy-fork` advances the rustc/rustc_private ABI in
-  # lockstep with the source. If a future fork commit needs different
-  # components, edit that file in the fork, not this one.
+    if clippy-src == null
+    then throw "llm-clippy: clippy-src is required"
+    else
+      ix.patchedSrc {
+        name = "llm-clippy";
+        src = clippy-src;
+        patchDir = ./patches;
+      };
+  # Drive the toolchain from the patched tree's `rust-toolchain.toml` so the
+  # base bump + regenerated series advance the rustc/rustc_private ABI in
+  # lockstep. clippy is nightly-coupled: `clippy-src` is pinned by rev and must
+  # move with the pinned nightly, never free-float (see flake.nix).
   toolchain = pkgs.rust-bin.fromRustupToolchainFile (source + "/rust-toolchain.toml");
 
   rustcLibPathVar =
@@ -34,9 +43,9 @@ in
 
     src = source;
     rustToolchain = toolchain;
-    # Read both the lockfile and the cargo-vendor inputs straight from the fork
-    # so `nix flake update clippy-fork` brings dependency changes along with the
-    # source commit. No checked-in lockfile to drift.
+    # Read the lockfile straight from the patched tree (patch 0014 tracks
+    # Cargo.lock) so a base bump + regenerated series brings dependency changes
+    # along with the source. No separately checked-in lockfile to drift.
     cargoLock.lockFile = source + "/Cargo.lock";
 
     nativeBuildInputs = [makeWrapper];
@@ -68,7 +77,7 @@ in
 
     meta = {
       description = "Clippy tuned for LLM-assisted codebases";
-      homepage = "https://github.com/indexable-inc/clippy";
+      homepage = "https://github.com/rust-lang/rust-clippy";
       license = [
         lib.licenses.asl20
         lib.licenses.mit

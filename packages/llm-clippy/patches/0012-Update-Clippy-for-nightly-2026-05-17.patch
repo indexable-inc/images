@@ -1,0 +1,1382 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Sun, 17 May 2026 19:56:45 +0000
+Subject: [PATCH] Update Clippy for nightly 2026-05-17
+
+
+diff --git a/clippy_lints/src/attrs/mod.rs b/clippy_lints/src/attrs/mod.rs
+index c15a37805..372defbb4 100644
+--- a/clippy_lints/src/attrs/mod.rs
++++ b/clippy_lints/src/attrs/mod.rs
+@@ -583,7 +583,7 @@ impl EarlyLintPass for PostExpansionEarlyAttributes {
+             if matches!(name, sym::allow | sym::expect) && self.msrv.meets(msrvs::LINT_REASONS_STABILIZATION) {
+                 allow_attributes_without_reason::check(cx, name, items, attr);
+             }
+-            if is_lint_level(name, attr.id) {
++            if is_lint_level(name) {
+                 blanket_clippy_restriction_lints::check(cx, name, items);
+             }
+             if items.is_empty() || !attr.has_name(sym::deprecated) {
+diff --git a/clippy_lints/src/attrs/unnecessary_clippy_cfg.rs b/clippy_lints/src/attrs/unnecessary_clippy_cfg.rs
+index 6ee3290fa..6efc931df 100644
+--- a/clippy_lints/src/attrs/unnecessary_clippy_cfg.rs
++++ b/clippy_lints/src/attrs/unnecessary_clippy_cfg.rs
+@@ -15,7 +15,7 @@ pub(super) fn check(
+ ) {
+     if cfg_attr.has_name(sym::clippy)
+         && let Some(ident) = behind_cfg_attr.ident()
+-        && Level::from_symbol(ident.name, || Some(attr.id)).is_some()
++        && Level::from_symbol(ident.name).is_some()
+         && let Some(items) = behind_cfg_attr.meta_item_list()
+     {
+         let nb_items = items.len();
+diff --git a/clippy_lints/src/attrs/useless_attribute.rs b/clippy_lints/src/attrs/useless_attribute.rs
+index 9a1e315ae..c025b47dc 100644
+--- a/clippy_lints/src/attrs/useless_attribute.rs
++++ b/clippy_lints/src/attrs/useless_attribute.rs
+@@ -15,7 +15,7 @@ pub(super) fn check(cx: &EarlyContext<'_>, item: &Item, attrs: &[Attribute]) {
+             return;
+         }
+         if let Some(lint_list) = &attr.meta_item_list()
+-            && attr.name().is_some_and(|name| is_lint_level(name, attr.id))
++            && attr.name().is_some_and(|name| is_lint_level(name))
+         {
+             for lint in lint_list {
+                 match item.kind {
+diff --git a/clippy_lints/src/attrs/utils.rs b/clippy_lints/src/attrs/utils.rs
+index 7b66f91f6..4822bdcb9 100644
+--- a/clippy_lints/src/attrs/utils.rs
++++ b/clippy_lints/src/attrs/utils.rs
+@@ -1,5 +1,5 @@
+ use clippy_utils::macros::{is_panic, macro_backtrace};
+-use rustc_ast::{AttrId, MetaItemInner};
++use rustc_ast::MetaItemInner;
+ use rustc_hir::{
+     Block, Expr, ExprKind, ImplItem, ImplItemKind, Item, ItemKind, StmtKind, TraitFn, TraitItem, TraitItemKind,
+ };
+@@ -16,8 +16,8 @@ pub(super) fn is_word(nmi: &MetaItemInner, expected: Symbol) -> bool {
+     }
+ }
+ 
+-pub(super) fn is_lint_level(symbol: Symbol, attr_id: AttrId) -> bool {
+-    Level::from_symbol(symbol, || Some(attr_id)).is_some()
++pub(super) fn is_lint_level(symbol: Symbol) -> bool {
++    Level::from_symbol(symbol).is_some()
+ }
+ 
+ pub(super) fn is_relevant_item(cx: &LateContext<'_>, item: &Item<'_>) -> bool {
+diff --git a/clippy_lints/src/booleans.rs b/clippy_lints/src/booleans.rs
+index 5446148b0..ecce0c90a 100644
+--- a/clippy_lints/src/booleans.rs
++++ b/clippy_lints/src/booleans.rs
+@@ -11,7 +11,7 @@ use rustc_ast::ast::LitKind;
+ use rustc_errors::Applicability;
+ use rustc_hir::intravisit::{FnKind, Visitor, walk_expr};
+ use rustc_hir::{BinOpKind, Body, Expr, ExprKind, FnDecl, RustcVersion, UnOp};
+-use rustc_lint::{LateContext, LateLintPass, Level};
++use rustc_lint::{LateContext, LateLintPass};
+ use rustc_session::impl_lint_pass;
+ use rustc_span::def_id::LocalDefId;
+ use rustc_span::{Span, Symbol, SyntaxContext};
+@@ -204,7 +204,7 @@ fn check_simplify_not(cx: &LateContext<'_>, msrv: Msrv, expr: &Expr<'_>) {
+         && !expr.span.from_expansion()
+         && !inner.span.from_expansion()
+         && let Some(suggestion) = simplify_not(cx, msrv, inner)
+-        && cx.tcx.lint_level_at_node(NONMINIMAL_BOOL, expr.hir_id).level != Level::Allow
++        && !cx.tcx.lint_level_spec_at_node(NONMINIMAL_BOOL, expr.hir_id).is_allow()
+     {
+         use clippy_utils::sugg::{Sugg, has_enclosing_paren};
+         let maybe_par = if let Some(sug) = Sugg::hir_opt(cx, inner) {
+@@ -612,7 +612,7 @@ impl<'tcx> NonminimalBoolVisitor<'_, 'tcx> {
+                 }
+             }
+             let nonminimal_bool_lint = |mut suggestions: Vec<_>| {
+-                if self.cx.tcx.lint_level_at_node(NONMINIMAL_BOOL, e.hir_id).level != Level::Allow {
++                if !self.cx.tcx.lint_level_spec_at_node(NONMINIMAL_BOOL, e.hir_id).is_allow() {
+                     suggestions.sort();
+                     span_lint_hir_and_then(
+                         self.cx,
+diff --git a/clippy_lints/src/collapsible_if.rs b/clippy_lints/src/collapsible_if.rs
+index 68e23c4cb..baa13b213 100644
+--- a/clippy_lints/src/collapsible_if.rs
++++ b/clippy_lints/src/collapsible_if.rs
+@@ -240,7 +240,7 @@ impl CollapsibleIf {
+             },
+ 
+             [attr]
+-                if matches!(Level::from_attr(attr.name(), || attr.id()), Some((Level::Expect, _)))
++                if matches!(Level::from_opt_symbol(attr.name()), Some(Level::Expect))
+                     && let Some(metas) = attr.meta_item_list()
+                     && let Some(MetaItemInner::MetaItem(meta_item)) = metas.first()
+                     && let [tool, lint_name] = meta_item.path.segments.as_slice()
+diff --git a/clippy_lints/src/default_numeric_fallback.rs b/clippy_lints/src/default_numeric_fallback.rs
+index f93f682bc..8ec095cc2 100644
+--- a/clippy_lints/src/default_numeric_fallback.rs
++++ b/clippy_lints/src/default_numeric_fallback.rs
+@@ -133,7 +133,7 @@ impl<'tcx> Visitor<'tcx> for NumericFallbackVisitor<'_, 'tcx> {
+                 if let Some(fn_sig) = self.cx.tcx.parent_hir_node(expr.hir_id).fn_sig()
+                     && let FnRetTy::Return(_ty) = fn_sig.decl.output
+                 {
+-                    // We cannot check the exact type since it's a `hir::Ty`` which does not implement `is_numeric`
++                    // We cannot check the exact type since it's a `hir::Ty` which does not implement `is_numeric`
+                     self.ty_bounds.push(ExplicitTyBound(true));
+                     for stmt in *stmts {
+                         self.visit_stmt(stmt);
+diff --git a/clippy_lints/src/default_union_representation.rs b/clippy_lints/src/default_union_representation.rs
+index 76242d775..bfb246c5f 100644
+--- a/clippy_lints/src/default_union_representation.rs
++++ b/clippy_lints/src/default_union_representation.rs
+@@ -94,7 +94,7 @@ fn is_union_with_two_non_zst_fields<'tcx>(cx: &LateContext<'tcx>, item: &Item<'t
+ }
+ 
+ fn is_zst<'tcx>(cx: &LateContext<'tcx>, field: &FieldDef, args: ty::GenericArgsRef<'tcx>) -> bool {
+-    let ty = field.ty(cx.tcx, args);
++    let ty = field.ty(cx.tcx, args).skip_norm_wip();
+     if let Ok(layout) = cx.layout_of(ty) {
+         layout.is_zst()
+     } else {
+diff --git a/clippy_lints/src/derive/derive_partial_eq_without_eq.rs b/clippy_lints/src/derive/derive_partial_eq_without_eq.rs
+index 3782c1dab..612d552a7 100644
+--- a/clippy_lints/src/derive/derive_partial_eq_without_eq.rs
++++ b/clippy_lints/src/derive/derive_partial_eq_without_eq.rs
+@@ -30,7 +30,7 @@ pub(super) fn check<'tcx>(
+         && adt
+             .all_fields()
+             .map(|f| f.ty(cx.tcx, args))
+-            .all(|ty| implements_trait_with_env(cx.tcx, typing_env, ty, eq_trait_def_id, None, &[]))
++            .all(|ty| implements_trait_with_env(cx.tcx, typing_env, ty.skip_norm_wip(), eq_trait_def_id, None, &[]))
+     {
+         span_lint_hir_and_then(
+             cx,
+diff --git a/clippy_lints/src/disallowed_script_idents.rs b/clippy_lints/src/disallowed_script_idents.rs
+index 4596d9457..d013e453e 100644
+--- a/clippy_lints/src/disallowed_script_idents.rs
++++ b/clippy_lints/src/disallowed_script_idents.rs
+@@ -2,7 +2,7 @@ use clippy_config::Conf;
+ use clippy_utils::diagnostics::span_lint;
+ use rustc_ast::ast;
+ use rustc_data_structures::fx::FxHashSet;
+-use rustc_lint::{EarlyContext, EarlyLintPass, Level, LintContext};
++use rustc_lint::{EarlyContext, EarlyLintPass, LintContext};
+ use rustc_session::impl_lint_pass;
+ use unicode_script::{Script, UnicodeScript};
+ 
+@@ -69,7 +69,7 @@ impl EarlyLintPass for DisallowedScriptIdents {
+         // Implementation is heavily inspired by the implementation of [`non_ascii_idents`] lint:
+         // https://github.com/rust-lang/rust/blob/HEAD/compiler/rustc_lint/src/non_ascii_idents.rs
+ 
+-        let check_disallowed_script_idents = cx.builder.lint_level(DISALLOWED_SCRIPT_IDENTS).level != Level::Allow;
++        let check_disallowed_script_idents = !cx.builder.lint_level_spec(DISALLOWED_SCRIPT_IDENTS).is_allow();
+         if !check_disallowed_script_idents {
+             return;
+         }
+diff --git a/clippy_lints/src/duplicate_mod.rs b/clippy_lints/src/duplicate_mod.rs
+index f3facac32..cb3cb2479 100644
+--- a/clippy_lints/src/duplicate_mod.rs
++++ b/clippy_lints/src/duplicate_mod.rs
+@@ -2,7 +2,7 @@ use clippy_utils::diagnostics::span_lint_and_help;
+ use rustc_ast::ast::{Crate, Inline, Item, ItemKind, ModKind};
+ use rustc_errors::MultiSpan;
+ use rustc_lint::{EarlyContext, EarlyLintPass, Level, LintContext};
+-use rustc_middle::lint::LevelAndSource;
++use rustc_middle::lint::LevelSpec;
+ use rustc_session::impl_lint_pass;
+ use rustc_span::{FileName, Span};
+ use std::collections::BTreeMap;
+@@ -51,7 +51,7 @@ impl_lint_pass!(DuplicateMod => [DUPLICATE_MOD]);
+ struct Modules {
+     local_path: PathBuf,
+     spans: Vec<Span>,
+-    lint_levels: Vec<LevelAndSource>,
++    lint_level_specs: Vec<LevelSpec>,
+ }
+ 
+ #[derive(Default)]
+@@ -71,10 +71,10 @@ impl EarlyLintPass for DuplicateMod {
+             let modules = self.modules.entry(absolute_path).or_insert(Modules {
+                 local_path,
+                 spans: Vec::new(),
+-                lint_levels: Vec::new(),
++                lint_level_specs: Vec::new(),
+             });
+             modules.spans.push(item.span_with_attributes());
+-            modules.lint_levels.push(cx.get_lint_level(DUPLICATE_MOD));
++            modules.lint_level_specs.push(cx.get_lint_level_spec(DUPLICATE_MOD));
+         }
+     }
+ 
+@@ -82,7 +82,7 @@ impl EarlyLintPass for DuplicateMod {
+         for Modules {
+             local_path,
+             spans,
+-            lint_levels,
++            lint_level_specs,
+         } in self.modules.values()
+         {
+             if spans.len() < 2 {
+@@ -90,16 +90,16 @@ impl EarlyLintPass for DuplicateMod {
+             }
+ 
+             // At this point the lint would be emitted
+-            assert_eq!(spans.len(), lint_levels.len());
++            assert_eq!(spans.len(), lint_level_specs.len());
+             let spans: Vec<_> = spans
+                 .iter()
+-                .zip(lint_levels)
+-                .filter_map(|(span, lvl)| {
+-                    if let Some(id) = lvl.lint_id {
++                .zip(lint_level_specs)
++                .filter_map(|(span, level_spec)| {
++                    if let Some(id) = level_spec.lint_id() {
+                         cx.fulfill_expectation(id);
+                     }
+ 
+-                    (!matches!(lvl.level, Level::Allow | Level::Expect)).then_some(*span)
++                    (!matches!(level_spec.level(), Level::Allow | Level::Expect)).then_some(*span)
+                 })
+                 .collect();
+ 
+diff --git a/clippy_lints/src/duration_suboptimal_units.rs b/clippy_lints/src/duration_suboptimal_units.rs
+index ceb24709a..6ad432c26 100644
+--- a/clippy_lints/src/duration_suboptimal_units.rs
++++ b/clippy_lints/src/duration_suboptimal_units.rs
+@@ -19,9 +19,6 @@ declare_clippy_lint! {
+     /// Checks for instances where a `std::time::Duration` is constructed using a smaller time unit
+     /// when the value could be expressed more clearly using a larger unit.
+     ///
+-    /// For literal values that would convert to 10 or fewer of the larger unit,
+-    /// this lint does not apply.
+-    ///
+     /// ### Why is this bad?
+     ///
+     /// Using a smaller unit for a duration that is evenly divisible by a larger unit reduces
+@@ -32,8 +29,8 @@ declare_clippy_lint! {
+     /// ```
+     /// use std::time::Duration;
+     ///
+-    /// let dur = Duration::from_millis(50_000);
+-    /// let dur = Duration::from_secs(1800);
++    /// let dur = Duration::from_millis(5_000);
++    /// let dur = Duration::from_secs(180);
+     /// let dur = Duration::from_mins(10 * 60);
+     /// ```
+     ///
+@@ -41,8 +38,8 @@ declare_clippy_lint! {
+     /// ```
+     /// use std::time::Duration;
+     ///
+-    /// let dur = Duration::from_secs(50);
+-    /// let dur = Duration::from_mins(30);
++    /// let dur = Duration::from_secs(5);
++    /// let dur = Duration::from_mins(3);
+     /// let dur = Duration::from_hours(10);
+     /// ```
+     #[clippy::version = "1.95.0"]
+@@ -83,20 +80,13 @@ impl LateLintPass<'_> for DurationSuboptimalUnits {
+             // We intentionally don't want to evaluate referenced constants, as we don't want to
+             // recommend a literal value over using constants:
+             //
+-            // let dur = Duration::from_millis(TWELVE_THOUSAND);
+-            //           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `Duration::from_secs(12)`
++            // let dur = Duration::from_secs(SIXTY);
++            //           ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `Duration::from_mins(1)`
+             && let Some(Constant::Int(value)) = ConstEvalCtxt::new(cx).eval_local(arg, expr.span.ctxt())
+             && let Ok(value) = u64::try_from(value) // Cannot fail
+             // There is no need to promote e.g. 0 seconds to 0 hours
+             && value != 0
+             && let Some((promoted_constructor, promoted_value)) = self.promote(cx, func_name.ident.name, value)
+-            // For plain integer literals, only lint if the promoted value is large enough.
+-            // Small promoted values (e.g. `from_millis(1_000)` -> `from_secs(1)`) are not
+-            // necessarily more readable, and keeping the smaller unit makes quick adjustments
+-            // easier (e.g. changing 1_000 to 1_200 without also changing the function name).
+-            // For expressions (e.g. `10 * 60`), always lint since the expression already
+-            // signals intent to compute a converted value.
+-            && (!matches!(arg.kind, ExprKind::Lit(_)) || promoted_value > 10)
+         {
+             span_lint_and_then(
+                 cx,
+diff --git a/clippy_lints/src/format_args.rs b/clippy_lints/src/format_args.rs
+index 97c45723f..f1013ca63 100644
+--- a/clippy_lints/src/format_args.rs
++++ b/clippy_lints/src/format_args.rs
+@@ -857,7 +857,7 @@ impl<'tcx> FormatArgsExpr<'_, 'tcx> {
+                 let pointer_debug = derived_debug
+                     && adt.all_fields().any(|f| {
+                         self.has_pointer_debug(
+-                            tcx.normalize_erasing_regions(typing_env, Unnormalized::new_wip(f.ty(tcx, args))),
++                            tcx.normalize_erasing_regions(typing_env, f.ty(tcx, args)),
+                             depth,
+                         )
+                     });
+diff --git a/clippy_lints/src/len_without_is_empty.rs b/clippy_lints/src/len_without_is_empty.rs
+index 8ae91bbcd..4b188709a 100644
+--- a/clippy_lints/src/len_without_is_empty.rs
++++ b/clippy_lints/src/len_without_is_empty.rs
+@@ -1,6 +1,7 @@
+ use clippy_utils::diagnostics::{span_lint, span_lint_and_then};
+ use clippy_utils::res::MaybeDef;
+ use clippy_utils::{fulfill_or_allowed, get_parent_as_impl, sym};
++use rustc_data_structures::unord::UnordItems;
+ use rustc_hir::def::Res;
+ use rustc_hir::def_id::{DefId, DefIdSet};
+ use rustc_hir::{
+@@ -130,7 +131,7 @@ fn check_trait_items(cx: &LateContext<'_>, visited_trait: &Item<'_>, ident: Iden
+         fill_trait_set(visited_trait.owner_id.to_def_id(), &mut current_and_super_traits, cx);
+         let is_empty_method_found = current_and_super_traits
+             .items()
+-            .flat_map(|&i| cx.tcx.associated_items(i).filter_by_name_unhygienic(sym::is_empty))
++            .flat_map(|&i| UnordItems::new(cx.tcx.associated_items(i).filter_by_name_unhygienic(sym::is_empty)))
+             .any(|i| i.is_method() && cx.tcx.fn_sig(i.def_id).skip_binder().inputs().skip_binder().len() == 1);
+ 
+         if !is_empty_method_found {
+diff --git a/clippy_lints/src/macro_metavars_in_unsafe.rs b/clippy_lints/src/macro_metavars_in_unsafe.rs
+index a7eda8e29..5f086988c 100644
+--- a/clippy_lints/src/macro_metavars_in_unsafe.rs
++++ b/clippy_lints/src/macro_metavars_in_unsafe.rs
+@@ -5,8 +5,7 @@ use itertools::Itertools;
+ use rustc_hir::def_id::LocalDefId;
+ use rustc_hir::intravisit::{Visitor, walk_block, walk_expr, walk_stmt};
+ use rustc_hir::{BlockCheckMode, Expr, ExprKind, HirId, Stmt, UnsafeSource, find_attr};
+-use rustc_lint::{LateContext, LateLintPass, Level, LintContext};
+-use rustc_middle::lint::LevelAndSource;
++use rustc_lint::{LateContext, LateLintPass, LintContext};
+ use rustc_session::impl_lint_pass;
+ use rustc_span::{Span, SyntaxContext};
+ use std::collections::BTreeMap;
+@@ -252,17 +251,15 @@ impl<'tcx> LateLintPass<'tcx> for ExprMetavarsInUnsafe {
+             .flatten()
+             .copied()
+             .inspect(|&unsafe_block| {
+-                if let LevelAndSource {
+-                    level: Level::Expect,
+-                    lint_id: Some(id),
+-                    ..
+-                } = cx.tcx.lint_level_at_node(MACRO_METAVARS_IN_UNSAFE, unsafe_block)
+-                {
++                let level_spec =
++                    cx.tcx.lint_level_spec_at_node(MACRO_METAVARS_IN_UNSAFE, unsafe_block);
++                if level_spec.is_expect() {
+                     // Since we're going to deduplicate expanded unsafe blocks by its enclosing macro definition soon,
+                     // which would lead to unfulfilled `#[expect()]`s in all other unsafe blocks that are filtered out
+                     // except for the one we emit the warning at, we must manually fulfill the lint
+                     // for all unsafe blocks here.
+-                    cx.fulfill_expectation(id);
++                    // `unwrap` is safe because `Expect` lints always have a `lint_id`.
++                    cx.fulfill_expectation(level_spec.lint_id().unwrap());
+                 }
+             })
+             .map(|id| {
+diff --git a/clippy_lints/src/matches/significant_drop_in_scrutinee.rs b/clippy_lints/src/matches/significant_drop_in_scrutinee.rs
+index 213c09bc3..34cfb6514 100644
+--- a/clippy_lints/src/matches/significant_drop_in_scrutinee.rs
++++ b/clippy_lints/src/matches/significant_drop_in_scrutinee.rs
+@@ -204,7 +204,7 @@ impl<'a, 'tcx> SigDropChecker<'a, 'tcx> {
+                 // if some field has significant drop,
+                 adt.all_fields()
+                     .map(|field| field.ty(self.cx.tcx, args))
+-                    .any(|ty| self.has_sig_drop_attr_impl(ty))
++                    .any(|ty| self.has_sig_drop_attr_impl(ty.skip_norm_wip()))
+                     // or if there is no generic lifetime and..
+                     // (to avoid false positive on `Ref<'a, MutexGuard<Foo>>`)
+                     || (args
+diff --git a/clippy_lints/src/module_style.rs b/clippy_lints/src/module_style.rs
+index c1c5a0142..905896886 100644
+--- a/clippy_lints/src/module_style.rs
++++ b/clippy_lints/src/module_style.rs
+@@ -2,7 +2,7 @@ use clippy_utils::ast_utils::is_cfg_test;
+ use clippy_utils::diagnostics::span_lint_and_then;
+ use clippy_utils::source::snippet;
+ use rustc_ast::ast::{self, Inline, ItemKind, ModKind};
+-use rustc_lint::{EarlyContext, EarlyLintPass, Level, LintContext};
++use rustc_lint::{EarlyContext, EarlyLintPass, LintContext};
+ use rustc_session::impl_lint_pass;
+ use rustc_span::def_id::LOCAL_CRATE;
+ use rustc_span::{FileName, Ident, SourceFile, Span, SyntaxContext, sym};
+@@ -137,9 +137,9 @@ impl EarlyLintPass for ModStyle {
+     }
+ 
+     fn check_item(&mut self, cx: &EarlyContext<'_>, item: &ast::Item) {
+-        if cx.builder.lint_level(MOD_MODULE_FILES).level == Level::Allow
+-            && cx.builder.lint_level(SELF_NAMED_MODULE_FILES).level == Level::Allow
+-            && cx.builder.lint_level(INLINE_MODULES).level == Level::Allow
++        if cx.builder.lint_level_spec(MOD_MODULE_FILES).is_allow()
++            && cx.builder.lint_level_spec(SELF_NAMED_MODULE_FILES).is_allow()
++            && cx.builder.lint_level_spec(INLINE_MODULES).is_allow()
+         {
+             return;
+         }
+@@ -192,9 +192,9 @@ impl EarlyLintPass for ModStyle {
+     }
+ 
+     fn check_item_post(&mut self, cx: &EarlyContext<'_>, item: &ast::Item) {
+-        if cx.builder.lint_level(MOD_MODULE_FILES).level == Level::Allow
+-            && cx.builder.lint_level(SELF_NAMED_MODULE_FILES).level == Level::Allow
+-            && cx.builder.lint_level(INLINE_MODULES).level == Level::Allow
++        if cx.builder.lint_level_spec(MOD_MODULE_FILES).is_allow()
++            && cx.builder.lint_level_spec(SELF_NAMED_MODULE_FILES).is_allow()
++            && cx.builder.lint_level_spec(INLINE_MODULES).is_allow()
+         {
+             return;
+         }
+diff --git a/clippy_lints/src/mutable_debug_assertion.rs b/clippy_lints/src/mutable_debug_assertion.rs
+index 1a1a912b7..a18817ac7 100644
+--- a/clippy_lints/src/mutable_debug_assertion.rs
++++ b/clippy_lints/src/mutable_debug_assertion.rs
+@@ -105,6 +105,10 @@ impl<'tcx> Visitor<'tcx> for MutArgVisitor<'_, 'tcx> {
+                 self.found = true;
+                 return;
+             },
++            ExprKind::If(..) => {
++                self.found = true;
++                return;
++            },
+             ExprKind::Path(_) => {
+                 if let Some(adj) = self.cx.typeck_results().adjustments().get(expr.hir_id)
+                     && adj
+diff --git a/clippy_lints/src/non_copy_const.rs b/clippy_lints/src/non_copy_const.rs
+index 82095e361..fabc1f5c7 100644
+--- a/clippy_lints/src/non_copy_const.rs
++++ b/clippy_lints/src/non_copy_const.rs
+@@ -297,14 +297,14 @@ impl<'tcx> NonCopyConst<'tcx> {
+                         IsFreeze::from_fields(
+                             v.fields
+                                 .iter()
+-                                .map(|f| self.is_ty_freeze(tcx, typing_env, f.ty(tcx, args))),
++                                .map(|f| self.is_ty_freeze(tcx, typing_env, f.ty(tcx, args).skip_norm_wip())),
+                         )
+                     })),
+                     // Workaround for `ManuallyDrop`-like unions.
+                     ty::Adt(adt, args)
+                         if adt.is_union()
+                             && adt.non_enum_variant().fields.iter().any(|f| {
+-                                tcx.layout_of(typing_env.as_query_input(f.ty(tcx, args)))
++                                tcx.layout_of(typing_env.as_query_input(f.ty(tcx, args).skip_norm_wip()))
+                                     .is_ok_and(|l| l.layout.size().bytes() == 0)
+                             }) =>
+                     {
+@@ -316,7 +316,7 @@ impl<'tcx> NonCopyConst<'tcx> {
+                         adt.non_enum_variant()
+                             .fields
+                             .iter()
+-                            .map(|f| self.is_ty_freeze(tcx, typing_env, f.ty(tcx, args))),
++                            .map(|f| self.is_ty_freeze(tcx, typing_env, f.ty(tcx, args).skip_norm_wip())),
+                     ),
+                     ty::Array(ty, _) | ty::Pat(ty, _) => self.is_ty_freeze(tcx, typing_env, ty),
+                     ty::Tuple(tys) => {
+diff --git a/clippy_lints/src/non_send_fields_in_send_ty.rs b/clippy_lints/src/non_send_fields_in_send_ty.rs
+index 6f1fca8d4..dc8111a51 100644
+--- a/clippy_lints/src/non_send_fields_in_send_ty.rs
++++ b/clippy_lints/src/non_send_fields_in_send_ty.rs
+@@ -100,7 +100,7 @@ impl<'tcx> LateLintPass<'tcx> for NonSendFieldInSendTy {
+                         .as_local()
+                         .map(|local_def_id| cx.tcx.local_def_id_to_hir_id(local_def_id))
+                         && !is_lint_allowed(cx, NON_SEND_FIELDS_IN_SEND_TY, field_hir_id)
+-                        && let field_ty = field.ty(cx.tcx, impl_trait_args)
++                        && let field_ty = field.ty(cx.tcx, impl_trait_args).skip_norm_wip()
+                         && !ty_allowed_in_send(cx, field_ty, send_trait)
+                         && let Node::Field(field_def) = cx.tcx.hir_node(field_hir_id)
+                     {
+diff --git a/clippy_lints/src/operators/arithmetic_side_effects.rs b/clippy_lints/src/operators/arithmetic_side_effects.rs
+index 6891ecb0c..96e7f7785 100644
+--- a/clippy_lints/src/operators/arithmetic_side_effects.rs
++++ b/clippy_lints/src/operators/arithmetic_side_effects.rs
+@@ -330,12 +330,12 @@ impl<'tcx> LateLintPass<'tcx> for ArithmeticSideEffects {
+ /// Detects a type-casting conversion and returns the type of the original expression. For
+ /// example, `let foo = u64::from(bar)`.
+ fn find_original_primitive_ty<'tcx>(cx: &LateContext<'tcx>, expr: &hir::Expr<'_>) -> Option<Ty<'tcx>> {
+-    match &expr.kind {
+-        hir::ExprKind::Call(path, [arg]) if path.res(cx).opt_def_id().is_diag_item(&cx.tcx, sym::from_fn) => {
+-            Some(cx.typeck_results().expr_ty(arg))
+-        },
+-        hir::ExprKind::Cast(arg, _) => Some(cx.typeck_results().expr_ty(arg)),
+-        _ => None,
++    if let hir::ExprKind::Call(path, [arg]) = &expr.kind
++        && path.res(cx).opt_def_id().is_diag_item(&cx.tcx, sym::from_fn)
++    {
++        Some(cx.typeck_results().expr_ty(arg))
++    } else {
++        None
+     }
+ }
+ 
+diff --git a/clippy_lints/src/pass_by_ref_or_value.rs b/clippy_lints/src/pass_by_ref_or_value.rs
+index 6b81b9d11..039da4cc4 100644
+--- a/clippy_lints/src/pass_by_ref_or_value.rs
++++ b/clippy_lints/src/pass_by_ref_or_value.rs
+@@ -6,6 +6,7 @@ use clippy_utils::{is_self, is_self_ty};
+ use core::ops::ControlFlow;
+ use rustc_abi::ExternAbi;
+ use rustc_data_structures::fx::FxHashSet;
++use rustc_data_structures::unord::UnordItems;
+ use rustc_errors::Applicability;
+ use rustc_hir as hir;
+ use rustc_hir::attrs::InlineAttr;
+@@ -181,7 +182,7 @@ impl PassByRefOrValue {
+                                 || typeck
+                                     .adjustments()
+                                     .items()
+-                                    .flat_map(|(_, a)| a)
++                                    .flat_map(|(_, a)| UnordItems::new(a.iter()))
+                                     .any(|a| matches!(a.kind, Adjust::Pointer(PointerCoercion::UnsafeFnPointer))))
+                         {
+                             continue;
+diff --git a/clippy_lints/src/raw_strings.rs b/clippy_lints/src/raw_strings.rs
+index 7f08fe0da..d8aa88d48 100644
+--- a/clippy_lints/src/raw_strings.rs
++++ b/clippy_lints/src/raw_strings.rs
+@@ -132,7 +132,7 @@ impl RawStrings {
+                     );
+                 },
+             );
+-            if !matches!(cx.get_lint_level(NEEDLESS_RAW_STRINGS).level, rustc_lint::Allow) {
++            if !cx.get_lint_level_spec(NEEDLESS_RAW_STRINGS).is_allow() {
+                 return;
+             }
+         }
+diff --git a/clippy_lints/src/returns/needless_return.rs b/clippy_lints/src/returns/needless_return.rs
+index b9bacc2b7..f3d6324e1 100644
+--- a/clippy_lints/src/returns/needless_return.rs
++++ b/clippy_lints/src/returns/needless_return.rs
+@@ -181,7 +181,7 @@ fn check_final_expr<'tcx>(
+             match cx.tcx.hir_attrs(expr.hir_id) {
+                 [] => {},
+                 [attr] => {
+-                    if matches!(Level::from_attr(attr.name(), || attr.id()), Some((Level::Expect, _)))
++                    if matches!(Level::from_opt_symbol(attr.name()), Some(Level::Expect))
+                         && let metas = attr.meta_item_list()
+                         && let Some(lst) = metas
+                         && let [MetaItemInner::MetaItem(meta_item), ..] = lst.as_slice()
+diff --git a/clippy_lints/src/significant_drop_tightening.rs b/clippy_lints/src/significant_drop_tightening.rs
+index 53cac75b8..c94e739f0 100644
+--- a/clippy_lints/src/significant_drop_tightening.rs
++++ b/clippy_lints/src/significant_drop_tightening.rs
+@@ -182,7 +182,7 @@ impl<'cx, 'others, 'tcx> AttrChecker<'cx, 'others, 'tcx> {
+         match ty.kind() {
+             rustc_middle::ty::Adt(a, b) => {
+                 for f in a.all_fields() {
+-                    let ty = f.ty(self.cx.tcx, b);
++                    let ty = f.ty(self.cx.tcx, b).skip_norm_wip();
+                     if self.has_sig_drop_attr(ty, depth) {
+                         return true;
+                     }
+diff --git a/clippy_lints/src/transmute/mod.rs b/clippy_lints/src/transmute/mod.rs
+index 625388782..4a150ba09 100644
+--- a/clippy_lints/src/transmute/mod.rs
++++ b/clippy_lints/src/transmute/mod.rs
+@@ -514,7 +514,7 @@ impl Transmute {
+             && first.vis.is_accessible_from(cx.tcx.parent_module(outer.hir_id), cx.tcx)
+         {
+             (
+-                first.ty(cx.tcx, struct_args),
++                first.ty(cx.tcx, struct_args).skip_norm_wip(),
+                 Sugg::NonParen(format!("{}.{}", outer_sugg.maybe_paren(), first.name).into()),
+             )
+         } else {
+diff --git a/clippy_lints/src/volatile_composites.rs b/clippy_lints/src/volatile_composites.rs
+index c7659056c..45177c7a8 100644
+--- a/clippy_lints/src/volatile_composites.rs
++++ b/clippy_lints/src/volatile_composites.rs
+@@ -91,7 +91,7 @@ fn is_struct_repr_transparent<'tcx>(cx: &LateContext<'tcx>, ty: Ty<'tcx>) -> boo
+         && let [fieldty] = adt_def
+             .all_fields()
+             .filter_map(|field| {
+-                let fty = field.ty(cx.tcx, args);
++                let fty = field.ty(cx.tcx, args).skip_norm_wip();
+                 if is_zero_sized_ty(cx, fty) { None } else { Some(fty) }
+             })
+             .collect::<Vec<_>>()
+diff --git a/clippy_utils/src/lib.rs b/clippy_utils/src/lib.rs
+index 021943db0..1ad12da6e 100644
+--- a/clippy_utils/src/lib.rs
++++ b/clippy_utils/src/lib.rs
+@@ -104,7 +104,6 @@ use rustc_lexer::{FrontmatterAllowed, TokenKind, tokenize};
+ use rustc_lint::{LateContext, Level, Lint, LintContext};
+ use rustc_middle::hir::nested_filter;
+ use rustc_middle::hir::place::PlaceBase;
+-use rustc_middle::lint::LevelAndSource;
+ use rustc_middle::mir::{AggregateKind, Operand, RETURN_PLACE, Rvalue, StatementKind, TerminatorKind};
+ use rustc_middle::ty::adjustment::{Adjust, Adjustment, AutoBorrow, DerefAdjustKind, PointerCoercion};
+ use rustc_middle::ty::layout::IntegerExt;
+@@ -1663,12 +1662,12 @@ pub fn fulfill_or_allowed(cx: &LateContext<'_>, lint: &'static Lint, ids: impl I
+     let mut suppress_lint = false;
+ 
+     for id in ids {
+-        let LevelAndSource { level, lint_id, .. } = cx.tcx.lint_level_at_node(lint, id);
+-        if let Some(expectation) = lint_id {
++        let level_spec = cx.tcx.lint_level_spec_at_node(lint, id);
++        if let Some(expectation) = level_spec.lint_id() {
+             cx.fulfill_expectation(expectation);
+         }
+ 
+-        match level {
++        match level_spec.level() {
+             Level::Allow | Level::Expect => suppress_lint = true,
+             Level::Warn | Level::ForceWarn | Level::Deny | Level::Forbid => {},
+         }
+@@ -1685,7 +1684,7 @@ pub fn fulfill_or_allowed(cx: &LateContext<'_>, lint: &'static Lint, ids: impl I
+ /// make sure to use `span_lint_hir` functions to emit the lint. This ensures that
+ /// expectations at the checked nodes will be fulfilled.
+ pub fn is_lint_allowed(cx: &LateContext<'_>, lint: &'static Lint, id: HirId) -> bool {
+-    cx.tcx.lint_level_at_node(lint, id).level == Level::Allow
++    cx.tcx.lint_level_spec_at_node(lint, id).is_allow()
+ }
+ 
+ pub fn strip_pat_refs<'hir>(mut pat: &'hir Pat<'hir>) -> &'hir Pat<'hir> {
+diff --git a/clippy_utils/src/ty/mod.rs b/clippy_utils/src/ty/mod.rs
+index 4ab21f34d..b384d58a0 100644
+--- a/clippy_utils/src/ty/mod.rs
++++ b/clippy_utils/src/ty/mod.rs
+@@ -65,7 +65,7 @@ pub fn can_partially_move_ty<'tcx>(cx: &LateContext<'tcx>, ty: Ty<'tcx>) -> bool
+     }
+     match ty.kind() {
+         ty::Param(_) => false,
+-        ty::Adt(def, subs) => def.all_fields().any(|f| !is_copy(cx, f.ty(cx.tcx, subs))),
++        ty::Adt(def, subs) => def.all_fields().any(|f| !is_copy(cx, f.ty(cx.tcx, subs).skip_norm_wip())),
+         _ => true,
+     }
+ }
+@@ -425,7 +425,7 @@ pub fn needs_ordered_drop<'tcx>(cx: &LateContext<'tcx>, ty: Ty<'tcx>) -> bool {
+                 ty::Array(ty, _) => needs_ordered_drop_inner(cx, *ty, seen),
+                 ty::Adt(adt, subs) => adt
+                     .all_fields()
+-                    .map(|f| f.ty(cx.tcx, subs))
++                    .map(|f| f.ty(cx.tcx, subs).skip_norm_wip())
+                     .any(|ty| needs_ordered_drop_inner(cx, ty, seen)),
+                 _ => true,
+             }
+@@ -524,7 +524,7 @@ fn is_uninit_value_valid_for_ty_fallback<'tcx>(cx: &LateContext<'tcx>, ty: Ty<'t
+         // This purposefully ignores enums as they may have a discriminant that can't be uninit.
+         ty::Adt(adt, args) if adt.is_struct() => adt
+             .all_fields()
+-            .all(|field| is_uninit_value_valid_for_ty(cx, field.ty(cx.tcx, args))),
++            .all(|field| is_uninit_value_valid_for_ty(cx, field.ty(cx.tcx, args).skip_norm_wip())),
+         // For the rest, conservatively assume that they cannot be uninit.
+         _ => false,
+     }
+@@ -868,7 +868,7 @@ impl AdtVariantInfo {
+                     .fields
+                     .iter()
+                     .enumerate()
+-                    .map(|(i, f)| (i, approx_ty_size(cx, f.ty(cx.tcx, subst))))
++                    .map(|(i, f)| (i, approx_ty_size(cx, f.ty(cx.tcx, subst).skip_norm_wip())))
+                     .collect::<Vec<_>>();
+                 fields_size.sort_by_key(|(_, a_size)| *a_size);
+ 
+@@ -932,7 +932,7 @@ pub fn approx_ty_size<'tcx>(cx: &LateContext<'tcx>, ty: Ty<'tcx>) -> u64 {
+             .map(|v| {
+                 v.fields
+                     .iter()
+-                    .map(|field| approx_ty_size(cx, field.ty(cx.tcx, subst)))
++                    .map(|field| approx_ty_size(cx, field.ty(cx.tcx, subst).skip_norm_wip()))
+                     .sum::<u64>()
+             })
+             .sum(),
+@@ -942,7 +942,7 @@ pub fn approx_ty_size<'tcx>(cx: &LateContext<'tcx>, ty: Ty<'tcx>) -> u64 {
+             .map(|v| {
+                 v.fields
+                     .iter()
+-                    .map(|field| approx_ty_size(cx, field.ty(cx.tcx, subst)))
++                    .map(|field| approx_ty_size(cx, field.ty(cx.tcx, subst).skip_norm_wip()))
+                     .sum::<u64>()
+             })
+             .max()
+@@ -953,7 +953,7 @@ pub fn approx_ty_size<'tcx>(cx: &LateContext<'tcx>, ty: Ty<'tcx>) -> u64 {
+             .map(|v| {
+                 v.fields
+                     .iter()
+-                    .map(|field| approx_ty_size(cx, field.ty(cx.tcx, subst)))
++                    .map(|field| approx_ty_size(cx, field.ty(cx.tcx, subst).skip_norm_wip()))
+                     .max()
+                     .unwrap_or_default()
+             })
+@@ -1193,7 +1193,7 @@ impl<'tcx> InteriorMut<'tcx> {
+                     None
+                 } else {
+                     def.all_fields()
+-                        .find_map(|f| self.interior_mut_ty_chain_inner(cx, f.ty(cx.tcx, args), depth))
++                        .find_map(|f| self.interior_mut_ty_chain_inner(cx, f.ty(cx.tcx, args).skip_norm_wip(), depth))
+                 }
+             },
+             ty::Alias(AliasTy {
+@@ -1312,7 +1312,7 @@ pub fn get_field_by_name<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>, name: Symbol) ->
+             .fields
+             .iter()
+             .find(|f| f.name == name)
+-            .map(|f| f.ty(tcx, args)),
++            .map(|f| f.ty(tcx, args).skip_norm_wip()),
+         ty::Tuple(args) => name.as_str().parse::<usize>().ok().and_then(|i| args.get(i).copied()),
+         _ => None,
+     }
+@@ -1344,10 +1344,10 @@ pub fn option_arg_ty<'tcx>(cx: &LateContext<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'t
+ /// types, or `PhantomData` types containing any of the previous. This can be used to check whether
+ /// skipping iterating over an iterator will change its behavior.
+ pub fn has_non_owning_mutable_access<'tcx>(cx: &LateContext<'tcx>, iter_ty: Ty<'tcx>) -> bool {
+-    fn normalize_ty<'tcx>(cx: &LateContext<'tcx>, ty: Ty<'tcx>) -> Ty<'tcx> {
++    fn normalize_ty<'tcx>(cx: &LateContext<'tcx>, ty: Unnormalized<'tcx, Ty<'tcx>>) -> Ty<'tcx> {
+         cx.tcx
+-            .try_normalize_erasing_regions(cx.typing_env(), Unnormalized::new_wip(ty))
+-            .unwrap_or(ty)
++            .try_normalize_erasing_regions(cx.typing_env(), ty)
++            .unwrap_or(ty.skip_norm_wip())
+     }
+ 
+     /// Check if `ty` contains mutable references or equivalent, which includes:
+diff --git a/rust-toolchain.toml b/rust-toolchain.toml
+index 397173e05..203f5981b 100644
+--- a/rust-toolchain.toml
++++ b/rust-toolchain.toml
+@@ -1,6 +1,6 @@
+ [toolchain]
+ # begin autogenerated nightly
+-channel = "nightly-2026-05-13"
++channel = "nightly-2026-05-17"
+ # end autogenerated nightly
+ components = ["cargo", "llvm-tools", "rust-src", "rust-std", "rustc", "rustc-dev", "rustfmt"]
+ profile = "minimal"
+diff --git a/tests/ui/arithmetic_side_effects.rs b/tests/ui/arithmetic_side_effects.rs
+index 744ba2789..87397a549 100644
+--- a/tests/ui/arithmetic_side_effects.rs
++++ b/tests/ui/arithmetic_side_effects.rs
+@@ -742,24 +742,4 @@ pub fn type_conversion_does_not_escape_its_context() {
+     //~^ arithmetic_side_effects
+ }
+ 
+-pub fn issue_17005() {
+-    fn id_u8() -> u8 {
+-        0
+-    }
+-    fn id_u16() -> u16 {
+-        0
+-    }
+-    fn id_u32() -> u32 {
+-        0
+-    }
+-
+-    // cast from a smaller unsigned type, sum cannot overflow
+-    let _ = 1u32 + id_u8() as u32;
+-    let _ = 1u32 + id_u16() as u32;
+-    let _ = 1u64 + id_u8() as u64;
+-    let _ = 1u64 + id_u16() as u64;
+-    let _ = 1u64 + id_u32() as u64;
+-    let _ = 0xf301_0000u32 + id_u16() as u32;
+-}
+-
+ fn main() {}
+diff --git a/tests/ui/duration_suboptimal_units.fixed b/tests/ui/duration_suboptimal_units.fixed
+index ebdae6f4a..a4eb981eb 100644
+--- a/tests/ui/duration_suboptimal_units.fixed
++++ b/tests/ui/duration_suboptimal_units.fixed
+@@ -6,8 +6,8 @@ use std::time::Duration;
+ const SIXTY: u64 = 60;
+ 
+ macro_rules! mac {
+-    (slow_rhythm) => {
+-        60 * 60
++    (slow_rythm) => {
++        3600
+     };
+     (duration) => {
+         Duration::from_mins(5)
+@@ -23,6 +23,8 @@ fn main() {
+     let dur = Duration::from_secs(42);
+     let dur = Duration::from_hours(3);
+ 
++    let dur = Duration::from_mins(1);
++    //~^ duration_suboptimal_units
+     let dur = Duration::from_mins(3);
+     //~^ duration_suboptimal_units
+     let dur = Duration::from_mins(10);
+@@ -42,16 +44,8 @@ fn main() {
+ 
+     const {
+         let dur = Duration::from_secs(0);
+-        let dur = Duration::from_millis(5_000);
+         let dur = Duration::from_secs(5);
+         //~^ duration_suboptimal_units
+-        let dur = Duration::from_secs(11);
+-        //~^ duration_suboptimal_units
+-
+-        let dur = Duration::from_secs(180);
+-        // 39600 secs = 11 hours
+-        let dur = Duration::from_hours(11);
+-        //~^ duration_suboptimal_units
+         let dur = Duration::from_mins(3);
+         //~^ duration_suboptimal_units
+         let dur = Duration::from_hours(24);
+@@ -61,11 +55,10 @@ fn main() {
+     }
+ 
+     // Qualified Durations must be kept
+-    std::time::Duration::from_mins(12);
++    std::time::Duration::from_mins(1);
+     //~^ duration_suboptimal_units
+ 
+     // We lint in normal macros
+-    assert_eq!(Duration::from_secs(3_600), Duration::from_mins(6));
+     assert_eq!(Duration::from_hours(1), Duration::from_mins(6));
+     //~^ duration_suboptimal_units
+ 
+@@ -73,13 +66,13 @@ fn main() {
+     let dur = mac!(duration);
+ 
+     // We don't lint in macros if duration comes from outside
+-    let dur = mac!(arg => 60 * 60);
++    let dur = mac!(arg => 3600);
+ 
+     // We don't lint in external macros
+-    let dur = proc_macros::external! { Duration::from_secs(60 * 60) };
++    let dur = proc_macros::external! { Duration::from_secs(3_600) };
+ 
+     // We don't lint values coming from macros
+-    let dur = Duration::from_secs(mac!(slow_rhythm));
++    let dur = Duration::from_secs(mac!(slow_rythm));
+ }
+ 
+ mod my_duration {
+@@ -112,34 +105,3 @@ fn sufficient_msrv() {
+     _ = Duration::from_hours(18824455811688);
+     //~^ duration_suboptimal_units
+ }
+-
+-fn issue16532() {
+-    // Literals with small promoted values should not lint (issue #16532)
+-    let dur = Duration::from_secs(60);
+-    let dur = Duration::from_secs(180);
+-    let dur = Duration::from_millis(5_000);
+-    let dur = Duration::from_millis(1_000);
+-    let dur = Duration::from_secs(3_600);
+-    let dur = Duration::from_secs(600);
+-
+-    // Literals with larger promoted values should lint
+-    let dur = Duration::from_secs(20);
+-    //~^ duration_suboptimal_units
+-    let dur = Duration::from_hours(12);
+-    //~^ duration_suboptimal_units
+-    let dur = Duration::from_mins(11);
+-    //~^ duration_suboptimal_units
+-
+-    // Expressions should always be promoted, as they show intent to use a larger unit
+-    // 5 minutes
+-    let dur = Duration::from_mins(5);
+-    //~^ duration_suboptimal_units
+-
+-    // 2 Hours
+-    let dur = Duration::from_hours(2);
+-    //~^ duration_suboptimal_units
+-
+-    // Daily
+-    let dur = Duration::from_hours(24);
+-    //~^ duration_suboptimal_units
+-}
+diff --git a/tests/ui/duration_suboptimal_units.rs b/tests/ui/duration_suboptimal_units.rs
+index 6a778c9d7..e31ca679b 100644
+--- a/tests/ui/duration_suboptimal_units.rs
++++ b/tests/ui/duration_suboptimal_units.rs
+@@ -6,11 +6,11 @@ use std::time::Duration;
+ const SIXTY: u64 = 60;
+ 
+ macro_rules! mac {
+-    (slow_rhythm) => {
+-        60 * 60
++    (slow_rythm) => {
++        3600
+     };
+     (duration) => {
+-        Duration::from_secs(60 * 5)
++        Duration::from_secs(300)
+         //~^ duration_suboptimal_units
+     };
+     (arg => $e:expr) => {
+@@ -23,13 +23,15 @@ fn main() {
+     let dur = Duration::from_secs(42);
+     let dur = Duration::from_hours(3);
+ 
+-    let dur = Duration::from_secs(60 * 3);
++    let dur = Duration::from_secs(60);
++    //~^ duration_suboptimal_units
++    let dur = Duration::from_secs(180);
+     //~^ duration_suboptimal_units
+     let dur = Duration::from_secs(10 * 60);
+     //~^ duration_suboptimal_units
+     let dur = Duration::from_mins(24 * 60);
+     //~^ duration_suboptimal_units
+-    let dur = Duration::from_millis(5 * 1000);
++    let dur = Duration::from_millis(5_000);
+     //~^ duration_suboptimal_units
+     let dur = Duration::from_nanos(13 * 60 * 60 * 1_000 * 1_000 * 1_000);
+     //~^ duration_suboptimal_units
+@@ -43,16 +45,8 @@ fn main() {
+     const {
+         let dur = Duration::from_secs(0);
+         let dur = Duration::from_millis(5_000);
+-        let dur = Duration::from_millis(1000 * 5);
+         //~^ duration_suboptimal_units
+-        let dur = Duration::from_millis(11000);
+-        //~^ duration_suboptimal_units
+-
+         let dur = Duration::from_secs(180);
+-        // 39600 secs = 11 hours
+-        let dur = Duration::from_secs(39600);
+-        //~^ duration_suboptimal_units
+-        let dur = Duration::from_secs(3 * 60);
+         //~^ duration_suboptimal_units
+         let dur = Duration::from_mins(24 * 60);
+         //~^ duration_suboptimal_units
+@@ -61,25 +55,24 @@ fn main() {
+     }
+ 
+     // Qualified Durations must be kept
+-    std::time::Duration::from_secs(12 * 60);
++    std::time::Duration::from_secs(60);
+     //~^ duration_suboptimal_units
+ 
+     // We lint in normal macros
+     assert_eq!(Duration::from_secs(3_600), Duration::from_mins(6));
+-    assert_eq!(Duration::from_secs(60 * 60), Duration::from_mins(6));
+     //~^ duration_suboptimal_units
+ 
+     // We lint in normal macros (marker is in macro itself)
+     let dur = mac!(duration);
+ 
+     // We don't lint in macros if duration comes from outside
+-    let dur = mac!(arg => 60 * 60);
++    let dur = mac!(arg => 3600);
+ 
+     // We don't lint in external macros
+-    let dur = proc_macros::external! { Duration::from_secs(60 * 60) };
++    let dur = proc_macros::external! { Duration::from_secs(3_600) };
+ 
+     // We don't lint values coming from macros
+-    let dur = Duration::from_secs(mac!(slow_rhythm));
++    let dur = Duration::from_secs(mac!(slow_rythm));
+ }
+ 
+ mod my_duration {
+@@ -112,34 +105,3 @@ fn sufficient_msrv() {
+     _ = Duration::from_secs(67_768_040_922_076_800);
+     //~^ duration_suboptimal_units
+ }
+-
+-fn issue16532() {
+-    // Literals with small promoted values should not lint (issue #16532)
+-    let dur = Duration::from_secs(60);
+-    let dur = Duration::from_secs(180);
+-    let dur = Duration::from_millis(5_000);
+-    let dur = Duration::from_millis(1_000);
+-    let dur = Duration::from_secs(3_600);
+-    let dur = Duration::from_secs(600);
+-
+-    // Literals with larger promoted values should lint
+-    let dur = Duration::from_millis(20_000);
+-    //~^ duration_suboptimal_units
+-    let dur = Duration::from_mins(720);
+-    //~^ duration_suboptimal_units
+-    let dur = Duration::from_secs(660);
+-    //~^ duration_suboptimal_units
+-
+-    // Expressions should always be promoted, as they show intent to use a larger unit
+-    // 5 minutes
+-    let dur = Duration::from_secs(60 * 5);
+-    //~^ duration_suboptimal_units
+-
+-    // 2 Hours
+-    let dur = Duration::from_mins(60 * 2);
+-    //~^ duration_suboptimal_units
+-
+-    // Daily
+-    let dur = Duration::from_mins(60 * 24);
+-    //~^ duration_suboptimal_units
+-}
+diff --git a/tests/ui/duration_suboptimal_units.stderr b/tests/ui/duration_suboptimal_units.stderr
+index f106005c2..97b26f666 100644
+--- a/tests/ui/duration_suboptimal_units.stderr
++++ b/tests/ui/duration_suboptimal_units.stderr
+@@ -1,20 +1,32 @@
+ error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+   --> tests/ui/duration_suboptimal_units.rs:26:15
+    |
+-LL |     let dur = Duration::from_secs(60 * 3);
+-   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
++LL |     let dur = Duration::from_secs(60);
++   |               ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D clippy::duration-suboptimal-units` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::duration_suboptimal_units)]`
+ help: try using from_mins
+    |
+-LL -     let dur = Duration::from_secs(60 * 3);
+-LL +     let dur = Duration::from_mins(3);
++LL -     let dur = Duration::from_secs(60);
++LL +     let dur = Duration::from_mins(1);
+    |
+ 
+ error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+   --> tests/ui/duration_suboptimal_units.rs:28:15
+    |
++LL |     let dur = Duration::from_secs(180);
++   |               ^^^^^^^^^^^^^^^^^^^^^^^^
++   |
++help: try using from_mins
++   |
++LL -     let dur = Duration::from_secs(180);
++LL +     let dur = Duration::from_mins(3);
++   |
++
++error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
++  --> tests/ui/duration_suboptimal_units.rs:30:15
++   |
+ LL |     let dur = Duration::from_secs(10 * 60);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+@@ -25,7 +37,7 @@ LL +     let dur = Duration::from_mins(10);
+    |
+ 
+ error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+-  --> tests/ui/duration_suboptimal_units.rs:30:15
++  --> tests/ui/duration_suboptimal_units.rs:32:15
+    |
+ LL |     let dur = Duration::from_mins(24 * 60);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+@@ -37,19 +49,19 @@ LL +     let dur = Duration::from_hours(24);
+    |
+ 
+ error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+-  --> tests/ui/duration_suboptimal_units.rs:32:15
++  --> tests/ui/duration_suboptimal_units.rs:34:15
+    |
+-LL |     let dur = Duration::from_millis(5 * 1000);
+-   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++LL |     let dur = Duration::from_millis(5_000);
++   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+ help: try using from_secs
+    |
+-LL -     let dur = Duration::from_millis(5 * 1000);
++LL -     let dur = Duration::from_millis(5_000);
+ LL +     let dur = Duration::from_secs(5);
+    |
+ 
+ error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+-  --> tests/ui/duration_suboptimal_units.rs:34:15
++  --> tests/ui/duration_suboptimal_units.rs:36:15
+    |
+ LL |     let dur = Duration::from_nanos(13 * 60 * 60 * 1_000 * 1_000 * 1_000);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+@@ -61,55 +73,31 @@ LL +     let dur = Duration::from_hours(13);
+    |
+ 
+ error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+-  --> tests/ui/duration_suboptimal_units.rs:46:19
++  --> tests/ui/duration_suboptimal_units.rs:47:19
+    |
+-LL |         let dur = Duration::from_millis(1000 * 5);
+-   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+-   |
+-help: try using from_secs
+-   |
+-LL -         let dur = Duration::from_millis(1000 * 5);
+-LL +         let dur = Duration::from_secs(5);
+-   |
+-
+-error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+-  --> tests/ui/duration_suboptimal_units.rs:48:19
+-   |
+-LL |         let dur = Duration::from_millis(11000);
++LL |         let dur = Duration::from_millis(5_000);
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+ help: try using from_secs
+    |
+-LL -         let dur = Duration::from_millis(11000);
+-LL +         let dur = Duration::from_secs(11);
++LL -         let dur = Duration::from_millis(5_000);
++LL +         let dur = Duration::from_secs(5);
+    |
+ 
+ error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+-  --> tests/ui/duration_suboptimal_units.rs:53:19
++  --> tests/ui/duration_suboptimal_units.rs:49:19
+    |
+-LL |         let dur = Duration::from_secs(39600);
+-   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+-   |
+-help: try using from_hours
+-   |
+-LL -         let dur = Duration::from_secs(39600);
+-LL +         let dur = Duration::from_hours(11);
+-   |
+-
+-error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+-  --> tests/ui/duration_suboptimal_units.rs:55:19
+-   |
+-LL |         let dur = Duration::from_secs(3 * 60);
+-   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
++LL |         let dur = Duration::from_secs(180);
++   |                   ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+ help: try using from_mins
+    |
+-LL -         let dur = Duration::from_secs(3 * 60);
++LL -         let dur = Duration::from_secs(180);
+ LL +         let dur = Duration::from_mins(3);
+    |
+ 
+ error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+-  --> tests/ui/duration_suboptimal_units.rs:57:19
++  --> tests/ui/duration_suboptimal_units.rs:51:19
+    |
+ LL |         let dur = Duration::from_mins(24 * 60);
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+@@ -121,34 +109,34 @@ LL +         let dur = Duration::from_hours(24);
+    |
+ 
+ error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+-  --> tests/ui/duration_suboptimal_units.rs:64:5
++  --> tests/ui/duration_suboptimal_units.rs:58:5
+    |
+-LL |     std::time::Duration::from_secs(12 * 60);
+-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++LL |     std::time::Duration::from_secs(60);
++   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+ help: try using from_mins
+    |
+-LL -     std::time::Duration::from_secs(12 * 60);
+-LL +     std::time::Duration::from_mins(12);
++LL -     std::time::Duration::from_secs(60);
++LL +     std::time::Duration::from_mins(1);
+    |
+ 
+ error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+-  --> tests/ui/duration_suboptimal_units.rs:69:16
++  --> tests/ui/duration_suboptimal_units.rs:62:16
+    |
+-LL |     assert_eq!(Duration::from_secs(60 * 60), Duration::from_mins(6));
+-   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++LL |     assert_eq!(Duration::from_secs(3_600), Duration::from_mins(6));
++   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+ help: try using from_hours
+    |
+-LL -     assert_eq!(Duration::from_secs(60 * 60), Duration::from_mins(6));
++LL -     assert_eq!(Duration::from_secs(3_600), Duration::from_mins(6));
+ LL +     assert_eq!(Duration::from_hours(1), Duration::from_mins(6));
+    |
+ 
+ error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+   --> tests/ui/duration_suboptimal_units.rs:13:9
+    |
+-LL |         Duration::from_secs(60 * 5)
+-   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
++LL |         Duration::from_secs(300)
++   |         ^^^^^^^^^^^^^^^^^^^^^^^^
+ ...
+ LL |     let dur = mac!(duration);
+    |               -------------- in this macro invocation
+@@ -156,12 +144,12 @@ LL |     let dur = mac!(duration);
+    = note: this error originates in the macro `mac` (in Nightly builds, run with -Z macro-backtrace for more info)
+ help: try using from_mins
+    |
+-LL -         Duration::from_secs(60 * 5)
++LL -         Duration::from_secs(300)
+ LL +         Duration::from_mins(5)
+    |
+ 
+ error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+-  --> tests/ui/duration_suboptimal_units.rs:112:9
++  --> tests/ui/duration_suboptimal_units.rs:105:9
+    |
+ LL |     _ = Duration::from_secs(67_768_040_922_076_800);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+@@ -172,77 +160,5 @@ LL -     _ = Duration::from_secs(67_768_040_922_076_800);
+ LL +     _ = Duration::from_hours(18824455811688);
+    |
+ 
+-error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+-  --> tests/ui/duration_suboptimal_units.rs:126:15
+-   |
+-LL |     let dur = Duration::from_millis(20_000);
+-   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+-   |
+-help: try using from_secs
+-   |
+-LL -     let dur = Duration::from_millis(20_000);
+-LL +     let dur = Duration::from_secs(20);
+-   |
+-
+-error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+-  --> tests/ui/duration_suboptimal_units.rs:128:15
+-   |
+-LL |     let dur = Duration::from_mins(720);
+-   |               ^^^^^^^^^^^^^^^^^^^^^^^^
+-   |
+-help: try using from_hours
+-   |
+-LL -     let dur = Duration::from_mins(720);
+-LL +     let dur = Duration::from_hours(12);
+-   |
+-
+-error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+-  --> tests/ui/duration_suboptimal_units.rs:130:15
+-   |
+-LL |     let dur = Duration::from_secs(660);
+-   |               ^^^^^^^^^^^^^^^^^^^^^^^^
+-   |
+-help: try using from_mins
+-   |
+-LL -     let dur = Duration::from_secs(660);
+-LL +     let dur = Duration::from_mins(11);
+-   |
+-
+-error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+-  --> tests/ui/duration_suboptimal_units.rs:135:15
+-   |
+-LL |     let dur = Duration::from_secs(60 * 5);
+-   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+-   |
+-help: try using from_mins
+-   |
+-LL -     let dur = Duration::from_secs(60 * 5);
+-LL +     let dur = Duration::from_mins(5);
+-   |
+-
+-error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+-  --> tests/ui/duration_suboptimal_units.rs:139:15
+-   |
+-LL |     let dur = Duration::from_mins(60 * 2);
+-   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+-   |
+-help: try using from_hours
+-   |
+-LL -     let dur = Duration::from_mins(60 * 2);
+-LL +     let dur = Duration::from_hours(2);
+-   |
+-
+-error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+-  --> tests/ui/duration_suboptimal_units.rs:143:15
+-   |
+-LL |     let dur = Duration::from_mins(60 * 24);
+-   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+-   |
+-help: try using from_hours
+-   |
+-LL -     let dur = Duration::from_mins(60 * 24);
+-LL +     let dur = Duration::from_hours(24);
+-   |
+-
+-error: aborting due to 20 previous errors
++error: aborting due to 13 previous errors
+ 
+diff --git a/tests/ui/duration_suboptimal_units_days_weeks.fixed b/tests/ui/duration_suboptimal_units_days_weeks.fixed
+index f9d8852f5..b0abcbb7b 100644
+--- a/tests/ui/duration_suboptimal_units_days_weeks.fixed
++++ b/tests/ui/duration_suboptimal_units_days_weeks.fixed
+@@ -6,18 +6,12 @@
+ use std::time::Duration;
+ 
+ fn main() {
+-    let dur = Duration::from_secs(60);
+-    let dur = Duration::from_mins(100);
++    let dur = Duration::from_mins(1);
+     //~^ duration_suboptimal_units
+ 
+-    let dur = Duration::from_hours(24);
+-    let dur = Duration::from_days(1000);
++    let dur = Duration::from_days(1);
+     //~^ duration_suboptimal_units
+ 
+     let dur = Duration::from_weeks(13);
+     //~^ duration_suboptimal_units
+-
+-    // Weekly
+-    let dur = Duration::from_weeks(1);
+-    //~^ duration_suboptimal_units
+ }
+diff --git a/tests/ui/duration_suboptimal_units_days_weeks.rs b/tests/ui/duration_suboptimal_units_days_weeks.rs
+index 9d71071e7..663476905 100644
+--- a/tests/ui/duration_suboptimal_units_days_weeks.rs
++++ b/tests/ui/duration_suboptimal_units_days_weeks.rs
+@@ -7,17 +7,11 @@ use std::time::Duration;
+ 
+ fn main() {
+     let dur = Duration::from_secs(60);
+-    let dur = Duration::from_secs(6000);
+     //~^ duration_suboptimal_units
+ 
+     let dur = Duration::from_hours(24);
+-    let dur = Duration::from_hours(24000);
+     //~^ duration_suboptimal_units
+ 
+     let dur = Duration::from_nanos(13 * 7 * 24 * 60 * 60 * 1_000 * 1_000 * 1_000);
+     //~^ duration_suboptimal_units
+-
+-    // Weekly
+-    let dur = Duration::from_hours(24 * 7);
+-    //~^ duration_suboptimal_units
+ }
+diff --git a/tests/ui/duration_suboptimal_units_days_weeks.stderr b/tests/ui/duration_suboptimal_units_days_weeks.stderr
+index 8e8dbfe13..98325358b 100644
+--- a/tests/ui/duration_suboptimal_units_days_weeks.stderr
++++ b/tests/ui/duration_suboptimal_units_days_weeks.stderr
+@@ -1,31 +1,31 @@
+ error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+-  --> tests/ui/duration_suboptimal_units_days_weeks.rs:10:15
++  --> tests/ui/duration_suboptimal_units_days_weeks.rs:9:15
+    |
+-LL |     let dur = Duration::from_secs(6000);
+-   |               ^^^^^^^^^^^^^^^^^^^^^^^^^
++LL |     let dur = Duration::from_secs(60);
++   |               ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D clippy::duration-suboptimal-units` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::duration_suboptimal_units)]`
+ help: try using from_mins
+    |
+-LL -     let dur = Duration::from_secs(6000);
+-LL +     let dur = Duration::from_mins(100);
++LL -     let dur = Duration::from_secs(60);
++LL +     let dur = Duration::from_mins(1);
+    |
+ 
+ error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+-  --> tests/ui/duration_suboptimal_units_days_weeks.rs:14:15
++  --> tests/ui/duration_suboptimal_units_days_weeks.rs:12:15
+    |
+-LL |     let dur = Duration::from_hours(24000);
+-   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
++LL |     let dur = Duration::from_hours(24);
++   |               ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+ help: try using from_days
+    |
+-LL -     let dur = Duration::from_hours(24000);
+-LL +     let dur = Duration::from_days(1000);
++LL -     let dur = Duration::from_hours(24);
++LL +     let dur = Duration::from_days(1);
+    |
+ 
+ error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+-  --> tests/ui/duration_suboptimal_units_days_weeks.rs:17:15
++  --> tests/ui/duration_suboptimal_units_days_weeks.rs:15:15
+    |
+ LL |     let dur = Duration::from_nanos(13 * 7 * 24 * 60 * 60 * 1_000 * 1_000 * 1_000);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+@@ -36,17 +36,5 @@ LL -     let dur = Duration::from_nanos(13 * 7 * 24 * 60 * 60 * 1_000 * 1_000 *
+ LL +     let dur = Duration::from_weeks(13);
+    |
+ 
+-error: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+-  --> tests/ui/duration_suboptimal_units_days_weeks.rs:21:15
+-   |
+-LL |     let dur = Duration::from_hours(24 * 7);
+-   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+-   |
+-help: try using from_weeks
+-   |
+-LL -     let dur = Duration::from_hours(24 * 7);
+-LL +     let dur = Duration::from_weeks(1);
+-   |
+-
+-error: aborting due to 4 previous errors
++error: aborting due to 3 previous errors
+ 

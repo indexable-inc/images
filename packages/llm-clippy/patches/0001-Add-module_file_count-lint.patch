@@ -1,0 +1,276 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Sun, 17 May 2026 12:19:21 -0700
+Subject: [PATCH] Add module_file_count lint
+
+
+diff --git a/clippy_config/src/conf.rs b/clippy_config/src/conf.rs
+index 465e88a78..30ae84669 100644
+--- a/clippy_config/src/conf.rs
++++ b/clippy_config/src/conf.rs
+@@ -719,6 +719,9 @@ define_Conf! {
+     /// The maximum size of a file included via `include_bytes!()` or `include_str!()`, in bytes
+     #[lints(large_include_file)]
+     max_include_file_size: u64 = 1_000_000,
++    /// The maximum number of `.rs` files a module directory can contain
++    #[lints(module_file_count)]
++    max_module_files: u64 = 7,
+     /// The maximum number of bool fields a struct can have
+     #[lints(struct_excessive_bools)]
+     max_struct_bools: u64 = 3,
+diff --git a/clippy_lints/src/declared_lints.rs b/clippy_lints/src/declared_lints.rs
+index 4218d1fdc..4db81194c 100644
+--- a/clippy_lints/src/declared_lints.rs
++++ b/clippy_lints/src/declared_lints.rs
+@@ -541,6 +541,7 @@ pub static LINTS: &[&::declare_clippy_lint::LintInfo] = &[
+     crate::missing_trait_methods::MISSING_TRAIT_METHODS_INFO,
+     crate::mixed_read_write_in_expression::DIVERGING_SUB_EXPRESSION_INFO,
+     crate::mixed_read_write_in_expression::MIXED_READ_WRITE_IN_EXPRESSION_INFO,
++    crate::module_file_count::MODULE_FILE_COUNT_INFO,
+     crate::module_style::INLINE_MODULES_INFO,
+     crate::module_style::MOD_MODULE_FILES_INFO,
+     crate::module_style::SELF_NAMED_MODULE_FILES_INFO,
+diff --git a/clippy_lints/src/lib.rs b/clippy_lints/src/lib.rs
+index af25b1f7f..6f0457474 100644
+--- a/clippy_lints/src/lib.rs
++++ b/clippy_lints/src/lib.rs
+@@ -242,6 +242,7 @@ mod missing_fields_in_debug;
+ mod missing_inline;
+ mod missing_trait_methods;
+ mod mixed_read_write_in_expression;
++mod module_file_count;
+ mod module_style;
+ mod multi_assignments;
+ mod multiple_bound_locations;
+@@ -497,6 +498,7 @@ pub fn register_lint_passes(store: &mut rustc_lint::LintStore, conf: &'static Co
+         Box::new(move || Box::new(nonstandard_macro_braces::MacroBraces::new(conf))),
+         Box::new(|| Box::new(asm_syntax::InlineAsmX86AttSyntax)),
+         Box::new(|| Box::new(asm_syntax::InlineAsmX86IntelSyntax)),
++        Box::new(move || Box::new(module_file_count::ModuleFileCount::new(conf))),
+         Box::new(move || Box::new(module_style::ModStyle::default())),
+         Box::new(move || Box::new(disallowed_script_idents::DisallowedScriptIdents::new(conf))),
+         Box::new(|| Box::new(octal_escapes::OctalEscapes)),
+diff --git a/clippy_lints/src/module_file_count.rs b/clippy_lints/src/module_file_count.rs
+new file mode 100644
+index 000000000..c70305b58
+--- /dev/null
++++ b/clippy_lints/src/module_file_count.rs
+@@ -0,0 +1,126 @@
++use clippy_config::Conf;
++use clippy_utils::diagnostics::span_lint_and_then;
++use rustc_ast::ast::{self, Inline, ItemKind, ModKind};
++use rustc_lint::{EarlyContext, EarlyLintPass, LintContext};
++use rustc_session::impl_lint_pass;
++use rustc_span::def_id::LOCAL_CRATE;
++use rustc_span::{FileName, SourceFile};
++use std::path::{Path, PathBuf};
++
++declare_clippy_lint! {
++    /// ### What it does
++    /// Checks that module directories do not contain more than a configurable
++    /// number of `.rs` files (default: 7).
++    ///
++    /// ### Why restrict this?
++    /// Large modules with many files are hard to navigate and signal missing
++    /// abstraction boundaries. Splitting into sub-modules keeps each directory
++    /// focused and discoverable.
++    ///
++    /// ### Example
++    /// ```text
++    /// src/handlers/
++    ///   mod.rs a.rs b.rs c.rs d.rs e.rs f.rs g.rs h.rs  // 9 files
++    /// ```
++    /// Use instead:
++    /// ```text
++    /// src/handlers/
++    ///   mod.rs
++    ///   network/
++    ///     a.rs b.rs c.rs
++    ///   storage/
++    ///     d.rs e.rs
++    /// ```
++    #[clippy::version = "1.86.0"]
++    pub MODULE_FILE_COUNT,
++    restriction,
++    "module directory contains too many files"
++}
++
++pub struct ModuleFileCount {
++    max_module_files: u64,
++}
++
++impl ModuleFileCount {
++    pub fn new(conf: &'static Conf) -> Self {
++        Self {
++            max_module_files: conf.max_module_files,
++        }
++    }
++}
++
++impl_lint_pass!(ModuleFileCount => [MODULE_FILE_COUNT]);
++
++impl EarlyLintPass for ModuleFileCount {
++    fn check_item(&mut self, cx: &EarlyContext<'_>, item: &ast::Item) {
++        if let ItemKind::Mod(.., ModKind::Loaded(_, Inline::No { .. }, mod_spans, ..)) = &item.kind
++        {
++            let mod_file = cx
++                .sess()
++                .source_map()
++                .lookup_source_file(mod_spans.inner_span.lo());
++
++            let Some(mod_dir) = module_directory(&mod_file) else {
++                return;
++            };
++
++            let Ok(entries) = std::fs::read_dir(&mod_dir) else {
++                return;
++            };
++
++            let rs_count = entries
++                .filter_map(|e| e.ok())
++                .filter(|e| {
++                    e.path().extension().is_some_and(|ext| ext == "rs")
++                        && e.file_type().is_ok_and(|ft| ft.is_file())
++                })
++                .count() as u64;
++
++            if rs_count > self.max_module_files {
++                let working_dir = cx
++                    .sess()
++                    .source_map()
++                    .working_dir()
++                    .local_path()
++                    .map(Path::to_path_buf);
++
++                let display_dir = working_dir
++                    .as_ref()
++                    .and_then(|wd| mod_dir.strip_prefix(wd).ok())
++                    .map_or_else(|| mod_dir.clone(), Path::to_path_buf);
++
++                span_lint_and_then(
++                    cx,
++                    MODULE_FILE_COUNT,
++                    item.span,
++                    format!(
++                        "module `{}` has {rs_count} files (max {})",
++                        display_dir.display(),
++                        self.max_module_files,
++                    ),
++                    |diag| {
++                        diag.help("split into sub-modules to keep each directory focused");
++                    },
++                );
++            }
++        }
++    }
++}
++
++fn module_directory(file: &SourceFile) -> Option<PathBuf> {
++    let FileName::Real(ref name) = file.name else {
++        return None;
++    };
++    let path = name.local_path()?;
++
++    if file.cnum != LOCAL_CRATE {
++        return None;
++    }
++
++    if path.ends_with("mod.rs") {
++        path.parent().map(Path::to_path_buf)
++    } else {
++        // Self-named module: foo.rs -> foo/ directory
++        Some(path.with_extension(""))
++    }
++}
+diff --git a/tests/ui-cargo/module_file_count/fail/Cargo.stderr b/tests/ui-cargo/module_file_count/fail/Cargo.stderr
+new file mode 100644
+index 000000000..11a75edff
+--- /dev/null
++++ b/tests/ui-cargo/module_file_count/fail/Cargo.stderr
+@@ -0,0 +1,11 @@
++error: module `src/big_mod` has 4 files (max 3)
++ --> src/main.rs:4:1
++  |
++4 | mod big_mod;
++  | ^^^^^^^^^^^^
++  |
++  = help: split into sub-modules to keep each directory focused
++  = note: `-D clippy::module-file-count` implied by `-D warnings`
++  = help: to override `-D warnings` add `#[allow(clippy::module_file_count)]`
++
++error: could not compile `module_file_count` (bin "module_file_count") due to 1 previous error
+diff --git a/tests/ui-cargo/module_file_count/fail/Cargo.toml b/tests/ui-cargo/module_file_count/fail/Cargo.toml
+new file mode 100644
+index 000000000..bcec1d0ca
+--- /dev/null
++++ b/tests/ui-cargo/module_file_count/fail/Cargo.toml
+@@ -0,0 +1,5 @@
++[package]
++name = "module_file_count"
++edition = "2021"
++publish = false
++version = "0.1.0"
+diff --git a/tests/ui-cargo/module_file_count/fail/clippy.toml b/tests/ui-cargo/module_file_count/fail/clippy.toml
+new file mode 100644
+index 000000000..33e3b71a8
+--- /dev/null
++++ b/tests/ui-cargo/module_file_count/fail/clippy.toml
+@@ -0,0 +1 @@
++max-module-files = 3
+diff --git a/tests/ui-cargo/module_file_count/fail/src/big_mod/a.rs b/tests/ui-cargo/module_file_count/fail/src/big_mod/a.rs
+new file mode 100644
+index 000000000..82a3da183
+--- /dev/null
++++ b/tests/ui-cargo/module_file_count/fail/src/big_mod/a.rs
+@@ -0,0 +1 @@
++pub fn a() {}
+diff --git a/tests/ui-cargo/module_file_count/fail/src/big_mod/b.rs b/tests/ui-cargo/module_file_count/fail/src/big_mod/b.rs
+new file mode 100644
+index 000000000..40a8d9421
+--- /dev/null
++++ b/tests/ui-cargo/module_file_count/fail/src/big_mod/b.rs
+@@ -0,0 +1 @@
++pub fn b() {}
+diff --git a/tests/ui-cargo/module_file_count/fail/src/big_mod/c.rs b/tests/ui-cargo/module_file_count/fail/src/big_mod/c.rs
+new file mode 100644
+index 000000000..d93754551
+--- /dev/null
++++ b/tests/ui-cargo/module_file_count/fail/src/big_mod/c.rs
+@@ -0,0 +1 @@
++pub fn c() {}
+diff --git a/tests/ui-cargo/module_file_count/fail/src/big_mod/mod.rs b/tests/ui-cargo/module_file_count/fail/src/big_mod/mod.rs
+new file mode 100644
+index 000000000..696832913
+--- /dev/null
++++ b/tests/ui-cargo/module_file_count/fail/src/big_mod/mod.rs
+@@ -0,0 +1,3 @@
++mod a;
++mod b;
++mod c;
+diff --git a/tests/ui-cargo/module_file_count/fail/src/main.rs b/tests/ui-cargo/module_file_count/fail/src/main.rs
+new file mode 100644
+index 000000000..edd0fc4ad
+--- /dev/null
++++ b/tests/ui-cargo/module_file_count/fail/src/main.rs
+@@ -0,0 +1,7 @@
++#![warn(clippy::module_file_count)]
++#![allow(dead_code)]
++
++mod big_mod;
++mod small_mod;
++
++fn main() {}
+diff --git a/tests/ui-cargo/module_file_count/fail/src/small_mod/mod.rs b/tests/ui-cargo/module_file_count/fail/src/small_mod/mod.rs
+new file mode 100644
+index 000000000..d9ba5e906
+--- /dev/null
++++ b/tests/ui-cargo/module_file_count/fail/src/small_mod/mod.rs
+@@ -0,0 +1 @@
++mod x;
+diff --git a/tests/ui-cargo/module_file_count/fail/src/small_mod/x.rs b/tests/ui-cargo/module_file_count/fail/src/small_mod/x.rs
+new file mode 100644
+index 000000000..0c1f90b1e
+--- /dev/null
++++ b/tests/ui-cargo/module_file_count/fail/src/small_mod/x.rs
+@@ -0,0 +1 @@
++pub fn x() {}

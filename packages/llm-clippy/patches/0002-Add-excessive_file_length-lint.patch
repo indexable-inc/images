@@ -1,0 +1,161 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Sun, 17 May 2026 12:19:25 -0700
+Subject: [PATCH] Add excessive_file_length lint
+
+
+diff --git a/clippy_config/src/conf.rs b/clippy_config/src/conf.rs
+index 30ae84669..c59cb7e03 100644
+--- a/clippy_config/src/conf.rs
++++ b/clippy_config/src/conf.rs
+@@ -716,6 +716,9 @@ define_Conf! {
+     /// The maximum number of bool parameters a function can have
+     #[lints(fn_params_excessive_bools)]
+     max_fn_params_bools: u64 = 3,
++    /// The maximum number of lines a source file can have
++    #[lints(excessive_file_length)]
++    max_file_lines: u64 = 300,
+     /// The maximum size of a file included via `include_bytes!()` or `include_str!()`, in bytes
+     #[lints(large_include_file)]
+     max_include_file_size: u64 = 1_000_000,
+diff --git a/clippy_lints/src/declared_lints.rs b/clippy_lints/src/declared_lints.rs
+index 4db81194c..adfdde0d7 100644
+--- a/clippy_lints/src/declared_lints.rs
++++ b/clippy_lints/src/declared_lints.rs
+@@ -156,6 +156,7 @@ pub static LINTS: &[&::declare_clippy_lint::LintInfo] = &[
+     crate::eta_reduction::REDUNDANT_CLOSURE_FOR_METHOD_CALLS_INFO,
+     crate::excessive_bools::FN_PARAMS_EXCESSIVE_BOOLS_INFO,
+     crate::excessive_bools::STRUCT_EXCESSIVE_BOOLS_INFO,
++    crate::excessive_file_length::EXCESSIVE_FILE_LENGTH_INFO,
+     crate::excessive_nesting::EXCESSIVE_NESTING_INFO,
+     crate::exhaustive_items::EXHAUSTIVE_ENUMS_INFO,
+     crate::exhaustive_items::EXHAUSTIVE_STRUCTS_INFO,
+diff --git a/clippy_lints/src/excessive_file_length.rs b/clippy_lints/src/excessive_file_length.rs
+new file mode 100644
+index 000000000..543b8036e
+--- /dev/null
++++ b/clippy_lints/src/excessive_file_length.rs
+@@ -0,0 +1,103 @@
++use clippy_config::Conf;
++use clippy_utils::diagnostics::span_lint_and_then;
++use rustc_lint::{EarlyContext, EarlyLintPass, LintContext};
++use rustc_session::impl_lint_pass;
++use rustc_span::def_id::LOCAL_CRATE;
++use rustc_span::FileName;
++use std::path::Path;
++
++declare_clippy_lint! {
++    /// ### What it does
++    /// Checks that source files do not exceed a configurable number of lines
++    /// (default: 300).
++    ///
++    /// ### Why restrict this?
++    /// Large files are harder to navigate, understand, and review. Splitting
++    /// into smaller, focused modules improves maintainability.
++    ///
++    /// ### Example
++    /// A 500-line file covering parsing, validation, and serialization.
++    ///
++    /// Split into:
++    /// ```text
++    /// parse.rs      (~120 lines)
++    /// validate.rs   (~100 lines)
++    /// serialize.rs  (~80 lines)
++    /// mod.rs        (re-exports)
++    /// ```
++    #[clippy::version = "1.86.0"]
++    pub EXCESSIVE_FILE_LENGTH,
++    restriction,
++    "source file exceeds the configured line count threshold"
++}
++
++pub struct ExcessiveFileLength {
++    max_file_lines: u64,
++}
++
++impl ExcessiveFileLength {
++    pub fn new(conf: &'static Conf) -> Self {
++        Self {
++            max_file_lines: conf.max_file_lines,
++        }
++    }
++}
++
++impl_lint_pass!(ExcessiveFileLength => [EXCESSIVE_FILE_LENGTH]);
++
++impl EarlyLintPass for ExcessiveFileLength {
++    fn check_crate(&mut self, cx: &EarlyContext<'_>, _krate: &rustc_ast::Crate) {
++        if self.max_file_lines == 0 {
++            return;
++        }
++
++        let source_map = cx.sess().source_map();
++        let working_dir = source_map.working_dir().local_path().map(Path::to_path_buf);
++
++        source_map.files().iter().for_each(|file| {
++            if file.cnum != LOCAL_CRATE {
++                return;
++            }
++
++            let FileName::Real(ref name) = file.name else {
++                return;
++            };
++
++            let Some(path) = name.local_path() else {
++                return;
++            };
++
++            // Only check .rs files
++            if path.extension().is_some_and(|ext| ext != "rs") {
++                return;
++            }
++
++            let line_count = file.lines().len() as u64;
++            if line_count <= self.max_file_lines {
++                return;
++            }
++
++            let display_path = working_dir
++                .as_ref()
++                .and_then(|wd| path.strip_prefix(wd).ok())
++                .unwrap_or(path);
++
++            // Use the span of the first byte in the file
++            let span = rustc_span::Span::with_root_ctxt(file.start_pos, file.start_pos);
++
++            span_lint_and_then(
++                cx,
++                EXCESSIVE_FILE_LENGTH,
++                span,
++                format!(
++                    "file `{}` has {line_count} lines (max {})",
++                    display_path.display(),
++                    self.max_file_lines,
++                ),
++                |diag| {
++                    diag.help("split into smaller, focused modules");
++                },
++            );
++        });
++    }
++}
+diff --git a/clippy_lints/src/lib.rs b/clippy_lints/src/lib.rs
+index 6f0457474..58d7d79ef 100644
+--- a/clippy_lints/src/lib.rs
++++ b/clippy_lints/src/lib.rs
+@@ -126,6 +126,7 @@ mod error_impl_error;
+ mod escape;
+ mod eta_reduction;
+ mod excessive_bools;
++mod excessive_file_length;
+ mod excessive_nesting;
+ mod exhaustive_items;
+ mod exit;
+@@ -498,6 +499,7 @@ pub fn register_lint_passes(store: &mut rustc_lint::LintStore, conf: &'static Co
+         Box::new(move || Box::new(nonstandard_macro_braces::MacroBraces::new(conf))),
+         Box::new(|| Box::new(asm_syntax::InlineAsmX86AttSyntax)),
+         Box::new(|| Box::new(asm_syntax::InlineAsmX86IntelSyntax)),
++        Box::new(move || Box::new(excessive_file_length::ExcessiveFileLength::new(conf))),
+         Box::new(move || Box::new(module_file_count::ModuleFileCount::new(conf))),
+         Box::new(move || Box::new(module_style::ModStyle::default())),
+         Box::new(move || Box::new(disallowed_script_idents::DisallowedScriptIdents::new(conf))),

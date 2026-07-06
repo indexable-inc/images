@@ -1,0 +1,245 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Fri, 5 Jun 2026 00:20:24 +0000
+Subject: [PATCH] fallible_int_fallback: cover unwrap_or_else and add UI test
+ (#1)
+
+The lint already fired on .unwrap_or / .unwrap_or_default on a
+Result<_, TryFromIntError>; extend it to .unwrap_or_else, which silently
+substitutes a value the same way. Sharpen the message/help to say the
+default hides the overflow and how to fix it (propagate, explicit clamp,
+or allow-with-reason). Add a UI test covering all three methods plus the
+try_into() form, and negative cases (Option::unwrap_or, a non-int-error
+Result, an explicit min-then-cast). Drop a stray em dash and use Ty
+unqualified to satisfy the internal dogfood lint.
+
+diff --git a/clippy_lints/src/fallible_int_fallback.rs b/clippy_lints/src/fallible_int_fallback.rs
+index b3bdece04..e487ddfef 100644
+--- a/clippy_lints/src/fallible_int_fallback.rs
++++ b/clippy_lints/src/fallible_int_fallback.rs
+@@ -3,41 +3,47 @@ use clippy_utils::res::MaybeDef;
+ use clippy_utils::sym;
+ use rustc_hir::{Expr, ExprKind};
+ use rustc_lint::{LateContext, LateLintPass, LintContext};
+-use rustc_middle::ty;
++use rustc_middle::ty::{self, Ty};
+ use rustc_session::declare_lint_pass;
+ 
+ declare_clippy_lint! {
+     /// ### What it does
+     /// Catches `.unwrap_or(0)`, `.unwrap_or(T::MAX)`, `.unwrap_or(T::MIN)`,
+-    /// and `.unwrap_or_default()` on `Result<_, TryFromIntError>` — i.e. the
+-    /// result of fallible integer conversions via `TryFrom`/`TryInto`.
++    /// `.unwrap_or_default()`, and `.unwrap_or_else(..)` on
++    /// `Result<_, TryFromIntError>`, i.e. the result of fallible integer
++    /// conversions via `TryFrom`/`TryInto`.
+     ///
+     /// ### Why restrict this?
+-    /// Silently clamping or zeroing an out-of-range integer conversion is
+-    /// almost never the intended behavior when strict correctness is
+-    /// required. If the value does not fit, it is almost always a hard
+-    /// error that should be propagated with `?`.
++    /// Substituting a default for an out-of-range integer conversion hides the
++    /// overflow: `intTy::try_from(x).unwrap_or(default)` silently clamps or
++    /// zeroes a value that did not fit, which causes odd, hard-to-trace
++    /// behavior far from the conversion. An out-of-range conversion should be
++    /// an error that is propagated or reported, not silently defaulted.
+     ///
+     /// ### Example
+     /// ```rust,ignore
+     /// let n: u8 = u8::try_from(big_value).unwrap_or(0);
+     /// let n: i16 = i16::try_from(x).unwrap_or(i16::MAX);
+     /// let n: u32 = u32::try_from(x).unwrap_or_default();
++    /// let n: usize = usize::try_from(x).unwrap_or_else(|_| 0);
+     /// ```
+     /// Use instead:
+     /// ```rust,ignore
+     /// let n: u8 = u8::try_from(big_value)?;
+     /// ```
++    /// If clamping is genuinely intended, write it explicitly (for example
++    /// `x.min(u8::MAX as _) as u8`) with a comment, or
++    /// `#[allow(clippy::fallible_int_fallback)]` with a reason.
+     #[clippy::version = "1.86.0"]
+     pub FALLIBLE_INT_FALLBACK,
+     restriction,
+-    "`.unwrap_or` / `.unwrap_or_default` on fallible integer conversion silently loses data"
++    "`.unwrap_or` / `.unwrap_or_default` / `.unwrap_or_else` on fallible integer conversion silently loses data"
+ }
+ 
+ declare_lint_pass!(FallibleIntFallback => [FALLIBLE_INT_FALLBACK]);
+ 
+ /// Returns `true` if `ty` is `std::num::TryFromIntError`.
+-fn is_try_from_int_error(cx: &LateContext<'_>, ty: ty::Ty<'_>) -> bool {
++fn is_try_from_int_error(cx: &LateContext<'_>, ty: Ty<'_>) -> bool {
+     if let ty::Adt(adt_def, _) = ty.kind() {
+         let path = cx.tcx.def_path_str(adt_def.did());
+         path == "core::num::error::TryFromIntError"
+@@ -50,8 +56,8 @@ fn is_try_from_int_error(cx: &LateContext<'_>, ty: ty::Ty<'_>) -> bool {
+ /// If `recv_ty` is `Result<T, E>`, returns `E`.
+ fn result_error_ty<'tcx>(
+     cx: &LateContext<'tcx>,
+-    recv_ty: ty::Ty<'tcx>,
+-) -> Option<ty::Ty<'tcx>> {
++    recv_ty: Ty<'tcx>,
++) -> Option<Ty<'tcx>> {
+     if recv_ty.is_diag_item(cx, sym::Result) {
+         if let ty::Adt(_, args) = recv_ty.kind() {
+             return Some(args.type_at(1));
+@@ -70,12 +76,16 @@ impl LateLintPass<'_> for FallibleIntFallback {
+             return;
+         };
+ 
+-        let is_unwrap_or = method.ident.name == sym::unwrap_or;
+-        let is_unwrap_or_default = method.ident.name == sym::unwrap_or_default;
+-
+-        if !is_unwrap_or && !is_unwrap_or_default {
+-            return;
+-        }
++        // `unwrap_or`, `unwrap_or_default`, and `unwrap_or_else` all silently
++        // substitute a value when the conversion failed. The receiver-typing
++        // check below is what distinguishes a fallible integer conversion from
++        // an unrelated `Result::unwrap_or`, so this stays type-aware.
++        let method_name = match method.ident.name {
++            sym::unwrap_or => "unwrap_or(...)",
++            sym::unwrap_or_default => "unwrap_or_default()",
++            sym::unwrap_or_else => "unwrap_or_else(...)",
++            _ => return,
++        };
+ 
+         let recv_ty = cx.typeck_results().expr_ty(recv);
+         let Some(err_ty) = result_error_ty(cx, recv_ty) else {
+@@ -86,23 +96,19 @@ impl LateLintPass<'_> for FallibleIntFallback {
+             return;
+         }
+ 
+-        let method_name = if is_unwrap_or_default {
+-            "unwrap_or_default()"
+-        } else {
+-            "unwrap_or(...)"
+-        };
+-
+         span_lint_and_help(
+             cx,
+             FALLIBLE_INT_FALLBACK,
+             expr.span,
+             format!(
+-                "`.{method_name}` on a fallible integer conversion silently \
+-                 discards an out-of-range error"
++                "`.{method_name}` silently substitutes a default for an \
++                 out-of-range integer conversion, hiding the overflow"
+             ),
+             None,
+-            "propagate the error with `?` instead; if the value does not fit, \
+-             it is almost certainly a hard error",
++            "handle the conversion error instead (propagate with `?`, or report it); \
++             if clamping is genuinely intended, write it explicitly \
++             (e.g. `x.min(MAX)` before the cast) with a comment, or \
++             `#[allow(clippy::fallible_int_fallback)]` with a reason",
+         );
+     }
+ }
+diff --git a/tests/ui/fallible_int_fallback.rs b/tests/ui/fallible_int_fallback.rs
+new file mode 100644
+index 000000000..8dd316faf
+--- /dev/null
++++ b/tests/ui/fallible_int_fallback.rs
+@@ -0,0 +1,49 @@
++#![warn(clippy::fallible_int_fallback)]
++#![allow(
++    clippy::useless_conversion,
++    clippy::unnecessary_fallible_conversions,
++    clippy::unnecessary_lazy_evaluations,
++    unused
++)]
++
++fn fires(big: u64, x: i64) {
++    // `unwrap_or` with a literal default.
++    let _ = u8::try_from(big).unwrap_or(0);
++    //~^ fallible_int_fallback
++
++    // `unwrap_or` with `T::MAX`.
++    let _ = i16::try_from(x).unwrap_or(i16::MAX);
++    //~^ fallible_int_fallback
++
++    // `unwrap_or_default`.
++    let _ = i32::try_from(x).unwrap_or_default();
++    //~^ fallible_int_fallback
++
++    // `unwrap_or_else`.
++    let _ = usize::try_from(x).unwrap_or_else(|_| 0);
++    //~^ fallible_int_fallback
++
++    // The same conversion expressed with `try_into` on the value.
++    let _: u8 = big.try_into().unwrap_or(0);
++    //~^ fallible_int_fallback
++}
++
++fn does_not_fire(maybe: Option<u8>, big: u64) {
++    // `Option::unwrap_or` is not a fallible integer conversion.
++    let _ = maybe.unwrap_or(0);
++
++    // A `Result` whose error is not `TryFromIntError`.
++    let parsed: Result<u8, std::num::ParseIntError> = "5".parse();
++    let _ = parsed.unwrap_or(0);
++
++    // An explicit, documented clamp via `min` then `as`: intent is visible.
++    let _ = big.min(u8::MAX as u64) as u8;
++
++    // Infallible conversion: no `Result`, no fallback.
++    let _ = u64::from(7u8);
++}
++
++fn main() {
++    fires(300, -1);
++    does_not_fire(None, 300);
++}
+diff --git a/tests/ui/fallible_int_fallback.stderr b/tests/ui/fallible_int_fallback.stderr
+new file mode 100644
+index 000000000..1f332b7ff
+--- /dev/null
++++ b/tests/ui/fallible_int_fallback.stderr
+@@ -0,0 +1,44 @@
++error: `.unwrap_or(...)` silently substitutes a default for an out-of-range integer conversion, hiding the overflow
++  --> tests/ui/fallible_int_fallback.rs:11:13
++   |
++LL |     let _ = u8::try_from(big).unwrap_or(0);
++   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++   |
++   = help: handle the conversion error instead (propagate with `?`, or report it); if clamping is genuinely intended, write it explicitly (e.g. `x.min(MAX)` before the cast) with a comment, or `#[allow(clippy::fallible_int_fallback)]` with a reason
++   = note: `-D clippy::fallible-int-fallback` implied by `-D warnings`
++   = help: to override `-D warnings` add `#[allow(clippy::fallible_int_fallback)]`
++
++error: `.unwrap_or(...)` silently substitutes a default for an out-of-range integer conversion, hiding the overflow
++  --> tests/ui/fallible_int_fallback.rs:15:13
++   |
++LL |     let _ = i16::try_from(x).unwrap_or(i16::MAX);
++   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++   |
++   = help: handle the conversion error instead (propagate with `?`, or report it); if clamping is genuinely intended, write it explicitly (e.g. `x.min(MAX)` before the cast) with a comment, or `#[allow(clippy::fallible_int_fallback)]` with a reason
++
++error: `.unwrap_or_default()` silently substitutes a default for an out-of-range integer conversion, hiding the overflow
++  --> tests/ui/fallible_int_fallback.rs:19:13
++   |
++LL |     let _ = i32::try_from(x).unwrap_or_default();
++   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++   |
++   = help: handle the conversion error instead (propagate with `?`, or report it); if clamping is genuinely intended, write it explicitly (e.g. `x.min(MAX)` before the cast) with a comment, or `#[allow(clippy::fallible_int_fallback)]` with a reason
++
++error: `.unwrap_or_else(...)` silently substitutes a default for an out-of-range integer conversion, hiding the overflow
++  --> tests/ui/fallible_int_fallback.rs:23:13
++   |
++LL |     let _ = usize::try_from(x).unwrap_or_else(|_| 0);
++   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++   |
++   = help: handle the conversion error instead (propagate with `?`, or report it); if clamping is genuinely intended, write it explicitly (e.g. `x.min(MAX)` before the cast) with a comment, or `#[allow(clippy::fallible_int_fallback)]` with a reason
++
++error: `.unwrap_or(...)` silently substitutes a default for an out-of-range integer conversion, hiding the overflow
++  --> tests/ui/fallible_int_fallback.rs:27:17
++   |
++LL |     let _: u8 = big.try_into().unwrap_or(0);
++   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
++   |
++   = help: handle the conversion error instead (propagate with `?`, or report it); if clamping is genuinely intended, write it explicitly (e.g. `x.min(MAX)` before the cast) with a comment, or `#[allow(clippy::fallible_int_fallback)]` with a reason
++
++error: aborting due to 5 previous errors
++

@@ -1,0 +1,246 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Sun, 7 Jun 2026 13:19:25 -0700
+Subject: [PATCH] Add macOS process disk IO sorting
+
+
+diff --git a/src/btop_config.cpp b/src/btop_config.cpp
+index 632ec4d..050b01a 100644
+--- a/src/btop_config.cpp
++++ b/src/btop_config.cpp
+@@ -104,7 +104,7 @@ namespace Config {
+ 
+ 		{"update_ms", 			"#* Update time in milliseconds, recommended 2000 ms or above for better sample times for graphs."},
+ 
+-		{"proc_sorting",		"#* Processes sorting, \"pid\" \"program\" \"arguments\" \"threads\" \"user\" \"memory\" \"cpu lazy\" \"cpu direct\",\n"
++		{"proc_sorting",		"#* Processes sorting, \"pid\" \"program\" \"arguments\" \"threads\" \"user\" \"memory\" \"io read\" \"io write\" \"io total\" \"cpu lazy\" \"cpu direct\",\n"
+ 								"#* \"cpu lazy\" sorts top process over time (easier to follow), \"cpu direct\" updates top process directly."},
+ 
+ 		{"proc_reversed",		"#* Reverse sorting order, True or False."},
+diff --git a/src/btop_draw.cpp b/src/btop_draw.cpp
+index fbc99c0..cfa4a63 100644
+--- a/src/btop_draw.cpp
++++ b/src/btop_draw.cpp
+@@ -1685,6 +1685,8 @@ namespace Proc {
+ 		auto mem_bytes = Config::getB("proc_mem_bytes");
+ 		auto vim_keys = Config::getB("vim_keys");
+ 		auto show_graphs = Config::getB("proc_cpu_graphs");
++		const auto& sorting = Config::getS("proc_sorting");
++		const bool io_sorting = sorting == "io read" or sorting == "io write" or sorting == "io total";
+ 		const auto pause_proc_list = Config::getB("pause_proc_list");
+ 		auto follow_process = Config::getB("follow_process");
+ 		int followed_pid = Config::getI("followed_pid");
+@@ -1778,7 +1780,7 @@ namespace Proc {
+ 			prog_size = (width > 70 ? 16 : ( width > 55 ? 8 : width - user_size - thread_size - 33));
+ 			cmd_size = (width > 55 ? width - prog_size - user_size - thread_size - 33 : -1);
+ 			tree_size = width - user_size - thread_size - 23;
+-			if (not show_graphs) {
++			if (not show_graphs and not io_sorting) {
+ 				cmd_size += 5;
+ 				tree_size += 5;
+ 			}
+@@ -1882,7 +1884,6 @@ namespace Proc {
+ 			}
+ 
+ 			//? pause, per-core, reverse, tree and sorting
+-			const auto& sorting = Config::getS("proc_sorting");
+ 			const int sort_len = sorting.size();
+ 			const int sort_pos = x + width - sort_len - 8;
+ 
+@@ -1961,7 +1962,7 @@ namespace Proc {
+ 			out += (thread_size > 0 ? Mv::l(4) + "Threads: " : "")
+ 					+ ljust("User:", user_size) + ' '
+ 					+ rjust((mem_bytes ? "MemB" : "Mem%"), 5) + ' '
+-					+ rjust("Cpu%", (show_graphs ? 10 : 5)) + Fx::ub;
++					+ rjust(io_sorting ? "IO/s" : "Cpu%", (show_graphs or io_sorting ? 10 : 5)) + Fx::ub;
+ 		}
+ 		//* End of redraw block
+ 
+@@ -2122,6 +2123,16 @@ namespace Proc {
+ 				mem_str += '%';
+ 			}
+ 
++			string io_str;
++			if (io_sorting) {
++				const auto io_bytes = sorting == "io read"
++					? p.io_read_rate
++					: sorting == "io write"
++						? p.io_write_rate
++						: p.io_read_rate + p.io_write_rate;
++				io_str = io_bytes > 0 ? floating_humanizer(io_bytes, true) : "0";
++			}
++
+ 			// Shorten process thread representation when larger than 5 digits: 10000 -> 10K ...
+ 			const std::string proc_threads_string = [&] {
+ 				if (p.threads > 9999) {
+@@ -2134,9 +2145,9 @@ namespace Proc {
+ 			out += (thread_size > 0 ? t_color + rjust(proc_threads_string, thread_size) + ' ' + end : "" )
+ 				+ g_color + ljust((cmp_greater(p.user.size(), user_size) ? p.user.substr(0, user_size - 1) + '+' : p.user), user_size) + ' '
+ 				+ m_color + rjust(mem_str, 5) + end + ' '
+-				+ (is_selected or is_followed ? "" : Theme::c("inactive_fg")) + (show_graphs ? graph_bg * 5: "")
+-				+ (p_graphs.contains(p.pid) ? Mv::l(5) + c_color + p_graphs.at(p.pid)({(p.cpu_p >= 0.1 and p.cpu_p < 5 ? 5ll : (long long)round(p.cpu_p))}, data_same) : "") + end + ' '
+-				+ c_color + rjust(cpu_str, 4) + "  " + end;
++				+ (is_selected or is_followed ? "" : Theme::c("inactive_fg")) + (show_graphs and not io_sorting ? graph_bg * 5: "")
++				+ (not io_sorting and p_graphs.contains(p.pid) ? Mv::l(5) + c_color + p_graphs.at(p.pid)({(p.cpu_p >= 0.1 and p.cpu_p < 5 ? 5ll : (long long)round(p.cpu_p))}, data_same) : "") + end + ' '
++				+ c_color + (io_sorting ? rjust(io_str, 9) : rjust(cpu_str, 4) + "  ") + end;
+ 			if (lc++ > height - 5) break;
+ 			else if (lc > height - 5 and proc_banner_shown) break;
+ 		}
+diff --git a/src/btop_menu.cpp b/src/btop_menu.cpp
+index bcb64bf..df69f86 100644
+--- a/src/btop_menu.cpp
++++ b/src/btop_menu.cpp
+@@ -821,7 +821,8 @@ namespace Menu {
+ 				"",
+ 				"Possible values:",
+ 				"\"pid\", \"program\", \"arguments\", \"threads\",",
+-				"\"user\", \"memory\", \"cpu lazy\" and",
++				"\"user\", \"memory\", \"io read\", \"io write\",",
++				"\"io total\", \"cpu lazy\" and",
+ 				"\"cpu direct\".",
+ 				"",
+ 				"\"cpu lazy\" updates top process over time.",
+diff --git a/src/btop_shared.cpp b/src/btop_shared.cpp
+index 0ef9343..96d28ac 100644
+--- a/src/btop_shared.cpp
++++ b/src/btop_shared.cpp
+@@ -110,8 +110,11 @@ bool set_priority(pid_t pid, int priority) {
+ 			case 3: rng::stable_sort(proc_vec, rng::less{}, &proc_info::threads);	break;
+ 			case 4: rng::stable_sort(proc_vec, rng::greater{}, &proc_info::user); 		break;
+ 			case 5: rng::stable_sort(proc_vec, rng::less{}, &proc_info::mem); 		break;
+-			case 6: rng::stable_sort(proc_vec, rng::less{}, &proc_info::cpu_p);		break;
+-			case 7: rng::stable_sort(proc_vec, rng::less{}, &proc_info::cpu_c);		break;
++			case 6: rng::stable_sort(proc_vec, rng::less{}, &proc_info::io_read_rate);	break;
++			case 7: rng::stable_sort(proc_vec, rng::less{}, &proc_info::io_write_rate);	break;
++			case 8: rng::stable_sort(proc_vec, [](const auto& a, const auto& b) { return a.io_read_rate + a.io_write_rate < b.io_read_rate + b.io_write_rate; });	break;
++			case 9: rng::stable_sort(proc_vec, rng::less{}, &proc_info::cpu_p);		break;
++			case 10: rng::stable_sort(proc_vec, rng::less{}, &proc_info::cpu_c);		break;
+ 			}
+ 		}
+ 		else {
+@@ -122,8 +125,11 @@ bool set_priority(pid_t pid, int priority) {
+ 			case 3: rng::stable_sort(proc_vec, rng::greater{}, &proc_info::threads);	break;
+ 			case 4: rng::stable_sort(proc_vec, rng::less{}, &proc_info::user);		break;
+ 			case 5: rng::stable_sort(proc_vec, rng::greater{}, &proc_info::mem); 		break;
+-			case 6: rng::stable_sort(proc_vec, rng::greater{}, &proc_info::cpu_p);   	break;
+-			case 7: rng::stable_sort(proc_vec, rng::greater{}, &proc_info::cpu_c);   	break;
++			case 6: rng::stable_sort(proc_vec, rng::greater{}, &proc_info::io_read_rate);	break;
++			case 7: rng::stable_sort(proc_vec, rng::greater{}, &proc_info::io_write_rate);	break;
++			case 8: rng::stable_sort(proc_vec, [](const auto& a, const auto& b) { return a.io_read_rate + a.io_write_rate > b.io_read_rate + b.io_write_rate; });	break;
++			case 9: rng::stable_sort(proc_vec, rng::greater{}, &proc_info::cpu_p);   	break;
++			case 10: rng::stable_sort(proc_vec, rng::greater{}, &proc_info::cpu_c);   	break;
+ 			}
+ 		}
+ 
+@@ -151,16 +157,22 @@ bool set_priority(pid_t pid, int priority) {
+ 				switch (v_index(sort_vector, sorting)) {
+ 				case 3: rng::stable_sort(proc_vec, [](const auto& a, const auto& b) { return a.entry.get().threads < b.entry.get().threads; });	break;
+ 				case 5: rng::stable_sort(proc_vec, [](const auto& a, const auto& b) { return a.entry.get().mem < b.entry.get().mem; });	break;
+-				case 6: rng::stable_sort(proc_vec, [](const auto& a, const auto& b) { return a.entry.get().cpu_p < b.entry.get().cpu_p; });	break;
+-				case 7: rng::stable_sort(proc_vec, [](const auto& a, const auto& b) { return a.entry.get().cpu_c < b.entry.get().cpu_c; });	break;
++				case 6: rng::stable_sort(proc_vec, [](const auto& a, const auto& b) { return a.entry.get().io_read_rate < b.entry.get().io_read_rate; });	break;
++				case 7: rng::stable_sort(proc_vec, [](const auto& a, const auto& b) { return a.entry.get().io_write_rate < b.entry.get().io_write_rate; });	break;
++				case 8: rng::stable_sort(proc_vec, [](const auto& a, const auto& b) { return a.entry.get().io_read_rate + a.entry.get().io_write_rate < b.entry.get().io_read_rate + b.entry.get().io_write_rate; });	break;
++				case 9: rng::stable_sort(proc_vec, [](const auto& a, const auto& b) { return a.entry.get().cpu_p < b.entry.get().cpu_p; });	break;
++				case 10: rng::stable_sort(proc_vec, [](const auto& a, const auto& b) { return a.entry.get().cpu_c < b.entry.get().cpu_c; });	break;
+ 				}
+ 			}
+ 			else {
+ 				switch (v_index(sort_vector, sorting)) {
+ 				case 3: rng::stable_sort(proc_vec, [](const auto& a, const auto& b) { return a.entry.get().threads > b.entry.get().threads; });	break;
+ 				case 5: rng::stable_sort(proc_vec, [](const auto& a, const auto& b) { return a.entry.get().mem > b.entry.get().mem; });	break;
+-				case 6: rng::stable_sort(proc_vec, [](const auto& a, const auto& b) { return a.entry.get().cpu_p > b.entry.get().cpu_p; });	break;
+-				case 7: rng::stable_sort(proc_vec, [](const auto& a, const auto& b) { return a.entry.get().cpu_c > b.entry.get().cpu_c; });	break;
++				case 6: rng::stable_sort(proc_vec, [](const auto& a, const auto& b) { return a.entry.get().io_read_rate > b.entry.get().io_read_rate; });	break;
++				case 7: rng::stable_sort(proc_vec, [](const auto& a, const auto& b) { return a.entry.get().io_write_rate > b.entry.get().io_write_rate; });	break;
++				case 8: rng::stable_sort(proc_vec, [](const auto& a, const auto& b) { return a.entry.get().io_read_rate + a.entry.get().io_write_rate > b.entry.get().io_read_rate + b.entry.get().io_write_rate; });	break;
++				case 9: rng::stable_sort(proc_vec, [](const auto& a, const auto& b) { return a.entry.get().cpu_p > b.entry.get().cpu_p; });	break;
++				case 10: rng::stable_sort(proc_vec, [](const auto& a, const auto& b) { return a.entry.get().cpu_c > b.entry.get().cpu_c; });	break;
+ 				}
+ 			}
+ 		}
+@@ -244,6 +256,8 @@ bool set_priority(pid_t pid, int priority) {
+ 					cur_proc.cpu_p += p.cpu_p;
+ 					cur_proc.cpu_c += p.cpu_c;
+ 					cur_proc.mem += p.mem;
++					cur_proc.io_read_rate += p.io_read_rate;
++					cur_proc.io_write_rate += p.io_write_rate;
+ 					cur_proc.threads += p.threads;
+ 				}
+ 				filter_found++;
+@@ -253,6 +267,8 @@ bool set_priority(pid_t pid, int priority) {
+ 				cur_proc.cpu_p += p.cpu_p;
+ 				cur_proc.cpu_c += p.cpu_c;
+ 				cur_proc.mem += p.mem;
++				cur_proc.io_read_rate += p.io_read_rate;
++				cur_proc.io_write_rate += p.io_write_rate;
+ 				cur_proc.threads += p.threads;
+ 			}
+ 		}
+diff --git a/src/btop_shared.hpp b/src/btop_shared.hpp
+index dc891b6..d10bb1f 100644
+--- a/src/btop_shared.hpp
++++ b/src/btop_shared.hpp
+@@ -380,6 +380,9 @@ namespace Proc {
+ 		"threads",
+ 		"user",
+ 		"memory",
++		"io read",
++		"io write",
++		"io total",
+ 		"cpu direct",
+ 		"cpu lazy",
+ 	};
+@@ -411,6 +414,11 @@ namespace Proc {
+ 		uint64_t mem{};
+ 		double cpu_p{};         // defaults to = 0.0
+ 		double cpu_c{};         // defaults to = 0.0
++		uint64_t io_read{};
++		uint64_t io_write{};
++		uint64_t io_read_rate{};
++		uint64_t io_write_rate{};
++		uint64_t io_time{};
+ 		char state = '0';
+ 		int64_t p_nice{};
+ 		uint64_t ppid{};
+diff --git a/src/osx/btop_collect.cpp b/src/osx/btop_collect.cpp
+index d894069..a78bb2a 100644
+--- a/src/osx/btop_collect.cpp
++++ b/src/osx/btop_collect.cpp
+@@ -1872,6 +1872,9 @@ namespace Proc {
+ 
+ 					//? Get threads, mem and cpu usage
+ 					struct proc_taskinfo pti{};
++					const auto old_io_read = new_proc.io_read;
++					const auto old_io_write = new_proc.io_write;
++					const auto old_io_time = new_proc.io_time;
+ 					if (sizeof(pti) == proc_pidinfo(new_proc.pid, PROC_PIDTASKINFO, 0, &pti, sizeof(pti))) {
+ 						new_proc.threads = pti.pti_threadnum;
+ 						new_proc.mem = pti.pti_resident_size;
+@@ -1885,6 +1888,26 @@ namespace Proc {
+ 						cpu_t = new_proc.cpu_t;
+ 					}
+ 
++					rusage_info_current rusage{};
++					if (proc_pid_rusage(pid, RUSAGE_INFO_CURRENT, (void **)&rusage) == 0) {
++						new_proc.io_read = rusage.ri_diskio_bytesread;
++						new_proc.io_write = rusage.ri_diskio_byteswritten;
++						new_proc.io_time = timeNow;
++						if (no_cache or old_io_time == 0 or timeNow <= old_io_time) {
++							new_proc.io_read_rate = 0;
++							new_proc.io_write_rate = 0;
++						} else {
++							const auto read_delta = new_proc.io_read >= old_io_read ? new_proc.io_read - old_io_read : 0;
++							const auto write_delta = new_proc.io_write >= old_io_write ? new_proc.io_write - old_io_write : 0;
++							const auto elapsed_us = timeNow - old_io_time;
++							new_proc.io_read_rate = static_cast<uint64_t>(static_cast<long double>(read_delta) * 1'000'000 / elapsed_us);
++							new_proc.io_write_rate = static_cast<uint64_t>(static_cast<long double>(write_delta) * 1'000'000 / elapsed_us);
++						}
++					} else {
++						new_proc.io_read_rate = 0;
++						new_proc.io_write_rate = 0;
++					}
++
+ 					//? Process cpu usage since last update
+ 					new_proc.cpu_p = clamp(round(((cpu_t - new_proc.cpu_t) * Shared::machTck) / ((cputimes - old_cputimes) * Shared::clkTck)) * cmult / 1000.0, 0.0, 100.0 * Shared::coreCount);
+ 

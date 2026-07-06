@@ -1,0 +1,241 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Sun, 17 May 2026 12:20:09 -0700
+Subject: [PATCH] Add magic_number lint
+
+
+diff --git a/clippy_config/src/conf.rs b/clippy_config/src/conf.rs
+index c59cb7e03..e8b699258 100644
+--- a/clippy_config/src/conf.rs
++++ b/clippy_config/src/conf.rs
+@@ -428,6 +428,14 @@ define_Conf! {
+     /// Additional dotfiles (files or directories starting with a dot) to allow
+     #[lints(path_ends_with_ext)]
+     allowed_dotfiles: Vec<String> = Vec::default(),
++    /// Integer values that are allowed as inline literals without triggering `magic_number`.
++    /// Default: `[0, 1, 2]`.
++    #[lints(magic_number)]
++    allowed_magic_numbers: Vec<i64> = vec![0, 1, 2],
++    /// Float literal strings that are allowed as inline literals without triggering `magic_number`.
++    /// Default: `["0.0", "1.0"]`.
++    #[lints(magic_number)]
++    allowed_magic_floats: Vec<String> = vec!["0.0".to_string(), "1.0".to_string()],
+     /// A list of crate names to allow duplicates of
+     #[lints(multiple_crate_versions)]
+     allowed_duplicate_crates: Vec<String> = Vec::new(),
+diff --git a/clippy_lints/src/declared_lints.rs b/clippy_lints/src/declared_lints.rs
+index a5f9ae5c2..4614901c4 100644
+--- a/clippy_lints/src/declared_lints.rs
++++ b/clippy_lints/src/declared_lints.rs
+@@ -298,6 +298,7 @@ pub static LINTS: &[&::declare_clippy_lint::LintInfo] = &[
+     crate::loops::WHILE_LET_ON_ITERATOR_INFO,
+     crate::macro_metavars_in_unsafe::MACRO_METAVARS_IN_UNSAFE_INFO,
+     crate::macro_use::MACRO_USE_IMPORTS_INFO,
++    crate::magic_number::MAGIC_NUMBER_INFO,
+     crate::main_recursion::MAIN_RECURSION_INFO,
+     crate::manual_abs_diff::MANUAL_ABS_DIFF_INFO,
+     crate::manual_assert::MANUAL_ASSERT_INFO,
+diff --git a/clippy_lints/src/lib.rs b/clippy_lints/src/lib.rs
+index 094714b44..4128f2907 100644
+--- a/clippy_lints/src/lib.rs
++++ b/clippy_lints/src/lib.rs
+@@ -196,6 +196,7 @@ mod literal_string_with_formatting_args;
+ mod loops;
+ mod macro_metavars_in_unsafe;
+ mod macro_use;
++mod magic_number;
+ mod main_recursion;
+ mod manual_abs_diff;
+ mod manual_assert;
+@@ -883,6 +884,12 @@ pub fn register_lint_passes(store: &mut rustc_lint::LintStore, conf: &'static Co
+         Box::new(|_| Box::new(byte_char_slices::ByteCharSlice)),
+         Box::new(|_| Box::new(manual_assert_eq::ManualAssertEq)),
+         Box::new(|_| Box::new(fallible_int_fallback::FallibleIntFallback)),
++        Box::new(move |_| {
++            Box::new(magic_number::MagicNumber::new(
++                conf.allowed_magic_numbers.clone(),
++                conf.allowed_magic_floats.clone(),
++            ))
++        }),
+         // add late passes here, used by `cargo dev new_lint`
+     ];
+     store.late_passes.extend(late_lints);
+diff --git a/clippy_lints/src/magic_number.rs b/clippy_lints/src/magic_number.rs
+new file mode 100644
+index 000000000..64778b7ab
+--- /dev/null
++++ b/clippy_lints/src/magic_number.rs
+@@ -0,0 +1,173 @@
++use clippy_utils::diagnostics::span_lint_and_help;
++use clippy_utils::is_in_test;
++use rustc_ast::LitKind;
++use rustc_hir::def::DefKind;
++use rustc_hir::{Expr, ExprKind, ItemKind, Node, TraitItemKind, ImplItemKind};
++use rustc_lint::{LateContext, LateLintPass, LintContext};
++use rustc_session::impl_lint_pass;
++
++declare_clippy_lint! {
++    /// ### What it does
++    /// Flags numeric literals (integers and floats) that appear inline
++    /// in non-test production code.
++    ///
++    /// ### Why restrict this?
++    /// Magic numbers obscure intent. Every numeric literal should be
++    /// either a named `const` (if the value is static/known at compile
++    /// time) or a configurable value received via a struct field or
++    /// function argument.
++    ///
++    /// ### Example
++    /// ```rust,ignore
++    /// fn retry(n: u32) {
++    ///     std::thread::sleep(Duration::from_secs(30)); // what is 30?
++    ///     for _ in 0..5 { /* ... */ }                  // what is 5?
++    /// }
++    /// ```
++    /// Use instead:
++    /// ```rust,ignore
++    /// const RETRY_DELAY_SECS: u64 = 30;
++    /// const MAX_RETRIES: u32 = 5;
++    ///
++    /// fn retry(config: &RetryConfig) {
++    ///     std::thread::sleep(Duration::from_secs(RETRY_DELAY_SECS));
++    ///     for _ in 0..config.max_retries { /* ... */ }
++    /// }
++    /// ```
++    #[clippy::version = "1.86.0"]
++    pub MAGIC_NUMBER,
++    restriction,
++    "numeric literals should be named constants or configurable values passed as arguments"
++}
++
++pub struct MagicNumber {
++    allowed_ints: Vec<i64>,
++    allowed_floats: Vec<String>,
++}
++
++impl MagicNumber {
++    pub fn new(allowed_ints: Vec<i64>, allowed_floats: Vec<String>) -> Self {
++        Self {
++            allowed_ints,
++            allowed_floats,
++        }
++    }
++}
++
++impl_lint_pass!(MagicNumber => [MAGIC_NUMBER]);
++
++fn is_in_const_or_static(cx: &LateContext<'_>, expr: &Expr<'_>) -> bool {
++    let owner = cx.tcx.hir_get_parent_item(expr.hir_id);
++    match cx.tcx.hir_node_by_def_id(owner.def_id) {
++        Node::Item(item) => matches!(
++            item.kind,
++            ItemKind::Const(..) | ItemKind::Static(..)
++        ),
++        Node::TraitItem(item) => {
++            matches!(item.kind, TraitItemKind::Const(..))
++        },
++        Node::ImplItem(item) => {
++            matches!(item.kind, ImplItemKind::Const(..))
++        },
++        _ => false,
++    }
++}
++
++fn is_enum_discriminant(cx: &LateContext<'_>, expr: &Expr<'_>) -> bool {
++    matches!(
++        cx.tcx.parent_hir_node(expr.hir_id),
++        Node::AnonConst(_)
++    ) && matches!(
++        cx.tcx.hir_node_by_def_id(
++            cx.tcx.hir_get_parent_item(expr.hir_id).def_id
++        ),
++        Node::Item(item) if matches!(item.kind, ItemKind::Enum(..))
++    )
++}
++
++impl LateLintPass<'_> for MagicNumber {
++    fn check_expr(&mut self, cx: &LateContext<'_>, expr: &Expr<'_>) {
++        if expr.span.in_external_macro(cx.sess().source_map()) {
++            return;
++        }
++
++        if is_in_test(cx.tcx, expr.hir_id) {
++            return;
++        }
++
++        let ExprKind::Lit(lit) = expr.kind else {
++            return;
++        };
++
++        match lit.node {
++            LitKind::Int(val, _) => {
++                let v = val.get() as i128;
++                if self.allowed_ints.iter().any(|&a| i128::from(a) == v) {
++                    return;
++                }
++                // Check for negated literal: parent is Unary(Neg, _)
++                if let Node::Expr(parent) = cx.tcx.parent_hir_node(expr.hir_id)
++                    && let ExprKind::Unary(rustc_hir::UnOp::Neg, _) = parent.kind
++                    && self.allowed_ints.iter().any(|&a| i128::from(a) == -v)
++                {
++                    return;
++                }
++            },
++            LitKind::Float(sym, _) => {
++                let s = sym.as_str();
++                if self.allowed_floats.iter().any(|a| a == s) {
++                    return;
++                }
++                if let Node::Expr(parent) = cx.tcx.parent_hir_node(expr.hir_id)
++                    && let ExprKind::Unary(rustc_hir::UnOp::Neg, _) = parent.kind
++                {
++                    let neg = format!("-{s}");
++                    if self.allowed_floats.iter().any(|a| a == &neg) {
++                        return;
++                    }
++                }
++            },
++            _ => return,
++        }
++
++        if is_in_const_or_static(cx, expr) {
++            return;
++        }
++
++        if is_enum_discriminant(cx, expr) {
++            return;
++        }
++
++        // Array repeat count: [val; N] — the N is an AnonConst
++        if matches!(
++            cx.tcx.parent_hir_node(expr.hir_id),
++            Node::AnonConst(_)
++        ) {
++            let grandparent = cx.tcx.hir_get_parent_item(expr.hir_id);
++            if let Node::Expr(gp_expr) = cx.tcx.hir_node_by_def_id(grandparent.def_id) {
++                if matches!(gp_expr.kind, ExprKind::Repeat(..)) {
++                    return;
++                }
++            }
++            // Also allow type-level constants (generic args, etc.)
++            if matches!(
++                cx.tcx.def_kind(grandparent.def_id),
++                DefKind::AnonConst
++            ) {
++                return;
++            }
++        }
++
++        span_lint_and_help(
++            cx,
++            MAGIC_NUMBER,
++            expr.span,
++            "magic number: numeric literals should be named constants \
++             or configurable values",
++            None,
++            "extract this into a `const` (if the value is static) \
++             or pass it as a struct field / function argument \
++             (if it should be configurable)",
++        );
++    }
++}

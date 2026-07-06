@@ -1,0 +1,493 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Wed, 27 May 2026 23:26:42 -0700
+Subject: [PATCH] Add anonymous tuple return type lint
+
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index f53143e56..9114bbe9e 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -6537,6 +6537,7 @@ Released 2018-09-13
+ [`almost_complete_letter_range`]: https://rust-lang.github.io/rust-clippy/master/index.html#almost_complete_letter_range
+ [`almost_complete_range`]: https://rust-lang.github.io/rust-clippy/master/index.html#almost_complete_range
+ [`almost_swapped`]: https://rust-lang.github.io/rust-clippy/master/index.html#almost_swapped
++[`anonymous_tuple_return_type`]: https://rust-lang.github.io/rust-clippy/master/index.html#anonymous_tuple_return_type
+ [`approx_constant`]: https://rust-lang.github.io/rust-clippy/master/index.html#approx_constant
+ [`arbitrary_source_item_ordering`]: https://rust-lang.github.io/rust-clippy/master/index.html#arbitrary_source_item_ordering
+ [`arc_with_non_send_sync`]: https://rust-lang.github.io/rust-clippy/master/index.html#arc_with_non_send_sync
+@@ -6674,6 +6675,7 @@ Released 2018-09-13
+ [`drain_collect`]: https://rust-lang.github.io/rust-clippy/master/index.html#drain_collect
+ [`drop_bounds`]: https://rust-lang.github.io/rust-clippy/master/index.html#drop_bounds
+ [`drop_copy`]: https://rust-lang.github.io/rust-clippy/master/index.html#drop_copy
++[`drop_must_use`]: https://rust-lang.github.io/rust-clippy/master/index.html#drop_must_use
+ [`drop_non_drop`]: https://rust-lang.github.io/rust-clippy/master/index.html#drop_non_drop
+ [`drop_ref`]: https://rust-lang.github.io/rust-clippy/master/index.html#drop_ref
+ [`duplicate_mod`]: https://rust-lang.github.io/rust-clippy/master/index.html#duplicate_mod
+@@ -6702,6 +6704,7 @@ Released 2018-09-13
+ [`err_expect`]: https://rust-lang.github.io/rust-clippy/master/index.html#err_expect
+ [`error_impl_error`]: https://rust-lang.github.io/rust-clippy/master/index.html#error_impl_error
+ [`eval_order_dependence`]: https://rust-lang.github.io/rust-clippy/master/index.html#eval_order_dependence
++[`excessive_file_length`]: https://rust-lang.github.io/rust-clippy/master/index.html#excessive_file_length
+ [`excessive_nesting`]: https://rust-lang.github.io/rust-clippy/master/index.html#excessive_nesting
+ [`excessive_precision`]: https://rust-lang.github.io/rust-clippy/master/index.html#excessive_precision
+ [`exhaustive_enums`]: https://rust-lang.github.io/rust-clippy/master/index.html#exhaustive_enums
+@@ -6721,6 +6724,7 @@ Released 2018-09-13
+ [`extra_unused_lifetimes`]: https://rust-lang.github.io/rust-clippy/master/index.html#extra_unused_lifetimes
+ [`extra_unused_type_parameters`]: https://rust-lang.github.io/rust-clippy/master/index.html#extra_unused_type_parameters
+ [`fallible_impl_from`]: https://rust-lang.github.io/rust-clippy/master/index.html#fallible_impl_from
++[`fallible_int_fallback`]: https://rust-lang.github.io/rust-clippy/master/index.html#fallible_int_fallback
+ [`field_reassign_with_default`]: https://rust-lang.github.io/rust-clippy/master/index.html#field_reassign_with_default
+ [`field_scoped_visibility_modifiers`]: https://rust-lang.github.io/rust-clippy/master/index.html#field_scoped_visibility_modifiers
+ [`filetype_is_file`]: https://rust-lang.github.io/rust-clippy/master/index.html#filetype_is_file
+@@ -6877,6 +6881,7 @@ Released 2018-09-13
+ [`lossy_float_literal`]: https://rust-lang.github.io/rust-clippy/master/index.html#lossy_float_literal
+ [`macro_metavars_in_unsafe`]: https://rust-lang.github.io/rust-clippy/master/index.html#macro_metavars_in_unsafe
+ [`macro_use_imports`]: https://rust-lang.github.io/rust-clippy/master/index.html#macro_use_imports
++[`magic_number`]: https://rust-lang.github.io/rust-clippy/master/index.html#magic_number
+ [`main_recursion`]: https://rust-lang.github.io/rust-clippy/master/index.html#main_recursion
+ [`manual_abs_diff`]: https://rust-lang.github.io/rust-clippy/master/index.html#manual_abs_diff
+ [`manual_assert`]: https://rust-lang.github.io/rust-clippy/master/index.html#manual_assert
+@@ -6995,6 +7000,7 @@ Released 2018-09-13
+ [`mixed_case_hex_literals`]: https://rust-lang.github.io/rust-clippy/master/index.html#mixed_case_hex_literals
+ [`mixed_read_write_in_expression`]: https://rust-lang.github.io/rust-clippy/master/index.html#mixed_read_write_in_expression
+ [`mod_module_files`]: https://rust-lang.github.io/rust-clippy/master/index.html#mod_module_files
++[`module_file_count`]: https://rust-lang.github.io/rust-clippy/master/index.html#module_file_count
+ [`module_inception`]: https://rust-lang.github.io/rust-clippy/master/index.html#module_inception
+ [`module_name_repetitions`]: https://rust-lang.github.io/rust-clippy/master/index.html#module_name_repetitions
+ [`modulo_arithmetic`]: https://rust-lang.github.io/rust-clippy/master/index.html#modulo_arithmetic
+@@ -7067,6 +7073,7 @@ Released 2018-09-13
+ [`non_octal_unix_permissions`]: https://rust-lang.github.io/rust-clippy/master/index.html#non_octal_unix_permissions
+ [`non_send_fields_in_send_ty`]: https://rust-lang.github.io/rust-clippy/master/index.html#non_send_fields_in_send_ty
+ [`non_std_lazy_statics`]: https://rust-lang.github.io/rust-clippy/master/index.html#non_std_lazy_statics
++[`non_trait_imports`]: https://rust-lang.github.io/rust-clippy/master/index.html#non_trait_imports
+ [`non_zero_suggestions`]: https://rust-lang.github.io/rust-clippy/master/index.html#non_zero_suggestions
+ [`nonminimal_bool`]: https://rust-lang.github.io/rust-clippy/master/index.html#nonminimal_bool
+ [`nonsensical_open_options`]: https://rust-lang.github.io/rust-clippy/master/index.html#nonsensical_open_options
+@@ -7107,6 +7114,7 @@ Released 2018-09-13
+ [`partialeq_to_none`]: https://rust-lang.github.io/rust-clippy/master/index.html#partialeq_to_none
+ [`path_buf_push_overwrite`]: https://rust-lang.github.io/rust-clippy/master/index.html#path_buf_push_overwrite
+ [`path_ends_with_ext`]: https://rust-lang.github.io/rust-clippy/master/index.html#path_ends_with_ext
++[`path_segment_repetition`]: https://rust-lang.github.io/rust-clippy/master/index.html#path_segment_repetition
+ [`pathbuf_init_then_push`]: https://rust-lang.github.io/rust-clippy/master/index.html#pathbuf_init_then_push
+ [`pattern_type_mismatch`]: https://rust-lang.github.io/rust-clippy/master/index.html#pattern_type_mismatch
+ [`permissions_set_readonly_false`]: https://rust-lang.github.io/rust-clippy/master/index.html#permissions_set_readonly_false
+@@ -7178,6 +7186,7 @@ Released 2018-09-13
+ [`regex_creation_in_loops`]: https://rust-lang.github.io/rust-clippy/master/index.html#regex_creation_in_loops
+ [`regex_macro`]: https://rust-lang.github.io/rust-clippy/master/index.html#regex_macro
+ [`renamed_function_params`]: https://rust-lang.github.io/rust-clippy/master/index.html#renamed_function_params
++[`renamed_imports`]: https://rust-lang.github.io/rust-clippy/master/index.html#renamed_imports
+ [`repeat_once`]: https://rust-lang.github.io/rust-clippy/master/index.html#repeat_once
+ [`repeat_vec_with_capacity`]: https://rust-lang.github.io/rust-clippy/master/index.html#repeat_vec_with_capacity
+ [`replace_box`]: https://rust-lang.github.io/rust-clippy/master/index.html#replace_box
+@@ -7250,6 +7259,7 @@ Released 2018-09-13
+ [`string_add_assign`]: https://rust-lang.github.io/rust-clippy/master/index.html#string_add_assign
+ [`string_extend_chars`]: https://rust-lang.github.io/rust-clippy/master/index.html#string_extend_chars
+ [`string_from_utf8_as_bytes`]: https://rust-lang.github.io/rust-clippy/master/index.html#string_from_utf8_as_bytes
++[`string_ip_field`]: https://rust-lang.github.io/rust-clippy/master/index.html#string_ip_field
+ [`string_lit_as_bytes`]: https://rust-lang.github.io/rust-clippy/master/index.html#string_lit_as_bytes
+ [`string_lit_chars_any`]: https://rust-lang.github.io/rust-clippy/master/index.html#string_lit_chars_any
+ [`string_slice`]: https://rust-lang.github.io/rust-clippy/master/index.html#string_slice
+@@ -7316,6 +7326,7 @@ Released 2018-09-13
+ [`unchecked_duration_subtraction`]: https://rust-lang.github.io/rust-clippy/master/index.html#unchecked_duration_subtraction
+ [`unchecked_time_subtraction`]: https://rust-lang.github.io/rust-clippy/master/index.html#unchecked_time_subtraction
+ [`unconditional_recursion`]: https://rust-lang.github.io/rust-clippy/master/index.html#unconditional_recursion
++[`underscore_in_module_filename`]: https://rust-lang.github.io/rust-clippy/master/index.html#underscore_in_module_filename
+ [`undocumented_unsafe_blocks`]: https://rust-lang.github.io/rust-clippy/master/index.html#undocumented_unsafe_blocks
+ [`undropped_manually_drops`]: https://rust-lang.github.io/rust-clippy/master/index.html#undropped_manually_drops
+ [`unicode_not_nfc`]: https://rust-lang.github.io/rust-clippy/master/index.html#unicode_not_nfc
+diff --git a/clippy_lints/src/declared_lints.rs b/clippy_lints/src/declared_lints.rs
+index b2e5e93b5..fcc224e9c 100644
+--- a/clippy_lints/src/declared_lints.rs
++++ b/clippy_lints/src/declared_lints.rs
+@@ -133,9 +133,9 @@ pub static LINTS: &[&::declare_clippy_lint::LintInfo] = &[
+     crate::doc::UNNECESSARY_SAFETY_DOC_INFO,
+     crate::double_parens::DOUBLE_PARENS_INFO,
+     crate::drop_forget_ref::DROP_NON_DROP_INFO,
+-    crate::drop_must_use::DROP_MUST_USE_INFO,
+     crate::drop_forget_ref::FORGET_NON_DROP_INFO,
+     crate::drop_forget_ref::MEM_FORGET_INFO,
++    crate::drop_must_use::DROP_MUST_USE_INFO,
+     crate::duplicate_mod::DUPLICATE_MOD_INFO,
+     crate::duration_suboptimal_units::DURATION_SUBOPTIMAL_UNITS_INFO,
+     crate::else_if_without_else::ELSE_IF_WITHOUT_ELSE_INFO,
+@@ -164,8 +164,8 @@ pub static LINTS: &[&::declare_clippy_lint::LintInfo] = &[
+     crate::exit::EXIT_INFO,
+     crate::explicit_write::EXPLICIT_WRITE_INFO,
+     crate::extra_unused_type_parameters::EXTRA_UNUSED_TYPE_PARAMETERS_INFO,
+-    crate::fallible_int_fallback::FALLIBLE_INT_FALLBACK_INFO,
+     crate::fallible_impl_from::FALLIBLE_IMPL_FROM_INFO,
++    crate::fallible_int_fallback::FALLIBLE_INT_FALLBACK_INFO,
+     crate::field_scoped_visibility_modifiers::FIELD_SCOPED_VISIBILITY_MODIFIERS_INFO,
+     crate::float_literal::EXCESSIVE_PRECISION_INFO,
+     crate::float_literal::LOSSY_FLOAT_LITERAL_INFO,
+@@ -192,6 +192,7 @@ pub static LINTS: &[&::declare_clippy_lint::LintInfo] = &[
+     crate::from_over_into::FROM_OVER_INTO_INFO,
+     crate::from_raw_with_void_ptr::FROM_RAW_WITH_VOID_PTR_INFO,
+     crate::from_str_radix_10::FROM_STR_RADIX_10_INFO,
++    crate::functions::ANONYMOUS_TUPLE_RETURN_TYPE_INFO,
+     crate::functions::DOUBLE_MUST_USE_INFO,
+     crate::functions::DUPLICATE_UNDERSCORE_ARGUMENT_INFO,
+     crate::functions::IMPL_TRAIT_IN_PARAMS_INFO,
+@@ -768,6 +769,7 @@ pub static LINTS: &[&::declare_clippy_lint::LintInfo] = &[
+     crate::types::TYPE_COMPLEXITY_INFO,
+     crate::types::VEC_BOX_INFO,
+     crate::unconditional_recursion::UNCONDITIONAL_RECURSION_INFO,
++    crate::underscore_in_module_filename::UNDERSCORE_IN_MODULE_FILENAME_INFO,
+     crate::undocumented_unsafe_blocks::UNDOCUMENTED_UNSAFE_BLOCKS_INFO,
+     crate::undocumented_unsafe_blocks::UNNECESSARY_SAFETY_COMMENT_INFO,
+     crate::unicode::INVISIBLE_CHARACTERS_INFO,
+@@ -779,7 +781,6 @@ pub static LINTS: &[&::declare_clippy_lint::LintInfo] = &[
+     crate::unit_types::LET_UNIT_VALUE_INFO,
+     crate::unit_types::UNIT_ARG_INFO,
+     crate::unit_types::UNIT_CMP_INFO,
+-    crate::underscore_in_module_filename::UNDERSCORE_IN_MODULE_FILENAME_INFO,
+     crate::unnecessary_box_returns::UNNECESSARY_BOX_RETURNS_INFO,
+     crate::unnecessary_literal_bound::UNNECESSARY_LITERAL_BOUND_INFO,
+     crate::unnecessary_map_on_constructor::UNNECESSARY_MAP_ON_CONSTRUCTOR_INFO,
+diff --git a/clippy_lints/src/functions/anonymous_tuple_return_type.rs b/clippy_lints/src/functions/anonymous_tuple_return_type.rs
+new file mode 100644
+index 000000000..32c455bad
+--- /dev/null
++++ b/clippy_lints/src/functions/anonymous_tuple_return_type.rs
+@@ -0,0 +1,71 @@
++use crate::functions::ANONYMOUS_TUPLE_RETURN_TYPE;
++use clippy_utils::diagnostics::span_lint_and_help;
++use clippy_utils::{is_from_proc_macro, is_trait_impl_item};
++use rustc_hir::intravisit::{self, Visitor, VisitorExt};
++use rustc_hir::{self as hir, AmbigArg, FnDecl, FnRetTy, HirId, Ty, TyKind};
++use rustc_lint::{LateContext, LintContext};
++use rustc_span::Span;
++use std::ops::ControlFlow;
++
++struct AnonymousTupleVisitor<'cx, 'tcx> {
++    cx: &'cx LateContext<'tcx>,
++}
++
++impl<'tcx> Visitor<'tcx> for AnonymousTupleVisitor<'_, 'tcx> {
++    type NestedFilter = intravisit::nested_filter::None;
++    type Result = ControlFlow<Span>;
++
++    fn visit_ty(&mut self, ty: &'tcx Ty<'tcx, AmbigArg>) -> Self::Result {
++        let unambig_ty = ty.as_unambig_ty();
++
++        if unambig_ty.span.in_external_macro(self.cx.sess().source_map()) {
++            return ControlFlow::Continue(());
++        }
++
++        if let TyKind::Tup(fields) = unambig_ty.kind
++            && !fields.is_empty()
++        {
++            return ControlFlow::Break(unambig_ty.span);
++        }
++
++        intravisit::walk_ty(self, ty)
++    }
++}
++
++fn anonymous_tuple_span<'tcx>(cx: &LateContext<'tcx>, ret_ty: &'tcx Ty<'tcx>) -> Option<Span> {
++    let mut visitor = AnonymousTupleVisitor { cx };
++    visitor.visit_ty_unambig(ret_ty).break_value()
++}
++
++fn check_ret_ty<'tcx>(cx: &LateContext<'tcx>, ret_ty: &'tcx Ty<'tcx>) {
++    if let Some(tuple_span) = anonymous_tuple_span(cx, ret_ty) {
++        span_lint_and_help(
++            cx,
++            ANONYMOUS_TUPLE_RETURN_TYPE,
++            tuple_span,
++            "return type contains an anonymous tuple",
++            None,
++            "use a named struct to make the returned fields self-documenting",
++        );
++    }
++}
++
++pub(super) fn check_fn<'tcx>(cx: &LateContext<'tcx>, decl: &'tcx FnDecl<'tcx>, hir_id: HirId, span: Span) {
++    if span.in_external_macro(cx.sess().source_map()) || is_trait_impl_item(cx, hir_id) {
++        return;
++    }
++
++    if let FnRetTy::Return(ret_ty) = decl.output {
++        check_ret_ty(cx, ret_ty);
++    }
++}
++
++pub(super) fn check_trait_item<'tcx>(cx: &LateContext<'tcx>, item: &'tcx hir::TraitItem<'tcx>) {
++    if !item.span.in_external_macro(cx.sess().source_map())
++        && !is_from_proc_macro(cx, item)
++        && let hir::TraitItemKind::Fn(ref sig, hir::TraitFn::Required(_)) = item.kind
++        && let FnRetTy::Return(ret_ty) = sig.decl.output
++    {
++        check_ret_ty(cx, ret_ty);
++    }
++}
+diff --git a/clippy_lints/src/functions/mod.rs b/clippy_lints/src/functions/mod.rs
+index 7c5fd760a..db712cd80 100644
+--- a/clippy_lints/src/functions/mod.rs
++++ b/clippy_lints/src/functions/mod.rs
+@@ -1,3 +1,4 @@
++mod anonymous_tuple_return_type;
+ mod duplicate_underscore_argument;
+ mod impl_trait_in_params;
+ mod misnamed_getters;
+@@ -21,6 +22,38 @@ use rustc_session::{declare_lint_pass, impl_lint_pass};
+ use rustc_span::Span;
+ use rustc_span::def_id::{DefIdSet, LocalDefId};
+ 
++declare_clippy_lint! {
++    /// ### What it does
++    /// Checks for anonymous tuple types in explicit function return types.
++    ///
++    /// ### Why restrict this?
++    /// Tuple fields do not describe what each value means. A named struct gives
++    /// each field a name and makes the return value easier to understand at call
++    /// sites.
++    ///
++    /// ### Example
++    /// ```no_run
++    /// fn dimensions() -> (u32, u32) {
++    ///     (1920, 1080)
++    /// }
++    /// ```
++    /// Use instead:
++    /// ```no_run
++    /// struct Dimensions {
++    ///     width: u32,
++    ///     height: u32,
++    /// }
++    ///
++    /// fn dimensions() -> Dimensions {
++    ///     Dimensions { width: 1920, height: 1080 }
++    /// }
++    /// ```
++    #[clippy::version = "1.92.0"]
++    pub ANONYMOUS_TUPLE_RETURN_TYPE,
++    restriction,
++    "function return type contains an anonymous tuple"
++}
++
+ declare_clippy_lint! {
+     /// ### What it does
+     /// Checks for a `#[must_use]` attribute without
+@@ -476,6 +509,7 @@ declare_clippy_lint! {
+ declare_lint_pass!(EarlyFunctions => [DUPLICATE_UNDERSCORE_ARGUMENT]);
+ 
+ impl_lint_pass!(Functions => [
++    ANONYMOUS_TUPLE_RETURN_TYPE,
+     DOUBLE_MUST_USE,
+     IMPL_TRAIT_IN_PARAMS,
+     MISNAMED_GETTERS,
+@@ -542,6 +576,7 @@ impl<'tcx> LateLintPass<'tcx> for Functions {
+     ) {
+         let hir_id = cx.tcx.local_def_id_to_hir_id(def_id);
+         too_many_arguments::check_fn(cx, kind, decl, hir_id, def_id, self.too_many_arguments_threshold);
++        anonymous_tuple_return_type::check_fn(cx, decl, hir_id, span);
+         too_many_lines::check_fn(cx, kind, body, span, def_id, self.too_many_lines_threshold);
+         not_unsafe_ptr_arg_deref::check_fn(cx, kind, decl, body, def_id);
+         misnamed_getters::check_fn(cx, kind, decl, body, span);
+@@ -594,6 +629,7 @@ impl<'tcx> LateLintPass<'tcx> for Functions {
+             self.msrv,
+         );
+         impl_trait_in_params::check_trait_item(cx, item, self.avoid_breaking_exported_api);
++        anonymous_tuple_return_type::check_trait_item(cx, item);
+         ref_option::check_trait_item(cx, item, self.avoid_breaking_exported_api);
+     }
+ 
+diff --git a/clippy_lints/src/lib.rs b/clippy_lints/src/lib.rs
+index c07c0fcad..733409127 100644
+--- a/clippy_lints/src/lib.rs
++++ b/clippy_lints/src/lib.rs
+@@ -133,8 +133,8 @@ mod exhaustive_items;
+ mod exit;
+ mod explicit_write;
+ mod extra_unused_type_parameters;
+-mod fallible_int_fallback;
+ mod fallible_impl_from;
++mod fallible_int_fallback;
+ mod field_scoped_visibility_modifiers;
+ mod float_literal;
+ mod floating_point_arithmetic;
+@@ -372,13 +372,13 @@ mod transmute;
+ mod tuple_array_conversions;
+ mod types;
+ mod unconditional_recursion;
++mod underscore_in_module_filename;
+ mod undocumented_unsafe_blocks;
+ mod unicode;
+ mod uninhabited_references;
+ mod uninit_vec;
+ mod unit_return_expecting_ord;
+ mod unit_types;
+-mod underscore_in_module_filename;
+ mod unnecessary_box_returns;
+ mod unnecessary_literal_bound;
+ mod unnecessary_map_on_constructor;
+diff --git a/tests/ui/anonymous_tuple_return_type.rs b/tests/ui/anonymous_tuple_return_type.rs
+new file mode 100644
+index 000000000..896a6542b
+--- /dev/null
++++ b/tests/ui/anonymous_tuple_return_type.rs
+@@ -0,0 +1,80 @@
++#![allow(dead_code)]
++#![warn(clippy::anonymous_tuple_return_type)]
++
++struct Dimensions {
++    width: u32,
++    height: u32,
++}
++
++struct TupleStruct(u32, u32);
++
++type DimensionPair = (u32, u32);
++
++fn direct_tuple() -> (u32, String) {
++    //~^ anonymous_tuple_return_type
++    (1, String::new())
++}
++
++fn single_element_tuple() -> (u32,) {
++    //~^ anonymous_tuple_return_type
++    (1,)
++}
++
++fn nested_tuple() -> Result<(u32, String), String> {
++    //~^ anonymous_tuple_return_type
++    Ok((1, String::new()))
++}
++
++fn named_struct() -> Dimensions {
++    Dimensions { width: 1, height: 2 }
++}
++
++fn tuple_struct() -> TupleStruct {
++    TupleStruct(1, 2)
++}
++
++fn type_alias() -> DimensionPair {
++    (1, 2)
++}
++
++async fn async_tuple() -> (u32, String) {
++    //~^ anonymous_tuple_return_type
++    (1, String::new())
++}
++
++fn function_pointer_return() -> fn() -> (u32, String) {
++    //~^ anonymous_tuple_return_type
++    direct_tuple
++}
++
++trait Trait {
++    fn required() -> (u32, String);
++    //~^ anonymous_tuple_return_type
++
++    fn provided() -> Option<(u32, String)> {
++        //~^ anonymous_tuple_return_type
++        Some((1, String::new()))
++    }
++}
++
++struct Impl;
++
++impl Impl {
++    fn method() -> (u32, String) {
++        //~^ anonymous_tuple_return_type
++        (1, String::new())
++    }
++}
++
++impl Trait for Impl {
++    fn required() -> (u32, String) {
++        (1, String::new())
++    }
++}
++
++fn main() {
++    let _closure = || -> (u32, String) {
++        //~^ anonymous_tuple_return_type
++        (1, String::new())
++    };
++}
+diff --git a/tests/ui/anonymous_tuple_return_type.stderr b/tests/ui/anonymous_tuple_return_type.stderr
+new file mode 100644
+index 000000000..625a9076d
+--- /dev/null
++++ b/tests/ui/anonymous_tuple_return_type.stderr
+@@ -0,0 +1,76 @@
++error: return type contains an anonymous tuple
++  --> tests/ui/anonymous_tuple_return_type.rs:13:22
++   |
++LL | fn direct_tuple() -> (u32, String) {
++   |                      ^^^^^^^^^^^^^
++   |
++   = help: use a named struct to make the returned fields self-documenting
++   = note: `-D clippy::anonymous-tuple-return-type` implied by `-D warnings`
++   = help: to override `-D warnings` add `#[allow(clippy::anonymous_tuple_return_type)]`
++
++error: return type contains an anonymous tuple
++  --> tests/ui/anonymous_tuple_return_type.rs:18:30
++   |
++LL | fn single_element_tuple() -> (u32,) {
++   |                              ^^^^^^
++   |
++   = help: use a named struct to make the returned fields self-documenting
++
++error: return type contains an anonymous tuple
++  --> tests/ui/anonymous_tuple_return_type.rs:23:29
++   |
++LL | fn nested_tuple() -> Result<(u32, String), String> {
++   |                             ^^^^^^^^^^^^^
++   |
++   = help: use a named struct to make the returned fields self-documenting
++
++error: return type contains an anonymous tuple
++  --> tests/ui/anonymous_tuple_return_type.rs:40:27
++   |
++LL | async fn async_tuple() -> (u32, String) {
++   |                           ^^^^^^^^^^^^^
++   |
++   = help: use a named struct to make the returned fields self-documenting
++
++error: return type contains an anonymous tuple
++  --> tests/ui/anonymous_tuple_return_type.rs:45:41
++   |
++LL | fn function_pointer_return() -> fn() -> (u32, String) {
++   |                                         ^^^^^^^^^^^^^
++   |
++   = help: use a named struct to make the returned fields self-documenting
++
++error: return type contains an anonymous tuple
++  --> tests/ui/anonymous_tuple_return_type.rs:51:22
++   |
++LL |     fn required() -> (u32, String);
++   |                      ^^^^^^^^^^^^^
++   |
++   = help: use a named struct to make the returned fields self-documenting
++
++error: return type contains an anonymous tuple
++  --> tests/ui/anonymous_tuple_return_type.rs:54:29
++   |
++LL |     fn provided() -> Option<(u32, String)> {
++   |                             ^^^^^^^^^^^^^
++   |
++   = help: use a named struct to make the returned fields self-documenting
++
++error: return type contains an anonymous tuple
++  --> tests/ui/anonymous_tuple_return_type.rs:63:20
++   |
++LL |     fn method() -> (u32, String) {
++   |                    ^^^^^^^^^^^^^
++   |
++   = help: use a named struct to make the returned fields self-documenting
++
++error: return type contains an anonymous tuple
++  --> tests/ui/anonymous_tuple_return_type.rs:76:26
++   |
++LL |     let _closure = || -> (u32, String) {
++   |                          ^^^^^^^^^^^^^
++   |
++   = help: use a named struct to make the returned fields self-documenting
++
++error: aborting due to 9 previous errors
++

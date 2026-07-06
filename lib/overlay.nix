@@ -3,7 +3,7 @@
   packageRegistry,
   buildIxRustTool,
   cargoUnitFor,
-  clippy-fork,
+  clippy-src,
   rustWorkspaceFor,
   writeNushellApplication,
   writePythonApplication,
@@ -38,7 +38,7 @@ let
       prev
       lib
       buildIxRustTool
-      clippy-fork
+      clippy-src
       ;
     # Carry `pkgs` on the `ix` handle too (as `packageSetFor`'s `ixForPackages`
     # does), so overlay-built packages can read `ix.pkgs` instead of taking a
@@ -49,6 +49,7 @@ let
         pkgs = final;
         cargoUnit = cargoUnitFor final;
         rustWorkspace = rustWorkspaceFor final;
+        patchedSrc = ix.patchedSrcFor final;
       };
     pkgs = final;
     inherit (entry) path;

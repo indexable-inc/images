@@ -1,0 +1,96 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Sun, 7 Jun 2026 15:30:56 -0700
+Subject: [PATCH] proc: show kernel working directory (cwd) in the detail box
+
+Read each process's real working directory from the kernel (the cwd set by
+chdir(2)), not the stale $PWD environment variable:
+
+  - Linux: readlink /proc/<pid>/cwd
+  - macOS: proc_pidinfo(PROC_PIDVNODEPATHINFO)
+
+Surface it on the bottom row of the detail box's command area, but only when
+the command fits in <= 2 rows so a long command is never truncated for it.
+Other platforms leave cwd empty (field defaults to "").
+
+diff --git a/src/btop_draw.cpp b/src/btop_draw.cpp
+index cfa4a63..46af0c8 100644
+--- a/src/btop_draw.cpp
++++ b/src/btop_draw.cpp
+@@ -1853,17 +1853,30 @@ namespace Proc {
+ 				if (item_fit >= 8) out += cjust("Nice:", item_width);
+ 
+ 
+-				//? Command line
++				//? Command line (+ working directory on the last row when it fits)
+ 				for (int i = 0; const auto& l : {'C', 'M', 'D'})
+ 				out += Mv::to(d_y + 5 + i++, d_x + 1) + l;
+ 
+ 				out += Theme::c("main_fg") + Fx::ub;
+ 				const auto san_cmd = replace_ascii_control(detailed.entry.cmd);
+ 				const int cmd_size = ulen(san_cmd, true);
+-				for (int num_lines = min(3, (int)ceil((double)cmd_size / (d_width - 5))), i = 0; i < num_lines; i++) {
+-					out += Mv::to(d_y + 5 + (num_lines == 1 ? 1 : i), d_x + 3)
++				const auto san_cwd = replace_ascii_control(detailed.entry.cwd);
++				//? Reserve the bottom row for the cwd only when the command needs <= 2 rows,
++				//? so a long command is never truncated to make room for it.
++				const int cmd_rows = max(1, (int)ceil((double)cmd_size / (d_width - 5)));
++				const bool show_cwd = not san_cwd.empty() and cmd_rows <= 2;
++				const int cmd_lines = min(show_cwd ? 2 : 3, cmd_rows);
++				for (int i = 0; i < cmd_lines; i++) {
++					out += Mv::to(d_y + 5 + (not show_cwd and cmd_lines == 1 ? 1 : i), d_x + 3)
+ 						+ cjust(luresize(san_cmd, cmd_size - (d_width - 5) * i, true), d_width - 5, true, true);
+ 				}
++				if (show_cwd) {
++					//? Working directory directly under the command, with a dim label.
++					const string cwd_label = "cwd ";
++					const int cwd_size = ulen(san_cwd, true);
++					out += Mv::to(d_y + 5 + cmd_lines, d_x + 3) + Theme::c("title") + Fx::b + cwd_label + Theme::c("main_fg") + Fx::ub
++						+ cjust(luresize(san_cwd, cwd_size, true), d_width - 5 - ulen(cwd_label), true, true);
++				}
+ 
+ 			}
+ 
+diff --git a/src/btop_shared.hpp b/src/btop_shared.hpp
+index d10bb1f..6405eed 100644
+--- a/src/btop_shared.hpp
++++ b/src/btop_shared.hpp
+@@ -408,6 +408,7 @@ namespace Proc {
+ 		string name{};          // defaults to ""
+ 		string cmd{};           // defaults to ""
+ 		string short_cmd{};     // defaults to ""
++		string cwd{};           // kernel working directory, defaults to ""
+ 		size_t threads{};
+ 		int name_offset{};
+ 		string user{};          // defaults to ""
+diff --git a/src/linux/btop_collect.cpp b/src/linux/btop_collect.cpp
+index fe4c8ba..9259456 100644
+--- a/src/linux/btop_collect.cpp
++++ b/src/linux/btop_collect.cpp
+@@ -3346,6 +3346,11 @@ namespace Proc {
+ 					pread.close();
+ 					if (not new_proc.cmd.empty()) new_proc.cmd.pop_back();
+ 
++					//? Get the real working directory (kernel cwd, not the $PWD env var)
++					std::error_code cwd_ec;
++					if (auto cwd_path = fs::read_symlink(d.path() / "cwd", cwd_ec); not cwd_ec)
++						new_proc.cwd = cwd_path.string();
++
+ 					pread.open(d.path() / "status");
+ 					if (not pread.good()) continue;
+ 					string uid;
+diff --git a/src/osx/btop_collect.cpp b/src/osx/btop_collect.cpp
+index a78bb2a..9d1ed3b 100644
+--- a/src/osx/btop_collect.cpp
++++ b/src/osx/btop_collect.cpp
+@@ -1858,6 +1858,10 @@ namespace Proc {
+ 							new_proc.cmd.resize(1000);
+ 							new_proc.cmd.shrink_to_fit();
+ 						}
++						//? Get the real working directory (kernel cwd, not the $PWD env var)
++						struct proc_vnodepathinfo vpi;
++						if (proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &vpi, sizeof(vpi)) == sizeof(vpi))
++							new_proc.cwd = vpi.pvi_cdir.vip_path;
+ 						new_proc.ppid = kproc.kp_eproc.e_ppid;
+ 						new_proc.cpu_s = kproc.kp_proc.p_starttime.tv_sec * 1'000'000 + kproc.kp_proc.p_starttime.tv_usec;
+ 						struct passwd *pwd = getpwuid(kproc.kp_eproc.e_ucred.cr_uid);

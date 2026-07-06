@@ -1,0 +1,127 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Sun, 17 May 2026 12:19:55 -0700
+Subject: [PATCH] Add renamed_imports lint
+
+
+diff --git a/clippy_lints/src/declared_lints.rs b/clippy_lints/src/declared_lints.rs
+index 0b6745f38..fa38883e1 100644
+--- a/clippy_lints/src/declared_lints.rs
++++ b/clippy_lints/src/declared_lints.rs
+@@ -677,6 +677,7 @@ pub static LINTS: &[&::declare_clippy_lint::LintInfo] = &[
+     crate::regex::INVALID_REGEX_INFO,
+     crate::regex::REGEX_CREATION_IN_LOOPS_INFO,
+     crate::regex::TRIVIAL_REGEX_INFO,
++    crate::renamed_imports::RENAMED_IMPORTS_INFO,
+     crate::repeat_vec_with_capacity::REPEAT_VEC_WITH_CAPACITY_INFO,
+     crate::replace_box::REPLACE_BOX_INFO,
+     crate::reserve_after_initialization::RESERVE_AFTER_INITIALIZATION_INFO,
+diff --git a/clippy_lints/src/lib.rs b/clippy_lints/src/lib.rs
+index d8329faf1..f0bd30945 100644
+--- a/clippy_lints/src/lib.rs
++++ b/clippy_lints/src/lib.rs
+@@ -322,6 +322,7 @@ mod ref_option_ref;
+ mod ref_patterns;
+ mod reference;
+ mod regex;
++mod renamed_imports;
+ mod repeat_vec_with_capacity;
+ mod replace_box;
+ mod reserve_after_initialization;
+@@ -484,6 +485,7 @@ pub fn register_lint_passes(store: &mut rustc_lint::LintStore, conf: &'static Co
+         Box::new(|| Box::new(suspicious_operation_groupings::SuspiciousOperationGroupings)),
+         Box::new(|| Box::new(double_parens::DoubleParens)),
+         Box::new(|| Box::new(unsafe_removed_from_name::UnsafeNameRemoval)),
++        Box::new(|| Box::new(renamed_imports::RenamedImports)),
+         Box::new(|| Box::new(else_if_without_else::ElseIfWithoutElse)),
+         Box::new(|| Box::new(int_plus_one::IntPlusOne)),
+         Box::new(|| Box::new(formatting::Formatting)),
+diff --git a/clippy_lints/src/renamed_imports.rs b/clippy_lints/src/renamed_imports.rs
+new file mode 100644
+index 000000000..49431ecfa
+--- /dev/null
++++ b/clippy_lints/src/renamed_imports.rs
+@@ -0,0 +1,83 @@
++use clippy_utils::diagnostics::span_lint_and_help;
++use rustc_ast::ast::{Item, ItemKind, UseTree, UseTreeKind};
++use rustc_lint::{EarlyContext, EarlyLintPass};
++use rustc_session::declare_lint_pass;
++use rustc_span::symbol::kw;
++
++declare_clippy_lint! {
++    /// ### What it does
++    /// Checks for `use` statements that rename an import with `as`.
++    ///
++    /// ### Why restrict this?
++    /// Renaming imports with `as` hides the original name and makes it harder
++    /// to grep for usages. Using the fully qualified path or the original name
++    /// keeps code searchable and explicit.
++    ///
++    /// ### Example
++    /// ```rust,ignore
++    /// use std::collections::HashMap as Map;
++    ///
++    /// let m: Map = Map::new();
++    /// ```
++    ///
++    /// Use instead:
++    /// ```rust,ignore
++    /// use std::collections::HashMap;
++    ///
++    /// let m: HashMap = HashMap::new();
++    /// ```
++    #[clippy::version = "1.86.0"]
++    pub RENAMED_IMPORTS,
++    restriction,
++    "`use` items that rename an import with `as`"
++}
++
++declare_lint_pass!(RenamedImports => [RENAMED_IMPORTS]);
++
++impl EarlyLintPass for RenamedImports {
++    fn check_item(&mut self, cx: &EarlyContext<'_>, item: &Item) {
++        if let ItemKind::Use(ref use_tree) = item.kind {
++            check_use_tree(use_tree, cx);
++        }
++    }
++}
++
++fn check_use_tree(use_tree: &UseTree, cx: &EarlyContext<'_>) {
++    match use_tree.kind {
++        UseTreeKind::Simple(Some(alias)) => {
++            // `use Trait as _` is fine (anonymous import)
++            if alias.name == kw::Underscore {
++                return;
++            }
++
++            let original = use_tree
++                .prefix
++                .segments
++                .last()
++                .expect("use paths cannot be empty")
++                .ident;
++
++            // Only fire when the name actually changed
++            if original.name != alias.name {
++                span_lint_and_help(
++                    cx,
++                    RENAMED_IMPORTS,
++                    item_span(use_tree),
++                    "import renamed with `as`",
++                    None,
++                    "use the original name or the fully qualified path instead",
++                );
++            }
++        },
++        UseTreeKind::Simple(None) | UseTreeKind::Glob(_) => {},
++        UseTreeKind::Nested { ref items, .. } => {
++            for (nested, _) in items {
++                check_use_tree(nested, cx);
++            }
++        },
++    }
++}
++
++fn item_span(use_tree: &UseTree) -> rustc_span::Span {
++    use_tree.span()
++}

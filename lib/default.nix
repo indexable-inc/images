@@ -13,7 +13,7 @@
   nu-jupyter-kernel-src,
   launchk-src,
   snix-src,
-  clippy-fork,
+  clippy-src,
   codex-src,
   ghostty,
   # Flake source revision, stamped into builds that want to report it (see
@@ -60,6 +60,23 @@
     ;
   netCidr = import ./util/net-cidr.nix {inherit lib;};
   publicArtifactsFor = pkgs: import ./util/public-artifacts.nix {inherit lib pkgs;};
+  # Apply an in-repo ordered patch series to an upstream source tree (the
+  # de-forking replacement for a separate fork repo). Bound per package set like
+  # `cargoUnit` / `rustWorkspace` so a patched source builds for the consuming
+  # system, not the top-level x86_64-linux one. See lib/util/patched-src.nix.
+  patchedSrcFor = pkgs:
+    import ./util/patched-src.nix {
+      inherit lib;
+      inherit (pkgs) applyPatches;
+    };
+  # De-forked-package mapping (name -> input / upstream URL / patch dir), the
+  # single source of truth for the patched-src checks, the `.#update` fork
+  # nodes, and the `rebase-patches` tool. See lib/fork-packages.nix.
+  inherit (import ./fork-packages.nix) forkPackages;
+  # Build a fork package's `passthru.updateScript` (flake update base ->
+  # rebase-patches), so it joins the registry-discovered `.#update` DAG. See
+  # lib/fork-updater.nix.
+  mkForkUpdater = import ./fork-updater.nix;
   secretRefs = import ./util/secret-refs.nix {inherit lib;};
   selfVersionFor = self: import ./util/self-version.nix {inherit lib self;};
   checks = import ./checks.nix {inherit lib;};
@@ -77,7 +94,7 @@
       packageRegistry
       buildIxRustTool
       cargoUnitFor
-      clippy-fork
+      clippy-src
       rustWorkspaceFor
       writeNushellApplication
       writePythonApplication
@@ -190,7 +207,7 @@
         languages
         writePythonApplication
         rustWorkspaceFor
-        clippy-fork
+        clippy-src
         lists
         pins
         ;
@@ -201,6 +218,10 @@
     buildRustPackage
     ;
   cargoUnit = cargoUnitFor pkgs;
+  # Default patched-source builder, bound to the top-level x86_64-linux pkgs for
+  # image/module eval; `ixForPackages` / the overlay context rebind it to the
+  # consuming pkgs so a patched source builds for its own system.
+  patchedSrc = patchedSrcFor pkgs;
   goUnitFor = pkgs:
     import ./build/go-unit.nix {
       inherit lib pkgs;
@@ -381,7 +402,7 @@
       cargoUnitFor
       goUnitFor
       rustWorkspaceFor
-      clippy-fork
+      clippy-src
       ghostty
       ;
   };
@@ -456,6 +477,7 @@
       checks
       claudePlugin
       deepMerge
+      forkPackages
       goUnit
       hermes
       languages
@@ -463,6 +485,7 @@
       mcp
       minecraft
       mkBenchSuite
+      mkForkUpdater
       mkMinecraftLoader
       mkMinecraftNbtFormat
       wrapPackage
@@ -470,6 +493,8 @@
       mutableJson
       netCidr
       paths
+      patchedSrc
+      patchedSrcFor
       pins
       publicArtifactsFor
       relativePath
@@ -489,6 +514,7 @@
       ;
     btopSrc = btop-src;
     codexSrc = codex-src;
+    clippySrc = clippy-src;
     drgnSrc = drgn-src;
     perftestSrc = perftest-src;
     fffSrc = fff-src;

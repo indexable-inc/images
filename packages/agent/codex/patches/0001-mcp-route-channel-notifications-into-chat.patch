@@ -1,0 +1,812 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Sun, 5 Jul 2026 13:16:14 -0700
+Subject: [PATCH] mcp: route channel notifications into chat
+
+Refs indexable-inc/index#1857
+
+diff --git a/codex-rs/codex-mcp/src/connection_manager.rs b/codex-rs/codex-mcp/src/connection_manager.rs
+index c76e3c3c0..97073aeb0 100644
+--- a/codex-rs/codex-mcp/src/connection_manager.rs
++++ b/codex-rs/codex-mcp/src/connection_manager.rs
+@@ -20,6 +20,7 @@ use crate::codex_apps_cache::CodexAppsToolsFetchSource;
+ use crate::elicitation::ElicitationRequestManager;
+ use crate::elicitation::ElicitationRequestRouter;
+ use crate::elicitation::ElicitationReviewerHandle;
++use crate::elicitation::McpNotificationHandlerHandle;
+ use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
+ use crate::mcp::ToolPluginProvenance;
+ use crate::rmcp_client::AsyncManagedClient;
+@@ -142,6 +143,7 @@ impl McpConnectionManager {
+         tool_plugin_provenance: ToolPluginProvenance,
+         auth: Option<&CodexAuth>,
+         elicitation_reviewer: Option<ElicitationReviewerHandle>,
++        notification_handler: Option<McpNotificationHandlerHandle>,
+         elicitation_router: ElicitationRequestRouter,
+     ) -> Self {
+         let mut required_servers = mcp_servers
+@@ -157,6 +159,7 @@ impl McpConnectionManager {
+             approval_policy.value(),
+             initial_permission_profile,
+             elicitation_reviewer,
++            notification_handler,
+             elicitation_router,
+         );
+         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
+@@ -360,6 +363,7 @@ impl McpConnectionManager {
+                 approval_policy.value(),
+                 permission_profile.clone(),
+                 /*reviewer*/ None,
++                /*notification_handler*/ None,
+                 ElicitationRequestRouter::default(),
+             ),
+             startup_cancellation_token: CancellationToken::new(),
+diff --git a/codex-rs/codex-mcp/src/connection_manager_tests.rs b/codex-rs/codex-mcp/src/connection_manager_tests.rs
+index 1f61ab700..c9e2e6cc1 100644
+--- a/codex-rs/codex-mcp/src/connection_manager_tests.rs
++++ b/codex-rs/codex-mcp/src/connection_manager_tests.rs
+@@ -323,6 +323,7 @@ async fn disabled_permissions_auto_accept_elicitation_with_empty_form_schema() {
+         AskForApproval::Never,
+         PermissionProfile::Disabled,
+         /*reviewer*/ None,
++        /*notification_handler*/ None,
+         ElicitationRequestRouter::default(),
+     );
+     let (tx_event, _rx_event) = async_channel::bounded(1);
+@@ -359,6 +360,7 @@ async fn disabled_permissions_do_not_auto_accept_elicitation_with_requested_fiel
+         AskForApproval::Never,
+         PermissionProfile::Disabled,
+         /*reviewer*/ None,
++        /*notification_handler*/ None,
+         ElicitationRequestRouter::default(),
+     );
+     let (tx_event, _rx_event) = async_channel::bounded(1);
+@@ -400,12 +402,14 @@ async fn shared_elicitation_router_targets_the_exact_pending_request() {
+         AskForApproval::OnRequest,
+         PermissionProfile::default(),
+         /*reviewer*/ None,
++        /*notification_handler*/ None,
+         router.clone(),
+     );
+     let manager_b = ElicitationRequestManager::new(
+         AskForApproval::OnRequest,
+         PermissionProfile::default(),
+         /*reviewer*/ None,
++        /*notification_handler*/ None,
+         router,
+     );
+     let (tx_event, rx_event) = async_channel::bounded(2);
+@@ -1539,6 +1543,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
+         ToolPluginProvenance::default(),
+         /*auth*/ None,
+         /*elicitation_reviewer*/ None,
++        /*notification_handler*/ None,
+         ElicitationRequestRouter::default(),
+     )
+     .await;
+diff --git a/codex-rs/codex-mcp/src/elicitation.rs b/codex-rs/codex-mcp/src/elicitation.rs
+index e4fcf49d2..484b2d5f8 100644
+--- a/codex-rs/codex-mcp/src/elicitation.rs
++++ b/codex-rs/codex-mcp/src/elicitation.rs
+@@ -27,14 +27,20 @@ use codex_protocol::protocol::EventMsg;
+ use codex_rmcp_client::Elicitation;
+ use codex_rmcp_client::ElicitationResponse;
+ use codex_rmcp_client::SendElicitation;
++use codex_rmcp_client::SendNotification;
+ use futures::future::BoxFuture;
+ use futures::future::FutureExt;
++use rmcp::model::CustomNotification;
+ use rmcp::model::ElicitationAction;
+ use rmcp::model::RequestId;
++use serde::Deserialize;
+ use tokio::sync::Mutex;
+ use tokio::sync::oneshot;
++use tracing::warn;
+ 
+ static NEXT_ELICITATION_REQUEST_ID: AtomicU64 = AtomicU64::new(0);
++const CLAUDE_CHANNEL_NOTIFICATION_METHOD: &str = "notifications/claude/channel";
++const CODEX_CHANNEL_NOTIFICATION_METHOD: &str = "notifications/codex/channel";
+ 
+ #[derive(Debug, Clone)]
+ pub struct ElicitationReviewRequest {
+@@ -52,6 +58,27 @@ pub trait ElicitationReviewer: Send + Sync {
+ 
+ pub type ElicitationReviewerHandle = Arc<dyn ElicitationReviewer>;
+ 
++#[derive(Debug, Clone, PartialEq)]
++pub struct McpChannelNotification {
++    pub server_name: String,
++    pub method: String,
++    pub content: String,
++    pub meta: Option<serde_json::Value>,
++}
++
++pub trait McpNotificationHandler: Send + Sync {
++    fn handle(&self, notification: McpChannelNotification) -> BoxFuture<'static, Result<()>>;
++}
++
++pub type McpNotificationHandlerHandle = Arc<dyn McpNotificationHandler>;
++
++#[derive(Debug, Deserialize)]
++struct ChannelNotificationParams {
++    content: String,
++    #[serde(default)]
++    meta: Option<serde_json::Value>,
++}
++
+ /// Routes model-visible elicitation response tokens to their exact pending responders.
+ ///
+ /// One router is shared by every MCP runtime created for a thread. The public response token is
+@@ -86,6 +113,7 @@ pub(crate) struct ElicitationRequestManager {
+     pub(crate) permission_profile: Arc<StdMutex<PermissionProfile>>,
+     auto_deny: Arc<StdMutex<bool>>,
+     reviewer: Option<ElicitationReviewerHandle>,
++    notification_handler: Option<McpNotificationHandlerHandle>,
+ }
+ 
+ impl ElicitationRequestManager {
+@@ -93,6 +121,7 @@ impl ElicitationRequestManager {
+         approval_policy: AskForApproval,
+         permission_profile: PermissionProfile,
+         reviewer: Option<ElicitationReviewerHandle>,
++        notification_handler: Option<McpNotificationHandlerHandle>,
+         router: ElicitationRequestRouter,
+     ) -> Self {
+         Self {
+@@ -101,6 +130,7 @@ impl ElicitationRequestManager {
+             permission_profile: Arc::new(StdMutex::new(permission_profile)),
+             auto_deny: Arc::new(StdMutex::new(false)),
+             reviewer,
++            notification_handler,
+         }
+     }
+ 
+@@ -270,6 +300,58 @@ impl ElicitationRequestManager {
+             .boxed()
+         })
+     }
++
++    pub(crate) fn make_notification_sender(&self, server_name: String) -> SendNotification {
++        let handler = self.notification_handler.clone();
++        Box::new(move |notification| {
++            let handler = handler.clone();
++            let server_name = server_name.clone();
++            async move {
++                handle_custom_notification(server_name, handler, notification).await;
++                Ok(())
++            }
++            .boxed()
++        })
++    }
++}
++
++async fn handle_custom_notification(
++    server_name: String,
++    handler: Option<McpNotificationHandlerHandle>,
++    notification: CustomNotification,
++) {
++    if !matches!(
++        notification.method.as_str(),
++        CLAUDE_CHANNEL_NOTIFICATION_METHOD | CODEX_CHANNEL_NOTIFICATION_METHOD
++    ) {
++        return;
++    }
++    let Some(handler) = handler else {
++        return;
++    };
++    let method = notification.method.clone();
++    let params = match notification.params_as::<ChannelNotificationParams>() {
++        Ok(Some(params)) => params,
++        Ok(None) => {
++            warn!("MCP channel notification from {server_name} missing params");
++            return;
++        }
++        Err(error) => {
++            warn!("MCP channel notification from {server_name} has invalid params: {error}");
++            return;
++        }
++    };
++    if let Err(error) = handler
++        .handle(McpChannelNotification {
++            server_name: server_name.clone(),
++            method,
++            content: params.content,
++            meta: params.meta,
++        })
++        .await
++    {
++        warn!("MCP channel notification handler failed for {server_name}: {error}");
++    }
+ }
+ 
+ pub(crate) fn elicitation_is_rejected_by_policy(approval_policy: AskForApproval) -> bool {
+@@ -298,3 +380,96 @@ fn can_auto_accept_elicitation(elicitation: &Elicitation) -> bool {
+         | Elicitation::OpenAiForm { .. } => false,
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::sync::Mutex as StdMutex;
++
++    #[derive(Default)]
++    struct RecordingNotificationHandler {
++        notifications: Arc<StdMutex<Vec<McpChannelNotification>>>,
++    }
++
++    impl McpNotificationHandler for RecordingNotificationHandler {
++        fn handle(
++            &self,
++            notification: McpChannelNotification,
++        ) -> BoxFuture<'static, Result<()>> {
++            let notifications = Arc::clone(&self.notifications);
++            async move {
++                notifications
++                    .lock()
++                    .unwrap_or_else(std::sync::PoisonError::into_inner)
++                    .push(notification);
++                Ok(())
++            }
++            .boxed()
++        }
++    }
++
++    #[tokio::test]
++    async fn channel_notification_sender_routes_claude_channel_events() {
++        let handler = Arc::new(RecordingNotificationHandler::default());
++        let notifications = Arc::clone(&handler.notifications);
++        let manager = ElicitationRequestManager::new(
++            AskForApproval::Never,
++            PermissionProfile::default(),
++            None,
++            Some(handler),
++            ElicitationRequestRouter::default(),
++        );
++
++        let send = manager.make_notification_sender("ix".to_string());
++        send(CustomNotification::new(
++            "notifications/claude/channel",
++            Some(serde_json::json!({
++                "content": "build failed",
++                "meta": {"severity": "high", "run_id": 123}
++            })),
++        ))
++        .await
++        .unwrap();
++
++        assert_eq!(
++            notifications
++                .lock()
++                .unwrap_or_else(std::sync::PoisonError::into_inner)
++                .as_slice(),
++            &[McpChannelNotification {
++                server_name: "ix".to_string(),
++                method: "notifications/claude/channel".to_string(),
++                content: "build failed".to_string(),
++                meta: Some(serde_json::json!({"severity": "high", "run_id": 123})),
++            }]
++        );
++    }
++
++    #[tokio::test]
++    async fn channel_notification_sender_ignores_other_custom_events() {
++        let handler = Arc::new(RecordingNotificationHandler::default());
++        let notifications = Arc::clone(&handler.notifications);
++        let manager = ElicitationRequestManager::new(
++            AskForApproval::Never,
++            PermissionProfile::default(),
++            None,
++            Some(handler),
++            ElicitationRequestRouter::default(),
++        );
++
++        let send = manager.make_notification_sender("ix".to_string());
++        send(CustomNotification::new(
++            "notifications/other",
++            Some(serde_json::json!({"content": "ignored"})),
++        ))
++        .await
++        .unwrap();
++
++        assert!(
++            notifications
++                .lock()
++                .unwrap_or_else(std::sync::PoisonError::into_inner)
++                .is_empty()
++        );
++    }
++}
+diff --git a/codex-rs/codex-mcp/src/lib.rs b/codex-rs/codex-mcp/src/lib.rs
+index eda7ac239..f80e34d82 100644
+--- a/codex-rs/codex-mcp/src/lib.rs
++++ b/codex-rs/codex-mcp/src/lib.rs
+@@ -4,6 +4,9 @@ pub use elicitation::ElicitationRequestRouter;
+ pub use elicitation::ElicitationReviewRequest;
+ pub use elicitation::ElicitationReviewer;
+ pub use elicitation::ElicitationReviewerHandle;
++pub use elicitation::McpChannelNotification;
++pub use elicitation::McpNotificationHandler;
++pub use elicitation::McpNotificationHandlerHandle;
+ pub use resource_client::McpResourceClient;
+ pub use resource_client::McpResourceClientCacheKey;
+ pub use resource_client::McpResourcePage;
+diff --git a/codex-rs/codex-mcp/src/mcp/mod.rs b/codex-rs/codex-mcp/src/mcp/mod.rs
+index ffb797f26..ed8989d74 100644
+--- a/codex-rs/codex-mcp/src/mcp/mod.rs
++++ b/codex-rs/codex-mcp/src/mcp/mod.rs
+@@ -339,6 +339,7 @@ pub async fn read_mcp_resource(
+         tool_plugin_provenance(config),
+         auth,
+         /*elicitation_reviewer*/ None,
++        /*notification_handler*/ None,
+         crate::elicitation::ElicitationRequestRouter::default(),
+     )
+     .await;
+@@ -416,6 +417,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
+         tool_plugin_provenance,
+         auth,
+         /*elicitation_reviewer*/ None,
++        /*notification_handler*/ None,
+         crate::elicitation::ElicitationRequestRouter::default(),
+     )
+     .await;
+diff --git a/codex-rs/codex-mcp/src/rmcp_client.rs b/codex-rs/codex-mcp/src/rmcp_client.rs
+index 37819203f..13caf6459 100644
+--- a/codex-rs/codex-mcp/src/rmcp_client.rs
++++ b/codex-rs/codex-mcp/src/rmcp_client.rs
+@@ -807,9 +807,10 @@ async fn start_server_task(
+     );
+ 
+     let send_elicitation = elicitation_requests.make_sender(server_name.clone(), tx_event);
++    let send_notification = elicitation_requests.make_notification_sender(server_name.clone());
+ 
+     let initialize_result = client
+-        .initialize(params, startup_timeout, send_elicitation)
++        .initialize(params, startup_timeout, send_elicitation, send_notification)
+         .await
+         .map_err(StartupOutcomeError::from)?;
+ 
+diff --git a/codex-rs/core/src/connectors.rs b/codex-rs/core/src/connectors.rs
+index b45cc841a..3d0f49b90 100644
+--- a/codex-rs/core/src/connectors.rs
++++ b/codex-rs/core/src/connectors.rs
+@@ -283,6 +283,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
+         ToolPluginProvenance::default(),
+         auth.as_ref(),
+         /*elicitation_reviewer*/ None,
++        /*notification_handler*/ None,
+         codex_mcp::ElicitationRequestRouter::default(),
+     )
+     .await;
+diff --git a/codex-rs/core/src/mcp_skill_dependencies.rs b/codex-rs/core/src/mcp_skill_dependencies.rs
+index 61d5c54a5..b8a0bf74a 100644
+--- a/codex-rs/core/src/mcp_skill_dependencies.rs
++++ b/codex-rs/core/src/mcp_skill_dependencies.rs
+@@ -1,5 +1,6 @@
+ use std::collections::HashMap;
+ use std::collections::HashSet;
++use std::sync::Arc;
+ 
+ use codex_config::ConfigEditsBuilder;
+ use codex_config::McpServerConfig;
+@@ -32,7 +33,7 @@ const MCP_DEPENDENCY_OPTION_INSTALL: &str = "Install";
+ const MCP_DEPENDENCY_OPTION_SKIP: &str = "Continue anyway";
+ 
+ pub(crate) async fn maybe_prompt_and_install_mcp_dependencies(
+-    sess: &Session,
++    sess: &Arc<Session>,
+     turn_context: &TurnContext,
+     cancellation_token: &CancellationToken,
+     mentioned_skills: &[SkillMetadata],
+@@ -79,7 +80,7 @@ pub(crate) async fn maybe_prompt_and_install_mcp_dependencies(
+ }
+ 
+ pub(crate) async fn maybe_install_mcp_dependencies(
+-    sess: &Session,
++    sess: &Arc<Session>,
+     turn_context: &TurnContext,
+     config: &crate::config::Config,
+     mentioned_skills: &[SkillMetadata],
+diff --git a/codex-rs/core/src/mcp_tool_call_tests.rs b/codex-rs/core/src/mcp_tool_call_tests.rs
+index 6b642b1cd..8cbd457a6 100644
+--- a/codex-rs/core/src/mcp_tool_call_tests.rs
++++ b/codex-rs/core/src/mcp_tool_call_tests.rs
+@@ -1439,6 +1439,7 @@ async fn host_owned_codex_apps_manager(
+         codex_mcp::ToolPluginProvenance::default(),
+         auth.as_ref(),
+         /*elicitation_reviewer*/ None,
++        /*notification_handler*/ None,
+         codex_mcp::ElicitationRequestRouter::default(),
+     )
+     .await;
+diff --git a/codex-rs/core/src/session/mcp.rs b/codex-rs/core/src/session/mcp.rs
+index 25d95e30e..9834270fe 100644
+--- a/codex-rs/core/src/session/mcp.rs
++++ b/codex-rs/core/src/session/mcp.rs
+@@ -1,8 +1,12 @@
+ use super::*;
++use crate::session::handlers::user_input_or_turn;
+ use codex_exec_server::ResolvedSelectedCapabilityRoot;
+ use codex_mcp::ElicitationReviewRequest;
+ use codex_mcp::ElicitationReviewer;
+ use codex_mcp::ElicitationReviewerHandle;
++use codex_mcp::McpChannelNotification;
++use codex_mcp::McpNotificationHandler;
++use codex_mcp::McpNotificationHandlerHandle;
+ use codex_protocol::capabilities::CapabilityRootLocation;
+ use codex_protocol::config_types::ApprovalsReviewer;
+ use codex_protocol::mcp_approval_meta::APPROVAL_KIND_KEY as MCP_ELICITATION_APPROVAL_KIND_KEY;
+@@ -40,6 +44,10 @@ struct GuardianMcpElicitationReviewer {
+     session: std::sync::Weak<Session>,
+ }
+ 
++struct ChannelMcpNotificationHandler {
++    session: std::sync::Weak<Session>,
++}
++
+ pub(crate) struct McpServerElicitationOutcome {
+     pub(crate) response: Option<ElicitationResponse>,
+     pub(crate) sent: bool,
+@@ -60,6 +68,14 @@ impl GuardianMcpElicitationReviewer {
+     }
+ }
+ 
++impl ChannelMcpNotificationHandler {
++    fn new(session: &Arc<Session>) -> Self {
++        Self {
++            session: Arc::downgrade(session),
++        }
++    }
++}
++
+ impl ElicitationReviewer for GuardianMcpElicitationReviewer {
+     fn review(
+         &self,
+@@ -75,6 +91,86 @@ impl ElicitationReviewer for GuardianMcpElicitationReviewer {
+     }
+ }
+ 
++impl McpNotificationHandler for ChannelMcpNotificationHandler {
++    fn handle(
++        &self,
++        notification: McpChannelNotification,
++    ) -> BoxFuture<'static, anyhow::Result<()>> {
++        let session = self.session.clone();
++        Box::pin(async move {
++            let Some(session) = session.upgrade() else {
++                return Ok(());
++            };
++            let text = format_mcp_channel_notification(notification)?;
++            user_input_or_turn(
++                &session,
++                new_submission_id(),
++                Op::UserInput {
++                    items: vec![UserInput::Text {
++                        text,
++                        text_elements: Vec::new(),
++                    }],
++                    final_output_json_schema: None,
++                    responsesapi_client_metadata: None,
++                    additional_context: Default::default(),
++                    thread_settings: Default::default(),
++                },
++                None,
++            )
++            .await;
++            Ok(())
++        })
++    }
++}
++
++fn format_mcp_channel_notification(
++    notification: McpChannelNotification,
++) -> anyhow::Result<String> {
++    let mut attributes = vec![format!(
++        "source=\"{}\"",
++        xml_escape_attribute(&notification.server_name)
++    )];
++    if notification.method != "notifications/claude/channel" {
++        attributes.push(format!(
++            "method=\"{}\"",
++            xml_escape_attribute(&notification.method)
++        ));
++    }
++    if let Some(serde_json::Value::Object(meta)) = notification.meta {
++        let mut meta = meta.into_iter().collect::<Vec<_>>();
++        meta.sort_by(|(left, _), (right, _)| left.cmp(right));
++        for (key, value) in meta {
++            let value = match value {
++                serde_json::Value::String(value) => value,
++                value => serde_json::to_string(&value)?,
++            };
++            attributes.push(format!(
++                "{}=\"{}\"",
++                xml_escape_attribute(&key),
++                xml_escape_attribute(&value)
++            ));
++        }
++    }
++    Ok(format!(
++        "<channel {}>{}</channel>",
++        attributes.join(" "),
++        xml_escape_text(&notification.content)
++    ))
++}
++
++fn xml_escape_text(value: &str) -> String {
++    value
++        .replace('&', "&amp;")
++        .replace('<', "&lt;")
++        .replace('>', "&gt;")
++}
++
++fn xml_escape_attribute(value: &str) -> String {
++    xml_escape_text(value)
++        .replace('"', "&quot;")
++        .replace('\'', "&apos;")
++}
++
+ impl Session {
+     pub(crate) async fn runtime_mcp_config(&self, config: &Config) -> McpConfig {
+         let environments = self.services.turn_environments.snapshot().await;
+@@ -191,6 +287,10 @@ impl Session {
+         Arc::new(GuardianMcpElicitationReviewer::new(self))
+     }
+ 
++    pub(crate) fn mcp_notification_handler(self: &Arc<Self>) -> McpNotificationHandlerHandle {
++        Arc::new(ChannelMcpNotificationHandler::new(self))
++    }
++
+     #[expect(
+         clippy::await_holding_invalid_type,
+         reason = "active turn checks and turn state updates must remain atomic"
+@@ -307,7 +407,7 @@ impl Session {
+     }
+ 
+     async fn refresh_mcp_servers_inner(
+-        &self,
++        self: &Arc<Self>,
+         turn_context: &TurnContext,
+         mcp_config: McpConfig,
+         environments: &TurnEnvironmentSnapshot,
+@@ -369,6 +469,7 @@ impl Session {
+             tool_plugin_provenance,
+             auth.as_ref(),
+             elicitation_reviewer,
++            Some(self.mcp_notification_handler()),
+             current_runtime.manager().elicitation_router(),
+         )
+         .await;
+@@ -387,7 +488,7 @@ impl Session {
+         reason = "MCP runtime refresh and publication must remain serialized"
+     )]
+     pub(crate) async fn refresh_mcp_servers_if_requested(
+-        &self,
++        self: &Arc<Self>,
+         turn_context: &TurnContext,
+         elicitation_reviewer: Option<ElicitationReviewerHandle>,
+     ) {
+@@ -504,7 +605,7 @@ impl Session {
+         reason = "MCP runtime refresh and publication must remain serialized"
+     )]
+     pub(crate) async fn refresh_mcp_servers_now(
+-        &self,
++        self: &Arc<Self>,
+         turn_context: &TurnContext,
+         refresh_config: &Config,
+         elicitation_reviewer: Option<ElicitationReviewerHandle>,
+diff --git a/codex-rs/core/src/session/mcp_tests.rs b/codex-rs/core/src/session/mcp_tests.rs
+index 5e85b92f4..661e1da38 100644
+--- a/codex-rs/core/src/session/mcp_tests.rs
++++ b/codex-rs/core/src/session/mcp_tests.rs
+@@ -42,6 +42,39 @@ fn form_request(meta: Option<Meta>) -> ElicitationReviewRequest {
+     }
+ }
+ 
++#[test]
++fn channel_notification_formats_claude_channel_as_user_input() {
++    let notification = McpChannelNotification {
++        server_name: "packages/mcp".to_string(),
++        method: "notifications/claude/channel".to_string(),
++        content: "done <ok> & ready".to_string(),
++        meta: Some(json!({
++            "run_id": 123,
++            "severity": "info",
++        })),
++    };
++
++    assert_eq!(
++        format_mcp_channel_notification(notification).expect("notification should format"),
++        "<channel source=\"packages/mcp\" run_id=\"123\" severity=\"info\">done &lt;ok&gt; &amp; ready</channel>"
++    );
++}
++
++#[test]
++fn channel_notification_preserves_non_claude_method() {
++    let notification = McpChannelNotification {
++        server_name: "packages/mcp".to_string(),
++        method: "notifications/codex/channel".to_string(),
++        content: "hello".to_string(),
++        meta: None,
++    };
++
++    assert_eq!(
++        format_mcp_channel_notification(notification).expect("notification should format"),
++        "<channel source=\"packages/mcp\" method=\"notifications/codex/channel\">hello</channel>"
++    );
++}
++
+ #[test]
+ fn guardian_elicitation_review_request_builds_mcp_tool_call() {
+     let request = form_request(guardian_meta(Some(json!({
+diff --git a/codex-rs/core/src/session/session.rs b/codex-rs/core/src/session/session.rs
+index 5e7046b14..7bda042a6 100644
+--- a/codex-rs/core/src/session/session.rs
++++ b/codex-rs/core/src/session/session.rs
+@@ -1215,6 +1215,7 @@ impl Session {
+                 tool_plugin_provenance,
+                 auth,
+                 Some(sess.mcp_elicitation_reviewer()),
++                Some(sess.mcp_notification_handler()),
+                 codex_mcp::ElicitationRequestRouter::default(),
+             )
+             .instrument(info_span!(
+diff --git a/codex-rs/rmcp-client/src/elicitation_client_service.rs b/codex-rs/rmcp-client/src/elicitation_client_service.rs
+index 2227ee4d6..7a73e5ea6 100644
+--- a/codex-rs/rmcp-client/src/elicitation_client_service.rs
++++ b/codex-rs/rmcp-client/src/elicitation_client_service.rs
+@@ -23,6 +23,7 @@ use crate::rmcp_client::Elicitation;
+ use crate::rmcp_client::ElicitationPauseState;
+ use crate::rmcp_client::ElicitationResponse;
+ use crate::rmcp_client::SendElicitation;
++use crate::rmcp_client::SendNotification;
+ 
+ const MCP_PROGRESS_TOKEN_META_KEY: &str = "progressToken";
+ const OPENAI_FORM_METHOD: &str = "openai/form";
+@@ -48,6 +49,7 @@ impl ElicitationClientService {
+     pub(crate) fn new(
+         client_info: ClientInfo,
+         send_elicitation: SendElicitation,
++        send_notification: SendNotification,
+         pause_state: ElicitationPauseState,
+     ) -> Self {
+         let supports_openai_form = client_info
+@@ -60,6 +62,7 @@ impl ElicitationClientService {
+             handler: LoggingClientHandler::new(
+                 client_info,
+                 clone_send_elicitation(Arc::clone(&send_elicitation)),
++                send_notification,
+             ),
+             supports_openai_form,
+             send_elicitation,
+diff --git a/codex-rs/rmcp-client/src/lib.rs b/codex-rs/rmcp-client/src/lib.rs
+index e57eb3686..a11d8b0ea 100644
+--- a/codex-rs/rmcp-client/src/lib.rs
++++ b/codex-rs/rmcp-client/src/lib.rs
+@@ -40,6 +40,7 @@ pub use rmcp_client::ElicitationResponse;
+ pub use rmcp_client::ListToolsWithConnectorIdResult;
+ pub use rmcp_client::RmcpClient;
+ pub use rmcp_client::SendElicitation;
++pub use rmcp_client::SendNotification;
+ pub use rmcp_client::ToolWithConnectorId;
+ pub use startup_error::is_authentication_required_error;
+ pub use stdio_server_launcher::ExecutorStdioServerLauncher;
+diff --git a/codex-rs/rmcp-client/src/logging_client_handler.rs b/codex-rs/rmcp-client/src/logging_client_handler.rs
+index e575966cf..e676540a5 100644
+--- a/codex-rs/rmcp-client/src/logging_client_handler.rs
++++ b/codex-rs/rmcp-client/src/logging_client_handler.rs
+@@ -19,18 +19,25 @@ use tracing::warn;
+ 
+ use crate::rmcp_client::Elicitation;
+ use crate::rmcp_client::SendElicitation;
++use crate::rmcp_client::SendNotification;
+ 
+ #[derive(Clone)]
+ pub(crate) struct LoggingClientHandler {
+     client_info: ClientInfo,
+     send_elicitation: Arc<SendElicitation>,
++    send_notification: Arc<SendNotification>,
+ }
+ 
+ impl LoggingClientHandler {
+-    pub(crate) fn new(client_info: ClientInfo, send_elicitation: SendElicitation) -> Self {
++    pub(crate) fn new(
++        client_info: ClientInfo,
++        send_elicitation: SendElicitation,
++        send_notification: SendNotification,
++    ) -> Self {
+         Self {
+             client_info,
+             send_elicitation: Arc::new(send_elicitation),
++            send_notification: Arc::new(send_notification),
+         }
+     }
+ }
+@@ -134,4 +141,15 @@ impl ClientHandler for LoggingClientHandler {
+             }
+         }
+     }
++
++    async fn on_custom_notification(
++        &self,
++        notification: rmcp::model::CustomNotification,
++        _context: NotificationContext<RoleClient>,
++    ) {
++        let method = notification.method.clone();
++        if let Err(error) = (self.send_notification)(notification).await {
++            warn!("MCP server custom notification handler failed (method: {method}): {error}");
++        }
++    }
+ }
+diff --git a/codex-rs/rmcp-client/src/rmcp_client.rs b/codex-rs/rmcp-client/src/rmcp_client.rs
+index c6527990f..0e40f2a78 100644
+--- a/codex-rs/rmcp-client/src/rmcp_client.rs
++++ b/codex-rs/rmcp-client/src/rmcp_client.rs
+@@ -304,6 +304,9 @@ pub type SendElicitation = Box<
+     dyn Fn(RequestId, Elicitation) -> BoxFuture<'static, Result<ElicitationResponse>> + Send + Sync,
+ >;
+ 
++pub type SendNotification =
++    Box<dyn Fn(CustomNotification) -> BoxFuture<'static, Result<()>> + Send + Sync>;
++
+ pub struct ToolWithConnectorId {
+     pub tool: Tool,
+     pub connector_id: Option<String>,
+@@ -426,10 +429,12 @@ impl RmcpClient {
+         params: InitializeRequestParams,
+         timeout: Option<Duration>,
+         send_elicitation: SendElicitation,
++        send_notification: SendNotification,
+     ) -> Result<InitializeResult> {
+         let client_service = ElicitationClientService::new(
+             params.clone(),
+             send_elicitation,
++            send_notification,
+             self.elicitation_pause_state.clone(),
+         );
+         let pending_transport = {
+diff --git a/codex-rs/rmcp-client/tests/process_group_cleanup.rs b/codex-rs/rmcp-client/tests/process_group_cleanup.rs
+index ac446233f..b8ccae69a 100644
+--- a/codex-rs/rmcp-client/tests/process_group_cleanup.rs
++++ b/codex-rs/rmcp-client/tests/process_group_cleanup.rs
+@@ -150,6 +150,7 @@ async fn shutdown_kills_initialized_stdio_server_with_in_flight_operation() -> R
+                 }
+                 .boxed()
+             }),
++            Box::new(|_| async { Ok(()) }.boxed()),
+         )
+         .await?;
+ 
+diff --git a/codex-rs/rmcp-client/tests/resources.rs b/codex-rs/rmcp-client/tests/resources.rs
+index ef7c2f7cd..642a5b932 100644
+--- a/codex-rs/rmcp-client/tests/resources.rs
++++ b/codex-rs/rmcp-client/tests/resources.rs
+@@ -68,6 +68,7 @@ async fn rmcp_client_can_list_and_read_resources() -> anyhow::Result<()> {
+                 }
+                 .boxed()
+             }),
++            Box::new(|_| async { Ok(()) }.boxed()),
+         )
+         .await?;
+ 
+diff --git a/codex-rs/rmcp-client/tests/streamable_http_test_support.rs b/codex-rs/rmcp-client/tests/streamable_http_test_support.rs
+index 87a52f55d..3724a4d6e 100644
+--- a/codex-rs/rmcp-client/tests/streamable_http_test_support.rs
++++ b/codex-rs/rmcp-client/tests/streamable_http_test_support.rs
+@@ -120,6 +120,7 @@ pub(crate) async fn initialize_client(client: &RmcpClient) -> anyhow::Result<()>
+                 }
+                 .boxed()
+             }),
++            Box::new(|_| async { Ok(()) }.boxed()),
+         )
+         .await?;
+     Ok(())
+@@ -158,6 +159,7 @@ pub(crate) async fn create_remote_client(
+                 }
+                 .boxed()
+             }),
++            Box::new(|_| async { Ok(()) }.boxed()),
+         )
+         .await?;
+ 

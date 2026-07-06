@@ -4,13 +4,24 @@
   languages,
   writePythonApplication,
   rustWorkspaceFor,
-  clippy-fork,
+  clippy-src,
   repoRoot,
   lists,
   # Shared pins reader, threaded through to policy.nix (see its arg doc).
   pins,
 }: let
   inherit (builtins) toString;
+
+  # llm-clippy bootstraps before the full `ix` handle exists (below cargoUnit /
+  # rustWorkspace), so build the patched-source util here to hand it the same
+  # `ix.patchedSrc` the packageSet path gets. It applies packages/llm-clippy/patches
+  # to the raw `clippy-src` upstream. Reached via `repoRoot` (not a `../` literal,
+  # which the astlog `no-parent-path` rule bans).
+  patchedSrcFor = pkgs:
+    import (repoRoot + "/lib/util/patched-src.nix") {
+      inherit lib;
+      inherit (pkgs) applyPatches;
+    };
 
   repoRustToolchainFile = lib.importTOML (repoRoot + "/rust-toolchain.toml");
   repoRustChannel = repoRustToolchainFile.toolchain.channel;
@@ -26,13 +37,15 @@
         pins
         ;
       # llm-clippy bootstraps before cargoUnit / rustWorkspace exist, so the
-      # `ix` closure it receives carries only `buildRustPackage`.
+      # `ix` closure it receives carries only `buildRustPackage` plus the
+      # `patchedSrc` util it needs to apply its patch series to `clippy-src`.
       # `buildIxRustTool` adds the richer surface for packages that need it.
       clippyPackage = pkgs.callPackage (packagePath "llm-clippy") {
         ix = {
           inherit buildRustPackage pkgs;
+          patchedSrc = patchedSrcFor pkgs;
         };
-        inherit clippy-fork;
+        inherit clippy-src;
       };
       rustToolchain = languages.rust.toolchain pkgs {
         channel = "nightly";

@@ -1,0 +1,115 @@
+name: Sync fork patches
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Every 3 hours. De-forked packages pin an upstream `flake = false` input and
+    # keep their delta as an in-repo patch series (lib/fork-packages.nix). This
+    # job bumps the base of each auto-updatable fork and regenerates its series
+    # through a real `git rebase` (packages/rebase-patches). It is separate from
+    # update-flake-lock.yml because a bare `nix flake update` of a fork input
+    # would leave stale patches and fail the patched-src check; here the bump and
+    # the rebase move together. clippy-src is excluded (autoUpdate = false): it
+    # is nightly-toolchain-coupled and rev-pinned, bumped by hand alongside the
+    # rust toolchain, never free-floated by the cron.
+    - cron: "23 */3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-sync
+  cancel-in-progress: false
+
+jobs:
+  fork-sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # `accept-flake-config` lets the job consume the flake's cache.ix.dev
+      # substituter without a prompt.
+      - name: Install Determinate Nix
+        uses: DeterminateSystems/determinate-nix-action@629b284231c2a82554b724e357e47fc6020833c8 # v3
+        with:
+          extra-conf: |
+            accept-flake-config = true
+            extra-substituters = https://cache.ix.dev
+            extra-trusted-public-keys = ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI=
+
+      # Bump base + regenerate patches for every auto-updatable fork, driven by
+      # lib/fork-packages.nix (no fork names hardcoded here). Each fork's
+      # `passthru.updateScript` does `nix flake update <input>` then
+      # `rebase-patches <name>`; a rebase that hits an unresolved conflict fails
+      # loudly (naming the conflicting patch) and aborts the job, so a broken PR
+      # is never opened. Runs the two updaters directly rather than the whole
+      # `.#update` DAG so this PR carries only the fork sync.
+      - name: Sync fork patches
+        run: |
+          set -euo pipefail
+          # Names of forks the cron may bump (autoUpdate = true), from the single
+          # source of truth. clippy is filtered out by autoUpdate = false.
+          mapfile -t forks < <(
+            nix eval --json '.#lib.forkPackages' \
+              --apply 'fs: builtins.filter (f: f.autoUpdate) fs' \
+              | nix run nixpkgs#jq -- -r '.[].name'
+          )
+          echo "auto-updatable forks: ${forks[*]}"
+          for fork in "${forks[@]}"; do
+            echo "::group::rebase-patches: $fork"
+            # `<pkg>.updateScript` = flake update <input> + rebase-patches <name>.
+            nix run ".#$fork.updateScript"
+            echo "::endgroup::"
+          done
+
+      # The conflict gate: prove each patched source still applies against its
+      # freshly bumped base before opening the PR. Same derivation the real
+      # build consumes, so green here means the build gets an identical tree.
+      # Runs on the ubuntu (x86_64-linux) runner.
+      - name: Verify patched sources apply
+        run: |
+          set -euo pipefail
+          mapfile -t forks < <(
+            nix eval --json '.#lib.forkPackages' \
+              --apply 'fs: builtins.filter (f: f.autoUpdate) fs' \
+              | nix run nixpkgs#jq -- -r '.[].name'
+          )
+          for fork in "${forks[@]}"; do
+            echo "::group::nix build .#checks.x86_64-linux.patched-src-$fork"
+            nix build ".#checks.x86_64-linux.patched-src-$fork" --no-link
+            echo "::endgroup::"
+          done
+
+      # One rolling PR reusing the `fork-sync` branch, so each run advances the
+      # same PR instead of stacking. create-pull-request no-ops on an empty diff
+      # (no fork base moved). `token`: a PR opened with the default GITHUB_TOKEN
+      # does not trigger `pull_request` workflows (flake-check), so branch
+      # protection blocks the merge; set an `AUTOBUMP_TOKEN` repo secret (PAT or
+      # GitHub App token, with permission to create PRs) to make the PR run CI.
+      # Without it this falls back to GITHUB_TOKEN and a maintainer must
+      # re-trigger flake-check. Repo admins may also need to enable "Allow GitHub
+      # Actions to create and approve pull requests" once under Settings ->
+      # Actions -> General.
+      - name: Open pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ secrets.AUTOBUMP_TOKEN || github.token }}
+          base: main
+          branch: fork-sync
+          delete-branch: true
+          commit-message: "fork-sync: bump upstream bases and regenerate patches"
+          title: "fork-sync: bump upstream bases and regenerate patches"
+          body: |
+            Automated fork-sync: bump each auto-updatable de-forked package's upstream base and regenerate its in-repo patch series through a real `git rebase`.
+
+            Driven by `lib/fork-packages.nix` (`autoUpdate = true`): currently **codex** (`openai/codex`) and **btop** (`aristocratos/btop`). **clippy is excluded** (`autoUpdate = false`): it is nightly-toolchain-coupled and rev-pinned, bumped by hand alongside the rust toolchain via `nix run .#rebase-patches -- clippy`.
+
+            Each `patched-src-<name>` check was built against the freshly bumped base in this job, so the series still applies. The PR's `flake-check` CI rebuilds the full packages.
+
+            If this PR shows no `flake-check` run, the repo needs the `AUTOBUMP_TOKEN` secret and/or "Allow GitHub Actions to create and approve pull requests" enabled once.
+
+            Auto-bump, made with Claude Opus 4.8.

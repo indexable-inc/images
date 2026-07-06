@@ -15,49 +15,49 @@
     "btop-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1780871699,
-        "narHash": "sha256-dUM7UGO6lzT1At7m2xnnJD9mFbyFO7gjHonVE++YK58=",
-        "owner": "indexable-inc",
+        "lastModified": 1780742123,
+        "narHash": "sha256-YeW4bogDBLN9UQbVOT+vG7yKxYwwWmYP6gxnbolo6Xo=",
+        "owner": "aristocratos",
         "repo": "btop",
-        "rev": "711f4a128b1b7009ee9cf0fa179a586c82586613",
+        "rev": "d03b839ec2b562226731651d4921ee0419af2338",
         "type": "github"
       },
       "original": {
-        "owner": "indexable-inc",
+        "owner": "aristocratos",
         "repo": "btop",
-        "rev": "711f4a128b1b7009ee9cf0fa179a586c82586613",
+        "rev": "d03b839ec2b562226731651d4921ee0419af2338",
         "type": "github"
       }
     },
-    "clippy-fork": {
+    "clippy-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1780618824,
-        "narHash": "sha256-g9L5Uo3kMZIVwo3W5UOPuJvxakm63+F2pvrud3bPigY=",
-        "owner": "indexable-inc",
-        "repo": "clippy",
-        "rev": "c2308e380ab6213e522d8a04c31b3ceabd518a8a",
+        "lastModified": 1779864937,
+        "narHash": "sha256-12B5ImXg/JDzNHXha2RoVTNmuXdWmLx71TAmqa/aTCo=",
+        "owner": "rust-lang",
+        "repo": "rust-clippy",
+        "rev": "512551c839fc711fc925c8a862a9abd4bde0812f",
         "type": "github"
       },
       "original": {
-        "owner": "indexable-inc",
-        "repo": "clippy",
+        "owner": "rust-lang",
+        "repo": "rust-clippy",
+        "rev": "512551c839fc711fc925c8a862a9abd4bde0812f",
         "type": "github"
       }
     },
     "codex-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1783282574,
-        "narHash": "sha256-st9kcagTH5YDBmWDx1MzOPqel+MFtCQNe1W9R0wl8cU=",
-        "owner": "indexable-inc",
+        "lastModified": 1783210073,
+        "narHash": "sha256-FA5J7bZNNN+wb0FwL/t6nI6Bwejb2ICwYEcOyKAa1Rc=",
+        "owner": "openai",
         "repo": "codex",
-        "rev": "7d08748d54f3be979371e1d7b8659ab134d4189a",
+        "rev": "be33f80bc65159c094ecd06bf155afa3061ce23d",
         "type": "github"
       },
       "original": {
-        "owner": "indexable-inc",
-        "ref": "indexable/mcp-channel-notifications",
+        "owner": "openai",
         "repo": "codex",
         "type": "github"
       }
@@ -391,7 +391,7 @@
       "inputs": {
         "bench-filesystem": "bench-filesystem",
         "btop-src": "btop-src",
-        "clippy-fork": "clippy-fork",
+        "clippy-src": "clippy-src",
         "codex-src": "codex-src",
         "drgn-src": "drgn-src",
         "examples": "examples",

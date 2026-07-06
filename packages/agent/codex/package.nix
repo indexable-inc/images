@@ -12,4 +12,7 @@
   # top of that same base, without changing what the overlay hands other code.
   flake = true;
   overlay = false;
+  # Joins `nix run .#update`: bump codex-src and regenerate the patch series via
+  # passthru.updateScript (see default.nix / lib/fork-updater.nix).
+  updateScript = true;
 }

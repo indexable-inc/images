@@ -76,21 +76,34 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # Fork of rust-lang/rust-clippy with extra restriction lints tuned for
-    # LLM-assisted codebases. Pinned in flake.lock so `nix flake update`
-    # bumps it; consumed as the source tree for `packages/llm-clippy`.
-    clippy-fork = {
-      url = "github:indexable-inc/clippy";
+    # Upstream rust-lang/rust-clippy, patched in-repo with the restriction lints
+    # tuned for LLM-assisted codebases (packages/llm-clippy/patches). Pinned BY
+    # REV, not a floating branch: clippy links against rustc_private and tracks
+    # nightly rustc, so its base must move in lockstep with the pinned nightly in
+    # rust-toolchain.toml, never free-float under a blanket `nix flake update`.
+    # Bump this rev only inside the same change that bumps the rust toolchain,
+    # then `nix run .#rebase-patches -- llm-clippy` to regenerate the series.
+    clippy-src = {
+      url = "github:rust-lang/rust-clippy/512551c839fc711fc925c8a862a9abd4bde0812f";
       flake = false;
     };
 
+    # Upstream openai/codex, patched in-repo (packages/agent/codex/patches).
+    # Pinned at the merge-base of the old fork branch; `nix flake update
+    # codex-src` bumps the base and `nix run .#rebase-patches -- codex`
+    # regenerates the series.
     codex-src = {
-      url = "github:indexable-inc/codex?ref=indexable/mcp-channel-notifications";
+      url = "github:openai/codex";
       flake = false;
     };
 
+    # Upstream aristocratos/btop, patched in-repo (packages/terminal/btop/patches).
+    # Pinned at the fork's merge-base rev for a faithful migration (the fork's
+    # base was 14 behind upstream main; rebasing onto newer main is a separate,
+    # deliberate change, not this one). `nix flake update btop-src` +
+    # `nix run .#rebase-patches -- btop` to advance later.
     btop-src = {
-      url = "github:indexable-inc/btop/711f4a128b1b7009ee9cf0fa179a586c82586613";
+      url = "github:aristocratos/btop/d03b839ec2b562226731651d4921ee0419af2338";
       flake = false;
     };
 
@@ -191,7 +204,7 @@
     nu-jupyter-kernel-src,
     launchk-src,
     snix-src,
-    clippy-fork,
+    clippy-src,
     codex-src,
     ghostty,
     skills,
@@ -273,7 +286,7 @@
         nu-jupyter-kernel-src
         launchk-src
         snix-src
-        clippy-fork
+        clippy-src
         codex-src
         ghostty
         ;

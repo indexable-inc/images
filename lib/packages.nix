@@ -5,7 +5,7 @@
   cargoUnitFor,
   goUnitFor,
   rustWorkspaceFor,
-  clippy-fork,
+  clippy-src,
   ghostty,
 }: pkgs: let
   packageSystem = pkgs.stdenv.hostPlatform.system;
@@ -20,12 +20,16 @@
       cargoUnit = cargoUnitFor pkgs;
       goUnit = goUnitFor pkgs;
       rustWorkspace = rustWorkspaceFor pkgs;
+      # Patched-source builder bound to the caller's pkgs, so codex / btop /
+      # llm-clippy apply their patch series against a source that builds for the
+      # consuming system rather than the top-level x86_64-linux one.
+      patchedSrc = ixSpecialArgs.patchedSrcFor pkgs;
     };
   context = {
     inherit
       pkgs
       packageSystem
-      clippy-fork
+      clippy-src
       ghostty
       ixForPackages
       ;

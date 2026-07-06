@@ -5,8 +5,13 @@
   makeBinaryWrapper,
   runCommand,
   git,
+  nix,
   symlinkJoin,
   formats,
+  # Nushell writer for `passthru.updateScript`, pre-bound to the caller's pkgs
+  # on the flake path (lib/packages.nix); `null` on the overlay path, which is
+  # the signal to omit the fork updater (matches the pins.mkUpdater posture).
+  updateScriptWriter ? null,
   binName ? "codex",
   # Shell globs the (claude-only) worktree-guard protects, threaded into the
   # shared hook module so both wrappers feed it the same inputs. Unused in the
@@ -25,7 +30,16 @@
   # sibling is out of scope, so the wrapper bakes no MCP server there (the same
   # fallback the claude-code wrapper uses).
   repoPackages ? {},
-  codexSrc ? ix.codexSrc,
+  # Upstream openai/codex (codex-src input) with the in-repo patch series
+  # (./patches) applied. De-forking replacement for the old
+  # `indexable-inc/codex` branch input; the single "route channel notifications
+  # into chat" commit is now 0001-*.patch.
+  codexSrc ?
+    ix.patchedSrc {
+      name = "codex";
+      src = ix.codexSrc;
+      patchDir = ./patches;
+    },
   # Rule names dropped from the default house prompt. Only affects the computed
   # `systemPrompt` default below; ignored when `systemPrompt` is passed
   # explicitly.
@@ -154,7 +168,11 @@
   codexWithNotifications = codex.overrideAttrs (finalAttrs: previousAttrs: {
     version = "0.0.0";
     src = codexSrc;
-    sourceRoot = "source/codex-rs";
+    # `unpackPhase` names the unpacked dir after the src store path. The old
+    # fork input unpacked to `source/`; the patched-src derivation unpacks to
+    # its own name (`codex-patched`), so derive the sourceRoot from the src's
+    # name rather than hardcoding `source/`.
+    sourceRoot = "${codexSrc.name}/codex-rs";
     cargoHash = "sha256-mLpfLi5Wu/t/D8il/5xkDqCTHIeaJZ2OYMZmMIsg7E0=";
     # buildRustPackage carries cargoDeps through overrideAttrs, so retarget the
     # nested fixed-output staging derivation when swapping the upstream source.
@@ -175,8 +193,8 @@
     meta =
       previousAttrs.meta
       // {
-        homepage = "https://github.com/indexable-inc/codex";
-        changelog = "https://github.com/indexable-inc/codex/commits/indexable/mcp-channel-notifications";
+        homepage = "https://github.com/openai/codex";
+        changelog = "https://github.com/openai/codex/commits/main";
       };
   });
 in
@@ -206,11 +224,26 @@ in
     '';
     # The codex hooks.json rendered from the shared declaration list, for a
     # consumer to deliver to `~/.codex/hooks.json` (see the `hooksJson` comment).
-    passthru = {
-      inherit hooksJson spec specValue;
-      modelInstructionsFile = effectiveModelInstructionsFile;
-      permissions = sharedPermissions.codex;
-    };
+    passthru =
+      {
+        inherit hooksJson spec specValue;
+        modelInstructionsFile = effectiveModelInstructionsFile;
+        permissions = sharedPermissions.codex;
+      }
+      # Fork updater (flake path only): bump codex-src and regenerate the patch
+      # series, so codex joins the registry-discovered `.#update` DAG. Omitted
+      # when the writer or rebase-patches sibling is out of scope (overlay path).
+      // lib.optionalAttrs (updateScriptWriter != null && repoPackages ? rebase-patches) {
+        updateScript =
+          ix.mkForkUpdater {
+            writeNushellApplication = updateScriptWriter;
+            inherit nix;
+            rebasePatches = repoPackages.rebase-patches;
+          } {
+            name = "codex";
+            input = "codex-src";
+          };
+      };
     meta =
       codexWithNotifications.meta
       // {

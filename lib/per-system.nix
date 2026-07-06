@@ -576,6 +576,30 @@
   repoPackages = ix.packageSetFor pkgs;
   inherit (repoPackages) site;
 
+  # De-forked patched sources exposed as `checks.<system>.patched-src-<name>`
+  # (the seconds-fast "does the series still apply" gate). Built from the same
+  # `ix.patchedSrc` the packages consume, against the same raw upstream inputs,
+  # so the check can never drift from the real build: green here means the build
+  # gets an identical patched tree. Driven by the one fork-package list so a new
+  # entry there joins this set with no change here. Each raw input is exposed on
+  # the `ix` handle as `<name>Src` (see lib/default.nix sharedHelpers).
+  patchedSrcFor' = ix.patchedSrcFor pkgs;
+  forkSrcInputs = {
+    codex = ix.codexSrc;
+    btop = ix.btopSrc;
+    clippy = ix.clippySrc;
+  };
+  patchedSrcChecks = lib.genAttrs' (import ./fork-packages.nix).forkPackages (
+    fork:
+      lib.nameValuePair "patched-src-${fork.name}" (
+        patchedSrcFor' {
+          inherit (fork) name;
+          src = forkSrcInputs.${fork.name};
+          patchDir = paths.root + "/${fork.patchDir}";
+        }
+      )
+  );
+
   # One general updater for every content source in the repo, run in parallel
   # via dag-runner (the same engine `lint` uses). The Minecraft catalog and
   # sound updaters are fixed apps; the pinned prebuilt-binary updaters
@@ -1368,14 +1392,19 @@ in {
   # Flat keying: one derivation per `checks.<system>.<name>`, as the flake schema
   # and `nix flake check` require. The `.#check` gate and blast-radius consume
   # the sharded `ciChecks` instead, so this output is not what CI enumerates.
-  checks = catalogFor rustPackageTestSets.flat;
+  # `patchedSrcChecks` is merged on EVERY system (not just x86_64-linux like the
+  # rest of `catalogFor`): the patched sources are cheap, platform-relevant
+  # derivations, so `nix build .#checks.aarch64-darwin.patched-src-clippy`
+  # validates the series against a local Darwin build right after a flake update.
+  checks = catalogFor rustPackageTestSets.flat // patchedSrcChecks;
   # Sharded keying for the memory-bounded CI evaluator (nix-fast-build /
   # nix-eval-jobs / blast-radius): each package's per-#[test] checks sit under one
   # `recurseForDerivations` group, so the evaluator lists cheap per-package names
   # at the root and forces each crate's manifest IFD in its own worker job
   # (ENG-2201). Not a `checks.<system>.<name>` output, because a non-derivation
-  # there fails the flake schema.
-  ciChecks = catalogFor rustPackageTestSets.sharded;
+  # there fails the flake schema. The patched-src checks are plain derivations,
+  # so they key identically in both views.
+  ciChecks = catalogFor rustPackageTestSets.sharded // patchedSrcChecks;
 
   formatter = pkgs.alejandra;
 

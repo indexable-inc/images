@@ -1,0 +1,165 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Sun, 17 May 2026 12:20:23 -0700
+Subject: [PATCH] Add non_trait_imports lint
+
+
+diff --git a/clippy_lints/src/declared_lints.rs b/clippy_lints/src/declared_lints.rs
+index e677892c9..0eb0033d9 100644
+--- a/clippy_lints/src/declared_lints.rs
++++ b/clippy_lints/src/declared_lints.rs
+@@ -590,6 +590,7 @@ pub static LINTS: &[&::declare_clippy_lint::LintInfo] = &[
+     crate::non_octal_unix_permissions::NON_OCTAL_UNIX_PERMISSIONS_INFO,
+     crate::non_send_fields_in_send_ty::NON_SEND_FIELDS_IN_SEND_TY_INFO,
+     crate::non_std_lazy_statics::NON_STD_LAZY_STATICS_INFO,
++    crate::non_trait_imports::NON_TRAIT_IMPORTS_INFO,
+     crate::non_zero_suggestions::NON_ZERO_SUGGESTIONS_INFO,
+     crate::nonstandard_macro_braces::NONSTANDARD_MACRO_BRACES_INFO,
+     crate::octal_escapes::OCTAL_ESCAPES_INFO,
+diff --git a/clippy_lints/src/lib.rs b/clippy_lints/src/lib.rs
+index 9f275df0f..1e7770b51 100644
+--- a/clippy_lints/src/lib.rs
++++ b/clippy_lints/src/lib.rs
+@@ -281,6 +281,7 @@ mod non_expressive_names;
+ mod non_octal_unix_permissions;
+ mod non_send_fields_in_send_ty;
+ mod non_std_lazy_statics;
++mod non_trait_imports;
+ mod non_zero_suggestions;
+ mod nonstandard_macro_braces;
+ mod octal_escapes;
+@@ -886,6 +887,7 @@ pub fn register_lint_passes(store: &mut rustc_lint::LintStore, conf: &'static Co
+         Box::new(|_| Box::new(manual_assert_eq::ManualAssertEq)),
+         Box::new(|_| Box::new(fallible_int_fallback::FallibleIntFallback)),
+         Box::new(|_| Box::new(drop_must_use::DropMustUse)),
++        Box::new(|_| Box::new(non_trait_imports::NonTraitImports)),
+         Box::new(move |_| {
+             Box::new(magic_number::MagicNumber::new(
+                 conf.allowed_magic_numbers.clone(),
+diff --git a/clippy_lints/src/non_trait_imports.rs b/clippy_lints/src/non_trait_imports.rs
+new file mode 100644
+index 000000000..a3a2d50fd
+--- /dev/null
++++ b/clippy_lints/src/non_trait_imports.rs
+@@ -0,0 +1,121 @@
++use clippy_utils::diagnostics::span_lint_and_sugg;
++use rustc_errors::Applicability;
++use rustc_hir::def::{DefKind, Res};
++use rustc_hir::{Item, ItemKind, UseKind};
++use rustc_lint::{LateContext, LateLintPass};
++use rustc_middle::ty::Visibility;
++use rustc_session::declare_lint_pass;
++use rustc_span::symbol::kw;
++
++declare_clippy_lint! {
++    /// ### What it does
++    /// Checks for `use` statements that import non-trait items.
++    ///
++    /// ### Why restrict this?
++    /// Prefer fully qualified paths at call sites (`addr::Addr`, `vm::Config`).
++    /// Only traits need `use` imports (as `_`) for method resolution.
++    /// Owner-type re-exports (`pub use addr::Addr`) are allowed when the
++    /// imported name matches the parent module name.
++    ///
++    /// ### Example
++    /// ```rust,ignore
++    /// use std::collections::HashMap;
++    ///
++    /// let m: HashMap<_, _> = HashMap::new();
++    /// ```
++    ///
++    /// Use instead:
++    /// ```rust,ignore
++    /// let m: std::collections::HashMap<_, _> = std::collections::HashMap::new();
++    /// ```
++    #[clippy::version = "1.86.0"]
++    pub NON_TRAIT_IMPORTS,
++    restriction,
++    "`use` items that import non-trait, non-owner-reexport items"
++}
++
++declare_lint_pass!(NonTraitImports => [NON_TRAIT_IMPORTS]);
++
++impl<'tcx> LateLintPass<'tcx> for NonTraitImports {
++    fn check_item(&mut self, cx: &LateContext<'tcx>, item: &'tcx Item<'tcx>) {
++        if item.span.from_expansion() {
++            return;
++        }
++
++        let ItemKind::Use(path, UseKind::Single(ident)) = item.kind else {
++            return;
++        };
++
++        // Allow trait imports (handled by unused_trait_names for the `as _` style)
++        if matches!(
++            path.res.type_ns,
++            Some(Res::Def(DefKind::Trait | DefKind::TraitAlias, _))
++        ) {
++            return;
++        }
++
++        // Allow underscore imports
++        if ident.name == kw::Underscore {
++            return;
++        }
++
++        // Allow pub owner-type re-exports: `pub use addr::Addr`
++        if is_pub_owner_reexport(cx, item, path) {
++            return;
++        }
++
++        let qualified = path
++            .segments
++            .iter()
++            .map(|s| s.ident.as_str())
++            .collect::<Vec<_>>()
++            .join("::");
++
++        span_lint_and_sugg(
++            cx,
++            NON_TRAIT_IMPORTS,
++            item.span,
++            "non-trait `use` import",
++            format!("remove and use `{qualified}` at call sites"),
++            String::new(),
++            Applicability::MachineApplicable,
++        );
++    }
++}
++
++fn is_pub_owner_reexport<'tcx>(
++    cx: &LateContext<'tcx>,
++    item: &Item<'tcx>,
++    path: &rustc_hir::UsePath<'tcx>,
++) -> bool {
++    // Must be visible beyond the parent module (pub, pub(crate), pub(super), etc.)
++    let module = cx.tcx.parent_module_from_def_id(item.owner_id.def_id);
++    if cx.tcx.visibility(item.owner_id.def_id) == Visibility::Restricted(module.to_def_id()) {
++        return false;
++    }
++
++    let segments = &path.segments;
++    if segments.len() < 2 {
++        return false;
++    }
++
++    let parent_module = segments[segments.len() - 2].ident.as_str();
++    let imported_name = segments[segments.len() - 1].ident.as_str();
++
++    names_match_owner(parent_module, imported_name)
++}
++
++/// Case-insensitive, underscore-ignoring match.
++/// addr/Addr, vm_config/VmConfig, open/open all match.
++fn names_match_owner(module_name: &str, type_name: &str) -> bool {
++    let module_lower: String = module_name
++        .chars()
++        .filter(|c| *c != '_')
++        .flat_map(|c| c.to_lowercase())
++        .collect();
++    let type_lower: String = type_name
++        .chars()
++        .flat_map(|c| c.to_lowercase())
++        .collect();
++    module_lower == type_lower
++}
