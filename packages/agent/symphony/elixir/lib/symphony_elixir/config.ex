@@ -82,14 +82,8 @@ defmodule SymphonyElixir.Config do
                               "none" leaves the run to fail against the
                               missing placement with no fallback.
 
-  Claude models (any node whose model is a Claude model, e.g.
-  claude-opus-4-8, runs through Claude Code instead of codex):
+  Catalog hot-reload:
 
-      ANTHROPIC_API_KEY       Anthropic API key billed for Claude Code turns.
-                              Required for any Claude-model node; absent fails
-                              the node with :anthropic_api_key_not_configured.
-      SYMPHONY_CLAUDE_COMMAND defaults to "claude"; the Claude Code CLI invoked
-                              non-interactively (`--print`).
       SYMPHONY_CATALOG_POLL_MS defaults to 1000
 
   Integrations:
@@ -185,8 +179,6 @@ defmodule SymphonyElixir.Config do
     # `:worker` role is read from the env in Application, not from here.
     :worker,
     :worker_select_label,
-    :anthropic_api_key,
-    :claude_command,
     :catalog_poll_ms,
     :linear_api_key,
     :linear_endpoint,
@@ -255,8 +247,6 @@ defmodule SymphonyElixir.Config do
             worker_room_host: String.t() | nil
           },
           worker_select_label: String.t() | nil,
-          anthropic_api_key: String.t() | nil,
-          claude_command: String.t(),
           catalog_poll_ms: pos_integer(),
           linear_api_key: String.t() | nil,
           linear_endpoint: String.t(),
@@ -404,9 +394,6 @@ defmodule SymphonyElixir.Config do
 
     worker_select_label = empty_to_nil(Keyword.get(opts, :worker_select_label) || System.get_env("SYMPHONY_WORKER_SELECT_LABEL"))
 
-    anthropic_api_key = empty_to_nil(Keyword.get(opts, :anthropic_api_key) || System.get_env("ANTHROPIC_API_KEY"))
-    claude_command = string_env(opts, :claude_command, "SYMPHONY_CLAUDE_COMMAND", "claude")
-
     catalog_poll_ms = int_env(opts, :catalog_poll_ms, "SYMPHONY_CATALOG_POLL_MS", 1_000)
 
     linear_api_key = Keyword.get(opts, :linear_api_key) || System.get_env("LINEAR_API_KEY")
@@ -495,8 +482,6 @@ defmodule SymphonyElixir.Config do
       placement_fallback: placement_fallback,
       worker: worker,
       worker_select_label: worker_select_label,
-      anthropic_api_key: anthropic_api_key,
-      claude_command: claude_command,
       catalog_poll_ms: catalog_poll_ms,
       linear_api_key: empty_to_nil(linear_api_key),
       linear_endpoint: linear_endpoint,

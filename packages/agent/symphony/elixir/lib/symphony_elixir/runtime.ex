@@ -589,33 +589,13 @@ defmodule SymphonyElixir.Runtime do
     if Keyword.has_key?(opts, :bot_token) do
       opts
     else
-      case bot_token() do
+      # Best-effort: no token means the placement keeps the inherited env
+      # and falls back to the static host `config.github_token`.
+      case GithubApp.best_effort_installation_token() do
         {:ok, token} -> Keyword.put(opts, :bot_token, token)
         :none -> opts
       end
     end
-  end
-
-  # Best-effort, mirroring `Runtime.ExecRunner`: a missing or unconfigured
-  # GitHub App (dev laptops, tests) yields no token and the placement keeps
-  # the inherited env rather than crashing the run.
-  defp bot_token do
-    if GithubApp.configured?() do
-      case GithubApp.installation_token() do
-        {:ok, token} ->
-          {:ok, token}
-
-        {:error, reason} ->
-          Logger.warning("Runtime: GitHub App token mint failed (#{inspect(reason)}); agent placement uses the static host token")
-          :none
-      end
-    else
-      :none
-    end
-  rescue
-    error ->
-      Logger.warning("Runtime: bot identity unavailable (#{inspect(error)}); agent placement uses the static host token")
-      :none
   end
 
   # Resolve a node's inputs to concrete values using the outputs of its

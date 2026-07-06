@@ -20,7 +20,6 @@ defmodule SymphonyElixir.ConfigTest do
     assert config.host_room_server_command == "room-server"
     assert config.host_systemd_run_command == "systemd-run"
     refute config.host_keep?
-    assert config.claude_command == "claude"
   end
 
   test "reads the room advertise host and registry url from the environment" do

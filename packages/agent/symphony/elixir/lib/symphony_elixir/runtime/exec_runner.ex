@@ -231,7 +231,8 @@ defmodule SymphonyElixir.Runtime.ExecRunner do
   defp exec_env_with_bot_identity do
     base = inherited_env()
 
-    case bot_token() do
+    # Best-effort: no token means the script runs with the inherited env only.
+    case GithubApp.best_effort_installation_token() do
       {:ok, token} -> base ++ [{~c"GH_TOKEN", String.to_charlist(token)}]
       :none -> base
     end
@@ -240,26 +241,5 @@ defmodule SymphonyElixir.Runtime.ExecRunner do
   defp inherited_env do
     System.get_env()
     |> Enum.map(fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)
-  end
-
-  # Best-effort: a missing Config/GithubApp process (tests, dev) yields no
-  # token rather than crashing the script run.
-  defp bot_token do
-    if GithubApp.configured?() do
-      case GithubApp.installation_token() do
-        {:ok, token} ->
-          {:ok, token}
-
-        {:error, reason} ->
-          Logger.warning("ExecRunner: GitHub App token mint failed (#{inspect(reason)}); script runs with inherited env only")
-          :none
-      end
-    else
-      :none
-    end
-  rescue
-    error ->
-      Logger.warning("ExecRunner: bot identity unavailable (#{inspect(error)}); script runs with inherited env only")
-      :none
   end
 end

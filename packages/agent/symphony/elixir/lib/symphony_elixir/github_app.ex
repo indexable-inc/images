@@ -81,6 +81,33 @@ defmodule SymphonyElixir.GithubApp do
   end
 
   @doc """
+  Best-effort variant of `installation_token/0` for callers that inject the
+  bot identity opportunistically (exec env, placement opts): an unconfigured
+  App, a mint failure, or a missing Config/GithubApp process (dev laptops,
+  tests) all yield `:none` so the run proceeds with its ambient credentials
+  instead of crashing.
+  """
+  @spec best_effort_installation_token() :: {:ok, String.t()} | :none
+  def best_effort_installation_token do
+    if configured?() do
+      case installation_token() do
+        {:ok, token} ->
+          {:ok, token}
+
+        {:error, reason} ->
+          Logger.warning("GithubApp: token mint failed (#{inspect(reason)}); proceeding with ambient credentials")
+          :none
+      end
+    else
+      :none
+    end
+  rescue
+    error ->
+      Logger.warning("GithubApp: bot identity unavailable (#{inspect(error)}); proceeding with ambient credentials")
+      :none
+  end
+
+  @doc """
   True iff `SYMPHONY_GITHUB_APP_ID` and the private key are both configured.
   Used by the IR exec runner to decide whether to attempt token injection
   at all.
