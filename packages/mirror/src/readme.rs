@@ -262,9 +262,9 @@ pub fn hero_svg(name: &str, tagline: Option<&str>) -> String {
     let hash = fnv1a(name.as_bytes());
     let hue = hash % 360;
     let mut marks = String::new();
-    for (col, row) in mark_cells(hash) {
-        let x = 44 + col * 34;
-        let y = 58 + row * 34;
+    for cell in mark_cells(hash) {
+        let x = 44 + cell.col * 34;
+        let y = 58 + cell.row * 34;
         let _ = writeln!(
             marks,
             "  <rect class=\"mark\" x=\"{x}\" y=\"{y}\" width=\"26\" height=\"26\" rx=\"7\"/>"
@@ -306,22 +306,28 @@ pub fn hero_svg(name: &str, tagline: Option<&str>) -> String {
     )
 }
 
+/// One filled cell of the hero mark's 3x3 grid.
+struct Cell {
+    col: u64,
+    row: u64,
+}
+
 /// A 3x3 grid mirrored around its vertical axis (symmetry reads as a mark,
 /// raw bits read as noise): bits 0-2 fill the outer columns per row, bits
 /// 3-5 the middle column; a hash with none set gets the center cell.
-fn mark_cells(hash: u64) -> Vec<(u64, u64)> {
+fn mark_cells(hash: u64) -> Vec<Cell> {
     let mut cells = Vec::new();
     for row in 0..3 {
         if hash >> row & 1 == 1 {
-            cells.push((0, row));
-            cells.push((2, row));
+            cells.push(Cell { col: 0, row });
+            cells.push(Cell { col: 2, row });
         }
         if hash >> (3 + row) & 1 == 1 {
-            cells.push((1, row));
+            cells.push(Cell { col: 1, row });
         }
     }
     if cells.is_empty() {
-        cells.push((1, 1));
+        cells.push(Cell { col: 1, row: 1 });
     }
     cells
 }

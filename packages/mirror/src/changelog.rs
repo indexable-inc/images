@@ -46,12 +46,13 @@ pub fn compose(request: &Request<'_>) -> String {
          mirror tracks the monorepo continuously, so entries are grouped by month instead of \
          by release.\n"
     );
-    for (month, changes) in by_month(history) {
-        let _ = write!(out, "\n## {month}\n");
+    for group in by_month(history) {
+        let _ = write!(out, "\n## {}\n", group.month);
         for section in SECTIONS {
-            let entries: Vec<&&Change> = changes
+            let entries: Vec<&&Change> = group
+                .changes
                 .iter()
-                .filter(|change| classify(&change.subject).0 == section)
+                .filter(|change| classify(&change.subject).section == section)
                 .collect();
             if entries.is_empty() {
                 continue;
@@ -65,23 +66,33 @@ pub fn compose(request: &Request<'_>) -> String {
     out
 }
 
+/// One month of history, newest month first.
+struct MonthGroup<'a> {
+    /// `YYYY-MM`.
+    month: &'a str,
+    changes: Vec<&'a Change>,
+}
+
 /// Group by `YYYY-MM`, preserving the newest-first order of first
 /// appearance. Grouping (not splitting on month changes) keeps a month whole
 /// even when commit dates are not strictly monotonic.
-fn by_month(history: &[Change]) -> Vec<(&str, Vec<&Change>)> {
-    let mut months: Vec<(&str, Vec<&Change>)> = Vec::new();
+fn by_month(history: &[Change]) -> Vec<MonthGroup<'_>> {
+    let mut months: Vec<MonthGroup<'_>> = Vec::new();
     for change in history {
         let month = change.date.get(..7).unwrap_or(&change.date);
-        match months.iter_mut().find(|(existing, _)| *existing == month) {
-            Some((_, changes)) => changes.push(change),
-            None => months.push((month, vec![change])),
+        match months.iter_mut().find(|group| group.month == month) {
+            Some(group) => group.changes.push(change),
+            None => months.push(MonthGroup {
+                month,
+                changes: vec![change],
+            }),
         }
     }
     months
 }
 
 fn entry(monorepo: &str, change: &Change) -> String {
-    let (_, scope, rest) = classify(&change.subject);
+    let Classified { scope, rest, .. } = classify(&change.subject);
     let short = change.sha.get(..7).unwrap_or(&change.sha);
     let mut text = String::new();
     if let Some(scope) = scope {
@@ -94,25 +105,43 @@ fn entry(monorepo: &str, change: &Change) -> String {
     )
 }
 
+/// A subject sorted into its Keep a Changelog section.
+struct Classified<'a> {
+    section: &'static str,
+    /// Conventional-commit scope, kept as a prefix on the rendered entry.
+    scope: Option<&'a str>,
+    /// The subject with a recognized conventional-commit type stripped.
+    rest: &'a str,
+}
+
 /// Map a subject to its Keep a Changelog section. Only a recognized
 /// conventional-commit type is stripped (its scope survives as a prefix);
 /// anything else keeps the whole subject, under Changed.
-fn classify(subject: &str) -> (&'static str, Option<&str>, &str) {
+fn classify(subject: &str) -> Classified<'_> {
+    let unclassified = Classified {
+        section: "Changed",
+        scope: None,
+        rest: subject,
+    };
     let Some((prefix, rest)) = subject.split_once(':') else {
-        return ("Changed", None, subject);
+        return unclassified;
     };
     let prefix = prefix.trim_end_matches('!');
     let (kind, scope) = match prefix.split_once('(') {
         Some((kind, scope)) => match scope.strip_suffix(')') {
             Some(scope) => (kind, Some(scope)),
-            None => return ("Changed", None, subject),
+            None => return unclassified,
         },
         None => (prefix, None),
     };
     let Some(section) = section_for(kind) else {
-        return ("Changed", None, subject);
+        return unclassified;
     };
-    (section, scope, rest.trim_start())
+    Classified {
+        section,
+        scope,
+        rest: rest.trim_start(),
+    }
 }
 
 fn section_for(kind: &str) -> Option<&'static str> {
