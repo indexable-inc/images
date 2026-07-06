@@ -36,8 +36,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      # Fully qualified, not `./.github/actions/install-nix`: this workflow is
+      # reusable (`workflow_call`), and for a cross-repo caller (ix) the
+      # `actions/checkout` above checks out the CALLER's repository, which does
+      # not contain index's local composite action. A local-path `uses:` then
+      # fails with "Can't find 'action.yml'" (broke ix's hourly flake bump when
+      # #2064 introduced the local action). Referencing the action by repo
+      # resolves it from index@main regardless of which repo called the job.
       - name: Install Determinate Nix
-        uses: ./.github/actions/install-nix
+        uses: indexable-inc/index/.github/actions/install-nix@main
 
       - name: Update flake.lock
         uses: DeterminateSystems/update-flake-lock@834c491b2ece4de0bbd00d85214bb5e83b4da5c6 # v28
