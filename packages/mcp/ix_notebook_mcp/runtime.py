@@ -2642,13 +2642,22 @@ def _df_llm_text(df: Any) -> str:
     The shape + dtype header orients the reader; the body is a Nushell table
     literal with headers listed once. Values are never width-truncated (only the
     row count is bounded by ``_DF_LLM_ROWS``), so the agent reads the real data
-    instead of a boxed repr.
+    instead of a boxed repr. A 1x1 string frame is the exception: its body is
+    the string verbatim, not a one-cell table.
     """
     try:
         rows, cols = df.shape
         head = df.head(_DF_LLM_ROWS)
         schema = ", ".join(f"{name}:{dtype}" for name, dtype in zip(df.columns, df.dtypes, strict=False))
-        body = _nuon_table(list(head.columns), head.to_dicts())
+        if rows == 1 and cols == 1 and isinstance(only := head.to_dicts()[0][head.columns[0]], str):
+            # A 1x1 string frame is text, not a table -- `await nu("^cat f.toml")`
+            # or `^git remote -v` frames the whole capture as one scalar cell.
+            # Hand the model the string verbatim (real newlines, terminal escapes
+            # stripped: the plain-str treatment), not one JSON-escaped NUON cell
+            # it can only read by re-fetching with .item() (#1976).
+            body = _strip_ansi(only)
+        else:
+            body = _nuon_table(list(head.columns), head.to_dicts())
         more = f"\n... ({rows - _DF_LLM_ROWS} more rows)" if rows > _DF_LLM_ROWS else ""
         # A frame flagging an incomplete scan (fsearch's PartialFrame: `truncated`
         # + `reason`, duck-typed so the runtime stays decoupled) must SAY so in
