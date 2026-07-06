@@ -397,11 +397,13 @@ let
           contradict.
 
           This holds across repository boundaries: when a sibling repo needs
-          machinery another repo already owns, do not reimplement it. Expose a
-          narrow seam at the owner (a lib flake output, a tool parameterized over
-          the consumer's data) and consume it through a flake input; land the
-          exposure PR at the owner first. Each consumer keeps only its own data
-          (mappings, pins, patches), never a copy of the machinery.
+          machinery another repo already owns, do not reimplement it. The
+          sibling's need is the real second consumer that earns a shared home,
+          so expose a narrow seam at the owner (a lib flake output, a tool
+          parameterized over the consumer's data) and consume it through a
+          flake input; land the exposure PR at the owner first. Each consumer
+          keeps only its own data (mappings, pins, patches), never a copy of
+          the machinery.
         '';
         reason = ''
           Duplicated logic and restated rules drifted until copies contradicted each
