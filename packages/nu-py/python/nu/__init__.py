@@ -15,9 +15,13 @@ binary runs with ``^cmd``::
     df = await nu("^gh pr list --json number,title | from json")  # JSON-mode CLI
 
 This is not a subprocess: the engine (PyO3 bindings over nu-engine) lives in
-this process and its state is persistent, like a REPL. A ``let`` or a ``def``
-in one call is visible to the next (``PWD`` is the exception: it re-syncs to
-the process cwd each call, so a ``cd`` never outlives its call)::
+this process and its state is persistent, like a REPL: a ``let``, a ``def``,
+or a ``cd`` in one call is visible to the next. Each kernel session has its
+own engine, so a ``cd`` here never moves another session's PWD (issue #2089:
+the per-call re-sync to the shared process cwd silently redirected bare git
+commands into other agents' worktrees). If the remembered directory has been
+deleted, the next call fails loudly until you pass ``cwd=`` or ``nu.reset()``
+(issue #1986)::
 
     await nu("let prs = (http get $url)")
     await nu("$prs | where author.login == 'andrewgazelka'")
@@ -250,8 +254,8 @@ def _discard_engine(engine: Engine) -> None:
 
 
 def reset() -> None:
-    """Discard this session's persistent engine state (bindings and defs;
-    PWD is per-call, synced from the process cwd)."""
+    """Discard this session's persistent engine state (bindings, defs, and
+    PWD)."""
     _discard_engine(_default_engine())
 
 
@@ -282,6 +286,16 @@ class NuResult(NamedTuple):
     exit_code: int
 
 
+def _require_dir(cwd: str | os.PathLike) -> None:
+    """Reject an explicit ``cwd=`` that is not an existing directory. A bad
+    cwd would be written into the persistent stack and wedge every later call
+    (issue #1986's failure mode, self-inflicted); reject it at the boundary
+    instead. Sync on purpose: one local ``stat``, and keeping the path method
+    out of the ``async`` caller keeps it free of path methods (ASYNC240)."""
+    if not pathlib.Path(cwd).is_dir():
+        raise ValueError(f"cwd is not a directory: {os.fspath(cwd)!r}")
+
+
 async def _run(
     code: str,
     *,
@@ -297,8 +311,8 @@ async def _run(
     With ``check=True`` a non-zero trailing external raises inside the engine,
     so the exit code of anything that returns is 0.
     """
-    if cwd is None:
-        cwd = pathlib.Path.cwd()
+    if cwd is not None:
+        _require_dir(cwd)
     if name is not None and _rename_current_job is not None and (
         _ix_current is not None and _ix_current.get() is not None
     ):
@@ -460,11 +474,13 @@ async def nu(
     string.
 
     Multi-statement source is fine; the last pipeline's output is the result,
-    and ``let``/``def`` persist to later calls (REPL semantics). ``PWD`` does
-    not: each call re-syncs it to the process cwd, so a ``cd`` never outlives
-    its call. ``input`` pipes a value in as ``$in`` -- a polars DataFrame,
+    and ``let``/``def``/``cd`` persist to later calls (REPL semantics; the
+    engine is per session, so another session's ``cd`` can never move this
+    one's PWD). ``input`` pipes a value in as ``$in`` -- a polars DataFrame,
     list, dict, or scalar (datetimes must be tz-aware). ``cwd`` sets ``PWD``
-    for this call only; ``env`` adds environment variables;
+    and persists like ``cd``; if the remembered directory no longer exists
+    the call raises with the remedy instead of silently running elsewhere.
+    ``env`` adds environment variables;
     ``timeout`` interrupts the evaluation and discards the engine state (see
     the module docstring); ``name`` labels the running job in the dashboard.
 

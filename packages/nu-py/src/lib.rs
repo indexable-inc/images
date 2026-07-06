@@ -141,6 +141,23 @@ impl EngineInner {
 
         if let Some(dir) = cwd {
             stack.add_env_var("PWD".into(), Value::string(dir, Span::unknown()));
+        } else if let Some(pwd) = stack.get_env_var(engine_state, "PWD")
+            && let Ok(pwd) = pwd.as_str()
+            && !std::path::Path::new(pwd).is_dir()
+        {
+            // PWD persists across evals like the rest of the stack (REPL
+            // semantics; issue #2089 restored this after #1999 re-synced it to
+            // the embedding process's cwd -- the kernel's launch dir, i.e. some
+            // OTHER agent's worktree -- silently redirecting bare git commands
+            // across worktrees). A `cd` target that has since been removed
+            // (issue #1986) must fail loudly with the remedy, not be silently
+            // redirected somewhere else.
+            return Err(format!(
+                "the engine's working directory `{pwd}` no longer exists \
+                 (a previous `cd` target was removed); pass cwd= to run \
+                 somewhere real (it persists like `cd`), or nu.reset() \
+                 for a fresh engine"
+            ));
         }
         for (key, value) in env.into_iter().flatten() {
             stack.add_env_var(key, Value::string(value, Span::unknown()));
@@ -424,8 +441,10 @@ impl Engine {
     /// output as native Python objects; `handle.interrupt()` stops this eval
     /// (and only this eval) the way ctrl-c would. `input` becomes the
     /// pipeline's `$in`; `cwd`/`env` set `PWD` / environment variables for
-    /// this and later calls (the stack is persistent). Raises `NuError` with
-    /// nushell's rendered diagnostic.
+    /// this and later calls (the stack is persistent). When `cwd` is omitted
+    /// the persistent PWD is validated first: a directory that no longer
+    /// exists raises with the remedy instead of running somewhere unintended.
+    /// Raises `NuError` with nushell's rendered diagnostic.
     ///
     /// `check=False` (subprocess.run semantics) stops a trailing external's
     /// non-zero exit from raising: the awaitable then resolves to a

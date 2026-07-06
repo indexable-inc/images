@@ -252,3 +252,32 @@ def test_polars_dataframe_defaults_to_compact_nuon_for_llm(monkeypatch: pytest.M
 
 def test_list_of_records_uses_nushell_table_nuon() -> None:
     assert runtime._nuon([{"a": 1, "b": 2}, {"a": 5, "b": 7}]) == "[[a, b]; [1, 2], [5, 7]]"
+
+
+def test_nu_pwd_is_per_session_so_cd_cannot_cross_worktrees(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Issue #2089: with one shared PWD, agent A's `cd <its worktree>` followed
+    # by `git rebase --abort` executed in whatever directory another agent (or
+    # the kernel's launch dir) left behind -- silent cross-worktree mutation.
+    # Each session's engine must remember its own cd, unaffected by the other's.
+    # `nu` is seeded into the shared helper area (as install() preimports it);
+    # an in-cell `import nu` would hand the per-cell type check the real module
+    # type, which is not callable, while the helper-area name is stubbed `Any`
+    # exactly as in production.
+    nu_mod = pytest.importorskip("nu")
+    _wire(monkeypatch, {"Result": runtime.Result, "nu": nu_mod})
+    dir_a = tmp_path / "worktree-a"
+    dir_b = tmp_path / "worktree-b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+    a_cd = run_cell(f"await nu('cd {dir_a}')\nResult.ok('a')", session="sess-a")
+    b_cd = run_cell(f"await nu('cd {dir_b}')\nResult.ok('b')", session="sess-b")
+    assert a_cd.status == "done", (a_cd.status, a_cd.error)
+    assert b_cd.status == "done", (b_cd.status, b_cd.error)
+    a = run_cell("Result.text(await nu.value('$env.PWD'))", session="sess-a")
+    b = run_cell("Result.text(await nu.value('$env.PWD'))", session="sess-b")
+    assert a.status == "done", (a.status, a.error)
+    assert b.status == "done", (b.status, b.error)
+    assert Path(a.result.llm_result).resolve() == dir_a.resolve()
+    assert Path(b.result.llm_result).resolve() == dir_b.resolve()
