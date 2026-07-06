@@ -284,6 +284,18 @@ class JobStillRunning(RuntimeError):
     """
 
 
+class JobCancelled(RuntimeError):
+    """Raised by ``await jobs['<id>']`` when the awaited job was cancelled.
+
+    ``jobs`` is one kernel-wide registry, so several sessions may await the same
+    job. A cancelled job used to throw ``CancelledError`` into every awaiting
+    cell, which ``_runner`` then recorded as "cancelled" too -- one explicit
+    ``jobs['<id>'].cancel()`` silently killed other agents' waiter cells (issue
+    #2104). Raising an ordinary error instead keeps the awaiting cell alive and
+    names the job that was cancelled.
+    """
+
+
 class Job:
     """A single ``python_exec`` execution: an awaitable handle over the asyncio
     task running the code, with its captured output, result, and status."""
@@ -529,7 +541,32 @@ class Job:
         # contract is that awaiting raises rather than return a misleading None.
         async def _await_result() -> Result | None:
             if self.task is not None:
-                await self.task
+                try:
+                    # Shield the job's task: ``jobs`` is one kernel-wide registry,
+                    # so several sessions may await the same job, and an awaiter's
+                    # own cancellation -- the common shape is an
+                    # ``asyncio.wait_for(jobs['<id>'], t)`` timeout -- must not
+                    # propagate INTO the shared task and kill the job for everyone
+                    # (issue #2104). Cancelling a job stays explicit:
+                    # ``jobs['<id>'].cancel()``.
+                    await asyncio.shield(self.task)
+                except asyncio.CancelledError:
+                    current = asyncio.current_task()
+                    if current is not None and current.cancelling():
+                        # The AWAITER itself is being cancelled (its cell was
+                        # cancelled, or its wait timed out): propagate that,
+                        # leaving the job running for its other awaiters.
+                        raise
+                    if self.task.cancelled():
+                        # The JOB was cancelled out from under this await. Surface
+                        # an ordinary error naming the job, so the awaiting cell
+                        # records what happened instead of dying "cancelled"
+                        # itself (the cross-session cascade in issue #2104).
+                        raise JobCancelled(
+                            f"job {self.id} ({self.name}) was cancelled while "
+                            f"awaited; jobs[{self.id!r}] holds its partial output"
+                        ) from None
+                    raise
             if self._exc is not None:
                 # Re-raise the original exception object, so its type, message,
                 # and traceback (the cell's own frames) all reach the caller --

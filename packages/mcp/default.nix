@@ -3001,7 +3001,7 @@
         pkgs.fd
       ];
       strictDeps = true;
-      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110)";
+      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104)";
     }
     ''
       export HOME=$TMPDIR/home
@@ -3014,6 +3014,8 @@
       # a single .py is read by pytest as a directory).
       cp ${./tests/test_typecheck.py} test_typecheck.py
       cp ${./tests/test_job_await_errors.py} test_job_await_errors.py
+      # Issue #2104: one session's wait must never cancel another session's job.
+      cp ${./tests/test_job_cancel_scope.py} test_job_cancel_scope.py
       cp ${./tests/test_fsearch_partial.py} test_fsearch_partial.py
       cp ${./tests/test_fsearch_glob.py} test_fsearch_glob.py
       # sh Output rendering regressions (issue #1766: a failed build must not
@@ -3023,7 +3025,8 @@
       # TypeError-hint build stamp; imports the site-packages ix_notebook_mcp.
       cp ${./tests/test_build_info.py} test_build_info.py
       ${lib.getExe typecheckTestPython} -m pytest \
-        test_typecheck.py test_job_await_errors.py test_fsearch_partial.py \
+        test_typecheck.py test_job_await_errors.py test_job_cancel_scope.py \
+        test_fsearch_partial.py \
         test_fsearch_glob.py \
         test_sh_module.py \
         test_build_info.py \
