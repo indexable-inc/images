@@ -4,13 +4,25 @@
 # forced `-c` layer), so each capability row carries both handles and the
 # renderers at the bottom fold in the rows a wrapper's baked MCP servers make
 # redundant.
+#
+# Claude runtime semantics, verified empirically on the pinned CLI (2.1.197,
+# headless `claude -p --settings` probes): `permissions.deny` is a hard block
+# even under the wrapper's default `--dangerously-skip-permissions` posture
+# (bypass skips prompts, not deny rules), and a SUBAGENT whose definition
+# declares an explicit `tools:` allowlist re-grants a settings-denied tool.
+# So gating the stock tools here sends the MAIN agent kernel-first while the
+# repo subagents (subagents.nix, explicit tool lists) keep their declared
+# tools.
 {
   lib,
   # True when the wrapper bakes the `index` MCP server (the ix kernel,
   # packages/mcp). The kernel owns shell, file IO, and code search
-  # (python_exec/nu, read, grep/find), so the stock native tools are disabled
-  # wherever it is present. A wrapper without the kernel (the overlay package
-  # set) keeps them: denying them there would leave the agent with no hands.
+  # (python_exec/nu, read, grep/find), so the stock native tools this table
+  # maps are disabled wherever it is present. A wrapper without the kernel
+  # (the overlay package set) keeps the kernel-superseded tools: denying them
+  # there would leave the agent with no hands. (The exa-gated web pair below
+  # is a separate gate and is still denied in the overlay build, since exa is
+  # baked unconditionally by the default server set.)
   indexKernelBaked ? false,
   # True when the wrapper bakes the `exa` MCP server, which supersedes the
   # stock web search/fetch surface.

@@ -3703,20 +3703,27 @@
         assertion = let
           policy = gates:
             import (paths.packagesRoot + "/agent/policy/permissions.nix") ({inherit lib;} // gates);
-          bare = policy {};
+          # The overlay build's real gate combination: exa is baked
+          # unconditionally by the default server set, the kernel is not
+          # (repoPackages.mcp is out of scope there).
+          overlay = policy {exaSearchBaked = true;};
           baked = policy {
             indexKernelBaked = true;
             exaSearchBaked = true;
           };
         in
-          # Without baked MCP servers only the merge protections remain: the
-          # stock tools are the agent's whole surface there.
-          bare.claude.deniedToolPatterns
+          # Without the kernel only the merge protections and the
+          # exa-superseded web pair remain: the stock shell/file/search tools
+          # are that agent's whole surface.
+          overlay.claude.deniedToolPatterns
           == [
             "Bash(gh pr merge*--admin*)"
             "Bash(gh pr merge*--force*)"
+            "WebSearch"
+            "WebFetch"
           ]
-          && !(bare.codex.forcedSettings.features ? shell_tool)
+          && !(overlay.codex.forcedSettings.features ? shell_tool)
+          && overlay.codex.forcedSettings.features.standalone_web_search == false
           # With the index kernel + exa baked, every superseded native tool is
           # folded in, in each agent's own vocabulary.
           && builtins.all (tool: builtins.elem tool baked.claude.deniedToolPatterns) [
