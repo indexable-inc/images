@@ -407,6 +407,32 @@ let
       };
     }
     {
+      fileFrictionAtDiscovery = {
+        text = ''
+          Whenever you catch yourself being dumb, file a GitHub issue at that
+          moment, not at session end. The triggers: a wrong assumption you had
+          to correct, a workaround you reached for, wasted time from a missing
+          tool, flag, or doc, a guard or hook that misfired, an instruction
+          (this prompt, a skill, a memory) that misled you. File in the repo
+          that owns the fix, with the concrete evidence: the exact command,
+          error, denied call, or missing interface, and the smallest change
+          that would have prevented it. Deduplicate against open issues first
+          and skip real duplicates. This is the interface-friction case of
+          machineReadableInterfaces generalized to every kind of self-inflicted
+          friction, filed through tieToIssue and owned through agentPerIssue.
+        '';
+        reason = ''
+          Friction was captured only when the user asked at the end of a
+          session: this session filed six such issues (#1941 through #1946)
+          in one batch at the user's prompt, by which point the concrete
+          evidence had to be reconstructed from memory. Filing at the moment of
+          discovery, while the command, error, and context are live, is the
+          fix; the session-retro skill and its Stop gate then sweep for
+          anything missed.
+        '';
+      };
+    }
+    {
       preV1 = {
         text = ''
           This codebase is pre-v1. Prefer the correct API over compatibility. Migrate
@@ -626,8 +652,8 @@ let
           When a tool we control lacks one, fix the
           interface upstream (a `--json` flag, structured output) rather than parsing
           prose. Treat any interface friction the same way (a missing flag, output, or
-          helper): improve it or file an issue or PR instead of silently working
-          around it.
+          helper): improve it or file an issue or PR (see fileFrictionAtDiscovery)
+          instead of silently working around it.
         '';
         reason = ''
           Scraping human-oriented output broke on format changes when a structured
