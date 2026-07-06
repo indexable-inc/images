@@ -255,7 +255,7 @@ pub fn estimated_jaccard(sig_a: &[u64; NUM_HASHES], sig_b: &[u64; NUM_HASHES]) -
 }
 
 /// Estimate the overlap coefficient (containment) from `MinHash` signatures
-/// plus the exact feature counts, in O(`NUM_HASHES`).
+/// plus the exact *distinct* (set) feature counts, in O(`NUM_HASHES`).
 ///
 /// `MinHash` only estimates Jaccard `J = I/U`, but with the exact sizes and
 /// `U = |A| + |B| - I` the intersection follows: `I = J(|A| + |B|)/(1 + J)`,
@@ -264,9 +264,12 @@ pub fn estimated_jaccard(sig_a: &[u64; NUM_HASHES], sig_b: &[u64; NUM_HASHES]) -
 /// every LSH candidate pays the exact O(n+m) merge — measured as a >500x
 /// slowdown over this whole repo versus the pruned Jaccard path.
 ///
-/// The signature estimates *set* Jaccard while the sizes count multisets, so
-/// the result is biased for duplicate-heavy features; callers prune with a
-/// slack margin, never confirm.
+/// The signature estimates *set* Jaccard, so `len_a`/`len_b` MUST be distinct
+/// counts to keep the estimate internally consistent; feeding multiset lengths
+/// under-estimates duplicate-heavy fragments and wrongly prunes them. The
+/// confirmed metric is still multiset overlap, whose residual divergence from
+/// the set estimate is absorbed by the caller's slack margin (estimates only
+/// prune, never confirm).
 #[must_use]
 #[expect(
     clippy::cast_precision_loss,
@@ -529,6 +532,41 @@ mod tests {
             b.len(),
         );
         assert!(est < 0.3, "disjoint sets must estimate low overlap: {est}");
+    }
+
+    /// Duplicate-heavy regression (review finding on #1936): the estimate must
+    /// use *distinct* counts, because the signature only sees sets. Small = 30
+    /// tokens each repeated 10x (multiset 300, set 30); large = the same plus
+    /// 15 fresh tokens x2 (multiset 330, set 45). Exact multiset overlap is
+    /// 1.0. Feeding multiset lengths deflates the estimate to ~0.84 (a 0.95
+    /// threshold would wrongly prune); distinct counts keep it ~1.0.
+    #[test]
+    fn estimated_overlap_duplicate_heavy_containment() {
+        let mut small = Vec::new();
+        for token in 1..=30u64 {
+            small.extend(std::iter::repeat_n(token, 10));
+        }
+        let mut large = small.clone();
+        for token in 31..=45u64 {
+            large.extend(std::iter::repeat_n(token, 2));
+        }
+        small.sort_unstable();
+        large.sort_unstable();
+
+        let sig_small = minhash_signature(&small);
+        let sig_large = minhash_signature(&large);
+
+        let set_based = estimated_overlap(&sig_small, &sig_large, 30, 45);
+        let multiset_based =
+            estimated_overlap(&sig_small, &sig_large, small.len(), large.len());
+        assert!(
+            set_based > 0.9,
+            "set-consistent estimate must keep duplicate-heavy containment, got {set_based}"
+        );
+        assert!(
+            set_based > multiset_based,
+            "multiset lengths deflate the estimate: set {set_based} vs multiset {multiset_based}"
+        );
     }
 
     #[test]

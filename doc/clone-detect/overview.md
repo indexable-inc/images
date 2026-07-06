@@ -92,7 +92,8 @@ skipping symlinks/non-UTF-8/`ignore-file` files, and collecting
   configured `type3_metric` (`jaccard.rs`): `jaccard` (default,
   `|A∩B| / |A∪B|`) or `overlap` (containment, `|A∩B| / min(|A|,|B|)`), which
   catches copy-then-insert clones Jaccard misses but also nets structural
-  boilerplate, so pair it with a higher threshold (`>= 0.8`).
+  boilerplate, so pair it with a higher threshold (`>= 0.9` for repo-scale
+  sweeps; lower only on small targeted trees).
   `rayon`-parallel across kinds.
 - **Sequence** (`--sequences`, `sequences.rs`): sliding window of statements.
 - `dedup_subsumed` drops groups whose fragments are byte-range contained in a

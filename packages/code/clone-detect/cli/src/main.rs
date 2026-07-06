@@ -46,7 +46,7 @@ struct Args {
 
     /// Type-3 confirmation metric: `jaccard` (symmetric, precise; default) or
     /// `overlap` (containment: catches copy-then-insert clones but also nets
-    /// boilerplate, so pair it with a higher threshold).
+    /// boilerplate, so pair it with a higher threshold, >= 0.9 at repo scale).
     #[arg(long, value_enum)]
     type3_metric: Option<MetricArg>,
 

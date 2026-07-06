@@ -17,8 +17,9 @@ use serde::{Deserialize, Serialize};
 ///   2019). The flip side: generic structural boilerplate contains easily, so
 ///   at the same threshold overlap reports far more groups (measured 40x on
 ///   this repo at 0.7). Use it for recall-oriented sweeps, preferably with a
-///   higher threshold (>= 0.8); pure insert/delete clones score near 1.0 under
-///   it, so a high threshold costs little recall on the cases it exists for.
+///   higher threshold (>= 0.9 at repo scale); pure insert/delete clones score
+///   near 1.0 under it, so a high threshold costs little recall on the cases
+///   it exists for.
 ///
 /// Jaccard is the default deliberately: it keeps default output precise (and
 /// byte-compatible with the tool's history), while overlap is the opt-in

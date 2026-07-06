@@ -44,7 +44,7 @@ pub fn find(scan: &Output, threshold: f64, metric: Type3Metric) -> Vec<CloneGrou
     // Banding derived once from the threshold: shared by every kind group so the
     // LSH S-curve matches the configured similarity floor (see
     // `banding_for_threshold`).
-    let banding = banding_for_threshold(threshold);
+    let banding = banding_for_threshold(banding_threshold(threshold, metric));
 
     let mut by_kind: FxHashMap<&str, Vec<IndexedNode<'_>>> = FxHashMap::default();
 
@@ -71,6 +71,7 @@ pub fn find(scan: &Output, threshold: f64, metric: Type3Metric) -> Vec<CloneGrou
             // are already caught as Type-2 instances. Only send one representative
             // per unique normalized_hash into LSH to shrink bucket sizes.
             let mut seen_normalized: FxHashMap<u64, usize> = FxHashMap::default();
+            let mut lens: FxHashMap<NodeLocation, FeatureLens> = FxHashMap::default();
             let entries: Vec<LshEntry> = nodes
                 .iter()
                 .filter(|indexed| !indexed.node.subtree_features.is_empty())
@@ -82,12 +83,22 @@ pub fn find(scan: &Output, threshold: f64, metric: Type3Metric) -> Vec<CloneGrou
                     // Keep only the first occurrence of each normalized_hash
                     *count == 1
                 })
-                .map(|indexed| LshEntry {
-                    location: NodeLocation {
+                .map(|indexed| {
+                    let location = NodeLocation {
                         file_id: indexed.file_id,
                         node_idx: indexed.node_idx,
-                    },
-                    signature: minhash_signature(&indexed.node.subtree_features),
+                    };
+                    lens.insert(
+                        location,
+                        FeatureLens {
+                            multiset: indexed.node.subtree_features.len(),
+                            set: distinct_count(&indexed.node.subtree_features),
+                        },
+                    );
+                    LshEntry {
+                        location,
+                        signature: minhash_signature(&indexed.node.subtree_features),
+                    }
                 })
                 .collect();
 
@@ -109,19 +120,25 @@ pub fn find(scan: &Output, threshold: f64, metric: Type3Metric) -> Vec<CloneGrou
                 // (containment), so pruning overlap candidates on a Jaccard
                 // estimate would silently drop the very insert/delete clones
                 // overlap exists to catch; `estimated_overlap` reconstructs
-                // containment from the Jaccard estimate plus exact sizes.
+                // containment from the Jaccard estimate plus exact sizes. The
+                // MinHash signature sees a set, so the estimate uses distinct
+                // counts; the size floor guards the exact (multiset) metric
+                // domain, so it uses multiset counts.
                 if let (Some(sig_a), Some(sig_b)) =
                     (index.signature(&pair.first), index.signature(&pair.second))
                 {
                     let estimate = match metric {
                         Type3Metric::Jaccard => estimated_jaccard(sig_a, sig_b),
                         Type3Metric::Overlap => {
-                            let len_a = feature_len(scan, &pair.first);
-                            let len_b = feature_len(scan, &pair.second);
-                            if !size_compatible(len_a, len_b) {
+                            let (Some(lens_a), Some(lens_b)) =
+                                (lens.get(&pair.first), lens.get(&pair.second))
+                            else {
+                                continue;
+                            };
+                            if !size_compatible(lens_a.multiset, lens_b.multiset) {
                                 continue;
                             }
-                            estimated_overlap(sig_a, sig_b, len_a, len_b)
+                            estimated_overlap(sig_a, sig_b, lens_a.set, lens_b.set)
                         }
                     };
                     if estimate < threshold - ESTIMATION_MARGIN {
@@ -148,14 +165,49 @@ pub fn find(scan: &Output, threshold: f64, metric: Type3Metric) -> Vec<CloneGrou
         .collect()
 }
 
-/// Feature-multiset size of the node at `loc`, `0` when the location is stale.
-/// LSH entries are built only from nodes with non-empty features, so a `0` here
-/// makes the overlap estimate `0.0` and the pair is pruned rather than panicking.
-fn feature_len(scan: &Output, loc: &NodeLocation) -> usize {
-    scan.files
-        .get(loc.file_id)
-        .and_then(|file| file.nodes.get(loc.node_idx))
-        .map_or(0, |node| node.subtree_features.len())
+/// The Jaccard level the LSH banding must be tuned to for a given metric.
+///
+/// LSH candidate generation is MinHash-based, so its S-curve lives in Jaccard
+/// space regardless of the confirmation metric. For Jaccard that is the
+/// threshold itself. For overlap, a pair can clear the overlap threshold `t`
+/// while its Jaccard is as low as the fully-contained, maximally size-gapped
+/// case: `I = t·min` and `max = min / r` (with `r` the size floor) give
+/// `J = t·min / (min + min/r - t·min) = t / (1 + 1/r - t)`. Banding on `t`
+/// directly puts the inflection far above that floor and silently drops the
+/// very size-gapped clones the overlap mode exists for (e.g. at `t = 0.8`,
+/// `r = 0.4`: J can be 0.296 while the t-derived inflection sits at 0.77).
+fn banding_threshold(threshold: f64, metric: Type3Metric) -> f64 {
+    match metric {
+        Type3Metric::Jaccard => threshold,
+        Type3Metric::Overlap => {
+            threshold / (1.0 + 1.0 / OVERLAP_SIZE_RATIO_FLOOR - threshold)
+        }
+    }
+}
+
+/// Multiset and distinct feature counts for one node, precomputed per LSH entry
+/// so the per-candidate estimate stays O(1).
+#[derive(Clone, Copy)]
+struct FeatureLens {
+    /// Total feature count with multiplicity (the exact metrics' domain).
+    multiset: usize,
+    /// Distinct feature count (the `MinHash` estimate's domain: signatures see
+    /// sets, so the overlap estimate must use set sizes or duplicate-heavy
+    /// fragments get under-estimated and wrongly pruned).
+    set: usize,
+}
+
+/// Count distinct values in a sorted slice (one linear pass over runs).
+fn distinct_count(sorted: &[u64]) -> usize {
+    let mut count = usize::from(!sorted.is_empty());
+    for window in sorted.windows(2) {
+        if let [a, b] = window
+            && a != b
+        {
+            count += 1;
+        }
+    }
+    count
 }
 
 /// Enforce [`OVERLAP_SIZE_RATIO_FLOOR`] on a pair of feature counts.
@@ -257,4 +309,38 @@ pub fn compute_similarity_with(a: &NodeInfo, b: &NodeInfo, metric: Type3Metric) 
     }
 
     min / max
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Jaccard mode bands on the configured threshold itself.
+    #[test]
+    fn banding_threshold_jaccard_is_identity() {
+        let t = banding_threshold(0.7, Type3Metric::Jaccard);
+        assert!((t - 0.7).abs() < 1e-9);
+    }
+
+    /// Overlap mode must band on the worst-case implied Jaccard, not the raw
+    /// threshold: a true overlap-0.8 pair at the maximum allowed size gap has
+    /// Jaccard `0.8 / (1 + 1/0.4 - 0.8) ~ 0.296`. Banding on 0.8 directly puts
+    /// the LSH inflection at ~0.77 and silently drops such pairs before the
+    /// exact check (the size-gapped clones this mode exists for).
+    #[test]
+    fn banding_threshold_overlap_uses_implied_jaccard_floor() {
+        let t = banding_threshold(0.8, Type3Metric::Overlap);
+        let expected = 0.8 / (1.0 + 1.0 / OVERLAP_SIZE_RATIO_FLOOR - 0.8);
+        assert!((t - expected).abs() < 1e-9);
+        assert!(t < 0.35, "implied floor must sit far below the raw threshold");
+    }
+
+    /// Distinct counting over sorted runs.
+    #[test]
+    fn distinct_count_over_runs() {
+        assert_eq!(distinct_count(&[]), 0);
+        assert_eq!(distinct_count(&[7]), 1);
+        assert_eq!(distinct_count(&[1, 1, 1]), 1);
+        assert_eq!(distinct_count(&[1, 1, 2, 3, 3]), 3);
+    }
 }
