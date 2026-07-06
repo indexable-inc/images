@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 210" role="img"
+     aria-label="Three contributors commit tools into one shared Nix flake; everyone runs everything with nix run."
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    svg { color: #1f2328; }
+    .muted  { fill: #656d76; }
+    .accent { fill: #8250df; }
+    .accent-stroke { stroke: #8250df; }
+    text    { fill: currentColor; font-size: 14px; }
+    .mono   { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+    .box    { stroke: currentColor; fill: none; stroke-width: 1.5; }
+    .edge   { stroke: currentColor; fill: none; stroke-width: 1.5; marker-end: url(#arrow); }
+    .node   { fill: none; stroke: currentColor; stroke-width: 1.5; }
+    .label  { font-size: 12px; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted  { fill: #8b949e; }
+      .accent { fill: #a371f7; }
+      .accent-stroke { stroke: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 9 5 L 0 9" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    </marker>
+  </defs>
+
+  <!-- contributors -->
+  <circle class="node" cx="70" cy="55" r="14"/>
+  <circle class="node" cx="70" cy="105" r="14"/>
+  <circle class="node" cx="70" cy="155" r="14"/>
+  <text x="70" y="60" text-anchor="middle" class="label">you</text>
+  <text x="70" y="110" text-anchor="middle" class="label">team</text>
+  <text x="70" y="160" text-anchor="middle" class="label">agent</text>
+
+  <!-- commits flowing in -->
+  <path class="edge" d="M 92 55 C 160 55, 190 90, 268 98"/>
+  <path class="edge" d="M 92 105 L 268 105"/>
+  <path class="edge" d="M 92 155 C 160 155, 190 120, 268 112"/>
+  <text x="180" y="88" text-anchor="middle" class="muted label">add a tool</text>
+
+  <!-- the flake -->
+  <rect class="box" x="280" y="55" width="180" height="100" rx="10"/>
+  <text x="370" y="85" text-anchor="middle" font-weight="600" font-size="17">index</text>
+  <text x="370" y="106" text-anchor="middle" class="muted label">one Nix flake</text>
+  <text x="370" y="132" text-anchor="middle" class="accent label">packages &#183; modules &#183; agents</text>
+
+  <!-- everyone runs everything -->
+  <path class="edge" d="M 472 98 C 520 90, 540 55, 588 55"/>
+  <path class="edge" d="M 472 105 L 588 105"/>
+  <path class="edge" d="M 472 112 C 520 120, 540 155, 588 155"/>
+  <text x="530" y="88" text-anchor="middle" class="muted label">everyone gets it</text>
+
+  <text x="598" y="60" class="mono">$ nix run &#8230;#search</text>
+  <text x="598" y="110" class="mono">$ nix run &#8230;#tui</text>
+  <text x="598" y="160" class="mono">$ nix run &#8230;#vmkit</text>
+</svg>

@@ -25,9 +25,14 @@
 
 # Index
 
-`index` is a shared, open-source monorepo of developer tools that anyone can
-modify. The bet: one repo everyone can edit is the fastest way for all of us to
-move. Add something useful, and everyone gets it.
+<p align="center">
+  <img src="doc/assets/hero.svg" width="760" alt="Three contributors commit tools into one shared Nix flake; everyone runs everything with nix run." />
+</p>
+
+Ever built a great little tool and watched it die on your laptop? `index` is a
+shared, open-source monorepo of developer tools that anyone can modify. The
+bet: one repo everyone can edit is the fastest way for all of us to move. Add
+something useful, and everyone gets it.
 
 It is one Nix flake holding ~45 packages (mostly Rust, with Python, Elixir,
 TypeScript, and Svelte where they fit), a corpus of NixOS modules, fleet
