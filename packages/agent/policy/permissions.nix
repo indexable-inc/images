@@ -1,7 +1,8 @@
 # Shared agent permission policy: one agent-neutral fact per row, rendered per
 # agent CLI. The tool vocabularies differ (Claude Code denies tool names via
 # settings `permissions.deny`; codex disables `features.*` leaves via the
-# forced `-c` layer), so each capability row carries both handles and the
+# forced `-c` layer; cursor-agent denies `Shell(...)` patterns via
+# `cli-config.json`), so each capability row carries both handles and the
 # renderers at the bottom fold in the rows a wrapper's baked MCP servers make
 # redundant.
 #
@@ -103,5 +104,15 @@ in {
       // lib.optionalAttrs exaSearchBaked exaSuperseded.codexFeatures
       // lib.optionalAttrs indexKernelBaked kernelCodexFeatures;
     inherit protectedMergeCommandPatterns;
+  };
+
+  # cursor-agent's `cli-config.json` permission vocabulary only verifiably
+  # covers shell commands (`Shell(<glob>)` deny entries), so only the
+  # protected-merge row renders here; the kernel/exa gates have no cursor
+  # handle yet. Delivery is the consumer's config management (see the
+  # cursor-cli wrapper's passthru), since the CLI reads permissions from
+  # config, not flags.
+  cursor = {
+    deniedShellPatterns = map (pattern: "Shell(${pattern})") protectedMergeCommandPatterns;
   };
 }

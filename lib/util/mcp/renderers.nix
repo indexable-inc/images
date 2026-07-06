@@ -24,6 +24,26 @@
       inherit (def) url;
     };
 
+  # One neutral def -> the object cursor-agent's `mcp.json` expects (schema:
+  # `{ type = "stdio"; command; args; env; }` for local servers, `{ url; }` for
+  # remote ones). `envVars` forwarding is deliberately dropped: the CLI spawns
+  # stdio servers with its own environment inherited, and its documented
+  # `${env:NAME}` interpolation is broken in the CLI as of 2026.01
+  # (https://forum.cursor.com/t/79639), so a forwarding entry would deliver the
+  # literal placeholder instead of the value.
+  cursorOne = def:
+    if isStdio def
+    then
+      {
+        type = "stdio";
+        inherit (def) command;
+      }
+      // lib.optionalAttrs (def ? args) {inherit (def) args;}
+      // lib.optionalAttrs ((def.env or {}) != {}) {inherit (def) env;}
+    else {
+      inherit (def) url;
+    };
+
   # A TOML array literal of scalars, e.g. `[ "serve" ]`. `ix.toml.scalar` is
   # scalars-only by design (it throws on a list), so the one list leaf a server
   # carries (`args`) gets this local encoder rather than growing that helper.
@@ -87,6 +107,17 @@ in {
   - `servers`: attrset from server name to a neutral definition.
   */
   toClaudeJson = servers: lib.mapAttrs (_: claudeOne) servers;
+
+  /**
+  Render an attrset of neutral server definitions to the value cursor-agent's
+  `~/.cursor/mcp.json` `mcpServers` key expects (the `cursor-cli` wrapper
+  exposes it as `passthru.mcpJson` for config delivery, since the CLI has no
+  MCP flag).
+
+  Arguments:
+  - `servers`: attrset from server name to a neutral definition.
+  */
+  toCursorJson = servers: lib.mapAttrs (_: cursorOne) servers;
 
   /**
   Render an attrset of neutral server definitions to the value a Claude Code

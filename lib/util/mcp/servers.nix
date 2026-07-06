@@ -1,6 +1,6 @@
 # Single source of truth for the MCP servers the agent wrappers bake in. Define
 # a server ONCE in the neutral shape below and render it to each tool's native
-# config with `toClaudeJson` / `toCodexEntries`, so `index` (and any future
+# config with `toClaudeJson` / `toCodexEntries` / `toCursorJson`, so `index` (and any future
 # shared server) is declared in one place instead of copied into the Claude Code
 # and Codex wrappers in two different schemas.
 #
@@ -76,7 +76,7 @@ in {
   /**
   The default MCP server set, defined once for every wrapper that bakes it.
   Returns the neutral definitions; each consumer renders them with
-  `toClaudeJson` / `toCodexEntries`.
+  `toClaudeJson` / `toCodexEntries` / `toCursorJson`.
 
   Arguments:
   - `indexCommand`: path to the `ix-mcp` entrypoint, or `null` when the `mcp`

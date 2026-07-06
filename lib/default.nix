@@ -319,7 +319,8 @@
   Single source of truth for the MCP servers baked into the agent wrappers.
   Define a server once in a neutral shape and render it to each tool's native
   config with `mcp.toClaudeJson` (Claude Code's `mcpServers` JSON) and
-  `mcp.toCodexEntries` (dotted `mcp_servers.*` codex `-c` flags), so `index`
+  `mcp.toCodexEntries` (dotted `mcp_servers.*` codex `-c` flags) and
+  `mcp.toCursorJson` (cursor-agent's `mcp.json` object), so `index`
   is declared in one place rather than copied into both wrappers. See
   [`lib/util/mcp.nix`](lib/util/mcp.nix).
   */

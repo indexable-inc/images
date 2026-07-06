@@ -1,4 +1,4 @@
-"""Playwright-style harnesses for interactive coding agents (Claude Code, Codex).
+"""Playwright-style harnesses for interactive coding agents (Claude Code, Codex, Cursor).
 
 `tui.Tui` gives you a raw PTY: send bytes, scrape the rendered screen. This
 module is the layer every agent test rig re-invents on top of it, and it
@@ -79,6 +79,7 @@ __all__ = [
     "AgentAssertions",
     "Claude",
     "Codex",
+    "Cursor",
     "Gate",
     "Keyboard",
     "expect",
@@ -523,6 +524,48 @@ class Codex(Agent):
         return "\n".join(out).strip()
 
 
+class Cursor(Agent):
+    """Cursor CLI (`cursor-agent`) in a PTY.
+
+    Grounded against cursor-agent 2026.06: idle uses the "ctrl+c to stop"
+    footer plus quiescence, launch auto-accepts the "Workspace Trust Required"
+    gate, and `parse_reply` returns the final plain answer block(s). The login
+    gate is NOT auto-cleared: a logged-out cursor-agent opens a browser OAuth
+    flow only a human can approve, so log in once interactively first.
+
+    Defaults pin the fast Composer model and pass `--force` (skip per-command
+    approval dialogs; explicit `cli-config.json` denies still apply), which
+    makes `agent.ask(...)` a cheap smart-codebase-search delegate:
+
+        async with await Cursor.launch(cwd="/repo") as cursor:
+            where = await cursor.ask("where is retry backoff implemented?")
+    """
+
+    binary = "cursor-agent"
+    #: The input caret of a ready cursor-agent box ("→ Plan, search, build
+    #: anything" / "→ Add a follow-up").
+    ready = re.compile(r"^\s*→ ", re.MULTILINE)
+    busy_marker = "ctrl+c to stop"
+    gates = (
+        # A cwd outside the trusted-workspace list opens on "Workspace Trust
+        # Required"; `a` selects "Trust this workspace".
+        Gate("trust-workspace", "Do you trust the contents of this directory", "a"),
+    )
+
+    def __init__(
+        self,
+        *args: str,
+        model: str = "composer-2.5-fast",
+        force: bool = True,
+        **kwargs: object,
+    ) -> None:
+        defaults = ("--model", model, *(("--force",) if force else ()))
+        super().__init__(*defaults, *args, **kwargs)  # type: ignore[arg-type]
+
+    def parse_reply(self, transcript: str) -> str:
+        """Keep the final cursor-agent answer block(s) from a TUI transcript."""
+        return _parse_cursor_reply(transcript)
+
 # --------------------------------------------------------------------------- #
 # Assertions (Playwright `expect`)
 # --------------------------------------------------------------------------- #
@@ -616,6 +659,48 @@ def _parse_claude_reply(transcript: str) -> str:
         out.append(ln)
     return "\n".join(out).strip()
 
+
+#: cursor-agent input-box top border: a run of `▄` (the footer starts here).
+_CURSOR_FOOTER = re.compile(r"^\s*▄+\s*$")
+#: Spinner/status lines like "⠘⠤ Composing" / "⠠⠛ Running  55 tokens".
+_CURSOR_SPINNER = re.compile(r"^\s*[\u2800-\u28ff]")
+
+
+def _parse_cursor_reply(transcript: str) -> str:
+    """The last answer block(s) in a cursor-agent transcript.
+
+    cursor-agent prints no answer marker (unlike Claude's `⏺` or Codex's `•`):
+    a turn renders as the echoed prompt, tool blocks (a `$ cmd` line with its
+    output indented beneath), and plain answer paragraphs, then the input-box
+    footer. So: cut at the footer border, drop spinner lines, split into
+    blank-line-separated blocks, drop `$`-led tool blocks and the leading
+    echoed-prompt block, and return what remains. Falls back to the stripped
+    transcript when nothing survives.
+    """
+    body: list[str] = []
+    for line in transcript.splitlines():
+        if _CURSOR_FOOTER.match(line):
+            break
+        if _CURSOR_SPINNER.match(line):
+            continue
+        body.append(line)
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    for line in body:
+        if line.strip():
+            current.append(line)
+        elif current:
+            blocks.append(current)
+            current = []
+    if current:
+        blocks.append(current)
+    answers = [b for b in blocks if not b[0].lstrip().startswith("$ ")]
+    if len(answers) >= 2:
+        # The first surviving block of a turn is the echoed user prompt.
+        answers = answers[1:]
+    if not answers:
+        return transcript.strip()
+    return "\n\n".join("\n".join(line.strip() for line in block) for block in answers).strip()
 
 def _shquote(s: str) -> str:
     """Single-quote `s` for a POSIX shell."""

@@ -7,12 +7,14 @@
   providerNames = {
     claude = "Claude Code";
     codex = "Codex";
+    cursor = "Cursor";
   };
   # Runtime token each provider renders as, consumed by ./system-prompt.nix to
   # filter runtime-scoped sections (a section's `runtimes` list holds these).
   providerRuntimes = {
     claude = "claude-code";
     codex = "codex";
+    cursor = "cursor";
   };
   extraSystemPrompts = {
     claude = ''
@@ -22,6 +24,10 @@
     codex = ''
       You are Codex. When naming the coding-agent runtime or disclosing AI
       authorship in outward-facing messages, say Codex.
+    '';
+    cursor = ''
+      You are Cursor. When naming the coding-agent runtime or disclosing AI
+      authorship in outward-facing messages, say Cursor.
     '';
   };
   systemPromptFor = provider:

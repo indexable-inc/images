@@ -4,7 +4,7 @@
   # Target agent runtime for this render. Sections may narrow themselves to a
   # subset of runtimes (see the optional `runtimes` field on a rule); this
   # argument selects which. Tokens are the provider names ./prompt.nix maps:
-  # "claude-code", "codex".
+  # "claude-code", "codex", "cursor".
   runtime ? "claude-code",
   # Rule names to drop from this build's prompt, e.g.
   # `claude-code.override { omitRules = [ "reportToPlaybook" ]; }`.
