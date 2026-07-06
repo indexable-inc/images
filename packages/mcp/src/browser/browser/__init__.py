@@ -667,10 +667,9 @@ _VDOM_JS = r"""
     return clamp(el.innerText || el.getAttribute('title') || '');
   };
 
-  const visible = (el, rect) => {
+  const visible = (rect, st) => {
     if (rect.width <= 1 || rect.height <= 1) return false;
-    const st = getComputedStyle(el);
-    if (st.visibility === 'hidden' || st.display === 'none' || +st.opacity === 0) return false;
+    if (st.visibility === 'hidden' || st.display === 'none') return false;
     if (viewportOnly) {
       const vw = innerWidth, vh = innerHeight;
       if (rect.bottom < 0 || rect.right < 0 || rect.top > vh || rect.left > vw) return false;
@@ -707,13 +706,18 @@ _VDOM_JS = r"""
     return out;
   };
 
-  const build = (el, inLabel) => {
+  const build = (el, inLabel, opacityZero) => {
     const tag = el.tagName ? el.tagName.toLowerCase() : '';
     if (!tag || SKIP_TAGS.has(tag)) return [];
     if (el.getAttribute && el.getAttribute('aria-hidden') === 'true') return [];
 
     const rect = el.getBoundingClientRect();
-    const isVisible = visible(el, rect);
+    // display/visibility cascade into descendants' computed style, but opacity
+    // does not (an opacity:0 wrapper's child computes opacity 1), so thread the
+    // zeroed state through the recursion: it hides the whole subtree.
+    const st = getComputedStyle(el);
+    if (+st.opacity === 0) opacityZero = true;
+    const isVisible = !opacityZero && visible(rect, st);
 
     const role0 = (el.getAttribute && el.getAttribute('role')) || IMPLICIT_ROLE[tag] || '';
     const interactive0 =
@@ -728,7 +732,7 @@ _VDOM_JS = r"""
 
     // Recurse first so we can collapse pure wrappers.
     let kids = [];
-    for (const c of el.children) kids.push(...build(c, childInLabel));
+    for (const c of el.children) kids.push(...build(c, childInLabel, opacityZero));
     kids = mergeRuns(kids);
 
     const role = role0, interactive = interactive0, heading = heading0;
@@ -764,7 +768,7 @@ _VDOM_JS = r"""
     }];
   };
 
-  const roots = mergeRuns(build(document.body, false));
+  const roots = mergeRuns(build(document.body, false, false));
   return {
     url: location.href,
     title: document.title,
