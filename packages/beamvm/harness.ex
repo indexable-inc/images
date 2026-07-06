@@ -213,24 +213,39 @@ defmodule BeamVM.Harness do
       log("loading #{app} (#{length(spec.paths)} code paths)")
     end
 
-    # Release boot order: sys.config (the baked build-time config from
-    # config.exs + prod.exs -- `server: true` for a Phoenix endpoint lives
-    # here) first, then runtime.exs overrides it, exactly as the release's
-    # own boot script would.
-    apply_sys_config(app, spec.sys_config)
-    apply_runtime_config(app, spec.runtime_config)
+    apply_release_config(app, spec)
     if spec.start and not started?(app), do: start_app(app)
     spec
   end
 
-  # sys.config is one Erlang term: a list of {App, [{Key, Val}]} pairs.
-  defp apply_sys_config(_app, []), do: :ok
+  # Replay the release boot's config pipeline: sys.config (the baked
+  # build-time config from config.exs + prod.exs -- `server: true` for a
+  # Phoenix endpoint lives here) DEEP-MERGED with runtime.exs, exactly as
+  # the release's config provider would. Deep merge, not two sequential
+  # put_all_env passes: runtime.exs typically sets a subset of an app key's
+  # keyword list (only `http:` under the endpoint, say), and a plain
+  # overwrite of that key silently drops the baked siblings -- observed as
+  # symphony booting with `server: true` lost and no HTTP listener.
+  # Multi-app config (`config :other_app, ...`) applies globally, which is
+  # release semantics too.
+  defp apply_release_config(app, spec) do
+    base = read_sys_config(app, spec.sys_config)
+    runtime = read_runtime_config(app, spec.runtime_config)
 
-  defp apply_sys_config(app, [path | _] = all) do
+    case Config.Reader.merge(base, runtime) do
+      [] -> :ok
+      merged -> Application.put_all_env(merged, persistent: true)
+    end
+  end
+
+  # sys.config is one Erlang term: a list of {App, [{Key, Val}]} pairs.
+  defp read_sys_config(_app, []), do: []
+
+  defp read_sys_config(app, [path | _] = all) do
     if length(all) > 1, do: log("#{app}: multiple sys.configs matched; using #{path}")
     log("#{app}: applying sys.config #{path}")
     {:ok, [config]} = :file.consult(String.to_charlist(path))
-    Application.put_all_env(config, persistent: true)
+    config
   end
 
   # `:code.modified_modules/0` lists exactly the loaded modules whose beam on
@@ -263,16 +278,12 @@ defmodule BeamVM.Harness do
     end
   end
 
-  # A release evaluates config/runtime.exs through its boot script's config
-  # providers; the harness starts apps directly, so it replays that provider
-  # here before start. Multi-app config (`config :other_app, ...`) applies
-  # globally, which is the same semantics the release boot would have.
-  defp apply_runtime_config(_app, []), do: :ok
+  defp read_runtime_config(_app, []), do: []
 
-  defp apply_runtime_config(app, [path | _] = all) do
+  defp read_runtime_config(app, [path | _] = all) do
     if length(all) > 1, do: log("#{app}: multiple runtime configs matched; using #{path}")
     log("#{app}: applying runtime config #{path}")
-    Application.put_all_env(Config.Reader.read!(path, env: :prod), persistent: true)
+    Config.Reader.read!(path, env: :prod)
   end
 
   # :temporary, not :permanent: a tenant crashing past its own supervision
