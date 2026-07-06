@@ -7,19 +7,29 @@
 set -euo pipefail
 
 # Exec nodes run with the pack directory as cwd (ExecRunner), so the prompt
-# resolves pack-relative before we cd into the repo.
+# resolves pack-relative before we move into the repo.
 prompt_file="$PWD/prompts/insights.md"
 last_msg="$(mktemp)"
-trap 'rm -f "$last_msg"' EXIT
 
-# The agent is open-ended and its output is published, so strip every
-# secret the symphony unit env carries (ExecRunner inherits the full BEAM
-# env and injects GH_TOKEN); codex only needs its own API key. Containment
-# beyond that relies on codex's read-only sandbox (network off) and its
-# default *KEY*/*SECRET*/*TOKEN* env scrub for model-spawned shells;
+# The agent reads a detached worktree of HEAD, not the mutable checkout:
+# untracked files (.env, local scratch) in the operator's tree must never
+# be readable by a prompt whose output is posted to Slack. Tracked content
+# only, and the worktree is torn down whether the agent succeeds or not.
+digest_root="$(mktemp -d)"
+cleanup() {
+  git -C "$SYMPHONY_PRIMARY_REPO" worktree remove --force "$digest_root/repo" || true
+  rm -rf "$digest_root" "$last_msg"
+}
+trap cleanup EXIT
+git -C "$SYMPHONY_PRIMARY_REPO" worktree add --detach "$digest_root/repo" HEAD
+
+# Strip every secret the symphony unit env carries (ExecRunner inherits the
+# full BEAM env and injects GH_TOKEN); codex only needs its own API key.
+# Containment beyond that relies on codex's read-only sandbox (network off)
+# and its default *KEY*/*SECRET*/*TOKEN* env scrub for model-spawned shells;
 # --ignore-user-config keeps a host config.toml from re-enabling network.
 (
-  cd "$SYMPHONY_PRIMARY_REPO"
+  cd "$digest_root/repo"
   env -u SLACK_BOT_OAUTH_TOKEN -u SLACK_SIGNING_SECRET \
     -u GH_TOKEN -u GITHUB_TOKEN -u GITHUB_WEBHOOK_SECRET \
     -u LINEAR_API_KEY -u LINEAR_WEBHOOK_SECRET \

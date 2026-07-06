@@ -6,7 +6,8 @@ defmodule SymphonyElixir.Triggers.CronTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{CronExpression, WorkflowCatalog}
+  alias SymphonyElixir.{CronExpression, CronState, WorkflowCatalog}
+  alias SymphonyElixir.IR.{Node, Store}
   alias SymphonyElixir.Triggers.Cron
 
   # US DST in 2026: spring forward Sun Mar 8 (02:00 PST -> 03:00 PDT),
@@ -114,7 +115,7 @@ defmodule SymphonyElixir.Triggers.CronTest do
       )
 
       start_supervised!({WorkflowCatalog, workflows_dir: dir, poll_ms: 60_000})
-      start_supervised!(SymphonyElixir.CronState)
+      start_supervised!(CronState)
       cron = start_supervised!({Cron, []})
 
       # The catalog's boot scan is an async message; scan synchronously so
@@ -140,7 +141,7 @@ defmodule SymphonyElixir.Triggers.CronTest do
       @behaviour SymphonyElixir.Runtime.EngineClient
 
       @impl true
-      def run_node(%SymphonyElixir.IR.Node{id: id}, _opts), do: {:ok, %{ran: id}, "thread-#{id}"}
+      def run_node(%Node{id: id}, _opts), do: {:ok, %{ran: id}, "thread-#{id}"}
 
       @impl true
       def status(_thread_id), do: :unknown
@@ -150,7 +151,7 @@ defmodule SymphonyElixir.Triggers.CronTest do
       start_supervised!({Registry, keys: :unique, name: SymphonyElixir.Runtime.Registry})
       start_supervised!({Task.Supervisor, name: SymphonyElixir.TaskSupervisor})
       start_supervised!(SymphonyElixir.Runtime.Supervisor)
-      start_supervised!(SymphonyElixir.CronState)
+      start_supervised!(CronState)
 
       store = Path.join(base, "store")
       workflows = Path.join(base, "workflows")
@@ -187,7 +188,7 @@ defmodule SymphonyElixir.Triggers.CronTest do
     # Same tolerance as IngressTest: start_link returns before the :advance
     # continuation writes the first snapshot.
     defp wait_terminal(run_id, store_opts, attempts \\ 60) do
-      case SymphonyElixir.IR.Store.load(run_id, store_opts) do
+      case Store.load(run_id, store_opts) do
         {:ok, %{status: status} = graph} when status in [:succeeded, :failed, :cancelled] ->
           graph
 
@@ -223,7 +224,7 @@ defmodule SymphonyElixir.Triggers.CronTest do
 
       assert :ok = Cron.poll_now()
 
-      assert %DateTime{} = SymphonyElixir.CronState.get_last_fired(name)
+      assert %DateTime{} = CronState.get_last_fired(name)
       assert run_files(store_opts) == []
     end
 
@@ -234,7 +235,7 @@ defmodule SymphonyElixir.Triggers.CronTest do
 
       # A watermark two days back has a passed 9am-LA match, so the next
       # tick owes exactly one catch-up fire.
-      :ok = SymphonyElixir.CronState.seed_if_unset(name, DateTime.add(DateTime.utc_now(), -2, :day))
+      :ok = CronState.seed_if_unset(name, DateTime.add(DateTime.utc_now(), -2, :day))
 
       assert :ok = Cron.poll_now()
       [run_file] = wait_run_count(store_opts, 1)
@@ -248,9 +249,9 @@ defmodule SymphonyElixir.Triggers.CronTest do
       # The fire advanced the watermark to now, so an immediate second tick
       # owes nothing: the watermark is untouched (record_fire is the only
       # writer) and no second run appears.
-      watermark = SymphonyElixir.CronState.get_last_fired(name)
+      watermark = CronState.get_last_fired(name)
       assert :ok = Cron.poll_now()
-      assert SymphonyElixir.CronState.get_last_fired(name) == watermark
+      assert CronState.get_last_fired(name) == watermark
       assert run_files(store_opts) == [run_file]
     end
 
@@ -265,8 +266,8 @@ defmodule SymphonyElixir.Triggers.CronTest do
 
       # The bad schedule cannot seed (it never parses), the good one still
       # did: the tick walked past the failure instead of crashing.
-      assert is_nil(SymphonyElixir.CronState.get_last_fired(bad))
-      assert %DateTime{} = SymphonyElixir.CronState.get_last_fired(good)
+      assert is_nil(CronState.get_last_fired(bad))
+      assert %DateTime{} = CronState.get_last_fired(good)
     end
   end
 end

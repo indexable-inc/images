@@ -118,6 +118,9 @@ in
       erlang
       pkgs.gh
       pkgs.git
+      # The bundled indexable pack's exec scripts build their structured
+      # {"slack_summary": ...} output with jq, so the runtime carries it.
+      pkgs.jq
       pkgs.openssh
     ];
     text = ''

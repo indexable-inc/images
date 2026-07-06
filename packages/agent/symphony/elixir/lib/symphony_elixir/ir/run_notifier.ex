@@ -157,6 +157,11 @@ defmodule SymphonyElixir.IR.RunNotifier do
   # Slack caps a section block's text at 3000 characters.
   @section_char_limit 3000
 
+  # Slack rejects messages over 50 blocks; up to 4 are structural (header,
+  # summary, context, actions), so cap content sections well inside that. A
+  # wide fan-out truncating its digest list beats the whole post failing.
+  @max_content_sections 40
+
   # The run's publishable content: each sink node's reserved "slack_summary"
   # output, one mrkdwn section per node (see moduledoc). Succeeded runs
   # only; a failed run's partial content would read as a delivered digest.
@@ -164,7 +169,7 @@ defmodule SymphonyElixir.IR.RunNotifier do
   # rendering but disables <!channel>/<@user> mention parsing, so planted
   # repo text cannot broadcast-ping the channel through the digest.
   defp content_sections(%RunGraph{status: :succeeded} = graph) do
-    for text <- sink_summaries(graph) do
+    for text <- graph |> sink_summaries() |> Enum.take(@max_content_sections) do
       %{
         "type" => "section",
         "text" => %{"type" => "mrkdwn", "text" => truncate(text, @section_char_limit), "verbatim" => true}

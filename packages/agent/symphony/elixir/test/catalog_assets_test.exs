@@ -37,9 +37,9 @@ defmodule SymphonyElixir.CatalogAssetsTest do
     assert {:ok, workflow} = Parser.parse(source, file: "insights.sym")
 
     assert workflow.name == "insights"
-    # The cron kind is the load-bearing contract: it is what Triggers.Cron
-    # selects on, and what makes this pack scheduled rather than manual.
-    assert %{kind: :cron, schedule: "0 16" <> _} = workflow.trigger
+    # The cron kind and zone are the load-bearing contract: Triggers.Cron
+    # selects on them, and the zone keeps 9am Pacific across DST.
+    assert %{kind: :cron, schedule: "0 9" <> _, timezone: "America/Los_Angeles"} = workflow.trigger
 
     binds = for {:bind, name, _expr} <- workflow.statements, do: name
     assert binds == ["insights"]

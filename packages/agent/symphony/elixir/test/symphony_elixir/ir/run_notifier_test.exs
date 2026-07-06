@@ -245,6 +245,23 @@ defmodule SymphonyElixir.IR.RunNotifierTest do
       assert String.ends_with?(content, "...")
     end
 
+    test "content sections are capped inside Slack's 50-block message limit" do
+      # 60 independent sinks (no deps between them); the message must stay
+      # under 50 blocks total, so content is capped rather than the whole
+      # post failing.
+      nodes =
+        for i <- 1..60, into: %{} do
+          id = "sink-#{String.pad_leading(Integer.to_string(i), 2, "0")}"
+          {id, exec_node(id, %{"slack_summary" => "digest #{i}"})}
+        end
+
+      payload = RunNotifier.build_payload(graph(status: :succeeded, trigger: %{kind: :cron}, nodes: nodes), nil)
+
+      assert length(payload["blocks"]) <= 50
+      # 1 run summary + the capped content sections.
+      assert length(section_texts(payload)) == 41
+    end
+
     test "a failed run posts no content even when a sink carries a summary" do
       payload =
         RunNotifier.build_payload(

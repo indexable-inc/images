@@ -141,7 +141,7 @@ defmodule SymphonyElixir.Triggers.Cron do
             :ok = CronState.seed_if_unset(entry.name, now)
 
           %DateTime{} = last_fired ->
-            maybe_fire_due(entry, parsed, last_fired, now)
+            maybe_fire_due(entry, parsed, last_fired, now, run_opts)
         end
 
       {:error, reason} ->
@@ -149,7 +149,7 @@ defmodule SymphonyElixir.Triggers.Cron do
     end
   end
 
-  defp maybe_fire_due(entry, parsed, last_fired, now) do
+  defp maybe_fire_due(entry, parsed, last_fired, now, run_opts) do
     case next_due(parsed, last_fired, now, entry.trigger.timezone) do
       {:fire, scheduled_for} ->
         fire(entry, scheduled_for, now, run_opts)
