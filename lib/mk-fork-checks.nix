@@ -47,10 +47,13 @@
   # `patched-src` proves the linear series still applies, this proves the
   # committed `dag.json` is honest and in sync (declared ancestors sufficient,
   # independent patches commute byte-for-byte, NNNN is a topological order, and
-  # regenerating reproduces the committed bytes). Pure text work on the fetched
-  # src tree in the sandbox, so it stays seconds-fast. The derivation and
+  # regenerating reproduces the committed bytes), and that the fork's upstreaming
+  # intent (`fork.patches`, if declared) is coherent: keys name real patch files
+  # and attempt-marked patches carry a commit-message body (which becomes the
+  # upstream PR description, see packages/upstream-pr). Pure text work on the
+  # fetched src tree in the sandbox, so it stays seconds-fast. The derivation and
   # verification logic is owned by `dagCheckSrc` (dag-{lib,check}.nu); the check
-  # just wires the src, patch dir, and pinned rev into that driver.
+  # just wires the src, patch dir, pinned rev, and intent into that driver.
   patchDagChecks = lib.genAttrs' forkPackages (
     fork: let
       expectedBase = flakeLock.nodes.${fork.input}.locked.rev;
@@ -82,7 +85,8 @@
           nu "$workdir/dag-check.nu" \
             ${lib.escapeShellArg (toString forkSrcInputs.${fork.name})} \
             ${patchDirStore} \
-            ${lib.escapeShellArg expectedBase}
+            ${lib.escapeShellArg expectedBase} \
+            ${lib.escapeShellArg (builtins.toJSON (fork.patches or {}))}
           touch "$out"
         ''
       )

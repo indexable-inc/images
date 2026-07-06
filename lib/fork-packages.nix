@@ -50,11 +50,22 @@
 #                        never   = repo-specific delta or unmergeable upstream; the
 #                                  tool never opens a PR for it.
 #                      reason   : one line explaining the mark.
+#                      prExtra  : OPTIONAL upstream-specific PR-template content
+#                                 (issue refs, checklists) that does not belong in
+#                                 a commit message; appended after the PR body.
 #                    A patch with no entry defaults to `hold` with an "unclassified"
 #                    reason (fail-safe: an unclassified patch is never sent upstream
 #                    automatically). `upstream-sync` treats a repo whose
 #                    `upstreamPolicy.aiPrsAllowed == false` as `never` regardless of
 #                    the per-patch mark, so a banned repo cannot leak a PR.
+#
+# There is deliberately NO per-patch description field: the upstream PR's title
+# and body come from the patch's own commit message (subject = title, body = PR
+# body, plus AI attribution and a link to the patch of record; see
+# packages/upstream-pr). A nix copy would duplicate the commit message and
+# drift. One fact, one home: the commit message IS the patch's description, and
+# the `patch-dag-<name>` check fails any attempt-marked patch whose commit
+# message has no body.
 {
   forkPackages = [
     {

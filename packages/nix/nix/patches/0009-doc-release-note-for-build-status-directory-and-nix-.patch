@@ -4,6 +4,11 @@ Date: Sun, 5 Jul 2026 20:21:19 -0700
 Subject: [PATCH 7/7] doc: release note for build status directory and 'nix
  store builds'
 
+Adds the rl-next release note for the `build-status-dir` experimental
+feature and the `nix store builds` command: what the status directory
+exposes (per-goal JSON status files under `<store-state-dir>/status/`,
+observable without a daemon connection) and how `nix store builds`
+renders it.
 
 diff --git a/doc/manual/rl-next/build-status-dir.md b/doc/manual/rl-next/build-status-dir.md
 new file mode 100644

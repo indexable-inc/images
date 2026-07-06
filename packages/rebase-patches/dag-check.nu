@@ -8,13 +8,36 @@
 #   (b) every pair of DAG-independent patches commutes byte-for-byte,
 #   (c) dag.json is in sync: regenerating from scratch yields identical bytes,
 #       and the NNNN order is a valid topological order of the DAG.
+#   (d) the hand-written upstreaming intent (lib/fork-packages.nix `patches`)
+#       is coherent with the series: every intent key names a real patch file
+#       (a rebase can renumber/rename patches and orphan intent silently), and
+#       every `attempt`-marked patch has a substantive commit-message body,
+#       because the upstream PR body IS the commit message (one fact, one home;
+#       see packages/upstream-pr). An attempt patch with a bare subject would
+#       open a description-less PR, so it fails here with "write the why".
 #
-# Args: <src-dir> <patch-dir> <expected-base-rev>. `expected-base-rev` is the
-# upstream rev the fork is pinned at (flake.lock), so the committed dag.json's
-# `base` field is validated against the real pin, not just the synthetic commit.
+# Args: <src-dir> <patch-dir> <expected-base-rev> [<intent-json>]. The base rev
+# is the upstream rev the fork is pinned at (flake.lock), so the committed
+# dag.json's `base` field is validated against the real pin, not just the
+# synthetic commit. `intent-json` is the fork's `patches` intent attrset
+# rendered to JSON (defaults to empty for forks with no declared intent).
 use dag-lib.nu *
 
-def main [src_dir: string, patch_dir: string, expected_base: string] {
+# The commit-message body of a format-patch file: the lines between the header
+# block (ended by the first blank line; folded Subject continuations are
+# indented, never blank) and the diff payload (`---` separator, or `diff --git`
+# directly when the series is exported with --no-stat). Blank-only lines do not
+# count as substance.
+def "patch body-lines" [file: string]: nothing -> list<string> {
+  open --raw $file
+  | lines
+  | skip until {|l| $l == "" }
+  | skip 1
+  | take until {|l| ($l == "---") or ($l | str starts-with "diff --git ") }
+  | where {|l| ($l | str trim) != "" }
+}
+
+def main [src_dir: string, patch_dir: string, expected_base: string, intent_json: string = "{}"] {
   let files = (glob ($patch_dir | path join "*.patch") | sort)
   if ($files | is-empty) {
     print $"patch-dag check: no *.patch files in ($patch_dir)"
@@ -75,6 +98,29 @@ def main [src_dir: string, patch_dir: string, expected_base: string] {
     print "patch-dag check: invariant violations:"
     for e in $r.errors { print $"  - ($e)" }
     $failed = true
+  }
+
+  # (d) intent coherence. Keys must name real patch files (a rebase renumbers
+  # names and would orphan intent silently), and attempt-marked patches must
+  # carry the why in the commit body, because that body becomes the upstream PR
+  # description verbatim (packages/upstream-pr); nix deliberately has no
+  # duplicate description field.
+  let intent = ($intent_json | from json)
+  let names = ($patches | get name)
+  for key in ($intent | columns) {
+    if $key not-in $names {
+      print $"patch-dag check: lib/fork-packages.nix intent references nonexistent patch ($key) \(renamed by a rebase?\); update the intent key."
+      $failed = true
+    }
+  }
+  let attempts = ($intent | items {|k, v| {name: $k, mark: ($v.upstream? | default "hold")} } | where mark == "attempt" | get name)
+  for nm in $attempts {
+    if $nm not-in $names { continue }  # already reported above
+    let body = (patch body-lines ($patch_dir | path join $nm))
+    if ($body | is-empty) {
+      print $"patch-dag check: ($nm) is marked upstream = attempt but its commit message has no body; write the why in the commit body \(it becomes the upstream PR description\)."
+      $failed = true
+    }
   }
 
   # Best-effort cleanup. git marks pack/object files read-only, so a plain `rm`

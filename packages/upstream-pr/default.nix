@@ -23,6 +23,15 @@
 #      DRAFT PR upstream. Default is prepare-only: opening the upstream PR is the
 #      outward act and stays behind an explicit `--open` a human invokes.
 #
+# The PR's title and body come FROM THE PATCH ITSELF: subject = title, commit
+# message body = PR body (one fact, one home; the fork mapping deliberately has
+# no duplicate description field), plus AI attribution and a link back to the
+# patch file of record. An optional `patches.<patch>.prExtra` in the mapping is
+# appended after the body for upstream-specific PR-template content (issue refs,
+# checklists) that does not belong in a commit message. A body-less commit is
+# refused; the `patch-dag-<name>` check enforces the same for every
+# attempt-marked patch so the failure happens in CI, not mid-contribution.
+#
 # `--dry-run` runs the whole flow (closure, fetch, am, branch) but skips the
 # push and PR, printing what it WOULD push. Used to validate content without
 # touching any remote.
@@ -87,6 +96,27 @@ in
         let trimmed = ($url | str replace --regex '\.git$' "" | str replace --regex '/$' "")
         let parts = ($trimmed | split row "/")
         {owner: ($parts | get ($parts | length | $in - 2)), repo: ($parts | last)}
+      }
+
+      # The https blob URL of the patch file of record in the INVOKING repo (so a
+      # downstream mapping links to its own repo), derived from the `origin`
+      # remote in either ssh or https form. Returns null with a loud note when
+      # origin is absent or not a github URL: the PR body then omits the link
+      # rather than fabricating one.
+      def "origin blob-link" [patch_dir: string, patch: string]: nothing -> any {
+        let res = (do { git remote get-url origin } | complete)
+        if $res.exit_code != 0 {
+          print $"(ansi yellow)upstream-pr: no `origin` remote here; the PR body will omit the patch-of-record link.(ansi reset)"
+          return null
+        }
+        let url = ($res.stdout | str trim)
+        let m = ($url | parse --regex 'github\.com[:/](?<owner>[^/]+)/(?<repo>[^/]+?)(\.git)?$')
+        if ($m | is-empty) {
+          print $"(ansi yellow)upstream-pr: origin ($url) is not a parseable github URL; the PR body will omit the patch-of-record link.(ansi reset)"
+          return null
+        }
+        let o = ($m | first)
+        $"https://github.com/($o.owner)/($o.repo)/blob/main/($patch_dir)/($patch)"
       }
 
       # A filesystem/branch-safe slug from a patch file name: drop the NNNN- prefix
@@ -197,8 +227,41 @@ in
         print $"  ($compare)"
 
         if $open {
-          # The outward act, gated behind --open. Draft only.
+          # The outward act, gated behind --open. Draft only. Title and body come
+          # from the patch's own commit message (one fact, one home: nix carries
+          # no duplicate description field), so a body-less commit is refused
+          # loudly; the `patch-dag-<name>` check enforces the same for
+          # attempt-marked patches before it ever gets here.
           let title = (git -C $scratch log -1 --format='%s' HEAD | str trim)
+          let commit_body = (git -C $scratch log -1 --format='%b' HEAD | str trim)
+          if ($commit_body | is-empty) {
+            error make { msg: $"upstream-pr: ($pkg): ($target) has no commit-message body; write the why in the commit body \(it becomes the upstream PR description\)." }
+          }
+          # Optional upstream-specific PR-template content (issue refs,
+          # checklists) that does not belong in a commit message, declared as
+          # `patches.<patch>.prExtra` in the fork mapping.
+          let pr_extra = ($fork | get -o patches | default {} | get -o $target | default {} | get -o prExtra)
+          # Link back to the patch file of record in OUR repo, derived from the
+          # invoking repo's origin remote so a downstream mapping links to its
+          # own repo. Best-effort but loud: no parseable origin means no link.
+          let patch_link = (origin blob-link $fork.patchDir $target)
+          let attribution = (
+            [
+              "---"
+              (if $patch_link != null {
+                $"Contributed from a maintained fork patch series; the patch of record is ($patch_link)."
+              } else {
+                $"Contributed from a maintained fork patch series \(patch ($target)\)."
+              })
+              "Prepared with AI assistance (Claude); directed and reviewed by a human maintainer."
+            ] | str join "\n\n"
+          )
+          let body = (
+            [$commit_body]
+            | append (if $pr_extra != null { [$pr_extra] } else { [] })
+            | append [$attribution]
+            | str join "\n\n"
+          )
           print $"(ansi yellow)upstream-pr: opening DRAFT PR upstream ($slug.owner)/($slug.repo) <- ($org):($branch)...(ansi reset)"
           (
             gh pr create
@@ -207,7 +270,7 @@ in
               --head $"($org):($branch)"
               --title $title
               --draft
-              --body $"Contributed from indexable-inc's in-repo patch series. Single-patch closure of `($target)`.\n\nAuto-prepared by `nix run .#upstream-pr`."
+              --body $body
           )
         } else {
           print $"upstream-pr: prepare-only. Re-run with `--open` to open a DRAFT PR upstream, or open the compare URL by hand."

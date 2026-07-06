@@ -65,11 +65,12 @@
   # the PR mechanism (`upstream-pr`) from here rather than a bare callPackage arg,
   # which the package set does not expose flat.
   repoPackages,
+  runCommand,
+  nushell,
 }: let
   inherit (repoPackages) upstream-pr;
   forkData = (formats.json {}).generate "fork-packages.json" ix.forkPackages;
-in
-  writeNushellApplication {
+  package = writeNushellApplication {
     name = "upstream-sync";
     meta = {
       description = "Drive the de-fork upstreaming loop: track PR state, find duplicates, retire merged patches, and open PRs for attempt-marked patches";
@@ -295,6 +296,11 @@ in
           }
 
           mut doc = (status load $fork)
+          # Pre-run committed state, captured before this run touches it, so the
+          # `--check-stale` verdict reflects what was actually committed rather
+          # than the file this run is about to write.
+          let pre_existed = (status path $fork | path exists)
+          let pre_last_checked = $doc.lastChecked
           $doc = ($doc | update lastChecked (date now | format date "%Y-%m-%dT%H:%M:%SZ"))
 
           # The patch set to walk: dag.json node order (canonical), filtered by the
@@ -348,7 +354,7 @@ in
             if $tracked != null {
               let fresh = (pr refresh $slug $tracked.number)
               if $fresh == null {
-                $doc = (log append $doc $"($pf): tracked PR #($tracked.number) no longer readable (deleted/renamed); leaving last-known state")
+                $doc = (log append $doc $"($pf): tracked PR #($tracked.number) no longer readable, deleted or renamed; leaving last-known state")
                 $plan = ($plan | append {fork: $fork.name, patch: $pf, intent: "attempt", action: "stale-pr", detail: $"PR #($tracked.number) unreadable"})
                 continue
               }
@@ -362,7 +368,7 @@ in
               # wire that verification into the plan for a human/agent to confirm.
               if $fresh.state == "merged" and (not ($doc.patches | get $pf | get retired)) {
                 $new_entry = ($new_entry | update retired true)
-                $doc = (log append $doc $"($pf): merged upstream in PR #($fresh.number); marked retired. Verify the next base bump drops it (empty cherry).")
+                $doc = (log append $doc $"($pf): merged upstream in PR #($fresh.number); marked retired. Verify the next base bump drops it as an empty cherry.")
               }
               $doc = ($doc | upsert patches ($doc.patches | upsert $pf $new_entry))
               let action = (if $fresh.state == "merged" { "retired" } else { $"tracked:($fresh.state)" })
@@ -402,14 +408,20 @@ in
             if $opened.exit_code != 0 {
               print $"(ansi red)upstream-sync: ($fork.name): upstream-pr failed for ($pf):(ansi reset)"
               print ($opened.stderr)
-              $doc = (log append $doc $"($pf): upstream-pr --open FAILED (see output)")
+              $doc = (log append $doc $"($pf): upstream-pr --open FAILED; see output above")
               $plan = ($plan | append {fork: $fork.name, patch: $pf, intent: "attempt", action: "open-failed", detail: "upstream-pr error"})
               continue
             }
             # Parse the created PR URL from upstream-pr's output (gh prints it on
             # `pr create`). Best-effort: if we cannot parse it, still log the act.
+            # Each `str contains` is parenthesized (it would otherwise greedily
+            # swallow the `and`); `last` on an empty list yields null, which the
+            # guard below handles.
             let pr_url = (
-              ($opened.stdout | lines | where {|l| $l | str contains "github.com" and ($l | str contains "/pull/") } | last?)
+              $opened.stdout
+              | lines
+              | where {|l| ($l | str contains "github.com") and ($l | str contains "/pull/") }
+              | last
             )
             if $pr_url != null {
               let pr_num = ($pr_url | parse --regex '/pull/(?<n>[0-9]+)' | get n.0? | default "0" | into int)
@@ -424,11 +436,21 @@ in
 
           status save $fork $doc $dry_run
 
+          # Staleness verdicts judge the PRE-run committed state (captured at
+          # load), so they are meaningful in every mode, including right after
+          # this run wrote a fresh file.
           if $check_stale {
             let attempts = ($intent | items {|k, v| $v.upstream? | default "hold" } | where {|s| $s == "attempt" } | length)
-            let sp = (status path $fork)
-            if $attempts > 0 and (not ($sp | path exists)) and $dry_run {
-              print $"(ansi yellow)upstream-sync: ($fork.name): has ($attempts) attempt patches but no committed upstream-status.json yet; expected until a real non-dry-run sync runs.(ansi reset)"
+            if $attempts > 0 and (not $pre_existed) {
+              print $"(ansi yellow)upstream-sync: ($fork.name): STALE: has ($attempts) attempt patches but no committed upstream-status.json; run a non-dry-run sync and commit it.(ansi reset)"
+            } else if $pre_last_checked != null {
+              # 14 days: tracked-PR state and the duplicate landscape move on the
+              # scale of weeks; older than that and the committed state is a stale
+              # basis for the next upstreaming decision.
+              let age = ((date now) - ($pre_last_checked | into datetime))
+              if $age > 14day {
+                print $"(ansi yellow)upstream-sync: ($fork.name): STALE: committed upstream-status.json was last checked ($pre_last_checked), ($age) ago; re-run and commit.(ansi reset)"
+              }
             }
           }
         }
@@ -464,4 +486,104 @@ in
         }
       }
     '';
-  }
+  };
+
+  # Hermetic lifecycle test for the branch no other check reaches: the --open
+  # recording path and the merged->retired transition run ONLY after a real
+  # upstream PR exists, so a bug there surfaces on first outward use, orphaning
+  # an opened-but-untracked PR and inviting a duplicate on the next run (this
+  # exact failure shipped once: an invalid `last?` command and an unparenthesized
+  # `str contains ... and ...` both parsed fine at build time and crashed at
+  # runtime). gh and upstream-pr are stubbed, so the whole PR lifecycle runs in
+  # the sandbox with no network: open + record, merged -> retired, idempotent
+  # re-run. The test drives the REAL shipped script (the wrapper's PATH preamble
+  # pins store paths ahead of the stubs, so the body is extracted from the `# nu`
+  # marker on and run under a stub-first PATH).
+  lifecycle = runCommand "upstream-sync-lifecycle-test" {nativeBuildInputs = [nushell];} ''
+    mkdir -p stubs work/repo/patches
+    export HOME="$PWD"
+
+    # Stub gh: the search phase finds no duplicates; the view phase replays
+    # whatever PR state the stage under test staged into GH_PR_VIEW_RESPONSE.
+    # Dollars are escaped so the heredoc expands only $(command -v bash) now.
+    cat > stubs/gh <<STUB
+    #!$(command -v bash)
+    case "\$1 \$2" in
+      "search prs") echo "[]" ;;
+      "pr view") cat "\$GH_PR_VIEW_RESPONSE" ;;
+      *) echo "stub gh: unexpected: \$*" >&2; exit 1 ;;
+    esac
+    STUB
+
+    # Stub upstream-pr: mimic the real output shape (compare URL, then the
+    # `gh pr create` URL line the parser must pick).
+    cat > stubs/upstream-pr <<STUB
+    #!$(command -v bash)
+    echo "upstream-pr: stub invoked with: \$*"
+    echo "  https://github.com/fakeorg/fakerepo/compare/main...indexable-inc:fakerepo:branch?expand=1"
+    echo "https://github.com/fakeorg/fakerepo/pull/99999"
+    STUB
+    chmod +x stubs/gh stubs/upstream-pr
+
+    cat > work/repo/patches/0001-fake-fix.patch <<'EOF'
+    From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+    From: Test <t@t>
+    Date: Mon, 1 Jan 2026 00:00:00 +0000
+    Subject: [PATCH] fakefix: repair the frobnicator widget alignment
+
+    ---
+    EOF
+    echo '{"comment":"t","base":"deadbeef","nodes":[{"patch":"0001-fake-fix.patch","deps":[]}]}' \
+      > work/repo/patches/dag.json
+    cat > work/mapping.json <<'EOF'
+    [{"name":"fake","input":"fake-src","url":"https://github.com/fakeorg/fakerepo.git",
+      "patchDir":"repo/patches","autoUpdate":false,
+      "upstreamPolicy":{"prsWelcome":true,"aiPrsAllowed":"unknown","citation":"https://example.com","notes":"t"},
+      "patches":{"0001-fake-fix.patch":{"upstream":"attempt","reason":"lifecycle test"}}}]
+    EOF
+
+    # The shipped script body, from the `# nu` marker on (past the PATH preamble).
+    awk '/^# nu$/,0' ${package}/bin/upstream-sync > script.nu
+    export PATH="$PWD/stubs:$PATH"
+    cd work
+
+    echo "--- stage 1: --open records the created PR ---"
+    nu ../script.nu --open --mapping "$PWD/mapping.json" fake
+    nu -c '
+      let p = (open repo/patches/upstream-status.json | get patches."0001-fake-fix.patch")
+      if $p.pr.number != 99999 or $p.pr.state != "draft" or $p.retired {
+        error make {msg: $"stage 1: PR not recorded: ($p | to json)"}
+      }'
+
+    echo "--- stage 2: merged upstream -> retired ---"
+    echo '{"state":"MERGED","isDraft":false,"url":"https://github.com/fakeorg/fakerepo/pull/99999","number":99999}' > pr-view.json
+    export GH_PR_VIEW_RESPONSE="$PWD/pr-view.json"
+    nu ../script.nu --mapping "$PWD/mapping.json" fake
+    nu -c '
+      let d = (open repo/patches/upstream-status.json)
+      let p = ($d.patches."0001-fake-fix.patch")
+      if $p.pr.state != "merged" or (not $p.retired) {
+        error make {msg: $"stage 2: not retired: ($p | to json)"}
+      }
+      if ($d.log | length) != 3 {
+        error make {msg: $"stage 2: expected 3 log transitions, got ($d.log | to json)"}
+      }'
+
+    echo "--- stage 3: re-run is idempotent (no duplicate transitions) ---"
+    nu ../script.nu --mapping "$PWD/mapping.json" fake
+    nu -c '
+      let d = (open repo/patches/upstream-status.json)
+      if ($d.log | length) != 3 {
+        error make {msg: $"stage 3: log grew on a no-change re-run: ($d.log | to json)"}
+      }'
+
+    touch "$out"
+  '';
+in
+  package.overrideAttrs (old: {
+    passthru =
+      (old.passthru or {})
+      // {
+        tests = (old.passthru.tests or {}) // {inherit lifecycle;};
+      };
+  })
