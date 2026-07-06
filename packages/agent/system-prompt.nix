@@ -1,6 +1,11 @@
 {
   lib,
   agentName ? "Claude Code",
+  # Target agent runtime for this render. Sections may narrow themselves to a
+  # subset of runtimes (see the optional `runtimes` field on a rule); this
+  # argument selects which. Tokens are the provider names ./prompt.nix maps:
+  # "claude-code", "codex".
+  runtime ? "claude-code",
   # Rule names to drop from this build's prompt, e.g.
   # `claude-code.override { omitRules = [ "reportToPlaybook" ]; }`.
   omitRules ? [],
@@ -9,11 +14,21 @@
 # Keep safety-critical rules explicit. Eval and rollouts are opt-in because prior
 # prompt edits caused live `claude -p ... --dangerously-skip-permissions` runs to
 # create real production side effects.
+#
+# Render and reread the claude-code prompt (the default runtime) with:
+#   nix eval --raw --impure --expr \
+#     'import ./packages/agent/system-prompt.nix { lib = (import <nixpkgs> {}).lib; }'
+# Pass `runtime = "codex";` in that attrset to render the Codex variant.
 let
   singletonRule = rule: let
     names = builtins.attrNames rule;
     name = builtins.head names;
     value = builtins.getAttr name rule;
+    valueNames = builtins.attrNames value;
+    # `runtimes` is optional; a section absent it applies to every runtime.
+    # attrNames is lexicographically sorted, so the two legal shapes are:
+    #   ["reason" "text"]  (all runtimes) and
+    #   ["reason" "runtimes" "text"]  (scoped to the listed runtimes).
   in
     assert lib.assertMsg (
       builtins.length names == 1
@@ -21,16 +36,16 @@ let
     # `reason` records the concrete failure mode or incident that motivated the
     # rule. It is provenance data for auditing and pruning, not prompt text:
     # rendering it would spend context tokens on metadiscussion.
-    # attrNames returns lexicographically sorted names, so `reason` precedes `text`.
     assert lib.assertMsg (
-      builtins.attrNames value
-      == [
-        "reason"
-        "text"
-      ]
-    ) "system-prompt.nix: rule `${name}` must have exactly `reason` and `text` fields"; {
+      valueNames
+      == ["reason" "text"]
+      || valueNames == ["reason" "runtimes" "text"]
+    ) "system-prompt.nix: rule `${name}` must have `reason` and `text` (and an optional `runtimes` list)"; {
       inherit name;
       inherit (value) text reason;
+      # Absent `runtimes` means every runtime; `null` marks that here so the
+      # filter below can treat "unset" and "listed" uniformly.
+      runtimes = value.runtimes or null;
     };
 
   # `order` is the source of truth: each key is the omitRules name and prompt order.
@@ -199,6 +214,25 @@ let
         reason = ''
           Questions about hosts and services were answered from stale docs while
           read-only SSH had the ground truth.
+        '';
+      };
+    }
+    {
+      machineBuildObservability = {
+        runtimes = ["claude-code"];
+        text = ''
+          When debugging a build or wondering what the nix daemon is doing, list
+          every in-flight daemon build machine-wide with `nix store builds --json`
+          (patched nix, experimental `build-status-dir`): each entry carries the
+          drv, client user, pid, log path, and the why-chain (the requested root
+          that pulled it in, and the cause). nwm renders this as the MACHINE BUILDS
+          pane (`nix run .#dashboard`, :7532). The subcommand is absent on stock
+          nix, so confirm it exists before relying on it (`nix store builds --help`).
+        '';
+        reason = ''
+          Machine-wide build observability shipped (nix 2.34.7+ix); agents
+          debugging builds guessed at daemon state instead of reading it. Scoped to
+          claude-code because it names claude-only tooling (nwm dashboard).
         '';
       };
     }
@@ -1035,7 +1069,12 @@ let
     name: builtins.length (builtins.filter (other: other == name) ruleNames) > 1
   ) (lib.unique ruleNames);
   unknownOmits = builtins.filter (name: !(builtins.any (rule: rule.name == name) order)) omitRules;
-  kept = builtins.filter (rule: !(builtins.elem rule.name omitRules)) order;
+  appliesToRuntime = rule: rule.runtimes == null || builtins.elem runtime rule.runtimes;
+  kept =
+    builtins.filter (
+      rule: !(builtins.elem rule.name omitRules) && appliesToRuntime rule
+    )
+    order;
 in
   assert lib.assertMsg (
     duplicateNames == []

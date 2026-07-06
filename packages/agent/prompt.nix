@@ -8,6 +8,12 @@
     claude = "Claude Code";
     codex = "Codex";
   };
+  # Runtime token each provider renders as, consumed by ./system-prompt.nix to
+  # filter runtime-scoped sections (a section's `runtimes` list holds these).
+  providerRuntimes = {
+    claude = "claude-code";
+    codex = "codex";
+  };
   extraSystemPrompts = {
     claude = ''
       You are Claude Code. When naming the coding-agent runtime or disclosing AI
@@ -23,6 +29,7 @@
       (import ./system-prompt.nix {
         inherit lib omitRules;
         agentName = providerNames.${provider};
+        runtime = providerRuntimes.${provider};
       })
       extraSystemPrompts.${provider}
     ];
