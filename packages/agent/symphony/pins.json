@@ -1,6 +1,6 @@
 {
   "mix-deps": {
-    "hash": "sha256-TLRGNPIm3zQKeFt54wrdirYYK81ribfsV92/NVLdQSM="
+    "hash": "sha256-L9iTM8iGM6BUnoQxzegJN5twYM5J6sn7bFm5tNPjAsk="
   },
   "lazy-html-nif": {
     "version": "0.1.10",

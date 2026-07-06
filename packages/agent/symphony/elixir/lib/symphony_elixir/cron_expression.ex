@@ -10,7 +10,11 @@ defmodule SymphonyElixir.CronExpression do
   - Nicknames: `@yearly`, `@annually`, `@monthly`, `@weekly`, `@daily`,
     `@midnight`, `@hourly`.
 
-  Time is treated as UTC. Day-of-week is 0..6 with 0=Sunday, matching
+  Matching is pure wall-clock math over `NaiveDateTime` fields: this module
+  knows nothing about time zones or UTC. The caller decides which zone's
+  wall clock the naive values represent and converts back to absolute time
+  (`SymphonyElixir.Triggers.Cron` does that per workflow via
+  `entry.trigger.timezone`). Day-of-week is 0..6 with 0=Sunday, matching
   POSIX cron.
 
   When both `day-of-month` and `day-of-week` are restricted (neither is
@@ -21,8 +25,8 @@ defmodule SymphonyElixir.CronExpression do
   ## Usage
 
       {:ok, parsed} = CronExpression.parse("@monthly")
-      CronExpression.next_fire_after(parsed, DateTime.utc_now())
-      # => %DateTime{...}  (the first minute of the next month, UTC)
+      CronExpression.next_fire_after(parsed, ~N[2026-05-17 14:00:00])
+      # => {:ok, ~N[2026-06-01 00:00:00]}  (the first minute of the next month)
 
   `next_fire_after/2` returns the first matching minute strictly after
   the given moment. It steps minute-by-minute and bails out after two
@@ -170,19 +174,19 @@ defmodule SymphonyElixir.CronExpression do
   end
 
   @doc """
-  Returns the first DateTime strictly after `from` whose minute matches
+  Returns the first wall-clock minute strictly after `from` that matches
   the parsed expression. Resolution is one minute; sub-minute components
   of `from` are floored before stepping.
-  """
-  @spec next_fire_after(t(), DateTime.t()) :: {:ok, DateTime.t()} | {:error, term()}
-  def next_fire_after(%{} = parsed, %DateTime{} = from) do
-    floored =
-      from
-      |> DateTime.shift_zone!("Etc/UTC")
-      |> truncate_to_minute()
 
+  The naive stepping deliberately visits every wall-clock minute exactly
+  once: minutes inside a DST spring-forward gap still match here (the
+  caller maps them to real instants), and a fall-back hour's repeated
+  wall times match once, not twice.
+  """
+  @spec next_fire_after(t(), NaiveDateTime.t()) :: {:ok, NaiveDateTime.t()} | {:error, term()}
+  def next_fire_after(%{} = parsed, %NaiveDateTime{} = from) do
     # Advance one minute past `from` so we never return `from` itself.
-    start = DateTime.add(floored, 60, :second)
+    start = from |> truncate_to_minute() |> NaiveDateTime.add(60, :second)
     step(start, parsed, 0)
   end
 
@@ -190,21 +194,20 @@ defmodule SymphonyElixir.CronExpression do
     {:error, :no_match_within_window}
   end
 
-  defp step(%DateTime{} = dt, parsed, n) do
+  defp step(%NaiveDateTime{} = dt, parsed, n) do
     if matches?(parsed, dt) do
       {:ok, dt}
     else
-      step(DateTime.add(dt, 60, :second), parsed, n + 1)
+      step(NaiveDateTime.add(dt, 60, :second), parsed, n + 1)
     end
   end
 
   @doc """
-  Whether the given DateTime's minute matches the parsed expression.
+  Whether the given wall-clock minute matches the parsed expression.
   """
-  @spec matches?(t(), DateTime.t()) :: boolean()
-  def matches?(parsed, %DateTime{} = dt) do
-    dt = DateTime.shift_zone!(dt, "Etc/UTC")
-    date = DateTime.to_date(dt)
+  @spec matches?(t(), NaiveDateTime.t()) :: boolean()
+  def matches?(parsed, %NaiveDateTime{} = dt) do
+    date = NaiveDateTime.to_date(dt)
 
     minute_ok = MapSet.member?(parsed.minute, dt.minute)
     hour_ok = MapSet.member?(parsed.hour, dt.hour)
@@ -235,7 +238,7 @@ defmodule SymphonyElixir.CronExpression do
   # Sunday=0. Convert by `rem(date.day_of_week(), 7)`.
   defp day_of_week_sunday0(%Date{} = d), do: rem(Date.day_of_week(d), 7)
 
-  defp truncate_to_minute(%DateTime{} = dt) do
+  defp truncate_to_minute(%NaiveDateTime{} = dt) do
     %{dt | second: 0, microsecond: {0, 0}}
   end
 end

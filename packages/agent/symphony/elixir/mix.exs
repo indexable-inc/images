@@ -47,6 +47,11 @@ defmodule SymphonyElixir.MixProject do
       {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
       {:yaml_elixir, "~> 2.12"},
+      # IANA time zone database for cron trigger `tz "..."` evaluation. It
+      # bundles the tzdb in priv and defaults to `update: :disabled`, so zone
+      # math works offline (the nix check sandbox has no network) and is also
+      # NIF-free, keeping the runtime mix build portable on NixOS.
+      {:time_zone_info, "~> 0.7"},
       # Pure-BEAM markdown render + sanitize for the dashboard. Both are
       # NIF-free (earmark is pure Elixir, html_sanitize_ex rides on the
       # pure-Erlang mochiweb), so the runtime mix build stays portable on

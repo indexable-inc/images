@@ -147,7 +147,11 @@ kinds and their `.sym` `on` syntax are in [dsl](../dsl/overview.md#triggers-the-
   `systemd Persistent=true` semantic, `triggers/cron.ex:8-22`). Schedules are
   parsed by `CronExpression` (`cron_expression.ex:1-30`): standard 5-field cron
   with `*`, lists, ranges, and `*/n` steps, plus `@yearly`/`@monthly`/`@weekly`/
-  `@daily`/`@hourly` nicknames, all in UTC.
+  `@daily`/`@hourly` nicknames. Each schedule is evaluated against wall-clock
+  time in the workflow's `tz "..."` zone (default `"UTC"`), so a 9am-local job
+  does not drift across DST; a spring-forward gap fires at the first valid
+  instant after it, a fall-back repeat fires once, and an unknown zone is a
+  logged skip (see the `Triggers.Cron` moduledoc).
 - **Webhooks** - `LinearWebhookController`, `GithubWebhookController`, and
   `SlackEventsController` verify the inbound signature against
   `LINEAR_WEBHOOK_SECRET`/`GITHUB_WEBHOOK_SECRET`/`SLACK_SIGNING_SECRET` (absent
