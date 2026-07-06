@@ -72,7 +72,7 @@ patch DAG.
 
    ```nix
    mirror.repo = "indexable-inc/<name>";
-   # optional:
+   # optional (defaults to the crate's `[package] description`):
    # mirror.description = "One-line GitHub repo description";
    # mirror.topics = ["rust" "cli"];
    ```

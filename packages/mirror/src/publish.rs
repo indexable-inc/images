@@ -12,7 +12,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
 use crate::workspace::Workspace;
-use crate::{MONOREPO_SLUG, exec, generate};
+use crate::{MONOREPO_SLUG, exec, generate, manifest};
 
 pub struct Request {
     /// Repo-relative package path, e.g. `packages/progress-style`.
@@ -91,8 +91,18 @@ pub fn run(workspace: &Workspace, request: &Request) -> Result<()> {
 
 /// Push coordinates for the package: an explicit `--remote-url`/`--repo`
 /// wins, otherwise the entry for this package in the rendered
-/// `.#lib.mirrorPackages` list (from `--mirror-json` or `nix eval`).
+/// `.#lib.mirrorPackages` list (from `--mirror-json` or `nix eval`). A target
+/// without a description falls back to the crate's own `[package]
+/// description`, so packages needn't duplicate it in their `mirror` attr.
 fn resolve_target(workspace: &Workspace, request: &Request) -> Result<Target> {
+    let mut target = configured_target(workspace, request)?;
+    if target.description.is_none() {
+        target.description = crate_description(workspace, &request.package)?;
+    }
+    Ok(target)
+}
+
+fn configured_target(workspace: &Workspace, request: &Request) -> Result<Target> {
     if let Some(remote_url) = &request.remote_url {
         return Ok(Target {
             remote_url: remote_url.clone(),
@@ -142,6 +152,13 @@ fn resolve_target(workspace: &Workspace, request: &Request) -> Result<Target> {
             })
             .unwrap_or_default(),
     })
+}
+
+/// The `[package] description` of the package's own `Cargo.toml`.
+fn crate_description(workspace: &Workspace, package: &Path) -> Result<Option<String>> {
+    let path = workspace.root.join(package).join("Cargo.toml");
+    let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    Ok(manifest::package_info(&text)?.description)
 }
 
 fn mirror_entries(workspace: &Workspace, json: Option<&Path>) -> Result<Vec<Value>> {
@@ -229,4 +246,60 @@ pub fn authenticated_url(url: &str) -> String {
         || url.to_owned(),
         |rest| format!("https://x-access-token:{token}@github.com/{rest}"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A scratch monorepo: a workspace root, one member crate, and a rendered
+    /// mirror manifest naming that crate.
+    struct Scratch {
+        /// Owns the on-disk tree for the duration of the test.
+        _dir: tempfile::TempDir,
+        workspace: Workspace,
+        request: Request,
+    }
+
+    fn scratch(member_manifest: &str, mirror_entries: &str) -> Scratch {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(dir.path().join("Cargo.toml"), "[workspace]\n").expect("root manifest");
+        let package = dir.path().join("packages").join("example");
+        fs::create_dir_all(&package).expect("package dir");
+        fs::write(package.join("Cargo.toml"), member_manifest).expect("member manifest");
+        let mirror_json = dir.path().join("mirror.json");
+        fs::write(&mirror_json, mirror_entries).expect("mirror manifest");
+        let workspace = Workspace::locate(Some(dir.path())).expect("workspace");
+        Scratch {
+            _dir: dir,
+            workspace,
+            request: Request {
+                package: PathBuf::from("packages/example"),
+                remote_url: None,
+                repo: None,
+                create: true,
+                mirror_json: Some(mirror_json),
+            },
+        }
+    }
+
+    #[test]
+    fn mirror_entry_description_wins_over_crate_manifest() {
+        let scratch = scratch(
+            "[package]\nname = \"example\"\ndescription = \"from Cargo.toml\"\n",
+            r#"[{"path": "packages/example", "repo": "owner/example", "description": "from package.nix"}]"#,
+        );
+        let target = resolve_target(&scratch.workspace, &scratch.request).expect("resolves");
+        assert_eq!(target.description.as_deref(), Some("from package.nix"));
+    }
+
+    #[test]
+    fn missing_mirror_description_falls_back_to_crate_manifest() {
+        let scratch = scratch(
+            "[package]\nname = \"example\"\ndescription = \"from Cargo.toml\"\n",
+            r#"[{"path": "packages/example", "repo": "owner/example"}]"#,
+        );
+        let target = resolve_target(&scratch.workspace, &scratch.request).expect("resolves");
+        assert_eq!(target.description.as_deref(), Some("from Cargo.toml"));
+    }
 }
