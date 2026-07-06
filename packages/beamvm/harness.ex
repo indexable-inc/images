@@ -166,11 +166,31 @@ defmodule BeamVM.Harness do
   defp keep_code_path?(nil, _dir, _previous_paths), do: true
 
   defp keep_code_path?(app, dir, previous_paths) do
-    if loaded?(app) and not loaded_from_previous?(app, previous_paths) do
-      log("skipping #{dir}: application #{app} already loaded in this VM")
-      false
-    else
-      true
+    cond do
+      not loaded?(app) ->
+        true
+
+      loaded_from_previous?(app, previous_paths) ->
+        true
+
+      # Orphaned leftover of a removed tenant: still loaded (stopped), but
+      # its ebin is no longer on the code path. Unload the stale spec so the
+      # claiming tenant starts from the fresh .app.
+      not started?(app) and not on_code_path?(app) ->
+        log("reclaiming #{app}: stale spec from a removed tenant")
+        Application.unload(app)
+        true
+
+      true ->
+        log("skipping #{dir}: application #{app} already loaded in this VM")
+        false
+    end
+  end
+
+  defp on_code_path?(app) do
+    case :code.lib_dir(app) do
+      {:error, _} -> false
+      lib_dir -> Enum.member?(:code.get_path(), String.to_charlist(Path.join(to_string(lib_dir), "ebin")))
     end
   end
 
@@ -203,34 +223,102 @@ defmodule BeamVM.Harness do
 
   defp remove_app(app, entry) do
     log("removing #{app}")
-    Application.stop(app)
+    # The tenant's whole started set (dependencies ensure_all_started
+    # brought up), in reverse order; a dependency another tenant later
+    # started itself is not in this list and stays up.
+    stop_started(entry.started)
     Application.unload(app)
     Enum.each(entry.paths, &:code.del_path(String.to_charlist(&1)))
   end
 
   defp converge_app(app, previous, spec) do
     previous_paths = if previous, do: previous.paths, else: []
+    previous_started = if previous, do: previous.started, else: []
     new_paths = expand_code_paths(spec.code_path_globs, previous_paths)
-    entry = %{paths: new_paths, start: spec.start}
 
-    if new_paths == previous_paths do
-      # Same expanded dirs: the store paths did not change, nothing to swap.
-      if spec.start and not started?(app), do: start_app(app)
-      entry
-    else
-      Enum.each(previous_paths -- new_paths, &:code.del_path(String.to_charlist(&1)))
-      Enum.each(new_paths -- previous_paths, &:code.add_pathz(String.to_charlist(&1)))
-
-      if previous do
-        hot_swap_modules(app)
+    started =
+      if new_paths == previous_paths do
+        # Same expanded dirs: the store paths did not change, nothing to swap.
+        converge_started(app, spec, previous_started)
       else
-        log("loading #{app} (#{length(new_paths)} code paths)")
+        Enum.each(previous_paths -- new_paths, &:code.del_path(String.to_charlist(&1)))
+        Enum.each(new_paths -- previous_paths, &:code.add_pathz(String.to_charlist(&1)))
+
+        if previous do
+          hot_swap_modules(app)
+          converge_swapped_spec(app, new_paths, previous_started)
+        else
+          log("loading #{app} (#{length(new_paths)} code paths)")
+        end
+
+        apply_release_config(app, spec)
+        converge_started(app, spec, previous_started)
       end
 
-      apply_release_config(app, spec)
-      if spec.start and not started?(app), do: start_app(app)
-      entry
+    %{paths: new_paths, start: spec.start, started: started}
+  end
+
+  # Converge the running state to the declared one, both directions: `start`
+  # flipped off stops the tenant's own started set (a disabled app must not
+  # keep serving until a VM restart), and `start` on re-runs
+  # ensure_all_started even for an already-running app, which starts any
+  # runtime dependency the swapped release added while being a no-op
+  # otherwise.
+  defp converge_started(app, %{start: true}, previous_started) do
+    newly = start_app(app)
+    Enum.uniq(previous_started ++ newly)
+  end
+
+  defp converge_started(app, %{start: false}, previous_started) do
+    if started?(app) do
+      log("stopping #{app}: manifest no longer starts it")
+      stop_started(previous_started)
     end
+
+    []
+  end
+
+  # A hot swap replaces MODULES, but the application controller keeps the
+  # .app spec it loaded at first start: a new release that adds a runtime
+  # dependency to its .app would never see it started. Detect the spec
+  # change and do a loud tenant-level restart (stop, unload, fresh start
+  # picks up the new spec) -- correctness over zero-downtime for the rare
+  # dep-set change; module-only updates never take this path.
+  defp converge_swapped_spec(app, new_paths, previous_started) do
+    loaded_deps = Application.spec(app, :applications) || []
+    declared = declared_deps(app, new_paths)
+
+    if declared != nil and Enum.sort(declared) != Enum.sort(loaded_deps) do
+      log(
+        "#{app}: .app dependency set changed (#{inspect(declared -- loaded_deps)} added, " <>
+          "#{inspect(loaded_deps -- declared)} removed); restarting the tenant to reload its spec"
+      )
+
+      stop_started(previous_started)
+      Application.unload(app)
+    end
+
+    :ok
+  end
+
+  defp declared_deps(app, paths) do
+    with dir when is_binary(dir) <- Enum.find(paths, &(ebin_app_name(&1) == app)),
+         {:ok, [{:application, ^app, props}]} <-
+           :file.consult(String.to_charlist(Path.join(dir, "#{app}.app"))) do
+      Keyword.get(props, :applications, [])
+    else
+      _ -> nil
+    end
+  end
+
+  # Reverse start order, so dependents stop before their dependencies. Only
+  # the apps THIS tenant's ensure_all_started actually started: apps another
+  # tenant (or the harness) already ran are not in the list and stay up.
+  defp stop_started(started) do
+    Enum.each(Enum.reverse(started), fn dep ->
+      log("stopping #{dep}")
+      Application.stop(dep)
+    end)
   end
 
   # Replay the release boot's config pipeline: sys.config (the baked
@@ -305,11 +393,13 @@ defmodule BeamVM.Harness do
   # tree must not take the whole shared VM (and every other tenant) with it.
   # The failure is loud in the log and in `beamvm-ctl status`.
   defp start_app(app) do
-    log("starting #{app}")
-
     case Application.ensure_all_started(app, :temporary) do
+      {:ok, []} ->
+        []
+
       {:ok, started} ->
         log("started #{app} (#{inspect(started)})")
+        started
 
       {:error, reason} ->
         raise "failed to start #{app}: #{inspect(reason)}"

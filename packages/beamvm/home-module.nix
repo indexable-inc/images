@@ -250,24 +250,33 @@ in {
     # poke each running VM to converge on the new manifest. "Not running"
     # (exit 2) is fine -- the next start reads the same stable path -- but a
     # running VM that fails to reload fails the switch loudly.
+    # VM names reach systemd/launchd unit names, socket paths, and this
+    # activation script; constrain them once here rather than letting a
+    # metacharacter render an invalid unit or script.
+    assertions =
+      lib.mapAttrsToList (name: _vm: {
+        assertion = builtins.match "[A-Za-z0-9_-]+" name != null;
+        message = "services.beamvm.vms.\"${name}\": VM names must match [A-Za-z0-9_-]+";
+      })
+      cfg.vms;
+
     home.activation =
       lib.mapAttrs' (
         name: vm:
           lib.nameValuePair "beamvmReload-${name}" (
+            # Plain statements, no name-derived shell identifiers: the VM
+            # name appears only inside quoted strings.
             lib.hm.dag.entryAfter ["linkGeneration" "reloadSystemd" "setupLaunchAgents"] ''
-              beamvm_reload_${lib.replaceStrings ["-"] ["_"] name}() {
-                local rc=0
-                run ${getExe' cfg.package "beamvm-ctl"} \
-                  --socket ${lib.escapeShellArg "${stateDirFor name vm}/control.sock"} \
-                  reload || rc=$?
-                if [ "$rc" -eq 2 ]; then
-                  verboseEcho "beamvm ${name}: not running; next start reads the current manifest"
-                elif [ "$rc" -ne 0 ]; then
-                  echo "beamvm ${name}: hot reload failed (exit $rc)" >&2
-                  return "$rc"
-                fi
-              }
-              beamvm_reload_${lib.replaceStrings ["-"] ["_"] name}
+              beamvmReloadRc=0
+              run ${getExe' cfg.package "beamvm-ctl"} \
+                --socket ${lib.escapeShellArg "${stateDirFor name vm}/control.sock"} \
+                reload || beamvmReloadRc=$?
+              if [ "$beamvmReloadRc" -eq 2 ]; then
+                verboseEcho ${lib.escapeShellArg "beamvm ${name}: not running; next start reads the current manifest"}
+              elif [ "$beamvmReloadRc" -ne 0 ]; then
+                echo ${lib.escapeShellArg "beamvm ${name}: hot reload failed"} "(exit $beamvmReloadRc)" >&2
+                exit "$beamvmReloadRc"
+              fi
             ''
           )
       )

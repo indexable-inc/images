@@ -103,10 +103,14 @@ in {
     };
 
     releasePackage = mkOption {
-      type = types.package;
-      default = defaultPackage.release;
-      defaultText = lib.literalExpression "index.packages.\${system}.symphony.release";
-      description = "Compiled mix release the beamvm runtime code-loads (package.passthru.release).";
+      type = types.nullOr types.package;
+      default = null;
+      defaultText = lib.literalExpression "config.services.symphony.package.release";
+      description = ''
+        Compiled mix release the beamvm runtime code-loads. Null follows
+        `package` (its passthru.release), so overriding `package` alone
+        keeps code and catalogs from the same build.
+      '';
     };
 
     stateDir = mkOption {
@@ -225,14 +229,26 @@ in {
   config = mkIf cfg.enable (lib.mkMerge [
     {services.symphony.launcher = launcher;}
     (mkIf (cfg.runtime == "beamvm") {
+      # Catalog tree indirection: home-manager retargets this symlink at
+      # switch, so the VM (whose unit env carries only the stable path)
+      # reads updated catalogs without a unit change.
+      xdg.configFile."symphony/root".source = cfg.package.root;
+
       # The persistent-VM runtime: SYMPHONY_* env parity with bin/run-nix,
       # except SYMPHONY_ROOT points read-only at the store catalogs (the
       # release needs no writable staging copy) and every writable dir is
       # anchored explicitly under the state dir -- config.ex mkdir_p!'s its
       # dirs, which must never resolve to a store default.
       services.beamvm.vms.symphony = {
-        apps.symphony_elixir.package = cfg.releasePackage;
-        inherit (cfg) environmentFile secretsCommand extraPath;
+        apps.symphony_elixir.package =
+          if cfg.releasePackage != null
+          then cfg.releasePackage
+          else cfg.package.release;
+        inherit (cfg) environmentFile secretsCommand;
+        # The package's own runtime tool set first (ExecRunner inherits this
+        # PATH for workflow scripts; the bundled pack shells out to git/gh/
+        # jq), then deployment extras (codex lives there).
+        extraPath = cfg.package.runtimeTools ++ cfg.extraPath;
         environment = let
           stateDir =
             if cfg.stateDir != null
@@ -240,7 +256,11 @@ in {
             else "${config.xdg.stateHome}/symphony";
         in
           {
-            SYMPHONY_ROOT = toString cfg.package.root;
+            # Via the stable config symlink (written below), NOT the store
+            # path: a store path in the unit environment would change the
+            # unit on every symphony update and restart the VM, defeating
+            # the hot-reload contract this runtime exists for.
+            SYMPHONY_ROOT = "${config.xdg.configHome}/symphony/root";
             SYMPHONY_STATE_DIR = stateDir;
             SYMPHONY_WORKSPACES_DIR = "${stateDir}/workspaces";
             SYMPHONY_RUNS_DIR = "${stateDir}/runs";

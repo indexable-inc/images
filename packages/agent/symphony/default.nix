@@ -151,6 +151,23 @@
       mixFodDeps = prodMixFodDeps;
       __darwinAllowLocalNetworking = true;
     };
+  # One tool set for both runtimes: the standalone launcher's runtimeInputs
+  # and (via passthru) the beamvm VM's PATH. ExecRunner inherits this PATH
+  # for workflow scripts, and the bundled indexable pack shells out to
+  # git/gh/jq directly, so dropping any of these breaks running workflows.
+  runtimeTools = [
+    pkgs.bash
+    pkgs.cacert
+    pkgs.coreutils
+    elixir
+    erlang
+    pkgs.gh
+    pkgs.git
+    # The bundled indexable pack's exec scripts build their structured
+    # {"slack_summary": ...} output with jq, so the runtime carries it.
+    pkgs.jq
+    pkgs.openssh
+  ];
 in
   (writeNushellApplication {
     name = "symphony";
@@ -161,19 +178,7 @@ in
     # codex is intentionally absent: bin/run-nix requires an authenticated
     # codex on the operator's PATH and refuses to start otherwise, so the
     # binary and its credentials stay host-owned.
-    runtimeInputs = [
-      pkgs.bash
-      pkgs.cacert
-      pkgs.coreutils
-      elixir
-      erlang
-      pkgs.gh
-      pkgs.git
-      # The bundled indexable pack's exec scripts build their structured
-      # {"slack_summary": ...} output with jq, so the runtime carries it.
-      pkgs.jq
-      pkgs.openssh
-    ];
+    runtimeInputs = runtimeTools;
     text = ''
       # nu
       def --wrapped main [...args] {
@@ -186,6 +191,7 @@ in
       (old.passthru or {})
       // {
         inherit release;
+        inherit runtimeTools;
         # The tree SYMPHONY_ROOT points at (workflow + skill catalogs, the
         # bundled example pack): the same staged set bin/run-nix copies, for
         # runtimes (beamvm) that run the compiled release and only need the

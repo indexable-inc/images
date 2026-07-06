@@ -37,6 +37,7 @@
       passthru = {
         release = releaseStub;
         root = "/stub/symphony-root";
+        runtimeTools = [pkgs.jq];
       };
     } ''
       mkdir -p "$out/bin"
@@ -60,12 +61,23 @@
     };
   };
 
-  # The beamvm branch anchors the default state dir at xdg.stateHome, which
+  # The beamvm branch anchors the default state dir at xdg.stateHome and
+  # writes the catalog symlink through xdg.configFile, both of which
   # home-manager normally declares.
   xdgDecl = {
-    options.xdg.stateHome = lib.mkOption {
-      type = lib.types.str;
-      default = "/home/dev/.local/state";
+    options.xdg = {
+      stateHome = lib.mkOption {
+        type = lib.types.str;
+        default = "/home/dev/.local/state";
+      };
+      configHome = lib.mkOption {
+        type = lib.types.str;
+        default = "/home/dev/.config";
+      };
+      configFile = lib.mkOption {
+        type = lib.types.attrsOf lib.types.anything;
+        default = {};
+      };
     };
   };
 
@@ -225,8 +237,18 @@
       message = "beamvm runtime should host the compiled release (package.release)";
     }
     {
-      assertion = beamvmVm.environment.SYMPHONY_ROOT == "/stub/symphony-root";
-      message = "SYMPHONY_ROOT should point at the package's read-only catalog tree";
+      # The stable config symlink, NOT the store path: a store path in the
+      # unit environment would restart the VM on every symphony update.
+      assertion = beamvmVm.environment.SYMPHONY_ROOT == "/home/dev/.config/symphony/root";
+      message = "SYMPHONY_ROOT should go through the stable config symlink";
+    }
+    {
+      assertion = beamvm.xdg.configFile."symphony/root".source == "/stub/symphony-root";
+      message = "the catalog symlink should retarget to the package root at switch";
+    }
+    {
+      assertion = lib.elem pkgs.jq beamvmVm.extraPath;
+      message = "the package's runtimeTools should reach the VM PATH (workflow scripts shell out)";
     }
     {
       # config.ex mkdir_p!'s these; a store-rooted default would crash, so
