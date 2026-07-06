@@ -39,6 +39,7 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 import webbrowser
 from collections.abc import Callable
 from pathlib import Path
@@ -524,6 +525,11 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
     # writes there) and the private IPYTHONDIR (so the runtime startup runs)
     # before the kernel starts.
     os.environ["IX_MCP_STORE"] = str(store_path)
+    # One routing id per serve process, inherited by the kernel it spawns: outbox
+    # rows tagged with it are drained only by this process's pump, so several
+    # servers pointed at one store (pinned IX_MCP_STORE) stop stealing each
+    # other's events. setdefault so an embedder can pin the id.
+    os.environ.setdefault("IX_MCP_ROUTE", uuid.uuid4().hex[:8])
     # Surface the dashboard URL to the kernel so `DASHBOARD_URL` is one lookup
     # away (the agent should not have to spelunk the runtime dir to find it). The
     # human-facing dashboard is the Loro hub when we auto-spawn one; otherwise

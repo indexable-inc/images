@@ -218,6 +218,25 @@ _store = None
 _shell = None  # the InteractiveShell, set in install(); used to format rich results
 _trace_file = None  # faulthandler dump target, kept open for the kernel's lifetime
 
+# This process's channel routing id. The serve CLI mints IX_MCP_ROUTE and the
+# kernel subprocess inherits it, so both ends of one server agree; a bare
+# kernel (tests, embedders) mints its own, still stable for the process.
+_route_id: str | None = None
+
+
+def _route() -> str:
+    global _route_id
+    if _route_id is None:
+        _route_id = os.environ.get("IX_MCP_ROUTE") or uuid.uuid4().hex[:8]
+    return _route_id
+
+
+def _current_route() -> str:
+    """Delivery address for events emitted by the running job: its spawning
+    connection's route when inside one, else this process's route."""
+    job = _ix_current.get()
+    return job.route if job is not None else _route()
+
 
 def _rename_current_job(name: str) -> None:
     """Relabel the currently running job with ``name``.
@@ -304,6 +323,10 @@ class Job:
         # Carried so a read helper running inside the cell can attribute its read
         # to the right session's redundant-read counters (see readstats).
         self.session = session
+        # Where this job's channel events are delivered: the spawning connection.
+        # Distinct from `session` (the namespace selector), which stays None under
+        # stdio by contract.
+        self.route = session or _route()
         # 'cell' for a normal execution; 'replay' for a re-run performed while
         # reopening a session file. Replays never feed future replays
         # (store.replayable filters on this), so a session cannot double-run
@@ -1658,7 +1681,7 @@ async def ask(
 _META_KEY_RE = re.compile(r"[A-Za-z0-9_]+")
 
 
-async def notify(content: str, **meta: Any) -> None:
+async def notify(content: str, *, session: str | None = None, **meta: Any) -> None:
     """Push a channel event into the connected agent session.
 
     This server is a Claude Code channel (research preview): when the client
@@ -1678,6 +1701,11 @@ async def notify(content: str, **meta: Any) -> None:
     behavior), so never treat a notify as confirmed-read. Keys must be
     identifiers (``[A-Za-z0-9_]``); anything else raises here rather than being
     silently dropped client-side.
+
+    ``session`` routes the event to the one connection whose routing id matches
+    (its transport pump alone drains the row) and stamps the owner into the
+    meta, so clients on a shared stream can filter by it; None keeps broadcast
+    delivery.
     """
     bad = [key for key in meta if not _META_KEY_RE.fullmatch(key)]
     if bad:
@@ -1690,10 +1718,14 @@ async def notify(content: str, **meta: Any) -> None:
             "notify() needs the server-managed kernel (no store is configured), "
             "so there is no channel to deliver to"
         )
+    payload = {key: str(value) for key, value in meta.items()}
+    if session is not None:
+        payload["session"] = session
     _store.add_outbox(
         _store_conn,
         content=str(content),
-        meta=json.dumps({key: str(value) for key, value in meta.items()}),
+        meta=json.dumps(payload),
+        session=session,
     )
 
 
@@ -1864,18 +1896,27 @@ async def watch_pr(
         if last.get("state") != "OPEN":
             state["status"] = "merged" if last.get("state") == "MERGED" else "closed"
             resource.close()
-            await notify(f"PR {clean_pr} finished with state {last.get('state')}", resource=resource.id, pr=clean_pr)
+            await notify(
+                f"PR {clean_pr} finished with state {last.get('state')}",
+                session=_current_route(),
+                resource=resource.id,
+                pr=clean_pr,
+            )
             return {"state": last.get("state"), "url": last.get("url"), "checks": len(checks)}
         if failures:
             state["status"] = "failed"
             state["error"] = "One or more required actions failed."
             resource.close()
-            await notify(f"PR {clean_pr} has failing checks", resource=resource.id, pr=clean_pr)
+            await notify(
+                f"PR {clean_pr} has failing checks", session=_current_route(), resource=resource.id, pr=clean_pr
+            )
             return {"state": "failed", "url": last.get("url"), "failures": failures}
         if time.time() - started > timeout:
             state["status"] = "timed out"
             resource.close()
-            await notify(f"PR {clean_pr} watch timed out", resource=resource.id, pr=clean_pr)
+            await notify(
+                f"PR {clean_pr} watch timed out", session=_current_route(), resource=resource.id, pr=clean_pr
+            )
             return {"state": "timed out", "url": last.get("url"), "checks": len(checks)}
         await asyncio.sleep(interval)
 
@@ -2493,6 +2534,7 @@ async def _runner(job: Job, ns: dict) -> None:
             with contextlib.suppress(Exception):
                 await notify(
                     f"Background job {job.name} finished with status {job.status}.",
+                    session=job.route,
                     job_id=job.id,
                     job_name=job.name,
                     status=job.status,

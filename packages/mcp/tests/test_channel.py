@@ -66,6 +66,45 @@ def test_mark_interrupted_clears_outbox_and_events(tmp_path: Path) -> None:
     assert store.events_after(conn, "r", 0) == []
 
 
+def test_take_outbox_routes_owned_rows(tmp_path: Path) -> None:
+    conn = store.connect(tmp_path / "c.db")
+    store.add_outbox(conn, content="owned", meta="{}", session="route-a")
+    store.add_outbox(conn, content="broadcast", meta="{}")
+    # A foreign route drains broadcasts only; another connection's row stays put.
+    rows = store.take_outbox(conn, session="route-b")
+    assert [r["content"] for r in rows] == ["broadcast"]
+    rows = store.take_outbox(conn, session="route-a")
+    assert [r["content"] for r in rows] == ["owned"]
+    assert rows[0]["session"] == "route-a"
+    assert store.take_outbox(conn) == []
+
+
+def test_take_outbox_prunes_orphaned_owned_rows(tmp_path: Path) -> None:
+    conn = store.connect(tmp_path / "c.db")
+    store.add_outbox(conn, content="orphan", meta="{}", session="gone")
+    conn.execute("UPDATE outbox SET created_at = created_at - ?", (store._OUTBOX_MAX_AGE_SECONDS + 1,))
+    # A routed drain sweeps rows whose owner never came back for them, so a
+    # shared store cannot accrete dead servers' events.
+    assert store.take_outbox(conn, session="route-b") == []
+    assert conn.execute("SELECT COUNT(*) FROM outbox").fetchone()[0] == 0
+
+
+def test_connect_migrates_outbox_session_column(tmp_path: Path) -> None:
+    db = tmp_path / "old.db"
+    old = sqlite3.connect(db)
+    old.execute(
+        "CREATE TABLE outbox (seq INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "content TEXT NOT NULL, meta TEXT NOT NULL DEFAULT '{}', created_at REAL NOT NULL)"
+    )
+    old.commit()
+    old.close()
+    # A store written by a pre-routing build gains the column idempotently.
+    conn = store.connect(db)
+    assert "session" in {row[1] for row in conn.execute("PRAGMA table_info(outbox)")}
+    store.add_outbox(conn, content="routed", meta="{}", session="x")
+    assert [r["content"] for r in store.take_outbox(conn, session="x")] == ["routed"]
+
+
 # --------------------------------------------------------------------------- #
 # runtime: notify() and interactive resource actions (the kernel end)
 # --------------------------------------------------------------------------- #
@@ -110,6 +149,47 @@ def test_notify_without_store_raises(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(runtime, "_store_conn", None)
         with pytest.raises(RuntimeError, match="no store"):
             await runtime.notify("x")
+
+    asyncio.run(run())
+
+
+def test_backgrounded_completion_event_is_owned_by_spawning_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def run() -> None:
+        conn = store.connect(tmp_path / "r.db")
+        _wire_runtime(monkeypatch, conn)
+        monkeypatch.setattr(runtime, "_session_namespaces", {})
+        job = await runtime.__ix_run("import asyncio\nawait asyncio.sleep(0.05)", budget=0.01, session="sess-a")
+        await job.task
+        rows = store.take_outbox(conn)
+        assert len(rows) == 1
+        # The completion event is owned by the connection that spawned the job
+        # (only its pump drains it) and the owner rides in the channel meta.
+        assert rows[0]["session"] == "sess-a"
+        meta = json.loads(rows[0]["meta"])
+        assert meta["session"] == "sess-a"
+        assert meta["job_id"] == job.id
+
+    asyncio.run(run())
+
+
+def test_backgrounded_completion_event_defaults_to_process_route(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def run() -> None:
+        conn = store.connect(tmp_path / "r.db")
+        _wire_runtime(monkeypatch, conn)
+        monkeypatch.setattr(runtime, "_session_namespaces", {})
+        # No HTTP session (the stdio path): the job still gets a non-broadcast
+        # owner, this process's route, so a foreign server's pump cannot steal it.
+        job = await runtime.__ix_run("import asyncio\nawait asyncio.sleep(0.05)", budget=0.01)
+        await job.task
+        rows = store.take_outbox(conn)
+        assert len(rows) == 1
+        assert rows[0]["session"] == runtime._route()
+        assert rows[0]["session"] is not None
+        assert json.loads(rows[0]["meta"])["session"] == runtime._route()
 
     asyncio.run(run())
 
@@ -332,6 +412,32 @@ def test_pump_outbox_holds_events_until_initialized(tmp_path: Path, monkeypatch:
             assert len(store.take_outbox(conn)) == 1
         finally:
             pump.cancel()
+
+    asyncio.run(run())
+
+
+def test_pump_outbox_skips_rows_owned_by_another_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def run() -> None:
+        db = tmp_path / "p.db"
+        conn = store.connect(db)
+        cfg = Config(workdir=tmp_path, store_path=db)
+        monkeypatch.setattr("ix_notebook_mcp.transport.config", lambda: cfg)
+        monkeypatch.setenv("IX_MCP_ROUTE", "route-b")
+        store.add_outbox(conn, content="for-a", meta="{}", session="route-a")
+        store.add_outbox(conn, content="for-all", meta="{}")
+        send, receive = anyio.create_memory_object_stream(8)
+        pump = asyncio.ensure_future(transport.pump_outbox(send, _FakeSession(initialized=True)))
+        try:
+            message = await asyncio.wait_for(receive.receive(), timeout=5.0)
+            # The broadcast row arrives; another connection's row never does.
+            assert message.message.root.params["content"] == "for-all"
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(receive.receive(), timeout=1.0)
+        finally:
+            pump.cancel()
+        # The owned row is still queued for its owner, not stolen by this pump.
+        rows = store.take_outbox(conn, session="route-a")
+        assert [r["content"] for r in rows] == ["for-a"]
 
     asyncio.run(run())
 

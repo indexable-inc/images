@@ -8,7 +8,8 @@ The stdio transport is also a Claude Code channel (research preview,
 https://code.claude.com/docs/en/channels-reference): it advertises the
 ``claude/channel`` experimental capability and pumps the store's ``outbox``
 (what the kernel's ``notify()`` writes) as ``notifications/claude/channel``
-events, so kernel code can push into the running agent session. Channels are
+events, so kernel code can push into the running agent session; rows routed to
+another server's session id are left for that server's pump. Channels are
 stdio-only by contract (Claude Code spawns the channel server as a subprocess
 and a session opts in per-entry via ``--channels`` /
 ``--dangerously-load-development-channels``), so the HTTP transport does not
@@ -141,13 +142,18 @@ async def pump_outbox(
     write stream -- the same bytes ``ServerSession.send_notification`` would
     produce. Holds every send until the client is ``initialized`` (see
     :func:`_session_initialized`), so a startup/replay ``notify()`` never emits a
-    notification before the handshake completes. Best-effort per tick: a store
+    notification before the handshake completes. Drains unowned rows plus rows
+    owned by this process's ``IX_MCP_ROUTE``, so several servers sharing a store
+    each receive only their own jobs' events. Best-effort per tick: a store
     hiccup retries next tick, and a closed transport ends the pump (the task
     group tears it down anyway).
     """
     cfg = config()
     if not cfg.store_path:
         return
+    # None (an embedder/test that never minted a route) drains everything --
+    # exactly the single-consumer behavior routing replaced.
+    route = os.environ.get("IX_MCP_ROUTE")
     conn = store.connect(cfg.store_path)
     try:
         while True:
@@ -157,7 +163,7 @@ async def pump_outbox(
                 await anyio.sleep(_OUTBOX_POLL_SECONDS)
                 continue
             try:
-                rows = store.take_outbox(conn)
+                rows = store.take_outbox(conn, session=route)
             except Exception:
                 rows = []  # best-effort: a read error this tick just retries next tick
             for row in rows:

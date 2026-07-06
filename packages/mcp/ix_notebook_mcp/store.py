@@ -125,11 +125,14 @@ CREATE INDEX IF NOT EXISTS inputs_channel ON inputs (channel, seq);
 -- kernel code can wake the connected agent session. Same transient-message
 -- discipline as `inputs`: the drain DELETEs what it delivers, so the table stays
 -- empty between events. `meta` is a JSON object of identifier-keyed strings (they
--- become attributes on the client's <channel> tag).
+-- become attributes on the client's <channel> tag). NULL `session` = broadcast
+-- to any pump; a set session is the routing id of the one connection that
+-- should receive the row.
 CREATE TABLE IF NOT EXISTS outbox (
     seq         INTEGER PRIMARY KEY AUTOINCREMENT,
     content     TEXT NOT NULL,
     meta        TEXT NOT NULL DEFAULT '{}',
+    session     TEXT,
     created_at  REAL NOT NULL
 );
 
@@ -200,6 +203,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "execution_id" not in resource_have:
         with contextlib.suppress(sqlite3.OperationalError):
             conn.execute("ALTER TABLE resources ADD COLUMN execution_id TEXT NOT NULL DEFAULT ''")
+    outbox_have = {row[1] for row in conn.execute("PRAGMA table_info(outbox)")}
+    if "session" not in outbox_have:
+        with contextlib.suppress(sqlite3.OperationalError):
+            conn.execute("ALTER TABLE outbox ADD COLUMN session TEXT")
 
 
 def start(
@@ -546,24 +553,45 @@ def delete_inputs(conn: sqlite3.Connection, seqs: list[int]) -> None:
 # as a subscriber might still be catching up on a slow poll tick.
 _EVENT_MAX_AGE_SECONDS = 3600.0
 
+# Owned outbox rows whose owner never drains them (its process is gone) are
+# pruned on the next take, so a shared store cannot grow without bound.
+_OUTBOX_MAX_AGE_SECONDS = 3600.0
 
-def add_outbox(conn: sqlite3.Connection, *, content: str, meta: str) -> None:
+
+def add_outbox(conn: sqlite3.Connection, *, content: str, meta: str, session: str | None = None) -> None:
     """Queue one channel event (``meta`` is a JSON object of identifier-keyed
-    strings). The kernel is the sole inserter; the MCP transport drains."""
+    strings); ``session`` is the routing id of the connection that owns the
+    event, None broadcasts. The kernel is the sole inserter; the MCP transport
+    drains."""
     conn.execute(
-        "INSERT INTO outbox (content, meta, created_at) VALUES (?, ?, ?)",
-        (content, meta, _now()),
+        "INSERT INTO outbox (content, meta, session, created_at) VALUES (?, ?, ?, ?)",
+        (content, meta, session, _now()),
     )
 
 
-def take_outbox(conn: sqlite3.Connection) -> list[dict]:
-    """Every queued channel event, oldest first, consuming the rows. Like
-    ``_drain_inputs``: DELETE before delivering, so an event can never be emitted
-    twice; a crash between the delete and the send loses at most one batch."""
+def take_outbox(conn: sqlite3.Connection, session: str | None = None) -> list[dict]:
+    """Queued channel events, oldest first, consuming the rows. With a
+    ``session`` this is a routed drain: the caller's own rows plus unowned
+    broadcasts, and owned rows orphaned past the age cap (their owner's process
+    is gone) are pruned. With None, every row -- the legacy/single-consumer
+    drain. Like ``_drain_inputs``: DELETE before delivering, so an event can
+    never be emitted twice; a crash between the delete and the send loses at
+    most one batch."""
     conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT seq, content, meta FROM outbox ORDER BY seq ASC"
-    ).fetchall()
+    if session is None:
+        rows = conn.execute(
+            "SELECT seq, content, meta, session FROM outbox ORDER BY seq ASC"
+        ).fetchall()
+    else:
+        conn.execute(
+            "DELETE FROM outbox WHERE session IS NOT NULL AND session != ? AND created_at < ?",
+            (session, _now() - _OUTBOX_MAX_AGE_SECONDS),
+        )
+        rows = conn.execute(
+            "SELECT seq, content, meta, session FROM outbox "
+            "WHERE session IS NULL OR session = ? ORDER BY seq ASC",
+            (session,),
+        ).fetchall()
     if not rows:
         return []
     placeholders = ",".join("?" for _ in rows)

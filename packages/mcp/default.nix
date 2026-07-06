@@ -5513,6 +5513,10 @@
     {
       nativeBuildInputs = [channelTestPython];
       strictDeps = true;
+      # The SSE test binds a loopback aiohttp server; the darwin sandbox denies
+      # all binds without this. Linux sandboxes already provide a private
+      # loopback, so it is a no-op there.
+      __darwinAllowLocalNetworking = true;
     }
     ''
       export HOME=$TMPDIR/home
