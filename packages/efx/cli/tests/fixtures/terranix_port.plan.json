@@ -1,0 +1,776 @@
+{
+  "effects": [
+    {
+      "executor": "cloudflare.dns_record",
+      "inputs": {
+        "content": {
+          "literal": "192.0.2.10"
+        },
+        "name": {
+          "literal": "api.ix.dev"
+        },
+        "proxied": {
+          "literal": false
+        },
+        "ttl": {
+          "literal": 1
+        },
+        "type": {
+          "literal": "A"
+        },
+        "zone_id": {
+          "ref": {
+            "effect": "cloudflare_zone.ix_dev",
+            "field": "id"
+          }
+        }
+      },
+      "kind": "cloudflare.dns_record",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "cloudflare_dns_record.api_ix_dev"
+    },
+    {
+      "executor": "cloudflare.dns_record",
+      "inputs": {
+        "content": {
+          "literal": "192.0.2.10"
+        },
+        "name": {
+          "literal": "ix.dev"
+        },
+        "proxied": {
+          "literal": true
+        },
+        "ttl": {
+          "literal": 1
+        },
+        "type": {
+          "literal": "A"
+        },
+        "zone_id": {
+          "ref": {
+            "effect": "cloudflare_zone.ix_dev",
+            "field": "id"
+          }
+        }
+      },
+      "kind": "cloudflare.dns_record",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "cloudflare_dns_record.ix_dev_apex"
+    },
+    {
+      "executor": "cloudflare.dns_record",
+      "inputs": {
+        "data.flags": {
+          "literal": 0
+        },
+        "data.tag": {
+          "literal": "issue"
+        },
+        "data.value": {
+          "literal": "letsencrypt.org"
+        },
+        "name": {
+          "literal": "ix.dev"
+        },
+        "strategy": {
+          "literal": "ensure"
+        },
+        "ttl": {
+          "literal": 1
+        },
+        "type": {
+          "literal": "CAA"
+        },
+        "zone_id": {
+          "ref": {
+            "effect": "cloudflare_zone.ix_dev",
+            "field": "id"
+          }
+        }
+      },
+      "kind": "cloudflare.dns_record",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "cloudflare_dns_record.ix_dev_caa_0"
+    },
+    {
+      "executor": "cloudflare.dns_record",
+      "inputs": {
+        "content": {
+          "literal": "aspmx.l.google.com"
+        },
+        "name": {
+          "literal": "ix.dev"
+        },
+        "priority": {
+          "literal": 1
+        },
+        "strategy": {
+          "literal": "ensure"
+        },
+        "ttl": {
+          "literal": 1
+        },
+        "type": {
+          "literal": "MX"
+        },
+        "zone_id": {
+          "ref": {
+            "effect": "cloudflare_zone.ix_dev",
+            "field": "id"
+          }
+        }
+      },
+      "kind": "cloudflare.dns_record",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "cloudflare_dns_record.ix_dev_mx_0"
+    },
+    {
+      "executor": "cloudflare.dns_record",
+      "inputs": {
+        "content": {
+          "literal": "alt1.aspmx.l.google.com"
+        },
+        "name": {
+          "literal": "ix.dev"
+        },
+        "priority": {
+          "literal": 5
+        },
+        "strategy": {
+          "literal": "ensure"
+        },
+        "ttl": {
+          "literal": 1
+        },
+        "type": {
+          "literal": "MX"
+        },
+        "zone_id": {
+          "ref": {
+            "effect": "cloudflare_zone.ix_dev",
+            "field": "id"
+          }
+        }
+      },
+      "kind": "cloudflare.dns_record",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "cloudflare_dns_record.ix_dev_mx_1"
+    },
+    {
+      "executor": "cloudflare.dns_record",
+      "inputs": {
+        "content": {
+          "literal": "\"v=spf1 include:_spf.google.com ip4:192.0.2.10 -all\""
+        },
+        "name": {
+          "literal": "ix.dev"
+        },
+        "ttl": {
+          "literal": 1
+        },
+        "type": {
+          "literal": "TXT"
+        },
+        "zone_id": {
+          "ref": {
+            "effect": "cloudflare_zone.ix_dev",
+            "field": "id"
+          }
+        }
+      },
+      "kind": "cloudflare.dns_record",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "cloudflare_dns_record.ix_dev_spf"
+    },
+    {
+      "executor": "cloudflare.dns_record",
+      "inputs": {
+        "content": {
+          "literal": "statuspage.betteruptime.com"
+        },
+        "name": {
+          "literal": "status.ix.dev"
+        },
+        "proxied": {
+          "literal": false
+        },
+        "ttl": {
+          "literal": 1
+        },
+        "type": {
+          "literal": "CNAME"
+        },
+        "zone_id": {
+          "ref": {
+            "effect": "cloudflare_zone.ix_dev",
+            "field": "id"
+          }
+        }
+      },
+      "kind": "cloudflare.dns_record",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "cloudflare_dns_record.status_ix_dev"
+    },
+    {
+      "executor": "cloudflare.dns_record",
+      "inputs": {
+        "content": {
+          "literal": "203.0.113.40"
+        },
+        "name": {
+          "literal": "*.ix.dev"
+        },
+        "proxied": {
+          "literal": false
+        },
+        "ttl": {
+          "literal": 1
+        },
+        "type": {
+          "literal": "A"
+        },
+        "zone_id": {
+          "ref": {
+            "effect": "cloudflare_zone.ix_dev",
+            "field": "id"
+          }
+        }
+      },
+      "kind": "cloudflare.dns_record",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "cloudflare_dns_record.wildcard_ix_dev"
+    },
+    {
+      "executor": "cloudflare.email_routing_address",
+      "inputs": {
+        "account_id": {
+          "literal": "0123456789abcdef0123456789abcdef"
+        },
+        "email": {
+          "literal": "andrew@example.com"
+        }
+      },
+      "kind": "cloudflare.email_routing_address",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "cloudflare_email_routing_address.andrew_gmail"
+    },
+    {
+      "executor": "cloudflare.email_routing_rule",
+      "inputs": {
+        "actions": {
+          "literal": "[{\"type\":\"forward\",\"value\":[\"andrew@example.com\"]}]"
+        },
+        "enabled": {
+          "literal": true
+        },
+        "matchers": {
+          "literal": "[{\"field\":\"to\",\"type\":\"literal\",\"value\":\"andrew@getix.dev\"}]"
+        },
+        "name": {
+          "literal": "andrew@getix.dev forward"
+        },
+        "zone_id": {
+          "ref": {
+            "effect": "cloudflare_zone.getix_dev",
+            "field": "id"
+          }
+        }
+      },
+      "kind": "cloudflare.email_routing_rule",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "cloudflare_email_routing_rule.andrew"
+    },
+    {
+      "executor": "cloudflare.email_routing_settings",
+      "inputs": {
+        "zone_id": {
+          "ref": {
+            "effect": "cloudflare_zone.getix_dev",
+            "field": "id"
+          }
+        }
+      },
+      "kind": "cloudflare.email_routing_settings",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "cloudflare_email_routing_settings.getix"
+    },
+    {
+      "executor": "cloudflare.r2_bucket",
+      "inputs": {
+        "account_id": {
+          "literal": "0123456789abcdef0123456789abcdef"
+        },
+        "name": {
+          "literal": "ix-cli"
+        }
+      },
+      "kind": "cloudflare.r2_bucket",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "cloudflare_r2_bucket.cli"
+    },
+    {
+      "executor": "cloudflare.r2_bucket",
+      "inputs": {
+        "account_id": {
+          "literal": "0123456789abcdef0123456789abcdef"
+        },
+        "name": {
+          "literal": "ix-sdk-artifacts"
+        }
+      },
+      "kind": "cloudflare.r2_bucket",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "cloudflare_r2_bucket.sdk_artifacts"
+    },
+    {
+      "executor": "cloudflare.r2_managed_domain",
+      "inputs": {
+        "account_id": {
+          "literal": "0123456789abcdef0123456789abcdef"
+        },
+        "bucket_name": {
+          "ref": {
+            "effect": "cloudflare_r2_bucket.sdk_artifacts",
+            "field": "name"
+          }
+        },
+        "enabled": {
+          "literal": true
+        }
+      },
+      "kind": "cloudflare.r2_managed_domain",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "cloudflare_r2_managed_domain.sdk_artifacts"
+    },
+    {
+      "executor": "cloudflare.ruleset",
+      "inputs": {
+        "kind": {
+          "literal": "zone"
+        },
+        "name": {
+          "literal": "default"
+        },
+        "phase": {
+          "literal": "http_request_dynamic_redirect"
+        },
+        "rules": {
+          "literal": "[{\"action\":\"redirect\",\"action_parameters\":{\"from_value\":{\"preserve_query_string\":true,\"status_code\":301,\"target_url\":{\"value\":\"https://ix.dev\"}}},\"description\":\"getix.dev is the install/marketing alias for ix.dev\",\"enabled\":true,\"expression\":\"(http.host eq \\\"getix.dev\\\") or (http.host eq \\\"www.getix.dev\\\")\"}]"
+        },
+        "zone_id": {
+          "ref": {
+            "effect": "cloudflare_zone.getix_dev",
+            "field": "id"
+          }
+        }
+      },
+      "kind": "cloudflare.ruleset",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "cloudflare_ruleset.getix_redirect"
+    },
+    {
+      "executor": "cloudflare.workers_route",
+      "inputs": {
+        "pattern": {
+          "literal": "ix.dev/api/*"
+        },
+        "zone_id": {
+          "ref": {
+            "effect": "cloudflare_zone.ix_dev",
+            "field": "id"
+          }
+        }
+      },
+      "kind": "cloudflare.workers_route",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "cloudflare_workers_route.ix_api_bypass"
+    },
+    {
+      "executor": "cloudflare.workers_route",
+      "inputs": {
+        "pattern": {
+          "literal": "ix.dev/*"
+        },
+        "script": {
+          "literal": "ix-web"
+        },
+        "zone_id": {
+          "ref": {
+            "effect": "cloudflare_zone.ix_dev",
+            "field": "id"
+          }
+        }
+      },
+      "kind": "cloudflare.workers_route",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "cloudflare_workers_route.ix_web_apex"
+    },
+    {
+      "executor": "cloudflare.zone",
+      "inputs": {
+        "account.id": {
+          "literal": "0123456789abcdef0123456789abcdef"
+        },
+        "name": {
+          "literal": "getix.dev"
+        },
+        "type": {
+          "literal": "full"
+        }
+      },
+      "kind": "cloudflare.zone",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "cloudflare_zone.getix_dev"
+    },
+    {
+      "executor": "cloudflare.zone",
+      "inputs": {
+        "account.id": {
+          "literal": "0123456789abcdef0123456789abcdef"
+        },
+        "name": {
+          "literal": "ix.dev"
+        },
+        "type": {
+          "literal": "full"
+        }
+      },
+      "kind": "cloudflare.zone",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "cloudflare_zone.ix_dev"
+    },
+    {
+      "executor": "ovh.dedicated_server",
+      "inputs": {
+        "display_name": {
+          "literal": "ord-storage-1"
+        },
+        "keep_service_after_destroy": {
+          "literal": true
+        },
+        "monitoring": {
+          "literal": true
+        },
+        "prevent_install_on_create": {
+          "literal": true
+        },
+        "prevent_install_on_import": {
+          "literal": true
+        },
+        "service_name": {
+          "literal": "ns5009988.ip-198-51-100.test"
+        }
+      },
+      "kind": "ovh.dedicated_server",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "ovh_dedicated_server.ord-storage-1"
+    },
+    {
+      "executor": "ovh.dedicated_server",
+      "inputs": {
+        "display_name": {
+          "literal": "shared-compute-1"
+        },
+        "keep_service_after_destroy": {
+          "literal": true
+        },
+        "monitoring": {
+          "literal": false
+        },
+        "prevent_install_on_create": {
+          "literal": true
+        },
+        "prevent_install_on_import": {
+          "literal": true
+        },
+        "service_name": {
+          "literal": "ns1033398.ip-192-0-2.test"
+        }
+      },
+      "kind": "ovh.dedicated_server",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "ovh_dedicated_server.shared-compute-1"
+    },
+    {
+      "executor": "ovh.dedicated_server",
+      "inputs": {
+        "display_name": {
+          "literal": "vin-compute-1"
+        },
+        "keep_service_after_destroy": {
+          "literal": true
+        },
+        "monitoring": {
+          "literal": false
+        },
+        "prevent_install_on_create": {
+          "literal": true
+        },
+        "prevent_install_on_import": {
+          "literal": true
+        },
+        "service_name": {
+          "literal": "ns5011224.ip-203-0-113.test"
+        }
+      },
+      "kind": "ovh.dedicated_server",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "ovh_dedicated_server.vin-compute-1"
+    },
+    {
+      "executor": "betteruptime.heartbeat",
+      "inputs": {
+        "grace": {
+          "literal": 30
+        },
+        "name": {
+          "literal": "orchestrator-liveness"
+        },
+        "period": {
+          "literal": 60
+        }
+      },
+      "kind": "betteruptime.heartbeat",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "betteruptime_heartbeat.orchestrator_liveness"
+    },
+    {
+      "executor": "betteruptime.monitor",
+      "inputs": {
+        "check_frequency": {
+          "literal": 180
+        },
+        "confirmation_period": {
+          "literal": 0
+        },
+        "expected_status_codes": {
+          "literal": "[200]"
+        },
+        "monitor_type": {
+          "literal": "expected_status_code"
+        },
+        "pronounceable_name": {
+          "literal": "Website & CLI"
+        },
+        "url": {
+          "literal": "https://ix.dev/"
+        }
+      },
+      "kind": "betteruptime.monitor",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "betteruptime_monitor.website_cli"
+    },
+    {
+      "executor": "betteruptime.status_page",
+      "inputs": {
+        "company_name": {
+          "literal": "ix"
+        },
+        "company_url": {
+          "literal": "https://ix.dev"
+        },
+        "custom_domain": {
+          "literal": "status.ix.dev"
+        },
+        "design": {
+          "literal": "v2"
+        },
+        "history": {
+          "literal": 7
+        },
+        "subdomain": {
+          "literal": "ix"
+        },
+        "timezone": {
+          "literal": "Eastern Time (US & Canada)"
+        },
+        "whitelabeled": {
+          "literal": false
+        }
+      },
+      "kind": "betteruptime.status_page",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "betteruptime_status_page.ix"
+    },
+    {
+      "executor": "betteruptime.status_page_resource",
+      "inputs": {
+        "position": {
+          "literal": 0
+        },
+        "public_name": {
+          "literal": "Website & CLI"
+        },
+        "resource_id": {
+          "ref": {
+            "effect": "betteruptime_monitor.website_cli",
+            "field": "id"
+          }
+        },
+        "resource_type": {
+          "literal": "Monitor"
+        },
+        "status_page_id": {
+          "ref": {
+            "effect": "betteruptime_status_page.ix",
+            "field": "id"
+          }
+        },
+        "status_page_section_id": {
+          "ref": {
+            "effect": "betteruptime_status_page_section.global",
+            "field": "id"
+          }
+        },
+        "widget_type": {
+          "literal": "intraday_history"
+        }
+      },
+      "kind": "betteruptime.status_page_resource",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "betteruptime_status_page_resource.website_cli"
+    },
+    {
+      "executor": "betteruptime.status_page_section",
+      "inputs": {
+        "name": {
+          "literal": "Global"
+        },
+        "position": {
+          "literal": 0
+        },
+        "status_page_id": {
+          "ref": {
+            "effect": "betteruptime_status_page.ix",
+            "field": "id"
+          }
+        }
+      },
+      "kind": "betteruptime.status_page_section",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "betteruptime_status_page_section.global"
+    },
+    {
+      "executor": "html.render",
+      "inputs": {
+        "liveness": {
+          "ref": {
+            "effect": "betteruptime_heartbeat.orchestrator_liveness",
+            "field": "url"
+          }
+        },
+        "template": {
+          "literal": "{\"orchestrator-liveness\": \"{liveness}\"}"
+        }
+      },
+      "kind": "html.render",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "heartbeats_json_render"
+    },
+    {
+      "executor": "file.write",
+      "inputs": {
+        "content": {
+          "ref": {
+            "effect": "heartbeats_json_render",
+            "field": "html"
+          }
+        },
+        "path": {
+          "literal": "generated/heartbeats.json"
+        }
+      },
+      "kind": "file.write",
+      "meta": {
+        "idempotent": true,
+        "rollback_hint": null
+      },
+      "name": "heartbeats_json"
+    }
+  ]
+}

@@ -276,6 +276,10 @@
           # `git` (directly and via the `clone` binary's diff gate). The test
           # sandbox has no git otherwise, so the tests panic spawning it.
           clone-cli = [workspacePkgs.git];
+          # efx's cloudflare executors shell out to curl (pointed at a local
+          # stub via CLOUDFLARE_API_BASE in the integration tests). The test
+          # sandbox has no curl otherwise, so the executors fail spawning it.
+          efx = [workspacePkgs.curl];
         };
         # `rodio` (packages/minecraft/minecraft/sound) pulls `cpal`/`alsa-sys`, whose build
         # script needs ALSA's pkg-config metadata to link `libasound` on Linux.

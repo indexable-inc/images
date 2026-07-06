@@ -2,7 +2,9 @@
 
 Auto-started by the CLI. It serves the live execution log as JSON
 (``/api/jobs``, ``/api/jobs/{id}``, ``/api/resources``, ``/api/cells``,
-``/api/snapshot``) plus two write paths: the tailnet-gated ``/api/exec`` an
+``/api/snapshot``), one run's interactive HTML view (``/api/jobs/{id}/ui``,
+the same MCP Apps view claude.ai renders, for the room's sandboxed iframe),
+plus two write paths: the tailnet-gated ``/api/exec`` an
 embedder polls (the room server reads ``/api/snapshot``; a peer's
 ``fleet.in_kernel`` drives ``/api/exec``), and ``/api/input``, which an
 interactive resource's ``ixSubmit`` posts the human's reply to (authorized by the
@@ -128,6 +130,21 @@ def build_app(config: Config, conn: sqlite3.Connection) -> web.Application:
         if one is None:
             return web.json_response({"error": "no such job"}, status=404)
         return web.json_response(one)
+
+    async def job_ui(request: web.Request) -> web.Response:
+        # One execution as the same self-contained interactive HTML view an MCP
+        # Apps host (claude.ai) renders for the tool result, with the payload
+        # baked in (see mcp_ui.embedded_html). The room proxies this and mounts
+        # it in a sandboxed (allow-scripts, opaque-origin) iframe, so the chat
+        # shows the identical view without talking MCP. Read-only, derived
+        # entirely from the store, like every other GET here.
+        from . import mcp_ui
+
+        one = feed.job(conn, request.match_info["id"])
+        if one is None:
+            return web.json_response({"error": "no such job"}, status=404)
+        html = mcp_ui.embedded_html(mcp_ui.job_payload(one))
+        return web.Response(text=html, content_type="text/html")
 
     async def exec_run(request: web.Request) -> web.Response:
         # The one *write* path on this otherwise read-only surface: run a line of
@@ -285,6 +302,7 @@ def build_app(config: Config, conn: sqlite3.Connection) -> web.Application:
     app.router.add_get("/", index)
     app.router.add_get("/api/jobs", jobs)
     app.router.add_get("/api/jobs/{id}", job)
+    app.router.add_get("/api/jobs/{id}/ui", job_ui)
     app.router.add_get("/api/resources", resources)
     app.router.add_get("/api/resources/{id}/events", resource_events)
     app.router.add_get("/api/cells", cells)

@@ -518,7 +518,11 @@ fn bm25_rerank(
     // Default to ranking the whole batch; the search never returns more hits
     // than documents, so an oversized limit is harmless.
     let limit = limit.unwrap_or(texts.len());
-    let ranked = rerank(query, texts, limit).map_err(|error| PyRuntimeError::new_err(error))?;
+    // The indexing + scoring is pure Rust CPU work; detach from the GIL so a
+    // caller's other threads (e.g. an asyncio loop) keep running.
+    let ranked = py
+        .detach(|| rerank(query, texts, limit))
+        .map_err(PyRuntimeError::new_err)?;
 
     let out = pyo3::types::PyList::empty(py);
     for hit in ranked {
@@ -542,11 +546,19 @@ fn bm25_rerank(
 /// read or parsed; these do not abort the walk).
 #[pyfunction]
 #[pyo3(signature = (path, index_dir, no_gitignore = false))]
-fn bm25_index(py: Python<'_>, path: &str, index_dir: &str, no_gitignore: bool) -> PyResult<Py<PyAny>> {
-    let mut index =
-        SearchIndex::open_or_create(index_dir).map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-    let stats = index
-        .index_directory(std::path::Path::new(path), !no_gitignore)
+fn bm25_index(
+    py: Python<'_>,
+    path: &str,
+    index_dir: &str,
+    no_gitignore: bool,
+) -> PyResult<Py<PyAny>> {
+    // The walk + Tantivy indexing is blocking disk/CPU work; detach from the
+    // GIL so a caller's other threads (e.g. an asyncio loop) keep running.
+    let stats = py
+        .detach(|| {
+            let mut index = SearchIndex::open_or_create(index_dir)?;
+            index.index_directory(std::path::Path::new(path), !no_gitignore)
+        })
         .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
 
     let dict = PyDict::new(py);
@@ -580,10 +592,13 @@ fn bm25_search(
     limit: usize,
     filter: Option<&str>,
 ) -> PyResult<Py<PyAny>> {
-    let reader =
-        SearchIndexReader::open(index_dir).map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-    let hits = reader
-        .search(query, limit, filter.map(std::path::Path::new))
+    // Opening and querying the index is blocking disk/CPU work; detach from
+    // the GIL so a caller's other threads (e.g. an asyncio loop) keep running.
+    let hits = py
+        .detach(|| {
+            let reader = SearchIndexReader::open(index_dir)?;
+            reader.search(query, limit, filter.map(std::path::Path::new))
+        })
         .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
 
     let out = pyo3::types::PyList::empty(py);
@@ -665,5 +680,15 @@ mod tests {
             !matched.contains(&2),
             "unrelated text should not match; got {matched:?}"
         );
+    }
+
+    /// `bm25_rerank(query, [])` defaults the limit to the batch size — zero.
+    /// Tantivy's `TopDocs::with_limit(0)` panics, which pyo3 would re-raise as
+    /// a `PanicException`; `file_search` guards it, so this must return an
+    /// empty list instead.
+    #[test]
+    fn rerank_empty_batch_returns_no_hits() {
+        let hits = rerank("anything", Vec::new(), 0).expect("empty batch must not panic");
+        assert!(hits.is_empty(), "empty batch should yield no hits");
     }
 }

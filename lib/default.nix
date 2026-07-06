@@ -96,8 +96,31 @@
       inherit (entry) id;
       path = "packages/${entry.relativePath}";
       inherit (entry.mirror) repo description topics;
+      # The About-sidebar website: the package's own `mirror.homepage` when
+      # set, else its tree in the monorepo (the source of truth a mirror
+      # visitor should land on).
+      homepage =
+        if entry.mirror.homepage != null
+        then entry.mirror.homepage
+        else "https://github.com/${repoMetadataConfig.monorepo.repo}/tree/main/packages/${entry.relativePath}";
     })
     packageRegistry.mirrorEntries;
+  # Declarative GitHub About-sidebar metadata (description / homepage /
+  # topics) for every repo this monorepo owns: the monorepo itself
+  # (lib/repo-metadata.nix) plus one entry per package mirror. `nix eval
+  # --json '.#lib.repoMetadata'` is what the repo-metadata workflow
+  # (.github/workflows/repo-metadata.yml) renders: its sync job PATCHes the
+  # fields to GitHub on every push to main, and its check job fails when a
+  # covered repo is missing a description or topics (packages/registry.nix
+  # throws during this eval), so no owned repo regresses to GitHub's "No
+  # description, website, or topics provided."
+  repoMetadataConfig = import ./repo-metadata.nix;
+  repoMetadata =
+    [(repoMetadataConfig.monorepo // {path = ".";})]
+    ++ map (entry: {
+      inherit (entry) repo description homepage topics path;
+    })
+    mirrorPackages;
   # Build a fork package's `passthru.updateScript` (flake update base ->
   # rebase-patches), so it joins the registry-discovered `.#update` DAG. See
   # lib/fork-updater.nix.
@@ -310,6 +333,17 @@
   attrs = import ./util/attrs.nix {inherit lib;};
 
   /**
+  Build efx plan IR (`efx_ir::Plan` JSON) from Nix — the terranix
+  replacement. `plan` / `effect` / `lit` / `ref` construct effects natively;
+  `fromTerranix` translates a terranix-shaped `resource.<type>.<name>` config
+  into effects, turning terraform interpolation strings into first-class efx
+  references. Feed `builtins.toJSON (efx.plan ...)` to `efx plan/apply --ir`.
+  See [`lib/util/efx.nix`](lib/util/efx.nix) and
+  [`packages/efx/README.md`](packages/efx/README.md).
+  */
+  efx = import ./util/efx.nix {inherit lib lists;};
+
+  /**
   TOML value encoding. `scalar` renders one Nix scalar as the TOML literal a
   `key = value` pair expects (codex `--config a.b=1` flags). Scalars only;
   for whole TOML files use `pkgs.formats.toml`. See
@@ -337,6 +371,15 @@
   [`lib/util/mcp.nix`](lib/util/mcp.nix).
   */
   mcp = import ./util/mcp.nix {inherit lib;};
+
+  /**
+  Drop the `meta.license` marker on a vendored proprietary binary, so the
+  per-system flake package set (evaluated without `allowUnfree`) can build a
+  wrapper around it. Shared by the vendored-agent wrappers (claude-code,
+  cursor-cli); see [`lib/util/vendored-unfree.nix`](lib/util/vendored-unfree.nix)
+  for the full rationale.
+  */
+  allowVendoredUnfree = import ./util/vendored-unfree.nix {};
 
   mkMinecraftLoader = import ./minecraft/loader.nix;
 
@@ -499,6 +542,7 @@
       rev
       revEpoch
       agents
+      allowVendoredUnfree
       artifacts
       attrs
       buildElixirCheck
@@ -514,6 +558,7 @@
       checks
       claudePlugin
       deepMerge
+      efx
       forkPackages
       forkDagCheckSrc
       goUnit
@@ -538,6 +583,7 @@
       pins
       publicArtifactsFor
       relativePath
+      repoMetadata
       ruffAnnArgs
       rustWorkspace
       rustWorkspaceFor

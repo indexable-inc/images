@@ -21,8 +21,6 @@ and gives you the verbs. A minimal real example
 { index }:
 
 index.lib.mkFleet {
-  defaults = [ { ix.image.tag = "nginx-lifecycle"; } ];
-
   nodes.nginx = {
     deployment.recreateOnUp = true;
     modules = [ ./service.nix ];

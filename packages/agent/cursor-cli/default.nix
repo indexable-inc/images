@@ -42,14 +42,10 @@
     }).systemPromptFor
     "cursor",
 }: let
-  # nixpkgs tags the vendored binary `licenses.unfree`, and the per-system
-  # flake package set evaluates nixpkgs without `allowUnfree`, so consuming
-  # `cursor-cli` as-is would block `nix run .#cursor-cli`. Same posture as
-  # claude-code: omit the license marker for the vendored binary rather than
-  # gate the output; distribution terms are Cursor's commercial license.
-  cursorAgent = cursor-cli.overrideAttrs (previousAttrs: {
-    meta = builtins.removeAttrs previousAttrs.meta ["license"];
-  });
+  # nixpkgs tags the vendored binary `licenses.unfree`; drop the marker so
+  # `nix run .#cursor-cli` builds (see lib/util/vendored-unfree.nix for the
+  # shared rationale). Distribution terms are Cursor's commercial license.
+  cursorAgent = ix.allowVendoredUnfree cursor-cli;
 
   sharedPermissions = import (ix.paths.packagesRoot + "/agent/policy/permissions.nix") {
     inherit lib;

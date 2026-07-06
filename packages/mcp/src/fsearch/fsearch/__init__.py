@@ -106,6 +106,19 @@ def _expand(root: str | os.PathLike[str]) -> str:
     return str(Path(root).expanduser())
 
 
+def _dir_root(pattern: str) -> str | None:
+    """The expanded path when a ``find`` pattern is really a search root: it
+    contains a path separator (which fd rejects in a pattern outright) AND names
+    an existing directory. ``None`` otherwise — a plain name like ``"src"``
+    stays a pattern even if a ``src/`` directory exists, so name matching is
+    never hijacked. Sync on purpose, like :func:`_expand` (one local ``stat``;
+    keeps path methods out of the async caller, ASYNC240)."""
+    if os.sep not in pattern:
+        return None
+    path = Path(pattern).expanduser()
+    return str(path) if path.is_dir() else None
+
+
 async def _run(argv: list[str], *, timeout: float, ok_codes: tuple[int, ...] = (0,)) -> tuple[str, bool]:
     """Run a search CLI off the event loop with color disabled (so its output is
     clean, never SGR-corrupted) and return ``(output_text, timed_out)``.
@@ -398,8 +411,17 @@ async def find(
 ) -> pl.DataFrame:
     """Find files via fd, one row per path. ``pattern`` is a regex by default
     (``glob=True`` for glob, ``fixed=True`` for a literal); ``kind`` ∈
-    file/dir/symlink; ``ext`` filters by extension. Respects ``.gitignore`` by
-    default. Columns: ``path, name, type, size, mtime``."""
+    file/dir/symlink; ``ext`` filters by extension. A first positional that is
+    the path of an existing directory is taken as the search root instead —
+    ``find("/some/dir", max_depth=2)`` lists that tree. Respects ``.gitignore``
+    by default. Columns: ``path, name, type, size, mtime``."""
+    # Listing a directory tree is the most common call, and the natural spelling
+    # is `find("/some/dir")` — but the first positional is the pattern, and fd
+    # rejects any pattern containing a path separator. So a path-shaped first
+    # arg naming an existing directory becomes the root (with the match-all
+    # default pattern), unless an explicit `root` already claims that slot.
+    if root == "." and (dir_root := _dir_root(pattern)) is not None:
+        pattern, root = ".", dir_root
     argv = ["fd", "--print0"]
     if kind:
         argv += ["--type", _KIND_FLAG.get(kind, kind)]

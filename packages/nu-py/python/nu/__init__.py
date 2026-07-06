@@ -11,7 +11,7 @@ binary runs with ``^cmd``::
     df = await nu("ps | where cpu > 5 | sort-by cpu")
     df = await nu("open Cargo.toml | get package")          # record -> 1-row frame
     df = await nu("http get https://api.github.com/repos/nushell/nushell")
-    df = await nu("^git status --short")                    # external binary via ^
+    text = await nu("^git status --short")                  # external binary via ^ (stdout str)
     df = await nu("^gh pr list --json number,title | from json")  # JSON-mode CLI
 
 This is not a subprocess: the engine (PyO3 bindings over nu-engine) lives in
@@ -35,9 +35,12 @@ build, use the bundled ``nix`` module (a live dashboard build-tree pane), not
 
 Contract:
 
-- ``await nu(code)`` returns a ``pl.DataFrame``, always: a table maps
-  directly, a record becomes one row, a list of scalars / a scalar become a
-  single ``value`` column, no output (``null``) an empty frame.
+- ``await nu(code)`` returns a ``pl.DataFrame`` for structured output: a
+  table maps directly, a record becomes one row, a list of scalars / a
+  non-str scalar become a single ``value`` column, no output (``null``) an
+  empty frame. A lone string -- an external's stdout, ``to text`` -- comes
+  back as the plain ``str``: multiline text round-trips verbatim instead of
+  hiding in a 1x1 frame whose printed repr clips the cell (issue #2068).
 - ``await nu.value(code)`` is the escape hatch when you want the plain
   Python value (a scalar, a nested dict) instead of a frame.
 - Values cross natively, not as JSON: dates arrive as UTC ``Datetime``
@@ -59,11 +62,12 @@ Contract:
   fix the pipeline, retry. ``exit`` raises too; it never ends this process.
 - ``check=False`` is the grep escape hatch (subprocess.run semantics): a
   trailing external that exits non-zero stops raising and ``nu()`` returns
-  :class:`NuResult` -- the frame built from the output the external DID
-  produce, plus its ``exit_code`` -- so ``^ls | ^grep pattern`` with no
-  match is an empty result with ``exit_code == 1``, not an exception. Only
-  exit-status semantics change: parse errors, unknown commands, and runtime
-  shell errors raise either way. A signal-terminated external reports the
+  :class:`NuResult` -- ``result`` is what the call would have returned
+  anyway, built from the output the external DID produce, plus its
+  ``exit_code`` -- so ``^ls | ^grep pattern`` with no match is an empty
+  result with ``exit_code == 1``, not an exception. Only exit-status
+  semantics change: parse errors, unknown commands, and runtime shell
+  errors raise either way. A signal-terminated external reports the
   negative signal number, like subprocess.
 - ``timeout=`` REQUESTS a stop the way ctrl-c would (nushell checks the
   flag between pipeline elements), raises ``TimeoutError``, and abandons
@@ -264,16 +268,17 @@ def _serialize_input(input: object) -> object:
 
 
 class NuResult(NamedTuple):
-    """What ``nu(code, check=False)`` returns: the frame plus the exit code.
+    """What ``nu(code, check=False)`` returns: the result plus the exit code.
 
-    ``frame`` is built from whatever output the pipeline produced (a failing
-    ``grep`` still hands over the lines it matched before exiting non-zero);
-    ``exit_code`` is the trailing external's exit code, ``0`` when the
-    pipeline ends in an internal command, negative-signal when the external
-    was signal-terminated (the subprocess convention).
+    ``result`` is whatever the call would have returned anyway, built from
+    the output the pipeline produced (a failing ``grep`` still hands over
+    the lines it matched before exiting non-zero; a lone string stays plain
+    text); ``exit_code`` is the trailing external's exit code, ``0`` when
+    the pipeline ends in an internal command, negative-signal when the
+    external was signal-terminated (the subprocess convention).
     """
 
-    frame: pl.DataFrame
+    result: pl.DataFrame | str
     exit_code: int
 
 
@@ -394,7 +399,8 @@ def _rows_frame(rows: list[dict]) -> pl.DataFrame:
 
 
 def _to_frame(decoded: object) -> pl.DataFrame:
-    """Normalize any pipeline value into a ``pl.DataFrame``."""
+    """Normalize a pipeline value into a ``pl.DataFrame`` (a lone ``str``
+    never reaches here: ``nu()`` returns it verbatim, issue #2068)."""
     import polars as pl
 
     if decoded is None:
@@ -423,7 +429,7 @@ async def nu(
     timeout: float | None = ...,
     name: str | None = ...,
     check: Literal[True] = ...,
-) -> pl.DataFrame: ...
+) -> pl.DataFrame | str: ...
 
 
 @overload
@@ -448,9 +454,10 @@ async def nu(
     timeout: float | None = None,
     name: str | None = None,
     check: bool = True,
-) -> pl.DataFrame | NuResult:
+) -> pl.DataFrame | str | NuResult:
     """Run ``code`` as nushell source and return the result as a polars
-    DataFrame.
+    DataFrame, or as the plain ``str`` when the pipeline's value is a lone
+    string.
 
     Multi-statement source is fine; the last pipeline's output is the result,
     and ``let``/``def`` persist to later calls (REPL semantics). ``PWD`` does
@@ -462,22 +469,33 @@ async def nu(
     the module docstring); ``name`` labels the running job in the dashboard.
 
     Shape normalization: table -> frame; record -> 1-row frame; list of
-    scalars / scalar -> a single ``value`` column; no output -> empty frame.
-    A failure raises :class:`NuError` carrying nushell's diagnostic.
+    scalars / non-str scalar -> a single ``value`` column; a lone string ->
+    the plain ``str`` (an external's stdout round-trips verbatim); no output
+    -> empty frame. A failure raises :class:`NuError` carrying nushell's
+    diagnostic.
 
     ``check=False`` (subprocess.run semantics) keeps a grep-style pipeline
     usable: a trailing external's non-zero exit stops raising and the call
-    returns :class:`NuResult` -- the frame built from the output it did
-    produce, plus ``exit_code`` -- so "no match" reads as an empty result
-    with ``exit_code == 1``. Everything else still raises.
+    returns :class:`NuResult` -- ``result`` is whatever the call would have
+    returned (the output the external did produce, a lone string staying
+    text), plus ``exit_code`` -- so "no match" reads as an empty result with
+    ``exit_code == 1``. Everything else still raises.
     """
     value, exit_code = await _run(
         code, input=input, cwd=cwd, env=env, timeout=timeout, name=name, check=check
     )
-    frame = _to_frame(value)
+    if isinstance(value, str):
+        # A lone string is TEXT (an external's stdout, `to text`), not a table:
+        # hand it back verbatim. Framing it as a 1x1 DataFrame made every
+        # `print()` of it write polars' width-clipped box repr into the
+        # captured stdout, and the full text was unrecoverable afterwards
+        # (issue #2068).
+        result: pl.DataFrame | str = value
+    else:
+        result = _to_frame(value)
     if check:
-        return frame
-    return NuResult(frame, exit_code)
+        return result
+    return NuResult(result, exit_code)
 
 
 async def value(

@@ -191,7 +191,7 @@ NU = (
     "list, a dict) rather than a frame. A failing pipeline raises `NuError` carrying nushell's "
     "own diagnostic (span + 'did you mean'), so read it and fix the pipeline. For a grep-style "
     "pipeline where a non-zero exit is an answer (no match), pass `check=False`: instead of "
-    "raising, `nu(code, check=False)` returns `NuResult(frame, exit_code)` with the output the "
+    "raising, `nu(code, check=False)` returns `NuResult(result, exit_code)` with the output the "
     "external did produce — no bash-wrapping needed. It evaluates off "
     "the event loop (tokio's blocking pool), but its `timeout` only interrupts BETWEEN pipeline "
     "elements and can't kill an external it already spawned, and calls against the shared engine "

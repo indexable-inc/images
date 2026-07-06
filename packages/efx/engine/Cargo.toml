@@ -1,0 +1,24 @@
+[package]
+name = "efx-engine"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Effect engine: journal-backed memoization, plan diffing, and parallel execution of efx plans"
+
+[lints]
+workspace = true
+
+[dependencies]
+efx-ir.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+snafu.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+# cargo-unit flattens every workspace test target into one namespace, so
+# integration targets carry a crate-unique name.
+[[test]]
+name = "integration_efx_engine"
+path = "tests/engine.rs"

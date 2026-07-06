@@ -1472,6 +1472,7 @@
   # still-unmigrated siblings do not drag their errors in.
   strictGreenServerFiles = [
     "tools.py"
+    "mcp_ui.py"
   ];
   strictTypecheck = let
     # All src module package dirs go on MYPYPATH so first-party cross-imports
@@ -3018,7 +3019,7 @@
         pkgs.fd
       ];
       strictDeps = true;
-      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766)";
+      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068)";
     }
     ''
       export HOME=$TMPDIR/home
@@ -3239,7 +3240,9 @@
             )
             elapsed = loop.time() - started
             assert elapsed < 10, ("budget was not clamped", elapsed)
-            note = " ".join(getattr(c, "text", "") or "" for c in clamped)
+            # python_exec returns a CallToolResult (MCP Apps: the human view
+            # rides its _meta); the model-facing blocks live on .content.
+            note = " ".join(getattr(c, "text", "") or "" for c in clamped.content)
             assert "clamped" in note, note
         finally:
             await kernel.shutdown()
@@ -5524,6 +5527,36 @@
       mkdir -p "$out"
     '';
 
+  # The MCP Apps view mechanism (packages/mcp/tests/test_mcp_ui.py): the
+  # `ui://` viewer resource's spec shape (mimeType, lifecycle markers), the
+  # tool `_meta.ui.resourceUri` linkage, `ui_result`'s content-preserving
+  # `_meta` payload (proved over a real in-memory MCP session), the fragment
+  # extraction/budget, and the data API's `/api/jobs/{id}/ui` embedded view
+  # the room's sandboxed iframe loads. Same interpreter needs as channelTests
+  # (ix_notebook_mcp + the mcp SDK + aiohttp) plus pytest.
+  mcpUiTestSource = builtins.path {
+    name = "ix-mcp-ui-test";
+    path = ./tests/test_mcp_ui.py;
+  };
+  mcpUiTests =
+    pkgs.runCommand "ix-mcp-ui-tests"
+    {
+      nativeBuildInputs = [channelTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${mcpUiTestSource} "$TMPDIR/test_mcp_ui.py"
+      ${lib.getExe channelTestPython} -m pytest "$TMPDIR/test_mcp_ui.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp MCP Apps view tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      cat stdout
+      mkdir -p "$out"
+    '';
+
   # End-to-end browser proof of the interactive-input path: a real headless
   # Chromium mounts an `Input`'s HTML in a sandboxed, opaque-origin srcdoc iframe
   # (as HtmlBody.svelte does), clicks the button, and the cross-origin `ixSubmit`
@@ -5931,6 +5964,7 @@ in
               apiSmoke
               inputsTests
               channelTests
+              mcpUiTests
               taskErrorsTests
               readStatsTests
               inputBrowserSmoke

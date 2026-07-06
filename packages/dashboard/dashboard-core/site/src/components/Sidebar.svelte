@@ -10,15 +10,15 @@
   import { ui, isOpen, toggleFold, setFold, select, focusPane, humanTime, humanAge, humanClock, humanDate, recordingLabel, runTooltip } from '$lib/ui.svelte';
   import { setListNav } from '$lib/keys.svelte';
   import {
-    buildSidebar,
     flattenVisible,
     resourceMeta,
     selectionEq,
     type Selection,
   } from '$lib/sidebar';
+  import { sidebarModel } from '$lib/sidebar-model.svelte';
   import { kindOf, paneId } from '$lib/run';
 
-  const model = $derived(buildSidebar(store.panes, timeline.recordings));
+  const model = $derived(sidebarModel());
 
   const refMs = $derived(
     timeline.source === 'live' && timeline.following ? ui.clock : timeline.position || timeline.maxTs,

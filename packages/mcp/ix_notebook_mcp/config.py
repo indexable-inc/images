@@ -130,6 +130,16 @@ class Config:
     # every node the same secret.
     exec_token: str | None = None
 
+    # Static API key gating the MCP streamable-HTTP transport: every request to
+    # it must carry this value in `X-Api-Key` (or `Authorization: Bearer`, for
+    # clients whose path preserves that header -- some egress proxies strip
+    # Authorization for allowlisted domains, which is why X-Api-Key is primary).
+    # None leaves HTTP unauthenticated, which the CLI only allows on a
+    # loopback/tailnet bind (see `cli._http_bind_error`). `GET /health` stays
+    # open either way so a fronting proxy can probe liveness without the
+    # secret. Sourced from IX_MCP_API_KEY(_FILE) by the CLI; stdio ignores it.
+    api_key: str | None = None
+
     # Trust the bound network (the tailnet) as the `/api/exec` auth boundary, so
     # `fleet.in_kernel` works without a token -- the same model Ray's own data
     # plane relies on. The endpoint honors this only when `host` is non-loopback

@@ -7,6 +7,16 @@
   # `pkgs.sqlmerge`.
   overlay = true;
   inRustWorkspace = true;
-  mirror.repo = "indexable-inc/sqlmerge";
+  mirror = {
+    repo = "indexable-inc/sqlmerge";
+    description = "A git merge driver for SQLite database files: a real three-way merge of row data via the SQLite session extension.";
+    topics = [
+      "git"
+      "sqlite"
+      "merge-driver"
+      "rust"
+      "ix"
+    ];
+  };
   passthruTests = true;
 }

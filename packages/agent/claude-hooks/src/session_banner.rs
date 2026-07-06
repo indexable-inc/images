@@ -55,7 +55,10 @@ fn repo_inventory(out: &mut String) {
     let Ok(entries) = std::fs::read_dir(&projects) else {
         return;
     };
-    let _ = writeln!(out, "repos (~/Projects/<org>/<repo>):");
+    // Print the expanded absolute root, not `~`: nothing else in the session
+    // context states the home directory, so a `~` here costs the agent failed
+    // calls guessing it (#1034).
+    let _ = writeln!(out, "repos ({}/<org>/<repo>):", projects.display());
     let mut orgs: Vec<std::path::PathBuf> = entries
         .flatten()
         .map(|e| e.path())

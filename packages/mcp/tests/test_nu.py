@@ -44,6 +44,29 @@ def test_scalar_and_list_become_value_column() -> None:
     assert run(nu("[1, 2, 3]"))["value"].to_list() == [1, 2, 3]
 
 
+def test_lone_string_round_trips_as_plain_text() -> None:
+    # Issue #2068: a lone string is text, not data -- framing it as a 1x1
+    # DataFrame made every print of it show polars' width-clipped box repr,
+    # and the full multiline text was unrecoverable from the captured stdout.
+    lines = [f"---VERIFY {i}: a fairly long line of stdout text, step {i} in detail---" for i in range(10)]
+    joined = " ".join(f"'{line}'" for line in lines)
+    text = run(nu(f"[{joined}] | str join (char nl)"))
+    assert isinstance(text, str)
+    assert text.splitlines() == lines
+
+
+def test_external_stdout_is_the_full_string() -> None:
+    # The reported shape (issue #2068): `^cmd` multiline stdout must come back
+    # verbatim as str, not as a frame that clips at repr time.
+    import sys
+
+    script = "print(chr(10).join('section %d: ' % i + 'x' * 60 for i in range(10)))"
+    out = run(nu(f'^{sys.executable} -c "{script}"'))
+    assert isinstance(out, str)
+    body = out.strip().splitlines()
+    assert body == [f"section {i}: " + "x" * 60 for i in range(10)]
+
+
 def test_null_and_empty_become_empty_frames() -> None:
     assert run(nu("null")).is_empty()
     assert run(nu("[] | where true")).is_empty()
@@ -142,15 +165,17 @@ def test_trailing_external_output_is_collected(tmp_path: pathlib.Path) -> None:
 def test_check_false_keeps_output_and_surfaces_exit_code() -> None:
     # The whole point of check=False (index#2067): the output the external
     # produced before exiting non-zero must survive, alongside its exit code
-    # (check=True drops the collected output on the NuError path).
+    # (check=True drops the collected output on the NuError path). The output
+    # is a lone string, so it stays plain text (index#2068 semantics).
     import sys
 
     script = "print('kept'); raise SystemExit(3)"
-    result = run(nu(f'^{sys.executable} -c "{script}"', check=False))
-    assert isinstance(result, nu.NuResult)
-    frame, exit_code = result
+    res = run(nu(f'^{sys.executable} -c "{script}"', check=False))
+    assert isinstance(res, nu.NuResult)
+    result, exit_code = res
     assert exit_code == 3
-    assert frame["value"].item().strip() == "kept"
+    assert isinstance(result, str)
+    assert result.strip() == "kept"
 
 
 def test_check_false_grep_no_match_is_empty_not_an_error() -> None:
@@ -158,16 +183,17 @@ def test_check_false_grep_no_match_is_empty_not_an_error() -> None:
     import sys
 
     script = "raise SystemExit(1)"
-    frame, exit_code = run(nu(f'^{sys.executable} -c "{script}"', check=False))
+    result, exit_code = run(nu(f'^{sys.executable} -c "{script}"', check=False))
     assert exit_code == 1
-    assert frame["value"].item() == ""
+    assert result == ""
 
 
 def test_check_false_success_reports_exit_code_zero() -> None:
-    result = run(nu("2 + 2", check=False))
-    assert isinstance(result, nu.NuResult)
-    assert result.exit_code == 0
-    assert result.frame["value"].item() == 4
+    res = run(nu("2 + 2", check=False))
+    assert isinstance(res, nu.NuResult)
+    assert res.exit_code == 0
+    assert isinstance(res.result, pl.DataFrame)
+    assert res.result["value"].item() == 4
 
 
 def test_check_true_default_still_raises_on_non_zero_exit() -> None:
@@ -182,6 +208,44 @@ def test_check_false_still_raises_on_real_errors() -> None:
     # exception either way.
     with pytest.raises(nu.NuError):
         run(nu("[{a: 1}] | wherex a > 0", check=False))
+
+
+
+def test_big_external_output_inside_try_does_not_deadlock() -> None:
+    # index#2015: nushell's experimental `pipefail` (the 0.113 default) made
+    # try/catch collection wait on the child's exit status BEFORE draining its
+    # stdout. A child with more pending output than the OS pipe buffer
+    # (64 KiB) then never exits -- it blocks in write(2) and no EPIPE arrives
+    # because the engine still holds the read end -- so the eval hung forever
+    # and wedged the engine for every later call. The bindings disable
+    # pipefail, so this must complete and hand back all the output.
+    import sys
+
+    async def guarded() -> object:
+        writer = f"^{sys.executable} -c 'import sys; sys.stdout.write(\"x\"*130000)'"
+        # wait_for is a tripwire, not part of the contract: on regression this
+        # fails in seconds instead of hanging the test run forever.
+        return await asyncio.wait_for(
+            nu.value("try { " + writer + " } catch { 'caught' }"),
+            timeout=60,
+        )
+
+    out = run(guarded())
+    assert out == "x" * 130_000
+
+
+def test_failing_external_raises_and_try_catches_without_pipefail() -> None:
+    # Disabling pipefail must not cost error reporting: a trailing external's
+    # non-zero exit still raises through ByteStream's consume-then-wait check,
+    # and try/catch still routes it to the catch block.
+    import sys
+
+    with pytest.raises(nu.NuError, match="non-zero exit code"):
+        run(nu(f"^{sys.executable} -c 'raise SystemExit(7)'"))
+    caught = run(
+        nu.value("try { ^" + sys.executable + " -c 'raise SystemExit(7)' } catch { 'caught' }")
+    )
+    assert caught == "caught"
 
 
 def test_naive_datetime_input_gets_a_clear_error() -> None:
