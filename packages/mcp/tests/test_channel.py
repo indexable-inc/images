@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import sys
 from pathlib import Path
 
 import anyio
@@ -444,5 +445,103 @@ def test_pr_watch_tool_returns_header_with_slugged_resource(
         # The URL is slugged into a resource id safe for the dashboard route.
         assert header["resource"] == "pr-https-github.com-o-r-pull-1856"
         assert header["job"] == "ab12"
+
+    asyncio.run(run())
+
+
+def test_pr_resource_html_renders_every_check_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_pr_resource_html` slugs each check's raw state into a CSS class with
+    `re.sub` (regression: NameError on `re`, #1900/#1933 -- this path is NOT
+    covered by test_pr_watch_tool_returns_header_with_slugged_resource, which
+    mocks python_exec and never runs runtime.watch_pr's own body)."""
+    state = {
+        "pr": "1856",
+        "title": "fix: something",
+        "url": "https://github.com/o/r/pull/1856",
+        "status": "open",
+        "merge_state": "clean",
+        "elapsed": "1m 2s",
+        "auto_merge": "auto merge on",
+        "error": "",
+        "checks": [
+            {"name": "build", "conclusion": "SUCCESS", "startedAt": "", "completedAt": ""},
+            # A conclusion with characters outside [a-z0-9_-] (a space) exercises
+            # the re.sub slugging rather than a value that already happens to be safe.
+            {"name": "action required check", "conclusion": "ACTION_REQUIRED", "startedAt": "", "completedAt": ""},
+        ],
+    }
+    html = runtime._pr_resource_html(state)
+    assert '<span class="state success">success</span>' in html
+    assert '<span class="state action_required">action_required</span>' in html
+
+
+class _FakeFrame:
+    """Stands in for the `pl.DataFrame` a real `nu()` call returns; watch_pr only
+    calls `.to_dicts()` on the refresh-loop result."""
+
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self._rows = rows
+
+    def to_dicts(self) -> list[dict[str, object]]:
+        return self._rows
+
+
+class _FakeNu:
+    """A stand-in for the bundled `nu` module: `watch_pr` does `import nu as
+    nu_call` then calls it directly (`nu_call(code, ...)`), so this needs to be
+    an instance whose TYPE defines `__call__` -- an attribute set on a plain
+    instance would not make `instance(...)` callable."""
+
+    async def __call__(
+        self, code: str, *, cwd: str | None = None, env: dict[str, str] | None = None, timeout: float = 60
+    ) -> _FakeFrame:
+        assert "gh pr view" in code
+        return _FakeFrame(
+            [
+                {
+                    "number": 1856,
+                    "title": "fix: something",
+                    "state": "MERGED",
+                    "mergeStateStatus": "CLEAN",
+                    "statusCheckRollup": [{"name": "build", "conclusion": "SUCCESS"}],
+                    "url": "https://github.com/o/r/pull/1856",
+                    "autoMergeRequest": None,
+                    "isDraft": False,
+                    "reviewDecision": "APPROVED",
+                }
+            ]
+        )
+
+
+def test_watch_pr_slugs_resource_id_and_renders_without_nameerror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Drives `runtime.watch_pr` itself (not the mocked-kernel `tools.pr_watch`
+    path), with `nu`/`notify` stubbed, so the `re.sub` calls at both the
+    resource-id slug (runtime.py) and inside `_pr_resource_html` actually run.
+    Regression: NameError on `re` (#1900, reopened as #1933)."""
+
+    async def run() -> None:
+        monkeypatch.setitem(sys.modules, "nu", _FakeNu())
+
+        notified: list[tuple[str, dict[str, object]]] = []
+
+        async def fake_notify(content: str, **meta: object) -> None:
+            notified.append((content, meta))
+
+        monkeypatch.setattr(runtime, "notify", fake_notify)
+
+        result = await runtime.watch_pr(
+            "https://github.com/o/r/pull/1856",
+            cwd=str(tmp_path),
+            auto_merge=False,
+        )
+
+        assert result == {"state": "MERGED", "url": "https://github.com/o/r/pull/1856", "checks": 1}
+        # The resource id is the same slugged form pr_watch's header reports.
+        resource = runtime.resources["pr-https-github.com-o-r-pull-1856"]
+        assert resource.closed()
+        assert notified
+        assert notified[0][1]["resource"] == "pr-https-github.com-o-r-pull-1856"
 
     asyncio.run(run())
