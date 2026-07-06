@@ -114,6 +114,7 @@ defmodule BeamVM.Harness do
   # Manifest shape (rendered by the Nix home-module):
   #   {"apps": {"<app>": {"code_path_globs": [...],
   #                       "start": true,
+  #                       "sys_config_globs": [...],
   #                       "runtime_config_globs": [...]}}}
   # Globs, not literal dirs: a release's lib layout (`lib/<dep>-<vsn>/ebin`)
   # is only enumerable after the package is built, and expanding at eval time
@@ -126,6 +127,7 @@ defmodule BeamVM.Harness do
        %{
          paths: expand_code_paths(Map.fetch!(spec, "code_path_globs")),
          start: Map.get(spec, "start", true),
+         sys_config: expand_globs(Map.get(spec, "sys_config_globs", [])),
          runtime_config: expand_globs(Map.get(spec, "runtime_config_globs", []))
        }}
     end)
@@ -211,9 +213,24 @@ defmodule BeamVM.Harness do
       log("loading #{app} (#{length(spec.paths)} code paths)")
     end
 
+    # Release boot order: sys.config (the baked build-time config from
+    # config.exs + prod.exs -- `server: true` for a Phoenix endpoint lives
+    # here) first, then runtime.exs overrides it, exactly as the release's
+    # own boot script would.
+    apply_sys_config(app, spec.sys_config)
     apply_runtime_config(app, spec.runtime_config)
     if spec.start and not started?(app), do: start_app(app)
     spec
+  end
+
+  # sys.config is one Erlang term: a list of {App, [{Key, Val}]} pairs.
+  defp apply_sys_config(_app, []), do: :ok
+
+  defp apply_sys_config(app, [path | _] = all) do
+    if length(all) > 1, do: log("#{app}: multiple sys.configs matched; using #{path}")
+    log("#{app}: applying sys.config #{path}")
+    {:ok, [config]} = :file.consult(String.to_charlist(path))
+    Application.put_all_env(config, persistent: true)
   end
 
   # `:code.modified_modules/0` lists exactly the loaded modules whose beam on

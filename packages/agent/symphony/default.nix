@@ -101,10 +101,20 @@
     '';
   };
 
+  # Mix 1.18+ opens a loopback TCP socket (Mix.Sync.PubSub) on every
+  # deps.loadpaths, which the darwin sandbox denies with :eperm; there is no
+  # Mix env knob to disable it (Mix.PubSub.start/0 is unconditional in
+  # deps.loadpaths). __darwinAllowLocalNetworking is the nixpkgs idiom for
+  # exactly this: loopback only, no external network. Needed on hex (built
+  # with mix), the deps FOD, and the release build; a no-op on linux.
+  hexDarwinLoopback = pkgs.beamPackages.hex.overrideAttrs (_: {
+    __darwinAllowLocalNetworking = true;
+  });
+
   # Prod-env mix deps for the compiled release below: runtime deps only, so a
   # separate FOD from the test-env `mixFodDeps` (different dep set, different
   # hash). Refresh `mix-deps-prod` in pins.json whenever mix.lock changes.
-  prodMixFodDeps = pkgs.beamPackages.fetchMixDeps {
+  prodMixFodDeps = (pkgs.beamPackages.fetchMixDeps.override {hex = hexDarwinLoopback;}) {
     pname = "symphony-elixir-prod-deps";
     version = "0.2.0"; # keep in sync with elixir/mix.exs
     src = lib.fileset.toSource {
@@ -117,6 +127,7 @@
     inherit elixir;
     mixEnv = "prod";
     inherit (pins."mix-deps-prod") hash;
+    __darwinAllowLocalNetworking = true;
   };
 
   # Compiled BEAM release, the artifact the persistent-VM runtime
@@ -126,15 +137,20 @@
   # staging + compiling at boot; this is the no-compile-at-boot artifact hot
   # reload needs. Same elixir toolchain as the beamvm harness so the bytecode
   # and stdlib the release bundles are exactly what that VM booted.
-  release = (pkgs.beamPackages.mixRelease.override {inherit elixir;}) {
-    pname = "symphony-release";
-    version = "0.2.0"; # keep in sync with elixir/mix.exs
-    src = lib.fileset.toSource {
-      root = ./elixir;
-      fileset = ./elixir;
+  release =
+    (pkgs.beamPackages.mixRelease.override {
+      inherit elixir;
+      hex = hexDarwinLoopback;
+    }) {
+      pname = "symphony-release";
+      version = "0.2.0"; # keep in sync with elixir/mix.exs
+      src = lib.fileset.toSource {
+        root = ./elixir;
+        fileset = ./elixir;
+      };
+      mixFodDeps = prodMixFodDeps;
+      __darwinAllowLocalNetworking = true;
     };
-    mixFodDeps = prodMixFodDeps;
-  };
 in
   (writeNushellApplication {
     name = "symphony";

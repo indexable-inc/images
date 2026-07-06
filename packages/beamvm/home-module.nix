@@ -58,6 +58,12 @@
           # here would be import-from-derivation.
           code_path_globs = ["${app.package}/lib/*/ebin"] ++ app.extraCodePathGlobs;
           inherit (app) start;
+          # sys.config carries the baked build-time config (config.exs +
+          # prod.exs; `server: true` for Phoenix lives there), runtime.exs the
+          # boot-time env reads; the harness applies them in that order, as a
+          # release boot would.
+          sys_config_globs =
+            lib.optional app.releaseRuntimeConfig "${app.package}/releases/*/sys.config";
           runtime_config_globs =
             lib.optional app.releaseRuntimeConfig "${app.package}/releases/*/runtime.exs";
         })
