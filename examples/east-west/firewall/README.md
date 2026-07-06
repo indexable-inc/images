@@ -1,18 +1,24 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="allowed-client reaches service inside the east-west group; outside-client has no route"></p>
+
 # East-west firewall
 
-A small fleet where the useful boundary is an ix VM group. The HTTP service and
-`allowed-client` share one east-west group; `outside-client` is left out, and
-its health check expects the private URL to fail.
+How do you prove one VM can reach a service and another cannot? Put the
+boundary where ix already has one: the east-west group. The HTTP service and
+`allowed-client` share a group, so the client gets a private route and DNS
+name; `outside-client` is left out, and its health check passes only when the
+same URL fails.
 
 ## Run
 
 ```sh
+# From the index repo root.
 nix run .#east-west-firewall-up
 nix run .#east-west-firewall-health
 ```
 
 The fleet wrapper creates the `east-west-firewall` group, adds `service` and
-`allowed-client`, then runs the health checks.
+`allowed-client`, then runs the health checks. Need the repo first?
+`git clone https://github.com/indexable-inc/index`.
 
 ## Verify manually
 
