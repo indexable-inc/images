@@ -108,7 +108,17 @@ jobs:
             } >>"${GITHUB_STEP_SUMMARY}"
           fi
 
-          nix run .#check >"${check_log}" 2>&1
+          # TEMPORARY (revert before merge): replay the check log tail into the
+          # GitHub log on failure, to debug this PR's flake-check failure from
+          # an environment that cannot reach the runner host or the artifact
+          # blob store.
+          nix run .#check >"${check_log}" 2>&1 || {
+            status=$?
+            echo "::group::check log tail (exit ${status})"
+            tail -c 262144 "${check_log}"
+            echo "::endgroup::"
+            exit "${status}"
+          }
 
       # The `check` app writes nix-fast-build per-attr durations to
       # check-results.json in the workspace (see lib/per-system.nix). Upload it
