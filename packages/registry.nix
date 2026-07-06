@@ -33,6 +33,7 @@
     "flake"
     "id"
     "inRustWorkspace"
+    "mirror"
     "overlay"
     "packageSet"
     "passthruTests"
@@ -140,6 +141,26 @@
         prefix = value.prefix or "rust-${id}";
       };
 
+  # Opt-in standalone mirror repo (packages/mirror + the mirror-sync
+  # workflow): `repo` is the GitHub `owner/name` the generated tree is
+  # snapshot-synced into; `description`/`topics` seed the repo when CI creates
+  # it. Absent/false = no mirror.
+  normalizeMirror = label: value:
+    if value == null || value == false
+    then null
+    else
+      assertKnownKeys "${label}: mirror" [
+        "description"
+        "repo"
+        "topics"
+      ]
+      value
+      // {
+        repo = value.repo or (throw "${label}: mirror.repo is required");
+        description = value.description or null;
+        topics = value.topics or [];
+      };
+
   normalizeRustWorkspace = label: value:
     if value == null || value == false
     then null
@@ -174,6 +195,7 @@
       overlay = normalizeOverlay label id (raw.overlay or null);
       inRustWorkspace = normalizeRustWorkspace label (raw.inRustWorkspace or null);
       cross = normalizeCross label id (raw.cross or null);
+      mirror = normalizeMirror label (raw.mirror or null);
       passthruTests = normalizePassthruTests label id (raw.passthruTests or null);
       # `updateScript = true` marks a package that exposes a
       # `passthru.updateScript` (e.g. a pinned prebuilt binary that tracks an
@@ -216,6 +238,8 @@
     )
     entries;
 
+  mirrorEntries = lib.filter (entry: entry.mirror != null) entries;
+
   rustWorkspaceEntries = lib.filter (entry: entry.inRustWorkspace != null) entries;
 
   rustWorkspaceEntriesFor = system: lib.filter (entry: enabledForSystem system entry.inRustWorkspace) rustWorkspaceEntries;
@@ -231,6 +255,7 @@ in
       flakeEntriesFor
       overlayEntriesFor
       crossEntriesFor
+      mirrorEntries
       updateScriptEntriesFor
       passthruTestEntriesFor
       rustWorkspaceEntries

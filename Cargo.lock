@@ -6098,6 +6098,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mirror"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde_json",
+ "tempfile",
+ "toml_edit 0.25.12+spec-1.1.0",
+]
+
+[[package]]
 name = "mixedbread"
 version = "0.1.0"
 dependencies = [

@@ -7,5 +7,6 @@
   # `pkgs.sqlmerge`.
   overlay = true;
   inRustWorkspace = true;
+  mirror.repo = "indexable-inc/sqlmerge";
   passthruTests = true;
 }

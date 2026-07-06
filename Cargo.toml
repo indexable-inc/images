@@ -56,6 +56,7 @@ members = [
   "packages/minecraft/minecraft/nbt",
   "packages/minecraft/minecraft/sound",
   "packages/minecraft/minecraft/sync-managed",
+  "packages/mirror",
   "packages/search/mixedbread",
   "packages/mynoise",
   "packages/nu-py",
@@ -285,6 +286,9 @@ tokio-postgres = "0.7"
 tokio-stream = "0.1"
 tokio-util = "0.7"
 toml = { version = "1.1.2", default-features = false }
+# Format-preserving TOML rewriting for packages/mirror: inlining workspace
+# inheritance into standalone manifests without losing comments.
+toml_edit = "0.25"
 tower = "0.5"
 tower-http = "0.7"
 tracing = "0.1"

@@ -1,0 +1,120 @@
+name: Sync package mirrors
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "packages/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "LICENSE"
+      - "lib/fork-packages.nix"
+      - ".github/workflows/mirror-sync.yml"
+  schedule:
+    # Daily safety net: a mirror repo deleted or drifted out-of-band converges
+    # back to the monorepo state even when no `packages/**` push happened. The
+    # publish step commits only on an effective tree change, so a quiet day is
+    # a no-op. Minute offset from the other crons so they never start together.
+    - cron: "13 6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-sync
+  cancel-in-progress: false
+
+jobs:
+  # Snapshot-sync each opt-in package (a `mirror` attr in its package.nix,
+  # surfaced as `.#lib.mirrorPackages`) into its standalone read-only repo.
+  # `MIRROR_TOKEN` is a secret with repo-creation + push rights on the org
+  # (see packages/mirror/README.md, "Permissions"); the default GITHUB_TOKEN
+  # cannot create repos or push outside this repository, so without the
+  # secret the job skips loudly instead of half-running.
+  mirrors:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # `accept-flake-config` lets the job consume the flake's cache.ix.dev
+      # substituter without a prompt.
+      - name: Install Determinate Nix
+        uses: DeterminateSystems/determinate-nix-action@629b284231c2a82554b724e357e47fc6020833c8 # v3
+        with:
+          extra-conf: |
+            accept-flake-config = true
+            extra-substituters = https://cache.ix.dev
+            extra-trusted-public-keys = ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI=
+
+      - name: Publish package mirrors
+        env:
+          MIRROR_TOKEN: ${{ secrets.MIRROR_TOKEN }}
+          # `mirror publish --create` shells out to `gh repo create`, which
+          # reads GH_TOKEN.
+          GH_TOKEN: ${{ secrets.MIRROR_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$MIRROR_TOKEN" ]; then
+            echo "MIRROR_TOKEN is not configured; skipping mirror publish." \
+                 "See packages/mirror/README.md (Permissions)."
+            exit 0
+          fi
+          mapfile -t paths < <(
+            nix eval --json '.#lib.mirrorPackages' \
+              | nix run nixpkgs#jq -- -r '.[].path'
+          )
+          echo "mirror-enabled packages: ${paths[*]}"
+          for path in "${paths[@]}"; do
+            echo "::group::mirror publish: $path"
+            nix run .#mirror -- publish --package "$path" --create
+            echo "::endgroup::"
+          done
+
+  # For each de-forked package that opted into a real GitHub fork repo
+  # (`forkRepo` in its lib/fork-packages.nix entry), rebuild and force-push
+  # the `ix-patched` branch: pinned upstream base + the in-repo patch series
+  # applied as commits, so opening an upstream PR is one click away.
+  fork-branches:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Determinate Nix
+        uses: DeterminateSystems/determinate-nix-action@629b284231c2a82554b724e357e47fc6020833c8 # v3
+        with:
+          extra-conf: |
+            accept-flake-config = true
+            extra-substituters = https://cache.ix.dev
+            extra-trusted-public-keys = ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI=
+
+      - name: Push fork branches
+        env:
+          MIRROR_TOKEN: ${{ secrets.MIRROR_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$MIRROR_TOKEN" ]; then
+            echo "MIRROR_TOKEN is not configured; skipping fork branches." \
+                 "See packages/mirror/README.md (Permissions)."
+            exit 0
+          fi
+          mapfile -t forks < <(
+            nix eval --json '.#lib.forkPackages' \
+              --apply 'fs: builtins.filter (f: f ? forkRepo) fs' \
+              | nix run nixpkgs#jq -- -r '.[].name'
+          )
+          if [ "${#forks[@]}" -eq 0 ]; then
+            echo "no fork package opts into a forkRepo; nothing to push."
+            exit 0
+          fi
+          for fork in "${forks[@]}"; do
+            echo "::group::mirror fork-branch: $fork"
+            nix run .#mirror -- fork-branch --name "$fork" --push
+            echo "::endgroup::"
+          done

@@ -86,6 +86,16 @@
   # single source of truth for the patched-src checks, the `.#update` fork
   # nodes, and the `rebase-patches` tool. See lib/fork-packages.nix.
   inherit (import ./fork-packages.nix) forkPackages;
+  # Mirror-enabled packages (opt-in `mirror` attr in a package's package.nix):
+  # id, repo-relative path, and mirror-repo coordinates for each package that
+  # publishes a standalone read-only mirror. `nix eval --json
+  # '.#lib.mirrorPackages'` is what the mirror-sync workflow iterates to drive
+  # `mirror publish`. See packages/mirror.
+  mirrorPackages = map (entry: {
+    inherit (entry) id;
+    path = "packages/${entry.relativePath}";
+    inherit (entry.mirror) repo description topics;
+  }) packageRegistry.mirrorEntries;
   # Build a fork package's `passthru.updateScript` (flake update base ->
   # rebase-patches), so it joins the registry-discovered `.#update` DAG. See
   # lib/fork-updater.nix.
@@ -510,6 +520,7 @@
       lists
       mcp
       minecraft
+      mirrorPackages
       mkBenchSuite
       mkForkChecks
       mkForkUpdater
