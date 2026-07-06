@@ -77,6 +77,7 @@ import inspect as _inspect
 import os
 import re
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ._nu import Engine, NuError
@@ -259,7 +260,7 @@ async def _run(
 ) -> object:
     """Evaluate ``code`` on the shared engine; return the plain Python value."""
     if cwd is None:
-        cwd = os.getcwd()
+        cwd = Path.cwd()
     if name is not None and _rename_current_job is not None and (
         _ix_current is not None and _ix_current.get() is not None
     ):
