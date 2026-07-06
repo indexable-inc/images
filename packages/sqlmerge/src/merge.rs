@@ -28,10 +28,11 @@ use crate::config::PolicyConfig;
 use crate::error::{MergeError, PrimaryKey, Result, RowConflict};
 use crate::schema;
 
-/// Conflict-resolution policy for one table. Selected per-table by a
-/// [`PolicyConfig`] read from `sqlmerge.toml`; the resolution from a table name
-/// to a policy is pure data (see [`crate::config`]) and this enum is the
-/// vocabulary the apply path acts on.
+/// Conflict-resolution policy for one table.
+///
+/// Selected per-table by a [`PolicyConfig`] read from `sqlmerge.toml`; the
+/// resolution from a table name to a policy is pure data (see
+/// [`crate::config`]) and this enum is the vocabulary the apply path acts on.
 ///
 /// The mapping to `SQLite`'s conflict-handler return values is exact and
 /// constrained by the session docs: `SQLITE_CHANGESET_REPLACE` is only legal
@@ -225,26 +226,6 @@ fn describe_conflict(kind: &ConflictType, item: &ChangesetItem) -> RowConflict {
     }
 }
 
-/// Compute the `base -> theirs` changeset and apply it onto `ours` in place.
-///
-/// `ours_path` is opened read-write; on a clean merge it holds the merged
-/// result. `sqlite3changeset_apply` runs inside a savepoint, so an aborted
-/// apply leaves `ours` untouched.
-///
-/// # Errors
-///
-/// Every refusal maps to exit code 1 in the binary:
-///
-/// - [`MergeError::SchemaDiverged`]: the two sides' `sqlite_schema` differs.
-/// - [`MergeError::BaseSchemaDiverged`]: the sides agree but base's schema
-///   differs (the session diff needs identical table definitions).
-/// - [`MergeError::MissingPrimaryKey`]: a user table has no explicit PK.
-/// - [`MergeError::Conflicts`]: row-level conflicts that no table policy
-///   resolved (aborting tables, or `theirs`/`append-only` on a type they leave
-///   conflicting).
-/// - [`MergeError::IntegrityCheckFailed`] / [`MergeError::ForeignKeyCheckFailed`]:
-///   the post-merge `PRAGMA` sweeps found violations.
-/// - [`MergeError::Sqlite`]: any underlying `SQLite` failure.
 /// How the conflict handler should respond to one conflicting row under a given
 /// policy: either resolve it (returning the `SQLite` action, no report) or
 /// treat it as an unresolved conflict (capture + abort).
@@ -295,6 +276,26 @@ const fn resolve_conflict(
     }
 }
 
+/// Compute the `base -> theirs` changeset and apply it onto `ours` in place.
+///
+/// `ours_path` is opened read-write; on a clean merge it holds the merged
+/// result. `sqlite3changeset_apply` runs inside a savepoint, so an aborted
+/// apply leaves `ours` untouched.
+///
+/// # Errors
+///
+/// Every refusal maps to exit code 1 in the binary:
+///
+/// - [`MergeError::SchemaDiverged`]: the two sides' `sqlite_schema` differs.
+/// - [`MergeError::BaseSchemaDiverged`]: the sides agree but base's schema
+///   differs (the session diff needs identical table definitions).
+/// - [`MergeError::MissingPrimaryKey`]: a user table has no explicit PK.
+/// - [`MergeError::Conflicts`]: row-level conflicts that no table policy
+///   resolved (aborting tables, or `theirs`/`append-only` on a type they leave
+///   conflicting).
+/// - [`MergeError::IntegrityCheckFailed`] / [`MergeError::ForeignKeyCheckFailed`]:
+///   the post-merge `PRAGMA` sweeps found violations.
+/// - [`MergeError::Sqlite`]: any underlying `SQLite` failure.
 pub fn merge(
     base_path: &str,
     ours_path: &str,

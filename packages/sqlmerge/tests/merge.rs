@@ -357,8 +357,8 @@ fn ours_policy_keeps_our_value_on_data_conflict() {
     assert_eq!(read_int(&f.ours, "SELECT score FROM users WHERE id = 1"), 111);
 }
 
-/// Under `theirs`, a DATA conflict (both edited the same row) is REPLACEd with
-/// theirs's value.
+/// Under `theirs`, a DATA conflict (both edited the same row) is `REPLACEd`
+/// with theirs's value.
 #[test]
 fn theirs_policy_takes_their_value_on_data_conflict() {
     let f = seeded_users();
@@ -372,7 +372,7 @@ fn theirs_policy_takes_their_value_on_data_conflict() {
 }
 
 /// Under `theirs`, a CONFLICT-type row (both inserted the same PK with
-/// different values) is REPLACEd with theirs.
+/// different values) is `REPLACEd` with theirs.
 #[test]
 fn theirs_policy_replaces_conflicting_insert() {
     let f = seeded_users();
@@ -388,7 +388,7 @@ fn theirs_policy_replaces_conflicting_insert() {
 
 /// REPLACE is illegal for a NOTFOUND conflict (theirs updated a row ours
 /// deleted). Under `theirs`, that row must still abort rather than return an
-/// illegal REPLACE that would fail the whole apply with SQLITE_MISUSE.
+/// illegal REPLACE that would fail the whole apply with `SQLITE_MISUSE`.
 #[test]
 fn theirs_policy_aborts_on_notfound_update() {
     let f = seeded_users();
