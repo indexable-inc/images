@@ -12,6 +12,7 @@
 
 mod friction;
 mod guards;
+mod retro;
 mod review;
 mod session_banner;
 
@@ -79,6 +80,7 @@ fn main() -> ExitCode {
         Some("session-banner") => session_banner::session_banner(),
         Some("review-log-edit") => review::review_log_edit(),
         Some("review-gate") => review::review_gate(),
+        Some("retro-gate") => retro::retro_gate(),
         Some("cargo-guard") => guards::cargo_guard(),
         Some("bash-habits-guard") => guards::bash_habits_guard(),
         Some("search-guard") => guards::search_guard(),

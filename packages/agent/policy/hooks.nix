@@ -22,6 +22,7 @@
     subagentCacheLookup = hookRunnerSubcommand "subagent-cache-lookup";
     reviewEditLogger = hookRunnerSubcommand "review-log-edit";
     stopReviewGate = hookRunnerSubcommand "review-gate";
+    stopRetroGate = hookRunnerSubcommand "retro-gate";
     frictionIssueReporter = hookRunnerSubcommand "friction-report";
     subagentCachePopulate = hookRunnerSubcommand "subagent-cache-populate";
   };
@@ -97,6 +98,12 @@
     Stop = [
       {
         command = hookCommands.stopReviewGate;
+        agents = ["claude"];
+      }
+      # Retrospect a substantive session and file GitHub issues for what was
+      # improvable, once per session (own marker), like the review gate above.
+      {
+        command = hookCommands.stopRetroGate;
         agents = ["claude"];
       }
       {
