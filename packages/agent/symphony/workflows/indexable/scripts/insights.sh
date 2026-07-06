@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Daily insights digest: run a read-only headless codex agent over the
 # primary repository and hand its final message to the runtime as the
-# structured output {"summary": ...}. The reserved "summary" key is what
-# IR.RunNotifier posts to Slack, so delivery stays owned by the notifier
-# and this script never touches the Slack API.
+# structured output {"slack_summary": ...}. The reserved "slack_summary"
+# key is what IR.RunNotifier posts to Slack, so delivery stays owned by
+# the notifier and this script never touches the Slack API.
 set -euo pipefail
 
 # Exec nodes run with the pack directory as cwd (ExecRunner), so the prompt
@@ -12,12 +12,20 @@ prompt_file="$PWD/prompts/insights.md"
 last_msg="$(mktemp)"
 trap 'rm -f "$last_msg"' EXIT
 
-# Strip the Slack secret: the agent is open-ended, and posting is the
-# notifier's job, so it must not be able to speak as the bot.
+# The agent is open-ended and its output is published, so strip every
+# secret the symphony unit env carries (ExecRunner inherits the full BEAM
+# env and injects GH_TOKEN); codex only needs its own API key. Containment
+# beyond that relies on codex's read-only sandbox (network off) and its
+# default *KEY*/*SECRET*/*TOKEN* env scrub for model-spawned shells;
+# --ignore-user-config keeps a host config.toml from re-enabling network.
 (
   cd "$SYMPHONY_PRIMARY_REPO"
-  env -u SLACK_BOT_OAUTH_TOKEN \
-    codex exec --sandbox read-only --output-last-message "$last_msg" \
+  env -u SLACK_BOT_OAUTH_TOKEN -u SLACK_SIGNING_SECRET \
+    -u GH_TOKEN -u GITHUB_TOKEN -u GITHUB_WEBHOOK_SECRET \
+    -u LINEAR_API_KEY -u LINEAR_WEBHOOK_SECRET \
+    -u SYMPHONY_GITHUB_APP_PRIVATE_KEY_BASE64 -u SYMPHONY_ROOM_REGISTRY_TOKEN \
+    codex exec --sandbox read-only --ignore-user-config \
+    --output-last-message "$last_msg" \
     "$(cat "$prompt_file")"
 )
 
@@ -25,4 +33,4 @@ trap 'rm -f "$last_msg"' EXIT
 # the failure notification fires instead of a silent empty digest.
 [ -s "$last_msg" ]
 
-jq -n --rawfile summary "$last_msg" '{summary: $summary}' > "$SYMPHONY_OUTPUT_FILE"
+jq -n --rawfile summary "$last_msg" '{slack_summary: $summary}' > "$SYMPHONY_OUTPUT_FILE"

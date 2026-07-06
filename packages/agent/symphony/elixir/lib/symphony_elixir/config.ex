@@ -101,7 +101,7 @@ defmodule SymphonyElixir.Config do
       SYMPHONY_SLACK_POLL_MS  defaults to 60000
       SYMPHONY_SLACK_NOTIFY_CHANNEL optional; set empty to disable post-run notifications
       SYMPHONY_SLACK_NOTIFY_CRON_FAILURES post failed cron runs to Slack; defaults to true
-      SYMPHONY_SLACK_NOTIFY_CRON_WORKFLOWS comma-separated workflow names whose cron successes also post, or "*" for every cron success; defaults to none. Allowlisted runs also post their sink nodes' reserved "summary" output as content (IR.RunNotifier)
+      SYMPHONY_SLACK_NOTIFY_CRON_WORKFLOWS comma-separated workflow names whose cron successes also post, or "*" for every cron success; defaults to none. Notifying runs also post their sink nodes' reserved "slack_summary" output as content (IR.RunNotifier)
       SYMPHONY_ROOM_REGISTRY_URL central room.ix.dev a run's room-server registers with; also the Slack run-detail link base
       SYMPHONY_ROOM_REGISTRY_TOKEN optional bearer token for room backend registration writes
       SYMPHONY_ROOM_ADVERTISE_HOST optional; address a provisioned room-server binds/advertises so room.ix.dev can reach it

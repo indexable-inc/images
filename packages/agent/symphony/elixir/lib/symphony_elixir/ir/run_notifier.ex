@@ -23,11 +23,13 @@ defmodule SymphonyElixir.IR.RunNotifier do
 
   Content sections: a succeeded run's message also carries the output of
   its sink nodes (nodes no other node depends on) when that output is a map
-  with a string under the reserved `"summary"` key. That is how a workflow
-  publishes real content (a digest, a report) through the notifier instead
-  of handing packs a Slack token: an exec script opts in by writing
-  `{"summary": ...}` to `SYMPHONY_OUTPUT_FILE` (see `Runtime.ExecRunner`).
-  Failed runs keep the compact failure summary only.
+  with a string under the reserved `"slack_summary"` key. That is how a
+  workflow publishes real content (a digest, a report) through the notifier
+  instead of handing packs a Slack token: an exec script opts in by writing
+  `{"slack_summary": ...}` to `SYMPHONY_OUTPUT_FILE` (see
+  `Runtime.ExecRunner`). The key names its destination so an ordinary
+  `"summary"` output field never publishes by accident. Failed runs keep
+  the compact failure summary only.
   """
 
   alias SymphonyElixir.Codex.Provision
@@ -155,11 +157,19 @@ defmodule SymphonyElixir.IR.RunNotifier do
   # Slack caps a section block's text at 3000 characters.
   @section_char_limit 3000
 
-  # The run's publishable content: each sink node's reserved "summary"
+  # The run's publishable content: each sink node's reserved "slack_summary"
   # output, one mrkdwn section per node (see moduledoc). Succeeded runs
   # only; a failed run's partial content would read as a delivered digest.
+  # Agent-authored text is untrusted: verbatim mrkdwn keeps *bold*/`code`
+  # rendering but disables <!channel>/<@user> mention parsing, so planted
+  # repo text cannot broadcast-ping the channel through the digest.
   defp content_sections(%RunGraph{status: :succeeded} = graph) do
-    for text <- sink_summaries(graph), do: section(truncate(text, @section_char_limit))
+    for text <- sink_summaries(graph) do
+      %{
+        "type" => "section",
+        "text" => %{"type" => "mrkdwn", "text" => truncate(text, @section_char_limit), "verbatim" => true}
+      }
+    end
   end
 
   defp content_sections(_graph), do: []
@@ -172,11 +182,18 @@ defmodule SymphonyElixir.IR.RunNotifier do
 
     for {id, node} <- Enum.sort_by(nodes, &elem(&1, 0)),
         not MapSet.member?(depended_on, id),
-        is_map(node.output) and not is_struct(node.output),
-        is_binary(node.output["summary"]),
-        node.output["summary"] != "",
-        do: node.output["summary"]
+        payload = structured_payload(node.output),
+        is_binary(payload["slack_summary"]),
+        payload["slack_summary"] != "",
+        do: payload["slack_summary"]
   end
+
+  # An exec node's decoded SYMPHONY_OUTPUT_FILE document is nested under
+  # :output in the runner's result wrapper (ExecRunner.apply_structured_output
+  # wraps it as %{kind: :exec, exit_code: 0, output: decoded, log: tail});
+  # a script that wrote no structured output leaves a binary there.
+  defp structured_payload(%{kind: :exec, output: payload}) when is_map(payload), do: payload
+  defp structured_payload(_output), do: nil
 
   defp node_breakdown(%RunGraph{nodes: nodes}) do
     nodes
@@ -340,11 +357,15 @@ defmodule SymphonyElixir.IR.RunNotifier do
 
   defp code(text), do: "`" <> to_string(text) <> "`"
 
-  # The limits are Slack's hard caps, so the ellipsis must fit inside them:
-  # slice to limit - 3 so the "..." never pushes the text over.
-  defp truncate(text, limit) when byte_size(text) <= limit, do: text
-
+  # The limits are Slack's hard caps in CHARACTERS ("must be less than 3001
+  # characters"), so both the guard and the slice count graphemes, and the
+  # ellipsis fits inside the cap: slice to limit - 3. A byte-based guard
+  # would spuriously truncate multibyte text far under the cap.
   defp truncate(text, limit) do
-    text |> String.slice(0, limit - 3) |> String.trim() |> Kernel.<>("...")
+    if String.length(text) <= limit do
+      text
+    else
+      text |> String.slice(0, limit - 3) |> String.trim() |> Kernel.<>("...")
+    end
   end
 end

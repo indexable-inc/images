@@ -23,9 +23,11 @@ defmodule SymphonyElixir.IR.RunNotifierTest do
     }
   end
 
-  # An exec node whose (possibly structured) output the content sections
-  # read; `deps` is hand-set so a test can shape sink vs interior directly.
-  defp exec_node(id, output, deps \\ []) do
+  # An exec node carrying the runner's real result wrapper: the decoded
+  # SYMPHONY_OUTPUT_FILE document (or the raw stream tail) nests under
+  # :output, exactly as ExecRunner.apply_structured_output stores it.
+  # `deps` is hand-set so a test can shape sink vs interior directly.
+  defp exec_node(id, payload, deps \\ []) do
     %Node{
       id: id,
       ast_origin: {:exec, id},
@@ -33,7 +35,7 @@ defmodule SymphonyElixir.IR.RunNotifierTest do
       inputs: [],
       deps: deps,
       state: :succeeded,
-      output: output
+      output: %{kind: :exec, exit_code: 0, output: payload, log: "stream tail"}
     }
   end
 
@@ -167,8 +169,8 @@ defmodule SymphonyElixir.IR.RunNotifierTest do
             status: :succeeded,
             trigger: %{kind: :cron},
             nodes: %{
-              "gather" => exec_node("gather", %{"summary" => "interior digest"}),
-              "digest" => exec_node("digest", %{"summary" => "*hello* from the digest"}, ["gather"])
+              "gather" => exec_node("gather", %{"slack_summary" => "interior digest"}),
+              "digest" => exec_node("digest", %{"slack_summary" => "*hello* from the digest"}, ["gather"])
             }
           ),
           nil
@@ -178,35 +180,75 @@ defmodule SymphonyElixir.IR.RunNotifierTest do
       assert "*hello* from the digest" in texts
       # Interior node output is plumbing, not publishable content.
       refute "interior digest" in texts
+
+      # Agent-authored content is untrusted; verbatim mrkdwn disables
+      # <!channel>/<@user> mention parsing so it cannot broadcast-ping.
+      [content_block] = for %{"text" => %{"text" => "*hello*" <> _} = text} <- payload["blocks"], do: text
+      assert content_block["verbatim"] == true
     end
 
     test "a sink without a string summary adds no content" do
       base = graph(status: :succeeded, trigger: %{kind: :cron})
 
-      for output <- [nil, "raw tail", %{"summary" => 42}, %{"report" => "x"}, %{"summary" => ""}] do
-        payload = RunNotifier.build_payload(%{base | nodes: %{"n" => exec_node("n", output)}}, nil)
-        assert length(section_texts(payload)) == 1, "unexpected content for output #{inspect(output)}"
+      # "raw tail" is the no-structured-output case: the runner leaves the
+      # stream tail (a binary) under :output when the script wrote no JSON.
+      for payload <- ["raw tail", %{"slack_summary" => 42}, %{"report" => "x"}, %{"slack_summary" => ""}] do
+        message = RunNotifier.build_payload(%{base | nodes: %{"n" => exec_node("n", payload)}}, nil)
+        assert length(section_texts(message)) == 1, "unexpected content for payload #{inspect(payload)}"
       end
+
+      # A node that never produced any output at all.
+      bare = %Node{id: "n", ast_origin: {:exec, "n"}, kind: :exec, inputs: [], deps: [], state: :succeeded}
+      message = RunNotifier.build_payload(%{base | nodes: %{"n" => bare}}, nil)
+      assert length(section_texts(message)) == 1
     end
 
-    test "content is truncated to Slack's 3000-char section cap" do
+    test "content is truncated to Slack's 3000-character section cap" do
       long = String.duplicate("a", 4_000)
 
       payload =
         RunNotifier.build_payload(
-          graph(status: :succeeded, trigger: %{kind: :cron}, nodes: %{"n" => exec_node("n", %{"summary" => long})}),
+          graph(status: :succeeded, trigger: %{kind: :cron}, nodes: %{"n" => exec_node("n", %{"slack_summary" => long})}),
           nil
         )
 
       [_summary, content] = section_texts(payload)
-      assert byte_size(content) <= 3_000
+      assert String.length(content) <= 3_000
+      assert String.ends_with?(content, "...")
+    end
+
+    test "multibyte content under the character cap is not truncated" do
+      # 1200 CJK chars = 3600 bytes: over a byte-measured cap, well under
+      # Slack's 3000-character one. It must pass through untouched.
+      cjk = String.duplicate("語", 1_200)
+
+      payload =
+        RunNotifier.build_payload(
+          graph(status: :succeeded, trigger: %{kind: :cron}, nodes: %{"n" => exec_node("n", %{"slack_summary" => cjk})}),
+          nil
+        )
+
+      assert cjk in section_texts(payload)
+    end
+
+    test "multibyte content over the character cap truncates by characters" do
+      long = String.duplicate("語", 3_500)
+
+      payload =
+        RunNotifier.build_payload(
+          graph(status: :succeeded, trigger: %{kind: :cron}, nodes: %{"n" => exec_node("n", %{"slack_summary" => long})}),
+          nil
+        )
+
+      [_summary, content] = section_texts(payload)
+      assert String.length(content) <= 3_000
       assert String.ends_with?(content, "...")
     end
 
     test "a failed run posts no content even when a sink carries a summary" do
       payload =
         RunNotifier.build_payload(
-          graph(status: :failed, trigger: %{kind: :cron}, nodes: %{"n" => exec_node("n", %{"summary" => "partial"})}),
+          graph(status: :failed, trigger: %{kind: :cron}, nodes: %{"n" => exec_node("n", %{"slack_summary" => "partial"})}),
           nil
         )
 
