@@ -191,44 +191,24 @@
 
   # The scipql package, baked into the pinned interpreter so every session can
   # `import scipql` and run Soufflé datalog + find/replace over a SCIP semantic
-  # index. Same shape as `astlogModule`: the PyO3 cdylib comes from the shared
-  # workspace graph. (The CLI bakes in rust-analyzer/souffle; the kernel module
-  # exposes facts/query/fix/rename over an already-built index.scip.)
-  scipqlPythonSource = builtins.path {
-    name = "scipql-py-python-source";
-    path = ix.paths.packagesRoot + "/code/scipql/py/python";
-  };
-  scipqlModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-scipql-python-module"
-    {
-      strictDeps = true;
-      meta.description = "scipql PyO3 module bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/scipql"
-      mkdir -p "$site"
-      cp -r ${scipqlPythonSource}/scipql/. "$site/"
-
-      cdylib=""
-      for candidate in \
-        ${ix.rustWorkspace.units.libraries.scipql_py}/lib/libscipql_py.so \
-        ${ix.rustWorkspace.units.libraries.scipql_py}/lib/libscipql_py-*.so \
-        ${ix.rustWorkspace.units.libraries.scipql_py}/lib/libscipql_py.dylib \
-        ${ix.rustWorkspace.units.libraries.scipql_py}/lib/libscipql_py-*.dylib
-      do
-        if [ -f "$candidate" ]; then
-          cdylib="$candidate"
-          break
-        fi
-      done
-      if [ -z "$cdylib" ]; then
-        echo "ix-scipql module: no cdylib under ${ix.rustWorkspace.units.libraries.scipql_py}/lib" >&2
-        ls -la ${ix.rustWorkspace.units.libraries.scipql_py}/lib >&2 || true
-        exit 1
-      fi
-      install -m555 "$cdylib" "$site/_scipql.abi3.so"
-    ''
-  );
+  # index. Unlike `astlogModule` above, the site tree comes from
+  # `ix.unibind.build`: unibind-generated stub + `py.typed` merged with the
+  # hand-written wrapper, cdylib from the shared workspace graph. Same
+  # arguments as packages/code/scipql/py/default.nix (the wheel); keep the two
+  # call sites in sync. (The CLI bakes in rust-analyzer/souffle; the kernel
+  # module exposes facts/query/fix/rename over an already-built index.scip.)
+  scipqlModule =
+    (ix.unibind.build {
+      crate = "scipql-py";
+      targets.py = {
+        package = "scipql";
+        pythonSource = builtins.path {
+          name = "scipql-py-python-source";
+          path = ix.paths.packagesRoot + "/code/scipql/py/python";
+        };
+        pythonPackages = ps: [ps.polars];
+      };
+    }).py.module;
 
   # The flecs-query package, baked into the pinned interpreter so every
   # session can `import flecs_query` and parse/validate Flecs Query Language

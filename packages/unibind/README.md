@@ -78,12 +78,29 @@ Apple), wasm-bindgen style, so out-of-process generators in later phases can
 read the interface without the Rust source: generated `.pyi` stubs and nix
 glue are phase 1 (#1991), `.d.ts` and Elixir specs come with their backends.
 
+Phase 1 ships that out-of-process half. `unibind-gen` (the `gen` crate) reads
+the section back and renders host files through a small
+`HostFile`/`HostEmitter` seam -- Python today (`<module>.pyi`, `py.typed`,
+and a wrapper `__init__.py` unless the package hands one in); the `.d.ts`
+(#1993) and `.ex` (#1995) emitters implement the same seam. On the nix side,
+`unibind.lib.build { crate; targets.py = { package; ... }; }`
+(`ix.unibind` / `index.lib.unibind`, packages/unibind/nix) glues it in: the
+cdylib comes from the shared workspace graph, the registry's
+`pyExtension = true` marker injects the darwin `-undefined dynamic_lookup`
+link args (replacing per-crate build.rs), and the outputs are the merged
+python site tree, a zuban/ruff strict gate, the mcp-style importable module,
+and the Linux wheel. `packages/code/scipql/py` is the proving consumer: its
+hand-written `_scipql.pyi` and `py.typed` are deleted and generated instead.
+
 Crates:
 
 - `core`: the IR types (`Interface`, functions, records, enums, errors,
   objects, the boundary `Type`), the syn lowering, and the link-section
   embed. Enums, objects, and async exist in the IR but phase 0 rejects them
   with pointers at the phase that ships them.
+- `gen`: the `unibind-gen` binary. Reads the embedded IR out of a compiled
+  artifact and emits the host-language files above; run at build time by
+  `unibind.lib.build`, never at macro time.
 - `macros`: the `unibind` proc-macro crate. Parse once to IR, dispatch to the
   backends the consuming crate enabled through features (`py` today).
 - `backend-py`: renders the IR into pyo3 0.28 (abi3-py311) code:
@@ -112,6 +129,9 @@ Crates:
 
 Borrowed forms (`&str`, `&Path`, `&[u8]`, including under `Option`) are
 argument-only; returns and record fields own their data.
+
+Phase 1 changes nothing in this table: the `.pyi` emitter renders these same
+rules (argument vs return position included) from the untouched IR.
 
 ## Phases
 

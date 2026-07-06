@@ -1,35 +1,30 @@
-{
-  ix,
-  pkgs ? ix.pkgs,
-}:
-# scipql-py has no wheel of its own: the PyO3 cdylib is built by the shared
-# cargo-unit workspace graph and bundled into the ix-mcp interpreter by
-# packages/mcp/default.nix. The only thing to package here is the strict
-# type/annotation gate over the Python source, so this derivation *is* that
-# check (zuban --strict + ruff ANN), mirroring buildUvApplication's
-# pyChecker="zuban" path. It is also exposed as `passthru.tests.pyStrict` so it
-# joins the CI check set as `checks.<system>.scipql-py-pyStrict`.
+{ix, ...}:
+# scipql-py through `ix.unibind.build`: the wheel is the package (Linux-only,
+# see package.nix), with the module/site/library outputs and the strict type
+# gate attached as passthru. Same build arguments as the module bundle in
+# packages/mcp/default.nix (scipqlModule); keep the two call sites in sync.
 let
-  pythonSource = builtins.path {
-    name = "scipql-py-python-source";
-    path = ./python;
-  };
-
-  # The sources import polars; the `_scipql.pyi` stub travels with the tree.
-  pyStrict = ix.buildPyStrictCheck pkgs {
-    pname = "scipql-py";
-    pythonSrc = pythonSource;
-    pythonPackages = ps: [ps.polars];
+  built = ix.unibind.build {
+    crate = "scipql-py";
+    targets.py = {
+      package = "scipql";
+      pythonSource = builtins.path {
+        name = "scipql-py-python-source";
+        path = ./python;
+      };
+      pythonPackages = ps: [ps.polars];
+    };
   };
 in
-  pyStrict.overrideAttrs (old: {
+  built.py.wheel.overrideAttrs (old: {
     passthru =
       (old.passthru or {})
       // {
+        inherit (built.py) library module pythonSite;
         tests =
           (old.passthru.tests or {})
           // {
-            inherit pyStrict;
+            inherit (built.py.tests) pyStrict;
           };
       };
   })
