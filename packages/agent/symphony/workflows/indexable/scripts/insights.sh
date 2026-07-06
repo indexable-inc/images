@@ -11,10 +11,14 @@ set -euo pipefail
 prompt_file="$PWD/prompts/insights.md"
 last_msg="$(mktemp)"
 
-# The agent reads a detached worktree of HEAD, not the mutable checkout:
-# untracked files (.env, local scratch) in the operator's tree must never
-# be readable by a prompt whose output is posted to Slack. Tracked content
-# only, and the worktree is torn down whether the agent succeeds or not.
+# The agent reads a detached worktree of HEAD, not the mutable checkout,
+# so untracked files (.env, local scratch) in the operator's tree are out
+# of the default view. Defense-in-depth only: codex's read-only sandbox
+# restricts writes, not absolute-path reads (openai/codex#5237), so the
+# env scrub below is the actual secret control. The worktree is torn down
+# whether the agent succeeds or not; the prune reaps predecessors leaked
+# by hard crashes (SIGKILL/reboot skip the EXIT trap).
+git -C "$SYMPHONY_PRIMARY_REPO" worktree prune
 digest_root="$(mktemp -d)"
 cleanup() {
   git -C "$SYMPHONY_PRIMARY_REPO" worktree remove --force "$digest_root/repo" || true
