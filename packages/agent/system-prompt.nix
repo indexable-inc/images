@@ -666,15 +666,23 @@ let
         text = ''
           `nu` is the one shell-out path: `await nu('<pipeline>')` returns a Polars
           DataFrame, and an external binary runs with `^cmd` (`await nu('^git status')`).
-          The retired `sh()`/`zsh()` now raise a migration hint. The kernel carries no
-          persistent cwd or shell state between calls, so pass `cwd=<abs path>` where a
-          helper accepts it (or use `git -C <worktree>`). Before commit or branch work,
-          verify the repo root and branch match the assigned worktree.
+          The retired `sh()`/`zsh()` now raise a migration hint. The nu engine is a
+          persistent REPL: `cd`, `let`, `def`, and `$env` survive across calls, so a
+          later call inherits the previous call's PWD. Address paths explicitly
+          (`git -C <worktree>`, `cwd=<abs path>`) instead of relying on inherited
+          state, and never delete a directory an earlier call `cd`'ed into without
+          moving the engine out first: the next external spawn dies with `$env.PWD
+          points to a non-existent directory` (recover with an explicit `cwd=`).
+          Before commit or branch work, verify the repo root and branch match the
+          assigned worktree.
         '';
         reason = ''
-          Kernel shells carry no cwd between calls; commit and branch work landed in
-          the wrong repo or branch. DataFrame-shaped command results are easier to
-          inspect in the dashboard than dicts or scraped text.
+          The prompt used to claim the kernel carried no cwd between calls; the
+          engine actually persists PWD (index#1986), so a `git worktree remove` of a
+          previously `cd`'ed dir broke the following call mid-block. Relying on
+          inherited cwd also landed commit and branch work in the wrong repo.
+          DataFrame-shaped command results are easier to inspect in the dashboard
+          than dicts or scraped text.
         '';
       };
     }
