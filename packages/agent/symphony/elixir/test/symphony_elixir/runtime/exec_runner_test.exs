@@ -107,13 +107,15 @@ defmodule SymphonyElixir.Runtime.ExecRunnerTest do
   test "a timeout kills the whole process tree, not just the script", %{pack: pack} do
     # The #2011 wedge shape: the script's grandchild inherits stdout (so the
     # port would never deliver exit_status) and must not survive the timeout
-    # kill. The marker rides in the grandchild's argv so pgrep can find it.
+    # kill. The marker rides in the grandchild's argv so pgrep can find it;
+    # the compound command keeps sh from exec-ing sleep directly, which
+    # would drop the marker argv and make the survivor check vacuous.
     marker = "sym-exec-2011-#{System.unique_integer([:positive])}"
 
     rel =
       write_script!(pack, "scripts/tree.sh", """
       #!/bin/sh
-      /bin/sh -c 'sleep 300' #{marker} &
+      /bin/sh -c 'sleep 300; :' #{marker} &
       wait
       """)
 
