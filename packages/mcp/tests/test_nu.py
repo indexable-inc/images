@@ -139,6 +139,51 @@ def test_trailing_external_output_is_collected(tmp_path: pathlib.Path) -> None:
     assert out.strip() == "collected"
 
 
+def test_check_false_keeps_output_and_surfaces_exit_code() -> None:
+    # The whole point of check=False (index#2067): the output the external
+    # produced before exiting non-zero must survive, alongside its exit code
+    # (check=True drops the collected output on the NuError path).
+    import sys
+
+    script = "print('kept'); raise SystemExit(3)"
+    result = run(nu(f'^{sys.executable} -c "{script}"', check=False))
+    assert isinstance(result, nu.NuResult)
+    frame, exit_code = result
+    assert exit_code == 3
+    assert frame["value"].item().strip() == "kept"
+
+
+def test_check_false_grep_no_match_is_empty_not_an_error() -> None:
+    # grep exits 1 on "no match", which is an answer, not a failure.
+    import sys
+
+    script = "raise SystemExit(1)"
+    frame, exit_code = run(nu(f'^{sys.executable} -c "{script}"', check=False))
+    assert exit_code == 1
+    assert frame["value"].item() == ""
+
+
+def test_check_false_success_reports_exit_code_zero() -> None:
+    result = run(nu("2 + 2", check=False))
+    assert isinstance(result, nu.NuResult)
+    assert result.exit_code == 0
+    assert result.frame["value"].item() == 4
+
+
+def test_check_true_default_still_raises_on_non_zero_exit() -> None:
+    import sys
+
+    with pytest.raises(nu.NuError, match="non-zero exit code"):
+        run(nu(f"^{sys.executable} -c 'raise SystemExit(3)'"))
+
+
+def test_check_false_still_raises_on_real_errors() -> None:
+    # Only exit-status semantics are relaxed; a broken pipeline is still an
+    # exception either way.
+    with pytest.raises(nu.NuError):
+        run(nu("[{a: 1}] | wherex a > 0", check=False))
+
+
 def test_naive_datetime_input_gets_a_clear_error() -> None:
     naive = datetime.datetime(2024, 1, 2, 3, 4, 5)  # noqa: DTZ001 -- naive on purpose: it IS the case under test
     with pytest.raises(nu.NuError, match="naive datetime"):

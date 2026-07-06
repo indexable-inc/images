@@ -73,7 +73,9 @@ MODULES: tuple[Module, ...] = (
         "`http get`; run an external binary with `^cmd` (`^git status`, `^gh pr list --json .. "
         "| from json`); `let`/`def`/`cd` persist across calls like a REPL; `input=df` pipes a "
         "frame through a pipeline; `nu.value(code)` returns the plain Python value; a failure "
-        "raises NuError carrying nushell's own diagnostic. Replaces jq/awk/sed text munging and "
+        "raises NuError carrying nushell's own diagnostic, and `check=False` returns "
+        "`NuResult(frame, exit_code)` instead of raising when a trailing external exits "
+        "non-zero (grep with no match). Replaces jq/awk/sed text munging and "
         "the retired `sh`",
         preimport=True,
     ),

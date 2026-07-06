@@ -26,7 +26,7 @@ use chrono::{DateTime, FixedOffset, TimeDelta, Utc};
 use nu_protocol::debugger::WithoutDebug;
 use nu_protocol::engine::{EngineState, Stack, StateWorkingSet};
 use nu_protocol::{
-    ErrorStyle, PipelineData, Record, ShellError, Signals, Span, Value,
+    ByteStreamSource, ErrorStyle, PipelineData, Record, ShellError, Signals, Span, Value,
     report_error::format_cli_error,
 };
 use pyo3::create_exception;
@@ -109,8 +109,16 @@ struct EngineInner {
 
 impl EngineInner {
     /// Parse and evaluate `code` against the persistent state, returning the
-    /// pipeline's collected output value. Every error path returns nushell's
-    /// rendered diagnostic (span, label, help) as the message.
+    /// pipeline's collected output value and the trailing external's exit
+    /// code. Every error path returns nushell's rendered diagnostic (span,
+    /// label, help) as the message.
+    ///
+    /// `check` mirrors `subprocess.run`: when true (the default), a trailing
+    /// external that exits non-zero is an error like any other; when false,
+    /// its collected output comes back as the value and the exit code is
+    /// reported instead of raised (grep-style pipelines where exit 1 means
+    /// "no match", not failure). Only exit-status semantics are affected --
+    /// parse errors and runtime shell errors raise either way.
     fn eval(
         &mut self,
         code: &str,
@@ -118,7 +126,8 @@ impl EngineInner {
         cwd: Option<String>,
         env: Option<HashMap<String, String>>,
         interrupt: &Arc<AtomicBool>,
-    ) -> Result<Value, String> {
+        check: bool,
+    ) -> Result<(Value, i64), String> {
         let Self {
             engine_state,
             stack,
@@ -168,9 +177,24 @@ impl EngineInner {
         // std::process::exit, which would take the whole embedding process
         // (the kernel) down. Here `exit` surfaces as ShellError::Exit and
         // becomes a raised NuError like any other failure.
-        let executed =
+        let mut executed =
             nu_engine::eval_ir_block::<WithoutDebug>(engine_state, stack, &block, input)
                 .map_err(|error| render_shell_error(engine_state, stack, &error))?;
+        // check=false: the raise-on-non-zero happens inside into_value
+        // (ChildProcess::into_bytes collects stdout and THEN checks the exit
+        // status, dropping the output on the error path), so flip the child's
+        // ignore_error flag before collecting and read the status afterwards
+        // through a cloned handle -- the future caches Finished once
+        // into_bytes has waited, so the second wait is a lookup, not a block.
+        let mut exit_status = None;
+        if !check {
+            if let PipelineData::ByteStream(stream, _) = &mut executed.body {
+                if let ByteStreamSource::Child(child) = stream.source_mut() {
+                    child.ignore_error(true);
+                    exit_status = Some((child.clone_exit_status_future(), child.span()));
+                }
+            }
+        }
         let value = executed
             .body
             .into_value(Span::unknown())
@@ -178,7 +202,24 @@ impl EngineInner {
         if let Value::Error { error, .. } = value {
             return Err(render_shell_error(engine_state, stack, &error));
         }
-        Ok(value)
+        // ExitStatus::code() follows the subprocess convention: a plain exit
+        // is its code, a signal-terminated child is the negative signal.
+        let exit_code = match exit_status {
+            Some((future, span)) => i64::from(
+                future
+                    .lock()
+                    .map_err(|_| {
+                        "a previous eval panicked while waiting on an external; \
+                         create a fresh Engine"
+                            .to_owned()
+                    })?
+                    .wait(span)
+                    .map_err(|error| render_shell_error(engine_state, stack, &error))?
+                    .code(),
+            ),
+            None => 0,
+        };
+        Ok((value, exit_code))
     }
 }
 
@@ -385,7 +426,11 @@ impl Engine {
     /// pipeline's `$in`; `cwd`/`env` set `PWD` / environment variables for
     /// this and later calls (the stack is persistent). Raises `NuError` with
     /// nushell's rendered diagnostic.
-    #[pyo3(signature = (code, input=None, cwd=None, env=None))]
+    ///
+    /// `check=False` (subprocess.run semantics) stops a trailing external's
+    /// non-zero exit from raising: the awaitable then resolves to a
+    /// `(value, exit_code)` pair, keeping the output the external produced.
+    #[pyo3(signature = (code, input=None, cwd=None, env=None, check=true))]
     fn eval<'py>(
         &self,
         py: Python<'py>,
@@ -393,6 +438,7 @@ impl Engine {
         input: Option<Bound<'py, PyAny>>,
         cwd: Option<String>,
         env: Option<HashMap<String, String>>,
+        check: bool,
     ) -> PyResult<(Bound<'py, PyAny>, EvalHandle)> {
         // Convert under the GIL now; the blocking task must not touch Python.
         let input = input.as_ref().map(py_to_value).transpose()?;
@@ -404,12 +450,24 @@ impl Engine {
                 let mut guard = inner
                     .lock()
                     .map_err(|_| "a previous eval panicked; create a fresh Engine".to_owned())?;
-                guard.eval(&code, input, cwd, env, &interrupt)
+                guard.eval(&code, input, cwd, env, &interrupt, check)
             })
             .await
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
             match result {
-                Ok(value) => Python::attach(|py| value_to_py(py, value)),
+                Ok((value, exit_code)) => Python::attach(|py| {
+                    let value = value_to_py(py, value)?;
+                    if check {
+                        // The exit code is always 0 here (non-zero raised),
+                        // so keep the historical value-only shape.
+                        Ok(value)
+                    } else {
+                        Ok((value, exit_code)
+                            .into_pyobject(py)?
+                            .unbind()
+                            .into_any())
+                    }
+                }),
                 Err(diagnostic) => Err(NuError::new_err(diagnostic)),
             }
         })?;
