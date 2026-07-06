@@ -1,20 +1,30 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="Three thin surfaces (CLI, MCP tools, Python) drive one Rust Gmail client that talks OAuth and the Gmail v1 API"></p>
+
 # google-gmail
 
-Gmail for agents and shells: one Rust crate owns the
-[Gmail v1 API](https://developers.google.com/gmail/api/reference/rest)
-(messages, threads, labels, drafts, send, attachments) and the MIME
-builder for outgoing mail. Three thin surfaces expose it per
+Want your shell or your agent to search, read, and send Gmail without a browser tab? This is Gmail for agents and shells: one Rust crate owns the [Gmail v1 API](https://developers.google.com/gmail/api/reference/rest) (messages, threads, labels, drafts, send, attachments) and the MIME builder for outgoing mail, and three thin surfaces expose it, so the CLI, the MCP tools, and the Python binding all return the same wire types.
+
+The three surfaces, per
 [RFC 0003](../../site/src/lib/rfcs/0003-mcp-composable-clis.svx): the `gmail` CLI
-in [`cli/`](./cli), the `mail_*` tools in the `ix-google-mcp` Rust server
-in [`packages/google/mcp`](../mcp), and the `ix_google.gmail.Client`
-Python class in [`packages/google/py`](../py). Tracks
+in [`cli/`](./cli), the `mail_*` tools in the `ix-google-mcp` Rust server in
+[`packages/google/mcp`](../mcp), and the `ix_google.gmail.Client` Python class in
+[`packages/google/py`](../py). Tracks
 [#599](https://github.com/indexable-inc/index/issues/599) and
 [#644](https://github.com/indexable-inc/index/issues/644).
 
-OAuth is shared with the calendar crate through `google-auth`: one
-consent flow per workstation grants the union of every scope the repo
-knows about, and the stored token lives in
-`~/.config/google/token.json` (mode 0600).
+OAuth is shared with the calendar crate through `google-auth`: one consent flow
+per workstation grants the union of every scope the repo knows about, and the
+stored token lives in `~/.config/google/token.json` (mode 0600).
+
+## Get it
+
+```sh
+nix run github:indexable-inc/index#gmail -- --help
+```
+
+From a clone (`git clone https://github.com/indexable-inc/index`): `nix run .#gmail`.
+The crate itself (`google-gmail`) is an unmirrored workspace library; consume it
+through Nix or one of the three surfaces above.
 
 ## One-time team setup: the OAuth client
 
