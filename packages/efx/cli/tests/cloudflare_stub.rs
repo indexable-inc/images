@@ -79,7 +79,7 @@ fn handle(stream: TcpStream, routes: &[Route], log: &Arc<Mutex<Vec<Recorded>>>) 
             break;
         }
         if let Some(value) = line.strip_prefix("Content-Length: ") {
-            content_length = value.parse().unwrap_or(0);
+            content_length = value.parse().expect("curl sends a numeric Content-Length");
         }
         if let Some(value) = line.strip_prefix("Authorization: ") {
             value.clone_into(&mut authorization);

@@ -42,10 +42,12 @@
 
   # A terraform interpolation that is exactly one resource-output read.
   # Anything else containing "${" is unrepresentable and throws at the use
-  # site (with the input path) rather than here.
+  # site (with the input path) rather than here. Bracket expressions rather
+  # than backslash escapes: POSIX ERE (what builtins.match speaks) rejects
+  # the `\{` form.
   refMatch = value:
     if builtins.isString value
-    then builtins.match "\\$\\{([A-Za-z0-9_]+)\\.([A-Za-z0-9_-]+)\\.([A-Za-z0-9_]+)\\}" value
+    then builtins.match "[$][{]([A-Za-z0-9_]+)[.]([A-Za-z0-9_-]+)[.]([A-Za-z0-9_]+)[}]" value
     else null;
 
   lit = value:
@@ -82,15 +84,16 @@
     names = map (e: e.name) effects;
     duplicates = lists.findDuplicates names;
     known = lib.genAttrs names (_: true);
-    danglingRefs = lib.concatMap (
-      e:
-        lib.concatMap (
-          value:
-            lib.optional ((value ? ref) && !(builtins.hasAttr value.ref.effect known))
-            "`${e.name}` references unknown effect `${value.ref.effect}`"
-        ) (lib.attrValues e.inputs)
-    )
-    effects;
+    danglingRefs =
+      lib.concatMap (
+        e:
+          lib.concatMap (
+            value:
+              lib.optional ((value ? ref) && !(builtins.hasAttr value.ref.effect known))
+              "`${e.name}` references unknown effect `${value.ref.effect}`"
+          ) (lib.attrValues e.inputs)
+      )
+      effects;
   in
     if duplicates != []
     then throw "efx.plan: duplicate effect names: ${lib.concatStringsSep ", " duplicates}"

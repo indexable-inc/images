@@ -42,10 +42,9 @@ in [
     message = "efx terranix port should render exactly packages/efx/cli/tests/fixtures/terranix_port.plan.json (regenerate per tests/efx/default.nix after an intentional change)";
   }
   {
-    assertion =
-      lib.all (
-        name: effectsByName.${name} == goldenByName.${name}
-      ) (builtins.attrNames goldenByName);
+    assertion = lib.all (
+      name: effectsByName.${name} == goldenByName.${name}
+    ) (builtins.attrNames goldenByName);
     message = "every ported effect should match its golden counterpart field for field";
   }
   {
