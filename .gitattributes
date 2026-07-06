@@ -1,0 +1,7 @@
+# SQLite databases merge with the sqlmerge driver (packages/sqlmerge), not as
+# binary blobs. On an ix VM the base profile wires this globally; committing it
+# here also covers off-VM clones and documents the intent. The driver still
+# has to be configured (`[merge "sqlite"]`) — see packages/sqlmerge/README.md.
+*.db merge=sqlite
+*.sqlite merge=sqlite
+*.sqlite3 merge=sqlite
