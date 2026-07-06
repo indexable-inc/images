@@ -1,16 +1,16 @@
 diff --git a/src/drv.cc b/src/drv.cc
-index 32e9467..ee66d34 100644
+index 22a2ae9..692e830 100644
 --- a/src/drv.cc
 +++ b/src/drv.cc
-@@ -1,3 +1,6 @@
-+#include <nix/store/path-info.hh>
+@@ -1,4 +1,6 @@
+ #include <nix/store/path-info.hh>
 +#include <nix/store/realisation.hh>
 +#include <nix/store/store-open.hh>
  #include <nix/store/path-with-outputs.hh>
  #include <nix/store/store-api.hh>
  #include <nix/store/local-fs-store.hh>
-@@ -105,6 +108,104 @@ auto queryInputDrvs(const nix::Derivation &drv)
-     return drvs;
+@@ -145,6 +147,104 @@ auto checkOutputsAvailable(
+     return infos.empty() ? Drv::CacheStatus::Local : Drv::CacheStatus::Cached;
  }
  
 +// Resolve a content-addressed derivation's output paths and tell whether they
@@ -114,9 +114,9 @@ index 32e9467..ee66d34 100644
  auto queryCacheStatus(
      nix::Store &store,
      std::map<std::string, std::optional<nix::StorePath>> &outputs,
-@@ -113,6 +214,15 @@ auto queryCacheStatus(
-     std::vector<nix::StorePath> &unknownPaths, const nix::Derivation &drv)
-     -> Drv::CacheStatus {
+@@ -158,6 +258,15 @@ auto queryCacheStatus(
+         return *cached;
+     }
  
 +    // Floating CA outputs have no static path; resolve them against the
 +    // substituters first so a cached output is not misreported as notBuilt.
@@ -128,5 +128,5 @@ index 32e9467..ee66d34 100644
 +    }
 +
      std::vector<nix::StorePathWithOutputs> paths;
-     // Add output paths
      for (auto const &[key, val] : outputs) {
+         if (val) {
