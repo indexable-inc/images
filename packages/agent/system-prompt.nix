@@ -691,14 +691,19 @@ let
           confidence and is worse than none. Every watcher must fire on every
           terminal state: success, failure, and disappearance of the thing
           watched, and must carry its own heartbeat or deadline so a stalled
-          watcher is itself detected.
+          watcher is itself detected. Before ending a turn to wait, verify the
+          watch is actually alive: a harness-tracked background child or Monitor
+          running, its output growing. Receiving your own stop notification
+          means no watch survived, so re-arm one or proceed synchronously.
         '';
         reason = ''
           Success-only watchers turn silent failures into indefinite waits. A
           completion monitor watching only for marker files never fired when the
           build died before writing them, and a green PR sat unmerged ~45
           minutes after its merge-on-green watcher's owner stalled; nobody was
-          watching the watcher.
+          watching the watcher. Separately, three background agents in one
+          session ended turns "waiting for the monitor" with no live watch and
+          stalled until a coordinator manually probed and nudged them (#1941).
         '';
       };
     }
@@ -763,13 +768,19 @@ let
           lands on `origin/main`. Prefer a PR; push directly to `main` only if it is
           genuinely unprotected. Own PRs through merge: push, watch CI, fix failures,
           resolve review, rebase, and re-queue until landed or truly blocked.
+          After pushing to a PR branch with auto-merge armed, re-read the PR
+          state: if it merged without the push, the commit is unlanded, so open
+          a follow-up. Claim landed only when the merge oid contains the push.
           When the MCP `pr_watch` tool is available, use it for PR CI ownership:
           it creates a live PR resource, shows check durations, enables auto
           merge by default, and notifies the CLI on merge, failure, or timeout.
         '';
         reason = ''
           Tasks were reported done at an open PR that never landed; done means merged
-          to `origin/main`.
+          to `origin/main`. Separately, a review fix pushed seconds after
+          auto-merge fired was silently dropped: the merge took the older head,
+          the fix missed main, and the dangling branch became another session's
+          duplicate PR (#1910/#1911, #1942).
         '';
       };
     }
@@ -994,10 +1005,14 @@ let
       coordinateBranches = {
         text = ''
           Treat unmerged branches as unfinished for reasons you may not see. Do not work on someone else's branch without coordinating.
+          Before a non-trivial edit to a file, check for open PRs touching it
+          and coordinate or supersede explicitly instead of racing.
         '';
         reason = ''
           Agents modified or rebased branches whose in-flight intent they could not
-          see, clobbering others' work.
+          see, clobbering others' work. Parallel sessions also raced duplicate
+          PRs against the same file and sentences because nobody checked what
+          was already in flight (#1911/#1914 duplicating #1910/#1913, #1943).
         '';
       };
     }
