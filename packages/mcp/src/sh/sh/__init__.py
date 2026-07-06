@@ -74,6 +74,11 @@ use the argv-list form ``_exec(['git', 'commit', '-m', msg])`` so the argument i
 passed verbatim with no shell parsing, or write the text to a file and use
 ``git commit -F <file>``.
 
+Children read stdin from ``/dev/null`` (issue #1029): ``_exec`` never feeds
+stdin, and an inherited pipe made stdin-sniffing tools misbehave (``op`` parsed
+it as a JSON item template) and stdin-blocking ones hang. Pass ``stdin=`` an
+open file for the rare command that genuinely reads input.
+
 Inside the kernel the child's output also streams to the running cell's stdout
 as it arrives, so it lands in ``jobs['<id>'].output`` live: a long command's log
 is pageable from the job even when the cell backgrounds (or is cancelled) before
@@ -666,6 +671,7 @@ async def _exec(
     color: bool = True,
     echo: bool | None = None,
     name: str | None = None,
+    stdin: Any = asyncio.subprocess.DEVNULL,
 ) -> Output:
     """Run ``cmd`` on the shared async loop and return its :class:`Output`.
 
@@ -689,6 +695,15 @@ async def _exec(
     ``name`` sets a human-readable label for the running job in the dashboard and
     the ``jobs`` dict (mirrors the same parameter on ``python_exec``); outside
     the kernel it is accepted and silently ignored.
+
+    The child's stdin is ``/dev/null`` by default (issue #1029): nothing here
+    ever feeds stdin, and an inherited pipe is pure downside -- tools that sniff
+    a piped stdin take the wrong path (``op`` tried to parse it as a JSON item
+    template, ``gh``/``fzf`` drop interactive detection), and a command that
+    blocks reading stdin would hang until the timeout kill instead of seeing
+    EOF. For the rare command that genuinely reads input, pass ``stdin=`` an
+    open file object or fd (the value goes straight to
+    ``asyncio.create_subprocess_exec``/``create_subprocess_shell``).
 
     Output STREAMS as it arrives: inside the kernel each chunk is echoed
     (escape-stripped) to the running cell's stdout, so a long command's log is in
@@ -776,6 +791,7 @@ async def _exec(
         if argv is not None:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
+                stdin=stdin,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=cwd,
@@ -785,6 +801,7 @@ async def _exec(
         else:
             proc = await asyncio.create_subprocess_shell(
                 cmd,
+                stdin=stdin,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=cwd,

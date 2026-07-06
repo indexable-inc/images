@@ -154,6 +154,38 @@ def test_exec_runs_and_returns_output(tmp_path: pathlib.Path) -> None:
     assert "exec-ok" in out.text
 
 
+def test_exec_child_stdin_is_devnull_by_default() -> None:
+    # Issue #1029: an inherited stdin pipe made stdin-sniffing tools (op, gh)
+    # misbehave and stdin-blocking ones hang until the timeout kill. The child
+    # must see immediate EOF, not this process's stdin.
+    out = asyncio.run(
+        sh._exec(
+            [sys.executable, "-c", "import sys; print(repr(sys.stdin.read()))"],
+            echo=False,
+            timeout=30,
+        )
+    )
+    assert out.ok
+    assert "''" in out.text
+
+
+def test_exec_stdin_opt_in_feeds_the_child(tmp_path: pathlib.Path) -> None:
+    # The rare command that genuinely reads input opts in with stdin=<file>.
+    src = tmp_path / "stdin.txt"
+    src.write_text("fed-via-stdin\n")
+    with src.open("rb") as fh:
+        out = asyncio.run(
+            sh._exec(
+                [sys.executable, "-c", "import sys; print(sys.stdin.read(), end='')"],
+                echo=False,
+                stdin=fh,
+                timeout=30,
+            )
+        )
+    assert out.ok
+    assert "fed-via-stdin" in out.text
+
+
 def test_sh_registers_job_resource(monkeypatch: pytest.MonkeyPatch) -> None:
     class Job:
         id = "job123"
