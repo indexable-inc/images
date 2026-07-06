@@ -6,6 +6,7 @@
   import DaemonPanel from '$components/DaemonPanel.svelte';
   import DiffPanel from '$components/DiffPanel.svelte';
   import ErrorPanel from '$components/ErrorPanel.svelte';
+  import GlobalPanel from '$components/GlobalPanel.svelte';
   import LogPanel from '$components/LogPanel.svelte';
   import SummaryBar from '$components/SummaryBar.svelte';
   import Splitter from '$lib/Splitter.svelte';
@@ -225,6 +226,7 @@
           <ActivationPanel activation={snapshot.activation} />
         {/if}
         <DiffPanel diff={snapshot.diff} />
+        <GlobalPanel global={snapshot.global} />
         <DaemonPanel daemon={snapshot.daemon} />
         <ActivityGraph activities={snapshot.activities} builds={snapshot.builds} />
       </aside>

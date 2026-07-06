@@ -10,9 +10,11 @@ use snafu::Snafu;
 pub mod activation;
 pub mod build_view;
 pub mod daemon;
+pub mod global;
 pub use activation::{Activation, ActivationStatus, ActivationStep};
 pub use build_view::{ActivityRow, BuildCounts, BuildRow, BuildView};
 pub use daemon::{DaemonInfo, DaemonOps, OpClass};
+pub use global::{GlobalBuild, GlobalBuildKind, GlobalBuilds, GlobalWhy};
 
 const NIX_JSON_PREFIX: &str = "@nix ";
 
@@ -268,6 +270,10 @@ pub enum Delta {
     OptimiseSet { optimise: OptimiseStats },
     /// The live nix-daemon syscall view changed (new counts, path, or status).
     DaemonSet { daemon: DaemonInfo },
+    /// The machine-wide build view changed: the set of active builds/substitutions
+    /// on the host, or the detection/status line, moved. Carries the whole view,
+    /// like [`DaemonSet`](Delta::DaemonSet): the build list is small and polled.
+    GlobalSet { global: GlobalBuilds },
     /// The activation phase (a `switch`'s `activate` run) changed: a step opened
     /// or closed, a line landed, or the phase status moved. Carries the whole
     /// subtree, like [`DaemonSet`](Delta::DaemonSet): the step list is small.
@@ -305,6 +311,9 @@ pub struct MonitorState {
     pub optimise: OptimiseStats,
     /// Live nix-daemon syscall view, fed out-of-band by the server's tracer.
     pub daemon: DaemonInfo,
+    /// Machine-wide build view, fed out-of-band by the server's global probe.
+    /// `detected: false` on stock nix (the subcommand is unavailable).
+    pub global: GlobalBuilds,
     /// Live activation view, fed out-of-band by the server's switch orchestrator.
     /// Empty (`active: false`) on a plain `nix build`.
     pub activation: Activation,
@@ -394,6 +403,7 @@ impl MonitorState {
             progress: self.progress,
             optimise: self.optimise,
             daemon: self.daemon.clone(),
+            global: self.global.clone(),
             activation: self.activation.clone(),
             diff: self.diff.clone(),
             expected: self.expected.clone(),
@@ -487,6 +497,22 @@ impl MonitorState {
         self.daemon = daemon;
         self.emit(Delta::DaemonSet {
             daemon: self.daemon.clone(),
+        });
+    }
+
+    /// Replace the machine-wide build view and broadcast the change.
+    ///
+    /// Called by the server's global probe on its poll timer. Skips the broadcast
+    /// when nothing changed so an idle machine (or a stock nix that stays
+    /// undetected) does not put a frame on the wire every poll; the snapshot
+    /// still carries the latest value for a freshly-connected client.
+    pub fn set_global(&mut self, global: GlobalBuilds) {
+        if self.global == global {
+            return;
+        }
+        self.global = global;
+        self.emit(Delta::GlobalSet {
+            global: self.global.clone(),
         });
     }
 
@@ -1136,6 +1162,9 @@ pub struct MonitorSnapshot {
     pub optimise: OptimiseStats,
     /// Live nix-daemon syscall view, fed out-of-band by the server's tracer.
     pub daemon: DaemonInfo,
+    /// Machine-wide build view, fed out-of-band by the server's global probe.
+    /// `detected: false` on stock nix (the subcommand is unavailable).
+    pub global: GlobalBuilds,
     /// Live activation view, fed out-of-band by the server's switch orchestrator.
     pub activation: Activation,
     /// Generation diff text (`nvd diff`), set once at the end of a switch.

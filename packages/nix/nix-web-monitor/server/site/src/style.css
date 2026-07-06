@@ -619,6 +619,113 @@ main.dragging-v .splitter-v::after {
   color: var(--faint);
 }
 
+/* ---------- machine builds panel (patched nix only) ---------- */
+
+/* Sits above the daemon panel in the side pane; caps its height so the daemon
+ * panel and activity graph below stay visible. Self-hides on stock nix (the
+ * component renders nothing when `detected` is false). */
+.side-pane > .global-panel {
+  flex: 0 0 auto;
+  max-height: 40%;
+  border-bottom: 1px solid var(--line);
+}
+
+.global-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 0.4rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.global-status {
+  color: var(--muted);
+}
+
+.global-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.global-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+/* badge | name | version | elapsed, name flexes and truncates. */
+.global-row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.global-badge {
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--muted);
+}
+
+.global-badge-substitution {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+}
+
+.global-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ink);
+}
+
+.global-version {
+  flex: 0 0 auto;
+  color: var(--faint);
+}
+
+.global-elapsed {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.global-row-meta {
+  display: flex;
+  gap: 0.5rem;
+  color: var(--faint);
+  font-size: 0.85rem;
+}
+
+.global-cause {
+  color: var(--muted);
+}
+
+/* The why-chain: root -> ... -> this goal, one truncated line. */
+.global-why {
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.global-log {
+  color: var(--faint);
+  font-size: 0.8rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ---------- activation + diff panels (switch only) ---------- */
 
 /* Both ride at the top of the side pane during a switch and cap their height so

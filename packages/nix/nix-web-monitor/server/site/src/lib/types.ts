@@ -73,6 +73,43 @@ export const daemonInfoSchema = v.object({
   hotPaths: v.array(daemonHotPathSchema)
 });
 
+/// Why one machine-wide build is happening: the chain from the requested root
+/// derivation down to this goal, plus the cause that forced it. Mirrors the Rust
+/// `GlobalWhy`; every field is optional so a source that omits one still parses.
+export const globalWhySchema = v.object({
+  rootDrvPath: v.nullable(v.string()),
+  chain: v.array(v.string()),
+  cause: v.nullable(v.string())
+});
+
+/// One active build or substitution goal on the machine, from the patched-nix
+/// `nix store builds --json` subcommand. Mirrors the Rust `GlobalBuild`; a
+/// substitution has a null `drvPath` and sets `storePath`. `startTime` is unix
+/// *seconds* (the rest of the monitor uses milliseconds), so the panel multiplies
+/// by 1000 before diffing against its clock. `kind` is a free string ('build' /
+/// 'substitution' / an unknown future kind), so a schema drift is surfaced.
+export const globalBuildSchema = v.object({
+  drvPath: v.nullable(v.string()),
+  storePath: v.nullable(v.string()),
+  outputs: v.array(v.string()),
+  type: v.string(),
+  pid: v.nullable(v.number()),
+  startTime: v.nullable(v.number()),
+  user: v.nullable(v.string()),
+  uid: v.nullable(v.number()),
+  logFile: v.nullable(v.string()),
+  why: globalWhySchema
+});
+
+/// Machine-wide build view. `detected` is false on stock nix (the subcommand is
+/// unavailable), in which case the panel hides and `status` explains why. Mirrors
+/// the Rust `GlobalBuilds`.
+export const globalBuildsSchema = v.object({
+  detected: v.boolean(),
+  builds: v.array(globalBuildSchema),
+  status: v.string()
+});
+
 /// One activation step (a `home`/`os` switch's `activate` run): a named unit of
 /// work plus the output lines it printed. Mirrors the Rust `ActivationStep`.
 export const activationStepSchema = v.object({
@@ -151,6 +188,8 @@ export const snapshotSchema = v.object({
   progress: v.nullable(activityProgressSchema),
   optimise: optimiseStatsSchema,
   daemon: daemonInfoSchema,
+  /// Machine-wide build view; `detected: false` on stock nix (panel hidden).
+  global: globalBuildsSchema,
   /// Live activation view during a `home`/`os` switch; `active: false` otherwise.
   activation: activationSchema,
   /// Generation diff text (`nvd diff`), set once at the end of a switch.
@@ -182,6 +221,7 @@ export const deltaSchema = v.variant('type', [
   v.object({ type: v.literal('progressSet'), progress: activityProgressSchema }),
   v.object({ type: v.literal('optimiseSet'), optimise: optimiseStatsSchema }),
   v.object({ type: v.literal('daemonSet'), daemon: daemonInfoSchema }),
+  v.object({ type: v.literal('globalSet'), global: globalBuildsSchema }),
   v.object({ type: v.literal('activationSet'), activation: activationSchema }),
   v.object({ type: v.literal('diffSet'), diff: v.string() }),
   v.object({ type: v.literal('expectedSet'), name: v.string(), value: v.number() }),
@@ -200,6 +240,9 @@ export type OptimiseStats = v.InferOutput<typeof optimiseStatsSchema>;
 export type DaemonOps = v.InferOutput<typeof daemonOpsSchema>;
 export type DaemonHotPath = v.InferOutput<typeof daemonHotPathSchema>;
 export type DaemonInfo = v.InferOutput<typeof daemonInfoSchema>;
+export type GlobalWhy = v.InferOutput<typeof globalWhySchema>;
+export type GlobalBuild = v.InferOutput<typeof globalBuildSchema>;
+export type GlobalBuilds = v.InferOutput<typeof globalBuildsSchema>;
 export type ActivationStep = v.InferOutput<typeof activationStepSchema>;
 export type Activation = v.InferOutput<typeof activationSchema>;
 export type ActivityNode = v.InferOutput<typeof activityNodeSchema>;
@@ -240,6 +283,7 @@ export const EMPTY_SNAPSHOT: MonitorSnapshot = Object.freeze({
       currentPath: null,
       hotPaths: []
     },
+  global: { detected: false, builds: [], status: '' },
   activation: { active: false, command: '', steps: [], status: '' },
   diff: null,
   expected: {},

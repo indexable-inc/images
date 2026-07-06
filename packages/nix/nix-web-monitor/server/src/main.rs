@@ -28,9 +28,11 @@ use tower_http::services::ServeDir;
 mod daemon;
 mod dependencies;
 mod emit;
+mod global;
 mod reasons;
 use daemon::run_daemon_probe;
 use dependencies::resolve_dependencies;
+use global::run_global_probe;
 
 /// Bound on the delta broadcast ring. A client that falls this far behind gets
 /// resynced with a fresh `Reset` rather than the dropped frames.
@@ -221,6 +223,12 @@ async fn main() -> Result<()> {
     // life of the UI. Best-effort, so its handle is just aborted at shutdown.
     let daemon_probe = tokio::spawn(run_daemon_probe(Arc::clone(&monitor), deltas.clone()));
 
+    // Poll the machine-wide build view (all active builds on the host, and why),
+    // when the patched-nix `nix store builds --json` subcommand is present. Like
+    // the daemon probe, it lives for the whole UI and self-hides on stock nix; a
+    // best-effort overlay whose handle is just aborted at shutdown.
+    let global_probe = tokio::spawn(run_global_probe(Arc::clone(&monitor), deltas.clone()));
+
     let build = tokio::spawn(run_job(
         job,
         args.terminal_output,
@@ -241,6 +249,7 @@ async fn main() -> Result<()> {
             .context("waiting for Ctrl-C")?;
     }
     daemon_probe.abort();
+    global_probe.abort();
     http_server.abort();
     // Propagate Nix's exit status either way; otherwise the wrapper masks
     // build failures from shells and CI.
