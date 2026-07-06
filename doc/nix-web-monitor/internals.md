@@ -109,3 +109,29 @@ string the panel shows and the loop retries after `RETRY_INTERVAL` (5s); the
 probe never returns an error (`:41`). `OpClass::classify`
 (`parser/src/daemon.rs:37`) groups syscalls so the panel shows work kind
 (Link/Rename dominate store optimisation, Write/Fsync dominate writing a path).
+
+## Machine-wide build view (`server/src/global.rs`)
+
+Everything above watches *one* nix invocation; `run_global_probe` watches the
+whole machine. It polls the patched-nix `nix store builds --json` subcommand
+(the `build-status-dir` experimental feature: every active build/substitution
+goal writes a status file under `<nixStateDir>/status/`), whose entries carry
+the derivation, worker pid, start time, requesting client user/uid, on-disk log
+path, and a why-chain walked up the goal's waiters to the root goal the client
+asked for. Detection is by result: if no invocation variant parses as a JSON
+build array (stock nix prints an "unknown command" error), the view is marked
+undetected and the panel hides; the probe re-probes every 30s so a mid-session
+nix upgrade is picked up. The parser side (`parser/src/global.rs`) owns the
+tolerant wire types: unknown fields are ignored, missing optionals become
+`None`, and an unknown goal kind folds to `Other`, so C++-side schema drift
+degrades one field rather than the probe.
+
+The panel groups rows by requesting user and renders each goal's why-chain as a
+provenance trail ("for <root> via <hop> → <hop>"), so any leaf build is
+attributable to the top-level thing that wanted it. Each build row can expand a
+live log tail served by `/api/global-log?drv=<drvPath>`: the server resolves the
+drv against the *current* machine view (never a caller-supplied path), then
+reads and bzip2-decompresses the log itself. Nix compresses build logs while
+writing them, so a live log is a truncated stream `nix log` refuses;
+`decompress_prefix` keeps everything decoded before the truncation point and
+`tail_lines` bounds the response to the newest 64 KiB at a line boundary.
