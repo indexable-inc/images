@@ -1,9 +1,12 @@
-//! The built-in executors: enough surface for a real static-site demo.
+//! The built-in executors: the static-site demo surface plus the cloud
+//! kinds that replace the terranix/opentofu stacks.
 
 use std::process::Command;
 
 use efx_engine::{ExecuteError, ExecuteRequest, Executor, Outputs, Registry};
 use efx_ir::Literal;
+
+use crate::cloudflare;
 
 /// All built-in executors under their canonical ids.
 pub fn builtin_registry() -> Registry {
@@ -11,7 +14,106 @@ pub fn builtin_registry() -> Registry {
     registry.register("file.write", Box::new(FileWrite));
     registry.register("cmd.run", Box::new(CmdRun));
     registry.register("html.render", Box::new(HtmlRender));
+    cloudflare::register(&mut registry);
+    register_declared_gaps(&mut registry);
     registry
+}
+
+/// Cloud kinds the nix layer already plans but no executor reconciles yet.
+/// Registered explicitly so `efx apply` fails them loudly with the reason
+/// and the interim path — never silently, and never by pretending the
+/// resource converged. `efx plan` over these kinds works fully (that is the
+/// terranix-parity contract); apply-side coverage lands kind by kind.
+fn register_declared_gaps(registry: &mut Registry) {
+    let gaps: &[(&str, &str)] = &[
+        (
+            "cloudflare.ruleset",
+            "zone rulesets reconcile through a phase-entrypoint API (list the \
+             phase's ruleset, then replace its rule list) that is not wired up yet",
+        ),
+        (
+            "cloudflare.email_routing_settings",
+            "email routing enablement is not wired up yet",
+        ),
+        (
+            "cloudflare.email_routing_address",
+            "destination-address verification (Cloudflare mails the target a \
+             confirmation) is not wired up yet",
+        ),
+        (
+            "cloudflare.email_routing_rule",
+            "routing-rule reconciliation (match by rule name, diff matchers and \
+             actions) is not wired up yet",
+        ),
+        (
+            "cloudflare.r2_managed_domain",
+            "the managed-domain toggle on R2 buckets is not wired up yet",
+        ),
+        (
+            "ovh.dedicated_server",
+            "the OVH API's application-key request signing is not wired up yet",
+        ),
+        (
+            "betteruptime.status_page",
+            "Better Stack reconciliation (match by subdomain, PATCH drift) is \
+             not wired up yet",
+        ),
+        (
+            "betteruptime.status_page_section",
+            "Better Stack reconciliation is not wired up yet",
+        ),
+        (
+            "betteruptime.status_page_resource",
+            "Better Stack reconciliation is not wired up yet",
+        ),
+        (
+            "betteruptime.monitor",
+            "Better Stack reconciliation (match by url, PATCH drift) is not \
+             wired up yet",
+        ),
+        (
+            "betteruptime.heartbeat",
+            "Better Stack reconciliation (match by name, output the minted \
+             heartbeat url) is not wired up yet",
+        ),
+        (
+            "betteruptime.policy",
+            "escalation policies carry references inside structured step lists, \
+             which needs a native efx shape first",
+        ),
+        (
+            "betteruptime.severity",
+            "Better Stack reconciliation is not wired up yet",
+        ),
+    ];
+    for (kind, gap) in gaps {
+        registry.register(
+            *kind,
+            Box::new(Unimplemented {
+                executor: kind,
+                gap,
+            }),
+        );
+    }
+}
+
+/// An executor id that is declared but deliberately not implemented yet.
+/// Applying it fails loudly with the reason and the interim path, instead of
+/// pretending the resource reconciled.
+struct Unimplemented {
+    executor: &'static str,
+    gap: &'static str,
+}
+
+impl Executor for Unimplemented {
+    fn execute(&self, request: &ExecuteRequest) -> Result<Outputs, ExecuteError> {
+        Err(ExecuteError::new(format!(
+            "executor `{}` is not implemented: {}. Effect `{}` was NOT applied; \
+             keep applying this resource through the existing opentofu stack \
+             until the executor lands.",
+            self.executor, self.gap, request.name
+        )))
+    }
 }
 
 fn required(request: &ExecuteRequest, key: &str) -> Result<String, ExecuteError> {

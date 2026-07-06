@@ -112,6 +112,9 @@ impl Default for EffectMeta {
 }
 
 /// One node of a plan.
+///
+/// `inputs` and `meta` default when absent so hand-authored or generated IR
+/// documents (`efx plan --ir`) only spell what they mean.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Effect {
     /// Human name, unique within a plan. Not part of the identity.
@@ -121,7 +124,9 @@ pub struct Effect {
     /// Which executor runs it. Usually equal to `kind`; kept separate so a
     /// kind can be re-bound to a different implementation.
     pub executor: String,
+    #[serde(default)]
     pub inputs: BTreeMap<String, Value>,
+    #[serde(default)]
     pub meta: EffectMeta,
 }
 
@@ -198,9 +203,24 @@ pub struct Edge {
 }
 
 /// An ordered set of effects with unique names.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Deserialization goes through [`Plan::from_effects`], so a `Plan` parsed
+/// from an IR document carries the same name-uniqueness invariant as one
+/// built through [`Plan::add`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Plan {
     effects: Vec<Effect>,
+}
+
+impl<'de> Deserialize<'de> for Plan {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Document {
+            effects: Vec<Effect>,
+        }
+        let document = Document::deserialize(deserializer)?;
+        Self::from_effects(document.effects).map_err(serde::de::Error::custom)
+    }
 }
 
 impl Plan {
@@ -209,6 +229,19 @@ impl Plan {
         Self {
             effects: Vec::new(),
         }
+    }
+
+    /// Builds a plan from effects in order, enforcing name uniqueness.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlanError::DuplicateName`] when two effects share a name.
+    pub fn from_effects(effects: impl IntoIterator<Item = Effect>) -> Result<Self, PlanError> {
+        let mut plan = Self::new();
+        for effect in effects {
+            plan.add(effect)?;
+        }
+        Ok(plan)
     }
 
     /// Adds an effect, keeping declaration order.

@@ -1,8 +1,12 @@
-//! `efx`: plan, apply, and report over `.efx` files.
+//! `efx`: plan, apply, and report over `.efx` files or plan IR JSON.
 //!
 //! - `efx plan site.efx` — compile and diff against the journal, print
 //!   per-effect verdicts, execute nothing.
-//! - `efx apply site.efx` — execute what the diff demands, record results.
+//! - `efx plan --ir plan.json` — same, over a plan IR document produced by
+//!   another frontend (the nix efx library, or any program emitting
+//!   `efx_ir::Plan` JSON).
+//! - `efx apply site.efx` / `efx apply --ir plan.json` — execute what the
+//!   diff demands, record results.
 //! - `efx report --html out.html` — render the journal's run history as a
 //!   self-contained HTML page.
 
@@ -14,6 +18,7 @@ use clap::{Parser, Subcommand};
 use efx_engine::{Action, Journal, Verdict};
 use efx_ir::Plan;
 
+mod cloudflare;
 mod executors;
 mod report;
 
@@ -31,9 +36,21 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Show what an apply would do, without executing anything.
-    Plan { file: PathBuf },
+    Plan {
+        file: PathBuf,
+        /// Read FILE as plan IR JSON (an `efx_ir::Plan` document, as emitted
+        /// by the nix efx library) instead of `.efx` source.
+        #[arg(long)]
+        ir: bool,
+    },
     /// Execute the plan and record results in the journal.
-    Apply { file: PathBuf },
+    Apply {
+        file: PathBuf,
+        /// Read FILE as plan IR JSON (an `efx_ir::Plan` document, as emitted
+        /// by the nix efx library) instead of `.efx` source.
+        #[arg(long)]
+        ir: bool,
+    },
     /// Render the journal's run history to a self-contained HTML file.
     Report {
         #[arg(long)]
@@ -41,15 +58,19 @@ enum Cmd {
     },
 }
 
-fn load_plan(file: &PathBuf) -> Result<Plan> {
+fn load_plan(file: &PathBuf, ir: bool) -> Result<Plan> {
     let source =
         std::fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?;
+    if ir {
+        return serde_json::from_str(&source)
+            .with_context(|| format!("{}: not a valid plan IR document", file.display()));
+    }
     efx_lang::compile(&source)
         .map_err(|err| anyhow::anyhow!("{}: {}", file.display(), err.render(&source)))
 }
 
-fn cmd_plan(file: &PathBuf, journal_path: &PathBuf) -> Result<ExitCode> {
-    let plan = load_plan(file)?;
+fn cmd_plan(file: &PathBuf, ir: bool, journal_path: &PathBuf) -> Result<ExitCode> {
+    let plan = load_plan(file, ir)?;
     let journal = Journal::load(journal_path)?;
     let report = efx_engine::plan(&plan, &journal)?;
     let executes = report
@@ -87,8 +108,8 @@ fn cmd_plan(file: &PathBuf, journal_path: &PathBuf) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn cmd_apply(file: &PathBuf, journal_path: &PathBuf) -> Result<ExitCode> {
-    let plan = load_plan(file)?;
+fn cmd_apply(file: &PathBuf, ir: bool, journal_path: &PathBuf) -> Result<ExitCode> {
+    let plan = load_plan(file, ir)?;
     let mut journal = Journal::load(journal_path)?;
     let registry = executors::builtin_registry();
     let report = efx_engine::apply(&plan, &mut journal, &registry)?;
@@ -135,8 +156,8 @@ fn cmd_report(journal_path: &PathBuf, html: &PathBuf) -> Result<ExitCode> {
 fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
     match &cli.command {
-        Cmd::Plan { file } => cmd_plan(file, &cli.journal),
-        Cmd::Apply { file } => cmd_apply(file, &cli.journal),
+        Cmd::Plan { file, ir } => cmd_plan(file, *ir, &cli.journal),
+        Cmd::Apply { file, ir } => cmd_apply(file, *ir, &cli.journal),
         Cmd::Report { html } => cmd_report(&cli.journal, html),
     }
 }

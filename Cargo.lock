@@ -2919,6 +2919,8 @@ dependencies = [
  "efx-engine",
  "efx-ir",
  "efx-lang",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

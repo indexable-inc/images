@@ -170,3 +170,41 @@ fn edges_derive_from_references() {
     assert_eq!(edges[0].from, "src");
     assert_eq!(edges[0].to, "out");
 }
+
+#[test]
+fn json_round_trip_preserves_identity() {
+    let mut plan = Plan::new();
+    plan.add(effect("src", "cmd.run", &[("command", lit("true"))]))
+        .unwrap();
+    plan.add(effect(
+        "out",
+        "file.write",
+        &[("content", reference("src", "stdout"))],
+    ))
+    .unwrap();
+    let json = serde_json::to_string(&plan).unwrap();
+    let parsed: Plan = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, plan);
+    assert_eq!(ids_of(&parsed), ids_of(&plan));
+}
+
+#[test]
+fn deserialization_enforces_name_uniqueness() {
+    let doc = r#"{"effects": [
+        {"name": "a", "kind": "cmd.run", "executor": "cmd.run"},
+        {"name": "a", "kind": "cmd.run", "executor": "cmd.run"}]}"#;
+    let err = serde_json::from_str::<Plan>(doc).unwrap_err();
+    assert!(
+        err.to_string().contains("duplicate effect name `a`"),
+        "{err}"
+    );
+}
+
+#[test]
+fn minimal_ir_effect_defaults_inputs_and_meta() {
+    let doc = r#"{"effects": [{"name": "a", "kind": "cmd.run", "executor": "cmd.run"}]}"#;
+    let plan: Plan = serde_json::from_str(doc).unwrap();
+    let parsed = plan.get("a").unwrap();
+    assert!(parsed.inputs.is_empty());
+    assert_eq!(parsed.meta, EffectMeta::default());
+}
