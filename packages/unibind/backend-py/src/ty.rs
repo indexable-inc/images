@@ -38,6 +38,10 @@ pub fn rust_type(ty: &ir::Type, user: &Ident) -> TokenStream {
             let name = Ident::new(name, Span::call_site());
             quote!(super::#user::#name)
         }
+        ir::Type::Stream(item) => {
+            let item = rust_type(item, user);
+            quote!(::unibind_runtime::UniStream<#item>)
+        }
     }
 }
 

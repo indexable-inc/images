@@ -19,6 +19,7 @@
         "Docs become docstrings."
       ],
       "asyncness": "Sync",
+      "blocking": false,
       "args": [
         {
           "name": "store",
@@ -73,6 +74,7 @@
       },
       "docs": [],
       "asyncness": "Sync",
+      "blocking": false,
       "args": [
         {
           "name": "path",

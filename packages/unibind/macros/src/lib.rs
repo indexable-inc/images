@@ -79,14 +79,21 @@ pub fn error(_args: TokenStream, item: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Reserved for stateful handles; lands with resources in phase 2
-/// (issue #1992).
+/// Mark a stateful handle inside a `#[unibind::export]` module.
+///
+/// The struct crosses the boundary by reference: the target language holds
+/// a wrapped handle whose state stays on the Rust side. Methods take
+/// `&self` (use interior mutability for state), one associated function
+/// marked `#[unibind(constructor)]` makes the object constructible, and
+/// methods may be async or return streams. `object(resource)` requires a
+/// `close` method and adds close()/async-with plus a warning when the
+/// resource leaks unclosed.
 #[proc_macro_attribute]
 pub fn object(_args: TokenStream, item: TokenStream) -> TokenStream {
     expand::marker_outside_export(
         item.into(),
-        "#[unibind::object] lands with resources in phase 2 (issue #1992); \
-         phase 0 covers sync functions, records, and errors",
+        "#[unibind::object] only takes effect inside a #[unibind::export] \
+         module; declare the struct inside the exported module",
     )
     .into()
 }

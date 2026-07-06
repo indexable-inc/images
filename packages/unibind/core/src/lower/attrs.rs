@@ -1,4 +1,4 @@
-//! Parse `#[unibind(...)]` metadata and `#[unibind::...]` markers.
+//! Parse `#[unibind(...)]` metadata options.
 
 use proc_macro2::{Span, TokenStream};
 use syn::spanned::Spanned as _;
@@ -6,31 +6,18 @@ use syn::spanned::Spanned as _;
 use super::{LowerError, Result};
 use crate::ir;
 
-/// Which marker attribute an item carries.
-#[derive(Debug, Clone, Copy)]
-pub enum MarkerKind {
-    Record,
-    Error,
-    Object,
-}
-
-/// A `#[unibind::record]` / `#[unibind::error]` / `#[unibind::object]`
-/// marker found on an item, with its parsed arguments.
-#[derive(Debug)]
-pub struct Marker {
-    pub(crate) kind: MarkerKind,
-    pub(crate) span: Span,
-    pub(crate) meta: UnibindMeta,
-}
-
 /// The options a `#[unibind(...)]` attribute (or marker argument list) can
-/// carry: `py(name = "...")`, `py(base = "...")`, and `default = ...`.
+/// carry: `py(name = "...")`, `py(base = "...")`, `default = ...`, and the
+/// bare flags `resource`, `constructor`, and `blocking`.
 #[derive(Debug, Default)]
 pub struct UnibindMeta {
     pub(crate) span: Option<Span>,
     pub(crate) py_name: Option<String>,
     pub(crate) py_base: Option<String>,
     pub(crate) default: Option<ir::Literal>,
+    pub(crate) resource: bool,
+    pub(crate) constructor: bool,
+    pub(crate) blocking: bool,
 }
 
 impl UnibindMeta {
@@ -91,6 +78,24 @@ impl UnibindMeta {
             }
             self.default = other.default;
         }
+        if other.resource {
+            if self.resource {
+                return Err(LowerError::new(span, "duplicate unibind `resource`"));
+            }
+            self.resource = true;
+        }
+        if other.constructor {
+            if self.constructor {
+                return Err(LowerError::new(span, "duplicate unibind `constructor`"));
+            }
+            self.constructor = true;
+        }
+        if other.blocking {
+            if self.blocking {
+                return Err(LowerError::new(span, "duplicate unibind `blocking`"));
+            }
+            self.blocking = true;
+        }
         self.span = self.span.or(Some(span));
         Ok(())
     }
@@ -120,11 +125,23 @@ impl UnibindMeta {
             self.default = Some(literal(&pair.value)?);
             return Ok(());
         }
-        Err(LowerError::new(
-            span,
-            "unknown unibind option; expected py(name = \"...\"), \
-             py(base = \"...\"), or default = ...",
-        ))
+        if let syn::Meta::Path(path) = entry {
+            let flag = if path.is_ident("resource") {
+                &mut self.resource
+            } else if path.is_ident("constructor") {
+                &mut self.constructor
+            } else if path.is_ident("blocking") {
+                &mut self.blocking
+            } else {
+                return Err(unknown_option(span));
+            };
+            if *flag {
+                return Err(LowerError::new(span, "duplicate unibind flag"));
+            }
+            *flag = true;
+            return Ok(());
+        }
+        Err(unknown_option(span))
     }
 
     fn apply_py(&mut self, entry: &syn::Meta) -> Result<()> {
@@ -182,6 +199,51 @@ impl UnibindMeta {
         }
         Ok(())
     }
+
+    /// Error out when a `resource` flag was given somewhere it cannot apply.
+    pub(crate) fn reject_resource(&self, context: &str) -> Result<()> {
+        if self.resource {
+            return Err(LowerError::new(
+                self.span.unwrap_or_else(Span::call_site),
+                format!("`resource` applies to #[unibind::object] markers, not {context}"),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Error out when a `constructor` flag was given somewhere it cannot
+    /// apply.
+    pub(crate) fn reject_constructor(&self, context: &str) -> Result<()> {
+        if self.constructor {
+            return Err(LowerError::new(
+                self.span.unwrap_or_else(Span::call_site),
+                format!(
+                    "`constructor` applies to associated functions in an \
+                     object impl block, not {context}"
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Error out when a `blocking` flag was given somewhere it cannot apply.
+    pub(crate) fn reject_blocking(&self, context: &str) -> Result<()> {
+        if self.blocking {
+            return Err(LowerError::new(
+                self.span.unwrap_or_else(Span::call_site),
+                format!("`blocking` applies to exported functions and object methods, not {context}"),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn unknown_option(span: Span) -> LowerError {
+    LowerError::new(
+        span,
+        "unknown unibind option; expected py(name = \"...\"), \
+         py(base = \"...\"), default = ..., resource, constructor, or blocking",
+    )
 }
 
 fn literal(expr: &syn::Expr) -> Result<ir::Literal> {
@@ -222,87 +284,4 @@ fn literal_from_lit(lit: &syn::Lit) -> Result<ir::Literal> {
             "`default` takes a literal (bool, int, float, string) or None",
         )),
     }
-}
-
-/// Classify the unibind marker on an item, parsing its arguments.
-pub fn marker(item: &syn::Item) -> Result<Option<Marker>> {
-    let attributes = match item {
-        syn::Item::Struct(item) => &item.attrs,
-        syn::Item::Enum(item) => &item.attrs,
-        syn::Item::Fn(item) => &item.attrs,
-        _ => return Ok(None),
-    };
-    let mut found = None;
-    for attribute in attributes {
-        let Some(kind) = marker_kind(attribute.path()) else {
-            continue;
-        };
-        if found.is_some() {
-            return Err(LowerError::new(
-                attribute.span(),
-                "an item takes at most one unibind marker",
-            ));
-        }
-        let tokens = match &attribute.meta {
-            syn::Meta::Path(_) => TokenStream::new(),
-            syn::Meta::List(list) => list.tokens.clone(),
-            syn::Meta::NameValue(_) => {
-                return Err(LowerError::new(
-                    attribute.span(),
-                    "unibind markers take parenthesized options",
-                ));
-            }
-        };
-        found = Some(Marker {
-            kind,
-            span: attribute.span(),
-            meta: UnibindMeta::parse(tokens, attribute.span())?,
-        });
-    }
-    Ok(found)
-}
-
-fn marker_kind(path: &syn::Path) -> Option<MarkerKind> {
-    let mut segments = path.segments.iter();
-    let (first, second, rest) = (segments.next(), segments.next(), segments.next());
-    if rest.is_some() || first.is_none_or(|segment| segment.ident != "unibind") {
-        return None;
-    }
-    match second {
-        Some(segment) if segment.ident == "record" => Some(MarkerKind::Record),
-        Some(segment) if segment.ident == "error" => Some(MarkerKind::Error),
-        Some(segment) if segment.ident == "object" => Some(MarkerKind::Object),
-        _ => None,
-    }
-}
-
-/// Whether an attribute path belongs to unibind (`unibind` or
-/// `unibind::...`), for stripping.
-pub fn is_unibind_path(path: &syn::Path) -> bool {
-    path.segments
-        .first()
-        .is_some_and(|segment| segment.ident == "unibind")
-}
-
-/// Extract `///` doc comment lines, trimming the customary leading space.
-pub fn doc_lines(attributes: &[syn::Attribute]) -> Vec<String> {
-    let mut lines = Vec::new();
-    for attribute in attributes {
-        if !attribute.path().is_ident("doc") {
-            continue;
-        }
-        let syn::Meta::NameValue(pair) = &attribute.meta else {
-            continue;
-        };
-        let syn::Expr::Lit(syn::ExprLit {
-            lit: syn::Lit::Str(text),
-            ..
-        }) = &pair.value
-        else {
-            continue;
-        };
-        let text = text.value();
-        lines.push(text.strip_prefix(' ').unwrap_or(&text).to_owned());
-    }
-    lines
 }
