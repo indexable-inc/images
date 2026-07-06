@@ -1,4 +1,7 @@
-{errors}:
+{
+  errors,
+  lists,
+}:
 /**
 Bundle cross-compiled native binaries as a publishable npm distribution, the
 esbuild/turborepo pattern: one platform package per target carrying just the
@@ -171,8 +174,8 @@ pkgs: {
       # Exact-version pins: the shim's platform resolution and the wrapper are
       # published as one unit, so a range would let npm mix a new wrapper with
       # an old binary (or the reverse).
-      optionalDependencies = lib.listToAttrs (
-        map (entry: lib.nameValuePair entry.packageName version) platformEntries
+      optionalDependencies = lists.genAttrs' platformEntries (
+        entry: lib.nameValuePair entry.packageName version
       );
       # The `node:`-prefixed core-module specifiers the shim uses need >= 16.
       engines.node = ">=16";
@@ -210,11 +213,14 @@ pkgs: {
       Binaries are cross-compiled and published from [the source repository](${repository}).
     ''}'';
 
-  writePackageJson = json: "jq . ${pkgs.writeText "npm-dist-package.json" (builtins.toJSON json)}";
+  # Pretty-printed package.json files (npm rewrites manifests on publish, but
+  # the on-disk copies stay reviewable/diffable this way).
+  jsonFormat = pkgs.formats.json {};
 
   installPlatform = entry: ''
     mkdir -p "$out/packages/${entry.dir}/bin"
-    ${writePackageJson entry.packageJson} > "$out/packages/${entry.dir}/package.json"
+    install -m 0644 ${jsonFormat.generate "npm-dist-package.json" entry.packageJson} \
+      "$out/packages/${entry.dir}/package.json"
     install -m 0755 ${lib.escapeShellArg entry.binary} \
       "$out/packages/${entry.dir}/bin/${entry.executable}"
     echo "packages/${entry.dir}" >> "$out/publish-order"
@@ -230,13 +236,13 @@ in
       __structuredAttrs = true;
       strictDeps = true;
       dontUnpack = true;
-      nativeBuildInputs = [pkgs.jq];
       installPhase = ''
         # shell
         runHook preInstall
         ${lib.concatMapStringsSep "\n" installPlatform platformEntries}
         mkdir -p "$out/packages/${wrapperDir}/bin"
-        ${writePackageJson wrapperPackageJson} > "$out/packages/${wrapperDir}/package.json"
+        install -m 0644 ${jsonFormat.generate "npm-dist-package.json" wrapperPackageJson} \
+          "$out/packages/${wrapperDir}/package.json"
         install -m 0755 ${./npm-dist-shim.js} "$out/packages/${wrapperDir}/bin/${command}.js"
         install -m 0644 ${wrapperReadme} "$out/packages/${wrapperDir}/README.md"
         echo "packages/${wrapperDir}" >> "$out/publish-order"

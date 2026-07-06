@@ -250,7 +250,7 @@
       ;
   };
   buildNpmVitest = import ./build/npm-vitest.nix;
-  buildNpmDist = import ./build/npm-dist.nix {inherit errors;};
+  buildNpmDist = import ./build/npm-dist.nix {inherit errors lists;};
   buildZigPackage = import ./build/zig-package.nix {};
   buildLibghosttyVt = import ./build/libghostty-vt.nix {inherit lib writeNushellApplication;};
   uvLockFor = pkgs:
