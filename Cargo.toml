@@ -6,6 +6,7 @@ members = [
   "packages/agent/claude-hooks",
   "packages/agent/claude-stories",
   "packages/agent/subagent-cache",
+  "packages/audio/dsp",
   "packages/code/ast-merge/ast",
   "packages/code/ast-merge/cli",
   "packages/code/ast-merge/diff",
@@ -138,6 +139,7 @@ anstyle = "1"
 anyhow = "1"
 arrow = "59"
 ast-merge-ast = { path = "packages/code/ast-merge/ast" }
+audio-dsp = { path = "packages/audio/dsp" }
 ast-merge-diff = { path = "packages/code/ast-merge/diff" }
 ast-merge-git = { path = "packages/code/ast-merge/git" }
 ast-merge-langs = { path = "packages/code/ast-merge/langs" }
