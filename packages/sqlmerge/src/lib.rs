@@ -7,9 +7,11 @@
 //!
 //! Built by Claude Code.
 
+pub mod config;
 pub mod error;
 pub mod merge;
 pub mod schema;
 
+pub use config::{ConfigError, PolicyConfig};
 pub use error::{MergeError, Result};
 pub use merge::{ConflictPolicy, merge};

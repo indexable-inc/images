@@ -10329,8 +10329,11 @@ dependencies = [
 name = "sqlmerge"
 version = "0.1.0"
 dependencies = [
+ "glob",
  "rusqlite",
+ "serde",
  "tempfile",
+ "toml 1.1.2+spec-1.1.0",
 ]
 
 [[package]]

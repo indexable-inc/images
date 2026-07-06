@@ -59,9 +59,57 @@ sqlmerge, everything else keeps [mergiraf](https://mergiraf.org/). By hand:
 - **Missing primary key.** Any user table without an explicit `PRIMARY KEY` is
   a refusal naming the tables: the session extension silently skips such
   tables, which would be silent data loss.
-- **Any row conflict aborts the whole merge.** v1 has no auto-resolution
-  policies; the conflict handler is a policy enum so per-table policies
-  (last-writer-wins, append-only) can be added later.
+- **Row conflicts abort by default.** With no `sqlmerge.toml`, any row conflict
+  aborts the whole merge. Per-table auto-resolution is opt-in; see
+  [Conflict policies](#conflict-policies).
+
+## Conflict policies
+
+By default every row conflict aborts. A `sqlmerge.toml` at the repo root (the
+driver walks up from its working directory, which git sets to the worktree
+root) opts individual tables into auto-resolution. It maps a table-name **glob**
+to a policy:
+
+```toml
+# sqlmerge.toml
+[policies]
+"cache_*" = "theirs"       # matches cache_hot, cache_users, ...
+"events"  = "append-only"  # exact table name
+"*"       = "abort"        # catch-all (also the implicit default)
+```
+
+Globs use the usual `*` (any run), `?` (one char), and `[...]` class syntax.
+When several globs match one table, **the first one listed wins** (declaration
+order). A table matched by no glob uses `abort`. An absent config file means
+every table aborts — identical to the pre-config behavior. A malformed config
+(bad TOML, unknown policy name, invalid glob) is a loud refusal, never a silent
+fall-back.
+
+| policy        | on a conflicting row                                              |
+| ------------- | ---------------------------------------------------------------- |
+| `abort`       | abort the whole merge (default)                                  |
+| `ours`        | keep ours; drop the incoming change                              |
+| `theirs`      | take theirs where SQLite allows it; otherwise abort (see below)  |
+| `append-only` | a conflicting insert keeps ours; a conflicting update/delete aborts |
+
+**The `theirs` REPLACE caveat.** "Take theirs" maps to SQLite's
+`SQLITE_CHANGESET_REPLACE`, which the [session
+docs](https://sqlite.org/session/sqlite3changeset_apply.html) permit **only**
+for the `DATA` (both sides edited the same row) and `CONFLICT` (both inserted
+the same primary key) conflict types. For a `NOTFOUND` conflict — theirs edited
+a row ours had deleted, so there is no target row to overwrite — or a
+`CONSTRAINT` violation, returning REPLACE is illegal and would fail the entire
+apply with `SQLITE_MISUSE`. `theirs` therefore still **aborts** on those types
+rather than force an invalid resolution.
+
+**Foreign-key conflicts always abort**, regardless of policy. A deferred
+`FOREIGN_KEY` conflict carries no table (only a violation count), so there is no
+per-table policy to consult, and omitting it would commit a database with a
+foreign-key violation. It is always a refusal.
+
+Convergent cases are resolved before any policy is consulted and never
+conflict: an identical insert on both sides, and both sides deleting the same
+row.
 
 ## Limitations
 

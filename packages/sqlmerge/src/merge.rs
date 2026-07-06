@@ -12,8 +12,10 @@
 //!   - a row theirs inserted that ours also inserted with different values at
 //!     the same PK: `CONFLICT`, abort.
 //!
-//! Conflicts are captured per-row and reported; the default policy aborts the
-//! whole apply (no partial writes).
+//! Conflicts are captured per-row and reported. What happens to a conflicting
+//! row is set per-table by a [`crate::config::PolicyConfig`] read from
+//! `sqlmerge.toml`; the default (and the default for any unmatched table) is to
+//! abort the whole apply, so nothing is partially written.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -22,17 +24,37 @@ use rusqlite::hooks::Action;
 use rusqlite::session::{ChangesetItem, ConflictAction, ConflictType, Session};
 use rusqlite::types::ValueRef;
 
+use crate::config::PolicyConfig;
 use crate::error::{MergeError, PrimaryKey, Result, RowConflict};
 use crate::schema;
 
-/// Conflict-resolution policy. v1 ships only [`ConflictPolicy::Abort`]; the
-/// enum exists so per-table policies (last-writer-wins, append-only) can be
-/// added later without reshaping the apply path.
+/// Conflict-resolution policy for one table. Selected per-table by a
+/// [`PolicyConfig`] read from `sqlmerge.toml`; the resolution from a table name
+/// to a policy is pure data (see [`crate::config`]) and this enum is the
+/// vocabulary the apply path acts on.
+///
+/// The mapping to `SQLite`'s conflict-handler return values is exact and
+/// constrained by the session docs: `SQLITE_CHANGESET_REPLACE` is only legal
+/// when the conflict type is `DATA` or `CONFLICT`; returning it for
+/// `NOTFOUND`/`CONSTRAINT` fails the whole apply with `SQLITE_MISUSE`. Each
+/// variant documents how it handles the types where REPLACE is illegal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ConflictPolicy {
     /// Any conflict aborts the entire merge (exit 1). No auto-resolution.
     #[default]
     Abort,
+    /// Keep ours on every conflict: omit the incoming change
+    /// (`SQLITE_CHANGESET_OMIT`, legal for every conflict type).
+    Ours,
+    /// Take theirs on conflict via `SQLITE_CHANGESET_REPLACE` for `DATA` and
+    /// `CONFLICT`. REPLACE is illegal for `NOTFOUND` (theirs edited a row ours
+    /// deleted: no target to replace) and `CONSTRAINT`, so those still abort.
+    Theirs,
+    /// Inserts win, mutations abort. A conflicting INSERT (`CONFLICT`: same PK,
+    /// different values) keeps ours (`OMIT`); a conflicting UPDATE or DELETE
+    /// (`DATA`/`NOTFOUND`) aborts. Benign duplicate inserts and convergent
+    /// deletes are already merged globally, before any policy is consulted.
+    AppendOnly,
 }
 
 /// Render a [`ValueRef`] as a short display string for conflict reporting.
@@ -217,15 +239,67 @@ fn describe_conflict(kind: &ConflictType, item: &ChangesetItem) -> RowConflict {
 /// - [`MergeError::BaseSchemaDiverged`]: the sides agree but base's schema
 ///   differs (the session diff needs identical table definitions).
 /// - [`MergeError::MissingPrimaryKey`]: a user table has no explicit PK.
-/// - [`MergeError::Conflicts`]: row-level conflicts under the abort policy.
+/// - [`MergeError::Conflicts`]: row-level conflicts that no table policy
+///   resolved (aborting tables, or `theirs`/`append-only` on a type they leave
+///   conflicting).
 /// - [`MergeError::IntegrityCheckFailed`] / [`MergeError::ForeignKeyCheckFailed`]:
 ///   the post-merge `PRAGMA` sweeps found violations.
 /// - [`MergeError::Sqlite`]: any underlying `SQLite` failure.
+/// How the conflict handler should respond to one conflicting row under a given
+/// policy: either resolve it (returning the `SQLite` action, no report) or
+/// treat it as an unresolved conflict (capture + abort).
+enum Resolution {
+    /// The policy resolves this row; return this action, do not report it.
+    Resolve(ConflictAction),
+    /// The policy leaves this row conflicting; capture it and abort the apply.
+    Conflict,
+}
+
+/// Pure decision: given the resolved per-table `policy`, the conflict `kind`,
+/// and the changeset op's `action`, decide how to respond.
+///
+/// This is the whole policy switch, kept in one pure function rather than
+/// scattered through the C callback. Foreign-key conflicts never reach here:
+/// they have no table (so no policy) and are handled before this is called.
+///
+/// The `SQLITE_CHANGESET_REPLACE` return is only legal for `DATA` and
+/// `CONFLICT`; every other type that a policy would want to "take theirs" on
+/// falls back to [`Resolution::Conflict`] rather than returning an illegal
+/// REPLACE (which would fail the entire apply with `SQLITE_MISUSE`).
+const fn resolve_conflict(
+    policy: ConflictPolicy,
+    kind: &ConflictType,
+    action: Action,
+) -> Resolution {
+    match policy {
+        ConflictPolicy::Abort => Resolution::Conflict,
+
+        // Keep ours: OMIT is legal for every conflict type.
+        ConflictPolicy::Ours => Resolution::Resolve(ConflictAction::SQLITE_CHANGESET_OMIT),
+
+        // Take theirs: REPLACE only where SQLite allows it.
+        ConflictPolicy::Theirs => match kind {
+            ConflictType::SQLITE_CHANGESET_DATA | ConflictType::SQLITE_CHANGESET_CONFLICT => {
+                Resolution::Resolve(ConflictAction::SQLITE_CHANGESET_REPLACE)
+            }
+            // NOTFOUND (theirs edited a row ours deleted) and CONSTRAINT cannot
+            // be REPLACEd: there is no target row to overwrite. Conflict.
+            _ => Resolution::Conflict,
+        },
+
+        // Append-only: a conflicting insert keeps ours; mutations conflict.
+        ConflictPolicy::AppendOnly => match action {
+            Action::SQLITE_INSERT => Resolution::Resolve(ConflictAction::SQLITE_CHANGESET_OMIT),
+            _ => Resolution::Conflict,
+        },
+    }
+}
+
 pub fn merge(
     base_path: &str,
     ours_path: &str,
     theirs_path: &str,
-    policy: ConflictPolicy,
+    policies: &PolicyConfig,
 ) -> Result<()> {
     // Open theirs as the working connection so we can diff base against it.
     let theirs = Connection::open(theirs_path)?;
@@ -262,19 +336,46 @@ pub fn merge(
     };
     theirs.execute_batch("DETACH DATABASE base")?;
 
-    // Apply the changeset to ours. The conflict handler captures every conflict
-    // and, under the Abort policy, aborts the whole apply so nothing is written.
+    // Apply the changeset to ours. The conflict handler resolves each row per
+    // the table's policy; anything left conflicting is captured and aborts the
+    // whole apply, so an unresolved merge writes nothing.
     let conflicts: Arc<Mutex<Vec<RowConflict>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&conflicts);
+    let policies = policies.clone();
     let conflict_handler = move |kind: ConflictType, item: ChangesetItem| -> ConflictAction {
+        // Globally benign cases: identical inserts and convergent deletes
+        // converge regardless of policy, and carry no policy question.
         if is_benign_duplicate_insert(&kind, &item) || is_convergent_delete(&kind, &item) {
             return ConflictAction::SQLITE_CHANGESET_OMIT;
         }
-        sink.lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(describe_conflict(&kind, &item));
-        match policy {
-            ConflictPolicy::Abort => ConflictAction::SQLITE_CHANGESET_ABORT,
+
+        // Foreign-key conflicts have no table or op (only `fk_conflicts()` is
+        // legal). There is no per-table policy to consult, and OMIT would
+        // commit the violation, so a deferred-FK conflict always aborts.
+        if kind == ConflictType::SQLITE_CHANGESET_FOREIGN_KEY {
+            sink.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(describe_conflict(&kind, &item));
+            return ConflictAction::SQLITE_CHANGESET_ABORT;
+        }
+
+        // Every other conflict type carries an op with a table name and action.
+        // If the op is somehow unavailable, fall back to the abort policy
+        // rather than guessing.
+        let (table, action) = item.op().map_or_else(
+            |_| (String::new(), Action::UNKNOWN),
+            |op| (op.table_name().to_string(), op.code()),
+        );
+        let policy = policies.policy_for(&table);
+
+        match resolve_conflict(policy, &kind, action) {
+            Resolution::Resolve(resolved) => resolved,
+            Resolution::Conflict => {
+                sink.lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(describe_conflict(&kind, &item));
+                ConflictAction::SQLITE_CHANGESET_ABORT
+            }
         }
     };
 

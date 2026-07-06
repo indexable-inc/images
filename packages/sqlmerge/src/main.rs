@@ -7,7 +7,7 @@
 
 use std::process::ExitCode;
 
-use sqlmerge::{ConflictPolicy, merge};
+use sqlmerge::{PolicyConfig, merge};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -25,7 +25,26 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    match merge(base, ours, theirs, ConflictPolicy::Abort) {
+    // Resolve per-table policy from `sqlmerge.toml` at the repo root. git runs
+    // the driver with CWD = the worktree root, so we walk up from CWD to find
+    // it. Absent file = abort every conflict (the pre-config default). A
+    // malformed config is a loud refusal, never a silent fall-back to abort.
+    let cwd = match std::env::current_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("sqlmerge: cannot determine current directory: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let policies = match PolicyConfig::load_from(&cwd) {
+        Ok(policies) => policies,
+        Err(e) => {
+            eprintln!("sqlmerge: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    match merge(base, ours, theirs, &policies) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("sqlmerge: {e}");
