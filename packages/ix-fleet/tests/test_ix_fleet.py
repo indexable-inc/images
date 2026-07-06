@@ -281,51 +281,50 @@ class UpNodeTests(unittest.TestCase):
 
 
 class EastWestGroupTests(unittest.TestCase):
-    def test_ensures_group_before_adding_node(self) -> None:
-        calls: list[list[str]] = []
+    @staticmethod
+    def _recording_client(calls: list[tuple[str, list[str]]]) -> typing.Any:  # noqa: ANN401
+        class FakeClient:
+            async def apply_vm_groups(self, vm: str, groups: list[str]) -> typing.Any:  # noqa: ANN401
+                calls.append((vm, groups))
+                return type("GroupApplySummary", (), {"added": groups, "removed": []})()
 
-        async def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
-            del timeout
-            assert not dry_run
-            calls.append(command)
-            return ""
+        return FakeClient
 
+    def test_reconciles_membership_in_vm_region(self) -> None:
+        # ensure_node_groups routes through vm.apply_groups, which get-or-creates
+        # each slug in the VM's own region rather than the caller's local region
+        # (ENG-2754), so a fleet driven from one region's leader no longer
+        # strands a remote region's group. One set-based call keyed by VM name.
+        calls: list[tuple[str, list[str]]] = []
+
+        node_data = fleet_node("api")
+        node_data["groups"] = ["shared-db", "private-apps"]
+        node = ix_fleet.FleetNode.model_validate(node_data)
+
+        with patch.object(ix_fleet, "client", self._recording_client(calls)):
+            asyncio.run(ix_fleet.ensure_node_groups(node, dry_run=False))
+
+        assert calls == [("api", ["private-apps", "shared-db"])]
+
+    def test_no_groups_makes_no_live_call(self) -> None:
+        node = ix_fleet.FleetNode.model_validate(fleet_node("api"))
+
+        def fail_client() -> typing.Any:  # noqa: ANN401
+            raise AssertionError("no declared groups: apply_vm_groups must not be called")
+
+        with patch.object(ix_fleet, "client", fail_client):
+            asyncio.run(ix_fleet.ensure_node_groups(node, dry_run=False))
+
+    def test_dry_run_makes_no_live_call(self) -> None:
         node_data = fleet_node("api")
         node_data["groups"] = ["private-apps"]
         node = ix_fleet.FleetNode.model_validate(node_data)
 
-        with patch.object(ix_fleet, "run_cli", fake_run_cli):
-            asyncio.run(ix_fleet.ensure_node_groups(node, dry_run=False))
+        def fail_client() -> typing.Any:  # noqa: ANN401
+            raise AssertionError("dry-run must not touch the group surface")
 
-        assert calls == [
-            ["ix", "group", "create", "private-apps"],
-            ["ix", "group", "add", "private-apps", "api"],
-        ]
-
-    def test_existing_group_membership_is_idempotent(self) -> None:
-        calls: list[list[str]] = []
-
-        async def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
-            del timeout
-            assert not dry_run
-            calls.append(command)
-            if command[:3] == ["ix", "group", "create"]:
-                raise ix_fleet.CliError(command, 1, "", "group already exists")
-            if command[:3] == ["ix", "group", "add"]:
-                raise ix_fleet.CliError(command, 1, "", "vm is already a member of group")
-            return ""
-
-        node_data = fleet_node("api")
-        node_data["groups"] = ["private-apps"]
-        node = ix_fleet.FleetNode.model_validate(node_data)
-
-        with patch.object(ix_fleet, "run_cli", fake_run_cli):
-            asyncio.run(ix_fleet.ensure_node_groups(node, dry_run=False))
-
-        assert calls == [
-            ["ix", "group", "create", "private-apps"],
-            ["ix", "group", "add", "private-apps", "api"],
-        ]
+        with patch.object(ix_fleet, "client", fail_client):
+            asyncio.run(ix_fleet.ensure_node_groups(node, dry_run=True))
 
 
 class BootstrapTests(unittest.TestCase):
