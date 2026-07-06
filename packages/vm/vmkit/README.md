@@ -1,7 +1,13 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="the signed vmkit CLI boots and drives macOS guests (Virtualization.framework) and Linux guests (libkrun) off-screen, returning framebuffer PNGs and serial consoles"></p>
+
 # vmkit
 
-Own a virtual machine's lifecycle from Rust, with one hypervisor backend per host
-and guest OS:
+How do you boot a macOS or Linux VM from Rust and drive it without it ever
+touching your screen? `vmkit` owns a virtual machine's lifecycle end to end:
+install, provision, boot, synthetic keyboard/mouse input, and framebuffer
+screenshots, all fully off-screen, so an agent can verify GUI rendering
+without the VM ever appearing on the operator's desktop or grabbing the
+cursor. One hypervisor backend per host and guest OS:
 
 - **macOS guests** (macOS host) run on Apple's [Virtualization.framework](https://developer.apple.com/documentation/virtualization)
   (via [`objc2-virtualization`](https://docs.rs/objc2-virtualization)): boot an
@@ -15,10 +21,8 @@ and guest OS:
 A small CLI fronts all of these, so other parts of the system can start and
 control a VM without holding the entitlements themselves.
 
-The motivating macOS use case: run a GUI app (for example the `bossbar-overlay`)
-inside a VM and inspect it remotely, so an agent can verify on-screen rendering
-without the app ever appearing on the operator's real desktop or grabbing the
-operator's cursor.
+The motivating macOS use case: launch a GUI app (for example the
+`bossbar-overlay`) inside a guest and screenshot it for verification, remotely.
 
 ```sh
 nix run .#vmkit -- info
@@ -30,6 +34,17 @@ nix run .#vmkit -- boot-linux --disk ./linux.raw --gpu
 # running a command as the guest init:
 nix run .#vmkit -- boot-linux --root ./rootfs -- /bin/busybox sh -c 'uname -a; ls /'
 ```
+
+## Install
+
+```sh
+nix run github:indexable-inc/index#vmkit -- info
+```
+
+The `nix run .#<attr>` forms above assume a clone:
+`git clone https://github.com/indexable-inc/index`. The build wires libkrun
+linkage and the entitlement self-signing, so Nix is the supported way to build
+it (a plain `cargo install` does not link libkrun).
 
 ## Status
 
