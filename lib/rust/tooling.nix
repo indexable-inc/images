@@ -9,6 +9,9 @@
   lists,
   # Shared pins reader, threaded through to policy.nix (see its arg doc).
   pins,
+  # Flips `allowSubstitutes` back on for darwin cross-lane eval-time IFD nodes;
+  # threaded down to vendor.nix / patched-src.nix. See its doc comment.
+  evalTimeSubstitutable,
 }: let
   inherit (builtins) toString;
 
@@ -19,7 +22,7 @@
   # which the astlog `no-parent-path` rule bans).
   patchedSrcFor = pkgs:
     import (repoRoot + "/lib/util/patched-src.nix") {
-      inherit lib;
+      inherit lib evalTimeSubstitutable;
       inherit (pkgs) applyPatches;
     };
 
@@ -35,6 +38,7 @@
         pkgs
         lists
         pins
+        evalTimeSubstitutable
         ;
       # llm-clippy bootstraps before cargoUnit / rustWorkspace exist, so the
       # `ix` closure it receives carries only `buildRustPackage` plus the

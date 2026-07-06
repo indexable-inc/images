@@ -72,6 +72,9 @@
     writeProcessComposeApplication
     ;
   netCidr = import ./util/net-cidr.nix {inherit lib;};
+  # Force `allowSubstitutes = true` on a trivial-builder derivation that must be
+  # substitutable (darwin cross-lane eval-time IFD nodes). See its doc comment.
+  evalTimeSubstitutable = import ./util/eval-time-substitutable.nix;
   publicArtifactsFor = pkgs: import ./util/public-artifacts.nix {inherit lib pkgs;};
   # Apply an in-repo ordered patch series to an upstream source tree (the
   # de-forking replacement for a separate fork repo). Bound per package set like
@@ -79,7 +82,7 @@
   # system, not the top-level x86_64-linux one. See lib/util/patched-src.nix.
   patchedSrcFor = pkgs:
     import ./util/patched-src.nix {
-      inherit lib;
+      inherit lib evalTimeSubstitutable;
       inherit (pkgs) applyPatches;
     };
   # De-forked-package mapping (name -> input / upstream URL / patch dir), the
@@ -269,6 +272,7 @@
         clippy-src
         lists
         pins
+        evalTimeSubstitutable
         ;
       repoRoot = paths.root;
     })
@@ -575,6 +579,7 @@
       claudePlugin
       deepMerge
       efx
+      evalTimeSubstitutable
       forkPackages
       forkDagCheckSrc
       goUnit

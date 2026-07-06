@@ -11,9 +11,14 @@
 # files through a real `git rebase` when the pinned base moves, so plain `patch`
 # application is always correct at build time (the series is exact against the
 # pinned rev; the build never needs fuzzy or structural merging).
+# `applyPatches` is a nixpkgs trivial builder and opts out of substitution. A
+# patched source (e.g. ghostty) enters the darwin cross lane's eval-time IFD
+# closure, so a Mac must be able to substitute it: `evalTimeSubstitutable`
+# (threaded from lib) flips `allowSubstitutes` back on. See its doc comment.
 {
   lib,
   applyPatches,
+  evalTimeSubstitutable,
 }:
 # Return the patched source derivation. `applyPatches` copies `src` and runs
 # `patch` for each entry, so the result is a tiny, seconds-fast derivation that
@@ -57,7 +62,7 @@
     then fail "trailing signature block (--no-signature)"
     else path;
 in
-  applyPatches {
+  evalTimeSubstitutable (applyPatches {
     name = "${name}-patched";
     inherit src;
     patches = lib.pipe (builtins.readDir patchDir) [
@@ -66,4 +71,4 @@ in
       lib.naturalSort
       (map (f: assertCanonical f (patchDir + "/${f}")))
     ];
-  }
+  })
