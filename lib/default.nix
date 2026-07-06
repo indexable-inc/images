@@ -15,6 +15,7 @@
   snix-src,
   clippy-src,
   codex-src,
+  nix-src,
   ghostty,
   mesa-src,
   # Flake source revision, stamped into builds that want to report it (see
@@ -516,6 +517,7 @@
     btopSrc = btop-src;
     codexSrc = codex-src;
     clippySrc = clippy-src;
+    nixSrc = nix-src;
     drgnSrc = drgn-src;
     perftestSrc = perftest-src;
     fffSrc = fff-src;

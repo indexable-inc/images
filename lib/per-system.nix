@@ -589,6 +589,7 @@
     btop = ix.btopSrc;
     clippy = ix.clippySrc;
     mesa = ix.mesaSrc;
+    nix = ix.nixSrc;
   };
   patchedSrcChecks = lib.genAttrs' (import ./fork-packages.nix).forkPackages (
     fork:

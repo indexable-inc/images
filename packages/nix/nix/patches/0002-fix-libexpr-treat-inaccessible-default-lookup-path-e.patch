@@ -1,0 +1,47 @@
+From 315554e6dcd5e281a855605c570935d52a9d0e67 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew@ix.dev>
+Date: Sun, 5 Jul 2026 21:29:59 -0700
+Subject: [PATCH] fix(libexpr): treat inaccessible default lookup-path entries
+ as absent
+
+EvalSettings::getDefaultNixPath() probes its optional convenience entries
+(~/.nix-defexpr/channels, $NIX_STATE_DIR/profiles/per-user/root/channels)
+with the throwing std::filesystem::exists() overload. When the stat fails
+with something other than ENOENT -- e.g. EPERM from the macOS build sandbox
+denying the host's /nix/var while nix runs inside a derivation
+(recursive-nix, or the libflake C API unit tests on any darwin host that
+has root channels) -- the filesystem_error aborts every --impure eval, even
+one that never consults the lookup path.
+
+Switch to the non-throwing overload: an entry that cannot be stat'd is
+simply not offered as a default lookup path, matching how a missing entry
+already behaves.
+---
+ src/libexpr/eval-settings.cc | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/src/libexpr/eval-settings.cc b/src/libexpr/eval-settings.cc
+index 5cf0ae0..69c2494 100644
+--- a/src/libexpr/eval-settings.cc
++++ b/src/libexpr/eval-settings.cc
+@@ -82,7 +82,16 @@ Strings EvalSettings::getDefaultNixPath()
+ {
+     Strings res;
+     auto add = [&](const std::filesystem::path & p, const std::string & s = std::string()) {
+-        if (std::filesystem::exists(p)) {
++        /* Use the non-throwing exists() overload: these default lookup-path
++           entries are optional conveniences, so an inaccessible path must mean
++           "absent", not an eval abort. The throwing overload turns an EPERM
++           stat -- e.g. the macOS build sandbox denying access to the host's
++           /nix/var/nix/profiles/per-user/root/channels while nix runs inside a
++           derivation (recursive-nix, the C API unit tests) -- into a fatal
++           filesystem_error for any --impure eval, even one that never uses the
++           lookup path entry. */
++        std::error_code ec;
++        if (std::filesystem::exists(p, ec)) {
+             if (s.empty()) {
+                 res.push_back(p.string());
+             } else {
+-- 
+2.54.0
+

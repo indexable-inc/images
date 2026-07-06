@@ -106,7 +106,7 @@ jobs:
           body: |
             Automated fork-sync: bump each auto-updatable de-forked package's upstream base and regenerate its in-repo patch series through a real `git rebase`.
 
-            Driven by `lib/fork-packages.nix` (`autoUpdate = true`): currently **codex** (`openai/codex`) and **btop** (`aristocratos/btop`). **clippy is excluded** (`autoUpdate = false`): it is nightly-toolchain-coupled and rev-pinned, bumped by hand alongside the rust toolchain via `nix run .#rebase-patches -- clippy`.
+            Driven by `lib/fork-packages.nix` (`autoUpdate = true`): currently **codex** (`openai/codex`) and **btop** (`aristocratos/btop`). Excluded (`autoUpdate = false`, bumped by hand via `nix run .#rebase-patches -- <name>`): **clippy** is nightly-toolchain-coupled and rev-pinned, bumped alongside the rust toolchain; **nix** is our daemon toolchain, pinned at the rev the fleet daemon runs, bumped only when we deliberately move the daemon version.
 
             Each `patched-src-<name>` check was built against the freshly bumped base in this job, so the series still applies. The PR's `flake-check` CI rebuilds the full packages.
 

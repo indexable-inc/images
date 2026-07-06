@@ -64,5 +64,19 @@
       patchDir = "packages/vm/panes/guest-image/mesa/patches";
       autoUpdate = false;
     }
+    {
+      # nix is our daemon toolchain: the base is the exact rev the hydra daemon
+      # runs (tag 2.34.7), so the patched package is a protocol-compatible
+      # drop-in for the running daemon. The base moves DELIBERATELY, in the same
+      # change that moves the daemon version, never under a routine
+      # `nix flake update` or the scheduled fork-sync -- hence `autoUpdate =
+      # false`, which pins `nix-src` by rev and keeps it out of the cron. Bump the
+      # `nix-src` rev, then `nix run .#rebase-patches -- nix`.
+      name = "nix";
+      input = "nix-src";
+      url = "https://github.com/NixOS/nix.git";
+      patchDir = "packages/nix/nix/patches";
+      autoUpdate = false;
+    }
   ];
 }

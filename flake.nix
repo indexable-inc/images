@@ -105,6 +105,20 @@
       flake = false;
     };
 
+    # Upstream NixOS/nix, patched in-repo (packages/nix/nix/patches). Pinned BY
+    # REV at tag 2.34.7, the version the hydra daemon runs (`nix store info` ->
+    # `Version: 2.34.7`): nix is our daemon toolchain, so the patched package
+    # must stay a protocol-compatible drop-in for the running daemon. The base
+    # moves DELIBERATELY, never under a routine `nix flake update`
+    # (fork-packages.nix marks it `autoUpdate = false`, so the scheduled
+    # fork-sync leaves it alone): bump this rev only when we intend to move the
+    # daemon version too, then `nix run .#rebase-patches -- nix` to regenerate
+    # the series on the new base.
+    nix-src = {
+      url = "github:NixOS/nix/2c6d06e9387cf58167cb5a7ab91cee7333d8d17c";
+      flake = false;
+    };
+
     # Upstream aristocratos/btop, patched in-repo (packages/terminal/btop/patches).
     # Tracks upstream main (autoUpdate = true in lib/fork-packages.nix): the base
     # free-floats under the scheduled fork-sync, which runs `nix flake update
@@ -235,6 +249,7 @@
     snix-src,
     clippy-src,
     codex-src,
+    nix-src,
     ghostty,
     mesa-src,
     skills,
@@ -318,6 +333,7 @@
         snix-src
         clippy-src
         codex-src
+        nix-src
         ghostty
         mesa-src
         ;

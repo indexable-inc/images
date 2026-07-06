@@ -228,6 +228,23 @@
         "url": "https://gitlab.freedesktop.org/mesa/mesa"
       }
     },
+    "nix-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1777915353,
+        "narHash": "sha256-uj5KNW8Vdm60FCUxD2KsrCVH/WwoemvczWmmrb3Gvlo=",
+        "owner": "NixOS",
+        "repo": "nix",
+        "rev": "2c6d06e9387cf58167cb5a7ab91cee7333d8d17c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nix",
+        "rev": "2c6d06e9387cf58167cb5a7ab91cee7333d8d17c",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1780749050,
@@ -418,6 +435,7 @@
         "home-manager": "home-manager",
         "launchk-src": "launchk-src",
         "mesa-src": "mesa-src",
+        "nix-src": "nix-src",
         "nixpkgs": "nixpkgs",
         "nu-jupyter-kernel-src": "nu-jupyter-kernel-src",
         "perftest-src": "perftest-src",
