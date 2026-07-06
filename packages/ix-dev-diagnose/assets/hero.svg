@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 220" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    svg { color: #1f2328; }
+    .muted { fill: #656d76; }
+    .accent { fill: #8250df; }
+    .accent-stroke { stroke: #8250df; }
+    .box { stroke: currentColor; fill: none; }
+    text { fill: currentColor; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    .dashed { stroke: currentColor; fill: none; stroke-dasharray: 4 3; marker-end: url(#arrow); }
+    .arrowhead { fill: currentColor; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { fill: #a371f7; }
+      .accent-stroke { stroke: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arrowhead"/>
+    </marker>
+  </defs>
+
+  <rect class="box" x="20" y="82" width="180" height="56" rx="8"/>
+  <text x="110" y="106" text-anchor="middle" font-size="14">ix-dev-diagnose</text>
+  <text x="110" y="125" text-anchor="middle" font-size="11" class="muted">https://ix.dev/</text>
+
+  <path class="edge" d="M 200 96 L 268 56"/>
+  <text x="204" y="60" font-size="11" class="muted">resolve</text>
+  <rect class="box" x="270" y="24" width="180" height="40" rx="8"/>
+  <text x="360" y="49" text-anchor="middle" font-size="12">local DNS answers</text>
+
+  <path class="edge" d="M 200 118 L 268 130"/>
+  <text x="204" y="152" font-size="11" class="muted">probe each address</text>
+  <rect class="box" x="270" y="96" width="180" height="100" rx="8"/>
+  <text x="360" y="122" text-anchor="middle" font-size="13">TCP connect</text>
+  <text x="360" y="146" text-anchor="middle" font-size="13">TLS handshake</text>
+  <text x="360" y="170" text-anchor="middle" font-size="13">HTTP GET</text>
+
+  <path class="edge" d="M 450 146 L 528 146"/>
+  <rect class="box accent-stroke" x="530" y="112" width="170" height="68" rx="8"/>
+  <text x="615" y="138" text-anchor="middle" font-size="14" class="accent">report.json</text>
+  <text x="615" y="158" text-anchor="middle" font-size="11" class="muted">chain · verify · headers</text>
+
+  <path class="edge" d="M 450 44 L 528 44"/>
+  <rect class="box" x="530" y="24" width="170" height="40" rx="8"/>
+  <text x="615" y="49" text-anchor="middle" font-size="12">success | failure</text>
+</svg>
