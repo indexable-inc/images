@@ -1,16 +1,25 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="python_exec runs agent code on one persistent IPython kernel whose execution log feeds a live human dashboard"></p>
+
 # ix-mcp
 
-A Python execution MCP server. Its one general tool, `python_exec`, runs code on
-**one shared, persistent IPython kernel**. The namespace persists across calls,
-many executions run **concurrently** on the kernel's event loop, and work that
-outlives a short foreground budget keeps running in the background. Run one
-standalone dashboard (`nix run .#dashboard`) to see every running execution and
-its live output across all servers.
+What if your agent's Python tool never forgot a variable between calls? ix-mcp
+is an MCP server with one general tool, `python_exec`, that runs code on **one
+shared, persistent IPython kernel**: the namespace survives across calls, many
+executions run **concurrently** on the kernel's event loop, and work that
+outlives a short foreground budget keeps running as a background job. Run one
+standalone dashboard (`nix run .#dashboard`) to watch every execution and its
+live output across all servers.
 
 ## Quickstart
 
 ```
-nix run .#mcp -- serve                       # MCP over stdio (what an MCP client launches)
+nix run github:indexable-inc/index#mcp -- serve   # MCP over stdio (what an MCP client launches)
+```
+
+From a clone (`git clone https://github.com/indexable-inc/index`):
+
+```
+nix run .#mcp -- serve                       # MCP over stdio
 nix run .#mcp -- serve --http :8000          # MCP over streamable HTTP instead
 nix run .#mcp -- serve --session work.ixnb   # same, recorded in a reopenable session file
 nix run .#mcp -- notebook work.ixnb          # the engine alone: kernel + dashboard, no MCP
@@ -109,14 +118,14 @@ An MCP host that supports the [MCP Apps
 extension](https://github.com/modelcontextprotocol/ext-apps) (claude.ai, Claude
 Desktop) renders the human view INLINE in the conversation, not only in the
 dashboard. The mechanism (`mcp_ui.py`, spec 2026-01-26 / SEP-1865): the server
-declares one `ui://` resource with mimeType `text/html;profile=mcp-app` — a
-self-contained viewer document — and `python_exec` / `pr_watch` name it in
+declares one `ui://` resource with mimeType `text/html;profile=mcp-app` (a
+self-contained viewer document), and `python_exec` / `pr_watch` name it in
 their tool `_meta.ui.resourceUri`. The host mounts the viewer in a sandboxed
 iframe and hands it the tool's result; the run's `text/html` fragments (the
 same ones the dashboard shows) ride on the reply's `_meta`, so they never cost
 the model tokens. The viewer renders the status header as chips, collapses long
 text, inlines images, injects the rich HTML, and makes every table
-click-to-sort. Hosts without the extension ignore all of it — the model-facing
+click-to-sort. Hosts without the extension ignore all of it: the model-facing
 content blocks are unchanged.
 
 The same document renders outside an MCP host: `GET /api/jobs/{id}/ui` on the
