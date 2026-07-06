@@ -48,6 +48,7 @@ jobs:
         with:
           extra-conf: |
             accept-flake-config = true
+            extra-experimental-features = ca-derivations
             extra-substituters = https://cache.ix.dev
             extra-trusted-public-keys = ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI=
 
@@ -104,6 +105,7 @@ jobs:
         with:
           extra-conf: |
             accept-flake-config = true
+            extra-experimental-features = ca-derivations
             extra-substituters = https://cache.ix.dev
             extra-trusted-public-keys = ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI=
 
