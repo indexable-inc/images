@@ -15,17 +15,16 @@
     "btop-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1780742123,
-        "narHash": "sha256-YeW4bogDBLN9UQbVOT+vG7yKxYwwWmYP6gxnbolo6Xo=",
+        "lastModified": 1782995410,
+        "narHash": "sha256-0wZzlCfiWZB//qQTLV+4GLO23amddQrYkvVRSXjlf80=",
         "owner": "aristocratos",
         "repo": "btop",
-        "rev": "d03b839ec2b562226731651d4921ee0419af2338",
+        "rev": "9527231dfbcbe697f8eb80849e267377194e6ca8",
         "type": "github"
       },
       "original": {
         "owner": "aristocratos",
         "repo": "btop",
-        "rev": "d03b839ec2b562226731651d4921ee0419af2338",
         "type": "github"
       }
     },

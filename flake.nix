@@ -98,12 +98,12 @@
     };
 
     # Upstream aristocratos/btop, patched in-repo (packages/terminal/btop/patches).
-    # Pinned at the fork's merge-base rev for a faithful migration (the fork's
-    # base was 14 behind upstream main; rebasing onto newer main is a separate,
-    # deliberate change, not this one). `nix flake update btop-src` +
-    # `nix run .#rebase-patches -- btop` to advance later.
+    # Tracks upstream main (autoUpdate = true in lib/fork-packages.nix): the base
+    # free-floats under the scheduled fork-sync, which runs `nix flake update
+    # btop-src` + `nix run .#rebase-patches -- btop` to advance the two patches
+    # (macOS disk IO sorting, cwd detail box) onto the new tail.
     btop-src = {
-      url = "github:aristocratos/btop/d03b839ec2b562226731651d4921ee0419af2338";
+      url = "github:aristocratos/btop";
       flake = false;
     };
 

@@ -14,10 +14,10 @@ the command fits in <= 2 rows so a long command is never truncated for it.
 Other platforms leave cwd empty (field defaults to "").
 
 diff --git a/src/btop_draw.cpp b/src/btop_draw.cpp
-index cfa4a63..46af0c8 100644
+index 6953b40..da311ee 100644
 --- a/src/btop_draw.cpp
 +++ b/src/btop_draw.cpp
-@@ -1853,17 +1853,30 @@ namespace Proc {
+@@ -1884,17 +1884,30 @@ namespace Proc {
  				if (item_fit >= 8) out += cjust("Nice:", item_width);
  
  
@@ -52,10 +52,10 @@ index cfa4a63..46af0c8 100644
  			}
  
 diff --git a/src/btop_shared.hpp b/src/btop_shared.hpp
-index d10bb1f..6405eed 100644
+index 9b4e9a6..ef3b731 100644
 --- a/src/btop_shared.hpp
 +++ b/src/btop_shared.hpp
-@@ -408,6 +408,7 @@ namespace Proc {
+@@ -384,6 +384,7 @@ namespace Proc {
  		string name{};          // defaults to ""
  		string cmd{};           // defaults to ""
  		string short_cmd{};     // defaults to ""

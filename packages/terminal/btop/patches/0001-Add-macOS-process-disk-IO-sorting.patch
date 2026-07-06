@@ -3,12 +3,20 @@ From: Andrew Gazelka <andrew.gazelka@gmail.com>
 Date: Sun, 7 Jun 2026 13:19:25 -0700
 Subject: [PATCH] Add macOS process disk IO sorting
 
+Adds "io read", "io write", "io total" sort options to the process view,
+with per-column sort logic and macOS io_read_rate/io_write_rate collection.
+
+Rebase note (base d03b839 -> 9527231): upstream moved the Proc::sort_vector
+definition out of the btop_shared.hpp header into btop_shared.cpp, leaving an
+`extern` declaration behind. The three io entries are inserted into the
+relocated .cpp definition between "memory" and "cpu direct" so their positions
+(indices 6/7/8) line up with the io cases in the sorting switch.
 
 diff --git a/src/btop_config.cpp b/src/btop_config.cpp
-index 632ec4d..050b01a 100644
+index 5571427..6290586 100644
 --- a/src/btop_config.cpp
 +++ b/src/btop_config.cpp
-@@ -104,7 +104,7 @@ namespace Config {
+@@ -122,7 +122,7 @@ namespace Config {
  
  		{"update_ms", 			"#* Update time in milliseconds, recommended 2000 ms or above for better sample times for graphs."},
  
@@ -18,10 +26,10 @@ index 632ec4d..050b01a 100644
  
  		{"proc_reversed",		"#* Reverse sorting order, True or False."},
 diff --git a/src/btop_draw.cpp b/src/btop_draw.cpp
-index fbc99c0..cfa4a63 100644
+index 1c3b1bc..6953b40 100644
 --- a/src/btop_draw.cpp
 +++ b/src/btop_draw.cpp
-@@ -1685,6 +1685,8 @@ namespace Proc {
+@@ -1716,6 +1716,8 @@ namespace Proc {
  		auto mem_bytes = Config::getB("proc_mem_bytes");
  		auto vim_keys = Config::getB("vim_keys");
  		auto show_graphs = Config::getB("proc_cpu_graphs");
@@ -30,7 +38,7 @@ index fbc99c0..cfa4a63 100644
  		const auto pause_proc_list = Config::getB("pause_proc_list");
  		auto follow_process = Config::getB("follow_process");
  		int followed_pid = Config::getI("followed_pid");
-@@ -1778,7 +1780,7 @@ namespace Proc {
+@@ -1809,7 +1811,7 @@ namespace Proc {
  			prog_size = (width > 70 ? 16 : ( width > 55 ? 8 : width - user_size - thread_size - 33));
  			cmd_size = (width > 55 ? width - prog_size - user_size - thread_size - 33 : -1);
  			tree_size = width - user_size - thread_size - 23;
@@ -39,7 +47,7 @@ index fbc99c0..cfa4a63 100644
  				cmd_size += 5;
  				tree_size += 5;
  			}
-@@ -1882,7 +1884,6 @@ namespace Proc {
+@@ -1913,7 +1915,6 @@ namespace Proc {
  			}
  
  			//? pause, per-core, reverse, tree and sorting
@@ -47,7 +55,7 @@ index fbc99c0..cfa4a63 100644
  			const int sort_len = sorting.size();
  			const int sort_pos = x + width - sort_len - 8;
  
-@@ -1961,7 +1962,7 @@ namespace Proc {
+@@ -1992,7 +1993,7 @@ namespace Proc {
  			out += (thread_size > 0 ? Mv::l(4) + "Threads: " : "")
  					+ ljust("User:", user_size) + ' '
  					+ rjust((mem_bytes ? "MemB" : "Mem%"), 5) + ' '
@@ -56,7 +64,7 @@ index fbc99c0..cfa4a63 100644
  		}
  		//* End of redraw block
  
-@@ -2122,6 +2123,16 @@ namespace Proc {
+@@ -2153,6 +2154,16 @@ namespace Proc {
  				mem_str += '%';
  			}
  
@@ -73,7 +81,7 @@ index fbc99c0..cfa4a63 100644
  			// Shorten process thread representation when larger than 5 digits: 10000 -> 10K ...
  			const std::string proc_threads_string = [&] {
  				if (p.threads > 9999) {
-@@ -2134,9 +2145,9 @@ namespace Proc {
+@@ -2165,9 +2176,9 @@ namespace Proc {
  			out += (thread_size > 0 ? t_color + rjust(proc_threads_string, thread_size) + ' ' + end : "" )
  				+ g_color + ljust((cmp_greater(p.user.size(), user_size) ? p.user.substr(0, user_size - 1) + '+' : p.user), user_size) + ' '
  				+ m_color + rjust(mem_str, 5) + end + ' '
@@ -101,7 +109,7 @@ index bcb64bf..df69f86 100644
  				"",
  				"\"cpu lazy\" updates top process over time.",
 diff --git a/src/btop_shared.cpp b/src/btop_shared.cpp
-index 0ef9343..96d28ac 100644
+index 3b68b0f..32aaace 100644
 --- a/src/btop_shared.cpp
 +++ b/src/btop_shared.cpp
 @@ -110,8 +110,11 @@ bool set_priority(pid_t pid, int priority) {
@@ -177,21 +185,21 @@ index 0ef9343..96d28ac 100644
  				cur_proc.threads += p.threads;
  			}
  		}
+@@ -341,6 +357,9 @@ const vector<string> Proc::sort_vector = {
+ 	"threads",
+ 	"user",
+ 	"memory",
++	"io read",
++	"io write",
++	"io total",
+ 	"cpu direct",
+ 	"cpu lazy",
+ };
 diff --git a/src/btop_shared.hpp b/src/btop_shared.hpp
-index dc891b6..d10bb1f 100644
+index 0abd18c..9b4e9a6 100644
 --- a/src/btop_shared.hpp
 +++ b/src/btop_shared.hpp
-@@ -380,6 +380,9 @@ namespace Proc {
- 		"threads",
- 		"user",
- 		"memory",
-+		"io read",
-+		"io write",
-+		"io total",
- 		"cpu direct",
- 		"cpu lazy",
- 	};
-@@ -411,6 +414,11 @@ namespace Proc {
+@@ -390,6 +390,11 @@ namespace Proc {
  		uint64_t mem{};
  		double cpu_p{};         // defaults to = 0.0
  		double cpu_c{};         // defaults to = 0.0
