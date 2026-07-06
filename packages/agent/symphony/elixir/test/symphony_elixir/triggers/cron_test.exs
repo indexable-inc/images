@@ -267,8 +267,17 @@ defmodule SymphonyElixir.Triggers.CronTest do
       # workflows produced N runs per workflow per window (N^2 total).
       name_a = unique_name("shared-a")
       name_b = unique_name("shared-b")
-      write_cron_sym!(dir, name_a, ~s|"0 9 * * *" tz "America/Los_Angeles"|)
-      write_cron_sym!(dir, name_b, ~s|"0 9 * * *" tz "America/Los_Angeles"|)
+
+      # File basenames differ from the DSL workflow names on purpose: the
+      # catalog is keyed by basename while the tick works in display names,
+      # so a by-name re-lookup (instead of firing the held entry) would
+      # miss both workflows here.
+      for name <- [name_a, name_b] do
+        source = ~s|workflow "#{name}" on cron "0 9 * * *" tz "America/Los_Angeles" { a <- agent { engine: codex, model: "m", prompt: inline "go" } }|
+        File.write!(Path.join(dir, "file-#{name}.sym"), source)
+      end
+
+      WorkflowCatalog.scan(dir)
 
       seeded = DateTime.add(DateTime.utc_now(), -2, :day)
       :ok = CronState.seed_if_unset(name_a, seeded)
