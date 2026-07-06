@@ -12,6 +12,7 @@ use anyhow::{bail, Context as _};
 use clap::Parser as _;
 use unibind_gen::artifact;
 use unibind_gen::host::{self, HostEmitter as _};
+use unibind_gen::jvm::JvmEmitter;
 use unibind_gen::py::PyEmitter;
 
 /// Render host-language files (stubs, markers, wrapper modules) from the
@@ -27,9 +28,23 @@ struct Cli {
 /// (phase 5, issue #1995) join alongside `py` with their backends.
 #[derive(clap::Subcommand)]
 enum Command {
+    /// Emit the JVM host files: the Java Panama binding and the Kotlin
+    /// sugar under `unibind/<module>/`.
+    Jvm(JvmArgs),
     /// Emit the Python host files: `<package>/<module>.pyi`,
     /// `<package>/py.typed`, and the wrapper `<package>/__init__.py`.
     Py(PyArgs),
+}
+
+#[derive(clap::Args)]
+struct JvmArgs {
+    /// Compiled cdylib (or any object file) carrying the embedded IR.
+    #[arg(long)]
+    artifact: PathBuf,
+
+    /// Output root; files are written at paths relative to it.
+    #[arg(long)]
+    out: PathBuf,
 }
 
 #[derive(clap::Args)]
@@ -54,19 +69,24 @@ struct PyArgs {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        Command::Jvm(args) => run_jvm(&args),
         Command::Py(args) => run_py(&args),
     }
 }
 
-fn run_py(args: &PyArgs) -> anyhow::Result<()> {
-    let embedded = artifact::read(&args.artifact)?;
-    let interface = match embedded.interfaces.as_slice() {
-        [interface] => interface,
-        [] => bail!("{} embeds no unibind interface", args.artifact.display()),
+/// The one embedded interface, or a diagnostic naming what was found.
+fn single_interface<'a>(
+    embedded: &'a artifact::EmbeddedInterfaces,
+    artifact: &std::path::Path,
+    target: &str,
+) -> anyhow::Result<&'a unibind_core::ir::Interface> {
+    match embedded.interfaces.as_slice() {
+        [interface] => Ok(interface),
+        [] => bail!("{} embeds no unibind interface", artifact.display()),
         several => bail!(
-            "{} embeds {} unibind interfaces ({}); the py generator handles exactly one \
-             per artifact",
-            args.artifact.display(),
+            "{} embeds {} unibind interfaces ({}); the {target} generator handles exactly \
+             one per artifact",
+            artifact.display(),
             several.len(),
             several
                 .iter()
@@ -74,7 +94,28 @@ fn run_py(args: &PyArgs) -> anyhow::Result<()> {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-    };
+    }
+}
+
+fn run_jvm(args: &JvmArgs) -> anyhow::Result<()> {
+    let embedded = artifact::read(&args.artifact)?;
+    let interface = single_interface(&embedded, &args.artifact, "jvm")?;
+
+    let emitter = JvmEmitter;
+    let files = emitter
+        .emit(interface)
+        .with_context(|| format!("emitting the {} host files", emitter.target()))?;
+    host::write_host_files(&args.out, &files)?;
+
+    for file in &files {
+        println!("{}", file.path);
+    }
+    Ok(())
+}
+
+fn run_py(args: &PyArgs) -> anyhow::Result<()> {
+    let embedded = artifact::read(&args.artifact)?;
+    let interface = single_interface(&embedded, &args.artifact, "py")?;
 
     let emitter = PyEmitter {
         package: args.package.clone(),

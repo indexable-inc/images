@@ -12139,7 +12139,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.118",
+ "unibind-backend-jvm",
  "unibind-backend-py",
+ "unibind-core",
+]
+
+[[package]]
+name = "unibind-backend-jvm"
+version = "0.1.0"
+dependencies = [
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "syn 2.0.118",
  "unibind-core",
 ]
 
@@ -12185,6 +12198,7 @@ dependencies = [
  "clap",
  "object",
  "serde_json",
+ "unibind-backend-jvm",
  "unibind-core",
 ]
 

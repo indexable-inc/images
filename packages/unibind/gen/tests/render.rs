@@ -8,6 +8,7 @@
 use unibind_core::ir;
 use unibind_gen::artifact::parse_ir_bytes;
 use unibind_gen::host::HostEmitter as _;
+use unibind_gen::jvm::JvmEmitter;
 use unibind_gen::py::PyEmitter;
 
 fn names(py: Option<&str>) -> ir::Names {
@@ -245,6 +246,37 @@ fn skip_init_drops_the_wrapper() {
     let files = emitter.emit(&interface()).expect("emits");
     let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
     assert_eq!(paths, ["sample/_sample.pyi", "sample/py.typed"]);
+}
+
+#[test]
+fn jvm_emitter_emits_java_and_kotlin() {
+    // The JVM backend's async/stream surface is phase D (#2083); emit the
+    // sync subset of the fixture here and pin only the emitter seam.
+    let mut sync_only = interface();
+    sync_only.functions.retain(|function| {
+        matches!(function.asyncness, ir::Asyncness::Sync)
+            && !matches!(function.ret, Some(ir::Type::Stream(_)))
+    });
+    let files = JvmEmitter.emit(&sync_only).expect("emits");
+    let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        [
+            "unibind/_sample/Sample.java",
+            "unibind/_sample/Row.java",
+            "unibind/_sample/Source.java",
+            "unibind/_sample/SampleErrorException.java",
+            "unibind/_sample/UnibindPanicException.java",
+            "unibind/_sample/Sample.kt",
+        ]
+    );
+    // Content is snapshot-tested in unibind-backend-jvm; here we only pin
+    // the seam: the module class binds the export symbols of this module.
+    let module_class = &files[0].contents;
+    assert!(
+        module_class.contains("unibind_jvm__sample_rows"),
+        "module class misses the rows export: {module_class}"
+    );
 }
 
 #[test]

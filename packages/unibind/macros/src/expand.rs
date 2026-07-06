@@ -40,8 +40,20 @@ fn with_error(module: &mut syn::ItemMod, error: &LowerError) -> TokenStream {
     quote! { #module #error }
 }
 
-#[cfg(feature = "py")]
+/// Concatenate the glue of every enabled backend. With no backend feature
+/// the macro still validates the surface and embeds the IR; there is just
+/// no binding code to add.
 fn backends(
+    interface: &unibind_core::ir::Interface,
+    module: &mut syn::ItemMod,
+) -> Result<TokenStream, LowerError> {
+    let mut glue = py_glue(interface, module)?;
+    glue.extend(jvm_glue(interface)?);
+    Ok(glue)
+}
+
+#[cfg(feature = "py")]
+fn py_glue(
     interface: &unibind_core::ir::Interface,
     module: &mut syn::ItemMod,
 ) -> Result<TokenStream, LowerError> {
@@ -53,13 +65,27 @@ fn backends(
     Ok(rendered.glue)
 }
 
-/// With no backend feature enabled the macro still validates the surface
-/// and embeds the IR; there is just no binding code to add.
 #[cfg(not(feature = "py"))]
-fn backends(
+fn py_glue(
     _interface: &unibind_core::ir::Interface,
     _module: &mut syn::ItemMod,
 ) -> Result<TokenStream, LowerError> {
+    Ok(TokenStream::new())
+}
+
+/// The JVM glue is self-contained `extern "C"` exports; unlike `py` it
+/// attaches nothing to the record structs.
+#[cfg(feature = "jvm")]
+fn jvm_glue(interface: &unibind_core::ir::Interface) -> Result<TokenStream, LowerError> {
+    let rendered = unibind_backend_jvm::render(interface).map_err(|error| LowerError {
+        span: proc_macro2::Span::call_site(),
+        message: error.message,
+    })?;
+    Ok(rendered.glue)
+}
+
+#[cfg(not(feature = "jvm"))]
+fn jvm_glue(_interface: &unibind_core::ir::Interface) -> Result<TokenStream, LowerError> {
     Ok(TokenStream::new())
 }
 

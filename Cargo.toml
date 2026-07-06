@@ -93,6 +93,7 @@ members = [
   "packages/tui/tui",
   "packages/tui/tui-node",
   "packages/tui/tui-py",
+  "packages/unibind/backend-jvm",
   "packages/unibind/backend-py",
   "packages/unibind/conformance",
   "packages/unibind/core",
@@ -348,6 +349,7 @@ tree-sitter-typescript = "0.23"
 tree-sitter-yaml = "0.7"
 tui = { path = "packages/tui/tui" }
 unibind = { path = "packages/unibind/macros" }
+unibind-backend-jvm = { path = "packages/unibind/backend-jvm" }
 unibind-backend-py = { path = "packages/unibind/backend-py" }
 unibind-core = { path = "packages/unibind/core" }
 unibind-runtime = { path = "packages/unibind/runtime" }

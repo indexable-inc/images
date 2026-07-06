@@ -11,4 +11,5 @@
 
 pub mod artifact;
 pub mod host;
+pub mod jvm;
 pub mod py;
