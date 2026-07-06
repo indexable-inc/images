@@ -75,6 +75,7 @@ import contextlib
 import html as _html
 import inspect as _inspect
 import os
+import pathlib
 import re
 import time
 from typing import TYPE_CHECKING
@@ -259,7 +260,7 @@ async def _run(
 ) -> object:
     """Evaluate ``code`` on the shared engine; return the plain Python value."""
     if cwd is None:
-        cwd = os.getcwd()
+        cwd = pathlib.Path.cwd()
     if name is not None and _rename_current_job is not None and (
         _ix_current is not None and _ix_current.get() is not None
     ):
