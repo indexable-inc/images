@@ -17,6 +17,11 @@ defmodule SymphonyElixir.Runtime.ExecRunner do
   so grandchildren the script spawned cannot outlive the node, and the
   attempt fails with `{:exec_timeout, seconds, output_tail}`.
 
+  Scripts run with stdin bound to /dev/null: an exec node never receives
+  input, and the port's stdin pipe would otherwise never deliver EOF, so a
+  child that reads stdin to exhaustion (codex does, even with an argv
+  prompt) would hang until the timeout instead of proceeding.
+
   Declared inputs reach the script as environment variables: each key of
   `run_opts.resolved_inputs` (the runtime resolves `{ name: value }` DSL
   inputs, including `${node.path}` references, before the attempt) is
@@ -86,11 +91,19 @@ defmodule SymphonyElixir.Runtime.ExecRunner do
           input_env(run_opts) ++
           [{~c"SYMPHONY_OUTPUT_FILE", String.to_charlist(output_file)}]
 
+      # The wrapper rebinds stdin to /dev/null before exec-ing the script.
+      # A port's stdin pipe never sees EOF while the port lives, so anything
+      # downstream that reads stdin to exhaustion blocks forever; the #2011
+      # wedge was `codex exec` doing exactly that (it reads stdin even with
+      # an argv prompt) at 0% CPU. Exec nodes never receive stdin by
+      # contract. `exec` keeps the shell's pid, so os_pid still names the
+      # script and its process group for the timeout kill.
       port =
-        Port.open({:spawn_executable, absolute}, [
+        Port.open({:spawn_executable, "/bin/sh"}, [
           :exit_status,
           :binary,
           :stderr_to_stdout,
+          {:args, ["-c", ~S(exec "$1" </dev/null), "sh", absolute]},
           {:cd, pack_dir},
           {:env, env}
         ])

@@ -104,6 +104,24 @@ defmodule SymphonyElixir.Runtime.ExecRunnerTest do
     assert output =~ "tick"
   end
 
+  test "stdin is /dev/null so a script that drains stdin exits instead of hanging", %{pack: pack} do
+    # The port's stdin pipe never delivers EOF, so without the /dev/null
+    # rebind `cat` blocks until the deadline and this fails with
+    # {:exec_timeout, 3, _} instead of succeeding immediately (the codex
+    # stdin-read half of the #2011 wedge).
+    rel =
+      write_script!(pack, "scripts/drain.sh", """
+      #!/bin/sh
+      cat
+      echo drained
+      """)
+
+    assert {:ok, %{exit_code: 0, output: output}, nil} =
+             ExecRunner.run(exec_node(rel, timeout: 3), %{run_id: "r", attempt: 1, pack_dir: pack})
+
+    assert output =~ "drained"
+  end
+
   test "a timeout kills the whole process tree, not just the script", %{pack: pack} do
     # The #2011 wedge shape: the script's grandchild inherits stdout (so the
     # port would never deliver exit_status) and must not survive the timeout
