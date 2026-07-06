@@ -198,3 +198,34 @@ module above plus record and error declarations. The exception surface
 stays compatible (`ScipqlError` extends `ValueError`, which is what the
 hand-written binding raised), and `packages/unibind/backend-py/tests`
 snapshots the exact code the macro generates.
+
+## Elixir backend (phase 5)
+
+`unibind-backend-ex` renders the IR into rustler 0.38 glue plus the Elixir
+host modules (`<Ns>.Native` NIF stubs and a typespec'd `<Ns>` wrapper, via
+`host_files`). Records derive `NifStruct`, error enums cross as
+`%<Ns>.<Error>{variant: atom, message: String.t()}` structs, and
+`#[unibind::object]` structs register as BEAM resources (opaque
+references; `Drop` runs on garbage collection). `#[unibind(blocking)]`
+schedules a NIF on a dirty IO scheduler. `unibind-ex-runtime` carries the
+pieces generated code cannot: one shared tokio runtime, async replies, and
+demand-driven streams (`Stream<T>` is its type, legal only as a whole
+return type of a plain fn).
+
+The wire protocol pairs every async call and stream with a caller-made
+reference:
+
+- async: `Native.f(ref, args...)` returns an in-flight handle; the reply is
+  one `{:unibind, ref, {:ok, value} | {:error, error}}` message. The
+  generated wrapper blocks on `receive` for it.
+- stream: `Native.f(ref, args...)` returns a stream handle consumed as an
+  `Enumerable`: the wrapper grants one credit per step through
+  `Native.unibind_demand(handle, 1)` and receives
+  `{:unibind_stream, ref, {:item, value}}` per item, then
+  `{:unibind_stream, ref, :done}`. No items flow without demand. Stage 1
+  emits no error leg: a throwing stream function fails before the stream
+  exists (`{:error, _}` from the call itself).
+
+Both spawns monitor the calling process and abort the tokio task when it
+exits, so a crashed caller never leaks a future or a producer; the user
+code observes cancellation only as its `Drop` impls running.

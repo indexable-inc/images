@@ -40,42 +40,78 @@ fn with_error(module: &mut syn::ItemMod, error: &LowerError) -> TokenStream {
     quote! { #module #error }
 }
 
-#[cfg(feature = "py")]
+/// Render every backend the consuming crate enabled, splicing each one's
+/// record attributes and concatenating the glue.
 fn backends(
     interface: &unibind_core::ir::Interface,
     module: &mut syn::ItemMod,
 ) -> Result<TokenStream, LowerError> {
-    let rendered = unibind_backend_py::render(interface).map_err(|error| LowerError {
-        span: proc_macro2::Span::call_site(),
-        message: error.message,
-    })?;
-    splice_record_attrs(interface, module, &rendered);
-    Ok(rendered.glue)
+    let mut glue: Vec<TokenStream> = Vec::new();
+    #[cfg(feature = "py")]
+    {
+        let rendered = unibind_backend_py::render(interface).map_err(|error| LowerError {
+            span: proc_macro2::Span::call_site(),
+            message: error.message,
+        })?;
+        let attrs = rendered
+            .records
+            .iter()
+            .map(|record| RecordAttrs {
+                outer: record.outer.clone(),
+                fields: record.fields.clone(),
+            })
+            .collect();
+        splice_record_attrs(interface, module, attrs);
+        glue.push(rendered.glue);
+    }
+    #[cfg(feature = "ex")]
+    {
+        let rendered = unibind_backend_ex::render(interface).map_err(|error| LowerError {
+            span: proc_macro2::Span::call_site(),
+            message: error.message,
+        })?;
+        let attrs = rendered
+            .records
+            .iter()
+            .map(|record| RecordAttrs {
+                outer: record.outer.clone(),
+                fields: record.fields.clone(),
+            })
+            .collect();
+        splice_record_attrs(interface, module, attrs);
+        glue.push(rendered.glue);
+    }
+    // With no backend feature enabled the macro still validates the surface
+    // and embeds the IR; there is just no binding code to add.
+    #[cfg(not(any(feature = "py", feature = "ex")))]
+    {
+        let _ = (interface, module);
+    }
+    Ok(quote! { #(#glue)* })
 }
 
-/// With no backend feature enabled the macro still validates the surface
-/// and embeds the IR; there is just no binding code to add.
-#[cfg(not(feature = "py"))]
-fn backends(
-    _interface: &unibind_core::ir::Interface,
-    _module: &mut syn::ItemMod,
-) -> Result<TokenStream, LowerError> {
-    Ok(TokenStream::new())
+/// One backend's contribution to a record struct.
+#[cfg(any(feature = "py", feature = "ex"))]
+struct RecordAttrs {
+    /// Outer attributes for the struct itself.
+    outer: Vec<syn::Attribute>,
+    /// Attributes for each field, index-aligned with the record's fields.
+    fields: Vec<Vec<syn::Attribute>>,
 }
 
-/// Attach the backend's `#[pyclass]`-shaped attributes to the record
-/// structs the IR was lowered from. Records and rendered attribute sets are
-/// index-aligned by construction.
-#[cfg(feature = "py")]
+/// Attach a backend's record attributes to the structs the IR was lowered
+/// from. Records and rendered attribute sets are index-aligned by
+/// construction.
+#[cfg(any(feature = "py", feature = "ex"))]
 fn splice_record_attrs(
     interface: &unibind_core::ir::Interface,
     module: &mut syn::ItemMod,
-    rendered: &unibind_backend_py::RenderedInterface,
+    attrs: Vec<RecordAttrs>,
 ) {
     let Some((_, items)) = &mut module.content else {
         return;
     };
-    for (record, attrs) in interface.records.iter().zip(&rendered.records) {
+    for (record, rendered) in interface.records.iter().zip(attrs) {
         for item in &mut *items {
             let syn::Item::Struct(item) = item else {
                 continue;
@@ -83,11 +119,11 @@ fn splice_record_attrs(
             if item.ident != record.name {
                 continue;
             }
-            let mut outer = attrs.outer.clone();
+            let mut outer = rendered.outer.clone();
             outer.append(&mut item.attrs);
             item.attrs = outer;
-            for (field, field_attrs) in item.fields.iter_mut().zip(&attrs.fields) {
-                field.attrs.extend(field_attrs.iter().cloned());
+            for (field, attrs) in item.fields.iter_mut().zip(&rendered.fields) {
+                field.attrs.extend(attrs.iter().cloned());
             }
         }
     }

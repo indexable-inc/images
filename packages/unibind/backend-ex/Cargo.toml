@@ -1,0 +1,20 @@
+[package]
+name = "unibind-backend-ex"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Render the unibind IR into rustler binding code and the Elixir host modules: NIF wrappers, NifStruct records, error structs, and typespec'd wrapper functions"
+
+[lints]
+workspace = true
+
+[dependencies]
+heck.workspace = true
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+unibind-core.workspace = true
+
+[dev-dependencies]
+prettyplease.workspace = true
+serde_json.workspace = true
