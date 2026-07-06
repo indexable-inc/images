@@ -17,6 +17,7 @@
 {
   indexPackages,
   portableServicesModule,
+  beamvmModule,
   ix,
 }: {
   config,
@@ -65,7 +66,10 @@
       '';
   };
 in {
-  imports = [portableServicesModule];
+  imports = [
+    portableServicesModule
+    beamvmModule
+  ];
 
   options.services.symphony = {
     enable = mkEnableOption "the Symphony runtime as a user service";
@@ -75,6 +79,34 @@ in {
       default = defaultPackage;
       defaultText = lib.literalExpression "index.packages.\${system}.symphony";
       description = "Symphony package to run (this flake's launcher around bin/run-nix).";
+    };
+
+    runtime = mkOption {
+      type = types.enum [
+        "beamvm"
+        "standalone"
+      ];
+      default = "beamvm";
+      description = ''
+        How the runtime is hosted.
+
+        "beamvm" (the default) runs the compiled release inside the
+        persistent BEAM VM (services.beamvm): no compile at boot, and a
+        symphony update hot-swaps code in the running VM at switch time --
+        no restart, no dropped LiveView sockets or in-flight runs. Only a
+        beamvm/toolchain update restarts the VM.
+
+        "standalone" is the original path: a dedicated unit whose launcher
+        stages the source tree and runs `mix run --no-halt`, recompiling at
+        every start. Updates restart the unit.
+      '';
+    };
+
+    releasePackage = mkOption {
+      type = types.package;
+      default = defaultPackage.release;
+      defaultText = lib.literalExpression "index.packages.\${system}.symphony.release";
+      description = "Compiled mix release the beamvm runtime code-loads (package.passthru.release).";
     };
 
     stateDir = mkOption {
@@ -190,35 +222,72 @@ in {
     };
   };
 
-  config = mkIf cfg.enable {
-    services.symphony.launcher = launcher;
-
-    services.portable.symphony = {
-      description = "Symphony runtime";
-      command = [(lib.getExe launcher)];
-      environment =
-        {
-          SYMPHONY_HTTP_PORT = toString cfg.httpPort;
-          SYMPHONY_WORKFLOW_PACK = cfg.workflowPack;
-        }
-        // optionalAttrs (cfg.stateDir != null) {
-          SYMPHONY_STATE_DIR = toString cfg.stateDir;
-        }
-        // optionalAttrs (cfg.primaryRepo != null) {
-          SYMPHONY_PRIMARY_REPO = toString cfg.primaryRepo;
-        }
-        // optionalAttrs (cfg.repoRoot != null) {
-          SYMPHONY_REPO_ROOT = toString cfg.repoRoot;
-        }
-        // optionalAttrs (cfg.packDir != null) {
-          SYMPHONY_PACK_DIR = toString cfg.packDir;
-        }
-        // cfg.extraEnvironment;
-      # The BEAM is the scheduler: cron triggers live inside the runtime, so
-      # the unit's whole job is to keep it up from login onward. No interval;
-      # a poller here would fight the long-running daemon.
-      restart = "always";
-      runAtLoad = true;
-    };
-  };
+  config = mkIf cfg.enable (lib.mkMerge [
+    {services.symphony.launcher = launcher;}
+    (mkIf (cfg.runtime == "beamvm") {
+      # The persistent-VM runtime: SYMPHONY_* env parity with bin/run-nix,
+      # except SYMPHONY_ROOT points read-only at the store catalogs (the
+      # release needs no writable staging copy) and every writable dir is
+      # anchored explicitly under the state dir -- config.ex mkdir_p!'s its
+      # dirs, which must never resolve to a store default.
+      services.beamvm.vms.symphony = {
+        apps.symphony_elixir.package = cfg.releasePackage;
+        inherit (cfg) environmentFile secretsCommand extraPath;
+        environment = let
+          stateDir =
+            if cfg.stateDir != null
+            then toString cfg.stateDir
+            else "${config.xdg.stateHome}/symphony";
+        in
+          {
+            SYMPHONY_ROOT = toString cfg.package.root;
+            SYMPHONY_STATE_DIR = stateDir;
+            SYMPHONY_WORKSPACES_DIR = "${stateDir}/workspaces";
+            SYMPHONY_RUNS_DIR = "${stateDir}/runs";
+            SYMPHONY_LOGS_ROOT = "${stateDir}/log";
+            SYMPHONY_HTTP_PORT = toString cfg.httpPort;
+            SYMPHONY_WORKFLOW_PACK = cfg.workflowPack;
+          }
+          // optionalAttrs (cfg.primaryRepo != null) {
+            SYMPHONY_PRIMARY_REPO = toString cfg.primaryRepo;
+          }
+          // optionalAttrs (cfg.repoRoot != null) {
+            SYMPHONY_REPO_ROOT = toString cfg.repoRoot;
+          }
+          // optionalAttrs (cfg.packDir != null) {
+            SYMPHONY_PACK_DIR = toString cfg.packDir;
+          }
+          // cfg.extraEnvironment;
+      };
+    })
+    (mkIf (cfg.runtime == "standalone") {
+      services.portable.symphony = {
+        description = "Symphony runtime";
+        command = [(lib.getExe launcher)];
+        environment =
+          {
+            SYMPHONY_HTTP_PORT = toString cfg.httpPort;
+            SYMPHONY_WORKFLOW_PACK = cfg.workflowPack;
+          }
+          // optionalAttrs (cfg.stateDir != null) {
+            SYMPHONY_STATE_DIR = toString cfg.stateDir;
+          }
+          // optionalAttrs (cfg.primaryRepo != null) {
+            SYMPHONY_PRIMARY_REPO = toString cfg.primaryRepo;
+          }
+          // optionalAttrs (cfg.repoRoot != null) {
+            SYMPHONY_REPO_ROOT = toString cfg.repoRoot;
+          }
+          // optionalAttrs (cfg.packDir != null) {
+            SYMPHONY_PACK_DIR = toString cfg.packDir;
+          }
+          // cfg.extraEnvironment;
+        # The BEAM is the scheduler: cron triggers live inside the runtime,
+        # so the unit's whole job is to keep it up from login onward. No
+        # interval; a poller here would fight the long-running daemon.
+        restart = "always";
+        runAtLoad = true;
+      };
+    })
+  ]);
 }

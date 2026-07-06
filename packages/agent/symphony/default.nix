@@ -186,6 +186,11 @@ in
       (old.passthru or {})
       // {
         inherit release;
+        # The tree SYMPHONY_ROOT points at (workflow + skill catalogs, the
+        # bundled example pack): the same staged set bin/run-nix copies, for
+        # runtimes (beamvm) that run the compiled release and only need the
+        # catalogs, read-only, from the store.
+        root = src;
         tests.elixir = elixirCheck;
         # Building the release IS its test at this layer: it proves the prod
         # dep set resolves offline and the project compiles as a release.

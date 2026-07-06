@@ -447,6 +447,15 @@
       symphony = import ./packages/agent/symphony/home-module.nix {
         indexPackages = system: packages.${system};
         portableServicesModule = ix.portableServices.homeModule;
+        # The beamvm runtime (services.symphony.runtime = "beamvm", the
+        # default) hosts the compiled release in the persistent VM; the
+        # module composes it directly so importing homeModules.symphony
+        # alone is enough.
+        beamvmModule = import ./packages/beamvm/home-module.nix {
+          indexPackages = system: packages.${system};
+          portableServicesModule = ix.portableServices.homeModule;
+          inherit ix;
+        };
         inherit ix;
       };
       # Workstation-facing module: persistent BEAM VMs as user services with

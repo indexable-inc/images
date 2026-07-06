@@ -196,6 +196,11 @@
         '';
     };
 in {
+  # Both homeModules.beamvm and homeModules.symphony (which composes this
+  # module for its beamvm runtime) import this file through fresh `import`
+  # calls; the module-system key dedups those into one option declaration.
+  key = "index:packages/beamvm/home-module.nix";
+
   imports = [portableServicesModule];
 
   options.services.beamvm = {
