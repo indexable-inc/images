@@ -136,3 +136,48 @@ def test_emit_final_reports_every_nonempty_session(tmp_path: pathlib.Path, capfd
     out = capfd.readouterr().err.strip()
     assert '"session":"s1"' in out
     assert '"total_reads":2' in out
+
+
+def test_ranged_reads_of_one_file_are_each_novel(tmp_path: pathlib.Path) -> None:
+    # The runtime hashes the payload the agent RECEIVED, not the whole file, so
+    # two disjoint ranges of one file are two distinct (path, content) pairs. This
+    # mirrors that by recording the two slices' content.
+    p = tmp_path / "a.py"
+    tracker = readstats.ReadStatsTracker()
+
+    assert tracker.record("s1", p, "lines 1-100 body") is False
+    assert tracker.record("s1", p, "lines 101-200 body") is False  # new page, not redundant
+    assert tracker.snapshot("s1") == {"total_reads": 2, "redundant_reads": 0}
+    # Re-reading the same range IS redundant.
+    assert tracker.record("s1", p, "lines 1-100 body") is True
+
+
+def test_record_digest_matches_record(tmp_path: pathlib.Path) -> None:
+    # The async read path hashes off-loop with digest() then calls record_digest();
+    # it must agree with the synchronous record() used by view.cat.
+    p = tmp_path / "a.py"
+    text = "x = 1\n"
+    a = readstats.ReadStatsTracker()
+    b = readstats.ReadStatsTracker()
+
+    a.record("s1", p, text)
+    b.record_digest("s1", readstats.digest(p, text))
+    assert a.snapshot("s1") == b.snapshot("s1")
+    # And a second read via each stays consistent (redundant both ways).
+    assert a.record("s1", p, text) is True
+    assert b.record_digest("s1", readstats.digest(p, text)) is True
+
+
+def test_weird_session_id_stays_valid_json(tmp_path: pathlib.Path, capfd) -> None:  # noqa: ANN001 -- pytest fixture
+    # A session id with a quote/backslash must not produce an unparseable line.
+    p = tmp_path / "a.py"
+    weird = 'ab"c\\d'
+    tracker = readstats.ReadStatsTracker()
+    tracker.record(weird, p, "x = 1\n")
+
+    tracker.emit_changed()
+    line = capfd.readouterr().err.strip()
+
+    parsed = json.loads(line)  # must not raise
+    assert parsed["session"] == weird
+    assert parsed["event"] == "mcp_read_stats"

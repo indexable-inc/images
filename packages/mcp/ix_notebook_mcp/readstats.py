@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import json
 import os
 import pathlib
 import sys
@@ -36,14 +37,17 @@ EMIT_WINDOW_S = 300
 _SHARED_SESSION = "shared"
 
 
-def _digest(path: pathlib.Path, content: str | bytes) -> bytes:
+def digest(path: pathlib.Path, content: str | bytes) -> bytes:
     """A 16-byte blake2b digest of ``(absolute path, content)``.
 
-    ``content`` is whatever the read already produced in memory -- the decoded
-    text for the text-read paths, raw bytes for a bytes read -- so hashing never
-    triggers a second disk read. Binding the path in means the same bytes read
-    from two files are two reads, not a false redundancy; the path is absolutized
-    first so ``foo.py`` and ``./foo.py`` collapse to one identity.
+    ``content`` is the exact payload the read RETURNED to the agent (the decoded
+    text, a line slice for a ranged read, or raw bytes) -- so hashing never
+    triggers a second disk read, and two reads that hand the agent different
+    content (e.g. lines 1-100 then 101-200 of one file) hash differently and are
+    both novel. Binding the path in means the same bytes read from two files are
+    two reads, not a false redundancy; the path is absolutized first so ``foo.py``
+    and ``./foo.py`` collapse to one identity. Pure and CPU-bound: safe to run off
+    the event loop for a large read (see the ``read`` MCP tool path).
     """
     h = hashlib.blake2b(digest_size=16)
     h.update(os.fspath(path.resolve()).encode("utf-8"))
@@ -84,23 +88,31 @@ class ReadStatsTracker:
             self._by_session[key] = stats
         return stats
 
-    def record(self, session: str | None, path: pathlib.Path, content: str | bytes) -> bool:
-        """Record one file read; return whether it was redundant.
-
-        ``content`` is the text (or bytes) already in memory from the read that
-        just happened -- this never touches the disk again. A caller that could
-        not read the file has no ``content`` to pass and never reaches here: an
-        unreadable path is that read's own error path, not a swallow.
+    def record_digest(self, session: str | None, digest_bytes: bytes) -> bool:
+        """Record one read from its precomputed ``(path, content)`` digest; return
+        whether it was redundant. This is the fast, loop-only half: a set lookup
+        and three integer updates, no hashing -- the hashing (:func:`digest`) is
+        CPU-bound and can be run off the event loop first for a large read.
         """
         stats = self._stats(session)
-        digest = _digest(path, content)
-        redundant = digest in stats.seen
+        redundant = digest_bytes in stats.seen
         stats.total_reads += 1
         if redundant:
             stats.redundant_reads += 1
         else:
-            stats.seen.add(digest)
+            stats.seen.add(digest_bytes)
         return redundant
+
+    def record(self, session: str | None, path: pathlib.Path, content: str | bytes) -> bool:
+        """Record one file read (hash + count) in one call; return whether it was
+        redundant. ``content`` is the exact payload the read returned to the agent,
+        already in memory -- this never touches the disk again. A caller that could
+        not read the file has no ``content`` to pass and never reaches here: an
+        unreadable path is that read's own error path, not a swallow. Use this from
+        a synchronous read path (``view.cat``); an async path that may face a large
+        file should hash off-loop with :func:`digest` then call :meth:`record_digest`.
+        """
+        return self.record_digest(session, digest(path, content))
 
     def snapshot(self, session: str | None) -> dict[str, int]:
         """The live cumulative counters for ``session`` (for the agent to read its
@@ -113,11 +125,15 @@ class ReadStatsTracker:
     def _line(self, session_key: str, stats: _SessionStats) -> str:
         """The exact one-line JSON contract parsed by the ix fleet pipeline.
 
-        Built by hand (not ``json.dumps``) so the field order and spacing match
-        the frozen contract in indexable-inc/ix#6453 byte-for-byte.
+        Field order and spacing match the frozen contract in indexable-inc/ix#6453
+        byte-for-byte. The session id is the one free-form field, so it goes through
+        ``json.dumps`` (quotes included) -- a weird id (a quote, a backslash) can
+        then never emit a line the pipeline cannot parse. The integers and fixed
+        keys are formatted directly.
         """
+        session_json = json.dumps(session_key)
         return (
-            f'{{"event":"mcp_read_stats","session":"{session_key}",'
+            f'{{"event":"mcp_read_stats","session":{session_json},'
             f'"total_reads":{stats.total_reads},"redundant_reads":{stats.redundant_reads},'
             f'"window_s":{EMIT_WINDOW_S}}}'
         )
@@ -142,9 +158,16 @@ class ReadStatsTracker:
                 self._emit(key, stats)
 
     def emit_final(self) -> None:
-        """Emit every session's final counts on clean shutdown, whether or not
-        they changed since the last periodic emit, so the last window is never
-        lost."""
+        """Emit every session's final counts, whether or not they changed since the
+        last periodic emit, so the counts accrued since it (up to one ~300s window)
+        are not lost.
+
+        This must be driven explicitly at shutdown, NOT via ``atexit``: the daemon
+        stops the kernel with ``shutdown_kernel(now=True)``, which the bundled
+        jupyter_client turns into a SIGKILL of the kernel process -- atexit hooks
+        never run under SIGKILL. The server calls this in-kernel (through
+        ``__ix_emit_read_stats_final``) in its shutdown ``finally`` block, before it
+        kills the kernel (see cli._serve / kernel.emit_read_stats_final)."""
         for key, stats in self._by_session.items():
             if stats.total_reads:
                 self._emit(key, stats)

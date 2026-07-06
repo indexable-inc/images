@@ -276,6 +276,15 @@ class Kernel:
         with contextlib.suppress(Exception):  # shutdown must proceed; periodic checkpoint plus replay guarantee a correct reopen
             await self._execute("await __ix_snapshot()", timeout=60.0)
 
+    async def emit_read_stats_final(self) -> None:
+        """Flush the final ``mcp_read_stats`` line per session at shutdown, so the
+        counts since the last periodic (~300s) emit reach the journal. Must run
+        BEFORE ``shutdown()`` (which kills the kernel with SIGKILL, past which no
+        in-kernel or atexit code runs). Best-effort: a flush failure must not block
+        shutdown, and the periodic emit already covered every prior window."""
+        with contextlib.suppress(Exception):  # shutdown must proceed even if the final flush fails
+            await self._execute("__ix_emit_read_stats_final()", timeout=30.0)
+
     async def restart(self) -> None:
         if self._km is not None:
             await self._km.restart_kernel(now=True)

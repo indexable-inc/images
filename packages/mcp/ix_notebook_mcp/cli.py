@@ -628,6 +628,9 @@ async def _run(cfg: Config) -> None:
         if mesh_runner is not None:
             await mesh_runner.cleanup()
         await runner.cleanup()
+        # Flush the final redundant-read stats while the kernel is still alive:
+        # shutdown() kills it with SIGKILL, past which no in-kernel code runs.
+        await kernel.emit_read_stats_final()
         await kernel.shutdown()
 
 

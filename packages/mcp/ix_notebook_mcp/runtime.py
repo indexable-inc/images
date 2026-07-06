@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import ast
 import asyncio
-import atexit
 import base64
 import binascii
 import collections
@@ -75,10 +74,6 @@ task_errors: collections.deque[str] = collections.deque(maxlen=50)
 # The namespace-install flusher task (see _install), module-held so it cannot
 # be garbage-collected mid-flight.
 _flusher_task: asyncio.Task | None = None
-
-# Whether the redundant-read stats final-emit atexit hook has been registered, so
-# a re-install (tests re-run install() on one interpreter) does not double-register.
-_readstats_atexit_registered = False
 
 # Grace period between a task finishing with an exception and the failure being
 # reported: a parent that promptly retrieves it (`await task`, `gather`,
@@ -3832,6 +3827,14 @@ async def __ix_exec(
     _emit(job)
 
 
+def __ix_emit_read_stats_final() -> None:
+    """Emit every session's final ``mcp_read_stats`` line. The server calls this
+    in-kernel from its shutdown ``finally`` block, BEFORE it kills the kernel with
+    ``shutdown_kernel(now=True)`` (a SIGKILL, which no atexit hook survives), so
+    the counts accrued since the last periodic emit are flushed to the journal."""
+    readstats.tracker().emit_final()
+
+
 def _existing_file(value: Any) -> pathlib.Path | None:
     """``value`` as a :class:`pathlib.Path` when it is a string naming an
     existing file, else None. The one rule `__ix_read` applies to both the raw
@@ -3920,9 +3923,6 @@ async def __ix_read(target: Any, start: int | None = None, end: int | None = Non
         # Off the loop: a large file read is blocking I/O, the one thing that
         # freezes every other job on the shared event loop.
         full = await asyncio.to_thread(path.read_text, errors="replace")
-        # Track this read for the redundant-read KPI (hash of path+content, on the
-        # bytes already in memory -- never a second disk read). See readstats.
-        readstats.tracker().record(session, path, full)
         label = _tilde(path)
         lang = _read_lang(path)
     else:
@@ -3947,6 +3947,15 @@ async def __ix_read(target: Any, start: int | None = None, end: int | None = Non
         selected = lines
         body = full
         first, last = 1, total
+    if path is not None:
+        # Track this read for the redundant-read KPI. Hash the payload the agent
+        # actually RECEIVED (`body`, i.e. the line slice for a ranged read), not
+        # the whole file -- so reading lines 1-100 then 101-200 is two novel reads,
+        # not a false redundancy. Hashing is CPU-bound and `body` can be large, so
+        # it runs off the event loop (like the read itself); only the fast set
+        # lookup + counter update lands back on the loop. Never a second disk read.
+        _digest = await asyncio.to_thread(readstats.digest, path, body)
+        readstats.tracker().record_digest(session, _digest)
     # Display context: the whole file when it fits, else the slice, else a
     # line-clipped head of the slice. `start`/`end`/`total`/`chars` always
     # describe what the model received; `text`+`context_start` describe display,
@@ -4174,6 +4183,7 @@ def install(user_ns: dict | None = None) -> None:
     target["__ix_run"] = __ix_run
     target["__ix_exec"] = __ix_exec
     target["__ix_read"] = __ix_read
+    target["__ix_emit_read_stats_final"] = __ix_emit_read_stats_final
     target["__ix_snapshot"] = __ix_snapshot
     target["__ix_restore"] = __ix_restore
     target["DASHBOARD_URL"] = os.environ.get("IX_MCP_DASHBOARD_URL", "")
@@ -4245,15 +4255,6 @@ def install(user_ns: dict | None = None) -> None:
     # A fresh session starts with no recorded references (the namespace is empty of
     # user names; refs accumulate as runs touch them).
     _name_refs.clear()
-
-    # Emit each session's final redundant-read counts when the kernel process
-    # exits cleanly (jupyter's graceful shutdown runs the interpreter's atexit
-    # hooks), so the last window since the periodic emit is never lost. Guarded so
-    # a re-install (tests) does not double-register.
-    global _readstats_atexit_registered
-    if not _readstats_atexit_registered:
-        atexit.register(readstats.tracker().emit_final)
-        _readstats_atexit_registered = True
 
     with contextlib.suppress(RuntimeError):  # no event loop yet (sync context): flusher and task watch are optional
         loop = asyncio.get_event_loop()
