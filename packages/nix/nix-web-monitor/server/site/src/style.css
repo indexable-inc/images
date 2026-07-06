@@ -643,6 +643,27 @@ main.dragging-v .splitter-v::after {
   color: var(--muted);
 }
 
+/* One requesting user's header: name left, build count right. Rendered only
+ * when attribution adds information (several users, or one known user). */
+.global-group {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: -0.3rem;
+}
+
+.global-group:not(:first-child) {
+  margin-top: 0.2rem;
+}
+
+.global-group-count {
+  color: var(--faint);
+}
+
 .global-row {
   display: flex;
   flex-direction: column;
@@ -656,7 +677,7 @@ main.dragging-v .splitter-v::after {
   padding-bottom: 0;
 }
 
-/* badge | name | version | elapsed, name flexes and truncates. */
+/* badge | name | version | log | elapsed, name flexes and truncates. */
 .global-row-head {
   display: flex;
   align-items: baseline;
@@ -699,31 +720,77 @@ main.dragging-v .splitter-v::after {
   color: var(--muted);
 }
 
-.global-row-meta {
-  display: flex;
-  gap: 0.5rem;
-  color: var(--faint);
-  font-size: 0.85rem;
-}
-
-.global-cause {
+/* Toggle for the row's inline log tail; styled as a quiet chip that fills with
+ * the accent while the drawer is open. */
+.global-log-toggle {
+  appearance: none;
+  flex: 0 0 auto;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 0.3rem;
+  font-family: inherit;
+  font-size: 0.72rem;
   color: var(--muted);
+  cursor: pointer;
 }
 
-/* The why-chain: root -> ... -> this goal, one truncated line. */
+.global-log-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.global-log-toggle.open {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--panel);
+}
+
+/* The provenance trail: "for <root> via <hop> → <hop>". Root-first so the
+ * attribution survives the end-of-line truncation. */
 .global-why {
   color: var(--faint);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-size: 0.85rem;
 }
 
-.global-log {
+.global-why-label,
+.global-requested {
+  color: var(--faint);
+}
+
+/* The top-level thing that wanted this build: the answer to "why is my fan
+ * spinning", so it reads as ink rather than a dim afterthought. */
+.global-why-root {
+  color: var(--ink);
+}
+
+.global-why-via {
+  color: var(--faint);
+}
+
+/* Inline log tail under a row: a short fixed-height stream pinned to the
+ * newest lines, mirroring the main log drawer's look at panel scale. */
+.global-log-view {
+  margin: 0.15rem 0 0;
+  padding: 0.3rem 0.4rem;
+  max-height: 9rem;
+  overflow: auto;
+  background: var(--panel-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.global-log-note {
+  margin-top: 0.15rem;
   color: var(--faint);
   font-size: 0.8rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* ---------- activation + diff panels (switch only) ---------- */

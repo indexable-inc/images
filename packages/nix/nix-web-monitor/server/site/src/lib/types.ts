@@ -82,17 +82,21 @@ export const globalWhySchema = v.object({
   cause: v.nullable(v.string())
 });
 
+/// The kind of machine-wide goal. Mirrors the Rust `GlobalBuildKind`, which
+/// already folds any unknown kind from the C++ side into `other` before it
+/// reaches the wire, so the wire value is a closed set.
+export const globalBuildKindSchema = v.picklist(['build', 'substitution', 'other']);
+
 /// One active build or substitution goal on the machine, from the patched-nix
 /// `nix store builds --json` subcommand. Mirrors the Rust `GlobalBuild`; a
 /// substitution has a null `drvPath` and sets `storePath`. `startTime` is unix
 /// *seconds* (the rest of the monitor uses milliseconds), so the panel multiplies
-/// by 1000 before diffing against its clock. `kind` is a free string ('build' /
-/// 'substitution' / an unknown future kind), so a schema drift is surfaced.
+/// by 1000 before diffing against its clock.
 export const globalBuildSchema = v.object({
   drvPath: v.nullable(v.string()),
   storePath: v.nullable(v.string()),
   outputs: v.array(v.string()),
-  type: v.string(),
+  type: globalBuildKindSchema,
   pid: v.nullable(v.number()),
   startTime: v.nullable(v.number()),
   user: v.nullable(v.string()),
@@ -241,6 +245,7 @@ export type DaemonOps = v.InferOutput<typeof daemonOpsSchema>;
 export type DaemonHotPath = v.InferOutput<typeof daemonHotPathSchema>;
 export type DaemonInfo = v.InferOutput<typeof daemonInfoSchema>;
 export type GlobalWhy = v.InferOutput<typeof globalWhySchema>;
+export type GlobalBuildKind = v.InferOutput<typeof globalBuildKindSchema>;
 export type GlobalBuild = v.InferOutput<typeof globalBuildSchema>;
 export type GlobalBuilds = v.InferOutput<typeof globalBuildsSchema>;
 export type ActivationStep = v.InferOutput<typeof activationStepSchema>;

@@ -144,6 +144,37 @@ pub fn parse_builds(json: &str) -> Result<Vec<GlobalBuild>, serde_json::Error> {
 mod tests {
     use super::*;
 
+    /// A goal the client asked for directly: the writer records
+    /// `cause: "requested"` and a why-chain containing only the goal itself
+    /// (`isTopGoal` in the C++ writer). The UI keys "requested directly" off
+    /// this shape, so it must parse with the root equal to the leaf.
+    #[test]
+    fn parses_requested_root_whose_chain_is_itself() {
+        let json = r#"[
+            {
+                "drvPath": "/nix/store/aaa-app.drv",
+                "storePath": null,
+                "outputs": ["out"],
+                "type": "build",
+                "pid": 77,
+                "startTime": 1720200000,
+                "user": "alice",
+                "uid": 1000,
+                "logFile": "/nix/var/log/nix/drvs/aa/a-app.drv.bz2",
+                "why": {
+                    "rootDrvPath": "/nix/store/aaa-app.drv",
+                    "chain": ["/nix/store/aaa-app.drv"],
+                    "cause": "requested"
+                }
+            }
+        ]"#;
+        let builds = parse_builds(json).expect("requested root parses");
+        let build = &builds[0];
+        assert_eq!(build.why.cause.as_deref(), Some("requested"));
+        assert_eq!(build.why.chain, vec!["/nix/store/aaa-app.drv".to_owned()]);
+        assert_eq!(build.why.root_drv_path, build.drv_path);
+    }
+
     #[test]
     fn parses_full_build_with_why_chain() {
         let json = r#"[

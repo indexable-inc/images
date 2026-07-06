@@ -8,9 +8,9 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use axum::Json;
 use axum::Router;
-use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::http::header;
+use axum::extract::{Query, State};
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use bytes::Bytes;
@@ -287,6 +287,7 @@ fn router(site_dir: &Path, state: AppState) -> Router {
     Router::new()
         .route("/", get(serve_index))
         .route("/api/state", get(state_snapshot))
+        .route("/api/global-log", get(global_log))
         .route("/ws", get(ws_handler))
         .fallback_service(static_files)
         .with_state(state)
@@ -313,6 +314,48 @@ async fn serve_index(State(state): State<AppState>) -> impl IntoResponse {
 /// WebSocket. Same payload the live stream seeds each client with.
 async fn state_snapshot(State(state): State<AppState>) -> Json<MonitorSnapshot> {
     Json(state.monitor.read().await.snapshot())
+}
+
+/// Which machine build's log `/api/global-log` should tail, by derivation path.
+#[derive(serde::Deserialize)]
+struct GlobalLogQuery {
+    drv: String,
+}
+
+/// Tail of one machine build's on-disk log, as plain text.
+///
+/// The derivation must be an *active* build in the machine-wide view with a
+/// recorded log file: the server only opens paths the status directory itself
+/// advertised, never a caller-supplied filesystem path. 404s cover both "not an
+/// active build" (it finished between poll and click) and "log not written yet"
+/// (the builder has produced no output), so the panel can show a quiet
+/// placeholder instead of an error.
+async fn global_log(
+    State(state): State<AppState>,
+    Query(query): Query<GlobalLogQuery>,
+) -> Response {
+    let Some(log_file) = global::log_file_for(&state.monitor, &query.drv).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            "not an active machine build with a recorded log",
+        )
+            .into_response();
+    };
+    match global::read_log_tail(log_file).await {
+        Ok(text) => (
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            text,
+        )
+            .into_response(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            (StatusCode::NOT_FOUND, "log not written yet").into_response()
+        }
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("reading build log failed: {error}"),
+        )
+            .into_response(),
+    }
 }
 
 /// Upgrade the request to a WebSocket and stream deltas to it. The page is
@@ -1279,6 +1322,65 @@ mod tests {
             json.get("activities").is_some(),
             "snapshot exposes activities"
         );
+    }
+
+    /// `/api/global-log` serves the tail of an active machine build's log and
+    /// refuses anything the machine-wide view does not currently list. This is
+    /// the whole HTTP contract the panel's log drawer depends on: route, state
+    /// lookup, file read, and the not-found shapes.
+    #[tokio::test]
+    async fn global_log_serves_active_build_logs_only() {
+        let dir = std::env::temp_dir().join(format!("nwm-global-route-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        let log_path = dir.join("fixture.drv");
+        std::fs::write(&log_path, b"builder says hi\n").expect("write fixture log");
+
+        let state = test_state();
+        state.monitor.write().await.set_global(
+            nix_web_monitor_parser::GlobalBuilds {
+                detected: true,
+                builds: vec![nix_web_monitor_parser::GlobalBuild {
+                    drv_path: Some("/nix/store/aaa-foo.drv".to_owned()),
+                    log_file: Some(log_path.to_string_lossy().into_owned()),
+                    ..nix_web_monitor_parser::GlobalBuild::default()
+                }],
+                status: "1 active".to_owned(),
+            },
+        );
+        let app = router(Path::new("/nonexistent-site"), state);
+
+        let found = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(found.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(found.into_body(), 1 << 20)
+            .await
+            .expect("body collects");
+        assert_eq!(&body[..], b"builder says hi\n");
+
+        let unknown = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/global-log?drv=%2Fetc%2Fpasswd")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(
+            unknown.status(),
+            StatusCode::NOT_FOUND,
+            "a drv the machine view does not list must not resolve to a file"
+        );
+
+        std::fs::remove_dir_all(&dir).expect("clean scratch dir");
     }
 
     /// `/ws` must be a wired route that performs the WebSocket upgrade: a plain

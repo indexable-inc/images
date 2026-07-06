@@ -147,6 +147,9 @@ axum = "0.8"
 base64 = "0.22"
 build-version = { path = "packages/build-version" }
 bytes = "1"
+# Pure-Rust bzip2 (the 0.6 default backend is libbz2-rs-sys), used to read
+# Nix's build logs, which are bzip2-compressed on disk while being written.
+bzip2 = "0.6"
 chrono = { version = "0.4", default-features = false }
 clap = "4"
 source-atuin = { path = "packages/search/source/atuin" }
