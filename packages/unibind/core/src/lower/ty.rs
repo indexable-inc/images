@@ -8,7 +8,7 @@ use crate::ir;
 
 /// Where a type appears; borrowed forms are only legal in argument position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Position {
+pub enum Position {
     /// A function argument (borrowed `&str` / `&Path` / `&[u8]` allowed,
     /// also directly under `Option`).
     Arg,
@@ -16,7 +16,7 @@ pub(crate) enum Position {
     Owned,
 }
 
-pub(crate) fn lower_type(ty: &syn::Type, declared: &Declared, position: Position) -> Result<ir::Type> {
+pub fn lower_type(ty: &syn::Type, declared: &Declared, position: Position) -> Result<ir::Type> {
     match ty {
         syn::Type::Reference(reference) => lower_reference(reference, position),
         syn::Type::Path(path) => lower_path(path, declared, position),
@@ -87,10 +87,10 @@ fn lower_path(path: &syn::TypePath, declared: &Declared, position: Position) -> 
         }
         "Vec" => {
             let inner = one_generic(segment)?;
-            if let syn::Type::Path(inner_path) = inner {
-                if inner_path.path.is_ident("u8") {
-                    return Ok(ir::Type::Bytes { owned: true });
-                }
+            if let syn::Type::Path(inner_path) = inner
+                && inner_path.path.is_ident("u8")
+            {
+                return Ok(ir::Type::Bytes { owned: true });
             }
             Ok(ir::Type::Vec(Box::new(lower_type(
                 inner,

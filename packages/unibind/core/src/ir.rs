@@ -128,15 +128,15 @@ pub enum Type {
         owned: bool,
     },
     /// `Option<T>`.
-    Option(Box<Type>),
+    Option(Box<Self>),
     /// `Vec<T>` (except `Vec<u8>`, which lowers to [`Type::Bytes`]).
-    Vec(Box<Type>),
+    Vec(Box<Self>),
     /// `HashMap<K, V>`.
     Map {
         /// Key type; phase 0 restricts it to strings and integers.
-        key: Box<Type>,
+        key: Box<Self>,
         /// Value type.
-        value: Box<Type>,
+        value: Box<Self>,
     },
     /// A record declared in the same interface.
     Named(String),

@@ -124,12 +124,11 @@ fn lower_return(output: &syn::ReturnType, declared: &Declared) -> Result<Returne
             throws: None,
         });
     }
-    if let syn::Type::Path(path) = &**ty {
-        if let Some(segment) = path.path.segments.last() {
-            if segment.ident == "Result" {
-                return lower_result(segment, declared);
-            }
-        }
+    if let syn::Type::Path(path) = &**ty
+        && let Some(segment) = path.path.segments.last()
+        && segment.ident == "Result"
+    {
+        return lower_result(segment, declared);
     }
     Ok(Returned {
         ty: Some(lower_type(ty, declared, Position::Owned)?),

@@ -29,13 +29,13 @@ impl LowerError {
     }
 }
 
-pub(crate) type Result<T> = std::result::Result<T, LowerError>;
+pub type Result<T> = std::result::Result<T, LowerError>;
 
 /// Type names declared in the exported module, used to validate references.
 #[derive(Debug, Default)]
-pub(crate) struct Declared {
-    pub(crate) records: Vec<String>,
-    pub(crate) errors: Vec<String>,
+pub struct Declared {
+    pub records: Vec<String>,
+    pub errors: Vec<String>,
 }
 
 /// Lower an inline `#[unibind::export]` module into an [`ir::Interface`].

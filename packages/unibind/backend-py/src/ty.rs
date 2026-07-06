@@ -9,7 +9,7 @@ use crate::RenderError;
 /// The Rust spelling of a boundary type, as the wrapper signatures use it.
 /// `user` is the exported module's identifier; named types resolve through
 /// `super::<user>::`.
-pub(crate) fn rust_type(ty: &ir::Type, user: &Ident) -> TokenStream {
+pub fn rust_type(ty: &ir::Type, user: &Ident) -> TokenStream {
     match ty {
         ir::Type::Bool => quote!(bool),
         ir::Type::Int(kind) => int_tokens(*kind),
@@ -57,7 +57,7 @@ fn int_tokens(kind: ir::IntKind) -> TokenStream {
 }
 
 /// The default-value expression for a `#[pyo3(signature = ...)]` entry.
-pub(crate) fn default_tokens(literal: &ir::Literal) -> TokenStream {
+pub fn default_tokens(literal: &ir::Literal) -> TokenStream {
     match literal {
         ir::Literal::Bool(value) => quote!(#value),
         ir::Literal::Int(value) => {
@@ -75,7 +75,7 @@ pub(crate) fn default_tokens(literal: &ir::Literal) -> TokenStream {
 
 /// An identifier for a possibly-keyword name (Python renames like `type`
 /// fall back to raw identifiers, whose `r#` prefix `pyo3` strips again).
-pub(crate) fn name_ident(name: &str) -> Result<Ident, RenderError> {
+pub fn name_ident(name: &str) -> Result<Ident, RenderError> {
     syn::parse_str::<Ident>(name)
         .or_else(|_| syn::parse_str::<Ident>(&format!("r#{name}")))
         .map_err(|_| RenderError::new(format!("`{name}` is not usable as an identifier")))

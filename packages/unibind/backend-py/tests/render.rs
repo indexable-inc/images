@@ -4,6 +4,8 @@
 //! (trybuild/macrotest would invoke cargo at test runtime, which the nix
 //! test sandbox cannot do, so the render output is snapshotted directly.)
 
+use std::fmt::Write as _;
+
 use proc_macro2::TokenStream;
 use unibind_core::ir;
 
@@ -40,17 +42,16 @@ fn pyo3_glue_snapshot() {
     let mut shown = String::new();
     for (record, attrs) in interface.records.iter().zip(&rendered.records) {
         let outer = &attrs.outer;
-        shown.push_str(&format!(
-            "// struct {}: {}\n",
-            record.name,
-            quote::quote!(#(#outer)*)
-        ));
+        writeln!(shown, "// struct {}: {}", record.name, quote::quote!(#(#outer)*))
+            .expect("write to string");
         for (field, field_attrs) in record.fields.iter().zip(&attrs.fields) {
-            shown.push_str(&format!(
-                "//   field {}: {}\n",
+            writeln!(
+                shown,
+                "//   field {}: {}",
                 field.name,
                 quote::quote!(#(#field_attrs)*)
-            ));
+            )
+            .expect("write to string");
         }
     }
     shown.push('\n');

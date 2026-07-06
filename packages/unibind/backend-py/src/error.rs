@@ -11,7 +11,7 @@ use unibind_core::ir;
 use crate::function::doc_attrs;
 use crate::RenderError;
 
-pub(crate) fn render_error(
+pub fn render_error(
     error: &ir::ErrorType,
     module_name: &Ident,
     user: &Ident,

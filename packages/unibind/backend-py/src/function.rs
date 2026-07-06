@@ -6,7 +6,7 @@ use unibind_core::ir;
 
 use crate::{ty, RenderError};
 
-pub(crate) fn render_fn(function: &ir::Function, user: &Ident) -> Result<TokenStream, RenderError> {
+pub fn render_fn(function: &ir::Function, user: &Ident) -> Result<TokenStream, RenderError> {
     if matches!(function.asyncness, ir::Asyncness::Async) {
         return Err(RenderError::new(format!(
             "`{}` is async; async functions land in phase 2 (issue #1992)",
@@ -76,6 +76,6 @@ fn signature_entry(arg: &ir::Arg, ident: &Ident) -> TokenStream {
     quote!(#ident)
 }
 
-pub(crate) fn doc_attrs(lines: &[String]) -> TokenStream {
+pub fn doc_attrs(lines: &[String]) -> TokenStream {
     quote! { #(#[doc = #lines])* }
 }

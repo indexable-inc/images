@@ -8,7 +8,7 @@ use crate::ir;
 
 /// Which marker attribute an item carries.
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum MarkerKind {
+pub enum MarkerKind {
     Record,
     Error,
     Object,
@@ -17,7 +17,7 @@ pub(crate) enum MarkerKind {
 /// A `#[unibind::record]` / `#[unibind::error]` / `#[unibind::object]`
 /// marker found on an item, with its parsed arguments.
 #[derive(Debug)]
-pub(crate) struct Marker {
+pub struct Marker {
     pub(crate) kind: MarkerKind,
     pub(crate) span: Span,
     pub(crate) meta: UnibindMeta,
@@ -26,7 +26,7 @@ pub(crate) struct Marker {
 /// The options a `#[unibind(...)]` attribute (or marker argument list) can
 /// carry: `py(name = "...")`, `py(base = "...")`, and `default = ...`.
 #[derive(Debug, Default)]
-pub(crate) struct UnibindMeta {
+pub struct UnibindMeta {
     pub(crate) span: Option<Span>,
     pub(crate) py_name: Option<String>,
     pub(crate) py_base: Option<String>,
@@ -225,7 +225,7 @@ fn literal_from_lit(lit: &syn::Lit) -> Result<ir::Literal> {
 }
 
 /// Classify the unibind marker on an item, parsing its arguments.
-pub(crate) fn marker(item: &syn::Item) -> Result<Option<Marker>> {
+pub fn marker(item: &syn::Item) -> Result<Option<Marker>> {
     let attributes = match item {
         syn::Item::Struct(item) => &item.attrs,
         syn::Item::Enum(item) => &item.attrs,
@@ -265,7 +265,7 @@ pub(crate) fn marker(item: &syn::Item) -> Result<Option<Marker>> {
 fn marker_kind(path: &syn::Path) -> Option<MarkerKind> {
     let mut segments = path.segments.iter();
     let (first, second, rest) = (segments.next(), segments.next(), segments.next());
-    if rest.is_some() || first.map(|segment| segment.ident != "unibind") != Some(false) {
+    if rest.is_some() || first.is_none_or(|segment| segment.ident != "unibind") {
         return None;
     }
     match second {
@@ -278,14 +278,14 @@ fn marker_kind(path: &syn::Path) -> Option<MarkerKind> {
 
 /// Whether an attribute path belongs to unibind (`unibind` or
 /// `unibind::...`), for stripping.
-pub(crate) fn is_unibind_path(path: &syn::Path) -> bool {
+pub fn is_unibind_path(path: &syn::Path) -> bool {
     path.segments
         .first()
         .is_some_and(|segment| segment.ident == "unibind")
 }
 
 /// Extract `///` doc comment lines, trimming the customary leading space.
-pub(crate) fn doc_lines(attributes: &[syn::Attribute]) -> Vec<String> {
+pub fn doc_lines(attributes: &[syn::Attribute]) -> Vec<String> {
     let mut lines = Vec::new();
     for attribute in attributes {
         if !attribute.path().is_ident("doc") {
