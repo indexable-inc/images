@@ -61,10 +61,10 @@ defmodule SymphonyElixir.Triggers.Cron do
   Datetimes are serialized as ISO 8601 strings because the trigger
   round-trips through JSON via `IR.Store`, and `Jason` has no built-in
   encoder for `DateTime`. Callers that need the datetime back parse it
-  with `DateTime.from_iso8601/1`. The `schedule` field is load-bearing for
-  resolution: `start_by_trigger/2` re-selects the workflow whose declared
-  cron schedule equals it, so the tick fires exactly the workflow it
-  evaluated.
+  with `DateTime.from_iso8601/1`. Resolution does not read this map: the
+  tick already holds the catalog entry it evaluated, so it starts that
+  workflow by name (`Ingress.start_by_name/3`). Matching by schedule
+  instead would fire every workflow sharing the schedule on each tick.
 
   ## Dedupe
 
@@ -87,7 +87,7 @@ defmodule SymphonyElixir.Triggers.Cron do
   require Logger
 
   @doc """
-  `opts` may carry `:run_opts`, forwarded to `Ingress.start_by_trigger/2`
+  `opts` may carry `:run_opts`, forwarded to `Ingress.start_by_name/3`
   (`:engine`, `:store_opts`), so a test drives a full tick against a fake
   engine and an isolated store. Production passes nothing.
   """
@@ -218,11 +218,16 @@ defmodule SymphonyElixir.Triggers.Cron do
       input: entry.trigger.input
     }
 
-    case Ingress.start_by_trigger(trigger, run_opts) do
+    # Fire by identity, not by trigger matching: this tick evaluated exactly
+    # one workflow's watermark, so it must start exactly that workflow.
+    # Resolving through `start_by_trigger/2` would select EVERY cron workflow
+    # sharing this schedule, turning N same-schedule workflows into N^2 runs
+    # per window (issue #2010).
+    case Ingress.start_by_name(entry.name, trigger, run_opts) do
       {:ok, started} ->
         :ok = CronState.record_fire(entry.name, now)
 
-        Logger.info("Cron started runs=#{Enum.map_join(started, ",", & &1.run_id)} workflow=#{entry.name} scheduled_for=#{DateTime.to_iso8601(scheduled_for)}")
+        Logger.info("Cron started run=#{started.run_id} workflow=#{entry.name} scheduled_for=#{DateTime.to_iso8601(scheduled_for)}")
 
       {:error, reason} ->
         Logger.warning("Cron failed to start workflow=#{entry.name}: #{inspect(reason)}")
