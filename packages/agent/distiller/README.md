@@ -1,13 +1,16 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="local Claude Code transcripts are scanned, distilled and judged by one headless claude -p call, then written as facts markdown and corpus parquet slices that the archive funnel makes searchable"></p>
+
 # distiller
 
-Distill **ReasoningBank-style lessons** from local Claude Code transcripts
-into (a) human-readable facts markdown per `(user, project)`, (b) a
-`source=distilled_facts` **corpus parquet slice**, and (c) a
-`source=session_outcomes` slice with one LLM-judged **outcome verdict per
+Your agents keep relearning the same lessons: where does last week's hard-won
+fix go? distiller reads local Claude Code transcripts and distills
+**ReasoningBank-style lessons** into (a) human-readable facts markdown per
+`(user, project)`, (b) a `source=distilled_facts` **corpus parquet slice**, and
+(c) a `source=session_outcomes` slice with one LLM-judged **outcome verdict per
 session**. The existing archive → Iceberg-lake → Mixedbread funnel publishes
-both slices automatically — the leader fold ingests `(host, user, source)`
-slices generically, so this needs zero Rust (see `packages/search/sink/parquet` and
-ix `docs/history-archive.md`).
+both slices automatically: the leader fold ingests `(host, user, source)`
+slices generically, so this needs zero Rust (see `packages/search/sink/parquet`
+and ix `docs/history-archive.md`).
 
 ## What it does
 
@@ -25,12 +28,12 @@ ix `docs/history-archive.md`).
    one verdict per session id with a label (`success` / `partial` /
    `failure` / `abandoned`) and a one-line reason; sessions the model skips
    fall back to the scan heuristics so the verdict set never has holes.
-   Lessons whose evidence includes a failed session — the most valuable
-   guardrails — carry `session_labels` + `failure_derived` in their meta.
+   Lessons whose evidence includes a failed session (the most valuable
+   guardrails) carry `session_labels` + `failure_derived` in their meta.
 4. Merges **incrementally** with the previous run's items: stable item ids,
-   `add`/`update` operations only, unmentioned items survive verbatim —
-   never wholesale regeneration (ACE's brevity-bias / context-collapse
-   warning). State (items, seen sessions, verdicts) lives under
+   `add`/`update` operations only, unmentioned items survive verbatim, never
+   wholesale regeneration (ACE's brevity-bias / context-collapse warning).
+   State (items, seen sessions, verdicts) lives under
    `<out>/state/<user>/<project>.json`.
 5. Writes `<out>/facts/<user>/<project>.md` and two parquet slices at
    `<out>/corpus/host=<h>/user=<u>/source=distilled_facts/` (lessons) and
@@ -50,15 +53,18 @@ ix `docs/history-archive.md`).
 ## Usage
 
 ```sh
-ix-distiller --days 7 --user andrew --out /var/lib/ix-distiller \
+nix run github:indexable-inc/index#distiller -- --days 7 --user andrew \
+  --out /var/lib/ix-distiller \
   [--project index] [--model claude-haiku-4-5-20251001] \
   [--upload [--env-file /run/ix-secret-store/env/ix-indexer]]
 ```
 
+The installed binary is `ix-distiller` with the same flags.
+
 Updates come free with the contract: rewriting the slice with the current
 desired item set folds each `external_id` to its newest `content_hash` on the
-next fold. Vanished ids are NOT deleted — the lake fold is append/merge only,
-so a row absent from a newer slice stays live (ENG-2696); deletion takes an
+next fold. Vanished ids are NOT deleted; the lake fold is append/merge only,
+so a row absent from a newer slice stays live (ENG-2696). Deletion takes an
 explicit tombstone (the indexer's `--gc` path for export-complete sources).
 
 ## Tests
@@ -70,3 +76,6 @@ transcript signal extraction, and the outcome-labeling path (verdict
 normalization + fallback, the session_outcomes slice, failure-derived
 lesson marking, and an end-to-end run against a mocked `claude -p` that
 keeps the `PROMPT_SENTINEL` anti-recursion filter honest).
+
+Repo-local commands assume a clone:
+`git clone https://github.com/indexable-inc/index`.
