@@ -108,24 +108,7 @@ jobs:
             } >>"${GITHUB_STEP_SUMMARY}"
           fi
 
-          # The full log lands in ${check_log} on the runner host. On failure,
-          # ALSO surface it in the job: the tail into the step log for humans,
-          # and the error lines as ::error:: workflow commands so the failure
-          # cause is readable from the Checks API annotations without host
-          # access (before this, a red flake-check carried no diagnostics —
-          # the only annotation was "Process completed with exit code 1").
-          nix run .#check >"${check_log}" 2>&1 || {
-            status=$?
-            printf '::group::index check failed - log tail\n'
-            tail -n 300 "${check_log}" || true
-            printf '::endgroup::\n'
-            { grep -aE 'error:|error \(ignored\)|FAILED|failed with exit code' "${check_log}" || true; } \
-              | tail -n 8 \
-              | while IFS= read -r line; do
-                  printf '::error::%s\n' "${line}"
-                done
-            exit "${status}"
-          }
+          nix run .#check >"${check_log}" 2>&1
 
       # The `check` app writes nix-fast-build per-attr durations to
       # check-results.json in the workspace (see lib/per-system.nix). Upload it
