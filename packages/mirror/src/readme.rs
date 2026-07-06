@@ -1,21 +1,23 @@
-//! The mirror README, composed to the house README style (the
-//! `creating-a-readme` skill, in flight on a sibling branch as of this
-//! writing): a symbolic SVG hero up top that adapts to dark/light via CSS
-//! `prefers-color-scheme` embedded in the SVG, then a hook question, a short
-//! plain-language pitch, install, usage, and a one-line pointer to the
-//! derived changelog. A banner still declares the repo a read-only generated
-//! mirror. Everything is derived, nothing hand-maintained per mirror: the
-//! pitch is the declarative `mirror.description` (falling back to the
-//! crate's own `[package] description`), install/use branch on what the
-//! package *is* (flake-exposed? binary? library?), and the deep
-//! documentation is the package's own README.
+//! The mirror README, composed to the house README style
+//! (packages/agent/skills/creating-a-readme/SKILL.md, the single source of
+//! truth the skill says generators conform to). A package with its own
+//! README leads the mirror with it verbatim -- the skill already makes it
+//! open with an `assets/hero.svg` and a hook question, and the skill's
+//! mirror checklist requires it to make sense standalone -- behind a banner
+//! declaring the repo a read-only generated mirror; a derived Install
+//! section is appended only when the body has none. A package without a
+//! README gets the whole skill shape synthesized from metadata: hero, hook,
+//! pitch (the declarative `mirror.description`, falling back to the crate's
+//! `[package] description`), Install branched on what the package *is*
+//! (flake-exposed? binary? library?), and a minimal Use section. Nothing is
+//! hand-maintained per mirror.
 
 use std::fmt::Write as _;
 
-/// Where the generated hero lands in the mirror tree: outside the crate's
-/// own sources (a package may legitimately own an `assets/` directory) and
-/// where GitHub tooling conventionally keeps repo-page furniture.
-pub const HERO_PATH: &str = ".github/hero.svg";
+/// Where a hero lives relative to its README (the skill's convention), both
+/// for a package-committed hero riding into the mirror and for the one this
+/// module synthesizes.
+pub const HERO_PATH: &str = "assets/hero.svg";
 
 pub struct Package<'a> {
     /// Monorepo `owner/name`, e.g. `indexable-inc/index`.
@@ -40,24 +42,27 @@ pub struct Package<'a> {
 }
 
 pub fn compose(pkg: &Package<'_>, existing: Option<&str>) -> String {
-    let body = existing.map(without_title);
-    // A curated README usually opens by restating the package description;
-    // repeating the metadata pitch right above it would be pure duplication,
-    // so the pitch paragraph yields to the body's own opening (the hook, and
-    // the hero tagline, still come from the metadata).
-    let pitch = pkg.description.filter(|description| {
-        !body.is_some_and(|body| restates(body, description))
-    });
-    let mut sections = vec![
-        format!("![{}]({HERO_PATH})", pkg.crate_name),
-        banner(pkg),
-        lead(pkg, pitch),
-        install(pkg),
-    ];
-    match body {
-        Some(body) => sections.push(body.to_owned()),
-        None => sections.push(usage(pkg)),
-    }
+    // A curated README already opens with its own hero and hook (the
+    // creating-a-readme skill), so behind the banner the generator adds only
+    // what the package cannot know about itself.
+    let mut sections = existing.map_or_else(
+        || {
+            vec![
+                hero_reference(pkg),
+                banner(pkg),
+                lead(pkg),
+                install(pkg),
+                usage(pkg),
+            ]
+        },
+        |body| {
+            let mut sections = vec![banner(pkg), body.to_owned()];
+            if !has_install(body) {
+                sections.push(install(pkg));
+            }
+            sections
+        },
+    );
     if pkg.has_changelog {
         sections.push(format!(
             "Changes: [CHANGELOG.md](CHANGELOG.md), derived from the \
@@ -70,6 +75,23 @@ pub fn compose(pkg: &Package<'_>, existing: Option<&str>) -> String {
         .map(|section| format!("{}\n", section.trim_end()))
         .collect();
     sections.join("\n")
+}
+
+/// Whether the body already tells the reader how to get the package (a
+/// skill-conformant README derives its own install lines); an older body
+/// without any gets the generated section appended.
+fn has_install(body: &str) -> bool {
+    body.contains("cargo install")
+        || body.contains("nix run github:")
+        || body.contains("{ git = ")
+}
+
+fn hero_reference(pkg: &Package<'_>) -> String {
+    let alt = pkg.description.unwrap_or(pkg.crate_name);
+    format!(
+        "<p align=\"center\"><img src=\"{HERO_PATH}\" width=\"720\" alt=\"{}\"></p>",
+        xml_escape(alt)
+    )
 }
 
 fn banner(pkg: &Package<'_>) -> String {
@@ -96,13 +118,10 @@ fn banner(pkg: &Package<'_>) -> String {
     )
 }
 
-fn lead(pkg: &Package<'_>, pitch: Option<&str>) -> String {
+fn lead(pkg: &Package<'_>) -> String {
     let mut out = format!("# {}\n", pkg.crate_name);
     if let Some(description) = pkg.description {
-        let _ = write!(out, "\n**{}**\n", hook(description, pkg));
-    }
-    if let Some(pitch) = pitch {
-        let _ = write!(out, "\n{pitch}\n");
+        let _ = write!(out, "\n**{}**\n\n{description}\n", hook(description, pkg));
     }
     out
 }
@@ -188,77 +207,12 @@ fn usage(pkg: &Package<'_>) -> String {
     }
 }
 
-/// Whether `body` opens by restating `description`: their normalized forms
-/// (markdown markup and link targets dropped, whitespace collapsed, a
-/// leading "the" ignored, lowercased) share the first 40 characters.
-fn restates(body: &str, description: &str) -> bool {
-    const PREFIX: usize = 40;
-    let body = normalize(body);
-    let description = normalize(description);
-    let prefix: String = description.chars().take(PREFIX).collect();
-    !prefix.is_empty() && body.starts_with(&prefix)
-}
-
-fn normalize(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars();
-    let mut was_space = true;
-    while let Some(ch) = chars.next() {
-        match ch {
-            '[' | ']' | '`' | '*' | '_' => {}
-            // A link target right after its text: `](url)` had its `]`
-            // dropped above, so strip the parenthesized URL too.
-            '(' => {
-                let mut group = String::new();
-                for inner in chars.by_ref() {
-                    if inner == ')' {
-                        break;
-                    }
-                    group.push(inner);
-                }
-                if !group.contains("://") {
-                    out.push('(');
-                    out.push_str(&group);
-                    out.push(')');
-                    was_space = false;
-                }
-            }
-            _ if ch.is_whitespace() => {
-                if !was_space {
-                    out.push(' ');
-                }
-                was_space = true;
-            }
-            _ => {
-                out.extend(ch.to_lowercase());
-                was_space = false;
-            }
-        }
-    }
-    let out = out.trim_end();
-    out.strip_prefix("the ")
-        .map_or_else(|| out.to_owned(), str::to_owned)
-}
-
-/// Drop a package README's leading `# <title>` line (it duplicates the hero
-/// and the generated heading) plus the blank lines after it; everything else
-/// is the package author's.
-fn without_title(body: &str) -> &str {
-    let Some(rest) = body.strip_prefix("# ") else {
-        return body;
-    };
-    let after = rest.split_once('\n').map_or("", |(_, after)| after);
-    after.trim_start_matches('\n')
-}
-
-/// The symbolic hero: crate name and tagline in monospace with a
-/// deterministic geometric mark derived from the crate name (same name, same
-/// mark; no per-package art to maintain). Dark/light adapts via CSS
-/// `prefers-color-scheme` embedded in the SVG, the one mechanism that works
-/// for a README `<img>` on GitHub without maintaining two images.
+/// The synthesized hero for a package that ships neither a README nor its
+/// own `assets/hero.svg`: crate name and tagline with a deterministic
+/// geometric mark derived from the crate name (same name, same mark; no
+/// per-package art to maintain). One SVG adapts to dark/light via its
+/// embedded `prefers-color-scheme` CSS, per the creating-a-readme skill.
 pub fn hero_svg(name: &str, tagline: Option<&str>) -> String {
-    const MONO: &str =
-        "ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace";
     let hash = fnv1a(name.as_bytes());
     let hue = hash % 360;
     let mut marks = String::new();
@@ -267,7 +221,7 @@ pub fn hero_svg(name: &str, tagline: Option<&str>) -> String {
         let y = 58 + cell.row * 34;
         let _ = writeln!(
             marks,
-            "  <rect class=\"mark\" x=\"{x}\" y=\"{y}\" width=\"26\" height=\"26\" rx=\"7\"/>"
+            "  <rect class=\"accent\" x=\"{x}\" y=\"{y}\" width=\"26\" height=\"26\" rx=\"7\"/>"
         );
     }
     // A long name shrinks instead of overflowing the fixed viewBox.
@@ -282,24 +236,26 @@ pub fn hero_svg(name: &str, tagline: Option<&str>) -> String {
         let y = 138 + 30 * index;
         let _ = writeln!(
             tags,
-            "  <text class=\"tag\" x=\"160\" y=\"{y}\">{}</text>",
+            "  <text class=\"muted\" font-size=\"22\" x=\"160\" y=\"{y}\">{}</text>",
             xml_escape(line)
         );
     }
     format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 880 220\" role=\"img\" aria-label=\"{name}\">\n\
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 880 220\" role=\"img\" aria-label=\"{name}\"\n\
+         \x20    font-family=\"system-ui, -apple-system, 'Segoe UI', sans-serif\">\n\
          <title>{name}</title>\n\
          <style>\n\
-         .name {{ font: 700 {name_size}px {MONO}; fill: #1f2328; }}\n\
-         .tag {{ font: 400 22px {MONO}; fill: #59636e; }}\n\
-         .mark {{ fill: hsl({hue} 70% 45%); }}\n\
+         svg {{ color: #1f2328; }}\n\
+         text {{ fill: currentColor; }}\n\
+         .muted {{ fill: #656d76; }}\n\
+         .accent {{ fill: hsl({hue} 70% 45%); }}\n\
          @media (prefers-color-scheme: dark) {{\n\
-         .name {{ fill: #f0f6fc; }}\n\
-         .tag {{ fill: #9198a1; }}\n\
-         .mark {{ fill: hsl({hue} 75% 65%); }}\n\
+         svg {{ color: #e6edf3; }}\n\
+         .muted {{ fill: #8b949e; }}\n\
+         .accent {{ fill: hsl({hue} 75% 65%); }}\n\
          }}\n\
          </style>\n\
-         {marks}  <text class=\"name\" x=\"160\" y=\"104\">{escaped}</text>\n\
+         {marks}  <text font-size=\"{name_size}\" font-weight=\"700\" x=\"160\" y=\"104\">{escaped}</text>\n\
          {tags}</svg>\n",
         name = xml_escape(name),
         escaped = xml_escape(name),
@@ -397,9 +353,12 @@ mod tests {
     }
 
     #[test]
-    fn hero_then_banner_lead_the_readme() {
+    fn synthesized_readme_leads_hero_then_banner() {
         let out = compose(&package(), None);
-        assert!(out.starts_with("![progress-style](.github/hero.svg)\n"), "{out}");
+        assert!(
+            out.starts_with("<p align=\"center\"><img src=\"assets/hero.svg\" width=\"720\""),
+            "{out}"
+        );
         assert!(
             out.contains(
                 "https://github.com/indexable-inc/index/tree/0123456789abcdef0123456789abcdef01234567/packages/progress-style"
@@ -460,29 +419,27 @@ mod tests {
     }
 
     #[test]
-    fn existing_body_rides_along_without_its_duplicate_title() {
-        let out = compose(&package(), Some("# progress-style\n\nHand-written body.\n"));
-        assert!(!out.contains("# progress-style\n\nHand-written"), "{out}");
-        assert!(out.ends_with("Hand-written body.\n\nChanges: [CHANGELOG.md](CHANGELOG.md), derived from the [monorepo history](https://github.com/indexable-inc/index/commits/main/packages/progress-style) of the package.\n"), "{out}");
-    }
-
-    #[test]
-    fn pitch_yields_to_a_body_that_restates_it() {
-        let body = "# progress-style\n\nThe shared [`indicatif`](https://docs.rs/indicatif) styling for ix tools, so every CLI\nmatches: one owner for the glyphs.\n";
+    fn curated_body_rides_verbatim_behind_the_banner() {
+        let body = "<p align=\"center\"><img src=\"assets/hero.svg\"></p>\n\n# sqlmerge\n\n\
+                    Ever needed this? A pitch.\n\n## Get it\n\n```sh\ncargo install --git x\n```\n";
         let out = compose(&package(), Some(body));
-        assert!(
-            out.contains("**Shared indicatif styling for ix tools: one dependency line away?**"),
-            "{out}"
-        );
-        assert_eq!(out.matches("styling for ix tools").count(), 2, "hook + body only:\n{out}");
-        assert!(!out.contains("so every CLI matches."), "metadata pitch dropped:\n{out}");
+        assert!(out.starts_with("> [!NOTE]\n"), "banner first:\n{out}");
+        assert!(out.contains(body.trim_end()), "body verbatim:\n{out}");
+        // The body derives its own install lines; no generated section.
+        assert!(!out.contains("## Install"), "{out}");
+        assert!(out.ends_with(
+            "Changes: [CHANGELOG.md](CHANGELOG.md), derived from the [monorepo history](https://github.com/indexable-inc/index/commits/main/packages/progress-style) of the package.\n"
+        ), "{out}");
     }
 
     #[test]
-    fn pitch_stays_when_the_body_opens_differently() {
-        let out = compose(&package(), Some("# progress-style\n\nDeep dive into the styling system.\n"));
+    fn install_is_appended_when_the_body_has_none() {
+        let out = compose(&package(), Some("# progress-style\n\nUsage docs only.\n"));
+        assert!(out.contains("## Install"), "{out}");
         assert!(
-            out.contains("Shared indicatif styling for ix tools, so every CLI matches."),
+            out.contains(
+                "progress-style = { git = \"https://github.com/indexable-inc/progress-style\" }"
+            ),
             "{out}"
         );
     }
@@ -501,9 +458,10 @@ mod tests {
     fn hero_svg_adapts_via_prefers_color_scheme_and_escapes() {
         let svg = hero_svg("a<b", Some("styling & \"quotes\""));
         assert!(svg.contains("@media (prefers-color-scheme: dark)"), "{svg}");
+        assert!(svg.contains("text { fill: currentColor; }"), "{svg}");
         assert!(svg.contains("a&lt;b"), "{svg}");
         assert!(svg.contains("styling &amp; &quot;quotes&quot;"), "{svg}");
-        assert!(svg.contains("class=\"mark\""), "{svg}");
+        assert!(svg.contains("class=\"accent\""), "{svg}");
         assert_eq!(svg, hero_svg("a<b", Some("styling & \"quotes\"")), "deterministic");
     }
 }

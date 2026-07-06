@@ -118,13 +118,6 @@ pub fn run(workspace: &Workspace, request: &Request<'_>) -> Result<Generated> {
         .context("writing CHANGELOG.md")?;
     }
 
-    let hero = request.out.join(readme::HERO_PATH);
-    fs::create_dir_all(hero.parent().context("hero path has a parent")?)
-        .context("creating the hero's directory")?;
-    fs::write(&hero, readme::hero_svg(&crate_name, description.as_deref()))
-        .context("writing the hero SVG")?;
-
-    let existing = fs::read_to_string(package_dir.join("README.md")).ok();
     let package = readme::Package {
         monorepo: MONOREPO_SLUG,
         path: package_path,
@@ -136,11 +129,7 @@ pub fn run(workspace: &Workspace, request: &Request<'_>) -> Result<Generated> {
         has_binary: has_binary(&package_dir, &primary_manifest)?,
         has_changelog: !history.is_empty(),
     };
-    fs::write(
-        request.out.join("README.md"),
-        readme::compose(&package, existing.as_deref()),
-    )
-    .context("writing README.md")?;
+    write_readme(request.out, &package_dir, &package)?;
 
     Ok(Generated {
         crate_name,
@@ -164,6 +153,27 @@ fn dependency_closure(workspace: &Workspace, primary: &str) -> Result<BTreeMap<S
         }
     }
     Ok(closure)
+}
+
+/// Compose the mirror README, synthesizing an `assets/hero.svg` first when
+/// the package ships no README of its own; a curated README references its
+/// own hero (already copied with the crate) per the creating-a-readme skill.
+fn write_readme(out: &Path, package_dir: &Path, package: &readme::Package<'_>) -> Result<()> {
+    let existing = fs::read_to_string(package_dir.join("README.md")).ok();
+    if existing.is_none() {
+        let hero = out.join(readme::HERO_PATH);
+        if !hero.exists() {
+            fs::create_dir_all(hero.parent().context("hero path has a parent")?)
+                .context("creating the hero's directory")?;
+            fs::write(&hero, readme::hero_svg(package.crate_name, package.description))
+                .context("writing the hero SVG")?;
+        }
+    }
+    fs::write(
+        out.join("README.md"),
+        readme::compose(package, existing.as_deref()),
+    )
+    .context("writing README.md")
 }
 
 /// Whether the crate builds an executable: `src/main.rs`, a `src/bin/`
