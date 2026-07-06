@@ -19,9 +19,11 @@ notifications, so this costs nothing when unused.
 from __future__ import annotations
 
 import functools
+import hmac
 import json
 import logging
 import os
+from collections.abc import Awaitable, Callable, MutableMapping
 from contextlib import AsyncExitStack
 
 import anyio
@@ -180,8 +182,102 @@ async def pump_outbox(
         conn.close()
 
 
+# ASGI plumbing types for the HTTP transport's auth gate. `object` values (not
+# Any) keep the wrapper honestly typed; only our own literal dicts flow through.
+_Message = MutableMapping[str, object]
+_Scope = MutableMapping[str, object]
+_Receive = Callable[[], Awaitable[_Message]]
+_Send = Callable[[_Message], Awaitable[None]]
+_App = Callable[[_Scope, _Receive, _Send], Awaitable[None]]
+
+# Liveness probe for a fronting reverse proxy / uptime monitor: always
+# unauthenticated (it leaks nothing), so the prober never holds the API key.
+_HEALTH_PATH = "/health"
+
+
+def _request_key(scope: _Scope) -> bytes | None:
+    """The API key a request presented, or None.
+
+    ``X-Api-Key`` is the primary carrier: some agent-platform egress proxies
+    strip ``Authorization`` from requests to allowlisted domains, so a
+    bearer-only gate would lock those clients out. ``Authorization: Bearer`` is
+    still accepted for clients whose path preserves it. When both appear,
+    X-Api-Key wins.
+    """
+    bearer: bytes | None = None
+    api_key: bytes | None = None
+    headers = scope.get("headers")
+    if isinstance(headers, (list, tuple)):
+        for name, value in headers:
+            if name == b"x-api-key":
+                api_key = value
+            elif name == b"authorization" and value[:7].lower() == b"bearer ":
+                bearer = value[7:]
+    return api_key if api_key is not None else bearer
+
+
+async def _plain_response(send: _Send, status: int, body: bytes) -> None:
+    await send(
+        {
+            "type": "http.response.start",
+            "status": status,
+            "headers": [
+                (b"content-type", b"text/plain; charset=utf-8"),
+                (b"content-length", str(len(body)).encode()),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})
+
+
+def _gate(inner: _App, api_key: str | None) -> _App:
+    """Wrap the streamable-HTTP app with the health probe and the API-key gate.
+
+    ``GET/HEAD /health`` answers 200 unauthenticated. With a key configured,
+    every other HTTP request must present it (see :func:`_request_key`) or is
+    refused 401 before it reaches the MCP session manager; the comparison is
+    constant-time. Non-HTTP scopes (lifespan) pass through untouched. With no
+    key the gate is transparent -- the CLI has already confined that mode to a
+    loopback/tailnet bind (`cli._http_bind_error`).
+    """
+    expected = api_key.encode() if api_key is not None else None
+
+    async def app(scope: _Scope, receive: _Receive, send: _Send) -> None:
+        if scope.get("type") != "http":
+            await inner(scope, receive, send)
+            return
+        if scope.get("path") == _HEALTH_PATH and scope.get("method") in ("GET", "HEAD"):
+            await _plain_response(send, 200, b"ok")
+            return
+        if expected is not None:
+            presented = _request_key(scope)
+            if presented is None or not hmac.compare_digest(presented, expected):
+                await _plain_response(send, 401, b"missing or invalid API key")
+                return
+        await inner(scope, receive, send)
+
+    return app
+
+
 async def _serve_http() -> None:
+    """Serve MCP over streamable HTTP (endpoint path: `/mcp`).
+
+    Mirrors ``FastMCP.run_streamable_http_async`` (its streamable-HTTP ASGI app
+    under uvicorn) so the API-key gate can sit between uvicorn and the session
+    manager -- the SDK runner offers no hook for per-request auth.
+    """
+    import uvicorn
+
     cfg = config()
     mcp.settings.host = cfg.mcp_http_host
     mcp.settings.port = cfg.mcp_http_port
-    await mcp.run_streamable_http_async()
+    app = _gate(mcp.streamable_http_app(), cfg.api_key)
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app,
+            host=cfg.mcp_http_host,
+            port=cfg.mcp_http_port,
+            log_level=mcp.settings.log_level.lower(),
+        )
+    )
+    await server.serve()

@@ -33,6 +33,7 @@
     "flake"
     "id"
     "inRustWorkspace"
+    "mirror"
     "overlay"
     "packageSet"
     "passthruTests"
@@ -140,6 +141,56 @@
         prefix = value.prefix or "rust-${id}";
       };
 
+  # GitHub caps a topic at 50 chars of lowercase alphanumerics and hyphens,
+  # starting alphanumeric (what `PUT /repos/{repo}/topics` accepts).
+  validTopic = topic: builtins.match "[a-z0-9][a-z0-9-]{0,49}" topic != null;
+
+  # Opt-in standalone mirror repo (packages/mirror + the mirror-sync
+  # workflow): `repo` is the GitHub `owner/name` the generated tree is
+  # snapshot-synced into. `description` and `topics` are REQUIRED -- they are
+  # the mirror repo's public About sidebar, seeded when CI creates the repo
+  # and kept in sync on every push to main by the repo-metadata workflow
+  # (.github/workflows/repo-metadata.yml), so a published mirror can never
+  # show GitHub's "No description, website, or topics provided." `homepage`
+  # is optional and defaults (in lib/default.nix) to the package's tree in
+  # this monorepo, the source of truth a visitor should find. Absent/false =
+  # no mirror.
+  normalizeMirror = label: value:
+    if value == null || value == false
+    then null
+    else
+      assertKnownKeys "${label}: mirror" [
+        "description"
+        "homepage"
+        "repo"
+        "topics"
+      ]
+      value
+      // {
+        repo = value.repo or (throw "${label}: mirror.repo is required");
+        description = let
+          description =
+            value.description
+            or (throw "${label}: mirror.description is required (it becomes the mirror repo's GitHub description)");
+        in
+          assert lib.assertMsg (
+            description != ""
+          ) "${label}: mirror.description must not be empty"; description;
+        homepage = value.homepage or null;
+        topics = let
+          topics =
+            value.topics
+            or (throw "${label}: mirror.topics is required (at least one GitHub topic for the mirror repo)");
+          invalid = lib.filter (topic: !validTopic topic) topics;
+        in
+          assert lib.assertMsg (
+            topics != []
+          ) "${label}: mirror.topics must list at least one topic";
+          assert lib.assertMsg (
+            invalid == []
+          ) "${label}: mirror.topics entries must be 1-50 lowercase alphanumeric/hyphen characters, starting alphanumeric: ${lib.concatStringsSep ", " invalid}"; topics;
+      };
+
   normalizeRustWorkspace = label: value:
     if value == null || value == false
     then null
@@ -174,6 +225,7 @@
       overlay = normalizeOverlay label id (raw.overlay or null);
       inRustWorkspace = normalizeRustWorkspace label (raw.inRustWorkspace or null);
       cross = normalizeCross label id (raw.cross or null);
+      mirror = normalizeMirror label (raw.mirror or null);
       passthruTests = normalizePassthruTests label id (raw.passthruTests or null);
       # `updateScript = true` marks a package that exposes a
       # `passthru.updateScript` (e.g. a pinned prebuilt binary that tracks an
@@ -216,6 +268,8 @@
     )
     entries;
 
+  mirrorEntries = lib.filter (entry: entry.mirror != null) entries;
+
   rustWorkspaceEntries = lib.filter (entry: entry.inRustWorkspace != null) entries;
 
   rustWorkspaceEntriesFor = system: lib.filter (entry: enabledForSystem system entry.inRustWorkspace) rustWorkspaceEntries;
@@ -231,6 +285,7 @@ in
       flakeEntriesFor
       overlayEntriesFor
       crossEntriesFor
+      mirrorEntries
       updateScriptEntriesFor
       passthruTestEntriesFor
       rustWorkspaceEntries

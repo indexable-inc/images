@@ -1,0 +1,35 @@
+[package]
+name = "efx"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "CLI for the efx effect engine: plan, apply, and HTML run reports over .efx files or plan IR JSON"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive"] }
+efx-engine.workspace = true
+efx-ir.workspace = true
+efx-lang.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+# cargo-unit flattens every workspace test target into one namespace, so
+# integration targets carry a crate-unique name.
+[[test]]
+name = "integration_efx_cli"
+path = "tests/e2e.rs"
+
+[[test]]
+name = "integration_efx_cli_ir"
+path = "tests/ir.rs"
+
+[[test]]
+name = "integration_efx_cli_cloudflare"
+path = "tests/cloudflare_stub.rs"

@@ -86,6 +86,78 @@ defmodule SymphonyElixir.Runtime.ExecRunnerTest do
              ExecRunner.run(exec_node(rel, timeout: 1), %{run_id: "r", attempt: 1, pack_dir: pack})
   end
 
+  test "a chatty script cannot outlive its timeout by streaming output", %{pack: pack} do
+    # Ticks land between deadline polls; exit code 7 is the sentinel that
+    # would surface as {:exec_failed, 7} if the runner ever waited for the
+    # script to finish instead of enforcing the deadline.
+    rel =
+      write_script!(pack, "scripts/chatty.sh", """
+      #!/bin/sh
+      i=0
+      while [ $i -lt 40 ]; do echo tick; sleep 0.2; i=$((i+1)); done
+      exit 7
+      """)
+
+    assert {:error, {:exec_timeout, 1, output}, nil} =
+             ExecRunner.run(exec_node(rel, timeout: 1), %{run_id: "r", attempt: 1, pack_dir: pack})
+
+    assert output =~ "tick"
+  end
+
+  test "stdin is /dev/null so a script that drains stdin exits instead of hanging", %{pack: pack} do
+    # The port's stdin pipe never delivers EOF, so without the /dev/null
+    # rebind `cat` blocks until the deadline and this fails with
+    # {:exec_timeout, 3, _} instead of succeeding immediately (the codex
+    # stdin-read half of the #2011 wedge).
+    rel =
+      write_script!(pack, "scripts/drain.sh", """
+      #!/bin/sh
+      cat
+      echo drained
+      """)
+
+    assert {:ok, %{exit_code: 0, output: output}, nil} =
+             ExecRunner.run(exec_node(rel, timeout: 3), %{run_id: "r", attempt: 1, pack_dir: pack})
+
+    assert output =~ "drained"
+  end
+
+  test "a timeout kills the whole process tree, not just the script", %{pack: pack} do
+    # The #2011 wedge shape: the script's grandchild inherits stdout (so the
+    # port would never deliver exit_status) and must not survive the timeout
+    # kill. The script records the grandchild pid so the test can probe it
+    # with `kill -0` (already on the sandbox PATH; pgrep is not).
+    rel =
+      write_script!(pack, "scripts/tree.sh", """
+      #!/bin/sh
+      sleep 300 &
+      echo $! > grandchild.pid
+      wait
+      """)
+
+    assert {:error, {:exec_timeout, 1, _output}, nil} =
+             ExecRunner.run(exec_node(rel, timeout: 1), %{run_id: "r", attempt: 1, pack_dir: pack})
+
+    grandchild = pack |> Path.join("grandchild.pid") |> File.read!() |> String.trim()
+    assert await_dead(grandchild), "grandchild pid #{grandchild} survived the timeout kill"
+  end
+
+  # SIGKILL delivery is immediate but reparent-and-reap is not; poll briefly
+  # before declaring a survivor. kill -0 probes liveness without signaling.
+  defp await_dead(pid, tries \\ 50) do
+    case System.cmd("kill", ["-0", pid], stderr_to_stdout: true) do
+      {_, 0} when tries > 0 ->
+        Process.sleep(100)
+        await_dead(pid, tries - 1)
+
+      {_, 0} ->
+        false
+
+      {_, _} ->
+        true
+    end
+  end
+
   test "resolved DSL inputs reach the script as SYMPHONY_INPUT_* env vars", %{pack: pack} do
     rel =
       write_script!(pack, "scripts/env.sh", """

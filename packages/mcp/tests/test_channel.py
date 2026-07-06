@@ -422,8 +422,7 @@ def test_pr_watch_tool_returns_header_with_slugged_resource(
 
         monkeypatch.setattr(tools, "_start_dashboard_once", gate)
         monkeypatch.setattr(tools, "_identify_client_once", gate)
-        monkeypatch.setattr(tools, "_require_session_name", gate)
-        monkeypatch.setattr(tools, "_require_topic", gate)
+        monkeypatch.setattr(tools, "_require_acting_gates", gate)
 
         class FakeKernel:
             async def python_exec(
@@ -441,12 +440,45 @@ def test_pr_watch_tool_returns_header_with_slugged_resource(
         monkeypatch.setattr(tools, "current_kernel", FakeKernel)
 
         out = await tools.pr_watch("https://github.com/o/r/pull/1856", cwd=str(tmp_path))
-        header = json.loads(out[0].text)
+        # pr_watch now returns a CallToolResult (MCP Apps: the human view rides
+        # its _meta); the model-facing blocks live on .content, same as before.
+        header = json.loads(out.content[0].text)
         # The URL is slugged into a resource id safe for the dashboard route.
         assert header["resource"] == "pr-https-github.com-o-r-pull-1856"
         assert header["job"] == "ab12"
 
     asyncio.run(run())
+
+
+def test_acting_gates_report_both_unmet_gates_in_one_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A fresh session's first acting call names BOTH unmet gates in its one
+    rejection, instead of tripping session-name and then topic serially at a
+    full tool round trip each (#1983)."""
+    from mcp.shared.exceptions import McpError
+
+    from ix_notebook_mcp import tools
+
+    monkeypatch.delenv("IX_MCP_REQUIRE_SESSION_NAME", raising=False)
+    monkeypatch.delenv("IX_MCP_REQUIRE_TOPIC", raising=False)
+    monkeypatch.setattr(tools, "_solo_session_name", None)
+    monkeypatch.setattr(tools, "_solo_topic", None)
+
+    with pytest.raises(McpError) as excinfo:
+        asyncio.run(tools._require_acting_gates(None, intent="count rows per host"))
+    message = str(excinfo.value)
+    assert "session_set_name" in message
+    assert "topic_set" in message
+    assert "'count rows per host'" in message
+
+    # Once named, only the topic gate remains -- and it alone is reported.
+    monkeypatch.setattr(tools, "_solo_session_name", "count rows per host")
+    with pytest.raises(McpError, match="topic_set") as excinfo:
+        asyncio.run(tools._require_acting_gates(None, intent="count rows per host"))
+    assert "session_set_name" not in str(excinfo.value)
+
+    # Both gates satisfied: the check passes silently.
+    monkeypatch.setattr(tools, "_solo_topic", "row counts")
+    asyncio.run(tools._require_acting_gates(None, intent="count rows per host"))
 
 
 def test_pr_resource_html_renders_every_check_state(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -553,6 +553,13 @@ impl Unit {
     pub fn has_doctests(&self) -> bool {
         self.target.doctest
             && self.is_library()
+            // The rendered doctest command compiles the crate under test as a
+            // plain library, but a proc-macro target only compiles under
+            // `--crate-type proc-macro` (cargo special-cases this when it
+            // drives rustdoc): every `#[proc_macro_attribute]` item and the
+            // `proc_macro` import error out otherwise. Skip the doctest unit
+            // until the renderer mirrors cargo's proc-macro rustdoc setup.
+            && !self.is_proc_macro()
             && !self.is_external()
             && self.mode != UnitMode::Test
     }

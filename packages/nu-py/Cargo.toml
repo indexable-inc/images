@@ -18,6 +18,7 @@ nu-cmd-extra.workspace = true
 nu-cmd-lang.workspace = true
 nu-command.workspace = true
 nu-engine.workspace = true
+nu-experimental.workspace = true
 nu-parser.workspace = true
 nu-protocol.workspace = true
 pyo3 = { workspace = true, features = ["extension-module", "chrono"] }

@@ -187,3 +187,30 @@ fn ephemeral_reranks_matching_text_higher() {
     let top = results.first().expect("at least one hit");
     assert_eq!(top.id, 1, "expected the fibonacci text to win: {results:?}");
 }
+
+#[test]
+fn search_limit_zero_returns_empty() {
+    let workdir = TempDir::new().expect("workdir");
+    let index_dir = TempDir::new().expect("index dir");
+
+    fs::write(workdir.path().join("note.md"), "alpha bravo charlie").expect("write");
+
+    let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
+    index.index_directory(workdir.path(), false).expect("index");
+
+    // Tantivy's `TopDocs::with_limit(0)` panics; a zero limit must instead
+    // return no hits.
+    let hits = index.search("alpha", 0, None).expect("limit 0 search");
+    assert!(hits.is_empty(), "limit 0 should return no hits: {hits:?}");
+}
+
+#[test]
+fn ephemeral_limit_zero_returns_empty() {
+    let search =
+        EphemeralSearch::from_texts(["alpha bravo charlie".to_string()]).expect("build ephemeral");
+
+    // Tantivy's `TopDocs::with_limit(0)` panics; a zero limit must instead
+    // return no hits. Reranking an empty batch defaults to this limit.
+    let hits = search.search("alpha", 0).expect("limit 0 search");
+    assert!(hits.is_empty(), "limit 0 should return no hits: {hits:?}");
+}

@@ -59,7 +59,7 @@ one rollout, and an honest keep-or-revert decision at the end.
 When the thing under test is Claude (or Codex) performance, do **not** evaluate
 with a headless `claude -p` and do **not** wrangle `tmux`. Use the index TUI
 Python harness. It spawns the *real* agent TUI in a PTY, so the session is live
-on the web dashboard (`nix run .#tui-dashboard`) exactly like a human's: you and
+on the web dashboard (`nix run .#dashboard`) exactly like a human's: you and
 the user watch the current state, attach, and interrupt. An experiment you can
 watch beats a black box you can only diff, and the harness gives clean,
 programmatic prompt/await/read so rollouts are a `for`-loop or an `asyncio.gather`.

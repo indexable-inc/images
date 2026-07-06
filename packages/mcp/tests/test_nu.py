@@ -44,6 +44,29 @@ def test_scalar_and_list_become_value_column() -> None:
     assert run(nu("[1, 2, 3]"))["value"].to_list() == [1, 2, 3]
 
 
+def test_lone_string_round_trips_as_plain_text() -> None:
+    # Issue #2068: a lone string is text, not data -- framing it as a 1x1
+    # DataFrame made every print of it show polars' width-clipped box repr,
+    # and the full multiline text was unrecoverable from the captured stdout.
+    lines = [f"---VERIFY {i}: a fairly long line of stdout text, step {i} in detail---" for i in range(10)]
+    joined = " ".join(f"'{line}'" for line in lines)
+    text = run(nu(f"[{joined}] | str join (char nl)"))
+    assert isinstance(text, str)
+    assert text.splitlines() == lines
+
+
+def test_external_stdout_is_the_full_string() -> None:
+    # The reported shape (issue #2068): `^cmd` multiline stdout must come back
+    # verbatim as str, not as a frame that clips at repr time.
+    import sys
+
+    script = "print(chr(10).join('section %d: ' % i + 'x' * 60 for i in range(10)))"
+    out = run(nu(f'^{sys.executable} -c "{script}"'))
+    assert isinstance(out, str)
+    body = out.strip().splitlines()
+    assert body == [f"section {i}: " + "x" * 60 for i in range(10)]
+
+
 def test_null_and_empty_become_empty_frames() -> None:
     assert run(nu("null")).is_empty()
     assert run(nu("[] | where true")).is_empty()
@@ -139,6 +162,43 @@ def test_trailing_external_output_is_collected(tmp_path: pathlib.Path) -> None:
     assert out.strip() == "collected"
 
 
+def test_big_external_output_inside_try_does_not_deadlock() -> None:
+    # index#2015: nushell's experimental `pipefail` (the 0.113 default) made
+    # try/catch collection wait on the child's exit status BEFORE draining its
+    # stdout. A child with more pending output than the OS pipe buffer
+    # (64 KiB) then never exits -- it blocks in write(2) and no EPIPE arrives
+    # because the engine still holds the read end -- so the eval hung forever
+    # and wedged the engine for every later call. The bindings disable
+    # pipefail, so this must complete and hand back all the output.
+    import sys
+
+    async def guarded() -> object:
+        writer = f"^{sys.executable} -c 'import sys; sys.stdout.write(\"x\"*130000)'"
+        # wait_for is a tripwire, not part of the contract: on regression this
+        # fails in seconds instead of hanging the test run forever.
+        return await asyncio.wait_for(
+            nu.value("try { " + writer + " } catch { 'caught' }"),
+            timeout=60,
+        )
+
+    out = run(guarded())
+    assert out == "x" * 130_000
+
+
+def test_failing_external_raises_and_try_catches_without_pipefail() -> None:
+    # Disabling pipefail must not cost error reporting: a trailing external's
+    # non-zero exit still raises through ByteStream's consume-then-wait check,
+    # and try/catch still routes it to the catch block.
+    import sys
+
+    with pytest.raises(nu.NuError, match="non-zero exit code"):
+        run(nu(f"^{sys.executable} -c 'raise SystemExit(7)'"))
+    caught = run(
+        nu.value("try { ^" + sys.executable + " -c 'raise SystemExit(7)' } catch { 'caught' }")
+    )
+    assert caught == "caught"
+
+
 def test_naive_datetime_input_gets_a_clear_error() -> None:
     naive = datetime.datetime(2024, 1, 2, 3, 4, 5)  # noqa: DTZ001 -- naive on purpose: it IS the case under test
     with pytest.raises(nu.NuError, match="naive datetime"):
@@ -232,3 +292,57 @@ def test_nu_registers_job_resource(monkeypatch: pytest.MonkeyPatch) -> None:
     alive = call["alive"]
     assert callable(alive)
     assert alive() is False
+
+
+def test_externals_run_color_free_even_when_host_forces_color(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # issue #2051: the kernel process typically runs with color FORCED by its
+    # launcher (FORCE_COLOR=1 / CLICOLOR_FORCE=1), which the engine used to
+    # inherit wholesale, so JSON-mode CLIs (`gh ... --json`) emitted
+    # ANSI-wrapped JSON into a captured pipe and `from json` choked. The engine
+    # copies the host env at construction, so force color first, then build a
+    # fresh engine.
+    import sys
+
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.setenv("CLICOLOR", "1")
+    monkeypatch.setenv("CLICOLOR_FORCE", "1")
+    monkeypatch.setenv("GH_FORCE_TTY", "100%")
+    nu.reset()
+    # A color-happy external: wraps its JSON in SGR exactly when the env asks
+    # for color (the same decision gh makes). chr(27) keeps the script free of
+    # backslashes so it survives nushell's double-quote escaping untouched.
+    script = (
+        "import json, os, sys;"
+        "force = os.environ.get('CLICOLOR_FORCE', '0') not in ('', '0')"
+        " or os.environ.get('FORCE_COLOR', '0') not in ('', '0');"
+        "on = force and not os.environ.get('NO_COLOR');"
+        "body = json.dumps({'state': 'MERGED'});"
+        "esc = chr(27);"
+        "sys.stdout.write(esc + '[1;37m' + body + esc + '[m' if on else body)"
+    )
+    try:
+        env = run(nu.value("$env | select -o NO_COLOR CLICOLOR CLICOLOR_FORCE FORCE_COLOR"))
+        assert env == {
+            "NO_COLOR": "1",
+            "CLICOLOR": "0",
+            "CLICOLOR_FORCE": "0",
+            "FORCE_COLOR": "0",
+        }
+        # GH_FORCE_TTY (TTY-style gh rendering into a pipe) must not cross over.
+        assert run(nu.value("'GH_FORCE_TTY' in $env")) is False
+        df = run(nu(f'^{sys.executable} -c "{script}" | from json'))
+        assert df["state"].item() == "MERGED"
+        # env= still re-enables color for the one call that wants raw ANSI.
+        raw = run(
+            nu.value(
+                f'^{sys.executable} -c "{script}"',
+                env={"NO_COLOR": "", "CLICOLOR_FORCE": "1"},
+            )
+        )
+        assert "\x1b[" in raw
+    finally:
+        # The forced-color engine (and the env= override, which persists on
+        # the stack) must not leak into later tests.
+        nu.reset()

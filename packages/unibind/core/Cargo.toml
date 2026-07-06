@@ -1,0 +1,16 @@
+[package]
+name = "unibind-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Language-agnostic interface IR for unibind: syn lowering, serialization, and the link-section embed"
+
+[lints]
+workspace = true
+
+[dependencies]
+proc-macro2.workspace = true
+quote.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+syn.workspace = true

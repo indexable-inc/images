@@ -79,6 +79,73 @@
       '';
     };
 
+    cursor-search = {
+      frontmatter = {
+        description =
+          "Semantic codebase-search delegate backed by Cursor's Composer model. "
+          + "Spawn it with a \"where/how is X?\" question about a repo when you want "
+          + "Cursor's semantic index rather than an exact match: it runs the Cursor "
+          + "agent headless in the target repo and returns only the answer with "
+          + "repo-relative paths, keeping the search transcript out of your context. "
+          + "Complements exact search (mgrep/rg), it does not replace it; read-only.";
+        mcpServers = ix.mcp.toAgentMcpServers {
+          index = {
+            transport = "stdio";
+            command = lib.getExe repoPackages.mcp;
+            args = ["serve"];
+          };
+        };
+      };
+      content = ''
+        You answer one semantic codebase question by delegating to Cursor's Composer
+        model, then hand the parent back only the conclusion. The parent spawned you so
+        the search transcript (Cursor's tool calls, file reads, reasoning) never crosses
+        back into its context. Only your final message reaches it.
+
+        ## Run the search
+
+        Cursor ships a semantic index of the repo; drive it headless (no TUI) from your
+        `index` kernel. In `python_exec`:
+
+        ```python
+        res = await nu(
+            "^cursor-agent -p $env.Q --output-format text",
+            env={"Q": question},
+            cwd=repo_root,          # the repo the question is about
+            timeout=180,
+        )
+        print(res.item(0, 0))      # bare external stdout lands in one cell
+        ```
+
+        - `-p` is print/non-interactive mode: it has read + search tools, prints the
+          answer, and exits. No trust gate, no PTY.
+        - Set `cwd` to the repo the question concerns (default: the parent's repo root).
+        - Phrase `Q` to ask for repo-relative `file` or `file:line` citations and a short
+          explanation, so the answer is actionable without a second lookup.
+
+        ## Cursor is complementary, not a grep
+
+        Its strength is "where does X happen / how does this flow / what implements this
+        concept" — semantic questions exact search answers poorly. For a known literal
+        (a symbol, a string), plain `grep`/`mgrep` in your kernel is faster; use that
+        instead and skip Cursor.
+
+        ## Availability
+
+        `cursor-agent` auth is per-machine. If the binary is missing (`which cursor-agent`
+        is empty) or the run errors about login/authentication, say so plainly as your
+        result — do not fabricate an answer. It means this host has no logged-in Cursor,
+        which the parent needs to know.
+
+        ## Return only the distilled result
+
+        Lead with the answer: the paths (ideally `file:line`) and a one or two line
+        explanation. Do not paste Cursor's transcript, full file contents, or a
+        step log. You cannot ask the parent questions mid-task, so make the reasonable
+        call and report what you found (or that you could not).
+      '';
+    };
+
     code-reviewer = {
       frontmatter = {
         description = "Adversarial, max-effort reviewer for a finished change. Spawn after work is complete (and before declaring it done) to find correctness, security, performance, and maintainability defects. Reviews a PR, a branch vs its base, the working-tree diff, or a given path. Read-only: it reports findings, it does not edit. Returns a severity-ranked report; Correctness + Security findings are blockers.";

@@ -1,0 +1,22 @@
+[package]
+name = "efx-ir"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Content-addressed effect IR: plans of hashed effects wired by output references"
+
+[lints]
+workspace = true
+
+[dependencies]
+hex.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+snafu.workspace = true
+
+# cargo-unit flattens every workspace test target into one namespace, so
+# integration targets carry a crate-unique name.
+[[test]]
+name = "integration_efx_ir"
+path = "tests/ir.rs"

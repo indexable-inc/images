@@ -1,16 +1,35 @@
-"""Type stub for the PyO3 extension module backing `scipql`.
+"""Type stub for the unibind-generated extension module backing `scipql`.
 
-Hand-maintained to mirror packages/code/scipql/py/src/lib.rs. Keep in sync when
-changing the binding. The public `scipql` API (`__init__.py`) lowers these dict
-shapes into polars DataFrames.
+Hand-maintained to mirror packages/code/scipql/py/src/lib.rs (the
+`#[unibind::export]` module). Keep in sync when changing the binding; stub
+generation from the embedded IR lands with unibind phase 1 (#1991). The
+public `scipql` API (`__init__.py`) lowers these record classes into polars
+DataFrames.
 """
 
-from typing import TypedDict
+from typing import final
 
 __version__: str
 
 
-class Occurrence(TypedDict):
+class ScipqlError(ValueError):
+    """Everything the scipql boundary raises, split by pipeline stage."""
+
+
+class IndexingError(ScipqlError):
+    """Producing, loading, or lowering the SCIP index failed."""
+
+
+class SouffleError(ScipqlError):
+    """Materializing facts or running Soufflé failed."""
+
+
+class EditError(ScipqlError):
+    """Computing or applying edits failed."""
+
+
+@final
+class Occurrence:
     """One `occurrence` fact: a symbol use site with its byte range and role."""
 
     symbol: str
@@ -19,30 +38,42 @@ class Occurrence(TypedDict):
     end: int
     role: str
 
+    def __init__(self, symbol: str, path: str, start: int, end: int, role: str) -> None: ...
 
-class SymbolInfo(TypedDict):
+
+@final
+class SymbolInfo:
     """One `symbol_info` fact: a symbol's kind and display name."""
 
     symbol: str
     kind: str
     display_name: str
 
+    def __init__(self, symbol: str, kind: str, display_name: str) -> None: ...
 
-class Document(TypedDict):
+
+@final
+class Document:
     """One `document` fact: an indexed source path."""
 
     path: str
 
+    def __init__(self, path: str) -> None: ...
 
-class Relationship(TypedDict):
+
+@final
+class Relationship:
     """One `relationship` fact: a typed edge between two symbols."""
 
     symbol: str
     related: str
     kind: str
 
+    def __init__(self, symbol: str, related: str, kind: str) -> None: ...
 
-class Facts(TypedDict):
+
+@final
+class Facts:
     """The four fact relations a SCIP index lowers into."""
 
     occurrence: list[Occurrence]
@@ -50,12 +81,23 @@ class Facts(TypedDict):
     document: list[Document]
     relationship: list[Relationship]
 
+    def __init__(
+        self,
+        occurrence: list[Occurrence],
+        symbol_info: list[SymbolInfo],
+        document: list[Document],
+        relationship: list[Relationship],
+    ) -> None: ...
 
-class Relation(TypedDict):
+
+@final
+class Relation:
     """One Soufflé `.output` relation: its column names and untyped string rows."""
 
     columns: list[str]
     rows: list[dict[str, str]]
+
+    def __init__(self, columns: list[str], rows: list[dict[str, str]]) -> None: ...
 
 
 def index(project: str, output: str = ...) -> str:

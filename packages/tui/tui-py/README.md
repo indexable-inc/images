@@ -329,7 +329,7 @@ asyncio.run(main())
 Run the aggregator once, separately, to watch every publisher:
 
 ```sh
-nix run .#tui-dashboard          # http://127.0.0.1:8080/
+nix run .#dashboard               # http://127.0.0.1:8080/
 ```
 
 Producers come and go freely: the aggregator discovers each socket in the shared
@@ -377,7 +377,7 @@ The vocabulary maps straight onto Playwright:
 
 **Why drive the real TUI, not `claude -p`?** A headless `-p` run is invisible and
 uninterruptible. A harness drives the actual TUI in a PTY, so the session shows
-up live on the web dashboard (`nix run .#tui-dashboard`) exactly like a human's:
+up live on the web dashboard (`nix run .#dashboard`) exactly like a human's:
 you watch the current state, attach, interrupt. For an experiment, observability
 beats a black box you can only diff.
 

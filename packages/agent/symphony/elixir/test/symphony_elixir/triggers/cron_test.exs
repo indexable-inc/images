@@ -261,6 +261,47 @@ defmodule SymphonyElixir.Triggers.CronTest do
     end
 
     @tag :tmp_dir
+    test "two workflows sharing a schedule each fire exactly once per window", %{store_opts: store_opts, workflows_dir: dir} do
+      # Regression for issue #2010: firing by trigger matching selected
+      # every cron workflow with an equal schedule, so N same-schedule
+      # workflows produced N runs per workflow per window (N^2 total).
+      name_a = unique_name("shared-a")
+      name_b = unique_name("shared-b")
+
+      # File basenames differ from the DSL workflow names on purpose: the
+      # catalog is keyed by basename while the tick works in display names,
+      # so a by-name re-lookup (instead of firing the held entry) would
+      # miss both workflows here.
+      for name <- [name_a, name_b] do
+        source = ~s|workflow "#{name}" on cron "0 9 * * *" tz "America/Los_Angeles" { a <- agent { engine: codex, model: "m", prompt: inline "go" } }|
+        File.write!(Path.join(dir, "file-#{name}.sym"), source)
+      end
+
+      WorkflowCatalog.scan(dir)
+
+      seeded = DateTime.add(DateTime.utc_now(), -2, :day)
+      :ok = CronState.seed_if_unset(name_a, seeded)
+      :ok = CronState.seed_if_unset(name_b, seeded)
+
+      assert :ok = Cron.poll_now()
+      run_files = wait_run_count(store_opts, 2)
+
+      # One run per workflow, not two: the run id carries the workflow slug.
+      run_ids = Enum.map(run_files, &Path.rootname/1)
+      assert Enum.count(run_ids, &String.starts_with?(&1, "#{name_a}-")) == 1
+      assert Enum.count(run_ids, &String.starts_with?(&1, "#{name_b}-")) == 1
+
+      # Let both runs finish so no snapshot persist races test teardown.
+      for run_id <- run_ids do
+        assert wait_terminal(run_id, store_opts).status == :succeeded
+      end
+
+      # Both watermarks advanced past the rewound seed.
+      assert DateTime.after?(CronState.get_last_fired(name_a), seeded)
+      assert DateTime.after?(CronState.get_last_fired(name_b), seeded)
+    end
+
+    @tag :tmp_dir
     test "an unparseable schedule is logged and skipped without poisoning the tick", %{workflows_dir: dir} do
       bad = unique_name("bad")
       good = unique_name("good")

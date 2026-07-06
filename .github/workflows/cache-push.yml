@@ -275,13 +275,8 @@ jobs:
           sudo rm -rf /Applications/Xcode_*.app ~/Library/Developer/CoreSimulator || true
           df -h / | tail -n 1
 
-      - name: Install nix
-        uses: DeterminateSystems/determinate-nix-action@629b284231c2a82554b724e357e47fc6020833c8 # v3
-        with:
-          extra-conf: |
-            extra-substituters = https://cache.ix.dev
-            extra-trusted-public-keys = ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI=
-            extra-experimental-features = nix-command flakes ca-derivations
+      - name: Install Determinate Nix
+        uses: ./.github/actions/install-nix
 
       - name: Realise darwin roots and stage the relay cache
         shell: bash

@@ -40,7 +40,7 @@ git -C "$SYMPHONY_PRIMARY_REPO" worktree add --detach "$digest_root/repo" HEAD
     -u SYMPHONY_GITHUB_APP_PRIVATE_KEY_BASE64 -u SYMPHONY_ROOM_REGISTRY_TOKEN \
     codex exec --sandbox read-only --ignore-user-config \
     --output-last-message "$last_msg" \
-    "$(cat "$prompt_file")"
+    "$(cat "$prompt_file")" </dev/null # codex reads a non-tty stdin to EOF; the runner pipe never closes (#2011)
 )
 
 # An empty final message means nothing postable; fail the node loudly so

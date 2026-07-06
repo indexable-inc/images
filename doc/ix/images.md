@@ -15,11 +15,11 @@ model and the `ix image` verbs; for flags on any verb run `ix image --help`.
    (`lib/image/oci-layer.nix:28-31`, `:64`); `mkImage` returns exactly that
    derivation. Each image is self-contained: ix runs one image per VM, it does
    not stack images at runtime (`lib/image/default.nix:92-99`).
-2. **Tag.** The image name and tag come from `ix.image.name` and
-   `ix.image.tag` (`lib/image/oci-layer.nix:18-26`; tag defaults to `latest`).
-   In a fleet the node name seeds `ix.image.name` by default
-   (`lib/image/fleet.nix:218`). See `examples/nginx-lifecycle/default.nix:4`
-   for a real `ix.image.tag = "nginx-lifecycle";`.
+2. **Tag.** The image name comes from `ix.image.name`
+   (`lib/image/oci-layer.nix:17-20`); the built archive is always tagged
+   `latest` (`lib/image/oci-layer.nix:79`). In a fleet the node name seeds
+   `ix.image.name` by default (`lib/image/fleet.nix:238`). The registry tag is
+   chosen at push time by the destination ref.
 3. **Push.** Send the archive to your registry namespace with
    `ix image push <source> <destination>`. A bare destination is stored under
    `registry.ix.dev/<your-username>/`.
@@ -50,10 +50,7 @@ pass your own fully-qualified registry ref to boot an application image.
 ```nix
 # image.nix - a NixOS module evaluated by index.lib.mkImage
 {
-  ix.image = {
-    name = "hello";
-    tag = "v1";
-  };
+  ix.image.name = "hello";
   # ... your services, packages, etc.
 }
 ```
@@ -72,10 +69,10 @@ A fleet node carries two images (`lib/image/fleet.nix:291-300`):
   missing node. Defaults to the shared NixOS bootstrap image under
   `registry.ix.dev/...` (`lib/image/fleet.nix:48-49`,
   `lib/image/default.nix:104-107`).
-- **`replacementImage`** (`{ imageName, imageTag, destination, source,
+- **`replacementImage`** (`{ imageName, destination, source,
   sourceDrv }`) - the image `up`/`replace` build and push from your config
-  (`lib/image/fleet.nix:292-300`). `destination` defaults to
-  `<imageName>:<imageTag>` (`lib/image/fleet.nix:248`).
+  (`lib/image/fleet.nix:311-316`). `destination` defaults to
+  `<imageName>:latest` (`lib/image/fleet.nix:269`).
 
 See [fleet.md](fleet.md) for the authoring surface.
 

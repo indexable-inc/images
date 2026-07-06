@@ -6,6 +6,7 @@ members = [
   "packages/agent/claude-hooks",
   "packages/agent/claude-stories",
   "packages/agent/subagent-cache",
+  "packages/audio/dsp",
   "packages/code/ast-merge/ast",
   "packages/code/ast-merge/cli",
   "packages/code/ast-merge/diff",
@@ -31,6 +32,10 @@ members = [
   "packages/search/code-tokenizer",
   "packages/dag-runner",
   "packages/code/edit-applier",
+  "packages/efx/cli",
+  "packages/efx/engine",
+  "packages/efx/ir",
+  "packages/efx/lang",
   "packages/code/file-language",
   "packages/search/file-search",
   "packages/code/scipql/core",
@@ -56,6 +61,7 @@ members = [
   "packages/minecraft/minecraft/nbt",
   "packages/minecraft/minecraft/sound",
   "packages/minecraft/minecraft/sync-managed",
+  "packages/mirror",
   "packages/search/mixedbread",
   "packages/mynoise",
   "packages/nu-py",
@@ -87,6 +93,9 @@ members = [
   "packages/tui/tui",
   "packages/tui/tui-node",
   "packages/tui/tui-py",
+  "packages/unibind/backend-py",
+  "packages/unibind/core",
+  "packages/unibind/macros",
   "packages/vm/panes/audio",
   "packages/vm/panes/compositor",
   "packages/vm/panes/host",
@@ -138,6 +147,7 @@ anstyle = "1"
 anyhow = "1"
 arrow = "59"
 ast-merge-ast = { path = "packages/code/ast-merge/ast" }
+audio-dsp = { path = "packages/audio/dsp" }
 ast-merge-diff = { path = "packages/code/ast-merge/diff" }
 ast-merge-git = { path = "packages/code/ast-merge/git" }
 ast-merge-langs = { path = "packages/code/ast-merge/langs" }
@@ -180,6 +190,9 @@ deadpool-postgres = "0.14"
 devicons = "0.6"
 dirs = "6"
 edit-applier = { path = "packages/code/edit-applier" }
+efx-engine = { path = "packages/efx/engine" }
+efx-ir = { path = "packages/efx/ir" }
+efx-lang = { path = "packages/efx/lang" }
 file-language = { path = "packages/code/file-language" }
 flecs-query-core = { path = "packages/flecs-query/core" }
 fontdue = "0.9"
@@ -223,6 +236,7 @@ nu-command = { version = "0.113.1", default-features = false, features = [
   "rustls-tls",
 ] }
 nu-engine = "0.113.1"
+nu-experimental = "0.113.1"
 nu-parser = "0.113.1"
 nu-protocol = "0.113.1"
 numpy = "0.28"
@@ -236,6 +250,8 @@ panes-protocol = { path = "packages/vm/panes/protocol" }
 parking_lot = "0.12"
 parquet = { version = "59", features = ["arrow"] }
 percent-encoding = "2"
+prettyplease = "0.2"
+proc-macro2 = "1"
 progress-style = { path = "packages/progress-style" }
 protobuf = "3"
 pty-process = { version = "0.5", features = ["async"] }
@@ -243,6 +259,7 @@ pyo3 = { version = "0.28", features = ["abi3-py311"] }
 pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
 pythonize = "0.28"
 quartz_nbt = "0.2.9"
+quote = "1"
 rayon = "1"
 regex = "1"
 repo-walker = { path = "packages/repo-walker" }
@@ -273,6 +290,7 @@ sink-mixedbread = { path = "packages/search/sink/mixedbread" }
 sink-parquet = { path = "packages/search/sink/parquet" }
 snafu = "0.9"
 strip-ansi-escapes = "0.2"
+syn = { version = "2", features = ["full"] }
 tango-bench = "0.7"
 tantivy = "0.26"
 tao = "0.35"
@@ -285,6 +303,9 @@ tokio-postgres = "0.7"
 tokio-stream = "0.1"
 tokio-util = "0.7"
 toml = { version = "1.1.2", default-features = false }
+# Format-preserving TOML rewriting for packages/mirror: inlining workspace
+# inheritance into standalone manifests without losing comments.
+toml_edit = "0.25"
 tower = "0.5"
 tower-http = "0.7"
 tracing = "0.1"
@@ -322,6 +343,9 @@ tree-sitter-toml-ng = "0.7"
 tree-sitter-typescript = "0.23"
 tree-sitter-yaml = "0.7"
 tui = { path = "packages/tui/tui" }
+unibind = { path = "packages/unibind/macros" }
+unibind-backend-py = { path = "packages/unibind/backend-py" }
+unibind-core = { path = "packages/unibind/core" }
 url = { version = "2.5.8", default-features = false }
 uuid = "1"
 webpki-roots = "1"

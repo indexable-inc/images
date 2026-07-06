@@ -3,12 +3,15 @@ defmodule SymphonyElixir.Runtime.Trigger do
   The one matcher every producer shares to resolve an inbound trigger event
   to the `.sym` workflows that declared interest in it.
 
-  A producer (cron, a webhook, the operator dashboard) builds a trigger
-  event map carrying `kind:` plus the kind's selector fields (a Slack
-  channel, a GitHub `repo`/`label`, a Linear `label`, a cron `schedule`),
-  then hands it to `Runtime.Ingress.start_by_trigger/2`. That ingress asks
+  A producer (a webhook, the operator dashboard) builds a trigger event
+  map carrying `kind:` plus the kind's selector fields (a Slack channel,
+  a GitHub `repo`/`label`, a Linear `label`), then hands it to
+  `Runtime.Ingress.start_by_trigger/2`. That ingress asks
   `WorkflowCatalog.for_trigger_kind/1` for the candidates of that kind and
-  keeps the ones `matches?/2` accepts.
+  keeps the ones `matches?/2` accepts. Cron does not route through here:
+  its tick evaluates one catalog entry at a time and starts exactly that
+  entry (`Ingress.start_workflow/3`), because a schedule is not an
+  identity; matching on it would fire every workflow sharing the schedule.
 
   Keeping this predicate in one place is the point of the cutover: every
   producer used to re-implement its own `Catalog.dags() |> Enum.filter`
@@ -36,9 +39,6 @@ defmodule SymphonyElixir.Runtime.Trigger do
   The kinds already agree (the ingress filters by `kind` first), so this
   only compares the kind's selector fields:
 
-  - `:cron` matches when the declared `schedule` equals the event's
-    `schedule`. A cron tick fires one workflow at a time, so the producer
-    echoes the schedule it resolved and this re-selects exactly it.
   - `:linear` matches when the declared `label` is present on the event.
     The event carries the inbound issue's labels under `:labels`; a single
     matched label is enough.
@@ -54,9 +54,6 @@ defmodule SymphonyElixir.Runtime.Trigger do
   so a malformed event fires nothing rather than fanning out to every
   workflow of that kind.
   """
-  @spec matches?(declared(), event()) :: boolean()
-  def matches?(%{kind: :cron, schedule: schedule}, %{schedule: event_schedule}), do: schedule == event_schedule
-
   @spec matches?(declared(), event()) :: boolean()
   def matches?(%{kind: :linear, label: label}, %{labels: labels}) when is_list(labels), do: label in labels
 

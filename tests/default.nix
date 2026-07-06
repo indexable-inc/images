@@ -2548,6 +2548,10 @@
   ];
 
   groups = {
+    # efx terranix-port parity: the ported stacks under tests/efx must render
+    # exactly the golden plan IR the efx CLI's tests parse, and everything the
+    # translator cannot express must throw. See tests/efx-plan.nix.
+    efx = import ./efx-plan.nix {inherit lib ix paths;};
     wrap-package = [
       {
         assertion = !wrapPackageTypoEval.success;

@@ -31,15 +31,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      # `accept-flake-config` lets the job consume the flake's cache.ix.dev
-      # substituter without a prompt.
       - name: Install Determinate Nix
-        uses: DeterminateSystems/determinate-nix-action@629b284231c2a82554b724e357e47fc6020833c8 # v3
-        with:
-          extra-conf: |
-            accept-flake-config = true
-            extra-substituters = https://cache.ix.dev
-            extra-trusted-public-keys = ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI=
+        uses: ./.github/actions/install-nix
 
       # Bump base + regenerate patches for every auto-updatable fork, driven by
       # lib/fork-packages.nix (no fork names hardcoded here). Each fork's

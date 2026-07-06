@@ -78,10 +78,9 @@ idempotent, skipped when `IX_TUI_AUTOPUBLISH=0`, and superseded by an explicit
 `tui.publish(...)` so a process never exposes two producers
 (`src/publish.rs:38,98`). The producer/consumer transport and the aggregator
 live in the dashboard domain; the README and Python
-docstrings invoke the aggregator as `nix run .#tui-dashboard`, but the registered
-flake output for the aggregator is `nix run .#dashboard`
-([dashboard](../dashboard/overview.md)).
-<!-- TODO: verify whether `tui-dashboard` is an intended alias for the `dashboard` flake output; it is not registered in packages/*/package.nix. -->
+docstrings invoke the aggregator as `nix run .#dashboard`
+([dashboard](../dashboard/overview.md)), the registered flake output for the
+aggregator.
 
 ## Layer 3: the agent harness (`python/tui/harness.py`)
 

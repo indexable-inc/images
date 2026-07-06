@@ -183,6 +183,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
+name = "anymap3"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb5dfbc6d8d2675589ccbe4d0fd61df2419075625f8c1a62325e718e2b0049f9"
+
+[[package]]
 name = "apache-avro"
 version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -907,6 +913,13 @@ name = "atomic_float"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "628d228f918ac3b82fe590352cc719d30664a0c13ca3a60266fe02c7132d480a"
+
+[[package]]
+name = "audio-dsp"
+version = "0.1.0"
+dependencies = [
+ "nnnoiseless",
+]
 
 [[package]]
 name = "autocfg"
@@ -2903,10 +2916,67 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "easyfft"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "767e39eef2ad8a3b6f1d733be3ec70364d21d437d06d4f18ea76ce08df20b75f"
+dependencies = [
+ "array-init",
+ "generic_singleton",
+ "num-complex",
+ "realfft",
+ "rustfft",
+]
+
+[[package]]
 name = "edit-applier"
 version = "0.1.0"
 dependencies = [
  "similar",
+ "snafu",
+]
+
+[[package]]
+name = "efx"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "efx-engine",
+ "efx-ir",
+ "efx-lang",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "efx-engine"
+version = "0.1.0"
+dependencies = [
+ "efx-ir",
+ "serde",
+ "serde_json",
+ "snafu",
+ "tempfile",
+]
+
+[[package]]
+name = "efx-ir"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "snafu",
+]
+
+[[package]]
+name = "efx-lang"
+version = "0.1.0"
+dependencies = [
+ "efx-ir",
  "snafu",
 ]
 
@@ -3712,6 +3782,16 @@ dependencies = [
  "loro-thunderdome",
  "proc-macro2",
  "rustc-hash",
+]
+
+[[package]]
+name = "generic_singleton"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab6e923c8e978e57cf63e2e200ca967d1d20f0ea2662b28f6d4e11c44aa6ab16"
+dependencies = [
+ "anymap3",
+ "parking_lot",
 ]
 
 [[package]]
@@ -6098,6 +6178,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mirror"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde_json",
+ "tempfile",
+ "toml_edit 0.25.12+spec-1.1.0",
+]
+
+[[package]]
 name = "mixedbread"
 version = "0.1.0"
 dependencies = [
@@ -6352,6 +6443,16 @@ dependencies = [
  "serde_json",
  "snafu",
  "strip-ansi-escapes",
+]
+
+[[package]]
+name = "nnnoiseless"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "805d5964d1e7a0006a7fdced7dae75084d66d18b35f1dfe81bd76929b1f8da0c"
+dependencies = [
+ "easyfft",
+ "once_cell",
 ]
 
 [[package]]
@@ -6807,6 +6908,7 @@ dependencies = [
  "nu-cmd-lang",
  "nu-command",
  "nu-engine",
+ "nu-experimental",
  "nu-parser",
  "nu-protocol",
  "pyo3",
@@ -6919,6 +7021,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73f88a1307638156682bada9d7604135552957b7818057dcef22705b4d509495"
 dependencies = [
  "num-traits",
+ "serde",
 ]
 
 [[package]]
@@ -8253,6 +8356,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "primal-check"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc0d895b311e3af9902528fbb8f928688abbd95872819320517cc24ca6b2bd08"
+dependencies = [
+ "num-integer",
+]
+
+[[package]]
 name = "print-positions"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8823,6 +8935,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "realfft"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f821338fddb99d089116342c46e9f1fbf3828dba077674613e734e01d6ea8677"
+dependencies = [
+ "rustfft",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9235,6 +9356,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustfft"
+version = "6.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21db5f9893e91f41798c88680037dba611ca6674703c1a18601b01a72c8adb89"
+dependencies = [
+ "num-complex",
+ "num-integer",
+ "num-traits",
+ "primal-check",
+ "strength_reduce",
+ "transpose",
+]
+
+[[package]]
 name = "rusticata-macros"
 version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9469,6 +9604,7 @@ version = "0.1.0"
 dependencies = [
  "pyo3",
  "scipql-core",
+ "unibind",
 ]
 
 [[package]]
@@ -10371,6 +10507,12 @@ name = "streaming-iterator"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b2231b7c3057d5e4ad0156fb3dc807d900806020c5ffa3ee6ff2c8c76fb8520"
+
+[[package]]
+name = "strength_reduce"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe895eb47f22e2ddd4dabc02bce419d2e643c8e3b585c78158b349195bc24d82"
 
 [[package]]
 name = "string_cache"
@@ -11490,6 +11632,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "transpose"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ad61aed86bc3faea4300c7aee358b4c6d0c8d6ccc36524c96e4c92ccf26e77e"
+dependencies = [
+ "num-integer",
+ "strength_reduce",
+]
+
+[[package]]
 name = "tree-sitter"
 version = "0.26.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11996,6 +12148,40 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dce1bf08044d4b7a94028c93786f8566047edc11110595914de93362559bc658"
 dependencies = [
  "tinystr",
+]
+
+[[package]]
+name = "unibind"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+ "unibind-backend-py",
+ "unibind-core",
+]
+
+[[package]]
+name = "unibind-backend-py"
+version = "0.1.0"
+dependencies = [
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "syn 2.0.118",
+ "unibind-core",
+]
+
+[[package]]
+name = "unibind-core"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_json",
+ "syn 2.0.118",
 ]
 
 [[package]]

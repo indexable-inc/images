@@ -24,6 +24,13 @@
 #                may free-float the base under a routine bump. `false` pins the
 #                input by rev and keeps it out of the cron; it moves only under a
 #                deliberate manual `rebase-patches` run.
+#   forkRepo   : optional GitHub `owner/name` of a real fork repo to maintain.
+#                When set, the mirror-sync workflow (packages/mirror,
+#                `mirror fork-branch --name <name> --push`) keeps that repo's
+#                `ix-patched` branch equal to the pinned base plus this patch
+#                series applied as commits, so an upstream PR is one push away.
+#                Absent = no fork repo is maintained (the in-repo series stays
+#                the only serialization).
 #
 # Upstreaming intent (hand-written declarative intent; the human gate on the
 # outward act). `packages/upstream-sync` reads these; the LIVE state it tracks
