@@ -449,6 +449,16 @@
         portableServicesModule = ix.portableServices.homeModule;
         inherit ix;
       };
+      # Workstation-facing module: persistent BEAM VMs as user services with
+      # the OTP applications they host declared in Nix. Updating an app
+      # hot-swaps its code in the running VM (no restart, no dropped
+      # connections); only a beamvm/toolchain update restarts. See
+      # packages/beamvm/home-module.nix and packages/beamvm/harness.ex.
+      beamvm = import ./packages/beamvm/home-module.nix {
+        indexPackages = system: packages.${system};
+        portableServicesModule = ix.portableServices.homeModule;
+        inherit ix;
+      };
     };
     overlays.default = ix.overlay;
     templates = {};
