@@ -30,10 +30,10 @@ concurrency:
 jobs:
   # Snapshot-sync each opt-in package (a `mirror` attr in its package.nix,
   # surfaced as `.#lib.mirrorPackages`) into its standalone read-only repo.
-  # `MIRROR_TOKEN` is a secret with repo-creation + push rights on the org
-  # (see packages/mirror/README.md, "Permissions"); the default GITHUB_TOKEN
-  # cannot create repos or push outside this repository, so without the
-  # secret the job skips loudly instead of half-running.
+  # MIRROR_TOKEN is minted per run from the ix-mirror-sync GitHub App (see
+  # packages/mirror/README.md, "Permissions"); the default GITHUB_TOKEN cannot
+  # create repos or push outside this repository, so without the app secrets
+  # the job skips loudly instead of half-running.
   mirrors:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -51,12 +51,25 @@ jobs:
             extra-substituters = https://cache.ix.dev
             extra-trusted-public-keys = ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI=
 
+      # MIRROR_TOKEN is minted per run from the org-owned ix-mirror-sync
+      # GitHub App (repo Administration + Contents write): short-lived, no
+      # long-lived PAT to rotate. When the app secrets are absent the step is
+      # skipped and the shell guard below skips loudly instead of half-running.
+      - name: Mint mirror token
+        id: mirror-token
+        if: ${{ vars.MIRROR_APP_ID != '' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.MIRROR_APP_ID }}
+          private-key: ${{ secrets.MIRROR_APP_PRIVATE_KEY }}
+          owner: indexable-inc
+
       - name: Publish package mirrors
         env:
-          MIRROR_TOKEN: ${{ secrets.MIRROR_TOKEN }}
+          MIRROR_TOKEN: ${{ steps.mirror-token.outputs.token }}
           # `mirror publish --create` shells out to `gh repo create`, which
           # reads GH_TOKEN.
-          GH_TOKEN: ${{ secrets.MIRROR_TOKEN }}
+          GH_TOKEN: ${{ steps.mirror-token.outputs.token }}
         run: |
           set -euo pipefail
           if [ -z "$MIRROR_TOKEN" ]; then
@@ -94,9 +107,22 @@ jobs:
             extra-substituters = https://cache.ix.dev
             extra-trusted-public-keys = ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI=
 
+      # MIRROR_TOKEN is minted per run from the org-owned ix-mirror-sync
+      # GitHub App (repo Administration + Contents write): short-lived, no
+      # long-lived PAT to rotate. When the app secrets are absent the step is
+      # skipped and the shell guard below skips loudly instead of half-running.
+      - name: Mint mirror token
+        id: mirror-token
+        if: ${{ vars.MIRROR_APP_ID != '' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.MIRROR_APP_ID }}
+          private-key: ${{ secrets.MIRROR_APP_PRIVATE_KEY }}
+          owner: indexable-inc
+
       - name: Push fork branches
         env:
-          MIRROR_TOKEN: ${{ secrets.MIRROR_TOKEN }}
+          MIRROR_TOKEN: ${{ steps.mirror-token.outputs.token }}
         run: |
           set -euo pipefail
           if [ -z "$MIRROR_TOKEN" ]; then

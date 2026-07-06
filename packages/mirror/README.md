@@ -90,21 +90,20 @@ To maintain a fork repo for a de-forked package instead, add
 ## Permissions
 
 The default `GITHUB_TOKEN` can neither create repositories nor push to any
-repo other than this one, so mirror-sync needs a `MIRROR_TOKEN` secret on
-this repository. Two ways to mint it:
+repo other than this one, so mirror-sync mints `MIRROR_TOKEN` per run from
+the org-owned **ix-mirror-sync GitHub App**, installed on the `indexable-inc`
+org with
 
-- **Recommended: an org-owned GitHub App**, installed on the `indexable-inc`
-  org with
-  - Administration: **write** (create the mirror/fork repos on first publish),
-  - Contents: **write** (push `main` / `ix-patched`),
-  - Metadata: **read** (implicit baseline).
+- Administration: **write** (create the mirror/fork repos on first publish),
+- Contents: **write** (push `main` / `ix-patched`),
+- Metadata: **read** (implicit baseline).
 
-  Store its id/private key as `APP_ID` / `APP_PRIVATE_KEY` secrets and mint a
-  short-lived installation token per run with
-  `actions/create-github-app-token`, feeding the output into `MIRROR_TOKEN`.
-  Scoped, revocable, and not tied to a person's account.
+The app id lives in the `MIRROR_APP_ID` repository variable and its private
+key in the `MIRROR_APP_PRIVATE_KEY` secret; `actions/create-github-app-token`
+turns them into a short-lived installation token each run. Scoped, revocable,
+and not tied to a person's account. Fallback if the app is ever unavailable:
 
-- **Simpler: a PAT.** Fine-grained, org-owned, all-repositories (new mirror
+- **A PAT.** Fine-grained, org-owned, all-repositories (new mirror
   repos must fall inside its scope) with Administration + Contents write; or
   a classic PAT with the `repo` scope (classic PATs can create org repos,
   fine-grained repo *creation* otherwise needs the App route). Stored
