@@ -70,9 +70,10 @@
 # and body come from the patch's own commit message (subject = title, body = PR
 # body, plus AI attribution and a link to the patch of record; see
 # packages/upstream-pr). A nix copy would duplicate the commit message and
-# drift. One fact, one home: the commit message IS the patch's description, and
-# the `patch-dag-<name>` check fails any attempt-marked patch whose commit
-# message has no body.
+# drift. One fact, one home: the commit message IS the patch's description and
+# its reason of record, and the `patch-dag-<name>` check fails any patch whose
+# commit message states no reason (attribution trailers and bare issue refs do
+# not count).
 {
   forkPackages = [
     {

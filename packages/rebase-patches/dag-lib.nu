@@ -191,6 +191,40 @@ export def "dag to-json" [doc: record] {
   ($doc | to json --indent 2) + "\n"
 }
 
+# --- Commit-message reason (invariant (e) of the patch-dag check) -------------
+
+# The commit-message body of a format-patch file: the lines between the header
+# block (ended by the first blank line; folded Subject continuations are
+# indented, never blank) and the diff payload (`---` separator, or `diff --git`
+# directly in this repo's canonical `--no-stat` serialization). Blank-only
+# lines are dropped.
+export def "dag body-lines" [file: string]: nothing -> list<string> {
+  open --raw $file
+  | lines
+  | skip until {|l| $l == "" }
+  | skip 1
+  | take until {|l| ($l == "---") or ($l | str starts-with "diff --git ") }
+  | where {|l| ($l | str trim) != "" }
+}
+
+# Does the patch state WHY it exists in its commit-message body? The body is
+# the reason of record for every fork patch: it rides the `git am` / rebase /
+# `format-patch` round-trip, so it reaches upstream reviewers, and for
+# attempt-marked patches it becomes the upstream PR description verbatim
+# (packages/upstream-pr). Attribution trailers and bare issue references are
+# not substance: `Refs #123` points at a reason without stating it, and a
+# `*-by:` trailer states no rationale at all.
+export def "dag body-has-reason" [file: string]: nothing -> bool {
+  dag body-lines $file
+  | where {|l|
+      let t = ($l | str trim)
+      let trailer = ($t =~ '(?i)^[a-z][a-z-]*-by:') or ($t =~ '(?i)^(cc|change-id):')
+      let bare_ref = ($t =~ '(?i)^(refs?|fixes|closes|resolves|see|see-also):?[ \t]+\S+$')
+      not ($trailer or $bare_ref)
+    }
+  | is-not-empty
+}
+
 # --- Invariant verification (the `patch-dag-<name>` flake check) --------------
 
 # Verify the three DAG invariants against a committed `dag.json`, plus topo
