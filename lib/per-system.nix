@@ -1404,7 +1404,15 @@ in {
       native-ifd-vendor-dir = crossWorkspace.units.vendorDir;
     };
   in
-    imagesAsClosures // exampleNodeToplevels // crossIfdRoots // nativeIfdRoots;
+    # Fleet node toplevels are NixOS closures: on Darwin they can only
+    # eval-error (every `<fleet>-<node>` row in the first darwin lane run was
+    # an eval failure, run 28762717645), so they stay a linux-lane concern.
+    # Alias-shadowed natives (dag-runner, nix-web-monitor) need no exclusion
+    # here: the flake grafts `linuxDarwinAliases` over this set, so the darwin
+    # lane sees the cross drvs and its system filter drops them.
+    if pkgs.stdenv.hostPlatform.isDarwin
+    then imagesAsClosures // nativeIfdRoots
+    else imagesAsClosures // exampleNodeToplevels // crossIfdRoots;
 
   inherit darwinPackageAliases;
 

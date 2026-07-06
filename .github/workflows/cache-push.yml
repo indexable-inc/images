@@ -233,6 +233,12 @@ jobs:
     # darwin runner. 3 cores / 7 GiB, so eval workers and realise parallelism
     # stay small.
     runs-on: macos-14
+    # The darwin roots' dependency closures overlap the linux lane (shared
+    # nixpkgs paths, and any x86_64-linux path a wrapper references):
+    # realising here substitutes them from cache.ix.dev, which only serves
+    # them after the linux push lands. Running after `push` turns those into
+    # downloads instead of doomed platform-mismatch builds.
+    needs: push
     # A cold codex (full codex-rs workspace rustc build) is 40-80 min on this
     # runner; warm runs are probe + substitution only.
     timeout-minutes: 240
@@ -251,6 +257,18 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Free scratch disk
+        # arm64 hosted macs ship ~14 GB free and a cold codex realise needs
+        # more than that in target-dir scratch alone: the first lane run died
+        # ENOSPC at 43 MB free (run 28762717645). The preinstalled Xcode
+        # bundles and simulator runtimes are dead weight here (nix brings its
+        # own SDK); reclaiming them buys tens of GB. Best-effort: a layout
+        # change in the runner image must not fail the lane.
+        run: |
+          df -h / | tail -n 1
+          sudo rm -rf /Applications/Xcode_*.app ~/Library/Developer/CoreSimulator || true
+          df -h / | tail -n 1
 
       - name: Install nix
         uses: DeterminateSystems/determinate-nix-action@629b284231c2a82554b724e357e47fc6020833c8 # v3
@@ -350,8 +368,14 @@ jobs:
           : > "$outs"
           realise_t=$SECONDS
           if [ -s "$drvs" ]; then
+            # -P 1, not -P 3: the runner's scratch disk is the binding
+            # constraint, not cores. Three concurrent rust/npm builds each
+            # keep a full target dir on disk at once and the first lane run
+            # died ENOSPC with 43 MB free (run 28762717645); serial roots cap
+            # peak scratch at one build while `max-jobs`/`cores` still use
+            # every core inside it.
             # shellcheck disable=SC2016  # $1/$2 expand in the child bash, not here
-            xargs -P 3 -n 1 bash -c \
+            xargs -P 1 -n 1 bash -c \
                 'nix-store --realise --keep-going "$2" || { printf "%s\n" "$2" >> "$1"; exit 1; }' _ "$failed_roots" \
               < "$drvs" > "$outs" 2>"$workdir/realise.err" \
               || {
