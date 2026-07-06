@@ -121,8 +121,9 @@ defmodule SymphonyElixir.Triggers.CronTest do
       start_supervised!(CronState)
       cron = start_supervised!({Cron, []})
 
-      # The catalog's boot scan is an async message; scan synchronously so
-      # the first poll below deterministically sees the workflow.
+      # start_supervised!/1 already ran the catalog's synchronous boot scan,
+      # so this just re-scans; kept explicit so the workflow's presence
+      # before the first poll below isn't an implicit assumption.
       :ok = WorkflowCatalog.scan(dir)
 
       # First poll seeds the watermark; the second evaluates against it and
