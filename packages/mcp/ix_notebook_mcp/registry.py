@@ -302,6 +302,12 @@ BUILTINS: tuple[Builtin, ...] = (
     ),
     Builtin("api", "the live catalog of every helper, as a polars frame (`api('grep')` to filter)"),
     Builtin(
+        "read_stats",
+        "this session's cumulative file-read counters ({total_reads, redundant_reads}); a "
+        "redundant read is a file re-read with byte-identical content -- check your own "
+        "redundancy rate (KPI: redundant/total < 1%)",
+    ),
+    Builtin(
         "grep",
         "content search backed by ripgrep (process-isolated + timeout, so it can't wedge the "
         "kernel): `await grep(pattern)` -> a polars frame, one row per match "

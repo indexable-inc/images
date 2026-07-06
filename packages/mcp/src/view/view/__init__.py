@@ -734,6 +734,24 @@ def tree(
 # --------------------------------------------------------------------------- #
 
 
+def _record_read(path: pathlib.Path, text: str) -> None:
+    """Attribute a file read to the current session's redundant-read counters.
+
+    Reaches into the kernel runtime lazily (as ``sh`` does) so ``view`` stays
+    usable standalone: outside the bundled interpreter the import fails and the
+    read simply is not tracked. Hashing runs on the ``text`` already in memory,
+    never a second disk read. Best-effort: tracking must never break a read.
+    """
+    try:
+        from ix_notebook_mcp import readstats
+        from ix_notebook_mcp.runtime import _ix_current
+    except Exception:
+        return
+    job = _ix_current.get()
+    session = job.session if job is not None else None
+    readstats.tracker().record(session, path, text)
+
+
 def cat(
     path: str | os.PathLike[str],
     lines: tuple[int, int] | None = None,
@@ -746,6 +764,7 @@ def cat(
     """
     p = pathlib.Path(path)
     text = p.read_text(errors="replace")
+    _record_read(p, text)
     start = 1
     if lines is not None:
         a, b = lines
@@ -764,14 +783,18 @@ def read(*args: Any, **kwargs: Any) -> Code:  # noqa: ANN401 -- forwarded verbat
 def head(path: str | os.PathLike[str], n: int = 20, *, lang: str | None = None) -> Code:
     """The first ``n`` lines of a file as a :class:`Code` view."""
     p = pathlib.Path(path)
-    sliced = p.read_text(errors="replace").splitlines()[:n]
+    text = p.read_text(errors="replace")
+    _record_read(p, text)
+    sliced = text.splitlines()[:n]
     return Code("\n".join(sliced), lang or _lang_for(p), title=str(p), start_line=1)
 
 
 def tail(path: str | os.PathLike[str], n: int = 20, *, lang: str | None = None) -> Code:
     """The last ``n`` lines of a file as a :class:`Code` view."""
     p = pathlib.Path(path)
-    all_lines = p.read_text(errors="replace").splitlines()
+    text = p.read_text(errors="replace")
+    _record_read(p, text)
+    all_lines = text.splitlines()
     start = max(1, len(all_lines) - n + 1)
     return Code(
         "\n".join(all_lines[-n:]), lang or _lang_for(p), title=str(p), start_line=start

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import atexit
 import base64
 import binascii
 import collections
@@ -53,7 +54,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, overload
 
-from . import registry, typecheck
+from . import readstats, registry, typecheck
 
 _ix_current: contextvars.ContextVar = contextvars.ContextVar("ix_current_job", default=None)
 
@@ -74,6 +75,10 @@ task_errors: collections.deque[str] = collections.deque(maxlen=50)
 # The namespace-install flusher task (see _install), module-held so it cannot
 # be garbage-collected mid-flight.
 _flusher_task: asyncio.Task | None = None
+
+# Whether the redundant-read stats final-emit atexit hook has been registered, so
+# a re-install (tests re-run install() on one interpreter) does not double-register.
+_readstats_atexit_registered = False
 
 # Grace period between a task finishing with an exception and the failure being
 # reported: a parent that promptly retrieves it (`await task`, `gather`,
@@ -294,11 +299,16 @@ class Job:
         budget: float = 15.0,
         kind: str = "cell",
         topic: str = "",
+        session: str | None = None,
     ) -> None:
         self.id = uuid.uuid4().hex[:8]
         self.code = code
         self.name = name or self.id
         self.topic = topic
+        # The MCP session id this run belongs to (None = the shared namespace).
+        # Carried so a read helper running inside the cell can attribute its read
+        # to the right session's redundant-read counters (see readstats).
+        self.session = session
         # 'cell' for a normal execution; 'replay' for a re-run performed while
         # reopening a session file. Replays never feed future replays
         # (store.replayable filters on this), so a session cannot double-run
@@ -3145,6 +3155,18 @@ def api(filter: str | None = None) -> Any:
         return "\n".join(f'{r["where"]:>6}  {r["sig"]:<{width}}  {r["summary"]}' for r in rows)
 
 
+def read_stats() -> dict[str, int]:
+    """This session's cumulative file-read counters: ``total_reads`` and
+    ``redundant_reads`` (a redundant read is the same file with byte-identical
+    content read earlier in this session -- with perfect memory you would not
+    have needed it again). Use it to check your own redundancy rate; the KPI is
+    ``redundant_reads / total_reads < 1%`` (indexable-inc/ix#6440). The same
+    counters are emitted to the service journal as ``mcp_read_stats`` lines."""
+    job = _ix_current.get()
+    session = job.session if job is not None else None
+    return readstats.tracker().snapshot(session)
+
+
 _TYPEERROR_CALL_RE = re.compile(
     r"^(\w+)\(\) (got an unexpected keyword argument|missing \d+ required (keyword-only argument|positional argument))"
 )
@@ -3307,12 +3329,19 @@ def _drain_inputs() -> None:
             channel._deliver(payload)
 
 
+# When the flusher last emitted the redundant-read stats, so it fires on the
+# readstats.EMIT_WINDOW_S cadence rather than every flusher tick.
+_last_readstats_emit = 0.0
+
+
 async def _flusher() -> None:
     """Throttled background loop: persist every running job's output tail and
     re-render every live resource to the store so the dashboard shows both live.
     One loop for all jobs and resources (cheap)."""
     if _store is None or _store_conn is None:
         return
+    global _last_readstats_emit
+    _last_readstats_emit = time.time()
     while True:
         await asyncio.sleep(0.5)
         for job in list(jobs.values()):
@@ -3326,6 +3355,11 @@ async def _flusher() -> None:
         _drain_inputs()
         cells._sync()
         session._sync()
+        now = time.time()
+        if now - _last_readstats_emit >= readstats.EMIT_WINDOW_S:
+            _last_readstats_emit = now
+            with contextlib.suppress(Exception):  # best-effort: a stats emit must not kill the loop
+                readstats.tracker().emit_changed()
         if _SESSION and _snapshot_dirty and not _snapshot_busy and not _restoring:
             # Fire-and-forget so a multi-second dump of a big namespace never
             # stalls the live-output mirroring this loop exists for.
@@ -3691,7 +3725,7 @@ async def __ix_run(
     way (done, or still running in the background). ``session`` selects the
     namespace the code runs in (see :func:`_session_ns`)."""
     ns = _session_ns(session)
-    job = Job(code, name, budget=budget, kind=kind, topic=topic or globals()["session"].topic)
+    job = Job(code, name, budget=budget, kind=kind, topic=topic or globals()["session"].topic, session=session)
     job._ns = ns
     jobs[job.id] = job
     job.task = asyncio.ensure_future(_runner(job, ns))
@@ -3886,6 +3920,9 @@ async def __ix_read(target: Any, start: int | None = None, end: int | None = Non
         # Off the loop: a large file read is blocking I/O, the one thing that
         # freezes every other job on the shared event loop.
         full = await asyncio.to_thread(path.read_text, errors="replace")
+        # Track this read for the redundant-read KPI (hash of path+content, on the
+        # bytes already in memory -- never a second disk read). See readstats.
+        readstats.tracker().record(session, path, full)
         label = _tilde(path)
         lang = _read_lang(path)
     else:
@@ -4181,6 +4218,7 @@ def install(user_ns: dict | None = None) -> None:
 
         target["pl"] = _polars_mod
     target["api"] = api
+    target["read_stats"] = read_stats
     # Failures of fire-and-forget tasks, newest last (see the deque's comment).
     # A report also lands in the spawning job's output, tagged `[task_errors]`,
     # which is how the name advertises itself.
@@ -4207,6 +4245,15 @@ def install(user_ns: dict | None = None) -> None:
     # A fresh session starts with no recorded references (the namespace is empty of
     # user names; refs accumulate as runs touch them).
     _name_refs.clear()
+
+    # Emit each session's final redundant-read counts when the kernel process
+    # exits cleanly (jupyter's graceful shutdown runs the interpreter's atexit
+    # hooks), so the last window since the periodic emit is never lost. Guarded so
+    # a re-install (tests) does not double-register.
+    global _readstats_atexit_registered
+    if not _readstats_atexit_registered:
+        atexit.register(readstats.tracker().emit_final)
+        _readstats_atexit_registered = True
 
     with contextlib.suppress(RuntimeError):  # no event loop yet (sync context): flusher and task watch are optional
         loop = asyncio.get_event_loop()

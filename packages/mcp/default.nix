@@ -5418,6 +5418,35 @@
       mkdir -p "$out"
     '';
 
+  # Redundant-read tracking (packages/mcp/tests/test_readstats.py, index#1924):
+  # the per-session tracker's core contract (same-content re-read is redundant,
+  # changed content is not, a different path is not, counters are per-session) and
+  # the exact `mcp_read_stats` journald line the ix fleet pipeline parses. Only
+  # imports `ix_notebook_mcp.readstats` (pure stdlib), so it reuses the typecheck
+  # interpreter, which already carries pytest.
+  readStatsTestSource = builtins.path {
+    name = "ix-mcp-readstats-test";
+    path = ./tests/test_readstats.py;
+  };
+  readStatsTests =
+    pkgs.runCommand "ix-mcp-readstats-tests"
+    {
+      nativeBuildInputs = [typecheckTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${readStatsTestSource} "$TMPDIR/test_readstats.py"
+      ${lib.getExe typecheckTestPython} -m pytest "$TMPDIR/test_readstats.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp readstats tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      cat stdout
+      mkdir -p "$out"
+    '';
+
   # The Claude Code channel + interactive resource actions
   # (packages/mcp/tests/test_channel.py): the store outbox/events queues, the
   # kernel's notify() + action dispatch, the transport pump emitting
@@ -5861,6 +5890,7 @@ in
               inputsTests
               channelTests
               taskErrorsTests
+              readStatsTests
               inputBrowserSmoke
               svelteBundled
               svelteTests
