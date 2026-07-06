@@ -333,10 +333,23 @@ let
           Tie real work to a GitHub or Linear issue before starting. Find one, or create
           one with the repro and desired outcome. Reference it in the branch, PR, and
           relevant comments; keep reproduce-before-fix and root-cause notes there.
+
+          For real multi-part work, make the first task creating a GitHub master issue
+          plus one sub-issue per modular piece. GitHub has native parent/child
+          sub-issues (no `gh` subcommand yet): create each child with `gh issue create`,
+          read its database id with
+          `gh api repos/<o>/<r>/issues/<n> --jq .id`, then attach it with
+          `gh api --method POST repos/<o>/<r>/issues/<parent>/sub_issues -F sub_issue_id=<db id>`.
+          Pass the database id, not the issue number. Cross-repo within the org works.
+
+          Then open the master issue in the browser (`open <url>` on macOS) so the human
+          sees the plan immediately.
         '';
         reason = ''
           Repro steps and root-cause notes were lost with the session when work had no
-          durable issue trail.
+          durable issue trail. Multi-part work without a master issue and sub-issues had
+          no shared plan to track pieces against; opening it surfaces the plan to the
+          human up front instead of after the work is done.
         '';
       };
     }
