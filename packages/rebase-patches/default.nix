@@ -118,7 +118,12 @@ in
         if ($resolved | is-empty) { return }
         mkdir $rr_committed
         for key in $resolved {
-          cp --recursive ($rr_scratch | path join $key) ($rr_committed | path join $key)
+          # Replace, never merge: nushell's `cp --recursive src dest` NESTS src
+          # under dest when dest already exists, so re-exporting a recurring key
+          # would corrupt the committed cache (key/key/...). Clear it first.
+          let dest = ($rr_committed | path join $key)
+          if ($dest | path exists) { rm --recursive --force $dest }
+          cp --recursive ($rr_scratch | path join $key) $dest
         }
         print $"(ansi yellow)rebase-patches: ($fork.name): exported (($resolved | length)) rerere resolution(s) to ($fork.patchDir)/rerere: (($resolved) | str join ', ')(ansi reset)"
       }
