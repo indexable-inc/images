@@ -6818,6 +6818,7 @@ dependencies = [
  "nu-cmd-lang",
  "nu-command",
  "nu-engine",
+ "nu-experimental",
  "nu-parser",
  "nu-protocol",
  "pyo3",

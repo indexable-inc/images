@@ -419,6 +419,24 @@ impl Engine {
 
 #[pymodule]
 fn _nu(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Nushell's experimental `pipefail` option is ON by default (OptOut since
+    // 0.107), and its try/catch collection path (`Instruction::TryCollect` ->
+    // eval_ir.rs `collect`) waits on an external's exit status BEFORE draining
+    // its stdout pipe. A child with more output pending than the OS pipe
+    // buffer (64 KiB) can then never exit: it blocks in write(2), no EPIPE
+    // ever arrives because this process still holds the read end, and the
+    // eval deadlocks in waitpid -- wedging the engine's mutex and with it
+    // every later `nu()` call in the session (indexable-inc/index#2015;
+    // upstream ordering discussed in nushell/nushell#17571 / #17764, which
+    // fixed the sibling `collect_reg` path but left `TryCollect` checking
+    // first). Externals still fail loudly without pipefail: trailing and
+    // statement externals raise through ByteStream's own consume-then-wait
+    // checks, and these bindings drop the pipeline's exit-guard vector at the
+    // boundary anyway, so the option bought nothing observable here.
+    //
+    // SAFETY: `set` is unsafe only to discourage mid-run flips; this runs
+    // once at module import, before any `Engine` can exist.
+    unsafe { nu_experimental::PIPE_FAIL.set(false) };
     module.add_class::<Engine>()?;
     module.add_class::<EvalHandle>()?;
     module.add("NuError", module.py().get_type::<NuError>())?;

@@ -139,6 +139,43 @@ def test_trailing_external_output_is_collected(tmp_path: pathlib.Path) -> None:
     assert out.strip() == "collected"
 
 
+def test_big_external_output_inside_try_does_not_deadlock() -> None:
+    # index#2015: nushell's experimental `pipefail` (the 0.113 default) made
+    # try/catch collection wait on the child's exit status BEFORE draining its
+    # stdout. A child with more pending output than the OS pipe buffer
+    # (64 KiB) then never exits -- it blocks in write(2) and no EPIPE arrives
+    # because the engine still holds the read end -- so the eval hung forever
+    # and wedged the engine for every later call. The bindings disable
+    # pipefail, so this must complete and hand back all the output.
+    import sys
+
+    async def guarded() -> object:
+        writer = f"^{sys.executable} -c 'import sys; sys.stdout.write(\"x\"*130000)'"
+        # wait_for is a tripwire, not part of the contract: on regression this
+        # fails in seconds instead of hanging the test run forever.
+        return await asyncio.wait_for(
+            nu.value("try { " + writer + " } catch { 'caught' }"),
+            timeout=60,
+        )
+
+    out = run(guarded())
+    assert out == "x" * 130_000
+
+
+def test_failing_external_raises_and_try_catches_without_pipefail() -> None:
+    # Disabling pipefail must not cost error reporting: a trailing external's
+    # non-zero exit still raises through ByteStream's consume-then-wait check,
+    # and try/catch still routes it to the catch block.
+    import sys
+
+    with pytest.raises(nu.NuError, match="non-zero exit code"):
+        run(nu(f"^{sys.executable} -c 'raise SystemExit(7)'"))
+    caught = run(
+        nu.value("try { ^" + sys.executable + " -c 'raise SystemExit(7)' } catch { 'caught' }")
+    )
+    assert caught == "caught"
+
+
 def test_naive_datetime_input_gets_a_clear_error() -> None:
     naive = datetime.datetime(2024, 1, 2, 3, 4, 5)  # noqa: DTZ001 -- naive on purpose: it IS the case under test
     with pytest.raises(nu.NuError, match="naive datetime"):
