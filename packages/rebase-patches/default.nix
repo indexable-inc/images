@@ -66,6 +66,13 @@ in
         # has a grammar.
         git -C $scratch init --quiet
         git -C $scratch config merge.conflictStyle zdiff3
+        # Cache conflict resolutions within a run: after a human resolves a patch
+        # and re-runs, rerere replays that resolution so only genuinely new
+        # conflicts stop the rebase. The cache is ephemeral with the scratch repo
+        # and never committed (the re-exported patches are the durable
+        # resolution), and autoUpdate stays off so a replayed resolution is
+        # still staged deliberately, not silently.
+        git -C $scratch config rerere.enabled true
         git -C $scratch config "merge.mergiraf.name" "mergiraf syntax-aware merge"
         git -C $scratch config "merge.mergiraf.driver" "mergiraf merge --git %O %A %B -s %S -x %X -y %Y -p %P -l %L"
         mkdir ($scratch | path join ".git" "info")
