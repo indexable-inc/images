@@ -1,16 +1,23 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="run records a command's PTY session, prints only head and tail, and writes replayable artifacts"></p>
+
 # run
 
-`run` executes a command under a recorded terminal session and keeps the output
-small enough for agent logs by default.
+Ever had an agent's context (or your scrollback) drowned by a build's 50,000
+lines of output? `run` executes a command under a recorded terminal session
+and keeps the console small by default: you see the first and last 80 lines,
+while the full live stream, a replayable recording, and per-line JSONL land
+under `./.ix/run/<session>/`. Nothing is lost, and nothing floods the log.
 
-## Run A Command
+## Run a command
 
 ```sh
-nix run .#run -- nix build .#base
+nix run github:indexable-inc/index#run -- nix build .#base
 ```
 
-The first argument after `run` is the command. Every following argument is passed
-to that command unchanged.
+The first argument after `run` is the command. Every following argument is
+passed to that command unchanged. Inside a clone
+(`git clone https://github.com/indexable-inc/index`) the short form is
+`nix run .#run -- <command>`.
 
 By default, `run` prints the first 80 output lines and the last 80 output lines.
 The full live stream is written under `./.ix/run/<session>/output.log`, with
