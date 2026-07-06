@@ -615,7 +615,7 @@
   # check just wires the src, patch dir, and pinned rev into that driver. Merged
   # on every system like patched-src, so `nix build .#checks.aarch64-darwin.
   # patch-dag-clippy` validates the graph natively.
-  forkLock = builtins.fromJSON (builtins.readFile (paths.root + "/flake.lock"));
+  forkLock = lib.importJSON (paths.root + "/flake.lock");
   # The nushell driver plus its shared lib, staged together so the driver's
   # sibling `use dag-lib.nu` resolves at runtime.
   dagCheckSrc = paths.packagesRoot + "/rebase-patches";
