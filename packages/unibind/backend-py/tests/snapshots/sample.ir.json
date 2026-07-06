@@ -1,0 +1,272 @@
+{
+  "version": 0,
+  "name": "sample",
+  "names": {
+    "py": null
+  },
+  "docs": [
+    "A sample boundary exercising the phase 0 surface."
+  ],
+  "functions": [
+    {
+      "name": "rows",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Fetch rows.",
+        "",
+        "Docs become docstrings."
+      ],
+      "asyncness": "Sync",
+      "args": [
+        {
+          "name": "store",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "String": {
+              "owned": false
+            }
+          },
+          "default": null
+        },
+        {
+          "name": "limit",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Int": "Usize"
+          },
+          "default": {
+            "Int": 10
+          }
+        },
+        {
+          "name": "root",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Option": {
+              "String": {
+                "owned": false
+              }
+            }
+          },
+          "default": null
+        }
+      ],
+      "ret": {
+        "Vec": {
+          "Named": "Row"
+        }
+      },
+      "throws": "SampleError"
+    },
+    {
+      "name": "touch",
+      "names": {
+        "py": "touch_path"
+      },
+      "docs": [],
+      "asyncness": "Sync",
+      "args": [
+        {
+          "name": "path",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Path": {
+              "owned": false
+            }
+          },
+          "default": null
+        },
+        {
+          "name": "data",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Bytes": {
+              "owned": false
+            }
+          },
+          "default": null
+        },
+        {
+          "name": "ratio",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Float": "F64"
+          },
+          "default": {
+            "Float": 0.5
+          }
+        },
+        {
+          "name": "note",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "String": {
+              "owned": false
+            }
+          },
+          "default": {
+            "Str": "note"
+          }
+        },
+        {
+          "name": "flush",
+          "names": {
+            "py": null
+          },
+          "ty": "Bool",
+          "default": {
+            "Bool": false
+          }
+        }
+      ],
+      "ret": "Bool",
+      "throws": null
+    }
+  ],
+  "records": [
+    {
+      "name": "Row",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "A row."
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "names": {
+            "py": null
+          },
+          "docs": [
+            "Identifier."
+          ],
+          "ty": {
+            "Int": "U64"
+          }
+        },
+        {
+          "name": "name",
+          "names": {
+            "py": "label"
+          },
+          "docs": [],
+          "ty": {
+            "String": {
+              "owned": true
+            }
+          }
+        },
+        {
+          "name": "tags",
+          "names": {
+            "py": null
+          },
+          "docs": [],
+          "ty": {
+            "Vec": {
+              "String": {
+                "owned": true
+              }
+            }
+          }
+        },
+        {
+          "name": "weights",
+          "names": {
+            "py": null
+          },
+          "docs": [],
+          "ty": {
+            "Map": {
+              "key": {
+                "String": {
+                  "owned": true
+                }
+              },
+              "value": {
+                "Float": "F64"
+              }
+            }
+          }
+        },
+        {
+          "name": "blob",
+          "names": {
+            "py": null
+          },
+          "docs": [],
+          "ty": {
+            "Bytes": {
+              "owned": true
+            }
+          }
+        },
+        {
+          "name": "home",
+          "names": {
+            "py": null
+          },
+          "docs": [],
+          "ty": {
+            "Option": {
+              "Path": {
+                "owned": true
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "enums": [],
+  "errors": [
+    {
+      "name": "SampleError",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Boundary failures."
+      ],
+      "py_base": "RuntimeError",
+      "variants": [
+        {
+          "name": "StoreGone",
+          "names": {
+            "py": "StoreGoneError"
+          },
+          "docs": [
+            "The store is gone."
+          ]
+        },
+        {
+          "name": "Invalid",
+          "names": {
+            "py": null
+          },
+          "docs": [
+            "Bad input."
+          ]
+        }
+      ]
+    }
+  ],
+  "objects": []
+}
