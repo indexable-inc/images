@@ -48,7 +48,9 @@ struct ActionStyle {
 
 /// Unix seconds to `YYYY-MM-DD HH:MM:SS UTC` (Howard Hinnant's civil-from-days).
 fn format_utc(secs: u64) -> String {
-    let days = i64::try_from(secs / 86_400).unwrap_or(0);
+    // Never fails: u64::MAX / 86_400 (~2.1e14) is far below i64::MAX, and a
+    // silent `unwrap_or(0)` would trip clippy::fallible_int_fallback anyway.
+    let days = i64::try_from(secs / 86_400).expect("u64 day count fits in i64");
     let rem = secs % 86_400;
     let era = days.div_euclid(146_097);
     let doe = days.rem_euclid(146_097);
