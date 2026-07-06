@@ -298,6 +298,17 @@
   attrs = import ./util/attrs.nix {inherit lib;};
 
   /**
+  Build efx plan IR (`efx_ir::Plan` JSON) from Nix — the terranix
+  replacement. `plan` / `effect` / `lit` / `ref` construct effects natively;
+  `fromTerranix` translates a terranix-shaped `resource.<type>.<name>` config
+  into effects, turning terraform interpolation strings into first-class efx
+  references. Feed `builtins.toJSON (efx.plan ...)` to `efx plan/apply --ir`.
+  See [`lib/util/efx.nix`](lib/util/efx.nix) and
+  [`packages/efx/README.md`](packages/efx/README.md).
+  */
+  efx = import ./util/efx.nix {inherit lib lists;};
+
+  /**
   TOML value encoding. `scalar` renders one Nix scalar as the TOML literal a
   `key = value` pair expects (codex `--config a.b=1` flags). Scalars only;
   for whole TOML files use `pkgs.formats.toml`. See
@@ -502,6 +513,7 @@
       checks
       claudePlugin
       deepMerge
+      efx
       forkPackages
       forkDagCheckSrc
       goUnit
