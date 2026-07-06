@@ -79,6 +79,16 @@ let
 
   package = nixEverything.overrideAttrs (old: {
     version = "2.34.7+ix";
+    # The aggregate's `doCheck = true` gates the build on `checkInputs`: the
+    # five component unit-test runners plus the entire upstream functional
+    # suite. Those dominate a cold build of this closure and re-validate
+    # nothing per consumer rebuild: patch applicability is already gated by
+    # `checks.<system>.patched-src-nix`, the series carries its own
+    # upstream-style functional test inside the patched tree, and the `smoke`
+    # passthru below executes the linked binary. With them on, the cache-push
+    # darwin lane (3-core hosted mac) blew its 4 h job budget cold-building
+    # this package and froze `cache-ready` (run 28772327218, index#1967).
+    doCheck = false;
     meta =
       (old.meta or {})
       // {
