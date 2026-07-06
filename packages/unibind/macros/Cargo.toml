@@ -1,0 +1,22 @@
+[package]
+name = "unibind"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Write-once binding attributes: lower an annotated module to the unibind IR and render the enabled language backends"
+
+[lib]
+proc-macro = true
+
+[lints]
+workspace = true
+
+[features]
+py = ["dep:unibind-backend-py"]
+
+[dependencies]
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+unibind-backend-py = { workspace = true, optional = true }
+unibind-core.workspace = true

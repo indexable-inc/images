@@ -87,6 +87,9 @@ members = [
   "packages/tui/tui",
   "packages/tui/tui-node",
   "packages/tui/tui-py",
+  "packages/unibind/backend-py",
+  "packages/unibind/core",
+  "packages/unibind/macros",
   "packages/vm/panes/audio",
   "packages/vm/panes/compositor",
   "packages/vm/panes/host",
@@ -236,6 +239,8 @@ panes-protocol = { path = "packages/vm/panes/protocol" }
 parking_lot = "0.12"
 parquet = { version = "59", features = ["arrow"] }
 percent-encoding = "2"
+prettyplease = "0.2"
+proc-macro2 = "1"
 progress-style = { path = "packages/progress-style" }
 protobuf = "3"
 pty-process = { version = "0.5", features = ["async"] }
@@ -243,6 +248,7 @@ pyo3 = { version = "0.28", features = ["abi3-py311"] }
 pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
 pythonize = "0.28"
 quartz_nbt = "0.2.9"
+quote = "1"
 rayon = "1"
 regex = "1"
 repo-walker = { path = "packages/repo-walker" }
@@ -273,6 +279,7 @@ sink-mixedbread = { path = "packages/search/sink/mixedbread" }
 sink-parquet = { path = "packages/search/sink/parquet" }
 snafu = "0.9"
 strip-ansi-escapes = "0.2"
+syn = { version = "2", features = ["full"] }
 tango-bench = "0.7"
 tantivy = "0.26"
 tao = "0.35"
@@ -322,6 +329,9 @@ tree-sitter-toml-ng = "0.7"
 tree-sitter-typescript = "0.23"
 tree-sitter-yaml = "0.7"
 tui = { path = "packages/tui/tui" }
+unibind = { path = "packages/unibind/macros" }
+unibind-backend-py = { path = "packages/unibind/backend-py" }
+unibind-core = { path = "packages/unibind/core" }
 url = { version = "2.5.8", default-features = false }
 uuid = "1"
 webpki-roots = "1"
