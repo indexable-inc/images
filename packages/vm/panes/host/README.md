@@ -1,9 +1,23 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="panes-host decodes guest frames into one Metal-backed NSWindow per toplevel, acks each present back to the guest, and forwards NSEvents as evdev input"></p>
+
 # panes-host
 
-macOS window agent for seamless guest-Linux windows (index#1686): connects to
-the guest compositor's stream (unix socket today, fronted by the libkrun vsock
-port map later), presents each guest toplevel as a real `NSWindow`, and
-forwards input back. The wire contract lives in `packages/vm/panes/protocol`.
+What turns a guest Linux toplevel into a real Mac window, at 120 Hz, with your
+keyboard and mouse working? `panes-host` is the macOS agent of
+[panes](../README.md) (index#1686): it connects to the guest compositor's
+stream (unix socket today, fronted by the libkrun vsock port map), presents
+each guest toplevel as a real `NSWindow`, and forwards input back as evdev
+events. The wire contract lives in [`../protocol`](../protocol).
+
+## Install
+
+```sh
+nix run github:indexable-inc/index#panes-host -- --mock   # demo, no VM needed
+```
+
+Apple Silicon only (`aarch64-darwin`). From a clone
+(`git clone https://github.com/indexable-inc/index`): `nix run .#panes-host`.
+For the full VM boot line see [the panes README](../README.md).
 
 ## Architecture
 
