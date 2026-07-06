@@ -15,6 +15,14 @@
   # (repo policy: no hash literals in tracked .nix).
   pins = ix.pins.loadPins ./pins.json;
   portableServicesTest = import ./portable-services.nix {inherit lib pkgs ix;};
+  symphonyHomeModuleTest = import ./symphony-home-module.nix {
+    inherit
+      lib
+      pkgs
+      ix
+      paths
+      ;
+  };
   # VM boot smoke test for the minecraft-blocks Paper plugin (ENG-2186). Not
   # part of the `eval` aggregate: it boots a qemu VM, so it is its own check
   # (`checks.<system>.minecraft-blocks-vm`).
@@ -5611,6 +5619,7 @@ in {
   # Strict type + annotation gate over the public ix-sdk Python sources.
   sdkPythonStrict = sdkPython.strictCheck;
   portableServices = portableServicesTest;
+  symphonyHomeModule = symphonyHomeModuleTest;
   minecraftBlocksVm = minecraftBlocksVmTest;
   inherit baseImageNixDb;
 
@@ -5622,6 +5631,7 @@ in {
       fleetTest
       helperTest
       portableServicesTest
+      symphonyHomeModuleTest
       cargoUnitPrebuiltTest
     ]
   );

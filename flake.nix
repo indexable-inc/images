@@ -439,6 +439,16 @@
         indexPackages = system: packages.${system};
         portableServicesModule = ix.portableServices.homeModule;
       };
+      # Workstation-facing module: run the Symphony BEAM runtime as a user
+      # service (native launchd agent on macOS, systemd user unit on Linux)
+      # by composing portable-services. Mirrors the NixOS module's option
+      # vocabulary; point `packDir` at a mutable checkout for hot-reloaded
+      # workflows and skills. See packages/agent/symphony/home-module.nix.
+      symphony = import ./packages/agent/symphony/home-module.nix {
+        indexPackages = system: packages.${system};
+        portableServicesModule = ix.portableServices.homeModule;
+        inherit ix;
+      };
     };
     overlays.default = ix.overlay;
     templates = {};

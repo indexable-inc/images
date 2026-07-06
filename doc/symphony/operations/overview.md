@@ -187,6 +187,46 @@ services.symphony = {
 };
 ```
 
+## home-manager module (`packages/agent/symphony/home-module.nix`)
+
+`homeModules.symphony` runs the runtime as a user service: one declarative
+instance renders a native launchd agent on macOS and a native systemd user unit
+on Linux by composing `homeModules.portable-services`. It mirrors the NixOS
+module's vocabulary (`package`, `stateDir`, `httpPort`, `primaryRepo`,
+`repoRoot`, `workflowPack`/`packDir`, `extraEnvironment`, `environmentFile`,
+`secretsCommand`) minus the system-level pieces (no `user`, tmpfiles, or
+polkit); `bin/run-nix` creates the state dirs itself and defaults `stateDir` to
+`~/.local/state/symphony`. `packDir` is the hot-reload surface: point it at a
+mutable checkout and the runtime picks up edited `.sym` workflows and skills
+without a restart. Two knobs are home-specific: `extraPath` prepends packages
+to the service PATH (this is where deployers add their host-owned `codex`,
+plus `jq`/`gh` for workflows), and because launchd has no `EnvironmentFile`,
+secrets are loaded by a rendered launch wrapper that sources `environmentFile`
+and execs under `secretsCommand`. The unit is `restart = "always"` with no
+interval: the BEAM is the scheduler, cron triggers live inside it.
+
+```nix
+# home.nix on a workstation (e.g. hydra)
+{
+  imports = [index.homeModules.symphony];
+
+  services.symphony = {
+    enable = true;
+    primaryRepo = "/Users/andrewgazelka/Projects/indexable-inc/index";
+    packDir = "/Users/andrewgazelka/Projects/indexable-inc/symphony-pack";
+    environmentFile = "/Users/andrewgazelka/.config/symphony/secrets.env";
+    extraPath = [
+      pkgs.codex
+      pkgs.jq
+      pkgs.gh
+    ];
+  };
+}
+```
+
+Eval coverage (rendered plist, user unit, wrapper) lives in
+`tests/symphony-home-module.nix`, bundled into the `eval` flake check.
+
 ## Quality gates
 
 The required lane (compile `--warnings-as-errors`, `mix format --check-formatted`,
