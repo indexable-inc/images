@@ -86,6 +86,59 @@ defmodule SymphonyElixir.Runtime.ExecRunnerTest do
              ExecRunner.run(exec_node(rel, timeout: 1), %{run_id: "r", attempt: 1, pack_dir: pack})
   end
 
+  test "a chatty script cannot outlive its timeout by streaming output", %{pack: pack} do
+    # Ticks land between deadline polls; exit code 7 is the sentinel that
+    # would surface as {:exec_failed, 7} if the runner ever waited for the
+    # script to finish instead of enforcing the deadline.
+    rel =
+      write_script!(pack, "scripts/chatty.sh", """
+      #!/bin/sh
+      i=0
+      while [ $i -lt 40 ]; do echo tick; sleep 0.2; i=$((i+1)); done
+      exit 7
+      """)
+
+    assert {:error, {:exec_timeout, 1, output}, nil} =
+             ExecRunner.run(exec_node(rel, timeout: 1), %{run_id: "r", attempt: 1, pack_dir: pack})
+
+    assert output =~ "tick"
+  end
+
+  test "a timeout kills the whole process tree, not just the script", %{pack: pack} do
+    # The #2011 wedge shape: the script's grandchild inherits stdout (so the
+    # port would never deliver exit_status) and must not survive the timeout
+    # kill. The marker rides in the grandchild's argv so pgrep can find it.
+    marker = "sym-exec-2011-#{System.unique_integer([:positive])}"
+
+    rel =
+      write_script!(pack, "scripts/tree.sh", """
+      #!/bin/sh
+      /bin/sh -c 'sleep 300' #{marker} &
+      wait
+      """)
+
+    assert {:error, {:exec_timeout, 1, _output}, nil} =
+             ExecRunner.run(exec_node(rel, timeout: 1), %{run_id: "r", attempt: 1, pack_dir: pack})
+
+    assert await_no_process(marker), "grandchild #{marker} survived the timeout kill"
+  end
+
+  # SIGKILL delivery is immediate but reparent-and-reap is not; poll briefly
+  # before declaring a survivor.
+  defp await_no_process(marker, tries \\ 50) do
+    case System.cmd("pgrep", ["-f", marker]) do
+      {_, 1} ->
+        true
+
+      {_, 0} when tries > 0 ->
+        Process.sleep(100)
+        await_no_process(marker, tries - 1)
+
+      _ ->
+        false
+    end
+  end
+
   test "resolved DSL inputs reach the script as SYMPHONY_INPUT_* env vars", %{pack: pack} do
     rel =
       write_script!(pack, "scripts/env.sh", """
