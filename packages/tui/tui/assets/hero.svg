@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 210" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    svg { color: #1f2328; }
+    .muted { fill: #656d76; }
+    .accent { fill: #8250df; }
+    text { fill: currentColor; }
+    .box { stroke: currentColor; fill: none; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { fill: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <rect class="box" x="20" y="55" width="165" height="66" rx="8"/>
+  <text x="102" y="83" text-anchor="middle" font-size="15" font-weight="600">TuiManager</text>
+  <text x="102" y="103" text-anchor="middle" font-size="11" class="muted">one process, many children</text>
+
+  <line class="edge" x1="185" y1="88" x2="278" y2="88"/>
+  <text x="232" y="78" text-anchor="middle" font-size="12" class="muted">spawn, write</text>
+
+  <rect class="box" x="280" y="55" width="160" height="66" rx="8"/>
+  <text x="360" y="83" text-anchor="middle" font-size="15" font-weight="600">child on a PTY</text>
+  <text x="360" y="103" text-anchor="middle" font-size="11" class="muted">vim, bash, a repl</text>
+
+  <line class="edge" x1="440" y1="88" x2="533" y2="88"/>
+  <text x="487" y="78" text-anchor="middle" font-size="12" class="muted">escape bytes</text>
+
+  <rect class="box" x="535" y="45" width="165" height="86" rx="8"/>
+  <text x="617" y="69" text-anchor="middle" font-size="15" font-weight="600">vt100 screen</text>
+  <rect class="accent" x="560" y="82" width="26" height="10" rx="2"/>
+  <rect class="muted" x="592" y="82" width="44" height="10" rx="2"/>
+  <rect class="muted" x="560" y="98" width="56" height="10" rx="2"/>
+  <rect class="accent" x="622" y="98" width="26" height="10" rx="2" opacity="0.6"/>
+
+  <path class="edge" d="M600 131 C 560 190, 190 195, 106 125"/>
+  <text x="360" y="185" text-anchor="middle" font-size="12" class="muted">read: viewport, scrollback, styled cells</text>
+</svg>
