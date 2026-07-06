@@ -517,6 +517,22 @@
   rustWorkspace = rustWorkspaceFor pkgs;
 
   /**
+  Host-language build glue for unibind-annotated crates
+  (`unibind.build { crate; targets; }`): generated stubs, the merged python
+  site tree, the strict type gate, the importable module, and the wheel, all
+  from the crate's cdylib in the shared workspace graph. Bound per package
+  set like `rustWorkspaceFor`; the default binds the repo's x86_64-linux set.
+  See [packages/unibind/nix](packages/unibind/nix).
+  */
+  unibindFor = unibindPkgs:
+    import (paths.packagesRoot + "/unibind/nix") {
+      inherit lib packageRegistry buildPyStrictCheck;
+      pkgs = unibindPkgs;
+      rustWorkspace = rustWorkspaceFor unibindPkgs;
+    };
+  unibind = unibindFor pkgs;
+
+  /**
   Pinned macOS SDK used to cross-compile Rust to Darwin from Linux. A
   function `{ pkgs }: derivation`; override it to supply your own SDK.
   See [`lib/darwin/macos-sdk.nix`](lib/darwin/macos-sdk.nix).
@@ -592,6 +608,8 @@
       skills
       systemdHardening
       toml
+      unibind
+      unibindFor
       writeBashApplication
       writeNushellApplication
       writeProcessComposeApplication
