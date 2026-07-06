@@ -190,10 +190,13 @@ impl PolicyConfig {
         Ok(Self { rules })
     }
 
-    /// Load the policy config for the working tree rooted at `start`: walk up
-    /// from `start` looking for `sqlmerge.toml` (git runs a merge driver at the
-    /// worktree root, but walking up is robust to being invoked elsewhere).
-    /// Absent file -> [`PolicyConfig::abort_all`].
+    /// Load the policy config for the working tree containing `start`: walk up
+    /// from `start` looking for `sqlmerge.toml`, but never past the git
+    /// worktree root (git runs a merge driver at the worktree root; walking up
+    /// tolerates a manual invocation from a subdirectory). Outside a git
+    /// worktree only `start` itself is checked: an ancestor's config (a parent
+    /// checkout, `$HOME`) must never opt an unrelated repo into
+    /// auto-resolution. Absent file -> [`PolicyConfig::abort_all`].
     ///
     /// # Errors
     ///
@@ -211,13 +214,37 @@ impl PolicyConfig {
     }
 }
 
-/// Walk up from `start` (a directory) to the filesystem root, returning the
-/// first `sqlmerge.toml` found.
+/// Walk up from `start` (a directory), returning the first `sqlmerge.toml`
+/// found, bounded by the git worktree root: the walk stops at the first
+/// ancestor containing `.git` (a directory in a plain checkout, a file in a
+/// linked worktree or submodule). Without that bound a repo with no config
+/// would inherit whatever `sqlmerge.toml` happens to sit in a parent checkout
+/// or `$HOME` and silently opt into its auto-resolution policies. Outside a
+/// git worktree entirely, only `start` itself is consulted.
 fn find_config(start: &Path) -> Option<PathBuf> {
-    start.ancestors().find_map(|dir| {
+    let config_in = |dir: &Path| {
         let candidate = dir.join("sqlmerge.toml");
         candidate.is_file().then_some(candidate)
-    })
+    };
+
+    // `.git` marks the worktree root (a directory in a plain checkout, a file
+    // in a linked worktree or submodule). Locate the boundary first: only the
+    // directories from `start` up to and including it are searched.
+    let Some(root) = start.ancestors().find(|dir| dir.join(".git").exists()) else {
+        // Not inside a git worktree: honor only a config sitting right next
+        // to the invocation, never an ancestor's.
+        return config_in(start);
+    };
+
+    for dir in start.ancestors() {
+        if let Some(found) = config_in(dir) {
+            return Some(found);
+        }
+        if dir == root {
+            return None;
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -286,6 +313,51 @@ mod tests {
         )
         .expect_err("unknown policy should fail");
         assert!(matches!(err, ConfigError::Parse { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn config_search_stops_at_the_worktree_root() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        // Layout: tmp/sqlmerge.toml (ancestor config that must NOT apply)
+        //         tmp/repo/.git/    (worktree root, no config)
+        //         tmp/repo/sub/     (invocation dir)
+        std::fs::write(
+            tmp.path().join("sqlmerge.toml"),
+            "[policies]\n\"*\" = \"theirs\"\n",
+        )
+        .expect("write ancestor config");
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git")).expect("mk .git");
+        let sub = repo.join("sub");
+        std::fs::create_dir_all(&sub).expect("mk sub");
+
+        // From inside the repo, the ancestor config is out of bounds.
+        assert!(find_config(&sub).is_none());
+        assert!(find_config(&repo).is_none());
+
+        // A config at the worktree root itself applies, from any depth.
+        std::fs::write(repo.join("sqlmerge.toml"), "[policies]\n").expect("write root config");
+        assert_eq!(find_config(&sub), Some(repo.join("sqlmerge.toml")));
+        assert_eq!(find_config(&repo), Some(repo.join("sqlmerge.toml")));
+    }
+
+    #[test]
+    fn outside_a_worktree_only_the_start_dir_is_consulted() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        std::fs::write(
+            tmp.path().join("sqlmerge.toml"),
+            "[policies]\n\"*\" = \"theirs\"\n",
+        )
+        .expect("write ancestor config");
+        let plain = tmp.path().join("plain");
+        std::fs::create_dir_all(&plain).expect("mk plain");
+
+        // No .git anywhere under the tempdir: the ancestor config is ignored.
+        assert!(find_config(&plain).is_none());
+
+        // But a config in the invocation dir itself still applies.
+        std::fs::write(plain.join("sqlmerge.toml"), "[policies]\n").expect("write local config");
+        assert_eq!(find_config(&plain), Some(plain.join("sqlmerge.toml")));
     }
 
     #[test]
