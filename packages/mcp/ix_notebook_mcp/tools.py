@@ -47,7 +47,7 @@ from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData
 from pydantic import AnyUrl, Field
 
-from . import guide, outputs, resources_bridge
+from . import guide, mcp_ui, outputs, resources_bridge
 from .config import config, server_version
 from .kernel import current_kernel
 
@@ -88,6 +88,13 @@ _KERNEL_GUIDE = guide.compose(
 
 
 mcp = FastMCP("ix-mcp")
+
+# MCP Apps (SEP-1865): the one shared `ui://` viewer resource, plus the
+# `_meta.ui.resourceUri` dict a tool passes as `meta=` to opt in. A host that
+# supports the extension (claude.ai, Claude Desktop) renders an opted-in tool's
+# reply as interactive HTML in the chat; every other host ignores the metadata
+# and sees the exact same content blocks as before. See `mcp_ui`.
+_UI_META = mcp_ui.register_viewer(mcp)
 
 # One short id per live MCP session, keyed weakly by the session object so an id
 # is stable for a client's whole session and the map never pins a closed one.
@@ -451,8 +458,15 @@ async def topic_set(
 # as a real image, once as a wall of base64-in-text), which is what kept
 # blowing the host's per-result token cap. The content blocks ARE the reply;
 # there is no structured consumer.
+#
+# The UI-enabled tools return a `CallToolResult` built by `mcp_ui.ui_result`:
+# the same content blocks, with the run's human HTML riding in `_meta` for an
+# MCP Apps host's view. FastMCP passes a returned CallToolResult through
+# verbatim, and `structured_output=False` keeps the return annotation out of
+# schema derivation, so nothing about the model-facing reply changes.
 @mcp.tool(
     structured_output=False,
+    meta=_UI_META,
     description=guide.compose(
         guide.PYEXEC_INTRO,
         guide.PAGING,
@@ -468,7 +482,7 @@ async def python_exec(
     intent: Annotated[str, Field(description="Required. A short plain-language description of what this run does, e.g. 'count rows per host' or 'fetch and parse the open PR list'. It titles the run's card in the dashboard feed (grouped under your session) so a human watching can follow your work — never the raw code. Keep it under ~8 words.")],
     budget: Annotated[float, Field(description="Seconds to wait before backgrounding the run (server-side cap: 120s; larger values are clamped and a notice is appended to the reply)")] = 15.0,
     ctx: Context | None = None,
-) -> Content:
+) -> types.CallToolResult:
     await _start_dashboard_once()
     await _identify_client_once(ctx)
     await _require_session_name(ctx, intent=intent)
@@ -485,8 +499,12 @@ async def python_exec(
         code, effective_budget, intent, session=_session_id(ctx), topic=_session_topic(ctx)
     )
     rendered = outputs.to_mcp(cell_outputs)
+    # The human view for an MCP Apps host: the same text/html fragments the
+    # dashboard and room render for this run, carried on the reply's `_meta`
+    # (host/view plumbing, never model context -- see mcp_ui).
+    ui_fragments = mcp_ui.html_fragments(cell_outputs)
     if summary is None:
-        return rendered
+        return mcp_ui.ui_result(rendered, fragments=ui_fragments, title=intent)
     header = outputs.text(
         json.dumps(
             {
@@ -543,11 +561,12 @@ async def python_exec(
                 f"stdout, jobs['{job_id}'].result the value; history() lists recent runs.]"
             )
         )
-    return parts
+    return mcp_ui.ui_result(parts, fragments=ui_fragments, title=intent)
 
 
 @mcp.tool(
     structured_output=False,
+    meta=_UI_META,
     description=(
         "Watch a GitHub pull request in the dashboard. Creates a live PR resource "
         "nested under this task, lists required checks and actions with elapsed "
@@ -578,7 +597,7 @@ async def pr_watch(
         Field(description="Seconds to watch before the resource closes as timed out."),
     ] = 3600.0,
     ctx: Context | None = None,
-) -> Content:
+) -> types.CallToolResult:
     await _start_dashboard_once()
     await _identify_client_once(ctx)
     await _require_session_name(ctx, intent=f"watch PR {pr}")
@@ -609,7 +628,11 @@ async def pr_watch(
             }
         )
     )
-    return [header, *(item for item in rendered if getattr(item, "text", None) != "(no output)")]
+    return mcp_ui.ui_result(
+        [header, *(item for item in rendered if getattr(item, "text", None) != "(no output)")],
+        fragments=mcp_ui.html_fragments(cell_outputs),
+        title=f"watch PR {pr}",
+    )
 
 
 @mcp.tool(structured_output=False, description=guide.READ)
@@ -777,7 +800,10 @@ async def _read_resource_handler(uri: AnyUrl) -> list[ReadResourceContents]:
         resource = None
     if resource is not None:
         content = await resource.read()
-        return [ReadResourceContents(content=content, mime_type=resource.mime_type)]
+        # Pass the resource's `_meta` through (as FastMCP's own read path does):
+        # an MCP Apps `ui://` resource may carry rendering metadata (CSP,
+        # prefersBorder) that the host reads off `resources/read`.
+        return [ReadResourceContents(content=content, mime_type=resource.mime_type, meta=resource.meta)]
     try:
         text, mime = await resources_bridge.read_resource(uri_str)
     except resources_bridge.ResourceNotFoundError as exc:

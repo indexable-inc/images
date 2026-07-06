@@ -103,6 +103,30 @@ Non-string `llm_result` / `__ix_llm__` values are serialized as Nushell NUON.
 Polars DataFrames default to compact NUON with shape, schema, columns, and rows,
 while the dashboard still gets the styled HTML table.
 
+## Interactive results in the chat: MCP Apps
+
+An MCP host that supports the [MCP Apps
+extension](https://github.com/modelcontextprotocol/ext-apps) (claude.ai, Claude
+Desktop) renders the human view INLINE in the conversation, not only in the
+dashboard. The mechanism (`mcp_ui.py`, spec 2026-01-26 / SEP-1865): the server
+declares one `ui://` resource with mimeType `text/html;profile=mcp-app` — a
+self-contained viewer document — and `python_exec` / `pr_watch` name it in
+their tool `_meta.ui.resourceUri`. The host mounts the viewer in a sandboxed
+iframe and hands it the tool's result; the run's `text/html` fragments (the
+same ones the dashboard shows) ride on the reply's `_meta`, so they never cost
+the model tokens. The viewer renders the status header as chips, collapses long
+text, inlines images, injects the rich HTML, and makes every table
+click-to-sort. Hosts without the extension ignore all of it — the model-facing
+content blocks are unchanged.
+
+The same document renders outside an MCP host: `GET /api/jobs/{id}/ui` on the
+data API serves it with the run's payload baked in, which is what the room's
+results panel mounts (sandboxed iframe) behind each run's `UI` toggle.
+
+Opting a new tool in is two calls: `meta = mcp_ui.register_viewer(mcp)` once,
+then `@mcp.tool(meta=meta)` and `return mcp_ui.ui_result(content,
+fragments=mcp_ui.html_fragments(cell_outputs))`.
+
 ## Asking the human: interactive input
 
 A `Resource` pushes a view *to* the human; an `Input` is the channel the human
