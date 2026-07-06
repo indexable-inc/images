@@ -16,7 +16,7 @@ fn error_message(source: &str) -> String {
     lower(source).expect_err("lowering should fail").message
 }
 
-const OBJECTS: &str = r#"
+const OBJECTS: &str = r"
 /// A stateful boundary.
 mod sample {
     /// Boundary failures.
@@ -67,7 +67,7 @@ mod sample {
         todo!()
     }
 }
-"#;
+";
 
 #[test]
 fn objects_lower_with_constructor_methods_and_resource() {

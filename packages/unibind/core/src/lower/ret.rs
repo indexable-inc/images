@@ -76,20 +76,19 @@ pub(super) fn lower_ctor_return(
             throws: None,
         });
     }
-    if let syn::Type::Path(path) = &**ty {
-        if let Some(segment) = path.path.segments.last() {
-            if segment.ident == "Result" {
-                let parts = result_parts(segment)?;
-                if !is_object(parts.ok, object) {
-                    return Err(bad_ctor(parts.ok.span(), object));
-                }
-                let throws = error_name(parts.error, declared)?;
-                return Ok(Returned {
-                    ty: None,
-                    throws: Some(throws),
-                });
-            }
+    if let syn::Type::Path(path) = &**ty
+        && let Some(segment) = path.path.segments.last()
+        && segment.ident == "Result"
+    {
+        let parts = result_parts(segment)?;
+        if !is_object(parts.ok, object) {
+            return Err(bad_ctor(parts.ok.span(), object));
         }
+        let throws = error_name(parts.error, declared)?;
+        return Ok(Returned {
+            ty: None,
+            throws: Some(throws),
+        });
     }
     Err(bad_ctor(ty.span(), object))
 }
@@ -163,16 +162,15 @@ fn lower_stream(segment: &syn::PathSegment, declared: &Declared) -> Result<ir::T
             "streams do not nest; yield the inner stream's items directly",
         ));
     }
-    if let syn::Type::Path(path) = item {
-        if let Some(ident) = path.path.get_ident() {
-            if declared.objects.iter().any(|name| ident == name.as_str()) {
-                return Err(LowerError::new(
-                    item.span(),
-                    "streams of objects do not cross the boundary yet; \
-                     stream a #[unibind::record] snapshot instead",
-                ));
-            }
-        }
+    if let syn::Type::Path(path) = item
+        && let Some(ident) = path.path.get_ident()
+        && declared.objects.iter().any(|name| ident == name.as_str())
+    {
+        return Err(LowerError::new(
+            item.span(),
+            "streams of objects do not cross the boundary yet; \
+             stream a #[unibind::record] snapshot instead",
+        ));
     }
     Ok(ir::Type::Stream(Box::new(lower_type(
         item,
