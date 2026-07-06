@@ -15,3 +15,16 @@ ignore = [
     "*/fixtures/*",
     "*/snapshots/*",
 ]
+
+# Duplication budget consumed by `nix run .#clone` and enforced by the `clone`
+# lint stage. `global_pct` is the ceiling on whole-scan `duplication_pct`
+# (measured over the gated code, i.e. after the ignore globs above are applied).
+#
+# This is a RATCHET: the measured baseline is 0.729%, and this ceiling sits just
+# above it. Lower it as duplication is removed (re-measure with `nix run .#clone
+# -- . | jq .stats.duplication_pct`). Do NOT raise it without a written reason:
+# raising it silently admits new duplication.
+[budget]
+global_pct = 0.8
+diff_pct = 0.0
+diff_base = "origin/main"

@@ -36,7 +36,7 @@
   # up in the `lint` derivation build, not at `nix run` time.
   lintStage = ix.writeNushellApplication pkgs {
     name = "lint-stage";
-    meta.description = "One lint stage (alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | ruff); driven by `lint`";
+    meta.description = "One lint stage (alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | ruff | clone); driven by `lint`";
     runtimeInputs = [
       pkgs.alejandra
       pkgs.deadnix
@@ -44,6 +44,7 @@
       pkgs.ruff
       pkgs.statix
       repoPackages.astlog
+      repoPackages.clone
     ];
     text = ''
       # nu
@@ -137,8 +138,20 @@
           ruff check ${ix.ruffAnnArgs} ...$py_files
         }
       }
+      # Code clone detection over the whole tree (packages/code/clone-detect).
+      # `clone .` walks up for the repo `clone.toml`, whose `[budget]
+      # global_pct` is the ceiling on whole-scan `duplication_pct`; the binary
+      # exits nonzero when the global gate fails, so this gate ratchets
+      # duplication down without failing on every pre-existing clone. Only the
+      # global gate runs here: the diff gate needs a `.git` directory, and the
+      # CI lint derivation copies a `.git`-less source tree. `clone` prints the
+      # DetectionResult JSON to stdout; redirect it to null so a failing stage's
+      # log shows the tracing gate summary (stderr), not the full JSON blob.
+      def "main clone" [] {
+        clone . out> /dev/null
+      }
       def main [] {
-        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | ruff" }
+        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | ruff | clone" }
       }
     '';
   };
@@ -154,6 +167,7 @@
     "astlog-rust"
     "astlog-elixir"
     "ruff"
+    "clone"
   ];
 
   lintSpec = (pkgs.formats.json {}).generate "lint-dag.json" {
