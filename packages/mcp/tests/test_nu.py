@@ -232,3 +232,57 @@ def test_nu_registers_job_resource(monkeypatch: pytest.MonkeyPatch) -> None:
     alive = call["alive"]
     assert callable(alive)
     assert alive() is False
+
+
+def test_externals_run_color_free_even_when_host_forces_color(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # issue #2051: the kernel process typically runs with color FORCED by its
+    # launcher (FORCE_COLOR=1 / CLICOLOR_FORCE=1), which the engine used to
+    # inherit wholesale, so JSON-mode CLIs (`gh ... --json`) emitted
+    # ANSI-wrapped JSON into a captured pipe and `from json` choked. The engine
+    # copies the host env at construction, so force color first, then build a
+    # fresh engine.
+    import sys
+
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.setenv("CLICOLOR", "1")
+    monkeypatch.setenv("CLICOLOR_FORCE", "1")
+    monkeypatch.setenv("GH_FORCE_TTY", "100%")
+    nu.reset()
+    # A color-happy external: wraps its JSON in SGR exactly when the env asks
+    # for color (the same decision gh makes). chr(27) keeps the script free of
+    # backslashes so it survives nushell's double-quote escaping untouched.
+    script = (
+        "import json, os, sys;"
+        "force = os.environ.get('CLICOLOR_FORCE', '0') not in ('', '0')"
+        " or os.environ.get('FORCE_COLOR', '0') not in ('', '0');"
+        "on = force and not os.environ.get('NO_COLOR');"
+        "body = json.dumps({'state': 'MERGED'});"
+        "esc = chr(27);"
+        "sys.stdout.write(esc + '[1;37m' + body + esc + '[m' if on else body)"
+    )
+    try:
+        env = run(nu.value("$env | select -o NO_COLOR CLICOLOR CLICOLOR_FORCE FORCE_COLOR"))
+        assert env == {
+            "NO_COLOR": "1",
+            "CLICOLOR": "0",
+            "CLICOLOR_FORCE": "0",
+            "FORCE_COLOR": "0",
+        }
+        # GH_FORCE_TTY (TTY-style gh rendering into a pipe) must not cross over.
+        assert run(nu.value("'GH_FORCE_TTY' in $env")) is False
+        df = run(nu(f'^{sys.executable} -c "{script}" | from json'))
+        assert df["state"].item() == "MERGED"
+        # env= still re-enables color for the one call that wants raw ANSI.
+        raw = run(
+            nu.value(
+                f'^{sys.executable} -c "{script}"',
+                env={"NO_COLOR": "", "CLICOLOR_FORCE": "1"},
+            )
+        )
+        assert "\x1b[" in raw
+    finally:
+        # The forced-color engine (and the env= override, which persists on
+        # the stack) must not leak into later tests.
+        nu.reset()

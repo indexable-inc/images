@@ -45,6 +45,12 @@ Contract:
   Python's ``timedelta`` is the carrier, so a sub-microsecond remainder like
   ``1500ns`` truncates to the microsecond), filesize as ``int`` bytes,
   binary as ``bytes``.
+- Externals run color-free by default: the engine env overrides
+  ``NO_COLOR=1`` / ``CLICOLOR=0`` / ``CLICOLOR_FORCE=0`` / ``FORCE_COLOR=0``
+  and never inherits ``GH_FORCE_TTY``, so a JSON-mode CLI pipes parseable
+  bytes into ``from json`` even when the host process forces color. A call
+  that wants ANSI re-enables it with ``env={"NO_COLOR": "",
+  "CLICOLOR_FORCE": "1"}`` (or ``with-env`` inside the pipeline).
 - Each kernel session gets its OWN engine (stored in the session's
   namespace), so one agent's ``let``/``cd``/``def`` never leaks into or
   clobbers another session's pipelines.

@@ -68,8 +68,28 @@ fn initial_engine_state() -> EngineState {
 
     // The host environment, so `$env`, externals, and path lookups behave like
     // a normal shell session. PWD seeds cwd-relative commands (`ls`, `open`).
+    // GH_FORCE_TTY is the one exclusion: it makes gh render TTY-style output
+    // (color, truncation) into a captured pipe, so it never crosses over.
     for (key, value) in std::env::vars() {
+        if key == "GH_FORCE_TTY" {
+            continue;
+        }
         engine_state.add_env_var(key, Value::string(value, Span::unknown()));
+    }
+    // Color-free externals by default (issue #2051): the host process often
+    // forces color (e.g. Claude Code exports FORCE_COLOR=1 / CLICOLOR_FORCE=1),
+    // and pipeline output here is parsed rather than displayed, so inherited
+    // forcing breaks `^gh ... --json | from json` with ANSI-wrapped JSON.
+    // Overriding the values (not merely unsetting them) beats every CLI color
+    // convention; a caller that wants ANSI back re-enables it for one call via
+    // `env=` (the per-eval stack shadows these) or `with-env`.
+    for (key, value) in [
+        ("NO_COLOR", "1"),
+        ("CLICOLOR", "0"),
+        ("CLICOLOR_FORCE", "0"),
+        ("FORCE_COLOR", "0"),
+    ] {
+        engine_state.add_env_var(key.into(), Value::string(value, Span::unknown()));
     }
     if let Ok(current_dir) = std::env::current_dir() {
         engine_state.add_env_var(

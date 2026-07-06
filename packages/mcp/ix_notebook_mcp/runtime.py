@@ -1787,9 +1787,8 @@ async def watch_pr(
 
     async def refresh() -> dict[str, Any]:
         out = await run_nu(
-            'with-env {NO_COLOR: "1" CLICOLOR: "0" CLICOLOR_FORCE: "0" FORCE_COLOR: "0"} '
-            '{ gh pr view $env.PR --json number,title,state,mergeStateStatus,statusCheckRollup,'
-            'url,autoMergeRequest,isDraft,reviewDecision | complete | get stdout | from json }'
+            'gh pr view $env.PR --json number,title,state,mergeStateStatus,statusCheckRollup,'
+            'url,autoMergeRequest,isDraft,reviewDecision | complete | get stdout | from json'
         )
         row = out.to_dicts()[0]
         checks = row.get("statusCheckRollup") or []
