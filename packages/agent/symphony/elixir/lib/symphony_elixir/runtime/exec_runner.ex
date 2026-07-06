@@ -23,7 +23,10 @@ defmodule SymphonyElixir.Runtime.ExecRunner do
   ${node.output.field}` gating and `map ${node.output.items}` fan-out work
   over exec nodes. A script that writes nothing keeps today's behavior (the
   combined stdout/stderr tail as `output`); a non-empty file that is not
-  valid JSON fails the node loudly rather than guessing.
+  valid JSON fails the node loudly rather than guessing. The `"summary"`
+  key is reserved: on a sink node, `IR.RunNotifier` posts its string value
+  as message content, which is how a pack publishes a digest to Slack
+  without ever holding the bot token.
 
   The return shape matches `Runtime.EngineClient.run_node/2`
   (`{:ok, output, thread_id}` / `{:error, reason, thread_id}`) so the

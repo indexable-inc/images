@@ -83,6 +83,11 @@ defmodule SymphonyElixir.Triggers.Cron do
 
   require Logger
 
+  @doc """
+  `opts` may carry `:run_opts`, forwarded to `Ingress.start_by_trigger/2`
+  (`:engine`, `:store_opts`), so a test drives a full tick against a fake
+  engine and an isolated store. Production passes nothing.
+  """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -98,35 +103,35 @@ defmodule SymphonyElixir.Triggers.Cron do
   end
 
   @impl true
-  def init(_opts) do
+  def init(opts) do
     poll_ms = Config.get().cron_poll_ms
     schedule_tick(poll_ms)
-    {:ok, %{poll_ms: poll_ms}}
+    {:ok, %{poll_ms: poll_ms, run_opts: Keyword.get(opts, :run_opts, [])}}
   end
 
   @impl true
   def handle_info(:tick, state) do
-    tick_once()
+    tick_once(state.run_opts)
     schedule_tick(state.poll_ms)
     {:noreply, state}
   end
 
   @impl true
   def handle_call(:poll_now, _from, state) do
-    tick_once()
+    tick_once(state.run_opts)
     {:reply, :ok, state}
   end
 
   defp schedule_tick(ms), do: Process.send_after(self(), :tick, ms)
 
-  defp tick_once do
+  defp tick_once(run_opts) do
     now = DateTime.utc_now()
 
     WorkflowCatalog.for_trigger_kind(:cron)
-    |> Enum.each(fn entry -> evaluate_workflow(entry, now) end)
+    |> Enum.each(fn entry -> evaluate_workflow(entry, now, run_opts) end)
   end
 
-  defp evaluate_workflow(entry, now) do
+  defp evaluate_workflow(entry, now, run_opts) do
     case CronExpression.parse(entry.trigger.schedule) do
       {:ok, parsed} ->
         case CronState.get_last_fired(entry.name) do
@@ -147,7 +152,7 @@ defmodule SymphonyElixir.Triggers.Cron do
   defp maybe_fire_due(entry, parsed, last_fired, now) do
     case next_due(parsed, last_fired, now, entry.trigger.timezone) do
       {:fire, scheduled_for} ->
-        fire(entry, scheduled_for, now)
+        fire(entry, scheduled_for, now, run_opts)
 
       :not_due ->
         :ok
@@ -199,7 +204,7 @@ defmodule SymphonyElixir.Triggers.Cron do
     end
   end
 
-  defp fire(entry, %DateTime{} = scheduled_for, %DateTime{} = now) do
+  defp fire(entry, %DateTime{} = scheduled_for, %DateTime{} = now, run_opts) do
     trigger = %{
       kind: :cron,
       schedule: entry.trigger.schedule,
@@ -209,7 +214,7 @@ defmodule SymphonyElixir.Triggers.Cron do
       input: entry.trigger.input
     }
 
-    case Ingress.start_by_trigger(trigger) do
+    case Ingress.start_by_trigger(trigger, run_opts) do
       {:ok, started} ->
         :ok = CronState.record_fire(entry.name, now)
 

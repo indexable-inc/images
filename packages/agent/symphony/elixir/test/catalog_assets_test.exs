@@ -32,6 +32,19 @@ defmodule SymphonyElixir.CatalogAssetsTest do
            |> Enum.all?(&match?({:ok, %Skill{}}, &1))
   end
 
+  test "indexable pack insights workflow fires daily via cron" do
+    source = File.read!(Path.join([@root, "workflows", "indexable", "workflows", "insights.sym"]))
+    assert {:ok, workflow} = Parser.parse(source, file: "insights.sym")
+
+    assert workflow.name == "insights"
+    # 16:00 UTC = 9am Pacific; the notifier posts its summary via the
+    # SYMPHONY_SLACK_NOTIFY_CRON_WORKFLOWS allowlist.
+    assert workflow.trigger == %{kind: :cron, schedule: "0 16 * * *", timezone: "UTC", input: %{}}
+
+    binds = for {:bind, name, _expr} <- workflow.statements, do: name
+    assert binds == ["insights"]
+  end
+
   test "example workflow pack is safe and manual-only" do
     source = File.read!(Path.join(@example_workflows_dir, "inspect.sym"))
     assert {:ok, workflow} = Parser.parse(source, file: "inspect.sym")

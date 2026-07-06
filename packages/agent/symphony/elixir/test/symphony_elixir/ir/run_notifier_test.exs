@@ -23,6 +23,20 @@ defmodule SymphonyElixir.IR.RunNotifierTest do
     }
   end
 
+  # An exec node whose (possibly structured) output the content sections
+  # read; `deps` is hand-set so a test can shape sink vs interior directly.
+  defp exec_node(id, output, deps \\ []) do
+    %Node{
+      id: id,
+      ast_origin: {:exec, id},
+      kind: :exec,
+      inputs: [],
+      deps: deps,
+      state: :succeeded,
+      output: output
+    }
+  end
+
   # The notifier only reads the two cron-policy fields; default to the
   # production defaults (failures on, no success allowlist) unless overridden.
   defp config(attrs \\ %{}) do
@@ -143,6 +157,65 @@ defmodule SymphonyElixir.IR.RunNotifierTest do
       # No room url was given, so there is no run-details button.
       assert is_nil(button_with_text(payload, "Run details"))
     end
+  end
+
+  describe "content sections" do
+    test "posts a sink node's reserved summary output as message content" do
+      payload =
+        RunNotifier.build_payload(
+          graph(
+            status: :succeeded,
+            trigger: %{kind: :cron},
+            nodes: %{
+              "gather" => exec_node("gather", %{"summary" => "interior digest"}),
+              "digest" => exec_node("digest", %{"summary" => "*hello* from the digest"}, ["gather"])
+            }
+          ),
+          nil
+        )
+
+      texts = section_texts(payload)
+      assert "*hello* from the digest" in texts
+      # Interior node output is plumbing, not publishable content.
+      refute "interior digest" in texts
+    end
+
+    test "a sink without a string summary adds no content" do
+      base = graph(status: :succeeded, trigger: %{kind: :cron})
+
+      for output <- [nil, "raw tail", %{"summary" => 42}, %{"report" => "x"}, %{"summary" => ""}] do
+        payload = RunNotifier.build_payload(%{base | nodes: %{"n" => exec_node("n", output)}}, nil)
+        assert length(section_texts(payload)) == 1, "unexpected content for output #{inspect(output)}"
+      end
+    end
+
+    test "content is truncated to Slack's 3000-char section cap" do
+      long = String.duplicate("a", 4_000)
+
+      payload =
+        RunNotifier.build_payload(
+          graph(status: :succeeded, trigger: %{kind: :cron}, nodes: %{"n" => exec_node("n", %{"summary" => long})}),
+          nil
+        )
+
+      [_summary, content] = section_texts(payload)
+      assert byte_size(content) <= 3_000
+      assert String.ends_with?(content, "...")
+    end
+
+    test "a failed run posts no content even when a sink carries a summary" do
+      payload =
+        RunNotifier.build_payload(
+          graph(status: :failed, trigger: %{kind: :cron}, nodes: %{"n" => exec_node("n", %{"summary" => "partial"})}),
+          nil
+        )
+
+      refute "partial" in section_texts(payload)
+    end
+  end
+
+  defp section_texts(payload) do
+    for %{"type" => "section", "text" => %{"text" => text}} <- payload["blocks"], do: text
   end
 
   defp button_with_text(payload, text) do

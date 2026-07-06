@@ -134,4 +134,139 @@ defmodule SymphonyElixir.Triggers.CronTest do
       assert Process.alive?(cron)
     end
   end
+
+  describe "tick firing (full stack, fake engine)" do
+    defmodule FakeEngine do
+      @behaviour SymphonyElixir.Runtime.EngineClient
+
+      @impl true
+      def run_node(%SymphonyElixir.IR.Node{id: id}, _opts), do: {:ok, %{ran: id}, "thread-#{id}"}
+
+      @impl true
+      def status(_thread_id), do: :unknown
+    end
+
+    setup %{tmp_dir: base} do
+      start_supervised!({Registry, keys: :unique, name: SymphonyElixir.Runtime.Registry})
+      start_supervised!({Task.Supervisor, name: SymphonyElixir.TaskSupervisor})
+      start_supervised!(SymphonyElixir.Runtime.Supervisor)
+      start_supervised!(SymphonyElixir.CronState)
+
+      store = Path.join(base, "store")
+      workflows = Path.join(base, "workflows")
+      File.mkdir_p!(store)
+      File.mkdir_p!(workflows)
+      start_supervised!({WorkflowCatalog, workflows_dir: workflows, poll_ms: 60_000})
+
+      store_opts = [dir: store]
+      start_supervised!({Cron, run_opts: [engine: FakeEngine, store_opts: store_opts]})
+
+      {:ok, store_opts: store_opts, workflows_dir: workflows}
+    end
+
+    # Workflow names are unique per test because CronState persists to the
+    # shared test-root cron_state.json across this file's tests.
+    defp unique_name(prefix), do: "#{prefix}-#{System.unique_integer([:positive])}"
+
+    defp write_cron_sym!(dir, name, header_rest) do
+      source = ~s|workflow "#{name}" on cron #{header_rest} { a <- agent { engine: codex, model: "m", prompt: inline "go" } }|
+      File.write!(Path.join(dir, "#{name}.sym"), source)
+      WorkflowCatalog.scan(dir)
+    end
+
+    # Only stable snapshots: the store writes temp-then-rename, so a raw
+    # File.ls! can catch a transient <run_id>.json.tmp mid-persist.
+    defp run_files(store_opts) do
+      store_opts
+      |> Keyword.fetch!(:dir)
+      |> Path.join("*.json")
+      |> Path.wildcard()
+      |> Enum.map(&Path.basename/1)
+    end
+
+    # Same tolerance as IngressTest: start_link returns before the :advance
+    # continuation writes the first snapshot.
+    defp wait_terminal(run_id, store_opts, attempts \\ 60) do
+      case SymphonyElixir.IR.Store.load(run_id, store_opts) do
+        {:ok, %{status: status} = graph} when status in [:succeeded, :failed, :cancelled] ->
+          graph
+
+        _ when attempts == 0 ->
+          flunk("run #{run_id} never terminal")
+
+        _ ->
+          Process.sleep(20)
+          wait_terminal(run_id, store_opts, attempts - 1)
+      end
+    end
+
+    defp wait_run_count(store_opts, expected, attempts \\ 60) do
+      files = run_files(store_opts)
+
+      cond do
+        length(files) == expected ->
+          files
+
+        attempts == 0 ->
+          flunk("expected #{expected} run files, have #{inspect(files)}")
+
+        true ->
+          Process.sleep(20)
+          wait_run_count(store_opts, expected, attempts - 1)
+      end
+    end
+
+    @tag :tmp_dir
+    test "first observation seeds the watermark without firing", %{store_opts: store_opts, workflows_dir: dir} do
+      name = unique_name("seed")
+      write_cron_sym!(dir, name, ~s|"* * * * *"|)
+
+      assert :ok = Cron.poll_now()
+
+      assert %DateTime{} = SymphonyElixir.CronState.get_last_fired(name)
+      assert run_files(store_opts) == []
+    end
+
+    @tag :tmp_dir
+    test "fires exactly one zoned catch-up run and stamps the cron trigger", %{store_opts: store_opts, workflows_dir: dir} do
+      name = unique_name("daily")
+      write_cron_sym!(dir, name, ~s|"0 9 * * *" tz "America/Los_Angeles"|)
+
+      # A watermark two days back has a passed 9am-LA match, so the next
+      # tick owes exactly one catch-up fire.
+      :ok = SymphonyElixir.CronState.seed_if_unset(name, DateTime.add(DateTime.utc_now(), -2, :day))
+
+      assert :ok = Cron.poll_now()
+      [run_file] = wait_run_count(store_opts, 1)
+
+      # Let the run finish before the second tick so no snapshot persist
+      # races the file-count assertions below.
+      run_id = Path.rootname(run_file)
+      graph = wait_terminal(run_id, store_opts)
+      assert %{kind: :cron, schedule: "0 9 * * *", timezone: "America/Los_Angeles"} = graph.trigger
+
+      # The fire advanced the watermark to now, so an immediate second tick
+      # owes nothing: the watermark is untouched (record_fire is the only
+      # writer) and no second run appears.
+      watermark = SymphonyElixir.CronState.get_last_fired(name)
+      assert :ok = Cron.poll_now()
+      assert SymphonyElixir.CronState.get_last_fired(name) == watermark
+      assert run_files(store_opts) == [run_file]
+    end
+
+    @tag :tmp_dir
+    test "an unparseable schedule is logged and skipped without poisoning the tick", %{workflows_dir: dir} do
+      bad = unique_name("bad")
+      good = unique_name("good")
+      write_cron_sym!(dir, bad, ~s|"not a cron"|)
+      write_cron_sym!(dir, good, ~s|"* * * * *"|)
+
+      assert :ok = Cron.poll_now()
+
+      # The bad schedule cannot seed (it never parses), the good one still
+      # did: the tick walked past the failure instead of crashing.
+      assert is_nil(SymphonyElixir.CronState.get_last_fired(bad))
+      assert %DateTime{} = SymphonyElixir.CronState.get_last_fired(good)
+    end
+  end
 end

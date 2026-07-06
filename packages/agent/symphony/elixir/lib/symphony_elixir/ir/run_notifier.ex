@@ -20,6 +20,14 @@ defmodule SymphonyElixir.IR.RunNotifier do
   specific names to surface only a few. The policy reads workflow names from
   config, never a literal in source, so `elixir/lib/` stays pack-agnostic.
   Non-cron terminal runs always notify.
+
+  Content sections: a succeeded run's message also carries the output of
+  its sink nodes (nodes no other node depends on) when that output is a map
+  with a string under the reserved `"summary"` key. That is how a workflow
+  publishes real content (a digest, a report) through the notifier instead
+  of handing packs a Slack token: an exec script opts in by writing
+  `{"summary": ...}` to `SYMPHONY_OUTPUT_FILE` (see `Runtime.ExecRunner`).
+  Failed runs keep the compact failure summary only.
   """
 
   alias SymphonyElixir.Codex.Provision
@@ -99,12 +107,15 @@ defmodule SymphonyElixir.IR.RunNotifier do
     header_text = "#{status_icon(status)} #{workflow} #{status_word(status)}"
 
     blocks =
-      [
-        header(header_text),
-        section(summary),
-        context(context_text(graph)),
-        actions(graph, room_base_url)
-      ]
+      ([
+         header(header_text),
+         section(summary)
+       ] ++
+         content_sections(graph) ++
+         [
+           context(context_text(graph)),
+           actions(graph, room_base_url)
+         ])
       |> Enum.reject(&is_nil/1)
 
     %{
@@ -139,6 +150,32 @@ defmodule SymphonyElixir.IR.RunNotifier do
 
   defp failed_node_ids(%RunGraph{nodes: nodes}) do
     for {id, node} <- nodes, node.state == :failed, do: id
+  end
+
+  # Slack caps a section block's text at 3000 characters.
+  @section_char_limit 3000
+
+  # The run's publishable content: each sink node's reserved "summary"
+  # output, one mrkdwn section per node (see moduledoc). Succeeded runs
+  # only; a failed run's partial content would read as a delivered digest.
+  defp content_sections(%RunGraph{status: :succeeded} = graph) do
+    for text <- sink_summaries(graph), do: section(truncate(text, @section_char_limit))
+  end
+
+  defp content_sections(_graph), do: []
+
+  # Sink nodes (no other node depends on them) are the run's results by
+  # construction; interior node outputs are plumbing. Sorted by id so
+  # multi-sink runs render deterministically.
+  defp sink_summaries(%RunGraph{nodes: nodes}) do
+    depended_on = nodes |> Map.values() |> Enum.flat_map(& &1.deps) |> MapSet.new()
+
+    for {id, node} <- Enum.sort_by(nodes, &elem(&1, 0)),
+        not MapSet.member?(depended_on, id),
+        is_map(node.output) and not is_struct(node.output),
+        is_binary(node.output["summary"]),
+        node.output["summary"] != "",
+        do: node.output["summary"]
   end
 
   defp node_breakdown(%RunGraph{nodes: nodes}) do
@@ -303,9 +340,11 @@ defmodule SymphonyElixir.IR.RunNotifier do
 
   defp code(text), do: "`" <> to_string(text) <> "`"
 
+  # The limits are Slack's hard caps, so the ellipsis must fit inside them:
+  # slice to limit - 3 so the "..." never pushes the text over.
   defp truncate(text, limit) when byte_size(text) <= limit, do: text
 
   defp truncate(text, limit) do
-    text |> String.slice(0, limit - 1) |> String.trim() |> Kernel.<>("...")
+    text |> String.slice(0, limit - 3) |> String.trim() |> Kernel.<>("...")
   end
 end
