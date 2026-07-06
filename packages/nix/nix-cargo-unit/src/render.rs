@@ -1060,7 +1060,7 @@ fn render_driver_build_phase(
     }
     append_direct_dependency_metadata_exports(&mut script, graph, prepared, index)?;
 
-    push_rustc_args(&mut script, unit, &prepared.hashes[index]);
+    push_rustc_args(&mut script, unit, &prepared.hashes[index], driver);
     append_target_linker_arg(&mut script, unit);
     append_extra_rustc_args(&mut script, unit);
 
@@ -1107,7 +1107,7 @@ fn render_driver_build_phase(
 
     match driver {
         Driver::Rustc => {
-            if unit.is_bin() || unit.is_test() {
+            if uses_explicit_output_path(unit, driver) {
                 writeln!(
                     script,
                     "rustc_args+=( -o {} )",
@@ -1214,7 +1214,17 @@ fn collects_unused_crate_dependencies(unit: &Unit, options: &RenderOptions) -> b
     options.deny_unused_crate_dependencies && !unit.is_external()
 }
 
-fn push_rustc_args(script: &mut String, unit: &Unit, hash: &str) {
+// A root (bin) or test unit gets an explicit `-o build/<name>` path (see the
+// `Driver::Rustc` match arm below), which alone fixes the output filename.
+// `-C extra-filename` only matters for `--out-dir`-style outputs (libs, rlibs,
+// proc-macros) where multiple units can otherwise collide; combining both
+// flags is what makes rustc warn "ignoring -C extra-filename flag due to -o
+// flag" on every such build (index#1975).
+fn uses_explicit_output_path(unit: &Unit, driver: Driver) -> bool {
+    driver == Driver::Rustc && (unit.is_bin() || unit.is_test())
+}
+
+fn push_rustc_args(script: &mut String, unit: &Unit, hash: &str, driver: Driver) {
     push_arg(script, "--crate-name");
     push_arg(script, &unit.target.name.replace('-', "_"));
     push_arg(script, "--edition");
@@ -1273,7 +1283,13 @@ fn push_rustc_args(script: &mut String, unit: &Unit, hash: &str) {
         push_arg(script, "rpath=yes");
     }
     push_codegen(script, "metadata", hash);
-    push_codegen(script, "extra-filename", &format!("-{hash}"));
+    // rustc warns "ignoring -C extra-filename flag due to -o flag" when both
+    // are given; the explicit `-o build/<name>` path fully determines a bin/test
+    // unit's output name, so extra-filename (which only disambiguates
+    // `--out-dir`-style outputs) would be a no-op there anyway.
+    if !uses_explicit_output_path(unit, driver) {
+        push_codegen(script, "extra-filename", &format!("-{hash}"));
+    }
 
     for rustflag in &unit.profile.rustflags {
         push_arg(script, rustflag);
@@ -3424,6 +3440,87 @@ mod tests {
         assert!(rendered.contains("cp \"$split_debuginfo_sidecar\" \"$out/lib/\""));
         assert!(rendered.contains("case \"$build_artifact\" in\n    *.dwo|*.dwp) continue ;;"));
         assert!(!rendered.contains("cp -R build/* $out/lib/"));
+    }
+
+    #[test]
+    fn omits_extra_filename_when_output_path_is_explicit() {
+        // Bin (and test) units get an explicit `-o build/<name>` path, which by
+        // itself fully determines the output filename. Also emitting
+        // `-C extra-filename` there is what makes rustc warn "ignoring -C
+        // extra-filename flag due to -o flag" on every such build (index#1975).
+        // Lib units use `--out-dir` instead, so they still need extra-filename
+        // to disambiguate same-named outputs.
+        let graph: UnitGraph = serde_json::from_str(
+            r#"{
+              "version": 1,
+              "units": [
+                {
+                  "pkg_id": "path+file:///workspace#hello@0.1.0",
+                  "target": {
+                    "kind": ["lib"],
+                    "crate_types": ["lib"],
+                    "name": "hello",
+                    "src_path": "/workspace/src/lib.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [],
+                  "mode": "build",
+                  "dependencies": []
+                },
+                {
+                  "pkg_id": "path+file:///workspace#hello@0.1.0",
+                  "target": {
+                    "kind": ["bin"],
+                    "crate_types": ["bin"],
+                    "name": "hello-cli",
+                    "src_path": "/workspace/src/main.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [],
+                  "mode": "build",
+                  "dependencies": []
+                }
+              ],
+              "roots": [0, 1]
+            }"#,
+        )
+        .unwrap();
+
+        let rendered = render_units_nix(
+            &graph,
+            &RenderOptions {
+                workspace_root: PathBuf::from("/workspace"),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: false,
+                toolchain_id: Some("rustc-test".to_string()),
+                deny_unused_crate_dependencies: false,
+                deny_panics: false,
+            },
+        )
+        .unwrap();
+
+        // The bin unit's rustc (link) invocation carries the explicit `-o`
+        // path immediately after the source-path arg, with no
+        // `extra-filename` anywhere in between -- that adjacency is exactly
+        // what makes rustc emit "ignoring -C extra-filename flag due to -o
+        // flag".
+        let bin_rustc_invocation = rendered
+            .split("rustc_args+=( \"$src/src/main.rs\" )")
+            .nth(1)
+            .and_then(|rest| rest.split("env \"''${rustc_env[@]}\" rustc").next())
+            .expect("bin unit's rustc build phase");
+        assert!(bin_rustc_invocation.contains("rustc_args+=( -o 'build/hello-cli' )"));
+        assert!(!bin_rustc_invocation.contains("extra-filename"));
+
+        // Sibling clippy-driver units still use `--out-dir` (never `-o`), so
+        // they keep extra-filename for both the lib and the bin target; only
+        // the bin's *rustc* link step drops it. Three occurrences total: the
+        // lib's rustc build, the lib's clippy build, and the bin's clippy
+        // build.
+        assert_eq!(rendered.matches("'extra-filename=").count(), 3);
     }
 
     #[test]
