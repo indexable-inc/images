@@ -12,8 +12,8 @@ use crate::{ty, RenderError, RenderedRecord};
 /// read-only getter per field.
 pub(crate) fn record_attrs(record: &ir::Record) -> RenderedRecord {
     let outer: syn::Attribute = match &record.names.py {
-        Some(name) => parse_quote!(#[::pyo3::pyclass(name = #name)]),
-        None => parse_quote!(#[::pyo3::pyclass]),
+        Some(name) => parse_quote!(#[::pyo3::pyclass(from_py_object, name = #name)]),
+        None => parse_quote!(#[::pyo3::pyclass(from_py_object)]),
     };
     let fields = record
         .fields

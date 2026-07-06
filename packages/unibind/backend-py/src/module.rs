@@ -54,6 +54,8 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
         #[doc(hidden)]
         #[allow(clippy::all, clippy::pedantic, clippy::nursery, unused_qualifications)]
         mod #glue_ident {
+            use ::pyo3::types::PyModuleMethods as _;
+
             #(#exceptions)*
             #(#constructors)*
             #(#wrappers)*
