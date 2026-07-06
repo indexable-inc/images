@@ -3,6 +3,9 @@ From: Andrew Gazelka <andrew.gazelka@gmail.com>
 Date: Sun, 17 May 2026 12:20:09 -0700
 Subject: [PATCH] Add magic_number lint
 
+House lint: flags numeric literals appearing inline in non-test code.
+Magic numbers obscure intent: a value should be a named `const` (when
+static) or a configurable struct field / function argument.
 
 diff --git a/clippy_config/src/conf.rs b/clippy_config/src/conf.rs
 index c59cb7e03..e8b699258 100644

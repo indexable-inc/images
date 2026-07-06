@@ -3,6 +3,13 @@ From: Claude <noreply@anthropic.com>
 Date: Thu, 2 Jul 2026 18:31:24 -0700
 Subject: [PATCH] README.ix: document snapshot fork layout
 
+The indexable-inc/mesa fork repo is a generated serialization (snapshot
+base plus this patch series applied as commits), not a place where
+changes originate. Add README.ix.md so a reader of the fork repo learns
+the layout, why the fork exists (the venus driver-side sync-fd work for
+the panes GPU guest), and that the series in indexable-inc/index is the
+fork of record.
+
 Refs: indexable-inc/index#1686
 
 diff --git a/README.ix.md b/README.ix.md

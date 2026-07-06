@@ -3,6 +3,9 @@ From: Andrew Gazelka <andrew.gazelka@gmail.com>
 Date: Wed, 27 May 2026 23:26:42 -0700
 Subject: [PATCH] Add anonymous tuple return type lint
 
+House lint: flags anonymous tuple types in explicit function return
+types. Tuple fields carry no names; a named struct documents what each
+value means at every call site.
 
 diff --git a/CHANGELOG.md b/CHANGELOG.md
 index f53143e56..9114bbe9e 100644

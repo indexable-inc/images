@@ -3,6 +3,11 @@ From: Andrew Gazelka <andrew.gazelka@gmail.com>
 Date: Sun, 5 Jul 2026 13:16:14 -0700
 Subject: [PATCH] mcp: route channel notifications into chat
 
+codex surfaces no unsolicited MCP server notifications in the agent
+chat, so the index kernel's `notifications/claude/channel` events
+(interactive resources, channel replies) were silently dropped. Route
+MCP channel notifications into the chat stream so the agent sees them.
+
 Refs indexable-inc/index#1857
 
 diff --git a/codex-rs/codex-mcp/src/connection_manager.rs b/codex-rs/codex-mcp/src/connection_manager.rs

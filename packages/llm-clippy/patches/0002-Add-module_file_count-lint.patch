@@ -3,6 +3,10 @@ From: Andrew Gazelka <andrew.gazelka@gmail.com>
 Date: Sun, 17 May 2026 12:19:21 -0700
 Subject: [PATCH] Add module_file_count lint
 
+House lint: flags module directories containing more than a
+configurable number of `.rs` files (default 7). Large modules are hard
+to navigate and signal missing abstraction boundaries; splitting into
+sub-modules keeps each directory focused and discoverable.
 
 diff --git a/clippy_config/src/conf.rs b/clippy_config/src/conf.rs
 index 465e88a78..30ae84669 100644
