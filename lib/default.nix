@@ -525,7 +525,7 @@
   See [packages/unibind/nix](packages/unibind/nix).
   */
   unibindFor = unibindPkgs:
-    import (paths.packagesRoot + "/unibind/nix") {
+    import (paths.packagesRoot + "/unibind/nix/build.nix") {
       inherit lib packageRegistry buildPyStrictCheck;
       pkgs = unibindPkgs;
       rustWorkspace = rustWorkspaceFor unibindPkgs;
