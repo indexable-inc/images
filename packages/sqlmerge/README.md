@@ -51,7 +51,7 @@ sqlmerge, everything else keeps [mergiraf](https://mergiraf.org/). By hand:
 ## Refusals (by design, no fallbacks)
 
 - **Schema divergence.** If `sqlite_schema` differs between ours and theirs
-  (ignoring whitespace outside quoted literals), the driver refuses and lists
+  (ignoring whitespace and SQL comments outside quoted literals), the driver refuses and lists
   the differing objects. Changesets are data-only; sqlmerge never pretends to
   merge DDL. The merge base must share the schema too: even when both sides
   applied the same migration, the session diff cannot span a schema change,

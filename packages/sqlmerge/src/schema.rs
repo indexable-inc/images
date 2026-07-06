@@ -7,7 +7,7 @@
 //!   1. If the schema diverges between the merged sides, applying a data
 //!      changeset across that boundary is meaningless (or corrupting), so we
 //!      refuse. We compare the SQL text of every schema object,
-//!      whitespace-insensitively (outside quoted literals).
+//!      whitespace- and comment-insensitively (outside quoted literals).
 //!   2. The merge base must share that schema too: `sqlite3session_diff`
 //!      requires identical table definitions on both ends of the diff, so a
 //!      base behind a DDL migration (even one both sides applied identically)
@@ -33,6 +33,14 @@ use crate::error::{MergeError, Result, SchemaDivergence};
 /// `DEFAULT 'a, b'` is a real schema change), `"..."`/`` `...` `` quoted
 /// identifiers, and `[...]` bracket identifiers. Doubled closing quotes
 /// (`''`, `""`) are the SQL escape and stay inside the region.
+///
+/// SQL comments are dropped entirely, since a comment is never a schema change
+/// (`SQLite` stores them verbatim in `sqlite_schema.sql`): line comments (`--` to
+/// end of line) and block comments (`/* ... */`, which do not nest). A comment
+/// is only recognized outside a quoted region, so a `--` or `/*` inside a
+/// literal stays literal. A dropped comment collapses like whitespace, so it
+/// separates adjacent tokens (`a/* c */b` becomes `a b`) rather than gluing
+/// them.
 fn normalize_sql(sql: &str) -> String {
     let mut out = String::with_capacity(sql.len());
     let mut chars = sql.chars().peekable();
@@ -51,6 +59,37 @@ fn normalize_sql(sql: &str) -> String {
                 } else {
                     closing_quote = None;
                 }
+            }
+            continue;
+        }
+
+        // Comments (only outside quoted regions) are dropped and treated as a
+        // whitespace boundary: emit at most one separating space, then let the
+        // normal whitespace-collapse / punctuation rules decide if it survives.
+        if ch == '-' && chars.peek() == Some(&'-') {
+            chars.next(); // consume the second '-'
+            for c in chars.by_ref() {
+                if c == '\n' {
+                    break;
+                }
+            }
+            if !out.is_empty() && !out.ends_with([' ', '(', ',']) {
+                out.push(' ');
+            }
+            continue;
+        }
+        if ch == '/' && chars.peek() == Some(&'*') {
+            chars.next(); // consume the '*'
+            // Scan to the closing `*/` (block comments do not nest in SQLite).
+            let mut prev = '\0';
+            for c in chars.by_ref() {
+                if prev == '*' && c == '/' {
+                    break;
+                }
+                prev = c;
+            }
+            if !out.is_empty() && !out.ends_with([' ', '(', ',']) {
+                out.push(' ');
             }
             continue;
         }
@@ -258,5 +297,44 @@ mod tests {
         assert!(quoted.contains("\"my  table\""));
         let bracket = normalize_sql("CREATE TABLE [my  table] (id INTEGER PRIMARY KEY)");
         assert!(bracket.contains("[my  table]"));
+    }
+
+    #[test]
+    fn line_comment_does_not_diverge() {
+        let none = normalize_sql("CREATE TABLE t (id INTEGER PRIMARY KEY)");
+        let v1 = normalize_sql("CREATE TABLE t (id INTEGER PRIMARY KEY) -- v1");
+        let v2 = normalize_sql("CREATE TABLE t (id INTEGER PRIMARY KEY) -- v2");
+        assert_eq!(v1, v2);
+        assert_eq!(v1, none);
+    }
+
+    #[test]
+    fn block_comment_does_not_diverge() {
+        let none = normalize_sql("CREATE TABLE t (id INTEGER PRIMARY KEY)");
+        // Mid-statement block comment must vanish without changing the schema.
+        let embedded = normalize_sql("CREATE TABLE t (id INTEGER /* pk */ PRIMARY KEY)");
+        assert_eq!(embedded, none);
+    }
+
+    #[test]
+    fn comment_does_not_glue_adjacent_tokens() {
+        let out = normalize_sql("CREATE TABLE t (a/* x */b TEXT)");
+        assert!(out.contains("a b"), "tokens glued: {out}");
+        assert!(!out.contains("ab"), "tokens glued: {out}");
+    }
+
+    #[test]
+    fn double_dash_inside_string_literal_is_not_a_comment() {
+        let out = normalize_sql("CREATE TABLE t (v TEXT DEFAULT '-- not a comment')");
+        assert!(out.contains("'-- not a comment'"), "literal mangled: {out}");
+    }
+
+    #[test]
+    fn punctuation_inside_comment_does_not_affect_real_punctuation() {
+        // A `,` inside a comment must be dropped with the comment and must not
+        // interfere with structural-punctuation handling of the real commas.
+        let with_comment = normalize_sql("CREATE TABLE t (a TEXT, /* one, two, three */ b TEXT)");
+        let without = normalize_sql("CREATE TABLE t (a TEXT, b TEXT)");
+        assert_eq!(with_comment, without);
     }
 }
