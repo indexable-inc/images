@@ -509,7 +509,14 @@ jobs:
           # Token via config file, never `attic login`: argv is world-readable
           # through /proc/<pid>/cmdline.
           workdir="$(mktemp -d)"
-          trap 'rm -rf "$workdir"' EXIT
+          # `nix copy` writes the chroot store below with store permissions
+          # (read-only files and dirs), which a bare `rm -rf` cannot delete;
+          # run 28787288386 pushed all 2485 paths successfully and then FAILED
+          # on exactly this trap (~300k "Permission denied" lines), which
+          # skipped advance-cache-ready and kept the consumer pin frozen
+          # (#1968). chmod first; cleanup of the job-private tmpdir must never
+          # outweigh a completed push, so it warns instead of failing.
+          trap 'chmod -R u+w "$workdir" || true; rm -rf "$workdir" || echo "::warning::could not clean $workdir (job-private tmp, reaped with the runner unit)"' EXIT
           export XDG_CONFIG_HOME="$workdir/config"
           install -d -m700 "$XDG_CONFIG_HOME/attic"
           ( umask 077
