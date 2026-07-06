@@ -272,6 +272,10 @@
           # ix-vt's tests dlopen the libghostty-vt dylib at runtime; make its lib
           # dir available so the loader resolves `@rpath`/`-l ghostty-vt`.
           ix-vt = [libghosttyVt];
+          # clone-cli's diff-gate integration tests build temp git repos and run
+          # `git` (directly and via the `clone` binary's diff gate). The test
+          # sandbox has no git otherwise, so the tests panic spawning it.
+          clone-cli = [workspacePkgs.git];
         };
         # `rodio` (packages/minecraft/minecraft/sound) pulls `cpal`/`alsa-sys`, whose build
         # script needs ALSA's pkg-config metadata to link `libasound` on Linux.
