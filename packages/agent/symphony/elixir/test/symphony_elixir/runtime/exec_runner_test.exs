@@ -107,37 +107,36 @@ defmodule SymphonyElixir.Runtime.ExecRunnerTest do
   test "a timeout kills the whole process tree, not just the script", %{pack: pack} do
     # The #2011 wedge shape: the script's grandchild inherits stdout (so the
     # port would never deliver exit_status) and must not survive the timeout
-    # kill. The marker rides in the grandchild's argv so pgrep can find it;
-    # the compound command keeps sh from exec-ing sleep directly, which
-    # would drop the marker argv and make the survivor check vacuous.
-    marker = "sym-exec-2011-#{System.unique_integer([:positive])}"
-
+    # kill. The script records the grandchild pid so the test can probe it
+    # with `kill -0` (already on the sandbox PATH; pgrep is not).
     rel =
       write_script!(pack, "scripts/tree.sh", """
       #!/bin/sh
-      /bin/sh -c 'sleep 300; :' #{marker} &
+      sleep 300 &
+      echo $! > grandchild.pid
       wait
       """)
 
     assert {:error, {:exec_timeout, 1, _output}, nil} =
              ExecRunner.run(exec_node(rel, timeout: 1), %{run_id: "r", attempt: 1, pack_dir: pack})
 
-    assert await_no_process(marker), "grandchild #{marker} survived the timeout kill"
+    grandchild = pack |> Path.join("grandchild.pid") |> File.read!() |> String.trim()
+    assert await_dead(grandchild), "grandchild pid #{grandchild} survived the timeout kill"
   end
 
   # SIGKILL delivery is immediate but reparent-and-reap is not; poll briefly
-  # before declaring a survivor.
-  defp await_no_process(marker, tries \\ 50) do
-    case System.cmd("pgrep", ["-f", marker]) do
-      {_, 1} ->
-        true
-
+  # before declaring a survivor. kill -0 probes liveness without signaling.
+  defp await_dead(pid, tries \\ 50) do
+    case System.cmd("kill", ["-0", pid], stderr_to_stdout: true) do
       {_, 0} when tries > 0 ->
         Process.sleep(100)
-        await_no_process(marker, tries - 1)
+        await_dead(pid, tries - 1)
 
-      _ ->
+      {_, 0} ->
         false
+
+      {_, _} ->
+        true
     end
   end
 
