@@ -25,7 +25,11 @@
 #
 # The fork-package mapping (input name, upstream URL, patch dir) is data from
 # lib/fork-packages.nix, rendered to JSON and baked in as a store path, so the
-# script body hardcodes no per-package coordinates.
+# script body hardcodes no per-package coordinates. A downstream repo (e.g. ix)
+# that keeps its own fork mapping + patches reuses this one tool by pointing it
+# at its list: `nix run <index>#rebase-patches -- --mapping <its-fork.json>
+# [<name>]`, run from its repo root so `patchDir` and `flake.lock` resolve
+# there. One tool, parameterized by data, never copied per repo.
 {
   ix,
   formats,
@@ -242,9 +246,10 @@ in
       # `dag` subcommand: regenerate dag.json for one or all fork packages against
       # the currently-pinned base (working-tree flake.lock), without a rebase.
       def "main dag" [
-        name?: string # one fork package (codex | btop | clippy); all if omitted
+        name?: string  # one fork package (codex | btop | clippy); all if omitted
+        --mapping: string # fork-package JSON to drive (default: index's baked-in list)
       ] {
-        let forks = (fork select $name)
+        let forks = (fork select $name $mapping)
         let new_lock = (open --raw flake.lock | from json)
         for fork in $forks {
           let base = ($new_lock.nodes | get $fork.input | get locked | get rev)
@@ -252,9 +257,17 @@ in
         }
       }
 
-      # Resolve the selected fork records from an optional name.
-      def "fork select" [name?: string]: nothing -> list<record> {
-        let forks = (open $fork_data)
+      # The fork-package mapping to drive: the caller-supplied `--mapping` path
+      # (a downstream repo pointing this one tool at its own fork list, run from
+      # its repo root so `patchDir`/`flake.lock` resolve there) else index's own
+      # baked-in list. One tool, parameterized by data, never copied.
+      def "mapping path" [override?: string]: nothing -> string {
+        if $override == null { $fork_data } else { $override }
+      }
+
+      # Resolve the selected fork records from an optional name against `mapping`.
+      def "fork select" [name?: string, mapping?: string]: nothing -> list<record> {
+        let forks = (open (mapping path $mapping))
         if $name == null { return $forks }
         let hit = ($forks | where name == $name)
         if ($hit | is-empty) {
@@ -264,9 +277,10 @@ in
       }
 
       def main [
-        name?: string # one fork package (codex | btop | clippy | mesa); all changed if omitted
+        name?: string  # one fork package (codex | btop | clippy | mesa); all changed if omitted
+        --mapping: string # fork-package JSON to drive (default: index's baked-in list)
       ] {
-        let selected = (fork select $name)
+        let selected = (fork select $name $mapping)
 
         # Old base from the committed flake.lock, new base from the working
         # tree. `flake.lock` has no nushell-recognized extension, so parse JSON

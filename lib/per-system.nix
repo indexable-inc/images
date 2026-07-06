@@ -576,85 +576,33 @@
   repoPackages = ix.packageSetFor pkgs;
   inherit (repoPackages) site;
 
-  # De-forked patched sources exposed as `checks.<system>.patched-src-<name>`
-  # (the seconds-fast "does the series still apply" gate). Built from the same
-  # `ix.patchedSrc` the packages consume, against the same raw upstream inputs,
-  # so the check can never drift from the real build: green here means the build
-  # gets an identical patched tree. Driven by the one fork-package list so a new
-  # entry there joins this set with no change here. Each raw input is exposed on
-  # the `ix` handle as `<name>Src` (see lib/default.nix sharedHelpers).
-  patchedSrcFor' = ix.patchedSrcFor pkgs;
-  forkSrcInputs = {
-    codex = ix.codexSrc;
-    btop = ix.btopSrc;
-    clippy = ix.clippySrc;
-    mesa = ix.mesaSrc;
-    nix = ix.nixSrc;
+  # De-forked patched sources + patch-DAG invariants exposed as
+  # `checks.<system>.{patched-src,patch-dag}-<name>`. `patched-src-<name>` is the
+  # seconds-fast "does the series still apply" gate, built from the same
+  # `patchedSrc` the packages consume against the same raw upstream inputs, so it
+  # can never drift from the real build. `patch-dag-<name>` is its textual
+  # sibling, validating the committed `dag.json` against the pinned base. Both are
+  # built by the shared `ix.mkForkChecks` (lib/mk-fork-checks.nix) — the one owner
+  # of these check derivations, reused verbatim by ix for its own forks — driven
+  # by index's fork-package list so a new entry there joins this set with no
+  # change here. Each raw input is exposed on the `ix` handle as `<name>Src` (see
+  # lib/default.nix sharedHelpers). Merged on every system, so
+  # `nix build .#checks.aarch64-darwin.patch-dag-clippy` validates natively.
+  forkChecks = ix.mkForkChecks {
+    inherit pkgs;
+    patchedSrcFor = ix.patchedSrcFor pkgs;
+    inherit (ix) forkPackages;
+    dagCheckSrc = ix.forkDagCheckSrc;
+    forkSrcInputs = {
+      codex = ix.codexSrc;
+      btop = ix.btopSrc;
+      clippy = ix.clippySrc;
+      mesa = ix.mesaSrc;
+      nix = ix.nixSrc;
+    };
+    patchesRoot = paths.root;
+    flakeLock = lib.importJSON (paths.root + "/flake.lock");
   };
-  patchedSrcChecks = lib.genAttrs' (import ./fork-packages.nix).forkPackages (
-    fork:
-      lib.nameValuePair "patched-src-${fork.name}" (
-        patchedSrcFor' {
-          inherit (fork) name;
-          src = forkSrcInputs.${fork.name};
-          patchDir = paths.root + "/${fork.patchDir}";
-        }
-      )
-  );
-
-  # Patch-dependency DAG invariant checks, one per fork package
-  # (`checks.<system>.patch-dag-<name>`), the fast textual sibling of
-  # `patched-src-<name>`. Where `patched-src` proves the linear series still
-  # applies, this proves the committed `dag.json` is honest and in sync: every
-  # patch applies given only its declared ancestors (no undeclared deps), every
-  # pair of DAG-independent patches commutes byte-for-byte (no silent overwrite),
-  # the NNNN order topologically sorts the DAG, and regenerating the DAG
-  # reproduces the committed bytes. Pure text work on the fetched src tree in the
-  # sandbox (no network, no build), so it stays seconds-fast. The derivation and
-  # verification logic is owned by packages/rebase-patches/dag-{lib,check}.nu; the
-  # check just wires the src, patch dir, and pinned rev into that driver. Merged
-  # on every system like patched-src, so `nix build .#checks.aarch64-darwin.
-  # patch-dag-clippy` validates the graph natively.
-  forkLock = lib.importJSON (paths.root + "/flake.lock");
-  # The nushell driver plus its shared lib, staged together so the driver's
-  # sibling `use dag-lib.nu` resolves at runtime.
-  dagCheckSrc = paths.packagesRoot + "/rebase-patches";
-  patchDagChecks = lib.genAttrs' (import ./fork-packages.nix).forkPackages (
-    fork: let
-      expectedBase = forkLock.nodes.${fork.input}.locked.rev;
-      # Import the committed patch series + dag.json into the store so the
-      # sandbox can read them (the raw repo path is not a sandbox input).
-      patchDirStore = builtins.path {
-        name = "${fork.name}-patches";
-        path = paths.root + "/${fork.patchDir}";
-      };
-    in
-      lib.nameValuePair "patch-dag-${fork.name}" (
-        pkgs.runCommand "patch-dag-${fork.name}-check"
-        {
-          nativeBuildInputs = [
-            pkgs.nushell
-            pkgs.git
-            # `chmod` (external) to make the read-only store src writable before
-            # the apply-tests, since git must write files during `am`.
-            pkgs.coreutils
-          ];
-        }
-        ''
-          # nushell's `use` resolves modules relative to the script file, so run
-          # the driver from a dir holding both it and dag-lib.nu.
-          workdir=$(mktemp -d)
-          cp ${dagCheckSrc}/dag-check.nu ${dagCheckSrc}/dag-lib.nu "$workdir/"
-          # git needs an identity even for the throwaway base commit.
-          export HOME="$workdir"
-          nu "$workdir/dag-check.nu" \
-            ${lib.escapeShellArg (toString forkSrcInputs.${fork.name})} \
-            ${patchDirStore} \
-            ${lib.escapeShellArg expectedBase}
-          touch "$out"
-        ''
-      )
-  );
 
   # One general updater for every content source in the repo, run in parallel
   # via dag-runner (the same engine `lint` uses). The Minecraft catalog and
@@ -1463,11 +1411,11 @@ in {
   # Flat keying: one derivation per `checks.<system>.<name>`, as the flake schema
   # and `nix flake check` require. The `.#check` gate and blast-radius consume
   # the sharded `ciChecks` instead, so this output is not what CI enumerates.
-  # `patchedSrcChecks` is merged on EVERY system (not just x86_64-linux like the
+  # `forkChecks` is merged on EVERY system (not just x86_64-linux like the
   # rest of `catalogFor`): the patched sources are cheap, platform-relevant
   # derivations, so `nix build .#checks.aarch64-darwin.patched-src-clippy`
   # validates the series against a local Darwin build right after a flake update.
-  checks = catalogFor rustPackageTestSets.flat // patchedSrcChecks // patchDagChecks;
+  checks = catalogFor rustPackageTestSets.flat // forkChecks;
   # Sharded keying for the memory-bounded CI evaluator (nix-fast-build /
   # nix-eval-jobs / blast-radius): each package's per-#[test] checks sit under one
   # `recurseForDerivations` group, so the evaluator lists cheap per-package names
@@ -1475,7 +1423,7 @@ in {
   # (ENG-2201). Not a `checks.<system>.<name>` output, because a non-derivation
   # there fails the flake schema. The patched-src checks are plain derivations,
   # so they key identically in both views.
-  ciChecks = catalogFor rustPackageTestSets.sharded // patchedSrcChecks // patchDagChecks;
+  ciChecks = catalogFor rustPackageTestSets.sharded // forkChecks;
 
   formatter = pkgs.alejandra;
 

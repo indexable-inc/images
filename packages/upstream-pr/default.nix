@@ -29,7 +29,9 @@
 #
 # The fork-package mapping (upstream URL, patch dir) is data from
 # lib/fork-packages.nix; the dependency closure is data from each series'
-# dag.json. Both are read, not hardcoded.
+# dag.json. Both are read, not hardcoded. A downstream repo (e.g. ix) reuses this
+# one tool for its own forks via `--mapping <its-fork.json>` (run from its repo
+# root); the baked-in list is index's default. One tool, parameterized by data.
 {
   ix,
   formats,
@@ -62,9 +64,16 @@ in
       const fork_data = "${forkData}"
       const org = "indexable-inc"
 
-      # Resolve a fork record by name, erroring with the known set otherwise.
-      def "fork by-name" [name: string]: nothing -> record {
-        let forks = (open $fork_data)
+      # The fork-package mapping to drive: the caller-supplied `--mapping` path (a
+      # downstream repo pointing this one tool at its own fork list) else index's
+      # baked-in list. One tool, parameterized by data, never copied.
+      def "mapping path" [override?: string]: nothing -> string {
+        if $override == null { $fork_data } else { $override }
+      }
+
+      # Resolve a fork record by name against `mapping`, erroring with the known set.
+      def "fork by-name" [name: string, mapping?: string]: nothing -> record {
+        let forks = (open (mapping path $mapping))
         let hit = ($forks | where name == $name)
         if ($hit | is-empty) {
           error make { msg: $"upstream-pr: no fork package named ($name); known: (($forks | get name) | str join ', ')" }
@@ -96,8 +105,9 @@ in
         patch: string  # patch file name (or its NNNN prefix / unique substring)
         --open         # also open a DRAFT PR upstream (outward act; default: prepare only)
         --dry-run      # run the whole flow but skip push + PR (validate content)
+        --mapping: string # fork-package JSON to drive (default: index's baked-in list)
       ] {
-        let fork = (fork by-name $pkg)
+        let fork = (fork by-name $pkg $mapping)
         let patch_dir = ($fork.patchDir | path expand)
         let dag_file = ($patch_dir | path join "dag.json")
         if not ($dag_file | path exists) {

@@ -79,6 +79,17 @@
   # rebase-patches), so it joins the registry-discovered `.#update` DAG. See
   # lib/fork-updater.nix.
   mkForkUpdater = import ./fork-updater.nix;
+  # Build the de-forked-package flake checks (`patched-src-<name>` +
+  # `patch-dag-<name>`) for a repo's fork list. The single owner of those check
+  # derivations, reused by `lib/per-system.nix` for index's own forks and by a
+  # downstream consumer (ix) for its forks via `inputs.index.lib.mkForkChecks`.
+  # See lib/mk-fork-checks.nix.
+  mkForkChecks = args: import ./mk-fork-checks.nix ({inherit lib;} // args);
+  # The directory holding the shared DAG driver + verifier (`dag-check.nu` +
+  # `dag-lib.nu`) that `mkForkChecks` stages into each `patch-dag-<name>` build.
+  # Exposed so a downstream consumer passes it straight through to `mkForkChecks`
+  # rather than reaching into index's package layout by path.
+  forkDagCheckSrc = paths.packagesRoot + "/rebase-patches";
   secretRefs = import ./util/secret-refs.nix {inherit lib;};
   selfVersionFor = self: import ./util/self-version.nix {inherit lib self;};
   checks = import ./checks.nix {inherit lib;};
@@ -480,6 +491,7 @@
       claudePlugin
       deepMerge
       forkPackages
+      forkDagCheckSrc
       goUnit
       hermes
       languages
@@ -487,6 +499,7 @@
       mcp
       minecraft
       mkBenchSuite
+      mkForkChecks
       mkForkUpdater
       mkMinecraftLoader
       mkMinecraftNbtFormat
