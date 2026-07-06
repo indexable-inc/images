@@ -10,6 +10,18 @@ defmodule SymphonyElixir.Runtime.ExecRunner do
   relative to the active pack directory so a pack references its own
   scripts without carrying absolute deployment paths.
 
+  Timeouts are wall-clock: `timeout <seconds>` (default 300) bounds the
+  attempt in elapsed real time, re-checked on a bounded tick because BEAM
+  timers pause while the host sleeps. On expiry the runner SIGKILLs the
+  script's whole process group (the port program runs in its own session),
+  so grandchildren the script spawned cannot outlive the node, and the
+  attempt fails with `{:exec_timeout, seconds, output_tail}`.
+
+  Scripts run with stdin bound to /dev/null: an exec node never receives
+  input, and the port's stdin pipe would otherwise never deliver EOF, so a
+  child that reads stdin to exhaustion (codex does, even with an argv
+  prompt) would hang until the timeout instead of proceeding.
+
   Declared inputs reach the script as environment variables: each key of
   `run_opts.resolved_inputs` (the runtime resolves `{ name: value }` DSL
   inputs, including `${node.path}` references, before the attempt) is
@@ -51,6 +63,15 @@ defmodule SymphonyElixir.Runtime.ExecRunner do
   @output_tail_bytes 64 * 1024
   @default_timeout_seconds 300
 
+  # Upper bound on each receive wait so the wall-clock deadline is
+  # re-checked at least this often. BEAM `after` timers count monotonic
+  # time, which stops while the host sleeps (macOS mach_absolute_time,
+  # Linux CLOCK_MONOTONIC across suspend), so a single full-length `after`
+  # stalls arbitrarily far past the declared timeout: the #2011 wedge was a
+  # 3600s exec still running 2h later because the laptop slept mid-run.
+  # An operator's `timeout` means wall time, so poll against os_time.
+  @timeout_poll_ms 1_000
+
   @type result :: {:ok, map(), nil} | {:error, term(), nil}
 
   @spec run(Node.t(), map()) :: result()
@@ -70,16 +91,24 @@ defmodule SymphonyElixir.Runtime.ExecRunner do
           input_env(run_opts) ++
           [{~c"SYMPHONY_OUTPUT_FILE", String.to_charlist(output_file)}]
 
+      # The wrapper rebinds stdin to /dev/null before exec-ing the script.
+      # A port's stdin pipe never sees EOF while the port lives, so anything
+      # downstream that reads stdin to exhaustion blocks forever; the #2011
+      # wedge was `codex exec` doing exactly that (it reads stdin even with
+      # an argv prompt) at 0% CPU. Exec nodes never receive stdin by
+      # contract. `exec` keeps the shell's pid, so os_pid still names the
+      # script and its process group for the timeout kill.
       port =
-        Port.open({:spawn_executable, absolute}, [
+        Port.open({:spawn_executable, "/bin/sh"}, [
           :exit_status,
           :binary,
           :stderr_to_stdout,
+          {:args, ["-c", ~S(exec "$1" </dev/null), "sh", absolute]},
           {:cd, pack_dir},
           {:env, env}
         ])
 
-      deadline = System.monotonic_time(:millisecond) + timeout_seconds * 1_000
+      deadline = System.os_time(:millisecond) + timeout_seconds * 1_000
 
       try do
         port
@@ -178,35 +207,60 @@ defmodule SymphonyElixir.Runtime.ExecRunner do
   end
 
   defp collect(port, acc, acc_bytes, deadline, run_id, node_id, timeout_seconds) do
-    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+    remaining = deadline - System.os_time(:millisecond)
 
-    receive do
-      {^port, {:data, chunk}} when is_binary(chunk) ->
-        Logger.info("[exec #{run_id}/#{node_id}] " <> String.trim_trailing(chunk))
-        {next_acc, next_bytes} = append_with_tail(acc, acc_bytes, chunk)
-        collect(port, next_acc, next_bytes, deadline, run_id, node_id, timeout_seconds)
+    if remaining <= 0 do
+      kill_timed_out(port, acc, run_id, node_id, timeout_seconds)
+    else
+      receive do
+        {^port, {:data, chunk}} when is_binary(chunk) ->
+          Logger.info("[exec #{run_id}/#{node_id}] " <> String.trim_trailing(chunk))
+          {next_acc, next_bytes} = append_with_tail(acc, acc_bytes, chunk)
+          collect(port, next_acc, next_bytes, deadline, run_id, node_id, timeout_seconds)
 
-      {^port, {:exit_status, 0}} ->
-        {:ok, %{kind: :exec, exit_code: 0, output: IO.iodata_to_binary(acc)}, nil}
+        {^port, {:exit_status, 0}} ->
+          {:ok, %{kind: :exec, exit_code: 0, output: IO.iodata_to_binary(acc)}, nil}
 
-      {^port, {:exit_status, status}} ->
-        {:error, {:exec_failed, status, IO.iodata_to_binary(acc)}, nil}
-    after
-      remaining ->
-        # :spawn_executable does not die on Port.close, so kill the OS
-        # process explicitly, then drain the close so the mailbox stays clean.
-        case Port.info(port, :os_pid) do
-          {:os_pid, os_pid} ->
-            Logger.warning("ExecRunner timeout run=#{run_id} node=#{node_id} after #{timeout_seconds}s; killing pid=#{os_pid}")
-            System.cmd("kill", ["-KILL", Integer.to_string(os_pid)], stderr_to_stdout: true)
-
-          _ ->
-            :ok
-        end
-
-        Port.close(port)
-        {:error, {:exec_timeout, timeout_seconds, IO.iodata_to_binary(acc)}, nil}
+        {^port, {:exit_status, status}} ->
+          {:error, {:exec_failed, status, IO.iodata_to_binary(acc)}, nil}
+      after
+        min(remaining, @timeout_poll_ms) ->
+          collect(port, acc, acc_bytes, deadline, run_id, node_id, timeout_seconds)
+      end
     end
+  end
+
+  # Kill the script's whole process group, not just its pid: erl_child_setup
+  # starts a port program in its own session, so os_pid doubles as the pgid
+  # and kill(-pgid) reaps grandchildren too. The prior pid-targeted kill left
+  # the killed script's children (the wedged `codex` in #2011) orphaned and
+  # still holding the SYMPHONY_OUTPUT_FILE contract. Group scope also makes
+  # the timeout independent of `exit_status`, which the port withholds while
+  # any descendant keeps the inherited stdout pipe open.
+  defp kill_timed_out(port, acc, run_id, node_id, timeout_seconds) do
+    # :spawn_executable does not die on Port.close, so the group kill is the
+    # terminator; the close just drains the port so the mailbox stays clean.
+    case Port.info(port, :os_pid) do
+      {:os_pid, os_pid} ->
+        Logger.warning("ExecRunner timeout run=#{run_id} node=#{node_id} after #{timeout_seconds}s; killing pgid=#{os_pid}")
+        System.cmd("kill", ["-KILL", "--", "-#{os_pid}"], stderr_to_stdout: true)
+
+      _ ->
+        :ok
+    end
+
+    # The kill races the port's own teardown: once the dead process's pipe
+    # hits EOF the port delivers exit_status and closes itself, and closing
+    # an already-closed port raises ArgumentError. Either side closing is
+    # fine, so swallow exactly that race (OTP itself guards port_close the
+    # same way, e.g. in os_mon).
+    try do
+      Port.close(port)
+    rescue
+      ArgumentError -> :ok
+    end
+
+    {:error, {:exec_timeout, timeout_seconds, IO.iodata_to_binary(acc)}, nil}
   end
 
   # iodata accumulator with a byte budget: keep the tail, drop the head.
