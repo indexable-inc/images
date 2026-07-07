@@ -1,0 +1,134 @@
+---
+id: 0010-git-fetcher-history
+number: '0010'
+title: Structured commit history from the Nix git fetcher
+status: Draft
+authors: andrewgazelka
+created: '2026-07-06'
+updated: '2026-07-06'
+trackingIssue: '#2108'
+supersedes: null
+supersededBy: null
+description: 'Git inputs opt into `exportHistory = true` and evaluation sees `inputs.foo.history`: a deterministic, depth-bounded list of commits (rev, parents, author, message, paths touched), cached by rev, never in lock files. Changelogs become a pure function of a locked input.'
+---
+
+## Summary
+
+Extend the Nix git fetcher (as a patch in the `nix-ix` series) so a git input can opt into exposing its commit history as structured evaluation-time data. `builtins.fetchGit { ...; exportHistory = true; historyDepth = 200; }` (and the same attributes on `fetchTree` and flake inputs of type `git`) yields a `history` attribute: a list of commits, newest first, in a deterministic topological order, each carrying `rev`, `parents`, `author`, `committer`, the full `message`, and the `paths` touched relative to the first parent. The history is a pure function of the locked `rev` (exactly like `revCount` and `lastModified`, which it generalises), so it is memoised in the fetcher cache and never appears in lock files. Consumers filter and render in Nix: a per-subtree CHANGELOG becomes `map render (filter (touches "packages/foo") input.history)`.
+
+## Motivation
+
+Two concrete consumers exist today and both are worked around with imperative scripting:
+
+- **Mirror changelogs.** The mirror machinery (`packages/mirror`, #2022) generates standalone repos per workspace package. A standard-format `CHANGELOG.md` per package subtree is the natural next artifact, and the data it needs — which commits touched `packages/<name>` and what they said — is precisely commit history filtered by path. Today the only options are at-push scripting inside `mirror` (imperative, a second source of truth, invisible to eval) or nothing. With history as input data, the changelog is derived *in Nix* from the same locked input the build uses.
+- **Release notes / provenance in eval.** Anything that wants "what changed between these two revs of an input" (site update feeds, blast-radius-style summaries, version-bump PR bodies) currently shells out to `git log` outside the eval boundary, against a checkout that may not even match the locked rev.
+
+The underlying gap is old and upstream-recognised: Nix deliberately strips `.git` from fetched sources because `.git` is nondeterministic (packfile layout, ref state, reflogs), and upstream has repeatedly declined `leaveDotGit`-for-flakes on exactly those grounds (`nixpkgs` fetchers document `leaveDotGit` as non-reproducible; NixOS/nix#8567 tracks the demand). But the *useful subset* of `.git` — the commit graph reachable from the fetched rev — is content-addressed and immutable: `rev` transitively pins every parent, author, message and tree. Nix already ships two scalar projections of that graph as first-class deterministic metadata: `revCount` and `lastModified`. This RFC generalises them to the structured projection, dodging the nondeterminism objection entirely.
+
+## Detailed design
+
+### Surface
+
+Two new attributes on the `git` input scheme, gated behind a new `git-export-history` experimental feature (mirroring how `verified-fetches` gates `publicKeys`):
+
+- `exportHistory` (bool, default `false`): opt in. The result attrset (from `fetchGit`/`fetchTree`, and each flake input's `sourceInfo` — thus `inputs.foo.history` and `self.history`) gains a `history` attribute.
+- `historyDepth` (integer, default `100`): bound the walk by generation distance from the tip, counted like `git clone --depth` (the fetched commit is generation 1). `0` means unlimited, an explicit opt-in to unbounded eval data. `historyDepth` without `exportHistory` is an error; `exportHistory` with `shallow = true` is an error (the walk needs the real parent chain). One interaction needed explicit handling: flake inputs re-enter the fetcher through `fetchTree`, which injects `shallow = true` by default for git inputs; `exportHistory = true` suppresses that injected default (an explicit `shallow = true` still errors), so `inputs.foo = { type = "git"; url = ...; exportHistory = true; }` and the URL form `git+https://...?exportHistory=1&historyDepth=200` both work unmodified.
+
+### Schema
+
+`history` is a list of attrsets, one per commit:
+
+```nix
+{
+  rev = "bfbb7cba2473ac8250ad92d38f42ccfe6dd3d9ac";
+  parents = [ "44a78f5cb08a78e4998b043344a409075deb8a80" ];  # all parents, even outside the exported set
+  author    = { name = "…"; email = "…"; time = 1783373709; tzOffset = -420; };
+  committer = { name = "…"; email = "…"; time = 1783373709; tzOffset = -420; };
+  message = "fix: tweak a\n";                                 # full message, verbatim
+  paths = [ { path = "a.txt"; status = "M"; } ];              # vs first parent; A/M/D/T, sorted by path
+}
+```
+
+`paths` is the tree diff against the *first* parent (against the empty tree for root commits), with rename detection off — rename detection is a similarity heuristic, not a function of the trees, so it has no place in a deterministic schema. Merge commits therefore show their first-parent delta, which is the `git log --first-parent` convention changelog tools already assume.
+
+### Determinism argument
+
+Every emitted byte is a function of the commit objects reachable from `rev`:
+
+1. **The set** is fixed by `rev` and `historyDepth`: a breadth-first walk of parent edges emits exactly the commits whose minimal parent-distance from the tip is at most the depth. Commit objects are immutable and content-addressed, so the set is the same on every machine that can resolve `rev`.
+2. **The order** is specified, not inherited from a library: children always precede parents (topological), and among candidates whose already-emitted-set children are all emitted, the numerically smallest commit hash goes first. No timestamps, no clone order, no libgit2 version dependence. (`git rev-list --topo-order` by contrast leaves tie order unspecified.)
+3. **The fields** are commit-object data (`author`/`committer` including timezone offset, message bytes) plus tree-object data (`paths` via tree-to-tree diff, no blob reads, no similarity detection), sorted by path.
+
+Hence `history == f(rev, historyDepth)`, the same invariant `revCount == f(rev)` already relies on — which is also why it stays **out of lock files**: locking derived-from-rev data would only create a second thing to keep consistent (`checkLocks` would have to validate it, schema evolution would invalidate locks). Like `revCount`, it is instead memoised in the fetcher cache (`~/.cache/nix/fetcher-cache-*.sqlite`) under key `("gitHistory", {rev, depth, format})`, where `format` versions the schema.
+
+### Mechanics (patch anatomy)
+
+One patch (`0010-libfetchers-export-structured-git-commit-history.patch`) in the `nix-ix` series:
+
+- `GitRepo::getHistoryJson(rev, depth)` in `src/libfetchers/git-utils.cc`: the libgit2 walk + JSON rendering described above.
+- `GitInputScheme` (`src/libfetchers/git.cc`): the two attributes (URL query and attrs forms), validation, and fetch-time computation into the fetcher cache right where `revCount` is computed — the repository is guaranteed present there.
+- A new `InputScheme::getHistoryJson()` virtual (default `std::nullopt`), so the exposure point does not hard-code git. The git override reads the fetcher cache; on a miss (source substituted by `narHash`, so the fetcher never ran on this machine; or the cache was deleted) it re-fetches the repo and recomputes. That miss path is the one case where `exportHistory` costs a network fetch that plain substitution would have avoided.
+- `emitTreeAttrs` (`src/libexpr/primops/fetchTree.cc`): the single choke point through which `fetchGit`, `fetchTree` *and* every flake input's `sourceInfo` are rendered (`callFlake` routes locked inputs through `fetchFinalTree`), parses the cached JSON into eval values. One exposure site covers all three surfaces, and because it never touches `input.attrs`, nothing can leak into `flake.lock`.
+
+### Cost
+
+Measured with the prototype on a full local nixpkgs clone (964,455 commits, Apple M-series, warm store copy, cold fetcher cache per depth):
+
+Measured with the prototype (Apple M-series, local full clones, `historyDepth` in generations):
+
+**NixOS/nix** (23,114 commits; a synthetic empty-tree tip isolates walk cost from the source copy):
+
+| `historyDepth` | commits emitted | cold eval | warm eval (fetcher-cache hit) | JSON size |
+|---|---|---|---|---|
+| 100 (default) | 875 | 1.9 s | 0.32 s | 1.0 MB |
+| 1000 | 19,560 | 10.3 s | 2.5 s | 17.8 MB |
+| 0 (unlimited) | 23,115 | 10.5 s | 2.7 s | 20.0 MB |
+
+The walk costs ~0.4 ms/commit on nix-sized trees (first-parent tree diff dominated); the warm numbers are the SQLite read plus `parseJSON` into eval values, which is what every evaluation after the first pays.
+
+**nixpkgs** (964,455 commits) is the honest upper bound and it is not viable inline: `historyDepth = 100` reaches tens of thousands of commits (merge fan-out makes generation distance much larger than linear count: on the nix repo, 100 generations already cover 875 commits) and each first-parent tree diff on a nixpkgs-sized tree costs ~150 ms, so the depth-100 cold walk did not finish inside 65 minutes. Plain `git log --format=%H --name-status -n 10000` on the same clone also blows a 30-minute budget, so this is the price of paths-touched at that repo scale, not an implementation artifact. Consumers wanting nixpkgs-scale history need a paths-free variant (see Unresolved questions).
+
+The walk is linear in emitted commits with a per-commit tree-diff cost; the fetcher cache makes every evaluation after the first a SQLite lookup plus JSON parse. Eval-side, the list is materialised eagerly when `exportHistory = true`, which is why the default depth is bounded at 100: nixpkgs-scale history (20 MB of JSON for the *nix* repo already; far more with nixpkgs's commit count) belongs in a store path, not evaluator memory (see Unresolved questions).
+
+Partial clones are unaffected in principle: the walk reads commit and tree objects only, never blobs, so a `--filter=blob:none` clone (if the fetcher ever grows one) still serves it. Shallow clones are rejected up front.
+
+## Drawbacks
+
+- **Eager eval materialisation.** `history` is built when the input's sourceInfo is rendered, even if never forced. Bounded by the default depth, but a flake with many `exportHistory` inputs pays it on every eval (post-fetcher-cache: lookup + parse, measured 0.3 s at the default depth and 2.5 s at depth 1000 on the nix repo).
+- **A schema is a contract.** Once consumers render changelogs from it, field changes need the `format` cache-version bump *and* consumer migration. The schema is deliberately minimal (no GPG signature status, no rename detection, no committer-vs-author disambiguation beyond both being present) to keep the contract small.
+- **Substitution loses its shortcut.** A `narHash`-substituted input with `exportHistory = true` must still fetch the git repo the first time its history is read on a machine. This is inherent: the store path does not contain the history (by design), so the data must come from the repo once.
+- **Fork surface.** One more patch to rebase across nix-src bumps. It touches `git.cc`/`git-utils.cc`/`fetchTree.cc` in append-mostly ways, and the DAG keeps it independent of the build-status series.
+
+## Alternatives
+
+- **Do nothing / at-push scripting in `mirror`.** The mirror tool shells `git log` at sync time and writes CHANGELOG.md imperatively. Works, but the changelog becomes a second source of truth generated outside eval, per consumer, with none of the caching or determinism guarantees, and every other would-be consumer (release notes, provenance) re-implements it.
+- **`leaveDotGit`-style: keep `.git` in the store path.** Upstream has rejected this repeatedly because `.git` is nondeterministic (packing, refs, reflogs) and it drags the whole object database into the NAR. This proposal is the deterministic subset of that idea.
+- **FOD-based export.** A fixed-output derivation running `git log` inside the sandbox. Requires a hash-per-input-per-depth to maintain by hand (or hash-drift pain on every bump), pays a full network re-clone inside the FOD sandbox (the fetcher cache is invisible to it), and produces a store path eval cannot read without IFD anyway.
+- **IFD over the fetched tree.** Impossible by construction: the fetched store path deliberately contains no `.git`, so there is nothing for a derivation to read history from.
+- **`history.json` store path instead of inline attrs** (`input.historyFile`). Solves eager-eval memory for huge histories and keeps eval lazy (`builtins.fromJSON (builtins.readFile ...)` on demand). Costs a store path per (rev, depth) and pushes parsing onto every consumer. The inline list with a bounded default depth was chosen for v1 ergonomics; the store-path variant is the natural escape hatch if unbounded-history consumers materialise (Unresolved questions).
+
+## Prior art
+
+- **`revCount` / `lastModified`**: the existing precedent that history-derived, rev-determined metadata is legitimate fetcher output; this RFC is their generalisation, and reuses their exact caching pattern (`Cache::Key{"gitRevCount", {rev}}` → `{"gitHistory", {rev, depth, format}}`).
+- **RFC 0009 / the `nix-ix` patch series**: the fork-local delivery vehicle — `lib/util/patched-src.nix`, `dag.json`, per-patch upstream intent in `lib/fork-packages.nix` (this patch: `hold`, see below).
+- **`builtins.fetchTree` locked-attr flow**: `callFlake` → `fetchFinalTree` → `emitTreeAttrs` is the existing single path this design hooks for all three user surfaces.
+- **Elsewhere**: Bazel's `git_repository` exposes nothing like this (changelog generation lives in release tooling); Buck2 likewise. `jj`/`git log --format=%H%x00...` streaming formats are the imperative equivalents consumers use today. The "history as data, views derived per consumer" split follows the repo's own pipeline convention (transport / durable log / per-query views).
+
+## Upstreaming posture
+
+Written to be upstreamable, parked fork-local. The design deliberately avoids every objection upstream raised against `leaveDotGit` (nondeterminism, NAR bloat): the export is deterministic by construction, opt-in, feature-gated (`git-export-history`), out of lock files, and adds no bytes to fetched store paths. The patch is self-contained against `2.34.7` with an upstream-style functional test and release note, so `nix run .#upstream-pr` can carry it when the freeze lifts. It stays `upstream = "hold"` in `lib/fork-packages.nix` for now: upstreaming is paused repo-wide pending NixOS/nix#15984 (see #2021), and a feature of this size should open as an upstream issue/RFC discussion first, not a cold PR.
+
+## Unresolved questions
+
+1. **Default depth.** `100` is a guess biased toward safety. Mirror changelogs for old packages want deeper history; is `1000` still cheap enough (see Cost) to be the default, or should the mirror consumer just set `historyDepth = 0` explicitly on its (small) per-package repos?
+2. **A `historyPaths = false` knob.** The tree diffs are the dominant walk cost (~0.4 ms/commit on nix-sized trees, ~150 ms/commit on nixpkgs-sized ones). A metadata-only mode would make even nixpkgs-scale history walkable in seconds for consumers that only need messages/authors. Worth adding before or after v1?
+3. **Store-path variant.** Should `exportHistory = "file"` (or a separate `historyFile = true`) emit the JSON as a store path instead of inline attrs, for unbounded histories? v1 ships inline-only; deciding this before consumers exist avoids a schema fork later.
+4. **Laziness.** `emitTreeAttrs` builds the list eagerly. A thunked `history` attr (pay only when forced) would erase the per-eval cost for consumers that rarely force it; is the added evaluator plumbing worth it before a real workload complains?
+5. **`self.history` for the current flake.** Works when the flake is fetched as a git input; a dirty local checkout has no locked rev and silently omits the attribute. Is silent omission the right contract, or should dirty trees expose history up to `dirtyRev`'s parent?
+
+## Future possibilities
+
+- **Mirror CHANGELOG.md**: `mirror gen` consumes `inputs.self.history` filtered by `packages/<name>/` and writes a Keep-a-Changelog file into each standalone repo — the motivating consumer, unblocked by this RFC.
+- **`nix flake metadata --history`** rendering the same data from the CLI.
+- **Range queries** (`historySince = <rev>`): stop the walk at a base rev, the natural "changes between two locked revs" primitive for update PRs. Deterministic for the same reasons.
+- **Upstream RFC** once #15984 resolves, proposing the schema as documented fetchTree output.

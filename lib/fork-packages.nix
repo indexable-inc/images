@@ -327,6 +327,16 @@
           upstream = "attempt";
           reason = "Build-status-dir feature series: release note for the feature.";
         };
+        # Structured git history export (RFC 0010). Designed to be
+        # upstreamable (deterministic, opt-in, experimental-feature gated,
+        # never in lock files -- it dodges the objections that sank
+        # leaveDotGit-for-flakes), but held: repo-wide upstreaming pause
+        # (NixOS/nix#15984, see #2021), and a feature of this size should
+        # start as an upstream discussion, not a cold PR.
+        "0010-libfetchers-add-opt-in-structured-commit-history-exp.patch" = {
+          upstream = "hold";
+          reason = "Feature-sized change; upstreaming paused per NixOS/nix#15984 and it should open as an upstream issue/RFC first.";
+        };
       };
     }
   ];
