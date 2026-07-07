@@ -1716,6 +1716,24 @@ async def notify(content: str, **meta: Any) -> None:
     behavior), so never treat a notify as confirmed-read. Keys must be
     identifiers (``[A-Za-z0-9_]``); anything else raises here rather than being
     silently dropped client-side.
+
+    Explicit notify() is a broadcast: an armed watch (``pr_watch``, a slack/CI
+    watch loop) must reach its agent regardless of which session runs the
+    watcher. Automatic job lifecycle events do NOT go through here -- they are
+    addressed to the session that started the job (see
+    :func:`_notify_job_finished`), so one session's routine background jobs
+    cannot wake another session's agent (issue #2165).
+    """
+    _queue_channel_event(str(content), meta, session="")
+
+
+def _queue_channel_event(content: str, meta: dict[str, Any], *, session: str) -> None:
+    """Validate and queue one channel event on the store outbox.
+
+    ``session`` is the delivery address: '' broadcasts (every transport pump may
+    deliver it), a session id restricts the row to that MCP session's pump. The
+    shared write path behind :func:`notify` (broadcast) and
+    :func:`_notify_job_finished` (addressed).
     """
     bad = [key for key in meta if not _META_KEY_RE.fullmatch(key)]
     if bad:
@@ -1730,8 +1748,47 @@ async def notify(content: str, **meta: Any) -> None:
         )
     _store.add_outbox(
         _store_conn,
-        content=str(content),
+        content=content,
         meta=json.dumps({key: str(value) for key, value in meta.items()}),
+        session=session,
+    )
+
+
+def _server_session() -> str:
+    """This server process's own MCP session id, or '' when unmanaged.
+
+    ``IX_MCP_SERVER_SESSION`` is minted per ``ix-mcp serve`` process (see
+    ``cli._serve``) and inherited by the kernel: it identifies the one stdio
+    client as a session, so jobs it starts can be addressed back to it and only
+    it. An embedder driving the runtime without the CLI has no id; '' degrades
+    an addressed event to a broadcast, today's pre-#2165 behavior.
+    """
+    return os.environ.get("IX_MCP_SERVER_SESSION", "")
+
+
+def _notify_job_finished(job: Job) -> None:
+    """Queue the job's terminal lifecycle event, addressed to the session that
+    started it.
+
+    Only a backgrounded real cell notifies: a job that finished within its
+    budget already returned its summary in the tool reply, and a replay is
+    history, not news. The address is the job's own MCP session
+    (``job.session``, set for HTTP-transport sessions) falling back to this
+    server's session id (the stdio client), so the wake reaches the session
+    that started the job and no other -- the dashboard still shows every job
+    globally from the executions table (issue #2165).
+    """
+    if not job.backgrounded or job.kind == "replay":
+        return
+    _queue_channel_event(
+        f"Background job {job.name} finished with status {job.status}.",
+        {
+            "job_id": job.id,
+            "job_name": job.name,
+            "status": job.status,
+            "topic": job.topic,
+        },
+        session=job.session or _server_session(),
     )
 
 
@@ -2527,15 +2584,8 @@ async def _runner(job: Job, ns: dict) -> None:
         _ix_current.reset(token)
         _persist_final(job)
         _mark_snapshot_dirty()
-        if job.backgrounded and job.kind != "replay":
-            with contextlib.suppress(Exception):
-                await notify(
-                    f"Background job {job.name} finished with status {job.status}.",
-                    job_id=job.id,
-                    job_name=job.name,
-                    status=job.status,
-                    topic=job.topic,
-                )
+        with contextlib.suppress(Exception):  # best-effort wake; the job row is already persisted
+            _notify_job_finished(job)
 
 
 def _persist_final(job: Job) -> None:

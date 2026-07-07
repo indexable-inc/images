@@ -35,6 +35,67 @@ def test_outbox_roundtrip_consumes_in_order(tmp_path: Path) -> None:
     assert store.take_outbox(conn) == []
 
 
+def test_take_outbox_routes_addressed_rows_to_their_session(tmp_path: Path) -> None:
+    """The routing decision (issue #2165): a session's pump receives broadcast
+    rows plus rows addressed to it, and never another session's rows -- those
+    stay queued for their own pump."""
+    conn = store.connect(tmp_path / "route.db")
+    store.add_outbox(conn, content="broadcast", meta="{}")
+    store.add_outbox(conn, content="mine", meta="{}", session="s1")
+    store.add_outbox(conn, content="theirs", meta="{}", session="s2")
+    rows = store.take_outbox(conn, session="s1")
+    assert [(r["content"], r["session"]) for r in rows] == [("broadcast", ""), ("mine", "s1")]
+    # s2's row was neither delivered nor consumed; its own pump still gets it.
+    assert store.take_outbox(conn, session="s1") == []
+    rows = store.take_outbox(conn, session="s2")
+    assert [r["content"] for r in rows] == ["theirs"]
+    assert store.take_outbox(conn, session="s2") == []
+
+
+def test_take_outbox_default_serves_broadcast_only(tmp_path: Path) -> None:
+    """A pump with no session id ('' -- an embedder without the CLI) delivers
+    broadcasts but never rows addressed to a real session."""
+    conn = store.connect(tmp_path / "solo.db")
+    store.add_outbox(conn, content="broadcast", meta="{}")
+    store.add_outbox(conn, content="addressed", meta="{}", session="s1")
+    assert [r["content"] for r in store.take_outbox(conn)] == ["broadcast"]
+    assert [r["content"] for r in store.take_outbox(conn, session="s1")] == ["addressed"]
+
+
+def test_add_outbox_prunes_rows_past_age_cap(tmp_path: Path) -> None:
+    """A row nothing serves (addressed to a gone session, or queued on a
+    transport with no pump) is reaped on a later write instead of growing the
+    store forever."""
+    conn = store.connect(tmp_path / "prune.db")
+    stale_at = store._now() - store._OUTBOX_MAX_AGE_SECONDS - 1.0
+    conn.execute(
+        "INSERT INTO outbox (content, meta, session, created_at) VALUES (?, ?, ?, ?)",
+        ("stale", "{}", "gone-session", stale_at),
+    )
+    store.add_outbox(conn, content="fresh", meta="{}")
+    remaining = [r[0] for r in conn.execute("SELECT content FROM outbox ORDER BY seq")]
+    assert remaining == ["fresh"]
+
+
+def test_migrate_adds_session_column_to_old_outbox(tmp_path: Path) -> None:
+    """A store written before the outbox carried delivery addressing gains the
+    column on open, defaulting every old row to broadcast."""
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE outbox (seq INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "content TEXT NOT NULL, meta TEXT NOT NULL DEFAULT '{}', created_at REAL NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO outbox (content, meta, created_at) VALUES ('old', '{}', 1.0)"
+    )
+    conn.commit()
+    conn.close()
+    migrated = store.connect(path)
+    rows = store.take_outbox(migrated, session="anything")
+    assert [(r["content"], r["session"]) for r in rows] == [("old", "")]
+
+
 def test_events_stream_after_seq_and_live_gate(tmp_path: Path) -> None:
     conn = store.connect(tmp_path / "c.db")
     assert store.latest_event_seq(conn, "res1") == 0
@@ -88,8 +149,78 @@ def test_notify_queues_event_with_stringified_meta(tmp_path: Path, monkeypatch: 
         assert rows[0]["content"] == "build failed"
         # Values are stringified: they become <channel> tag attributes.
         assert json.loads(rows[0]["meta"]) == {"severity": "high", "run_id": "1234"}
+        # An explicit notify() is a broadcast: an armed watch (pr_watch, a slack
+        # watch loop) must reach its agent whichever session runs the watcher.
+        assert rows[0]["session"] == ""
 
     asyncio.run(run())
+
+
+def _finished_job(*, session: str | None, backgrounded: bool = True, kind: str = "cell") -> runtime.Job:
+    job = runtime.Job("1 + 1", name="poll ci", kind=kind, topic="ci", session=session)
+    job.status = "done"
+    job.backgrounded = backgrounded
+    return job
+
+
+def test_job_finished_event_is_addressed_to_starting_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The routing decision at the source (issue #2165): a backgrounded job's
+    terminal wake is addressed to the MCP session that started the job -- its
+    own session id when it has one (HTTP transport), else this server's session
+    id (the stdio client) -- never broadcast to every session."""
+    conn = store.connect(tmp_path / "r.db")
+    _wire_runtime(monkeypatch, conn)
+    monkeypatch.setenv("IX_MCP_SERVER_SESSION", "srv1")
+
+    # A job started by an HTTP session carries that session id.
+    job = _finished_job(session="abc123")
+    runtime._notify_job_finished(job)
+    rows = store.take_outbox(conn, session="abc123")
+    assert [r["session"] for r in rows] == ["abc123"]
+    assert rows[0]["content"] == "Background job poll ci finished with status done."
+    assert json.loads(rows[0]["meta"]) == {
+        "job_id": job.id,
+        "job_name": "poll ci",
+        "status": "done",
+        "topic": "ci",
+    }
+
+    # A stdio-session job (no per-call session id) belongs to this server's own
+    # session, so its wake reaches this server's client and no other.
+    runtime._notify_job_finished(_finished_job(session=None))
+    rows = store.take_outbox(conn, session="srv1")
+    assert [r["session"] for r in rows] == ["srv1"]
+
+    # No other session's pump sees either event.
+    assert store.take_outbox(conn, session="other") == []
+
+
+def test_job_finished_event_broadcasts_without_server_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An embedder without the CLI has no server session id; the wake degrades
+    to a broadcast (the pre-#2165 behavior) rather than being lost."""
+    conn = store.connect(tmp_path / "r.db")
+    _wire_runtime(monkeypatch, conn)
+    monkeypatch.delenv("IX_MCP_SERVER_SESSION", raising=False)
+    runtime._notify_job_finished(_finished_job(session=None))
+    rows = store.take_outbox(conn)
+    assert [r["session"] for r in rows] == [""]
+
+
+def test_job_finished_event_skips_foreground_and_replay_jobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A job that finished within its budget already returned its summary in the
+    tool reply, and a session-reopen replay is history: neither queues a wake."""
+    conn = store.connect(tmp_path / "r.db")
+    _wire_runtime(monkeypatch, conn)
+    monkeypatch.setenv("IX_MCP_SERVER_SESSION", "srv1")
+    runtime._notify_job_finished(_finished_job(session=None, backgrounded=False))
+    runtime._notify_job_finished(_finished_job(session=None, kind="replay"))
+    assert store.take_outbox(conn, session="srv1") == []
 
 
 def test_notify_rejects_non_identifier_meta_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -309,6 +440,40 @@ def test_pump_outbox_emits_channel_notifications(tmp_path: Path, monkeypatch: py
         assert wire.params == {"content": "hello agent", "meta": {"severity": "high"}}
         # The row was consumed: a redelivery cannot happen.
         assert store.take_outbox(conn) == []
+
+    asyncio.run(run())
+
+
+def test_pump_outbox_delivers_own_session_and_skips_others(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The delivery half of the routing decision (issue #2165): the pump emits
+    broadcast rows and rows addressed to its own server session; a row addressed
+    to another session is neither emitted nor consumed."""
+
+    async def run() -> None:
+        db = tmp_path / "p.db"
+        conn = store.connect(db)
+        cfg = Config(workdir=tmp_path, store_path=db, server_session_id="me")
+        monkeypatch.setattr("ix_notebook_mcp.transport.config", lambda: cfg)
+        store.add_outbox(conn, content="for everyone", meta="{}")
+        store.add_outbox(conn, content="for me", meta="{}", session="me")
+        store.add_outbox(conn, content="for someone else", meta="{}", session="other")
+        send, receive = anyio.create_memory_object_stream(8)
+        pump = asyncio.ensure_future(transport.pump_outbox(send, _FakeSession(initialized=True)))
+        try:
+            first = await asyncio.wait_for(receive.receive(), timeout=5.0)
+            second = await asyncio.wait_for(receive.receive(), timeout=5.0)
+            # Only the broadcast and this session's row arrive, in queue order.
+            assert first.message.root.params["content"] == "for everyone"
+            assert second.message.root.params["content"] == "for me"
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(receive.receive(), timeout=1.0)
+        finally:
+            pump.cancel()
+        # The other session's row is still queued for its own pump.
+        rows = store.take_outbox(conn, session="other")
+        assert [r["content"] for r in rows] == ["for someone else"]
 
     asyncio.run(run())
 

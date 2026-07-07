@@ -177,6 +177,15 @@ class Config:
     # rather than widened to a LAN or wildcard bind.
     mesh_host: str | None = None
 
+    # This server process's own MCP session id, minted per `ix-mcp serve` by the
+    # CLI (and exported to the kernel as IX_MCP_SERVER_SESSION). It identifies
+    # the one stdio client as a session for channel-event addressing: the
+    # transport pump delivers broadcast outbox rows plus rows addressed to this
+    # id, so a job lifecycle event reaches only the session that started the job
+    # (issue #2165). "" (an embedder without the CLI) disables addressing --
+    # every event is then a broadcast, the pre-#2165 behavior.
+    server_session_id: str = ""
+
     # "stdio" (the default; what an MCP client launches), "http", or "none"
     # (the standalone notebook engine: kernel + dashboard, no MCP transport).
     transport: str = "stdio"

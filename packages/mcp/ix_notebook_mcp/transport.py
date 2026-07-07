@@ -134,7 +134,9 @@ async def pump_outbox(
     write_stream: ObjectSendStream[SessionMessage],
     session: ServerSession | None,
 ) -> None:
-    """Drain the store's outbox into ``notifications/claude/channel`` events.
+    """Drain this session's share of the store outbox into
+    ``notifications/claude/channel`` events (broadcast rows plus rows addressed
+    to ``config().server_session_id`` -- see ``store.take_outbox``).
 
     Custom notification methods are not in the SDK's typed ``ServerNotification``
     union, so the JSON-RPC message is built directly and sent on the transport's
@@ -157,7 +159,12 @@ async def pump_outbox(
                 await anyio.sleep(_OUTBOX_POLL_SECONDS)
                 continue
             try:
-                rows = store.take_outbox(conn)
+                # Serve only this session's mail: broadcast rows (explicit
+                # notify() -- pr_watch and friends) plus rows addressed to this
+                # server's own session id. A job lifecycle event addressed to
+                # another session stays queued for its own pump instead of
+                # waking this client (issue #2165).
+                rows = store.take_outbox(conn, session=cfg.server_session_id)
             except Exception:
                 rows = []  # best-effort: a read error this tick just retries next tick
             for row in rows:

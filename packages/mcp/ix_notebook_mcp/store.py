@@ -125,11 +125,18 @@ CREATE INDEX IF NOT EXISTS inputs_channel ON inputs (channel, seq);
 -- kernel code can wake the connected agent session. Same transient-message
 -- discipline as `inputs`: the drain DELETEs what it delivers, so the table stays
 -- empty between events. `meta` is a JSON object of identifier-keyed strings (they
--- become attributes on the client's <channel> tag).
+-- become attributes on the client's <channel> tag). `session` addresses the row:
+-- '' is a broadcast every pump may deliver (explicit notify() -- pr_watch, user
+-- watch loops); a session id restricts delivery to the MCP session that started
+-- the work (job lifecycle events, issue #2165), so one session's routine job
+-- completions never wake another session's agent. Undeliverable addressed rows
+-- (their session is gone, or the transport has no pump) are pruned by age on
+-- write rather than lingering forever.
 CREATE TABLE IF NOT EXISTS outbox (
     seq         INTEGER PRIMARY KEY AUTOINCREMENT,
     content     TEXT NOT NULL,
     meta        TEXT NOT NULL DEFAULT '{}',
+    session     TEXT NOT NULL DEFAULT '',
     created_at  REAL NOT NULL
 );
 
@@ -200,6 +207,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "execution_id" not in resource_have:
         with contextlib.suppress(sqlite3.OperationalError):
             conn.execute("ALTER TABLE resources ADD COLUMN execution_id TEXT NOT NULL DEFAULT ''")
+    outbox_have = {row[1] for row in conn.execute("PRAGMA table_info(outbox)")}
+    if "session" not in outbox_have:
+        with contextlib.suppress(sqlite3.OperationalError):
+            conn.execute("ALTER TABLE outbox ADD COLUMN session TEXT NOT NULL DEFAULT ''")
 
 
 def start(
@@ -547,22 +558,44 @@ def delete_inputs(conn: sqlite3.Connection, seqs: list[int]) -> None:
 _EVENT_MAX_AGE_SECONDS = 3600.0
 
 
-def add_outbox(conn: sqlite3.Connection, *, content: str, meta: str) -> None:
+# Outbox rows older than this are pruned on write. A drained transport never
+# lets a deliverable row age this far (the pump polls sub-second); the cap only
+# reaps rows addressed to a session nothing serves (an HTTP session -- that
+# transport has no channel pump -- or a session that disconnected), so an
+# addressed queue cannot grow the store without bound.
+_OUTBOX_MAX_AGE_SECONDS = 3600.0
+
+
+def add_outbox(conn: sqlite3.Connection, *, content: str, meta: str, session: str = "") -> None:
     """Queue one channel event (``meta`` is a JSON object of identifier-keyed
-    strings). The kernel is the sole inserter; the MCP transport drains."""
+    strings). ``session`` addresses delivery: '' broadcasts to every pump, a
+    session id restricts the row to that MCP session's pump (see
+    :func:`take_outbox`). The kernel is the sole inserter; the MCP transport
+    drains. Rows past the age cap are pruned on write (see
+    ``_OUTBOX_MAX_AGE_SECONDS``)."""
+    now = _now()
     conn.execute(
-        "INSERT INTO outbox (content, meta, created_at) VALUES (?, ?, ?)",
-        (content, meta, _now()),
+        "INSERT INTO outbox (content, meta, session, created_at) VALUES (?, ?, ?, ?)",
+        (content, meta, session, now),
+    )
+    conn.execute(
+        "DELETE FROM outbox WHERE created_at < ?", (now - _OUTBOX_MAX_AGE_SECONDS,)
     )
 
 
-def take_outbox(conn: sqlite3.Connection) -> list[dict]:
-    """Every queued channel event, oldest first, consuming the rows. Like
-    ``_drain_inputs``: DELETE before delivering, so an event can never be emitted
-    twice; a crash between the delete and the send loses at most one batch."""
+def take_outbox(conn: sqlite3.Connection, *, session: str = "") -> list[dict]:
+    """The queued channel events this ``session``'s pump may deliver -- broadcast
+    rows (``session = ''``) plus rows addressed to it -- oldest first, consuming
+    exactly the rows returned. Rows addressed to OTHER sessions are left queued
+    for their own pump (a job's lifecycle event reaches only the session that
+    started the job, issue #2165). Like ``_drain_inputs``: DELETE before
+    delivering, so an event can never be emitted twice; a crash between the
+    delete and the send loses at most one batch."""
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT seq, content, meta FROM outbox ORDER BY seq ASC"
+        "SELECT seq, content, meta, session FROM outbox "
+        "WHERE session = '' OR session = ? ORDER BY seq ASC",
+        (session,),
     ).fetchall()
     if not rows:
         return []

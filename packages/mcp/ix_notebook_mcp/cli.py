@@ -39,6 +39,7 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 import webbrowser
 from collections.abc import Callable
 from pathlib import Path
@@ -494,6 +495,13 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
     # dashboard_port. A pinned IX_MCP_HUB_PORT lets an embedder reach a known hub.
     hub_port = int(os.environ.get("IX_MCP_HUB_PORT") or _free_port())
 
+    # One id per serve process: the identity of this server's single MCP client
+    # as a session, used to address channel events (job lifecycle wakes) to the
+    # session that started the job. Minted fresh per process -- a session file
+    # reopened by a new server is a new session for delivery purposes (the
+    # startup outbox clear already dropped the old one's queue).
+    server_session_id = uuid.uuid4().hex[:8]
+
     cfg = Config(
         workdir=workdir,
         host=bind_host,
@@ -517,6 +525,7 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
         api_key=api_key,
         exec_token=_exec_token(),
         exec_trust_network=_exec_trust_network(),
+        server_session_id=server_session_id,
     )
     set_config(cfg)
 
@@ -524,6 +533,10 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
     # writes there) and the private IPYTHONDIR (so the runtime startup runs)
     # before the kernel starts.
     os.environ["IX_MCP_STORE"] = str(store_path)
+    # The kernel addresses job lifecycle channel events to the session that
+    # started the job; for its stdio client that address is this server's own
+    # session id (see Config.server_session_id and runtime._server_session).
+    os.environ["IX_MCP_SERVER_SESSION"] = server_session_id
     # Surface the dashboard URL to the kernel so `DASHBOARD_URL` is one lookup
     # away (the agent should not have to spelunk the runtime dir to find it). The
     # human-facing dashboard is the Loro hub when we auto-spawn one; otherwise
