@@ -6,6 +6,7 @@ separate process through the async :mod:`sh` helper, and each returns a
 table while you get a frame to ``.filter`` / ``.sort`` / ``.group_by`` / ``.head``.
 
     rows = await grep("TODO", "src")           # ripgrep -> path, line_number, col, match, line, abs_offset
+    hits = await grep("TODO", files_only=True) # ripgrep -> path, count (one row per matching file)
     files = await find(ext="py", root="src")   # fd       -> path, name, type, size, mtime
     docs = await spotlight("invoice", "~")     # mdfind   -> path, name, type, size, mtime (macOS only)
 
@@ -56,6 +57,10 @@ _GREP_SCHEMA = {
     "match": pl.Utf8,
     "line": pl.Utf8,
     "abs_offset": pl.Int64,
+}
+_GREP_FILES_SCHEMA = {
+    "path": pl.Utf8,
+    "count": pl.Int64,
 }
 _FIND_SCHEMA = {
     "path": pl.Utf8,
@@ -215,14 +220,20 @@ async def grep(
     multiline: bool = False,
     hidden: bool = False,
     no_ignore: bool = False,
+    files_only: bool = False,
     limit: int = DEFAULT_LIMIT,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> pl.DataFrame:
     """Content search via ripgrep, one row per match. Respects ``.gitignore`` by
     default (``no_ignore=True`` to override) and searches ``root`` (cwd by
     default). Columns: ``path, line_number, col, match, line, abs_offset``.
-    ``col``/``abs_offset`` are byte offsets. ``fixed`` = literal (no regex)."""
-    argv = ["rg", "--json"]
+    ``col``/``abs_offset`` are byte offsets. ``fixed`` = literal (no regex).
+    ``files_only=True`` lists the matching *files* instead (``rg
+    --count-matches``): columns ``path, count``, one row per file, where
+    ``count`` is that file's number of individual matches -- so listing which
+    files match never materializes every match row, and ``limit`` caps files,
+    not matches."""
+    argv = ["rg", "--count-matches", "--null"] if files_only else ["rg", "--json"]
     if ignore_case:
         argv.append("-i")
     if fixed:
@@ -236,6 +247,8 @@ async def grep(
     if glob:
         argv += ["-g", glob]
     argv += ["--", pattern, _expand(root)]
+    if files_only:
+        return await _grep_files_only(argv, limit=limit, timeout=timeout)
     rows, timed_out, hit_limit = await _stream_rg(argv, limit=limit, timeout=timeout)
     if timed_out:
         return PartialFrame(
@@ -253,6 +266,49 @@ async def grep(
             reason=f"stopped at limit={limit}; raise limit= to scan further",
         )
     return pl.DataFrame(rows, schema=_GREP_SCHEMA)
+
+
+def _count_rows(text: str) -> list[dict[str, Any]]:
+    """Parse ``rg --count-matches --null`` output (one ``<path>NUL<count>`` line
+    per matching file) into files-only rows. ``--null`` makes the path/count
+    separator a NUL byte, so a ``:`` in a path cannot corrupt the split; a line
+    without a NUL (e.g. a stderr warning ``sh`` merged into the stream) is
+    skipped, which drops the noise without losing hits."""
+    rows: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        path, sep, num = line.rpartition("\0")
+        if not sep:
+            continue  # no NUL separator: a stderr line, not a count line
+        try:
+            count = int(num)
+        except ValueError:
+            continue  # NUL but no trailing integer: also not a count line
+        rows.append({"path": path, "count": count})
+    return rows
+
+
+async def _grep_files_only(argv: list[str], *, limit: int, timeout: float) -> pl.DataFrame:
+    """The ``files_only=True`` tail of :func:`grep`: run ``rg --count-matches``
+    to completion and parse the per-file counts. Counting inherently scans every
+    file (there is no early limit-kill like :func:`_stream_rg`; the output is
+    one line per matching file, so it stays small either way), and the
+    ``timeout`` process-group kill still bounds a runaway scan. rg exits 1 on
+    "no matches" -- a legitimate empty frame, not a failure."""
+    text, timed_out = await _run(argv, timeout=timeout, ok_codes=(0, 1))
+    rows = _count_rows(text)
+    hit_limit = len(rows) > limit
+    frame = pl.DataFrame(rows[:limit], schema=_GREP_FILES_SCHEMA)
+    if timed_out:
+        return PartialFrame(
+            frame,
+            reason=f"rg timed out after {timeout}s; {frame.height} file(s) counted before the deadline",
+        )
+    if hit_limit:
+        return PartialFrame(
+            frame,
+            reason=f"stopped at limit={limit}; raise limit= to see every matching file",
+        )
+    return frame
 
 
 def _parse_rg_match(event: dict[str, Any]) -> list[dict[str, Any]]:

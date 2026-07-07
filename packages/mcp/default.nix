@@ -3001,7 +3001,7 @@
         pkgs.fd
       ];
       strictDeps = true;
-      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + jobs.spawn ad-hoc awaitables (#2164)";
+      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246)";
     }
     ''
       export HOME=$TMPDIR/home
@@ -3020,6 +3020,8 @@
       cp ${./tests/test_jobs_spawn.py} test_jobs_spawn.py
       cp ${./tests/test_fsearch_partial.py} test_fsearch_partial.py
       cp ${./tests/test_fsearch_glob.py} test_fsearch_glob.py
+      # Issue #2246: grep(files_only=True) -> path + match-count rows via rg --count-matches.
+      cp ${./tests/test_fsearch_files_only.py} test_fsearch_files_only.py
       # sh Output rendering regressions (issue #1766: a failed build must not
       # read as success/still-running); imports the site-packages sh module.
       cp ${./tests/test_sh_module.py} test_sh_module.py
@@ -3031,6 +3033,7 @@
         test_jobs_spawn.py \
         test_fsearch_partial.py \
         test_fsearch_glob.py \
+        test_fsearch_files_only.py \
         test_sh_module.py \
         test_build_info.py \
         -q -p no:cacheprovider >stdout 2>stderr || {
