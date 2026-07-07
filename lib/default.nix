@@ -89,6 +89,11 @@
   # single source of truth for the patched-src checks, the `.#update` fork
   # nodes, and the `rebase-patches` tool. See lib/fork-packages.nix.
   inherit (import ./fork-packages.nix) forkPackages;
+  # Per-attempt-patch closure build gates (RFC 0010 A3, #2098): the pure-eval
+  # dag.json closure computation (`closureOf`) plus the gate-attrset builder
+  # (`mkGates`) an opted-in fork package wires into its passthru. See
+  # lib/fork-closure-gates.nix.
+  forkClosureGates = import ./fork-closure-gates.nix {inherit lib;};
   # Mirror-enabled packages (opt-in `mirror` attr in a package's package.nix):
   # id, repo-relative path, and mirror-repo coordinates for each package that
   # publishes a standalone read-only mirror. `nix eval --json
@@ -587,6 +592,7 @@
       deepMerge
       efx
       evalTimeSubstitutable
+      forkClosureGates
       forkPackages
       forkDagCheckSrc
       goUnit

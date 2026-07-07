@@ -37,6 +37,13 @@
 #      comment on the existing PR instead of opening a competing one).
 #   3. Else, if `--open` was passed, open the PR by delegating to
 #      `upstream-pr --open` (its DAG-closure/am/push/draft-PR mechanism, one owner).
+#      For forks opted into the closure build gates (`closureGates = true` in
+#      lib/fork-packages.nix; RFC 0010 A3), the patch's gate derivation
+#      (`forkClosureGates.<system>.<fork>.<patch>`) is built FIRST and a red
+#      gate aborts that patch's PR-opening: `upstream-pr` ships the patch as
+#      its dag.json closure against the bare base, so a non-building closure
+#      means the upstream PR would be broken. Only the `--open` path pays this
+#      build; refresh/search/would-open never build anything.
 #      The PR body carries AI attribution (outward-message policy) and a link back
 #      to our patch file. Opening a PR is the outward act, DOUBLY gated: the patch
 #      must be marked `attempt` in nix (intent gate) AND `--open` must be passed
@@ -69,6 +76,9 @@
   git,
   gh,
   coreutils,
+  # Pinned client for the closure-gate preflight `nix build` (same posture as
+  # lib/fork-updater.nix's updateScript).
+  nix,
   # Sibling repo packages, threaded under one name (see lib/packages.nix); we take
   # the PR mechanism (`upstream-pr`) from here rather than a bare callPackage arg,
   # which the package set does not expose flat.
@@ -88,6 +98,7 @@
       git
       gh
       coreutils
+      nix
       upstream-pr
     ];
     text = ''
@@ -583,6 +594,28 @@
               continue
             }
 
+            # Closure-gate preflight (RFC 0010 A3, #2098): `upstream-pr` ships
+            # this patch as its dag.json ancestor closure against the bare
+            # base, so for forks opted in via `closureGates = true` prove that
+            # closure BUILDS before the outward act, and abort THIS patch's
+            # PR-opening on a red gate. The gate attr is the current repo
+            # flake's (a downstream --mapping repo gates against its own
+            # flake; without the flag no fork ever pays this build).
+            let gates_on = ($fork.closureGates? | default false)
+            if $gates_on {
+              let system = (nix config show system | str trim)
+              let gate = $".#forkClosureGates.($system).($fork.name).\"($pf)\""
+              print $"(ansi cyan)upstream-sync: ($fork.name): building closure gate ($gate) before opening \(heavy full-package build; cache hit when unchanged)(ansi reset)"
+              let gate_res = (do { nix build --no-link $gate } | complete)
+              if $gate_res.exit_code != 0 {
+                print ($gate_res.stderr)
+                print $"(ansi red)upstream-sync: ($fork.name): closure gate FAILED for ($pf): its dag.json closure does not build standalone, so the upstream PR would ship broken. Fix the series; NOT opening.(ansi reset)"
+                $doc = (log append $doc $"($pf): closure gate build FAILED; PR-opening aborted")
+                $plan = ($plan | append {fork: $fork.name, patch: $pf, intent: "attempt", action: "gate-failed", detail: $gate})
+                continue
+              }
+            }
+
             # The outward act, only for attempt patches on a non-blocked repo, only
             # when --open was passed. upstream-pr owns the branch/am/push/draft-PR
             # mechanism; --mapping is threaded so a downstream repo's list is used.
@@ -712,7 +745,19 @@
     echo "  https://github.com/fakeorg/fakerepo/compare/main...indexable-inc:fakerepo:branch?expand=1"
     echo "https://github.com/fakeorg/fakerepo/pull/99999"
     STUB
-    chmod +x stubs/gh stubs/upstream-pr
+
+    # Stub nix, for the closure-gate preflight: `config show system` names the
+    # gate attr's system, `build` exits per NIX_GATE_EXIT so the stages below
+    # drive a red and a green gate through the REAL preflight branch.
+    cat > stubs/nix <<STUB
+    #!$(command -v bash)
+    case "\$1" in
+      config) echo "x86_64-stub" ;;
+      build) exit "\''${NIX_GATE_EXIT:-0}" ;;
+      *) echo "stub nix: unexpected: \$*" >&2; exit 1 ;;
+    esac
+    STUB
+    chmod +x stubs/gh stubs/upstream-pr stubs/nix
 
     cat > work/repo/patches/0001-fake-fix.patch <<'EOF'
     From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
@@ -764,6 +809,34 @@
       let d = (open repo/patches/upstream-status.json)
       if ($d.log | length) != 3 {
         error make {msg: $"stage 3: log grew on a no-change re-run: ($d.log | to json)"}
+      }'
+
+    # A closureGates fork: same patch/dag shape, its own patch dir + status
+    # file, exercising the preflight branch (RFC 0010 A3) that otherwise runs
+    # only on a real --open against a real flake.
+    mkdir -p gated/patches
+    cp repo/patches/0001-fake-fix.patch repo/patches/dag.json gated/patches/
+    cat > mapping-gated.json <<'EOF'
+    [{"name":"gated","input":"gated-src","url":"https://github.com/fakeorg/fakerepo.git",
+      "patchDir":"gated/patches","autoUpdate":false,"closureGates":true,
+      "upstreamPolicy":{"prsWelcome":true,"aiPrsAllowed":"unknown","citation":"https://example.com","notes":"t"},
+      "patches":{"0001-fake-fix.patch":{"upstream":"attempt","reason":"gate test"}}}]
+    EOF
+
+    echo "--- stage 4: a red closure gate aborts the PR-opening ---"
+    NIX_GATE_EXIT=1 nu ../script.nu --open --mapping "$PWD/mapping-gated.json" gated
+    nu -c '
+      let p = (open gated/patches/upstream-status.json | get patches."0001-fake-fix.patch")
+      if $p.pr != null {
+        error make {msg: $"stage 4: PR opened despite a failed gate: ($p | to json)"}
+      }'
+
+    echo "--- stage 5: a green gate proceeds to open and record the PR ---"
+    NIX_GATE_EXIT=0 nu ../script.nu --open --mapping "$PWD/mapping-gated.json" gated
+    nu -c '
+      let p = (open gated/patches/upstream-status.json | get patches."0001-fake-fix.patch")
+      if $p.pr.number != 99999 {
+        error make {msg: $"stage 5: PR not recorded after a green gate: ($p | to json)"}
       }'
 
     touch "$out"
