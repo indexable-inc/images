@@ -405,12 +405,18 @@ def test_externals_run_color_free_even_when_host_forces_color(
         "sys.stdout.write(esc + '[1;37m' + body + esc + '[m' if on else body)"
     )
     try:
-        env = run(nu.value("$env | select -o NO_COLOR CLICOLOR CLICOLOR_FORCE FORCE_COLOR"))
+        env = run(
+            nu.value(
+                "$env | select -o NO_COLOR CLICOLOR CLICOLOR_FORCE FORCE_COLOR GH_PROMPT_DISABLED"
+            )
+        )
         assert env == {
             "NO_COLOR": "1",
             "CLICOLOR": "0",
             "CLICOLOR_FORCE": "0",
             "FORCE_COLOR": "0",
+            # issue #2163: gh must never try to prompt into a captured pipe.
+            "GH_PROMPT_DISABLED": "1",
         }
         # GH_FORCE_TTY (TTY-style gh rendering into a pipe) must not cross over.
         assert run(nu.value("'GH_FORCE_TTY' in $env")) is False

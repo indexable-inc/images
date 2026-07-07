@@ -84,11 +84,15 @@ fn initial_engine_state() -> EngineState {
     // Overriding the values (not merely unsetting them) beats every CLI color
     // convention; a caller that wants ANSI back re-enables it for one call via
     // `env=` (the per-eval stack shadows these) or `with-env`.
+    // GH_PROMPT_DISABLED (issue #2163): output here is parsed, never a
+    // terminal, so gh must fail fast with a usable error instead of ever
+    // attempting an interactive prompt.
     for (key, value) in [
         ("NO_COLOR", "1"),
         ("CLICOLOR", "0"),
         ("CLICOLOR_FORCE", "0"),
         ("FORCE_COLOR", "0"),
+        ("GH_PROMPT_DISABLED", "1"),
     ] {
         engine_state.add_env_var(key.into(), Value::string(value, Span::unknown()));
     }

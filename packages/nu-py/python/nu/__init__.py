@@ -55,7 +55,9 @@ Contract:
 - Externals run color-free by default: the engine env overrides
   ``NO_COLOR=1`` / ``CLICOLOR=0`` / ``CLICOLOR_FORCE=0`` / ``FORCE_COLOR=0``
   and never inherits ``GH_FORCE_TTY``, so a JSON-mode CLI pipes parseable
-  bytes into ``from json`` even when the host process forces color. A call
+  bytes into ``from json`` even when the host process forces color. It
+  also sets ``GH_PROMPT_DISABLED=1`` so gh errors out instead of trying
+  to prompt into a captured pipe. A call
   that wants ANSI re-enables it with ``env={"NO_COLOR": "",
   "CLICOLOR_FORCE": "1"}`` (or ``with-env`` inside the pipeline).
 - Each kernel session gets its OWN engine (stored in the session's
