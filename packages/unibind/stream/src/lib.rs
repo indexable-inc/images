@@ -87,10 +87,11 @@ pub trait RawStream {
     extern "C" fn is_done(&self) -> bool;
 }
 
-/// Adapts a real [`futures_core::Stream`] to the raw protocol, tracking
-/// termination for [`RawStream::is_done`]. Engines box one of these into a
-/// [`DynStream`]; the generated glue does it for every exported
-/// `impl Stream` return.
+/// Adapts a real [`futures_core::Stream`] to the raw protocol.
+///
+/// Tracks termination for [`RawStream::is_done`]; engines box one of these
+/// into a [`DynStream`], which the generated glue does for every exported
+/// stream return.
 pub struct StreamAdapter<S> {
     stream: S,
     done: bool,
@@ -139,10 +140,12 @@ where
     }
 }
 
-/// A type alias for `dynptr!(Box<dyn RawStream<Item = Item> + Send + 'a>)`,
-/// the shape unibind engines return streams as. `Send` only: the engine
-/// side wraps `unibind_runtime::UniStream`, whose boxed inner stream is
-/// deliberately not `Sync` (a stream is polled from one place at a time).
+/// The shape unibind engines return streams as.
+///
+/// A type alias for `dynptr!(Box<dyn RawStream<Item = Item> + Send + 'a>)`.
+/// `Send` only: the engine side wraps [`UniStream`], whose boxed inner
+/// stream is deliberately not `Sync` (a stream is polled from one place at
+/// a time).
 pub type DynStream<'a, Item> =
     stabby::dynptr!(stabby::boxed::Box<dyn RawStream<Item = Item> + Send + 'a>);
 
