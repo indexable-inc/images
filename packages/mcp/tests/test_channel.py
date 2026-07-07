@@ -313,6 +313,9 @@ def test_closed_before_first_sweep_keeps_final_resource(tmp_path: Path, monkeypa
         assert row[1] == "<p>terminal</p>"
         assert row[2] == "closed"
         assert "blink" not in runtime.resources
+        # The row survives for the reply gate, but a closed resource is not
+        # listed: the sidebar/feed present live views only.
+        assert "blink" not in {r["id"] for r in store.live_resources(conn)}
 
     asyncio.run(run())
 

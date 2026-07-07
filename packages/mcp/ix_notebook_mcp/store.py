@@ -469,7 +469,9 @@ def upsert_resource(
 
 
 def close_resource(conn: sqlite3.Connection, *, id: str, updated_at: float) -> None:
-    """Mark a resource closed while keeping its final pane visible."""
+    """Mark a resource closed so it drops out of the live listings. The row is
+    kept (final HTML included) so `resource_live` can refuse a late reply with a
+    precise error instead of a not-found."""
     conn.execute(
         "UPDATE resources SET status = 'closed', updated_at = ? WHERE id = ?",
         (updated_at, id),
@@ -754,10 +756,14 @@ def replayable(conn: sqlite3.Connection, since: float | None) -> list[dict]:
 
 
 def live_resources(conn: sqlite3.Connection) -> list[dict]:
-    """Every resource, oldest first, as plain dicts for the sidebar."""
+    """The not-yet-closed resources, oldest first, as plain dicts for the
+    sidebar. Closed rows stay in the table (see `close_resource`) but are not
+    listed: every consumer of this feed (`/api/resources`, the dashboard panes,
+    `feed.snapshot`) presents resources as live, self-updating views, and a
+    closed one can never update again."""
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         "SELECT id, title, kind, html, status, execution_id, created_at, updated_at "
-        "FROM resources ORDER BY created_at ASC"
+        "FROM resources WHERE status != 'closed' ORDER BY created_at ASC"
     ).fetchall()
     return [dict(r) for r in rows]
