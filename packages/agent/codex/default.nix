@@ -2,6 +2,7 @@
   lib,
   ix,
   codex,
+  rustPlatform,
   makeBinaryWrapper,
   runCommand,
   git,
@@ -172,7 +173,7 @@
           ;
       }).codex;
   };
-  codexWithNotifications = codex.overrideAttrs (finalAttrs: previousAttrs: {
+  codexWithNotifications = codex.overrideAttrs (previousAttrs: {
     version = "0.0.0";
     src = codexSrc;
     # `unpackPhase` names the unpacked dir after the src store path. The old
@@ -180,18 +181,26 @@
     # its own name (`codex-patched`), so derive the sourceRoot from the src's
     # name rather than hardcoding `source/`.
     sourceRoot = "${codexSrc.name}/codex-rs";
-    cargoHash = "sha256-mLpfLi5Wu/t/D8il/5xkDqCTHIeaJZ2OYMZmMIsg7E0=";
-    # buildRustPackage carries cargoDeps through overrideAttrs, so retarget the
-    # nested fixed-output staging derivation when swapping the upstream source.
-    cargoDeps = previousAttrs.cargoDeps.overrideAttrs (_: previousCargoAttrs: {
-      vendorStaging = previousCargoAttrs.vendorStaging.overrideAttrs (_: {
-        inherit (finalAttrs) src sourceRoot;
-        outputHash = finalAttrs.cargoHash;
-      });
-    });
+    # No cargoHash: an inlined vendor FOD hash goes stale on every codex-src
+    # bump the flake-update bot makes (index #2233 broke every ix deploy this
+    # way). importCargoLock needs no aggregate hash: crates.io checksums come
+    # from Cargo.lock itself and git deps are fetched by their locked revs.
+    # The lockfile is read from the RAW codex-src input (an eval-time store
+    # path, so no IFD), not the patched src: no patch touches Cargo.lock
+    # today, and if one ever does, cargoSetupPostPatchHook's lock-consistency
+    # check fails the build loudly rather than vendoring the wrong set.
+    cargoDeps = rustPlatform.importCargoLock {
+      lockFile = ix.codexSrc + "/codex-rs/Cargo.lock";
+      allowBuiltinFetchGit = true;
+    };
     postPatch = ''
       # shell
-      substituteInPlace $cargoDepsCopy/*/webrtc-sys-*/build.rs \
+      # importCargoLock vendors one top-level dir per crate (name-version),
+      # unlike fetchCargoVendor's extra nesting level. Version-anchor the glob
+      # so the sibling crate webrtc-sys-build-* can never match if a future
+      # rust-sdks rev gives it a build.rs (that would break --replace-fail on
+      # the next codex-src bump, the breakage class this file just eliminated).
+      substituteInPlace $cargoDepsCopy/webrtc-sys-[0-9]*/build.rs \
         --replace-fail "cargo:rustc-link-lib=static=webrtc" "cargo:rustc-link-lib=dylib=webrtc"
       substituteInPlace Cargo.toml \
         --replace-fail 'lto = "thin"' "" \
