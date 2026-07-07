@@ -96,6 +96,7 @@ members = [
   "packages/unibind/backend-jvm",
   "packages/unibind/backend-py",
   "packages/unibind/conformance",
+  "packages/unibind/conformance/jvm",
   "packages/unibind/core",
   "packages/unibind/gen",
   "packages/unibind/macros",

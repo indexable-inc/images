@@ -102,7 +102,7 @@ fn async_functions_are_rejected() {
     interface.functions[0].asyncness = ir::Asyncness::Async;
     let error = unibind_backend_jvm::render(&interface).expect_err("async must not render");
     assert!(
-        error.message.contains("issue #1992"),
+        error.message.contains("issue #2083"),
         "missing phase pointer: {}",
         error.message
     );

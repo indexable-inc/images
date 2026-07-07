@@ -94,6 +94,12 @@ pub fn expr(
                     .collect::<::std::collections::HashMap<_, _>>()
             }
         }
+        ir::Type::Stream(_) => {
+            return Err(RenderError::new(
+                "`UniStream` crosses as an async iterator; the JVM backend's stream \
+                 support lands with issue #2083",
+            ));
+        }
         ir::Type::Named(name) => {
             let ident = names::rust_ident(name)?;
             let mut fields = Vec::new();

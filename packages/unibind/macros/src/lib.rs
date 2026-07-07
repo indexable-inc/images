@@ -46,6 +46,13 @@ use proc_macro::TokenStream;
 /// Glue for async functions, `UniStream` returns, and `#[unibind::object]`
 /// types calls into `unibind_runtime::py`, so a crate exporting any of
 /// those adds `unibind-runtime` with the `py` feature to its dependencies.
+///
+/// `backends(py)` / `backends(jvm)` / `backends(py, jvm)` selects which
+/// enabled backends render glue for this module; without it every
+/// feature-enabled backend renders. Cargo unifies this crate's features
+/// across a workspace, so a module whose surface only one backend accepts
+/// (e.g. async python bindings while the JVM backend is sync-only) names
+/// its backends instead of inheriting a neighbor crate's features.
 #[proc_macro_attribute]
 pub fn export(args: TokenStream, item: TokenStream) -> TokenStream {
     expand::export(args.into(), item.into()).into()

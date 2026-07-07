@@ -66,6 +66,9 @@ impl CTy {
                 value: Box::new(Self::of(value)),
             },
             ir::Type::Named(name) => Self::Record(name.clone()),
+            // Streams never reach the mirror model: `Model::new` rejects
+            // them first (the JVM async surface is issue #2083).
+            ir::Type::Stream(_) => unreachable!("streams are rejected by Model::new"),
         }
     }
 

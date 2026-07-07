@@ -12180,6 +12180,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "unibind-conformance-jvm"
+version = "0.1.0"
+dependencies = [
+ "unibind",
+]
+
+[[package]]
 name = "unibind-core"
 version = "0.1.0"
 dependencies = [

@@ -23,12 +23,14 @@ impl<'ir> Model<'ir> {
     /// # Errors
     ///
     /// Fails for surface this backend does not implement (async functions,
-    /// data enums, objects), for unresolved or recursive record types, and
-    /// for a `throws` name with no matching error enum.
+    /// streams, data enums, objects; the async surface is issue #2083), for
+    /// unresolved or recursive record types, and for a `throws` name with no
+    /// matching error enum.
     pub fn new(interface: &'ir ir::Interface) -> Result<Self, RenderError> {
         if let Some(object) = interface.objects.first() {
             return Err(RenderError::new(format!(
-                "`{}` is a #[unibind::object]; objects land in phase 2 (issue #1992)",
+                "`{}` is a #[unibind::object]; the JVM backend's object support lands with the \
+                 async surface (issue #2083)",
                 object.name
             )));
         }
@@ -44,7 +46,7 @@ impl<'ir> Model<'ir> {
             .find(|function| matches!(function.asyncness, ir::Asyncness::Async))
         {
             return Err(RenderError::new(format!(
-                "`{}` is async; async functions land in phase 2 (issue #1992)",
+                "`{}` is async; the JVM backend's async support lands with issue #2083",
                 function.name
             )));
         }
@@ -86,6 +88,10 @@ impl<'ir> Model<'ir> {
                 self.check_type(value, stack)
             }
             ir::Type::Named(name) => self.check_record(name, stack),
+            ir::Type::Stream(_) => Err(RenderError::new(
+                "`UniStream` crosses as an async iterator; the JVM backend's stream \
+                 support lands with issue #2083",
+            )),
             ir::Type::Bool
             | ir::Type::Int(_)
             | ir::Type::Float(_)
