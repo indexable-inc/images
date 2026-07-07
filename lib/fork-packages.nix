@@ -92,11 +92,20 @@
 {
   forkPackages = [
     {
+      # codex is cargoHash-coupled: the package vendors its Cargo dependencies
+      # behind a fixed `cargoHash`, and a rebase-patches run does not regenerate
+      # that hash, so a free-floating base desyncs the two the moment upstream's
+      # Cargo.lock changes. Worse, the desync also hits consumers that lock
+      # codex-src transitively (ix), where a routine `nix flake update` floated
+      # the base past our hash and broke every prod deploy for 13h on
+      # 2026-07-07. The input is pinned by rev in flake.nix; bump it by hand,
+      # then `nix run .#rebase-patches -- codex` and regenerate the cargoHash in
+      # the same change.
       name = "codex";
       input = "codex-src";
       url = "https://github.com/openai/codex.git";
       patchDir = "packages/agent/codex/patches";
-      autoUpdate = true;
+      autoUpdate = false;
       upstreamPolicy = {
         # Codex is invitation-only: unsolicited PRs are closed without review, so
         # `prsWelcome = false` and the tool never opens a PR here regardless of

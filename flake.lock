@@ -48,16 +48,17 @@
     "codex-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1783377144,
-        "narHash": "sha256-qmGzvhYR6Gkj/Urrc+1l5+jtQ9/oFhDorMmOtCu9PQM=",
+        "lastModified": 1783210073,
+        "narHash": "sha256-FA5J7bZNNN+wb0FwL/t6nI6Bwejb2ICwYEcOyKAa1Rc=",
         "owner": "openai",
         "repo": "codex",
-        "rev": "d61ad78abc9b35f59e6d3a7eb2bd6b6ca9338230",
+        "rev": "be33f80bc65159c094ecd06bf155afa3061ce23d",
         "type": "github"
       },
       "original": {
         "owner": "openai",
         "repo": "codex",
+        "rev": "be33f80bc65159c094ecd06bf155afa3061ce23d",
         "type": "github"
       }
     },

@@ -11,7 +11,9 @@ on:
     # would leave stale patches and fail the patched-src check; here the bump and
     # the rebase move together. clippy-src is excluded (autoUpdate = false): it
     # is nightly-toolchain-coupled and rev-pinned, bumped by hand alongside the
-    # rust toolchain, never free-floated by the cron.
+    # rust toolchain, never free-floated by the cron. codex-src is excluded for
+    # the same reason vendored-hash forks cannot free-float: its cargoHash must
+    # be regenerated with every base bump (see lib/fork-packages.nix).
     - cron: "23 */3 * * *"
 
 permissions:
@@ -109,7 +111,7 @@ jobs:
             cat <<'BODY'
           Automated fork-sync: bump each auto-updatable de-forked package's upstream base and regenerate its in-repo patch series through a real `git rebase`.
 
-          Driven by `lib/fork-packages.nix` (`autoUpdate = true`): currently **codex** (`openai/codex`) and **btop** (`aristocratos/btop`). Excluded (`autoUpdate = false`, bumped by hand via `nix run .#rebase-patches -- <name>`): **clippy** is nightly-toolchain-coupled and rev-pinned, bumped alongside the rust toolchain; **nix** is our daemon toolchain, pinned at the rev the fleet daemon runs, bumped only when we deliberately move the daemon version.
+          Driven by `lib/fork-packages.nix` (`autoUpdate = true`): currently **btop** (`aristocratos/btop`). Excluded (`autoUpdate = false`, bumped by hand via `nix run .#rebase-patches -- <name>`): **clippy** is nightly-toolchain-coupled and rev-pinned, bumped alongside the rust toolchain; **nix** is our daemon toolchain, pinned at the rev the fleet daemon runs, bumped only when we deliberately move the daemon version; **codex** vendors its Cargo dependencies behind a fixed `cargoHash` that must be regenerated with every base bump, so its base is rev-pinned and moves only by hand.
 
           Each `patched-src-<name>` check was built against the freshly bumped base in this job, so the series still applies. The PR's `flake-check` CI rebuilds the full packages.
 

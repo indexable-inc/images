@@ -114,11 +114,17 @@
     };
 
     # Upstream openai/codex, patched in-repo (packages/agent/codex/patches).
-    # Pinned at the merge-base of the old fork branch; `nix flake update
-    # codex-src` bumps the base and `nix run .#rebase-patches -- codex`
-    # regenerates the series.
+    # Pinned BY REV: the package vendors its Cargo dependencies behind a fixed
+    # `cargoHash` (packages/agent/codex/default.nix), so the base and the hash
+    # must move together. A branch-loose URL here lets any blanket `nix flake
+    # update` -- ours or a downstream consumer's (ix locks this input
+    # transitively) -- float the base past the hash, which broke every ix prod
+    # deploy for 13h on 2026-07-07. Bump this rev deliberately, then
+    # `nix run .#rebase-patches -- codex` and regenerate the cargoHash in the
+    # same change (fork-packages.nix marks it `autoUpdate = false`, so the
+    # scheduled fork-sync leaves it alone).
     codex-src = {
-      url = "github:openai/codex";
+      url = "github:openai/codex/be33f80bc65159c094ecd06bf155afa3061ce23d";
       flake = false;
     };
 
