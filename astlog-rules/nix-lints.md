@@ -1,7 +1,7 @@
 # Nix ASTLog lints
 
 Complete reference for every house-style lint ASTLog enforces on Nix source in this
-repo. Generated from [`astlog-rules/nix.astlog`](./nix.astlog), the single source of
+repo. Reference for [`astlog-rules/nix.astlog`](./nix.astlog), the single source of
 truth. **99 lints total: 95 `error`, 4 `warning`.**
 
 ## How it works
@@ -27,95 +27,99 @@ truth. **99 lints total: 95 `error`, 4 `warning`.**
 | 4 | [`no-impure`](#no-impure) | err | __impure = true: prefer ix.writeNushellApplication for side-effect orchestrators; __impure is only for network side effects that must live inside the derivation graph |
 | 5 | [`no-allow-builtin-fetch-git`](#no-allow-builtin-fetch-git) | err | allowBuiltinFetchGit fetches Cargo git dependencies during evaluation; pin rustPlatform.importCargoLock outputHashes instead |
 | 6 | [`no-builtins-path-without-name`](#no-builtins-path-without-name) | err | `builtins.path` without `name` derives the store-path name from the working directory; set `name = "<stable>"` so the result is reproducible across clones |
-| 7 | [`no-getflake-tostring`](#no-getflake-tostring) | err | `builtins.getFlake (toString ./...)` uses path-flake semantics, copying the entire tree including non-regular files; use `"git+file:///..."` instead |
-| 8 | [`no-nixpkgs-channel-ref`](#no-nixpkgs-channel-ref) | err | `<nixpkgs>` channel reference is banned; use flake inputs |
-| 9 | [`no-path-flake-ref`](#no-path-flake-ref) | err | whole-tree `path:` flake refs copy the working tree byte-for-byte; use `.#...`, `git+file:///abs/path`, a relative `path:./<subtree>` input, or a proper flake input |
-| 10 | [`no-parent-path`](#no-parent-path) | err | relative parent path `../` reaches across a directory; use ix.<helper> / index.lib, ix.paths.<root> + a relative string, or the package registry instead of a `../` literal |
-| 11 | [`no-root-string-interp`](#no-root-string-interp) | err | `"${root}/..."` string-interpolates the workspace tree, leaking full-tree context; use `root + "/..."` (path concat) or `builtins.path { name; path; }` |
-| 12 | [`no-fake-hash`](#no-fake-hash) | err | fake hashes are banned; compute the real SRI hash before editing tracked Nix files |
-| 13 | [`no-fetchfromgithub-fixed-hash`](#no-fetchfromgithub-fixed-hash) | err | do not pin GitHub source with `fetchFromGitHub { ... hash = ...; }`; add it as a flake input with `flake = false` and consume that source instead |
-| 14 | [`prefer-sri-hash`](#prefer-sri-hash) | err | legacy `sha256`-flavored hash attr; use the SRI `hash` slot: `hash` in fetchers, `cargoHash` / `vendorHash` / `npmDepsHash` in the language builders (or the typed `cargoLock` block for Rust) |
-| 15 | [`mkderivation-missing-strict-deps`](#mkderivation-missing-strict-deps) | err | mkDerivation without strictDeps = true; add it to prevent build/host dependency leaking |
-| 16 | [`no-buildphase-pure-default`](#no-buildphase-pure-default) | err | `buildPhase = "make"` / `installPhase = "make install"` restates the stdenv default; drop the override or document the deviation |
-| 17 | [`no-buildrustpackage`](#no-buildrustpackage) | err | `buildRustPackage` is the legacy entry point; use `rustPlatform.buildRustPackage` (typed `cargoLock` shape) or `crane` |
-| 18 | [`no-derivation-name-version-interp`](#no-derivation-name-version-interp) | err | `name = "${pname}-${version}"` restates stdenv; set `pname` and `version`, and stdenv constructs `name` automatically |
-| 19 | [`no-fixup-phase-override`](#no-fixup-phase-override) | err | `fixupPhase = ...` wipes the default fixup pass; use `preFixup` / `postFixup` instead |
-| 20 | [`no-pname-finalattrs-self-ref`](#no-pname-finalattrs-self-ref) | err | `finalAttrs.pname` as the value of `repo`, `owner`, or `pname` itself is usually a copy-paste artifact; use the literal |
-| 21 | [`no-stringly-flags`](#no-stringly-flags) | err | build flag attrs are list-of-string, not one string with spaces; whitespace inside flag values breaks paths-with-spaces and shell quoting |
-| 22 | [`no-substitute-all`](#no-substitute-all) | err | `substituteAll` / `substituteAllFiles` was removed from nixpkgs; use `replaceVars` or `replaceVarsWith` instead |
-| 23 | [`runcommand-missing-structured-attrs`](#runcommand-missing-structured-attrs) | warn | runCommand with empty attrs {}; add { __structuredAttrs = true; } for consistent derivation behavior |
-| 24 | [`no-handrolled-shell-script`](#no-handrolled-shell-script) | warn | `writeText "*.sh"` hand-rolls an unchecked shell script; prefer a compiled Rust launcher (ix.rustWorkspace, see packages/config-launch / packages/agent/codex) or ix.writeNushellApplication / ix.writePythonApplication, or keep it with an `astlog-ignore: no-handrolled-shell-script` comment + reason |
-| 25 | [`no-nix-in-generated-shell`](#no-nix-in-generated-shell) | err | Nix-generated shell applications must not call nix again; pass realized store paths into the script instead |
-| 26 | [`no-write-shell-application`](#no-write-shell-application) | err | writeShellApplication is banned; use ix.writeNushellApplication instead |
-| 27 | [`no-write-shell-script`](#no-write-shell-script) | err | writeShellScript is unchecked (no shellcheck, no declared deps); prefer a compiled Rust launcher/tool (ix.rustWorkspace, see packages/config-launch / packages/claude-hooks), else ix.writeNushellApplication / ix.writePythonApplication for logic, else ix.writeBashApplication (checked) for must-be-bash |
-| 28 | [`no-write-shell-script-bin`](#no-write-shell-script-bin) | err | writeShellScriptBin is banned; use ix.writeNushellApplication instead |
-| 29 | [`no-mkforce`](#no-mkforce) | err | mkForce is banned; use priority composition (mkDefault, mkOverride) instead |
-| 30 | [`no-mkoverride-numeric`](#no-mkoverride-numeric) | err | `mkOverride <literal>` is the back-door for `mkForce`; use module priority composition (`mkDefault`, `mkOptionDefault`, `mkBefore`, `mkAfter`) or fix the module boundary |
-| 31 | [`no-mkoption-conditional-default`](#no-mkoption-conditional-default) | err | a conditional `mkOption.default` couples the declaration to a sibling option; keep `default` self-contained and move the branch into `config` as `mkIf <cond> (mkDefault ...)` |
-| 32 | [`no-mkif-true`](#no-mkif-true) | err | `mkIf true x` is `x` and `mkIf false x` is empty; drop the wrapper |
-| 33 | [`no-mkmerge-singleton`](#no-mkmerge-singleton) | err | `mkMerge [ x ]` is identity; drop the wrapper |
-| 34 | [`no-types-attrs`](#no-types-attrs) | err | `types.attrs` is the give-up type; use a typed `submodule` with `freeformType` (or `attrsOf <real-type>`) so options merge, document, and validate |
-| 35 | [`no-types-unspecified`](#no-types-unspecified) | err | `types.unspecified` accepts anything, including bottom; use a real type or `attrsOf <type>` / `oneOf [ ... ]` |
-| 36 | [`no-mddoc`](#no-mddoc) | err | `lib.mdDoc` / `mdDoc` is a no-op and was removed from nixpkgs; pass the description string directly |
-| 37 | [`no-import-in-imports`](#no-import-in-imports) | err | use `imports = [ ./foo.nix ]`, not `imports = [ (import ./foo.nix) ]`; NixOS modules auto-import paths |
-| 38 | [`no-abort`](#no-abort) | err | `abort` is a hard abort with no recovery; use `throw` (catchable) or `lib.assertMsg` (typed assertion) instead |
-| 39 | [`no-bare-assert`](#no-bare-assert) | err | bare `assert <cond>;` gives an opaque failure; use `assert lib.assertMsg <cond> "<why>";` (or `lib.assertOneOf`) so the diagnostic names the invariant |
-| 40 | [`no-throw-without-message`](#no-throw-without-message) | err | `throw ""` is an empty placeholder message; pass a message that names the failing invariant |
-| 41 | [`no-deprecated-trace`](#no-deprecated-trace) | err | `builtins.trace` left in tracked code prints during every eval; remove it or guard behind a debug flag |
-| 42 | [`no-with-builtins`](#no-with-builtins) | err | `with builtins;` is banned; use explicit builtins.foo qualifications |
-| 43 | [`no-with-lib`](#no-with-lib) | err | file-scope `with lib;` is banned; use explicit lib.foo qualifications |
-| 44 | [`no-with-pkgs`](#no-with-pkgs) | err | file-scope `with pkgs;` is banned; use explicit pkgs.foo qualifications |
-| 45 | [`no-pkgs-lib`](#no-pkgs-lib) | err | `pkgs.lib.X` reaches through `pkgs`; use the bare `lib` binding (or `inherit (pkgs) lib;`) |
-| 46 | [`no-builtin-length-list-zero`](#no-builtin-length-list-zero) | err | `builtins.length xs == 0` is `xs == [ ]` (and `> 0` is `xs != [ ]`); drop the function call |
-| 47 | [`no-chained-attrset-update`](#no-chained-attrset-update) | err | `A // { ... } // { ... }` builds one attrset in two steps; merge the adjacent literals into a single `// { ... }` |
-| 48 | [`no-deprecated-iflist-empty`](#no-deprecated-iflist-empty) | err | `if cond then [ x ] else [ ]` is `lib.optional cond x` |
-| 49 | [`no-double-paren`](#no-double-paren) | err | `(($X))` is double-grouped; drop one layer of parens |
-| 50 | [`no-empty-list-concat`](#no-empty-list-concat) | err | `[ ] ++ X` and `X ++ [ ]` are no-ops; drop the empty operand |
-| 51 | [`no-escapeshellargs-for-loop`](#no-escapeshellargs-for-loop) | err | `for v in ${lib.escapeShellArgs xs}` trips fatal SC2043 when the list renders single-element, failing `writeBashApplication` only at deploy time; iterate a bash array instead |
-| 52 | [`no-negate-bool-literal`](#no-negate-bool-literal) | err | `!true` / `!false` is the opposite literal; use the literal directly |
-| 53 | [`no-optional-true`](#no-optional-true) | err | `lib.optional true x` is always `[ x ]` and `lib.optional false x` is always `[ ]`; inline the literal |
-| 54 | [`no-update-empty-set`](#no-update-empty-set) | err | `X // { }` and `{ } // X` are no-ops; drop the empty operand |
-| 55 | [`no-unquoted-splice`](#no-unquoted-splice) | err | `legacyPackages.${system}` interpolates outside a string; prefer `import nixpkgs { inherit system; }`, or quote the antiquote: `legacyPackages."${system}"` |
-| 56 | [`no-legacy-let-block`](#no-legacy-let-block) | err | `let { ... }` is the undocumented legacy let form; use `let ... in` or a normal attrset |
-| 57 | [`no-rec-attrset`](#no-rec-attrset) | err | `rec { }` is banned in derivations and overlays; use let, finalAttrs:, or final/prev |
-| 58 | [`no-ambiguous-gpl-license`](#no-ambiguous-gpl-license) | err | ambiguous GPL/AGPL/LGPL license identifier; use the `-Only` / `-Plus` flavor: `gpl2Only`, `gpl3Plus`, `agpl3Only`, etc. |
-| 59 | [`no-flake-utils-eachsystem`](#no-flake-utils-eachsystem) | err | `flake-utils.lib.eachSystem` is discouraged; use `flake-parts` (`mkFlake` + `perSystem`) or a plain `lib.genAttrs systems` helper |
-| 60 | [`prefer-attrvalues-over-mapattrs-identity`](#prefer-attrvalues-over-mapattrs-identity) | err | `lib.mapAttrsToList (_: v: v) X` is `builtins.attrValues X`; drop the identity map |
-| 61 | [`prefer-fileset-over-cleansource`](#prefer-fileset-over-cleansource) | err | `lib.cleanSource` is a blunt filter; prefer `lib.fileset.toSource { root; fileset = ...; }` so the source closure names exactly what the build needs |
-| 62 | [`prefer-formats-json-generate`](#prefer-formats-json-generate) | err | use `(pkgs.formats.json { }).generate "name" value` instead of `pkgs.writeText "name" (builtins.toJSON value)` |
-| 63 | [`prefer-genattrs-listtoattrs`](#prefer-genattrs-listtoattrs) | err | `listToAttrs (map f xs)` is `lib.genAttrs' xs f`; when each entry is keyed by the element itself it simplifies further to `lib.genAttrs xs f` |
-| 64 | [`prefer-genattrs-mapattrs-identity`](#prefer-genattrs-mapattrs-identity) | err | `lib.mapAttrs (_: _: v) X` discards both name and value; use `lib.genAttrs (lib.attrNames X) (_: v)` when the value is constant, or `builtins.mapAttrs (_: f) X` when only the value matters |
-| 65 | [`prefer-genlist-over-map-range`](#prefer-genlist-over-map-range) | err | `map f (lib.range 0 (n - 1))` collapses to `lib.genList f n` |
-| 66 | [`prefer-imap0-over-genlist-identity`](#prefer-imap0-over-genlist-identity) | err | `lib.genList lib.id n` just materializes the index list; iterate the data with `lib.imap0`, or use `lib.range 0 (n - 1)` if you only need the integers |
-| 67 | [`prefer-lib-import-format`](#prefer-lib-import-format) | err | use `lib.importJSON path` / `lib.importTOML path` instead of `fromJSON (readFile path)` / `fromTOML (readFile path)` |
-| 68 | [`prefer-lib-optional-singleton`](#prefer-lib-optional-singleton) | err | `lib.optionals cond [ x ]` collapses to `lib.optional cond x` |
-| 69 | [`prefer-or-default-over-has-attr-guard`](#prefer-or-default-over-has-attr-guard) | err | `(s ? k) && <expr using s.k>` guards a lookup with an existence check; push the default into the lookup with `s.k or DEFAULT` |
-| 70 | [`prefer-sorton-over-keyed-sort`](#prefer-sorton-over-keyed-sort) | err | `sort (a: b: (f a) < (f b))` is a keyed comparator; use `lib.sortOn f xs`, which evaluates the key once per element |
-| 71 | [`no-recursive-update`](#no-recursive-update) | err | lib.recursiveUpdate silently replaces at leaf collisions; use ix.deepMerge.strict (throws on collision) or ix.deepMerge.rhs (rhs wins) from `lib/util/deep-merge.nix` |
-| 72 | [`no-tofile-unsafediscardstringcontext`](#no-tofile-unsafediscardstringcontext) | err | `builtins.toFile X (builtins.unsafeDiscardStringContext Y)` drops the runtime dependency; use `pkgs.writeText X Y` (or `passAsFile`) instead |
-| 73 | [`no-handrolled-toml-scalar`](#no-handrolled-toml-scalar) | err | hand-rolled `toToml` scalar encoder; use ix.toml.scalar from `lib/util/toml.nix` (and ix.attrs.flattenToDotted from `lib/util/attrs.nix` for nested config trees) |
-| 74 | [`no-at-pattern-shortcut`](#no-at-pattern-shortcut) | err | `{ foo, ... }@args` then reaching `args.bar` hides a required input; match every attribute you use in the formals |
-| 75 | [`nixpkgs-explicit-config`](#nixpkgs-explicit-config) | err | `import nixpkgs {}` inherits ambient config and overlays from the environment; pass `config = {}; overlays = [];` |
-| 76 | [`import-nixpkgs-once`](#import-nixpkgs-once) | err | an optional `pkgs ? import <nixpkgs> {}` default re-imports Nixpkgs as an accidental singleton; require `pkgs` and thread it through |
-| 77 | [`set-docheck`](#set-docheck) | warn | `checkPhase` is off by default; set `doCheck = true;` so the build runs the package's tests |
-| 78 | [`declare-env-explicitly`](#declare-env-explicitly) | err | a list attr coerces to a single space-joined env var; use the `env` slot with `lib.escapeShellArgs` for correct conversion |
-| 79 | [`extend-makeflagsarray`](#extend-makeflagsarray) | err | assigning `makeFlagsArray` directly mangles space-containing values; append to it in a `preBuild` shell snippet |
-| 80 | [`no-pkgs-in-callpackage`](#no-pkgs-in-callpackage) | err | taking `pkgs` in a `callPackage` argument set breaks `override`; list the exact dependencies you need |
-| 81 | [`keep-python-composable`](#keep-python-composable) | err | pulling deps out of `python3Packages` blocks per-dependency overrides; take the package names directly |
-| 82 | [`future-proof-overrideattrs`](#future-proof-overrideattrs) | err | `overrideAttrs` with an attrset drops pre-existing values; use the `(old: { ... })` function form with `old.x or []` |
-| 83 | [`keep-phase-hooks`](#keep-phase-hooks) | err | a phase override without `runHook pre*/post*` strips downstream pre/post hooks; bracket the body with the hook calls |
-| 84 | [`prefer-substituteinplace`](#prefer-substituteinplace) | err | `sed -i`/`awk` in a phase fails silently when the match disappears; use `substituteInPlace ... --replace-fail` |
-| 85 | [`prefer-phase-flags`](#prefer-phase-flags) | err | a whole-phase override carrying custom targets/flags should be `makeFlags` / `buildFlags` / `configureFlags` / `installTargets` |
-| 86 | [`filter-src`](#filter-src) | warn | raw `src = ./.;` copies the whole working tree into the store; filter with `lib.fileset.toSource` |
-| 87 | [`pname-with-version`](#pname-with-version) | err | a literal `name = "package"` set alongside `version` restates stdenv; use `pname` |
-| 88 | [`cross-compile-ready-deps`](#cross-compile-ready-deps) | err | build-time tools (`pkg-config`, `cmake`, ...) in `buildInputs` break cross-compilation; move them to `nativeBuildInputs` |
-| 89 | [`overlay-preserve-nested`](#overlay-preserve-nested) | err | `final: prev: { a = { b; }; }` drops the rest of `prev.a`; merge with `prev.a or {} // { ... }` |
-| 90 | [`keep-overrides-composable`](#keep-overrides-composable) | err | hiding a custom package in an overlay `let` blocks later overlays; expose it as a real attr and inject via `final.<name>` |
-| 91 | [`parametrize-with-options`](#parametrize-with-options) | err | a top-level function arg on a module locks the choice in; declare an `mkOption` and read it from `config` |
-| 92 | [`avoid-specialargs`](#avoid-specialargs) | err | `specialArgs` injection scales badly and can clash; prefer a Nixpkgs overlay and read `pkgs.<name>` |
-| 93 | [`separate-host-guest-pkgs`](#separate-host-guest-pkgs) | err | referencing the host's `pkgs` inside a test node breaks when host and guest platforms differ; take `pkgs` from the node module function |
-| 94 | [`wait-for-unit-and-port`](#wait-for-unit-and-port) | err | curling a service after only `wait_for_unit` races on fast hosts; wait for `network-online.target`, the unit, and the open port |
-| 95 | [`minimize-with-scope`](#minimize-with-scope) | err | `with <expr>;` over any target other than a tightly-scoped `with pkgs;` obscures name origins; bind with `let`/`inherit` |
+| 7 | [`package-overlay-intent-explicit`](#package-overlay-intent-explicit) | err | flake-exposed package metadata with `packageSet = true` must make overlay intent explicit: `overlay = false`, `overlay = true`, or `overlay.attrName = ...` |
+| 8 | [`no-getflake-tostring`](#no-getflake-tostring) | err | `builtins.getFlake (toString ./...)` uses path-flake semantics, copying the entire tree including non-regular files; use `"git+file:///..."` instead |
+| 9 | [`no-nixpkgs-channel-ref`](#no-nixpkgs-channel-ref) | err | `<nixpkgs>` channel reference is banned; use flake inputs |
+| 10 | [`no-path-flake-ref`](#no-path-flake-ref) | err | whole-tree `path:` flake refs copy the working tree byte-for-byte; use `.#...`, `git+file:///abs/path`, a relative `path:./<subtree>` input, or a proper flake input |
+| 11 | [`no-parent-path`](#no-parent-path) | err | relative parent path `../` reaches across a directory; use ix.<helper> / index.lib, ix.paths.<root> + a relative string, or the package registry instead of a `../` literal |
+| 12 | [`no-root-string-interp`](#no-root-string-interp) | err | `"${root}/..."` string-interpolates the workspace tree, leaking full-tree context; use `root + "/..."` (path concat) or `builtins.path { name; path; }` |
+| 13 | [`no-fake-hash`](#no-fake-hash) | err | fake hashes are banned; compute the real SRI hash before editing tracked Nix files |
+| 14 | [`no-fetchfromgithub-fixed-hash`](#no-fetchfromgithub-fixed-hash) | err | do not pin GitHub source with `fetchFromGitHub { ... hash = ...; }`; add it as a flake input with `flake = false` and consume that source instead |
+| 15 | [`prefer-sri-hash`](#prefer-sri-hash) | err | legacy `sha256`-flavored hash attr; use the SRI `hash` slot: `hash` in fetchers, `cargoHash` / `vendorHash` / `npmDepsHash` in the language builders (or the typed `cargoLock` block for Rust) |
+| 16 | [`mkderivation-missing-strict-deps`](#mkderivation-missing-strict-deps) | err | mkDerivation without strictDeps = true; add it to prevent build/host dependency leaking |
+| 17 | [`no-buildphase-pure-default`](#no-buildphase-pure-default) | err | `buildPhase = "make"` / `installPhase = "make install"` restates the stdenv default; drop the override or document the deviation |
+| 18 | [`no-buildrustpackage`](#no-buildrustpackage) | err | `buildRustPackage` is the legacy entry point; use `rustPlatform.buildRustPackage` (typed `cargoLock` shape) or `crane` |
+| 19 | [`no-derivation-name-version-interp`](#no-derivation-name-version-interp) | err | `name = "${pname}-${version}"` restates stdenv; set `pname` and `version`, and stdenv constructs `name` automatically |
+| 20 | [`no-fixup-phase-override`](#no-fixup-phase-override) | err | `fixupPhase = ...` wipes the default fixup pass; use `preFixup` / `postFixup` instead |
+| 21 | [`no-pname-finalattrs-self-ref`](#no-pname-finalattrs-self-ref) | err | `finalAttrs.pname` as the value of `repo`, `owner`, or `pname` itself is usually a copy-paste artifact; use the literal |
+| 22 | [`no-stringly-flags`](#no-stringly-flags) | err | build flag attrs are list-of-string, not one string with spaces; whitespace inside flag values breaks paths-with-spaces and shell quoting |
+| 23 | [`no-substitute-all`](#no-substitute-all) | err | `substituteAll` / `substituteAllFiles` was removed from nixpkgs; use `replaceVars` or `replaceVarsWith` instead |
+| 24 | [`runcommand-missing-structured-attrs`](#runcommand-missing-structured-attrs) | warn | runCommand with empty attrs {}; add { __structuredAttrs = true; } for consistent derivation behavior |
+| 25 | [`no-handrolled-shell-script`](#no-handrolled-shell-script) | warn | `writeText "*.sh"` hand-rolls an unchecked shell script; prefer a compiled Rust launcher (ix.rustWorkspace, see packages/config-launch / packages/agent/codex) or ix.writeNushellApplication / ix.writePythonApplication, or keep it with an `astlog-ignore: no-handrolled-shell-script` comment + reason |
+| 26 | [`no-nix-in-generated-shell`](#no-nix-in-generated-shell) | err | Nix-generated shell applications must not call nix again; pass realized store paths into the script instead |
+| 27 | [`no-write-shell-application`](#no-write-shell-application) | err | writeShellApplication is banned; use ix.writeNushellApplication instead |
+| 28 | [`no-write-shell-script`](#no-write-shell-script) | err | writeShellScript is unchecked (no shellcheck, no declared deps); prefer a compiled Rust launcher/tool (ix.rustWorkspace, see packages/config-launch / packages/claude-hooks), else ix.writeNushellApplication / ix.writePythonApplication for logic, else ix.writeBashApplication (checked) for must-be-bash |
+| 29 | [`no-write-shell-script-bin`](#no-write-shell-script-bin) | err | writeShellScriptBin is banned; use ix.writeNushellApplication instead |
+| 30 | [`no-mkforce`](#no-mkforce) | err | mkForce is banned; use priority composition (mkDefault, mkOverride) instead |
+| 31 | [`no-mkoverride-numeric`](#no-mkoverride-numeric) | err | `mkOverride <literal>` is the back-door for `mkForce`; use module priority composition (`mkDefault`, `mkOptionDefault`, `mkBefore`, `mkAfter`) or fix the module boundary |
+| 32 | [`no-mkoption-conditional-default`](#no-mkoption-conditional-default) | err | a conditional `mkOption.default` couples the declaration to a sibling option; keep `default` self-contained and move the branch into `config` as `mkIf <cond> (mkDefault ...)` |
+| 33 | [`no-mkif-true`](#no-mkif-true) | err | `mkIf true x` is `x` and `mkIf false x` is empty; drop the wrapper |
+| 34 | [`no-mkmerge-singleton`](#no-mkmerge-singleton) | err | `mkMerge [ x ]` is identity; drop the wrapper |
+| 35 | [`no-types-attrs`](#no-types-attrs) | err | `types.attrs` is the give-up type; use a typed `submodule` with `freeformType` (or `attrsOf <real-type>`) so options merge, document, and validate |
+| 36 | [`no-types-unspecified`](#no-types-unspecified) | err | `types.unspecified` accepts anything, including bottom; use a real type or `attrsOf <type>` / `oneOf [ ... ]` |
+| 37 | [`no-mddoc`](#no-mddoc) | err | `lib.mdDoc` / `mdDoc` is a no-op and was removed from nixpkgs; pass the description string directly |
+| 38 | [`no-import-in-imports`](#no-import-in-imports) | err | use `imports = [ ./foo.nix ]`, not `imports = [ (import ./foo.nix) ]`; NixOS modules auto-import paths |
+| 39 | [`no-abort`](#no-abort) | err | `abort` is a hard abort with no recovery; use `throw` (catchable) or `lib.assertMsg` (typed assertion) instead |
+| 40 | [`no-bare-assert`](#no-bare-assert) | err | bare `assert <cond>;` gives an opaque failure; use `assert lib.assertMsg <cond> "<why>";` (or `lib.assertOneOf`) so the diagnostic names the invariant |
+| 41 | [`no-throw-without-message`](#no-throw-without-message) | err | `throw ""` is an empty placeholder message; pass a message that names the failing invariant |
+| 42 | [`no-deprecated-trace`](#no-deprecated-trace) | err | `builtins.trace` left in tracked code prints during every eval; remove it or guard behind a debug flag |
+| 43 | [`no-with-builtins`](#no-with-builtins) | err | `with builtins;` is banned; use explicit builtins.foo qualifications |
+| 44 | [`no-with-lib`](#no-with-lib) | err | file-scope `with lib;` is banned; use explicit lib.foo qualifications |
+| 45 | [`no-with-pkgs`](#no-with-pkgs) | err | file-scope `with pkgs;` is banned; use explicit pkgs.foo qualifications |
+| 46 | [`no-pkgs-lib`](#no-pkgs-lib) | err | `pkgs.lib.X` reaches through `pkgs`; use the bare `lib` binding (or `inherit (pkgs) lib;`) |
+| 47 | [`no-builtin-length-list-zero`](#no-builtin-length-list-zero) | err | `builtins.length xs == 0` is `xs == [ ]` (and `> 0` is `xs != [ ]`); drop the function call |
+| 48 | [`no-chained-attrset-update`](#no-chained-attrset-update) | err | `A // { ... } // { ... }` builds one attrset in two steps; merge the adjacent literals into a single `// { ... }` |
+| 49 | [`no-deprecated-iflist-empty`](#no-deprecated-iflist-empty) | err | `if cond then [ x ] else [ ]` is `lib.optional cond x` |
+| 50 | [`no-double-paren`](#no-double-paren) | err | `(($X))` is double-grouped; drop one layer of parens |
+| 51 | [`no-empty-list-concat`](#no-empty-list-concat) | err | `[ ] ++ X` and `X ++ [ ]` are no-ops; drop the empty operand |
+| 52 | [`no-escapeshellargs-for-loop`](#no-escapeshellargs-for-loop) | err | `for v in ${lib.escapeShellArgs xs}` trips fatal SC2043 when the list renders single-element, failing `writeBashApplication` only at deploy time; iterate a bash array instead |
+| 53 | [`no-negate-bool-literal`](#no-negate-bool-literal) | err | `!true` / `!false` is the opposite literal; use the literal directly |
+| 54 | [`no-optional-true`](#no-optional-true) | err | `lib.optional true x` is always `[ x ]` and `lib.optional false x` is always `[ ]`; inline the literal |
+| 55 | [`no-update-empty-set`](#no-update-empty-set) | err | `X // { }` and `{ } // X` are no-ops; drop the empty operand |
+| 56 | [`no-unquoted-splice`](#no-unquoted-splice) | err | `legacyPackages.${system}` interpolates outside a string; prefer `import nixpkgs { inherit system; }`, or quote the antiquote: `legacyPackages."${system}"` |
+| 57 | [`no-legacy-let-block`](#no-legacy-let-block) | err | `let { ... }` is the undocumented legacy let form; use `let ... in` or a normal attrset |
+| 58 | [`no-rec-attrset`](#no-rec-attrset) | err | `rec { }` is banned in derivations and overlays; use let, finalAttrs:, or final/prev |
+| 59 | [`no-ambiguous-gpl-license`](#no-ambiguous-gpl-license) | err | ambiguous GPL/AGPL/LGPL license identifier; use the `-Only` / `-Plus` flavor: `gpl2Only`, `gpl3Plus`, `agpl3Only`, etc. |
+| 60 | [`no-flake-utils-eachsystem`](#no-flake-utils-eachsystem) | err | `flake-utils.lib.eachSystem` is discouraged; use `flake-parts` (`mkFlake` + `perSystem`) or a plain `lib.genAttrs systems` helper |
+| 61 | [`prefer-attrvalues-over-mapattrs-identity`](#prefer-attrvalues-over-mapattrs-identity) | err | `lib.mapAttrsToList (_: v: v) X` is `builtins.attrValues X`; drop the identity map |
+| 62 | [`prefer-fileset-over-cleansource`](#prefer-fileset-over-cleansource) | err | `lib.cleanSource` is a blunt filter; prefer `lib.fileset.toSource { root; fileset = ...; }` so the source closure names exactly what the build needs |
+| 63 | [`prefer-formats-json-generate`](#prefer-formats-json-generate) | err | use `(pkgs.formats.json { }).generate "name" value` instead of `pkgs.writeText "name" (builtins.toJSON value)` |
+| 64 | [`prefer-genattrs-listtoattrs`](#prefer-genattrs-listtoattrs) | err | `listToAttrs (map f xs)` is `lib.genAttrs' xs f`; when each entry is keyed by the element itself it simplifies further to `lib.genAttrs xs f` |
+| 65 | [`prefer-genattrs-mapattrs-identity`](#prefer-genattrs-mapattrs-identity) | err | `lib.mapAttrs (_: _: v) X` discards both name and value; use `lib.genAttrs (lib.attrNames X) (_: v)` when the value is constant, or `builtins.mapAttrs (_: f) X` when only the value matters |
+| 66 | [`prefer-genlist-over-map-range`](#prefer-genlist-over-map-range) | err | `map f (lib.range 0 (n - 1))` collapses to `lib.genList f n` |
+| 67 | [`prefer-imap0-over-genlist-identity`](#prefer-imap0-over-genlist-identity) | err | `lib.genList lib.id n` just materializes the index list; iterate the data with `lib.imap0`, or use `lib.range 0 (n - 1)` if you only need the integers |
+| 68 | [`prefer-lib-import-format`](#prefer-lib-import-format) | err | use `lib.importJSON path` / `lib.importTOML path` instead of `fromJSON (readFile path)` / `fromTOML (readFile path)` |
+| 69 | [`prefer-lib-optional-singleton`](#prefer-lib-optional-singleton) | err | `lib.optionals cond [ x ]` collapses to `lib.optional cond x` |
+| 70 | [`prefer-or-default-over-has-attr-guard`](#prefer-or-default-over-has-attr-guard) | err | `(s ? k) && <expr using s.k>` guards a lookup with an existence check; push the default into the lookup with `s.k or DEFAULT` |
+| 71 | [`prefer-sorton-over-keyed-sort`](#prefer-sorton-over-keyed-sort) | err | `sort (a: b: (f a) < (f b))` is a keyed comparator; use `lib.sortOn f xs`, which evaluates the key once per element |
+| 72 | [`no-recursive-update`](#no-recursive-update) | err | lib.recursiveUpdate silently replaces at leaf collisions; use ix.deepMerge.strict (throws on collision) or ix.deepMerge.rhs (rhs wins) from `lib/util/deep-merge.nix` |
+| 73 | [`no-tofile-unsafediscardstringcontext`](#no-tofile-unsafediscardstringcontext) | err | `builtins.toFile X (builtins.unsafeDiscardStringContext Y)` drops the runtime dependency; use `pkgs.writeText X Y` (or `passAsFile`) instead |
+| 74 | [`no-handrolled-toml-scalar`](#no-handrolled-toml-scalar) | err | hand-rolled `toToml` scalar encoder; use ix.toml.scalar from `lib/util/toml.nix` (and ix.attrs.flattenToDotted from `lib/util/attrs.nix` for nested config trees) |
+| 75 | [`no-at-pattern-shortcut`](#no-at-pattern-shortcut) | err | `{ foo, ... }@args` then reaching `args.bar` hides a required input; match every attribute you use in the formals |
+| 76 | [`nixpkgs-explicit-config`](#nixpkgs-explicit-config) | err | `import nixpkgs {}` inherits ambient config and overlays from the environment; pass `config = {}; overlays = [];` |
+| 77 | [`import-nixpkgs-once`](#import-nixpkgs-once) | err | an optional `pkgs ? import <nixpkgs> {}` default re-imports Nixpkgs as an accidental singleton; require `pkgs` and thread it through |
+| 78 | [`set-docheck`](#set-docheck) | warn | `checkPhase` is off by default; set `doCheck = true;` so the build runs the package's tests |
+| 79 | [`declare-env-explicitly`](#declare-env-explicitly) | err | a list attr coerces to a single space-joined env var; use the `env` slot with `lib.escapeShellArgs` for correct conversion |
+| 80 | [`extend-makeflagsarray`](#extend-makeflagsarray) | err | assigning `makeFlagsArray` directly mangles space-containing values; append to it in a `preBuild` shell snippet |
+| 81 | [`no-pkgs-in-callpackage`](#no-pkgs-in-callpackage) | err | taking `pkgs` in a `callPackage` argument set breaks `override`; list the exact dependencies you need |
+| 82 | [`keep-python-composable`](#keep-python-composable) | err | pulling deps out of `python3Packages` blocks per-dependency overrides; take the package names directly |
+| 83 | [`future-proof-overrideattrs`](#future-proof-overrideattrs) | err | `overrideAttrs` with an attrset drops pre-existing values; use the `(old: { ... })` function form with `old.x or []` |
+| 84 | [`keep-phase-hooks`](#keep-phase-hooks) | err | a phase override without `runHook pre*/post*` strips downstream pre/post hooks; bracket the body with the hook calls |
+| 85 | [`phase-string-without-syntax-comment`](#phase-string-without-syntax-comment) | err | multiline shell phase strings need `# shell` as their first line so editors highlight the embedded shell |
+| 86 | [`nushell-text-without-syntax-comment`](#nushell-text-without-syntax-comment) | err | multiline Nushell `text` strings need `# nu` as their first line so editors highlight the embedded Nushell |
+| 87 | [`python-text-without-syntax-comment`](#python-text-without-syntax-comment) | err | multiline Python `writeText "*.py"` strings need `# python` as their first line so editors highlight the embedded Python |
+| 88 | [`prefer-substituteinplace`](#prefer-substituteinplace) | err | `sed -i`/`awk` in a phase fails silently when the match disappears; use `substituteInPlace ... --replace-fail` |
+| 89 | [`prefer-phase-flags`](#prefer-phase-flags) | err | a whole-phase override carrying custom targets/flags should be `makeFlags` / `buildFlags` / `configureFlags` / `installTargets` |
+| 90 | [`filter-src`](#filter-src) | warn | raw `src = ./.;` copies the whole working tree into the store; filter with `lib.fileset.toSource` |
+| 91 | [`pname-with-version`](#pname-with-version) | err | a literal `name = "package"` set alongside `version` restates stdenv; use `pname` |
+| 92 | [`cross-compile-ready-deps`](#cross-compile-ready-deps) | err | build-time tools (`pkg-config`, `cmake`, ...) in `buildInputs` break cross-compilation; move them to `nativeBuildInputs` |
+| 93 | [`overlay-preserve-nested`](#overlay-preserve-nested) | err | `final: prev: { a = { b; }; }` drops the rest of `prev.a`; merge with `prev.a or {} // { ... }` |
+| 94 | [`keep-overrides-composable`](#keep-overrides-composable) | err | hiding a custom package in an overlay `let` blocks later overlays; expose it as a real attr and inject via `final.<name>` |
+| 95 | [`parametrize-with-options`](#parametrize-with-options) | err | a top-level function arg on a module locks the choice in; declare an `mkOption` and read it from `config` |
+| 96 | [`avoid-specialargs`](#avoid-specialargs) | err | `specialArgs` injection scales badly and can clash; prefer a Nixpkgs overlay and read `pkgs.<name>` |
+| 97 | [`separate-host-guest-pkgs`](#separate-host-guest-pkgs) | err | referencing the host's `pkgs` inside a test node breaks when host and guest platforms differ; take `pkgs` from the node module function |
+| 98 | [`wait-for-unit-and-port`](#wait-for-unit-and-port) | err | curling a service after only `wait_for_unit` races on fast hosts; wait for `network-online.target`, the unit, and the open port |
+| 99 | [`minimize-with-scope`](#minimize-with-scope) | err | `with <expr>;` over any target other than a tightly-scoped `with pkgs;` obscures name origins; bind with `let`/`inherit` |
 
 ## Rules by theme
 
@@ -276,6 +280,37 @@ builtins.path { path = ./src; }
 
 ```nix
 builtins.path { name = "source"; path = ./src; }
+```
+
+</td></tr></table>
+
+### package-overlay-intent-explicit
+
+**🔴 error**
+
+Public package metadata must make the overlay decision explicit. `flake = true` publishes a CLI/build surface; `packageSet = true` publishes the repo-internal package-set surface. The nixpkgs overlay surface is intentionally separate, so write `overlay = false` for leaf packages that should stay out of `pkgs`, `overlay = true` for packages that should be available as `pkgs.<id>`, or `overlay.attrName = ...` when the nixpkgs name needs a repo-owned prefix.
+
+*Matches:* `attrset_expression` · *predicates:* `text`, `text-match`, `no-descendant` · *1 pattern variant*
+
+<table><tr><th>flagged</th><th>ok</th></tr><tr><td>
+
+```nix
+{
+  id = "example";
+  packageSet = true;
+  flake.systems = [ "x86_64-linux" ];
+}
+```
+
+</td><td>
+
+```nix
+{
+  id = "example";
+  packageSet = true;
+  flake = true;
+  overlay = false;
+}
 ```
 
 </td></tr></table>
@@ -2070,6 +2105,107 @@ When you replace a phase wholesale, keep **both** the `runHook pre<Phase>` and `
   do something else
   runHook postBuild
 ''; }
+```
+
+</td></tr></table>
+
+### phase-string-without-syntax-comment
+
+**🔴 error**
+
+Multiline shell phase strings should opt into editor shell highlighting with a harmless first-line shell comment.
+
+*Matches:* `binding` · *predicates:* `text-match`, `not` · *1 pattern variant*
+
+<table><tr><th>flagged</th><th>ok</th></tr><tr><td>
+
+```nix
+{
+  installPhase = ''
+    runHook preInstall
+    install -Dm755 tool $out/bin/tool
+    runHook postInstall
+  '';
+}
+```
+
+</td><td>
+
+```nix
+{
+  installPhase = ''
+    # shell
+    runHook preInstall
+    install -Dm755 tool $out/bin/tool
+    runHook postInstall
+  '';
+}
+```
+
+</td></tr></table>
+
+### nushell-text-without-syntax-comment
+
+**🔴 error**
+
+Embedded Nushell app bodies should opt into editor highlighting with a harmless first-line Nushell comment.
+
+*Matches:* `binding` · *predicates:* `text`, `text-match`, `not` · *1 pattern variant*
+
+<table><tr><th>flagged</th><th>ok</th></tr><tr><td>
+
+```nix
+{
+  text = ''
+    def main [] {
+      print "ok"
+    }
+  '';
+}
+```
+
+</td><td>
+
+```nix
+{
+  text = ''
+    # nu
+    def main [] {
+      print "ok"
+    }
+  '';
+}
+```
+
+</td></tr></table>
+
+### python-text-without-syntax-comment
+
+**🔴 error**
+
+Embedded Python source files should opt into editor highlighting with a harmless first-line Python comment.
+
+*Matches:* `apply_expression` · *predicates:* `text-match`, `not` · *1 pattern variant*
+
+<table><tr><th>flagged</th><th>ok</th></tr><tr><td>
+
+```nix
+{
+  src = pkgs.writeText "tool.py" ''
+    print("ok")
+  '';
+}
+```
+
+</td><td>
+
+```nix
+{
+  src = pkgs.writeText "tool.py" ''
+    # python
+    print("ok")
+  '';
+}
 ```
 
 </td></tr></table>
