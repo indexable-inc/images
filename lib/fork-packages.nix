@@ -112,6 +112,10 @@
           upstream = "never";
           reason = "Hard to land upstream (fast-moving OpenAI-owned repo); ix-specific MCP channel-notification routing.";
         };
+        "0002-tui-refresh-adaptive-syntax-theme-on-focus-regain.patch" = {
+          upstream = "never";
+          reason = "General fix for openai/codex#18942, but codex closes unsolicited PRs (prsWelcome = false); the upstream issue is the feedback channel.";
+        };
       };
     }
     {

@@ -5,6 +5,10 @@
     {
       "patch": "0001-mcp-route-channel-notifications-into-chat.patch",
       "deps": []
+    },
+    {
+      "patch": "0002-tui-refresh-adaptive-syntax-theme-on-focus-regain.patch",
+      "deps": []
     }
   ]
 }
