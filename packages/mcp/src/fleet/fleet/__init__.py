@@ -30,6 +30,11 @@ Usage::
     # Unstructured log lines, one row per line, tagged by host.
     logs = await fleet.read_text(hosts, "/var/log/syslog")
 
+    # One host, one multi-line script, raw typed outcome: the script is shipped
+    # base64-encoded into bash, so no quoting layer ever touches it.
+    r = await fleet.ssh_run("hc1.ts.net:9999", "set -e\nuptime\ndf -h /")
+    r.exit_code, r.stdout, r.stderr
+
     # Survive a down host instead of failing the whole batch.
     df = await fleet.scan(hosts, "uptime", parser=fleet.text_parser,
                           on_error="collect")
@@ -45,8 +50,12 @@ one call.
 from __future__ import annotations
 
 import asyncio
+import base64
+import dataclasses
 import io
 import os
+import re
+import shlex
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -81,6 +90,7 @@ __all__ = [
     "ClusterError",
     "FleetError",
     "HostSpec",
+    "SshResult",
     "connect",
     # SSH shell fan-out (this module)
     "csv_parser",
@@ -97,6 +107,7 @@ __all__ = [
     "run",
     "scan",
     "spark",
+    "ssh_run",
     "submit",
     "text_parser",
     "up",
@@ -342,6 +353,136 @@ async def scan(
     # separate return value. attrs is a plain dict polars passes through.
     combined.attrs = {"fleet_failures": failures}  # type: ignore[attr-defined]
     return combined
+
+
+
+# Environment variable names accepted by `ssh_run(env=...)`. Values are shell-
+# quoted; a name that needs quoting (spaces, "=") is a caller bug, not
+# something to work around.
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+# Seconds to wait for the TCP + SSH handshake before giving up on a host
+# (OpenSSH's ConnectTimeout role): without it a down host holds the call for
+# the OS-level connect timeout, which can be minutes.
+_CONNECT_TIMEOUT = 10.0
+
+
+@dataclasses.dataclass(frozen=True)
+class SshResult:
+    """The outcome of one :func:`ssh_run` script on one host."""
+
+    host: str  # the resolved "host:port" label the script ran on
+    exit_code: int  # the script's exit status; negative signal number if killed
+    stdout: str
+    stderr: str
+
+    @property
+    def ok(self) -> bool:
+        """Whether the script exited 0."""
+        return self.exit_code == 0
+
+
+def _ssh_command(script: str, *, sudo: bool, env: Mapping[str, str] | None) -> str:
+    """The remote command line that runs ``script`` under ``bash``.
+
+    The script travels base64-encoded and is decoded straight into ``bash`` on
+    the host, so no quoting layer -- the local shell, the SSH exec channel, or
+    a remote login shell that is not bash (nushell, fish) -- ever parses it.
+    The pipeline's exit status is bash's, i.e. the script's own.
+    """
+    for name in env or ():
+        if not _ENV_NAME.match(name):
+            raise ValueError(f"invalid environment variable name: {name!r}")
+    runner = "bash"
+    if env:
+        pairs = " ".join(shlex.quote(f"{k}={v}") for k, v in env.items())
+        runner = f"env {pairs} {runner}"
+    if sudo:
+        # -n: fail immediately when a password would be required; an
+        # interactive sudo prompt over the exec channel would just hang.
+        runner = f"sudo -n {runner}"
+    encoded = base64.b64encode(script.encode()).decode("ascii")
+    return f"echo {encoded} | base64 -d | {runner}"
+
+
+async def ssh_run(
+    host: str | Mapping[str, Any],
+    script: str,
+    *,
+    sudo: bool = False,
+    env: Mapping[str, str] | None = None,
+    timeout: float | None = 300.0,
+    connect_timeout: float = _CONNECT_TIMEOUT,
+    username: str | None = None,
+    **connect_kwargs: Any,  # noqa: ANN401 -- passed through to asyncssh.connect
+) -> SshResult:
+    """Run a multi-line ``bash`` script on one host and return its typed outcome.
+
+    The single-host complement to :func:`scan`: where ``scan`` fans one command
+    out across many hosts and parses stdout into a frame, this runs one script
+    on one host and returns the raw outcome (:class:`SshResult` with
+    ``exit_code`` / ``stdout`` / ``stderr``). Because the script is shipped
+    base64-encoded into ``bash`` (see :func:`_ssh_command`), heredocs, quotes,
+    and newlines survive untouched -- this replaces hand-rolling
+    ``echo <b64> | base64 -d | bash`` through ``nu('^ssh ...')`` quoting.
+
+    A non-zero exit is a *result*, not an exception: branch on ``result.ok``.
+    A connection failure (unreachable host, bad auth) raises the underlying
+    ``asyncssh`` error, and a script still running after ``timeout`` seconds
+    raises :class:`asyncssh.TimeoutError` (which carries the partial output).
+
+    Args:
+        host: ``"host"``, ``"host:port"``, or a connect-kwargs ``dict`` (must
+            include ``"host"``) -- the same forms one :func:`scan` entry takes,
+            with the same key/known-hosts defaults.
+        script: the bash script; any number of lines, any quoting.
+        sudo: run the script under ``sudo -n`` (non-interactive: fails fast
+            instead of hanging on a password prompt the kernel cannot answer).
+        env: extra environment for the script, applied host-side via
+            ``env NAME=value``; names must be valid identifiers.
+        timeout: seconds the script may run before ``asyncssh.TimeoutError``;
+            ``None`` waits forever.
+        connect_timeout: seconds allowed for the TCP + SSH handshake
+            (OpenSSH's ``ConnectTimeout``), so a down host fails fast.
+        username: SSH username for the connection.
+        **connect_kwargs: extra ``asyncssh.connect`` kwargs
+            (``client_keys=...``, ``known_hosts=...``).
+
+    Example::
+
+        result = await fleet.ssh_run(
+            "hil-compute-1",
+            '''
+            set -euo pipefail
+            systemctl is-active ix-kernel
+            journalctl -u ix-kernel --since -5min | tail -n 20
+            ''',
+            sudo=True,
+            env={"RUST_LOG": "debug"},
+        )
+        if not result.ok:
+            print(result.exit_code, result.stderr)
+    """
+    label, opts = _normalize_host(
+        host, username=username, connect_kwargs=dict(connect_kwargs)
+    )
+    opts.setdefault("connect_timeout", connect_timeout)
+    command = _ssh_command(script, sudo=sudo, env=env)
+
+    async with asyncssh.connect(**opts) as conn:
+        # check=False: the exit code is part of the returned result. Default
+        # encoding keeps stdout/stderr as str (scripts are a text interface;
+        # binary transfer is read_parquet/get territory).
+        completed = await conn.run(command, check=False, timeout=timeout)
+
+    stdout = completed.stdout
+    stderr = completed.stderr
+    return SshResult(
+        host=label,
+        exit_code=completed.returncode if completed.returncode is not None else -1,
+        stdout=stdout if isinstance(stdout, str) else (stdout or b"").decode("utf-8", errors="replace"),
+        stderr=stderr if isinstance(stderr, str) else (stderr or b"").decode("utf-8", errors="replace"),
+    )
 
 
 async def read_ndjson(

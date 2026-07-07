@@ -88,7 +88,13 @@ MODULES: tuple[Module, ...] = (
         "`nix.attrs()` catalogs the flake's buildable attrs; `nix.parse()` folds a captured "
         "internal-json log into polars frames",
     ),
-    Module("fleet", "async polars SSH fan-out across hosts (`read_ndjson` / `scan`)"),
+    Module(
+        "fleet",
+        "async polars SSH fan-out across hosts (`read_ndjson` / `scan`), plus "
+        "`await fleet.ssh_run(host, script, sudo=, env=, timeout=)` to run one "
+        "multi-line bash script on one host (shipped base64-encoded, so no shell "
+        "quoting) returning a typed exit_code/stdout/stderr result",
+    ),
     Module(
         "mesh",
         "tailnet mesh of live ix-mcp servers, zero config: `await mesh.peers()` is one polars "

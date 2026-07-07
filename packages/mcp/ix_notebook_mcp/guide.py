@@ -213,6 +213,16 @@ NIX = (
     "stdout verbatim (e.g. `^nix eval --raw`)."
 )
 
+SSH = (
+    "To run a script on a fleet host over ssh, use `await fleet.ssh_run(host, script)` "
+    "(`sudo=` / `env=` / `timeout=` as needed): it ships the script base64-encoded into `bash` "
+    "on the host, so multi-line scripts and quoting survive every layer untouched, and returns "
+    "a typed exit_code/stdout/stderr result with fail-fast connect timeouts. Never hand-roll "
+    "`echo <b64> | base64 -d | bash` through `nu('^ssh ...')` quoting. For the same command "
+    "across MANY hosts, `fleet.scan` combines every host's output into one frame."
+)
+
+
 VERIFY = (
     "Verify a change by its actual effect, not by a proxy: when you change "
     "something whose result a static check cannot see — an interactive UI, a "
