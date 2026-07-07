@@ -1,6 +1,6 @@
 ---
 id: 0011-git-fetcher-history
-number: '0010'
+number: '0011'
 title: Structured commit history from the Nix git fetcher
 status: Draft
 authors: andrewgazelka
