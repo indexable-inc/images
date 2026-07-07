@@ -83,8 +83,8 @@ let
     # source string. Refresh with `nix flake update snix-src` then rebuild and
     # copy the corrected hashes from the fetchgit mismatch errors.
     outputHashes = {
-      "git+https://github.com/arianvp/hyper.git?branch=push-ktssyytnyrru#e071325cc75549b37bbcd5be591e93c4c974b4a2" = "sha256-XnUOQYfPa+LKOx7aKz5wv4tL9hXirJ7UkrMBiM7bHb4=";
-      "git+https://github.com/edef1c/tonic.git?branch=push-rosuyzxnysvw#f03397b816b834f78c8b9e1a271c23ac4265d750" = "sha256-bf88XZMzeplglunUDOU5XWFgKpbzoVV1r4Sj3qvhOHQ=";
+      "git+https://github.com/flokli/grpc-rust.git?rev=292ed1a6aa8011208f685e9e116ea205d3156256#292ed1a6aa8011208f685e9e116ea205d3156256" = "sha256-tl2Zqbt26+PfNE5TO/7ITH3VXhf3KUpr26rgennfhj4=";
+      "git+https://github.com/flokli/hyper.git?rev=554050c2ac5057110dc76a71022d7f6a7a8c9e2e#554050c2ac5057110dc76a71022d7f6a7a8c9e2e" = "sha256-5Jwxx+cafnawCBV+6VS461uL2TGht8k6xPBf2tAhcO0=";
       "git+https://github.com/tvlfyi/wu-manber.git#0d5b22bea136659f7de60b102a7030e0daaa503d" = "sha256-7YIttaQLfFC/32utojh2DyOHVsZiw8ul/z0lvOhAE/4=";
     };
   };
