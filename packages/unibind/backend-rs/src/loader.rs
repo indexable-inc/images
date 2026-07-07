@@ -1,6 +1,8 @@
-//! Render the generated client's `src/engine.rs`: the `Engine` handle that
-//! dlopens the cdylib, runs the IR-hash handshake, resolves every export
-//! through stabby's report check, and wraps each one idiomatically.
+//! Render the generated client's `src/engine.rs`.
+//!
+//! The emitted `Engine` handle dlopens the cdylib, runs the IR-hash
+//! handshake, resolves every export through stabby's report check, and
+//! wraps each one idiomatically.
 
 use proc_macro2::{Literal, TokenStream};
 use quote::quote;

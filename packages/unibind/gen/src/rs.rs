@@ -1,5 +1,7 @@
 //! The Rust client-crate emitter: the `rs` target of the [`HostEmitter`]
-//! seam. All rendering lives in `unibind-backend-rs` (the same library the
+//! seam.
+//!
+//! All rendering lives in `unibind-backend-rs` (the same library the
 //! `#[unibind::export]` macro's `rs` feature uses for the engine half), so
 //! this adapter only maps the seam's types.
 

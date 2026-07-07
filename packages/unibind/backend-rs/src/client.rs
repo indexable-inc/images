@@ -250,10 +250,12 @@ fn abi_file(interface: &ir::Interface) -> TokenStream {
         .iter()
         .map(|err| error::stable_struct(err, &paths));
     quote! {
-        #![doc = "The raw ABI surface shared with the engine: stable mirror \
-                  structs and error carriers, token-identical to the types \
-                  the engine's generated glue compiles. stabby's report \
-                  check verifies the match structurally at load time."]
+        #![doc = "The raw ABI surface shared with the engine."]
+        #![doc = ""]
+        #![doc = "Stable mirror structs and error carriers, token-identical \
+                  to the types the engine's generated glue compiles; \
+                  stabby's report check verifies the match structurally at \
+                  load time."]
 
         #(#mirrors)*
         #(#carriers)*
