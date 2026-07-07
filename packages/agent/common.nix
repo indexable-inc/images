@@ -1,13 +1,13 @@
 # Backward-compatible aggregate for agent wrapper defaults. New code can import
-# ./prompt.nix or ./mcp.nix directly when it needs only one side.
+# ./prompt or ./mcp.nix directly when it needs only one side.
 {
   lib,
   ix,
   repoPackages ? {},
-  # Rule names dropped from the baked house prompt; forwarded to ./prompt.nix.
+  # Rule names dropped from the baked house prompt; forwarded to ./prompt.
   promptOmitRules ? [],
 }: let
-  prompt = import ./prompt.nix {
+  prompt = import ./prompt {
     inherit lib;
     omitRules = promptOmitRules;
   };

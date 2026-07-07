@@ -429,9 +429,11 @@
       # surface, while the package wrappers remain the implementation detail.
       claude-code = import ./packages/agent/home-manager/claude-code.nix {
         indexPackages = system: packages.${system};
+        promptModule = ./packages/agent/prompt;
       };
       codex = import ./packages/agent/home-manager/codex.nix {
         indexPackages = system: packages.${system};
+        promptModule = ./packages/agent/prompt;
       };
       # Personal-but-shareable workstation module for github:andrewgazelka: the
       # ix.dev downtime watcher + boss bar overlay + the shared say-detached
@@ -443,6 +445,7 @@
         portableServicesModule = ix.portableServices.homeModule;
         claudeCodeModule = import ./packages/agent/home-manager/claude-code.nix {
           indexPackages = system: packages.${system};
+          promptModule = ./packages/agent/prompt;
         };
         inherit ix;
       };

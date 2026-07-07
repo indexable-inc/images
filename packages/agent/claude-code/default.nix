@@ -131,7 +131,7 @@
   # is unaffected. `[ ]` bakes no flag.
   developmentChannels ? lib.optional (mcpServers ? index) "server:index",
   # Rule names dropped from the default house prompt (forwarded to
-  # ../system-prompt.nix's `omitRules`). Only affects the computed `systemPrompt`
+  # ../prompt's `omitRules`). Only affects the computed `systemPrompt`
   # default below; ignored when `systemPrompt` is passed explicitly. Lets a
   # consumer bake a variant minus a rule without restating the whole prompt, e.g.
   # `claude-code.override { omitRules = [ "htmlDeliverable" ]; }`. `[ ]` keeps all.
@@ -149,7 +149,7 @@
   # (single-value options are last-wins), and a caller who wants the stock
   # prompt plus additions can still pass `--append-system-prompt[-file]`.
   # Defaults to the shared house prompt (`systemPrompt` in ../common.nix,
-  # authored in ../system-prompt.nix: the shokunin craft ethos plus the pre-v1
+  # authored in ../prompt/rules.nix: the shokunin craft ethos plus the pre-v1
   # backward-compatibility engineering rule, plus a preference for working in git
   # worktrees); set to `null` to bake no flag and ship the stock prompt alone.
   systemPrompt ?

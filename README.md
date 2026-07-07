@@ -62,7 +62,7 @@ check in the flake; the sections below are the guided tour of that same list.
 
 The harness, governance, and tuning loop that runs coding agents (Claude Code and
 Codex) across the fleet under one set of rules. The house system prompt is
-[`system-prompt.nix`](packages/agent/system-prompt.nix), an ordered set of named,
+[`prompt/rules.nix`](packages/agent/prompt/rules.nix), an ordered set of named,
 reviewable bindings rather than a text blob, so behavior changes land as PR diffs.
 
 | Package | What it does |

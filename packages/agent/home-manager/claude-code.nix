@@ -1,4 +1,9 @@
-{indexPackages}: {
+{
+  indexPackages,
+  # Path to the house prompt module (packages/agent/prompt), injected by the
+  # importing flake so this module never climbs the tree with `../`.
+  promptModule,
+}: {
   config,
   lib,
   pkgs,
@@ -14,6 +19,15 @@
     "text"
   ];
 
+  housePrompt = import promptModule {
+    inherit lib;
+    omitRules = cfg.houseContext.omitRules;
+  };
+  houseContextText = lib.concatStringsSep "\n\n" (
+    [(housePrompt.contextFor "claude")]
+    ++ lib.optional (cfg.houseContext.extraText != "") cfg.houseContext.extraText
+  );
+
   optionalOverride = condition: name: value:
     lib.optionalAttrs condition {${name} = value;};
   packageOverrides =
@@ -23,9 +37,13 @@
         addDirs
         dangerouslySkipPermissions
         personalStartupContext
-        pluginDirs
         primaryCheckouts
         ;
+      # The index plugin (skills as `/index:<skill>`) rides the wrapper's
+      # `--plugin-dir` layer ahead of any user-specified plugin dirs.
+      pluginDirs =
+        lib.optional cfg.housePlugin.enable indexPkgs.agent-plugin
+        ++ cfg.pluginDirs;
       omitRules = cfg.systemPrompt.omitRules;
       extraSettings = cfg.defaults;
     }
@@ -96,6 +114,53 @@ in {
       '';
     };
 
+    housePlugin = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Bake the index plugin (the repo skill set, invoked as
+          `/index:<skill>`) into the wrapper as a {command}`--plugin-dir`
+          layer. Disable to run without the house skills.
+        '';
+      };
+    };
+
+    houseContext = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Write the house context render (the tagged prompt rules minus the
+          `system`-only basics, see packages/agent/prompt) to
+          {file}`~/.claude/CLAUDE.md` through the native
+          {option}`programs.claude-code.context` option, so sessions whose
+          runtime keeps its stock system prompt (claude.ai desktop, unwrapped
+          CLIs) still ride the house rules. An explicit `context` value
+          overrides this default entirely.
+        '';
+      };
+
+      extraText = lib.mkOption {
+        type = lib.types.lines;
+        default = "";
+        description = ''
+          Personal instructions appended after the house rules in the
+          rendered context file.
+        '';
+      };
+
+      omitRules = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [];
+        description = ''
+          Rule names omitted from the house context render (independent of
+          {option}`programs.claude-code.systemPrompt.omitRules`, which governs
+          the baked system prompt).
+        '';
+      };
+    };
+
     systemPrompt = lib.mkOption {
       type = lib.types.submodule {
         options = {
@@ -149,6 +214,9 @@ in {
       }
     ];
 
-    programs.claude-code.package = lib.mkDefault defaultedPackage;
+    programs.claude-code = {
+      package = lib.mkDefault defaultedPackage;
+      context = lib.mkIf cfg.houseContext.enable (lib.mkDefault houseContextText);
+    };
   };
 }
