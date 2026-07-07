@@ -11,7 +11,7 @@ MCP channel notifications into the chat stream so the agent sees them.
 Refs indexable-inc/index#1857
 
 diff --git a/codex-rs/codex-mcp/src/connection_manager.rs b/codex-rs/codex-mcp/src/connection_manager.rs
-index c76e3c3c0..97073aeb0 100644
+index 2143e3b57..da795ded8 100644
 --- a/codex-rs/codex-mcp/src/connection_manager.rs
 +++ b/codex-rs/codex-mcp/src/connection_manager.rs
 @@ -20,6 +20,7 @@ use crate::codex_apps_cache::CodexAppsToolsFetchSource;
@@ -22,75 +22,76 @@ index c76e3c3c0..97073aeb0 100644
  use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
  use crate::mcp::ToolPluginProvenance;
  use crate::rmcp_client::AsyncManagedClient;
-@@ -142,6 +143,7 @@ impl McpConnectionManager {
-         tool_plugin_provenance: ToolPluginProvenance,
+@@ -143,6 +144,7 @@ impl McpConnectionManager {
          auth: Option<&CodexAuth>,
          elicitation_reviewer: Option<ElicitationReviewerHandle>,
+         elicitation_lifecycle: Option<crate::ElicitationLifecycle>,
 +        notification_handler: Option<McpNotificationHandlerHandle>,
          elicitation_router: ElicitationRequestRouter,
      ) -> Self {
          let mut required_servers = mcp_servers
-@@ -157,6 +159,7 @@ impl McpConnectionManager {
-             approval_policy.value(),
+@@ -159,6 +161,7 @@ impl McpConnectionManager {
              initial_permission_profile,
              elicitation_reviewer,
+             elicitation_lifecycle,
 +            notification_handler,
              elicitation_router,
          );
          let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
-@@ -360,6 +363,7 @@ impl McpConnectionManager {
-                 approval_policy.value(),
+@@ -363,6 +366,7 @@ impl McpConnectionManager {
                  permission_profile.clone(),
                  /*reviewer*/ None,
+                 /*lifecycle*/ None,
 +                /*notification_handler*/ None,
                  ElicitationRequestRouter::default(),
              ),
              startup_cancellation_token: CancellationToken::new(),
 diff --git a/codex-rs/codex-mcp/src/connection_manager_tests.rs b/codex-rs/codex-mcp/src/connection_manager_tests.rs
-index 1f61ab700..c9e2e6cc1 100644
+index 41fc19a59..d5d1e8fe2 100644
 --- a/codex-rs/codex-mcp/src/connection_manager_tests.rs
 +++ b/codex-rs/codex-mcp/src/connection_manager_tests.rs
-@@ -323,6 +323,7 @@ async fn disabled_permissions_auto_accept_elicitation_with_empty_form_schema() {
-         AskForApproval::Never,
+@@ -325,6 +325,7 @@ async fn disabled_permissions_auto_accept_elicitation_with_empty_form_schema() {
          PermissionProfile::Disabled,
          /*reviewer*/ None,
+         /*lifecycle*/ None,
 +        /*notification_handler*/ None,
          ElicitationRequestRouter::default(),
      );
      let (tx_event, _rx_event) = async_channel::bounded(1);
-@@ -359,6 +360,7 @@ async fn disabled_permissions_do_not_auto_accept_elicitation_with_requested_fiel
-         AskForApproval::Never,
+@@ -362,6 +363,7 @@ async fn disabled_permissions_do_not_auto_accept_elicitation_with_requested_fiel
          PermissionProfile::Disabled,
          /*reviewer*/ None,
+         /*lifecycle*/ None,
 +        /*notification_handler*/ None,
          ElicitationRequestRouter::default(),
      );
      let (tx_event, _rx_event) = async_channel::bounded(1);
-@@ -400,12 +402,14 @@ async fn shared_elicitation_router_targets_the_exact_pending_request() {
-         AskForApproval::OnRequest,
+@@ -420,6 +422,7 @@ async fn shared_elicitation_router_targets_the_exact_pending_request() {
          PermissionProfile::default(),
          /*reviewer*/ None,
+         Some(lifecycle.clone()),
 +        /*notification_handler*/ None,
          router.clone(),
      );
      let manager_b = ElicitationRequestManager::new(
-         AskForApproval::OnRequest,
+@@ -427,6 +430,7 @@ async fn shared_elicitation_router_targets_the_exact_pending_request() {
          PermissionProfile::default(),
          /*reviewer*/ None,
+         Some(lifecycle),
 +        /*notification_handler*/ None,
          router,
      );
      let (tx_event, rx_event) = async_channel::bounded(2);
-@@ -1539,6 +1543,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
-         ToolPluginProvenance::default(),
+@@ -1563,6 +1567,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
          /*auth*/ None,
          /*elicitation_reviewer*/ None,
+         /*elicitation_lifecycle*/ None,
 +        /*notification_handler*/ None,
          ElicitationRequestRouter::default(),
      )
      .await;
 diff --git a/codex-rs/codex-mcp/src/elicitation.rs b/codex-rs/codex-mcp/src/elicitation.rs
-index e4fcf49d2..484b2d5f8 100644
+index b6bb7fa79..2165e4e55 100644
 --- a/codex-rs/codex-mcp/src/elicitation.rs
 +++ b/codex-rs/codex-mcp/src/elicitation.rs
 @@ -27,14 +27,20 @@ use codex_protocol::protocol::EventMsg;
@@ -139,34 +140,34 @@ index e4fcf49d2..484b2d5f8 100644
 +    meta: Option<serde_json::Value>,
 +}
 +
- /// Routes model-visible elicitation response tokens to their exact pending responders.
- ///
- /// One router is shared by every MCP runtime created for a thread. The public response token is
-@@ -86,6 +113,7 @@ pub(crate) struct ElicitationRequestManager {
-     pub(crate) permission_profile: Arc<StdMutex<PermissionProfile>>,
+ /// Holds an owner-provided registration while an MCP elicitation is waiting for a response.
+ #[derive(Clone)]
+ pub struct ElicitationLifecycle {
+@@ -114,6 +141,7 @@ pub(crate) struct ElicitationRequestManager {
      auto_deny: Arc<StdMutex<bool>>,
      reviewer: Option<ElicitationReviewerHandle>,
+     lifecycle: Option<ElicitationLifecycle>,
 +    notification_handler: Option<McpNotificationHandlerHandle>,
  }
  
  impl ElicitationRequestManager {
-@@ -93,6 +121,7 @@ impl ElicitationRequestManager {
-         approval_policy: AskForApproval,
+@@ -122,6 +150,7 @@ impl ElicitationRequestManager {
          permission_profile: PermissionProfile,
          reviewer: Option<ElicitationReviewerHandle>,
+         lifecycle: Option<ElicitationLifecycle>,
 +        notification_handler: Option<McpNotificationHandlerHandle>,
          router: ElicitationRequestRouter,
      ) -> Self {
          Self {
-@@ -101,6 +130,7 @@ impl ElicitationRequestManager {
-             permission_profile: Arc::new(StdMutex::new(permission_profile)),
+@@ -131,6 +160,7 @@ impl ElicitationRequestManager {
              auto_deny: Arc::new(StdMutex::new(false)),
              reviewer,
+             lifecycle,
 +            notification_handler,
          }
      }
  
-@@ -270,6 +300,58 @@ impl ElicitationRequestManager {
+@@ -303,6 +333,58 @@ impl ElicitationRequestManager {
              .boxed()
          })
      }
@@ -225,7 +226,7 @@ index e4fcf49d2..484b2d5f8 100644
  }
  
  pub(crate) fn elicitation_is_rejected_by_policy(approval_policy: AskForApproval) -> bool {
-@@ -298,3 +380,96 @@ fn can_auto_accept_elicitation(elicitation: &Elicitation) -> bool {
+@@ -331,3 +413,96 @@ fn can_auto_accept_elicitation(elicitation: &Elicitation) -> bool {
          | Elicitation::OpenAiForm { .. } => false,
      }
  }
@@ -323,10 +324,10 @@ index e4fcf49d2..484b2d5f8 100644
 +    }
 +}
 diff --git a/codex-rs/codex-mcp/src/lib.rs b/codex-rs/codex-mcp/src/lib.rs
-index eda7ac239..f80e34d82 100644
+index 77128d797..1784d4e9e 100644
 --- a/codex-rs/codex-mcp/src/lib.rs
 +++ b/codex-rs/codex-mcp/src/lib.rs
-@@ -4,6 +4,9 @@ pub use elicitation::ElicitationRequestRouter;
+@@ -5,6 +5,9 @@ pub use elicitation::ElicitationRequestRouter;
  pub use elicitation::ElicitationReviewRequest;
  pub use elicitation::ElicitationReviewer;
  pub use elicitation::ElicitationReviewerHandle;
@@ -337,21 +338,21 @@ index eda7ac239..f80e34d82 100644
  pub use resource_client::McpResourceClientCacheKey;
  pub use resource_client::McpResourcePage;
 diff --git a/codex-rs/codex-mcp/src/mcp/mod.rs b/codex-rs/codex-mcp/src/mcp/mod.rs
-index ffb797f26..ed8989d74 100644
+index 87ea25dd9..188ae2341 100644
 --- a/codex-rs/codex-mcp/src/mcp/mod.rs
 +++ b/codex-rs/codex-mcp/src/mcp/mod.rs
-@@ -339,6 +339,7 @@ pub async fn read_mcp_resource(
-         tool_plugin_provenance(config),
+@@ -340,6 +340,7 @@ pub async fn read_mcp_resource(
          auth,
          /*elicitation_reviewer*/ None,
+         /*elicitation_lifecycle*/ None,
 +        /*notification_handler*/ None,
          crate::elicitation::ElicitationRequestRouter::default(),
      )
      .await;
-@@ -416,6 +417,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
-         tool_plugin_provenance,
+@@ -418,6 +419,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
          auth,
          /*elicitation_reviewer*/ None,
+         /*elicitation_lifecycle*/ None,
 +        /*notification_handler*/ None,
          crate::elicitation::ElicitationRequestRouter::default(),
      )
@@ -373,13 +374,13 @@ index 37819203f..13caf6459 100644
          .map_err(StartupOutcomeError::from)?;
  
 diff --git a/codex-rs/core/src/connectors.rs b/codex-rs/core/src/connectors.rs
-index b45cc841a..3d0f49b90 100644
+index 6e643f34d..512f9766b 100644
 --- a/codex-rs/core/src/connectors.rs
 +++ b/codex-rs/core/src/connectors.rs
-@@ -283,6 +283,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
-         ToolPluginProvenance::default(),
+@@ -271,6 +271,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
          auth.as_ref(),
          /*elicitation_reviewer*/ None,
+         /*elicitation_lifecycle*/ None,
 +        /*notification_handler*/ None,
          codex_mcp::ElicitationRequestRouter::default(),
      )
@@ -414,23 +415,24 @@ index 61d5c54a5..b8a0bf74a 100644
      config: &crate::config::Config,
      mentioned_skills: &[SkillMetadata],
 diff --git a/codex-rs/core/src/mcp_tool_call_tests.rs b/codex-rs/core/src/mcp_tool_call_tests.rs
-index 6b642b1cd..8cbd457a6 100644
+index f68d32ff4..de19c1d5a 100644
 --- a/codex-rs/core/src/mcp_tool_call_tests.rs
 +++ b/codex-rs/core/src/mcp_tool_call_tests.rs
-@@ -1439,6 +1439,7 @@ async fn host_owned_codex_apps_manager(
-         codex_mcp::ToolPluginProvenance::default(),
+@@ -1440,6 +1440,7 @@ async fn host_owned_codex_apps_manager(
          auth.as_ref(),
          /*elicitation_reviewer*/ None,
+         /*elicitation_lifecycle*/ None,
 +        /*notification_handler*/ None,
          codex_mcp::ElicitationRequestRouter::default(),
      )
      .await;
 diff --git a/codex-rs/core/src/session/mcp.rs b/codex-rs/core/src/session/mcp.rs
-index 25d95e30e..9834270fe 100644
+index 3f5e92eca..90e7f29a5 100644
 --- a/codex-rs/core/src/session/mcp.rs
 +++ b/codex-rs/core/src/session/mcp.rs
-@@ -1,8 +1,12 @@
+@@ -1,9 +1,13 @@
  use super::*;
+ use crate::mcp::McpRuntimeProjection;
 +use crate::session::handlers::user_input_or_turn;
  use codex_exec_server::ResolvedSelectedCapabilityRoot;
  use codex_mcp::ElicitationReviewRequest;
@@ -442,7 +444,7 @@ index 25d95e30e..9834270fe 100644
  use codex_protocol::capabilities::CapabilityRootLocation;
  use codex_protocol::config_types::ApprovalsReviewer;
  use codex_protocol::mcp_approval_meta::APPROVAL_KIND_KEY as MCP_ELICITATION_APPROVAL_KIND_KEY;
-@@ -40,6 +44,10 @@ struct GuardianMcpElicitationReviewer {
+@@ -41,6 +45,10 @@ struct GuardianMcpElicitationReviewer {
      session: std::sync::Weak<Session>,
  }
  
@@ -453,7 +455,7 @@ index 25d95e30e..9834270fe 100644
  pub(crate) struct McpServerElicitationOutcome {
      pub(crate) response: Option<ElicitationResponse>,
      pub(crate) sent: bool,
-@@ -60,6 +68,14 @@ impl GuardianMcpElicitationReviewer {
+@@ -61,6 +69,14 @@ impl GuardianMcpElicitationReviewer {
      }
  }
  
@@ -468,7 +470,7 @@ index 25d95e30e..9834270fe 100644
  impl ElicitationReviewer for GuardianMcpElicitationReviewer {
      fn review(
          &self,
-@@ -75,6 +91,86 @@ impl ElicitationReviewer for GuardianMcpElicitationReviewer {
+@@ -76,6 +92,86 @@ impl ElicitationReviewer for GuardianMcpElicitationReviewer {
      }
  }
  
@@ -555,8 +557,8 @@ index 25d95e30e..9834270fe 100644
  impl Session {
      pub(crate) async fn runtime_mcp_config(&self, config: &Config) -> McpConfig {
          let environments = self.services.turn_environments.snapshot().await;
-@@ -191,6 +287,10 @@ impl Session {
-         Arc::new(GuardianMcpElicitationReviewer::new(self))
+@@ -200,6 +296,10 @@ impl Session {
+         codex_mcp::ElicitationLifecycle::new(move || elicitations.register())
      }
  
 +    pub(crate) fn mcp_notification_handler(self: &Arc<Self>) -> McpNotificationHandlerHandle {
@@ -566,24 +568,24 @@ index 25d95e30e..9834270fe 100644
      #[expect(
          clippy::await_holding_invalid_type,
          reason = "active turn checks and turn state updates must remain atomic"
-@@ -307,7 +407,7 @@ impl Session {
+@@ -317,7 +417,7 @@ impl Session {
      }
  
      async fn refresh_mcp_servers_inner(
 -        &self,
 +        self: &Arc<Self>,
          turn_context: &TurnContext,
-         mcp_config: McpConfig,
+         mcp_projection: McpRuntimeProjection,
          environments: &TurnEnvironmentSnapshot,
-@@ -369,6 +469,7 @@ impl Session {
-             tool_plugin_provenance,
+@@ -384,6 +484,7 @@ impl Session {
              auth.as_ref(),
              elicitation_reviewer,
+             Some(self.mcp_elicitation_lifecycle()),
 +            Some(self.mcp_notification_handler()),
              current_runtime.manager().elicitation_router(),
          )
          .await;
-@@ -387,7 +488,7 @@ impl Session {
+@@ -403,7 +504,7 @@ impl Session {
          reason = "MCP runtime refresh and publication must remain serialized"
      )]
      pub(crate) async fn refresh_mcp_servers_if_requested(
@@ -592,7 +594,7 @@ index 25d95e30e..9834270fe 100644
          turn_context: &TurnContext,
          elicitation_reviewer: Option<ElicitationReviewerHandle>,
      ) {
-@@ -504,7 +605,7 @@ impl Session {
+@@ -521,7 +622,7 @@ impl Session {
          reason = "MCP runtime refresh and publication must remain serialized"
      )]
      pub(crate) async fn refresh_mcp_servers_now(
@@ -646,13 +648,13 @@ index 5e85b92f4..661e1da38 100644
  fn guardian_elicitation_review_request_builds_mcp_tool_call() {
      let request = form_request(guardian_meta(Some(json!({
 diff --git a/codex-rs/core/src/session/session.rs b/codex-rs/core/src/session/session.rs
-index 5e7046b14..7bda042a6 100644
+index 2261eaa49..34877bb9c 100644
 --- a/codex-rs/core/src/session/session.rs
 +++ b/codex-rs/core/src/session/session.rs
-@@ -1215,6 +1215,7 @@ impl Session {
-                 tool_plugin_provenance,
+@@ -1216,6 +1216,7 @@ impl Session {
                  auth,
                  Some(sess.mcp_elicitation_reviewer()),
+                 Some(sess.mcp_elicitation_lifecycle()),
 +                Some(sess.mcp_notification_handler()),
                  codex_mcp::ElicitationRequestRouter::default(),
              )
