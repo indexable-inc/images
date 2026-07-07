@@ -236,6 +236,14 @@ in {
           lib.nameValuePair "beamvm-${name}" {
             description = "beamvm ${name}: persistent BEAM VM";
             command = [(lib.getExe (launcherFor name vm))];
+            # A defined, writable cwd instead of wherever the init system
+            # spawns us: BEAM apps commonly derive file defaults from cwd
+            # (symphony's disk log handler writes cwd-relative
+            # `log/symphony.log` when no explicit :log_file env is set), and
+            # $HOME must not silently collect those. Created by the
+            # activation hook below; a missing WorkingDirectory fails the
+            # spawn on both init systems.
+            workingDirectory = stateDirFor name vm;
             inherit (vm) environment;
             # The VM hosts long-running supervision trees; the unit's whole
             # job is keeping it up from login onward.
@@ -261,7 +269,19 @@ in {
       cfg.vms;
 
     home.activation =
+      # State dirs first: the unit's WorkingDirectory must exist before the
+      # platform service step (re)starts anything, and the harness only
+      # creates it AFTER spawn, which is too late for the cwd.
       lib.mapAttrs' (
+        name: vm:
+          lib.nameValuePair "beamvmStateDir-${name}" (
+            lib.hm.dag.entryBetween ["reloadSystemd" "setupLaunchAgents"] ["writeBoundary"] ''
+              run mkdir -p ${lib.escapeShellArg (stateDirFor name vm)}
+            ''
+          )
+      )
+      cfg.vms
+      // lib.mapAttrs' (
         name: vm:
           lib.nameValuePair "beamvmReload-${name}" (
             # Plain statements, no name-derived shell identifiers: the VM
