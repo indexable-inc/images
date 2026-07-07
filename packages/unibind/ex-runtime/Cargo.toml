@@ -10,7 +10,7 @@ workspace = true
 
 [dependencies]
 rustler.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
 unibind-runtime.workspace = true
 
 [dev-dependencies]

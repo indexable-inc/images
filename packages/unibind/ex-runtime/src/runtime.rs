@@ -20,6 +20,11 @@ pub fn runtime() -> &'static Runtime {
     RUNTIME.get_or_init(|| {
         Builder::new_multi_thread()
             .thread_name("unibind-ex")
+            // Timers and I/O both on: exported futures use tokio's whole
+            // surface, and a driver-less runtime panics at first use (the
+            // conformance suite caught `tokio::time::sleep` doing exactly
+            // that).
+            .enable_all()
             .build()
             .expect("building the unibind tokio runtime failed")
     })
