@@ -12,48 +12,15 @@ use crate::record::fallback_docs;
 use crate::ty::{self, Paths};
 use crate::{function, module, RenderError};
 
-/// The full `src/engine.rs` token stream.
+/// The full `src/engine.rs` token stream: module docs, the `Engine`
+/// struct, its `load` + one method per export, the future/stream wrappers,
+/// the per-symbol resolvers, and the failure classifier.
 pub fn engine_file(interface: &ir::Interface) -> Result<TokenStream, RenderError> {
     let paths = client_paths(interface);
     let hash = module::ir_sha256_hex(interface)?;
-    let handshake_symbol = function::ir_sha256_symbol(interface);
-    let handshake_bytes = Literal::byte_string(handshake_symbol.as_bytes());
-
-    let fields = interface.functions.iter().map(|func| {
-        let ident = ty::name_ident(&func.name);
-        let signature = function::signature_type(func, &paths);
-        quote!(#ident: #signature,)
-    });
-    // One resolver fn per export keeps `Engine::load` at one line per
-    // symbol, so it stays under the lint gate's function-length cap no
-    // matter how many functions the interface exports.
-    let resolvers = interface.functions.iter().map(|func| {
-        let resolver = resolver_ident(func);
-        let signature = function::signature_type(func, &paths);
-        let symbol = function::symbol(interface, &func.name);
-        let symbol_bytes = Literal::byte_string(symbol.as_bytes());
-        let doc = format!("Resolve `{symbol}` through stabby's report check.");
-        quote! {
-            #[doc = #doc]
-            fn #resolver(
-                library: &::libloading::Library,
-            ) -> ::std::result::Result<#signature, LoadError> {
-                // SAFETY: `get_stabbied` validates the symbol's type report
-                // before handing out the pointer.
-                let resolved = unsafe { library.get_stabbied::<#signature>(#symbol_bytes) }
-                    .map_err(|error| symbol_error(#symbol, error.as_ref()))?;
-                ::std::result::Result::Ok(*resolved)
-            }
-        }
-    });
-    let resolutions = interface.functions.iter().map(|func| {
-        let ident = ty::name_ident(&func.name);
-        let resolver = resolver_ident(func);
-        quote! {
-            let #ident = #resolver(&library)?;
-        }
-    });
-    let field_names = interface.functions.iter().map(|func| ty::name_ident(&func.name));
+    let engine_struct = engine_struct(interface, &paths);
+    let load = load_fn(interface);
+    let classifier = symbol_error_fn();
     let methods = interface
         .functions
         .iter()
@@ -68,6 +35,10 @@ pub fn engine_file(interface: &ir::Interface) -> Result<TokenStream, RenderError
         .iter()
         .filter(|func| function::returns_stream(func))
         .map(|func| stream_wrapper(func, &paths));
+    let resolvers = interface
+        .functions
+        .iter()
+        .map(|func| resolver_fn(interface, func, &paths));
     let module_doc = format!(
         "The safe handle over the `{}` engine cdylib: loading, the IR-hash \
          handshake, and one method per exported function.",
@@ -85,6 +56,33 @@ pub fn engine_file(interface: &ir::Interface) -> Result<TokenStream, RenderError
         /// compared against the engine's handshake symbol at load time.
         const EXPECTED_IR_SHA256: &str = #hash;
 
+        #engine_struct
+
+        impl Engine {
+            #load
+
+            #(#methods)*
+        }
+
+        #(#wrappers)*
+
+        #(#stream_wrappers)*
+
+        #(#resolvers)*
+
+        #classifier
+    })
+}
+
+/// The `Engine` struct: the kept-alive library handle plus one resolved,
+/// typed fn pointer per export.
+fn engine_struct(interface: &ir::Interface, paths: &Paths) -> TokenStream {
+    let fields = interface.functions.iter().map(|func| {
+        let ident = ty::name_ident(&func.name);
+        let signature = function::signature_type(func, paths);
+        quote!(#ident: #signature,)
+    });
+    quote! {
         /// A loaded engine with every export resolved and typed.
         ///
         /// The `Engine` keeps the library mapped for its whole lifetime and
@@ -96,58 +94,93 @@ pub fn engine_file(interface: &ir::Interface) -> Result<TokenStream, RenderError
             _library: ::libloading::Library,
             #(#fields)*
         }
+    }
+}
 
-        impl Engine {
-            /// Load the engine cdylib at `path` and resolve every export.
-            ///
-            /// The IR-hash handshake runs first: the engine must report
-            /// exactly the interface hash this client was generated from.
-            /// Nothing loads on a mismatch; there is no fallback.
-            ///
-            /// # Errors
-            ///
-            /// [`LoadError`] when the library cannot be opened, a symbol is
-            /// missing or fails stabby's structural report check, or the
-            /// IR hashes disagree.
-            pub fn load(path: &::std::path::Path) -> ::std::result::Result<Self, LoadError> {
-                // SAFETY: dlopen runs the library's initializers; the engine
-                // is the generated counterpart of this client.
-                let library = unsafe { ::libloading::Library::new(path) }.map_err(|error| {
-                    LoadError::Dlopen {
-                        message: ::std::string::ToString::to_string(&error),
-                    }
-                })?;
-                // SAFETY: `get_stabbied` validates the symbol's type report
-                // before handing out the pointer.
-                let ir_sha256 = *unsafe {
-                    library.get_stabbied::<extern "C" fn() -> ::stabby::str::Str<'static>>(
-                        #handshake_bytes,
-                    )
-                }
-                .map_err(|error| symbol_error(#handshake_symbol, error.as_ref()))?;
-                let actual: &'static str = ::core::convert::Into::into(ir_sha256());
-                if actual != EXPECTED_IR_SHA256 {
-                    return ::std::result::Result::Err(LoadError::IrHashMismatch {
-                        expected: EXPECTED_IR_SHA256.to_owned(),
-                        actual: actual.to_owned(),
-                    });
-                }
-                #(#resolutions)*
-                ::std::result::Result::Ok(Self {
-                    _library: library,
-                    #(#field_names,)*
-                })
-            }
-
-            #(#methods)*
+/// `Engine::load`: dlopen, the IR-hash handshake (first, no fallback), then
+/// one resolver call per export. The per-symbol work lives in the
+/// [`resolver_fn`]s, so `load` stays at one line per export no matter how
+/// many functions the interface exposes.
+fn load_fn(interface: &ir::Interface) -> TokenStream {
+    let handshake_symbol = function::ir_sha256_symbol(interface);
+    let handshake_bytes = Literal::byte_string(handshake_symbol.as_bytes());
+    let resolutions = interface.functions.iter().map(|func| {
+        let ident = ty::name_ident(&func.name);
+        let resolver = resolver_ident(func);
+        quote! {
+            let #ident = #resolver(&library)?;
         }
+    });
+    let field_names = interface.functions.iter().map(|func| ty::name_ident(&func.name));
+    quote! {
+        /// Load the engine cdylib at `path` and resolve every export.
+        ///
+        /// The IR-hash handshake runs first: the engine must report
+        /// exactly the interface hash this client was generated from.
+        /// Nothing loads on a mismatch; there is no fallback.
+        ///
+        /// # Errors
+        ///
+        /// [`LoadError`] when the library cannot be opened, a symbol is
+        /// missing or fails stabby's structural report check, or the
+        /// IR hashes disagree.
+        pub fn load(path: &::std::path::Path) -> ::std::result::Result<Self, LoadError> {
+            // SAFETY: dlopen runs the library's initializers; the engine
+            // is the generated counterpart of this client.
+            let library = unsafe { ::libloading::Library::new(path) }.map_err(|error| {
+                LoadError::Dlopen {
+                    message: ::std::string::ToString::to_string(&error),
+                }
+            })?;
+            // SAFETY: `get_stabbied` validates the symbol's type report
+            // before handing out the pointer.
+            let ir_sha256 = *unsafe {
+                library.get_stabbied::<extern "C" fn() -> ::stabby::str::Str<'static>>(
+                    #handshake_bytes,
+                )
+            }
+            .map_err(|error| symbol_error(#handshake_symbol, error.as_ref()))?;
+            let actual: &'static str = ::core::convert::Into::into(ir_sha256());
+            if actual != EXPECTED_IR_SHA256 {
+                return ::std::result::Result::Err(LoadError::IrHashMismatch {
+                    expected: EXPECTED_IR_SHA256.to_owned(),
+                    actual: actual.to_owned(),
+                });
+            }
+            #(#resolutions)*
+            ::std::result::Result::Ok(Self {
+                _library: library,
+                #(#field_names,)*
+            })
+        }
+    }
+}
 
-        #(#wrappers)*
+/// One private resolver per export: `get_stabbied` plus failure
+/// classification, so [`load_fn`]'s body scales by one line per symbol.
+fn resolver_fn(interface: &ir::Interface, func: &ir::Function, paths: &Paths) -> TokenStream {
+    let resolver = resolver_ident(func);
+    let signature = function::signature_type(func, paths);
+    let symbol = function::symbol(interface, &func.name);
+    let symbol_bytes = Literal::byte_string(symbol.as_bytes());
+    let doc = format!("Resolve `{symbol}` through stabby's report check.");
+    quote! {
+        #[doc = #doc]
+        fn #resolver(
+            library: &::libloading::Library,
+        ) -> ::std::result::Result<#signature, LoadError> {
+            // SAFETY: `get_stabbied` validates the symbol's type report
+            // before handing out the pointer.
+            let resolved = unsafe { library.get_stabbied::<#signature>(#symbol_bytes) }
+                .map_err(|error| symbol_error(#symbol, error.as_ref()))?;
+            ::std::result::Result::Ok(*resolved)
+        }
+    }
+}
 
-        #(#stream_wrappers)*
-
-        #(#resolvers)*
-
+/// The interface-independent failure classifier every resolver calls.
+fn symbol_error_fn() -> TokenStream {
+    quote! {
         /// Classify a `get_stabbied` failure: a loader error means the
         /// symbol is missing, anything else is stabby's type-report
         /// mismatch text.
@@ -168,7 +201,7 @@ pub fn engine_file(interface: &ir::Interface) -> Result<TokenStream, RenderError
                 }
             }
         }
-    })
+    }
 }
 
 /// The per-symbol resolver's name: `resolve_<fn>`.
