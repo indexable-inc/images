@@ -23,8 +23,8 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
     }
 
     let user = crate::ty::name_ident(&interface.name)?;
+    let alias = crate::ty::user_alias();
     let ctx = TyCtx {
-        user: &user,
         objects: &interface.objects,
     };
     let glue_ident = format_ident!("__unibind_ts_{}", interface.name.trim_start_matches('_'));
@@ -35,7 +35,7 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
     let conversions = interface
         .errors
         .iter()
-        .map(|err| error::render_error(err, &user))
+        .map(error::render_error)
         .collect::<Result<Vec<_>, _>>()?;
     let wrappers = interface
         .functions
@@ -58,6 +58,10 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
         #[doc(hidden)]
         #[allow(clippy::all, clippy::pedantic, clippy::nursery, unused_qualifications)]
         mod #glue_ident {
+            // Unused when an interface declares only records (whose attrs
+            // attach in the user module, leaving the glue empty).
+            #[allow(unused_imports)]
+            use super::#user as #alias;
             #signal
             #(#conversions)*
             #(#wrappers)*

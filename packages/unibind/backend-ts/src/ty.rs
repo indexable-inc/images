@@ -6,12 +6,10 @@ use unibind_core::ir;
 
 use crate::RenderError;
 
-/// Interface-wide context the type mapping needs: the exported module's
-/// identifier (named types resolve through `super::<user>::`) and the
-/// declared objects (which map to generated handle classes, not user
-/// structs).
+/// Interface-wide context the type mapping needs: the declared objects
+/// (which map to generated handle classes, not user structs). Named types
+/// resolve through the glue-level [`user_alias`] import.
 pub struct TyCtx<'a> {
-    pub user: &'a Ident,
     pub objects: &'a [ir::Object],
 }
 
@@ -101,9 +99,9 @@ pub fn decl(ty: &ir::Type, ctx: &TyCtx<'_>, level: Level) -> Result<TokenStream,
                 let handle = object_handle_ident(object);
                 quote!(#handle)
             } else {
-                let user = ctx.user;
+                let alias = user_alias();
                 let name = name_ident(name)?;
-                quote!(super::#user::#name)
+                quote!(#alias::#name)
             }
         }
         ir::Type::Stream(_) => {
@@ -152,6 +150,17 @@ pub fn ret(ty: &ir::Type, ctx: &TyCtx<'_>, expr: &TokenStream) -> TokenStream {
         ),
         _ => quote!(#expr),
     }
+}
+
+/// The glue module's alias for the exported user module. Rendered paths
+/// to user types anchor here instead of `super::<user>` because
+/// napi-derive re-quotes signature types into a nested
+/// `__napi_impl_helper__*` module, where `super::` resolves to the glue
+/// module instead of the exported module's parent; the helper's
+/// `use super::*;` glob re-imports this alias, so the same tokens resolve
+/// at both depths.
+pub fn user_alias() -> Ident {
+    Ident::new("__unibind_user", Span::call_site())
 }
 
 /// The Rust identifier of the generated handle class for `object`.
