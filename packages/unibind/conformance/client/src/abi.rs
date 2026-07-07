@@ -1,4 +1,6 @@
-//!The raw ABI surface shared with the engine: stable mirror structs and error carriers, token-identical to the types the engine's generated glue compiles. stabby's report check verifies the match structurally at load time.
+//!The raw ABI surface shared with the engine.
+//!
+//!Stable mirror structs and error carriers, token-identical to the types the engine's generated glue compiles; stabby's report check verifies the match structurally at load time.
 ///ABI-stable mirror of `Sample`, field for field in declaration order.
 #[::stabby::stabby(no_opt, module = "unibind::conformance")]
 pub struct Sample {
