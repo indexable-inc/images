@@ -27,12 +27,14 @@ impl ::core::convert::From<crate::records::Sample> for Sample {
             flag: value.flag,
             id: value.id,
             name: ::stabby::string::String::from(value.name),
-            note: match value.note {
-                ::std::option::Option::Some(inner) => {
-                    ::stabby::option::Option::Some(::stabby::string::String::from(inner))
-                }
-                ::std::option::Option::None => ::stabby::option::Option::None(),
-            },
+            note: value
+                .note
+                .map_or_else(
+                    ::stabby::option::Option::None,
+                    |inner| ::stabby::option::Option::Some(
+                        ::stabby::string::String::from(inner),
+                    ),
+                ),
             values: value.values.into_iter().collect::<::stabby::vec::Vec<i64>>(),
             weights: value
                 .weights

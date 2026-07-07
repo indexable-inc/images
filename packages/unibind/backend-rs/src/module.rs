@@ -75,7 +75,7 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
 /// The logical namespace stamped into every generated mirror's stabby
 /// report (`module = ...`), shared by engine and client so the structural
 /// check compares like against like.
-pub(crate) fn report_module(interface: &ir::Interface) -> String {
+pub fn report_module(interface: &ir::Interface) -> String {
     format!("unibind::{}", interface.name)
 }
 
@@ -108,7 +108,7 @@ fn handshake(interface: &ir::Interface) -> Result<TokenStream, RenderError> {
 /// data enums are whole shapes; streams are supported only as a sync
 /// function's plain return (`fn f(..) -> UniStream<T>`), because the
 /// `async` and `Result` compositions need dedicated wrapper designs.
-pub(crate) fn reject_unrendered(interface: &ir::Interface) -> Result<(), RenderError> {
+pub fn reject_unrendered(interface: &ir::Interface) -> Result<(), RenderError> {
     if let Some(object) = interface.objects.first() {
         return Err(RenderError::new(format!(
             "`{}` is a #[unibind::object]; the Rust backend does not render \

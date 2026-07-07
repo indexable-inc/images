@@ -13,7 +13,7 @@ use crate::ty::{self, Paths};
 use crate::{function, module, RenderError};
 
 /// The full `src/engine.rs` token stream.
-pub(crate) fn engine_file(interface: &ir::Interface) -> Result<TokenStream, RenderError> {
+pub fn engine_file(interface: &ir::Interface) -> Result<TokenStream, RenderError> {
     let paths = client_paths(interface);
     let hash = module::ir_sha256_hex(interface)?;
     let handshake_symbol = function::ir_sha256_symbol(interface);
@@ -24,16 +24,33 @@ pub(crate) fn engine_file(interface: &ir::Interface) -> Result<TokenStream, Rend
         let signature = function::signature_type(func, &paths);
         quote!(#ident: #signature,)
     });
-    let resolutions = interface.functions.iter().map(|func| {
-        let ident = ty::name_ident(&func.name);
+    // One resolver fn per export keeps `Engine::load` at one line per
+    // symbol, so it stays under the lint gate's function-length cap no
+    // matter how many functions the interface exports.
+    let resolvers = interface.functions.iter().map(|func| {
+        let resolver = resolver_ident(func);
         let signature = function::signature_type(func, &paths);
         let symbol = function::symbol(interface, &func.name);
         let symbol_bytes = Literal::byte_string(symbol.as_bytes());
+        let doc = format!("Resolve `{symbol}` through stabby's report check.");
         quote! {
-            // SAFETY: `get_stabbied` validates the symbol's type report
-            // before handing out the pointer.
-            let #ident = *unsafe { library.get_stabbied::<#signature>(#symbol_bytes) }
-                .map_err(symbol_error(#symbol))?;
+            #[doc = #doc]
+            fn #resolver(
+                library: &::libloading::Library,
+            ) -> ::std::result::Result<#signature, LoadError> {
+                // SAFETY: `get_stabbied` validates the symbol's type report
+                // before handing out the pointer.
+                let resolved = unsafe { library.get_stabbied::<#signature>(#symbol_bytes) }
+                    .map_err(|error| symbol_error(#symbol, error.as_ref()))?;
+                ::std::result::Result::Ok(*resolved)
+            }
+        }
+    });
+    let resolutions = interface.functions.iter().map(|func| {
+        let ident = ty::name_ident(&func.name);
+        let resolver = resolver_ident(func);
+        quote! {
+            let #ident = #resolver(&library)?;
         }
     });
     let field_names = interface.functions.iter().map(|func| ty::name_ident(&func.name));
@@ -107,7 +124,7 @@ pub(crate) fn engine_file(interface: &ir::Interface) -> Result<TokenStream, Rend
                         #handshake_bytes,
                     )
                 }
-                .map_err(symbol_error(#handshake_symbol))?;
+                .map_err(|error| symbol_error(#handshake_symbol, error.as_ref()))?;
                 let actual: &'static str = ::core::convert::Into::into(ir_sha256());
                 if actual != EXPECTED_IR_SHA256 {
                     return ::std::result::Result::Err(LoadError::IrHashMismatch {
@@ -129,33 +146,39 @@ pub(crate) fn engine_file(interface: &ir::Interface) -> Result<TokenStream, Rend
 
         #(#stream_wrappers)*
 
+        #(#resolvers)*
+
         /// Classify a `get_stabbied` failure: a loader error means the
         /// symbol is missing, anything else is stabby's type-report
         /// mismatch text.
         fn symbol_error(
-            symbol: &'static str,
-        ) -> impl Fn(::std::boxed::Box<dyn ::std::error::Error + Send + Sync>) -> LoadError {
-            move |error| {
-                let message = ::std::string::ToString::to_string(&error);
-                if error.is::<::libloading::Error>() {
-                    LoadError::MissingSymbol {
-                        symbol: symbol.to_owned(),
-                        message,
-                    }
-                } else {
-                    LoadError::SignatureMismatch {
-                        symbol: symbol.to_owned(),
-                        message,
-                    }
+            symbol: &str,
+            error: &(dyn ::std::error::Error + Send + Sync + 'static),
+        ) -> LoadError {
+            let message = ::std::string::ToString::to_string(&error);
+            if error.is::<::libloading::Error>() {
+                LoadError::MissingSymbol {
+                    symbol: symbol.to_owned(),
+                    message,
+                }
+            } else {
+                LoadError::SignatureMismatch {
+                    symbol: symbol.to_owned(),
+                    message,
                 }
             }
         }
     })
 }
 
+/// The per-symbol resolver's name: `resolve_<fn>`.
+fn resolver_ident(func: &ir::Function) -> proc_macro2::Ident {
+    quote::format_ident!("resolve_{}", func.name)
+}
+
 /// The `Paths` every client file shares: idiomatic records under
 /// `crate::records`, ABI mirrors under `crate::abi`.
-pub(crate) fn client_paths(interface: &ir::Interface) -> Paths {
+pub fn client_paths(interface: &ir::Interface) -> Paths {
     Paths {
         plain: quote!(crate::records::),
         mirror: quote!(crate::abi::),

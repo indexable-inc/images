@@ -15,23 +15,23 @@ use unibind_core::ir;
 /// idiomatic records through `crate::records::` and mirrors through
 /// `crate::abi::`.
 #[derive(Debug, Clone)]
-pub(crate) struct Paths {
+pub struct Paths {
     /// Prefix for the plain (user / idiomatic) side of a conversion.
-    pub(crate) plain: TokenStream,
+    pub plain: TokenStream,
     /// Prefix for the ABI-stable mirror side.
-    pub(crate) mirror: TokenStream,
+    pub mirror: TokenStream,
     /// The `#[stabby::stabby(module = ...)]` override stamped on every
     /// generated mirror. stabby's report check compares module paths, and
     /// the engine's and client's mirrors live in different crates, so both
     /// sides pin the same logical namespace (`unibind::<interface>`)
     /// instead of their real `module_path!()`.
-    pub(crate) report_module: String,
+    pub report_module: String,
 }
 
 /// The stable (ABI) spelling of a boundary type. Borrowed strings, paths,
 /// and byte slices cross by value: the boundary conversion clones anyway, so
 /// one owned representation serves both.
-pub(crate) fn stable_type(ty: &ir::Type, paths: &Paths) -> TokenStream {
+pub fn stable_type(ty: &ir::Type, paths: &Paths) -> TokenStream {
     match ty {
         ir::Type::Bool => quote!(bool),
         ir::Type::Int(kind) => int_tokens(*kind),
@@ -73,7 +73,7 @@ pub(crate) fn stable_type(ty: &ir::Type, paths: &Paths) -> TokenStream {
 /// The idiomatic (std) spelling, as the client's safe surface and the user's
 /// exported functions use it. `borrowed` spellings only appear in argument
 /// position, mirroring the lowering rules.
-pub(crate) fn plain_type(ty: &ir::Type, paths: &Paths) -> TokenStream {
+pub fn plain_type(ty: &ir::Type, paths: &Paths) -> TokenStream {
     match ty {
         ir::Type::Bool => quote!(bool),
         ir::Type::Int(kind) => int_tokens(*kind),
@@ -111,13 +111,13 @@ pub(crate) fn plain_type(ty: &ir::Type, paths: &Paths) -> TokenStream {
 
 /// Whether the plain and stable spellings coincide, making the conversion
 /// the value itself (primitives cross as-is).
-pub(crate) fn is_identity(ty: &ir::Type) -> bool {
+pub const fn is_identity(ty: &ir::Type) -> bool {
     matches!(ty, ir::Type::Bool | ir::Type::Int(_) | ir::Type::Float(_))
 }
 
 /// Convert `expr` (a plain value, possibly borrowed) into its stable
 /// representation.
-pub(crate) fn to_stable(expr: &TokenStream, ty: &ir::Type, paths: &Paths) -> TokenStream {
+pub fn to_stable(expr: &TokenStream, ty: &ir::Type, paths: &Paths) -> TokenStream {
     match ty {
         ir::Type::Bool | ir::Type::Int(_) | ir::Type::Float(_) => expr.clone(),
         ir::Type::String { .. } => quote!(::stabby::string::String::from(#expr)),
@@ -134,12 +134,14 @@ pub(crate) fn to_stable(expr: &TokenStream, ty: &ir::Type, paths: &Paths) -> Tok
         }
         ir::Type::Bytes { owned: false } => quote!(::stabby::vec::Vec::from(#expr)),
         ir::Type::Option(inner) => {
+            // `map_or_else`, not a match: the generated code compiles under
+            // the workspace's nursery gate (`clippy::option_if_let_else`).
             let converted = to_stable(&quote!(inner), inner, paths);
             quote! {
-                match #expr {
-                    ::std::option::Option::Some(inner) => ::stabby::option::Option::Some(#converted),
-                    ::std::option::Option::None => ::stabby::option::Option::None(),
-                }
+                #expr.map_or_else(
+                    ::stabby::option::Option::None,
+                    |inner| ::stabby::option::Option::Some(#converted),
+                )
             }
         }
         ir::Type::Vec(inner) => {
@@ -174,7 +176,7 @@ pub(crate) fn to_stable(expr: &TokenStream, ty: &ir::Type, paths: &Paths) -> Tok
 /// Convert `expr` (a stable value) back into its plain, owned
 /// representation. Borrowed types come back owned; the caller borrows at the
 /// call site.
-pub(crate) fn to_plain(expr: &TokenStream, ty: &ir::Type, paths: &Paths) -> TokenStream {
+pub fn to_plain(expr: &TokenStream, ty: &ir::Type, paths: &Paths) -> TokenStream {
     match ty {
         ir::Type::Bool | ir::Type::Int(_) | ir::Type::Float(_) => expr.clone(),
         ir::Type::String { .. } => quote!(::std::string::String::from(#expr)),
@@ -230,7 +232,7 @@ pub(crate) fn to_plain(expr: &TokenStream, ty: &ir::Type, paths: &Paths) -> Toke
 /// The owned spelling of a plain type, for conversion targets: borrowed
 /// argument types (`&str`, `&Path`, `&[u8]`) come back as their owned
 /// counterparts.
-pub(crate) fn owned_plain_type(ty: &ir::Type, paths: &Paths) -> TokenStream {
+pub fn owned_plain_type(ty: &ir::Type, paths: &Paths) -> TokenStream {
     match ty {
         ir::Type::String { .. } => quote!(::std::string::String),
         ir::Type::Path { .. } => quote!(::std::path::PathBuf),
@@ -254,7 +256,7 @@ pub(crate) fn owned_plain_type(ty: &ir::Type, paths: &Paths) -> TokenStream {
 
 /// Whether a plain value of `ty` is borrowed at the user's call surface, so
 /// conversions bind an owned local and pass `&local`.
-pub(crate) fn is_borrowed(ty: &ir::Type) -> bool {
+pub const fn is_borrowed(ty: &ir::Type) -> bool {
     matches!(
         ty,
         ir::Type::String { owned: false }
@@ -280,6 +282,6 @@ fn int_tokens(kind: ir::IntKind) -> TokenStream {
 
 /// An identifier for an IR-provided name. IR names come from parsed Rust
 /// identifiers, so this cannot fail for lowered interfaces.
-pub(crate) fn name_ident(name: &str) -> Ident {
+pub fn name_ident(name: &str) -> Ident {
     Ident::new(name, Span::call_site())
 }

@@ -59,7 +59,7 @@ impl Engine {
                     extern "C" fn() -> ::stabby::str::Str<'static>,
                 >(b"unibind_sample_ir_sha256")
         }
-            .map_err(symbol_error("unibind_sample_ir_sha256"))?;
+            .map_err(|error| symbol_error("unibind_sample_ir_sha256", error.as_ref()))?;
         let actual: &'static str = ::core::convert::Into::into(ir_sha256());
         if actual != EXPECTED_IR_SHA256 {
             return ::std::result::Result::Err(LoadError::IrHashMismatch {
@@ -67,66 +67,12 @@ impl Engine {
                 actual: actual.to_owned(),
             });
         }
-        let rows = *unsafe {
-            library
-                .get_stabbied::<
-                    extern "C" fn(
-                        ::stabby::string::String,
-                        usize,
-                        ::stabby::option::Option<::stabby::string::String>,
-                    ) -> ::stabby::result::Result<
-                        ::stabby::vec::Vec<crate::abi::Row>,
-                        crate::abi::SampleErrorStable,
-                    >,
-                >(b"unibind_sample_rows")
-        }
-            .map_err(symbol_error("unibind_sample_rows"))?;
-        let touch = *unsafe {
-            library
-                .get_stabbied::<
-                    extern "C" fn(
-                        ::stabby::vec::Vec<u8>,
-                        ::stabby::vec::Vec<u8>,
-                        f64,
-                    ) -> bool,
-                >(b"unibind_sample_touch")
-        }
-            .map_err(symbol_error("unibind_sample_touch"))?;
-        let reset = *unsafe {
-            library.get_stabbied::<extern "C" fn()>(b"unibind_sample_reset")
-        }
-            .map_err(symbol_error("unibind_sample_reset"))?;
-        let delayed_double = *unsafe {
-            library
-                .get_stabbied::<
-                    extern "C" fn(i64) -> ::stabby::future::DynFuture<'static, i64>,
-                >(b"unibind_sample_delayed_double")
-        }
-            .map_err(symbol_error("unibind_sample_delayed_double"))?;
-        let fetch_row = *unsafe {
-            library
-                .get_stabbied::<
-                    extern "C" fn(
-                        ::stabby::string::String,
-                    ) -> ::stabby::future::DynFuture<
-                        'static,
-                        ::stabby::result::Result<
-                            crate::abi::Row,
-                            crate::abi::SampleErrorStable,
-                        >,
-                    >,
-                >(b"unibind_sample_fetch_row")
-        }
-            .map_err(symbol_error("unibind_sample_fetch_row"))?;
-        let labels = *unsafe {
-            library
-                .get_stabbied::<
-                    extern "C" fn(
-                        ::stabby::string::String,
-                    ) -> ::unibind_stream::DynStream<'static, ::stabby::string::String>,
-                >(b"unibind_sample_labels")
-        }
-            .map_err(symbol_error("unibind_sample_labels"))?;
+        let rows = resolve_rows(&library)?;
+        let touch = resolve_touch(&library)?;
+        let reset = resolve_reset(&library)?;
+        let delayed_double = resolve_delayed_double(&library)?;
+        let fetch_row = resolve_fetch_row(&library)?;
+        let labels = resolve_labels(&library)?;
         ::std::result::Result::Ok(Self {
             _library: library,
             rows,
@@ -154,12 +100,13 @@ impl Engine {
         crate::error::SampleError,
     > {
         let store: ::stabby::string::String = ::stabby::string::String::from(store);
-        let root: ::stabby::option::Option<::stabby::string::String> = match root {
-            ::std::option::Option::Some(inner) => {
-                ::stabby::option::Option::Some(::stabby::string::String::from(inner))
-            }
-            ::std::option::Option::None => ::stabby::option::Option::None(),
-        };
+        let root: ::stabby::option::Option<::stabby::string::String> = root
+            .map_or_else(
+                ::stabby::option::Option::None,
+                |inner| ::stabby::option::Option::Some(
+                    ::stabby::string::String::from(inner),
+                ),
+            );
         match ::std::result::Result::from((self.rows)(store, limit, root)) {
             ::std::result::Result::Ok(out) => {
                 ::std::result::Result::Ok(
@@ -291,24 +238,148 @@ impl ::futures_core::Stream for LabelsStream {
         }
     }
 }
+///Resolve `unibind_sample_rows` through stabby's report check.
+fn resolve_rows(
+    library: &::libloading::Library,
+) -> ::std::result::Result<
+    extern "C" fn(
+        ::stabby::string::String,
+        usize,
+        ::stabby::option::Option<::stabby::string::String>,
+    ) -> ::stabby::result::Result<
+        ::stabby::vec::Vec<crate::abi::Row>,
+        crate::abi::SampleErrorStable,
+    >,
+    LoadError,
+> {
+    let resolved = unsafe {
+        library
+            .get_stabbied::<
+                extern "C" fn(
+                    ::stabby::string::String,
+                    usize,
+                    ::stabby::option::Option<::stabby::string::String>,
+                ) -> ::stabby::result::Result<
+                    ::stabby::vec::Vec<crate::abi::Row>,
+                    crate::abi::SampleErrorStable,
+                >,
+            >(b"unibind_sample_rows")
+    }
+        .map_err(|error| symbol_error("unibind_sample_rows", error.as_ref()))?;
+    ::std::result::Result::Ok(*resolved)
+}
+///Resolve `unibind_sample_touch` through stabby's report check.
+fn resolve_touch(
+    library: &::libloading::Library,
+) -> ::std::result::Result<
+    extern "C" fn(::stabby::vec::Vec<u8>, ::stabby::vec::Vec<u8>, f64) -> bool,
+    LoadError,
+> {
+    let resolved = unsafe {
+        library
+            .get_stabbied::<
+                extern "C" fn(
+                    ::stabby::vec::Vec<u8>,
+                    ::stabby::vec::Vec<u8>,
+                    f64,
+                ) -> bool,
+            >(b"unibind_sample_touch")
+    }
+        .map_err(|error| symbol_error("unibind_sample_touch", error.as_ref()))?;
+    ::std::result::Result::Ok(*resolved)
+}
+///Resolve `unibind_sample_reset` through stabby's report check.
+fn resolve_reset(
+    library: &::libloading::Library,
+) -> ::std::result::Result<extern "C" fn(), LoadError> {
+    let resolved = unsafe {
+        library.get_stabbied::<extern "C" fn()>(b"unibind_sample_reset")
+    }
+        .map_err(|error| symbol_error("unibind_sample_reset", error.as_ref()))?;
+    ::std::result::Result::Ok(*resolved)
+}
+///Resolve `unibind_sample_delayed_double` through stabby's report check.
+fn resolve_delayed_double(
+    library: &::libloading::Library,
+) -> ::std::result::Result<
+    extern "C" fn(i64) -> ::stabby::future::DynFuture<'static, i64>,
+    LoadError,
+> {
+    let resolved = unsafe {
+        library
+            .get_stabbied::<
+                extern "C" fn(i64) -> ::stabby::future::DynFuture<'static, i64>,
+            >(b"unibind_sample_delayed_double")
+    }
+        .map_err(|error| symbol_error("unibind_sample_delayed_double", error.as_ref()))?;
+    ::std::result::Result::Ok(*resolved)
+}
+///Resolve `unibind_sample_fetch_row` through stabby's report check.
+fn resolve_fetch_row(
+    library: &::libloading::Library,
+) -> ::std::result::Result<
+    extern "C" fn(
+        ::stabby::string::String,
+    ) -> ::stabby::future::DynFuture<
+        'static,
+        ::stabby::result::Result<crate::abi::Row, crate::abi::SampleErrorStable>,
+    >,
+    LoadError,
+> {
+    let resolved = unsafe {
+        library
+            .get_stabbied::<
+                extern "C" fn(
+                    ::stabby::string::String,
+                ) -> ::stabby::future::DynFuture<
+                    'static,
+                    ::stabby::result::Result<
+                        crate::abi::Row,
+                        crate::abi::SampleErrorStable,
+                    >,
+                >,
+            >(b"unibind_sample_fetch_row")
+    }
+        .map_err(|error| symbol_error("unibind_sample_fetch_row", error.as_ref()))?;
+    ::std::result::Result::Ok(*resolved)
+}
+///Resolve `unibind_sample_labels` through stabby's report check.
+fn resolve_labels(
+    library: &::libloading::Library,
+) -> ::std::result::Result<
+    extern "C" fn(
+        ::stabby::string::String,
+    ) -> ::unibind_stream::DynStream<'static, ::stabby::string::String>,
+    LoadError,
+> {
+    let resolved = unsafe {
+        library
+            .get_stabbied::<
+                extern "C" fn(
+                    ::stabby::string::String,
+                ) -> ::unibind_stream::DynStream<'static, ::stabby::string::String>,
+            >(b"unibind_sample_labels")
+    }
+        .map_err(|error| symbol_error("unibind_sample_labels", error.as_ref()))?;
+    ::std::result::Result::Ok(*resolved)
+}
 /// Classify a `get_stabbied` failure: a loader error means the
 /// symbol is missing, anything else is stabby's type-report
 /// mismatch text.
 fn symbol_error(
-    symbol: &'static str,
-) -> impl Fn(::std::boxed::Box<dyn ::std::error::Error + Send + Sync>) -> LoadError {
-    move |error| {
-        let message = ::std::string::ToString::to_string(&error);
-        if error.is::<::libloading::Error>() {
-            LoadError::MissingSymbol {
-                symbol: symbol.to_owned(),
-                message,
-            }
-        } else {
-            LoadError::SignatureMismatch {
-                symbol: symbol.to_owned(),
-                message,
-            }
+    symbol: &str,
+    error: &(dyn ::std::error::Error + Send + Sync + 'static),
+) -> LoadError {
+    let message = ::std::string::ToString::to_string(&error);
+    if error.is::<::libloading::Error>() {
+        LoadError::MissingSymbol {
+            symbol: symbol.to_owned(),
+            message,
+        }
+    } else {
+        LoadError::SignatureMismatch {
+            symbol: symbol.to_owned(),
+            message,
         }
     }
 }

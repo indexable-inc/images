@@ -49,7 +49,10 @@ impl Engine {
                     extern "C" fn() -> ::stabby::str::Str<'static>,
                 >(b"unibind_conformance_ir_sha256")
         }
-            .map_err(symbol_error("unibind_conformance_ir_sha256"))?;
+            .map_err(|error| symbol_error(
+                "unibind_conformance_ir_sha256",
+                error.as_ref(),
+            ))?;
         let actual: &'static str = ::core::convert::Into::into(ir_sha256());
         if actual != EXPECTED_IR_SHA256 {
             return ::std::result::Result::Err(LoadError::IrHashMismatch {
@@ -57,67 +60,14 @@ impl Engine {
                 actual: actual.to_owned(),
             });
         }
-        let echo_record = *unsafe {
-            library
-                .get_stabbied::<
-                    extern "C" fn(crate::abi::Sample) -> crate::abi::Sample,
-                >(b"unibind_conformance_echo_record")
-        }
-            .map_err(symbol_error("unibind_conformance_echo_record"))?;
-        let sum = *unsafe {
-            library
-                .get_stabbied::<
-                    extern "C" fn(::stabby::vec::Vec<i64>) -> i64,
-                >(b"unibind_conformance_sum")
-        }
-            .map_err(symbol_error("unibind_conformance_sum"))?;
-        let fail = *unsafe {
-            library
-                .get_stabbied::<
-                    extern "C" fn(
-                        u32,
-                    ) -> ::stabby::result::Result<
-                        u64,
-                        crate::abi::ConformanceErrorStable,
-                    >,
-                >(b"unibind_conformance_fail")
-        }
-            .map_err(symbol_error("unibind_conformance_fail"))?;
-        let delayed_double = *unsafe {
-            library
-                .get_stabbied::<
-                    extern "C" fn(i64) -> ::stabby::future::DynFuture<'static, i64>,
-                >(b"unibind_conformance_delayed_double")
-        }
-            .map_err(symbol_error("unibind_conformance_delayed_double"))?;
-        let hang_until_dropped = *unsafe {
-            library
-                .get_stabbied::<
-                    extern "C" fn() -> ::stabby::future::DynFuture<'static, u64>,
-                >(b"unibind_conformance_hang_until_dropped")
-        }
-            .map_err(symbol_error("unibind_conformance_hang_until_dropped"))?;
-        let count_to = *unsafe {
-            library
-                .get_stabbied::<
-                    extern "C" fn(u64) -> ::unibind_stream::DynStream<'static, u64>,
-                >(b"unibind_conformance_count_to")
-        }
-            .map_err(symbol_error("unibind_conformance_count_to"))?;
-        let reset_cancel_witness = *unsafe {
-            library
-                .get_stabbied::<
-                    extern "C" fn(),
-                >(b"unibind_conformance_reset_cancel_witness")
-        }
-            .map_err(symbol_error("unibind_conformance_reset_cancel_witness"))?;
-        let cancel_witnessed = *unsafe {
-            library
-                .get_stabbied::<
-                    extern "C" fn() -> bool,
-                >(b"unibind_conformance_cancel_witnessed")
-        }
-            .map_err(symbol_error("unibind_conformance_cancel_witnessed"))?;
+        let echo_record = resolve_echo_record(&library)?;
+        let sum = resolve_sum(&library)?;
+        let fail = resolve_fail(&library)?;
+        let delayed_double = resolve_delayed_double(&library)?;
+        let hang_until_dropped = resolve_hang_until_dropped(&library)?;
+        let count_to = resolve_count_to(&library)?;
+        let reset_cancel_witness = resolve_reset_cancel_witness(&library)?;
+        let cancel_witnessed = resolve_cancel_witnessed(&library)?;
         ::std::result::Result::Ok(Self {
             _library: library,
             echo_record,
@@ -261,24 +211,159 @@ impl ::futures_core::Stream for CountToStream {
         }
     }
 }
+///Resolve `unibind_conformance_echo_record` through stabby's report check.
+fn resolve_echo_record(
+    library: &::libloading::Library,
+) -> ::std::result::Result<
+    extern "C" fn(crate::abi::Sample) -> crate::abi::Sample,
+    LoadError,
+> {
+    let resolved = unsafe {
+        library
+            .get_stabbied::<
+                extern "C" fn(crate::abi::Sample) -> crate::abi::Sample,
+            >(b"unibind_conformance_echo_record")
+    }
+        .map_err(|error| symbol_error(
+            "unibind_conformance_echo_record",
+            error.as_ref(),
+        ))?;
+    ::std::result::Result::Ok(*resolved)
+}
+///Resolve `unibind_conformance_sum` through stabby's report check.
+fn resolve_sum(
+    library: &::libloading::Library,
+) -> ::std::result::Result<extern "C" fn(::stabby::vec::Vec<i64>) -> i64, LoadError> {
+    let resolved = unsafe {
+        library
+            .get_stabbied::<
+                extern "C" fn(::stabby::vec::Vec<i64>) -> i64,
+            >(b"unibind_conformance_sum")
+    }
+        .map_err(|error| symbol_error("unibind_conformance_sum", error.as_ref()))?;
+    ::std::result::Result::Ok(*resolved)
+}
+///Resolve `unibind_conformance_fail` through stabby's report check.
+fn resolve_fail(
+    library: &::libloading::Library,
+) -> ::std::result::Result<
+    extern "C" fn(
+        u32,
+    ) -> ::stabby::result::Result<u64, crate::abi::ConformanceErrorStable>,
+    LoadError,
+> {
+    let resolved = unsafe {
+        library
+            .get_stabbied::<
+                extern "C" fn(
+                    u32,
+                ) -> ::stabby::result::Result<u64, crate::abi::ConformanceErrorStable>,
+            >(b"unibind_conformance_fail")
+    }
+        .map_err(|error| symbol_error("unibind_conformance_fail", error.as_ref()))?;
+    ::std::result::Result::Ok(*resolved)
+}
+///Resolve `unibind_conformance_delayed_double` through stabby's report check.
+fn resolve_delayed_double(
+    library: &::libloading::Library,
+) -> ::std::result::Result<
+    extern "C" fn(i64) -> ::stabby::future::DynFuture<'static, i64>,
+    LoadError,
+> {
+    let resolved = unsafe {
+        library
+            .get_stabbied::<
+                extern "C" fn(i64) -> ::stabby::future::DynFuture<'static, i64>,
+            >(b"unibind_conformance_delayed_double")
+    }
+        .map_err(|error| symbol_error(
+            "unibind_conformance_delayed_double",
+            error.as_ref(),
+        ))?;
+    ::std::result::Result::Ok(*resolved)
+}
+///Resolve `unibind_conformance_hang_until_dropped` through stabby's report check.
+fn resolve_hang_until_dropped(
+    library: &::libloading::Library,
+) -> ::std::result::Result<
+    extern "C" fn() -> ::stabby::future::DynFuture<'static, u64>,
+    LoadError,
+> {
+    let resolved = unsafe {
+        library
+            .get_stabbied::<
+                extern "C" fn() -> ::stabby::future::DynFuture<'static, u64>,
+            >(b"unibind_conformance_hang_until_dropped")
+    }
+        .map_err(|error| symbol_error(
+            "unibind_conformance_hang_until_dropped",
+            error.as_ref(),
+        ))?;
+    ::std::result::Result::Ok(*resolved)
+}
+///Resolve `unibind_conformance_count_to` through stabby's report check.
+fn resolve_count_to(
+    library: &::libloading::Library,
+) -> ::std::result::Result<
+    extern "C" fn(u64) -> ::unibind_stream::DynStream<'static, u64>,
+    LoadError,
+> {
+    let resolved = unsafe {
+        library
+            .get_stabbied::<
+                extern "C" fn(u64) -> ::unibind_stream::DynStream<'static, u64>,
+            >(b"unibind_conformance_count_to")
+    }
+        .map_err(|error| symbol_error("unibind_conformance_count_to", error.as_ref()))?;
+    ::std::result::Result::Ok(*resolved)
+}
+///Resolve `unibind_conformance_reset_cancel_witness` through stabby's report check.
+fn resolve_reset_cancel_witness(
+    library: &::libloading::Library,
+) -> ::std::result::Result<extern "C" fn(), LoadError> {
+    let resolved = unsafe {
+        library
+            .get_stabbied::<extern "C" fn()>(b"unibind_conformance_reset_cancel_witness")
+    }
+        .map_err(|error| symbol_error(
+            "unibind_conformance_reset_cancel_witness",
+            error.as_ref(),
+        ))?;
+    ::std::result::Result::Ok(*resolved)
+}
+///Resolve `unibind_conformance_cancel_witnessed` through stabby's report check.
+fn resolve_cancel_witnessed(
+    library: &::libloading::Library,
+) -> ::std::result::Result<extern "C" fn() -> bool, LoadError> {
+    let resolved = unsafe {
+        library
+            .get_stabbied::<
+                extern "C" fn() -> bool,
+            >(b"unibind_conformance_cancel_witnessed")
+    }
+        .map_err(|error| symbol_error(
+            "unibind_conformance_cancel_witnessed",
+            error.as_ref(),
+        ))?;
+    ::std::result::Result::Ok(*resolved)
+}
 /// Classify a `get_stabbied` failure: a loader error means the
 /// symbol is missing, anything else is stabby's type-report
 /// mismatch text.
 fn symbol_error(
-    symbol: &'static str,
-) -> impl Fn(::std::boxed::Box<dyn ::std::error::Error + Send + Sync>) -> LoadError {
-    move |error| {
-        let message = ::std::string::ToString::to_string(&error);
-        if error.is::<::libloading::Error>() {
-            LoadError::MissingSymbol {
-                symbol: symbol.to_owned(),
-                message,
-            }
-        } else {
-            LoadError::SignatureMismatch {
-                symbol: symbol.to_owned(),
-                message,
-            }
+    symbol: &str,
+    error: &(dyn ::std::error::Error + Send + Sync + 'static),
+) -> LoadError {
+    let message = ::std::string::ToString::to_string(&error);
+    if error.is::<::libloading::Error>() {
+        LoadError::MissingSymbol {
+            symbol: symbol.to_owned(),
+            message,
+        }
+    } else {
+        LoadError::SignatureMismatch {
+            symbol: symbol.to_owned(),
+            message,
         }
     }
 }

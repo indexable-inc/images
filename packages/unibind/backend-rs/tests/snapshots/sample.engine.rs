@@ -48,29 +48,29 @@ mod __unibind_rs_sample {
                         >,
                     >(),
                 blob: value.blob.into_iter().collect::<::stabby::vec::Vec<u8>>(),
-                home: match value.home {
-                    ::std::option::Option::Some(inner) => {
-                        ::stabby::option::Option::Some(
+                home: value
+                    .home
+                    .map_or_else(
+                        ::stabby::option::Option::None,
+                        |inner| ::stabby::option::Option::Some(
                             ::std::os::unix::ffi::OsStringExt::into_vec(
                                     inner.into_os_string(),
                                 )
                                 .into_iter()
                                 .collect::<::stabby::vec::Vec<u8>>(),
-                        )
-                    }
-                    ::std::option::Option::None => ::stabby::option::Option::None(),
-                },
-                nested: match value.nested {
-                    ::std::option::Option::Some(inner) => {
-                        ::stabby::option::Option::Some(
+                        ),
+                    ),
+                nested: value
+                    .nested
+                    .map_or_else(
+                        ::stabby::option::Option::None,
+                        |inner| ::stabby::option::Option::Some(
                             inner
                                 .into_iter()
                                 .map(|item| Inner::from(item))
                                 .collect::<::stabby::vec::Vec<Inner>>(),
-                        )
-                    }
-                    ::std::option::Option::None => ::stabby::option::Option::None(),
-                },
+                        ),
+                    ),
                 inner: Inner::from(value.inner),
             }
         }

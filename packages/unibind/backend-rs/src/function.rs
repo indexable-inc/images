@@ -10,19 +10,19 @@ use crate::ty::{self, Paths};
 /// The exported symbol for one function: `unibind_<module>_<fn>`. The
 /// interface name is used as-is (leading underscores and all), so the symbol
 /// space follows the exported module verbatim.
-pub(crate) fn symbol(interface: &ir::Interface, name: &str) -> String {
+pub fn symbol(interface: &ir::Interface, name: &str) -> String {
     format!("unibind_{}_{name}", interface.name)
 }
 
 /// The handshake symbol carrying the hex SHA-256 of the IR JSON bytes.
-pub(crate) fn ir_sha256_symbol(interface: &ir::Interface) -> String {
+pub fn ir_sha256_symbol(interface: &ir::Interface) -> String {
     symbol(interface, "ir_sha256")
 }
 
 /// The stable return type a function's export carries: the plain stable
 /// type, wrapped in `stabby::result::Result` when the function throws and in
 /// `DynFuture` when it suspends. `None` means the export returns unit.
-pub(crate) fn stable_return(function: &ir::Function, paths: &Paths) -> Option<TokenStream> {
+pub fn stable_return(function: &ir::Function, paths: &Paths) -> Option<TokenStream> {
     let ok = function
         .ret
         .as_ref()
@@ -48,7 +48,7 @@ pub(crate) fn stable_return(function: &ir::Function, paths: &Paths) -> Option<To
 /// The `extern "C"` fn-pointer type the client resolves for one export;
 /// stabby's report check compares this type structurally against the
 /// engine's.
-pub(crate) fn signature_type(function: &ir::Function, paths: &Paths) -> TokenStream {
+pub fn signature_type(function: &ir::Function, paths: &Paths) -> TokenStream {
     let args = function
         .args
         .iter()
@@ -59,7 +59,7 @@ pub(crate) fn signature_type(function: &ir::Function, paths: &Paths) -> TokenStr
 
 /// One `#[stabby::export]` wrapper: stable args in, plain call, stable value
 /// out (boxed into a `DynFuture` for `async fn`).
-pub(crate) fn render_export(
+pub fn render_export(
     interface: &ir::Interface,
     function: &ir::Function,
     paths: &Paths,
@@ -166,18 +166,18 @@ fn call_arg(ty: &ir::Type, ident: &proc_macro2::Ident) -> TokenStream {
 
 /// A future-wrapper type name for one async function: `delayed_double` ->
 /// `DelayedDoubleFuture`.
-pub(crate) fn future_wrapper_ident(function: &ir::Function) -> proc_macro2::Ident {
+pub fn future_wrapper_ident(function: &ir::Function) -> proc_macro2::Ident {
     format_ident!("{}Future", pascal_case(&function.name))
 }
 
 /// A stream-wrapper type name for one stream-returning function:
 /// `count_to` -> `CountToStream`.
-pub(crate) fn stream_wrapper_ident(function: &ir::Function) -> proc_macro2::Ident {
+pub fn stream_wrapper_ident(function: &ir::Function) -> proc_macro2::Ident {
     format_ident!("{}Stream", pascal_case(&function.name))
 }
 
 /// Whether the function's return is a stream (only ever at top level).
-pub(crate) fn returns_stream(function: &ir::Function) -> bool {
+pub const fn returns_stream(function: &ir::Function) -> bool {
     matches!(function.ret, Some(ir::Type::Stream(_)))
 }
 
@@ -194,6 +194,6 @@ fn pascal_case(name: &str) -> String {
 }
 
 /// Doc attributes from IR doc lines.
-pub(crate) fn doc_attrs(lines: &[String]) -> TokenStream {
+pub fn doc_attrs(lines: &[String]) -> TokenStream {
     quote! { #(#[doc = #lines])* }
 }

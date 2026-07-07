@@ -18,10 +18,12 @@ pub const LINK_SECTION_ELF: &str = ".unibind_ir";
 /// Mach-O `segment,section` pair; section names cap at 16 bytes.
 pub const LINK_SECTION_MACH_O: &str = "__DATA,__unibind_ir";
 
-/// The exact bytes the link section carries: one compact `serde_json`
-/// rendering of the interface. The Rust client backend hashes these same
-/// bytes for its load-time handshake, so the serialization lives here once
-/// and the two consumers cannot drift byte-wise.
+/// The exact bytes the link section carries.
+///
+/// One compact `serde_json` rendering of the interface. The Rust client
+/// backend hashes these same bytes for its load-time handshake, so the
+/// serialization lives here once and the two consumers cannot drift
+/// byte-wise.
 ///
 /// # Errors
 ///

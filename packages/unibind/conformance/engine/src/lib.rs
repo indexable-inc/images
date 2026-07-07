@@ -78,13 +78,13 @@ mod conformance {
     }
 
     /// Round-trip a record through the boundary unchanged.
-    pub fn echo_record(sample: Sample) -> Sample {
+    pub const fn echo_record(sample: Sample) -> Sample {
         sample
     }
 
     /// Sum the values.
     pub fn sum(values: Vec<i64>) -> i64 {
-        values.iter().sum()
+        values.into_iter().sum()
     }
 
     /// Fail with the variant selected by `kind` (0 and 1); anything else

@@ -22,7 +22,7 @@ use crate::ty::{self, Paths};
 /// `module`: stabby's report check compares the declaring module path, and
 /// the two sides' mirrors live in different crates, so both pin the same
 /// logical namespace instead of `module_path!()`.
-pub(crate) fn mirror_struct(record: &ir::Record, paths: &Paths) -> TokenStream {
+pub fn mirror_struct(record: &ir::Record, paths: &Paths) -> TokenStream {
     let name = ty::name_ident(&record.name);
     let module = &paths.report_module;
     let doc = format!(
@@ -49,7 +49,7 @@ pub(crate) fn mirror_struct(record: &ir::Record, paths: &Paths) -> TokenStream {
 
 /// `From` impls in both directions between the plain record (through
 /// `paths.plain`) and its mirror (through `paths.mirror`).
-pub(crate) fn mirror_conversions(record: &ir::Record, paths: &Paths) -> TokenStream {
+pub fn mirror_conversions(record: &ir::Record, paths: &Paths) -> TokenStream {
     let name = ty::name_ident(&record.name);
     let plain = &paths.plain;
     let mirror = &paths.mirror;
@@ -84,7 +84,7 @@ pub(crate) fn mirror_conversions(record: &ir::Record, paths: &Paths) -> TokenStr
 
 /// The client's idiomatic record: plain owned fields, `Clone`/`Debug`/
 /// `PartialEq` so consumers can assert round trips.
-pub(crate) fn plain_record(record: &ir::Record, paths: &Paths) -> TokenStream {
+pub fn plain_record(record: &ir::Record, paths: &Paths) -> TokenStream {
     let name = ty::name_ident(&record.name);
     let docs = fallback_docs(&record.docs, &format!("The `{}` record.", record.name));
     let fields = record.fields.iter().map(|field| {
@@ -107,7 +107,7 @@ pub(crate) fn plain_record(record: &ir::Record, paths: &Paths) -> TokenStream {
 
 /// IR docs, or a generated one-liner when the user wrote none, so every
 /// public item in the generated crate is documented.
-pub(crate) fn fallback_docs(lines: &[String], fallback: &str) -> TokenStream {
+pub fn fallback_docs(lines: &[String], fallback: &str) -> TokenStream {
     if lines.is_empty() {
         quote!(#[doc = #fallback])
     } else {

@@ -14,7 +14,7 @@ use crate::record::fallback_docs;
 use crate::ty::{self, Paths};
 
 /// The stable carrier's type name for one error enum.
-pub(crate) fn stable_ident(error: &ir::ErrorType) -> proc_macro2::Ident {
+pub fn stable_ident(error: &ir::ErrorType) -> proc_macro2::Ident {
     ty::name_ident(&format!("{}Stable", error.name))
 }
 
@@ -22,7 +22,7 @@ pub(crate) fn stable_ident(error: &ir::ErrorType) -> proc_macro2::Ident {
 /// record mirrors). `no_opt` and the `module` override for the same reasons
 /// as record mirrors: the layout is generated and report-checked, and the
 /// report module must match across the two crates.
-pub(crate) fn stable_struct(error: &ir::ErrorType, paths: &Paths) -> TokenStream {
+pub fn stable_struct(error: &ir::ErrorType, paths: &Paths) -> TokenStream {
     let name = stable_ident(error);
     let module = &paths.report_module;
     let doc = format!(
@@ -45,7 +45,7 @@ pub(crate) fn stable_struct(error: &ir::ErrorType, paths: &Paths) -> TokenStream
 /// Engine side: map the user's enum onto the carrier. Variants map to their
 /// declaration index; the message is the enum's `Display` output, which the
 /// user must implement (the same requirement the Python backend documents).
-pub(crate) fn engine_conversion(error: &ir::ErrorType, paths: &Paths) -> TokenStream {
+pub fn engine_conversion(error: &ir::ErrorType, paths: &Paths) -> TokenStream {
     let name = ty::name_ident(&error.name);
     let stable = stable_ident(error);
     let plain = &paths.plain;
@@ -71,7 +71,7 @@ pub(crate) fn engine_conversion(error: &ir::ErrorType, paths: &Paths) -> TokenSt
 /// Client side: the idiomatic error enum, one named-field variant per IR
 /// variant, `Display` + `std::error::Error`, and the conversion from the
 /// carrier.
-pub(crate) fn client_error(error: &ir::ErrorType) -> TokenStream {
+pub fn client_error(error: &ir::ErrorType) -> TokenStream {
     let name = ty::name_ident(&error.name);
     let stable = stable_ident(error);
     let docs = fallback_docs(&error.docs, &format!("The `{}` error.", error.name));
@@ -129,7 +129,7 @@ pub(crate) fn client_error(error: &ir::ErrorType) -> TokenStream {
 
 /// The client's load-time error: everything `Engine::load` can fail with.
 /// Load never falls back: any mismatch is a hard error naming both sides.
-pub(crate) fn load_error() -> TokenStream {
+pub fn load_error() -> TokenStream {
     quote! {
         /// Everything [`crate::Engine::load`] can fail with. Loading never
         /// falls back: a mismatch is a hard error naming both sides.
