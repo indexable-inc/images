@@ -60,7 +60,10 @@ let
       # shell
       runHook preCheck
       mix format --check-formatted
-      mix test
+      # --trace prints every test name (the CI log is the conformance
+      # evidence) and runs them sequentially, which the process-global
+      # counters want anyway.
+      mix test --trace
       runHook postCheck
     '';
 
