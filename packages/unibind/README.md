@@ -174,8 +174,11 @@ rules (argument vs return position included) from the untouched IR.
   `bytes`, `bytearray`, and contiguous `memoryview` all alias the caller's
   memory for the duration of the call.
 - A crate exporting async functions, streams, or objects adds
-  `unibind-runtime` with the `py` feature next to its `unibind` dependency;
-  sync-only crates (scipql-py) do not need it.
+  `unibind-runtime` plus `unibind-py-runtime` next to its `unibind`
+  dependency; sync-only crates (scipql-py) need neither. The split is
+  load-bearing: features unify across a workspace build, so the pyo3 glue
+  lives in its own crate instead of a `py` feature that would leak `Py*`
+  symbols into every NIF in the workspace.
 
 ## Conformance suite
 

@@ -75,7 +75,7 @@ fn close_method(close: &ir::Function) -> TokenStream {
                 ) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::PyAny>> {
                     let first = !self.closed.swap(true, ::std::sync::atomic::Ordering::SeqCst);
                     let inner = ::std::sync::Arc::clone(&self.inner);
-                    ::unibind_runtime::py::future_into_py(py, async move {
+                    ::unibind_py_runtime::future_into_py(py, async move {
                         if first {
                             #stmt
                         }
@@ -95,7 +95,7 @@ fn aenter() -> TokenStream {
         ) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::PyAny>> {
             let py = slf.py();
             let owned: ::pyo3::Py<Self> = slf.unbind();
-            ::unibind_runtime::py::future_into_py(py, async move { ::pyo3::PyResult::Ok(owned) })
+            ::unibind_py_runtime::future_into_py(py, async move { ::pyo3::PyResult::Ok(owned) })
         }
     }
 }
@@ -116,7 +116,7 @@ fn aexit(close: &ir::Function) -> TokenStream {
         ) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::PyAny>> {
             let first = !self.closed.swap(true, ::std::sync::atomic::Ordering::SeqCst);
             let inner = ::std::sync::Arc::clone(&self.inner);
-            ::unibind_runtime::py::future_into_py(py, async move {
+            ::unibind_py_runtime::future_into_py(py, async move {
                 if first {
                     #stmt
                 }

@@ -3,8 +3,10 @@
 //! [`UniStream`] is the stream half of the unibind surface: an exported
 //! `fn` returning `UniStream<T>` becomes an async iterator in the target
 //! language, and items flow one poll per consumer request (pull-based
-//! backpressure). The `py` feature adds the Python async helpers the
-//! generated glue calls into.
+//! backpressure). Deliberately language-free: the per-language runtime
+//! glue lives in `unibind-py-runtime` and `unibind-ex-runtime`, so this
+//! crate can sit inside any binding artifact without dragging another
+//! language's toolchain along.
 
 use std::fmt;
 use std::pin::Pin;
@@ -12,9 +14,6 @@ use std::task::{Context, Poll};
 
 use futures::Stream;
 use futures::StreamExt as _;
-
-#[cfg(feature = "py")]
-pub mod py;
 
 /// A boxed stream crossing the binding boundary.
 ///

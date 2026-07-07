@@ -17,4 +17,5 @@ futures.workspace = true
 pyo3 = { workspace = true, features = ["extension-module"] }
 tokio = { workspace = true, features = ["time"] }
 unibind = { workspace = true, features = ["py"] }
-unibind-runtime = { workspace = true, features = ["py"] }
+unibind-py-runtime.workspace = true
+unibind-runtime.workspace = true

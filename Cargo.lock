@@ -12203,6 +12203,7 @@ dependencies = [
  "pyo3",
  "tokio",
  "unibind",
+ "unibind-py-runtime",
  "unibind-runtime",
 ]
 
@@ -12252,13 +12253,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "unibind-runtime"
+name = "unibind-py-runtime"
 version = "0.1.0"
 dependencies = [
  "futures",
  "pyo3",
  "pyo3-async-runtimes",
  "tokio",
+ "unibind-runtime",
+]
+
+[[package]]
+name = "unibind-runtime"
+version = "0.1.0"
+dependencies = [
+ "futures",
 ]
 
 [[package]]

@@ -72,12 +72,12 @@ impl StreamExport<'_> {
             #[doc = #doc_pull]
             #[::pyo3::pyclass(name = #py_name, frozen)]
             struct #ident {
-                stream: ::unibind_runtime::py::SharedStream<#item_ty>,
+                stream: ::unibind_py_runtime::SharedStream<#item_ty>,
             }
             impl #ident {
                 fn __unibind_wrap(stream: ::unibind_runtime::UniStream<#item_ty>) -> Self {
                     Self {
-                        stream: ::unibind_runtime::py::SharedStream::new(stream),
+                        stream: ::unibind_py_runtime::SharedStream::new(stream),
                     }
                 }
             }
@@ -91,7 +91,7 @@ impl StreamExport<'_> {
                     py: ::pyo3::Python<'py>,
                 ) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::PyAny>> {
                     let next = self.stream.next();
-                    ::unibind_runtime::py::future_into_py(py, async move {
+                    ::unibind_py_runtime::future_into_py(py, async move {
                         match next.await {
                             ::std::option::Option::Some(item) => ::pyo3::PyResult::Ok(item),
                             ::std::option::Option::None => ::pyo3::PyResult::Err(

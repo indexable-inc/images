@@ -8,8 +8,8 @@
 //! The consuming crate therefore depends on `pyo3` directly (with
 //! `extension-module` for a wheel-shaped cdylib), and the generated code
 //! compiles against `pyo3` 0.28 with `abi3-py311`. Glue for async, stream,
-//! and object exports also calls `unibind_runtime::py`, so those consumers
-//! add `unibind-runtime` with the `py` feature.
+//! and object exports also calls `unibind_py_runtime`, so those consumers
+//! add `unibind-runtime` and `unibind-py-runtime`.
 
 mod ctx;
 mod error;

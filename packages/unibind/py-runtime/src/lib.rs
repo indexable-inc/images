@@ -1,7 +1,11 @@
 //! Python async helpers the generated glue calls.
 //!
 //! Everything here is a thin layer over `pyo3-async-runtimes`, so generated
-//! code only ever names `unibind_runtime`.
+//! code only ever names `unibind_py_runtime`. A crate of its own (not a
+//! `py` feature on `unibind-runtime`): cargo unifies features across a
+//! workspace build, and a feature would drag pyo3 into every NIF that
+//! shares the workspace with a Python consumer (the BEAM dlopens with
+//! RTLD_NOW, so even unused `Py*` symbols fail the load).
 
 use std::fmt;
 use std::future::Future;
@@ -12,7 +16,7 @@ use futures::FutureExt as _;
 
 use pyo3::{Bound, PyAny, PyResult, Python};
 
-use crate::UniStream;
+use unibind_runtime::UniStream;
 
 /// Convert a Rust future into an awaitable Python object.
 ///

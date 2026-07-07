@@ -101,6 +101,7 @@ members = [
   "packages/unibind/ex-runtime",
   "packages/unibind/gen",
   "packages/unibind/macros",
+  "packages/unibind/py-runtime",
   "packages/unibind/runtime",
   "packages/vm/panes/audio",
   "packages/vm/panes/compositor",
@@ -357,6 +358,7 @@ unibind-backend-ex = { path = "packages/unibind/backend-ex" }
 unibind-backend-py = { path = "packages/unibind/backend-py" }
 unibind-core = { path = "packages/unibind/core" }
 unibind-ex-runtime = { path = "packages/unibind/ex-runtime" }
+unibind-py-runtime = { path = "packages/unibind/py-runtime" }
 unibind-runtime = { path = "packages/unibind/runtime" }
 url = { version = "2.5.8", default-features = false }
 uuid = "1"

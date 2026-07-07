@@ -48,8 +48,9 @@ use proc_macro::TokenStream;
 /// without the option every enabled backend renders.
 ///
 /// Glue for async functions, `UniStream` returns, and `#[unibind::object]`
-/// types calls into `unibind_runtime::py`, so a crate exporting any of
-/// those adds `unibind-runtime` with the `py` feature to its dependencies.
+/// types calls into `unibind_py_runtime`, so a crate exporting any of
+/// those adds `unibind-runtime` and `unibind-py-runtime` to its
+/// dependencies (the Elixir glue calls `unibind_ex_runtime` instead).
 #[proc_macro_attribute]
 pub fn export(args: TokenStream, item: TokenStream) -> TokenStream {
     expand::export(args.into(), item.into()).into()

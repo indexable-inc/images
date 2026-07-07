@@ -3,16 +3,10 @@ name = "unibind-runtime"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
-description = "Boundary types exported code references at runtime: UniStream and the Python async helpers"
+description = "Language-free boundary types exported code references at runtime: UniStream"
 
 [lints]
 workspace = true
 
-[features]
-py = ["dep:pyo3", "dep:pyo3-async-runtimes", "dep:tokio", "tokio/sync"]
-
 [dependencies]
 futures.workspace = true
-pyo3 = { workspace = true, optional = true }
-pyo3-async-runtimes = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true }
