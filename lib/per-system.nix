@@ -327,6 +327,13 @@
               "--eval-max-memory-size" "6144"
               "--eval-workers" "16"
               "--skip-cached"
+              # Stop scheduling new checks as soon as one fails (in-flight
+              # builds still finish). Default nix-fast-build behavior is to
+              # build every remaining check and only report at the end, which
+              # spends the full wall time before flake-check goes red (#2128).
+              # The failed-attr log replay below still works: the result file
+              # is written on failure with the records collected so far.
+              "--fail-fast"
               "--no-nom"
               "--no-link"
               "--result-format" "json"
