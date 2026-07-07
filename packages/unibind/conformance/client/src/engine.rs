@@ -3,7 +3,7 @@ use ::stabby::libloading::StabbyLibrary as _;
 use crate::error::LoadError;
 /// Hex SHA-256 of the interface IR this client was generated from,
 /// compared against the engine's handshake symbol at load time.
-const EXPECTED_IR_SHA256: &str = "efdad5ba1babe93154e1de0baa31486004aaef5515c1903a3d97b39d312fec13";
+const EXPECTED_IR_SHA256: &str = "787cf68e644c5704b0ffaf066d43953cf24025d2d355ee1e50b2234e749562c7";
 /// A loaded engine with every export resolved and typed.
 ///
 /// The `Engine` keeps the library mapped for its whole lifetime and
