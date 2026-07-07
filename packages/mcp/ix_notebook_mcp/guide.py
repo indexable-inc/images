@@ -71,7 +71,9 @@ JOBS = (
     "before it backgrounds, so keep it small and poll: do NOT pass a huge budget to sit on a "
     "long `await jobs['ab12']` in the foreground — it blocks every other call for that whole "
     "time and is capped server-side anyway. Let the work background, then re-await or poll "
-    "`.done()` in a later cell."
+    "`.done()` in a later cell. `jobs.spawn(coro, name=...)` registers an awaitable you created "
+    "yourself as a first-class job with the same lifecycle (appears in `jobs`, notifies on "
+    "completion, result via `await jobs['<id>']`)."
 )
 
 PAGING = (

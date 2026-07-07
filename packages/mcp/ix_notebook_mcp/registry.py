@@ -276,7 +276,10 @@ BUILTINS: tuple[Builtin, ...] = (
     Builtin("Result", "split a cell's value into the human view and your view; a cell must end with or yield one"),
     Builtin("cells", "curate the dashboard's highlight reel (`cells.add` / `set` / `remove` / `clear`)"),
     Builtin("session", "this session's dashboard identity — set `session.name = '...'` first so a human can tell your runs apart"),
-    Builtin("jobs", "the background-run registry (inspect / await / cancel / page each run)"),
+    Builtin(
+        "jobs",
+        "the background-run registry (inspect / await / cancel / page each run); `jobs.spawn(coro, name=...)` registers your own awaitable as a first-class job (dashboard card + completion notification + awaitable result)",
+    ),
     Builtin("history", "list recent runs"),
     Builtin("doc", "the signature + docstring of any object, returned as a Result (help() only prints and returns None)"),
     Builtin("resources", "the live, self-updating views (a terminal, a widget)"),

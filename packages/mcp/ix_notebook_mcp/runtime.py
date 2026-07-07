@@ -50,7 +50,7 @@ import time
 import traceback
 import types
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any, overload
 
 from . import readstats, registry, typecheck
@@ -1434,7 +1434,54 @@ def register_resource(
     return res
 
 
-jobs: dict[str, Job] = {}
+class Jobs(dict[str, Job]):
+    """The kernel-wide run registry (``jobs``): every execution this kernel has
+    run, keyed by job id. Beyond the dict surface, :meth:`spawn` registers an
+    ad-hoc awaitable as a first-class background job, so work an agent started
+    itself (a coroutine, a Task) gets the same lifecycle as a backgrounded cell:
+    a dashboard card, a completion notification, and a pageable/awaitable
+    ``jobs['<id>']`` handle (issue #2164)."""
+
+    def spawn(self, aw: Awaitable[Any], *, name: str | None = None, topic: str | None = None) -> Job:
+        """Register ``aw`` (any awaitable: a coroutine, Task, or Future) as a
+        first-class background job and return its :class:`Job` handle at once.
+
+        The awaitable gets the full job lifecycle: it appears in ``jobs`` /
+        ``history()`` and on the dashboard, its completion pushes a channel
+        notification exactly like a backgrounded cell, and its value is
+        retrieved with ``await jobs['<id>']`` (or ``.result`` once done; a
+        failure re-raises there, like any other job). ``name`` labels the job
+        (defaults to the coroutine's qualname); ``topic`` files it under a
+        dashboard topic (defaults to the session's current one). Must be called
+        with the kernel's event loop running (i.e. from inside a cell)."""
+        if not inspect.isawaitable(aw):
+            raise TypeError(
+                f"jobs.spawn() needs an awaitable (coroutine, Task, or Future), got {type(aw).__name__}"
+            )
+        # Raises RuntimeError outside the loop, BEFORE the job is registered, so
+        # a misuse never leaves a forever-"running" phantom in the registry.
+        loop = asyncio.get_running_loop()
+        parent = _ix_current.get()
+        label = name or getattr(aw, "__qualname__", None) or type(aw).__name__
+        job = Job(
+            f"jobs.spawn({label!r})",
+            name=label,
+            # No foreground wait: a spawned job is background from birth, so
+            # there is no budget window to draw (0 is /api/exec's floor too).
+            budget=0.0,
+            kind="spawn",
+            topic=topic or session.topic,
+            session=parent.session if parent is not None else None,
+        )
+        # Background from birth: completion notifies the agent session the same
+        # way a budget-expired cell does (see the runners' shared finally tail).
+        job.backgrounded = True
+        self[job.id] = job
+        job.task = loop.create_task(_spawn_runner(job, aw))
+        return job
+
+
+jobs: Jobs = Jobs()
 resources: dict[str, Resource] = {}
 
 # A safe id for an INTERACTIVE resource: it is interpolated into the injected
@@ -2559,6 +2606,76 @@ def _persist_final(job: Job) -> None:
             bindings=_cell_bindings(job),
             namespace=_namespace_snapshot(job),
         )
+
+
+async def _spawn_runner(job: Job, aw: Awaitable[Any]) -> None:
+    """:func:`_runner`'s sibling for :meth:`Jobs.spawn`: there is no cell code
+    to typecheck or compile -- just await the registered awaitable -- but the
+    rest of the lifecycle is identical: prints captured under the job, the value
+    wrapped like a trailing expression, the same persistence, and the same
+    completion notification a backgrounded cell sends."""
+    token = _ix_current.set(job)
+    _install_task_failure_watch(asyncio.get_running_loop())
+    if _store is not None and _store_conn is not None:
+        with contextlib.suppress(Exception):  # best-effort: store write must not abort the job
+            _store.start(
+                _store_conn,
+                id=job.id,
+                name=job.name,
+                code=job.code,
+                started_at=job.started,
+                budget=job.budget,
+                kind=job.kind,
+                topic=job.topic,
+            )
+    try:
+        value = await aw
+        if value is None:
+            # Same contract as a None-valued cell: the captured stdout (or a
+            # quiet ok) is the result, so a print-only awaitable reports what
+            # it printed.
+            result = _auto_result(job)
+        elif isinstance(value, Result):
+            # An explicit Result is the author's full statement of both views;
+            # stdout stays out of it (page jobs['<id>'].output), like a cell's.
+            result = value
+        else:
+            result = _merge_stdout(job, Result.of(value))
+        job._result = result
+        job.status = "done"
+    except asyncio.CancelledError:
+        job.status = "cancelled"
+        # `job.cancel()` cancels THIS runner; a pre-created Task/Future keeps
+        # running unless the cancellation is forwarded to it. Forward it, so
+        # cancelling the job cancels the work whatever shape was registered.
+        if isinstance(aw, asyncio.Future):
+            aw.cancel()
+        raise
+    except (Exception, KeyboardInterrupt, SystemExit) as _exc:
+        # Isolate like _runner: a failed awaitable becomes a failed job
+        # (traceback captured, `await jobs['<id>']` re-raises) instead of
+        # escaping the task and dying as an unretrieved background failure.
+        job.status = "error"
+        job.error = _user_traceback(_exc)
+        job._exc = _exc
+        job._exc_tb = _exc.__traceback__
+        job._append(job.error)
+    finally:
+        job.ended = time.time()
+        _ix_current.reset(token)
+        _persist_final(job)
+        _mark_snapshot_dirty()
+        # Spawned jobs are backgrounded by construction, so completion always
+        # notifies (the suppress mirrors _runner: a session without the channel
+        # has nothing to deliver to, and that must not fail the job's cleanup).
+        with contextlib.suppress(Exception):
+            await notify(
+                f"Background job {job.name} finished with status {job.status}.",
+                job_id=job.id,
+                job_name=job.name,
+                status=job.status,
+                topic=job.topic,
+            )
 
 
 def _cell_bindings(job: Job) -> dict:
