@@ -2784,7 +2784,7 @@ fn compute_root_keys(
 }
 
 fn compute_test_keys(graph: &UnitGraph, prepared: &PreparedGraph) -> BTreeMap<usize, String> {
-    compute_root_keys(graph, prepared, Unit::is_test)
+    compute_root_keys(graph, prepared, Unit::is_runnable_test)
 }
 
 fn compute_benchmark_keys(graph: &UnitGraph, prepared: &PreparedGraph) -> BTreeMap<usize, String> {
@@ -3053,7 +3053,7 @@ fn render_test_entries_for(
     let mut seen = BTreeSet::new();
     for index in roots {
         let unit = &units[*index];
-        if !unit.is_test() {
+        if !unit.is_runnable_test() {
             continue;
         }
         let key = keys

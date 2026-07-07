@@ -239,10 +239,15 @@ impl UnibindMeta {
         for path in &entries {
             let backend = if path.is_ident("py") {
                 Backend::Py
+            } else if path.is_ident("rs") {
+                Backend::Rs
             } else if path.is_ident("ts") {
                 Backend::Ts
             } else {
-                return Err(LowerError::new(path.span(), "unknown backend; expected `py` or `ts`"));
+                return Err(LowerError::new(
+                    path.span(),
+                    "unknown backend; expected `py`, `rs`, or `ts`",
+                ));
             };
             if backends.contains(&backend) {
                 return Err(LowerError::new(path.span(), "duplicate backend"));

@@ -10037,6 +10037,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha2-const-stable"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f179d4e11094a893b82fff208f74d448a7512f99f5a0acbd5c679b705f83ed9"
+
+[[package]]
 name = "shadow-rs"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10488,6 +10494,41 @@ dependencies = [
  "serde",
  "tempfile",
  "toml 1.1.2+spec-1.1.0",
+]
+
+[[package]]
+name = "stabby"
+version = "72.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7b834ec7ced12095fea1e4b07dcb7e8cf2b59b18afa3eac52494d835965a5ec"
+dependencies = [
+ "libloading 0.9.0",
+ "rustversion",
+ "stabby-abi",
+]
+
+[[package]]
+name = "stabby-abi"
+version = "72.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff1a4f477858a5bdf927c9fab7f579899de9b13e39f8b3b3b300c89fbab632f4"
+dependencies = [
+ "rustc_version",
+ "rustversion",
+ "sha2-const-stable",
+ "stabby-macros",
+]
+
+[[package]]
+name = "stabby-macros"
+version = "72.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b31c4b2434980b67ad83f300a58088ba14d59454dcd79ba3d87419bbd924d31e"
+dependencies = [
+ "proc-macro-crate 3.5.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -12140,6 +12181,7 @@ dependencies = [
  "quote",
  "syn 2.0.118",
  "unibind-backend-py",
+ "unibind-backend-rs",
  "unibind-backend-ts",
  "unibind-core",
 ]
@@ -12152,6 +12194,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde_json",
+ "syn 2.0.118",
+ "unibind-core",
+]
+
+[[package]]
+name = "unibind-backend-rs"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "sha2 0.11.0",
  "syn 2.0.118",
  "unibind-core",
 ]
@@ -12177,6 +12233,35 @@ dependencies = [
  "tokio",
  "unibind",
  "unibind-runtime",
+]
+
+[[package]]
+name = "unibind-conformance-client"
+version = "0.1.0"
+dependencies = [
+ "futures-core",
+ "libloading 0.9.0",
+ "stabby",
+ "unibind-stream",
+]
+
+[[package]]
+name = "unibind-conformance-consumer"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "unibind-conformance-client",
+]
+
+[[package]]
+name = "unibind-conformance-engine"
+version = "0.1.0"
+dependencies = [
+ "futures-core",
+ "stabby",
+ "unibind",
+ "unibind-runtime",
+ "unibind-stream",
 ]
 
 [[package]]
@@ -12211,6 +12296,7 @@ dependencies = [
  "clap",
  "object",
  "serde_json",
+ "unibind-backend-rs",
  "unibind-core",
 ]
 
@@ -12222,6 +12308,14 @@ dependencies = [
  "pyo3",
  "pyo3-async-runtimes",
  "tokio",
+]
+
+[[package]]
+name = "unibind-stream"
+version = "0.1.0"
+dependencies = [
+ "futures-core",
+ "stabby",
 ]
 
 [[package]]

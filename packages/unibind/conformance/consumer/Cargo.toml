@@ -1,0 +1,13 @@
+[package]
+name = "unibind-conformance-consumer"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Runs the generated unibind conformance client against the engine cdylib and asserts the boundary behaves"
+
+[lints]
+workspace = true
+
+[dependencies]
+futures.workspace = true
+unibind-conformance-client.workspace = true

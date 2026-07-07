@@ -1,0 +1,17 @@
+[package]
+name = "unibind-conformance-client"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Generated unibind Rust client for the `conformance` interface"
+
+[lints]
+workspace = true
+
+[dependencies]
+futures-core.workspace = true
+# stabby resolves `libloading` 0.9 and implements `StabbyLibrary` on that
+# exact `Library` type, so the client pins 0.9 directly.
+libloading = "0.9"
+stabby.workspace = true
+unibind-stream.workspace = true

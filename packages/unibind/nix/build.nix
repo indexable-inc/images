@@ -14,12 +14,17 @@
     inherit lib pkgs packageRegistry rustWorkspace buildPyStrictCheck;
   };
 
+  buildRs = import ./rs.nix {
+    inherit lib pkgs rustWorkspace;
+  };
+
   buildTs = import ./ts.nix {
     inherit lib pkgs rustWorkspace;
   };
 
   supportedTargets = [
     "py"
+    "rust"
     "ts"
   ];
 in {
@@ -32,13 +37,16 @@ in {
     `dynamic_lookup` link args its cdylib needs (lib/rust/workspace.nix).
     napi (`ts`) crates carry a `napi_build::setup()` build.rs instead.
   - `targets.<language>`: selects and configures each language target: `py`
-    (see [./py.nix](./py.nix) for its arguments) and `ts` (see
-    [./ts.nix](./ts.nix)); the `ex` target lands with issue #1995.
+    (see [./py.nix](./py.nix) for its arguments), `rust` (see
+    [./rs.nix](./rs.nix)), and `ts` (see [./ts.nix](./ts.nix)); the `ex`
+    target lands with issue #1995.
 
   Returns one attrset per requested target; `py` is
   `{ wheel; module; pythonSite; library; tests.pyStrict; }` (`wheel` is
   Linux-only and throws when forced on darwin), `ts` is `{ npm; library; }`
-  (`npm` is Linux-only, same policy as the wheel).
+  (`npm` is Linux-only, same policy as the wheel), and `rust` is
+  `{ generated; library; }` (`generated` is the emitted client crate's
+  source tree).
   */
   build = {
     crate,
@@ -51,6 +59,9 @@ in {
       Supported: ${lib.concatStringsSep ", " supportedTargets}. (`ex` is issue #1995.)'';
       lib.optionalAttrs (targets ? py) {
         py = buildPy ({inherit crate;} // targets.py);
+      }
+      // lib.optionalAttrs (targets ? rust) {
+        rust = buildRs ({inherit crate;} // targets.rust);
       }
       // lib.optionalAttrs (targets ? ts) {
         ts = buildTs ({inherit crate;} // targets.ts);

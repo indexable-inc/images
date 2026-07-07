@@ -10,8 +10,9 @@
 /// The exported boundary. The module name names the `PyInit_` symbol, so
 /// the built cdylib imports as `_conformance`.
 // `backends(py)`: a whole-workspace build unifies unibind's backend
-// features across consumers (the ts conformance crate enables `ts`), so pin
-// this crate's glue to the backend whose runtime deps it declares.
+// features across consumers (the ts conformance crate enables `ts`, the
+// conformance engine enables `rs`), so pin this crate's glue to the backend
+// whose runtime deps it declares.
 #[unibind::export(backends(py))]
 mod _conformance {
     use std::collections::HashMap;

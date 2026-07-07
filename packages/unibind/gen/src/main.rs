@@ -14,6 +14,7 @@ use unibind_core::ir::Interface;
 use unibind_gen::artifact;
 use unibind_gen::host::{self, HostEmitter};
 use unibind_gen::py::PyEmitter;
+use unibind_gen::rs::RsEmitter;
 use unibind_gen::ts::TsEmitter;
 
 /// Render host-language files (stubs, markers, wrapper modules) from the
@@ -26,12 +27,15 @@ struct Cli {
 }
 
 /// One subcommand per target language. `ex` (phase 5, issue #1995) joins
-/// alongside `py` and `ts` with its backend.
+/// alongside `py`, `rs`, and `ts` with its backend.
 #[derive(clap::Subcommand)]
 enum Command {
     /// Emit the Python host files: `<package>/<module>.pyi`,
     /// `<package>/py.typed`, and the wrapper `<package>/__init__.py`.
     Py(PyArgs),
+    /// Emit the Rust client crate: `Cargo.toml`, the safe `Engine` wrapper
+    /// sources, and (with `--workspace-deps`) the package.nix marker.
+    Rs(RsArgs),
     /// Emit the TypeScript host files: `index.d.ts` and the `CommonJS`
     /// `index.js` wrapper around the native addon.
     Ts(TsArgs),
@@ -57,6 +61,26 @@ struct PyArgs {
 }
 
 #[derive(clap::Args)]
+struct RsArgs {
+    /// Compiled cdylib (or any object file) carrying the embedded IR.
+    #[arg(long)]
+    artifact: PathBuf,
+
+    /// The generated crate's `[package] name`.
+    #[arg(long)]
+    crate_name: String,
+
+    /// Resolve dependencies through `workspace = true` (and emit the
+    /// package.nix registry marker) instead of concrete versions.
+    #[arg(long)]
+    workspace_deps: bool,
+
+    /// Output root; the crate's files are written at paths relative to it.
+    #[arg(long)]
+    out: PathBuf,
+}
+
+#[derive(clap::Args)]
 struct TsArgs {
     /// Compiled cdylib (or renamed `.node` addon) carrying the embedded IR.
     #[arg(long)]
@@ -76,6 +100,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Py(args) => run_py(&args),
+        Command::Rs(args) => run_rs(&args),
         Command::Ts(args) => run_ts(&args),
     }
 }
@@ -87,6 +112,17 @@ fn run_py(args: &PyArgs) -> anyhow::Result<()> {
     let emitter = PyEmitter {
         package: args.package.clone(),
         skip_init: args.skip_init,
+    };
+    emit_and_write(&emitter, interface, &args.out)
+}
+
+fn run_rs(args: &RsArgs) -> anyhow::Result<()> {
+    let embedded = artifact::read(&args.artifact)?;
+    let interface = single_interface(&args.artifact, &embedded, "rs")?;
+
+    let emitter = RsEmitter {
+        crate_name: args.crate_name.clone(),
+        workspace_deps: args.workspace_deps,
     };
     emit_and_write(&emitter, interface, &args.out)
 }

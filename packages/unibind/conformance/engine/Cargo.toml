@@ -1,0 +1,22 @@
+[package]
+name = "unibind-conformance-engine"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Conformance engine cdylib proving the unibind Rust backend end to end"
+
+[lib]
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+futures-core.workspace = true
+stabby.workspace = true
+unibind = { workspace = true, features = ["rs"] }
+# `UniStream` is the exported stream return type (the phase 2 surface).
+unibind-runtime.workspace = true
+# The generated glue boxes `UniStream` returns into the shared dynptr
+# protocol, so a stream-exporting engine links the protocol crate directly.
+unibind-stream.workspace = true

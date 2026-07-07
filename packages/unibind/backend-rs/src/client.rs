@@ -1,0 +1,274 @@
+//! Render the generated client crate: every file of a standalone
+//! `<name>-client` crate wrapping one engine cdylib.
+
+use proc_macro2::TokenStream;
+use quote::quote;
+use unibind_core::ir;
+
+use crate::ty::{self, Paths};
+use crate::{
+    error, function, loader, module, record, ClientOptions, RenderError, RenderedCrate,
+    RenderedFile,
+};
+
+/// Render the client crate for one interface.
+///
+/// The result is pure data (paths plus contents); the caller writes it to
+/// disk. Rust files come back `prettyplease`-formatted so the generated
+/// crate is committable source, not macro soup.
+///
+/// # Errors
+///
+/// Fails for surface this backend does not implement (data enums, objects,
+/// async or fallible stream returns) or when the IR cannot serialize for
+/// the handshake hash.
+pub fn render_client(
+    interface: &ir::Interface,
+    options: &ClientOptions,
+) -> Result<RenderedCrate, RenderError> {
+    module::reject_unrendered(interface)?;
+    let mut files = vec![
+        RenderedFile {
+            path: "Cargo.toml".to_owned(),
+            contents: cargo_toml(interface, options),
+        },
+        rust_file("src/lib.rs", &lib_file(interface, options))?,
+        rust_file("src/records.rs", &records_file(interface))?,
+        rust_file("src/abi.rs", &abi_file(interface))?,
+        rust_file("src/error.rs", &error_file(interface))?,
+        rust_file("src/engine.rs", &loader::engine_file(interface)?)?,
+    ];
+    if options.workspace_deps {
+        // The crate joins this repo's workspace, whose package registry
+        // requires the metadata marker; emitting it here keeps the committed
+        // crate byte-identical to generator output (the drift check diffs
+        // the whole directory).
+        files.push(RenderedFile {
+            path: "package.nix".to_owned(),
+            contents: package_nix(options),
+        });
+    }
+    Ok(RenderedCrate { files })
+}
+
+fn rust_file(path: &str, tokens: &TokenStream) -> Result<RenderedFile, RenderError> {
+    let file: syn::File = syn::parse2(tokens.clone()).map_err(|parse_error| {
+        RenderError::new(format!(
+            "generated `{path}` does not parse (a backend bug): {parse_error}"
+        ))
+    })?;
+    Ok(RenderedFile {
+        path: path.to_owned(),
+        contents: prettyplease::unparse(&file),
+    })
+}
+
+fn cargo_toml(interface: &ir::Interface, options: &ClientOptions) -> String {
+    let description = format!(
+        "Generated unibind Rust client for the `{}` interface",
+        interface.name
+    );
+    let has_streams = interface.functions.iter().any(function::returns_stream);
+    let package = if options.workspace_deps {
+        format!(
+            "[package]\nname = \"{name}\"\nversion.workspace = true\nedition.workspace = true\n\
+             publish.workspace = true\ndescription = \"{description}\"\n\n[lints]\nworkspace = true\n",
+            name = options.crate_name,
+        )
+    } else {
+        format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\
+             publish = false\ndescription = \"{description}\"\n",
+            name = options.crate_name,
+        )
+    };
+    // Dependencies stay alphabetical. Interfaces without streams skip the
+    // stream protocol deps entirely; unibind-stream is not published, so an
+    // out-of-workspace client pins it by path (see the crate docs).
+    let mut dependencies = String::from("[dependencies]\n");
+    if has_streams {
+        dependencies.push_str(if options.workspace_deps {
+            "futures-core.workspace = true\n"
+        } else {
+            "futures-core = \"0.3\"\n"
+        });
+    }
+    dependencies.push_str(
+        "# stabby resolves `libloading` 0.9 and implements `StabbyLibrary` on that\n\
+         # exact `Library` type, so the client pins 0.9 directly.\n\
+         libloading = \"0.9\"\n",
+    );
+    dependencies.push_str(if options.workspace_deps {
+        "stabby.workspace = true\n"
+    } else {
+        // >=72.1.8: the `&mut dyn` vtable fix (ZettaScaleLabs/stabby#130)
+        // and deterministic macro expansion.
+        "stabby = { version = \"72.1.8\", features = [\"libloading\"] }\n"
+    });
+    if has_streams {
+        dependencies.push_str(if options.workspace_deps {
+            "unibind-stream.workspace = true\n"
+        } else {
+            "unibind-stream = { path = \"../unibind-stream\" }\n"
+        });
+    }
+    format!("{package}\n{dependencies}")
+}
+
+fn package_nix(options: &ClientOptions) -> String {
+    format!(
+        "{{\n  id = \"{}\";\n  inRustWorkspace = true;\n  passthruTests = true;\n}}\n",
+        options.crate_name
+    )
+}
+
+fn lib_file(interface: &ir::Interface, options: &ClientOptions) -> TokenStream {
+    let title = format!(
+        "Generated unibind Rust client for the `{}` interface.",
+        interface.name
+    );
+    let generated = format!(
+        "Generated by `unibind-gen rs` (crate `{}`); do not edit by hand — \
+         regenerate from the engine cdylib's embedded IR instead.",
+        options.crate_name
+    );
+
+    let record_names: Vec<_> = interface
+        .records
+        .iter()
+        .map(|rec| ty::name_ident(&rec.name))
+        .collect();
+    let error_names: Vec<_> = interface
+        .errors
+        .iter()
+        .map(|err| ty::name_ident(&err.name))
+        .collect();
+    let future_names: Vec<_> = interface
+        .functions
+        .iter()
+        .filter(|func| matches!(func.asyncness, ir::Asyncness::Async))
+        .map(function::future_wrapper_ident)
+        .collect();
+    let stream_names: Vec<_> = interface
+        .functions
+        .iter()
+        .filter(|func| function::returns_stream(func))
+        .map(function::stream_wrapper_ident)
+        .collect();
+    let record_export = (!record_names.is_empty()).then(|| {
+        quote!(pub use records::{#(#record_names),*};)
+    });
+    let error_export = quote!(pub use error::{LoadError #(, #error_names)*};);
+    let future_export = (!future_names.is_empty()).then(|| {
+        quote!(pub use engine::{#(#future_names),*};)
+    });
+    let stream_export = (!stream_names.is_empty()).then(|| {
+        quote!(pub use engine::{#(#stream_names),*};)
+    });
+
+    quote! {
+        #![doc = #title]
+        #![doc = ""]
+        #![doc = #generated]
+        #![doc = ""]
+        #![doc = "# Loading and the handshake"]
+        #![doc = ""]
+        #![doc = "[`Engine::load`] dlopens the engine cdylib, resolves the \
+                  handshake symbol first, and compares the engine's IR hash \
+                  against the one baked into this crate. On any mismatch \
+                  loading fails with [`LoadError::IrHashMismatch`]; there is \
+                  no degraded mode. Every other symbol resolves through \
+                  stabby's structural type-report check, so an ABI drift \
+                  fails at load time, never at call time."]
+        #![doc = ""]
+        #![doc = "# Allocator contract"]
+        #![doc = ""]
+        #![doc = "Values cross the boundary in stabby's default `RustAlloc`, \
+                  which frees through whichever global allocator the \
+                  *allocating* side compiled in. Both the engine and this \
+                  client must therefore keep Rust's default global \
+                  allocator (no `#[global_allocator]` on either side)."]
+        #![doc = ""]
+        #![doc = "# Library lifetime"]
+        #![doc = ""]
+        #![doc = "The [`Engine`] keeps the library mapped for its whole \
+                  lifetime and never exposes unloading: returned values and \
+                  futures carry vtable pointers into the engine's code, so \
+                  unloading while any of them is alive would be undefined \
+                  behavior."]
+
+        pub mod abi;
+        pub mod engine;
+        pub mod error;
+        pub mod records;
+
+        pub use engine::Engine;
+        #future_export
+        #stream_export
+        #error_export
+        #record_export
+    }
+}
+
+fn records_file(interface: &ir::Interface) -> TokenStream {
+    // Named fields of sibling records spell bare within this module.
+    let paths = Paths {
+        plain: TokenStream::new(),
+        mirror: quote!(crate::abi::),
+        report_module: module::report_module(interface),
+    };
+    let records = interface
+        .records
+        .iter()
+        .map(|rec| record::plain_record(rec, &paths));
+    quote! {
+        #![doc = "Plain-data records mirrored from the engine interface, \
+                  with owned `std` types."]
+
+        #(#records)*
+    }
+}
+
+fn abi_file(interface: &ir::Interface) -> TokenStream {
+    // Mirrors are siblings within this module; their plain counterparts
+    // live in `crate::records`.
+    let paths = Paths {
+        plain: quote!(crate::records::),
+        mirror: TokenStream::new(),
+        report_module: module::report_module(interface),
+    };
+    let mirrors = interface.records.iter().map(|rec| {
+        let mirror = record::mirror_struct(rec, &paths);
+        let conversions = record::mirror_conversions(rec, &paths);
+        quote! {
+            #mirror
+            #conversions
+        }
+    });
+    let carriers = interface
+        .errors
+        .iter()
+        .map(|err| error::stable_struct(err, &paths));
+    quote! {
+        #![doc = "The raw ABI surface shared with the engine: stable mirror \
+                  structs and error carriers, token-identical to the types \
+                  the engine's generated glue compiles. stabby's report \
+                  check verifies the match structurally at load time."]
+
+        #(#mirrors)*
+        #(#carriers)*
+    }
+}
+
+fn error_file(interface: &ir::Interface) -> TokenStream {
+    let errors = interface.errors.iter().map(error::client_error);
+    let load_error = error::load_error();
+    quote! {
+        #![doc = "Idiomatic error types: one enum per engine error enum \
+                  (variants carry the engine-side `Display` text) plus the \
+                  load-time `LoadError`."]
+
+        #load_error
+        #(#errors)*
+    }
+}

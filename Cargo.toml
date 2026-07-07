@@ -94,13 +94,18 @@ members = [
   "packages/tui/tui-node",
   "packages/tui/tui-py",
   "packages/unibind/backend-py",
+  "packages/unibind/backend-rs",
   "packages/unibind/backend-ts",
   "packages/unibind/conformance",
   "packages/unibind/conformance-ts",
+  "packages/unibind/conformance/client",
+  "packages/unibind/conformance/consumer",
+  "packages/unibind/conformance/engine",
   "packages/unibind/core",
   "packages/unibind/gen",
   "packages/unibind/macros",
   "packages/unibind/runtime",
+  "packages/unibind/stream",
   "packages/vm/panes/audio",
   "packages/vm/panes/compositor",
   "packages/vm/panes/host",
@@ -202,6 +207,7 @@ file-language = { path = "packages/code/file-language" }
 flecs-query-core = { path = "packages/flecs-query/core" }
 fontdue = "0.9"
 futures = "0.3"
+futures-core = "0.3"
 git2 = { version = "0.21", default-features = false }
 glob = "0.3"
 hex = "0.4"
@@ -295,6 +301,11 @@ source-parquet = { path = "packages/search/source/parquet" }
 sink-mixedbread = { path = "packages/search/sink/mixedbread" }
 sink-parquet = { path = "packages/search/sink/parquet" }
 snafu = "0.9"
+# The unibind Rust backend's ABI layer. >=72.1.8: the `&mut dyn` vtable fix
+# (ZettaScaleLabs/stabby#130) and deterministic macro expansion for
+# reproducible builds. `libloading` is only the client side's need, but one
+# workspace entry keeps engine and client on one resolution.
+stabby = { version = "72.1.8", features = ["libloading"] }
 strip-ansi-escapes = "0.2"
 syn = { version = "2", features = ["full"] }
 tango-bench = "0.7"
@@ -351,9 +362,12 @@ tree-sitter-yaml = "0.7"
 tui = { path = "packages/tui/tui" }
 unibind = { path = "packages/unibind/macros" }
 unibind-backend-py = { path = "packages/unibind/backend-py" }
+unibind-backend-rs = { path = "packages/unibind/backend-rs" }
 unibind-backend-ts = { path = "packages/unibind/backend-ts" }
+unibind-conformance-client = { path = "packages/unibind/conformance/client" }
 unibind-core = { path = "packages/unibind/core" }
 unibind-runtime = { path = "packages/unibind/runtime" }
+unibind-stream = { path = "packages/unibind/stream" }
 url = { version = "2.5.8", default-features = false }
 uuid = "1"
 webpki-roots = "1"

@@ -252,6 +252,55 @@ backend still rejects) and runs as
 | 5     | #1995 | Elixir backend (rustler, generated `.ex`, `@spec`) |
 | 6     | #1996 | adopt for ix-sdk, delete sdk-py and sdk-ts |
 
+## Phase 4: the Rust client backend
+
+The `rs` cargo feature makes `#[unibind::export]` additionally emit
+ABI-stable exports (stabby 72.1.8) into the annotated crate: a hidden module
+with a `#[stabby::stabby]` mirror struct per record, a stable error carrier
+per error enum (variant index + `Display` text), one `#[stabby::export]`
+`extern "C"` wrapper per function, and a handshake symbol returning the hex
+SHA-256 of the exact IR JSON bytes the link section embeds. crABI would be
+the language-level answer, but it remains an unimplemented compiler
+experiment, so the ABI is pinned by stabby's structural type reports
+instead.
+
+`unibind-gen rs` (the `rust` target of `unibind.lib.build`) renders the
+consumer half from the built cdylib's embedded IR: a complete
+`<name>-client` crate
+that dlopens the engine cdylib, resolves the handshake symbol first, and
+refuses to load on any hash mismatch — no fallback. Every other symbol
+resolves through `get_stabbied`, so a signature drift fails at load time.
+Sync exports become safe methods on an `Engine`; async exports cross as
+`stabby::future::DynFuture` and come back as named `impl Future` wrappers,
+so `.await` works and dropping the future before completion drops the
+engine-side future through the ABI vtable — real cancellation, proven by the
+conformance suite's `hang_until_dropped` witness. Wakers cross through
+stabby's safe `StableWaker` (one allocation per waker clone).
+
+Type-mapping additions for the stable boundary: `HashMap<K, V>` crosses as
+`stabby::vec::Vec<Tuple2<K, V>>` (stabby has no stable map), `PathBuf` /
+`&Path` cross as unix `OsStr` bytes, and borrowed argument types cross by
+value (the boundary conversion clones anyway). A `UniStream<T>` return (the
+phase 2 stream surface) crosses through `unibind-stream`, a small shared
+crate declaring the ABI-stable `RawStream` protocol — shared because stabby
+stamps a trait vtable's type report with its declaration site's module
+path, so per-crate copies could never match. Both sides must keep Rust's
+default global allocator, and the generated `Engine` never exposes
+unloading; the generated crate's docs spell out both contracts.
+
+`packages/unibind/conformance` is the proof: `engine/` is a cdylib built
+with the `rs` feature, `client/` is the checked-in generated crate (the
+`rust-unibind-conformance-consumer-client-drift` check regenerates it and
+requires byte identity), and `consumer/` is a binary that loads the engine
+via `UNIBIND_CONFORMANCE_ENGINE` and asserts record round trips, error
+mapping, an awaited async call, and Drop-cancellation
+(`rust-unibind-conformance-consumer-integration`). The consumer has no cargo
+dependency edge on the engine, and `lib/rust/workspace.nix` gives each crate
+its own source fileset, so cargo-unit derivations for the consumer never
+take the engine's source as input: an engine rebuild changes only engine
+units and the runCommand check, never recompiles client or consumer units —
+a compile-time firewall between the two sides of the ABI.
+
 ## Phase 0 in the tree
 
 `packages/code/scipql/py` is the proving port: the same five functions, the

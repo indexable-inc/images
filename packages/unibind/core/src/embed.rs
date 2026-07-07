@@ -18,6 +18,22 @@ pub const LINK_SECTION_ELF: &str = ".unibind_ir";
 /// Mach-O `segment,section` pair; section names cap at 16 bytes.
 pub const LINK_SECTION_MACH_O: &str = "__DATA,__unibind_ir";
 
+/// The exact bytes the link section carries: one compact `serde_json`
+/// rendering of the interface. The Rust client backend hashes these same
+/// bytes for its load-time handshake, so the serialization lives here once
+/// and the two consumers cannot drift byte-wise.
+///
+/// # Errors
+///
+/// Fails only when the interface cannot serialize, which would be a bug in
+/// the IR types rather than in the annotated module.
+pub fn ir_json(interface: &Interface) -> Result<Vec<u8>, LowerError> {
+    serde_json::to_vec(interface).map_err(|error| LowerError {
+        span: proc_macro2::Span::call_site(),
+        message: format!("serializing the unibind interface failed: {error}"),
+    })
+}
+
 /// Render the `#[used]` static carrying the serialized `interface`.
 ///
 /// # Errors
@@ -25,10 +41,7 @@ pub const LINK_SECTION_MACH_O: &str = "__DATA,__unibind_ir";
 /// Fails only when the interface cannot serialize, which would be a bug in
 /// the IR types rather than in the annotated module.
 pub fn ir_static(interface: &Interface) -> Result<TokenStream, LowerError> {
-    let json = serde_json::to_vec(interface).map_err(|error| LowerError {
-        span: proc_macro2::Span::call_site(),
-        message: format!("serializing the unibind interface failed: {error}"),
-    })?;
+    let json = ir_json(interface)?;
     let len = json.len();
     let bytes = proc_macro2::Literal::byte_string(&json);
     Ok(quote! {
