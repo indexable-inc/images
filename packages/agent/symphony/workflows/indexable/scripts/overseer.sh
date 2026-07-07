@@ -28,10 +28,10 @@ now_iso="$(date +%Y-%m-%dT%H:%M:%S%z)"
 # Every process, parsed into fields once; agent/hot/stall views are jq
 # filters over this. tty="??" separates headless (launchd, cron, exec
 # nodes) from interactive terminal sessions.
-ps_json="$(ps axo pid=,pcpu=,etime=,tty=,args= | jq -Rs '
+ps_json="$(ps axo pid=,ppid=,pcpu=,etime=,tty=,args= | jq -Rs '
   [split("\n")[]
-   | capture("^ *(?<pid>[0-9]+) +(?<pcpu>[0-9.]+) +(?<etime>[0-9:-]+) +(?<tty>[^ ]+) +(?<args>.*)$")?
-   | .pid |= tonumber | .pcpu |= tonumber
+   | capture("^ *(?<pid>[0-9]+) +(?<ppid>[0-9]+) +(?<pcpu>[0-9.]+) +(?<etime>[0-9:-]+) +(?<tty>[^ ]+) +(?<args>.*)$")?
+   | .pid |= tonumber | .ppid |= tonumber | .pcpu |= tonumber
    | .args |= .[0:220]
    # elapsed minutes from etime (mm:ss, hh:mm:ss, or d-hh:mm:ss)
    | .minutes = (.etime | capture("^((?<d>[0-9]+)-)?((?<h>[0-9]+):)?(?<m>[0-9]+):(?<s>[0-9]+)$")?
@@ -51,12 +51,24 @@ cwd_map="$(
 )"
 agents="$(jq --argjson cwds "$cwd_map" 'map(. + {cwd: ($cwds[.pid | tostring] // null)})' <<<"$agents")"
 
-hot="$(jq '[.[] | select(.pcpu >= 30)] | sort_by(-.pcpu) | .[0:8]' <<<"$ps_json")"
+# parent_chain: ancestor command lines, child-first. Root helpers show as
+# bare "(name)" with no args, so ancestry is the only evidence of ownership
+# the judge gets (#2169: a root fs_usage owned by nix-web-monitor was
+# flagged as an orphan and a fixer was dispatched to kill it).
+parents_def='def parents($by): [.ppid | tostring | $by[.]? // empty
+  | recurse($by[.ppid | tostring]? // empty) | .args] | .[0:5];'
+hot="$(jq "$parents_def"'
+  INDEX(.pid | tostring) as $by
+  | [.[] | select(.pcpu >= 30) | . + {parent_chain: parents($by)}]
+  | sort_by(-.pcpu) | .[0:8]' <<<"$ps_json")"
 
 # Wedge heuristic (#2011 signature): a headless agent process idling at
 # ~0% CPU for a long time. Interactive agents idle at 0% legitimately
 # (waiting on the human), so only tty-less processes qualify.
-stalled="$(jq '[.[] | select(.tty == "??" and .pcpu < 1 and .minutes >= 15)]' <<<"$agents")"
+stalled="$(jq --argjson all "$ps_json" "$parents_def"'
+  INDEX($all[]; .pid | tostring) as $by
+  | [.[] | select(.tty == "??" and .pcpu < 1 and .minutes >= 15)
+     | . + {parent_chain: parents($by)}]' <<<"$agents")"
 
 # Claude Code sessions active in the last 12h: cwd and texts come from
 # the transcript itself (the dir-name encoding is lossy). age_min against

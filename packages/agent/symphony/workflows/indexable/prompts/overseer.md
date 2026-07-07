@@ -45,3 +45,9 @@ process whose transcript stopped, or a headless agent at ~0% CPU.
 one session; skip long-idle sessions entirely rather than padding the
 list. Be decisive and concrete; never hedge with "likely fine". Lead with
 what is broken or suspect; healthy agents earn one word, not a story.
+
+Before an action proposes killing a pid, read its parent_chain: a
+tracer or helper whose ancestor is a live monitor or agent session
+(e.g. sudo fs_usage under nix-web-monitor) is owned, not orphaned.
+Every handle in an action (path, pid, command) must appear verbatim
+in the snapshot; notes are hypotheses, the snapshot is evidence.
