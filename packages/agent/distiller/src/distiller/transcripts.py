@@ -89,10 +89,23 @@ def _text_blocks(content: object) -> str:
     return ""
 
 
+# Box-drawing / block glyphs that dominate a pasted terminal (TUI) screen; a
+# handful of them early in a "user" message means a paste, not typed prose.
+_TUI_GLYPHS = frozenset("\u256d\u256e\u2570\u256f\u2502\u251c\u2524\u252c\u2534\u253c\u2500\u2550\u2551\u2554\u2557\u255a\u255d\u2590\u258c\u2588\u2580\u2584")
+
+
+def _is_pasted_tui_text(text: str) -> bool:
+    """A pasted terminal screen or paste placeholder, not typed prose."""
+    if text.startswith("[Pasted text"):
+        return True
+    head = text[:400]
+    return sum(1 for ch in head if ch in _TUI_GLYPHS) >= 8
+
+
 def _is_meta_user_text(text: str) -> bool:
-    """Harness-injected user content, not a human signal."""
+    """Harness-injected or pasted user content, not a human signal."""
     stripped = text.lstrip()
-    return stripped.startswith(("<", "Caveat:"))
+    return stripped.startswith(("<", "Caveat:")) or _is_pasted_tui_text(stripped)
 
 
 def parse_session(path: Path) -> Session | None:
@@ -158,7 +171,7 @@ def parse_session(path: Path) -> Session | None:
                     continue
                 if not isinstance(content, str) or not content.strip():
                     continue
-                if _is_meta_user_text(content):
+                if record.get("isMeta") or _is_meta_user_text(content):
                     continue
                 if not saw_user:
                     saw_user = True
@@ -217,8 +230,12 @@ _CONTAINER_DIRS = frozenset(
 )
 
 
-def _resolve_path(cwd: str | None, transcript_dir: str) -> str:
-    """The session's working dir: the recorded cwd, else the decoded dir name."""
+def resolve_cwd(cwd: str | None, transcript_dir: str) -> str:
+    """The session's working dir: the recorded cwd, else the decoded dir name.
+
+    Public: ``claude_history`` (packages/mcp) resolves the un-munged project
+    path of a search hit through this, so the decoding lives in one place.
+    """
     if cwd:
         return cwd
     # `-home-andrew-index` -> `/home/andrew/index` (lossy but stable).
@@ -236,7 +253,7 @@ def repo_identity(cwd: str | None, transcript_dir: str) -> str | None:
     take the project-root basename. It cannot collapse two clones whose
     basenames differ, but it fixes the common clone and worktree cases.
     """
-    path = _resolve_path(cwd, transcript_dir).rstrip("/")
+    path = resolve_cwd(cwd, transcript_dir).rstrip("/")
     if not path or _SCRATCH_RE.search(path) or _HOME_RE.match(path):
         return None
     # A git worktree lives at ``<repo>/.claude/worktrees/<name>``; the repo root
@@ -262,7 +279,7 @@ def legacy_state_slugs(sessions: list[Session]) -> list[str]:
     slug(s) for a repo's sessions lets ``load`` migrate the old file forward
     (newest cwd first, so the most recent silo wins on collision).
 
-    The old key used ``_resolve_path`` -- the recorded ``cwd`` when present, else
+    The old key used ``resolve_cwd`` -- the recorded ``cwd`` when present, else
     the decoded transcript-dir name -- so a session that never recorded a ``cwd``
     still wrote a legacy file under that decoded path. Use the same fallback here
     so those transcripts migrate too instead of starting from empty state.
@@ -270,7 +287,7 @@ def legacy_state_slugs(sessions: list[Session]) -> list[str]:
     seen: set[str] = set()
     slugs: list[str] = []
     for session in sorted(sessions, key=lambda s: s.last_ts or 0, reverse=True):
-        raw = _resolve_path(session.cwd, Path(session.path).parent.name)
+        raw = resolve_cwd(session.cwd, Path(session.path).parent.name)
         slug = project_slug(raw)
         if slug == "unknown" or slug in seen:
             continue

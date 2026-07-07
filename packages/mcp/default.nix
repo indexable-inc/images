@@ -610,6 +610,37 @@
       cp -r ${worktreePythonSource}/worktree/. "$site/"
     ''
   );
+
+  # Local Claude Code history search (issue #2245): `await
+  # claude_history.search(pattern)` returns one polars row per matching session
+  # under ~/.claude/projects -- session id, un-munged cwd, start/end
+  # timestamps, hit count, first real user message -- ranked by hit count. Pure
+  # Python: ripgrep matching rides the bundled `fsearch`, transcript parsing
+  # reuses the distiller's reader (below), so the transcript schema stays owned
+  # in one place on the Python side.
+  claudeHistoryPythonSource = builtins.path {
+    name = "ix-mcp-claude-history-python-source";
+    path = ./src/claude_history;
+  };
+  claudeHistoryModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-claude-history-python-module"
+    {
+      strictDeps = true;
+      meta.description = "Local Claude Code history search bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/claude_history"
+      mkdir -p "$site"
+      cp -r ${claudeHistoryPythonSource}/claude_history/. "$site/"
+    ''
+  );
+  # The distiller's transcript reader (packages/agent/distiller), the single
+  # Python-side owner of the Claude transcript schema, bundled from that
+  # package's own passthru so the module recipe is not duplicated here.
+  # `claude_history` imports `distiller.transcripts` (stdlib-only); the
+  # distiller's optional deps (pyarrow/boto3) stay out of this interpreter.
+  distillerModule = pkgs.ix-distiller.passthru.pythonModule;
+  distillerPythonSource = pkgs.ix-distiller.passthru.pythonSource;
   # Example task-dependency graphs generated in Python and stored in SQLite:
   # `import tasks`, then `tasks.seed("tasks.sqlite")` writes a ~100-node DAG and
   # `tasks.load(...)` / `tasks.frame(...)` read it back. The task-graph demo site
@@ -1289,6 +1320,8 @@
       shModule
       svelteModule
       worktreeModule
+      claudeHistoryModule
+      distillerModule
       browserModule
       xModule
       slackModule
@@ -1446,6 +1479,7 @@
     "view"
     "worktree"
     "mesh"
+    "claude_history"
   ];
   # The `ix_notebook_mcp` server package is migrated file-by-file (the package
   # as a whole is still ~200 errors from strict-clean, index#1902): each file
@@ -1460,7 +1494,9 @@
     # All src module package dirs go on MYPYPATH so first-party cross-imports
     # resolve; the green subset are the actual check targets.
     allSrcModules = builtins.attrNames (builtins.readDir ./src);
-    mypypath = lib.concatMapStringsSep ":" (m: "src/${m}") allSrcModules;
+    # `claude_history` imports the distiller's transcript reader, so the
+    # distiller source rides MYPYPATH alongside the src module dirs.
+    mypypath = lib.concatMapStringsSep ":" (m: "src/${m}") allSrcModules + ":distiller-src";
     targets = lib.concatStringsSep " " (
       map (m: "src/${m}/${m}") strictGreenModules
       ++ map (f: "ix_notebook_mcp/${f}") strictGreenServerFiles
@@ -1479,8 +1515,9 @@
     ''
       cp -r ${ixNotebookMcpSource} ix_notebook_mcp
       cp -r ${./src} src
+      cp -r ${distillerPythonSource} distiller-src
       cp ${./zuban.ini} zuban.ini
-      chmod -R u+w ix_notebook_mcp src
+      chmod -R u+w ix_notebook_mcp src distiller-src
 
       export MYPYPATH=${lib.escapeShellArg mypypath}:.
       echo "zuban check --strict over: ${toString strictGreenModules} + ix_notebook_mcp: ${toString strictGreenServerFiles}"
@@ -3001,7 +3038,7 @@
         pkgs.fd
       ];
       strictDeps = true;
-      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246)";
+      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246) + claude-history session search (#2245)";
     }
     ''
       export HOME=$TMPDIR/home
@@ -3022,6 +3059,8 @@
       cp ${./tests/test_fsearch_glob.py} test_fsearch_glob.py
       # Issue #2246: grep(files_only=True) -> path + match-count rows via rg --count-matches.
       cp ${./tests/test_fsearch_files_only.py} test_fsearch_files_only.py
+      # Issue #2245: ranked per-session search over local Claude Code history.
+      cp ${./tests/test_claude_history.py} test_claude_history.py
       # sh Output rendering regressions (issue #1766: a failed build must not
       # read as success/still-running); imports the site-packages sh module.
       cp ${./tests/test_sh_module.py} test_sh_module.py
@@ -3034,6 +3073,7 @@
         test_fsearch_partial.py \
         test_fsearch_glob.py \
         test_fsearch_files_only.py \
+        test_claude_history.py \
         test_sh_module.py \
         test_build_info.py \
         -q -p no:cacheprovider >stdout 2>stderr || {

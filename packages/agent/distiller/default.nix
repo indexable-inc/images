@@ -151,6 +151,11 @@ in
       (old.passthru or {})
       // {
         python = distillerPython;
+        # The bare importable package and its source tree, for embedding the
+        # transcript reader into other interpreters without duplicating the
+        # recipe: packages/mcp bundles it for `claude_history` (issue #2245).
+        pythonModule = distillerModule;
+        pythonSource = distillerSource;
         tests =
           (old.passthru.tests or {})
           // {

@@ -121,6 +121,13 @@ MODULES: tuple[Module, ...] = (
         ),
     ),
     Module(
+        "claude_history",
+        "find past local Claude Code sessions by content: `await claude_history.search(pattern)` "
+        "greps every transcript under ~/.claude/projects and returns one polars row per matching "
+        "session (session id, un-munged project cwd, start/end timestamps, hit count, first real "
+        "user message with meta / tool-result / pasted-TUI noise skipped), ranked by hit count",
+    ),
+    Module(
         "astlog",
         "Datalog over tree-sitter ASTs: tree-sitter query matches become relations, rules join "
         "them (position, text, recursion), `(lint ...)` rows become findings, rewrites turn rows "

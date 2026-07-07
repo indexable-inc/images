@@ -124,3 +124,27 @@ def test_repo_identity_heuristics() -> None:
     # dir-name fallback when cwd is absent
     assert transcripts.repo_identity(None, "-home-u-my-repo") == "repo"
     assert transcripts.project_slug("/home/u/my repo!") == "home-u-my-repo"
+
+
+def test_is_meta_records_and_pasted_noise_never_become_the_goal(tmp_path: Path) -> None:
+    # Records flagged isMeta (even plain-looking prose), pasted-TUI screens,
+    # and paste placeholders all precede the typed request; none may win.
+    path = tmp_path / "proj" / "s.jsonl"
+    write_transcript(
+        path,
+        [
+            rec("user", "Caveat: injected by the harness", isMeta=True),
+            rec("user", "plain-looking but harness-flagged", isMeta=True),
+            rec("user", "\u256d\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e\n\u2502 TUI \u2502\n\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f"),
+            rec("user", "[Pasted text #1 +120 lines]"),
+            rec("user", "real goal"),
+        ],
+    )
+    session = transcripts.parse_session(path)
+    assert session is not None
+    assert session.goal == "real goal"
+
+
+def test_resolve_cwd_prefers_the_recorded_cwd() -> None:
+    assert transcripts.resolve_cwd("/home/u/repo", "-home-u-other") == "/home/u/repo"
+    assert transcripts.resolve_cwd(None, "-home-u-repo") == "/home/u/repo"
