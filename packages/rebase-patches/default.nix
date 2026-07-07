@@ -129,7 +129,7 @@ in
           if ($dest | path exists) { rm --recursive --force $dest }
           cp --recursive ($rr_scratch | path join $key) $dest
         }
-        print $"(ansi yellow)rebase-patches: ($fork.name): exported (($resolved | length)) rerere resolution(s) to ($fork.patchDir)/rerere: (($resolved) | str join ', ')(ansi reset)"
+        print $"(ansi yellow)rebase-patches: ($fork.name): exported (($resolved | length)) rerere resolution\(s\) to ($fork.patchDir)/rerere: (($resolved) | str join ', ')(ansi reset)"
       }
 
       # Print every resolution rerere REPLAYED during the rebase, keyed by the
@@ -144,7 +144,7 @@ in
           | where {|l| $l | str contains "using previous resolution" }
         )
         if ($replays | is-empty) { return }
-        print $"(ansi yellow)rebase-patches: ($fork.name): rerere REPLAYED (($replays | length)) previously-recorded resolution(s):(ansi reset)"
+        print $"(ansi yellow)rebase-patches: ($fork.name): rerere REPLAYED (($replays | length)) previously-recorded resolution\(s\):(ansi reset)"
         for r in $replays {
           print $"  ($r | str trim)"
         }
@@ -221,19 +221,27 @@ in
         # Rebase our branch onto the new base. 3-way + mergiraf absorb the
         # mechanical drift; a real semantic collision aborts here. Capture the
         # combined output so we can surface any rerere replays.
-        let rebased = (do { git -C $scratch rebase --onto $new $old } | complete)
-        let rebase_log = ($rebased.stdout + $rebased.stderr)
-        if $rebased.exit_code != 0 {
-          rerere report-replays $fork $scratch $rebase_log
+        mut rebased = (do { git -C $scratch rebase --onto $new $old } | complete)
+        mut rebase_log = ($rebased.stdout + $rebased.stderr)
+        mut stops = 0
+        while $rebased.exit_code != 0 {
           let conflict = (
             git -C $scratch diff --name-only --diff-filter=U
             | lines
-            | str join ", "
           )
-          # Persist any resolutions recorded so far so a human's earlier fixes are
-          # not lost, then leave the scratch repo conflicted for them to finish.
-          rerere export $fork $scratch
-          error make { msg: $"rebase-patches: ($fork.name): rebase onto ($new) hit an unresolved conflict in [($conflict)]; resolve in the scratch repo then `git rebase --continue` and re-run, or fix the offending patch. Scratch repo: ($scratch)" }
+          $stops += 1
+          if (not ($conflict | is-empty)) or $stops > 100 {
+            rerere report-replays $fork $scratch $rebase_log
+            # Persist any resolutions recorded so far so a human's earlier fixes are
+            # not lost, then leave the scratch repo conflicted for them to finish.
+            rerere export $fork $scratch
+            error make { msg: $"rebase-patches: ($fork.name): rebase onto ($new) hit an unresolved conflict in [($conflict | str join ', ')]; resolve in the scratch repo then `git rebase --continue` and re-run, or fix the offending patch. Scratch repo: ($scratch)" }
+          }
+          # rerere replayed and staged a recorded resolution for every conflicted
+          # path; git still stops so a human could review, but the committed cache
+          # is the reviewed resolution of record, so resume the rebase.
+          $rebased = (do { git -C $scratch -c core.editor=true rebase --continue } | complete)
+          $rebase_log = ($rebase_log + $rebased.stdout + $rebased.stderr)
         }
 
         # Loudly report and persist any rerere resolutions that fired.
