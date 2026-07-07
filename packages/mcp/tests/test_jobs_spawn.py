@@ -14,7 +14,7 @@ on ``await``, cancel works).
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+import sys
 
 import pytest
 
@@ -34,7 +34,7 @@ def test_spawn_registers_and_awaiting_yields_the_value(monkeypatch: pytest.Monke
         await asyncio.sleep(0)
         return "payload"
 
-    async def drive() -> tuple[runtime.Job, Any]:
+    async def drive() -> tuple[runtime.Job, runtime.Result | None]:
         job = runtime.jobs.spawn(work(), name="my-work")
         # First-class from the moment spawn returns: registered and running.
         assert runtime.jobs[job.id] is job
@@ -71,8 +71,11 @@ def test_spawn_name_defaults_to_the_coroutine_qualname(monkeypatch: pytest.Monke
 
 def test_spawned_stdout_is_captured_under_the_job(monkeypatch: pytest.MonkeyPatch) -> None:
     # Prints made while the awaitable runs must land in the job's buffer (the
-    # pageable `jobs['<id>'].output`), exactly like a cell's prints.
+    # pageable `jobs['<id>'].output`), exactly like a cell's prints. Capture
+    # rides the same _Tee + _ix_current plumbing install() wires up, so give the
+    # bare test process the tee (install() is not run here).
     _wire(monkeypatch, {})
+    monkeypatch.setattr(sys, "stdout", runtime._Tee(sys.stdout))
 
     async def chatty() -> None:
         print("spawned hello")
@@ -104,7 +107,7 @@ def test_awaiting_a_failed_spawn_reraises_the_original_exception(monkeypatch: py
     assert job.status == "error"
     assert "spawn boom" in (job.error or "")
 
-    async def await_it() -> Any:
+    async def await_it() -> object:
         return await runtime.jobs[job.id]
 
     with pytest.raises(ValueError, match="spawn boom"):
@@ -161,7 +164,7 @@ def test_completion_sends_the_backgrounded_job_notification(monkeypatch: pytest.
     _wire(monkeypatch, {})
     sent: list[tuple[str, dict]] = []
 
-    async def fake_notify(content: str, **meta: Any) -> None:
+    async def fake_notify(content: str, **meta: object) -> None:
         sent.append((content, meta))
 
     monkeypatch.setattr(runtime, "notify", fake_notify)
@@ -178,7 +181,8 @@ def test_completion_sends_the_backgrounded_job_notification(monkeypatch: pytest.
     assert job.status == "done"
     assert len(sent) == 1
     content, meta = sent[0]
-    assert "notified" in content and "done" in content
+    assert "notified" in content
+    assert "done" in content
     assert meta["job_id"] == job.id
     assert meta["status"] == "done"
 
