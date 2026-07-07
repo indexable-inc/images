@@ -180,7 +180,7 @@
     # its own name (`codex-patched`), so derive the sourceRoot from the src's
     # name rather than hardcoding `source/`.
     sourceRoot = "${codexSrc.name}/codex-rs";
-    cargoHash = "sha256-mLpfLi5Wu/t/D8il/5xkDqCTHIeaJZ2OYMZmMIsg7E0=";
+    cargoHash = "sha256-LAOk6eeSjPOcVBuPIvPjK44WZZniAJmBCJSwHPBbrrw=";
     # buildRustPackage carries cargoDeps through overrideAttrs, so retarget the
     # nested fixed-output staging derivation when swapping the upstream source.
     cargoDeps = previousAttrs.cargoDeps.overrideAttrs (_: previousCargoAttrs: {
