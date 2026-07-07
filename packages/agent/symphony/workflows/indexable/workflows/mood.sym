@@ -1,0 +1,8 @@
+# Every-10-minute mood journal: a headless codex agent writes a short
+# first-person note about how it feels; the script owns the HTML page at
+# ~/.local/share/symphony/mood/index.html and appends each entry. Not in
+# SYMPHONY_SLACK_NOTIFY_CRON_WORKFLOWS: this is a local page, no Slack.
+# Timeout stays under the 10-minute cadence so runs cannot overlap.
+workflow "mood" on cron "*/10 * * * *" tz "America/Los_Angeles" {
+  mood <- exec "./scripts/mood.sh" timeout 480
+}
