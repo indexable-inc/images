@@ -12,6 +12,13 @@
 //!   follows every daemon worker, including ones forked after we attach).
 //! * Linux: `strace -f -p <pid>` on the daemon master (`-f` follows the per-
 //!   connection workers it forks).
+//!
+//! The tracer runs only while at least one dashboard client is subscribed to
+//! the delta feed: the panel is consumed nowhere else, and macOS allows a
+//! single machine-wide ktrace session, so an unwatched tracer starves every
+//! other `fs_usage`/`ktrace` consumer for output nobody sees (#2177). The
+//! probe parks until the first client connects and, via the babysitter's
+//! stdin-EOF kill path, ends the tracer once the last client leaves.
 
 use std::process::Stdio;
 use std::sync::Arc;
@@ -36,6 +43,14 @@ const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 /// found, so a single-user store (no daemon) or a denied tracer does not spin.
 const RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
+/// How often the parked probe re-checks for a first dashboard client.
+const CLIENT_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Panel status while the probe is parked with no dashboard client connected.
+/// Late joiners still see it: every new client is seeded from the monitor
+/// snapshot, and their arrival un-parks the probe within a poll interval.
+const UNWATCHED_STATUS: &str = "daemon tracing idle -- attaches while the dashboard is open";
+
 /// Run the daemon syscall probe until the task is aborted.
 ///
 /// Never returns an error: tracing is a best-effort overlay, so any failure
@@ -45,6 +60,15 @@ pub async fn run_daemon_probe(
     deltas: broadcast::Sender<Bytes>,
 ) {
     loop {
+        // Park until a dashboard client subscribes; see the module doc for why
+        // an unwatched tracer must not run.
+        if deltas.receiver_count() == 0 {
+            publish_status(&monitor, &deltas, UNWATCHED_STATUS).await;
+            while deltas.receiver_count() == 0 {
+                tokio::time::sleep(CLIENT_POLL_INTERVAL).await;
+            }
+        }
+
         let pids = daemon_pids().await;
         if pids.is_empty() {
             publish_status(
@@ -58,7 +82,13 @@ pub async fn run_daemon_probe(
         }
 
         match spawn_tracer(&pids).await {
-            Ok(child) => trace_loop(child, pids, &monitor, &deltas).await,
+            Ok(child) => {
+                if trace_loop(child, pids, &monitor, &deltas).await == TraceEnd::Unwatched {
+                    // The gate ended the tracer, not a failure: go straight
+                    // back to parking instead of burning the retry pause.
+                    continue;
+                }
+            }
             Err(reason) => publish_status(&monitor, &deltas, &reason).await,
         }
         // The tracer exited (daemon idle/restarted or attach denied). Surface
@@ -180,17 +210,29 @@ async fn spawn_tracer(pids: &[u32]) -> Result<Child, String> {
         .map_err(|error| format!("could not start daemon tracer: {error}"))
 }
 
+/// Why [`trace_loop`] returned, so the probe knows whether to back off
+/// (tracer died) or park immediately (the gate ended it on purpose).
+#[derive(Debug, PartialEq, Eq)]
+enum TraceEnd {
+    /// The tracer exited on its own: daemon restarted, attach denied, or died.
+    TracerExited,
+    /// The last dashboard client disconnected and the gate ended the tracer.
+    Unwatched,
+}
+
 /// Read the tracer's output, folding syscalls into a [`DaemonTrace`] and
 /// publishing a [`DaemonInfo`] every [`SAMPLE_INTERVAL`]. Returns when the
-/// tracer exits.
+/// tracer exits, or when the last dashboard client disconnects -- dropping
+/// `child` closes its stdin pipe, which trips the babysitter's EOF kill path,
+/// the one signal that reaches the root-owned tracer.
 async fn trace_loop(
     mut child: Child,
     pids: Vec<u32>,
     monitor: &Arc<RwLock<MonitorState>>,
     deltas: &broadcast::Sender<Bytes>,
-) {
+) -> TraceEnd {
     let Some(stdout) = child.stdout.take() else {
-        return;
+        return TraceEnd::TracerExited;
     };
     // The first stderr line is the most useful failure explanation (e.g.
     // fs_usage's "requires root"); capture it so a denied attach shows a reason.
@@ -219,6 +261,13 @@ async fn trace_loop(
                 Ok(None) | Err(_) => break,
             },
             _ = ticker.tick() => {
+                // Gate: end the tracer once nobody is watching (see module
+                // doc). Returning drops `child`, whose closed stdin pipe has
+                // the babysitter TERM the tracer at its own privilege level.
+                if deltas.receiver_count() == 0 {
+                    publish_status(monitor, deltas, UNWATCHED_STATUS).await;
+                    return TraceEnd::Unwatched;
+                }
                 let total = trace.ops.total();
                 let ops_per_sec = total.saturating_sub(last_total);
                 last_total = total;
@@ -237,6 +286,7 @@ async fn trace_loop(
         let reason = denied_reason(stderr, is_root().await).await;
         publish_status(monitor, deltas, &reason).await;
     }
+    TraceEnd::TracerExited
 }
 
 /// Parse one tracer line with the parser for this platform.
@@ -324,5 +374,39 @@ mod tests {
             .expect("stdout should reach EOF when the tracer exits")
             .expect("read stdout");
         assert_eq!(output, "done\n");
+    }
+
+    /// With no dashboard client subscribed, the probe must park on the
+    /// unwatched status without attaching: headless and `serve` runs never
+    /// hold the machine-wide ktrace session while nobody watches (#2177).
+    #[tokio::test]
+    async fn probe_parks_without_clients() {
+        let monitor = Arc::new(RwLock::new(MonitorState::default()));
+        let (deltas, _) = broadcast::channel(8);
+        let probe = tokio::spawn(run_daemon_probe(Arc::clone(&monitor), deltas));
+        // One scheduling round is enough for the park status to publish.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let daemon = monitor.read().await.daemon.clone();
+        probe.abort();
+        assert!(!daemon.tracing);
+        assert_eq!(daemon.status, UNWATCHED_STATUS);
+    }
+
+    /// Once tracing, the gate must end the loop when the last client is gone
+    /// (the babysitter then reaps the tracer; its kill path is covered by
+    /// `tracer_dies_when_monitor_stdin_closes`).
+    #[tokio::test]
+    async fn gate_ends_trace_loop_when_last_client_leaves() {
+        let monitor = Arc::new(RwLock::new(MonitorState::default()));
+        let (deltas, _) = broadcast::channel(8);
+        let child = wrapped("sleep", &["300"]).spawn().expect("spawn wrapper");
+        let end = tokio::time::timeout(
+            Duration::from_secs(10),
+            trace_loop(child, Vec::new(), &monitor, &deltas),
+        )
+        .await
+        .expect("gate should end the loop");
+        assert_eq!(end, TraceEnd::Unwatched);
+        assert_eq!(monitor.read().await.daemon.status, UNWATCHED_STATUS);
     }
 }
