@@ -11,22 +11,27 @@ use unibind_core::ir;
 use crate::ctype::CTy;
 use crate::model::Model;
 use crate::names;
-use crate::rust_glue::types::{envelope_ident, mirror_tokens};
+use crate::rust_glue::types::{envelope_ident, item_envelope_ident, mirror_tokens};
+use crate::rust_glue::Export;
 
-/// The `const _: () = { ... }` block checking every reachable aggregate and
-/// every function envelope.
-pub fn layout_asserts(interface: &ir::Interface, model: &Model<'_>) -> TokenStream {
+/// The `const _: () = { ... }` block checking every reachable aggregate,
+/// every export envelope, and every stream export's item envelope.
+pub fn layout_asserts(
+    interface: &ir::Interface,
+    model: &Model<'_>,
+    exports: &[Export<'_>],
+) -> TokenStream {
     let mut checks = Vec::new();
 
-    let roots = interface
-        .functions
+    let roots = exports
         .iter()
-        .flat_map(|function| {
-            function
+        .flat_map(|export| {
+            export
+                .function
                 .args
                 .iter()
                 .map(|arg| &arg.ty)
-                .chain(function.ret.as_ref())
+                .chain(export.ret.as_ref())
         })
         .chain(
             interface
@@ -43,22 +48,14 @@ pub fn layout_asserts(interface: &ir::Interface, model: &Model<'_>) -> TokenStre
         checks.push(field_checks(ty, model));
     }
 
-    for function in &interface.functions {
-        let ident = envelope_ident(&function.name);
-        let tokens = quote!(#ident);
-        let ret = function.ret.as_ref().map(CTy::of);
-        let envelope = model.envelope(ret.as_ref());
-        checks.push(size_align(&tokens, envelope.layout.size, envelope.layout.align));
-        let err_msg = Literal::u64_unsuffixed(envelope.err_msg_offset);
-        checks.push(quote! {
-            assert!(::core::mem::offset_of!(#tokens, code) == 0);
-            assert!(::core::mem::offset_of!(#tokens, err_msg) == #err_msg);
-        });
-        if let Some(value_offset) = envelope.value_offset {
-            let value = Literal::u64_unsuffixed(value_offset);
-            checks.push(quote! {
-                assert!(::core::mem::offset_of!(#tokens, value) == #value);
-            });
+    for export in exports {
+        let ident = envelope_ident(export.owner, &export.function.name);
+        let ret = export.ret.as_ref().map(|ty| model.boundary(ty));
+        checks.push(envelope_checks(&quote!(#ident), model, ret.as_ref()));
+        if let Some(ir::Type::Stream(item)) = &export.ret {
+            let item_ident = item_envelope_ident(export.owner, &export.function.name);
+            let payload = CTy::Option(Box::new(CTy::of(item)));
+            checks.push(envelope_checks(&quote!(#item_ident), model, Some(&payload)));
         }
     }
 
@@ -67,6 +64,24 @@ pub fn layout_asserts(interface: &ir::Interface, model: &Model<'_>) -> TokenStre
             #(#checks)*
         };
     }
+}
+
+/// Size, alignment, and field offsets of one envelope-shaped struct.
+fn envelope_checks(tokens: &TokenStream, model: &Model<'_>, ret: Option<&CTy>) -> TokenStream {
+    let envelope = model.envelope(ret);
+    let mut checks = vec![size_align(tokens, envelope.layout.size, envelope.layout.align)];
+    let err_msg = Literal::u64_unsuffixed(envelope.err_msg_offset);
+    checks.push(quote! {
+        assert!(::core::mem::offset_of!(#tokens, code) == 0);
+        assert!(::core::mem::offset_of!(#tokens, err_msg) == #err_msg);
+    });
+    if let Some(value_offset) = envelope.value_offset {
+        let value = Literal::u64_unsuffixed(value_offset);
+        checks.push(quote! {
+            assert!(::core::mem::offset_of!(#tokens, value) == #value);
+        });
+    }
+    quote!(#(#checks)*)
 }
 
 fn size_align(tokens: &TokenStream, size: u64, align: u64) -> TokenStream {
@@ -123,6 +138,6 @@ fn field_checks(ty: &CTy, model: &Model<'_>) -> TokenStream {
             }
             quote!(#(#checks)*)
         }
-        CTy::Bool | CTy::Int(_) | CTy::Float(_) => TokenStream::new(),
+        CTy::Bool | CTy::Int(_) | CTy::Float(_) | CTy::Handle => TokenStream::new(),
     }
 }

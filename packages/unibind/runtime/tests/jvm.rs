@@ -3,13 +3,13 @@
 
 #![cfg(feature = "jvm")]
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use unibind_runtime::UniStream;
 use unibind_runtime::jvm::{self, NextOutcome, TaskOutcome};
+use unibind_runtime::UniStream;
 
 /// Wait for a finish callback, failing loudly instead of hanging CI.
 fn recv<T>(rx: &mpsc::Receiver<T>) -> T {
