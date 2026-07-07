@@ -49,6 +49,34 @@
     fi
   ''}
 
+    # 1M-context guard (see wrapperEnvDefaults): sessions default to the
+    # standard context window, so the disable flag must ride env_defaults —
+    # baked in the spec, injected when the caller has it unset, and yielding
+    # to a caller value so the per-machine re-enable path
+    # (`export CLAUDE_CODE_DISABLE_1M_CONTEXT=`) keeps working.
+    one_m="$(${lib.getExe jq} -r \
+      '.env_defaults[] | select(.key == "CLAUDE_CODE_DISABLE_1M_CONTEXT") | .value' \
+      "$PWD/test-spec.json")"
+    if [ "$one_m" != 1 ]; then
+      printf 'claude launcher env check failed: CLAUDE_CODE_DISABLE_1M_CONTEXT env_default is %s, want 1\n' \
+        "$one_m" >&2
+      exit 1
+    fi
+    envstub="$PWD/envstub"
+    printf '%s\n' '#!${runtimeShell}' 'printf "%s\n" "''${CLAUDE_CODE_DISABLE_1M_CONTEXT-unset}"' > "$envstub"
+    chmod +x "$envstub"
+    sed "s|@helper@|$envstub|" ${launchSpec} > "$PWD/env-spec.json"
+    got="$(env -u CLAUDE_CODE_DISABLE_1M_CONTEXT IX_LAUNCH_SPEC="$PWD/env-spec.json" "$launcher")"
+    if [ "$got" != 1 ]; then
+      printf '1M-context guard check failed: unset caller env must get the default, got %s\n' "$got" >&2
+      exit 1
+    fi
+    got="$(env CLAUDE_CODE_DISABLE_1M_CONTEXT= IX_LAUNCH_SPEC="$PWD/env-spec.json" "$launcher")"
+    if [ "$got" != "" ]; then
+      printf '1M-context guard check failed: caller re-enable (empty value) must win, got %s\n' "$got" >&2
+      exit 1
+    fi
+
     check() {
       local desc="$1" expected="$2"
       shift 2

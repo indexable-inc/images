@@ -206,7 +206,17 @@
 
   # Set only when the caller has not already provided an env value.
   wrapperEnvDefaults = {
-    # Drops [1m] variants from /model without touching model selection.
+    # Keep every session on the standard (~200K) context window, never 1M
+    # (~5x input price; past-the-window work belongs in subagents, and the
+    # smaller window makes auto-compaction trigger sooner). Verified against
+    # 2.1.197: this flag gates every 1M path in the CLI — the explicit `[1m]`
+    # model suffix, the silent auto-upgrade on eligible models, honoring a
+    # `context-1m` beta header, and the built-in `[1m]` /model rows. Server-
+    # pushed model options (`additionalModelOptionsCache` in ~/.claude.json,
+    # e.g. an org-offered row valued `claude-fable-5[1m]`) can still APPEAR in
+    # /model, but selecting one still runs at the standard window: the beta
+    # header is never sent and the window computation ignores the suffix.
+    # Model selection itself is untouched. Guarded by an install check.
     # Re-enable 1M per machine: `export CLAUDE_CODE_DISABLE_1M_CONTEXT=`.
     CLAUDE_CODE_DISABLE_1M_CONTEXT = 1;
   };
