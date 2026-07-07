@@ -8,7 +8,7 @@ use crate::ir;
 
 /// The backend names `backends(...)` accepts, one per rendering backend
 /// the macros crate can enable (`ts` joins with issue #1993).
-pub(crate) const KNOWN_BACKENDS: [&str; 2] = ["ex", "py"];
+pub const KNOWN_BACKENDS: [&str; 2] = ["ex", "py"];
 
 /// The options a `#[unibind(...)]` attribute (or marker argument list) can
 /// carry: `py(name = "...")`, `py(base = "...")`, `ex(name = "...")`,

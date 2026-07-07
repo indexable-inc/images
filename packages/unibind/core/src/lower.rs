@@ -42,7 +42,8 @@ pub struct Declared {
     pub objects: Vec<String>,
 }
 
-/// The `backends(...)` selection carried by `#[unibind::export]` args:
+/// The `backends(...)` selection carried by `#[unibind::export]` args.
+///
 /// `None` when absent, meaning every backend the consuming crate's features
 /// enable. Cargo unifies the macro crate's features across a workspace
 /// build, so a crate sharing a workspace with consumers of another backend
