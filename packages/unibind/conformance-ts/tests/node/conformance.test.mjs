@@ -139,6 +139,19 @@ test("an async stream function resolves to an iterable stream", async () => {
   assert.deepEqual(items, [0, 1, 2]);
 });
 
+test("streams carry records as items (issue #2220)", async () => {
+  const items = [];
+  for await (const item of api.occurrenceStream("sym", 3)) {
+    items.push(item);
+  }
+  assert.equal(items.length, 3);
+  assert.deepEqual(
+    items.map((item) => item.occurrenceRole),
+    ["reference", "reference", "reference"],
+  );
+  assert.equal(items[0].path, "src/file_0.rs");
+});
+
 test("streams exert backpressure through the bounded(2) channel", async () => {
   const baseline = api.streamItemsProduced();
   const stream = api.countStream(20);
@@ -195,6 +208,14 @@ test("objects construct, expose methods, and close idempotently", async () => {
   assert.equal(session.isOpen(), false, "methods still answer after close");
   await session.close();
   assert.equal(api.closedSessions(), closedBaseline + 1, "second close is a no-op");
+});
+
+test("record-returning methods cross napi's impl helper module (issue #2220)", async () => {
+  const session = api.openSession("gamma");
+  const described = session.describe();
+  assert.equal(described.symbol, "gamma");
+  assert.equal(described.occurrenceRole, "session");
+  await session.close();
 });
 
 test("objects also arrive from plain function returns", async () => {
