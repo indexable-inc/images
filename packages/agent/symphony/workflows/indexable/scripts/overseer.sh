@@ -18,7 +18,7 @@ touch "$notes"
 prompt_file="$PWD/prompts/overseer.md"
 last_msg="$(mktemp)"
 workdir="$(mktemp -d)" # empty cwd for codex; --skip-git-repo-check below
-cleanup() { rm -rf "$last_msg" "$workdir" "${report_file:-}" "${data_json:-}"; }
+cleanup() { rm -rf "$last_msg" "$last_msg.envelope" "$workdir" "${report_file:-}" "${data_json:-}"; }
 trap cleanup EXIT
 
 now_iso="$(date +%Y-%m-%dT%H:%M:%S%z)"
@@ -124,17 +124,22 @@ jq -n \
 
 # Same secret scrub as insights.sh: ExecRunner inherits the full BEAM env;
 # codex only needs its own API key.
-# The judge is the claude harness on fable at high effort. No tools: the
-# whole world it needs is in the prompt, so --allowedTools "" doubles as
-# the read-only sandbox. --output-format json carries the reply in
-# .result, which lands in $last_msg for the same strict parse as before.
+# The judge is the claude harness on fable at high effort. Plain `claude`
+# from PATH (the pack unit provides upstream claude-code), NOT the
+# operator's ~/.local/bin wrapper: the wrapper bakes ix-mcp bootstrap
+# argv that wedges and chats on stdout in unattended launchd runs, the
+# same reason insights.sh pins plain codex. No tools: the whole world it
+# needs is in the prompt, so --allowedTools "" doubles as the read-only
+# sandbox. The -p JSON envelope is checked before the reply is trusted:
+# an is_error envelope carries a partial .result (the 04:30Z truncation),
+# which must fail the tick with the envelope's own error.
 (
   cd "$workdir"
   env -u SLACK_BOT_OAUTH_TOKEN -u SLACK_SIGNING_SECRET \
     -u GH_TOKEN -u GITHUB_TOKEN -u GITHUB_WEBHOOK_SECRET \
     -u LINEAR_API_KEY -u LINEAR_WEBHOOK_SECRET \
     -u SYMPHONY_GITHUB_APP_PRIVATE_KEY_BASE64 -u SYMPHONY_ROOM_REGISTRY_TOKEN \
-    "$HOME/.local/bin/claude" -p --model fable --effort high \
+    claude -p --model fable --effort high \
     --allowedTools "" --output-format json \
     "$(cat "$prompt_file")
 
@@ -142,7 +147,9 @@ Your notes from previous ticks:
 $(cat "$notes")
 
 Snapshot ($now_iso):
-$(cat "$snap")" </dev/null | jq -r '.result' > "$last_msg"
+$(cat "$snap")" </dev/null > "$last_msg.envelope"
+  jq -er 'if .is_error then error("claude -p errored: " + (.subtype // "unknown")) else .result end' \
+    "$last_msg.envelope" > "$last_msg"
 )
 
 # The reply must be the {digest, attention, agents, notes} JSON object;
@@ -150,6 +157,12 @@ $(cat "$snap")" </dev/null | jq -r '.result' > "$last_msg"
 report_file="$(mktemp)"
 tr -d '\000-\010\013\014\016-\037' < "$last_msg" > "$last_msg.clean"
 mv "$last_msg.clean" "$last_msg"
+# On a bad reply, keep the raw bytes as evidence before failing loudly.
+if ! jq -e . "$last_msg" > /dev/null 2>&1; then
+  cp "$last_msg" "$state_dir/last-reply.rejected"
+  echo "overseer: reply is not valid JSON; saved to $state_dir/last-reply.rejected" >&2
+  exit 5
+fi
 jq -e '{digest: .digest, attention: (.attention // []), agents: (.agents // [])}' "$last_msg" > "$report_file"
 jq -er '.notes' "$last_msg" > "$notes"
 
