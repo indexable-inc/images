@@ -38,17 +38,6 @@ fn min_tool_calls() -> usize {
         .unwrap_or(DEFAULT_MIN_TOOL_CALLS)
 }
 
-/// `session_id` is interpolated into a file path; accept only a plain filename
-/// component so a crafted value cannot escape the state dir. Same contract as
-/// `review::safe_session`.
-fn safe_session(payload: &Value) -> Option<String> {
-    let session = payload.get("session_id").and_then(Value::as_str)?;
-    if session.is_empty() || session == "." || session == ".." || session.contains('/') {
-        return None;
-    }
-    Some(session.to_owned())
-}
-
 /// One `<session>.retro-done` marker per session: its presence means the retro
 /// gate already fired, so a later Stop must not fire again.
 fn marker_path(session: &str) -> PathBuf {
@@ -145,7 +134,7 @@ pub fn retro_gate() {
     let Ok(payload) = serde_json::from_str::<Value>(&input) else {
         return;
     };
-    let Some(session) = safe_session(&payload) else {
+    let Some(session) = crate::safe_session(&payload) else {
         return;
     };
 
@@ -212,23 +201,8 @@ pub fn retro_gate() {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        GateAction, count_tool_calls, gate_action, is_substantive, safe_session,
-    };
+    use super::{GateAction, count_tool_calls, gate_action, is_substantive};
     use serde_json::json;
-
-    #[test]
-    fn session_rejects_path_escapes() {
-        assert_eq!(
-            safe_session(&json!({"session_id": "abc-123"})).as_deref(),
-            Some("abc-123")
-        );
-        assert!(safe_session(&json!({"session_id": "../escape"})).is_none());
-        assert!(safe_session(&json!({"session_id": "a/b"})).is_none());
-        assert!(safe_session(&json!({"session_id": "."})).is_none());
-        assert!(safe_session(&json!({"session_id": ""})).is_none());
-        assert!(safe_session(&json!({})).is_none());
-    }
 
     #[test]
     fn gate_evaluates_a_plain_main_session_stop() {

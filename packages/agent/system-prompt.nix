@@ -760,6 +760,10 @@ let
           watch is actually alive: a harness-tracked background child or Monitor
           running, its output growing. Receiving your own stop notification
           means no watch survived, so re-arm one or proceed synchronously.
+          An armed ScheduleWakeup is such a watch: pending wakeups live only
+          in harness memory and a session resume or user abort silently drops
+          them, so on any later turn that still counts on one, re-verify or
+          re-arm it before ending the turn.
         '';
         reason = ''
           Success-only watchers turn silent failures into indefinite waits. A
@@ -769,6 +773,9 @@ let
           watching the watcher. Separately, three background agents in one
           session ended turns "waiting for the monitor" with no live watch and
           stalled until a coordinator manually probed and nudged them (#1941).
+          An armed ScheduleWakeup vanished across intervening notification
+          turns and never fired, idling a background session 24h past its gate
+          (#2259).
         '';
       };
     }
