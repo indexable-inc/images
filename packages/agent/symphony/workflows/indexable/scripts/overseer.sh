@@ -197,8 +197,11 @@ while IFS=$'\t' read -r key title action; do
   agent_name="overseer-fix-$(printf '%s' "$key" | head -c 12)"
   # </dev/null: claude reads stdin, which inside this while-read loop is
   # the remaining TSV problem rows; without it the first dispatch swallows
-  # every later row (index#2157).
-  if out="$("$HOME/.local/bin/claude" --bg -p "You are $agent_name, dispatched by the overseer. Problem: $title. Suggested action: $action. Investigate, fix it properly (worktree + PR when it is a repo change), and report." </dev/null 2>&1)"; then
+  # every later row (index#2157). cd "$HOME": fixers inherit this script's
+  # cwd (the pack dir), so their sessions showed up in later snapshots as
+  # claude sessions inside workflows/indexable and the judge re-diagnosed
+  # its own just-spawned fixers as a silent workflow agent (index#2188).
+  if out="$(cd "$HOME" && "$HOME/.local/bin/claude" --bg -p "You are $agent_name, dispatched by the overseer. Problem: $title. Suggested action: $action. Investigate, fix it properly (worktree + PR when it is a repo change), and report." </dev/null 2>&1)"; then
     note="dispatched $agent_name"
   else
     note="dispatch failed: $(printf '%s' "$out" | head -c 120)"

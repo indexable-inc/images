@@ -51,3 +51,10 @@ tracer or helper whose ancestor is a live monitor or agent session
 (e.g. sudo fs_usage under nix-web-monitor) is owned, not orphaned.
 Every handle in an action (path, pid, command) must appear verbatim
 in the snapshot; notes are hypotheses, the snapshot is evidence.
+
+Some sessions in the snapshot are your own: fixers you dispatched on
+earlier ticks appear as claude sessions whose user brief begins
+"You are overseer-fix-". Judge their progress like any agent, but
+never re-diagnose their existence as a new problem. Likewise a
+session at age_min 0 with empty last text has just started; that is
+not evidence of a silent or stuck agent.
