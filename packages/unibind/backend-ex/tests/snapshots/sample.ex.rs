@@ -47,10 +47,6 @@ mod __unibind_ex_sample {
             .map_err(SampleErrorTerm::from)
     }
     #[::rustler::nif]
-    fn cursor_at(position: u64) -> ::rustler::ResourceArc<super::sample::Cursor> {
-        ::rustler::ResourceArc::new(super::sample::Cursor::at(position))
-    }
-    #[::rustler::nif]
     fn cursor_position(handle: ::rustler::ResourceArc<super::sample::Cursor>) -> u64 {
         handle.position()
     }
@@ -84,7 +80,7 @@ mod __unibind_ex_sample {
             ::std::result::Result::<
                 _,
                 ::unibind_ex_runtime::Never,
-            >::Ok(super::sample::label(key, &prefix).await)
+            >::Ok(super::sample::label(key, prefix).await)
         };
         ::unibind_ex_runtime::spawn_reply(env, reference, fut)
     }
@@ -135,5 +131,8 @@ mod __unibind_ex_sample {
         ::unibind_ex_runtime::grant(&handle, n);
     }
     ::rustler::init!("Elixir.Sample.Native");
+    #[unsafe(no_mangle)]
+    extern "C" fn nif_init() -> *const ::rustler::codegen_runtime::DEF_NIF_ENTRY {
+        sample_nif_init()
+    }
 }
-

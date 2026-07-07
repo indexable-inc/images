@@ -2,8 +2,7 @@
   "version": 0,
   "name": "sample",
   "names": {
-    "py": null,
-    "ex": null
+    "py": null
   },
   "docs": [
     "A sample boundary exercising the elixir surface."
@@ -12,8 +11,7 @@
     {
       "name": "rows",
       "names": {
-        "py": null,
-        "ex": null
+        "py": null
       },
       "docs": [
         "Fetch rows.",
@@ -22,13 +20,11 @@
       ],
       "asyncness": "Sync",
       "blocking": false,
-      "receiver": null,
       "args": [
         {
           "name": "store",
           "names": {
-            "py": null,
-            "ex": null
+            "py": null
           },
           "ty": {
             "String": {
@@ -40,8 +36,7 @@
         {
           "name": "limit",
           "names": {
-            "py": null,
-            "ex": null
+            "py": null
           },
           "ty": {
             "Int": "Usize"
@@ -53,8 +48,7 @@
         {
           "name": "root",
           "names": {
-            "py": null,
-            "ex": null
+            "py": null
           },
           "ty": {
             "Option": {
@@ -76,21 +70,18 @@
     {
       "name": "recount",
       "names": {
-        "py": null,
-        "ex": null
+        "py": null
       },
       "docs": [
         "Recount everything; long-running, so scheduled dirty."
       ],
       "asyncness": "Sync",
       "blocking": true,
-      "receiver": null,
       "args": [
         {
           "name": "home",
           "names": {
-            "py": null,
-            "ex": null
+            "py": null
           },
           "ty": {
             "Path": {
@@ -116,7 +107,6 @@
       ],
       "asyncness": "Async",
       "blocking": false,
-      "receiver": null,
       "args": [
         {
           "name": "id",
@@ -132,12 +122,11 @@
         {
           "name": "prefix",
           "names": {
-            "py": null,
-            "ex": null
+            "py": null
           },
           "ty": {
             "String": {
-              "owned": false
+              "owned": true
             }
           },
           "default": null
@@ -153,21 +142,18 @@
     {
       "name": "store",
       "names": {
-        "py": null,
-        "ex": null
+        "py": null
       },
       "docs": [
         "Persist a row."
       ],
       "asyncness": "Async",
       "blocking": false,
-      "receiver": null,
       "args": [
         {
           "name": "row",
           "names": {
-            "py": null,
-            "ex": null
+            "py": null
           },
           "ty": {
             "Named": "Row"
@@ -181,21 +167,18 @@
     {
       "name": "tags",
       "names": {
-        "py": null,
-        "ex": null
+        "py": null
       },
       "docs": [
         "Every tag, on demand."
       ],
       "asyncness": "Sync",
       "blocking": false,
-      "receiver": null,
       "args": [
         {
           "name": "prefix",
           "names": {
-            "py": null,
-            "ex": null
+            "py": null
           },
           "ty": {
             "String": {
@@ -217,21 +200,18 @@
     {
       "name": "scan",
       "names": {
-        "py": null,
-        "ex": null
+        "py": null
       },
       "docs": [
         "Stream rows, verifying the store first."
       ],
       "asyncness": "Sync",
       "blocking": false,
-      "receiver": null,
       "args": [
         {
           "name": "store",
           "names": {
-            "py": null,
-            "ex": null
+            "py": null
           },
           "ty": {
             "String": {
@@ -263,8 +243,7 @@
         {
           "name": "id",
           "names": {
-            "py": null,
-            "ex": null
+            "py": null
           },
           "docs": [
             "Identifier."
@@ -276,8 +255,7 @@
         {
           "name": "name",
           "names": {
-            "py": null,
-            "ex": null
+            "py": null
           },
           "docs": [],
           "ty": {
@@ -289,8 +267,7 @@
         {
           "name": "weights",
           "names": {
-            "py": null,
-            "ex": null
+            "py": null
           },
           "docs": [],
           "ty": {
@@ -309,8 +286,7 @@
         {
           "name": "home",
           "names": {
-            "py": null,
-            "ex": null
+            "py": null
           },
           "docs": [],
           "ty": {
@@ -350,8 +326,7 @@
         {
           "name": "Invalid",
           "names": {
-            "py": null,
-            "ex": null
+            "py": null
           },
           "docs": [
             "Bad input."
@@ -364,89 +339,50 @@
     {
       "name": "Cursor",
       "names": {
-        "py": null,
-        "ex": null
+        "py": null
       },
       "docs": [
         "A live cursor."
       ],
-      "constructors": [
-        {
-          "name": "open",
-          "names": {
-            "py": null,
-            "ex": null
-          },
-          "docs": [
-            "Open at the start."
-          ],
-          "asyncness": "Sync",
-          "blocking": false,
-          "receiver": null,
-          "args": [
-            {
-              "name": "store",
-              "names": {
-                "py": null,
-                "ex": null
-              },
-              "ty": {
-                "String": {
-                  "owned": false
-                }
-              },
-              "default": null
-            }
-          ],
-          "ret": {
-            "Named": "Cursor"
-          },
-          "throws": "SampleError"
+      "resource": false,
+      "constructor": {
+        "name": "open",
+        "names": {
+          "py": null
         },
-        {
-          "name": "at",
-          "names": {
-            "py": null,
-            "ex": null
-          },
-          "docs": [
-            "Start from an offset."
-          ],
-          "asyncness": "Sync",
-          "blocking": false,
-          "receiver": null,
-          "args": [
-            {
-              "name": "position",
-              "names": {
-                "py": null,
-                "ex": null
-              },
-              "ty": {
-                "Int": "U64"
-              },
-              "default": null
-            }
-          ],
-          "ret": {
-            "Named": "Cursor"
-          },
-          "throws": null
-        }
-      ],
+        "docs": [
+          "Open at the start."
+        ],
+        "asyncness": "Sync",
+        "blocking": false,
+        "args": [
+          {
+            "name": "store",
+            "names": {
+              "py": null
+            },
+            "ty": {
+              "String": {
+                "owned": false
+              }
+            },
+            "default": null
+          }
+        ],
+        "ret": null,
+        "throws": "SampleError"
+      },
       "methods": [
         {
           "name": "position",
           "names": {
-            "py": null,
-            "ex": null
+            "py": null
           },
           "docs": [
             "The current position."
           ],
           "asyncness": "Sync",
           "blocking": false,
-          "receiver": "Ref",
           "args": [],
           "ret": {
             "Int": "U64"
@@ -456,21 +392,18 @@
         {
           "name": "skip",
           "names": {
-            "py": null,
-            "ex": null
+            "py": null
           },
           "docs": [
             "Skip ahead; long-running, so scheduled dirty."
           ],
           "asyncness": "Sync",
           "blocking": true,
-          "receiver": "Ref",
           "args": [
             {
               "name": "n",
               "names": {
-                "py": null,
-                "ex": null
+                "py": null
               },
               "ty": {
                 "Int": "U64"
