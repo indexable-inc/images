@@ -1,0 +1,9 @@
+# Overseer: every 10 minutes, snapshot what every agent on this machine is
+# doing (agent processes, claude sessions, symphony runs, hot or stalled
+# processes), have a headless codex write a terse digest, and maintain a
+# minimal HTML report at ~/.local/share/symphony/overseer/index.html.
+# Not Slack-notified: it is a local page. Timeout stays under the cadence
+# so runs cannot overlap.
+workflow "overseer" on cron "*/10 * * * *" tz "America/Los_Angeles" {
+  overseer <- exec "./scripts/overseer.sh" timeout 480
+}
