@@ -4,9 +4,10 @@
 //! cannot live in generated code: one process-wide tokio [`runtime`] shared
 //! by every unibind NIF library in the node, the [`spawn_reply`] plumbing
 //! that runs an `async fn` and messages the calling process, and the
-//! [`spawn_stream`] plumbing that drives a [`Stream`] under consumer
-//! demand. User crates only name [`Stream`] directly (as the return type of
-//! stream functions); everything else is called by generated code.
+//! [`spawn_stream`] plumbing that drives a [`unibind_runtime::UniStream`]
+//! under consumer demand. User crates never name this crate in their own
+//! code (streams are `UniStream<T>` from `unibind-runtime`, shared with
+//! every backend); everything here is called by generated code.
 //!
 //! # Wire protocol
 //!
@@ -30,4 +31,4 @@ mod stream;
 
 pub use reply::{spawn_reply, InFlight, Never};
 pub use runtime::runtime;
-pub use stream::{grant, spawn_stream, Stream, StreamHandle};
+pub use stream::{grant, spawn_stream, StreamHandle};

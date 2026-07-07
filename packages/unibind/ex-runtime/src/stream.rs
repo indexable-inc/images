@@ -1,63 +1,16 @@
 //! Demand-driven streams across the BEAM boundary.
 
-use std::pin::Pin;
 use std::sync::Mutex;
-use std::task::{Context, Poll};
-
-use futures_core::Stream as _;
 
 use rustler::env::OwnedEnv;
 use rustler::{Encoder, Env, LocalPid, Monitor, NifResult, Resource, ResourceArc, Term};
 use tokio::sync::Semaphore;
 use tokio::task::AbortHandle;
+use unibind_runtime::UniStream;
 
 use crate::atoms;
 use crate::reply::{abort_stored, store_and_monitor};
 use crate::runtime::runtime;
-
-/// A boxed stream of items headed for the BEAM: the return type of a
-/// unibind stream function.
-pub struct Stream<T>(pub Pin<Box<dyn futures_core::Stream<Item = T> + Send + 'static>>);
-
-impl<T> Stream<T> {
-    /// Box `inner` as a unibind stream.
-    #[must_use]
-    pub fn new(inner: impl futures_core::Stream<Item = T> + Send + 'static) -> Self {
-        Self(Box::pin(inner))
-    }
-
-    /// A stream that yields the iterator's items, each ready immediately.
-    ///
-    /// Not `FromIterator`: the adapter needs `I::IntoIter: Send`, which the
-    /// trait cannot express.
-    #[must_use]
-    pub fn from_iterator<I>(iter: I) -> Self
-    where
-        I: IntoIterator<Item = T>,
-        I::IntoIter: Send + 'static,
-    {
-        Self::new(IterStream(iter.into_iter()))
-    }
-
-    /// The next item, `None` once the stream ends.
-    pub async fn next(&mut self) -> Option<T> {
-        std::future::poll_fn(|cx| self.0.as_mut().poll_next(cx)).await
-    }
-}
-
-/// Adapts an iterator into an always-ready stream.
-struct IterStream<I>(I);
-
-/// The iterator is never pinned structurally, so the adapter moves freely.
-impl<I> Unpin for IterStream<I> {}
-
-impl<I: Iterator> futures_core::Stream for IterStream<I> {
-    type Item = I::Item;
-
-    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Poll::Ready(self.get_mut().0.next())
-    }
-}
 
 /// The consumer-facing handle of a running stream: the credit counter the
 /// generated `unibind_demand` NIF feeds, and the producer's abort handle.
@@ -105,7 +58,7 @@ pub fn grant(handle: &StreamHandle, n: u64) {
 pub fn spawn_stream<T>(
     env: Env<'_>,
     reference: Term<'_>,
-    stream: Stream<T>,
+    stream: UniStream<T>,
 ) -> NifResult<ResourceArc<StreamHandle>>
 where
     T: Encoder + Send + 'static,

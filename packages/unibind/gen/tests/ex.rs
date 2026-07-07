@@ -36,7 +36,6 @@ fn function(name: &str, doc_lines: &[&str], args: Vec<ir::Arg>) -> ir::Function 
         docs: docs(doc_lines),
         asyncness: ir::Asyncness::Sync,
         blocking: false,
-        receiver: None,
         args,
         ret: None,
         throws: None,
@@ -161,17 +160,16 @@ fn sample_interface() -> ir::Interface {
         name: "Cursor".to_owned(),
         names: names(None),
         docs: docs(&["A live cursor."]),
-        constructors: vec![ir::Function {
-            ret: Some(ir::Type::Named("Cursor".to_owned())),
+        resource: false,
+        constructor: Some(ir::Function {
             throws: Some("SampleError".to_owned()),
             ..function(
                 "open",
                 &["Open at the start."],
                 vec![arg("store", ir::Type::String { owned: false }, None)],
             )
-        }],
+        }),
         methods: vec![ir::Function {
-            receiver: Some(ir::Receiver::Ref),
             ret: Some(ir::Type::Int(ir::IntKind::U64)),
             ..function("position", &["The current position."], Vec::new())
         }],

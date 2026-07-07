@@ -2,7 +2,7 @@
 mod sample {
     use std::collections::HashMap;
     use std::path::PathBuf;
-    use unibind_ex_runtime::Stream;
+    use unibind_runtime::UniStream;
 
     /// A row.
     #[unibind::record(ex(name = "Line"))]
@@ -46,7 +46,7 @@ mod sample {
 
     /// Resolve a label off the scheduler.
     #[unibind(ex(name = "label_of"))]
-    pub async fn label(#[unibind(ex(name = "key"))] id: u64, prefix: &str) -> String {
+    pub async fn label(#[unibind(ex(name = "key"))] id: u64, prefix: String) -> String {
         format!("{prefix}{id}")
     }
 
@@ -57,15 +57,15 @@ mod sample {
     }
 
     /// Every tag, on demand.
-    pub fn tags(prefix: &str) -> Stream<String> {
+    pub fn tags(prefix: &str) -> UniStream<String> {
         let _ = prefix;
-        Stream::from_iterator(Vec::new())
+        UniStream::new(futures::stream::iter(Vec::new()))
     }
 
     /// Stream rows, verifying the store first.
-    pub fn scan(store: &str) -> Result<Stream<Row>, SampleError> {
+    pub fn scan(store: &str) -> Result<UniStream<Row>, SampleError> {
         let _ = store;
-        Ok(Stream::from_iterator(Vec::new()))
+        Ok(UniStream::new(futures::stream::iter(Vec::new())))
     }
 
     /// A live cursor.
@@ -76,14 +76,10 @@ mod sample {
 
     impl Cursor {
         /// Open at the start.
+        #[unibind(constructor)]
         pub fn open(store: &str) -> Result<Self, SampleError> {
             let _ = store;
             Ok(Self { position: 0 })
-        }
-
-        /// Start from an offset.
-        pub fn at(position: u64) -> Self {
-            Self { position }
         }
 
         /// The current position.

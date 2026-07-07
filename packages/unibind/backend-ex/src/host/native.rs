@@ -38,7 +38,7 @@ pub fn render(interface: &ir::Interface, nif_soname: &str) -> String {
         );
     }
     for object in &interface.objects {
-        for constructor in &object.constructors {
+        if let Some(constructor) = &object.constructor {
             stub(
                 &mut out,
                 &names::member_nif_name(object, constructor),

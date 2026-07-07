@@ -119,6 +119,12 @@ Crates:
   `unibind.lib.build`, never at macro time.
 - `macros`: the `unibind` proc-macro crate. Parse once to IR, dispatch to the
   backends the consuming crate enabled through features (`py` today).
+- `backend-ex`: renders the IR into rustler 0.38 glue (`#[rustler::nif]`
+  wrappers, `NifStruct` records, error-term structs, resource
+  registrations) plus the Elixir host modules `unibind-gen ex` writes; see
+  the Elixir section below.
+- `ex-runtime`: BEAM-side support the generated glue calls into: the
+  shared tokio runtime, async reply plumbing, demand-driven streams.
 - `backend-py`: renders the IR into pyo3 0.28 (abi3-py311) code:
   `#[pyfunction]` wrappers with `#[pyo3(signature = ...)]` defaults,
   `#[pyclass]` records, `create_exception!` hierarchies plus a
@@ -177,6 +183,13 @@ stream counters, exactly one `ResourceWarning` per leaked resource, and
 `ctypes.addressof` equality for zero-copy buffers. It runs in CI as
 `checks.<system>.unibind-conformance-run`.
 
+`packages/unibind/conformance-ex` is the same idea for the Elixir backend:
+a NIF crate mirroring that surface (minus binaries, an ex limitation) plus
+a zero-dep ExUnit suite asserting the wire contracts below from the BEAM,
+including caller-exit cancellation observed through a drop counter and
+GC-run resource destructors. It runs in CI as
+`checks.<system>.unibind-conformance-ex-run`.
+
 ## Phases
 
 | Phase | Issue | Scope |
@@ -186,7 +199,7 @@ stream counters, exactly one `ResourceWarning` per leaked resource, and
 | 2     | #1992 | async, cancellation, streams, resources/objects (Python backend); proven by `packages/unibind/conformance` |
 | 3     | #1993 | TypeScript backend (napi-rs) with enriched `.d.ts` |
 | 4     | #1994 | Rust client backend over a stable ABI |
-| 5     | #1995 | Elixir backend (rustler, generated `.ex`, `@spec`) |
+| 5     | #1995 | Elixir backend (rustler, generated `.ex`, `@spec`); proven by `packages/unibind/conformance-ex` |
 | 6     | #1996 | adopt for ix-sdk, delete sdk-py and sdk-ts |
 
 ## Phase 0 in the tree
@@ -209,8 +222,9 @@ host modules (`<Ns>.Native` NIF stubs and a typespec'd `<Ns>` wrapper, via
 references; `Drop` runs on garbage collection). `#[unibind(blocking)]`
 schedules a NIF on a dirty IO scheduler. `unibind-ex-runtime` carries the
 pieces generated code cannot: one shared tokio runtime, async replies, and
-demand-driven streams (`Stream<T>` is its type, legal only as a whole
-return type of a plain fn).
+demand-driven streams. Streams are the shared `UniStream<T>` from
+`unibind-runtime` (the same type the Python backend iterates), legal only
+as the whole return type of a plain (non-async) fn on this backend.
 
 The wire protocol pairs every async call and stream with a caller-made
 reference:
@@ -229,3 +243,18 @@ reference:
 Both spawns monitor the calling process and abort the tokio task when it
 exits, so a crashed caller never leaks a future or a producer; the user
 code observes cancellation only as its `Drop` impls running.
+
+On the nix side, `unibind.lib.build { crate; targets.ex = { mixSource }; }`
+assembles the mix-importable package from the crate's already-built NIF
+library: generated `lib/<app>/native.ex` + `lib/<app>.ex`, the library at
+`priv/native/lib<crate>.so` (one canonical name on both OSes; darwin link
+flags come from the crate's build.rs), and the caller's hand-written mix
+project (`mix.exs`, tests) overlaid. `packages/unibind/conformance-ex` is
+the reference consumer and the CI gate.
+
+Known limits of the backend today: binary payloads (`Vec<u8>` / `&[u8]`)
+do not cross (carry text for now), object members must be sync (`&mut
+self` never crosses on any backend: lowering rejects it), async fns cannot
+return streams (drive the stream from a plain fn), and `object(resource)`
+close()/with sugar stays Python-only; on the BEAM, cleanup is the
+GC-driven `Drop`.

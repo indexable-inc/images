@@ -128,7 +128,7 @@ fn render_object(out: &mut String, object: &ir::Object, interface: &ir::Interfac
     );
     out.push_str("    @type t :: reference()\n");
     let handle = name.to_snake_case();
-    for constructor in &object.constructors {
+    if let Some(constructor) = &object.constructor {
         out.push('\n');
         let target = calls::Target {
             nif_name: names::member_nif_name(object, constructor),

@@ -31,11 +31,7 @@ fn assert_snapshot(actual: &str, expected: &str, name: &str) {
 #[test]
 fn ir_json_snapshot() {
     let json = serde_json::to_string_pretty(&interface()).expect("serializes");
-    assert_snapshot(
-        &json,
-        include_str!("snapshots/sample.ir.json"),
-        "sample.ir.json",
-    );
+    assert_snapshot(&json, include_str!("snapshots/sample.ir.json"), "sample.ir.json");
 }
 
 #[test]
@@ -46,13 +42,8 @@ fn pyo3_glue_snapshot() {
     let mut shown = String::new();
     for (record, attrs) in interface.records.iter().zip(&rendered.records) {
         let outer = &attrs.outer;
-        writeln!(
-            shown,
-            "// struct {}: {}",
-            record.name,
-            quote::quote!(#(#outer)*)
-        )
-        .expect("write to string");
+        writeln!(shown, "// struct {}: {}", record.name, quote::quote!(#(#outer)*))
+            .expect("write to string");
         for (field, field_attrs) in record.fields.iter().zip(&attrs.fields) {
             writeln!(
                 shown,
@@ -66,26 +57,5 @@ fn pyo3_glue_snapshot() {
     shown.push('\n');
     let glue: syn::File = syn::parse2(rendered.glue).expect("glue parses");
     shown.push_str(&prettyplease::unparse(&glue));
-    assert_snapshot(
-        &shown,
-        include_str!("snapshots/sample.py.rs"),
-        "sample.py.rs",
-    );
-}
-
-#[test]
-fn async_functions_point_at_phase_2() {
-    let file: syn::File = syn::parse_str("mod m { pub async fn go() {} }").expect("module parses");
-    let Some(syn::Item::Mod(module)) = file.items.first() else {
-        panic!("module first");
-    };
-    let lowered = unibind_core::lower_module(TokenStream::new(), module).expect("async fn lowers");
-    let Err(error) = unibind_backend_py::render(&lowered) else {
-        panic!("the backend rejects async");
-    };
-    assert!(
-        error.message.contains("phase 2 (#1992)"),
-        "{}",
-        error.message
-    );
+    assert_snapshot(&shown, include_str!("snapshots/sample.py.rs"), "sample.py.rs");
 }

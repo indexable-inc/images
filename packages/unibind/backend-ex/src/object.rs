@@ -17,7 +17,7 @@ pub fn render_object(object: &ir::Object, user: &Ident) -> Result<TokenStream, R
         #[::rustler::resource_impl]
         impl ::rustler::Resource for super::#user::#obj_ident {}
     }];
-    for constructor in &object.constructors {
+    if let Some(constructor) = &object.constructor {
         items.push(render_constructor(object, constructor, user, &obj_ident)?);
     }
     for method in &object.methods {
@@ -95,13 +95,6 @@ fn render_method(
     obj_ident: &Ident,
 ) -> Result<TokenStream, RenderError> {
     reject_suspending(object, method)?;
-    if matches!(method.receiver, Some(ir::Receiver::Mut)) {
-        return Err(RenderError::new(format!(
-            "`{}::{}` takes `&mut self`, but a BEAM resource is shared; use \
-             interior mutability (Mutex, RwLock, atomics) behind `&self`",
-            object.name, method.name
-        )));
-    }
     let wrapper = member_ident(object, method);
     let attr = nif_attr(method, &names::member_nif_name(object, method), &wrapper);
     let rust_name = Ident::new(&method.name, Span::call_site());

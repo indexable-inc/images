@@ -78,16 +78,16 @@ fn rustler_glue_snapshot() {
 }
 
 #[test]
-fn mut_methods_are_rejected() {
+fn async_stream_functions_are_rejected() {
     let interface = lower(
-        "mod m { #[unibind::object] pub struct H {} \
-         impl H { pub fn new() -> Self { Self {} } pub fn bump(&mut self) {} } }",
+        "mod m { pub async fn feed() -> UniStream<u64> { \
+         unimplemented!() } }",
     );
     let Err(error) = unibind_backend_ex::render(&interface) else {
-        panic!("&mut is rejected");
+        panic!("async streams are rejected");
     };
     assert!(
-        error.message.contains("interior mutability"),
+        error.message.contains("plain fn"),
         "{}",
         error.message
     );

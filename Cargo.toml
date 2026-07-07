@@ -96,6 +96,7 @@ members = [
   "packages/unibind/backend-ex",
   "packages/unibind/backend-py",
   "packages/unibind/conformance",
+  "packages/unibind/conformance-ex",
   "packages/unibind/core",
   "packages/unibind/ex-runtime",
   "packages/unibind/gen",
@@ -202,7 +203,6 @@ file-language = { path = "packages/code/file-language" }
 flecs-query-core = { path = "packages/flecs-query/core" }
 fontdue = "0.9"
 futures = "0.3"
-futures-core = "0.3"
 git2 = { version = "0.21", default-features = false }
 glob = "0.3"
 heck = "0.5"

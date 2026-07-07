@@ -12207,6 +12207,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "unibind-conformance-ex"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "rustler",
+ "tokio",
+ "unibind",
+ "unibind-ex-runtime",
+ "unibind-runtime",
+]
+
+[[package]]
 name = "unibind-core"
 version = "0.1.0"
 dependencies = [
@@ -12221,9 +12233,10 @@ dependencies = [
 name = "unibind-ex-runtime"
 version = "0.1.0"
 dependencies = [
- "futures-core",
+ "futures",
  "rustler",
  "tokio",
+ "unibind-runtime",
 ]
 
 [[package]]

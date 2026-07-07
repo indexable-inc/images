@@ -43,11 +43,17 @@ pub struct Interface {
     pub objects: Vec<Object>,
 }
 
-/// Per-language name overrides, from `#[unibind(py(name = "..."))]`.
+/// Per-language name overrides, from `#[unibind(py(name = "..."))]` and
+/// `#[unibind(ex(name = "..."))]`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Names {
     /// Python name override.
     pub py: Option<String>,
+    /// Elixir name override. Additive to the serialized layout: absent in
+    /// older IR payloads (and skipped when unset), so readers on either
+    /// side of the change agree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ex: Option<String>,
 }
 
 /// How a function suspends.

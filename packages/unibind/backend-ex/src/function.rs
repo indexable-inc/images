@@ -8,6 +8,15 @@ use crate::{error, names, ty, RenderError};
 
 pub fn render_fn(function: &ir::Function, user: &Ident) -> Result<TokenStream, RenderError> {
     if matches!(function.asyncness, ir::Asyncness::Async) {
+        if matches!(function.ret, Some(ir::Type::Stream(_))) {
+            return Err(RenderError::new(format!(
+                "`{}` is an async fn returning a stream; the elixir backend \
+                 drives streams from a plain fn, so return `UniStream<T>` \
+                 without `async` (the producer already runs on the shared \
+                 runtime)",
+                function.name
+            )));
+        }
         return render_async_fn(function, user);
     }
     if let Some(ir::Type::Stream(item)) = &function.ret {

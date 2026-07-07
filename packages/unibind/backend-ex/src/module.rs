@@ -11,8 +11,9 @@ use crate::{error, function, names, object, record, RenderError, RenderedInterfa
 /// # Errors
 ///
 /// Fails for surface the elixir backend does not implement (data enums,
-/// binary payloads, `&mut self` methods, async or stream object members,
-/// record field renames), and for renames that cannot become identifiers.
+/// binary payloads, async fns returning streams, async or stream object
+/// members, record field renames), and for renames that cannot become
+/// identifiers.
 pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderError> {
     if let Some(data_enum) = interface.enums.first() {
         return Err(RenderError::new(format!(
