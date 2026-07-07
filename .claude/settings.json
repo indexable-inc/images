@@ -1,4 +1,8 @@
 {
+  "env": {
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "300000",
+    "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1"
+  },
   "extraKnownMarketplaces": {
     "mixedbread-skills": {
       "source": {
