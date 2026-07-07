@@ -1,16 +1,16 @@
 //! Render the `.pyi` stub for one interface.
 //!
-//! Ordering is deterministic: module docstring, imports (`collections.abc`
-//! when a stream return needs it, `os` when an argument accepts a path),
-//! errors, records, functions, and the trailing
-//! `__version__` the generated `pymodule` sets. Everything keeps the
-//! interface's declaration order within its group, so the stub diffs the way
-//! the Rust module does.
+//! Ordering is deterministic: module docstring, imports (`os` when an
+//! argument accepts a path), errors, records, object classes, stream
+//! classes, functions, and the trailing `__version__` the generated
+//! `pymodule` sets. Everything keeps the interface's declaration order
+//! within its group, so the stub diffs the way the Rust module does.
 
 use std::fmt::Write as _;
 
 use unibind_core::ir;
 
+use crate::py::streams::{self, StreamExport};
 use crate::py::types::{self, Position};
 
 /// The complete `.pyi` text.
@@ -19,9 +19,8 @@ pub fn render(interface: &ir::Interface) -> String {
     if !interface.docs.is_empty() {
         blocks.push(docstring(&interface.docs, 0));
     }
-    let imports = imports(interface);
-    if !imports.is_empty() {
-        blocks.push(imports.join("\n"));
+    if needs_os_import(interface) {
+        blocks.push("import os".to_owned());
     }
     for error in &interface.errors {
         error_classes(error, &mut blocks);
@@ -29,8 +28,16 @@ pub fn render(interface: &ir::Interface) -> String {
     for record in &interface.records {
         blocks.push(record_class(interface, record));
     }
+    for object in &interface.objects {
+        blocks.push(object_class(interface, object));
+    }
+    // Forward references need no quoting in a stub, so stream classes can
+    // trail the objects whose methods return them.
+    for export in streams::collect(interface) {
+        blocks.push(stream_class(interface, &export));
+    }
     for function in &interface.functions {
-        blocks.push(function_def(interface, function));
+        blocks.push(callable_def(interface, function, &Receiver::Free));
     }
     blocks.push("__version__: str".to_owned());
     join_blocks(&blocks)
@@ -63,42 +70,30 @@ pub fn docstring(lines: &[String], indent: usize) -> String {
     out
 }
 
-/// The stub's imports, alphabetized: `collections.abc` exactly when a
-/// function returns a stream (its annotation is
-/// `collections.abc.AsyncIterator`), `os` exactly when a path can appear in
-/// argument position.
-fn imports(interface: &ir::Interface) -> Vec<String> {
-    let mut imports = Vec::new();
-    if needs_abc_import(interface) {
-        imports.push("import collections.abc".to_owned());
-    }
-    if needs_os_import(interface) {
-        imports.push("import os".to_owned());
-    }
-    imports
-}
-
-fn needs_abc_import(interface: &ir::Interface) -> bool {
-    interface
-        .functions
-        .iter()
-        .any(|function| matches!(function.ret, Some(ir::Type::Stream(_))))
-}
-
-/// A path in argument position: function arguments and record constructor
-/// arguments (fields).
+/// A path in argument position needs `import os` for the `os.PathLike`
+/// form: function, method, and constructor arguments, plus record
+/// constructor arguments (fields).
 fn needs_os_import(interface: &ir::Interface) -> bool {
     let function_args = interface
         .functions
         .iter()
         .flat_map(|function| function.args.iter())
         .map(|arg| &arg.ty);
-    let constructor_args = interface
+    let record_args = interface
         .records
         .iter()
         .flat_map(|record| record.fields.iter())
         .map(|field| &field.ty);
-    function_args.chain(constructor_args).any(types::mentions_path)
+    let object_args = interface
+        .objects
+        .iter()
+        .flat_map(|object| object.constructor.iter().chain(object.methods.iter()))
+        .flat_map(|function| function.args.iter())
+        .map(|arg| &arg.ty);
+    function_args
+        .chain(record_args)
+        .chain(object_args)
+        .any(types::mentions_path)
 }
 
 /// One class per error: the base (extending `py_base`, `Exception` when
@@ -119,6 +114,21 @@ fn class_block(header: &str, docs: &[String]) -> String {
         return format!("{header} ...");
     }
     format!("{header}\n{}", docstring(docs, 1))
+}
+
+/// A class whose body is a docstring plus member blocks separated by one
+/// blank line.
+fn class_with_members(header: &str, docs: &[String], members: &[String]) -> String {
+    if members.is_empty() {
+        return class_block(header, docs);
+    }
+    let mut out = format!("{header}\n");
+    if !docs.is_empty() {
+        out.push_str(&docstring(docs, 1));
+        out.push_str("\n\n");
+    }
+    out.push_str(&members.join("\n\n"));
+    out
 }
 
 /// A record: docstring, the positional `__init__` the generated `#[new]`
@@ -154,33 +164,174 @@ fn record_class(interface: &ir::Interface, record: &ir::Record) -> String {
         }
     }
 
-    let mut out = format!("class {name}:\n");
-    if !record.docs.is_empty() {
-        out.push_str(&docstring(&record.docs, 1));
-        out.push_str("\n\n");
-    }
-    out.push_str(&members.join("\n\n"));
-    out
+    class_with_members(&format!("class {name}:"), &record.docs, &members)
 }
 
-/// A function stub: literal defaults, `None` for undefaulted `Option`
-/// arguments, and a docstring that names the raised exception base when the
-/// function throws (stub signatures cannot express `raises`). Async functions
-/// render `async def`: the extension returns a coroutine resolving to the
-/// annotated type.
-fn function_def(interface: &ir::Interface, function: &ir::Function) -> String {
-    let name = types::py_name(&function.names, &function.name);
-    let params: Vec<String> = function.args.iter().map(|arg| parameter(interface, arg)).collect();
-    let ret = function.ret.as_ref().map_or_else(
-        || "None".to_owned(),
-        |ty| types::annotation(interface, ty, Position::Return),
+/// An object: docstring, the `__init__` its declared constructor exposes
+/// through `#[new]` (no constructor means the class cannot be instantiated
+/// from Python, so no `__init__` appears), its methods, and, for
+/// resources, the close/async-with surface the pyo3 backend generates.
+fn object_class(interface: &ir::Interface, object: &ir::Object) -> String {
+    let name = types::py_name(&object.names, &object.name);
+    let mut members = Vec::new();
+    if let Some(ctor) = &object.constructor {
+        members.push(constructor_def(interface, ctor));
+    }
+    let close = resource_close(object);
+    for method in &object.methods {
+        // The resource surface owns `close`; the backend skips the generic
+        // rendering for it, so the stub does too.
+        if close.is_some_and(|close| std::ptr::eq(close, method)) {
+            continue;
+        }
+        let receiver = Receiver::Method {
+            object: &object.name,
+        };
+        members.push(callable_def(interface, method, &receiver));
+    }
+    if let Some(close) = close {
+        members.push(close_def(interface, close));
+        members.push(aenter_def(name));
+        members.push(aexit_def());
+    }
+    class_with_members(&format!("class {name}:"), &object.docs, &members)
+}
+
+/// The user close method the resource surface wraps: named `close`, zero
+/// arguments, no success value (the shape lowering guarantees resources
+/// declare). `None` for plain objects.
+fn resource_close(object: &ir::Object) -> Option<&ir::Function> {
+    if !object.resource {
+        return None;
+    }
+    object
+        .methods
+        .iter()
+        .find(|method| method.name == "close" && method.args.is_empty() && method.ret.is_none())
+}
+
+/// The generated `close()`: idempotent in the runtime, async exactly when
+/// the user's close is.
+fn close_def(interface: &ir::Interface, close: &ir::Function) -> String {
+    let def = def_keyword(close.asyncness);
+    let header = format!("    {def} close(self) -> None:");
+    def_block(&header, &doc_lines_with_raises(interface, close), 1)
+}
+
+/// `__aenter__` resolves to the object itself; its docstring mirrors the
+/// generated method's.
+fn aenter_def(class: &str) -> String {
+    let docs = vec!["Enter `async with`: resolves to the object itself.".to_owned()];
+    def_block(&format!("    async def __aenter__(self) -> {class}:"), &docs, 1)
+}
+
+/// `__aexit__` closes and resolves to `False`; the generated method takes
+/// the exception triple as raw objects.
+fn aexit_def() -> String {
+    let docs =
+        vec!["Exit `async with`: closes the resource, never suppresses the exception.".to_owned()];
+    def_block(
+        "    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> bool:",
+        &docs,
+        1,
+    )
+}
+
+/// The constructor stub: `#[new]` surfaces as `__init__`, with the same
+/// parameter surface as any callable.
+fn constructor_def(interface: &ir::Interface, ctor: &ir::Function) -> String {
+    let mut params = String::from("self");
+    for arg in &ctor.args {
+        params.push_str(", ");
+        params.push_str(&parameter(interface, arg));
+    }
+    let header = format!("    def __init__({params}) -> None:");
+    def_block(&header, &doc_lines_with_raises(interface, ctor), 1)
+}
+
+/// A per-export stream class, mirroring the pyo3 backend's generated
+/// async-iterator classes (`__aiter__` returns the class itself,
+/// `__anext__` resolves one item) and their synthesized docstrings.
+fn stream_class(interface: &ir::Interface, export: &StreamExport<'_>) -> String {
+    let class = streams::class_name(export.owner, &export.function.name);
+    let produced = export.owner.map_or_else(
+        || export.function.name.clone(),
+        |object| format!("{object}.{}", export.function.name),
     );
-    let def = match function.asyncness {
+    let docs = vec![
+        format!("Async iterator produced by `{produced}`."),
+        String::new(),
+        "Pull-based: each `__anext__` polls exactly one item, so the producer only runs as \
+         fast as the consumer awaits."
+            .to_owned(),
+    ];
+    let item = types::annotation(interface, export.item, Position::Return);
+    let members = vec![
+        format!("    def __aiter__(self) -> {class}: ..."),
+        format!("    async def __anext__(self) -> {item}: ..."),
+    ];
+    class_with_members(&format!("class {class}:"), &docs, &members)
+}
+
+/// Whose callable a stub renders: a module-level function, or a method
+/// (implicit `self`) of the named object. The receiver decides indentation
+/// and which per-export stream class a stream return names.
+enum Receiver<'a> {
+    Free,
+    Method { object: &'a str },
+}
+
+/// A function or method stub: literal defaults, `None` for undefaulted
+/// `Option` arguments, and a docstring that names the raised exception base
+/// when the callable throws (stub signatures cannot express `raises`).
+/// Async callables render `async def`: the extension returns a coroutine
+/// resolving to the annotated type.
+fn callable_def(
+    interface: &ir::Interface,
+    function: &ir::Function,
+    receiver: &Receiver<'_>,
+) -> String {
+    let (indent, owner) = match receiver {
+        Receiver::Free => (0, None),
+        Receiver::Method { object } => (1, Some(*object)),
+    };
+    let name = types::py_name(&function.names, &function.name);
+    let mut params = Vec::new();
+    if owner.is_some() {
+        params.push("self".to_owned());
+    }
+    params.extend(function.args.iter().map(|arg| parameter(interface, arg)));
+    let ret = match &function.ret {
+        None => "None".to_owned(),
+        // The runtime wraps a stream return in its per-export class; the
+        // annotation names that class rather than the abstract iterator.
+        Some(ir::Type::Stream(_)) => streams::class_name(owner, &function.name),
+        Some(ty) => types::annotation(interface, ty, Position::Return),
+    };
+    let def = def_keyword(function.asyncness);
+    let pad = "    ".repeat(indent);
+    let header = format!("{pad}{def} {name}({}) -> {ret}:", params.join(", "));
+    def_block(&header, &doc_lines_with_raises(interface, function), indent)
+}
+
+const fn def_keyword(asyncness: ir::Asyncness) -> &'static str {
+    match asyncness {
         ir::Asyncness::Async => "async def",
         ir::Asyncness::Sync => "def",
-    };
-    let header = format!("{def} {name}({}) -> {ret}:", params.join(", "));
+    }
+}
 
+/// A def whose body is its docstring, or `...` without one.
+fn def_block(header: &str, doc_lines: &[String], indent: usize) -> String {
+    if doc_lines.is_empty() {
+        return format!("{header} ...");
+    }
+    format!("{header}\n{}", docstring(doc_lines, indent + 1))
+}
+
+/// The callable's doc lines plus a trailing `Raises <base>.` naming the
+/// exception base class when it throws.
+fn doc_lines_with_raises(interface: &ir::Interface, function: &ir::Function) -> Vec<String> {
     let mut doc_lines = function.docs.clone();
     if let Some(throws) = &function.throws {
         let base = error_base_py_name(interface, throws);
@@ -189,10 +340,7 @@ fn function_def(interface: &ir::Interface, function: &ir::Function) -> String {
         }
         doc_lines.push(format!("Raises {base}."));
     }
-    if doc_lines.is_empty() {
-        return format!("{header} ...");
-    }
-    format!("{header}\n{}", docstring(&doc_lines, 1))
+    doc_lines
 }
 
 fn parameter(interface: &ir::Interface, arg: &ir::Arg) -> String {

@@ -3,7 +3,8 @@
 //! review surface for what `unibind-gen py` writes; on drift the test prints
 //! the new content to copy over the snapshot file. The interface is built
 //! literally (every IR field is `pub`) so the fixture exercises renames,
-//! docs, defaults, and every boundary type without lowering Rust source.
+//! docs, defaults, objects (plain and resource), streams, and every
+//! boundary type without lowering Rust source.
 
 use unibind_core::ir;
 use unibind_gen::artifact::parse_ir_bytes;
@@ -183,6 +184,75 @@ fn sample_errors() -> Vec<ir::ErrorType> {
     }]
 }
 
+
+fn sample_objects() -> Vec<ir::Object> {
+    let constructor = ir::Function {
+        throws: Some("SampleError".to_owned()),
+        ..function(
+            "open",
+            None,
+            &["Open a store."],
+            vec![
+                arg("path", ir::Type::Path { owned: false }, None),
+                arg("create", ir::Type::Bool, Some(ir::Literal::Bool(true))),
+            ],
+        )
+    };
+    let head = ir::Function {
+        asyncness: ir::Asyncness::Async,
+        ret: Some(ir::Type::Named("Row".to_owned())),
+        throws: Some("SampleError".to_owned()),
+        ..function("head", None, &["The first row."], vec![])
+    };
+    let watch = ir::Function {
+        ret: Some(ir::Type::Stream(Box::new(ir::Type::Named("Row".to_owned())))),
+        ..function(
+            "watch",
+            None,
+            &["Watch rows as they land."],
+            vec![arg("prefix", owned_string(), Some(ir::Literal::Str(String::new())))],
+        )
+    };
+    let cursor = ir::Function {
+        ret: Some(ir::Type::Named("Cursor".to_owned())),
+        ..function("cursor", Some("open_cursor"), &["Open a cursor over the store."], vec![])
+    };
+    let store = ir::Object {
+        name: "Store".to_owned(),
+        names: names(None),
+        docs: docs(&["A stateful handle over one store."]),
+        resource: false,
+        constructor: Some(constructor),
+        methods: vec![head, watch, cursor],
+    };
+
+    let read = ir::Function {
+        asyncness: ir::Asyncness::Async,
+        ret: Some(owned_string()),
+        ..function(
+            "read",
+            None,
+            &["Read the next chunk."],
+            vec![arg("max_bytes", ir::Type::Int(ir::IntKind::U32), Some(ir::Literal::Int(4096)))],
+        )
+    };
+    let close = ir::Function {
+        asyncness: ir::Asyncness::Async,
+        throws: Some("SampleError".to_owned()),
+        ..function("close", None, &["Release the cursor."], vec![])
+    };
+    let cursor_object = ir::Object {
+        name: "Cursor".to_owned(),
+        names: names(Some("StoreCursor")),
+        docs: docs(&["A resource over one store; instances come from `Store.cursor`."]),
+        resource: true,
+        constructor: None,
+        methods: vec![read, close],
+    };
+
+    vec![store, cursor_object]
+}
+
 fn interface() -> ir::Interface {
     ir::Interface {
         version: ir::IR_VERSION,
@@ -191,13 +261,13 @@ fn interface() -> ir::Interface {
         docs: docs(&[
             "A sample boundary for the emitter tests.",
             "",
-            "Everything the phase 1 generator renders appears here once.",
+            "Everything the py generator renders appears here once.",
         ]),
         functions: sample_functions(),
         records: sample_records(),
         enums: vec![],
         errors: sample_errors(),
-        objects: vec![],
+        objects: sample_objects(),
     }
 }
 

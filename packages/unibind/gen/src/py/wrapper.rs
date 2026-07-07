@@ -9,6 +9,7 @@ use std::fmt::Write as _;
 
 use unibind_core::ir;
 
+use crate::py::streams;
 use crate::py::stub;
 use crate::py::types;
 
@@ -35,8 +36,9 @@ pub fn render(interface: &ir::Interface, module_name: &str) -> String {
     out
 }
 
-/// Every name the extension module registers: functions, record classes, and
-/// the error base plus its variant subclasses (Python names throughout).
+/// Every name the extension module registers: functions, record classes,
+/// object classes, per-export stream classes, and the error base plus its
+/// variant subclasses (Python names throughout).
 fn public_names(interface: &ir::Interface) -> Vec<String> {
     let mut names = Vec::new();
     for function in &interface.functions {
@@ -44,6 +46,12 @@ fn public_names(interface: &ir::Interface) -> Vec<String> {
     }
     for record in &interface.records {
         names.push(types::py_name(&record.names, &record.name).to_owned());
+    }
+    for object in &interface.objects {
+        names.push(types::py_name(&object.names, &object.name).to_owned());
+    }
+    for export in streams::collect(interface) {
+        names.push(streams::class_name(export.owner, &export.function.name));
     }
     for error in &interface.errors {
         names.push(types::py_name(&error.names, &error.name).to_owned());

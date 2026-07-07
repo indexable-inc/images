@@ -15,7 +15,7 @@ pub enum Position {
 }
 
 /// The Python annotation for `ty` at `position`. Named types resolve to the
-/// record's Python name through `interface`.
+/// record's or object's Python name through `interface`.
 pub fn annotation(interface: &ir::Interface, ty: &ir::Type, position: Position) -> String {
     match ty {
         ir::Type::Bool => "bool".to_owned(),
@@ -34,7 +34,7 @@ pub fn annotation(interface: &ir::Interface, ty: &ir::Type, position: Position) 
             annotation(interface, key, position),
             annotation(interface, value, position)
         ),
-        ir::Type::Named(name) => record_py_name(interface, name),
+        ir::Type::Named(name) => named_py_name(interface, name),
         // Stream items are always produced, never accepted, so the item
         // renders in return position regardless of where the stream sits.
         ir::Type::Stream(item) => format!(
@@ -82,12 +82,16 @@ pub fn py_name<'a>(names: &'a ir::Names, name: &'a str) -> &'a str {
     names.py.as_deref().unwrap_or(name)
 }
 
-fn record_py_name(interface: &ir::Interface, name: &str) -> String {
+/// Resolve a `Named` reference (a record or an object) to its Python name.
+fn named_py_name(interface: &ir::Interface, name: &str) -> String {
+    if let Some(record) = interface.records.iter().find(|record| record.name == name) {
+        return py_name(&record.names, &record.name).to_owned();
+    }
     interface
-        .records
+        .objects
         .iter()
-        .find(|record| record.name == name)
-        .map_or(name, |record| py_name(&record.names, &record.name))
+        .find(|object| object.name == name)
+        .map_or(name, |object| py_name(&object.names, &object.name))
         .to_owned()
 }
 

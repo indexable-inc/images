@@ -1,6 +1,6 @@
 """A sample boundary for the emitter tests.
 
-Everything the phase 1 generator renders appears here once.
+Everything the py generator renders appears here once.
 """
 
 from ._sample import (
@@ -9,6 +9,10 @@ from ._sample import (
     Row,
     SampleError,
     Source,
+    Store,
+    StoreCursor,
+    StoreWatchStream,
+    TailStream,
     __version__,
     find,
     greet,
@@ -24,6 +28,10 @@ __all__ = [
     "Row",
     "SampleError",
     "Source",
+    "Store",
+    "StoreCursor",
+    "StoreWatchStream",
+    "TailStream",
     "__version__",
     "find",
     "greet",
@@ -32,3 +40,4 @@ __all__ = [
     "tail",
     "write_file",
 ]
+

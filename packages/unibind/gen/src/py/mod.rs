@@ -5,6 +5,7 @@
 //! and (unless skipped) the wrapper `__init__.py` re-exporting the module's
 //! public names.
 
+mod streams;
 mod stub;
 mod types;
 mod wrapper;
@@ -60,14 +61,6 @@ impl HostEmitter for PyEmitter {
 /// Refuse the IR surface the stub emitter does not render yet, with the
 /// same pointers the pyo3 backend gives.
 fn reject_unrendered_surface(interface: &Interface) -> Result<(), EmitError> {
-    if let Some(object) = interface.objects.first() {
-        return Err(EmitError {
-            message: format!(
-                "`{}` is a #[unibind::object]; class stubs are not rendered yet (issue #1991)",
-                object.name
-            ),
-        });
-    }
     if let Some(data_enum) = interface.enums.first() {
         return Err(EmitError {
             message: format!("`{}` is a data enum, which phase 1 does not render", data_enum.name),
