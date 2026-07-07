@@ -223,16 +223,41 @@ while IFS=$'\t' read -r key title action; do
   # cwd (the pack dir), so their sessions showed up in later snapshots as
   # claude sessions inside workflows/indexable and the judge re-diagnosed
   # its own just-spawned fixers as a silent workflow agent (index#2188).
+  session=""
   if out="$(cd "$HOME" && "$HOME/.local/bin/claude" --bg -p "You are $agent_name, dispatched by the overseer. Problem: $title. Suggested action: $action. Investigate, fix it properly (worktree + PR when it is a repo change), and report." </dev/null 2>&1)"; then
-    note="dispatched $agent_name"
+    # `claude --bg` prints "backgrounded · <session-id>". That id plus the
+    # exact $agent_name label IS the dispatch handle; record it verbatim.
+    # Tick-time tracking joins on this recorded handle, never on a label
+    # the judge restates in its own notes: a self-invented label was
+    # declared "never materialized" for two ticks while the real fixer
+    # ran and finished, and a duplicate was dispatched (index#2288).
+    session="$(printf '%s\n' "$out" | awk '/backgrounded/ {print $NF; exit}')"
+    note="dispatched $agent_name session=${session:-unknown}"
   else
     note="dispatch failed: $(printf '%s' "$out" | head -c 120)"
   fi
   jq --arg k "$key" --argjson at "$now_epoch" --arg note "$note" \
-    '.[$k] = {at: $at, note: $note}' "$dispatched" > "$dispatched.tmp"
+    --arg agent "$agent_name" --arg session "$session" \
+    '.[$k] = {at: $at, note: $note, agent: $agent,
+              session: (if $session == "" then null else $session end)}' \
+    "$dispatched" > "$dispatched.tmp"
   mv "$dispatched.tmp" "$dispatched"
 done < <(jq -r '.attention[]? | select(.severity == "fix")
   | [(.title | ascii_downcase | gsub("[^a-z0-9]+"; "-")), .title, .action] | @tsv' "$report_file")
+
+# Append the dispatch ledger to the notes mechanically. The notes are
+# otherwise model-authored, and a restated label drifts (index#2288), so
+# the authoritative handles (exact label + spawned session id) are
+# re-derived from dispatched.json on every tick and appended after the
+# judge's own text; the next tick joins fixer tracking on these handles.
+ledger="$(jq -r --argjson now "$now_epoch" '
+  to_entries
+  | map(select($now - .value.at < 86400))
+  | sort_by(-.value.at)
+  | .[] | "- \(.value.at | todate) \(.value.note) [key: \(.key)]"' "$dispatched")"
+if [ -n "$ledger" ]; then
+  printf '\n\nDISPATCH LEDGER (machine-written by overseer.sh; the authoritative record of dispatched fixers -- do not restate):\n%s\n' "$ledger" >> "$notes"
+fi
 
 # fold the dispatch notes into the report the page renders
 jq --slurpfile d "$dispatched" '.attention = [.attention[]?
