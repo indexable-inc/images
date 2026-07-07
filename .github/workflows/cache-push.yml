@@ -309,12 +309,22 @@ jobs:
           # surface as warnings, not failures: an attr can legitimately refuse
           # to instantiate on darwin (linux-only module assertions), and the
           # error row does not say which system the attr would have been.
+          #
+          # `--gc-roots-dir` roots every instantiated drv for the realise
+          # loop below: its per-root `nix store gc` otherwise deletes the
+          # not-yet-realised .drv files (nothing else roots them), so once
+          # the first root succeeded and gc'd, every remaining root died
+          # with "failed to obtain derivation" -- 109 of 110 roots on every
+          # merge (run 28883927791), which kept the cache empty and made
+          # each run re-attempt the full set.
           roots="$workdir/roots.tsv"
+          mkdir -p "$workdir/gcroots"
           eval_t=$SECONDS
           "$eval_jobs" \
             --flake .#cachePushRoots.aarch64-darwin \
             --workers 2 \
             --max-memory-size 2048 \
+            --gc-roots-dir "$workdir/gcroots" \
             2>"$workdir/eval.err" \
             | tee "$workdir/eval.jsonl" \
             | jq -r 'select(.error == null and .system == "aarch64-darwin") | [.drvPath, (.outputs.out // "")] | @tsv' \
@@ -363,17 +373,18 @@ jobs:
           # matching the linux lane's temperament; job-level failures (empty
           # eval, relay upload) are what block `cache-ready`.
           #
-          # Each root is realised, copied into the relay cache, and then GC'd
-          # in the same child, so the Nix store never holds more than one
-          # root's closure at a time. The store grew monotonically before
-          # (realise all, copy all at the end): on the ~14 GB hosted mac the
-          # accumulated closures of ~100 roots plus a cold codex build's
-          # scratch overran the disk and every remaining root died ENOSPC
-          # (run 28770353669, 17 roots "failed" purely on `No space left`).
-          # The relay dir is a plain NAR directory, so once a root is copied
-          # there its store paths are redundant; `nix store gc` reclaims the
-          # closure (no GC roots are held), and any dependency a later root
-          # shares simply re-substitutes as a cheap download.
+          # Each root is realised, copied into the relay cache, and then the
+          # store is GC'd when scratch runs low, so closures do not
+          # accumulate. The store grew monotonically before (realise all,
+          # copy all at the end): on the ~14 GB hosted mac the accumulated
+          # closures of ~100 roots plus a cold codex build's scratch overran
+          # the disk and every remaining root died ENOSPC (run 28770353669,
+          # 17 roots "failed" purely on `No space left`). The relay dir is a
+          # plain NAR directory, so once a root is copied there its store
+          # paths are redundant; gc reclaims everything except the pending
+          # drvs (rooted by the eval's --gc-roots-dir above), and any
+          # dependency a later root shares re-substitutes as a cheap
+          # download.
           failed_roots="$workdir/failed-roots.txt"
           : > "$failed_roots"
           outs="$workdir/outs.txt"
@@ -398,9 +409,17 @@ jobs:
                 if out="$(nix-store --realise --keep-going "$drv")" \
                    && printf "%s\n" "$out" | xargs -r nix copy --to "$relay"; then
                   printf "%s\n" "$out" >> "$outs"
-                  # gc keeps anything still referenced (later roots re-fetch
-                  # it), so reclaiming here never breaks a subsequent realise.
-                  nix store gc >/dev/null 2>&1 || true
+                  # gc only under disk pressure: an unconditional per-root gc
+                  # evicts the shared deps (toolchains, stdenv closures) that
+                  # every later root then re-downloads. The 20 GiB floor
+                  # covers the largest single-root scratch seen so far: a
+                  # cold codex build alone needs >14 GB of target dir (run
+                  # 28762717645). Pending drvs survive the sweep via the
+                  # eval gc roots.
+                  read -r _ _ _ avail _ < <(df -Pk /nix/store | tail -n 1)
+                  if [ "$avail" -lt $((20 * 1024 * 1024)) ]; then
+                    nix store gc >/dev/null 2>&1 || true
+                  fi
                 else
                   printf "%s\n" "$drv" >> "$failed"
                   exit 1
