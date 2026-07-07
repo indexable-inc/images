@@ -5,6 +5,7 @@
 # agent only authors the digest text (a read-only sandbox cannot write
 # the page anyway).
 set -euo pipefail
+trap 'echo "overseer.sh: failed at line $LINENO (exit $?)" >&2' ERR
 
 state_dir="$HOME/.local/share/symphony/overseer"
 html="$state_dir/index.html"
@@ -17,7 +18,7 @@ touch "$notes"
 prompt_file="$PWD/prompts/overseer.md"
 last_msg="$(mktemp)"
 workdir="$(mktemp -d)" # empty cwd for codex; --skip-git-repo-check below
-cleanup() { rm -rf "$last_msg" "$workdir" "${digest_file:-}"; }
+cleanup() { rm -rf "$last_msg" "$workdir" "${report_file:-}" "${data_json:-}"; }
 trap cleanup EXIT
 
 now_iso="$(date +%Y-%m-%dT%H:%M:%S%z)"
@@ -96,13 +97,19 @@ symphony_runs="$(curl -s --max-time 5 http://127.0.0.1:4040/api/v1/ir/runs |
 
 loadavg="$(sysctl -n vm.loadavg | tr -d '{}' | awk '{print $1}')"
 ncpu="$(sysctl -n hw.ncpu)"
+cpu_pct="$(jq '([.[].pcpu] | add // 0) / '"$ncpu"' | round' <<<"$ps_json")"
+mem_pct="$(vm_stat | awk -v total="$(sysctl -n hw.memsize)" '
+  /page size of/ { psize = $8 }
+  /Pages (active|wired down|occupied by compressor)/ { used += $NF }
+  END { printf "%d", used * psize / total * 100 }')"
 
 jq -n \
   --arg now "$now_iso" --arg loadavg "$loadavg" --argjson ncpu "$ncpu" \
+  --argjson cpu_pct "$cpu_pct" --argjson mem_pct "$mem_pct" \
   --argjson agents "$agents" --argjson hot "$hot" --argjson stalled "$stalled" \
   --argjson claude_sessions "$claude_sessions" --argjson codex_sessions "$codex_sessions" \
   --argjson symphony_runs "$symphony_runs" \
-  '{now: $now, load_1m: ($loadavg | tonumber), ncpu: $ncpu,
+  '{now: $now, load_1m: ($loadavg | tonumber), ncpu: $ncpu, cpu_pct: $cpu_pct, mem_pct: $mem_pct,
     agent_processes: $agents, hot_processes: $hot, stalled_suspects: $stalled,
     claude_sessions: $claude_sessions, codex_sessions: $codex_sessions,
     symphony_runs: $symphony_runs}' > "$snap"
@@ -129,11 +136,43 @@ Snapshot ($now_iso):
 $(cat "$snap")" </dev/null # codex reads a non-tty stdin to EOF; the runner pipe never closes (#2011)
 )
 
-# The reply must be the {digest, notes} JSON object; anything else fails
-# the run loudly rather than publishing a garbled page.
-digest_file="$(mktemp)"
-jq -er '.digest' "$last_msg" > "$digest_file"
+# The reply must be the {digest, attention, agents, notes} JSON object;
+# anything else fails the run loudly rather than publishing a garbled page.
+report_file="$(mktemp)"
+tr -d '\000-\010\013\014\016-\037' < "$last_msg" > "$last_msg.clean"
+mv "$last_msg.clean" "$last_msg"
+jq -e '{digest: .digest, attention: (.attention // []), agents: (.agents // [])}' "$last_msg" > "$report_file"
 jq -er '.notes' "$last_msg" > "$notes"
+
+# Act on "fix" items: dispatch one background claude fixer per new
+# problem (keyed by title, 6h dedupe via dispatched.json) and record the
+# handle so the page can say what is being done. Dispatch is best-effort
+# observability of the overseer acting, never a reason to fail the tick,
+# so a spawn failure is recorded as such rather than aborting the report.
+dispatched="$state_dir/dispatched.json"
+[ -f "$dispatched" ] || echo '{}' > "$dispatched"
+now_epoch="$(date +%s)"
+while IFS=$'\t' read -r key title action; do
+  [ -n "$key" ] || continue
+  last="$(jq -r --arg k "$key" '.[$k].at // 0' "$dispatched")"
+  if [ $((now_epoch - last)) -lt 21600 ]; then continue; fi
+  agent_name="overseer-fix-$(printf '%s' "$key" | head -c 12)"
+  if out="$("$HOME/.local/bin/claude" --bg -p "You are $agent_name, dispatched by the overseer. Problem: $title. Suggested action: $action. Investigate, fix it properly (worktree + PR when it is a repo change), and report." 2>&1)"; then
+    note="dispatched $agent_name"
+  else
+    note="dispatch failed: $(printf '%s' "$out" | head -c 120)"
+  fi
+  jq --arg k "$key" --argjson at "$now_epoch" --arg note "$note" \
+    '.[$k] = {at: $at, note: $note}' "$dispatched" > "$dispatched.tmp"
+  mv "$dispatched.tmp" "$dispatched"
+done < <(jq -r '.attention[]? | select(.severity == "fix")
+  | [(.title | ascii_downcase | gsub("[^a-z0-9]+"; "-")), .title, .action] | @tsv' "$report_file")
+
+# fold the dispatch notes into the report the page renders
+jq --slurpfile d "$dispatched" '.attention = [.attention[]?
+  | .dispatched = ($d[0][(.title | ascii_downcase | gsub("[^a-z0-9]+"; "-"))].note // null)]' \
+  "$report_file" > "$report_file.tmp"
+mv "$report_file.tmp" "$report_file"
 
 # Snapshot history for the drill-down trail (3 days at 10-min ticks).
 cp "$snap" "$state_dir/snapshots/$(date +%Y%m%dT%H%M%S).json"
@@ -141,83 +180,51 @@ ls -1 "$state_dir/snapshots" | sort | head -n -432 2>/dev/null | while read -r f
   rm -f "$state_dir/snapshots/$f"
 done
 
-# ---- render: digest on top, one <details> row per item -----------------
+# ---- render: data.json spliced into the Svelte report template ---------
+
+# The compiled report app (template.html + bundle.js) comes from the
+# overseer-report nix package; the symphony home module wires its store
+# path through OVERSEER_APP. No app, no page: fail loudly.
+[ -d "${OVERSEER_APP:?OVERSEER_APP must point at the overseer-report package}" ]
+
+# Trend history from the archived snapshots (last 48 ticks = 8h).
+history="$(ls -1 "$state_dir/snapshots" | sort | tail -48 | while read -r f; do
+  jq -c '{ts: .now, load: .load_1m, cpu: (.cpu_pct // 0), mem: (.mem_pct // 0),
+          sessions: (.claude_sessions | length),
+          stuck: (.stalled_suspects | length)}' "$state_dir/snapshots/$f"
+done | jq -s '.')"
+
+data_json="$(mktemp)"
+jq -n \
+  --arg now "$now_iso" --arg loadavg "$loadavg" --argjson ncpu "$ncpu" \
+  --argjson cpu_pct "$cpu_pct" --argjson mem_pct "$mem_pct" \
+  --slurpfile report "$report_file" --rawfile notes_text "$notes" \
+  --argjson history "$history" --argjson runs "$symphony_runs" \
+  '{generated_at: $now, load_1m: ($loadavg | tonumber), ncpu: $ncpu, cpu_pct: $cpu_pct, mem_pct: $mem_pct,
+    report: $report[0], history: $history,
+    runs: (if ($runs | type) == "array" then $runs else [] end),
+    notes: $notes_text}' > "$data_json"
 
 first_run=0
 [ -f "$html" ] || first_run=1
 
+# Splice the JSON over the template marker byte-exactly (no regex, so the
+# payload cannot corrupt the substitution), escaping "<" so transcript
+# text can never close the <script> tag early.
 tmp_html="$(mktemp "$state_dir/.index.XXXXXX")"
-{
-  cat <<'EOF'
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta http-equiv="refresh" content="120">
-<title>overseer</title>
-<style>
-  body { max-width: 46rem; margin: 3rem auto; padding: 0 1rem;
-         font: 15px/1.55 -apple-system, "Helvetica Neue", sans-serif;
-         color: #1a1a1a; background: #fcfcfa; }
-  h1 { font-size: 1rem; font-weight: 600; letter-spacing: 0.02em; }
-  h2 { font-size: 0.8rem; font-weight: 600; color: #8a8a86;
-       text-transform: uppercase; letter-spacing: 0.06em; margin: 2rem 0 0.5rem; }
-  .digest { white-space: pre-wrap; margin: 1rem 0 0; }
-  .meta { font-size: 0.8rem; color: #8a8a86; font-variant-numeric: tabular-nums; }
-  details { border-top: 1px solid #e6e6e2; padding: 0.4rem 0; }
-  summary { cursor: pointer; }
-  summary .n { color: #8a8a86; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
-  pre { font-size: 12px; overflow-x: auto; background: #f4f4f0; padding: 0.6rem; }
-  .warn summary { color: #a04000; }
-  a { color: inherit; }
-  @media (prefers-color-scheme: dark) {
-    body { color: #e6e6e2; background: #161615; }
-    details { border-color: #2c2c2a; }
-    pre { background: #1f1f1d; }
-    .warn summary { color: #e0956a; }
-  }
-</style>
-</head>
-<body>
-EOF
-
-  jq -r --rawfile digest "$digest_file" --rawfile notes "$notes" '
-    def esc: @html;
-    def row(cls; head; body): "<details class=\"\(cls)\"><summary>\(head)</summary><pre>\(body | esc)</pre></details>";
-
-    "<h1>overseer</h1>",
-    "<p class=\"meta\">updated \(.now | esc) · load \(.load_1m)/\(.ncpu) · \(.agent_processes | length) agent processes · \(.claude_sessions | length) claude sessions · \(.hot_processes | length) hot · \(.stalled_suspects | length) stalled suspects</p>",
-    "<p class=\"digest\">\($digest | esc)</p>",
-
-    (if (.stalled_suspects | length) > 0 then
-      "<h2>stalled suspects</h2>",
-      (.stalled_suspects[] | row("warn"; "pid \(.pid) · \(.etime) at \(.pcpu)% <span class=\"n\">headless</span>"; (. | tojson)))
-    else empty end),
-
-    (if (.hot_processes | length) > 0 then
-      "<h2>hot processes</h2>",
-      (.hot_processes[] | row(""; "\(.pcpu)% · pid \(.pid) · \(.args[0:80] | esc)"; (. | tojson)))
-    else empty end),
-
-    "<h2>agent processes</h2>",
-    (if (.agent_processes | length) == 0 then "<p class=\"meta\">none</p>" else
-      (.agent_processes[] | row(""; "pid \(.pid) · \(.pcpu)% · up \(.etime) · \(.args[0:80] | esc)"; (. | tojson))) end),
-
-    "<h2>claude sessions (12h)</h2>",
-    (if (.claude_sessions | length) == 0 then "<p class=\"meta\">none</p>" else
-      (.claude_sessions[] | row(""; "\(.cwd | esc) <span class=\"n\">\(.last_active | esc)</span>"; .last_text)) end),
-
-    "<h2>overseer notes</h2>",
-    row(""; "working notes carried to the next tick"; $notes),
-
-    "<h2>symphony runs</h2>",
-    (if (.symphony_runs | type) != "array" then "<p class=\"meta\">\(.symphony_runs.error // "unavailable" | esc)</p>" else
-      (.symphony_runs[] | "<details class=\"\(if .status == "failed" then "warn" else "" end)\"><summary>\(.run_id | esc) · \(.status | esc) <span class=\"n\">\(.updated_at | esc)</span></summary><pre>\(. | tojson | esc)</pre><p class=\"meta\"><a href=\"http://127.0.0.1:4040/ir/\(.run_id)\">full run detail</a></p></details>") end)
-  ' "$snap"
-
-  printf '</body>\n</html>\n'
-} > "$tmp_html"
+sed 's/</\\u003c/g' "$data_json" | perl -0777 -e '
+  local $/;
+  open my $t, "<", $ARGV[0] or die "template: $!";
+  my $html = <$t>;
+  my $json = <STDIN>;
+  my $m = "__OVERSEER_DATA__";
+  my $i = index($html, $m);
+  die "marker $m missing from template" if $i < 0;
+  substr($html, $i, length($m)) = $json;
+  print $html;
+' "$OVERSEER_APP/template.html" > "$tmp_html"
 mv "$tmp_html" "$html"
+cp -f "$OVERSEER_APP/bundle.js" "$state_dir/bundle.js"
 
 # Surface the page the first time it exists; later ticks update in place
 # (the meta refresh keeps an open tab current without re-stealing focus).
