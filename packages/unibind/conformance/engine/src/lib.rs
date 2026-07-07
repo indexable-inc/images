@@ -277,14 +277,17 @@ mod tests {
         assert_eq!(pendings, 3, "one yield per item");
     }
 
-    /// The exported future types must satisfy `DynFuture`'s bounds. The
-    /// hanging future stays unpolled here, so dropping it never creates
-    /// (or fires) the cancellation guard and the witness test cannot race.
+    /// The exported future types must satisfy `DynFuture`'s bounds and the
+    /// stream must satisfy `DynStream`'s (`Send` only: `UniStream`'s inner
+    /// box is deliberately not `Sync`). The hanging future stays unpolled
+    /// here, so dropping it never creates (or fires) the cancellation guard
+    /// and the witness test cannot race.
     #[test]
     fn engine_futures_are_send_and_sync() {
         fn assert_send_sync<T: Send + Sync>(_value: T) {}
+        fn assert_send<T: Send>(_value: T) {}
         assert_send_sync(conformance::delayed_double(1));
         assert_send_sync(conformance::hang_until_dropped());
-        assert_send_sync(conformance::count_to(1));
+        assert_send(conformance::count_to(1));
     }
 }
