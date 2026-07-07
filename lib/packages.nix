@@ -20,6 +20,9 @@
       cargoUnit = cargoUnitFor pkgs;
       goUnit = goUnitFor pkgs;
       rustWorkspace = rustWorkspaceFor pkgs;
+      # unibind build glue bound to the caller's pkgs, for the same reason as
+      # rustWorkspace above.
+      unibind = ixSpecialArgs.unibindFor pkgs;
       # Patched-source builder bound to the caller's pkgs, so codex / btop /
       # llm-clippy apply their patch series against a source that builds for the
       # consuming system rather than the top-level x86_64-linux one.

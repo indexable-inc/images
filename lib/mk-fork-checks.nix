@@ -48,9 +48,10 @@
   # committed `dag.json` is honest and in sync (declared ancestors sufficient,
   # independent patches commute byte-for-byte, NNNN is a topological order, and
   # regenerating reproduces the committed bytes), and that the fork's upstreaming
-  # intent (`fork.patches`, if declared) is coherent: keys name real patch files
-  # and attempt-marked patches carry a commit-message body (which becomes the
-  # upstream PR description, see packages/upstream-pr). Pure text work on the
+  # intent (`fork.patches`, if declared) is coherent: keys name real patch files.
+  # It also fails any patch that states no reason in its commit-message body:
+  # the body is the reason of record for every fork patch and, for
+  # attempt-marked ones, the upstream PR description (see packages/upstream-pr). Pure text work on the
   # fetched src tree in the sandbox, so it stays seconds-fast. The derivation and
   # verification logic is owned by `dagCheckSrc` (dag-{lib,check}.nu); the check
   # just wires the src, patch dir, pinned rev, and intent into that driver.

@@ -1,13 +1,13 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="TuiManager spawns children on real PTYs and a vt100 emulator turns their bytes into a readable screen"></p>
+
 # tui
 
-Spawn and drive multiple PTY-backed terminal programs from one process. Each
-spawned child gets a real pseudo-terminal, so interactive programs (vim, less,
-a shell, a REPL) behave as they would in a normal terminal instead of seeing a
-dumb pipe.
-
-The output of every child is fed through a [vt100] emulator, so you read back a
-rendered screen (viewport, scrollback, per-cell styling) rather than a raw byte
-stream full of escape sequences.
+Ever tried to script vim, less, or a REPL through a pipe, and watched it
+misbehave or spray raw escape sequences? `tui` spawns each child on a real
+pseudo-terminal, so interactive programs behave exactly as they do in a normal
+terminal, and feeds every byte through a [vt100] emulator, so you read back a
+rendered screen (viewport, scrollback, per-cell styling) instead of a byte
+stream. One `TuiManager` drives any number of children from one process.
 
 ## Usage
 
@@ -35,6 +35,23 @@ let cells = term.read_styled_cells()?;   // per-cell char + color + attrs
 Every blocking method has an `_async` twin (`write_async`, `read_viewport_async`,
 …) that returns a future instead of driving the runtime itself, for callers that
 already run inside tokio.
+
+## Getting it
+
+`tui` is a library crate in the index Cargo workspace, with no standalone
+mirror, so it is consumed through the workspace: inside the repo, depend on it
+with `tui.workspace = true` in your crate's `Cargo.toml`. The multi-process
+dashboard it feeds is runnable on its own:
+
+```sh
+nix run github:indexable-inc/index#dashboard
+```
+
+The `.#` commands in this README assume a clone:
+
+```sh
+git clone https://github.com/indexable-inc/index
+```
 
 ## Design
 
@@ -146,13 +163,13 @@ Size is fixed for the life of the process; there is no runtime resize today.
 
 All fallible calls return `Result<T, Error>`, a `snafu`-derived enum:
 
-- `ProcessSpawn` — the child failed to launch.
-- `TuiNotFound` — the handle's actor has exited (the channel is closed).
-- `WriteToTui` / `ReadFromTui` — a PTY I/O call failed.
-- `NoOutputAvailable` — the screen is still empty.
+- `ProcessSpawn`: the child failed to launch.
+- `TuiNotFound`: the handle's actor has exited (the channel is closed).
+- `WriteToTui` / `ReadFromTui`: a PTY I/O call failed.
+- `NoOutputAvailable`: the screen is still empty.
 - `InvalidRowRange` / `InvalidColRange` / `RowIndexOutOfBounds` /
-  `ColIndexOutOfBounds` — bad arguments to `slice_2d`.
-- `ArrayConversion` — building the styled-cell grid failed (carries the
+  `ColIndexOutOfBounds`: bad arguments to `slice_2d`.
+- `ArrayConversion`: building the styled-cell grid failed (carries the
   underlying `ndarray::ShapeError`).
 
 ## Known limitations

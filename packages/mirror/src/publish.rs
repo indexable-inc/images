@@ -9,10 +9,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use serde_json::Value;
 
 use crate::workspace::Workspace;
-use crate::{MONOREPO_SLUG, exec, generate, manifest};
+use crate::{MONOREPO_SLUG, exec, generate, manifest, mirrors};
 
 pub struct Request {
     /// Repo-relative package path, e.g. `packages/progress-style`.
@@ -28,6 +27,7 @@ struct Target {
     repo: Option<String>,
     description: Option<String>,
     topics: Vec<String>,
+    flake_attr: Option<String>,
 }
 
 pub fn run(workspace: &Workspace, request: &Request) -> Result<()> {
@@ -41,6 +41,8 @@ pub fn run(workspace: &Workspace, request: &Request) -> Result<()> {
             package: &request.package,
             out: &tree,
             mirror_repo: target.repo.as_deref(),
+            description: target.description.as_deref(),
+            flake_attr: target.flake_attr.as_deref(),
         },
     )?;
 
@@ -109,6 +111,7 @@ fn configured_target(workspace: &Workspace, request: &Request) -> Result<Target>
             repo: request.repo.clone(),
             description: None,
             topics: Vec::new(),
+            flake_attr: None,
         });
     }
     if let Some(repo) = &request.repo {
@@ -117,40 +120,16 @@ fn configured_target(workspace: &Workspace, request: &Request) -> Result<Target>
             repo: Some(repo.clone()),
             description: None,
             topics: Vec::new(),
+            flake_attr: None,
         });
     }
-    let entries = mirror_entries(workspace, request.mirror_json.as_deref())?;
-    let package = request
-        .package
-        .to_str()
-        .context("package path is not UTF-8")?;
-    let entry = entries
-        .iter()
-        .find(|entry| entry.get("path").and_then(Value::as_str) == Some(package))
-        .with_context(|| format!("`{package}` has no `mirror` attr in its package.nix"))?;
-    let repo = entry
-        .get("repo")
-        .and_then(Value::as_str)
-        .context("mirror entry without `repo`")?
-        .to_owned();
+    let entry = mirrors::entry_for(workspace, &request.package, request.mirror_json.as_deref())?;
     Ok(Target {
-        remote_url: format!("https://github.com/{repo}.git"),
-        repo: Some(repo),
-        description: entry
-            .get("description")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        topics: entry
-            .get("topics")
-            .and_then(Value::as_array)
-            .map(|topics| {
-                topics
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect()
-            })
-            .unwrap_or_default(),
+        remote_url: format!("https://github.com/{}.git", entry.repo),
+        repo: Some(entry.repo),
+        description: entry.description,
+        topics: entry.topics,
+        flake_attr: entry.flake_attr,
     })
 }
 
@@ -159,24 +138,6 @@ fn crate_description(workspace: &Workspace, package: &Path) -> Result<Option<Str
     let path = workspace.root.join(package).join("Cargo.toml");
     let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     Ok(manifest::package_info(&text)?.description)
-}
-
-fn mirror_entries(workspace: &Workspace, json: Option<&Path>) -> Result<Vec<Value>> {
-    let text = match json {
-        Some(path) => {
-            fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?
-        }
-        None => exec::run(
-            &workspace.root,
-            "nix",
-            &["eval", "--json", ".#lib.mirrorPackages"],
-        )?,
-    };
-    let value: Value = serde_json::from_str(&text).context("parsing mirrorPackages JSON")?;
-    value
-        .as_array()
-        .cloned()
-        .context("mirrorPackages JSON is not a list")
 }
 
 fn clone_or_create(

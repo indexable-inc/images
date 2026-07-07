@@ -12,13 +12,18 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use crate::workspace::Workspace;
-use crate::{MONOREPO_SLUG, lockfile, manifest, readme};
+use crate::{MONOREPO_SLUG, changelog, lockfile, manifest, readme};
 
 pub struct Request<'a> {
     /// Repo-relative package path, e.g. `packages/progress-style`.
     pub package: &'a Path,
     pub out: &'a Path,
     pub mirror_repo: Option<&'a str>,
+    /// Pitch for the generated README (the resolved `mirror.description`);
+    /// `None` falls back to the crate's `[package] description`.
+    pub description: Option<&'a str>,
+    /// Monorepo flake output attr when the package is flake-exposed.
+    pub flake_attr: Option<&'a str>,
 }
 
 pub struct Generated {
@@ -38,6 +43,9 @@ pub fn run(workspace: &Workspace, request: &Request<'_>) -> Result<Generated> {
         name: crate_name,
         description,
     } = manifest::package_info(&primary_manifest)?;
+    // The declarative mirror metadata is the single source of truth for the
+    // pitch; the crate's own description is the fallback, never a second copy.
+    let description = request.description.map(str::to_owned).or(description);
     let internal = dependency_closure(workspace, &primary_manifest)?;
 
     ensure_empty(request.out)?;
@@ -95,20 +103,33 @@ pub fn run(workspace: &Workspace, request: &Request<'_>) -> Result<Generated> {
         .to_str()
         .context("package path is not UTF-8")?
         .trim_end_matches('/');
-    let existing = fs::read_to_string(package_dir.join("README.md")).ok();
-    let banner = readme::Banner {
+
+    let history = workspace.package_history(package_path)?;
+    if !history.is_empty() {
+        fs::write(
+            request.out.join("CHANGELOG.md"),
+            changelog::compose(&changelog::Request {
+                monorepo: MONOREPO_SLUG,
+                package_path,
+                crate_name: &crate_name,
+                history: &history,
+            }),
+        )
+        .context("writing CHANGELOG.md")?;
+    }
+
+    let package = readme::Package {
         monorepo: MONOREPO_SLUG,
-        package_path,
+        path: package_path,
         commit: &workspace.head_commit()?,
         crate_name: &crate_name,
         description: description.as_deref(),
         mirror_repo: request.mirror_repo,
+        flake_attr: request.flake_attr,
+        has_binary: has_binary(&package_dir, &primary_manifest)?,
+        has_changelog: !history.is_empty(),
     };
-    fs::write(
-        request.out.join("README.md"),
-        readme::compose(&banner, existing.as_deref()),
-    )
-    .context("writing README.md")?;
+    write_readme(request.out, &package_dir, &package)?;
 
     Ok(Generated {
         crate_name,
@@ -132,6 +153,36 @@ fn dependency_closure(workspace: &Workspace, primary: &str) -> Result<BTreeMap<S
         }
     }
     Ok(closure)
+}
+
+/// Compose the mirror README, synthesizing an `assets/hero.svg` first when
+/// the package ships no README of its own; a curated README references its
+/// own hero (already copied with the crate) per the creating-a-readme skill.
+fn write_readme(out: &Path, package_dir: &Path, package: &readme::Package<'_>) -> Result<()> {
+    let existing = fs::read_to_string(package_dir.join("README.md")).ok();
+    if existing.is_none() {
+        let hero = out.join(readme::HERO_PATH);
+        if !hero.exists() {
+            fs::create_dir_all(hero.parent().context("hero path has a parent")?)
+                .context("creating the hero's directory")?;
+            fs::write(&hero, readme::hero_svg(package.crate_name, package.description))
+                .context("writing the hero SVG")?;
+        }
+    }
+    fs::write(
+        out.join("README.md"),
+        readme::compose(package, existing.as_deref()),
+    )
+    .context("writing README.md")
+}
+
+/// Whether the crate builds an executable: `src/main.rs`, a `src/bin/`
+/// directory (cargo's auto-discovered targets), or an explicit `[[bin]]`.
+fn has_binary(package_dir: &Path, manifest: &str) -> Result<bool> {
+    if package_dir.join("src/main.rs").is_file() || package_dir.join("src/bin").is_dir() {
+        return Ok(true);
+    }
+    manifest::declares_binary(manifest)
 }
 
 fn read_manifest(crate_dir: &Path) -> Result<String> {

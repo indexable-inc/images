@@ -78,7 +78,7 @@ session machinery; see [sessions](../sessions/overview.md).
 ## MCP tools (`tools.py`)
 
 The FastMCP server is `mcp = FastMCP("ix-mcp")` (`tools.py:75`); its
-`serverInfo.version` is stamped from `IX_MCP_VERSION` (the flake rev) onto the
+`serverInfo.version` is stamped from `IX_BUILD_REV` (the flake rev) onto the
 low-level server (`tools.py:197`). Three tools, all with
 `structured_output=False` so FastMCP does not duplicate the reply as
 `structuredContent` (which doubled image blocks and blew the token cap,
@@ -124,7 +124,9 @@ holding the store and the `dashboard-url` handoff (CWE-377 checks).
 Environment variables the server reads: `IX_MCP_HOST`, `IX_MCP_PUBLIC_HOST`,
 `IX_MCP_DASHBOARD_PORT`, `IX_MCP_HUB_PORT`, `IX_MCP_STORE`, `IX_MCP_SESSION`,
 `IX_MCP_NO_BROWSER`, `IX_MCP_EXEC_TOKEN`(`_FILE`), `IX_MCP_EXEC_TRUST_NETWORK`,
-`IX_MCP_VERSION`, `IX_MCP_DASHBOARD_URL`, `IX_MCP_KERNEL_TRACE`, plus output caps
+`IX_BUILD_REV`/`IX_BUILD_EPOCH` (the shared build-stamp names, see
+[build-version](../../build-version/overview.md)), `IX_MCP_DASHBOARD_URL`,
+`IX_MCP_KERNEL_TRACE`, plus output caps
 read in [runtime](../runtime/overview.md) and `outputs.py`
 (`IX_MCP_MAX_RESULT_CHARS`, `IX_MCP_IMAGE_MAX_BYTES`, `IX_MCP_IMAGE_MAX_DIM`).
 
@@ -160,7 +162,8 @@ matplotlib, pypdf), the execution engine (`ipykernel`, `jupyter-client`,
 other packages). `makeWrapper` then emits two binaries (`default.nix:918-948`):
 
 - `ix-mcp` (`mainProgram`): `<interpreter> -m ix_notebook_mcp`, with
-  `IX_MCP_VERSION` (flake rev), `PLAYWRIGHT_BROWSERS_PATH`, `IX_GCAL_BIN`
+  `IX_BUILD_REV`/`IX_BUILD_EPOCH` (flake rev + commit epoch),
+  `PLAYWRIGHT_BROWSERS_PATH`, `IX_GCAL_BIN`
   (the `gcal` binary), `IX_DASHBOARD_BIN` (the `dashboard` hub binary),
   `SCIPQL_SOUFFLE`, and on Darwin `IX_VMKIT_BIN`.
 - `ix-notebook`: the same interpreter entered at the `notebook` subcommand.

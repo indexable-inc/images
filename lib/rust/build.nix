@@ -13,6 +13,9 @@
   lists,
   # Shared pins reader, threaded through to policy.nix (see its arg doc).
   pins,
+  # Flips `allowSubstitutes` back on for darwin cross-lane eval-time IFD nodes;
+  # threaded through to vendor.nix. See its doc comment.
+  evalTimeSubstitutable,
 }: let
   inherit (builtins) removeAttrs;
 
@@ -29,6 +32,7 @@
       writePythonApplication
       lists
       pins
+      evalTimeSubstitutable
       ;
   };
   inherit

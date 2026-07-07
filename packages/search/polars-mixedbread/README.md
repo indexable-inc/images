@@ -1,9 +1,14 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="scan_mixedbread searches the store lazily into a polars LazyFrame, pushing string-equality filters down to be applied before ranking"></p>
+
 # polars-mixedbread
 
-A Polars IO source backed by [Mixedbread](https://www.mixedbread.com) store
-search. `scan_mixedbread(query, store=...)` returns a lazy `pl.LazyFrame` whose
-rows are the hits of one search, with file metadata flattened into typed columns,
-so you can do in Polars everything Mixedbread does not, above all `group_by`.
+Ever wanted to `group_by` your search results? `polars-mixedbread` is a Polars
+IO source backed by [Mixedbread](https://www.mixedbread.com) store search:
+`scan_mixedbread(query, store=...)` returns a lazy `pl.LazyFrame` whose rows
+are the hits of one search, with file metadata flattened into typed columns.
+So you do in Polars everything Mixedbread does not, above all aggregation, and
+your string-equality filters are pushed down server-side so the store ranks
+only what matters.
 
 ```python
 import polars as pl
@@ -17,6 +22,16 @@ lf = scan_mixedbread("how does retry backoff work", store="index", top_k=500)
     .sort("len", descending=True)
     .collect()
 )
+```
+
+## Install
+
+The wheel is consumed inside the nix env, not published: an `ix-mcp` Python
+session imports it with no install step. To build it yourself:
+
+```sh
+git clone https://github.com/indexable-inc/index
+nix build ./index#polars-mixedbread
 ```
 
 ## One unified API: filter in Polars, push down to Mixedbread

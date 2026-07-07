@@ -178,6 +178,17 @@ in
         let edges = ($nodes | each {|n| $n.deps | length } | math sum)
         let roots = ($nodes | where {|n| ($n.deps | length) == 0 } | length)
         print $"(ansi green)rebase-patches: ($fork.name): regenerated dag.json (($patches | length)) nodes, ($edges) edges, ($roots) roots(ansi reset)"
+
+        # Surface the inline-reason requirement at authoring time: the
+        # `patch-dag-<name>` flake check fails any patch whose commit message
+        # states no reason (dag-lib.nu `dag body-has-reason`), and regenerating
+        # the DAG is the first tooling a new patch meets. A warning, not an
+        # error: this run's job is the rebase/DAG, and the flake check stays
+        # the gate, so a base bump is never blocked on a pre-existing message.
+        let mute = ($patches | where {|p| not (dag body-has-reason $p.file) } | get name)
+        if ($mute | is-not-empty) {
+          print $"(ansi yellow)rebase-patches: ($fork.name): (($mute | length)) patch\(es\) state no reason in their commit-message body and will fail the patch-dag-($fork.name) check; write the why into: (($mute | str join ', '))(ansi reset)"
+        }
         rm --recursive --force $scratch
       }
 

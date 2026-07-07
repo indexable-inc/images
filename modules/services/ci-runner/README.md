@@ -1,10 +1,8 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="GitHub Actions jobs dispatch to a static runner pool on one NixOS host that shares a warm Nix store and the cache.ix.dev substituter"></p>
+
 # ci-runner
 
-Self-hosted GitHub Actions runners for this repository, registered as a small
-static pool on a persistent NixOS host. The point is cache locality: jobs share
-the host's `/nix/store` and the cache.ix.dev public substituter, so a
-`nix build .#...` step substitutes warm artifacts instead of rebuilding from a
-cold store on a throwaway cloud VM.
+Tired of every CI job rebuilding the world from a cold store on a throwaway cloud VM? `services.ci-runner` registers a small static pool of self-hosted GitHub Actions runners on a persistent NixOS host. The point is cache locality: jobs share the host's `/nix/store` and the cache.ix.dev public substituter, so a `nix build .#...` step substitutes warm artifacts instead of rebuilding.
 
 This is the simple counterpart to the [`ix`](https://github.com/indexable-inc/ix)
 repo's webhook dispatcher, which mints just-in-time ephemeral runners per job.
@@ -13,8 +11,19 @@ service and no per-job VM.
 
 ## Use it
 
-Import is automatic: the module is discovered as `nixosModules.ci-runner`. On a
-host config:
+The flake exposes the module as `nixosModules.ci-runner`; inside this repo's own
+host configs it is auto-discovered, so no import line is needed there. From
+another flake:
+
+```nix
+{
+  inputs.index.url = "github:indexable-inc/index";
+  # in a NixOS host configuration:
+  imports = [ inputs.index.nixosModules.ci-runner ];
+}
+```
+
+Then configure it on the host:
 
 ```nix
 {

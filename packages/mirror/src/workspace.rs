@@ -14,6 +14,16 @@ pub struct Workspace {
     doc: DocumentMut,
 }
 
+/// One monorepo commit that touched a package path.
+pub struct Change {
+    /// Full commit sha.
+    pub sha: String,
+    /// Committer date, `YYYY-MM-DD`.
+    pub date: String,
+    /// First line of the commit message.
+    pub subject: String,
+}
+
 impl Workspace {
     /// Load the workspace rooted at `root`, or when `None`, at the nearest
     /// ancestor of the current directory whose `Cargo.toml` has a
@@ -57,6 +67,38 @@ impl Workspace {
 
     pub fn head_commit(&self) -> Result<String> {
         exec::git(&self.root, &["rev-parse", "HEAD"])
+    }
+
+    /// Every monorepo commit that touched `path`, newest first. Refuses a
+    /// shallow clone: `git log` over truncated history would silently
+    /// produce a shorter-than-real changelog, so CI checks out with
+    /// `fetch-depth: 0` (.github/workflows/mirror-sync.yml).
+    pub fn package_history(&self, path: &str) -> Result<Vec<Change>> {
+        if exec::git(&self.root, &["rev-parse", "--is-shallow-repository"])? == "true" {
+            bail!(
+                "{} is a shallow clone, which would truncate the generated changelog; \
+                 fetch full history (actions/checkout `fetch-depth: 0`)",
+                self.root.display()
+            );
+        }
+        let log = exec::git(
+            &self.root,
+            &["log", "--format=%H%x09%cs%x09%s", "HEAD", "--", path],
+        )?;
+        log.lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                let mut parts = line.splitn(3, '\t');
+                match (parts.next(), parts.next(), parts.next()) {
+                    (Some(sha), Some(date), Some(subject)) => Ok(Change {
+                        sha: sha.to_owned(),
+                        date: date.to_owned(),
+                        subject: subject.to_owned(),
+                    }),
+                    _ => bail!("unexpected `git log` line: {line}"),
+                }
+            })
+            .collect()
     }
 
     fn workspace_table(&self, name: &str) -> Result<&Table> {

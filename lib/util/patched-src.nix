@@ -11,9 +11,14 @@
 # files through a real `git rebase` when the pinned base moves, so plain `patch`
 # application is always correct at build time (the series is exact against the
 # pinned rev; the build never needs fuzzy or structural merging).
+# `applyPatches` is a nixpkgs trivial builder and opts out of substitution. A
+# patched source (e.g. ghostty) enters the darwin cross lane's eval-time IFD
+# closure, so a Mac must be able to substitute it: `evalTimeSubstitutable`
+# (threaded from lib) flips `allowSubstitutes` back on. See its doc comment.
 {
   lib,
   applyPatches,
+  evalTimeSubstitutable,
 }:
 # Return the patched source derivation. `applyPatches` copies `src` and runs
 # `patch` for each entry, so the result is a tiny, seconds-fast derivation that
@@ -23,6 +28,17 @@
   name,
   src,
   patchDir,
+  # Optional restriction of the applied series to a subset of the discovered
+  # patch files (bare `NNNN-*.patch` names, any order). `null`, the default,
+  # applies the full discovered series, so every existing caller (including
+  # ix's cross-repo `index.lib.patchedSrcFor` use) is unchanged. The subset is
+  # validated against the discovered series (an unknown name is an eval error,
+  # not a silently shorter series) and applied in NNNN order; the
+  # canonical-format assertions below still run on every selected patch. Used
+  # by the per-attempt-patch closure build gates (RFC 0010 A3, #2098):
+  # `upstream-pr` ships a patch as its dag.json ancestor closure against the
+  # bare base, so that closure must build as a standalone series.
+  patchNames ? null,
 }: let
   # `rebase-patches` exports the series with `git format-patch --zero-commit
   # --no-signature --no-stat -N`, so a conforming file is byte-stable across
@@ -56,14 +72,29 @@
     else if lib.length nonEmpty >= 2 && lib.elemAt nonEmpty (lib.length nonEmpty - 2) == "-- "
     then fail "trailing signature block (--no-signature)"
     else path;
+  discovered = lib.pipe (builtins.readDir patchDir) [
+    (lib.filterAttrs (f: t: t == "regular" && lib.hasSuffix ".patch" f))
+    builtins.attrNames
+    lib.naturalSort
+  ];
+  # Filtering the discovered series (rather than sorting the request) keeps
+  # NNNN application order the single ordering owner and dedupes for free.
+  selected =
+    if patchNames == null
+    then discovered
+    else let
+      unknown = lib.subtractLists discovered patchNames;
+    in
+      if unknown != []
+      then
+        throw ''
+          ${name}: patchNames not in ${toString patchDir}: ${lib.concatStringsSep ", " unknown}.
+          The selection must name existing `NNNN-*.patch` files of the series.
+        ''
+      else lib.filter (f: lib.elem f patchNames) discovered;
 in
-  applyPatches {
+  evalTimeSubstitutable (applyPatches {
     name = "${name}-patched";
     inherit src;
-    patches = lib.pipe (builtins.readDir patchDir) [
-      (lib.filterAttrs (f: t: t == "regular" && lib.hasSuffix ".patch" f))
-      builtins.attrNames
-      lib.naturalSort
-      (map (f: assertCanonical f (patchDir + "/${f}")))
-    ];
-  }
+    patches = map (f: assertCanonical f (patchDir + "/${f}")) selected;
+  })

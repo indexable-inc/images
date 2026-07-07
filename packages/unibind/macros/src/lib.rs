@@ -42,6 +42,10 @@ use proc_macro::TokenStream;
 /// untouched. The attribute accepts `py(name = "...")` to rename the Python
 /// module (it defaults to the Rust module name, which also names the
 /// `PyInit_` symbol of the built extension).
+///
+/// Glue for async functions, `UniStream` returns, and `#[unibind::object]`
+/// types calls into `unibind_runtime::py`, so a crate exporting any of
+/// those adds `unibind-runtime` with the `py` feature to its dependencies.
 #[proc_macro_attribute]
 pub fn export(args: TokenStream, item: TokenStream) -> TokenStream {
     expand::export(args.into(), item.into()).into()
@@ -79,14 +83,22 @@ pub fn error(_args: TokenStream, item: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Reserved for stateful handles; lands with resources in phase 2
-/// (issue #1992).
+/// Mark a stateful handle inside a `#[unibind::export]` module.
+///
+/// The struct crosses the boundary by reference: the target language holds
+/// a wrapped handle whose state stays on the Rust side. Methods take
+/// `&self` (use interior mutability for state), one associated function
+/// marked `#[unibind(constructor)]` makes the object constructible, and
+/// methods may be async or return streams. `object(resource)` requires a
+/// `close` method and adds close()/async-with plus a warning when the
+/// resource leaks unclosed. The wrapped struct crosses threads inside an
+/// `Arc`, so it must be `Send + Sync`.
 #[proc_macro_attribute]
 pub fn object(_args: TokenStream, item: TokenStream) -> TokenStream {
     expand::marker_outside_export(
         item.into(),
-        "#[unibind::object] lands with resources in phase 2 (issue #1992); \
-         phase 0 covers sync functions, records, and errors",
+        "#[unibind::object] only takes effect inside a #[unibind::export] \
+         module; declare the struct inside the exported module",
     )
     .into()
 }

@@ -3,6 +3,10 @@ From: Andrew Gazelka <andrew.gazelka@gmail.com>
 Date: Sun, 17 May 2026 12:20:26 -0700
 Subject: [PATCH] Add ix metadata to Cargo manifests
 
+Adds `[package.metadata.ix.inputs]` to clippy's own Cargo manifests so
+the repo's per-crate nix build machinery (cargo-unit) can treat the
+fork's crates like any other repo crate. Repo-specific packaging glue;
+never meant for upstream.
 
 diff --git a/Cargo.toml b/Cargo.toml
 index ca80c3fad..1b50a1156 100644

@@ -6,14 +6,18 @@ use syn::spanned::Spanned as _;
 use super::{Declared, LowerError, Result};
 use crate::ir;
 
-/// Where a type appears; borrowed forms are only legal in argument position.
+/// Where a type appears; borrowed forms are only legal in argument
+/// position, and object names only in return position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Position {
     /// A function argument (borrowed `&str` / `&Path` / `&[u8]` allowed,
     /// also directly under `Option`).
     Arg,
-    /// A return type or record field: owned types only.
+    /// A record field or container element: owned data types only.
     Owned,
+    /// A function or method return type: owned data, plus bare object
+    /// names.
+    Return,
 }
 
 pub fn lower_type(ty: &syn::Type, declared: &Declared, position: Position) -> Result<ir::Type> {
@@ -81,9 +85,20 @@ fn lower_path(path: &syn::TypePath, declared: &Declared, position: Position) -> 
         "f64" => no_generics(segment).map(|()| ir::Type::Float(ir::FloatKind::F64)),
         "String" => no_generics(segment).map(|()| ir::Type::String { owned: true }),
         "PathBuf" => no_generics(segment).map(|()| ir::Type::Path { owned: true }),
+        "UniStream" => Err(LowerError::new(
+            segment.span(),
+            "UniStream only crosses the boundary as a return type; \
+             arguments, fields, and container elements take concrete values",
+        )),
         "Option" => {
             let inner = one_generic(segment)?;
-            Ok(ir::Type::Option(Box::new(lower_type(inner, declared, position)?)))
+            // An object handle only crosses bare, so under Option the
+            // return position drops to Owned and object names reject.
+            let inner_position = match position {
+                Position::Arg => Position::Arg,
+                Position::Owned | Position::Return => Position::Owned,
+            };
+            Ok(ir::Type::Option(Box::new(lower_type(inner, declared, inner_position)?)))
         }
         "Vec" => {
             let inner = one_generic(segment)?;
@@ -112,7 +127,7 @@ fn lower_path(path: &syn::TypePath, declared: &Declared, position: Position) -> 
                 value: Box::new(lower_type(pair.value, declared, Position::Owned)?),
             })
         }
-        _ => lower_named(path, segment, &ident, declared),
+        _ => lower_named(path, segment, &ident, declared, position),
     }
 }
 
@@ -121,6 +136,7 @@ fn lower_named(
     segment: &syn::PathSegment,
     ident: &str,
     declared: &Declared,
+    position: Position,
 ) -> Result<ir::Type> {
     no_generics(segment)?;
     if path.path.segments.len() != 1 {
@@ -128,6 +144,18 @@ fn lower_named(
     }
     if declared.records.iter().any(|name| name == ident) {
         return Ok(ir::Type::Named(ident.to_owned()));
+    }
+    if declared.objects.iter().any(|name| name == ident) {
+        if position == Position::Return {
+            return Ok(ir::Type::Named(ident.to_owned()));
+        }
+        return Err(LowerError::new(
+            segment.span(),
+            format!(
+                "`{ident}` is a #[unibind::object]; objects cross the \
+                 boundary as return values only"
+            ),
+        ));
     }
     if declared.errors.iter().any(|name| name == ident) {
         return Err(LowerError::new(
@@ -192,7 +220,7 @@ fn generic_types(segment: &syn::PathSegment) -> Result<Vec<&syn::Type>> {
         .collect())
 }
 
-fn one_generic(segment: &syn::PathSegment) -> Result<&syn::Type> {
+pub(super) fn one_generic(segment: &syn::PathSegment) -> Result<&syn::Type> {
     let types = generic_types(segment)?;
     if let [inner] = types.as_slice() {
         Ok(inner)

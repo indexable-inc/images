@@ -1,19 +1,23 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="an asyncio coroutine drives a Rust-owned PTY and reads back a styled Snapshot of the screen"></p>
+
 # tui (Python)
 
-Python bindings for the [`tui`](../tui) Rust crate. Spawn and control multiple
-PTY-backed processes from Python with full vt100 emulation, scrollback, and
-optional NumPy access to per-cell character data.
+How do you drive vim, htop, or Claude Code from Python and assert on what is
+actually on screen? `tui` binds the [`tui`](../tui) Rust crate: every spawned
+process gets a real PTY with full vt100 emulation, and you get one async
+class, `Tui`. Send keys, `wait_for` a pattern, read back a frozen `Snapshot`
+with text, per-cell styling, and NumPy access to the character grid.
 
-The Python API is a single class, `Tui`. Construct it, drive it, read it. The
-API is async-only. A single process-wide tokio runtime drives every spawned
-PTY, and every I/O method is a coroutine that bridges a real Rust future into
-asyncio via [pyo3-async-runtimes][pyo3-async-runtimes], with no thread-pool hop.
-Only construction and the shape accessors (`id`, `command`, `size`, `is_alive`,
-`exit_code`) are synchronous.
+The API is async-only. A single process-wide tokio runtime drives every
+spawned PTY, and every I/O method is a coroutine that bridges a real Rust
+future into asyncio via [pyo3-async-runtimes][pyo3-async-runtimes], with no
+thread-pool hop, so fanning out to many terminals is plain `asyncio.gather`.
+Only construction and the shape accessors (`id`, `command`, `size`,
+`is_alive`, `exit_code`) are synchronous.
 
 PyPI distribution name: `ix-tui`. Import name: `tui`.
 
-## Build
+## Install
 
 The wheel is built by Nix, not maturin. The PyO3 cdylib comes out of the shared
 `cargo-unit` workspace graph (the same one the rest of the repo's Rust builds
@@ -22,7 +26,14 @@ source into a PEP 427 wheel. There is no PEP 517 backend; `pip install .` is not
 a supported path.
 
 ```sh
-nix build .#tui-py     # writes ix_tui-<version>-cp311-abi3-manylinux_2_34_<arch>.whl
+nix build .#tui-py             # ix_tui-<version>-cp311-abi3-manylinux_2_34_<arch>.whl
+pip install result/ix_tui-*.whl
+```
+
+The build assumes a clone:
+
+```sh
+git clone https://github.com/indexable-inc/index
 ```
 
 The wheel is Linux-only, like ix's native SDK wheels: a PyO3 extension cdylib

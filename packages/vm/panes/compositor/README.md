@@ -1,11 +1,27 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="client commits are diffed in a FrameStore, encoded as LZ4 band tiles, and shipped over vsock; the host's ack on present fires the clients' frame callbacks"></p>
+
 # panes-compositor
 
-Headless Wayland compositor for the aarch64-linux panes guest. Apps inside
-the VM connect to it as a completely ordinary Wayland compositor; every
-`xdg_toplevel` they map is exported over one byte stream to `panes-host`,
-which presents each one as a native NSWindow on the macOS side. The wire
-contract lives in `packages/vm/panes/protocol` (postcard frames, damage
-tiles, ack pacing); context in index#1686.
+How does a Wayland app inside a VM become a native Mac window? This is the
+guest half: a headless Wayland compositor for the aarch64-linux panes guest.
+Apps connect to it as a completely ordinary Wayland compositor; every
+`xdg_toplevel` they map is exported over one byte stream to
+[`panes-host`](../host), which presents each one as a native NSWindow on the
+macOS side. It composites nothing and renders nothing: it only diffs, packs,
+and ships. The wire contract lives in [`../protocol`](../protocol) (postcard
+frames, damage tiles, ack pacing); context in
+[index#1686](https://github.com/indexable-inc/index/issues/1686).
+
+## Install
+
+Guest-side only (`aarch64-linux`); it ships inside the
+[`panes-guest-image`](../guest-image) as a systemd service, which is how you
+normally get it. To build the binary alone from a clone
+(`git clone https://github.com/indexable-inc/index`):
+
+```sh
+nix build .#packages.aarch64-linux.panes-compositor
+```
 
 ## Architecture
 
@@ -14,14 +30,6 @@ output device, and no scene graph: the single `wl_output` is virtual (its
 refresh/scale come from the host's `Hello`), and windows have no positions
 because the host owns layout entirely.
 
-```
-Wayland clients ──commit──> FrameStore (packed BGRA copy per window)
-                              │ diff vs. what the host holds
-                              ▼
-                       band tiles (≤256 rows) ── LZ4 or Raw ──> WindowFrame
-                              ▲                                     │
-       frame callbacks ◄── Ack{id,seq} ◄──────── vsock/unix/tcp ◄───┘
-```
 
 - `src/frame.rs`: the pure core. Per window a `FrameStore` keeps the latest
   committed pixels plus a mirror of what the host currently holds.

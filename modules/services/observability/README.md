@@ -1,10 +1,8 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="App SDKs, host metrics, and logs flow through per-node agent Collectors to one gateway that writes ClickHouse, read by Grafana and ix-observe"></p>
+
 # ix Observability
 
-`services.ix-observability` is a self-hosted [OpenTelemetry](https://opentelemetry.io/)
-pipeline for an ix fleet. One module, one Collector, one job:
-
-**Monitoring**: every service emits traces, metrics, and logs. They land in
-[ClickHouse](https://clickhouse.com/) and render in [Grafana](https://grafana.com/).
+How do you see every trace, metric, and log from an ix fleet in one place? `services.ix-observability` is a self-hosted [OpenTelemetry](https://opentelemetry.io/) pipeline: one module, one Collector, one job. Every service emits telemetry, it lands in [ClickHouse](https://clickhouse.com/), and it renders in [Grafana](https://grafana.com/).
 
 This is telemetry only. The search corpus used to ride this same Collector (RFC
 0004), but it moved to its own Parquet-log pipeline (issue #736, the
@@ -12,38 +10,52 @@ This is telemetry only. The search corpus used to ride this same Collector (RFC
 storage as the source of truth, with the Mixedbread index as a materialized view
 replayed from it. OTel is back to what it is good at.
 
-The Collector is the one moving part everything else hangs off. Read the two
-diagrams and the rest follows.
+The Collector is the one moving part everything else hangs off. Each application
+node runs a local Collector (the **agent**) that forwards to one gateway node
+(the **stack**) over OTLP/gRPC; the gateway writes to ClickHouse, and Grafana and
+the `ix-observe` CLI read from it. That is the whole hero diagram above.
 
-## Monitoring flow
+## Use it
 
-Each application node runs a local Collector (the **agent**). It forwards to one
-gateway node (the **stack**) over OTLP/gRPC. The gateway writes to ClickHouse;
-Grafana and the `ix-observe` CLI read from it.
+The flake exposes the module as `nixosModules.observability`; inside this repo's
+own VM configs it is auto-discovered, so no import line is needed there (the
+examples just set `services.ix-observability.*`). From another flake:
 
-```mermaid
-flowchart LR
-  subgraph appnode["app node (agent)"]
-    sdk["app OTLP SDK<br/>127.0.0.1:4317"]
-    hm["hostmetrics<br/>cpu / mem / disk / net"]
-    fl["filelog + journald"]
-    agent["local Collector"]
-    sdk --> agent
-    hm --> agent
-    fl --> agent
-  end
-
-  subgraph obsnode["observability node (stack)"]
-    gw["gateway Collector<br/>OTLP :4317 / :4318"]
-    ch[("ClickHouse<br/>otel_logs · otel_traces<br/>otel_metrics_*")]
-    gf["Grafana :3000"]
-    gw -->|clickhouse exporter| ch
-    gf -->|ClickHouse datasource| ch
-  end
-
-  agent -->|OTLP/gRPC| gw
-  cli["ix-observe CLI"] --> ch
+```nix
+{
+  inputs.index.url = "github:indexable-inc/index";
+  # in a NixOS host configuration:
+  imports = [ inputs.index.nixosModules.observability ];
+}
 ```
+
+Single node, everything local:
+
+```nix
+{ services.ix-observability.enable = true; }
+```
+
+Fleet: one gateway, many agents (the [observability-stack example](../../../examples/observability/stack/)
+wires exactly this):
+
+```nix
+# observability node
+{ services.ix-observability.stack.enable = true; }
+
+# each app node
+{
+  services.ix-observability.agent = {
+    enable = true;
+    endpoint = "observability:4317";
+    filelog.paths = [ "/var/log/my-service/*.log" ];
+  };
+  services.ix-observability.resourceAttributes."ix.app" = "my-service";
+}
+```
+
+Point your application's OpenTelemetry SDK at `127.0.0.1:4317`; the local
+Collector handles batching, resource labels, and the remote write. Every option
+is declared in [`default.nix`](default.nix).
 
 ## How telemetry flows through the Collector
 
@@ -111,36 +123,6 @@ ix shell observability -- ix-observe slow-spans         # slowest spans
 ix shell observability -- ix-observe trace <trace-id>   # one trace, ordered
 ix shell observability -- ix-observe sql "SELECT ..."   # arbitrary SQL
 ```
-
-## Configure it
-
-Single node, everything local:
-
-```nix
-{ services.ix-observability.enable = true; }
-```
-
-Fleet: one gateway, many agents (the [observability-stack example](../../../examples/observability/stack/)
-wires exactly this):
-
-```nix
-# observability node
-{ services.ix-observability.stack.enable = true; }
-
-# each app node
-{
-  services.ix-observability.agent = {
-    enable = true;
-    endpoint = "observability:4317";
-    filelog.paths = [ "/var/log/my-service/*.log" ];
-  };
-  services.ix-observability.resourceAttributes."ix.app" = "my-service";
-}
-```
-
-Point your application's OpenTelemetry SDK at `127.0.0.1:4317`; the local
-Collector handles batching, resource labels, and the remote write. Every option
-above is declared in [`default.nix`](default.nix).
 
 ---
 

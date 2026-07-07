@@ -38,6 +38,7 @@
     "packageSet"
     "passthruTests"
     "path"
+    "pyExtension"
     "updateScript"
   ];
 
@@ -226,6 +227,12 @@
       inRustWorkspace = normalizeRustWorkspace label (raw.inRustWorkspace or null);
       cross = normalizeCross label id (raw.cross or null);
       mirror = normalizeMirror label (raw.mirror or null);
+      # Opt-in marker for a pyo3 extension-module cdylib crate: the shared
+      # Rust workspace injects the darwin `-undefined dynamic_lookup` link
+      # args for marked crates (lib/rust/workspace.nix, replacing per-crate
+      # build.rs copies), and `unibind.lib.build` requires the mark. Boolean;
+      # must ride `inRustWorkspace` (asserted below).
+      pyExtension = raw.pyExtension or false;
       passthruTests = normalizePassthruTests label id (raw.passthruTests or null);
       # `updateScript = true` marks a package that exposes a
       # `passthru.updateScript` (e.g. a pinned prebuilt binary that tracks an
@@ -270,13 +277,21 @@
 
   mirrorEntries = lib.filter (entry: entry.mirror != null) entries;
 
+  pyExtensionEntries = lib.filter (entry: entry.pyExtension) entries;
+  pyExtensionWithoutWorkspace = map (entry: entry.id) (
+    lib.filter (entry: entry.inRustWorkspace == null) pyExtensionEntries
+  );
+
   rustWorkspaceEntries = lib.filter (entry: entry.inRustWorkspace != null) entries;
 
   rustWorkspaceEntriesFor = system: lib.filter (entry: enabledForSystem system entry.inRustWorkspace) rustWorkspaceEntries;
 in
   assert lib.assertMsg (
     duplicateIds == []
-  ) "packages/registry.nix: duplicate package ids: ${lib.concatStringsSep ", " duplicateIds}"; {
+  ) "packages/registry.nix: duplicate package ids: ${lib.concatStringsSep ", " duplicateIds}";
+  assert lib.assertMsg (
+    pyExtensionWithoutWorkspace == []
+  ) "packages/registry.nix: pyExtension requires inRustWorkspace: ${lib.concatStringsSep ", " pyExtensionWithoutWorkspace}"; {
     inherit
       entries
       byId
@@ -286,6 +301,7 @@ in
       overlayEntriesFor
       crossEntriesFor
       mirrorEntries
+      pyExtensionEntries
       updateScriptEntriesFor
       passthruTestEntriesFor
       rustWorkspaceEntries

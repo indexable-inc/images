@@ -3,6 +3,9 @@
 mod attrs;
 mod data;
 mod func;
+mod marker;
+mod object;
+mod ret;
 mod ty;
 
 use proc_macro2::Span;
@@ -36,6 +39,7 @@ pub type Result<T> = std::result::Result<T, LowerError>;
 pub struct Declared {
     pub records: Vec<String>,
     pub errors: Vec<String>,
+    pub objects: Vec<String>,
 }
 
 /// Lower an inline `#[unibind::export]` module into an [`ir::Interface`].
@@ -45,9 +49,9 @@ pub struct Declared {
 ///
 /// # Errors
 ///
-/// Returns a positioned error for anything outside the phase 0 surface:
-/// async functions, generics, methods, data enums, `#[unibind::object]`,
-/// unsupported boundary types, or malformed `#[unibind(...)]` metadata.
+/// Returns a positioned error for anything outside the supported surface:
+/// generics, data enums, unsupported boundary types, misplaced markers or
+/// flags, or malformed `#[unibind(...)]` metadata.
 pub fn lower_module(
     module_args: proc_macro2::TokenStream,
     module: &syn::ItemMod,
@@ -55,6 +59,9 @@ pub fn lower_module(
     let meta = attrs::UnibindMeta::parse(module_args, module.span())?;
     meta.reject_default("a module")?;
     meta.reject_py_base("a module")?;
+    meta.reject_resource("a module")?;
+    meta.reject_constructor("a module")?;
+    meta.reject_blocking("a module")?;
     let Some((_, items)) = &module.content else {
         return Err(LowerError::new(
             module.span(),
@@ -64,11 +71,12 @@ pub fn lower_module(
     };
 
     let declared = collect_declared(items)?;
+    let mut objects = object::Objects::default();
     let mut interface = ir::Interface {
         version: ir::IR_VERSION,
         name: module.ident.to_string(),
         names: meta.names(),
-        docs: attrs::doc_lines(&module.attrs),
+        docs: marker::doc_lines(&module.attrs),
         functions: Vec::new(),
         records: Vec::new(),
         enums: Vec::new(),
@@ -77,82 +85,106 @@ pub fn lower_module(
     };
 
     for item in items {
-        match (item, attrs::marker(item)?) {
+        match (item, marker::marker(item)?) {
             (syn::Item::Fn(func), None) => {
                 if matches!(func.vis, syn::Visibility::Public(_)) {
                     interface.functions.push(func::lower_fn(func, &declared)?);
                 }
             }
-            (syn::Item::Struct(item), Some(marker)) => match marker.kind {
-                attrs::MarkerKind::Record => {
+            (syn::Item::Impl(item), None) => objects.lower_impl(item, &declared)?,
+            (syn::Item::Struct(item), Some(found)) => match found.kind {
+                marker::MarkerKind::Record => {
                     interface
                         .records
-                        .push(data::lower_record(item, &marker, &declared)?);
+                        .push(data::lower_record(item, &found, &declared)?);
                 }
-                attrs::MarkerKind::Error => {
+                marker::MarkerKind::Object => objects.declare(item, &found)?,
+                marker::MarkerKind::Error => {
                     return Err(LowerError::new(
-                        marker.span,
+                        found.span,
                         "#[unibind::error] goes on an enum; each variant becomes \
                          an exception class",
                     ));
                 }
-                attrs::MarkerKind::Object => return Err(object_unsupported(marker.span)),
             },
-            (syn::Item::Enum(item), Some(marker)) => match marker.kind {
-                attrs::MarkerKind::Error => {
-                    interface.errors.push(data::lower_error(item, &marker)?);
+            (syn::Item::Enum(item), Some(found)) => match found.kind {
+                marker::MarkerKind::Error => {
+                    interface.errors.push(data::lower_error(item, &found)?);
                 }
-                attrs::MarkerKind::Record => {
+                marker::MarkerKind::Record => {
                     return Err(LowerError::new(
-                        marker.span,
+                        found.span,
                         "data enums are not part of phase 0; model the value as a \
                          #[unibind::record] struct until enums land",
                     ));
                 }
-                attrs::MarkerKind::Object => return Err(object_unsupported(marker.span)),
+                marker::MarkerKind::Object => return Err(object_misplaced(found.span)),
             },
-            (_, Some(marker)) => {
-                return Err(match marker.kind {
-                    attrs::MarkerKind::Object => object_unsupported(marker.span),
-                    attrs::MarkerKind::Record | attrs::MarkerKind::Error => LowerError::new(
-                        marker.span,
+            (_, Some(found)) => {
+                return Err(match found.kind {
+                    marker::MarkerKind::Object => object_misplaced(found.span),
+                    marker::MarkerKind::Record | marker::MarkerKind::Error => LowerError::new(
+                        found.span,
                         "this unibind marker goes on a struct (record) or enum (error)",
                     ),
                 });
             }
-            // Anything unannotated that is not a pub fn passes through as
-            // plain Rust: impls, uses, consts, private helpers.
+            // Anything unannotated that is not a pub fn or an impl passes
+            // through as plain Rust: uses, consts, private helpers.
             _ => {}
         }
     }
+    interface.objects = objects.finish()?;
     Ok(interface)
 }
 
-fn object_unsupported(span: Span) -> LowerError {
+fn object_misplaced(span: Span) -> LowerError {
     LowerError::new(
         span,
-        "#[unibind::object] lands with resources in phase 2 (issue #1992); \
-         phase 0 covers sync functions, records, and errors",
+        "#[unibind::object] goes on a struct; the handle's state lives in \
+         its fields",
     )
 }
 
 fn collect_declared(items: &[syn::Item]) -> Result<Declared> {
     let mut declared = Declared::default();
     for item in items {
-        let Some(marker) = attrs::marker(item)? else {
+        let Some(found) = marker::marker(item)? else {
             continue;
         };
-        match (item, marker.kind) {
-            (syn::Item::Struct(item), attrs::MarkerKind::Record) => {
+        match (item, found.kind) {
+            (syn::Item::Struct(item), marker::MarkerKind::Record) => {
+                check_fresh(&declared, &item.ident)?;
                 declared.records.push(item.ident.to_string());
             }
-            (syn::Item::Enum(item), attrs::MarkerKind::Error) => {
+            (syn::Item::Struct(item), marker::MarkerKind::Object) => {
+                check_fresh(&declared, &item.ident)?;
+                declared.objects.push(item.ident.to_string());
+            }
+            (syn::Item::Enum(item), marker::MarkerKind::Error) => {
+                check_fresh(&declared, &item.ident)?;
                 declared.errors.push(item.ident.to_string());
             }
             _ => {}
         }
     }
     Ok(declared)
+}
+
+/// Records, errors, and objects share one type namespace: a reference like
+/// `Row` in a signature must resolve to exactly one declaration.
+fn check_fresh(declared: &Declared, ident: &syn::Ident) -> Result<()> {
+    let name = ident.to_string();
+    let taken = declared.records.contains(&name)
+        || declared.errors.contains(&name)
+        || declared.objects.contains(&name);
+    if taken {
+        return Err(LowerError::new(
+            ident.span(),
+            format!("`{name}` is declared twice; records, errors, and objects share one namespace"),
+        ));
+    }
+    Ok(())
 }
 
 /// Remove every `#[unibind...]` attribute from the module's items so the
@@ -166,11 +198,7 @@ pub fn strip_unibind_attrs(module: &mut syn::ItemMod) {
         match item {
             syn::Item::Fn(func) => {
                 strip(&mut func.attrs);
-                for input in &mut func.sig.inputs {
-                    if let syn::FnArg::Typed(arg) = input {
-                        strip(&mut arg.attrs);
-                    }
-                }
+                strip_fn_args(&mut func.sig);
             }
             syn::Item::Struct(item) => {
                 strip(&mut item.attrs);
@@ -187,11 +215,28 @@ pub fn strip_unibind_attrs(module: &mut syn::ItemMod) {
                     }
                 }
             }
+            syn::Item::Impl(item) => {
+                strip(&mut item.attrs);
+                for impl_item in &mut item.items {
+                    if let syn::ImplItem::Fn(method) = impl_item {
+                        strip(&mut method.attrs);
+                        strip_fn_args(&mut method.sig);
+                    }
+                }
+            }
             _ => {}
         }
     }
 }
 
+fn strip_fn_args(signature: &mut syn::Signature) {
+    for input in &mut signature.inputs {
+        if let syn::FnArg::Typed(arg) = input {
+            strip(&mut arg.attrs);
+        }
+    }
+}
+
 fn strip(attributes: &mut Vec<syn::Attribute>) {
-    attributes.retain(|attribute| !attrs::is_unibind_path(attribute.path()));
+    attributes.retain(|attribute| !marker::is_unibind_path(attribute.path()));
 }

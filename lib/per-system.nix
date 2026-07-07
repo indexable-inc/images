@@ -618,6 +618,35 @@
     flakeLock = lib.importJSON (paths.root + "/flake.lock");
   };
 
+  # Per-attempt-patch closure build gates (RFC 0010 A3, #2098): for each fork
+  # opted in via `closureGates = true` in lib/fork-packages.nix, the fork
+  # package rebuilt with its series restricted to each attempt-marked patch's
+  # dag.json closure -- exactly the standalone series `upstream-pr` ships
+  # upstream, so a red gate means the upstream PR would be broken. The gate
+  # derivations live on the opted-in package's `passthru.closureGates` (the
+  # package owns its own re-instantiation; see packages/nix/nix/default.nix);
+  # this map only keys them by fork name so the scheduled fork-closure-gates
+  # workflow and the `upstream-sync --open` preflight can `nix eval` the set
+  # and `nix build .#forkClosureGates.<system>.<fork>."<patch>"`. NEVER merged
+  # into `checks`/`ciChecks`: these are heavy full-package builds, and per-PR
+  # flake-check cost must stay flat (the attrset is lazy, so enumerating it
+  # forces nothing heavy).
+  forkClosureGates = let
+    # Fork name -> the repo package carrying that fork's gates. A fork flagged
+    # `closureGates = true` without an entry here fails eval loudly instead of
+    # silently publishing no gates.
+    gatePackages = {
+      nix = repoPackages.nix-ix;
+    };
+  in
+    lib.genAttrs' (lib.filter (fork: fork.closureGates or false) ix.forkPackages) (
+      fork:
+        lib.nameValuePair fork.name
+        (gatePackages.${fork.name}
+          or (throw "lib/per-system.nix: fork `${fork.name}` sets closureGates = true in lib/fork-packages.nix but gatePackages maps no package for it"))
+        .closureGates
+    );
+
   # One general updater for every content source in the repo, run in parallel
   # via dag-runner (the same engine `lint` uses). The Minecraft catalog and
   # sound updaters are fixed apps; the pinned prebuilt-binary updaters
@@ -1453,6 +1482,10 @@ in {
   # derivations, so `nix build .#checks.aarch64-darwin.patched-src-clippy`
   # validates the series against a local Darwin build right after a flake update.
   checks = catalogFor rustPackageTestSets.flat // forkChecks;
+  # Closure build gates, keyed `<fork>.<patch>` (see the binding above). A
+  # non-schema output like `ciChecks`, exposed per system so a darwin host can
+  # gate-build natively before an upstream PR.
+  inherit forkClosureGates;
   # Sharded keying for the memory-bounded CI evaluator (nix-fast-build /
   # nix-eval-jobs / blast-radius): each package's per-#[test] checks sit under one
   # `recurseForDerivations` group, so the evaluator lists cheap per-package names

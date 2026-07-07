@@ -3,16 +3,17 @@
 use syn::spanned::Spanned as _;
 
 use super::ty::{lower_type, Position};
-use super::{attrs, Declared, LowerError, Result};
+use super::{attrs, marker, Declared, LowerError, Result};
 use crate::ir;
 
 pub(super) fn lower_record(
     item: &syn::ItemStruct,
-    marker: &attrs::Marker,
+    found: &marker::Marker,
     declared: &Declared,
 ) -> Result<ir::Record> {
-    marker.meta.reject_default("a record")?;
-    marker.meta.reject_py_base("a record")?;
+    reject_flags(&found.meta, "a record")?;
+    found.meta.reject_default("a record")?;
+    found.meta.reject_py_base("a record")?;
     require_pub(&item.vis, item.ident.span(), "record")?;
     if !item.generics.params.is_empty() || item.generics.where_clause.is_some() {
         return Err(LowerError::new(
@@ -35,25 +36,27 @@ pub(super) fn lower_record(
         };
         require_pub(&field.vis, ident.span(), "record field")?;
         let meta = attrs::UnibindMeta::from_attrs(&field.attrs)?;
+        reject_flags(&meta, "a record field")?;
         meta.reject_default("a record field")?;
         meta.reject_py_base("a record field")?;
         lowered.push(ir::Field {
             name: ident.to_string(),
             names: meta.names(),
-            docs: attrs::doc_lines(&field.attrs),
+            docs: marker::doc_lines(&field.attrs),
             ty: lower_type(&field.ty, declared, Position::Owned)?,
         });
     }
     Ok(ir::Record {
         name: item.ident.to_string(),
-        names: marker.meta.names(),
-        docs: attrs::doc_lines(&item.attrs),
+        names: found.meta.names(),
+        docs: marker::doc_lines(&item.attrs),
         fields: lowered,
     })
 }
 
-pub(super) fn lower_error(item: &syn::ItemEnum, marker: &attrs::Marker) -> Result<ir::ErrorType> {
-    marker.meta.reject_default("an error enum")?;
+pub(super) fn lower_error(item: &syn::ItemEnum, found: &marker::Marker) -> Result<ir::ErrorType> {
+    reject_flags(&found.meta, "an error enum")?;
+    found.meta.reject_default("an error enum")?;
     require_pub(&item.vis, item.ident.span(), "error enum")?;
     if !item.generics.params.is_empty() || item.generics.where_clause.is_some() {
         return Err(LowerError::new(
@@ -71,21 +74,28 @@ pub(super) fn lower_error(item: &syn::ItemEnum, marker: &attrs::Marker) -> Resul
     let mut variants = Vec::new();
     for variant in &item.variants {
         let meta = attrs::UnibindMeta::from_attrs(&variant.attrs)?;
+        reject_flags(&meta, "an error variant")?;
         meta.reject_default("an error variant")?;
         meta.reject_py_base("an error variant")?;
         variants.push(ir::ErrorVariant {
             name: variant.ident.to_string(),
             names: meta.names(),
-            docs: attrs::doc_lines(&variant.attrs),
+            docs: marker::doc_lines(&variant.attrs),
         });
     }
     Ok(ir::ErrorType {
         name: item.ident.to_string(),
-        names: marker.meta.names(),
-        docs: attrs::doc_lines(&item.attrs),
-        py_base: marker.meta.py_base.clone(),
+        names: found.meta.names(),
+        docs: marker::doc_lines(&item.attrs),
+        py_base: found.meta.py_base.clone(),
         variants,
     })
+}
+
+fn reject_flags(meta: &attrs::UnibindMeta, context: &str) -> Result<()> {
+    meta.reject_resource(context)?;
+    meta.reject_constructor(context)?;
+    meta.reject_blocking(context)
 }
 
 fn require_pub(vis: &syn::Visibility, span: proc_macro2::Span, what: &str) -> Result<()> {

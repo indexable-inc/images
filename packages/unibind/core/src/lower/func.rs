@@ -1,20 +1,46 @@
-//! Lower exported functions.
+//! Lower exported functions, object methods, and constructors.
 
 use syn::spanned::Spanned as _;
 
 use super::ty::{lower_type, Position};
-use super::{attrs, Declared, LowerError, Result};
+use super::{attrs, marker, ret, Declared, LowerError, Result};
 use crate::ir;
 
-pub(super) fn lower_fn(func: &syn::ItemFn, declared: &Declared) -> Result<ir::Function> {
-    let signature = &func.sig;
-    if let Some(asyncness) = signature.asyncness {
-        return Err(LowerError::new(
-            asyncness.span(),
-            "async functions land in phase 2 (issue #1992); phase 0 exports \
-             sync functions only",
-        ));
+/// What a signature lowers as; receivers and return conventions differ.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum Kind<'a> {
+    /// A free `pub fn` in the exported module.
+    Free,
+    /// An object method; the `&self` receiver was validated by the caller
+    /// and is skipped here.
+    Method,
+    /// An object constructor: sync, receiver-less, returning the object.
+    Constructor {
+        /// The object type the constructor must return.
+        object: &'a str,
+    },
+}
+
+impl Kind<'_> {
+    const fn context(self) -> &'static str {
+        match self {
+            Self::Free => "a function",
+            Self::Method => "a method",
+            Self::Constructor { .. } => "a constructor",
+        }
     }
+}
+
+pub(super) fn lower_fn(func: &syn::ItemFn, declared: &Declared) -> Result<ir::Function> {
+    lower_callable(&func.attrs, &func.sig, declared, Kind::Free)
+}
+
+pub(super) fn lower_callable(
+    attributes: &[syn::Attribute],
+    signature: &syn::Signature,
+    declared: &Declared,
+    kind: Kind<'_>,
+) -> Result<ir::Function> {
     if let Some(unsafety) = signature.unsafety {
         return Err(LowerError::new(
             unsafety.span(),
@@ -34,37 +60,101 @@ pub(super) fn lower_fn(func: &syn::ItemFn, declared: &Declared) -> Result<ir::Fu
             "variadic functions do not cross the binding boundary",
         ));
     }
+    let asyncness = match signature.asyncness {
+        Some(token) => {
+            if matches!(kind, Kind::Constructor { .. }) {
+                return Err(LowerError::new(
+                    token.span(),
+                    "Python constructors are synchronous; expose an async \
+                     factory function instead",
+                ));
+            }
+            ir::Asyncness::Async
+        }
+        None => ir::Asyncness::Sync,
+    };
 
-    let meta = attrs::UnibindMeta::from_attrs(&func.attrs)?;
-    meta.reject_default("a function")?;
-    meta.reject_py_base("a function")?;
+    let meta = attrs::UnibindMeta::from_attrs(attributes)?;
+    meta.reject_default(kind.context())?;
+    meta.reject_py_base(kind.context())?;
+    meta.reject_resource(kind.context())?;
+    match kind {
+        // A `constructor` flag routed the signature here already, so only
+        // the other kinds can carry it by mistake.
+        Kind::Free | Kind::Method => meta.reject_constructor(kind.context())?,
+        Kind::Constructor { .. } => meta.reject_blocking(kind.context())?,
+    }
+    let blocking = meta.blocking;
+    if blocking && matches!(asyncness, ir::Asyncness::Async) {
+        return Err(LowerError::new(
+            meta.span.unwrap_or_else(proc_macro2::Span::call_site),
+            "async bodies already run off the GIL; `blocking` applies to \
+             sync exports",
+        ));
+    }
 
     let mut args = Vec::new();
     for input in &signature.inputs {
         let arg = match input {
             syn::FnArg::Receiver(receiver) => {
+                if matches!(kind, Kind::Method) {
+                    continue;
+                }
                 return Err(LowerError::new(
                     receiver.span(),
-                    "methods belong to #[unibind::object], which lands in \
-                     phase 2 (issue #1992)",
+                    "a free function takes no receiver; methods live in an \
+                     impl block for a #[unibind::object] type",
                 ));
             }
             syn::FnArg::Typed(arg) => arg,
         };
-        args.push(lower_arg(arg, declared)?);
+        let lowered = lower_arg(arg, declared)?;
+        if matches!(asyncness, ir::Asyncness::Async) && borrows(&lowered.ty, true) {
+            return Err(LowerError::new(
+                arg.span(),
+                "async exports take owned arguments (String, PathBuf, \
+                 Vec<u8>); borrowed data cannot outlive the call into the \
+                 Python event loop",
+            ));
+        }
+        if blocking && borrows(&lowered.ty, false) {
+            return Err(LowerError::new(
+                arg.span(),
+                "a blocking export releases the GIL, so it takes owned \
+                 String/PathBuf arguments; &[u8] stays zero-copy through the \
+                 buffer protocol",
+            ));
+        }
+        args.push(lowered);
     }
     check_default_order(signature, &args)?;
 
-    let returned = lower_return(&signature.output, declared)?;
+    let returned = match kind {
+        Kind::Constructor { object } => ret::lower_ctor_return(&signature.output, object, declared)?,
+        Kind::Free | Kind::Method => ret::lower_return(&signature.output, declared)?,
+    };
     Ok(ir::Function {
         name: signature.ident.to_string(),
         names: meta.names(),
-        docs: attrs::doc_lines(&func.attrs),
-        asyncness: ir::Asyncness::Sync,
+        docs: marker::doc_lines(attributes),
+        asyncness,
+        blocking,
         args,
         ret: returned.ty,
         throws: returned.throws,
     })
+}
+
+/// Whether `ty` borrows caller data (directly or under `Option`, the only
+/// places phase 0 allows borrows); `include_bytes` is off for blocking
+/// exports, whose `&[u8]` stays a zero-copy buffer-protocol view.
+fn borrows(ty: &ir::Type, include_bytes: bool) -> bool {
+    match ty {
+        ir::Type::String { owned } | ir::Type::Path { owned } => !owned,
+        ir::Type::Bytes { owned } => include_bytes && !owned,
+        ir::Type::Option(inner) => borrows(inner, include_bytes),
+        _ => false,
+    }
 }
 
 fn lower_arg(arg: &syn::PatType, declared: &Declared) -> Result<ir::Arg> {
@@ -76,6 +166,9 @@ fn lower_arg(arg: &syn::PatType, declared: &Declared) -> Result<ir::Arg> {
     };
     let meta = attrs::UnibindMeta::from_attrs(&arg.attrs)?;
     meta.reject_py_base("an argument")?;
+    meta.reject_resource("an argument")?;
+    meta.reject_constructor("an argument")?;
+    meta.reject_blocking("an argument")?;
     Ok(ir::Arg {
         name: pattern.ident.to_string(),
         names: meta.names(),
@@ -103,93 +196,4 @@ fn check_default_order(signature: &syn::Signature, args: &[ir::Arg]) -> Result<(
         defaults_started = defaults_started || has_default;
     }
     Ok(())
-}
-
-/// A lowered return position: the success type and the thrown error, if any.
-struct Returned {
-    ty: Option<ir::Type>,
-    throws: Option<String>,
-}
-
-fn lower_return(output: &syn::ReturnType, declared: &Declared) -> Result<Returned> {
-    let syn::ReturnType::Type(_, ty) = output else {
-        return Ok(Returned {
-            ty: None,
-            throws: None,
-        });
-    };
-    if is_unit(ty) {
-        return Ok(Returned {
-            ty: None,
-            throws: None,
-        });
-    }
-    if let syn::Type::Path(path) = &**ty
-        && let Some(segment) = path.path.segments.last()
-        && segment.ident == "Result"
-    {
-        return lower_result(segment, declared);
-    }
-    Ok(Returned {
-        ty: Some(lower_type(ty, declared, Position::Owned)?),
-        throws: None,
-    })
-}
-
-fn lower_result(segment: &syn::PathSegment, declared: &Declared) -> Result<Returned> {
-    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
-        return Err(LowerError::new(
-            segment.span(),
-            "spell the Result out as Result<T, YourError>",
-        ));
-    };
-    let types: Vec<&syn::Type> = arguments
-        .args
-        .iter()
-        .filter_map(|argument| match argument {
-            syn::GenericArgument::Type(ty) => Some(ty),
-            _ => None,
-        })
-        .collect();
-    let [ok, error]: [&syn::Type; 2] = types.as_slice().try_into().map_err(|_| {
-        LowerError::new(
-            segment.span(),
-            "spell the Result out as Result<T, YourError>; type aliases hide \
-             the error type from the macro",
-        )
-    })?;
-    let syn::Type::Path(error_path) = error else {
-        return Err(bad_error_type(error));
-    };
-    let Some(error_ident) = error_path.path.get_ident() else {
-        return Err(bad_error_type(error));
-    };
-    if !declared
-        .errors
-        .iter()
-        .any(|name| error_ident == name.as_str())
-    {
-        return Err(bad_error_type(error));
-    }
-    let ty = if is_unit(ok) {
-        None
-    } else {
-        Some(lower_type(ok, declared, Position::Owned)?)
-    };
-    Ok(Returned {
-        ty,
-        throws: Some(error_ident.to_string()),
-    })
-}
-
-fn bad_error_type(ty: &syn::Type) -> LowerError {
-    LowerError::new(
-        ty.span(),
-        "the error type of an exported function must be a #[unibind::error] \
-         enum declared in the same module",
-    )
-}
-
-fn is_unit(ty: &syn::Type) -> bool {
-    matches!(ty, syn::Type::Tuple(tuple) if tuple.elems.is_empty())
 }

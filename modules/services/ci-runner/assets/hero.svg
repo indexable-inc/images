@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 210" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    svg { color: #1f2328; }
+    .muted { fill: #656d76; }
+    .accent { fill: #8250df; }
+    .accent-stroke { stroke: #8250df; }
+    .box { stroke: currentColor; fill: none; }
+    text { fill: currentColor; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    .dashed { stroke: currentColor; fill: none; stroke-dasharray: 4 3; marker-end: url(#arrow); }
+    .arrowhead { fill: currentColor; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { fill: #a371f7; }
+      .accent-stroke { stroke: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arrowhead"/>
+    </marker>
+  </defs>
+
+  <rect class="box" x="20" y="70" width="210" height="64" rx="8"/>
+  <text x="125" y="96" text-anchor="middle" font-size="13">GitHub Actions job</text>
+  <text x="125" y="116" text-anchor="middle" font-size="11" class="muted">runs-on: [self-hosted, nix]</text>
+
+  <path class="edge" d="M 230 102 L 308 102"/>
+  <text x="269" y="90" text-anchor="middle" font-size="11" class="muted">dispatch</text>
+
+  <rect class="box accent-stroke" x="310" y="62" width="190" height="80" rx="8"/>
+  <text x="405" y="92" text-anchor="middle" font-size="13">runner pool × N</text>
+  <text x="405" y="112" text-anchor="middle" font-size="11" class="muted">one persistent NixOS host</text>
+
+  <path class="edge" d="M 500 84 L 558 52"/>
+  <text x="504" y="46" font-size="11" class="muted">shares</text>
+  <rect class="box" x="560" y="26" width="140" height="44" rx="8"/>
+  <text x="630" y="45" text-anchor="middle" font-size="12">/nix/store</text>
+  <text x="630" y="61" text-anchor="middle" font-size="11" class="muted">stays warm</text>
+
+  <path class="edge" d="M 500 120 L 558 150"/>
+  <text x="500" y="164" font-size="11" class="muted">substitutes</text>
+  <rect class="box" x="560" y="134" width="140" height="44" rx="8"/>
+  <text x="630" y="153" text-anchor="middle" font-size="12">cache.ix.dev</text>
+  <text x="630" y="169" text-anchor="middle" font-size="11" class="muted">public cache</text>
+</svg>

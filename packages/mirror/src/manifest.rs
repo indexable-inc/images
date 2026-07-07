@@ -97,6 +97,12 @@ pub fn inherited_dependency_names(manifest: &str) -> Result<Vec<String>> {
     Ok(names)
 }
 
+/// Whether the manifest declares an explicit `[[bin]]` target.
+pub fn declares_binary(manifest: &str) -> Result<bool> {
+    let doc: DocumentMut = manifest.parse().context("parsing member Cargo.toml")?;
+    Ok(doc.get("bin").is_some())
+}
+
 /// The `name` and `description` of a manifest's `[package]`.
 pub struct PackageInfo {
     pub name: String,

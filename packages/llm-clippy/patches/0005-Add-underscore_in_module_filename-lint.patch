@@ -3,6 +3,10 @@ From: Andrew Gazelka <andrew.gazelka@gmail.com>
 Date: Sun, 17 May 2026 12:19:49 -0700
 Subject: [PATCH] Add underscore_in_module_filename lint
 
+House lint: denies module filenames containing underscores
+(e.g. `compute_vm.rs`). Compound names should become directory
+hierarchy instead (`vm/config.rs`), keeping the filesystem structure
+aligned with the module tree.
 
 diff --git a/clippy_lints/src/declared_lints.rs b/clippy_lints/src/declared_lints.rs
 index 808b31419..0b6745f38 100644

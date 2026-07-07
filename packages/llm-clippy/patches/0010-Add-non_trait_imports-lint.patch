@@ -3,6 +3,10 @@ From: Andrew Gazelka <andrew.gazelka@gmail.com>
 Date: Sun, 17 May 2026 12:20:23 -0700
 Subject: [PATCH] Add non_trait_imports lint
 
+House lint: flags `use` statements that import non-trait items; the
+style prefers fully qualified paths at call sites (`vm::Config`). Only
+traits need imports (as `_`) for method resolution, and owner-type
+re-exports matching the parent module name stay allowed.
 
 diff --git a/clippy_lints/src/declared_lints.rs b/clippy_lints/src/declared_lints.rs
 index e677892c9..0eb0033d9 100644

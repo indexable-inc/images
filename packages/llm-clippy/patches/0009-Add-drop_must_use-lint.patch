@@ -3,6 +3,10 @@ From: Andrew Gazelka <andrew.gazelka@gmail.com>
 Date: Sun, 17 May 2026 12:20:15 -0700
 Subject: [PATCH] Add drop_must_use lint
 
+House lint: flags `drop(expr)` where `expr` is `#[must_use]`. An
+explicit `drop()` consumes the value while bypassing both rustc's
+`unused_must_use` and clippy's `let_underscore_must_use`, making it a
+silent error-suppression pattern.
 
 diff --git a/clippy_lints/src/declared_lints.rs b/clippy_lints/src/declared_lints.rs
 index 4614901c4..e677892c9 100644

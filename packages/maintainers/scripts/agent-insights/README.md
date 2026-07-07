@@ -1,13 +1,27 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="Claude Code and Codex transcripts are parsed into turns and interrupts, then rendered as a weekly trend SVG"></p>
+
 # agent-insights
 
-Graph how often you interrupt your local CLI coding agents over time.
-
-`agent-insights.py` reads the session transcripts Claude Code and Codex already
-write to disk, and renders a self-contained SVG (no dependencies) plus a text
-summary.
+How often do you actually cut off your coding agent mid-flight, and is that number going down? `agent-insights.py` reads the session transcripts Claude Code and Codex already write to disk and graphs your interrupt rate over time: a self-contained SVG (no dependencies) plus a text summary.
 
 - Claude Code: `~/.claude/projects/**/<session>.jsonl`
 - Codex: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`
+
+## Usage
+
+This is a maintainers' script, not a flake package; run it straight from a clone
+(`git clone https://github.com/indexable-inc/index`):
+
+```
+python3 agent-insights.py                 # writes agent-insights.svg, prints summary
+python3 agent-insights.py --out /tmp/i.svg
+python3 agent-insights.py --since 2026-01-01
+python3 agent-insights.py --tool codex
+python3 agent-insights.py --no-svg        # text summary only
+```
+
+Override transcript locations with `--claude-dir` and `--codex-dir`. Open the
+SVG in any browser, or render it: `rsvg-convert agent-insights.svg -o out.png`.
 
 ## Metric
 
@@ -31,16 +45,3 @@ time**, split Claude vs Codex.
   resumes and drops the fake near-zero interrupt durations the replay injects.
 - Claude session files are self-contained (no cross-file message duplication),
   so they are counted as-is. Subagent sidechains are skipped.
-
-## Usage
-
-```
-python3 agent-insights.py                 # writes agent-insights.svg, prints summary
-python3 agent-insights.py --out /tmp/i.svg
-python3 agent-insights.py --since 2026-01-01
-python3 agent-insights.py --tool codex
-python3 agent-insights.py --no-svg        # text summary only
-```
-
-Override transcript locations with `--claude-dir` and `--codex-dir`. Open the
-SVG in any browser, or render it: `rsvg-convert agent-insights.svg -o out.png`.

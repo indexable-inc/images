@@ -5,7 +5,7 @@
     "py": null
   },
   "docs": [
-    "A sample boundary exercising the phase 0 surface."
+    "A sample boundary exercising the phase 0-2 surface."
   ],
   "functions": [
     {
@@ -19,6 +19,7 @@
         "Docs become docstrings."
       ],
       "asyncness": "Sync",
+      "blocking": false,
       "args": [
         {
           "name": "store",
@@ -73,6 +74,7 @@
       },
       "docs": [],
       "asyncness": "Sync",
+      "blocking": false,
       "args": [
         {
           "name": "path",
@@ -136,6 +138,168 @@
         }
       ],
       "ret": "Bool",
+      "throws": null
+    },
+    {
+      "name": "fetch_row",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Wait for one row."
+      ],
+      "asyncness": "Async",
+      "blocking": false,
+      "args": [
+        {
+          "name": "id",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Int": "U64"
+          },
+          "default": null
+        },
+        {
+          "name": "timeout_ms",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Int": "U64"
+          },
+          "default": {
+            "Int": 250
+          }
+        }
+      ],
+      "ret": {
+        "Named": "Row"
+      },
+      "throws": "SampleError"
+    },
+    {
+      "name": "head",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Snapshot the head row."
+      ],
+      "asyncness": "Async",
+      "blocking": false,
+      "args": [],
+      "ret": {
+        "Named": "Row"
+      },
+      "throws": null
+    },
+    {
+      "name": "digest",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Checksum data off the GIL."
+      ],
+      "asyncness": "Sync",
+      "blocking": true,
+      "args": [
+        {
+          "name": "data",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Bytes": {
+              "owned": false
+            }
+          },
+          "default": null
+        }
+      ],
+      "ret": {
+        "Bytes": {
+          "owned": true
+        }
+      },
+      "throws": null
+    },
+    {
+      "name": "ticks",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Tick forever."
+      ],
+      "asyncness": "Sync",
+      "blocking": false,
+      "args": [
+        {
+          "name": "period_ms",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Int": "U64"
+          },
+          "default": null
+        }
+      ],
+      "ret": {
+        "Stream": {
+          "Int": "U64"
+        }
+      },
+      "throws": null
+    },
+    {
+      "name": "follow",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Follow rows as they land."
+      ],
+      "asyncness": "Async",
+      "blocking": false,
+      "args": [
+        {
+          "name": "store",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "String": {
+              "owned": true
+            }
+          },
+          "default": null
+        }
+      ],
+      "ret": {
+        "Stream": {
+          "Named": "Row"
+        }
+      },
+      "throws": "SampleError"
+    },
+    {
+      "name": "cursor",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Open a cursor."
+      ],
+      "asyncness": "Async",
+      "blocking": false,
+      "args": [],
+      "ret": {
+        "Named": "Cursor"
+      },
       "throws": null
     }
   ],
@@ -268,5 +432,156 @@
       ]
     }
   ],
-  "objects": []
+  "objects": [
+    {
+      "name": "Store",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "A live store handle."
+      ],
+      "resource": true,
+      "constructor": {
+        "name": "open",
+        "names": {
+          "py": null
+        },
+        "docs": [
+          "Open a store."
+        ],
+        "asyncness": "Sync",
+        "blocking": false,
+        "args": [
+          {
+            "name": "path",
+            "names": {
+              "py": null
+            },
+            "ty": {
+              "String": {
+                "owned": false
+              }
+            },
+            "default": null
+          }
+        ],
+        "ret": null,
+        "throws": "SampleError"
+      },
+      "methods": [
+        {
+          "name": "len",
+          "names": {
+            "py": null
+          },
+          "docs": [
+            "Count rows."
+          ],
+          "asyncness": "Sync",
+          "blocking": false,
+          "args": [],
+          "ret": {
+            "Int": "U64"
+          },
+          "throws": null
+        },
+        {
+          "name": "get",
+          "names": {
+            "py": null
+          },
+          "docs": [
+            "Pull one row."
+          ],
+          "asyncness": "Async",
+          "blocking": false,
+          "args": [
+            {
+              "name": "id",
+              "names": {
+                "py": null
+              },
+              "ty": {
+                "Int": "U64"
+              },
+              "default": null
+            }
+          ],
+          "ret": {
+            "Named": "Row"
+          },
+          "throws": "SampleError"
+        },
+        {
+          "name": "sync",
+          "names": {
+            "py": "sync_all"
+          },
+          "docs": [
+            "Flush to disk."
+          ],
+          "asyncness": "Sync",
+          "blocking": false,
+          "args": [],
+          "ret": "Bool",
+          "throws": null
+        },
+        {
+          "name": "close",
+          "names": {
+            "py": null
+          },
+          "docs": [
+            "Release the store."
+          ],
+          "asyncness": "Async",
+          "blocking": false,
+          "args": [],
+          "ret": null,
+          "throws": "SampleError"
+        }
+      ]
+    },
+    {
+      "name": "Cursor",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "A cursor over rows."
+      ],
+      "resource": false,
+      "constructor": null,
+      "methods": [
+        {
+          "name": "advance",
+          "names": {
+            "py": null
+          },
+          "docs": [
+            "Step forward."
+          ],
+          "asyncness": "Sync",
+          "blocking": false,
+          "args": [
+            {
+              "name": "by",
+              "names": {
+                "py": null
+              },
+              "ty": {
+                "Int": "U64"
+              },
+              "default": null
+            }
+          ],
+          "ret": {
+            "Int": "U64"
+          },
+          "throws": null
+        }
+      ]
+    }
+  ]
 }

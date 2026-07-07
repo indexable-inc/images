@@ -1,8 +1,16 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="A layer plan is described into a tiny content-addressed image.json, then materialized into a verified OCI tar, with per-layer sharded derivations"></p>
+
 # oci-image-builder
 
-Turns a `streamLayeredImage` layer plan into an OCI image around a
-content-addressed description, `image.json`, so an image can be described cheaply
-and materialized into bytes only when needed (see #679).
+Why re-tar a whole image closure when you only changed one store path? `oci-image-builder` turns a `streamLayeredImage` layer plan into an OCI image around a content-addressed description, `image.json`: the image is described cheaply (a few KiB of digests and regeneration recipes) and materialized into bytes only when needed (see #679).
+
+## Run it
+
+```sh
+nix run github:indexable-inc/index#oci-image-builder -- --help
+```
+
+From a clone (`git clone https://github.com/indexable-inc/index`): `nix run .#oci-image-builder`.
 
 ## Modes
 

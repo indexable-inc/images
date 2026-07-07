@@ -1,0 +1,84 @@
+---
+id: 0010-fork-patch-series
+number: '0010'
+title: Fork patch-series machinery vs the state of the art
+status: Draft
+authors: andrewgazelka
+created: '2026-07-06'
+updated: '2026-07-06'
+trackingIssue: '#2098'
+supersedes: null
+supersededBy: null
+description: 'The de-fork patch machinery benchmarked against Debian DEP-3, Yocto, the kernel/b4 workflow, Gerrit, jujutsu, and friends: the format/DAG/rerere core already matches or exceeds the state of the art. Three adoptions, reasoned rejections for the rest.'
+---
+
+## Summary
+
+We benchmarked the de-fork patch machinery (#1893, #1903, #1909, #1912, #1973) against the strongest patch-series practice in the wild: Debian DEP-3, Yocto/OpenEmbedded Upstream-Status + patchtest, the kernel/b4/lore workflow and patatt attestation, Gerrit Change-Id, jujutsu, stgit/quilt, git-branchless/GitButler, Fedora dist-git/rpmautospec, Intel 0-day per-patch build gating, nixpkgs patch policy, and Android ACK fork-drift management. Verdict: our format determinism (canonical `git format-patch --zero-commit --no-signature --no-stat -N` bytes, asserted at eval in `lib/util/patched-src.nix`), per-patch dependency DAG with pairwise commute verification (`dag.json`, unmatched by quilt/stgit/Debian practice), and conflict automation (committed rerere + mergiraf) already match or exceed the state of the art. We adopt three things and reject the rest with reasons: (1) endorse #2087's inline commit-body reason-of-record as the standardized mechanism (landed via #2100 while this RFC was drafted, backfill included); (2) a fork drift metric in the fork-sync loop; (3) per-attempt-patch closure build gates, scheduled, never per-PR. Tracking: #2098.
+
+## Motivation
+
+Five forks carry 29 patches through this machinery, and the estate is growing. Before growing it further we owed ourselves an answer to two questions: is any part of the design below the industry bar, and is there proven practice worth importing? This RFC is that survey, scored against a fixed rubric, with an explicit adopt/reject/defer verdict per option so the rejections are on the record with reasons rather than silently re-litigated later.
+
+## Rubric
+
+Recommendations were scored against: (R1) checkable grounding (code path or cited source); (R2) binding constraints: pure eval, deterministic patch bytes, no new IFD, the `index.lib` seams ix consumes preserved; (R3) prefer an existing standard over a house format where one exists, and metadata must survive the `git am` → rebase → `git format-patch` round trip; (R4) explicit cost/benefit per adoption, specific non-strawman reason per rejection; (R5) per-PR CI cost stays flat; (R6) one reason mechanism shared with #2087; (R7) metrics actionable, not vanity.
+
+## What we have (grounding)
+
+- `lib/util/patched-src.nix`: the patch dir is the single source of truth ("the series is derived from `builtins.readDir patchDir` ... never a hand-kept list", lines 7-8); canonical-format assertions at eval (lines 32-58) make patched bytes deterministic and make any second writer of patch files fail loudly.
+- `lib/fork-packages.nix`: 5 forks, 29 patches (codex 1, llm-clippy 14, nix 9, btop 2, mesa 3); per-patch upstreaming stance `upstream = "attempt" | "hold" | "never"` + stance reason; repo-level `upstreamPolicy` gates (`prsWelcome`, `aiPrsAllowed`). All 9 nix patches are attempt-marked today.
+- `packages/rebase-patches`: scratch-repo rebase with committed rerere state and a mergiraf merge driver, deterministic re-export, `dag.json` regeneration with commute verification (invariants: applies-with-declared-ancestors-only, pairwise byte-identical commutation, topo order, byte-stable regen, base matches pin, intent coherence, body-states-reason for every patch since #2100).
+- `packages/upstream-sync`: tool-owned live state `upstream-status.json` (pr, retired, duplicates; save at `default.nix:161`, PR refresh via `gh` at `:182`); PR opening delegated to `upstream-pr`, which ships a patch plus its `dag.json` ancestor closure (`:400-406`).
+- `checks.<sys>.patched-src-*` (seconds-fast apply gate) and `patch-dag-*` (invariant check); `fork-sync.yml` cron every 3h (line 15) rebases `autoUpdate` forks (codex, btop) into a rolling PR; nix/clippy/mesa pins are manual.
+
+## Verdicts
+
+### Adopt
+
+**A1 — Inline reason-of-record per patch (endorse #2087; landed via #2100).** The reason a patch exists is its commit-message body, enforced for every patch: #2100 extended the previously attempt-only body check in `packages/rebase-patches/dag-check.nu` (now invariant (e), backed by `dag body-has-reason` in `dag-lib.nu`) to the whole series, and backfilled the 13 mute patches in the same PR. This is the existing standard, not a house format: the kernel requires the why in the commit message (submitting-patches); DEP-3's one required field (Description/Subject) was designed to map onto `format-patch` output (Subject/From aliases; parsing stops at the `---` separator) ([DEP-3](https://dep-team.pages.debian.net/deps/dep3/)); nixpkgs policy requires purpose + upstream link per patch (NixOS/nixpkgs#246766; nixpkgs-hammering `missing-patch-comment`). #2087 verbatim: "The reason of record should stay INLINE in the patch's own commit-message body (it round-trips through `git am` / rebase / `git format-patch` and reaches upstream reviewers; a separate metadata file would drift). The `reason` field in `lib/fork-packages.nix` stays what it is: the rationale for the upstreaming stance, not the patch's existence." So there is one mechanism per fact: body = why the patch exists; `fork-packages.nix` `reason` = why the stance. Migration cost, stated (and paid by #2100 as predicted): backfilling bodies is a one-time byte-churn confined to patch files whose bodies were empty, one deliberate re-export commit per fork. `dag.json` is unaffected (nodes key on filenames, which derive from subjects; deps derive from diffs) and rerere preimages key on conflict content, also unaffected.
+
+**A2 — Fork drift metric.** `upstream-sync drift`: per fork, commits behind upstream's default branch (forge compare API against the `flake.lock` pinned rev), age of the pinned base in days, patch count by stance, and retired-awaiting-drop count; human table plus `--json`. Wired into `fork-sync.yml`: step summary and the rolling PR body each 3h run. Actionable (R7): drift of the manual-pin forks (nix, clippy, mesa) is invisible today and is the trigger to schedule a manual rebase; retired > 0 means a rebase shrinks the series. Cost: a few API calls per cron run, zero new CI jobs.
+
+**A3 — Per-attempt-patch closure build gates, scheduled, never per-PR.** Kernel bisectability (every patch must build standalone; Intel 0-day tests patch-by-patch) is the precedent, but our sharper local reason: `upstream-pr` ships a patch + its `dag.json` ancestor closure as a standalone PR against the bare base, so a non-building closure means we ship upstream a broken PR. Mechanism: for each attempt-marked patch, build the package with `patchedSrc` restricted to that patch's closure. Closure computation is pure eval: `dag.json` is a committed repo file read with `builtins.fromJSON` — no IFD. Seam: `ix.patchedSrc` gains an optional patch-list argument defaulting to today's `readDir` discovery (additive; existing callers unchanged, including ix's cross-repo use). Exposure: an attrset outside `checks.*` so per-PR flake-check cost is flat (R5). Triggers, deliberately decoupled from contributor iteration: `workflow_dispatch` + post-merge on main when a fork's patch dir changed + preflight in `upstream-sync --open`. Cost, honestly: attempt patches are today exactly the 9 nix patches, and nix is a heavy C++ build, so a nix base bump or patch edit re-pays up to 9 package builds off the merge path; between changes the gate derivations are cache hits when the shared cache is warm. The flag is per-fork opt-in in `fork-packages.nix`, default off.
+
+### Reject
+
+**R1 — In-patch mutable status headers (Yocto Upstream-Status / DEP-3 Origin, Bug, Forwarded, Applied-Upstream) as source of truth.** The repo splits three facts across three owners: intent (`fork-packages.nix`: hand-written, gates outward automation, needs nix eval), live state (`upstream-status.json`: tool-owned), description (commit body: the only part that travels). Yocto and Debian target distro patch dirs where the patch file is the only home, so everything must live in it. Importing in-patch status here would create a second home for a mutable fact and churn canonical patch bytes on every PR open/merge (status changes without content changes) — the bytes rerere, the DAG, and review all key off. On R3: the standards-preference binds when metadata must travel; the only artifact our upstreams consume is a GitHub/GitLab PR, which carries the commit body. The taxonomy is not currently expressed in round-trippable form; it is reconstructable at export time by joining `fork-packages.nix` + `upstream-status.json`, and we document the mapping so an exporter is mechanical if a consumer ever appears. To Yocto Upstream-Status (valid set: Pending | Submitted | Backport | Denied | Inappropriate | Inactive-Upstream; "Accepted" was removed in Yocto 3.2, see the [recipe style guide](https://docs.yoctoproject.org/dev/contributor-guide/recipe-style-guide.html)): attempt with no PR → `Pending`; attempt with open PR → `Submitted [pr url]`; attempt merged (retired) → `Backport [pr url]`; attempt with closed-unmerged PR → `Denied`; never → `Inappropriate [reason]`; hold → lossy, nearest is `Pending` with the hold reason (accepted: hold exists to gate our automation, not to inform a distro). To [DEP-3](https://dep-team.pages.debian.net/deps/dep3/), which has no status tokens, only fields: `Forwarded: <pr url>` once submitted (else `no` / `not-needed` for never), `Applied-Upstream: <pr url or commit>` once merged, `Bug:` for the upstream tracker.
+
+**R2 — jj (jujutsu) as machinery.** First-class conflicts and auto-rebased descendants are the best interactive-rebase UX in the industry, but they solve the recurring-conflict problem we already automated (committed rerere replays + mergiraf structural merges + zdiff3), and jj cannot be the source of truth without abandoning the `.patch` files pure-eval `applyPatches` requires. A required new tool and second mental model is not paid for by a 29-patch estate. Humans may still use jj ad hoc on the scratch repo; document, do not integrate.
+
+**R3 — stgit / quilt.** Same substrate (ordered patch dir), strictly weaker invariants: no commute check, no deterministic re-export contract. `stg import`/`export` would add a second writer of patch bytes that does not honor the canonical flag set asserted at eval in `patched-src.nix`. `rebase-patches` already is our `stg rebase` with deterministic export.
+
+**R4 — b4 / lore email workflow, cover letters, patch versioning.** Our upstreams take GitHub/GitLab PRs, not mailing lists. The upstream-sync PR body is the cover letter; PR pushes are the rerolls; `dag.json` base is `base-commit`. Revisit only if we ever upstream to a lore-based project.
+
+**R5 — patatt / gitsign provenance signing.** Patches do leave the repo (`upstream-sync --open` pushes a branch and opens a PR), but they leave as platform commits whose authorship, integrity, and review trail are established by GitHub/GitLab push identity and PR history — which is exactly what our upstream maintainers consume. None of them verify patatt/DKIM detached signatures (a kernel/lore practice), and gitsign signs commit objects that do not survive `format-patch` anyway. Detached signatures would add key management with zero current verifiers. Same revisit trigger as R4.
+
+**R6 — Fedora dist-git / rpmautospec, Android ACK subject tags.** Derive-metadata-from-git is already embodied (`dag.json` and `upstream-status.json` are tool-derived); ACK subject tags (`UPSTREAM:`/`FROMLIST:`/`ANDROID:`) are a weaker in-subject encoding of our intent field and would pollute upstream-facing subjects. Fedora's comment-above-`Patch` convention is a SHOULD-level, unenforced ancestor of what #2087 enforces mechanically.
+
+**R7 — git-branchless / GitButler.** Stack-editing ergonomics for live branches; our stack lives as files and is materialized transiently by `rebase-patches`. GitButler's Gerrit mode auto-injects Change-Id trailers, which we separately defer (D1).
+
+### Defer
+
+**D1 — Stable per-patch identity (Gerrit Change-Id-style trailer).** The one stable-ID mechanism that survives the `format-patch` round trip, and it would decouple `fork-packages.nix` intent keys and `dag.json` nodes from mutable `NNNN-title` filenames. Deferred for two reasons: no consumer — no tool keys off cross-rename identity today (the intent-coherence invariant fails loudly on stale keys and subject renames are rare) — and adding a body trailer is itself a V1-class byte-churn event. Also, in-patch Change-Id trailers pollute upstream-bound output (kernel checkpatch has a dedicated `GERRIT_CHANGE_ID` error; projects require removing it before submission), so adoption would need strip-on-export. If rename churn materializes, adopt inside an already-open churn window (a body backfill or rebase re-export), with `upstream-pr` stripping the trailer on export.
+
+## Drawbacks
+
+Each adoption's cost is stated inline above; the honest bill is A3's: a nix base bump or attempt-patch edit re-pays up to 9 heavy C++ package builds off the merge path, and the per-fork opt-in flag is the pressure valve if that bill ever outgrows the value of pre-upstream confidence. A2 adds a dependence on forge compare APIs to the cron loop (degraded, not broken, when a forge call fails). A1's backfill byte-churn was a real one-time cost, already paid by #2100.
+
+## Alternatives
+
+The reject list above is the alternatives survey, each with its specific reason. The "do nothing" alternative is the baseline the grounding section describes: it is already at or above the state of the art, which is exactly why the three adoptions are incremental (a metric, a scheduled gate, and an endorsement of an in-flight issue) rather than machinery replacements.
+
+## Prior art
+
+The surveyed practice itself: [DEP-3](https://dep-team.pages.debian.net/deps/dep3/), [Yocto Upstream-Status + patchtest](https://docs.yoctoproject.org/dev/contributor-guide/recipe-style-guide.html), the kernel's submitting-patches and b4/lore/patatt tooling, Gerrit Change-Id, jujutsu, stgit/quilt, git-branchless/GitButler, Fedora dist-git/rpmautospec, Intel 0-day per-patch build gating, nixpkgs patch policy (NixOS/nixpkgs#246766), and Android ACK subject tags. In-repo: RFC-adjacent groundwork in #1893, #1903, #1909, #1912, #1973, and the reason-of-record enforcement in #2087/#2100.
+
+## Adoption plan
+
+PR 1: this RFC. PR 2: drift metric (`upstream-sync` subcommand + `fork-sync.yml` wiring); independent of #2087. PR 3: closure build gates (`patchedSrc` patch-list seam + gate attrset + scheduled workflow + `upstream-sync --open` preflight); does not churn patch bytes; `fork-packages.nix` opt-in flag lands default-off, enabled for nix. #2087's reason mechanism and its backfill landed via #2100, sequenced as deliberate re-exports exactly as A1 prescribes.
+
+## Unresolved questions
+
+- GitLab drift (mesa): the compare API differs from GitHub's; if counts are impractical, degrade to base-age-only for GitLab forks and say so in the table.
+- Closure-gate economics if attempt-marked patches ever concentrate in an even heavier package: the per-fork opt-in is the pressure valve; revisit if a bump's rebuild bill exceeds the value of pre-upstream confidence.

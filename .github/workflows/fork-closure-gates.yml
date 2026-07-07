@@ -1,0 +1,73 @@
+name: Fork closure gates
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    # The gates re-pay only when a gated fork's series or the fork mapping
+    # moved. Path filters are static YAML, so a fork newly opting in
+    # (`closureGates = true` in lib/fork-packages.nix) must add its patch dir
+    # here; the flag's field doc points back at this list.
+    paths:
+      - packages/nix/nix/patches/**
+      - lib/fork-packages.nix
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-closure-gates
+  cancel-in-progress: false
+
+jobs:
+  closure-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Determinate Nix
+        uses: ./.github/actions/install-nix
+
+      # Per-attempt-patch closure build gates (RFC 0010 A3, #2098): for each
+      # fork opted in via `closureGates = true` and each attempt-marked patch,
+      # build the fork package with the series restricted to that patch's
+      # dag.json closure -- exactly the standalone series `upstream-pr` ships
+      # upstream, so a red gate means the upstream PR would be broken.
+      #
+      # Deliberately scheduled/post-merge, NEVER per-PR CI: these are heavy
+      # full-package builds (a cold nix closure is ~45 min; cache hits when
+      # nothing in that closure changed). Built sequentially, and every red
+      # gate is reported with the patch it belongs to before the job fails,
+      # so one broken closure does not mask another.
+      - name: Build closure gates
+        run: |
+          set -euo pipefail
+          mapfile -t forks < <(
+            nix eval --json '.#lib.forkPackages' \
+              --apply 'fs: builtins.filter (f: f.closureGates or false) fs' \
+              | nix run nixpkgs#jq -- -r '.[].name'
+          )
+          echo "closure-gated forks: ${forks[*]}"
+          failed=()
+          for fork in "${forks[@]}"; do
+            mapfile -t patches < <(
+              nix eval --json ".#forkClosureGates.x86_64-linux.$fork" \
+                --apply builtins.attrNames \
+                | nix run nixpkgs#jq -- -r '.[]'
+            )
+            echo "$fork: ${#patches[@]} attempt-patch gates"
+            for patch in "${patches[@]}"; do
+              echo "::group::gate: $fork / $patch"
+              if ! nix build --no-link ".#forkClosureGates.x86_64-linux.$fork.\"$patch\""; then
+                echo "::error::closure gate FAILED: $fork / $patch (its dag.json closure does not build standalone; the upstream PR for it would ship broken)"
+                failed+=("$fork / $patch")
+              fi
+              echo "::endgroup::"
+            done
+          done
+          if ((${#failed[@]})); then
+            printf 'failed closure gates:\n'
+            printf '  %s\n' "${failed[@]}"
+            exit 1
+          fi

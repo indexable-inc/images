@@ -94,8 +94,11 @@ members = [
   "packages/tui/tui-node",
   "packages/tui/tui-py",
   "packages/unibind/backend-py",
+  "packages/unibind/conformance",
   "packages/unibind/core",
+  "packages/unibind/gen",
   "packages/unibind/macros",
+  "packages/unibind/runtime",
   "packages/vm/panes/audio",
   "packages/vm/panes/compositor",
   "packages/vm/panes/host",
@@ -245,6 +248,7 @@ objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
 objc2-quartz-core = "0.3"
 objc2-web-kit = "0.3"
+object = { version = "0.37", default-features = false, features = ["read"] }
 object_store = { version = "0.14", features = ["aws"] }
 panes-protocol = { path = "packages/vm/panes/protocol" }
 parking_lot = "0.12"
@@ -346,6 +350,7 @@ tui = { path = "packages/tui/tui" }
 unibind = { path = "packages/unibind/macros" }
 unibind-backend-py = { path = "packages/unibind/backend-py" }
 unibind-core = { path = "packages/unibind/core" }
+unibind-runtime = { path = "packages/unibind/runtime" }
 url = { version = "2.5.8", default-features = false }
 uuid = "1"
 webpki-roots = "1"

@@ -191,44 +191,24 @@
 
   # The scipql package, baked into the pinned interpreter so every session can
   # `import scipql` and run Soufflé datalog + find/replace over a SCIP semantic
-  # index. Same shape as `astlogModule`: the PyO3 cdylib comes from the shared
-  # workspace graph. (The CLI bakes in rust-analyzer/souffle; the kernel module
-  # exposes facts/query/fix/rename over an already-built index.scip.)
-  scipqlPythonSource = builtins.path {
-    name = "scipql-py-python-source";
-    path = ix.paths.packagesRoot + "/code/scipql/py/python";
-  };
-  scipqlModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-scipql-python-module"
-    {
-      strictDeps = true;
-      meta.description = "scipql PyO3 module bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/scipql"
-      mkdir -p "$site"
-      cp -r ${scipqlPythonSource}/scipql/. "$site/"
-
-      cdylib=""
-      for candidate in \
-        ${ix.rustWorkspace.units.libraries.scipql_py}/lib/libscipql_py.so \
-        ${ix.rustWorkspace.units.libraries.scipql_py}/lib/libscipql_py-*.so \
-        ${ix.rustWorkspace.units.libraries.scipql_py}/lib/libscipql_py.dylib \
-        ${ix.rustWorkspace.units.libraries.scipql_py}/lib/libscipql_py-*.dylib
-      do
-        if [ -f "$candidate" ]; then
-          cdylib="$candidate"
-          break
-        fi
-      done
-      if [ -z "$cdylib" ]; then
-        echo "ix-scipql module: no cdylib under ${ix.rustWorkspace.units.libraries.scipql_py}/lib" >&2
-        ls -la ${ix.rustWorkspace.units.libraries.scipql_py}/lib >&2 || true
-        exit 1
-      fi
-      install -m555 "$cdylib" "$site/_scipql.abi3.so"
-    ''
-  );
+  # index. Unlike `astlogModule` above, the site tree comes from
+  # `ix.unibind.build`: unibind-generated stub + `py.typed` merged with the
+  # hand-written wrapper, cdylib from the shared workspace graph. Same
+  # arguments as packages/code/scipql/py/default.nix (the wheel); keep the two
+  # call sites in sync. (The CLI bakes in rust-analyzer/souffle; the kernel
+  # module exposes facts/query/fix/rename over an already-built index.scip.)
+  scipqlModule =
+    (ix.unibind.build {
+      crate = "scipql-py";
+      targets.py = {
+        package = "scipql";
+        pythonSource = builtins.path {
+          name = "scipql-py-python-source";
+          path = ix.paths.packagesRoot + "/code/scipql/py/python";
+        };
+        pythonPackages = ps: [ps.polars];
+      };
+    }).py.module;
 
   # The flecs-query package, baked into the pinned interpreter so every
   # session can `import flecs_query` and parse/validate Flecs Query Language
@@ -1373,7 +1353,8 @@
       mkdir -p $out/bin
       makeWrapper ${lib.getExe mcpPython} $out/bin/ix-mcp \
         --add-flags "-m ix_notebook_mcp" \
-        --set IX_MCP_VERSION ${lib.escapeShellArg ix.rev} \
+        --set IX_BUILD_REV ${lib.escapeShellArg ix.rev} \
+        --set IX_BUILD_EPOCH ${lib.escapeShellArg (toString ix.revEpoch)} \
         --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
         --set IX_SVELTE_BUNDLE_BIN ${lib.escapeShellArg (lib.getExe svelteBundleBin)} \
         --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
@@ -1394,7 +1375,8 @@
       # subcommand. Our jupyter-shaped serve; the MCP server is one client of it.
       makeWrapper ${lib.getExe mcpPython} $out/bin/ix-notebook \
         --add-flags "-m ix_notebook_mcp notebook" \
-        --set IX_MCP_VERSION ${lib.escapeShellArg ix.rev} \
+        --set IX_BUILD_REV ${lib.escapeShellArg ix.rev} \
+        --set IX_BUILD_EPOCH ${lib.escapeShellArg (toString ix.revEpoch)} \
         --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
         --set IX_SVELTE_BUNDLE_BIN ${lib.escapeShellArg (lib.getExe svelteBundleBin)} \
         --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
@@ -3019,7 +3001,7 @@
         pkgs.fd
       ];
       strictDeps = true;
-      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366)";
+      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110)";
     }
     ''
       export HOME=$TMPDIR/home
@@ -3037,10 +3019,14 @@
       # sh Output rendering regressions (issue #1766: a failed build must not
       # read as success/still-running); imports the site-packages sh module.
       cp ${./tests/test_sh_module.py} test_sh_module.py
+      # In-band kernel build staleness (#2110): the api() header row and the
+      # TypeError-hint build stamp; imports the site-packages ix_notebook_mcp.
+      cp ${./tests/test_build_info.py} test_build_info.py
       ${lib.getExe typecheckTestPython} -m pytest \
         test_typecheck.py test_job_await_errors.py test_fsearch_partial.py \
         test_fsearch_glob.py \
         test_sh_module.py \
+        test_build_info.py \
         -q -p no:cacheprovider >stdout 2>stderr || {
         echo "ix-mcp typecheck smoke failed:" >&2
         cat stdout stderr >&2

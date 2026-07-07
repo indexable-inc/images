@@ -30,16 +30,6 @@ let
   # nix/* packages read `pkgs` off their argument the same way.
   inherit (ix) pkgs;
 
-  # The patched upstream tree: the ./patches series applied 0001..NNNN on top of
-  # the pinned 2.34.7 source, via the shared de-fork util. This doubles as the
-  # `checks.<system>.patched-src-nix` conflict gate (per-system wiring), so a
-  # patch that stops applying fails there in seconds.
-  patchedSrc = ix.patchedSrc {
-    name = "nix";
-    src = ix.nixSrc;
-    patchDir = ./patches;
-  };
-
   # nixpkgs builds `nixVersions.nix_2_34` as
   # `(nixComponents_2_34.overrideSource fetchedSrc).appendPatches patches_common`
   # then takes `.nix-everything` (pkgs/tools/package-management/nix/default.nix).
@@ -57,6 +47,15 @@ let
     pkgs.path + "/pkgs/tools/package-management/nix/patches/skip-flaky-darwin-tests.patch"
   );
 
+  # The whole patched pipeline as a function of the applied series, so the
+  # per-attempt-patch closure gates below rebuild the SAME logic with a
+  # restricted series instead of copying it. `patchNames = null` is the full
+  # series (the shipped package).
+  #
+  # The full-series patched tree doubles as the
+  # `checks.<system>.patched-src-nix` conflict gate (per-system wiring), so a
+  # patch that stops applying fails there in seconds.
+  #
   # Identify a patched daemon by version: `nix --version` (and
   # `builtins.nixVersion`) report the version each *component* was compiled
   # with -- the modular build's preConfigure writes the component derivation's
@@ -69,33 +68,58 @@ let
   # `-ix`: meson feeds the version to darwin ld's -current_version, which
   # rejects a `-` suffix as a "malformed 32-bit x.y.z version number" but
   # tolerates `+`.
-  patchedComponents =
-    ((base.overrideSource patchedSrc).appendPatches patchesCommon).overrideAllMesonComponents
-    (_: _: {version = "2.34.7+ix";});
+  mkPatchedNix = patchNames: let
+    patchedSrc = ix.patchedSrc {
+      name = "nix";
+      src = ix.nixSrc;
+      patchDir = ./patches;
+      inherit patchNames;
+    };
+    patchedComponents =
+      ((base.overrideSource patchedSrc).appendPatches patchesCommon).overrideAllMesonComponents
+      (_: _: {version = "2.34.7+ix";});
 
-  # The aggregate `nix` package (daemon + client + libs), the same attribute
-  # `nixVersions.nix_2_34` exposes.
-  nixEverything = patchedComponents.nix-everything;
+    # The aggregate `nix` package (daemon + client + libs), the same attribute
+    # `nixVersions.nix_2_34` exposes.
+    nixEverything = patchedComponents.nix-everything;
+  in
+    nixEverything.overrideAttrs (old: {
+      version = "2.34.7+ix";
+      # The aggregate's `doCheck = true` gates the build on `checkInputs`: the
+      # five component unit-test runners plus the entire upstream functional
+      # suite. Those dominate a cold build of this closure and re-validate
+      # nothing per consumer rebuild: patch applicability is already gated by
+      # `checks.<system>.patched-src-nix`, the series carries its own
+      # upstream-style functional test inside the patched tree, and the `smoke`
+      # passthru below executes the linked binary. With them on, the cache-push
+      # darwin lane (3-core hosted mac) blew its 4 h job budget cold-building
+      # this package and froze `cache-ready` (run 28772327218, index#1967).
+      doCheck = false;
+      meta =
+        (old.meta or {})
+        // {
+          description = "NixOS/nix 2.34.7 with the index in-repo patch series (GC-roots daemon-crash fix, lookup-path EPERM eval fix)";
+          mainProgram = "nix";
+        };
+    });
 
-  package = nixEverything.overrideAttrs (old: {
-    version = "2.34.7+ix";
-    # The aggregate's `doCheck = true` gates the build on `checkInputs`: the
-    # five component unit-test runners plus the entire upstream functional
-    # suite. Those dominate a cold build of this closure and re-validate
-    # nothing per consumer rebuild: patch applicability is already gated by
-    # `checks.<system>.patched-src-nix`, the series carries its own
-    # upstream-style functional test inside the patched tree, and the `smoke`
-    # passthru below executes the linked binary. With them on, the cache-push
-    # darwin lane (3-core hosted mac) blew its 4 h job budget cold-building
-    # this package and froze `cache-ready` (run 28772327218, index#1967).
-    doCheck = false;
-    meta =
-      (old.meta or {})
-      // {
-        description = "NixOS/nix 2.34.7 with the index in-repo patch series (GC-roots daemon-crash fix, lookup-path EPERM eval fix)";
-        mainProgram = "nix";
-      };
-  });
+  package = mkPatchedNix null;
+
+  # Per-attempt-patch closure build gates (RFC 0010 A3, #2098): one derivation
+  # per attempt-marked patch, this same package rebuilt with the series
+  # restricted to that patch's dag.json closure -- exactly the standalone
+  # series `upstream-pr` ships upstream. Lazy passthru data, never a flake
+  # check (heavy builds; the scheduled fork-closure-gates workflow and the
+  # `upstream-sync --open` preflight build them). Keyed here off the fork's
+  # own lib/fork-packages.nix entry so intent has one home.
+  closureGates = ix.forkClosureGates.mkGates {
+    fork =
+      lib.findFirst (fork: fork.name == "nix")
+      (throw "packages/nix/nix: lib/fork-packages.nix has no `nix` entry")
+      ix.forkPackages;
+    patchDir = ./patches;
+    mkSeries = mkPatchedNix;
+  };
 
   # The override's real risk is that the whole modular C++ tree still links and
   # the patched daemon still runs, so the smoke test executes the binary and
@@ -124,6 +148,7 @@ in
     passthru =
       (old.passthru or {})
       // {
+        inherit closureGates;
         tests =
           (old.passthru.tests or old.tests or {})
           // {

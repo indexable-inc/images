@@ -1,13 +1,13 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="one Paper factions VM with three public listeners: game, BlueMap web map, and voice chat"></p>
+
 # Factions Server
 
-Standalone consumer example for a Paper factions server on ix.
-
-It defines one Paper `26.1.2` server with a curated plugin set, a `12000` block
+What does a production-shaped factions server look like as one Nix file? This
+standalone consumer example defines a single Paper `26.1.2` node with a curated
+plugin set (factions, economy, audit, map, voice, scripting), a `12000` block
 world border, a 4064-block max-height datapack, BlueMap on TCP `8100`, Simple
-Voice Chat on UDP `24454`, and local-only RCON for managed reloads.
-
-Customize real player UUIDs and spawn/claim policy before using it with real
-players.
+Voice Chat on UDP `24454`, and local-only RCON for managed reloads. Customize
+real player UUIDs and spawn/claim policy before using it with real players.
 
 ## Run
 
@@ -15,6 +15,8 @@ players.
 # From the index repo root.
 nix run .#minecraft-factions-up
 ```
+
+Need the repo first? `git clone https://github.com/indexable-inc/index`.
 
 ## Shape
 

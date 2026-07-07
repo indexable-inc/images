@@ -1,7 +1,19 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="Rust, Python, and TypeScript SDKs link one precompiled ix-sdk core that talks to the hosted ix service"></p>
+
 # ix SDK
 
-Public source for the ix SDKs (Rust, Python, TypeScript). Each links or bundles
-the precompiled, proprietary `ix-sdk` libraries distributed by Indexable.
+Building on ix and wondering which SDK to grab? This directory is the public
+source for all three. Each links or bundles the same precompiled, proprietary
+`ix-sdk` core distributed by Indexable, so behavior is identical across
+languages and each binding only adds ecosystem-native surface.
+
+| SDK | Source | Get it |
+| --- | --- | --- |
+| Rust | [`rust/`](./rust) | the core crates; built via Nix, the other SDKs bind it |
+| Python | [`python/`](./python) | `nix build .#ix-sdk-python` |
+| TypeScript | [`typescript/`](./typescript) | `npm install @indexable/sdk` |
+
+The Nix build assumes a clone: `git clone https://github.com/indexable-inc/index`.
 
 ## License
 

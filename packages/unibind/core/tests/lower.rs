@@ -128,18 +128,6 @@ fn module_rename_comes_from_the_attribute_args() {
 }
 
 #[test]
-fn async_functions_point_at_phase_2() {
-    let message = error_message("mod m { pub async fn go() {} }");
-    assert!(message.contains("phase 2"), "{message}");
-}
-
-#[test]
-fn objects_point_at_phase_2() {
-    let message = error_message("mod m { #[unibind::object] pub struct Handle { pub id: u64 } }");
-    assert!(message.contains("phase 2"), "{message}");
-}
-
-#[test]
 fn data_enums_are_rejected() {
     let message = error_message("mod m { #[unibind::record] pub enum Kind { A, B } }");
     assert!(message.contains("data enums"), "{message}");

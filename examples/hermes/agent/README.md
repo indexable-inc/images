@@ -1,8 +1,8 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="you chat with the hermes daemon in one ix VM; the only network traffic is outbound to the model API"></p>
+
 # Hermes Operator VM
 
-One ix node running [Nous Research's Hermes agent](https://hermes-agent.nousresearch.com/) as a long-lived daemon. The upstream NixOS module (`services.hermes-agent.*`) is wired in through [`index.lib.hermesAgent`](../../../lib/default.nix); this preset only chooses the model provider, the persona, and which integrations are turned on.
-
-Defaults: OpenRouter for the model, local SQLite memory, Edge TTS, a filesystem MCP server pointed at the workspace, no messaging platforms. Everything else is opt-in through `_module.args.hermes.*`.
+What does it take to run a long-lived AI agent as a boring system service? This is one ix node running [Nous Research's Hermes agent](https://hermes-agent.nousresearch.com/) as a daemon: the upstream NixOS module (`services.hermes-agent.*`) is wired in through [`index.lib.hermesAgent`](../../../lib/default.nix), and this preset only chooses the model provider, the persona, and which integrations are turned on. Defaults: OpenRouter for the model, local SQLite memory, Edge TTS, a filesystem MCP server pointed at the workspace, no messaging platforms. Everything else is opt-in through `_module.args.hermes.*`.
 
 ## Run
 
@@ -19,7 +19,7 @@ nix run .#hermes-agent-up
 ix shell hermes -- hermes chat
 ```
 
-The fleet maps `hermes_env` to `/run/secrets/hermes.env`, owned by the `hermes` user. The file lives outside `/nix/store`. To rotate, run `ix secret set hermes_env` again and restart the unit if the process needs to re-read it.
+The fleet maps `hermes_env` to `/run/secrets/hermes.env`, owned by the `hermes` user. The file lives outside `/nix/store`. To rotate, run `ix secret set hermes_env` again and restart the unit if the process needs to re-read it. Need the repo first? `git clone https://github.com/indexable-inc/index`.
 
 ## Shape
 
@@ -82,9 +82,9 @@ Per-integration env file overrides (`telegramEnvFile`, `webSearchEnvFile`, etc.)
 
 Three ready-made shapes build on this composition instead of forking it:
 
-- [`examples/hermes/telegram`](../telegram/) — Telegram chat companion (`telegram = true`, chat-tuned `SOUL.md`, BotFather walkthrough).
-- [`examples/hermes/minecraft-operator`](../minecraft-operator/) — the agent operating a Paper Minecraft server through a typed RCON `run_command` MCP tool.
-- [`examples/hermes/api-server`](../api-server/) — `apiServer = true` in an east-west group, so LobeChat / Open WebUI / LibreChat on sibling VMs use the agent as their OpenAI endpoint.
+- [`examples/hermes/telegram`](../telegram/): Telegram chat companion (`telegram = true`, chat-tuned `SOUL.md`, BotFather walkthrough).
+- [`examples/hermes/minecraft-operator`](../minecraft-operator/): the agent operating a Paper Minecraft server through a typed RCON `run_command` MCP tool.
+- [`examples/hermes/api-server`](../api-server/): `apiServer = true` in an east-west group, so LobeChat / Open WebUI / LibreChat on sibling VMs use the agent as their OpenAI endpoint.
 
 ## Bad fit if
 

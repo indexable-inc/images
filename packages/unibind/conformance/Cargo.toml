@@ -1,0 +1,20 @@
+[package]
+name = "unibind-conformance"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Runtime conformance surface for the unibind Python backend: cancellation, streams, resources, GIL"
+
+[lib]
+name = "unibind_conformance"
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+futures.workspace = true
+pyo3 = { workspace = true, features = ["extension-module"] }
+tokio = { workspace = true, features = ["time"] }
+unibind = { workspace = true, features = ["py"] }
+unibind-runtime = { workspace = true, features = ["py"] }

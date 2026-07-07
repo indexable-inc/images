@@ -3,6 +3,9 @@ From: Andrew Gazelka <andrew.gazelka@gmail.com>
 Date: Sun, 17 May 2026 12:19:25 -0700
 Subject: [PATCH] Add excessive_file_length lint
 
+House lint: flags source files longer than a configurable number of
+lines (default 300). Large files are harder to navigate, understand,
+and review; the lint pushes toward smaller, focused modules.
 
 diff --git a/clippy_config/src/conf.rs b/clippy_config/src/conf.rs
 index 30ae84669..c59cb7e03 100644

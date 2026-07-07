@@ -3,6 +3,11 @@ From: Andrew Gazelka <andrew.gazelka@gmail.com>
 Date: Sun, 17 May 2026 12:19:46 -0700
 Subject: [PATCH] Add path_segment_repetition lint
 
+House lint: flags item names that repeat `_`-separated words already
+present in the crate name or an ancestor module name
+(`guest::spawn_vm_guest()` -> `guest::spawn()`). The module path
+already communicates the domain, so the repeated words add noise
+without information.
 
 diff --git a/clippy_lints/src/declared_lints.rs b/clippy_lints/src/declared_lints.rs
 index adfdde0d7..808b31419 100644

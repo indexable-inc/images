@@ -72,6 +72,9 @@
     writeProcessComposeApplication
     ;
   netCidr = import ./util/net-cidr.nix {inherit lib;};
+  # Force `allowSubstitutes = true` on a trivial-builder derivation that must be
+  # substitutable (darwin cross-lane eval-time IFD nodes). See its doc comment.
+  evalTimeSubstitutable = import ./util/eval-time-substitutable.nix;
   publicArtifactsFor = pkgs: import ./util/public-artifacts.nix {inherit lib pkgs;};
   # Apply an in-repo ordered patch series to an upstream source tree (the
   # de-forking replacement for a separate fork repo). Bound per package set like
@@ -79,13 +82,18 @@
   # system, not the top-level x86_64-linux one. See lib/util/patched-src.nix.
   patchedSrcFor = pkgs:
     import ./util/patched-src.nix {
-      inherit lib;
+      inherit lib evalTimeSubstitutable;
       inherit (pkgs) applyPatches;
     };
   # De-forked-package mapping (name -> input / upstream URL / patch dir), the
   # single source of truth for the patched-src checks, the `.#update` fork
   # nodes, and the `rebase-patches` tool. See lib/fork-packages.nix.
   inherit (import ./fork-packages.nix) forkPackages;
+  # Per-attempt-patch closure build gates (RFC 0010 A3, #2098): the pure-eval
+  # dag.json closure computation (`closureOf`) plus the gate-attrset builder
+  # (`mkGates`) an opted-in fork package wires into its passthru. See
+  # lib/fork-closure-gates.nix.
+  forkClosureGates = import ./fork-closure-gates.nix {inherit lib;};
   # Mirror-enabled packages (opt-in `mirror` attr in a package's package.nix):
   # id, repo-relative path, and mirror-repo coordinates for each package that
   # publishes a standalone read-only mirror. `nix eval --json
@@ -103,6 +111,13 @@
         if entry.mirror.homepage != null
         then entry.mirror.homepage
         else "https://github.com/${repoMetadataConfig.monorepo.repo}/tree/main/packages/${entry.relativePath}";
+      # The monorepo flake output attr (`nix run .#<attr>`) when the package
+      # is flake-exposed, so the generated mirror README can print a real run
+      # command instead of guessing.
+      flakeAttr =
+        if entry.flake != null
+        then entry.flake.attrName
+        else null;
     })
     packageRegistry.mirrorEntries;
   # Declarative GitHub About-sidebar metadata (description / homepage /
@@ -269,6 +284,7 @@
         clippy-src
         lists
         pins
+        evalTimeSubstitutable
         ;
       repoRoot = paths.root;
     })
@@ -517,6 +533,22 @@
   rustWorkspace = rustWorkspaceFor pkgs;
 
   /**
+  Host-language build glue for unibind-annotated crates
+  (`unibind.build { crate; targets; }`): generated stubs, the merged python
+  site tree, the strict type gate, the importable module, and the wheel, all
+  from the crate's cdylib in the shared workspace graph. Bound per package
+  set like `rustWorkspaceFor`; the default binds the repo's x86_64-linux set.
+  See [packages/unibind/nix](packages/unibind/nix).
+  */
+  unibindFor = unibindPkgs:
+    import (paths.packagesRoot + "/unibind/nix/build.nix") {
+      inherit lib packageRegistry buildPyStrictCheck;
+      pkgs = unibindPkgs;
+      rustWorkspace = rustWorkspaceFor unibindPkgs;
+    };
+  unibind = unibindFor pkgs;
+
+  /**
   Pinned macOS SDK used to cross-compile Rust to Darwin from Linux. A
   function `{ pkgs }: derivation`; override it to supply your own SDK.
   See [`lib/darwin/macos-sdk.nix`](lib/darwin/macos-sdk.nix).
@@ -559,6 +591,8 @@
       claudePlugin
       deepMerge
       efx
+      evalTimeSubstitutable
+      forkClosureGates
       forkPackages
       forkDagCheckSrc
       goUnit
@@ -592,6 +626,8 @@
       skills
       systemdHardening
       toml
+      unibind
+      unibindFor
       writeBashApplication
       writeNushellApplication
       writeProcessComposeApplication

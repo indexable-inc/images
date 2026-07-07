@@ -8,11 +8,13 @@ keeps the wiring simple. The object is frozen so nothing mutates after launch.
 
 from __future__ import annotations
 
+import datetime
 import ipaddress
 import json
 import os
 import socket
 import stat
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -61,11 +63,74 @@ def mesh_enabled() -> bool:
 
 
 def server_version() -> str:
-    """The build's source revision. The nix wrapper sets ``IX_MCP_VERSION`` to
-    the flake rev (``<commit>`` / ``<commit>-dirty``); a bare run reads "dev".
-    Both the MCP ``serverInfo.version`` (tools.py) and the ``/mesh`` payload
-    report this one value, so a client and a mesh peer see the same commit."""
-    return os.environ.get("IX_MCP_VERSION") or "dev"
+    """The build's source revision. The nix wrapper sets ``IX_BUILD_REV`` (the
+    shared build-stamp name every ix tool reads; see
+    ``doc/build-version/overview.md``) to the flake rev (``<commit>`` /
+    ``<commit>-dirty``); a bare run reads "dev". The MCP ``serverInfo.version``
+    (tools.py), the ``/mesh`` payload, and the kernel's ``api()`` catalog all
+    report this one value, so a client, a mesh peer, and an agent in a cell see
+    the same commit."""
+    return os.environ.get("IX_BUILD_REV") or "dev"
+
+
+def build_epoch() -> int | None:
+    """The build's commit time (unix epoch seconds, Nix's ``self.lastModified``)
+    from ``IX_BUILD_EPOCH``. ``None`` when unset, malformed, or the ``0``
+    non-git sentinel, so an unknown epoch never renders as 1970."""
+    raw = os.environ.get("IX_BUILD_EPOCH")
+    try:
+        epoch = int(raw) if raw else 0
+    except ValueError:
+        return None
+    return epoch or None
+
+
+# Abbreviated-revision length in the stamp; mirrors build-version's SHORT_REV_LEN
+# so the Python and Rust stamps read identically.
+_SHORT_REV_LEN = 12
+
+
+def _humanize_ago(seconds: int) -> str:
+    """``just now`` / ``5 minutes ago`` / ``2 days ago`` / ``1 year ago``; the
+    Python port of build-version's ``humanize_ago`` (same buckets, so ix tools
+    and the kernel phrase age identically). Spans under a minute and negative
+    spans (build clock ahead of ours) collapse to ``just now``."""
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        value, unit = seconds // 60, "minute"
+    elif seconds < 86400:
+        value, unit = seconds // 3600, "hour"
+    elif seconds < 7 * 86400:
+        value, unit = seconds // 86400, "day"
+    elif seconds < 30 * 86400:
+        value, unit = seconds // (7 * 86400), "week"
+    elif seconds < 365 * 86400:
+        value, unit = seconds // (30 * 86400), "month"
+    else:
+        value, unit = seconds // (365 * 86400), "year"
+    return f"{value} {unit}{'' if value == 1 else 's'} ago"
+
+
+def build_stamp(now: float | None = None) -> str:
+    """One line identifying this build, the shape build-version renders into
+    every ix tool's ``--version``: ``7e42ccdb1882 (2026-06-07, 2 days ago)``.
+    A reproducible build has no wall-clock build time, so the "when" is the
+    commit time, and the age is computed here at call time (against ``now``,
+    injectable for tests). Degrades to the bare short rev when the epoch is
+    unknown, and to ``dev`` outside the packaged wrapper.
+
+    This is the in-band staleness signal for agents (index#2110): a documented
+    helper or kwarg missing from a kernel whose stamp is days old points at a
+    stale deploy, not a phantom API."""
+    rev = server_version()
+    short = rev[:_SHORT_REV_LEN]
+    epoch = build_epoch()
+    if epoch is None:
+        return short
+    date = datetime.datetime.fromtimestamp(epoch, tz=datetime.UTC).strftime("%Y-%m-%d")
+    now_epoch = int(now if now is not None else time.time())
+    return f"{short} ({date}, {_humanize_ago(now_epoch - epoch)})"
 
 
 @dataclass(frozen=True)

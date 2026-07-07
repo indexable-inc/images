@@ -261,17 +261,50 @@ def test_empty_record_is_one_row_zero_columns() -> None:
     assert df.shape == (1, 0)
 
 
-def test_cd_does_not_outlive_its_call(tmp_path: pathlib.Path) -> None:
-    # PWD re-syncs to the process cwd on every call (index#1986/#1999): a
-    # `cd` in one call must not leak into the next, and deleting a dir a
-    # previous call cd'ed into must not break later calls.
+def test_cd_persists_across_calls(tmp_path: pathlib.Path) -> None:
+    # Issue #2089: the per-call re-sync of PWD to the process cwd (the kernel's
+    # launch dir -- typically another agent's worktree) silently redirected
+    # bare `git` commands across worktrees. PWD is REPL state like `let`/`def`:
+    # a `cd` outlives its call, per engine (and engines are per session).
+    target = tmp_path / "workdir"
+    target.mkdir()
+    try:
+        run(nu(f"cd {target}"))
+        assert pathlib.Path(run(nu.value("$env.PWD"))).resolve() == target.resolve()
+    finally:
+        nu.reset()
+
+
+def test_removed_cwd_fails_loudly_and_cwd_recovers(tmp_path: pathlib.Path) -> None:
+    # Issue #1986's failure mode, now with a diagnosis and a remedy instead of
+    # a cryptic engine error -- and never a silent redirect somewhere else.
     target = tmp_path / "transient"
     target.mkdir()
-    run(nu(f"cd {target}"))
-    assert run(nu.value("$env.PWD")) == str(pathlib.Path.cwd())
-    run(nu(f"cd {target}"))
-    target.rmdir()
-    assert run(nu.value("2 + 2")) == 4
+    try:
+        run(nu(f"cd {target}"))
+        target.rmdir()
+        with pytest.raises(nu.NuError, match="no longer exists"):
+            run(nu.value("2 + 2"))
+        # An explicit cwd= both runs the call and repairs the engine.
+        keep = tmp_path / "keep"
+        keep.mkdir()
+        assert run(nu.value("2 + 2", cwd=keep)) == 4
+        assert pathlib.Path(run(nu.value("$env.PWD"))).resolve() == keep.resolve()
+    finally:
+        nu.reset()
+
+
+def test_explicit_cwd_persists_like_cd(tmp_path: pathlib.Path) -> None:
+    try:
+        run(nu.value("2 + 2", cwd=tmp_path))
+        assert pathlib.Path(run(nu.value("$env.PWD"))).resolve() == tmp_path.resolve()
+    finally:
+        nu.reset()
+
+
+def test_nonexistent_explicit_cwd_is_rejected_at_the_boundary(tmp_path: pathlib.Path) -> None:
+    with pytest.raises(ValueError, match="not a directory"):
+        run(nu.value("2 + 2", cwd=tmp_path / "missing"))
 
 
 def test_cwd_is_respected(tmp_path: pathlib.Path) -> None:

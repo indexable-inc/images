@@ -1,0 +1,24 @@
+[package]
+name = "unibind-gen"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Render host-language files (.pyi stubs, py.typed, wrapper modules) from the unibind IR embedded in a compiled artifact"
+
+[lib]
+name = "unibind_gen"
+path = "src/lib.rs"
+
+[[bin]]
+name = "unibind-gen"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive"] }
+object.workspace = true
+serde_json.workspace = true
+unibind-core.workspace = true

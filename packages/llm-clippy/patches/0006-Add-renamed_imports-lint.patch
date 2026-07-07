@@ -3,6 +3,10 @@ From: Andrew Gazelka <andrew.gazelka@gmail.com>
 Date: Sun, 17 May 2026 12:19:55 -0700
 Subject: [PATCH] Add renamed_imports lint
 
+House lint: flags `use` statements that rename an import with `as`.
+Renaming hides the original name and makes usages hard to grep for;
+the original name or a qualified path keeps code searchable and
+explicit.
 
 diff --git a/clippy_lints/src/declared_lints.rs b/clippy_lints/src/declared_lints.rs
 index 0b6745f38..fa38883e1 100644

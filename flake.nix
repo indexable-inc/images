@@ -466,6 +466,13 @@
     # updaters changed, instead of deriving an attr from path segments
     # (#2036). Non-schema, so surfaced through `collect` like `ciChecks`.
     updatablePackages = collect "updatablePackages";
+    # Per-attempt-patch closure build gates (RFC 0010 A3, #2098), keyed
+    # `<system>.<fork>.<patch>`: the fork package rebuilt with the series
+    # restricted to that patch's dag.json closure. Deliberately NOT under
+    # `checks` (per-PR flake-check cost stays flat): built post-merge by the
+    # scheduled fork-closure-gates workflow and by the `upstream-sync --open`
+    # preflight. Non-schema, so surfaced through `collect` like `ciChecks`.
+    forkClosureGates = collect "forkClosureGates";
     # CI-only view of `packages` with each NixOS image swapped for its
     # `toplevel` closure; cache-push.yml publishes this instead of the
     # monolithic `*-oci.tar` archives, which nothing substitutes. Non-schema,

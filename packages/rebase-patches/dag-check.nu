@@ -10,11 +10,13 @@
 #       and the NNNN order is a valid topological order of the DAG.
 #   (d) the hand-written upstreaming intent (lib/fork-packages.nix `patches`)
 #       is coherent with the series: every intent key names a real patch file
-#       (a rebase can renumber/rename patches and orphan intent silently), and
-#       every `attempt`-marked patch has a substantive commit-message body,
-#       because the upstream PR body IS the commit message (one fact, one home;
-#       see packages/upstream-pr). An attempt patch with a bare subject would
-#       open a description-less PR, so it fails here with "write the why".
+#       (a rebase can renumber/rename patches and orphan intent silently),
+#   (e) every patch states WHY it exists in its commit-message body. The body
+#       is the reason of record (one fact, one home): it rides the `git am` /
+#       rebase / `format-patch` round-trip, so it reaches upstream reviewers,
+#       and for attempt-marked patches it becomes the upstream PR description
+#       verbatim (see packages/upstream-pr). Attribution trailers and bare
+#       issue refs are not a reason, so a mute patch fails with "write the why".
 #
 # Args: <src-dir> <patch-dir> <expected-base-rev> [<intent-json>]. The base rev
 # is the upstream rev the fork is pinned at (flake.lock), so the committed
@@ -22,20 +24,6 @@
 # synthetic commit. `intent-json` is the fork's `patches` intent attrset
 # rendered to JSON (defaults to empty for forks with no declared intent).
 use dag-lib.nu *
-
-# The commit-message body of a format-patch file: the lines between the header
-# block (ended by the first blank line; folded Subject continuations are
-# indented, never blank) and the diff payload (`---` separator, or `diff --git`
-# directly when the series is exported with --no-stat). Blank-only lines do not
-# count as substance.
-def "patch body-lines" [file: string]: nothing -> list<string> {
-  open --raw $file
-  | lines
-  | skip until {|l| $l == "" }
-  | skip 1
-  | take until {|l| ($l == "---") or ($l | str starts-with "diff --git ") }
-  | where {|l| ($l | str trim) != "" }
-}
 
 def main [src_dir: string, patch_dir: string, expected_base: string, intent_json: string = "{}"] {
   let files = (glob ($patch_dir | path join "*.patch") | sort)
@@ -100,11 +88,8 @@ def main [src_dir: string, patch_dir: string, expected_base: string, intent_json
     $failed = true
   }
 
-  # (d) intent coherence. Keys must name real patch files (a rebase renumbers
-  # names and would orphan intent silently), and attempt-marked patches must
-  # carry the why in the commit body, because that body becomes the upstream PR
-  # description verbatim (packages/upstream-pr); nix deliberately has no
-  # duplicate description field.
+  # (d) intent coherence: keys must name real patch files (a rebase renumbers
+  # names and would orphan intent silently).
   let intent = ($intent_json | from json)
   let names = ($patches | get name)
   for key in ($intent | columns) {
@@ -113,12 +98,16 @@ def main [src_dir: string, patch_dir: string, expected_base: string, intent_json
       $failed = true
     }
   }
-  let attempts = ($intent | items {|k, v| {name: $k, mark: ($v.upstream? | default "hold")} } | where mark == "attempt" | get name)
-  for nm in $attempts {
-    if $nm not-in $names { continue }  # already reported above
-    let body = (patch body-lines ($patch_dir | path join $nm))
-    if ($body | is-empty) {
-      print $"patch-dag check: ($nm) is marked upstream = attempt but its commit message has no body; write the why in the commit body \(it becomes the upstream PR description\)."
+
+  # (e) every patch carries its reason inline. The commit-message body is the
+  # reason of record; nix deliberately has no duplicate description field
+  # (lib/fork-packages.nix `reason` explains the upstreaming STANCE, not the
+  # patch), and for attempt-marked patches the body becomes the upstream PR
+  # description verbatim (packages/upstream-pr). A bare subject is mute both
+  # here and in an upstream reviewer's inbox.
+  for p in $patches {
+    if not (dag body-has-reason $p.file) {
+      print $"patch-dag check: ($p.name) states no reason in its commit-message body; write why the patch exists in the commit body \(attribution trailers and bare issue refs do not count; for attempt patches the body becomes the upstream PR description\)."
       $failed = true
     }
   }

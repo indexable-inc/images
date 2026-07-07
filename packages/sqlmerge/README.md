@@ -1,10 +1,26 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="base, ours, and theirs SQLite files flow through sqlmerge into a merged database on clean rows or a per-row conflict report on exit 1"></p>
+
 # sqlmerge
 
-A git merge driver for SQLite database files: a real three-way merge of row
-data via the [SQLite session extension](https://sqlite.org/sessionintro.html),
-instead of git's default "binary files conflict".
+Ever rebased a branch and had git call your SQLite file a binary conflict? sqlmerge is a git merge driver that gives `.db` files a real three-way merge: it computes the `base -> theirs` changeset with the [SQLite session extension](https://sqlite.org/sessionintro.html) and applies it onto ours, row by row, keyed by primary key. Rows only one side touched merge silently; genuinely conflicting rows get a per-row report instead of a shrug.
 
 Built by Claude Code.
+
+## Get it
+
+```sh
+nix run github:indexable-inc/index#sqlmerge   # prints usage + git wiring
+```
+
+With cargo, from the standalone mirror:
+
+```sh
+cargo install --git https://github.com/indexable-inc/sqlmerge
+```
+
+The mirror is generated read-only; the source of truth is
+[indexable-inc/index](https://github.com/indexable-inc/index)
+(`git clone https://github.com/indexable-inc/index`), where issues and PRs go.
 
 ## How it works
 
@@ -43,10 +59,10 @@ sqlmerge, everything else keeps [mergiraf](https://mergiraf.org/). By hand:
 
 ## Exit codes
 
-| code | meaning                                                            |
-| ---- | ------------------------------------------------------------------ |
-| 0    | merged clean; `%A` now holds the merged database                   |
-| 1    | conflict or refusal (details on stderr); git marks the file conflicted |
+| code | meaning                                                                 |
+| ---- | ----------------------------------------------------------------------- |
+| 0    | merged clean; `%A` now holds the merged database                        |
+| 1    | conflict or refusal (details on stderr); git marks the file conflicted  |
 
 ## Refusals (by design, no fallbacks)
 
@@ -81,23 +97,23 @@ to a policy:
 Globs use the usual `*` (any run), `?` (one char), and `[...]` class syntax.
 When several globs match one table, **the first one listed wins** (declaration
 order). A table matched by no glob uses `abort`. An absent config file means
-every table aborts — identical to the pre-config behavior. A malformed config
+every table aborts, identical to the pre-config behavior. A malformed config
 (bad TOML, unknown policy name, invalid glob) is a loud refusal, never a silent
 fall-back.
 
-| policy        | on a conflicting row                                              |
-| ------------- | ---------------------------------------------------------------- |
-| `abort`       | abort the whole merge (default)                                  |
-| `ours`        | keep ours; drop the incoming change                              |
-| `theirs`      | take theirs where SQLite allows it; otherwise abort (see below)  |
+| policy        | on a conflicting row                                                |
+| ------------- | ------------------------------------------------------------------- |
+| `abort`       | abort the whole merge (default)                                     |
+| `ours`        | keep ours; drop the incoming change                                 |
+| `theirs`      | take theirs where SQLite allows it; otherwise abort (see below)     |
 | `append-only` | a conflicting insert keeps ours; a conflicting update/delete aborts |
 
 **The `theirs` REPLACE caveat.** "Take theirs" maps to SQLite's
 `SQLITE_CHANGESET_REPLACE`, which the [session
 docs](https://sqlite.org/session/sqlite3changeset_apply.html) permit **only**
 for the `DATA` (both sides edited the same row) and `CONFLICT` (both inserted
-the same primary key) conflict types. For a `NOTFOUND` conflict — theirs edited
-a row ours had deleted, so there is no target row to overwrite — or a
+the same primary key) conflict types. For a `NOTFOUND` conflict (theirs edited
+a row ours had deleted, so there is no target row to overwrite) or a
 `CONSTRAINT` violation, returning REPLACE is illegal and would fail the entire
 apply with `SQLITE_MISUSE`. `theirs` therefore still **aborts** on those types
 rather than force an invalid resolution.

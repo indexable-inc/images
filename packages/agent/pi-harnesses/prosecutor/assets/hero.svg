@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 190" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    svg { color: #1f2328; }
+    .muted { fill: #656d76; }
+    .accent { fill: #8250df; }
+    .box { stroke: currentColor; fill: none; }
+    text { fill: currentColor; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { fill: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+            orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <rect class="box" x="20" y="56" width="150" height="60" rx="8"/>
+  <text x="95" y="81" text-anchor="middle" font-size="13" font-weight="600">executor</text>
+  <text x="95" y="100" text-anchor="middle" font-size="11" class="muted">full tool surface</text>
+
+  <line class="edge" x1="170" y1="72" x2="368" y2="56"/>
+  <text x="269" y="46" text-anchor="middle" font-size="11" class="muted">claim({ statement, verify })</text>
+
+  <rect class="box" x="370" y="30" width="250" height="64" rx="8"/>
+  <text x="495" y="56" text-anchor="middle" font-size="13" font-weight="600">prosecutor</text>
+  <text x="495" y="76" text-anchor="middle" font-size="11" class="muted">fresh pi, no shared transcript</text>
+
+  <line class="edge" x1="370" y1="106" x2="172" y2="102"/>
+  <text x="271" y="126" text-anchor="middle" font-size="11" class="muted">VERDICT: UPHELD / BROKEN</text>
+  <rect class="box" x="370" y="94" width="250" height="24" rx="6"/>
+  <text x="495" y="110" text-anchor="middle" font-size="10" class="muted">runs the check + its own probes</text>
+
+  <text x="320" y="166" text-anchor="middle" font-size="11" class="accent">upheld → interval ×2 (1…16) · broken → check every action</text>
+</svg>

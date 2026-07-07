@@ -9,6 +9,10 @@
   writePythonApplication,
   # List helpers, threaded in rather than imported across dirs.
   lists,
+  # Flip `allowSubstitutes` back on for the trivial-builder config files and the
+  # linkFarm vendor dir; threaded from lib rather than imported across dirs. See
+  # its doc comment.
+  evalTimeSubstitutable,
 }: let
   inherit
     (builtins)
@@ -75,7 +79,7 @@
     cargoLock,
     vendorDir,
   }: let
-    cargoExtraConfigFile = pkgs.writeText "cargo-extra-config.toml" cargoExtraConfig;
+    cargoExtraConfigFile = evalTimeSubstitutable (pkgs.writeText "cargo-extra-config.toml" cargoExtraConfig);
 
     gitSources = lib.unique (
       map (pkg: parseGitSource pkg.source // {inherit (pkg) source;}) (gitPackages cargoLock)
@@ -83,13 +87,13 @@
 
     # The default vendored-sources config, emitted when the vendor dir carries
     # no `.cargo/config.toml` of its own (the aggregate `linkFarm` never does).
-    vendorConfigFile = pkgs.writeText "cargo-vendor-config.toml" ''
+    vendorConfigFile = evalTimeSubstitutable (pkgs.writeText "cargo-vendor-config.toml" ''
       [source.crates-io]
       replace-with = "vendored-sources"
 
       [source.vendored-sources]
       directory = "${vendorDir}"
-    '';
+    '');
 
     # One `[source."<git>"]` table per git dependency, each replacing that git
     # source with the vendored copy. Rendered at eval time and `cat` in, rather
@@ -103,9 +107,9 @@
         ++ lib.optional (git.refType != null) "${git.refType} = ${toJSON git.ref}"
         ++ [''replace-with = "vendored-sources"'']
       );
-    gitSourceConfigFile = pkgs.writeText "cargo-git-sources.toml" (
+    gitSourceConfigFile = evalTimeSubstitutable (pkgs.writeText "cargo-git-sources.toml" (
       lib.concatMapStringsSep "\n\n" gitSourceBlock gitSources + "\n"
-    );
+    ));
   in
     ''
       export CARGO_HOME="$TMPDIR/cargo-home"
@@ -294,16 +298,7 @@
         Cargo.lock contains multiple git dependencies with the same name-version: ${join ", " duplicateNameVersions}
         cargo-unit cannot generate an aggregate vendor dir for this lock without losing source identity.
       '';
-        (pkgs.linkFarm "cargo-vendor-dir" vendorEntries).overrideAttrs (_old: {
-          # linkFarm hardcodes `allowSubstitutes = false` (a symlink farm is
-          # cheaper to rebuild than to fetch). That default is wrong here: a
-          # Darwin consumer forces this x86_64-linux drv at eval time through
-          # the cross lane's IFD (`import unitsNix` reaches the vendor dir),
-          # cannot build it, and with substitution disallowed cannot use the
-          # pushed cache output either -- eval dies with `platform mismatch`
-          # no matter how healthy cache.ix.dev is (#1711).
-          allowSubstitutes = true;
-        });
+        evalTimeSubstitutable (pkgs.linkFarm "cargo-vendor-dir" vendorEntries);
   in {
     inherit vendorSources vendorDir;
   };

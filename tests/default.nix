@@ -2181,9 +2181,14 @@
   #   3. missing DB       — the OCI image baked no /nix/var/nix/db/db.sqlite at
   #      all, so the pinned source (present in the image) was never valid; fixed
   #      by `includeNixDB = true` in oci-layer.nix
+  #   4. wrong journal mode — the DB was baked WAL-marked (build nix defaults
+  #      `use-sqlite-wal = true`) while the image's nix.conf set it false; the
+  #      guest's shm-less dotfile-VFS open then fails outright and every
+  #      nix-daemon connection resets (ix#6563)
   # The boundary this defends: the built base OCI archive must ship a populated
   # /nix/var/nix/db/db.sqlite whose ValidPaths includes EVERY source the image
-  # bakes for in-guest eval — otherwise the first in-guest `nix` re-ingests it.
+  # bakes for in-guest eval — otherwise the first in-guest `nix` re-ingests it —
+  # and whose journal mode the image's own nix.conf can actually open.
   # Two classes of baked source, both covered here:
   #   - flake registry pins (nixpkgs and, once baked, index), read off
   #     `nix.registry.*.to.path`; and
@@ -2228,6 +2233,13 @@
       ];
       archive = base.imageConfig.ix.build.ociImage;
       requiredPaths = registryPaths ++ extraBakedPaths;
+      # SQLite header bytes 18/19 (file-format versions): "1 1" = rollback
+      # journal, "2 2" = WAL. Derived from the image's OWN nix.conf so the
+      # assertion tracks the setting instead of hardcoding a mode.
+      expectedDbFormat =
+        if base.imageConfig.nix.settings.use-sqlite-wal or true
+        then "2 2"
+        else "1 1";
     } ''
       mkdir extract db
       tar -C extract -xf "$archive"
@@ -2269,6 +2281,17 @@
           exit 1
         fi
       done
+      # Journal-mode agreement (regression 4, ix#6563). A complete ValidPaths
+      # is worthless if the guest cannot open the DB at all: with
+      # `use-sqlite-wal = false` nix opens it on SQLite's unix-dotfile VFS (no
+      # shared memory), which refuses WAL-marked databases (SQLITE_CANTOPEN),
+      # and every nix-daemon connection dies with "Connection reset by peer".
+      format=$(od -An -tu1 -j18 -N2 "$dbfile")
+      format=$(echo $format)
+      if [ "$format" != "$expectedDbFormat" ]; then
+        echo "error: baked db.sqlite header format is '$format' but the image's use-sqlite-wal setting requires '$expectedDbFormat'; the guest cannot open this DB (ix#6563)" >&2
+        exit 1
+      fi
       mkdir -p "$out"
     '';
 
@@ -2563,11 +2586,130 @@
     }
   ];
 
+  # --- fork closure gates (RFC 0010 A3, #2098) -------------------------------
+  # Pure-eval facts about the per-attempt-patch closure machinery: the dag.json
+  # closure computation (`ix.forkClosureGates.closureOf`) and `patchedSrc`'s
+  # optional series restriction. The gate derivations themselves are heavy
+  # full-package builds owned by the scheduled fork-closure-gates workflow,
+  # never checks; nothing here forces one (attrNames stays shallow).
+  syntheticDagNodes = [
+    {
+      patch = "0001-a.patch";
+      deps = [];
+    }
+    {
+      patch = "0002-b.patch";
+      deps = ["0001-a.patch"];
+    }
+    {
+      patch = "0003-c.patch";
+      deps = [];
+    }
+    {
+      patch = "0004-d.patch";
+      deps = [
+        "0002-b.patch"
+        "0003-c.patch"
+      ];
+    }
+  ];
+  # The committed clippy DAG is the known fork with real transitive chains
+  # (0014 -> 0005 -> 0003 -> 0002 and 0014 -> 0009 -> 0008 -> 0007), so it
+  # exercises closure computation against live data, not just the synthetic
+  # fixture. A rebase that reshapes these edges legitimately updates this
+  # expectation.
+  clippyDag = lib.importJSON (paths.packagesRoot + "/llm-clippy/patches/dag.json");
+  nixAttemptPatches = lib.attrNames (
+    lib.filterAttrs (_: mark: (mark.upstream or "hold") == "attempt")
+    (
+      lib.findFirst (fork: fork.name == "nix") (throw "no nix fork entry") ix.forkPackages
+    )
+    .patches
+  );
+  patchedSrcFixture = args:
+    ix.patchedSrc ({
+        name = "patched-src-fixture";
+        src = ./fixtures/patched-src;
+        patchDir = ./fixtures/patched-src;
+      }
+      // args);
+  # Forcing `.patches` runs the eval-time selection + canonical assertions
+  # without building anything.
+  patchedSrcSubsetEval = builtins.tryEval (
+    builtins.deepSeq (patchedSrcFixture {patchNames = ["0001-canonical.patch"];}).patches true
+  );
+  patchedSrcSubsetNonCanonicalEval = builtins.tryEval (
+    builtins.deepSeq (patchedSrcFixture {patchNames = ["0002-noncanonical.patch"];}).patches true
+  );
+  patchedSrcSubsetUnknownEval = builtins.tryEval (
+    builtins.deepSeq (patchedSrcFixture {patchNames = ["9999-missing.patch"];}).patches true
+  );
+  patchedSrcDefaultEval = builtins.tryEval (
+    builtins.deepSeq (patchedSrcFixture {}).patches true
+  );
+
   groups = {
     # efx terranix-port parity: the ported stacks under tests/efx must render
     # exactly the golden plan IR the efx CLI's tests parse, and everything the
     # translator cannot express must throw. See tests/efx-plan.nix.
     efx = import ./efx-plan.nix {inherit lib ix paths;};
+    fork-closure-gates = [
+      {
+        assertion =
+          ix.forkClosureGates.closureOf syntheticDagNodes "0004-d.patch"
+          == [
+            "0001-a.patch"
+            "0002-b.patch"
+            "0003-c.patch"
+            "0004-d.patch"
+          ];
+        message = "closureOf should return the patch plus its transitive dag deps in NNNN order";
+      }
+      {
+        assertion = ix.forkClosureGates.closureOf syntheticDagNodes "0001-a.patch" == ["0001-a.patch"];
+        message = "closureOf of a root patch should be just the patch itself";
+      }
+      {
+        assertion =
+          ix.forkClosureGates.closureOf clippyDag.nodes "0014-Add-anonymous-tuple-return-type-lint.patch"
+          == [
+            "0002-Add-module_file_count-lint.patch"
+            "0003-Add-excessive_file_length-lint.patch"
+            "0005-Add-underscore_in_module_filename-lint.patch"
+            "0007-Add-fallible_int_fallback-lint.patch"
+            "0008-Add-magic_number-lint.patch"
+            "0009-Add-drop_must_use-lint.patch"
+            "0014-Add-anonymous-tuple-return-type-lint.patch"
+          ];
+        message = "closureOf should reproduce the committed clippy dag.json transitive closure of 0014";
+      }
+      {
+        # Crosses the fork-packages.nix intent <-> package passthru boundary:
+        # the nix package must expose exactly one gate per attempt-marked
+        # patch (attrNames only; forcing a gate would eval a full package).
+        assertion = lib.attrNames repoPackages.nix-ix.closureGates == nixAttemptPatches;
+        message = "nix-ix should expose one closure gate per attempt-marked patch in lib/fork-packages.nix";
+      }
+      {
+        assertion = patchedSrcSubsetEval.success;
+        message = "patchedSrc should accept a patchNames subset of the discovered series";
+      }
+      {
+        assertion = !patchedSrcSubsetNonCanonicalEval.success;
+        message = "patchedSrc should still assert canonical patch format on a selected subset";
+      }
+      {
+        assertion = !patchedSrcSubsetUnknownEval.success;
+        message = "patchedSrc should reject a patchNames entry naming no patch file in the series";
+      }
+      {
+        # The default (null) selection must keep discovering the WHOLE dir:
+        # the fixture dir contains a non-canonical patch, so full discovery
+        # can only succeed by skipping files, which would be the regression.
+        assertion = !patchedSrcDefaultEval.success;
+        message = "patchedSrc default discovery should still walk every patch file (and thus trip on the non-canonical fixture)";
+      }
+    ];
     wrap-package = [
       {
         assertion = !wrapPackageTypoEval.success;

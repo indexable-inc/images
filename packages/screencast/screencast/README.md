@@ -1,14 +1,13 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="A Mac's screen is hardware-encoded to H.265 and uploaded as HLS to an ingest server that stores and replays every session"></p>
+
 # screencast
 
-Stream a Mac's screen to a central server as hardware-encoded H.265, so a whole
-team can push their screens to one place that stores every session for replay and
-for downstream data and context use.
+How do you get a whole team's screens into one place you can replay later, without melting anyone's laptop? `screencast` streams a Mac's screen to a central server as hardware-encoded H.265: capture stays near-free on CPU and battery (Apple's media engine does the encoding), and the server stores every session for live view, replay, and downstream data and context use.
 
 Two pieces:
 
 - **`screencast`** (this crate): the macOS client. Captures the desktop, encodes
-  it with `hevc_videotoolbox` (the Apple media engine, so it stays near-free on
-  CPU and battery), and uploads the stream to the server.
+  it with `hevc_videotoolbox`, and uploads the stream to the server.
 - **`screencast-ingest`** (sibling crate): the server. Accepts uploads, stores
   every session on disk, and serves them back for live view, replay, and
   indexing.
@@ -19,7 +18,9 @@ bytes the hardware encoder produced are what land on disk.
 
 ## Run the server
 
-    nix run .#screencast-ingest -- --root /var/lib/screencast --addr 0.0.0.0:8080
+```sh
+nix run .#screencast-ingest -- --root /var/lib/screencast --addr 0.0.0.0:8080
+```
 
 Open `http://<host>:8080/` for the dashboard (a session list plus a player).
 `GET /api/sessions` returns the same data as JSON for scripts and indexers.
@@ -30,7 +31,9 @@ transport encryption of its own.
 
 ## Stream from a Mac
 
-    nix run .#screencast -- --server http://<host>:8080
+```sh
+nix run github:indexable-inc/index#screencast -- --server http://<host>:8080
+```
 
 That auto-detects the display, captures at 30 fps and 6 Mbit/s H.265, and streams
 under `<you>/<timestamp>`. Stop with Ctrl-C, which finalizes the session into a
@@ -40,6 +43,8 @@ capture is a black frame with no error.
 Useful flags: `--user`, `--screen N` (`--list-screens` to enumerate displays),
 `--fps`, `--bitrate 10M`, `--segment-seconds`, `--max-height 1440` (downscale to
 cut bandwidth on Retina displays), `--no-cursor`, `--token`.
+
+From a clone (`git clone https://github.com/indexable-inc/index`): `nix run .#screencast`.
 
 ## How it streams
 

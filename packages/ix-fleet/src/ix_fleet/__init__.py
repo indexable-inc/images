@@ -507,27 +507,24 @@ async def switch_node(node: FleetNode, *, dry_run: bool) -> None:
         ) from error
 
 
-async def ensure_group(group: str, *, dry_run: bool) -> None:
-    if dry_run:
-        step(f"ensure east-west group {group} exists")
-        return
-
-    try:
-        await client().create_group(group)
-    except ix_sdk.IxConflictError:
-        step(f"east-west group {group} already exists")
-
-
 async def ensure_node_groups(node: FleetNode, *, dry_run: bool) -> None:
-    for group in sorted(node.groups):
-        await ensure_group(group, dry_run=dry_run)
-        if dry_run:
-            step(f"+ add {node.name} to east-west group {group}")
-            continue
-        try:
-            await client().add_group_member(group, node.name)
-        except ix_sdk.IxConflictError:
-            step(f"{node.name} is already in east-west group {group}")
+    """Reconcile the node's east-west membership to exactly `node.groups`.
+
+    Uses `vm.apply_groups` (ENG-2752): set-based, and it get-or-creates each
+    slug **in the VM's own region**. This is the fix for a fleet driven from
+    one region's leader: the previous `group.create` + `add_group_member` pair
+    created the group with standalone `group.create`, which only ever creates
+    in the caller's local region (ENG-2754), so every other region's group was
+    stranded in the leader's region and rejected its own members. Routing
+    through the VM's region removes that class of failure.
+    """
+    groups = sorted(node.groups)
+    if not groups:
+        return
+    if dry_run:
+        step(f"+ reconcile {node.name} east-west groups -> {groups}")
+        return
+    await client().apply_vm_groups(node.name, groups)
 
 
 async def bootstrap_node(node: FleetNode, *, dry_run: bool) -> None:

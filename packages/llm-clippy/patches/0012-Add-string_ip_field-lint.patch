@@ -3,6 +3,10 @@ From: Andrew Gazelka <andrew.gazelka@gmail.com>
 Date: Wed, 27 May 2026 09:36:03 -0700
 Subject: [PATCH] Add string_ip_field lint
 
+House lint: flags struct fields whose name suggests an IP address but
+whose type is `String`. Parsing once at the boundary into
+`IpAddr`/`Ipv4Addr`/`Ipv6Addr` guarantees validity for the rest of the
+program and states the intent at the type level.
 
 diff --git a/clippy_lints/src/declared_lints.rs b/clippy_lints/src/declared_lints.rs
 index 0eb0033d9..b2e5e93b5 100644

@@ -1,6 +1,8 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="the hermes VM long-polls the Telegram API; you message the bot from the app, no inbound port anywhere"></p>
+
 # Hermes Telegram Companion
 
-The [Hermes operator VM](../agent/) tuned as a Telegram chat companion: same one-node, outbound-only shape, plus the long-poll Telegram platform and a chat-tuned persona. No inbound port, no webhook, no public hostname; the bot long-polls Telegram's API, so it works from any network the VM can dial out of.
+Want an agent in your pocket without opening a single inbound port? This is the [Hermes operator VM](../agent/) tuned as a Telegram chat companion: the same one-node, outbound-only shape, plus the long-poll Telegram platform and a chat-tuned persona. No webhook, no public hostname; the bot long-polls Telegram's API, so it works from any network the VM can dial out of.
 
 ## Shape
 
@@ -22,6 +24,8 @@ The [Hermes operator VM](../agent/) tuned as a Telegram chat companion: same one
 nix run .#hermes-telegram-up
 ```
 
+Need the repo first? `git clone https://github.com/indexable-inc/index`.
+
 Store the env-file secret, then bring the VM up. To rotate later, run `ix secret set hermes_env` again and restart the unit.
 
 ```sh
@@ -41,7 +45,7 @@ Now open your bot's chat in Telegram and say hello.
 
 > **you:** hey, what machine are you on?
 >
-> **bot:** Hi! I'm on a NixOS VM called `hermes` — 1 vCPU bursting higher, systemd as PID 1, nushell for a shell. Root inside the guest, no access to the ix host.
+> **bot:** Hi! I'm on a NixOS VM called `hermes`: 1 vCPU bursting higher, systemd as PID 1, nushell for a shell. Root inside the guest, no access to the ix host.
 >
 > **you:** is anything eating cpu right now
 >
@@ -49,7 +53,7 @@ Now open your bot's chat in Telegram and say hello.
 >
 > **you:** remind me to rotate the api key on friday morning
 >
-> **bot:** Done — cron job set for Friday 09:00 (VM time, UTC). I'll message you here when it fires.
+> **bot:** Done, cron job set for Friday 09:00 (VM time, UTC). I'll message you here when it fires.
 
 ## Notes
 

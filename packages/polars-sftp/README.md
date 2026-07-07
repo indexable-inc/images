@@ -1,8 +1,8 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="A remote file is fetched over SFTP by a Rust reader and handed to Polars as a LazyFrame with projection and row-limit pushdown"></p>
+
 # polars-sftp
 
-A [Polars](https://pola.rs) IO source that reads a remote file over **SFTP** and
-hands it back as a lazy `LazyFrame`. Point it at a parquet, IPC, CSV, or NDJSON
-(`.jsonl`) file on an SSH host and query it like any other Polars source:
+Ever needed to query a parquet file that lives on some SSH box, without copying it around first? `polars-sftp` is a [Polars](https://pola.rs) IO source that reads a remote file over **SFTP** and hands it back as a lazy `LazyFrame`. Point it at a parquet, IPC, CSV, or NDJSON (`.jsonl`) file on an SSH host and query it like any other Polars source:
 
 ```python
 import polars as pl
@@ -20,6 +20,19 @@ df = (
 It registers through Polars' official IO-plugin hook (`register_io_source`), so it
 composes with the rest of a lazy query: column projection and an `n_rows` limit
 are pushed into the reader, and any predicate is applied to the result.
+
+## Install
+
+The package is a Python wheel built by Nix:
+
+```sh
+git clone https://github.com/indexable-inc/index
+cd index
+nix build .#polars-sftp     # produces the abi3 wheel under ./result
+```
+
+`pip install` the wheel into the environment that runs your Polars queries (the
+crate's Rust `polars` and your Python `polars` must be the matching release).
 
 ## How it works
 
@@ -54,15 +67,6 @@ credential is sent: a recorded entry that mismatches is rejected (possible MITM)
 an unrecorded host is accepted (trust on first use). Pass `check_host_key=False`
 to skip the check. `timeout_ms` bounds the connect and read so a stuck host errors
 instead of hanging.
-
-## Build
-
-```sh
-nix build .#polars-sftp     # produces the abi3 wheel under ./result
-```
-
-`pip install` the wheel into the environment that runs your Polars queries (the
-crate's Rust `polars` and your Python `polars` must be the matching release).
 
 ## Known limitations
 

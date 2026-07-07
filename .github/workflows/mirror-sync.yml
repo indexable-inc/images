@@ -40,6 +40,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Full history: each mirror's CHANGELOG.md is derived from `git log`
+          # over the package path, and the generator refuses a shallow clone
+          # rather than publish a silently truncated changelog.
+          fetch-depth: 0
 
       - name: Install Determinate Nix
         uses: ./.github/actions/install-nix
