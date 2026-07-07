@@ -166,7 +166,10 @@ while IFS=$'\t' read -r key title action; do
   last="$(jq -r --arg k "$key" '.[$k].at // 0' "$dispatched")"
   if [ $((now_epoch - last)) -lt 21600 ]; then continue; fi
   agent_name="overseer-fix-$(printf '%s' "$key" | head -c 12)"
-  if out="$("$HOME/.local/bin/claude" --bg -p "You are $agent_name, dispatched by the overseer. Problem: $title. Suggested action: $action. Investigate, fix it properly (worktree + PR when it is a repo change), and report." 2>&1)"; then
+  # </dev/null: claude reads stdin, which inside this while-read loop is
+  # the remaining TSV problem rows; without it the first dispatch swallows
+  # every later row (index#2157).
+  if out="$("$HOME/.local/bin/claude" --bg -p "You are $agent_name, dispatched by the overseer. Problem: $title. Suggested action: $action. Investigate, fix it properly (worktree + PR when it is a repo change), and report." </dev/null 2>&1)"; then
     note="dispatched $agent_name"
   else
     note="dispatch failed: $(printf '%s' "$out" | head -c 120)"
