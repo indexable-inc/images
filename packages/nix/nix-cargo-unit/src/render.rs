@@ -946,9 +946,11 @@ fn render_panic_object_unit(
             pname: format!("{}-panic-objects", graph.units[index].target.name),
             native_build_inputs: "[ rustToolchain ] ++ extraNativeBuildInputs",
             driver: Driver::ObjectEmit,
-            install_phase:
-                "mkdir -p $out\nfind build -maxdepth 1 -name '*.o' -exec cp {} \"$out/\" ';'\n"
-                    .to_string(),
+            // Content-addressed like the build unit, so it hits the same
+            // killed-build orphan `cp` failure (#2247); guard it identically.
+            install_phase: format!(
+                "{ORPHAN_OUTPUT_PRECHECK}mkdir -p $out\nfind build -maxdepth 1 -name '*.o' -exec cp {{}} \"$out/\" ';'\n"
+            ),
             package_name: None,
         },
     )
@@ -1444,6 +1446,34 @@ fn append_link_arg_reader(script: &mut String, quoted_run_ref: &str, file: &str)
     );
 }
 
+// A killed content-addressed build on a store without a build sandbox (the
+// darwin default) can leave its resolved output path behind in /nix/store as an
+// invalid directory owned by the `_nixbld` user that ran it. Nix does not remove
+// that orphan before a later rebuild of the same drv, so a fresh builder (a
+// different `_nixbld` uid) hits the pre-existing dir at `$out` and the artifact
+// `cp` below fails with a bare `cp: ... Permission denied` one phase after rustc
+// succeeded, which reads like a linker/OOM failure (#2247). Detect the orphan
+// first and fail with the path, its owner, and the recovery recipe. A valid
+// sealed store path is always root-owned and never pre-exists for a fresh build,
+// so an existing non-writable `$out` here is unambiguously a killed-build
+// leftover; we only detect and report it, never delete a store path from a
+// builder. A nix builder puts GNU coreutils `stat` first on PATH even on
+// darwin, so query the owner with GNU `-c '%U'` first; BSD `stat -f '%Su'` is
+// only the fallback (GNU stat would misparse `-f` as `--file-system`).
+const ORPHAN_OUTPUT_PRECHECK: &str = "\
+if [ -e \"$out\" ] && [ ! -w \"$out\" ]; then
+  echo >&2 \"error: refusing to install over a pre-existing, non-writable output path:\"
+  echo >&2 \"  $out\"
+  echo >&2 \"  owner: $(stat -c '%U' \"$out\" 2>/dev/null || stat -f '%Su' \"$out\" 2>/dev/null || echo '?')\"
+  echo >&2 \"This is an invalid orphan left by a killed content-addressed build (see index#2247).\"
+  echo >&2 \"Nix does not clear it before rebuilding, so this build cannot write its output.\"
+  echo >&2 \"Recover on the host (a valid store path is root-owned; an invalid one is not):\"
+  echo >&2 \"  nix-store --check-validity \\\"$out\\\"   # nonzero exit => invalid => safe to remove\"
+  echo >&2 \"  sudo rm -rf \\\"$out\\\"\"
+  exit 1
+fi
+";
+
 fn render_install_phase(unit: &Unit, options: &RenderOptions, hash: &str) -> String {
     let unused_crate_dependencies_install = if collects_unused_crate_dependencies(unit, options) {
         "\
@@ -1458,7 +1488,7 @@ fi
     if unit.is_bin() || unit.is_test() {
         format!(
             "\
-mkdir -p $out/bin $out/nix-support
+{ORPHAN_OUTPUT_PRECHECK}mkdir -p $out/bin $out/nix-support
 cp {} $out/bin/{}
 chmod 755 $out/bin/{}
 if [ -f build/cargo-metadata ]; then
@@ -1474,7 +1504,7 @@ fi
         let lib_name = unit.target.name.replace('-', "_");
         format!(
             "\
-mkdir -p $out/lib $out/nix-support
+{ORPHAN_OUTPUT_PRECHECK}mkdir -p $out/lib $out/nix-support
 for build_artifact in build/*; do
   case \"$build_artifact\" in
     *.dwo|*.dwp) continue ;;
@@ -3521,6 +3551,82 @@ mod tests {
         // lib's rustc build, the lib's clippy build, and the bin's clippy
         // build.
         assert_eq!(rendered.matches("'extra-filename=").count(), 3);
+    }
+
+    #[test]
+    fn install_phase_guards_against_stale_orphan_output() {
+        // Every rustc build unit (both the lib and the bin here) must open its
+        // installPhase with the orphan-output pre-check before any mkdir/cp, so a
+        // killed content-addressed build's leftover output at `$out` fails loud
+        // with the recovery recipe instead of a bare `cp: Permission denied`
+        // (index#2247).
+        let graph: UnitGraph = serde_json::from_str(
+            r#"{
+              "version": 1,
+              "units": [
+                {
+                  "pkg_id": "path+file:///workspace#hello@0.1.0",
+                  "target": {
+                    "kind": ["lib"],
+                    "crate_types": ["lib"],
+                    "name": "hello",
+                    "src_path": "/workspace/src/lib.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [],
+                  "mode": "build",
+                  "dependencies": []
+                },
+                {
+                  "pkg_id": "path+file:///workspace#hello@0.1.0",
+                  "target": {
+                    "kind": ["bin"],
+                    "crate_types": ["bin"],
+                    "name": "hello-cli",
+                    "src_path": "/workspace/src/main.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [],
+                  "mode": "build",
+                  "dependencies": []
+                }
+              ],
+              "roots": [0, 1]
+            }"#,
+        )
+        .unwrap();
+
+        let rendered = render_units_nix(
+            &graph,
+            &RenderOptions {
+                workspace_root: PathBuf::from("/workspace"),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: true,
+                toolchain_id: Some("rustc-test".to_string()),
+                deny_unused_crate_dependencies: false,
+                deny_panics: false,
+            },
+        )
+        .unwrap();
+
+        // The guard fires on a pre-existing, non-writable `$out` (the killed-build
+        // orphan) and names the recovery recipe. One occurrence per build unit
+        // (the lib and the bin); it must land before the artifact `cp`.
+        assert_eq!(
+            rendered
+                .matches("refusing to install over a pre-existing, non-writable output path")
+                .count(),
+            2
+        );
+        assert!(rendered.contains("nix-store --check-validity"));
+        // The guard runs first: it is prepended directly to the installPhase
+        // mkdir in both the lib and the bin branches, so it must be immediately
+        // adjacent to (and hence before) the mkdir that precedes the artifact cp.
+        assert!(rendered.contains("exit 1\nfi\nmkdir -p $out/lib $out/nix-support"));
+        assert!(rendered.contains("exit 1\nfi\nmkdir -p $out/bin $out/nix-support"));
     }
 
     #[test]
