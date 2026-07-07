@@ -3904,6 +3904,10 @@
             "NotebookEdit"
             "Glob"
             "Grep"
+            "Monitor"
+            "CronCreate"
+            "CronDelete"
+            "CronList"
             "WebSearch"
             "WebFetch"
           ]

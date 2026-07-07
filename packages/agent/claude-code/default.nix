@@ -204,22 +204,15 @@
       }
     else null;
 
-  # Set only when the caller has not already provided an env value.
-  wrapperEnvDefaults = {
-    # Keep every session on the standard (~200K) context window, never 1M
-    # (~5x input price; past-the-window work belongs in subagents, and the
-    # smaller window makes auto-compaction trigger sooner). Verified against
-    # 2.1.197: this flag gates every 1M path in the CLI — the explicit `[1m]`
-    # model suffix, the silent auto-upgrade on eligible models, honoring a
-    # `context-1m` beta header, and the built-in `[1m]` /model rows. Server-
-    # pushed model options (`additionalModelOptionsCache` in ~/.claude.json,
-    # e.g. an org-offered row valued `claude-fable-5[1m]`) can still APPEAR in
-    # /model, but selecting one still runs at the standard window: the beta
-    # header is never sent and the window computation ignores the suffix.
-    # Model selection itself is untouched. Guarded by an install check.
-    # Re-enable 1M per machine: `export CLAUDE_CODE_DISABLE_1M_CONTEXT=`.
-    CLAUDE_CODE_DISABLE_1M_CONTEXT = 1;
-  };
+  # `env_defaults` leaves caller-provided values alone: exporting the full
+  # CLAUDE_CODE_DISABLE_* name to empty re-enables that feature for one session.
+  claudeCodeDisabledFeatureDefaults = [
+    "1M_CONTEXT"
+    "CRON"
+  ];
+  wrapperEnvDefaults = lib.genAttrs (
+    map (name: "CLAUDE_CODE_DISABLE_${name}") claudeCodeDisabledFeatureDefaults
+  ) (_: 1);
 
   # Settings defaults are injected only when the caller passed no `--settings`;
   # Claude treats repeated settings flags as first-wins.

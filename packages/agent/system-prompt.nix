@@ -716,7 +716,8 @@ let
           Treat wall time as a first-class cost. Before launching an operation
           expected to run longer than about a minute, state its expected
           duration, and when other work can proceed meanwhile, run it in the
-          background with a monitor instead of foreground-blocking a tool slot.
+          background with a harness-tracked job instead of foreground-blocking a
+          tool slot.
           A blocking critical-path operation with nothing to parallelize may run
           foreground. Among strategies of equal rigor, pick the one that yields
           signal soonest.
@@ -724,7 +725,7 @@ let
         reason = ''
           Foreground-blocking on long operations idles the whole session. An
           agent foreground-waited a 600s Bash timeout on a long build instead of
-          backgrounding it with a log-tail monitor.
+          backgrounding it with an observable log-tail job.
         '';
       };
     }
@@ -757,9 +758,9 @@ let
           terminal state: success, failure, and disappearance of the thing
           watched, and must carry its own heartbeat or deadline so a stalled
           watcher is itself detected. Before ending a turn to wait, verify the
-          watch is actually alive: a harness-tracked background child or Monitor
-          running, its output growing. Receiving your own stop notification
-          means no watch survived, so re-arm one or proceed synchronously.
+          watch is actually alive: a harness-tracked background child running,
+          its output growing. Receiving your own stop notification means no
+          watch survived, so re-arm one or proceed synchronously.
           An armed ScheduleWakeup is such a watch: pending wakeups live only
           in harness memory and a session resume or user abort silently drops
           them, so on any later turn that still counts on one, re-verify or

@@ -18,7 +18,7 @@ Hand a PR's whole "watch CI → fix failures → merge" loop to a **background s
 
 3. **On the completion notification**, relay the outcome: merged (with commit), or stopped-stuck (with the failure it could not fix and why), or blocked (needs a human decision).
 
-Keep all CI watching inside the fork, and even there make it event-driven (see below). A foreground `gh pr checks --watch` / `gh run watch` in the main thread holds a Bash slot up to the 600s timeout and freezes the session, so route it through `run_in_background` + `Monitor` instead.
+Keep all CI watching inside the fork, and even there make it event-driven (see below). A foreground `gh pr checks --watch` / `gh run watch` in the main thread holds a Bash slot up to the 600s timeout and freezes the session, so route it through a harness-tracked background job instead.
 
 ## The fork's charter (paste into the subagent prompt)
 

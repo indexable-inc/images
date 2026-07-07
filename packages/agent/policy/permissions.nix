@@ -90,12 +90,19 @@
     image_generation = false;
     in_app_browser = false;
   };
+
+  claudeHouseDeniedTools = [
+    "Monitor"
+    "CronCreate"
+    "CronDelete"
+    "CronList"
+  ];
 in {
   claude = {
     deniedToolPatterns =
       map (pattern: "Bash(${pattern})") protectedMergeCommandPatterns
       ++ lib.optionals exaSearchBaked exaSuperseded.claudeTools
-      ++ lib.optionals indexKernelBaked kernelClaudeTools;
+      ++ lib.optionals indexKernelBaked (kernelClaudeTools ++ claudeHouseDeniedTools);
   };
 
   codex = {

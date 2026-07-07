@@ -49,17 +49,24 @@
     fi
   ''}
 
-    # 1M-context guard (see wrapperEnvDefaults): sessions default to the
-    # standard context window, so the disable flag must ride env_defaults —
-    # baked in the spec, injected when the caller has it unset, and yielding
-    # to a caller value so the per-machine re-enable path
-    # (`export CLAUDE_CODE_DISABLE_1M_CONTEXT=`) keeps working.
-    one_m="$(${lib.getExe jq} -r \
-      '.env_defaults[] | select(.key == "CLAUDE_CODE_DISABLE_1M_CONTEXT") | .value' \
-      "$PWD/test-spec.json")"
-    if [ "$one_m" != 1 ]; then
-      printf 'claude launcher env check failed: CLAUDE_CODE_DISABLE_1M_CONTEXT env_default is %s, want 1\n' \
-        "$one_m" >&2
+    check_env_default() {
+      local key="$1" got
+      got="$(${lib.getExe jq} -r --arg key "$key" \
+        '.env_defaults[] | select(.key == $key) | .value' \
+        "$PWD/test-spec.json")"
+      if [ "$got" != 1 ]; then
+        printf 'claude launcher env check failed: %s env_default is %s, want 1\n' \
+          "$key" "$got" >&2
+        exit 1
+      fi
+    }
+    check_env_default CLAUDE_CODE_DISABLE_1M_CONTEXT
+    check_env_default CLAUDE_CODE_DISABLE_CRON
+
+    if ${lib.getExe jq} -e \
+      '.env[] | select(.key == "CLAUDE_CODE_DISABLE_1M_CONTEXT" or .key == "CLAUDE_CODE_DISABLE_CRON")' \
+      "$PWD/test-spec.json"; then
+      printf 'claude launcher env check failed: CLAUDE_CODE_DISABLE_* must be env_defaults, not env\n' >&2
       exit 1
     fi
     envstub="$PWD/envstub"
