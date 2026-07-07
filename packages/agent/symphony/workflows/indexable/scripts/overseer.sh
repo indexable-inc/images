@@ -109,8 +109,12 @@ codex_sessions="$(
 
 # Symphony runs from the local runtime. An unreachable API is itself a
 # finding, so the failure is recorded in the snapshot, never swallowed.
+# The API lists runs grouped by workflow, oldest-first; sort to keep the
+# NEWEST runs, or the window freezes in the past as the store grows and
+# the judge sees phantom cron outages (#2183).
 symphony_runs="$(curl -s --max-time 5 http://127.0.0.1:4040/api/v1/ir/runs |
-  jq '[.runs[] | {run_id, status, states, trigger, created_at, updated_at}] | .[0:12]' ||
+  jq '[.runs[] | {run_id, status, states, trigger, created_at, updated_at}]
+      | sort_by(.created_at) | reverse | .[0:12]' ||
   echo '{"error": "symphony runtime unreachable on 127.0.0.1:4040"}')"
 
 loadavg="$(sysctl -n vm.loadavg | tr -d '{}' | awk '{print $1}')"
