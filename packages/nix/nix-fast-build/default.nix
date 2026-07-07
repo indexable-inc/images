@@ -3,7 +3,7 @@
   # its `cacheStatus` as `cached` (present in a configured *remote* substituter).
   # A `local` status (output already realized in *this* runner's store, but not
   # pushed anywhere) falls through to the build queue and gets re-realized every
-  # run (__init__.py, the `elif cache_status == "local"` arm).
+  # run (workers.py, the `elif cache_status == "local"` arm).
   #
   # On index's persistent warm CI runner that is almost everything: the rust
   # workspace units default to `contentAddressed = true` (lib/rust/cargo-unit.nix)
@@ -19,6 +19,20 @@
   # needs (re)building. nix-eval-jobs#403 / nix#12128 fixed the *status*; this
   # fixes what --skip-cached does with it.
   package = pkgs.nix-fast-build.overrideAttrs (old: {
+    # Forward-pin to upstream 1.6.0 while the repo's nixpkgs pin still carries
+    # 1.5.0: the check gate passes --fail-fast, which landed upstream in 1.6.0
+    # (Mic92/nix-fast-build#343), and skip-local.patch below targets the 1.6.0
+    # module layout (workers.py; 1.5.0 was a single __init__.py). tag + hash
+    # copied from nixpkgs-unstable f205b557 pkgs/by-name/ni/nix-fast-build.
+    # Delete this version/src override (keep the patch) once the nixpkgs pin
+    # reaches nix-fast-build >= 1.6.0.
+    version = "1.6.0";
+    src = pkgs.fetchFromGitHub {
+      owner = "Mic92";
+      repo = "nix-fast-build";
+      tag = "1.6.0";
+      hash = "sha256-PMBbenLBvn/0pSFOhwPVn171Vw7kU5YmBUNDhxllZ7c=";
+    };
     patches = (old.patches or []) ++ [./skip-local.patch];
   });
 
@@ -36,10 +50,21 @@
     }
     ''
       help=$(nix-fast-build --help 2>&1) || true
+      # --fail-fast is what the check gate passes (lib/per-system.nix); its
+      # absence from usage is exactly the failure mode that broke CI when the
+      # flag was assumed present on 1.5.0 (#2128), so assert both flags.
       case "$help" in
         *"--skip-cached"*) ;;
         *)
           echo "nix-fast-build --help did not print usage" >&2
+          printf '%s\n' "$help" >&2
+          exit 1
+          ;;
+      esac
+      case "$help" in
+        *"--fail-fast"*) ;;
+        *)
+          echo "nix-fast-build --help lacks --fail-fast (version < 1.6.0?)" >&2
           printf '%s\n' "$help" >&2
           exit 1
           ;;
