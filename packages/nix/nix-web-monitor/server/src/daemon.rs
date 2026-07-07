@@ -93,11 +93,35 @@ async fn is_root() -> bool {
     String::from_utf8_lossy(&output.stdout).trim() == "0"
 }
 
+/// Shell wrapper that ties the tracer's lifetime to this process.
+///
+/// The tracer runs as root while the monitor usually does not, so no signal we
+/// send can reach it: `kill_on_drop` gets EPERM against the `sudo` child, and a
+/// signal that kills the monitor without unwinding (tmux's SIGHUP, SIGKILL)
+/// never even fires it. An orphaned `fs_usage` is expensive: it holds the
+/// machine's only ktrace session and burns a core against a busy daemon
+/// (#2187). So the kill must come from the tracer's own privilege level: a
+/// watchdog forked before `exec`ing the tracer holds our stdin pipe, whose EOF
+/// is the one signal no death path can suppress (the kernel closes the write
+/// end when this process exits, however it exits), and then TERMs the tracer.
+/// `$$` names the tracer because `exec` keeps the shell's pid. Details that
+/// matter: stdin is dup'd to fd 3 because `&` re-points a background command's
+/// stdin at /dev/null, and the watchdog group's stdio is redirected to
+/// /dev/null so a tracer exit still closes the stdout pipe [`trace_loop`]
+/// watches for EOF.
+const TRACER_BABYSITTER: &str = concat!(
+    "exec 3<&0\n",
+    "{ cat <&3; kill \"$$\"; } >/dev/null 2>&1 &\n",
+    "exec \"$0\" \"$@\" 3<&-\n",
+);
+
 /// Build the tracer command for this platform.
 ///
 /// Wrapped in `sudo -n` when not already root: the daemon is root-owned, so
 /// tracing it needs privilege, and `-n` never prompts -- a user without cached
 /// sudo just gets the "needs root" status instead of a hung password prompt.
+/// Either way the tracer runs under [`TRACER_BABYSITTER`] with stdin piped, so
+/// it dies with this process instead of surviving as an unkillable root orphan.
 async fn tracer_command(pids: &[u32]) -> Command {
     let root = is_root().await;
     let (program, args): (&str, Vec<String>) = if cfg!(target_os = "macos") {
@@ -127,39 +151,33 @@ async fn tracer_command(pids: &[u32]) -> Command {
     };
 
     let mut command = if root {
-        let mut c = Command::new(program);
-        c.args(args);
-        c
+        Command::new("sh")
     } else {
         let mut c = Command::new("sudo");
-        c.arg("-n").arg(program).args(args);
+        c.arg("-n").arg("sh");
         c
     };
     command
+        .arg("-c")
+        .arg(TRACER_BABYSITTER)
+        .arg(program)
+        .args(args)
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     command
 }
 
-/// Spawn the tracer, or return a human status explaining why it could not start
-/// (binary missing, or `sudo -n` refused for lack of privilege).
+/// Spawn the tracer, or return a human status explaining why it could not
+/// start. A missing tracer binary does not fail the spawn (the shell wrapper
+/// starts fine and its `exec` fails); that surfaces through the tracer's
+/// stderr as a "command not found" status via [`denied_reason`] instead.
 async fn spawn_tracer(pids: &[u32]) -> Result<Child, String> {
     let mut command = tracer_command(pids).await;
-    command.spawn().map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            format!(
-                "syscall tracer not found ({}); daemon view unavailable",
-                if cfg!(target_os = "macos") {
-                    "fs_usage"
-                } else {
-                    "strace"
-                }
-            )
-        } else {
-            format!("could not start daemon tracer: {error}")
-        }
-    })
+    command
+        .spawn()
+        .map_err(|error| format!("could not start daemon tracer: {error}"))
 }
 
 /// Read the tracer's output, folding syscalls into a [`DaemonTrace`] and
@@ -257,4 +275,54 @@ async fn publish_status(
     let info = DaemonTrace::default().info(false, status.to_owned(), 0, Vec::new());
     monitor.write().await.set_daemon(info);
     let _ = broadcast_deltas(monitor, deltas).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncReadExt;
+
+    /// [`TRACER_BABYSITTER`] with a stand-in tracer and no sudo, stdio wired
+    /// exactly as [`tracer_command`] wires it.
+    fn wrapped(program: &str, args: &[&str]) -> Command {
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg(TRACER_BABYSITTER)
+            .arg(program)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    }
+
+    /// The orphan guard (#2187): when the monitor dies its stdin pipe closes,
+    /// and the watchdog must reap the tracer no signal of ours could reach.
+    #[tokio::test]
+    async fn tracer_dies_when_monitor_stdin_closes() {
+        let mut child = wrapped("sleep", &["300"]).spawn().expect("spawn wrapper");
+        drop(child.stdin.take());
+        let status = tokio::time::timeout(Duration::from_secs(10), child.wait())
+            .await
+            .expect("tracer should die once stdin closes")
+            .expect("wait on tracer");
+        // TERMed by the watchdog, not a clean exit.
+        assert!(!status.success());
+    }
+
+    /// A tracer exiting on its own must still close the stdout pipe (the
+    /// lingering watchdog holds /dev/null, not our pipe): stdout EOF is how
+    /// [`trace_loop`] detects tracer death.
+    #[tokio::test]
+    async fn tracer_exit_closes_stdout() {
+        let mut child = wrapped("echo", &["done"]).spawn().expect("spawn wrapper");
+        let mut stdout = child.stdout.take().expect("stdout piped");
+        let mut output = String::new();
+        tokio::time::timeout(Duration::from_secs(10), stdout.read_to_string(&mut output))
+            .await
+            .expect("stdout should reach EOF when the tracer exits")
+            .expect("read stdout");
+        assert_eq!(output, "done\n");
+    }
 }
