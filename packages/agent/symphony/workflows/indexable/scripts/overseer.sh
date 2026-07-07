@@ -166,6 +166,10 @@ jq -n \
 # sandbox. The -p JSON envelope is checked before the reply is trusted:
 # an is_error envelope carries a partial .result (the 04:30Z truncation),
 # which must fail the tick with the envelope's own error.
+# --settings '{"hooks":{}}': the tick judge is a pure function call, not an
+# agent session. Without it the nix claude wrapper injects the default
+# settings (Stop hooks included), so every tick's meta-transcript was sliced
+# by the friction-report hook and fed to the extractor (index#2275).
 (
   cd "$workdir"
   env -u SLACK_BOT_OAUTH_TOKEN -u SLACK_SIGNING_SECRET \
@@ -174,6 +178,7 @@ jq -n \
     -u SYMPHONY_GITHUB_APP_PRIVATE_KEY_BASE64 -u SYMPHONY_ROOM_REGISTRY_TOKEN \
     claude -p --model fable --effort high \
     --allowedTools "" --output-format json \
+    --settings '{"hooks":{}}' \
     "$(cat "$prompt_file")
 
 Your notes from previous ticks:

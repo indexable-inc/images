@@ -344,6 +344,15 @@ fn ask_model(delta: &str, cwd: Option<&str>) -> Vec<Item> {
         "",
         "--setting-sources",
         "",
+        // The index claude-code wrapper injects `--settings <default-settings>`
+        // (Stop hooks included) whenever the caller passes no --settings, and
+        // --setting-sources does not filter that injected file. Without this
+        // override every extractor run is itself sliced by the Stop hooks and
+        // spawns another extractor: 84k recursive transcripts on hydra
+        // (index#2275). An explicit empty hooks object keeps the extractor
+        // session hook-free.
+        "--settings",
+        "{\"hooks\":{}}",
         "--strict-mcp-config",
         "--mcp-config",
         "{\"mcpServers\":{}}",
@@ -786,6 +795,18 @@ pub fn friction_report() {
     }
     let _ = fs::create_dir_all(state_dir());
 
+    // Meta-session filter (index#2275): headless judges run in mktemp scratch
+    // cwds (the symphony overseer tick, one-off summarizers). Their transcripts
+    // are role prompts and reports, not agent work, and mining them burned a
+    // model call per tick and filed noise. Deterministic skip, logged so the
+    // exclusion stays visible in friction.log.
+    if let Some(cwd) = payload.get("cwd").and_then(Value::as_str)
+        && is_scratch_cwd(cwd)
+    {
+        log(&format!("{session}: scratch cwd {cwd}, skipping meta-session"));
+        return;
+    }
+
     if std::env::var_os("FRICTION_FOREGROUND").is_some_and(|v| !v.is_empty()) {
         analyze(&payload);
         return;
@@ -804,6 +825,18 @@ fn read_stdin() -> Option<String> {
 /// component with no path separators, matching `os.path.basename(s) == s`.
 fn is_plain_component(s: &str) -> bool {
     Path::new(s).file_name().map(OsString::from) == Some(OsString::from(s))
+}
+
+/// True when the session's cwd lives in a throwaway temp location: `/tmp`, or
+/// the macOS per-user temp tree `/var/folders/<xx>/<hash>/T` (`$TMPDIR`).
+/// macOS aliases these under `/private`, and payloads carry either spelling,
+/// so the optional `/private` prefix is stripped before matching. Sessions
+/// there are headless meta-calls by construction, never mined for friction.
+fn is_scratch_cwd(cwd: &str) -> bool {
+    let path = cwd.strip_prefix("/private").unwrap_or(cwd);
+    path == "/tmp"
+        || path.starts_with("/tmp/")
+        || path.starts_with("/var/folders/")
 }
 
 /// Re-spawn THIS binary as `friction-report --analyze`, detached (new session,
@@ -862,7 +895,7 @@ fn set_new_session(cmd: &mut Command) {
 
 #[cfg(test)]
 mod tests {
-    use super::{compose_prompt, condense, normalize_title, parse_items};
+    use super::{compose_prompt, condense, is_scratch_cwd, normalize_title, parse_items};
 
     #[test]
     fn condense_claude_dialect() {
@@ -949,5 +982,24 @@ mod tests {
     fn parse_items_no_array() {
         assert!(parse_items("no brackets here").is_empty());
         assert!(parse_items("]backwards[").is_empty());
+    }
+
+    #[test]
+    fn scratch_cwd_detection() {
+        // overseer tick judge (index#2275): mktemp -d under the macOS user T dir
+        assert!(is_scratch_cwd(
+            "/private/var/folders/2z/yxvv26350y7cnj7w0q3p66mc0000gn/T/tmp.KGYPUmQMiV"
+        ));
+        assert!(is_scratch_cwd("/var/folders/2z/abc/T/tmp.x"));
+        assert!(is_scratch_cwd("/tmp"));
+        assert!(is_scratch_cwd("/tmp/scratch"));
+        assert!(is_scratch_cwd("/private/tmp/scratch"));
+        // real work cwds are never scratch
+        assert!(!is_scratch_cwd("/Users/andrewgazelka"));
+        assert!(!is_scratch_cwd("/Users/x/Projects/indexable-inc/index"));
+        assert!(!is_scratch_cwd("/home/user/tmp/repo"));
+        // similarly-named but distinct roots
+        assert!(!is_scratch_cwd("/tmpfs/work"));
+        assert!(!is_scratch_cwd("/var/folderstuff"));
     }
 }
