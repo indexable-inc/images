@@ -385,7 +385,7 @@
           upstream = "hold";
           reason = "Build-status series: engage on #15979 rather than open a competing PR.";
         };
-        # Structured git history export (RFC 0010). Designed to be
+        # Structured git history export (RFC 0011). Designed to be
         # upstreamable (deterministic, opt-in, experimental-feature gated,
         # never in lock files -- it dodges the objections that sank
         # leaveDotGit-for-flakes), but held: repo-wide upstreaming pause

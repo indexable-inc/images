@@ -50,4 +50,9 @@ describe('rfcs', () => {
   test('findRfc returns undefined for an unknown id', () => {
     expect(findRfc('9999-does-not-exist')).toBeUndefined();
   });
+
+  test('rfc numbers are unique across every entry, including the template', () => {
+    const numbers = rfcEntries().map((e) => findRfc(e.id)?.number);
+    expect(new Set(numbers).size).toBe(numbers.length);
+  });
 });
