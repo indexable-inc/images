@@ -117,6 +117,23 @@ symphony_runs="$(curl -s --max-time 5 http://127.0.0.1:4040/api/v1/ir/runs |
       | sort_by(.created_at) | reverse | .[0:12]' ||
   echo '{"error": "symphony runtime unreachable on 127.0.0.1:4040"}')"
 
+# Sleep/wake context. A cron run that straddles a sleep window dies by
+# wall-clock timeout (#2216) or by DNS-retry exhaustion (a DarkWake has
+# no SSID), and the run record alone cannot show that: without this
+# signal the judge diagnosed "failures while awake" on a host pmset
+# shows was in Clamshell Sleep for the whole window and dispatched a
+# fixer on that phantom premise. Last transitions only; the grep streams
+# the full pmset log (~seconds), so keep this the only pass over it.
+power="$(
+  {
+    pmset -g batt | head -1
+    # A host that has not slept since boot greps empty; that is a real,
+    # non-fatal state under pipefail.
+    pmset -g log | grep -E 'Entering Sleep|DarkWake|Wake from' | tail -25 || true
+  } | jq -Rs 'split("\n") | map(select(length > 0) | gsub(" +$"; "") | .[0:160])
+              | {batt: .[0], transitions: .[1:]}'
+)"
+
 loadavg="$(sysctl -n vm.loadavg | tr -d '{}' | awk '{print $1}')"
 ncpu="$(sysctl -n hw.ncpu)"
 cpu_pct="$(jq '([.[].pcpu] | add // 0) / '"$ncpu"' | round' <<<"$ps_json")"
@@ -130,11 +147,11 @@ jq -n \
   --argjson cpu_pct "$cpu_pct" --argjson mem_pct "$mem_pct" \
   --argjson agents "$agents" --argjson hot "$hot" --argjson stalled "$stalled" \
   --argjson claude_sessions "$claude_sessions" --argjson codex_sessions "$codex_sessions" \
-  --argjson symphony_runs "$symphony_runs" \
+  --argjson symphony_runs "$symphony_runs" --argjson power "$power" \
   '{now: $now, load_1m: ($loadavg | tonumber), ncpu: $ncpu, cpu_pct: $cpu_pct, mem_pct: $mem_pct,
     agent_processes: $agents, hot_processes: $hot, stalled_suspects: $stalled,
     claude_sessions: $claude_sessions, codex_sessions: $codex_sessions,
-    symphony_runs: $symphony_runs}' > "$snap"
+    symphony_runs: $symphony_runs, power: $power}' > "$snap"
 
 # ---- digest: headless codex over the snapshot --------------------------
 

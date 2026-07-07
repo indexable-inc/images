@@ -8,7 +8,8 @@ snapshot of the current moment: every running claude/codex/BEAM process
 (CPU, elapsed, tty, cwd), recent Claude Code and codex session
 transcripts (cwd, last activity, age in minutes, last user ask, last
 assistant text, recent tool-error count), recent symphony workflow runs,
-and hot or suspiciously idle processes.
+hot or suspiciously idle processes, and `power`: the battery/AC line
+plus the host's recent sleep/wake transitions from the pmset log.
 
 Reply with ONLY a raw JSON object, no code fences:
 
@@ -45,6 +46,13 @@ process whose transcript stopped, or a headless agent at ~0% CPU.
 one session; skip long-idle sessions entirely rather than padding the
 list. Be decisive and concrete; never hedge with "likely fine". Lead with
 what is broken or suspect; healthy agents earn one word, not a story.
+
+Workflow run failures whose window overlaps `Entering Sleep` or
+`DarkWake` transitions in `power` are sleep noise, not agent trouble:
+a DarkWake has no Wi-Fi, so runs die by wall-clock timeout or network
+retry exhaustion by design (#2216). Only a `to FullWake` window
+covering the whole run justifies calling a failure an awake failure,
+and only awake failures earn an attention item.
 
 Before an action proposes killing a pid, read its parent_chain: a
 tracer or helper whose ancestor is a live monitor or agent session
