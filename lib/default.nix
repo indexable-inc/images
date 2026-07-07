@@ -4,6 +4,8 @@
   nixpkgs,
   paths,
   rust-overlay,
+  sdk-prebuilt-nixpkgs,
+  sdk-prebuilt-rust-overlay,
   home-manager,
   hermes-agent,
   btop-src,
@@ -645,6 +647,12 @@
     launchkSrc = launchk-src;
     snixSrc = snix-src;
     mesaSrc = mesa-src;
+    # Pinned toolchain evaluation context for the prebuilt public-SDK rlib:
+    # the exact nixpkgs + rust-overlay sources whose evaluation reproduces the
+    # toolchain id recorded in the artifact's manifest. Consumed only by
+    # packages/sdk/rust/build.nix; see the input comments in flake.nix.
+    sdkPrebuiltNixpkgsSrc = sdk-prebuilt-nixpkgs;
+    sdkPrebuiltRustOverlaySrc = sdk-prebuilt-rust-overlay;
   };
 
   /**

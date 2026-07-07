@@ -25,15 +25,34 @@
   # `iz0mdcq43pxl3fmxmznc6n38sals6q0x-rust-default-1.98.0-nightly-2026-05-27`,
   # or the generated `ix-sdk-wire` unit hash diverges from the prebuilt's.
   #
+  # That store path folds the whole nixpkgs + rust-overlay evaluation, so it
+  # is only reproducible from the exact revs the artifact was published
+  # against, NOT from the repo's floating inputs: any flake bump would move
+  # the constructed id while the published manifest keeps the old one,
+  # deadlocking the hourly update-flake-lock PR on the eval assert below
+  # (#2131). The toolchain is therefore built from the rev-pinned
+  # `sdk-prebuilt-nixpkgs` + `sdk-prebuilt-rust-overlay` inputs (flake.nix),
+  # which a blanket `nix flake update` re-locks unchanged. A republication of
+  # the rlib bumps those revs together with pins.json and the ids in this
+  # file.
+  #
   # ix builds via `rust-bin.fromRustupToolchainFile rust-toolchain.toml`; the
   # equivalent is the index rust toolchain helper with ix's exact pin: the same
   # nightly date, the `default` rust-overlay profile, ix's extra components, and
   # ix's extra targets (ix rust-toolchain.toml added aarch64-apple-darwin in
   # ix#4278, which is what moved the toolchain id off `a2dj...`). The binding
   # constraint is that this resolves to wireToolchainId (the eval assert in
-  # mkPrebuiltLibraryUnit enforces it); verified on x86_64-linux at index's
-  # rust-overlay d286e969 that this yields the `iz0m...` id above.
-  rustToolchain = ix.languages.rust.toolchain pkgs {
+  # mkPrebuiltLibraryUnit enforces it); verified on x86_64-linux that the
+  # pinned context below yields the `iz0m...` id above.
+  toolchainPkgs = import ix.sdkPrebuiltNixpkgsSrc {
+    inherit (pkgs.stdenv.hostPlatform) system;
+    config = {};
+    # rust-overlay's default.nix is its overlay ("Overlay interface for
+    # non-flake Nix"), the same function its flake exports as
+    # `overlays.default`.
+    overlays = [(import ix.sdkPrebuiltRustOverlaySrc)];
+  };
+  rustToolchain = ix.languages.rust.toolchain toolchainPkgs {
     channel = "nightly";
     version = "2026-05-27";
     profile = "default";
