@@ -9,6 +9,10 @@
 //! `pyo3` glue (function wrappers, record classes, the exception hierarchy,
 //! and the module registration) from these declarations.
 
+// `backends(py)`: a whole-workspace build unifies unibind's backend
+// features across consumers (the ts and ex conformance crates enable `ts`
+// and `ex`), so pin this crate's glue to the backend whose runtime deps it
+// declares.
 #[unibind::export(backends(py))]
 mod _scipql {
     use std::collections::HashMap;

@@ -19,6 +19,14 @@ on:
         description: "Space-separated flake inputs to update; empty updates all."
         type: string
         default: ""
+      app-client-id:
+        description: "Client id of a GitHub App (contents + pull-requests write) that authors the bump PR; empty falls back to GITHUB_TOKEN, whose PRs never get pull_request CI on private repos."
+        type: string
+        default: ""
+    secrets:
+      app-private-key:
+        description: "Private key for app-client-id."
+        required: false
   schedule:
     - cron: "17 * * * *"
 
@@ -36,8 +44,28 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      # Fully qualified, not `./.github/actions/install-nix`: this workflow is
+      # reusable (`workflow_call`), and for a cross-repo caller (ix) the
+      # `actions/checkout` above checks out the CALLER's repository, which does
+      # not contain index's local composite action. A local-path `uses:` then
+      # fails with "Can't find 'action.yml'" (broke ix's hourly flake bump when
+      # #2064 introduced the local action). Referencing the action by repo
+      # resolves it from index@main regardless of which repo called the job.
       - name: Install Determinate Nix
-        uses: ./.github/actions/install-nix
+        uses: indexable-inc/index/.github/actions/install-nix@main
+
+      # PRs authored by the default GITHUB_TOKEN never get pull_request CI on
+      # private repos: GitHub parks every run in action_required and the
+      # fork-approval API cannot clear them (ix#6566). When the caller supplies
+      # a GitHub App with contents + pull-requests write, mint a token scoped
+      # to this repository and author the PR with it so CI triggers normally.
+      - name: Mint PR token
+        id: app-token
+        if: ${{ inputs.app-client-id != '' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ inputs.app-client-id }}
+          private-key: ${{ secrets.app-private-key }}
 
       - name: Update flake.lock
         uses: DeterminateSystems/update-flake-lock@834c491b2ece4de0bbd00d85214bb5e83b4da5c6 # v28
@@ -49,3 +77,4 @@ jobs:
           # Empty for schedule/dispatch on index (all inputs public); a caller
           # scopes this to avoid fetching private inputs it can't auth for.
           inputs: ${{ inputs.flake-inputs }}
+          token: ${{ steps.app-token.outputs.token || github.token }}

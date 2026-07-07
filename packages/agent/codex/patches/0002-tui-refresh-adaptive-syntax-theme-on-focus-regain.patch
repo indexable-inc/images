@@ -1,0 +1,225 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Mon, 6 Jul 2026 19:07:20 -0700
+Subject: [PATCH] tui: refresh adaptive syntax theme on focus regain
+
+The adaptive light/dark syntax theme is selected once at startup from the
+terminal background (OSC 10/11). When the terminal switches appearance
+mid-session (macOS auto light/dark), FocusGained already re-queries the
+default colors but the cached syntax theme kept the stale selection until
+restart (openai/codex#18942). Recompute the adaptive theme from the fresh
+palette on FocusGained; a resolvable startup `tui.theme` override and any
+non-adaptive in-session `/theme` pick are left untouched.
+
+Refs indexable-inc/index#2130
+
+diff --git a/codex-rs/tui/src/render/highlight.rs b/codex-rs/tui/src/render/highlight.rs
+index ef4d7a2f3..0f1ccfa8b 100644
+--- a/codex-rs/tui/src/render/highlight.rs
++++ b/codex-rs/tui/src/render/highlight.rs
+@@ -181,12 +181,24 @@ fn load_custom_theme(name: &str, codex_home: &Path) -> Option<Theme> {
+     ThemeSet::get_theme(custom_theme_path(name, codex_home)).ok()
+ }
+ 
++/// The two themes the adaptive default can select from terminal background
++/// lightness. Shared by startup selection and the mid-session refresh so the
++/// refresh recognizes every theme the adaptive path could have installed.
++const ADAPTIVE_LIGHT_THEME: (EmbeddedThemeName, &str) =
++    (EmbeddedThemeName::CatppuccinLatte, "catppuccin-latte");
++const ADAPTIVE_DARK_THEME: (EmbeddedThemeName, &str) =
++    (EmbeddedThemeName::CatppuccinMocha, "catppuccin-mocha");
++
+ fn adaptive_default_theme_selection() -> (EmbeddedThemeName, &'static str) {
+-    match crate::terminal_palette::default_bg() {
+-        Some(bg) if crate::color::is_light(bg) => {
+-            (EmbeddedThemeName::CatppuccinLatte, "catppuccin-latte")
+-        }
+-        _ => (EmbeddedThemeName::CatppuccinMocha, "catppuccin-mocha"),
++    adaptive_default_theme_selection_for(crate::terminal_palette::default_bg())
++}
++
++fn adaptive_default_theme_selection_for(
++    terminal_bg: Option<(u8, u8, u8)>,
++) -> (EmbeddedThemeName, &'static str) {
++    match terminal_bg {
++        Some(bg) if crate::color::is_light(bg) => ADAPTIVE_LIGHT_THEME,
++        _ => ADAPTIVE_DARK_THEME,
+     }
+ }
+ 
+@@ -200,6 +212,45 @@ pub(crate) fn adaptive_default_theme_name() -> &'static str {
+     adaptive_default_theme_selection().1
+ }
+ 
++/// Re-resolve the adaptive default syntax theme from the current terminal
++/// palette, after `terminal_palette::requery_default_colors()` observed a
++/// possible light/dark switch (openai/codex#18942).
++///
++/// The swap only happens when the active theme is one the adaptive default
++/// could have installed: an explicit startup `tui.theme` override and an
++/// in-session `/theme` pick both stay untouched.
++pub(crate) fn refresh_adaptive_default_theme() {
++    let target = adaptive_refresh_target_for(
++        crate::terminal_palette::default_bg(),
++        resolved_theme_override_name().is_some(),
++        current_syntax_theme().name.as_deref(),
++    );
++    if let Some(target) = target {
++        set_syntax_theme(two_face::theme::extra().get(target).clone());
++    }
++}
++
++/// Pure decision core of [`refresh_adaptive_default_theme`]: the theme to
++/// swap to, or `None` when the active theme must be left alone.
++fn adaptive_refresh_target_for(
++    terminal_bg: Option<(u8, u8, u8)>,
++    override_resolves: bool,
++    current_theme_name: Option<&str>,
++) -> Option<EmbeddedThemeName> {
++    if override_resolves {
++        return None;
++    }
++    let ts = two_face::theme::extra();
++    let current_is_adaptive = [ADAPTIVE_LIGHT_THEME.0, ADAPTIVE_DARK_THEME.0]
++        .iter()
++        .any(|candidate| ts.get(*candidate).name.as_deref() == current_theme_name);
++    if !current_is_adaptive {
++        return None;
++    }
++    let (target, _) = adaptive_default_theme_selection_for(terminal_bg);
++    (ts.get(target).name.as_deref() != current_theme_name).then_some(target)
++}
++
+ /// Build the theme from current override/default-theme settings.
+ /// Extracted from the old `theme()` init closure so it can be reused.
+ fn resolve_theme_with_override(name: Option<&str>, codex_home: Option<&Path>) -> Theme {
+@@ -320,18 +371,18 @@ fn foreground_style_for_scopes_with_theme(theme: &Theme, scope_names: &[&str]) -
+ /// This intentionally reflects persisted configuration/default selection, not
+ /// transient runtime swaps applied via `set_syntax_theme`.
+ pub(crate) fn configured_theme_name() -> String {
+-    // Explicit user override?
+-    if let Some(Some(name)) = THEME_OVERRIDE.get() {
+-        if parse_theme_name(name).is_some() {
+-            return name.clone();
+-        }
+-        if let Some(Some(home)) = CODEX_HOME.get()
+-            && load_custom_theme(name, home).is_some()
+-        {
+-            return name.clone();
+-        }
++    resolved_theme_override_name().unwrap_or_else(|| adaptive_default_theme_name().to_string())
++}
++
++/// The startup `tui.theme` override, when it names a resolvable theme
++/// (bundled or custom `.tmTheme`).
++fn resolved_theme_override_name() -> Option<String> {
++    let name = THEME_OVERRIDE.get()?.as_deref()?;
++    if parse_theme_name(name).is_some() {
++        return Some(name.to_string());
+     }
+-    adaptive_default_theme_name().to_string()
++    let home = CODEX_HOME.get()?.as_deref()?;
++    load_custom_theme(name, home).map(|_| name.to_string())
+ }
+ 
+ /// Resolve a theme name to a `Theme` (bundled or custom). Returns `None`
+@@ -690,6 +741,83 @@ pub(crate) fn highlight_code_to_styled_spans(
+ mod tests {
+     use super::*;
+     use insta::assert_snapshot;
++
++    const LIGHT_BG: Option<(u8, u8, u8)> = Some((255, 255, 255));
++    const DARK_BG: Option<(u8, u8, u8)> = Some((0, 0, 0));
++
++    fn embedded_theme_name(theme: EmbeddedThemeName) -> Option<String> {
++        two_face::theme::extra().get(theme).name.clone()
++    }
++
++    #[test]
++    fn adaptive_refresh_follows_background_flip() {
++        let mocha = embedded_theme_name(ADAPTIVE_DARK_THEME.0);
++        assert_eq!(
++            adaptive_refresh_target_for(
++                LIGHT_BG,
++                /*override_resolves*/ false,
++                mocha.as_deref(),
++            ),
++            Some(ADAPTIVE_LIGHT_THEME.0)
++        );
++        let latte = embedded_theme_name(ADAPTIVE_LIGHT_THEME.0);
++        assert_eq!(
++            adaptive_refresh_target_for(
++                DARK_BG,
++                /*override_resolves*/ false,
++                latte.as_deref(),
++            ),
++            Some(ADAPTIVE_DARK_THEME.0)
++        );
++    }
++
++    #[test]
++    fn adaptive_refresh_is_noop_when_selection_is_current() {
++        let mocha = embedded_theme_name(ADAPTIVE_DARK_THEME.0);
++        assert_eq!(
++            adaptive_refresh_target_for(
++                DARK_BG,
++                /*override_resolves*/ false,
++                mocha.as_deref(),
++            ),
++            None
++        );
++        // An unreadable palette keeps the dark selection.
++        assert_eq!(
++            adaptive_refresh_target_for(
++                /*terminal_bg*/ None,
++                /*override_resolves*/ false,
++                mocha.as_deref(),
++            ),
++            None
++        );
++    }
++
++    #[test]
++    fn adaptive_refresh_preserves_explicit_theme_choices() {
++        // A resolvable startup override pins the theme.
++        let mocha = embedded_theme_name(ADAPTIVE_DARK_THEME.0);
++        assert_eq!(
++            adaptive_refresh_target_for(
++                LIGHT_BG,
++                /*override_resolves*/ true,
++                mocha.as_deref(),
++            ),
++            None
++        );
++        // A non-adaptive active theme (e.g. an in-session /theme pick) is
++        // never swapped.
++        let nord = embedded_theme_name(EmbeddedThemeName::Nord);
++        assert_eq!(
++            adaptive_refresh_target_for(
++                LIGHT_BG,
++                /*override_resolves*/ false,
++                nord.as_deref(),
++            ),
++            None
++        );
++    }
++
+     use pretty_assertions::assert_eq;
+     use std::str::FromStr;
+     use syntect::highlighting::Color as SyntectColor;
+diff --git a/codex-rs/tui/src/tui/event_stream.rs b/codex-rs/tui/src/tui/event_stream.rs
+index 9a5e416fd..d75132bdf 100644
+--- a/codex-rs/tui/src/tui/event_stream.rs
++++ b/codex-rs/tui/src/tui/event_stream.rs
+@@ -258,6 +258,11 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
+             Event::FocusGained => {
+                 self.terminal_focused.store(true, Ordering::Relaxed);
+                 crate::terminal_palette::requery_default_colors();
++                // The adaptive syntax theme caches the light/dark pick made at
++                // startup; recompute it from the fresh palette so a terminal
++                // that switched appearance while unfocused is followed
++                // (openai/codex#18942).
++                crate::render::highlight::refresh_adaptive_default_theme();
+                 Some(TuiEvent::Draw)
+             }
+             Event::FocusLost => {

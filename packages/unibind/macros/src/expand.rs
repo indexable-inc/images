@@ -12,13 +12,8 @@ pub fn export(args: TokenStream, item: TokenStream) -> TokenStream {
             return quote! { #item #error };
         }
     };
-    // Cargo unifies this crate's features across a workspace build, so a
-    // consumer sharing a workspace with consumers of other backends names
-    // its own targets with `backends(...)`; absent, every enabled backend
-    // renders.
-    let selection = match unibind_core::module_backends(args.clone(), proc_macro2::Span::call_site())
-    {
-        Ok(selection) => selection,
+    let selected = match unibind_core::export_backends(args.clone()) {
+        Ok(selected) => selected,
         Err(error) => return with_error(&mut module, &error),
     };
     let interface = match unibind_core::lower_module(args, &module) {
@@ -30,7 +25,7 @@ pub fn export(args: TokenStream, item: TokenStream) -> TokenStream {
         Ok(embed) => embed,
         Err(error) => return with_error(&mut module, &error),
     };
-    let glue = match backends(&interface, &mut module, selection.as_deref()) {
+    let glue = match backends(&interface, &mut module, selected.as_deref()) {
         Ok(glue) => glue,
         Err(error) => return with_error(&mut module, &error),
     };
@@ -41,25 +36,6 @@ pub fn export(args: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-/// Whether the export renders `backend`: named in the selection, or no
-/// selection at all. A selected backend whose feature is off is an error
-/// (the crate asked for glue this build cannot produce), raised in
-/// [`backends`].
-#[cfg(any(feature = "py", feature = "ex"))]
-fn selected(selection: Option<&[String]>, backend: &str) -> bool {
-    selection.is_none_or(|names| names.iter().any(|name| name == backend))
-}
-
-/// The backend names this build compiled in.
-const fn enabled_backends() -> &'static [&'static str] {
-    &[
-        #[cfg(feature = "ex")]
-        "ex",
-        #[cfg(feature = "py")]
-        "py",
-    ]
-}
-
 /// Emit the module (markers stripped, so nothing cascades) plus the
 /// positioned diagnostic.
 fn with_error(module: &mut syn::ItemMod, error: &LowerError) -> TokenStream {
@@ -68,98 +44,172 @@ fn with_error(module: &mut syn::ItemMod, error: &LowerError) -> TokenStream {
     quote! { #module #error }
 }
 
-/// Render every backend the consuming crate enabled, splicing each one's
-/// record attributes and concatenating the glue.
+/// Render the selected backends; each contributes glue items and splices
+/// its own record attributes.
+///
+/// `selected` is the `backends(...)` list from the attribute. Without it,
+/// every feature-enabled backend renders -- fine for a crate built alone,
+/// but a whole-workspace build unifies cargo features across every unibind
+/// consumer, so a workspace mixing backend features needs each export to
+/// name its own (or it would render glue whose runtime deps the crate
+/// never declared). With no backend at all the macro still validates the
+/// surface and embeds the IR; there is just no binding code to add.
 fn backends(
     interface: &unibind_core::ir::Interface,
     module: &mut syn::ItemMod,
-    selection: Option<&[String]>,
+    selected: Option<&[unibind_core::Backend]>,
 ) -> Result<TokenStream, LowerError> {
-    if let Some(missing) = selection
-        .unwrap_or_default()
-        .iter()
-        .find(|name| !enabled_backends().contains(&name.as_str()))
-    {
-        return Err(LowerError {
-            span: proc_macro2::Span::call_site(),
-            message: format!(
-                "backends({missing}) needs the `{missing}` feature on the `unibind` dependency"
-            ),
-        });
+    let selects = |backend| selected.is_none_or(|backends| backends.contains(&backend));
+    let mut glue = TokenStream::new();
+    if selects(unibind_core::Backend::Py) {
+        glue.extend(backend_py(interface, module, selected.is_some())?);
     }
-    let mut glue: Vec<TokenStream> = Vec::new();
-    #[cfg(feature = "py")]
-    if selected(selection, "py") {
-        let rendered = unibind_backend_py::render(interface).map_err(|error| LowerError {
-            span: proc_macro2::Span::call_site(),
-            message: error.message,
-        })?;
-        let attrs = rendered
-            .records
-            .iter()
-            .map(|record| RecordAttrs {
-                outer: record.outer.clone(),
-                fields: record.fields.clone(),
-            })
-            .collect();
-        splice_record_attrs(interface, module, attrs);
-        glue.push(rendered.glue);
+    if selects(unibind_core::Backend::Ts) {
+        glue.extend(backend_ts(interface, module, selected.is_some())?);
     }
-    #[cfg(feature = "ex")]
-    if selected(selection, "ex") {
-        // The consuming crate's name, for the plain `nif_init` alias; set
-        // by every cargo-compatible driver, as rustler's own macro assumes.
-        let crate_name = std::env::var("CARGO_CRATE_NAME").map_err(|_| LowerError {
-            span: proc_macro2::Span::call_site(),
-            message: "the ex backend needs CARGO_CRATE_NAME during expansion".to_owned(),
-        })?;
-        let rendered =
-            unibind_backend_ex::render(interface, Some(&crate_name)).map_err(|error| LowerError {
-            span: proc_macro2::Span::call_site(),
-            message: error.message,
-        })?;
-        let attrs = rendered
-            .records
-            .iter()
-            .map(|record| RecordAttrs {
-                outer: record.outer.clone(),
-                fields: record.fields.clone(),
-            })
-            .collect();
-        splice_record_attrs(interface, module, attrs);
-        glue.push(rendered.glue);
+    if selects(unibind_core::Backend::Ex) {
+        glue.extend(backend_ex(interface, module, selected.is_some())?);
     }
-    // With no backend feature enabled the macro still validates the surface
-    // and embeds the IR; there is just no binding code to add.
-    #[cfg(not(any(feature = "py", feature = "ex")))]
-    {
-        let _ = (interface, module);
-    }
-    Ok(quote! { #(#glue)* })
+    Ok(glue)
 }
 
-/// One backend's contribution to a record struct.
-#[cfg(any(feature = "py", feature = "ex"))]
-struct RecordAttrs {
-    /// Outer attributes for the struct itself.
-    outer: Vec<syn::Attribute>,
-    /// Attributes for each field, index-aligned with the record's fields.
-    fields: Vec<Vec<syn::Attribute>>,
-}
-
-/// Attach a backend's record attributes to the structs the IR was lowered
-/// from. Records and rendered attribute sets are index-aligned by
-/// construction.
-#[cfg(any(feature = "py", feature = "ex"))]
-fn splice_record_attrs(
+#[cfg(feature = "py")]
+fn backend_py(
     interface: &unibind_core::ir::Interface,
     module: &mut syn::ItemMod,
-    attrs: Vec<RecordAttrs>,
+    _explicit: bool,
+) -> Result<TokenStream, LowerError> {
+    let rendered = unibind_backend_py::render(interface).map_err(|error| LowerError {
+        span: proc_macro2::Span::call_site(),
+        message: error.message,
+    })?;
+    splice_record_attrs(
+        interface,
+        module,
+        rendered.records.iter().map(|record| RecordAttrs {
+            outer: &record.outer,
+            fields: &record.fields,
+        }),
+    );
+    Ok(rendered.glue)
+}
+
+#[cfg(not(feature = "py"))]
+fn backend_py(
+    _interface: &unibind_core::ir::Interface,
+    _module: &mut syn::ItemMod,
+    explicit: bool,
+) -> Result<TokenStream, LowerError> {
+    if explicit {
+        return Err(LowerError {
+            span: proc_macro2::Span::call_site(),
+            message: "backends(py) needs the `py` cargo feature of unibind".to_owned(),
+        });
+    }
+    Ok(TokenStream::new())
+}
+
+#[cfg(feature = "ts")]
+fn backend_ts(
+    interface: &unibind_core::ir::Interface,
+    module: &mut syn::ItemMod,
+    _explicit: bool,
+) -> Result<TokenStream, LowerError> {
+    let rendered = unibind_backend_ts::render(interface).map_err(|error| LowerError {
+        span: proc_macro2::Span::call_site(),
+        message: error.message,
+    })?;
+    splice_record_attrs(
+        interface,
+        module,
+        rendered.records.iter().map(|record| RecordAttrs {
+            outer: &record.outer,
+            fields: &record.fields,
+        }),
+    );
+    Ok(rendered.glue)
+}
+
+#[cfg(not(feature = "ts"))]
+fn backend_ts(
+    _interface: &unibind_core::ir::Interface,
+    _module: &mut syn::ItemMod,
+    explicit: bool,
+) -> Result<TokenStream, LowerError> {
+    if explicit {
+        return Err(LowerError {
+            span: proc_macro2::Span::call_site(),
+            message: "backends(ts) needs the `ts` cargo feature of unibind".to_owned(),
+        });
+    }
+    Ok(TokenStream::new())
+}
+
+#[cfg(feature = "ex")]
+fn backend_ex(
+    interface: &unibind_core::ir::Interface,
+    module: &mut syn::ItemMod,
+    _explicit: bool,
+) -> Result<TokenStream, LowerError> {
+    // The consuming crate's name, for the plain `nif_init` alias; set
+    // by every cargo-compatible driver, as rustler's own macro assumes.
+    let crate_name = std::env::var("CARGO_CRATE_NAME").map_err(|_| LowerError {
+        span: proc_macro2::Span::call_site(),
+        message: "the ex backend needs CARGO_CRATE_NAME during expansion".to_owned(),
+    })?;
+    let rendered =
+        unibind_backend_ex::render(interface, Some(&crate_name)).map_err(|error| LowerError {
+            span: proc_macro2::Span::call_site(),
+            message: error.message,
+        })?;
+    splice_record_attrs(
+        interface,
+        module,
+        rendered.records.iter().map(|record| RecordAttrs {
+            outer: &record.outer,
+            fields: &record.fields,
+        }),
+    );
+    Ok(rendered.glue)
+}
+
+#[cfg(not(feature = "ex"))]
+fn backend_ex(
+    _interface: &unibind_core::ir::Interface,
+    _module: &mut syn::ItemMod,
+    explicit: bool,
+) -> Result<TokenStream, LowerError> {
+    if explicit {
+        return Err(LowerError {
+            span: proc_macro2::Span::call_site(),
+            message: "backends(ex) needs the `ex` cargo feature of unibind".to_owned(),
+        });
+    }
+    Ok(TokenStream::new())
+}
+
+/// One record's backend-rendered attributes, index-aligned with the
+/// record's fields.
+#[cfg(any(feature = "py", feature = "ts", feature = "ex"))]
+struct RecordAttrs<'a> {
+    outer: &'a [syn::Attribute],
+    fields: &'a [Vec<syn::Attribute>],
+}
+
+/// Attach a backend's `#[pyclass]`-, `#[napi(object)]`-, or
+/// `#[derive(NifStruct)]`-shaped attributes to the record structs the IR
+/// was lowered from. Records and rendered attribute sets are index-aligned
+/// by construction.
+#[cfg(any(feature = "py", feature = "ts", feature = "ex"))]
+fn splice_record_attrs<'a>(
+    interface: &unibind_core::ir::Interface,
+    module: &mut syn::ItemMod,
+    records: impl Iterator<Item = RecordAttrs<'a>>,
 ) {
     let Some((_, items)) = &mut module.content else {
         return;
     };
-    for (record, rendered) in interface.records.iter().zip(attrs) {
+    for (record, attrs) in interface.records.iter().zip(records) {
         for item in &mut *items {
             let syn::Item::Struct(item) = item else {
                 continue;
@@ -167,11 +217,11 @@ fn splice_record_attrs(
             if item.ident != record.name {
                 continue;
             }
-            let mut outer = rendered.outer.clone();
+            let mut outer = attrs.outer.to_vec();
             outer.append(&mut item.attrs);
             item.attrs = outer;
-            for (field, attrs) in item.fields.iter_mut().zip(&rendered.fields) {
-                field.attrs.extend(attrs.iter().cloned());
+            for (field, field_attrs) in item.fields.iter_mut().zip(attrs.fields) {
+                field.attrs.extend(field_attrs.iter().cloned());
             }
         }
     }

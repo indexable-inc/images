@@ -1,0 +1,19 @@
+[package]
+name = "unibind-backend-ts"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Render the unibind IR into napi-rs binding code: napi wrappers with AbortSignal cancellation, napi(object) records, error reason channels, stream and object handle classes"
+
+[lints]
+workspace = true
+
+[dependencies]
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+unibind-core.workspace = true
+
+[dev-dependencies]
+prettyplease.workspace = true
+serde_json.workspace = true

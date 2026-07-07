@@ -24,6 +24,21 @@
 #                may free-float the base under a routine bump. `false` pins the
 #                input by rev and keeps it out of the cron; it moves only under a
 #                deliberate manual `rebase-patches` run.
+#   closureGates : optional, default false. Opt the fork into the
+#                per-attempt-patch closure build gates (RFC 0010 A3, #2098):
+#                one derivation per attempt-marked patch that rebuilds the
+#                fork package with the series restricted to that patch's
+#                dag.json closure -- exactly what `upstream-pr` ships
+#                upstream, so a red gate means the upstream PR would be
+#                broken. Heavy full-package builds, so gates are NEVER flake
+#                checks: they surface as `passthru.closureGates` on the fork
+#                package and `forkClosureGates.<system>.<name>` on the flake,
+#                built by the scheduled fork-closure-gates workflow
+#                (post-merge; its static path filters must name this fork's
+#                patch dir) and the `upstream-sync --open` preflight. Opting
+#                in also requires the package to wire `passthru.closureGates`
+#                (see packages/nix/nix/default.nix) and a `gatePackages`
+#                entry in lib/per-system.nix (missing one fails eval loudly).
 #   forkRepo   : optional GitHub `owner/name` of a real fork repo to maintain.
 #                When set, the mirror-sync workflow (packages/mirror,
 #                `mirror fork-branch --name <name> --push`) keeps that repo's
@@ -96,6 +111,10 @@
         "0001-mcp-route-channel-notifications-into-chat.patch" = {
           upstream = "never";
           reason = "Hard to land upstream (fast-moving OpenAI-owned repo); ix-specific MCP channel-notification routing.";
+        };
+        "0002-tui-refresh-adaptive-syntax-theme-on-focus-regain.patch" = {
+          upstream = "never";
+          reason = "General fix for openai/codex#18942, but codex closes unsolicited PRs (prsWelcome = false); the upstream issue is the feedback channel.";
         };
       };
     }
@@ -274,6 +293,11 @@
       url = "https://github.com/NixOS/nix.git";
       patchDir = "packages/nix/nix/patches";
       autoUpdate = false;
+      # nix is the one fork whose attempt patches ship upstream as standalone
+      # dag.json closures, so it pays for the per-attempt closure build gates
+      # (RFC 0010 A3): 9 attempt patches = 9 scheduled full-package builds,
+      # cache hits between changes. See the `closureGates` field doc above.
+      closureGates = true;
       upstreamPolicy = {
         prsWelcome = true;
         # NixOS/nix has no explicit AI policy (unknown). PRs are generally welcome
@@ -327,6 +351,16 @@
         "0009-doc-release-note-for-build-status-directory-and-nix-.patch" = {
           upstream = "attempt";
           reason = "Build-status-dir feature series: release note for the feature.";
+        };
+        # Structured git history export (RFC 0010). Designed to be
+        # upstreamable (deterministic, opt-in, experimental-feature gated,
+        # never in lock files -- it dodges the objections that sank
+        # leaveDotGit-for-flakes), but held: repo-wide upstreaming pause
+        # (NixOS/nix#15984, see #2021), and a feature of this size should
+        # start as an upstream discussion, not a cold PR.
+        "0010-libfetchers-add-opt-in-structured-commit-history-exp.patch" = {
+          upstream = "hold";
+          reason = "Feature-sized change; upstreaming paused per NixOS/nix#15984 and it should open as an upstream issue/RFC first.";
         };
       };
     }

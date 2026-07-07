@@ -3,7 +3,7 @@
   # its `cacheStatus` as `cached` (present in a configured *remote* substituter).
   # A `local` status (output already realized in *this* runner's store, but not
   # pushed anywhere) falls through to the build queue and gets re-realized every
-  # run (__init__.py, the `elif cache_status == "local"` arm).
+  # run (workers.py, the `elif cache_status == "local"` arm).
   #
   # On index's persistent warm CI runner that is almost everything: the rust
   # workspace units default to `contentAddressed = true` (lib/rust/cargo-unit.nix)
@@ -36,10 +36,21 @@
     }
     ''
       help=$(nix-fast-build --help 2>&1) || true
+      # --fail-fast is what the check gate passes (lib/per-system.nix); its
+      # absence from usage is exactly the failure mode that broke CI when the
+      # flag was assumed present on 1.5.0 (#2128), so assert both flags.
       case "$help" in
         *"--skip-cached"*) ;;
         *)
           echo "nix-fast-build --help did not print usage" >&2
+          printf '%s\n' "$help" >&2
+          exit 1
+          ;;
+      esac
+      case "$help" in
+        *"--fail-fast"*) ;;
+        *)
+          echo "nix-fast-build --help lacks --fail-fast (version < 1.6.0?)" >&2
           printf '%s\n' "$help" >&2
           exit 1
           ;;

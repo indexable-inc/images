@@ -33,6 +33,7 @@
     "flake"
     "id"
     "inRustWorkspace"
+    "isolatedFeatures"
     "mirror"
     "overlay"
     "packageSet"
@@ -233,6 +234,13 @@
       # build.rs copies), and `unibind.lib.build` requires the mark. Boolean;
       # must ride `inRustWorkspace` (asserted below).
       pyExtension = raw.pyExtension or false;
+      # `isolatedFeatures = true` gives the crate its own `-p` cargo
+      # invocation in the shared unit graph instead of riding the
+      # `--workspace` resolve, so its dependency features resolve from its
+      # own manifest alone. Needed by crates whose linked artifact cannot
+      # tolerate workspace-unified features (e.g. a Node addon that must not
+      # inherit unibind-runtime's `py` feature from the Python consumers).
+      isolatedFeatures = raw.isolatedFeatures or false;
       passthruTests = normalizePassthruTests label id (raw.passthruTests or null);
       # `updateScript = true` marks a package that exposes a
       # `passthru.updateScript` (e.g. a pinned prebuilt binary that tracks an
@@ -282,6 +290,11 @@
     lib.filter (entry: entry.inRustWorkspace == null) pyExtensionEntries
   );
 
+  isolatedFeatureEntries = lib.filter (entry: entry.isolatedFeatures) entries;
+  isolatedWithoutWorkspace = map (entry: entry.id) (
+    lib.filter (entry: entry.inRustWorkspace == null) isolatedFeatureEntries
+  );
+
   rustWorkspaceEntries = lib.filter (entry: entry.inRustWorkspace != null) entries;
 
   rustWorkspaceEntriesFor = system: lib.filter (entry: enabledForSystem system entry.inRustWorkspace) rustWorkspaceEntries;
@@ -291,7 +304,10 @@ in
   ) "packages/registry.nix: duplicate package ids: ${lib.concatStringsSep ", " duplicateIds}";
   assert lib.assertMsg (
     pyExtensionWithoutWorkspace == []
-  ) "packages/registry.nix: pyExtension requires inRustWorkspace: ${lib.concatStringsSep ", " pyExtensionWithoutWorkspace}"; {
+  ) "packages/registry.nix: pyExtension requires inRustWorkspace: ${lib.concatStringsSep ", " pyExtensionWithoutWorkspace}";
+  assert lib.assertMsg (
+    isolatedWithoutWorkspace == []
+  ) "packages/registry.nix: isolatedFeatures requires inRustWorkspace: ${lib.concatStringsSep ", " isolatedWithoutWorkspace}"; {
     inherit
       entries
       byId
@@ -302,6 +318,7 @@ in
       crossEntriesFor
       mirrorEntries
       pyExtensionEntries
+      isolatedFeatureEntries
       updateScriptEntriesFor
       passthruTestEntriesFor
       rustWorkspaceEntries

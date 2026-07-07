@@ -3,28 +3,26 @@
 use proc_macro2::{Span, TokenStream};
 use syn::spanned::Spanned as _;
 
-use super::{LowerError, Result};
+use super::{Backend, LowerError, Result};
 use crate::ir;
 
-/// The backend names `backends(...)` accepts, one per rendering backend
-/// the macros crate can enable (`ts` joins with issue #1993).
-pub const KNOWN_BACKENDS: [&str; 2] = ["ex", "py"];
-
 /// The options a `#[unibind(...)]` attribute (or marker argument list) can
-/// carry: `py(name = "...")`, `py(base = "...")`, `ex(name = "...")`,
-/// `backends(...)`, `default = ...`, and the bare flags `resource`,
-/// `constructor`, and `blocking`.
+/// carry: `py(name = "...")`, `py(base = "...")`, `ts(name = "...")`,
+/// `ex(name = "...")`, `default = ...`, the bare flags `resource`,
+/// `constructor`, and `blocking`, and (on `#[unibind::export]` only)
+/// `backends(...)`.
 #[derive(Debug, Default)]
 pub struct UnibindMeta {
     pub(crate) span: Option<Span>,
     pub(crate) py_name: Option<String>,
     pub(crate) py_base: Option<String>,
+    pub(crate) ts_name: Option<String>,
     pub(crate) ex_name: Option<String>,
-    pub(crate) backends: Option<Vec<String>>,
     pub(crate) default: Option<ir::Literal>,
     pub(crate) resource: bool,
     pub(crate) constructor: bool,
     pub(crate) blocking: bool,
+    pub(crate) backends: Option<Vec<Backend>>,
 }
 
 impl UnibindMeta {
@@ -79,23 +77,29 @@ impl UnibindMeta {
             }
             self.py_base = other.py_base;
         }
+        if other.ts_name.is_some() {
+            if self.ts_name.is_some() {
+                return Err(LowerError::new(span, "duplicate unibind `ts(name = ...)`"));
+            }
+            self.ts_name = other.ts_name;
+        }
         if other.ex_name.is_some() {
             if self.ex_name.is_some() {
                 return Err(LowerError::new(span, "duplicate unibind `ex(name = ...)`"));
             }
             self.ex_name = other.ex_name;
         }
-        if other.backends.is_some() {
-            if self.backends.is_some() {
-                return Err(LowerError::new(span, "duplicate unibind `backends(...)`"));
-            }
-            self.backends = other.backends;
-        }
         if other.default.is_some() {
             if self.default.is_some() {
                 return Err(LowerError::new(span, "duplicate unibind `default`"));
             }
             self.default = other.default;
+        }
+        if other.backends.is_some() {
+            if self.backends.is_some() {
+                return Err(LowerError::new(span, "duplicate unibind `backends(...)`"));
+            }
+            self.backends = other.backends;
         }
         if other.resource {
             if self.resource {
@@ -137,6 +141,19 @@ impl UnibindMeta {
             }
             return Ok(());
         }
+        if entry.path().is_ident("ts") {
+            let syn::Meta::List(list) = entry else {
+                return Err(LowerError::new(span, "`ts` takes a list: ts(name = \"...\")"));
+            };
+            let parser =
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated;
+            let entries = syn::parse::Parser::parse2(parser, list.tokens.clone())
+                .map_err(|error| LowerError::new(span, format!("bad `ts` options: {error}")))?;
+            for nested in entries {
+                self.apply_ts(&nested)?;
+            }
+            return Ok(());
+        }
         if entry.path().is_ident("ex") {
             let syn::Meta::List(list) = entry else {
                 return Err(LowerError::new(span, "`ex` takes a list: ex(name = \"...\")"));
@@ -151,42 +168,7 @@ impl UnibindMeta {
             return Ok(());
         }
         if entry.path().is_ident("backends") {
-            let syn::Meta::List(list) = entry else {
-                return Err(LowerError::new(span, "`backends` takes a list: backends(py, ex)"));
-            };
-            let parser =
-                syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated;
-            let entries = syn::parse::Parser::parse2(parser, list.tokens.clone())
-                .map_err(|error| LowerError::new(span, format!("bad `backends` list: {error}")))?;
-            let mut backends = Vec::new();
-            for path in entries {
-                let Some(ident) = path.get_ident() else {
-                    return Err(LowerError::new(span, "`backends` takes bare names: backends(py, ex)"));
-                };
-                let name = ident.to_string();
-                if !KNOWN_BACKENDS.contains(&name.as_str()) {
-                    return Err(LowerError::new(
-                        span,
-                        format!(
-                            "unknown backend `{name}`; the backends are {}",
-                            KNOWN_BACKENDS.join(", ")
-                        ),
-                    ));
-                }
-                if backends.contains(&name) {
-                    return Err(LowerError::new(span, format!("backend `{name}` listed twice")));
-                }
-                backends.push(name);
-            }
-            if backends.is_empty() {
-                return Err(LowerError::new(
-                    span,
-                    "`backends()` selects nothing; drop the option to render every \
-                     backend the crate's features enable",
-                ));
-            }
-            self.backends = Some(backends);
-            return Ok(());
+            return self.apply_backends(entry, span);
         }
         if entry.path().is_ident("default") {
             let syn::Meta::NameValue(pair) = entry else {
@@ -242,6 +224,31 @@ impl UnibindMeta {
         Ok(())
     }
 
+    /// Parse `ts(name = "...")`: the TypeScript-side rename.
+    fn apply_ts(&mut self, entry: &syn::Meta) -> Result<()> {
+        let span = entry.span();
+        let syn::Meta::NameValue(pair) = entry else {
+            return Err(LowerError::new(span, "the `ts` option is name = \"...\""));
+        };
+        let syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(value),
+            ..
+        }) = &pair.value
+        else {
+            return Err(LowerError::new(span, "`ts` options take string literals"));
+        };
+        if pair.path.is_ident("name") {
+            self.ts_name = Some(value.value());
+        } else {
+            return Err(LowerError::new(
+                span,
+                "unknown `ts` option; expected name = \"...\"",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Parse `ex(name = "...")`: the Elixir-side rename.
     fn apply_ex(&mut self, entry: &syn::Meta) -> Result<()> {
         let span = entry.span();
         let syn::Meta::NameValue(pair) = entry else {
@@ -265,9 +272,44 @@ impl UnibindMeta {
         Ok(())
     }
 
+    /// Parse `backends(py, ts, ex)`: which enabled backends an export renders.
+    fn apply_backends(&mut self, entry: &syn::Meta, span: Span) -> Result<()> {
+        let syn::Meta::List(list) = entry else {
+            return Err(LowerError::new(span, "`backends` takes a list: backends(py, ts, ex)"));
+        };
+        let parser = syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated;
+        let entries = syn::parse::Parser::parse2(parser, list.tokens.clone())
+            .map_err(|error| LowerError::new(span, format!("bad `backends` list: {error}")))?;
+        let mut backends = Vec::new();
+        for path in &entries {
+            let backend = if path.is_ident("py") {
+                Backend::Py
+            } else if path.is_ident("ts") {
+                Backend::Ts
+            } else if path.is_ident("ex") {
+                Backend::Ex
+            } else {
+                return Err(LowerError::new(
+                    path.span(),
+                    "unknown backend; expected `py`, `ts`, or `ex`",
+                ));
+            };
+            if backends.contains(&backend) {
+                return Err(LowerError::new(path.span(), "duplicate backend"));
+            }
+            backends.push(backend);
+        }
+        if backends.is_empty() {
+            return Err(LowerError::new(span, "`backends(...)` names at least one backend"));
+        }
+        self.backends = Some(backends);
+        Ok(())
+    }
+
     pub(crate) fn names(&self) -> ir::Names {
         ir::Names {
             py: self.py_name.clone(),
+            ts: self.ts_name.clone(),
             ex: self.ex_name.clone(),
         }
     }
@@ -278,17 +320,6 @@ impl UnibindMeta {
             return Err(LowerError::new(
                 self.span.unwrap_or_else(Span::call_site),
                 format!("`default` applies to function arguments, not {context}"),
-            ));
-        }
-        Ok(())
-    }
-
-    /// Error out when a `backends(...)` was given somewhere it cannot apply.
-    pub(crate) fn reject_backends(&self, context: &str) -> Result<()> {
-        if self.backends.is_some() {
-            return Err(LowerError::new(
-                self.span.unwrap_or_else(Span::call_site),
-                format!("`backends(...)` applies to #[unibind::export] modules, not {context}"),
             ));
         }
         Ok(())
@@ -341,14 +372,25 @@ impl UnibindMeta {
         }
         Ok(())
     }
+
+    /// Error out when a `backends(...)` was given somewhere it cannot apply.
+    pub(crate) fn reject_backends(&self, context: &str) -> Result<()> {
+        if self.backends.is_some() {
+            return Err(LowerError::new(
+                self.span.unwrap_or_else(Span::call_site),
+                format!("`backends(...)` applies to #[unibind::export], not {context}"),
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn unknown_option(span: Span) -> LowerError {
     LowerError::new(
         span,
         "unknown unibind option; expected py(name = \"...\"), \
-         py(base = \"...\"), ex(name = \"...\"), backends(...), \
-         default = ..., resource, constructor, or blocking",
+         py(base = \"...\"), ts(name = \"...\"), ex(name = \"...\"), \
+         backends(...), default = ..., resource, constructor, or blocking",
     )
 }
 

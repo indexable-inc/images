@@ -12,6 +12,7 @@ use unibind_gen::host::HostEmitter as _;
 fn names(ex: Option<&str>) -> ir::Names {
     ir::Names {
         py: None,
+        ts: None,
         ex: ex.map(str::to_owned),
     }
 }

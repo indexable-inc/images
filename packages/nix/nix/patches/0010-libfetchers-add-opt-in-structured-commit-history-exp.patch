@@ -1,0 +1,836 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew@ix.dev>
+Date: Mon, 6 Jul 2026 15:24:25 -0700
+Subject: [PATCH] libfetchers: add opt-in structured commit history export for
+ git inputs
+
+Behind a new `git-export-history` experimental feature, git inputs
+(builtins.fetchGit, fetchTree { type = "git"; } and flake inputs of type
+git) accept two new attributes:
+
+  - `exportHistory` (bool, default false): expose the commit history of
+    the fetched revision as a `history` attribute on the result: a list
+    of commits, newest first, each with `rev`, `parents`, `author`,
+    `committer` (name/email/time/tzOffset), the full `message`, and the
+    `paths` touched relative to the first parent (empty tree for root
+    commits; statuses A/M/D/T, no rename detection, sorted by path).
+  - `historyDepth` (int, default 100): bound the walk by generation
+    distance from the tip, counted like `git clone --depth` (the fetched
+    commit is generation 1); 0 means unlimited. Requires exportHistory.
+
+The history is a pure function of (rev, depth): the emitted set is fixed
+by the parent graph, the order is a specified deterministic topological
+order (children before parents; among ready candidates the numerically
+smallest commit hash first -- independent of clone order, timestamps and
+libgit2 version), and every field is commit- or tree-object data. It
+therefore generalises revCount/lastModified and gets the same treatment:
+memoised in the fetcher cache (keyed by rev, depth and a schema format
+version) and never stored in input attributes, so it cannot reach lock
+files (Input::checkLocks would drop it for final inputs anyway).
+
+Exposure happens in emitTreeAttrs via a new InputScheme::getHistoryJson
+virtual, so builtins.fetchGit, fetchTree and flake sourceInfo all gain
+the attribute through the one existing choke point. On a cache miss
+(e.g. the source tree was substituted by narHash so the fetcher never
+ran on this machine) the git scheme re-fetches the repository and
+recomputes.
+
+The walk reads only commit and tree objects, never blobs, so it remains
+compatible with partial clones; shallow clones are rejected because the
+parent chain is truncated. exportHistory with shallow = true is an
+error, as is historyDepth without exportHistory.
+
+Includes fetchGit/fetchTree documentation for the new attributes, an
+rl-next release note, and functional-test coverage in
+tests/functional/fetchGit.sh (ordering, metadata, paths, depth
+bounding, feature gating, shallow rejection, and lock-attribute
+hygiene).
+
+diff --git a/doc/manual/rl-next/git-export-history.md b/doc/manual/rl-next/git-export-history.md
+new file mode 100644
+index 000000000..aa862cfbe
+--- /dev/null
++++ b/doc/manual/rl-next/git-export-history.md
+@@ -0,0 +1,28 @@
++---
++synopsis: "Git fetcher: opt-in structured commit history via `exportHistory`"
++prs: []
++---
++
++Git inputs (`builtins.fetchGit`, `builtins.fetchTree` and flake inputs of
++type `git`) can now opt into exposing the commit history of the fetched
++revision as structured evaluation-time data, behind the new
++`git-export-history` experimental feature:
++
++```nix
++builtins.fetchGit {
++  url = "https://github.com/NixOS/patchelf.git";
++  rev = "...";
++  exportHistory = true;
++  historyDepth = 50; # generations from the tip, like `git clone --depth`; 0 = unlimited
++}
++```
++
++The result gains a `history` attribute: a list of commits, newest first, in
++a deterministic topological order (children always precede parents; ties are
++broken by commit hash), where each entry carries `rev`, `parents`, `author`,
++`committer`, the full `message`, and the `paths` touched relative to the
++first parent. This makes evaluation-time changelog generation and
++per-subtree release notes possible without `leaveDotGit`-style
++nondeterminism: the history is a pure function of the locked revision, is
++cached in the fetcher cache, and never appears in lock files (exactly like
++`revCount` and `lastModified`, which it generalises).
+diff --git a/src/libexpr/primops/fetchTree.cc b/src/libexpr/primops/fetchTree.cc
+index 6e06bdbe9..ae8b0705a 100644
+--- a/src/libexpr/primops/fetchTree.cc
++++ b/src/libexpr/primops/fetchTree.cc
+@@ -9,6 +9,7 @@
+ #include "nix/fetchers/tarball.hh"
+ #include "nix/util/url.hh"
+ #include "nix/expr/value-to-json.hh"
++#include "nix/expr/json-to-value.hh"
+ #include "nix/fetchers/fetch-to-store.hh"
+ #include "nix/fetchers/input-cache.hh"
+ 
+@@ -69,6 +70,15 @@ void emitTreeAttrs(
+             .mkString(fmt("%s", std::put_time(std::gmtime(&*lastModified), "%Y%m%d%H%M%S")), state.mem);
+     }
+ 
++    /* The history is memoised in the fetcher cache keyed by the locked
++       revision, so this is a lookup, not a fetch, on the happy path. On
++       a miss (the source tree was substituted by narHash, or the
++       fetcher cache was deleted) the scheme re-fetches the repository
++       to recompute it. It is exposed only here (never via the input
++       attributes), so it cannot end up in lock files. */
++    if (auto history = input.getHistoryJson(state.fetchSettings, *state.store))
++        parseJSON(state, *history, attrs.alloc("history"));
++
+     v.mkAttrs(attrs);
+ }
+ 
+@@ -152,7 +162,11 @@ static void fetchTree(
+         }
+ 
+         // fetchTree should fetch git repos with shallow = true by default
+-        if (type == "git" && !params.isFetchGit && !attrs.contains("shallow")) {
++        // (except when the input exports history, which needs the full
++        // parent chain; flake inputs re-enter here via fetchFinalTree, so
++        // injecting shallow would contradict the exportHistory opt-in).
++        if (type == "git" && !params.isFetchGit && !attrs.contains("shallow")
++            && !fetchers::maybeGetBoolAttr(attrs, "exportHistory").value_or(false)) {
+             attrs.emplace("shallow", Explicit<bool>{true});
+         }
+ 
+@@ -655,6 +669,30 @@ static RegisterPrimOp primop_fetchGit({
+ 
+         This option has no effect once `shallow` cloning is enabled.
+ 
++      - `exportHistory` (default: `false`)
++
++        Export the commit history of the fetched revision as a `history`
++        attribute on the result: a list of commits, newest first, in a
++        deterministic topological order. Each commit is an attribute set
++        with `rev`, `parents`, `author`, `committer` (each of the latter
++        two with `name`, `email`, `time`, `tzOffset`), `message`, and
++        `paths` (the files touched relative to the first parent, each with
++        `path` and a Git-style `status` letter such as `"A"`, `"M"`,
++        `"D"` or `"T"`).
++
++        The history is a pure function of `rev`, so it never appears in
++        lock files; it is cached in the fetcher cache. It cannot be
++        combined with `shallow = true`.
++
++        Requires the [`git-export-history` experimental feature](@docroot@/development/experimental-features.md#xp-feature-git-export-history).
++
++      - `historyDepth` (default: `100`)
++
++        Bound the exported history to the commits at most this many
++        generations from the fetched revision (like `git clone --depth`;
++        the fetched commit itself is generation 1). `0` means unlimited.
++        Only meaningful together with `exportHistory`.
++
+       - `verifyCommit` (default: `true` if `publicKey` or `publicKeys` are provided, otherwise `false`)
+ 
+         Whether to check `rev` for a signature matching `publicKey` or `publicKeys`.
+diff --git a/src/libfetchers/fetchers.cc b/src/libfetchers/fetchers.cc
+index 575e479d4..5df582c78 100644
+--- a/src/libfetchers/fetchers.cc
++++ b/src/libfetchers/fetchers.cc
+@@ -464,6 +464,13 @@ std::optional<time_t> Input::getLastModified() const
+     return {};
+ }
+ 
++std::optional<std::string> Input::getHistoryJson(const Settings & settings, Store & store) const
++{
++    if (!scheme)
++        return std::nullopt;
++    return scheme->getHistoryJson(settings, store, *this);
++}
++
+ ParsedURL InputScheme::toURL(const Input & input) const
+ {
+     throw Error("don't know how to convert input '%s' to a URL", attrsToJSON(input.attrs));
+diff --git a/src/libfetchers/git-utils.cc b/src/libfetchers/git-utils.cc
+index 456d86998..a84582f06 100644
+--- a/src/libfetchers/git-utils.cc
++++ b/src/libfetchers/git-utils.cc
+@@ -20,6 +20,7 @@
+ #include <git2/commit.h>
+ #include <git2/config.h>
+ #include <git2/describe.h>
++#include <git2/diff.h>
+ #include <git2/errors.h>
+ #include <git2/global.h>
+ #include <git2/indexer.h>
+@@ -38,6 +39,8 @@
+ #include <git2/tag.h>
+ #include <git2/tree.h>
+ 
++#include <nlohmann/json.hpp>
++
+ #include <boost/unordered/concurrent_flat_set.hpp>
+ #include <boost/unordered/unordered_flat_map.hpp>
+ #include <boost/unordered/unordered_flat_set.hpp>
+@@ -107,6 +110,7 @@ typedef std::unique_ptr<git_object, Deleter<git_object_free>> Object;
+ typedef std::unique_ptr<git_commit, Deleter<git_commit_free>> Commit;
+ typedef std::unique_ptr<git_reference, Deleter<git_reference_free>> Reference;
+ typedef std::unique_ptr<git_describe_result, Deleter<git_describe_result_free>> DescribeResult;
++typedef std::unique_ptr<git_diff, Deleter<git_diff_free>> Diff;
+ typedef std::unique_ptr<git_status_list, Deleter<git_status_list_free>> StatusList;
+ typedef std::unique_ptr<git_remote, Deleter<git_remote_free>> Remote;
+ typedef std::unique_ptr<git_config, Deleter<git_config_free>> GitConfig;
+@@ -457,6 +461,208 @@ struct GitRepoImpl : GitRepo, std::enable_shared_from_this<GitRepoImpl>
+         return done.size();
+     }
+ 
++
++    std::string getHistoryJson(const Hash & rev, uint64_t depth) override
++    {
++        /* Phase 1: collect the emitted set, bounded by generation
++           distance from the tip (like `git clone --depth`; 0 =
++           unlimited), breadth-first so each commit is visited at its
++           minimal distance. */
++        struct Node
++        {
++            std::vector<git_oid> parents;
++        };
++
++        boost::unordered_flat_map<git_oid, Node, std::hash<git_oid>> nodes;
++
++        auto startCommit = peelObject<Commit>(lookupObject(*this, hashToOID(rev)).get(), GIT_OBJECT_COMMIT);
++        auto startOid = *git_commit_id(startCommit.get());
++
++        std::queue<std::pair<git_oid, uint64_t>> queue;
++        queue.push({startOid, 1});
++        nodes.emplace(startOid, Node{});
++
++        while (!queue.empty()) {
++            checkInterrupt();
++            auto [oid, generation] = queue.front();
++            queue.pop();
++
++            auto _commit = lookupObject(*this, oid, GIT_OBJECT_COMMIT);
++            auto commit = (const git_commit *) &*_commit;
++
++            /* Collect the parents before touching `nodes`: emplacing
++               into a flat map can rehash and would invalidate a
++               reference held across the loop. */
++            std::vector<git_oid> parents;
++            for (auto n : std::views::iota(0U, git_commit_parentcount(commit))) {
++                auto parentOid = git_commit_parent_id(commit, n);
++                if (!parentOid)
++                    throw Error(
++                        "Failed to retrieve parent %d of Git commit '%s' while exporting history: %s. "
++                        "'exportHistory' requires the full history of the fetched revision to be present; "
++                        "this repository appears to be incomplete (e.g. a shallow clone).",
++                        n,
++                        *git_commit_id(commit),
++                        git_error_last()->message);
++                parents.push_back(*parentOid);
++            }
++
++            for (auto & parent : parents)
++                if ((depth == 0 || generation < depth) && nodes.emplace(parent, Node{}).second)
++                    queue.push({parent, generation + 1});
++
++            nodes.at(oid).parents = std::move(parents);
++        }
++
++        /* Phase 2: deterministic topological order, newest first: a
++           commit may be emitted once all of its children inside the
++           emitted set are emitted; among the ready candidates, the
++           numerically smallest commit hash goes first. This is a pure
++           function of the commit graph, independent of clone order,
++           libgit2 version and timestamps. */
++        boost::unordered_flat_map<git_oid, size_t, std::hash<git_oid>> pendingChildren;
++        for (auto & [oid, node] : nodes)
++            for (auto & parent : node.parents)
++                if (nodes.contains(parent))
++                    pendingChildren[parent]++;
++
++        auto oidLess = [](const git_oid & a, const git_oid & b) { return git_oid_cmp(&a, &b) < 0; };
++        std::set<git_oid, decltype(oidLess)> ready(oidLess);
++        for (auto & [oid, node] : nodes)
++            if (!pendingChildren.contains(oid))
++                ready.insert(oid);
++
++        /* Phase 3: emit each commit. All fields come from the commit
++           and tree objects themselves, so the result is fully
++           determined by `rev`. */
++        auto signatureToJson = [](const git_signature * sig) {
++            nlohmann::json j;
++            j["name"] = sig ? std::string(sig->name) : "";
++            j["email"] = sig ? std::string(sig->email) : "";
++            j["time"] = sig ? (int64_t) sig->when.time : 0;
++            j["tzOffset"] = sig ? (int64_t) sig->when.offset : 0;
++            return j;
++        };
++
++        nlohmann::json history = nlohmann::json::array();
++
++        while (!ready.empty()) {
++            checkInterrupt();
++            auto oid = *ready.begin();
++            ready.erase(ready.begin());
++
++            auto _commit = lookupObject(*this, oid, GIT_OBJECT_COMMIT);
++            auto commit = (const git_commit *) &*_commit;
++
++            nlohmann::json entry;
++            entry["rev"] = std::string(git_oid_tostr_s(&oid));
++
++            auto & node = nodes.at(oid);
++            auto parents = nlohmann::json::array();
++            for (auto & parent : node.parents)
++                parents.push_back(std::string(git_oid_tostr_s(&parent)));
++            entry["parents"] = std::move(parents);
++
++            entry["author"] = signatureToJson(git_commit_author(commit));
++            entry["committer"] = signatureToJson(git_commit_committer(commit));
++
++            auto message = git_commit_message(commit);
++            entry["message"] = message ? std::string(message) : "";
++
++            /* Paths touched: tree diff against the first parent (the
++               empty tree for root commits). Tree diffs read only
++               commit and tree objects, never blob contents, and rename
++               detection stays off (it would depend on similarity
++               heuristics, not just the trees). */
++            Tree commitTree;
++            if (git_commit_tree(Setter(commitTree), commit))
++                throw GitError("getting tree of Git commit '%s'", oid);
++
++            Tree parentTree;
++            if (!node.parents.empty()) {
++                auto _parent = lookupObject(*this, node.parents.front(), GIT_OBJECT_COMMIT);
++                if (git_commit_tree(Setter(parentTree), (const git_commit *) &*_parent))
++                    throw GitError("getting tree of Git commit '%s'", node.parents.front());
++            }
++
++            git_diff_options diffOpts = GIT_DIFF_OPTIONS_INIT;
++            diffOpts.flags |= GIT_DIFF_SKIP_BINARY_CHECK;
++
++            Diff diff;
++            if (git_diff_tree_to_tree(Setter(diff), *this, parentTree.get(), commitTree.get(), &diffOpts))
++                throw GitError("diffing Git commit '%s' against its first parent", oid);
++
++            /* Map the delta status explicitly: `git_diff_status_char`
++               returns ' ' for statuses a plain tree-to-tree diff should
++               never produce, and a silent ' ' would corrupt the schema.
++               RENAMED/COPIED are unreachable while rename detection
++               stays off, but map them anyway rather than guessing. */
++            auto statusLetter = [&](const git_diff_delta * delta) -> char {
++                switch (delta->status) {
++                case GIT_DELTA_ADDED:
++                    return 'A';
++                case GIT_DELTA_DELETED:
++                    return 'D';
++                case GIT_DELTA_MODIFIED:
++                    return 'M';
++                case GIT_DELTA_TYPECHANGE:
++                    return 'T';
++                case GIT_DELTA_RENAMED:
++                    return 'R';
++                case GIT_DELTA_COPIED:
++                    return 'C';
++                /* A plain tree-to-tree diff cannot produce these; fail
++                   loudly rather than emit a corrupt status letter. */
++                case GIT_DELTA_UNMODIFIED:
++                case GIT_DELTA_IGNORED:
++                case GIT_DELTA_UNTRACKED:
++                case GIT_DELTA_UNREADABLE:
++                case GIT_DELTA_CONFLICTED:
++                default:
++                    throw Error(
++                        "unexpected delta status %d for path '%s' in tree diff of Git commit '%s'",
++                        (int) delta->status,
++                        delta->new_file.path ? delta->new_file.path : "(unknown)",
++                        git_oid_tostr_s(&oid));
++                }
++            };
++
++            std::vector<std::pair<std::string, std::string>> paths;
++            for (auto i : std::views::iota((size_t) 0, git_diff_num_deltas(diff.get()))) {
++                auto delta = git_diff_get_delta(diff.get(), i);
++                auto path = delta->new_file.path ? delta->new_file.path : delta->old_file.path;
++                paths.emplace_back(path, std::string(1, statusLetter(delta)));
++            }
++            std::sort(paths.begin(), paths.end());
++
++            auto pathsJson = nlohmann::json::array();
++            for (auto & [path, status] : paths) {
++                auto p = nlohmann::json::object();
++                p["path"] = path;
++                p["status"] = status;
++                pathsJson.push_back(std::move(p));
++            }
++            entry["paths"] = std::move(pathsJson);
++
++            history.push_back(std::move(entry));
++
++            for (auto & parent : node.parents) {
++                auto i = pendingChildren.find(parent);
++                if (i == pendingChildren.end())
++                    continue;
++                if (--i->second == 0) {
++                    pendingChildren.erase(i);
++                    ready.insert(parent);
++                }
++            }
++        }
++
++        /* Commit messages are not guaranteed to be valid UTF-8; replace
++           invalid sequences rather than throwing, so one odd commit
++           does not make the whole input unfetchable. */
++        return history.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
++    }
++
+     uint64_t getLastModified(const Hash & rev) override
+     {
+         auto commit = peelObject<Commit>(lookupObject(*this, hashToOID(rev)).get(), GIT_OBJECT_COMMIT);
+diff --git a/src/libfetchers/git.cc b/src/libfetchers/git.cc
+index f6ae63c81..13344a3fa 100644
+--- a/src/libfetchers/git.cc
++++ b/src/libfetchers/git.cc
+@@ -15,6 +15,7 @@
+ #include "nix/util/finally.hh"
+ #include "nix/fetchers/fetch-settings.hh"
+ #include "nix/util/json-utils.hh"
++#include "nix/util/util.hh"
+ #include "nix/util/archive.hh"
+ #include "nix/util/mounted-source-accessor.hh"
+ 
+@@ -192,8 +193,14 @@ struct GitInputScheme : InputScheme
+                 attrs.emplace(name, value);
+             else if (
+                 name == "shallow" || name == "submodules" || name == "lfs" || name == "exportIgnore"
+-                || name == "allRefs" || name == "verifyCommit")
++                || name == "allRefs" || name == "verifyCommit" || name == "exportHistory")
+                 attrs.emplace(name, Explicit<bool>{value == "1"});
++            else if (name == "historyDepth") {
++                if (auto n = string2Int<uint64_t>(value))
++                    attrs.emplace(name, *n);
++                else
++                    throw BadURL("invalid 'historyDepth' value '%s' in URL '%s'", value, url);
++            }
+             else
+                 url2.query.emplace(name, value);
+         }
+@@ -355,6 +362,53 @@ struct GitInputScheme : InputScheme
+                     )",
+                 },
+             },
++            {
++                "exportHistory",
++                {
++                    .type = "Bool",
++                    .required = false,
++                    .doc = R"(
++                      Export the commit history of the fetched revision.
++
++                      When enabled, the resulting attribute set gains a
++                      `history` attribute: a list of commits, newest first, in
++                      a deterministic topological order. Each commit is an
++                      attribute set with `rev`, `parents`, `author`,
++                      `committer` (each with `name`, `email`, `time`,
++                      `tzOffset`), `message`, and `paths` (the files touched
++                      relative to the first parent, each with `path` and a
++                      Git-style `status` letter).
++
++                      The history is derived entirely from the fetched
++                      revision, so it does not appear in lock files (like
++                      `revCount`, it is a pure function of `rev`). It cannot
++                      be combined with `shallow = true`.
++
++                      Requires the `git-export-history` experimental feature.
++
++                      Default: `false`
++                    )",
++                },
++            },
++            {
++                "historyDepth",
++                {
++                    .type = "Integer",
++                    .required = false,
++                    .doc = R"(
++                      Bound the history exported by `exportHistory` to the
++                      commits at most this many generations away from the
++                      fetched revision (counted like `git clone --depth`; the
++                      fetched commit itself is generation 1). `0` means
++                      unlimited. `parents` fields may name commits outside the
++                      exported set.
++
++                      Only meaningful together with `exportHistory = true`.
++
++                      Default: `100`
++                    )",
++                },
++            },
+             {
+                 "name",
+                 {},
+@@ -393,6 +447,13 @@ struct GitInputScheme : InputScheme
+             if (name == "verifyCommit" || name == "keytype" || name == "publicKey" || name == "publicKeys")
+                 experimentalFeatureSettings.require(Xp::VerifiedFetches);
+ 
++        for (auto & [name, _] : attrs)
++            if (name == "exportHistory" || name == "historyDepth")
++                experimentalFeatureSettings.require(Xp::GitExportHistory);
++
++        if (attrs.contains("historyDepth") && !maybeGetBoolAttr(attrs, "exportHistory").value_or(false))
++            throw Error("the 'historyDepth' attribute requires 'exportHistory = true'");
++
+         maybeGetBoolAttr(attrs, "verifyCommit");
+ 
+         if (auto ref = maybeGetStrAttr(attrs, "ref"); ref && !isLegalRefName(*ref))
+@@ -426,6 +487,11 @@ struct GitInputScheme : InputScheme
+             url.query.insert_or_assign("exportIgnore", "1");
+         if (maybeGetBoolAttr(input.attrs, "verifyCommit").value_or(false))
+             url.query.insert_or_assign("verifyCommit", "1");
++        if (getExportHistoryAttr(input)) {
++            url.query.insert_or_assign("exportHistory", "1");
++            if (auto depth = maybeGetIntAttr(input.attrs, "historyDepth"))
++                url.query.insert_or_assign("historyDepth", std::to_string(*depth));
++        }
+         auto publicKeys = getPublicKeys(input.attrs);
+         if (publicKeys.size() == 1) {
+             url.query.insert_or_assign("keytype", publicKeys.at(0).type);
+@@ -612,6 +678,22 @@ struct GitInputScheme : InputScheme
+         return maybeGetBoolAttr(input.attrs, "allRefs").value_or(false);
+     }
+ 
++    bool getExportHistoryAttr(const Input & input) const
++    {
++        return maybeGetBoolAttr(input.attrs, "exportHistory").value_or(false);
++    }
++
++    /* Bounding the exported history is the default: materialising the
++       full history of a large repository at evaluation time is an
++       easy way to blow up evaluator memory. `historyDepth = 0` opts
++       into unlimited history explicitly. */
++    constexpr static uint64_t defaultHistoryDepth = 100;
++
++    uint64_t getHistoryDepthAttr(const Input & input) const
++    {
++        return maybeGetIntAttr(input.attrs, "historyDepth").value_or(defaultHistoryDepth);
++    }
++
+     RepoInfo getRepoInfo(const Input & input) const
+     {
+         auto checkHashAlgorithm = [&](const std::optional<Hash> & hash) {
+@@ -751,6 +833,38 @@ struct GitInputScheme : InputScheme
+         return revCount;
+     }
+ 
++    /* The history is memoised in the fetcher cache: it is immutable
++       for a given (rev, depth), like `revCount`. `format` versions the
++       JSON schema so a future schema change cannot serve stale
++       entries. */
++    std::string getHistoryJson(
++        const Settings & settings, const std::filesystem::path & repoDir, const Hash & rev, uint64_t depth) const
++    {
++        auto key = historyCacheKey(rev, depth);
++
++        auto cache = settings.getCache();
++
++        if (auto res = cache->lookup(key))
++            return getStrAttr(*res, "history");
++
++        Activity act(*logger, lvlChatty, actUnknown, fmt("exporting Git history of '%s'", rev.gitRev()));
++
++        auto history = GitRepo::openRepo(repoDir, {})->getHistoryJson(rev, depth);
++
++        cache->upsert(key, {{"history", history}});
++
++        return history;
++    }
++
++    /* CONTRACT: any change to the exported history -- schema fields,
++       ordering rule, depth semantics, diff options, status letters --
++       MUST bump `format`, or previously cached entries would be served
++       in the old shape forever (the cache has no TTL for this key). */
++    static Cache::Key historyCacheKey(const Hash & rev, uint64_t depth)
++    {
++        return {"gitHistory", {{"rev", rev.gitRev()}, {"depth", depth}, {"format", uint64_t(1)}}};
++    }
++
+     std::string getDefaultRef(const Settings & settings, const RepoInfo & repoInfo, bool shallow) const
+     {
+         auto head = std::visit(
+@@ -913,6 +1027,20 @@ struct GitInputScheme : InputScheme
+         if (!getShallowAttr(input))
+             input.attrs.insert_or_assign("revCount", getRevCount(settings, repoInfo, repoDir, rev));
+ 
++        if (getExportHistoryAttr(input)) {
++            if (getShallowAttr(input))
++                throw Error(
++                    "'exportHistory' requires the full history of Git repository '%s'; "
++                    "it cannot be combined with 'shallow = true'",
++                    repoInfo.locationToArg());
++            /* Compute the history now (into the fetcher cache, not the
++               input attributes: it is derivable from `rev`, so it must
++               not end up in lock files) while the repository is
++               guaranteed to be present. `emitTreeAttrs` reads it back
++               via `getHistoryJson()`. */
++            getHistoryJson(settings, repoDir, rev, getHistoryDepthAttr(input));
++        }
++
+         printTalkative("using revision %s of repo '%s'", rev.gitRev(), repoInfo.locationToArg());
+ 
+         verifyCommit(input, repo);
+@@ -1079,6 +1207,43 @@ struct GitInputScheme : InputScheme
+         return {accessor, std::move(final)};
+     }
+ 
++    std::optional<std::string> getHistoryJson(const Settings & settings, Store & store, const Input & input) const override
++    {
++        if (!getExportHistoryAttr(input))
++            return std::nullopt;
++
++        auto rev = input.getRev();
++        if (!rev || *rev == nullRev)
++            /* Dirty or empty working trees have no commit to walk
++               from; they also never produce locked inputs, so there is
++               nothing deterministic to expose. */
++            return std::nullopt;
++
++        auto cache = settings.getCache();
++        auto key = historyCacheKey(*rev, getHistoryDepthAttr(input));
++
++        if (auto res = cache->lookup(key))
++            return getStrAttr(*res, "history");
++
++        /* Not memoised yet: e.g. the source tree was substituted by
++           `narHash` so the fetcher never ran on this machine, or the
++           fetcher cache was deleted. Fetching the input recomputes the
++           history (populating the cache) from the local or cached
++           repository, re-fetching it only if it is gone entirely. */
++        getAccessor(settings, store, input);
++
++        if (auto res = cache->lookup(key))
++            return getStrAttr(*res, "history");
++
++        /* The fetch above takes the commit path (a rev is present), and
++           that path computes the history into the cache whenever
++           `exportHistory` is set -- so a miss here is a bug, not a
++           condition to paper over with a silently absent attribute. */
++        throw Error(
++            "the Git fetch of input '%s' did not produce the requested commit history; this is a bug in Nix",
++            input.to_string());
++    }
++
+     std::optional<std::string> getFingerprint(Store & store, const Input & input) const override
+     {
+         auto makeFingerprint = [&](const Hash & rev) {
+diff --git a/src/libfetchers/include/nix/fetchers/fetchers.hh b/src/libfetchers/include/nix/fetchers/fetchers.hh
+index 180d10e9d..ab2f1a645 100644
+--- a/src/libfetchers/include/nix/fetchers/fetchers.hh
++++ b/src/libfetchers/include/nix/fetchers/fetchers.hh
+@@ -165,6 +165,21 @@ public:
+     std::optional<uint64_t> getRevCount() const;
+     std::optional<time_t> getLastModified() const;
+ 
++    /**
++     * For inputs that opt into history export (e.g. Git inputs with
++     * `exportHistory = true`), return the input's commit history as a
++     * JSON array rendered to a string (see
++     * `GitRepo::getHistoryJson()` for the schema and ordering
++     * guarantees). Returns `std::nullopt` for inputs that don't
++     * support or didn't request history export.
++     *
++     * The result is a pure function of the locked input (in
++     * particular of `rev` and `historyDepth`), so it is *not* part of
++     * the input's attributes and never appears in lock files; it is
++     * memoised in the fetcher cache instead.
++     */
++    std::optional<std::string> getHistoryJson(const Settings & settings, Store & store) const;
++
+     /**
+      * For locked inputs, return a string that uniquely specifies the
+      * content of the input (typically a commit hash or content hash).
+@@ -273,6 +288,16 @@ struct InputScheme
+     {
+         return {};
+     }
++
++    /**
++     * Return the input's commit history as a JSON string, for schemes
++     * that support exporting history and inputs that opted in. See
++     * `Input::getHistoryJson()`.
++     */
++    virtual std::optional<std::string> getHistoryJson(const Settings & settings, Store & store, const Input & input) const
++    {
++        return std::nullopt;
++    }
+ };
+ 
+ void registerInputScheme(std::shared_ptr<InputScheme> && fetcher);
+diff --git a/src/libfetchers/include/nix/fetchers/git-utils.hh b/src/libfetchers/include/nix/fetchers/git-utils.hh
+index 24a7b8008..4e343c086 100644
+--- a/src/libfetchers/include/nix/fetchers/git-utils.hh
++++ b/src/libfetchers/include/nix/fetchers/git-utils.hh
+@@ -43,6 +43,28 @@ struct GitRepo
+ 
+     virtual uint64_t getRevCount(const Hash & rev) = 0;
+ 
++    /**
++     * Return the commit history reachable from `rev` as a JSON array
++     * (rendered to a string), newest first.
++     *
++     * The result is a pure function of `rev` (and `depth`): commits are
++     * emitted in a deterministic topological order (every commit precedes
++     * its parents; among the candidates whose emitted-set children are
++     * all emitted, the numerically smallest commit hash is emitted
++     * first), and each entry contains only data stored in the commit
++     * objects themselves: revision, parent revisions, author/committer
++     * (name, email, time, timezone offset), the full commit message, and
++     * the paths touched relative to the first parent (relative to the
++     * empty tree for root commits), with no rename detection.
++     *
++     * `depth` bounds the walk by generation distance from the tip, like
++     * `git clone --depth`: only commits whose minimal chain of parent
++     * edges from `rev` is shorter than `depth` are emitted. `depth` 0
++     * means unlimited. `parents` always lists all parents, including
++     * ones outside the emitted set.
++     */
++    virtual std::string getHistoryJson(const Hash & rev, uint64_t depth) = 0;
++
+     virtual uint64_t getLastModified(const Hash & rev) = 0;
+ 
+     virtual bool isShallow() = 0;
+diff --git a/src/libutil/experimental-features.cc b/src/libutil/experimental-features.cc
+index e4f8b30ab..b121a9ce8 100644
+--- a/src/libutil/experimental-features.cc
++++ b/src/libutil/experimental-features.cc
+@@ -25,7 +25,7 @@ struct ExperimentalFeatureDetails
+  * feature, we either have no issue at all if few features are not added
+  * at the end of the list, or a proper merge conflict if they are.
+  */
+-constexpr size_t numXpFeatures = 1 + static_cast<size_t>(Xp::BuildStatusDir);
++constexpr size_t numXpFeatures = 1 + static_cast<size_t>(Xp::GitExportHistory);
+ 
+ constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails = {{
+     {
+@@ -293,6 +293,20 @@ constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails
+         )",
+         .trackingUrl = "https://github.com/NixOS/nix/milestone/60",
+     },
++    {
++        .tag = Xp::GitExportHistory,
++        .name = "git-export-history",
++        .description = R"(
++            Allows Git fetcher inputs (`builtins.fetchGit`, `fetchTree` and
++            flake inputs of type `git`) to opt into exporting structured
++            commit history via the `exportHistory` and `historyDepth`
++            attributes. The resulting source attribute set gains a `history`
++            attribute: a list of commits (newest first, deterministic
++            topological order) with revision, parents, author, committer,
++            message and the paths touched by each commit.
++        )",
++        .trackingUrl = "https://github.com/NixOS/nix/milestone/60",
++    },
+ }};
+ 
+ static_assert(
+diff --git a/src/libutil/include/nix/util/experimental-features.hh b/src/libutil/include/nix/util/experimental-features.hh
+index 4a245d23c..ac97f5fb7 100644
+--- a/src/libutil/include/nix/util/experimental-features.hh
++++ b/src/libutil/include/nix/util/experimental-features.hh
+@@ -39,6 +39,7 @@ enum struct ExperimentalFeature {
+     ExternalBuilders,
+     BLAKE3Hashes,
+     BuildStatusDir,
++    GitExportHistory,
+ };
+ 
+ /**
+diff --git a/tests/functional/fetchGit.sh b/tests/functional/fetchGit.sh
+index 2992020f1..386523d3a 100755
+--- a/tests/functional/fetchGit.sh
++++ b/tests/functional/fetchGit.sh
+@@ -309,3 +309,64 @@ git -C "$empty" config user.name "Foobar"
+ git -C "$empty" commit --allow-empty --allow-empty-message --message ""
+ 
+ nix eval --impure --expr "let attrs = builtins.fetchGit $empty; in assert attrs.lastModified != 0; assert attrs.rev != \"0000000000000000000000000000000000000000\"; assert attrs.revCount == 1; true"
++
++# Test exportHistory: structured, deterministic commit history as eval data.
++histRepo="$TEST_ROOT/history"
++rm -rf "$histRepo"
++createGitRepo "$histRepo"
++
++echo one > "$histRepo/a"
++git -C "$histRepo" add a
++git -C "$histRepo" commit -m 'first'
++hrev1=$(git -C "$histRepo" rev-parse HEAD)
++
++echo two > "$histRepo/a"
++mkdir "$histRepo/sub"
++echo s > "$histRepo/sub/file"
++git -C "$histRepo" add a sub/file
++git -C "$histRepo" commit -m 'second'
++hrev2=$(git -C "$histRepo" rev-parse HEAD)
++
++git -C "$histRepo" rm -q a
++git -C "$histRepo" commit -m 'third'
++hrev3=$(git -C "$histRepo" rev-parse HEAD)
++
++histExpr="builtins.fetchGit { url = \"file://$histRepo\"; rev = \"$hrev3\"; exportHistory = true; historyDepth = 0; }"
++
++# The attributes are gated by the git-export-history experimental feature.
++expectStderr 1 nix eval --impure --expr "($histExpr).history" | grepQuiet "experimental Nix feature 'git-export-history' is disabled"
++
++histEval() {
++    nix eval --extra-experimental-features git-export-history --impure "$@"
++}
++
++# Full history: all three commits, newest first, in topological order.
++[[ $(histEval --expr "builtins.length ($histExpr).history") = 3 ]]
++[[ $(histEval --raw --expr "builtins.concatStringsSep \",\" (map (c: c.rev) ($histExpr).history)") = "$hrev3,$hrev2,$hrev1" ]]
++
++# Commit metadata comes from the commit objects.
++[[ $(histEval --raw --expr "(builtins.head ($histExpr).history).message") = 'third' ]]
++[[ $(histEval --raw --expr "builtins.concatStringsSep \",\" (builtins.head ($histExpr).history).parents") = "$hrev2" ]]
++[[ $(histEval --expr "builtins.length (builtins.elemAt ($histExpr).history 2).parents") = 0 ]]
++[[ $(histEval --raw --expr "(builtins.head ($histExpr).history).author.name") = 'Foobar' ]]
++
++# Paths touched, relative to the first parent: root commit adds, deletions are 'D'.
++[[ $(histEval --json --expr "(builtins.head ($histExpr).history).paths") = '[{"path":"a","status":"D"}]' ]]
++[[ $(histEval --json --expr "(builtins.elemAt ($histExpr).history 1).paths") = '[{"path":"a","status":"M"},{"path":"sub/file","status":"A"}]' ]]
++[[ $(histEval --json --expr "(builtins.elemAt ($histExpr).history 2).paths") = '[{"path":"a","status":"A"}]' ]]
++
++# historyDepth bounds the walk by generation distance, like git clone --depth;
++# parents still name commits outside the exported set.
++histDepthExpr="builtins.fetchGit { url = \"file://$histRepo\"; rev = \"$hrev3\"; exportHistory = true; historyDepth = 1; }"
++[[ $(histEval --json --expr "map (c: c.rev) ($histDepthExpr).history") = "[\"$hrev3\"]" ]]
++[[ $(histEval --raw --expr "builtins.concatStringsSep \",\" (builtins.head ($histDepthExpr).history).parents") = "$hrev2" ]]
++
++# historyDepth without exportHistory is rejected.
++expectStderr 1 histEval --expr "builtins.fetchGit { url = \"file://$histRepo\"; rev = \"$hrev3\"; historyDepth = 1; }" | grepQuiet "requires 'exportHistory = true'"
++
++# exportHistory requires the full history: shallow is rejected.
++expectStderr 1 histEval --expr "(builtins.fetchGit { url = \"file://$histRepo\"; rev = \"$hrev3\"; exportHistory = true; shallow = true; }).history" | grepQuiet "cannot be combined with 'shallow"
++
++# The history never leaks into the input attributes (and thus lock files):
++# the same fetch without .history has no history-shaped attributes.
++histEval --expr "assert !(builtins.fetchGit { url = \"file://$histRepo\"; rev = \"$hrev3\"; } ? history); true" > /dev/null

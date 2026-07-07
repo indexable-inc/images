@@ -4,6 +4,8 @@
   nixpkgs,
   paths,
   rust-overlay,
+  sdk-prebuilt-nixpkgs,
+  sdk-prebuilt-rust-overlay,
   home-manager,
   hermes-agent,
   btop-src,
@@ -89,6 +91,11 @@
   # single source of truth for the patched-src checks, the `.#update` fork
   # nodes, and the `rebase-patches` tool. See lib/fork-packages.nix.
   inherit (import ./fork-packages.nix) forkPackages;
+  # Per-attempt-patch closure build gates (RFC 0010 A3, #2098): the pure-eval
+  # dag.json closure computation (`closureOf`) plus the gate-attrset builder
+  # (`mkGates`) an opted-in fork package wires into its passthru. See
+  # lib/fork-closure-gates.nix.
+  forkClosureGates = import ./fork-closure-gates.nix {inherit lib;};
   # Mirror-enabled packages (opt-in `mirror` attr in a package's package.nix):
   # id, repo-relative path, and mirror-repo coordinates for each package that
   # publishes a standalone read-only mirror. `nix eval --json
@@ -587,6 +594,7 @@
       deepMerge
       efx
       evalTimeSubstitutable
+      forkClosureGates
       forkPackages
       forkDagCheckSrc
       goUnit
@@ -639,6 +647,12 @@
     launchkSrc = launchk-src;
     snixSrc = snix-src;
     mesaSrc = mesa-src;
+    # Pinned toolchain evaluation context for the prebuilt public-SDK rlib:
+    # the exact nixpkgs + rust-overlay sources whose evaluation reproduces the
+    # toolchain id recorded in the artifact's manifest. Consumed only by
+    # packages/sdk/rust/build.nix; see the input comments in flake.nix.
+    sdkPrebuiltNixpkgsSrc = sdk-prebuilt-nixpkgs;
+    sdkPrebuiltRustOverlaySrc = sdk-prebuilt-rust-overlay;
   };
 
   /**

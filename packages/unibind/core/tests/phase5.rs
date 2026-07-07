@@ -95,22 +95,21 @@ fn duplicate_ex_renames_are_rejected() {
 }
 
 #[test]
-fn module_backends_parse_and_validate() {
-    let span = proc_macro2::Span::call_site();
+fn export_backends_parse_and_validate() {
     let args: TokenStream = "backends(ex, py)".parse().expect("args parse");
-    let backends = unibind_core::module_backends(args, span)
+    let backends = unibind_core::export_backends(args)
         .expect("parses")
         .expect("present");
-    assert_eq!(backends, ["ex", "py"]);
-
-    let absent: TokenStream = r#"py(name = "m")"#.parse().expect("args parse");
     assert_eq!(
-        unibind_core::module_backends(absent, span).expect("parses"),
-        None
+        backends,
+        [unibind_core::Backend::Ex, unibind_core::Backend::Py]
     );
 
-    let unknown: TokenStream = "backends(ts)".parse().expect("args parse");
-    let error = unibind_core::module_backends(unknown, span).expect_err("unknown backend fails");
+    let absent: TokenStream = r#"py(name = "m")"#.parse().expect("args parse");
+    assert_eq!(unibind_core::export_backends(absent).expect("parses"), None);
+
+    let unknown: TokenStream = "backends(zig)".parse().expect("args parse");
+    let error = unibind_core::export_backends(unknown).expect_err("unknown backend fails");
     assert!(error.message.contains("unknown backend"), "{}", error.message);
 
     let misplaced = lower_with(
@@ -119,7 +118,7 @@ fn module_backends_parse_and_validate() {
     )
     .expect_err("backends on a fn fails");
     assert!(
-        misplaced.message.contains("#[unibind::export] modules"),
+        misplaced.message.contains("applies to #[unibind::export]"),
         "{}",
         misplaced.message
     );

@@ -95,8 +95,10 @@ members = [
   "packages/tui/tui-py",
   "packages/unibind/backend-ex",
   "packages/unibind/backend-py",
+  "packages/unibind/backend-ts",
   "packages/unibind/conformance",
   "packages/unibind/conformance-ex",
+  "packages/unibind/conformance-ts",
   "packages/unibind/core",
   "packages/unibind/ex-runtime",
   "packages/unibind/gen",
@@ -356,6 +358,7 @@ tui = { path = "packages/tui/tui" }
 unibind = { path = "packages/unibind/macros" }
 unibind-backend-ex = { path = "packages/unibind/backend-ex" }
 unibind-backend-py = { path = "packages/unibind/backend-py" }
+unibind-backend-ts = { path = "packages/unibind/backend-ts" }
 unibind-core = { path = "packages/unibind/core" }
 unibind-ex-runtime = { path = "packages/unibind/ex-runtime" }
 unibind-py-runtime = { path = "packages/unibind/py-runtime" }

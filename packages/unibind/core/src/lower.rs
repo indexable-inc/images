@@ -34,29 +34,42 @@ impl LowerError {
 
 pub type Result<T> = std::result::Result<T, LowerError>;
 
+/// A language backend the macro can render, as named in
+/// `#[unibind::export(backends(...))]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Backend {
+    /// The pyo3 backend (`unibind-backend-py`, cargo feature `py`).
+    Py,
+    /// The napi-rs backend (`unibind-backend-ts`, cargo feature `ts`).
+    Ts,
+    /// The rustler backend (`unibind-backend-ex`, cargo feature `ex`).
+    Ex,
+}
+
+/// The backends `#[unibind::export(backends(...))]` selected; `None` when
+/// the attribute names none, in which case the macro renders every
+/// feature-enabled backend.
+///
+/// Cargo unifies features across a whole-workspace build, so a workspace
+/// holding consumers of different backends compiles the macro with every
+/// backend feature on at once. `backends(...)` is how one crate pins its
+/// glue to the backends whose runtime dependencies it actually declares.
+///
+/// # Errors
+///
+/// Returns a positioned error for malformed `#[unibind::export(...)]`
+/// options.
+pub fn export_backends(module_args: proc_macro2::TokenStream) -> Result<Option<Vec<Backend>>> {
+    let meta = attrs::UnibindMeta::parse(module_args, Span::call_site())?;
+    Ok(meta.backends)
+}
+
 /// Type names declared in the exported module, used to validate references.
 #[derive(Debug, Default)]
 pub struct Declared {
     pub records: Vec<String>,
     pub errors: Vec<String>,
     pub objects: Vec<String>,
-}
-
-/// The `backends(...)` selection carried by `#[unibind::export]` args.
-///
-/// `None` when absent, meaning every backend the consuming crate's features
-/// enable. Cargo unifies the macro crate's features across a workspace
-/// build, so a crate sharing a workspace with consumers of another backend
-/// names its own targets here.
-///
-/// # Errors
-///
-/// Fails on malformed options, an unknown backend name, or an empty list.
-pub fn module_backends(
-    module_args: proc_macro2::TokenStream,
-    span: Span,
-) -> Result<Option<Vec<String>>> {
-    Ok(attrs::UnibindMeta::parse(module_args, span)?.backends)
 }
 
 /// Lower an inline `#[unibind::export]` module into an [`ir::Interface`].
