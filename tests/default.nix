@@ -2181,9 +2181,14 @@
   #   3. missing DB       — the OCI image baked no /nix/var/nix/db/db.sqlite at
   #      all, so the pinned source (present in the image) was never valid; fixed
   #      by `includeNixDB = true` in oci-layer.nix
+  #   4. wrong journal mode — the DB was baked WAL-marked (build nix defaults
+  #      `use-sqlite-wal = true`) while the image's nix.conf set it false; the
+  #      guest's shm-less dotfile-VFS open then fails outright and every
+  #      nix-daemon connection resets (ix#6563)
   # The boundary this defends: the built base OCI archive must ship a populated
   # /nix/var/nix/db/db.sqlite whose ValidPaths includes EVERY source the image
-  # bakes for in-guest eval — otherwise the first in-guest `nix` re-ingests it.
+  # bakes for in-guest eval — otherwise the first in-guest `nix` re-ingests it —
+  # and whose journal mode the image's own nix.conf can actually open.
   # Two classes of baked source, both covered here:
   #   - flake registry pins (nixpkgs and, once baked, index), read off
   #     `nix.registry.*.to.path`; and
@@ -2228,6 +2233,13 @@
       ];
       archive = base.imageConfig.ix.build.ociImage;
       requiredPaths = registryPaths ++ extraBakedPaths;
+      # SQLite header bytes 18/19 (file-format versions): "1 1" = rollback
+      # journal, "2 2" = WAL. Derived from the image's OWN nix.conf so the
+      # assertion tracks the setting instead of hardcoding a mode.
+      expectedDbFormat =
+        if base.imageConfig.nix.settings.use-sqlite-wal or true
+        then "2 2"
+        else "1 1";
     } ''
       mkdir extract db
       tar -C extract -xf "$archive"
@@ -2269,6 +2281,17 @@
           exit 1
         fi
       done
+      # Journal-mode agreement (regression 4, ix#6563). A complete ValidPaths
+      # is worthless if the guest cannot open the DB at all: with
+      # `use-sqlite-wal = false` nix opens it on SQLite's unix-dotfile VFS (no
+      # shared memory), which refuses WAL-marked databases (SQLITE_CANTOPEN),
+      # and every nix-daemon connection dies with "Connection reset by peer".
+      format=$(od -An -tu1 -j18 -N2 "$dbfile")
+      format=$(echo $format)
+      if [ "$format" != "$expectedDbFormat" ]; then
+        echo "error: baked db.sqlite header format is '$format' but the image's use-sqlite-wal setting requires '$expectedDbFormat'; the guest cannot open this DB (ix#6563)" >&2
+        exit 1
+      fi
       mkdir -p "$out"
     '';
 

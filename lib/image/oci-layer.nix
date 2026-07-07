@@ -58,6 +58,13 @@
     build.ociImage = let
       inherit (config.system.build) toplevel;
 
+      # The SQLite journal mode the guest's nix will use on /nix/var/nix/db,
+      # derived from this image's own nix.conf (`use-sqlite-wal`, default true).
+      dbJournalMode =
+        if config.nix.settings.use-sqlite-wal or true
+        then "WAL"
+        else "DELETE";
+
       # FHS layout pointing into the NixOS toplevel. Keep activation-owned
       # paths writable: NixOS first boot populates /etc and creates /bin/sh
       # and /usr/bin/env, so those cannot be symlinks into the immutable store.
@@ -94,6 +101,21 @@
         # The `base-image-nix-db` check asserts the baked DB actually registers
         # the nixpkgs source as valid (a bare db.sqlite is not enough).
         includeNixDB = true;
+        # dockerTools' load-db runs under the BUILD nix's default
+        # `use-sqlite-wal = true`, so the baked db.sqlite header is WAL-marked.
+        # The guest opens that DB with whatever journal mode this image's own
+        # nix.conf selects: with `use-sqlite-wal = false` (the base profile's
+        # VCFS mitigation, ix#6259) nix picks SQLite's `unix-dotfile` VFS,
+        # which has no shared-memory support and refuses WAL-marked databases
+        # (SQLITE_CANTOPEN). Every per-connection nix-daemon child then dies
+        # and clients see "Connection reset by peer" (ix#6563). Rewrite the
+        # journal mode to match the image's nix.conf, so the baked DB and the
+        # runtime flag agree by construction. This composes AFTER load-db in
+        # the same customisation-layer script, with cwd at the layer root.
+        extraCommands = ''
+          ${lib.getExe pkgs.buildPackages.sqlite} nix/var/nix/db/db.sqlite \
+            'PRAGMA journal_mode=${dbJournalMode};'
+        '';
       };
 
       efficiency = config.ix.build.ociEfficiency;
