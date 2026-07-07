@@ -1,0 +1,420 @@
+{
+  "version": 0,
+  "name": "sample",
+  "names": {
+    "py": null
+  },
+  "docs": [
+    "A sample boundary exercising the Rust backend surface."
+  ],
+  "functions": [
+    {
+      "name": "rows",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Fetch rows.",
+        "",
+        "Docs travel into the generated client."
+      ],
+      "asyncness": "Sync",
+      "blocking": false,
+      "args": [
+        {
+          "name": "store",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "String": {
+              "owned": false
+            }
+          },
+          "default": null
+        },
+        {
+          "name": "limit",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Int": "Usize"
+          },
+          "default": null
+        },
+        {
+          "name": "root",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Option": {
+              "String": {
+                "owned": false
+              }
+            }
+          },
+          "default": null
+        }
+      ],
+      "ret": {
+        "Vec": {
+          "Named": "Row"
+        }
+      },
+      "throws": "SampleError"
+    },
+    {
+      "name": "touch",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Touch a path."
+      ],
+      "asyncness": "Sync",
+      "blocking": false,
+      "args": [
+        {
+          "name": "path",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Path": {
+              "owned": false
+            }
+          },
+          "default": null
+        },
+        {
+          "name": "data",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Bytes": {
+              "owned": false
+            }
+          },
+          "default": null
+        },
+        {
+          "name": "ratio",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Float": "F64"
+          },
+          "default": null
+        }
+      ],
+      "ret": "Bool",
+      "throws": null
+    },
+    {
+      "name": "reset",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Reset a counter."
+      ],
+      "asyncness": "Sync",
+      "blocking": false,
+      "args": [],
+      "ret": null,
+      "throws": null
+    },
+    {
+      "name": "delayed_double",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Double after yielding."
+      ],
+      "asyncness": "Async",
+      "blocking": false,
+      "args": [
+        {
+          "name": "x",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Int": "I64"
+          },
+          "default": null
+        }
+      ],
+      "ret": {
+        "Int": "I64"
+      },
+      "throws": null
+    },
+    {
+      "name": "fetch_row",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "An async call that can fail."
+      ],
+      "asyncness": "Async",
+      "blocking": false,
+      "args": [
+        {
+          "name": "name",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "String": {
+              "owned": true
+            }
+          },
+          "default": null
+        }
+      ],
+      "ret": {
+        "Named": "Row"
+      },
+      "throws": "SampleError"
+    },
+    {
+      "name": "labels",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "A stream of labels."
+      ],
+      "asyncness": "Sync",
+      "blocking": false,
+      "args": [
+        {
+          "name": "prefix",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "String": {
+              "owned": true
+            }
+          },
+          "default": null
+        }
+      ],
+      "ret": {
+        "Stream": {
+          "String": {
+            "owned": true
+          }
+        }
+      },
+      "throws": null
+    }
+  ],
+  "records": [
+    {
+      "name": "Row",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "A row. The `flag`-first field order is deliberate: Rust would pack",
+        "this struct tighter reordered, which exercises the mirror's layout",
+        "opt-out."
+      ],
+      "fields": [
+        {
+          "name": "flag",
+          "names": {
+            "py": null
+          },
+          "docs": [
+            "Awkwardly-placed bool."
+          ],
+          "ty": "Bool"
+        },
+        {
+          "name": "id",
+          "names": {
+            "py": null
+          },
+          "docs": [
+            "Identifier."
+          ],
+          "ty": {
+            "Int": "U64"
+          }
+        },
+        {
+          "name": "name",
+          "names": {
+            "py": null
+          },
+          "docs": [],
+          "ty": {
+            "String": {
+              "owned": true
+            }
+          }
+        },
+        {
+          "name": "tags",
+          "names": {
+            "py": null
+          },
+          "docs": [],
+          "ty": {
+            "Vec": {
+              "String": {
+                "owned": true
+              }
+            }
+          }
+        },
+        {
+          "name": "weights",
+          "names": {
+            "py": null
+          },
+          "docs": [],
+          "ty": {
+            "Map": {
+              "key": {
+                "String": {
+                  "owned": true
+                }
+              },
+              "value": {
+                "Float": "F64"
+              }
+            }
+          }
+        },
+        {
+          "name": "blob",
+          "names": {
+            "py": null
+          },
+          "docs": [],
+          "ty": {
+            "Bytes": {
+              "owned": true
+            }
+          }
+        },
+        {
+          "name": "home",
+          "names": {
+            "py": null
+          },
+          "docs": [],
+          "ty": {
+            "Option": {
+              "Path": {
+                "owned": true
+              }
+            }
+          }
+        },
+        {
+          "name": "nested",
+          "names": {
+            "py": null
+          },
+          "docs": [],
+          "ty": {
+            "Option": {
+              "Vec": {
+                "Named": "Inner"
+              }
+            }
+          }
+        },
+        {
+          "name": "inner",
+          "names": {
+            "py": null
+          },
+          "docs": [],
+          "ty": {
+            "Named": "Inner"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Inner",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "A nested record."
+      ],
+      "fields": [
+        {
+          "name": "label",
+          "names": {
+            "py": null
+          },
+          "docs": [],
+          "ty": {
+            "String": {
+              "owned": true
+            }
+          }
+        },
+        {
+          "name": "ratio",
+          "names": {
+            "py": null
+          },
+          "docs": [],
+          "ty": {
+            "Float": "F64"
+          }
+        }
+      ]
+    }
+  ],
+  "enums": [],
+  "errors": [
+    {
+      "name": "SampleError",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Boundary failures."
+      ],
+      "py_base": null,
+      "variants": [
+        {
+          "name": "StoreGone",
+          "names": {
+            "py": null
+          },
+          "docs": [
+            "The store is gone."
+          ]
+        },
+        {
+          "name": "Invalid",
+          "names": {
+            "py": null
+          },
+          "docs": [
+            "Bad input."
+          ]
+        }
+      ]
+    }
+  ],
+  "objects": []
+}
