@@ -103,6 +103,13 @@ def main(argv: list[str] | None = None) -> int:
     ev.add_argument("code")
     ex = sub.add_parser("exec", help="Run statements on a throwaway kernel")
     ex.add_argument("code")
+    tu = sub.add_parser(
+        "toolusage",
+        help="Export capability usage from store files as the ix desktop-space "
+        "vault's ToolUsage JSON (one AGENT=STORE.sqlite pair per session)",
+    )
+    tu.add_argument("stores", nargs="+", metavar="AGENT=STORE")
+    tu.add_argument("--out", type=Path, default=None, help="write here instead of stdout")
 
     args = parser.parse_args(argv)
     command = args.command or "serve"
@@ -116,6 +123,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if requirements.report(print) else 1
     if command in ("eval", "exec"):
         return _one_shot(args.code)
+    if command == "toolusage":
+        from . import toolusage
+
+        return toolusage.main_export(args.stores, args.out)
     parser.error(f"unknown command {command!r}")
     return 2
 
