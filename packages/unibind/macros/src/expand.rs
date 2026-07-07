@@ -64,6 +64,9 @@ fn backends(
     if selects(unibind_core::Backend::Py) {
         glue.extend(backend_py(interface, module, selected.is_some())?);
     }
+    if selects(unibind_core::Backend::Swift) {
+        glue.extend(backend_swift(interface, selected.is_some())?);
+    }
     if selects(unibind_core::Backend::Ts) {
         glue.extend(backend_ts(interface, module, selected.is_some())?);
     }
@@ -101,6 +104,32 @@ fn backend_py(
         return Err(LowerError {
             span: proc_macro2::Span::call_site(),
             message: "backends(py) needs the `py` cargo feature of unibind".to_owned(),
+        });
+    }
+    Ok(TokenStream::new())
+}
+
+#[cfg(feature = "swift")]
+fn backend_swift(
+    interface: &unibind_core::ir::Interface,
+    _explicit: bool,
+) -> Result<TokenStream, LowerError> {
+    let rendered = unibind_backend_swift::render(interface).map_err(|error| LowerError {
+        span: proc_macro2::Span::call_site(),
+        message: error.message,
+    })?;
+    Ok(rendered.glue)
+}
+
+#[cfg(not(feature = "swift"))]
+fn backend_swift(
+    _interface: &unibind_core::ir::Interface,
+    explicit: bool,
+) -> Result<TokenStream, LowerError> {
+    if explicit {
+        return Err(LowerError {
+            span: proc_macro2::Span::call_site(),
+            message: "backends(swift) needs the `swift` cargo feature of unibind".to_owned(),
         });
     }
     Ok(TokenStream::new())

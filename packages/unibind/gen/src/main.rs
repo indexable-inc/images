@@ -14,6 +14,7 @@ use unibind_core::ir::Interface;
 use unibind_gen::artifact;
 use unibind_gen::host::{self, HostEmitter};
 use unibind_gen::py::PyEmitter;
+use unibind_gen::swift::SwiftEmitter;
 use unibind_gen::ts::TsEmitter;
 
 /// Render host-language files (stubs, markers, wrapper modules) from the
@@ -32,6 +33,10 @@ enum Command {
     /// Emit the Python host files: `<package>/<module>.pyi`,
     /// `<package>/py.typed`, and the wrapper `<package>/__init__.py`.
     Py(PyArgs),
+    /// Emit the Swift host files: the swift-bridge low-level Swift and C
+    /// headers, the `SwiftBridgeCore` support files, and the ergonomic
+    /// `Bindings.swift` overlay.
+    Swift(SwiftArgs),
     /// Emit the TypeScript host files: `index.d.ts` and the `CommonJS`
     /// `index.js` wrapper around the native addon.
     Ts(TsArgs),
@@ -57,6 +62,22 @@ struct PyArgs {
 }
 
 #[derive(clap::Args)]
+struct SwiftArgs {
+    /// Compiled artifact carrying the embedded IR: a cdylib, an object
+    /// file, or a staticlib archive.
+    #[arg(long)]
+    artifact: PathBuf,
+
+    /// Directory (and Swift module name) the files land under.
+    #[arg(long)]
+    package: String,
+
+    /// Output root; files are written at paths relative to it.
+    #[arg(long)]
+    out: PathBuf,
+}
+
+#[derive(clap::Args)]
 struct TsArgs {
     /// Compiled cdylib (or renamed `.node` addon) carrying the embedded IR.
     #[arg(long)]
@@ -76,6 +97,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Py(args) => run_py(&args),
+        Command::Swift(args) => run_swift(&args),
         Command::Ts(args) => run_ts(&args),
     }
 }
@@ -87,6 +109,16 @@ fn run_py(args: &PyArgs) -> anyhow::Result<()> {
     let emitter = PyEmitter {
         package: args.package.clone(),
         skip_init: args.skip_init,
+    };
+    emit_and_write(&emitter, interface, &args.out)
+}
+
+fn run_swift(args: &SwiftArgs) -> anyhow::Result<()> {
+    let embedded = artifact::read(&args.artifact)?;
+    let interface = single_interface(&args.artifact, &embedded, "swift")?;
+
+    let emitter = SwiftEmitter {
+        package: args.package.clone(),
     };
     emit_and_write(&emitter, interface, &args.out)
 }

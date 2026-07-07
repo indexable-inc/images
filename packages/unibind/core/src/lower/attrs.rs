@@ -230,7 +230,7 @@ impl UnibindMeta {
     /// Parse `backends(py, ts)`: which enabled backends an export renders.
     fn apply_backends(&mut self, entry: &syn::Meta, span: Span) -> Result<()> {
         let syn::Meta::List(list) = entry else {
-            return Err(LowerError::new(span, "`backends` takes a list: backends(py, ts)"));
+            return Err(LowerError::new(span, "`backends` takes a list: backends(py, swift, ts)"));
         };
         let parser = syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated;
         let entries = syn::parse::Parser::parse2(parser, list.tokens.clone())
@@ -239,10 +239,15 @@ impl UnibindMeta {
         for path in &entries {
             let backend = if path.is_ident("py") {
                 Backend::Py
+            } else if path.is_ident("swift") {
+                Backend::Swift
             } else if path.is_ident("ts") {
                 Backend::Ts
             } else {
-                return Err(LowerError::new(path.span(), "unknown backend; expected `py` or `ts`"));
+                return Err(LowerError::new(
+                    path.span(),
+                    "unknown backend; expected `py`, `swift`, or `ts`",
+                ));
             };
             if backends.contains(&backend) {
                 return Err(LowerError::new(path.span(), "duplicate backend"));

@@ -3,7 +3,7 @@ name = "unibind-gen"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
-description = "Render host-language files (.pyi stubs, py.typed, wrapper modules) from the unibind IR embedded in a compiled artifact"
+description = "Render host-language files (.pyi stubs, .d.ts, Swift sources, wrapper modules) from the unibind IR embedded in a compiled artifact"
 
 [lib]
 name = "unibind_gen"
@@ -20,5 +20,9 @@ workspace = true
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }
 object.workspace = true
+proc-macro2.workspace = true
 serde_json.workspace = true
+swift-bridge-build.workspace = true
+tempfile.workspace = true
+unibind-backend-swift.workspace = true
 unibind-core.workspace = true

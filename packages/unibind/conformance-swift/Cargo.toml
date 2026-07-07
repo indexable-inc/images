@@ -1,0 +1,18 @@
+[package]
+name = "unibind-conformance-swift"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Conformance surface for the unibind swift backend: echo functions for every boundary type, record round-trips, and thrown errors, exercised by the committed Swift runner"
+
+[lib]
+# The Swift runner links the boundary statically; unibind-gen reads the IR
+# straight out of the archive's members.
+crate-type = ["staticlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+swift-bridge.workspace = true
+unibind = { workspace = true, features = ["swift"] }

@@ -9,6 +9,7 @@ use unibind_core::ir;
 use unibind_gen::artifact::parse_ir_bytes;
 use unibind_gen::host::HostEmitter as _;
 use unibind_gen::py::PyEmitter;
+use unibind_gen::swift::SwiftEmitter;
 
 fn names(py: Option<&str>) -> ir::Names {
     ir::Names {
@@ -278,4 +279,71 @@ fn parse_rejects_a_newer_ir_version() {
         message.contains(&format!("version {}", ir::IR_VERSION)),
         "missing supported version: {message}"
     );
+}
+
+/// The fixture without the async/stream surface the swift backend rejects.
+fn sync_interface() -> ir::Interface {
+    let mut sketch = interface();
+    sketch.functions.retain(|function| {
+        matches!(function.asyncness, ir::Asyncness::Sync)
+            && !matches!(function.ret, Some(ir::Type::Stream(_)))
+    });
+    sketch.objects.clear();
+    sketch
+}
+
+/// The Swift emitter runs swift-bridge-build over the re-rendered bridge
+/// module, so this asserts the file set and a few load-bearing lines rather
+/// than snapshotting upstream's codegen text (the overlay itself is
+/// snapshotted in unibind-backend-swift).
+#[test]
+fn swift_host_files() {
+    let emitter = SwiftEmitter {
+        package: "sample".to_owned(),
+    };
+    let files = emitter.emit(&sync_interface()).expect("emits");
+    let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        [
+            "sample/sample.swift",
+            "sample/Bindings.swift",
+            "sample/SwiftBridgeCore.swift",
+            "sample/include/sample.h",
+            "sample/include/SwiftBridgeCore.h",
+            "sample/include/bridging-header.h",
+        ]
+    );
+    let by_path = |path: &str| {
+        files
+            .iter()
+            .find(|file| file.path == path)
+            .unwrap_or_else(|| panic!("no emitted file at {path}"))
+    };
+    let low_level = &by_path("sample/sample.swift").contents;
+    assert!(
+        low_level.contains("__swift_bridge__$__unibind_fn_rows"),
+        "low-level Swift misses the rows wrapper: {low_level}"
+    );
+    let overlay = &by_path("sample/Bindings.swift").contents;
+    assert!(
+        overlay.contains("public func rows("),
+        "overlay misses the ergonomic rows function: {overlay}"
+    );
+    assert!(
+        by_path("sample/include/bridging-header.h")
+            .contents
+            .contains("#include \"sample.h\"")
+    );
+}
+
+/// The async/stream surface points at the swift follow-up instead of
+/// emitting broken bindings.
+#[test]
+fn swift_rejects_the_async_surface() {
+    let emitter = SwiftEmitter {
+        package: "sample".to_owned(),
+    };
+    let error = emitter.emit(&interface()).expect_err("async must not emit");
+    assert!(error.message.contains("issue #"), "{}", error.message);
 }

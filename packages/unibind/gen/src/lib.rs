@@ -12,4 +12,5 @@
 pub mod artifact;
 pub mod host;
 pub mod py;
+pub mod swift;
 pub mod ts;

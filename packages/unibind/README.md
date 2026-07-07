@@ -251,6 +251,40 @@ backend still rejects) and runs as
 | 4     | #1994 | Rust client backend over a stable ABI |
 | 5     | #1995 | Elixir backend (rustler, generated `.ex`, `@spec`) |
 | 6     | #1996 | adopt for ix-sdk, delete sdk-py and sdk-ts |
+| 7     | #2082 | Swift backend (swift-bridge): sync surface, generated Swift package, conformance runner |
+
+## Phase 7: Swift (sync surface)
+
+`backend-swift` renders the same IR through
+[swift-bridge](https://github.com/chinedufn/swift-bridge), the incumbent
+Rust-Swift bridge: the macro's `swift` feature expands a genuine
+`#[swift_bridge::bridge]` module (so the FFI symbols match swift-bridge's
+Swift output by construction), and `unibind-gen swift` re-renders that same
+bridge module from the IR embedded in the built staticlib, runs
+swift-bridge-build over it, and emits the Swift sources: the low-level
+generated Swift + C headers, `SwiftBridgeCore` support files, and an
+ergonomic `Bindings.swift` overlay with records as Swift structs, errors as
+thrown Swift enums (variant + `Display` message), lowerCamelCase functions,
+default arguments, and `///` documentation comments.
+
+swift-bridge's type grammar cannot spell maps, vectors of non-primitives,
+options of composites, or field types like those inside shared structs, so
+records and such containers cross as opaque handles with index accessors
+(field-by-field constructors, `push`/`get`/`insert`/`key_at` methods); the
+overlay converts to native `[T]`, `[K: V]`, and `T?` on the Swift side, and
+returned maps iterate sorted by key. Paths cross as UTF-8 text
+(`to_string_lossy`).
+
+`unibind.lib.build { crate; targets.swift = { package; swiftSource; }; }`
+generates the Swift package from the staticlib and, given hand-written
+sources, compiles and runs them with nixpkgs `swift`.
+`packages/unibind/conformance-swift` is the proving consumer: a staticlib
+exporting echo functions for every boundary type plus record round-trips and
+thrown errors, with a committed `swift/main.swift` runner that asserts each
+case and prints one `PASS <case>` line each --
+`nix build .#checks.aarch64-darwin.unibind-conformance-swift-conformance`
+(darwin-only; nixpkgs substitutes Swift 5.10 there). Async, streams,
+cancellation, and resource cases follow the phase 2 IR (#1992).
 
 ## Phase 0 in the tree
 

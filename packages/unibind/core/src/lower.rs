@@ -40,6 +40,9 @@ pub type Result<T> = std::result::Result<T, LowerError>;
 pub enum Backend {
     /// The pyo3 backend (`unibind-backend-py`, cargo feature `py`).
     Py,
+    /// The swift-bridge backend (`unibind-backend-swift`, cargo feature
+    /// `swift`).
+    Swift,
     /// The napi-rs backend (`unibind-backend-ts`, cargo feature `ts`).
     Ts,
 }

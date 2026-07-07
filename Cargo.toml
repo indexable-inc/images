@@ -94,8 +94,10 @@ members = [
   "packages/tui/tui-node",
   "packages/tui/tui-py",
   "packages/unibind/backend-py",
+  "packages/unibind/backend-swift",
   "packages/unibind/backend-ts",
   "packages/unibind/conformance",
+  "packages/unibind/conformance-swift",
   "packages/unibind/conformance-ts",
   "packages/unibind/core",
   "packages/unibind/gen",
@@ -297,6 +299,13 @@ sink-parquet = { path = "packages/search/sink/parquet" }
 snafu = "0.9"
 strip-ansi-escapes = "0.2"
 syn = { version = "2", features = ["full"] }
+# The incumbent Rust-Swift bridge, rendered to by unibind's swift backend
+# (packages/unibind/backend-swift): the runtime + macro pair for consuming
+# crates, the build crate unibind-gen runs to derive the Swift sources, and
+# the ir crate backend-swift's probe test parses bridge modules with.
+swift-bridge = "0.1.59"
+swift-bridge-build = "0.1.59"
+swift-bridge-ir = "0.1.59"
 tango-bench = "0.7"
 tantivy = "0.26"
 tao = "0.35"
@@ -351,6 +360,7 @@ tree-sitter-yaml = "0.7"
 tui = { path = "packages/tui/tui" }
 unibind = { path = "packages/unibind/macros" }
 unibind-backend-py = { path = "packages/unibind/backend-py" }
+unibind-backend-swift = { path = "packages/unibind/backend-swift" }
 unibind-backend-ts = { path = "packages/unibind/backend-ts" }
 unibind-core = { path = "packages/unibind/core" }
 unibind-runtime = { path = "packages/unibind/runtime" }

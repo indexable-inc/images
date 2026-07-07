@@ -1,0 +1,24 @@
+[package]
+name = "unibind-backend-swift"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Render the unibind IR into swift-bridge binding code: a bridge module, opaque record handles, thrown error enums, and the ergonomic Swift overlay"
+
+[lints]
+workspace = true
+
+[dependencies]
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+unibind-core.workspace = true
+
+[dev-dependencies]
+prettyplease.workspace = true
+# The probe test parses the rendered bridge module with swift-bridge's own
+# parser and forces its Rust codegen, so an IR construct swift-bridge cannot
+# express fails here instead of in a consuming crate's macro expansion.
+# swift-bridge-ir is on syn 1, so the test names that parser explicitly.
+swift-bridge-ir.workspace = true
+syn1 = { package = "syn", version = "1" }

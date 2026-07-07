@@ -1409,6 +1409,16 @@
     // nonNixExampleDescriptions
     // crossPackages
     // healthChecks.lifecyclePackages;
+  # The unibind swift conformance runner (packages/unibind/conformance-swift):
+  # compiled by nixpkgs `swift` against the staticlib from the shared
+  # workspace graph, then run. Darwin-gated the same way as the registry's
+  # `packageSet.systems` for the crate: nixpkgs only substitutes a Swift
+  # toolchain for darwin, and the passthruTests catalog is
+  # x86_64-linux-only, so this merges next to `forkChecks` instead.
+  unibindSwiftChecks = lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
+    unibind-conformance-swift-conformance =
+      repoPackages.unibind-conformance-swift.passthru.tests.conformance;
+  };
 in {
   packages = packageSet;
 
@@ -1488,7 +1498,7 @@ in {
   # rest of `catalogFor`): the patched sources are cheap, platform-relevant
   # derivations, so `nix build .#checks.aarch64-darwin.patched-src-clippy`
   # validates the series against a local Darwin build right after a flake update.
-  checks = catalogFor rustPackageTestSets.flat // forkChecks;
+  checks = catalogFor rustPackageTestSets.flat // forkChecks // unibindSwiftChecks;
   # Closure build gates, keyed `<fork>.<patch>` (see the binding above). A
   # non-schema output like `ciChecks`, exposed per system so a darwin host can
   # gate-build natively before an upstream PR.
@@ -1500,7 +1510,7 @@ in {
   # (ENG-2201). Not a `checks.<system>.<name>` output, because a non-derivation
   # there fails the flake schema. The patched-src checks are plain derivations,
   # so they key identically in both views.
-  ciChecks = catalogFor rustPackageTestSets.sharded // forkChecks;
+  ciChecks = catalogFor rustPackageTestSets.sharded // forkChecks // unibindSwiftChecks;
 
   formatter = pkgs.alejandra;
 

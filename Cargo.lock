@@ -10632,6 +10632,51 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b7401a30af6cb5818bb64852270bb722533397edcfc7344954a38f420819ece2"
 
 [[package]]
+name = "swift-bridge"
+version = "0.1.59"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "384ed39ea10f1cefabb197b7d8e67f0034b15a94ccbb1038b8e020da59bfb0be"
+dependencies = [
+ "swift-bridge-build",
+ "swift-bridge-macro",
+]
+
+[[package]]
+name = "swift-bridge-build"
+version = "0.1.59"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71b36df21e7f8a8b5eeb718d2e71f9cfc308477bfb705981cca705de9767dcb7"
+dependencies = [
+ "proc-macro2",
+ "swift-bridge-ir",
+ "syn 1.0.109",
+ "tempfile",
+]
+
+[[package]]
+name = "swift-bridge-ir"
+version = "0.1.59"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c73bd16155df50708b92306945656e57d62d321290a7db490f299f709fb31c83"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
+name = "swift-bridge-macro"
+version = "0.1.59"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1a13dc0dc875d85341dec5b5344a7d713f20eb5650b71086b27d09a6ece272f"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "swift-bridge-ir",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "symlink"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12140,6 +12185,7 @@ dependencies = [
  "quote",
  "syn 2.0.118",
  "unibind-backend-py",
+ "unibind-backend-swift",
  "unibind-backend-ts",
  "unibind-core",
 ]
@@ -12152,6 +12198,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde_json",
+ "syn 2.0.118",
+ "unibind-core",
+]
+
+[[package]]
+name = "unibind-backend-swift"
+version = "0.1.0"
+dependencies = [
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "swift-bridge-ir",
+ "syn 1.0.109",
  "syn 2.0.118",
  "unibind-core",
 ]
@@ -12177,6 +12236,14 @@ dependencies = [
  "tokio",
  "unibind",
  "unibind-runtime",
+]
+
+[[package]]
+name = "unibind-conformance-swift"
+version = "0.1.0"
+dependencies = [
+ "swift-bridge",
+ "unibind",
 ]
 
 [[package]]
@@ -12210,7 +12277,11 @@ dependencies = [
  "anyhow",
  "clap",
  "object",
+ "proc-macro2",
  "serde_json",
+ "swift-bridge-build",
+ "tempfile",
+ "unibind-backend-swift",
  "unibind-core",
 ]
 

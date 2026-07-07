@@ -4,8 +4,8 @@
 //! together with the `#[unibind::record]` and `#[unibind::error]` items,
 //! into one language-agnostic interface (see `unibind-core`), embeds the
 //! serialized interface in the built artifact, and renders binding code for
-//! every backend enabled by cargo features (`py` renders `pyo3`, `ts`
-//! renders `napi-rs`).
+//! every backend enabled by cargo features (`py` renders `pyo3`, `swift`
+//! renders `swift-bridge`, `ts` renders `napi-rs`).
 //!
 //! ```ignore
 //! #[unibind::export]
@@ -42,7 +42,7 @@ use proc_macro::TokenStream;
 /// Every `pub fn` in the module is exported; private items pass through
 /// untouched. The attribute accepts `py(name = "...")` to rename the Python
 /// module (it defaults to the Rust module name, which also names the
-/// `PyInit_` symbol of the built extension), and `backends(py, ts)` to pin
+/// `PyInit_` symbol of the built extension), and `backends(py, swift, ts)` to pin
 /// which backends render glue. Without `backends(...)` every
 /// feature-enabled backend renders; a whole-workspace cargo build unifies
 /// features across every unibind consumer, so a crate in a workspace that

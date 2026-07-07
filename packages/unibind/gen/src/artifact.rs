@@ -24,35 +24,72 @@ const SECTION_ELF: &str = ".unibind_ir";
 /// sections by that 16-byte section name alone, without the segment.
 const SECTION_MACH_O: &str = "__unibind_ir";
 
-/// Read and parse the unibind IR section of the artifact at `path`.
+/// Read and parse the unibind IR section of the artifact at `path`: an
+/// object file, a cdylib, or a `staticlib` archive (the section is read out
+/// of every archive member that carries one).
 ///
 /// # Errors
 ///
-/// Fails when the file cannot be read or parsed as an object file, when no
-/// IR section is present, and when the embedded payload does not deserialize
-/// to interfaces of the supported [`IR_VERSION`].
+/// Fails when the file cannot be read or parsed as an object file or
+/// archive, when no IR section is present, and when the embedded payload
+/// does not deserialize to interfaces of the supported [`IR_VERSION`].
 pub fn read(path: &Path) -> anyhow::Result<EmbeddedInterfaces> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    let file = object::File::parse(&*bytes)
-        .with_context(|| format!("parsing {} as an object file", path.display()))?;
-
-    let section = file
-        .sections()
-        .find(|section| matches!(section.name(), Ok(SECTION_ELF | SECTION_MACH_O)));
-    let Some(section) = section else {
+    let interfaces = if bytes.starts_with(ARCHIVE_MAGIC) {
+        archive_interfaces(&bytes, path)?
+    } else {
+        let file = object::File::parse(&*bytes)
+            .with_context(|| format!("parsing {} as an object file", path.display()))?;
+        object_interfaces(&file, path)?
+    };
+    if interfaces.is_empty() {
         bail!(
             "no unibind IR section ({SECTION_ELF} / __DATA,{SECTION_MACH_O}) in {}; \
              was the crate built with #[unibind::export]?",
             path.display()
         );
-    };
+    }
+    Ok(EmbeddedInterfaces { interfaces })
+}
 
+/// The `ar` header every archive starts with; a `staticlib` artifact is one
+/// of these with one member per codegen unit (plus symbol tables).
+const ARCHIVE_MAGIC: &[u8] = b"!<arch>\n";
+
+/// The interfaces of every archive member that parses as an object file and
+/// carries the IR section. Members that are not objects (symbol tables like
+/// darwin's `__.SYMDEF`) are skipped.
+fn archive_interfaces(bytes: &[u8], path: &Path) -> anyhow::Result<Vec<Interface>> {
+    let archive = object::read::archive::ArchiveFile::parse(bytes)
+        .with_context(|| format!("parsing {} as an archive", path.display()))?;
+    let mut interfaces = Vec::new();
+    for member in archive.members() {
+        let member = member.with_context(|| format!("reading a member of {}", path.display()))?;
+        let data = member
+            .data(bytes)
+            .with_context(|| format!("reading a member of {}", path.display()))?;
+        let Ok(file) = object::File::parse(data) else {
+            continue;
+        };
+        interfaces.extend(object_interfaces(&file, path)?);
+    }
+    Ok(interfaces)
+}
+
+/// The interfaces embedded in one parsed object, empty when the object has
+/// no IR section.
+fn object_interfaces(file: &object::File<'_>, path: &Path) -> anyhow::Result<Vec<Interface>> {
+    let section = file
+        .sections()
+        .find(|section| matches!(section.name(), Ok(SECTION_ELF | SECTION_MACH_O)));
+    let Some(section) = section else {
+        return Ok(Vec::new());
+    };
     let data = section
         .data()
         .with_context(|| format!("reading the unibind IR section of {}", path.display()))?;
-    let interfaces = parse_ir_bytes(data)
-        .with_context(|| format!("parsing the unibind IR embedded in {}", path.display()))?;
-    Ok(EmbeddedInterfaces { interfaces })
+    parse_ir_bytes(data)
+        .with_context(|| format!("parsing the unibind IR embedded in {}", path.display()))
 }
 
 /// Parse raw section bytes: one JSON [`Interface`] per `#[used]` static, with
