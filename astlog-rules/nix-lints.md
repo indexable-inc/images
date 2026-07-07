@@ -2,7 +2,7 @@
 
 Complete reference for every house-style lint ASTLog enforces on Nix source in this
 repo. Generated from [`astlog-rules/nix.astlog`](./nix.astlog), the single source of
-truth. **94 lints total: 90 `error`, 4 `warning`.**
+truth. **99 lints total: 95 `error`, 4 `warning`.**
 
 ## How it works
 
@@ -1298,6 +1298,46 @@ xs: xs ++ [ ]
 
 ```nix
 xs: ys: xs ++ ys
+```
+
+</td></tr></table>
+
+### no-escapeshellargs-for-loop
+
+**🔴 error**
+
+`for <var> in ${lib.escapeShellArgs xs}` in a nix-rendered bash string iterates a
+nix-computed word list. When the list dedups/filters to a single element the loop
+renders as `for v in one-word`, which shellcheck flags SC2043 ("loop only runs
+once") and `writeBashApplication` treats as a fatal build error. Because the
+toplevel is only built by the deploy job, never PR CI, a single-element render
+turns `main` red after merge (ix#6688). Materialize the list into a bash array and
+iterate it: `xs=(${lib.escapeShellArgs xs}); for v in "${xs[@]}"` renders zero,
+one, or many elements uniformly and never trips SC2043.
+
+*Matches:* `string_expression` / `indented_string_expression` · *predicates:* `text-match` · *2 pattern variants*
+
+<table><tr><th>flagged</th><th>ok</th></tr><tr><td>
+
+```nix
+{ lib, names }:
+''
+  for name in ${lib.escapeShellArgs names}; do
+    echo "$name"
+  done
+''
+```
+
+</td><td>
+
+```nix
+{ lib, names }:
+''
+  script_names=(${lib.escapeShellArgs names})
+  for name in "${script_names[@]}"; do
+    echo "$name"
+  done
+''
 ```
 
 </td></tr></table>
