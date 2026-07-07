@@ -81,12 +81,18 @@ claude_sessions="$(
   done | jq -s '.'
 )"
 
-# Codex sessions active in the last 12h (rollout transcripts).
+# Codex sessions active in the last 12h (rollout transcripts). jq builds
+# the JSON (never hand-printf a serialized form: an awk-printf here fed
+# jq raw control bytes under the launchd locale and failed every tick).
 codex_sessions="$(
   find "$HOME/.codex/sessions" -name '*.jsonl' -mmin -720 -print0 2>/dev/null |
   perl -0ne 'my @s = stat($_); print "$s[9] $_\n" if @s' | sort -rn | awk 'NR <= 10' |
-  awk -v now="$(date +%s)" '{printf "{\"last_active\": %d, \"age_min\": %d, \"path\": \"%s\"}\n", $1, (now - $1) / 60, $2}' |
-  jq -s '[.[] | .last_active |= todate]'
+  while read -r mtime f; do
+    jq -cn --arg m "$mtime" --arg p "$f" --arg now "$(date +%s)" \
+      '{last_active: ($m | tonumber | todate),
+        age_min: ((($now | tonumber) - ($m | tonumber)) / 60 | floor),
+        path: $p}'
+  done | jq -s '.'
 )"
 
 # Symphony runs from the local runtime. An unreachable API is itself a
