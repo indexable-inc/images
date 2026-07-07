@@ -19,20 +19,6 @@
   # needs (re)building. nix-eval-jobs#403 / nix#12128 fixed the *status*; this
   # fixes what --skip-cached does with it.
   package = pkgs.nix-fast-build.overrideAttrs (old: {
-    # Forward-pin to upstream 1.6.0 while the repo's nixpkgs pin still carries
-    # 1.5.0: the check gate passes --fail-fast, which landed upstream in 1.6.0
-    # (Mic92/nix-fast-build#343), and skip-local.patch below targets the 1.6.0
-    # module layout (workers.py; 1.5.0 was a single __init__.py). tag + hash
-    # copied from nixpkgs-unstable f205b557 pkgs/by-name/ni/nix-fast-build.
-    # Delete this version/src override (keep the patch) once the nixpkgs pin
-    # reaches nix-fast-build >= 1.6.0.
-    version = "1.6.0";
-    src = pkgs.fetchFromGitHub {
-      owner = "Mic92";
-      repo = "nix-fast-build";
-      tag = "1.6.0";
-      hash = "sha256-PMBbenLBvn/0pSFOhwPVn171Vw7kU5YmBUNDhxllZ7c=";
-    };
     patches = (old.patches or []) ++ [./skip-local.patch];
   });
 
