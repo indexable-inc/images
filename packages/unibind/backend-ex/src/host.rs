@@ -36,7 +36,7 @@ pub fn host_modules(
 ) -> Result<HostModules, RenderError> {
     // One validator for both sides: whatever the glue renderer rejects, the
     // host modules must not paper over.
-    crate::module::render(interface)?;
+    crate::module::render(interface, None)?;
     Ok(HostModules {
         app: names::ns_snake(interface),
         native: native::render(interface, nif_soname),

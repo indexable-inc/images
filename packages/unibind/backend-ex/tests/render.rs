@@ -45,7 +45,7 @@ fn ir_json_snapshot() {
 #[test]
 fn rustler_glue_snapshot() {
     let interface = interface();
-    let rendered = unibind_backend_ex::render(&interface).expect("renders");
+    let rendered = unibind_backend_ex::render(&interface, Some("sample")).expect("renders");
 
     let mut shown = String::new();
     for (record, attrs) in interface.records.iter().zip(&rendered.records) {
@@ -83,7 +83,7 @@ fn async_stream_functions_are_rejected() {
         "mod m { pub async fn feed() -> UniStream<u64> { \
          unimplemented!() } }",
     );
-    let Err(error) = unibind_backend_ex::render(&interface) else {
+    let Err(error) = unibind_backend_ex::render(&interface, None) else {
         panic!("async streams are rejected");
     };
     assert!(
@@ -96,7 +96,7 @@ fn async_stream_functions_are_rejected() {
 #[test]
 fn binary_payloads_are_rejected() {
     let interface = lower("mod m { pub fn write(data: &[u8]) {} }");
-    let Err(error) = unibind_backend_ex::render(&interface) else {
+    let Err(error) = unibind_backend_ex::render(&interface, None) else {
         panic!("bytes are rejected");
     };
     assert!(
@@ -112,7 +112,7 @@ fn field_ex_renames_are_rejected() {
         "mod m { #[unibind::record] #[derive(Clone)] pub struct R { \
          #[unibind(ex(name = \"tag\"))] pub name: String } }",
     );
-    let Err(error) = unibind_backend_ex::render(&interface) else {
+    let Err(error) = unibind_backend_ex::render(&interface, None) else {
         panic!("field renames are rejected");
     };
     assert!(

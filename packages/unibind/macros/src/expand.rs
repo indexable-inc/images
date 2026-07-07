@@ -107,7 +107,14 @@ fn backends(
     }
     #[cfg(feature = "ex")]
     if selected(selection, "ex") {
-        let rendered = unibind_backend_ex::render(interface).map_err(|error| LowerError {
+        // The consuming crate's name, for the plain `nif_init` alias; set
+        // by every cargo-compatible driver, as rustler's own macro assumes.
+        let crate_name = std::env::var("CARGO_CRATE_NAME").map_err(|_| LowerError {
+            span: proc_macro2::Span::call_site(),
+            message: "the ex backend needs CARGO_CRATE_NAME during expansion".to_owned(),
+        })?;
+        let rendered =
+            unibind_backend_ex::render(interface, Some(&crate_name)).map_err(|error| LowerError {
             span: proc_macro2::Span::call_site(),
             message: error.message,
         })?;
