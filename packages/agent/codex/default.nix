@@ -189,9 +189,25 @@
     # path, so no IFD), not the patched src: no patch touches Cargo.lock
     # today, and if one ever does, cargoSetupPostPatchHook's lock-consistency
     # check fails the build loudly rather than vendoring the wrong set.
+    #
+    # Git dependencies pinned in codex's Cargo.lock, keyed by "<name>-<version>"
+    # (rustPlatform.importCargoLock resolves the key to a locked commit SHA
+    # internally, so any one name-version sharing a SHA is enough; the
+    # rust-sdks monorepo contributes 4 crates from the same commit here).
+    # Refresh after a codex-src bump by rebuilding and copying the corrected
+    # hashes from the fetchgit mismatch errors; NOT allowBuiltinFetchGit,
+    # which would let builtins.fetchGit run at evaluation time (index#2255).
     cargoDeps = rustPlatform.importCargoLock {
       lockFile = ix.codexSrc + "/codex-rs/Cargo.lock";
-      allowBuiltinFetchGit = true;
+      outputHashes = {
+        "runfiles-0.1.0" = "sha256-uJpVLcQh8wWZA3GPv9D8Nt43EOirajfDJ7eq/FB+tek=";
+        "nucleo-0.5.0" = "sha256-Hm4SxtTSBrcWpXrtSqeO0TACbUxq3gizg1zD/6Yw/sI=";
+        "webrtc-sys-0.3.24" = "sha256-0HPuwaGcqpuG+Pp6z79bCuDu/DyE858VZSYr3DKZD9o=";
+        "crossterm-0.28.1" = "sha256-6qCtfSMuXACKFb9ATID39XyFDIEMFDmbx6SSmNe+728=";
+        "ratatui-0.29.0" = "sha256-HBvT5c8GsiCxMffNjJGLmHnvG77A6cqEL+1ARurBXho=";
+        "tokio-tungstenite-0.28.0" = "sha256-V1xmnrfRWOcZZogelZEA4vvyMj2awCfHVA5/glQ6KAI=";
+        "tungstenite-0.27.0" = "sha256-VVHhk7l9J/sEmG3q/UuV/sQ3f+fGsmq5vumSy8vbMvw=";
+      };
     };
     postPatch = ''
       # shell
