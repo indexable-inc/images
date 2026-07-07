@@ -75,9 +75,15 @@ mod _mylib {
   names the receiver-less constructor. `object(resource)` adds
   deterministic cleanup: a generated `close()`, `async with` support, and
   a `ResourceWarning` when the handle is dropped unclosed.
-- `#[unibind(py(name = "..."))]` renames a module, function, argument, field,
-  or error variant for Python. `#[unibind(default = ...)]` gives an argument
-  a default; `Option` arguments default to `None` automatically.
+- `#[unibind(py(name = "..."))]` and `#[unibind(ts(name = "..."))]` rename a
+  module, function, argument, field, or error variant per language.
+  `#[unibind(default = ...)]` gives an argument a default; `Option` arguments
+  default to `None` automatically.
+- `#[unibind::export(backends(py))]` pins which backends render glue. Without
+  it every feature-enabled backend renders, but a whole-workspace cargo build
+  unifies unibind's features across every consumer, so a crate in a workspace
+  that mixes backend features names its own (the ones whose runtime deps it
+  declares).
 
 ## Pipeline
 
@@ -96,17 +102,21 @@ glue are phase 1 (#1991), `.d.ts` and Elixir specs come with their backends.
 
 Phase 1 ships that out-of-process half. `unibind-gen` (the `gen` crate) reads
 the section back and renders host files through a small
-`HostFile`/`HostEmitter` seam -- Python today (`<module>.pyi`, `py.typed`,
-and a wrapper `__init__.py` unless the package hands one in); the `.d.ts`
-(#1993) and `.ex` (#1995) emitters implement the same seam. On the nix side,
-`unibind.lib.build { crate; targets.py = { package; ... }; }`
-(`ix.unibind` / `index.lib.unibind`, packages/unibind/nix) glues it in: the
-cdylib comes from the shared workspace graph, the registry's
-`pyExtension = true` marker injects the darwin `-undefined dynamic_lookup`
-link args (replacing per-crate build.rs), and the outputs are the merged
-python site tree, a zuban/ruff strict gate, the mcp-style importable module,
-and the Linux wheel. `packages/code/scipql/py` is the proving consumer: its
-hand-written `_scipql.pyi` and `py.typed` are deleted and generated instead.
+`HostFile`/`HostEmitter` seam -- Python (`<module>.pyi`, `py.typed`, and a
+wrapper `__init__.py` unless the package hands one in) and TypeScript
+(`index.d.ts` plus the CommonJS `index.js` wrapper, `unibind-gen ts`); the
+`.ex` (#1995) emitter implements the same seam. On the nix side,
+`unibind.lib.build { crate; targets; }` (`ix.unibind` / `index.lib.unibind`,
+packages/unibind/nix) glues it in. For `py`: the cdylib comes from the shared
+workspace graph, the registry's `pyExtension = true` marker injects the
+darwin `-undefined dynamic_lookup` link args (replacing per-crate build.rs),
+and the outputs are the merged python site tree, a zuban/ruff strict gate,
+the mcp-style importable module, and the Linux wheel;
+`packages/code/scipql/py` is the proving consumer. For `ts`: the output is
+the tui-node-shaped npm package (sanitized `native/<crate>.node` + generated
+`index.js`/`index.d.ts` + a `cpu`/`libc`-stamped package.json, Linux-only);
+`packages/unibind/conformance-ts` is the proving consumer, gated by a Node
+end-to-end check.
 
 Crates:
 
@@ -115,10 +125,15 @@ Crates:
   embed. Phase 2 turned on async, streams, and
   objects; plain (non-error) enums still wait for their phase.
 - `gen`: the `unibind-gen` binary. Reads the embedded IR out of a compiled
-  artifact and emits the host-language files above; run at build time by
-  `unibind.lib.build`, never at macro time.
-- `macros`: the `unibind` proc-macro crate. Parse once to IR, dispatch to the
-  backends the consuming crate enabled through features (`py` today).
+  artifact and emits the host-language files above (`py` and `ts`
+  subcommands); run at build time by `unibind.lib.build`, never at macro
+  time.
+- `macros`: the `unibind` proc-macro crate. Parse once to IR, dispatch to
+  the backends the consuming crate enabled through features (`py`, `ts`).
+  `#[unibind::export(backends(...))]` pins which enabled backends render: a
+  whole-workspace cargo build unifies unibind's features across every
+  consumer, so a crate in a workspace that mixes backend features names the
+  backends whose runtime deps it declares.
 - `backend-py`: renders the IR into pyo3 0.28 (abi3-py311) code:
   `#[pyfunction]` wrappers with `#[pyo3(signature = ...)]` defaults,
   `#[pyclass]` records, `create_exception!` hierarchies plus a
@@ -126,22 +141,38 @@ Crates:
   registers everything and sets `__version__`. Doc comments become
   docstrings. The consuming crate depends on `pyo3` directly with
   `extension-module`.
+- `backend-ts`: renders the IR into napi-rs 3 code: `#[napi]` wrappers
+  (async ones take a trailing optional `AbortSignal` whose abort drops the
+  Rust future via `tokio::select!`), `#[napi(object)]` records, error enums
+  as `napi::Error` reasons under the machine-decodable
+  `__unibind__:err:<Enum>:<Variant>:<message>` prefix, pull-stream handle
+  classes (`next`/`close`), and object classes with napi constructors and an
+  idempotent resource `close()` plus an unclosed-leak warning on drop. The
+  consuming crate depends on `napi` (`napi6` + `tokio_rt`), `napi-derive`,
+  `tokio` (`sync` + `macros`), and `unibind-runtime`, and builds a cdylib
+  with `napi_build::setup()`. `blocking` renders as a plain sync export
+  (there is no GIL to release). BigInt-only integers (u64, usize, isize) and
+  integer-keyed maps reject at render time until BigInt lands.
 
 ## Type mapping (phase 0)
 
-| Rust                  | IR              | Python        |
-| --------------------- | --------------- | ------------- |
-| `bool`                | `Bool`          | `bool`        |
-| `i8..i64`, `u8..u64`, `isize`, `usize` | `Int` | `int` |
-| `f32`, `f64`          | `Float`         | `float`       |
-| `String` / `&str`     | `String`        | `str`         |
-| `PathBuf` / `&Path`   | `Path`          | accepts `str \| os.PathLike`, returns `str` |
-| `Vec<u8>` / `&[u8]`   | `Bytes`         | `bytes`       |
-| `Option<T>`           | `Option`        | `T \| None`   |
-| `Vec<T>`              | `Vec`           | `list[T]`     |
-| `HashMap<K, V>`       | `Map`           | `dict[K, V]`  |
-| `#[unibind::record]`  | `Named`         | native class  |
-| `Result<T, E>`        | `ret` + `throws`| `T`, raises `E`'s hierarchy |
+| Rust                  | IR              | Python        | TypeScript |
+| --------------------- | --------------- | ------------- | ---------- |
+| `bool`                | `Bool`          | `bool`        | `boolean`  |
+| `i8..i64`, `u8..u32`  | `Int`           | `int`         | `number`   |
+| `u64`, `usize`, `isize` | `Int`         | `int`         | rejected until BigInt lands (follow-up of #1993) |
+| `f32`, `f64`          | `Float`         | `float`       | `number`   |
+| `String` / `&str`     | `String`        | `str`         | `string`   |
+| `PathBuf` / `&Path`   | `Path`          | accepts `str \| os.PathLike`, returns `str` | `string` |
+| `Vec<u8>` / `&[u8]`   | `Bytes`         | `bytes`       | `Buffer` at the boundary; `number[]` inside records and containers |
+| `Option<T>`           | `Option`        | `T \| None`   | `T \| null` (omission accepted) |
+| `Vec<T>`              | `Vec`           | `list[T]`     | `Array<T>` |
+| `HashMap<K, V>`       | `Map`           | `dict[K, V]`  | `Record<string, V>` (string keys only) |
+| `#[unibind::record]`  | `Named`         | native class  | plain object via `napi(object)` |
+| `#[unibind::object]`  | `Named` (return only) | wrapped handle class | wrapped handle class, `await using` on resources |
+| `UniStream<T>` return | `Stream`        | async iterator | `UnibindStream<T>` (`AsyncIterable<T>` + `next`/`close`) |
+| `async fn`            | `Asyncness::Async` | asyncio coroutine | `Promise<T>`, trailing optional `AbortSignal` |
+| `Result<T, E>`        | `ret` + `throws`| `T`, raises `E`'s hierarchy | `T`, rejects with a decodable `__unibind__:err:` reason |
 
 Borrowed forms (`&str`, `&Path`, `&[u8]`, including under `Option`) are
 argument-only; returns and record fields own their data.
@@ -167,6 +198,34 @@ rules (argument vs return position included) from the untouched IR.
   `unibind-runtime` with the `py` feature next to its `unibind` dependency;
   sync-only crates (scipql-py) do not need it.
 
+## The TypeScript surface
+
+`unibind-gen ts --artifact <cdylib-or-.node> --addon <basename> --out <dir>`
+emits the two host files next to the addon (`./native/<basename>.node`):
+
+- `index.d.ts`: TSDoc from the IR's doc comments on every export; defaulted
+  and `Option` arguments are optional; async exports take a trailing
+  `signal?: AbortSignal` and return `Promise<T>`; stream returns are
+  `UnibindStream<T>` (`AsyncIterable<T>` + `next()`/`close()`); objects are
+  classes with real constructors (when declared) and, for resources,
+  `close()` plus `[Symbol.asyncDispose]()`.
+- `index.js` (CommonJS): decodes the glue's `__unibind__:` rejection reasons
+  into real classes -- one `Error` subclass per error enum (each variant a
+  subclass, `code` = the variant class name) and `__unibind__:aborted` into
+  an `AbortError`-named `DOMException`. Stream handles become
+  `AsyncIterable`s whose early exit (`break`) closes the Rust producer;
+  object handles become classes whose `close()` is idempotent and whose
+  `await using` disposal closes the resource. Exports are assigned one
+  property at a time so cjs-module-lexer sees named exports from ESM.
+
+Aborting a signal drops the Rust future (`tokio::select!` in the glue);
+`close()`/disposal runs the resource's own Rust close exactly once, and
+GC finalization drops the wrapped value (its `Drop` runs) with a leak
+warning on stderr when a resource was never closed.
+`packages/unibind/conformance-ts/tests/node/conformance.test.mjs` proves all
+of it against the built addon, including backpressure through the pull
+stream's bounded channel.
+
 ## Conformance suite
 
 `packages/unibind/conformance` is the runtime proof for everything above:
@@ -175,7 +234,11 @@ that asserts the semantics from Python with quantitative evidence, such as
 live/dropped guard counts around `task.cancel()`, produced-vs-consumed
 stream counters, exactly one `ResourceWarning` per leaked resource, and
 `ctypes.addressof` equality for zero-copy buffers. It runs in CI as
-`checks.<system>.unibind-conformance-run`.
+`checks.<system>.unibind-conformance-run`. Its TypeScript twin,
+`packages/unibind/conformance-ts`, mirrors those shapes with ts-compatible
+types (the shared crate's `u64`/`usize` surface is BigInt-territory the ts
+backend still rejects) and runs as
+`checks.<system>.unibind-conformance-ts-node-conformance`.
 
 ## Phases
 
@@ -184,7 +247,7 @@ stream counters, exactly one `ResourceWarning` per leaked resource, and
 | 0     | #1990 | core IR, macro skeleton, pyo3 backend for sync functions, records, errors; proven by porting `packages/code/scipql/py` |
 | 1     | #1991 | `unibind-gen`: host files (`.pyi`) from the embedded IR, `unibind.lib.build` nix glue |
 | 2     | #1992 | async, cancellation, streams, resources/objects (Python backend); proven by `packages/unibind/conformance` |
-| 3     | #1993 | TypeScript backend (napi-rs) with enriched `.d.ts` |
+| 3     | #1993 | TypeScript backend (napi-rs): render crate + `ts(name = ...)` renames, `unibind-gen ts` host files (`index.js`/`index.d.ts`), npm packaging in `unibind.lib.build`, Node conformance gate |
 | 4     | #1994 | Rust client backend over a stable ABI |
 | 5     | #1995 | Elixir backend (rustler, generated `.ex`, `@spec`) |
 | 6     | #1996 | adopt for ix-sdk, delete sdk-py and sdk-ts |

@@ -12140,6 +12140,7 @@ dependencies = [
  "quote",
  "syn 2.0.118",
  "unibind-backend-py",
+ "unibind-backend-ts",
  "unibind-core",
 ]
 
@@ -12156,11 +12157,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "unibind-backend-ts"
+version = "0.1.0"
+dependencies = [
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "syn 2.0.118",
+ "unibind-core",
+]
+
+[[package]]
 name = "unibind-conformance"
 version = "0.1.0"
 dependencies = [
  "futures",
  "pyo3",
+ "tokio",
+ "unibind",
+ "unibind-runtime",
+]
+
+[[package]]
+name = "unibind-conformance-ts"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "napi",
+ "napi-build",
+ "napi-derive",
  "tokio",
  "unibind",
  "unibind-runtime",

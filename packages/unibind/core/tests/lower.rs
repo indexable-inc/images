@@ -171,3 +171,34 @@ fn strip_removes_every_unibind_attribute() {
     let rendered = quote::quote!(#module).to_string();
     assert!(!rendered.contains("unibind"), "{rendered}");
 }
+
+#[test]
+fn export_backends_parses_and_rejects() {
+    let none = unibind_core::export_backends(TokenStream::new()).expect("empty args parse");
+    assert!(none.is_none());
+
+    let args: TokenStream = "backends(py, ts)".parse().expect("tokens");
+    let both = unibind_core::export_backends(args)
+        .expect("backends list parses")
+        .expect("backends listed");
+    assert_eq!(both, [unibind_core::Backend::Py, unibind_core::Backend::Ts]);
+
+    let args: TokenStream = "backends(rb)".parse().expect("tokens");
+    let error = unibind_core::export_backends(args).expect_err("unknown backend");
+    assert!(error.message.contains("expected `py` or `ts`"), "{}", error.message);
+
+    let error = error_message(
+        "mod m { pub fn go(#[unibind(backends(py))] value: bool) {} }",
+    );
+    assert!(error.contains("applies to #[unibind::export]"), "{error}");
+}
+
+#[test]
+fn ts_renames_lower_into_names() {
+    let interface = lower(
+        "mod m { #[unibind(ts(name = \"goFast\"))] pub fn go_fast(#[unibind(ts(name = \"theValue\"))] value: bool) { let _ = value; } }",
+    )
+    .expect("lowers");
+    assert_eq!(interface.functions[0].names.ts.as_deref(), Some("goFast"));
+    assert_eq!(interface.functions[0].args[0].names.ts.as_deref(), Some("theValue"));
+}

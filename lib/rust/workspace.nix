@@ -221,6 +221,28 @@
         entry.id
       ])
       excludedWorkspaceMembers;
+    # Crates that must not share cargo's workspace-wide feature resolution
+    # (registry `isolatedFeatures`): the Python consumers unify e.g.
+    # unibind-runtime's `py` feature across a `--workspace` resolve, which
+    # would pull pyo3's `#[used]` constructors into a Node addon cdylib that
+    # then fails to dlopen (undefined Python symbols). Each such crate roots
+    # its own `-p` cargo invocation, so its dependency features resolve from
+    # its own manifest alone; nix-cargo-unit merges the graphs, and the
+    # `--exclude` below keeps the crate out of the workspace resolve so its
+    # roots exist exactly once.
+    isolatedFeatureMembers =
+      lib.filter (
+        entry: builtins.elem entry (packageRegistry.rustWorkspaceEntriesFor targetSystem)
+      )
+      packageRegistry.isolatedFeatureEntries;
+    isolatedFeatureExcludes =
+      lib.concatMap (entry: [
+        "--exclude"
+        entry.id
+      ])
+      isolatedFeatureMembers;
+    isolatedFeatureTargets = map (entry: ["-p" entry.id]) isolatedFeatureMembers;
+    isolatedFeatureTargetNames = map (entry: "isolated-${entry.id}") isolatedFeatureMembers;
     # A build script's `rustc-link-search` does not reach the final per-unit link
     # in this graph, so a linked native lib's directory is added to the link search
     # here directly, plus an rpath entry so the resulting binary resolves the shared
@@ -253,14 +275,16 @@
         inherit src;
         cargoLock.lockFile = cargoLock;
         workspaceRoot = root;
-        cargoArgs = ["--workspace"] ++ cargoWorkspaceExcludes;
+        cargoArgs = ["--workspace"] ++ cargoWorkspaceExcludes ++ isolatedFeatureExcludes;
         # Cross test/bench binaries can't execute on the build host, so a cross
         # graph builds only the `--workspace` root set; the native graph keeps
-        # the test and bench roots for `passthru.tests`.
+        # the test and bench roots for `passthru.tests`. Isolated-feature
+        # crates root their own `-p` entries (see isolatedFeatureMembers).
         cargoTargets =
           [
-            (["--workspace"] ++ cargoWorkspaceExcludes)
+            (["--workspace"] ++ cargoWorkspaceExcludes ++ isolatedFeatureExcludes)
           ]
+          ++ isolatedFeatureTargets
           ++ lib.optionals (!isCross) [
             (
               [
@@ -268,6 +292,7 @@
                 "--tests"
               ]
               ++ cargoWorkspaceExcludes
+              ++ isolatedFeatureExcludes
             )
             (
               [
@@ -275,12 +300,14 @@
                 "--benches"
               ]
               ++ cargoWorkspaceExcludes
+              ++ isolatedFeatureExcludes
             )
           ];
         cargoTargetNames =
           [
             "build"
           ]
+          ++ isolatedFeatureTargetNames
           ++ lib.optionals (!isCross) [
             "test"
             "bench"

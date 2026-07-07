@@ -15,6 +15,7 @@ use anyhow::Context as _;
 use unibind_core::ir::Interface;
 
 /// One generated host-language file, path relative to the output root.
+#[derive(Debug)]
 pub struct HostFile {
     pub path: String,
     pub contents: String,

@@ -13,6 +13,7 @@ use unibind_gen::py::PyEmitter;
 fn names(py: Option<&str>) -> ir::Names {
     ir::Names {
         py: py.map(str::to_owned),
+        ts: None,
     }
 }
 

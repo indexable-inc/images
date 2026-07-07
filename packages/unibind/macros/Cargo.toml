@@ -17,10 +17,12 @@ workspace = true
 
 [features]
 py = ["dep:unibind-backend-py"]
+ts = ["dep:unibind-backend-ts"]
 
 [dependencies]
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
 unibind-backend-py = { workspace = true, optional = true }
+unibind-backend-ts = { workspace = true, optional = true }
 unibind-core.workspace = true

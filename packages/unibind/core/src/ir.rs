@@ -43,11 +43,16 @@ pub struct Interface {
     pub objects: Vec<Object>,
 }
 
-/// Per-language name overrides, from `#[unibind(py(name = "..."))]`.
+/// Per-language name overrides, from `#[unibind(py(name = "..."))]` and
+/// `#[unibind(ts(name = "..."))]`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Names {
     /// Python name override.
     pub py: Option<String>,
+    /// TypeScript name override. Skipped when absent so interfaces without
+    /// ts renames serialize exactly as they did before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ts: Option<String>,
 }
 
 /// How a function suspends.
