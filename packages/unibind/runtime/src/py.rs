@@ -3,16 +3,17 @@
 //! Everything here is a thin layer over `pyo3-async-runtimes`, so generated
 //! code only ever names `unibind_runtime`.
 
-use std::fmt;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
-use std::sync::Arc;
 
 use futures::FutureExt as _;
 
 use pyo3::{Bound, PyAny, PyResult, Python};
 
-use crate::UniStream;
+use crate::shared::panic_text;
+// Generated glue names `unibind_runtime::py::SharedStream`; the definition
+// moved to the shared backend module when the JVM backend started using it.
+pub use crate::shared::SharedStream;
 
 /// Convert a Rust future into an awaitable Python object.
 ///
@@ -44,59 +45,4 @@ where
             ))),
         }
     })
-}
-
-/// Best-effort panic payload text, mirroring std's default panic hook.
-fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
-    payload
-        .downcast_ref::<&str>()
-        .map(|text| (*text).to_owned())
-        .or_else(|| payload.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "Box<dyn Any>".to_owned())
-}
-
-/// A [`UniStream`] shared with Python's async iterator protocol.
-///
-/// `__anext__` is called on one shared object from whichever task drives
-/// the iterator, so the stream sits behind a `tokio::sync::Mutex`: the
-/// lock serializes polls and keeps the returned future `Send`.
-pub struct SharedStream<T> {
-    inner: Arc<tokio::sync::Mutex<UniStream<T>>>,
-}
-
-// Manual impl: cloning shares the underlying stream, so `T: Clone` is not
-// required.
-impl<T> Clone for SharedStream<T> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: Arc::clone(&self.inner),
-        }
-    }
-}
-
-impl<T> SharedStream<T> {
-    /// Wrap `stream` for shared consumption.
-    #[must_use]
-    pub fn new(stream: UniStream<T>) -> Self {
-        Self {
-            inner: Arc::new(tokio::sync::Mutex::new(stream)),
-        }
-    }
-
-    /// Pull the next item. The future owns its own `Arc`, so it outlives
-    /// the `&self` borrow that produced it (pyo3 futures must be
-    /// `'static`).
-    pub fn next(&self) -> impl Future<Output = Option<T>> + Send + 'static + use<T>
-    where
-        T: Send + 'static,
-    {
-        let inner = Arc::clone(&self.inner);
-        async move { inner.lock().await.next().await }
-    }
-}
-
-impl<T> fmt::Debug for SharedStream<T> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_struct("SharedStream").finish_non_exhaustive()
-    }
 }

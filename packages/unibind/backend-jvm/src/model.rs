@@ -1,11 +1,15 @@
 //! The validated type model of one interface.
 //!
 //! [`Model::new`] is the shared gate all three generators pass through: it
-//! rejects the surface the sync JVM backend does not implement and resolves
-//! every `Named` type, so the layout queries and the per-record lookups can
-//! assume a well-formed interface.
+//! rejects the surface the JVM backend does not implement (data enums) and
+//! everything that cannot cross the boundary (streams outside return
+//! position, objects outside handle position, unresolved or recursive
+//! records), so the layout queries and the per-record lookups can assume a
+//! well-formed interface.
 
-use std::collections::BTreeMap;
+mod validate;
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use unibind_core::ir;
 
@@ -15,110 +19,54 @@ use crate::RenderError;
 /// Record lookup plus layout queries for every reachable mirror.
 pub struct Model<'ir> {
     records: BTreeMap<&'ir str, &'ir ir::Record>,
+    /// Names declared as `#[unibind::object]`; a `Named` return naming one
+    /// crosses as an opaque handle instead of a record mirror.
+    objects: BTreeSet<&'ir str>,
 }
 
 impl<'ir> Model<'ir> {
-    /// Validate the sync JVM surface and build the model.
+    /// Validate the JVM surface and build the model.
     ///
     /// # Errors
     ///
-    /// Fails for surface this backend does not implement (async functions,
-    /// streams, data enums, objects; the async surface is issue #2083), for
-    /// unresolved or recursive record types, and for a `throws` name with no
-    /// matching error enum.
+    /// Fails for data enums (not rendered yet), for streams or objects in
+    /// a position where they cannot cross (arguments, record fields,
+    /// nested inside another type), for unresolved or recursive record
+    /// types, and for a `throws` name with no matching error enum.
     pub fn new(interface: &'ir ir::Interface) -> Result<Self, RenderError> {
-        if let Some(object) = interface.objects.first() {
-            return Err(RenderError::new(format!(
-                "`{}` is a #[unibind::object]; the JVM backend's object support lands with the \
-                 async surface (issue #2083)",
-                object.name
-            )));
-        }
-        if let Some(data_enum) = interface.enums.first() {
-            return Err(RenderError::new(format!(
-                "`{}` is a data enum, which the sync JVM backend does not render (issue #2083)",
-                data_enum.name
-            )));
-        }
-        if let Some(function) = interface
-            .functions
-            .iter()
-            .find(|function| matches!(function.asyncness, ir::Asyncness::Async))
-        {
-            return Err(RenderError::new(format!(
-                "`{}` is async; the JVM backend's async support lands with issue #2083",
-                function.name
-            )));
-        }
         let model = Self {
             records: interface
                 .records
                 .iter()
                 .map(|record| (record.name.as_str(), record))
                 .collect(),
+            objects: interface
+                .objects
+                .iter()
+                .map(|object| object.name.as_str())
+                .collect(),
         };
-        for record in &interface.records {
-            model.check_record(&record.name, &mut Vec::new())?;
-        }
-        for function in &interface.functions {
-            for arg in &function.args {
-                model.check_type(&arg.ty, &mut Vec::new())?;
-            }
-            if let Some(ret) = &function.ret {
-                model.check_type(ret, &mut Vec::new())?;
-            }
-            if let Some(throws) = &function.throws
-                && !interface.errors.iter().any(|error| error.name == *throws)
-            {
-                return Err(RenderError::new(format!(
-                    "`{}` returns `Result<_, {throws}>`, but `{throws}` is not a \
-                     #[unibind::error] in this module",
-                    function.name
-                )));
-            }
-        }
+        validate::interface(&model, interface)?;
         Ok(model)
     }
 
-    fn check_type(&self, ty: &ir::Type, stack: &mut Vec<String>) -> Result<(), RenderError> {
-        match ty {
-            ir::Type::Option(inner) | ir::Type::Vec(inner) => self.check_type(inner, stack),
-            ir::Type::Map { key, value } => {
-                self.check_type(key, stack)?;
-                self.check_type(value, stack)
-            }
-            ir::Type::Named(name) => self.check_record(name, stack),
-            ir::Type::Stream(_) => Err(RenderError::new(
-                "`UniStream` crosses as an async iterator; the JVM backend's stream \
-                 support lands with issue #2083",
-            )),
-            ir::Type::Bool
-            | ir::Type::Int(_)
-            | ir::Type::Float(_)
-            | ir::Type::String { .. }
-            | ir::Type::Path { .. }
-            | ir::Type::Bytes { .. } => Ok(()),
-        }
+    /// Whether `name` is a `#[unibind::object]` in this interface.
+    #[must_use]
+    pub fn is_object(&self, name: &str) -> bool {
+        self.objects.contains(name)
     }
 
-    fn check_record(&self, name: &str, stack: &mut Vec<String>) -> Result<(), RenderError> {
-        if stack.iter().any(|seen| seen == name) {
-            return Err(RenderError::new(format!(
-                "record `{name}` is part of a reference cycle; recursive records cannot \
-                 cross the boundary by value"
-            )));
+    /// The boundary mirror of one argument or return type: streams and
+    /// objects cross as opaque handles, everything else through
+    /// [`CTy::of`]. Record fields keep using [`CTy::of`] directly, because
+    /// validation rejects streams and objects inside records.
+    #[must_use]
+    pub fn boundary(&self, ty: &ir::Type) -> CTy {
+        match ty {
+            ir::Type::Stream(_) => CTy::Handle,
+            ir::Type::Named(name) if self.is_object(name) => CTy::Handle,
+            _ => CTy::of(ty),
         }
-        let Some(record) = self.records.get(name) else {
-            return Err(RenderError::new(format!(
-                "`{name}` is not a #[unibind::record] in this module"
-            )));
-        };
-        stack.push(name.to_owned());
-        for field in &record.fields {
-            self.check_type(&field.ty, stack)?;
-        }
-        stack.pop();
-        Ok(())
     }
 
     /// The record behind a validated [`CTy::Record`] name.
@@ -140,7 +88,7 @@ impl<'ir> Model<'ir> {
             CTy::Bool => Layout { size: 1, align: 1 },
             CTy::Int(kind) => ctype::int_layout(*kind),
             CTy::Float(ir::FloatKind::F32) => Layout { size: 4, align: 4 },
-            CTy::Float(ir::FloatKind::F64) => Layout { size: 8, align: 8 },
+            CTy::Float(ir::FloatKind::F64) | CTy::Handle => Layout { size: 8, align: 8 },
             CTy::Str | CTy::Path | CTy::Bytes | CTy::Vec(_) | CTy::Map { .. } => ctype::PTR_PAIR,
             CTy::Option(inner) => self.option_struct(inner).layout,
             CTy::Record(name) => self.record_struct(name).layout,
@@ -183,7 +131,7 @@ impl<'ir> Model<'ir> {
 
     /// Layout of a function's return envelope: `code: i32` at 0, then the
     /// `err_msg` text, then the success payload when the function returns
-    /// one.
+    /// one. Item envelopes reuse the same shape with a `COption` payload.
     #[must_use]
     pub fn envelope(&self, ret: Option<&CTy>) -> EnvelopeLayout {
         let mut fields = vec![Layout { size: 4, align: 4 }, ctype::PTR_PAIR];
@@ -200,14 +148,21 @@ impl<'ir> Model<'ir> {
     }
 
     /// Every distinct aggregate mirror reachable from `roots`, keyed and
-    /// ordered by mangled name.
+    /// ordered by mangled name. A stream root contributes `COption` of its
+    /// item (the shape its item envelope carries); handles are scalars and
+    /// contribute nothing.
     pub fn reachable_aggregates<'ty>(
         &self,
         roots: impl Iterator<Item = &'ty ir::Type>,
     ) -> BTreeMap<String, CTy> {
         let mut found = BTreeMap::new();
         for ty in roots {
-            self.visit(&CTy::of(ty), &mut found);
+            match ty {
+                ir::Type::Stream(item) => {
+                    self.visit(&CTy::Option(Box::new(CTy::of(item))), &mut found);
+                }
+                _ => self.visit(&self.boundary(ty), &mut found),
+            }
         }
         found
     }
@@ -234,7 +189,7 @@ impl<'ir> Model<'ir> {
                     self.visit(&CTy::of(&field.ty), found);
                 }
             }
-            CTy::Bool | CTy::Int(_) | CTy::Float(_) | CTy::Str | CTy::Bytes => {}
+            CTy::Bool | CTy::Int(_) | CTy::Float(_) | CTy::Str | CTy::Bytes | CTy::Handle => {}
         }
     }
 }

@@ -31,6 +31,9 @@ pub enum CTy {
     Path,
     /// Raw bytes (`CBytes`, the `CString` shape).
     Bytes,
+    /// An opaque pointer-sized handle (a stream or an object) crossing by
+    /// value; the Rust mirror is `*mut ::core::ffi::c_void`.
+    Handle,
     /// `COption<T>`: a `u8` presence flag with the value inline, zeroed
     /// when absent.
     Option(Box<Self>),
@@ -48,8 +51,11 @@ pub enum CTy {
 }
 
 impl CTy {
-    /// The mirror of one IR type. Ownership never changes the mirror:
-    /// borrowed and owned strings cross identically.
+    /// The mirror of one plain-data IR type. Ownership never changes the
+    /// mirror: borrowed and owned strings cross identically. Streams and
+    /// object-typed returns never reach this mapping: arg/ret sites route
+    /// through [`crate::model::Model::boundary`], which maps them to
+    /// [`CTy::Handle`], and validation rejects them everywhere else.
     #[must_use]
     pub fn of(ty: &ir::Type) -> Self {
         match ty {
@@ -66,16 +72,17 @@ impl CTy {
                 value: Box::new(Self::of(value)),
             },
             ir::Type::Named(name) => Self::Record(name.clone()),
-            // Streams never reach the mirror model: `Model::new` rejects
-            // them first (the JVM async surface is issue #2083).
-            ir::Type::Stream(_) => unreachable!("streams are rejected by Model::new"),
+            // Streams cross as opaque handles via `Model::boundary`;
+            // validation rejects them in every non-return position, so the
+            // plain mirror mapping never sees one.
+            ir::Type::Stream(_) => unreachable!("streams only cross through Model::boundary"),
         }
     }
 
     /// Whether the mirror passes by value at the C boundary.
     #[must_use]
     pub const fn is_scalar(&self) -> bool {
-        matches!(self, Self::Bool | Self::Int(_) | Self::Float(_))
+        matches!(self, Self::Bool | Self::Int(_) | Self::Float(_) | Self::Handle)
     }
 
     /// A name unique per mirror, naming generated Java helpers and keying
@@ -90,6 +97,7 @@ impl CTy {
             Self::Str => "Str".to_owned(),
             Self::Path => "Path".to_owned(),
             Self::Bytes => "Bytes".to_owned(),
+            Self::Handle => "Handle".to_owned(),
             Self::Option(inner) => format!("Opt{}", inner.mangle()),
             Self::Vec(inner) => format!("List{}", inner.mangle()),
             Self::Map { key, value } => {

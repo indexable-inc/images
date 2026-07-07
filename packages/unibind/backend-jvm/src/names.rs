@@ -45,7 +45,50 @@ pub fn export_symbol(module: &str, function: &str) -> String {
 
 /// The companion export that frees one function's return envelope.
 pub fn free_symbol(module: &str, function: &str) -> String {
-    format!("{}__free", export_symbol(module, function))
+    free_suffix(&export_symbol(module, function))
+}
+
+/// The `extern "C"` export for one object constructor or method; the
+/// object keeps its Rust PascalCase inside the symbol.
+pub fn object_export_symbol(module: &str, object: &str, method: &str) -> String {
+    format!("unibind_jvm_{module}_{object}_{method}")
+}
+
+/// The export releasing one object handle (dropping its `Arc`).
+pub fn object_free_symbol(module: &str, object: &str) -> String {
+    format!("unibind_jvm_{module}_{object}__free")
+}
+
+/// The `__free` companion on an arbitrary export symbol; methods share the
+/// suffix scheme with free functions, so companions build on the base
+/// symbol rather than on module + function.
+pub fn free_suffix(base: &str) -> String {
+    format!("{base}__free")
+}
+
+/// The companion export requesting cancellation of an async export's task.
+pub fn cancel_suffix(base: &str) -> String {
+    format!("{base}__cancel")
+}
+
+/// The companion export releasing an async export's task handle.
+pub fn task_free_suffix(base: &str) -> String {
+    format!("{base}__task_free")
+}
+
+/// The companion export pulling one item from a stream export's handle.
+pub fn stream_next_suffix(base: &str) -> String {
+    format!("{base}__stream_next")
+}
+
+/// The companion export releasing a stream export's handle.
+pub fn stream_free_suffix(base: &str) -> String {
+    format!("{base}__stream_free")
+}
+
+/// The companion export freeing one of a stream export's item envelopes.
+pub fn item_free_suffix(base: &str) -> String {
+    format!("{base}__item_free")
 }
 
 /// The ABI version probe the Java binding calls at load.

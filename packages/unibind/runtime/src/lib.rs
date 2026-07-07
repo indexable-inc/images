@@ -4,7 +4,8 @@
 //! `fn` returning `UniStream<T>` becomes an async iterator in the target
 //! language, and items flow one poll per consumer request (pull-based
 //! backpressure). The `py` feature adds the Python async helpers the
-//! generated glue calls into.
+//! generated glue calls into; the `jvm` feature adds the shared tokio
+//! runtime and raw-handle task/stream helpers the JVM glue calls into.
 
 use std::fmt;
 use std::pin::Pin;
@@ -13,8 +14,12 @@ use std::task::{Context, Poll};
 use futures::Stream;
 use futures::StreamExt as _;
 
+#[cfg(feature = "jvm")]
+pub mod jvm;
 #[cfg(feature = "py")]
 pub mod py;
+#[cfg(any(feature = "py", feature = "jvm"))]
+mod shared;
 
 /// A boxed stream crossing the binding boundary.
 ///

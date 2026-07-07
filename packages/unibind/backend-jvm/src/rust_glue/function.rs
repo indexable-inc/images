@@ -1,17 +1,21 @@
-//! Render one `extern "C"` export, its `__free` companion, and the shared
-//! panic plumbing.
+//! Render sync `extern "C"` exports and the plumbing every export kind
+//! shares: argument decoding plans and the panic-text helper.
 //!
 //! Every export wraps its body in `catch_unwind`, so unwinding never
 //! crosses the C boundary: a panic becomes an envelope with `code == -1`
 //! carrying the payload text.
+//!
+//! `#[unibind(blocking)]` needs no special sync handling here: the JVM has
+//! no GIL to release, so the calling Java thread blocking for the call's
+//! duration is the whole blocking contract.
 
-use proc_macro2::{Ident, Literal, TokenStream};
+use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use unibind_core::ir;
 
-use crate::ctype::CTy;
 use crate::model::Model;
-use crate::rust_glue::{decode, encode, types};
+use crate::rust_glue::envelope::{self, EnvelopeParts};
+use crate::rust_glue::{decode, types, Export};
 use crate::{names, RenderError};
 
 /// The shared panic-payload helper.
@@ -43,80 +47,126 @@ pub fn abi_version(module: &str) -> TokenStream {
     }
 }
 
-/// One function's export and free pair.
-pub fn render_fn(
+/// How one export's arguments cross: the `extern "C"` parameters, the
+/// decode bindings turning them into the user function's values, and the
+/// decoded identifiers to forward.
+pub(crate) struct ArgPlan {
+    pub params: Vec<TokenStream>,
+    pub bindings: Vec<TokenStream>,
+    pub idents: Vec<Ident>,
+}
+
+/// Plan the argument crossing for one export. Scalars pass by value,
+/// aggregates by `*const` mirror pointer into Java-owned memory.
+pub(crate) fn arg_plan(
     function: &ir::Function,
-    interface: &ir::Interface,
     model: &Model<'_>,
     user: &Ident,
-) -> Result<TokenStream, RenderError> {
-    let export_ident = format_ident!("{}", names::export_symbol(&interface.name, &function.name));
-    let free_ident = format_ident!("{}", names::free_symbol(&interface.name, &function.name));
-    let envelope = types::envelope_ident(&function.name);
-
-    let mut params = Vec::new();
-    let mut bindings = Vec::new();
-    let mut forwarded = Vec::new();
+) -> Result<ArgPlan, RenderError> {
+    let mut plan = ArgPlan {
+        params: Vec::new(),
+        bindings: Vec::new(),
+        idents: Vec::new(),
+    };
     for arg in &function.args {
         let ident = names::rust_ident(&arg.name)?;
-        let cty = CTy::of(&arg.ty);
+        let cty = model.boundary(&arg.ty);
         let mirror = types::mirror_tokens(&cty);
         if cty.is_scalar() {
-            params.push(quote!(#ident: #mirror));
+            plan.params.push(quote!(#ident: #mirror));
             if matches!(arg.ty, ir::Type::Bool) {
-                bindings.push(quote!(let #ident = #ident != 0;));
+                plan.bindings.push(quote!(let #ident = #ident != 0;));
             }
         } else {
-            params.push(quote!(#ident: *const #mirror));
+            plan.params.push(quote!(#ident: *const #mirror));
             let decoded = decode::expr(model, &arg.ty, &quote!(#ident), user)?;
-            bindings.push(quote! {
+            plan.bindings.push(quote! {
                 let #ident = unsafe { &*#ident };
                 let #ident = #decoded;
             });
         }
-        forwarded.push(quote!(#ident));
+        plan.idents.push(ident);
     }
+    Ok(plan)
+}
 
-    let rust_name = names::rust_ident(&function.name)?;
-    let call = quote!(super::#user::#rust_name(#(#forwarded),*));
-    let ok_value = match &function.ret {
-        Some(ret) => {
-            let encoded = encode::expr(model, ret, &quote!(value))?;
-            Some(quote!(value: #encoded,))
+/// The `super::<user>::...` call target for one export.
+pub(crate) fn call_path(
+    export: &Export<'_>,
+    user: &Ident,
+) -> Result<TokenStream, RenderError> {
+    let name = names::rust_ident(&export.function.name)?;
+    match export.owner {
+        Some(owner) => {
+            let owner_ident = names::rust_ident(owner)?;
+            Ok(quote!(super::#user::#owner_ident::#name))
         }
-        None => None,
-    };
-    let zero_value = function
-        .ret
-        .as_ref()
-        .map(|_| quote!(value: unsafe { ::core::mem::zeroed() },));
+        None => Ok(quote!(super::#user::#name)),
+    }
+}
 
-    let body = match &function.throws {
-        Some(throws) => {
-            let error = interface
-                .errors
-                .iter()
-                .find(|error| error.name == *throws)
-                .expect("throws names are validated when the model is built");
-            throws_body(ThrowsBody {
-                function,
-                error,
-                call: &call,
-                envelope: &envelope,
-                ok_value: ok_value.as_ref(),
-                zero_value: zero_value.as_ref(),
-                user,
-            })?
+/// One sync export and its `__free` companion. Constructors render here
+/// too (lowering keeps them sync): their envelope carries the new object
+/// as an opaque handle.
+pub(crate) fn render_sync(
+    export: &Export<'_>,
+    interface: &ir::Interface,
+    model: &Model<'_>,
+    user: &Ident,
+) -> Result<TokenStream, RenderError> {
+    let base = export.symbol(interface);
+    let export_ident = format_ident!("{base}");
+    let free_ident = format_ident!("{}", names::free_suffix(&base));
+    let envelope = types::envelope_ident(export.owner, &export.function.name);
+    let plan = arg_plan(export.function, model, user)?;
+
+    let mut params = Vec::new();
+    let mut receiver_binding = None;
+    if export.has_receiver {
+        let owner_ident = names::rust_ident(export.owner.expect("methods have an owner"))?;
+        params.push(quote!(this: *mut ::core::ffi::c_void));
+        // The read stays a shared borrow: Java's per-object read lock
+        // guarantees the handle outlives every sync downcall.
+        receiver_binding = Some(quote! {
+            let this = unsafe { &*this.cast_const().cast::<super::#user::#owner_ident>() };
+        });
+    }
+    params.extend(plan.params.iter().cloned());
+
+    let path = call_path(export, user)?;
+    let forwarded = &plan.idents;
+    let call = if export.has_receiver {
+        quote!(#path(this #(, #forwarded)*))
+    } else {
+        quote!(#path(#(#forwarded),*))
+    };
+
+    let parts = EnvelopeParts {
+        interface,
+        model,
+        user,
+        function: export.function,
+        ret: export.ret.as_ref(),
+        envelope: &envelope,
+    };
+    let body = envelope::envelope_expr(&parts, &call)?;
+    let zero_value = envelope::zero_value(&parts);
+    let bindings = &plan.bindings;
+    let docs = &export.function.docs;
+    let blocking_doc = export.function.blocking.then(|| {
+        quote! {
+            #[doc = ""]
+            #[doc = "`#[unibind(blocking)]`: the calling Java thread blocks for the duration; the JVM has no GIL to release, so blocking the caller is the whole contract."]
         }
-        None => plain_body(function, &call, &envelope, ok_value.as_ref()),
-    };
+    });
 
-    let docs = &function.docs;
     Ok(quote! {
         #(#[doc = #docs])*
+        #blocking_doc
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn #export_ident(#(#params),*) -> *mut #envelope {
             let outcome = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
+                #receiver_binding
                 #(#bindings)*
                 #body
             }));
@@ -139,86 +189,6 @@ pub fn render_fn(
                 return;
             }
             drop(unsafe { ::std::boxed::Box::from_raw(envelope) });
-        }
-    })
-}
-
-fn plain_body(
-    function: &ir::Function,
-    call: &TokenStream,
-    envelope: &Ident,
-    ok_value: Option<&TokenStream>,
-) -> TokenStream {
-    if function.ret.is_some() {
-        quote! {
-            let value = #call;
-            #envelope {
-                code: 0,
-                err_msg: null_string(),
-                #ok_value
-            }
-        }
-    } else {
-        quote! {
-            #call;
-            #envelope {
-                code: 0,
-                err_msg: null_string(),
-            }
-        }
-    }
-}
-
-/// Everything a `throws` function's match body needs.
-#[derive(Clone, Copy)]
-struct ThrowsBody<'a> {
-    function: &'a ir::Function,
-    error: &'a ir::ErrorType,
-    call: &'a TokenStream,
-    envelope: &'a Ident,
-    ok_value: Option<&'a TokenStream>,
-    zero_value: Option<&'a TokenStream>,
-    user: &'a Ident,
-}
-
-fn throws_body(parts: ThrowsBody<'_>) -> Result<TokenStream, RenderError> {
-    let ThrowsBody {
-        function,
-        error,
-        call,
-        envelope,
-        ok_value,
-        zero_value,
-        user,
-    } = parts;
-    let error_ident = names::rust_ident(&error.name)?;
-    let mut arms = Vec::new();
-    for (index, variant) in error.variants.iter().enumerate() {
-        let variant_ident = names::rust_ident(&variant.name)?;
-        let code = Literal::usize_unsuffixed(index + 1);
-        arms.push(quote! {
-            super::#user::#error_ident::#variant_ident { .. } => #code,
-        });
-    }
-    let ok_pattern = if function.ret.is_some() {
-        quote!(value)
-    } else {
-        quote!(())
-    };
-    Ok(quote! {
-        match #call {
-            ::std::result::Result::Ok(#ok_pattern) => #envelope {
-                code: 0,
-                err_msg: null_string(),
-                #ok_value
-            },
-            ::std::result::Result::Err(error) => #envelope {
-                code: match &error {
-                    #(#arms)*
-                },
-                err_msg: string_value(::std::string::ToString::to_string(&error)),
-                #zero_value
-            },
         }
     })
 }
