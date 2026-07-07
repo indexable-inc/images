@@ -41,7 +41,11 @@ use proc_macro::TokenStream;
 /// Every `pub fn` in the module is exported; private items pass through
 /// untouched. The attribute accepts `py(name = "...")` to rename the Python
 /// module (it defaults to the Rust module name, which also names the
-/// `PyInit_` symbol of the built extension).
+/// `PyInit_` symbol of the built extension) and `backends(py)` /
+/// `backends(ex)` to pick which enabled backends render. Cargo unifies this
+/// crate's features across a workspace build, so a crate sharing a
+/// workspace with consumers of another backend names its own targets;
+/// without the option every enabled backend renders.
 ///
 /// Glue for async functions, `UniStream` returns, and `#[unibind::object]`
 /// types calls into `unibind_runtime::py`, so a crate exporting any of

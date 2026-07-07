@@ -9,7 +9,7 @@
 
 /// The exported boundary. The module name names the `PyInit_` symbol, so
 /// the built cdylib imports as `_conformance`.
-#[unibind::export]
+#[unibind::export(backends(py))]
 mod _conformance {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

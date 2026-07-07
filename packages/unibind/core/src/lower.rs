@@ -42,6 +42,22 @@ pub struct Declared {
     pub objects: Vec<String>,
 }
 
+/// The `backends(...)` selection carried by `#[unibind::export]` args:
+/// `None` when absent, meaning every backend the consuming crate's features
+/// enable. Cargo unifies the macro crate's features across a workspace
+/// build, so a crate sharing a workspace with consumers of another backend
+/// names its own targets here.
+///
+/// # Errors
+///
+/// Fails on malformed options, an unknown backend name, or an empty list.
+pub fn module_backends(
+    module_args: proc_macro2::TokenStream,
+    span: Span,
+) -> Result<Option<Vec<String>>> {
+    Ok(attrs::UnibindMeta::parse(module_args, span)?.backends)
+}
+
 /// Lower an inline `#[unibind::export]` module into an [`ir::Interface`].
 ///
 /// `module_args` is the token stream the attribute itself carried, for

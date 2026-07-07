@@ -77,6 +77,7 @@ pub(super) fn lower_callable(
     let meta = attrs::UnibindMeta::from_attrs(attributes)?;
     meta.reject_default(kind.context())?;
     meta.reject_py_base(kind.context())?;
+    meta.reject_backends(kind.context())?;
     meta.reject_resource(kind.context())?;
     match kind {
         // A `constructor` flag routed the signature here already, so only
@@ -166,6 +167,7 @@ fn lower_arg(arg: &syn::PatType, declared: &Declared) -> Result<ir::Arg> {
     };
     let meta = attrs::UnibindMeta::from_attrs(&arg.attrs)?;
     meta.reject_py_base("an argument")?;
+    meta.reject_backends("an argument")?;
     meta.reject_resource("an argument")?;
     meta.reject_constructor("an argument")?;
     meta.reject_blocking("an argument")?;

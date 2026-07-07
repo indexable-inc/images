@@ -14,6 +14,7 @@ pub(super) fn lower_record(
     reject_flags(&found.meta, "a record")?;
     found.meta.reject_default("a record")?;
     found.meta.reject_py_base("a record")?;
+    found.meta.reject_backends("a record")?;
     require_pub(&item.vis, item.ident.span(), "record")?;
     if !item.generics.params.is_empty() || item.generics.where_clause.is_some() {
         return Err(LowerError::new(
@@ -39,6 +40,7 @@ pub(super) fn lower_record(
         reject_flags(&meta, "a record field")?;
         meta.reject_default("a record field")?;
         meta.reject_py_base("a record field")?;
+        meta.reject_backends("a record field")?;
         lowered.push(ir::Field {
             name: ident.to_string(),
             names: meta.names(),
@@ -57,6 +59,7 @@ pub(super) fn lower_record(
 pub(super) fn lower_error(item: &syn::ItemEnum, found: &marker::Marker) -> Result<ir::ErrorType> {
     reject_flags(&found.meta, "an error enum")?;
     found.meta.reject_default("an error enum")?;
+    found.meta.reject_backends("an error enum")?;
     require_pub(&item.vis, item.ident.span(), "error enum")?;
     if !item.generics.params.is_empty() || item.generics.where_clause.is_some() {
         return Err(LowerError::new(
@@ -77,6 +80,7 @@ pub(super) fn lower_error(item: &syn::ItemEnum, found: &marker::Marker) -> Resul
         reject_flags(&meta, "an error variant")?;
         meta.reject_default("an error variant")?;
         meta.reject_py_base("an error variant")?;
+        meta.reject_backends("an error variant")?;
         variants.push(ir::ErrorVariant {
             name: variant.ident.to_string(),
             names: meta.names(),

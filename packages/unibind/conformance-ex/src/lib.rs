@@ -10,7 +10,7 @@
 
 /// The exported boundary. The module name names the generated Elixir
 /// namespace (`UnibindConformance`) and the OTP app (`:unibind_conformance`).
-#[unibind::export]
+#[unibind::export(backends(ex))]
 mod _unibind_conformance {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicU64, Ordering};

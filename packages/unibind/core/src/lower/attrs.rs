@@ -6,16 +6,21 @@ use syn::spanned::Spanned as _;
 use super::{LowerError, Result};
 use crate::ir;
 
+/// The backend names `backends(...)` accepts, one per rendering backend
+/// the macros crate can enable (`ts` joins with issue #1993).
+pub(crate) const KNOWN_BACKENDS: [&str; 2] = ["ex", "py"];
+
 /// The options a `#[unibind(...)]` attribute (or marker argument list) can
 /// carry: `py(name = "...")`, `py(base = "...")`, `ex(name = "...")`,
-/// `default = ...`, and the bare flags `resource`, `constructor`, and
-/// `blocking`.
+/// `backends(...)`, `default = ...`, and the bare flags `resource`,
+/// `constructor`, and `blocking`.
 #[derive(Debug, Default)]
 pub struct UnibindMeta {
     pub(crate) span: Option<Span>,
     pub(crate) py_name: Option<String>,
     pub(crate) py_base: Option<String>,
     pub(crate) ex_name: Option<String>,
+    pub(crate) backends: Option<Vec<String>>,
     pub(crate) default: Option<ir::Literal>,
     pub(crate) resource: bool,
     pub(crate) constructor: bool,
@@ -80,6 +85,12 @@ impl UnibindMeta {
             }
             self.ex_name = other.ex_name;
         }
+        if other.backends.is_some() {
+            if self.backends.is_some() {
+                return Err(LowerError::new(span, "duplicate unibind `backends(...)`"));
+            }
+            self.backends = other.backends;
+        }
         if other.default.is_some() {
             if self.default.is_some() {
                 return Err(LowerError::new(span, "duplicate unibind `default`"));
@@ -137,6 +148,44 @@ impl UnibindMeta {
             for nested in entries {
                 self.apply_ex(&nested)?;
             }
+            return Ok(());
+        }
+        if entry.path().is_ident("backends") {
+            let syn::Meta::List(list) = entry else {
+                return Err(LowerError::new(span, "`backends` takes a list: backends(py, ex)"));
+            };
+            let parser =
+                syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated;
+            let entries = syn::parse::Parser::parse2(parser, list.tokens.clone())
+                .map_err(|error| LowerError::new(span, format!("bad `backends` list: {error}")))?;
+            let mut backends = Vec::new();
+            for path in entries {
+                let Some(ident) = path.get_ident() else {
+                    return Err(LowerError::new(span, "`backends` takes bare names: backends(py, ex)"));
+                };
+                let name = ident.to_string();
+                if !KNOWN_BACKENDS.contains(&name.as_str()) {
+                    return Err(LowerError::new(
+                        span,
+                        format!(
+                            "unknown backend `{name}`; the backends are {}",
+                            KNOWN_BACKENDS.join(", ")
+                        ),
+                    ));
+                }
+                if backends.contains(&name) {
+                    return Err(LowerError::new(span, format!("backend `{name}` listed twice")));
+                }
+                backends.push(name);
+            }
+            if backends.is_empty() {
+                return Err(LowerError::new(
+                    span,
+                    "`backends()` selects nothing; drop the option to render every \
+                     backend the crate's features enable",
+                ));
+            }
+            self.backends = Some(backends);
             return Ok(());
         }
         if entry.path().is_ident("default") {
@@ -234,6 +283,17 @@ impl UnibindMeta {
         Ok(())
     }
 
+    /// Error out when a `backends(...)` was given somewhere it cannot apply.
+    pub(crate) fn reject_backends(&self, context: &str) -> Result<()> {
+        if self.backends.is_some() {
+            return Err(LowerError::new(
+                self.span.unwrap_or_else(Span::call_site),
+                format!("`backends(...)` applies to #[unibind::export] modules, not {context}"),
+            ));
+        }
+        Ok(())
+    }
+
     /// Error out when a `py(base = ...)` was given somewhere it cannot apply.
     pub(crate) fn reject_py_base(&self, context: &str) -> Result<()> {
         if self.py_base.is_some() {
@@ -287,8 +347,8 @@ fn unknown_option(span: Span) -> LowerError {
     LowerError::new(
         span,
         "unknown unibind option; expected py(name = \"...\"), \
-         py(base = \"...\"), ex(name = \"...\"), default = ..., resource, \
-         constructor, or blocking",
+         py(base = \"...\"), ex(name = \"...\"), backends(...), \
+         default = ..., resource, constructor, or blocking",
     )
 }
 

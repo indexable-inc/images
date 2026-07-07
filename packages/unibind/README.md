@@ -28,7 +28,11 @@ pyo3 = { workspace = true, features = ["extension-module"] }
 ```
 
 (`packages/code/scipql/py` is the reference consumer.) The workspace lives in
-the monorepo: `git clone https://github.com/indexable-inc/index`.
+the monorepo: `git clone https://github.com/indexable-inc/index`. Cargo
+unifies the macro crate's features across a workspace build, so once any
+workspace member enables another backend, every export names its own
+targets: `#[unibind::export(backends(py))]` (or `backends(ex)`); the
+attribute without the option renders every enabled backend.
 
 ## Surface
 

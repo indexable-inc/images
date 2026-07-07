@@ -93,3 +93,34 @@ fn duplicate_ex_renames_are_rejected() {
     .expect_err("duplicate renames fail");
     assert!(error.message.contains("duplicate"), "{}", error.message);
 }
+
+#[test]
+fn module_backends_parse_and_validate() {
+    let span = proc_macro2::Span::call_site();
+    let args: TokenStream = "backends(ex, py)".parse().expect("args parse");
+    let backends = unibind_core::module_backends(args, span)
+        .expect("parses")
+        .expect("present");
+    assert_eq!(backends, ["ex", "py"]);
+
+    let absent: TokenStream = r#"py(name = "m")"#.parse().expect("args parse");
+    assert_eq!(
+        unibind_core::module_backends(absent, span).expect("parses"),
+        None
+    );
+
+    let unknown: TokenStream = "backends(ts)".parse().expect("args parse");
+    let error = unibind_core::module_backends(unknown, span).expect_err("unknown backend fails");
+    assert!(error.message.contains("unknown backend"), "{}", error.message);
+
+    let misplaced = lower_with(
+        TokenStream::new(),
+        "mod m { #[unibind(backends(py))] pub fn f() {} }",
+    )
+    .expect_err("backends on a fn fails");
+    assert!(
+        misplaced.message.contains("#[unibind::export] modules"),
+        "{}",
+        misplaced.message
+    );
+}

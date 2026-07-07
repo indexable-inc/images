@@ -12,6 +12,15 @@ pub fn export(args: TokenStream, item: TokenStream) -> TokenStream {
             return quote! { #item #error };
         }
     };
+    // Cargo unifies this crate's features across a workspace build, so a
+    // consumer sharing a workspace with consumers of other backends names
+    // its own targets with `backends(...)`; absent, every enabled backend
+    // renders.
+    let selection = match unibind_core::module_backends(args.clone(), proc_macro2::Span::call_site())
+    {
+        Ok(selection) => selection,
+        Err(error) => return with_error(&mut module, &error),
+    };
     let interface = match unibind_core::lower_module(args, &module) {
         Ok(interface) => interface,
         Err(error) => return with_error(&mut module, &error),
@@ -21,7 +30,7 @@ pub fn export(args: TokenStream, item: TokenStream) -> TokenStream {
         Ok(embed) => embed,
         Err(error) => return with_error(&mut module, &error),
     };
-    let glue = match backends(&interface, &mut module) {
+    let glue = match backends(&interface, &mut module, selection.as_deref()) {
         Ok(glue) => glue,
         Err(error) => return with_error(&mut module, &error),
     };
@@ -30,6 +39,25 @@ pub fn export(args: TokenStream, item: TokenStream) -> TokenStream {
         #embed
         #glue
     }
+}
+
+/// Whether the export renders `backend`: named in the selection, or no
+/// selection at all. A selected backend whose feature is off is an error
+/// (the crate asked for glue this build cannot produce), raised in
+/// [`backends`].
+#[cfg(any(feature = "py", feature = "ex"))]
+fn selected(selection: Option<&[String]>, backend: &str) -> bool {
+    selection.is_none_or(|names| names.iter().any(|name| name == backend))
+}
+
+/// The backend names this build compiled in.
+const fn enabled_backends() -> &'static [&'static str] {
+    &[
+        #[cfg(feature = "ex")]
+        "ex",
+        #[cfg(feature = "py")]
+        "py",
+    ]
 }
 
 /// Emit the module (markers stripped, so nothing cascades) plus the
@@ -45,10 +73,23 @@ fn with_error(module: &mut syn::ItemMod, error: &LowerError) -> TokenStream {
 fn backends(
     interface: &unibind_core::ir::Interface,
     module: &mut syn::ItemMod,
+    selection: Option<&[String]>,
 ) -> Result<TokenStream, LowerError> {
+    if let Some(missing) = selection
+        .unwrap_or_default()
+        .iter()
+        .find(|name| !enabled_backends().contains(&name.as_str()))
+    {
+        return Err(LowerError {
+            span: proc_macro2::Span::call_site(),
+            message: format!(
+                "backends({missing}) needs the `{missing}` feature on the `unibind` dependency"
+            ),
+        });
+    }
     let mut glue: Vec<TokenStream> = Vec::new();
     #[cfg(feature = "py")]
-    {
+    if selected(selection, "py") {
         let rendered = unibind_backend_py::render(interface).map_err(|error| LowerError {
             span: proc_macro2::Span::call_site(),
             message: error.message,
@@ -65,7 +106,7 @@ fn backends(
         glue.push(rendered.glue);
     }
     #[cfg(feature = "ex")]
-    {
+    if selected(selection, "ex") {
         let rendered = unibind_backend_ex::render(interface).map_err(|error| LowerError {
             span: proc_macro2::Span::call_site(),
             message: error.message,
