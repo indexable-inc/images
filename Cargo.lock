@@ -12260,7 +12260,6 @@ dependencies = [
  "futures-core",
  "stabby",
  "unibind",
- "unibind-runtime",
  "unibind-stream",
 ]
 
@@ -12308,6 +12307,7 @@ dependencies = [
  "pyo3",
  "pyo3-async-runtimes",
  "tokio",
+ "unibind-stream",
 ]
 
 [[package]]

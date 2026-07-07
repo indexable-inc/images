@@ -15,8 +15,8 @@ workspace = true
 futures-core.workspace = true
 stabby.workspace = true
 unibind = { workspace = true, features = ["rs"] }
-# `UniStream` is the exported stream return type (the phase 2 surface).
-unibind-runtime.workspace = true
-# The generated glue boxes `UniStream` returns into the shared dynptr
-# protocol, so a stream-exporting engine links the protocol crate directly.
+# `UniStream` (the phase 2 stream return type) plus the dynptr protocol the
+# generated glue boxes it into. Deliberately NOT unibind-runtime: feature
+# unification would py-enable the runtime rlib and drag Python's C symbols
+# into this cdylib's link.
 unibind-stream.workspace = true

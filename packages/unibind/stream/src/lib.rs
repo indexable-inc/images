@@ -19,9 +19,60 @@
 //! `None` means "no item right now"; [`RawStream::is_done`] disambiguates
 //! end-of-stream from pending.
 
+use core::pin::Pin;
+use core::task::{Context, Poll};
+
 use stabby::abi::IDeterminantProvider;
 use stabby::future::StableWaker;
 use stabby::option::Option;
+
+/// A boxed stream crossing the binding boundary.
+///
+/// Exported functions return it by value; each backend wraps it in the
+/// target language's async iterator (Python's `__anext__`, the generated
+/// Rust client's `futures_core::Stream` wrapper), so every pull crosses the
+/// boundary once and the producer sees backpressure for free. It lives here
+/// rather than in `unibind-runtime` so a Rust-ABI engine never links the
+/// runtime's optional pyo3 half: cargo unifies features workspace-wide, and
+/// a py-enabled runtime rlib would drag Python's C symbols into every
+/// engine cdylib link.
+pub struct UniStream<T> {
+    inner: Pin<std::boxed::Box<dyn futures_core::Stream<Item = T> + Send + 'static>>,
+}
+
+impl<T> UniStream<T> {
+    /// Box `stream` for the boundary.
+    #[must_use]
+    pub fn new(stream: impl futures_core::Stream<Item = T> + Send + 'static) -> Self {
+        Self {
+            inner: std::boxed::Box::pin(stream),
+        }
+    }
+
+    /// Pull the next item; `None` once the stream ends.
+    pub async fn next(&mut self) -> core::option::Option<T> {
+        core::future::poll_fn(|context| self.inner.as_mut().poll_next(context)).await
+    }
+}
+
+impl<T> futures_core::Stream for UniStream<T> {
+    type Item = T;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<core::option::Option<T>> {
+        self.inner.as_mut().poll_next(context)
+    }
+}
+
+// Opaque by hand: the boxed stream has no useful state to show, and a
+// derive would demand `T: Debug` from every exported item type.
+impl<T> core::fmt::Debug for UniStream<T> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.debug_struct("UniStream").finish_non_exhaustive()
+    }
+}
 
 /// [`futures_core::Stream`], but ABI-stable. `None` from `poll_next` plus
 /// `is_done() == false` is "pending"; with `is_done() == true` the stream

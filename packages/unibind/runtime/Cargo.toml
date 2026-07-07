@@ -9,10 +9,16 @@ description = "Boundary types exported code references at runtime: UniStream and
 workspace = true
 
 [features]
-py = ["dep:pyo3", "dep:pyo3-async-runtimes", "dep:tokio", "tokio/sync"]
+py = ["dep:futures", "dep:pyo3", "dep:pyo3-async-runtimes", "dep:tokio", "tokio/sync"]
 
 [dependencies]
-futures.workspace = true
+# Only the `py` helpers need combinators; `UniStream` itself lives in
+# unibind-stream (see its crate docs for why) and is re-exported here.
+futures = { workspace = true, optional = true }
 pyo3 = { workspace = true, optional = true }
 pyo3-async-runtimes = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
+unibind-stream.workspace = true
+
+[dev-dependencies]
+futures.workspace = true

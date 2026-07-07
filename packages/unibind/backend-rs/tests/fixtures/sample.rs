@@ -3,7 +3,7 @@ mod sample {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
-    use unibind_runtime::UniStream;
+    use unibind_stream::UniStream;
 
     /// A row. The `flag`-first field order is deliberate: Rust would pack
     /// this struct tighter reordered, which exercises the mirror's layout

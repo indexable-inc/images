@@ -21,7 +21,7 @@ mod conformance {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::task::{Context, Poll};
 
-    use unibind_runtime::UniStream;
+    use unibind_stream::UniStream;
 
     /// A sample record. `flag` sits first on purpose: Rust would pack the
     /// struct tighter reordered, which exercises the generated mirror's
