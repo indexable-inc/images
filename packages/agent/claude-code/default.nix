@@ -263,6 +263,18 @@
     {
       # Keep transcripts and wrapper debug logs long enough for troubleshooting.
       cleanupPeriodDays = 365;
+      # settings `env` is read at Claude Code startup (even when launch env is
+      # missing), so bake the 1M-disable + compact cap here as well as in
+      # wrapperEnvDefaults. Without DISABLE_1M, native-1M models (Fable 5,
+      # Sonnet 5, Opus 4.8) report `/context` as 1M and autocompact late.
+      env =
+        (extraSettings.env or {})
+        // {
+          CLAUDE_CODE_DISABLE_1M_CONTEXT = "1";
+          # Fable/Sonnet 5: compact well before the 1M cliff; 300K matches the
+          # standard (non-[1m]) working window the picker labels "300K High".
+          CLAUDE_CODE_AUTO_COMPACT_WINDOW = "300000";
+        };
       permissions = {
         # Concatenate manually: deepMerge treats lists as leaves.
         deny = (extraSettings.permissions.deny or []) ++ sharedPermissions.claude.deniedToolPatterns;

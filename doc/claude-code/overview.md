@@ -63,12 +63,15 @@ the explicit `[1m]` model suffix, the silent auto-upgrade on eligible models,
 honoring a `context-1m` beta header, and the built-in `[1m]` rows in `/model`.
 One cosmetic residual: server-pushed model options
 (`additionalModelOptionsCache` in `~/.claude.json`, e.g. an org-offered row
-valued `claude-fable-5[1m]`) can still appear in the picker — and that cached
-`[1m]` string in `~/.claude.json` does NOT mean 1M is active — but selecting
-one still runs at the standard window, since the beta header is never sent and
-the window computation ignores the suffix. An install check asserts the
-default is baked in the spec, injected when unset, and yields to a caller
-value. Re-enable per machine with `export CLAUDE_CODE_DISABLE_1M_CONTEXT=`.
+valued `claude-fable-5[1m]`) can still appear in the picker — selecting one
+still runs at the standard window when the disable flag is active.
+
+The wrapper also bakes the same knobs into the read-only `--settings` `env`
+layer (`CLAUDE_CODE_DISABLE_1M_CONTEXT=1`,
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000`) so `/context` and autocompact stay
+on the ~300K working window even if launch-time `env_defaults` are missing.
+Install checks assert both paths. Re-enable 1M per machine with
+`export CLAUDE_CODE_DISABLE_1M_CONTEXT=`.
 
 ### Prepended flags (`wrapperFlags`, `default.nix:353-361`)
 

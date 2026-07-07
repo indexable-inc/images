@@ -77,6 +77,23 @@
       exit 1
     fi
 
+    # Same policy via the baked --settings env layer (read at CC startup even
+    # when process env is missing). Keeps `/context` off 1M for Fable 5 et al.
+    disable_1m="$(${lib.getExe jq} -r '.env.CLAUDE_CODE_DISABLE_1M_CONTEXT // empty' \
+      ${settingsDefaultsFile})"
+    compact_win="$(${lib.getExe jq} -r '.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW // empty' \
+      ${settingsDefaultsFile})"
+    if [ "$disable_1m" != 1 ]; then
+      printf '1M-context guard check failed: settings env CLAUDE_CODE_DISABLE_1M_CONTEXT is %s, want 1\n' \
+        "$disable_1m" >&2
+      exit 1
+    fi
+    if [ "$compact_win" != 300000 ]; then
+      printf '1M-context guard check failed: settings env CLAUDE_CODE_AUTO_COMPACT_WINDOW is %s, want 300000\n' \
+        "$compact_win" >&2
+      exit 1
+    fi
+
     check() {
       local desc="$1" expected="$2"
       shift 2
