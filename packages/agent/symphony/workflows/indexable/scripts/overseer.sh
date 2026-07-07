@@ -124,22 +124,25 @@ jq -n \
 
 # Same secret scrub as insights.sh: ExecRunner inherits the full BEAM env;
 # codex only needs its own API key.
+# The judge is the claude harness on fable at high effort. No tools: the
+# whole world it needs is in the prompt, so --allowedTools "" doubles as
+# the read-only sandbox. --output-format json carries the reply in
+# .result, which lands in $last_msg for the same strict parse as before.
 (
   cd "$workdir"
   env -u SLACK_BOT_OAUTH_TOKEN -u SLACK_SIGNING_SECRET \
     -u GH_TOKEN -u GITHUB_TOKEN -u GITHUB_WEBHOOK_SECRET \
     -u LINEAR_API_KEY -u LINEAR_WEBHOOK_SECRET \
     -u SYMPHONY_GITHUB_APP_PRIVATE_KEY_BASE64 -u SYMPHONY_ROOM_REGISTRY_TOKEN \
-    codex exec --sandbox read-only --ignore-user-config \
-    --skip-git-repo-check \
-    --output-last-message "$last_msg" \
+    "$HOME/.local/bin/claude" -p --model fable --effort high \
+    --allowedTools "" --output-format json \
     "$(cat "$prompt_file")
 
 Your notes from previous ticks:
 $(cat "$notes")
 
 Snapshot ($now_iso):
-$(cat "$snap")" </dev/null # codex reads a non-tty stdin to EOF; the runner pipe never closes (#2011)
+$(cat "$snap")" </dev/null | jq -r '.result' > "$last_msg"
 )
 
 # The reply must be the {digest, attention, agents, notes} JSON object;
