@@ -674,11 +674,58 @@ async def read(
     span = f":{start}-{end}" if start is not None and end is not None else (f":{start}" if start is not None else "")
     name = f"read {target}{span}"
     cell_outputs, summary = await current_kernel().python_exec(code, budget=30.0, name=name, session=sid)
-    if summary is not None and summary.get("status") == "error" and summary.get("error"):
+    status = summary.get("status") if summary is not None else None
+    if summary is not None and status == "error" and summary.get("error"):
+        # The in-kernel read itself raised (bad expression, unreadable path):
+        # the traceback is the useful answer, so return it as the content.
         return [outputs.text(summary["error"])]
+    if summary is not None and status == "wedged":
+        # The kernel bridge could not execute the read: a wedged cell holds the
+        # kernel's one event loop, so nothing was read. Fail loudly -- a quiet
+        # empty reply here is indistinguishable from reading an empty file, and
+        # was misread exactly that way (index#2381).
+        raise McpError(
+            ErrorData(
+                code=types.INTERNAL_ERROR,
+                message=(
+                    f"read {target}: kernel unavailable, nothing was read. "
+                    + str(summary.get("error") or "The kernel did not respond.")
+                ),
+            )
+        )
     rendered = outputs.to_mcp(cell_outputs)
     content = [item for item in rendered if getattr(item, "text", None) != "(no output)"]
-    return content or rendered
+    if content:
+        return content
+    if status == "done":
+        # The read COMPLETED and produced no text: the file or value is
+        # genuinely empty. Only this state may report emptiness (index#2381).
+        return rendered
+    if status == "running" and summary is not None and summary.get("id"):
+        # The kernel is healthy but the read outlived its foreground budget
+        # (a slow expression, a giant file): point at the live job instead of
+        # posing as empty output.
+        job_id = summary["id"]
+        return [
+            outputs.text(
+                f"[read {target} is still running as jobs[{job_id!r}] after its 30s "
+                f"foreground budget; await or page it via python_exec.]"
+            )
+        ]
+    # No output and no completed job summary: the in-kernel runtime never ran
+    # the read (dead bridge, cancelled run, stale build). Never report this as
+    # empty success (index#2381).
+    raise McpError(
+        ErrorData(
+            code=types.INTERNAL_ERROR,
+            message=(
+                f"read {target}: kernel unavailable, nothing was read "
+                "(the read produced no output and no completed job summary"
+                + (f"; status {status!r}" if status is not None else "")
+                + ")."
+            ),
+        )
+    )
 
 
 @mcp.tool(structured_output=False, description=guide.TRACE)

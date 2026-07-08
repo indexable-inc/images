@@ -3402,6 +3402,36 @@
       mkdir -p "$out"
     '';
 
+  # The read tool's failure contract (index#2381): when the kernel bridge
+  # cannot execute the read (a wedge summary, a bridge returning neither
+  # output nor a completed job summary), the tool must raise a "kernel
+  # unavailable" error, never return empty content -- an empty reply is
+  # indistinguishable from reading an empty file, and was misread exactly that
+  # way. Pure unit tests over a stubbed kernel: no kernel boots, no sockets
+  # bind, so it runs in the sandbox on every platform.
+  readUnavailableTestSource = builtins.path {
+    name = "ix-mcp-read-unavailable-test";
+    path = ./tests/test_read_kernel_unavailable.py;
+  };
+  readUnavailableTests =
+    pkgs.runCommand "ix-mcp-read-unavailable-tests"
+    {
+      nativeBuildInputs = [typecheckTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${readUnavailableTestSource} "$TMPDIR/test_read_kernel_unavailable.py"
+      ${lib.getExe typecheckTestPython} -m pytest "$TMPDIR/test_read_kernel_unavailable.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp read kernel-unavailable tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      cat stdout
+      mkdir -p "$out"
+    '';
+
   # Exercises the rich-output capture path: a DataFrame result is persisted to the
   # store with its text/html bundle (so the dashboard renders a table, not a repr),
   # a display() call made while a job runs is captured the same way, and a bytes
@@ -6132,6 +6162,7 @@ in
               kernelDeathSmoke
               kernelRestartSmoke
               wedgeEscalationSmoke
+              readUnavailableTests
               richSmoke
               yieldSmoke
               bindingsSmoke

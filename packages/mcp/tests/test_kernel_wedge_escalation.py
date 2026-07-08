@@ -45,19 +45,23 @@ def test_unrescuable_block_escalates_to_kernel_restart() -> None:
                 budget=15.0,
                 name="arm",
             )
-            assert armed is not None and armed["status"] == "done", armed
+            assert armed is not None
+            assert armed["status"] == "done", armed
             old_pid = kernel._pid
             assert old_pid is not None
 
             _, summary = await kernel.python_exec("import time\ntime.sleep(120)", budget=0.5, name="block")
-            assert summary is not None and summary["status"] == "wedged", summary
+            assert summary is not None
+            assert summary["status"] == "wedged", summary
             assert "killed and respawned" in summary["error"], summary
             # The escalation bounced only this kernel child; the fresh pid proves it.
-            assert kernel._pid is not None and kernel._pid != old_pid, (old_pid, kernel._pid)
+            assert kernel._pid is not None
+            assert kernel._pid != old_pid, (old_pid, kernel._pid)
             assert kernel._death is None, kernel._death
 
             _, after = await kernel.python_exec("Result.text('alive')", budget=10.0, name="after")
-            assert after is not None and after["status"] == "done", after
+            assert after is not None
+            assert after["status"] == "done", after
         finally:
             await kernel.shutdown()
 
@@ -75,13 +79,15 @@ def test_rescued_block_reports_verified_recovery() -> None:
             # A plain Python-level block: SIGUSR2 interrupts it, the probe
             # confirms the kernel answered, and NO restart happens.
             _, summary = await kernel.python_exec("import time\ntime.sleep(120)", budget=0.5, name="block")
-            assert summary is not None and summary["status"] == "wedged", summary
+            assert summary is not None
+            assert summary["status"] == "wedged", summary
             assert "usable again" in summary["error"], summary
             assert "asyncio.to_thread" in summary["error"], summary
             assert kernel._pid == old_pid, (old_pid, kernel._pid)
 
             _, after = await kernel.python_exec("Result.text('alive')", budget=10.0, name="after")
-            assert after is not None and after["status"] == "done", after
+            assert after is not None
+            assert after["status"] == "done", after
         finally:
             await kernel.shutdown()
 

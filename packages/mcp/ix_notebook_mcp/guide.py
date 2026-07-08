@@ -367,7 +367,9 @@ READ = (
     "as a file when it names an existing file, otherwise it is evaluated as a Python expression "
     "in the kernel namespace (e.g. `jobs['ab12'].output` to page a job, or a variable you bound "
     "earlier); an expression whose value is a string naming an existing file reads that file "
-    "too. Pass `start` / `end` for a 1-based inclusive line range."
+    "too. Pass `start` / `end` for a 1-based inclusive line range. When the kernel cannot execute "
+    "the read (wedged or dead), the tool ERRORS with 'kernel unavailable' rather than returning "
+    "empty output, so empty content always means the file or value is genuinely empty."
 )
 
 TRACE = (
