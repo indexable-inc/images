@@ -638,6 +638,7 @@
       writeRustApplication
       ;
     btopSrc = btop-src;
+    nushell = nushell-src;
     nushellSrc = nushell-src;
     codexSrc = codex-src;
     clippySrc = clippy-src;

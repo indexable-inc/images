@@ -620,6 +620,7 @@
       clippy = ix.clippySrc;
       mesa = ix.mesaSrc;
       nix = ix.nixSrc;
+      nushell = ix.nushellSrc;
     };
     patchesRoot = paths.root;
     flakeLock = lib.importJSON (paths.root + "/flake.lock");
