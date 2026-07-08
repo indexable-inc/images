@@ -206,6 +206,7 @@
           programs.claude-code = {
             enable = true;
             systemPrompt.omitRules = ["reportToPlaybook"];
+            houseContext.enable = true;
             personalStartupContext = true;
           };
           programs.codex = {
@@ -4013,7 +4014,7 @@
         message = "Codex Home Manager module should thread systemPrompt.omitRules into the package wrapper";
       }
       {
-        # houseContext defaults on: the native `context` option carries the
+        # When explicitly enabled, the native `context` option carries the
         # context render (house rules without the system-tagged basics).
         assertion =
           lib.hasInfix "shokunin" homeAgentConfig.programs.claude-code.context

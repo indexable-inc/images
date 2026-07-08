@@ -38,11 +38,9 @@
   # never occupies (or symlinks) the writable settings.json the CLI churns at
   # runtime. `{ }` (default) ships only the computed defaults.
   extraSettings ? {},
-  # Claude Code built-in orchestration and hosted-service tool posture. Values
-  # are explicit strings, not booleans, so a review reads as "tool -> state" and
-  # adding a new controlled tool requires choosing `enabled` or `disabled` in
-  # `defaultSystemTools` below. Disabled entries render as bare tool names in
-  # settings `permissions.deny`, which removes the tool from Claude's available
+  # Claude Code built-in orchestration and hosted-service tool posture. True
+  # means Claude sees the tool; false renders the bare tool name into settings
+  # `permissions.deny`, which removes the tool from Claude's available
   # tool set. Core shell/file/search tools stay in sharedPermissions because
   # their defaults depend on which MCP replacements the wrapper bakes.
   systemTools ? {},
@@ -222,46 +220,39 @@
     map (name: "CLAUDE_CODE_DISABLE_${name}") claudeCodeDisabledFeatureDefaults
   ) (_: 1);
 
-  systemToolStates = [
-    "enabled"
-    "disabled"
-  ];
   defaultSystemTools = {
-    Agent = "enabled";
-    Artifact = "enabled";
-    AskUserQuestion = "disabled";
-    DesignSync = "disabled";
-    EnterPlanMode = "disabled";
-    EnterWorktree = "disabled";
-    ExitPlanMode = "disabled";
-    ExitWorktree = "disabled";
-    PushNotification = "disabled";
-    RemoteTrigger = "enabled";
-    ReportFindings = "disabled";
-    ScheduleWakeup = "enabled";
-    SendMessage = "enabled";
-    SendUserFile = "enabled";
-    ShareOnboardingGuide = "enabled";
-    Skill = "enabled";
-    TaskCreate = "enabled";
-    TaskGet = "enabled";
-    TaskList = "enabled";
-    TaskOutput = "enabled";
-    TaskStop = "enabled";
-    TaskUpdate = "enabled";
-    ToolSearch = "enabled";
-    WaitForMcpServers = "enabled";
-    Workflow = "enabled";
+    Agent = true;
+    Artifact = true;
+    AskUserQuestion = false;
+    DesignSync = false;
+    EnterPlanMode = false;
+    EnterWorktree = false;
+    ExitPlanMode = false;
+    ExitWorktree = false;
+    PushNotification = false;
+    RemoteTrigger = true;
+    ReportFindings = false;
+    ScheduleWakeup = true;
+    SendMessage = true;
+    SendUserFile = true;
+    ShareOnboardingGuide = true;
+    Skill = true;
+    TaskCreate = true;
+    TaskGet = true;
+    TaskList = true;
+    TaskOutput = true;
+    TaskStop = true;
+    TaskUpdate = true;
+    ToolSearch = true;
+    WaitForMcpServers = true;
+    Workflow = true;
   };
   unknownSystemTools = lib.subtractLists (builtins.attrNames defaultSystemTools) (builtins.attrNames systemTools);
-  invalidSystemTools = lib.filterAttrs (_: state: !(builtins.elem state systemToolStates)) systemTools;
   effectiveSystemTools =
     if unknownSystemTools != []
     then throw "claude-code.systemTools: unknown tool(s): ${lib.concatStringsSep ", " unknownSystemTools}"
-    else if invalidSystemTools != {}
-    then throw "claude-code.systemTools: states must be one of ${lib.concatStringsSep ", " systemToolStates}"
     else defaultSystemTools // systemTools;
-  disabledSystemTools = builtins.attrNames (lib.filterAttrs (_: state: state == "disabled") effectiveSystemTools);
+  disabledSystemTools = builtins.attrNames (lib.filterAttrs (_: enabled: !enabled) effectiveSystemTools);
 
   # Settings defaults are injected only when the caller passed no `--settings`;
   # Claude treats repeated settings flags as first-wins.

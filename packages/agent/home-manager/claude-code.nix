@@ -78,19 +78,16 @@ in {
     };
 
     systemTools = lib.mkOption {
-      type = lib.types.attrsOf (lib.types.enum [
-        "enabled"
-        "disabled"
-      ]);
+      type = lib.types.attrsOf lib.types.bool;
       default = {};
       example = {
-        AskUserQuestion = "enabled";
-        DesignSync = "enabled";
+        AskUserQuestion = true;
+        DesignSync = true;
       };
       description = ''
         Overrides for Claude Code built-in orchestration and hosted-service
         tools. Tool names must be present in the wrapper's defaultSystemTools
-        table, and values must be `enabled` or `disabled`.
+        table. True enables the tool; false denies it.
       '';
     };
 
@@ -147,15 +144,16 @@ in {
     houseContext = {
       enable = lib.mkOption {
         type = lib.types.bool;
-        default = true;
+        default = false;
         description = ''
           Write the house context render (the tagged prompt rules minus the
           `system`-only basics, see packages/agent/prompt) to
           {file}`~/.claude/CLAUDE.md` through the native
           {option}`programs.claude-code.context` option, so sessions whose
           runtime keeps its stock system prompt (claude.ai desktop, unwrapped
-          CLIs) still ride the house rules. An explicit `context` value
-          overrides this default entirely.
+          CLIs) still ride the house rules. Keep this off when the consuming
+          Home Manager configuration already manages {file}`.claude/CLAUDE.md`
+          through {option}`home.file`.
         '';
       };
 

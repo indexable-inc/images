@@ -120,7 +120,7 @@ wrapper injects its defaults file only `unless_present` a caller `--settings`
 - `permissions.deny` for `systemTools`: the `defaultSystemTools` table in
   `default.nix` is the source of truth for Claude Code orchestration and
   hosted-service tool posture. Override with
-  `systemTools.<ToolName> = "enabled"` when that surface earns its context cost.
+  `systemTools.<ToolName> = true` when that surface earns its context cost.
 - `hooks` (below).
 
 ### MCP servers (`--mcp-config`, `default.nix:90-94`, `295-297`)
@@ -176,7 +176,7 @@ and on Linux the sandbox helpers `bubblewrap` and `socat`.
 
 `default.nix` exposes these args: `binName` (default `claude`),
 `dangerouslySkipPermissions`, `extraSettings`, `systemTools`, `primaryCheckouts`,
-`mcpServers`, `systemPrompt`. Example: `claude-code.override { systemTools.AskUserQuestion = "enabled"; }`.
+`mcpServers`, `systemPrompt`. Example: `claude-code.override { systemTools.AskUserQuestion = true; }`.
 
 ## Build and wiring
 
