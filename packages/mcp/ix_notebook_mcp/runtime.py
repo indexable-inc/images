@@ -54,7 +54,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any, overload
 
 from . import readstats, registry, typecheck
-from .config import build_stamp
+from .config import build_stamp, process_cwd
 
 _ix_current: contextvars.ContextVar = contextvars.ContextVar("ix_current_job", default=None)
 
@@ -4468,7 +4468,7 @@ def install(user_ns: dict | None = None) -> None:
     # Seed the default session label with this kernel's working directory; the
     # connecting client's identity is folded in later (see Kernel.set_client).
     with contextlib.suppress(OSError):
-        session._workdir = pathlib.Path.cwd().name or ""
+        session._workdir = process_cwd().name or ""
         session._rev += 1  # ensure the first flush mirrors the default to the store
     target["resources"] = resources
     target["Resource"] = Resource

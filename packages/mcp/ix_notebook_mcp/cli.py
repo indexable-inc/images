@@ -50,6 +50,7 @@ from .config import (
     is_tailnet_ipv4,
     live_hub,
     port_open,
+    process_cwd,
     runtime_dir,
     set_config,
 )
@@ -403,7 +404,7 @@ def _auto_dashboard() -> bool:
 
 def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
     wd = getattr(args, "workdir", None)
-    workdir = Path(wd).resolve() if wd else Path.cwd()
+    workdir = Path(wd).resolve() if wd else process_cwd()
     workdir.mkdir(parents=True, exist_ok=True)
 
     http = getattr(args, "http", None)
