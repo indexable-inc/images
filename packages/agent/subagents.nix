@@ -1,5 +1,14 @@
 # Declarative Claude subagents bundled by the agent package set. Each agent is
 # authored as Nix data: frontmatter fields plus markdown content.
+#
+# Inline `mcpServers` entries here must NOT reuse a server name the parent
+# session's wrapper already binds (`index`, `exa`): Claude Code silently
+# discards a same-named inline config and reuses the parent's existing
+# connection, so an "own kernel" declared as `index` actually shared the
+# spawning session's serve and inherited its wedges (#2382; probed 2026-07-07:
+# a same-named spawn ran on the parent's kernel pid, a fresh-named spawn got
+# its own serve process). The distinct name is what makes the isolation real;
+# the eval-time assert at the bottom keeps the trap from coming back.
 {
   ix,
   lib,
@@ -15,7 +24,7 @@
           + "the whole loop in its own index kernel and returns only the distilled "
           + "result, keeping screenshots and DOM dumps out of the main thread.";
         mcpServers = ix.mcp.toAgentMcpServers {
-          index = {
+          own-kernel = {
             transport = "stdio";
             command = lib.getExe repoPackages.mcp;
             args = ["serve"];
@@ -29,9 +38,12 @@
         dumps, and intermediate tool output it never needs again. Your whole value is
         that none of that crosses back. Only your final message reaches the parent.
 
-        You have your own `index` MCP: a fresh Python kernel (`python_exec`) with the
-        bundled helpers (`browser`, `view`, `grep`, `find`, `nu`, image `Read`, ...). Drive the
-        task to its outcome there, in this context, and return a small result.
+        You have your own kernel: the `own-kernel` MCP server, a fresh serve process
+        with a Python kernel (`python_exec`) and the bundled helpers (`browser`,
+        `view`, `grep`, `find`, `nu`, image `Read`, ...). Drive the task to its
+        outcome there, in this context, and return a small result. Use only the
+        `mcp__own-kernel__*` tools: any inherited `mcp__index__*` tools are the
+        spawning session's shared serve, not yours.
 
         ## You are the executor, not a planner
 
@@ -89,7 +101,7 @@
           + "repo-relative paths, keeping the search transcript out of your context. "
           + "Complements exact search (mgrep/rg), it does not replace it; read-only.";
         mcpServers = ix.mcp.toAgentMcpServers {
-          index = {
+          own-kernel = {
             transport = "stdio";
             command = lib.getExe repoPackages.mcp;
             args = ["serve"];
@@ -104,8 +116,9 @@
 
         ## Run the search
 
-        Cursor ships a semantic index of the repo; drive it headless (no TUI) from your
-        `index` kernel. In `python_exec`:
+        Cursor ships a semantic index of the repo; drive it headless (no TUI) from
+        your own kernel, the `own-kernel` MCP server (use its tools, not any
+        inherited `mcp__index__*` ones). In its `python_exec`:
 
         ```python
         res = await nu(
@@ -294,7 +307,7 @@
           + "spawns, or backgrounds work.";
         color = "green";
         mcpServers = ix.mcp.toAgentMcpServers {
-          index = {
+          own-kernel = {
             transport = "stdio";
             command = lib.getExe repoPackages.mcp;
             args = ["serve"];
@@ -308,8 +321,11 @@
         back the real outputs. Your whole value is fidelity: the parent needs
         verbatim stdout/stderr and exit codes, not a summary and not a plan.
 
-        You have no Bash tool. Your shell is the `index` MCP kernel: name the
-        session (`session_set_name`), then run each command via `python_exec`:
+        You have no Bash tool. Your shell is your OWN index kernel, connected as
+        the `own-kernel` MCP server: a fresh serve process spawned for this run,
+        so a wedged spawning session cannot reach you. Name the session
+        (`own-kernel`'s `session_set_name`), then run each command via its
+        `python_exec`:
 
         ```python
         r = await nu("^git -C /abs/path status --porcelain", check=False)
@@ -320,6 +336,10 @@
 
         - Run the commands verbatim, in order. Use absolute paths from the brief;
           never rely on cwd persisting between calls (`git -C <path>`, not `cd`).
+        - Use ONLY the `own-kernel` server's tools (`mcp__own-kernel__*`). Any
+          inherited `mcp__index__*` tools belong to the spawning session's shared
+          serve; touching them reintroduces the shared fate your dedicated
+          kernel exists to avoid (#2382).
         - NEVER delegate: no spawning agents, no background jobs, no relaying, no
           substitute execution paths through other MCP servers. If the kernel
           itself is unavailable, stop and report the exact failing tool call and
@@ -481,7 +501,28 @@
       '';
     };
   };
-in {
-  renderedAgents = agents;
-  rawFiles = [];
-}
+  # Server names the parent session's wrapper already binds. An inline
+  # subagent server reusing one of these is silently discarded by Claude Code
+  # and the parent's connection shared instead (#2382), so the isolated kernel
+  # the agent declares would not exist. Enforced at eval so the trap cannot
+  # come back.
+  reservedServerNames =
+    builtins.attrNames
+    (import ./mcp.nix {inherit lib ix repoPackages;}).defaultServers;
+  inlineServerNames = frontmatter:
+    lib.concatMap builtins.attrNames (lib.filter builtins.isAttrs (frontmatter.mcpServers or []));
+  serverNameCollisions =
+    lib.filterAttrs (
+      _: agent: lib.intersectLists reservedServerNames (inlineServerNames (agent.frontmatter or {})) != []
+    )
+    agents;
+in
+  assert lib.assertMsg (serverNameCollisions == {}) ''
+    subagents: an inline mcpServers entry reuses a wrapper-baked server name
+    (reserved: ${lib.concatStringsSep ", " reservedServerNames}). Claude Code
+    silently drops a same-named inline config and shares the parent session's
+    connection instead (#2382), so pick a distinct name.
+    Offending agent(s): ${lib.concatStringsSep ", " (builtins.attrNames serverNameCollisions)}''; {
+    renderedAgents = agents;
+    rawFiles = [];
+  }
