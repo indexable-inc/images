@@ -559,6 +559,17 @@ in {
         ];
         allow-import-from-derivation = lib.mkDefault true;
         warn-dirty = false;
+        # nixpkgs' nix-daemon module bakes `sandbox-fallback = false` as a
+        # "legacy configuration conversion" (nixos/modules/services/system/
+        # nix-daemon.nix), which turns a build FATAL the moment the kernel
+        # lacks the namespaces sandboxing needs. ix guests deliberately run
+        # without user namespaces (hardening sets `allowNamespaces = false`)
+        # and the VM is itself the isolation boundary, so a build that cannot
+        # be sandboxed should degrade to an unsandboxed build with a warning,
+        # not kill `ix up`. Restore Nix's own upstream default of `true`.
+        # mkForce because the nixpkgs assignment is unconditional, not a
+        # default. See indexable-inc/index#2453.
+        sandbox-fallback = lib.mkForce true;
       };
       gc = {
         automatic = true;
