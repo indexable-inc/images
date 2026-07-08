@@ -186,6 +186,10 @@ $(cat "$notes")
 
 Snapshot ($now_iso):
 $(cat "$snap")" </dev/null > "$last_msg.envelope"
+  # An empty envelope (claude killed mid-run, e.g. host slept) makes
+  # jq -e exit 1 with no message (the bare line-191 failures of
+  # 2026-07-08); name the cause instead.
+  [ -s "$last_msg.envelope" ] || { echo "claude -p produced no output" >&2; exit 5; }
   jq -er 'if .is_error then error("claude -p errored: " + (.subtype // "unknown")) else .result end' \
     "$last_msg.envelope" > "$last_msg"
 )
