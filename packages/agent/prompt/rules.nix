@@ -754,6 +754,33 @@
     };
   }
   {
+    monitorHarnessKill = {
+      tags = ["claude-code"];
+      text = ''
+        A watch can also die without the watched thing ending: `script failed
+        (exit 144)` in a task-notification means the watch shell was SIGTERMed
+        from outside the session (144 is the harness sentinel for an external
+        SIGTERM; your own TaskStop renders "stopped" and a real timeout
+        "[Monitor timed out]"), often a deliberate nudge to wake a session
+        stuck behind a wedged watcher. No event accompanies it and the
+        output-file only exists if the script ever wrote output, so treat it
+        as "watched state unknown": re-probe the state directly, then re-arm.
+        Arm long poll loops with `trap 'echo <terminal line>; exit 0' TERM` so
+        an external kill surfaces as a clean terminal event instead.
+      '';
+      reason = ''
+        Two ssh poll-loop watchers wedged on a pgrep self-match were SIGTERMed
+        by the overseer to wake their session; each surfaced only as `script
+        failed (exit 144)` with zero events and no output file,
+        indistinguishable from a crash, and the watched builds went unprobed
+        until manual intervention (#2313). A trap-armed repro converted the
+        same external SIGTERM into a delivered terminal line and a clean
+        completion. Scoped to claude-code because it names the Monitor and
+        TaskStop tooling.
+      '';
+    };
+  }
+  {
     harness = {
       tags = ["system"];
       text = ''
