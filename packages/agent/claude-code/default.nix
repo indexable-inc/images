@@ -217,8 +217,17 @@
     map (name: "CLAUDE_CODE_DISABLE_${name}") claudeCodeDisabledFeatureDefaults
   ) (_: 1);
 
+  # Disabling a tool here puts its BARE name in `permissions.deny`, which
+  # strips the tool's schema from the model context entirely; Claude Code has
+  # no lazy/deferred-description mode for built-in tools (scoped patterns
+  # like `Bash(...)` leave the schema loaded), so denying is the only way to
+  # reclaim their tokens. The orchestration surface (Agent, SendMessage,
+  # Task*, ScheduleWakeup) is off because delegation routes through the index
+  # kernel instead: coding agents spawned from `python_exec` as background
+  # jobs, completion notifying the session over the kernel channel (#2404).
+  # The MCP resource browsers are kernel-superseded the same way.
   defaultSystemTools = {
-    Agent = true;
+    Agent = false;
     Artifact = true;
     AskUserQuestion = false;
     DesignSync = false;
@@ -226,20 +235,23 @@
     EnterWorktree = false;
     ExitPlanMode = false;
     ExitWorktree = false;
+    ListMcpResourcesTool = false;
     PushNotification = false;
+    ReadMcpResourceDirTool = false;
+    ReadMcpResourceTool = false;
     RemoteTrigger = true;
     ReportFindings = false;
-    ScheduleWakeup = true;
-    SendMessage = true;
+    ScheduleWakeup = false;
+    SendMessage = false;
     SendUserFile = true;
     ShareOnboardingGuide = true;
     Skill = true;
-    TaskCreate = true;
-    TaskGet = true;
-    TaskList = true;
-    TaskOutput = true;
-    TaskStop = true;
-    TaskUpdate = true;
+    TaskCreate = false;
+    TaskGet = false;
+    TaskList = false;
+    TaskOutput = false;
+    TaskStop = false;
+    TaskUpdate = false;
     ToolSearch = true;
     WaitForMcpServers = true;
     Workflow = true;

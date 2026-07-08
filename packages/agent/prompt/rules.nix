@@ -659,22 +659,23 @@
   {
     backgroundSubagents = {
       text = ''
-        Delegate independent work to named subagents by default: split
+        Delegate independent work to agents spawned through the index kernel:
+        the harness subagent and task tools are absent by design, so
+        delegation means kernel-spawned coding agents (the how-to arrives
+        with the MCP instructions; `api('tui')` is the catalog entry),
+        launched as background jobs by default so the main thread stays free,
+        with completion notifying the session over the kernel channel. Split
         implementation by phase, fan independent questions (diagnostic
         differentials, research legs, per-component checks) out in parallel,
-        and give each editing subagent its own worktree. Keep the main agent on
-        orchestration, quick replies, and trivial one-step work. Match subagent model
-        strength to task difficulty: strongest for hard reasoning, planning, and
-        high-stakes decisions; cheaper tiers for mechanical edits, search, and
-        settled execution. For simple delegated questions, use the MCP subagent
-        tool to spawn Codex on `gpt-5.5` with low reasoning.
-        Subagents inherit the kernel-first tool denies: no Bash, Read, or
-        Edit, even when an agent definition declares them. Brief them to work
-        through their own index kernel, and for verbatim command execution
-        spawn the `executor` agent; never promise a subagent a Bash tool.
+        and give each editing agent its own worktree. Keep the main session
+        on orchestration, quick replies, and trivial one-step work. Match
+        agent model strength to task difficulty: strongest for hard
+        reasoning, planning, and high-stakes decisions; cheaper tiers (Codex
+        on `gpt-5.5` with low reasoning) for mechanical edits, search, and
+        settled execution.
         When a request branches off the current conversation (a side task,
         fix, or change that is not the thread's main line), dispatch it to a
-        named background subagent by default and keep the main thread
+        named background agent by default and keep the main thread
         conversational; do the work inline only when it is the conversation's
         actual subject or trivially quick.
       '';
@@ -682,12 +683,15 @@
         Serial main-thread editing wasted wall clock on independent work and bloated
         the orchestrating context. Simple lookup questions do not need expensive
         reasoning, but still benefit from separate context. Doing a mid-conversation
-        side task inline blocks the user's follow-ups; a background subagent keeps the
+        side task inline blocks the user's follow-ups; a background agent keeps the
         live conversation fluid.
-        Briefs that promised a default subagent "your Bash tool" (stripped by
-        the settings deny) produced relay swarms: in one session 130 subagents
-        reported the missing tool and improvised shell through Monitor and the
-        Blender MCP code runner (index#2153).
+        The harness Agent/Task tool schemas were denied to reclaim their
+        context tokens (bare-name deny is the only mechanism: built-in tools
+        have no lazy-description mode; #2404), and harness subagents
+        inherited the kernel-first denies anyway: briefs promising "your Bash
+        tool" produced relay swarms, 130 subagents in one session reporting
+        the missing tool and improvising shell through side channels
+        (index#2153).
       '';
     };
   }
@@ -742,10 +746,6 @@
         watch is actually alive: a harness-tracked background child running,
         its output growing. Receiving your own stop notification means no
         watch survived, so re-arm one or proceed synchronously.
-        An armed ScheduleWakeup is such a watch: pending wakeups live only
-        in harness memory and a session resume or user abort silently drops
-        them, so on any later turn that still counts on one, re-verify or
-        re-arm it before ending the turn.
       '';
       reason = ''
         Success-only watchers turn silent failures into indefinite waits. A
@@ -755,36 +755,6 @@
         watching the watcher. Separately, three background agents in one
         session ended turns "waiting for the monitor" with no live watch and
         stalled until a coordinator manually probed and nudged them (#1941).
-        An armed ScheduleWakeup vanished across intervening notification
-        turns and never fired, idling a background session 24h past its gate
-        (#2259).
-      '';
-    };
-  }
-  {
-    monitorHarnessKill = {
-      tags = ["claude-code"];
-      text = ''
-        A watch can also die without the watched thing ending: `script failed
-        (exit 144)` in a task-notification means the watch shell was SIGTERMed
-        from outside the session (144 is the harness sentinel for an external
-        SIGTERM; your own TaskStop renders "stopped" and a real timeout
-        "[Monitor timed out]"), often a deliberate nudge to wake a session
-        stuck behind a wedged watcher. No event accompanies it and the
-        output-file only exists if the script ever wrote output, so treat it
-        as "watched state unknown": re-probe the state directly, then re-arm.
-        Arm long poll loops with `trap 'echo <terminal line>; exit 0' TERM` so
-        an external kill surfaces as a clean terminal event instead.
-      '';
-      reason = ''
-        Two ssh poll-loop watchers wedged on a pgrep self-match were SIGTERMed
-        by the overseer to wake their session; each surfaced only as `script
-        failed (exit 144)` with zero events and no output file,
-        indistinguishable from a crash, and the watched builds went unprobed
-        until manual intervention (#2313). A trap-armed repro converted the
-        same external SIGTERM into a delivered terminal line and a clean
-        completion. Scoped to claude-code because it names the Monitor and
-        TaskStop tooling.
       '';
     };
   }
