@@ -379,7 +379,6 @@
       "x86_64-linux"
       "aarch64-linux"
       "aarch64-darwin"
-      "x86_64-darwin"
     ];
     perSystem = lib.genAttrs devSystems (
       system:
@@ -396,19 +395,18 @@
     );
     collect = key: lib.mapAttrs (_: out: out.${key}) perSystem;
     linuxDarwinAliases = perSystem.x86_64-linux.darwinPackageAliases or {};
-    # Graft the Linux->Darwin cross aliases over a collected per-system set, so
+    # Graft the Linux-to-Darwin cross aliases over a collected per-system set so
     # a Darwin namespace resolves an aliased attr to the cross-compiled
     # x86_64-linux derivation instead of a native rebuild. Applied to both
     # `packages` (the consumer surface) and `cachePushRoots` (what
-    # cache-push.yml publishes): the darwin cache lane realises the post-alias
+    # cache-push.yml publishes): the Darwin cache lane realises the post-alias
     # set filtered to native aarch64-darwin drvs, so an alias-shadowed native
-    # variant (e.g. dag-runner) is neither built nor published -- consumers can
+    # variant (e.g. dag-runner) is neither built nor published. Consumers can
     # never install it (#1890).
     withDarwinAliases = raw:
       raw
       // lib.genAttrs [
         "aarch64-darwin"
-        "x86_64-darwin"
       ] (system: raw.${system} // (linuxDarwinAliases.${system} or {}));
     packages = withDarwinAliases (collect "packages");
   in {
