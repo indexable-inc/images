@@ -3038,7 +3038,7 @@
         pkgs.fd
       ];
       strictDeps = true;
-      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246) + claude-history session search (#2245)";
+      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246) + claude-history session search (#2245) + per-serve kernel trace file (#2355)";
     }
     ''
       export HOME=$TMPDIR/home
@@ -3067,6 +3067,8 @@
       # In-band kernel build staleness (#2110): the api() header row and the
       # TypeError-hint build stamp; imports the site-packages ix_notebook_mcp.
       cp ${./tests/test_build_info.py} test_build_info.py
+      # Issue #2355: per-serve kernel trace file + sweep of orphaned dumps.
+      cp ${./tests/test_kernel_trace_path.py} test_kernel_trace_path.py
       ${lib.getExe typecheckTestPython} -m pytest \
         test_typecheck.py test_job_await_errors.py test_job_cancel_scope.py \
         test_jobs_spawn.py \
@@ -3076,6 +3078,7 @@
         test_claude_history.py \
         test_sh_module.py \
         test_build_info.py \
+        test_kernel_trace_path.py \
         -q -p no:cacheprovider >stdout 2>stderr || {
         echo "ix-mcp typecheck smoke failed:" >&2
         cat stdout stderr >&2

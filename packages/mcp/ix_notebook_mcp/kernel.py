@@ -61,6 +61,31 @@ def _describe_exit(returncode: int | None) -> str:
     return f"exit code {returncode}"
 
 
+def trace_path_for(server_pid: int) -> Path:
+    """The faulthandler dump target for the serve owning ``server_pid``. One
+    file per serve, not one machine-wide name: concurrent kernels sharing a
+    path truncate and interleave each other's dumps (index#2355)."""
+    return runtime_dir() / f"kernel-trace-{server_pid}.txt"
+
+
+def _sweep_stale_traces() -> None:
+    """Drop trace files orphaned by serves that are gone: a SIGKILLed serve
+    never reaches shutdown(), so its file would linger in runtime_dir()
+    forever. The legacy fixed-name ``kernel-trace.txt`` (no pid suffix) is
+    left alone for still-running older builds."""
+    for path in runtime_dir().glob("kernel-trace-*.txt"):
+        try:
+            pid = int(path.stem.rsplit("-", 1)[-1])
+        except ValueError:
+            continue
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            path.unlink(missing_ok=True)
+        except PermissionError:
+            continue  # a live process we cannot signal: not ours to sweep
+
+
 def _wedged_summary(budget: float, grace: float, deadline: float, *, interrupted: bool) -> dict:
     """A per-call summary, shaped like ``runtime._job_summary``, returned when a
     cell blocks the kernel past ``deadline``. The server renders it like any
@@ -131,9 +156,14 @@ class Kernel:
         from jupyter_client.manager import AsyncKernelManager
 
         # Point the kernel's faulthandler at a private file before launch; the
-        # kernel inherits this env and registers the SIGUSR1 dump handler.
-        self._trace_path = runtime_dir() / "kernel-trace.txt"
+        # kernel inherits this env and registers the SIGUSR1 dump handler. The
+        # name carries this server's pid: every serve on the machine shares
+        # runtime_dir(), and one fixed name had concurrent kernels truncating
+        # and interleaving each other's dumps, so kernel_trace could return a
+        # different session's stacks (index#2355).
+        self._trace_path = trace_path_for(os.getpid())
         os.environ[TRACE_ENV] = str(self._trace_path)
+        _sweep_stale_traces()
 
         self._km = AsyncKernelManager(kernel_name="python3")
         await self._km.start_kernel(cwd=str(self._config.workdir))
@@ -565,6 +595,12 @@ class Kernel:
             self._kc.stop_channels()
         if self._km is not None:
             await self._km.shutdown_kernel(now=True)
+        # This serve owns its trace file (the name carries our pid): remove it
+        # so clean exits leave nothing behind; SIGKILLed serves are covered by
+        # the sweep at the next start().
+        if self._trace_path is not None:
+            self._trace_path.unlink(missing_ok=True)
+            self._trace_path = None
 
 
 _KERNEL: Kernel | None = None
