@@ -109,6 +109,63 @@ def test_cancel_running_leaves_other_sessions_untouched(
     assert "other done" in (other.text or "")
 
 
+def test_cancel_running_spares_a_job_the_call_deliberately_spawned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A python_exec call may detach work with ``jobs.spawn`` -- the user asked
+    # for that to outlive the call. The spawned child inherits the parent's
+    # session and starts LATER than the parent run, so a naive "cancel the
+    # newest running job for this session" would kill the child instead of the
+    # abandoned foreground run. Cancelling the abandoned call must cancel the
+    # foreground run (kind="cell") and leave the spawned child (kind="spawn")
+    # running.
+    _wire(monkeypatch, {"asyncio": asyncio, "jobs": runtime.jobs})
+
+    async def scenario() -> tuple[runtime.Job, runtime.Job]:
+        foreground = await runtime.__ix_run(
+            "child = jobs.spawn(asyncio.sleep(30))\n"
+            "await asyncio.sleep(30)\n"
+            "'foreground side effect ran'",
+            budget=0.05,
+            session="agent-a",
+        )
+        assert foreground.running()
+
+        # The cell spawns the child on its FIRST line, but the foreground run may
+        # background (budget elapsed) before the cell task has run that far --
+        # more likely under a loaded, single-core CI runner. Wait for the child
+        # to actually register rather than assuming it is there already.
+        def _spawned() -> list[runtime.Job]:
+            return [
+                j
+                for j in runtime.jobs.values()
+                if j.session == "agent-a" and j.kind == "spawn"
+            ]
+
+        for _ in range(1000):
+            if _spawned():
+                break
+            await asyncio.sleep(0.005)
+        children = _spawned()
+        assert children, "the cell's jobs.spawn child never registered"
+        spawned = max(children, key=lambda j: j.started)
+        assert spawned.started > foreground.started  # newest running is the child
+        cancelled = runtime.__ix_cancel_running(session="agent-a")
+        assert cancelled == [foreground.id]  # NOT the spawned child
+        await foreground.wait(10)
+        # Assert the child survives WHILE the loop is still live: `asyncio.run`
+        # cancels every outstanding task at teardown, so a check after it
+        # returned would see the child cancelled by the shutdown, not by us.
+        assert foreground.status == "cancelled"
+        assert spawned.running()  # the deliberately-detached job was spared
+        spawned.cancel()  # cleanup before the loop closes
+        return foreground, spawned
+
+    foreground, spawned = asyncio.run(scenario())
+    assert foreground.status == "cancelled"
+    assert "foreground side effect ran" not in (foreground.text or "")
+
+
 def test_cancel_running_is_a_noop_when_the_run_already_finished(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

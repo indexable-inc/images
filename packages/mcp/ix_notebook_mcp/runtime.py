@@ -4141,22 +4141,29 @@ def __ix_cancel_running(session: str | None = None, exclude: str | None = None) 
     already abandoned (index#2387). Cancelling that job here is the SAME path as
     an explicit ``jobs['<id>'].cancel()``, so it drains and records cleanly.
 
-    Only the single most recently started still-running job for ``session`` is
-    cancelled: that is the one the abandoned call launched. Other background jobs
-    the same session started earlier (and did not abandon) keep running.
-    ``exclude`` skips a job id -- the raw cancel request's own frame is never a
-    ``jobs`` entry, but the guard keeps the helper honest if that ever changes.
-    Returns the ids cancelled (empty when the run already finished, the common
-    race: a fast call completes before the cancellation lands)."""
+    Only the single most recently started still-running ``python_exec`` run
+    (``kind == "cell"``) for ``session`` is cancelled: that is the one the
+    abandoned call launched. Crucially, jobs the call itself detached with
+    ``jobs.spawn`` (``kind == "spawn"``, newer-started than the parent run but
+    inheriting its session) are NOT candidates -- the user asked for those to
+    outlive the call, so cancelling the abandoned foreground run must leave them
+    running. Legitimate earlier runs the same session did not abandon also keep
+    running. ``exclude`` skips a job id -- the raw cancel request's own frame is
+    never a ``jobs`` entry, but the guard keeps the helper honest if that ever
+    changes. Returns the ids cancelled (empty when the run already finished, the
+    common race: a fast call completes before the cancellation lands)."""
     candidates = [
         job
         for job in jobs.values()
-        if job.session == session and job.running() and job.id != exclude
+        if job.session == session
+        and job.kind == "cell"
+        and job.running()
+        and job.id != exclude
     ]
     if not candidates:
         return []
-    # Newest-started wins: `jobs` is insertion-ordered, and the abandoned call is
-    # the last run this session launched.
+    # Newest-started cell wins: `jobs` is insertion-ordered, and the abandoned
+    # call is the last foreground run this session launched.
     target = max(candidates, key=lambda job: job.started)
     target.cancel()
     return [target.id]
