@@ -38,6 +38,7 @@
         dangerouslySkipPermissions
         personalStartupContext
         primaryCheckouts
+        systemTools
         ;
       # The index plugin (skills as `/index:<skill>`) rides the wrapper's
       # `--plugin-dir` layer ahead of any user-specified plugin dirs.
@@ -74,6 +75,23 @@ in {
       type = lib.types.bool;
       default = true;
       description = "Bake Claude Code's bypass-permissions flag into the wrapper.";
+    };
+
+    systemTools = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.enum [
+        "enabled"
+        "disabled"
+      ]);
+      default = {};
+      example = {
+        AskUserQuestion = "enabled";
+        DesignSync = "enabled";
+      };
+      description = ''
+        Overrides for Claude Code built-in orchestration and hosted-service
+        tools. Tool names must be present in the wrapper's defaultSystemTools
+        table, and values must be `enabled` or `disabled`.
+      '';
     };
 
     addDirs = lib.mkOption {

@@ -18,6 +18,7 @@
   launchSpec,
   settingsDefaultsFile,
   wrapperFlags,
+  disabledSystemTools,
   python3,
   binName,
 }: ''
@@ -62,6 +63,16 @@
     }
     check_env_default CLAUDE_CODE_DISABLE_1M_CONTEXT
     check_env_default CLAUDE_CODE_DISABLE_CRON
+
+    disabled_system_tools=(${lib.escapeShellArgs disabledSystemTools})
+    for tool in "''${disabled_system_tools[@]}"
+    do
+      if ! ${lib.getExe jq} -e --arg tool "$tool" '.permissions.deny | index($tool)' \
+        ${settingsDefaultsFile} >/dev/null; then
+        printf 'system tool deny check failed: %s is not denied in settings defaults\n' "$tool" >&2
+        exit 1
+      fi
+    done
 
     if ${lib.getExe jq} -e \
       '.env[] | select(.key == "CLAUDE_CODE_DISABLE_1M_CONTEXT" or .key == "CLAUDE_CODE_DISABLE_CRON")' \

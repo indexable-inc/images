@@ -38,6 +38,14 @@
   # never occupies (or symlinks) the writable settings.json the CLI churns at
   # runtime. `{ }` (default) ships only the computed defaults.
   extraSettings ? {},
+  # Claude Code built-in orchestration and hosted-service tool posture. Values
+  # are explicit strings, not booleans, so a review reads as "tool -> state" and
+  # adding a new controlled tool requires choosing `enabled` or `disabled` in
+  # `defaultSystemTools` below. Disabled entries render as bare tool names in
+  # settings `permissions.deny`, which removes the tool from Claude's available
+  # tool set. Core shell/file/search tools stay in sharedPermissions because
+  # their defaults depend on which MCP replacements the wrapper bakes.
+  systemTools ? {},
   # Directories baked into the wrapper as `--add-dir=<dir>` flags, one per entry.
   # `--add-dir` grants tool file-access to a directory, AND (the reason this arg
   # exists) Claude Code loads any `<dir>/.claude/skills/` and `<dir>/CLAUDE.md`
@@ -214,6 +222,47 @@
     map (name: "CLAUDE_CODE_DISABLE_${name}") claudeCodeDisabledFeatureDefaults
   ) (_: 1);
 
+  systemToolStates = [
+    "enabled"
+    "disabled"
+  ];
+  defaultSystemTools = {
+    Agent = "enabled";
+    Artifact = "enabled";
+    AskUserQuestion = "disabled";
+    DesignSync = "disabled";
+    EnterPlanMode = "disabled";
+    EnterWorktree = "disabled";
+    ExitPlanMode = "disabled";
+    ExitWorktree = "disabled";
+    PushNotification = "disabled";
+    RemoteTrigger = "enabled";
+    ReportFindings = "disabled";
+    ScheduleWakeup = "enabled";
+    SendMessage = "enabled";
+    SendUserFile = "enabled";
+    ShareOnboardingGuide = "enabled";
+    Skill = "enabled";
+    TaskCreate = "enabled";
+    TaskGet = "enabled";
+    TaskList = "enabled";
+    TaskOutput = "enabled";
+    TaskStop = "enabled";
+    TaskUpdate = "enabled";
+    ToolSearch = "enabled";
+    WaitForMcpServers = "enabled";
+    Workflow = "enabled";
+  };
+  unknownSystemTools = lib.subtractLists (builtins.attrNames defaultSystemTools) (builtins.attrNames systemTools);
+  invalidSystemTools = lib.filterAttrs (_: state: !(builtins.elem state systemToolStates)) systemTools;
+  effectiveSystemTools =
+    if unknownSystemTools != []
+    then throw "claude-code.systemTools: unknown tool(s): ${lib.concatStringsSep ", " unknownSystemTools}"
+    else if invalidSystemTools != {}
+    then throw "claude-code.systemTools: states must be one of ${lib.concatStringsSep ", " systemToolStates}"
+    else defaultSystemTools // systemTools;
+  disabledSystemTools = builtins.attrNames (lib.filterAttrs (_: state: state == "disabled") effectiveSystemTools);
+
   # Settings defaults are injected only when the caller passed no `--settings`;
   # Claude treats repeated settings flags as first-wins.
 
@@ -270,7 +319,11 @@
         };
       permissions = {
         # Concatenate manually: deepMerge treats lists as leaves.
-        deny = (extraSettings.permissions.deny or []) ++ sharedPermissions.claude.deniedToolPatterns;
+        deny = lib.unique (
+          (extraSettings.permissions.deny or [])
+          ++ disabledSystemTools
+          ++ sharedPermissions.claude.deniedToolPatterns
+        );
       };
       # Full Claude hook set rendered from shared agent policy.
       hooks = sharedHooks.claude;
@@ -482,6 +535,7 @@ in
         launchSpec
         settingsDefaultsFile
         wrapperFlags
+        disabledSystemTools
         python3
         binName
         ;

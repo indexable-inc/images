@@ -117,6 +117,10 @@ wrapper injects its defaults file only `unless_present` a caller `--settings`
 - `permissions.deny` `WebSearch` / `WebFetch`: one web surface, not two; use
   Exa MCP for live web research. Deny rules are enforced in every
   permission mode.
+- `permissions.deny` for `systemTools`: the `defaultSystemTools` table in
+  `default.nix` is the source of truth for Claude Code orchestration and
+  hosted-service tool posture. Override with
+  `systemTools.<ToolName> = "enabled"` when that surface earns its context cost.
 - `hooks` (below).
 
 ### MCP servers (`--mcp-config`, `default.nix:90-94`, `295-297`)
@@ -171,8 +175,8 @@ and on Linux the sandbox helpers `bubblewrap` and `socat`.
 ## Overrides
 
 `default.nix` exposes these args: `binName` (default `claude`),
-`dangerouslySkipPermissions`, `extraSettings`, `primaryCheckouts`, `mcpServers`,
-`systemPrompt`. Example: `claude-code.override { dangerouslySkipPermissions = false; }`.
+`dangerouslySkipPermissions`, `extraSettings`, `systemTools`, `primaryCheckouts`,
+`mcpServers`, `systemPrompt`. Example: `claude-code.override { systemTools.AskUserQuestion = "enabled"; }`.
 
 ## Build and wiring
 
