@@ -301,17 +301,14 @@ jobs:
           eval_jobs="$(nix build --inputs-from . nixpkgs#nix-eval-jobs --no-link --print-out-paths)/bin/nix-eval-jobs"
           phase tools "$tools_t"
 
-          # The eval IFDs the input-addressed cross cargo unit graph (vendor
-          # dir, unit graph JSON, rendered cargo-units.nix): the darwin
-          # workspace is bound to the cross graph (lib/packages.nix), so these
-          # substitute from the `push` lane's `crossIfdRoots` instead of
-          # re-rendering here. The realised residual is codex, btop,
-          # nix-output-monitor, libkrun-efi, and the config-launch launcher
-          # units. Non-darwin rows are the `push` lane's responsibility and
-          # drop out. Eval errors surface as warnings, not failures: an attr
-          # can legitimately refuse to instantiate on darwin (linux-only module
-          # assertions), and the error row does not say which system the attr
-          # would have been.
+          # The eval IFDs the native darwin cargo unit graph (vendor dir, unit
+          # graph JSON, rendered cargo-units.nix); those realise here -- this is
+          # a mac -- and are published as explicit roots (lib/per-system.nix
+          # `nativeIfdRoots`) because consumer evals force them too. Non-darwin
+          # rows are the `push` lane's responsibility and drop out. Eval errors
+          # surface as warnings, not failures: an attr can legitimately refuse
+          # to instantiate on darwin (linux-only module assertions), and the
+          # error row does not say which system the attr would have been.
           #
           # `--gc-roots-dir` roots every instantiated drv for the realise
           # loop below: its per-root `nix store gc` otherwise deletes the

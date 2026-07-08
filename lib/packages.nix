@@ -19,19 +19,7 @@
       # is bound to.
       cargoUnit = cargoUnitFor pkgs;
       goUnit = goUnitFor pkgs;
-      # On aarch64-darwin swap the workspace's native unit graph for the
-      # input-addressed cross graph the linux `push` lane already publishes
-      # (`unitsFor` re-roots the DAG at the target, same shape as `units`).
-      # The native graph is floating content-addressed, so a Mac can't
-      # substitute it from cache.ix.dev (atticd serves narinfos only, no
-      # `/realisations`) and re-renders it locally every eval (#1755); the
-      # cross graph carries eval-time paths and substitutes via plain narinfo.
-      rustWorkspace = let
-        ws = rustWorkspaceFor pkgs;
-      in
-        if packageSystem == "aarch64-darwin"
-        then ws // {units = ws.unitsFor {target = "aarch64-apple-darwin";};}
-        else ws;
+      rustWorkspace = rustWorkspaceFor pkgs;
       # unibind build glue bound to the caller's pkgs, for the same reason as
       # rustWorkspace above.
       unibind = ixSpecialArgs.unibindFor pkgs;
