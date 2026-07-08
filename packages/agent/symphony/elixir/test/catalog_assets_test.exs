@@ -32,27 +32,31 @@ defmodule SymphonyElixir.CatalogAssetsTest do
            |> Enum.all?(&match?({:ok, %Skill{}}, &1))
   end
 
-  test "indexable pack insights workflow fires daily via cron" do
+  test "indexable pack insights workflow is manual while its cron is disabled" do
     source = File.read!(Path.join([@root, "workflows", "indexable", "workflows", "insights.sym"]))
     assert {:ok, workflow} = Parser.parse(source, file: "insights.sym")
 
     assert workflow.name == "insights"
-    # The cron kind and zone are the load-bearing contract: Triggers.Cron
-    # selects on them, and the zone keeps 9am Pacific across DST.
-    assert %{kind: :cron, schedule: "0 9" <> _, timezone: "America/Los_Angeles"} = workflow.trigger
+    # The cron is disabled (every scheduled run was failing in exec-0);
+    # the manual kind is the load-bearing contract until it is restored.
+    # When re-enabling, assert the cron shape again:
+    #   %{kind: :cron, schedule: "0 9" <> _, timezone: "America/Los_Angeles"}
+    assert workflow.trigger == %{kind: :manual}
 
     binds = for {:bind, name, _expr} <- workflow.statements, do: name
     assert binds == ["insights"]
   end
 
-  test "indexable pack triage workflow fires daily via cron" do
+  test "indexable pack triage workflow is manual while its cron is disabled" do
     source = File.read!(Path.join([@root, "workflows", "indexable", "workflows", "triage.sym"]))
     assert {:ok, workflow} = Parser.parse(source, file: "triage.sym")
 
     assert workflow.name == "triage"
-    # The cron kind and zone are the load-bearing contract: Triggers.Cron
-    # selects on them, and the zone keeps 9am Pacific across DST.
-    assert %{kind: :cron, schedule: "0 9" <> _, timezone: "America/Los_Angeles"} = workflow.trigger
+    # The cron is disabled (every scheduled run was failing in exec-0);
+    # the manual kind is the load-bearing contract until it is restored.
+    # When re-enabling, assert the cron shape again:
+    #   %{kind: :cron, schedule: "0 9" <> _, timezone: "America/Los_Angeles"}
+    assert workflow.trigger == %{kind: :manual}
 
     binds = for {:bind, name, _expr} <- workflow.statements, do: name
     assert binds == ["triage"]
