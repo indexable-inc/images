@@ -11,8 +11,10 @@
 execution store, and the MCP transport, all on one event loop. It publishes its
 panes into the shared discovery dir but does NOT spawn a `dashboard` hub: that
 aggregator is a single machine-wide process, started once on demand by
-`ix-mcp dashboard` (which reuses a running hub or spawns one and opens it), and
-renders every server behind one URL. Set `IX_MCP_AUTO_DASHBOARD` truthy to
+`ix-mcp dashboard` (which reuses a running hub or spawns one and prints its
+URL), and renders every server behind one URL. It never opens a browser unless
+the user asks with `ix-mcp dashboard --open`. Set `IX_MCP_AUTO_DASHBOARD`
+truthy to
 restore the old per-server auto-spawn.
 `notebook` is the engine without the MCP surface: the same kernel and store,
 driven only by what is already in the session file and the humans watching it.
@@ -87,12 +89,12 @@ def main(argv: list[str] | None = None) -> int:
     notebook.add_argument("--workdir", help="Directory the kernel runs in (default: cwd)")
     dash = sub.add_parser(
         "dashboard",
-        help="Open the shared dashboard UI, starting it once if it is not already running",
+        help="Print the shared dashboard URL, starting it once if needed",
     )
     dash.add_argument(
-        "--no-open",
+        "--open",
         action="store_true",
-        help="Print the URL but do not open a browser",
+        help="Open the URL in the default browser after printing it",
     )
     sub.add_parser(
         "requirements",
@@ -117,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     if command in ("serve", "notebook"):
         return _serve(args, engine_only=command == "notebook")
     if command == "dashboard":
-        return _dashboard(open_browser=not args.no_open)
+        return _dashboard(open_browser=args.open)
     if command == "requirements":
         from . import requirements
 
@@ -851,8 +853,8 @@ def _spawn_shared_hub() -> dict | None:
     return state
 
 
-def _dashboard(*, open_browser: bool = True) -> int:
-    """Open the one shared dashboard, starting it if needed. Idempotent: a hub
+def _dashboard(*, open_browser: bool = False) -> int:
+    """Print the one shared dashboard URL, starting it if needed. Idempotent: a hub
     already running is reused (no second board), which is the whole point of the
     machine-wide singleton -- repeated runs never pile up dashboards."""
     state = ensure_shared_dashboard()
@@ -860,9 +862,8 @@ def _dashboard(*, open_browser: bool = True) -> int:
         return 1
     url = state["url"]
     print(url)
-    # Open the advertised URL (the hub binds the tailnet IP or loopback, so this
-    # is reachable from this host too); only when attached to a terminal so an
-    # embedder shelling out to `ix-mcp dashboard` does not pop a browser.
+    # Only an explicit `ix-mcp dashboard --open` launches a browser. Printing
+    # the URL is enough for humans, and avoids stealing focus from agents.
     if open_browser and sys.stdout.isatty():
         webbrowser.open(url)
     return 0

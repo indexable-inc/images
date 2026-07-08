@@ -23,7 +23,7 @@ nix run .#mcp -- serve                       # MCP over stdio
 nix run .#mcp -- serve --http :8000          # MCP over streamable HTTP instead
 nix run .#mcp -- serve --session work.ixnb   # same, recorded in a reopenable session file
 nix run .#mcp -- notebook work.ixnb          # the engine alone: kernel + dashboard, no MCP
-nix run .#mcp -- dashboard                   # print/open this server's data-API URL (human UI: nix run .#dashboard)
+nix run .#mcp -- dashboard                   # print the shared dashboard URL without opening a browser
 nix run .#mcp -- eval '1 + 2'                # one-shot expression on a throwaway kernel
 ```
 
