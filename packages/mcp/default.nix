@@ -1973,10 +1973,11 @@
   serverTools = importTest "server" (
     "import asyncio; from ix_notebook_mcp.tools import mcp; "
     + "names = sorted(t.name for t in asyncio.run(mcp.list_tools())); "
-    # session_set_name joined the surface in #1615 but this expected set was
-    # not updated with it; the stale drv kept passing from cache on main until
-    # this package's inputs changed and forced a rebuild.
-    + "expected = {'python_exec','pr_watch','read','kernel_trace','tui_act','session_set_name','topic_set','reply'}; "
+    # This set drifts silently: session_set_name (#1615) and kernel_restart
+    # (#2349) each joined the surface without updating it, and the stale drv
+    # kept passing from cache on main until this package's inputs changed and
+    # forced a rebuild. When adding a tool, add it here in the same change.
+    + "expected = {'python_exec','pr_watch','read','kernel_trace','kernel_restart','tui_act','session_set_name','topic_set','reply'}; "
     + "assert set(names) == expected, ('tool surface drifted: %r' % (names,)); "
     + "from ix_notebook_mcp import registry; instr = mcp._mcp_server.instructions; "
     + "assert 'root=' not in instr, 'a parameter/signature leaked into the instructions'; "
