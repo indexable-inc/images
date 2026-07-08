@@ -155,6 +155,30 @@
       };
     }
     {
+      name = "nushell";
+      input = "nushell-src";
+      url = "https://github.com/nushell/nushell.git";
+      patchDir = "packages/nushell/patches";
+      autoUpdate = true;
+      upstreamPolicy = {
+        prsWelcome = true;
+        aiPrsAllowed = "unknown";
+        citation = "https://github.com/nushell/nushell/blob/main/CONTRIBUTING.md";
+        notes = "PRs welcome for focused changes; CONTRIBUTING has no AI-specific policy as of 2026-07-07. Include tests and user-facing release-note context.";
+      };
+      patches = {
+        "0001-Add-xattrs-column-to-ls-l.patch" = {
+          upstream = "attempt";
+          reason = "General filesystem feature requested in nushell/nushell#7106; prior PR #7158 was abandoned and explicitly left open for takeover.";
+          prExtra = "Related issue: nushell/nushell#7106. Prior closed attempt: nushell/nushell#7158.";
+        };
+        "0002-Derive-feature-list-for-cargo-unit-builds.patch" = {
+          upstream = "never";
+          reason = "Repo-specific: cargo-unit does not export Cargo's aggregate CARGO_CFG_FEATURE env var, so the package derives it from CARGO_FEATURE_* for ix builds.";
+        };
+      };
+    }
+    {
       # clippy is nightly-toolchain-coupled: its input is pinned by rev and must
       # move only with the pinned nightly, so `rebase-patches` is run explicitly
       # alongside a toolchain bump, never under a blanket `nix flake update` or

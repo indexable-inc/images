@@ -9,6 +9,7 @@
   home-manager,
   hermes-agent,
   btop-src,
+  nushell-src,
   drgn-src,
   perftest-src,
   fff-src,
@@ -637,6 +638,7 @@
       writeRustApplication
       ;
     btopSrc = btop-src;
+    nushellSrc = nushell-src;
     codexSrc = codex-src;
     clippySrc = clippy-src;
     nixSrc = nix-src;

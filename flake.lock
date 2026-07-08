@@ -300,6 +300,22 @@
         "type": "github"
       }
     },
+    "nushell-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1783458263,
+        "narHash": "sha256-lQz5lhpSiItyYXpCuy/KCQSF3T+CMctY/kYytfuI3cw=",
+        "owner": "nushell",
+        "repo": "nushell",
+        "rev": "65829326fbab11a8ddd8bff6aabb17d18b394e0c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nushell",
+        "repo": "nushell",
+        "type": "github"
+      }
+    },
     "perftest-src": {
       "flake": false,
       "locked": {
@@ -439,6 +455,7 @@
         "nix-src": "nix-src",
         "nixpkgs": "nixpkgs",
         "nu-jupyter-kernel-src": "nu-jupyter-kernel-src",
+        "nushell-src": "nushell-src",
         "perftest-src": "perftest-src",
         "pg-uint128-src": "pg-uint128-src",
         "rust-overlay": "rust-overlay",

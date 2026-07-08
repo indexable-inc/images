@@ -152,6 +152,14 @@
       flake = false;
     };
 
+    # Upstream nushell/nushell, patched in-repo (packages/nushell/patches).
+    # Tracks upstream main (autoUpdate = true in lib/fork-packages.nix): the
+    # scheduled fork-sync bumps nushell-src and rebases the xattr patch.
+    nushell-src = {
+      url = "github:nushell/nushell";
+      flake = false;
+    };
+
     drgn-src = {
       url = "git+https://github.com/osandov/drgn?ref=refs/tags/v0.2.0&submodules=1";
       flake = false;
@@ -265,6 +273,7 @@
     home-manager,
     hermes-agent,
     btop-src,
+    nushell-src,
     drgn-src,
     perftest-src,
     pg-uint128-src,
@@ -352,6 +361,7 @@
         home-manager
         hermes-agent
         btop-src
+        nushell-src
         drgn-src
         perftest-src
         fff-src
