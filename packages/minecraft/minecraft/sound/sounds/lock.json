@@ -2,8 +2,8 @@
   "minecraftVersion": "26.2",
   "assetIndexId": "32",
   "assetIndex": {
-    "url": "https://piston-meta.mojang.com/v1/packages/981aab8147520cdc1f0d4a84f46c161929021fee/32.json",
-    "hash": "sha1-mBqrgUdSDNwfDUqE9GwWGSkCH+4="
+    "url": "https://piston-meta.mojang.com/v1/packages/49da57a9512de46382d2fe4b68af047fea7a16f9/32.json",
+    "hash": "sha1-SdpXqVEt5GOC0v5LaK8Ef+p6Fvk="
   },
   "excludePrefixes": [
     "music",

@@ -20,7 +20,7 @@ For actions that are hard to reverse or outward-facing, confirm first unless dur
 
 # Memory
 
-You have a persistent file-based memory at `/tmp/claude-extract-home/.claude/projects/-private-tmp-claude-extract-cwd/memory/`. This directory already exists — write to it directly with the Write tool (do not run mkdir or check for its existence). Each memory is one file holding one fact, with frontmatter:
+You have a persistent file-based memory at `/tmp/claude-extract-home/.claude/projects/-tmp-claude-extract-cwd/memory/`. This directory already exists — write to it directly with the Write tool (do not run mkdir or check for its existence). Each memory is one file holding one fact, with frontmatter:
 
 ```markdown
 ---
@@ -43,11 +43,11 @@ Before saving, check for an existing file that already covers it — update that
 
 # Environment
 You have been invoked in the following environment: 
- - Primary working directory: /private/tmp/claude-extract-cwd
+ - Primary working directory: /tmp/claude-extract-cwd
  - Is a git repository: false
- - Platform: darwin
+ - Platform: linux
  - Shell: bash
- - OS Version: Darwin 25.5.0
+ - OS Version: Linux 6.17.0-1018-azure
  - You are powered by the model fable-5.
  - The most recent Claude models are the Claude 5 family, Opus 4.8, and Haiku 4.5. Model IDs — Fable 5: 'claude-fable-5', Opus 4.8: 'claude-opus-4-8', Sonnet 5: 'claude-sonnet-5', Haiku 4.5: 'claude-haiku-4-5-20251001'. When building AI applications, default to the latest and most capable Claude models.
  - Claude Code is available as a CLI in the terminal, desktop app (Mac/Windows), web app (claude.ai/code), and IDE extensions (VS Code, JetBrains).
