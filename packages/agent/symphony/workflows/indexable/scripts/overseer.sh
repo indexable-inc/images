@@ -195,6 +195,11 @@ $(cat "$snap")" </dev/null > "$last_msg.envelope"
 report_file="$(mktemp)"
 tr -d '\000-\010\013\014\016-\037' < "$last_msg" > "$last_msg.clean"
 mv "$last_msg.clean" "$last_msg"
+# Models sporadically fence the JSON despite the prompt (2026-07-08 00:10Z
+# rejected reply was exactly that); unwrap one fence pair, stay strict
+# about everything inside it.
+sed -e '1{/^```[a-z]*$/d;}' -e '${/^```$/d;}' "$last_msg" > "$last_msg.unfenced"
+mv "$last_msg.unfenced" "$last_msg"
 # On a bad reply, keep the raw bytes as evidence before failing loudly.
 if ! jq -e . "$last_msg" > /dev/null 2>&1; then
   cp "$last_msg" "$state_dir/last-reply.rejected"
