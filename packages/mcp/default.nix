@@ -3373,6 +3373,35 @@
       mkdir -p "$out"
     '';
 
+  # python_exec's wedge escalation (index#2375): the SIGUSR2 rescue only helps a
+  # Python-level block; a main thread stuck inside native code never runs the
+  # handler, so after the interrupt the server must PROBE the kernel and, when
+  # the probe hangs too, kill and respawn only the kernel child (never claim
+  # "usable again" on mere signal delivery). Boots a real kernel, so it reuses
+  # the full interpreter plus pytest.
+  wedgeEscalationTestSource = builtins.path {
+    name = "ix-mcp-wedge-escalation-test";
+    path = ./tests/test_kernel_wedge_escalation.py;
+  };
+  wedgeEscalationSmoke =
+    pkgs.runCommand "ix-mcp-wedge-escalation-smoke"
+    {
+      nativeBuildInputs = [typecheckTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${wedgeEscalationTestSource} "$TMPDIR/test_kernel_wedge_escalation.py"
+      ${lib.getExe typecheckTestPython} -m pytest "$TMPDIR/test_kernel_wedge_escalation.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp wedge-escalation smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      cat stdout
+      mkdir -p "$out"
+    '';
+
   # Exercises the rich-output capture path: a DataFrame result is persisted to the
   # store with its text/html bundle (so the dashboard renders a table, not a repr),
   # a display() call made while a job runs is captured the same way, and a bytes
@@ -6102,6 +6131,7 @@ in
               wedgeSmoke
               kernelDeathSmoke
               kernelRestartSmoke
+              wedgeEscalationSmoke
               richSmoke
               yieldSmoke
               bindingsSmoke

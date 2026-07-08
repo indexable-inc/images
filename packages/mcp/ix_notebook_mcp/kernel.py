@@ -86,28 +86,45 @@ def _sweep_stale_traces() -> None:
             continue  # a live process we cannot signal: not ours to sweep
 
 
-def _wedged_summary(budget: float, grace: float, deadline: float, *, interrupted: bool) -> dict:
+# What the wedge rescue actually achieved, verified rather than assumed
+# (index#2375): "recovered" means the kernel answered a probe after the
+# interrupt; "restarted" means it did not (a block inside native code never
+# reaches the Python-level rescue handler) and the kernel child was killed and
+# respawned; "restart_pending" means another call already owns that respawn.
+_RECOVERY = {
+    "recovered": "The kernel was interrupted, answered a follow-up probe, and is usable again.",
+    "restarted": (
+        "The interrupt did not unblock it (a block inside native code never "
+        "reaches the Python-level rescue handler), so the kernel child was "
+        "killed and respawned: the session namespace was restored from its "
+        "checkpoint and this cell's work was lost."
+    ),
+    "restart_pending": (
+        "The interrupt did not unblock it and a kernel restart is already in "
+        "progress; retry shortly."
+    ),
+}
+
+
+def _wedged_summary(budget: float, grace: float, deadline: float, *, outcome: str) -> dict:
     """A per-call summary, shaped like ``runtime._job_summary``, returned when a
     cell blocks the kernel past ``deadline``. The server renders it like any
     other summary, so the caller gets a clear, actionable message rather than an
-    opaque transport timeout. ``interrupted`` reports whether the rescue signal
-    was actually sent, so the message does not claim a recovery that did not
-    happen when the kernel pid is unknown."""
-    recovery = (
-        "The kernel was interrupted and is usable again."
-        if interrupted
-        else "The kernel could NOT be interrupted (its pid is unknown); it is still "
-        "blocked and likely needs a restart."
-    )
+    opaque transport timeout. ``outcome`` (a ``_RECOVERY`` key) reports what the
+    rescue verifiably achieved, so the message never claims a recovery that did
+    not happen (index#2375: SIGUSR2 delivery alone proves nothing when the block
+    is in native code)."""
     message = (
         f"Cell blocked the kernel's event loop for over {deadline:.0f}s "
         f"(budget {budget:.0f}s + {grace:.0f}s grace) with a synchronous "
-        f"call, so the budget could not background it. {recovery} "
+        f"call, so the budget could not background it. {_RECOVERY[outcome]} "
         "Wrap blocking calls (subprocess.run, time.sleep, "
         "requests, heavy CPU) in `await asyncio.to_thread(...)` or use an async "
-        "API, and run anything slow as a background job. The interrupted run is "
-        "recoverable in this kernel via history() / jobs['<id>']."
+        "API, and run anything slow as a background job."
     )
+    if outcome == "recovered":
+        # Only a surviving kernel still holds the interrupted run's job row.
+        message += " The interrupted run is recoverable in this kernel via history() / jobs['<id>']."
     return {
         "id": None,
         "name": None,
@@ -317,8 +334,11 @@ class Kernel:
         the job and returns the summary right after the budget elapses). If the
         kernel does not report idle within ``budget + wedge_grace`` the cell is
         blocking the kernel's single event loop with a synchronous call: interrupt
-        the kernel so it is usable again and return an actionable summary instead
-        of letting an opaque ``Timeout waiting for output`` escape to the caller.
+        the kernel, verify with a probe that the interrupt actually landed, and
+        escalate to a kernel restart when it did not (index#2375: a block inside
+        native code never reaches the Python-level rescue handler, so delivery
+        alone recovers nothing) -- then return an actionable summary instead of
+        letting an opaque ``Timeout waiting for output`` escape to the caller.
         """
         name_arg = "None" if name is None else repr(name)
         session_arg = "None" if session is None else repr(session)
@@ -337,7 +357,25 @@ class Kernel:
             # while this request waited, report that precise cause, never a wedge.
             self._check_alive()
             interrupted = await self._interrupt()
-            return [], _wedged_summary(budget, grace, deadline, interrupted=interrupted)
+            if interrupted and await self._probe_idle():
+                outcome = "recovered"
+            else:
+                # Delivery is not recovery: the SIGUSR2 rescue is a Python-level
+                # handler that only runs at a bytecode boundary, so a main thread
+                # blocked inside native code (the embedded nu engine, index#2095;
+                # any C extension) never executes it. Left alone the kernel wedges
+                # until the client SIGTERMs the whole serve (index#2365), so kill
+                # and respawn just the kernel child instead (index#2375). Safe:
+                # session restore replays only SUCCESSFUL cells, so the wedged
+                # cell is not re-run.
+                try:
+                    await self.restart_now(freshen=False, reason="wedge escalation, index#2375")
+                    outcome = "restarted"
+                except RuntimeError:
+                    # Another call's escalation (or an operator's kernel_restart)
+                    # already owns the respawn; its restore will serve us too.
+                    outcome = "restart_pending"
+            return [], _wedged_summary(budget, grace, deadline, outcome=outcome)
 
     async def set_client(self, client: str) -> None:
         """Tell the kernel which MCP client connected, so the session label can
@@ -386,13 +424,27 @@ class Kernel:
         the kernel's runtime handler instead: it raises ``KeyboardInterrupt`` inline
         at the blocked frame, which ``_runner`` records as a failed job so the
         kernel returns to idle and the next call runs. Returns whether the signal
-        was actually delivered, so the caller's summary does not claim a recovery
-        that did not happen."""
+        was DELIVERED -- not whether it recovered anything: the handler is
+        Python-level, so a main thread blocked inside native code never runs it
+        (index#2375). Callers must verify with :meth:`_probe_idle`."""
         if self._pid is None:
             return False
         try:
             os.kill(self._pid, signal.SIGUSR2)
         except ProcessLookupError:
+            return False
+        return True
+
+    async def _probe_idle(self, timeout: float | None = None) -> bool:
+        """Whether the kernel answers a trivial execute, i.e. a rescue attempt
+        actually returned it to idle. ``wait_for`` also bounds the wait for the
+        shell lock itself, which an unrescued kernel's earlier request may still
+        hold; cancelling ``_execute`` there is safe (its cancel path drains the
+        socket under the lock before re-raising)."""
+        budget = timeout if timeout is not None else max(5.0, self._config.wedge_grace)
+        try:
+            await asyncio.wait_for(self._execute("pass", timeout=budget), timeout=budget + 5.0)
+        except TimeoutError:
             return False
         return True
 
@@ -527,9 +579,11 @@ class Kernel:
             await locked.wait()
         self._death = None
 
-    async def restart_now(self) -> dict[str, int | float | None]:
+    async def restart_now(
+        self, *, freshen: bool = True, reason: str = "requested via kernel_restart"
+    ) -> dict[str, int | float | None]:
         """An intentional restart of this server's kernel: the `kernel_restart`
-        tool's primitive (index#2345).
+        tool's primitive (index#2345) and the wedge escalation's (index#2375).
 
         Reuses the death watch's respawn machinery (``restart()``: fresh
         process, rebuilt channels, checkpoint restore, session labels
@@ -538,8 +592,10 @@ class Kernel:
         report this as a death nor race its own respawn against it; it is
         re-armed for the new process afterwards. Loud on stderr (which reaches
         journald), like the death watch, so an operator can see who bounced a
-        kernel and when. Returns the old pid, the new pid, and the elapsed
-        seconds.
+        kernel and when. ``freshen=False`` skips the pre-kill checkpoint
+        freshening: the wedge escalation calls this against a kernel known to be
+        blocked, where the snapshot attempt would only burn its timeout.
+        Returns the old pid, the new pid, and the elapsed seconds.
         """
         if self._km is None:
             raise RuntimeError("the kernel is not running")
@@ -550,7 +606,7 @@ class Kernel:
             loop = asyncio.get_running_loop()
             started = loop.time()
             old_pid = self._pid
-            print(f"[ix-mcp] kernel restart requested (pid {old_pid})", file=sys.stderr, flush=True)
+            print(f"[ix-mcp] kernel restart requested (pid {old_pid}; {reason})", file=sys.stderr, flush=True)
             # Stop the death watch FIRST, exactly as shutdown() does: the kill
             # below is intentional.
             if self._watch_task is not None:
@@ -562,14 +618,14 @@ class Kernel:
             # as little as possible -- but on a short leash: the kernel may be
             # wedged, the very reason for this restart, and the periodic
             # checkpoint plus replay already guarantee a correct reopen.
-            if self._death is None and self._config.session_resume:
+            if freshen and self._death is None and self._config.session_resume:
                 with contextlib.suppress(Exception):  # best-effort freshness; a timeout here means a wedged kernel, which the restart below fixes
                     await asyncio.wait_for(self.snapshot_session(timeout=10.0), timeout=15.0)
             # Fail calls already in flight (a wedged cell would otherwise hold
             # the shell lock against the respawn for its whole budget) and guard
             # new ones until the restore holds the channel -- the death watch's
             # own mechanism, with the honest cause instead of a death report.
-            self._death = f"kernel is restarting (requested via kernel_restart; was pid {old_pid}); retry shortly"
+            self._death = f"kernel is restarting ({reason}; was pid {old_pid}); retry shortly"
             self._death_event.set()
             await self.restart()
             self._watch_task = asyncio.ensure_future(self._watch())
