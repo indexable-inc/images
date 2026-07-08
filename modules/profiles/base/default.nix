@@ -38,9 +38,16 @@ in {
     # `cache.ix.dev` is the ix pull-through cache for guest Nix operations. Put
     # it in the auto-enabled base profile so every image gets the same warm
     # binary-cache path unless an image explicitly disables the profile.
-    nix.settings.substituters = lib.mkBefore [
-      "https://cache.ix.dev"
-    ];
+    #
+    # The matching `ix-workspace:` key has to be trusted alongside it. The
+    # guests keep `require-sigs` on, so without the key the daemon rejects every
+    # `cache.ix.dev` narinfo as unsigned ("ignoring substitute ... not signed by
+    # any of the keys in 'trusted-public-keys'") and silently rebuilds the whole
+    # system closure from source, which then dies on the guest's no-namespace
+    # sandbox and fails `ix up`. Both fields come from the one cache-identity
+    # source of truth (lib/cache.nix), exposed here as `ix.cache`.
+    nix.settings.substituters = lib.mkBefore [ix.cache.url];
+    nix.settings.trusted-public-keys = lib.mkAfter [ix.cache.publicKey];
 
     # The guest's writable layer (`/`, incl. `/nix/var/nix/db`) is a virtiofs
     # FUSE mount with no DAX cache capability, so a memory-mapped file is served
