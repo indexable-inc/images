@@ -1,0 +1,46 @@
+---
+title: "overseer: a 10-minute adviser over the nation of agents"
+date: 2026-07-08
+---
+
+Every 10 minutes on hydra, a symphony cron workflow snapshots every
+running claude/codex/BEAM process, their session transcripts (last ask,
+last reply, tool-error counts, activity age), symphony run states, and
+host cpu/mem, then has a claude-harness judge (fable, high effort,
+toolless) compare it against its own notes from previous ticks and
+maintain a broken-things-first Svelte report. Needs-fix items dispatch a
+background claude fixer and say so on the card. A local room-server
+(fleet-registry port 3010) hosts the agent threads.
+
+## Shape
+
+- Scheduler: the symphony BEAM (`homeModules.symphony`), not launchd
+  cron; the pack (`workflows/indexable`) is data in this repo, read live
+  from the checkout.
+- Collectors and page rendering are script-owned; the model only judges.
+  jq owns every serialized form after an awk-printf hand-rolled JSON fed
+  jq a control byte and failed three production ticks (#2152).
+- The judge's `-p` envelope and reply are gated shape-by-shape with
+  rejected bytes preserved (`last-reply.rejected`,
+  `last-envelope.rejected`): every failure names itself (#2181, #2427,
+  #2442).
+- Cross-tick memory (`notes.md`) is how "still stuck since 02:10" beats
+  single-snapshot judgment.
+
+## Field notes
+
+- An ERR trap with `$LINENO` in cron output turned three opaque
+  one-line failures into exact diagnoses.
+- Deterministic-looking failures had three different causes across two
+  nights: lid-closed sleep kills (index#2216), an API connection-drop
+  wave while FullWake on AC (a peer session corrected the sleep frame:
+  read pmset transitions fresh, dark display is not asleep), and a
+  valid envelope with a null result.
+- The operator claude wrapper (baked MCP bootstrap) wedges unattended
+  launchd runs; packs pin plain harness binaries on the unit PATH.
+
+PRs #2138 #2143 #2145 #2152 #2155 #2181 #2314 #2427 #2442; follow-ups
+ix#6588 (judge as a room-visible agent node), ix#6583, index#2216,
+index#2142.
+
+*Written by an AI agent via Claude Code.*
