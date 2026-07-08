@@ -10,6 +10,11 @@ A single asyncio lock serializes the shell channel (a kernel processes one
 ``execute_request`` at a time): the *budget* keeps each request short by design,
 so backgrounded work never holds the channel, and a later ``python_exec`` that
 inspects ``jobs`` gets serviced promptly.
+
+A death watch polls the kernel child for the server's lifetime: a kernel killed
+externally (SIGTERM/SIGKILL, OOM, crash) is reported as ``kernel died (pid N,
+signal S); respawning`` -- never as a generic wedge or transport timeout -- and
+is respawned immediately, not lazily on the next execute (index#2339).
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ import asyncio
 import contextlib
 import os
 import signal
+import sys
 from pathlib import Path
 
 from .config import Config, runtime_dir
@@ -29,6 +35,30 @@ _READY_TIMEOUT = 60.0
 # on SIGUSR1. The server sets it before launching the kernel and reads it back in
 # ``dump_trace``; the kernel-side runtime registers the handler (``runtime``).
 TRACE_ENV = "IX_MCP_KERNEL_TRACE"
+
+# How often the death watch polls the kernel child (a waitpid(WNOHANG) via the
+# provisioner: cheap). Small enough that an external kill surfaces as the precise
+# death error within the same breath, not after a 35s transport timeout.
+_WATCH_INTERVAL = 0.5
+
+
+class KernelDiedError(RuntimeError):
+    """The kernel process exited (killed externally, OOM, crashed) and the
+    server is respawning it. Raised by the tool entry points so the caller gets
+    the precise cause -- ``kernel died (pid N, signal S); respawning`` -- instead
+    of a generic wedge or timeout against a process that no longer exists."""
+
+
+def _describe_exit(returncode: int | None) -> str:
+    """Render a Popen returncode: negative is death by that signal, by name."""
+    if returncode is None:
+        return "unknown exit"
+    if returncode < 0:
+        try:
+            return f"signal {signal.Signals(-returncode).name}"
+        except ValueError:
+            return f"signal {-returncode}"
+    return f"exit code {returncode}"
 
 
 def _wedged_summary(budget: float, grace: float, deadline: float, *, interrupted: bool) -> dict:
@@ -79,6 +109,13 @@ class Kernel:
         self._trace_lock = asyncio.Lock()
         self._trace_path: Path | None = None
         self._pid: int | None = None
+        # Death-watch state: `_death` is the rendered cause while the kernel is
+        # down (entry guard), `_death_event` fails calls already in flight, and
+        # `_watch_task` is the poll loop itself (cancelled by shutdown()).
+        self._death: str | None = None
+        self._death_event = asyncio.Event()
+        self._watch_task: asyncio.Task | None = None
+        self._restore_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         from jupyter_client.manager import AsyncKernelManager
@@ -94,6 +131,9 @@ class Kernel:
         self._kc = self._km.client()
         self._kc.start_channels()
         await self._kc.wait_for_ready(timeout=_READY_TIMEOUT)
+        # Watch the child we just spawned so an external kill is noticed the
+        # moment it happens, not at the next execute's timeout (index#2339).
+        self._watch_task = asyncio.ensure_future(self._watch())
 
     def _kernel_pid(self) -> int | None:
         """The kernel process's pid, so a trace signal targets that process alone
@@ -112,6 +152,8 @@ class Kernel:
         thread is still parked in the blocking call. Returns the newest dump."""
         if self._km is None or self._trace_path is None or self._pid is None:
             return "kernel is not running"
+        if self._death is not None:
+            return f"kernel process is gone: {self._death}"
         path = self._trace_path
         # Serialize dumps: two concurrent traces share the same `before` offset and
         # would each read both appended dumps. The lock keeps each dump clean.
@@ -125,10 +167,20 @@ class Kernel:
             deadline = loop.time() + timeout
             while loop.time() < deadline:
                 await asyncio.sleep(0.05)
+                # The signal may have gone to a zombie (a killed child not yet
+                # reaped): os.kill succeeds but nothing can ever dump. The death
+                # watch reaps and flags it within its poll interval; report the
+                # death instead of waiting out the deadline (index#2339).
+                if self._death is not None:
+                    return f"kernel process is gone: {self._death}"
                 if path.exists() and path.stat().st_size > before:
                     # A short settle so the whole multi-thread dump has flushed.
                     await asyncio.sleep(0.05)
                     return path.read_text()[before:].strip() or "(empty trace)"
+        # No dump and no flagged death: distinguish a gone process (say so
+        # plainly) from a live kernel that cannot service signals.
+        if self._death is not None or not await self._km.is_alive():
+            return "kernel process is gone: " + (self._death or f"kernel died (pid {self._pid})")
         return (
             f"No trace was produced within {timeout:.0f}s. The kernel may not have "
             "the faulthandler registered (older build) or cannot service signals."
@@ -169,23 +221,42 @@ class Kernel:
                     code, timeout=timeout, allow_stdin=False, output_hook=on_iopub, store_history=True
                 )
             )
+            # Race the reply against kernel death: a request to a process that
+            # exits mid-cell never gets a reply, so waiting out the full
+            # ``timeout`` would misreport an external kill as a wedge AND hold
+            # this lock against the respawn (index#2339). The death watch sets
+            # the event the moment the child exits.
+            died = asyncio.ensure_future(self._death_event.wait())
             try:
-                await asyncio.shield(task)
-            except asyncio.CancelledError:
                 try:
-                    await task
-                except TimeoutError:
-                    # The cell is synchronously wedging the loop, so the reply
-                    # never arrives within the deadline. The drain alone would
-                    # leave the kernel stuck behind the cancelled-but-still-running
-                    # cell, so fire the same SIGUSR2 watchdog the outer timeout
-                    # path uses to break the blocked frame and free the channel.
-                    await self._interrupt()
-                except BaseException:  # noqa: S110 -- any drain error is acceptable; we just need the socket read to finish before releasing the lock
-                    # Any other drain error: we only need the socket read to
-                    # finish before releasing the lock.
-                    pass
-                raise
+                    await asyncio.shield(asyncio.wait({task, died}, return_when=asyncio.FIRST_COMPLETED))
+                except asyncio.CancelledError:
+                    try:
+                        await task
+                    except TimeoutError:
+                        # The cell is synchronously wedging the loop, so the reply
+                        # never arrives within the deadline. The drain alone would
+                        # leave the kernel stuck behind the cancelled-but-still-running
+                        # cell, so fire the same SIGUSR2 watchdog the outer timeout
+                        # path uses to break the blocked frame and free the channel.
+                        await self._interrupt()
+                    except BaseException:  # noqa: S110 -- any drain error is acceptable; we just need the socket read to finish before releasing the lock
+                        # Any other drain error: we only need the socket read to
+                        # finish before releasing the lock.
+                        pass
+                    raise
+                if not task.done():
+                    # The kernel died with this request in flight: the reply can
+                    # never arrive. The process is gone and the respawn rebuilds
+                    # the channels, so there is no half-read reply to protect;
+                    # drop the read and surface the precise cause.
+                    task.cancel()
+                    with contextlib.suppress(BaseException):
+                        await task
+                    raise KernelDiedError(self._death or "kernel died; respawning")
+                await task  # propagate the reply's own error (e.g. TimeoutError)
+            finally:
+                died.cancel()
             return outputs, summary
 
     async def python_exec(
@@ -216,11 +287,15 @@ class Kernel:
             f"await __ix_exec({code!r}, budget={float(budget)!r}, "
             f"name={name_arg}, session={session_arg}, topic={topic_arg})"
         )
+        self._check_alive()
         grace = self._config.wedge_grace
         deadline = float(budget) + grace
         try:
             return await self._execute(wrapper, timeout=deadline)
         except TimeoutError:
+            # A dead kernel also never replies: if the death watch flagged one
+            # while this request waited, report that precise cause, never a wedge.
+            self._check_alive()
             interrupted = await self._interrupt()
             return [], _wedged_summary(budget, grace, deadline, interrupted=interrupted)
 
@@ -238,10 +313,12 @@ class Kernel:
         This is the MCP-side naming handshake, not user code, so it uses the raw
         shell channel instead of ``__ix_exec``.
         """
+        self._check_alive()
         await self._execute(f"session.name = {name!r}\nsession._sync()", timeout=10.0)
 
     async def set_topic(self, topic: str) -> None:
         """Set the dashboard topic without creating an execution card."""
+        self._check_alive()
         await self._execute(f"session.topic = {topic!r}", timeout=10.0)
 
     async def _interrupt(self) -> bool:
@@ -285,16 +362,116 @@ class Kernel:
         with contextlib.suppress(Exception):  # shutdown must proceed even if the final flush fails
             await self._execute("__ix_emit_read_stats_final()", timeout=30.0)
 
+    def _check_alive(self) -> None:
+        """Fail a tool entry point with the precise death cause while the kernel
+        is down: `kernel died (pid N, signal S); respawning`, never a generic
+        wedge or transport timeout against a process that no longer exists."""
+        if self._death is not None:
+            raise KernelDiedError(self._death)
+
+    def _exit_code(self) -> int | None:
+        """The dead kernel's returncode (negative: killed by that signal), read
+        from the Popen the provisioner's liveness poll reaped."""
+        provisioner = getattr(self._km, "provisioner", None)
+        process = getattr(provisioner, "process", None)
+        code = getattr(process, "returncode", None)
+        return code if isinstance(code, int) else None
+
+    async def _watch(self) -> None:
+        """Notice the kernel child exiting the moment it happens.
+
+        Without this watch an externally killed kernel (a stray `pkill -f
+        ipykernel_launcher`, the OOM killer, a crash) presented as a generic
+        'wedged' timeout, `kernel_trace` signalled the zombie and blamed a
+        missing faulthandler, and the kernel only came back on the next execute
+        (index#2339). On death: record the precise cause, fail in-flight and
+        subsequent calls with it, say it loudly on stderr (which reaches
+        journald), and respawn immediately."""
+        while True:
+            await asyncio.sleep(_WATCH_INTERVAL)
+            km = self._km
+            if km is None:
+                return
+            try:
+                alive = await km.is_alive()
+            except Exception:  # noqa: S112 -- a transient introspection error must not end the lifetime watch
+                continue
+            if alive:
+                continue
+            pid = self._pid
+            cause = _describe_exit(self._exit_code())
+            self._death = f"kernel died (pid {pid}, {cause}); respawning"
+            self._death_event.set()
+            print(f"[ix-mcp] {self._death}", file=sys.stderr, flush=True)
+            delay = 1.0
+            while True:
+                try:
+                    await self.restart()
+                    break
+                except Exception as exc:
+                    # Still loud, still precise; keep trying so the server heals
+                    # without waiting for a client call.
+                    self._death = f"kernel died (pid {pid}, {cause}); respawn failed: {exc!r}, retrying in {delay:.0f}s"
+                    print(f"[ix-mcp] {self._death}", file=sys.stderr, flush=True)
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 30.0)
+            print(
+                f"[ix-mcp] kernel respawned (pid {self._pid}) after pid {pid} died ({cause})",
+                file=sys.stderr,
+                flush=True,
+            )
+
     async def restart(self) -> None:
-        if self._km is not None:
-            await self._km.restart_kernel(now=True)
-            # The restart launches a new process, so refresh the pid the trace and
-            # interrupt signals target; a stale pid would signal a dead or reused
-            # process. The new kernel re-runs install() and re-opens the trace file.
+        """Start a fresh kernel process; the death watch's respawn primitive.
+
+        Rebuilds everything the old process owned: the pid the trace/interrupt
+        signals target (a stale pid would signal a dead or reused process), the
+        client channels (the old sockets may hold a dead kernel's half-delivered
+        replies), and -- exactly as `serve` does at startup -- the session
+        checkpoint, restored while holding the shell channel so every call
+        admitted once the death flag clears queues behind the restored state.
+        The cwd is re-passed fresh so a respawn survives the original launch
+        directory having been deleted since (index#2120). The new kernel re-runs
+        install() and re-opens the trace file.
+        """
+        if self._km is None:
+            return
+        async with self._lock:
+            await self._km.restart_kernel(now=True, cwd=str(self._config.workdir))
             self._pid = self._kernel_pid()
+            if self._kc is not None:
+                self._kc.stop_channels()
+            self._kc = self._km.client()
+            self._kc.start_channels()
             await self._kc.wait_for_ready(timeout=_READY_TIMEOUT)
+        # The new process is alive: in-flight racing stops now (fresh event); the
+        # entry guard (`_death`) stays up until the restore holds the channel.
+        self._death_event = asyncio.Event()
+        if self._config.session_resume:
+            locked = asyncio.Event()
+
+            async def _restore() -> None:
+                try:
+                    summary = await self.restore_session(on_locked=locked.set)
+                    if summary:
+                        print(f"[ix-mcp] {summary}", file=sys.stderr, flush=True)
+                except Exception as exc:
+                    print(f"[ix-mcp] session restore after respawn failed: {exc!r}", file=sys.stderr, flush=True)
+                finally:
+                    locked.set()  # a restore that died before locking must not hold the death flag forever
+
+            self._restore_task = asyncio.ensure_future(_restore())
+            await locked.wait()
+        self._death = None
 
     async def shutdown(self) -> None:
+        # Stop the death watch first: shutdown kills the kernel on purpose, and
+        # the watch must not report that as a death or respawn over it.
+        if self._watch_task is not None:
+            self._watch_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._watch_task
+            self._watch_task = None
         if self._kc is not None:
             self._kc.stop_channels()
         if self._km is not None:

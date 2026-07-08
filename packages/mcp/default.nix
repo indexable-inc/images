@@ -3310,6 +3310,35 @@
       mkdir -p "$out"
     '';
 
+  # An externally killed kernel must be reported as `kernel died (pid N, signal
+  # S); respawning` -- never a generic 'wedged' timeout -- with kernel_trace
+  # naming the gone process and the death watch respawning it eagerly, not on
+  # the next execute (packages/mcp/tests/test_kernel_death.py, index#2339: a
+  # broad pkill SIGTERM'd a session's kernel and every symptom read as a wedge).
+  # Boots a real kernel, so it reuses the full interpreter plus pytest.
+  kernelDeathTestSource = builtins.path {
+    name = "ix-mcp-kernel-death-test";
+    path = ./tests/test_kernel_death.py;
+  };
+  kernelDeathSmoke =
+    pkgs.runCommand "ix-mcp-kernel-death-smoke"
+    {
+      nativeBuildInputs = [typecheckTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${kernelDeathTestSource} "$TMPDIR/test_kernel_death.py"
+      ${lib.getExe typecheckTestPython} -m pytest "$TMPDIR/test_kernel_death.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp kernel-death smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      cat stdout
+      mkdir -p "$out"
+    '';
+
   # Exercises the rich-output capture path: a DataFrame result is persisted to the
   # store with its text/html bundle (so the dashboard renders a table, not a repr),
   # a display() call made while a job runs is captured the same way, and a bytes
@@ -6008,6 +6037,7 @@ in
               svelteBundled
               svelteTests
               wedgeSmoke
+              kernelDeathSmoke
               richSmoke
               yieldSmoke
               bindingsSmoke
