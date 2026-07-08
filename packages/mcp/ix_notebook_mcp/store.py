@@ -663,23 +663,22 @@ def take_outbox(conn: sqlite3.Connection, *, session: str = "") -> list[dict]:
     rows (``session = ''``) plus rows addressed to it -- oldest first, consuming
     exactly the rows returned. Rows addressed to OTHER sessions are left queued
     for their own pump (a job's lifecycle event reaches only the session that
-    started the job, issue #2165). Like ``_drain_inputs``: DELETE before
-    delivering, so an event can never be emitted twice; a crash between the
-    delete and the send loses at most one batch."""
+    started the job, issue #2165). Like ``_drain_inputs``: the rows are consumed
+    before delivering, so a crash between the delete and the send loses at most
+    one batch. The consume is a single ``DELETE ... RETURNING`` statement, not a
+    SELECT-then-DELETE: several pumps can share one store (serve processes
+    spawned with an inherited ``IX_MCP_STORE``/session file), and the statement
+    gap let two of them read the same row and each deliver it -- one session's
+    event waking every connected session (issue #2400). One statement means one
+    writer wins per row, so an event is emitted exactly once."""
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT seq, content, meta, session FROM outbox "
-        "WHERE session = '' OR session = ? ORDER BY seq ASC",
+        "DELETE FROM outbox WHERE session = '' OR session = ? "
+        "RETURNING seq, content, meta, session",
         (session,),
     ).fetchall()
-    if not rows:
-        return []
-    placeholders = ",".join("?" for _ in rows)
-    conn.execute(
-        f"DELETE FROM outbox WHERE seq IN ({placeholders})",  # noqa: S608 -- placeholders are bound params
-        [r["seq"] for r in rows],
-    )
-    return [dict(r) for r in rows]
+    # RETURNING order is unspecified; deliver oldest first, as the queue promises.
+    return sorted((dict(r) for r in rows), key=lambda row: row["seq"])
 
 
 def add_event(conn: sqlite3.Connection, *, resource: str, kind: str, body: str) -> None:

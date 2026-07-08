@@ -10,6 +10,7 @@ import asyncio
 import json
 import sqlite3
 import sys
+import threading
 from pathlib import Path
 
 import anyio
@@ -60,6 +61,44 @@ def test_take_outbox_default_serves_broadcast_only(tmp_path: Path) -> None:
     store.add_outbox(conn, content="addressed", meta="{}", session="s1")
     assert [r["content"] for r in store.take_outbox(conn)] == ["broadcast"]
     assert [r["content"] for r in store.take_outbox(conn, session="s1")] == ["addressed"]
+
+
+def test_take_outbox_delivers_each_row_exactly_once_across_connections(tmp_path: Path) -> None:
+    """The consume is atomic (issue #2400): several pumps can share one store
+    (serve processes spawned with an inherited store pin), and the old
+    SELECT-then-DELETE let two connections read the same rows and each deliver
+    them -- one session's event waking every connected session. Two connections
+    draining the same queue at once must partition it, never overlap."""
+    path = tmp_path / "race.db"
+    seed = store.connect(path)
+    for i in range(300):
+        store.add_outbox(seed, content=f"event {i}", meta="{}")
+    total = seed.execute("SELECT count(*) FROM outbox").fetchone()[0]
+
+    delivered: dict[str, list[int]] = {"a": [], "b": []}
+    barrier = threading.Barrier(2)
+
+    def drain(who: str) -> None:
+        conn = store.connect(path)  # its own connection, like a real pump
+        barrier.wait()  # maximize the overlap the old code raced on
+        while True:
+            rows = store.take_outbox(conn, session=who)
+            if not rows:
+                break
+            delivered[who].extend(r["seq"] for r in rows)
+
+    threads = [threading.Thread(target=drain, args=(who,)) for who in ("a", "b")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    seqs = delivered["a"] + delivered["b"]
+    assert len(seqs) == len(set(seqs)), "a row was delivered by both pumps"
+    assert len(seqs) == total, "a row was lost"
+    # Each drainer saw its share oldest-first.
+    assert delivered["a"] == sorted(delivered["a"])
+    assert delivered["b"] == sorted(delivered["b"])
 
 
 def test_add_outbox_prunes_rows_past_age_cap(tmp_path: Path) -> None:
@@ -477,6 +516,61 @@ def test_pump_outbox_delivers_own_session_and_skips_others(
         # The other session's row is still queued for its own pump.
         rows = store.take_outbox(conn, session="other")
         assert [r["content"] for r in rows] == ["for someone else"]
+
+    asyncio.run(run())
+
+
+def test_job_finished_wake_reaches_only_the_owning_sessions_pump(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end for issue #2400: session A starts a job and session B is
+    connected to the same store; when the backgrounded job finishes, the
+    kernel-side addressing (`_notify_job_finished`) plus each session's pump
+    deliver the completion channel event to A exactly once -- B's pump stays
+    silent and nothing is left queued."""
+
+    async def start_pump(
+        cfg: Config, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[asyncio.Future, object]:
+        # pump_outbox reads config() once, before its first await, so patching,
+        # scheduling, and yielding one tick pins this pump to `cfg` even though
+        # the next pump repatches the same module attribute.
+        monkeypatch.setattr("ix_notebook_mcp.transport.config", lambda: cfg)
+        send, receive = anyio.create_memory_object_stream(8)
+        pump = asyncio.ensure_future(transport.pump_outbox(send, _FakeSession(initialized=True)))
+        await asyncio.sleep(0)
+        return pump, receive
+
+    async def run() -> None:
+        db = tmp_path / "p.db"
+        conn = store.connect(db)
+        _wire_runtime(monkeypatch, conn)
+
+        # Session A's backgrounded job reaches a terminal state.
+        job = _finished_job(session="sess-a")
+        runtime._notify_job_finished(job)
+
+        pump_a, receive_a = await start_pump(
+            Config(workdir=tmp_path, store_path=db, server_session_id="sess-a"), monkeypatch
+        )
+        pump_b, receive_b = await start_pump(
+            Config(workdir=tmp_path, store_path=db, server_session_id="sess-b"), monkeypatch
+        )
+        try:
+            message = await asyncio.wait_for(receive_a.receive(), timeout=5.0)
+            wire = message.message.root
+            assert wire.method == "notifications/claude/channel"
+            assert wire.params["content"] == "Background job poll ci finished with status done."
+            assert wire.params["meta"]["job_id"] == job.id
+            # B never sees A's wake -- not late, not at all.
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(receive_b.receive(), timeout=1.0)
+        finally:
+            pump_a.cancel()
+            pump_b.cancel()
+        # The row was consumed by A's pump; nothing lingers for anyone.
+        assert store.take_outbox(conn, session="sess-a") == []
+        assert store.take_outbox(conn, session="sess-b") == []
 
     asyncio.run(run())
 

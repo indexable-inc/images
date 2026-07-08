@@ -1824,6 +1824,14 @@ def _notify_job_finished(job: Job) -> None:
     server's session id (the stdio client), so the wake reaches the session
     that started the job and no other -- the dashboard still shows every job
     globally from the executions table (issue #2165).
+
+    Known limit (issue #2400): one Claude Code process multiplexes its parent
+    conversation and in-process subagents onto a single stdio MCP session, and
+    the client sends no per-agent identity on tool calls (only
+    ``claudecode/toolUseId``, see anthropics/claude-code#32514), so a
+    subagent's job wake still lands in the parent conversation. That split
+    needs the client to expose the caller; the addressing here is where it
+    will slot in.
     """
     if not job.backgrounded or job.kind == "replay":
         return
