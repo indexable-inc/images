@@ -395,6 +395,12 @@
           upstream = "hold";
           reason = "Feature-sized change; upstreaming paused per NixOS/nix#15984 and it should open as an upstream issue/RFC first.";
         };
+        # 0011: temp roots for in-flight CA build outputs, closing the min-free
+        # auto-GC race that broke wide cargo-unit graphs (index#2334).
+        "0011-fix-libstore-add-temp-roots-for-CA-derivation-output.patch" = {
+          upstream = "hold";
+          reason = "Fix for min-free auto-GC deleting in-flight CA build outputs (indexable-inc/index#2334). Hold: humans submit nix patches upstream per NixOS/nix#15984; overlaps the still-open upstream discussion NixOS/nix#15613 / NixOS/nix#15719.";
+        };
       };
     }
   ];

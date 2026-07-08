@@ -43,6 +43,10 @@
       "deps": [
         "0003-libutil-add-build-status-dir-experimental-feature.patch"
       ]
+    },
+    {
+      "patch": "0011-fix-libstore-add-temp-roots-for-CA-derivation-output.patch",
+      "deps": []
     }
   ]
 }
