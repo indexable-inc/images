@@ -152,6 +152,14 @@
       flake = false;
     };
 
+    # Upstream nushell/nushell, patched in-repo (packages/nushell/patches).
+    # Tracks upstream main (autoUpdate = true in lib/fork-packages.nix): the
+    # scheduled fork-sync bumps nushell-src and rebases the xattr patch.
+    nushell-src = {
+      url = "github:nushell/nushell";
+      flake = false;
+    };
+
     drgn-src = {
       url = "git+https://github.com/osandov/drgn?ref=refs/tags/v0.2.0&submodules=1";
       flake = false;
@@ -265,6 +273,7 @@
     home-manager,
     hermes-agent,
     btop-src,
+    nushell-src,
     drgn-src,
     perftest-src,
     pg-uint128-src,
@@ -352,6 +361,7 @@
         home-manager
         hermes-agent
         btop-src
+        nushell-src
         drgn-src
         perftest-src
         fff-src
@@ -369,7 +379,6 @@
       "x86_64-linux"
       "aarch64-linux"
       "aarch64-darwin"
-      "x86_64-darwin"
     ];
     perSystem = lib.genAttrs devSystems (
       system:
@@ -386,19 +395,18 @@
     );
     collect = key: lib.mapAttrs (_: out: out.${key}) perSystem;
     linuxDarwinAliases = perSystem.x86_64-linux.darwinPackageAliases or {};
-    # Graft the Linux->Darwin cross aliases over a collected per-system set, so
+    # Graft the Linux-to-Darwin cross aliases over a collected per-system set so
     # a Darwin namespace resolves an aliased attr to the cross-compiled
     # x86_64-linux derivation instead of a native rebuild. Applied to both
     # `packages` (the consumer surface) and `cachePushRoots` (what
-    # cache-push.yml publishes): the darwin cache lane realises the post-alias
+    # cache-push.yml publishes): the Darwin cache lane realises the post-alias
     # set filtered to native aarch64-darwin drvs, so an alias-shadowed native
-    # variant (e.g. dag-runner) is neither built nor published -- consumers can
+    # variant (e.g. dag-runner) is neither built nor published. Consumers can
     # never install it (#1890).
     withDarwinAliases = raw:
       raw
       // lib.genAttrs [
         "aarch64-darwin"
-        "x86_64-darwin"
       ] (system: raw.${system} // (linuxDarwinAliases.${system} or {}));
     packages = withDarwinAliases (collect "packages");
   in {
@@ -411,6 +419,12 @@
       # services); import it from a darwin host to get the casks merged in. See
       # users/andrewgazelka/darwin.nix.
       andrewgazelka = ./users/andrewgazelka/darwin.nix;
+      # Per-generation provenance manifest for nix-darwin: bake deployed-path
+      # -> defining nix file:line backlinks (provenance.json) into the system
+      # closure so `whence </etc/...>` answers from /run/current-system with
+      # zero eval. Set `provenance.rev = self.rev or self.dirtyRev or null`
+      # in the consuming flake. See modules/darwin/provenance.nix.
+      provenance = import ./modules/darwin/provenance.nix {inherit (ix) provenance;};
     };
     homeModules = {
       # Workstation-facing home-manager module: declare a service once, get a
@@ -425,13 +439,21 @@
       # `programs.raycast.focus = { enable = true; ... }`. See
       # modules/home/raycast.nix.
       raycast = ./modules/home/raycast.nix;
+      # Per-generation provenance manifest: every home-manager generation
+      # carries provenance.json mapping deployed files back to the nix
+      # file:line that defined them, and `whence <path>` reads it with zero
+      # eval. Set `provenance.rev = self.rev or self.dirtyRev or null` in
+      # the consuming flake. See modules/home/provenance.nix.
+      provenance = import ./modules/home/provenance.nix {inherit (ix) provenance;};
       # Agent CLI modules: Home Manager is the user-facing configuration
       # surface, while the package wrappers remain the implementation detail.
       claude-code = import ./packages/agent/home-manager/claude-code.nix {
         indexPackages = system: packages.${system};
+        promptModule = ./packages/agent/prompt;
       };
       codex = import ./packages/agent/home-manager/codex.nix {
         indexPackages = system: packages.${system};
+        promptModule = ./packages/agent/prompt;
       };
       # Personal-but-shareable workstation module for github:andrewgazelka: the
       # ix.dev downtime watcher + boss bar overlay + the shared say-detached
@@ -443,6 +465,7 @@
         portableServicesModule = ix.portableServices.homeModule;
         claudeCodeModule = import ./packages/agent/home-manager/claude-code.nix {
           indexPackages = system: packages.${system};
+          promptModule = ./packages/agent/prompt;
         };
         inherit ix;
       };

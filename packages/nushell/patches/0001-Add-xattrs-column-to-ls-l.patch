@@ -1,0 +1,127 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@indexable.ai>
+Date: Tue, 7 Jul 2026 19:43:20 -0700
+Subject: [PATCH] Add xattrs column to ls -l
+
+Expose extended attribute names in the long listing output as an `xattrs`
+column on Unix platforms. This lets Nushell users inspect filesystem metadata
+that native `ls -l` marks with `@` and addresses the xattr side of #7106.
+
+The column is empty when the filesystem reports no readable attributes, so the
+existing table shape stays stable for scripts.
+
+diff --git a/Cargo.lock b/Cargo.lock
+index a10817e..1c06e74 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -4668,6 +4668,7 @@ dependencies = [
+  "win_uds",
+  "windows 0.62.2",
+  "winreg",
++ "xattr",
+ ]
+ 
+ [[package]]
+diff --git a/Cargo.toml b/Cargo.toml
+index 350d348..7c76e42 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -281,6 +281,7 @@ uuid = "1.23.1"
+ v_htmlescape = "0.15.8"
+ memchr = "2.8.0"
+ wax = "0.7.0"
++xattr = "1.6.1"
+ web-time = "1.1.0"
+ webpki-roots = "1.0.7"
+ which = "8.0.2"
+diff --git a/crates/nu-command/Cargo.toml b/crates/nu-command/Cargo.toml
+index 9d0e30e..488ea1d 100644
+--- a/crates/nu-command/Cargo.toml
++++ b/crates/nu-command/Cargo.toml
+@@ -155,6 +155,7 @@ unicode-width = { workspace = true }
+ data-encoding = { version = "2.11.0", features = ["alloc"] }
+ web-time = { workspace = true }
+ webpki-roots = { workspace = true, optional = true }
++xattr = { workspace = true }
+ 
+ [target.'cfg(windows)'.dependencies]
+ win_uds = { workspace = true }
+diff --git a/crates/nu-command/src/filesystem/ls.rs b/crates/nu-command/src/filesystem/ls.rs
+index f6f6993..e66a6f8 100644
+--- a/crates/nu-command/src/filesystem/ls.rs
++++ b/crates/nu-command/src/filesystem/ls.rs
+@@ -19,6 +19,20 @@ use std::{
+     time::{SystemTime, UNIX_EPOCH},
+ };
+ 
++#[cfg(unix)]
++fn xattr_names(path: &std::path::Path, span: Span) -> Value {
++    match xattr::list(path) {
++        Ok(names) => Value::list(
++            names
++                .filter_map(|name| name.into_string().ok())
++                .map(|name| Value::string(name, span))
++                .collect(),
++            span,
++        ),
++        Err(_) => Value::list(Vec::new(), span),
++    }
++}
++
+ /// Entry from directory listing with cached metadata/file type to avoid repeated syscalls.
+ /// On Windows, DirEntry::metadata() is free (no extra syscalls).
+ /// On Unix, DirEntry::file_type() is usually free, but metadata requires stat().
+@@ -811,6 +825,8 @@ pub(crate) fn dir_entry_dict(
+                     Value::int(md.gid().into(), span)
+                 },
+             );
++
++            record.push("xattrs", xattr_names(filename, span));
+         }
+     }
+ 
+diff --git a/crates/nu-command/tests/commands/ls.rs b/crates/nu-command/tests/commands/ls.rs
+index 213050a..e3e8db5 100644
+--- a/crates/nu-command/tests/commands/ls.rs
++++ b/crates/nu-command/tests/commands/ls.rs
+@@ -450,6 +450,7 @@ fn list_all_columns() {
+                     "inode",
+                     "user",
+                     "group",
++                    "xattrs",
+                     "size",
+                     "created",
+                     "accessed",
+@@ -937,3 +938,32 @@ fn ls_literal_empty_directory() -> Result {
+ 
+     Ok(())
+ }
++
++
++#[cfg(unix)]
++#[test]
++fn long_shows_extended_attributes() {
++    Playground::setup("ls_test_extended_attributes", |dirs, sandbox| {
++        sandbox.with_files(&[EmptyFile("plain.txt"), EmptyFile("marked.txt")]);
++
++        match xattr::set(
++            dirs.test().join("marked.txt"),
++            "user.nushell.test",
++            b"present",
++        ) {
++            Ok(()) => {}
++            Err(error) if error.kind() == std::io::ErrorKind::Unsupported => return,
++            Err(error) => panic!("failed to set xattr: {error}"),
++        }
++
++        let actual = nu!(
++            cwd: dirs.test(),
++            r#"
++                (ls -l marked.txt).0.xattrs
++                | $in | any { |attr| $attr == 'user.nushell.test' }
++            "#
++        );
++
++        assert_eq!(actual.out, "true");
++    })
++}

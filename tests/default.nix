@@ -23,6 +23,18 @@
       paths
       ;
   };
+  # Provenance walker + home module (whence, #2413): asserts the manifest of
+  # a real home-manager eval links deployed paths to their defining sites,
+  # so it takes the home-manager flake input rather than option stubs.
+  provenanceTest = import ./provenance.nix {
+    inherit
+      lib
+      pkgs
+      ix
+      paths
+      home-manager
+      ;
+  };
   # VM boot smoke test for the minecraft-blocks Paper plugin (ENG-2186). Not
   # part of the `eval` aggregate: it boots a qemu VM, so it is its own check
   # (`checks.<system>.minecraft-blocks-vm`).
@@ -175,6 +187,8 @@
   agentCommon = import (paths.packagesRoot + "/agent/common.nix") {inherit lib ix repoPackages;};
   sampleClaudeSystemPrompt = agentCommon.systemPromptFor "claude";
   sampleCodexSystemPrompt = agentCommon.systemPromptFor "codex";
+  sampleClaudeContextPrompt = agentCommon.contextFor "claude";
+  sampleCodexContextPrompt = agentCommon.contextFor "codex";
   homeAgentPkgs = import nixpkgs {
     inherit (pkgs.stdenv.hostPlatform) system;
     config = {
@@ -189,9 +203,11 @@
       modules = [
         (import (paths.packagesRoot + "/agent/home-manager/claude-code.nix") {
           indexPackages = homeAgentIndexPackages;
+          promptModule = paths.packagesRoot + "/agent/prompt";
         })
         (import (paths.packagesRoot + "/agent/home-manager/codex.nix") {
           indexPackages = homeAgentIndexPackages;
+          promptModule = paths.packagesRoot + "/agent/prompt";
         })
         {
           home = {
@@ -202,6 +218,7 @@
           programs.claude-code = {
             enable = true;
             systemPrompt.omitRules = ["reportToPlaybook"];
+            houseContext.enable = true;
             personalStartupContext = true;
           };
           programs.codex = {
@@ -2836,6 +2853,31 @@
           && !(lib.hasInfix "via Codex" sampleClaudeSystemPrompt);
         message = "Claude prompt should disclose outward messages as Claude Code, not Codex";
       }
+      {
+        # `system`-tagged rules (identity, harness basics) belong only to the
+        # full system-prompt render; a context file rides on the stock prompt.
+        assertion =
+          !(lib.hasInfix "You are Claude Code" sampleClaudeContextPrompt)
+          && !(lib.hasInfix "You are Codex" sampleCodexContextPrompt);
+        message = "Context renders should drop system-tagged identity rules";
+      }
+      {
+        # Runtime tags survive independently of the kind axis: the
+        # claude-code-tagged build-observability rule stays in both Claude
+        # renders and never reaches Codex.
+        assertion =
+          lib.hasInfix "nix store builds --json" sampleClaudeSystemPrompt
+          && lib.hasInfix "nix store builds --json" sampleClaudeContextPrompt
+          && !(lib.hasInfix "nix store builds --json" sampleCodexSystemPrompt);
+        message = "Runtime-tagged rules should follow their runtime across kinds";
+      }
+      {
+        # Untagged rules render everywhere, including context files.
+        assertion =
+          lib.hasInfix "shokunin" sampleClaudeContextPrompt
+          && lib.hasInfix "shokunin" sampleCodexContextPrompt;
+        message = "Untagged rules should render into context files";
+      }
     ];
 
     ix-ray = [
@@ -3904,6 +3946,10 @@
             "NotebookEdit"
             "Glob"
             "Grep"
+            "Monitor"
+            "CronCreate"
+            "CronDelete"
+            "CronList"
             "WebSearch"
             "WebFetch"
           ]
@@ -3978,6 +4024,26 @@
             builtins.readFile homeAgentConfig.programs.codex.finalPackage.passthru.modelInstructionsFile
           );
         message = "Codex Home Manager module should thread systemPrompt.omitRules into the package wrapper";
+      }
+      {
+        # When explicitly enabled, the native `context` option carries the
+        # context render (house rules without the system-tagged basics).
+        assertion =
+          lib.hasInfix "shokunin" homeAgentConfig.programs.claude-code.context
+          && !(lib.hasInfix "You are Claude Code" homeAgentConfig.programs.claude-code.context)
+          && lib.hasInfix "shokunin" homeAgentConfig.programs.codex.context
+          && !(lib.hasInfix "You are Codex" homeAgentConfig.programs.codex.context);
+        message = "agent Home Manager modules should default the global context files to the house context render";
+      }
+      {
+        # housePlugin defaults on: Codex gets the plugin as config-declared
+        # local-marketplace soft settings.
+        assertion =
+          builtins.any (
+            entry: entry.key == "plugins.index@index.enabled" && entry.value == "true"
+          )
+          homeAgentConfig.programs.codex.finalPackage.passthru.specValue.soft;
+        message = "Codex Home Manager module should declare the index plugin through soft settings";
       }
     ];
 
@@ -5782,6 +5848,7 @@ in {
   sdkPythonStrict = sdkPython.strictCheck;
   portableServices = portableServicesTest;
   symphonyHomeModule = symphonyHomeModuleTest;
+  provenance = provenanceTest;
   minecraftBlocksVm = minecraftBlocksVmTest;
   inherit baseImageNixDb;
 
@@ -5794,6 +5861,7 @@ in {
       helperTest
       portableServicesTest
       symphonyHomeModuleTest
+      provenanceTest
       cargoUnitPrebuiltTest
     ]
   );

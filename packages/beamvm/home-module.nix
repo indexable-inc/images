@@ -255,9 +255,9 @@ in {
 
     # After home-manager rewrites the manifest symlinks (and after the
     # platform's unit-management step handled any unit-definition changes),
-    # poke each running VM to converge on the new manifest. "Not running"
-    # (exit 2) is fine -- the next start reads the same stable path -- but a
-    # running VM that fails to reload fails the switch loudly.
+    # poke each running VM to converge on the new manifest. "Not running" is
+    # a loud no-op -- the next start reads the same stable path -- and only a
+    # reload attempted against a live VM that then fails fails the switch.
     # VM names reach systemd/launchd unit names, socket paths, and this
     # activation script; constrain them once here rather than letting a
     # metacharacter render an invalid unit or script.
@@ -287,15 +287,31 @@ in {
             # Plain statements, no name-derived shell identifiers: the VM
             # name appears only inside quoted strings.
             lib.hm.dag.entryAfter ["linkGeneration" "reloadSystemd" "setupLaunchAgents"] ''
-              beamvmReloadRc=0
-              run ${getExe' cfg.package "beamvm-ctl"} \
+              # Probe liveness before reloading: a dead VM can leave a stale
+              # socket file behind, and then `reload` fails with socat's
+              # connection-refused (exit 1), indistinguishable by exit code
+              # from a live VM whose reload failed. "Not running" must not
+              # fail the switch -- activation already succeeded and the next
+              # start reads the same stable manifest path -- so warn and move
+              # on instead (#2389).
+              if run --silence ${getExe' cfg.package "beamvm-ctl"} \
                 --socket ${lib.escapeShellArg "${stateDirFor name vm}/control.sock"} \
-                reload || beamvmReloadRc=$?
-              if [ "$beamvmReloadRc" -eq 2 ]; then
-                verboseEcho ${lib.escapeShellArg "beamvm ${name}: not running; next start reads the current manifest"}
-              elif [ "$beamvmReloadRc" -ne 0 ]; then
-                echo ${lib.escapeShellArg "beamvm ${name}: hot reload failed"} "(exit $beamvmReloadRc)" >&2
-                exit "$beamvmReloadRc"
+                ping; then
+                beamvmReloadRc=0
+                run ${getExe' cfg.package "beamvm-ctl"} \
+                  --socket ${lib.escapeShellArg "${stateDirFor name vm}/control.sock"} \
+                  reload || beamvmReloadRc=$?
+                if [ "$beamvmReloadRc" -eq 2 ]; then
+                  # Went down between the ping and the reload: same no-op.
+                  warnEcho ${lib.escapeShellArg "beamvm ${name}: stopped before reload; next start reads the current manifest"}
+                elif [ "$beamvmReloadRc" -ne 0 ]; then
+                  # The VM answered ping, so this is a live reload that
+                  # failed: the one case that must fail the switch.
+                  echo ${lib.escapeShellArg "beamvm ${name}: hot reload failed"} "(exit $beamvmReloadRc)" >&2
+                  exit "$beamvmReloadRc"
+                fi
+              else
+                warnEcho ${lib.escapeShellArg "beamvm ${name}: not running; skipping hot reload (next start reads the current manifest)"}
               fi
             ''
           )

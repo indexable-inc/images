@@ -155,6 +155,30 @@
       };
     }
     {
+      name = "nushell";
+      input = "nushell-src";
+      url = "https://github.com/nushell/nushell.git";
+      patchDir = "packages/nushell/patches";
+      autoUpdate = true;
+      upstreamPolicy = {
+        prsWelcome = true;
+        aiPrsAllowed = "unknown";
+        citation = "https://github.com/nushell/nushell/blob/main/CONTRIBUTING.md";
+        notes = "PRs welcome for focused changes; CONTRIBUTING has no AI-specific policy as of 2026-07-07. Include tests and user-facing release-note context.";
+      };
+      patches = {
+        "0001-Add-xattrs-column-to-ls-l.patch" = {
+          upstream = "attempt";
+          reason = "General filesystem feature requested in nushell/nushell#7106; prior PR #7158 was abandoned and explicitly left open for takeover.";
+          prExtra = "Related issue: nushell/nushell#7106. Prior closed attempt: nushell/nushell#7158.";
+        };
+        "0002-Derive-feature-list-for-cargo-unit-builds.patch" = {
+          upstream = "never";
+          reason = "Repo-specific: cargo-unit does not export Cargo's aggregate CARGO_CFG_FEATURE env var, so the package derives it from CARGO_FEATURE_* for ix builds.";
+        };
+      };
+    }
+    {
       # clippy is nightly-toolchain-coupled: its input is pinned by rev and must
       # move only with the pinned nightly, so `rebase-patches` is run explicitly
       # alongside a toolchain bump, never under a blanket `nix flake update` or
@@ -385,7 +409,7 @@
           upstream = "hold";
           reason = "Build-status series: engage on #15979 rather than open a competing PR.";
         };
-        # Structured git history export (RFC 0010). Designed to be
+        # Structured git history export (RFC 0011). Designed to be
         # upstreamable (deterministic, opt-in, experimental-feature gated,
         # never in lock files -- it dodges the objections that sank
         # leaveDotGit-for-flakes), but held: repo-wide upstreaming pause
@@ -394,6 +418,12 @@
         "0010-libfetchers-add-opt-in-structured-commit-history-exp.patch" = {
           upstream = "hold";
           reason = "Feature-sized change; upstreaming paused per NixOS/nix#15984 and it should open as an upstream issue/RFC first.";
+        };
+        # 0011: temp roots for in-flight CA build outputs, closing the min-free
+        # auto-GC race that broke wide cargo-unit graphs (index#2334).
+        "0011-fix-libstore-add-temp-roots-for-CA-derivation-output.patch" = {
+          upstream = "hold";
+          reason = "Fix for min-free auto-GC deleting in-flight CA build outputs (indexable-inc/index#2334). Hold: humans submit nix patches upstream per NixOS/nix#15984; overlaps the still-open upstream discussion NixOS/nix#15613 / NixOS/nix#15719.";
         };
       };
     }

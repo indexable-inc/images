@@ -10,9 +10,8 @@ https://code.claude.com/docs/en/channels-reference): it advertises the
 (what the kernel's ``notify()`` writes) as ``notifications/claude/channel``
 events, so kernel code can push into the running agent session. Channels are
 stdio-only by contract (Claude Code spawns the channel server as a subprocess
-and a session opts in per-entry via ``--channels`` /
-``--dangerously-load-development-channels``), so the HTTP transport does not
-grow one. A client that did not opt in ignores both the capability and the
+and a session opts in per-entry via ``--channels``), so the HTTP transport does
+not grow one. A client that did not opt in ignores both the capability and the
 notifications, so this costs nothing when unused.
 """
 
@@ -150,7 +149,9 @@ async def pump_outbox(
     cfg = config()
     if not cfg.store_path:
         return
-    conn = store.connect(cfg.store_path)
+    # Through the async facade: `take_outbox` deletes as it reads, and on a fat
+    # store that write used to run inline on the shared event loop (index#2348).
+    db = store.AsyncConn(cfg.store_path)
     try:
         while True:
             # Wait for the handshake before draining, so rows that accrue during
@@ -164,7 +165,7 @@ async def pump_outbox(
                 # server's own session id. A job lifecycle event addressed to
                 # another session stays queued for its own pump instead of
                 # waking this client (issue #2165).
-                rows = store.take_outbox(conn, session=cfg.server_session_id)
+                rows = await db.run(store.take_outbox, session=cfg.server_session_id)
             except Exception:
                 rows = []  # best-effort: a read error this tick just retries next tick
             for row in rows:
@@ -186,7 +187,7 @@ async def pump_outbox(
                     return
             await anyio.sleep(_OUTBOX_POLL_SECONDS)
     finally:
-        conn.close()
+        await db.close()
 
 
 # ASGI plumbing types for the HTTP transport's auth gate. `object` values (not

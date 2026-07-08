@@ -172,10 +172,11 @@ NU = (
     "`nu` is the ONE shell-out path: running a command, a pipeline, "
     "listing/filtering/transforming, reaching into files or the web all go through it (the old "
     "`sh()`/`zsh()` are retired and now raise a migration hint). `await nu(\"ls | where size > "
-    "1kb | sort-by size\")` runs a real nushell pipeline and every result comes back as a Polars "
+    "1kb | sort-by size\")` runs a real nushell pipeline and every tabular result comes back as a Polars "
     "DataFrame, structured end to end (`ls`, `ps`, `sys`, `open Cargo.toml`, `from csv`, `http "
     "get`, `where`, `group-by`, `select`) — no jq/awk/sed/cut text munging and no scraping "
-    "columns out of a text dump. A record is one row, a scalar a one-cell `value` column; dates "
+    "columns out of a text dump. A single record is a plain dict, so `(await nu('do -i { ^cmd } "
+    "| complete'))['exit_code']` reads directly; a scalar is a one-cell `value` column; dates "
     "and durations arrive as real Datetime/Duration columns and filesize as bytes, so you filter "
     "and sort on typed values, not strings. Run an external binary with `^cmd` "
     "(`await nu('^git status --short')`, `await nu('^gh pr list --json number,title | from "
@@ -190,7 +191,10 @@ NU = (
     "until you pass `cwd=` or `nu.reset()`. Pipe a polars "
     "frame you already have THROUGH a pipeline with `await nu(\"where a > 1 | sort-by a\", "
     "input=df)`. Use `await nu.value(code)` when you want the plain Python value (a scalar, a "
-    "list, a dict) rather than a frame. A failing pipeline raises `NuError` carrying nushell's "
+    "list) rather than a frame. Multi-statement source returns the FINAL pipeline's "
+    "value; every earlier pipeline's output prints into the job's stdout (never silently "
+    "dropped), so capture what you need in the final pipeline or in separate calls. A failing "
+    "pipeline raises `NuError` carrying nushell's "
     "own diagnostic (span + 'did you mean'), so read it and fix the pipeline. For a grep-style "
     "pipeline where a non-zero exit is an answer (no match), pass `check=False`: instead of "
     "raising, `nu(code, check=False)` returns `NuResult(result, exit_code)` with the output the "
@@ -308,7 +312,7 @@ READABLE = (
 
 CHANNEL = (
     "This server is also a Claude Code channel (research preview). When the client session was "
-    "launched with the channel enabled (`claude --dangerously-load-development-channels "
+    "launched with the channel enabled (`claude --channels "
     "server:<name>`), kernel code can push events into the running agent session with `await "
     "notify(content, **meta)`: each event arrives in the session as <channel source=\"...\" "
     "key=\"val\">content</channel>, with each meta kwarg a tag attribute (identifier keys only). "
@@ -353,6 +357,32 @@ PYEXEC_INTRO = (
     "(inspect / await / cancel it via more python_exec on the `jobs` dict)."
 )
 
+# Developer note (NOT part of any tool description or the model-facing
+# instructions -- it documents server behavior for maintainers). When an MCP
+# client cancels an in-flight `python_exec` request -- MCP `notifications/cancelled`
+# for the request id, or a transport-level abort -- the SDK cancels this handler's
+# request scope, and `tools.python_exec` catches that cancellation and interrupts
+# the kernel job the call launched (the same path as `jobs['<id>'].cancel()`),
+# rather than leaving it to finish in the background and run its side effects after
+# the caller abandoned it (index#2387).
+#
+# LIMITATION: Claude Code does NOT send `notifications/cancelled` when a USER
+# REJECTS an in-flight tool call (clicks "No" on the permission prompt). Its
+# permission verdict is a client-local decision that never reaches the server, so
+# the server has nothing to cancel in that specific case: a call that was already
+# dispatched to the kernel before the (racing) rejection landed still runs to
+# completion. The cancellation wiring above therefore fires for spec-compliant MCP
+# clients and for Claude Code's own request-timeout cancellation, but not for a
+# rejected permission prompt. Fully closing the rejection gap needs a client-side
+# fix (Claude Code sending `notifications/cancelled` on rejection, or gating
+# dispatch behind the permission verdict); see index#2387.
+CANCELLATION_NOTE = (
+    "An MCP client that cancels an in-flight python_exec (notifications/cancelled "
+    "or transport abort) interrupts the kernel job it launched, on the same path as "
+    "jobs['<id>'].cancel(). Claude Code does not signal a user's REJECTION of an "
+    "in-flight call, so a rejected prompt is not covered (index#2387)."
+)
+
 SEE_INSTRUCTIONS = (
     "The server instructions cover the rest — the bundled tooling (grep / find / view / nix / "
     "fleet / polars / htpy), how to find and read things, and how to curate the dashboard's cells."
@@ -367,7 +397,9 @@ READ = (
     "as a file when it names an existing file, otherwise it is evaluated as a Python expression "
     "in the kernel namespace (e.g. `jobs['ab12'].output` to page a job, or a variable you bound "
     "earlier); an expression whose value is a string naming an existing file reads that file "
-    "too. Pass `start` / `end` for a 1-based inclusive line range."
+    "too. Pass `start` / `end` for a 1-based inclusive line range. When the kernel cannot execute "
+    "the read (wedged or dead), the tool ERRORS with 'kernel unavailable' rather than returning "
+    "empty output, so empty content always means the file or value is genuinely empty."
 )
 
 TRACE = (
@@ -377,6 +409,18 @@ TRACE = (
     "channel, so it returns while the loop is still frozen. Use it to see WHERE a wedged or slow "
     "cell is stuck, then fix the blocking call (wrap it in `await asyncio.to_thread(...)` and "
     "background it)."
+)
+
+RESTART = (
+    "Restart THIS server's kernel process on purpose: shut the child down, respawn it, restore "
+    "the session checkpoint (when serving a session file), and report the old pid, new pid, and "
+    "elapsed seconds. Scoped to your own connection's server -- other sessions' kernels on the "
+    "machine are untouched, so NEVER reach for `pkill -f ipykernel_launcher` (it kills every "
+    "session's kernel at once). Use it when the kernel is truly wedged (kernel_trace shows a "
+    "stuck frame and an interrupt cannot break it) or to adopt a fixed/updated kernel build "
+    "without restarting the MCP server (index#2209). It is disruptive: the namespace is rebuilt "
+    "(the checkpoint restore covers a session file's names; without one every variable is lost) "
+    "and running background jobs die with the process."
 )
 
 REPLY = (

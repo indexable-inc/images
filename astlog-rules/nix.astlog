@@ -255,6 +255,40 @@
 (lint no-empty-list-concat error
   "`[ ] ++ X` and `X ++ [ ]` are no-ops; drop the empty operand")
 
+;; no-escapeshellargs-for-loop: `for <var> in ${lib.escapeShellArgs xs}` in a
+;; nix-rendered bash string iterates a word list that is nix-computed, so when
+;; the list dedups/filters to a single element the loop renders as
+;; `for v in one-word`, which shellcheck flags SC2043 ("loop only runs once")
+;; and `writeBashApplication` treats as a fatal build error. This surfaces only
+;; when the toplevel is built (deploy job), never in PR CI, so a single-element
+;; render turns main red after merge (ix#6688). Materialize the list into a bash
+;; array and iterate it: `xs=(${lib.escapeShellArgs xs}); for v in "''${xs[@]}"`
+;; renders zero, one, or many elements uniformly and never trips SC2043. The
+;; preceding string fragment is the `... for <var> in ` text; the interpolation
+;; is the escapeShellArgs call.
+(rule (no-escapeshellargs-for-loop n frag f)
+  (match nix "
+    (string_expression
+      (string_fragment) @frag
+      .
+      (interpolation
+        expression: (apply_expression
+          function: [(variable_expression) (select_expression)] @f)) @n)")
+  (text-match f "^(lib\\.)?escapeShellArgs$")
+  (text-match frag "(^|[^A-Za-z0-9_])for[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]+in[ \t]*$"))
+(rule (no-escapeshellargs-for-loop n frag f)
+  (match nix "
+    (indented_string_expression
+      (string_fragment) @frag
+      .
+      (interpolation
+        expression: (apply_expression
+          function: [(variable_expression) (select_expression)] @f)) @n)")
+  (text-match f "^(lib\\.)?escapeShellArgs$")
+  (text-match frag "(^|[^A-Za-z0-9_])for[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]+in[ \t]*$"))
+(lint no-escapeshellargs-for-loop error
+  "`for <var> in ${{lib.escapeShellArgs xs}}` trips shellcheck SC2043 when the nix-computed list renders single-element, failing writeBashApplication only at deploy time; materialize a bash array (`xs=(${{lib.escapeShellArgs xs}}); for v in \"${{xs[@]}}\"`) so zero/one/many elements iterate uniformly")
+
 ;; no-fake-hash: Fake hashes are banned. Compute the real SRI hash before
 ;; editing tracked Nix files.
 (rule (no-fake-hash n)

@@ -10,6 +10,7 @@ import asyncio
 import json
 import sqlite3
 import sys
+import threading
 from pathlib import Path
 
 import anyio
@@ -60,6 +61,44 @@ def test_take_outbox_default_serves_broadcast_only(tmp_path: Path) -> None:
     store.add_outbox(conn, content="addressed", meta="{}", session="s1")
     assert [r["content"] for r in store.take_outbox(conn)] == ["broadcast"]
     assert [r["content"] for r in store.take_outbox(conn, session="s1")] == ["addressed"]
+
+
+def test_take_outbox_delivers_each_row_exactly_once_across_connections(tmp_path: Path) -> None:
+    """The consume is atomic (issue #2400): several pumps can share one store
+    (serve processes spawned with an inherited store pin), and the old
+    SELECT-then-DELETE let two connections read the same rows and each deliver
+    them -- one session's event waking every connected session. Two connections
+    draining the same queue at once must partition it, never overlap."""
+    path = tmp_path / "race.db"
+    seed = store.connect(path)
+    for i in range(300):
+        store.add_outbox(seed, content=f"event {i}", meta="{}")
+    total = seed.execute("SELECT count(*) FROM outbox").fetchone()[0]
+
+    delivered: dict[str, list[int]] = {"a": [], "b": []}
+    barrier = threading.Barrier(2)
+
+    def drain(who: str) -> None:
+        conn = store.connect(path)  # its own connection, like a real pump
+        barrier.wait()  # maximize the overlap the old code raced on
+        while True:
+            rows = store.take_outbox(conn, session=who)
+            if not rows:
+                break
+            delivered[who].extend(r["seq"] for r in rows)
+
+    threads = [threading.Thread(target=drain, args=(who,)) for who in ("a", "b")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    seqs = delivered["a"] + delivered["b"]
+    assert len(seqs) == len(set(seqs)), "a row was delivered by both pumps"
+    assert len(seqs) == total, "a row was lost"
+    # Each drainer saw its share oldest-first.
+    assert delivered["a"] == sorted(delivered["a"])
+    assert delivered["b"] == sorted(delivered["b"])
 
 
 def test_add_outbox_prunes_rows_past_age_cap(tmp_path: Path) -> None:
@@ -481,6 +520,61 @@ def test_pump_outbox_delivers_own_session_and_skips_others(
     asyncio.run(run())
 
 
+def test_job_finished_wake_reaches_only_the_owning_sessions_pump(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end for issue #2400: session A starts a job and session B is
+    connected to the same store; when the backgrounded job finishes, the
+    kernel-side addressing (`_notify_job_finished`) plus each session's pump
+    deliver the completion channel event to A exactly once -- B's pump stays
+    silent and nothing is left queued."""
+
+    async def start_pump(
+        cfg: Config, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[asyncio.Future, object]:
+        # pump_outbox reads config() once, before its first await, so patching,
+        # scheduling, and yielding one tick pins this pump to `cfg` even though
+        # the next pump repatches the same module attribute.
+        monkeypatch.setattr("ix_notebook_mcp.transport.config", lambda: cfg)
+        send, receive = anyio.create_memory_object_stream(8)
+        pump = asyncio.ensure_future(transport.pump_outbox(send, _FakeSession(initialized=True)))
+        await asyncio.sleep(0)
+        return pump, receive
+
+    async def run() -> None:
+        db = tmp_path / "p.db"
+        conn = store.connect(db)
+        _wire_runtime(monkeypatch, conn)
+
+        # Session A's backgrounded job reaches a terminal state.
+        job = _finished_job(session="sess-a")
+        runtime._notify_job_finished(job)
+
+        pump_a, receive_a = await start_pump(
+            Config(workdir=tmp_path, store_path=db, server_session_id="sess-a"), monkeypatch
+        )
+        pump_b, receive_b = await start_pump(
+            Config(workdir=tmp_path, store_path=db, server_session_id="sess-b"), monkeypatch
+        )
+        try:
+            message = await asyncio.wait_for(receive_a.receive(), timeout=5.0)
+            wire = message.message.root
+            assert wire.method == "notifications/claude/channel"
+            assert wire.params["content"] == "Background job poll ci finished with status done."
+            assert wire.params["meta"]["job_id"] == job.id
+            # B never sees A's wake -- not late, not at all.
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(receive_b.receive(), timeout=1.0)
+        finally:
+            pump_a.cancel()
+            pump_b.cancel()
+        # The row was consumed by A's pump; nothing lingers for anyone.
+        assert store.take_outbox(conn, session="sess-a") == []
+        assert store.take_outbox(conn, session="sess-b") == []
+
+    asyncio.run(run())
+
+
 def test_pump_outbox_holds_events_until_initialized(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     async def run() -> None:
         db = tmp_path / "p.db"
@@ -516,7 +610,7 @@ def test_sse_streams_new_events_only(tmp_path: Path) -> None:
         cfg = Config(workdir=tmp_path, store_path=db)
         # History from before the subscription must not replay.
         store.add_event(conn, resource="panel", kind="reply", body=json.dumps({"text": "old"}))
-        client = TestClient(TestServer(dashboard.build_app(cfg, conn)))
+        client = TestClient(TestServer(dashboard.build_app(cfg, store.AsyncConn(cfg.store_path))))
         await client.start_server()
         try:
             async with client.get("/api/resources/panel/events") as resp:
@@ -555,7 +649,7 @@ def test_reply_tool_appends_event_for_live_resource(tmp_path: Path, monkeypatch:
         conn = store.connect(db)
         cfg = Config(workdir=tmp_path, store_path=db)
         monkeypatch.setattr("ix_notebook_mcp.tools.config", lambda: cfg)
-        monkeypatch.setattr(tools, "_reply_conn", None)
+        monkeypatch.setattr(tools, "_reply_db", None)
         monkeypatch.setattr(tools, "_dashboard_started", True)
 
         # An unknown/closed resource is refused loudly, and nothing is written.
@@ -675,42 +769,29 @@ def test_pr_resource_html_renders_every_check_state(monkeypatch: pytest.MonkeyPa
     assert '<span class="state action_required">action_required</span>' in html
 
 
-class _FakeFrame:
-    """Stands in for the `pl.DataFrame` a real `nu()` call returns; watch_pr only
-    calls `.to_dicts()` on the refresh-loop result."""
-
-    def __init__(self, rows: list[dict[str, object]]) -> None:
-        self._rows = rows
-
-    def to_dicts(self) -> list[dict[str, object]]:
-        return self._rows
-
-
 class _FakeNu:
     """A stand-in for the bundled `nu` module: `watch_pr` does `import nu as
     nu_call` then calls it directly (`nu_call(code, ...)`), so this needs to be
     an instance whose TYPE defines `__call__` -- an attribute set on a plain
-    instance would not make `instance(...)` callable."""
+    instance would not make `instance(...)` callable. The refresh pipeline ends
+    in `from json` on a gh object, a nu record, which `nu()` returns as a plain
+    dict (issue #2390)."""
 
     async def __call__(
         self, code: str, *, cwd: str | None = None, env: dict[str, str] | None = None, timeout: float = 60
-    ) -> _FakeFrame:
+    ) -> dict[str, object]:
         assert "gh pr view" in code
-        return _FakeFrame(
-            [
-                {
-                    "number": 1856,
-                    "title": "fix: something",
-                    "state": "MERGED",
-                    "mergeStateStatus": "CLEAN",
-                    "statusCheckRollup": [{"name": "build", "conclusion": "SUCCESS"}],
-                    "url": "https://github.com/o/r/pull/1856",
-                    "autoMergeRequest": None,
-                    "isDraft": False,
-                    "reviewDecision": "APPROVED",
-                }
-            ]
-        )
+        return {
+            "number": 1856,
+            "title": "fix: something",
+            "state": "MERGED",
+            "mergeStateStatus": "CLEAN",
+            "statusCheckRollup": [{"name": "build", "conclusion": "SUCCESS"}],
+            "url": "https://github.com/o/r/pull/1856",
+            "autoMergeRequest": None,
+            "isDraft": False,
+            "reviewDecision": "APPROVED",
+        }
 
 
 def test_watch_pr_slugs_resource_id_and_renders_without_nameerror(

@@ -14,6 +14,7 @@ import json
 import os
 import socket
 import stat
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,6 +47,32 @@ def is_tailnet_ipv4(value: str) -> bool:
 # (ix_notebook_mcp.mesh) and the bundled `mesh` module's peer probes both read
 # it through :func:`mesh_port`, so the two sides cannot drift.
 DEFAULT_MESH_PORT = 8798
+
+
+def process_cwd() -> Path:
+    """The process working directory, self-healing a deleted one (index#2120).
+
+    A long-lived kernel can have its cwd removed under it (e.g. an auto-cleaned
+    ``.claude`` worktree a cell had ``os.chdir``'d into). From then on
+    ``Path.cwd()`` raises ``FileNotFoundError`` -- and because the per-cell type
+    checker resolves the cwd BEFORE user code runs, every subsequent cell
+    (including a repair ``os.chdir``) dies on that traceback until the server is
+    restarted. Every per-call cwd read goes through here instead: on a vanished
+    cwd the process moves itself to ``$HOME``, says so loudly on stderr (which
+    reaches journald), and carries on. One recovery, one warning; any other
+    error still propagates.
+    """
+    try:
+        return Path.cwd()
+    except FileNotFoundError:
+        home = Path.home()
+        os.chdir(home)
+        print(
+            f"[ix-mcp] working directory vanished (deleted under the process); moved to {home}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return home
 
 
 def mesh_port() -> int:

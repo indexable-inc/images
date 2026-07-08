@@ -31,6 +31,33 @@ type SvxModule = {
 
 const modules = import.meta.glob<SvxModule>('./rfcs/*.svx', { eager: true });
 
+// RFC numbers derive from filenames (the digits before the first '-') and
+// must be unique and agree with frontmatter. Throwing at module scope makes
+// `vite build` — and so `nix build .#site` and CI — fail on a violation:
+// the glob is eager and every prerendered RFC route imports this module.
+// Two RFCs once merged as 0010 (#2154); this keeps that unrepresentable.
+const numberToPath = new Map<string, string>();
+for (const [path, mod] of Object.entries(modules)) {
+  const stem = path.slice(path.lastIndexOf('/') + 1).replace(/\.svx$/, '');
+  const number = stem.slice(0, stem.indexOf('-'));
+  if (!/^\d{4}$/.test(number)) {
+    throw new Error(`RFC ${path}: filename must start with a four-digit number and '-'`);
+  }
+  if (mod.metadata.number !== number) {
+    throw new Error(
+      `RFC ${path}: frontmatter number '${mod.metadata.number}' disagrees with filename-derived '${number}'`
+    );
+  }
+  if (mod.metadata.id !== stem) {
+    throw new Error(`RFC ${path}: frontmatter id '${mod.metadata.id}' disagrees with filename '${stem}'`);
+  }
+  const existing = numberToPath.get(number);
+  if (existing !== undefined) {
+    throw new Error(`Duplicate RFC number ${number}: ${existing} and ${path}`);
+  }
+  numberToPath.set(number, path);
+}
+
 const allRfcs: Rfc[] = Object.values(modules)
   .map((mod) => ({
     ...mod.metadata,

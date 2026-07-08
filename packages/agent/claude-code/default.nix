@@ -30,14 +30,40 @@
   # `claude-code.override { dangerouslySkipPermissions = false; }`.
   dangerouslySkipPermissions ? true,
   # Extra settings.json keys to ship through the read-only flagSettings layer
-  # (the `--settings` file below), deep-merged UNDER the computed defaults so the
-  # keys this package controls always win on a conflict. Lets a consumer keep its whole
+  # (the `--settings` file below), deep-merged UNDER the controlled keys this
+  # package owns (so those always win on a conflict) and OVER the house posture
+  # defaults (`houseSettingsDefaults` in the let-block, so any of those can be
+  # overridden per consumer). Lets a consumer keep its whole
   # static Claude config (hooks, statusLine, enabledPlugins, marketplaces, ...)
   # in Nix and out of a hand-maintained ~/.claude/settings.json: flagSettings
   # merges per-key ABOVE user settings and is a separate read-only layer, so it
   # never occupies (or symlinks) the writable settings.json the CLI churns at
-  # runtime. `{ }` (default) ships only the computed defaults.
+  # runtime. `{ }` (default) ships the house defaults plus the controlled keys.
   extraSettings ? {},
+  # Typed Claude Code feature posture, rendered to the CLAUDE_CODE_* env vars
+  # so no consumer has to spell (or misspell) the raw names. Booleans gate
+  # features: false bakes the feature's CLAUDE_CODE_DISABLE_<NAME> var both as
+  # a soft launch-env default (export the var empty to re-enable for one
+  # session) and into settings `env` (read at CC startup even when the launch
+  # env is missing); true bakes nothing, i.e. stock behavior.
+  # `autoCompactWindow` is the token count baked as
+  # CLAUDE_CODE_AUTO_COMPACT_WINDOW into settings `env` (null bakes nothing).
+  # Unknown keys throw, like systemTools. Merged over `defaultFeatures` in the
+  # let-block:
+  #  - context1M = false: every 1M path in the CLI (the [1m] model suffix, the
+  #    silent auto-upgrade, the context-1m beta header) is ~5x input price;
+  #    past-the-window work belongs in subagents.
+  #  - cron = false: drops the scheduling/loop tools.
+  #  - autoCompactWindow = 300000: native-1M models (Fable 5, Sonnet 5,
+  #    Opus 4.8) otherwise autocompact near the 1M cliff; 300K matches the
+  #    standard (non-[1m]) working window the picker labels "300K High".
+  features ? {},
+  # Claude Code built-in orchestration and hosted-service tool posture. True
+  # means Claude sees the tool; false renders the bare tool name into settings
+  # `permissions.deny`, which removes the tool from Claude's available
+  # tool set. Core shell/file/search tools stay in sharedPermissions because
+  # their defaults depend on which MCP replacements the wrapper bakes.
+  systemTools ? {},
   # Directories baked into the wrapper as `--add-dir=<dir>` flags, one per entry.
   # `--add-dir` grants tool file-access to a directory, AND (the reason this arg
   # exists) Claude Code loads any `<dir>/.claude/skills/` and `<dir>/CLAUDE.md`
@@ -117,13 +143,10 @@
   # things that happen while you are away. Our `index` server (baked above via
   # `mcpServers`, packages/mcp) is a channel: kernel `notify(...)` and
   # interactive-resource actions emit `notifications/claude/channel` events. It
-  # is our OWN stdio server, not on Anthropic's curated preview allowlist, so it
-  # loads with `--dangerously-load-development-channels` rather than `--channels`
-  # (the "dangerous" name is because a channel injects text into the session's
-  # context — a trust decision; here the source is our own baked server). Each
-  # entry is a channel spec: `server:<mcpServersKey>` or
-  # `plugin:<name>@<marketplace>`; baked as
-  # `--dangerously-load-development-channels <spec>...`. Defaults to the `index`
+  # is our OWN stdio server, baked into this package from the same trusted
+  # registry as `mcpServers`. Each entry is a channel spec:
+  # `server:<mcpServersKey>` or `plugin:<name>@<marketplace>`; baked as
+  # `--channels <spec>...`. Defaults to the `index`
   # server WHEN it is baked (so notify()/interactive resources reach a session
   # with no per-launch flag), and to nothing otherwise (the overlay build has no
   # `index` server, so referencing it would be a dead flag). A session whose org
@@ -131,7 +154,7 @@
   # is unaffected. `[ ]` bakes no flag.
   developmentChannels ? lib.optional (mcpServers ? index) "server:index",
   # Rule names dropped from the default house prompt (forwarded to
-  # ../system-prompt.nix's `omitRules`). Only affects the computed `systemPrompt`
+  # ../prompt's `omitRules`). Only affects the computed `systemPrompt`
   # default below; ignored when `systemPrompt` is passed explicitly. Lets a
   # consumer bake a variant minus a rule without restating the whole prompt, e.g.
   # `claude-code.override { omitRules = [ "htmlDeliverable" ]; }`. `[ ]` keeps all.
@@ -149,7 +172,7 @@
   # (single-value options are last-wins), and a caller who wants the stock
   # prompt plus additions can still pass `--append-system-prompt[-file]`.
   # Defaults to the shared house prompt (`systemPrompt` in ../common.nix,
-  # authored in ../system-prompt.nix: the shokunin craft ethos plus the pre-v1
+  # authored in ../prompt/rules.nix: the shokunin craft ethos plus the pre-v1
   # backward-compatibility engineering rule, plus a preference for working in git
   # worktrees); set to `null` to bake no flag and ship the stock prompt alone.
   systemPrompt ?
@@ -204,25 +227,119 @@
       }
     else null;
 
-  # Set only when the caller has not already provided an env value.
-  wrapperEnvDefaults = {
-    # Keep every session on the standard (~200K) context window, never 1M
-    # (~5x input price; past-the-window work belongs in subagents, and the
-    # smaller window makes auto-compaction trigger sooner). Verified against
-    # 2.1.197: this flag gates every 1M path in the CLI — the explicit `[1m]`
-    # model suffix, the silent auto-upgrade on eligible models, honoring a
-    # `context-1m` beta header, and the built-in `[1m]` /model rows. Server-
-    # pushed model options (`additionalModelOptionsCache` in ~/.claude.json,
-    # e.g. an org-offered row valued `claude-fable-5[1m]`) can still APPEAR in
-    # /model, but selecting one still runs at the standard window: the beta
-    # header is never sent and the window computation ignores the suffix.
-    # Model selection itself is untouched. Guarded by an install check.
-    # Re-enable 1M per machine: `export CLAUDE_CODE_DISABLE_1M_CONTEXT=`.
-    CLAUDE_CODE_DISABLE_1M_CONTEXT = 1;
+  # Typed feature table (see the `features` arg): one row per feature key,
+  # owning its CLAUDE_CODE_* env var name and default, so the raw strings
+  # exist exactly once. Toggle rows render DISABLE-style (feature off ⇒ var
+  # "1"); value rows render their scalar.
+  featureToggleEnvVars = {
+    context1M = "CLAUDE_CODE_DISABLE_1M_CONTEXT";
+    cron = "CLAUDE_CODE_DISABLE_CRON";
   };
+  defaultFeatures = {
+    context1M = false;
+    cron = false;
+    autoCompactWindow = 300000;
+  };
+  unknownFeatures = lib.subtractLists (builtins.attrNames defaultFeatures) (builtins.attrNames features);
+  effectiveFeatures =
+    if unknownFeatures != []
+    then throw "claude-code.features: unknown feature(s): ${lib.concatStringsSep ", " unknownFeatures}"
+    else defaultFeatures // features;
+  disabledFeatureEnv =
+    lib.mapAttrs' (_: envVar: lib.nameValuePair envVar "1")
+    (lib.filterAttrs (name: _: !effectiveFeatures.${name}) featureToggleEnvVars);
+  # The full render, for settings `env` below. The launch layer gets only the
+  # toggles (as `env_defaults`, which leave caller-provided values alone:
+  # exporting the full CLAUDE_CODE_DISABLE_* name to empty re-enables that
+  # feature for one session).
+  featureSettingsEnv =
+    disabledFeatureEnv
+    // lib.optionalAttrs (effectiveFeatures.autoCompactWindow != null) {
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW = toString effectiveFeatures.autoCompactWindow;
+    };
+  wrapperEnvDefaults = disabledFeatureEnv;
+
+  # Disabling a tool here puts its BARE name in `permissions.deny`, which
+  # strips the tool's schema from the model context entirely; Claude Code has
+  # no lazy/deferred-description mode for built-in tools (scoped patterns
+  # like `Bash(...)` leave the schema loaded), so denying is the only way to
+  # reclaim their tokens. The orchestration surface (Agent, SendMessage,
+  # Task*, ScheduleWakeup) is off because delegation routes through the index
+  # kernel instead: coding agents spawned from `python_exec` as background
+  # jobs, completion notifying the session over the kernel channel (#2404).
+  # The MCP resource browsers are kernel-superseded the same way.
+  defaultSystemTools = {
+    Agent = false;
+    Artifact = true;
+    AskUserQuestion = false;
+    DesignSync = false;
+    EnterPlanMode = false;
+    EnterWorktree = false;
+    ExitPlanMode = false;
+    ExitWorktree = false;
+    ListMcpResourcesTool = false;
+    PushNotification = false;
+    ReadMcpResourceDirTool = false;
+    ReadMcpResourceTool = false;
+    RemoteTrigger = true;
+    ReportFindings = false;
+    ScheduleWakeup = false;
+    SendMessage = false;
+    SendUserFile = true;
+    ShareOnboardingGuide = true;
+    Skill = true;
+    TaskCreate = false;
+    TaskGet = false;
+    TaskList = false;
+    TaskOutput = false;
+    TaskStop = false;
+    TaskUpdate = false;
+    ToolSearch = true;
+    WaitForMcpServers = true;
+    Workflow = true;
+  };
+  unknownSystemTools = lib.subtractLists (builtins.attrNames defaultSystemTools) (builtins.attrNames systemTools);
+  effectiveSystemTools =
+    if unknownSystemTools != []
+    then throw "claude-code.systemTools: unknown tool(s): ${lib.concatStringsSep ", " unknownSystemTools}"
+    else defaultSystemTools // systemTools;
+  disabledSystemTools = builtins.attrNames (lib.filterAttrs (_: enabled: !enabled) effectiveSystemTools);
 
   # Settings defaults are injected only when the caller passed no `--settings`;
   # Claude treats repeated settings flags as first-wins.
+
+  # House posture defaults every wrapped session starts from: agent-neutral
+  # preferences that used to live in per-machine extraSettings. They form the
+  # LOWEST-priority layer of the computed settings (under the caller's
+  # extraSettings, which sits under the controlled keys in settingsDefaults),
+  # so a consumer can override any of them without this package losing its
+  # invariants.
+  houseEffortLevel = "high";
+  houseSettingsDefaults = {
+    # No Claude attribution trailers on commits or PRs.
+    attribution = {
+      commit = "";
+      pr = "";
+    };
+    worktree.baseRef = "fresh";
+    autoMemoryEnabled = true;
+    effortLevel = houseEffortLevel;
+    fastMode = true;
+    theme = "auto";
+    verbose = false;
+    fileCheckpointingEnabled = false;
+    autoUpdatesChannel = "latest";
+    skipAutoPermissionPrompt = true;
+    # House statusline (./statusline.nu): context bar, model, effort, and the
+    # running CLI version with an update marker against Anthropic's `latest`
+    # release pointer. The house effortLevel rides argv because the script
+    # cannot read this read-only settings layer back from disk; the writable
+    # settings files still win when a user overrides per machine.
+    statusLine = {
+      type = "command";
+      command = "${lib.getExe pkgs.nushell} ${./statusline.nu} --default-effort ${houseEffortLevel}";
+    };
+  };
 
   # Build the hook runner once; shared policy renders it for each wrapper.
   hookRunner = import (ix.paths.packagesRoot + "/agent/policy/hook-runner.nix") {
@@ -256,28 +373,23 @@
     exaSearchBaked = mcpServers ? exa;
   };
 
-  # Caller's extraSettings first, then the computed defaults recursively merged
-  # ON TOP, so the keys below always win a conflict while the caller's other
-  # keys (hooks, statusLine, ...) pass through.
-  settingsDefaults = ix.deepMerge.rhs extraSettings (
+  # Controlled keys this package always owns: the highest-priority settings
+  # layer, merged over the house defaults and the caller's extraSettings below.
+  controlledSettings =
     {
       # Keep transcripts and wrapper debug logs long enough for troubleshooting.
       cleanupPeriodDays = 365;
       # settings `env` is read at Claude Code startup (even when launch env is
-      # missing), so bake the 1M-disable + compact cap here as well as in
-      # wrapperEnvDefaults. Without DISABLE_1M, native-1M models (Fable 5,
-      # Sonnet 5, Opus 4.8) report `/context` as 1M and autocompact late.
-      env =
-        (extraSettings.env or {})
-        // {
-          CLAUDE_CODE_DISABLE_1M_CONTEXT = "1";
-          # Fable/Sonnet 5: compact well before the 1M cliff; 300K matches the
-          # standard (non-[1m]) working window the picker labels "300K High".
-          CLAUDE_CODE_AUTO_COMPACT_WINDOW = "300000";
-        };
+      # missing), so the typed feature render (see the `features` arg) bakes
+      # here as well as in the launch layer's env_defaults.
+      env = (extraSettings.env or {}) // featureSettingsEnv;
       permissions = {
         # Concatenate manually: deepMerge treats lists as leaves.
-        deny = (extraSettings.permissions.deny or []) ++ sharedPermissions.claude.deniedToolPatterns;
+        deny = lib.unique (
+          (extraSettings.permissions.deny or [])
+          ++ disabledSystemTools
+          ++ sharedPermissions.claude.deniedToolPatterns
+        );
       };
       # Full Claude hook set rendered from shared agent policy.
       hooks = sharedHooks.claude;
@@ -285,8 +397,21 @@
     // lib.optionalAttrs dangerouslySkipPermissions {
       # Suppress the one-time warning that the skip flag alone still shows.
       skipDangerousModePermissionPrompt = true;
-    }
-  );
+    };
+
+  # Three layers, rhs winning at each leaf: house posture defaults, then the
+  # caller's extraSettings, then the controlled keys this package always owns.
+  # The caller's other keys (hooks aside — enabledPlugins, marketplaces, ...)
+  # pass through untouched.
+  settingsDefaults = ix.deepMerge.rhs (ix.deepMerge.rhs houseSettingsDefaults extraSettings) controlledSettings;
+
+  # What the installCheck expects the settings file to carry from the two
+  # lower layers: the merged house+extraSettings render, minus any top-level
+  # key the controlled layer shadows. Derived (not restated) so the check
+  # holds for overridden builds too.
+  houseSettingsRender =
+    builtins.removeAttrs (ix.deepMerge.rhs houseSettingsDefaults extraSettings)
+    (builtins.attrNames controlledSettings);
   settingsDefaultsFile =
     (formats.json {}).generate "claude-code-default-settings.json"
     settingsDefaults;
@@ -322,7 +447,7 @@
     # swallow the user's argv (a prompt, a subcommand). It sits here so the always-
     # present `--thinking-display=` below terminates the spec list.
     ++ lib.optionals (developmentChannels != []) (
-      ["--dangerously-load-development-channels"] ++ developmentChannels
+      ["--channels"] ++ developmentChannels
     )
     ++ [
       # Opus 4.7+ otherwise omits thinking from the UI/transcript.
@@ -373,6 +498,17 @@
       {
         unless_present = ["--settings"];
         flags = ["--settings=${settingsDefaultsFile}"];
+      }
+    ];
+    # `claude --which-settings` prints the store path of the read-only
+    # settings layer this package injects, then exits (answered by the
+    # launcher; the real CLI never sees the flag). The wrapper passes settings
+    # by flag, so nothing on disk under ~/.claude explains the live config:
+    # this is the introspection that does.
+    introspection = [
+      {
+        flag = "--which-settings";
+        value = "${settingsDefaultsFile}";
       }
     ];
   };
@@ -478,6 +614,8 @@ in
     # against a stub target; see ./install-check.nix for what each check guards.
     doInstallCheck = true;
     installCheckPhase = import ./install-check.nix {
+      inherit (pkgs) nushell;
+      statuslineCommand = houseSettingsDefaults.statusLine.command;
       inherit
         lib
         runtimeShell
@@ -489,6 +627,10 @@ in
         launchSpec
         settingsDefaultsFile
         wrapperFlags
+        wrapperEnvDefaults
+        featureSettingsEnv
+        houseSettingsRender
+        disabledSystemTools
         python3
         binName
         ;

@@ -18,14 +18,14 @@ Hand a PR's whole "watch CI → fix failures → merge" loop to a **background s
 
 3. **On the completion notification**, relay the outcome: merged (with commit), or stopped-stuck (with the failure it could not fix and why), or blocked (needs a human decision).
 
-Keep all CI watching inside the fork, and even there make it event-driven (see below). A foreground `gh pr checks --watch` / `gh run watch` in the main thread holds a Bash slot up to the 600s timeout and freezes the session, so route it through `run_in_background` + `Monitor` instead.
+Keep all CI watching inside the fork, and even there make it event-driven (see below). A foreground `gh pr checks --watch` / `gh run watch` in the main thread holds a Bash slot up to the 600s timeout and freezes the session, so route it through a harness-tracked background job instead.
 
 ## The fork's charter (paste into the subagent prompt)
 
 > You own PR #<N> in <owner/repo> from now until it is merged or you are genuinely stuck. Loop:
 >
 > 1. **Watch CI fail-fast, silently.** Arm exactly ONE event-driven watch and let it be the only thing that wakes you. It must complete only on a terminal or changed state — a check result (any fail / all pass), a new head sha, a merge or close event, or your own deadline — never on a timer tick that re-reports "pending". Run `gh pr checks <N> --watch --fail-fast --interval 20` with `run_in_background: true` (never a foreground Bash slot) so it returns the instant ANY check fails or all pass. `--fail-fast` needs gh ≥ 2.42; if it is rejected, drop the flag and run a background `until` loop over `gh pr checks <N> --json name,state,bucket` that exits only when the aggregate state differs from when you armed it.
-> 2. **If all checks pass → merge.** Use the repo's merge norm: for `indexable-inc/index` and `indexable-inc/ix`, admin force-merge immediately (`gh pr merge <N> --admin --squash`; merge queue is on, so do NOT pass `--delete-branch`). For other repos, enable auto-merge (`gh pr merge <N> --auto --squash`) unless the user said force-merge. Then report "merged" with the squash commit sha and stop.
+> 2. **If all checks pass → merge.** Enable auto-merge: `gh pr merge <N> --auto --squash`. When the PR is already green and `mergeStateStatus` is CLEAN this merges immediately, so there is never a reason to escalate. Never pass `--admin` or `--force`, even when everything is green: the house rules forbid them and the permission policy denies them. Then report "merged" with the squash commit sha and stop.
 > 3. **If a check failed → diagnose and fix.**
 >    - Pull the failing logs: `gh pr checks <N>` to find the failed check, then `gh run view <run-id> --log-failed` (or `--log` for the failing job) to read the actual error. Read the real error, do not guess.
 >    - Work on the PR branch in an **isolated worktree** off the PR head, never the shared main checkout (in index/ix a PreToolUse hook blocks edits on main anyway). `git fetch origin` then `git worktree add ../<repo>-pr<N> <headRef>` and fix there. Validate the fix at the layer it touches via the repo's own commands (e.g. `nix build .#…`, `nix run .#lint`, the scoped `nix build .#checks.<system>.<name>`) before pushing, so you are not burning CI to test a guess.

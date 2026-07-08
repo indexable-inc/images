@@ -14,7 +14,7 @@
     "1.16" = pkgs.elixir_1_16;
     "1.17" = pkgs.elixir_1_17;
     "1.18" = pkgs.elixir_1_18;
-    "1.19" = pkgs.elixir_1_19;
+    "1.19" = pkgs.beamPackages.elixir_1_19;
   };
 in {
   /**

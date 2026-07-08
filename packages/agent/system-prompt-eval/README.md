@@ -4,7 +4,7 @@
 
 How do you know a system-prompt edit made the agent better and not just
 different? system-prompt-eval is a reproducible, **scored** behavioral eval for
-the house system prompt (`packages/agent/system-prompt.nix`). Every eval spawns
+the house system prompt (`packages/agent/prompt/`). Every eval spawns
 fresh `claude -p` rollouts that load the prompt the same way a production
 session does, then an LLM judge scores the result. Scores are committed under
 `eval-results/` so the prompt's behavior is tracked over time, run to run.
@@ -29,7 +29,7 @@ nix run .#system-prompt-eval -- run --eval first-principles --sandbox
 
 # test a candidate prompt edit before committing it
 nix run .#system-prompt-eval -- run --eval behaviors \
-  --system-prompt-nix packages/agent/system-prompt.nix
+  --system-prompt-nix packages/agent/prompt
 ```
 
 ## Evals
@@ -81,7 +81,7 @@ probe is stable. Web tools are denied so it cannot look the answer up. Headline
 ## Matrix and effort
 
 - `--agent {claude,codex}`: the matrix seam. `claude` is wired; `codex` (which
-  shares the same house prompt via `packages/agent/prompt.nix`) is the next
+  shares the same house prompt via `packages/agent/prompt/`) is the next
   backend (tracked issue). Compose `--agent` x `--model` x `--effort` for a
   matrix run.
 - `--effort {high,xhigh,max}`: reasoning effort. Evals NEVER run in fast/low

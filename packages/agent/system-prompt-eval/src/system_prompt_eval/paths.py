@@ -39,5 +39,5 @@ def baked_prompt_file() -> Path | None:
 
 
 def repo_system_prompt_nix() -> Path:
-    """The house prompt source in a checkout (``packages/agent/system-prompt.nix``)."""
-    return data_root().parent / "system-prompt.nix"
+    """The house prompt source in a checkout (``packages/agent/prompt/``)."""
+    return data_root().parent / "prompt"

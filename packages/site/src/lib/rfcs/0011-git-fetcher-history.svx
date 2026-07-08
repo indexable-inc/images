@@ -5,16 +5,16 @@ title: Structured commit history from the Nix git fetcher
 status: Draft
 authors: andrewgazelka
 created: '2026-07-06'
-updated: '2026-07-06'
+updated: '2026-07-07'
 trackingIssue: '#2108'
 supersedes: null
 supersededBy: null
-description: 'Git inputs opt into `exportHistory = true` and evaluation sees `inputs.foo.history`: a deterministic, depth-bounded list of commits (rev, parents, author, message, paths touched), cached by rev, never in lock files. Changelogs become a pure function of a locked input.'
+description: 'Git inputs opt into `exportHistory = true` and evaluation sees `inputs.foo.history`: a deterministic, depth-bounded list of commits (rev, parents, author, message, optionally paths touched), cached by rev, never in lock files. Changelogs become a pure function of a locked input.'
 ---
 
 ## Summary
 
-Extend the Nix git fetcher (as a patch in the `nix-ix` series) so a git input can opt into exposing its commit history as structured evaluation-time data. `builtins.fetchGit { ...; exportHistory = true; historyDepth = 200; }` (and the same attributes on `fetchTree` and flake inputs of type `git`) yields a `history` attribute: a list of commits, newest first, in a deterministic topological order, each carrying `rev`, `parents`, `author`, `committer`, the full `message`, and the `paths` touched relative to the first parent. The history is a pure function of the locked `rev` (exactly like `revCount` and `lastModified`, which it generalises), so it is memoised in the fetcher cache and never appears in lock files. Consumers filter and render in Nix: a per-subtree CHANGELOG becomes `map render (filter (touches "packages/foo") input.history)`.
+Extend the Nix git fetcher (as a patch in the `nix-ix` series) so a git input can opt into exposing its commit history as structured evaluation-time data. `builtins.fetchGit { ...; exportHistory = true; historyDepth = 200; }` (and the same attributes on `fetchTree` and flake inputs of type `git`) yields a `history` attribute: a list of commits, newest first, in a deterministic topological order, each carrying `rev`, `parents`, `author`, `committer`, the full `message`, and (with `historyPaths`, on by default) the `paths` touched relative to the first parent. The history is a pure function of the locked `rev` (exactly like `revCount` and `lastModified`, which it generalises), so it is memoised in the fetcher cache and never appears in lock files. Consumers filter and render in Nix: a per-subtree CHANGELOG becomes `map render (filter (touches "packages/foo") input.history)`.
 
 ## Motivation
 
@@ -29,10 +29,11 @@ The underlying gap is old and upstream-recognised: Nix deliberately strips `.git
 
 ### Surface
 
-Two new attributes on the `git` input scheme, gated behind a new `git-export-history` experimental feature (mirroring how `verified-fetches` gates `publicKeys`):
+Three new attributes on the `git` input scheme, gated behind a new `git-export-history` experimental feature (mirroring how `verified-fetches` gates `publicKeys`):
 
 - `exportHistory` (bool, default `false`): opt in. The result attrset (from `fetchGit`/`fetchTree`, and each flake input's `sourceInfo` — thus `inputs.foo.history` and `self.history`) gains a `history` attribute.
-- `historyDepth` (integer, default `100`): bound the walk by generation distance from the tip, counted like `git clone --depth` (the fetched commit is generation 1). `0` means unlimited, an explicit opt-in to unbounded eval data. `historyDepth` without `exportHistory` is an error; `exportHistory` with `shallow = true` is an error (the walk needs the real parent chain). One interaction needed explicit handling: flake inputs re-enter the fetcher through `fetchTree`, which injects `shallow = true` by default for git inputs; `exportHistory = true` suppresses that injected default (an explicit `shallow = true` still errors), so `inputs.foo = { type = "git"; url = ...; exportHistory = true; }` and the URL form `git+https://...?exportHistory=1&historyDepth=200` both work unmodified.
+- `historyDepth` (integer, default `100`): emit at most this many commits, walked level-by-level from the tip (numerically smallest hash first among ties, including at the cap boundary); `0` means unlimited, an explicit opt-in to unbounded eval data. The bound counts emitted commits, not generation distance: merge fan-out means a generation bound of 100 on nixpkgs covers tens of thousands of commits (#2156), while a commit-count bound keeps `historyDepth = 100` meaning 100 commits. On linear history the two coincide. `historyDepth` or `historyPaths` without `exportHistory` is an error; `exportHistory` with `shallow = true` is an error (the walk needs the real parent chain). One interaction needed explicit handling: flake inputs re-enter the fetcher through `fetchTree`, which injects `shallow = true` by default for git inputs; `exportHistory = true` suppresses that injected default (an explicit `shallow = true` still errors), so `inputs.foo = { type = "git"; url = ...; exportHistory = true; }` and the URL form `git+https://...?exportHistory=1&historyDepth=200` both work unmodified.
+- `historyPaths` (bool, default `true`): include the per-commit `paths` field. Path extraction is a tree diff per commit and dominates export cost on large-tree repositories (~150ms/commit on nixpkgs, measured), so metadata-only consumers (changelogs keyed on messages, provenance) switch it off and a depth-100 nixpkgs export completes in well under a second instead of hours (#2156).
 
 ### Schema
 
@@ -55,11 +56,11 @@ Two new attributes on the `git` input scheme, gated behind a new `git-export-his
 
 Every emitted byte is a function of the commit objects reachable from `rev`:
 
-1. **The set** is fixed by `rev` and `historyDepth`: a breadth-first walk of parent edges emits exactly the commits whose minimal parent-distance from the tip is at most the depth. Commit objects are immutable and content-addressed, so the set is the same on every machine that can resolve `rev`.
+1. **The set** is fixed by `rev` and `historyDepth`: a level-by-level walk of parent edges (numerically smallest hash first among ties, including at the cap boundary) emits at most `historyDepth` commits, so merge fan-out cannot blow up the emitted set (#2156). Commit objects are immutable and content-addressed, so the set is the same on every machine that can resolve `rev`.
 2. **The order** is specified, not inherited from a library: children always precede parents (topological), and among candidates whose already-emitted-set children are all emitted, the numerically smallest commit hash goes first. No timestamps, no clone order, no libgit2 version dependence. (`git rev-list --topo-order` by contrast leaves tie order unspecified.)
 3. **The fields** are commit-object data (`author`/`committer` including timezone offset, message bytes) plus tree-object data (`paths` via tree-to-tree diff, no blob reads, no similarity detection), sorted by path.
 
-Hence `history == f(rev, historyDepth)`, the same invariant `revCount == f(rev)` already relies on — which is also why it stays **out of lock files**: locking derived-from-rev data would only create a second thing to keep consistent (`checkLocks` would have to validate it, schema evolution would invalidate locks). Like `revCount`, it is instead memoised in the fetcher cache (`~/.cache/nix/fetcher-cache-*.sqlite`) under key `("gitHistory", {rev, depth, format})`, where `format` versions the schema.
+Hence `history == f(rev, historyDepth, historyPaths)`, the same invariant `revCount == f(rev)` already relies on — which is also why it stays **out of lock files**: locking derived-from-rev data would only create a second thing to keep consistent (`checkLocks` would have to validate it, schema evolution would invalidate locks). Like `revCount`, it is instead memoised in the fetcher cache (`~/.cache/nix/fetcher-cache-*.sqlite`) under key `("gitHistory", {rev, depth, paths, format})`, where `format` versions the schema.
 
 ### Mechanics (patch anatomy)
 
@@ -109,7 +110,7 @@ Partial clones are unaffected in principle: the walk reads commit and tree objec
 
 ## Prior art
 
-- **`revCount` / `lastModified`**: the existing precedent that history-derived, rev-determined metadata is legitimate fetcher output; this RFC is their generalisation, and reuses their exact caching pattern (`Cache::Key{"gitRevCount", {rev}}` → `{"gitHistory", {rev, depth, format}}`).
+- **`revCount` / `lastModified`**: the existing precedent that history-derived, rev-determined metadata is legitimate fetcher output; this RFC is their generalisation, and reuses their exact caching pattern (`Cache::Key{"gitRevCount", {rev}}` → `{"gitHistory", {rev, depth, paths, format}}`).
 - **RFC 0009 / the `nix-ix` patch series**: the fork-local delivery vehicle — `lib/util/patched-src.nix`, `dag.json`, per-patch upstream intent in `lib/fork-packages.nix` (this patch: `hold`, see below).
 - **`builtins.fetchTree` locked-attr flow**: `callFlake` → `fetchFinalTree` → `emitTreeAttrs` is the existing single path this design hooks for all three user surfaces.
 - **Elsewhere**: Bazel's `git_repository` exposes nothing like this (changelog generation lives in release tooling); Buck2 likewise. `jj`/`git log --format=%H%x00...` streaming formats are the imperative equivalents consumers use today. The "history as data, views derived per consumer" split follows the repo's own pipeline convention (transport / durable log / per-query views).
@@ -132,3 +133,7 @@ Written to be upstreamable, parked fork-local. The design deliberately avoids ev
 - **`nix flake metadata --history`** rendering the same data from the CLI.
 - **Range queries** (`historySince = <rev>`): stop the walk at a base rev, the natural "changes between two locked revs" primitive for update PRs. Deterministic for the same reasons.
 - **Upstream RFC** once #15984 resolves, proposing the schema as documented fetchTree output.
+
+### Revision: cost bounding (2026-07-07, #2156)
+
+The first prototype bounded the walk by generation distance and always extracted `paths`. On nixpkgs, merge fan-out made `historyDepth = 100` cover tens of thousands of commits at ~150ms of tree diff each, so a depth-100 export ran for hours (#2156). Two changes, shipped in the same patch: `historyDepth` now counts emitted commits, and `historyPaths = false` skips path extraction entirely. Measured after the change: metadata-only depth-100 history on nixpkgs completes in 0.2s wall (0.17s with an uncacheable depth to rule out cache hits); paths-on stays ~160ms/commit, now bounded by the commit-count cap. The fetcher-cache key gained the paths dimension and bumped its schema format.

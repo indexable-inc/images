@@ -66,3 +66,14 @@ earlier ticks appear as claude sessions whose user brief begins
 never re-diagnose their existence as a new problem. Likewise a
 session at age_min 0 with empty last text has just started; that is
 not evidence of a silent or stuck agent.
+
+Your notes may end with a DISPATCH LEDGER block. The runtime writes
+it, not you: every fixer dispatch is recorded there mechanically with
+its exact agent label and spawned session id, regenerated each tick
+from the runtime's own records. Track dispatched fixers ONLY by
+joining those handles against the snapshot. Never restate or invent a
+dispatch label in the notes you author (a restated label once diverged
+from the real one and the running fixer was declared "never
+materialized", triggering a duplicate dispatch), and never report a
+fixer missing while a session matching a ledger handle exists. Do not
+copy the ledger into your notes; the runtime re-appends it.

@@ -38,20 +38,29 @@ in {
     # `cache.ix.dev` is the ix pull-through cache for guest Nix operations. Put
     # it in the auto-enabled base profile so every image gets the same warm
     # binary-cache path unless an image explicitly disables the profile.
-    nix.settings.substituters = lib.mkBefore [
-      "https://cache.ix.dev"
-    ];
+    #
+    # The matching `ix-workspace:` key has to be trusted alongside it. The
+    # guests keep `require-sigs` on, so without the key the daemon rejects every
+    # `cache.ix.dev` narinfo as unsigned ("ignoring substitute ... not signed by
+    # any of the keys in 'trusted-public-keys'") and silently rebuilds the whole
+    # system closure from source, which then dies on the guest's no-namespace
+    # sandbox and fails `ix up`. Both fields come from the one cache-identity
+    # source of truth (lib/cache.nix), exposed here as `ix.cache`.
+    nix.settings = {
+      substituters = lib.mkBefore [ix.cache.url];
+      trusted-public-keys = lib.mkAfter [ix.cache.publicKey];
 
-    # The guest's writable layer (`/`, incl. `/nix/var/nix/db`) is a virtiofs
-    # FUSE mount with no DAX cache capability, so a memory-mapped file is served
-    # through FUSE writeback rather than a coherent shared window. SQLite's WAL
-    # mode needs exactly that: an mmap'd `*-shm` for cross-connection shared
-    # state plus strict WAL/main fsync ordering on checkpoint. Neither holds on
-    # this layer, so the nix DB's WAL silently corrupts and `nix` degrades to
-    # `database disk image is malformed`. Rollback-journal mode drops the `-shm`
-    # mmap dependency and keeps the DB intact. Mitigation for the VCFS layer bug
-    # tracked in indexable-inc/ix#6259; drop this once that layer honors mmap+fsync.
-    nix.settings.use-sqlite-wal = false;
+      # The guest's writable layer (`/`, incl. `/nix/var/nix/db`) is a virtiofs
+      # FUSE mount with no DAX cache capability, so a memory-mapped file is served
+      # through FUSE writeback rather than a coherent shared window. SQLite's WAL
+      # mode needs exactly that: an mmap'd `*-shm` for cross-connection shared
+      # state plus strict WAL/main fsync ordering on checkpoint. Neither holds on
+      # this layer, so the nix DB's WAL silently corrupts and `nix` degrades to
+      # `database disk image is malformed`. Rollback-journal mode drops the `-shm`
+      # mmap dependency and keeps the DB intact. Mitigation for the VCFS layer bug
+      # tracked in indexable-inc/ix#6259; drop this once that layer honors mmap+fsync.
+      use-sqlite-wal = false;
+    };
 
     # Install terminfo for every common terminal emulator so ncurses tools
     # (`clear`, `tmux`, `vim`, ...) work no matter what `$TERM` an operator's

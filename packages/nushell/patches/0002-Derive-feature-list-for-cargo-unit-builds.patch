@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@indexable.ai>
+Date: Tue, 7 Jul 2026 20:00:34 -0700
+Subject: [PATCH] Derive feature list for cargo-unit builds
+
+Cargo sets CARGO_CFG_FEATURE for build scripts, but ix's cargo-unit runner
+currently exposes the individual CARGO_FEATURE_* variables without the aggregate
+cfg env. Nushell's root build script panics when the aggregate is missing, which
+blocks packaging Nushell through cargo-unit.
+
+Derive the same comma-separated feature list from CARGO_FEATURE_* when the
+aggregate env var is absent. Normal Cargo builds keep using CARGO_CFG_FEATURE.
+
+diff --git a/scripts/build.rs b/scripts/build.rs
+index 1469b50..a94c2bc 100644
+--- a/scripts/build.rs
++++ b/scripts/build.rs
+@@ -1,10 +1,22 @@
++fn cargo_cfg_feature() -> String {
++    std::env::var("CARGO_CFG_FEATURE").unwrap_or_else(|_| {
++        let mut features = std::env::vars()
++            .filter_map(|(name, value)| {
++                (value == "1")
++                    .then_some(name)
++                    .and_then(|name| name.strip_prefix("CARGO_FEATURE_").map(str::to_owned))
++            })
++            .map(|name| name.to_ascii_lowercase().replace('_', "-"))
++            .collect::<Vec<_>>();
++        features.sort_unstable();
++        features.join(",")
++    })
++}
++
+ fn main() {
+     let target_os = std::env::var("CARGO_CFG_TARGET_OS").expect("set by cargo");
+     println!("cargo:rerun-if-changed=scripts/build.rs");
+-    println!(
+-        "cargo:rustc-env=NU_FEATURES={}",
+-        std::env::var("CARGO_CFG_FEATURE").expect("set by cargo")
+-    );
++    println!("cargo:rustc-env=NU_FEATURES={}", cargo_cfg_feature());
+ 
+     if target_os == "windows" {
+         println!("cargo:rerun-if-changed=assets/nu_logo.ico");

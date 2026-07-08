@@ -41,7 +41,7 @@ def test_sandboxed_iframe_fetch_delivers_input(tmp_path: Path, monkeypatch: pyte
         port = _free_port()
         base = f"http://127.0.0.1:{port}"
         cfg = Config(workdir=tmp_path, store_path=db, host="127.0.0.1", dashboard_port=port)
-        runner = web.AppRunner(dashboard.build_app(cfg, conn))
+        runner = web.AppRunner(dashboard.build_app(cfg, store.AsyncConn(cfg.store_path)))
         await runner.setup()
         await web.TCPSite(runner, "127.0.0.1", port).start()
 

@@ -1,0 +1,270 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew@ix.dev>
+Date: Tue, 7 Jul 2026 19:46:01 -0700
+Subject: [PATCH] fix(libstore): add temp roots for CA derivation outputs (GC
+ race)
+
+Statically known (input-addressed) output paths are rooted against the
+garbage collector by DerivationGoal::haveDerivation() before the build
+starts, but a floating CA output path is only known once the build
+finishes. registerOutputs() registered the freshly built path as valid
+without adding a temp root, so nothing protected it until some
+downstream consumer wrote a resolved derivation referencing it - which
+only happens after ALL of that consumer's inputs are realised. During
+that window (minutes, in a wide cargo-unit graph) an auto-GC triggered
+by min-free deletes the output, and the downstream resolved-derivation
+build then fails with "1 dependency failed".
+
+Close the gap with temp roots at every point where a CA output path
+first becomes known to a consumer:
+
+- derivation-builder.cc registerOutputs(): root the final output path
+  as soon as its name is computed (primary fix; also covers the
+  reuse-existing-CA-path branch).
+- derivation-building-goal.cc gaveUpOnSubstitution(): root inputSrcs.
+  Already-valid inputs get no goal of their own, so nothing else roots
+  them; a resolved derivation's flattened inputs are typically freshly
+  built outputs nothing on disk references yet.
+- both checkPathValidity() variants: root the realised path before (and
+  instead of blindly trusting) the validity answer. The building-goal
+  variant previously treated any queried realisation as Valid without
+  isValidPath(); the GC deletes unreferenced CA outputs without
+  deleting their realisations, so a stale realisation made the build
+  "succeed" with a missing output path.
+
+Add a functional test (ca/gc-during-build): build a CA graph where a
+fast dep finishes while a fifo-blocked sibling keeps the top-level
+(resolved) derivation queued, run nix-store --gc mid-build, and assert
+the dep's freshly built output survives and the build completes. The
+dep's final CA path is discovered driver-side by content (a builder's
+$out is a pre-rewrite scratch path).
+
+Upstream has no merged fix: NixOS/nix#15613 (open) covers only the
+inputSrcs surface.
+
+Refs indexable-inc/index#2334
+
+Assisted-by: Claude <noreply@anthropic.com>
+
+diff --git a/src/libstore/build/derivation-building-goal.cc b/src/libstore/build/derivation-building-goal.cc
+index fea6e05a4..1d3f2b439 100644
+--- a/src/libstore/build/derivation-building-goal.cc
++++ b/src/libstore/build/derivation-building-goal.cc
+@@ -105,6 +105,12 @@ Goal::Co DerivationBuildingGoal::gaveUpOnSubstitution(bool storeDerivation)
+     }
+ 
+     for (auto & i : drv->inputSrcs) {
++        /* Root inputs against the garbage collector. Inputs that are
++           already valid get no goal of their own, so nothing else roots
++           them; in particular the inputs of a resolved derivation are
++           flattened into `inputSrcs` and are typically freshly built
++           outputs that no other store object references yet. */
++        worker.store.addTempRoot(i);
+         if (worker.store.isValidPath(i))
+             continue;
+         if (!worker.settings.useSubstitutes)
+@@ -1304,9 +1310,19 @@ DerivationBuildingGoal::checkPathValidity(std::map<std::string, InitialOutput> &
+         auto drvOutput = DrvOutput{info.outputHash, i.first};
+         if (experimentalFeatureSettings.isEnabled(Xp::CaDerivations)) {
+             if (auto real = worker.store.queryRealisation(drvOutput)) {
++                /* Root the realised path before checking its validity, so
++                   the answer cannot be invalidated by a concurrent GC. Do
++                   not assume the path is still valid: the GC deletes
++                   unreferenced CA outputs without deleting their
++                   realisations, and treating such a stale realisation as
++                   valid would make the build succeed with a missing
++                   output path. */
++                worker.store.addTempRoot(real->outPath);
+                 info.known = {
+                     .path = real->outPath,
+-                    .status = PathStatus::Valid,
++                    .status = !worker.store.isValidPath(real->outPath)               ? PathStatus::Absent
++                              : !checkHash || worker.pathContentsGood(real->outPath) ? PathStatus::Valid
++                                                                                     : PathStatus::Corrupt,
+                 };
+             } else if (info.known && info.known->isValid()) {
+                 // We know the output because it's a static output of the
+diff --git a/src/libstore/build/derivation-goal.cc b/src/libstore/build/derivation-goal.cc
+index 4f99928d7..fb545e2a5 100644
+--- a/src/libstore/build/derivation-goal.cc
++++ b/src/libstore/build/derivation-goal.cc
+@@ -430,6 +430,12 @@ std::optional<std::pair<UnkeyedRealisation, PathStatus>> DerivationGoal::checkPa
+ 
+     if (mRealisation) {
+         auto & outputPath = mRealisation->outPath;
++        /* Root the path before checking its validity, so that the answer
++           cannot be invalidated by a concurrent GC. For input-addressed
++           outputs this duplicates the root added in haveDerivation();
++           for CA outputs found via a realisation this is the only root
++           protecting the path until the caller consumes it. */
++        worker.store.addTempRoot(outputPath);
+         bool checkHash = buildMode == bmRepair;
+         PathStatus status = !worker.store.isValidPath(outputPath)               ? PathStatus::Absent
+                             : !checkHash || worker.pathContentsGood(outputPath) ? PathStatus::Valid
+diff --git a/src/libstore/unix/build/derivation-builder.cc b/src/libstore/unix/build/derivation-builder.cc
+index fc877dd56..6ef32233f 100644
+--- a/src/libstore/unix/build/derivation-builder.cc
++++ b/src/libstore/unix/build/derivation-builder.cc
+@@ -1840,6 +1840,15 @@ SingleDrvOutputs DerivationBuilderImpl::registerOutputs()
+            their usual "final destination" */
+         auto finalDestPath = store.printStorePath(newInfo.path);
+ 
++        /* Root the output path against the garbage collector as soon as
++           its final name is known. Statically known output paths are
++           rooted by DerivationGoal::haveDerivation() before the build
++           starts, but a floating CA output path is only known at this
++           point; without a temp root here an auto-GC (e.g. triggered by
++           min-free) can delete the freshly built output while downstream
++           (resolved) derivations that consume it are still queued. */
++        store.addTempRoot(newInfo.path);
++
+         /* Lock final output path, if not already locked. This happens with
+            floating CA derivations and hash-mismatching fixed-output
+            derivations. */
+diff --git a/tests/functional/ca/gc-during-build.nix b/tests/functional/ca/gc-during-build.nix
+new file mode 100644
+index 000000000..10671d823
+--- /dev/null
++++ b/tests/functional/ca/gc-during-build.nix
+@@ -0,0 +1,59 @@
++with import ./config.nix;
++
++let
++  mkCADerivation =
++    args:
++    mkDerivation (
++      {
++        __contentAddressed = true;
++        outputHashMode = "recursive";
++        outputHashAlgo = "sha256";
++      }
++      // args
++    );
++in
++
++{
++  seed ? 0,
++  fifo,
++}:
++rec {
++  # A fast CA dependency. The seed makes both the derivation and its
++  # output content unique per test run (CA outputs dedup on content, so
++  # a stale output from a previous run must not be mistaken for ours).
++  dep = mkCADerivation {
++    name = "gc-during-build-dep";
++    inherit seed;
++    buildCommand = ''
++      mkdir $out
++      echo "dep-$seed" > $out/content
++    '';
++  };
++
++  # An independent derivation that blocks on a fifo, keeping the
++  # top-level build in flight (and its resolution unperformed) while the
++  # test runs the garbage collector.
++  blocker = mkCADerivation {
++    name = "gc-during-build-blocker";
++    inherit seed fifo;
++    buildCommand = ''
++      # Wait for the test driver to unblock us.
++      cat $fifo
++      mkdir $out
++      echo "blocker-$seed" > $out/content
++    '';
++  };
++
++  # Consumes both. Its resolved derivation (which would reference the
++  # dep's output path) cannot be computed until the blocker finishes, so
++  # nothing in the store references the dep's freshly built output when
++  # the GC runs.
++  top = mkCADerivation {
++    name = "gc-during-build-top";
++    inherit seed dep blocker;
++    buildCommand = ''
++      mkdir $out
++      cat $dep/content $blocker/content > $out/content
++    '';
++  };
++}
+diff --git a/tests/functional/ca/gc-during-build.sh b/tests/functional/ca/gc-during-build.sh
+new file mode 100755
+index 000000000..5df18f4fc
+--- /dev/null
++++ b/tests/functional/ca/gc-during-build.sh
+@@ -0,0 +1,64 @@
++#!/usr/bin/env bash
++
++# Regression test: a mid-build garbage collection (e.g. the min-free
++# auto-GC) must not delete the freshly built output of a CA derivation
++# that is only referenced by still-queued downstream (resolved)
++# derivations. See https://github.com/indexable-inc/index/issues/2334.
++
++source common.sh
++
++clearStoreIfPossible
++
++fifo="$TEST_ROOT/gc-during-build.fifo"
++rm -f "$fifo"
++mkfifo "$fifo"
++
++# A fresh seed forces a rebuild (and fresh CA output content) even on a
++# dirty store (e.g. when the store could not be cleared).
++seed="$RANDOM$RANDOM$$"
++
++# Start the top-level build in the background. `dep` builds immediately;
++# `blocker` parks on the fifo, so `top` stays queued.
++nix build -f gc-during-build.nix top --no-link \
++    --argstr seed "$seed" --argstr fifo "$fifo" \
++    --max-jobs 2 &
++buildPid=$!
++# shellcheck disable=SC2064
++trap "kill $buildPid 2>/dev/null || true" EXIT
++
++# Wait until dep's output is built and registered as valid. The final
++# content-addressed path is only known after the build, so find it by
++# name and by this run's content.
++depOut=""
++for _ in $(seq 300); do
++    for p in "$NIX_STORE_DIR"/*-gc-during-build-dep; do
++        [[ -e "$p/content" ]] || continue
++        if grep -qx "dep-$seed" "$p/content" 2>/dev/null \
++            && nix path-info "$p" >/dev/null 2>&1; then
++            depOut=$p
++            break 2
++        fi
++    done
++    sleep 0.2
++done
++[[ -n "$depOut" ]]
++nix path-info "$depOut"
++
++# Run the GC while the build is still in flight. Without a temp root on
++# the freshly built (dynamic) output path, this used to delete it.
++nix-store --gc
++
++# The dep output must have survived the GC.
++nix path-info "$depOut"
++[[ -e "$depOut/content" ]]
++
++# Unblock the rest of the build; it must now succeed.
++echo go > "$fifo"
++wait $buildPid
++trap - EXIT
++
++# And the final output must actually exist and contain both parts.
++topOut=$(nix build -f gc-during-build.nix top --no-link --print-out-paths \
++    --argstr seed "$seed" --argstr fifo "$fifo")
++grep -q "dep-$seed" "$topOut/content"
++grep -q "blocker-$seed" "$topOut/content"
+diff --git a/tests/functional/ca/meson.build b/tests/functional/ca/meson.build
+index b1912fd86..391e98d13 100644
+--- a/tests/functional/ca/meson.build
++++ b/tests/functional/ca/meson.build
+@@ -18,6 +18,7 @@ suites += {
+     'duplicate-realisation-in-closure.sh',
+     'eval-store.sh',
+     'gc.sh',
++    'gc-during-build.sh',
+     'import-from-derivation.sh',
+     'issue-13247.sh',
+     'multiple-outputs.sh',

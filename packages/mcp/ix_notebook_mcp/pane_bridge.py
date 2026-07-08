@@ -25,8 +25,10 @@ from . import store
 from .outputs import IX_VIEW_MIME
 from .produce import PaneProducer, data_pane, exec_pane, html_pane
 
-# How often to resample the store. Local SQLite in WAL mode, so a poll is cheap;
-# fast enough that a run appears promptly, slow enough to stay idle-quiet.
+# How often to resample the store: fast enough that a run appears promptly,
+# slow enough to stay idle-quiet. A tick is one `PRAGMA data_version` unless
+# another connection committed since the last tick (see `run`), so the rate is
+# safe even against a store carrying multi-MB output rows.
 _POLL_SECONDS = 0.25
 
 # Match the read-only API's window so the board and the API agree on which runs
@@ -206,24 +208,48 @@ def _panes(conn: sqlite3.Connection) -> list[dict]:
     return panes
 
 
+def _data_version(conn: sqlite3.Connection) -> int:
+    """SQLite's cross-connection change counter: it moves between two calls on
+    the SAME connection iff another connection committed in between. This
+    connection never writes, so an unchanged value means an unchanged store."""
+    return int(conn.execute("PRAGMA data_version").fetchone()[0])
+
+
+def _snapshot(conn: sqlite3.Connection) -> tuple[list[dict], str]:
+    """The pane set plus its change fingerprint, computed together so both the
+    blob reads and the (large) JSON dump stay off the event loop."""
+    panes = _panes(conn)
+    return panes, json.dumps(panes, separators=(",", ":"), sort_keys=True)
+
+
 async def run(store_path: str | Path, *, interval: float = _POLL_SECONDS) -> None:
     """Publish the store as panes until cancelled. Mirrors the store on every tick
-    and pushes a new snapshot only when the rendered set changes."""
+    and pushes a new snapshot only when the rendered set changes.
+
+    Store access goes through :class:`store.AsyncConn`: reading a fat store's
+    output blobs inline used to block the shared event loop -- and with it the
+    MCP transport -- for the read's duration, 4x per second (index#2348)."""
     producer = await PaneProducer().start()
     if producer is None:
         return
-    conn = store.connect(store_path)
+    db = store.AsyncConn(store_path)
     last: str | None = None
+    version: int | None = None
     logged_error = False
     try:
         while True:
             try:
-                panes = _panes(conn)
-                # Cheap change check so an idle session never re-publishes.
-                fingerprint = json.dumps(panes, separators=(",", ":"), sort_keys=True)
-                if fingerprint != last:
-                    await producer.publish(panes)
-                    last = fingerprint
+                # Gate the full re-render on the store actually having changed;
+                # an idle session then costs one PRAGMA per tick instead of
+                # re-reading every output blob. `version` advances only after a
+                # successful pass, so a failed read or publish retries next tick.
+                seen = await db.run(_data_version)
+                if seen != version:
+                    panes, fingerprint = await db.run(_snapshot)
+                    if fingerprint != last:
+                        await producer.publish(panes)
+                        last = fingerprint
+                    version = seen
             except Exception as error:
                 # A transient read error must not kill the bridge; try next tick.
                 # Log the first one so a persistent failure (e.g. a schema
@@ -236,4 +262,4 @@ async def run(store_path: str | Path, *, interval: float = _POLL_SECONDS) -> Non
         pass
     finally:
         await producer.stop()
-        conn.close()
+        await db.close()

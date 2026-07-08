@@ -20,6 +20,17 @@ struct ConditionalFlags {
     flags: Vec<String>,
 }
 
+/// A flag the launcher answers itself instead of launching: when the user
+/// argv contains `flag` (scanning until the first `--`, same as
+/// `unless_present`), print `value` and exit 0. Lets a wrapper expose what it
+/// bakes (e.g. claude-code's `--which-settings` printing the injected
+/// settings store path) without the real binary ever seeing the flag.
+#[derive(Deserialize)]
+struct Introspection {
+    flag: String,
+    value: String,
+}
+
 /// The launch spec, read as JSON from `IX_LAUNCH_SPEC`. Every field beyond
 /// `target` is optional so each consumer uses only the layers it needs: codex
 /// sets the `forced`/`soft` `--config` layer; claude-code sets
@@ -59,6 +70,9 @@ struct Spec {
     /// Flag blocks prepended only when the user passed no equivalent option.
     #[serde(default)]
     conditional_flags: Vec<ConditionalFlags>,
+    /// Flags answered by the launcher itself: print the paired value, exit 0.
+    #[serde(default)]
+    introspection: Vec<Introspection>,
 }
 
 fn expand_tilde(path: &str) -> String {
@@ -134,6 +148,15 @@ fn build_arg_flags(spec: &Spec, user_args: &[OsString]) -> Vec<String> {
     out
 }
 
+/// The value to print (instead of launching) for the first introspection flag
+/// present in the user argv, if any.
+fn introspect<'a>(spec: &'a Spec, user_args: &[OsString]) -> Option<&'a str> {
+    spec.introspection
+        .iter()
+        .find(|intro| arg_present(user_args, std::slice::from_ref(&intro.flag)))
+        .map(|intro| intro.value.as_str())
+}
+
 /// `path_prepend` joined ahead of the current `PATH` (or alone if PATH is unset).
 fn build_path(prepend: &[String], current: Option<&str>) -> String {
     let mut p = prepend.join(":");
@@ -162,6 +185,12 @@ fn main() -> ExitCode {
     let mut argv = std::env::args_os();
     let argv0 = argv.next().unwrap_or_else(|| spec.target.clone().into());
     let user_args: Vec<OsString> = argv.collect();
+
+    // Introspection short-circuits the launch entirely: the target never runs.
+    if let Some(value) = introspect(&spec, &user_args) {
+        println!("{value}");
+        return ExitCode::SUCCESS;
+    }
 
     // Read the config file only when there are soft keys whose presence it
     // gates (claude-code sets no soft keys, so it never needs a config dir).
@@ -203,8 +232,8 @@ mod tests {
     use std::ffi::OsString;
 
     use super::{
-        ConditionalFlags, Entry, Spec, arg_present, build_arg_flags, build_config_flags,
-        build_path, is_set,
+        ConditionalFlags, Entry, Introspection, Spec, arg_present, build_arg_flags,
+        build_config_flags, build_path, introspect, is_set,
     };
 
     #[derive(Default)]
@@ -213,6 +242,7 @@ mod tests {
         soft: Vec<(&'static str, &'static str)>,
         flags: Vec<&'static str>,
         conditional: Vec<(Vec<&'static str>, Vec<&'static str>)>,
+        introspection: Vec<(&'static str, &'static str)>,
     }
 
     fn entries(pairs: Vec<(&str, &str)>) -> Vec<Entry> {
@@ -243,6 +273,14 @@ mod tests {
                 .map(|(unless, flags)| ConditionalFlags {
                     unless_present: unless.into_iter().map(str::to_owned).collect(),
                     flags: flags.into_iter().map(str::to_owned).collect(),
+                })
+                .collect(),
+            introspection: b
+                .introspection
+                .into_iter()
+                .map(|(flag, value)| Introspection {
+                    flag: flag.to_owned(),
+                    value: value.to_owned(),
                 })
                 .collect(),
         }
@@ -466,6 +504,39 @@ mod tests {
             &os(&["--settings", "x"]),
             &["--settings".to_owned()]
         ));
+    }
+
+    #[test]
+    fn introspection_answers_when_flag_present() {
+        let spec = make_spec(SpecBuilder {
+            introspection: vec![("--which-settings", "/nix/store/settings.json")],
+            ..SpecBuilder::default()
+        });
+        assert_eq!(
+            introspect(&spec, &os(&["--which-settings"])),
+            Some("/nix/store/settings.json")
+        );
+        // Position-independent, like the rest of the flag scan.
+        assert_eq!(
+            introspect(&spec, &os(&["-p", "hi", "--which-settings"])),
+            Some("/nix/store/settings.json")
+        );
+    }
+
+    #[test]
+    fn introspection_ignores_absent_and_positional_flags() {
+        let spec = make_spec(SpecBuilder {
+            introspection: vec![("--which-settings", "/nix/store/settings.json")],
+            ..SpecBuilder::default()
+        });
+        assert_eq!(introspect(&spec, &os(&["mcp", "list"])), None);
+        // After `--` the token is a positional for the target, not our flag.
+        assert_eq!(introspect(&spec, &os(&["--", "--which-settings"])), None);
+        // `=` form parity with `arg_present`: still recognized as the flag.
+        assert_eq!(
+            introspect(&spec, &os(&["--which-settings=x"])),
+            Some("/nix/store/settings.json")
+        );
     }
 
     #[test]

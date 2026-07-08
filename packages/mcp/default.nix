@@ -1372,6 +1372,14 @@
   # cell importing a bundled module resolves that module's real types.
   tyBin = lib.getExe pkgs.ty;
 
+  # TLS trust for every shelled-out client in the kernel (issue #2429): the
+  # nix-built curl/git carry no baked-in system CA path on darwin and the
+  # launchd/user environment provides none, so `^curl https://...` inside nu()
+  # failed verification (exit 60) while httpx in the same kernel worked
+  # (Python carries certifi). set-default, not set: an operator-provided
+  # bundle (a corporate CA) must still win.
+  caBundle = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+
   package =
     pkgs.runCommand "ix-mcp"
     {
@@ -1396,6 +1404,8 @@
         --set IX_MCP_TY_BIN ${lib.escapeShellArg tyBin} \
         --set IX_MCP_TY_PYTHON ${lib.escapeShellArg mcpPython.interpreter} \
         --set IX_NIX_WEB_MONITOR_BIN ${lib.escapeShellArg (lib.getExe nixWebMonitorBin)} \
+        --set-default SSL_CERT_FILE ${lib.escapeShellArg caBundle} \
+        --set-default CURL_CA_BUNDLE ${lib.escapeShellArg caBundle} \
         --prefix PATH : ${
         lib.makeBinPath [
           pkgs.ripgrep
@@ -1418,6 +1428,8 @@
         --set IX_MCP_TY_BIN ${lib.escapeShellArg tyBin} \
         --set IX_MCP_TY_PYTHON ${lib.escapeShellArg mcpPython.interpreter} \
         --set IX_NIX_WEB_MONITOR_BIN ${lib.escapeShellArg (lib.getExe nixWebMonitorBin)} \
+        --set-default SSL_CERT_FILE ${lib.escapeShellArg caBundle} \
+        --set-default CURL_CA_BUNDLE ${lib.escapeShellArg caBundle} \
         --prefix PATH : ${
         lib.makeBinPath [
           pkgs.ripgrep
@@ -1973,10 +1985,11 @@
   serverTools = importTest "server" (
     "import asyncio; from ix_notebook_mcp.tools import mcp; "
     + "names = sorted(t.name for t in asyncio.run(mcp.list_tools())); "
-    # session_set_name joined the surface in #1615 but this expected set was
-    # not updated with it; the stale drv kept passing from cache on main until
-    # this package's inputs changed and forced a rebuild.
-    + "expected = {'python_exec','pr_watch','read','kernel_trace','tui_act','session_set_name','topic_set','reply'}; "
+    # This set drifts silently: session_set_name (#1615) and kernel_restart
+    # (#2349) each joined the surface without updating it, and the stale drv
+    # kept passing from cache on main until this package's inputs changed and
+    # forced a rebuild. When adding a tool, add it here in the same change.
+    + "expected = {'python_exec','pr_watch','read','kernel_trace','kernel_restart','tui_act','session_set_name','topic_set','reply'}; "
     + "assert set(names) == expected, ('tool surface drifted: %r' % (names,)); "
     + "from ix_notebook_mcp import registry; instr = mcp._mcp_server.instructions; "
     + "assert 'root=' not in instr, 'a parameter/signature leaked into the instructions'; "
@@ -3038,7 +3051,7 @@
         pkgs.fd
       ];
       strictDeps = true;
-      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246) + claude-history session search (#2245)";
+      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + client-cancel interrupts in-flight run (#2387) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246) + claude-history session search (#2245) + per-serve kernel trace file (#2355) + builtin shadow restore (#2430)";
     }
     ''
       export HOME=$TMPDIR/home
@@ -3053,6 +3066,9 @@
       cp ${./tests/test_job_await_errors.py} test_job_await_errors.py
       # Issue #2104: one session's wait must never cancel another session's job.
       cp ${./tests/test_job_cancel_scope.py} test_job_cancel_scope.py
+      # Issue #2387: a client that cancels an in-flight python_exec cancels the
+      # backgrounded run it launched, instead of executing side effects after.
+      cp ${./tests/test_cancel_running.py} test_cancel_running.py
       # Issue #2164: jobs.spawn registers an ad-hoc awaitable as a first-class job.
       cp ${./tests/test_jobs_spawn.py} test_jobs_spawn.py
       cp ${./tests/test_fsearch_partial.py} test_fsearch_partial.py
@@ -3067,8 +3083,13 @@
       # In-band kernel build staleness (#2110): the api() header row and the
       # TypeError-hint build stamp; imports the site-packages ix_notebook_mcp.
       cp ${./tests/test_build_info.py} test_build_info.py
+      # Issue #2355: per-serve kernel trace file + sweep of orphaned dumps.
+      cp ${./tests/test_kernel_trace_path.py} test_kernel_trace_path.py
+      # Issue #2430: a cell rebinding/deleting a kernel builtin gets it restored.
+      cp ${./tests/test_builtin_shadow_restore.py} test_builtin_shadow_restore.py
       ${lib.getExe typecheckTestPython} -m pytest \
         test_typecheck.py test_job_await_errors.py test_job_cancel_scope.py \
+        test_cancel_running.py \
         test_jobs_spawn.py \
         test_fsearch_partial.py \
         test_fsearch_glob.py \
@@ -3076,6 +3097,8 @@
         test_claude_history.py \
         test_sh_module.py \
         test_build_info.py \
+        test_kernel_trace_path.py \
+        test_builtin_shadow_restore.py \
         -q -p no:cacheprovider >stdout 2>stderr || {
         echo "ix-mcp typecheck smoke failed:" >&2
         cat stdout stderr >&2
@@ -3307,6 +3330,124 @@
         cat stdout stderr >&2
         exit 1
       }
+      mkdir -p "$out"
+    '';
+
+  # An externally killed kernel must be reported as `kernel died (pid N, signal
+  # S); respawning` -- never a generic 'wedged' timeout -- with kernel_trace
+  # naming the gone process and the death watch respawning it eagerly, not on
+  # the next execute (packages/mcp/tests/test_kernel_death.py, index#2339: a
+  # broad pkill SIGTERM'd a session's kernel and every symptom read as a wedge).
+  # Boots a real kernel, so it reuses the full interpreter plus pytest.
+  kernelDeathTestSource = builtins.path {
+    name = "ix-mcp-kernel-death-test";
+    path = ./tests/test_kernel_death.py;
+  };
+  kernelDeathSmoke =
+    pkgs.runCommand "ix-mcp-kernel-death-smoke"
+    {
+      nativeBuildInputs = [typecheckTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${kernelDeathTestSource} "$TMPDIR/test_kernel_death.py"
+      ${lib.getExe typecheckTestPython} -m pytest "$TMPDIR/test_kernel_death.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp kernel-death smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      cat stdout
+      mkdir -p "$out"
+    '';
+
+  # An INTENTIONAL restart (the kernel_restart tool, index#2345) must be
+  # surgical: only this server's kernel child is bounced (old pid -> new pid,
+  # elapsed time reported), the namespace is rebuilt, the session name/topic the
+  # server pushed are re-applied, and stderr carries the requested-restart lines
+  # -- never the death watch's `kernel died` report, since the kill is on
+  # purpose (packages/mcp/tests/test_kernel_restart.py). Boots a real kernel,
+  # so it reuses the full interpreter plus pytest.
+  kernelRestartTestSource = builtins.path {
+    name = "ix-mcp-kernel-restart-test";
+    path = ./tests/test_kernel_restart.py;
+  };
+  kernelRestartSmoke =
+    pkgs.runCommand "ix-mcp-kernel-restart-smoke"
+    {
+      nativeBuildInputs = [typecheckTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${kernelRestartTestSource} "$TMPDIR/test_kernel_restart.py"
+      ${lib.getExe typecheckTestPython} -m pytest "$TMPDIR/test_kernel_restart.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp kernel-restart smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      cat stdout
+      mkdir -p "$out"
+    '';
+
+  # python_exec's wedge escalation (index#2375): the SIGUSR2 rescue only helps a
+  # Python-level block; a main thread stuck inside native code never runs the
+  # handler, so after the interrupt the server must PROBE the kernel and, when
+  # the probe hangs too, kill and respawn only the kernel child (never claim
+  # "usable again" on mere signal delivery). Boots a real kernel, so it reuses
+  # the full interpreter plus pytest.
+  wedgeEscalationTestSource = builtins.path {
+    name = "ix-mcp-wedge-escalation-test";
+    path = ./tests/test_kernel_wedge_escalation.py;
+  };
+  wedgeEscalationSmoke =
+    pkgs.runCommand "ix-mcp-wedge-escalation-smoke"
+    {
+      nativeBuildInputs = [typecheckTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${wedgeEscalationTestSource} "$TMPDIR/test_kernel_wedge_escalation.py"
+      ${lib.getExe typecheckTestPython} -m pytest "$TMPDIR/test_kernel_wedge_escalation.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp wedge-escalation smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      cat stdout
+      mkdir -p "$out"
+    '';
+
+  # The read tool's failure contract (index#2381): when the kernel bridge
+  # cannot execute the read (a wedge summary, a bridge returning neither
+  # output nor a completed job summary), the tool must raise a "kernel
+  # unavailable" error, never return empty content -- an empty reply is
+  # indistinguishable from reading an empty file, and was misread exactly that
+  # way. Pure unit tests over a stubbed kernel: no kernel boots, no sockets
+  # bind, so it runs in the sandbox on every platform.
+  readUnavailableTestSource = builtins.path {
+    name = "ix-mcp-read-unavailable-test";
+    path = ./tests/test_read_kernel_unavailable.py;
+  };
+  readUnavailableTests =
+    pkgs.runCommand "ix-mcp-read-unavailable-tests"
+    {
+      nativeBuildInputs = [typecheckTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${readUnavailableTestSource} "$TMPDIR/test_read_kernel_unavailable.py"
+      ${lib.getExe typecheckTestPython} -m pytest "$TMPDIR/test_read_kernel_unavailable.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp read kernel-unavailable tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      cat stdout
       mkdir -p "$out"
     '';
 
@@ -5470,6 +5611,34 @@
       mkdir -p "$out"
     '';
 
+  # The store's async facade (packages/mcp/tests/test_store_async.py,
+  # index#2348): AsyncConn confines every store call to one worker thread off
+  # the shared event loop, and the pane bridge's `data_version` idle gate
+  # re-renders only on a foreign commit. Reuses the channel interpreter
+  # (ix_notebook_mcp + aiohttp + pytest).
+  storeAsyncTestSource = builtins.path {
+    name = "ix-mcp-store-async-test";
+    path = ./tests/test_store_async.py;
+  };
+  storeAsyncTests =
+    pkgs.runCommand "ix-mcp-store-async-tests"
+    {
+      nativeBuildInputs = [channelTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${storeAsyncTestSource} "$TMPDIR/test_store_async.py"
+      ${lib.getExe channelTestPython} -m pytest "$TMPDIR/test_store_async.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp store-async tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      cat stdout
+      mkdir -p "$out"
+    '';
+
   # Background-task failure reporting (packages/mcp/tests/test_task_errors.py):
   # a fire-and-forget task that dies with an unretrieved exception must be
   # reported at completion into `task_errors` (asyncio's own warning only fires
@@ -6001,6 +6170,7 @@ in
               apiSmoke
               inputsTests
               channelTests
+              storeAsyncTests
               mcpUiTests
               taskErrorsTests
               readStatsTests
@@ -6008,6 +6178,10 @@ in
               svelteBundled
               svelteTests
               wedgeSmoke
+              kernelDeathSmoke
+              kernelRestartSmoke
+              wedgeEscalationSmoke
+              readUnavailableTests
               richSmoke
               yieldSmoke
               bindingsSmoke

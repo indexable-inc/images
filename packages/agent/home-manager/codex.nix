@@ -1,4 +1,9 @@
-{indexPackages}: {
+{
+  indexPackages,
+  # Path to the house prompt module (packages/agent/prompt), injected by the
+  # importing flake so this module never climbs the tree with `../`.
+  promptModule,
+}: {
   config,
   lib,
   pkgs,
@@ -16,6 +21,29 @@
     "file"
   ];
 
+  housePrompt = import promptModule {
+    inherit lib;
+    omitRules = cfg.houseContext.omitRules;
+  };
+  houseContextText = lib.concatStringsSep "\n\n" (
+    [(housePrompt.contextFor "codex")]
+    ++ lib.optional (cfg.houseContext.extraText != "") cfg.houseContext.extraText
+  );
+
+  # The index plugin reaches Codex as a config-declared local marketplace:
+  # Codex resolves the Claude-format `.claude-plugin/{marketplace,plugin}.json`
+  # manifests in place (no snapshot sync for local sources), gated behind the
+  # `features.plugins` flag. Soft-layer entries, so any explicit user
+  # config.toml value wins per key.
+  housePluginSettings = lib.optionalAttrs cfg.housePlugin.enable {
+    features.plugins = true;
+    marketplaces.index = {
+      source_type = "local";
+      source = "${indexPkgs.agent-plugin.marketplace}";
+    };
+    plugins."index@index".enabled = true;
+  };
+
   optionalOverride = condition: name: value:
     lib.optionalAttrs condition {${name} = value;};
   packageOverrides =
@@ -26,7 +54,15 @@
         personalStartupContext
         primaryCheckouts
         ;
-      settings = cfg.defaults;
+      # Manual two-level merge (same shape as the wrapper's forcedSettings
+      # fold): user defaults win at the top level, and the `features` subtree
+      # is combined so the plugin gate coexists with feature defaults.
+      settings =
+        housePluginSettings
+        // cfg.defaults
+        // {
+          features = (housePluginSettings.features or {}) // (cfg.defaults.features or {});
+        };
     }
     // optionalOverride (cfg.mcpServers != null) "mcpServers" cfg.mcpServers
     // optionalOverride (
@@ -101,6 +137,53 @@ in {
         MCP server declarations rendered as soft Codex config defaults. Null
         keeps the package default; `{ }` intentionally bakes no MCP defaults.
       '';
+    };
+
+    housePlugin = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Declare the index plugin (the repo skill set, invoked as
+          `/index:<skill>`) through soft config defaults: a local marketplace
+          entry pointing at the store-built Claude-format plugin bundle plus
+          its enablement. Requires a Codex new enough to gate plugins behind
+          `features.plugins`; older builds ignore the keys.
+        '';
+      };
+    };
+
+    houseContext = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Write the house context render (the tagged prompt rules minus the
+          `system`-only basics, see packages/agent/prompt) to
+          {file}`$CODEX_HOME/AGENTS.md` through the native
+          {option}`programs.codex.context` option. An explicit `context`
+          value overrides this default entirely.
+        '';
+      };
+
+      extraText = lib.mkOption {
+        type = lib.types.lines;
+        default = "";
+        description = ''
+          Personal instructions appended after the house rules in the
+          rendered context file.
+        '';
+      };
+
+      omitRules = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [];
+        description = ''
+          Rule names omitted from the house context render (independent of
+          {option}`programs.codex.systemPrompt.omitRules`, which governs the
+          baked model instructions).
+        '';
+      };
     };
 
     systemPrompt = lib.mkOption {
@@ -185,10 +268,23 @@ in {
     programs.codex = {
       package = lib.mkDefault finalPackage;
       inherit finalPackage;
+      context = lib.mkIf cfg.houseContext.enable (lib.mkDefault houseContextText);
     };
 
     home.file."${cfg.configDir}/hooks.json" = lib.mkIf (cfg.enable && cfg.installHooks) {
       source = cfg.finalPackage.hooksJson;
+    };
+
+    # Codex marks a plugin installed by the presence of
+    # plugins/cache/<marketplace>/<plugin>/<version>; materialize that
+    # snapshot from the store so the config-declared plugin is installed
+    # without ever running `codex plugin add`. `recursive` because Codex
+    # requires the version path to be a real directory (a bare symlink reads
+    # as not installed; real dirs with per-file symlinks are accepted,
+    # verified against codex plugin list).
+    home.file."${cfg.configDir}/plugins/cache/index/${indexPkgs.agent-plugin.pluginName}/${indexPkgs.agent-plugin.version}" = lib.mkIf (cfg.enable && cfg.housePlugin.enable) {
+      source = indexPkgs.agent-plugin;
+      recursive = true;
     };
   };
 }

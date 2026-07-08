@@ -84,6 +84,8 @@ positional). Both rules are learned from real breakage; see the long comment at
 - `--debug`: writes operational telemetry to `~/.claude/debug/` (pruned on the
   `cleanupPeriodDays` sweep). It is an optional-value flag, so it cannot take
   `=`; it is safe only because `--thinking-display` follows it.
+- `--channels server:index`: lets the baked `index` MCP server push channel
+  events into the running session without Claude's development-channel warning.
 - `--thinking-display=summarized`: forces visible reasoning. The API default
   flipped to "omitted" on Opus 4.7/4.8, hiding thinking in the UI and
   transcript; this hidden flag is the only lever that restores it (verified on
@@ -117,6 +119,10 @@ wrapper injects its defaults file only `unless_present` a caller `--settings`
 - `permissions.deny` `WebSearch` / `WebFetch`: one web surface, not two; use
   Exa MCP for live web research. Deny rules are enforced in every
   permission mode.
+- `permissions.deny` for `systemTools`: the `defaultSystemTools` table in
+  `default.nix` is the source of truth for Claude Code orchestration and
+  hosted-service tool posture. Override with
+  `systemTools.<ToolName> = true` when that surface earns its context cost.
 - `hooks` (below).
 
 ### MCP servers (`--mcp-config`, `default.nix:90-94`, `295-297`)
@@ -132,7 +138,7 @@ Defaults to the default pair, additions only:
 - `exa`: Exa's hosted web-search server over streamable HTTP at
   `https://mcp.exa.ai/mcp` (keyless, rate-limited).
 
-### System prompt (`system-prompt.nix`)
+### System prompt (`packages/agent/prompt/`)
 
 `systemPrompt` is baked as the session's system prompt, REPLACING the stock one
 rather than appending to it (`default.nix:95-113`). The text is the shokunin craft ethos plus
@@ -140,7 +146,7 @@ fleet engineering rules: pre-v1 no-backward-compatibility, one-concept-one-
 implementation, always work in a git worktree, spawn background subagents for
 independent work, do work through the index Python kernel and `search` priors,
 gate admin/force merges on a fresh local build, never use em dashes, and more
-(`system-prompt.nix:7-37`). Set to `null` to ship the stock prompt alone.
+(`packages/agent/prompt/rules.nix`). Set to `null` to ship the stock prompt alone.
 
 ### Hooks (`packages/agent/policy/hook-runner.nix`, `default.nix:209-285`)
 
@@ -171,8 +177,8 @@ and on Linux the sandbox helpers `bubblewrap` and `socat`.
 ## Overrides
 
 `default.nix` exposes these args: `binName` (default `claude`),
-`dangerouslySkipPermissions`, `extraSettings`, `primaryCheckouts`, `mcpServers`,
-`systemPrompt`. Example: `claude-code.override { dangerouslySkipPermissions = false; }`.
+`dangerouslySkipPermissions`, `extraSettings`, `systemTools`, `primaryCheckouts`,
+`mcpServers`, `systemPrompt`. Example: `claude-code.override { systemTools.AskUserQuestion = true; }`.
 
 ## Build and wiring
 

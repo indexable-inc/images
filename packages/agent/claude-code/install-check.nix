@@ -13,11 +13,17 @@
   ix,
   git,
   jq,
+  nushell,
   repoPackages,
   hookRunner,
   launchSpec,
   settingsDefaultsFile,
   wrapperFlags,
+  wrapperEnvDefaults,
+  featureSettingsEnv,
+  houseSettingsRender,
+  statuslineCommand,
+  disabledSystemTools,
   python3,
   binName,
 }: ''
@@ -49,19 +55,43 @@
     fi
   ''}
 
-    # 1M-context guard (see wrapperEnvDefaults): sessions default to the
-    # standard context window, so the disable flag must ride env_defaults —
-    # baked in the spec, injected when the caller has it unset, and yielding
-    # to a caller value so the per-machine re-enable path
-    # (`export CLAUDE_CODE_DISABLE_1M_CONTEXT=`) keeps working.
-    one_m="$(${lib.getExe jq} -r \
-      '.env_defaults[] | select(.key == "CLAUDE_CODE_DISABLE_1M_CONTEXT") | .value' \
-      "$PWD/test-spec.json")"
-    if [ "$one_m" != 1 ]; then
-      printf 'claude launcher env check failed: CLAUDE_CODE_DISABLE_1M_CONTEXT env_default is %s, want 1\n' \
-        "$one_m" >&2
+    # Every disabled typed feature (see the wrapper's `features` arg) must ride
+    # the launch spec as an env_default, never plain env, so a caller export
+    # can still re-enable it per session.
+    check_env_default() {
+      local key="$1" got
+      got="$(${lib.getExe jq} -r --arg key "$key" \
+        '.env_defaults[] | select(.key == $key) | .value' \
+        "$PWD/test-spec.json")"
+      if [ "$got" != 1 ]; then
+        printf 'claude launcher env check failed: %s env_default is %s, want 1\n' \
+          "$key" "$got" >&2
+        exit 1
+      fi
+    }
+    feature_envs=(${lib.escapeShellArgs (builtins.attrNames wrapperEnvDefaults)})
+    for feature_env in "''${feature_envs[@]}"
+    do
+      check_env_default "$feature_env"
+    done
+
+    disabled_system_tools=(${lib.escapeShellArgs disabledSystemTools})
+    for tool in "''${disabled_system_tools[@]}"
+    do
+      if ! ${lib.getExe jq} -e --arg tool "$tool" '.permissions.deny | index($tool)' \
+        ${settingsDefaultsFile} >/dev/null; then
+        printf 'system tool deny check failed: %s is not denied in settings defaults\n' "$tool" >&2
+        exit 1
+      fi
+    done
+
+    if ${lib.getExe jq} -e --argjson names ${lib.escapeShellArg (builtins.toJSON (builtins.attrNames wrapperEnvDefaults))} \
+      '.env[] | select(.key as $k | $names | index($k))' \
+      "$PWD/test-spec.json"; then
+      printf 'claude launcher env check failed: disabled-feature vars must be env_defaults, not env\n' >&2
       exit 1
     fi
+    ${lib.optionalString (wrapperEnvDefaults ? CLAUDE_CODE_DISABLE_1M_CONTEXT) ''
     envstub="$PWD/envstub"
     printf '%s\n' '#!${runtimeShell}' 'printf "%s\n" "''${CLAUDE_CODE_DISABLE_1M_CONTEXT-unset}"' > "$envstub"
     chmod +x "$envstub"
@@ -76,23 +106,67 @@
       printf '1M-context guard check failed: caller re-enable (empty value) must win, got %s\n' "$got" >&2
       exit 1
     fi
+  ''}
 
-    # Same policy via the baked --settings env layer (read at CC startup even
-    # when process env is missing). Keeps `/context` off 1M for Fable 5 et al.
-    disable_1m="$(${lib.getExe jq} -r '.env.CLAUDE_CODE_DISABLE_1M_CONTEXT // empty' \
-      ${settingsDefaultsFile})"
-    compact_win="$(${lib.getExe jq} -r '.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW // empty' \
-      ${settingsDefaultsFile})"
-    if [ "$disable_1m" != 1 ]; then
-      printf '1M-context guard check failed: settings env CLAUDE_CODE_DISABLE_1M_CONTEXT is %s, want 1\n' \
-        "$disable_1m" >&2
+    # The typed feature render must land verbatim in the baked settings env
+    # (read at CC startup even when the launch env is missing), and the house
+    # posture layer (post-extraSettings merge, minus controlled keys) must
+    # land key-for-key in the settings file. Both expectations are derived
+    # from the same nix values that build the file, so they hold for
+    # overridden builds too.
+    if ! ${lib.getExe jq} -e --argjson want ${lib.escapeShellArg (builtins.toJSON featureSettingsEnv)} \
+      '.env as $env | $want | to_entries | all($env[.key] == .value)' \
+      ${settingsDefaultsFile} >/dev/null; then
+      printf 'feature settings env check failed: want %s within .env of %s\n' \
+        ${lib.escapeShellArg (builtins.toJSON featureSettingsEnv)} ${settingsDefaultsFile} >&2
       exit 1
     fi
-    if [ "$compact_win" != 300000 ]; then
-      printf '1M-context guard check failed: settings env CLAUDE_CODE_AUTO_COMPACT_WINDOW is %s, want 300000\n' \
-        "$compact_win" >&2
+    if ! ${lib.getExe jq} -e --argjson want ${lib.escapeShellArg (builtins.toJSON houseSettingsRender)} \
+      '. as $doc | $want | to_entries | all($doc[.key] == .value)' \
+      ${settingsDefaultsFile} >/dev/null; then
+      printf 'house settings default check failed: want %s within %s\n' \
+        ${lib.escapeShellArg (builtins.toJSON houseSettingsRender)} ${settingsDefaultsFile} >&2
       exit 1
     fi
+
+    # House statusline, driven through the exact command string the house
+    # defaults bake (so the store paths inside it are exercised; the render
+    # check above proves the settings file carries it, extraSettings aside).
+    # Offline by construction: the seeded run finds a fresh cache and never
+    # fetches; the cold run's fetch fails in the sandbox and must degrade to a
+    # plain version segment. The seeded latest (1.2.10 vs current 1.2.3) also
+    # guards the numeric per-segment compare a string compare would get
+    # backwards.
+    statusline_cmd=${lib.escapeShellArg statuslineCommand}
+    if [ "$(${lib.getExe nushell} --no-config-file -c "nu-check '${./statusline.nu}'")" != true ]; then
+      printf 'statusline check failed: nu-check rejected statusline.nu\n' >&2
+      exit 1
+    fi
+    statusline_payload='{"version":"1.2.3","model":{"display_name":"TestModel"},"context_window":{"context_window_size":200000,"current_usage":{"input_tokens":100000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}'
+    mkdir -p sl-home/.cache/ix-claude-statusline sl-cold-home
+    printf '1.2.10' > sl-home/.cache/ix-claude-statusline/latest
+    got="$(printf '%s' "$statusline_payload" \
+      | HOME="$PWD/sl-home" XDG_CACHE_HOME="$PWD/sl-home/.cache" ${runtimeShell} -c "$statusline_cmd")"
+    case "$got" in
+    *'█████░░░░░ | TestModel | high | v1.2.3 '*'↑1.2.10'*) : ;;
+    *)
+      printf 'statusline check failed (seeded cache): want bar/model/effort/version/update marker, got:\n%s\n' "$got" >&2
+      exit 1
+      ;;
+    esac
+    got="$(printf '%s' "$statusline_payload" \
+      | HOME="$PWD/sl-cold-home" XDG_CACHE_HOME="$PWD/sl-cold-home/.cache" ${runtimeShell} -c "$statusline_cmd")"
+    case "$got" in
+    *'↑'*)
+      printf 'statusline check failed (cold cache): update marker must not render offline, got:\n%s\n' "$got" >&2
+      exit 1
+      ;;
+    *'█████░░░░░ | TestModel | high | v1.2.3'*) : ;;
+    *)
+      printf 'statusline check failed (cold cache): want plain version segment, got:\n%s\n' "$got" >&2
+      exit 1
+      ;;
+    esac
 
     check() {
       local desc="$1" expected="$2"
@@ -135,6 +209,30 @@
     )
   } \
       --settings=/dev/null -p hi
+
+    # `--which-settings` is answered by the launcher itself (exit 0, no exec):
+    # the output is exactly the injected settings store path, with none of the
+    # baked flags the stub would echo on a real launch.
+    check "--which-settings prints the injected settings path" \
+      ${lib.escapeShellArg "${settingsDefaultsFile}"} \
+      --which-settings
+
+    # After `--` the same token is a positional for the CLI, so the launch
+    # proceeds normally (flags, injected settings, then the user argv).
+    check "--which-settings after -- stays a positional" \
+      ${
+    lib.escapeShellArg (
+      lib.concatStringsSep "\n" (
+        wrapperFlags
+        ++ [
+          "--settings=${settingsDefaultsFile}"
+          "--"
+          "--which-settings"
+        ]
+      )
+    )
+  } \
+      -- --which-settings
 
     # addDirs/pluginDirs render as single, prepended `=` tokens. `--add-dir` is
     # variadic in the CLI, so a space-form token would swallow the next positional

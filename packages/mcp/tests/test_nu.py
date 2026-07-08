@@ -33,10 +33,27 @@ def test_table_becomes_frame() -> None:
     assert df.to_dicts() == [{"a": 2, "b": "y"}]
 
 
-def test_record_becomes_one_row_frame() -> None:
-    df = run(nu("{name: 'ix', stars: 7}"))
-    assert df.shape == (1, 2)
-    assert df["name"].item() == "ix"
+def test_record_becomes_plain_dict() -> None:
+    # Issue #2390: a record is a struct, not a table. Framing it as a 1-row
+    # DataFrame forced every field read through `df.to_dicts()[0]`, and the
+    # natural `d['exit_code']` / `d.get('stderr')` on a `| complete` result
+    # failed with "'DataFrame' object has no attribute 'get'".
+    rec = run(nu("{name: 'ix', stars: 7}"))
+    assert rec == {"name": "ix", "stars": 7}
+
+
+def test_complete_record_fields_read_directly() -> None:
+    # The dominant record producer (issue #2390): `do -i { ^cmd } | complete`
+    # captures stdout/stderr/exit_code of a fallible external; each field must
+    # read straight off the returned dict.
+    import sys
+
+    script = "import sys; print('kept'); sys.stderr.write('boom'); raise SystemExit(3)"
+    rec = run(nu(f'do -i {{ ^{sys.executable} -c "{script}" }} | complete'))
+    assert isinstance(rec, dict)
+    assert rec["exit_code"] == 3
+    assert str(rec["stdout"]).strip() == "kept"
+    assert "boom" in str(rec["stderr"])
 
 
 def test_scalar_and_list_become_value_column() -> None:
@@ -75,6 +92,32 @@ def test_null_and_empty_become_empty_frames() -> None:
 def test_multi_statement_code_is_one_result() -> None:
     df = run(nu("let n = 3; seq 1 $n | each {|i| {n: $i, sq: ($i * $i)}}"))
     assert df["sq"].to_list() == [1, 4, 9]
+
+
+def test_intermediate_pipeline_output_prints_instead_of_dropping(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Issue #2391: a multi-statement cell used to return only the last
+    # pipeline's value and silently drop everything before it (an agent read
+    # `git show | to text; git status | to text` as empty commits). Now each
+    # non-final pipeline's output prints into the captured stdout while the
+    # final pipeline's value stays the return value.
+    result = run(nu("'first' | str upcase; [1 2 3]; 'final'"))
+    assert result == "final"
+    printed = capsys.readouterr().out
+    assert "FIRST" in printed
+    assert "value" in printed  # the [1 2 3] intermediate prints as a frame
+
+
+def test_single_statement_prints_nothing_extra(capsys: pytest.CaptureFixture[str]) -> None:
+    assert run(nu("'only'")) == "only"
+    assert capsys.readouterr().out == ""
+
+
+def test_silent_intermediates_stay_silent(capsys: pytest.CaptureFixture[str]) -> None:
+    # `let` produces no output; printing blank lines for it would be noise.
+    assert run(nu.value("let quiet = 1; $quiet + 1")) == 2
+    assert capsys.readouterr().out == ""
 
 
 def test_state_persists_across_calls_like_a_repl() -> None:
@@ -254,11 +297,9 @@ def test_naive_datetime_input_gets_a_clear_error() -> None:
         run(nu.value("$in", input=naive))
 
 
-def test_empty_record_is_one_row_zero_columns() -> None:
-    # Pins the degenerate corner of the record -> 1-row contract so a polars
-    # behavior change is caught here, not by a confused caller.
-    df = run(nu("{}"))
-    assert df.shape == (1, 0)
+def test_empty_record_is_empty_dict() -> None:
+    # Pins the degenerate corner of the record -> dict contract (issue #2390).
+    assert run(nu("{}")) == {}
 
 
 def test_cd_persists_across_calls(tmp_path: pathlib.Path) -> None:
@@ -420,8 +461,8 @@ def test_externals_run_color_free_even_when_host_forces_color(
         }
         # GH_FORCE_TTY (TTY-style gh rendering into a pipe) must not cross over.
         assert run(nu.value("'GH_FORCE_TTY' in $env")) is False
-        df = run(nu(f'^{sys.executable} -c "{script}" | from json'))
-        assert df["state"].item() == "MERGED"
+        rec = run(nu(f'^{sys.executable} -c "{script}" | from json'))
+        assert rec == {"state": "MERGED"}
         # env= still re-enables color for the one call that wants raw ANSI.
         raw = run(
             nu.value(
