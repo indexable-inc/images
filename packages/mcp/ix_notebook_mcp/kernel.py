@@ -368,6 +368,18 @@ class Kernel:
                 # and respawn just the kernel child instead (index#2375). Safe:
                 # session restore replays only SUCCESSFUL cells, so the wedged
                 # cell is not re-run.
+                #
+                # First preserve the evidence the kill would destroy: faulthandler's
+                # SIGUSR1 dump is C-level, so it fires even mid-native-block and
+                # names the frame that called into it -- exactly the stack #2095
+                # needs from a live occurrence. Best-effort, to stderr/journald.
+                with contextlib.suppress(Exception):  # evidence capture must never block the escalation
+                    trace = await self.dump_trace()
+                    print(
+                        f"[ix-mcp] wedged kernel stack before escalation kill (pid {self._pid}):\n{trace}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                 try:
                     await self.restart_now(freshen=False, reason="wedge escalation, index#2375")
                     outcome = "restarted"
