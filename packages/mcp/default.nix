@@ -1372,6 +1372,14 @@
   # cell importing a bundled module resolves that module's real types.
   tyBin = lib.getExe pkgs.ty;
 
+  # TLS trust for every shelled-out client in the kernel (issue #2429): the
+  # nix-built curl/git carry no baked-in system CA path on darwin and the
+  # launchd/user environment provides none, so `^curl https://...` inside nu()
+  # failed verification (exit 60) while httpx in the same kernel worked
+  # (Python carries certifi). set-default, not set: an operator-provided
+  # bundle (a corporate CA) must still win.
+  caBundle = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+
   package =
     pkgs.runCommand "ix-mcp"
     {
@@ -1396,6 +1404,8 @@
         --set IX_MCP_TY_BIN ${lib.escapeShellArg tyBin} \
         --set IX_MCP_TY_PYTHON ${lib.escapeShellArg mcpPython.interpreter} \
         --set IX_NIX_WEB_MONITOR_BIN ${lib.escapeShellArg (lib.getExe nixWebMonitorBin)} \
+        --set-default SSL_CERT_FILE ${lib.escapeShellArg caBundle} \
+        --set-default CURL_CA_BUNDLE ${lib.escapeShellArg caBundle} \
         --prefix PATH : ${
         lib.makeBinPath [
           pkgs.ripgrep
@@ -1418,6 +1428,8 @@
         --set IX_MCP_TY_BIN ${lib.escapeShellArg tyBin} \
         --set IX_MCP_TY_PYTHON ${lib.escapeShellArg mcpPython.interpreter} \
         --set IX_NIX_WEB_MONITOR_BIN ${lib.escapeShellArg (lib.getExe nixWebMonitorBin)} \
+        --set-default SSL_CERT_FILE ${lib.escapeShellArg caBundle} \
+        --set-default CURL_CA_BUNDLE ${lib.escapeShellArg caBundle} \
         --prefix PATH : ${
         lib.makeBinPath [
           pkgs.ripgrep
