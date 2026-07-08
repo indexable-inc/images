@@ -587,6 +587,10 @@
   */
   appleSdkToolchain = import ./darwin/apple-sdk-toolchain.nix;
 
+  # Single source of truth for the ix public binary cache identity (URL + the
+  # `ix-workspace:` trusted key that verifies its narinfos). See ./cache.nix.
+  cache = import ./cache.nix;
+
   /**
   Helper surface shared by both the per-module `specialArgs.ix`
   (`ixSpecialArgs`) and the public `index.lib` (`ixReturn`). Listed once
@@ -611,6 +615,7 @@
       buildSvelteSite
       buildUvApplication
       buildZigPackage
+      cache
       cargoUnit
       checks
       claudePlugin
