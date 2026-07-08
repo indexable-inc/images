@@ -1,5 +1,7 @@
-# Single source of truth for the repo's ruff lint policy, consumed by every
-# Python gate so it never drifts across call sites:
+# The repo's ruff lint policy lives in the checked-in /ruff.toml (selector,
+# ignores, and the per-rule rationale); this module derives the inline-flag
+# form consumed by every Python gate so the policy never drifts across call
+# sites:
 #   lib/build/uv-application.nix   (all uv apps)
 #   lib/util/writers.nix          (writePythonApplication scripts)
 #   packages/mcp/default.nix      (bundled-module strict gate)
@@ -7,107 +9,22 @@
 #   packages/sdk/python/build.nix
 #   lib/per-system.nix            (the repo-wide `ruff` lint stage, over ALL .py)
 #
-# Philosophy: a high-signal "really good lints" set -- every rule family that
-# catches real bugs, security issues, or stale idioms -- and NOT the stylistic
-# rules that would only generate noqa noise. Highlights: B (bugbear, incl.
-# mutable-default args), ASYNC (blocking calls in async fns), S (bandit
-# security), PTH (pathlib), PT (pytest), UP (pyupgrade), plus the original
-# ANN (explicit annotations, ANN401 bans bare `typing.Any`) and TID251.
-#
-# `ignore` drops the contextual/noisy members of selected families so we never
-# need per-file ignores (the inline-config sandbox gate has no ruff.toml):
-#   S101 asserts (used in tests + runtime), S603/S607 deliberate fixed-arg
-#   subprocess calls, S311 non-crypto random, PLW0603 module-lifetime caches,
-#   ISC001 (formatter owns it), RUF001/2/3 ambiguous-unicode false positives.
-# Deliberately NOT selected (pure style): TRY003, EM, T201, N, ARG, D.
-#
-# TID251 bans `typing.cast`: it lies to the type checker at zero runtime cost, so
-# a wrong cast is a latent bug no checker can catch. Parse untrusted/JSON data
-# into a pydantic model at the boundary instead, or fix the real type; the rare
-# genuinely-unavoidable case (e.g. a test double) opts out with `# noqa: TID251`.
-#
-# Config is passed inline (`--config`/`--select`/`--ignore`) rather than via a
-# checked-in ruff.toml because per-package builds run ruff inside sandboxes that
-# do not contain the repo root, so an on-disk config would never be discovered.
+# Why flags AND a discovered toml: per-package builds run ruff inside sandboxes
+# that do not contain the repo root, so an on-disk config would never be found
+# there -- the gates take the policy inline (--select/--ignore/--config). A
+# direct `ruff check` in a checkout, meanwhile, discovers ruff.toml and applies
+# the same policy, so ad-hoc runs cannot diverge from the gates: ruff's default
+# E/F selection used to flag patterns the repo deliberately allows (e.g. the
+# importorskip-then-import pattern in tests -> E402), reading as "my change
+# broke lint" (#2393).
 {lib}: let
-  banMessage =
-    "typing.cast defeats the type checker (no runtime check), so a wrong cast "
-    + "is a latent bug. Parse untrusted/JSON data into a pydantic model at the "
-    + "boundary, or fix the real type. Only for an unavoidable case (e.g. a test "
-    + "double): add a `# noqa: TID251` with a reason.";
+  policy = builtins.fromTOML (builtins.readFile ../ruff.toml);
+  banMessage = policy.lint.flake8-tidy-imports.banned-api."typing.cast".msg;
   banConfig = ''lint.flake8-tidy-imports.banned-api."typing.cast".msg = "${banMessage}"'';
-  # Bug-catchers + security + pathlib + pytest + the original explicit-annotation
-  # and no-cast gates. TID251 here is redundant with the banned-api config below
-  # but makes the ban explicit in the selector.
-  select = [
-    "ANN"
-    "TID251"
-    "B"
-    "ASYNC"
-    "C4"
-    "SIM"
-    "RET"
-    "PIE"
-    "UP"
-    "RUF"
-    "PERF"
-    "FURB"
-    "PLE"
-    "PLW"
-    "LOG"
-    "G"
-    "DTZ"
-    "FLY"
-    "ISC"
-    "S"
-    "PTH"
-    "PT"
-    "FBT"
-  ];
-  ignore = [
-    "S101"
-    "S603"
-    "S607"
-    "S311"
-    "PLW0603"
-    "ISC001"
-    "RUF001"
-    "RUF002"
-    "RUF003"
-    # PERF203 (try-except in a loop) is a minor perf hint AND version-volatile
-    # across ruff releases: the per-package buildUvApplication gate and the
-    # repo-wide lint stage can resolve to different ruff builds, so a
-    # `# noqa: PERF203` one gate needs the other flags as RUF100 (unused). Drop
-    # it -- the flagged loops (retry/drain/collect-failures) genuinely need the
-    # per-iteration try; hoisting it would change behavior.
-    "PERF203"
-    # ASYNC109: async function that takes a `timeout` parameter. The codebase's
-    # pervasive, deliberate pattern is to accept a timeout and forward it to the
-    # underlying library (httpx/asyncssh/subprocess/wait_for), which the rule
-    # cannot see; it fires ~38 times with no bug behind any. Not a helpful lint here.
-    "ASYNC109"
-    # PEP-695 modernization (UP040 `type X =`, UP047 `def f[T]`, UP049 private
-    # type params) is churn, not bug-catching, and it fights the type checker:
-    # zuban rejects PEP-695 generics ("type parameter not declared"). Keep the
-    # classic `TypeAlias` / `TypeVar` forms.
-    "UP040"
-    "UP047"
-    "UP049"
-  ];
 in {
-  inherit
-    banMessage
-    banConfig
-    select
-    ignore
-    ;
+  inherit (policy.lint) select ignore;
+  inherit banMessage banConfig;
   # Drop-in replacement for the old bare `--select ANN`:
   #   ruff check ${ruffAnnArgs} <targets>
-  #
-  # `--target-version py313` is pinned so every gate (per-package and the repo-wide
-  # lint stage) evaluates target-version-gated rules (UP041 aliased errors, UP017
-  # datetime.UTC, ...) identically -- the whole repo is Python 3.13, and without
-  # this the lint stage's per-file pyproject discovery diverged from the package
-  # gates, flagging rules in one place but not the other.
-  ruffAnnArgs = "--target-version py313 --select ${lib.concatStringsSep "," select} --ignore ${lib.concatStringsSep "," ignore} --config ${lib.escapeShellArg banConfig}";
+  ruffAnnArgs = "--target-version ${policy.target-version} --select ${lib.concatStringsSep "," policy.lint.select} --ignore ${lib.concatStringsSep "," policy.lint.ignore} --config ${lib.escapeShellArg banConfig}";
 }
