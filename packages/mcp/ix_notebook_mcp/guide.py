@@ -353,6 +353,32 @@ PYEXEC_INTRO = (
     "(inspect / await / cancel it via more python_exec on the `jobs` dict)."
 )
 
+# Developer note (NOT part of any tool description or the model-facing
+# instructions -- it documents server behavior for maintainers). When an MCP
+# client cancels an in-flight `python_exec` request -- MCP `notifications/cancelled`
+# for the request id, or a transport-level abort -- the SDK cancels this handler's
+# request scope, and `tools.python_exec` catches that cancellation and interrupts
+# the kernel job the call launched (the same path as `jobs['<id>'].cancel()`),
+# rather than leaving it to finish in the background and run its side effects after
+# the caller abandoned it (index#2387).
+#
+# LIMITATION: Claude Code does NOT send `notifications/cancelled` when a USER
+# REJECTS an in-flight tool call (clicks "No" on the permission prompt). Its
+# permission verdict is a client-local decision that never reaches the server, so
+# the server has nothing to cancel in that specific case: a call that was already
+# dispatched to the kernel before the (racing) rejection landed still runs to
+# completion. The cancellation wiring above therefore fires for spec-compliant MCP
+# clients and for Claude Code's own request-timeout cancellation, but not for a
+# rejected permission prompt. Fully closing the rejection gap needs a client-side
+# fix (Claude Code sending `notifications/cancelled` on rejection, or gating
+# dispatch behind the permission verdict); see index#2387.
+CANCELLATION_NOTE = (
+    "An MCP client that cancels an in-flight python_exec (notifications/cancelled "
+    "or transport abort) interrupts the kernel job it launched, on the same path as "
+    "jobs['<id>'].cancel(). Claude Code does not signal a user's REJECTION of an "
+    "in-flight call, so a rejected prompt is not covered (index#2387)."
+)
+
 SEE_INSTRUCTIONS = (
     "The server instructions cover the rest — the bundled tooling (grep / find / view / nix / "
     "fleet / polars / htpy), how to find and read things, and how to curate the dashboard's cells."

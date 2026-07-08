@@ -4125,6 +4125,38 @@ async def __ix_exec(
     _emit(job)
 
 
+def __ix_cancel_running(session: str | None = None, exclude: str | None = None) -> list[str]:
+    """Cancel the run this session's in-flight ``python_exec`` launched, so an
+    abandoned call stops instead of finishing in the background.
+
+    The MCP server calls this when the client cancels an in-flight
+    ``python_exec`` request (``notifications/cancelled`` or a transport abort):
+    the tool coroutine is cancelled server-side, but the kernel job it started
+    keeps running as a background task -- executing side effects the caller
+    already abandoned (index#2387). Cancelling that job here is the SAME path as
+    an explicit ``jobs['<id>'].cancel()``, so it drains and records cleanly.
+
+    Only the single most recently started still-running job for ``session`` is
+    cancelled: that is the one the abandoned call launched. Other background jobs
+    the same session started earlier (and did not abandon) keep running.
+    ``exclude`` skips a job id -- the raw cancel request's own frame is never a
+    ``jobs`` entry, but the guard keeps the helper honest if that ever changes.
+    Returns the ids cancelled (empty when the run already finished, the common
+    race: a fast call completes before the cancellation lands)."""
+    candidates = [
+        job
+        for job in jobs.values()
+        if job.session == session and job.running() and job.id != exclude
+    ]
+    if not candidates:
+        return []
+    # Newest-started wins: `jobs` is insertion-ordered, and the abandoned call is
+    # the last run this session launched.
+    target = max(candidates, key=lambda job: job.started)
+    target.cancel()
+    return [target.id]
+
+
 def __ix_emit_read_stats_final() -> None:
     """Emit every session's final ``mcp_read_stats`` line. The server calls this
     in-kernel from its shutdown ``finally`` block, BEFORE it kills the kernel with
@@ -4480,6 +4512,7 @@ def install(user_ns: dict | None = None) -> None:
     target["input_channels"] = input_channels
     target["__ix_run"] = __ix_run
     target["__ix_exec"] = __ix_exec
+    target["__ix_cancel_running"] = __ix_cancel_running
     target["__ix_read"] = __ix_read
     target["__ix_emit_read_stats_final"] = __ix_emit_read_stats_final
     target["__ix_snapshot"] = __ix_snapshot

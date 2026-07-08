@@ -19,6 +19,7 @@ is respawned immediately, not lazily on the next execute (index#2339).
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import contextlib
 import os
@@ -388,6 +389,39 @@ class Kernel:
                     # already owns the respawn; its restore will serve us too.
                     outcome = "restart_pending"
             return [], _wedged_summary(budget, grace, deadline, outcome=outcome)
+
+    async def cancel_running(self, session: str | None) -> list[str]:
+        """Cancel the run this ``session``'s abandoned ``python_exec`` launched.
+
+        The server calls this when a client cancels an in-flight ``python_exec``
+        (``notifications/cancelled`` or a transport abort): the tool coroutine is
+        cancelled server-side, but the job it started keeps running in the kernel
+        as a background task, executing side effects the caller already abandoned
+        (index#2387). This pokes ``__ix_cancel_running`` on the raw shell channel
+        (no job/card, like ``set_client``), which cancels the same job an explicit
+        ``jobs['<id>'].cancel()`` would. Best-effort: a cancel arriving after the
+        run finished (the common race) cancels nothing, and a failure here must
+        never mask the original cancellation the caller is propagating. Returns
+        the ids cancelled (parsed from the raw reply; empty on any hiccup)."""
+        if self._pid is None:
+            return []
+        session_arg = "None" if session is None else repr(session)
+        try:
+            outputs, _ = await self._execute(
+                f"print(__ix_cancel_running(session={session_arg}))", timeout=10.0
+            )
+        except BaseException:  # noqa: BLE001 -- cancel is best-effort; never mask the caller's own cancellation
+            return []
+        text = "".join(
+            o.get("text", "") for o in outputs if isinstance(o, dict)
+        ).strip()
+        # `print(list)` renders `['ab12']`; parse it back defensively so a
+        # malformed reply degrades to "cancelled nothing" rather than raising.
+        with contextlib.suppress(Exception):
+            value = ast.literal_eval(text)
+            if isinstance(value, list):
+                return [str(item) for item in value]
+        return []
 
     async def set_client(self, client: str) -> None:
         """Tell the kernel which MCP client connected, so the session label can

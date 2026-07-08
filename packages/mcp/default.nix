@@ -3039,7 +3039,7 @@
         pkgs.fd
       ];
       strictDeps = true;
-      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246) + claude-history session search (#2245) + per-serve kernel trace file (#2355)";
+      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + client-cancel interrupts in-flight run (#2387) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246) + claude-history session search (#2245) + per-serve kernel trace file (#2355)";
     }
     ''
       export HOME=$TMPDIR/home
@@ -3054,6 +3054,9 @@
       cp ${./tests/test_job_await_errors.py} test_job_await_errors.py
       # Issue #2104: one session's wait must never cancel another session's job.
       cp ${./tests/test_job_cancel_scope.py} test_job_cancel_scope.py
+      # Issue #2387: a client that cancels an in-flight python_exec cancels the
+      # backgrounded run it launched, instead of executing side effects after.
+      cp ${./tests/test_cancel_running.py} test_cancel_running.py
       # Issue #2164: jobs.spawn registers an ad-hoc awaitable as a first-class job.
       cp ${./tests/test_jobs_spawn.py} test_jobs_spawn.py
       cp ${./tests/test_fsearch_partial.py} test_fsearch_partial.py
@@ -3072,6 +3075,7 @@
       cp ${./tests/test_kernel_trace_path.py} test_kernel_trace_path.py
       ${lib.getExe typecheckTestPython} -m pytest \
         test_typecheck.py test_job_await_errors.py test_job_cancel_scope.py \
+        test_cancel_running.py \
         test_jobs_spawn.py \
         test_fsearch_partial.py \
         test_fsearch_glob.py \
