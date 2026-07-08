@@ -1,0 +1,180 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew@ix.dev>
+Date: Tue, 7 Jul 2026 23:09:08 -0700
+Subject: [PATCH] fix(libstore): add temp root for floating-CA scratch output
+ paths (GC race)
+
+A non-chroot builder writes a floating CA output directly at its
+scratch store path (makeFallbackPath), which is not a valid path and
+was not rooted against the garbage collector. A GC running concurrently
+with the build (e.g. the min-free auto-GC) treats the scratch path as
+garbage and deletes it mid-build; the build then fails with "builder
+for '<drv>' failed to produce output path" or, downstream, "path '...'
+is not valid" / "N dependencies failed" - the remaining failure mode of
+indexable-inc/index#2354 after the previous CA temp-root patch.
+
+Root the scratch path as soon as it is assigned, before the builder
+starts. addTempRoot also performs the gc-socket handshake with an
+in-progress GC, so the root is honored even when the collector is
+already running. For chroot builds the store-side scratch path does not
+exist during the build, so the extra root is harmless.
+
+Stress-validated with a 20-chain CA graph rebuilt at max-jobs 16 under
+a concurrent nix-store --gc loop:
+- base:                       10/10 iterations failed
+- previous patch only:        10/10 failed ("failed to produce output path")
+- this patch only:            10/10 failed ("path '...' is not valid")
+- previous patch + this one:   0/30 failed
+
+Add a deterministic functional test (ca/gc-scratch-output): a
+fifo-blocked CA builder keeps its scratch output on disk, nix-store
+--gc runs mid-build, and the scratch path must survive so the build
+completes. Verified to fail without the fix and pass with it; the full
+ca suite stays green.
+
+Upstream master has the same gap (no temp root on scratch outputs);
+NixOS/nix#15613 covers only the inputSrcs surface.
+
+Refs indexable-inc/index#2354
+
+Assisted-by: Claude <noreply@anthropic.com>
+
+diff --git a/src/libstore/unix/build/derivation-builder.cc b/src/libstore/unix/build/derivation-builder.cc
+index 6ef3223..afbcd19 100644
+--- a/src/libstore/unix/build/derivation-builder.cc
++++ b/src/libstore/unix/build/derivation-builder.cc
+@@ -798,6 +798,14 @@ std::optional<Descriptor> DerivationBuilderImpl::startBuild()
+                                            makeFallbackPath(status.known->path);
+         scratchOutputs.insert_or_assign(outputName, scratchPath);
+ 
++        /* Root the scratch path against the garbage collector. For a
++           floating CA output (and for hash-rewrite fallbacks) the
++           scratch path is an unregistered store path that a non-chroot
++           builder writes to directly; without a temp root a concurrent
++           GC deletes it mid-build ("failed to produce output path").
++           For chroot builds the store-side path does not exist during
++           the build, so the extra root is harmless. */
++        store.addTempRoot(scratchPath);
+         /* Substitute output placeholders with the scratch output paths.
+            We'll use during the build. */
+         inputRewrites[hashPlaceholder(outputName)] = store.printStorePath(scratchPath);
+diff --git a/tests/functional/ca/gc-scratch-output.nix b/tests/functional/ca/gc-scratch-output.nix
+new file mode 100644
+index 0000000..97cf48b
+--- /dev/null
++++ b/tests/functional/ca/gc-scratch-output.nix
+@@ -0,0 +1,35 @@
++with import ./config.nix;
++
++let
++  mkCADerivation =
++    args:
++    mkDerivation (
++      {
++        __contentAddressed = true;
++        outputHashMode = "recursive";
++        outputHashAlgo = "sha256";
++      }
++      // args
++    );
++in
++
++{
++  seed ? 0,
++  fifo,
++}:
++{
++  # A floating-CA derivation whose builder writes its output and then
++  # blocks, keeping the (non-chroot) scratch output path on disk while
++  # the test driver runs the garbage collector.
++  top = mkCADerivation {
++    name = "gc-scratch-output";
++    inherit seed fifo;
++    buildCommand = ''
++      mkdir $out
++      echo "scratch-$seed" > $out/c
++      # Block until the test driver has run the GC.
++      cat $fifo
++      echo done >> $out/c
++    '';
++  };
++}
+diff --git a/tests/functional/ca/gc-scratch-output.sh b/tests/functional/ca/gc-scratch-output.sh
+new file mode 100755
+index 0000000..5a86b91
+--- /dev/null
++++ b/tests/functional/ca/gc-scratch-output.sh
+@@ -0,0 +1,61 @@
++#!/usr/bin/env bash
++
++# Regression test: a garbage collection while a floating-CA derivation is
++# building must not delete the builder's scratch output path. On non-chroot
++# builds (sandbox = false) the builder writes $out directly at the scratch
++# store path, which is not a valid path; without a temp root the GC treats
++# it as garbage and the build later fails with "failed to produce output
++# path". See https://github.com/indexable-inc/index/issues/2354.
++
++source common.sh
++
++clearStoreIfPossible
++
++fifo="$TEST_ROOT/gc-scratch-output.fifo"
++rm -f "$fifo"
++mkfifo "$fifo"
++
++# A fresh seed forces a rebuild (and fresh scratch content) even on a
++# dirty store.
++seed="$RANDOM$RANDOM$$"
++
++# Start the build in the background; the builder writes its scratch
++# output, then parks on the fifo.
++nix build -f gc-scratch-output.nix top --no-link \
++    --argstr seed "$seed" --argstr fifo "$fifo" &
++buildPid=$!
++# shellcheck disable=SC2064
++trap "kill $buildPid 2>/dev/null || true" EXIT
++
++# Wait until the builder has written the scratch output. The scratch path
++# has the derivation's name but a rewrite-fingerprint hash, so find it by
++# name and by this run's content.
++scratch=""
++for _ in $(seq 300); do
++    for p in "$NIX_STORE_DIR"/*-gc-scratch-output; do
++        if grep -qx "scratch-$seed" "$p/c" 2>/dev/null; then
++            scratch=$p
++            break 2
++        fi
++    done
++    sleep 0.2
++done
++[[ -n "$scratch" ]]
++
++# Run the GC while the builder is parked. Without a temp root on the
++# scratch path, this used to delete it.
++nix-store --gc
++
++# The scratch output must have survived the GC.
++[[ -e "$scratch/c" ]]
++
++# Unblock the builder; the build must now succeed.
++echo go > "$fifo"
++wait $buildPid
++trap - EXIT
++
++# The final output must exist and contain both writes.
++out=$(nix build -f gc-scratch-output.nix top --no-link --print-out-paths \
++    --argstr seed "$seed" --argstr fifo "$fifo")
++grep -q "scratch-$seed" "$out/c"
++grep -q done "$out/c"
+diff --git a/tests/functional/ca/meson.build b/tests/functional/ca/meson.build
+index 391e98d..ab5d9ca 100644
+--- a/tests/functional/ca/meson.build
++++ b/tests/functional/ca/meson.build
+@@ -19,6 +19,7 @@ suites += {
+     'eval-store.sh',
+     'gc.sh',
+     'gc-during-build.sh',
++    'gc-scratch-output.sh',
+     'import-from-derivation.sh',
+     'issue-13247.sh',
+     'multiple-outputs.sh',

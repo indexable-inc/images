@@ -425,6 +425,14 @@
           upstream = "hold";
           reason = "Fix for min-free auto-GC deleting in-flight CA build outputs (indexable-inc/index#2334). Hold: humans submit nix patches upstream per NixOS/nix#15984; overlaps the still-open upstream discussion NixOS/nix#15613 / NixOS/nix#15719.";
         };
+        # 0012: temp root for the floating-CA scratch output path itself
+        # (makeFallbackPath), the residual GC window 0011 left open: a
+        # non-chroot builder writes the unregistered scratch path directly,
+        # and a concurrent GC deletes it mid-build (index#2354).
+        "0012-fix-libstore-add-temp-root-for-floating-CA-scratch-o.patch" = {
+          upstream = "hold";
+          reason = "Companion to 0011: roots the floating-CA scratch output path during non-chroot builds (indexable-inc/index#2354). Upstream master has the same gap, but humans submit nix patches upstream per NixOS/nix#15984.";
+        };
       };
     }
   ];
