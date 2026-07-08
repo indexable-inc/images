@@ -4,6 +4,11 @@
 # minimal HTML report at ~/.local/share/symphony/overseer/index.html.
 # Not Slack-notified: it is a local page. Timeout stays under the cadence
 # so runs cannot overlap.
-workflow "overseer" on cron "*/10 * * * *" tz "America/Los_Angeles" {
+#
+# Cron disabled: every scheduled run was failing in exec-0. Manual
+# trigger keeps the workflow runnable by an operator; restore the
+# previous header to re-enable the schedule:
+#   workflow "overseer" on cron "*/10 * * * *" tz "America/Los_Angeles" {
+workflow "overseer" on manual {
   overseer <- exec "./scripts/overseer.sh" timeout 480
 }
