@@ -569,6 +569,7 @@ in {
         # not kill `ix up`. Restore Nix's own upstream default of `true`.
         # mkForce because the nixpkgs assignment is unconditional, not a
         # default. See indexable-inc/index#2453.
+        # astlog-ignore: no-mkforce nixpkgs sets this unconditionally; #2453 owns the fix.
         sandbox-fallback = lib.mkForce true;
       };
       gc = {

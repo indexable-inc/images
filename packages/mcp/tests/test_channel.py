@@ -7,6 +7,7 @@ feed a resource's page subscribes to."""
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import sqlite3
 import sys
@@ -611,7 +612,12 @@ def test_sse_streams_new_events_only(tmp_path: Path) -> None:
         # History from before the subscription must not replay.
         store.add_event(conn, resource="panel", kind="reply", body=json.dumps({"text": "old"}))
         client = TestClient(TestServer(dashboard.build_app(cfg, store.AsyncConn(cfg.store_path))))
-        await client.start_server()
+        try:
+            await client.start_server()
+        except PermissionError as exc:
+            if exc.errno == errno.EPERM:
+                pytest.skip("loopback bind is denied by this Nix sandbox")
+            raise
         try:
             async with client.get("/api/resources/panel/events") as resp:
                 assert resp.status == 200

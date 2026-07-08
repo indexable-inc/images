@@ -3071,6 +3071,8 @@
       cp ${./tests/test_cancel_running.py} test_cancel_running.py
       # Issue #2164: jobs.spawn registers an ad-hoc awaitable as a first-class job.
       cp ${./tests/test_jobs_spawn.py} test_jobs_spawn.py
+      # Issue #2464: first tool use starts the dashboard hub without opening a browser.
+      cp ${./tests/test_dashboard_autostart.py} test_dashboard_autostart.py
       cp ${./tests/test_fsearch_partial.py} test_fsearch_partial.py
       cp ${./tests/test_fsearch_glob.py} test_fsearch_glob.py
       # Issue #2246: grep(files_only=True) -> path + match-count rows via rg --count-matches.
@@ -3091,6 +3093,7 @@
         test_typecheck.py test_job_await_errors.py test_job_cancel_scope.py \
         test_cancel_running.py \
         test_jobs_spawn.py \
+        test_dashboard_autostart.py \
         test_fsearch_partial.py \
         test_fsearch_glob.py \
         test_fsearch_files_only.py \

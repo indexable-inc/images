@@ -247,7 +247,7 @@ async def _start_dashboard_once() -> None:
     try:
         from .cli import ensure_shared_dashboard
 
-        await asyncio.to_thread(ensure_shared_dashboard, open_browser=True)
+        await asyncio.to_thread(ensure_shared_dashboard, open_browser=False)
     except Exception:
         logger.exception("dashboard autostart failed")
 
