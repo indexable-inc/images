@@ -55,7 +55,7 @@ def test_async_conn_kwargs_and_store_functions(tmp_path: Path) -> None:
 
 def test_async_conn_requires_a_path() -> None:
     # Eager, like store.connect: `serve` must fail at startup, not first request.
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="store path is required"):
         store.AsyncConn(None)  # type: ignore[arg-type]
 
 

@@ -173,7 +173,7 @@ def test_api_input_validation_and_size_cap(tmp_path: Path) -> None:
 
 def test_api_input_preflight_returns_cors(tmp_path: Path) -> None:
     async def run() -> None:
-        cfg, conn = _app(tmp_path)
+        cfg, _conn = _app(tmp_path)
         client = await _client(cfg)
         try:
             resp = await client.options("/api/input")

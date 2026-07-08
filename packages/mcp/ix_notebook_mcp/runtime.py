@@ -1748,7 +1748,7 @@ async def notify(content: str, **meta: Any) -> None:
 
     This server is a Claude Code channel (research preview): when the client
     session was launched with the channel enabled (``claude
-    --dangerously-load-development-channels server:<name>``), the event lands in
+    --channels server:<name>``), the event lands in
     the agent's context as ``<channel source="<name>" key="val">content</channel>``
     and wakes it. Each keyword becomes a tag attribute (values are stringified)::
 

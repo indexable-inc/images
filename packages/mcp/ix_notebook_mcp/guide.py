@@ -308,7 +308,7 @@ READABLE = (
 
 CHANNEL = (
     "This server is also a Claude Code channel (research preview). When the client session was "
-    "launched with the channel enabled (`claude --dangerously-load-development-channels "
+    "launched with the channel enabled (`claude --channels "
     "server:<name>`), kernel code can push events into the running agent session with `await "
     "notify(content, **meta)`: each event arrives in the session as <channel source=\"...\" "
     "key=\"val\">content</channel>, with each meta kwarg a tag attribute (identifier keys only). "

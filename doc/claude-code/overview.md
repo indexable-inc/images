@@ -84,6 +84,8 @@ positional). Both rules are learned from real breakage; see the long comment at
 - `--debug`: writes operational telemetry to `~/.claude/debug/` (pruned on the
   `cleanupPeriodDays` sweep). It is an optional-value flag, so it cannot take
   `=`; it is safe only because `--thinking-display` follows it.
+- `--channels server:index`: lets the baked `index` MCP server push channel
+  events into the running session without Claude's development-channel warning.
 - `--thinking-display=summarized`: forces visible reasoning. The API default
   flipped to "omitted" on Opus 4.7/4.8, hiding thinking in the UI and
   transcript; this hidden flag is the only lever that restores it (verified on

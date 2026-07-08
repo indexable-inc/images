@@ -10,9 +10,8 @@ https://code.claude.com/docs/en/channels-reference): it advertises the
 (what the kernel's ``notify()`` writes) as ``notifications/claude/channel``
 events, so kernel code can push into the running agent session. Channels are
 stdio-only by contract (Claude Code spawns the channel server as a subprocess
-and a session opts in per-entry via ``--channels`` /
-``--dangerously-load-development-channels``), so the HTTP transport does not
-grow one. A client that did not opt in ignores both the capability and the
+and a session opts in per-entry via ``--channels``), so the HTTP transport does
+not grow one. A client that did not opt in ignores both the capability and the
 notifications, so this costs nothing when unused.
 """
 
