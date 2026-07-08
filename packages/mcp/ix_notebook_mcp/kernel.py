@@ -410,7 +410,7 @@ class Kernel:
             outputs, _ = await self._execute(
                 f"print(__ix_cancel_running(session={session_arg}))", timeout=10.0
             )
-        except BaseException:  # noqa: BLE001 -- cancel is best-effort; never mask the caller's own cancellation
+        except BaseException:  # cancel is best-effort; never mask the caller's own cancellation
             return []
         text = "".join(
             o.get("text", "") for o in outputs if isinstance(o, dict)

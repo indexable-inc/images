@@ -71,7 +71,8 @@ def test_cancel_running_targets_only_the_newest_run_for_the_session(
         newest = await runtime.__ix_run(
             "await asyncio.sleep(30)", budget=0.01, session="agent-a"
         )
-        assert earlier.running() and newest.running()
+        assert earlier.running()
+        assert newest.running()
         cancelled = runtime.__ix_cancel_running(session="agent-a")
         assert cancelled == [newest.id]
         await earlier.wait(10)
