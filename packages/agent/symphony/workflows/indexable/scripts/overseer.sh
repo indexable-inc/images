@@ -185,7 +185,14 @@ Your notes from previous ticks:
 $(cat "$notes")
 
 Snapshot ($now_iso):
-$(cat "$snap")" </dev/null > "$last_msg.envelope"
+$(cat "$snap")" </dev/null > "$last_msg.envelope" || claude_status=$?
+  # set -e must not abort the subshell on a nonzero claude exit (the
+  # bare line-203 failures: no ERR trap inside a subshell); a nonzero
+  # exit that still wrote an envelope proceeds to the shape gate.
+  [ "${claude_status:-0}" -eq 0 ] || [ -s "$last_msg.envelope" ] || {
+    echo "claude -p exited ${claude_status} with no output (API unreachable?)" >&2
+    exit 5
+  }
   # An empty envelope (claude killed mid-run, e.g. host slept) makes
   # jq -e exit 1 with no message (the bare line-191 failures of
   # 2026-07-08); name the cause instead.
