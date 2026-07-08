@@ -114,9 +114,11 @@ struct EngineInner {
 
 impl EngineInner {
     /// Parse and evaluate `code` against the persistent state, returning the
-    /// pipeline's collected output value and the trailing external's exit
-    /// code. Every error path returns nushell's rendered diagnostic (span,
-    /// label, help) as the message.
+    /// intermediate pipelines' collected output values (for the caller to
+    /// print: script-style visibility, issue #2391), the FINAL pipeline's
+    /// collected output value, and the trailing external's exit code. Every
+    /// error path returns nushell's rendered diagnostic (span, label, help)
+    /// as the message.
     ///
     /// `check` mirrors `subprocess.run`: when true (the default), a trailing
     /// external that exits non-zero is an error like any other; when false,
@@ -132,7 +134,7 @@ impl EngineInner {
         env: Option<HashMap<String, String>>,
         interrupt: &Arc<AtomicBool>,
         check: bool,
-    ) -> Result<(Value, i64), String> {
+    ) -> Result<(Vec<Value>, Value, i64), String> {
         let Self {
             engine_state,
             stack,
@@ -214,7 +216,97 @@ impl EngineInner {
 /// Evaluate an already-parsed block against the persistent state: the
 /// post-parse half of [`EngineInner::eval`], split out so `eval` can append
 /// the bash-redirection hint to whatever diagnostic a failure renders.
+///
+/// Multi-statement source runs pipeline by pipeline (each top-level pipeline
+/// as its own IR-compiled block) so that every intermediate pipeline's output
+/// is COLLECTED and returned for the caller to print, instead of nushell's
+/// block semantics where an intermediate value is drained away silently and
+/// an intermediate external writes to the host process stdio -- under the MCP
+/// stdio transport, the protocol stream (issue #2391). Only the final
+/// pipeline's value becomes the eval's result, and only its trailing external
+/// is subject to `check`; an intermediate failure still aborts the eval.
+///
+/// Caveat: source where a statement STARTS with `$in` is collect-wrapped by
+/// the parser into one pipeline (parse_block), so it takes the
+/// single-pipeline path and keeps nushell's block semantics (intermediates
+/// drain); same for intermediates nested inside subexpressions and blocks.
 fn run_block(
+    engine_state: &mut EngineState,
+    stack: &mut Stack,
+    block: &Block,
+    input: Option<Value>,
+    check: bool,
+) -> Result<(Vec<Value>, Value, i64), String> {
+    // One pipeline: evaluate the parse-compiled block as-is (the historical
+    // fast path; nothing intermediate exists to surface).
+    if block.pipelines.len() <= 1 {
+        let (value, exit_code) = run_pipeline(engine_state, stack, block, input, check)?;
+        return Ok((Vec::new(), value, exit_code));
+    }
+
+    // Compile each top-level pipeline into its own block. The parse already
+    // merged every parse-time definition (`def`, aliases) into the engine
+    // state, and `let`/`cd` live on the persistent stack, so evaluating the
+    // pipelines one at a time is observationally the block's own REPL
+    // semantics -- except that each pipeline is now in trailing position, so
+    // its output collects (`OutDest::Value`) instead of draining.
+    let span = block.span.unwrap_or(Span::unknown());
+    let mut sub_blocks: Vec<Block> = block
+        .pipelines
+        .iter()
+        .map(|pipeline| {
+            let mut sub = Block::new();
+            sub.span = block.span;
+            sub.pipelines.push(pipeline.clone());
+            sub
+        })
+        .collect();
+    {
+        let working_set = StateWorkingSet::new(engine_state);
+        for sub in &mut sub_blocks {
+            match nu_engine::compile(&working_set, sub) {
+                Ok(ir_block) => sub.ir_block = Some(ir_block),
+                Err(error) => {
+                    return Err(format_cli_error(
+                        Some(stack),
+                        &working_set,
+                        &error,
+                        Some("nu::compile::error"),
+                    ));
+                }
+            }
+        }
+    }
+
+    let last_index = sub_blocks.len() - 1;
+    let mut intermediates = Vec::with_capacity(last_index);
+    let mut input = input; // `$in` feeds the FIRST pipeline, like block IR.
+    for (index, sub) in sub_blocks.iter().enumerate() {
+        let is_last = index == last_index;
+        if index > 0 {
+            // eval_ir_block checks signals between elements of one pipeline;
+            // this is the same ctrl-c point between the pipelines themselves.
+            engine_state
+                .signals()
+                .check(&span)
+                .map_err(|error| render_shell_error(engine_state, stack, &error))?;
+        }
+        // `check` governs only the final pipeline's trailing external
+        // (documented NuResult semantics); an intermediate external that
+        // fails aborts the eval either way.
+        let (value, exit_code) =
+            run_pipeline(engine_state, stack, sub, input.take(), if is_last { check } else { true })?;
+        if is_last {
+            return Ok((intermediates, value, exit_code));
+        }
+        intermediates.push(value);
+    }
+    unreachable!("the loop returns at the last pipeline and the block is non-empty");
+}
+
+/// Evaluate one compiled block (a whole single-pipeline eval, or one
+/// pipeline of a multi-statement eval) against the persistent state.
+fn run_pipeline(
     engine_state: &mut EngineState,
     stack: &mut Stack,
     block: &Block,
@@ -589,11 +681,13 @@ impl Engine {
         Self {
             inner: Arc::new(Mutex::new(EngineInner {
                 engine_state: initial_engine_state(),
-                // collect_value marks the last command's stdout as
-                // OutDest::Value: a trailing external (or `print`) collects
-                // into the returned value instead of writing to the host
+                // collect_value marks the trailing command's stdout as
+                // OutDest::Value: an external in trailing position collects
+                // into the pipeline's value instead of writing to the host
                 // process stdio, which under MCP stdio transport IS the
-                // protocol stream.
+                // protocol stream. run_block evaluates every top-level
+                // pipeline in trailing position, so this applies to
+                // intermediate statements too (issue #2391).
                 stack: Stack::new().collect_value(),
             })),
         }
@@ -601,18 +695,21 @@ impl Engine {
 
     /// Evaluate nushell source against the persistent state.
     ///
-    /// Returns `(awaitable, handle)`: the awaitable resolves to the pipeline's
-    /// output as native Python objects; `handle.interrupt()` stops this eval
-    /// (and only this eval) the way ctrl-c would. `input` becomes the
+    /// Returns `(awaitable, handle)`: the awaitable resolves to an
+    /// `(intermediates, value, exit_code)` triple of native Python objects --
+    /// `intermediates` holds each non-final pipeline's collected output (for
+    /// the wrapper to print, issue #2391) and `value` is the final
+    /// pipeline's output; `handle.interrupt()` stops this eval (and only
+    /// this eval) the way ctrl-c would. `input` becomes the
     /// pipeline's `$in`; `cwd`/`env` set `PWD` / environment variables for
     /// this and later calls (the stack is persistent). When `cwd` is omitted
     /// the persistent PWD is validated first: a directory that no longer
     /// exists raises with the remedy instead of running somewhere unintended.
     /// Raises `NuError` with nushell's rendered diagnostic.
     ///
-    /// `check=False` (subprocess.run semantics) stops a trailing external's
-    /// non-zero exit from raising: the awaitable then resolves to a
-    /// `(value, exit_code)` pair, keeping the output the external produced.
+    /// `check=False` (subprocess.run semantics) stops the FINAL pipeline's
+    /// trailing external's non-zero exit from raising; `exit_code` then
+    /// carries its exit status (it is always 0 under `check=True`).
     #[pyo3(signature = (code, input=None, cwd=None, env=None, check=true))]
     fn eval<'py>(
         &self,
@@ -638,15 +735,18 @@ impl Engine {
             .await
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
             match result {
-                Ok((value, exit_code)) => Python::attach(|py| {
+                Ok((intermediates, value, exit_code)) => Python::attach(|py| {
+                    let intermediates = intermediates
+                        .into_iter()
+                        .map(|item| value_to_py(py, item))
+                        .collect::<PyResult<Vec<_>>>()?;
                     let value = value_to_py(py, value)?;
-                    if check {
-                        // The exit code is always 0 here (non-zero raised),
-                        // so keep the historical value-only shape.
-                        Ok(value)
-                    } else {
-                        Ok((value, exit_code).into_pyobject(py)?.unbind().into_any())
-                    }
+                    // Uniform (intermediates, value, exit_code) shape; with
+                    // check=true the exit code is always 0 (non-zero raised).
+                    Ok((intermediates, value, exit_code)
+                        .into_pyobject(py)?
+                        .unbind()
+                        .into_any())
                 }),
                 Err(diagnostic) => Err(NuError::new_err(diagnostic)),
             }
@@ -784,6 +884,107 @@ mod tests {
             diagnostic.contains("2>/dev/null"),
             "token missing: {diagnostic}"
         );
+    }
+
+    /// A fresh inner engine + interrupt flag for behavior tests.
+    fn test_inner() -> (EngineInner, Arc<AtomicBool>) {
+        (
+            EngineInner {
+                engine_state: initial_engine_state(),
+                stack: Stack::new().collect_value(),
+            },
+            Arc::new(AtomicBool::new(false)),
+        )
+    }
+
+    #[test]
+    fn intermediate_pipeline_values_are_returned_not_dropped() {
+        let (mut inner, interrupt) = test_inner();
+        let (intermediates, value, exit_code) = inner
+            .eval("'a'; 'b' | str upcase; 'final'", None, None, None, &interrupt, true)
+            .expect("multi-statement eval");
+        assert_eq!(intermediates.len(), 2, "one value per non-final pipeline");
+        assert!(matches!(&intermediates[0], Value::String { val, .. } if val == "a"));
+        assert!(matches!(&intermediates[1], Value::String { val, .. } if val == "B"));
+        assert!(matches!(&value, Value::String { val, .. } if val == "final"));
+        assert_eq!(exit_code, 0);
+    }
+
+    #[test]
+    fn single_pipeline_has_no_intermediates() {
+        let (mut inner, interrupt) = test_inner();
+        let (intermediates, value, _) = inner
+            .eval("'only'", None, None, None, &interrupt, true)
+            .expect("single-statement eval");
+        assert!(intermediates.is_empty());
+        assert!(matches!(&value, Value::String { val, .. } if val == "only"));
+    }
+
+    #[test]
+    fn bindings_and_defs_span_pipelines_within_one_eval() {
+        let (mut inner, interrupt) = test_inner();
+        let (intermediates, value, _) = inner
+            .eval(
+                "def double [x: int] { $x * 2 }; let n = 5; double $n",
+                None,
+                None,
+                None,
+                &interrupt,
+                true,
+            )
+            .expect("def + let + call in one eval");
+        assert_eq!(intermediates.len(), 2);
+        assert!(matches!(intermediates[0], Value::Nothing { .. }));
+        assert!(matches!(intermediates[1], Value::Nothing { .. }));
+        assert!(matches!(value, Value::Int { val: 10, .. }));
+    }
+
+    #[test]
+    fn input_feeds_the_first_pipeline_only() {
+        let (mut inner, interrupt) = test_inner();
+        let (intermediates, value, _) = inner
+            .eval(
+                "str upcase; 'done'",
+                Some(Value::string("hi", Span::unknown())),
+                None,
+                None,
+                &interrupt,
+                true,
+            )
+            .expect("input piped into the first pipeline");
+        assert!(matches!(&intermediates[0], Value::String { val, .. } if val == "HI"));
+        assert!(matches!(&value, Value::String { val, .. } if val == "done"));
+    }
+
+    /// A statement whose FIRST element references `$in` makes the parser
+    /// collect-wrap the WHOLE block into one pipeline (parse_block), so the
+    /// eval takes the single-pipeline path and keeps nushell's own block
+    /// semantics: intermediates drain, the block's value comes back. Pinned
+    /// so the limitation is a decision, not an accident.
+    #[test]
+    fn dollar_in_source_is_block_collected_without_intermediates() {
+        let (mut inner, interrupt) = test_inner();
+        let (intermediates, value, _) = inner
+            .eval(
+                "$in | str upcase; 'done'",
+                Some(Value::string("hi", Span::unknown())),
+                None,
+                None,
+                &interrupt,
+                true,
+            )
+            .expect("$in source evals");
+        assert!(intermediates.is_empty(), "block-collected: no intermediates");
+        assert!(matches!(&value, Value::String { val, .. } if val == "done"));
+    }
+
+    #[test]
+    fn intermediate_failure_aborts_the_eval() {
+        let (mut inner, interrupt) = test_inner();
+        let diagnostic = inner
+            .eval("error make {msg: 'boom'}; 'after'", None, None, None, &interrupt, true)
+            .expect_err("an intermediate failure must abort");
+        assert!(diagnostic.contains("boom"), "diagnostic: {diagnostic}");
     }
 
     #[test]

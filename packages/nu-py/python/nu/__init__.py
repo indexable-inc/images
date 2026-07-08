@@ -48,6 +48,12 @@ Contract:
   string -- an external's stdout, ``to text`` -- comes back as the plain
   ``str``: multiline text round-trips verbatim instead of hiding in a 1x1
   frame whose printed repr clips the cell (issue #2068).
+- Multi-statement source: only the FINAL pipeline's output is the return
+  value; every earlier pipeline's output is collected and printed into the
+  job's stdout (script-style visibility), never silently dropped (issue
+  #2391). ``^git show | to text; ^git status | to text`` returns the status
+  and prints the show. To CAPTURE more than one pipeline's output, make
+  separate calls (or build one final value, e.g. a record).
 - ``await nu.value(code)`` is the escape hatch when you want the plain
   Python value (a scalar, a nested dict) instead of a frame.
 - Values cross natively, not as JSON: dates arrive as UTC ``Datetime``
@@ -381,17 +387,20 @@ async def _run(
             close()
         raise
     else:
-        # check=False resolves to a (value, exit_code) pair; check=True keeps
-        # the engine's historical value-only shape (exit code 0 by survival --
-        # a non-zero trailing external raised inside the engine).
-        if check:
-            value, exit_code = decoded, 0
-        else:
-            if not (isinstance(decoded, tuple) and len(decoded) == 2):
-                raise TypeError(f"engine returned {type(decoded).__name__} for check=False")
-            value, exit_code = decoded
-            if not isinstance(exit_code, int):
-                raise TypeError(f"engine exit code is {type(exit_code).__name__}")
+        # The engine resolves to an (intermediates, value, exit_code) triple:
+        # each non-final pipeline's collected output, the final pipeline's
+        # value, and the trailing external's exit code (always 0 under
+        # check=True -- a non-zero trailing external raised inside the
+        # engine).
+        if not (isinstance(decoded, tuple) and len(decoded) == 3):
+            raise TypeError(f"engine returned {type(decoded).__name__}, expected a triple")
+        intermediates, value, exit_code = decoded
+        if not isinstance(intermediates, list):
+            raise TypeError(f"engine intermediates are {type(intermediates).__name__}")
+        if not isinstance(exit_code, int):
+            raise TypeError(f"engine exit code is {type(exit_code).__name__}")
+        for item in intermediates:
+            _print_intermediate(item)
         state["status"] = "done"
         state["result"] = value
         state["ended"] = loop.time()
@@ -416,6 +425,26 @@ def _rows_frame(rows: list[dict]) -> pl.DataFrame:
         return pl.from_dicts(rows, infer_schema_length=None)
     except (TypeError, pl.exceptions.PolarsError):
         return pl.DataFrame(rows, infer_schema_length=None, strict=False)
+
+
+def _print_intermediate(value: object) -> None:
+    """One non-final pipeline's output, printed into the (captured) stdout.
+
+    Script-style visibility for multi-statement source (issue #2391): the
+    engine collects every intermediate pipeline's output and this prints it,
+    so nothing is silently dropped while the FINAL pipeline's value stays the
+    return value. Each item prints as the shape it would have been returned
+    as: text verbatim (issue #2068's reasoning), a single record as the plain
+    dict (issue #2390), anything else as a frame. ``None`` and the empty
+    string (a statement with no output) stay silent -- printing them would
+    only add blank lines between statements.
+    """
+    if value is None or value == "":
+        return
+    if isinstance(value, (str, dict)):
+        print(value)
+    else:
+        print(_to_frame(value))
 
 
 def _to_frame(decoded: object) -> pl.DataFrame:
@@ -480,9 +509,10 @@ async def nu(
     is a single record, or the plain ``str`` when it is a lone string.
 
     Multi-statement source is fine; the last pipeline's output is the result,
-    and ``let``/``def``/``cd`` persist to later calls (REPL semantics; the
-    engine is per session, so another session's ``cd`` can never move this
-    one's PWD). ``input`` pipes a value in as ``$in`` -- a polars DataFrame,
+    every earlier pipeline's output prints into the job's stdout instead of
+    being silently dropped (issue #2391), and ``let``/``def``/``cd`` persist
+    to later calls (REPL semantics; the engine is per session, so another
+    session's ``cd`` can never move this one's PWD). ``input`` pipes a value in as ``$in`` -- a polars DataFrame,
     list, dict, or scalar (datetimes must be tz-aware). ``cwd`` sets ``PWD``
     and persists like ``cd``; if the remembered directory no longer exists
     the call raises with the remedy instead of silently running elsewhere.

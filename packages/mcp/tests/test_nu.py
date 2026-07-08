@@ -94,6 +94,32 @@ def test_multi_statement_code_is_one_result() -> None:
     assert df["sq"].to_list() == [1, 4, 9]
 
 
+def test_intermediate_pipeline_output_prints_instead_of_dropping(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Issue #2391: a multi-statement cell used to return only the last
+    # pipeline's value and silently drop everything before it (an agent read
+    # `git show | to text; git status | to text` as empty commits). Now each
+    # non-final pipeline's output prints into the captured stdout while the
+    # final pipeline's value stays the return value.
+    result = run(nu("'first' | str upcase; [1 2 3]; 'final'"))
+    assert result == "final"
+    printed = capsys.readouterr().out
+    assert "FIRST" in printed
+    assert "value" in printed  # the [1 2 3] intermediate prints as a frame
+
+
+def test_single_statement_prints_nothing_extra(capsys: pytest.CaptureFixture[str]) -> None:
+    assert run(nu("'only'")) == "only"
+    assert capsys.readouterr().out == ""
+
+
+def test_silent_intermediates_stay_silent(capsys: pytest.CaptureFixture[str]) -> None:
+    # `let` produces no output; printing blank lines for it would be noise.
+    assert run(nu.value("let quiet = 1; $quiet + 1")) == 2
+    assert capsys.readouterr().out == ""
+
+
 def test_state_persists_across_calls_like_a_repl() -> None:
     run(nu("let repl_answer = 42"))
     run(nu("def double [x] { $x * 2 }"))
