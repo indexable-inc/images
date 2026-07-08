@@ -190,8 +190,16 @@ $(cat "$snap")" </dev/null > "$last_msg.envelope"
   # jq -e exit 1 with no message (the bare line-191 failures of
   # 2026-07-08); name the cause instead.
   [ -s "$last_msg.envelope" ] || { echo "claude -p produced no output" >&2; exit 5; }
-  jq -er 'if .is_error then error("claude -p errored: " + (.subtype // "unknown")) else .result end' \
-    "$last_msg.envelope" > "$last_msg"
+  # Name every envelope shape: is_error, and the null-result envelope the
+  # 12:30Z API-drop tick produced (jq -e exits 1 silently on null). Keep
+  # the envelope as evidence whenever the gate rejects it.
+  jq -er 'if (.is_error // false) then error("claude -p errored: " + (.subtype // "unknown"))
+          elif (.result // "") == "" then error("claude -p envelope has no result (subtype: " + (.subtype // "none") + ")")
+          else .result end' "$last_msg.envelope" > "$last_msg" || {
+    cp "$last_msg.envelope" "$HOME/.local/share/symphony/overseer/last-envelope.rejected"
+    echo "overseer: bad claude envelope; saved to last-envelope.rejected" >&2
+    exit 5
+  }
 )
 
 # The reply must be the {digest, attention, agents, notes} JSON object;
