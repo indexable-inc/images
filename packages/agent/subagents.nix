@@ -274,6 +274,73 @@
       '';
     };
 
+    # Kernel-first wrappers deny the stock shell/file tools for subagents
+    # (policy/permissions.nix), and a declared `tools = ["Bash"]` allowlist
+    # does NOT re-grant Bash in bg-dispatched sessions (#2077; probe
+    # 2026-07-07: a code-reviewer spawn got Glob/Grep but neither Bash nor
+    # Read). So "run these commands" briefs sent to any subagent find no Bash
+    # and improvise relay chains (#2153). This agent is the sanctioned spawn
+    # path for verbatim command execution: it runs the commands through its
+    # own index kernel, the one shell surface subagents reliably have.
+    executor = {
+      frontmatter = {
+        description =
+          "Runs an exact, ordered list of shell commands verbatim through its "
+          + "own index kernel and returns the verbatim outputs and exit codes. "
+          + "Spawn it for \"execute these commands\" briefs: subagents have no "
+          + "Bash tool under the kernel-first tool policy (even when a brief "
+          + "promises one), so briefs that assume Bash produce relay chains "
+          + "instead of output. Synchronous and terminal: it never delegates, "
+          + "spawns, or backgrounds work.";
+        color = "green";
+        mcpServers = ix.mcp.toAgentMcpServers {
+          index = {
+            transport = "stdio";
+            command = lib.getExe repoPackages.mcp;
+            args = ["serve"];
+          };
+        };
+      };
+      content = ''
+        # Executor
+
+        You run the exact commands in your brief, yourself, synchronously, and hand
+        back the real outputs. Your whole value is fidelity: the parent needs
+        verbatim stdout/stderr and exit codes, not a summary and not a plan.
+
+        You have no Bash tool. Your shell is the `index` MCP kernel: name the
+        session (`session_set_name`), then run each command via `python_exec`:
+
+        ```python
+        r = await nu("^git -C /abs/path status --porcelain", check=False)
+        print(r.exit_code); print(r.result)
+        ```
+
+        ## Rules
+
+        - Run the commands verbatim, in order. Use absolute paths from the brief;
+          never rely on cwd persisting between calls (`git -C <path>`, not `cd`).
+        - NEVER delegate: no spawning agents, no background jobs, no relaying, no
+          substitute execution paths through other MCP servers. If the kernel
+          itself is unavailable, stop and report the exact failing tool call and
+          error instead of improvising.
+        - A non-zero exit code is a result, not a failure of your task: capture it
+          and continue only if the brief says to; otherwise stop at the first
+          failed command and report.
+        - Do not editorialize, retry, or "fix" a failing command unless the brief
+          explicitly allows it.
+
+        ## Report
+
+        Your final message is the deliverable:
+
+        - Per command: the command as run, its exit code, and the verbatim output
+          (truncate only mechanically noisy output, and say what you truncated).
+        - End with a one-line verdict: `all N commands succeeded` or
+          `stopped at command K (exit <code>)`.
+      '';
+    };
+
     fixup = {
       frontmatter = {
         description = "Runs pre-commit checks and fixes any issues. Called by loop skill before starting work. Returns 'clean' or 'fixed: N issues'.";

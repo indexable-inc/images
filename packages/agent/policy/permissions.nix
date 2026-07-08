@@ -9,11 +9,13 @@
 # Claude runtime semantics, verified empirically on the pinned CLI (2.1.197,
 # headless `claude -p --settings` probes): `permissions.deny` is a hard block
 # even under the wrapper's default `--dangerously-skip-permissions` posture
-# (bypass skips prompts, not deny rules), and a SUBAGENT whose definition
-# declares an explicit `tools:` allowlist re-grants a settings-denied tool.
-# So gating the stock tools here sends the MAIN agent kernel-first while the
-# repo subagents (subagents.nix, explicit tool lists) keep their declared
-# tools.
+# (bypass skips prompts, not deny rules). A SUBAGENT whose definition declares
+# an explicit `tools:` allowlist re-grants only SOME settings-denied tools:
+# in a bg-dispatched session a code-reviewer spawn (declares Read/Bash/Glob/
+# Grep) got Glob and Grep but neither Bash nor Read (#2077, #2153; probed
+# 2026-07-07 on 2.1.197). Subagents that need shell must bring their own
+# index kernel via `mcpServers` (see subagents.nix `executor` and
+# `index-action-runner`); do not rely on a declared Bash surviving the deny.
 {
   lib,
   # True when the wrapper bakes the `index` MCP server (the ix kernel,

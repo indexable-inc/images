@@ -668,6 +668,10 @@
         high-stakes decisions; cheaper tiers for mechanical edits, search, and
         settled execution. For simple delegated questions, use the MCP subagent
         tool to spawn Codex on `gpt-5.5` with low reasoning.
+        Subagents inherit the kernel-first tool denies: no Bash, Read, or
+        Edit, even when an agent definition declares them. Brief them to work
+        through their own index kernel, and for verbatim command execution
+        spawn the `executor` agent; never promise a subagent a Bash tool.
         When a request branches off the current conversation (a side task,
         fix, or change that is not the thread's main line), dispatch it to a
         named background subagent by default and keep the main thread
@@ -680,6 +684,10 @@
         reasoning, but still benefit from separate context. Doing a mid-conversation
         side task inline blocks the user's follow-ups; a background subagent keeps the
         live conversation fluid.
+        Briefs that promised a default subagent "your Bash tool" (stripped by
+        the settings deny) produced relay swarms: in one session 130 subagents
+        reported the missing tool and improvised shell through Monitor and the
+        Blender MCP code runner (index#2153).
       '';
     };
   }
