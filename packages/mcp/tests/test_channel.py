@@ -675,42 +675,29 @@ def test_pr_resource_html_renders_every_check_state(monkeypatch: pytest.MonkeyPa
     assert '<span class="state action_required">action_required</span>' in html
 
 
-class _FakeFrame:
-    """Stands in for the `pl.DataFrame` a real `nu()` call returns; watch_pr only
-    calls `.to_dicts()` on the refresh-loop result."""
-
-    def __init__(self, rows: list[dict[str, object]]) -> None:
-        self._rows = rows
-
-    def to_dicts(self) -> list[dict[str, object]]:
-        return self._rows
-
-
 class _FakeNu:
     """A stand-in for the bundled `nu` module: `watch_pr` does `import nu as
     nu_call` then calls it directly (`nu_call(code, ...)`), so this needs to be
     an instance whose TYPE defines `__call__` -- an attribute set on a plain
-    instance would not make `instance(...)` callable."""
+    instance would not make `instance(...)` callable. The refresh pipeline ends
+    in `from json` on a gh object, a nu record, which `nu()` returns as a plain
+    dict (issue #2390)."""
 
     async def __call__(
         self, code: str, *, cwd: str | None = None, env: dict[str, str] | None = None, timeout: float = 60
-    ) -> _FakeFrame:
+    ) -> dict[str, object]:
         assert "gh pr view" in code
-        return _FakeFrame(
-            [
-                {
-                    "number": 1856,
-                    "title": "fix: something",
-                    "state": "MERGED",
-                    "mergeStateStatus": "CLEAN",
-                    "statusCheckRollup": [{"name": "build", "conclusion": "SUCCESS"}],
-                    "url": "https://github.com/o/r/pull/1856",
-                    "autoMergeRequest": None,
-                    "isDraft": False,
-                    "reviewDecision": "APPROVED",
-                }
-            ]
-        )
+        return {
+            "number": 1856,
+            "title": "fix: something",
+            "state": "MERGED",
+            "mergeStateStatus": "CLEAN",
+            "statusCheckRollup": [{"name": "build", "conclusion": "SUCCESS"}],
+            "url": "https://github.com/o/r/pull/1856",
+            "autoMergeRequest": None,
+            "isDraft": False,
+            "reviewDecision": "APPROVED",
+        }
 
 
 def test_watch_pr_slugs_resource_id_and_renders_without_nameerror(

@@ -9,8 +9,8 @@ binary runs with ``^cmd``::
 
     df = await nu("ls | where size > 1kb | sort-by size")
     df = await nu("ps | where cpu > 5 | sort-by cpu")
-    df = await nu("open Cargo.toml | get package")          # record -> 1-row frame
-    df = await nu("http get https://api.github.com/repos/nushell/nushell")
+    rec = await nu("open Cargo.toml | get package")         # record -> plain dict
+    rec = await nu("http get https://api.github.com/repos/nushell/nushell")
     text = await nu("^git status --short")                  # external binary via ^ (stdout str)
     df = await nu("^gh pr list --json number,title | from json")  # JSON-mode CLI
 
@@ -39,12 +39,15 @@ build, use the bundled ``nix`` module (a live dashboard build-tree pane), not
 
 Contract:
 
-- ``await nu(code)`` returns a ``pl.DataFrame`` for structured output: a
-  table maps directly, a record becomes one row, a list of scalars / a
-  non-str scalar become a single ``value`` column, no output (``null``) an
-  empty frame. A lone string -- an external's stdout, ``to text`` -- comes
-  back as the plain ``str``: multiline text round-trips verbatim instead of
-  hiding in a 1x1 frame whose printed repr clips the cell (issue #2068).
+- ``await nu(code)`` returns a ``pl.DataFrame`` for tabular output: a
+  table (list of records) maps directly, a list of scalars / a non-str
+  scalar become a single ``value`` column, no output (``null``) an empty
+  frame. A single record is a struct, not a table, so it comes back as a
+  plain ``dict``: ``(await nu("... | complete"))['exit_code']`` just works
+  instead of needing ``df.to_dicts()[0]`` first (issue #2390). A lone
+  string -- an external's stdout, ``to text`` -- comes back as the plain
+  ``str``: multiline text round-trips verbatim instead of hiding in a 1x1
+  frame whose printed repr clips the cell (issue #2068).
 - ``await nu.value(code)`` is the escape hatch when you want the plain
   Python value (a scalar, a nested dict) instead of a frame.
 - Values cross natively, not as JSON: dates arrive as UTC ``Datetime``
@@ -278,13 +281,14 @@ class NuResult(NamedTuple):
 
     ``result`` is whatever the call would have returned anyway, built from
     the output the pipeline produced (a failing ``grep`` still hands over
-    the lines it matched before exiting non-zero; a lone string stays plain
-    text); ``exit_code`` is the trailing external's exit code, ``0`` when
-    the pipeline ends in an internal command, negative-signal when the
-    external was signal-terminated (the subprocess convention).
+    the lines it matched before exiting non-zero; a record stays a plain
+    dict and a lone string stays plain text); ``exit_code`` is the trailing
+    external's exit code, ``0`` when the pipeline ends in an internal
+    command, negative-signal when the external was signal-terminated (the
+    subprocess convention).
     """
 
-    result: pl.DataFrame | str
+    result: pl.DataFrame | dict[str, object] | str
     exit_code: int
 
 
@@ -416,15 +420,15 @@ def _rows_frame(rows: list[dict]) -> pl.DataFrame:
 
 def _to_frame(decoded: object) -> pl.DataFrame:
     """Normalize a pipeline value into a ``pl.DataFrame`` (a lone ``str``
-    never reaches here: ``nu()`` returns it verbatim, issue #2068)."""
+    or a single record never reaches here: ``nu()`` returns the ``str``
+    verbatim (issue #2068) and the record as a plain ``dict`` (issue
+    #2390))."""
     import polars as pl
 
     if decoded is None:
         return pl.DataFrame()
     if isinstance(decoded, list) and decoded and all(isinstance(r, dict) for r in decoded):
         return _rows_frame(decoded)
-    if isinstance(decoded, dict):
-        return _rows_frame([decoded])
     if isinstance(decoded, list):
         try:
             series = pl.Series("value", decoded)
@@ -445,7 +449,7 @@ async def nu(
     timeout: float | None = ...,
     name: str | None = ...,
     check: Literal[True] = ...,
-) -> pl.DataFrame | str: ...
+) -> pl.DataFrame | dict[str, object] | str: ...
 
 
 @overload
@@ -470,10 +474,10 @@ async def nu(
     timeout: float | None = None,
     name: str | None = None,
     check: bool = True,
-) -> pl.DataFrame | str | NuResult:
+) -> pl.DataFrame | dict[str, object] | str | NuResult:
     """Run ``code`` as nushell source and return the result as a polars
-    DataFrame, or as the plain ``str`` when the pipeline's value is a lone
-    string.
+    DataFrame for tabular output, a plain ``dict`` when the pipeline's value
+    is a single record, or the plain ``str`` when it is a lone string.
 
     Multi-statement source is fine; the last pipeline's output is the result,
     and ``let``/``def``/``cd`` persist to later calls (REPL semantics; the
@@ -486,11 +490,12 @@ async def nu(
     ``timeout`` interrupts the evaluation and discards the engine state (see
     the module docstring); ``name`` labels the running job in the dashboard.
 
-    Shape normalization: table -> frame; record -> 1-row frame; list of
-    scalars / non-str scalar -> a single ``value`` column; a lone string ->
-    the plain ``str`` (an external's stdout round-trips verbatim); no output
-    -> empty frame. A failure raises :class:`NuError` carrying nushell's
-    diagnostic.
+    Shape normalization: table -> frame; record -> plain ``dict`` (a struct,
+    not a table: ``(await nu("do -i { ^cmd } | complete"))['exit_code']``
+    reads directly, issue #2390); list of scalars / non-str scalar -> a
+    single ``value`` column; a lone string -> the plain ``str`` (an
+    external's stdout round-trips verbatim); no output -> empty frame. A
+    failure raises :class:`NuError` carrying nushell's diagnostic.
 
     ``check=False`` (subprocess.run semantics) keeps a grep-style pipeline
     usable: a trailing external's non-zero exit stops raising and the call
@@ -502,13 +507,21 @@ async def nu(
     value, exit_code = await _run(
         code, input=input, cwd=cwd, env=env, timeout=timeout, name=name, check=check
     )
+    result: pl.DataFrame | dict[str, object] | str
     if isinstance(value, str):
         # A lone string is TEXT (an external's stdout, `to text`), not a table:
         # hand it back verbatim. Framing it as a 1x1 DataFrame made every
         # `print()` of it write polars' width-clipped box repr into the
         # captured stdout, and the full text was unrecoverable afterwards
         # (issue #2068).
-        result: pl.DataFrame | str = value
+        result = value
+    elif isinstance(value, dict):
+        # A single record is a STRUCT, not a table: hand it back as the plain
+        # dict. Framing it as a 1-row DataFrame forced every field read
+        # through `df.to_dicts()[0]`, and the natural `d['exit_code']` /
+        # `d.get('stderr')` on a `| complete` result failed with
+        # "'DataFrame' object has no attribute 'get'" (issue #2390).
+        result = value
     else:
         result = _to_frame(value)
     if check:
@@ -528,7 +541,8 @@ async def value(
     """Like :func:`nu`, but return the plain Python value un-framed.
 
     The escape hatch for a scalar (``await nu.value("sys host | get
-    hostname")``) or a nested structure you want as plain dicts/lists.
+    hostname")``) or a table/list you want as plain lists instead of a
+    frame (a single record already arrives as a plain dict from :func:`nu`).
     """
     value, _ = await _run(code, input=input, cwd=cwd, env=env, timeout=timeout, name=name)
     return value

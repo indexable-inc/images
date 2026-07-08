@@ -71,7 +71,9 @@ MODULES: tuple[Module, ...] = (
         "engine): run a pipeline and get a polars DataFrame back -- "
         '`await nu("ls | where size > 1kb | sort-by size")`, `open Cargo.toml`, `from csv`, '
         "`http get`; run an external binary with `^cmd` (`^git status`, `^gh pr list --json .. "
-        "| from json`); a lone string result (an external's plain stdout) returns as the full "
+        "| from json`); a single record (a `| complete` result, `open Cargo.toml | get package`) "
+        "returns as a plain dict, so `res['exit_code']` reads directly; a lone string result "
+        "(an external's plain stdout) returns as the full "
         "`str`, never a clipped 1x1 frame; `let`/`def`/`cd` persist across calls like a REPL "
         "(per session -- one agent's `cd` never moves another's PWD); "
         "`input=df` pipes a frame through a pipeline; `nu.value(code)` returns the plain Python "

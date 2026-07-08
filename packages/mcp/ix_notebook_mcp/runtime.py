@@ -1965,11 +1965,12 @@ async def watch_pr(
         )
 
     async def refresh() -> dict[str, Any]:
-        out = await run_nu(
+        # `from json` on a gh object yields a nu record, which nu() returns as
+        # a plain dict (issue #2390).
+        row: dict[str, Any] = await run_nu(
             'gh pr view $env.PR --json number,title,state,mergeStateStatus,statusCheckRollup,'
             'url,autoMergeRequest,isDraft,reviewDecision | complete | get stdout | from json'
         )
-        row = out.to_dicts()[0]
         checks = row.get("statusCheckRollup") or []
         title = row.get("title") or f"PR {row.get('number') or clean_pr}"
         state.update(
@@ -1990,9 +1991,13 @@ async def watch_pr(
     if auto_merge:
         flag = f"--{merge_method}"
         delete = "--delete-branch" if delete_branch else ""
-        merge = await run_nu(f"gh pr merge $env.PR --auto {flag} {delete} | complete")
-        if int(merge["exit_code"][0]) != 0:
-            state["error"] = str(merge["stderr"][0] or merge["stdout"][0])
+        # `| complete` yields a nu record: a plain dict, not a 1-row frame
+        # (issue #2390).
+        merge: dict[str, Any] = await run_nu(
+            f"gh pr merge $env.PR --auto {flag} {delete} | complete"
+        )
+        if int(merge["exit_code"]) != 0:
+            state["error"] = str(merge["stderr"] or merge["stdout"])
 
     last: dict[str, Any] = {}
     while True:
