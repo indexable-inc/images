@@ -17,8 +17,13 @@
 # E/F selection used to flag patterns the repo deliberately allows (e.g. the
 # importorskip-then-import pattern in tests -> E402), reading as "my change
 # broke lint" (#2393).
-{lib}: let
-  policy = builtins.fromTOML (builtins.readFile ../ruff.toml);
+{
+  lib,
+  # Path to the checked-in /ruff.toml policy, injected by lib/default.nix from
+  # `paths.root` so this module never climbs the tree with a `../` literal.
+  ruffToml,
+}: let
+  policy = lib.importTOML ruffToml;
   banMessage = policy.lint.flake8-tidy-imports.banned-api."typing.cast".msg;
   banConfig = ''lint.flake8-tidy-imports.banned-api."typing.cast".msg = "${banMessage}"'';
 in {

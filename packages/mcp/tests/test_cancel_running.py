@@ -162,7 +162,7 @@ def test_cancel_running_spares_a_job_the_call_deliberately_spawned(
         spawned.cancel()  # cleanup before the loop closes
         return foreground, spawned
 
-    foreground, spawned = asyncio.run(scenario())
+    foreground, _spawned = asyncio.run(scenario())
     assert foreground.status == "cancelled"
     assert "foreground side effect ran" not in (foreground.text or "")
 
