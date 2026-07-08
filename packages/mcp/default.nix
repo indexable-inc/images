@@ -5499,6 +5499,34 @@
       mkdir -p "$out"
     '';
 
+  # The store's async facade (packages/mcp/tests/test_store_async.py,
+  # index#2348): AsyncConn confines every store call to one worker thread off
+  # the shared event loop, and the pane bridge's `data_version` idle gate
+  # re-renders only on a foreign commit. Reuses the channel interpreter
+  # (ix_notebook_mcp + aiohttp + pytest).
+  storeAsyncTestSource = builtins.path {
+    name = "ix-mcp-store-async-test";
+    path = ./tests/test_store_async.py;
+  };
+  storeAsyncTests =
+    pkgs.runCommand "ix-mcp-store-async-tests"
+    {
+      nativeBuildInputs = [channelTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${storeAsyncTestSource} "$TMPDIR/test_store_async.py"
+      ${lib.getExe channelTestPython} -m pytest "$TMPDIR/test_store_async.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp store-async tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      cat stdout
+      mkdir -p "$out"
+    '';
+
   # Background-task failure reporting (packages/mcp/tests/test_task_errors.py):
   # a fire-and-forget task that dies with an unretrieved exception must be
   # reported at completion into `task_errors` (asyncio's own warning only fires
@@ -6030,6 +6058,7 @@ in
               apiSmoke
               inputsTests
               channelTests
+              storeAsyncTests
               mcpUiTests
               taskErrorsTests
               readStatsTests

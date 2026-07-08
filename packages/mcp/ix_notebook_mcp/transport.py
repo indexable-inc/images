@@ -150,7 +150,9 @@ async def pump_outbox(
     cfg = config()
     if not cfg.store_path:
         return
-    conn = store.connect(cfg.store_path)
+    # Through the async facade: `take_outbox` deletes as it reads, and on a fat
+    # store that write used to run inline on the shared event loop (index#2348).
+    db = store.AsyncConn(cfg.store_path)
     try:
         while True:
             # Wait for the handshake before draining, so rows that accrue during
@@ -164,7 +166,7 @@ async def pump_outbox(
                 # server's own session id. A job lifecycle event addressed to
                 # another session stays queued for its own pump instead of
                 # waking this client (issue #2165).
-                rows = store.take_outbox(conn, session=cfg.server_session_id)
+                rows = await db.run(store.take_outbox, session=cfg.server_session_id)
             except Exception:
                 rows = []  # best-effort: a read error this tick just retries next tick
             for row in rows:
@@ -186,7 +188,7 @@ async def pump_outbox(
                     return
             await anyio.sleep(_OUTBOX_POLL_SECONDS)
     finally:
-        conn.close()
+        await db.close()
 
 
 # ASGI plumbing types for the HTTP transport's auth gate. `object` values (not

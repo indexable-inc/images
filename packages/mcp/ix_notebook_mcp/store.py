@@ -12,11 +12,22 @@ writer.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import functools
 import json
 import sqlite3
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import TYPE_CHECKING, TypeVar
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from typing import Concatenate, ParamSpec
+
+    _P = ParamSpec("_P")
+_T = TypeVar("_T")
 
 
 def _now() -> float:
@@ -173,6 +184,68 @@ def connect(path: str | Path) -> sqlite3.Connection:
     conn.executescript(_SCHEMA)
     _migrate(conn)
     return conn
+
+
+class AsyncConn:
+    """The store for an asyncio host: the same file, every call confined to one
+    worker thread.
+
+    Serve-side consumers (the data API, the pane bridge, the outbox pump, the
+    reply tool) share the MCP transport's event loop. A store call there is
+    synchronous SQLite, and once a session's store carries multi-MB output rows
+    the blob reads block the loop long enough to starve MCP stdio -- from the
+    client that is indistinguishable from a kernel wedge (index#2348). Confining
+    the connection to a private single-thread executor makes a slow read cost
+    latency on its own caller only, and serializes access exactly as the shared
+    loop used to. The connection opens lazily on the worker thread itself, so
+    sqlite3's ``check_same_thread`` guard keeps enforcing the confinement.
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        # The connection opens lazily on the worker thread, so re-run connect()'s
+        # eager None guard here: a missing path must fail at construction (where
+        # `serve` startup surfaces it), not on the first request.
+        if path is None:
+            raise ValueError("store path is required (got None)")
+        self._path = path
+        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ix-store")
+        self._conn: sqlite3.Connection | None = None
+
+    def _bound(self) -> sqlite3.Connection:
+        # Worker-thread only: the single-worker pool makes this race-free.
+        if self._conn is None:
+            self._conn = connect(self._path)
+        return self._conn
+
+    def _invoke(
+        self,
+        fn: Callable[Concatenate[sqlite3.Connection, _P], _T],
+        args: tuple,
+        kwargs: dict,
+    ) -> _T:
+        return fn(self._bound(), *args, **kwargs)
+
+    async def run(
+        self,
+        fn: Callable[Concatenate[sqlite3.Connection, _P], _T],
+        /,
+        *args: _P.args,
+        **kwargs: _P.kwargs,
+    ) -> _T:
+        """Run ``fn(conn, *args, **kwargs)`` on the store's worker thread."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            self._pool, functools.partial(self._invoke, fn, args, kwargs)
+        )
+
+    async def close(self) -> None:
+        def _close() -> None:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
+
+        await asyncio.get_running_loop().run_in_executor(self._pool, _close)
+        self._pool.shutdown(wait=False)
 
 
 def _migrate(conn: sqlite3.Connection) -> None:

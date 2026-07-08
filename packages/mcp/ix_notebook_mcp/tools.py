@@ -35,7 +35,6 @@ import json
 import logging
 import os
 import re
-import sqlite3
 import uuid
 import weakref
 from typing import Annotated
@@ -47,7 +46,7 @@ from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData
 from pydantic import AnyUrl, Field
 
-from . import guide, mcp_ui, outputs, resources_bridge
+from . import guide, mcp_ui, outputs, resources_bridge, store
 from .config import config, server_version
 from .kernel import current_kernel
 
@@ -692,13 +691,14 @@ async def kernel_trace(ctx: Context | None = None) -> str:
 
 # The reply tool's store connection, opened lazily on first reply. The tool runs
 # in the server process (the kernel's `events` writes come from its own
-# connection), so it needs its own handle on the shared WAL store.
-_reply_conn: sqlite3.Connection | None = None
+# connection), so it needs its own handle on the shared WAL store. The async
+# facade keeps its writes off the shared event loop (index#2348).
+_reply_db: store.AsyncConn | None = None
 
 
-def _reply_store() -> sqlite3.Connection:
-    global _reply_conn
-    if _reply_conn is None:
+def _reply_store() -> store.AsyncConn:
+    global _reply_db
+    if _reply_db is None:
         # `store_path` is None outside `serve` (e.g. an embedder driving the
         # tools directly), which needs the same error as having no config at all.
         try:
@@ -709,10 +709,8 @@ def _reply_store() -> sqlite3.Connection:
             raise McpError(
                 ErrorData(code=types.INTERNAL_ERROR, message="no store configured; reply needs `ix-mcp serve`")
             )
-        from . import store
-
-        _reply_conn = store.connect(path)
-    return _reply_conn
+        _reply_db = store.AsyncConn(path)
+    return _reply_db
 
 
 @mcp.tool(structured_output=False, description=guide.REPLY)
@@ -728,17 +726,15 @@ async def reply(
     await _identify_client_once(ctx)
     # Deliberately not gated on session_set_name: a reply answers a channel event
     # (often the session's very first act) and creates no dashboard run to label.
-    from . import store
-
-    conn = _reply_store()
-    if not store.resource_live(conn, resource):
+    db = _reply_store()
+    if not await db.run(store.resource_live, resource):
         raise McpError(
             ErrorData(
                 code=types.INVALID_PARAMS,
                 message=f"no live resource {resource!r}; pass the id from the <channel resource=...> attribute",
             )
         )
-    store.add_event(conn, resource=resource, kind="reply", body=json.dumps({"text": text}))
+    await db.run(store.add_event, resource=resource, kind="reply", body=json.dumps({"text": text}))
     return [outputs.text("sent")]
 
 

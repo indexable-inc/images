@@ -73,8 +73,8 @@ def _app(tmp_path: Path) -> tuple[Config, sqlite3.Connection]:
     return cfg, conn
 
 
-async def _client(cfg: Config, conn: sqlite3.Connection) -> TestClient:
-    client = TestClient(TestServer(dashboard.build_app(cfg, conn)))
+async def _client(cfg: Config) -> TestClient:
+    client = TestClient(TestServer(dashboard.build_app(cfg, store.AsyncConn(cfg.store_path))))
     await client.start_server()
     return client
 
@@ -89,7 +89,7 @@ def test_api_input_network_gate(tmp_path: Path) -> None:
         # rides in HTML the read endpoints serve, so it is not a secret -- input is
         # authorized by the network boundary, like /api/exec.
         untrusted = Config(workdir=tmp_path, store_path=db, host="100.64.0.1")
-        client = await _client(untrusted, conn)
+        client = await _client(untrusted)
         try:
             resp = await client.post("/api/input", data=body)
             assert resp.status == 403
@@ -98,7 +98,7 @@ def test_api_input_network_gate(tmp_path: Path) -> None:
             await client.close()
         # Trusting the tailnet (what the fleet sets) accepts it.
         trusted = Config(workdir=tmp_path, store_path=db, host="100.64.0.1", exec_trust_network=True)
-        client = await _client(trusted, conn)
+        client = await _client(trusted)
         try:
             resp = await client.post("/api/input", data=body)
             assert resp.status == 200
@@ -113,7 +113,7 @@ def test_api_input_accepts_open_channel_and_queues(tmp_path: Path) -> None:
     async def run() -> None:
         cfg, conn = _app(tmp_path)
         store.open_channel(conn, id="cap", title="t")
-        client = await _client(cfg, conn)
+        client = await _client(cfg)
         try:
             resp = await client.post(
                 "/api/input", data=json.dumps({"channel": "cap", "payload": {"value": "hi"}})
@@ -135,7 +135,7 @@ def test_api_input_accepts_open_channel_and_queues(tmp_path: Path) -> None:
 def test_api_input_rejects_unknown_and_closed_channel(tmp_path: Path) -> None:
     async def run() -> None:
         cfg, conn = _app(tmp_path)
-        client = await _client(cfg, conn)
+        client = await _client(cfg)
         try:
             resp = await client.post(
                 "/api/input", data=json.dumps({"channel": "ghost", "payload": 1})
@@ -152,7 +152,7 @@ def test_api_input_validation_and_size_cap(tmp_path: Path) -> None:
     async def run() -> None:
         cfg, conn = _app(tmp_path)
         store.open_channel(conn, id="cap", title="t")
-        client = await _client(cfg, conn)
+        client = await _client(cfg)
         try:
             # Missing payload key is a 400 (distinct from a closed channel's 404).
             resp = await client.post("/api/input", data=json.dumps({"channel": "cap"}))
@@ -174,7 +174,7 @@ def test_api_input_validation_and_size_cap(tmp_path: Path) -> None:
 def test_api_input_preflight_returns_cors(tmp_path: Path) -> None:
     async def run() -> None:
         cfg, conn = _app(tmp_path)
-        client = await _client(cfg, conn)
+        client = await _client(cfg)
         try:
             resp = await client.options("/api/input")
             assert resp.status == 204

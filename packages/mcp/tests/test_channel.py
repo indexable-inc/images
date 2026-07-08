@@ -516,7 +516,7 @@ def test_sse_streams_new_events_only(tmp_path: Path) -> None:
         cfg = Config(workdir=tmp_path, store_path=db)
         # History from before the subscription must not replay.
         store.add_event(conn, resource="panel", kind="reply", body=json.dumps({"text": "old"}))
-        client = TestClient(TestServer(dashboard.build_app(cfg, conn)))
+        client = TestClient(TestServer(dashboard.build_app(cfg, store.AsyncConn(cfg.store_path))))
         await client.start_server()
         try:
             async with client.get("/api/resources/panel/events") as resp:
@@ -555,7 +555,7 @@ def test_reply_tool_appends_event_for_live_resource(tmp_path: Path, monkeypatch:
         conn = store.connect(db)
         cfg = Config(workdir=tmp_path, store_path=db)
         monkeypatch.setattr("ix_notebook_mcp.tools.config", lambda: cfg)
-        monkeypatch.setattr(tools, "_reply_conn", None)
+        monkeypatch.setattr(tools, "_reply_db", None)
         monkeypatch.setattr(tools, "_dashboard_started", True)
 
         # An unknown/closed resource is refused loudly, and nothing is written.

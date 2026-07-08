@@ -23,7 +23,6 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
-import sqlite3
 
 from aiohttp import web
 
@@ -77,12 +76,14 @@ def landing_html() -> str:
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", ""})
 
 
-def build_app(config: Config, conn: sqlite3.Connection) -> web.Application:
-    """Assemble the data API over an open store ``conn``.
+def build_app(config: Config, db: store.AsyncConn) -> web.Application:
+    """Assemble the data API over the store's async facade ``db``.
 
     Split out of :func:`start` so the routes (notably the token-gated
     ``/api/exec`` write path) are testable with an in-memory app and a fake
-    kernel, without binding a socket."""
+    kernel, without binding a socket. Every store read goes through ``db`` so a
+    slow read (a fat store's output blobs) costs latency on its request only,
+    never the shared event loop the MCP transport runs on (index#2348)."""
     app = web.Application()
 
     async def index(_request: web.Request) -> web.Response:
@@ -109,24 +110,24 @@ def build_app(config: Config, conn: sqlite3.Connection) -> web.Application:
         return web.Response(text=landing_html(), content_type="text/html")
 
     async def jobs(_request: web.Request) -> web.Response:
-        return web.json_response(store.recent(conn, limit=feed.JOBS_LIMIT))
+        return web.json_response(await db.run(store.recent, limit=feed.JOBS_LIMIT))
 
     async def resources(_request: web.Request) -> web.Response:
-        return web.json_response(store.live_resources(conn))
+        return web.json_response(await db.run(store.live_resources))
 
     async def cells(_request: web.Request) -> web.Response:
-        return web.json_response(store.cells(conn))
+        return web.json_response(await db.run(store.cells))
 
     async def snapshot(_request: web.Request) -> web.Response:
         # The whole presentation in one read, the embed contract an external
         # consumer (the room server) polls; `rev` lets it skip unchanged renders.
-        return web.json_response(feed.snapshot(conn))
+        return web.json_response(await db.run(feed.snapshot))
 
     async def job(request: web.Request) -> web.Response:
         # One execution by id: the rich outputs for the `jobs['<id>']` a
         # python_exec tool result already names, so an embedder renders that run's
         # tables/plots/HTML beside the tool call.
-        one = feed.job(conn, request.match_info["id"])
+        one = await db.run(feed.job, request.match_info["id"])
         if one is None:
             return web.json_response({"error": "no such job"}, status=404)
         return web.json_response(one)
@@ -140,7 +141,7 @@ def build_app(config: Config, conn: sqlite3.Connection) -> web.Application:
         # entirely from the store, like every other GET here.
         from . import mcp_ui
 
-        one = feed.job(conn, request.match_info["id"])
+        one = await db.run(feed.job, request.match_info["id"])
         if one is None:
             return web.json_response({"error": "no such job"}, status=404)
         html = mcp_ui.embedded_html(mcp_ui.job_payload(one))
@@ -253,14 +254,14 @@ def build_app(config: Config, conn: sqlite3.Connection) -> web.Application:
             return web.json_response(
                 {"error": "missing 'payload'"}, status=400, headers=_CORS_HEADERS
             )
-        if not store.channel_open(conn, channel):
+        if not await db.run(store.channel_open, channel):
             # Unknown or already-closed channel: refuse rather than queue input no
             # awaiter will ever read (and so an attacker cannot grow the table by
             # posting to random ids).
             return web.json_response(
                 {"error": "no such open channel"}, status=404, headers=_CORS_HEADERS
             )
-        store.add_input(conn, channel=channel, payload=json.dumps(body["payload"]))
+        await db.run(store.add_input, channel=channel, payload=json.dumps(body["payload"]))
         return web.json_response({"ok": True}, headers=_CORS_HEADERS)
 
     async def resource_events(request: web.Request) -> web.StreamResponse:
@@ -282,10 +283,10 @@ def build_app(config: Config, conn: sqlite3.Connection) -> web.Application:
         await resp.prepare(request)
         # A comment frame so EventSource sees bytes immediately (open fires).
         await resp.write(b": connected\n\n")
-        last = store.latest_event_seq(conn, rid)
+        last = await db.run(store.latest_event_seq, rid)
         try:
             while True:
-                for row in store.events_after(conn, rid, last):
+                for row in await db.run(store.events_after, rid, last):
                     last = row["seq"]
                     try:
                         body = json.loads(row["body"])
@@ -317,8 +318,13 @@ async def start(config: Config) -> web.AppRunner:
     # `config.host` is resolved to a bindable address by the CLI before the
     # kernel spawns (see cli._serve), so the bind here is expected to succeed;
     # a failure is a genuine error worth surfacing.
-    conn = store.connect(config.store_path)
-    app = build_app(config, conn)
+    db = store.AsyncConn(config.store_path)
+    app = build_app(config, db)
+
+    async def _close_store(_app: web.Application) -> None:
+        await db.close()
+
+    app.on_cleanup.append(_close_store)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, config.host, config.dashboard_port).start()

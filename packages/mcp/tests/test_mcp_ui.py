@@ -272,7 +272,7 @@ def test_api_job_ui_serves_embedded_view(tmp_path: Path) -> None:
     cfg = Config(workdir=tmp_path, store_path=db)
 
     async def run() -> None:
-        client = TestClient(TestServer(dashboard.build_app(cfg, conn)))
+        client = TestClient(TestServer(dashboard.build_app(cfg, store.AsyncConn(cfg.store_path))))
         await client.start_server()
         try:
             resp = await client.get("/api/jobs/ab12/ui")
