@@ -2502,6 +2502,26 @@ def _typecheck_enabled() -> bool:
         return True
 
 
+def _restore_clobbered_builtins(ns: dict, job: Job) -> None:
+    """Re-inject every kernel builtin the finished cell rebound or deleted
+    (issue #2430). A cell that assigned to a builtin name (``api = ...``,
+    ``json = json.loads(...)``) used to silently destroy that helper for every
+    later cell in the session -- and ``del`` could not bring it back, because
+    the injected binding was gone rather than shadowed. Called from the
+    runner's ``finally`` so error and cancel paths restore too; the warning
+    lands in the job's output, naming the builtin so the author picks a
+    different name on the retry."""
+    for name, canonical in _protected_builtins.items():
+        if ns.get(name, _ABSENT) is canonical:
+            continue
+        ns[name] = canonical
+        job._append(
+            f"[ix] '{name}' is a kernel builtin; this cell rebound or deleted "
+            f"it, so the builtin was restored (the cell's own '{name}' value "
+            "was discarded) -- use a different name\n"
+        )
+
+
 async def _runner(job: Job, ns: dict) -> None:
     token = _ix_current.set(job)
     # (Re-)arm the task-failure watch on the loop actually running jobs.
@@ -2641,6 +2661,10 @@ async def _runner(job: Job, ns: dict) -> None:
         job._append(job.error)
     finally:
         job.ended = time.time()
+        # Before persisting: the restore warning must ride the job's stored
+        # output, and the namespace snapshot must see the restored builtin,
+        # not the clobbered value.
+        _restore_clobbered_builtins(ns, job)
         _ix_current.reset(token)
         _persist_final(job)
         _mark_snapshot_dirty()
@@ -4393,6 +4417,17 @@ def _register_rich_formatters(shell: Any) -> None:
 
 _user_ns: dict | None = None
 
+# Every name install() binds into the namespace (jobs, nu, api, ...), keyed to
+# its canonical object. A cell that rebound or deleted one (``api = ...``,
+# ``del nu``) used to silently brick that helper for the rest of the session,
+# and ``del`` could not bring it back (issue #2430): the runner re-injects
+# these after every cell (see _restore_clobbered_builtins).
+_protected_builtins: dict[str, Any] = {}
+
+# Sentinel distinguishing "name deleted" from any real value (None included)
+# when checking the namespace for clobbered builtins.
+_ABSENT: Any = object()
+
 
 def _install_signal_handlers() -> None:
     """Wire the two operator signals the MCP server uses to inspect or rescue a
@@ -4509,35 +4544,44 @@ def install(user_ns: dict | None = None) -> None:
             _store_conn = None
 
     target = user_ns if user_ns is not None else globals()
-    target["jobs"] = jobs
-    target["history"] = history
-    target["doc"] = doc
-    target["Job"] = Job
-    target["Result"] = Result
-    target["cells"] = cells
-    target["Cells"] = Cells
-    target["session"] = session
+
+    def _bind(name: str, value: Any) -> None:
+        """Bind one runtime builtin and register it for post-cell restore: every
+        name bound through here is re-injected by the runner when a cell rebinds
+        or deletes it (issue #2430)."""
+        target[name] = value
+        _protected_builtins[name] = value
+
+    _protected_builtins.clear()
+    _bind("jobs", jobs)
+    _bind("history", history)
+    _bind("doc", doc)
+    _bind("Job", Job)
+    _bind("Result", Result)
+    _bind("cells", cells)
+    _bind("Cells", Cells)
+    _bind("session", session)
     # Seed the default session label with this kernel's working directory; the
     # connecting client's identity is folded in later (see Kernel.set_client).
     with contextlib.suppress(OSError):
         session._workdir = process_cwd().name or ""
         session._rev += 1  # ensure the first flush mirrors the default to the store
-    target["resources"] = resources
-    target["Resource"] = Resource
-    target["register_resource"] = register_resource
-    target["Input"] = Input
-    target["ask"] = ask
-    target["notify"] = notify
-    target["watch_pr"] = watch_pr
-    target["input_channels"] = input_channels
-    target["__ix_run"] = __ix_run
-    target["__ix_exec"] = __ix_exec
-    target["__ix_cancel_running"] = __ix_cancel_running
-    target["__ix_read"] = __ix_read
-    target["__ix_emit_read_stats_final"] = __ix_emit_read_stats_final
-    target["__ix_snapshot"] = __ix_snapshot
-    target["__ix_restore"] = __ix_restore
-    target["DASHBOARD_URL"] = os.environ.get("IX_MCP_DASHBOARD_URL", "")
+    _bind("resources", resources)
+    _bind("Resource", Resource)
+    _bind("register_resource", register_resource)
+    _bind("Input", Input)
+    _bind("ask", ask)
+    _bind("notify", notify)
+    _bind("watch_pr", watch_pr)
+    _bind("input_channels", input_channels)
+    _bind("__ix_run", __ix_run)
+    _bind("__ix_exec", __ix_exec)
+    _bind("__ix_cancel_running", __ix_cancel_running)
+    _bind("__ix_read", __ix_read)
+    _bind("__ix_emit_read_stats_final", __ix_emit_read_stats_final)
+    _bind("__ix_snapshot", __ix_snapshot)
+    _bind("__ix_restore", __ix_restore)
+    _bind("DASHBOARD_URL", os.environ.get("IX_MCP_DASHBOARD_URL", ""))
     # `sh`/`zsh` are RETIRED (agents shell out through `await nu(...)`; the sh
     # module's public entry points now raise a migration hint). Bind them anyway
     # so a stale `await sh(cmd)` in an old transcript fails LOUDLY with that hint
@@ -4546,8 +4590,8 @@ def install(user_ns: dict | None = None) -> None:
     with contextlib.suppress(Exception):  # sh may be absent outside the bundled interpreter; skip it
         import sh as _sh_module
 
-        target["sh"] = _sh_module
-        target["zsh"] = _sh_module.zsh
+        _bind("sh", _sh_module)
+        _bind("zsh", _sh_module.zsh)
     # Bind the filesystem-search helpers as top-level callables (`await grep(...)`
     # / `find(...)` / `spotlight(...)`) the way `sh` is bound, so the most common
     # search/listing actions need no import. They live in the bundled `fsearch`
@@ -4556,9 +4600,9 @@ def install(user_ns: dict | None = None) -> None:
     with contextlib.suppress(Exception):  # fsearch may be absent outside the bundled interpreter; skip it
         import fsearch as _fsearch_module
 
-        target["grep"] = _fsearch_module.grep
-        target["find"] = _fsearch_module.find
-        target["spotlight"] = _fsearch_module.spotlight
+        _bind("grep", _fsearch_module.grep)
+        _bind("find", _fsearch_module.find)
+        _bind("spotlight", _fsearch_module.spotlight)
     # Pre-bind the most-reached-for bundled module so `view.ls(...)` works with no
     # import, the way Result/cells/jobs/sh do (an explicit `import view` returns
     # the same object). It is already imported at startup (01-ix-polars installs
@@ -4566,24 +4610,24 @@ def install(user_ns: dict | None = None) -> None:
     # fleet, search) stay import-on-demand to keep the namespace lean.
     for _mod_name in registry.preimport_names():
         with contextlib.suppress(Exception):  # best-effort per-module import; continue on missing modules
-            target[_mod_name] = __import__(_mod_name)
+            _bind(_mod_name, __import__(_mod_name))
     # The kernel is async-first and polars-first: nearly every session reaches
     # for asyncio (ensure_future / sleep), json (every CLI's --json output), and
     # pl within its first cells, and a NameError on `asyncio` in an async kernel
     # is pure friction (observed twice in one 2026-06-10 session). Bound like
     # sh/view; an explicit import returns the same module.
-    target["asyncio"] = asyncio
-    target["json"] = json
+    _bind("asyncio", asyncio)
+    _bind("json", json)
     with contextlib.suppress(Exception):  # polars may be absent; skip binding pl
         import polars as _polars_mod
 
-        target["pl"] = _polars_mod
-    target["api"] = api
-    target["read_stats"] = read_stats
+        _bind("pl", _polars_mod)
+    _bind("api", api)
+    _bind("read_stats", read_stats)
     # Failures of fire-and-forget tasks, newest last (see the deque's comment).
     # A report also lands in the spawning job's output, tagged `[task_errors]`,
     # which is how the name advertises itself.
-    target["task_errors"] = task_errors
+    _bind("task_errors", task_errors)
 
     # Everything in the namespace up to here is the runtime's own surface plus
     # the kernel preamble -- not user state. Session checkpoints cover only the
