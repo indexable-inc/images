@@ -36,6 +36,7 @@
         (cfg)
         addDirs
         dangerouslySkipPermissions
+        features
         personalStartupContext
         primaryCheckouts
         systemTools
@@ -78,6 +79,23 @@ in {
       type = lib.types.bool;
       default = true;
       description = "Bake Claude Code's bypass-permissions flag into the wrapper.";
+    };
+
+    features = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.nullOr (lib.types.either lib.types.bool lib.types.int));
+      default = {};
+      example = {
+        context1M = true;
+        autoCompactWindow = null;
+      };
+      description = ''
+        Typed Claude Code feature posture forwarded to the wrapper's
+        `features` argument: booleans gate features (false bakes the
+        feature's CLAUDE_CODE_DISABLE_* env var into both the launch layer
+        and the settings env), `autoCompactWindow` is a token count for
+        CLAUDE_CODE_AUTO_COMPACT_WINDOW (null bakes nothing). Keys must
+        exist in the wrapper's defaultFeatures table.
+      '';
     };
 
     systemTools = lib.mkOption {
