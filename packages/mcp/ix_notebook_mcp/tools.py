@@ -690,6 +690,14 @@ async def kernel_trace(ctx: Context | None = None) -> str:
     return await current_kernel().dump_trace()
 
 
+@mcp.tool(structured_output=False, description=guide.RESTART)
+async def kernel_restart(ctx: Context | None = None) -> str:
+    await _start_dashboard_once()
+    await _identify_client_once(ctx)
+    await _require_session_name(ctx, intent="kernel restart")
+    return json.dumps(await current_kernel().restart_now())
+
+
 # The reply tool's store connection, opened lazily on first reply. The tool runs
 # in the server process (the kernel's `events` writes come from its own
 # connection), so it needs its own handle on the shared WAL store.

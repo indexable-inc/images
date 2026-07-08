@@ -3339,6 +3339,36 @@
       mkdir -p "$out"
     '';
 
+  # An INTENTIONAL restart (the kernel_restart tool, index#2345) must be
+  # surgical: only this server's kernel child is bounced (old pid -> new pid,
+  # elapsed time reported), the namespace is rebuilt, the session name/topic the
+  # server pushed are re-applied, and stderr carries the requested-restart lines
+  # -- never the death watch's `kernel died` report, since the kill is on
+  # purpose (packages/mcp/tests/test_kernel_restart.py). Boots a real kernel,
+  # so it reuses the full interpreter plus pytest.
+  kernelRestartTestSource = builtins.path {
+    name = "ix-mcp-kernel-restart-test";
+    path = ./tests/test_kernel_restart.py;
+  };
+  kernelRestartSmoke =
+    pkgs.runCommand "ix-mcp-kernel-restart-smoke"
+    {
+      nativeBuildInputs = [typecheckTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${kernelRestartTestSource} "$TMPDIR/test_kernel_restart.py"
+      ${lib.getExe typecheckTestPython} -m pytest "$TMPDIR/test_kernel_restart.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp kernel-restart smoke failed:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      cat stdout
+      mkdir -p "$out"
+    '';
+
   # Exercises the rich-output capture path: a DataFrame result is persisted to the
   # store with its text/html bundle (so the dashboard renders a table, not a repr),
   # a display() call made while a job runs is captured the same way, and a bytes
@@ -6038,6 +6068,7 @@ in
               svelteTests
               wedgeSmoke
               kernelDeathSmoke
+              kernelRestartSmoke
               richSmoke
               yieldSmoke
               bindingsSmoke

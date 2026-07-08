@@ -116,6 +116,16 @@ class Kernel:
         self._death_event = asyncio.Event()
         self._watch_task: asyncio.Task | None = None
         self._restore_task: asyncio.Task | None = None
+        # The session identity the server last pushed (client label, session
+        # name, topic), re-applied by restart() so a respawned kernel keeps the
+        # dashboard grouping the client already chose instead of resetting to
+        # the default label.
+        self._client_label: str | None = None
+        self._session_name: str | None = None
+        self._session_topic: str | None = None
+        # Entry guard for restart_now(): two concurrent intentional restarts
+        # would cancel each other's death watch and double-respawn.
+        self._restarting = False
 
     async def start(self) -> None:
         from jupyter_client.manager import AsyncKernelManager
@@ -304,6 +314,7 @@ class Kernel:
         default to it. Runs as a raw shell request (not ``__ix_exec``), so it
         leaves no job/card behind — it only pokes ``session._set_client``. The
         server calls this once, when the client identifies itself."""
+        self._client_label = client
         with contextlib.suppress(Exception):  # session label is a convenience; must not break the tool call
             await self._execute(f"session._set_client({client!r})", timeout=10.0)
 
@@ -315,11 +326,28 @@ class Kernel:
         """
         self._check_alive()
         await self._execute(f"session.name = {name!r}\nsession._sync()", timeout=10.0)
+        self._session_name = name
 
     async def set_topic(self, topic: str) -> None:
         """Set the dashboard topic without creating an execution card."""
         self._check_alive()
         await self._execute(f"session.topic = {topic!r}", timeout=10.0)
+        self._session_topic = topic
+
+    async def _reapply_session(self) -> None:
+        """Re-push the session identity the server already set (client label,
+        session name, topic) into a fresh kernel process. The respawned kernel
+        boots with a default ``Session`` and nothing else replays these -- the
+        checkpoint covers user-bound names only -- so without this a restart
+        silently resets the dashboard grouping the client already chose.
+        Best-effort, like ``set_client``: a label must never fail a restart."""
+        with contextlib.suppress(Exception):  # labels are a convenience; the restart must proceed without them
+            if self._client_label is not None:
+                await self._execute(f"session._set_client({self._client_label!r})", timeout=10.0)
+            if self._session_name is not None:
+                await self._execute(f"session.name = {self._session_name!r}\nsession._sync()", timeout=10.0)
+            if self._session_topic is not None:
+                await self._execute(f"session.topic = {self._session_topic!r}", timeout=10.0)
 
     async def _interrupt(self) -> bool:
         """Break a synchronous call wedging the kernel's event loop. ipykernel's
@@ -347,11 +375,13 @@ class Kernel:
         texts = [o.get("text", "") for o in outputs if isinstance(o, dict)]
         return "".join(t for t in texts if isinstance(t, str)).strip()
 
-    async def snapshot_session(self) -> None:
-        """Best-effort final checkpoint at shutdown, so the last cells' state is
-        in the file even if the debounced checkpoint had not fired yet."""
-        with contextlib.suppress(Exception):  # shutdown must proceed; periodic checkpoint plus replay guarantee a correct reopen
-            await self._execute("await __ix_snapshot()", timeout=60.0)
+    async def snapshot_session(self, timeout: float = 60.0) -> None:
+        """Best-effort final checkpoint (shutdown, or just before an intentional
+        restart), so the last cells' state is in the file even if the debounced
+        checkpoint had not fired yet. ``timeout`` bounds the wait: a caller
+        about to kill a possibly-wedged kernel keeps it short."""
+        with contextlib.suppress(Exception):  # the caller must proceed; periodic checkpoint plus replay guarantee a correct reopen
+            await self._execute("await __ix_snapshot()", timeout=timeout)
 
     async def emit_read_stats_final(self) -> None:
         """Flush the final ``mcp_read_stats`` line per session at shutdown, so the
@@ -447,6 +477,9 @@ class Kernel:
         # The new process is alive: in-flight racing stops now (fresh event); the
         # entry guard (`_death`) stays up until the restore holds the channel.
         self._death_event = asyncio.Event()
+        # Re-push the session identity the server already set, BEFORE the
+        # restore, so replayed cells group under the label the client chose.
+        await self._reapply_session()
         if self._config.session_resume:
             locked = asyncio.Event()
 
@@ -463,6 +496,62 @@ class Kernel:
             self._restore_task = asyncio.ensure_future(_restore())
             await locked.wait()
         self._death = None
+
+    async def restart_now(self) -> dict[str, int | float | None]:
+        """An intentional restart of this server's kernel: the `kernel_restart`
+        tool's primitive (index#2345).
+
+        Reuses the death watch's respawn machinery (``restart()``: fresh
+        process, rebuilt channels, checkpoint restore, session labels
+        re-applied) but for a kill made ON PURPOSE, so the watch is cancelled
+        first -- exactly the order ``shutdown()`` uses -- and must neither
+        report this as a death nor race its own respawn against it; it is
+        re-armed for the new process afterwards. Loud on stderr (which reaches
+        journald), like the death watch, so an operator can see who bounced a
+        kernel and when. Returns the old pid, the new pid, and the elapsed
+        seconds.
+        """
+        if self._km is None:
+            raise RuntimeError("the kernel is not running")
+        if self._restarting:
+            raise RuntimeError("a kernel restart is already in progress")
+        self._restarting = True
+        try:
+            loop = asyncio.get_running_loop()
+            started = loop.time()
+            old_pid = self._pid
+            print(f"[ix-mcp] kernel restart requested (pid {old_pid})", file=sys.stderr, flush=True)
+            # Stop the death watch FIRST, exactly as shutdown() does: the kill
+            # below is intentional.
+            if self._watch_task is not None:
+                self._watch_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._watch_task
+                self._watch_task = None
+            # Freshen the checkpoint so the restore replays (i.e. RE-EXECUTES)
+            # as little as possible -- but on a short leash: the kernel may be
+            # wedged, the very reason for this restart, and the periodic
+            # checkpoint plus replay already guarantee a correct reopen.
+            if self._death is None and self._config.session_resume:
+                with contextlib.suppress(Exception):  # best-effort freshness; a timeout here means a wedged kernel, which the restart below fixes
+                    await asyncio.wait_for(self.snapshot_session(timeout=10.0), timeout=15.0)
+            # Fail calls already in flight (a wedged cell would otherwise hold
+            # the shell lock against the respawn for its whole budget) and guard
+            # new ones until the restore holds the channel -- the death watch's
+            # own mechanism, with the honest cause instead of a death report.
+            self._death = f"kernel is restarting (requested via kernel_restart; was pid {old_pid}); retry shortly"
+            self._death_event.set()
+            await self.restart()
+            self._watch_task = asyncio.ensure_future(self._watch())
+            elapsed = loop.time() - started
+            print(
+                f"[ix-mcp] kernel restarted on request (pid {old_pid} -> {self._pid}) in {elapsed:.1f}s",
+                file=sys.stderr,
+                flush=True,
+            )
+            return {"old_pid": old_pid, "new_pid": self._pid, "elapsed_s": round(elapsed, 2)}
+        finally:
+            self._restarting = False
 
     async def shutdown(self) -> None:
         # Stop the death watch first: shutdown kills the kernel on purpose, and

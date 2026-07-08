@@ -379,6 +379,18 @@ TRACE = (
     "background it)."
 )
 
+RESTART = (
+    "Restart THIS server's kernel process on purpose: shut the child down, respawn it, restore "
+    "the session checkpoint (when serving a session file), and report the old pid, new pid, and "
+    "elapsed seconds. Scoped to your own connection's server -- other sessions' kernels on the "
+    "machine are untouched, so NEVER reach for `pkill -f ipykernel_launcher` (it kills every "
+    "session's kernel at once). Use it when the kernel is truly wedged (kernel_trace shows a "
+    "stuck frame and an interrupt cannot break it) or to adopt a fixed/updated kernel build "
+    "without restarting the MCP server (index#2209). It is disruptive: the namespace is rebuilt "
+    "(the checkpoint restore covers a session file's names; without one every variable is lost) "
+    "and running background jobs die with the process."
+)
+
 REPLY = (
     "Send a message to the page behind an interactive resource. Use it to answer a channel event "
     "that carries a resource attribute (<channel resource=\"...\">): pass that resource id and "
