@@ -419,6 +419,12 @@
       # services); import it from a darwin host to get the casks merged in. See
       # users/andrewgazelka/darwin.nix.
       andrewgazelka = ./users/andrewgazelka/darwin.nix;
+      # Per-generation provenance manifest for nix-darwin: bake deployed-path
+      # -> defining nix file:line backlinks (provenance.json) into the system
+      # closure so `whence </etc/...>` answers from /run/current-system with
+      # zero eval. Set `provenance.rev = self.rev or self.dirtyRev or null`
+      # in the consuming flake. See modules/darwin/provenance.nix.
+      provenance = import ./modules/darwin/provenance.nix {inherit (ix) provenance;};
     };
     homeModules = {
       # Workstation-facing home-manager module: declare a service once, get a
@@ -433,6 +439,12 @@
       # `programs.raycast.focus = { enable = true; ... }`. See
       # modules/home/raycast.nix.
       raycast = ./modules/home/raycast.nix;
+      # Per-generation provenance manifest: every home-manager generation
+      # carries provenance.json mapping deployed files back to the nix
+      # file:line that defined them, and `whence <path>` reads it with zero
+      # eval. Set `provenance.rev = self.rev or self.dirtyRev or null` in
+      # the consuming flake. See modules/home/provenance.nix.
+      provenance = import ./modules/home/provenance.nix {inherit (ix) provenance;};
       # Agent CLI modules: Home Manager is the user-facing configuration
       # surface, while the package wrappers remain the implementation detail.
       claude-code = import ./packages/agent/home-manager/claude-code.nix {

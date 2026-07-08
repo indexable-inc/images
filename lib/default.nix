@@ -206,6 +206,13 @@
   # one, so it stays outside `modules/`. Exposed as `homeModules.mutable-json`.
   mutableJson = import ./services/mutable-json.nix {inherit lib;};
 
+  # Eval-provenance walker (whence, #2413): map an evaluated home-manager /
+  # nix-darwin configuration's deployed files back to their defining nix
+  # sites via `definitionsWithLocations` + per-key `unsafeGetAttrPos`.
+  # Consumed by modules/home/provenance.nix and modules/darwin/provenance.nix
+  # and exposed so downstream tooling can render manifests for other configs.
+  provenance = import ./provenance.nix {inherit lib;};
+
   # Flat list of module paths from the auto-discovered registry under
   # `modules/`. Pulled in unconditionally so every option is in scope; each
   # module stays inert until its `enable` flag is set.
@@ -618,6 +625,7 @@
       patchedSrc
       patchedSrcFor
       pins
+      provenance
       publicArtifactsFor
       relativePath
       repoMetadata

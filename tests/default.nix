@@ -23,6 +23,18 @@
       paths
       ;
   };
+  # Provenance walker + home module (whence, #2413): asserts the manifest of
+  # a real home-manager eval links deployed paths to their defining sites,
+  # so it takes the home-manager flake input rather than option stubs.
+  provenanceTest = import ./provenance.nix {
+    inherit
+      lib
+      pkgs
+      ix
+      paths
+      home-manager
+      ;
+  };
   # VM boot smoke test for the minecraft-blocks Paper plugin (ENG-2186). Not
   # part of the `eval` aggregate: it boots a qemu VM, so it is its own check
   # (`checks.<system>.minecraft-blocks-vm`).
@@ -5836,6 +5848,7 @@ in {
   sdkPythonStrict = sdkPython.strictCheck;
   portableServices = portableServicesTest;
   symphonyHomeModule = symphonyHomeModuleTest;
+  provenance = provenanceTest;
   minecraftBlocksVm = minecraftBlocksVmTest;
   inherit baseImageNixDb;
 
@@ -5848,6 +5861,7 @@ in {
       helperTest
       portableServicesTest
       symphonyHomeModuleTest
+      provenanceTest
       cargoUnitPrebuiltTest
     ]
   );
