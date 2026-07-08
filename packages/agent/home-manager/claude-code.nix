@@ -68,6 +68,9 @@ in {
         Lower-priority Claude Code settings passed through the wrapper's
         read-only default layer. Runtime user settings are still managed by
         Home Manager's native {option}`programs.claude-code.settings` option.
+        The wrapper answers {command}`claude --which-settings` with the store
+        path of the rendered layer, since no file under {file}`~/.claude`
+        explains it.
       '';
     };
 

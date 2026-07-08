@@ -154,6 +154,30 @@
   } \
       --settings=/dev/null -p hi
 
+    # `--which-settings` is answered by the launcher itself (exit 0, no exec):
+    # the output is exactly the injected settings store path, with none of the
+    # baked flags the stub would echo on a real launch.
+    check "--which-settings prints the injected settings path" \
+      ${lib.escapeShellArg "${settingsDefaultsFile}"} \
+      --which-settings
+
+    # After `--` the same token is a positional for the CLI, so the launch
+    # proceeds normally (flags, injected settings, then the user argv).
+    check "--which-settings after -- stays a positional" \
+      ${
+    lib.escapeShellArg (
+      lib.concatStringsSep "\n" (
+        wrapperFlags
+        ++ [
+          "--settings=${settingsDefaultsFile}"
+          "--"
+          "--which-settings"
+        ]
+      )
+    )
+  } \
+      -- --which-settings
+
     # addDirs/pluginDirs render as single, prepended `=` tokens. `--add-dir` is
     # variadic in the CLI, so a space-form token would swallow the next positional
     # (proven against the real binary); this guards that the launcher keeps each as

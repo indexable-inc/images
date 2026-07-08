@@ -421,6 +421,17 @@
         flags = ["--settings=${settingsDefaultsFile}"];
       }
     ];
+    # `claude --which-settings` prints the store path of the read-only
+    # settings layer this package injects, then exits (answered by the
+    # launcher; the real CLI never sees the flag). The wrapper passes settings
+    # by flag, so nothing on disk under ~/.claude explains the live config:
+    # this is the introspection that does.
+    introspection = [
+      {
+        flag = "--which-settings";
+        value = "${settingsDefaultsFile}";
+      }
+    ];
   };
 
   inherit (stdenv.hostPlatform) system;
