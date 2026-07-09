@@ -30,8 +30,7 @@
       replacementImage = {
         imageName = "api";
         destination = "registry.ix.dev/example/api:latest";
-        source = "/nix/store/api-image.tar";
-        sourceDrv = "/nix/store/api-image.drv";
+        sourceInstallable = ".#api";
       };
       region = "us-west-1";
       ipv4 = false;
@@ -89,8 +88,7 @@
       replacementImage = {
         imageName = name;
         destination = "registry.ix.dev/example/${name}:latest";
-        source = "/nix/store/${name}-image.tar";
-        sourceDrv = "/nix/store/${name}-image.drv";
+        sourceInstallable = ".#${name}";
       };
       region = "us-west-1";
       ipv4 = false;

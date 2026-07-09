@@ -146,6 +146,7 @@
         ++ [
           ./platform.nix
           ./oci-layer.nix
+          ./cas-layer.nix
           # Home Manager as a NixOS module. Per-tool XDG config (Nushell,
           # atuin, zoxide, starship, ...) is configured under
           # `home-manager.users.root` in the base profile; this module

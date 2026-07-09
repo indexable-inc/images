@@ -36,8 +36,11 @@ class ReplacementImage(BaseModel):
 
     imageName: str = Field(min_length=1)
     destination: str = Field(min_length=1)
-    source: str = Field(min_length=1)
-    sourceDrv: str = Field(min_length=1)
+    # The flake attr of the node's CAS-manifest image (`.#<node>`), built at
+    # push time. The plan deliberately carries no out/drv path: instantiating
+    # the manifest builder evaluates the node's whole system closure (IFD), so
+    # plan rendering must never force it.
+    sourceInstallable: str = Field(min_length=1)
 
 
 class SwitchSpec(BaseModel):
@@ -340,21 +343,47 @@ async def wait_node_ready(node: FleetNode, *, dry_run: bool) -> None:
 async def push_replacement_image(node: FleetNode, *, dry_run: bool) -> str:
     image = node.replacementImage
     if dry_run:
-        step(f"+ realise {image.sourceDrv} and image push -> {image.destination}")
+        step(f"+ build {image.sourceInstallable} and image push-manifest -> {image.destination}")
         return image.destination
 
-    # Realising the OCI image is host-side nix work; the push itself goes through
-    # the SDK (sdk-core owns the chunk/dedup/upload pipeline).
-    source = image.source
-    out = await run_cli(["nix-store", "--realise", image.sourceDrv], dry_run=False)
-    realised = [line.strip() for line in out.splitlines() if line.strip()]
-    if realised:
-        source = realised[-1]
-    if not await asyncio.to_thread(Path(source).exists):
-        raise RuntimeError(f"OCI image derivation did not realise to an existing path: {source}")
+    # Building the CAS image is host-side nix work; the push goes through the
+    # ix CLI: `push-manifest` streams data chunks straight from the origin
+    # /nix/store files the locator names, so nothing is staged host-side.
+    out = await run_cli(
+        ["nix", "build", "--no-link", "--print-out-paths", image.sourceInstallable],
+        dry_run=False,
+    )
+    built = [line.strip() for line in out.splitlines() if line.strip()]
+    if not built:
+        raise RuntimeError(f"nix build printed no out path for {image.sourceInstallable}")
+    image_dir = Path(built[-1])
+    manifest = image_dir / "manifest.cas"
+    locator = image_dir / "locator.bin"
+    for required in (manifest, locator):
+        if not await asyncio.to_thread(required.exists):
+            raise RuntimeError(f"CAS image {image_dir} is missing {required.name}")
 
-    step(f"pushing {image.destination} from {source}")
-    return await client().image_push(source, image.destination, region=node.region)
+    step(f"pushing {image.destination} from {image_dir}")
+    out = await run_cli(
+        [
+            "ix",
+            "image",
+            "push-manifest",
+            "--locator",
+            str(locator),
+            str(manifest),
+            image.destination,
+            "--region",
+            node.region,
+        ],
+        dry_run=False,
+    )
+    # The pushed reference is the only stdout line (phase progress renders on
+    # stderr), the same normalized reference the SDK's image_push returned.
+    pushed = [line.strip() for line in out.splitlines() if line.strip()]
+    if not pushed:
+        raise RuntimeError(f"ix image push-manifest printed no reference for {image.destination}")
+    return pushed[-1]
 
 
 async def list_nodes() -> list[ix_sdk.BranchInfo]:

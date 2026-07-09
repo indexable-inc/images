@@ -65,14 +65,18 @@ Returns an attrset with two front-ends over the same lifecycle scripts:
   '';
 
   mkLifecycle = name: fleet: let
-    # Pin each node's OCI image as a build-time dep of the lifecycle script
-    # so `nix run .#health-checks` realises every image before the runner
-    # starts. Without this, `ix-fleet up` calls `nix-store --realise` on the
-    # image .drv at runtime, which then triggers an x86_64-linux build chain
-    # on whatever host launched the runner. Surfacing the realise step as a
-    # normal Nix build fails fast at one well-known boundary instead of five
+    # Pin each node's NixOS system closure as a build-time dep of the
+    # lifecycle script so `nix run .#health-checks` realises every closure
+    # before the runner starts. Without this, `ix-fleet up`'s runtime
+    # `nix build` of the replacement image triggers an x86_64-linux build
+    # chain on whatever host launched the runner. Surfacing the build as a
+    # normal Nix dep fails fast at one well-known boundary instead of five
     # parallel runners independently rediscovering a broken remote builder.
-    pinnedImages = lib.attrValues fleet.packages;
+    # Deliberately the toplevels, NOT `fleet.packages`: the CAS images those
+    # hold need the ix-side `casImageBuilder` threaded in (cas-layer.nix),
+    # which this repo's example fleets do not have, and even referencing
+    # their outPaths here would force that eval during `nix flake check`.
+    pinnedSystems = lib.attrValues fleet.systemPackages;
   in
     writeNushellApplication pkgs {
       name = "health-check-${name}";
@@ -96,11 +100,11 @@ Returns an attrset with two front-ends over the same lifecycle scripts:
 
           ${ixTokenCheck}
 
-          let pinned_images = ${builtins.toJSON pinnedImages}
+          let pinned_systems = ${builtins.toJSON pinnedSystems}
           let plan_data = (open ${fleet.plan})
           let nodes = $plan_data.order
 
-          print $"[${name}] ($pinned_images | length) image\(s) pinned in store; removing any pre-existing VMs: ($nodes | str join ', ')"
+          print $"[${name}] ($pinned_systems | length) system closure\(s) pinned in store; removing any pre-existing VMs: ($nodes | str join ', ')"
           for node_name in $nodes {
             do --ignore-errors { ^ix rm --force $node_name } | ignore
           }

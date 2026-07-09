@@ -1455,10 +1455,10 @@ in {
   #      streamLayeredImage). Non-image packages, and non-NixOS OCI images (which
   #      expose no `toplevel`), pass through unchanged. See lib/image/oci-layer.nix.
   #   2. The `health-check-*` packages (and the `health-checks{,-zellij}` runners)
-  #      pin every fleet node's OCI *tar* as a build dep (lib/image/health-checks.nix),
-  #      so realising them would rebuild ~all the archives. Drop them and add the
-  #      fleet node `toplevel` closures directly, so the closures those checks used
-  #      to drag in stay cached without ever building a tar.
+  #      pin every fleet node's `toplevel` closure as a build dep
+  #      (lib/image/health-checks.nix). Drop the wrapper scripts and add the
+  #      fleet node `toplevel` closures directly, so the closures those checks
+  #      drag in stay cached without pushing the per-fleet script derivations.
   #   3. The cross lane's eval-time IFD outputs (`crossIfdRoots`): the rendered
   #      `cargo-units.nix`, its `cargo-unit-graph.json`, and the vendor dir a Mac
   #      forces at eval when it substitutes a Darwin cross output. These are

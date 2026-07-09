@@ -79,7 +79,9 @@ each node key matches its `name`; and that every `dependsOn` names a real node.
   direct `ix up` flake and `examples/dev/fleet/default.nix` for the mkDev
   wrapper).
 - **`ReplacementImage`** (`:34`): `imageName`, `destination`,
-  `source`, `sourceDrv` (the OCI image derivation to realise and push).
+  `sourceInstallable` (the `.#<node>` flake attr of the node's CAS-manifest
+  image, built at push time; the plan never carries the image's out/drv path
+  because instantiating the manifest builder forces the whole system closure).
 - **`HealthCheck`** (`:54`): `description`, `command` (argv), `timeoutSec`,
   `attempts`, `intervalSec`, `requiresIpv4`, and `from` (`guest`|`host`, stored
   as `from_` since `from` is a keyword).
@@ -98,8 +100,10 @@ uses. A node maps to an ix branch (`ix_sdk.BranchInfo`/`BranchStatus`:
 
 - create / delete / start a branch: `client().create(...)`, `branch.delete()`,
   `branch.start()` (`create_node` `:366`, `remove_node` `:509`).
-- image push: `client().image_push(source, destination, region)` after a
-  host-side `nix-store --realise` of `sourceDrv` (`push_replacement_image`, `:338`).
+- image push: a host-side `nix build` of `sourceInstallable`, then
+  `ix image push-manifest --locator <out>/locator.bin <out>/manifest.cas
+  <destination> --region <region>` (`push_replacement_image`, `:338`); the CLI
+  prints the pushed reference on stdout.
 - snapshot: `client().snapshot(name=...)` (`snapshot_node`, `:423`).
 - in-place switch: `client().switch_system(name, target, build_on)`
   (`switch_node`, `:430`).

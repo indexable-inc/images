@@ -1710,6 +1710,22 @@
   mcpPackage = (ix.packageSetFor pkgs).mcp;
 
   fleet = ix.mkFleet {
+    # Stand-in for the ix-side CAS manifest builder (the cas-layer.nix
+    # contract): a directory with manifest.cas + locator.bin, carrying
+    # passthru.toplevel. Only this fixture threads a builder; the other fleet
+    # fixtures deliberately leave it unset, proving plan eval never forces
+    # `casImage`.
+    defaults = [
+      (
+        {pkgs, ...}: {
+          ix.build.casImageBuilder = {toplevel}:
+            pkgs.runCommand "cas-image-stub" {passthru = {inherit toplevel;};} ''
+              mkdir -p "$out"
+              touch "$out/manifest.cas" "$out/locator.bin"
+            '';
+        }
+      )
+    ];
     deployment.region = "us-west-1";
     # Fleet-wide per-VM user-store secret attachment; merges with per-node refs.
     deployment.secrets = {
@@ -1775,6 +1791,11 @@
   };
 
   prefixedFleet = prefixedFleetBase.withNodePrefix "tprefix-";
+
+  # No casImageBuilder is threaded into prefixedFleetBase, so forcing a CAS
+  # image must abort with the module system's "used but not defined" error
+  # rather than falling back to anything.
+  fleetMissingCasBuilderEval = builtins.tryEval (builtins.seq prefixedFleetBase.packages.api true);
 
   # A local-build node: its source switch runs a plain `nix build`, so the
   # default installable must be the `.#<node>-system` package alias, not the
@@ -5198,8 +5219,8 @@
         message = "fleet should expose nixosConfigurations.<node> so `ix up .#<node>` (native multi-VM switch) resolves the node toplevel";
       }
       {
-        assertion = fleet.packages.web == fleet.nodes.web.ix.build.ociImage;
-        message = "fleet replacement package outputs should keep node names";
+        assertion = fleet.packages.web == fleet.nodes.web.ix.build.casImage;
+        message = "fleet replacement package outputs should keep node names and resolve to the CAS image";
       }
       {
         assertion =
@@ -5214,10 +5235,12 @@
         message = "fleet plans should default to local eval and remote build switch metadata";
       }
       {
-        assertion =
-          fleetPlan.web.replacementImage.sourceDrv
-          == builtins.unsafeDiscardStringContext fleet.nodes.web.ix.build.ociImage.drvPath;
-        message = "fleet plans should expose replacement image derivations without forcing local image builds";
+        assertion = fleetPlan.web.replacementImage.sourceInstallable == ".#web";
+        message = "fleet plans should reference the replacement image only by flake installable; forcing the CAS image at plan eval would IFD-build every node's system closure";
+      }
+      {
+        assertion = !fleetMissingCasBuilderEval.success;
+        message = "forcing a node's CAS image without the ix-side casImageBuilder must abort eval, never fall back";
       }
       {
         assertion = fleetPlan.web.region == "us-west-1";
@@ -5343,9 +5366,9 @@
         assertion =
           prefixedFleet.planValue.nodes."tprefix-api".system
           == prefixedFleetBase.planValue.nodes.api.system
-          && prefixedFleet.planValue.nodes."tprefix-api".replacementImage.source
-          == prefixedFleetBase.planValue.nodes.api.replacementImage.source;
-        message = "withNodePrefix must reuse the base fleet's system closure and image source, not re-evaluate them";
+          && prefixedFleet.planValue.nodes."tprefix-api".replacementImage.sourceInstallable
+          == ".#tprefix-api";
+        message = "withNodePrefix must reuse the base fleet's system closure while re-deriving the replacement installable to the prefixed packages attr";
       }
       {
         assertion = prefixedFleet.nodes."tprefix-worker".environment.etc."api-host".text == "api";
