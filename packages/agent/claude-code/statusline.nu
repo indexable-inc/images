@@ -1,8 +1,8 @@
 # House Claude Code statusline (settings `statusLine.command`, baked by
 # package.nix into the wrapper's read-only settings layer). Renders one
-# dark-gray line: context-window bar, model, effort level, and the running CLI
-# version with an "↑<latest>" marker when Anthropic has published a newer
-# release than the wrapper pins.
+# dark-gray line: the ix identity mark, context-window bar, model, effort
+# level, and the running CLI version with an "↑<latest>" marker when
+# Anthropic has published a newer release than the wrapper pins.
 #
 # Claude Code pipes a JSON status payload on stdin and re-runs this on every
 # render, so everything here must be fast and fail-soft: the one network call
@@ -108,6 +108,7 @@ def main [--default-effort: string = ""] {
   } else { "" })
 
   let effort_segment = (if ($effort | is-not-empty) { $" | ($effort)" } else { "" })
+  let identity_segment = "⟡ 𝒊𝒙"
 
-  print $"(ansi dark_gray)($bar) | ($model)($effort_segment)($version_segment)(ansi reset)"
+  print $"(ansi dark_gray)($identity_segment) | ($bar) | ($model)($effort_segment)($version_segment)(ansi reset)"
 }
