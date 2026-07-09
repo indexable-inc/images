@@ -23,11 +23,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, FixedOffset, TimeDelta, Utc};
-use nu_protocol::ast::{Block, Expr, Expression, ListItem, RecordItem};
+use nu_protocol::ast::{Block, Expr, Expression, ListItem, Pipeline, RecordItem};
 use nu_protocol::debugger::WithoutDebug;
 use nu_protocol::engine::{EngineState, Stack, StateWorkingSet};
 use nu_protocol::{
-    ByteStreamSource, ErrorStyle, PipelineData, Record, ShellError, Signals, Span, Value,
+    ByteStreamSource, ErrorStyle, PipelineData, Record, ShellError, Signals, Span, Type, Value,
     report_error::format_cli_error,
 };
 use pyo3::create_exception;
@@ -237,6 +237,30 @@ fn run_block(
     input: Option<Value>,
     check: bool,
 ) -> Result<(Vec<Value>, Value, i64), String> {
+    // input= routing (issue #2540): deliver the input to the FIRST pipeline
+    // that can accept pipeline input. Nushell's own block semantics feed the
+    // first pipeline unconditionally, so a leading no-input statement (`cd
+    // /tmp; ^cat` -- cd declares `nothing` input) drained the payload
+    // silently and the external read empty stdin with exit code 0 (`gh
+    // ... --body-file -` then failed on a blank body). When NO pipeline can
+    // accept it, fail loudly instead of dropping it.
+    let deliver_to = match input {
+        None => None,
+        Some(_) => Some(
+            block
+                .pipelines
+                .iter()
+                .position(|pipeline| pipeline_accepts_input(engine_state, pipeline))
+                .ok_or_else(|| {
+                    "input= was provided but no statement in this source accepts pipeline \
+                     input (each one, like `cd` or `def`, declares `nothing` input), so \
+                     the input cannot be delivered; consume it (e.g. `$in | ...`) or drop \
+                     input="
+                        .to_owned()
+                })?,
+        ),
+    };
+
     // One pipeline: evaluate the parse-compiled block as-is (the historical
     // fast path; nothing intermediate exists to surface).
     if block.pipelines.len() <= 1 {
@@ -280,7 +304,7 @@ fn run_block(
 
     let last_index = sub_blocks.len() - 1;
     let mut intermediates = Vec::with_capacity(last_index);
-    let mut input = input; // `$in` feeds the FIRST pipeline, like block IR.
+    let mut input = input;
     for (index, sub) in sub_blocks.iter().enumerate() {
         let is_last = index == last_index;
         if index > 0 {
@@ -291,17 +315,47 @@ fn run_block(
                 .check(&span)
                 .map_err(|error| render_shell_error(engine_state, stack, &error))?;
         }
+        let pipeline_input = if deliver_to == Some(index) {
+            input.take()
+        } else {
+            None
+        };
         // `check` governs only the final pipeline's trailing external
         // (documented NuResult semantics); an intermediate external that
         // fails aborts the eval either way.
         let (value, exit_code) =
-            run_pipeline(engine_state, stack, sub, input.take(), if is_last { check } else { true })?;
+            run_pipeline(engine_state, stack, sub, pipeline_input, if is_last { check } else { true })?;
         if is_last {
             return Ok((intermediates, value, exit_code));
         }
         intermediates.push(value);
     }
     unreachable!("the loop returns at the last pipeline and the block is non-empty");
+}
+
+/// True when `pipeline` can receive pipeline input: its head is an external
+/// (stdin), a plain expression (a `$in`-referencing element arrives
+/// collect-wrapped, never as a bare call), or a call whose declared input
+/// types include something other than `nothing`. `cd` and `def` declare
+/// `(nothing, nothing)`, so [`run_block`]'s input routing skips them (issue
+/// #2540); `let`/`mut` declare `any` and keep receiving input (their RHS may
+/// read `$in`). An empty declaration list is treated as accepting: dropping
+/// input on an unknown signature would be the very bug being fixed.
+fn pipeline_accepts_input(engine_state: &EngineState, pipeline: &Pipeline) -> bool {
+    let Some(element) = pipeline.elements.first() else {
+        return false;
+    };
+    match &element.expr.expr {
+        Expr::Call(call) => {
+            let signature = engine_state.get_decl(call.decl_id).signature();
+            signature.input_output_types.is_empty()
+                || signature
+                    .input_output_types
+                    .iter()
+                    .any(|(input, _)| !matches!(input, Type::Nothing))
+        }
+        _ => true,
+    }
 }
 
 /// Evaluate one compiled block (a whole single-pipeline eval, or one
@@ -701,7 +755,10 @@ impl Engine {
     /// the wrapper to print, issue #2391) and `value` is the final
     /// pipeline's output; `handle.interrupt()` stops this eval (and only
     /// this eval) the way ctrl-c would. `input` becomes the
-    /// pipeline's `$in`; `cwd`/`env` set `PWD` / environment variables for
+    /// pipeline's `$in`, delivered to the first pipeline that can accept
+    /// pipeline input (a leading `cd`/`def` declares `nothing` input and is
+    /// skipped; undeliverable input raises instead of dropping, issue
+    /// #2540); `cwd`/`env` set `PWD` / environment variables for
     /// this and later calls (the stack is persistent). When `cwd` is omitted
     /// the persistent PWD is validated first: a directory that no longer
     /// exists raises with the remedy instead of running somewhere unintended.
@@ -940,7 +997,7 @@ mod tests {
     }
 
     #[test]
-    fn input_feeds_the_first_pipeline_only() {
+    fn input_feeds_the_first_accepting_pipeline() {
         let (mut inner, interrupt) = test_inner();
         let (intermediates, value, _) = inner
             .eval(
@@ -954,6 +1011,62 @@ mod tests {
             .expect("input piped into the first pipeline");
         assert!(matches!(&intermediates[0], Value::String { val, .. } if val == "HI"));
         assert!(matches!(&value, Value::String { val, .. } if val == "done"));
+    }
+
+    #[test]
+    fn input_routes_past_no_input_statements_to_the_consumer() {
+        // Issue #2540's shape: `cd /tmp; ^cat` fed the input to `cd`
+        // (declared `nothing` input), which drained it, and the external
+        // read empty stdin with exit 0. Routing must skip `cd` and deliver.
+        // The consumer is an external on purpose: nushell's parser already
+        // rejects an internal command mid-block unless it accepts `nothing`
+        // input (nu::parser::input_type_mismatch), so externals are the
+        // consumers this routing exists for.
+        let (mut inner, interrupt) = test_inner();
+        let (intermediates, value, _) = inner
+            .eval(
+                &format!("cd {}; ^cat", std::env::temp_dir().display()),
+                Some(Value::string("hi", Span::unknown())),
+                None,
+                None,
+                &interrupt,
+                true,
+            )
+            .expect("input routed past cd (issue #2540)");
+        assert!(matches!(&intermediates[0], Value::Nothing { .. }));
+        assert!(matches!(&value, Value::String { val, .. } if val == "hi"));
+    }
+
+    #[test]
+    fn undeliverable_input_fails_loudly() {
+        let (mut inner, interrupt) = test_inner();
+        let diagnostic = inner
+            .eval(
+                "def noop [] {}; def still-no-input [] {}",
+                Some(Value::string("hi", Span::unknown())),
+                None,
+                None,
+                &interrupt,
+                true,
+            )
+            .expect_err("input nothing can consume must error, not drop (issue #2540)");
+        assert!(diagnostic.contains("input="), "diagnostic: {diagnostic}");
+    }
+
+    #[test]
+    fn undeliverable_input_fails_loudly_for_a_single_statement() {
+        let (mut inner, interrupt) = test_inner();
+        let diagnostic = inner
+            .eval(
+                "def noop [] {}",
+                Some(Value::string("hi", Span::unknown())),
+                None,
+                None,
+                &interrupt,
+                true,
+            )
+            .expect_err("single-statement undeliverable input must error too");
+        assert!(diagnostic.contains("input="), "diagnostic: {diagnostic}");
     }
 
     /// A statement whose FIRST element references `$in` makes the parser
