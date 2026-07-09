@@ -385,15 +385,15 @@
           upstream = "hold";
           reason = "Build-status series overlaps edolstra's active #15979 (nix ps); engage there with the daemon-less file-based angle instead of filing a competing series.";
         };
-        "0004-libstore-add-build-status-directory-writer.patch" = {
+        "0004-libstore-add-goal-graph-recorder.patch" = {
           upstream = "hold";
           reason = "Build-status series: engage on #15979 rather than open a competing PR.";
         };
-        "0005-libstore-write-status-files-from-build-and-substitut.patch" = {
+        "0005-libstore-maintain-the-goal-graph-from-the-worker-and.patch" = {
           upstream = "hold";
           reason = "Build-status series: engage on #15979 rather than open a competing PR.";
         };
-        "0006-libstore-daemon-record-client-uid-and-user-for-build.patch" = {
+        "0006-libstore-daemon-record-client-uid-and-user-for-the-g.patch" = {
           upstream = "hold";
           reason = "Build-status series: engage on #15979 rather than open a competing PR.";
         };

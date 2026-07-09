@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Wed, 8 Jul 2026 18:11:34 -0700
+Subject: [PATCH] libstore/daemon: record client uid and user for the goal
+ graph
+
+The daemon accepts connections as root and forks a worker per client,
+so only the daemon knows which uid/user a worker is serving. Record it
+via `setBuildStatusClientInfo()` right after the fork, so the worker's
+goal-graph file can attribute the work to the requesting client.
+
+Refs indexable-inc/index#2485
+Assisted-by: Claude <noreply@anthropic.com>
+
+diff --git a/src/nix/unix/daemon.cc b/src/nix/unix/daemon.cc
+index 5b41d42b3..77499ba26 100644
+--- a/src/nix/unix/daemon.cc
++++ b/src/nix/unix/daemon.cc
+@@ -17,6 +17,7 @@
+ #include "nix/cmd/legacy.hh"
+ #include "nix/cmd/unix-socket-server.hh"
+ #include "nix/store/daemon.hh"
++#include "nix/store/build/goal-graph.hh"
+ #include "man-pages.hh"
+ 
+ #include <algorithm>
+@@ -348,6 +349,10 @@ static void daemonLoop(ref<const StoreConfig> storeConfig, std::optional<Trusted
+                             strncpy(savedArgv[1], processName.c_str(), strlen(savedArgv[1]));
+                         }
+ 
++                        // Record the client identity so the worker's goal
++                        // graph can attribute the work to it.
++                        setBuildStatusClientInfo({.uid = peer.uid, .user = userName});
++
+                         // Handle the connection.
+                         auto store = storeConfig->openStore();
+                         store->init();

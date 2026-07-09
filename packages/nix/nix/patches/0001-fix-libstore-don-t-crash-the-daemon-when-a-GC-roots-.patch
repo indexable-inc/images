@@ -23,7 +23,7 @@ friends) still terminate exactly as before.
 Assisted-by: Claude <noreply@anthropic.com>
 
 diff --git a/src/libstore/gc.cc b/src/libstore/gc.cc
-index 16b81ab..efab447 100644
+index 16b81abf2..efab447ae 100644
 --- a/src/libstore/gc.cc
 +++ b/src/libstore/gc.cc
 @@ -492,7 +492,11 @@ void LocalStore::collectGarbage(const GCOptions & options, GCResults & results)

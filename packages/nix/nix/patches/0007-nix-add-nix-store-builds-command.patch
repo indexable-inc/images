@@ -1,22 +1,29 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Andrew Gazelka <andrew@ix.dev>
-Date: Sun, 5 Jul 2026 20:12:45 -0700
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Wed, 8 Jul 2026 18:11:34 -0700
 Subject: [PATCH] nix: add 'nix store builds' command
 
-Adds `nix store builds`, which reports the builds and substitutions currently
-in progress by reading the status directory directly, *without* connecting to
-a Nix daemon. It derives the directory from `settings.nixStateDir`, so it
-honors `NIX_STATE_DIR` exactly like the writer.
+Adds `nix store builds`, which reports what Nix is currently building
+or substituting, and why, without connecting to a daemon: it reads the
+coordinators' `graph-<pid>.json` files directly (pruning files whose
+recorded pid is dead, since a crashed coordinator cannot clean up).
 
-For each `*.json` file it parses the entry and checks that the recorded worker
-pid is still alive (via `kill(pid, 0)`); stale files left by a crashed worker
-are skipped and removed. Output is a human-readable summary, or a JSON array
-with `--json`.
+The default (and `--json`) view is a flat list derived from the graph
+files: one entry per running goal, with the why-chain recomputed by
+walking the graph's `waiters` edges up to the requested root. With
+`--graph`, the command reports each coordinator's goal graph whole,
+including waiting and completed goals, as an indented forest or, with
+`--json`, as a `{"coordinators": [...]}` document.
 
-Gated behind the `build-status-dir` experimental feature.
+Gated on the `build-status-dir` experimental feature, enforced
+explicitly in `run()` because the multi-command dispatcher does not
+enforce a subcommand's advertised feature automatically.
+
+Refs indexable-inc/index#2485
+Assisted-by: Claude <noreply@anthropic.com>
 
 diff --git a/src/nix/meson.build b/src/nix/meson.build
-index 039b202..69fdb6c 100644
+index 039b202b9..69fdb6c78 100644
 --- a/src/nix/meson.build
 +++ b/src/nix/meson.build
 @@ -99,6 +99,7 @@ nix_sources = [ config_priv_h ] + files(
@@ -29,10 +36,10 @@ index 039b202..69fdb6c 100644
    'store-gc.cc',
 diff --git a/src/nix/store-builds.cc b/src/nix/store-builds.cc
 new file mode 100644
-index 0000000..c509e41
+index 000000000..2503319c2
 --- /dev/null
 +++ b/src/nix/store-builds.cc
-@@ -0,0 +1,132 @@
+@@ -0,0 +1,310 @@
 +#include "nix/cmd/command.hh"
 +#include "nix/main/common-args.hh"
 +#include "nix/store/globals.hh"
@@ -43,6 +50,8 @@ index 0000000..c509e41
 +#include <nlohmann/json.hpp>
 +
 +#include <csignal>
++#include <map>
++#include <set>
 +
 +using namespace nix;
 +
@@ -58,7 +67,7 @@ index 0000000..c509e41
 +}
 +
 +/**
-+ * Is the process @p pid still alive? A status file whose writer has died
++ * Is the process @p pid still alive? A graph file whose coordinator has died
 + * (e.g. after a crash) is stale and should be ignored/removed.
 + */
 +static bool pidAlive(pid_t pid)
@@ -70,8 +79,142 @@ index 0000000..c509e41
 +    return errno != ESRCH;
 +}
 +
++/**
++ * Load every live coordinator's `graph-<pid>.json` document, pruning files
++ * whose coordinator pid is dead. This is the single source of truth both
++ * views (flat and graph) derive from.
++ */
++static std::vector<nlohmann::json> loadCoordinators()
++{
++    std::vector<nlohmann::json> coordinators;
++
++    auto dir = statusDir();
++    if (!std::filesystem::exists(dir))
++        return coordinators;
++
++    for (auto & entry : std::filesystem::directory_iterator{dir}) {
++        auto & p = entry.path();
++        if (p.extension() != ".json" || !p.filename().string().starts_with("graph-"))
++            continue;
++
++        nlohmann::json j;
++        try {
++            j = nlohmann::json::parse(readFile(p.string()));
++        } catch (...) {
++            /* A half-written or corrupt file; skip it. */
++            continue;
++        }
++
++        auto pidIt = j.find("pid");
++        if (pidIt == j.end() || !pidIt->is_number() || !pidAlive(pidIt->get<pid_t>())) {
++            /* The coordinator is gone; its RAII cleanup never ran (crash or
++               SIGKILL), so remove the stale file on its behalf. */
++            try {
++                std::filesystem::remove(p);
++            } catch (...) {
++            }
++            continue;
++        }
++
++        coordinators.push_back(std::move(j));
++    }
++
++    return coordinators;
++}
++
++/**
++ * Walk `waiters` edges from @p id up to a root, root-first. Mirrors the goal
++ * graph: a goal with no waiters is a root the client asked for. Any waiter
++ * leads to a root, so following the first is enough for a why-chain.
++ */
++static std::vector<std::string> whyChain(const std::map<std::string, const nlohmann::json *> & goalsById, const std::string & id)
++{
++    std::vector<std::string> chainLeafFirst;
++    std::set<std::string> visited;
++
++    auto cur = id;
++    while (visited.insert(cur).second) {
++        chainLeafFirst.push_back(cur);
++        auto it = goalsById.find(cur);
++        if (it == goalsById.end())
++            break;
++        auto & waiters = (*it->second)["waiters"];
++        if (!waiters.is_array() || waiters.empty())
++            break;
++        cur = waiters.front().get<std::string>();
++    }
++
++    std::reverse(chainLeafFirst.begin(), chainLeafFirst.end());
++    return chainLeafFirst;
++}
++
++/**
++ * Flatten one coordinator's graph document to the classic per-running-goal
++ * entries of `nix store builds --json`: only goals with status `running`
++ * appear, and the why-chain is recomputed from the graph's `waiters` edges.
++ */
++static std::vector<nlohmann::json> flattenCoordinator(const nlohmann::json & doc)
++{
++    std::vector<nlohmann::json> entries;
++
++    auto goalsIt = doc.find("goals");
++    if (goalsIt == doc.end() || !goalsIt->is_array())
++        return entries;
++
++    std::map<std::string, const nlohmann::json *> goalsById;
++    for (auto & goal : *goalsIt)
++        if (goal.contains("id") && goal["id"].is_string())
++            goalsById.emplace(goal["id"].get<std::string>(), &goal);
++
++    for (auto & goal : *goalsIt) {
++        if (goal.value("status", "") != "running")
++            continue;
++
++        auto id = goal.value("id", "");
++        auto kind = goal.value("kind", "build");
++        bool substitution = kind == "substitution";
++
++        auto chain = whyChain(goalsById, id);
++        bool isRoot = chain.size() == 1;
++
++        nlohmann::json why;
++        why["rootDrvPath"] = chain.empty() ? nlohmann::json(nullptr) : nlohmann::json(chain.front());
++        why["chain"] = chain;
++        why["cause"] = isRoot ? "requested" : (substitution ? "outputInvalid" : "outputsMissing");
++
++        nlohmann::json j;
++        j["drvPath"] = substitution ? nlohmann::json(nullptr) : nlohmann::json(id);
++        j["storePath"] = substitution ? nlohmann::json(id) : nlohmann::json(nullptr);
++        j["outputs"] = goal.value("outputs", nlohmann::json::array());
++        j["type"] = kind;
++        j["pid"] = doc.value("pid", 0);
++        j["startTime"] = goal.contains("startTime") ? goal["startTime"] : nlohmann::json(nullptr);
++        j["user"] = doc.contains("user") ? doc["user"] : nlohmann::json(nullptr);
++        j["uid"] = doc.contains("uid") ? doc["uid"] : nlohmann::json(nullptr);
++        j["logFile"] = goal.contains("logFile") ? goal["logFile"] : nlohmann::json(nullptr);
++        j["why"] = std::move(why);
++        entries.push_back(std::move(j));
++    }
++
++    return entries;
++}
++
 +struct CmdStoreBuilds : Command, MixJSON
 +{
++    bool graph = false;
++
++    CmdStoreBuilds()
++    {
++        addFlag({
++            .longName = "graph",
++            .description =
++                "Show every coordinator's full goal graph (waiting, running and "
++                "completed goals with their dependency edges) instead of the flat "
++                "list of running goals.",
++            .handler = {&graph, true},
++        });
++    }
++
 +    std::string description() override
 +    {
 +        return "show the builds and substitutions currently in progress";
@@ -101,39 +244,20 @@ index 0000000..c509e41
 +           a subcommand's feature automatically, so require it here too. */
 +        experimentalFeatureSettings.require(Xp::BuildStatusDir);
 +
-+        auto dir = statusDir();
++        auto coordinators = loadCoordinators();
 +
++        if (graph)
++            runGraph(coordinators);
++        else
++            runFlat(coordinators);
++    }
++
++    void runFlat(const std::vector<nlohmann::json> & coordinators)
++    {
 +        std::vector<nlohmann::json> entries;
-+
-+        if (std::filesystem::exists(dir)) {
-+            for (auto & entry : std::filesystem::directory_iterator{dir}) {
-+                auto & p = entry.path();
-+                if (p.extension() != ".json")
-+                    continue;
-+
-+                nlohmann::json j;
-+                try {
-+                    j = nlohmann::json::parse(readFile(p.string()));
-+                } catch (...) {
-+                    /* A half-written or corrupt file; skip it. */
-+                    continue;
-+                }
-+
-+                /* Drop entries whose writer is no longer alive. */
-+                auto pidIt = j.find("pid");
-+                if (pidIt != j.end() && pidIt->is_number()) {
-+                    if (!pidAlive(pidIt->get<pid_t>())) {
-+                        try {
-+                            std::filesystem::remove(p);
-+                        } catch (...) {
-+                        }
-+                        continue;
-+                    }
-+                }
-+
-+                entries.push_back(std::move(j));
-+            }
-+        }
++        for (auto & doc : coordinators)
++            for (auto & entry : flattenCoordinator(doc))
++                entries.push_back(entry);
 +
 +        if (json) {
 +            printJSON(nlohmann::json(entries));
@@ -156,10 +280,71 @@ index 0000000..c509e41
 +            if (j.contains("why") && j["why"].contains("chain")) {
 +                auto & chain = j["why"]["chain"];
 +                if (chain.is_array() && !chain.empty())
-+                    logger->cout("    because %s wants it (%s)",
++                    logger->cout(
++                        "    because %s wants it (%s)",
 +                        chain.front().get<std::string>(),
 +                        j["why"].value("cause", "?"));
 +            }
++        }
++    }
++
++    void runGraph(const std::vector<nlohmann::json> & coordinators)
++    {
++        if (json) {
++            nlohmann::json doc;
++            doc["coordinators"] = coordinators;
++            printJSON(doc);
++            return;
++        }
++
++        if (coordinators.empty()) {
++            notice("No builds or substitutions are currently in progress.");
++            return;
++        }
++
++        for (auto & doc : coordinators) {
++            auto user =
++                doc.contains("user") && !doc["user"].is_null() ? doc["user"].get<std::string>() : "<unknown>";
++            logger->cout("coordinator pid %d (user %s)", doc.value("pid", 0), user);
++
++            auto goalsIt = doc.find("goals");
++            if (goalsIt == doc.end() || !goalsIt->is_array())
++                continue;
++
++            /* Invert `waiters` (child -> parents) into parent -> children so
++               the forest prints top-down from the requested roots. */
++            std::map<std::string, std::vector<std::string>> children;
++            std::map<std::string, const nlohmann::json *> goalsById;
++            for (auto & goal : *goalsIt) {
++                if (!goal.contains("id") || !goal["id"].is_string())
++                    continue;
++                auto id = goal["id"].get<std::string>();
++                goalsById.emplace(id, &goal);
++                if (goal.contains("waiters") && goal["waiters"].is_array())
++                    for (auto & w : goal["waiters"])
++                        if (w.is_string())
++                            children[w.get<std::string>()].push_back(id);
++            }
++
++            /* DFS from each root; a goal reachable via several parents prints
++               once per edge, but never re-descends (cycle/diamond guard). */
++            std::set<std::string> expanded;
++            auto printNode = [&](const auto & self, const std::string & id, size_t depth) -> void {
++                std::string status = "?";
++                if (auto it = goalsById.find(id); it != goalsById.end())
++                    status = it->second->value("status", "?");
++                logger->cout("%s%s %s", std::string(2 + depth * 2, ' '), status, id);
++                if (!expanded.insert(id).second)
++                    return;
++                if (auto it = children.find(id); it != children.end())
++                    for (auto & child : it->second)
++                        self(self, child, depth + 1);
++            };
++
++            if (doc.contains("roots") && doc["roots"].is_array())
++                for (auto & root : doc["roots"])
++                    if (root.is_string())
++                        printNode(printNode, root.get<std::string>(), 0);
 +        }
 +    }
 +};
@@ -167,10 +352,10 @@ index 0000000..c509e41
 +static auto rCmdStoreBuilds = registerCommand2<CmdStoreBuilds>({"store", "builds"});
 diff --git a/src/nix/store-builds.md b/src/nix/store-builds.md
 new file mode 100644
-index 0000000..62eaba0
+index 000000000..e94f73077
 --- /dev/null
 +++ b/src/nix/store-builds.md
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,138 @@
 +R""(
 +
 +# Examples
@@ -207,44 +392,105 @@ index 0000000..62eaba0
 +  ]
 +  ```
 +
++* Show each coordinator's full goal graph, including goals that are still
++  waiting on dependencies and goals that already completed this session:
++
++  ```console
++  # nix store builds --graph --json
++  {
++    "coordinators": [
++      {
++        "pid": 12345,
++        "user": "alice",
++        "uid": 1000,
++        "roots": ["/nix/store/…-app.drv"],
++        "goals": [
++          {
++            "id": "/nix/store/…-app.drv",
++            "kind": "build",
++            "status": "waiting",
++            "waiters": [],
++            "outputs": ["out"],
++            "startTime": null,
++            "logFile": null,
++            "builderPid": null
++          },
++          {
++            "id": "/nix/store/…-hello-2.12.drv",
++            "kind": "build",
++            "status": "running",
++            "waiters": ["/nix/store/…-app.drv"],
++            "outputs": ["out"],
++            "startTime": 1720200000,
++            "logFile": "/nix/var/log/nix/drvs/ab/cdef….drv.bz2",
++            "builderPid": 23456
++          }
++        ]
++      }
++    ]
++  }
++  ```
++
 +# Description
 +
-+This command reports the builds and substitutions that are *currently in
-+progress*, giving global, daemon-independent observability into what Nix is
-+doing and *why*.
++This command reports what Nix is *currently* building or substituting, and
++*why*, giving global, daemon-independent observability into build activity.
 +
 +Unlike most `nix store` subcommands, `nix store builds` does **not** connect to
 +a Nix daemon. Instead it reads the *status directory*
-+`<store-state-dir>/status` (e.g. `/nix/var/nix/status`), where each active
-+build or substitution goal writes one JSON file while it is doing real work and
-+removes it on completion. The directory location is derived from the Nix state
-+directory, so it honors the `NIX_STATE_DIR` environment variable.
++`<store-state-dir>/status` (e.g. `/nix/var/nix/status`), where every build
++coordinator process (each forked daemon worker, or a client using a local
++store directly) maintains one `graph-<pid>.json` file describing its entire
++goal graph, and removes it on exit. The directory location is derived from the
++Nix state directory, so it honors the `NIX_STATE_DIR` environment variable.
 +
-+Because each daemon worker is a separate process, a status file can be left
-+behind if its writer crashes. `nix store builds` treats a file whose recorded
-+`pid` is no longer alive as stale: it ignores such files and removes them.
++A graph file can be left behind if its coordinator crashes. `nix store builds`
++treats a file whose recorded `pid` is no longer alive as stale: it ignores
++such files and removes them.
 +
-+Each status file, and each element of the `--json` array, has the following
-+fields:
++## Flat view (default)
++
++By default the command shows only the goals that are actively doing work
++(status `running`), one entry per goal across all coordinators. Each element
++of the `--json` array has the following fields:
 +
 +- `drvPath`: the derivation being built, or `null` for a substitution.
 +- `storePath`: the store path being substituted, or `null` for a build.
 +- `outputs`: the wanted output names (builds only).
 +- `type`: `"build"` or `"substitution"`.
-+- `pid`: the daemon worker process building/substituting this path.
++- `pid`: the coordinator process building/substituting this path.
 +- `startTime`: when the work began, in seconds since the Unix epoch.
 +- `user` / `uid`: the client that requested the work, if known (otherwise
 +  `null`, e.g. for a local store used without a daemon).
 +- `logFile`: the on-disk build log path (builds only), if build logs are kept.
-+- `why`: the chain of goals leading to this one:
++- `why`: the chain of goals leading to this one, recomputed from the graph's
++  `waiters` edges:
 +  - `rootDrvPath`: the top-level goal the client asked for.
 +  - `chain`: the goals from the root down to this one, root first.
 +  - `cause`: a best-effort reason this goal exists (e.g. `"requested"`,
 +    `"outputsMissing"`, `"outputInvalid"`).
 +
++## Graph view (`--graph`)
++
++With `--graph`, the command reports each coordinator's goal graph whole: the
++requested `roots` and every goal the coordinator knows, including goals still
++`waiting` on dependencies and goals that already completed (`done` / `failed`)
++this session. Each goal has:
++
++- `id`: the derivation path (builds) or store path (substitutions).
++- `kind`: `"build"` or `"substitution"`.
++- `status`: `"waiting"`, `"running"`, `"done"` or `"failed"`.
++- `waiters`: the ids of the goals waiting on this one (its parents in the
++  dependency forest).
++- `outputs`: the wanted output names, when known.
++- `startTime`, `logFile`, `builderPid`: set while the goal is `running`
++  (`builderPid` is the local builder child or build hook process).
++
++Without `--json`, `--graph` prints the forest indented under each coordinator.
++
 +This command is only available with the
 +[`build-status-dir`](@docroot@/development/experimental-features.md#xp-feature-build-status-dir)
-+experimental feature enabled. That same feature gates the writing of status
++experimental feature enabled. That same feature gates the writing of graph
 +files, so both the producer and this consumer must have it enabled.
 +
 +)""

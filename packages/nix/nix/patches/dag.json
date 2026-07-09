@@ -15,15 +15,15 @@
       "deps": []
     },
     {
-      "patch": "0004-libstore-add-build-status-directory-writer.patch",
+      "patch": "0004-libstore-add-goal-graph-recorder.patch",
       "deps": []
     },
     {
-      "patch": "0005-libstore-write-status-files-from-build-and-substitut.patch",
+      "patch": "0005-libstore-maintain-the-goal-graph-from-the-worker-and.patch",
       "deps": []
     },
     {
-      "patch": "0006-libstore-daemon-record-client-uid-and-user-for-build.patch",
+      "patch": "0006-libstore-daemon-record-client-uid-and-user-for-the-g.patch",
       "deps": []
     },
     {

@@ -40,10 +40,10 @@ Refs indexable-inc/index#2354
 Assisted-by: Claude <noreply@anthropic.com>
 
 diff --git a/src/libstore/unix/build/derivation-builder.cc b/src/libstore/unix/build/derivation-builder.cc
-index 6ef3223..afbcd19 100644
+index 311d49e47..3414a29ab 100644
 --- a/src/libstore/unix/build/derivation-builder.cc
 +++ b/src/libstore/unix/build/derivation-builder.cc
-@@ -798,6 +798,14 @@ std::optional<Descriptor> DerivationBuilderImpl::startBuild()
+@@ -805,6 +805,14 @@ std::optional<Descriptor> DerivationBuilderImpl::startBuild()
                                             makeFallbackPath(status.known->path);
          scratchOutputs.insert_or_assign(outputName, scratchPath);
  
@@ -60,7 +60,7 @@ index 6ef3223..afbcd19 100644
          inputRewrites[hashPlaceholder(outputName)] = store.printStorePath(scratchPath);
 diff --git a/tests/functional/ca/gc-scratch-output.nix b/tests/functional/ca/gc-scratch-output.nix
 new file mode 100644
-index 0000000..97cf48b
+index 000000000..97cf48b1c
 --- /dev/null
 +++ b/tests/functional/ca/gc-scratch-output.nix
 @@ -0,0 +1,35 @@
@@ -101,7 +101,7 @@ index 0000000..97cf48b
 +}
 diff --git a/tests/functional/ca/gc-scratch-output.sh b/tests/functional/ca/gc-scratch-output.sh
 new file mode 100755
-index 0000000..5a86b91
+index 000000000..5a86b913a
 --- /dev/null
 +++ b/tests/functional/ca/gc-scratch-output.sh
 @@ -0,0 +1,61 @@
@@ -167,7 +167,7 @@ index 0000000..5a86b91
 +grep -q "scratch-$seed" "$out/c"
 +grep -q done "$out/c"
 diff --git a/tests/functional/ca/meson.build b/tests/functional/ca/meson.build
-index 391e98d..ab5d9ca 100644
+index 391e98d13..ab5d9ca24 100644
 --- a/tests/functional/ca/meson.build
 +++ b/tests/functional/ca/meson.build
 @@ -19,6 +19,7 @@ suites += {

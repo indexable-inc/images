@@ -1,0 +1,278 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Wed, 8 Jul 2026 18:11:34 -0700
+Subject: [PATCH] libstore: maintain the goal graph from the worker and goals
+
+Wires the `GoalGraph` recorder into the goal machinery:
+
+The worker owns the recorder and is the only writer: every goal state
+change passes through `Worker::wakeUp`, which marks the graph dirty,
+and the run loop flushes it (throttled) once the awake goals settle.
+`waitForInput` caps its poll timeout to a second while a rewrite is
+pending, bounding the file's staleness.
+
+Goals fill in `runningStatus` at the point they start doing real work:
+both `mcRunningBuilds` sites in DerivationBuildingGoal (build hook /
+remote, and local build) and the `runningSubstitutions` site in
+PathSubstitutionGoal. `DerivationBuilder` gains a `builderPid()`
+accessor so the graph can report the builder child's pid.
+
+`Goal::amDone` reports completed goals to the recorder (with `waiters`
+still intact) so the graph keeps them for the session; goals that end
+with `ecNoSubstituters` are skipped, since "couldn't substitute, will
+build instead" is expected control flow, not an outcome.
+
+Refs indexable-inc/index#2485
+Assisted-by: Claude <noreply@anthropic.com>
+
+diff --git a/src/libstore/build/derivation-building-goal.cc b/src/libstore/build/derivation-building-goal.cc
+index 60ca5492c..639f6772c 100644
+--- a/src/libstore/build/derivation-building-goal.cc
++++ b/src/libstore/build/derivation-building-goal.cc
+@@ -9,6 +9,7 @@
+ #include "nix/util/environment-variables.hh"
+ #include "nix/util/config-global.hh"
+ #include "nix/store/build/worker.hh"
++#include "nix/store/build/goal-graph.hh"
+ #include "nix/util/util.hh"
+ #include "nix/util/compression.hh"
+ #include "nix/store/common-protocol.hh"
+@@ -50,6 +51,18 @@ std::string DerivationBuildingGoal::key()
+     return "dd$" + std::string(drvPath.name()) + "$" + worker.store.printStorePath(drvPath);
+ }
+ 
++/**
++ * The names of the outputs a build goal is producing, for the goal graph.
++ */
++static std::vector<std::string> wantedOutputNames(const std::map<std::string, InitialOutput> & initialOutputs)
++{
++    std::vector<std::string> names;
++    names.reserve(initialOutputs.size());
++    for (auto & [name, _] : initialOutputs)
++        names.push_back(name);
++    return names;
++}
++
+ std::string showKnownOutputs(const StoreDirConfig & store, const Derivation & drv)
+ {
+     std::string msg;
+@@ -641,6 +654,16 @@ Goal::Co DerivationBuildingGoal::buildWithHook(
+             msg,
+             Logger::Fields{worker.store.printStorePath(drvPath), hook->machineName, 1, 1}));
+     mcRunningBuilds = std::make_unique<MaintainCount<uint64_t>>(worker.runningBuilds);
++    if (worker.goalGraph) {
++        auto logFile = logFileFor(worker.store, drvPath, settings.getLogFileSettings().compressLog);
++        runningStatus = GoalRunningInfo{
++            .startTime = time(nullptr),
++            .logFile = logFile ? std::optional(logFile->string()) : std::nullopt,
++            .builderPid = std::optional<pid_t>(hook->pid),
++            .outputs = wantedOutputNames(initialOutputs),
++        };
++        worker.goalGraph->markDirty();
++    }
+     worker.updateProgress();
+ 
+     std::string currentHookLine;
+@@ -790,6 +813,10 @@ Goal::Co DerivationBuildingGoal::buildLocally(
+     std::unique_ptr<BuildLog> buildLog;
+     std::unique_ptr<LogFile> logFile;
+ 
++    /* Declared before `started` so the lambda can read the builder's child
++       pid for the goal graph. */
++    DerivationBuilderUnique builder;
++
+     auto openLogFile = [&]() {
+         logFile = std::make_unique<LogFile>(worker.store, drvPath, settings.getLogFileSettings());
+     };
+@@ -807,11 +834,20 @@ Goal::Co DerivationBuildingGoal::buildLocally(
+             std::make_unique<Activity>(
+                 *logger, lvlInfo, actBuild, msg, Logger::Fields{worker.store.printStorePath(drvPath), "", 1, 1}));
+         mcRunningBuilds = std::make_unique<MaintainCount<uint64_t>>(worker.runningBuilds);
++        if (worker.goalGraph) {
++            auto logFilePath = logFileFor(worker.store, drvPath, settings.getLogFileSettings().compressLog);
++            runningStatus = GoalRunningInfo{
++                .startTime = time(nullptr),
++                .logFile = logFilePath ? std::optional(logFilePath->string()) : std::nullopt,
++                .builderPid = builder->builderPid(),
++                .outputs = wantedOutputNames(initialOutputs),
++            };
++            worker.goalGraph->markDirty();
++        }
+         worker.updateProgress();
+     };
+ 
+     std::unique_ptr<Activity> actLock;
+-    DerivationBuilderUnique builder;
+     Descriptor builderOut;
+ 
+     // Will continue here while waiting for a build user below
+@@ -1322,6 +1358,7 @@ DerivationBuildingGoal::checkPathValidity(std::map<std::string, InitialOutput> &
+ Goal::Done DerivationBuildingGoal::doneSuccess(BuildResult::Success::Status status, SingleDrvOutputs builtOutputs)
+ {
+     mcRunningBuilds.reset();
++    runningStatus.reset();
+ 
+     if (status == BuildResult::Success::Built)
+         worker.doneBuilds++;
+@@ -1338,6 +1375,7 @@ Goal::Done DerivationBuildingGoal::doneSuccess(BuildResult::Success::Status stat
+ Goal::Done DerivationBuildingGoal::doneFailure(BuildError ex)
+ {
+     mcRunningBuilds.reset();
++    runningStatus.reset();
+ 
+     worker.exitStatusFlags.updateFromStatus(ex.status);
+     if (ex.status != BuildResult::Failure::DependencyFailed)
+diff --git a/src/libstore/build/goal.cc b/src/libstore/build/goal.cc
+index ef3501b00..25b1cd4e3 100644
+--- a/src/libstore/build/goal.cc
++++ b/src/libstore/build/goal.cc
+@@ -204,6 +204,9 @@ Goal::Done Goal::amDone(ExitCode result)
+     assert(result == ecSuccess || result == ecFailed || result == ecNoSubstituters);
+     exitCode = result;
+ 
++    if (worker.goalGraph)
++        worker.goalGraph->goalFinished(*this, worker.store, result);
++
+     // Log the failure if we have one and shouldn't preserve it.
+     // Only log for actual failures (ecFailed), not for ecNoSubstituters
+     // which indicates "couldn't substitute, will try building" - that's
+diff --git a/src/libstore/build/substitution-goal.cc b/src/libstore/build/substitution-goal.cc
+index d58bec885..73f303c9f 100644
+--- a/src/libstore/build/substitution-goal.cc
++++ b/src/libstore/build/substitution-goal.cc
+@@ -202,6 +202,10 @@ Goal::Co PathSubstitutionGoal::tryToRun(
+     }
+ 
+     auto maintainRunningSubstitutions = std::make_unique<MaintainCount<uint64_t>>(worker.runningSubstitutions);
++    if (worker.goalGraph) {
++        runningStatus = GoalRunningInfo{.startTime = time(nullptr)};
++        worker.goalGraph->markDirty();
++    }
+     worker.updateProgress();
+ 
+ #ifndef _WIN32
+@@ -309,6 +313,8 @@ Goal::Co PathSubstitutionGoal::tryToRun(
+ void PathSubstitutionGoal::cleanup()
+ {
+     try {
++        runningStatus.reset();
++
+         if (thr.joinable()) {
+             // FIXME: signal worker thread to quit.
+             thr.join();
+diff --git a/src/libstore/build/worker.cc b/src/libstore/build/worker.cc
+index ffb1027b4..4c58b88a7 100644
+--- a/src/libstore/build/worker.cc
++++ b/src/libstore/build/worker.cc
+@@ -37,6 +37,7 @@ Worker::Worker(Store & store, Store & evalStore)
+     nrLocalBuilds = 0;
+     nrSubstitutions = 0;
+     lastWokenUp = steady_time_point::min();
++    goalGraph = GoalGraph::forCurrentProcess();
+ }
+ 
+ Worker::~Worker()
+@@ -212,6 +213,10 @@ void Worker::wakeUp(GoalPtr goal)
+ {
+     goal->trace("woken up");
+     addToWeakGoals(awake, goal);
++    /* Every goal state change passes through here, so this is the one
++       choke point where the goal graph learns it is stale. */
++    if (goalGraph)
++        goalGraph->markDirty();
+ }
+ 
+ size_t Worker::getNrLocalBuilds()
+@@ -367,6 +372,12 @@ void Worker::run(const Goals & _topGoals)
+             }
+         }
+ 
++        /* Rewrite the goal-graph file (throttled) now that the awake goals
++           have settled; the final flush before exit happens with topGoals
++           already empty, which drains the graph to just completed goals. */
++        if (goalGraph)
++            goalGraph->flush(topGoals, store);
++
+         if (topGoals.empty())
+             break;
+ 
+@@ -448,6 +459,15 @@ void Worker::waitForInput()
+     } else
+         lastWokenUp = steady_time_point::min();
+ 
++    /* A dirty goal graph is flushed from the run loop, so don't sleep more
++       than a second while there is a pending rewrite: together with the
++       once-per-second throttle in GoalGraph::flush this bounds the file's
++       staleness to about a second. */
++    if (goalGraph && goalGraph->isDirty()) {
++        timeout = useTimeout ? std::min(timeout, 1L) : 1L;
++        useTimeout = true;
++    }
++
+     if (useTimeout)
+         vomit("sleeping %d seconds", timeout);
+ 
+diff --git a/src/libstore/include/nix/store/build/derivation-builder.hh b/src/libstore/include/nix/store/build/derivation-builder.hh
+index f521c0402..3c396cd17 100644
+--- a/src/libstore/include/nix/store/build/derivation-builder.hh
++++ b/src/libstore/include/nix/store/build/derivation-builder.hh
+@@ -181,6 +181,15 @@ struct DerivationBuilder : RestrictionContext
+      * killed.
+      */
+     virtual bool killChild() = 0;
++
++    /**
++     * The pid of the builder child process, if there is one, for the goal
++     * graph (see the `build-status-dir` experimental feature).
++     */
++    virtual std::optional<pid_t> builderPid()
++    {
++        return std::nullopt;
++    }
+ };
+ 
+ /**
+diff --git a/src/libstore/include/nix/store/build/worker.hh b/src/libstore/include/nix/store/build/worker.hh
+index baf5c5a4d..1fa9abd9f 100644
+--- a/src/libstore/include/nix/store/build/worker.hh
++++ b/src/libstore/include/nix/store/build/worker.hh
+@@ -8,6 +8,7 @@
+ #include "nix/store/build-result.hh"
+ #include "nix/store/realisation.hh"
+ #include "nix/util/muxable-pipe.hh"
++#include "nix/store/build/goal-graph.hh"
+ 
+ #include <functional>
+ #include <future>
+@@ -159,6 +160,13 @@ public:
+     Store & evalStore;
+     const WorkerSettings & settings;
+ 
++    /**
++     * Records this worker's entire goal graph to a `graph-<pid>.json` file
++     * under the build status directory. Null unless the `build-status-dir`
++     * experimental feature is enabled.
++     */
++    std::unique_ptr<GoalGraph> goalGraph;
++
+     /**
+      * Function to get the substituters to use for path substitution.
+      *
+diff --git a/src/libstore/unix/build/derivation-builder.cc b/src/libstore/unix/build/derivation-builder.cc
+index fc877dd56..d7a7bb205 100644
+--- a/src/libstore/unix/build/derivation-builder.cc
++++ b/src/libstore/unix/build/derivation-builder.cc
+@@ -459,6 +459,13 @@ public:
+ 
+     bool killChild() override;
+ 
++    std::optional<pid_t> builderPid() override
++    {
++        /* `Pid` holds -1 when there is no child. */
++        pid_t p = pid;
++        return p > 0 ? std::optional(p) : std::nullopt;
++    }
++
+ private:
+ 
+     bool decideWhetherDiskFull();
