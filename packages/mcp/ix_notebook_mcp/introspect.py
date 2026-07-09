@@ -142,6 +142,164 @@ def binding_names(code: str) -> tuple[set[str], set[str]]:
     return assigned, used
 
 
+
+def unexecuted_bindings(code: str, stop_line: int) -> list[str]:
+    """The names ``code`` binds at module scope that a run stopped on
+    ``stop_line`` never (re)bound, in source order (issue #2526).
+
+    ``stop_line`` is the top-level cell line that was executing when the cell's
+    exception escaped. Every statement that completed strictly before it did its
+    binding; the statement in flight and everything after it did not, so those
+    targets keep whatever value an earlier run left -- the stale-state trap the
+    failure note warns about. The walk is static and best-effort:
+
+    - A statement counts once its extent reaches ``stop_line``
+      (``end_lineno >= stop_line``), so a multi-line assignment that failed
+      inside its value expression still reports its target.
+    - Compound statements recurse into their blocks; their header bindings (a
+      ``for`` target, ``with ... as``) count only when the header itself is the
+      stop line, because a failure inside the body means the header already
+      bound this iteration's value.
+    - ``def``/``class`` bodies never contribute (those are locals); the
+      def/class *name* is the module-scope binding and counts like any other.
+    - Untaken branches are indistinguishable statically, so an ``if``/``except``
+      arm past the stop line is included even when the run would have skipped
+      it: over-warning beats silently missing a stale name.
+
+    Returns ``[]`` for code that does not parse (a SyntaxError's traceback
+    already shows the offending line, and nothing at all ran)."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+    out: list[str] = []
+    _unexecuted_in(tree.body, stop_line, out)
+    return out
+
+
+def _unexecuted_in(stmts: list[ast.stmt], stop_line: int, out: list[str]) -> None:
+    """Collect into ``out`` the bindings in ``stmts`` execution stopped before;
+    see :func:`unexecuted_bindings` for the rules."""
+    for stmt in stmts:
+        if (stmt.end_lineno or stmt.lineno) < stop_line:
+            continue  # completed before execution reached the stop line
+        if isinstance(stmt, (ast.For, ast.AsyncFor)):
+            if stmt.lineno >= stop_line:
+                # Stopped on the header: this pass never bound the target. A
+                # failure in the body (below) means the header did bind.
+                _bindings_in(stmt.target, out)
+                _bindings_in(stmt.iter, out)  # a walrus in the iterable
+            _unexecuted_in(stmt.body, stop_line, out)
+            _unexecuted_in(stmt.orelse, stop_line, out)
+        elif isinstance(stmt, (ast.While, ast.If)):
+            if stmt.lineno >= stop_line:
+                _bindings_in(stmt.test, out)  # a walrus in the condition
+            _unexecuted_in(stmt.body, stop_line, out)
+            _unexecuted_in(stmt.orelse, stop_line, out)
+        elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+            if stmt.lineno >= stop_line:
+                for item in stmt.items:
+                    _bindings_in(item.context_expr, out)
+                    if item.optional_vars is not None:
+                        _bindings_in(item.optional_vars, out)
+            _unexecuted_in(stmt.body, stop_line, out)
+        elif isinstance(stmt, (ast.Try, ast.TryStar)):
+            _unexecuted_in(stmt.body, stop_line, out)
+            for handler in stmt.handlers:
+                if handler.name and handler.lineno >= stop_line:
+                    _note(handler.name, out)
+                _unexecuted_in(handler.body, stop_line, out)
+            _unexecuted_in(stmt.orelse, stop_line, out)
+            _unexecuted_in(stmt.finalbody, stop_line, out)
+        elif isinstance(stmt, ast.Match):
+            for case in stmt.cases:
+                if case.pattern.lineno >= stop_line:
+                    _bindings_in(case.pattern, out)  # capture patterns bind
+                _unexecuted_in(case.body, stop_line, out)
+        elif isinstance(stmt, ast.AnnAssign) and stmt.value is None:
+            continue  # a bare `x: T` annotates without binding
+        else:
+            # A simple statement (or a def/class) whose extent reaches the stop
+            # line: in flight or never reached, so none of its bindings landed.
+            _bindings_in(stmt, out)
+
+
+def _note(name: str, out: list[str]) -> None:
+    if name not in out:
+        out.append(name)
+
+
+def _bindings_in(node: ast.AST, out: list[str]) -> None:
+    _Bindings(out).visit(node)
+
+
+class _Bindings(ast.NodeVisitor):
+    """Every module-scope name a node binds, appended to ``out`` in source
+    order. Function/class/lambda bodies are private scopes and are not entered
+    (the def/class *name* is the enclosing scope's binding). Comprehension
+    targets do not leak either, but a walrus inside one binds the enclosing
+    scope (PEP 572), so comprehensions are entered minus their targets."""
+
+    def __init__(self, out: list[str]) -> None:
+        self.out = out
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if isinstance(node.ctx, (ast.Store, ast.Del)):
+            _note(node.id, self.out)
+
+    def visit_alias(self, node: ast.alias) -> None:
+        _note(node.asname or node.name.split(".", 1)[0], self.out)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        _note(node.name, self.out)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        _note(node.name, self.out)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        _note(node.name, self.out)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        """A lambda body is its own scope; nothing in it binds ours."""
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+        if node.name:
+            _note(node.name, self.out)
+        self.generic_visit(node)
+
+    def visit_MatchAs(self, node: ast.MatchAs) -> None:
+        if node.name:
+            _note(node.name, self.out)
+        self.generic_visit(node)
+
+    def visit_MatchStar(self, node: ast.MatchStar) -> None:
+        if node.name:
+            _note(node.name, self.out)
+
+    def visit_MatchMapping(self, node: ast.MatchMapping) -> None:
+        if node.rest:
+            _note(node.rest, self.out)
+        self.generic_visit(node)
+
+    def _visit_comprehension(
+        self, node: ast.ListComp | ast.SetComp | ast.GeneratorExp | ast.DictComp
+    ) -> None:
+        if isinstance(node, ast.DictComp):
+            self.visit(node.key)
+            self.visit(node.value)
+        else:
+            self.visit(node.elt)
+        for gen in node.generators:
+            self.visit(gen.iter)
+            for cond in gen.ifs:
+                self.visit(cond)
+
+    visit_ListComp = _visit_comprehension
+    visit_SetComp = _visit_comprehension
+    visit_GeneratorExp = _visit_comprehension
+    visit_DictComp = _visit_comprehension
+
+
 def describe(value: Any) -> dict:
     """A compact descriptor for one live value.
 

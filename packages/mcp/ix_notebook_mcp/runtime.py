@@ -2485,6 +2485,50 @@ def _error_line(exc: BaseException, job: Job) -> int | None:
     return line
 
 
+def _cell_stop_line(exc: BaseException, job: Job) -> int | None:
+    """The top-level cell line executing when ``exc`` escaped: the shallowest
+    traceback frame in this job's pseudo-file. Distinct from :func:`_error_line`
+    (the deepest cell frame, for the dashboard's highlight): a failure inside a
+    function the cell defined stops the cell at the call site, and it is the
+    call site that decides which later top-level statements never ran."""
+    target = f"<job {job.id}>"
+    tb = exc.__traceback__
+    while tb is not None:
+        if tb.tb_frame.f_code.co_filename == target:
+            return tb.tb_lineno
+        tb = tb.tb_next
+    return None
+
+
+def _unexecuted_note(exc: BaseException, job: Job) -> str:
+    """A one-line warning naming the bindings the failed cell never reached
+    (issue #2526). A cell that raises partway through leaves every assignment
+    at/after the failing statement unexecuted while the namespace keeps the old
+    values, so a retry cell that reuses those names silently operates on stale
+    state (the incident: a rebuilt email reused the previous run's ``body`` and
+    sent a duplicate). Static and best-effort (see
+    :func:`introspect.unexecuted_bindings`); empty when nothing at/after the
+    failure binds a name."""
+    line = _cell_stop_line(exc, job)
+    if line is None:
+        return ""
+    try:
+        from .introspect import unexecuted_bindings
+
+        names = unexecuted_bindings(job.code, line)
+    except Exception:
+        # Best-effort: a failure here just means no note.
+        return ""
+    if not names:
+        return ""
+    return (
+        "\nNOTE: this cell failed before updating: "
+        + ", ".join(names)
+        + " (their current values, if any, predate this cell; rebuild them "
+        + "before reuse)."
+    )
+
+
 def _typecheck_enabled() -> bool:
     """Whether per-cell type checking runs. Default ON; the escape hatch is the
     ``IX_MCP_TYPECHECK`` env var (``0``/``false``/``no``/``off`` disables it) or,
@@ -2636,7 +2680,7 @@ async def _runner(job: Job, ns: dict) -> None:
         else:
             # The user's own code raised KeyboardInterrupt; keep its real
             # traceback (trimmed to the cell's frames) and the failing line.
-            job.error = _user_traceback(_kexc)
+            job.error = _user_traceback(_kexc) + _unexecuted_note(_kexc, job)
             job.error_line = _error_line(_kexc, job)
             job._exc = _kexc
         job._exc_tb = _kexc.__traceback__
@@ -2653,7 +2697,7 @@ async def _runner(job: Job, ns: dict) -> None:
         tb = _user_traceback(_exc)
         job.error_line = _error_line(_exc, job)
         hint = _type_error_hint(_exc) if isinstance(_exc, TypeError) else ""
-        job.error = tb + hint
+        job.error = tb + hint + _unexecuted_note(_exc, job)
         # Keep the exception object itself, so `await jobs['<id>']` re-raises it
         # (type + message + the cell's own traceback) instead of yielding None.
         job._exc = _exc
