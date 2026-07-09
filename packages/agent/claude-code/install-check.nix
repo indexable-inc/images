@@ -321,7 +321,7 @@
           r"\x1b\[[0-?]*[ -/]*[@-~]", "", output.decode("utf-8", "replace")
       )
       compact_loop = re.sub(r"\s+", "", plain_loop)
-      if "Diagnostics" in compact_loop and "Search:OK" in compact_loop:
+      if "Running:native" in compact_loop and "Search:OK" in compact_loop:
           proc.terminate()
           try:
               proc.wait(timeout=2)
@@ -344,7 +344,7 @@
   raw = b"".join(chunks).decode("utf-8", "replace")
   plain = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw)
   compact = re.sub(r"\s+", "", plain)
-  for needle in ("Diagnostics", "Search:OK"):
+  for needle in ("Running:native", "Search:OK"):
       if needle not in compact:
           sys.stderr.write(f"claude doctor check failed: missing {needle!r}\n")
           sys.stderr.write(plain[-4000:])

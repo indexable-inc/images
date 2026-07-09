@@ -46,7 +46,7 @@ You have been invoked in the following environment:
  - Primary working directory: /private/tmp/claude-extract-cwd
  - Is a git repository: false
  - Platform: darwin
- - Shell: bash
+ - Shell: /run/current-system/sw/bin/nu
  - OS Version: Darwin 25.5.0
  - You are powered by the model named Opus 4.8. The exact model ID is claude-opus-4-8.
  - Assistant knowledge cutoff is January 2026.

@@ -1,22 +1,22 @@
 {
-  "version": "0.27.23",
-  "cliHash": "sha256-IH6PQkW6ONPqKljJe6AsCkSuPhfSDaalq4pPMOxfA0g=",
+  "version": "0.27.31",
+  "cliHash": "sha256-gUqfCLDROnW97C69pSxUAlqWvbwNvSTOtX5SlUUEJXM=",
   "platforms": {
     "x86_64-linux": {
       "slug": "linux-x64",
-      "hash": "sha256-GZDHuhnh0eeuDX7FvujcrKtxccpTmTohhXzv3JEQHZ8="
+      "hash": "sha256-Hq/AiXDMRiem0bwIBQN4Red3g0/9X5WzJM6Y+BolZNo="
     },
     "aarch64-linux": {
       "slug": "linux-arm64",
-      "hash": "sha256-k9KbyUzNW4nuiFGcVGIe1plMaE7/OLqHDWqIRNSJG5I="
+      "hash": "sha256-AsnJZZHPJJkr+05Wg51ziB/+yagjBylZ8pzwbP00lqs="
     },
     "aarch64-darwin": {
       "slug": "darwin-arm64",
-      "hash": "sha256-v9F49XjDJHyuRwHEIj+IYBVIMTbzc0FFE2PzaateaBY="
+      "hash": "sha256-PLBTpTc/YGsiT//Hv6Fkf39SFFDPlZfnQjl/wwmkqDE="
     },
     "x86_64-darwin": {
       "slug": "darwin-x64",
-      "hash": "sha256-pTV6CqzWBQC2GsZ+nNCE4YNMTS80PRYFTHoRijukgiQ="
+      "hash": "sha256-Ko0EvbvSrF3YHoNIoUPCGElGATK4zrOSWLuJqeJK+bY="
     }
   }
 }

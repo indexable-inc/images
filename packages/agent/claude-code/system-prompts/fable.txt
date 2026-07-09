@@ -46,7 +46,7 @@ You have been invoked in the following environment:
  - Primary working directory: /private/tmp/claude-extract-cwd
  - Is a git repository: false
  - Platform: darwin
- - Shell: bash
+ - Shell: /run/current-system/sw/bin/nu
  - OS Version: Darwin 25.5.0
  - You are powered by the model fable-5.
  - The most recent Claude models are the Claude 5 family, Opus 4.8, and Haiku 4.5. Model IDs — Fable 5: 'claude-fable-5', Opus 4.8: 'claude-opus-4-8', Sonnet 5: 'claude-sonnet-5', Haiku 4.5: 'claude-haiku-4-5-20251001'. When building AI applications, default to the latest and most capable Claude models.
