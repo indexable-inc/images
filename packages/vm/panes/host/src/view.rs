@@ -289,9 +289,10 @@ define_class!(
             };
             // One synthetic ctrl serves however many translated chords are
             // down; engage it only for the first, and not at all while the
-            // user physically holds ctrl (same evdev keycode: a second press
-            // would later release ctrl out from under their real hold).
-            if forwarded.ctrl && !self.ivars().synthetic_ctrl.get() && !self.real_ctrl_held() {
+            // user physically holds LEFT ctrl (same evdev keycode: a second
+            // press would later release ctrl out from under their real
+            // hold).
+            if forwarded.ctrl && !self.ivars().synthetic_ctrl.get() && !self.left_ctrl_held() {
                 self.ivars().synthetic_ctrl.set(true);
                 self.send_keycode(KEY_LEFTCTRL, ButtonState::Pressed);
             }
@@ -373,20 +374,23 @@ define_class!(
             if cmd_key && self.ivars().chord_translation {
                 return;
             }
-            // A real LEFT ctrl pressed while the synthetic chord ctrl is
-            // down: both are evdev KEY_LEFTCTRL, so forwarding this press
-            // would double-press an already-down key, and the chord's
-            // release would then drop ctrl out from under the user's
-            // physical hold. Adopt instead: the key is already pressed
-            // guest-side, and this real key's release (tracked in
-            // held_modifiers above) now owns the eventual release. Right
-            // ctrl is a different evdev key (KEY_RIGHTCTRL) and coexists.
-            if state == ButtonState::Pressed
-                && code == KVK_CONTROL
-                && self.ivars().synthetic_ctrl.get()
+            // A real LEFT ctrl and the synthetic chord ctrl are the same
+            // evdev key (KEY_LEFTCTRL): a physical transition may need to
+            // swap ownership of that one guest key with the chord machinery
+            // instead of reaching the guest (see [`ctrl_handoff`]).
+            let chord_needs_ctrl =
+                self.ivars().held_keys.borrow().values().any(|key| key.ctrl);
+            match ctrl_handoff(code, state, self.ivars().synthetic_ctrl.get(), chord_needs_ctrl)
             {
-                self.ivars().synthetic_ctrl.set(false);
-                return;
+                CtrlHandoff::Adopt => {
+                    self.ivars().synthetic_ctrl.set(false);
+                    return;
+                }
+                CtrlHandoff::Rejoin => {
+                    self.ivars().synthetic_ctrl.set(true);
+                    return;
+                }
+                CtrlHandoff::Forward => {}
             }
             self.send_key(code, state);
         }
@@ -421,6 +425,50 @@ const fn modifier_transition(held: bool, class_down: bool) -> Option<ButtonState
         (true, _) => Some(ButtonState::Released),
         (false, true) => Some(ButtonState::Pressed),
         (false, false) => None,
+    }
+}
+
+/// See [`ctrl_handoff`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CtrlHandoff {
+    Adopt,
+    Rejoin,
+    Forward,
+}
+
+/// How a physical ctrl key's `flagsChanged` transition interacts with the
+/// synthetic chord ctrl. The real LEFT ctrl and the synthetic press are the
+/// same evdev key (`KEY_LEFTCTRL`), so ownership of that one guest key swaps
+/// instead of forwarding a transition the guest would misread:
+///
+/// - [`CtrlHandoff::Adopt`]: real left ctrl pressed while the synthetic
+///   ctrl is down. The key is already pressed guest-side, so forwarding
+///   would double-press it, and the chord's release would then drop ctrl
+///   out from under the user's physical hold. The real key's release
+///   (tracked in `held_modifiers`) now owns the eventual release.
+/// - [`CtrlHandoff::Rejoin`]: real left ctrl released while a translated
+///   chord key still rides ctrl (`chord_needs_ctrl`) — it adopted above, or
+///   was already physically held when the chord was pressed. Forwarding
+///   this release would strip ctrl out from under the chord, leaving a bare
+///   held key auto-repeating in the guest (Cmd+C held while tapping real
+///   ctrl typed "ccc…"). Ownership passes (back) to the chord: the last
+///   ctrl-riding key's release sends the guest release
+///   (`release_forwarded`).
+/// - [`CtrlHandoff::Forward`]: everything else. Right ctrl is
+///   `KEY_RIGHTCTRL`, a different evdev key, and always forwards.
+const fn ctrl_handoff(
+    code: u16,
+    state: ButtonState,
+    synthetic_ctrl: bool,
+    chord_needs_ctrl: bool,
+) -> CtrlHandoff {
+    if code != KVK_CONTROL {
+        return CtrlHandoff::Forward;
+    }
+    match state {
+        ButtonState::Pressed if synthetic_ctrl => CtrlHandoff::Adopt,
+        ButtonState::Released if chord_needs_ctrl => CtrlHandoff::Rejoin,
+        _ => CtrlHandoff::Forward,
     }
 }
 
@@ -510,10 +558,13 @@ impl PanesView {
         }
     }
 
-    /// A physical ctrl key's forwarded press is still outstanding.
-    fn real_ctrl_held(&self) -> bool {
-        let held = self.ivars().held_modifiers.borrow();
-        held.contains(&KVK_CONTROL) || held.contains(&KVK_RIGHT_CONTROL)
+    /// A physical LEFT ctrl's forwarded press is still outstanding. Only
+    /// the left key matters here: it shares evdev `KEY_LEFTCTRL` with the
+    /// synthetic chord ctrl (see [`ctrl_handoff`]), while right ctrl is
+    /// `KEY_RIGHTCTRL`, a different guest key that coexists with a
+    /// synthetic press.
+    fn left_ctrl_held(&self) -> bool {
+        self.ivars().held_modifiers.borrow().contains(&KVK_CONTROL)
     }
 
     /// Cmd went fully up: release every key that went down inside the chord.
@@ -719,6 +770,66 @@ mod tests {
         }
         assert_eq!(modifier_class(KVK_FUNCTION), Some(NSEventModifierFlags::Function));
         assert_eq!(modifier_class(KVK_ANSI_A), None);
+    }
+
+    #[test]
+    fn ctrl_adopted_mid_chord_rejoins_on_release() {
+        // Chord translation, Cmd+C held: synthetic ctrl is down and C rides
+        // it (held_keys[C].ctrl == true, so chord_needs_ctrl stays true
+        // throughout).
+        let chord_needs_ctrl = true;
+        // Real left ctrl pressed mid-chord: KEY_LEFTCTRL is already down
+        // guest-side, so it is adopted (no double press); the caller clears
+        // synthetic_ctrl.
+        assert_eq!(
+            ctrl_handoff(KVK_CONTROL, ButtonState::Pressed, true, chord_needs_ctrl),
+            CtrlHandoff::Adopt
+        );
+        // Real left ctrl released while C is still physically held: the
+        // release must NOT reach the guest (a bare held C auto-repeats
+        // "ccc…"); ownership rejoins the chord and the caller re-arms
+        // synthetic_ctrl, so C's eventual keyUp releases C then ctrl via
+        // release_forwarded.
+        assert_eq!(
+            ctrl_handoff(KVK_CONTROL, ButtonState::Released, false, chord_needs_ctrl),
+            CtrlHandoff::Rejoin
+        );
+    }
+
+    #[test]
+    fn ctrl_release_rejoins_even_when_held_before_chord() {
+        // Ctrl physically held before Cmd+C: no synthetic press was made
+        // (key_down defers to the real hold), but its release mid-chord
+        // strands the chord all the same, so it still rejoins.
+        assert_eq!(
+            ctrl_handoff(KVK_CONTROL, ButtonState::Released, false, true),
+            CtrlHandoff::Rejoin
+        );
+    }
+
+    #[test]
+    fn ctrl_without_chord_or_synthetic_forwards() {
+        // No synthetic ctrl, no chord riding ctrl: plain modifier traffic.
+        assert_eq!(
+            ctrl_handoff(KVK_CONTROL, ButtonState::Pressed, false, false),
+            CtrlHandoff::Forward
+        );
+        assert_eq!(
+            ctrl_handoff(KVK_CONTROL, ButtonState::Released, false, false),
+            CtrlHandoff::Forward
+        );
+    }
+
+    #[test]
+    fn right_ctrl_never_swaps_with_synthetic() {
+        // Right ctrl is KEY_RIGHTCTRL, not the synthetic KEY_LEFTCTRL:
+        // always forwarded, never adopted or rejoined.
+        for state in [ButtonState::Pressed, ButtonState::Released] {
+            assert_eq!(
+                ctrl_handoff(KVK_RIGHT_CONTROL, state, true, true),
+                CtrlHandoff::Forward
+            );
+        }
     }
 
     #[test]
