@@ -75,6 +75,7 @@ __all__ = [
     "Claude",
     "Codex",
     "Color",
+    "Cursor",
     "Dashboard",
     "Key",
     "Pattern",
@@ -86,6 +87,7 @@ __all__ = [
     "Tui",
     "WaitTimeout",
     "__version__",
+    "delegate",
     "publish",
     "serve",
     "socket_dir",
@@ -942,4 +944,6 @@ from .harness import (
     Agent as Agent,
     Claude as Claude,
     Codex as Codex,
+    Cursor as Cursor,
+    delegate as delegate,
 )
