@@ -31,6 +31,12 @@ A DataFrame (or list/dict/scalar) can be piped THROUGH a pipeline: pass
 
     df = await nu("where size > 1kb | sort-by size", input=df)
 
+In multi-statement source the input is delivered to the first statement that
+can accept pipeline input, so a leading ``cd``/``def`` (declared ``nothing``
+input) never drains it (``cd /tmp; ^cat | complete`` still feeds cat); when
+no statement can accept it, the call raises instead of silently dropping the
+payload (issue #2540).
+
 ``nu()`` is the single shell-out path: side-effectful commands
 (``git``/``gh`` writes) run as externals with ``^cmd``, and a CLI with a native
 ``--json`` mode decodes end to end (``^gh ... --json | from json``). For a nix
@@ -513,7 +519,10 @@ async def nu(
     being silently dropped (issue #2391), and ``let``/``def``/``cd`` persist
     to later calls (REPL semantics; the engine is per session, so another
     session's ``cd`` can never move this one's PWD). ``input`` pipes a value in as ``$in`` -- a polars DataFrame,
-    list, dict, or scalar (datetimes must be tz-aware). ``cwd`` sets ``PWD``
+    list, dict, or scalar (datetimes must be tz-aware) -- delivered to the
+    first statement that accepts pipeline input (a leading ``cd``/``def``
+    declares none and is skipped); when nothing can accept it the call
+    raises instead of dropping the payload (issue #2540). ``cwd`` sets ``PWD``
     and persists like ``cd``; if the remembered directory no longer exists
     the call raises with the remedy instead of silently running elsewhere.
     ``env`` adds environment variables;
