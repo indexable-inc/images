@@ -18,7 +18,7 @@ from ix_notebook_mcp import runtime, store
 # --------------------------------------------------------------------------- #
 
 
-def test_latest_namespace_is_not_stale_after_clear(tmp_path: Path) -> None:
+def test_latest_namespace_is_not_stale_after_clear(tmp_path: Path, fake_weave) -> None:
     # The dashboard namespace pane reads the newest *finished* run's globals,
     # empty or not, so clearing the namespace drops the pane instead of pinning
     # the last non-empty snapshot as stale data. A running job has no namespace
@@ -37,7 +37,7 @@ def test_latest_namespace_is_not_stale_after_clear(tmp_path: Path) -> None:
     assert store.latest_namespace(conn) == []
 
 
-def test_snapshot_roundtrip_keeps_only_the_newest(tmp_path: Path) -> None:
+def test_snapshot_roundtrip_keeps_only_the_newest(tmp_path: Path, fake_weave) -> None:
     conn = store.connect(tmp_path / "s.ixnb")
     store.save_snapshot(conn, created_at=1.0, blob=b"one", names=["a"], skipped=[])
     store.save_snapshot(
@@ -47,16 +47,18 @@ def test_snapshot_roundtrip_keeps_only_the_newest(tmp_path: Path) -> None:
     assert snap["blob"] == b"two"
     assert snap["names"] == ["a", "b"]
     assert snap["skipped"][0]["name"] == "s"
-    # Pruned: exactly one checkpoint lives in the file.
-    assert conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0] == 1
+    # Latest-wins: the agent's snapshot fact points at the newest blob; the
+    # journal keeps history (append-only), so there is no prune to count.
+    newest = fake_weave.facts[(conn.agent, "snapshot")]
+    assert fake_weave.blobs[str(newest)] == b"two"
 
 
-def test_latest_snapshot_is_none_for_a_fresh_file(tmp_path: Path) -> None:
+def test_latest_snapshot_is_none_for_a_fresh_file(tmp_path: Path, fake_weave) -> None:
     conn = store.connect(tmp_path / "s.ixnb")
     assert store.latest_snapshot(conn) is None
 
 
-def test_mark_interrupted_closes_running_rows_and_live_resources(tmp_path: Path) -> None:
+def test_mark_interrupted_closes_running_rows_and_live_resources(tmp_path: Path, fake_weave) -> None:
     conn = store.connect(tmp_path / "s.ixnb")
     store.start(conn, id="dead", name="dead", code="x", started_at=1.0)
     store.start(conn, id="fine", name="fine", code="y", started_at=1.0)
@@ -71,7 +73,7 @@ def test_mark_interrupted_closes_running_rows_and_live_resources(tmp_path: Path)
     assert store.live_resources(conn) == []
 
 
-def test_replayable_anchors_on_ended_at_and_excludes_replays(tmp_path: Path) -> None:
+def test_replayable_anchors_on_ended_at_and_excludes_replays(tmp_path: Path, fake_weave) -> None:
     conn = store.connect(tmp_path / "s.ixnb")
     # Finished before the checkpoint: captured by it, not replayed.
     store.start(conn, id="old", name="old", code="a = 1", started_at=1.0)
@@ -94,7 +96,7 @@ def test_replayable_anchors_on_ended_at_and_excludes_replays(tmp_path: Path) -> 
     assert [r["id"] for r in store.replayable(conn, since=None)] == ["old", "straddle", "new"]
 
 
-def test_kind_column_round_trips(tmp_path: Path) -> None:
+def test_kind_column_round_trips(tmp_path: Path, fake_weave) -> None:
     conn = store.connect(tmp_path / "s.ixnb")
     store.start(conn, id="r", name="r", code="x", started_at=1.0, kind="replay")
     assert store.get(conn, "r")["kind"] == "replay"

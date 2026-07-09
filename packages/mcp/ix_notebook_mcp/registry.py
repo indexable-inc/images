@@ -105,6 +105,10 @@ MODULES: tuple[Module, ...] = (
         preimport=True,
     ),
     Module(
+        "weave",
+        "one shared world - facts, queries, verbs against the weave journal",
+    ),
+    Module(
         "search",
         "meaning-based recall across the fleet corpus (code + agent/shell history): "
         "`await search.semantic(q, since='7d', compact=True)` / `grep(pattern)` / "
@@ -182,10 +186,6 @@ MODULES: tuple[Module, ...] = (
         "need a root `tunneld` daemon (start it explicitly with `iphone.start_tunneld(sudo=True)`) "
         "plus a device with Developer Mode on; works cable-free once the device is paired and "
         "network-enabled (see the iphone-control skill)",
-    ),
-    Module(
-        "tasks",
-        "generate and read the task-graph demo's SQLite DAG (`tasks.seed` / `load` / `frame`)",
     ),
     Module(
         "mcp_client",

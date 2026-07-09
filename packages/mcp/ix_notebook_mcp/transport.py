@@ -6,7 +6,7 @@ write to them, so here we hand the MCP protocol those private fds exclusively.
 
 The stdio transport is also a Claude Code channel (research preview,
 https://code.claude.com/docs/en/channels-reference): it advertises the
-``claude/channel`` experimental capability and pumps the store's ``outbox``
+``claude/channel`` experimental capability and pumps the tier-3 mailbox outbox
 (what the kernel's ``notify()`` writes) as ``notifications/claude/channel``
 events, so kernel code can push into the running agent session. Channels are
 stdio-only by contract (Claude Code spawns the channel server as a subprocess
@@ -31,7 +31,7 @@ from mcp.server.session import InitializationState, ServerSession
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage, JSONRPCNotification
 
-from . import store
+from . import mailbox
 from .config import config
 from .tools import mcp
 
@@ -133,62 +133,52 @@ async def pump_outbox(
     write_stream: ObjectSendStream[SessionMessage],
     session: ServerSession | None,
 ) -> None:
-    """Drain this session's share of the store outbox into
+    """Drain this session's share of the in-process mailbox outbox into
     ``notifications/claude/channel`` events (broadcast rows plus rows addressed
-    to ``config().server_session_id`` -- see ``store.take_outbox``).
+    to ``config().server_session_id``).
 
     Custom notification methods are not in the SDK's typed ``ServerNotification``
     union, so the JSON-RPC message is built directly and sent on the transport's
     write stream -- the same bytes ``ServerSession.send_notification`` would
     produce. Holds every send until the client is ``initialized`` (see
     :func:`_session_initialized`), so a startup/replay ``notify()`` never emits a
-    notification before the handshake completes. Best-effort per tick: a store
-    hiccup retries next tick, and a closed transport ends the pump (the task
-    group tears it down anyway).
+    notification before the handshake completes.
     """
     cfg = config()
-    if not cfg.store_path:
-        return
-    # Through the async facade: `take_outbox` deletes as it reads, and on a fat
-    # store that write used to run inline on the shared event loop (index#2348).
-    db = store.AsyncConn(cfg.store_path)
-    try:
-        while True:
-            # Wait for the handshake before draining, so rows that accrue during
-            # startup are held (not dropped) until the client can receive them.
-            if not _session_initialized(session):
-                await anyio.sleep(_OUTBOX_POLL_SECONDS)
-                continue
-            try:
-                # Serve only this session's mail: broadcast rows (explicit
-                # notify() -- pr_watch and friends) plus rows addressed to this
-                # server's own session id. A job lifecycle event addressed to
-                # another session stays queued for its own pump instead of
-                # waking this client (issue #2165).
-                rows = await db.run(store.take_outbox, session=cfg.server_session_id)
-            except Exception:
-                rows = []  # best-effort: a read error this tick just retries next tick
-            for row in rows:
-                try:
-                    meta = json.loads(row["meta"] or "{}")
-                except ValueError:
-                    meta = {}
-                params: dict = {"content": row["content"]}
-                if meta:
-                    params["meta"] = meta
-                notification = JSONRPCNotification(
-                    jsonrpc="2.0",
-                    method="notifications/claude/channel",
-                    params=params,
-                )
-                try:
-                    await write_stream.send(SessionMessage(message=JSONRPCMessage(notification)))
-                except (anyio.ClosedResourceError, anyio.BrokenResourceError):
-                    return
+    box = mailbox.get_mailbox()
+    while True:
+        # Wait for the handshake before draining, so rows that accrue during
+        # startup are held (not dropped) until the client can receive them.
+        if not _session_initialized(session):
             await anyio.sleep(_OUTBOX_POLL_SECONDS)
-    finally:
-        await db.close()
-
+            continue
+        try:
+            # Serve only this session's mail: broadcast rows (explicit
+            # notify() -- pr_watch and friends) plus rows addressed to this
+            # server's own session id. A job lifecycle event addressed to
+            # another session stays queued for its own pump instead of
+            # waking this client (issue #2165).
+            rows = box.take_outbox(session=cfg.server_session_id)
+        except Exception:
+            rows = []  # best-effort: a read error this tick just retries next tick
+        for row in rows:
+            try:
+                meta = json.loads(row["meta"] or "{}")
+            except ValueError:
+                meta = {}
+            params: dict = {"content": row["content"]}
+            if meta:
+                params["meta"] = meta
+            notification = JSONRPCNotification(
+                jsonrpc="2.0",
+                method="notifications/claude/channel",
+                params=params,
+            )
+            try:
+                await write_stream.send(SessionMessage(message=JSONRPCMessage(notification)))
+            except (anyio.ClosedResourceError, anyio.BrokenResourceError):
+                return
+        await anyio.sleep(_OUTBOX_POLL_SECONDS)
 
 # ASGI plumbing types for the HTTP transport's auth gate. `object` values (not
 # Any) keep the wrapper honestly typed; only our own literal dicts flow through.

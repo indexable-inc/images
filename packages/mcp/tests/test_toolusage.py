@@ -40,7 +40,7 @@ def _run(
         )
 
 
-def test_export_counts_module_usage(tmp_path: Path) -> None:
+def test_export_counts_module_usage(tmp_path: Path, fake_weave) -> None:
     conn = _mkstore(tmp_path / "s.sqlite")
     # two finished runs used `fleet` (via recorded bindings), one used `search`.
     _run(conn, "a", "fleet.deploy()", bindings={"fleet": {}}, started_at=100)
@@ -62,7 +62,7 @@ def test_export_counts_module_usage(tmp_path: Path) -> None:
     assert "tool/mcp/df" not in tools
 
 
-def test_unfinished_run_falls_back_to_source_parse(tmp_path: Path) -> None:
+def test_unfinished_run_falls_back_to_source_parse(tmp_path: Path, fake_weave) -> None:
     conn = _mkstore(tmp_path / "s.sqlite")
     # still running: no bindings recorded yet, so the source parse attributes it.
     _run(conn, "a", "import mesh\nmesh.peers()", started_at=50, finish=False)
@@ -71,7 +71,7 @@ def test_unfinished_run_falls_back_to_source_parse(tmp_path: Path) -> None:
     assert doc["links"][0]["calls"] == 1
 
 
-def test_export_stores_merges_agents(tmp_path: Path) -> None:
+def test_export_stores_merges_agents(tmp_path: Path, fake_weave) -> None:
     a = tmp_path / "a.sqlite"
     b = tmp_path / "b.sqlite"
     _run(_mkstore(a), "r1", "fleet.x", bindings={"fleet": {}})
@@ -84,7 +84,7 @@ def test_export_stores_merges_agents(tmp_path: Path) -> None:
     }
 
 
-def test_cli_writes_file(tmp_path: Path) -> None:
+def test_cli_writes_file(tmp_path: Path, fake_weave) -> None:
     s = tmp_path / "s.sqlite"
     _run(_mkstore(s), "r", "view.ls('.')", bindings={"view": {}})
     out = tmp_path / "tools.json"
