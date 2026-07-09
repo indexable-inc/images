@@ -183,6 +183,18 @@ class WeaveStore:
             self._last_values[key] = value
             self._enqueue({"fact": {"entity": _api_value(entity), "attr": attr, "value": _api_value(value)}})
 
+    def _enqueue_blob_fact(self, entity: str, attr: str, data: bytes) -> None:
+        """Queue one (entity, attr, <hash of data>) fact whose CAS put is
+        deferred to the writer thread (see _resolve_blob_item). The enqueue is
+        a plain list append, so bulk payloads (pty chunks) never block the
+        caller on a synchronous /api/blob round trip; FIFO keeps journal seq =
+        enqueue order. Deliberately NOT routed through _enqueue_facts: its
+        last-value dedupe would eat a repeated identical chunk, and replay
+        needs every flush."""
+        if self.disabled:
+            return
+        self._enqueue({"blob_fact": {"entity": entity, "attr": attr, "data": data}})
+
     def put_blob(self, data: bytes) -> _HashRef:
         if self.disabled:
             return _HashRef(hashlib.sha256(data).hexdigest())
@@ -199,6 +211,18 @@ class WeaveStore:
             return b""
         return _http_bytes("GET", f"{self.weave_url}/api/blob/{quote(hash_, safe='')}")
 
+    def _resolve_blob_item(self, item: dict) -> dict:
+        """blob_fact items defer their CAS put to the writer thread: PUT the
+        bytes (the server computes the blake3 hash) and rewrite the item into
+        a plain fact carrying the returned hash ref. A put failure raises into
+        _writer's retry path, which requeues the ORIGINAL items; put_blob's
+        digest cache makes the retry cheap."""
+        blob = item.get("blob_fact")
+        if blob is None:
+            return item
+        h = self.put_blob(blob["data"])
+        return {"fact": {"entity": _api_value(blob["entity"]), "attr": blob["attr"], "value": _api_value(h)}}
+
     def _writer(self) -> None:
         backoff = 0.25
         while True:
@@ -210,7 +234,8 @@ class WeaveStore:
                 batch = [self._queue.popleft() for _ in range(min(_BATCH, len(self._queue)))]
                 self._inflight = True
             try:
-                _http_json("POST", f"{self.weave_url}/api/facts", body=batch if len(batch) != 1 else batch[0])
+                body = [self._resolve_blob_item(item) for item in batch]
+                _http_json("POST", f"{self.weave_url}/api/facts", body=body if len(body) != 1 else body[0])
                 backoff = 0.25
                 with self._cv:
                     self._inflight = False
@@ -429,6 +454,32 @@ def update_output(conn: WeaveStore, id: str, output: str, outputs: list | None =
     conn._enqueue_facts(facts)
 
 
+def stream_open(conn: WeaveStore, *, id: str, kind: str = "cell") -> str:
+    """Mint the pty_stream entity for one run/process (weave2 n-pty; schema.dl
+    "PTY/CAS stream shapes"): (S, type, pty_stream) + (S, child_of, parent),
+    parent picked exactly like start() so the stream tombstones with its run.
+    Chunks carry no seq attr - the journal seq of each chunk fact anchors
+    replay order. Returns the stream entity id."""
+    ent = _entity("pty-stream", id)
+    parent = _entity("run", id) if kind != "spawn" else _entity("proc", id)
+    conn._enqueue_facts([(ent, "type", "pty_stream"), (ent, "child_of", parent)])
+    return ent
+
+
+def stream_chunk(conn: WeaveStore, stream: str, data: bytes) -> None:
+    """One flushed output range: bytes ride CAS, the stream gets exactly one
+    (S, chunk, <hash>) fact (cardinality many, never deduped)."""
+    if data:
+        conn._enqueue_blob_fact(stream, "chunk", data)
+
+
+def stream_snapshot(conn: WeaveStore, stream: str, data: bytes) -> None:
+    """Periodic emulator-state snapshot: (S, snapshot, <hash>). Optional - the
+    replay renderer treats a stream with no snapshots as replay-from-start."""
+    if data:
+        conn._enqueue_blob_fact(stream, "snapshot", data)
+
+
 def finish(conn: WeaveStore, *, id: str, status: str, ended_at: float, output: str, result: str | None, error: str | None, error_line: int | None = None, outputs: list | None = None, bindings: dict | None = None, namespace: list | None = None) -> None:
     ent = _entity("run", id)
     ended = _ms(ended_at)
@@ -446,6 +497,29 @@ def finish(conn: WeaveStore, *, id: str, status: str, ended_at: float, output: s
     if namespace is not None:
         facts.append((ent, "namespace", _blob(conn, namespace)))
     conn._enqueue_facts(facts)
+
+
+def save_tool_view(conn: WeaveStore, *, id: str, html: str, label: str) -> str | None:
+    """Persist one run's human HTML as a live weave view (weave2 n-toolviews).
+
+    Fact shape is the cas-html view contract pinned in weave views.dl: type
+    "view", renderer "cas-html", body = CAS hash of the html, label. Tool
+    views link lineage with child_of the run entity - not from_msg, which is
+    for chat-driven views answering a request message - so cascade cleanup
+    and sidebar lineage follow the run. Returns the view entity id, or None
+    when persistence is off (WEAVE_URL=off): the caller then attaches no
+    view to the tool result."""
+    if conn.disabled:
+        return None
+    ent = _entity("view", id)
+    conn._enqueue_facts([
+        (ent, "type", "view"),
+        (ent, "renderer", "cas-html"),
+        (ent, "body", _blob_text(conn, html)),
+        (ent, "label", label),
+        (ent, "child_of", _entity("run", id)),
+    ])
+    return ent
 
 
 def recent(conn: WeaveStore, limit: int = 100) -> list[dict]:

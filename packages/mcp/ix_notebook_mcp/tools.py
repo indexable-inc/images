@@ -596,7 +596,10 @@ async def python_exec(
                 f"stdout, jobs['{job_id}'].result the value; history() lists recent runs.]"
             )
         )
-    return mcp_ui.ui_result(parts, fragments=ui_fragments, title=intent)
+    # The run's live weave view (minted kernel-side when the result had a
+    # human HTML view; see store.save_tool_view) rides the summary so a
+    # weave-aware host can resolve it from the result's `_meta`.
+    return mcp_ui.ui_result(parts, fragments=ui_fragments, title=intent, weave_view=summary.get("weave_view"))
 
 
 @mcp.tool(
@@ -670,6 +673,7 @@ async def pr_watch(
         [header, *(item for item in rendered if getattr(item, "text", None) != "(no output)")],
         fragments=mcp_ui.html_fragments(cell_outputs),
         title=f"watch PR {pr}",
+        weave_view=summary.get("weave_view") if summary else None,
     )
 
 

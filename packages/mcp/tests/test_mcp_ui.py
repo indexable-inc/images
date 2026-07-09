@@ -122,6 +122,36 @@ def test_ui_result_budget_clips_loudly_never_partially() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# weave_view: the live weave view entity riding beside the html fragments.
+# --------------------------------------------------------------------------- #
+
+
+def test_ui_result_carries_weave_view_beside_html_view() -> None:
+    result = mcp_ui.ui_result(
+        [text("t")], fragments=["<p>hi</p>"], title="show", weave_view="view:ab12"
+    )
+    assert result.meta is not None
+    assert result.meta[mcp_ui.WEAVE_VIEW_META_KEY] == "view:ab12"
+    # The MCP Apps view payload is untouched by the new key.
+    assert result.meta[mcp_ui.RESULT_META_KEY] == {"title": "show", "html": ["<p>hi</p>"]}
+
+
+def test_no_weave_view_leaves_meta_unchanged() -> None:
+    # WEAVE_URL=off (or a run whose result had no human HTML) mints no view:
+    # the payload is identical to one built before the key existed.
+    payload = mcp_ui.result_payload([text("t")], fragments=["<p>hi</p>"], title="show", weave_view=None)
+    assert mcp_ui.WEAVE_VIEW_META_KEY not in payload["_meta"]
+    assert payload == mcp_ui.result_payload([text("t")], fragments=["<p>hi</p>"], title="show")
+
+
+def test_weave_view_rides_without_fragments() -> None:
+    # A text-only reply whose run still minted a view: the id rides alone.
+    result = mcp_ui.ui_result([text("t")], weave_view="view:ab12")
+    assert (result.meta or {})[mcp_ui.WEAVE_VIEW_META_KEY] == "view:ab12"
+    assert mcp_ui.RESULT_META_KEY not in (result.meta or {})
+
+
+# --------------------------------------------------------------------------- #
 # html_fragments: exactly the dashboard's human view, out of nbformat outputs.
 # --------------------------------------------------------------------------- #
 
