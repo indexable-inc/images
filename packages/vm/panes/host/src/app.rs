@@ -19,7 +19,7 @@ use objc2::runtime::ProtocolObject;
 use objc2::{MainThreadMarker, MainThreadOnly, define_class};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSCursor, NSEvent,
-    NSScreen, NSWindow,
+    NSEventMask, NSEventModifierFlags, NSScreen, NSWindow,
 };
 use dispatch2::DispatchQueue;
 use objc2_core_graphics::{CGAssociateMouseAndMouseCursorPosition, CGError};
@@ -32,6 +32,18 @@ use crate::conn::{self, Event, Target};
 use crate::render::Renderer;
 use crate::window::{PaneWindow, WindowParams};
 
+/// Presentation and input policy from the CLI.
+pub struct RunOptions {
+    /// Prefix prepended to every window title.
+    pub title_prefix: String,
+    /// Stock macOS chrome instead of the default hidden-titlebar style (see
+    /// `window::apply_hidden_titlebar`).
+    pub native_titlebar: bool,
+    /// Translate macOS editing chords to Linux equivalents (default; see
+    /// `view::translate_chord`). `--no-chord-translation` clears it.
+    pub chord_translation: bool,
+}
+
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
 }
@@ -41,10 +53,7 @@ struct App {
     renderer: Renderer,
     windows: HashMap<WindowId, PaneWindow>,
     out: Option<mpsc::Sender<ToGuest>>,
-    title_prefix: String,
-    /// `--native-titlebar`: stock macOS chrome instead of the default
-    /// hidden-titlebar style (see `window::apply_hidden_titlebar`).
-    native_titlebar: bool,
+    options: RunOptions,
     quitting: bool,
     /// Per-window ack counters behind the periodic acks/s log: the real-path
     /// equivalent of mock's rate line, and the 120Hz-genlock evidence
@@ -148,7 +157,7 @@ impl Deferred {
     }
 }
 
-pub fn run(target: Target, title_prefix: String, native_titlebar: bool) -> ExitCode {
+pub fn run(target: Target, options: RunOptions) -> ExitCode {
     let Some(mtm) = MainThreadMarker::new() else {
         eprintln!("panes-host: must start on the main thread");
         return ExitCode::FAILURE;
@@ -178,8 +187,7 @@ pub fn run(target: Target, title_prefix: String, native_titlebar: bool) -> ExitC
             renderer,
             windows: HashMap::new(),
             out: None,
-            title_prefix,
-            native_titlebar,
+            options,
             quitting: false,
             ack_stats: HashMap::new(),
             peer_minor: 0,
@@ -194,6 +202,8 @@ pub fn run(target: Target, title_prefix: String, native_titlebar: bool) -> ExitC
     // hook (see `screens_changed`).
     let delegate = AppDelegate::new(mtm);
     ns_app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+
+    install_key_up_monitor(mtm);
 
     conn::spawn(target, host_info);
 
@@ -298,6 +308,39 @@ fn screens_changed() {
     });
 }
 
+/// Un-swallow Cmd keyUps. `NSApplication.sendEvent` routes a keyUp with Cmd
+/// held into key-equivalent processing and never delivers it to the key
+/// window -- above `NSWindow`, so a window-level `sendEvent` override alone
+/// never sees it -- leaving the guest with the chorded key stuck down and
+/// auto-repeating forever (one Cmd-Backspace deleted "like an animation"
+/// until the next focus change). A local event monitor observes every event
+/// before that dispatch: re-deliver Cmd keyUps to the key window ourselves,
+/// exactly GLFW's workaround (`cocoa_init.m` `keyUpMonitor`). The window's
+/// `sendEvent` override routes them on to the view, and the view's held-key
+/// map dedupes if `AppKit` ever delivers the original too.
+fn install_key_up_monitor(mtm: MainThreadMarker) {
+    let block = block2::RcBlock::new(
+        move |event: core::ptr::NonNull<NSEvent>| -> *mut NSEvent {
+            // SAFETY: AppKit passes a valid event; local monitors run on the
+            // main thread.
+            let ev = unsafe { event.as_ref() };
+            if ev.modifierFlags().contains(NSEventModifierFlags::Command)
+                && let Some(window) = NSApplication::sharedApplication(mtm).keyWindow()
+            {
+                window.sendEvent(ev);
+            }
+            // Hand the event back so normal dispatch continues unchanged.
+            event.as_ptr()
+        },
+    );
+    // SAFETY: the block returns the pointer it was handed (valid, non-null).
+    let monitor =
+        unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyUp, &block) };
+    // Intentionally never removed: the monitor must live as long as the app,
+    // and dropping the token would not uninstall it anyway.
+    std::mem::forget(monitor);
+}
+
 /// Entry point for supervisor events, always on the main queue.
 pub fn on_event(event: Event) {
     let Some(mtm) = MainThreadMarker::new() else {
@@ -347,15 +390,14 @@ fn handle_msg(app: &mut App, msg: ToHost, recv: f64) -> Deferred {
                 app.mtm,
                 &app.renderer,
                 &params,
-                &app.title_prefix,
-                app.native_titlebar,
+                &app.options,
             );
             app.windows.insert(id, window);
             Deferred::default()
         }
         ToHost::WindowTitle { id, title } => {
             if let Some(window) = app.windows.get(&id) {
-                window.set_title(&app.title_prefix, &title);
+                window.set_title(&app.options.title_prefix, &title);
             }
             Deferred::default()
         }

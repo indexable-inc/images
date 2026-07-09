@@ -168,7 +168,7 @@ fn build_output(
         .context("no default audio output device")?;
     let config = cpal::StreamConfig {
         channels,
-        // `cpal::SampleRate` is a plain u32 alias in 0.17.
+        // `cpal::SampleRate` is a plain u32 alias in 0.18.
         sample_rate: rate,
         // The device default (~10 ms on macOS): small enough for the latency
         // budget, and not fighting whatever quantum other apps negotiated.
@@ -176,7 +176,7 @@ fn build_output(
     };
     let stream = device
         .build_output_stream(
-            &config,
+            config,
             move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
                 // Outcomes are counted inside the buffer; no logging here,
                 // this closure runs on the realtime render thread.
