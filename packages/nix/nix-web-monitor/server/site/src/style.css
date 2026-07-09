@@ -643,46 +643,39 @@ main.dragging-v .splitter-v::after {
   color: var(--muted);
 }
 
-/* One requesting user's header: name left, build count right. Rendered only
- * when attribution adds information (several users, or one known user). */
-.global-group {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-  margin-bottom: -0.3rem;
-}
-
-.global-group:not(:first-child) {
-  margin-top: 0.2rem;
-}
-
-.global-group-count {
-  color: var(--faint);
-}
-
-.global-row {
+/* The why-chain forest. Rows reuse the build-tree row language (guides,
+ * twirl, drv columns) at side-panel scale; the body already provides the
+ * horizontal padding, so rows drop their own. */
+.global-tree {
   display: flex;
   flex-direction: column;
-  gap: 0.1rem;
-  padding-bottom: 0.4rem;
-  border-bottom: 1px solid var(--line-soft);
 }
 
-.global-row:last-child {
+.global-tree .activity-row {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.global-tree .activity-row:last-child {
   border-bottom: none;
-  padding-bottom: 0;
 }
 
-/* badge | name | version | log | elapsed, name flexes and truncates. */
-.global-row-head {
-  display: flex;
-  align-items: baseline;
-  gap: 0.35rem;
-  font-variant-numeric: tabular-nums;
+/* Skeleton ancestors: chain hops nothing is actively building, kept only to
+ * show where the active leaves hang. Dimmed so live goals read as the
+ * foreground. */
+.global-tree .global-tree-row.skeleton .drv-name {
+  color: var(--muted);
+}
+
+/* Requesting user as a per-row annotation, now that rows nest by why-chain
+ * instead of grouping by user. */
+.global-user {
+  flex: 0 0 auto;
+  max-width: 7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.72rem;
+  color: var(--muted);
 }
 
 .global-badge {
@@ -699,25 +692,6 @@ main.dragging-v .splitter-v::after {
 .global-badge-substitution {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
-}
-
-.global-name {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  color: var(--ink);
-}
-
-.global-version {
-  flex: 0 0 auto;
-  color: var(--faint);
-}
-
-.global-elapsed {
-  flex: 0 0 auto;
-  color: var(--muted);
 }
 
 /* Toggle for the row's inline log tail; styled as a quiet chip that fills with
@@ -744,31 +718,6 @@ main.dragging-v .splitter-v::after {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--panel);
-}
-
-/* The provenance trail: "for <root> via <hop> → <hop>". Root-first so the
- * attribution survives the end-of-line truncation. */
-.global-why {
-  color: var(--faint);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: 0.85rem;
-}
-
-.global-why-label,
-.global-requested {
-  color: var(--faint);
-}
-
-/* The top-level thing that wanted this build: the answer to "why is my fan
- * spinning", so it reads as ink rather than a dim afterthought. */
-.global-why-root {
-  color: var(--ink);
-}
-
-.global-why-via {
-  color: var(--faint);
 }
 
 /* Inline log tail under a row: a short fixed-height stream pinned to the
