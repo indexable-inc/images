@@ -3053,7 +3053,7 @@
         pkgs.fd
       ];
       strictDeps = true;
-      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + client-cancel interrupts in-flight run (#2387) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246) + claude-history session search (#2245) + per-serve kernel trace file (#2355) + builtin shadow restore (#2430) + failed-cell stale-binding note (#2526) + pr_watch instant-merge guard (#2532)";
+      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + client-cancel interrupts in-flight run (#2387) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246) + claude-history session search (#2245) + per-serve kernel trace file (#2355) + builtin shadow restore (#2430) + failed-cell stale-binding note (#2526) + pr_watch instant-merge guard (#2532) + find glob-pattern autodetect (#2542)";
     }
     ''
       export HOME=$TMPDIR/home
@@ -3077,6 +3077,8 @@
       cp ${./tests/test_dashboard_autostart.py} test_dashboard_autostart.py
       cp ${./tests/test_fsearch_partial.py} test_fsearch_partial.py
       cp ${./tests/test_fsearch_glob.py} test_fsearch_glob.py
+      # Issue #2542: find('*.py') auto-detects a glob-shaped non-regex pattern.
+      cp ${./tests/test_fsearch_glob_pattern.py} test_fsearch_glob_pattern.py
       # Issue #2246: grep(files_only=True) -> path + match-count rows via rg --count-matches.
       cp ${./tests/test_fsearch_files_only.py} test_fsearch_files_only.py
       # Issue #2245: ranked per-session search over local Claude Code history.
@@ -3102,6 +3104,7 @@
         test_dashboard_autostart.py \
         test_fsearch_partial.py \
         test_fsearch_glob.py \
+        test_fsearch_glob_pattern.py \
         test_fsearch_files_only.py \
         test_claude_history.py \
         test_sh_module.py \
