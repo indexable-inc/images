@@ -148,7 +148,7 @@
     got="$(printf '%s' "$statusline_payload" \
       | HOME="$PWD/sl-home" XDG_CACHE_HOME="$PWD/sl-home/.cache" ${runtimeShell} -c "$statusline_cmd")"
     case "$got" in
-    *'█████░░░░░ | TestModel | high | v1.2.3 '*'↑1.2.10'*) : ;;
+    *'⟡ 𝒊𝒙 | █████░░░░░ | TestModel | high | v1.2.3 '*'↑1.2.10'*) : ;;
     *)
       printf 'statusline check failed (seeded cache): want bar/model/effort/version/update marker, got:\n%s\n' "$got" >&2
       exit 1
@@ -161,7 +161,7 @@
       printf 'statusline check failed (cold cache): update marker must not render offline, got:\n%s\n' "$got" >&2
       exit 1
       ;;
-    *'█████░░░░░ | TestModel | high | v1.2.3'*) : ;;
+    *'⟡ 𝒊𝒙 | █████░░░░░ | TestModel | high | v1.2.3'*) : ;;
     *)
       printf 'statusline check failed (cold cache): want plain version segment, got:\n%s\n' "$got" >&2
       exit 1
