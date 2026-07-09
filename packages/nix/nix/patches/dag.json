@@ -47,6 +47,12 @@
     {
       "patch": "0011-fix-libstore-add-temp-roots-for-CA-derivation-output.patch",
       "deps": []
+    },
+    {
+      "patch": "0012-fix-libstore-add-temp-root-for-floating-CA-scratch-o.patch",
+      "deps": [
+        "0011-fix-libstore-add-temp-roots-for-CA-derivation-output.patch"
+      ]
     }
   ]
 }
