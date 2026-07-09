@@ -68,7 +68,7 @@ function createWorking(): Working {
       currentPath: null,
       hotPaths: []
     },
-    global: { detected: false, builds: [], status: '' },
+    global: { detected: false, builds: [], coordinators: [], status: '' },
     activation: { active: false, command: '', steps: [], status: '' },
     diff: null,
     expected: {},

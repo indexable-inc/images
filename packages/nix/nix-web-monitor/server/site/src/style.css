@@ -746,6 +746,29 @@ main.dragging-v .splitter-v::after {
   color: var(--panel);
 }
 
+/* One goal row of a coordinator's dependency forest (graph-capable patched
+ * nix). Indented by tree depth; tighter than the flat `.global-row` since a
+ * forest shows many more rows and position already carries the why. */
+.global-goal {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding-left: calc(var(--goal-depth, 0) * 0.9rem);
+}
+
+/* Session-completed goals are the record, not the live work: keep them
+ * legible but recessive, like the invocation tree's planned rows. */
+.global-goal.settled {
+  opacity: 0.55;
+}
+
+/* A diamond's repeat appearance: the goal already expanded above under
+ * another dependent, so this row is a reference, not a subtree. */
+.global-repeat {
+  flex: 0 0 auto;
+  color: var(--faint);
+}
+
 /* The provenance trail: "for <root> via <hop> → <hop>". Root-first so the
  * attribution survives the end-of-line truncation. */
 .global-why {
