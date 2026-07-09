@@ -58,7 +58,10 @@ NAMESPACE = (
     "define stay defined and are reusable by every later call: define a helper once and call it "
     "again next turn. Bind expensive or large outputs to names (`df = await nu(...)`, "
     "`df = ...`) instead of only printing or returning them, so later calls can inspect, filter, "
-    "or pass that same object to `read` without recomputing."
+    "or pass that same object to `read` without recomputing. Persistence cuts both ways: a "
+    "failed cell stops at the raise, so names its later lines would have rebound keep their old "
+    "values -- re-run those assignments before reusing them, never retry from possibly-stale "
+    "bindings."
 )
 
 JOBS = (

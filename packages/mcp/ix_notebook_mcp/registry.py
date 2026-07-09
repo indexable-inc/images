@@ -210,7 +210,9 @@ MODULES: tuple[Module, ...] = (
     Module(
         "google_auth",
         "Google for your own account: read and send Gmail, and manage Calendar, over the "
-        "official googleapiclient (`google_auth.gmail()` / `.calendar()`); "
+        "official googleapiclient (`google_auth.gmail()` / `.calendar()`); `await "
+        "google_auth.send(to, subject, body)` sends mail (MIME assembly, reply threading via "
+        "`reply_to_message_id=`, and delivered-body readback handled for you); "
         "`await google_auth.login()` signs in through your browser and `status()` / `logout()` "
         "manage the grant. Incognito sessions only (a personal mailbox never reaches a shared room)",
         # The bundled `gcal` binary owns the grant; the stored refresh token
