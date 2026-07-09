@@ -1926,6 +1926,16 @@ def _pr_resource_html(state: Mapping[str, Any]) -> str:
     )
 
 
+# GitHub mergeStateStatus values under which `gh pr merge --auto` merges the
+# PR the moment it is armed (#2532): nothing blocking remains, either because
+# the repo has no required checks or because they already passed, so "arm,
+# then watch, then merge" silently degrades to "merge now". UNSTABLE is
+# mergeable with failing or pending NON-required checks; those never block.
+_INSTANT_MERGE_STATES: frozenset[str] = frozenset({"CLEAN", "UNSTABLE", "HAS_HOOKS"})
+_MERGEABILITY_POLL_S: float = 2.0
+_MERGEABILITY_TIMEOUT_S: float = 30.0
+
+
 async def watch_pr(
     pr: str | int,
     *,
@@ -1955,6 +1965,7 @@ async def watch_pr(
         "elapsed": "",
     }
     started = time.time()
+    auto_merge_note = ""
     resource = register_resource(
         render=lambda: _pr_resource_html(state),
         id=f"pr-{safe_id}",
@@ -1989,7 +2000,11 @@ async def watch_pr(
                 "status": str(row.get("state") or "").lower(),
                 "merge_state": row.get("mergeStateStatus") or "",
                 "checks": checks,
-                "auto_merge": "auto merge on" if row.get("autoMergeRequest") else "auto merge off",
+                "auto_merge": (
+                    "auto merge skipped: already mergeable"
+                    if auto_merge_note
+                    else ("auto merge on" if row.get("autoMergeRequest") else "auto merge off")
+                ),
                 "elapsed": _format_duration(time.time() - started),
                 "error": "",
             }
@@ -1997,15 +2012,47 @@ async def watch_pr(
         return row
 
     if auto_merge:
-        flag = f"--{merge_method}"
-        delete = "--delete-branch" if delete_branch else ""
-        # `| complete` yields a nu record: a plain dict, not a 1-row frame
-        # (issue #2390).
-        merge: dict[str, Any] = await run_nu(
-            f"gh pr merge $env.PR --auto {flag} {delete} | complete"
-        )
-        if int(merge["exit_code"]) != 0:
-            state["error"] = str(merge["stderr"] or merge["stdout"])
+        # Arming auto merge on an already-mergeable PR merges it instantly,
+        # before any watching happens (#2532): branch-protection endpoints
+        # need admin and gh's statusCheckRollup carries no isRequired, so
+        # mergeStateStatus is the one read-accessible "would merge right now"
+        # signal. A fresh PR reports UNKNOWN while GitHub computes
+        # mergeability, so poll briefly for a real answer first.
+        row = await refresh()
+        deadline = time.time() + _MERGEABILITY_TIMEOUT_S
+        while (
+            row.get("state") == "OPEN"
+            and str(row.get("mergeStateStatus") or "UNKNOWN") == "UNKNOWN"
+            and time.time() < deadline
+        ):
+            await asyncio.sleep(_MERGEABILITY_POLL_S)
+            row = await refresh()
+        if str(row.get("mergeStateStatus") or "") in _INSTANT_MERGE_STATES:
+            auto_merge_note = (
+                f"auto merge NOT armed: PR {clean_pr} is already mergeable "
+                f"(mergeStateStatus={row.get('mergeStateStatus')}: no blocking "
+                f"required checks remain), so arming would merge it immediately, "
+                f"before any watching. Merge explicitly "
+                f"(gh pr merge {clean_pr} --{merge_method}) once your own gate is green."
+            )
+            print(auto_merge_note, flush=True)
+            await notify(auto_merge_note, resource=resource.id, pr=clean_pr)
+        else:
+            flag = f"--{merge_method}"
+            delete = "--delete-branch" if delete_branch else ""
+            # `| complete` yields a nu record: a plain dict, not a 1-row frame
+            # (issue #2390).
+            merge: dict[str, Any] = await run_nu(
+                f"gh pr merge $env.PR --auto {flag} {delete} | complete"
+            )
+            if int(merge["exit_code"]) != 0:
+                state["error"] = str(merge["stderr"] or merge["stdout"])
+
+    def finished(result: dict[str, Any]) -> dict[str, Any]:
+        """Carry the skipped-auto-merge note onto the returned summary."""
+        if auto_merge_note:
+            result["auto_merge"] = auto_merge_note
+        return result
 
     last: dict[str, Any] = {}
     while True:
@@ -2020,18 +2067,18 @@ async def watch_pr(
             state["status"] = "merged" if last.get("state") == "MERGED" else "closed"
             resource.close()
             await notify(f"PR {clean_pr} finished with state {last.get('state')}", resource=resource.id, pr=clean_pr)
-            return {"state": last.get("state"), "url": last.get("url"), "checks": len(checks)}
+            return finished({"state": last.get("state"), "url": last.get("url"), "checks": len(checks)})
         if failures:
             state["status"] = "failed"
             state["error"] = "One or more required actions failed."
             resource.close()
             await notify(f"PR {clean_pr} has failing checks", resource=resource.id, pr=clean_pr)
-            return {"state": "failed", "url": last.get("url"), "failures": failures}
+            return finished({"state": "failed", "url": last.get("url"), "failures": failures})
         if time.time() - started > timeout:
             state["status"] = "timed out"
             resource.close()
             await notify(f"PR {clean_pr} watch timed out", resource=resource.id, pr=clean_pr)
-            return {"state": "timed out", "url": last.get("url"), "checks": len(checks)}
+            return finished({"state": "timed out", "url": last.get("url"), "checks": len(checks)})
         await asyncio.sleep(interval)
 
 
