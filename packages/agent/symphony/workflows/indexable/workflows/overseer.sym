@@ -1,9 +1,13 @@
-# Overseer: every 10 minutes, snapshot what every agent on this machine is
-# doing (agent processes, claude sessions, symphony runs, hot or stalled
-# processes), have a headless codex write a terse digest, and maintain a
-# minimal HTML report at ~/.local/share/symphony/overseer/index.html.
-# Not Slack-notified: it is a local page. Timeout stays under the cadence
-# so runs cannot overlap.
-workflow "overseer" on cron "*/10 * * * *" tz "America/Los_Angeles" {
+# Overseer: snapshot what every agent on this machine is doing (agent
+# processes, claude sessions, symphony runs, hot or stalled processes),
+# have a headless codex write a terse digest, and maintain a minimal HTML
+# report at ~/.local/share/symphony/overseer/index.html.
+#
+# DISABLED for now (was `on cron "*/10 * * * *" tz "America/Los_Angeles"`,
+# timeout 480 under the cadence so runs cannot overlap): every failed tick
+# posted to Slack #general via IR.RunNotifier's cron-failure default
+# (SYMPHONY_SLACK_NOTIFY_CRON_FAILURES). Manual trigger keeps it runnable
+# from the enqueue UI; restore the cron clause to re-enable.
+workflow "overseer" on manual {
   overseer <- exec "./scripts/overseer.sh" timeout 480
 }
