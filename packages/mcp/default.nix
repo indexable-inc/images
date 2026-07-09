@@ -1752,6 +1752,8 @@
 
     assert _asyncio.iscoroutinefunction(google_auth.login)
     assert callable(google_auth.status) and callable(google_auth.logout)
+    # The mail sender (issue #2523): awaitable, so it never blocks the loop.
+    assert _asyncio.iscoroutinefunction(google_auth.send)
 
     # In a shared (multiplayer) room (IX_MCP_SHARED set) Gmail/Calendar are
     # refused before minting ever looks for the grant, so a personal mailbox
@@ -6048,6 +6050,39 @@
       mkdir -p "$out"
     '';
 
+  # Network-free unit tests for the `google_auth` mail sender (issue #2523):
+  # MIME assembly, reply threading (threadId + In-Reply-To/References), and the
+  # delivered-body readback, driven against a stub Gmail Resource. Only the
+  # module's import-time deps are needed: googleapiclient itself is stubbed.
+  googleAuthTestPython = pkgs.python3.withPackages (ps: [
+    ps.pytest
+    ps.pydantic
+    ps.google-auth
+    googleAuthModule
+  ]);
+  googleAuthTestSource = builtins.path {
+    name = "ix-mcp-google-auth-send-test";
+    path = ./tests/test_google_auth_send.py;
+  };
+  googleAuthTests =
+    pkgs.runCommand "ix-mcp-google-auth-tests"
+    {
+      nativeBuildInputs = [googleAuthTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${googleAuthTestSource} "$TMPDIR/test_google_auth_send.py"
+      ${lib.getExe googleAuthTestPython} -m pytest "$TMPDIR/test_google_auth_send.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp google_auth tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      cat stdout
+      mkdir -p "$out"
+    '';
+
   # Network-free unit tests for the federated-resources bridge: every path of
   # `resources_bridge` (list/read/act, peer-flag assembly, not-found -> -32002,
   # graceful empty/clear-error when `ix-resource-cli` is absent) driven against a
@@ -6154,6 +6189,7 @@ in
               exaBundled
               cursorSdkBundled
               googleAuthBundled
+              googleAuthTests
               ixGoogleBundled
               slackBundled
               slackTests
