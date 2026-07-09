@@ -1449,6 +1449,7 @@ mod tests {
                     log_file: Some(log_path.to_string_lossy().into_owned()),
                     ..nix_web_monitor_parser::GlobalBuild::default()
                 }],
+                coordinators: Vec::new(),
                 status: "1 active".to_owned(),
             });
         let app = router(Path::new("/nonexistent-site"), state);
