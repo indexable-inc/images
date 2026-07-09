@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/hero.svg" width="720" alt="client commits are diffed in a FrameStore, encoded as LZ4 band tiles, and shipped over vsock; the host's ack on present fires the clients' frame callbacks"></p>
+<p align="center"><img src="assets/hero.svg" width="720" alt="client commits are diffed in a FrameStore, encoded as LZ4 band tiles, and shipped over vsock; frame callbacks fire at send, host acks bound the in-flight window"></p>
 
 # panes-compositor
 
@@ -9,7 +9,7 @@ Apps connect to it as a completely ordinary Wayland compositor; every
 [`panes-host`](../host), which presents each one as a native NSWindow on the
 macOS side. It composites nothing and renders nothing: it only diffs, packs,
 and ships. The wire contract lives in [`../protocol`](../protocol) (postcard
-frames, damage tiles, ack pacing); context in
+frames, damage tiles, ack backpressure); context in
 [index#1686](https://github.com/indexable-inc/index/issues/1686).
 
 ## Install
@@ -67,24 +67,26 @@ because the host owns layout entirely.
 
 ## Pacing (no timer)
 
-The compositor never runs a frame timer. At most one `WindowFrame` per
-window is in flight; commits that land meanwhile only update the
-`FrameStore`. When the host presents a frame it sends `Ack{id, seq}`
-(cumulative: the host coalesces per display tick and acks only the newest
-presented seq, so any `seq >= awaited` satisfies the wait), and the
-compositor then (1) fires the window's wl_surface frame callbacks, which
-is the client's "draw again" signal, and (2) immediately sends the coalesced
-delta if more commits arrived. The guest is thereby genlocked to the host's
-CAMetalDisplayLink (ProMotion and all) with backpressure for free: a slow
-link degrades to fewer, bigger deltas instead of a growing queue.
+The compositor never runs a frame timer. A window's wl_surface frame
+callbacks (the client's "draw again" signal) fire when its `WindowFrame`
+goes onto the wire: the frame is a compositor-owned copy by then, and
+holding the callback to the host's ack quantized clients to `refresh/n`
+whenever the host's per-frame turnaround crossed one display tick (the
+index#1686 60-acks cap on a 120 Hz display). Acks are backpressure only:
+the host sends `Ack{id, seq}` when it presents (cumulative: it coalesces
+per display tick and acks only the newest presented seq), and at most
+`MAX_INFLIGHT_FRAMES` (2) frames per window may be on the wire unacked. At
+the cap, sends -- and the callbacks fired with them -- wait for an ack to
+free a slot, so a slow link degrades to fewer, bigger deltas instead of a
+growing queue; commits that land while capped only update the `FrameStore`.
 
 Three escape hatches keep clients from wedging when no ack can come: a
 commit that produces nothing to send fires its callbacks immediately (as do
 the commit paths that never reach a pump: popups, cursor surfaces, and the
 pre-configure commit), a 10 Hz fallback ticker fires callbacks for all
 windows while no host is connected (popup surfaces, which never carry wire
-frames, always tick), and a watchdog force-releases pacing after ~1s if an
-in-flight frame's ack never arrives (the mirror is invalidated so the next
+frames, always tick), and a watchdog force-releases pacing after ~1s if the
+in-flight frames' acks never arrive (the mirror is invalidated so the next
 frame ships full).
 
 ## GPU vs shm mode

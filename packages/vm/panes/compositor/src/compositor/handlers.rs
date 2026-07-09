@@ -240,7 +240,7 @@ impl App {
                     host.send(ToHost::WindowGone { id: pane.id });
                 }
                 pane.announced = false;
-                pane.inflight = None;
+                pane.acked = pane.seq;
                 pane.inflight_ticks = 0;
                 pane.store = crate::frame::FrameStore::default();
             }

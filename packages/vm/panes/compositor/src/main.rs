@@ -1,14 +1,17 @@
 //! Guest-side headless Wayland compositor: exports each `xdg_toplevel` over
 //! vsock (or a unix/TCP socket for off-VM development) to `panes-host` on the
 //! macOS side. The wire contract lives in `packages/vm/panes/protocol`; the
-//! design constraints (ack-paced frame callbacks, damage tiles, host-side
-//! resize) are documented there and in index#1686.
+//! design constraints (send-paced frame callbacks with ack backpressure,
+//! damage tiles, host-side resize) are documented there and in index#1686.
 
 mod cli;
-// The pure damage/tile logic compiles everywhere so its unit tests run on any
-// development host; outside Linux nothing calls it, hence the dead_code allow.
+// The pure damage/tile and pacing logic compiles everywhere so its unit tests
+// run on any development host; outside Linux nothing calls it, hence the
+// dead_code allows.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod frame;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod pacing;
 
 #[cfg(target_os = "linux")]
 mod compositor;

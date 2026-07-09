@@ -8,10 +8,12 @@
 //! - Frames are damage-driven: [`WindowFrame`] carries only damaged tiles, the
 //!   host keeps the previous contents. `Lz4` per-tile because raw 1080p120 is
 //!   ~1 GB/s, at the edge of the libkrun vsock budget.
-//! - Pacing is ack-driven: the host sends [`ToGuest::Ack`] when a frame is
-//!   presented (`CAMetalDisplayLink`), and the compositor fires Wayland frame
-//!   callbacks off that ack, genlocking guest rendering to `ProMotion` instead
-//!   of running an open-loop 120Hz timer.
+//! - Acks are backpressure: the host sends [`ToGuest::Ack`] when a frame is
+//!   presented (`CAMetalDisplayLink`), and the compositor caps how many
+//!   unacked frames a window may have on the wire. Wayland frame callbacks
+//!   fire at frame SEND (holding them to the ack quantizes clients to
+//!   `refresh/n` once per-frame host cost crosses a display tick), so the
+//!   ack bounds a client only when the host falls behind.
 //! - Windows are `xdg_toplevels`: title/`app_id`/min-max map onto `NSWindow`
 //!   properties; interactive resize is host-side (`WSLg` lesson) and lands as
 //!   [`ToGuest::Configure`].
@@ -206,7 +208,7 @@ pub enum ToGuest {
     /// Presented up to `seq` for window `id` (cumulative: the host coalesces
     /// and acks only the newest frame it presented per display tick, so a
     /// guest must treat any `seq >= awaited` as satisfying the wait).
-    /// Compositor fires frame callbacks off this.
+    /// Backpressure for the compositor's in-flight frame cap.
     Ack {
         id: WindowId,
         seq: u64,

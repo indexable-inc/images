@@ -67,13 +67,14 @@ the window is dirty we encode one fullscreen-triangle pass sampling the
 texture into the drawable (a render pass, not a blit, because
 `framebufferOnly` drawables are render-target-only, and sampling stretches
 stale content for free during resize), present, and only then send
-`ToGuest::Ack { id, seq }`. The compositor fires Wayland frame callbacks off
-that ack, so guest rendering is genlocked to ProMotion instead of running an
-open-loop timer. Coalescing: if several frames land between ticks, only the
-newest is presented and acked; guests should treat an ack as "presented up
-to seq". A frame the host cannot take at all (zero-size, texture allocation
-failure) is still acked immediately so the guest's one-in-flight loop never
-wedges on it. The link starts paused, unpauses on content/resize, and
+`ToGuest::Ack { id, seq }`. The compositor uses acks as backpressure for its
+in-flight frame cap (frame callbacks fire guest-side at send), so a slow
+host bounds how far a client runs ahead instead of quantizing its frame
+rate. Coalescing: if several frames land between ticks, every frame's tiles
+are applied but only the newest is presented and acked; guests should treat
+an ack as "presented up to seq". A frame the host cannot take at all
+(zero-size, texture allocation failure) is still acked immediately so the
+guest's in-flight window never wedges on it. The link starts paused, unpauses on content/resize, and
 re-pauses after ~250ms of idle ticks so a quiet window stops costing CPU.
 
 `PANES_TRACE=1` emits one parseable stderr line per input event, frame
@@ -167,7 +168,7 @@ compositor).
 connects to it: one 800x600-point toplevel with a moving gradient and a
 blocky frame counter, full-damage-tiled in 256px tiles, LZ4 when the host
 advertises it. It renders the next frame when the previous seq is acked
-(exactly one frame in flight, like the real compositor) and logs every input
+(exactly one frame in flight) and logs every input
 event plus a once-a-second ack rate. A right-click into the window toggles
 `ToHost::PointerLock`, exercising the host's cursor capture without a VM:
 the cursor hides and freezes, motion arrives in the log as `PointerRelative`

@@ -430,7 +430,7 @@ fn handle_msg(app: &mut App, msg: ToHost, recv: f64) -> Deferred {
             }
             if !applied {
                 // Frame the host could not take (zero-size / texture alloc
-                // failure): ack immediately anyway. With one-frame-in-flight
+                // failure): ack immediately anyway. With capped-in-flight
                 // guest pacing, an ack held hostage to a texture we never
                 // made would wedge that window's frame loop forever.
                 if let Some(out) = &app.out {

@@ -4,7 +4,8 @@
 //! There is no rendering and no output device here. Client pixels are copied
 //! out of their buffers on commit, diffed, and shipped as damage tiles; the
 //! only pacing signal clients see is the `wl_surface` frame callback, fired
-//! when the host acks the frame it presented (see `pump` and `on_host_msg`).
+//! when a frame goes onto the wire (see `pump`). Host acks are backpressure
+//! only: they free slots under the [`crate::pacing::MAX_INFLIGHT_FRAMES`] cap.
 
 mod handlers;
 mod input;
@@ -48,6 +49,7 @@ use tracing::{info, warn};
 
 use crate::cli::Cli;
 use crate::frame::FrameStore;
+use crate::pacing::{apply_ack, under_inflight_cap};
 use transport::{HostEvent, HostLink, ListenSpec};
 
 /// The advertised `wl_output` mode. The output is virtual (windows are exported
@@ -60,11 +62,11 @@ const VIRTUAL_SIZE: (i32, i32) = (3840, 2160);
 /// wedging forever on a callback that would never come.
 const FALLBACK_TICK: Duration = Duration::from_millis(100);
 
-/// Watchdog: ticks (of `FALLBACK_TICK`) an in-flight frame may go unacked
-/// before pacing is force-released (~1s). Pacing is one-frame-in-flight, so a
-/// host that drops a single ack (e.g. the window is removed host-side between
-/// `set_frame` and its next display tick) would otherwise wedge that client
-/// permanently.
+/// Watchdog: ticks (of `FALLBACK_TICK`) in-flight frames may go unacked
+/// before pacing is force-released (~1s). A host that drops its acks (e.g.
+/// the window is removed host-side between `set_frame` and its next display
+/// tick) would otherwise pin the window at the in-flight cap and wedge that
+/// client permanently.
 const INFLIGHT_WATCHDOG_TICKS: u32 = 10;
 
 /// Ceiling for the watchdog's exponential backoff (~8s of `FALLBACK_TICK`s).
@@ -83,11 +85,12 @@ struct Pane {
     /// `WindowNew` sent on the *current* host connection.
     announced: bool,
     seq: u64,
-    /// Frame seq on the wire, unacked. At most one frame is in flight per
-    /// window: that is the whole pacing mechanism.
-    inflight: Option<u64>,
-    /// Fallback ticks the current in-flight frame has gone unacked; drives
-    /// the `INFLIGHT_WATCHDOG_TICKS` rescue in `on_tick`.
+    /// Newest seq the host acked. Frames in `acked+1..=seq` are on the wire
+    /// unacked; `pump` stops sending (and thus firing frame callbacks) at
+    /// `MAX_INFLIGHT_FRAMES` of them.
+    acked: u64,
+    /// Fallback ticks the in-flight frames have gone unacked since the last
+    /// send; drives the `INFLIGHT_WATCHDOG_TICKS` rescue in `on_tick`.
     inflight_ticks: u32,
     /// Ticks the watchdog currently waits before firing. Doubles on each
     /// consecutive fire (see `INFLIGHT_WATCHDOG_MAX_TICKS`); reset by a
@@ -121,7 +124,8 @@ struct Pane {
     /// hundreds of frames a second, and a per-commit readback of a 2x buffer
     /// saturates the event-loop thread -- measured live with Minecraft
     /// (index#1686): internal render at ~347fps, wire cadence collapsed to a
-    /// tick-quantized ~30 acks/s. Held unreleased so the client cannot write
+    /// tick-quantized ~30 acks/s. The readback runs in `pump`, once per WIRE
+    /// frame under the in-flight cap. Held unreleased so the client cannot write
     /// into it while a readback may still happen; a superseding commit
     /// releases it untouched (that frame is simply never sent, which is
     /// mailbox semantics).
@@ -147,7 +151,7 @@ impl Pane {
             store: FrameStore::default(),
             announced: false,
             seq: 0,
-            inflight: None,
+            acked: 0,
             inflight_ticks: 0,
             watchdog_ticks: INFLIGHT_WATCHDOG_TICKS,
             title: String::new(),
@@ -533,21 +537,24 @@ impl App {
     fn absorb_pending_gpu(&mut self, _idx: usize) {}
 
     /// Try to move one frame onto the wire for `panes[idx]`, announcing the
-    /// window first if this connection has not seen it. When there is
-    /// nothing to send, release the window's frame callbacks instead: no
-    /// frame means no ack, and without this the client would stall. The only
-    /// path that leaves callbacks pending is a frame actually in flight
-    /// (that is the throttle; the ack or its watchdog releases them).
+    /// window first if this connection has not seen it. Frame callbacks fire
+    /// here, at send (or immediately when there is nothing to send): the
+    /// host's ack never gates the client's next frame, it only frees an
+    /// in-flight slot. The only path that leaves callbacks pending is the
+    /// `MAX_INFLIGHT_FRAMES` cap (an ack or its watchdog releases it and
+    /// re-pumps).
     fn pump(&mut self, idx: usize) {
         let now = self.now_ms();
         if self.host.as_ref().is_none_or(|h| !h.ready) {
             // No ready host: the 10Hz fallback tick paces this pane.
             return;
         }
-        if self.panes[idx].inflight.is_some() {
-            // A frame is pacing the wire. Any held dmabuf stays held (and
-            // keeps being superseded by newer commits) so the readback below
-            // captures the newest content once the ack lands.
+        if !under_inflight_cap(self.panes[idx].seq, self.panes[idx].acked) {
+            // At the in-flight cap: this is the one place callbacks are
+            // withheld, so a stalled host stops the client instead of
+            // letting it run unboundedly ahead. Any held dmabuf stays held
+            // (and keeps being superseded by newer commits) so the readback
+            // below captures the newest content once an ack frees a slot.
             return;
         }
         // Pacing allows a send: absorb the newest held dmabuf now.
@@ -559,7 +566,7 @@ impl App {
         };
         if !pane.store.has_content() {
             // Content-less commits (initial pre-map commit, commit after
-            // unmap) never turn into wire frames, so nothing would ever ack
+            // unmap) never turn into wire frames, so no send would ever fire
             // their callbacks; the fallback tick only runs host-less.
             fire_frame_callbacks(pane.toplevel.wl_surface(), now);
             return;
@@ -599,12 +606,14 @@ impl App {
                 full: frame.full,
                 tiles: frame.tiles,
             });
-            pane.inflight = Some(pane.seq);
             pane.inflight_ticks = 0;
             tracing::debug!(id = pane.id, seq = pane.seq, "frame sent");
-        } else {
-            fire_frame_callbacks(pane.toplevel.wl_surface(), now);
         }
+        // Sent or nothing to send, the client may draw again now: the wire
+        // frame is a copy the store owns (shm copied at commit, dmabuf read
+        // back in absorb_pending_gpu above), so the ack it will produce is
+        // pure backpressure, not a "buffer free" signal.
+        fire_frame_callbacks(pane.toplevel.wl_surface(), now);
     }
 
     fn on_host_event(&mut self, event: HostEvent) {
@@ -637,7 +646,7 @@ impl App {
                     // sync_pointer_lock call in on_hello.
                     self.locked_pane = None;
                     for pane in &mut self.panes {
-                        pane.inflight = None;
+                        pane.acked = pane.seq;
                         pane.inflight_ticks = 0;
                         // A reconnect is a fresh link; backoff earned on the
                         // old one says nothing about it.
@@ -731,8 +740,8 @@ impl App {
         }
         info!(major, minor, refresh_mhz, scale, "host hello");
         // Advertise the host's real refresh so clients that pace themselves
-        // by wl_output pick the right budget (the actual genlock is the
-        // ack-driven frame callback, not this number).
+        // by wl_output pick the right budget (actual pacing is the frame
+        // callback fired at send under the in-flight cap, not this number).
         self.output.change_current_state(
             Some(Mode {
                 size: VIRTUAL_SIZE.into(),
@@ -777,26 +786,21 @@ impl App {
     }
 
     fn on_ack(&mut self, id: WindowId, seq: u64) {
-        let now = self.now_ms();
         let Some(idx) = self.pane_index(id) else {
             return;
         };
-        // Acks are cumulative: the host coalesces per display tick and acks
-        // only the newest presented seq, so any seq >= the awaited one
-        // satisfies the wait (an exact-match test would stall forever under
-        // coalescing). Older seqs are stale and ignored.
-        match self.panes[idx].inflight {
-            Some(awaited) if seq >= awaited => {}
-            _ => return,
-        }
-        self.panes[idx].inflight = None;
-        self.panes[idx].inflight_ticks = 0;
+        let pane = &mut self.panes[idx];
+        let Some(acked) = apply_ack(pane.seq, pane.acked, seq) else {
+            // Stale: already covered by a newer cumulative ack.
+            return;
+        };
+        pane.acked = acked;
+        pane.inflight_ticks = 0;
         // A live ack ends any backoff: the link is moving again.
-        self.panes[idx].watchdog_ticks = INFLIGHT_WATCHDOG_TICKS;
-        // The host presented: let the client draw the next frame.
-        fire_frame_callbacks(self.panes[idx].toplevel.wl_surface(), now);
-        // And if commits accumulated while this frame was in flight, send
-        // the coalesced delta immediately.
+        pane.watchdog_ticks = INFLIGHT_WATCHDOG_TICKS;
+        // Callbacks fired at send; the ack only frees in-flight slots. If
+        // commits piled up at the cap, send the coalesced delta now (pump
+        // fires the withheld callbacks with it).
         self.pump(idx);
     }
 
@@ -960,7 +964,7 @@ impl App {
         if host_ready {
             for idx in 0..self.panes.len() {
                 let pane = &mut self.panes[idx];
-                if pane.inflight.is_none() {
+                if pane.acked == pane.seq {
                     continue;
                 }
                 pane.inflight_ticks += 1;
@@ -974,14 +978,16 @@ impl App {
                     (pane.watchdog_ticks * 2).min(INFLIGHT_WATCHDOG_MAX_TICKS);
                 warn!(
                     id = pane.id,
-                    seq = pane.inflight,
+                    seq = pane.seq,
+                    acked = pane.acked,
                     next_wait_ticks = pane.watchdog_ticks,
                     "ack never arrived; releasing pacing and resending full"
                 );
-                pane.inflight = None;
+                pane.acked = pane.seq;
                 pane.inflight_ticks = 0;
                 pane.store.invalidate();
-                fire_frame_callbacks(pane.toplevel.wl_surface(), now);
+                // pump fires the callbacks: pacing is released, so it either
+                // sends the full frame or takes the nothing-to-send path.
                 self.pump(idx);
             }
             // smithay 0.7's PointerConstraintsHandler has no
