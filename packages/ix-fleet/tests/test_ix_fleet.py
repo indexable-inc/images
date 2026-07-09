@@ -27,8 +27,7 @@ def fleet_node(name: str, *, depends_on: list[str] | None = None) -> dict[str, t
         "replacementImage": {
             "imageName": name,
             "destination": f"registry.ix.dev/example/{name}:latest",
-            "source": f"/nix/store/{name}-image.tar",
-            "sourceDrv": f"/nix/store/{name}-image.drv",
+            "sourceInstallable": f".#{name}",
         },
         "region": "us-west-1",
         "ipv4": False,
@@ -154,50 +153,81 @@ class VerifySecretsAvailableTests(unittest.TestCase):
 
 
 class PushReplacementImageTests(unittest.TestCase):
-    def test_uses_image_subcommand(self) -> None:
+    @staticmethod
+    def _node(destination: str) -> ix_fleet.FleetNode:
+        return ix_fleet.FleetNode.model_validate(
+            {
+                "name": "health-check-nginx",
+                "baseName": "nginx",
+                "system": "/nix/store/example-system",
+                "switch": {
+                    "target": "/nix/store/example-system.drv",
+                    "sourceInstallable": ".#health-check-nginx-system",
+                },
+                "bootstrapImage": "registry.ix.dev/ix/base:latest",
+                "replacementImage": {
+                    "imageName": "health-check-nginx",
+                    "destination": destination,
+                    "sourceInstallable": ".#health-check-nginx",
+                },
+                "region": "us-west-1",
+                "ipv4": False,
+                "snapshot": True,
+            }
+        )
+
+    def test_builds_installable_and_pushes_manifest(self) -> None:
         with TemporaryDirectory() as temporary_directory:
-            source = Path(temporary_directory) / "image.tar"
-            source.write_text("")
+            image_dir = Path(temporary_directory)
+            (image_dir / "manifest.cas").write_text("")
+            (image_dir / "locator.bin").write_text("")
             calls: list[list[str]] = []
 
             async def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
                 del timeout
-                calls.append(command)
-                if command[0] == "nix-store":
-                    return f"{source}\n"
                 assert not dry_run
+                calls.append(command)
+                if command[0] == "nix":
+                    return f"{image_dir}\n"
                 return "registry.ix.dev/example/health-check-nginx:nginx-lifecycle\n"
 
-            node = ix_fleet.FleetNode.model_validate(
-                {
-                    "name": "health-check-nginx",
-                    "baseName": "nginx",
-                    "system": "/nix/store/example-system",
-                    "switch": {
-                        "target": "/nix/store/example-system.drv",
-                        "sourceInstallable": ".#health-check-nginx-system",
-                    },
-                    "bootstrapImage": "registry.ix.dev/ix/base:latest",
-                    "replacementImage": {
-                        "imageName": "health-check-nginx",
-                        "destination": "health-check-nginx:nginx-lifecycle",
-                        "source": str(source),
-                        "sourceDrv": "/nix/store/example-image.drv",
-                    },
-                    "region": "us-west-1",
-                    "ipv4": False,
-                    "snapshot": True,
-                }
-            )
+            node = self._node("health-check-nginx:nginx-lifecycle")
 
             with patch.object(ix_fleet, "run_cli", fake_run_cli):
                 image = asyncio.run(ix_fleet.push_replacement_image(node, dry_run=False))
 
             assert calls == [
-                ["nix-store", "--realise", "/nix/store/example-image.drv"],
-                ["ix", "image", "push", str(source), "health-check-nginx:nginx-lifecycle"],
+                ["nix", "build", "--no-link", "--print-out-paths", ".#health-check-nginx"],
+                [
+                    "ix",
+                    "image",
+                    "push-manifest",
+                    "--locator",
+                    str(image_dir / "locator.bin"),
+                    str(image_dir / "manifest.cas"),
+                    "health-check-nginx:nginx-lifecycle",
+                    "--region",
+                    "us-west-1",
+                ],
             ]
             assert image == "registry.ix.dev/example/health-check-nginx:nginx-lifecycle"
+
+    def test_rejects_build_output_missing_manifest_files(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            image_dir = Path(temporary_directory)
+
+            async def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
+                del dry_run, timeout
+                assert command[0] == "nix", "must fail before any push attempt"
+                return f"{image_dir}\n"
+
+            node = self._node("health-check-nginx:nginx-lifecycle")
+
+            with (
+                patch.object(ix_fleet, "run_cli", fake_run_cli),
+                pytest.raises(RuntimeError, match=r"missing manifest\.cas"),
+            ):
+                asyncio.run(ix_fleet.push_replacement_image(node, dry_run=False))
 
 
 class UpNodeTests(unittest.TestCase):
