@@ -1,18 +1,22 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Andrew Gazelka <andrew@ix.dev>
-Date: Sun, 5 Jul 2026 20:12:08 -0700
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Wed, 8 Jul 2026 18:11:34 -0700
 Subject: [PATCH] libutil: add build-status-dir experimental feature
 
 Introduces the `build-status-dir` experimental feature. It gates the
-daemon-independent build status directory: when enabled, build and
-substitution goals write JSON status files under `<store-state-dir>/status/`,
-and the `nix store builds` command reads them.
+daemon-independent build status directory: when enabled, each build
+coordinator process writes its entire goal graph to a JSON file under
+`<store-state-dir>/status/`, and the `nix store builds` command reads
+those files.
 
 This commit only adds the feature flag; the producer and consumer are
 wired up in following commits.
 
+Refs indexable-inc/index#2485
+Assisted-by: Claude <noreply@anthropic.com>
+
 diff --git a/src/libutil/experimental-features.cc b/src/libutil/experimental-features.cc
-index 5ce1183..e4f8b30 100644
+index 5ce11836b..492a61858 100644
 --- a/src/libutil/experimental-features.cc
 +++ b/src/libutil/experimental-features.cc
 @@ -25,7 +25,7 @@ struct ExperimentalFeatureDetails
@@ -24,7 +28,7 @@ index 5ce1183..e4f8b30 100644
  
  constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails = {{
      {
-@@ -279,6 +279,20 @@ constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails
+@@ -279,6 +279,21 @@ constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails
          )",
          .trackingUrl = "https://github.com/NixOS/nix/milestone/60",
      },
@@ -32,9 +36,10 @@ index 5ce1183..e4f8b30 100644
 +        .tag = Xp::BuildStatusDir,
 +        .name = "build-status-dir",
 +        .description = R"(
-+            Makes each build and substitution goal write a JSON status file
-+            to `<store-state-dir>/status/` (e.g. `/nix/var/nix/status/`) while
-+            it is doing real work, and removes it on completion. This gives
++            Makes each build coordinator process write its entire goal graph
++            (every build and substitution goal, with status and dependency
++            edges) to a `graph-<pid>.json` file under `<store-state-dir>/status/`
++            (e.g. `/nix/var/nix/status/`), and remove it on exit. This gives
 +            global, daemon-independent observability into what a Nix daemon is
 +            building and why: the [`nix store builds`](@docroot@/command-ref/new-cli/nix3-store-builds.md)
 +            command reads that directory directly, without connecting to the
@@ -46,7 +51,7 @@ index 5ce1183..e4f8b30 100644
  
  static_assert(
 diff --git a/src/libutil/include/nix/util/experimental-features.hh b/src/libutil/include/nix/util/experimental-features.hh
-index 1a97f26..4a245d2 100644
+index 1a97f2691..4a245d23c 100644
 --- a/src/libutil/include/nix/util/experimental-features.hh
 +++ b/src/libutil/include/nix/util/experimental-features.hh
 @@ -38,6 +38,7 @@ enum struct ExperimentalFeature {

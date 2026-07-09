@@ -1,21 +1,21 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Andrew Gazelka <andrew@ix.dev>
-Date: Sun, 5 Jul 2026 20:21:19 -0700
-Subject: [PATCH] doc: release note for build status directory and 'nix
- store builds'
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Wed, 8 Jul 2026 18:11:34 -0700
+Subject: [PATCH] doc: release note for build status directory and 'nix store
+ builds'
 
-Adds the rl-next release note for the `build-status-dir` experimental
-feature and the `nix store builds` command: what the status directory
-exposes (per-goal JSON status files under `<store-state-dir>/status/`,
-observable without a daemon connection) and how `nix store builds`
-renders it.
+Documents the new `build-status-dir` experimental feature and the
+`nix store builds` command for the next release's changelog.
+
+Refs indexable-inc/index#2485
+Assisted-by: Claude <noreply@anthropic.com>
 
 diff --git a/doc/manual/rl-next/build-status-dir.md b/doc/manual/rl-next/build-status-dir.md
 new file mode 100644
-index 0000000..de97280
+index 000000000..27db3a5dd
 --- /dev/null
 +++ b/doc/manual/rl-next/build-status-dir.md
-@@ -0,0 +1,21 @@
+@@ -0,0 +1,24 @@
 +---
 +synopsis: "New experimental `build-status-dir` feature and `nix store builds` command"
 +prs: []
@@ -25,15 +25,18 @@ index 0000000..de97280
 +without connecting to the daemon.
 +
 +With the `build-status-dir` [experimental feature](@docroot@/development/experimental-features.md)
-+enabled, each active build or substitution goal writes a JSON status file to
-+`<store-state-dir>/status/` (e.g. `/nix/var/nix/status/`) while it is doing
-+real work, and removes it on completion. Each file records the derivation or
-+store path, the wanted outputs, the worker pid, the requesting client's
-+uid/user, the on-disk build log, and the chain of goals leading up to the
-+root that the client requested.
++enabled, every build coordinator process (each forked daemon worker, or a
++client using a local store directly) maintains one `graph-<pid>.json` file
++under `<store-state-dir>/status/` (e.g. `/nix/var/nix/status/`) describing its
++entire goal graph: the requested roots and every build and substitution goal
++with its status (`waiting`, `running`, `done`, `failed`), its dependency
++edges, and, for running builds, the builder pid, start time and on-disk build
++log. The file is updated at most about once per second and removed when the
++coordinator exits.
 +
-+The new `nix store builds` command reads that directory directly — it does
-+*not* connect to a daemon — and reports the builds and substitutions currently
-+in progress, as a human-readable summary or, with `--json`, as a JSON array.
-+Stale files left behind by a crashed worker (identified by a dead pid) are
-+ignored and cleaned up.
++The new `nix store builds` command reads that directory directly, without
++connecting to a daemon. By default it reports the goals currently doing real
++work, as a human-readable summary or, with `--json`, as a JSON array; with
++`--graph` it reports each coordinator's goal graph whole. Stale files left
++behind by a crashed coordinator (identified by a dead pid) are ignored and
++cleaned up.

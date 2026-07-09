@@ -1,0 +1,569 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew.gazelka@gmail.com>
+Date: Wed, 8 Jul 2026 18:11:34 -0700
+Subject: [PATCH] libstore: add goal graph recorder
+
+Adds a `GoalGraph` recorder that writes one `graph-<pid>.json` file per
+build coordinator process under `<store-state-dir>/status/` (e.g.
+`/nix/var/nix/status/`). Since the daemon forks one worker per client,
+this shared filesystem state is how a coordinator's work becomes
+globally observable without a daemon connection.
+
+The document holds the whole goal graph as the single source of truth:
+the coordinator pid, the requesting client's uid/user, the requested
+root goals, and one entry per goal (derivation or substitution) with
+its status (waiting/running/done/failed), its `waiters` edges, wanted
+outputs, and, for running builds, the builder pid, start time and
+on-disk log file. Goals completed during the session are kept so the
+graph shows progress, not just remaining work.
+
+The file is written atomically (write-to-temp + rename), rewritten at
+most about once per second when goal state changed, and removed by the
+destructor; a reader treats a file whose recorded pid is dead as stale.
+
+Goals grow a `runningStatus` member recording live-work details (held
+on the goal itself so its lifetime is exactly the goal's) plus a
+read-only `getWaitees()` accessor, and DerivationBuildingGoal a
+`getDrvPath()` accessor, so the recorder can walk and identify goals.
+Also factors out `logFileFor()`, mirroring the build log path formula
+so the graph's `logFile` field points at the real log, and a
+per-process `setBuildStatusClientInfo()` for the daemon to record
+client identity.
+
+Everything is a no-op unless the `build-status-dir` experimental
+feature is enabled.
+
+Refs indexable-inc/index#2485
+Assisted-by: Claude <noreply@anthropic.com>
+
+diff --git a/src/libstore/build/goal-graph.cc b/src/libstore/build/goal-graph.cc
+new file mode 100644
+index 000000000..db87b6fe2
+--- /dev/null
++++ b/src/libstore/build/goal-graph.cc
+@@ -0,0 +1,269 @@
++#include "nix/store/build/goal-graph.hh"
++
++#include "nix/store/build/derivation-building-goal.hh"
++#include "nix/store/build/derivation-goal.hh"
++#include "nix/store/build/derivation-trampoline-goal.hh"
++#include "nix/store/build/substitution-goal.hh"
++#include "nix/store/local-fs-store.hh"
++#include "nix/store/local-store.hh"
++#include "nix/store/globals.hh"
++#include "nix/util/experimental-features.hh"
++#include "nix/util/file-system.hh"
++#include "nix/util/logging.hh"
++
++#include <nlohmann/json.hpp>
++
++#include <unistd.h>
++
++namespace nix {
++
++/**
++ * Per-process client identity, set once per daemon connection in the forked
++ * worker. Each worker is its own process, so a process-global is the natural
++ * fit (and mirrors how the daemon already stuffs the client pid into argv[1]).
++ */
++static BuildStatusClientInfo currentClientInfo;
++
++void setBuildStatusClientInfo(BuildStatusClientInfo info)
++{
++    currentClientInfo = std::move(info);
++}
++
++std::filesystem::path buildStatusDir()
++{
++    return settings.nixStateDir / "status";
++}
++
++std::optional<std::filesystem::path> logFileFor(Store & store, const StorePath & drvPath, bool compress)
++{
++    /* Mirror the formula used by `LogFile` in derivation-building-goal.cc so
++       the graph file points at the real log. */
++    auto baseName = std::string(baseNameOf(store.printStorePath(drvPath)));
++
++    std::filesystem::path logDir;
++    if (auto * localStore = dynamic_cast<LocalStore *>(&store))
++        logDir = localStore->config->logDir.get();
++    else if (dynamic_cast<LocalFSStore *>(&store))
++        logDir = settings.getLogFileSettings().nixLogDir;
++    else
++        return std::nullopt;
++
++    auto dir = logDir / LocalFSStore::drvsLogDir / baseName.substr(0, 2);
++    return dir / (baseName.substr(2) + (compress ? ".bz2" : ""));
++}
++
++namespace {
++
++/**
++ * The stable identity of a goal in the graph: the derivation path for the
++ * derivation goal family, the store path for substitution. Goals with no
++ * user-meaningful identity of their own (e.g. DerivationResolutionGoal,
++ * DrvOutputSubstitutionGoal) return nullopt and are tunneled through: their
++ * waitees are attributed to the nearest identified ancestor.
++ */
++std::optional<std::string> goalId(Store & store, const Goal & goal)
++{
++    if (auto * g = dynamic_cast<const DerivationTrampolineGoal *>(&goal))
++        return store.printStorePath(g->drvReq->getBaseStorePath());
++    if (auto * g = dynamic_cast<const DerivationGoal *>(&goal))
++        return store.printStorePath(g->drvPath);
++    if (auto * g = dynamic_cast<const DerivationBuildingGoal *>(&goal))
++        return store.printStorePath(g->getDrvPath());
++    if (auto * g = dynamic_cast<const PathSubstitutionGoal *>(&goal))
++        return store.printStorePath(g->storePath);
++    return std::nullopt;
++}
++
++bool isSubstitution(const Goal & goal)
++{
++    return dynamic_cast<const PathSubstitutionGoal *>(&goal) != nullptr;
++}
++
++/**
++ * The output names a goal asks for, when it records that at all.
++ */
++std::set<std::string> goalOutputs(const Goal & goal)
++{
++    std::set<std::string> res;
++    if (auto * g = dynamic_cast<const DerivationTrampolineGoal *>(&goal)) {
++        if (auto * names = std::get_if<OutputsSpec::Names>(&g->wantedOutputs.raw))
++            res.insert(names->begin(), names->end());
++    } else if (auto * g = dynamic_cast<const DerivationGoal *>(&goal))
++        res.insert(g->wantedOutput);
++    else if (goal.runningStatus)
++        res.insert(goal.runningStatus->outputs.begin(), goal.runningStatus->outputs.end());
++    return res;
++}
++
++} // namespace
++
++std::unique_ptr<GoalGraph> GoalGraph::forCurrentProcess()
++{
++    if (!experimentalFeatureSettings.isEnabled(Xp::BuildStatusDir))
++        return nullptr;
++    return std::unique_ptr<GoalGraph>(new GoalGraph());
++}
++
++GoalGraph::GoalGraph()
++    : path(buildStatusDir() / fmt("graph-%d.json", getpid()))
++{
++}
++
++GoalGraph::~GoalGraph()
++{
++    try {
++        std::filesystem::remove(path);
++    } catch (...) {
++        ignoreExceptionInDestructor();
++    }
++}
++
++void GoalGraph::goalFinished(Goal & goal, Store & store, Goal::ExitCode result)
++{
++    if (result == Goal::ecNoSubstituters)
++        return;
++    bool success = result == Goal::ecSuccess;
++    try {
++        auto id = goalId(store, goal);
++        if (!id)
++            return;
++        auto [it, inserted] = finished.try_emplace(*id);
++        auto & entry = it->second;
++        /* A goal id can complete more than once in a session (a merged
++           DerivationGoal / DerivationBuildingGoal pair completes twice); a
++           failure is the fact worth keeping. */
++        entry.success = inserted ? success : (entry.success && success);
++        entry.kind = isSubstitution(goal) ? "substitution" : "build";
++        for (auto & weak : goal.waiters)
++            if (auto waiter = weak.lock())
++                if (auto wid = goalId(store, *waiter); wid && *wid != *id)
++                    entry.waiters.insert(*wid);
++        auto outputs = goalOutputs(goal);
++        entry.outputs.insert(outputs.begin(), outputs.end());
++        markDirty();
++    } catch (...) {
++        /* Observability must never break a build. */
++        ignoreExceptionExceptInterrupt();
++    }
++}
++
++void GoalGraph::flush(const Goals & topGoals, Store & store)
++{
++    if (!dirty)
++        return;
++    auto now = std::chrono::steady_clock::now();
++    if (everWrote && now - lastFlush < std::chrono::seconds(1))
++        return;
++
++    try {
++        /* One node per goal id; goals sharing an id (the same derivation's
++           trampoline, per-output, and building goals) merge into one node. */
++        struct Node
++        {
++            bool substitution = false;
++            bool running = false;
++            std::set<std::string> waiters;
++            std::set<std::string> outputs;
++            std::optional<GoalRunningInfo> info;
++        };
++
++        std::map<std::string, Node> nodes;
++        std::set<std::string> roots;
++
++        /* Walk the live goal graph from the top goals down through waitees.
++           Each frame carries the nearest identified ancestor, so edges tunnel
++           through id-less goals (resolution, drv-output substitution). A goal
++           can be reached via several ancestors; revisit per distinct ancestor
++           so every edge is recorded, but never re-descend the same pair. */
++        std::vector<std::pair<const Goal *, std::optional<std::string>>> stack;
++        std::set<std::pair<const Goal *, std::string>> visited;
++
++        for (auto & top : topGoals) {
++            if (auto id = goalId(store, *top))
++                roots.insert(*id);
++            stack.emplace_back(top.get(), std::nullopt);
++        }
++
++        while (!stack.empty()) {
++            auto [goal, parent] = stack.back();
++            stack.pop_back();
++            if (!visited.insert({goal, parent.value_or("")}).second)
++                continue;
++
++            auto id = goalId(store, *goal);
++            auto nearest = parent;
++            if (id) {
++                auto & node = nodes[*id];
++                node.substitution = isSubstitution(*goal);
++                if (goal->runningStatus) {
++                    node.running = true;
++                    node.info = goal->runningStatus;
++                }
++                if (parent && *parent != *id)
++                    node.waiters.insert(*parent);
++                auto outputs = goalOutputs(*goal);
++                node.outputs.insert(outputs.begin(), outputs.end());
++                nearest = id;
++            }
++
++            for (auto & waitee : goal->getWaitees())
++                stack.emplace_back(waitee.get(), nearest);
++        }
++
++        auto goals = nlohmann::json::array();
++
++        auto emit = [&](const std::string & id,
++                        std::string_view kind,
++                        std::string_view status,
++                        const std::set<std::string> & waiters,
++                        const std::set<std::string> & outputs,
++                        const std::optional<GoalRunningInfo> & info) {
++            nlohmann::json j;
++            j["id"] = id;
++            j["kind"] = kind;
++            j["status"] = status;
++            j["waiters"] = waiters;
++            j["outputs"] = outputs;
++            j["startTime"] = info ? nlohmann::json(info->startTime) : nlohmann::json(nullptr);
++            j["logFile"] = info && info->logFile ? nlohmann::json(*info->logFile) : nlohmann::json(nullptr);
++            j["builderPid"] = info && info->builderPid ? nlohmann::json(*info->builderPid) : nlohmann::json(nullptr);
++            goals.push_back(std::move(j));
++        };
++
++        for (auto & [id, node] : nodes)
++            emit(id,
++                 node.substitution ? "substitution" : "build",
++                 node.running ? "running" : "waiting",
++                 node.waiters,
++                 node.outputs,
++                 node.info);
++
++        /* Goals that completed this session and are no longer live. */
++        for (auto & [id, fin] : finished)
++            if (!nodes.contains(id))
++                emit(id, fin.kind, fin.success ? "done" : "failed", fin.waiters, fin.outputs, std::nullopt);
++
++        nlohmann::json doc;
++        doc["pid"] = getpid();
++        doc["user"] = currentClientInfo.user ? nlohmann::json(*currentClientInfo.user) : nlohmann::json(nullptr);
++        doc["uid"] = currentClientInfo.uid ? nlohmann::json(*currentClientInfo.uid) : nlohmann::json(nullptr);
++        doc["roots"] = roots;
++        doc["goals"] = std::move(goals);
++
++        createDirs(buildStatusDir());
++        /* Write to a temp file and rename so a reader never sees a
++           half-written document. */
++        auto tmp = path;
++        tmp += ".tmp";
++        writeFile(tmp, doc.dump());
++        std::filesystem::rename(tmp, path);
++
++        everWrote = true;
++        lastFlush = now;
++        dirty = false;
++    } catch (...) {
++        ignoreExceptionExceptInterrupt();
++    }
++}
++
++} // namespace nix
+diff --git a/src/libstore/include/nix/store/build/derivation-building-goal.hh b/src/libstore/include/nix/store/build/derivation-building-goal.hh
+index 826cf2c50..5a93bffc5 100644
+--- a/src/libstore/include/nix/store/build/derivation-building-goal.hh
++++ b/src/libstore/include/nix/store/build/derivation-building-goal.hh
+@@ -44,6 +44,12 @@ struct DerivationBuildingGoal : public Goal
+         const StorePath & drvPath, const Derivation & drv, Worker & worker, BuildMode buildMode, bool storeDerivation);
+     ~DerivationBuildingGoal();
+ 
++    /** The path of the derivation being built. */
++    const StorePath & getDrvPath() const
++    {
++        return drvPath;
++    }
++
+ private:
+ 
+     /** The path of the derivation. */
+diff --git a/src/libstore/include/nix/store/build/goal-graph.hh b/src/libstore/include/nix/store/build/goal-graph.hh
+new file mode 100644
+index 000000000..6a0169788
+--- /dev/null
++++ b/src/libstore/include/nix/store/build/goal-graph.hh
+@@ -0,0 +1,149 @@
++#pragma once
++///@file
++
++#include "nix/store/build/goal.hh"
++
++#include <chrono>
++#include <filesystem>
++#include <map>
++#include <optional>
++#include <set>
++#include <string>
++
++#include <sys/types.h>
++
++namespace nix {
++
++/**
++ * Identity of the client that requested the work this coordinator is doing.
++ *
++ * The daemon forks one worker process per client connection, so this is
++ * recorded once per connection as a process-global (see @ref
++ * setBuildStatusClientInfo) and stamped on the coordinator's goal-graph file.
++ */
++struct BuildStatusClientInfo
++{
++    std::optional<uid_t> uid;
++    std::optional<std::string> user;
++};
++
++/**
++ * Record the identity of the client for the current process. Called once per
++ * connection in the forked daemon worker. Safe to leave unset (e.g. for a
++ * local store with no daemon), in which case the recorded uid/user are null.
++ */
++void setBuildStatusClientInfo(BuildStatusClientInfo info);
++
++/**
++ * The directory into which goal-graph files are written, i.e.
++ * `<store-state-dir>/status`. Derived from `settings.nixStateDir`, so it
++ * honors `NIX_STATE_DIR`.
++ */
++std::filesystem::path buildStatusDir();
++
++/**
++ * Compute the path of the build log file for @p drvPath, using the exact same
++ * formula as the build log writer (see `LogFile` in
++ * derivation-building-goal.cc). Returns `std::nullopt` if build logs are not
++ * being kept.
++ */
++std::optional<std::filesystem::path> logFileFor(Store & store, const StorePath & drvPath, bool compress);
++
++/**
++ * Records the worker's entire goal graph to one `graph-<pid>.json` file under
++ * @ref buildStatusDir, so what this coordinator process is building, waiting
++ * on, and done with is globally observable without a daemon connection.
++ *
++ * The document is written atomically (write-to-temp + rename) and removed by
++ * the destructor when the coordinator's build session ends; a reader treats a
++ * file whose recorded pid is dead as stale (a crashed coordinator cannot lie).
++ *
++ * Contents: the coordinator pid, the requesting client's uid/user, the
++ * requested root goals, and one entry per goal the worker currently knows,
++ * with `status` (waiting/running/done/failed) and `waiters` edges (the parent
++ * goals waiting on it). Completed goals are kept for the session (ids plus
++ * their last-known edges) so the graph shows progress, not just remaining
++ * work.
++ *
++ * State changes mark the graph dirty ([`markDirty`]); the worker's run loop
++ * calls [`flush`], which rewrites the file at most about once per second. A
++ * ten-thousand-goal graph is a few MB of JSON, fine at that cadence.
++ *
++ * Instantiated ([`forCurrentProcess`]) only when the `build-status-dir`
++ * experimental feature is enabled; a null recorder means the feature is off.
++ */
++class GoalGraph
++{
++    std::filesystem::path path;
++
++    /**
++     * Whether goal state changed since the last flush. Starts true so the
++     * file exists as soon as the worker loop first flushes.
++     */
++    bool dirty = true;
++
++    bool everWrote = false;
++
++    std::chrono::steady_clock::time_point lastFlush;
++
++    /**
++     * A goal completed this session: its last-known edges and outcome, kept
++     * (id-keyed) after the goal object is gone so the graph still shows it.
++     * Cancelled goals (destroyed without completing) are deliberately absent.
++     */
++    struct Finished
++    {
++        std::string kind;
++        std::set<std::string> waiters;
++        std::set<std::string> outputs;
++        bool success;
++    };
++
++    std::map<std::string, Finished> finished;
++
++    GoalGraph();
++
++public:
++    /**
++     * The recorder for this process, or null when the `build-status-dir`
++     * experimental feature is disabled.
++     */
++    static std::unique_ptr<GoalGraph> forCurrentProcess();
++
++    GoalGraph(const GoalGraph &) = delete;
++    GoalGraph & operator=(const GoalGraph &) = delete;
++
++    ~GoalGraph();
++
++    /**
++     * Note that goal state changed; the next [`flush`] (throttle permitting)
++     * rewrites the file.
++     */
++    void markDirty()
++    {
++        dirty = true;
++    }
++
++    bool isDirty() const
++    {
++        return dirty;
++    }
++
++    /**
++     * Record a goal that completed (successfully or not), snapshotting its
++     * id, kind, outputs and waiter edges before `amDone` unlinks it from the
++     * graph. Called with the goal's `waiters` still intact. A goal that ends
++     * with `ecNoSubstituters` is not recorded: "couldn't substitute, will
++     * build instead" is expected control flow, not an outcome worth showing.
++     */
++    void goalFinished(Goal & goal, Store & store, Goal::ExitCode result);
++
++    /**
++     * Rewrite the graph file if dirty, at most about once per second. The
++     * live goals are enumerated from @p topGoals down through their waitees;
++     * writing never throws (observability must never break a build).
++     */
++    void flush(const Goals & topGoals, Store & store);
++};
++
++} // namespace nix
+diff --git a/src/libstore/include/nix/store/build/goal.hh b/src/libstore/include/nix/store/build/goal.hh
+index 263647fc1..45b10c437 100644
+--- a/src/libstore/include/nix/store/build/goal.hh
++++ b/src/libstore/include/nix/store/build/goal.hh
+@@ -72,6 +72,32 @@ enum struct JobCategory {
+     Administration,
+ };
+ 
++/**
++ * What a goal that is actively doing work (building or substituting) records
++ * about that work, for the goal-graph file (see the `build-status-dir`
++ * experimental feature). Held on the goal itself so its lifetime is exactly
++ * the goal's: a destroyed goal can never leave a stale entry behind.
++ */
++struct GoalRunningInfo
++{
++    time_t startTime;
++
++    /**
++     * The on-disk build log file, when one is being written.
++     */
++    std::optional<std::string> logFile;
++
++    /**
++     * The pid of the builder child process, for local builds.
++     */
++    std::optional<pid_t> builderPid;
++
++    /**
++     * The output names being produced, when known.
++     */
++    std::vector<std::string> outputs;
++};
++
+ struct Goal : public std::enable_shared_from_this<Goal>
+ {
+ private:
+@@ -94,6 +120,22 @@ public:
+      */
+     WeakGoals waiters;
+ 
++    /**
++     * Set while this goal is actively building or substituting, when the
++     * `build-status-dir` experimental feature is enabled. Read by the
++     * worker's @ref GoalGraph when rendering the graph file.
++     */
++    std::optional<GoalRunningInfo> runningStatus;
++
++    /**
++     * The goals this one is waiting for (read-only view, for the goal
++     * graph).
++     */
++    const Goals & getWaitees() const
++    {
++        return waitees;
++    }
++
+     /**
+      * Number of goals we are/were waiting for that have failed.
+      */
+diff --git a/src/libstore/include/nix/store/meson.build b/src/libstore/include/nix/store/meson.build
+index 93be5921a..99d7d45b9 100644
+--- a/src/libstore/include/nix/store/meson.build
++++ b/src/libstore/include/nix/store/meson.build
+@@ -14,6 +14,7 @@ headers = [ config_pub_h ] + files(
+   'binary-cache-store.hh',
+   'build-result.hh',
+   'build/build-log.hh',
++  'build/goal-graph.hh',
+   'build/derivation-builder.hh',
+   'build/derivation-building-goal.hh',
+   'build/derivation-building-misc.hh',
+diff --git a/src/libstore/meson.build b/src/libstore/meson.build
+index edc476ae7..8d2c4bf2c 100644
+--- a/src/libstore/meson.build
++++ b/src/libstore/meson.build
+@@ -276,6 +276,7 @@ sources = files(
+   'binary-cache-store.cc',
+   'build-result.cc',
+   'build/build-log.cc',
++  'build/goal-graph.cc',
+   'build/derivation-builder.cc',
+   'build/derivation-building-goal.cc',
+   'build/derivation-check.cc',
