@@ -144,7 +144,9 @@ PR_WATCH = (
     "For pull requests, use `pr_watch` instead of a hand-written polling loop. It creates a "
     "live PR resource under the current task, shows each required check or action with elapsed "
     "time, enables auto merge by default, and notifies the CLI when the PR merges, fails, or "
-    "times out."
+    "times out. On an already-mergeable PR (no blocking required checks) it deliberately does "
+    "NOT arm auto merge, since arming would merge instantly before any watching; its result "
+    "says to merge explicitly once your own validation is green."
 )
 
 DISCOVER = (

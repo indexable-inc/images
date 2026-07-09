@@ -606,7 +606,11 @@ async def python_exec(
         "Watch a GitHub pull request in the dashboard. Creates a live PR resource "
         "nested under this task, lists required checks and actions with elapsed "
         "time, enables auto merge by default, and notifies the CLI when the PR "
-        "merges, fails, or times out. Use this instead of hand-written PR polling."
+        "merges, fails, or times out. When the PR is already mergeable (no "
+        "blocking required checks), auto merge is NOT armed, since arming would "
+        "merge instantly before any watching: the result says so, and the caller "
+        "merges explicitly once its own validation is green. Use this instead of "
+        "hand-written PR polling."
     ),
 )
 async def pr_watch(
