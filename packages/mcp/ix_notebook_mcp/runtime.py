@@ -2485,6 +2485,45 @@ def _error_line(exc: BaseException, job: Job) -> int | None:
     return line
 
 
+# How many never-updated names a stale-binding note lists before eliding.
+_STALE_NOTE_NAMES = 12
+
+
+def _stale_binding_note(exc: BaseException, job: Job) -> str:
+    """A traceback addendum naming the bindings the failed cell provably never
+    updated (issue #2526). The namespace keeps each such name's old value, so a
+    retry cell that reads one silently operates on stale state (the incident: a
+    retry rebuilt an email from a ``body`` the failed cell never reassigned and
+    re-sent the previous one). The static walk lives in
+    :func:`introspect.unreached_bindings`; the failing line is read off the
+    FIRST frame in the cell's pseudo-file -- the cell's top level, where
+    execution actually stopped -- not the deepest (which can sit inside a
+    helper the cell defined, whose lines interleave the module's). Empty when
+    the exception never entered the cell (a SyntaxError, kernel plumbing) or
+    when nothing qualifies; best-effort, never raises."""
+    try:
+        target = f"<job {job.id}>"
+        tb = exc.__traceback__
+        while tb is not None and tb.tb_frame.f_code.co_filename != target:
+            tb = tb.tb_next
+        if tb is None:
+            return ""
+        from .introspect import unreached_bindings
+
+        names = unreached_bindings(job.code, tb.tb_lineno)
+        if not names:
+            return ""
+        shown = ", ".join(names[:_STALE_NOTE_NAMES])
+        if len(names) > _STALE_NOTE_NAMES:
+            shown += f", +{len(names) - _STALE_NOTE_NAMES} more"
+        return (
+            f"\nNOTE: this cell failed before updating: {shown} -- a retry "
+            "that reads these names gets values from before this run."
+        )
+    except Exception:
+        return ""
+
+
 def _typecheck_enabled() -> bool:
     """Whether per-cell type checking runs. Default ON; the escape hatch is the
     ``IX_MCP_TYPECHECK`` env var (``0``/``false``/``no``/``off`` disables it) or,
@@ -2618,6 +2657,9 @@ async def _runner(job: Job, ns: dict) -> None:
         raise
     except KeyboardInterrupt as _kexc:
         job.status = "error"
+        # An interrupt stops the cell mid-run exactly like an exception does,
+        # so the stale-binding note (issue #2526) applies to both branches.
+        stale = _stale_binding_note(_kexc, job)
         if job.interrupted_by_watchdog:
             # The server's wedge watchdog (SIGUSR2, fired after config.wedge_grace)
             # raised this: a synchronous call blocked the event loop past the
@@ -2628,7 +2670,7 @@ async def _runner(job: Job, ns: dict) -> None:
                 "time.sleep, requests, a long CPU op), which freezes every job. Wrap "
                 "it in `await asyncio.to_thread(...)` or use an async API, and run "
                 "anything slow as a background job."
-            )
+            ) + stale
             # Keep the interrupt as the job's exception (with the actionable
             # message) so `await jobs['<id>']` re-raises rather than yielding None.
             job._exc = _kexc
@@ -2636,7 +2678,7 @@ async def _runner(job: Job, ns: dict) -> None:
         else:
             # The user's own code raised KeyboardInterrupt; keep its real
             # traceback (trimmed to the cell's frames) and the failing line.
-            job.error = _user_traceback(_kexc)
+            job.error = _user_traceback(_kexc) + stale
             job.error_line = _error_line(_kexc, job)
             job._exc = _kexc
         job._exc_tb = _kexc.__traceback__
@@ -2653,7 +2695,7 @@ async def _runner(job: Job, ns: dict) -> None:
         tb = _user_traceback(_exc)
         job.error_line = _error_line(_exc, job)
         hint = _type_error_hint(_exc) if isinstance(_exc, TypeError) else ""
-        job.error = tb + hint
+        job.error = tb + hint + _stale_binding_note(_exc, job)
         # Keep the exception object itself, so `await jobs['<id>']` re-raises it
         # (type + message + the cell's own traceback) instead of yielding None.
         job._exc = _exc

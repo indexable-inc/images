@@ -22,6 +22,7 @@ import inspect
 import reprlib
 import sys
 import types
+from collections.abc import Iterator
 from itertools import islice
 from typing import Any
 
@@ -140,6 +141,186 @@ def binding_names(code: str) -> tuple[set[str], set[str]]:
             # Store ``Name`` node, so ``ast.walk`` would otherwise miss it.
             assigned.add(node.name)
     return assigned, used
+
+
+def unreached_bindings(code: str, fail_line: int) -> list[str]:
+    """The cell-level names ``code`` provably never (re)bound in a run whose
+    exception left the cell's top-level frame at ``fail_line``, in source order.
+
+    The static half of the stale-binding trap (index#2526): a cell that raises
+    partway leaves every later assignment unexecuted while the namespace keeps
+    each name's old value, so a retry cell that reads one silently operates on
+    stale state. This walk names those bindings so the runner can say so right
+    in the traceback (``runtime._stale_binding_note``).
+
+    Only provable claims are made. A statement binds its targets when it
+    *completes*, so any binding statement ending at or after ``fail_line``
+    never bound -- including the failing statement itself (its right side
+    raised first). Bindings that happen mid-statement (a ``for``/``with``/
+    ``except as`` target, a walrus) qualify only strictly after the failing
+    line, and regions an interrupted run may still have executed are excluded
+    entirely: the span of any loop enclosing the failing line (an earlier
+    iteration ran its body) and the handlers/finally of any ``try`` enclosing
+    it (they run during the unwind). Nested ``def``/``class``/lambda scopes
+    bind locals, not cell names, so only the ``def``/``class`` name itself
+    counts. Returns [] for code that does not parse."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+    spans = _maybe_ran_spans(tree, fail_line)
+    names: list[str] = []
+    seen: set[str] = set()
+
+    def emit(name: str, line: int) -> None:
+        if name in seen or any(a <= line <= b for a, b in spans):
+            return
+        seen.add(name)
+        names.append(name)
+
+    def point(node: ast.AST) -> None:
+        # A walrus binds the moment it evaluates; only one strictly after the
+        # failing line is provably unexecuted (same-line order is unknowable
+        # without column info).
+        for name, line in _walrus_targets(node):
+            if line > fail_line:
+                emit(name, line)
+
+    def visit(body: list[ast.stmt]) -> None:
+        for stmt in body:
+            end = stmt.end_lineno or stmt.lineno
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                # The name binds when the whole statement (decorators, bases,
+                # defaults, class body) completes; the body's own assignments
+                # bind locals or class attributes when called, never cell
+                # names, so don't descend.
+                if end >= fail_line:
+                    emit(stmt.name, stmt.lineno)
+            elif isinstance(stmt, (ast.For, ast.AsyncFor)):
+                if stmt.lineno > fail_line:
+                    for name, line in _name_targets(stmt.target):
+                        emit(name, line)
+                point(stmt.iter)
+                visit(stmt.body)
+                visit(stmt.orelse)
+            elif isinstance(stmt, (ast.While, ast.If)):
+                point(stmt.test)
+                visit(stmt.body)
+                visit(stmt.orelse)
+            elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+                for item in stmt.items:
+                    point(item.context_expr)
+                    if item.optional_vars is not None and stmt.lineno > fail_line:
+                        for name, line in _name_targets(item.optional_vars):
+                            emit(name, line)
+                visit(stmt.body)
+            elif isinstance(stmt, (ast.Try, ast.TryStar)):
+                visit(stmt.body)
+                for handler in stmt.handlers:
+                    if handler.name and handler.lineno > fail_line:
+                        emit(handler.name, handler.lineno)
+                    visit(handler.body)
+                visit(stmt.orelse)
+                visit(stmt.finalbody)
+            elif isinstance(stmt, ast.Match):
+                point(stmt.subject)
+                for case in stmt.cases:
+                    for name, line in _pattern_targets(case.pattern):
+                        if line > fail_line:
+                            emit(name, line)
+                    if case.guard is not None:
+                        point(case.guard)
+                    visit(case.body)
+            else:
+                # A simple statement binds at completion: one that never
+                # completed (it ends at/after the failing line) never bound.
+                if end >= fail_line:
+                    for name, line in _completion_targets(stmt):
+                        emit(name, line)
+                point(stmt)
+
+    visit(tree.body)
+    return names
+
+
+def _maybe_ran_spans(tree: ast.Module, fail_line: int) -> list[tuple[int, int]]:
+    """Line spans at/after ``fail_line`` that may nonetheless have executed,
+    so :func:`unreached_bindings` must not claim anything inside them: the
+    whole span of any loop enclosing the failing line (an earlier iteration
+    ran its body) and the handlers/finally of any ``try`` enclosing it (a
+    ``finally`` runs during the unwind; a handler may have run and re-raised)."""
+    spans: list[tuple[int, int]] = []
+    for node in ast.walk(tree):
+        lineno = getattr(node, "lineno", None)
+        end = getattr(node, "end_lineno", None)
+        if lineno is None or end is None or not (lineno <= fail_line <= end):
+            continue
+        if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
+            spans.append((lineno, end))
+        elif isinstance(node, (ast.Try, ast.TryStar)):
+            spans.extend((h.lineno, h.end_lineno or h.lineno) for h in node.handlers)
+            if node.finalbody:
+                last = node.finalbody[-1]
+                spans.append((node.finalbody[0].lineno, last.end_lineno or last.lineno))
+    return spans
+
+
+def _completion_targets(stmt: ast.stmt) -> Iterator[tuple[str, int]]:
+    """``(name, line)`` for each name a simple statement binds when it
+    completes: assignment targets, import heads, ``del`` targets (a ``del``
+    that never ran leaves the old value bound, the same stale trap)."""
+    if isinstance(stmt, ast.Assign):
+        for target in stmt.targets:
+            yield from _name_targets(target)
+    elif isinstance(stmt, ast.AugAssign) or (isinstance(stmt, ast.AnnAssign) and stmt.value is not None):
+        yield from _name_targets(stmt.target)
+    elif isinstance(stmt, ast.Delete):
+        for target in stmt.targets:
+            yield from _name_targets(target)
+    elif isinstance(stmt, (ast.Import, ast.ImportFrom)):
+        for alias in stmt.names:
+            name = alias.asname or alias.name.split(".", 1)[0]
+            if name != "*":
+                yield name, alias.lineno
+
+
+def _name_targets(target: ast.expr) -> Iterator[tuple[str, int]]:
+    """``(name, line)`` for each plain name a target expression binds.
+    Attribute and subscript targets mutate an existing object rather than bind
+    a cell name, so they are skipped."""
+    if isinstance(target, ast.Name):
+        yield target.id, target.lineno
+    elif isinstance(target, ast.Starred):
+        yield from _name_targets(target.value)
+    elif isinstance(target, (ast.Tuple, ast.List)):
+        for elt in target.elts:
+            yield from _name_targets(elt)
+
+
+def _walrus_targets(node: ast.AST) -> Iterator[tuple[str, int]]:
+    """``(name, line)`` for each walrus under ``node`` that binds the enclosing
+    scope. Nested ``def``/``class``/lambda are skipped (their walruses bind
+    locals); a comprehension's walrus deliberately counts (PEP 572 binds it
+    outward), while its ``for`` targets are plain names, never ``NamedExpr``,
+    so they need no special casing."""
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+        return
+    if isinstance(node, ast.NamedExpr) and isinstance(node.target, ast.Name):
+        yield node.target.id, node.target.lineno
+    for child in ast.iter_child_nodes(node):
+        yield from _walrus_targets(child)
+
+
+def _pattern_targets(pattern: ast.pattern) -> Iterator[tuple[str, int]]:
+    """``(name, line)`` for each capture a match pattern binds."""
+    if isinstance(pattern, (ast.MatchAs, ast.MatchStar)):
+        if pattern.name:
+            yield pattern.name, pattern.lineno
+    elif isinstance(pattern, ast.MatchMapping) and pattern.rest:
+        yield pattern.rest, pattern.lineno
+    for child in ast.iter_child_nodes(pattern):
+        if isinstance(child, ast.pattern):
+            yield from _pattern_targets(child)
 
 
 def describe(value: Any) -> dict:
