@@ -146,7 +146,9 @@
   # is our OWN stdio server, baked into this package from the same trusted
   # registry as `mcpServers`. Each entry is a channel spec:
   # `server:<mcpServersKey>` or `plugin:<name>@<marketplace>`; baked as
-  # `--channels <spec>...`. Defaults to the `index`
+  # `--dangerously-load-development-channels <spec>...` because the bundled
+  # `index` server is local development channel code, not an Anthropic allowlist
+  # entry. Defaults to the `index`
   # server WHEN it is baked (so notify()/interactive resources reach a session
   # with no per-launch flag), and to nothing otherwise (the overlay build has no
   # `index` server, so referencing it would be a dead flag). A session whose org
@@ -441,13 +443,13 @@
       # Write ~/.claude/debug telemetry; cleanupPeriodDays controls retention.
       "--debug"
     ]
-    # Load our own MCP servers as channels (research preview). This flag is
-    # VARIADIC (it consumes every following non-`--` token as a spec), so it must
-    # be followed by a `--`-prefixed flag — never placed last, where it would
-    # swallow the user's argv (a prompt, a subcommand). It sits here so the always-
-    # present `--thinking-display=` below terminates the spec list.
+    # Load our own MCP servers as local development channels (research preview).
+    # This flag is VARIADIC (it consumes every following non-`--` token as a spec),
+    # so it must be followed by a `--`-prefixed flag, never placed last, where it
+    # would swallow the user's argv (a prompt, a subcommand). It sits here so the
+    # always-present `--thinking-display=` below terminates the spec list.
     ++ lib.optionals (developmentChannels != []) (
-      ["--channels"] ++ developmentChannels
+      ["--dangerously-load-development-channels"] ++ developmentChannels
     )
     ++ [
       # Opus 4.7+ otherwise omits thinking from the UI/transcript.
