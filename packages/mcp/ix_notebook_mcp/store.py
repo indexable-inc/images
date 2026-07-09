@@ -488,6 +488,30 @@ def set_session(conn: WeaveStore, *, name: str, client: str) -> None:
     conn._enqueue_facts([(conn.agent, "label", name), (conn.agent, "client", client), (conn.agent, "session", name)])
 
 
+def session_facts(conn: WeaveStore, *, id: str, status: str, client: str = "", connected_at: float | None = None) -> None:
+    """One MCP connection's session entity (weave2 session contract, docs 4.6).
+
+    status="connected" asserts the full shape; any other status re-asserts only
+    the status fact: cardinality one, latest wins, never retracted (a closed
+    session greys out on the board, it does not disappear). Re-asserting
+    "connected" with the same connected_at is idempotent per attr (the
+    write-behind queue drops unchanged values), so upgrading `client` once the
+    initialize handshake names the real client emits just that one fact.
+    """
+    ent = _entity("session", id)
+    if status != "connected":
+        conn._enqueue_facts([(ent, "status", status)])
+        return
+    conn._enqueue_facts([
+        (ent, "type", "session"),
+        (ent, "child_of", conn.agent),
+        (ent, "on_kernel", conn.kernel),
+        (ent, "client", client),
+        (ent, "connected_ms", _ms(connected_at)),
+        (ent, "status", "connected"),
+    ])
+
+
 def cells(conn: WeaveStore) -> list[dict]:
     rows = _rows(conn.query(f"?- latest({conn.agent}, cells, C)."))
     return _load_json_blob(conn, rows[0].get("C") or "", []) if rows else []

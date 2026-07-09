@@ -90,10 +90,38 @@ async def _heartbeat(client: Weave, host_id: str) -> None:
         await asyncio.sleep(_HEARTBEAT_S)
 
 
+async def _retract_claim(client: Weave, claim_ids: list[str]) -> None:
+    for fact_id in claim_ids:
+        await client.retract(fact_id)
+
+
+async def _claim(client: Weave, host_id: str, req: str) -> list[str] | None:
+    """Assert this host's claim on ``req``; return the claim fact ids, or None if lost.
+
+    The claim lands BEFORE any effect, so a supervisor crash mid-spawn leaves
+    (req, claimed_by, host) in the journal and the prelude reopens the request
+    once this host's heartbeat goes stale. Claims are latest-wins by journal
+    order: after asserting we read claimed_by back and back off when another
+    host wrote after us, retracting our superseded claim so it can never
+    resurrect if the winner later retracts theirs.
+    """
+
+    acks = await client.assert_facts([(req, "claimed_by", host_id), (req, "claimed_ms", _ms())])
+    claim_ids = [str(ack["id"]) for ack in acks]
+    winner = await _one(f"?- latest({req}, claimed_by, H).")
+    if winner != host_id:
+        await _retract_claim(client, claim_ids)
+        return None
+    return claim_ids
+
+
 async def _spawn_request(
     client: Weave, host_id: str, req: str, prefab: str, sem: asyncio.Semaphore
-) -> None:
+) -> bool:
     async with sem:
+        claim_ids = await _claim(client, host_id, req)
+        if claim_ids is None:
+            return False
         task = await _one(f"?- task({req}, T).") or ""
         requested_by = await _one(f"?- latest({req}, requested_by, A).") or "agent:main"
         harness = await _one(f"?- attr_of({prefab}, harness, H).") or "claude-code"
@@ -101,11 +129,17 @@ async def _spawn_request(
         label = " ".join(str(task).split()[:5]) or agent
         started = _ms()
         argv = _harness_argv(str(task))
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+        except OSError:
+            # Launch failed: retract the claim so the request reopens now
+            # instead of waiting out this host's heartbeat staleness window.
+            await _retract_claim(client, claim_ids)
+            raise
         await client.assert_facts(
             [
                 (agent, "type", "agent"),
@@ -141,11 +175,14 @@ async def _spawn_request(
                 (agent, "last_active_ms", ended),
             ]
         )
+        return True
 
 
 async def _watch_spawns(client: Weave, host_id: str) -> None:
     sem = asyncio.Semaphore(_MAX_SPAWNS)
-    background: set[asyncio.Task[None]] = set()
+    background: set[asyncio.Task[bool]] = set()
+    # Dedup cache only: correctness derives from claim facts (a live-claimed
+    # request is not open), so a fresh supervisor never double-spawns.
     seen: set[str] = set()
     # open_spawn_request/2 carries the prefab (prelude rule): (R, P).
     async for batch in client.watch("?- open_spawn_request(R, P)."):
@@ -158,7 +195,15 @@ async def _watch_spawns(client: Weave, host_id: str) -> None:
             seen.add(req)
             task = asyncio.create_task(_spawn_request(client, host_id, req, prefab, sem))
             background.add(task)
-            task.add_done_callback(background.discard)
+
+            def _forget(task: asyncio.Task[bool], req: str = req) -> None:
+                background.discard(task)
+                # Lost the claim race: forget the request so this host can
+                # still reclaim it if the winner's claim ever goes stale.
+                if not task.cancelled() and task.exception() is None and not task.result():
+                    seen.discard(req)
+
+            task.add_done_callback(_forget)
 
 
 async def _reply(client: Weave, msg: str, agent: str) -> None:

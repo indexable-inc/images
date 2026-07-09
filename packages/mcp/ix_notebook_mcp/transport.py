@@ -22,8 +22,10 @@ import hmac
 import json
 import logging
 import os
-from collections.abc import Awaitable, Callable, MutableMapping
-from contextlib import AsyncExitStack
+import time
+import uuid
+from collections.abc import Awaitable, Callable, Iterator, MutableMapping
+from contextlib import AsyncExitStack, contextmanager
 
 import anyio
 from anyio.abc import ObjectSendStream
@@ -31,7 +33,7 @@ from mcp.server.session import InitializationState, ServerSession
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage, JSONRPCNotification
 
-from . import mailbox
+from . import mailbox, store
 from .config import config
 from .tools import mcp
 
@@ -46,12 +48,63 @@ CHANNEL_CAPABILITIES = {"claude/channel": {}}
 # a notify() reaches the client within ~this bound.
 _OUTBOX_POLL_SECONDS = 0.5
 
+# One write-behind store connection for session lifecycle facts, shared by every
+# connection this process serves. Lazy, and per-module like the dashboard's
+# AsyncConn (each store.connect re-asserts the same agent/kernel identity, so
+# that stays idempotent); an embedder without a CLI config (store_path=None)
+# simply gets no session facts.
+_facts_conn: store.WeaveStore | None = None
+
+
+def _session_conn() -> store.WeaveStore | None:
+    global _facts_conn
+    if _facts_conn is None and config().store_path is not None:
+        _facts_conn = store.connect(config().store_path)
+    return _facts_conn
+
+
+@contextmanager
+def _session_entity(transport_kind: str) -> Iterator[Callable[[str], None]]:
+    """Land one MCP connection as its own session entity for its lifetime.
+
+    Entering asserts the weave2 session contract (docs/weave2.md 4.6: every
+    connection is a graph node attached to this server's agent); exiting
+    re-asserts status "closed" -- latest wins, never retracted, so a closed
+    session greys out instead of disappearing. Yields an upgrade callable that
+    replaces the transport-kind client fact with the name the client declared
+    in the initialize handshake, once known. Under WEAVE_URL=off the facade
+    makes every write a silent no-op.
+    """
+    conn = _session_conn()
+    if conn is None:
+        yield lambda name: None
+        return
+    sid = uuid.uuid4().hex[:8]
+    connected_at = time.time()
+
+    def upgrade(name: str) -> None:
+        # Same connected_at: the facade's per-attr dedupe reduces this
+        # re-assert to just the changed client fact.
+        store.session_facts(conn, id=sid, status="connected", client=name, connected_at=connected_at)
+
+    store.session_facts(conn, id=sid, status="connected", client=transport_kind, connected_at=connected_at)
+    try:
+        yield upgrade
+    finally:
+        store.session_facts(conn, id=sid, status="closed")
+
 
 async def serve() -> None:
-    if config().transport == "http":
-        await _serve_http()
-    else:
-        await _serve_stdio()
+    try:
+        if config().transport == "http":
+            await _serve_http()
+        else:
+            await _serve_stdio()
+    finally:
+        # Best-effort drain (close flushes the write-behind queue) so the final
+        # status="closed" facts do not die with the process.
+        if _facts_conn is not None:
+            _facts_conn.close()
 
 
 async def _serve_stdio() -> None:
@@ -97,28 +150,36 @@ async def _run_with_channel_pump(server, read_stream, write_stream, init_options
     (see :func:`_can_hold_session`), fall back to the plain ``run`` with an
     ungated pump -- correct today because nothing writes the outbox before init
     (the store's outbox is cleared at startup), just not future-proofed.
+
+    Either path also lands this one connection as its own session entity (see
+    :func:`_session_entity`); stdio single-session mode therefore emits exactly
+    one. Only the held-session path can name the real client afterwards -- the
+    fallback has no session to read ``client_params`` from.
     """
     if not _can_hold_session(server):
         logger.warning("channel pump: SDK internals unavailable; running without the initialized gate")
-        async with anyio.create_task_group() as tg:
-            tg.start_soon(pump_outbox, write_stream, None)
-            await server.run(read_stream, write_stream, init_options)
-            tg.cancel_scope.cancel()
+        with _session_entity("stdio"):
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(pump_outbox, write_stream, None)
+                await server.run(read_stream, write_stream, init_options)
+                tg.cancel_scope.cancel()
         return
     async with AsyncExitStack() as stack:
         lifespan_context = await stack.enter_async_context(server.lifespan(server))
         session = await stack.enter_async_context(
             ServerSession(read_stream, write_stream, init_options)
         )
-        async with anyio.create_task_group() as tg:
-            tg.start_soon(pump_outbox, write_stream, session)
-            async for message in session.incoming_messages:
-                tg.start_soon(
-                    functools.partial(
-                        server._handle_message, message, session, lifespan_context, raise_exceptions=False
+        with _session_entity("stdio") as upgrade_client:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(pump_outbox, write_stream, session)
+                tg.start_soon(_watch_client_name, session, upgrade_client)
+                async for message in session.incoming_messages:
+                    tg.start_soon(
+                        functools.partial(
+                            server._handle_message, message, session, lifespan_context, raise_exceptions=False
+                        )
                     )
-                )
-            tg.cancel_scope.cancel()
+                tg.cancel_scope.cancel()
 
 
 def _session_initialized(session: ServerSession | None) -> bool:
@@ -127,6 +188,18 @@ def _session_initialized(session: ServerSession | None) -> bool:
     if session is None:
         return True
     return getattr(session, "_initialization_state", None) is InitializationState.Initialized
+
+
+async def _watch_client_name(session: ServerSession, upgrade: Callable[[str], None]) -> None:
+    """Upgrade the session entity's client fact from the transport kind to the
+    name declared in the initialize handshake. ``client_params`` is set before
+    the session reports Initialized, so polling the same gate as the pump is
+    sufficient; a client that never completes the handshake keeps the kind."""
+    while not _session_initialized(session):
+        await anyio.sleep(_OUTBOX_POLL_SECONDS)
+    params = session.client_params
+    if params is not None:
+        upgrade(params.clientInfo.name)
 
 
 async def pump_outbox(
@@ -257,6 +330,26 @@ def _gate(inner: _App, api_key: str | None) -> _App:
     return app
 
 
+def _wrap_run_as_session(server) -> None:  # noqa: ANN001 -- SDK server type is internal
+    """Land each streamable-HTTP MCP session as its own session entity.
+
+    The SDK's ``StreamableHTTPSessionManager`` runs exactly one ``server.run``
+    per MCP session (``_handle_stateful_request``), so wrapping this instance's
+    ``run`` is the one choke point where the transport learns of HTTP session
+    creation and teardown (DELETE, idle cancel, or shutdown all return through
+    it). The stdio held-session mirror cannot apply here -- the manager owns
+    the per-session streams -- so the client fact stays the transport kind.
+    """
+    inner_run = server.run
+
+    @functools.wraps(inner_run)
+    async def run_as_session(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202 -- mirrors the SDK's call shape
+        with _session_entity("http"):
+            return await inner_run(*args, **kwargs)
+
+    server.run = run_as_session
+
+
 async def _serve_http() -> None:
     """Serve MCP over streamable HTTP (endpoint path: `/mcp`).
 
@@ -269,6 +362,7 @@ async def _serve_http() -> None:
     cfg = config()
     mcp.settings.host = cfg.mcp_http_host
     mcp.settings.port = cfg.mcp_http_port
+    _wrap_run_as_session(mcp._mcp_server)
     app = _gate(mcp.streamable_http_app(), cfg.api_key)
     server = uvicorn.Server(
         uvicorn.Config(
