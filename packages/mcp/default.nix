@@ -2638,9 +2638,18 @@
   sessionTestPy = pkgs.writeText "ix-mcp-session-test.py" ''
     # python
     import asyncio
+    import sys
     import tempfile
 
     import dill  # the checkpoint serializer must be bundled in this interpreter
+
+    # Hermetic: the session contract runs over an in-memory Weave ABI double
+    # (tests/weave_stub.py, copied next to this script by the derivation);
+    # real-server fidelity is pinned by tests/test_weave_integration.py.
+    sys.path.insert(0, ".")
+    import weave_stub
+
+    weave_stub.install()
 
     from ix_notebook_mcp import runtime, store
 
@@ -2697,6 +2706,11 @@
     ''
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
+      cd "$TMPDIR"
+      cp ${builtins.path {
+        name = "ix-mcp-weave-stub";
+        path = ./tests/weave_stub.py;
+      }} weave_stub.py
       ${lib.getExe mcpPython} ${sessionTestPy} >stdout 2>stderr || {
         echo "ix-mcp session smoke failed:" >&2
         cat stdout stderr >&2

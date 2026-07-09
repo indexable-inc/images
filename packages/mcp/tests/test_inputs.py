@@ -108,13 +108,13 @@ def test_api_input_preflight_returns_cors(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
-def _wire_runtime(monkeypatch, conn) -> None:
+def _wire_runtime(monkeypatch: pytest.MonkeyPatch, conn: object) -> None:
     monkeypatch.setattr(runtime, "_store", store)
     monkeypatch.setattr(runtime, "_store_conn", conn)
     runtime.input_channels.clear()
 
 
-def test_input_script_targets_endpoint_and_channel(tmp_path: Path, monkeypatch) -> None:
+def test_input_script_targets_endpoint_and_channel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("IX_MCP_DATA_API_URL", "http://node:9000/")
     monkeypatch.setenv("WEAVE_URL", "off")
     mailbox.get_mailbox().reset()
@@ -126,7 +126,7 @@ def test_input_script_targets_endpoint_and_channel(tmp_path: Path, monkeypatch) 
     assert inp.id in inp.script
 
 
-def test_drain_delivers_payload_to_awaiting_input(tmp_path: Path, monkeypatch) -> None:
+def test_drain_delivers_payload_to_awaiting_input(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     async def run() -> None:
         monkeypatch.setenv("WEAVE_URL", "off")
         mailbox.get_mailbox().reset()

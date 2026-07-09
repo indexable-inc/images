@@ -15,7 +15,11 @@ import secrets
 import time
 from collections.abc import AsyncIterator, Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import httpx
+    import polars
 
 __all__ = [
     "HashRef",
@@ -76,15 +80,15 @@ def _headers() -> dict[str, str]:
     return {"X-Api-Key": token} if token else {}
 
 
-def _client(**kwargs: Any):  # noqa: ANN401 - test seam mirrors house style
+def _client(**kwargs: object) -> httpx.AsyncClient:
     """Return a fresh ``httpx.AsyncClient`` configured for Weave."""
 
     import httpx
 
-    return httpx.AsyncClient(base_url=_url(), headers=_headers(), **kwargs)
+    return httpx.AsyncClient(base_url=_url(), headers=_headers(), **kwargs)  # type: ignore[arg-type]
 
 
-def _wrap_value(value: Any) -> dict[str, Any]:
+def _wrap_value(value: object) -> dict[str, Any]:
     if isinstance(value, HashRef):
         return {"t": "hash", "v": value.value.removeprefix("blake3:")}
     if isinstance(value, bytes):
@@ -100,7 +104,7 @@ def _wrap_value(value: Any) -> dict[str, Any]:
     raise TypeError(f"unsupported Weave value {type(value).__name__}")
 
 
-def _unwrap_value(value: Any) -> Any:
+def _unwrap_value(value: object) -> object:
     if isinstance(value, dict) and "t" in value:
         t = value.get("t")
         v = value.get("v")
@@ -110,7 +114,7 @@ def _unwrap_value(value: Any) -> Any:
     return value
 
 
-def _fact(entity: str, attr: str, value: Any) -> dict[str, Any]:
+def _fact(entity: str, attr: str, value: object) -> dict[str, Any]:
     # WriteRequest wire shape: entity and value are tagged ApiValues, the
     # attr is a plain string (crates/protocol/src/api.rs).
     return {"fact": {"entity": _wrap_value(entity), "attr": attr, "value": _wrap_value(value)}}
@@ -119,7 +123,7 @@ def _fact(entity: str, attr: str, value: Any) -> dict[str, Any]:
 class QueryResult(dict[str, Any]):
     """Weave query result with a Polars frame helper."""
 
-    def frame(self):  # noqa: ANN401 - returns polars.DataFrame when available
+    def frame(self) -> polars.DataFrame:
         """Return query rows as a Polars DataFrame with object-valued columns."""
 
         import polars as pl
@@ -132,7 +136,7 @@ class QueryResult(dict[str, Any]):
 class Weave:
     """Lazy async client for one Weave server."""
 
-    async def assert_fact(self, entity: str, attr: str, value: Any) -> dict[str, Any]:
+    async def assert_fact(self, entity: str, attr: str, value: object) -> dict[str, Any]:
         """Assert one fact and return ``{seq, id}``."""
 
         async with _client() as client:
@@ -202,10 +206,12 @@ class Weave:
     ) -> dict[str, Any]:
         """Write a message through ``/api/chat``."""
 
-        payload = {"text": text, "to": to}
-        for key, val in (("author", author), ("from", from_), ("role", role), ("id", id)):
-            if val is not None:
-                payload[key] = val
+        extras = {
+            key: val
+            for key, val in (("author", author), ("from", from_), ("role", role), ("id", id))
+            if val is not None
+        }
+        payload = {"text": text, "to": to, **extras}
         async with _client() as client:
             resp = await client.post("/api/chat", json=payload)
             resp.raise_for_status()
@@ -215,21 +221,20 @@ class Weave:
         """Yield added/removed/updated query-row batches on SSE head advances."""
 
         previous: dict[Any, list[Any]] = {}
-        async with _client(timeout=None) as client:
-            async with client.stream("GET", "/api/events") as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    await asyncio.sleep(0 if interval <= 0 else min(interval, 0.001))
-                    current_rows = (await self.query(program))["rows"]
-                    current = {row[0] if row else i: row for i, row in enumerate(current_rows)}
-                    added = [row for k, row in current.items() if k not in previous]
-                    removed = [row for k, row in previous.items() if k not in current]
-                    updated = [row for k, row in current.items() if k in previous and previous[k] != row]
-                    previous = current
-                    if added or removed or updated:
-                        yield {"added": added, "removed": removed, "updated": updated}
+        async with _client(timeout=None) as client, client.stream("GET", "/api/events") as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                await asyncio.sleep(0 if interval <= 0 else min(interval, 0.001))
+                current_rows = (await self.query(program))["rows"]
+                current = {row[0] if row else i: row for i, row in enumerate(current_rows)}
+                added = [row for k, row in current.items() if k not in previous]
+                removed = [row for k, row in previous.items() if k not in current]
+                updated = [row for k, row in current.items() if k in previous and previous[k] != row]
+                previous = current
+                if added or removed or updated:
+                    yield {"added": added, "removed": removed, "updated": updated}
 
     async def spawn(self, prefab: str, task: str, requested_by: str, placement: str = "") -> str:
         """Assert a spawn_request after validating ``prefab`` is a prefab entity."""
@@ -259,7 +264,7 @@ class Weave:
 _default = Weave()
 
 
-async def assert_fact(entity: str, attr: str, value: Any) -> dict[str, Any]:
+async def assert_fact(entity: str, attr: str, value: object) -> dict[str, Any]:
     return await _default.assert_fact(entity, attr, value)
 
 

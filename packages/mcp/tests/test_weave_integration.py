@@ -20,6 +20,7 @@ import socket
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -36,7 +37,7 @@ def _free_port() -> int:
 
 
 @pytest.fixture
-def weave_server(tmp_path: Path):
+def weave_server(tmp_path: Path) -> Iterator[str]:
     port = _free_port()
     store_dir = tmp_path / "weave-store"
     subprocess.run([WEAVE_BIN, "--store", str(store_dir), "init"], check=True, capture_output=True)
@@ -51,7 +52,7 @@ def weave_server(tmp_path: Path):
 
         for _ in range(100):
             try:
-                urlopen(f"{url}/api/info", timeout=1).read()
+                urlopen(f"{url}/api/info", timeout=1).read()  # noqa: S310 - fixture-local http url
                 break
             except Exception:
                 time.sleep(0.1)
@@ -63,7 +64,7 @@ def weave_server(tmp_path: Path):
         proc.wait(timeout=10)
 
 
-def test_phase0_store_roundtrip_against_real_weave(weave_server, tmp_path, monkeypatch) -> None:
+def test_phase0_store_roundtrip_against_real_weave(weave_server: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("WEAVE_URL", weave_server)
     monkeypatch.setenv("IX_WEAVE_AGENT", "agent:e2e")
     from ix_notebook_mcp import store
@@ -88,7 +89,8 @@ def test_phase0_store_roundtrip_against_real_weave(weave_server, tmp_path, monke
     assert got["run-1"]["code"] == "print('hello weave')"
     assert store.get_session(ws)["name"] == "e2e demo session"
     snap = store.latest_snapshot(ws)
-    assert snap and snap["blob"] == b"snapshot-bytes" * 10
+    assert snap is not None
+    assert snap["blob"] == b"snapshot-bytes" * 10
     assert snap["names"] == ["x", "y"]
     assert any(r["id"] == "run-1" for r in store.replayable(ws, None))
 
@@ -106,7 +108,7 @@ def test_phase0_store_roundtrip_against_real_weave(weave_server, tmp_path, monke
     asyncio.run(check())
 
 
-def test_supervisor_spawn_and_reply_loop(weave_server, tmp_path, monkeypatch) -> None:
+def test_supervisor_spawn_and_reply_loop(weave_server: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake = tmp_path / "fake-harness.sh"
     fake.write_text("#!/bin/sh\necho \"fake harness ran: $1\"\n")
     fake.chmod(0o755)

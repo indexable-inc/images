@@ -50,9 +50,8 @@ def build_app(config: Config, db: store.AsyncConn | None = None, mb: mailbox.Mai
         trust = config.exec_trust_network and config.host not in _LOOPBACK_HOSTS
         if not token and not trust:
             return web.json_response({"error": "exec endpoint disabled (set IX_MCP_EXEC_TRUST_NETWORK on a non-loopback bind, or IX_MCP_EXEC_TOKEN)"}, status=403)
-        if token:
-            if not hmac.compare_digest(request.headers.get("Authorization", ""), f"Bearer {token}"):
-                return web.json_response({"error": "unauthorized"}, status=401)
+        if token and not hmac.compare_digest(request.headers.get("Authorization", ""), f"Bearer {token}"):
+            return web.json_response({"error": "unauthorized"}, status=401)
         try:
             body = await request.json()
         except Exception:
@@ -128,6 +127,11 @@ def build_app(config: Config, db: store.AsyncConn | None = None, mb: mailbox.Mai
             box.delete_inputs([row["seq"] for row in rows])
         return web.json_response(rows)
 
+    async def mailbox_inputs_delete(request: web.Request) -> web.Response:
+        body = await request.json()
+        box.delete_inputs([int(s) for s in body.get("seqs", [])])
+        return web.json_response({"ok": True})
+
     async def mailbox_events(request: web.Request) -> web.Response:
         body = await request.json()
         box.add_event(resource=str(body["resource"]), kind=str(body["kind"]), body=str(body["body"]))
@@ -173,6 +177,7 @@ def build_app(config: Config, db: store.AsyncConn | None = None, mb: mailbox.Mai
     app.router.add_get("/api/jobs/{id}/ui", job_ui)
     app.router.add_post("/api/mailbox/outbox", mailbox_outbox)
     app.router.add_get("/api/mailbox/inputs", mailbox_inputs)
+    app.router.add_post("/api/mailbox/inputs/delete", mailbox_inputs_delete)
     app.router.add_post("/api/mailbox/events", mailbox_events)
     app.router.add_post("/api/mailbox/channels", mailbox_channels)
     app.router.add_get("/api/mailbox/channels/{id}", mailbox_channel_open)

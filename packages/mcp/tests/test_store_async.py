@@ -12,7 +12,7 @@ import pytest
 from ix_notebook_mcp import store
 
 
-def test_async_conn_runs_off_loop_on_one_thread(tmp_path: Path, monkeypatch) -> None:
+def test_async_conn_runs_off_loop_on_one_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("WEAVE_URL", "off")
 
     async def run() -> None:
@@ -36,13 +36,13 @@ def test_async_conn_runs_off_loop_on_one_thread(tmp_path: Path, monkeypatch) -> 
     asyncio.run(run())
 
 
-def test_async_conn_kwargs_and_store_functions(tmp_path: Path, monkeypatch) -> None:
+def test_async_conn_kwargs_and_store_functions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """store.recent through the facade translates weave query rows into the
     execution dict shape callers have always consumed."""
     monkeypatch.setenv("WEAVE_URL", "http://weave.test")
     monkeypatch.setenv("IX_WEAVE_AGENT", "agent:test")
 
-    def fake_json(method: str, url: str, *, body=None, content=None):
+    def fake_json(method: str, url: str, *, body: object = None, content: bytes | None = None) -> object:
         if url.endswith("/api/query"):
             # pivot rows for one finished run child of agent:test
             rows = [

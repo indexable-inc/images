@@ -25,7 +25,7 @@ def test_inputs_channel_lifecycle_and_consume() -> None:
 
 def test_input_payload_cap() -> None:
     box = Mailbox()
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="payload"):
         box.add_input(channel="cap", payload="x" * (256 * 1024 + 1))
 
 

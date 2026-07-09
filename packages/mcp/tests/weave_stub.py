@@ -12,7 +12,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import pytest
 
 _PIVOT_SNAPSHOT = re.compile(r'^\?- type\(E, "snapshot"\), child_of\(E, (\S+)\), latest\(E, A, V\)\.$')
 _PIVOT_CHILDREN = re.compile(r"^\?- child_of\(E, (\S+)\), latest\(E, A, V\)\.$")
@@ -20,7 +23,7 @@ _ATTRS_OF = re.compile(r"^\?- latest\((\S+), A, V\)\.$")
 _ONE_ATTR = re.compile(r"^\?- latest\((\S+), (\w+), \w+\)\.$")
 
 
-def _tag(value: Any) -> dict:
+def _tag(value: object) -> dict:
     if isinstance(value, dict) and "t" in value:
         return value
     if isinstance(value, bool):
@@ -88,7 +91,7 @@ class FakeWeave:
         raise AssertionError(f"weave_stub: unhandled query shape: {program!r}")
 
     # -- transport hooks ------------------------------------------------------
-    def http_json(self, method: str, url: str, *, body: Any = None, content: bytes | None = None) -> Any:
+    def http_json(self, method: str, url: str, *, body: object = None, content: bytes | None = None) -> object:
         if url.endswith("/api/facts"):
             items = body if isinstance(body, list) else [body]
             acks = [self._apply(item) for item in items]
@@ -108,14 +111,24 @@ class FakeWeave:
         return self.blobs.get(digest, b"")
 
 
-def install(monkeypatch) -> FakeWeave:
-    """Point ix_notebook_mcp.store at an in-memory Weave for this test."""
+def install(monkeypatch: pytest.MonkeyPatch | None = None) -> FakeWeave:
+    """Point ix_notebook_mcp.store at an in-memory Weave.
+
+    With a pytest `monkeypatch` the patch reverts after the test; without
+    one (nix smoke scripts) it applies for the process lifetime."""
+    import os
+
     from ix_notebook_mcp import store
 
     fake = FakeWeave()
-    monkeypatch.setenv("WEAVE_URL", "http://weave.stub")
-    monkeypatch.setattr(store, "_http_json", fake.http_json)
-    monkeypatch.setattr(store, "_http_bytes", fake.http_bytes)
+    if monkeypatch is None:
+        os.environ["WEAVE_URL"] = "http://weave.stub"
+        store._http_json = fake.http_json
+        store._http_bytes = fake.http_bytes
+    else:
+        monkeypatch.setenv("WEAVE_URL", "http://weave.stub")
+        monkeypatch.setattr(store, "_http_json", fake.http_json)
+        monkeypatch.setattr(store, "_http_bytes", fake.http_bytes)
     return fake
 
 

@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import httpx
 import pytest
@@ -16,12 +17,14 @@ sys.path.insert(0, str(ROOT.parent))
 import weave
 from weave import supervisor
 
+_T = TypeVar("_T")
 
-def run(coro: Any) -> Any:
+
+def run(coro: Coroutine[Any, Any, _T]) -> _T:
     return asyncio.run(coro)
 
 
-def install_transport(monkeypatch: pytest.MonkeyPatch, handler: Any) -> list[Any]:
+def install_transport(monkeypatch: pytest.MonkeyPatch, handler: Callable[[httpx.Request], httpx.Response]) -> list[Any]:
     seen: list[Any] = []
 
     def wrapped(req: httpx.Request) -> httpx.Response:
@@ -47,7 +50,7 @@ def test_value_mapping_bool_before_int_and_hashref(monkeypatch: pytest.MonkeyPat
     install_transport(monkeypatch, handler)
     h = "a" * 64
     run(weave.assert_fact("e", "s", "x"))
-    run(weave.assert_fact("e", "b", True))
+    run(weave.assert_fact("e", "b", True))  # noqa: FBT003 - the bool VALUE mapping is the subject under test
     run(weave.assert_fact("e", "i", 3))
     run(weave.assert_fact("e", "f", 1.5))
     run(weave.assert_fact("e", "h", weave.hashref(f"blake3:{h}")))
@@ -164,7 +167,7 @@ def test_supervisor_spawn_flow_fake_harness(tmp_path: Path, monkeypatch: pytest.
         "harness": "claude-code",
     }
 
-    async def fake_one(program: str) -> Any:
+    async def fake_one(program: str) -> object | None:
         for key, value in answers.items():
             if key in program:
                 return value

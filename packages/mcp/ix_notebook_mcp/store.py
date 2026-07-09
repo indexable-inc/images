@@ -36,14 +36,14 @@ _BATCH = 500
 _QUEUE_MAX = 10_000
 _WARNED_OFF = False
 
-def _http_json(method: str, url: str, *, body: Any = None, content: bytes | None = None) -> Any:
+def _http_json(method: str, url: str, *, body: object = None, content: bytes | None = None) -> object:
     headers: dict[str, str] = {}
     data: bytes | None = content
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"
-    req = Request(url, data=data, headers=headers, method=method)
-    with urlopen(req, timeout=10.0) as resp:  # noqa: S310 - configured local/Weave endpoint
+    req = Request(url, data=data, headers=headers, method=method)  # noqa: S310 - configured local/Weave endpoint
+    with urlopen(req, timeout=10.0) as resp:  # noqa: S310
         raw = resp.read()
     if not raw:
         return None
@@ -51,8 +51,8 @@ def _http_json(method: str, url: str, *, body: Any = None, content: bytes | None
 
 
 def _http_bytes(method: str, url: str, *, content: bytes | None = None) -> bytes:
-    req = Request(url, data=content, method=method)
-    with urlopen(req, timeout=10.0) as resp:  # noqa: S310 - configured local/Weave endpoint
+    req = Request(url, data=content, method=method)  # noqa: S310 - configured local/Weave endpoint
+    with urlopen(req, timeout=10.0) as resp:  # noqa: S310
         return resp.read()
 
 
@@ -61,10 +61,10 @@ def _now() -> float:
 
 
 def _ms(seconds: float | None = None) -> int:
-    return int(round((seconds if seconds is not None else _now()) * 1000))
+    return round((seconds if seconds is not None else _now()) * 1000)
 
 
-def _sec(ms: Any) -> float | None:
+def _sec(ms: object) -> float | None:
     if ms is None or ms == "":
         return None
     return int(ms) / 1000.0
@@ -84,7 +84,7 @@ class _HashRef(str):
     """Marks a value as a CAS blob reference so it rides as a typed hash."""
 
 
-def _api_value(value: Any) -> dict:
+def _api_value(value: object) -> dict:
     # bool must be checked before int (bool is an int subclass).
     if isinstance(value, _HashRef):
         return {"t": "hash", "v": str(value)}
@@ -97,13 +97,13 @@ def _api_value(value: Any) -> dict:
     return {"t": "str", "v": str(value)}
 
 
-def _unwrap(cell: Any) -> Any:
+def _unwrap(cell: object) -> object:
     if isinstance(cell, dict) and "t" in cell and "v" in cell:
         return cell["v"]
     return cell
 
 
-def _json_blob(value: Any) -> bytes:
+def _json_blob(value: object) -> bytes:
     return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
@@ -238,7 +238,7 @@ class WeaveStore:
             payload["as_of"] = as_of
         return _http_json("POST", f"{self.weave_url}/api/query", body=payload)
 
-    def mailbox(self, method: str, path: str, *, json_body: Any = None) -> Any:
+    def mailbox(self, method: str, path: str, *, json_body: object = None) -> object:
         try:
             return _http_json(method, f"{self.mailbox_base}{path}", body=json_body)
         except Exception:
@@ -247,11 +247,14 @@ class WeaveStore:
             if method == "POST" and path == "/api/input":
                 channel = str(json_body["channel"])
                 if not box.channel_open(channel):
-                    raise ValueError("no such open channel")
+                    raise ValueError("no such open channel") from None
                 box.add_input(channel=channel, payload=json.dumps(json_body["payload"]))
                 return {"ok": True}
             if method == "POST" and path == "/api/mailbox/outbox":
                 box.add_outbox(content=str(json_body.get("content", "")), meta=str(json_body.get("meta", "{}")), session=str(json_body.get("session", "")))
+                return {"ok": True}
+            if method == "POST" and path == "/api/mailbox/inputs/delete":
+                box.delete_inputs([int(s) for s in (json_body or {}).get("seqs", [])])
                 return {"ok": True}
             if method == "GET" and path.startswith("/api/mailbox/inputs"):
                 rows = box.pending_inputs()
@@ -308,7 +311,7 @@ class AsyncConn:
         self._pool.shutdown(wait=False)
 
 
-def _blob(conn: WeaveStore, value: Any) -> _HashRef:
+def _blob(conn: WeaveStore, value: object) -> _HashRef:
     return conn.put_blob(_json_blob(value))
 
 
@@ -316,7 +319,7 @@ def _blob_text(conn: WeaveStore, text: str) -> _HashRef:
     return conn.put_blob(text.encode("utf-8"))
 
 
-def _load_json_blob(conn: WeaveStore, hash_: str, default: Any) -> Any:
+def _load_json_blob(conn: WeaveStore, hash_: str, default: object) -> object:
     if not hash_:
         return default
     try:
@@ -524,11 +527,14 @@ def add_input(conn: WeaveStore, *, channel: str, payload: str) -> None:
 
 
 def pending_inputs(conn: WeaveStore) -> list[dict]:
-    return list(conn.mailbox("GET", "/api/mailbox/inputs?consume=1") or [])
+    # Non-consuming, exactly like the sqlite store: the kernel's drain calls
+    # delete_inputs (delete-before-deliver, at-most-once) itself.
+    return list(conn.mailbox("GET", "/api/mailbox/inputs") or [])
 
 
 def delete_inputs(conn: WeaveStore, seqs: list[int]) -> None:
-    return None
+    if seqs:
+        conn.mailbox("POST", "/api/mailbox/inputs/delete", json_body={"seqs": list(seqs)})
 
 
 def add_outbox(conn: WeaveStore, *, content: str, meta: str, session: str = "") -> None:
@@ -573,7 +579,7 @@ def latest_snapshot(conn: WeaveStore) -> dict | None:
     snaps = _pivot(conn, f"?- type(E, \"snapshot\"), child_of(E, {conn.agent}), latest(E, A, V).")
     if not snaps:
         return None
-    ent, attrs = max(snaps.items(), key=lambda kv: int(kv[1].get("created_ms") or 0))
+    _ent, attrs = max(snaps.items(), key=lambda kv: int(kv[1].get("created_ms") or 0))
     blob_hash = attrs.get("blob") or ""
     if not blob_hash:
         return None

@@ -250,11 +250,46 @@ def test_tools_declare_ui_resource_in_meta() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_api_job_ui_serves_embedded_view(tmp_path: Path) -> None:
+def test_api_job_ui_serves_embedded_view(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from aiohttp.test_utils import TestClient, TestServer
 
     from ix_notebook_mcp import dashboard, store
     from ix_notebook_mcp.config import Config
+
+    # Hermetic in-memory Weave ABI double, inline because the nix derivation
+    # copies only this file: latest-wins facts + blobs, answering exactly the
+    # store facade's `?- latest(<entity>, A, V).` lookups.
+    facts: dict[tuple[str, str], object] = {}
+    blobs: dict[str, bytes] = {}
+
+    def fake_json(method: str, url: str, *, body: object = None, content: bytes | None = None) -> object:
+        if url.endswith("/api/facts"):
+            items = body if isinstance(body, list) else [body]
+            for item in items:
+                fact = item.get("fact")
+                if fact:
+                    facts[(fact["entity"]["v"], fact["attr"])] = fact["value"]["v"]
+            return [{"seq": 1, "id": "f" * 64}] if isinstance(body, list) else {"seq": 1, "id": "f" * 64}
+        if url.endswith("/api/blob"):
+            import hashlib
+
+            digest = hashlib.sha256(content or b"").hexdigest()
+            blobs[digest] = content or b""
+            return {"hash": digest}
+        if url.endswith("/api/query"):
+            program = str(body["program"]).strip()
+            ent = program.removeprefix("?- latest(").split(",", 1)[0]
+            rows = [
+                [{"t": "str", "v": a}, {"t": "str", "v": v} if isinstance(v, str) else {"t": "int", "v": v}]
+                for (e, a), v in facts.items()
+                if e == ent
+            ]
+            return {"vars": ["A", "V"], "rows": rows, "as_of": 1}
+        raise AssertionError(f"unexpected url {url}")
+
+    monkeypatch.setenv("WEAVE_URL", "http://weave.stub")
+    monkeypatch.setattr(store, "_http_json", fake_json)
+    monkeypatch.setattr(store, "_http_bytes", lambda method, url, content=None: blobs.get(url.rsplit("/", 1)[-1], b""))
 
     db = tmp_path / "ui.db"
     conn = store.connect(db)
@@ -269,6 +304,7 @@ def test_api_job_ui_serves_embedded_view(tmp_path: Path) -> None:
         error=None,
         outputs=[{"output_type": "display_data", "data": {"text/html": "<table></table>"}}],
     )
+    assert conn.flush(timeout=5.0)
     cfg = Config(workdir=tmp_path, store_path=db)
 
     async def run() -> None:

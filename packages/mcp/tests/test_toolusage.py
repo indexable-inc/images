@@ -40,7 +40,7 @@ def _run(
         )
 
 
-def test_export_counts_module_usage(tmp_path: Path, fake_weave) -> None:
+def test_export_counts_module_usage(tmp_path: Path, fake_weave: object) -> None:
     conn = _mkstore(tmp_path / "s.sqlite")
     # two finished runs used `fleet` (via recorded bindings), one used `search`.
     _run(conn, "a", "fleet.deploy()", bindings={"fleet": {}}, started_at=100)
@@ -62,7 +62,7 @@ def test_export_counts_module_usage(tmp_path: Path, fake_weave) -> None:
     assert "tool/mcp/df" not in tools
 
 
-def test_unfinished_run_falls_back_to_source_parse(tmp_path: Path, fake_weave) -> None:
+def test_unfinished_run_falls_back_to_source_parse(tmp_path: Path, fake_weave: object) -> None:
     conn = _mkstore(tmp_path / "s.sqlite")
     # still running: no bindings recorded yet, so the source parse attributes it.
     _run(conn, "a", "import mesh\nmesh.peers()", started_at=50, finish=False)
@@ -71,11 +71,16 @@ def test_unfinished_run_falls_back_to_source_parse(tmp_path: Path, fake_weave) -
     assert doc["links"][0]["calls"] == 1
 
 
-def test_export_stores_merges_agents(tmp_path: Path, fake_weave) -> None:
+def test_export_stores_merges_agents(tmp_path: Path, fake_weave: object) -> None:
     a = tmp_path / "a.sqlite"
     b = tmp_path / "b.sqlite"
-    _run(_mkstore(a), "r1", "fleet.x", bindings={"fleet": {}})
-    _run(_mkstore(b), "r2", "fleet.y", bindings={"fleet": {}})
+    # close() drains each writer's own write-behind queue; the exporter's
+    # fresh handles can only flush their own queues, not these.
+    ca, cb = _mkstore(a), _mkstore(b)
+    _run(ca, "r1", "fleet.x", bindings={"fleet": {}})
+    _run(cb, "r2", "fleet.y", bindings={"fleet": {}})
+    ca.close()
+    cb.close()
     doc = toolusage.export_stores([("ix://h/ada", a), ("ix://h/grace", b)])
     assert len(doc["tools"]) == 1, "tools dedupe on id"
     assert {(l["agent"], l["calls"]) for l in doc["links"]} == {
@@ -84,9 +89,11 @@ def test_export_stores_merges_agents(tmp_path: Path, fake_weave) -> None:
     }
 
 
-def test_cli_writes_file(tmp_path: Path, fake_weave) -> None:
+def test_cli_writes_file(tmp_path: Path, fake_weave: object) -> None:
     s = tmp_path / "s.sqlite"
-    _run(_mkstore(s), "r", "view.ls('.')", bindings={"view": {}})
+    cs = _mkstore(s)
+    _run(cs, "r", "view.ls('.')", bindings={"view": {}})
+    cs.close()
     out = tmp_path / "tools.json"
     rc = toolusage.main_export([f"ix://h/ada={s}"], out)
     assert rc == 0

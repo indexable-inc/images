@@ -6,10 +6,10 @@ import time
 from ix_notebook_mcp import store
 
 
-def _capture(monkeypatch):
+def _capture(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, object]]:
     calls: list[tuple[str, str, object]] = []
 
-    def fake_json(method: str, url: str, *, body=None, content=None):
+    def fake_json(method: str, url: str, *, body: object = None, content: bytes | None = None) -> object:
         calls.append((method, url, body if body is not None else content))
         if url.endswith("/api/blob"):
             return {"hash": f"h{len(calls):063d}"}
@@ -31,7 +31,7 @@ def _drain(conn: store.WeaveStore, timeout: float = 2.0) -> None:
         time.sleep(0.02)
 
 
-def test_start_finish_set_session_and_snapshot_emit_fact_shapes(tmp_path, monkeypatch) -> None:
+def test_start_finish_set_session_and_snapshot_emit_fact_shapes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("WEAVE_URL", "http://weave.test")
     monkeypatch.setenv("IX_WEAVE_AGENT", "agent:test")
     calls = _capture(monkeypatch)
@@ -69,7 +69,7 @@ def test_start_finish_set_session_and_snapshot_emit_fact_shapes(tmp_path, monkey
     assert any(f["entity"]["v"] == "agent:test" and f["attr"] == "snapshot" for f in facts)
 
 
-def test_weave_url_off_drops_writes_cleanly(tmp_path, monkeypatch, capsys) -> None:
+def test_weave_url_off_drops_writes_cleanly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv("WEAVE_URL", "off")
     monkeypatch.setattr(store, "_WARNED_OFF", False)  # latch is process-global
     conn = store.connect(tmp_path / "off.ixnb")
@@ -78,7 +78,7 @@ def test_weave_url_off_drops_writes_cleanly(tmp_path, monkeypatch, capsys) -> No
     assert "persistence writes are disabled" in capsys.readouterr().err
 
 
-def test_read_functions_return_empty_when_disabled(tmp_path, monkeypatch) -> None:
+def test_read_functions_return_empty_when_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("WEAVE_URL", "off")
     conn = store.connect(tmp_path / "off.ixnb")
     assert store.recent(conn) == []

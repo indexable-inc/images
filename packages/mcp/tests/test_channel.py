@@ -42,14 +42,14 @@ def test_events_stream_after_seq_and_reset() -> None:
     assert box.events_after("res1", 0) == []
 
 
-def _wire_runtime(monkeypatch, conn) -> None:
+def _wire_runtime(monkeypatch: pytest.MonkeyPatch, conn: object) -> None:
     monkeypatch.setattr(runtime, "_store", store)
     monkeypatch.setattr(runtime, "_store_conn", conn)
     runtime.input_channels.clear()
     runtime.resources.clear()
 
 
-def test_notify_queues_event_with_stringified_meta(tmp_path: Path, monkeypatch) -> None:
+def test_notify_queues_event_with_stringified_meta(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     async def run() -> None:
         monkeypatch.setenv("WEAVE_URL", "off")
         _box()
@@ -65,7 +65,7 @@ def test_notify_queues_event_with_stringified_meta(tmp_path: Path, monkeypatch) 
     asyncio.run(run())
 
 
-def test_job_finished_event_is_addressed_to_starting_session(tmp_path: Path, monkeypatch) -> None:
+def test_job_finished_event_is_addressed_to_starting_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("WEAVE_URL", "off")
     _box()
     conn = store.connect(tmp_path / "r.db")
@@ -111,11 +111,10 @@ def test_transport_pump_drains_mailbox() -> None:
             _initialization_state = transport.InitializationState.Initialized
 
         send, recv = anyio.create_memory_object_stream[SessionMessage](10)
-        async with send, recv:
-            async with anyio.create_task_group() as tg:
-                tg.start_soon(transport.pump_outbox, send, Session())
-                msg = await recv.receive()
-                tg.cancel_scope.cancel()
+        async with send, recv, anyio.create_task_group() as tg:
+            tg.start_soon(transport.pump_outbox, send, Session())
+            msg = await recv.receive()
+            tg.cancel_scope.cancel()
         notification = msg.message.root
         assert notification.method == "notifications/claude/channel"
         assert notification.params == {"content": "hello", "meta": {"resource": "r"}}
@@ -123,7 +122,7 @@ def test_transport_pump_drains_mailbox() -> None:
     anyio.run(run)
 
 
-def test_reply_tool_appends_event(monkeypatch) -> None:
+def test_reply_tool_appends_event(monkeypatch: pytest.MonkeyPatch) -> None:
     async def run() -> None:
         box = _box()
         # Hermetic: no live weave in unit tests; liveness is then unknowable

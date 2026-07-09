@@ -76,7 +76,7 @@ async def _rows(program: str) -> list[list[Any]]:
     return (await query(program))["rows"]
 
 
-async def _one(program: str) -> Any | None:
+async def _one(program: str) -> object | None:
     rows = await _rows(program)
     return rows[0][0] if rows and rows[0] else None
 
@@ -128,7 +128,7 @@ async def _spawn_request(
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=_HARNESS_TIMEOUT_S)
             text = out.decode(errors="replace")
             status = "done" if proc.returncode == 0 else "error"
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proc.kill()
             out, _ = await proc.communicate()
             text = (out or b"").decode(errors="replace") + "\n(timeout)"
@@ -145,6 +145,7 @@ async def _spawn_request(
 
 async def _watch_spawns(client: Weave, host_id: str) -> None:
     sem = asyncio.Semaphore(_MAX_SPAWNS)
+    background: set[asyncio.Task[None]] = set()
     seen: set[str] = set()
     # open_spawn_request/2 carries the prefab (prelude rule): (R, P).
     async for batch in client.watch("?- open_spawn_request(R, P)."):
@@ -155,7 +156,9 @@ async def _watch_spawns(client: Weave, host_id: str) -> None:
             if req in seen:
                 continue
             seen.add(req)
-            asyncio.create_task(_spawn_request(client, host_id, req, prefab, sem))
+            task = asyncio.create_task(_spawn_request(client, host_id, req, prefab, sem))
+            background.add(task)
+            task.add_done_callback(background.discard)
 
 
 async def _reply(client: Weave, msg: str, agent: str) -> None:
@@ -192,17 +195,20 @@ async def _reply(client: Weave, msg: str, agent: str) -> None:
     )
 
 
-async def _watch_replies(client: Weave, answer_main: bool) -> None:
+async def _watch_replies(client: Weave, *, answer_main: bool) -> None:
     seen: set[str] = set()
+    background: set[asyncio.Task[None]] = set()
     async for batch in client.watch("?- needs_reply(M, A)."):
         for msg, agent in batch["added"]:
             if msg in seen or (agent == "agent:main" and not answer_main):
                 continue
             seen.add(msg)
-            asyncio.create_task(_reply(client, msg, agent))
+            task = asyncio.create_task(_reply(client, msg, agent))
+            background.add(task)
+            task.add_done_callback(background.discard)
 
 
-async def run(weave_url: str | None = None, host: str | None = None, answer_main: bool = False) -> None:
+async def run(weave_url: str | None = None, host: str | None = None, *, answer_main: bool = False) -> None:
     """Run the singleton Weave supervisor until cancelled."""
 
     if weave_url is not None:
@@ -214,6 +220,6 @@ async def run(weave_url: str | None = None, host: str | None = None, answer_main
     host_id = host or f"host:{socket.gethostname()}"
     try:
         await client.assert_facts([(host_id, "type", "host"), (host_id, "label", socket.gethostname())])
-        await asyncio.gather(_heartbeat(client, host_id), _watch_spawns(client, host_id), _watch_replies(client, answer_main))
+        await asyncio.gather(_heartbeat(client, host_id), _watch_spawns(client, host_id), _watch_replies(client, answer_main=answer_main))
     finally:
         lock.release()
