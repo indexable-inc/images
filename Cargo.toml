@@ -238,24 +238,20 @@ nix-web-monitor-parser = { path = "packages/nix/nix-web-monitor/parser" }
 # nu-command drops its default `sqlite` feature (`stor`, `into sqlite`): its
 # rusqlite 0.37 pins libsqlite3-sys 0.35, which collides with source-atuin's
 # rusqlite 0.40 on the one-per-graph `links = "sqlite3"` native library.
-nu-cmd-extra = "0.113.1"
-nu-cmd-lang = "0.113.1"
-nu-command = { version = "0.113.1", default-features = false, features = [
-  "os",
-  "network",
-  "rustls-tls",
-] }
-nu-engine = "0.113.1"
-nu-experimental = "0.113.1"
-nu-parser = "0.113.1"
-nu-protocol = "0.113.1"
+nu-cmd-extra = "0.114.0"
+nu-cmd-lang = "0.114.0"
+nu-command = { version = "0.114.0", default-features = false, features = ["os", "network", "rustls-tls"] }
+nu-engine = "0.114.0"
+nu-experimental = "0.114.0"
+nu-parser = "0.114.0"
+nu-protocol = "0.114.0"
 numpy = "0.28"
 objc2 = "0.6"
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
 objc2-quartz-core = "0.3"
 objc2-web-kit = "0.3"
-object = { version = "0.37", default-features = false, features = ["read"] }
+object = { version = "0.39", default-features = false, features = ["read"] }
 object_store = { version = "0.14", features = ["aws"] }
 panes-protocol = { path = "packages/vm/panes/protocol" }
 parking_lot = "0.12"

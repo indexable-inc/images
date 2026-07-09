@@ -28,7 +28,7 @@ block2 = "0.6"
 # CoreAudio playback for the guest's PCM stream (vsock port 7102, the
 # protocol crate's `audio` module). Already vendored in the workspace lock
 # via minecraft-sound's rodio.
-cpal = "0.17"
+cpal = "0.18"
 # Main-queue handoff: the socket reader thread owns the stream and
 # `exec_async`s decoded messages onto the AppKit main thread.
 dispatch2 = "0.3"
