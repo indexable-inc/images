@@ -205,6 +205,17 @@ NU = (
     "a separate `nu.Engine()`."
 )
 
+DELEGATE = (
+    "Delegate work to coding agents from the kernel. For a one-shot question or a bounded task, "
+    "`from tui import delegate; answer = await delegate('prompt')` runs the agent's headless "
+    "mode in one call and returns the reply (`claude -p` by default; `agent='codex'` / "
+    "`agent='cursor'` likewise, `model=` / `cwd=` / `timeout=` as needed). For an observable, "
+    "interruptible session a human can watch on the dashboard, launch the TUI harness instead: "
+    "`from tui import Claude; agent = await Claude.launch(cwd=...); await agent.ask('...')` "
+    "(see `api('tui')`). Either way, run a long delegation as a background job and push a "
+    "channel event with `await notify(...)` when it finishes."
+)
+
 NIX = (
     "For any `nix` command, use the bundled `nix` module — NEVER `nu('^nix ...')`. `await "
     "nix.run(['build', '.#foo'])` (or the shorthand `await nix.build('.#foo')`) runs the build "

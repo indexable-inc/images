@@ -11,6 +11,9 @@ import re
 import unittest
 
 from .harness import (
+    Claude,
+    Codex,
+    Cursor,
     _gate_matches,
     _parse_claude_reply,
     _parse_cursor_reply,
@@ -63,6 +66,45 @@ class GateMatchTests(unittest.TestCase):
 
     def test_regex(self) -> None:
         assert _gate_matches(re.compile(r"hooks?\b"), "review hooks")
+
+
+class OneshotArgvTests(unittest.TestCase):
+    def test_claude_defaults(self) -> None:
+        assert Claude._oneshot_argv("q") == ["claude", "-p", "q"]
+
+    def test_claude_model(self) -> None:
+        assert Claude._oneshot_argv("q", model="haiku") == [
+            "claude",
+            "-p",
+            "--model",
+            "haiku",
+            "q",
+        ]
+
+    def test_codex_reply_goes_to_last_message_file(self) -> None:
+        argv = Codex._oneshot_argv("q", "/scratch/last.txt")
+        assert argv[:2] == ["codex", "exec"]
+        assert argv[-1] == "q"
+        assert argv[argv.index("--output-last-message") + 1] == "/scratch/last.txt"
+
+    def test_cursor_defaults(self) -> None:
+        argv = Cursor._oneshot_argv("q")
+        assert argv[:2] == ["cursor-agent", "-p"]
+        assert "--force" in argv
+        assert argv[-1] == "q"
+
+
+class ClaudeGateTests(unittest.TestCase):
+    # The dev-channels warning screen as rendered by claude 2.1.x launched with
+    # --dangerously-load-development-channels (#2508).
+    def test_dev_channels_screen_matches_a_gate(self) -> None:
+        screen = (
+            "  WARNING: Loading development channels\n\n"
+            "  Channels: server:index\n\n"
+            "  ❯ 1. I am using this for local development\n"
+            "    2. Exit\n"
+        )
+        assert any(_gate_matches(g.pattern, screen) for g in Claude.gates)
 
 
 class ClaudeReplyTests(unittest.TestCase):
