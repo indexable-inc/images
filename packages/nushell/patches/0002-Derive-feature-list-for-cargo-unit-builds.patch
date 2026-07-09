@@ -12,7 +12,7 @@ Derive the same comma-separated feature list from CARGO_FEATURE_* when the
 aggregate env var is absent. Normal Cargo builds keep using CARGO_CFG_FEATURE.
 
 diff --git a/scripts/build.rs b/scripts/build.rs
-index 1469b50..a94c2bc 100644
+index 1469b5041..a94c2bcf7 100644
 --- a/scripts/build.rs
 +++ b/scripts/build.rs
 @@ -1,10 +1,22 @@
