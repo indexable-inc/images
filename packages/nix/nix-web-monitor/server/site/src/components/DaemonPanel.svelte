@@ -1,6 +1,5 @@
 <script lang="ts">
   import PanelHeader from '$lib/PanelHeader.svelte';
-  import { middleTruncate } from '$lib/format';
   import type { DaemonInfo, DaemonOps } from '$lib/types';
 
   type Props = {
@@ -9,21 +8,28 @@
 
   const { daemon }: Props = $props();
 
-  /// Op classes in a fixed display order with a short label. Keyed by the
-  /// `DaemonOps` field so the row count joins by identity.
-  const OP_ORDER: ReadonlyArray<readonly [keyof DaemonOps, string]> = [
-    ['link', 'link'],
-    ['rename', 'rename'],
-    ['write', 'write'],
-    ['fsync', 'fsync'],
-    ['open', 'open'],
-    ['stat', 'stat'],
-    ['unlink', 'unlink'],
-    ['other', 'other']
+  /// Op classes in a fixed display order: the `DaemonOps` field (so the row
+  /// count joins by identity), a short label, and a tooltip spelling out what
+  /// the class counts. The syscall lists mirror `OpClass::classify` in
+  /// `parser/src/daemon.rs`; update both together.
+  const OP_ORDER: ReadonlyArray<readonly [keyof DaemonOps, string, string]> = [
+    ['link', 'link', 'link, linkat, clonefile: hard-linking, dominates store optimisation'],
+    ['rename', 'rename', 'rename, renameat: finished paths moving into place'],
+    ['write', 'write', 'write, pwrite, writev: file data being written'],
+    ['fsync', 'fsync', 'fsync, fdatasync: writes being flushed to disk'],
+    ['open', 'open', 'open, openat'],
+    ['stat', 'stat', 'stat, lstat, fstat, access, getattrlist, readlink: metadata reads'],
+    ['unlink', 'unlink', 'unlink, rmdir: paths being deleted'],
+    [
+      'other',
+      'other',
+      'everything else: syscalls with no class of their own (ioctl, mmap, getdirentries, …) ' +
+        'plus, on macOS, the disk-I/O rows fs_usage interleaves (RdData, WrData, PgIn, …)'
+    ]
   ];
 
   const rows = $derived(
-    OP_ORDER.map(([key, label]) => ({ label, count: daemon.ops[key] })).filter(
+    OP_ORDER.map(([key, label, detail]) => ({ label, detail, count: daemon.ops[key] })).filter(
       (row) => row.count > 0
     )
   );
@@ -53,7 +59,7 @@
     {:else}
       <div class="daemon-ops">
         {#each rows as row (row.label)}
-          <div class="daemon-op" title="{String(row.count)} {row.label}">
+          <div class="daemon-op" title="{String(row.count)} {row.label} &middot; {row.detail}">
             <span class="daemon-op-label">{row.label}</span>
             <span class="daemon-op-bar" aria-hidden="true"
               ><span class="daemon-op-fill" style="--p: {String(pct(row.count))}%"></span></span
@@ -63,16 +69,26 @@
         {/each}
       </div>
       {#if daemon.currentPath !== null}
-        <div class="daemon-path" title={daemon.currentPath}>
-          {middleTruncate(daemon.currentPath, 56)}
+        <!-- The most recent path any traced syscall touched: a "currently
+             working on" readout, not tied to the op-class rows above. The
+             &lrm; marks pin character order under the rtl ellipsis trick
+             (see .daemon-path-value in style.css). -->
+        <div class="daemon-path" title="most recently touched path: {daemon.currentPath}">
+          <span class="daemon-path-label">touching</span>
+          <span class="daemon-path-value">&lrm;{daemon.currentPath}&lrm;</span>
         </div>
       {/if}
       {#if daemon.hotPaths.length > 0}
         <div class="daemon-hot">
-          <div class="daemon-hot-title">hot paths</div>
+          <div
+            class="daemon-hot-title"
+            title="highest-traffic paths across all traced syscalls: rate this second, then total"
+          >
+            hot paths
+          </div>
           {#each daemon.hotPaths as hot (hot.path)}
             <div class="daemon-hot-row" title={hot.path}>
-              <span class="daemon-hot-path">{middleTruncate(hot.path, 48)}</span>
+              <span class="daemon-hot-path">&lrm;{hot.path}&lrm;</span>
               <span class="daemon-hot-rate">{hot.opsPerSec}/s</span>
               <span class="daemon-hot-count">{hot.count}</span>
             </div>

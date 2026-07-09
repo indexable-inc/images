@@ -29,12 +29,19 @@ pub enum OpClass {
     Fsync,
     Stat,
     Unlink,
+    /// Everything [`Self::classify`] does not group: syscalls with no class of
+    /// their own (`ioctl`, `mmap`, `getdirentries`, ...) and, on macOS, the
+    /// disk-I/O rows `fs_usage` interleaves with syscalls (`RdData`, `WrData`,
+    /// `PgIn`, ...), which is why this bucket dominates during heavy I/O.
     Other,
 }
 
 impl OpClass {
     /// Classify a syscall by name. Handles the `*at` and `p*`/`*64` variants the
     /// two tracers emit (`openat`, `pwrite`, `lstat64`, `fdatasync`, ...).
+    ///
+    /// The daemon panel restates this grouping in its per-row tooltips
+    /// (`DaemonPanel.svelte`, `OP_ORDER`); update both together.
     #[must_use]
     pub fn classify(syscall: &str) -> Self {
         // Strip a trailing `64`/`_nocancel` so `stat64` / `open_nocancel` match.

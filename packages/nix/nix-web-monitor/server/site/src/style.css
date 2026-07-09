@@ -568,10 +568,34 @@ main.dragging-v .splitter-v::after {
 
 /* The store path the daemon last touched -- the "currently working on" line. */
 .daemon-path {
+  display: flex;
+  gap: 0.4rem;
   color: var(--faint);
   white-space: nowrap;
+}
+
+.daemon-path-label {
+  flex: none;
+  color: var(--muted);
+}
+
+/* Head-side ellipsis for path readouts: the leaf carries the identity, so
+ * overflow must eat the prefix, never the tail (#2487). `direction: rtl`
+ * moves the line's overflow edge (and its ellipsis) to the left; the &lrm;
+ * marks wrapping the text in the markup keep the characters themselves in
+ * left-to-right order, so nothing visually reorders. */
+.daemon-path-value,
+.daemon-hot-path {
+  min-width: 0;
   overflow: hidden;
+  white-space: nowrap;
   text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.daemon-path-value {
+  flex: 1 1 auto;
 }
 
 .daemon-hot {
@@ -599,11 +623,7 @@ main.dragging-v .splitter-v::after {
 }
 
 .daemon-hot-path {
-  min-width: 0;
-  overflow: hidden;
   color: var(--ink);
-  white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
 .daemon-hot-rate,
