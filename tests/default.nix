@@ -927,9 +927,6 @@
     workspaceRoot = ./fixtures/cargo-unit-prebuilt;
     cargoArgs = ["--workspace"];
     policy = cargoUnitPrebuiltPolicy;
-    # GitHub's runner daemon lacks `realisation-with-path-not-hash`; this test
-    # exercises prebuilt injection, so CA outputs add an unrelated eval failure.
-    contentAddressed = false;
   };
 
   # (a) The variant workspace, standing in for an out-of-tree prebuilt SDK

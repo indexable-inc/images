@@ -78,8 +78,20 @@ index 22a2ae9..692e830 100644
 +        }
 +        nix::DrvOutput const id{hashIt->second, outputName};
 +
-+        std::shared_ptr<const nix::UnkeyedRealisation> realisation =
-+            store.queryRealisation(id);
++        std::shared_ptr<const nix::UnkeyedRealisation> realisation;
++        try {
++            realisation = store.queryRealisation(id);
++        } catch (const nix::Error &error) {
++            // Nix 2.35 changed the CA-realisation wire format. A 2.34 client
++            // cannot negotiate that format with a newer daemon, so preserve
++            // the stock queryMissing classification until this evaluator and
++            // the runner daemon use the same Nix generation.
++            if (std::string_view{error.what()}.find(
++                    "realisation-with-path-not-hash") != std::string_view::npos) {
++                return std::nullopt;
++            }
++            throw;
++        }
 +        if (!realisation) {
 +            for (auto &sub : substituters) {
 +                realisation = sub->queryRealisation(id);
