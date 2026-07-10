@@ -8,6 +8,10 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode = RepositoriesMode.FAIL_ON_PROJECT_REPOS
     repositories {
+        // Every server is a standalone Gradle build (its Nix source root is its
+        // own directory), so this repository-selection boilerplate is
+        // intentionally identical across servers.
+        // clone:ignore-start
         val ixMavenRepository = providers.gradleProperty("ix.mavenRepository")
         if (ixMavenRepository.isPresent) {
             maven {
@@ -21,6 +25,7 @@ dependencyResolutionManagement {
         } else {
             mavenCentral()
         }
+        // clone:ignore-end
     }
 }
 
