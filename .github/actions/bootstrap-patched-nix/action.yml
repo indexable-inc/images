@@ -27,7 +27,12 @@ runs:
         BOOTSTRAP_REV: bf7a9b0d8577b32e542e8a3425ace8bb0c9bbaed
       run: |
         set -euo pipefail
+        # Runner logs are not always reachable from automation, so failures
+        # must explain themselves through annotations: name the command that
+        # died and where.
+        trap 'echo "::error title=bootstrap-patched-nix::failed at line $LINENO: $BASH_COMMAND"' ERR
         if ! git rev-parse --verify --quiet "$BOOTSTRAP_REV^{commit}" >/dev/null; then
+          echo "::notice title=bootstrap-patched-nix::pinned rev not in checkout; fetching $BOOTSTRAP_REV"
           git fetch --depth 1 origin "$BOOTSTRAP_REV"
         fi
         # Materialize the pinned tree with `git archive` and build it as a
@@ -42,4 +47,4 @@ runs:
           --out-link "$RUNNER_TEMP/nix-ix" \
           "path:$src#nix-ix"
         echo "$RUNNER_TEMP/nix-ix/bin" >> "$GITHUB_PATH"
-        "$RUNNER_TEMP/nix-ix/bin/nix" --version
+        echo "::notice title=bootstrap-patched-nix::$("$RUNNER_TEMP/nix-ix/bin/nix" --version) on PATH"
