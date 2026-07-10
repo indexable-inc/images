@@ -112,9 +112,12 @@ pub fn instances(scan: &Output, config: &DetectConfig) -> DetectionResult {
     }
 }
 
-/// Rank clone groups by actionability and estimated impact.
+/// Rank clone groups by actionable impact.
 ///
-/// Stable tie-breakers make JSON output reproducible.
+/// Put the canonical fragment first in every group, rank authored groups ahead
+/// of generated output, then rank by estimated removable lines. Generated
+/// groups remain present and gated; the ordering only keeps actionable work at
+/// the top. Stable tie-breakers make JSON output reproducible.
 pub fn rank_by_impact(groups: &mut [CloneGroup]) {
     for group in groups.iter_mut() {
         group.fragments.sort_by(|left, right| {
@@ -144,7 +147,7 @@ const fn fragment_line_count(fragment: &Fragment) -> usize {
         .saturating_add(1)
 }
 
-#[derive(Eq, Ord, PartialEq, PartialOrd)]
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
 struct FragmentKey<'a> {
     file: &'a std::path::Path,
     start: usize,
