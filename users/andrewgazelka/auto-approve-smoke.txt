@@ -1,0 +1,1 @@
+Temporary live smoke test for issue #2554.
