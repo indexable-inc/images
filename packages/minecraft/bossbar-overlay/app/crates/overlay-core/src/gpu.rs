@@ -355,6 +355,41 @@ impl Gpu {
         bitmap_font::shared().measure(text, scale)
     }
 
+    /// Greedily wrap text to `max_width` using this GPU's bitmap-font metrics.
+    /// Newlines are hard breaks and an empty segment preserves a blank line.
+    pub fn wrap_text(
+        &self,
+        text: &str,
+        max_width: f32,
+        scale: f32,
+    ) -> Vec<String> {
+        let mut lines = Vec::new();
+        for segment in text.split('\n') {
+            if segment.trim().is_empty() {
+                lines.push(String::new());
+                continue;
+            }
+            let mut line = String::new();
+            for word in segment.split_whitespace() {
+                let candidate = if line.is_empty() {
+                    word.to_owned()
+                } else {
+                    format!("{line} {word}")
+                };
+                if line.is_empty() || self.measure(&candidate, scale) <= max_width {
+                    line = candidate;
+                } else {
+                    lines.push(std::mem::take(&mut line));
+                    line = word.to_owned();
+                }
+            }
+            if !line.is_empty() {
+                lines.push(line);
+            }
+        }
+        lines
+    }
+
     /// Paint `quads` into `view` over a transparent clear. Quads draw in order, so
     /// later quads layer over earlier ones.
     pub fn draw(

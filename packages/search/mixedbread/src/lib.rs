@@ -1521,6 +1521,33 @@ mod tests {
     };
     use crate::{Filter, Operator};
 
+    type CapturedRequest = Arc<std::sync::Mutex<Option<serde_json::Value>>>;
+
+    async fn post_fixture(
+        path: &'static str,
+        response: &'static str,
+    ) -> (String, CapturedRequest) {
+        let captured: CapturedRequest = Arc::default();
+        let app = Router::new().route(
+            path,
+            axum::routing::post({
+                let captured = Arc::clone(&captured);
+                move |axum::extract::Json(body): axum::extract::Json<serde_json::Value>| {
+                    *captured.lock().expect("lock") = Some(body);
+                    async move { (StatusCode::OK, response) }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        (format!("http://{addr}"), captured)
+    }
+
     #[test]
     fn list_request_sends_its_filter_as_metadata_filter() {
         // The list endpoint reads `metadata_filter`, not `filters`, and the API
@@ -1597,31 +1624,13 @@ mod tests {
         // Round-trip through a real router: the request must hit
         // `/v1/stores/list-chunks` and the response decodes through the same
         // RawChunk -> Chunk projection search uses.
-        let captured: Arc<std::sync::Mutex<Option<serde_json::Value>>> = Arc::default();
-        let app = Router::new().route(
+        let (base_url, captured) = post_fixture(
             "/v1/stores/list-chunks",
-            axum::routing::post({
-                let captured = Arc::clone(&captured);
-                move |axum::extract::Json(body): axum::extract::Json<serde_json::Value>| {
-                    *captured.lock().expect("lock") = Some(body);
-                    async {
-                        (
-                            StatusCode::OK,
-                            r#"{"data":[{"text":"gt sync","score":1.0,"metadata":{"source":"shell","timestamp":1781248268}}]}"#,
-                        )
-                    }
-                }
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        tokio::spawn(async move {
-            axum::serve(listener, app).await.expect("serve");
-        });
+            r#"{"data":[{"text":"gt sync","score":1.0,"metadata":{"source":"shell","timestamp":1781248268}}]}"#,
+        )
+        .await;
 
-        let client = Client::new(format!("http://{addr}"), "test-key").expect("client");
+        let client = Client::new(base_url, "test-key").expect("client");
         let sort = SortBy::desc("timestamp");
         let chunks = client
             .list_chunks(&["index".to_owned()], 1, None, Some(&sort))
@@ -1933,31 +1942,13 @@ mod tests {
         // Round-trip through a real router: the request must hit
         // `/v1/stores/queries/enhance` with the documented body, and the
         // response's one item decodes through the tagged EnhancedQuery enum.
-        let captured: Arc<std::sync::Mutex<Option<serde_json::Value>>> = Arc::default();
-        let app = Router::new().route(
+        let (base_url, captured) = post_fixture(
             "/v1/stores/queries/enhance",
-            axum::routing::post({
-                let captured = Arc::clone(&captured);
-                move |axum::extract::Json(body): axum::extract::Json<serde_json::Value>| {
-                    *captured.lock().expect("lock") = Some(body);
-                    async {
-                        (
-                            StatusCode::OK,
-                            r#"{"items":[{"type":"query","query":"indexer slack messages","metadata_filters":[{"key":"source","operator":"eq","value":"slack"}],"filter_mode":"all","rank_by":null,"direction":null}]}"#,
-                        )
-                    }
-                }
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        tokio::spawn(async move {
-            axum::serve(listener, app).await.expect("serve");
-        });
+            r#"{"items":[{"type":"query","query":"indexer slack messages","metadata_filters":[{"key":"source","operator":"eq","value":"slack"}],"filter_mode":"all","rank_by":null,"direction":null}]}"#,
+        )
+        .await;
 
-        let client = Client::new(format!("http://{addr}"), "test-key").expect("client");
+        let client = Client::new(base_url, "test-key").expect("client");
         let enhanced = client
             .enhance_query(
                 &["index".to_owned()],
@@ -1990,31 +1981,13 @@ mod tests {
         // `/v1/stores/metadata-facets` with the documented body (facet keys,
         // scan caps, no nulls for unset caps) and the response decodes the
         // live `{key: {value: count}}` shape.
-        let captured: Arc<std::sync::Mutex<Option<serde_json::Value>>> = Arc::default();
-        let app = Router::new().route(
+        let (base_url, captured) = post_fixture(
             "/v1/stores/metadata-facets",
-            axum::routing::post({
-                let captured = Arc::clone(&captured);
-                move |axum::extract::Json(body): axum::extract::Json<serde_json::Value>| {
-                    *captured.lock().expect("lock") = Some(body);
-                    async {
-                        (
-                            StatusCode::OK,
-                            r#"{"facets":{"source":{"shell":1154,"code":9644}}}"#,
-                        )
-                    }
-                }
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        tokio::spawn(async move {
-            axum::serve(listener, app).await.expect("serve");
-        });
+            r#"{"facets":{"source":{"shell":1154,"code":9644}}}"#,
+        )
+        .await;
 
-        let client = Client::new(format!("http://{addr}"), "test-key").expect("client");
+        let client = Client::new(base_url, "test-key").expect("client");
         let facets = client
             .metadata_facets(
                 &["index".to_owned()],
@@ -2289,31 +2262,13 @@ mod tests {
         // query, documents (`input`), top_k, and `return_input: false`; the
         // response's `data` items project to (index, score) pairs pointing back
         // into the submitted slice.
-        let captured: Arc<std::sync::Mutex<Option<serde_json::Value>>> = Arc::default();
-        let app = Router::new().route(
+        let (base_url, captured) = post_fixture(
             "/v1/reranking",
-            axum::routing::post({
-                let captured = Arc::clone(&captured);
-                move |axum::extract::Json(body): axum::extract::Json<serde_json::Value>| {
-                    *captured.lock().expect("lock") = Some(body);
-                    async {
-                        (
-                            StatusCode::OK,
-                            r#"{"data":[{"index":2,"score":0.91},{"index":0,"score":0.12}]}"#,
-                        )
-                    }
-                }
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        tokio::spawn(async move {
-            axum::serve(listener, app).await.expect("serve");
-        });
+            r#"{"data":[{"index":2,"score":0.91},{"index":0,"score":0.12}]}"#,
+        )
+        .await;
 
-        let client = Client::new(format!("http://{addr}"), "test-key").expect("client");
+        let client = Client::new(base_url, "test-key").expect("client");
         let docs = vec!["alpha".to_owned(), "beta".to_owned(), "gamma".to_owned()];
         let hits = client
             .rerank(DEFAULT_RERANK_MODEL, "which greek letter", &docs, 2)

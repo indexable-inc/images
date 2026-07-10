@@ -79,6 +79,7 @@ pub fn instances(scan: &Output, config: &DetectConfig) -> DetectionResult {
     instances.extend(sequence_groups);
 
     dedup_subsumed(&mut instances);
+    rank_by_impact(&mut instances);
 
     let type1_count = instances
         .iter()
@@ -91,17 +92,8 @@ pub fn instances(scan: &Output, config: &DetectConfig) -> DetectionResult {
 
     let total_lines: usize = scan.files.iter().map(|f| f.source.lines().count()).sum();
 
-    let duplicated_lines = compute_duplicated_lines(&instances);
-
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "line counts stay far below f64 mantissa precision"
-    )]
-    let duplication_pct = if total_lines == 0 {
-        0.0
-    } else {
-        (duplicated_lines as f64 / total_lines as f64) * PERCENT
-    };
+    let duplicated_lines = duplicated_lines(&instances);
+    let duplication_pct = duplication_percentage(duplicated_lines, total_lines);
 
     DetectionResult {
         instances,
@@ -116,6 +108,56 @@ pub fn instances(scan: &Output, config: &DetectConfig) -> DetectionResult {
             type3_groups: type3_count,
             sequence_groups: sequence_count,
         },
+    }
+}
+
+/// Put the canonical fragment first in every group and rank groups by the
+/// estimated number of removable lines. Stable path/range tie-breakers make
+/// JSON output reproducible across hash-map and Rayon iteration order.
+pub fn rank_by_impact(groups: &mut [CloneGroup]) {
+    for group in groups.iter_mut() {
+        group.fragments.sort_by(|left, right| {
+            fragment_line_count(right)
+                .cmp(&fragment_line_count(left))
+                .then_with(|| left.file.cmp(&right.file))
+                .then_with(|| left.byte_range.start.cmp(&right.byte_range.start))
+                .then_with(|| left.byte_range.end.cmp(&right.byte_range.end))
+        });
+    }
+
+    groups.sort_by(|left, right| {
+        right
+            .line_impact()
+            .cmp(&left.line_impact())
+            .then_with(|| first_fragment_key(left).cmp(&first_fragment_key(right)))
+            .then_with(|| kind_rank(left.clone_type).cmp(&kind_rank(right.clone_type)))
+    });
+}
+
+fn fragment_line_count(fragment: &Fragment) -> usize {
+    fragment
+        .lines
+        .end
+        .saturating_sub(fragment.lines.start)
+        .saturating_add(1)
+}
+
+fn first_fragment_key(group: &CloneGroup) -> Option<(&std::path::Path, usize, usize)> {
+    group.fragments.first().map(|fragment| {
+        (
+            fragment.file.as_path(),
+            fragment.byte_range.start,
+            fragment.byte_range.end,
+        )
+    })
+}
+
+fn kind_rank(kind: Kind) -> u8 {
+    match kind {
+        Kind::Type1 => 0,
+        Kind::Type2 => 1,
+        Kind::Type3 { .. } => 2,
+        Kind::Sequence { .. } => 3,
     }
 }
 
@@ -233,7 +275,7 @@ fn is_subsumed_by(inner: &[FragKey], outer: &[FragKey]) -> bool {
 /// For each clone group, only count duplicated instances (all fragments except
 /// one "original"). Lines are deduplicated across groups per file using a
 /// set of line numbers.
-fn compute_duplicated_lines(instances: &[CloneGroup]) -> usize {
+pub fn duplicated_lines(instances: &[CloneGroup]) -> usize {
     let mut dup_lines_per_file: FxHashMap<&PathBuf, BTreeSet<usize>> = FxHashMap::default();
 
     for group in instances {
@@ -247,6 +289,20 @@ fn compute_duplicated_lines(instances: &[CloneGroup]) -> usize {
     }
 
     dup_lines_per_file.values().map(BTreeSet::len).sum()
+}
+
+/// Convert a duplicated/total line count to the percentage used by gates.
+#[must_use]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "line counts stay far below f64 mantissa precision"
+)]
+pub fn duplication_percentage(duplicated_lines: usize, total_lines: usize) -> f64 {
+    if total_lines == 0 {
+        0.0
+    } else {
+        (duplicated_lines as f64 / total_lines as f64) * PERCENT
+    }
 }
 
 fn total_byte_span(group: &CloneGroup) -> usize {

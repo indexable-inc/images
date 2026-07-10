@@ -485,39 +485,39 @@ async def ssh_run(
     )
 
 
-async def read_ndjson(
-    hosts: Sequence[str | Mapping[str, Any]],
-    remote_path: str,
-    *,
-    filter_cmd: str | None = None,
-    **kw: Any,  # noqa: ANN401 -- forwarded to scan/asyncssh.connect
-) -> pl.DataFrame:
-    """Read an NDJSON file from every host into one frame.
+def _remote_reader(name: str, parser: Parser, doc: str) -> Callable[..., Awaitable[pl.DataFrame]]:
+    async def reader(
+        hosts: Sequence[str | Mapping[str, Any]],
+        remote_path: str,
+        *,
+        filter_cmd: str | None = None,
+        **connect_kwargs: Any,  # noqa: ANN401 -- forwarded to scan/asyncssh.connect
+    ) -> pl.DataFrame:
+        command = filter_cmd if filter_cmd is not None else f"cat {_q(remote_path)}"
+        return await scan(hosts, command, parser=parser, **connect_kwargs)
 
-    Runs ``cat <remote_path>`` by default. ``filter_cmd`` replaces that with a
-    host-side pipeline so filtering happens at the source and less crosses the
-    wire, e.g. ``filter_cmd="rg level=error /var/log/app.ndjson"`` or
-    ``filter_cmd="tail -n 100 /var/log/app.ndjson | jq -c 'select(.ok)'"``.
-    Extra kwargs pass through to :func:`scan`.
-    """
-    command = filter_cmd if filter_cmd is not None else f"cat {_q(remote_path)}"
-    return await scan(hosts, command, parser=ndjson_parser, **kw)
+    reader.__name__ = name
+    reader.__doc__ = doc
+    return reader
 
 
-async def read_csv(
-    hosts: Sequence[str | Mapping[str, Any]],
-    remote_path: str,
-    *,
-    filter_cmd: str | None = None,
-    **kw: Any,  # noqa: ANN401 -- forwarded to scan/asyncssh.connect
-) -> pl.DataFrame:
-    """Read a CSV file from every host into one frame.
+read_ndjson = _remote_reader(
+    "read_ndjson",
+    ndjson_parser,
+    """Read NDJSON from every host, optionally filtering at the source.
 
-    ``cat <remote_path>`` by default; ``filter_cmd`` substitutes a host-side
-    pipeline (keep the header if you filter, e.g. with ``head -1; rg ...``).
-    """
-    command = filter_cmd if filter_cmd is not None else f"cat {_q(remote_path)}"
-    return await scan(hosts, command, parser=csv_parser, **kw)
+    Extra keyword arguments pass through to :func:`scan`.
+    """,
+)
+
+read_csv = _remote_reader(
+    "read_csv",
+    csv_parser,
+    """Read CSV from every host, optionally filtering at the source.
+
+    A filter must preserve the CSV header.
+    """,
+)
 
 
 async def read_parquet(
@@ -580,22 +580,14 @@ async def read_parquet(
     return combined
 
 
-async def read_text(
-    hosts: Sequence[str | Mapping[str, Any]],
-    remote_path: str,
-    *,
-    filter_cmd: str | None = None,
-    **kw: Any,  # noqa: ANN401 -- forwarded to scan/asyncssh.connect
-) -> pl.DataFrame:
-    """Read an unstructured file from every host as one row per line.
+read_text = _remote_reader(
+    "read_text",
+    text_parser,
+    """Read unstructured files from every host as one row per line.
 
-    Returns a frame with columns ``host`` and ``line`` (one row per line), for
-    logs, shell history, and other text with no record format. ``filter_cmd``
-    runs a host-side pipeline instead of ``cat`` so you can ``tail``/``rg`` at
-    the source (e.g. ``filter_cmd="rg -i oom /var/log/kern.log"``).
-    """
-    command = filter_cmd if filter_cmd is not None else f"cat {_q(remote_path)}"
-    return await scan(hosts, command, parser=text_parser, **kw)
+    The result contains ``host`` and ``line`` columns. A filter runs at the source.
+    """,
+)
 
 
 def _q(path: str) -> str:

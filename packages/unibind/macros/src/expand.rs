@@ -94,20 +94,33 @@ fn backend_py(
     Ok(rendered.glue)
 }
 
-#[cfg(not(feature = "py"))]
-fn backend_py(
-    _interface: &unibind_core::ir::Interface,
-    _module: &mut syn::ItemMod,
-    explicit: bool,
-) -> Result<TokenStream, LowerError> {
-    if explicit {
-        return Err(LowerError {
-            span: proc_macro2::Span::call_site(),
-            message: "backends(py) needs the `py` cargo feature of unibind".to_owned(),
-        });
-    }
-    Ok(TokenStream::new())
+macro_rules! disabled_backend {
+    ($name:ident, $feature:literal) => {
+        #[cfg(not(feature = $feature))]
+        fn $name(
+            _interface: &unibind_core::ir::Interface,
+            _module: &mut syn::ItemMod,
+            explicit: bool,
+        ) -> Result<TokenStream, LowerError> {
+            if explicit {
+                return Err(LowerError {
+                    span: proc_macro2::Span::call_site(),
+                    message: concat!(
+                        "backends(",
+                        $feature,
+                        ") needs the `",
+                        $feature,
+                        "` cargo feature of unibind"
+                    )
+                    .to_owned(),
+                });
+            }
+            Ok(TokenStream::new())
+        }
+    };
 }
+
+disabled_backend!(backend_py, "py");
 
 #[cfg(feature = "ts")]
 fn backend_ts(
@@ -130,20 +143,7 @@ fn backend_ts(
     Ok(rendered.glue)
 }
 
-#[cfg(not(feature = "ts"))]
-fn backend_ts(
-    _interface: &unibind_core::ir::Interface,
-    _module: &mut syn::ItemMod,
-    explicit: bool,
-) -> Result<TokenStream, LowerError> {
-    if explicit {
-        return Err(LowerError {
-            span: proc_macro2::Span::call_site(),
-            message: "backends(ts) needs the `ts` cargo feature of unibind".to_owned(),
-        });
-    }
-    Ok(TokenStream::new())
-}
+disabled_backend!(backend_ts, "ts");
 
 #[cfg(feature = "ex")]
 fn backend_ex(
@@ -173,20 +173,7 @@ fn backend_ex(
     Ok(rendered.glue)
 }
 
-#[cfg(not(feature = "ex"))]
-fn backend_ex(
-    _interface: &unibind_core::ir::Interface,
-    _module: &mut syn::ItemMod,
-    explicit: bool,
-) -> Result<TokenStream, LowerError> {
-    if explicit {
-        return Err(LowerError {
-            span: proc_macro2::Span::call_site(),
-            message: "backends(ex) needs the `ex` cargo feature of unibind".to_owned(),
-        });
-    }
-    Ok(TokenStream::new())
-}
+disabled_backend!(backend_ex, "ex");
 
 /// One record's backend-rendered attributes, index-aligned with the
 /// record's fields.

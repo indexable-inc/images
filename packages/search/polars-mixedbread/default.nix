@@ -88,7 +88,12 @@
       ''}
 
       mkdir -p "$out"
-      python3 ${./wheel/mkwheel.py} \
+      python3 ${ix.paths.root}/lib/build/pyo3-wheel.py \
+        --package polars_mixedbread \
+        --dist-name polars-mixedbread \
+        --so-name _polars_mixedbread.abi3.so \
+        --summary ${lib.escapeShellArg "Polars IO source backed by Mixedbread store search, imported as polars_mixedbread"} \
+        --requires-dist polars \
         --cdylib "$sanitized" \
         --python-src ${pythonSource} \
         --version ${version} \

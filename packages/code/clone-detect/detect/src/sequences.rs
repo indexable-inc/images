@@ -95,26 +95,24 @@ pub fn sequence_instances(scan: &Output, window_size: usize) -> Vec<CloneGroup> 
                 }
 
                 let extended = extend_match(scan, loc_a, loc_b);
-
-                for pos in extended.first.start..extended.first.end {
-                    used.insert(SeqKey {
-                        file_id: extended.first.file_id,
-                        node_idx: extended.first.node_idx,
-                        position: pos,
-                    });
-                }
-                for pos in extended.second.start..extended.second.end {
-                    used.insert(SeqKey {
-                        file_id: extended.second.file_id,
-                        node_idx: extended.second.node_idx,
-                        position: pos,
-                    });
-                }
-
                 let frag_a = sequence_to_fragment(scan, &extended.first);
                 let frag_b = sequence_to_fragment(scan, &extended.second);
 
                 if let (Some(fa), Some(fb)) = (frag_a, frag_b) {
+                    // Different AST parents can expose overlapping child
+                    // sequences for the same source bytes. That is one region
+                    // viewed at two nesting levels, not duplicated code.
+                    if fa.file == fb.file
+                        && ranges_overlap(
+                            fa.byte_range.start..fa.byte_range.end,
+                            fb.byte_range.start..fb.byte_range.end,
+                        )
+                    {
+                        continue;
+                    }
+
+                    mark_used(&mut used, &extended.first);
+                    mark_used(&mut used, &extended.second);
                     groups.push(CloneGroup {
                         clone_type: Kind::Sequence {
                             statements: extended.first.end - extended.first.start,
@@ -127,6 +125,16 @@ pub fn sequence_instances(scan: &Output, window_size: usize) -> Vec<CloneGroup> 
     }
 
     groups
+}
+
+fn mark_used(used: &mut FxHashSet<SeqKey>, location: &SeqLoc) {
+    for position in location.start..location.end {
+        used.insert(SeqKey {
+            file_id: location.file_id,
+            node_idx: location.node_idx,
+            position,
+        });
+    }
 }
 
 /// Extend a matching window in both directions as long as child hashes match.

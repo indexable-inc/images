@@ -19,16 +19,12 @@
   # inline here (repo policy: no `hash = "sha256-..."` literals in tracked .nix).
   # Bump the version/url in pins.json, then `nix run .#update` re-pins the hash.
   pin = ix.pins.loadPin ./pins.json "vector";
-  updateScript =
-    if updateScriptWriter == null
-    then null
-    else
-      ix.pins.mkUpdater {
-        writeNushellApplication = updateScriptWriter;
-        inherit nix;
-        pname = "vector-bin";
-        relPath = "packages/vector-bin/pins.json";
-      };
+  updateScript = ix.pins.mkOptionalUpdater {
+    writeNushellApplication = updateScriptWriter;
+    inherit nix;
+    pname = "vector-bin";
+    relPath = "packages/vector-bin/pins.json";
+  };
 in
   stdenv.mkDerivation {
     pname = "vector";

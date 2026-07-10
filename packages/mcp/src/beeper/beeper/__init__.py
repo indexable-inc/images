@@ -43,11 +43,13 @@ from __future__ import annotations
 import os
 import pathlib
 import urllib.parse
+from functools import partial
 from typing import Any
 
 import httpx
 import polars as pl
 from pydantic import BaseModel, ConfigDict, Field
+from private_session import SHARED_ENV, find_token, require_private_session
 
 __all__ = [
     "BeeperError",
@@ -68,8 +70,6 @@ __version__ = "0.1.0"
 # across participants. Incognito is the default: an unset (or empty) value means
 # access is permitted; only a truthy value marks the session shared and refuses
 # access, keeping personal Beeper data out of synced room state.
-SHARED_ENV = "IX_MCP_SHARED"
-
 # Environment variables checked for an access token, in order. BEEPER_ACCESS_TOKEN
 # is the name the official Beeper CLI/SDK use; BEEPER_API_TOKEN is also accepted
 # as a common alias.
@@ -292,20 +292,12 @@ class BeeperError(RuntimeError):
     """
 
 
-def _require_incognito() -> None:
-    """Refuse to access Beeper data in a shared (multiplayer) room.
-
-    Beeper aggregates DMs and group chats across every connected network, so a
-    shared room would leak one person's messages into state everyone can see. A
-    shared room sets ``IX_MCP_SHARED``; only then is access refused.
-    """
-    if os.environ.get(SHARED_ENV):
-        raise BeeperError(
-            "Beeper is not available in a shared (multiplayer) room "
-            "(IX_MCP_SHARED is set), because it would expose personal chats "
-            "across every connected network to everyone in the room. Use it "
-            "from an incognito chat instead; its transcript stays private to you."
-        )
+_require_incognito = partial(
+    require_private_session,
+    "Beeper",
+    "personal chats across every connected network",
+    BeeperError,
+)
 
 
 def _base_url() -> str:
@@ -320,14 +312,8 @@ def _token() -> str:
     Resolution order: ``BEEPER_ACCESS_TOKEN`` env, ``BEEPER_API_TOKEN`` env, then
     ``~/.config/beeper/token`` (written by :func:`login`).
     """
-    for var in _TOKEN_ENV_VARS:
-        val = os.environ.get(var, "").strip()
-        if val:
-            return val
-    if _TOKEN_FILE.exists():
-        val = _TOKEN_FILE.read_text().strip()
-        if val:
-            return val
+    if token := find_token(_TOKEN_ENV_VARS, _TOKEN_FILE):
+        return token
     raise BeeperError(
         "No Beeper access token is configured for this session. "
         "Call `beeper.login(token)` with an access token minted in Beeper "

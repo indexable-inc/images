@@ -25,6 +25,7 @@ import pytest
 
 # Both import paths must work.
 import linear
+from linear_test_support import FakeLinearPort
 from linear import triage as triage_mod
 from linear.triage import (
     Finding,
@@ -42,54 +43,6 @@ from linear.triage import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-class FakeLinearPort:
-    """In-memory LinearPort for tests.
-
-    ``search_results`` maps a search term to the list of issue dicts returned.
-    Calls to ``search``, ``create``, and ``comment`` are recorded in the
-    corresponding lists so assertions can inspect them.
-    """
-
-    def __init__(self) -> None:
-        self.search_results: dict[str, list[dict[str, Any]]] = {}
-        self.created: list[dict[str, Any]] = []
-        self.commented: list[tuple[str, str]] = []
-        self._next_id = 1
-
-    def _issue_id(self) -> str:
-        uid = f"issue-{self._next_id:04d}"
-        self._next_id += 1
-        return uid
-
-    async def search(self, term: str) -> list[dict[str, Any]]:
-        return list(self.search_results.get(term, []))
-
-    async def create(
-        self,
-        *,
-        team_id: str,
-        title: str,
-        description: str,
-        parent_id: str,
-        label_ids: list[str],
-        priority: int,
-    ) -> dict[str, Any]:
-        issue: dict[str, Any] = {
-            "id": self._issue_id(),
-            "title": title,
-            "description": description,
-            "identifier": f"ENG-{self._next_id}",
-            "state": {"id": "state-todo", "name": "Todo", "type": "unstarted"},
-        }
-        self.created.append(issue)
-        return issue
-
-    async def comment(self, issue_id: str, body: str) -> dict[str, Any]:
-        comment = {"id": f"comment-{len(self.commented) + 1}", "url": "#"}
-        self.commented.append((issue_id, body))
-        return comment
 
 
 def _cfg(**overrides: object) -> TriageConfig:
@@ -127,95 +80,68 @@ def run(coro: object) -> object:
 
 
 class TestFingerprintStability:
-    def test_nix_store_hash_differences_same_fp(self) -> None:
-        """Two findings whose key/body differ only by nix store hashes are equal."""
-        f1 = Finding(
-            source="ci",
-            kind="lint",
-            key="/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1-foo/bar.rs",
-            title="Lint failure",
-            body_md="Error in /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1-foo/bar.rs",
-        )
-        f2 = Finding(
-            source="ci",
-            kind="lint",
-            key="/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-foo/bar.rs",
-            title="Lint failure",
-            body_md="Error in /nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-foo/bar.rs",
-        )
-        assert fingerprint(f1) == fingerprint(f2)
-
-    def test_nox_conformance_store_pid_same_fp(self) -> None:
-        """Findings differing only by nox-conformance-store-<pid> yield same fp."""
-        f1 = Finding(
-            source="nox",
-            kind="conformance",
-            key="nox-conformance-store-12345/test.rs",
-            title="Conformance failure",
-            body_md="Failure in nox-conformance-store-12345",
-        )
-        f2 = Finding(
-            source="nox",
-            kind="conformance",
-            key="nox-conformance-store-99999/test.rs",
-            title="Conformance failure",
-            body_md="Failure in nox-conformance-store-99999",
-        )
-        assert fingerprint(f1) == fingerprint(f2)
-
-    def test_line_col_differences_same_fp(self) -> None:
-        """Findings differing only by :line:col positions yield the same fp."""
-        f1 = Finding(
-            source="ci",
-            kind="lint",
-            key="src/foo.rs:10:5",
-            title="Lint failure",
-            body_md="Error at src/foo.rs:10:5",
-        )
-        f2 = Finding(
-            source="ci",
-            kind="lint",
-            key="src/foo.rs:99:1",
-            title="Lint failure",
-            body_md="Error at src/foo.rs:99:1",
-        )
-        assert fingerprint(f1) == fingerprint(f2)
-
-    def test_pid_differences_same_fp(self) -> None:
-        """Findings differing only by pid numbers yield the same fp."""
-        f1 = Finding(
-            source="ci",
-            kind="crash",
-            key="crash in pid 1234",
-            title="Crash",
-            body_md="Process crash: pid 1234 exited unexpectedly",
-        )
-        f2 = Finding(
-            source="ci",
-            kind="crash",
-            key="crash in pid 5678",
-            title="Crash",
-            body_md="Process crash: pid 5678 exited unexpectedly",
-        )
-        assert fingerprint(f1) == fingerprint(f2)
-
-    def test_tmp_path_differences_same_fp(self) -> None:
-        """Findings differing only by /tmp paths yield the same fp."""
-        f1 = Finding(
-            source="ci",
-            kind="test",
-            key="/tmp/run-abc123/output",  # noqa: S108 -- test data string, not a temp-file operation
-            title="Test failure",
-            body_md="Output at /tmp/run-abc123/output",
-        )
-        f2 = Finding(
-            source="ci",
-            kind="test",
-            key="/tmp/run-xyz789/output",  # noqa: S108 -- test data string, not a temp-file operation
-            title="Test failure",
-            body_md="Output at /tmp/run-xyz789/output",
-        )
-        assert fingerprint(f1) == fingerprint(f2)
+    @pytest.mark.parametrize(
+        ("source", "kind", "left_key", "right_key", "left_body", "right_body"),
+        [
+            pytest.param(
+                "ci",
+                "lint",
+                "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1-foo/bar.rs",
+                "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-foo/bar.rs",
+                "Error in /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1-foo/bar.rs",
+                "Error in /nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-foo/bar.rs",
+                id="nix-store-hash",
+            ),
+            pytest.param(
+                "nox",
+                "conformance",
+                "nox-conformance-store-12345/test.rs",
+                "nox-conformance-store-99999/test.rs",
+                "Failure in nox-conformance-store-12345",
+                "Failure in nox-conformance-store-99999",
+                id="conformance-store-pid",
+            ),
+            pytest.param(
+                "ci",
+                "lint",
+                "src/foo.rs:10:5",
+                "src/foo.rs:99:1",
+                "Error at src/foo.rs:10:5",
+                "Error at src/foo.rs:99:1",
+                id="line-column",
+            ),
+            pytest.param(
+                "ci",
+                "crash",
+                "crash in pid 1234",
+                "crash in pid 5678",
+                "Process crash: pid 1234 exited unexpectedly",
+                "Process crash: pid 5678 exited unexpectedly",
+                id="pid",
+            ),
+            pytest.param(
+                "ci",
+                "test",
+                "/tmp/run-abc123/output",  # noqa: S108 -- normalization input
+                "/tmp/run-xyz789/output",  # noqa: S108 -- normalization input
+                "Output at /tmp/run-abc123/output",
+                "Output at /tmp/run-xyz789/output",
+                id="temporary-path",
+            ),
+        ],
+    )
+    def test_incidental_differences_have_the_same_fingerprint(
+        self,
+        source: str,
+        kind: str,
+        left_key: str,
+        right_key: str,
+        left_body: str,
+        right_body: str,
+    ) -> None:
+        left = Finding(source, kind, left_key, "Failure", left_body)
+        right = Finding(source, kind, right_key, "Failure", right_body)
+        assert fingerprint(left) == fingerprint(right)
 
     def test_different_source_different_fp(self) -> None:
         """Findings from different sources yield different fingerprints."""
@@ -688,8 +614,27 @@ class TestGqlRetry:
 
         return restore
 
-    def test_retries_on_transient_5xx(self) -> None:
-        """A 500 followed by 200 succeeds and is observable as a single retry."""
+    @pytest.mark.parametrize(
+        "first_response",
+        [
+            pytest.param(
+                {"status_code": 500, "text": "Internal Server Error"}, id="http-500"
+            ),
+            pytest.param(
+                {"status_code": 200, "json": {"errors": [{"message": "Internal server error"}]}},
+                id="graphql-error",
+            ),
+            pytest.param(
+                {
+                    "status_code": 200,
+                    "json": {"data": None, "errors": [{"message": "Internal server error"}]},
+                },
+                id="graphql-null-data",
+            ),
+        ],
+    )
+    def test_transient_errors_retry_once(self, first_response: dict[str, Any]) -> None:
+        """HTTP and GraphQL transient errors, including null data, retry once."""
         import httpx
 
         calls = {"n": 0}
@@ -697,64 +642,7 @@ class TestGqlRetry:
         def handler(request: httpx.Request) -> httpx.Response:
             calls["n"] += 1
             if calls["n"] == 1:
-                return httpx.Response(500, text="Internal Server Error")
-            return httpx.Response(
-                200, json={"data": {"searchIssues": {"nodes": []}}}
-            )
-
-        sleeps: list[float] = []
-        restore = self._wire(handler, sleep_calls=sleeps)
-        try:
-            result = run(linear.issue_search("t"))
-        finally:
-            restore()
-
-        assert result == []
-        assert calls["n"] == 2
-        assert sleeps == [0.5]
-
-    def test_retries_on_graphql_internal_server_error(self) -> None:
-        """A GraphQL ``Internal server error`` is retried and then succeeds."""
-        import httpx
-
-        calls = {"n": 0}
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            calls["n"] += 1
-            if calls["n"] == 1:
-                return httpx.Response(
-                    200, json={"errors": [{"message": "Internal server error"}]}
-                )
-            return httpx.Response(
-                200, json={"data": {"searchIssues": {"nodes": []}}}
-            )
-
-        sleeps: list[float] = []
-        restore = self._wire(handler, sleep_calls=sleeps)
-        try:
-            result = run(linear.issue_search("t"))
-        finally:
-            restore()
-
-        assert result == []
-        assert calls["n"] == 2
-        assert sleeps == [0.5]
-
-    def test_retries_on_internal_server_error_with_null_data(self) -> None:
-        """Regression: the GraphQL spec returns ``{"data": null, "errors": [...]}``
-        for a top-level error. The envelope must accept ``data: null`` so the
-        internal-server-error retry still fires (not a raw ValidationError)."""
-        import httpx
-
-        calls = {"n": 0}
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            calls["n"] += 1
-            if calls["n"] == 1:
-                return httpx.Response(
-                    200,
-                    json={"data": None, "errors": [{"message": "Internal server error"}]},
-                )
+                return httpx.Response(**first_response)
             return httpx.Response(200, json={"data": {"searchIssues": {"nodes": []}}})
 
         sleeps: list[float] = []

@@ -1,6 +1,6 @@
 use tempfile::TempDir;
 
-use super::helpers::{create_temp_file, scan_and_run};
+use super::helpers::{assert_no_overlapping_fragments, create_temp_file, scan_and_run};
 use crate::DetectConfig;
 
 #[test]
@@ -80,4 +80,33 @@ fn aggregate_values(values: Vec<i32>) -> i32 {
     let result = scan_and_run(&dir, &config);
 
     assert_eq!(result.stats.files_scanned, 2);
+}
+
+#[test]
+fn sequences_never_compare_overlapping_regions_of_one_file() {
+    let dir = TempDir::new().unwrap();
+    let code = r#"
+fn process(values: &[i32]) -> i32 {
+    let mut total = 0;
+    for value in values {
+        total += value;
+    }
+    println!("{total}");
+    total
+}
+"#;
+    create_temp_file(&dir, "nested.rs", code);
+
+    let result = scan_and_run(
+        &dir,
+        &DetectConfig {
+            enable_sequences: true,
+            sequence_window_size: 2,
+            ..DetectConfig::default()
+        },
+    );
+
+    assert_no_overlapping_fragments(&result, |kind| {
+        matches!(kind, crate::Kind::Sequence { .. })
+    });
 }

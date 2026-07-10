@@ -491,17 +491,21 @@ in {
         viAlias = true;
         vimAlias = true;
         configure = {
-          customLuaRC = lib.concatMapStringsSep "\n" builtins.readFile [
-            ./nvim/init.lua
-            ./nvim/plugins/treesitter.lua
-            ./nvim/plugins/telescope.lua
-            ./nvim/plugins/gitsigns.lua
-            ./nvim/plugins/which-key.lua
-            ./nvim/plugins/oil.lua
-            # Pure-Lua Claude Code dispatcher (no nixpkgs plugin); shells out to
-            # the `claude` binary the dev images bake in. <leader>aa on a line.
-            ./nvim/plugins/agent.lua
-          ];
+          customLuaRC =
+            lib.concatMapStringsSep "\n" builtins.readFile [
+              ./nvim/init.lua
+              ./nvim/plugins/treesitter.lua
+              ./nvim/plugins/telescope.lua
+              ./nvim/plugins/gitsigns.lua
+              ./nvim/plugins/which-key.lua
+              ./nvim/plugins/oil.lua
+            ]
+            + ''
+              local agent = (function()
+              ${builtins.readFile ./nvim/agent.lua}
+              end)()
+              agent.setup()
+            '';
           packages.ix.start =
             [
               pkgs.vimPlugins.nvim-treesitter.withAllGrammars

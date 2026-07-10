@@ -3,8 +3,8 @@ use ast_merge_langs::Lang;
 
 use crate::{Info, Pragma, parse_text, ranges_overlap, scan};
 
-fn parse_rust(source: &str) -> Option<Tree> {
-    let lang = Lang::Rust.to_tree_sitter();
+fn parse(source: &str, language: Lang) -> Option<Tree> {
+    let lang = language.to_tree_sitter();
     let result = tree(source, &lang);
     assert!(result.is_ok());
     match result {
@@ -13,24 +13,8 @@ fn parse_rust(source: &str) -> Option<Tree> {
     }
 }
 
-fn parse_python(source: &str) -> Option<Tree> {
-    let lang = Lang::Python.to_tree_sitter();
-    let result = tree(source, &lang);
-    assert!(result.is_ok());
-    match result {
-        Ok(parsed) => Some(parsed.tree),
-        Err(_) => None,
-    }
-}
-
-fn parse_js(source: &str) -> Option<Tree> {
-    let lang = Lang::JavaScript.to_tree_sitter();
-    let result = tree(source, &lang);
-    assert!(result.is_ok());
-    match result {
-        Ok(parsed) => Some(parsed.tree),
-        Err(_) => None,
-    }
+fn scan_source(source: &str, language: Lang) -> Info {
+    scan(&parse(source, language).expect("valid source"))
 }
 
 #[test]
@@ -63,24 +47,19 @@ fn test_parse_no_match() {
 }
 
 #[test]
-fn test_rust_ignore_file() {
-    let source = r"
-// clone:ignore-file
-
-fn foo() {
-    let x = 1;
-}
-
-fn bar() {
-    let y = 2;
-}
-";
-    let Some(tree) = parse_rust(source) else {
-        return;
-    };
-    let info = scan(&tree);
-
-    assert!(info.ignore_file);
+fn ignore_file_is_language_independent() {
+    let cases = [
+        (Lang::Rust, "// clone:ignore-file\nfn foo() {}"),
+        (Lang::Python, "# clone:ignore-file\ndef foo(): pass"),
+        (
+            Lang::JavaScript,
+            "// clone:ignore-file\nfunction foo() {}",
+        ),
+    ];
+    for (language, source) in cases {
+        let tree = parse(source, language).expect("valid source");
+        assert!(scan(&tree).ignore_file);
+    }
 }
 
 #[test]
@@ -99,10 +78,7 @@ fn also_keep() {
     let z = 3;
 }
 ";
-    let Some(tree) = parse_rust(source) else {
-        return;
-    };
-    let info = scan(&tree);
+    let info = scan_source(source, Lang::Rust);
 
     assert!(!info.ignore_file);
     assert_eq!(info.ignored_ranges.len(), 1);
@@ -127,10 +103,7 @@ fn ignored2() {}
 
 fn also_keep() {}
 ";
-    let Some(tree) = parse_rust(source) else {
-        return;
-    };
-    let info = scan(&tree);
+    let info = scan_source(source, Lang::Rust);
 
     assert!(!info.ignore_file);
     assert_eq!(info.ignored_ranges.len(), 1);
@@ -150,90 +123,29 @@ fn test_rust_no_pragmas() {
 fn foo() { let x = 1; }
 fn bar() { let y = 2; }
 ";
-    let Some(tree) = parse_rust(source) else {
-        return;
-    };
-    let info = scan(&tree);
+    let info = scan_source(source, Lang::Rust);
 
     assert!(!info.ignore_file);
     assert!(info.ignored_ranges.is_empty());
 }
 
 #[test]
-fn test_python_ignore_file() {
-    let source = r"
-# clone:ignore-file
-
-def foo():
-    x = 1
-
-def bar():
-    y = 2
-";
-    let Some(tree) = parse_python(source) else {
-        return;
-    };
-    let info = scan(&tree);
-
-    assert!(info.ignore_file);
-}
-
-#[test]
-fn test_python_ignore_next() {
-    let source = r"
-def keep():
-    x = 1
-
-# clone:ignore
-def ignore_me():
-    y = 2
-
-def also_keep():
-    z = 3
-";
-    let Some(tree) = parse_python(source) else {
-        return;
-    };
-    let info = scan(&tree);
-
-    assert!(!info.ignore_file);
-    assert_eq!(info.ignored_ranges.len(), 1);
-}
-
-#[test]
-fn test_js_ignore_file() {
-    let source = r"
-// clone:ignore-file
-
-function foo() {
-    const x = 1;
-}
-";
-    let Some(tree) = parse_js(source) else {
-        return;
-    };
-    let info = scan(&tree);
-
-    assert!(info.ignore_file);
-}
-
-#[test]
-fn test_js_block_comment() {
-    let source = r"
-function keep() {}
-
-/* clone:ignore */
-function ignored() {}
-
-function alsoKeep() {}
-";
-    let Some(tree) = parse_js(source) else {
-        return;
-    };
-    let info = scan(&tree);
-
-    assert!(!info.ignore_file);
-    assert_eq!(info.ignored_ranges.len(), 1);
+fn ignore_next_is_language_independent() {
+    let cases = [
+        (
+            Lang::Python,
+            "def keep(): pass\n# clone:ignore\ndef ignored(): pass",
+        ),
+        (
+            Lang::JavaScript,
+            "function keep() {}\n/* clone:ignore */\nfunction ignored() {}",
+        ),
+    ];
+    for (language, source) in cases {
+        let info = scan_source(source, language);
+        assert!(!info.ignore_file);
+        assert_eq!(info.ignored_ranges.len(), 1);
+    }
 }
 
 #[test]
