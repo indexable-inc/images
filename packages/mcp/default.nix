@@ -2400,8 +2400,8 @@
     names = set(cat["name"].to_list())
     assert {"Result", "cells", "jobs", "nu", "api"} <= names, names
     assert "sh" not in names and "zsh" not in names, names
-    filt = ns["api"]("cells")
-    assert 1 <= filt.height <= cat.height, (filt.height, cat.height)
+    filt = cat.filter(cat["name"] == "cells")
+    assert filt.height == 1, filt
 
     # grep/find/spotlight (the fsearch search helpers) and view are pre-bound in
     # the namespace (no import needed), the way Result/cells/jobs are, so
