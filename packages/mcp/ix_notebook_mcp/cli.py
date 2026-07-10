@@ -87,15 +87,8 @@ def main(argv: list[str] | None = None) -> int:
         "session", nargs="?", metavar="FILE", help="Session file to create or reopen"
     )
     notebook.add_argument("--workdir", help="Directory the kernel runs in (default: cwd)")
-    dash = sub.add_parser(
-        "dashboard",
-        help="Print the shared dashboard URL, starting it once if needed",
-    )
-    dash.add_argument(
-        "--open",
-        action="store_true",
-        help="Open the URL in the default browser after printing it",
-    )
+    dash = sub.add_parser("dashboard", help="Print the Weave Constellation URL")
+    dash.add_argument("--open", action="store_true", help="Open the URL in the default browser after printing it")
     sub.add_parser(
         "requirements",
         help="Report each external credential the bundled tooling needs: present "
@@ -383,18 +376,10 @@ def _exec_trust_network() -> bool:
 
 
 def _auto_dashboard() -> bool:
-    """Whether ``serve`` should spawn its own ``dashboard`` hub.
+    """Legacy flag retained for environment compatibility.
 
-    Off by default. The hub is a single, machine-wide, long-lived aggregator:
-    exactly one process binds the port, and every ``serve`` already publishes its
-    panes into the shared discovery dir (see ``pane_bridge``), so one hub renders
-    them all behind one stable URL. Spawning a hub per ``serve`` both duplicates
-    that singleton and leaks it -- a ``serve`` killed abnormally (SIGKILL/crash)
-    skips the cleanup ``finally``, so its hub reparents to init and survives
-    forever; a churning fleet of short-lived servers piles up thousands of
-    orphaned ``dashboard`` processes. Run the UI yourself once instead
-    (``nix run .#dashboard``). Set ``IX_MCP_AUTO_DASHBOARD`` truthy to restore the
-    old auto-spawn.
+    The Python server no longer starts a dashboard hub; Weave Constellation is
+    the UI. The value is ignored by the serve path.
     """
     return os.environ.get("IX_MCP_AUTO_DASHBOARD", "").strip().lower() in (
         "1",
@@ -499,9 +484,7 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
         # cannot switch the kernel runtime into checkpointing.
         os.environ.pop("IX_MCP_SESSION", None)
         store_path = _store_path(dashboard_port)
-        # Fresh execution log per ephemeral server, pinned or minted: a leftover
-        # database (and WAL sidecars) from a prior run would otherwise show
-        # stale runs in the dashboard and the room feed.
+        # Fresh execution identity per ephemeral server, pinned or minted.
         for suffix in ("", "-wal", "-shm"):
             (store_path.parent / (store_path.name + suffix)).unlink(missing_ok=True)
 
@@ -551,15 +534,12 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
     # started the job; for its stdio client that address is this server's own
     # session id (see Config.server_session_id and runtime._server_session).
     os.environ["IX_MCP_SERVER_SESSION"] = server_session_id
-    # Surface the dashboard URL to the kernel so `DASHBOARD_URL` is one lookup
-    # away (the agent should not have to spelunk the runtime dir to find it). The
-    # human-facing dashboard is the Loro hub when we auto-spawn one; otherwise
-    # there is no per-server hub, so point at this server's own data API.
-    os.environ["IX_MCP_DASHBOARD_URL"] = cfg.hub_url() if _auto_dashboard() else cfg.dashboard_url()
-    # The data API base, ALWAYS this server's own read/write API (never the hub):
-    # the runtime bakes it into an interactive resource's `ixSubmit` so the
-    # browser posts user input to `/api/input` here. Distinct from
-    # IX_MCP_DASHBOARD_URL above, which may point at the human-facing hub.
+    # The dashboard URL is now the Weave Constellation UI; the data API remains
+    # this server for mailbox/input glue.
+    weave_url = os.environ.get("WEAVE_URL", "http://127.0.0.1:7677")
+    os.environ["WEAVE_URL"] = weave_url
+    os.environ.setdefault("IX_WEAVE_AGENT", f"agent:{uuid.uuid5(uuid.NAMESPACE_URL, str(store_path)).hex[:8]}")
+    os.environ["IX_MCP_DASHBOARD_URL"] = weave_url
     os.environ["IX_MCP_DATA_API_URL"] = cfg.dashboard_url()
     os.environ["IPYTHONDIR"] = str(_prepare_ipython_startup(dashboard_port))
 
@@ -588,41 +568,9 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
     return 0
 
 
-def _spawn_hub(cfg: Config) -> subprocess.Popen | None:
-    """Spawn the Loro dashboard hub (the `dashboard` aggregator) the human opens.
-
-    It watches the shared discovery directory the pane bridge publishes into, so
-    it renders this server's panes alongside every other producer (a TUI's
-    terminals, a VM's screen). Best-effort: if the binary is absent (a bare run
-    outside nix, which bundles it on PATH), log and skip -- the read-only data
-    API still serves embedders, there is just no UI."""
-    hub_bin = _hub_bin()
-    if not hub_bin:
-        print(
-            "[ix-mcp] dashboard hub binary not found; UI disabled "
-            "(build via nix, which bundles `dashboard`, or run it yourself)",
-            file=sys.stderr,
-            flush=True,
-        )
-        return None
-    try:
-        # `--record-ms 0`: do NOT persist the board to disk. The hub aggregates
-        # every producer's panes (this kernel's namespace values, captured
-        # outputs, terminals) -- recording them to a replay file is surprising,
-        # potentially-sensitive persistence for an ephemeral MCP session. Live
-        # replay within the open browser session still works.
-        return subprocess.Popen(
-            [hub_bin, "--host", cfg.host, "--port", str(cfg.hub_port), "--record-ms", "0"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except OSError as error:
-        print(f"[ix-mcp] failed to start dashboard hub: {error}", file=sys.stderr, flush=True)
-        return None
-
 
 async def _run(cfg: Config) -> None:
-    from . import dashboard, mesh, pane_bridge, tools, transport
+    from . import dashboard, mesh, tools, transport
     from .kernel import Kernel, set_kernel
 
     kernel = Kernel(cfg)
@@ -652,38 +600,11 @@ async def _run(cfg: Config) -> None:
         await locked.wait()
 
     runner = await dashboard.start(cfg)
-    # Always publish this server's runs/resources/namespace as panes into the
-    # shared discovery dir; a single standalone `dashboard` (run separately,
-    # `nix run .#dashboard`) renders every producer behind one stable URL.
-    bridge_task = asyncio.ensure_future(pane_bridge.run(cfg.store_path))
-    # Only auto-spawn a per-server hub when explicitly opted in (see
-    # `_auto_dashboard`): the default leaks an orphaned `dashboard` per abnormal
-    # exit and duplicates the machine-wide singleton. Best-effort either way -- a
-    # missing hub binary or an unbindable producer socket just means no UI here.
-    hub = _spawn_hub(cfg) if _auto_dashboard() else None
-    # Advertise the hub UI only if we actually started one; otherwise point at the
-    # live data API rather than a dead hub port.
-    url = cfg.hub_url() if hub is not None else cfg.dashboard_url()
+    url = os.environ.get("WEAVE_URL", "http://127.0.0.1:7677")
     (runtime_dir() / "dashboard-url").write_text(url)
-    # Bake the live URL into the MCP instructions before serving, so the client
-    # gets it in the `initialize` response -- no tool call to discover it.
     tools.set_dashboard_url(url)
-    # Advertise this server on the tailnet mesh (`GET /mesh`, index#1787):
-    # default-on and best-effort -- no tailscale, an occupied port, or
-    # IX_MCP_MESH=0 log one line and skip, never blocking the MCP itself.
-    # Started only now, AFTER the hub-spawn decision resolved `url`, so the
-    # card advertises the URL a human can actually open (a failed auto hub
-    # falls back to the data API here, not to a dead pre-spawn hub URL --
-    # index#1789 review).
     mesh_runner = await mesh.start(cfg, tools.session_names, url)
-    if hub is not None:
-        print(f"[ix-mcp] dashboard (all running things + output): {url}", file=sys.stderr, flush=True)
-    else:
-        print(
-            f"[ix-mcp] data API: {url}  (open the UI: `ix-mcp dashboard`)",
-            file=sys.stderr,
-            flush=True,
-        )
+    print(f"[ix-mcp] data API: {cfg.dashboard_url()}  (Weave UI: {url})", file=sys.stderr, flush=True)
     if cfg.session_path is not None:
         print(f"[ix-mcp] session file: {cfg.session_path}", file=sys.stderr, flush=True)
 
@@ -695,13 +616,6 @@ async def _run(cfg: Config) -> None:
         else:
             await transport.serve()
     finally:
-        bridge_task.cancel()
-        if hub is not None:
-            hub.terminate()
-            try:
-                hub.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                hub.kill()
         if restore_task is not None and not restore_task.done():
             restore_task.cancel()
         if cfg.session_path is not None:
@@ -717,180 +631,21 @@ async def _run(cfg: Config) -> None:
         await kernel.shutdown()
 
 
-def _hub_bin() -> str | None:
-    """The `dashboard` aggregator binary: the nix wrapper bakes IX_DASHBOARD_BIN,
-    a bare run falls back to PATH."""
-    return os.environ.get("IX_DASHBOARD_BIN") or shutil.which("dashboard")
-
-
-def _stable_hub_port() -> int:
-    """The port the one shared hub binds. A fixed default (8080) so the URL is the
-    same every time; ``IX_DASH_HUB_PORT`` overrides. If it is taken by something
-    that is not our hub, the launcher falls back to an ephemeral port."""
-    pinned = os.environ.get("IX_DASH_HUB_PORT")
-    if not pinned:
-        return 8080
-    try:
-        return int(pinned)
-    except ValueError:
-        print(
-            f"[ix-mcp] IX_DASH_HUB_PORT={pinned!r} is not an integer; using 8080",
-            file=sys.stderr,
-        )
-        return 8080
-
-
-def _bind_ip(host: str) -> str:
-    """A concrete, non-wildcard IP literal to hand the `dashboard` binary. It
-    parses ``host:port`` as a SocketAddr (IP only), so a hostname like
-    ``localhost`` from ``IX_MCP_HOST`` would crash it on startup even though
-    Python's bind accepts the name. A wildcard (``0.0.0.0``/``::``) is refused --
-    it would serve the board (kernel data, outputs) on every NIC -- and mapped to
-    loopback. Otherwise: pass IPs through; resolve a name; loopback if unresolvable."""
-    if host in ("0.0.0.0", "::", ""):  # noqa: S104 -- refusing a wildcard bind, mapping it to loopback
-        return "127.0.0.1"
-    try:
-        ipaddress.ip_address(host)
-    except ValueError:
-        try:
-            return socket.gethostbyname(host)
-        except OSError:
-            return "127.0.0.1"
-    return host
-
-
-def _host_arg(host: str) -> str:
-    """Bracket an IPv6 literal for use in a ``host:port`` string. The dashboard
-    binary builds ``format!("{host}:{port}")`` and parses it as a SocketAddr,
-    which requires ``[::1]:8080`` form; the same bracketing makes a valid URL
-    authority. IPv4 and hostnames are returned unchanged (Python's own socket
-    calls take the raw, unbracketed host)."""
-    return f"[{host}]" if ":" in host else host
-
-
-def _spawn_shared_hub() -> dict | None:
-    """Start the one shared dashboard hub detached and record it in
-    :func:`hub_state_path`. Returns its state dict, or ``None`` if the binary is
-    missing or it never came up. Bound to the tailnet IP (or ``IX_MCP_HOST``, else
-    loopback), never ``0.0.0.0`` -- see the bind rationale below; a tailnet peer
-    joins via that IP. ``start_new_session`` so it outlives this launcher."""
-    binp = _hub_bin()
-    if not binp:
-        print(
-            "[ix-mcp] dashboard binary not found; build via nix (which bundles "
-            "`dashboard`) or put it on PATH",
-            file=sys.stderr,
-        )
-        return None
-
-    # Bind like the data API (see `_serve`): this machine's tailnet IP when
-    # Tailscale is up (the tailnet is the trust boundary, so a peer can join) or
-    # IX_MCP_HOST, else loopback. Never a wildcard -- 0.0.0.0/:: would serve the
-    # board (kernel namespace values, captured outputs) on every LAN/public NIC of
-    # a multi-homed host -- so a wildcard request falls through to tailnet/loopback.
-    requested = os.environ.get("IX_MCP_HOST") or ""
-    if requested in ("0.0.0.0", "::"):  # noqa: S104 -- treat a wildcard request as "unspecified"
-        requested = ""
-    bind = _bind_ip(requested or _tailscale_ip() or "127.0.0.1")
-    port = _stable_hub_port()
-    # `--port 0` would tell the binary to pick an ephemeral port we cannot predict,
-    # so the readiness probe below would wait on the wrong port and time out while
-    # leaking a live hub. Resolve a concrete port up front instead.
-    if port == 0:
-        port = _free_port()
-    elif not _bindable(bind, port):
-        # Stable port busy on that interface: take an ephemeral one. If even that
-        # fails the interface is unusable (a stopped-tailscale race) -> loopback.
-        port = _free_port()
-        if bind != "127.0.0.1" and not _bindable(bind, port):
-            bind, port = "127.0.0.1", _free_port()
-
-    # Advertise the actual bind IP, never the originally-requested host: after a
-    # hostname-resolution or bindability fallback the request may not be where we
-    # are listening, so a URL built from it would point users somewhere unreachable.
-    # Bracket IPv6 for the binary's host:port and the URL authority.
-    host_arg = _host_arg(bind)
-    url = f"http://{host_arg}:{port}/"
-    log = runtime_dir() / "hub.log"
-    try:
-        with log.open("ab") as logf:
-            proc = subprocess.Popen(
-                [binp, "--host", host_arg, "--port", str(port), "--record-ms", "0"],
-                stdout=logf,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
-    except OSError as error:
-        print(f"[ix-mcp] failed to start dashboard: {error}", file=sys.stderr)
-        return None
-
-    deadline = time.monotonic() + 8.0
-    while time.monotonic() < deadline:
-        # Check our own child FIRST: if it died (e.g. lost a bind race to another
-        # launcher's hub), a `port_open` success would be the *winner's* listener,
-        # and we would wrongly record hub.json with our dead pid. The flock in
-        # `_dashboard` already serializes launches so this race should not occur,
-        # but ordering the poll first keeps the readiness check honest regardless.
-        if proc.poll() is not None:
-            print(f"[ix-mcp] dashboard exited on startup; see {log}", file=sys.stderr)
-            return None
-        if port_open(port, bind):
-            break
-        time.sleep(0.1)
-    else:
-        # Never observed it listen: kill the detached child so a slow/failed start
-        # does not leave an orphan hub running (the very pile-up this avoids).
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        print(f"[ix-mcp] dashboard did not start listening in time; see {log}", file=sys.stderr)
-        return None
-
-    state = {"pid": proc.pid, "host": bind, "port": port, "url": url}
-    hub_state_path().write_text(json.dumps(state))
-    return state
-
-
 def _dashboard(*, open_browser: bool = False) -> int:
-    """Print the one shared dashboard URL, starting it if needed. Idempotent: a hub
-    already running is reused (no second board), which is the whole point of the
-    machine-wide singleton -- repeated runs never pile up dashboards."""
-    state = ensure_shared_dashboard()
-    if state is None:
-        return 1
-    url = state["url"]
+    """Print the Weave Constellation URL."""
+    url = os.environ.get("WEAVE_URL", "http://127.0.0.1:7677")
     print(url)
-    # Only an explicit `ix-mcp dashboard --open` launches a browser. Printing
-    # the URL is enough for humans, and avoids stealing focus from agents.
     if open_browser and sys.stdout.isatty():
         webbrowser.open(url)
     return 0
 
 
 def ensure_shared_dashboard(*, open_browser: bool = False) -> dict | None:
-    """Start or reuse the shared dashboard hub.
-
-    Tool calls use this directly for first-use autostart, where stdout is the MCP
-    protocol stream and must stay untouched. ``ix-mcp dashboard`` remains the
-    user-facing CLI wrapper that prints the URL and applies the TTY browser-open
-    policy.
-    """
-    # Serialize concurrent launches: without this, two `ix-mcp dashboard` runs can
-    # both see no hub and both spawn one (TOCTOU between the check and the bind).
-    # Holding an exclusive lock around check-or-spawn means the loser blocks, then
-    # finds the winner's hub.json and reuses it.
-    lock_path = runtime_dir() / "hub.lock"
-    with lock_path.open("w") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        state = live_hub() or _spawn_shared_hub()
-    if state is None:
-        return None
-    url = state["url"]
+    """Compatibility shim for callers that used to request the dashboard hub."""
+    url = os.environ.get("WEAVE_URL", "http://127.0.0.1:7677")
     if open_browser:
         webbrowser.open(url)
-    return state
+    return {"url": url}
 
 
 def _one_shot(code: str) -> int:

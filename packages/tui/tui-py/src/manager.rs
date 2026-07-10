@@ -35,9 +35,11 @@ pub struct TuiInstance {
 #[pymethods]
 impl TuiInstance {
     /// Spawn `command` on a fresh PTY. Unset size or scrollback fall back to
-    /// the core defaults (80x24, 10,000 lines).
+    /// the core defaults (80x24, 10,000 lines). `env` adds per-session
+    /// identity/config pairs; the core forces `TERM`/`COLORTERM` after them,
+    /// so those two always win.
     #[new]
-    #[pyo3(signature = (command, args=None, rows=None, cols=None, scrollback_lines=None))]
+    #[pyo3(signature = (command, args=None, rows=None, cols=None, scrollback_lines=None, env=None))]
     fn new(
         py: Python<'_>,
         command: String,
@@ -45,6 +47,7 @@ impl TuiInstance {
         rows: Option<u16>,
         cols: Option<u16>,
         scrollback_lines: Option<usize>,
+        env: Option<std::collections::HashMap<String, String>>,
     ) -> PyResult<Self> {
         let manager = global_manager();
         let args = args.unwrap_or_default();
@@ -58,6 +61,9 @@ impl TuiInstance {
         }
         if let Some(scrollback_lines) = scrollback_lines {
             config.scrollback_lines = scrollback_lines;
+        }
+        if let Some(env) = env {
+            config.env = env.into_iter().collect();
         }
 
         let inner = py.detach(move || manager.spawn(command, args, config))?;

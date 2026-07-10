@@ -26,6 +26,7 @@
     reason = "napi-derive resolves exported return types by their concrete name"
 )]
 
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -55,12 +56,15 @@ fn narrow_u16(name: &str, value: u32) -> Result<u16> {
 }
 
 /// Spawn-time terminal configuration. Unset fields fall back to the core
-/// defaults (80x24, 10,000 lines of scrollback).
+/// defaults (80x24, 10,000 lines of scrollback, no extra environment).
 #[napi(object)]
 pub struct SpawnOptions {
     pub rows: Option<u32>,
     pub cols: Option<u32>,
     pub scrollback_lines: Option<u32>,
+    /// Extra environment for the child (per-session identity/config). The
+    /// crate forces `TERM`/`COLORTERM` after these, so those two always win.
+    pub env: Option<HashMap<String, String>>,
 }
 
 /// Scrollback history plus the visible viewport, read together.
@@ -95,6 +99,9 @@ impl Tui {
             }
             if let Some(scrollback) = options.scrollback_lines {
                 config.scrollback_lines = scrollback as usize;
+            }
+            if let Some(env) = options.env {
+                config.env = env.into_iter().collect();
             }
         }
         let inner = manager()
