@@ -1,115 +1,128 @@
-use super::helpers::{pair_hashes, parse_js, parse_python, parse_rust};
+use super::helpers::{HashPair, pair_hashes, parse_js, parse_python, parse_rust};
 use crate::{Dual, dual, hash as normalized};
 
 type Parser = fn(&str) -> ast_merge_ast::Tree;
 
-#[test]
-fn normalized_hash_relations() {
-    let cases: &[(&str, Parser, &str, &str, bool)] = &[
-        (
-            "renamed functions",
-            parse_rust,
-            "fn foo() { let x = 1; }",
-            "fn bar() { let y = 1; }",
-            true,
-        ),
-        (
-            "different structure",
-            parse_rust,
-            "fn foo() { let x = 1; }",
-            "fn foo() { let x = 1; let y = 2; }",
-            false,
-        ),
-        (
-            "swapped identifiers",
-            parse_rust,
-            "fn f() { a + b }",
-            "fn f() { b + a }",
-            true,
-        ),
-        (
-            "different operators",
-            parse_rust,
-            "fn f() { a + b }",
-            "fn f() { a - b }",
-            false,
-        ),
-        (
-            "inconsistent identifier mapping",
-            parse_rust,
-            "fn f() { x + x }",
-            "fn f() { x + y }",
-            false,
-        ),
-        (
-            "different argument counts",
-            parse_rust,
-            "fn f(a: i32) { a }",
-            "fn f(a: i32, b: i32) { a }",
-            false,
-        ),
-        (
-            "different types",
-            parse_rust,
-            "fn f(a: i32) { a }",
-            "fn f(a: i64) { a }",
-            false,
-        ),
-        (
-            "JavaScript rename",
-            parse_js,
-            "function add(a, b) { return a + b; }",
-            "function sum(x, y) { return x + y; }",
-            true,
-        ),
-        (
-            "Python rename",
-            parse_python,
-            "def add(a, b):\n    return a + b",
-            "def sum(x, y):\n    return x + y",
-            true,
-        ),
-        (
-            "closure rename",
-            parse_rust,
-            "fn f() { let add = |a, b| a + b; }",
-            "fn g() { let sum = |x, y| x + y; }",
-            true,
-        ),
-        (
-            "complex function rename",
-            parse_rust,
-            r"fn calculate(a: i32, b: i32) -> i32 {
+struct Relation {
+    name: &'static str,
+    parse: Parser,
+    left: &'static str,
+    right: &'static str,
+    equal: bool,
+}
+
+const RELATIONS: &[Relation] = &[
+    Relation {
+        name: "renamed functions",
+        parse: parse_rust,
+        left: "fn foo() { let x = 1; }",
+        right: "fn bar() { let y = 1; }",
+        equal: true,
+    },
+    Relation {
+        name: "different structure",
+        parse: parse_rust,
+        left: "fn foo() { let x = 1; }",
+        right: "fn foo() { let x = 1; let y = 2; }",
+        equal: false,
+    },
+    Relation {
+        name: "swapped identifiers",
+        parse: parse_rust,
+        left: "fn f() { a + b }",
+        right: "fn f() { b + a }",
+        equal: true,
+    },
+    Relation {
+        name: "different operators",
+        parse: parse_rust,
+        left: "fn f() { a + b }",
+        right: "fn f() { a - b }",
+        equal: false,
+    },
+    Relation {
+        name: "inconsistent identifier mapping",
+        parse: parse_rust,
+        left: "fn f() { x + x }",
+        right: "fn f() { x + y }",
+        equal: false,
+    },
+    Relation {
+        name: "different argument counts",
+        parse: parse_rust,
+        left: "fn f(a: i32) { a }",
+        right: "fn f(a: i32, b: i32) { a }",
+        equal: false,
+    },
+    Relation {
+        name: "different types",
+        parse: parse_rust,
+        left: "fn f(a: i32) { a }",
+        right: "fn f(a: i64) { a }",
+        equal: false,
+    },
+    Relation {
+        name: "JavaScript rename",
+        parse: parse_js,
+        left: "function add(a, b) { return a + b; }",
+        right: "function sum(x, y) { return x + y; }",
+        equal: true,
+    },
+    Relation {
+        name: "Python rename",
+        parse: parse_python,
+        left: "def add(a, b):\n    return a + b",
+        right: "def sum(x, y):\n    return x + y",
+        equal: true,
+    },
+    Relation {
+        name: "closure rename",
+        parse: parse_rust,
+        left: "fn f() { let add = |a, b| a + b; }",
+        right: "fn g() { let sum = |x, y| x + y; }",
+        equal: true,
+    },
+    Relation {
+        name: "complex function rename",
+        parse: parse_rust,
+        left: r"fn calculate(a: i32, b: i32) -> i32 {
                 let sum = a + b;
                 let product = a * b;
                 sum + product
             }",
-            r"fn compute(x: i32, y: i32) -> i32 {
+        right: r"fn compute(x: i32, y: i32) -> i32 {
                 let total = x + y;
                 let result = x * y;
                 total + result
             }",
-            true,
-        ),
-        (
-            "nested function rename",
-            parse_rust,
-            "fn outer() { fn inner() { let x = 1; } }",
-            "fn wrapper() { fn nested() { let y = 1; } }",
-            true,
-        ),
-        (
-            "recursive function rename",
-            parse_rust,
-            "fn factorial(n: i32) -> i32 { if n <= 1 { 1 } else { n * factorial(n - 1) } }",
-            "fn fact(x: i32) -> i32 { if x <= 1 { 1 } else { x * fact(x - 1) } }",
-            true,
-        ),
-    ];
+        equal: true,
+    },
+    Relation {
+        name: "nested function rename",
+        parse: parse_rust,
+        left: "fn outer() { fn inner() { let x = 1; } }",
+        right: "fn wrapper() { fn nested() { let y = 1; } }",
+        equal: true,
+    },
+    Relation {
+        name: "recursive function rename",
+        parse: parse_rust,
+        left: "fn factorial(n: i32) -> i32 { if n <= 1 { 1 } else { n * factorial(n - 1) } }",
+        right: "fn fact(x: i32) -> i32 { if x <= 1 { 1 } else { x * fact(x - 1) } }",
+        equal: true,
+    },
+];
 
-    for &(name, parse, left, right, equal) in cases {
-        let (left, right) = pair_hashes(parse, normalized, left, right);
-        assert_eq!(left == right, equal, "{name}");
+#[test]
+fn normalized_hash_relations() {
+    for relation in RELATIONS {
+        let HashPair { left, right } = pair_hashes(
+            relation.parse,
+            normalized,
+            relation.left,
+            relation.right,
+        );
+        assert_eq!(left == right, relation.equal, "{}", relation.name);
     }
 }
 
