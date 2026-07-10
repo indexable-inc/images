@@ -24,177 +24,84 @@
       runHook postInstall
     '';
   };
+
+  mkStyle = base: background: emphasis: {
+    inherit base background;
+    emphasis_0 = emphasis;
+    emphasis_1 = emphasis;
+    emphasis_2 = emphasis;
+    emphasis_3 = emphasis;
+  };
+
+  minimalTheme = {
+    ribbon_selected = mkStyle [30 30 30] [160 160 160] [160 160 160];
+    ribbon_unselected = mkStyle [120 120 120] [45 45 45] [45 45 45];
+    text_unselected = mkStyle [160 160 160] [26 26 26] [120 120 120];
+    text_selected = mkStyle [200 200 200] [40 40 40] [140 140 140];
+    frame_selected = mkStyle [100 100 100] [0] [80 80 80];
+    frame_highlight = mkStyle [140 140 140] [0] [100 100 100];
+    exit_code_success = mkStyle [120 160 120] [0] [100 100 100];
+    exit_code_error = mkStyle [180 100 100] [0] [100 100 100];
+    table_title = mkStyle [140 140 140] [0] [100 100 100];
+    table_cell_selected = mkStyle [200 200 200] [50 50 50] [140 140 140];
+    table_cell_unselected = mkStyle [160 160 160] [30 30 30] [120 120 120];
+    list_selected = mkStyle [200 200 200] [50 50 50] [140 140 140];
+    list_unselected = mkStyle [160 160 160] [30 30 30] [120 120 120];
+    multiplayer_user_colors = {
+      player_1 = [150 150 150];
+      player_2 = [130 130 130];
+      player_3 = [110 110 110];
+      player_4 = [100 100 100];
+      player_5 = [90 90 90];
+      player_6 = [80 80 80];
+      player_7 = [70 70 70];
+      player_8 = [60 60 60];
+      player_9 = [50 50 50];
+      player_10 = [40 40 40];
+    };
+  };
 in {
+  settings = {
+    theme = "minimal";
+    ui.pane_frames = {
+      rounded_corners = true;
+      hide_session_name = true;
+    };
+    simplified_ui = true;
+    pane_frames = false;
+    default_shell = "nu";
+    copy_on_select = true;
+    copy_command = "pbcopy";
+    mouse_mode = true;
+    env = {
+      TERM = "xterm-256color";
+      COLORTERM = "truecolor";
+    };
+    session_serialization = true;
+    serialize_pane_viewport = true;
+    scrollback_editor = "nvim";
+    scroll_buffer_size = 50000;
+    show_startup_tips = false;
+    default_layout = "compact";
+    plugins = {
+      tab-bar._props.location = "zellij:tab-bar";
+      status-bar._props.location = "zellij:status-bar";
+      strider._props.location = "zellij:strider";
+      compact-bar = {
+        _props.location = "zellij:compact-bar";
+        tooltip = "F1";
+      };
+      session-manager._props.location = "zellij:session-manager";
+      filepicker = {
+        _props.location = "zellij:strider";
+        cwd = "/";
+      };
+    };
+  };
+
+  themes.minimal = minimalTheme;
+
   extraConfig = ''
-    // Zellij Configuration - Modern setup compatible with AeroSpace
-    // AeroSpace uses: Alt-hjkl (focus), Alt-Shift-hjkl (join), Ctrl-Alt-Shift-hjkl (move)
-    // Zellij uses: Ctrl-hjkl (pane focus), Ctrl-Shift (pane management)
-
-    // Minimal dark theme - no color alternation
-    themes {
-        minimal {
-            ribbon_selected {
-                base 30 30 30           // Dark text on light bg
-                background 160 160 160  // Light gray active tab
-                emphasis_0 160 160 160
-                emphasis_1 160 160 160
-                emphasis_2 160 160 160
-                emphasis_3 160 160 160
-            }
-            ribbon_unselected {
-                base 120 120 120        // Gray text
-                background 45 45 45     // Dark bg - same for all unselected
-                emphasis_0 45 45 45
-                emphasis_1 45 45 45     // SAME as background = no alternation
-                emphasis_2 45 45 45
-                emphasis_3 45 45 45
-            }
-            text_unselected {
-                base 160 160 160
-                background 26 26 26
-                emphasis_0 120 120 120
-                emphasis_1 120 120 120
-                emphasis_2 120 120 120
-                emphasis_3 120 120 120
-            }
-            text_selected {
-                base 200 200 200
-                background 40 40 40
-                emphasis_0 140 140 140
-                emphasis_1 140 140 140
-                emphasis_2 140 140 140
-                emphasis_3 140 140 140
-            }
-            frame_selected {
-                base 100 100 100
-                background 0
-                emphasis_0 80 80 80
-                emphasis_1 80 80 80
-                emphasis_2 80 80 80
-                emphasis_3 80 80 80
-            }
-            frame_highlight {
-                base 140 140 140
-                background 0
-                emphasis_0 100 100 100
-                emphasis_1 100 100 100
-                emphasis_2 100 100 100
-                emphasis_3 100 100 100
-            }
-            exit_code_success {
-                base 120 160 120
-                background 0
-                emphasis_0 100 100 100
-                emphasis_1 100 100 100
-                emphasis_2 100 100 100
-                emphasis_3 100 100 100
-            }
-            exit_code_error {
-                base 180 100 100
-                background 0
-                emphasis_0 100 100 100
-                emphasis_1 100 100 100
-                emphasis_2 100 100 100
-                emphasis_3 100 100 100
-            }
-            table_title {
-                base 140 140 140
-                background 0
-                emphasis_0 100 100 100
-                emphasis_1 100 100 100
-                emphasis_2 100 100 100
-                emphasis_3 100 100 100
-            }
-            table_cell_selected {
-                base 200 200 200
-                background 50 50 50
-                emphasis_0 140 140 140
-                emphasis_1 140 140 140
-                emphasis_2 140 140 140
-                emphasis_3 140 140 140
-            }
-            table_cell_unselected {
-                base 160 160 160
-                background 30 30 30
-                emphasis_0 120 120 120
-                emphasis_1 120 120 120
-                emphasis_2 120 120 120
-                emphasis_3 120 120 120
-            }
-            list_selected {
-                base 200 200 200
-                background 50 50 50
-                emphasis_0 140 140 140
-                emphasis_1 140 140 140
-                emphasis_2 140 140 140
-                emphasis_3 140 140 140
-            }
-            list_unselected {
-                base 160 160 160
-                background 30 30 30
-                emphasis_0 120 120 120
-                emphasis_1 120 120 120
-                emphasis_2 120 120 120
-                emphasis_3 120 120 120
-            }
-            multiplayer_user_colors {
-                player_1 150 150 150
-                player_2 130 130 130
-                player_3 110 110 110
-                player_4 100 100 100
-                player_5 90 90 90
-                player_6 80 80 80
-                player_7 70 70 70
-                player_8 60 60 60
-                player_9 50 50 50
-                player_10 40 40 40
-            }
-        }
-    }
-    theme "minimal"
-
-    // Minimal UI - no pane frames, clean look
-    ui {
-        pane_frames {
-            rounded_corners true
-            hide_session_name true
-        }
-    }
-
-    // Hide pane frames for cleaner look
-    simplified_ui true
-    pane_frames false
-
-    // Default shell
-    default_shell "nu"
-
-    // Clipboard
-    copy_on_select true
-    copy_command "pbcopy"
-
-    // Mouse support
-    mouse_mode true
-
-    // Force 24-bit color support
-    env {
-        TERM "xterm-256color"
-        COLORTERM "truecolor"
-    }
-
-    // Session management
-    session_serialization true
-    serialize_pane_viewport true
-
-    // Zellij's env block already supplies truecolor to the editor.
-    scrollback_editor "nvim"
-    scroll_buffer_size 50000
-
-    // Disable startup tips
-    show_startup_tips false
-
-    // Layout - use built-in compact for now
-    default_layout "compact"
-
     // Keybindings - using Ctrl-based to avoid AeroSpace conflicts
     keybinds clear-defaults=true {
         // Locked mode - Ctrl+g to enter, prevents zellij from capturing keys
@@ -397,30 +304,19 @@ in {
         }
     }
 
-    // Plugins
-    plugins {
-        tab-bar location="zellij:tab-bar"
-        status-bar location="zellij:status-bar"
-        strider location="zellij:strider"
-        compact-bar location="zellij:compact-bar" {
-            tooltip "F1"  // Hints only show when F1 is pressed
-        }
-        session-manager location="zellij:session-manager"
-        filepicker location="zellij:strider" {
-            cwd "/"
-        }
-    }
   '';
-  layouts.minimal = ''
-    layout {
-        default_tab_template {
-            pane size=1 borderless=true {
-                plugin location="file:${xdgConfigHome}/zellij/plugins/minimal-tab-bar.wasm"
-            }
-            children
-        }
+  layouts.minimal.layout.default_tab_template._children = [
+    {
+      pane = {
+        _props = {
+          size = 1;
+          borderless = true;
+        };
+        plugin._props.location = "file:${xdgConfigHome}/zellij/plugins/minimal-tab-bar.wasm";
+      };
     }
-  '';
+    {children = {};}
+  ];
   plugins = [
     minimalTabBar
     zellijPlugins.zjstatus
