@@ -46,7 +46,7 @@ from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData
 from pydantic import AnyUrl, Field
 
-from . import guide, mcp_ui, outputs, resources_bridge, store
+from . import guide, mailbox, mcp_ui, outputs, resources_bridge, store
 from .config import config, server_version
 from .kernel import current_kernel
 
@@ -596,7 +596,10 @@ async def python_exec(
                 f"stdout, jobs['{job_id}'].result the value; history() lists recent runs.]"
             )
         )
-    return mcp_ui.ui_result(parts, fragments=ui_fragments, title=intent)
+    # The run's live weave view (minted kernel-side when the result had a
+    # human HTML view; see store.save_tool_view) rides the summary so a
+    # weave-aware host can resolve it from the result's `_meta`.
+    return mcp_ui.ui_result(parts, fragments=ui_fragments, title=intent, weave_view=summary.get("weave_view"))
 
 
 @mcp.tool(
@@ -670,6 +673,7 @@ async def pr_watch(
         [header, *(item for item in rendered if getattr(item, "text", None) != "(no output)")],
         fragments=mcp_ui.html_fragments(cell_outputs),
         title=f"watch PR {pr}",
+        weave_view=summary.get("weave_view") if summary else None,
     )
 
 
@@ -768,28 +772,8 @@ async def kernel_restart(ctx: Context | None = None) -> str:
     return json.dumps(await current_kernel().restart_now())
 
 
-# The reply tool's store connection, opened lazily on first reply. The tool runs
-# in the server process (the kernel's `events` writes come from its own
-# connection), so it needs its own handle on the shared WAL store. The async
-# facade keeps its writes off the shared event loop (index#2348).
-_reply_db: store.AsyncConn | None = None
-
-
-def _reply_store() -> store.AsyncConn:
-    global _reply_db
-    if _reply_db is None:
-        # `store_path` is None outside `serve` (e.g. an embedder driving the
-        # tools directly), which needs the same error as having no config at all.
-        try:
-            path = config().store_path
-        except RuntimeError:
-            path = None
-        if path is None:
-            raise McpError(
-                ErrorData(code=types.INTERNAL_ERROR, message="no store configured; reply needs `ix-mcp serve`")
-            )
-        _reply_db = store.AsyncConn(path)
-    return _reply_db
+# The reply tool runs in the serve process, so it writes directly to the
+# tier-3 mailbox singleton instead of round-tripping through the data API.
 
 
 @mcp.tool(structured_output=False, description=guide.REPLY)
@@ -805,15 +789,24 @@ async def reply(
     await _identify_client_once(ctx)
     # Deliberately not gated on session_set_name: a reply answers a channel event
     # (often the session's very first act) and creates no dashboard run to label.
-    db = _reply_store()
-    if not await db.run(store.resource_live, resource):
+    box = mailbox.get_mailbox()
+    # Resource liveness is durable Weave state. If that check is unavailable,
+    # keep reply usable for same-process resources whose events mailbox is live.
+    live = True
+    with contextlib.suppress(Exception):
+        path = config().store_path
+        if path is not None:
+            db = store.AsyncConn(path)
+            live = await db.run(store.resource_live, resource)
+            await db.close()
+    if not live:
         raise McpError(
             ErrorData(
                 code=types.INVALID_PARAMS,
                 message=f"no live resource {resource!r}; pass the id from the <channel resource=...> attribute",
             )
         )
-    await db.run(store.add_event, resource=resource, kind="reply", body=json.dumps({"text": text}))
+    box.add_event(resource=resource, kind="reply", body=json.dumps({"text": text}))
     return [outputs.text("sent")]
 
 

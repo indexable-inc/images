@@ -1,27 +1,16 @@
-use std::{io::Write as _, path::PathBuf};
+use std::path::PathBuf;
 
 use clone_scanner::Config;
 use tempfile::TempDir;
 
-use crate::{DetectConfig, DetectionResult, instances};
+use crate::{DetectConfig, DetectionResult, Kind, instances};
 
 pub fn create_temp_file(dir: &TempDir, name: &str, content: &str) -> PathBuf {
-    let path = dir.path().join(name);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).unwrap();
-    }
-    let mut file = std::fs::File::create(&path).unwrap();
-    file.write_all(content.as_bytes()).unwrap();
-    path
+    clone_test_support::write_file(dir.path(), name, content)
 }
 
 pub fn test_scan_config() -> Config {
-    Config {
-        min_lines: 1,
-        min_nodes: 1,
-        respect_gitignore: false,
-        include_hidden: false,
-    }
+    Config::for_tests()
 }
 
 /// Scan a directory with the default test config and detect instances with the
@@ -30,4 +19,29 @@ pub fn scan_and_run(dir: &TempDir, detect_config: &DetectConfig) -> DetectionRes
     let scanner = clone_scanner::Scanner::new(test_scan_config());
     let scan = scanner.directory(dir.path()).unwrap();
     instances(&scan, detect_config)
+}
+
+pub fn assert_no_overlapping_fragments(
+    result: &DetectionResult,
+    selected: impl Fn(&Kind) -> bool,
+) {
+    for group in result
+        .instances
+        .iter()
+        .filter(|group| selected(&group.clone_type))
+    {
+        for (index, left) in group.fragments.iter().enumerate() {
+            for right in group.fragments.iter().skip(index + 1) {
+                let same_file = left.file == right.file;
+                let left_starts_before_right_ends =
+                    left.byte_range.start < right.byte_range.end;
+                let right_starts_before_left_ends =
+                    right.byte_range.start < left.byte_range.end;
+                let overlaps = same_file
+                    && left_starts_before_right_ends
+                    && right_starts_before_left_ends;
+                assert!(!overlaps, "clone group compared overlapping fragments: {group:?}");
+            }
+        }
+    }
 }

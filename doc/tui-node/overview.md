@@ -25,27 +25,29 @@ with [napi-rs](https://napi.rs/); the `tui` crate owns every behavior. npm name
 The native addon exports three items (`src/lib.rs`); the JS wrapper re-exports
 them and adds two pure-JS helpers (`npm/index.js:72-76`).
 
-`Tui` (`src/lib.rs:74`), one spawned process:
+`Tui` (`src/lib.rs:79`), one spawned process:
 
-- `new(command, args?, options?)` (`src/lib.rs:83`): spawn on a fresh PTY and
-  track it. `SpawnOptions { rows?, cols?, scrollbackLines? }` (`src/lib.rs:60`),
-  unset fields fall back to 80x24 / 10,000.
-- Static `Tui.listAll()` (`src/lib.rs:108`).
+- `new(command, args?, options?)` (`src/lib.rs:87`): spawn on a fresh PTY and
+  track it. `SpawnOptions { rows?, cols?, scrollbackLines?, env? }`
+  (`src/lib.rs:61`), unset fields fall back to 80x24 / 10,000 / no extra env.
+  `env` pairs (per-session identity/config) are applied before the crate-forced
+  `TERM`/`COLORTERM`, so those two always win.
+- Static `Tui.listAll()` (`src/lib.rs:115`).
 - Synchronous getters: `id`, `command`, `args`, `rows`, `cols`,
-  `scrollbackLimit` (`src/lib.rs:118-146`); instant state `isAlive()`,
-  `exitCode()` (`src/lib.rs:191,197`).
+  `scrollbackLimit` (`src/lib.rs:126-153`); instant state `isAlive()`,
+  `exitCode()` (`src/lib.rs:198,204`).
 - Async I/O (each returns a `Promise`, runs on the tui actor, never blocks the
   event loop): `write(data)`, `readViewport()`, `readScrollback()`, `readFull()`
-  (`{ scrollback, viewport }`), `readBlocking(timeoutMs)` (`src/lib.rs:152-185`).
+  (`{ scrollback, viewport }`), `readBlocking(timeoutMs)` (`src/lib.rs:159-192`).
 - Lifecycle: `wait()` (resolves to the exit code, `null` if signalled),
   `kill()` (SIGKILL), `resize(rows, cols)` (delivers `SIGWINCH`),
   `close()` (force-kill and drop from `listAll` and the dashboard,
-  `src/lib.rs:207-234`).
+  `src/lib.rs:214-241`).
 
-`serve(host?, port?, pollMs?) -> Promise<Dashboard>` (`src/lib.rs:279`): start
+`serve(host?, port?, pollMs?) -> Promise<Dashboard>` (`src/lib.rs:286`): start
 the in-process Loro-backed web dashboard for every live `Tui`. `host` must be an
-IP literal (a hostname is not resolved, `src/lib.rs:289`); `port = 0` binds an
-ephemeral port read back from `Dashboard.url`. `Dashboard` (`src/lib.rs:239`)
+IP literal (a hostname is not resolved, `src/lib.rs:296`); `port = 0` binds an
+ephemeral port read back from `Dashboard.url`. `Dashboard` (`src/lib.rs:246`)
 exposes `url`, `addr`, and `stop()`. The server, the CRDT document, and the SSE
 stream are all in Rust ([dashboard-core](../dashboard-core/overview.md));
 the browser imports updates with `loro-crdt`.
@@ -62,10 +64,10 @@ JS-only helpers (`npm/index.js`):
 ## Wiring
 
 The addon holds a single process-wide `tui::TuiManager` in a `OnceLock`
-(`src/lib.rs:38`); every `Tui` is a handle into it, mirroring the Python binding.
+(`src/lib.rs:39`); every `Tui` is a handle into it, mirroring the Python binding.
 JS numbers cross in as `u32`; `narrow_u16` rejects out-of-range rows/cols/ports
-rather than wrapping (`src/lib.rs:52`). Errors become rejected Promises via
-`Error::from_reason` (`src/lib.rs:46`).
+rather than wrapping (`src/lib.rs:53`). Errors become rejected Promises via
+`Error::from_reason` (`src/lib.rs:47`).
 
 ## Build details
 

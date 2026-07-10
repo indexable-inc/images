@@ -1,6 +1,8 @@
 {
   ix,
   lib,
+  nix,
+  updateScriptWriter ? null,
 }: let
   # The headless Nix build-tree emitter. The `nix` module's live-pane path spawns
   # it (`nix-web-monitor --emit ndjson`) so the parser stays the single owner of
@@ -15,13 +17,22 @@
   # callPackage would have auto-bound to a `pkgs` arg in the flake package set.
   inherit (ix) pkgs;
 
-  # PyPI source pins (version + sdist URL + SRI hash) for the interpreter
-  # overrides below, in the sibling pins.json (repo policy: no inline hash
-  # literals in tracked .nix). Each `url` is fetchPypi's canonical pypi.io
-  # source path (verified byte-identical to the pinned hashes). Re-pin after a
-  # version edit manually (rebuild, copy the `got:` hash): mcp carries no
-  # registry updateScript, so `nix run .#update` does not touch these pins.
+  # PyPI pins (version + URL + SRI hash) for the interpreter overrides below,
+  # in the sibling pins.json (repo policy: no inline hash literals in tracked
+  # .nix). `nix run .#mcp.updateScript` joins the registry update DAG and
+  # refreshes normal PyPI sdist pins from the JSON API. pins.json policy markers
+  # are `prefetch = "manual"` for hash-mode holds, `hold` for version holds, and
+  # `track` for version-line tracking, so the updater skips or narrows pins
+  # loudly instead of guessing.
   pypiPins = ix.pins.loadPins ./pins.json;
+  updateScript =
+    if updateScriptWriter == null
+    then null
+    else
+      import ./update.nix {
+        inherit nix;
+        writeNushellApplication = updateScriptWriter;
+      };
   # The PTY-driving `tui` package, baked into the pinned interpreter so every
   # session can `import tui` with no setup. The PyO3 cdylib comes from the same
   # shared workspace graph the binary is selected from, dropped next to the
@@ -343,6 +354,26 @@
     ''
   );
 
+  # One privacy boundary shared by every helper that can expose a signed-in
+  # user's personal account data. Keeping the IX_MCP_SHARED policy here makes
+  # the refusal semantics impossible to drift between integrations.
+  privateSessionSource = builtins.path {
+    name = "ix-mcp-private-session-source";
+    path = ./src/private_session.py;
+  };
+  privateSessionModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-private-session-module"
+    {
+      strictDeps = true;
+      meta.description = "Shared private-session guard for personal MCP integrations";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}"
+      mkdir -p "$site"
+      install -Dm644 ${privateSessionSource} "$site/private_session.py"
+    ''
+  );
+
   # `google_auth`: Gmail + Calendar for the kernel, with self-service sign-in.
   # Pure Python (no cdylib): it shells to the bundled `gcal` binary
   # (`IX_GCAL_BIN`, set on the wrapper below) to sign in (`login()` drives
@@ -457,6 +488,24 @@
       site="$out/${pkgs.python3.sitePackages}/mesh"
       mkdir -p "$site"
       cp -r ${meshPythonSource}/mesh/. "$site/"
+    ''
+  );
+  # Weave 2 async client: facts, queries, blobs, chat, and delegation verbs
+  # against the shared Weave journal. Pure Python over bundled httpx + polars.
+  weavePythonSource = builtins.path {
+    name = "ix-mcp-weave-python-source";
+    path = ./src/weave;
+  };
+  weaveModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-weave-python-module"
+    {
+      strictDeps = true;
+      meta.description = "Weave 2 async client bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/weave"
+      mkdir -p "$site"
+      cp -r ${weavePythonSource}/weave/. "$site/"
     ''
   );
   # The kernel's process runner. The public `sh()`/`zsh()` are RETIRED (agents
@@ -641,26 +690,6 @@
   # distiller's optional deps (pyarrow/boto3) stay out of this interpreter.
   distillerModule = pkgs.ix-distiller.passthru.pythonModule;
   distillerPythonSource = pkgs.ix-distiller.passthru.pythonSource;
-  # Example task-dependency graphs generated in Python and stored in SQLite:
-  # `import tasks`, then `tasks.seed("tasks.sqlite")` writes a ~100-node DAG and
-  # `tasks.load(...)` / `tasks.frame(...)` read it back. The task-graph demo site
-  # reads the same SQLite file. Pure stdlib (sqlite3) + lazy polars.
-  tasksPythonSource = builtins.path {
-    name = "ix-mcp-tasks-python-source";
-    path = ./src/tasks;
-  };
-  tasksModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-tasks-python-module"
-    {
-      strictDeps = true;
-      meta.description = "Task-graph SQLite helper bundled into the ix-mcp interpreter";
-    }
-    ''
-      site="$out/${pkgs.python3.sitePackages}/tasks"
-      mkdir -p "$site"
-      cp -r ${tasksPythonSource}/tasks/. "$site/"
-    ''
-  );
   # Drive the Ghostty terminal over its AppleScript dictionary (Ghostty 1.3.2+):
   # `import ghostty`, then `await ghostty.surfaces()` reads every open surface
   # (id/tty/pid/cwd/name) into polars and `await ghostty.close_me()` closes the
@@ -826,12 +855,12 @@
 
   # The vmkit binary `vmkit` spawns. Darwin-only; referenced lazily so a Linux
   # mcp build never forces it.
-  vmkitBin = ix.rustWorkspace.units.binaries."vmkit";
+  vmkitBin = ix.rustWorkspace.units.binaries.vmkit;
 
   # The gcal binary the calendar tools spawn with --json: the CLI surface of
   # the google-calendar crate (packages/google/calendar), so the MCP binding
   # carries no calendar logic of its own (RFC 0003).
-  gcalBin = ix.rustWorkspace.units.binaries."gcal";
+  gcalBin = ix.rustWorkspace.units.binaries.gcal;
 
   # The Svelte 5 -> one-IIFE-bundle compiler the `svelte` module spawns
   # (IX_SVELTE_BUNDLE_BIN): esbuild + esbuild-svelte from the lockfile pin in
@@ -1310,6 +1339,7 @@
       scipqlModule
       flecsQueryModule
       fsearchModule
+      privateSessionModule
       googleAuthModule
       ixGoogleModule
       ixNotebookMcpModule
@@ -1317,6 +1347,7 @@
       nixModule
       fleetModule
       meshModule
+      weaveModule
       shModule
       svelteModule
       worktreeModule
@@ -1326,7 +1357,6 @@
       xModule
       slackModule
       beeperModule
-      tasksModule
       linearModule
       notionModule
       noxAutotriageModule
@@ -1359,11 +1389,6 @@
   # `ix-mcp` is just the pinned interpreter invoked on the bundled package's CLI.
   # Everything (the entrypoint, the one shared kernel, the data API) runs in this
   # one interpreter, so the bundled modules are all importable with no install step.
-  # The human-facing dashboard is the shared Loro hub (the `dashboard` aggregator):
-  # `ix-mcp serve` spawns it (IX_DASHBOARD_BIN) and publishes its runs/resources/
-  # namespace to it as panes; the aiohttp server keeps only the read-only /api the
-  # embedders poll. So there is no committed UI artifact and no Svelte build here.
-  dashboardHubBin = ix.rustWorkspace.units.binaries."dashboard";
 
   # `ty` (astral-sh's Rust type checker) drives the per-cell static type check the
   # kernel runs before every `python_exec` cell (see ix_notebook_mcp/typecheck.py).
@@ -1399,7 +1424,6 @@
         --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
         --set IX_SVELTE_BUNDLE_BIN ${lib.escapeShellArg (lib.getExe svelteBundleBin)} \
         --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
-        --set IX_DASHBOARD_BIN ${lib.escapeShellArg (lib.getExe' dashboardHubBin "dashboard")} \
         --set SCIPQL_SOUFFLE ${lib.escapeShellArg (lib.getExe' pkgs.souffle "souffle")} \
         --set IX_MCP_TY_BIN ${lib.escapeShellArg tyBin} \
         --set IX_MCP_TY_PYTHON ${lib.escapeShellArg mcpPython.interpreter} \
@@ -1423,7 +1447,6 @@
         --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
         --set IX_SVELTE_BUNDLE_BIN ${lib.escapeShellArg (lib.getExe svelteBundleBin)} \
         --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
-        --set IX_DASHBOARD_BIN ${lib.escapeShellArg (lib.getExe' dashboardHubBin "dashboard")} \
         --set SCIPQL_SOUFFLE ${lib.escapeShellArg (lib.getExe' pkgs.souffle "souffle")} \
         --set IX_MCP_TY_BIN ${lib.escapeShellArg tyBin} \
         --set IX_MCP_TY_PYTHON ${lib.escapeShellArg mcpPython.interpreter} \
@@ -1479,7 +1502,6 @@
   # The `ix_notebook_mcp` server package and the remaining `src/*` modules are
   # added here as they are brought up to strict.
   strictGreenModules = [
-    "tasks"
     "x"
     "nix"
     "nox_autotriage"
@@ -1502,6 +1524,12 @@
     "tools.py"
     "mcp_ui.py"
   ];
+  zubanConfig = (pkgs.formats.ini {}).generate "ix-mcp-zuban.ini" {
+    mypy = {};
+    # Pygments builds public re-exports through module __getattr__, and several
+    # lexer/highlight helpers remain untyped in its partial stubs.
+    "mypy-pygments.*".disallow_untyped_calls = false;
+  };
   strictTypecheck = let
     # All src module package dirs go on MYPYPATH so first-party cross-imports
     # resolve; the green subset are the actual check targets.
@@ -1528,7 +1556,7 @@
       cp -r ${ixNotebookMcpSource} ix_notebook_mcp
       cp -r ${./src} src
       cp -r ${distillerPythonSource} distiller-src
-      cp ${./zuban.ini} zuban.ini
+      cp ${zubanConfig} zuban.ini
       chmod -R u+w ix_notebook_mcp src distiller-src
 
       export MYPYPATH=${lib.escapeShellArg mypypath}:.
@@ -2179,220 +2207,6 @@
       mkdir -p "$out"
     '';
 
-  # Exercises the shared-dashboard launcher logic: live_hub() ignores a missing
-  # or stale (dead-port) hub-state file and accepts a live one, and the data
-  # API's `/` landing page names `ix-mcp dashboard` instead of redirecting to a
-  # dead hub port. This is the "no million dashboards" reuse contract plus the
-  # dead-redirect fix, both pure Python (real loopback sockets, no `dashboard`
-  # binary), so the sandbox runs it.
-  dashboardLauncherTest = pkgs.writeText "ix-mcp-dashboard-launcher-test.py" ''
-    # python
-    import asyncio
-    import json
-    import os
-    import socket
-    import tempfile
-    import threading
-    import time
-    from pathlib import Path
-
-    from aiohttp.test_utils import TestClient, TestServer
-
-    from ix_notebook_mcp import config, store
-    from ix_notebook_mcp.dashboard import build_app, landing_html
-
-    state = config.hub_state_path()
-
-    # No state file -> no hub (and no socket probe even happens).
-    state.unlink(missing_ok=True)
-    assert config.live_hub() is None, "missing state must read as no hub"
-
-    # Stale state: a record whose port has nothing listening is ignored.
-    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    probe.bind(("127.0.0.1", 0))
-    dead = probe.getsockname()[1]
-    probe.close()
-    state.write_text(json.dumps({"pid": 1, "host": "0.0.0.0", "port": dead, "url": f"http://x:{dead}/"}))
-    assert config.port_open(dead) is False, "closed port must not read as open"
-    assert config.live_hub() is None, "stale state (dead port) must read as no hub"
-
-    # Live state: a record whose port is accepting connections is reused.
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind(("127.0.0.1", 0))
-    # Backlog must exceed the probes below: each port_open leaves a completed but
-    # un-accepted connection, so listen(1) would make the second probe time out.
-    srv.listen(16)
-    live = srv.getsockname()[1]
-    url = f"http://join.example:{live}/"
-    state.write_text(json.dumps({"pid": 1, "host": "0.0.0.0", "port": live, "url": url}))
-    assert config.port_open(live) is True, "listening port must read as open"
-    got = config.live_hub()
-    assert got is not None and got["port"] == live and got["url"] == url, got
-
-    # Dead pid: even with a live listener on the recorded port (port reuse by an
-    # unrelated service), a dead recorded pid means the file is stale -> no hub.
-    gone = os.fork()
-    if gone == 0:
-        os._exit(0)
-    os.waitpid(gone, 0)  # reap so the pid is truly dead
-    state.write_text(json.dumps({"pid": gone, "host": "127.0.0.1", "port": live, "url": url}))
-    assert config.live_hub() is None, "stale state (dead pid) must read as no hub"
-    srv.close()
-    state.unlink(missing_ok=True)
-
-    # _bind_ip hands the Rust hub a concrete, non-wildcard IP literal: IPs pass
-    # through, names resolve, and a wildcard is refused (mapped to loopback) so the
-    # board never binds every NIC.
-    from ix_notebook_mcp import cli
-    assert cli._bind_ip("127.0.0.1") == "127.0.0.1"
-    assert cli._bind_ip("localhost") == "127.0.0.1"
-    assert cli._bind_ip("0.0.0.0") == "127.0.0.1"  # noqa: S104 -- asserting the wildcard refusal
-    assert cli._bind_ip("::") == "127.0.0.1"
-    assert cli._bind_ip("::1") == "::1"  # a non-wildcard IPv6 literal passes through
-
-    # _host_arg brackets IPv6 for the binary's host:port and the URL; IPv4/names
-    # are returned raw (Python's own socket calls take the unbracketed host).
-    assert cli._host_arg("127.0.0.1") == "127.0.0.1"
-    assert cli._host_arg("::1") == "[::1]"
-
-    # The data API landing page points at the command, never a bare redirect.
-    html = landing_html()
-    assert "ix-mcp dashboard" in html, html
-    assert "/api/jobs" in html, html
-
-    # A non-numeric IX_DASH_HUB_PORT must not crash the launcher: fall back to 8080.
-    os.environ["IX_DASH_HUB_PORT"] = "not-a-port"
-    assert cli._stable_hub_port() == 8080
-    os.environ["IX_DASH_HUB_PORT"] = "9191"
-    assert cli._stable_hub_port() == 9191
-    os.environ.pop("IX_DASH_HUB_PORT")
-
-    # Drive the real aiohttp `/` handler: 302 to a live hub, else the landing
-    # page -- never the old dead redirect. Pins the off-loop probe too.
-    async def check_index() -> None:
-        conn = store.connect(os.path.join(tempfile.mkdtemp(), "s.db"))
-        client = TestClient(TestServer(build_app(config.Config(workdir=Path(tempfile.mkdtemp())), conn)))
-        await client.start_server()
-        try:
-            hub = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            hub.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            hub.bind(("127.0.0.1", 0))
-            hub.listen(16)
-            hub_port = hub.getsockname()[1]
-            hub_url = f"http://127.0.0.1:{hub_port}/"
-            state.write_text(json.dumps({"pid": 1, "host": "127.0.0.1", "port": hub_port, "url": hub_url}))
-            resp = await client.get("/", allow_redirects=False)
-            assert resp.status == 302 and resp.headers.get("Location") == hub_url, (
-                resp.status,
-                resp.headers.get("Location"),
-            )
-            hub.close()
-
-            state.unlink(missing_ok=True)
-            resp = await client.get("/", allow_redirects=False)
-            assert resp.status == 200, resp.status
-            assert "ix-mcp dashboard" in await resp.text()
-        finally:
-            await client.close()
-
-    asyncio.run(check_index())
-
-    # The auto-dashboard hub_port branch is gated on `auto_dashboard`: with it
-    # ON, a live hub_port redirects; with it OFF (the default), a live listener on
-    # hub_port must NOT redirect -- that port is reserved-but-unbound and could be
-    # any unrelated process. Pins the wrong-redirect fix.
-    async def check_auto_gate() -> None:
-        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        listener.bind(("127.0.0.1", 0))
-        listener.listen(16)
-        hp = listener.getsockname()[1]
-        try:
-            auto = config.Config(
-                workdir=Path(tempfile.mkdtemp()), host="127.0.0.1", advertised_host="127.0.0.1",
-                hub_port=hp, auto_dashboard=True,
-            )
-            ca = TestClient(TestServer(build_app(auto, store.connect(os.path.join(tempfile.mkdtemp(), "a.db")))))
-            await ca.start_server()
-            try:
-                r = await ca.get("/", allow_redirects=False)
-                assert r.status == 302 and r.headers.get("Location") == auto.hub_url(), (r.status, r.headers.get("Location"))
-            finally:
-                await ca.close()
-
-            noauto = config.Config(
-                workdir=Path(tempfile.mkdtemp()), host="127.0.0.1", advertised_host="127.0.0.1",
-                hub_port=hp, auto_dashboard=False,
-            )
-            cn = TestClient(TestServer(build_app(noauto, store.connect(os.path.join(tempfile.mkdtemp(), "n.db")))))
-            await cn.start_server()
-            try:
-                r = await cn.get("/", allow_redirects=False)
-                assert r.status == 200 and "ix-mcp dashboard" in await r.text(), r.status
-            finally:
-                await cn.close()
-        finally:
-            listener.close()
-
-    asyncio.run(check_auto_gate())
-
-    # Concurrent launches must spawn exactly one hub (the flock in _dashboard
-    # serializes check-or-spawn): the loser blocks, then reuses the winner's
-    # hub.json instead of starting a second hub.
-    state.unlink(missing_ok=True)
-    hub = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    hub.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    hub.bind(("127.0.0.1", 0))
-    hub.listen(16)
-    hub_port = hub.getsockname()[1]
-    spawns = []
-
-    def fake_spawn() -> dict:
-        spawns.append(1)
-        time.sleep(0.3)  # hold the lock so the racer is forced to wait on it
-        st = {"pid": os.getpid(), "host": "127.0.0.1", "port": hub_port, "url": f"http://127.0.0.1:{hub_port}/"}
-        config.hub_state_path().write_text(json.dumps(st))
-        return st
-
-    real_spawn = cli._spawn_shared_hub
-    cli._spawn_shared_hub = fake_spawn
-    try:
-        threads = [threading.Thread(target=cli._dashboard, kwargs={"open_browser": False}) for _ in range(2)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-    finally:
-        cli._spawn_shared_hub = real_spawn
-        hub.close()
-    assert len(spawns) == 1, f"expected exactly one spawn under the lock, got {len(spawns)}"
-    state.unlink(missing_ok=True)
-
-    print("dashboard-launcher-ok")
-  '';
-  dashboardLauncherSmoke =
-    pkgs.runCommand "ix-mcp-dashboard-launcher-smoke"
-    {
-      nativeBuildInputs = [mcpPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      ${mcpPython}/bin/python3 ${dashboardLauncherTest} >stdout 2>stderr || {
-        echo "ix-mcp dashboard-launcher smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -qx 'dashboard-launcher-ok' stdout || {
-        echo "ix-mcp dashboard-launcher smoke did not confirm helper behaviour:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
   # Exercises the in-kernel runtime (ix_notebook_mcp/runtime.py) in-process: two
   # jobs run concurrently on one event loop, neither blocks the other, each keeps
   # its own captured stdout, and the trailing expression is captured as the
@@ -2597,8 +2411,8 @@
     names = set(cat["name"].to_list())
     assert {"Result", "cells", "jobs", "nu", "api"} <= names, names
     assert "sh" not in names and "zsh" not in names, names
-    filt = ns["api"]("cells")
-    assert 1 <= filt.height <= cat.height, (filt.height, cat.height)
+    filt = cat.filter(cat["name"] == "cells")
+    assert filt.height == 1, filt
 
     # grep/find/spotlight (the fsearch search helpers) and view are pre-bound in
     # the namespace (no import needed), the way Result/cells/jobs are, so
@@ -2736,276 +2550,6 @@
 
     print("runtime-ok")
   '';
-  # Locks the embed contract (ix_notebook_mcp/feed.py): the dashboard and the
-  # room server both read the agent's presentation through `feed`, so prove a
-  # snapshot returns running-pinned jobs with decoded rich outputs, the curated
-  # cells and live resources, a change marker that advances as a running job
-  # streams output, and that `feed.job` fetches one run by the id a python_exec
-  # tool result names (and None for a miss).
-  feedTestPy = pkgs.writeText "ix-mcp-feed-test.py" ''
-    # python
-    import tempfile
-    import time
-
-    from ix_notebook_mcp import feed, store
-
-    conn = store.connect(tempfile.mktemp(suffix=".db"))
-    now = time.time()
-    store.start(conn, id="aa11", name="run1", code="Result.of(df)", started_at=now, budget=15.0)
-    store.finish(
-        conn, id="aa11", status="done", ended_at=now + 1, output="hi", result="42 rows",
-        error=None, outputs=[{"data": {"text/html": "<table>x</table>"}}],
-        bindings={"df": {"kind": "DataFrame"}},
-    )
-    store.start(conn, id="bb22", name="run2", code="time.sleep(99)", started_at=now + 2, budget=5.0)
-    store.replace_cells(conn, [{"id": "cell0", "title": "latency", "position": 0,
-                                "outputs": [{"data": {"text/html": "<b>p50</b>"}}]}])
-    store.upsert_resource(conn, id="res0", title="term", kind="html", html="<pre>$</pre>",
-                          status="live", created_at=now, updated_at=now)
-
-    snap = feed.snapshot(conn)
-    assert len(snap["jobs"]) == 2, snap["jobs"]
-    assert snap["jobs"][0]["id"] == "bb22", "running job must pin first"
-    done = snap["jobs"][1]
-    assert done["outputs"][0]["data"]["text/html"] == "<table>x</table>", done
-    assert done["bindings"] == {"df": {"kind": "DataFrame"}}, done
-    assert snap["cells"][0]["outputs"][0]["data"]["text/html"] == "<b>p50</b>", snap["cells"]
-    assert snap["resources"][0]["html"] == "<pre>$</pre>", snap["resources"]
-    assert isinstance(snap["rev"], str), snap["rev"]
-
-    one = feed.job(conn, "aa11")
-    assert one is not None and one["result"] == "42 rows", one
-    assert one["outputs"][0]["data"]["text/html"] == "<table>x</table>", one
-    assert feed.job(conn, "nope") is None
-
-    store.update_output(conn, "bb22", "tick tick tick")
-    assert feed.snapshot(conn)["rev"] != snap["rev"], "rev must advance on streamed output"
-
-    print("feed-ok")
-  '';
-  feedSmoke =
-    pkgs.runCommand "ix-mcp-feed-smoke"
-    {
-      nativeBuildInputs = [mcpPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${feedTestPy} >stdout 2>stderr || {
-        echo "ix-mcp feed smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -qx 'feed-ok' stdout || {
-        echo "ix-mcp feed smoke did not confirm the embed contract:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
-  # The session identity feature: a run's session label flows kernel -> store ->
-  # pane bridge so the dashboard can group and name each MCP client's runs.
-  # Covers the store singleton row, runtime.Session's label precedence + store
-  # mirror, and the reserved `__session__` pane the bridge publishes.
-  sessionIdentityTestPy = pkgs.writeText "ix-mcp-session-identity-test.py" ''
-    # python
-    import tempfile
-
-    from ix_notebook_mcp import pane_bridge, runtime, store
-
-    conn = store.connect(tempfile.mktemp(suffix=".db"))
-
-    # Store: the session row is a singleton (id 0) that round-trips and updates
-    # in place rather than accumulating rows.
-    assert store.get_session(conn) is None, "no session before it is set"
-    store.set_session(conn, name="alpha", client="claude-code 2.1")
-    got = store.get_session(conn)
-    assert got["name"] == "alpha" and got["client"] == "claude-code 2.1", got
-    store.set_session(conn, name="beta", client="claude-code 2.1")
-    assert store.get_session(conn)["name"] == "beta", "set_session must update in place"
-    assert conn.execute("SELECT count(*) FROM session").fetchone()[0] == 1, "singleton row"
-
-    # runtime.Session: label precedence is explicit name > client . workdir.
-    s = runtime.Session()
-    s._workdir = "index"
-    assert s.name == "index", s.name
-    s._set_client("claude-code 2.1")
-    assert s.name == "claude-code 2.1 · index", s.name
-    s.name = "refactor auth"
-    assert s.name == "refactor auth", s.name
-    assert s.client == "claude-code 2.1", s.client
-
-    # _sync mirrors the effective label to the store, and is a no-op when nothing
-    # changed (so an idle session never rewrites the row).
-    runtime._store = store
-    runtime._store_conn = conn
-    s._sync()
-    assert store.get_session(conn)["name"] == "refactor auth", store.get_session(conn)
-    stamp = store.get_session(conn)["updated_at"]
-    s._sync()
-    assert store.get_session(conn)["updated_at"] == stamp, "unchanged sync must not rewrite"
-
-    # pane bridge: a reserved `__session__` data pane carries the label + client,
-    # so the dashboard reads it for the session selector (and excludes it as a run).
-    store.set_session(conn, name="my session", client="claude-code 2.1")
-    panes = pane_bridge._panes(conn)
-    sess = [p for p in panes if p["id"] == "__session__"]
-    assert len(sess) == 1, panes
-    pane = sess[0]
-    assert pane["title"] == "my session", pane
-    assert pane["view"]["kind"] == "data" and pane["view"]["renderer"] == "session", pane
-    assert pane["view"]["data"]["client"] == "claude-code 2.1", pane
-
-    print("session-identity-ok")
-  '';
-
-  sessionIdentitySmoke =
-    pkgs.runCommand "ix-mcp-session-identity-smoke"
-    {
-      nativeBuildInputs = [mcpPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      ${lib.getExe mcpPython} ${sessionIdentityTestPy} >stdout 2>stderr || {
-        echo "ix-mcp session identity smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -qx 'session-identity-ok' stdout || {
-        echo "ix-mcp session identity smoke did not confirm the contract:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
-
-  # The read-only data API is also the embedding contract: a host (the room
-  # server runs `ix-mcp` as its agent's only tool) reads the agent's rich
-  # results back over HTTP and renders them in its own UI. Exercise that path
-  # in-process: seed the store, start the dashboard server, and assert the JSON
-  # routes (incl. the by-id lookup an embedder keys off the job id in a tool
-  # reply) return the run's nbformat output bundles, cells, and live resources.
-  apiTest = pkgs.writeText "ix-mcp-api-test.py" ''
-    # python
-    import asyncio, tempfile
-    from pathlib import Path
-
-    import aiohttp
-
-    from ix_notebook_mcp import cli, dashboard, store
-    from ix_notebook_mcp.config import Config, set_config
-
-    # An embedder pins the data-API port so it knows where to reach this instance.
-    import os
-
-    os.environ["IX_MCP_DASHBOARD_PORT"] = "54321"
-    assert cli._dashboard_port() == 54321, cli._dashboard_port()
-    os.environ.pop("IX_MCP_DASHBOARD_PORT")
-    assert isinstance(cli._dashboard_port(), int)
-
-    tmp = Path(tempfile.mkdtemp())
-
-    # An embedder pins the execution store the same way (the pi-harness room
-    # event mapper polls exactly this file); unset, the store is minted in the
-    # runtime dir keyed by the data-API port.
-    os.environ["IX_MCP_STORE"] = str(tmp / "pinned-store.sqlite")
-    assert cli._store_path(54321) == tmp / "pinned-store.sqlite", cli._store_path(54321)
-    os.environ["IX_MCP_STORE"] = ""
-    assert cli._store_path(54321).name == "store-54321.db", cli._store_path(54321)
-    os.environ.pop("IX_MCP_STORE")
-    assert cli._store_path(54321).name == "store-54321.db", cli._store_path(54321)
-    store_path = tmp / "store.db"
-    conn = store.connect(store_path)
-    rich = [
-        {
-            "output_type": "execute_result",
-            "data": {
-                "text/plain": "shape: (1, 1)",
-                "text/html": "<table><tr><td>1</td></tr></table>",
-            },
-        }
-    ]
-    store.start(conn, id="job1", name="demo", code="df.head()", started_at=1000.0, budget=15.0)
-    store.finish(
-        conn,
-        id="job1",
-        status="done",
-        ended_at=1001.0,
-        output="stdout tail",
-        result="ok",
-        error=None,
-        outputs=rich,
-        bindings={"df": {"summary": "DataFrame"}},
-    )
-    store.replace_cells(conn, [{"id": "c1", "title": "Result", "position": 0, "outputs": rich}])
-    store.upsert_resource(
-        conn, id="r1", title="Live", kind="html", html="<b>hi</b>", status="live",
-        created_at=1000.0, updated_at=1000.0,
-    )
-
-    cfg = Config(
-        workdir=tmp, host="127.0.0.1", advertised_host="127.0.0.1",
-        dashboard_port=cli._free_port(), store_path=store_path,
-    )
-    set_config(cfg)
-
-    async def main():
-        runner = await dashboard.start(cfg)
-        base = f"http://127.0.0.1:{cfg.dashboard_port}"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(base + "/api/jobs") as resp:
-                    jobs = await resp.json()
-                assert len(jobs) == 1 and jobs[0]["id"] == "job1", jobs
-                assert jobs[0]["outputs"] == rich, jobs[0]["outputs"]
-
-                async with session.get(base + "/api/jobs/job1") as resp:
-                    assert resp.status == 200, resp.status
-                    one = await resp.json()
-                assert one["id"] == "job1" and one["outputs"] == rich
-                assert one["bindings"] == {"df": {"summary": "DataFrame"}}, one["bindings"]
-
-                async with session.get(base + "/api/jobs/nope") as resp:
-                    assert resp.status == 404, resp.status
-
-                async with session.get(base + "/api/cells") as resp:
-                    cells = await resp.json()
-                assert cells[0]["id"] == "c1" and cells[0]["outputs"] == rich
-
-                async with session.get(base + "/api/resources") as resp:
-                    resources = await resp.json()
-                assert resources[0]["id"] == "r1" and resources[0]["html"] == "<b>hi</b>"
-        finally:
-            await runner.cleanup()
-
-    asyncio.run(main())
-    print("api-ok")
-  '';
-  apiSmoke =
-    pkgs.runCommand "ix-mcp-api-smoke"
-    {
-      nativeBuildInputs = [mcpPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      ${mcpPython}/bin/python3 ${apiTest} >stdout 2>stderr || {
-        echo "ix-mcp api smoke failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      grep -qx 'api-ok' stdout || {
-        echo "ix-mcp api smoke did not confirm the embedding data API:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      mkdir -p "$out"
-    '';
 
   runtimeSmoke =
     pkgs.runCommand "ix-mcp-runtime-smoke"
@@ -3053,7 +2597,7 @@
         pkgs.fd
       ];
       strictDeps = true;
-      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + client-cancel interrupts in-flight run (#2387) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246) + claude-history session search (#2245) + per-serve kernel trace file (#2355) + builtin shadow restore (#2430) + failed-cell stale-binding note (#2526) + pr_watch instant-merge guard (#2532) + find glob-pattern autodetect (#2542) + nu input= routing past no-input statements (#2540)";
+      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + client-cancel interrupts in-flight run (#2387) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246) + claude-history session search (#2245) + per-serve kernel trace file (#2355) + builtin shadow restore (#2430) + failed-cell stale-binding note (#2526) + pr_watch instant-merge guard (#2532) + find glob-pattern autodetect (#2542) + nu input= routing past no-input statements (#2540) + kernel host seam: local child vs ray actor";
     }
     ''
       export HOME=$TMPDIR/home
@@ -3073,8 +2617,6 @@
       cp ${./tests/test_cancel_running.py} test_cancel_running.py
       # Issue #2164: jobs.spawn registers an ad-hoc awaitable as a first-class job.
       cp ${./tests/test_jobs_spawn.py} test_jobs_spawn.py
-      # Issue #2464: first tool use starts the dashboard hub without opening a browser.
-      cp ${./tests/test_dashboard_autostart.py} test_dashboard_autostart.py
       cp ${./tests/test_fsearch_partial.py} test_fsearch_partial.py
       cp ${./tests/test_fsearch_glob.py} test_fsearch_glob.py
       # Issue #2542: find('*.py') auto-detects a glob-shaped non-regex pattern.
@@ -3091,6 +2633,12 @@
       cp ${./tests/test_build_info.py} test_build_info.py
       # Issue #2355: per-serve kernel trace file + sweep of orphaned dumps.
       cp ${./tests/test_kernel_trace_path.py} test_kernel_trace_path.py
+      # The kernel host seam: local/ray selection, the actor's connection-info
+      # plumbing (str HMAC key), offset-scoped trace reads.
+      cp ${./tests/test_kernel_host.py} test_kernel_host.py
+      # The kernel's board lease: registration placement facts (kernel_host,
+      # node) and the writer's heartbeat_ms beat, agent idle-clock untouched.
+      cp ${./tests/test_store_kernel_lease.py} test_store_kernel_lease.py
       # Issue #2430: a cell rebinding/deleting a kernel builtin gets it restored.
       cp ${./tests/test_builtin_shadow_restore.py} test_builtin_shadow_restore.py
       # Issue #2526: a failed cell's traceback names the bindings it never reached.
@@ -3103,7 +2651,6 @@
         test_typecheck.py test_job_await_errors.py test_job_cancel_scope.py \
         test_cancel_running.py \
         test_jobs_spawn.py \
-        test_dashboard_autostart.py \
         test_fsearch_partial.py \
         test_fsearch_glob.py \
         test_fsearch_glob_pattern.py \
@@ -3112,6 +2659,8 @@
         test_sh_module.py \
         test_build_info.py \
         test_kernel_trace_path.py \
+        test_kernel_host.py \
+        test_store_kernel_lease.py \
         test_builtin_shadow_restore.py \
         test_unexecuted_note.py \
         test_pr_watch_automerge.py \
@@ -3134,9 +2683,18 @@
   sessionTestPy = pkgs.writeText "ix-mcp-session-test.py" ''
     # python
     import asyncio
+    import sys
     import tempfile
 
     import dill  # the checkpoint serializer must be bundled in this interpreter
+
+    # Hermetic: the session contract runs over an in-memory Weave ABI double
+    # (tests/weave_stub.py, copied next to this script by the derivation);
+    # real-server fidelity is pinned by tests/test_weave_integration.py.
+    sys.path.insert(0, ".")
+    import weave_stub
+
+    weave_stub.install()
 
     from ix_notebook_mcp import runtime, store
 
@@ -3193,6 +2751,11 @@
     ''
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
+      cd "$TMPDIR"
+      cp ${builtins.path {
+        name = "ix-mcp-weave-stub";
+        path = ./tests/weave_stub.py;
+      }} weave_stub.py
       ${lib.getExe mcpPython} ${sessionTestPy} >stdout 2>stderr || {
         echo "ix-mcp session smoke failed:" >&2
         cat stdout stderr >&2
@@ -3489,6 +3052,7 @@
 
     store_path = tempfile.mktemp(suffix=".db")
     os.environ["IX_MCP_STORE"] = store_path
+    os.environ["WEAVE_URL"] = "off"
 
     import polars as pl
 
@@ -3603,11 +3167,8 @@
         # A DataFrame result is stored with its text/html bundle.
         df_job = await run("Result.of(pl.DataFrame({'a': [1, 2], 'b': ['x', 'y']}))", budget=3.0, name="df")
         await df_job.task
-        conn = sqlite3.connect(store_path)
-        conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT status, outputs FROM executions WHERE id = ?", (df_job.id,)).fetchone()
-        assert row["status"] == "done", row["status"]
-        result_mimes = {mime for out in json.loads(row["outputs"]) for mime in out["data"]}
+        assert df_job.status == "done", df_job.status
+        result_mimes = {mime for out in runtime._job_outputs(df_job) for mime in out["data"]}
         assert "text/html" in result_mimes, ("result mimes", result_mimes)
 
         # An htpy element renders through the __html__ protocol: IPython's html
@@ -3617,10 +3178,7 @@
             "import htpy\nResult.of(htpy.div(class_='x')['<hi>'])", budget=3.0, name="htpy"
         )
         await htpy_job.task
-        htpy_outputs = conn.execute(
-            "SELECT outputs FROM executions WHERE id = ?", (htpy_job.id,)
-        ).fetchone()[0]
-        htpy_html = [out["data"].get("text/html") for out in json.loads(htpy_outputs)][-1]
+        htpy_html = [out["data"].get("text/html") for out in runtime._job_outputs(htpy_job)][-1]
         assert htpy_html == '<div class="x">&lt;hi&gt;</div>', htpy_html
 
         # A display() call made while a job runs is captured too.
@@ -3630,10 +3188,7 @@
             name="disp",
         )
         await disp_job.task
-        disp_outputs = conn.execute(
-            "SELECT outputs FROM executions WHERE id = ?", (disp_job.id,)
-        ).fetchone()[0]
-        disp_mimes = {mime for out in json.loads(disp_outputs) for mime in out["data"]}
+        disp_mimes = {mime for out in runtime._job_outputs(disp_job) for mime in out["data"]}
         assert "text/html" in disp_mimes, ("display mimes", disp_mimes)
 
         # A Result splits the human view (HTML on the dashboard) from the model
@@ -3642,8 +3197,7 @@
         from ix_notebook_mcp import outputs
         res_job = await run("Result(user_html='<b>hi</b>', llm_result='just-text')", budget=3.0, name="res")
         await res_job.task
-        res_outputs = conn.execute("SELECT outputs FROM executions WHERE id = ?", (res_job.id,)).fetchone()[0]
-        res_bundle = [out["data"] for out in json.loads(res_outputs)][-1]
+        res_bundle = [out["data"] for out in runtime._job_outputs(res_job)][-1]
         assert res_bundle.get("text/html") == "<b>hi</b>", res_bundle
         mcp = outputs.to_mcp([{"output_type": "execute_result", "data": res_bundle, "metadata": {}}])
         texts = [c.text for c in mcp if getattr(c, "text", None) is not None]
@@ -3654,22 +3208,16 @@
         # breaks nbformat -- and its keys reach the model text.
         dwim_job = await run("Result({'alpha': 1, 'beta': 2})", budget=3.0, name="dwim")
         await dwim_job.task
-        dwim_row = conn.execute(
-            "SELECT status, outputs FROM executions WHERE id = ?", (dwim_job.id,)
-        ).fetchone()
-        assert dwim_row["status"] == "done", dwim_row["status"]
-        dwim_bundle = [out["data"] for out in json.loads(dwim_row["outputs"])][-1]
+        assert dwim_job.status == "done", dwim_job.status
+        dwim_bundle = [out["data"] for out in runtime._job_outputs(dwim_job)][-1]
         assert isinstance(dwim_bundle.get("text/html"), str) and dwim_bundle["text/html"], dwim_bundle
         assert "alpha" in dwim_bundle.get("text/plain", "") and "beta" in dwim_bundle["text/plain"], dwim_bundle
 
         # Multiple values are ALL shown (not silently collapsed to the first).
         multi_job = await run("Result(True, [1, 2, 3])", budget=3.0, name="multi")
         await multi_job.task
-        multi_row = conn.execute(
-            "SELECT status, outputs FROM executions WHERE id = ?", (multi_job.id,)
-        ).fetchone()
-        assert multi_row["status"] == "done", multi_row["status"]
-        multi_text = [out["data"].get("text/plain", "") for out in json.loads(multi_row["outputs"])][-1]
+        assert multi_job.status == "done", multi_job.status
+        multi_text = [out["data"].get("text/plain", "") for out in runtime._job_outputs(multi_job)][-1]
         # Both values are shown: the bool by its repr, the list as its one-column
         # frame (NUON rows 1/2/3), not collapsed to just the first value.
         assert "true" in multi_text and "[[value]; [1], [2], [3]]" in multi_text, ("multi-value dropped a value", multi_text)
@@ -3698,6 +3246,7 @@
 
     store_path = tempfile.mktemp(suffix=".db")
     os.environ["IX_MCP_STORE"] = store_path
+    os.environ["WEAVE_URL"] = "off"
 
     from ix_notebook_mcp import outputs, runtime
 
@@ -3707,8 +3256,6 @@
 
 
     async def main():
-        conn = sqlite3.connect(store_path)
-        conn.row_factory = sqlite3.Row
 
         # A yielding cell streams multiple Results; its top-level names persist.
         code = (
@@ -3722,9 +3269,7 @@
         await job.task
         assert job.status == "done", (job.status, job.error)
         assert ns["acc"] == 3, ns.get("acc")
-        outs = json.loads(
-            conn.execute("SELECT outputs FROM executions WHERE id = ?", (job.id,)).fetchone()[0]
-        )
+        outs = runtime._job_outputs(job)
         htmls = [o["data"].get("text/html") for o in outs if "text/html" in o["data"]]
         assert len(htmls) == 4, ("expected 4 yielded results", len(htmls), outs)
 
@@ -3741,9 +3286,7 @@
         bare = await run("yield 123", budget=3.0, name="bare")
         await bare.task
         assert bare.status == "done", (bare.status, bare.error)
-        bare_outs = json.loads(
-            conn.execute("SELECT outputs FROM executions WHERE id = ?", (bare.id,)).fetchone()[0]
-        )
+        bare_outs = runtime._job_outputs(bare)
         bare_mcp = outputs.to_mcp(
             [{"output_type": "display_data", "data": o["data"], "metadata": {}} for o in bare_outs]
         )
@@ -3852,42 +3395,10 @@
     assert set(bound) == {"df", "n"}, bound
     assert bound["df"]["kind"] == "dataframe" and bound["n"]["summary"] == "7", bound
 
-    # Opening a pre-bindings store migrates it, and a second open (the kernel and
-    # dashboard each open the store) is a no-op rather than an error.
-    from ix_notebook_mcp import store as store_mod
-
-    legacy = tempfile.mktemp(suffix=".db")
-    seed = sqlite3.connect(legacy)
-    seed.execute(
-        "CREATE TABLE executions (id TEXT PRIMARY KEY, name TEXT, code TEXT NOT NULL, "
-        "status TEXT NOT NULL, started_at REAL NOT NULL, ended_at REAL, "
-        "output TEXT, result TEXT, error TEXT, outputs TEXT)"
-    )
-    seed.commit()
-    seed.close()
-    conn_a = store_mod.connect(legacy)
-    store_mod.connect(legacy)
-    migrated = {row[1] for row in conn_a.execute("PRAGMA table_info(executions)")}
-    assert "bindings" in migrated, migrated
-
-    # The duplicate-column race itself: a connection that observed the column
-    # missing (here forced via a shim) but runs ALTER after another connection
-    # already added it must swallow the error, not raise. This exercises the
-    # except branch the idempotency case above skips.
-    class _StaleSchema:
-        def __init__(self, conn):
-            self._conn = conn
-
-        def execute(self, sql, *args):
-            if sql.startswith("PRAGMA table_info"):
-                return [(0, "id"), (1, "name")]  # pretend bindings is still absent
-            return self._conn.execute(sql, *args)
-
-    store_mod._migrate(_StaleSchema(conn_a))  # ALTER -> duplicate column -> caught
-
-    # End to end: a finished job snapshots its bindings into the store row.
+    # End to end: a finished job snapshots the bindings that persistence emits.
     store_path = tempfile.mktemp(suffix=".db")
     os.environ["IX_MCP_STORE"] = store_path
+    os.environ["WEAVE_URL"] = "off"
 
     from IPython.core.interactiveshell import InteractiveShell
 
@@ -3903,10 +3414,7 @@
     async def main():
         job = await run("frame = pl.DataFrame({'a': [1, 2]})\nResult.ok('made it')", budget=3.0, name="bind")
         await job.task
-        conn = sqlite3.connect(store_path)
-        conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT bindings FROM executions WHERE id = ?", (job.id,)).fetchone()
-        stored = json.loads(row["bindings"])
+        stored = runtime._cell_bindings(job)
         assert stored.get("frame", {}).get("kind") == "dataframe", stored
         # `pl` is referenced and live, so it is described as a module.
         assert stored.get("pl", {}).get("kind") == "module", stored
@@ -5628,34 +5136,6 @@
       mkdir -p "$out"
     '';
 
-  # The store's async facade (packages/mcp/tests/test_store_async.py,
-  # index#2348): AsyncConn confines every store call to one worker thread off
-  # the shared event loop, and the pane bridge's `data_version` idle gate
-  # re-renders only on a foreign commit. Reuses the channel interpreter
-  # (ix_notebook_mcp + aiohttp + pytest).
-  storeAsyncTestSource = builtins.path {
-    name = "ix-mcp-store-async-test";
-    path = ./tests/test_store_async.py;
-  };
-  storeAsyncTests =
-    pkgs.runCommand "ix-mcp-store-async-tests"
-    {
-      nativeBuildInputs = [channelTestPython];
-      strictDeps = true;
-    }
-    ''
-      export HOME=$TMPDIR/home
-      mkdir -p "$HOME"
-      cp ${storeAsyncTestSource} "$TMPDIR/test_store_async.py"
-      ${lib.getExe channelTestPython} -m pytest "$TMPDIR/test_store_async.py" -q -p no:cacheprovider >stdout 2>stderr || {
-        echo "ix-mcp store-async tests failed:" >&2
-        cat stdout stderr >&2
-        exit 1
-      }
-      cat stdout
-      mkdir -p "$out"
-    '';
-
   # Background-task failure reporting (packages/mcp/tests/test_task_errors.py):
   # a fire-and-forget task that dies with an unretrieved exception must be
   # reported at completion into `task_errors` (asyncio's own warning only fires
@@ -5941,6 +5421,10 @@
     name = "ix-mcp-linear-triage-test";
     path = ./tests/test_linear_triage.py;
   };
+  linearTestSupport = builtins.path {
+    name = "ix-mcp-linear-test-support";
+    path = ./tests/linear_test_support.py;
+  };
   linearTriageTests =
     pkgs.runCommand "ix-mcp-linear-triage-tests"
     {
@@ -5951,6 +5435,7 @@
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
       cp ${linearTriageTestSource} "$TMPDIR/test_linear_triage.py"
+      cp ${linearTestSupport} "$TMPDIR/linear_test_support.py"
       ${lib.getExe linearTriageTestPython} -m pytest "$TMPDIR/test_linear_triage.py" -q -p no:cacheprovider >stdout 2>stderr || {
         echo "ix-mcp linear triage tests failed:" >&2
         cat stdout stderr >&2
@@ -5985,6 +5470,7 @@
       mkdir -p "$HOME"
       mkdir -p "$TMPDIR/fixtures"
       cp ${noxAutotriageTestSource} "$TMPDIR/test_nox_autotriage.py"
+      cp ${linearTestSupport} "$TMPDIR/linear_test_support.py"
       cp -r ${noxAutotriageTestFixtures}/. "$TMPDIR/fixtures/"
       ${lib.getExe noxAutotriageTestPython} -m pytest "$TMPDIR/test_nox_autotriage.py" -q -p no:cacheprovider >stdout 2>stderr || {
         echo "ix-mcp nox-autotriage tests failed:" >&2
@@ -6037,6 +5523,7 @@
     ps.pytest
     ps.polars
     ps.pydantic
+    privateSessionModule
     slackModule
   ]);
   slackTestSource = builtins.path {
@@ -6070,6 +5557,7 @@
     ps.pytest
     ps.pydantic
     ps.google-auth
+    privateSessionModule
     googleAuthModule
   ]);
   googleAuthTestSource = builtins.path {
@@ -6216,12 +5704,8 @@ in
               runtimeSmoke
               typecheckSmoke
               sessionSmoke
-              sessionIdentitySmoke
-              feedSmoke
-              apiSmoke
               inputsTests
               channelTests
-              storeAsyncTests
               mcpUiTests
               taskErrorsTests
               readStatsTests
@@ -6238,7 +5722,6 @@ in
               bindingsSmoke
               bindDefaultSmoke
               sshAuthSockSmoke
-              dashboardLauncherSmoke
               viewSmoke
               nixSmoke
               fleetSmoke
@@ -6276,5 +5759,8 @@ in
               ghosttySmoke
               ;
           };
+      }
+      // lib.optionalAttrs (updateScript != null) {
+        inherit updateScript;
       };
   })

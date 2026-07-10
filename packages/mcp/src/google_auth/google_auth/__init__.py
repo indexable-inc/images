@@ -52,10 +52,12 @@ import os
 import subprocess
 import webbrowser
 from email.message import EmailMessage
+from functools import partial
 from typing import Any
 
 from google.oauth2.credentials import Credentials
 from pydantic import BaseModel, ConfigDict, ValidationError
+from private_session import SHARED_ENV, require_private_session
 
 __all__ = [
     "GoogleAuthError",
@@ -125,24 +127,12 @@ class GoogleAuthError(RuntimeError):
 # participants. Incognito is the default, so an unset (or empty) value means a
 # token may be minted; only a truthy value marks the session shared and refuses
 # minting, keeping the personal Google grant out of synced room state.
-SHARED_ENV = "IX_MCP_SHARED"
-
-
-def _require_incognito() -> None:
-    """Allow Google access unless the session is a shared (multiplayer) room.
-
-    Gmail/Calendar read personal data, so they are confined to incognito
-    sessions -- the default for a plain ix-mcp. A shared room marks the MCP it
-    replicates across participants with ``IX_MCP_SHARED``; only then is access
-    refused, so a personal credential never reaches state other people can see.
-    """
-    if os.environ.get(SHARED_ENV):
-        raise GoogleAuthError(
-            "Gmail and Calendar are not available in a shared (multiplayer) room "
-            "(IX_MCP_SHARED is set), because they would expose a personal mailbox "
-            "to everyone in the room. Use them from an incognito chat instead; its "
-            "transcript and credential stay private to you."
-        )
+_require_incognito = partial(
+    require_private_session,
+    "Gmail and Calendar",
+    "a personal mailbox",
+    GoogleAuthError,
+)
 
 
 def _binary() -> str:

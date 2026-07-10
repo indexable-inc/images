@@ -34,7 +34,7 @@ use serde_json::Value;
 use snafu::ResultExt as _;
 use source_meta::sanitize;
 
-use crate::error::{ReadDirSnafu, ReadFileSnafu, Result};
+use crate::error::{ReadFileSnafu, Result};
 use crate::record::RolloutItem;
 
 /// Injected-context wrappers Codex prepends to user-role message blocks.
@@ -67,33 +67,7 @@ const INJECTED_BLOCK_PREFIXES: &[&str] = &[
 /// error (not a silently empty success). Absence is normal: most homes have
 /// no Codex sessions, and the privileged fleet run walks many of them.
 pub fn collect_rollouts(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(error).context(ReadDirSnafu {
-                path: dir.to_path_buf(),
-            });
-        }
-    };
-    for entry in entries {
-        let entry = entry.context(ReadDirSnafu {
-            path: dir.to_path_buf(),
-        })?;
-        let file_type = entry.file_type().context(ReadDirSnafu {
-            path: dir.to_path_buf(),
-        })?;
-        if file_type.is_symlink() {
-            continue;
-        }
-        let path = entry.path();
-        if file_type.is_dir() {
-            collect_rollouts(&path, out)?;
-        } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == "jsonl") {
-            out.push(path);
-        }
-    }
-    Ok(())
+    source_meta::files::collect_jsonl_no_follow(dir, out, crate::error::read_dir)
 }
 
 /// Parse every embeddable item from one rollout file.

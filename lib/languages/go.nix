@@ -10,7 +10,7 @@
   channel default without naming a version.
   */
   toolchainsFor = pkgs: {
-    "latest" = pkgs.go;
+    latest = pkgs.go;
     "1.23" = pkgs.go_1_23;
     "1.25" = pkgs.go_1_25;
     "1.26" = pkgs.go_1_26;

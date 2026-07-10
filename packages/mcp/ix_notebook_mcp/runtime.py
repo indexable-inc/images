@@ -53,6 +53,9 @@ import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any, overload
 
+if TYPE_CHECKING:
+    import polars as pl
+
 from . import readstats, registry, typecheck
 from .config import build_stamp, process_cwd
 
@@ -62,6 +65,19 @@ _ix_current: contextvars.ContextVar = contextvars.ContextVar("ix_current_job", d
 # and the dashboard). A chatty/runaway job keeps only the most recent slice, so
 # memory, store writes, and poll payloads all stay bounded.
 _MAX_OUTPUT_CHARS = 256_000
+
+# n-pty chunk-stream flush policy: bulk job output rides CAS as ~1 chunk fact
+# per flush instead of per-character facts. Flush when either
+# _STREAM_FLUSH_BYTES accumulate (size cap, checked at feed time) or
+# _STREAM_FLUSH_SECS elapse since the first unflushed byte (latency cap,
+# checked by the _flusher tick), whichever first. Volume math: a saturated
+# stream lands one fact per 4096 output bytes instead of 4096 per-character
+# facts (~4e3 fewer), and every avoided fact also carries fixed journal
+# framing (seq, entity, attr, value tagging) that dwarfs a 1-byte payload,
+# so total journal volume sits ~5 orders of magnitude under per-character
+# facts; an idle trickle is capped at 1 fact/s.
+_STREAM_FLUSH_BYTES = 4096
+_STREAM_FLUSH_SECS = 1.0
 
 # Bounded record of background-task failures, newest last; bound into the user
 # namespace as `task_errors`. asyncio only reports a failed, never-awaited task
@@ -185,9 +201,9 @@ JOB_MIME = "application/x-ix-job+json"
 IX_LLM_MIME = "application/x-ix-llm+json"
 
 # The custom mime a Result uses to carry a STRUCTURED human view — a
-# ``{"renderer": <name>, "data": <json>}`` spec the dashboard renders natively
-# (pane_bridge republishes it as a `data` pane routed through the frontend's
-# renderer registry) instead of a baked HTML string in a sandboxed frame.
+# ``{"renderer": <name>, "data": <json>}`` spec a view-aware frontend routes
+# through its renderer registry instead of a baked HTML string in a sandboxed
+# frame; it persists with the run's stored outputs (see _normalize_bundle).
 # Mirrors outputs.IX_VIEW_MIME.
 IX_VIEW_MIME = "application/x-ix-view+json"
 
@@ -235,6 +251,86 @@ def _rename_current_job(name: str) -> None:
     if _store is not None and _store_conn is not None:
         with contextlib.suppress(Exception):  # best-effort: a store write must not abort user code
             _store.rename(_store_conn, id=job.id, name=name)
+
+
+class _StreamWriter:
+    """Full-fidelity job output -> CAS chunk stream (weave2 n-pty, index side).
+
+    ``Job._append`` feeds every write here besides the trimmed in-memory
+    buffer: the existing previews (``last_output``, ``line`` facts) stay the
+    cheap derived view, this stream keeps the complete bytes. On the first
+    byte the writer mints ``pty-stream:<job id8>`` child_of the run/process
+    entity; bytes then buffer locally and flush as ONE ``(S, chunk, <hash>)``
+    fact per the _STREAM_FLUSH_BYTES/_STREAM_FLUSH_SECS policy above, with a
+    final flush on job exit (``_persist_final``). Flushed bytes ride the
+    store's write-behind queue and the CAS put happens on its writer thread,
+    so a flush never blocks user prints on HTTP. With ``WEAVE_URL=off`` (or
+    no store at all) the writer is entirely inert: nothing buffers, nothing
+    is minted."""
+
+    __slots__ = ("_buf", "_buflen", "_ent", "_first_ts", "_job")
+
+    def __init__(self, job: Job) -> None:
+        self._job = job
+        self._ent: str | None = None
+        self._buf: list[bytes] = []
+        self._buflen = 0
+        self._first_ts = 0.0
+
+    def feed(self, s: str) -> None:
+        if _store is None or _store_conn is None or _store_conn.disabled or not s:
+            return
+        with contextlib.suppress(Exception):  # best-effort: a store write must not abort user code
+            if self._ent is None:
+                self._ent = _store.stream_open(_store_conn, id=self._job.id, kind=self._job.kind)
+            if not self._buf:
+                self._first_ts = time.monotonic()
+            data = s.encode("utf-8", "replace")
+            self._buf.append(data)
+            self._buflen += len(data)
+            if self._buflen >= _STREAM_FLUSH_BYTES:
+                self._flush()
+
+    def poll(self) -> None:
+        """Time-cap flush; the _flusher tick is this writer's only clock."""
+        if self._buf and time.monotonic() - self._first_ts >= _STREAM_FLUSH_SECS:
+            with contextlib.suppress(Exception):  # best-effort: a store write must not kill the loop
+                self._flush()
+
+    def close(self) -> None:
+        """Final flush on job exit, so the last partial chunk is never lost."""
+        if self._buf:
+            with contextlib.suppress(Exception):  # best-effort: persist during cleanup must not raise
+                self._flush()
+
+    def _flush(self) -> None:
+        # Swap-out, not clear-in-place: a concurrent feed (a to_thread print)
+        # lands either wholly in this chunk or wholly in the next.
+        buf, self._buf, self._buflen = self._buf, [], 0
+        _store.stream_chunk(_store_conn, self._ent, b"".join(buf))
+
+    def _snapshot(self, state_json: str) -> None:
+        """Documented seam, unused for now: assert (S, snapshot, <hash>) of a
+        terminal-emulator state so replay can seek instead of replaying from
+        the start. No emulator ships in this env (pyte is deliberately not a
+        dependency), so nothing calls this yet; the weave-side replay renderer
+        treats a stream with no snapshots as replay-from-start, so chunks
+        alone are complete. ``state_json`` contract (version 1):
+
+            {"v": 1, "cols": int, "rows": int,
+             "cursor": {"x": int, "y": int},
+             "lines": [{"text": str, "attrs": [[start, len, sgr]]?}]}
+
+        ``attrs`` is optional per line: [start, len, sgr] spans; ``sgr`` is
+        the semicolon-joined SGR parameter list exactly as it would appear in
+        CSI <params> m, applied to that span from a fresh default state
+        ("1;31" = bold red). Lines are padded/truncated to ``cols``. Agreed
+        with the weave-side vt100 replay renderer (viz/src/lib/vt/)."""
+        if _store is None or _store_conn is None or _store_conn.disabled:
+            return
+        if self._ent is None:
+            self._ent = _store.stream_open(_store_conn, id=self._job.id, kind=self._job.kind)
+        _store.stream_snapshot(_store_conn, self._ent, state_json.encode("utf-8"))
 
 
 class _Tee:
@@ -354,6 +450,9 @@ class Job:
         self._exc_tb: types.TracebackType | None = None
         self._buf: list[str] = []
         self._buflen = 0
+        # Full-fidelity output -> CAS chunk stream (weave2 n-pty); inert
+        # unless a store is configured.
+        self._stream = _StreamWriter(self)
         # Rich outputs (mime bundles) display()-ed while this job runs.
         self._displays: list[dict] = []
         self.task: asyncio.Task | None = None
@@ -367,11 +466,18 @@ class Job:
         # Set once __ix_run returns before the task finishes. When such a job
         # reaches a terminal state later, notify the agent session.
         self.backgrounded = False
+        # The live weave view entity backing this run's human HTML (weave2
+        # n-toolviews), set by _persist_final once the finished result is
+        # stored; rides the job summary so the server attaches it to the tool
+        # result's _meta. None while running, when the result carries no
+        # human HTML, or when persistence is off (WEAVE_URL=off).
+        self.weave_view: str | None = None
 
     def _append(self, s: str) -> None:
         """Append output, trimming to the most recent _MAX_OUTPUT_CHARS so a
         runaway job cannot grow the buffer (or the store row / poll payload)
         without bound."""
+        self._stream.feed(s)  # full bytes ride the chunk stream; the trim below only bounds the preview
         self._buf.append(s)
         self._buflen += len(s)
         if self._buflen > _MAX_OUTPUT_CHARS:
@@ -2766,6 +2872,8 @@ async def _runner(job: Job, ns: dict) -> None:
 def _persist_final(job: Job) -> None:
     if _store is None or _store_conn is None:
         return
+    # Final chunk flush first: the stream tail lands before the finish facts.
+    job._stream.close()
     # Record this run's name references first, so the snapshot below already shows
     # the just-finished job among each name's assigned_in/used_in.
     _record_refs(job)
@@ -2784,6 +2892,16 @@ def _persist_final(job: Job) -> None:
             bindings=_cell_bindings(job),
             namespace=_namespace_snapshot(job),
         )
+    # A finished cell whose result carries a human HTML view becomes a live
+    # weave view entity (weave2 n-toolviews): the html goes to CAS once and
+    # the view hangs off the run entity for lineage and cascade cleanup; the
+    # id rides the job summary so the server attaches it to the tool result's
+    # _meta. Replays and spawns mint none -- a reopened session would
+    # otherwise duplicate views for cells that already have theirs.
+    html = getattr(job._result, "user_html", "") if job.kind == "cell" else ""
+    if html:
+        with contextlib.suppress(Exception):  # best-effort, like the writes above
+            job.weave_view = _store.save_tool_view(_store_conn, id=job.id, html=html, label=job.name)
 
 
 async def _spawn_runner(job: Job, aw: Awaitable[Any]) -> None:
@@ -3251,10 +3369,11 @@ def _normalize_bundle(data: dict, metadata: dict | None = None) -> dict:
         if len(encoded) > _MAX_IMAGE_BUNDLE:
             encoded = json.dumps({"text": text, "images": []})
         out[IX_LLM_MIME] = encoded
-    # Carry the structured human view (IX_VIEW_MIME) so pane_bridge can publish
-    # it as a native `data` pane. JSON cannot be clipped without corrupting it,
-    # so an oversize spec is dropped whole and the text/html fallback renders
-    # instead; producers keep their payloads under the cap (see _READ_CONTEXT_MAX).
+    # Carry the structured human view (IX_VIEW_MIME) so it persists with the
+    # run's stored outputs for native `data`-pane rendering. JSON cannot be
+    # clipped without corrupting it, so an oversize spec is dropped whole and
+    # the text/html fallback renders instead; producers keep their payloads
+    # under the cap (see _READ_CONTEXT_MAX).
     view = data.get(IX_VIEW_MIME)
     if isinstance(view, dict):
         encoded = json.dumps(view)
@@ -3490,7 +3609,8 @@ def doc(obj: Any) -> Result:
     Result -- so the documented "everything through Result" path also works for
     reading docs. ``help()`` only writes to stdout (not your channel) and returns
     ``None``, so ``Result(help(x))`` shows nothing; use ``doc(grep)`` instead.
-    Pair it with `api()`: `api('grep')` to find a name, `doc(grep)` to read it."""
+    Pair it with `api()`: filter its frame to find a name, then use
+    `doc(grep)` to read it."""
     name = getattr(obj, "__name__", None) or type(obj).__name__
     sig = ""
     if callable(obj):
@@ -3506,8 +3626,7 @@ def _build_row() -> dict:
     """The catalog's header row: which build this kernel IS. The in-band
     staleness signal (index#2110): when an agent's docs promise a helper or
     kwarg this catalog lacks, the stamp attributes the gap to a stale deploy
-    instead of a phantom API. Prepended after filtering, so even a filtered
-    miss (`api('check')` finding nothing) still shows it."""
+    instead of a phantom API."""
     return {
         "where": "kernel",
         "name": "build",
@@ -3518,37 +3637,34 @@ def _build_row() -> dict:
     }
 
 
-def api(filter: str | None = None) -> Any:
+def api() -> pl.DataFrame:
     """A live catalog of every helper the kernel gives you: the always-present
     namespace builtins (`Result`, `cells`, `jobs`, `sh`, ...) and the public
     surface of each bundled module (`view`, `nix`, `fleet`, ...), each with
-    its signature and a one-line summary. Call `api()` to discover what exists
-    instead of guessing names or grepping source; pass `filter` to match a
-    substring against the name, summary, or module. The first row is always the
+    its provenance, signature, and a one-line summary. Call `api()` to discover
+    what exists instead of guessing names or grepping source. Filter and sort the
+    returned Polars DataFrame directly, for example
+    `api().filter(pl.col("where") == "view")`. The first row is always the
     kernel's own build stamp (rev, commit date, age), so a catalog that lacks
     something your docs describe is attributable to a stale deploy.
 
-    Returns a polars DataFrame (filter/sort it further, e.g.
-    `api().filter(pl.col("where") == "view")`), or plain text if polars is absent.
+    Leave the frame as the cell's final expression or yield it. Passing it to
+    ``print`` converts it to Polars' terminal representation before MCP can render
+    the structured result.
     """
-    rows = _api_rows()
-    if filter:
-        q = filter.lower()
-        rows = [
-            r for r in rows
-            if q in r["name"].lower() or q in r["summary"].lower() or q in r["where"].lower()
-        ]
-    rows.insert(0, _build_row())
-    try:
-        import polars as _pl
+    import polars as pl
 
-        return _pl.DataFrame(
-            rows,
-            schema={"where": _pl.Utf8, "name": _pl.Utf8, "kind": _pl.Utf8, "sig": _pl.Utf8, "summary": _pl.Utf8},
-        )
-    except Exception:
-        width = max((len(r["sig"]) for r in rows), default=0)
-        return "\n".join(f'{r["where"]:>6}  {r["sig"]:<{width}}  {r["summary"]}' for r in rows)
+    rows = [_build_row(), *_api_rows()]
+    return pl.DataFrame(
+        rows,
+        schema={
+            "where": pl.Utf8,
+            "name": pl.Utf8,
+            "kind": pl.Utf8,
+            "sig": pl.Utf8,
+            "summary": pl.Utf8,
+        },
+    )
 
 
 def read_stats() -> dict[str, int]:
@@ -3772,6 +3888,7 @@ async def _flusher() -> None:
                     _store.update_output(
                         _store_conn, job.id, job.output, job._displays or None, line=job.line
                     )
+                job._stream.poll()  # time-cap chunk flush (weave2 n-pty)
         await _sweep_resources()
         _drain_inputs()
         cells._sync()
@@ -4201,6 +4318,10 @@ def _job_summary(job: Job) -> dict:
         # Where a still-running job is right now (cell line), so a budget-expired
         # reply can say not just "running" but "running, on line N".
         "line": _current_line(job) if job.running() else None,
+        # The run's live weave view entity (weave2 n-toolviews, set by
+        # _persist_final), so the server can attach it to the tool result's
+        # _meta. None while running or when no view was minted.
+        "weave_view": job.weave_view,
     }
 
 
@@ -4525,7 +4646,7 @@ def _install_signal_handlers() -> None:
     kernel whose event loop is blocked by a synchronous call.
 
     SIGUSR1: faulthandler dumps every thread's Python stack to the file named by
-    ``IX_MCP_KERNEL_TRACE`` (kept by ``kernel.TRACE_ENV``). The handler is C-level
+    ``IX_MCP_KERNEL_TRACE`` (kept by ``kernel_host.TRACE_ENV``). The handler is C-level
     so it runs even while the main thread is parked in a blocking call; the
     ``kernel_trace`` tool reads the file back.
 
@@ -4709,10 +4830,9 @@ def install(user_ns: dict | None = None) -> None:
     # sh/view; an explicit import returns the same module.
     _bind("asyncio", asyncio)
     _bind("json", json)
-    with contextlib.suppress(Exception):  # polars may be absent; skip binding pl
-        import polars as _polars_mod
+    import polars as _polars_mod
 
-        _bind("pl", _polars_mod)
+    _bind("pl", _polars_mod)
     _bind("api", api)
     _bind("read_stats", read_stats)
     # Failures of fire-and-forget tasks, newest last (see the deque's comment).

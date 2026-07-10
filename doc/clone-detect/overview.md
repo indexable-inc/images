@@ -93,11 +93,17 @@ skipping symlinks/non-UTF-8/`ignore-file` files, and collecting
   `|A∩B| / |A∪B|`) or `overlap` (containment, `|A∩B| / min(|A|,|B|)`), which
   catches copy-then-insert clones Jaccard misses but also nets structural
   boilerplate, so pair it with a higher threshold (`>= 0.9` for repo-scale
-  sweeps; lower only on small targeted trees).
+  sweeps; lower only on small targeted trees). Candidate nodes whose byte
+  ranges overlap in one file are rejected because they are two views of the
+  same syntax tree, not two copies of code.
   `rayon`-parallel across kinds.
 - **Sequence** (`--sequences`, `sequences.rs`): sliding window of statements.
 - `dedup_subsumed` drops groups whose fragments are byte-range contained in a
   larger group (e.g. a function and its block, `detector.rs:139-202`).
+- Groups are emitted in descending `line_impact` order: the sum of fragment
+  line counts after retaining the largest fragment as the canonical original.
+  This puts the consolidation with the most estimated removable lines first;
+  the global percentage separately unions line ranges across all groups.
 
 `DetectionResult` (`types.rs`) is `{ instances: Vec<CloneGroup>, stats }`;
 `Kind` is `Type1 | Type2 | Type3 { similarity, metric } | Sequence

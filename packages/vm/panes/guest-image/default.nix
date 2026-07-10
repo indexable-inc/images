@@ -94,16 +94,12 @@
   };
   # Mechanically re-pins the ./pins.json jar hashes from their URLs
   # (`nix run .#update`); bumping the LWJGL version is the human edit.
-  updateScript =
-    if updateScriptWriter == null
-    then null
-    else
-      ix.pins.mkUpdater {
-        writeNushellApplication = updateScriptWriter;
-        inherit nix;
-        pname = "panes-guest-image";
-        relPath = "packages/vm/panes/guest-image/pins.json";
-      };
+  updateScript = ix.pins.mkOptionalUpdater {
+    writeNushellApplication = updateScriptWriter;
+    inherit nix;
+    pname = "panes-guest-image";
+    relPath = "packages/vm/panes/guest-image/pins.json";
+  };
 in
   # Expose the raw disk directly as the package output (the repart module
   # produces it at `${system.build.image}/${image.filePath}`).

@@ -262,42 +262,10 @@ fn page_content(
     gpu.text(&header, tx + (tw - hw) * 0.5, oy + HEADER_TOP * s, s, INK, quads);
 
     let mut y = oy + BODY_TOP * s;
-    for line in wrap(gpu, book.page(idx), tw, s) {
+    for line in gpu.wrap_text(book.page(idx), tw, s) {
         if !line.is_empty() {
             gpu.text(&line, tx, y, s, INK, quads);
         }
         y += LINE * s;
     }
-}
-
-/// Greedy word-wrap `text` to `max_w` (physical px) using the font's own metrics.
-/// Each `\n` ends a line; a blank segment (from `\n\n`) yields a blank line.
-fn wrap(gpu: &Gpu, text: &str, max_w: f32, scale: f32) -> Vec<String> {
-    let mut out = Vec::new();
-    for seg in text.split('\n') {
-        if seg.trim().is_empty() {
-            out.push(String::new());
-            continue;
-        }
-        let mut line = String::new();
-        for word in seg.split_whitespace() {
-            let trial = if line.is_empty() {
-                word.to_string()
-            } else {
-                format!("{line} {word}")
-            };
-            // Keep the word on this line if it fits, or if the line is empty (a
-            // single over-long word still has to go somewhere).
-            if line.is_empty() || gpu.measure(&trial, scale) <= max_w {
-                line = trial;
-            } else {
-                out.push(std::mem::take(&mut line));
-                line = word.to_string();
-            }
-        }
-        if !line.is_empty() {
-            out.push(line);
-        }
-    }
-    out
 }

@@ -1,14 +1,10 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
+use clone_detect::{
+    DetectionResult, DetectionStats, Kind, duplicated_lines, duplication_percentage as ratio_pct,
+    rank_by_impact,
 };
-
-use clone_detect::{DetectionResult, DetectionStats, Kind};
 use clone_scanner::Output;
 
 const MIN_FRAGMENTS: usize = 2;
-/// Multiplier turning a ratio into a percentage (mirrors `detect`).
-const PERCENT: f64 = 100.0;
 
 /// Drop fragments in ignored files, then **recompute** the duplication stats
 /// over what survives.
@@ -82,7 +78,7 @@ pub fn by_patterns(
     let duplicated_lines = duplicated_lines(&filtered_clones);
     let duplication_pct = ratio_pct(duplicated_lines, total_lines);
 
-    Ok(DetectionResult {
+    let mut filtered = DetectionResult {
         instances: filtered_clones,
         stats: DetectionStats {
             files_scanned: result.stats.files_scanned,
@@ -95,36 +91,9 @@ pub fn by_patterns(
             type3_groups,
             sequence_groups,
         },
-    })
-}
-
-/// Deduplicated duplicated-line count over the surviving groups. Mirrors
-/// `detect::compute_duplicated_lines`: per group skip the first fragment (the
-/// "original"), and dedup line numbers per file across all groups.
-fn duplicated_lines(instances: &[clone_detect::CloneGroup]) -> usize {
-    let mut per_file: BTreeMap<&PathBuf, BTreeSet<usize>> = BTreeMap::new();
-    for group in instances {
-        for frag in group.fragments.iter().skip(1) {
-            let lines = per_file.entry(&frag.file).or_default();
-            for line in frag.lines.start..=frag.lines.end {
-                lines.insert(line);
-            }
-        }
-    }
-    per_file.values().map(BTreeSet::len).sum()
-}
-
-/// `100 * numerator / denominator`, `0.0` when the denominator is zero.
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "line counts stay far below f64 mantissa precision"
-)]
-fn ratio_pct(numerator: usize, denominator: usize) -> f64 {
-    if denominator == 0 {
-        0.0
-    } else {
-        (numerator as f64 / denominator as f64) * PERCENT
-    }
+    };
+    rank_by_impact(&mut filtered.instances);
+    Ok(filtered)
 }
 
 #[cfg(test)]

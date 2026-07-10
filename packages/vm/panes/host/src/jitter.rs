@@ -186,30 +186,20 @@ mod tests {
     }
 
     #[test]
-    fn overrun_drops_oldest_back_to_target() {
-        let buf = JitterBuffer::new(4, 8);
-        buf.push(&ramp(1, 8)); // exactly max: kept in full
-        // 8 + 2 > max: drop the oldest 6 so the post-push fill is target (4),
-        // leaving the newest samples [7, 8] ++ [9, 10].
-        buf.push(&ramp(9, 2));
-        assert_eq!(buf.stats().dropped_samples, 6);
-        let mut out = [0.0f32; 4];
-        assert_eq!(buf.pop_f32(&mut out), PopOutcome::Playing);
-        let expected: Vec<f32> = [7i16, 8, 9, 10].iter().map(|&s| f32::from(s) / 32768.0).collect();
-        assert_eq!(out.to_vec(), expected);
-    }
-
-    #[test]
-    fn giant_push_keeps_only_newest_target_samples() {
-        let buf = JitterBuffer::new(4, 8);
-        buf.push(&ramp(1, 2));
-        // 2 + 20 samples against max 8: everything but the newest 4 goes.
-        buf.push(&ramp(100, 20));
-        assert_eq!(buf.stats().dropped_samples, 18);
-        let mut out = [0.0f32; 4];
-        assert_eq!(buf.pop_f32(&mut out), PopOutcome::Playing);
-        let expected: Vec<f32> =
-            [116i16, 117, 118, 119].iter().map(|&s| f32::from(s) / 32768.0).collect();
-        assert_eq!(out.to_vec(), expected);
+    fn overruns_keep_the_newest_target_window() {
+        let cases = [
+            ("incremental", (1, 8), (9, 2), 6, [7_i16, 8, 9, 10]),
+            ("giant push", (1, 2), (100, 20), 18, [116, 117, 118, 119]),
+        ];
+        for (name, first, second, dropped, expected) in cases {
+            let buf = JitterBuffer::new(4, 8);
+            buf.push(&ramp(first.0, first.1));
+            buf.push(&ramp(second.0, second.1));
+            assert_eq!(buf.stats().dropped_samples, dropped, "{name}");
+            let mut out = [0.0f32; 4];
+            assert_eq!(buf.pop_f32(&mut out), PopOutcome::Playing, "{name}");
+            let expected = expected.map(|sample| f32::from(sample) / 32768.0);
+            assert_eq!(out, expected, "{name}");
+        }
     }
 }

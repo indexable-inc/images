@@ -162,7 +162,6 @@ dependencies = [
 name = "book"
 version = "0.1.0"
 dependencies = [
- "dirs",
  "glam",
  "overlay-core",
  "rusqlite",
@@ -182,7 +181,6 @@ dependencies = [
 name = "bossbar"
 version = "0.1.0"
 dependencies = [
- "dirs",
  "glam",
  "layershellev",
  "overlay-core",
@@ -1377,7 +1375,6 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 name = "orb"
 version = "0.1.0"
 dependencies = [
- "dirs",
  "glam",
  "overlay-core",
  "rusqlite",
@@ -1408,6 +1405,7 @@ version = "0.1.0"
 dependencies = [
  "block2",
  "bytemuck",
+ "dirs",
  "glam",
  "image",
  "objc2",

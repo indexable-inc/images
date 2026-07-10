@@ -807,6 +807,7 @@ version = "0.1.0"
 dependencies = [
  "astlog-core",
  "clap",
+ "error-chain",
  "serde_json",
  "snafu",
 ]
@@ -829,6 +830,7 @@ name = "astlog-py"
 version = "0.1.0"
 dependencies = [
  "astlog-core",
+ "error-chain",
  "pyo3",
 ]
 
@@ -1702,6 +1704,7 @@ version = "0.1.0"
 dependencies = [
  "clone-hash",
  "clone-scanner",
+ "clone-test-support",
  "rayon",
  "rustc-hash",
  "serde",
@@ -1736,6 +1739,7 @@ dependencies = [
  "ast-merge-langs",
  "clone-hash",
  "clone-pragma",
+ "clone-test-support",
  "ignore",
  "parking_lot",
  "rustc-hash",
@@ -1743,6 +1747,10 @@ dependencies = [
  "tempfile",
  "tracing",
 ]
+
+[[package]]
+name = "clone-test-support"
+version = "0.1.0"
 
 [[package]]
 name = "cmake"
@@ -2351,6 +2359,21 @@ name = "cursor-icon"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
+
+[[package]]
+name = "cve-scan"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "hex",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "toml 0.9.12+spec-1.1.0",
+]
 
 [[package]]
 name = "dag-runner"
@@ -3124,6 +3147,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "error-chain"
+version = "0.1.0"
+
+[[package]]
 name = "error-code"
 version = "3.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3441,6 +3468,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flecs-query-core",
+ "mcp-server-info",
  "rmcp",
  "schemars 1.2.1",
  "serde",
@@ -4141,6 +4169,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "google-auth",
  "google-calendar",
  "serde_json",
  "tokio",
@@ -4172,6 +4201,7 @@ dependencies = [
  "anyhow",
  "base64",
  "clap",
+ "google-auth",
  "google-gmail",
  "serde_json",
  "tokio",
@@ -4187,6 +4217,7 @@ dependencies = [
  "google-auth",
  "google-calendar",
  "google-gmail",
+ "mcp-server-info",
  "rmcp",
  "schemars 1.2.1",
  "serde",
@@ -4949,6 +4980,23 @@ name = "indenter"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "964de6e86d545b246d84badc0fef527924ace5134f30641c203ef52ba83f58d5"
+
+[[package]]
+name = "index-delta"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "plist",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "sha2 0.11.0",
+ "similar",
+ "tempfile",
+ "toml 1.1.2+spec-1.1.0",
+ "toml_edit 0.25.12+spec-1.1.0",
+]
 
 [[package]]
 name = "indexbench"
@@ -6042,6 +6090,13 @@ checksum = "a06de3016e9fae57a36fd14dba131fccf49f74b40b7fbdb472f96e361ec71a08"
 dependencies = [
  "autocfg",
  "rawpointer",
+]
+
+[[package]]
+name = "mcp-server-info"
+version = "0.1.0"
+dependencies = [
+ "rmcp",
 ]
 
 [[package]]
@@ -7850,6 +7905,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "panes-guest-transport",
  "panes-protocol",
  "tracing",
  "tracing-subscriber",
@@ -7863,11 +7919,21 @@ dependencies = [
  "anyhow",
  "clap",
  "lz4_flex 0.13.1",
+ "panes-guest-transport",
  "panes-protocol",
  "rayon",
  "smithay",
  "tracing",
  "tracing-subscriber",
+ "vsock",
+]
+
+[[package]]
+name = "panes-guest-transport"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "tracing",
  "vsock",
 ]
 
@@ -8284,6 +8350,19 @@ checksum = "9368d62437c8cbb7c31ee37fd8c08a7d390e09a3ff75698a674953f46705ffcb"
 dependencies = [
  "libc",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "plist"
+version = "1.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7da1d65da6dd5d1e44199ac0f58712d241c0f439f80adea8924d832384087f85"
+dependencies = [
+ "base64",
+ "indexmap 2.14.0",
+ "quick-xml 0.41.0",
+ "serde",
+ "time",
 ]
 
 [[package]]
@@ -9720,6 +9799,7 @@ name = "scipql"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "error-chain",
  "scipql-core",
 ]
 
@@ -9738,6 +9818,7 @@ dependencies = [
 name = "scipql-py"
 version = "0.1.0"
 dependencies = [
+ "error-chain",
  "pyo3",
  "scipql-core",
  "unibind",
@@ -11518,6 +11599,21 @@ dependencies = [
 
 [[package]]
 name = "toml"
+version = "0.9.12+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf92845e79fc2e2def6a5d828f0801e29a2f8acc037becc5ab08595c7d5e9863"
+dependencies = [
+ "indexmap 2.14.0",
+ "serde_core",
+ "serde_spanned 1.1.1",
+ "toml_datetime 0.7.5+spec-1.1.0",
+ "toml_parser",
+ "toml_writer",
+ "winnow 0.7.15",
+]
+
+[[package]]
+name = "toml"
 version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81f3d15e84cbcd896376e6730314d59fb5a87f31e4b038454184435cd57defee"
@@ -11538,6 +11634,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cda73e2f1397b1262d6dfdcef8aafae14d1de7748d66822d3bfeeb6d03e5e4b"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "toml_datetime"
+version = "0.7.5+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92e1cfed4a3038bc5a127e35a2d360f145e1f4b971b551a2ba5fd7aedf7e1347"
+dependencies = [
+ "serde_core",
 ]
 
 [[package]]
@@ -12296,6 +12401,7 @@ dependencies = [
  "serde_json",
  "syn 2.0.118",
  "unibind-core",
+ "unibind-test-support",
 ]
 
 [[package]]
@@ -12308,6 +12414,7 @@ dependencies = [
  "serde_json",
  "syn 2.0.118",
  "unibind-core",
+ "unibind-test-support",
 ]
 
 [[package]]
@@ -12320,6 +12427,7 @@ dependencies = [
  "serde_json",
  "syn 2.0.118",
  "unibind-core",
+ "unibind-test-support",
 ]
 
 [[package]]
@@ -12390,6 +12498,7 @@ dependencies = [
  "serde_json",
  "unibind-backend-ex",
  "unibind-core",
+ "unibind-test-support",
 ]
 
 [[package]]
@@ -12409,6 +12518,10 @@ version = "0.1.0"
 dependencies = [
  "futures",
 ]
+
+[[package]]
+name = "unibind-test-support"
+version = "0.1.0"
 
 [[package]]
 name = "unic-langid"

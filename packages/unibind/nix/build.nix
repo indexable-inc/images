@@ -9,9 +9,10 @@
   packageRegistry,
   rustWorkspace,
   buildPyStrictCheck,
+  wheelBuilder,
 }: let
   buildPy = import ./py.nix {
-    inherit lib pkgs packageRegistry rustWorkspace buildPyStrictCheck;
+    inherit lib pkgs packageRegistry rustWorkspace buildPyStrictCheck wheelBuilder;
   };
 
   buildTs = import ./ts.nix {

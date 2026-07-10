@@ -28,3 +28,26 @@ pub fn rust(base: &str, left: &str, right: &str) -> ast_merge_diff::Result {
 
     merger.merge()
 }
+
+pub struct CleanMergeCase {
+    pub name: &'static str,
+    pub base: &'static str,
+    pub left: &'static str,
+    pub right: &'static str,
+    pub expected: &'static [&'static str],
+}
+
+pub fn assert_clean_merges(cases: &[CleanMergeCase]) {
+    for case in cases {
+        let result = rust(case.base, case.left, case.right);
+        assert!(result.success, "{}: {}", case.name, result.content);
+        for needle in case.expected {
+            assert!(
+                result.content.contains(needle),
+                "{}: missing {needle:?} in {}",
+                case.name,
+                result.content
+            );
+        }
+    }
+}

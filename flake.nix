@@ -114,17 +114,15 @@
     };
 
     # Upstream openai/codex, patched in-repo (packages/agent/codex/patches).
-    # Pinned BY REV: the package vendors its Cargo dependencies behind a fixed
-    # `cargoHash` (packages/agent/codex/default.nix), so the base and the hash
-    # must move together. A branch-loose URL here lets any blanket `nix flake
-    # update` -- ours or a downstream consumer's (ix locks this input
-    # transitively) -- float the base past the hash, which broke every ix prod
-    # deploy for 13h on 2026-07-07. Bump this rev deliberately, then
-    # `nix run .#rebase-patches -- codex` and regenerate the cargoHash in the
-    # same change (fork-packages.nix marks it `autoUpdate = false`, so the
-    # scheduled fork-sync leaves it alone).
+    # Pinned BY REV: importCargoLock removes the aggregate cargoHash, but git
+    # dependencies still carry fixed output hashes in the package. A
+    # branch-loose URL lets a blanket `nix flake update` float the source past
+    # those hashes, which broke every ix prod deploy for 13h on 2026-07-07.
+    # Bump this rev deliberately, run `nix run .#rebase-patches -- codex`, then
+    # build Codex and refresh any git dependency hashes named by Nix. The
+    # scheduled content and fork updaters intentionally leave this input alone.
     codex-src = {
-      url = "github:openai/codex/be33f80bc65159c094ecd06bf155afa3061ce23d";
+      url = "github:openai/codex/1f0566d3f59298d1bb88820a0d35294f1eeb07ea";
       flake = false;
     };
 
@@ -409,9 +407,41 @@
         "aarch64-darwin"
       ] (system: raw.${system} // (linuxDarwinAliases.${system} or {}));
     packages = withDarwinAliases (collect "packages");
+    rawSecurityRoots = collect "securityRoots";
+    rawSecurityRootPaths = collect "securityRootPaths";
+    securityRoots =
+      rawSecurityRoots
+      // {
+        aarch64-darwin =
+          rawSecurityRoots.aarch64-darwin
+          // lib.mapAttrs (
+            name: _:
+              (rawSecurityRoots.aarch64-darwin.${name} or rawSecurityRoots.x86_64-linux.${name})
+              // {
+                attr = "packages.aarch64-darwin.${name}";
+              }
+          )
+          (linuxDarwinAliases.aarch64-darwin or {});
+      };
+    securityRootPaths =
+      rawSecurityRootPaths
+      // {
+        aarch64-darwin =
+          rawSecurityRootPaths.aarch64-darwin
+          // (linuxDarwinAliases.aarch64-darwin or {});
+      };
     indexPackages = system: packages.${system};
     personalConfigRoot = ./users/andrewgazelka/config;
     personalOptionsModule = ./users/andrewgazelka/options.nix;
+    mutableFilesHomeModule = import ./modules/home/mutable-files.nix {
+      inherit indexPackages;
+      portableServicesModule = ix.portableServices.homeModule;
+    };
+    # One instance shared by every wiring site (the workstation profile and
+    # homeModules.provenance); the module's `key` also dedups the instances a
+    # consumer combines, but there is no reason to make them re-apply the
+    # walker.
+    provenanceHomeModule = import ./modules/home/provenance.nix {inherit (ix) provenance;};
     claudeCodeHomeModule = import ./packages/agent/home-manager/claude-code.nix {
       inherit indexPackages;
       promptModule = ./packages/agent/prompt;
@@ -432,10 +462,11 @@
     personalWorkstationModule = import ./users/andrewgazelka/profiles/workstation.nix {
       inherit indexPackages personalServicesModule ix;
       configRoot = personalConfigRoot;
-      mutableJsonModule = ix.mutableJson.homeModule;
-      provenanceModule = import ./modules/home/provenance.nix {inherit (ix) provenance;};
+      mutableFilesModule = mutableFilesHomeModule;
+      provenanceModule = provenanceHomeModule;
       optionsModule = personalOptionsModule;
       indexSkillsSrc = paths.skills;
+      tmuxModule = ./modules/home/tmux.nix;
     };
     personalDarwinHomeModule = import ./users/andrewgazelka/profiles/darwin-home.nix {
       inherit indexPackages ix;
@@ -489,14 +520,57 @@
       # zero eval. Set `provenance.rev = self.rev or self.dirtyRev or null`
       # in the consuming flake. See modules/darwin/provenance.nix.
       provenance = import ./modules/darwin/provenance.nix {inherit (ix) provenance;};
+      # System-level (root, /etc) adapter for declarative-but-writable files:
+      # same model as homeModules.mutable-files, state under
+      # /var/db/index-delta, boot-time reseed daemon. See
+      # modules/darwin/mutable-files.nix.
+      mutable-files = import ./modules/darwin/mutable-files.nix {
+        indexPackages = system: packages.${system};
+      };
+      # Declarative NFS automounts via macOS autofs: each entry renders a
+      # direct-map line, /etc/auto_master gains the include idempotently, and
+      # activation reloads automountd. See modules/darwin/nfs.nix.
+      nfs = ./modules/darwin/nfs.nix;
     };
     homeModules = {
       # Workstation-facing home-manager module: declare a service once, get a
       # native launchd agent on macOS and native systemd user units on Linux.
       portable-services = ix.portableServices.homeModule;
+      tmux = ./modules/home/tmux.nix;
+      # Shared modern-CLI package baseline (bat, delta, eza, fd, ripgrep, ...).
+      # Import it and set `cliBaseline.enable = true`; override
+      # `cliBaseline.packages` to trim or swap tools. See
+      # modules/home/cli-baseline.nix.
+      cli-baseline = ./modules/home/cli-baseline.nix;
+      # Per-project nvim-server multiplexer (tmux replacement): one headless
+      # nvim server per git root, `mux` attaches with --remote-ui, and the
+      # optional zsh integration makes bare `ssh <host>`/`mosh <host>`
+      # auto-attach the remote's mux. Import it and set
+      # `programs.mux.enable = true`; needs an nvim config shipping a `mux`
+      # lua module. See modules/home/mux.nix.
+      mux = import ./modules/home/mux.nix {inherit ix;};
+      # XDG hygiene: point tool state/caches/config (cargo, go, npm/pnpm,
+      # python, docker, aws, psql/sqlite histories, wget/less) at the XDG
+      # base directories instead of $HOME. Import it and set
+      # `xdgTidy.enable = true`. See modules/home/xdg-tidy.nix.
+      xdg-tidy = ./modules/home/xdg-tidy.nix;
+      # Cursor-shape feedback for zsh vi mode (beam insert, block command,
+      # reset around every prompt/command). Import it and set
+      # `zshViCursor.enable = true`. See modules/home/zsh-vi-cursor.nix.
+      zsh-vi-cursor = ./modules/home/zsh-vi-cursor.nix;
       # Declarative-but-writable JSON config files (last-applied 3-way merge),
       # for config an app rewrites at runtime. See lib/mutable-json.nix.
+      # Prefer `mutable-files` below for new config: it never auto-merges,
+      # covers more formats, and queues drift for explicit resolution.
       mutable-json = ix.mutableJson.homeModule;
+      # Declarative-but-writable files with logical (format-aware) drift
+      # tracking and a model-oriented resolution queue — no auto-merge.
+      # Declared content seeds a plain writable file; ephemeral files reset
+      # at login (drift journaled), durable files queue base-vs-drift
+      # conflicts in `index-delta status --json` for discard / adopt /
+      # absorb-into-Nix via `index-delta apply-ops`. See
+      # modules/home/mutable-files.nix and packages/index-delta.
+      mutable-files = mutableFilesHomeModule;
       # Reusable workstation module (macOS): declare Raycast Focus session
       # defaults (title, filter mode, duration) and have them written to the
       # com.raycast.macos defaults domain at switch time. Import it and set
@@ -508,7 +582,7 @@
       # file:line that defined them, and `whence <path>` reads it with zero
       # eval. Set `provenance.rev = self.rev or self.dirtyRev or null` in
       # the consuming flake. See modules/home/provenance.nix.
-      provenance = import ./modules/home/provenance.nix {inherit (ix) provenance;};
+      provenance = provenanceHomeModule;
       # Agent CLI modules: Home Manager is the user-facing configuration
       # surface, while the package wrappers remain the implementation detail.
       claude-code = claudeCodeHomeModule;
@@ -523,11 +597,19 @@
       # runs on. See users/andrewgazelka/home.nix.
       andrewgazelka-portable = ./users/andrewgazelka/profiles/portable.nix;
       andrewgazelka-development = import ./users/andrewgazelka/profiles/development.nix {
-        agentLua = ./modules/profiles/base/nvim/plugins/agent.lua;
+        agentLua = ./modules/profiles/base/nvim/agent.lua;
         configRoot = personalConfigRoot;
       };
       andrewgazelka-workstation = personalWorkstationModule;
       andrewgazelka-darwin = personalDarwinHomeModule;
+      # Personal-but-shareable server module for github:harivansh-afk: the
+      # dotfiles hari runs as the `hari` user on hari-compute-1 (zsh, git,
+      # neovim plus the mux nvim multiplexer, and the CLI tool set around
+      # them), ported from his personal nix repo. Consumes the shared
+      # cli-baseline, mux, xdg-tidy, and zsh-vi-cursor modules above; the
+      # source repo's secrets/theme machinery is deliberately absent. See
+      # users/harivansh-afk/home.nix.
+      harivansh-afk = import ./users/harivansh-afk/home.nix {inherit ix;};
       # Reusable workstation module: draw one Minecraft boss bar per in-flight
       # GitHub Actions run across a set of repos (green = running, filled by
       # elapsed / average duration; purple = queued/unpicked). Import it and set
@@ -599,6 +681,12 @@
     # monolithic `*-oci.tar` archives, which nothing substitutes. Non-schema,
     # so surfaced through `collect` like `ciChecks`. See lib/per-system.nix.
     cachePushRoots = withDarwinAliases (collect "cachePushRoots");
+    # Typed security exposure roots consumed as JSON by the runtime DAG scanner.
+    # Unlike cachePushRoots, every entry carries policy metadata and names only
+    # a shipped runtime output or an example service closure. securityRootPaths
+    # carries the derivations separately so callers realize terminal store paths
+    # instead of trusting content-addressed placeholders from evaluation.
+    inherit securityRoots securityRootPaths;
     formatter = collect "formatter";
     apps = collect "apps";
     devShells = collect "devShells";

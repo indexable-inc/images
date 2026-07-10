@@ -23,16 +23,12 @@
   # policy: no `hash = "sha256-..."` literals in tracked .nix). Bump the
   # rev/url in pins.json, then `nix run .#update` re-pins the hash.
   pin = ix.pins.loadPin ./pins.json "blender-lab-mcp";
-  updateScript =
-    if updateScriptWriter == null
-    then null
-    else
-      ix.pins.mkUpdater {
-        writeNushellApplication = updateScriptWriter;
-        inherit nix;
-        pname = "blender-lab-mcp";
-        relPath = "packages/blender-lab-mcp/pins.json";
-      };
+  updateScript = ix.pins.mkOptionalUpdater {
+    writeNushellApplication = updateScriptWriter;
+    inherit nix;
+    pname = "blender-lab-mcp";
+    relPath = "packages/blender-lab-mcp/pins.json";
+  };
 
   src = fetchzip {inherit (pin) url hash;};
 in

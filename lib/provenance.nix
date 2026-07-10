@@ -130,27 +130,34 @@
             || !(settings ? definitionsWithLocations)
             || settings.definitionsWithLocations == []
           then []
-          else [
-            {
+          else let
+            declarations = map (decl: discard (toString decl)) settings.declarations;
+            definitions =
+              map (
+                def: let
+                  names =
+                    if builtins.isAttrs def.value
+                    then builtins.attrNames def.value
+                    else [];
+                  pos =
+                    if names == []
+                    then null
+                    else builtins.unsafeGetAttrPos (builtins.head names) def.value;
+                in
+                  site def.file pos
+              )
+              settings.definitionsWithLocations;
+            # A definition made by a declaring module is the wiring module
+            # populating its own option (programs.git filling settings from
+            # userName, say), not the user configuring it; a chain with only
+            # such definitions would claim a settings site the user never
+            # wrote.
+            userDefined = lib.any (def: !(lib.elem def.file declarations)) definitions;
+          in
+            lib.optional userDefined {
               option = "programs.${name}.settings";
-              declarations = map (decl: discard (toString decl)) settings.declarations;
-              definitions =
-                map (
-                  def: let
-                    names =
-                      if builtins.isAttrs def.value
-                      then builtins.attrNames def.value
-                      else [];
-                    pos =
-                      if names == []
-                      then null
-                      else builtins.unsafeGetAttrPos (builtins.head names) def.value;
-                  in
-                    site def.file pos
-                )
-                settings.definitionsWithLocations;
+              inherit declarations definitions;
             }
-          ]
       ) (builtins.attrNames options.programs);
 
   mergeEntry = prev: entry:
@@ -195,11 +202,12 @@ in {
       path = _name: value: relativeTo home value.target;
       source = _name: value: value.source or null;
     }
-    # home-manager on darwin: agents are written per attr name under the
-    # user's LaunchAgents directory.
+    # home-manager on darwin: the deployed plist is named after the agent's
+    # Label (default "org.nix-community.home.<name>"), not the attr name;
+    # keying by name would give entries no deployed file ever matches.
     ++ collect {
       optionPath = ["launchd" "agents"];
-      path = name: _value: "Library/LaunchAgents/${name}.plist";
+      path = _name: value: "Library/LaunchAgents/${value.config.Label}.plist";
     };
 
   # File collectors for an evaluated nix-darwin configuration.
@@ -208,7 +216,10 @@ in {
     config,
   }: let
     collect = walkOption {inherit options config;};
-    label = name: value: value.serviceConfig.Label or "org.nixos.${name}";
+    # nix-darwin always sets serviceConfig.Label (mkDefault
+    # "${labelPrefix}.${name}"), so read it directly: a hardcoded fallback
+    # would silently diverge from a consumer's launchd.labelPrefix.
+    label = value: value.serviceConfig.Label;
   in
     collect {
       optionPath = ["environment" "etc"];
@@ -217,12 +228,12 @@ in {
     }
     ++ collect {
       optionPath = ["launchd" "agents"];
-      path = name: value: "/Library/LaunchAgents/${label name value}.plist";
+      path = _name: value: "/Library/LaunchAgents/${label value}.plist";
       enabled = _value: true;
     }
     ++ collect {
       optionPath = ["launchd" "daemons"];
-      path = name: value: "/Library/LaunchDaemons/${label name value}.plist";
+      path = _name: value: "/Library/LaunchDaemons/${label value}.plist";
       enabled = _value: true;
     };
 

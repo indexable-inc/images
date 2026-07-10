@@ -10,6 +10,7 @@
 name = "panes-host"
 version = "0.1.0"
 edition = "2024"
+publish.workspace = true
 description = "macOS agent presenting guest-Linux windows as native NSWindows"
 license = "MIT OR Apache-2.0"
 

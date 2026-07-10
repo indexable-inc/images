@@ -35,7 +35,7 @@ in {
 
   services.nginx = {
     enable = true;
-    virtualHosts."declared-groups" = {
+    virtualHosts.declared-groups = {
       default = true;
       listen = [
         {

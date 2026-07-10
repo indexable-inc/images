@@ -36,7 +36,7 @@
   # up in the `lint` derivation build, not at `nix run` time.
   lintStage = ix.writeNushellApplication pkgs {
     name = "lint-stage";
-    meta.description = "One lint stage (alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | ruff | clone); driven by `lint`";
+    meta.description = "One lint stage (alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | filenames | ruff | clone); driven by `lint`";
     runtimeInputs = [
       pkgs.alejandra
       pkgs.deadnix
@@ -122,6 +122,62 @@
           astlog scan astlog-rules/elixir.astlog ...$files
         }
       }
+      # Repository configuration belongs in composable Nix expressions. Keep
+      # serialized files only where an external consumer owns the filename or
+      # the file is generated data, a lock, a fixture, or a protocol payload.
+      def "main filenames" [] {
+        let allowed = [
+          # Ecosystem-owned configuration and manifests.
+          '(^|/)Cargo\.toml$'
+          '(^|/)pyproject\.toml$'
+          '(^|/)rust-toolchain\.toml$'
+          '(^|/)mise\.toml$'
+          '(^|/)osv-scanner\.toml$'
+          '(^|/)ruff\.toml$'
+          '(^|/)statix\.toml$'
+          '(^|/)\.cargo/config\.toml$'
+          '^clone\.toml$'
+          '^packages/cve-scan/whitelist\.toml$'
+          '^\.github/.*\.ya?ml$'
+          '(^|/)docker-compose\.ya?ml$'
+          '(^|/)plugin\.yml$'
+          '^packages/agent/symphony/workflows/.*/repositories\.yaml$'
+          '^\.editorconfig$'
+          '^packages/agent/symphony/elixir/\.sobelow-conf$'
+          '^packages/minecraft/minestom/servers/hello/gradle\.properties$'
+          '^packages/minecraft/minestom/servers/hello/gradle/verification-metadata\.xml$'
+          '^packages/minecraft/minestom/servers/hello/src/main/resources/logback\.xml$'
+
+          # Generated manifests, locks, editor settings, and typed data.
+          '(^|/)(package|tsconfig)\.json$'
+          '(^|/)(package-lock|lock)\.json$'
+          '(^|/)(pins|manifest)\.json$'
+          '^\.(claude|vscode|zed)/settings\.json$'
+          '^\.vscode/extensions\.json$'
+          '^\.github/user-owners\.json$'
+          '(^|/)(dag|upstream-status)\.json$'
+          '(^|/)(fixtures?[^/]*|snapshots?|catalogs?|metadata|sounds|seeds)/.*\.json$'
+          '^examples/.*\.json$'
+          '^packages/agent/claude-code/system-prompts/models\.json$'
+          '^packages/agent/system-prompt-eval-viewer/src/sample\.json$'
+          '^packages/code/code-highlight/src/islands-theme\.json$'
+          '^tests/.*\.json$'
+        ]
+        let candidates = (
+          fd --hidden --type file
+          --extension toml --extension json --extension yaml --extension yml
+          --extension kdl --extension ini --extension conf --extension cfg --extension xml
+          --extension properties --extension editorconfig --extension sobelow-conf
+          --exclude .git --exclude .claude/worktrees
+          | lines
+        )
+        let denied = ($candidates | where {|path| not ($allowed | any {|pattern| $path =~ $pattern})})
+        if ($denied | is-not-empty) {
+          print --stderr "prefer .nix for repository-owned configuration; serialized files require an external filename or generated/data role:"
+          $denied | each {|path| print --stderr $"  ($path)" }
+          exit 1
+        }
+      }
       # Repo-wide Python lint: the shared ruff selector (bug-catchers + security +
       # pathlib + pytest + explicit annotations + no `typing.cast`; see
       # lib/ruff-ann.nix) over EVERY tracked .py, so non-package dirs
@@ -151,7 +207,7 @@
         clone . out> /dev/null
       }
       def main [] {
-        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | ruff | clone" }
+        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | filenames | ruff | clone" }
       }
     '';
   };
@@ -166,6 +222,7 @@
     "astlog"
     "astlog-rust"
     "astlog-elixir"
+    "filenames"
     "ruff"
     "clone"
   ];
@@ -241,13 +298,14 @@
   # (above nix-eval-jobs' 4 GiB default per worker, below the old 8 GiB), not a
   # workaround: the per-crate check split (see the `checks` block below) keeps
   # each worker's eval bounded by the largest single crate. Both binaries are
-  # repo-built patches of nixpkgs' 1.5.0 / v2.34.1 (same commits the flake refs
-  # used to pin): the patched nix-eval-jobs (--nix-eval-jobs) resolves floating-CA
-  # outputs so they report a real cacheStatus instead of always-uncached, and the
-  # patched nix-fast-build makes --skip-cached skip a `local` (warm-store) output,
-  # not just a remotely-`cached` one. Without both, --skip-cached re-realizes every
-  # floating-CA rust unit and image closure (~1450) on every warm run. See the
-  # $fast_build and $eval_jobs comments below.
+  # nix-fast-build is the repo-built nixpkgs 1.5.0 package with a patch that
+  # makes --skip-cached skip a `local` (warm-store) output, not just a remotely
+  # `cached` one. nix-eval-jobs is built against the fleet daemon's stable Nix
+  # 2.34 protocol family rather than nixpkgs' moving default. The eval
+  # cache is disabled for the parallel evaluator: all workers share one
+  # per-flake SQLite database, so writes contend and can fail with "database is
+  # busy" without providing useful hits on a fresh commit. See the $fast_build
+  # and $eval_jobs comments below.
   #
   # Step 2 (nix-eval-jobs) is the schema/eval gate over the package outputs,
   # broader than the `checks` set step 1 built. nix-eval-jobs is the same
@@ -265,10 +323,8 @@
   # reports a per-attribute eval failure as a JSON `error` line and still exits 0,
   # so the gate is the error-line check; a startup or lock failure exits nonzero
   # and aborts the run (Nushell propagates external failures like bash
-  # `set -o pipefail`). Uses the repo-built patched nix-eval-jobs
-  # (packages/nix/nix-eval-jobs, nixpkgs' v2.34.1 + the CA cacheStatus patch),
-  # matching the host Nix 2.34.x; invoked directly by store path rather than
-  # `nix run`.
+  # `set -o pipefail`). Uses the repo-built nix-eval-jobs directly by store path
+  # rather than `nix run`.
   check = ix.writeNushellApplication pkgs {
     name = "check";
     meta.description = "Run the full CI gate: build .#ciChecks.x86_64-linux and eval-validate .#packages.x86_64-linux";
@@ -282,13 +338,9 @@
       # same commit (7f185e0) the flake ref used to pin, so this is a like-for-like
       # source swap plus the patch. Invoked directly by store path, not `nix run`.
       const fast_build = "${lib.getExe repoPackages.nix-fast-build}"
-      # Patched nix-eval-jobs (packages/nix/nix-eval-jobs): the stock binary
-      # reports `local`/`notBuilt` for floating content-addressed outputs even
-      # when they are in cache.ix.dev, so --skip-cached rebuilt every CA rust
-      # unit (~1434) on every run. The patch resolves the CA output realisation
-      # against the substituters so a warm unit reports `cached` and is skipped.
-      # See nix#12128 / nix-eval-jobs#403. Built for x86_64-linux (the CI gate
-      # system); `check` itself is x86_64-linux-only.
+      # nix-eval-jobs is linked to the stable Nix 2.34 components the fleet
+      # daemon runs. Built for x86_64-linux (the CI gate system); `check` itself
+      # is x86_64-linux-only.
       const eval_jobs = "${lib.getExe repoPackages.nix-eval-jobs}"
 
       def main [] {
@@ -297,10 +349,10 @@
         # `.#ciChecks.x86_64-linux` resolves floating content-addressed drvs. The
         # evaluator (nix-eval-jobs, which nix-fast-build wraps) needs the
         # `ca-derivations` experimental feature, or it aborts with
-        # "experimental Nix feature 'ca-derivations' is disabled". The flake's
-        # nixConfig.extra-experimental-features carries it via
-        # accept-flake-config; `--option extra-experimental-features` here pins
-        # it for the build pool too so the gate is self-contained.
+        # "experimental Nix feature 'ca-derivations' is disabled". The caller
+        # owns cache policy: developers may accept the flake config, while
+        # self-hosted CI ignores its restricted cache settings. Pin only the CA
+        # feature here so nested evaluator processes remain self-contained.
         # --result-format json --result-file emits one record per attr per phase
         # ({attr, type: EVAL|BUILD, duration, success, error, outputs}) into the
         # cwd. blast-radius consumes this on a later PR via `--timings` to
@@ -320,9 +372,8 @@
           try {
             ^$fast_build ...[
               "--flake" ".#ciChecks.x86_64-linux"
-              # Drive nix-fast-build's evaluator with the patched nix-eval-jobs
-              # (CA cacheStatus fix) so --skip-cached actually skips warm CA
-              # units rather than rebuilding the lot.
+              # Drive nix-fast-build with the daemon-family-compatible
+              # evaluator rather than its nixpkgs default.
               "--nix-eval-jobs" $eval_jobs
               "--eval-max-memory-size" "6144"
               "--eval-workers" "16"
@@ -338,7 +389,7 @@
               "--no-link"
               "--result-format" "json"
               "--result-file" "check-results.json"
-              "--option" "accept-flake-config" "true"
+              "--option" "eval-cache" "false"
               "--option" "extra-experimental-features" "ca-derivations"
             ]
             false
@@ -362,7 +413,6 @@
             # input-addressed checks like the browser smoke test).
             let drv = (
               ^nix eval --raw
-                --option accept-flake-config true
                 --option extra-experimental-features ca-derivations
                 $"($inst).drvPath"
               | complete
@@ -385,7 +435,6 @@
                   $inst
                   "-L"
                   "--no-link"
-                  "--option" "accept-flake-config" "true"
                   "--option" "extra-experimental-features" "ca-derivations"
                 ]
               } catch { }
@@ -405,7 +454,6 @@
             "--flake" ".#packages.x86_64-linux"
             "--workers" "16"
             "--gc-roots-dir" ($tmp | path join "flake-schema-eval-gc")
-            "--option" "accept-flake-config" "true"
             "--option" "eval-cache" "false"
             # See the ca-derivations note above: the package set also resolves
             # content-addressed rust units, so this eval needs the feature too.
@@ -457,46 +505,6 @@
   };
 
   # `nix run .#cve-scan`: scan the whole Nix closure of the repo's key outputs
-  # for known CVEs (issue #1697). cargoAudit (lib/rust/policy.nix) only covers the
-  # workspace Cargo.lock against RustSec; nothing scanned the closure for a
-  # vulnerable system lib, a stale OpenSSL in an image, or a C dependency of a
-  # tool. This wraps `vulnix` -- the Nix-native NVD closure scanner (chosen over
-  # sbomnix/vulnxscan: leaner, first-class `--json`, caches the NVD feed locally
-  # so only the first/refresh run needs network, and works on both x86_64-linux
-  # and aarch64-darwin). The scan target is `.#cachePushRoots.<system>`: the
-  # registry- and example-fleet-derived roots cache-push.yml publishes (every
-  # package, images as their `toplevel` closure, plus each example fleet node's
-  # system closure), so the closure list grows with the repo rather than being
-  # hardcoded, and it is exactly "the repo's key outputs" a consumer substitutes.
-  #
-  # Advisory data is impure and fresh, so this is an app plus a scheduled workflow
-  # that files a tracking issue (.github/workflows/cve-scan.yml), NOT a blocking
-  # flake check. `vulnix` needs `nix-store` (and `nix build`) on PATH; both come
-  # from the runtime `pkgs.nix`. The wrapper forces a UTF-8 locale (vulnix decodes
-  # NVD text and aborts under the C locale); see cve-scan.py.
-  cveScan = ix.writePythonApplication pkgs {
-    name = "cve-scan";
-    src = paths.tools.cveScan;
-    pyChecker = "zuban";
-    # The committed whitelist of acknowledged advisories is baked in as a store
-    # path so `nix run .#cve-scan` applies it from any working directory; extra
-    # `--whitelist` flags at the CLI add to it (argparse append). Masked
-    # advisories stay visible as a count (vulnix --show-whitelisted), never
-    # silently dropped.
-    args = [
-      "--whitelist"
-      "${paths.packagesRoot + "/cve-scan/whitelist.toml"}"
-    ];
-    runtimeInputs = [
-      pkgs.vulnix
-      pkgs.nix
-    ];
-    # pydantic validates vulnix's --json output at the boundary so an upstream
-    # schema drift fails with a path-precise error rather than a bare KeyError.
-    python = pkgs.python314.withPackages (ps: [ps.pydantic]);
-    meta.description = "Scan the Nix closure of the repo's key outputs for CVEs (vulnix)";
-  };
-
   # One symlink-free directory holding every skill under `skills/`, ready to
   # copy into `.claude/skills`.
   skillsDir = ix.skills.mkSkillsDir {inherit pkgs;};
@@ -924,6 +932,13 @@
     fileset = fs.intersection (fs.gitTracked paths.root) (paths.root + "/astlog-rules");
   };
 
+  andrewZellij = import (paths.root + "/users/andrewgazelka/config/zellij") {
+    configRoot = paths.root + "/users/andrewgazelka/config";
+    inherit (pkgs) lib stdenvNoCC zellijPlugins;
+    xdgConfigHome = "/Users/andrewgazelka/.config";
+  };
+  andrewZellijConfig = pkgs.writeText "andrewgazelka-zellij.kdl" (ix.kdl.render andrewZellij.settings);
+
   tests = import paths.tests {
     inherit
       nixpkgs
@@ -956,6 +971,8 @@
     fleetSubs = [
       "up"
       "health"
+      "status"
+      "logs"
       "replace"
       "switch"
       "diff"
@@ -980,7 +997,7 @@
     import ./image/health-checks.nix
     {
       inherit lib pkgs;
-      inherit (ix) writeNushellApplication;
+      inherit (ix) kdl writeNushellApplication;
       dagRunner = repoPackages.dag-runner;
     }
     {
@@ -1318,6 +1335,28 @@
             ${lib.getExe lint}
             mkdir -p "$out"
           '';
+          filename-policy =
+            pkgs.runCommand "filename-policy-check"
+            {
+              nativeBuildInputs = [pkgs.coreutils];
+            }
+            ''
+              mkdir source
+              cd source
+              touch repository-config.json zellij-layout.kdl
+              if ${lib.getExe lintStage} filenames >output 2>&1; then
+                echo "filename policy accepted repository-config.json" >&2
+                exit 1
+              fi
+              grep -F "repository-config.json" output
+              grep -F "zellij-layout.kdl" output
+              touch "$out"
+            '';
+          zellij-config = pkgs.runCommand "zellij-config-check" {nativeBuildInputs = [pkgs.zellij];} ''
+            export HOME="$TMPDIR/home"
+            mkdir -p "$HOME" "$out"
+            zellij --config ${andrewZellijConfig} setup --check >"$out/check.txt"
+          '';
           # Exercises the trusted half of the blast-radius PR comment: the
           # validate/render jq embedded in its workflow, extracted from the YAML so
           # the test can't drift from what the trusted comment job runs. The
@@ -1348,7 +1387,7 @@
           # header; a regression in the zig/SDK wiring fails here on x86_64-linux CI
           # rather than silently shipping a wrong-arch binary.
           cross-darwin-smoke = pkgs.runCommand "cross-darwin-smoke" {nativeBuildInputs = [pkgs.file];} ''
-            bin=${crossPackages."dag-runner-aarch64-apple-darwin"}/bin/dag-runner
+            bin=${crossPackages.dag-runner-aarch64-apple-darwin}/bin/dag-runner
             info=$(file -b "$bin")
             echo "$info"
             case "$info" in
@@ -1363,7 +1402,7 @@
           cross-darwin-web-monitor-smoke =
             pkgs.runCommand "cross-darwin-web-monitor-smoke" {nativeBuildInputs = [pkgs.file];}
             ''
-              pkg=${crossPackages."nix-web-monitor-aarch64-apple-darwin"}
+              pkg=${crossPackages.nix-web-monitor-aarch64-apple-darwin}
               bin=$pkg/bin/.nix-web-monitor-unwrapped
               info=$(file -b "$bin")
               echo "$info"
@@ -1404,12 +1443,11 @@
     // {
       health-checks = healthChecks.dag;
       health-checks-zellij = healthChecks.zellij;
-      inherit check lint site;
+      inherit lint site;
       site-dev = site.passthru.devServer;
       bench-filesystem = benchFilesystem;
       update-mods = updateMods;
       update-loaders = updateLoaders;
-      cve-scan = cveScan;
       inherit update;
       ix-shell-sync-ignored = ixShellSyncIgnored;
       mc-source = mcSource;
@@ -1417,27 +1455,106 @@
       agents = agentsDir;
       skills = skillsDir;
       claude-plugin = claudePluginDir;
-      # The attic binary cache client, jq, findutils (xargs), and gh, used by
-      # cache-push.yml (attic/jq/xargs) and cve-scan.yml (jq/gh). Pinned to the
-      # flake's nixpkgs so the workflows resolve them with `nix build .#<tool>`
-      # rather than depending on a tool being on the runner PATH or a floating
+      # CI tools are pinned to the flake's nixpkgs so workflows resolve exact
+      # executables with `nix build .#<tool>` instead of trusting runner PATH.
+      # cache-push uses attic/jq/xargs/gh; cve-scan uses curl/jq/tar.
+      # This avoids depending on a tool being on the runner PATH or a floating
       # `nixpkgs#` registry reference. The self-hosted runner PATH carries
       # coreutils + nix but not findutils, jq, or gh, so the bare commands are
       # `command not found` (cve-scan run 28598889924 died on exactly that).
       inherit
         (pkgs)
         attic-client
+        coreutils
+        curl
         jq
         findutils
         gh
+        gnutar
         ;
     }
+    // lib.optionalAttrs (system == "x86_64-linux") {inherit check;}
     // repoFlakePackages
     // examplePackages
     // nonNixExampleImages
     // nonNixExampleDescriptions
     // crossPackages
     // healthChecks.lifecyclePackages;
+  securityRootRegistry = let
+    mkRoot = ix.securityRoots.mkRoot;
+    owner = "indexable-inc/index";
+    cachePolicy = {
+      inherit owner;
+      class = "cache-only";
+      environment = "none";
+      exposure = "none";
+      criticality = "low";
+      slaHours = 168;
+    };
+    baseImagePolicy = {
+      inherit owner;
+      class = "base-image";
+      environment = "development";
+      exposure = "internal";
+      criticality = "medium";
+      slaHours = 72;
+    };
+    # Business exposure is never inferred from package metadata. Add a complete
+    # policy here only when a package is known to be deployed or distributed;
+    # every unspecified non-image output remains cache hygiene, not exposure.
+    securityRootPolicies = {};
+    packageEntries =
+      lib.mapAttrs (
+        name: package: let
+          isImage = package ? passthru.toplevel;
+          path = package.passthru.toplevel or (lib.getOutput package.outputName package);
+          policy =
+            if isImage
+            then baseImagePolicy
+            else securityRootPolicies.${name} or cachePolicy;
+        in {
+          inherit path;
+          root = mkRoot (
+            {
+              attr = "packages.${system}.${name}";
+              inherit name;
+            }
+            // policy
+          );
+        }
+      )
+      packageSet;
+    exampleEntries =
+      lib.concatMapAttrs (
+        fleetName: fleet:
+          lib.mapAttrs' (
+            node: path: let
+              name = "example-${fleetName}-${node}";
+            in
+              lib.nameValuePair name {
+                inherit path;
+                root = mkRoot {
+                  attr = "exampleFleets.${system}.${fleetName}.systemPackages.${node}";
+                  inherit name owner;
+                  class = "deployed-service";
+                  environment = "development";
+                  exposure = "internal";
+                  criticality = "medium";
+                  slaHours = 72;
+                };
+              }
+          )
+          fleet.systemPackages
+      )
+      exampleFleets;
+    entries =
+      if pkgs.stdenv.hostPlatform.isDarwin
+      then packageEntries
+      else packageEntries // exampleEntries;
+  in {
+    securityRoots = lib.mapAttrs (_: entry: entry.root) entries;
+    securityRootPaths = lib.mapAttrs (_: entry: entry.path) entries;
+  };
 in {
   packages = packageSet;
 
@@ -1507,6 +1624,11 @@ in {
     if pkgs.stdenv.hostPlatform.isDarwin
     then imagesAsClosures // nativeIfdRoots
     else imagesAsClosures // exampleNodeToplevels // crossIfdRoots;
+
+  # The policy manifest is safe to `nix eval --json`: derivations live in the
+  # separate securityRootPaths output and must be realized before their terminal
+  # store paths are trusted.
+  inherit (securityRootRegistry) securityRoots securityRootPaths;
 
   inherit darwinPackageAliases;
 

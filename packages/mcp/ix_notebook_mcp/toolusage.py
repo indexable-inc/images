@@ -24,13 +24,12 @@ agent is not in its federated graph, so an id must match the graph's
 from __future__ import annotations
 
 import json
-import sqlite3
 from pathlib import Path
 
 from . import introspect, registry, store
 
 
-def export(conn: sqlite3.Connection, *, agent: str) -> dict:
+def export(conn: store.WeaveStore, *, agent: str) -> dict:
     """Fold this store's executions into the vault ``ToolUsage`` document.
 
     A run "used" a capability module when the module's name appears among the
@@ -84,7 +83,7 @@ def export_stores(paths: list[tuple[str, Path]]) -> dict:
     tools: dict[str, dict] = {}
     links: list[dict] = []
     for agent, path in paths:
-        conn = sqlite3.connect(path)
+        conn = store.connect(path)
         try:
             doc = export(conn, agent=agent)
         finally:

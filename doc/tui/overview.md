@@ -64,8 +64,10 @@ twin returning a future for callers already inside tokio.
 
 Value types (`src/types.rs`):
 
-- `SpawnConfig { rows, cols, scrollback_lines }`, default 24x80 / 10,000 lines
-  (`types.rs:122`).
+- `SpawnConfig { rows, cols, scrollback_lines, env }`, default 24x80 / 10,000
+  lines / no extra env (`types.rs:127`). `env` pairs are applied to the child
+  before the crate-forced `TERM`/`COLORTERM`, so those two always win
+  (`spawn.rs:76-83`).
 - `StyledCell { character, fg, bg, bold, italic, underline, inverse }`
   (`types.rs:35`); an unwritten cell is a space with `Color::Default`.
 - `Color::{Default, Indexed(u8), Rgb(u8,u8,u8)}` (`types.rs:10`), converted from

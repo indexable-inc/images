@@ -5,10 +5,11 @@
 //! at test runtime, which the nix test sandbox cannot do, so the render
 //! output is snapshotted directly.)
 
-use std::fmt::Write as _;
-
 use proc_macro2::TokenStream;
 use unibind_core::ir;
+use unibind_test_support::{assert_render_snapshot, assert_snapshot};
+
+const GLUE_SNAPSHOT: &str = include_str!("snapshots/sample.ex.rs");
 
 fn lower(source: &str) -> ir::Interface {
     let file: syn::File = syn::parse_str(source).expect("module parses");
@@ -20,16 +21,6 @@ fn lower(source: &str) -> ir::Interface {
 
 fn interface() -> ir::Interface {
     lower(include_str!("fixtures/sample.rs"))
-}
-
-fn assert_snapshot(actual: &str, expected: &str, name: &str) {
-    if actual.trim() == expected.trim() {
-        return;
-    }
-    println!("=== actual {name} ===");
-    println!("{actual}");
-    println!("=== end {name} ===");
-    panic!("{name} drifted; copy the printed block into tests/snapshots/{name}");
 }
 
 #[test]
@@ -47,34 +38,7 @@ fn rustler_glue_snapshot() {
     let interface = interface();
     let rendered = unibind_backend_ex::render(&interface, Some("sample")).expect("renders");
 
-    let mut shown = String::new();
-    for (record, attrs) in interface.records.iter().zip(&rendered.records) {
-        let outer = &attrs.outer;
-        writeln!(
-            shown,
-            "// struct {}: {}",
-            record.name,
-            quote::quote!(#(#outer)*)
-        )
-        .expect("write to string");
-        for (field, field_attrs) in record.fields.iter().zip(&attrs.fields) {
-            writeln!(
-                shown,
-                "//   field {}: {}",
-                field.name,
-                quote::quote!(#(#field_attrs)*)
-            )
-            .expect("write to string");
-        }
-    }
-    shown.push('\n');
-    let glue: syn::File = syn::parse2(rendered.glue).expect("glue parses");
-    shown.push_str(&prettyplease::unparse(&glue));
-    assert_snapshot(
-        &shown,
-        include_str!("snapshots/sample.ex.rs"),
-        "sample.ex.rs",
-    );
+    assert_render_snapshot!(interface, rendered, GLUE_SNAPSHOT, "sample.ex.rs");
 }
 
 #[test]
