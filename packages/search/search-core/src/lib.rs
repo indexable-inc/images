@@ -64,11 +64,6 @@ pub use mixedbread::{
 pub use source_meta::{Document, KNOWN_SOURCE_TAGS, RepoSlug, Source, SourceAdapter};
 
 /// Current wall clock as epoch seconds, clamped to the signed query timestamp range.
-///
-/// # Panics
-///
-/// Panics only if the positive `i64::MAX` constant cannot convert to `u64`, or
-/// if the explicitly capped seconds value cannot convert back to `i64`.
 #[must_use]
 pub fn epoch_now() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -76,6 +71,5 @@ pub fn epoch_now() -> i64 {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_secs());
-    let capped = seconds.min(u64::try_from(i64::MAX).expect("i64::MAX is positive"));
-    i64::try_from(capped).expect("capped at i64::MAX")
+    i64::try_from(seconds).map_or(i64::MAX, |seconds| seconds)
 }
