@@ -88,8 +88,8 @@ def test_actor_info_ships_a_json_safe_key() -> None:
             return {"transport": "tcp", "ip": self.ip, "key": b"5ecret"}
 
     actor = KernelActor()
-    actor._km = FakeKM()
-    actor._pid = 7
+    actor._core._km = FakeKM()
+    actor._core._pid = 7
     info = actor._info()
     assert info == {
         "pid": 7,

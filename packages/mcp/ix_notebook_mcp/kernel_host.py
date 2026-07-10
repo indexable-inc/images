@@ -162,7 +162,7 @@ class LocalKernelHost(KernelHost):
     def running(self) -> bool:
         return self._km is not None
 
-    async def start(self, workdir: Path) -> None:
+    async def start(self, workdir: Path, *, ip: str | None = None) -> None:
         from jupyter_client.manager import AsyncKernelManager
 
         # Point the kernel's faulthandler at a private file before launch; the
@@ -176,11 +176,18 @@ class LocalKernelHost(KernelHost):
         _sweep_stale_traces()
 
         self._km = AsyncKernelManager(kernel_name="python3")
+        if ip is not None:
+            self._km.ip = ip
         await self._km.start_kernel(cwd=str(workdir))
         self._pid = _child_pid(self._km)
 
     def client(self) -> AsyncKernelClient:
         return self._km.client()
+
+    def connection_info(self) -> dict:
+        """The kernel's ZMQ connection info as a plain dict (the key stays
+        bytes here; :class:`KernelActor` ships it back to the serve)."""
+        return dict(self._km.get_connection_info(session=False))
 
     async def is_alive(self) -> bool:
         return self._km is not None and bool(await self._km.is_alive())
@@ -229,17 +236,16 @@ class KernelActor:
     """Runs on a fleet node; supervises one ipykernel child there.
 
     Decorated with ``ray.remote`` at spawn time (``RayKernelHost``), never at
-    import, so importing this module costs no Ray. Async methods make it an
-    async actor; each does node-local work the server cannot do remotely:
-    signals, trace-file reads, spawn/restart against the local jupyter
-    provisioner. The connection info it returns carries the node's routable
-    IP, so the server's ZMQ channels reach the kernel directly.
+    import, so importing this module costs no Ray. A thin shell over the same
+    :class:`LocalKernelHost` the serve uses directly -- "local" here means the
+    RAY NODE -- adding only what remoteness demands: env replay, an IPYTHONDIR
+    that exists on this node, a routable bind IP so the serve's ZMQ channels
+    reach the kernel directly, and the connection info shipped back as a
+    plain dict.
     """
 
     def __init__(self) -> None:
-        self._km: Any = None
-        self._pid: int | None = None
-        self._trace_path: Path | None = None
+        self._core = LocalKernelHost()
 
     async def launch(self, workdir: str, env: dict[str, str]) -> dict:
         """Start the kernel on this node; return pid + ZMQ connection info.
@@ -248,82 +254,56 @@ class KernelActor:
         exactly that, so the actor replays it for parity (IX_MCP_STORE, the
         weave/session vars, SSH_AUTH_SOCK). Two entries are node-local and
         re-derived here: the trace path (this actor's pid, this node's
-        runtime_dir) and IPYTHONDIR when the inherited path does not exist on
-        this node (the serve materialized it under ITS runtime_dir).
+        runtime_dir; core.start owns it) and IPYTHONDIR when the inherited
+        path does not exist on this node (the serve materialized it under
+        ITS runtime_dir).
         """
         import ray
 
         os.environ.update(env)
-        self._trace_path = trace_path_for(os.getpid())
-        os.environ[TRACE_ENV] = str(self._trace_path)
-        _sweep_stale_traces()
         ipythondir = env.get("IPYTHONDIR")
         if not ipythondir or not await asyncio.to_thread(Path(ipythondir).exists):
             from .cli import _prepare_ipython_startup
 
             os.environ["IPYTHONDIR"] = str(_prepare_ipython_startup(os.getpid()))
-
-        from jupyter_client.manager import AsyncKernelManager
-
         await asyncio.to_thread(lambda: Path(workdir).mkdir(parents=True, exist_ok=True))
-        self._km = AsyncKernelManager(kernel_name="python3")
         # Bind the kernel's ZMQ sockets on this node's routable IP (the one
         # Ray knows peers reach it by), not loopback: the serve driving this
         # kernel may sit on another node.
-        self._km.ip = ray.util.get_node_ip_address()
-        await self._km.start_kernel(cwd=workdir)
-        self._pid = _child_pid(self._km)
+        await self._core.start(Path(workdir), ip=ray.util.get_node_ip_address())
         return self._info()
 
     def _info(self) -> dict:
-        info = dict(self._km.get_connection_info(session=False))
+        info = self._core.connection_info()
         key = info.get("key", b"")
         # Plain-str payload: bytes round-trip through Ray fine, but a str key
         # keeps the dict JSON-safe for logs/facts; load_connection_info
         # re-encodes it.
         info["key"] = key.decode("ascii") if isinstance(key, bytes) else key
-        return {"pid": self._pid, "connection": info, "node_ip": self._km.ip}
+        return {"pid": self._core.pid, "connection": info, "node_ip": info.get("ip")}
 
     async def relaunch(self, workdir: str) -> dict:
         """A fresh kernel child from the same actor (the respawn primitive)."""
-        await self._km.restart_kernel(now=True, cwd=workdir)
-        self._pid = _child_pid(self._km)
+        await self._core.restart(Path(workdir))
         return self._info()
 
     async def is_alive(self) -> bool:
-        return self._km is not None and bool(await self._km.is_alive())
+        return await self._core.is_alive()
 
     async def exit_code(self) -> int | None:
-        provisioner = getattr(self._km, "provisioner", None)
-        process = getattr(provisioner, "process", None)
-        code = getattr(process, "returncode", None)
-        return code if isinstance(code, int) else None
+        return await self._core.exit_code()
 
     async def send_signal(self, signum: int) -> bool:
-        if self._pid is None:
-            return False
-        try:
-            os.kill(self._pid, signum)
-        except ProcessLookupError:
-            return False
-        return True
+        return await self._core.send_signal(signum)
 
     async def trace_size(self) -> int:
-        path = self._trace_path
-        return path.stat().st_size if path is not None and path.exists() else 0
+        return await self._core.trace_size()
 
     async def trace_read(self, offset: int) -> str:
-        if self._trace_path is None:
-            return ""
-        return self._trace_path.read_text()[offset:]
+        return await self._core.trace_read(offset)
 
     async def shutdown(self) -> None:
-        if self._km is not None:
-            await self._km.shutdown_kernel(now=True)
-            self._km = None
-        if self._trace_path is not None:
-            self._trace_path.unlink(missing_ok=True)
-            self._trace_path = None
+        await self._core.shutdown()
 
 
 class RayKernelHost(KernelHost):
