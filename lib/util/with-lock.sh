@@ -1,6 +1,6 @@
-# Body of the `with-lock` writeShellApplication (see profiles/darwin-home.nix).
-# No shebang / `set` line: writeShellApplication supplies bash + `set -euo pipefail`
-# and bakes coreutils onto PATH via runtimeInputs.
+# Body of the `with-lock` writeBashApplication (see `withLockFor` in
+# lib/default.nix). No shebang / `set` line: the writer supplies bash +
+# `set -euo pipefail` and bakes coreutils onto PATH via runtimeInputs.
 #
 # Reusable "do not overlap" wrapper for launchd agents (and manual runs). Grabs a
 # NON-BLOCKING exclusive lock named by the caller; if the lock is already held

@@ -29,28 +29,13 @@
 
   grayscaleSwift = configRoot + "/scripts/grayscale.swift";
 
-  # Reusable "do not overlap" wrapper for launchd agents. Grabs a NON-BLOCKING
-  # exclusive lock keyed by the agent label; if the previous run is still going
-  # the new fire exits 0 silently (skipped) instead of overlapping, and the lock
-  # releases on exit including crash/kill. macOS has no stock flock(1), so the
-  # lock is taken via /usr/bin/perl + flock(2). See scripts/with-lock.sh.
-  withLock = ix.writeBashApplication pkgs {
-    name = "with-lock";
-    runtimeInputs = [pkgs.coreutils];
-    text = builtins.readFile (configRoot + "/scripts/with-lock.sh");
-  };
-
-  # DRY helper: wrap a launchd agent's ProgramArguments so the run is serialized
-  # under a per-label lock. `label` namespaces the lock (each agent only blocks
-  # itself); `args` is the original ProgramArguments list. Use as:
+  # Reusable "do not overlap" wrapper for launchd agents, from the shared lib
+  # (see `withLockFor` in lib/default.nix and lib/util/with-lock.sh): wrap a
+  # launchd agent's ProgramArguments so the run is serialized under a
+  # per-label non-blocking lock — a fire while the previous run is still going
+  # exits 0 silently instead of overlapping. Use as:
   #   ProgramArguments = lockArgs "main-sync" [ "${mainSync}/bin/main-sync" ];
-  lockArgs = label: args:
-    [
-      "${withLock}/bin/with-lock"
-      label
-      "--"
-    ]
-    ++ args;
+  lockArgs = (ix.withLockFor pkgs).wrap;
 
   # pr-watch + ci-triage + announce-lib live in the shared users/andrewgazelka
   # module (index `homeModules.andrewgazelka`). pr-watch is disabled below

@@ -11,9 +11,10 @@
 # focus, shader stack) are built algebraically by mapping over data, so adding
 # one is a one-line data edit rather than a hand-copied config line.
 #
-# Themes (custom-dark/custom-light) and shaders live in ghostty/{themes,shaders}
-# and are linked into ~/.config/ghostty separately in profiles/workstation.nix; this file
-# only references them by name / absolute path.
+# Themes (custom-dark/custom-light) and shaders live in the shared
+# modules/home/ghostty/{themes,shaders} and are linked into ~/.config/ghostty
+# separately in profiles/workstation.nix; this file only references them by
+# name / absolute path.
 {
   config,
   lib,
