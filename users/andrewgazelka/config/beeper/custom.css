@@ -1,0 +1,391 @@
+/* /* Beeper Dark Theme - matches ghostty custom-dark */ */
+/**/
+/* /* Override CSS variables at root */ */
+/* :root { */
+/*   --color-bg: #1e1e1e !important; */
+/*   --color-surface: #1e1e1e !important; */
+/*   --color-background-app: #1e1e1e !important; */
+/*   --color-primary-container: #1e1e1e !important; */
+/*   --right-pane-bg: #1e1e1e !important; */
+/* } */
+/**/
+/* /* Global backgrounds - #1e1e1e from ghostty */ */
+/* #root, */
+/* .home, */
+/* .right-wrapper, */
+/* .pane-container, */
+/* .right-pane-header, */
+/* .right-pane-header-thread, */
+/* .subheader-content, */
+/* .conversation, */
+/* .panes, */
+/* .messages-list-wrapper, */
+/* .messages-list-scrolling-container, */
+/* .messages-list, */
+/* .reply-thread-messages, */
+/* .thread-window-controls { */
+/*   background: #1e1e1e !important; */
+/*   background-color: #1e1e1e !important; */
+/* } */
+/**/
+/* /* Left sidebar */ */
+/* .left { */
+/*   background: #1e1e1e !important; */
+/*   background-color: #1e1e1e !important; */
+/*   border-right: 1px solid #313244 !important; */
+/* } */
+/**/
+/* /* Message wrapper elements - must be transparent */ */
+/* .message-container, */
+/* .message, */
+/* .message-main, */
+/* .message-click-boundary, */
+/* .message-contents-container, */
+/* .message-text-container, */
+/* .message-children { */
+/*   background: transparent !important; */
+/*   background-color: transparent !important; */
+/* } */
+/**/
+/* /* Incoming messages - the actual bubble */ */
+/* .message-contents, */
+/* .MessageContent-module__contents { */
+/*   background: #313244 !important; */
+/*   color: #d4d4d4 !important; */
+/*   border-radius: 20px !important; */
+/* } */
+/**/
+/* /* Outgoing messages - blue like iMessage */ */
+/* .message-contents.MessageContent-module__isSender, */
+/* .MessageContent-module__contents.MessageContent-module__isSender { */
+/*   background: linear-gradient(135deg, #89b4fa 0%, #7aa2f7 100%) !important; */
+/*   color: #1e1e1e !important; */
+/* } */
+/**/
+/* /* Linked/reply message previews */ */
+/* .linked-message-content, */
+/* .LinkedMessage-module__linkedMessageContent { */
+/*   background: #252525 !important; */
+/*   border: 1px solid #313244 !important; */
+/* } */
+/**/
+/* /* Header styling */ */
+/* .SelectionModeHeader-module__wrapper, */
+/* .app-region-drag { */
+/*   background: #1e1e1e !important; */
+/*   border-bottom: 1px solid #313244 !important; */
+/* } */
+/**/
+/* /* Sticky date containers */ */
+/* .sticky-date-container { */
+/*   background: #1e1e1e !important; */
+/* } */
+/**/
+/* /* Date badges */ */
+/* .sticky-date-container span, */
+/* .date-separator { */
+/*   background: #313244 !important; */
+/*   color: #585b70 !important; */
+/*   border-radius: 12px !important; */
+/*   padding: 4px 12px !important; */
+/*   font-size: 11px !important; */
+/*   text-transform: uppercase !important; */
+/*   letter-spacing: 0.5px !important; */
+/* } */
+/**/
+/* /* Links - ghostty blue */ */
+/* a { */
+/*   color: #89b4fa !important; */
+/*   text-decoration: none !important; */
+/*   transition: color 0.2s ease !important; */
+/* } */
+/**/
+/* a:hover { */
+/*   color: #a6c8ff !important; */
+/* } */
+/**/
+/* /* Links in outgoing messages */ */
+/* .MessageContent-module__isSender a { */
+/*   color: #1e1e1e !important; */
+/*   text-decoration: underline !important; */
+/*   text-decoration-color: rgba(30, 30, 30, 0.5) !important; */
+/*   text-underline-offset: 2px !important; */
+/* } */
+/**/
+/* /* Timestamps in outgoing messages */ */
+/* .MessageReadableMetadata-module__isSender, */
+/* .MessageContent-module__isSender .timestamp, */
+/* .MessageContent-module__isSender [class*="timestamp"], */
+/* .MessageContent-module__isSender [class*="Metadata"] { */
+/*   color: rgba(30, 30, 30, 0.7) !important; */
+/* } */
+/**/
+/* /* Text colors - ghostty foreground */ */
+/* body { */
+/*   color: #d4d4d4 !important; */
+/*   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif !important; */
+/* } */
+/**/
+/* /* Muted text - timestamps - ghostty palette 8 */ */
+/* .timestamp, */
+/* [class*="timestamp"], */
+/* [class*="date"] { */
+/*   color: #585b70 !important; */
+/*   font-size: 11px !important; */
+/* } */
+/**/
+/* /* Input area styling - iMessage style */ */
+/* .compose-message-container { */
+/*   background: rgba(22, 22, 24, 0.55) !important; */
+/*   background-color: rgba(22, 22, 24, 0.55) !important; */
+/*   border-top: 1px solid rgba(255, 255, 255, 0.08) !important; */
+/*   border-bottom-color: transparent !important; */
+/*   border-left-color: transparent !important; */
+/*   border-right-color: transparent !important; */
+/*   backdrop-filter: blur(20px) !important; */
+/*   -webkit-backdrop-filter: blur(20px) !important; */
+/*   box-shadow: none !important; */
+/* } */
+/**/
+/* [class*="ComposeMessage-module__wrapper"] { */
+/*   background: transparent !important; */
+/*   background-color: transparent !important; */
+/*   border-color: transparent !important; */
+/*   box-shadow: none !important; */
+/* } */
+/**/
+/* [class*="ComposeMessage-module__row"] { */
+/*   background: transparent !important; */
+/*   background-color: transparent !important; */
+/*   border-color: transparent !important; */
+/*   box-shadow: none !important; */
+/* } */
+/**/
+/* /* Only the input field itself gets styling */ */
+/* .compose-text { */
+/*   background: rgba(60, 60, 67, 0.35) !important; */
+/*   background-color: rgba(60, 60, 67, 0.35) !important; */
+/*   border-radius: 18px !important; */
+/*   border: 1px solid rgba(255, 255, 255, 0.12) !important; */
+/*   backdrop-filter: blur(18px) !important; */
+/*   -webkit-backdrop-filter: blur(18px) !important; */
+/*   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05) !important; */
+/*   padding: 2px 10px !important; */
+/* } */
+/**/
+/* [class*="ComposeMessage-module__messageInputExternal"], */
+/* [class*="messageInputExternal"] { */
+/*   display: none !important; */
+/*   height: 0 !important; */
+/*   width: 0 !important; */
+/*   border: none !important; */
+/*   margin: 0 !important; */
+/*   padding: 0 !important; */
+/*   visibility: hidden !important; */
+/* } */
+/**/
+/* .message-input-scroll { */
+/*   background: transparent !important; */
+/*   border: none !important; */
+/* } */
+/**/
+/* /* Kill any dividers or separators */ */
+/* [class*="divider"], */
+/* [class*="Divider"], */
+/* [class*="separator"], */
+/* [class*="Separator"], */
+/* .compose-message-container *::before, */
+/* .compose-message-container *::after { */
+/*   border: none !important; */
+/*   background: transparent !important; */
+/* } */
+/**/
+/* [class*="ComposeMessage-module__textArea"], */
+/* .tiptap.ProseMirror, */
+/* #message-input { */
+/*   background: transparent !important; */
+/*   color: #d4d4d4 !important; */
+/*   caret-color: #89b4fa !important; */
+/* } */
+/**/
+/* .tiptap.ProseMirror p, */
+/* #message-input p { */
+/*   color: #d4d4d4 !important; */
+/* } */
+/**/
+/* /* Placeholder text */ */
+/* .tiptap.ProseMirror p.is-empty::before, */
+/* [data-placeholder]::before { */
+/*   color: #585b70 !important; */
+/* } */
+/**/
+/* /* Compose buttons */ */
+/* [class*="ComposeMessage-module__rightButtons"], */
+/* [class*="ComposeMessage-module__textAreaButtons"] { */
+/*   background: transparent !important; */
+/* } */
+/**/
+/* [class*="BrandSendButton"] { */
+/*   background: rgba(255, 255, 255, 0.1) !important; */
+/*   border-radius: 50% !important; */
+/* } */
+/**/
+/* [class*="BrandSendButton"] svg, */
+/* [class*="Emoji-module"] svg, */
+/* [class*="ComposeMessage-module__textAreaButtons"] svg, */
+/* .btn-icon svg { */
+/*   color: #888 !important; */
+/* } */
+/**/
+/* [class*="BrandHiddenControls"], */
+/* [class*="BrandHiddenControls"] *, */
+/* [class*="ComposerHiddenActions"] { */
+/*   background: transparent !important; */
+/*   border: none !important; */
+/*   box-shadow: none !important; */
+/*   outline: none !important; */
+/* } */
+/**/
+/* [class*="BrandHiddenControls-module__toggle"] { */
+/*   background: rgba(255, 255, 255, 0.1) !important; */
+/*   border-radius: 50% !important; */
+/*   border: none !important; */
+/* } */
+/**/
+/* [class*="BrandHiddenControls-module__controls"] { */
+/*   background: rgba(30, 30, 30, 0.9) !important; */
+/*   backdrop-filter: blur(20px) !important; */
+/*   -webkit-backdrop-filter: blur(20px) !important; */
+/*   border: 1px solid rgba(255, 255, 255, 0.1) !important; */
+/*   border-radius: 12px !important; */
+/* } */
+/**/
+/* [class*="BrandHiddenControls-module__control"] { */
+/*   background: transparent !important; */
+/*   border: none !important; */
+/* } */
+/**/
+/* [class*="BrandHiddenControls-module__container"]::before, */
+/* [class*="BrandHiddenControls-module__container"]::after, */
+/* [class*="ComposerHiddenActions"]::before, */
+/* [class*="ComposerHiddenActions"]::after { */
+/*   display: none !important; */
+/* } */
+/**/
+/* /* Hide emoji picker */ */
+/* [class*="Emoji-module__emojiPicker"], */
+/* [class*="ComposeMessage-module__emojiPopup"] { */
+/*   display: none !important; */
+/* } */
+/**/
+/* .composer textarea, */
+/* .composer input, */
+/* [class*="Composer"] textarea, */
+/* [class*="Composer"] input { */
+/*   background: #313244 !important; */
+/*   border: 1px solid #585b70 !important; */
+/*   border-radius: 20px !important; */
+/*   color: #d4d4d4 !important; */
+/*   padding: 10px 16px !important; */
+/* } */
+/**/
+/* .composer textarea:focus, */
+/* [class*="Composer"] textarea:focus { */
+/*   border-color: #89b4fa !important; */
+/*   box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.2) !important; */
+/*   outline: none !important; */
+/* } */
+/**/
+/* /* Scrollbar - minimal */ */
+/* ::-webkit-scrollbar { */
+/*   width: 6px; */
+/* } */
+/**/
+/* ::-webkit-scrollbar-track { */
+/*   background: #1e1e1e; */
+/* } */
+/**/
+/* ::-webkit-scrollbar-thumb { */
+/*   background: #313244; */
+/*   border-radius: 3px; */
+/* } */
+/**/
+/* ::-webkit-scrollbar-thumb:hover { */
+/*   background: #585b70; */
+/* } */
+/**/
+/* /* Chat list items */ */
+/* .chat-list-item, */
+/* [class*="ChatListItem"] { */
+/*   border-radius: 12px !important; */
+/*   margin: 2px 8px !important; */
+/*   transition: background 0.15s ease !important; */
+/* } */
+/**/
+/* .chat-list-item:hover, */
+/* [class*="ChatListItem"]:hover { */
+/*   background: #313244 !important; */
+/* } */
+/**/
+/* .chat-list-item.selected, */
+/* [class*="ChatListItem"][class*="selected"] { */
+/*   background: #313244 !important; */
+/* } */
+/**/
+/* /* Avatar styling */ */
+/* .avatar, */
+/* [class*="Avatar"] { */
+/*   border-radius: 50% !important; */
+/*   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3) !important; */
+/* } */
+/**/
+/* /* Reactions */ */
+/* [class*="Reaction"] { */
+/*   background: #313244 !important; */
+/*   border-radius: 12px !important; */
+/*   border: 1px solid #585b70 !important; */
+/* } */
+/**/
+/* /* Hide reaction flyover lines */ */
+/* [class*="BrandMessageFlyover"], */
+/* [class*="BrandMessageFlyover"] *, */
+/* [class*="Flyover-module"], */
+/* [class*="Flyover-module"] * { */
+/*   background: transparent !important; */
+/*   border: none !important; */
+/*   box-shadow: none !important; */
+/*   outline: none !important; */
+/* } */
+/**/
+/* [class*="BrandMessageFlyover"] ul, */
+/* [class*="Flyover"] ul { */
+/*   list-style: none !important; */
+/*   padding: 0 !important; */
+/*   margin: 0 !important; */
+/* } */
+/**/
+/* [class*="BrandMessageFlyover"] ul::before, */
+/* [class*="BrandMessageFlyover"] ul::after, */
+/* [class*="Flyover"] ul::before, */
+/* [class*="Flyover"] ul::after { */
+/*   display: none !important; */
+/* } */
+/**/
+/* /* Image/media in messages */ */
+/* .message-contents img, */
+/* .MessageContent-module__contents img { */
+/*   border-radius: 16px !important; */
+/* } */
+/**/
+/* /* Selection highlight */ */
+/* ::selection { */
+/*   background: rgba(91, 141, 239, 0.3) !important; */
+/* } */
+/**/
+/* /* Smooth transitions - selective, not global */ */
+/* .chat-list-item, */
+/* [class*="ChatListItem"], */
+/* a, */
+/* button { */
+/*   transition: background-color 0.15s ease, color 0.15s ease !important; */
+/* } */

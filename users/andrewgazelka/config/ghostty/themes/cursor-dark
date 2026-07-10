@@ -1,0 +1,32 @@
+# Cursor-inspired Dark Theme - Warm/Cozy aesthetic
+# Inspired by modern editor UIs
+
+# Main colors
+background = 14120b
+foreground = d8d0c0
+
+# ANSI color palette (warm tones)
+palette = 0=2a2820
+palette = 1=e06c60
+palette = 2=5cb87a
+palette = 3=d4a656
+palette = 4=6b9fc4
+palette = 5=b08cba
+palette = 6=5aafa8
+palette = 7=a09888
+palette = 8=6a6558
+palette = 9=e8847a
+palette = 10=6ed08e
+palette = 11=e0b86c
+palette = 12=7eb4d8
+palette = 13=c4a0ce
+palette = 14=6cc4bc
+palette = 15=d8d0c0
+
+# Cursor colors
+cursor-color = d8d0c0
+cursor-text = 14120b
+
+# Selection colors
+selection-background = 2e2a22
+selection-foreground = d8d0c0
