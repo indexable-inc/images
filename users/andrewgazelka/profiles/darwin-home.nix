@@ -519,6 +519,16 @@ in {
     recursive = true;
   };
 
+  # Home Manager does not replace a managed directory symlink when its source
+  # changes to recursive leaf links. Remove that legacy link before collision
+  # checks so linkGeneration can create the writable parent directory.
+  home.activation.migrateNushellDataDirectory = config.lib.dag.entryBefore ["checkLinkTargets"] ''
+    dataDir=${lib.escapeShellArg "${config.home.homeDirectory}/Library/Application Support/nushell"}
+    if [[ -L "$dataDir" ]] && [[ $(readlink "$dataDir") == /nix/store/*-home-manager-files/* ]]; then
+      run rm "$dataDir"
+    fi
+  '';
+
   # rbw (Vaultwarden CLI). On macOS rbw reads its config from
   # Library/Application Support, not XDG, so the upstream programs.rbw module
   # (which writes ~/.config/rbw) does not apply. Symlinked (not store-baked) so
