@@ -442,6 +442,17 @@
           upstream = "hold";
           reason = "Feature-sized fetcher change; upstreaming paused per NixOS/nix#15984 and it should open as an upstream issue/discussion first (touches lock-file-adjacent fetch semantics).";
         };
+        # 0014: underscore digit separators in numeric literals (`1_000`,
+        # `1_000.000_1`, `2.5e1_0`), Rust-shaped (between digits only; a
+        # leading underscore is still an identifier), stripped before the
+        # value is parsed. Repo `.nix` files stay separator-free until the
+        # whole toolchain (stock nix, alejandra/statix/deadnix, tree-sitter)
+        # accepts the syntax; astlog's digit-grouping lints track that
+        # backlog (astlog-rules/nix.astlog).
+        "0014-libexpr-accept-underscore-digit-separators-in-numeri.patch" = {
+          upstream = "hold";
+          reason = "Language syntax change; must start as an upstream issue/RFC, and humans submit nix patches upstream per NixOS/nix#15984.";
+        };
       };
     }
   ];
