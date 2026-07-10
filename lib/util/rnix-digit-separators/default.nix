@@ -8,9 +8,12 @@
 # apply this to the nixpkgs builds.
 #
 # Mechanics: nixpkgs vendors each tool's locked dependencies into a
-# fixed-output vendor dir, and `cargoSetupPostUnpackHook` copies it to the
-# writable `$cargoDepsCopy` before the patch phase runs, so a `postPatch` can
-# patch the vendored rnix source in place with no new fixed-output hash. The
+# fixed-output vendor dir, and the cargo setup hooks copy it to the writable
+# `$cargoDepsCopy` before the build compiles anything, so a `preBuild` can
+# patch the vendored rnix source in place with no new fixed-output hash
+# (`preBuild`, not `postPatch`: which phase performs the writable copy has
+# moved between nixpkgs vendorer generations, and pre-build is after every
+# variant while still before cargo reads a line of the crate). The
 # tokenizer moved across rnix releases, so the patch is selected by the
 # vendored version, and an unknown version fails the build with instructions
 # (a nixpkgs bump onto a new rnix minor adds a flavor here, not silence).
@@ -25,8 +28,8 @@
 # verbatim.
 tool:
 tool.overrideAttrs (old: {
-  postPatch =
-    (old.postPatch or "")
+  preBuild =
+    (old.preBuild or "")
     + ''
       patchedRnix=0
       for rnixDir in "$cargoDepsCopy"/rnix-*; do

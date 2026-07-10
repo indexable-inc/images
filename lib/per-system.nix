@@ -465,20 +465,34 @@
             }
             if $logged.exit_code == 0 and (($logged.stdout | str trim) | is-not-empty) {
               print --stderr $logged.stdout
+              # The tail as an annotation too: raw log downloads are blocked
+              # from automation, and the checks API only carries annotations.
+              let tail = (
+                $logged.stdout | lines | last 10 | str join " | " | str substring 0..600
+              )
+              print $"::error title=($f.attr) build log tail::($tail)"
             } else {
               # A content-addressed build (the rust units default to CA) keeps
               # its log under the *resolved* drv, which `nix log` cannot fetch by
               # the original -- so re-run the one failed check with -L to stream
               # the diagnostic (clippy lint / test output). nix does not cache
               # failures, so this just re-attempts that single check.
-              try {
+              let rebuilt = (do {
                 ^nix build ...[
                   $inst
                   "-L"
                   "--no-link"
                   "--option" "extra-experimental-features" "ca-derivations"
                 ]
-              } catch { }
+              } | complete)
+              print --stderr $rebuilt.stdout
+              print --stderr $rebuilt.stderr
+              let tail = (
+                $"($rebuilt.stdout)\n($rebuilt.stderr)"
+                | lines | where {|l| ($l | str trim) | is-not-empty }
+                | last 10 | str join " | " | str substring 0..600
+              )
+              print $"::error title=($f.attr) build log tail::($tail)"
             }
             print --stderr "::endgroup::"
           }
