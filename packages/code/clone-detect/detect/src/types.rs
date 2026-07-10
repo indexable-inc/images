@@ -87,6 +87,15 @@ impl Fragment {
             kind: node.kind.to_owned(),
         }
     }
+
+    /// Number of source lines covered by this fragment.
+    #[must_use]
+    pub const fn line_count(&self) -> usize {
+        self.lines
+            .end
+            .saturating_sub(self.lines.start)
+            .saturating_add(1)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,24 +111,17 @@ impl CloneGroup {
     /// deduplicates overlapping line ranges across every group.
     #[must_use]
     pub fn line_impact(&self) -> usize {
-        let total: usize = self.fragments.iter().map(fragment_line_count).sum();
+        let total: usize = self.fragments.iter().map(Fragment::line_count).sum();
         let original = self
             .fragments
             .iter()
-            .map(fragment_line_count)
+            .map(Fragment::line_count)
             .max()
             .unwrap_or_default();
         total.saturating_sub(original)
     }
 }
 
-fn fragment_line_count(fragment: &Fragment) -> usize {
-    fragment
-        .lines
-        .end
-        .saturating_sub(fragment.lines.start)
-        .saturating_add(1)
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

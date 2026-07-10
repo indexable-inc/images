@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, path::PathBuf};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+};
 
 use clone_scanner::{Location, Output};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -112,13 +115,15 @@ pub fn instances(scan: &Output, config: &DetectConfig) -> DetectionResult {
 }
 
 /// Put the canonical fragment first in every group and rank groups by the
-/// estimated number of removable lines. Stable path/range tie-breakers make
-/// JSON output reproducible across hash-map and Rayon iteration order.
+/// estimated number of removable lines.
+///
+/// Stable path/range tie-breakers make JSON output reproducible across hash-map and Rayon iteration order.
 pub fn rank_by_impact(groups: &mut [CloneGroup]) {
     for group in groups.iter_mut() {
         group.fragments.sort_by(|left, right| {
-            fragment_line_count(right)
-                .cmp(&fragment_line_count(left))
+            right
+                .line_count()
+                .cmp(&left.line_count())
                 .then_with(|| left.file.cmp(&right.file))
                 .then_with(|| left.byte_range.start.cmp(&right.byte_range.start))
                 .then_with(|| left.byte_range.end.cmp(&right.byte_range.end))
@@ -134,25 +139,23 @@ pub fn rank_by_impact(groups: &mut [CloneGroup]) {
     });
 }
 
-fn fragment_line_count(fragment: &Fragment) -> usize {
-    fragment
-        .lines
-        .end
-        .saturating_sub(fragment.lines.start)
-        .saturating_add(1)
+
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
+struct FragmentKey<'a> {
+    file: &'a Path,
+    start: usize,
+    end: usize,
 }
 
-fn first_fragment_key(group: &CloneGroup) -> Option<(&std::path::Path, usize, usize)> {
-    group.fragments.first().map(|fragment| {
-        (
-            fragment.file.as_path(),
-            fragment.byte_range.start,
-            fragment.byte_range.end,
-        )
+fn first_fragment_key(group: &CloneGroup) -> Option<FragmentKey<'_>> {
+    group.fragments.first().map(|fragment| FragmentKey {
+        file: fragment.file.as_path(),
+        start: fragment.byte_range.start,
+        end: fragment.byte_range.end,
     })
 }
 
-fn kind_rank(kind: Kind) -> u8 {
+const fn kind_rank(kind: Kind) -> u8 {
     match kind {
         Kind::Type1 => 0,
         Kind::Type2 => 1,
