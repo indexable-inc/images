@@ -2169,7 +2169,6 @@
       mkdir -p "$out"
     '';
 
-
   # Exercises the in-kernel runtime (ix_notebook_mcp/runtime.py) in-process: two
   # jobs run concurrently on one event loop, neither blocks the other, each keeps
   # its own captured stdout, and the trailing expression is captured as the
@@ -5145,7 +5144,6 @@
       cat stdout
       mkdir -p "$out"
     '';
-
 
   # Background-task failure reporting (packages/mcp/tests/test_task_errors.py):
   # a fire-and-forget task that dies with an unretrieved exception must be
