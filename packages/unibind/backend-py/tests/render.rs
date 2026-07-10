@@ -4,10 +4,11 @@
 //! (trybuild/macrotest would invoke cargo at test runtime, which the nix
 //! test sandbox cannot do, so the render output is snapshotted directly.)
 
-use std::fmt::Write as _;
-
 use proc_macro2::TokenStream;
 use unibind_core::ir;
+use unibind_test_support::{assert_render_snapshot, assert_snapshot};
+
+const GLUE_SNAPSHOT: &str = include_str!("snapshots/sample.py.rs");
 
 fn interface() -> ir::Interface {
     let file: syn::File =
@@ -16,16 +17,6 @@ fn interface() -> ir::Interface {
         panic!("fixture starts with a module");
     };
     unibind_core::lower_module(TokenStream::new(), module).expect("fixture lowers")
-}
-
-fn assert_snapshot(actual: &str, expected: &str, name: &str) {
-    if actual.trim() == expected.trim() {
-        return;
-    }
-    println!("=== actual {name} ===");
-    println!("{actual}");
-    println!("=== end {name} ===");
-    panic!("{name} drifted; copy the printed block into tests/snapshots/{name}");
 }
 
 #[test]
@@ -39,23 +30,5 @@ fn pyo3_glue_snapshot() {
     let interface = interface();
     let rendered = unibind_backend_py::render(&interface).expect("renders");
 
-    let mut shown = String::new();
-    for (record, attrs) in interface.records.iter().zip(&rendered.records) {
-        let outer = &attrs.outer;
-        writeln!(shown, "// struct {}: {}", record.name, quote::quote!(#(#outer)*))
-            .expect("write to string");
-        for (field, field_attrs) in record.fields.iter().zip(&attrs.fields) {
-            writeln!(
-                shown,
-                "//   field {}: {}",
-                field.name,
-                quote::quote!(#(#field_attrs)*)
-            )
-            .expect("write to string");
-        }
-    }
-    shown.push('\n');
-    let glue: syn::File = syn::parse2(rendered.glue).expect("glue parses");
-    shown.push_str(&prettyplease::unparse(&glue));
-    assert_snapshot(&shown, include_str!("snapshots/sample.py.rs"), "sample.py.rs");
+    assert_render_snapshot!(interface, rendered, GLUE_SNAPSHOT, "sample.py.rs");
 }

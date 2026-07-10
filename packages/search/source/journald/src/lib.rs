@@ -2,7 +2,7 @@
 //! documents for the multi-source `search` store.
 //!
 //! # Grain
-//! One [`Document`] per **(unit, UTC day)**, embedding only that day's
+//! One [`source_meta::Document`] per **(unit, UTC day)**, embedding only that day's
 //! priority<=4 messages (warning and worse) as `HH:MM:SS [level] message`
 //! lines. The journal's volume makes a per-message grain untenable, and the
 //! info/debug levels carry no incident signal; the warning-and-worse day slice
@@ -36,7 +36,6 @@ use std::collections::BTreeMap;
 use std::process::Command;
 
 use snafu::ResultExt as _;
-use source_meta::{Document, Source, SourceAdapter};
 
 pub use crate::error::Error;
 use crate::error::{JournalctlFailedSnafu, ParseSnafu, Result, SpawnSnafu};
@@ -151,19 +150,13 @@ impl JournaldLog {
     }
 }
 
-impl SourceAdapter for JournaldLog {
-    type Error = Error;
-
-    fn source(&self) -> Source {
-        Source::new(SOURCE_TAG)
-    }
-
-    fn documents(&self) -> impl Iterator<Item = Result<Document, Error>> + Send {
-        // Clone into an owned iterator so the result is `'static + Send`,
-        // independent of `&self` (mirrors the other source adapters).
-        self.days.clone().into_iter().map(UnitDay::into_document)
-    }
-}
+source_meta::impl_owned_source_adapter!(
+    JournaldLog,
+    Error,
+    SOURCE_TAG,
+    days,
+    UnitDay::into_document
+);
 
 /// One journal line reduced to its grouping key and message.
 struct ParsedEntry {

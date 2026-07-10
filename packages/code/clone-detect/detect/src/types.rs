@@ -96,6 +96,31 @@ pub struct CloneGroup {
     pub fragments: Vec<Fragment>,
 }
 
+impl CloneGroup {
+    /// Estimated lines removable by consolidating this group into its largest
+    /// fragment. This is a ranking signal, while the global statistic still
+    /// deduplicates overlapping line ranges across every group.
+    #[must_use]
+    pub fn line_impact(&self) -> usize {
+        let total: usize = self.fragments.iter().map(fragment_line_count).sum();
+        let original = self
+            .fragments
+            .iter()
+            .map(fragment_line_count)
+            .max()
+            .unwrap_or_default();
+        total.saturating_sub(original)
+    }
+}
+
+fn fragment_line_count(fragment: &Fragment) -> usize {
+    fragment
+        .lines
+        .end
+        .saturating_sub(fragment.lines.start)
+        .saturating_add(1)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DetectionResult {

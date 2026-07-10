@@ -343,6 +343,26 @@
     ''
   );
 
+  # One privacy boundary shared by every helper that can expose a signed-in
+  # user's personal account data. Keeping the IX_MCP_SHARED policy here makes
+  # the refusal semantics impossible to drift between integrations.
+  privateSessionSource = builtins.path {
+    name = "ix-mcp-private-session-source";
+    path = ./src/private_session.py;
+  };
+  privateSessionModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-private-session-module"
+    {
+      strictDeps = true;
+      meta.description = "Shared private-session guard for personal MCP integrations";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}"
+      mkdir -p "$site"
+      install -Dm644 ${privateSessionSource} "$site/private_session.py"
+    ''
+  );
+
   # `google_auth`: Gmail + Calendar for the kernel, with self-service sign-in.
   # Pure Python (no cdylib): it shells to the bundled `gcal` binary
   # (`IX_GCAL_BIN`, set on the wrapper below) to sign in (`login()` drives
@@ -1308,6 +1328,7 @@
       scipqlModule
       flecsQueryModule
       fsearchModule
+      privateSessionModule
       googleAuthModule
       ixGoogleModule
       ixNotebookMcpModule
@@ -2168,7 +2189,6 @@
       }
       mkdir -p "$out"
     '';
-
 
   # Exercises the in-kernel runtime (ix_notebook_mcp/runtime.py) in-process: two
   # jobs run concurrently on one event loop, neither blocks the other, each keeps
@@ -5146,7 +5166,6 @@
       mkdir -p "$out"
     '';
 
-
   # Background-task failure reporting (packages/mcp/tests/test_task_errors.py):
   # a fire-and-forget task that dies with an unretrieved exception must be
   # reported at completion into `task_errors` (asyncio's own warning only fires
@@ -5432,6 +5451,10 @@
     name = "ix-mcp-linear-triage-test";
     path = ./tests/test_linear_triage.py;
   };
+  linearTestSupport = builtins.path {
+    name = "ix-mcp-linear-test-support";
+    path = ./tests/linear_test_support.py;
+  };
   linearTriageTests =
     pkgs.runCommand "ix-mcp-linear-triage-tests"
     {
@@ -5442,6 +5465,7 @@
       export HOME=$TMPDIR/home
       mkdir -p "$HOME"
       cp ${linearTriageTestSource} "$TMPDIR/test_linear_triage.py"
+      cp ${linearTestSupport} "$TMPDIR/linear_test_support.py"
       ${lib.getExe linearTriageTestPython} -m pytest "$TMPDIR/test_linear_triage.py" -q -p no:cacheprovider >stdout 2>stderr || {
         echo "ix-mcp linear triage tests failed:" >&2
         cat stdout stderr >&2
@@ -5476,6 +5500,7 @@
       mkdir -p "$HOME"
       mkdir -p "$TMPDIR/fixtures"
       cp ${noxAutotriageTestSource} "$TMPDIR/test_nox_autotriage.py"
+      cp ${linearTestSupport} "$TMPDIR/linear_test_support.py"
       cp -r ${noxAutotriageTestFixtures}/. "$TMPDIR/fixtures/"
       ${lib.getExe noxAutotriageTestPython} -m pytest "$TMPDIR/test_nox_autotriage.py" -q -p no:cacheprovider >stdout 2>stderr || {
         echo "ix-mcp nox-autotriage tests failed:" >&2
@@ -5528,6 +5553,7 @@
     ps.pytest
     ps.polars
     ps.pydantic
+    privateSessionModule
     slackModule
   ]);
   slackTestSource = builtins.path {
@@ -5561,6 +5587,7 @@
     ps.pytest
     ps.pydantic
     ps.google-auth
+    privateSessionModule
     googleAuthModule
   ]);
   googleAuthTestSource = builtins.path {

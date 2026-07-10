@@ -4141,6 +4141,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "google-auth",
  "google-calendar",
  "serde_json",
  "tokio",
@@ -4172,6 +4173,7 @@ dependencies = [
  "anyhow",
  "base64",
  "clap",
+ "google-auth",
  "google-gmail",
  "serde_json",
  "tokio",
@@ -12296,6 +12298,7 @@ dependencies = [
  "serde_json",
  "syn 2.0.118",
  "unibind-core",
+ "unibind-test-support",
 ]
 
 [[package]]
@@ -12308,6 +12311,7 @@ dependencies = [
  "serde_json",
  "syn 2.0.118",
  "unibind-core",
+ "unibind-test-support",
 ]
 
 [[package]]
@@ -12320,6 +12324,7 @@ dependencies = [
  "serde_json",
  "syn 2.0.118",
  "unibind-core",
+ "unibind-test-support",
 ]
 
 [[package]]
@@ -12390,6 +12395,7 @@ dependencies = [
  "serde_json",
  "unibind-backend-ex",
  "unibind-core",
+ "unibind-test-support",
 ]
 
 [[package]]
@@ -12409,6 +12415,10 @@ version = "0.1.0"
 dependencies = [
  "futures",
 ]
+
+[[package]]
+name = "unibind-test-support"
+version = "0.1.0"
 
 [[package]]
 name = "unic-langid"

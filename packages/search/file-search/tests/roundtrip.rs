@@ -32,39 +32,6 @@ fn index_then_search_finds_path_by_filename() {
 }
 
 #[test]
-fn reindexing_removes_old_chunks() {
-    let workdir = TempDir::new().expect("workdir");
-    let index_dir = TempDir::new().expect("index dir");
-
-    let file = workdir.path().join("subject.md");
-    fs::write(&file, "alpha bravo charlie").expect("write v1");
-
-    {
-        let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
-        index
-            .index_directory(workdir.path(), false)
-            .expect("index v1");
-        let hits = index.search("alpha", 5, None).expect("search v1");
-        assert!(!hits.is_empty(), "v1 should match `alpha`");
-    }
-
-    fs::write(&file, "delta echo foxtrot").expect("write v2");
-    {
-        let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
-        index
-            .index_directory(workdir.path(), false)
-            .expect("index v2");
-        let alpha_hits = index.search("alpha", 5, None).expect("search alpha");
-        assert!(
-            alpha_hits.is_empty(),
-            "stale chunk should be gone after re-index: {alpha_hits:?}",
-        );
-        let delta_hits = index.search("delta", 5, None).expect("search delta");
-        assert!(!delta_hits.is_empty(), "v2 should match `delta`");
-    }
-}
-
-#[test]
 fn directory_filter_matches_subdirectory() {
     let workdir = TempDir::new().expect("workdir");
     let index_dir = TempDir::new().expect("index dir");
@@ -96,37 +63,34 @@ fn directory_filter_matches_subdirectory() {
 }
 
 #[test]
-fn reindex_removes_deleted_file_chunks() {
+fn reindex_removes_stale_and_deleted_file_chunks() {
     let workdir = TempDir::new().expect("workdir");
     let index_dir = TempDir::new().expect("index dir");
 
     let kept = workdir.path().join("kept.md");
     let removed = workdir.path().join("gone.md");
-    fs::write(&kept, "alpha bravo").expect("write kept");
-    fs::write(&removed, "alpha charlie").expect("write removed");
+    fs::write(&kept, "alpha bravo").expect("write kept v1");
+    fs::write(&removed, "charlie delta").expect("write removed");
 
     {
         let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
         index
             .index_directory(workdir.path(), false)
             .expect("index v1");
-        let hits = index.search("charlie", 5, None).expect("search v1");
-        assert!(!hits.is_empty(), "removed file should be searchable in v1");
+        assert!(!index.search("alpha", 5, None).expect("search kept v1").is_empty());
+        assert!(!index.search("charlie", 5, None).expect("search removed v1").is_empty());
     }
 
+    fs::write(&kept, "echo foxtrot").expect("write kept v2");
     fs::remove_file(&removed).expect("rm removed");
     {
         let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
         index
             .index_directory(workdir.path(), false)
             .expect("index v2");
-        let hits = index.search("charlie", 5, None).expect("search v2");
-        assert!(
-            hits.is_empty(),
-            "chunks for deleted file should be gone: {hits:?}",
-        );
-        let alpha_hits = index.search("alpha", 5, None).expect("search alpha");
-        assert!(!alpha_hits.is_empty(), "surviving file should still match");
+        assert!(index.search("alpha", 5, None).expect("stale search").is_empty());
+        assert!(index.search("charlie", 5, None).expect("deleted search").is_empty());
+        assert!(!index.search("foxtrot", 5, None).expect("current search").is_empty());
     }
 }
 

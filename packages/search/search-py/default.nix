@@ -88,7 +88,11 @@ in
       "$sanitized"
 
     mkdir -p "$out"
-    python3 ${./wheel/mkwheel.py} \
+    python3 ${ix.paths.root}/lib/build/pyo3-wheel.py \
+      --package search \
+      --dist-name ix-search \
+      --so-name _search.abi3.so \
+      --summary ${lib.escapeShellArg "Python bindings for content-addressed semantic code search, imported as search"} \
       --cdylib "$sanitized" \
       --python-src ${pythonSource} \
       --version ${version} \

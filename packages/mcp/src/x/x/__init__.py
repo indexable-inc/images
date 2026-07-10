@@ -35,11 +35,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+from functools import partial
 from typing import Any
 
 import polars as pl
 
 import browser
+from private_session import SHARED_ENV, require_private_session
 
 __all__ = ["DEFAULT_APP", "DEFAULT_ENDPOINT", "posts"]
 
@@ -53,24 +55,11 @@ DEFAULT_APP = browser.DEFAULT_APP
 # this env var. Reading X timelines/notifications/bookmarks exposes the signed-in
 # account's personal data, so -- like `google_auth` -- it is confined to incognito
 # sessions (the default for a plain ix-mcp); only a truthy value refuses access.
-SHARED_ENV = "IX_MCP_SHARED"
-
-
-def _require_incognito() -> None:
-    """Refuse to read personal X data in a shared (multiplayer) room.
-
-    `x.posts()` reads whatever the signed-in browser can see (home timeline,
-    notifications, bookmarks, a private account's posts), so a shared room would
-    leak one person's feed into state everyone can see. A shared room sets
-    ``IX_MCP_SHARED``; only then is access refused.
-    """
-    if os.environ.get(SHARED_ENV):
-        raise RuntimeError(
-            "x.posts is not available in a shared (multiplayer) room "
-            "(IX_MCP_SHARED is set), because it would expose the signed-in "
-            "X account's personal feed to everyone in the room. Use it from an "
-            "incognito chat instead; its transcript stays private to you."
-        )
+_require_incognito = partial(
+    require_private_session,
+    "x.posts",
+    "the signed-in X account's personal feed",
+)
 
 # Named timeline shortcuts: a bare keyword maps to its x.com path. Anything else
 # is treated as a handle (leading "@"), a search ("#tag" or free text), or a URL.

@@ -8,6 +8,7 @@
 use unibind_core::ir;
 use unibind_gen::host::HostEmitter as _;
 use unibind_gen::ts::TsEmitter;
+use unibind_test_support::assert_snapshot;
 
 fn names(py: Option<&str>, ts: Option<&str>) -> ir::Names {
     ir::Names {
@@ -235,16 +236,6 @@ fn interface() -> ir::Interface {
         errors: sample_errors(),
         objects: sample_objects(),
     }
-}
-
-fn assert_snapshot(actual: &str, expected: &str, name: &str) {
-    if actual.trim() == expected.trim() {
-        return;
-    }
-    println!("=== actual {name} ===");
-    println!("{actual}");
-    println!("=== end {name} ===");
-    panic!("{name} drifted; copy the printed block into tests/snapshots/{name}");
 }
 
 #[test]
