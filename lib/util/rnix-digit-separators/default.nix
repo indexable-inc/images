@@ -32,19 +32,37 @@ tool.overrideAttrs (old: {
   preBuild =
     (old.preBuild or "")
     + ''
-      if [ -n "''${cargoDepsCopy:-}" ]; then
-        rnixVendor="$cargoDepsCopy"
-      else
-        rnixVendor="$NIX_BUILD_TOP/rnix-digit-separators-vendor"
-        cp -r --reflink=auto \
-          "''${cargoDeps:?rnix-digit-separators: build has neither cargoDepsCopy nor cargoDeps}" \
-          "$rnixVendor"
-        chmod -R u+w "$rnixVendor"
-        for rnixCargoConfig in .cargo/config.toml .cargo/config; do
-          if [ -f "$rnixCargoConfig" ]; then
-            sed -i "s|$cargoDeps|$rnixVendor|g" "$rnixCargoConfig"
+      # The vendor tree cargo actually reads is whatever the cargo setup hook
+      # wrote into .cargo/config.toml -- across vendorer generations that has
+      # been a writable $cargoDepsCopy, the read-only store output, or an
+      # unpacked tree elsewhere in the build dir. The config is the one
+      # authoritative pointer, so read it from there; prefer $cargoDepsCopy
+      # only when a generation still exports it.
+      rnixVendor="''${cargoDepsCopy:-}"
+      rnixConfig=""
+      if [ -z "$rnixVendor" ]; then
+        for rnixConfigCandidate in .cargo/config.toml .cargo/config; do
+          [ -f "$rnixConfigCandidate" ] || continue
+          rnixVendor=$(sed -n 's/^[[:space:]]*directory[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$rnixConfigCandidate" | head -n 1)
+          if [ -n "$rnixVendor" ]; then
+            rnixConfig="$rnixConfigCandidate"
+            break
           fi
         done
+      fi
+      if [ -z "$rnixVendor" ]; then
+        echo "rnix-digit-separators: no cargoDepsCopy and no vendored-sources directory in .cargo/config*" >&2
+        exit 1
+      fi
+      if [ ! -w "$rnixVendor" ]; then
+        rnixWritable="$NIX_BUILD_TOP/rnix-digit-separators-vendor"
+        rm -rf "$rnixWritable"
+        cp -r --reflink=auto "$rnixVendor" "$rnixWritable"
+        chmod -R u+w "$rnixWritable"
+        if [ -n "$rnixConfig" ]; then
+          sed -i "s|$rnixVendor|$rnixWritable|g" "$rnixConfig"
+        fi
+        rnixVendor="$rnixWritable"
       fi
       patchedRnix=0
       for rnixDir in "$rnixVendor"/rnix-*; do
@@ -71,6 +89,8 @@ tool.overrideAttrs (old: {
       if [ "$patchedRnix" = 0 ]; then
         echo "rnix-digit-separators: no vendored rnix-* crate found in $rnixVendor;" >&2
         echo "did ${old.pname or "the tool"} stop parsing nix with rnix?" >&2
+        echo "vendor dir entries:" >&2
+        ls "$rnixVendor" 2>/dev/null | head -6 >&2
         exit 1
       fi
     '';
