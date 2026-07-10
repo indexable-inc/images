@@ -63,6 +63,8 @@ members = [
   "packages/terminal/kitty",
   "packages/search/lake/iceberg",
   "packages/minecraft/minecraft/nbt",
+  "packages/minecraft/minecraft/protocol",
+  "packages/minecraft/minecraft/protocol/py",
   "packages/minecraft/minecraft/sound",
   "packages/minecraft/minecraft/sync-managed",
   "packages/mirror",
@@ -262,6 +264,7 @@ objc2-quartz-core = "0.3"
 objc2-web-kit = "0.3"
 object = { version = "0.39", default-features = false, features = ["read"] }
 object_store = { version = "0.14", features = ["aws"] }
+mc-protocol = { path = "packages/minecraft/minecraft/protocol" }
 mcp-server-info = { path = "packages/mcp/server-info" }
 panes-protocol = { path = "packages/vm/panes/protocol" }
 panes-guest-transport = { path = "packages/vm/panes/guest-transport" }

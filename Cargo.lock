@@ -6093,6 +6093,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "mc-protocol-py"
+version = "0.1.0"
+dependencies = [
+ "mc-protocol",
+ "pyo3",
+ "unibind",
+]
+
+[[package]]
 name = "mcp-server-info"
 version = "0.1.0"
 dependencies = [
