@@ -581,6 +581,13 @@
       };
       andrewgazelka-workstation = personalWorkstationModule;
       andrewgazelka-darwin = personalDarwinHomeModule;
+      # Personal-but-shareable server module for github:harivansh-afk: the
+      # dotfiles hari runs as the `hari` user on hari-compute-1 (zsh, git,
+      # neovim plus the mux nvim multiplexer, and the CLI tool set around
+      # them), ported from his personal nix repo. Consumes the shared
+      # cli-baseline module; the source repo's secrets/theme machinery is
+      # deliberately absent. See users/harivansh-afk/home.nix.
+      harivansh-afk = import ./users/harivansh-afk/home.nix {inherit ix;};
       # Reusable workstation module: draw one Minecraft boss bar per in-flight
       # GitHub Actions run across a set of repos (green = running, filled by
       # elapsed / average duration; purple = queued/unpicked). Import it and set
