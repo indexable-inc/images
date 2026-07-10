@@ -13,7 +13,11 @@
 # minecraft/velocity modules use for health checks) and `mc-probe-kt`
 # (Kotlin over the FFM/JVM unibind bindings,
 # packages/minecraft/minecraft/probe-kt), so the e2e path exercises every
-# binding surface against a live server.
+# binding surface against a live server. Finally (5) `mc-bot`
+# (packages/minecraft/minecraft/bot) joins as a real offline-mode player —
+# full login, registry configuration, play state — and records the session
+# as a ReplayMod .mcpr, which the test exports as an artifact: when a run
+# fails, the replay is the client-side trace to scrub through.
 #
 # Minestom needs no bootstrap step (no paperclip, no EULA, no world download),
 # so unlike tests/minecraft-blocks-vm.nix there is no build-time pre-patching:
@@ -28,6 +32,7 @@
   spleefJar = packages.minestom.spleefServerJar;
   mcProbe = lib.getExe packages.mc-probe;
   mcProbeKt = lib.getExe packages.mc-probe-kt;
+  mcBot = lib.getExe packages.mc-bot;
 in
   pkgs.testers.runNixOSTest {
     name = "minestom-spleef-boot";
@@ -88,6 +93,17 @@ in
       # against a live server, not just their conformance fixtures.
       server.succeed("${mcProbe} 127.0.0.1:25565 --protocol-version 775 --timeout 30")
       server.succeed("${mcProbeKt} 127.0.0.1:25565 --protocol-version 775 --timeout 30")
+
+      # Join as a real player and record the session. mc-bot walks the whole
+      # protocol — offline login, registry configuration, spawn into the
+      # lobby — so this asserts far more than the pings: the server actually
+      # admits a client. The recorded ReplayMod .mcpr is exported as a test
+      # artifact; open it in ReplayMod to see exactly what a client saw.
+      server.succeed(
+          "${mcBot} 127.0.0.1:25565 --protocol-version 775 --mc-version 26.1.2"
+          + " --record-seconds 8 --timeout 30 --output /tmp/spleef.mcpr"
+      )
+      server.copy_from_vm("/tmp/spleef.mcpr")
 
       server.shutdown()
     '';

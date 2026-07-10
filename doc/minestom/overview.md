@@ -84,6 +84,9 @@ loaders/mods/EULA. A consumer can make a runnable fleet by setting
 
 The spleef server is covered end-to-end by `checks.<system>.minestom-spleef-vm`
 (`tests/minestom-spleef-vm.nix`): a NixOS VM boots the jar under
-`services.minestom` and a real Minecraft server-list ping — `mc-probe`, the
-repo's SLP asserter (`packages/minecraft/minecraft/probe`) — must answer with
-the pinned protocol version.
+`services.minestom`, a real Minecraft server-list ping must answer with the
+pinned protocol version through both renderings of the shared `mc-protocol`
+crate — `mc-probe` (Python) and `mc-probe-kt` (Kotlin/FFM), both under
+`packages/minecraft/minecraft` — and `mc-bot` joins as a real offline-mode
+player and records the session as a ReplayMod `.mcpr`, exported as a test
+artifact so a failing run leaves the client-side trace to scrub through.

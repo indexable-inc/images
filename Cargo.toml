@@ -62,6 +62,7 @@ members = [
   "packages/ix-windows",
   "packages/terminal/kitty",
   "packages/search/lake/iceberg",
+  "packages/minecraft/minecraft/bot",
   "packages/minecraft/minecraft/nbt",
   "packages/minecraft/minecraft/protocol",
   "packages/minecraft/minecraft/protocol/jvm",
@@ -218,6 +219,7 @@ efx-engine = { path = "packages/efx/engine" }
 efx-ir = { path = "packages/efx/ir" }
 efx-lang = { path = "packages/efx/lang" }
 file-language = { path = "packages/code/file-language" }
+flate2 = "1"
 flecs-query-core = { path = "packages/flecs-query/core" }
 fontdue = "0.9"
 futures = "0.3"
@@ -270,6 +272,7 @@ object = { version = "0.39", default-features = false, features = ["read"] }
 object_store = { version = "0.14", features = ["aws"] }
 mc-protocol = { path = "packages/minecraft/minecraft/protocol" }
 mcp-server-info = { path = "packages/mcp/server-info" }
+md-5 = "0.10"
 panes-protocol = { path = "packages/vm/panes/protocol" }
 panes-guest-transport = { path = "packages/vm/panes/guest-transport" }
 parking_lot = "0.12"
@@ -394,3 +397,7 @@ webpki-roots = "1"
 wry = { version = "0.55", features = ["transparent"] }
 x509-parser = "0.18"
 xxhash-rust = { version = "0.8", default-features = false }
+# Container format only (ReplayMod .mcpr archives); the compression backends
+# are opted into per consumer, so the default heavyweight codecs (zstd, lzma,
+# bzip2) stay out of the build graph.
+zip = { version = "7", default-features = false }

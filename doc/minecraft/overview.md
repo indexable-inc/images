@@ -1,18 +1,24 @@
 # minecraft tools
 
 `packages/minecraft` is a directory of small, single-purpose Minecraft tools in
-three languages. Three are Rust binaries and members of the repo's top-level
-Cargo workspace; the rest are a Python uv app, a Python script, and a Java agent.
-None of them run a server: they encode data, play sounds, reconcile files, probe
-a server, or hot-reload plugin classes. The NixOS modules and images that consume
-them are cross-referenced, not documented here (see common).
+several languages. The Rust members live in the repo's top-level Cargo
+workspace; the rest are Python scripts, a Kotlin CLI, and a Java agent. None
+of them run a server: they encode data, play sounds, reconcile files, probe a
+server, record a session, or hot-reload plugin classes. The wire-protocol
+logic they share lives in one Rust crate (`protocol`), rendered into Python
+and JVM bindings by unibind (`packages/unibind`). The NixOS modules and
+images that consume them are cross-referenced, not documented here (see
+common).
 
 | member | lang | entry | flake output |
 | --- | --- | --- | --- |
 | `nbt` (`minecraft-nbt`) | Rust | `nbt/src/main.rs` | `.#minecraft-nbt` |
 | `sound` (`minecraft-sound`) | Rust | `sound/src/main.rs` | `.#minecraft-sound` |
 | `sync-managed` (`minecraft-sync-managed`) | Rust | `sync-managed/src/main.rs` | `.#minecraft-sync-managed` |
-| `probe` (`mc-probe`) | Python (uv) | `probe/src/mc_probe/__init__.py` | `.#mc-probe` |
+| `protocol` (`mc-protocol`) | Rust lib (+ `py`/`jvm` binding crates) | `protocol/src/lib.rs` | none (library) |
+| `probe` (`mc-probe`) | Python | `probe/mc_probe.py` | `.#mc-probe` |
+| `probe-kt` (`mc-probe-kt`) | Kotlin | `probe-kt/src/McProbe.kt` | `.#mc-probe-kt` |
+| `bot` (`mc-bot`) | Rust | `bot/src/main.rs` | `.#mc-bot` |
 | `rcon` (`minecraft-rcon`) | Python | `rcon/minecraft-rcon.py` | overlay only |
 | `hot-reload-agent` | Java | `hot-reload-agent/src/dev/ix/minecraft/hotreload/HotReloadAgent.java` | overlay only |
 
@@ -116,17 +122,72 @@ configuring RCON.
   `rcon.port`, `rcon.password`, `broadcast-rcon-to-ops`.
 - **Build.** `sync-managed/default.nix` via `ix.cargoUnit.selectBinaryWithTests`.
 
+## mc-protocol: the shared wire-protocol crate
+
+One Rust implementation of the protocol pieces the repo speaks
+(`protocol/src/lib.rs`): VarInt encoding and packet framing (`varint`),
+length-prefixed strings (`wire`), the Server List Ping status exchange
+(`slp`), and legacy `§`/`&` format-code stripping for MOTD comparison
+(`text`). Every probe and test harness goes through it, whatever its
+language:
+
+- **Python** — `protocol/py`, unibind-rendered pyo3 bindings imported as
+  `mc_protocol`; consumed by mc-probe.
+- **JVM** — `protocol/jvm`, the same three-call surface (parse address,
+  status, strip format codes) rendered by unibind's jvm backend into C-ABI
+  shims plus one generated FFM class (`McProtocolJvm`); consumed by
+  mc-probe-kt.
+- **Rust** — consumed directly by mc-bot for its packet layer.
+
+Non-goal: SRV record lookup. In-repo health checks and tests address servers
+by explicit `host:port`; resolve SRV records before calling in.
+
 ## mc-probe: Server List Ping health check
 
-A `mcstatus`-based exit-code probe for fleet health checks (`probe/src/mc_probe/__init__.py:1`).
+An exit-code probe for fleet health checks (`probe/mc_probe.py`), a single
+Python script over the `mc_protocol` bindings.
 
-- **CLI** (`__init__.py:66`): `mc-probe <host[:port]>` with optional
+- **CLI** (`mc_probe.py:56`): `mc-probe <host[:port]>` with optional
   `--motd-contains SUBSTRING` (repeatable; strips `section`/`&` format codes both
-  sides, `__init__.py:25`), `--protocol-version N`, `--min-max-players N`,
-  `--timeout SECONDS` (default 5). Resolves SRV records like the vanilla client.
+  sides), `--protocol-version N`, `--min-max-players N`,
+  `--timeout SECONDS` (default 5).
 - **Contract.** Exit 0 only if the SLP handshake answered and every requested
-  assertion held; otherwise each failure is named on stderr and it exits 1
-  (`__init__.py:108`). Built with `ix.buildUvApplication` (`probe/default.nix`).
+  assertion held; otherwise each failure is named on stderr and it exits 1.
+  Built with `ix.writePythonApplication` over a `python3.withPackages` that
+  carries the unibind-built `mc_protocol` module (`probe/default.nix`).
+
+## mc-probe-kt: the same probe, from Kotlin
+
+The JVM twin of mc-probe (`probe-kt/src/McProbe.kt`): same flags, same
+exit-code contract, but speaking the wire format through `McProtocolJvm`,
+the unibind-rendered FFM class over the Rust crate. It exists to prove the
+JVM binding surface end-to-end against a live server (the spleef VM test
+runs both probes), and as the seed for JVM-side test harnesses.
+`probe-kt/default.nix` compiles the generated class + the Kotlin CLI with
+JDK 25/kotlinc and wraps a launcher that passes
+`--enable-native-access=ALL-UNNAMED` and the native library location.
+
+## mc-bot: record a session as a ReplayMod replay
+
+A headless Minecraft client (`bot/src/main.rs`) that joins a server as a
+real offline-mode player — full login, registry configuration, spawn — sits
+in the play state answering keep-alives, and records every clientbound
+packet into a ReplayMod `.mcpr` archive (a zip of `recording.tmcpr`, the
+timestamped packet stream, plus `metaData.json`). Open the file in ReplayMod
+to scrub through exactly what the client saw; the spleef VM test exports one
+as a test artifact so a failing e2e run leaves a client-side trace.
+
+- **CLI**: `mc-bot <host[:port]> --protocol-version N --mc-version NAME
+  [--username U] [--record-seconds S] [--timeout S] --output FILE.mcpr`.
+  The protocol version is explicit at the call site, like the probes', so
+  version bumps are deliberate.
+- **Scope.** Offline login only (an encryption request is a hard error); the
+  bot never moves or interprets game content — packet ids it must answer
+  (keep-alive, ping, the configuration handshake) are transcribed from the
+  pinned Minestom's `PacketRegistry` in `bot/src/packets.rs`. The replay is
+  written even when the session ends in a kick or network failure.
+- **Build.** `bot/default.nix` via `ix.cargoUnit.selectBinaryWithTests`;
+  framing/`VarInt`/string primitives come from mc-protocol.
 
 ## minecraft-rcon: minimal RCON client
 
