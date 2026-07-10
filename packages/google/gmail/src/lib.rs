@@ -65,7 +65,7 @@ pub(crate) struct PageParts<T> {
 }
 
 impl<T> PageParts<T> {
-    fn new(items: Vec<T>, next_page_token: Option<String>) -> Self {
+    const fn new(items: Vec<T>, next_page_token: Option<String>) -> Self {
         Self {
             items,
             next_page_token,
