@@ -6,7 +6,10 @@
   cfg = config.nix.remoteBuilders;
 
   tokenType = lib.types.strMatching "[^ \t\r\n]+";
-  lineType = lib.types.strMatching "[^\r\n]+";
+  commandType = lib.types.strMatching "[^\r\n]+";
+  hostType = lib.types.strMatching "[A-Za-z0-9._:%-]+";
+  keyType = lib.types.strMatching "/[^ \t\r\n]+";
+  userType = lib.types.strMatching "[A-Za-z0-9._-]+";
 
   builderType = lib.types.submodule {
     options = {
@@ -17,19 +20,19 @@
       };
 
       hostName = lib.mkOption {
-        type = tokenType;
+        type = hostType;
         example = "builder.example.com";
         description = "Network host passed to OpenSSH for this builder.";
       };
 
       user = lib.mkOption {
-        type = tokenType;
+        type = userType;
         default = "root";
         description = "Remote SSH user.";
       };
 
       sshKey = lib.mkOption {
-        type = lib.types.nullOr lineType;
+        type = lib.types.nullOr keyType;
         default = null;
         example = "/etc/nix/builder_ed25519";
         description = "Local private key used by Nix and OpenSSH, or null to use a default identity file.";
@@ -79,7 +82,7 @@
       };
 
       publicHostKey = lib.mkOption {
-        type = lib.types.nullOr lineType;
+        type = lib.types.nullOr tokenType;
         default = null;
         description = "Base64-encoded SSH host key recorded in Nix's machine entry.";
       };
@@ -107,7 +110,7 @@
         };
 
         proxyCommand = lib.mkOption {
-          type = lib.types.nullOr lineType;
+          type = lib.types.nullOr commandType;
           default = null;
           example = "/run/current-system/sw/bin/connect-builder";
           description = "Single-line OpenSSH ProxyCommand, or null for a direct connection.";
@@ -248,6 +251,10 @@ in {
       {
         assertion = lib.all (builder: builder.systems != []) cfg;
         message = "every nix.remoteBuilders entry must declare at least one system";
+      }
+      {
+        assertion = lib.all (builder: builder.sshKey == null || !lib.hasPrefix "${builtins.storeDir}/" builder.sshKey) cfg;
+        message = "nix.remoteBuilders sshKey values must not point into the Nix store";
       }
     ];
 
