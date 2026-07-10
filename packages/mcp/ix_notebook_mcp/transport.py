@@ -160,7 +160,9 @@ async def _run_with_channel_pump(server, read_stream, write_stream, init_options
         logger.warning("channel pump: SDK internals unavailable; running without the initialized gate")
         with _session_entity("stdio"):
             async with anyio.create_task_group() as tg:
-                tg.start_soon(pump_outbox, write_stream, None)
+                initialized = anyio.Event()
+                initialized.set()
+                tg.start_soon(pump_outbox, write_stream, initialized)
                 await server.run(read_stream, write_stream, init_options)
                 tg.cancel_scope.cancel()
         return
@@ -169,11 +171,14 @@ async def _run_with_channel_pump(server, read_stream, write_stream, init_options
         session = await stack.enter_async_context(
             ServerSession(read_stream, write_stream, init_options)
         )
+        initialized = anyio.Event()
         with _session_entity("stdio") as upgrade_client:
             async with anyio.create_task_group() as tg:
-                tg.start_soon(pump_outbox, write_stream, session)
-                tg.start_soon(_watch_client_name, session, upgrade_client)
+                tg.start_soon(pump_outbox, write_stream, initialized)
+                tg.start_soon(_watch_client_name, session, initialized, upgrade_client)
                 async for message in session.incoming_messages:
+                    if not initialized.is_set() and _session_initialized(session):
+                        initialized.set()
                     tg.start_soon(
                         functools.partial(
                             server._handle_message, message, session, lifespan_context, raise_exceptions=False
@@ -182,22 +187,21 @@ async def _run_with_channel_pump(server, read_stream, write_stream, init_options
                 tg.cancel_scope.cancel()
 
 
-def _session_initialized(session: ServerSession | None) -> bool:
-    """Whether the client has completed the initialize handshake. None session
-    (the fallback path) reports True: there is nothing to gate on there."""
-    if session is None:
-        return True
+def _session_initialized(session: ServerSession) -> bool:
+    """Whether the client has completed the initialize handshake."""
     return getattr(session, "_initialization_state", None) is InitializationState.Initialized
 
 
-async def _watch_client_name(session: ServerSession, upgrade: Callable[[str], None]) -> None:
+async def _watch_client_name(
+    session: ServerSession,
+    initialized: anyio.Event,
+    upgrade: Callable[[str], None],
+) -> None:
     """Upgrade the session entity's client fact from the transport kind to the
     name declared in the initialize handshake. ``client_params`` is set before
-    the session reports Initialized, so polling the same gate as the pump is
-    sufficient; a client that never completes the handshake keeps the kind."""
-    # ServerSession exposes no initialization event, only this private state.
-    while not _session_initialized(session):  # noqa: ASYNC110
-        await anyio.sleep(_OUTBOX_POLL_SECONDS)
+    session reports Initialized; a client that never completes the handshake
+    leaves this task waiting and keeps the transport kind."""
+    await initialized.wait()
     params = session.client_params
     if params is not None:
         upgrade(params.clientInfo.name)
@@ -205,7 +209,7 @@ async def _watch_client_name(session: ServerSession, upgrade: Callable[[str], No
 
 async def pump_outbox(
     write_stream: ObjectSendStream[SessionMessage],
-    session: ServerSession | None,
+    initialized: anyio.Event,
 ) -> None:
     """Drain this session's share of the in-process mailbox outbox into
     ``notifications/claude/channel`` events (broadcast rows plus rows addressed
@@ -214,18 +218,13 @@ async def pump_outbox(
     Custom notification methods are not in the SDK's typed ``ServerNotification``
     union, so the JSON-RPC message is built directly and sent on the transport's
     write stream -- the same bytes ``ServerSession.send_notification`` would
-    produce. Holds every send until the client is ``initialized`` (see
-    :func:`_session_initialized`), so a startup/replay ``notify()`` never emits a
-    notification before the handshake completes.
+    produce. Holds every send on the initialization event, so a startup/replay
+    ``notify()`` never emits a notification before the handshake completes.
     """
+    await initialized.wait()
     cfg = config()
     box = mailbox.get_mailbox()
     while True:
-        # Wait for the handshake before draining, so rows that accrue during
-        # startup are held (not dropped) until the client can receive them.
-        if not _session_initialized(session):
-            await anyio.sleep(_OUTBOX_POLL_SECONDS)
-            continue
         try:
             # Serve only this session's mail: broadcast rows (explicit
             # notify() -- pr_watch and friends) plus rows addressed to this
