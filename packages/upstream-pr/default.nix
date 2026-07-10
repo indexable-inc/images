@@ -16,25 +16,40 @@
 #      mechanical drift between our old base and the upstream tip; a real
 #      collision fails loudly (this is exactly where old-base-vs-tip drift
 #      surfaces, and a human must rebase the patch).
-#   4. Pushes the branch to an indexable-inc fork of the upstream repo (created
+#   4. Runs the fork's `preflight` commands (lib/fork-packages.nix) in the
+#      patched scratch checkout: the target repo's own cheap pre-submit gates
+#      (fmt-level, mirroring the first steps of its CI). A red preflight aborts
+#      the contribution loudly BEFORE anything is pushed; an upstream PR that
+#      fails `cargo fmt` in its first CI step reads as low-effort to
+#      maintainers (nushell/nushell#18549).
+#   5. Pushes the branch to an indexable-inc fork of the upstream repo (created
 #      with `gh repo fork --clone=false` if absent). Pushing to OUR fork is
 #      fine; it is not the outward act.
-#   5. Prints the ready-to-open compare URL. With `--open`, additionally opens a
-#      DRAFT PR upstream. Default is prepare-only: opening the upstream PR is the
-#      outward act and stays behind an explicit `--open` a human invokes.
+#   6. Prints the ready-to-open compare URL. With `--open`, additionally opens
+#      the PR upstream READY FOR REVIEW (pass `--draft` to open a draft
+#      instead). Ready is the default because the preflight and template
+#      rendering above are exactly the pre-submit bar; a PR parked as a draft
+#      signals not-ready and sits unreviewed. Default is prepare-only: opening
+#      the upstream PR is the outward act and stays behind an explicit `--open`
+#      a human invokes.
 #
 # The PR's title and body come FROM THE PATCH ITSELF: subject = title, commit
 # message body = PR body (one fact, one home; the fork mapping deliberately has
 # no duplicate description field), plus AI attribution and a link back to the
-# patch file of record. An optional `patches.<patch>.prExtra` in the mapping is
-# appended after the body for upstream-specific PR-template content (issue refs,
-# checklists) that does not belong in a commit message. A body-less commit is
+# patch file of record. When the target repo ships a PR template
+# (.github/pull_request_template.md and the standard fallback locations), the
+# body is RENDERED INTO the template's `## ` sections instead: Description <-
+# the commit body, a release-notes section <- the patch's `releaseNotes` from
+# the mapping, an additional-notes section <- `prExtra` + the attribution
+# block. A template section this tool cannot fill refuses loudly rather than
+# opening a noncompliant PR; a repo with no template keeps the plain
+# composition (body + `prExtra` + attribution). A body-less commit is
 # refused; the `patch-dag-<name>` check enforces the same for every
 # attempt-marked patch so the failure happens in CI, not mid-contribution.
 #
-# `--dry-run` runs the whole flow (closure, fetch, am, branch) but skips the
-# push and PR, printing what it WOULD push. Used to validate content without
-# touching any remote.
+# `--dry-run` runs the whole flow (closure, fetch, am, branch, preflight) but
+# skips the push and PR, printing what it WOULD push. Used to validate content
+# without touching any remote.
 #
 # The fork-package mapping (upstream URL, patch dir) is data from
 # lib/fork-packages.nix; the dependency closure is data from each series'
@@ -48,6 +63,9 @@
   git,
   gh,
   coreutils,
+  # Preflight commands are arbitrary shell strings from the fork mapping,
+  # run with `bash -ec` in the scratch checkout.
+  bash,
 }: let
   forkData = (formats.json {}).generate "fork-packages.json" ix.forkPackages;
   # Reuse the DAG closure logic from the one owner of that code (rebase-patches),
@@ -64,6 +82,7 @@ in
       git
       gh
       coreutils
+      bash
     ];
     text = ''
       # nu
@@ -130,10 +149,77 @@ in
         | str trim --char "-"
       }
 
+      # The target repo's PR template file in the scratch checkout, or null.
+      # GitHub resolves templates from .github/, the repo root, and docs/, in
+      # either case; the scratch repo has the upstream default-branch tip
+      # checked out, so the working tree is the source of truth.
+      def "template find" [scratch: string]: nothing -> any {
+        let hits = (
+          [
+            ".github/pull_request_template.md"
+            ".github/PULL_REQUEST_TEMPLATE.md"
+            "pull_request_template.md"
+            "PULL_REQUEST_TEMPLATE.md"
+            "docs/pull_request_template.md"
+            "docs/PULL_REQUEST_TEMPLATE.md"
+          ]
+          | where {|c| $scratch | path join $c | path exists }
+        )
+        if ($hits | is-empty) { null } else { $scratch | path join ($hits | first) }
+      }
+
+      # Render the PR body INTO the target repo's PR template: each `## `
+      # section is filled from the source that owns it (Description <- the
+      # commit body, release notes <- the patch's `releaseNotes` from the fork
+      # mapping, additional notes <- `prExtra` + the attribution block). A
+      # section this mapping does not recognize, or a release-notes section
+      # for a patch that declares no `releaseNotes`, REFUSES loudly: a
+      # template-noncompliant PR reads as low-effort to the maintainers
+      # receiving it (nushell/nushell#18549), so there is no silent fallback.
+      def "template render" [
+        template: string     # raw template text from the upstream checkout
+        pkg: string          # fork name, for error messages
+        target: string       # patch file name, for error messages
+        commit_body: string  # fills the Description section
+        release_notes: any   # `patches.<patch>.releaseNotes`, or null
+        notes: string        # prExtra + attribution, fills additional notes
+      ]: nothing -> string {
+        let headings = (
+          $template
+          | lines
+          | where {|l| $l | str starts-with "## " }
+          | each {|l| $l | str replace --regex '^##\s+' "" | str trim }
+        )
+        if ($headings | is-empty) {
+          error make { msg: $"upstream-pr: ($pkg): the target repo has a PR template with no `## ` sections; this tool cannot render into it. Open the PR by hand, following the template." }
+        }
+        $headings
+        | each {|h|
+          let hl = ($h | str downcase)
+          let content = (
+            if ($hl | str contains "description") {
+              $commit_body
+            } else if (($hl | str contains "user-facing") or ($hl | str contains "release note")) {
+              if $release_notes == null {
+                error make { msg: $"upstream-pr: ($pkg): the target repo's PR template requires a '($h)' section, but ($target) declares no `releaseNotes` in the fork mapping \(lib/fork-packages.nix\). Write the user-facing change in release-note style \(or 'n/a'\) there; NOT opening a template-noncompliant PR." }
+              }
+              $release_notes | str trim
+            } else if (($hl | str contains "additional note") or ($hl == "notes")) {
+              $notes
+            } else {
+              error make { msg: $"upstream-pr: ($pkg): the target repo's PR template has a '($h)' section this tool does not know how to fill. Extend the section mapping in packages/upstream-pr or open the PR by hand; NOT opening a template-noncompliant PR." }
+            }
+          )
+          $"## ($h)\n\n($content)"
+        }
+        | str join "\n\n"
+      }
+
       def main [
         pkg: string    # fork package name (codex | btop | clippy)
         patch: string  # patch file name (or its NNNN prefix / unique substring)
-        --open         # also open a DRAFT PR upstream (outward act; default: prepare only)
+        --open         # also open the PR upstream (outward act; default: prepare only)
+        --draft        # with --open: open the PR as a draft (default: ready for review)
         --dry-run      # run the whole flow but skip push + PR (validate content)
         --mapping: string # fork-package JSON to drive (default: index's baked-in list)
       ] {
@@ -209,6 +295,27 @@ in
         let n_commits = (git -C $scratch rev-list --count $"($tip)..HEAD" | str trim)
         print $"(ansi green)upstream-pr: ($pkg): applied ($n_commits) commit\(s\) cleanly onto ($slug.owner)/($slug.repo)@($head_ref) (($tip | str substring 0..9))(ansi reset)"
 
+        # Per-repo preflight (`preflight` in the fork mapping): the target
+        # repo's own cheap pre-submit gates (fmt-level checks mirroring the
+        # first steps of its CI, never full test suites), run in the patched
+        # scratch checkout so the EXACT tree we would push passes them. A red
+        # preflight aborts the contribution loudly before anything is pushed:
+        # nushell/nushell#18549 shipped a `cargo fmt` failure that turned the
+        # whole upstream CI matrix red in seconds. Commands run via `bash -ec`
+        # with the invoking environment's toolchain; a missing tool fails the
+        # same way (loudly), never skips.
+        let preflight = ($fork | get -o preflight | default [])
+        for cmd in $preflight {
+          print $"upstream-pr: ($pkg): preflight: ($cmd)"
+          let res = (do { cd $scratch; bash -ec $cmd } | complete)
+          if $res.exit_code != 0 {
+            print ($res.stdout)
+            print ($res.stderr)
+            error make { msg: $"upstream-pr: ($pkg): preflight `($cmd)` FAILED in the patched checkout; the upstream PR would open with red CI. Fix the patch series first. Scratch repo: ($scratch)" }
+          }
+          print $"(ansi green)upstream-pr: ($pkg): preflight `($cmd)` passed(ansi reset)"
+        }
+
         if $dry_run {
           print $"(ansi green)upstream-pr: --dry-run: would push branch ($branch) to ($org)/($slug.repo) and print a compare URL. Commits:(ansi reset)"
           git -C $scratch log --oneline $"($tip)..HEAD"
@@ -227,9 +334,9 @@ in
         print $"  ($compare)"
 
         if $open {
-          # The outward act, gated behind --open. Draft only. Title and body come
-          # from the patch's own commit message (one fact, one home: nix carries
-          # no duplicate description field), so a body-less commit is refused
+          # The outward act, gated behind --open. Title and body come from the
+          # patch's own commit message (one fact, one home: nix carries no
+          # duplicate description field), so a body-less commit is refused
           # loudly; the `patch-dag-<name>` check enforces the same for
           # attempt-marked patches before it ever gets here.
           let title = (git -C $scratch log -1 --format='%s' HEAD | str trim)
@@ -237,10 +344,13 @@ in
           if ($commit_body | is-empty) {
             error make { msg: $"upstream-pr: ($pkg): ($target) has no commit-message body; write the why in the commit body \(it becomes the upstream PR description\)." }
           }
-          # Optional upstream-specific PR-template content (issue refs,
-          # checklists) that does not belong in a commit message, declared as
-          # `patches.<patch>.prExtra` in the fork mapping.
-          let pr_extra = ($fork | get -o patches | default {} | get -o $target | default {} | get -o prExtra)
+          # Optional upstream-specific PR content that does not belong in a
+          # commit message: `prExtra` (issue refs, checklists) and
+          # `releaseNotes` (user-facing release-note text for templates that
+          # require it), declared per patch in the fork mapping.
+          let patch_meta = ($fork | get -o patches | default {} | get -o $target | default {})
+          let pr_extra = ($patch_meta | get -o prExtra)
+          let release_notes = ($patch_meta | get -o releaseNotes)
           # Link back to the patch file of record in OUR repo, derived from the
           # invoking repo's origin remote so a downstream mapping links to its
           # own repo. Best-effort but loud: no parseable origin means no link.
@@ -256,24 +366,40 @@ in
               "Prepared with AI assistance (Claude); directed and reviewed by a human maintainer."
             ] | str join "\n\n"
           )
-          let body = (
-            [$commit_body]
-            | append (if $pr_extra != null { [$pr_extra] } else { [] })
+          # prExtra + attribution together are the "anything else reviewers
+          # should know" content: under the template's additional-notes
+          # section when the repo has a template, appended after the body
+          # otherwise.
+          let notes = (
+            (if $pr_extra != null { [$pr_extra] } else { [] })
             | append [$attribution]
             | str join "\n\n"
           )
-          print $"(ansi yellow)upstream-pr: opening DRAFT PR upstream ($slug.owner)/($slug.repo) <- ($org):($branch)...(ansi reset)"
+          # Follow the target repo's conventions: render into its PR template
+          # when it ships one (refusing loudly on any section we cannot
+          # fill); keep the plain composition when it does not.
+          let template_path = (template find $scratch)
+          let body = (
+            if $template_path != null {
+              print $"upstream-pr: ($pkg): rendering the PR body into the target repo's template \(($template_path | path relative-to $scratch)\)"
+              template render (open --raw $template_path) $pkg $target $commit_body $release_notes $notes
+            } else {
+              [$commit_body $notes] | str join "\n\n"
+            }
+          )
+          let kind = (if $draft { "DRAFT" } else { "ready-for-review" })
+          print $"(ansi yellow)upstream-pr: opening ($kind) PR upstream ($slug.owner)/($slug.repo) <- ($org):($branch)...(ansi reset)"
           (
             gh pr create
               --repo $"($slug.owner)/($slug.repo)"
               --base $head_ref
               --head $"($org):($branch)"
               --title $title
-              --draft
               --body $body
+              ...(if $draft { ["--draft"] } else { [] })
           )
         } else {
-          print $"upstream-pr: prepare-only. Re-run with `--open` to open a DRAFT PR upstream, or open the compare URL by hand."
+          print $"upstream-pr: prepare-only. Re-run with `--open` to open the PR upstream \(add `--draft` for a draft\), or open the compare URL by hand."
         }
 
         rm --recursive --force $scratch

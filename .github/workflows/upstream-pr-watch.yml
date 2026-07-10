@@ -1,0 +1,92 @@
+name: Watch upstream PRs
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Every 6 hours. `upstream-pr` opens real PRs on upstream repos for
+    # attempt-marked fork patches (lib/fork-packages.nix); once opened, their
+    # CI runs in the UPSTREAM repo where none of our checks look. This job
+    # refreshes each tracked PR's state + CI verdict into the per-fork
+    # upstream-status.json (packages/upstream-sync `pr refresh`), lands the
+    # refreshed files via a rolling PR, and FAILS the run when any tracked
+    # upstream PR has red CI, so a failing PR under our name cannot sit
+    # unnoticed the way nushell/nushell#18549 did. Refresh-only: `--open` is
+    # never passed, so no outward act happens on a cron.
+    - cron: "37 */6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-pr-watch
+  cancel-in-progress: false
+
+jobs:
+  upstream-pr-watch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Determinate Nix
+        uses: ./.github/actions/install-nix
+
+      # Refresh tracked upstream PR state + CI into each fork's
+      # upstream-status.json. `--fail-on-red-ci` exits nonzero on any tracked
+      # open/draft PR with failing upstream CI; continue-on-error lets the
+      # refreshed status files still land via the rolling PR below, and the
+      # final gate step re-raises the failure so the run stays visibly red.
+      # Tracked upstreams are public repos, so the default token suffices for
+      # check-run reads.
+      - name: Refresh tracked upstream PR state
+        id: refresh
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          nix run .#upstream-sync -- --check-stale --fail-on-red-ci 2>&1 \
+            | tee "$RUNNER_TEMP/upstream-sync.log"
+
+      - name: Step summary
+        run: |
+          set -euo pipefail
+          {
+            echo "## Upstream PR watch"
+            echo ""
+            echo '```'
+            # Strip ANSI colors from the tool output for the summary.
+            sed -e 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/upstream-sync.log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # One rolling PR reusing the `upstream-pr-watch` branch, same pattern as
+      # fork-sync: create-pull-request no-ops on an empty diff (no tracked PR
+      # state moved). See fork-sync.yml for the AUTOBUMP_TOKEN rationale (a
+      # GITHUB_TOKEN-opened PR does not trigger flake-check).
+      - name: Open pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ secrets.AUTOBUMP_TOKEN || github.token }}
+          base: main
+          branch: upstream-pr-watch
+          delete-branch: true
+          commit-message: "upstream-sync: refresh tracked upstream PR state"
+          title: "upstream-sync: refresh tracked upstream PR state"
+          body: |
+            Automated upstream-PR watch: refresh each tracked upstream PR's state and CI verdict into the per-fork `upstream-status.json` (tool-owned live state; see `packages/upstream-sync`).
+
+            The watch run itself goes red when any tracked upstream PR has failing CI, so a broken PR under our name surfaces as a failed workflow here instead of sitting unnoticed on the upstream repo.
+
+            If this PR shows no `flake-check` run, the repo needs the `AUTOBUMP_TOKEN` secret and/or "Allow GitHub Actions to create and approve pull requests" enabled once.
+
+            Auto-refresh, made with Claude Fable 5.
+
+      - name: Fail on red upstream CI
+        if: steps.refresh.outcome == 'failure'
+        run: |
+          echo "::error::A tracked upstream PR has red CI (or the refresh itself failed); see the 'Refresh tracked upstream PR state' step output and the per-fork upstream-status.json."
+          exit 1

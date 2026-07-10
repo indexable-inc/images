@@ -1067,6 +1067,26 @@
     };
   }
   {
+    upstreamContributions = {
+      text = ''
+        When sending a PR to an external or upstream repository, follow that
+        repo's contribution conventions, not ours: read its CONTRIBUTING and PR
+        template, render the PR body into the template's sections, run the
+        repo's cheap pre-submit checks (fmt, lint) on the exact tree being
+        pushed, and open ready for review rather than parking a draft with red
+        CI. If a required template section cannot be filled or a pre-submit
+        check fails, stop and fix or escalate; never open the PR anyway.
+      '';
+      reason = ''
+        nushell/nushell#18549 was opened by our upstream-pr tooling as a
+        template-less draft that failed the target repo's first CI step
+        (cargo fmt), and a nushell maintainer called it a negative signal.
+        Upstream maintainers judge contributions by their conventions, and one
+        sloppy PR taxes every later one from the same org.
+      '';
+    };
+  }
+  {
     reportToPlaybook = {
       text = ''
         Publish substantial investigations, decisions, shipped changes, and eval

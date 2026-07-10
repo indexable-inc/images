@@ -28,7 +28,13 @@
 #
 # The loop, per `attempt` patch of each selected fork:
 #   1. If we already track a PR: refresh its state via `gh pr view` (open / draft
-#      / merged / closed). If merged, mark `retired = true` and record it: the
+#      / merged / closed) AND its upstream CI verdict (`statusCheckRollup` ->
+#      ci = passing | failing | pending | none, plus the failing check names),
+#      logging transitions. A red upstream PR is reported loudly in the plan
+#      summary; with `--fail-on-red-ci` the run exits nonzero so a cron
+#      (.github/workflows/upstream-pr-watch.yml) surfaces it as a failed
+#      workflow instead of letting it sit unnoticed (nushell/nushell#18549 sat
+#      red for days). If merged, mark `retired = true` and record it: the
 #      NEXT base bump's `rebase-patches` run should drop the patch (it becomes an
 #      empty cherry against the new base), and this tool wires a retirement note
 #      into the plan so a human/agent verifies the drop.
@@ -36,7 +42,9 @@
 #      title keywords. If found, RECORD it and SKIP loudly (a human or agent can
 #      comment on the existing PR instead of opening a competing one).
 #   3. Else, if `--open` was passed, open the PR by delegating to
-#      `upstream-pr --open` (its DAG-closure/am/push/draft-PR mechanism, one owner).
+#      `upstream-pr --open` (its DAG-closure/am/preflight/push/PR mechanism,
+#      one owner; PRs open ready for review, with the body rendered into the
+#      target repo's PR template when it ships one).
 #      For forks opted into the closure build gates (`closureGates = true` in
 #      lib/fork-packages.nix; RFC 0010 A3), the patch's gate derivation
 #      (`forkClosureGates.<system>.<fork>.<patch>`) is built FIRST and a red
@@ -192,13 +200,18 @@
       # --- PR state via gh ------------------------------------------------------
 
       # Refresh a tracked PR's live state. Returns a record {url, number, state,
-      # checkedAt} with state one of open|draft|merged|closed, or null if the PR
-      # can no longer be read (deleted/renamed). `state` collapses gh's separate
-      # `state` (OPEN/CLOSED/MERGED) and `isDraft` into one field.
+      # ci, failingChecks, checkedAt} with state one of open|draft|merged|closed,
+      # or null if the PR can no longer be read (deleted/renamed). `state`
+      # collapses gh's separate `state` (OPEN/CLOSED/MERGED) and `isDraft` into
+      # one field. `ci` is the upstream CI verdict from the head commit's
+      # `statusCheckRollup` (a mix of CheckRun entries carrying
+      # status/conclusion and commit-status contexts carrying state):
+      # failing | pending | passing | none, with the failing check names kept
+      # so a red verdict is actionable without opening the PR.
       def "pr refresh" [slug: record, number: int]: nothing -> any {
         let res = (
           do {
-            gh pr view $number --repo $"($slug.owner)/($slug.repo)" --json state,isDraft,url,number
+            gh pr view $number --repo $"($slug.owner)/($slug.repo)" --json state,isDraft,url,number,statusCheckRollup
           } | complete
         )
         if $res.exit_code != 0 { return null }
@@ -209,7 +222,39 @@
           else if $j.isDraft { "draft" }
           else { "open" }
         )
-        {url: $j.url, number: $j.number, state: $state, checkedAt: (date now | format date "%Y-%m-%dT%H:%M:%SZ")}
+        let rollup = ($j | get -o statusCheckRollup | default [])
+        # CANCELLED counts as failing: on fail-fast matrices (nushell) the
+        # cancelled jobs ride along with a real failure, and a required check
+        # that was cancelled is not green either way.
+        let failing = (
+          $rollup
+          | where {|c|
+            # A leading-`or` continuation line parses as an external command
+            # in a closure; the outer parens keep this one expression.
+            (
+              (($c | get -o conclusion | default "") in ["FAILURE" "TIMED_OUT" "CANCELLED" "ACTION_REQUIRED" "STARTUP_FAILURE"])
+              or (($c | get -o state | default "") in ["FAILURE" "ERROR"])
+            )
+          }
+          | each {|c| $c | get -o name | default ($c | get -o context | default "unknown") }
+        )
+        let pending = (
+          $rollup
+          | where {|c|
+            let run_status = ($c | get -o status | default "")
+            (
+              (($run_status != "") and ($run_status != "COMPLETED"))
+              or (($c | get -o state | default "") in ["PENDING" "EXPECTED"])
+            )
+          }
+        )
+        let ci = (
+          if ($rollup | is-empty) { "none" }
+          else if ($failing | is-not-empty) { "failing" }
+          else if ($pending | is-not-empty) { "pending" }
+          else { "passing" }
+        )
+        {url: $j.url, number: $j.number, state: $state, ci: $ci, failingChecks: $failing, checkedAt: (date now | format date "%Y-%m-%dT%H:%M:%SZ")}
       }
 
       # Distinctive lowercase tokens of a patch subject: alphanumerics, min length
@@ -456,6 +501,7 @@
         --open          # OPEN real upstream PRs for attempt patches (the outward act). Default: refresh + plan only.
         --dry-run       # plan only: refresh + search but write NO status files (pure validation)
         --check-stale   # additionally warn if a fork has attempt patches but no status file, or a stale lastChecked
+        --fail-on-red-ci # exit nonzero when any tracked open/draft upstream PR has failing CI (for the watch cron)
         --mapping: string # fork-package JSON to drive (default: index's baked-in list)
       ] {
         # The outward act (opening a PR) is doubly gated, mirroring upstream-pr:
@@ -466,6 +512,7 @@
         # `--dry-run` additionally suppresses the status write for pure validation.
         let forks = (fork select $pkg $mapping)
         mut plan = []  # accumulate {fork, patch, intent, action, detail} for the summary
+        mut red = []   # tracked open/draft PRs whose upstream CI is failing
 
         for fork in $forks {
           let slug = (url slug $fork.url)
@@ -562,6 +609,20 @@
               if $fresh.state != $tracked.state {
                 $doc = (log append $doc $"($pf): PR #($fresh.number) ($tracked.state) -> ($fresh.state) (($fresh.url))")
               }
+              # Log CI transitions while the PR is live (merged/closed PRs'
+              # checks no longer matter). Pre-CI-tracking entries have no `ci`
+              # field; treat them as "none" so the first refresh logs the real
+              # verdict as a visible transition.
+              if $fresh.state in ["open" "draft"] {
+                let prev_ci = ($tracked | get -o ci | default "none")
+                if $fresh.ci != $prev_ci {
+                  let ci_detail = (if $fresh.ci == "failing" { $" [(($fresh.failingChecks | str join ', '))]" } else { "" })
+                  $doc = (log append $doc $"($pf): PR #($fresh.number) CI ($prev_ci) -> ($fresh.ci)($ci_detail)")
+                }
+                if $fresh.ci == "failing" {
+                  $red = ($red | append {fork: $fork.name, patch: $pf, url: $fresh.url, failing: $fresh.failingChecks})
+                }
+              }
               mut new_entry = ($doc.patches | get $pf | update pr $fresh)
               # 1b. Merged upstream -> retire. Next base bump's rebase-patches run
               # should drop the patch (it cherries empty against the new base); we
@@ -572,7 +633,8 @@
               }
               $doc = ($doc | upsert patches ($doc.patches | upsert $pf $new_entry))
               let action = (if $fresh.state == "merged" { "retired" } else { $"tracked:($fresh.state)" })
-              $plan = ($plan | append {fork: $fork.name, patch: $pf, intent: "attempt", action: $action, detail: $fresh.url})
+              let detail = (if $fresh.state in ["open" "draft"] { $"($fresh.url) [ci: ($fresh.ci)]" } else { $fresh.url })
+              $plan = ($plan | append {fork: $fork.name, patch: $pf, intent: "attempt", action: $action, detail: $detail})
               continue
             }
 
@@ -647,9 +709,12 @@
             )
             if $pr_url != null {
               let pr_num = ($pr_url | parse --regex '/pull/(?<n>[0-9]+)' | get n.0? | default "0" | into int)
-              let fresh = {url: ($pr_url | str trim), number: $pr_num, state: "draft", checkedAt: (date now | format date "%Y-%m-%dT%H:%M:%SZ")}
+              # upstream-pr opens ready for review (its preflight + template
+              # rendering are the pre-submit bar); CI has not reported yet, so
+              # the verdict starts pending and the next refresh settles it.
+              let fresh = {url: ($pr_url | str trim), number: $pr_num, state: "open", ci: "pending", failingChecks: [], checkedAt: (date now | format date "%Y-%m-%dT%H:%M:%SZ")}
               $doc = ($doc | upsert patches ($doc.patches | upsert $pf (($doc.patches | get $pf) | update pr $fresh)))
-              $doc = (log append $doc $"($pf): opened draft PR ($fresh.url)")
+              $doc = (log append $doc $"($pf): opened PR ($fresh.url)")
             } else {
               $doc = (log append $doc $"($pf): upstream-pr --open succeeded but PR URL was not parseable from output")
             }
@@ -705,6 +770,22 @@
         if $dry_run {
           print ""
           print $"(ansi yellow)--dry-run: no status files written. Drop --dry-run to persist the refreshed status; add --open to create PRs.(ansi reset)"
+        }
+
+        # Red upstream CI is always reported loudly; with --fail-on-red-ci it
+        # also fails the run, so the scheduled watch workflow
+        # (.github/workflows/upstream-pr-watch.yml) turns red instead of
+        # letting a failing upstream PR sit unnoticed under our name.
+        if ($red | is-not-empty) {
+          print ""
+          print $"(ansi red)upstream CI is RED on (($red | length)) tracked PR\(s\) we opened:(ansi reset)"
+          for r in $red {
+            print $"  - ($r.fork) / ($r.patch): ($r.url)"
+            print $"      failing: (($r.failing | str join ', '))"
+          }
+          if $fail_on_red_ci {
+            error make { msg: "upstream-sync: tracked upstream PRs have failing CI (listed above); fix the patch series and force-push via upstream-pr, or close the PR. A red PR under our name is a negative signal upstream." }
+          }
         }
       }
     '';
@@ -781,34 +862,61 @@
     export PATH="$PWD/stubs:$PATH"
     cd work
 
-    echo "--- stage 1: --open records the created PR ---"
+    echo "--- stage 1: --open records the created PR (ready for review, CI pending) ---"
     nu ../script.nu --open --mapping "$PWD/mapping.json" fake
     nu -c '
       let p = (open repo/patches/upstream-status.json | get patches."0001-fake-fix.patch")
-      if $p.pr.number != 99999 or $p.pr.state != "draft" or $p.retired {
+      if $p.pr.number != 99999 or $p.pr.state != "open" or $p.pr.ci != "pending" or $p.retired {
         error make {msg: $"stage 1: PR not recorded: ($p | to json)"}
       }'
 
-    echo "--- stage 2: merged upstream -> retired ---"
-    echo '{"state":"MERGED","isDraft":false,"url":"https://github.com/fakeorg/fakerepo/pull/99999","number":99999}' > pr-view.json
+    echo "--- stage 2: red upstream CI is recorded and --fail-on-red-ci fails the run ---"
+    cat > pr-view.json <<'EOF'
+    {"state":"OPEN","isDraft":false,"url":"https://github.com/fakeorg/fakerepo/pull/99999","number":99999,
+     "statusCheckRollup":[
+       {"__typename":"CheckRun","name":"cargo fmt","status":"COMPLETED","conclusion":"FAILURE"},
+       {"__typename":"StatusContext","context":"ci/other","state":"SUCCESS"}]}
+    EOF
     export GH_PR_VIEW_RESPONSE="$PWD/pr-view.json"
     nu ../script.nu --mapping "$PWD/mapping.json" fake
     nu -c '
       let d = (open repo/patches/upstream-status.json)
       let p = ($d.patches."0001-fake-fix.patch")
-      if $p.pr.state != "merged" or (not $p.retired) {
-        error make {msg: $"stage 2: not retired: ($p | to json)"}
+      if $p.pr.ci != "failing" or $p.pr.failingChecks != ["cargo fmt"] {
+        error make {msg: $"stage 2: red CI not recorded: ($p | to json)"}
       }
-      if ($d.log | length) != 3 {
-        error make {msg: $"stage 2: expected 3 log transitions, got ($d.log | to json)"}
+      if ($d.log | length) != 2 {
+        error make {msg: $"stage 2: expected 2 log transitions, got ($d.log | to json)"}
+      }'
+    if nu ../script.nu --fail-on-red-ci --mapping "$PWD/mapping.json" fake; then
+      echo "stage 2: --fail-on-red-ci should have exited nonzero on a red tracked PR" >&2
+      exit 1
+    fi
+    nu -c '
+      let d = (open repo/patches/upstream-status.json)
+      if ($d.log | length) != 2 {
+        error make {msg: $"stage 2: log grew on an unchanged red re-run: ($d.log | to json)"}
       }'
 
-    echo "--- stage 3: re-run is idempotent (no duplicate transitions) ---"
+    echo "--- stage 3: merged upstream -> retired ---"
+    echo '{"state":"MERGED","isDraft":false,"url":"https://github.com/fakeorg/fakerepo/pull/99999","number":99999}' > pr-view.json
     nu ../script.nu --mapping "$PWD/mapping.json" fake
     nu -c '
       let d = (open repo/patches/upstream-status.json)
-      if ($d.log | length) != 3 {
-        error make {msg: $"stage 3: log grew on a no-change re-run: ($d.log | to json)"}
+      let p = ($d.patches."0001-fake-fix.patch")
+      if $p.pr.state != "merged" or (not $p.retired) {
+        error make {msg: $"stage 3: not retired: ($p | to json)"}
+      }
+      if ($d.log | length) != 4 {
+        error make {msg: $"stage 3: expected 4 log transitions, got ($d.log | to json)"}
+      }'
+
+    echo "--- stage 4: re-run is idempotent (no duplicate transitions), merged PR never counts as red ---"
+    nu ../script.nu --fail-on-red-ci --mapping "$PWD/mapping.json" fake
+    nu -c '
+      let d = (open repo/patches/upstream-status.json)
+      if ($d.log | length) != 4 {
+        error make {msg: $"stage 4: log grew on a no-change re-run: ($d.log | to json)"}
       }'
 
     # A closureGates fork: same patch/dag shape, its own patch dir + status

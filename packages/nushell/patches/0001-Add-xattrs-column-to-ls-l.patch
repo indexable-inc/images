@@ -81,7 +81,7 @@ index f6f6993fa..e66a6f870 100644
      }
  
 diff --git a/crates/nu-command/tests/commands/ls.rs b/crates/nu-command/tests/commands/ls.rs
-index 213050afb..e3e8db502 100644
+index 213050afb..c071fd5f5 100644
 --- a/crates/nu-command/tests/commands/ls.rs
 +++ b/crates/nu-command/tests/commands/ls.rs
 @@ -450,6 +450,7 @@ fn list_all_columns() {
@@ -92,11 +92,10 @@ index 213050afb..e3e8db502 100644
                      "size",
                      "created",
                      "accessed",
-@@ -937,3 +938,32 @@ fn ls_literal_empty_directory() -> Result {
+@@ -937,3 +938,31 @@ fn ls_literal_empty_directory() -> Result {
  
      Ok(())
  }
-+
 +
 +#[cfg(unix)]
 +#[test]
