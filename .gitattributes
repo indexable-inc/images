@@ -5,3 +5,7 @@
 *.db merge=sqlite
 *.sqlite merge=sqlite
 *.sqlite3 merge=sqlite
+
+# Git rerere preimages contain conflict markers by design. Treat the cache as
+# opaque data so `git diff --check` does not report those markers as unresolved.
+**/patches/rerere/** -diff
