@@ -2586,7 +2586,7 @@
         pkgs.fd
       ];
       strictDeps = true;
-      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + client-cancel interrupts in-flight run (#2387) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246) + claude-history session search (#2245) + per-serve kernel trace file (#2355) + builtin shadow restore (#2430) + failed-cell stale-binding note (#2526) + pr_watch instant-merge guard (#2532) + find glob-pattern autodetect (#2542) + nu input= routing past no-input statements (#2540)";
+      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + client-cancel interrupts in-flight run (#2387) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246) + claude-history session search (#2245) + per-serve kernel trace file (#2355) + builtin shadow restore (#2430) + failed-cell stale-binding note (#2526) + pr_watch instant-merge guard (#2532) + find glob-pattern autodetect (#2542) + nu input= routing past no-input statements (#2540) + kernel host seam: local child vs ray actor";
     }
     ''
       export HOME=$TMPDIR/home
@@ -2622,6 +2622,9 @@
       cp ${./tests/test_build_info.py} test_build_info.py
       # Issue #2355: per-serve kernel trace file + sweep of orphaned dumps.
       cp ${./tests/test_kernel_trace_path.py} test_kernel_trace_path.py
+      # The kernel host seam: local/ray selection, the actor's connection-info
+      # plumbing (str HMAC key), offset-scoped trace reads.
+      cp ${./tests/test_kernel_host.py} test_kernel_host.py
       # Issue #2430: a cell rebinding/deleting a kernel builtin gets it restored.
       cp ${./tests/test_builtin_shadow_restore.py} test_builtin_shadow_restore.py
       # Issue #2526: a failed cell's traceback names the bindings it never reached.
@@ -2642,6 +2645,7 @@
         test_sh_module.py \
         test_build_info.py \
         test_kernel_trace_path.py \
+        test_kernel_host.py \
         test_builtin_shadow_restore.py \
         test_unexecuted_note.py \
         test_pr_watch_automerge.py \
