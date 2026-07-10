@@ -409,6 +409,22 @@
         "aarch64-darwin"
       ] (system: raw.${system} // (linuxDarwinAliases.${system} or {}));
     packages = withDarwinAliases (collect "packages");
+    rawSecurityRoots = collect "securityRoots";
+    securityRoots =
+      rawSecurityRoots
+      // {
+        aarch64-darwin =
+          rawSecurityRoots.aarch64-darwin
+          // lib.mapAttrs (
+            name: path:
+              (rawSecurityRoots.aarch64-darwin.${name} or rawSecurityRoots.x86_64-linux.${name})
+              // {
+                attr = "packages.aarch64-darwin.${name}";
+                inherit path;
+              }
+          )
+          (linuxDarwinAliases.aarch64-darwin or {});
+      };
     indexPackages = system: packages.${system};
     personalConfigRoot = ./users/andrewgazelka/config;
     personalOptionsModule = ./users/andrewgazelka/options.nix;
@@ -601,6 +617,12 @@
     # monolithic `*-oci.tar` archives, which nothing substitutes. Non-schema,
     # so surfaced through `collect` like `ciChecks`. See lib/per-system.nix.
     cachePushRoots = withDarwinAliases (collect "cachePushRoots");
+    # Typed security exposure roots consumed as JSON by the runtime DAG scanner.
+    # Unlike cachePushRoots, every entry carries policy metadata and names only
+    # a shipped runtime output or an example service closure. Darwin aliases are
+    # grafted above alongside packages so the recorded path matches what the
+    # public package attr actually resolves to.
+    inherit securityRoots;
     formatter = collect "formatter";
     apps = collect "apps";
     devShells = collect "devShells";

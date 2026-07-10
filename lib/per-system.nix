@@ -1549,6 +1549,78 @@ in {
     then imagesAsClosures // nativeIfdRoots
     else imagesAsClosures // exampleNodeToplevels // crossIfdRoots;
 
+  # Security exposure inventory for the runtime DAG scanner. This stays
+  # separate from cachePushRoots: cache publication includes build/eval helpers,
+  # while this registry names shipped package outputs and example service
+  # closures with policy metadata. The scanner realizes each path and obtains
+  # the exact reference edges with `nix path-info --json --json-format 1 --recursive`.
+  securityRoots = let
+    mkRoot = ix.securityRoots.mkRoot;
+    owner = "indexable-inc/index";
+    cachePolicy = {
+      inherit owner;
+      class = "cache-only";
+      environment = "none";
+      exposure = "none";
+      criticality = "low";
+      slaHours = 168;
+    };
+    baseImagePolicy = {
+      inherit owner;
+      class = "base-image";
+      environment = "development";
+      exposure = "internal";
+      criticality = "medium";
+      slaHours = 72;
+    };
+    # Business exposure is never inferred from package metadata. Add a complete
+    # policy here only when a package is known to be deployed or distributed;
+    # every unspecified non-image output remains cache hygiene, not exposure.
+    securityRootPolicies = {};
+    packageRoots =
+      lib.mapAttrs (
+        name: package: let
+          isImage = package ? passthru.toplevel;
+          path = package.passthru.toplevel or package;
+          policy =
+            if isImage
+            then baseImagePolicy
+            else securityRootPolicies.${name} or cachePolicy;
+        in
+          mkRoot (
+            {
+              attr = "packages.${system}.${name}";
+              inherit name path;
+            }
+            // policy
+          )
+      )
+      packageSet;
+    exampleRoots =
+      lib.concatMapAttrs (
+        fleetName: fleet:
+          lib.mapAttrs' (
+            node: path: let
+              name = "example-${fleetName}-${node}";
+            in
+              lib.nameValuePair name (mkRoot {
+                attr = "exampleFleets.${system}.${fleetName}.systemPackages.${node}";
+                inherit name path owner;
+                class = "deployed-service";
+                environment = "development";
+                exposure = "internal";
+                criticality = "medium";
+                slaHours = 72;
+              })
+          )
+          fleet.systemPackages
+      )
+      exampleFleets;
+  in
+    if pkgs.stdenv.hostPlatform.isDarwin
+    then packageRoots
+    else packageRoots // exampleRoots;
+
   inherit darwinPackageAliases;
 
   # Flat keying: one derivation per `checks.<system>.<name>`, as the flake schema

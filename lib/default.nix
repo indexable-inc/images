@@ -81,6 +81,7 @@
     writeProcessComposeApplication
     ;
   netCidr = import ./util/net-cidr.nix {inherit lib;};
+  securityRoots = import ./security-roots.nix {inherit lib;};
   # Force `allowSubstitutes = true` on a trivial-builder derivation that must be
   # substitutable (darwin cross-lane eval-time IFD nodes). See its doc comment.
   evalTimeSubstitutable = import ./util/eval-time-substitutable.nix;
@@ -657,6 +658,7 @@
       rustWorkspace
       rustWorkspaceFor
       secretRefs
+      securityRoots
       selfVersionFor
       skills
       systemdHardening

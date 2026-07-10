@@ -64,6 +64,27 @@
       dir: lib.removePrefix "${builtins.toString paths.packagesRoot}/" (builtins.toString dir)
     )
     packageRegistry.packageDirsWithoutMetadata;
+  securityRootArgs = {
+    attr = "packages.${pkgs.stdenv.hostPlatform.system}.hello";
+    name = "hello";
+    path = pkgs.hello;
+    class = "distributed-cli";
+    owner = "indexable-inc/index";
+    environment = "none";
+    exposure = "local";
+    criticality = "low";
+    slaHours = 168;
+  };
+  securityRoot = ix.securityRoots.mkRoot securityRootArgs;
+  securityRootJson = builtins.fromJSON (
+    builtins.unsafeDiscardStringContext (builtins.toJSON securityRoot)
+  );
+  invalidSecurityRootClass =
+    builtins.tryEval (ix.securityRoots.mkRoot (securityRootArgs // {class = "package";})).class;
+  invalidSecurityRootSla =
+    builtins.tryEval (ix.securityRoots.mkRoot (securityRootArgs // {slaHours = 0;})).slaHours;
+  invalidSecurityRootPath =
+    builtins.tryEval (ix.securityRoots.mkRoot (securityRootArgs // {path = "/tmp/not-a-store-output";})).path;
   fleetWrapperReadmes = [
     "hermes/agent"
     "hermes/api-server"
@@ -2687,6 +2708,36 @@
   );
 
   groups = {
+    security-roots = [
+      {
+        assertion =
+          securityRootJson
+          == {
+            attr = "packages.${pkgs.stdenv.hostPlatform.system}.hello";
+            name = "hello";
+            path = builtins.unsafeDiscardStringContext (builtins.toString pkgs.hello);
+            class = "distributed-cli";
+            owner = "indexable-inc/index";
+            environment = "none";
+            exposure = "local";
+            criticality = "low";
+            slaHours = 168;
+          };
+        message = "security roots should cross the nix eval JSON boundary with their output path and policy metadata intact";
+      }
+      {
+        assertion = !invalidSecurityRootClass.success;
+        message = "security roots should reject unknown class values at evaluation";
+      }
+      {
+        assertion = !invalidSecurityRootSla.success;
+        message = "security roots should reject non-positive SLA hours at evaluation";
+      }
+      {
+        assertion = !invalidSecurityRootPath.success;
+        message = "security roots should reject paths that are not derivation outputs at evaluation";
+      }
+    ];
     # efx terranix-port parity: the ported stacks under tests/efx must render
     # exactly the golden plan IR the efx CLI's tests parse, and everything the
     # translator cannot express must throw. See tests/efx-plan.nix.
