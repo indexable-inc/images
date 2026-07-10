@@ -2625,6 +2625,9 @@
       # The kernel host seam: local/ray selection, the actor's connection-info
       # plumbing (str HMAC key), offset-scoped trace reads.
       cp ${./tests/test_kernel_host.py} test_kernel_host.py
+      # The kernel's board lease: registration placement facts (kernel_host,
+      # node) and the writer's heartbeat_ms beat, agent idle-clock untouched.
+      cp ${./tests/test_store_kernel_lease.py} test_store_kernel_lease.py
       # Issue #2430: a cell rebinding/deleting a kernel builtin gets it restored.
       cp ${./tests/test_builtin_shadow_restore.py} test_builtin_shadow_restore.py
       # Issue #2526: a failed cell's traceback names the bindings it never reached.
@@ -2646,6 +2649,7 @@
         test_build_info.py \
         test_kernel_trace_path.py \
         test_kernel_host.py \
+        test_store_kernel_lease.py \
         test_builtin_shadow_restore.py \
         test_unexecuted_note.py \
         test_pr_watch_automerge.py \
