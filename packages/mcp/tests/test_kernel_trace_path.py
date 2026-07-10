@@ -9,7 +9,7 @@ import subprocess
 
 import pytest
 
-from ix_notebook_mcp.kernel import _sweep_stale_traces, trace_path_for
+from ix_notebook_mcp.kernel_host import _sweep_stale_traces, trace_path_for
 
 
 @pytest.fixture

@@ -4646,7 +4646,7 @@ def _install_signal_handlers() -> None:
     kernel whose event loop is blocked by a synchronous call.
 
     SIGUSR1: faulthandler dumps every thread's Python stack to the file named by
-    ``IX_MCP_KERNEL_TRACE`` (kept by ``kernel.TRACE_ENV``). The handler is C-level
+    ``IX_MCP_KERNEL_TRACE`` (kept by ``kernel_host.TRACE_ENV``). The handler is C-level
     so it runs even while the main thread is parked in a blocking call; the
     ``kernel_trace`` tool reads the file back.
 
