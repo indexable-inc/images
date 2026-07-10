@@ -123,11 +123,12 @@ another process. See [dashboard](../dashboard/overview.md) and
 
 ## Discovery: `api()` and `introspect.py`
 
-`api(filter)` (`runtime.py:1939`) is the live catalog of every helper: the
-namespace builtins and each bundled module's public surface, each with its real
-signature (from live introspection, never copied prose) and a one-line summary,
-returned as a polars DataFrame to filter. The catalog is built from `registry.py`
-(`_api_rows`, `runtime.py:1850`) so a module declared there shows up in `api()`,
+`api()` (`runtime.py:3640`) returns the complete live catalog of every helper:
+the namespace builtins and each bundled module's public surface, each with its
+provenance, real signature (from live introspection, never copied prose), and a
+one-line summary. Callers filter its Polars DataFrame columns directly. The
+catalog is built from `registry.py` (`_api_rows`, `runtime.py:3537`) so a module
+declared there shows up in `api()`,
 gets pre-imported if marked, and is listed in the server instructions, with no
 signature duplicated anywhere. `introspect.py` backs the dashboard's namespace
 pane and inlay hints: `describe(value)` (`introspect.py:143`), `namespace_rows`

@@ -29,28 +29,13 @@
 
   grayscaleSwift = configRoot + "/scripts/grayscale.swift";
 
-  # Reusable "do not overlap" wrapper for launchd agents. Grabs a NON-BLOCKING
-  # exclusive lock keyed by the agent label; if the previous run is still going
-  # the new fire exits 0 silently (skipped) instead of overlapping, and the lock
-  # releases on exit including crash/kill. macOS has no stock flock(1), so the
-  # lock is taken via /usr/bin/perl + flock(2). See scripts/with-lock.sh.
-  withLock = ix.writeBashApplication pkgs {
-    name = "with-lock";
-    runtimeInputs = [pkgs.coreutils];
-    text = builtins.readFile (configRoot + "/scripts/with-lock.sh");
-  };
-
-  # DRY helper: wrap a launchd agent's ProgramArguments so the run is serialized
-  # under a per-label lock. `label` namespaces the lock (each agent only blocks
-  # itself); `args` is the original ProgramArguments list. Use as:
+  # Reusable "do not overlap" wrapper for launchd agents, from the shared lib
+  # (see `withLockFor` in lib/default.nix and lib/util/with-lock.sh): wrap a
+  # launchd agent's ProgramArguments so the run is serialized under a
+  # per-label non-blocking lock — a fire while the previous run is still going
+  # exits 0 silently instead of overlapping. Use as:
   #   ProgramArguments = lockArgs "main-sync" [ "${mainSync}/bin/main-sync" ];
-  lockArgs = label: args:
-    [
-      "${withLock}/bin/with-lock"
-      label
-      "--"
-    ]
-    ++ args;
+  lockArgs = (ix.withLockFor pkgs).wrap;
 
   # pr-watch + ci-triage + announce-lib live in the shared users/andrewgazelka
   # module (index `homeModules.andrewgazelka`). pr-watch is disabled below
@@ -352,9 +337,11 @@ in {
 
   # Ghostty main config: generated from Nix in home/ghostty.nix (imported above).
 
-  # Claude Desktop rewrites this file and carries a runtime Authorization
-  # header. Reconcile only public keys; mutable-json preserves the unmanaged
-  # credential without ever copying it into the Nix store.
+  # Claude Desktop rewrites its config file and carries a runtime
+  # Authorization header. The `mutable.files` declaration below seeds only
+  # public keys; the app-added credential stays on disk as tracked drift
+  # (durable, so never reset) without ever being copied into the Nix store —
+  # only the declared base lives in the store.
   # BlenderMCP addon auto-load: the in-Blender half of the MCP bridge, from the
   # SAME pinned rev as the `blender-mcp` server binary (index packages/blender-mcp
   # passthru.addon), so the :9876 socket protocol cannot drift between them.
@@ -447,12 +434,16 @@ in {
       bpy.app.timers.register(_blender_lab_mcp_setup, first_interval=0.5)
     '';
 
-  # Cursor and VS Code rewrite settings during UI changes. Keep the files
-  # writable while reconciling the Nix-owned keys on activation.
-  home.mutableJsonFiles = {
-    claude-desktop = {
-      target = "Library/Application Support/Claude/claude_desktop_config.json";
-      value = {
+  # Apps that rewrite their own config at runtime (Cursor and VS Code save
+  # settings/keybindings on UI changes, Claude Desktop persists preferences,
+  # rbw rewrites its config on `rbw config set`): seeded writable and
+  # drift-tracked by index-delta (module imported in profiles/workstation.nix;
+  # replaces the old mutable-json last-applied merge). Durable — app edits
+  # survive, base-vs-drift conflicts queue in `index-delta status` — and a
+  # pre-existing file is kept as day-one drift, never clobbered.
+  mutable.files = {
+    "Library/Application Support/Claude/claude_desktop_config.json" = {
+      source = jsonFormat.generate "andrewgazelka-claude-desktop.json" {
         globalShortcut = "";
         mcpServers.ix = {
           type = "http";
@@ -473,35 +464,51 @@ in {
           dispatchCodeTasksPermissionMode = "bypassPermissions";
         };
       };
+      persistence = "durable";
+      declaredAt = "users/andrewgazelka/profiles/darwin-home.nix";
     };
-    cursor-settings = {
-      target = "Library/Application Support/Cursor/User/settings.json";
-      value = cursorSettings;
+    "Library/Application Support/Cursor/User/settings.json" = {
+      source = jsonFormat.generate "andrewgazelka-cursor-settings.json" cursorSettings;
+      persistence = "durable";
+      declaredAt = "users/andrewgazelka/config/settings/structured.nix";
     };
-    vscode-settings = {
-      target = "Library/Application Support/Code/User/settings.json";
-      value = cursorSettings;
+    "Library/Application Support/Code/User/settings.json" = {
+      source = jsonFormat.generate "andrewgazelka-vscode-settings.json" cursorSettings;
+      persistence = "durable";
+      declaredAt = "users/andrewgazelka/config/settings/structured.nix";
     };
-    rbw = {
-      target = "Library/Application Support/rbw/config.json";
-      value = {
+    "Library/Application Support/rbw/config.json" = {
+      source = jsonFormat.generate "andrewgazelka-rbw-config.json" {
         email = cfg.rbw.email;
         base_url = cfg.rbw.baseUrl;
         pinentry = "${cfg.paths.privateConfigDirectory}/rbw/op-pinentry.sh";
         lock_timeout = 3600;
         sync_interval = 3600;
       };
+      persistence = "durable";
+      declaredAt = "users/andrewgazelka/profiles/darwin-home.nix";
+    };
+    "Library/Application Support/Cursor/User/keybindings.json" = {
+      source =
+        jsonFormat.generate "andrewgazelka-cursor-keybindings.json"
+        (import (configRoot + "/cursor/keybindings.nix"));
+      persistence = "durable";
+      declaredAt = "users/andrewgazelka/config/cursor/keybindings.nix";
+    };
+    "Library/Application Support/Code/User/keybindings.json" = {
+      source =
+        jsonFormat.generate "andrewgazelka-vscode-keybindings.json"
+        (import (configRoot + "/cursor/keybindings.nix"));
+      persistence = "durable";
+      declaredAt = "users/andrewgazelka/config/cursor/keybindings.nix";
+    };
+    # Bacon persists preference edits (`bacon --prefs`) into this file.
+    "Library/Application Support/org.dystroy.bacon/prefs.toml" = {
+      source = tomlFormat.generate "andrewgazelka-bacon-prefs.toml" structured.bacon-prefs.value;
+      persistence = "durable";
+      declaredAt = "users/andrewgazelka/config/settings/structured.nix";
     };
   };
-
-  home.file."Library/Application Support/Cursor/User/keybindings.json".source =
-    jsonFormat.generate "andrewgazelka-cursor-keybindings.json" (import (configRoot + "/cursor/keybindings.nix"));
-  home.file."Library/Application Support/Code/User/keybindings.json".source =
-    jsonFormat.generate "andrewgazelka-vscode-keybindings.json" (import (configRoot + "/cursor/keybindings.nix"));
-
-  # Bacon
-  home.file."Library/Application Support/org.dystroy.bacon/prefs.toml".source =
-    tomlFormat.generate "andrewgazelka-bacon-prefs.toml" structured.bacon-prefs.value;
 
   # Zen browser
   home.file."Library/Application Support/zen/Profiles/nu2gused.Default (release)/chrome".source =

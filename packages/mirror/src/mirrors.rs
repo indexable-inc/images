@@ -3,7 +3,6 @@
 //! `mirror` attrs in package.nix render to. The single source of truth for
 //! everything curated about a mirror; the generator derives the rest.
 
-use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -36,18 +35,7 @@ pub fn entry_for(workspace: &Workspace, package: &Path, json: Option<&Path>) -> 
 }
 
 fn load(workspace: &Workspace, json: Option<&Path>) -> Result<Vec<Entry>> {
-    let text = match json {
-        Some(path) => {
-            fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?
-        }
-        None => exec::run(
-            &workspace.root,
-            "nix",
-            &["eval", "--json", ".#lib.mirrorPackages"],
-        )?,
-    };
-    let value: Value = serde_json::from_str(&text).context("parsing mirrorPackages JSON")?;
-    value
+    exec::nix_json(workspace, json, "mirrorPackages")?
         .as_array()
         .context("mirrorPackages JSON is not a list")?
         .iter()

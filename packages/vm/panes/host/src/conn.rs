@@ -4,20 +4,13 @@
 //! socket, so a stalled guest can never hitch window presentation.
 
 use std::io::{BufReader, BufWriter, Read, Write};
-use std::net::TcpStream;
-use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use dispatch2::DispatchQueue;
 use panes_protocol::{Encoding, ToGuest, ToHost, VERSION_MAJOR, VERSION_MINOR, read_msg, write_msg};
-
-pub enum Target {
-    Unix(PathBuf),
-    Tcp(String),
-}
+use crate::transport::{Stream, Target, connect};
 
 /// What the supervisor tells the main thread. `Connected` carries the sender
 /// the main thread queues outgoing messages on; dropping it (on `Disconnected`)
@@ -67,29 +60,6 @@ fn supervise(target: &Target, host: &HostInfo) -> ! {
         }
         std::thread::sleep(backoff);
         backoff = (backoff * 2).min(BACKOFF_MAX);
-    }
-}
-
-struct Stream {
-    read: Box<dyn Read + Send>,
-    write: Box<dyn Write + Send>,
-}
-
-fn connect(target: &Target) -> std::io::Result<Stream> {
-    match target {
-        Target::Unix(path) => {
-            let stream = UnixStream::connect(path)?;
-            let read = stream.try_clone()?;
-            Ok(Stream { read: Box::new(read), write: Box::new(stream) })
-        }
-        Target::Tcp(addr) => {
-            let stream = TcpStream::connect(addr.as_str())?;
-            // Acks pace the guest's next frame; Nagle batching them would cap
-            // the loop well under the display rate.
-            stream.set_nodelay(true)?;
-            let read = stream.try_clone()?;
-            Ok(Stream { read: Box::new(read), write: Box::new(stream) })
-        }
     }
 }
 

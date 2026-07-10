@@ -29,7 +29,7 @@ in {
 
     plugins = plugins.enabled;
 
-    datapacks."max-height" = {
+    datapacks.max-height = {
       inherit (world.height) dimensionTypes pack;
       worlds = [world.name];
     };

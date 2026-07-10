@@ -137,7 +137,7 @@ no results. The selected run is shown in the dropdown at the top of the page.
 Inject `assets/antithesis-query-logs.js` into the Logs Explorer page:
 
 ```bash
-cat assets/antithesis-query-logs.js \
+cat ../antithesis/assets/browser-utils.js assets/antithesis-query-logs.js \
   | agent-browser --session "$SESSION" eval --stdin
 ```
 

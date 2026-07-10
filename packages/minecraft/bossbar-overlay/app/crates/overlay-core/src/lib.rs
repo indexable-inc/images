@@ -12,6 +12,7 @@
 //! - a headless render-to-PNG for verification ([`snapshot`]),
 //! - the shared animation primitives the overlays drive their hovers with
 //!   ([`anim`]: easing curves, a hover stepper, a breathe oscillator).
+//! - environment-overridable per-OS data paths shared by every overlay.
 //!
 //! A consumer (the boss bar, the book) builds a `Vec<`[`Quad`]`>` for its domain
 //! and hands it to [`Gpu::draw`] or [`snapshot::render_to_png`]. The Mojang art
@@ -24,16 +25,36 @@ pub mod gesture;
 pub mod gpu;
 pub mod menu;
 pub mod snapshot;
+pub mod sound;
 pub mod watch;
 pub mod window;
 
 pub use anim::HoverAnim;
 pub use bitmap_font::BitmapFont;
-pub use gesture::{scroll_drag_delta, scroll_drag_position, scroll_drag_settled, DragClick};
-pub use gpu::{Gpu, Quad, TexHandle, SHADOW};
+pub use gesture::{
+    DragClick, scroll_drag_delta, scroll_drag_position, scroll_drag_settled,
+};
+pub use gpu::{Gpu, Quad, SHADOW, TexHandle};
+pub use sound::play_minecraft_sound;
+pub use window::handle_scroll_drag;
 
 // Re-export the heavy deps so consumers name the exact versions this workspace
 // pins, without each crate re-declaring them.
 pub use glam;
 pub use wgpu;
 pub use winit;
+
+/// Resolve an overlay database path from an environment override or the
+/// platform's application-data directory.
+pub fn resolve_data_path(env_var: &str, app_dir: &str, file_name: &str) -> std::path::PathBuf {
+    if let Ok(path) = std::env::var(env_var)
+        && !path.trim().is_empty()
+    {
+        return path.into();
+    }
+    dirs::data_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| ".".into())
+        .join(app_dir)
+        .join(file_name)
+}

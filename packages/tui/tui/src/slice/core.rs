@@ -10,45 +10,32 @@ pub(super) struct Bounds {
     to: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct RowRange {
-    pub from: Option<usize>,
-    pub to: Option<usize>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct ColRange {
-    pub from: Option<usize>,
-    pub to: Option<usize>,
-}
-
-impl RowRange {
-    #[must_use]
-    pub const fn new(from: Option<usize>, to: Option<usize>) -> Self {
-        Self { from, to }
-    }
-
-    pub(super) fn resolve(&self, total_lines: usize) -> Bounds {
-        Bounds {
-            from: self.from.unwrap_or(1),
-            to: self.to.unwrap_or(total_lines),
+macro_rules! define_range {
+    ($name:ident) => {
+        #[derive(Debug, Clone, Copy)]
+        pub struct $name {
+            pub from: Option<usize>,
+            pub to: Option<usize>,
         }
-    }
-}
 
-impl ColRange {
-    #[must_use]
-    pub const fn new(from: Option<usize>, to: Option<usize>) -> Self {
-        Self { from, to }
-    }
+        impl $name {
+            #[must_use]
+            pub const fn new(from: Option<usize>, to: Option<usize>) -> Self {
+                Self { from, to }
+            }
 
-    pub(super) fn resolve(&self, line_len: usize) -> Bounds {
-        Bounds {
-            from: self.from.unwrap_or(1),
-            to: self.to.unwrap_or(line_len),
+            pub(super) fn resolve(&self, extent: usize) -> Bounds {
+                Bounds {
+                    from: self.from.unwrap_or(1),
+                    to: self.to.unwrap_or(extent),
+                }
+            }
         }
-    }
+    };
 }
+
+define_range!(RowRange);
+define_range!(ColRange);
 
 pub fn slice_2d(lines: &[String], row_range: RowRange, col_range: ColRange) -> Result<Vec<String>> {
     if lines.is_empty() {

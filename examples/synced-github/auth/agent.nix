@@ -81,7 +81,7 @@ in {
   # does not replace this one; no user here defines a github helper, so this is
   # the one that answers. git execs the helper directly because the value is an
   # absolute path.
-  environment.etc."gitconfig".text = ''
+  environment.etc.gitconfig.text = ''
     [credential "https://github.com"]
     	helper = ${credentialHelper}
 

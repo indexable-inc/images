@@ -53,6 +53,9 @@ import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any, overload
 
+if TYPE_CHECKING:
+    import polars as pl
+
 from . import readstats, registry, typecheck
 from .config import build_stamp, process_cwd
 
@@ -3606,7 +3609,8 @@ def doc(obj: Any) -> Result:
     Result -- so the documented "everything through Result" path also works for
     reading docs. ``help()`` only writes to stdout (not your channel) and returns
     ``None``, so ``Result(help(x))`` shows nothing; use ``doc(grep)`` instead.
-    Pair it with `api()`: `api('grep')` to find a name, `doc(grep)` to read it."""
+    Pair it with `api()`: filter its frame to find a name, then use
+    `doc(grep)` to read it."""
     name = getattr(obj, "__name__", None) or type(obj).__name__
     sig = ""
     if callable(obj):
@@ -3622,8 +3626,7 @@ def _build_row() -> dict:
     """The catalog's header row: which build this kernel IS. The in-band
     staleness signal (index#2110): when an agent's docs promise a helper or
     kwarg this catalog lacks, the stamp attributes the gap to a stale deploy
-    instead of a phantom API. Prepended after filtering, so even a filtered
-    miss (`api('check')` finding nothing) still shows it."""
+    instead of a phantom API."""
     return {
         "where": "kernel",
         "name": "build",
@@ -3634,37 +3637,34 @@ def _build_row() -> dict:
     }
 
 
-def api(filter: str | None = None) -> Any:
+def api() -> pl.DataFrame:
     """A live catalog of every helper the kernel gives you: the always-present
     namespace builtins (`Result`, `cells`, `jobs`, `sh`, ...) and the public
     surface of each bundled module (`view`, `nix`, `fleet`, ...), each with
-    its signature and a one-line summary. Call `api()` to discover what exists
-    instead of guessing names or grepping source; pass `filter` to match a
-    substring against the name, summary, or module. The first row is always the
+    its provenance, signature, and a one-line summary. Call `api()` to discover
+    what exists instead of guessing names or grepping source. Filter and sort the
+    returned Polars DataFrame directly, for example
+    `api().filter(pl.col("where") == "view")`. The first row is always the
     kernel's own build stamp (rev, commit date, age), so a catalog that lacks
     something your docs describe is attributable to a stale deploy.
 
-    Returns a polars DataFrame (filter/sort it further, e.g.
-    `api().filter(pl.col("where") == "view")`), or plain text if polars is absent.
+    Leave the frame as the cell's final expression or yield it. Passing it to
+    ``print`` converts it to Polars' terminal representation before MCP can render
+    the structured result.
     """
-    rows = _api_rows()
-    if filter:
-        q = filter.lower()
-        rows = [
-            r for r in rows
-            if q in r["name"].lower() or q in r["summary"].lower() or q in r["where"].lower()
-        ]
-    rows.insert(0, _build_row())
-    try:
-        import polars as _pl
+    import polars as pl
 
-        return _pl.DataFrame(
-            rows,
-            schema={"where": _pl.Utf8, "name": _pl.Utf8, "kind": _pl.Utf8, "sig": _pl.Utf8, "summary": _pl.Utf8},
-        )
-    except Exception:
-        width = max((len(r["sig"]) for r in rows), default=0)
-        return "\n".join(f'{r["where"]:>6}  {r["sig"]:<{width}}  {r["summary"]}' for r in rows)
+    rows = [_build_row(), *_api_rows()]
+    return pl.DataFrame(
+        rows,
+        schema={
+            "where": pl.Utf8,
+            "name": pl.Utf8,
+            "kind": pl.Utf8,
+            "sig": pl.Utf8,
+            "summary": pl.Utf8,
+        },
+    )
 
 
 def read_stats() -> dict[str, int]:
@@ -4646,7 +4646,7 @@ def _install_signal_handlers() -> None:
     kernel whose event loop is blocked by a synchronous call.
 
     SIGUSR1: faulthandler dumps every thread's Python stack to the file named by
-    ``IX_MCP_KERNEL_TRACE`` (kept by ``kernel.TRACE_ENV``). The handler is C-level
+    ``IX_MCP_KERNEL_TRACE`` (kept by ``kernel_host.TRACE_ENV``). The handler is C-level
     so it runs even while the main thread is parked in a blocking call; the
     ``kernel_trace`` tool reads the file back.
 
@@ -4830,10 +4830,9 @@ def install(user_ns: dict | None = None) -> None:
     # sh/view; an explicit import returns the same module.
     _bind("asyncio", asyncio)
     _bind("json", json)
-    with contextlib.suppress(Exception):  # polars may be absent; skip binding pl
-        import polars as _polars_mod
+    import polars as _polars_mod
 
-        _bind("pl", _polars_mod)
+    _bind("pl", _polars_mod)
     _bind("api", api)
     _bind("read_stats", read_stats)
     # Failures of fire-and-forget tasks, newest last (see the deque's comment).

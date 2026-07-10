@@ -62,3 +62,14 @@ pub use mixedbread::{
     HistogramBucket, Operator, Rerank, SortBy, SortDirection,
 };
 pub use source_meta::{Document, KNOWN_SOURCE_TAGS, RepoSlug, Source, SourceAdapter};
+
+/// Current wall clock as epoch seconds, clamped to the signed query timestamp range.
+#[must_use]
+pub fn epoch_now() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs());
+    i64::try_from(seconds).map_or(i64::MAX, |seconds| seconds)
+}
