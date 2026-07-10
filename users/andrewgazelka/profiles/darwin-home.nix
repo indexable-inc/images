@@ -512,9 +512,12 @@ in {
   home.file."Library/Application Support/BeeperTexts/custom.css".source =
     repoFile "beeper/custom.css";
 
-  # Nushell config (macOS uses Library/Application Support, not XDG)
-  home.file."Library/Application Support/nushell".source =
-    repoFile "nushell";
+  # Nushell writes runtime state beside its config on macOS. Link the managed
+  # files recursively so Library/Application Support/nushell stays writable.
+  home.file."Library/Application Support/nushell" = {
+    source = repoFile "nushell";
+    recursive = true;
+  };
 
   # rbw (Vaultwarden CLI). On macOS rbw reads its config from
   # Library/Application Support, not XDG, so the upstream programs.rbw module
