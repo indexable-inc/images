@@ -1039,6 +1039,7 @@ dependencies = [
 name = "audio-score"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "audio-blob",
  "loro",
 ]
@@ -13570,6 +13571,7 @@ version = "46.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3fc28372e36eaf8cf70faa83b5779137f7e99c8d18569a125d1580e735cc9e4d"
 dependencies = [
+ "anyhow",
  "hashbrown 0.17.1",
  "libm",
  "serde",

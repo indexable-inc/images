@@ -10,6 +10,7 @@ publish.workspace = true
 description = "Loro CRDT score for shared-audio: instrument reference, controls, scheduled events"
 
 [dependencies]
+anyhow.workspace = true
 audio-blob.workspace = true
 loro.workspace = true
 

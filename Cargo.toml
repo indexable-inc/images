@@ -401,6 +401,7 @@ webpki-roots = "1"
 # runtime itself, WAT text support for built-in/demo instruments, and the
 # std/signals/parallel-compilation platform features.
 wasmtime = { version = "46", default-features = false, features = [
+  "anyhow",
   "cranelift",
   "runtime",
   "wat",
