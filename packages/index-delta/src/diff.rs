@@ -192,7 +192,10 @@ fn diff_values(
             let added = new_map
                 .iter()
                 .filter(|(key, _)| !old_map.contains_key(*key))
-                .map(|(key, item)| (key.clone(), item));
+                .map(|(key, value)| Leaf {
+                    segment: key.clone(),
+                    value,
+                });
             push_leaf_ops(addr, path, ops, added, |path, value| Op::Add {
                 path,
                 value,
@@ -251,12 +254,20 @@ fn diff_arrays(
     }
 }
 
-fn indexed(items: &[Value], from: usize) -> impl DoubleEndedIterator<Item = (String, &Value)> {
+struct Leaf<'v> {
+    segment: String,
+    value: &'v Value,
+}
+
+fn indexed(items: &[Value], from: usize) -> impl DoubleEndedIterator<Item = Leaf<'_>> {
     items
         .iter()
         .enumerate()
         .skip(from)
-        .map(|(index, item)| (index.to_string(), item))
+        .map(|(index, value)| Leaf {
+            segment: index.to_string(),
+            value,
+        })
 }
 
 /// Emit one leaf op per `(segment, value)` pair, each addressed one level
@@ -266,12 +277,12 @@ fn push_leaf_ops<'v>(
     addr: Addressing,
     path: &mut Vec<String>,
     ops: &mut Vec<Op>,
-    items: impl Iterator<Item = (String, &'v Value)>,
+    items: impl Iterator<Item = Leaf<'v>>,
     make: fn(String, Value) -> Op,
 ) {
-    for (segment, value) in items {
-        path.push(segment);
-        ops.push(make(render(addr, path), value.clone()));
+    for leaf in items {
+        path.push(leaf.segment);
+        ops.push(make(render(addr, path), leaf.value.clone()));
         path.pop();
     }
 }
