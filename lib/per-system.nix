@@ -1458,19 +1458,21 @@
       agents = agentsDir;
       skills = skillsDir;
       claude-plugin = claudePluginDir;
-      # The attic binary cache client, jq, findutils (xargs), and gh, used by
-      # cache-push.yml (attic/jq/xargs) and cve-scan.yml (jq/gh). Pinned to the
-      # flake's nixpkgs so the workflows resolve them with `nix build .#<tool>`
-      # rather than depending on a tool being on the runner PATH or a floating
+      # CI tools are pinned to the flake's nixpkgs so workflows resolve exact
+      # executables with `nix build .#<tool>` instead of trusting runner PATH.
+      # cache-push uses attic/jq/xargs/gh; cve-scan uses curl/jq/tar.
+      # This avoids depending on a tool being on the runner PATH or a floating
       # `nixpkgs#` registry reference. The self-hosted runner PATH carries
       # coreutils + nix but not findutils, jq, or gh, so the bare commands are
       # `command not found` (cve-scan run 28598889924 died on exactly that).
       inherit
         (pkgs)
         attic-client
+        curl
         jq
         findutils
         gh
+        gnutar
         ;
     }
     // repoFlakePackages
