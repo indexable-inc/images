@@ -511,9 +511,22 @@ in {
   home.file."Library/Application Support/BeeperTexts/custom.css".source =
     repoFile "beeper/custom.css";
 
-  # Nushell config (macOS uses Library/Application Support, not XDG)
-  home.file."Library/Application Support/nushell".source =
-    repoFile "nushell";
+  # Nushell writes runtime state beside its config on macOS. Link the managed
+  # files recursively so Library/Application Support/nushell stays writable.
+  home.file."Library/Application Support/nushell" = {
+    source = repoFile "nushell";
+    recursive = true;
+  };
+
+  # Home Manager does not replace a managed directory symlink when its source
+  # changes to recursive leaf links. Remove that legacy link before collision
+  # checks so linkGeneration can create the writable parent directory.
+  home.activation.migrateNushellDataDirectory = config.lib.dag.entryBefore ["checkLinkTargets"] ''
+    dataDir=${lib.escapeShellArg "${config.home.homeDirectory}/Library/Application Support/nushell"}
+    if [[ -L "$dataDir" ]] && [[ $(readlink "$dataDir") == /nix/store/*-home-manager-files/* ]]; then
+      run rm "$dataDir"
+    fi
+  '';
 
   # rbw (Vaultwarden CLI). On macOS rbw reads its config from
   # Library/Application Support, not XDG, so the upstream programs.rbw module
