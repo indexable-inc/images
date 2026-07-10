@@ -42,6 +42,35 @@ macro_rules! assert_render_snapshot {
     }};
 }
 
+/// Lower a fixture module's source to its interface: parse, take the first
+/// item (the exported module), and run the shared lowering. Every backend's
+/// snapshot test starts from this same seam.
+///
+/// # Panics
+/// Panics when `source` is not a parseable file starting with a module, or
+/// when the module fails to lower — fixture bugs, not runtime conditions.
+pub fn lower_module_source(source: &str) -> unibind_core::ir::Interface {
+    let file: syn::File = syn::parse_str(source).expect("module parses");
+    let Some(syn::Item::Mod(module)) = file.items.first() else {
+        panic!("source starts with a module");
+    };
+    unibind_core::lower_module(proc_macro2::TokenStream::new(), module).expect("module lowers")
+}
+
+/// Snapshot an interface's IR as pretty JSON; every backend's render test
+/// pins its fixture's lowering this way.
+///
+/// # Panics
+/// Panics when the IR fails to serialize or the snapshot drifted.
+pub fn assert_ir_json_snapshot(
+    interface: &unibind_core::ir::Interface,
+    expected: &str,
+    name: &str,
+) {
+    let json = serde_json::to_string_pretty(interface).expect("serializes");
+    assert_snapshot(&json, expected, name);
+}
+
 /// Compare rendered output while printing a copy-ready replacement on drift.
 ///
 /// # Panics

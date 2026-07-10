@@ -36,7 +36,7 @@
   # up in the `lint` derivation build, not at `nix run` time.
   lintStage = ix.writeNushellApplication pkgs {
     name = "lint-stage";
-    meta.description = "One lint stage (alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | filenames | ruff | clone); driven by `lint`";
+    meta.description = "One lint stage (alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | filenames | dirnames | ruff | clone); driven by `lint`";
     runtimeInputs = [
       pkgs.alejandra
       pkgs.deadnix
@@ -144,9 +144,9 @@
           '^packages/agent/symphony/workflows/.*/repositories\.yaml$'
           '^\.editorconfig$'
           '^packages/agent/symphony/elixir/\.sobelow-conf$'
-          '^packages/minecraft/minestom/servers/hello/gradle\.properties$'
-          '^packages/minecraft/minestom/servers/hello/gradle/verification-metadata\.xml$'
-          '^packages/minecraft/minestom/servers/hello/src/main/resources/logback\.xml$'
+          '^packages/minecraft/minestom/servers/[^/]+/gradle\.properties$'
+          '^packages/minecraft/minestom/servers/[^/]+/gradle/verification-metadata\.xml$'
+          '^packages/minecraft/minestom/servers/[^/]+/src/main/resources/logback\.xml$'
 
           # Generated manifests, locks, editor settings, and typed data.
           '(^|/)(package|tsconfig)\.json$'
@@ -175,6 +175,37 @@
         if ($denied | is-not-empty) {
           print --stderr "prefer .nix for repository-owned configuration; serialized files require an external filename or generated/data role:"
           $denied | each {|path| print --stderr $"  ($path)" }
+          exit 1
+        }
+      }
+      # A grouping directory must never restate its parent's name — the
+      # directory-tree form of the scopedNaming rule. The one occurrence,
+      # packages/minecraft/minecraft/{bot,nbt,...}, was flattened into
+      # packages/minecraft (b32885d); this stage keeps the doubled segment
+      # from coming back. Scoped to consecutive duplicates in the grouping
+      # hierarchy only: a package root (a `package.nix` or `default.nix`
+      # marker, the same markers packages/registry.nix discovers by) and
+      # everything beneath it is exempt, because an eponym package inside
+      # its area (packages/nix/nix) is deliberate and language layouts
+      # inside a package (the mcp server's Python src/slack/slack) repeat a
+      # segment by convention. Non-consecutive repeats (foo/bar/foo) are
+      # fine and stay out of scope.
+      def "main dirnames" [] {
+        let offenders = (
+          fd --type directory . packages
+          | lines
+          | where {|dir| ($dir | path basename) == ($dir | path dirname | path basename) }
+          | where {|dir|
+              let segments = ($dir | path split)
+              let enclosing = (1..($segments | length) | each {|n| $segments | first $n | path join })
+              not ($enclosing | any {|scope|
+                ["package.nix" "default.nix"] | any {|marker| ($scope | path join $marker | path exists) }
+              })
+            }
+        )
+        if ($offenders | is-not-empty) {
+          print --stderr "grouping directory restates its parent's name; flatten the child into its parent:"
+          $offenders | each {|dir| print --stderr $"  ($dir)" }
           exit 1
         }
       }
@@ -207,7 +238,7 @@
         clone . out> /dev/null
       }
       def main [] {
-        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | filenames | ruff | clone" }
+        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | filenames | dirnames | ruff | clone" }
       }
     '';
   };
@@ -223,6 +254,7 @@
     "astlog-rust"
     "astlog-elixir"
     "filenames"
+    "dirnames"
     "ruff"
     "clone"
   ];
@@ -546,7 +578,7 @@
   updateSounds = ix.writeNushellApplication pkgs {
     name = "update-sounds";
     text = builtins.readFile paths.tools.updateSounds;
-    meta.description = "Refresh the pinned Minecraft sound pack in packages/minecraft/minecraft/sound";
+    meta.description = "Refresh the pinned Minecraft sound pack in packages/minecraft/sound";
   };
 
   benchFilesystem = import (paths.bench.filesystem + "/build.nix") {inherit ix pkgs;};
@@ -1074,6 +1106,11 @@
           # pre-run at build time so the VM never needs the network; see
           # tests/minecraft-blocks-vm.nix.
           minecraft-blocks-vm = tests.minecraftBlocksVm;
+          # Boots a NixOS VM running the Minestom spleef example server under
+          # `services.minestom` and asserts it serves the Minecraft protocol
+          # (readiness log line, open port, real server-list ping); see
+          # tests/minestom-spleef-vm.nix.
+          minestom-spleef-vm = tests.minestomSpleefVm;
           # Builds the base OCI archive and asserts its baked nix store DB
           # registers the pinned nixpkgs source as valid, so a fresh VM's first
           # `nix` command does not re-copy the tree through VCFS (ix
@@ -1350,6 +1387,29 @@
               fi
               grep -F "repository-config.json" output
               grep -F "zellij-layout.kdl" output
+              touch "$out"
+            '';
+          # Both halves of the dirnames stage: a marker-less doubled segment is
+          # flagged, an eponym package root (package.nix) is exempt.
+          dirname-policy =
+            pkgs.runCommand "dirname-policy-check"
+            {
+              nativeBuildInputs = [pkgs.coreutils];
+            }
+            ''
+              mkdir source
+              cd source
+              mkdir -p packages/foo/foo packages/bar/bar
+              touch packages/bar/bar/package.nix
+              if ${lib.getExe lintStage} dirnames >output 2>&1; then
+                echo "dirname policy accepted packages/foo/foo" >&2
+                exit 1
+              fi
+              grep -F "packages/foo/foo" output
+              if grep -F "packages/bar/bar" output; then
+                echo "dirname policy exempted nothing: flagged the eponym package packages/bar/bar" >&2
+                exit 1
+              fi
               touch "$out"
             '';
           zellij-config = pkgs.runCommand "zellij-config-check" {nativeBuildInputs = [pkgs.zellij];} ''
