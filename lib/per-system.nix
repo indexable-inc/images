@@ -971,6 +971,8 @@
     fleetSubs = [
       "up"
       "health"
+      "status"
+      "logs"
       "replace"
       "switch"
       "diff"
