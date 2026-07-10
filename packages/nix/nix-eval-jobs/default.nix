@@ -1,25 +1,15 @@
 {pkgs}: let
-  daemonNixSrc = pkgs.fetchFromGitHub {
-    owner = "NixOS";
-    repo = "nix";
-    rev = "ac94798c753e48fd0b36128a029ed8aecebe9b56";
-    hash = "sha256-lMvyBFy7jl8cnUI8efQuW8lxgIiwUhw6CHEmDpK0mfw=";
+  # nix-eval-jobs uses libstore's worker protocol directly. Build it against
+  # the same stable Nix family as the deployed fleet daemon, not nixpkgs'
+  # moving default components: a newer client can require protocol features
+  # the 2.34 daemon does not advertise and then fail floating-CA evaluation.
+  package = pkgs.nix-eval-jobs.override {
+    nixComponents = pkgs.nixVersions.nixComponents_2_34;
   };
-  # CA realisations are an unstable protocol. Build the evaluator from the
-  # exact Nix revision reported by the fleet daemon, while the interactive
-  # client remains on the stable release.
-  package =
-    (pkgs.nix-eval-jobs.override {
-      nixComponents = pkgs.nixVersions.nixComponents_git.overrideSource daemonNixSrc;
-    }).overrideAttrs (old: {
-      patches = (old.patches or []) ++ [./nix-master-api.patch];
-    });
 
-  # The override's real risk is the C++ rebuild against nix's libstore linking
-  # and the new symbols (staticOutputHashes, getDefaultSubstituters,
-  # Store::queryRealisation) resolving at all, so the smoke test runs the
-  # binary. `--help` exits 0 and prints usage without touching a store or
-  # daemon (absent in the sandbox).
+  # The override's real risk is silently relinking against nixpkgs' default
+  # Nix family after an update, so the smoke test checks both the executable
+  # and its propagated Nix component version.
   smoke =
     pkgs.runCommand "nix-eval-jobs-smoke"
     {
@@ -27,6 +17,13 @@
       strictDeps = true;
     }
     ''
+      case ${package.nixComponents.nix-cli.version} in
+        2.34.*) ;;
+        *)
+          echo "nix-eval-jobs is not linked to the fleet daemon's Nix 2.34 family" >&2
+          exit 1
+          ;;
+      esac
       help=$(nix-eval-jobs --help 2>&1) || true
       case "$help" in
         *"--check-cache-status"*) ;;
@@ -52,7 +49,7 @@ in
     meta =
       (old.meta or {})
       // {
-        description = "nix-eval-jobs built against the fleet daemon's Nix protocol generation";
+        description = "nix-eval-jobs built against the fleet daemon's stable Nix 2.34 protocol family";
         mainProgram = "nix-eval-jobs";
       };
   })
