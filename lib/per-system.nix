@@ -328,6 +328,7 @@
   check = ix.writeNushellApplication pkgs {
     name = "check";
     meta.description = "Run the full CI gate: build .#ciChecks.x86_64-linux and eval-validate .#packages.x86_64-linux";
+    runtimeInputs = [repoPackages.nix-eval-jobs.passthru.nix];
     text = ''
       # Patched nix-fast-build (packages/nix/nix-fast-build): stock --skip-cached
       # only skips a job whose nix-eval-jobs cacheStatus is `cached` (in a remote
@@ -345,6 +346,15 @@
       const eval_jobs = "${lib.getExe repoPackages.nix-eval-jobs}"
 
       def main [] {
+        # Realize the aggregate eval gate's IFD inputs sequentially before the
+        # parallel evaluator fans out. This also verifies the daemon-matched
+        # Nix client can complete CA realization before scheduling any builds.
+        ^nix eval ...[
+          "--raw" ".#ciChecks.x86_64-linux.eval.drvPath"
+          "--option" "accept-flake-config" "true"
+          "--option" "extra-experimental-features" "ca-derivations"
+        ] | ignore
+
         # ca-derivations: the rust workspace units default to
         # `contentAddressed = true` (lib/rust/cargo-unit.nix), so evaluating
         # `.#ciChecks.x86_64-linux` resolves floating content-addressed drvs. The
