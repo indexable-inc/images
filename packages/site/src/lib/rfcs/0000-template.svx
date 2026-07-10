@@ -1,0 +1,53 @@
+---
+id: 0000-template
+number: '0000'
+title: <RFC title>
+status: Draft
+authors: <github-handle>
+created: YYYY-MM-DD
+updated: YYYY-MM-DD
+trackingIssue: null
+supersedes: null
+supersededBy: null
+description: Template. Copy to `NNNN-short-slug.svx`, update the `title` frontmatter field, fill in the rest of the frontmatter and the body.
+template: true
+---
+
+## Summary
+
+One paragraph. State what this RFC proposes in concrete terms a reader can act on. If the summary is hard to write, the RFC is not ready yet.
+
+## Motivation
+
+Why does this need to exist? What goes wrong today? What forces the change? Cite specific files, options, conversations, or incidents. Prefer concrete pain over abstract elegance.
+
+## Detailed design
+
+The bulk of the document. Describe the proposed shape in enough detail that someone who is *not* the author could implement it. Cover:
+
+- The user-visible API: options, commands, file layout.
+- The internal mechanics where they affect more than one file.
+- How this composes with existing pieces: modules, fleet helpers, lint rules, image conventions.
+- Migration: what existing callers or configs need to change, and whether that is an automatic rewrite or manual.
+
+Use real names and real types. Avoid abstract sketches. Concrete is reviewable; vague is not.
+
+## Drawbacks
+
+What goes wrong if we ship this? Performance cost, increased surface area, lock-in, operator confusion, security implications. Be honest. Listing zero drawbacks means the section was skipped.
+
+## Alternatives
+
+What else was considered? Why is the proposed design preferred over each? Include the "do nothing" alternative explicitly.
+
+## Prior art
+
+Where does this pattern exist already, in this repo, in NixOS, in upstream Linux, in cloud providers, in other RFC processes? Link concrete artifacts where possible.
+
+## Unresolved questions
+
+Specific open points the RFC author wants reviewers to answer or push back on. Keep them tractable: each should be resolvable inside the PR thread, not its own follow-up RFC.
+
+## Future possibilities
+
+Optional. Sketch directions this design enables but does not commit to. Useful for reviewers to understand "where does this go next" without thinking the RFC is promising to deliver it.

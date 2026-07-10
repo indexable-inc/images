@@ -5,9 +5,9 @@
   lib,
   pkgs,
   ...
-}:
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     mkDefault
     mkEnableOption
     mkIf
@@ -24,6 +24,7 @@ let
       pkgs.xterm
     ];
     text = ''
+      # nu
       def main [] {
         job spawn { ^xterm }
         exec icewm-session
@@ -38,7 +39,7 @@ let
     (types.listOf types.str)
   ];
 
-  flags = lib.cli.toCommandLineGNU { } cfg.settings;
+  flags = lib.cli.toCommandLineGNU {} cfg.settings;
   effectiveAuth = cfg.settings.auth or cfg.auth;
   expectedBindTcp = "${cfg.bindAddress}:${toString cfg.port}";
   effectiveBindTcp = cfg.settings.bind-tcp or expectedBindTcp;
@@ -49,26 +50,26 @@ let
       cfg.package
     ];
     text = ''
+      # nu
       def main [] {
         let args = ${
-          builtins.toJSON (
-            [
-              "start-desktop"
-              cfg.display
-            ]
-            ++ flags
-          )
-        }
+        builtins.toJSON (
+          [
+            "start-desktop"
+            cfg.display
+          ]
+          ++ flags
+        )
+      }
         exec xpra ...$args
       }
     '';
   };
-in
-{
+in {
   options.services.remote-desktop = {
     enable = mkEnableOption "browser-accessible Xpra remote desktop";
 
-    package = mkPackageOption pkgs "xpra" { };
+    package = mkPackageOption pkgs "xpra" {};
 
     port = mkOption {
       type = types.port;
@@ -125,7 +126,7 @@ in
 
     settings = mkOption {
       type = types.attrsOf flagValueType;
-      default = { };
+      default = {};
       description = ''
         Flags passed to `xpra start-desktop` rendered via `lib.cli.toCommandLineGNU`.
         Each entry becomes `--key=value`; `true` becomes a bare `--key`, `false`
@@ -189,7 +190,7 @@ in
 
     networking.firewall.allowedTCPPorts = lib.optional cfg.openFirewall cfg.port;
 
-    users.groups.remote-desktop = { };
+    users.groups.remote-desktop = {};
     users.users.remote-desktop = {
       description = "Remote desktop service user";
       isSystemUser = true;
@@ -199,9 +200,9 @@ in
 
     systemd.services.remote-desktop = {
       description = "Xpra remote desktop";
-      after = [ "network-online.target" ];
-      wants = [ "network-online.target" ];
-      wantedBy = [ "multi-user.target" ];
+      after = ["network-online.target"];
+      wants = ["network-online.target"];
+      wantedBy = ["multi-user.target"];
       environment.HOME = "/var/lib/remote-desktop";
       serviceConfig = {
         Type = "simple";

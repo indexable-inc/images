@@ -45,67 +45,67 @@ defmodule SymphonyElixir.CronExpressionTest do
   describe "next_fire_after/2 with @hourly" do
     test "advances to the next hour boundary" do
       {:ok, parsed} = CronExpression.parse("@hourly")
-      from = ~U[2026-05-17 14:23:00Z]
-      assert {:ok, ~U[2026-05-17 15:00:00Z]} = CronExpression.next_fire_after(parsed, from)
+      from = ~N[2026-05-17 14:23:00]
+      assert {:ok, ~N[2026-05-17 15:00:00]} = CronExpression.next_fire_after(parsed, from)
     end
 
     test "never returns the from moment itself" do
       {:ok, parsed} = CronExpression.parse("@hourly")
-      from = ~U[2026-05-17 14:00:00Z]
-      assert {:ok, ~U[2026-05-17 15:00:00Z]} = CronExpression.next_fire_after(parsed, from)
+      from = ~N[2026-05-17 14:00:00]
+      assert {:ok, ~N[2026-05-17 15:00:00]} = CronExpression.next_fire_after(parsed, from)
     end
   end
 
   describe "next_fire_after/2 with @daily" do
-    test "advances to midnight UTC the next day" do
+    test "advances to wall-clock midnight the next day" do
       {:ok, parsed} = CronExpression.parse("@daily")
-      from = ~U[2026-05-17 14:00:00Z]
-      assert {:ok, ~U[2026-05-18 00:00:00Z]} = CronExpression.next_fire_after(parsed, from)
+      from = ~N[2026-05-17 14:00:00]
+      assert {:ok, ~N[2026-05-18 00:00:00]} = CronExpression.next_fire_after(parsed, from)
     end
   end
 
   describe "next_fire_after/2 with @monthly" do
-    test "advances to the 1st of the next month at 00:00 UTC" do
+    test "advances to the 1st of the next month at wall-clock 00:00" do
       {:ok, parsed} = CronExpression.parse("@monthly")
-      from = ~U[2026-05-17 14:00:00Z]
-      assert {:ok, ~U[2026-06-01 00:00:00Z]} = CronExpression.next_fire_after(parsed, from)
+      from = ~N[2026-05-17 14:00:00]
+      assert {:ok, ~N[2026-06-01 00:00:00]} = CronExpression.next_fire_after(parsed, from)
     end
 
     test "rolls into the next year correctly" do
       {:ok, parsed} = CronExpression.parse("@monthly")
-      from = ~U[2026-12-15 09:30:00Z]
-      assert {:ok, ~U[2027-01-01 00:00:00Z]} = CronExpression.next_fire_after(parsed, from)
+      from = ~N[2026-12-15 09:30:00]
+      assert {:ok, ~N[2027-01-01 00:00:00]} = CronExpression.next_fire_after(parsed, from)
     end
   end
 
   describe "next_fire_after/2 with explicit 5-field" do
     test "*/15 * * * * fires on the next quarter-hour" do
       {:ok, parsed} = CronExpression.parse("*/15 * * * *")
-      from = ~U[2026-05-17 14:07:00Z]
-      assert {:ok, ~U[2026-05-17 14:15:00Z]} = CronExpression.next_fire_after(parsed, from)
+      from = ~N[2026-05-17 14:07:00]
+      assert {:ok, ~N[2026-05-17 14:15:00]} = CronExpression.next_fire_after(parsed, from)
     end
 
     test "weekday business hours respects day-of-week" do
       # 9am on weekdays (Mon-Fri). 2026-05-17 is a Sunday.
       {:ok, parsed} = CronExpression.parse("0 9 * * 1-5")
-      from = ~U[2026-05-17 12:00:00Z]
-      assert {:ok, ~U[2026-05-18 09:00:00Z]} = CronExpression.next_fire_after(parsed, from)
+      from = ~N[2026-05-17 12:00:00]
+      assert {:ok, ~N[2026-05-18 09:00:00]} = CronExpression.next_fire_after(parsed, from)
     end
 
     test "POSIX OR semantics for DOM and DOW when both restricted" do
       # 'every 1st of the month OR every Friday'
       {:ok, parsed} = CronExpression.parse("0 0 1 * 5")
       # Thursday May 14 2026 -> first match is Friday May 15
-      from = ~U[2026-05-14 12:00:00Z]
-      assert {:ok, ~U[2026-05-15 00:00:00Z]} = CronExpression.next_fire_after(parsed, from)
+      from = ~N[2026-05-14 12:00:00]
+      assert {:ok, ~N[2026-05-15 00:00:00]} = CronExpression.next_fire_after(parsed, from)
     end
   end
 
   describe "matches?/2" do
     test "@hourly matches every wall-clock hour" do
       {:ok, parsed} = CronExpression.parse("@hourly")
-      assert CronExpression.matches?(parsed, ~U[2026-05-17 03:00:00Z])
-      refute CronExpression.matches?(parsed, ~U[2026-05-17 03:01:00Z])
+      assert CronExpression.matches?(parsed, ~N[2026-05-17 03:00:00])
+      refute CronExpression.matches?(parsed, ~N[2026-05-17 03:01:00])
     end
   end
 end

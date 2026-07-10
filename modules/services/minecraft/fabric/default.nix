@@ -8,18 +8,17 @@
   lib,
   pkgs,
   ...
-}:
-let
+}: let
   defaultJvmVersion = ix.languages.java.defaultJvmVersion;
 in
-ix.mkMinecraftLoader {
-  inherit ix config lib;
-  name = "fabric";
-  dropinDir = "mods";
-  # Fabric uses the shared Temurin JVM default. Hot reload can redefine ordinary
-  # classes through the Java agent, but it does not dynamically load new mods or
-  # mutate frozen registries.
-  configFragment = _: {
-    services.minecraft.javaPackage = lib.mkDefault pkgs."temurin-jre-bin-${defaultJvmVersion}";
-  };
-}
+  ix.mkMinecraftLoader {
+    inherit ix config lib;
+    name = "fabric";
+    dropinDir = "mods";
+    # Fabric uses the shared Temurin JVM default. Hot reload can redefine ordinary
+    # classes through the Java agent, but it does not dynamically load new mods or
+    # mutate frozen registries.
+    configFragment = _: {
+      services.minecraft.javaPackage = lib.mkDefault pkgs."temurin-jre-bin-${defaultJvmVersion}";
+    };
+  }

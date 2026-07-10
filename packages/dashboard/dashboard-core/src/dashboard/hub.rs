@@ -109,11 +109,22 @@ fn view_scalars(view: &View) -> Vec<ScalarField> {
             field("lang", Scalar::Str(e.lang.clone())),
             field("running", Scalar::Bool(e.running)),
             field("ok", e.ok.map_or(Scalar::Absent, Scalar::Bool)),
+            field("topic", e.topic.clone().map_or(Scalar::Absent, Scalar::Str)),
             field(
                 "duration_ms",
                 e.duration_ms.map_or(Scalar::Absent, |ms| {
                     Scalar::Int(i64::try_from(ms).unwrap_or(i64::MAX))
                 }),
+            ),
+            field(
+                "line",
+                e.line
+                    .map_or(Scalar::Absent, |line| Scalar::Int(i64::from(line))),
+            ),
+            field(
+                "error_line",
+                e.error_line
+                    .map_or(Scalar::Absent, |line| Scalar::Int(i64::from(line))),
             ),
         ],
         View::Data(d) => vec![field("renderer", Scalar::Str(d.renderer.clone()))],
@@ -136,7 +147,10 @@ struct TextField {
 fn view_texts(view: &View) -> Vec<TextField> {
     let field = |name, value| TextField { name, value };
     match view {
-        View::Terminal(t) => vec![field("body", t.screen.clone())],
+        View::Terminal(t) => vec![
+            field("body", t.screen.clone()),
+            field("scrollback", t.scrollback.clone()),
+        ],
         View::Html(h) => vec![field("body", h.html.clone())],
         View::Exec(e) => vec![
             field("source", e.source.clone()),
@@ -215,6 +229,7 @@ struct Slot {
     kind: &'static str,
     title: String,
     subtitle: String,
+    parent: Option<String>,
     /// Cached scalar meta, keyed by field name. Absent from the map until first
     /// written, so the first apply writes every field the view declares.
     scalars: HashMap<&'static str, Scalar>,
@@ -329,6 +344,7 @@ impl DocState {
                 // when the real value is empty.
                 title: sentinel(),
                 subtitle: sentinel(),
+                parent: None,
                 scalars: HashMap::new(),
                 texts,
             },
@@ -352,6 +368,16 @@ impl DocState {
                 .map_err(loro_err)?;
             slot.subtitle.clone_from(&pane.subtitle);
         }
+        if slot.parent != pane.parent {
+            match &pane.parent {
+                Some(parent) => slot
+                    .meta
+                    .insert("parent", parent.as_str())
+                    .map_err(loro_err)?,
+                None => slot.meta.delete("parent").map_err(loro_err)?,
+            }
+            slot.parent.clone_from(&pane.parent);
+        }
         for field in view_scalars(&pane.view) {
             if slot.scalars.get(field.name) != Some(&field.value) {
                 write_scalar(&slot.meta, field.name, &field.value)?;
@@ -372,21 +398,16 @@ impl DocState {
         Ok(())
     }
 
-    /// Drop every pane under `scope` (its producer disconnected). Returns the
-    /// delta when the scope held anything.
+    /// Keep panes under `scope` when its producer disconnects.
+    ///
+    /// A terminal/resource pane is still useful after the process or producer
+    /// dies: it is the final state a human wants to inspect. The next live
+    /// snapshot from the same scope still reconciles normally through
+    /// [`apply_scope`](Self::apply_scope), including deleting panes that are no
+    /// longer reported by that producer.
     fn remove_scope(&mut self, scope: &str) -> Result<Option<Vec<u8>>> {
-        let prefix = format!("{scope}{SCOPE_SEP}");
-        let dead: Vec<String> = self
-            .panes
-            .keys()
-            .filter(|key| key.starts_with(&prefix))
-            .cloned()
-            .collect();
-        if dead.is_empty() {
-            return Ok(None);
-        }
-        self.drop_keys(&dead)?;
-        self.commit_delta()
+        let _ = scope;
+        Ok(None)
     }
 
     fn drop_keys(&mut self, keys: &[String]) -> Result<()> {
@@ -538,6 +559,7 @@ mod tests {
                 cols: 80,
                 alive: true,
                 screen: screen.to_owned(),
+                scrollback: String::new(),
                 cursor_row: 0,
                 cursor_col: 0,
                 cursor_visible: true,
@@ -555,7 +577,7 @@ mod tests {
     }
 
     /// The core multi-producer invariant: one producer's reconcile never touches
-    /// another's panes, and dropping a producer removes only its own.
+    /// another's panes, and dropping a producer keeps the final snapshot.
     #[test]
     fn scopes_do_not_clobber_each_other() {
         let mut state = DocState::new();
@@ -571,10 +593,11 @@ mod tests {
         assert_eq!(state.panes.len(), 2);
         assert!(state.panes.keys().any(|key| key.starts_with("b\u{1f}")));
 
-        // Disconnecting producer a removes only a's panes.
+        // Disconnecting producer a keeps the last visible state.
         state.remove_scope("a").unwrap();
-        assert_eq!(state.panes.len(), 1);
-        assert!(state.panes.keys().all(|key| key.starts_with("b\u{1f}")));
+        assert_eq!(state.panes.len(), 2);
+        assert!(state.panes.keys().any(|key| key.starts_with("a\u{1f}")));
+        assert!(state.panes.keys().any(|key| key.starts_with("b\u{1f}")));
     }
 
     /// A tick that changes nothing produces no delta, so idle producers do not
@@ -645,6 +668,16 @@ mod tests {
         assert!(state.remove_scope("ghost").unwrap().is_none());
     }
 
+    #[test]
+    fn removing_scope_retains_last_panes() {
+        let mut state = DocState::new();
+        state.apply_scope("a", &[terminal("1", "last")]).unwrap();
+        let key = doc_key("a", "1");
+        assert!(state.panes.contains_key(&key));
+        assert!(state.remove_scope("a").unwrap().is_none());
+        assert_eq!(state.panes[&key].text("body"), "last");
+    }
+
     /// Heterogeneous panes coexist under one scope: a terminal, an HTML pane, an
     /// exec pane, and a data pane all land with the right `kind` and text fields,
     /// and an unchanged re-apply of the mixed set yields no delta.
@@ -665,6 +698,9 @@ mod tests {
                     running: false,
                     ok: Some(true),
                     duration_ms: Some(9),
+                    topic: Some("test".to_owned()),
+                    line: None,
+                    error_line: None,
                     trace: Vec::new(),
                 },
             ),
@@ -707,6 +743,9 @@ mod tests {
                 running: true,
                 ok: None,
                 duration_ms: None,
+                topic: None,
+                line: None,
+                error_line: None,
                 trace: Vec::new(),
             },
         );
@@ -726,6 +765,9 @@ mod tests {
                 running: false,
                 ok: Some(true),
                 duration_ms: Some(4),
+                topic: Some("test".to_owned()),
+                line: None,
+                error_line: None,
                 trace: vec![ExecTraceLine {
                     line: 1,
                     text: "hi\n".to_owned(),

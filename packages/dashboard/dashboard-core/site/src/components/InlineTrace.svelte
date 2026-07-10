@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { highlight } from '$lib/highlight';
+  import { highlightLines } from '$lib/highlight';
 
   // Inline-trace execution: the code shown once, full width. Each line that
   // produced output shows its first output line inline in gray beside the code; a
@@ -43,20 +43,16 @@
     return out.includes('\n');
   }
 
-  // Per-line highlighted HTML, parsed out of shiki's `.line` spans (null until the
-  // highlighter loads; raw text shows meanwhile and upgrades in place).
+  // Per-line highlighted HTML (null until the highlighter loads; raw text shows
+  // meanwhile and upgrades in place).
   let lineHtml = $state<string[] | null>(null);
   $effect(() => {
     const src = source;
     const l = lang;
     let alive = true;
     lineHtml = null;
-    void highlight(src, l).then((html) => {
-      if (!alive || !html) return;
-      const tpl = document.createElement('template');
-      tpl.innerHTML = html;
-      const spans = tpl.content.querySelectorAll('.line');
-      lineHtml = spans.length ? Array.from(spans, (s) => s.outerHTML) : null;
+    void highlightLines(src, l).then((out) => {
+      if (alive) lineHtml = out;
     });
     return () => {
       alive = false;

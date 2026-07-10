@@ -1,13 +1,17 @@
 {
-  description = "Pre-built OCI images for ix VMs";
+  description = "Index developer tools, modules, and fleet examples";
 
-  # Keep the repo cache available for image closures and repo-owned tools that
-  # CI has already built. Generic nixpkgs paths still substitute from
-  # cache.nixos.org.
+  # Keep the repo cache available for repo-owned tools that CI has already built.
+  # `cache.ix.dev` is the ix public cache (ncps fronting the `ix-public` atticd
+  # cache); it serves repo-owned artifacts and falls through to cache.nixos.org
+  # for generic nixpkgs paths, so a single substituter covers both. Everything
+  # there is signed `ix-workspace:` (atticd signs served narinfos server-side),
+  # so that one trusted key verifies both ix's builds and index's published
+  # packages (pushed by cache-push.yml).
   nixConfig = {
-    extra-substituters = [ "https://indexable-inc.cachix.org" ];
+    extra-substituters = ["https://cache.ix.dev"];
     extra-trusted-public-keys = [
-      "indexable-inc.cachix.org-1:HQ5mjdOyhgNjLVhjv0qgVMJ5YiO1zEEVMAtF9mTcpiI="
+      "ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI="
     ];
     # The rust workspace units default to `contentAddressed = true`
     # (lib/rust/cargo-unit.nix), so evaluating `.#checks` / `.#packages`
@@ -16,7 +20,7 @@
     # disabled". Declared here so any eval against this flake (CI's
     # `accept-flake-config` runs, a local `nix flake check`, `nix build
     # .#checks.<sys>.<name>`) picks it up from one source of truth.
-    extra-experimental-features = [ "ca-derivations" ];
+    extra-experimental-features = ["ca-derivations"];
   };
 
   inputs = {
@@ -28,22 +32,15 @@
     # file change anywhere re-hashes and re-copies the full tree per eval and
     # invalidates every dependent. Declaring each pure-data subtree as its own
     # `flake = false` path input scopes a consumer's source to just the subtree
-    # it reads, so an edit under `site/` no longer perturbs a `skills`
-    # package's drvPath. nix and nox both resolve these as lock nodes
+    # it reads, so an edit under `packages/site/` no longer perturbs a
+    # `packages/agent/skills` package's drvPath. nix and nox both resolve
+    # these as lock nodes
     # `{ type = "path"; path = "./<dir>"; parent = []; }` against the parent
     # tree, with no separate fetch. Nix-code roots the flake itself imports
     # (`modules`, `packages`) stay ordinary relative paths: they are
     # import-time, not source identity. See ENG-2362.
     skills = {
-      url = "path:./skills";
-      flake = false;
-    };
-    agents = {
-      url = "path:./agents";
-      flake = false;
-    };
-    images = {
-      url = "path:./images";
+      url = "path:./packages/agent/skills";
       flake = false;
     };
     examples = {
@@ -55,17 +52,35 @@
       flake = false;
     };
     bench-filesystem = {
-      url = "path:./bench/filesystem";
+      url = "path:./packages/indexbench/filesystem";
       flake = false;
     };
     site = {
-      url = "path:./site";
+      url = "path:./packages/site";
       flake = false;
     };
 
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
+    };
+
+    # Pinned evaluation context for the prebuilt public-SDK `ix-sdk-wire` rlib
+    # (packages/sdk/rust/build.nix). The artifact's manifest records the store
+    # path of the toolchain it was compiled with, and that path folds the whole
+    # nixpkgs + rust-overlay evaluation, so it is only reproducible from the
+    # exact revs the artifact was published against. Pinned BY REV: a blanket
+    # `nix flake update` re-locks the same rev, so the hourly flake bump can
+    # never move this context out from under the artifact (#2131). A
+    # republication of the rlib bumps these two revs together with
+    # packages/sdk/rust/pins.json.
+    sdk-prebuilt-nixpkgs = {
+      url = "github:NixOS/nixpkgs/a799d3e3886da994fa307f817a6bc705ae538eeb";
+      flake = false;
+    };
+    sdk-prebuilt-rust-overlay = {
+      url = "github:oxalica/rust-overlay/107c334f141854f563f8adf1db781dc453d92639";
+      flake = false;
     };
 
     # Home Manager wired in via its NixOS module for per-tool XDG-shaped
@@ -79,16 +94,67 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # Fork of rust-lang/rust-clippy with extra restriction lints tuned for
-    # LLM-assisted codebases. Pinned in flake.lock so `nix flake update`
-    # bumps it; consumed as the source tree for `packages/llm-clippy`.
-    clippy-fork = {
-      url = "github:indexable-inc/clippy";
+    # Upstream rust-lang/rust-clippy, patched in-repo with the restriction lints
+    # tuned for LLM-assisted codebases (packages/llm-clippy/patches). Pinned BY
+    # REV, not a floating branch: clippy-driver links rustc_private and must match
+    # the repo's pinned nightly (root rust-toolchain.toml) exactly, or every
+    # per-unit clippy gate fails with E0514 "compiled by an incompatible version
+    # of rustc". Never free-float under a blanket `nix flake update`.
+    #
+    # The repo nightly (2026-05-27) sits between
+    # upstream clippy's autogenerated sync points (05-13 -> 05-28), so no
+    # upstream rev compiles against it as-is. The series' first patch bridges
+    # that gap (toolchain file + rustc_private adaptations). Bump this rev only
+    # inside the same change that bumps the repo rust toolchain; if the new
+    # nightly matches an upstream sync commit, drop the bridge patch, otherwise
+    # regenerate it. Then `nix run .#rebase-patches -- clippy` for the rest.
+    clippy-src = {
+      url = "github:rust-lang/rust-clippy/512551c839fc711fc925c8a862a9abd4bde0812f";
       flake = false;
     };
 
+    # Upstream openai/codex, patched in-repo (packages/agent/codex/patches).
+    # Pinned BY REV: importCargoLock removes the aggregate cargoHash, but git
+    # dependencies still carry fixed output hashes in the package. A
+    # branch-loose URL lets a blanket `nix flake update` float the source past
+    # those hashes, which broke every ix prod deploy for 13h on 2026-07-07.
+    # Bump this rev deliberately, run `nix run .#rebase-patches -- codex`, then
+    # build Codex and refresh any git dependency hashes named by Nix. The
+    # scheduled content and fork updaters intentionally leave this input alone.
+    codex-src = {
+      url = "github:openai/codex/1f0566d3f59298d1bb88820a0d35294f1eeb07ea";
+      flake = false;
+    };
+
+    # Upstream NixOS/nix, patched in-repo (packages/nix/nix/patches). Pinned BY
+    # REV at tag 2.34.7, the version the hydra daemon runs (`nix store info` ->
+    # `Version: 2.34.7`): nix is our daemon toolchain, so the patched package
+    # must stay a protocol-compatible drop-in for the running daemon. The base
+    # moves DELIBERATELY, never under a routine `nix flake update`
+    # (fork-packages.nix marks it `autoUpdate = false`, so the scheduled
+    # fork-sync leaves it alone): bump this rev only when we intend to move the
+    # daemon version too, then `nix run .#rebase-patches -- nix` to regenerate
+    # the series on the new base.
+    nix-src = {
+      url = "github:NixOS/nix/2c6d06e9387cf58167cb5a7ab91cee7333d8d17c";
+      flake = false;
+    };
+
+    # Upstream aristocratos/btop, patched in-repo (packages/terminal/btop/patches).
+    # Tracks upstream main (autoUpdate = true in lib/fork-packages.nix): the base
+    # free-floats under the scheduled fork-sync, which runs `nix flake update
+    # btop-src` + `nix run .#rebase-patches -- btop` to advance the two patches
+    # (macOS disk IO sorting, cwd detail box) onto the new tail.
     btop-src = {
-      url = "github:indexable-inc/btop/711f4a128b1b7009ee9cf0fa179a586c82586613";
+      url = "github:aristocratos/btop";
+      flake = false;
+    };
+
+    # Upstream nushell/nushell, patched in-repo (packages/nushell/patches).
+    # Tracks upstream main (autoUpdate = true in lib/fork-packages.nix): the
+    # scheduled fork-sync bumps nushell-src and rebases the xattr patch.
+    nushell-src = {
+      url = "github:nushell/nushell";
       flake = false;
     };
 
@@ -97,8 +163,25 @@
       flake = false;
     };
 
+    perftest-src = {
+      url = "git+https://github.com/linux-rdma/perftest?ref=refs/tags/26.04.17";
+      flake = false;
+    };
+
+    # PostgreSQL uint128 extension source. The package marks the extension trusted
+    # so non-superuser database owners can run `CREATE EXTENSION uint128`.
+    pg-uint128-src = {
+      url = "github:pg-uint/pg-uint128/1.2.0";
+      flake = false;
+    };
+
     fff-src = {
       url = "github:dmtrKovalenko/fff/v0.9.1";
+      flake = false;
+    };
+
+    nu-jupyter-kernel-src = {
+      url = "github:cptpiepmatz/nu-jupyter-kernel/016d5089d9b0c66beb95311e339e252c8b9dd4e4";
       flake = false;
     };
 
@@ -132,19 +215,18 @@
     # a release tag so routine bumps are review events; `nix flake update
     # hermes-agent` after bumping the tag is the supported intake path.
     # Surfaced through `ix.hermesAgent` and consumed by
-    # `examples/hermes-agent/`.
+    # `examples/hermes/agent/`.
     hermes-agent = {
       url = "github:NousResearch/hermes-agent/v2026.5.16";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
     # TODO: re-add the `symphony` flake input that provided
-    # `pkgs.symphony-room-server` for images/dev/symphony-codex. room-server's
-    # real home is the ix monorepo (`crates/room`,
-    # `ix#packages.x86_64-linux.room-server`), but ix already inputs index
-    # (`ix/flake.nix`), so index cannot source it from ix without a circular
-    # flake dependency. Pin removed for now; re-add once that cycle is resolved
-    # or the symphony-codex image moves into ix.
+    # `pkgs.symphony-room-server`. room-server's real home is the ix monorepo
+    # (`crates/room`, `ix#packages.x86_64-linux.room-server`), but ix already
+    # inputs index (`ix/flake.nix`), so index cannot source it from ix without a
+    # circular flake dependency. Pin removed for now; re-add once that cycle is
+    # resolved or room-server moves into this repo.
 
     # Ghostty's terminal VT engine, consumed as a source tree (not a flake) so
     # `packages/tui/vt/libghostty-vt` owns the build. Pinned to the commit the
@@ -157,116 +239,147 @@
       url = "github:ghostty-org/ghostty/fd49716ea2084108aa098db390931c007495a1ab";
       flake = false;
     };
+
+    # Upstream mesa (gitlab.freedesktop.org), patched in-repo for the panes GPU
+    # guest (packages/vm/panes/guest-image/mesa/patches): the venus driver-side
+    # external-semaphore delta (index#1742). De-forking replacement for the old
+    # `indexable-inc/mesa` snapshot fork tarball; pinned by the `mesa-26.1.2`
+    # tag, so the patched tree is the upstream tag tree plus the venus commits.
+    #
+    # `shallow=1` is load-bearing (same reason as snix-src): mesa's git history
+    # is huge, and only the source tree at the pinned tag is ever used (through
+    # `ix.mesaSrc` -> patchedSrc), never history or revCount. Without it the
+    # lock records `revCount`, forcing a full-history clone on every cold
+    # `nix flake archive` / direnv load. `flake.lock` still records the rev, so
+    # `rebase-patches` can read the base rev; the URL is a real git remote so
+    # its scratch-clone fetch works. Pinned by rev (autoUpdate = false in
+    # lib/fork-packages.nix): a mesa bump must be rebased AND boot-validated on
+    # a linux GPU host (the venus patch is validated by running the guest, not
+    # by CI), so it moves only under a deliberate manual bump, never the cron.
+    mesa-src = {
+      url = "git+https://gitlab.freedesktop.org/mesa/mesa?ref=refs/tags/mesa-26.1.2&shallow=1";
+      flake = false;
+    };
   };
 
-  outputs =
-    {
-      self,
-      nixpkgs,
-      rust-overlay,
-      home-manager,
-      hermes-agent,
-      btop-src,
-      drgn-src,
-      fff-src,
-      launchk-src,
-      snix-src,
-      clippy-fork,
-      ghostty,
-      skills,
-      agents,
-      images,
-      examples,
-      tests,
-      bench-filesystem,
-      site,
-      ...
-    }:
-    let
-      inherit (nixpkgs) lib;
+  outputs = {
+    self,
+    nixpkgs,
+    rust-overlay,
+    sdk-prebuilt-nixpkgs,
+    sdk-prebuilt-rust-overlay,
+    home-manager,
+    hermes-agent,
+    btop-src,
+    nushell-src,
+    drgn-src,
+    perftest-src,
+    pg-uint128-src,
+    fff-src,
+    nu-jupyter-kernel-src,
+    launchk-src,
+    snix-src,
+    clippy-src,
+    codex-src,
+    nix-src,
+    ghostty,
+    mesa-src,
+    skills,
+    examples,
+    tests,
+    bench-filesystem,
+    site,
+    ...
+  }: let
+    inherit (nixpkgs) lib;
 
-      # The flake's own source revision, threaded into `ix` so packages can
-      # stamp the running build (e.g. the MCP server reports it as its
-      # `serverInfo.version`). Clean tree -> the commit hash; dirty tree ->
-      # `<commit>-dirty`; neither (eval from a non-git source) -> "dev".
-      rev = self.rev or self.dirtyRev or "dev";
+    # The flake's own source revision, threaded into `ix` so packages can
+    # stamp the running build (e.g. the MCP server reports it as its
+    # `serverInfo.version`). Clean tree -> the commit hash; dirty tree ->
+    # `<commit>-dirty`; neither (eval from a non-git source) -> "dev".
+    rev = self.rev or self.dirtyRev or "dev";
 
-      # Commit time of that revision as unix epoch seconds, threaded alongside
-      # `rev` so a build can stamp a human date and relative age. Under
-      # reproducible builds there is no wall-clock compile time; this is the
-      # source date Nix already records (`self.lastModified`): the commit time
-      # on a clean tree, the working-tree mtime on a dirty one. `0` when
-      # evaluated from a non-git source.
-      revEpoch = self.lastModified or 0;
+    # Commit time of that revision as unix epoch seconds, threaded alongside
+    # `rev` so a build can stamp a human date and relative age. Under
+    # reproducible builds there is no wall-clock compile time; this is the
+    # source date Nix already records (`self.lastModified`): the commit time
+    # on a clean tree, the working-tree mtime on a dirty one. `0` when
+    # evaluated from a non-git source.
+    revEpoch = self.lastModified or 0;
 
-      # All path literals the flake exposes. Centralized so lib/ and
-      # lib/per-system.nix have a single source of truth.
-      #
-      # The data-subtree entries below resolve to the `outPath` of a
-      # relative-path input (declared `flake = false` above) instead of a
-      # bare `./<dir>` literal, so each consumer's source identity is scoped to
-      # just that subtree. The shape and names of `paths` are unchanged, so no
-      # downstream lib code needs editing. Nix-code roots the flake imports
-      # directly (`modules`, `packagesRoot`) and the whole-repo `root` (the lint
-      # source intentionally covers the entire tree) stay ordinary relative
-      # paths: those are import-time / whole-repo by design, not per-subtree
-      # source identity. The minecraft sub-paths are projections of the `images`
-      # subtree, so they ride the same `images` input rather than each opening a
-      # new whole-repo dependency.
-      paths = {
-        root = ./.;
-        skills = skills.outPath;
-        agents = agents.outPath;
-        images = images.outPath;
-        modules = ./modules;
-        examples = examples.outPath;
-        tests = tests.outPath;
-        bench.filesystem = bench-filesystem.outPath;
-        site = site.outPath;
-        packagesRoot = ./packages;
-        minecraftMods = images.outPath + "/games/minecraft/mods";
-        minecraftPaperPlugins = images.outPath + "/games/minecraft/plugins/paper";
-        minecraftVelocityPlugins = images.outPath + "/games/minecraft/plugins/velocity";
-        minecraftLoaders = {
-          paper = images.outPath + "/games/minecraft/loaders/paper";
-          velocity = images.outPath + "/games/minecraft/loaders/velocity";
-          fabric = images.outPath + "/games/minecraft/loaders/fabric";
-        };
-        tools = {
-          ixShellSyncIgnored = ./tools/ix-shell-sync-ignored.py;
-          mcSource = ./tools/mc-source.nu;
-          updateSounds = ./tools/update-sounds.nu;
-          updateLoaders = ./tools/update-loaders.py;
-          updateMods = ./tools/update-mods.py;
-        };
+    # All path literals the flake exposes. Centralized so lib/ and
+    # lib/per-system.nix have a single source of truth.
+    # The data-subtree entries below resolve to the `outPath` of relative-path
+    # inputs (declared `flake = false` above) instead of bare `./<dir>`
+    # literals, so each consumer's source identity is scoped to just that
+    # subtree. Nix-code roots the flake imports directly (`modules`,
+    # `packagesRoot`) and the whole-repo `root` (the lint source intentionally
+    # covers the entire tree) stay ordinary relative paths: those are
+    # import-time / whole-repo by design, not per-subtree source identity.
+    paths = {
+      root = ./.;
+      skills = skills.outPath;
+      modules = ./modules;
+      examples = examples.outPath;
+      tests = tests.outPath;
+      bench.filesystem = bench-filesystem.outPath;
+      site = site.outPath;
+      pgUint128Src = pg-uint128-src;
+      packagesRoot = ./packages;
+      minecraftCatalogs = ./packages/minecraft/catalogs;
+      minecraftMods = ./packages/minecraft/catalogs/mods;
+      minecraftPaperPlugins = ./packages/minecraft/catalogs/plugins/paper;
+      minecraftVelocityPlugins = ./packages/minecraft/catalogs/plugins/velocity;
+      minecraftLoaders = {
+        paper = ./packages/minecraft/catalogs/loaders/paper;
+        velocity = ./packages/minecraft/catalogs/loaders/velocity;
+        fabric = ./packages/minecraft/catalogs/loaders/fabric;
       };
-
-      ix = import ./lib {
-        inherit
-          rev
-          revEpoch
-          nixpkgs
-          paths
-          rust-overlay
-          home-manager
-          hermes-agent
-          btop-src
-          drgn-src
-          fff-src
-          launchk-src
-          snix-src
-          clippy-fork
-          ghostty
-          ;
+      # Repo maintenance scripts and package-owned source updaters.
+      tools = {
+        cveScan = ./packages/cve-scan/cve-scan.py;
+        ixShellSyncIgnored = ./packages/maintainers/scripts/ix-shell-sync-ignored.py;
+        mcSource = ./packages/minecraft/tools/mc-source.nu;
+        updateSounds = ./packages/minecraft/tools/update-sounds.nu;
+        updateLoaders = ./packages/minecraft/tools/update-loaders.py;
+        updateMods = ./packages/minecraft/tools/update-mods.py;
       };
-      devSystems = [
-        "x86_64-linux"
-        "aarch64-linux"
-        "aarch64-darwin"
-        "x86_64-darwin"
-      ];
-      perSystem = lib.genAttrs devSystems (
-        system:
+    };
+
+    ix = import ./lib {
+      inherit
+        self
+        rev
+        revEpoch
+        nixpkgs
+        paths
+        rust-overlay
+        sdk-prebuilt-nixpkgs
+        sdk-prebuilt-rust-overlay
+        home-manager
+        hermes-agent
+        btop-src
+        nushell-src
+        drgn-src
+        perftest-src
+        fff-src
+        nu-jupyter-kernel-src
+        launchk-src
+        snix-src
+        clippy-src
+        codex-src
+        nix-src
+        ghostty
+        mesa-src
+        ;
+    };
+    devSystems = [
+      "x86_64-linux"
+      "aarch64-linux"
+      "aarch64-darwin"
+    ];
+    perSystem = lib.genAttrs devSystems (
+      system:
         import ./lib/per-system.nix {
           inherit
             system
@@ -274,81 +387,308 @@
             nixpkgs
             paths
             rust-overlay
+            home-manager
             ;
         }
-      );
-      collect = key: lib.mapAttrs (_: out: out.${key}) perSystem;
-    in
-    {
-      lib = ix;
-      inherit (ix) nixosModules;
-      darwinModules = {
-        # Personal-but-shareable nix-darwin module for github:andrewgazelka: the
-        # Homebrew package set (GUI casks, the `mas` brew, Mac App Store apps).
-        # Companion to homeModules.andrewgazelka (which owns the home-manager
-        # services); import it from a darwin host to get the casks merged in. See
-        # users/andrewgazelka/darwin.nix.
-        andrewgazelka = ./users/andrewgazelka/darwin.nix;
+    );
+    collect = key: lib.mapAttrs (_: out: out.${key}) perSystem;
+    linuxDarwinAliases = perSystem.x86_64-linux.darwinPackageAliases or {};
+    # Graft the Linux-to-Darwin cross aliases over a collected per-system set so
+    # a Darwin namespace resolves an aliased attr to the cross-compiled
+    # x86_64-linux derivation instead of a native rebuild. Applied to both
+    # `packages` (the consumer surface) and `cachePushRoots` (what
+    # cache-push.yml publishes): the Darwin cache lane realises the post-alias
+    # set filtered to native aarch64-darwin drvs, so an alias-shadowed native
+    # variant (e.g. dag-runner) is neither built nor published. Consumers can
+    # never install it (#1890).
+    withDarwinAliases = raw:
+      raw
+      // lib.genAttrs [
+        "aarch64-darwin"
+      ] (system: raw.${system} // (linuxDarwinAliases.${system} or {}));
+    packages = withDarwinAliases (collect "packages");
+    rawSecurityRoots = collect "securityRoots";
+    rawSecurityRootPaths = collect "securityRootPaths";
+    securityRoots =
+      rawSecurityRoots
+      // {
+        aarch64-darwin =
+          rawSecurityRoots.aarch64-darwin
+          // lib.mapAttrs (
+            name: _:
+              (rawSecurityRoots.aarch64-darwin.${name} or rawSecurityRoots.x86_64-linux.${name})
+              // {
+                attr = "packages.aarch64-darwin.${name}";
+              }
+          )
+          (linuxDarwinAliases.aarch64-darwin or {});
       };
-      homeModules = {
-        # Workstation-facing home-manager module: declare a service once, get a
-        # native launchd agent on macOS and native systemd user units on Linux.
-        portable-services = ix.portableServices.homeModule;
-        # Declarative-but-writable JSON config files (last-applied 3-way merge),
-        # for config an app rewrites at runtime. See lib/mutable-json.nix.
-        mutable-json = ix.mutableJson.homeModule;
-        # Reusable workstation module (macOS): declare Raycast Focus session
-        # defaults (title, filter mode, duration) and have them written to the
-        # com.raycast.macos defaults domain at switch time. Import it and set
-        # `programs.raycast.focus = { enable = true; ... }`. See
-        # modules/home/raycast.nix.
-        raycast = ./modules/home/raycast.nix;
-        # Personal-but-shareable workstation module for github:andrewgazelka: the
-        # ix.dev downtime watcher + boss bar overlay + the shared say-detached
-        # sound helper, all as portable services. Closed over the per-system
-        # flake packages so it resolves bossbar / minecraft-sound for the host it
-        # runs on. See users/andrewgazelka/home.nix.
-        andrewgazelka = import ./users/andrewgazelka/home.nix {
-          indexPackages = system: (collect "packages").${system};
-          portableServicesModule = ix.portableServices.homeModule;
-          inherit ix;
-        };
-        # Reusable workstation module: draw one Minecraft boss bar per in-flight
-        # GitHub Actions run across a set of repos (green = running, filled by
-        # elapsed / average duration; purple = queued/unpicked). Import it and set
-        # `services.ciBars = { enable = true; repos = [ ... ]; }`. Closed over the
-        # per-system packages so it resolves the `bossbar` CLI for the host. See
-        # packages/minecraft/bossbar-overlay/ci-bars-home-module.nix.
-        ci-bars = import ./packages/minecraft/bossbar-overlay/ci-bars-home-module.nix {
-          indexPackages = system: (collect "packages").${system};
-          portableServicesModule = ix.portableServices.homeModule;
-          inherit ix;
-        };
-        # Workstation-facing module to sync corpus sources (agent/shell history,
-        # Slack/Linear exports, git repos) to an S3/R2 parquet archive and/or
-        # Mixedbread, as a portable timer service. Closed over the per-system
-        # packages so it resolves the `indexer` for the host. See
-        # packages/search/indexer/home-module.nix.
-        indexer = import ./packages/search/indexer/home-module.nix {
-          indexPackages = system: (collect "packages").${system};
-          portableServicesModule = ix.portableServices.homeModule;
-        };
+    securityRootPaths =
+      rawSecurityRootPaths
+      // {
+        aarch64-darwin =
+          rawSecurityRootPaths.aarch64-darwin
+          // (linuxDarwinAliases.aarch64-darwin or {});
       };
-      overlays.default = ix.overlay;
-      templates.dev = {
-        path = ./templates/dev;
-        description = "Forkable ix dev environment: one dev.nix for a default VM, a fleet, and shared Claude/ix auth (RFC 0007)";
-      };
-      packages = collect "packages";
-      checks = collect "checks";
-      # Sharded keying of the same check derivations for the memory-bounded CI
-      # evaluator (the `.#check` gate and blast-radius); see lib/per-system.nix
-      # (ENG-2201). Kept separate from `checks` because its per-package
-      # `recurseForDerivations` groups are not derivations, which the flake
-      # `checks` schema requires.
-      ciChecks = collect "ciChecks";
-      formatter = collect "formatter";
-      apps = collect "apps";
-      devShells = collect "devShells";
+    indexPackages = system: packages.${system};
+    personalConfigRoot = ./users/andrewgazelka/config;
+    personalOptionsModule = ./users/andrewgazelka/options.nix;
+    mutableFilesHomeModule = import ./modules/home/mutable-files.nix {
+      inherit indexPackages;
+      portableServicesModule = ix.portableServices.homeModule;
     };
+    # One instance shared by every wiring site (the workstation profile and
+    # homeModules.provenance); the module's `key` also dedups the instances a
+    # consumer combines, but there is no reason to make them re-apply the
+    # walker.
+    provenanceHomeModule = import ./modules/home/provenance.nix {inherit (ix) provenance;};
+    claudeCodeHomeModule = import ./packages/agent/home-manager/claude-code.nix {
+      inherit indexPackages;
+      promptModule = ./packages/agent/prompt;
+    };
+    personalServicesModule = import ./users/andrewgazelka/home.nix {
+      inherit indexPackages ix;
+      claudeCodeModule = claudeCodeHomeModule;
+      portableServicesModule = ix.portableServices.homeModule;
+    };
+    symphonyHomeModule = import ./packages/agent/symphony/home-module.nix {
+      inherit indexPackages ix;
+      portableServicesModule = ix.portableServices.homeModule;
+      beamvmModule = import ./packages/beamvm/home-module.nix {
+        inherit indexPackages ix;
+        portableServicesModule = ix.portableServices.homeModule;
+      };
+    };
+    personalWorkstationModule = import ./users/andrewgazelka/profiles/workstation.nix {
+      inherit indexPackages personalServicesModule ix;
+      configRoot = personalConfigRoot;
+      mutableFilesModule = mutableFilesHomeModule;
+      provenanceModule = provenanceHomeModule;
+      optionsModule = personalOptionsModule;
+      indexSkillsSrc = paths.skills;
+      tmuxModule = ./modules/home/tmux.nix;
+    };
+    personalDarwinHomeModule = import ./users/andrewgazelka/profiles/darwin-home.nix {
+      inherit indexPackages ix;
+      configRoot = personalConfigRoot;
+      ghosttyModule = ./users/andrewgazelka/config/home/ghostty.nix;
+      raycastModule = ./modules/home/raycast.nix;
+      optionsModule = personalOptionsModule;
+      symphonyModule = symphonyHomeModule;
+    };
+    personalLightProfile = system:
+      home-manager.lib.homeManagerConfiguration {
+        pkgs = import nixpkgs {
+          inherit system;
+          config = {};
+        };
+        extraSpecialArgs = {
+          inputs = throw "light personal profiles must not access consumer inputs";
+          self = throw "light personal profiles must not access the consuming flake";
+          indexPackages = throw "light personal profiles must not access index packages";
+        };
+        modules = [
+          ./users/andrewgazelka/profiles/portable.nix
+          (import ./users/andrewgazelka/profiles/development.nix {
+            agentLua = ./modules/profiles/base/nvim/agent.lua;
+            configRoot = personalConfigRoot;
+          })
+          {
+            home = {
+              username = "profile-test";
+              homeDirectory =
+                if lib.hasSuffix "darwin" system
+                then "/Users/profile-test"
+                else "/home/profile-test";
+            };
+          }
+        ];
+      };
+  in {
+    lib = ix;
+    inherit (ix) nixosModules;
+    darwinModules = {
+      # Personal-but-shareable nix-darwin module for github:andrewgazelka: the
+      # Homebrew package set (GUI casks, the `mas` brew, Mac App Store apps).
+      # Companion to homeModules.andrewgazelka (which owns the home-manager
+      # services); import it from a darwin host to get the casks merged in. See
+      # users/andrewgazelka/darwin.nix.
+      andrewgazelka = ./users/andrewgazelka/darwin.nix;
+      # Per-generation provenance manifest for nix-darwin: bake deployed-path
+      # -> defining nix file:line backlinks (provenance.json) into the system
+      # closure so `whence </etc/...>` answers from /run/current-system with
+      # zero eval. Set `provenance.rev = self.rev or self.dirtyRev or null`
+      # in the consuming flake. See modules/darwin/provenance.nix.
+      provenance = import ./modules/darwin/provenance.nix {inherit (ix) provenance;};
+      # System-level (root, /etc) adapter for declarative-but-writable files:
+      # same model as homeModules.mutable-files, state under
+      # /var/db/index-delta, boot-time reseed daemon. See
+      # modules/darwin/mutable-files.nix.
+      mutable-files = import ./modules/darwin/mutable-files.nix {
+        indexPackages = system: packages.${system};
+      };
+      # Declarative NFS automounts via macOS autofs: each entry renders a
+      # direct-map line, /etc/auto_master gains the include idempotently, and
+      # activation reloads automountd. See modules/darwin/nfs.nix.
+      nfs = ./modules/darwin/nfs.nix;
+    };
+    homeModules = {
+      # Workstation-facing home-manager module: declare a service once, get a
+      # native launchd agent on macOS and native systemd user units on Linux.
+      portable-services = ix.portableServices.homeModule;
+      tmux = ./modules/home/tmux.nix;
+      # Shared modern-CLI package baseline (bat, delta, eza, fd, ripgrep, ...).
+      # Import it and set `cliBaseline.enable = true`; override
+      # `cliBaseline.packages` to trim or swap tools. See
+      # modules/home/cli-baseline.nix.
+      cli-baseline = ./modules/home/cli-baseline.nix;
+      # Per-project nvim-server multiplexer (tmux replacement): one headless
+      # nvim server per git root, `mux` attaches with --remote-ui, and the
+      # optional zsh integration makes bare `ssh <host>`/`mosh <host>`
+      # auto-attach the remote's mux. Import it and set
+      # `programs.mux.enable = true`; needs an nvim config shipping a `mux`
+      # lua module. See modules/home/mux.nix.
+      mux = import ./modules/home/mux.nix {inherit ix;};
+      # XDG hygiene: point tool state/caches/config (cargo, go, npm/pnpm,
+      # python, docker, aws, psql/sqlite histories, wget/less) at the XDG
+      # base directories instead of $HOME. Import it and set
+      # `xdgTidy.enable = true`. See modules/home/xdg-tidy.nix.
+      xdg-tidy = ./modules/home/xdg-tidy.nix;
+      # Cursor-shape feedback for zsh vi mode (beam insert, block command,
+      # reset around every prompt/command). Import it and set
+      # `zshViCursor.enable = true`. See modules/home/zsh-vi-cursor.nix.
+      zsh-vi-cursor = ./modules/home/zsh-vi-cursor.nix;
+      # Declarative-but-writable JSON config files (last-applied 3-way merge),
+      # for config an app rewrites at runtime. See lib/mutable-json.nix.
+      # Prefer `mutable-files` below for new config: it never auto-merges,
+      # covers more formats, and queues drift for explicit resolution.
+      mutable-json = ix.mutableJson.homeModule;
+      # Declarative-but-writable files with logical (format-aware) drift
+      # tracking and a model-oriented resolution queue — no auto-merge.
+      # Declared content seeds a plain writable file; ephemeral files reset
+      # at login (drift journaled), durable files queue base-vs-drift
+      # conflicts in `index-delta status --json` for discard / adopt /
+      # absorb-into-Nix via `index-delta apply-ops`. See
+      # modules/home/mutable-files.nix and packages/index-delta.
+      mutable-files = mutableFilesHomeModule;
+      # Reusable workstation module (macOS): declare Raycast Focus session
+      # defaults (title, filter mode, duration) and have them written to the
+      # com.raycast.macos defaults domain at switch time. Import it and set
+      # `programs.raycast.focus = { enable = true; ... }`. See
+      # modules/home/raycast.nix.
+      raycast = ./modules/home/raycast.nix;
+      # Per-generation provenance manifest: every home-manager generation
+      # carries provenance.json mapping deployed files back to the nix
+      # file:line that defined them, and `whence <path>` reads it with zero
+      # eval. Set `provenance.rev = self.rev or self.dirtyRev or null` in
+      # the consuming flake. See modules/home/provenance.nix.
+      provenance = provenanceHomeModule;
+      # Agent CLI modules: Home Manager is the user-facing configuration
+      # surface, while the package wrappers remain the implementation detail.
+      claude-code = claudeCodeHomeModule;
+      codex = import ./packages/agent/home-manager/codex.nix {
+        indexPackages = system: packages.${system};
+        promptModule = ./packages/agent/prompt;
+      };
+      # Personal-but-shareable workstation module for github:andrewgazelka: the
+      # ix.dev downtime watcher + boss bar overlay + the shared say-detached
+      # sound helper, all as portable services. Closed over the per-system
+      # flake packages so it resolves bossbar / minecraft-sound for the host it
+      # runs on. See users/andrewgazelka/home.nix.
+      andrewgazelka-portable = ./users/andrewgazelka/profiles/portable.nix;
+      andrewgazelka-development = import ./users/andrewgazelka/profiles/development.nix {
+        agentLua = ./modules/profiles/base/nvim/agent.lua;
+        configRoot = personalConfigRoot;
+      };
+      andrewgazelka-workstation = personalWorkstationModule;
+      andrewgazelka-darwin = personalDarwinHomeModule;
+      # Personal-but-shareable server module for github:harivansh-afk: the
+      # dotfiles hari runs as the `hari` user on hari-compute-1 (zsh, git,
+      # neovim plus the mux nvim multiplexer, and the CLI tool set around
+      # them), ported from his personal nix repo. Consumes the shared
+      # cli-baseline, mux, xdg-tidy, and zsh-vi-cursor modules above; the
+      # source repo's secrets/theme machinery is deliberately absent. See
+      # users/harivansh-afk/home.nix.
+      harivansh-afk = import ./users/harivansh-afk/home.nix {inherit ix;};
+      # Reusable workstation module: draw one Minecraft boss bar per in-flight
+      # GitHub Actions run across a set of repos (green = running, filled by
+      # elapsed / average duration; purple = queued/unpicked). Import it and set
+      # `services.ciBars = { enable = true; repos = [ ... ]; }`. Closed over the
+      # per-system packages so it resolves the `bossbar` CLI for the host. See
+      # packages/minecraft/bossbar-overlay/ci-bars-home-module.nix.
+      ci-bars = import ./packages/minecraft/bossbar-overlay/ci-bars-home-module.nix {
+        indexPackages = system: packages.${system};
+        portableServicesModule = ix.portableServices.homeModule;
+        inherit ix;
+      };
+      # Workstation-facing module to sync corpus sources (agent/shell history,
+      # Slack/Linear exports, git repos) to an S3/R2 parquet archive and/or
+      # Mixedbread, as a portable timer service. Closed over the per-system
+      # packages so it resolves the `indexer` for the host. See
+      # packages/search/indexer/home-module.nix.
+      indexer = import ./packages/search/indexer/home-module.nix {
+        indexPackages = system: packages.${system};
+        portableServicesModule = ix.portableServices.homeModule;
+      };
+      # Workstation-facing module: run the Symphony BEAM runtime as a user
+      # service (native launchd agent on macOS, systemd user unit on Linux)
+      # by composing portable-services. Mirrors the NixOS module's option
+      # vocabulary; point `packDir` at a mutable checkout for hot-reloaded
+      # workflows and skills. See packages/agent/symphony/home-module.nix.
+      symphony = symphonyHomeModule;
+      # Workstation-facing module: persistent BEAM VMs as user services with
+      # the OTP applications they host declared in Nix. Updating an app
+      # hot-swaps its code in the running VM (no restart, no dropped
+      # connections); only a beamvm/toolchain update restarts. See
+      # packages/beamvm/home-module.nix and packages/beamvm/harness.ex.
+      beamvm = import ./packages/beamvm/home-module.nix {
+        indexPackages = system: packages.${system};
+        portableServicesModule = ix.portableServices.homeModule;
+        inherit ix;
+      };
+    };
+    overlays.default = ix.overlay;
+    templates = {};
+    inherit packages;
+    checks = lib.mapAttrs (
+      system: systemChecks:
+        systemChecks
+        // {
+          personal-light-profile = (personalLightProfile system).activationPackage;
+        }
+    ) (collect "checks");
+    # Sharded keying of the same check derivations for the memory-bounded CI
+    # evaluator (the `.#check` gate and blast-radius); see lib/per-system.nix
+    # (ENG-2201). Kept separate from `checks` because its per-package
+    # `recurseForDerivations` groups are not derivations, which the flake
+    # `checks` schema requires.
+    ciChecks = collect "ciChecks";
+    # Registry-derived map of package directory -> flake attr for every
+    # `updateScript` package exposed on a system. update.yml's "Build changed
+    # packages" step evaluates this to find which attr owns each file the
+    # updaters changed, instead of deriving an attr from path segments
+    # (#2036). Non-schema, so surfaced through `collect` like `ciChecks`.
+    updatablePackages = collect "updatablePackages";
+    # Per-attempt-patch closure build gates (RFC 0010 A3, #2098), keyed
+    # `<system>.<fork>.<patch>`: the fork package rebuilt with the series
+    # restricted to that patch's dag.json closure. Deliberately NOT under
+    # `checks` (per-PR flake-check cost stays flat): built post-merge by the
+    # scheduled fork-closure-gates workflow and by the `upstream-sync --open`
+    # preflight. Non-schema, so surfaced through `collect` like `ciChecks`.
+    forkClosureGates = collect "forkClosureGates";
+    # CI-only view of `packages` with each NixOS image swapped for its
+    # `toplevel` closure; cache-push.yml publishes this instead of the
+    # monolithic `*-oci.tar` archives, which nothing substitutes. Non-schema,
+    # so surfaced through `collect` like `ciChecks`. See lib/per-system.nix.
+    cachePushRoots = withDarwinAliases (collect "cachePushRoots");
+    # Typed security exposure roots consumed as JSON by the runtime DAG scanner.
+    # Unlike cachePushRoots, every entry carries policy metadata and names only
+    # a shipped runtime output or an example service closure. securityRootPaths
+    # carries the derivations separately so callers realize terminal store paths
+    # instead of trusting content-addressed placeholders from evaluation.
+    inherit securityRoots securityRootPaths;
+    formatter = collect "formatter";
+    apps = collect "apps";
+    devShells = collect "devShells";
+  };
 }

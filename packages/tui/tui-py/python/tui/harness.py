@@ -1,4 +1,4 @@
-"""Playwright-style harnesses for interactive coding agents (Claude Code, Codex).
+"""Playwright-style harnesses for interactive coding agents (Claude Code, Codex, Cursor).
 
 `tui.Tui` gives you a raw PTY: send bytes, scrape the rendered screen. This
 module is the layer every agent test rig re-invents on top of it, and it
@@ -30,11 +30,22 @@ Quick start, exactly the shape of a Playwright test:
     # or the one-liner: submit, wait for the turn to finish, return the reply
     answer = await agent.run("summarize CONTRIBUTING.md", timeout=180)
 
+    # or fan out across mixed agents through the shared Agent interface
+    claude, codex = await Claude.launch(cwd="/repo"), await Codex.launch(cwd="/repo")
+    replies = await asyncio.gather(
+        claude.run_to_completion("find one risk"),
+        codex.run_to_completion("find one risk"),
+    )
+
 Why drive the real TUI instead of `claude -p`? A headless `-p` run is invisible
 and uninterruptible. A harness drives the actual TUI in a PTY, so the session
-shows up live on the `tui` web dashboard (`nix run .#tui-dashboard`) just like a
+shows up live on the `tui` web dashboard (`nix run .#dashboard`) just like a
 human's. You watch the current state, attach, interrupt. For an *experiment*
 that is the whole point: an agent you can observe beats a black box you diff.
+When you do want exactly that black box, `delegate()` is the one-call wrapper
+over the headless modes (`claude -p`, `codex exec`, `cursor-agent -p`):
+
+    answer = await delegate("What is 2+2? Reply with just the number.")
 
 ## Auto-waiting and idle detection
 
@@ -60,14 +71,27 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import os
 import re
+import tempfile
 from collections.abc import Awaitable, Callable, Sequence
+from pathlib import Path
 from types import TracebackType
 from typing import ClassVar, Self
 
 from . import Key, Pattern, Snapshot, Tui, WaitTimeout
 
-__all__ = ["Agent", "AgentAssertions", "Claude", "Codex", "Gate", "Keyboard", "expect"]
+__all__ = [
+    "Agent",
+    "AgentAssertions",
+    "Claude",
+    "Codex",
+    "Cursor",
+    "Gate",
+    "Keyboard",
+    "delegate",
+    "expect",
+]
 
 
 class Gate:
@@ -203,23 +227,30 @@ class Agent:
 
         Usually reached via `launch()`. Idempotent enough to call on an
         already-ready agent (the gate sweep no-ops and `ready` matches at once).
+        A failed start closes the spawned PTY before re-raising, so a timeout
+        never leaks a live agent process (#2511).
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
-        await self._settle(timeout=timeout)
-        # Clear any onboarding gates, re-sweeping until none match (one gate can
-        # reveal the next), bounded so a misfiring pattern cannot spin forever.
-        for _ in range(len(self._gates) + 2):
-            txt = await self._tui.text()
-            gate = next((g for g in self._gates if _gate_matches(g.pattern, txt)), None)
-            if gate is None:
-                break
-            await self._tui.send(gate.response)
-            await self._settle(timeout=max(1.0, deadline - loop.time()))
-        if self._ready:
-            await self._tui.wait_for(
-                self._ready, timeout=max(1.0, deadline - loop.time())
-            )
+        try:
+            await self._settle(timeout=timeout)
+            # Clear any onboarding gates, re-sweeping until none match (one gate
+            # can reveal the next), bounded so a misfiring pattern cannot spin
+            # forever.
+            for _ in range(len(self._gates) + 2):
+                txt = await self._tui.text()
+                gate = next((g for g in self._gates if _gate_matches(g.pattern, txt)), None)
+                if gate is None:
+                    break
+                await self._tui.send(gate.response)
+                await self._settle(timeout=max(1.0, deadline - loop.time()))
+            if self._ready:
+                await self._tui.wait_for(
+                    self._ready, timeout=max(1.0, deadline - loop.time())
+                )
+        except BaseException:
+            await self.close()
+            raise
         self._started = True
         return self
 
@@ -259,6 +290,8 @@ class Agent:
         then presses Enter, and presses it once more if the turn has not started.
         Grounded against Claude Code, which drops the occasional fast Enter.
         """
+        if not self._started:
+            await self.start()
         await self.keyboard.type(text)
         # The box may wrap/scroll the text; submit anyway if it times out.
         with contextlib.suppress(WaitTimeout):
@@ -266,6 +299,14 @@ class Agent:
         await self.keyboard.press(Key.ENTER)
         if not await self._turn_started():
             await self.keyboard.press(Key.ENTER)
+
+    async def send_message(self, text: str) -> None:
+        """Submit `text` without waiting for the agent to finish the turn.
+
+        High-level interface alias for `prompt`, shared by `Claude` and `Codex`
+        so orchestrators can type against `AgentLike`.
+        """
+        await self.prompt(text)
 
     async def run(self, text: str, *, timeout: float = 180.0, settle: float = 0.6) -> str:
         """Submit `text`, wait for the turn to finish, return the agent's reply.
@@ -279,6 +320,28 @@ class Agent:
         await self.wait_for_idle(timeout=timeout, settle=settle)
         delta = _tail_delta(before, await self._lines())
         return self.parse_reply(delta)
+
+    async def run_to_completion(
+        self,
+        text: str,
+        *,
+        timeout: float = 180.0,
+        settle: float = 0.6,
+    ) -> str:
+        """Submit `text`, wait for idle, and return the parsed reply.
+
+        This is the agent-interface name for `run`, meant for mixed fan-out:
+        `await asyncio.gather(claude.run_to_completion(q), codex.run_to_completion(q))`.
+        """
+        return await self.run(text, timeout=timeout, settle=settle)
+
+    async def ask(self, text: str, *, timeout: float = 180.0, settle: float = 0.6) -> str:
+        """Submit one question and return the parsed reply.
+
+        `ask` is the high-level name for simple delegation; it keeps the visible
+        resource open, unlike a headless one-shot command.
+        """
+        return await self.run_to_completion(text, timeout=timeout, settle=settle)
 
     # -- waiting (Playwright-style) -----------------------------------------
 
@@ -354,6 +417,25 @@ class Agent:
         """
         return transcript.strip()
 
+    # -- headless delegation --------------------------------------------------
+
+    @classmethod
+    async def oneshot(
+        cls,
+        prompt: str,
+        *,
+        model: str | None = None,
+        cwd: str | None = None,
+        timeout: float = 300.0,
+    ) -> str:
+        """Run one prompt in this agent's headless mode and return the reply.
+
+        No PTY, no onboarding gates, no dashboard tile: the cheap path for
+        fire-and-forget delegation (see the module-level `delegate`).
+        Subclasses whose CLI has a headless one-shot mode implement it.
+        """
+        raise NotImplementedError(f"{cls.__name__} has no headless one-shot mode")
+
     # -- internals ----------------------------------------------------------
 
     async def _lines(self) -> list[str]:
@@ -418,12 +500,36 @@ class Claude(Agent):
         # A fresh / untrusted cwd opens on a trust prompt whose default
         # selection is "1. Yes, I trust this folder"; Enter accepts it.
         Gate("trust-folder", "Is this a project you created or one you trust", Key.ENTER),
+        # A dev-channels launch (`claude --dangerously-load-development-channels`,
+        # how the nix wrapper runs it) opens on a warning menu whose default
+        # selection is "1. I am using this for local development"; Enter
+        # accepts it (#2508).
+        Gate("dev-channels", "I am using this for local development", Key.ENTER),
     )
 
     def parse_reply(self, transcript: str) -> str:
         """Keep the last assistant block: the run of lines from the final `⏺`
         marker up to the next chrome line. Falls back to the stripped text."""
         return _parse_claude_reply(transcript)
+
+    @classmethod
+    def _oneshot_argv(cls, prompt: str, *, model: str | None = None) -> list[str]:
+        """argv of a headless one-shot run (`claude -p`)."""
+        return [cls.binary, "-p", *(() if model is None else ("--model", model)), prompt]
+
+    @classmethod
+    async def oneshot(
+        cls,
+        prompt: str,
+        *,
+        model: str | None = None,
+        cwd: str | None = None,
+        timeout: float = 300.0,
+    ) -> str:
+        """Run one prompt through headless `claude -p` and return the reply."""
+        return await _run_oneshot(
+            cls._oneshot_argv(prompt, model=model), cwd=cwd, timeout=timeout
+        )
 
 
 class Codex(Agent):
@@ -439,6 +545,238 @@ class Codex(Agent):
     binary = "codex"
     ready = re.compile(r"[›❯>]\s*$", re.MULTILINE)
     busy_marker = None
+    #: Defaults shared by the TUI constructor and the headless one-shot.
+    default_model: ClassVar[str] = "gpt-5.5"
+    default_reasoning_effort: ClassVar[str] = "low"
+    default_sandbox: ClassVar[str] = "danger-full-access"
+
+    def __init__(
+        self,
+        *args: str,
+        model: str = default_model,
+        reasoning_effort: str = default_reasoning_effort,
+        approval: str = "never",
+        sandbox: str = default_sandbox,
+        **kwargs: object,
+    ) -> None:
+        defaults = (
+            "-c",
+            f"model_reasoning_effort={reasoning_effort!r}",
+            "--model",
+            model,
+            "--ask-for-approval",
+            approval,
+            "--sandbox",
+            sandbox,
+        )
+        super().__init__(*defaults, *args, **kwargs)  # type: ignore[arg-type]
+
+    def parse_reply(self, transcript: str) -> str:
+        """Keep the final Codex answer block from a TUI transcript."""
+        lines = transcript.splitlines()
+        starts = [i for i, line in enumerate(lines) if line.lstrip().startswith("•")]
+        if not starts:
+            return transcript.strip()
+        out: list[str] = []
+        for line in lines[starts[-1]:]:
+            stripped = line.strip()
+            if out and (stripped.startswith("›") or (" · " in stripped and "gpt-" in stripped)):
+                break
+            out.append(line.lstrip("• ").rstrip())
+        return "\n".join(out).strip()
+
+    @classmethod
+    def _oneshot_argv(
+        cls,
+        prompt: str,
+        last_message_file: str,
+        *,
+        model: str | None = None,
+    ) -> list[str]:
+        """argv of a headless one-shot run (`codex exec`).
+
+        `codex exec` interleaves activity logs with the answer on stdout, so
+        the reply is read from `--output-last-message` instead.
+        """
+        return [
+            cls.binary,
+            "exec",
+            "--skip-git-repo-check",
+            "-c",
+            f"model_reasoning_effort={cls.default_reasoning_effort!r}",
+            "--model",
+            model if model is not None else cls.default_model,
+            "--sandbox",
+            cls.default_sandbox,
+            "--output-last-message",
+            last_message_file,
+            prompt,
+        ]
+
+    @classmethod
+    async def oneshot(
+        cls,
+        prompt: str,
+        *,
+        model: str | None = None,
+        cwd: str | None = None,
+        timeout: float = 300.0,
+    ) -> str:
+        """Run one prompt through headless `codex exec` and return the reply."""
+        with tempfile.TemporaryDirectory() as td:
+            last = Path(td) / "last-message.txt"
+            out = await _run_oneshot(
+                cls._oneshot_argv(prompt, os.fspath(last), model=model),
+                cwd=cwd,
+                timeout=timeout,
+            )
+            if not last.exists():
+                raise RuntimeError(
+                    f"codex exec wrote no --output-last-message; stdout tail: {out[-2000:]}"
+                )
+            return last.read_text().strip()
+
+
+class Cursor(Agent):
+    """Cursor CLI (`cursor-agent`) in a PTY.
+
+    Grounded against cursor-agent 2026.06: idle uses the "ctrl+c to stop"
+    footer plus quiescence, launch auto-accepts the "Workspace Trust Required"
+    gate, and `parse_reply` returns the final plain answer block(s). The login
+    gate is NOT auto-cleared: a logged-out cursor-agent opens a browser OAuth
+    flow only a human can approve, so log in once interactively first.
+
+    Defaults pin the fast Composer model and pass `--force` (skip per-command
+    approval dialogs; explicit `cli-config.json` denies still apply), which
+    makes `agent.ask(...)` a cheap smart-codebase-search delegate:
+
+        async with await Cursor.launch(cwd="/repo") as cursor:
+            where = await cursor.ask("where is retry backoff implemented?")
+    """
+
+    binary = "cursor-agent"
+    #: The input caret of a ready cursor-agent box ("→ Plan, search, build
+    #: anything" / "→ Add a follow-up").
+    ready = re.compile(r"^\s*→ ", re.MULTILINE)
+    busy_marker = "ctrl+c to stop"
+    gates = (
+        # A cwd outside the trusted-workspace list opens on "Workspace Trust
+        # Required"; `a` selects "Trust this workspace".
+        Gate("trust-workspace", "Do you trust the contents of this directory", "a"),
+    )
+
+    #: Default shared by the TUI constructor and the headless one-shot.
+    default_model: ClassVar[str] = "composer-2.5-fast"
+
+    def __init__(
+        self,
+        *args: str,
+        model: str = default_model,
+        force: bool = True,
+        **kwargs: object,
+    ) -> None:
+        defaults = ("--model", model, *(("--force",) if force else ()))
+        super().__init__(*defaults, *args, **kwargs)  # type: ignore[arg-type]
+
+    def parse_reply(self, transcript: str) -> str:
+        """Keep the final cursor-agent answer block(s) from a TUI transcript."""
+        return _parse_cursor_reply(transcript)
+
+    @classmethod
+    def _oneshot_argv(cls, prompt: str, *, model: str | None = None) -> list[str]:
+        """argv of a headless one-shot run (`cursor-agent -p`)."""
+        return [
+            cls.binary,
+            "-p",
+            "--output-format",
+            "text",
+            "--model",
+            model if model is not None else cls.default_model,
+            "--force",
+            prompt,
+        ]
+
+    @classmethod
+    async def oneshot(
+        cls,
+        prompt: str,
+        *,
+        model: str | None = None,
+        cwd: str | None = None,
+        timeout: float = 300.0,
+    ) -> str:
+        """Run one prompt through headless `cursor-agent -p`, return the reply."""
+        return await _run_oneshot(
+            cls._oneshot_argv(prompt, model=model), cwd=cwd, timeout=timeout
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Delegation (headless one-shots)
+# --------------------------------------------------------------------------- #
+
+
+#: `delegate(agent=...)` names, one per Agent subclass with a headless mode.
+_ONESHOT_AGENTS: dict[str, type[Agent]] = {
+    "claude": Claude,
+    "codex": Codex,
+    "cursor": Cursor,
+}
+
+
+async def delegate(
+    prompt: str,
+    *,
+    agent: str = "claude",
+    model: str | None = None,
+    cwd: str | None = None,
+    timeout: float = 300.0,
+) -> str:
+    """Run one prompt on a coding agent and return its reply, in one call.
+
+    Headless by default: `claude -p`, `codex exec`, or `cursor-agent -p`
+    (`agent="claude" | "codex" | "cursor"`). No PTY, no onboarding gates, no
+    dashboard tile: the cheap path for fire-and-forget delegation.
+
+        answer = await delegate("What is 2+2? Reply with just the number.")
+
+    For an observable, interruptible session (a task a human may watch or
+    stop), launch the TUI harness instead: `agent = await Claude.launch();
+    await agent.ask(...)`.
+    """
+    try:
+        cls = _ONESHOT_AGENTS[agent]
+    except KeyError:
+        raise ValueError(
+            f"unknown agent {agent!r}; expected one of {sorted(_ONESHOT_AGENTS)}"
+        ) from None
+    return await cls.oneshot(prompt, model=model, cwd=cwd, timeout=timeout)
+
+
+async def _run_oneshot(argv: Sequence[str], *, cwd: str | None, timeout: float) -> str:
+    """Run a headless one-shot agent command; its stripped stdout is the reply.
+
+    stdin is closed (`claude -p` would otherwise concatenate anything it reads
+    there into the prompt). Past `timeout` the process is killed and
+    `WaitTimeout` raised; a non-zero exit raises with the command's stderr.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=cwd,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout)
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise WaitTimeout(f"{argv[0]} did not finish within {timeout:.0f}s") from None
+    if proc.returncode != 0:
+        err = stderr.decode(errors="replace").strip()
+        raise RuntimeError(f"{argv[0]} exited {proc.returncode}: {err}")
+    return stdout.decode(errors="replace").strip()
 
 
 # --------------------------------------------------------------------------- #
@@ -534,6 +872,48 @@ def _parse_claude_reply(transcript: str) -> str:
         out.append(ln)
     return "\n".join(out).strip()
 
+
+#: cursor-agent input-box top border: a run of `▄` (the footer starts here).
+_CURSOR_FOOTER = re.compile(r"^\s*▄+\s*$")
+#: Spinner/status lines like "⠘⠤ Composing" / "⠠⠛ Running  55 tokens".
+_CURSOR_SPINNER = re.compile(r"^\s*[\u2800-\u28ff]")
+
+
+def _parse_cursor_reply(transcript: str) -> str:
+    """The last answer block(s) in a cursor-agent transcript.
+
+    cursor-agent prints no answer marker (unlike Claude's `⏺` or Codex's `•`):
+    a turn renders as the echoed prompt, tool blocks (a `$ cmd` line with its
+    output indented beneath), and plain answer paragraphs, then the input-box
+    footer. So: cut at the footer border, drop spinner lines, split into
+    blank-line-separated blocks, drop `$`-led tool blocks and the leading
+    echoed-prompt block, and return what remains. Falls back to the stripped
+    transcript when nothing survives.
+    """
+    body: list[str] = []
+    for line in transcript.splitlines():
+        if _CURSOR_FOOTER.match(line):
+            break
+        if _CURSOR_SPINNER.match(line):
+            continue
+        body.append(line)
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    for line in body:
+        if line.strip():
+            current.append(line)
+        elif current:
+            blocks.append(current)
+            current = []
+    if current:
+        blocks.append(current)
+    answers = [b for b in blocks if not b[0].lstrip().startswith("$ ")]
+    if len(answers) >= 2:
+        # The first surviving block of a turn is the echoed user prompt.
+        answers = answers[1:]
+    if not answers:
+        return transcript.strip()
+    return "\n\n".join("\n".join(line.strip() for line in block) for block in answers).strip()
 
 def _shquote(s: str) -> str:
     """Single-quote `s` for a POSIX shell."""

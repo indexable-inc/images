@@ -4,7 +4,8 @@
   import { metrics } from '$lib/metrics.svelte';
   import type { Pane } from '$lib/types';
 
-  // The terminal renderer: the pane's `body` is the ANSI-SGR screen. Repaint
+  // The terminal renderer: `scrollback` is plain text and `body` is the ANSI-SGR
+  // viewport. Repaint
   // imperatively (spans are built in JS) and track only the primitives that
   // should trigger a repaint, so per-frame object churn does not thrash a full
   // replaceChildren on unchanged cards.
@@ -13,10 +14,13 @@
 
   const alive = $derived(pane.alive !== false);
   const screen = $derived(pane.body ?? '');
-  const output = $derived(hasOutput(screen));
+  const scrollback = $derived(pane.scrollback ?? '');
+  const scrollbackRows = $derived(scrollback ? scrollback.split('\n').length : 0);
+  const fullScreen = $derived(scrollback ? `${scrollback}\n${screen}` : screen);
+  const output = $derived(hasOutput(fullScreen));
   const cursor = $derived<Cursor | null>(
     alive && output && pane.cursor_visible !== false && typeof pane.cursor_row === 'number'
-      ? { row: pane.cursor_row, col: pane.cursor_col ?? 0, shape: pane.cursor_shape ?? 'block' }
+      ? { row: pane.cursor_row + scrollbackRows, col: pane.cursor_col ?? 0, shape: pane.cursor_shape ?? 'block' }
       : null,
   );
   // A stable string key for the cursor: `cursor` is a fresh object each frame, so
@@ -25,6 +29,7 @@
 
   $effect(() => {
     void screen;
+    void scrollback;
     void cursorKey;
     void output;
     void alive;
@@ -34,7 +39,7 @@
     if (!el) return;
     untrack(() => {
       if (output) {
-        renderInto(el, screen, cursor);
+        renderInto(el, fullScreen, cursor);
       } else {
         const ph = document.createElement('span');
         ph.className = 'placeholder';

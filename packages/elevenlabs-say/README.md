@@ -1,8 +1,8 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="Text from an argument, a file, or a live stdin stream is synthesized by ElevenLabs and played or saved"></p>
+
 # elevenlabs-say
 
-A `say`-style command-line tool that speaks text with the [ElevenLabs](https://elevenlabs.io)
-text-to-speech API. It reads text from an argument, a file, or stdin, then plays
-the audio through your speakers or writes it to a file.
+Want macOS `say`, but with a voice you would actually listen to? `elevenlabs-say` is a `say`-style command-line tool that speaks text with the [ElevenLabs](https://elevenlabs.io) text-to-speech API. It reads text from an argument, a file, or stdin (streaming live token-by-token input, so an LLM pipe is spoken as it arrives), then plays the audio through your speakers or writes it to a file.
 
 ## Setup
 
@@ -17,30 +17,32 @@ export ELEVENLABS_API_KEY=sk_...
 
 ```sh
 # Speak a string through the speakers.
-nix run .#elevenlabs-say -- "the first move sets everything in motion"
+nix run github:indexable-inc/index#elevenlabs-say -- "the first move sets everything in motion"
 
 # Speak the contents of a file.
-nix run .#elevenlabs-say -- --file notes.txt
+nix run github:indexable-inc/index#elevenlabs-say -- --file notes.txt
 
 # Pipe text on stdin. This streams by default: a producer that emits text over
 # time is spoken as it arrives, instead of waiting for it to finish.
-my-llm --prompt "tell me a story" | nix run .#elevenlabs-say
+my-llm --prompt "tell me a story" | nix run github:indexable-inc/index#elevenlabs-say
 
 # Force the batch path on a pipe (buffer all stdin, then synthesize once).
-cat notes.txt | nix run .#elevenlabs-say -- --no-stream
+cat notes.txt | nix run github:indexable-inc/index#elevenlabs-say -- --no-stream
 
 # Save audio instead of playing it.
-nix run .#elevenlabs-say -- "save me" --output /tmp/out.mp3
+nix run github:indexable-inc/index#elevenlabs-say -- "save me" --output /tmp/out.mp3
 
 # Pick a voice by name or id, and override the model or format.
-nix run .#elevenlabs-say -- "different voice" --voice Adam
-nix run .#elevenlabs-say -- "slower model" --model eleven_multilingual_v2 --format mp3_44100_192
+nix run github:indexable-inc/index#elevenlabs-say -- "different voice" --voice Adam
+nix run github:indexable-inc/index#elevenlabs-say -- "slower model" --model eleven_multilingual_v2 --format mp3_44100_192
 
 # macOS `say`-style flags: -v voice, -r rate (words per minute).
-nix run .#elevenlabs-say -- -v Adam -r 300 "talk faster"
+nix run github:indexable-inc/index#elevenlabs-say -- -v Adam -r 300 "talk faster"
 ```
 
-Text source precedence is positional argument, then `--file`, then stdin.
+Text source precedence is positional argument, then `--file`, then stdin. From a
+clone (`git clone https://github.com/indexable-inc/index`), replace
+`github:indexable-inc/index` with `.`.
 
 ## macOS `say` compatibility
 

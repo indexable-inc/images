@@ -40,8 +40,12 @@ defmodule SymphonyElixir.Runtime.SubrunRunner do
   in-memory snapshot, so the mapped result reflects the persisted truth.
   """
 
-  alias SymphonyElixir.{Config, Runtime, WorkflowCatalog}
-  alias SymphonyElixir.IR.{Node, RunGraph, Store}
+  alias SymphonyElixir.Config
+  alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.IR.RunGraph
+  alias SymphonyElixir.IR.Store
+  alias SymphonyElixir.Runtime
+  alias SymphonyElixir.WorkflowCatalog
 
   require Logger
 
@@ -140,8 +144,19 @@ defmodule SymphonyElixir.Runtime.SubrunRunner do
     child_opts = child_opts(name, run_opts)
 
     case Runtime.Ingress.start_workflow(entry, trigger, child_opts) do
-      {:ok, %{run_id: run_id, pid: pid}} -> await_child(run_id, pid, run_opts)
-      {:error, reason} -> {:error, {:subrun_start_failed, name, reason}, nil}
+      {:ok, %{run_id: run_id, pid: pid}} ->
+        notify_child_started(run_id, run_opts)
+        await_child(run_id, pid, run_opts)
+
+      {:error, reason} ->
+        {:error, {:subrun_start_failed, name, reason}, nil}
+    end
+  end
+
+  defp notify_child_started(run_id, run_opts) do
+    case Map.get(run_opts, :on_child_started) do
+      callback when is_function(callback, 1) -> callback.(run_id)
+      _ -> :ok
     end
   end
 
@@ -156,9 +171,7 @@ defmodule SymphonyElixir.Runtime.SubrunRunner do
     literals =
       for {key, {:literal, value}} <- inputs, key != "source", into: %{}, do: {key, value}
 
-    context =
-      literals
-      |> Map.merge(Map.drop(resolved, ["source"]))
+    context = Map.merge(literals, Map.delete(resolved, "source"))
 
     if context == %{}, do: nil, else: context
   end

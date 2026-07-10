@@ -1,7 +1,10 @@
-"""Regression tests for sh() input guards (ENG-2519).
+"""Regression tests for the kernel process runner's input guards (ENG-2519).
 
-These tests run standalone without the kernel runtime -- the module's graceful
-fallback means `import sh` works fine outside the kernel environment.
+The public ``sh()``/``zsh()`` are retired (agents shell out through ``await
+nu(...)``) and now raise a migration hint; the guards live on the private
+``_exec`` runner the kernel's own internals still use. These tests run
+standalone without the kernel runtime -- the module's graceful fallback means
+``import sh`` works fine outside the kernel environment.
 
 Run with:
     python -m pytest packages/mcp/src/sh/test_guards.py -v
@@ -12,7 +15,6 @@ or:
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import sys
 from pathlib import Path
 
@@ -22,9 +24,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent / "sh"))
 import sh as _sh_module
 
-# sh() is the coroutine function inside the module; when the module is
-# imported standalone _sh_module.sh is the async function.
-sh = _sh_module.sh
+# The guards live on the private runner `_exec`; the public `sh`/`zsh` are the
+# disabled shims tested separately below.
+exec_ = _sh_module._exec
 
 
 def run(coro: object) -> object:
@@ -32,13 +34,33 @@ def run(coro: object) -> object:
 
 
 # ---------------------------------------------------------------------------
-# Backtick guard
+# Public entry points are disabled
+# ---------------------------------------------------------------------------
+
+def test_public_sh_raises_migration_hint() -> None:
+    """`sh()` is retired; calling it raises with a pointer to `await nu(...)`."""
+    with pytest.raises(RuntimeError, match=r"await nu"):
+        run(_sh_module.sh("echo hi"))
+
+
+def test_public_zsh_raises_migration_hint() -> None:
+    with pytest.raises(RuntimeError, match=r"await nu"):
+        run(_sh_module.zsh("echo hi"))
+
+
+def test_calling_module_raises_migration_hint() -> None:
+    with pytest.raises(RuntimeError, match=r"await nu"):
+        run(_sh_module("echo hi"))
+
+
+# ---------------------------------------------------------------------------
+# Backtick guard (on the private runner)
 # ---------------------------------------------------------------------------
 
 def test_backtick_in_string_command_raises() -> None:
     """A string command containing a backtick must raise ValueError."""
     with pytest.raises(ValueError, match=r"(?i)backtick|command substitution"):
-        run(sh("git commit -m `some command`", cwd="."))
+        run(exec_("git commit -m `some command`", cwd="."))
 
 
 def test_backtick_in_repr_string_raises() -> None:
@@ -48,7 +70,7 @@ def test_backtick_in_repr_string_raises() -> None:
     # msg!r produces 'add `ix-mcp dashboard` support' -- backticks present
     assert "`" in cmd
     with pytest.raises(ValueError, match=r"(?i)backtick|command substitution"):
-        run(sh(cmd, cwd="."))
+        run(exec_(cmd, cwd="."))
 
 
 def test_backtick_in_argv_list_not_rejected() -> None:
@@ -57,7 +79,7 @@ def test_backtick_in_argv_list_not_rejected() -> None:
     # This should run (and fail with non-zero because there's no git repo at /tmp,
     # but it must NOT raise ValueError before even starting the process).
     try:
-        run(sh(["git", "commit", "-m", msg], cwd="/tmp"))  # noqa: S108 -- test-only; /tmp is intentional
+        run(exec_(["git", "commit", "-m", msg], cwd="/tmp"))  # noqa: S108 -- test-only; /tmp is intentional
     except ValueError:
         raise AssertionError("argv-list form with backticks in an argument should not be rejected") from None
     except Exception:  # noqa: S110 -- non-ValueError errors (git not found, no repo) are acceptable in this test
@@ -71,20 +93,20 @@ def test_backtick_in_argv_list_not_rejected() -> None:
 def test_commit_message_with_escaped_newline_raises() -> None:
     r"""A git commit -m with a literal \n escape should raise ValueError."""
     with pytest.raises(ValueError, match=r"(?i)newline|multi-line|-F"):
-        run(sh(r"git commit -m 'subject\nbody'", cwd="."))
+        run(exec_(r"git commit -m 'subject\nbody'", cwd="."))
 
 
 def test_commit_message_with_real_newline_raises() -> None:
     """A git commit -m with an embedded real newline should raise ValueError."""
     msg = "subject\nbody"
     with pytest.raises(ValueError, match=r"(?i)newline|multi-line|-F"):
-        run(sh(f"git commit -m '{msg}'", cwd="."))
+        run(exec_(f"git commit -m '{msg}'", cwd="."))
 
 
 def test_simple_commit_message_not_rejected() -> None:
     """A plain single-line git commit -m must NOT be rejected."""
     try:
-        run(sh("git commit -m 'fix typo'", cwd="/tmp"))  # noqa: S108 -- test-only; /tmp is intentional
+        run(exec_("git commit -m 'fix typo'", cwd="/tmp"))  # noqa: S108 -- test-only; /tmp is intentional
     except ValueError:
         raise AssertionError("A simple single-line git commit -m should not be rejected") from None
     except Exception:  # noqa: S110 -- non-zero exit or other runtime error (no git repo) is fine in this test
@@ -98,7 +120,7 @@ def test_simple_commit_message_not_rejected() -> None:
 def test_cd_prefix_still_rejected() -> None:
     """Existing cd-prefix guard must still raise ValueError."""
     with pytest.raises(ValueError, match="cwd="):
-        run(sh("cd /tmp && ls", cwd="."))
+        run(exec_("cd /tmp && ls", cwd="."))
 
 
 # ---------------------------------------------------------------------------
@@ -107,13 +129,16 @@ def test_cd_prefix_still_rejected() -> None:
 
 def test_benign_command_runs() -> None:
     """A simple string command with no backticks or newlines must run."""
-    out = run(sh("echo hello", cwd="/tmp"))  # noqa: S108 -- test-only; /tmp is intentional
+    out = run(exec_("echo hello", cwd="/tmp"))  # noqa: S108 -- test-only; /tmp is intentional
     assert out.ok, f"Expected exit 0, got {out.code}"  # type: ignore[union-attr]
     assert "hello" in out.text  # type: ignore[union-attr]
 
 
 def _run_tests() -> None:
     tests = [
+        test_public_sh_raises_migration_hint,
+        test_public_zsh_raises_migration_hint,
+        test_calling_module_raises_migration_hint,
         test_backtick_in_string_command_raises,
         test_backtick_in_repr_string_raises,
         test_backtick_in_argv_list_not_rejected,

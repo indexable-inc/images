@@ -19,6 +19,8 @@ It can probe two binaries and compare them (`--mode`):
 Every capture runs from a fresh temp HOME and an empty temp cwd, so no
 `~/.claude` settings, no project `CLAUDE.md`, and no git status leak in; the
 only difference between stock and wrapped is the wrapper's own baked flags.
+Claude Code may send a transcript-title request first; the capture skips that
+and records the first real agent request.
 
 The capture is print mode (`claude -p`), which uses the Agent SDK entrypoint, so
 the stock identity line reads "You are a Claude agent, built on Anthropic's
@@ -47,6 +49,21 @@ from typing import Any
 # --settings overrides.
 DEFAULT_STOCK_BINARY = "claude"
 DEFAULT_WRAPPED_BINARY = "claude"
+
+
+def _system_text(body: dict[str, Any]) -> str:
+    system = body.get("system", [])
+    blocks = system if isinstance(system, list) else [{"text": system}]
+    return "\n".join(str(block.get("text", "")) for block in blocks)
+
+
+def _is_title_request(body: dict[str, Any]) -> bool:
+    """Claude Code may title the transcript before sending the agent request."""
+    text = _system_text(body)
+    return (
+        "Generate a concise, sentence-case title" in text
+        and 'Return JSON with a single "title" field' in text
+    )
 
 
 async def _read_http_request(reader: asyncio.StreamReader) -> tuple[str, bytes]:
@@ -107,8 +124,9 @@ async def capture(
                 if is_messages and body and not captured:
                     with contextlib.suppress(json.JSONDecodeError):
                         parsed: dict[str, Any] = json.loads(body)
-                        captured.append(parsed)
-                        done.set()
+                        if not _is_title_request(parsed):
+                            captured.append(parsed)
+                            done.set()
                 # Reply with the shape each endpoint expects so the CLI doesn't
                 # error or retry before it gets to the messages request we want:
                 # count_tokens wants {input_tokens}, messages wants a message. By

@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 160" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    svg { color: #1f2328; }
+    text { fill: currentColor; }
+    .muted { fill: #656d76; }
+    .box { stroke: currentColor; fill: none; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    .arrow { fill: #1f2328; }
+    .group { stroke: #8250df; fill: none; stroke-dasharray: 6 4; }
+    .accent { fill: #8250df; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .arrow { fill: #e6edf3; }
+      .group { stroke: #a371f7; }
+      .accent { fill: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="arrow"/>
+    </marker>
+  </defs>
+  <rect x="30" y="30" width="190" height="54" rx="6" class="box"/>
+  <text x="125" y="52" font-size="13" text-anchor="middle">producer</text>
+  <text x="125" y="70" font-size="11" text-anchor="middle" class="muted">Paper + BlockEvents plugin</text>
+  <rect x="285" y="30" width="150" height="54" rx="6" class="box"/>
+  <text x="360" y="52" font-size="13" text-anchor="middle">log</text>
+  <text x="360" y="70" font-size="11" text-anchor="middle" class="muted">Kafka block_events</text>
+  <rect x="495" y="30" width="195" height="54" rx="6" class="box"/>
+  <text x="592" y="52" font-size="13" text-anchor="middle">view</text>
+  <text x="592" y="70" font-size="11" text-anchor="middle" class="muted">ClickHouse Morton view</text>
+  <line x1="220" y1="57" x2="277" y2="57" class="edge"/>
+  <text x="249" y="49" font-size="11" text-anchor="middle" class="muted">ship</text>
+  <line x1="435" y1="57" x2="487" y2="57" class="edge"/>
+  <text x="461" y="49" font-size="11" text-anchor="middle" class="muted">replay</text>
+  <path d="M125,84 L125,124 L592,124 L592,92" class="edge"/>
+  <text x="360" y="116" font-size="11" text-anchor="middle" class="muted">telemetry (OTel collector, otel_* tables, Grafana)</text>
+</svg>

@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 230" role="img" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13">
+  <style>
+    svg { color: #1f2328; }
+    text { fill: currentColor; }
+    .muted { fill: #656d76; }
+    .box { stroke: currentColor; fill: none; stroke-width: 1.2; }
+    .accent { stroke: #8250df; fill: none; stroke-width: 1.4; }
+    .edge { stroke: currentColor; fill: none; stroke-width: 1.2; marker-end: url(#arrow); }
+    .head { fill: currentColor; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { stroke: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="head"/>
+    </marker>
+  </defs>
+  <rect class="box" x="25" y="98" width="110" height="34" rx="6"/>
+  <text x="80" y="119" text-anchor="middle">spec.json</text>
+
+  <path class="edge" d="M135,115 L216,115"/>
+  <text class="muted" x="176" y="104" text-anchor="middle" font-size="12">validate</text>
+
+  <rect class="accent" x="220" y="98" width="100" height="34" rx="6"/>
+  <text x="270" y="119" text-anchor="middle">fetch</text>
+
+  <path class="edge" d="M320,106 C370,98 370,61 401,59"/>
+  <path class="edge" d="M320,124 C370,132 370,169 401,171"/>
+
+  <rect class="box" x="405" y="42" width="100" height="34" rx="6"/>
+  <text x="455" y="63" text-anchor="middle">lint</text>
+  <rect class="box" x="405" y="154" width="100" height="34" rx="6"/>
+  <text x="455" y="175" text-anchor="middle">convert</text>
+  <text class="muted" x="455" y="121" text-anchor="middle" font-size="12">run in parallel</text>
+
+  <path class="edge" d="M505,59 C560,61 560,98 581,106"/>
+  <path class="edge" d="M505,171 C560,169 560,132 581,124"/>
+
+  <rect class="box" x="585" y="98" width="105" height="34" rx="6"/>
+  <text x="637" y="119" text-anchor="middle">upload</text>
+
+  <text class="muted" x="360" y="216" text-anchor="middle" font-size="12">exit = worst outcome; a failed dependency skips its dependents</text>
+</svg>

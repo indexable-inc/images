@@ -22,7 +22,7 @@
 # The node-level correctness here (pinned inter-node ports, a SHORT `/run/ray`
 # temp-dir so Ray's AF_UNIX plasma socket stays under the 108-byte sun_path
 # limit, and PrivateDevices/PrivateUsers off so an attaching kernel can map the
-# shared-memory object store) mirrors the proven `examples/ray-cluster`
+# shared-memory object store) mirrors the proven `examples/ray/cluster`
 # cluster-node module. Use nixpkgs `python3Packages.ray` -- the same Ray the
 # ix-mcp interpreter imports, so the cluster and the kernels driving it run an
 # identical version (Ray requires matching versions cluster-wide) and the
@@ -40,13 +40,14 @@
   lib,
   pkgs,
   ...
-}:
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     mkEnableOption
     mkIf
     mkOption
     mkPackageOption
+    optional
     optionalAttrs
     optionals
     types
@@ -56,12 +57,11 @@ let
 
   # Spill target lives on real disk (the StateDirectory), NOT under the tmpfs
   # `/run/ray` temp-dir -- otherwise "spill to disk under memory pressure" would
-  # just consume RAM. directory_path is created by Ray under the StateDirectory.
+  # just consume RAM. Ray creates the directory itself. Passed via
+  # `--object-spilling-directory`: the JSON `--object-spilling-config` flag does
+  # not exist on `ray start` in ray 2.55 (the daemon rejects it and the unit
+  # crash-loops fleet-wide, ix deploy 2026-07-04).
   spillDir = "/var/lib/ray/spill";
-  spillConfig = builtins.toJSON {
-    type = "filesystem";
-    params.directory_path = spillDir;
-  };
 
   ray = lib.getExe' cfg.package "ray";
 
@@ -72,42 +72,42 @@ let
   # The head also pins the Ray Client server port so off-cluster `ray://` clients
   # (e.g. a laptop driving the fleet via `fleet.connect()`) reach a known port.
   modeArgs =
-    if cfg.role == "head" then
-      [
-        "--head"
-        "--port"
-        (toString cfg.gcsPort)
-        "--ray-client-server-port"
-        (toString cfg.clientServerPort)
-        "--include-dashboard"
-        "false"
-      ]
-    else
-      [
-        "--address"
-        "${cfg.headAddress}:${toString cfg.gcsPort}"
-      ];
+    if cfg.role == "head"
+    then [
+      "--head"
+      "--port"
+      (toString cfg.gcsPort)
+      "--ray-client-server-port"
+      (toString cfg.clientServerPort)
+      "--include-dashboard"
+      "false"
+    ]
+    else [
+      "--address"
+      "${cfg.headAddress}:${toString cfg.gcsPort}"
+    ];
 
-  commonArgs = [
-    "--node-manager-port"
-    (toString cfg.nodeManagerPort)
-    "--object-manager-port"
-    (toString cfg.objectManagerPort)
-    "--min-worker-port"
-    (toString cfg.workerPortLow)
-    "--max-worker-port"
-    (toString cfg.workerPortHigh)
-    "--temp-dir"
-    "/run/ray"
-    "--object-spilling-config"
-    spillConfig
-  ]
-  ++ optionals (cfg.objectStoreMemory != null) [
-    "--object-store-memory"
-    (toString cfg.objectStoreMemory)
-  ];
+  commonArgs =
+    [
+      "--node-manager-port"
+      (toString cfg.nodeManagerPort)
+      "--object-manager-port"
+      (toString cfg.objectManagerPort)
+      "--min-worker-port"
+      (toString cfg.workerPortLow)
+      "--max-worker-port"
+      (toString cfg.workerPortHigh)
+      "--temp-dir"
+      "/run/ray"
+      "--object-spilling-directory"
+      spillDir
+    ]
+    ++ optionals (cfg.objectStoreMemory != null) [
+      "--object-store-memory"
+      (toString cfg.objectStoreMemory)
+    ];
 
-  startArgsNu = "[ ${lib.concatMapStringsSep " " builtins.toJSON (modeArgs ++ commonArgs)} ]";
+  startArgsNu = "[ ${lib.concatMapStringsSep " " builtins.toJSON (["start"] ++ modeArgs ++ commonArgs)} ]";
 
   # Resolve this node's tailscale IPv4 at runtime (it is host state, not a Nix
   # value), fail loudly if tailscale is not up, then exec `ray start` bound to
@@ -118,8 +118,16 @@ let
     runtimeInputs = [
       pkgs.tailscale
       cfg.package
+      # Ray execs its runtime-env worker wrappers via `os.execvp("bash", ...)`
+      # (ray._private.runtime_env.context.exec_worker) -- the head's Ray Client
+      # server spawns its default worker through that path on startup, and any
+      # runtime_env task does the same on workers. The hardened unit gets only
+      # this PATH, so without bash the subprocess dies with FileNotFoundError,
+      # `--block` sees it exit, and the daemon flaps (~70s cycle on the head).
+      pkgs.bash
     ];
     text = ''
+      # nu
       def main [] {
         let ip = (do --ignore-errors {
           ^tailscale ip -4 | lines | where ($it | str trim | is-not-empty) | first
@@ -140,10 +148,9 @@ let
   # a non-default `--temp-dir`, so the launcher hands the kernel an explicit
   # RAY_ADDRESS (which `fleet.connect()` reads).
   rayAddrNu =
-    if cfg.role == "head" then
-      ''$"($ip):${toString cfg.gcsPort}"''
-    else
-      ''"${cfg.headAddress}:${toString cfg.gcsPort}"'';
+    if cfg.role == "head"
+    then ''$"($ip):${toString cfg.gcsPort}"''
+    else ''"${cfg.headAddress}:${toString cfg.gcsPort}"'';
 
   # Resolve this node's tailscale IPv4, bind the dashboard/exec to it
   # (IX_MCP_HOST), point the kernel at the local Ray GCS (RAY_ADDRESS), then exec
@@ -157,6 +164,7 @@ let
       cfg.notebookPackage
     ];
     text = ''
+      # nu
       def main [] {
         let ip = (do --ignore-errors {
           ^tailscale ip -4 | lines | where ($it | str trim | is-not-empty) | first
@@ -177,18 +185,25 @@ let
   # dashboard data API exposes the `/api/exec` that `fleet.in_kernel` reaches on
   # `execPort`. Tailnet-trust is on by default (the tailnet is the boundary,
   # exactly as Ray's own data plane); set a tokenFile to also require a token.
-  notebookEnv = {
-    IX_MCP_DASHBOARD_PORT = toString cfg.execPort;
-    IX_FLEET_EXEC_PORT = toString cfg.execPort;
-  }
-  // optionalAttrs cfg.execTrustNetwork {
-    IX_MCP_EXEC_TRUST_NETWORK = "1";
-  }
-  // optionalAttrs (cfg.tokenFile != null) {
-    IX_MCP_EXEC_TOKEN_FILE = toString cfg.tokenFile;
-  };
-in
-{
+  notebookEnv =
+    {
+      IX_MCP_DASHBOARD_PORT = toString cfg.execPort;
+      IX_FLEET_EXEC_PORT = toString cfg.execPort;
+      IX_MCP_MESH_PORT = toString cfg.meshPort;
+      # The unit runs as root under systemdHardening's ProtectHome=true, which
+      # masks /root. Without an explicit HOME both the nushell launcher (plugin
+      # cache under $HOME/.config/nushell) and the engine ($HOME/.mgrep) resolve
+      # root's passwd home and die on EACCES. Point HOME at the unit's own
+      # writable StateDirectory, mirroring the ray unit's HOME=/run/ray.
+      HOME = "/var/lib/ix-ray-notebook";
+    }
+    // optionalAttrs cfg.execTrustNetwork {
+      IX_MCP_EXEC_TRUST_NETWORK = "1";
+    }
+    // optionalAttrs (cfg.tokenFile != null) {
+      IX_MCP_EXEC_TOKEN_FILE = toString cfg.tokenFile;
+    };
+in {
   options.services.ix-ray = {
     enable = mkEnableOption "Ray cluster node + ix-mcp engine for the `fleet` distributed API";
 
@@ -201,7 +216,10 @@ in
       description = ''
         This node's role in the single cluster. Exactly one node must be `head`
         (it runs the GCS); every other node is a `worker` and must set
-        {option}`services.ix-ray.headAddress`.
+        {option}`services.ix-ray.headAddress`. The GCS is not HA (no external
+        Redis), so a head restart resets cluster state: in-flight tasks and
+        object refs are lost, and every raylet re-registers on its
+        `Restart=on-failure` -- a reset, not an orphaned cluster.
       '';
     };
 
@@ -284,6 +302,19 @@ in
       '';
     };
 
+    meshPort = mkOption {
+      type = types.port;
+      default = 8798;
+      description = ''
+        Port the node's ix-mcp serves its tailnet `/mesh` discovery card on
+        (ix-mcp's DEFAULT_MESH_PORT). Exported to the engine as
+        `IX_MCP_MESH_PORT` so the service and the firewall rule below cannot
+        drift, and opened by {option}`services.ix-ray.openFirewall` when the
+        notebook engine runs -- a firewall that guards the tailscale interface
+        would otherwise silently blind mesh discovery.
+      '';
+    };
+
     objectStoreMemory = mkOption {
       type = types.nullOr types.ints.positive;
       default = null;
@@ -335,9 +366,12 @@ in
       default = false;
       description = ''
         Open the inter-node Ray ports (node/object manager, worker range), the
-        exec port, and on the head the GCS + client-server ports. Usually
-        unnecessary on a tailnet where peers reach each other directly, but
-        required if a firewall guards the tailscale interface.
+        exec port, the mesh discovery port (when the notebook engine runs),
+        and on the head the GCS + client-server ports -- on the tailscale
+        interface ONLY, never the global firewall (Ray has no per-call auth,
+        so these ports must stay unreachable from any public interface).
+        Usually unnecessary on a tailnet where peers reach each other
+        directly, but required if a firewall guards the tailscale interface.
       '';
     };
   };
@@ -358,16 +392,28 @@ in
       }
     ];
 
-    networking.firewall = mkIf cfg.openFirewall {
-      allowedTCPPorts = [
-        cfg.execPort
-        cfg.nodeManagerPort
-        cfg.objectManagerPort
-      ]
-      ++ optionals (cfg.role == "head") [
-        cfg.gcsPort
-        cfg.clientServerPort
-      ];
+    # Scoped to the tailscale interface, never the global firewall: Ray's GCS
+    # and Client server carry NO authentication (any peer that can reach them
+    # runs arbitrary code), and a fleet host can also have a PUBLIC interface.
+    # A global `allowedTCPPorts` would have exposed `ray://<public-ip>:10001`
+    # to the internet (index#1800 review). The daemons bind the tailscale IPv4,
+    # and the tailnet is the module's stated trust boundary, so the tailscale
+    # interface is exactly where these ports may open. `tailscale0` is
+    # tailscaled's default (and the fleet's) interface name.
+    networking.firewall.interfaces.tailscale0 = mkIf cfg.openFirewall {
+      allowedTCPPorts =
+        [
+          cfg.execPort
+          cfg.nodeManagerPort
+          cfg.objectManagerPort
+        ]
+        # The notebook engine also serves the tailnet `/mesh` discovery card
+        # (index#1787); a firewalled tailscale interface must not blind it.
+        ++ optional cfg.notebook.enable cfg.meshPort
+        ++ optionals (cfg.role == "head") [
+          cfg.gcsPort
+          cfg.clientServerPort
+        ];
       allowedTCPPortRanges = [
         {
           from = cfg.workerPortLow;
@@ -382,27 +428,40 @@ in
         "network-online.target"
         "tailscaled.service"
       ];
-      wants = [ "network-online.target" ];
-      wantedBy = [ "multi-user.target" ];
+      wants = ["network-online.target"];
+      wantedBy = ["multi-user.target"];
       environment = {
         HOME = "/run/ray";
         RAY_DISABLE_USAGE_STATS = "1";
       };
-      serviceConfig = indexLib.systemdHardening // {
-        Type = "simple";
-        ExecStart = lib.getExe rayLauncher;
-        Restart = "on-failure";
-        RestartSec = 5;
-        DynamicUser = true;
-        RuntimeDirectory = "ray";
-        StateDirectory = "ray";
-        WorkingDirectory = "/run/ray";
-        # Ray's object store is host shared memory and an attaching kernel maps it
-        # from outside this unit's namespace; a private /dev (hence /dev/shm) or
-        # user namespace would block that, so both are disabled here.
-        PrivateDevices = false;
-        PrivateUsers = false;
-      };
+      serviceConfig =
+        indexLib.systemdHardening
+        // {
+          Type = "simple";
+          ExecStart = lib.getExe rayLauncher;
+          Restart = "on-failure";
+          RestartSec = 5;
+          DynamicUser = true;
+          RuntimeDirectory = "ray";
+          StateDirectory = "ray";
+          WorkingDirectory = "/run/ray";
+          # Ray's object store is host shared memory and an attaching kernel maps it
+          # from outside this unit's namespace; a private /dev (hence /dev/shm) or
+          # user namespace would block that, so both are disabled here.
+          PrivateDevices = false;
+          PrivateUsers = false;
+          # getifaddrs needs an AF_NETLINK route socket. libzmq's ip_resolver
+          # calls it and ABORTS the whole process (SIGABRT) on EAFNOSUPPORT,
+          # which killed the notebook kernel on hosts with certain interface
+          # sets; ray's own psutil/grpc interface enumeration walks the same
+          # path. Extend the hardening default (AF_INET/AF_INET6/AF_UNIX).
+          RestrictAddressFamilies = [
+            "AF_INET"
+            "AF_INET6"
+            "AF_UNIX"
+            "AF_NETLINK"
+          ];
+        };
     };
 
     systemd.services.ix-ray-notebook = mkIf cfg.notebook.enable {
@@ -411,22 +470,34 @@ in
         "network-online.target"
         "ix-ray.service"
       ];
-      wants = [ "network-online.target" ];
-      requires = [ "ix-ray.service" ];
-      wantedBy = [ "multi-user.target" ];
+      wants = ["network-online.target"];
+      requires = ["ix-ray.service"];
+      wantedBy = ["multi-user.target"];
       environment = notebookEnv;
-      serviceConfig = indexLib.systemdHardening // {
-        Type = "simple";
-        ExecStart = lib.getExe notebookLauncher;
-        Restart = "on-failure";
-        RestartSec = 5;
-        StateDirectory = "ix-ray-notebook";
-        WorkingDirectory = "/var/lib/ix-ray-notebook";
-        # Same shared-memory reasoning as the ray unit: the engine's kernel maps
-        # the object store, so it cannot run under a private /dev or userns.
-        PrivateDevices = false;
-        PrivateUsers = false;
-      };
+      serviceConfig =
+        indexLib.systemdHardening
+        // {
+          Type = "simple";
+          ExecStart = lib.getExe notebookLauncher;
+          Restart = "on-failure";
+          RestartSec = 5;
+          StateDirectory = "ix-ray-notebook";
+          WorkingDirectory = "/var/lib/ix-ray-notebook";
+          # Same shared-memory reasoning as the ray unit: the engine's kernel maps
+          # the object store, so it cannot run under a private /dev or userns.
+          PrivateDevices = false;
+          PrivateUsers = false;
+          # Same AF_NETLINK reasoning as the ray unit: the engine's Jupyter
+          # kernel dies by libzmq SIGABRT when getifaddrs cannot open a netlink
+          # socket (observed live: ip_resolver.cpp:542 EAFNOSUPPORT on
+          # vin-compute-1/hil-compute-1; A/B-verified fix).
+          RestrictAddressFamilies = [
+            "AF_INET"
+            "AF_INET6"
+            "AF_UNIX"
+            "AF_NETLINK"
+          ];
+        };
     };
   };
 }

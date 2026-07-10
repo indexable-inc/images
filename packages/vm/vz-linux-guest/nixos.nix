@@ -8,18 +8,19 @@
 {
   lib,
   pkgs,
-  bossbar-overlay,
   ...
-}:
-let
+}: let
+  # The overlaid aarch64-linux package, injected through `nixpkgs.overlays` by
+  # the builder (default.nix) rather than a specialArg.
+  inherit (pkgs) bossbar-overlay;
   # Wrapper that points the wgpu overlay at the lavapipe software-Vulkan ICD
   # (mandatory: with no ICD wgpu hard-panics, there is no GL fallback) and seeds
   # a fresh BOSSBAR_DB path so the overlay auto-populates its demo bars.
   #
-  # Kept as raw bash: this module is a standalone `eval-config.nix` system whose
-  # only specialArg is `bossbar-overlay` (no package `ix` in scope), so the
-  # checked `ix.writeBashApplication` / `ix.writeNushellApplication` writers are
-  # unreachable here. It is a trivial env-setup + exec launch wrapper.
+  # Kept as raw bash: this module is a standalone `eval-config.nix` system with
+  # no package `ix` in scope, so the checked `ix.writeBashApplication` /
+  # `ix.writeNushellApplication` writers are unreachable here. It is a trivial
+  # env-setup + exec launch wrapper.
   # astlog-ignore: no-write-shell-script
   bossbarLaunch = pkgs.writeShellScript "bossbar-launch" ''
     export VK_DRIVER_FILES=${pkgs.mesa}/share/vulkan/icd.d/lvp_icd.aarch64.json
@@ -34,8 +35,7 @@ let
     default_border none
     exec ${bossbarLaunch}
   '';
-in
-{
+in {
   boot = {
     # Boot under VZ's EFI firmware off the raw disk.
     loader = {
@@ -58,7 +58,7 @@ in
     ];
     # virtio-gpu DRM node so the compositor can run on a real (paravirtual)
     # display whose scanout VZ exposes to the host framebuffer.
-    kernelModules = [ "virtio_gpu" ];
+    kernelModules = ["virtio_gpu"];
   };
 
   # make-disk-image (partitionTableType = "efi") labels the partitions ESP/nixos.

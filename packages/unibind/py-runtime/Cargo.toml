@@ -1,0 +1,16 @@
+[package]
+name = "unibind-py-runtime"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Python-side support for unibind's pyo3 backend: awaitable futures over pyo3-async-runtimes and the shared async-iterator stream wrapper"
+
+[lints]
+workspace = true
+
+[dependencies]
+futures.workspace = true
+pyo3.workspace = true
+pyo3-async-runtimes.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+unibind-runtime.workspace = true

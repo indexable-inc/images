@@ -16,12 +16,11 @@
   pkgs,
   ix,
   writeNushellApplication,
-}:
-let
+}: let
   # mix.exs declares `~> 1.18`; the launcher and the check build against the
   # same toolchain so a run never executes code the gate did not.
-  elixir = ix.languages.elixir.toolchain pkgs { version = "1.18"; };
-  erlang = ix.languages.erlang.toolchain pkgs { version = "27"; };
+  elixir = ix.languages.elixir.toolchain pkgs {version = "1.18";};
+  erlang = ix.languages.erlang.toolchain pkgs {version = "27";};
 
   src = lib.fileset.toSource {
     root = ./elixir;
@@ -35,7 +34,10 @@ let
   };
 
   # Test-env mix deps (credo + its deps) as a fixed-output derivation so the
-  # sandboxed check runs offline. Refresh the hash whenever elixir/mix.lock changes.
+  # sandboxed check runs offline. The SRI pin lives in the sibling pins.json
+  # (repo policy: no inline hash literals); it has no URL (the FOD content is
+  # derived from mix.lock), so refresh it after a lock change by building and
+  # copying the `got:` hash from the mismatch error.
   mixFodDeps = pkgs.beamPackages.fetchMixDeps {
     pname = "hive-elixir-deps";
     version = "0.1.0"; # keep in sync with elixir/mix.exs
@@ -48,7 +50,7 @@ let
     };
     inherit elixir;
     mixEnv = "test";
-    hash = "sha256-EXaJddUakJETdzPNFWgJRgBWG4VcrP/Z5tOCuE+BXdo=";
+    inherit ((ix.pins.loadPins ./pins.json).mix-deps) hash;
   };
 
   elixirCheck = ix.buildElixirCheck pkgs {
@@ -58,39 +60,44 @@ let
     mixDeps = mixFodDeps;
   };
 in
-(writeNushellApplication {
-  name = "hive";
-  meta = {
-    description = "A tiny fully-connected mesh of Elixir agent actors; `hive` runs the demo";
-    license = lib.licenses.asl20;
-  };
-  runtimeInputs = [
-    pkgs.coreutils
-    elixir
-    erlang
-  ];
-  text = ''
-    def --wrapped main [...args] {
-      # mix compiles in place, so stage the read-only source into a writable
-      # temp dir before running the demo.
-      let work = (^mktemp -d | str trim)
-      ^cp -rL --no-preserve=mode ${src}/. $"($work)/"
-      cd $work
-      with-env {
-        MIX_ENV: "dev"
-        HEX_OFFLINE: "1"
-        MIX_HOME: $"($work)/.mix"
-        HEX_HOME: $"($work)/.hex"
-      } {
-        ^mix run -e "Hive.demo()"
-      }
-    }
-  '';
-}).overrideAttrs
-  (old: {
-    passthru = (old.passthru or { }) // {
-      tests = (old.passthru.tests or { }) // {
-        elixir = elixirCheck;
-      };
+  (writeNushellApplication {
+    name = "hive";
+    meta = {
+      description = "A tiny fully-connected mesh of Elixir agent actors; `hive` runs the demo";
+      license = lib.licenses.asl20;
     };
+    runtimeInputs = [
+      pkgs.coreutils
+      elixir
+      erlang
+    ];
+    text = ''
+      # nu
+      def --wrapped main [...args] {
+        # mix compiles in place, so stage the read-only source into a writable
+        # temp dir before running the demo.
+        let work = (^mktemp -d | str trim)
+        ^cp -rL --no-preserve=mode ${src}/. $"($work)/"
+        cd $work
+        with-env {
+          MIX_ENV: "dev"
+          HEX_OFFLINE: "1"
+          MIX_HOME: $"($work)/.mix"
+          HEX_HOME: $"($work)/.hex"
+        } {
+          ^mix run -e "Hive.demo()"
+        }
+      }
+    '';
+  }).overrideAttrs
+  (old: {
+    passthru =
+      (old.passthru or {})
+      // {
+        tests =
+          (old.passthru.tests or {})
+          // {
+            elixir = elixirCheck;
+          };
+      };
   })

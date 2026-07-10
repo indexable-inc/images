@@ -1,6 +1,6 @@
 """Call any Model Context Protocol (MCP) server's tools from the kernel.
 
-Bundled like ``view``/``fff``/``sh`` so every session can ``import mcp_client``
+Bundled like ``view``/``search``/``sh`` so every session can ``import mcp_client``
 with no setup. The point: an MCP server is a bag of tools (and resources and
 prompts) behind a small JSON-RPC protocol -- a Todoist server, a GitHub server,
 a local stdio server you wrote -- and this module lets you connect to one and

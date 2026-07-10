@@ -23,7 +23,8 @@ defmodule SymphonyElixir.Catalog do
 
   use GenServer
 
-  alias SymphonyElixir.{Config, Skill}
+  alias SymphonyElixir.Config
+  alias SymphonyElixir.Skill
 
   require Logger
 
@@ -48,7 +49,8 @@ defmodule SymphonyElixir.Catalog do
 
   @spec skills() :: [Skill.t()]
   def skills do
-    :ets.match_object(@table, {{:skill, :_}, :_})
+    @table
+    |> :ets.match_object({{:skill, :_}, :_})
     |> Enum.map(fn {_key, skill} -> skill end)
   end
 
@@ -103,7 +105,7 @@ defmodule SymphonyElixir.Catalog do
             case loader.(path) do
               {:ok, parsed} ->
                 :ets.insert(@table, {{kind, name}, parsed})
-                Logger.info("Catalog loaded #{kind}=#{name} hash=#{Base.encode16(new_hash, case: :lower) |> binary_part(0, 8)}")
+                Logger.info("Catalog loaded #{kind}=#{name} hash=#{new_hash |> Base.encode16(case: :lower) |> binary_part(0, 8)}")
 
               {:error, reason} ->
                 Logger.warning("Catalog failed to load #{kind}=#{name}: #{inspect(reason)}")
@@ -126,7 +128,7 @@ defmodule SymphonyElixir.Catalog do
     @table
     |> :ets.match_object({{kind, :_}, :_})
     |> Enum.each(fn {{^kind, name} = key, _value} ->
-      unless MapSet.member?(seen_names, name) do
+      if !MapSet.member?(seen_names, name) do
         :ets.delete(@table, key)
         Logger.info("Catalog removed #{kind}=#{name} (file deleted)")
       end

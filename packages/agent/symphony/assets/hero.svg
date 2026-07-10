@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 210" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    svg { color: #1f2328; }
+    .muted { fill: #656d76; }
+    .accent { fill: #8250df; }
+    .box { stroke: currentColor; fill: none; }
+    text { fill: currentColor; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { fill: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+            orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <text x="330" y="30" text-anchor="middle" font-size="11" class="muted">cron · Slack · Linear · GitHub triggers</text>
+  <line class="edge" x1="330" y1="38" x2="330" y2="76"/>
+
+  <rect class="box" x="20" y="90" width="150" height="52" rx="8"/>
+  <text x="95" y="112" text-anchor="middle" font-size="13" font-weight="600">.sym workflow</text>
+  <text x="95" y="130" text-anchor="middle" font-size="11" class="muted">surface language</text>
+
+  <line class="edge" x1="170" y1="116" x2="228" y2="116"/>
+  <text x="199" y="102" text-anchor="middle" font-size="11" class="muted">lower</text>
+
+  <rect class="box" x="230" y="90" width="130" height="52" rx="8"/>
+  <text x="295" y="112" text-anchor="middle" font-size="13" font-weight="600">IR run graph</text>
+  <text x="295" y="130" text-anchor="middle" font-size="11" class="muted">deterministic DAG</text>
+
+  <line class="edge" x1="360" y1="116" x2="418" y2="116"/>
+  <text x="389" y="102" text-anchor="middle" font-size="11" class="muted">walk</text>
+
+  <rect class="box" x="420" y="80" width="170" height="72" rx="8"/>
+  <text x="505" y="104" text-anchor="middle" font-size="13" font-weight="600">OTP runtime</text>
+  <text x="505" y="122" text-anchor="middle" font-size="11" class="muted">supervised, per-run</text>
+  <text x="505" y="138" text-anchor="middle" font-size="11" class="muted">git worktrees</text>
+
+  <line class="edge" x1="590" y1="100" x2="640" y2="80"/>
+  <line class="edge" x1="590" y1="132" x2="640" y2="152"/>
+  <text x="648" y="76" font-size="11" class="accent">dashboard</text>
+  <text x="648" y="156" font-size="11" class="accent">PRs · Linear</text>
+</svg>

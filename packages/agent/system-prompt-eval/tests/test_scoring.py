@@ -8,7 +8,8 @@ turns judge verdicts into the committed score.
 
 from __future__ import annotations
 
-from system_prompt_eval.model import BehaviorVerdict, RolloutResult, TaskCase
+from system_prompt_eval.data import load_behaviors, load_tasks, validate_expects
+from system_prompt_eval.model import Behavior, BehaviorVerdict, RolloutResult, TaskCase
 from system_prompt_eval.report import (
     longest_streak_for,
     max_streak,
@@ -98,6 +99,29 @@ def test_max_streak_across_tasks() -> None:
         _result("t2", 1, {"a": True}),
     ]
     assert max_streak(results, tasks) == 2
+
+
+def test_validate_expects_accepts_known_ids() -> None:
+    behaviors = [Behavior(id="a", name="A", rubric="")]
+    tasks = [TaskCase(id="t", task="", expects=("a",))]
+    validate_expects(tasks, behaviors)  # must not raise
+
+
+def test_validate_expects_rejects_unknown_id() -> None:
+    behaviors = [Behavior(id="a", name="A", rubric="")]
+    tasks = [TaskCase(id="t", task="", expects=("a", "typo_id"))]
+    error: ValueError | None = None
+    try:
+        validate_expects(tasks, behaviors)
+    except ValueError as exc:
+        error = exc
+    assert error is not None, "expected ValueError for an unknown expects id"
+    assert "typo_id" in str(error)
+
+
+def test_committed_tasks_expect_only_cataloged_behaviors() -> None:
+    """Guards the actual datasets: a bad id here would silently score wrong."""
+    validate_expects(load_tasks(), load_behaviors())  # must not raise
 
 
 def _main() -> None:

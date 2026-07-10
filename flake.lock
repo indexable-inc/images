@@ -1,25 +1,13 @@
 {
   "nodes": {
-    "agents": {
-      "flake": false,
-      "locked": {
-        "path": "./agents",
-        "type": "path"
-      },
-      "original": {
-        "path": "./agents",
-        "type": "path"
-      },
-      "parent": []
-    },
     "bench-filesystem": {
       "flake": false,
       "locked": {
-        "path": "./bench/filesystem",
+        "path": "./packages/indexbench/filesystem",
         "type": "path"
       },
       "original": {
-        "path": "./bench/filesystem",
+        "path": "./packages/indexbench/filesystem",
         "type": "path"
       },
       "parent": []
@@ -27,33 +15,50 @@
     "btop-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1780871699,
-        "narHash": "sha256-dUM7UGO6lzT1At7m2xnnJD9mFbyFO7gjHonVE++YK58=",
-        "owner": "indexable-inc",
+        "lastModified": 1782995410,
+        "narHash": "sha256-0wZzlCfiWZB//qQTLV+4GLO23amddQrYkvVRSXjlf80=",
+        "owner": "aristocratos",
         "repo": "btop",
-        "rev": "711f4a128b1b7009ee9cf0fa179a586c82586613",
+        "rev": "9527231dfbcbe697f8eb80849e267377194e6ca8",
         "type": "github"
       },
       "original": {
-        "owner": "indexable-inc",
+        "owner": "aristocratos",
         "repo": "btop",
-        "rev": "711f4a128b1b7009ee9cf0fa179a586c82586613",
         "type": "github"
       }
     },
-    "clippy-fork": {
+    "clippy-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1780618824,
-        "narHash": "sha256-g9L5Uo3kMZIVwo3W5UOPuJvxakm63+F2pvrud3bPigY=",
-        "owner": "indexable-inc",
-        "repo": "clippy",
-        "rev": "c2308e380ab6213e522d8a04c31b3ceabd518a8a",
+        "lastModified": 1779864937,
+        "narHash": "sha256-12B5ImXg/JDzNHXha2RoVTNmuXdWmLx71TAmqa/aTCo=",
+        "owner": "rust-lang",
+        "repo": "rust-clippy",
+        "rev": "512551c839fc711fc925c8a862a9abd4bde0812f",
         "type": "github"
       },
       "original": {
-        "owner": "indexable-inc",
-        "repo": "clippy",
+        "owner": "rust-lang",
+        "repo": "rust-clippy",
+        "rev": "512551c839fc711fc925c8a862a9abd4bde0812f",
+        "type": "github"
+      }
+    },
+    "codex-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1783646935,
+        "narHash": "sha256-3T9DJZJymasf59Fa6nMFOdjLgEMRakXwbm/DMmmtkJM=",
+        "owner": "openai",
+        "repo": "codex",
+        "rev": "1f0566d3f59298d1bb88820a0d35294f1eeb07ea",
+        "type": "github"
+      },
+      "original": {
+        "owner": "openai",
+        "repo": "codex",
+        "rev": "1f0566d3f59298d1bb88820a0d35294f1eeb07ea",
         "type": "github"
       }
     },
@@ -176,11 +181,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1781189114,
-        "narHash": "sha256-5inaamLgUMWy+MOBE9ChF9QAF1o/74LFuHkI0W/9rqc=",
+        "lastModified": 1783550008,
+        "narHash": "sha256-qbbZUk9IG9dLNwCPwdPBs6I5clxwugRpP+1YU+GPK20=",
         "owner": "nix-community",
         "repo": "home-manager",
-        "rev": "486595d2cf49cfcd649b58a284fa11ac0e34da22",
+        "rev": "f4d01c1d87c7c2ec909549165d5a8338f1bd3315",
         "type": "github"
       },
       "original": {
@@ -188,18 +193,6 @@
         "repo": "home-manager",
         "type": "github"
       }
-    },
-    "images": {
-      "flake": false,
-      "locked": {
-        "path": "./images",
-        "type": "path"
-      },
-      "original": {
-        "path": "./images",
-        "type": "path"
-      },
-      "parent": []
     },
     "launchk-src": {
       "flake": false,
@@ -218,13 +211,48 @@
         "type": "github"
       }
     },
+    "mesa-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1780475834,
+        "narHash": "sha256-IkfRd98uHODgnISpaxnEZi83IPis62cacJEierMiAvU=",
+        "ref": "refs/tags/mesa-26.1.2",
+        "rev": "b3d356db66d92ff99ad5b3274569761290232899",
+        "shallow": true,
+        "type": "git",
+        "url": "https://gitlab.freedesktop.org/mesa/mesa"
+      },
+      "original": {
+        "ref": "refs/tags/mesa-26.1.2",
+        "shallow": true,
+        "type": "git",
+        "url": "https://gitlab.freedesktop.org/mesa/mesa"
+      }
+    },
+    "nix-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1777915353,
+        "narHash": "sha256-uj5KNW8Vdm60FCUxD2KsrCVH/WwoemvczWmmrb3Gvlo=",
+        "owner": "NixOS",
+        "repo": "nix",
+        "rev": "2c6d06e9387cf58167cb5a7ab91cee7333d8d17c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nix",
+        "rev": "2c6d06e9387cf58167cb5a7ab91cee7333d8d17c",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1780749050,
-        "narHash": "sha256-3av0pIjlOWQ6rDbNOmpUSvbNnJkGORQKKjb4LtCZsIY=",
+        "lastModified": 1783224372,
+        "narHash": "sha256-8i/87eeoqiGE4yOTjwSA3Eh/ziJRQEmd/unYU+K27sk=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "a799d3e3886da994fa307f817a6bc705ae538eeb",
+        "rev": "d407951447dcd00442e97087bf374aad70c04cea",
         "type": "github"
       },
       "original": {
@@ -252,6 +280,73 @@
       "original": {
         "owner": "jeslie0",
         "repo": "npm-lockfile-fix",
+        "type": "github"
+      }
+    },
+    "nu-jupyter-kernel-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1774877791,
+        "narHash": "sha256-hBMmIJYRUs5fDPLYxVhfpiQHShZV4uj/o+DRuQsCIjk=",
+        "owner": "cptpiepmatz",
+        "repo": "nu-jupyter-kernel",
+        "rev": "016d5089d9b0c66beb95311e339e252c8b9dd4e4",
+        "type": "github"
+      },
+      "original": {
+        "owner": "cptpiepmatz",
+        "repo": "nu-jupyter-kernel",
+        "rev": "016d5089d9b0c66beb95311e339e252c8b9dd4e4",
+        "type": "github"
+      }
+    },
+    "nushell-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1783696074,
+        "narHash": "sha256-ADcCuRA8218b0QDo9FxKQslJwLGcQMiA2x5pSZ6RpHo=",
+        "owner": "nushell",
+        "repo": "nushell",
+        "rev": "e8424fe6af516a78cc5fb833f8e91dcda9678148",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nushell",
+        "repo": "nushell",
+        "type": "github"
+      }
+    },
+    "perftest-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1780225113,
+        "narHash": "sha256-oNvzQubmslZ4JUNww/wvWd54JDsDLamCDlorHWlNtaY=",
+        "ref": "refs/tags/26.04.17",
+        "rev": "720b61082454e189b1f21835ec175536a944afc3",
+        "revCount": 1432,
+        "type": "git",
+        "url": "https://github.com/linux-rdma/perftest"
+      },
+      "original": {
+        "ref": "refs/tags/26.04.17",
+        "type": "git",
+        "url": "https://github.com/linux-rdma/perftest"
+      }
+    },
+    "pg-uint128-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1762189440,
+        "narHash": "sha256-D2eTxzVZCQk9Cz4bhSmKu9hfL8r1RwkjS8ajadKb5sY=",
+        "owner": "pg-uint",
+        "repo": "pg-uint128",
+        "rev": "db7a79a0f5ccd3d59404d6b9510e01f0876699ea",
+        "type": "github"
+      },
+      "original": {
+        "owner": "pg-uint",
+        "ref": "1.2.0",
+        "repo": "pg-uint128",
         "type": "github"
       }
     },
@@ -345,20 +440,27 @@
     },
     "root": {
       "inputs": {
-        "agents": "agents",
         "bench-filesystem": "bench-filesystem",
         "btop-src": "btop-src",
-        "clippy-fork": "clippy-fork",
+        "clippy-src": "clippy-src",
+        "codex-src": "codex-src",
         "drgn-src": "drgn-src",
         "examples": "examples",
         "fff-src": "fff-src",
         "ghostty": "ghostty",
         "hermes-agent": "hermes-agent",
         "home-manager": "home-manager",
-        "images": "images",
         "launchk-src": "launchk-src",
+        "mesa-src": "mesa-src",
+        "nix-src": "nix-src",
         "nixpkgs": "nixpkgs",
+        "nu-jupyter-kernel-src": "nu-jupyter-kernel-src",
+        "nushell-src": "nushell-src",
+        "perftest-src": "perftest-src",
+        "pg-uint128-src": "pg-uint128-src",
         "rust-overlay": "rust-overlay",
+        "sdk-prebuilt-nixpkgs": "sdk-prebuilt-nixpkgs",
+        "sdk-prebuilt-rust-overlay": "sdk-prebuilt-rust-overlay",
         "site": "site",
         "skills": "skills",
         "snix-src": "snix-src",
@@ -372,6 +474,39 @@
         ]
       },
       "locked": {
+        "lastModified": 1783614422,
+        "narHash": "sha256-zSX553aXiIKJHWzUF6nrDKgeNRlfNK/SdyNYSbs2nkM=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "e8e9d70b96113fd49ccde6c3e08fb260b6ef5dd6",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "sdk-prebuilt-nixpkgs": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1780749050,
+        "narHash": "sha256-3av0pIjlOWQ6rDbNOmpUSvbNnJkGORQKKjb4LtCZsIY=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "a799d3e3886da994fa307f817a6bc705ae538eeb",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "a799d3e3886da994fa307f817a6bc705ae538eeb",
+        "type": "github"
+      }
+    },
+    "sdk-prebuilt-rust-overlay": {
+      "flake": false,
+      "locked": {
         "lastModified": 1781147846,
         "narHash": "sha256-hBdiQYd40xRtBWBiXHUxuQYWmJBiK19YO1FiYgrmEo0=",
         "owner": "oxalica",
@@ -382,17 +517,18 @@
       "original": {
         "owner": "oxalica",
         "repo": "rust-overlay",
+        "rev": "107c334f141854f563f8adf1db781dc453d92639",
         "type": "github"
       }
     },
     "site": {
       "flake": false,
       "locked": {
-        "path": "./site",
+        "path": "./packages/site",
         "type": "path"
       },
       "original": {
-        "path": "./site",
+        "path": "./packages/site",
         "type": "path"
       },
       "parent": []
@@ -400,11 +536,11 @@
     "skills": {
       "flake": false,
       "locked": {
-        "path": "./skills",
+        "path": "./packages/agent/skills",
         "type": "path"
       },
       "original": {
-        "path": "./skills",
+        "path": "./packages/agent/skills",
         "type": "path"
       },
       "parent": []
@@ -412,10 +548,10 @@
     "snix-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1781214841,
-        "narHash": "sha256-NKP/1lgKRne7+nW8MaTQbPtfVPa4mqZuvIBcai4neDM=",
+        "lastModified": 1783373906,
+        "narHash": "sha256-PPooXg6H/MbFdquSz9okE2Jbqrhglk8/GoeeUskIyCc=",
         "ref": "canon",
-        "rev": "3251a55da2c9ebdf7392e281d959eb70ed5b6054",
+        "rev": "ff8db41cdc01b72f2614c2b2c60ffe3cae5449c6",
         "shallow": true,
         "type": "git",
         "url": "https://git.snix.dev/snix/snix"

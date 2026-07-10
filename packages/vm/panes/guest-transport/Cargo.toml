@@ -1,0 +1,16 @@
+[package]
+name = "panes-guest-transport"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Shared vsock, Unix, and TCP listener transport for panes guest daemons"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+vsock = "0.5"

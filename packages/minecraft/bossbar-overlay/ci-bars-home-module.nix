@@ -22,15 +22,14 @@
   indexPackages,
   portableServicesModule,
   ix,
-}:
-{
+}: {
   config,
   lib,
   pkgs,
   ...
-}:
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     mkOption
     mkOptionDefault
     mkEnableOption
@@ -62,9 +61,8 @@ let
     ];
     text = builtins.readFile ./ci-bars.sh;
   };
-in
-{
-  imports = [ portableServicesModule ];
+in {
+  imports = [portableServicesModule];
 
   options.services.ciBars = {
     enable = mkEnableOption "the GitHub Actions CI progress boss bars (one bar per in-flight run)";
@@ -78,7 +76,7 @@ in
 
     repos = mkOption {
       type = types.listOf types.str;
-      default = [ ];
+      default = [];
       example = [
         "indexable-inc/ix"
         "indexable-inc/index"
@@ -127,16 +125,15 @@ in
       # so a downstream override still wins and the option declaration stays a
       # self-contained literal.
       services.ciBars.logDir = mkOptionDefault (
-        if pkgs.stdenv.hostPlatform.isDarwin then
-          "${config.home.homeDirectory}/Library/Logs"
-        else
-          "${config.home.homeDirectory}/.local/state"
+        if pkgs.stdenv.hostPlatform.isDarwin
+        then "${config.home.homeDirectory}/Library/Logs"
+        else "${config.home.homeDirectory}/.local/state"
       );
     }
     (mkIf cfg.enable {
       services.portable.ci-bars = {
         description = "GitHub Actions CI progress boss bars";
-        command = [ (lib.getExe' ciBars "ci-bars") ];
+        command = [(lib.getExe' ciBars "ci-bars")];
         inherit (cfg) interval;
         # Recover from a crashed poll without busy-looping. on-failure renders
         # launchd KeepAlive.SuccessfulExit = false (and systemd Restart =

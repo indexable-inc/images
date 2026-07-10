@@ -22,16 +22,16 @@ concurrency:
 
 env:
   # The self-hosted runner's Nix daemon owns substituters; the job only sets
-  # client-side eval knobs (matching check.yml). `accept-flake-config` consumes
-  # the flake's nixConfig (the indexable-inc Cachix substituter) without a
-  # prompt, which the inner nix-eval-jobs run needs to fetch the IFD closure.
+  # client-side eval knobs (matching check.yml). The daemon already owns the
+  # cache configuration, so this untrusted runner explicitly ignores restricted
+  # flake settings instead of warning once per evaluator worker.
   # `ca-derivations`: the rust units default to contentAddressed = true, so the
   # `.#checks` eval this job forces resolves content-addressed drvs. Without it
   # nix-eval-jobs aborts ("experimental Nix feature 'ca-derivations' is
   # disabled"). Mirrors check.yml.
   NIX_CONFIG: |-
     experimental-features = nix-command flakes ca-derivations
-    accept-flake-config = true
+    accept-flake-config = false
 
 jobs:
   # Untrusted half: runs this PR's own `.#blast-radius` flake code. It holds only
@@ -41,7 +41,7 @@ jobs:
   # token-backed step. The report leaves this job only as an artifact (plain
   # data) for the comment job.
   evaluate:
-    # Same-repository, non-Dependabot PRs only (mirroring ai-review-gate.yml).
+    # Same-repository, non-Dependabot PRs only.
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login != 'dependabot[bot]'
@@ -67,7 +67,7 @@ jobs:
       # `git merge-base` and the `?rev=<sha>` flake refs resolve. The only token
       # in this job is the read-only one on the timings-fetch step below.
       - name: Checkout repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
           persist-credentials: false

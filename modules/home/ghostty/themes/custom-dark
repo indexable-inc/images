@@ -1,0 +1,32 @@
+# Custom Dark Theme (complementary to light theme)
+# Dark background with light text
+
+# Main colors
+background = 1e1e1e
+foreground = d4d4d4
+
+# ANSI color palette (adjusted for dark background)
+palette = 0=000000
+palette = 1=f38ba8
+palette = 2=a6e3a1
+palette = 3=f9e2af
+palette = 4=89b4fa
+palette = 5=cba6f7
+palette = 6=94e2d5
+palette = 7=e0d8c0
+palette = 8=585b70
+palette = 9=f38ba8
+palette = 10=a6e3a1
+palette = 11=f9e2af
+palette = 12=89b4fa
+palette = 13=cba6f7
+palette = 14=94e2d5
+palette = 15=faf0c8
+
+# Cursor colors
+cursor-color = f5e0dc
+cursor-text = 1e1e1e
+
+# Selection colors
+selection-background = 313244
+selection-foreground = d4d4d4

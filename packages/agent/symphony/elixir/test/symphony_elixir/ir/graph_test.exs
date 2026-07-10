@@ -1,7 +1,10 @@
 defmodule SymphonyElixir.IR.GraphTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.IR.{Graph, Node, RunGraph}
+  alias SymphonyElixir.IR.Attempt
+  alias SymphonyElixir.IR.Graph
+  alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.IR.RunGraph
 
   defp node(id, opts) do
     Node.new(
@@ -11,7 +14,7 @@ defmodule SymphonyElixir.IR.GraphTest do
   end
 
   defp graph(nodes) do
-    RunGraph.new("run-1", "hash", nil) |> RunGraph.put_nodes(nodes)
+    "run-1" |> RunGraph.new("hash", nil) |> RunGraph.put_nodes(nodes)
   end
 
   describe "ready_nodes/1" do
@@ -63,7 +66,7 @@ defmodule SymphonyElixir.IR.GraphTest do
 
   describe "apply_output/3" do
     test "success marks the node succeeded and records output" do
-      g = graph([node("a", state: :running)]) |> Graph.apply_output("a", {:ok, :done})
+      g = [node("a", state: :running)] |> graph() |> Graph.apply_output("a", {:ok, :done})
       assert g.nodes["a"].state == :succeeded
       assert g.nodes["a"].output == :done
     end
@@ -111,6 +114,108 @@ defmodule SymphonyElixir.IR.GraphTest do
 
       assert g.nodes["a"].state == :pending
       assert g.nodes["a"].output == nil
+    end
+  end
+
+  describe "attempt bookkeeping" do
+    test "mark_running opens a running attempt recording the executor kind" do
+      g = graph([node("a", state: :pending)])
+
+      g = Graph.mark_running(g, g.nodes["a"], 1)
+
+      assert %Node{state: :running, attempts: [attempt]} = g.nodes["a"]
+      assert %Attempt{n: 1, engine: :exec, state: :running, outcome: nil} = attempt
+    end
+
+    test "running -> finished: the open attempt closes with outcome, cost, and thread id" do
+      cost = %{usd: 0.5, tokens_in: 10}
+      g = graph([node("a", state: :pending)])
+
+      g = Graph.mark_running(g, g.nodes["a"], 1)
+      g = Graph.record_finished_attempt(g, "a", {:ok, %{cost: cost}}, "thread-1")
+
+      assert [attempt] = g.nodes["a"].attempts
+      assert %Attempt{n: 1, state: :succeeded, outcome: :ok, cost: ^cost, thread_id: "thread-1"} = attempt
+      assert attempt.finished_at
+    end
+
+    test "a failed result closes the attempt :failed with the error and no cost" do
+      g = graph([node("a", state: :pending)])
+
+      g = Graph.mark_running(g, g.nodes["a"], 1)
+      g = Graph.record_finished_attempt(g, "a", {:error, :boom}, nil)
+
+      assert [%Attempt{state: :failed, outcome: {:error, :boom}, cost: nil}] = g.nodes["a"].attempts
+    end
+
+    test "cost accumulates per attempt: a retry's cost lands on the new attempt only" do
+      g = graph([node("a", state: :pending)])
+
+      g = Graph.mark_running(g, g.nodes["a"], 1)
+      g = Graph.record_finished_attempt(g, "a", {:ok, %{cost: %{usd: 1.0}}}, "t1")
+      g = Graph.mark_running(g, g.nodes["a"], 2)
+      g = Graph.record_finished_attempt(g, "a", {:ok, %{cost: %{usd: 2.0}}}, "t2")
+
+      assert [%Attempt{n: 1, cost: %{usd: 1.0}}, %Attempt{n: 2, cost: %{usd: 2.0}}] =
+               Enum.sort_by(g.nodes["a"].attempts, & &1.n)
+    end
+
+    test "record_finished_attempt synthesizes an attempt when none was recorded" do
+      g = graph([node("a", state: :running)])
+
+      g = Graph.record_finished_attempt(g, "a", {:ok, %{}}, "thread-9")
+
+      assert [%Attempt{n: 1, state: :succeeded, thread_id: "thread-9"}] = g.nodes["a"].attempts
+    end
+
+    test "record_finished_attempt on an unknown node is a no-op" do
+      g = graph([node("a", state: :pending)])
+      assert Graph.record_finished_attempt(g, "nope", {:ok, %{}}, nil) == g
+    end
+
+    test "record_attempt_thread_id stamps only a running node's open attempt" do
+      g = graph([node("a", state: :pending)])
+      g = Graph.mark_running(g, g.nodes["a"], 1)
+
+      g = Graph.record_attempt_thread_id(g, "a", "mid-flight")
+      assert [%Attempt{thread_id: "mid-flight"}] = g.nodes["a"].attempts
+
+      # A node with no open attempt, a non-running node, and an unknown id
+      # are all no-ops: the terminal path already recorded the handle.
+      fresh = graph([node("b", state: :pending)])
+      assert Graph.record_attempt_thread_id(fresh, "b", "x") == fresh
+      assert Graph.record_attempt_thread_id(fresh, "nope", "x") == fresh
+    end
+
+    test "mark_attempt_stranded closes the current attempt as stranded" do
+      g = graph([node("a", state: :pending)])
+      g = Graph.mark_running(g, g.nodes["a"], 1)
+
+      g = Graph.mark_attempt_stranded(g, g.nodes["a"])
+
+      assert [%Attempt{n: 1, state: :stranded, outcome: :stranded}] = g.nodes["a"].attempts
+    end
+
+    test "mark_attempt_stranded synthesizes an attempt when none was recorded" do
+      g = graph([node("a", state: :running)])
+
+      g = Graph.mark_attempt_stranded(g, g.nodes["a"])
+
+      assert [%Attempt{n: 1, state: :stranded, outcome: :stranded}] = g.nodes["a"].attempts
+    end
+
+    test "transition sets the node state without touching output or attempts" do
+      g = graph([node("a", state: :pending)])
+      g = Graph.mark_running(g, g.nodes["a"], 1)
+
+      g = Graph.transition(g, "a", :stranded)
+
+      assert g.nodes["a"].state == :stranded
+      assert [%Attempt{state: :running}] = g.nodes["a"].attempts
+      assert g.nodes["a"].output == nil
+
+      # An unknown id is a no-op, matching the other bookkeeping entries.
+      assert Graph.transition(g, "nope", :cancelled) == g
     end
   end
 

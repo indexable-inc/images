@@ -5,6 +5,8 @@ members = [
   "packages/build-version",
   "packages/agent/claude-hooks",
   "packages/agent/claude-stories",
+  "packages/agent/subagent-cache",
+  "packages/audio/dsp",
   "packages/code/ast-merge/ast",
   "packages/code/ast-merge/cli",
   "packages/code/ast-merge/diff",
@@ -25,11 +27,18 @@ members = [
   "packages/code/clone-detect/hash",
   "packages/code/clone-detect/pragma",
   "packages/code/clone-detect/scanner",
+  "packages/code/clone-detect/test-support",
   "packages/config-launch",
+  "packages/cve-scan",
   "packages/code/code-highlight",
   "packages/search/code-tokenizer",
   "packages/dag-runner",
   "packages/code/edit-applier",
+  "packages/code/error-chain",
+  "packages/efx/cli",
+  "packages/efx/engine",
+  "packages/efx/ir",
+  "packages/efx/lang",
   "packages/code/file-language",
   "packages/search/file-search",
   "packages/code/scipql/core",
@@ -47,6 +56,7 @@ members = [
   "packages/google/gmail/cli",
   "packages/google/mcp",
   "packages/google/py",
+  "packages/index-delta",
   "packages/indexbench",
   "packages/ix-dev-diagnose",
   "packages/ix-windows",
@@ -55,8 +65,11 @@ members = [
   "packages/minecraft/minecraft/nbt",
   "packages/minecraft/minecraft/sound",
   "packages/minecraft/minecraft/sync-managed",
+  "packages/mirror",
+  "packages/mcp/server-info",
   "packages/search/mixedbread",
   "packages/mynoise",
+  "packages/nu-py",
   "packages/nix/nix-web-monitor/parser",
   "packages/nix/nix-web-monitor/server",
   "packages/nix/oci-image-builder",
@@ -74,6 +87,7 @@ members = [
   "packages/search/source/parquet",
   "packages/search/search-py",
   "packages/skill-lint",
+  "packages/sqlmerge",
   "packages/search/source/slack",
   "packages/search/sink/mixedbread",
   "packages/search/sink/parquet",
@@ -84,6 +98,24 @@ members = [
   "packages/tui/tui",
   "packages/tui/tui-node",
   "packages/tui/tui-py",
+  "packages/unibind/backend-ex",
+  "packages/unibind/backend-py",
+  "packages/unibind/backend-ts",
+  "packages/unibind/conformance",
+  "packages/unibind/conformance-ex",
+  "packages/unibind/conformance-ts",
+  "packages/unibind/core",
+  "packages/unibind/ex-runtime",
+  "packages/unibind/gen",
+  "packages/unibind/macros",
+  "packages/unibind/py-runtime",
+  "packages/unibind/runtime",
+  "packages/unibind/test-support",
+  "packages/vm/panes/audio",
+  "packages/vm/panes/compositor",
+  "packages/vm/panes/host",
+  "packages/vm/panes/guest-transport",
+  "packages/vm/panes/protocol",
   "packages/vm/vmkit",
   "packages/tui/vt/ix-vt",
   "packages/tui/vt/ix-vt-sys",
@@ -131,6 +163,7 @@ anstyle = "1"
 anyhow = "1"
 arrow = "59"
 ast-merge-ast = { path = "packages/code/ast-merge/ast" }
+audio-dsp = { path = "packages/audio/dsp" }
 ast-merge-diff = { path = "packages/code/ast-merge/diff" }
 ast-merge-git = { path = "packages/code/ast-merge/git" }
 ast-merge-langs = { path = "packages/code/ast-merge/langs" }
@@ -140,6 +173,9 @@ axum = "0.8"
 base64 = "0.22"
 build-version = { path = "packages/build-version" }
 bytes = "1"
+# Pure-Rust bzip2 (the 0.6 default backend is libbz2-rs-sys), used to read
+# Nix's build logs, which are bzip2-compressed on disk while being written.
+bzip2 = "0.6"
 chrono = { version = "0.4", default-features = false }
 clap = "4"
 source-atuin = { path = "packages/search/source/atuin" }
@@ -152,8 +188,11 @@ clone-detect = { path = "packages/code/clone-detect/detect" }
 clone-hash = { path = "packages/code/clone-detect/hash" }
 clone-pragma = { path = "packages/code/clone-detect/pragma" }
 clone-scanner = { path = "packages/code/clone-detect/scanner" }
+clone-test-support = { path = "packages/code/clone-detect/test-support" }
+error-chain = { path = "packages/code/error-chain" }
 code-highlight = { path = "packages/code/code-highlight" }
 code-tokenizer = { path = "packages/search/code-tokenizer" }
+file-search = { path = "packages/search/file-search" }
 github-avatar = { path = "packages/github-avatar" }
 google-auth = { path = "packages/google/auth" }
 google-calendar = { path = "packages/google/calendar" }
@@ -165,15 +204,20 @@ kitty = { path = "packages/terminal/kitty" }
 lake-iceberg = { path = "packages/search/lake/iceberg" }
 color-eyre = "0.6"
 dashboard-core = { path = "packages/dashboard/dashboard-core" }
+deadpool-postgres = "0.14"
 devicons = "0.6"
 dirs = "6"
 edit-applier = { path = "packages/code/edit-applier" }
+efx-engine = { path = "packages/efx/engine" }
+efx-ir = { path = "packages/efx/ir" }
+efx-lang = { path = "packages/efx/lang" }
 file-language = { path = "packages/code/file-language" }
 flecs-query-core = { path = "packages/flecs-query/core" }
 fontdue = "0.9"
 futures = "0.3"
 git2 = { version = "0.21", default-features = false }
 glob = "0.3"
+heck = "0.5"
 hex = "0.4"
 hegeltest = { version = "0.14", default-features = false }
 # The Iceberg corpus lake (issue #752). iceberg 0.9 pins arrow/parquet ^57.1
@@ -198,22 +242,47 @@ napi-derive = "3"
 ndarray = "0.17"
 nix = "0.31"
 nix-web-monitor-parser = { path = "packages/nix/nix-web-monitor/parser" }
+# The embedded nushell engine nu-py wraps. One version for the whole family,
+# aligned with pkgs.nushell so embedded semantics match the CLI on PATH.
+# nu-command drops its default `sqlite` feature (`stor`, `into sqlite`): its
+# rusqlite 0.37 pins libsqlite3-sys 0.35, which collides with source-atuin's
+# rusqlite 0.40 on the one-per-graph `links = "sqlite3"` native library.
+nu-cmd-extra = "0.114.0"
+nu-cmd-lang = "0.114.0"
+nu-command = { version = "0.114.0", default-features = false, features = ["os", "network", "rustls-tls"] }
+nu-engine = "0.114.0"
+nu-experimental = "0.114.0"
+nu-parser = "0.114.0"
+nu-protocol = "0.114.0"
 numpy = "0.28"
 objc2 = "0.6"
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
+objc2-quartz-core = "0.3"
 objc2-web-kit = "0.3"
-object_store = { version = "0.13", features = ["aws"] }
+object = { version = "0.39", default-features = false, features = ["read"] }
+object_store = { version = "0.14", features = ["aws"] }
+mcp-server-info = { path = "packages/mcp/server-info" }
+panes-protocol = { path = "packages/vm/panes/protocol" }
+panes-guest-transport = { path = "packages/vm/panes/guest-transport" }
 parking_lot = "0.12"
 parquet = { version = "59", features = ["arrow"] }
 percent-encoding = "2"
+# Apple property lists for index-delta's logical-diff engines: macOS `defaults`
+# domains and LaunchAgents are plists (XML and binary), so drift in them must be
+# diffed as parsed values, not bytes.
+plist = "1"
+prettyplease = "0.2"
+proc-macro2 = "1"
 progress-style = { path = "packages/progress-style" }
+rmcp = { version = "2.0", default-features = false, features = ["server", "macros", "transport-io"] }
 protobuf = "3"
 pty-process = { version = "0.5", features = ["async"] }
 pyo3 = { version = "0.28", features = ["abi3-py311"] }
 pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
 pythonize = "0.28"
 quartz_nbt = "0.2.9"
+quote = "1"
 rayon = "1"
 regex = "1"
 repo-walker = { path = "packages/repo-walker" }
@@ -227,9 +296,10 @@ rmp-serde = "1"
 rodio = { version = "0.22", default-features = false, features = ["playback", "vorbis"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 rustc-hash = "2.1"
+rustler = "0.38"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
-scip = "0.8"
+scip = "0.9"
 scipql-core = { path = "packages/code/scipql/core" }
 search-core = { path = "packages/search/search-core" }
 source-meta = { path = "packages/search/source/meta" }
@@ -244,6 +314,7 @@ sink-mixedbread = { path = "packages/search/sink/mixedbread" }
 sink-parquet = { path = "packages/search/sink/parquet" }
 snafu = "0.9"
 strip-ansi-escapes = "0.2"
+syn = { version = "2", features = ["full"] }
 tango-bench = "0.7"
 tantivy = "0.26"
 tao = "0.35"
@@ -252,9 +323,13 @@ tempfile = "3"
 terminal-light = "1"
 terminal-theme = { path = "packages/terminal/terminal-theme" }
 tokio = "1"
+tokio-postgres = "0.7"
 tokio-stream = "0.1"
 tokio-util = "0.7"
 toml = { version = "1.1.2", default-features = false }
+# Format-preserving TOML rewriting for packages/mirror: inlining workspace
+# inheritance into standalone manifests without losing comments.
+toml_edit = "0.25"
 tower = "0.5"
 tower-http = "0.7"
 tracing = "0.1"
@@ -292,8 +367,21 @@ tree-sitter-toml-ng = "0.7"
 tree-sitter-typescript = "0.23"
 tree-sitter-yaml = "0.7"
 tui = { path = "packages/tui/tui" }
+unibind = { path = "packages/unibind/macros" }
+unibind-backend-ex = { path = "packages/unibind/backend-ex" }
+unibind-backend-py = { path = "packages/unibind/backend-py" }
+unibind-backend-ts = { path = "packages/unibind/backend-ts" }
+unibind-core = { path = "packages/unibind/core" }
+unibind-test-support = { path = "packages/unibind/test-support" }
+unibind-ex-runtime = { path = "packages/unibind/ex-runtime" }
+unibind-py-runtime = { path = "packages/unibind/py-runtime" }
+unibind-runtime = { path = "packages/unibind/runtime" }
 url = { version = "2.5.8", default-features = false }
 uuid = "1"
 webpki-roots = "1"
-wry = "0.55"
+# `transparent` is a non-default feature: without it `with_transparent(true)`
+# is a silent no-op and the webview paints an opaque canvas, hiding the
+# ix-windows blur behind a flat card.
+wry = { version = "0.55", features = ["transparent"] }
 x509-parser = "0.18"
+xxhash-rust = { version = "0.8", default-features = false }

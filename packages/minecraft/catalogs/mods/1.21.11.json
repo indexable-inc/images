@@ -1,0 +1,30 @@
+{
+  "distanthorizons": {
+    "hash": "sha512-FBkOviAElWlRyalyMrdML9i/vtZJbwRKVYgufUvhh8GmwmiNYv64lVG0o+0xUzcOX5AG+YGRtvhwm4kdjzubYg==",
+    "url": "https://cdn.modrinth.com/data/uCdwusMi/versions/bCTilxSz/DistantHorizons-3.2.0-b-1.21.11-fabric-neoforge.jar"
+  },
+  "fabric-api": {
+    "hash": "sha512-wJLUjGRTvsMmT4D2o1uzNKujEStc1sDgsmds5NgecCyx5SIzfzpzI0jnV8wiJto8YBoxSuh2YzTxavcaE7zJjQ==",
+    "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/5zJNhXV2/fabric-api-0.141.4%2B1.21.11.jar"
+  },
+  "spark": {
+    "hash": "sha512-dGCskqEkHzcyOLev48no3GcQHTzG2VMi+ahrfbTcO+XaXjzoCtllO/9oL3lqec2DhIUeDtdXtGjy9Str3nHLAA==",
+    "url": "https://cdn.modrinth.com/data/l6YH9Als/versions/gonLOAU1/spark-1.10.170-fabric.jar"
+  },
+  "terrain-diffusion": {
+    "hash": "sha256-qenGaiUue9508lSkBWUy7gvovP68nCl7h3PoQ0e8ews=",
+    "url": "https://github.com/xandergos/terrain-diffusion-mc/releases/download/v2.1.0/terrain-diffusion-mc-2.1.0-cpu%2B1.21.11.jar"
+  },
+  "viabackwards": {
+    "hash": "sha512-owERMoP/jay18qxMRWMrN63nlWNonuNCyedLzhalyAXXLsZBsF+G/XclWDEoYPkvX9Uq4kbMKHYlNKS+15S+qg==",
+    "url": "https://cdn.modrinth.com/data/NpvuJQoq/versions/YjpKsm6j/ViaBackwards-5.10.0.jar"
+  },
+  "viarewind": {
+    "hash": "sha512-6IsW3k5c3/wG7+GAdDj4nAf25L/5qNr3WW+Tcg5rpKTOuw3yf1ZzEtjZ8do2qQi8+67IA9WL+OHlxL3v8lvlzQ==",
+    "url": "https://cdn.modrinth.com/data/TbHIxhx5/versions/wzgBAvKl/ViaRewind-4.1.2.jar"
+  },
+  "viaversion": {
+    "hash": "sha512-O53082YOAnMRru4vae7om2wAEQu2pxmx63hWffXwA/j+nkV0V7QXdBAX7Wialgp5VuoysOpxL0gfK5o73pNVAQ==",
+    "url": "https://cdn.modrinth.com/data/P1OZGk5p/versions/ruzmiBqe/ViaVersion-5.10.0.jar"
+  }
+}

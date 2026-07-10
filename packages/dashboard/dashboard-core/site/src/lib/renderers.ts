@@ -9,8 +9,10 @@
 import type { Component } from 'svelte';
 import DataBody from '$components/DataBody.svelte';
 import ExecBody from '$components/ExecBody.svelte';
+import FileViewBody from '$components/FileViewBody.svelte';
 import HtmlBody from '$components/HtmlBody.svelte';
 import NamespaceBody from '$components/NamespaceBody.svelte';
+import NixBuildBody from '$components/NixBuildBody.svelte';
 import TermBody from '$components/TermBody.svelte';
 import type { Pane } from './types';
 
@@ -28,6 +30,11 @@ export const renderers: Record<string, Component<{ pane: Pane }>> = {
 // aggregator change. `namespace` (a Python session's live globals) is the first.
 const dataRenderers: Record<string, Component<{ pane: Pane }>> = {
   namespace: NamespaceBody,
+  // A read's highlighted file card (the kernel's `read` tool / `view.cat`).
+  'file-view': FileViewBody,
+  // A live Nix build tree (the kernel's `nix.run`/`nix.build`), streamed from the
+  // nix-web-monitor emitter's BuildView.
+  'nix-build': NixBuildBody,
 };
 
 export const fallback: Component<{ pane: Pane }> = DataBody;

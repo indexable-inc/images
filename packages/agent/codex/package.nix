@@ -11,4 +11,5 @@
   # (`nix run .#codex`, `index.packages.<sys>.codex`) that bakes our defaults on
   # top of that same base, without changing what the overlay hands other code.
   flake = true;
+  overlay = false;
 }

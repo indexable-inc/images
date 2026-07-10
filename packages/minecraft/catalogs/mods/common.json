@@ -1,0 +1,10 @@
+{
+  "almanac": {
+    "hash": "sha512-ccUBMwIxZC28BfhIate3B1bDzU52s2pqDpElRB2VgGp98PcIjPyA+74CT1xRU8MZiDq884vMYeYWdIrvHn5GFQ==",
+    "url": "https://cdn.modrinth.com/data/Gi02250Z/versions/7IRzJzBP/almanac-1.26.x-fabric-1.6.2.1.jar"
+  },
+  "lmd": {
+    "hash": "sha512-2ovLUiqfx070ANS2vP0RMNHb1kWOuxUsF3Lra32zngmtRE5F0iII6AQvxwSNpPZYTi9RDouDlsnq6B90EPteBQ==",
+    "url": "https://cdn.modrinth.com/data/vE2FN5qn/versions/eW5P1rHo/letmedespawn-1.26.x-fabric-1.6.2.1.jar"
+  }
+}

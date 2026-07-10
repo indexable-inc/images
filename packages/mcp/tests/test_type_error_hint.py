@@ -101,6 +101,12 @@ class TestTypeErrorHint:
         finally:
             rt._user_ns = old_ns
 
+    def test_sh_extra_positional_arg_gets_argv_hint(self) -> None:
+        """The common sh('git', 'status') mistake should point at sh([...])."""
+        h = self.hint(TypeError("sh() takes 1 positional argument but 2 were given"))
+        assert "sh(['git', 'status'])" in h
+        assert "cwd=" in h
+
     def test_never_raises(self) -> None:
         """_type_error_hint must never raise regardless of input."""
         for exc in [

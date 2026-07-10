@@ -1,5 +1,11 @@
 import Config
 
+# Zone-aware DateTime math (the cron trigger's `tz "..."` evaluation) resolves
+# IANA zones through time_zone_info's bundled database. Its default
+# `update: :disabled` keeps lookups fully offline, which the sandboxed nix
+# check requires.
+config :elixir, :time_zone_database, TimeZoneInfo.TimeZoneDatabase
+
 config :phoenix, :json_library, Jason
 
 config :symphony_elixir, SymphonyElixirWeb.Endpoint,

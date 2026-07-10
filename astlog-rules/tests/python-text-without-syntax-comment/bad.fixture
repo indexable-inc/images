@@ -1,0 +1,5 @@
+{
+  src = pkgs.writeText "tool.py" ''
+    print("ok")
+  '';
+}

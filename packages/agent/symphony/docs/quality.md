@@ -55,8 +55,10 @@ is to see the violations, not to enforce them yet.
 Phase B lands only after the top-down overhaul cutover, once the module set is
 final, so we do not spend effort on modules the cutover deletes. Steps:
 
-1. One-time Styler reformat, then enable the Styler formatter plugin in
-   `.formatter.exs`.
+1. Done: one-time Styler reformat, and the Styler formatter plugin is now
+   active in `.formatter.exs`. `mix format` (and the `symphony-elixir` flake
+   check's `format --check-formatted`) applies Styler's rewrites on every
+   run, so new code is kept in the same style going forward.
 2. Add Boundary as a dep and `use Boundary` annotations encoding the layer
    rules: DSL -> IR -> Runtime -> `Engine.Client`; `Engine.Client` is the only
    door to the room-server; `bridge`/`state`/`http` never name a concrete

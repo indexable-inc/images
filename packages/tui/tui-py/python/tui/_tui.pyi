@@ -50,6 +50,7 @@ class TuiInstance:
         rows: int | None = ...,
         cols: int | None = ...,
         scrollback_lines: int | None = ...,
+        env: dict[str, str] | None = ...,
     ) -> None: ...
     @staticmethod
     def list_all() -> list[TuiInstance]: ...

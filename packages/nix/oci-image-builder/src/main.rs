@@ -7,7 +7,7 @@ use std::env;
 use std::error::Error;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 
@@ -373,9 +373,16 @@ fn run_assemble_desc(args: &[String]) -> Result<(), Box<dyn Error>> {
         layers.push(desc);
     }
 
-    // Customisation layer on top. It is a prebuilt derivation output carrying its
-    // own checksum, so describing it reads a file rather than tarring anything.
-    let cust = make_customisation_layer(0, &conf.customisation_layer, &image_work()?.blobs_dir)?;
+    // Customisation layer on top. It is a prebuilt derivation output carrying
+    // its own checksum; describing it hashes the prebuilt tar (verifying that
+    // checksum) without re-tarring anything.
+    let cust_work = image_work()?;
+    let cust = make_customisation_layer(
+        0,
+        &conf.customisation_layer,
+        &cust_work.layers_dir,
+        &cust_work.blobs_dir,
+    )?;
     layers.push(LayerDesc {
         digest: format!("sha256:{}", cust.checksum),
         diff_id: format!("sha256:{}", cust.checksum),
@@ -487,6 +494,7 @@ fn assemble(
     layers.push(make_customisation_layer(
         base_layer_count + conf.store_layers.len() + 1,
         &conf.customisation_layer,
+        layers_dir,
         blobs_dir,
     )?);
     sources.push(LayerSource::Customisation {
@@ -679,8 +687,11 @@ fn regenerate_layer(
         LayerSource::Base { archive, member } => {
             regenerate_base_member(archive, member, layers_dir, blobs_dir)?
         }
+        // `make_customisation_layer` hashes the copied bytes, so the digest
+        // check below verifies real content instead of echoing the checksum
+        // file back at itself (index#2058).
         LayerSource::Customisation { dir } => {
-            make_customisation_layer(0, &dir.to_string_lossy(), blobs_dir)?
+            make_customisation_layer(0, &dir.to_string_lossy(), layers_dir, blobs_dir)?
         }
     };
 
@@ -1122,6 +1133,7 @@ fn make_store_layer(
 fn make_customisation_layer(
     number: usize,
     customisation_layer: &str,
+    layers_dir: &Path,
     blobs_dir: &Path,
 ) -> Result<Layer, Box<dyn Error>> {
     eprintln!("Creating layer {number} with customisation...");
@@ -1134,10 +1146,31 @@ fn make_customisation_layer(
         return Err(format!("oci-image-builder: invalid layer checksum: {checksum}").into());
     }
 
+    // Copy the bytes into the blob rather than symlinking into the store: a
+    // symlinked blob left the final archive depending on out-of-tar store
+    // state, and the base-image-nix-db check failed whenever the referenced
+    // path was not visible at read time (index#2058). Hashing during the copy
+    // makes the derivation's `checksum` file verified instead of trusted;
+    // that digest flows into the manifest and diff_ids, so mismatched bytes
+    // would ship a manifest lying about its content.
     let layer_path = customisation_layer.join("layer.tar");
-    let size = fs::metadata(&layer_path)?.len();
+    let tmp = layers_dir.join(format!("{number}.customisation.tar"));
+    let mut writer = HashingWriter::new(File::create(&tmp)?);
+    io::copy(&mut File::open(&layer_path)?, &mut writer)?;
+    let HashedBytes {
+        size,
+        checksum: computed,
+    } = writer.finalize();
+    if computed != checksum {
+        return Err(format!(
+            "oci-image-builder: customisation layer digest mismatch: \
+             checksum file records {checksum} but {} hashes to {computed}",
+            layer_path.display()
+        )
+        .into());
+    }
     let tar_path = blobs_dir.join(&checksum);
-    symlink(&layer_path, &tar_path)?;
+    fs::rename(&tmp, &tar_path)?;
 
     Ok(Layer {
         checksum,
@@ -1954,6 +1987,66 @@ mod tests {
             .collect())
     }
 
+    /// Assert the archive is self-contained: every blob the manifest
+    /// references (config and layers) is a regular tar entry, not a symlink
+    /// into the store, whose size matches the manifest and whose bytes hash
+    /// to its digest. A symlinked blob made the archive depend on out-of-tar
+    /// store state (index#2058).
+    fn assert_blobs_embedded(tar_path: &Path) -> Result<(), Box<dyn Error>> {
+        let index: Value = serde_json::from_slice(&read_member(tar_path, "index.json")?)?;
+        let manifest_digest = index["manifests"][0]["digest"].as_str().unwrap();
+        let manifest_member = format!(
+            "blobs/sha256/{}",
+            manifest_digest.strip_prefix("sha256:").unwrap()
+        );
+        let manifest: Value = serde_json::from_slice(&read_member(tar_path, &manifest_member)?)?;
+
+        let mut blobs: Vec<(String, u64)> = vec![(
+            manifest["config"]["digest"].as_str().unwrap().to_owned(),
+            manifest["config"]["size"].as_u64().unwrap(),
+        )];
+        for layer in manifest["layers"].as_array().unwrap() {
+            blobs.push((
+                layer["digest"].as_str().unwrap().to_owned(),
+                layer["size"].as_u64().unwrap(),
+            ));
+        }
+
+        for (digest, size) in blobs {
+            let member = format!("blobs/sha256/{}", digest.strip_prefix("sha256:").unwrap());
+            let mut found = false;
+            for entry in tar::Archive::new(File::open(tar_path)?).entries()? {
+                let mut entry = entry?;
+                if entry.path()?.to_string_lossy() != member {
+                    continue;
+                }
+                found = true;
+                assert_eq!(
+                    entry.header().entry_type(),
+                    tar::EntryType::Regular,
+                    "{member} must be a regular tar entry"
+                );
+                let mut bytes = Vec::new();
+                entry.read_to_end(&mut bytes)?;
+                assert_eq!(
+                    bytes.len() as u64,
+                    size,
+                    "{member} size differs from the manifest"
+                );
+                assert_eq!(
+                    format!("sha256:{}", sha256_bytes(&bytes)),
+                    digest,
+                    "{member} bytes do not hash to the manifest digest"
+                );
+            }
+            assert!(
+                found,
+                "{member} referenced by the manifest but absent from the archive"
+            );
+        }
+        Ok(())
+    }
+
     fn make_customisation_dir(dir: &Path) -> Result<(), Box<dyn Error>> {
         fs::create_dir_all(dir)?;
         let tar = layer_tar(&[("app/run", b"hi")]);
@@ -2035,6 +2128,9 @@ mod tests {
             .map(|layer| layer.digest.clone())
             .collect();
         assert_eq!(described, build_digests);
+
+        assert_blobs_embedded(&built)?;
+        assert_blobs_embedded(&materialized)?;
         Ok(())
     }
 
@@ -2133,6 +2229,45 @@ mod tests {
         assert_eq!(
             oci_layer_digests(&mat_one)?,
             oci_layer_digests(&mat_sharded)?
+        );
+        Ok(())
+    }
+
+    /// A rewritten `layer.tar` next to a stale checksum file must fail the
+    /// build: the recorded digest flows into the manifest and `diff_ids`, so
+    /// shipping the new bytes under the old digest would produce an image
+    /// whose manifest lies about its content (index#2058).
+    #[test]
+    fn build_rejects_tampered_customisation_layer() -> Result<(), Box<dyn Error>> {
+        let work = tempdir()?;
+        let cust = work.path().join("cust");
+        make_customisation_dir(&cust)?;
+        fs::write(
+            cust.join("layer.tar"),
+            layer_tar(&[("app/run", b"tampered")]),
+        )?;
+
+        let plan = serde_json::json!({
+            "architecture": "amd64",
+            "config": {},
+            "from_image": Value::Null,
+            "store_layers": [],
+            "customisation_layer": cust.to_string_lossy(),
+            "created": "1970-01-01T00:00:01Z",
+            "mtime": "1970-01-01T00:00:01Z",
+            "uid": "0",
+            "gid": "0",
+            "store_dir": work.path().join("store").to_string_lossy(),
+        });
+        let conf = work.path().join("conf.json");
+        fs::write(&conf, serde_json::to_vec(&plan)?)?;
+
+        let result = run_build(&conf, &work.path().join("out.tar"), None);
+
+        assert!(
+            result
+                .err()
+                .is_some_and(|error| error.to_string().contains("digest mismatch"))
         );
         Ok(())
     }

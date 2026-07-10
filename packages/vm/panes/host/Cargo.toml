@@ -1,0 +1,47 @@
+# macOS host agent: one native NSWindow (CAMetalLayer) per guest toplevel,
+# input forwarded back over the same stream.
+#
+# `clap`, `lz4_flex` and the protocol crate are unconditional: the built-in
+# mock guest (`--mock-serve`) compiles and runs on any OS, which is also what
+# keeps the Linux clippy pass meaningful for this otherwise Apple-only crate.
+# The Apple-framework crates stay gated to `cfg(target_os = "macos")` (the
+# vmkit pattern), so a Linux build pulls none of them.
+[package]
+name = "panes-host"
+version = "0.1.0"
+edition = "2024"
+publish.workspace = true
+description = "macOS agent presenting guest-Linux windows as native NSWindows"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+lz4_flex = "0.13"
+panes-protocol.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Error plumbing for the audio connection path only; the window path keeps
+# its original log-and-return style.
+anyhow.workspace = true
+# `RcBlock` for the trace-only MTLDrawable presented handler (tick-to-glass
+# ground truth, see src/trace.rs).
+block2 = "0.6"
+# CoreAudio playback for the guest's PCM stream (vsock port 7102, the
+# protocol crate's `audio` module). Already vendored in the workspace lock
+# via minecraft-sound's rodio.
+cpal = "0.18"
+# Main-queue handoff: the socket reader thread owns the stream and
+# `exec_async`s decoded messages onto the AppKit main thread.
+dispatch2 = "0.3"
+objc2.workspace = true
+objc2-app-kit.workspace = true
+# Pointer capture for guest pointer locks (index#1724):
+# CGAssociateMouseAndMouseCursorPosition parks the cursor while NSEvent
+# deltas keep flowing. Already in the tree as an objc2-app-kit dependency.
+objc2-core-graphics = "0.3"
+objc2-foundation.workspace = true
+objc2-metal = "0.3"
+objc2-quartz-core = "0.3"
+
+[lints]
+workspace = true

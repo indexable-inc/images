@@ -1,0 +1,8 @@
+{
+  "wasm-bindgen-cli": {
+    "version": "0.2.123",
+    "url": "https://static.crates.io/crates/wasm-bindgen-cli/wasm-bindgen-cli-0.2.123.crate",
+    "prefetch": "unpack",
+    "hash": "sha256-ymeAEYsr7OnupWYJWjSeVGvq3+s+zxSNkODbzY62rYs="
+  }
+}

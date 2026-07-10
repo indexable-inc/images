@@ -1,0 +1,5 @@
+repositories:
+  - name: index
+    owner_repo: indexable-inc/index
+    default_branch: main
+    primary: true

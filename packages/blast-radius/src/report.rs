@@ -212,7 +212,7 @@ mod tests {
 
     // Locks in the single-check collapse and keeps it in sync with the
     // workflow's jq renderer (validated against the same shape by
-    // tools/blast-radius-test.sh against tools/blast-radius-fixtures/).
+    // packages/blast-radius/tests/blast-radius-test.sh against packages/blast-radius/tests/fixtures/).
     #[test]
     fn single_check_cause_collapses_to_one_node() {
         let md = sample_report(BTreeMap::new()).to_markdown();
@@ -259,7 +259,7 @@ mod tests {
     // A PR that rebuilds thousands of checks must not blow GitHub's 65536-char
     // comment body limit: the list caps at CHANGED_LIST_CAP with an overflow
     // note, while the summary still carries the true total. Mirrors the trusted
-    // jq renderer's cap (tools/blast-radius-test.sh asserts the same bound).
+    // jq renderer's cap (packages/blast-radius/tests/blast-radius-test.sh asserts the same bound).
     #[test]
     fn caps_long_changed_list() {
         let mut report = sample_report(BTreeMap::new());

@@ -25,6 +25,20 @@ nixpkgs only provides libkrun on Darwin as **libkrun-efi** (classic libkrun's `l
 
 The known trap is an old guest Mesa: venus against a MoltenVK host needed Mesa fixes that stable-distro Mesas lacked for a while, which is why krunkit's proven guests (Fedora's podman-machine image) shipped a patched Mesa until the fixes landed upstream. A guest with a current Mesa, including a stock NixOS guest built from this repo's pin, has them ([#709](https://github.com/indexable-inc/index/issues/709)).
 
+The other trap is the guest kernel's page size. venus maps its blob resources
+into the guest through the host's `hv_vm_map`, which rejects any address or
+size not aligned to the fixed 16 KiB Apple Silicon host page. The guest kernel
+`PAGE_ALIGN`s blob sizes and packs blob offsets at its own page granularity, so
+a default 4 KiB-page aarch64 kernel produces 4K-aligned maps that the host
+refuses: the guest sees `ERR_UNSPEC` on `RESOURCE_MAP_BLOB`/`UNMAP_BLOB`
+(`*ERROR* response 0x1200 (command 0x208/0x209)` on the console) and mesa
+falls back to lavapipe even though the venus ICD loaded and the capsets probed
+fine. Build the guest kernel with `CONFIG_ARM64_16K_PAGES=y` (see
+[panes-guest-image](../../panes/guest-image/nixos.nix), and muvm/Asahi as the
+upstream precedent); host-side rounding in libkrun would overlap neighbouring
+4K-packed blobs, so this is a guest requirement, not a vmkit bug
+([#1686](https://github.com/indexable-inc/index/issues/1686)).
+
 ## Linux host: boot a rootfs under classic libkrun (KVM)
 
 `vmkit boot-linux --root <rootfs-dir> [--gpu] -- <cmd> [args...]` shares a host directory into the guest over virtiofs as `/`, boots it under libkrun's bundled `libkrunfw` kernel, and runs `<cmd>` as the guest init. This is the same model `podman --runtime krun` and `crun` use: no firmware, no guest-supplied kernel, no EFI disk.
@@ -102,3 +116,31 @@ The networking + persistent-serve plumbing in `vmkit` is in place (`src/net.rs`,
 plus `networking.useDHCP = true` and the `nox-server` aarch64-linux package as a
 service). End-to-end (guest reaches the internet via gvproxy, host reaches
 `guest:3200`) is the validation that closes this out.
+
+## Guest IPC over vsock
+
+`--vsock-port GUEST_PORT:HOST_PATH` (repeatable) exposes a guest AF_VSOCK port
+as a host unix socket, on both hosts (both libkrun variants export the call):
+
+```sh
+# Guest service listens on vsock port 7100; host clients connect to the socket.
+vmkit boot-linux --disk ./guest.raw --vsock-port 7100:/tmp/guest.sock --timeout-secs 0
+```
+
+This is `krun_add_vsock_port2(ctx, port, path, listen = true)`: libkrun binds
+and listens on `HOST_PATH` and forwards each host `connect()` into the guest as
+a vsock connection to `GUEST_PORT`, so the guest side does
+`listen(AF_VSOCK, port)` (libkrun.h on the `listen` flag: "true if guest
+expects connections to be initiated from host side"). The plain
+`krun_add_vsock_port` (`listen = false`) is the reverse direction, guest
+connects out to a host socket, and is not wired here.
+
+Unlike TSI networking, this needs no patched guest kernel: virtio-vsock is a
+mainline driver, so it works with the stock EFI-guest kernel on macOS, and it
+is independent of `--net`/`--port` (vsock is its own virtio device, not the
+NIC). libkrun refuses an existing `HOST_PATH` with `-EEXIST`, so `vmkit`
+removes a stale *socket* at that path before adding the mapping (anything else
+there is an error). The intended use is a low-latency host<->guest control or
+streaming channel, e.g. a guest compositor listening on vsock port 7100 with a
+host agent connecting to the unix path. The Python wrapper takes the same
+mapping as `boot_linux(..., vsock_ports=[(7100, "/tmp/guest.sock")])`.

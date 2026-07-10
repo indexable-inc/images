@@ -1,13 +1,21 @@
-//! Claude Code hook commands, one compiled binary with three subcommands that
-//! replace the old hand-rolled `writeShellScript` hooks in
-//! `packages/agent/claude-code`. Every hook fails OPEN and SILENT: any missing input,
-//! parse error, or kill-switch returns with no stdout, because a noisy or broken
-//! hook is strictly worse than no hook.
+//! Claude Code / Codex hook commands, one compiled binary whose subcommands
+//! replace the old hand-rolled shell/Python hooks in `packages/agent/claude-code`
+//! and the personal `~/.config/nix` dotfiles. Every hook fails OPEN and SILENT:
+//! any missing input, parse error, or kill-switch returns with no stdout/stderr,
+//! because a noisy or broken hook is strictly worse than no hook.
 //!
-//! Tool paths and the baked primary-checkout default are passed by the
-//! claude-code wrapper via env (`IX_GIT`, `IX_SEARCH`,
-//! `IX_DEFAULT_PRIMARY_CHECKOUTS`); user-facing knobs keep their
-//! `CLAUDE_CODE_*` names.
+//! The neutral declaration list that maps each subcommand to its event/matcher
+//! for both agents lives in `packages/agent/policy/hooks.nix`; the wrappers bake
+//! the binary's tool paths and primary-checkout default via env
+//! (`IX_GIT`, `IX_SEARCH`, `IX_DEFAULT_PRIMARY_CHECKOUTS`), while user-facing
+//! knobs keep their `CLAUDE_CODE_*` names.
+
+mod friction;
+mod guards;
+mod retro;
+mod review;
+mod session_banner;
+mod wakeup;
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -17,6 +25,8 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, SecondsFormat};
 use serde::Serialize;
 use serde_json::Value;
+
+mod subagent_cache;
 
 /// `SessionStart` digest cap (~1500 tokens), inside the 10,000-char
 /// `additionalContext` limit.
@@ -68,6 +78,18 @@ fn main() -> ExitCode {
         Some("session-digest") => session_digest(),
         Some("worktree-guard") => worktree_guard(),
         Some("prompt-priors") => prompt_priors(),
+        Some("session-banner") => session_banner::session_banner(),
+        Some("review-log-edit") => review::review_log_edit(),
+        Some("review-gate") => review::review_gate(),
+        Some("retro-gate") => retro::retro_gate(),
+        Some("wakeup-log") => wakeup::wakeup_log(),
+        Some("wakeup-gate") => wakeup::wakeup_gate(),
+        Some("cargo-guard") => guards::cargo_guard(),
+        Some("bash-habits-guard") => guards::bash_habits_guard(),
+        Some("search-guard") => guards::search_guard(),
+        Some("friction-report") => friction::friction_report(),
+        Some("subagent-cache-lookup") => subagent_cache::lookup(),
+        Some("subagent-cache-populate") => subagent_cache::populate(),
         other => {
             eprintln!("claude-hooks: unknown subcommand {other:?}");
             return ExitCode::from(2);
@@ -79,18 +101,40 @@ fn main() -> ExitCode {
 // --- shared helpers ---
 
 /// True when an env var is present and non-empty (the kill-switch convention).
-fn flag_set(name: &str) -> bool {
+pub(crate) fn flag_set(name: &str) -> bool {
     std::env::var_os(name).is_some_and(|v| !v.is_empty())
 }
 
-fn home() -> PathBuf {
+pub(crate) fn home() -> PathBuf {
     std::env::var_os("HOME").map_or_else(|| PathBuf::from("/var/empty"), PathBuf::from)
 }
 
-fn read_stdin() -> Option<String> {
+pub(crate) fn read_stdin() -> Option<String> {
     let mut buf = String::new();
     std::io::stdin().read_to_string(&mut buf).ok()?;
     Some(buf)
+}
+
+/// `session_id` is interpolated into state-file paths; accept only a plain
+/// filename component so a crafted value cannot escape a state dir.
+pub(crate) fn safe_session(payload: &Value) -> Option<String> {
+    let session = payload.get("session_id").and_then(Value::as_str)?;
+    if session.is_empty() || session == "." || session == ".." || session.contains('/') {
+        return None;
+    }
+    Some(session.to_owned())
+}
+
+/// True when a hook payload fired inside a subagent (Task tool) rather than
+/// the main thread. Claude Code populates `agent_id` ONLY inside a subagent
+/// call (`PostToolUse` carries it; the docs call it the way to "distinguish
+/// subagent hook calls from main-thread calls"), so its presence is the
+/// authoritative author signal while `session_id` stays the parent's.
+pub(crate) fn is_subagent(payload: &Value) -> bool {
+    payload
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.is_empty())
 }
 
 fn cap_chars(s: &str, max: usize) -> String {
@@ -99,17 +143,17 @@ fn cap_chars(s: &str, max: usize) -> String {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ContextOutput {
-    hook_event_name: &'static str,
-    additional_context: String,
+pub(crate) struct ContextOutput {
+    pub(crate) hook_event_name: &'static str,
+    pub(crate) additional_context: String,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DenyOutput {
-    hook_event_name: &'static str,
-    permission_decision: &'static str,
-    permission_decision_reason: String,
+pub(crate) struct DenyOutput {
+    pub(crate) hook_event_name: &'static str,
+    pub(crate) permission_decision: &'static str,
+    pub(crate) permission_decision_reason: String,
 }
 
 #[derive(Serialize)]
@@ -118,7 +162,7 @@ struct Wrap<T> {
     hook_specific_output: T,
 }
 
-fn emit<T: Serialize>(inner: T) {
+pub(crate) fn emit<T: Serialize>(inner: T) {
     if let Ok(s) = serde_json::to_string(&Wrap {
         hook_specific_output: inner,
     }) {

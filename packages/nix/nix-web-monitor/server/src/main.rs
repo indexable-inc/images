@@ -8,9 +8,9 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use axum::Json;
 use axum::Router;
-use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::http::header;
+use axum::extract::{Query, State};
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use bytes::Bytes;
@@ -27,9 +27,12 @@ use tower_http::services::ServeDir;
 
 mod daemon;
 mod dependencies;
+mod emit;
+mod global;
 mod reasons;
 use daemon::run_daemon_probe;
 use dependencies::resolve_dependencies;
+use global::run_global_probe;
 
 /// Bound on the delta broadcast ring. A client that falls this far behind gets
 /// resynced with a fresh `Reset` rather than the dropped frames.
@@ -59,8 +62,10 @@ struct Args {
     /// Static UI directory. The Nix package wrapper fills this in. Always comes
     /// from the env the wrapper sets, so it is never passed after a subcommand
     /// and need not be `global` (which clap forbids on a required argument).
+    /// Optional so the headless `--emit` path (which serves no UI) runs without
+    /// it; the web-UI path validates it is present in [`validate_site_dir`].
     #[arg(long, env = "NIX_WEB_MONITOR_SITE_DIR")]
-    site_dir: PathBuf,
+    site_dir: Option<PathBuf>,
 
     /// Exit when the Nix command finishes instead of keeping the web UI alive.
     #[arg(long, global = true)]
@@ -74,8 +79,23 @@ struct Args {
     #[arg(long, global = true)]
     nix_verbose: bool,
 
+    /// Run headless: emit the build tree as NDJSON on stdout instead of serving
+    /// the web UI. One compact JSON `BuildView` per line, throttled, for a
+    /// programmatic consumer (the kernel `nix` module's live pane). Only the
+    /// passthrough `nix …` subcommand is supported; a switch has no headless
+    /// form. Exits with nix's status.
+    #[arg(long, value_enum, global = true)]
+    emit: Option<EmitFormat>,
+
     #[command(subcommand)]
     command: NwmCommand,
+}
+
+/// Machine-readable output format for the headless emitter (`--emit`).
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum EmitFormat {
+    /// One JSON `BuildView` object per line (newline-delimited JSON).
+    Ndjson,
 }
 
 /// What `nwm` runs under the monitor. The named subcommands wrap the
@@ -91,6 +111,14 @@ enum NwmCommand {
     /// Build (and by default activate) a nix-darwin system configuration,
     /// mirroring `darwin-rebuild switch`. Activation runs under `sudo`.
     Os(SwitchSpec),
+
+    /// Serve the web UI and the machine-wide panels (the nix-daemon probe and
+    /// the machine-builds view) without wrapping any Nix command, until
+    /// interrupted. For running the monitor as a long-lived service
+    /// (launchd/systemd). The flags that shape a wrapped command
+    /// (`--exit-when-done`, `--terminal-output`, `--nix-verbose`, `--emit`)
+    /// do not apply.
+    Serve,
 
     /// Any other arguments are passed straight to `nix` (e.g. `build .#hello`,
     /// `run .#ix -- new`, or `flake update index --flake .`).
@@ -157,43 +185,54 @@ async fn main() -> Result<()> {
         .version(build_version::version_static(env!("CARGO_PKG_VERSION")))
         .get_matches();
     let args = Args::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
-    validate_site_dir(&args.site_dir)?;
+
+    // Headless emitter: no UI, no daemon probe -- spawn nix, stream the build
+    // tree as NDJSON, exit with nix's status. Only the passthrough `nix …`
+    // subcommand has a headless form; a switch or a bare `serve` is a UI-only
+    // mode.
+    if args.emit.is_some() {
+        let NwmCommand::Nix(nix_args) = args.command else {
+            bail!("--emit supports only the passthrough `nix …` command");
+        };
+        let exit_code = emit::run(nix_args, args.nix_verbose).await?;
+        std::process::exit(exit_code.unwrap_or(1));
+    }
+
+    let site_dir = args
+        .site_dir
+        .context("--site-dir (or NIX_WEB_MONITOR_SITE_DIR) is required to serve the web UI")?;
+    validate_site_dir(&site_dir)?;
+
+    // Serve mode: no wrapped command at all. The monitor state starts (and
+    // stays) empty -- its empty command label is what tells the UI to show the
+    // no-wrapped-command placeholder instead of a build tree -- while the
+    // machine-wide probes feed the daemon and machine-builds panels. There is
+    // no command whose exit could end the run, so it serves until interrupted.
+    if matches!(args.command, NwmCommand::Serve) {
+        let monitor = Arc::new(RwLock::new(MonitorState::default()));
+        let ui = start_ui(&args.host, args.port, site_dir, monitor).await?;
+        eprintln!("nix-web-monitor: serving the machine view (no wrapped command); Ctrl-C to stop");
+        tokio::signal::ctrl_c()
+            .await
+            .context("waiting for Ctrl-C")?;
+        ui.abort();
+        return Ok(());
+    }
 
     // Record startup before any build runs: the "what changed" reason baseline
     // uses it to exclude outputs registered during this run (see `reasons`).
     reasons::record_start_time();
 
-    let index_html =
-        Bytes::from(std::fs::read(args.site_dir.join("index.html")).context("reading index.html")?);
-
     let job = build_job(args.command).await.context("planning job")?;
     let monitor = Arc::new(RwLock::new(MonitorState::new(job.command_label.clone())));
-    let (deltas, _) = broadcast::channel::<Bytes>(DELTA_CHANNEL_CAPACITY);
-
-    let http_addr: SocketAddr = format!("{}:{}", args.host, args.port)
-        .parse()
-        .with_context(|| format!("invalid HTTP address {}:{}", args.host, args.port))?;
-
-    let state = AppState {
-        monitor: Arc::clone(&monitor),
-        deltas: deltas.clone(),
-        index_html,
-    };
-    let http_server = serve(http_addr, args.site_dir, state).await?;
-
-    eprintln!("nix-web-monitor: http://{http_addr}");
-
-    // Trace the nix-daemon's syscalls for the daemon panel. Independent of the
-    // build task: it keeps reporting (or explaining why it cannot) for the whole
-    // life of the UI. Best-effort, so its handle is just aborted at shutdown.
-    let daemon_probe = tokio::spawn(run_daemon_probe(Arc::clone(&monitor), deltas.clone()));
+    let ui = start_ui(&args.host, args.port, site_dir, monitor).await?;
 
     let build = tokio::spawn(run_job(
         job,
         args.terminal_output,
         args.nix_verbose,
-        monitor,
-        deltas,
+        Arc::clone(&ui.monitor),
+        ui.deltas.clone(),
     ));
 
     let exit_code = build.await.context("joining job task")??;
@@ -207,11 +246,72 @@ async fn main() -> Result<()> {
             .await
             .context("waiting for Ctrl-C")?;
     }
-    daemon_probe.abort();
-    http_server.abort();
+    ui.abort();
     // Propagate Nix's exit status either way; otherwise the wrapper masks
     // build failures from shells and CI.
     std::process::exit(exit_code.unwrap_or(1));
+}
+
+/// The long-lived machinery behind the web UI, shared by every UI mode: the
+/// monitor state and delta broadcast the HTTP handlers read, plus the server
+/// and machine-probe tasks, all aborted together at shutdown.
+struct Ui {
+    monitor: Arc<RwLock<MonitorState>>,
+    deltas: broadcast::Sender<Bytes>,
+    http_server: tokio::task::JoinHandle<()>,
+    daemon_probe: tokio::task::JoinHandle<()>,
+    global_probe: tokio::task::JoinHandle<()>,
+}
+
+impl Ui {
+    /// Stop the server and both probes. They are best-effort background tasks
+    /// with no state to flush, so aborting is a clean shutdown.
+    fn abort(&self) {
+        self.daemon_probe.abort();
+        self.global_probe.abort();
+        self.http_server.abort();
+    }
+}
+
+/// Bind the web server on `host:port` and start the machine-wide probes: the
+/// UI, the `/api/state` snapshot, and the `/ws` delta feed on one port, plus
+/// the two best-effort overlays that live for the whole life of the UI --
+/// the nix-daemon syscall tracer for the daemon panel, and the machine-builds
+/// poller (`nix store builds --json`, patched nix only, self-hides on stock
+/// nix) for the machine panel.
+async fn start_ui(
+    host: &str,
+    port: u16,
+    site_dir: PathBuf,
+    monitor: Arc<RwLock<MonitorState>>,
+) -> Result<Ui> {
+    let index_html =
+        Bytes::from(std::fs::read(site_dir.join("index.html")).context("reading index.html")?);
+    let (deltas, _) = broadcast::channel::<Bytes>(DELTA_CHANNEL_CAPACITY);
+
+    let http_addr: SocketAddr = format!("{host}:{port}")
+        .parse()
+        .with_context(|| format!("invalid HTTP address {host}:{port}"))?;
+
+    let state = AppState {
+        monitor: Arc::clone(&monitor),
+        deltas: deltas.clone(),
+        index_html,
+    };
+    let http_server = serve(http_addr, site_dir, state).await?;
+
+    eprintln!("nix-web-monitor: http://{http_addr}");
+
+    let daemon_probe = tokio::spawn(run_daemon_probe(Arc::clone(&monitor), deltas.clone()));
+    let global_probe = tokio::spawn(run_global_probe(Arc::clone(&monitor), deltas.clone()));
+
+    Ok(Ui {
+        monitor,
+        deltas,
+        http_server,
+        daemon_probe,
+        global_probe,
+    })
 }
 
 async fn serve(
@@ -245,6 +345,7 @@ fn router(site_dir: &Path, state: AppState) -> Router {
     Router::new()
         .route("/", get(serve_index))
         .route("/api/state", get(state_snapshot))
+        .route("/api/global-log", get(global_log))
         .route("/ws", get(ws_handler))
         .fallback_service(static_files)
         .with_state(state)
@@ -271,6 +372,44 @@ async fn serve_index(State(state): State<AppState>) -> impl IntoResponse {
 /// WebSocket. Same payload the live stream seeds each client with.
 async fn state_snapshot(State(state): State<AppState>) -> Json<MonitorSnapshot> {
     Json(state.monitor.read().await.snapshot())
+}
+
+/// Which machine build's log `/api/global-log` should tail, by derivation path.
+#[derive(serde::Deserialize)]
+struct GlobalLogQuery {
+    drv: String,
+}
+
+/// Tail of one machine build's on-disk log, as plain text.
+///
+/// The derivation must be an *active* build in the machine-wide view with a
+/// recorded log file: the server only opens paths the status directory itself
+/// advertised, never a caller-supplied filesystem path. 404s cover both "not an
+/// active build" (it finished between poll and click) and "log not written yet"
+/// (the builder has produced no output), so the panel can show a quiet
+/// placeholder instead of an error.
+async fn global_log(
+    State(state): State<AppState>,
+    Query(query): Query<GlobalLogQuery>,
+) -> Response {
+    let Some(log_file) = global::log_file_for(&state.monitor, &query.drv).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            "not an active machine build with a recorded log",
+        )
+            .into_response();
+    };
+    match global::read_log_tail(log_file).await {
+        Ok(text) => ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], text).into_response(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            (StatusCode::NOT_FOUND, "log not written yet").into_response()
+        }
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("reading build log failed: {error}"),
+        )
+            .into_response(),
+    }
 }
 
 /// Upgrade the request to a WebSocket and stream deltas to it. The page is
@@ -526,6 +665,9 @@ async fn build_job(command: NwmCommand) -> Result<Job> {
         }),
         NwmCommand::Home(spec) => build_switch_job(SwitchKind::Home, spec).await,
         NwmCommand::Os(spec) => build_switch_job(SwitchKind::Os, spec).await,
+        // `main` enters serve mode before job planning, so this arm is
+        // unreachable; serve wraps no command and has no job to plan.
+        NwmCommand::Serve => bail!("serve wraps no command, so it has no job to plan"),
     }
 }
 
@@ -627,9 +769,16 @@ async fn run_switch(
             "--flake".to_owned(),
             switch.flake_dir.clone(),
         ];
-        let update_code = run_nix_build(update_args, terminal_output, nix_verbose, false, monitor, deltas)
-            .await?
-            .exit_code;
+        let update_code = run_nix_build(
+            update_args,
+            terminal_output,
+            nix_verbose,
+            false,
+            monitor,
+            deltas,
+        )
+        .await?
+        .exit_code;
         if update_code != Some(0) {
             monitor
                 .write()
@@ -651,7 +800,15 @@ async fn run_switch(
     let NixBuildOutcome {
         exit_code: build_code,
         stdout,
-    } = run_nix_build(build_args, terminal_output, nix_verbose, true, monitor, deltas).await?;
+    } = run_nix_build(
+        build_args,
+        terminal_output,
+        nix_verbose,
+        true,
+        monitor,
+        deltas,
+    )
+    .await?;
     if build_code != Some(0) {
         monitor
             .write()
@@ -821,7 +978,10 @@ async fn run_activation(
     stderr_task.await.context("joining activation stderr")??;
 
     let exit_code = status.code();
-    monitor.write().await.finish_activation(exit_code == Some(0));
+    monitor
+        .write()
+        .await
+        .finish_activation(exit_code == Some(0));
     broadcast_deltas(monitor, deltas).await?;
     Ok(exit_code)
 }
@@ -1211,20 +1371,47 @@ mod tests {
         }
     }
 
+    async fn get(uri: &str) -> axum::response::Response {
+        router(Path::new("/nonexistent-site"), test_state())
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds")
+    }
+
+    /// `serve` must parse as the dedicated no-command subcommand -- not fall
+    /// through to the external passthrough, which would exec a nonexistent
+    /// `nix serve` -- and the shared network flags must still apply to it.
+    #[test]
+    fn serve_parses_as_dedicated_subcommand() {
+        let args = Args::try_parse_from(["nwm", "serve", "--host", "127.0.0.1", "--port", "8080"])
+            .expect("serve parses");
+        assert!(matches!(args.command, NwmCommand::Serve));
+        assert_eq!(args.host, "127.0.0.1");
+        assert_eq!(args.port, 8080);
+    }
+
+    /// Adding the `serve` subcommand must not narrow the passthrough: any other
+    /// leading word still reaches `nix` verbatim.
+    #[test]
+    fn other_subcommands_still_pass_through_to_nix() {
+        let args = Args::try_parse_from(["nwm", "build", ".#hello"]).expect("passthrough parses");
+        let NwmCommand::Nix(nix_args) = args.command else {
+            panic!("expected the external passthrough");
+        };
+        assert_eq!(nix_args, ["build", ".#hello"]);
+    }
+
     /// `/api/state` must be a wired route that serializes the live snapshot to
     /// JSON. Exercises route registration, the handler, and serde output in one
     /// shot without binding a socket or shipping a real site dir.
     #[tokio::test]
     async fn state_endpoint_serves_snapshot_json() {
-        let response = router(Path::new("/nonexistent-site"), test_state())
-            .oneshot(
-                Request::builder()
-                    .uri("/api/state")
-                    .body(Body::empty())
-                    .expect("request builds"),
-            )
-            .await
-            .expect("router responds");
+        let response = get("/api/state").await;
 
         assert_eq!(response.status(), StatusCode::OK);
 
@@ -1239,26 +1426,65 @@ mod tests {
         );
     }
 
-    /// `/ws` must be a wired route that performs the WebSocket upgrade: a plain
-    /// GET without the upgrade headers is rejected, proving the handler expects
-    /// a real WebSocket handshake rather than serving the static fallback.
+    /// `/api/global-log` serves the tail of an active machine build's log and
+    /// refuses anything the machine-wide view does not currently list. This is
+    /// the whole HTTP contract the panel's log drawer depends on: route, state
+    /// lookup, file read, and the not-found shapes.
     #[tokio::test]
-    async fn ws_route_requires_websocket_upgrade() {
-        let response = router(Path::new("/nonexistent-site"), test_state())
+    async fn global_log_serves_active_build_logs_only() {
+        let dir = std::env::temp_dir().join(format!("nwm-global-route-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        let log_path = dir.join("fixture.drv");
+        std::fs::write(&log_path, b"builder says hi\n").expect("write fixture log");
+
+        let state = test_state();
+        state
+            .monitor
+            .write()
+            .await
+            .set_global(nix_web_monitor_parser::GlobalBuilds {
+                detected: true,
+                builds: vec![nix_web_monitor_parser::GlobalBuild {
+                    drv_path: Some("/nix/store/aaa-foo.drv".to_owned()),
+                    log_file: Some(log_path.to_string_lossy().into_owned()),
+                    ..nix_web_monitor_parser::GlobalBuild::default()
+                }],
+                status: "1 active".to_owned(),
+            });
+        let app = router(Path::new("/nonexistent-site"), state);
+
+        let found = app
+            .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/ws")
+                    .uri("/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv")
                     .body(Body::empty())
                     .expect("request builds"),
             )
             .await
             .expect("router responds");
+        assert_eq!(found.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(found.into_body(), 1 << 20)
+            .await
+            .expect("body collects");
+        assert_eq!(&body[..], b"builder says hi\n");
 
+        let unknown = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/global-log?drv=%2Fetc%2Fpasswd")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
         assert_eq!(
-            response.status(),
-            StatusCode::BAD_REQUEST,
-            "a non-upgrade GET to /ws is rejected by the WebSocket extractor"
+            unknown.status(),
+            StatusCode::NOT_FOUND,
+            "a drv the machine view does not list must not resolve to a file"
         );
+
+        std::fs::remove_dir_all(&dir).expect("clean scratch dir");
     }
 
     /// `/` must serve `index.html` with `Cache-Control: no-store`. Without it,
@@ -1267,15 +1493,7 @@ mod tests {
     /// exists to prevent.
     #[tokio::test]
     async fn index_is_served_no_store() {
-        let response = router(Path::new("/nonexistent-site"), test_state())
-            .oneshot(
-                Request::builder()
-                    .uri("/")
-                    .body(Body::empty())
-                    .expect("request builds"),
-            )
-            .await
-            .expect("router responds");
+        let response = get("/").await;
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
@@ -1288,26 +1506,23 @@ mod tests {
         );
     }
 
-    /// A missing asset must 404, not fall back to `index.html`. Returning HTML
-    /// for a missing `/assets/*.js` is exactly what the browser rejects for the
-    /// wrong MIME type once a rebuild changes the asset hashes.
     #[tokio::test]
-    async fn missing_asset_404s_instead_of_html_fallback() {
-        let response = router(Path::new("/nonexistent-site"), test_state())
-            .oneshot(
-                Request::builder()
-                    .uri("/assets/index-deadbeef.js")
-                    .body(Body::empty())
-                    .expect("request builds"),
-            )
-            .await
-            .expect("router responds");
-
-        assert_eq!(
-            response.status(),
-            StatusCode::NOT_FOUND,
-            "a missing asset must 404 rather than serve index.html"
-        );
+    async fn invalid_route_requests_are_rejected_at_the_right_boundary() {
+        let cases = [
+            (
+                "/ws",
+                StatusCode::BAD_REQUEST,
+                "a non-upgrade GET is rejected by the WebSocket extractor",
+            ),
+            (
+                "/assets/index-deadbeef.js",
+                StatusCode::NOT_FOUND,
+                "a missing asset must not fall back to index.html",
+            ),
+        ];
+        for (uri, expected, message) in cases {
+            assert_eq!(get(uri).await.status(), expected, "{message}");
+        }
     }
 
     /// An encoded delta must decode back to an equal value: this is the exact

@@ -5,10 +5,11 @@ pub mod sequences;
 mod type3;
 mod types;
 
-pub use detector::instances;
-pub use type3::compute_similarity;
+pub use detector::{duplicated_lines, duplication_percentage, instances, rank_by_impact};
+pub use type3::{compute_similarity, compute_similarity_with};
 pub use types::{
-    ByteRange, CloneGroup, DetectConfig, DetectionResult, DetectionStats, Fragment, Kind, LineRange,
+    ByteRange, CloneGroup, DetectConfig, DetectionResult, DetectionStats, Fragment, Kind,
+    LineRange, Type3Metric,
 };
 
 #[cfg(test)]

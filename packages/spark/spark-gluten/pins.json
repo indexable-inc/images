@@ -1,0 +1,7 @@
+{
+  "gluten": {
+    "version": "1.6.0",
+    "url": "https://archive.apache.org/dist/gluten/1.6.0/apache-gluten-1.6.0-bin-spark-3.5.tar.gz",
+    "hash": "sha256-kPnsaslkvNc4k8ZhqRM+Rq/Eb4svqeF8ZH+zk5uLbUM="
+  }
+}
