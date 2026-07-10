@@ -199,6 +199,11 @@
     sandbox_mode = "danger-full-access";
     default_permissions = ":danger-full-access";
     commit_attribution = "";
+    # The features block below opts into under-development features
+    # (multi_agent_v2 et al.); without this Codex warns about them on every
+    # startup. Set here (not just the wrapper soft default) so the seeded
+    # config.toml stays quiet even under a stock codex binary.
+    suppress_unstable_features_warning = true;
     agents.max_depth = 3;
     mcp_servers = codexMcpServers;
     features = {
