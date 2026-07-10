@@ -88,11 +88,8 @@ struct MessagesPage {
 impl crate::ListPage for MessagesPage {
     type Item = MessageStub;
 
-    fn into_parts(self) -> crate::ListPageParts<Self::Item> {
-        crate::ListPageParts {
-            items: self.messages,
-            next_page_token: self.next_page_token,
-        }
+    fn into_parts(self) -> (Vec<Self::Item>, Option<String>) {
+        (self.messages, self.next_page_token)
     }
 }
 
