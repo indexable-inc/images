@@ -139,7 +139,10 @@
         };
       };
       language_servers = [
-        "nixd"
+        # nox-lsp (nox docs/lsp.md): eval-backed Nix LSP. typenix stays
+        # installed behind the nixd slot below; revert by swapping this list.
+        "nox-lsp"
+        "!nixd"
         "!nil"
       ];
     };
@@ -198,6 +201,22 @@
       binary = {
         arguments = [];
         path = "typenix-lsp";
+      };
+    };
+    nox-lsp = {
+      binary = {
+        arguments = [];
+        path = "nox-lsp";
+      };
+      initialization_options = {
+        embedded = {
+          commands = {
+            bash = [
+              "bash-language-server"
+              "start"
+            ];
+          };
+        };
       };
     };
     rust-analyzer = {
