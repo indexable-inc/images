@@ -149,6 +149,15 @@ fn first_seed(store: &Store, meta: &Meta, incoming: &[u8]) -> Result<Outcome> {
                     "yourEdits": diff::diff_bytes(meta.format, incoming, &found),
                 })),
             )?;
+            // The pre-existing target can still be a read-only store symlink
+            // (a home-manager link left by a `home.file` -> `mutable.files`
+            // migration). Keeping its content as day-one drift is pointless
+            // unless the file is writable, so materialize the symlink into a
+            // plain file holding the same bytes — the one seeding path that
+            // otherwise skips write_creating_parents' symlink replacement.
+            if fs::symlink_metadata(target).is_ok_and(|md| md.file_type().is_symlink()) {
+                write_creating_parents(target, &found)?;
+            }
             Ok(Outcome::DriftKept)
         }
         (_, pre_existing) => {
@@ -751,6 +760,34 @@ mod tests {
         fs::write(&fixture.target, r#"{"handmade": true}"#).expect("pre-existing");
         fixture.set_base(r#"{"a": 1}"#);
         fixture.activate();
+        assert_eq!(fixture.target_contents(), r#"{"handmade": true}"#);
+        assert_eq!(fixture.entry().state, State::Drifted);
+    }
+
+    #[test]
+    fn pre_existing_durable_symlink_is_materialized_writable() {
+        // Migrating `home.file` -> `mutable.files` can leave the target as a
+        // read-only store symlink. Day-one drift must still be writable.
+        let fixture = Fixture::new("durable");
+        let target = Path::new(&fixture.target);
+        fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+        let old_render = fixture
+            .source
+            .parent()
+            .expect("store dir")
+            .join("old-render.json");
+        fs::write(&old_render, r#"{"handmade": true}"#).expect("old render");
+        std::os::unix::fs::symlink(&old_render, target).expect("symlink");
+        fixture.set_base(r#"{"a": 1}"#);
+        fixture.activate();
+        // The symlink is replaced by a writable regular file with its content.
+        assert!(
+            fs::symlink_metadata(target)
+                .expect("meta")
+                .file_type()
+                .is_file(),
+            "target should be a regular file, not a symlink"
+        );
         assert_eq!(fixture.target_contents(), r#"{"handmade": true}"#);
         assert_eq!(fixture.entry().state, State::Drifted);
     }
