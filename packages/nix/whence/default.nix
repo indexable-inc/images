@@ -34,12 +34,14 @@ writeNushellApplication {
       }
     }
 
-    # Manifests of the live generations: the home-manager profile's and, on
-    # darwin, the running system's.
+    # Manifests of the live generations: the home-manager profile's (XDG
+    # location, plus the pre-XDG per-user profile older installs still use)
+    # and, on darwin, the running system's.
     def manifests [] {
       let state_home = ($env.XDG_STATE_HOME? | default ($env.HOME | path join ".local" "state"))
       [
         ($state_home | path join "nix" "profiles" "home-manager" "provenance.json")
+        $"/nix/var/nix/profiles/per-user/($env.USER)/home-manager/provenance.json"
         "/run/current-system/provenance.json"
       ] | where {|it| $it | path exists }
     }
@@ -86,7 +88,9 @@ writeNushellApplication {
     }
 
     def main [path: string] {
-      let home = $env.HOME
+      # A trailing slash on HOME would make the ($home)/ prefix tests below
+      # miss every home file.
+      let home = ($env.HOME | str trim --right --char '/')
       # Logical absolute path (no symlink resolution): manifest keys are
       # deployment targets, which are themselves symlinks into the store.
       let logical = ($path | path expand --no-symlink)

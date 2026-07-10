@@ -15,55 +15,68 @@
 # file stays importable as a bare module argument set; see the flake's
 # homeModules/darwinModules wiring.
 {provenance}: {
-  config,
-  options,
-  lib,
-  pkgs,
-  ...
-}: let
-  cfg = config.provenance;
-in {
-  options.provenance = {
-    enable = lib.mkEnableOption "baking a provenance manifest (deployed path -> defining nix file:line) into each generation";
+  # Applying the walker makes every import site a distinct anonymous attrset,
+  # which the module system cannot deduplicate the way it dedups plain
+  # `imports = [ ./file.nix ]` by path. Two instances in one configuration (a
+  # bundled profile plus homeModules.provenance, say) then both declare
+  # `provenance.*` and eval dies with "already declared in `<unknown-file>'".
+  # The explicit `key` restores dedup; `_file` restores error attribution.
+  key = "index/modules/home/provenance.nix";
+  _file = "index/modules/home/provenance.nix";
 
-    rev = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      example = lib.literalExpression "self.rev or self.dirtyRev or null";
-      description = ''
-        Configuration flake revision recorded on every manifest entry, so
-        `whence` can print which checkout defined a file. Pass
-        `self.rev or self.dirtyRev or null` from the consuming flake.
-      '';
-    };
+  imports = [
+    ({
+      config,
+      options,
+      lib,
+      pkgs,
+      ...
+    }: let
+      cfg = config.provenance;
+    in {
+      options.provenance = {
+        enable = lib.mkEnableOption "baking a provenance manifest (deployed path -> defining nix file:line) into each generation";
 
-    entries = lib.mkOption {
-      type = lib.types.raw;
-      internal = true;
-      readOnly = true;
-      default = provenance.manifestFor {
-        inherit options;
-        inherit (cfg) rev;
-        entries = provenance.homeCollectors {inherit options config;};
+        rev = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          example = lib.literalExpression "self.rev or self.dirtyRev or null";
+          description = ''
+            Configuration flake revision recorded on every manifest entry, so
+            `whence` can print which checkout defined a file. Pass
+            `self.rev or self.dirtyRev or null` from the consuming flake.
+          '';
+        };
+
+        entries = lib.mkOption {
+          type = lib.types.raw;
+          internal = true;
+          readOnly = true;
+          default = provenance.manifestFor {
+            inherit options;
+            inherit (cfg) rev;
+            entries = provenance.homeCollectors {inherit options config;};
+          };
+          description = "Rendered manifest attrset (deployed path -> provenance).";
+        };
+
+        manifest = lib.mkOption {
+          type = lib.types.package;
+          internal = true;
+          readOnly = true;
+          default = (pkgs.formats.json {}).generate "provenance.json" cfg.entries;
+          description = "The provenance.json for this generation.";
+        };
       };
-      description = "Rendered manifest attrset (deployed path -> provenance).";
-    };
 
-    manifest = lib.mkOption {
-      type = lib.types.package;
-      internal = true;
-      readOnly = true;
-      default = (pkgs.formats.json {}).generate "provenance.json" cfg.entries;
-      description = "The provenance.json for this generation.";
-    };
-  };
-
-  # `home.extraBuilderCommands` (not `home.file`): the walker reads
-  # `home.file`, so materializing the manifest through it would make the
-  # manifest an input of itself.
-  config = lib.mkIf cfg.enable {
-    home.extraBuilderCommands = ''
-      ln -s ${cfg.manifest} $out/provenance.json
-    '';
-  };
+      # `home.extraBuilderCommands` (not `home.file`): the walker reads
+      # `home.file`, so materializing the manifest through it would make the
+      # manifest an input of itself.
+      config = lib.mkIf cfg.enable {
+        home.extraBuilderCommands = ''
+          ln -s ${cfg.manifest} $out/provenance.json
+        '';
+      };
+    })
+  ];
 }
