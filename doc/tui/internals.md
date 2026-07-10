@@ -6,7 +6,7 @@ scrollback read. Read [overview](overview.md) first for the public surface.
 
 ## Two tiers per child: actor task + engine thread
 
-Each spawned child gets two owners (`src/manager/spawn.rs:96-119`):
+Each spawned child gets two owners (`src/manager/spawn.rs:100-123`):
 
 1. A **PTY actor**, an async task on the manager's runtime (`actor::pty_actor`,
    `src/actor/mod.rs:59`). It owns the PTY master and the `tokio::process::Child`
