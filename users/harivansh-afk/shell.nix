@@ -3,9 +3,15 @@
 # through programs.zsh. The sops secret loading and the dark/light theme
 # plumbing (prompt zstyles, ZSH_HIGHLIGHT_STYLES, BAT_THEME flipping) are
 # theme/secret machinery and are not ported; BAT_THEME is pinned to the
-# source's dark default instead. Tool hooks (zoxide, direnv, fzf) come from
-# the respective program modules in ./home.nix rather than hand-written
-# `eval "$(... init zsh)"` lines.
+# source's dark default instead.
+#
+# The user-agnostic zsh machinery is consumed from shared modules rather
+# than written here: tool hooks come from the zoxide/direnv/fzf program
+# modules (./home.nix), the ssh/mosh mux auto-attach and OSC 7 cwd
+# reporting from programs.mux.zshIntegration (modules/home/mux.nix), and
+# the vi-mode cursor shapes from zshViCursor (modules/home/zsh-vi-cursor.nix).
+# What stays here is hari's taste: history shape, aliases, the critic git
+# wrapper, the pure prompt setup, and his keybindings.
 {
   config,
   pkgs,
@@ -67,33 +73,6 @@
     initContent = ''
       export BAT_THEME='gruvbox-dark'
 
-      # --- bare `ssh <host>` / `mosh <host>` auto-attach the remote mux ---
-      # When the only argument is a plain hostname (no remote command, no
-      # flags), run the remote's mux launcher as the remote command: you land
-      # in the last nvim session; <c-b>d detaches to a remote shell and
-      # exiting that closes the connection. Every other form (`ssh host cmd`,
-      # any flag, scp, git) passes through to the real binary untouched.
-      # Needs mux in the remote's profile (see ./mux.nix).
-      _is_bare_host() {
-        [[ $# -eq 1 && "$1" != -* ]]
-      }
-
-      ssh() {
-        if _is_bare_host "$@"; then
-          command ssh -t "$1" mux
-        else
-          command ssh "$@"
-        fi
-      }
-
-      mosh() {
-        if _is_bare_host "$@"; then
-          command mosh "$1" -- mux
-        else
-          command mosh "$@"
-        fi
-      }
-
       # --- fire-and-forget `critic review` after staging-ish git verbs ---
       git() {
         command git "$@"
@@ -107,35 +86,6 @@
         esac
         return $exit_code
       }
-
-      # --- vi-mode cursor shape: beam for insert, block for command ---
-      autoload -Uz add-zle-hook-widget
-      _cursor() { printf '\e[%s q' "''${1:-6}"; }
-      _cursor_select() { [[ "$KEYMAP" == vicmd ]] && _cursor 2 || _cursor 6; }
-      _cursor_beam() { _cursor 6; }
-      add-zle-hook-widget zle-keymap-select _cursor_select
-      add-zle-hook-widget zle-line-init _cursor_beam
-      add-zle-hook-widget zle-line-finish _cursor_beam
-      precmd() { _cursor_beam; }
-      preexec() { _cursor_beam; }
-
-      # Inside an nvim :terminal (mux windows), report the cwd via OSC 7 so
-      # the mux tab bar can rename tabs like tmux automatic-rename. Byte-wise
-      # percent encoding (LC_ALL=C) keeps multibyte path names intact.
-      _mux_osc7() {
-        [[ -n "$NVIM" ]] || return
-        local LC_ALL=C ch encoded=""
-        for ch in ''${(s::)PWD}; do
-          if [[ "$ch" == [A-Za-z0-9/._~-] ]]; then
-            encoded+="$ch"
-          else
-            encoded+="$(printf '%%%02X' "'$ch")"
-          fi
-        done
-        printf '\e]7;file://%s%s\a' "$HOST" "$encoded"
-      }
-      chpwd_functions+=(_mux_osc7)
-      _mux_osc7
 
       # --- prompt (pure) ---
       fpath+=("${pkgs.pure-prompt}/share/zsh/site-functions")

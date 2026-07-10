@@ -1,13 +1,25 @@
 # Git, ported from dots/git in the source repo. The forgejo credential
 # helpers and the theme/delta include files are secret- and theme-machinery
-# and are intentionally not ported; the github credential helper comes from
-# programs.gh.gitCredentialHelper (see ./home.nix) instead of a hand-written
-# `!gh auth git-credential` section.
-{
-  lib,
-  pkgs,
-  ...
-}: {
+# and are intentionally not ported. The generalizable halves come from
+# upstream home-manager modules instead of hand-written config sections:
+# programs.diff-so-fancy owns the pager/diffFilter wiring, and
+# programs.gh.gitCredentialHelper (see ./home.nix) owns the github
+# credential helper. What stays here is hari's: identity, ssh signing, the
+# color taste, and his global ignore list.
+_: {
+  programs.diff-so-fancy = {
+    enable = true;
+    # Configures diff-so-fancy as git's diff/log/show pager (the default
+    # pagerOpts match the source config's `less --tabs=4 -RFX`) and as the
+    # interactive.diffFilter.
+    enableGitIntegration = true;
+    settings = {
+      markEmptyLines = true;
+      stripLeadingSymbols = true;
+      useUnicodeRuler = true;
+    };
+  };
+
   programs.git = {
     enable = true;
 
@@ -56,12 +68,9 @@
       core = {
         editor = "nvim";
         fsmonitor = true;
-        pager = "${lib.getExe pkgs.diff-so-fancy} | less --tabs=4 -RFX";
       };
 
       feature.manyFiles = true;
-
-      interactive.diffFilter = "${lib.getExe pkgs.diff-so-fancy} --patch";
 
       color = {
         ui = true;
@@ -82,12 +91,6 @@
           newNormal = "green bold";
           newHighlight = "green bold 22";
         };
-      };
-
-      diff-so-fancy = {
-        markEmptyLines = true;
-        stripLeadingSymbols = true;
-        useUnicodeRuler = true;
       };
 
       push.autoSetupRemote = true;

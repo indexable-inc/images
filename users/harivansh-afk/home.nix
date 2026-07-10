@@ -4,7 +4,7 @@
 # git.harivan.sh/harivansh-afk/nix).
 #
 # Scope is deliberately the server-side daily-driver set: zsh, git, neovim
-# (plus `mux`, the per-project nvim-server multiplexer that replaces tmux),
+# (plus mux, the per-project nvim-server multiplexer that replaces tmux),
 # and the XDG/session hygiene around them. Everything secret-adjacent in the
 # source repo (sops-nix rendering, forgejo credential helpers, tea logins,
 # graphite/gcloud token seeding) and everything client-side or darwin-only
@@ -12,21 +12,25 @@
 # configs) intentionally stays out. Host/system concerns (accounts, sshd,
 # mosh) belong to the consuming host config, as in the source repo.
 #
-# Closed over `ix` for the checked-bash writer that packages mux and the
-# shared language-toolchain handles (lib/util/writers.nix,
-# lib/languages/), mirroring how users/andrewgazelka/home.nix is wired in
-# flake.nix.
-{ix}: {
-  config,
-  lib,
-  pkgs,
-  ...
-}: let
-  muxModule = import ./mux.nix {inherit ix;};
+# The user-agnostic machinery lives in shared modules and is only consumed
+# here: mux (modules/home/mux.nix), the XDG tidiness set
+# (modules/home/xdg-tidy.nix), vi-mode cursor shapes
+# (modules/home/zsh-vi-cursor.nix), and the generic CLI package baseline
+# (modules/home/cli-baseline.nix). This directory keeps only what is
+# genuinely hari's: identity, aliases, prompt taste, his nvim lua tree, and
+# per-program settings.
+#
+# Closed over `ix` for the shared modules/helpers that need it (the mux
+# checked-bash launcher, the language-toolchain handles in ./neovim.nix),
+# mirroring how users/andrewgazelka/home.nix is wired in flake.nix.
+{ix}: {lib, ...}: let
+  muxModule = import ../../modules/home/mux.nix {inherit ix;};
   neovimModule = import ./neovim.nix {inherit ix;};
 in {
   imports = [
     ../../modules/home/cli-baseline.nix
+    ../../modules/home/xdg-tidy.nix
+    ../../modules/home/zsh-vi-cursor.nix
     ./git.nix
     ./shell.nix
     muxModule
@@ -34,101 +38,39 @@ in {
   ];
 
   # Shared modern-CLI package baseline (bat, delta, eza, fd, ripgrep, ...)
-  # instead of restating the generic tool list per-user; hari-specific tools
-  # ride below and in the sibling modules.
+  # instead of restating the generic tool list per-user.
   cliBaseline.enable = true;
+
+  # Tool state/caches out of $HOME (cargo, go, npm/pnpm, python, docker,
+  # aws, psql/sqlite histories, wget/less) — shared policy, not hari's.
+  xdgTidy.enable = true;
+
+  # Beam cursor in insert mode, block in command mode (vi keymap set in
+  # ./shell.nix).
+  zshViCursor.enable = true;
+
+  # The per-project nvim-server multiplexer; bare `ssh <host>`/`mosh <host>`
+  # auto-attach and OSC 7 cwd reporting ride in via its zsh integration. The
+  # server-side lua half lives in his nvim tree (./config/nvim/lua/mux).
+  programs.mux.enable = true;
 
   home = {
     stateVersion = lib.mkDefault "25.11";
 
-    packages = [
-      # git pager configured in ./git.nix; also used interactively.
-      pkgs.diff-so-fancy
-    ];
-
     sessionPath = [
       "$HOME/.local/bin"
-      "${config.xdg.dataHome}/cargo/bin"
-      "${config.xdg.dataHome}/go/bin"
-      "${config.xdg.dataHome}/npm/bin"
-      "${config.xdg.dataHome}/pnpm"
       "$HOME/.bun/bin"
     ];
 
-    # The XDG tidiness set from the source repo's session environment
-    # (modules/users/user-config/env.nix there): keep tool state out of $HOME.
     sessionVariables = {
       VISUAL = "nvim";
       MANPAGER = "nvim +Man!";
       NODE_NO_WARNINGS = "1";
-
-      LESSHISTFILE = "-";
-      WGETRC = "${config.xdg.configHome}/wgetrc";
-
-      CARGO_HOME = "${config.xdg.dataHome}/cargo";
-      RUSTUP_HOME = "${config.xdg.dataHome}/rustup";
-
-      GOPATH = "${config.xdg.dataHome}/go";
-      GOMODCACHE = "${config.xdg.cacheHome}/go/mod";
-
-      NPM_CONFIG_USERCONFIG = "${config.xdg.configHome}/npm/npmrc";
-      NODE_REPL_HISTORY = "${config.xdg.stateHome}/node_repl_history";
-      PNPM_HOME = "${config.xdg.dataHome}/pnpm";
-      PNPM_NO_UPDATE_NOTIFIER = "true";
       BUN_INSTALL = "$HOME/.bun";
-
-      PYTHONSTARTUP = "${config.xdg.configHome}/python/pythonrc";
-      PYTHON_HISTORY = "${config.xdg.stateHome}/python_history";
-      PYTHONPYCACHEPREFIX = "${config.xdg.cacheHome}/python";
-      PYTHONUSERBASE = "${config.xdg.dataHome}/python";
-
-      DOCKER_CONFIG = "${config.xdg.configHome}/docker";
-
-      AWS_SHARED_CREDENTIALS_FILE = "${config.xdg.configHome}/aws/credentials";
-      AWS_CONFIG_FILE = "${config.xdg.configHome}/aws/config";
-
-      PSQL_HISTORY = "${config.xdg.stateHome}/psql_history";
-      SQLITE_HISTORY = "${config.xdg.stateHome}/sqlite_history";
     };
   };
 
-  xdg = {
-    enable = true;
-
-    configFile = {
-      # npm expands ''${XDG_*} itself at runtime; the literals are intended.
-      "npm/npmrc".text = ''
-        prefix=''${XDG_DATA_HOME}/npm
-        cache=''${XDG_CACHE_HOME}/npm
-      '';
-
-      "python/pythonrc".text = ''
-        # python
-        import atexit
-        import os
-        import readline
-
-        history = os.path.join(os.environ.get('XDG_STATE_HOME', os.path.expanduser('~/.local/state')), 'python_history')
-
-        try:
-            readline.read_history_file(history)
-        except OSError:
-            pass
-
-        def write_history():
-            try:
-                readline.write_history_file(history)
-            except OSError:
-                pass
-
-        atexit.register(write_history)
-      '';
-
-      "wgetrc".text = ''
-        hsts_file = ~/.local/state/wget-hsts
-      '';
-    };
-  };
+  xdg.enable = true;
 
   programs = {
     direnv = {
