@@ -221,13 +221,6 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # TODO: re-add the `symphony` flake input that provided
-    # `pkgs.symphony-room-server`. room-server's real home is the ix monorepo
-    # (`crates/room`, `ix#packages.x86_64-linux.room-server`), but ix already
-    # inputs index (`ix/flake.nix`), so index cannot source it from ix without a
-    # circular flake dependency. Pin removed for now; re-add once that cycle is
-    # resolved or room-server moves into this repo.
-
     # Ghostty's terminal VT engine, consumed as a source tree (not a flake) so
     # `packages/tui/vt/libghostty-vt` owns the build. Pinned to the commit the
     # local clone validated against; `requireZig` in `build.zig.zon` is exact
