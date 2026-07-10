@@ -3033,6 +3033,7 @@
 
     store_path = tempfile.mktemp(suffix=".db")
     os.environ["IX_MCP_STORE"] = store_path
+    os.environ["WEAVE_URL"] = "off"
 
     import polars as pl
 
@@ -3147,11 +3148,8 @@
         # A DataFrame result is stored with its text/html bundle.
         df_job = await run("Result.of(pl.DataFrame({'a': [1, 2], 'b': ['x', 'y']}))", budget=3.0, name="df")
         await df_job.task
-        conn = sqlite3.connect(store_path)
-        conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT status, outputs FROM executions WHERE id = ?", (df_job.id,)).fetchone()
-        assert row["status"] == "done", row["status"]
-        result_mimes = {mime for out in json.loads(row["outputs"]) for mime in out["data"]}
+        assert df_job.status == "done", df_job.status
+        result_mimes = {mime for out in runtime._job_outputs(df_job) for mime in out["data"]}
         assert "text/html" in result_mimes, ("result mimes", result_mimes)
 
         # An htpy element renders through the __html__ protocol: IPython's html
@@ -3161,10 +3159,7 @@
             "import htpy\nResult.of(htpy.div(class_='x')['<hi>'])", budget=3.0, name="htpy"
         )
         await htpy_job.task
-        htpy_outputs = conn.execute(
-            "SELECT outputs FROM executions WHERE id = ?", (htpy_job.id,)
-        ).fetchone()[0]
-        htpy_html = [out["data"].get("text/html") for out in json.loads(htpy_outputs)][-1]
+        htpy_html = [out["data"].get("text/html") for out in runtime._job_outputs(htpy_job)][-1]
         assert htpy_html == '<div class="x">&lt;hi&gt;</div>', htpy_html
 
         # A display() call made while a job runs is captured too.
@@ -3174,10 +3169,7 @@
             name="disp",
         )
         await disp_job.task
-        disp_outputs = conn.execute(
-            "SELECT outputs FROM executions WHERE id = ?", (disp_job.id,)
-        ).fetchone()[0]
-        disp_mimes = {mime for out in json.loads(disp_outputs) for mime in out["data"]}
+        disp_mimes = {mime for out in runtime._job_outputs(disp_job) for mime in out["data"]}
         assert "text/html" in disp_mimes, ("display mimes", disp_mimes)
 
         # A Result splits the human view (HTML on the dashboard) from the model
@@ -3186,8 +3178,7 @@
         from ix_notebook_mcp import outputs
         res_job = await run("Result(user_html='<b>hi</b>', llm_result='just-text')", budget=3.0, name="res")
         await res_job.task
-        res_outputs = conn.execute("SELECT outputs FROM executions WHERE id = ?", (res_job.id,)).fetchone()[0]
-        res_bundle = [out["data"] for out in json.loads(res_outputs)][-1]
+        res_bundle = [out["data"] for out in runtime._job_outputs(res_job)][-1]
         assert res_bundle.get("text/html") == "<b>hi</b>", res_bundle
         mcp = outputs.to_mcp([{"output_type": "execute_result", "data": res_bundle, "metadata": {}}])
         texts = [c.text for c in mcp if getattr(c, "text", None) is not None]
@@ -3198,22 +3189,16 @@
         # breaks nbformat -- and its keys reach the model text.
         dwim_job = await run("Result({'alpha': 1, 'beta': 2})", budget=3.0, name="dwim")
         await dwim_job.task
-        dwim_row = conn.execute(
-            "SELECT status, outputs FROM executions WHERE id = ?", (dwim_job.id,)
-        ).fetchone()
-        assert dwim_row["status"] == "done", dwim_row["status"]
-        dwim_bundle = [out["data"] for out in json.loads(dwim_row["outputs"])][-1]
+        assert dwim_job.status == "done", dwim_job.status
+        dwim_bundle = [out["data"] for out in runtime._job_outputs(dwim_job)][-1]
         assert isinstance(dwim_bundle.get("text/html"), str) and dwim_bundle["text/html"], dwim_bundle
         assert "alpha" in dwim_bundle.get("text/plain", "") and "beta" in dwim_bundle["text/plain"], dwim_bundle
 
         # Multiple values are ALL shown (not silently collapsed to the first).
         multi_job = await run("Result(True, [1, 2, 3])", budget=3.0, name="multi")
         await multi_job.task
-        multi_row = conn.execute(
-            "SELECT status, outputs FROM executions WHERE id = ?", (multi_job.id,)
-        ).fetchone()
-        assert multi_row["status"] == "done", multi_row["status"]
-        multi_text = [out["data"].get("text/plain", "") for out in json.loads(multi_row["outputs"])][-1]
+        assert multi_job.status == "done", multi_job.status
+        multi_text = [out["data"].get("text/plain", "") for out in runtime._job_outputs(multi_job)][-1]
         # Both values are shown: the bool by its repr, the list as its one-column
         # frame (NUON rows 1/2/3), not collapsed to just the first value.
         assert "true" in multi_text and "[[value]; [1], [2], [3]]" in multi_text, ("multi-value dropped a value", multi_text)
@@ -3242,6 +3227,7 @@
 
     store_path = tempfile.mktemp(suffix=".db")
     os.environ["IX_MCP_STORE"] = store_path
+    os.environ["WEAVE_URL"] = "off"
 
     from ix_notebook_mcp import outputs, runtime
 
@@ -3251,8 +3237,6 @@
 
 
     async def main():
-        conn = sqlite3.connect(store_path)
-        conn.row_factory = sqlite3.Row
 
         # A yielding cell streams multiple Results; its top-level names persist.
         code = (
@@ -3266,9 +3250,7 @@
         await job.task
         assert job.status == "done", (job.status, job.error)
         assert ns["acc"] == 3, ns.get("acc")
-        outs = json.loads(
-            conn.execute("SELECT outputs FROM executions WHERE id = ?", (job.id,)).fetchone()[0]
-        )
+        outs = runtime._job_outputs(job)
         htmls = [o["data"].get("text/html") for o in outs if "text/html" in o["data"]]
         assert len(htmls) == 4, ("expected 4 yielded results", len(htmls), outs)
 
@@ -3285,9 +3267,7 @@
         bare = await run("yield 123", budget=3.0, name="bare")
         await bare.task
         assert bare.status == "done", (bare.status, bare.error)
-        bare_outs = json.loads(
-            conn.execute("SELECT outputs FROM executions WHERE id = ?", (bare.id,)).fetchone()[0]
-        )
+        bare_outs = runtime._job_outputs(bare)
         bare_mcp = outputs.to_mcp(
             [{"output_type": "display_data", "data": o["data"], "metadata": {}} for o in bare_outs]
         )
@@ -3396,42 +3376,10 @@
     assert set(bound) == {"df", "n"}, bound
     assert bound["df"]["kind"] == "dataframe" and bound["n"]["summary"] == "7", bound
 
-    # Opening a pre-bindings store migrates it, and a second open (the kernel and
-    # dashboard each open the store) is a no-op rather than an error.
-    from ix_notebook_mcp import store as store_mod
-
-    legacy = tempfile.mktemp(suffix=".db")
-    seed = sqlite3.connect(legacy)
-    seed.execute(
-        "CREATE TABLE executions (id TEXT PRIMARY KEY, name TEXT, code TEXT NOT NULL, "
-        "status TEXT NOT NULL, started_at REAL NOT NULL, ended_at REAL, "
-        "output TEXT, result TEXT, error TEXT, outputs TEXT)"
-    )
-    seed.commit()
-    seed.close()
-    conn_a = store_mod.connect(legacy)
-    store_mod.connect(legacy)
-    migrated = {row[1] for row in conn_a.execute("PRAGMA table_info(executions)")}
-    assert "bindings" in migrated, migrated
-
-    # The duplicate-column race itself: a connection that observed the column
-    # missing (here forced via a shim) but runs ALTER after another connection
-    # already added it must swallow the error, not raise. This exercises the
-    # except branch the idempotency case above skips.
-    class _StaleSchema:
-        def __init__(self, conn):
-            self._conn = conn
-
-        def execute(self, sql, *args):
-            if sql.startswith("PRAGMA table_info"):
-                return [(0, "id"), (1, "name")]  # pretend bindings is still absent
-            return self._conn.execute(sql, *args)
-
-    store_mod._migrate(_StaleSchema(conn_a))  # ALTER -> duplicate column -> caught
-
-    # End to end: a finished job snapshots its bindings into the store row.
+    # End to end: a finished job snapshots the bindings that persistence emits.
     store_path = tempfile.mktemp(suffix=".db")
     os.environ["IX_MCP_STORE"] = store_path
+    os.environ["WEAVE_URL"] = "off"
 
     from IPython.core.interactiveshell import InteractiveShell
 
@@ -3447,10 +3395,7 @@
     async def main():
         job = await run("frame = pl.DataFrame({'a': [1, 2]})\nResult.ok('made it')", budget=3.0, name="bind")
         await job.task
-        conn = sqlite3.connect(store_path)
-        conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT bindings FROM executions WHERE id = ?", (job.id,)).fetchone()
-        stored = json.loads(row["bindings"])
+        stored = runtime._cell_bindings(job)
         assert stored.get("frame", {}).get("kind") == "dataframe", stored
         # `pl` is referenced and live, so it is described as a module.
         assert stored.get("pl", {}).get("kind") == "module", stored
