@@ -436,6 +436,7 @@
       provenanceModule = import ./modules/home/provenance.nix {inherit (ix) provenance;};
       optionsModule = personalOptionsModule;
       indexSkillsSrc = paths.skills;
+      tmuxModule = ./modules/home/tmux.nix;
     };
     personalDarwinHomeModule = import ./users/andrewgazelka/profiles/darwin-home.nix {
       inherit indexPackages ix;
@@ -459,7 +460,7 @@
         modules = [
           ./users/andrewgazelka/profiles/portable.nix
           (import ./users/andrewgazelka/profiles/development.nix {
-            agentLua = ./modules/profiles/base/nvim/agent.lua;
+            agentLua = ./modules/profiles/base/nvim/plugins/agent.lua;
             configRoot = personalConfigRoot;
           })
           {
@@ -494,6 +495,7 @@
       # Workstation-facing home-manager module: declare a service once, get a
       # native launchd agent on macOS and native systemd user units on Linux.
       portable-services = ix.portableServices.homeModule;
+      tmux = ./modules/home/tmux.nix;
       # Declarative-but-writable JSON config files (last-applied 3-way merge),
       # for config an app rewrites at runtime. See lib/mutable-json.nix.
       mutable-json = ix.mutableJson.homeModule;
