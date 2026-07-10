@@ -814,6 +814,24 @@
     in
       lib.mergeAttrsList (map rootsForTarget crossTargets)
   );
+  # A cross package whose build rides a distinct `cargoUnit.buildWorkspace`
+  # instead of the shared `crossWorkspace` (codex: its codex-rs is a second
+  # workspace) exposes that workspace's unit-graph IFD artifacts via
+  # `passthru.workspaceIfdRoots`. `crossIfdRoots` only covers the shared
+  # workspace, so harvest these too -- otherwise a Mac consumer substituting the
+  # cross output re-vendors/re-renders that graph at eval and hits the #1890
+  # trap on x86_64-linux drvs it cannot build. Generic over `crossPackages`, so
+  # a future second-workspace cross package joins with no hand-kept list.
+  crossPackageIfdRoots = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
+    lib.concatMapAttrs (
+      name: pkg:
+        lib.mapAttrs' (
+          rootName: drv: lib.nameValuePair "cross-ifd-${name}-${rootName}" drv
+        )
+        (pkg.passthru.workspaceIfdRoots or {})
+    )
+    crossPackages
+  );
   darwinPackageAliases = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
     lib.genAttrs (lib.attrNames darwinTargetsBySystem) (
       darwinSystem: let
@@ -1581,6 +1599,9 @@ in {
   #      forces at eval when it substitutes a Darwin cross output. These are
   #      build-time deps of the cross packages, so they are absent from those
   #      packages' runtime closures; adding them as roots is the fix for #1687.
+  #      `crossPackageIfdRoots` extends this to cross packages that ride a second
+  #      `buildWorkspace` (codex's codex-rs), whose own unit graph `crossIfdRoots`
+  #      -- keyed off the shared `crossWorkspace` -- does not see.
   #   4. On Darwin hosts, the native lane's eval-time IFD outputs
   #      (`nativeIfdRoots`): the same three unit-graph artifacts as (3) but for
   #      the host's own target, which a Darwin consumer forces at eval when it
@@ -1623,7 +1644,7 @@ in {
     # lane sees the cross drvs and its system filter drops them.
     if pkgs.stdenv.hostPlatform.isDarwin
     then imagesAsClosures // nativeIfdRoots
-    else imagesAsClosures // exampleNodeToplevels // crossIfdRoots;
+    else imagesAsClosures // exampleNodeToplevels // crossIfdRoots // crossPackageIfdRoots;
 
   # The policy manifest is safe to `nix eval --json`: derivations live in the
   # separate securityRootPaths output and must be realized before their terminal

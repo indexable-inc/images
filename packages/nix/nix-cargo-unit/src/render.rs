@@ -1669,7 +1669,15 @@ fn render_build_script_run_phase(
         "cp -RL \"$build_script_manifest_dir_source\"/. \"$build_script_manifest_dir\"/\n",
     );
     script.push_str("chmod -R u+w \"$build_script_manifest_dir\"\n");
-    script.push_str("build_script_out_dir=$(mktemp -d)\n");
+    // Cargo nests OUT_DIR several levels deep
+    // (`target/<profile>/build/<pkg>-<hash>/out`), so a build script can write
+    // relative to its ancestors. The `v8`/`rusty_v8` crate takes a download
+    // lock at `OUT_DIR/../../v8.fslock`; a bare `mktemp -d` gives a path shallow
+    // enough that its grandparent is `/`, so that write hits PermissionDenied.
+    // Nest two levels under the temp dir so `OUT_DIR/../..` lands back inside
+    // the (writable) mktemp dir.
+    script.push_str("build_script_out_dir=$(mktemp -d)/build/out\n");
+    script.push_str("mkdir -p \"$build_script_out_dir\"\n");
     script.push_str("build_script_env=()\n");
     script.push_str("export OUT_DIR=$build_script_out_dir\n");
     ensure_source_contains_unit(source, run_unit)?;

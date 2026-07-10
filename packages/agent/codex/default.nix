@@ -1,9 +1,11 @@
 {
   lib,
   ix,
-  codex,
-  rustPlatform,
+  pkgs,
   makeBinaryWrapper,
+  installShellFiles,
+  ripgrep,
+  bubblewrap,
   runCommand,
   git,
   symlinkJoin,
@@ -96,6 +98,12 @@
   # Overrides `systemPrompt` when non-null.
   modelInstructionsFile ? null,
 }: let
+  # Cross signal from the RFC 0009 lane (lib/per-system.nix `crossIxFor`): on a
+  # Linux build host this ix carries `cross = { isCross; target; targetSystem; }`
+  # and codex-rs is cross-compiled to Darwin. `null`/absent on a native build.
+  crossTarget = ix.cross.target or null;
+  isCross = ix.cross.isCross or false;
+
   effectiveModelInstructionsFile =
     if modelInstructionsFile != null
     then modelInstructionsFile
@@ -173,62 +181,68 @@
           ;
       }).codex;
   };
-  codexWithNotifications = codex.overrideAttrs (previousAttrs: {
-    version = "0.0.0";
-    src = codexSrc;
-    # `unpackPhase` names the unpacked dir after the src store path. The old
-    # fork input unpacked to `source/`; the patched-src derivation unpacks to
-    # its own name (`codex-patched`), so derive the sourceRoot from the src's
-    # name rather than hardcoding `source/`.
-    sourceRoot = "${codexSrc.name}/codex-rs";
-    # No cargoHash: an inlined vendor FOD hash goes stale on every codex-src
-    # bump the flake-update bot makes (index #2233 broke every ix deploy this
-    # way). importCargoLock needs no aggregate hash: crates.io checksums come
-    # from Cargo.lock itself and git deps are fetched by their locked revs.
-    # The lockfile is read from the RAW codex-src input (an eval-time store
-    # path, so no IFD), not the patched src: no patch touches Cargo.lock
-    # today, and if one ever does, cargoSetupPostPatchHook's lock-consistency
-    # check fails the build loudly rather than vendoring the wrong set.
-    #
-    # Git dependencies pinned in codex's Cargo.lock, keyed by "<name>-<version>"
-    # (rustPlatform.importCargoLock resolves the key to a locked commit SHA
-    # internally, so any one name-version sharing a SHA is enough; the
-    # rust-sdks monorepo contributes 4 crates from the same commit here).
-    # Refresh after a codex-src bump by rebuilding and copying the corrected
-    # hashes from the fetchgit mismatch errors; NOT allowBuiltinFetchGit,
-    # which would let builtins.fetchGit run at evaluation time (index#2255).
-    cargoDeps = rustPlatform.importCargoLock {
-      lockFile = ix.codexSrc + "/codex-rs/Cargo.lock";
-      outputHashes = {
-        "runfiles-0.1.0" = "sha256-uJpVLcQh8wWZA3GPv9D8Nt43EOirajfDJ7eq/FB+tek=";
-        "nucleo-0.5.0" = "sha256-Hm4SxtTSBrcWpXrtSqeO0TACbUxq3gizg1zD/6Yw/sI=";
-        "webrtc-sys-0.3.24" = "sha256-0HPuwaGcqpuG+Pp6z79bCuDu/DyE858VZSYr3DKZD9o=";
-        "crossterm-0.28.1" = "sha256-6qCtfSMuXACKFb9ATID39XyFDIEMFDmbx6SSmNe+728=";
-        "ratatui-0.29.0" = "sha256-HBvT5c8GsiCxMffNjJGLmHnvG77A6cqEL+1ARurBXho=";
-        "tokio-tungstenite-0.28.0" = "sha256-V1xmnrfRWOcZZogelZEA4vvyMj2awCfHVA5/glQ6KAI=";
-        "tungstenite-0.27.0" = "sha256-VVHhk7l9J/sEmG3q/UuV/sQ3f+fGsmq5vumSy8vbMvw=";
-      };
-    };
-    postPatch = ''
-      # shell
-      # importCargoLock vendors one top-level dir per crate (name-version),
-      # unlike fetchCargoVendor's extra nesting level. Version-anchor the glob
-      # so the sibling crate webrtc-sys-build-* can never match if a future
-      # rust-sdks rev gives it a build.rs (that would break --replace-fail on
-      # the next codex-src bump, the breakage class this file just eliminated).
-      substituteInPlace $cargoDepsCopy/webrtc-sys-[0-9]*/build.rs \
-        --replace-fail "cargo:rustc-link-lib=static=webrtc" "cargo:rustc-link-lib=dylib=webrtc"
-      substituteInPlace Cargo.toml \
-        --replace-fail 'lto = "thin"' "" \
-        --replace-fail 'codegen-units = 4' ""
-    '';
-    meta =
-      previousAttrs.meta
-      // {
+  # The codex-rs workspace version. The fork tracks upstream loosely and the
+  # index wrapper owns the real version pin, so this stays fixed at codex-rs's
+  # own `workspace.package.version`.
+  version = "0.0.0";
+
+  # codex-rs built on the per-unit Rust DAG (see ./rust.nix). This is the deep
+  # change: instead of `rustPlatform.buildRustPackage`, codex now rides the same
+  # cargoUnit machinery as index's own crates, so it cross-compiles to Darwin
+  # from Linux and a codex-src bump only rebuilds the crates that changed.
+  codexRust = import ./rust.nix {
+    inherit lib pkgs ix codexSrc binName;
+    target = crossTarget;
+  };
+  codexBinary = codexRust.binary;
+
+  # Reassemble the pieces `rustPlatform`'s codex used to provide around the raw
+  # binary: ripgrep on PATH (codex shells out to it; bubblewrap too on Linux for
+  # its sandbox) and shell completions. Completions run the binary, so they are
+  # gated on the build host being able to execute it (skipped when cross).
+  codexWithNotifications =
+    runCommand "codex-${version}" {
+      inherit version;
+      nativeBuildInputs = lib.optionals (!isCross) [makeBinaryWrapper installShellFiles];
+      meta = {
+        description = "OpenAI Codex CLI";
         homepage = "https://github.com/openai/codex";
         changelog = "https://github.com/openai/codex/commits/main";
+        license = lib.licenses.asl20;
+        mainProgram = binName;
+        platforms = lib.platforms.unix;
       };
-  });
+    } (
+      if isCross
+      then ''
+        # Cross (Linux->Darwin) lane: makeBinaryWrapper would compile a
+        # build-host (Linux ELF) wrapper that is dead on the Mac, so ship the
+        # Mach-O binary directly. The runtime PATH tools (ripgrep, and bubblewrap
+        # on Linux) are host-native with no Darwin artifact in this pkgs, so they
+        # drop out on cross (RFC 0009 nativePathSuffix posture) and the Mac codex
+        # finds ripgrep on the ambient PATH. Completions are skipped: generating
+        # them runs the binary, which the Linux host cannot execute.
+        # ponytail: no bundled rg on the Mac cross build; wire a Darwin ripgrep
+        # onto PATH here (a portable sh wrapper) if codex search must not rely on
+        # an ambient rg.
+        mkdir -p "$out/bin"
+        cp ${codexBinary}/bin/${binName} "$out/bin/${binName}"
+        chmod 0755 "$out/bin/${binName}"
+      ''
+      else ''
+        # shell
+        makeBinaryWrapper ${codexBinary}/bin/${binName} "$out/bin/${binName}" \
+          --prefix PATH : ${
+          lib.makeBinPath ([ripgrep] ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [bubblewrap])
+        }
+        ${lib.optionalString (pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform) ''
+          installShellCompletion --cmd ${binName} \
+            --bash <("$out/bin/${binName}" completion bash) \
+            --fish <("$out/bin/${binName}" completion fish) \
+            --zsh <("$out/bin/${binName}" completion zsh)
+        ''}
+      ''
+    );
 in
   # These baked defaults also reach the Codex GUI app's remote-SSH sessions, not
   # just terminal use. The desktop app does NOT ship its own binary to the remote
@@ -246,18 +260,46 @@ in
     # symlinkJoin links the whole codex output (libexec, completions, ...); we only
     # replace the entrypoint with our wrapper so the baked defaults ride every
     # invocation while everything else stays pristine.
-    nativeBuildInputs = [makeBinaryWrapper];
-    postBuild = ''
-      # shell
-      rm -f $out/bin/${binName}
-      makeBinaryWrapper ${launcher}/bin/config-launch $out/bin/${binName} \
-        --inherit-argv0 \
-        --set IX_LAUNCH_SPEC ${spec}
-    '';
+    nativeBuildInputs = lib.optionals (!isCross) [makeBinaryWrapper];
+    postBuild =
+      if isCross
+      then ''
+        # Cross lane: a portable #!/bin/sh shim, since makeBinaryWrapper's
+        # compiled wrapper is a build-host (Linux ELF) binary dead on the Mac.
+        # `exec -a "$0"` reproduces makeBinaryWrapper --inherit-argv0 so
+        # config-launch sees the name codex was invoked as (it reads argv0 and
+        # re-execs the target with it); macOS /bin/sh supports `exec -a`.
+        rm -f $out/bin/${binName}
+        cp ${
+          pkgs.writeText "codex-cross-launch" ''
+            #!/bin/sh
+            export IX_LAUNCH_SPEC=${spec}
+            exec -a "$0" ${launcher}/bin/config-launch "$@"
+          ''
+        } $out/bin/${binName}
+        chmod 0755 $out/bin/${binName}
+      ''
+      else ''
+        # shell
+        rm -f $out/bin/${binName}
+        makeBinaryWrapper ${launcher}/bin/config-launch $out/bin/${binName} \
+          --inherit-argv0 \
+          --set IX_LAUNCH_SPEC ${spec}
+      '';
     # The codex hooks.json rendered from the shared declaration list, for a
     # consumer to deliver to `~/.codex/hooks.json` (see the `hooksJson` comment).
     passthru = {
       inherit hooksJson spec specValue;
+      # codex-rs rides its OWN cargoUnit workspace (a second buildWorkspace,
+      # not the shared crossWorkspace), so its unit-graph IFD artifacts are
+      # invisible to per-system.nix's crossIfdRoots. Expose them so the cross
+      # lane can publish them as explicit push roots; without that a Darwin
+      # consumer's eval of the cross codex re-vendors/re-renders this graph and
+      # hits the #1890 substitute-or-nothing trap on x86_64-linux drvs it
+      # cannot build (RFC 0009, same rationale as crossIfdRoots).
+      workspaceIfdRoots = {
+        inherit (codexRust.workspace) unitsNix unitGraphJson vendorDir;
+      };
       modelInstructionsFile = effectiveModelInstructionsFile;
       permissions = sharedPermissions.codex;
     };
