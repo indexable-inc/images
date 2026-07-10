@@ -36,7 +36,7 @@ mod tests {
     #[derive(Debug)]
     struct Layer {
         message: &'static str,
-        source: Option<Box<Layer>>,
+        source: Option<Box<Self>>,
     }
 
     impl std::fmt::Display for Layer {

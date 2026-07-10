@@ -283,15 +283,17 @@ fn optional_typed<T>(
     expected: &str,
     extract: impl FnOnce(&Literal) -> Option<T>,
 ) -> Result<Option<T>, ExecuteError> {
-    match request.inputs.get(key) {
-        None => Ok(None),
-        Some(value) => extract(value).map(Some).ok_or_else(|| {
-            ExecuteError::new(format!(
-                "`{}` input `{key}` must be {expected}, got `{value}`",
-                request.kind
-            ))
-        }),
-    }
+    request.inputs.get(key).map_or_else(
+        || Ok(None),
+        |value| {
+            extract(value).map(Some).ok_or_else(|| {
+                ExecuteError::new(format!(
+                    "`{}` input `{key}` must be {expected}, got `{value}`",
+                    request.kind
+                ))
+            })
+        },
+    )
 }
 
 fn str_field(value: &Json, field: &str) -> Result<String, ExecuteError> {
