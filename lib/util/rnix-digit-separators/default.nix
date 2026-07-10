@@ -41,7 +41,11 @@ tool.overrideAttrs (old: {
       rnixVendor="''${cargoDepsCopy:-}"
       rnixConfig=""
       if [ -z "$rnixVendor" ]; then
-        for rnixConfigCandidate in .cargo/config.toml .cargo/config; do
+        # Recent generations write the vendored-sources config into
+        # $CARGO_HOME rather than the source root; check both homes.
+        for rnixConfigCandidate in \
+          ''${CARGO_HOME:+"$CARGO_HOME/config.toml" "$CARGO_HOME/config"} \
+          .cargo/config.toml .cargo/config; do
           [ -f "$rnixConfigCandidate" ] || continue
           rnixVendor=$(sed -n 's/^[[:space:]]*directory[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$rnixConfigCandidate" | head -n 1)
           if [ -n "$rnixVendor" ]; then
@@ -51,7 +55,10 @@ tool.overrideAttrs (old: {
         done
       fi
       if [ -z "$rnixVendor" ]; then
-        echo "rnix-digit-separators: no cargoDepsCopy and no vendored-sources directory in .cargo/config*" >&2
+        echo "rnix-digit-separators: no cargoDepsCopy and no vendored-sources directory in any cargo config" >&2
+        echo "CARGO_HOME=''${CARGO_HOME:-unset}" >&2
+        ls "''${CARGO_HOME:-/nonexistent}" 2>/dev/null | head -4 >&2
+        ls .cargo 2>/dev/null | head -4 >&2
         exit 1
       fi
       if [ ! -w "$rnixVendor" ]; then
