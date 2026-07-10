@@ -19,6 +19,8 @@
 //! `list`. The `nu` Python package turns those into polars frames.
 
 use std::collections::HashMap;
+use std::fmt;
+use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -41,6 +43,46 @@ create_exception!(
     pyo3::exceptions::PyException,
     "A nushell pipeline failed; the message is nushell's own rendered diagnostic."
 );
+create_exception!(
+    _nu,
+    NuCwdError,
+    NuError,
+    "The persistent engine's working directory was removed."
+);
+
+#[derive(Debug)]
+enum EvalError {
+    Diagnostic(String),
+    RemovedCwd(String),
+}
+
+impl EvalError {
+    fn diagnostic(&self) -> &str {
+        match self {
+            Self::Diagnostic(diagnostic) | Self::RemovedCwd(diagnostic) => diagnostic,
+        }
+    }
+}
+
+impl Deref for EvalError {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.diagnostic()
+    }
+}
+
+impl fmt::Display for EvalError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.diagnostic())
+    }
+}
+
+impl From<String> for EvalError {
+    fn from(diagnostic: String) -> Self {
+        Self::Diagnostic(diagnostic)
+    }
+}
 
 /// The engine state a fresh [`Engine`] starts from: the full shell command
 /// set, the host environment, and REPL-free configuration.
@@ -134,7 +176,7 @@ impl EngineInner {
         env: Option<HashMap<String, String>>,
         interrupt: &Arc<AtomicBool>,
         check: bool,
-    ) -> Result<(Vec<Value>, Value, i64), String> {
+    ) -> Result<(Vec<Value>, Value, i64), EvalError> {
         let Self {
             engine_state,
             stack,
@@ -146,9 +188,8 @@ impl EngineInner {
         // receive a signal aimed at the one currently running.
         engine_state.set_signals(Signals::new(Arc::clone(interrupt)));
 
-        if let Some(dir) = cwd {
-            stack.add_env_var("PWD".into(), Value::string(dir, Span::unknown()));
-        } else if let Some(pwd) = stack.get_env_var(engine_state, "PWD")
+        if cwd.is_none()
+            && let Some(pwd) = stack.get_env_var(engine_state, "PWD")
             && let Ok(pwd) = pwd.as_str()
             && !std::path::Path::new(pwd).is_dir()
         {
@@ -159,15 +200,11 @@ impl EngineInner {
             // across worktrees). A `cd` target that has since been removed
             // (issue #1986) must fail loudly with the remedy, not be silently
             // redirected somewhere else.
-            return Err(format!(
+            return Err(EvalError::RemovedCwd(format!(
                 "the engine's working directory `{pwd}` no longer exists \
-                 (a previous `cd` target was removed); pass cwd= to run \
-                 somewhere real (it persists like `cd`), or nu.reset() \
-                 for a fresh engine"
-            ));
-        }
-        for (key, value) in env.into_iter().flatten() {
-            stack.add_env_var(key, Value::string(value, Span::unknown()));
+                 (a previous `cd` target was removed); this engine was \
+                 discarded, so retry the call or pass cwd= explicitly"
+            )));
         }
 
         let block = {
@@ -179,7 +216,8 @@ impl EngineInner {
                     &working_set,
                     error,
                     Some("nu::parser::error"),
-                ));
+                )
+                .into());
             }
             if let Some(error) = working_set.compile_errors.first() {
                 return Err(format_cli_error(
@@ -187,7 +225,8 @@ impl EngineInner {
                     &working_set,
                     error,
                     Some("nu::compile::error"),
-                ));
+                )
+                .into());
             }
             let delta = working_set.render();
             engine_state
@@ -195,6 +234,16 @@ impl EngineInner {
                 .map_err(|error| render_shell_error(engine_state, stack, &error))?;
             block
         };
+
+        // Parse and compile before changing the persistent environment. A
+        // setup error must leave the previous PWD and variables intact so the
+        // next call starts from the last successfully configured state.
+        if let Some(dir) = cwd {
+            stack.add_env_var("PWD".into(), Value::string(dir, Span::unknown()));
+        }
+        for (key, value) in env.into_iter().flatten() {
+            stack.add_env_var(key, Value::string(value, Span::unknown()));
+        }
 
         // Bash redirection tokens the parser handed to an external as literal
         // argv (`2>/dev/null` and friends), detected up front and reported
@@ -209,7 +258,7 @@ impl EngineInner {
             diagnostic.push('\n');
             diagnostic.push_str(&bash_redirection_hint(token));
         }
-        result
+        result.map_err(EvalError::from)
     }
 }
 
@@ -805,7 +854,8 @@ impl Engine {
                         .unbind()
                         .into_any())
                 }),
-                Err(diagnostic) => Err(NuError::new_err(diagnostic)),
+                Err(EvalError::Diagnostic(diagnostic)) => Err(NuError::new_err(diagnostic)),
+                Err(EvalError::RemovedCwd(diagnostic)) => Err(NuCwdError::new_err(diagnostic)),
             }
         })?;
         Ok((future, EvalHandle { flag }))
@@ -835,6 +885,7 @@ fn _nu(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Engine>()?;
     module.add_class::<EvalHandle>()?;
     module.add("NuError", module.py().get_type::<NuError>())?;
+    module.add("NuCwdError", module.py().get_type::<NuCwdError>())?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
