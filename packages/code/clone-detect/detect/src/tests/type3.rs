@@ -147,7 +147,7 @@ fn threshold_controls_type3_reporting() {
 #[test]
 fn groups_never_compare_overlapping_regions_of_one_file() {
     let dir = TempDir::new().unwrap();
-    let code = r"
+    let code = r#"
 fn process(values: &[i32]) -> i32 {
     let mut total = 0;
     for value in values {
@@ -157,7 +157,7 @@ fn process(values: &[i32]) -> i32 {
     }
     total
 }
-";
+"#;
     create_temp_file(&dir, "nested.rs", code);
 
     let result = scan_and_run(
