@@ -300,8 +300,8 @@
   # each worker's eval bounded by the largest single crate. Both binaries are
   # nix-fast-build is the repo-built nixpkgs 1.5.0 package with a patch that
   # makes --skip-cached skip a `local` (warm-store) output, not just a remotely
-  # `cached` one. nix-eval-jobs is built against nixpkgs' Git Nix components so
-  # its CA-realisation protocol matches the fleet's rolling daemon. The eval
+  # `cached` one. nix-eval-jobs is built against the fleet daemon's exact Nix
+  # revision so its unstable CA-realisation protocol matches. The eval
   # cache is disabled for the parallel evaluator: all workers share one
   # per-flake SQLite database, so writes contend and can fail with "database is
   # busy" without providing useful hits on a fresh commit. See the $fast_build

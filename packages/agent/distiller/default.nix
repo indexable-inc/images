@@ -56,7 +56,7 @@
     mypy = {};
     # pyarrow's bundled stubs omit explicit top-level re-exports and leave its
     # writer/reader helpers untyped.
-    "mypy-pyarrow" = {
+    mypy-pyarrow = {
       implicit_reexport = true;
       disallow_untyped_calls = false;
     };

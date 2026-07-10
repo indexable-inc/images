@@ -1,0 +1,31 @@
+diff --git a/src/nix-eval-jobs.cc b/src/nix-eval-jobs.cc
+index 9d8c2a1..d714d91 100644
+--- a/src/nix-eval-jobs.cc
++++ b/src/nix-eval-jobs.cc
+@@ -540,9 +540 @@ int main(int argc, char **argv) {
+-            try {
+-                nix::saveMountNamespace();
+-                if (unshare(CLONE_NEWNS) == -1) {
+-                    throw nix::SysError("setting up a private mount namespace");
+-                }
+-            } catch (nix::Error &e) {
+-                nix::warn("failed to set up a private mount namespace: %s",
+-                          e.msg());
+-            }
++            nix::tryEnterPrivateMountNamespace();
+diff --git a/src/worker.cc b/src/worker.cc
+index c341f14..d94c0d7 100644
+--- a/src/worker.cc
++++ b/src/worker.cc
+@@ -59 +59 @@ namespace {
+-auto releaseExprTopLevelValue(nix::EvalState &state, nix::Bindings &autoArgs,
++auto releaseExprTopLevelValue(nix::EvalState &state, const nix::Bindings &autoArgs,
+@@ -283 +283 @@ auto initializeRootValue(const nix::ref<nix::EvalState> &state,
+-                         nix::Bindings &autoArgs, MyArgs &args)
++                         const nix::Bindings &autoArgs, MyArgs &args)
+@@ -320 +320 @@ auto processJobRequest(nix::EvalState &state, LineReader &fromReader,
+-                       nix::AutoCloseFD &toParent, nix::Bindings &autoArgs,
++                       nix::AutoCloseFD &toParent, const nix::Bindings &autoArgs,
+@@ -407 +407 @@ void worker(
+-    nix::Bindings &autoArgs = *args.getAutoArgs(*state);
++    const nix::Bindings &autoArgs = *args.getAutoArgs(*state);
