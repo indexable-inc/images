@@ -1,15 +1,11 @@
 (function () {
   var VERSION = "3.0.0";
-
-  function clean(text) {
-    return (text || "").replace(/\s+/g, " ").trim();
-  }
-
-  function wait(ms) {
-    return new Promise(function (resolve) {
-      setTimeout(resolve, ms);
-    });
-  }
+  var utils = window.__antithesisBrowserUtils;
+  if (!utils) throw new Error("inject antithesis browser-utils.js first");
+  var clean = utils.clean;
+  var wait = utils.wait;
+  var isVisible = utils.isVisible;
+  var click = utils.click;
 
   function abort(details) {
     var msg =
@@ -19,33 +15,6 @@
     var err = new Error(msg);
     err.details = details;
     throw err;
-  }
-
-  function isVisible(el) {
-    if (!el || typeof el.getBoundingClientRect !== "function") return false;
-
-    var rect = el.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return false;
-
-    var style = window.getComputedStyle(el);
-    return style.display !== "none" && style.visibility !== "hidden";
-  }
-
-  function click(el) {
-    if (!el) return false;
-
-    ["pointerdown", "mousedown", "mouseup", "click"].forEach(function (type) {
-      el.dispatchEvent(
-        new MouseEvent(type, {
-          bubbles: true,
-          cancelable: true,
-          composed: true,
-          view: window,
-        }),
-      );
-    });
-
-    return true;
   }
 
   function ownText(el) {
@@ -1365,17 +1334,7 @@
       };
     },
 
-    waitForReady: async function (options) {
-      return waitForReady(
-        function () {
-          return runsApi.loadingFinished();
-        },
-        function () {
-          return runsApi.loadingStatus();
-        },
-        options,
-      );
-    },
+    waitForReady: utils.readiness(waitForReady, function () { return runsApi; }),
 
     /**
      * getRecentRuns(options?)

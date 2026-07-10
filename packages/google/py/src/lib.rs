@@ -83,6 +83,36 @@ fn parse_message_format(name: Option<&str>) -> PyResult<MessageFormat> {
     })
 }
 
+enum GmailResource {
+    Message,
+    Thread,
+}
+
+fn gmail_resource_future<'py>(
+    py: Python<'py>,
+    client: Arc<google_gmail::Client>,
+    id: String,
+    format: Option<String>,
+    resource: GmailResource,
+) -> PyResult<Bound<'py, PyAny>> {
+    let format = parse_message_format(format.as_deref())?;
+    json_future(py, async move {
+        match resource {
+            GmailResource::Message => client
+                .get_message(&id, format)
+                .await
+                .map(|value| serde_json::to_value(value))
+                .map_err(|error| error.to_string()),
+            GmailResource::Thread => client
+                .get_thread(&id, format)
+                .await
+                .map(|value| serde_json::to_value(value))
+                .map_err(|error| error.to_string()),
+        }
+        .and_then(|value| value.map_err(|error| error.to_string()))
+    })
+}
+
 /// `notify` defaults to `All` only when absent; an unrecognized value is
 /// an error, because it decides who Google emails.
 fn parse_send_updates(name: Option<&str>) -> PyResult<SendUpdates> {
@@ -234,33 +264,14 @@ impl GmailClient {
             include_spam_trash,
             max_results,
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let stubs = client
-                .list_messages(&q)
-                .await
-                .map_err(into_py_runtime_error)?;
-            pythonize_owned(&stubs)
-        })
+        json_future(py, async move { client.list_messages(&q).await })
     }
 
     /// Fetch one message by id. `format` is `full` (default), `minimal`,
     /// `metadata`, or `raw`.
     #[pyo3(signature = (message_id, format = None))]
-    fn get_message<'py>(
-        &self,
-        py: Python<'py>,
-        message_id: String,
-        format: Option<String>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let client = Arc::clone(&self.inner);
-        let fmt = parse_message_format(format.as_deref())?;
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let message = client
-                .get_message(&message_id, fmt)
-                .await
-                .map_err(into_py_runtime_error)?;
-            pythonize_owned(&message)
-        })
+    fn get_message<'py>(&self, py: Python<'py>, message_id: String, format: Option<String>) -> PyResult<Bound<'py, PyAny>> {
+        gmail_resource_future(py, Arc::clone(&self.inner), message_id, format, GmailResource::Message)
     }
 
     /// List threads matching `query` (Gmail search syntax).
@@ -291,21 +302,8 @@ impl GmailClient {
 
     /// Fetch one thread (with its messages) by id.
     #[pyo3(signature = (thread_id, format = None))]
-    fn get_thread<'py>(
-        &self,
-        py: Python<'py>,
-        thread_id: String,
-        format: Option<String>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let client = Arc::clone(&self.inner);
-        let fmt = parse_message_format(format.as_deref())?;
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let thread = client
-                .get_thread(&thread_id, fmt)
-                .await
-                .map_err(into_py_runtime_error)?;
-            pythonize_owned(&thread)
-        })
+    fn get_thread<'py>(&self, py: Python<'py>, thread_id: String, format: Option<String>) -> PyResult<Bound<'py, PyAny>> {
+        gmail_resource_future(py, Arc::clone(&self.inner), thread_id, format, GmailResource::Thread)
     }
 
     /// Compose and send a message.
@@ -559,13 +557,7 @@ impl CalendarClient {
             text,
             max_events,
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let events = client
-                .list_events(&calendar, &query)
-                .await
-                .map_err(into_py_runtime_error)?;
-            pythonize_owned(&events)
-        })
+        json_future(py, async move { client.list_events(&calendar, &query).await })
     }
 
     /// Fetch one event by id.
@@ -578,13 +570,7 @@ impl CalendarClient {
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = Arc::clone(&self.inner);
         let calendar = calendar_id.unwrap_or_else(|| google_calendar::PRIMARY_CALENDAR.to_owned());
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let event = client
-                .get_event(&calendar, &event_id)
-                .await
-                .map_err(into_py_runtime_error)?;
-            pythonize_owned(&event)
-        })
+        json_future(py, async move { client.get_event(&calendar, &event_id).await })
     }
 
     /// Create an event. `start` and `end` are RFC 3339 (timed) or
@@ -632,12 +618,8 @@ impl CalendarClient {
         };
         let calendar = calendar_id.unwrap_or_else(|| google_calendar::PRIMARY_CALENDAR.to_owned());
         let send_updates = parse_send_updates(notify.as_deref())?;
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let event = client
-                .create_event(&calendar, &draft, send_updates)
-                .await
-                .map_err(into_py_runtime_error)?;
-            pythonize_owned(&event)
+        json_future(py, async move {
+            client.create_event(&calendar, &draft, send_updates).await
         })
     }
 
@@ -653,12 +635,8 @@ impl CalendarClient {
         let client = Arc::clone(&self.inner);
         let calendar = calendar_id.unwrap_or_else(|| google_calendar::PRIMARY_CALENDAR.to_owned());
         let send_updates = parse_send_updates(notify.as_deref())?;
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            client
-                .cancel_event(&calendar, &event_id, send_updates)
-                .await
-                .map_err(into_py_runtime_error)?;
-            Python::attach(|py| Ok(py.None()))
+        unit_future(py, async move {
+            client.cancel_event(&calendar, &event_id, send_updates).await
         })
     }
 }

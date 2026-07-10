@@ -46,18 +46,8 @@ pub fn rust_type(ty: &ir::Type, user: &Ident) -> TokenStream {
 }
 
 fn int_tokens(kind: ir::IntKind) -> TokenStream {
-    match kind {
-        ir::IntKind::I8 => quote!(i8),
-        ir::IntKind::I16 => quote!(i16),
-        ir::IntKind::I32 => quote!(i32),
-        ir::IntKind::I64 => quote!(i64),
-        ir::IntKind::Isize => quote!(isize),
-        ir::IntKind::U8 => quote!(u8),
-        ir::IntKind::U16 => quote!(u16),
-        ir::IntKind::U32 => quote!(u32),
-        ir::IntKind::U64 => quote!(u64),
-        ir::IntKind::Usize => quote!(usize),
-    }
+    let ident = Ident::new(kind.rust_name(), Span::call_site());
+    quote!(#ident)
 }
 
 /// The default-value expression for a `#[pyo3(signature = ...)]` entry.

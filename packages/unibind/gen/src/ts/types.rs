@@ -66,7 +66,7 @@ pub fn ts_type(
                     message: format!(
                         "`{}` only crosses as a BigInt; the ts backend rejects it \
                          until BigInt lands (issue #1993)",
-                        int_name(*kind)
+                        kind.rust_name()
                     ),
                 });
             }
@@ -99,21 +99,6 @@ pub fn ts_type(
             });
         }
     })
-}
-
-const fn int_name(kind: ir::IntKind) -> &'static str {
-    match kind {
-        ir::IntKind::I8 => "i8",
-        ir::IntKind::I16 => "i16",
-        ir::IntKind::I32 => "i32",
-        ir::IntKind::I64 => "i64",
-        ir::IntKind::Isize => "isize",
-        ir::IntKind::U8 => "u8",
-        ir::IntKind::U16 => "u16",
-        ir::IntKind::U32 => "u32",
-        ir::IntKind::U64 => "u64",
-        ir::IntKind::Usize => "usize",
-    }
 }
 
 /// Resolve a `Named` reference (a record or an object) to its JavaScript

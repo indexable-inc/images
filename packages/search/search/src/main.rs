@@ -24,7 +24,7 @@ use search_core::{
     Agentic, AgenticConfig, AskOptions, CodeScope, ContextView, DEFAULT_RERANK_MODEL,
     DEFAULT_STORE, DisplayHit, EnhancedQuery, Filter, FilterSpec, GrepOptions, GrepTargets,
     KNOWN_SOURCE_TAGS, Manifest, MixedbreadStore, RenderMode, Rerank, SearchOptions, SortBy,
-    Source, build_filter, parse_time_spec,
+    Source, build_filter, epoch_now, parse_time_spec,
 };
 
 /// Command-line arguments.
@@ -151,19 +151,6 @@ fn resolve_scope(scope: &ScopeArgs) -> anyhow::Result<Option<Filter>> {
             .transpose()?,
     };
     Ok(build_filter(&spec))
-}
-
-/// The current wall clock as epoch seconds, the reference point for relative
-/// `--since`/`--until` spans.
-fn epoch_now() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    // Clamp explicitly: a wall clock past i64::MAX epoch seconds is not a real
-    // input, and the clamp makes the conversion below infallible.
-    let capped = secs.min(u64::try_from(i64::MAX).expect("i64::MAX is positive"));
-    i64::try_from(capped).expect("capped at i64::MAX")
 }
 
 fn parse_sources(values: &[String]) -> anyhow::Result<Vec<Source>> {

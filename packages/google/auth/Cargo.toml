@@ -20,7 +20,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
 snafu.workspace = true
-tokio = { workspace = true, features = ["io-util", "net", "sync", "time"] }
+tokio = { workspace = true, features = ["io-std", "io-util", "net", "sync", "time"] }
 url.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 

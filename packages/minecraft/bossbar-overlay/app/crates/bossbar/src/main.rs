@@ -13,6 +13,7 @@
 mod assets;
 mod bars;
 mod db;
+mod gpu_core;
 #[cfg(target_os = "linux")]
 mod layer_shell;
 mod overlay;

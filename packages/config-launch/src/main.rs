@@ -468,29 +468,18 @@ mod tests {
     }
 
     #[test]
-    fn conditional_flag_withheld_when_bare_option_present() {
+    fn conditional_flag_withheld_for_every_option_spelling() {
         let spec = make_spec(SpecBuilder {
             conditional: vec![(vec!["--settings"], vec!["--settings=/def.json"])],
             ..SpecBuilder::default()
         });
-        let flags = build_arg_flags(&spec, &os(&["--settings", "/user.json"]));
-        assert!(
-            flags.is_empty(),
-            "conditional should be withheld when user passes the bare option; got: {flags:?}"
-        );
-    }
-
-    #[test]
-    fn conditional_flag_withheld_when_equals_option_present() {
-        let spec = make_spec(SpecBuilder {
-            conditional: vec![(vec!["--settings"], vec!["--settings=/def.json"])],
-            ..SpecBuilder::default()
-        });
-        let flags = build_arg_flags(&spec, &os(&["--settings=/user.json"]));
-        assert!(
-            flags.is_empty(),
-            "conditional should be withheld for the `=` form; got: {flags:?}"
-        );
+        for args in [
+            &["--settings", "/user.json"][..],
+            &["--settings=/user.json"][..],
+        ] {
+            let flags = build_arg_flags(&spec, &os(args));
+            assert!(flags.is_empty(), "conditional leaked for {args:?}: {flags:?}");
+        }
     }
 
     #[test]

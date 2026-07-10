@@ -19,11 +19,11 @@ ignore = [
 # lint stage. `global_pct` is the ceiling on whole-scan `duplication_pct`
 # (measured over the gated code, i.e. after the ignore globs above are applied).
 #
-# This is a RATCHET: the measured baseline is 0.842%, and this ceiling sits just
+# This is a RATCHET: the measured baseline is 0.4367%, and this ceiling sits just
 # above it. Lower it as duplication is removed (re-measure with `nix run .#clone
 # -- . | jq .stats.duplication_pct`). Do NOT raise it without a written reason:
 # raising it silently admits new duplication.
 [budget]
-global_pct = 0.85
+global_pct = 0.44
 diff_pct = 0.0
 diff_base = "origin/main"

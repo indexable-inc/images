@@ -23,6 +23,7 @@
 //! client.
 
 pub mod keys;
+pub mod files;
 pub mod sanitize;
 
 use std::fmt;
@@ -231,10 +232,9 @@ pub trait SourceAdapter {
 }
 
 /// Implement [`SourceAdapter`] for an eagerly parsed collection whose elements
-/// convert into owned documents.
-///
-/// Cloning the collection makes the returned iterator independent of `&self`,
-/// which is the shared lifetime contract for file and database adapters.
+/// convert into owned documents. Cloning the collection makes the returned
+/// iterator independent of `&self`, which is the shared lifetime contract for
+/// file and database adapters.
 #[macro_export]
 macro_rules! impl_owned_source_adapter {
     ($adapter:ty, $error:ty, $source:expr, $field:ident, $convert:path) => {
@@ -419,6 +419,22 @@ mod tests {
         let b = hash_body(b"hello world");
         assert_eq!(a, b);
         assert!(a.starts_with("sha256:"));
+        assert_ne!(a, hash_body(b"hello worlds"));
+    }
+
+    #[test]
+    fn metadata_within_limits_passes() {
+        let meta = serde_json::json!({ "source": "code", "path": "a.rs" });
+        assert!(check_metadata("sha256:x", &meta).is_ok());
+    }
+
+    #[test]
+    fn oversized_metadata_is_rejected() {
+        let big = "x".repeat(super::MAX_METADATA_BYTES + 1);
+        let meta = serde_json::json!({ "source": "slack", "blob": big });
+        assert!(check_metadata("slack:c:1", &meta).is_err());
+    }
+}
         assert_ne!(a, hash_body(b"hello worlds"));
     }
 

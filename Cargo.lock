@@ -807,6 +807,7 @@ version = "0.1.0"
 dependencies = [
  "astlog-core",
  "clap",
+ "error-chain",
  "serde_json",
  "snafu",
 ]
@@ -829,6 +830,7 @@ name = "astlog-py"
 version = "0.1.0"
 dependencies = [
  "astlog-core",
+ "error-chain",
  "pyo3",
 ]
 
@@ -1702,6 +1704,7 @@ version = "0.1.0"
 dependencies = [
  "clone-hash",
  "clone-scanner",
+ "clone-test-support",
  "rayon",
  "rustc-hash",
  "serde",
@@ -1736,6 +1739,7 @@ dependencies = [
  "ast-merge-langs",
  "clone-hash",
  "clone-pragma",
+ "clone-test-support",
  "ignore",
  "parking_lot",
  "rustc-hash",
@@ -1743,6 +1747,10 @@ dependencies = [
  "tempfile",
  "tracing",
 ]
+
+[[package]]
+name = "clone-test-support"
+version = "0.1.0"
 
 [[package]]
 name = "cmake"
@@ -3124,6 +3132,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "error-chain"
+version = "0.1.0"
+
+[[package]]
 name = "error-code"
 version = "3.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3441,6 +3453,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flecs-query-core",
+ "mcp-server-info",
  "rmcp",
  "schemars 1.2.1",
  "serde",
@@ -4189,6 +4202,7 @@ dependencies = [
  "google-auth",
  "google-calendar",
  "google-gmail",
+ "mcp-server-info",
  "rmcp",
  "schemars 1.2.1",
  "serde",
@@ -6047,6 +6061,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mcp-server-info"
+version = "0.1.0"
+dependencies = [
+ "rmcp",
+]
+
+[[package]]
 name = "md-5"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7852,6 +7873,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "panes-guest-transport",
  "panes-protocol",
  "tracing",
  "tracing-subscriber",
@@ -7865,11 +7887,21 @@ dependencies = [
  "anyhow",
  "clap",
  "lz4_flex 0.13.1",
+ "panes-guest-transport",
  "panes-protocol",
  "rayon",
  "smithay",
  "tracing",
  "tracing-subscriber",
+ "vsock",
+]
+
+[[package]]
+name = "panes-guest-transport"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "tracing",
  "vsock",
 ]
 
@@ -9722,6 +9754,7 @@ name = "scipql"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "error-chain",
  "scipql-core",
 ]
 
@@ -9740,6 +9773,7 @@ dependencies = [
 name = "scipql-py"
 version = "0.1.0"
 dependencies = [
+ "error-chain",
  "pyo3",
  "scipql-core",
  "unibind",

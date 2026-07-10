@@ -146,7 +146,7 @@ Use the browser-side runtime file:
 Inject it into the current page with:
 
 ```bash
-cat assets/antithesis-debug.js \
+cat ../antithesis/assets/browser-utils.js assets/antithesis-debug.js \
   | agent-browser --session "$SESSION" eval --stdin
 ```
 
@@ -168,7 +168,7 @@ agent-browser --session "$SESSION" eval \
 `agent-browser eval` awaits Promises automatically, so async and sync methods
 use the same call pattern.
 
-If `window.__antithesisDebug` is missing, inject `assets/antithesis-debug.js` and retry the method call.
+If `window.__antithesisDebug` is missing, rerun the combined injection command and retry the method call.
 
 Do not run method calls in parallel with `agent-browser open`, navigation, or
 any other command that can replace the page. Wait until the target page is
@@ -241,7 +241,7 @@ agent-browser --session "$SESSION" eval \
 ### Advanced mode only
 
 - **Inject the runtime after navigation.** After every `open` call or page
-  reload, inject `assets/antithesis-debug.js` and call
+  reload, rerun the combined injection command and call
   `notebook.waitForReady()` before the next method call.
 - **Retry missing-runtime errors by reinjecting.** If a command fails because
   `window.__antithesisDebug` is undefined or missing, inject the runtime and

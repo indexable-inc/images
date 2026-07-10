@@ -90,32 +90,8 @@ impl<'a> ThreeWay<'a> {
 
     fn build_class_mapping(&self) -> Class {
         let mut mapping = Class::new();
-
-        for pair in self.base_left_matching.iter() {
-            mapping.merge(&RevisionNodePair {
-                a: RevisionNode {
-                    revision: Revision::Base,
-                    node_id: pair.a_id,
-                },
-                b: RevisionNode {
-                    revision: Revision::Left,
-                    node_id: pair.b_id,
-                },
-            });
-        }
-
-        for pair in self.base_right_matching.iter() {
-            mapping.merge(&RevisionNodePair {
-                a: RevisionNode {
-                    revision: Revision::Base,
-                    node_id: pair.a_id,
-                },
-                b: RevisionNode {
-                    revision: Revision::Right,
-                    node_id: pair.b_id,
-                },
-            });
-        }
+        merge_matching(&mut mapping, &self.base_left_matching, Revision::Left);
+        merge_matching(&mut mapping, &self.base_right_matching, Revision::Right);
 
         mapping
     }
@@ -141,6 +117,21 @@ impl<'a> ThreeWay<'a> {
             right: &right_items,
         };
         reconcile_lists(&self.trees, &items)
+    }
+}
+
+fn merge_matching(mapping: &mut Class, matching: &Map, target: Revision) {
+    for pair in matching.iter() {
+        mapping.merge(&RevisionNodePair {
+            a: RevisionNode {
+                revision: Revision::Base,
+                node_id: pair.a_id,
+            },
+            b: RevisionNode {
+                revision: target,
+                node_id: pair.b_id,
+            },
+        });
     }
 }
 

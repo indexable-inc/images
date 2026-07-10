@@ -638,6 +638,19 @@ impl Client {
         format!("{}{path}", self.base_url)
     }
 
+    async fn post_chunks<T: serde::Serialize + ?Sized>(
+        &self,
+        path: &str,
+        request: &T,
+    ) -> Result<Vec<Chunk>> {
+        let url = self.url(path);
+        let response = self
+            .send_retrying(|| Ok(self.http.post(url.as_str()).json(request)))
+            .await?;
+        let response: SearchResponse = decode(response).await?;
+        Ok(response.data.into_iter().map(Chunk::from).collect())
+    }
+
     /// Send a request with bearer auth, retrying on `429`/`5xx` (with
     /// `Retry-After`-aware, jittered backoff) and on transport-level send
     /// failures (connection reset, HTTP/2 error, timeout) where no response
@@ -862,12 +875,7 @@ impl Client {
             filters,
             file_ids,
         };
-        let search_url = self.url("/v1/stores/search");
-        let resp = self
-            .send_retrying(|| Ok(self.http.post(search_url.as_str()).json(&request)))
-            .await?;
-        let response: SearchResponse = decode(resp).await?;
-        Ok(response.data.into_iter().map(Chunk::from).collect())
+        self.post_chunks("/v1/stores/search", &request).await
     }
 
     /// Grep one or more stores: run a regular expression over the same indexed
@@ -899,12 +907,7 @@ impl Client {
             targets,
             filters,
         };
-        let grep_url = self.url("/v1/stores/grep");
-        let resp = self
-            .send_retrying(|| Ok(self.http.post(grep_url.as_str()).json(&request)))
-            .await?;
-        let response: SearchResponse = decode(resp).await?;
-        Ok(response.data.into_iter().map(Chunk::from).collect())
+        self.post_chunks("/v1/stores/grep", &request).await
     }
 
     /// List chunks from one or more stores purely by metadata filters — no
@@ -935,12 +938,7 @@ impl Client {
             filters,
             sort_by,
         };
-        let list_url = self.url("/v1/stores/list-chunks");
-        let resp = self
-            .send_retrying(|| Ok(self.http.post(list_url.as_str()).json(&request)))
-            .await?;
-        let response: SearchResponse = decode(resp).await?;
-        Ok(response.data.into_iter().map(Chunk::from).collect())
+        self.post_chunks("/v1/stores/list-chunks", &request).await
     }
 
     /// Ask a natural-language question against one or more stores. `file_ids`
@@ -1523,12 +1521,10 @@ mod tests {
 
     type CapturedRequest = Arc<std::sync::Mutex<Option<serde_json::Value>>>;
 
-    struct PostFixture {
-        base_url: String,
-        captured: CapturedRequest,
-    }
-
-    async fn post_fixture(path: &'static str, response: &'static str) -> PostFixture {
+    async fn post_fixture(
+        path: &'static str,
+        response: &'static str,
+    ) -> (String, CapturedRequest) {
         let captured: CapturedRequest = Arc::default();
         let app = Router::new().route(
             path,
@@ -1547,10 +1543,7 @@ mod tests {
         tokio::spawn(async move {
             axum::serve(listener, app).await.expect("serve");
         });
-        PostFixture {
-            base_url: format!("http://{addr}"),
-            captured,
-        }
+        (format!("http://{addr}"), captured)
     }
 
     #[test]
@@ -1629,10 +1622,7 @@ mod tests {
         // Round-trip through a real router: the request must hit
         // `/v1/stores/list-chunks` and the response decodes through the same
         // RawChunk -> Chunk projection search uses.
-        let PostFixture {
-            base_url,
-            captured,
-        } = post_fixture(
+        let (base_url, captured) = post_fixture(
             "/v1/stores/list-chunks",
             r#"{"data":[{"text":"gt sync","score":1.0,"metadata":{"source":"shell","timestamp":1781248268}}]}"#,
         )
@@ -1950,10 +1940,7 @@ mod tests {
         // Round-trip through a real router: the request must hit
         // `/v1/stores/queries/enhance` with the documented body, and the
         // response's one item decodes through the tagged EnhancedQuery enum.
-        let PostFixture {
-            base_url,
-            captured,
-        } = post_fixture(
+        let (base_url, captured) = post_fixture(
             "/v1/stores/queries/enhance",
             r#"{"items":[{"type":"query","query":"indexer slack messages","metadata_filters":[{"key":"source","operator":"eq","value":"slack"}],"filter_mode":"all","rank_by":null,"direction":null}]}"#,
         )
@@ -1992,10 +1979,7 @@ mod tests {
         // `/v1/stores/metadata-facets` with the documented body (facet keys,
         // scan caps, no nulls for unset caps) and the response decodes the
         // live `{key: {value: count}}` shape.
-        let PostFixture {
-            base_url,
-            captured,
-        } = post_fixture(
+        let (base_url, captured) = post_fixture(
             "/v1/stores/metadata-facets",
             r#"{"facets":{"source":{"shell":1154,"code":9644}}}"#,
         )
@@ -2276,10 +2260,7 @@ mod tests {
         // query, documents (`input`), top_k, and `return_input: false`; the
         // response's `data` items project to (index, score) pairs pointing back
         // into the submitted slice.
-        let PostFixture {
-            base_url,
-            captured,
-        } = post_fixture(
+        let (base_url, captured) = post_fixture(
             "/v1/reranking",
             r#"{"data":[{"index":2,"score":0.91},{"index":0,"score":0.12}]}"#,
         )
@@ -2430,6 +2411,3621 @@ mod tests {
         let client = Client::new(base_url, "test-key").expect("client");
         client
             .ensure_store("store")
+            .await
+            .expect("succeeds after transport retries");
+        // 2 dropped connections + 1 accepted.
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn gives_up_after_max_retries() {
+        let MockServer { base_url, calls } = spawn_mock(usize::MAX).await;
+        let client = Client::new(base_url, "test-key").expect("client");
+        let err = client
+            .ensure_store("store")
+            .await
+            .expect_err("never succeeds");
+        assert!(matches!(err, Error::Api { status: 429, .. }), "got {err:?}");
+        // The initial attempt plus MAX_RETRIES retries.
+        assert_eq!(calls.load(Ordering::SeqCst), (MAX_RETRIES + 1) as usize);
+    }
+}
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+                ..AgenticConfig::default()
+>>>>>>>
+<<<<<<<
+            }))
+=======
+    #[test]
+>>>>>>>
+<<<<<<<
+            .expect("serialize"),
+=======
+    fn search_request_matches_the_documented_wire_shape() {
+>>>>>>>
+<<<<<<<
+            serde_json::json!({ "max_rounds": 2, "instructions": "prefer recent records" })
+=======
+        // Pins the `/v1/stores/search` body across every option this client
+>>>>>>>
+<<<<<<<
+        );
+=======
+        // models: the StoreChunkSearchOptions fields live under
+>>>>>>>
+<<<<<<<
+
+=======
+        // `search_options`, while `file_ids` is a sibling of `filters` at the
+>>>>>>>
+<<<<<<<
+        // request level (verified against the live API, 2026-06-12).
+=======
+        assert!(!Agentic::off().is_enabled());
+>>>>>>>
+<<<<<<<
+        assert!(Agentic::on().is_enabled());
+=======
+        let filter = Filter::eq("source", "code");
+>>>>>>>
+<<<<<<<
+        assert!(Agentic::Config(AgenticConfig::default()).is_enabled());
+=======
+        let file_ids = FileIds::exclude(vec!["2b5d7a52".to_owned()]);
+>>>>>>>
+<<<<<<<
+        let request = SearchRequest {
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+            query: "upload",
+>>>>>>>
+<<<<<<<
+            store_identifiers: &["index".to_owned()],
+=======
+    #[test]
+>>>>>>>
+<<<<<<<
+            top_k: 3,
+=======
+    fn search_request_matches_the_documented_wire_shape() {
+>>>>>>>
+<<<<<<<
+            search_options: SearchOptions {
+=======
+        // Pins the `/v1/stores/search` body across every option this client
+>>>>>>>
+<<<<<<<
+                rerank: Rerank::Model {
+=======
+        // models: the StoreChunkSearchOptions fields live under
+>>>>>>>
+<<<<<<<
+                    model: DEFAULT_RERANK_MODEL.to_owned(),
+=======
+        // `search_options`, while `file_ids` is a sibling of `filters` at the
+>>>>>>>
+<<<<<<<
+                    top_k: Some(2),
+=======
+        // request level (verified against the live API, 2026-06-12).
+>>>>>>>
+<<<<<<<
+                },
+=======
+        let filter = Filter::eq("source", "code");
+>>>>>>>
+<<<<<<<
+                agentic: Agentic::off(),
+=======
+        let file_ids = FileIds::exclude(vec!["2b5d7a52".to_owned()]);
+>>>>>>>
+<<<<<<<
+                score_threshold: None,
+=======
+        let request = SearchRequest {
+>>>>>>>
+<<<<<<<
+                return_metadata: Some(true),
+=======
+            query: "upload",
+>>>>>>>
+<<<<<<<
+                rewrite_query: Some(true),
+=======
+            store_identifiers: &["index".to_owned()],
+>>>>>>>
+<<<<<<<
+                apply_search_rules: Some(false),
+=======
+            top_k: 3,
+>>>>>>>
+<<<<<<<
+            search_options: SearchOptions {
+=======
+            },
+>>>>>>>
+<<<<<<<
+                rerank: Rerank::Model {
+=======
+            filters: Some(&filter),
+>>>>>>>
+<<<<<<<
+                    model: DEFAULT_RERANK_MODEL.to_owned(),
+=======
+            file_ids: Some(&file_ids),
+>>>>>>>
+<<<<<<<
+                    top_k: Some(2),
+=======
+        };
+>>>>>>>
+<<<<<<<
+                },
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+                agentic: Agentic::off(),
+=======
+            serde_json::to_value(&request).expect("serialize"),
+>>>>>>>
+<<<<<<<
+                score_threshold: None,
+=======
+            serde_json::json!({
+>>>>>>>
+<<<<<<<
+                "query": "upload",
+=======
+                return_metadata: Some(true),
+>>>>>>>
+<<<<<<<
+                "store_identifiers": ["index"],
+=======
+                rewrite_query: Some(true),
+>>>>>>>
+<<<<<<<
+                "top_k": 3,
+=======
+                apply_search_rules: Some(false),
+>>>>>>>
+<<<<<<<
+                "search_options": {
+=======
+            },
+>>>>>>>
+<<<<<<<
+                    "rerank": { "model": DEFAULT_RERANK_MODEL, "top_k": 2 },
+=======
+            filters: Some(&filter),
+>>>>>>>
+<<<<<<<
+                    "agentic": false,
+=======
+            file_ids: Some(&file_ids),
+>>>>>>>
+<<<<<<<
+                    "return_metadata": true,
+=======
+        };
+>>>>>>>
+<<<<<<<
+                    "rewrite_query": true,
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+                    "apply_search_rules": false,
+=======
+            serde_json::to_value(&request).expect("serialize"),
+>>>>>>>
+<<<<<<<
+                },
+=======
+            serde_json::json!({
+>>>>>>>
+<<<<<<<
+                "filters": { "key": "source", "operator": "eq", "value": "code" },
+=======
+                "query": "upload",
+>>>>>>>
+<<<<<<<
+                "file_ids": ["not_in", ["2b5d7a52"]],
+=======
+                "store_identifiers": ["index"],
+>>>>>>>
+<<<<<<<
+                "top_k": 3,
+=======
+            })
+>>>>>>>
+<<<<<<<
+                "search_options": {
+=======
+        );
+>>>>>>>
+<<<<<<<
+
+=======
+                    "rerank": { "model": DEFAULT_RERANK_MODEL, "top_k": 2 },
+>>>>>>>
+<<<<<<<
+                    "agentic": false,
+=======
+        // With every new knob unset the legacy wire body is unchanged: no
+>>>>>>>
+<<<<<<<
+                    "return_metadata": true,
+=======
+        // rewrite_query/apply_search_rules/file_ids keys at all.
+>>>>>>>
+<<<<<<<
+                    "rewrite_query": true,
+=======
+        let legacy = SearchRequest {
+>>>>>>>
+<<<<<<<
+                    "apply_search_rules": false,
+=======
+            query: "upload",
+>>>>>>>
+<<<<<<<
+                },
+=======
+            store_identifiers: &["index".to_owned()],
+>>>>>>>
+<<<<<<<
+                "filters": { "key": "source", "operator": "eq", "value": "code" },
+=======
+            top_k: 3,
+>>>>>>>
+<<<<<<<
+                "file_ids": ["not_in", ["2b5d7a52"]],
+=======
+            search_options: SearchOptions {
+>>>>>>>
+<<<<<<<
+                rerank: Rerank::off(),
+=======
+            })
+>>>>>>>
+<<<<<<<
+                agentic: Agentic::off(),
+=======
+        );
+>>>>>>>
+<<<<<<<
+
+=======
+                score_threshold: None,
+>>>>>>>
+<<<<<<<
+                return_metadata: None,
+=======
+        // With every new knob unset the legacy wire body is unchanged: no
+>>>>>>>
+<<<<<<<
+                rewrite_query: None,
+=======
+        // rewrite_query/apply_search_rules/file_ids keys at all.
+>>>>>>>
+<<<<<<<
+                apply_search_rules: None,
+=======
+        let legacy = SearchRequest {
+>>>>>>>
+<<<<<<<
+            query: "upload",
+=======
+            },
+>>>>>>>
+<<<<<<<
+            filters: None,
+=======
+            store_identifiers: &["index".to_owned()],
+>>>>>>>
+<<<<<<<
+            file_ids: None,
+=======
+            top_k: 3,
+>>>>>>>
+<<<<<<<
+            search_options: SearchOptions {
+=======
+        };
+>>>>>>>
+<<<<<<<
+                rerank: Rerank::off(),
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+                agentic: Agentic::off(),
+=======
+            serde_json::to_value(&legacy).expect("serialize"),
+>>>>>>>
+<<<<<<<
+                score_threshold: None,
+=======
+            serde_json::json!({
+>>>>>>>
+<<<<<<<
+                "query": "upload",
+=======
+                return_metadata: None,
+>>>>>>>
+<<<<<<<
+                "store_identifiers": ["index"],
+=======
+                rewrite_query: None,
+>>>>>>>
+<<<<<<<
+                "top_k": 3,
+=======
+                apply_search_rules: None,
+>>>>>>>
+<<<<<<<
+                "search_options": { "rerank": false, "agentic": false },
+=======
+            },
+>>>>>>>
+<<<<<<<
+            filters: None,
+=======
+            })
+>>>>>>>
+<<<<<<<
+            file_ids: None,
+=======
+        );
+>>>>>>>
+<<<<<<<
+        };
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+            serde_json::to_value(&legacy).expect("serialize"),
+=======
+    #[test]
+>>>>>>>
+<<<<<<<
+            serde_json::json!({
+=======
+    fn qa_request_matches_the_documented_wire_shape() {
+>>>>>>>
+<<<<<<<
+                "query": "upload",
+=======
+        // Pins the `/v1/stores/question-answering` body: the flattened search
+>>>>>>>
+<<<<<<<
+                "store_identifiers": ["index"],
+=======
+        // surface plus `qa_options` (the API's QuestionAnsweringOptions) and
+>>>>>>>
+<<<<<<<
+                "top_k": 3,
+=======
+        // the request-level `instructions` (verified against the live API,
+>>>>>>>
+<<<<<<<
+                "search_options": { "rerank": false, "agentic": false },
+=======
+        // 2026-06-12).
+>>>>>>>
+<<<<<<<
+            })
+=======
+        let request = QaRequest {
+>>>>>>>
+<<<<<<<
+            search: SearchRequest {
+=======
+        );
+>>>>>>>
+<<<<<<<
+                query: "what bucket does the indexer use",
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+                store_identifiers: &["index".to_owned()],
+>>>>>>>
+<<<<<<<
+                top_k: 3,
+=======
+    #[test]
+>>>>>>>
+<<<<<<<
+                search_options: SearchOptions {
+=======
+    fn qa_request_matches_the_documented_wire_shape() {
+>>>>>>>
+<<<<<<<
+                    rerank: Rerank::server_default(),
+=======
+        // Pins the `/v1/stores/question-answering` body: the flattened search
+>>>>>>>
+<<<<<<<
+                    agentic: Agentic::off(),
+=======
+        // surface plus `qa_options` (the API's QuestionAnsweringOptions) and
+>>>>>>>
+<<<<<<<
+                    score_threshold: None,
+=======
+        // the request-level `instructions` (verified against the live API,
+>>>>>>>
+<<<<<<<
+                    return_metadata: Some(true),
+=======
+        // 2026-06-12).
+>>>>>>>
+<<<<<<<
+                    rewrite_query: None,
+=======
+        let request = QaRequest {
+>>>>>>>
+<<<<<<<
+                    apply_search_rules: None,
+=======
+            search: SearchRequest {
+>>>>>>>
+<<<<<<<
+                query: "what bucket does the indexer use",
+=======
+                },
+>>>>>>>
+<<<<<<<
+                filters: None,
+=======
+                store_identifiers: &["index".to_owned()],
+>>>>>>>
+<<<<<<<
+                file_ids: None,
+=======
+                top_k: 3,
+>>>>>>>
+<<<<<<<
+                search_options: SearchOptions {
+=======
+            },
+>>>>>>>
+<<<<<<<
+                    rerank: Rerank::server_default(),
+=======
+            qa_options: QaOptionsWire::from_options(&QaOptions {
+>>>>>>>
+<<<<<<<
+                    agentic: Agentic::off(),
+=======
+                cite: Some(true),
+>>>>>>>
+<<<<<<<
+                    score_threshold: None,
+=======
+                multimodal: Some(false),
+>>>>>>>
+<<<<<<<
+                    return_metadata: Some(true),
+=======
+                instructions: None,
+>>>>>>>
+<<<<<<<
+                    rewrite_query: None,
+=======
+            }),
+>>>>>>>
+<<<<<<<
+                    apply_search_rules: None,
+=======
+            instructions: Some("answer in one sentence"),
+>>>>>>>
+<<<<<<<
+                },
+=======
+        };
+>>>>>>>
+<<<<<<<
+                filters: None,
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+                file_ids: None,
+=======
+            serde_json::to_value(&request).expect("serialize"),
+>>>>>>>
+<<<<<<<
+            serde_json::json!({
+=======
+            },
+>>>>>>>
+<<<<<<<
+                "query": "what bucket does the indexer use",
+=======
+            qa_options: QaOptionsWire::from_options(&QaOptions {
+>>>>>>>
+<<<<<<<
+                "store_identifiers": ["index"],
+=======
+                cite: Some(true),
+>>>>>>>
+<<<<<<<
+                "top_k": 3,
+=======
+                multimodal: Some(false),
+>>>>>>>
+<<<<<<<
+                "search_options": { "rerank": true, "agentic": false, "return_metadata": true },
+=======
+                instructions: None,
+>>>>>>>
+<<<<<<<
+                "qa_options": { "cite": true, "multimodal": false },
+=======
+            }),
+>>>>>>>
+<<<<<<<
+                "instructions": "answer in one sentence",
+=======
+            instructions: Some("answer in one sentence"),
+>>>>>>>
+<<<<<<<
+            })
+=======
+        };
+>>>>>>>
+<<<<<<<
+        );
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+
+=======
+            serde_json::to_value(&request).expect("serialize"),
+>>>>>>>
+<<<<<<<
+            serde_json::json!({
+=======
+        // Default QA options leave the legacy wire body untouched: no
+>>>>>>>
+<<<<<<<
+                "query": "what bucket does the indexer use",
+=======
+        // `qa_options` or `instructions` keys at all.
+>>>>>>>
+<<<<<<<
+                "store_identifiers": ["index"],
+=======
+        let legacy = QaRequest {
+>>>>>>>
+<<<<<<<
+                "top_k": 3,
+=======
+            search: SearchRequest {
+>>>>>>>
+<<<<<<<
+                "search_options": { "rerank": true, "agentic": false, "return_metadata": true },
+=======
+                query: "q",
+>>>>>>>
+<<<<<<<
+                "qa_options": { "cite": true, "multimodal": false },
+=======
+                store_identifiers: &["index".to_owned()],
+>>>>>>>
+<<<<<<<
+                "instructions": "answer in one sentence",
+=======
+                top_k: 1,
+>>>>>>>
+<<<<<<<
+                search_options: SearchOptions {
+=======
+            })
+>>>>>>>
+<<<<<<<
+                    rerank: Rerank::off(),
+=======
+        );
+>>>>>>>
+<<<<<<<
+
+=======
+                    agentic: Agentic::off(),
+>>>>>>>
+<<<<<<<
+                    score_threshold: None,
+=======
+        // Default QA options leave the legacy wire body untouched: no
+>>>>>>>
+<<<<<<<
+                    return_metadata: None,
+=======
+        // `qa_options` or `instructions` keys at all.
+>>>>>>>
+<<<<<<<
+                    rewrite_query: None,
+=======
+        let legacy = QaRequest {
+>>>>>>>
+<<<<<<<
+                    apply_search_rules: None,
+=======
+            search: SearchRequest {
+>>>>>>>
+<<<<<<<
+                query: "q",
+=======
+                },
+>>>>>>>
+<<<<<<<
+                filters: None,
+=======
+                store_identifiers: &["index".to_owned()],
+>>>>>>>
+<<<<<<<
+                file_ids: None,
+=======
+                top_k: 1,
+>>>>>>>
+<<<<<<<
+                search_options: SearchOptions {
+=======
+            },
+>>>>>>>
+<<<<<<<
+                    rerank: Rerank::off(),
+=======
+            qa_options: QaOptionsWire::from_options(&QaOptions::default()),
+>>>>>>>
+<<<<<<<
+                    agentic: Agentic::off(),
+=======
+            instructions: None,
+>>>>>>>
+<<<<<<<
+                    score_threshold: None,
+=======
+        };
+>>>>>>>
+<<<<<<<
+                    return_metadata: None,
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+                    rewrite_query: None,
+=======
+            serde_json::to_value(&legacy).expect("serialize"),
+>>>>>>>
+<<<<<<<
+                    apply_search_rules: None,
+=======
+            serde_json::json!({
+>>>>>>>
+<<<<<<<
+                "query": "q",
+=======
+                },
+>>>>>>>
+<<<<<<<
+                "store_identifiers": ["index"],
+=======
+                filters: None,
+>>>>>>>
+<<<<<<<
+                "top_k": 1,
+=======
+                file_ids: None,
+>>>>>>>
+<<<<<<<
+                "search_options": { "rerank": false, "agentic": false },
+=======
+            },
+>>>>>>>
+<<<<<<<
+            qa_options: QaOptionsWire::from_options(&QaOptions::default()),
+=======
+            })
+>>>>>>>
+<<<<<<<
+            instructions: None,
+=======
+        );
+>>>>>>>
+<<<<<<<
+
+=======
+        };
+>>>>>>>
+<<<<<<<
+        // One set toggle is enough to carry the object, without a null for
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+            serde_json::to_value(&legacy).expect("serialize"),
+=======
+        // the unset sibling.
+>>>>>>>
+<<<<<<<
+            serde_json::json!({
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+                "query": "q",
+=======
+            serde_json::to_value(QaOptionsWire::from_options(&QaOptions {
+>>>>>>>
+<<<<<<<
+                "store_identifiers": ["index"],
+=======
+                cite: Some(false),
+>>>>>>>
+<<<<<<<
+                "top_k": 1,
+=======
+                multimodal: None,
+>>>>>>>
+<<<<<<<
+                "search_options": { "rerank": false, "agentic": false },
+=======
+                instructions: None,
+>>>>>>>
+<<<<<<<
+            })
+=======
+            }))
+>>>>>>>
+<<<<<<<
+            .expect("serialize"),
+=======
+        );
+>>>>>>>
+<<<<<<<
+
+=======
+            serde_json::json!({ "cite": false })
+>>>>>>>
+<<<<<<<
+        );
+=======
+        // One set toggle is enough to carry the object, without a null for
+>>>>>>>
+<<<<<<<
+        // the unset sibling.
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+            serde_json::to_value(QaOptionsWire::from_options(&QaOptions {
+=======
+    #[test]
+>>>>>>>
+<<<<<<<
+                cite: Some(false),
+=======
+    fn file_ids_serialize_as_bare_list_or_operator_tuple() {
+>>>>>>>
+<<<<<<<
+                multimodal: None,
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+                instructions: None,
+=======
+            serde_json::to_value(FileIds::include(vec!["a".to_owned(), "b".to_owned()]))
+>>>>>>>
+<<<<<<<
+                .expect("serialize"),
+=======
+            }))
+>>>>>>>
+<<<<<<<
+            .expect("serialize"),
+=======
+            serde_json::json!(["a", "b"])
+>>>>>>>
+<<<<<<<
+            serde_json::json!({ "cite": false })
+=======
+        );
+>>>>>>>
+<<<<<<<
+        );
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+            serde_json::to_value(FileIds::Scoped(Operator::In, vec!["a".to_owned()]))
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+                .expect("serialize"),
+>>>>>>>
+<<<<<<<
+            serde_json::json!(["in", ["a"]])
+=======
+    #[test]
+>>>>>>>
+<<<<<<<
+        );
+=======
+    fn file_ids_serialize_as_bare_list_or_operator_tuple() {
+>>>>>>>
+        assert_eq!(
+<<<<<<<
+            serde_json::to_value(FileIds::exclude(vec!["a".to_owned()])).expect("serialize"),
+=======
+            serde_json::to_value(FileIds::include(vec!["a".to_owned(), "b".to_owned()]))
+>>>>>>>
+<<<<<<<
+                .expect("serialize"),
+=======
+            serde_json::json!(["not_in", ["a"]])
+>>>>>>>
+<<<<<<<
+            serde_json::json!(["a", "b"])
+=======
+        );
+>>>>>>>
+<<<<<<<
+        );
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+            serde_json::to_value(FileIds::Scoped(Operator::In, vec!["a".to_owned()]))
+=======
+    #[tokio::test]
+>>>>>>>
+<<<<<<<
+                .expect("serialize"),
+=======
+    async fn list_files_decodes_id_external_id_metadata_and_created_at() {
+>>>>>>>
+<<<<<<<
+            serde_json::json!(["in", ["a"]])
+=======
+        // Pins the slice of the store-file listing the GC pass depends on: the
+>>>>>>>
+<<<<<<<
+        );
+=======
+        // file object's own `id` (the only unambiguous delete handle when two
+>>>>>>>
+<<<<<<<
+        // objects share an external id) and `created_at` (what "keep the
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+            serde_json::to_value(FileIds::exclude(vec!["a".to_owned()])).expect("serialize"),
+=======
+        // newest" orders by) must survive the projection into StoredFile, and
+>>>>>>>
+<<<<<<<
+            serde_json::json!(["not_in", ["a"]])
+=======
+        // a sparse item (no id, no timestamp) must decode rather than error.
+>>>>>>>
+<<<<<<<
+        );
+=======
+        let app = Router::new().route(
+>>>>>>>
+<<<<<<<
+            "/v1/stores/{store}/files/list",
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+            axum::routing::post(|| async {
+>>>>>>>
+<<<<<<<
+                (
+=======
+    #[tokio::test]
+>>>>>>>
+<<<<<<<
+                    StatusCode::OK,
+=======
+    async fn list_files_decodes_id_external_id_metadata_and_created_at() {
+>>>>>>>
+<<<<<<<
+                    r#"{"data":[
+=======
+        // Pins the slice of the store-file listing the GC pass depends on: the
+>>>>>>>
+<<<<<<<
+                        {"id":"f-1","external_id":"linear:issue:A",
+=======
+        // file object's own `id` (the only unambiguous delete handle when two
+>>>>>>>
+<<<<<<<
+                         "metadata":{"source":"linear","content_hash":"sha256:aa"},
+=======
+        // objects share an external id) and `created_at` (what "keep the
+>>>>>>>
+<<<<<<<
+                         "created_at":"2026-06-11T00:00:00Z"},
+=======
+        // newest" orders by) must survive the projection into StoredFile, and
+>>>>>>>
+<<<<<<<
+                        {"external_id":"legacy"}
+=======
+        // a sparse item (no id, no timestamp) must decode rather than error.
+>>>>>>>
+<<<<<<<
+                    ]}"#,
+=======
+        let app = Router::new().route(
+>>>>>>>
+<<<<<<<
+                )
+=======
+            "/v1/stores/{store}/files/list",
+>>>>>>>
+<<<<<<<
+            axum::routing::post(|| async {
+=======
+            }),
+>>>>>>>
+<<<<<<<
+                (
+=======
+        );
+>>>>>>>
+<<<<<<<
+                    StatusCode::OK,
+=======
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+>>>>>>>
+<<<<<<<
+                    r#"{"data":[
+=======
+            .await
+>>>>>>>
+<<<<<<<
+                        {"id":"f-1","external_id":"linear:issue:A",
+=======
+            .expect("bind");
+>>>>>>>
+<<<<<<<
+                         "metadata":{"source":"linear","content_hash":"sha256:aa"},
+=======
+        let addr = listener.local_addr().expect("addr");
+>>>>>>>
+<<<<<<<
+                         "created_at":"2026-06-11T00:00:00Z"},
+=======
+        tokio::spawn(async move {
+>>>>>>>
+<<<<<<<
+                        {"external_id":"legacy"}
+=======
+            axum::serve(listener, app).await.expect("serve");
+>>>>>>>
+<<<<<<<
+                    ]}"#,
+=======
+        });
+>>>>>>>
+<<<<<<<
+
+=======
+                )
+>>>>>>>
+<<<<<<<
+            }),
+=======
+        let client = Client::new(format!("http://{addr}"), "test-key").expect("client");
+>>>>>>>
+<<<<<<<
+        );
+=======
+        let files = client.list_files("s", None).await.expect("list");
+>>>>>>>
+<<<<<<<
+        assert_eq!(files.len(), 2);
+=======
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+>>>>>>>
+<<<<<<<
+            .await
+=======
+        assert_eq!(files[0].id.as_deref(), Some("f-1"));
+>>>>>>>
+<<<<<<<
+            .expect("bind");
+=======
+        assert_eq!(files[0].external_id.as_deref(), Some("linear:issue:A"));
+>>>>>>>
+<<<<<<<
+        assert_eq!(
+=======
+        let addr = listener.local_addr().expect("addr");
+>>>>>>>
+<<<<<<<
+            files[0].created_at.as_deref(),
+=======
+        tokio::spawn(async move {
+>>>>>>>
+<<<<<<<
+            Some("2026-06-11T00:00:00Z")
+=======
+            axum::serve(listener, app).await.expect("serve");
+>>>>>>>
+<<<<<<<
+        );
+=======
+        });
+>>>>>>>
+<<<<<<<
+
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+            files[0]
+=======
+        let client = Client::new(format!("http://{addr}"), "test-key").expect("client");
+>>>>>>>
+<<<<<<<
+                .metadata
+=======
+        let files = client.list_files("s", None).await.expect("list");
+>>>>>>>
+<<<<<<<
+                .as_ref()
+=======
+        assert_eq!(files.len(), 2);
+>>>>>>>
+<<<<<<<
+                .and_then(|m| m.get("content_hash"))
+=======
+        assert_eq!(files[0].id.as_deref(), Some("f-1"));
+>>>>>>>
+<<<<<<<
+                .and_then(serde_json::Value::as_str),
+=======
+        assert_eq!(files[0].external_id.as_deref(), Some("linear:issue:A"));
+>>>>>>>
+<<<<<<<
+            Some("sha256:aa")
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+            files[0].created_at.as_deref(),
+=======
+        );
+>>>>>>>
+<<<<<<<
+            Some("2026-06-11T00:00:00Z")
+=======
+        assert_eq!(files[1].id, None);
+>>>>>>>
+        assert_eq!(files[1].created_at, None);
+<<<<<<<
+        assert_eq!(
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+            files[0]
+>>>>>>>
+<<<<<<<
+                .metadata
+=======
+    #[tokio::test]
+>>>>>>>
+<<<<<<<
+                .as_ref()
+=======
+    async fn enhance_posts_the_endpoint_and_decodes_the_single_item() {
+>>>>>>>
+<<<<<<<
+                .and_then(|m| m.get("content_hash"))
+=======
+        // Round-trip through a real router: the request must hit
+>>>>>>>
+<<<<<<<
+                .and_then(serde_json::Value::as_str),
+=======
+        // `/v1/stores/queries/enhance` with the documented body, and the
+>>>>>>>
+<<<<<<<
+            Some("sha256:aa")
+=======
+        // response's one item decodes through the tagged EnhancedQuery enum.
+>>>>>>>
+<<<<<<<
+        );
+=======
+        let (base_url, captured) = post_fixture(
+>>>>>>>
+<<<<<<<
+            "/v1/stores/queries/enhance",
+=======
+        assert_eq!(files[1].id, None);
+>>>>>>>
+<<<<<<<
+            r#"{"items":[{"type":"query","query":"indexer slack messages","metadata_filters":[{"key":"source","operator":"eq","value":"slack"}],"filter_mode":"all","rank_by":null,"direction":null}]}"#,
+=======
+        assert_eq!(files[1].created_at, None);
+>>>>>>>
+<<<<<<<
+        )
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+        .await;
+>>>>>>>
+<<<<<<<
+
+=======
+    #[tokio::test]
+>>>>>>>
+<<<<<<<
+        let client = Client::new(base_url, "test-key").expect("client");
+=======
+    async fn enhance_posts_the_endpoint_and_decodes_the_single_item() {
+>>>>>>>
+<<<<<<<
+        // Round-trip through a real router: the request must hit
+=======
+        let enhanced = client
+>>>>>>>
+<<<<<<<
+            .enhance_query(
+=======
+        // `/v1/stores/queries/enhance` with the documented body, and the
+>>>>>>>
+<<<<<<<
+                &["index".to_owned()],
+=======
+        // response's one item decodes through the tagged EnhancedQuery enum.
+>>>>>>>
+<<<<<<<
+                "slack messages about the indexer",
+=======
+        let PostFixture {
+>>>>>>>
+<<<<<<<
+                Some("prefer source filters"),
+=======
+            base_url,
+>>>>>>>
+<<<<<<<
+            )
+=======
+            captured,
+>>>>>>>
+<<<<<<<
+            .await
+=======
+        } = post_fixture(
+>>>>>>>
+<<<<<<<
+            "/v1/stores/queries/enhance",
+=======
+            .expect("enhance");
+>>>>>>>
+<<<<<<<
+            r#"{"items":[{"type":"query","query":"indexer slack messages","metadata_filters":[{"key":"source","operator":"eq","value":"slack"}],"filter_mode":"all","rank_by":null,"direction":null}]}"#,
+=======
+        let EnhancedQuery::Query { query, .. } = &enhanced else {
+>>>>>>>
+<<<<<<<
+            panic!("expected query item, got {enhanced:?}");
+=======
+        )
+>>>>>>>
+<<<<<<<
+        .await;
+=======
+        };
+>>>>>>>
+<<<<<<<
+
+=======
+        assert_eq!(query, "indexer slack messages");
+>>>>>>>
+<<<<<<<
+        assert_eq!(
+=======
+        let client = Client::new(base_url, "test-key").expect("client");
+>>>>>>>
+<<<<<<<
+            serde_json::to_value(enhanced.filter().expect("filter")).expect("serialize"),
+=======
+        let enhanced = client
+>>>>>>>
+<<<<<<<
+            .enhance_query(
+=======
+            serde_json::json!({ "key": "source", "operator": "eq", "value": "slack" })
+>>>>>>>
+<<<<<<<
+                &["index".to_owned()],
+=======
+        );
+>>>>>>>
+<<<<<<<
+                "slack messages about the indexer",
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+                Some("prefer source filters"),
+=======
+            captured.lock().expect("lock").take().expect("request body"),
+>>>>>>>
+<<<<<<<
+            )
+=======
+            serde_json::json!({
+>>>>>>>
+<<<<<<<
+                "query": "slack messages about the indexer",
+=======
+            .await
+>>>>>>>
+<<<<<<<
+                "store_identifiers": ["index"],
+=======
+            .expect("enhance");
+>>>>>>>
+<<<<<<<
+                "instructions": "prefer source filters",
+=======
+        let EnhancedQuery::Query { query, .. } = &enhanced else {
+>>>>>>>
+<<<<<<<
+            panic!("expected query item, got {enhanced:?}");
+=======
+            })
+>>>>>>>
+<<<<<<<
+        );
+=======
+        };
+>>>>>>>
+<<<<<<<
+        assert_eq!(query, "indexer slack messages");
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+            serde_json::to_value(enhanced.filter().expect("filter")).expect("serialize"),
+=======
+    #[tokio::test]
+>>>>>>>
+<<<<<<<
+            serde_json::json!({ "key": "source", "operator": "eq", "value": "slack" })
+=======
+    async fn metadata_facets_posts_the_endpoint_and_decodes_value_counts() {
+>>>>>>>
+<<<<<<<
+        );
+=======
+        // Round-trip through a real router: the request must hit
+>>>>>>>
+<<<<<<<
+        // `/v1/stores/metadata-facets` with the documented body (facet keys,
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+            captured.lock().expect("lock").take().expect("request body"),
+=======
+        // scan caps, no nulls for unset caps) and the response decodes the
+>>>>>>>
+<<<<<<<
+            serde_json::json!({
+=======
+        // live `{key: {value: count}}` shape.
+>>>>>>>
+<<<<<<<
+                "query": "slack messages about the indexer",
+=======
+        let (base_url, captured) = post_fixture(
+>>>>>>>
+<<<<<<<
+                "store_identifiers": ["index"],
+=======
+            "/v1/stores/metadata-facets",
+>>>>>>>
+<<<<<<<
+                "instructions": "prefer source filters",
+=======
+            r#"{"facets":{"source":{"shell":1154,"code":9644}}}"#,
+>>>>>>>
+<<<<<<<
+            })
+=======
+        )
+>>>>>>>
+<<<<<<<
+        );
+=======
+        .await;
+>>>>>>>
+<<<<<<<
+
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+        let client = Client::new(base_url, "test-key").expect("client");
+>>>>>>>
+<<<<<<<
+        let facets = client
+=======
+    #[tokio::test]
+>>>>>>>
+<<<<<<<
+            .metadata_facets(
+=======
+    async fn metadata_facets_posts_the_endpoint_and_decodes_value_counts() {
+>>>>>>>
+<<<<<<<
+                &["index".to_owned()],
+=======
+        // Round-trip through a real router: the request must hit
+>>>>>>>
+<<<<<<<
+                &["source"],
+=======
+        // `/v1/stores/metadata-facets` with the documented body (facet keys,
+>>>>>>>
+<<<<<<<
+                None,
+=======
+        // scan caps, no nulls for unset caps) and the response decodes the
+>>>>>>>
+<<<<<<<
+                FacetLimits {
+=======
+        // live `{key: {value: count}}` shape.
+>>>>>>>
+<<<<<<<
+                    max_values_per_field: Some(256),
+=======
+        let PostFixture {
+>>>>>>>
+<<<<<<<
+                    max_files: Some(FACETS_MAX_FILES),
+=======
+            base_url,
+>>>>>>>
+<<<<<<<
+                    ..FacetLimits::default()
+=======
+            captured,
+>>>>>>>
+<<<<<<<
+                },
+=======
+        } = post_fixture(
+>>>>>>>
+<<<<<<<
+            "/v1/stores/metadata-facets",
+=======
+            )
+>>>>>>>
+<<<<<<<
+            .await
+=======
+            r#"{"facets":{"source":{"shell":1154,"code":9644}}}"#,
+>>>>>>>
+<<<<<<<
+            .expect("facets");
+=======
+        )
+>>>>>>>
+<<<<<<<
+        .await;
+=======
+        assert_eq!(facets["source"]["shell"], 1_154);
+>>>>>>>
+<<<<<<<
+
+=======
+        assert_eq!(facets["source"]["code"], 9_644);
+>>>>>>>
+<<<<<<<
+        assert_eq!(
+=======
+        let client = Client::new(base_url, "test-key").expect("client");
+>>>>>>>
+<<<<<<<
+            captured.lock().expect("lock").take().expect("request body"),
+=======
+        let facets = client
+>>>>>>>
+<<<<<<<
+            .metadata_facets(
+=======
+            serde_json::json!({
+>>>>>>>
+<<<<<<<
+                "store_identifiers": ["index"],
+=======
+                &["index".to_owned()],
+>>>>>>>
+<<<<<<<
+                "facets": ["source"],
+=======
+                &["source"],
+>>>>>>>
+<<<<<<<
+                "max_values_per_field": 256,
+=======
+                None,
+>>>>>>>
+<<<<<<<
+                "max_files": 100_000,
+=======
+                FacetLimits {
+>>>>>>>
+<<<<<<<
+                    max_values_per_field: Some(256),
+=======
+            })
+>>>>>>>
+<<<<<<<
+                    max_files: Some(FACETS_MAX_FILES),
+=======
+        );
+>>>>>>>
+<<<<<<<
+                    ..FacetLimits::default()
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+                },
+>>>>>>>
+<<<<<<<
+            )
+=======
+    #[tokio::test]
+>>>>>>>
+<<<<<<<
+            .await
+=======
+    async fn events_histogram_posts_the_store_path_and_decodes_buckets() {
+>>>>>>>
+<<<<<<<
+            .expect("facets");
+=======
+        // Round-trip through a real router: the store name must land as one
+>>>>>>>
+<<<<<<<
+        // path segment of `/v1/stores/{store}/events/histogram`, the body
+=======
+        assert_eq!(facets["source"]["shell"], 1_154);
+>>>>>>>
+<<<<<<<
+        // must carry the window/bucket/types, and the buckets decode with
+=======
+        assert_eq!(facets["source"]["code"], 9_644);
+>>>>>>>
+<<<<<<<
+        // `type` mapped onto `event_type`.
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+            captured.lock().expect("lock").take().expect("request body"),
+=======
+        let captured: Arc<std::sync::Mutex<Option<serde_json::Value>>> = Arc::default();
+>>>>>>>
+<<<<<<<
+            serde_json::json!({
+=======
+        let app = Router::new().route(
+>>>>>>>
+<<<<<<<
+                "store_identifiers": ["index"],
+=======
+            "/v1/stores/{store}/events/histogram",
+>>>>>>>
+<<<<<<<
+                "facets": ["source"],
+=======
+            axum::routing::post({
+>>>>>>>
+<<<<<<<
+                "max_values_per_field": 256,
+=======
+                let captured = Arc::clone(&captured);
+>>>>>>>
+<<<<<<<
+                "max_files": 100_000,
+=======
+                move |axum::extract::Path(store): axum::extract::Path<String>,
+>>>>>>>
+<<<<<<<
+                      axum::extract::Json(body): axum::extract::Json<serde_json::Value>| {
+=======
+            })
+>>>>>>>
+<<<<<<<
+                    *captured.lock().expect("lock") =
+=======
+        );
+>>>>>>>
+<<<<<<<
+                        Some(serde_json::json!({ "store": store, "body": body }));
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+                    async {
+>>>>>>>
+<<<<<<<
+                        (
+=======
+    #[tokio::test]
+>>>>>>>
+<<<<<<<
+                            StatusCode::OK,
+=======
+    async fn events_histogram_posts_the_store_path_and_decodes_buckets() {
+>>>>>>>
+<<<<<<<
+                            r#"{"object":"store.histogram","data":[{"bucket_start":"2026-06-12T00:00:00Z","bucket_end":"2026-06-12T12:00:00Z","type":"store.file.completed","event_count":6407}]}"#,
+=======
+        // Round-trip through a real router: the store name must land as one
+>>>>>>>
+<<<<<<<
+                        )
+=======
+        // path segment of `/v1/stores/{store}/events/histogram`, the body
+>>>>>>>
+<<<<<<<
+                    }
+=======
+        // must carry the window/bucket/types, and the buckets decode with
+>>>>>>>
+<<<<<<<
+                }
+=======
+        // `type` mapped onto `event_type`.
+>>>>>>>
+<<<<<<<
+            }),
+=======
+        let captured: Arc<std::sync::Mutex<Option<serde_json::Value>>> = Arc::default();
+>>>>>>>
+<<<<<<<
+        );
+=======
+        let app = Router::new().route(
+>>>>>>>
+<<<<<<<
+            "/v1/stores/{store}/events/histogram",
+=======
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+>>>>>>>
+<<<<<<<
+            .await
+=======
+            axum::routing::post({
+>>>>>>>
+<<<<<<<
+                let captured = Arc::clone(&captured);
+=======
+            .expect("bind");
+>>>>>>>
+<<<<<<<
+                move |axum::extract::Path(store): axum::extract::Path<String>,
+=======
+        let addr = listener.local_addr().expect("addr");
+>>>>>>>
+<<<<<<<
+                      axum::extract::Json(body): axum::extract::Json<serde_json::Value>| {
+=======
+        tokio::spawn(async move {
+>>>>>>>
+<<<<<<<
+                    *captured.lock().expect("lock") =
+=======
+            axum::serve(listener, app).await.expect("serve");
+>>>>>>>
+<<<<<<<
+                        Some(serde_json::json!({ "store": store, "body": body }));
+=======
+        });
+>>>>>>>
+<<<<<<<
+
+=======
+                    async {
+>>>>>>>
+<<<<<<<
+                        (
+=======
+        let client = Client::new(format!("http://{addr}"), "test-key").expect("client");
+>>>>>>>
+<<<<<<<
+                            StatusCode::OK,
+=======
+        let buckets = client
+>>>>>>>
+<<<<<<<
+                            r#"{"object":"store.histogram","data":[{"bucket_start":"2026-06-12T00:00:00Z","bucket_end":"2026-06-12T12:00:00Z","type":"store.file.completed","event_count":6407}]}"#,
+=======
+            .events_histogram(
+>>>>>>>
+<<<<<<<
+                        )
+=======
+                "index",
+>>>>>>>
+<<<<<<<
+                    }
+=======
+                "2026-06-12T00:00:00Z",
+>>>>>>>
+<<<<<<<
+                "2026-06-13T00:00:00Z",
+=======
+                }
+>>>>>>>
+<<<<<<<
+                43_200,
+=======
+            }),
+>>>>>>>
+<<<<<<<
+                Some(&[EventType::Ingestion, EventType::AgenticSearch]),
+=======
+        );
+>>>>>>>
+<<<<<<<
+            )
+=======
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+>>>>>>>
+            .await
+<<<<<<<
+            .expect("bind");
+=======
+            .expect("histogram");
+>>>>>>>
+<<<<<<<
+        assert_eq!(buckets.len(), 1);
+=======
+        let addr = listener.local_addr().expect("addr");
+>>>>>>>
+<<<<<<<
+        assert_eq!(buckets[0].event_type, "store.file.completed");
+=======
+        tokio::spawn(async move {
+>>>>>>>
+<<<<<<<
+            axum::serve(listener, app).await.expect("serve");
+=======
+        assert_eq!(buckets[0].event_count, 6_407);
+>>>>>>>
+<<<<<<<
+        assert_eq!(buckets[0].bucket_start, "2026-06-12T00:00:00Z");
+=======
+        });
+>>>>>>>
+<<<<<<<
+
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+            captured.lock().expect("lock").take().expect("request"),
+=======
+        let client = Client::new(format!("http://{addr}"), "test-key").expect("client");
+>>>>>>>
+<<<<<<<
+            serde_json::json!({
+=======
+        let buckets = client
+>>>>>>>
+<<<<<<<
+                "store": "index",
+=======
+            .events_histogram(
+>>>>>>>
+<<<<<<<
+                "body": {
+=======
+                "index",
+>>>>>>>
+<<<<<<<
+                    "start_time": "2026-06-12T00:00:00Z",
+=======
+                "2026-06-12T00:00:00Z",
+>>>>>>>
+<<<<<<<
+                    "end_time": "2026-06-13T00:00:00Z",
+=======
+                "2026-06-13T00:00:00Z",
+>>>>>>>
+<<<<<<<
+                    "bucket_seconds": 43_200,
+=======
+                43_200,
+>>>>>>>
+<<<<<<<
+                    "event_types": ["ingestion", "agentic_search"],
+=======
+                Some(&[EventType::Ingestion, EventType::AgenticSearch]),
+>>>>>>>
+<<<<<<<
+                },
+=======
+            )
+>>>>>>>
+<<<<<<<
+            .await
+=======
+            })
+>>>>>>>
+<<<<<<<
+            .expect("histogram");
+=======
+        );
+>>>>>>>
+<<<<<<<
+        assert_eq!(buckets.len(), 1);
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+        assert_eq!(buckets[0].event_type, "store.file.completed");
+>>>>>>>
+<<<<<<<
+        assert_eq!(buckets[0].event_count, 6_407);
+=======
+    /// A spawned test server: its base URL and a shared counter of requests it received.
+>>>>>>>
+<<<<<<<
+        assert_eq!(buckets[0].bucket_start, "2026-06-12T00:00:00Z");
+=======
+    struct MockServer {
+>>>>>>>
+<<<<<<<
+        assert_eq!(
+=======
+        base_url: String,
+>>>>>>>
+<<<<<<<
+            captured.lock().expect("lock").take().expect("request"),
+=======
+        calls: Arc<AtomicUsize>,
+>>>>>>>
+<<<<<<<
+            serde_json::json!({
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+                "store": "index",
+>>>>>>>
+<<<<<<<
+                "body": {
+=======
+    #[test]
+>>>>>>>
+<<<<<<<
+                    "start_time": "2026-06-12T00:00:00Z",
+=======
+    fn raw_chunk_projects_generated_metadata() {
+>>>>>>>
+<<<<<<<
+                    "end_time": "2026-06-13T00:00:00Z",
+=======
+        let json = serde_json::json!({
+>>>>>>>
+<<<<<<<
+                    "bucket_seconds": 43_200,
+=======
+            "text": "fn main() {}",
+>>>>>>>
+<<<<<<<
+                    "event_types": ["ingestion", "agentic_search"],
+=======
+            "score": 0.9,
+>>>>>>>
+<<<<<<<
+                },
+=======
+            "filename": "main.rs",
+>>>>>>>
+<<<<<<<
+            "generated_metadata": { "start_line": 4, "num_lines": 2 },
+=======
+            })
+>>>>>>>
+<<<<<<<
+            "metadata": { "path": "src/main.rs", "hash": "sha256:abc" }
+=======
+        );
+>>>>>>>
+<<<<<<<
+        });
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+        let raw: RawChunk = serde_json::from_value(json).expect("parse");
+>>>>>>>
+<<<<<<<
+        let chunk = Chunk::from(raw);
+=======
+    /// A spawned test server: its base URL and a shared counter of requests it received.
+>>>>>>>
+<<<<<<<
+
+=======
+    struct MockServer {
+>>>>>>>
+<<<<<<<
+        assert_eq!(chunk.start_line, Some(4));
+=======
+        base_url: String,
+>>>>>>>
+<<<<<<<
+        assert_eq!(chunk.num_lines, Some(2));
+=======
+        calls: Arc<AtomicUsize>,
+>>>>>>>
+<<<<<<<
+        assert_eq!(chunk.text.as_deref(), Some("fn main() {}"));
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+            chunk
+=======
+    #[test]
+>>>>>>>
+<<<<<<<
+                .metadata
+=======
+    fn raw_chunk_projects_generated_metadata() {
+>>>>>>>
+<<<<<<<
+                .and_then(|m| m.get("hash").and_then(|h| h.as_str()).map(str::to_owned)),
+=======
+        let json = serde_json::json!({
+>>>>>>>
+<<<<<<<
+            "text": "fn main() {}",
+=======
+            Some("sha256:abc".to_owned())
+>>>>>>>
+<<<<<<<
+            "score": 0.9,
+=======
+        );
+>>>>>>>
+<<<<<<<
+            "filename": "main.rs",
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+            "generated_metadata": { "start_line": 4, "num_lines": 2 },
+>>>>>>>
+<<<<<<<
+            "metadata": { "path": "src/main.rs", "hash": "sha256:abc" }
+=======
+    #[test]
+>>>>>>>
+<<<<<<<
+        });
+=======
+    fn missing_generated_metadata_is_none() {
+>>>>>>>
+<<<<<<<
+        let raw: RawChunk =
+=======
+        let raw: RawChunk = serde_json::from_value(json).expect("parse");
+>>>>>>>
+<<<<<<<
+            serde_json::from_value(serde_json::json!({ "score": 0.1 })).expect("parse");
+=======
+        let chunk = Chunk::from(raw);
+>>>>>>>
+<<<<<<<
+
+=======
+        let chunk = Chunk::from(raw);
+>>>>>>>
+<<<<<<<
+        assert_eq!(chunk.start_line, None);
+=======
+        assert_eq!(chunk.start_line, Some(4));
+>>>>>>>
+<<<<<<<
+        assert_eq!(chunk.num_lines, None);
+=======
+        assert_eq!(chunk.num_lines, Some(2));
+>>>>>>>
+<<<<<<<
+        assert_eq!(chunk.text.as_deref(), Some("fn main() {}"));
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+            chunk
+=======
+    #[test]
+>>>>>>>
+<<<<<<<
+                .metadata
+=======
+    fn backoff_stays_within_equal_jitter_band_and_cap() {
+>>>>>>>
+<<<<<<<
+                .and_then(|m| m.get("hash").and_then(|h| h.as_str()).map(str::to_owned)),
+=======
+        for attempt in 0..10u32 {
+>>>>>>>
+<<<<<<<
+            Some("sha256:abc".to_owned())
+=======
+            let exp = BACKOFF_BASE
+>>>>>>>
+<<<<<<<
+                .saturating_mul(1u32 << attempt.min(5))
+=======
+        );
+>>>>>>>
+<<<<<<<
+                .min(BACKOFF_CAP);
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+            let delay = backoff(attempt);
+>>>>>>>
+<<<<<<<
+            assert!(
+=======
+    #[test]
+>>>>>>>
+<<<<<<<
+                delay >= exp / 2,
+=======
+    fn missing_generated_metadata_is_none() {
+>>>>>>>
+<<<<<<<
+                "attempt {attempt}: {delay:?} below half {:?}",
+=======
+        let raw: RawChunk =
+>>>>>>>
+<<<<<<<
+                exp / 2
+=======
+            serde_json::from_value(serde_json::json!({ "score": 0.1 })).expect("parse");
+>>>>>>>
+<<<<<<<
+            );
+=======
+        let chunk = Chunk::from(raw);
+>>>>>>>
+<<<<<<<
+            assert!(
+=======
+        assert_eq!(chunk.start_line, None);
+>>>>>>>
+<<<<<<<
+                delay <= exp,
+=======
+        assert_eq!(chunk.num_lines, None);
+>>>>>>>
+<<<<<<<
+                "attempt {attempt}: {delay:?} above exp {exp:?}"
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+            );
+>>>>>>>
+<<<<<<<
+            assert!(
+=======
+    #[test]
+>>>>>>>
+<<<<<<<
+                delay <= BACKOFF_CAP,
+=======
+    fn backoff_stays_within_equal_jitter_band_and_cap() {
+>>>>>>>
+<<<<<<<
+                "attempt {attempt}: {delay:?} above cap"
+=======
+        for attempt in 0..10u32 {
+>>>>>>>
+<<<<<<<
+            );
+=======
+            let exp = BACKOFF_BASE
+>>>>>>>
+<<<<<<<
+                .saturating_mul(1u32 << attempt.min(5))
+=======
+        }
+>>>>>>>
+<<<<<<<
+                .min(BACKOFF_CAP);
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+            let delay = backoff(attempt);
+>>>>>>>
+<<<<<<<
+            assert!(
+=======
+    /// Mock server that answers `429` (with `Retry-After: 0` so retries are
+>>>>>>>
+<<<<<<<
+                delay >= exp / 2,
+=======
+    /// instant) for the first `fail_times` requests, then `200`. Returns the
+>>>>>>>
+<<<<<<<
+                "attempt {attempt}: {delay:?} below half {:?}",
+=======
+    /// base URL and a shared counter of total requests received.
+>>>>>>>
+<<<<<<<
+                exp / 2
+=======
+    async fn spawn_mock(fail_times: usize) -> MockServer {
+>>>>>>>
+<<<<<<<
+            );
+=======
+        let calls = Arc::new(AtomicUsize::new(0));
+>>>>>>>
+<<<<<<<
+            assert!(
+=======
+        let app = Router::new().fallback({
+>>>>>>>
+<<<<<<<
+                delay <= exp,
+=======
+            let calls = Arc::clone(&calls);
+>>>>>>>
+<<<<<<<
+                "attempt {attempt}: {delay:?} above exp {exp:?}"
+=======
+            move || {
+>>>>>>>
+<<<<<<<
+                let calls = Arc::clone(&calls);
+=======
+            );
+>>>>>>>
+<<<<<<<
+                async move {
+=======
+            assert!(
+>>>>>>>
+<<<<<<<
+                    let n = calls.fetch_add(1, Ordering::SeqCst);
+=======
+                delay <= BACKOFF_CAP,
+>>>>>>>
+<<<<<<<
+                    if n < fail_times {
+=======
+                "attempt {attempt}: {delay:?} above cap"
+>>>>>>>
+<<<<<<<
+                        (
+=======
+            );
+>>>>>>>
+<<<<<<<
+                            StatusCode::TOO_MANY_REQUESTS,
+=======
+        }
+>>>>>>>
+<<<<<<<
+                            [(header::RETRY_AFTER, "0")],
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+                            "slow down",
+>>>>>>>
+<<<<<<<
+                        )
+=======
+    /// Mock server that answers `429` (with `Retry-After: 0` so retries are
+>>>>>>>
+<<<<<<<
+                            .into_response()
+=======
+    /// instant) for the first `fail_times` requests, then `200`. Returns the
+>>>>>>>
+<<<<<<<
+                    } else {
+=======
+    /// base URL and a shared counter of total requests received.
+>>>>>>>
+<<<<<<<
+                        (StatusCode::OK, "{}").into_response()
+=======
+    async fn spawn_mock(fail_times: usize) -> MockServer {
+>>>>>>>
+<<<<<<<
+                    }
+=======
+        let calls = Arc::new(AtomicUsize::new(0));
+>>>>>>>
+<<<<<<<
+                }
+=======
+        let app = Router::new().fallback({
+>>>>>>>
+<<<<<<<
+            let calls = Arc::clone(&calls);
+=======
+            }
+>>>>>>>
+<<<<<<<
+            move || {
+=======
+        });
+>>>>>>>
+<<<<<<<
+                let calls = Arc::clone(&calls);
+=======
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+>>>>>>>
+<<<<<<<
+                async move {
+=======
+            .await
+>>>>>>>
+<<<<<<<
+                    let n = calls.fetch_add(1, Ordering::SeqCst);
+=======
+            .expect("bind");
+>>>>>>>
+<<<<<<<
+                    if n < fail_times {
+=======
+        let addr = listener.local_addr().expect("addr");
+>>>>>>>
+<<<<<<<
+                        (
+=======
+        tokio::spawn(async move {
+>>>>>>>
+<<<<<<<
+                            StatusCode::TOO_MANY_REQUESTS,
+=======
+            axum::serve(listener, app).await.expect("serve");
+>>>>>>>
+<<<<<<<
+                            [(header::RETRY_AFTER, "0")],
+=======
+        });
+>>>>>>>
+<<<<<<<
+                            "slow down",
+=======
+        MockServer {
+>>>>>>>
+<<<<<<<
+                        )
+=======
+            base_url: format!("http://{addr}"),
+>>>>>>>
+<<<<<<<
+                            .into_response()
+=======
+            calls,
+>>>>>>>
+<<<<<<<
+                    } else {
+=======
+        }
+>>>>>>>
+<<<<<<<
+                        (StatusCode::OK, "{}").into_response()
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+                    }
+>>>>>>>
+<<<<<<<
+                }
+=======
+    #[tokio::test]
+>>>>>>>
+<<<<<<<
+            }
+=======
+    async fn delete_file_sends_a_slashed_id_as_one_path_segment() {
+>>>>>>>
+<<<<<<<
+        // An external id may contain `/` (e.g. `github:org/repo`). Unencoded it
+=======
+        });
+>>>>>>>
+<<<<<<<
+        // splits the path and the API 404s; this routes through a real router,
+=======
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+>>>>>>>
+<<<<<<<
+            .await
+=======
+        // so a regression fails to match the `{file}` segment at all.
+>>>>>>>
+<<<<<<<
+            .expect("bind");
+=======
+        let captured: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
+>>>>>>>
+<<<<<<<
+        let addr = listener.local_addr().expect("addr");
+=======
+        let app = Router::new().route(
+>>>>>>>
+<<<<<<<
+            "/v1/stores/{store}/files/{file}",
+=======
+        tokio::spawn(async move {
+>>>>>>>
+<<<<<<<
+            axum::routing::delete({
+=======
+            axum::serve(listener, app).await.expect("serve");
+>>>>>>>
+<<<<<<<
+                let captured = Arc::clone(&captured);
+=======
+        });
+>>>>>>>
+<<<<<<<
+                move |axum::extract::Path((_store, file)): axum::extract::Path<(String, String)>| {
+=======
+        MockServer {
+>>>>>>>
+<<<<<<<
+                    *captured.lock().expect("lock") = Some(file);
+=======
+            base_url: format!("http://{addr}"),
+>>>>>>>
+<<<<<<<
+                    async { (StatusCode::OK, "{}") }
+=======
+            calls,
+>>>>>>>
+<<<<<<<
+                }
+=======
+        }
+>>>>>>>
+<<<<<<<
+            }),
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+        );
+>>>>>>>
+<<<<<<<
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+=======
+    #[tokio::test]
+>>>>>>>
+<<<<<<<
+            .await
+=======
+    async fn delete_file_sends_a_slashed_id_as_one_path_segment() {
+>>>>>>>
+<<<<<<<
+            .expect("bind");
+=======
+        // An external id may contain `/` (e.g. `github:org/repo`). Unencoded it
+>>>>>>>
+<<<<<<<
+        // splits the path and the API 404s; this routes through a real router,
+=======
+        let addr = listener.local_addr().expect("addr");
+>>>>>>>
+<<<<<<<
+        // so a regression fails to match the `{file}` segment at all.
+=======
+        tokio::spawn(async move {
+>>>>>>>
+<<<<<<<
+            axum::serve(listener, app).await.expect("serve");
+=======
+        let captured: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
+>>>>>>>
+<<<<<<<
+        let app = Router::new().route(
+=======
+        });
+>>>>>>>
+<<<<<<<
+
+=======
+            "/v1/stores/{store}/files/{file}",
+>>>>>>>
+<<<<<<<
+            axum::routing::delete({
+=======
+        let client = Client::new(format!("http://{addr}"), "test-key").expect("client");
+>>>>>>>
+<<<<<<<
+                let captured = Arc::clone(&captured);
+=======
+        client
+>>>>>>>
+<<<<<<<
+                move |axum::extract::Path((_store, file)): axum::extract::Path<(String, String)>| {
+=======
+            .delete_file("s", "github:indexable-inc/index")
+>>>>>>>
+<<<<<<<
+                    *captured.lock().expect("lock") = Some(file);
+=======
+            .await
+>>>>>>>
+<<<<<<<
+                    async { (StatusCode::OK, "{}") }
+=======
+            .expect("delete routes as one segment");
+>>>>>>>
+<<<<<<<
+                }
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+            captured.lock().expect("lock").as_deref(),
+=======
+            }),
+>>>>>>>
+<<<<<<<
+            Some("github:indexable-inc/index"),
+=======
+        );
+>>>>>>>
+<<<<<<<
+            "the router must decode the segment back to the original id"
+=======
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+>>>>>>>
+<<<<<<<
+            .await
+=======
+        );
+>>>>>>>
+<<<<<<<
+            .expect("bind");
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+        let addr = listener.local_addr().expect("addr");
+>>>>>>>
+<<<<<<<
+        tokio::spawn(async move {
+=======
+    #[tokio::test]
+>>>>>>>
+<<<<<<<
+            axum::serve(listener, app).await.expect("serve");
+=======
+    async fn file_status_reads_the_status_field_and_maps_404_to_none() {
+>>>>>>>
+<<<<<<<
+        // Pins the per-file status wire contract: GET the store-file object,
+=======
+        });
+>>>>>>>
+<<<<<<<
+
+=======
+        // read its `status` string (including one this client has never heard
+>>>>>>>
+<<<<<<<
+        // of), and fold a 404 into `None` rather than an error — a file deleted
+=======
+        let client = Client::new(format!("http://{addr}"), "test-key").expect("client");
+>>>>>>>
+<<<<<<<
+        // out from under a waiting caller is settled, not a failure.
+=======
+        client
+>>>>>>>
+<<<<<<<
+            .delete_file("s", "github:indexable-inc/index")
+=======
+        let app = Router::new().route(
+>>>>>>>
+<<<<<<<
+            "/v1/stores/{store}/files/{file}",
+=======
+            .await
+>>>>>>>
+<<<<<<<
+            .expect("delete routes as one segment");
+=======
+            axum::routing::get(
+>>>>>>>
+<<<<<<<
+                |axum::extract::Path((_store, file)): axum::extract::Path<(String, String)>| async move {
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+                    match file.as_str() {
+=======
+            captured.lock().expect("lock").as_deref(),
+>>>>>>>
+<<<<<<<
+                        "queued" => (StatusCode::OK, r#"{"status":"pending"}"#),
+=======
+            Some("github:indexable-inc/index"),
+>>>>>>>
+<<<<<<<
+                        "embedding" => (StatusCode::OK, r#"{"status":"in_progress"}"#),
+=======
+            "the router must decode the segment back to the original id"
+>>>>>>>
+<<<<<<<
+                        "done" => (StatusCode::OK, r#"{"status":"completed"}"#),
+=======
+        );
+>>>>>>>
+<<<<<<<
+                        "novel" => (StatusCode::OK, r#"{"status":"some_future_state"}"#),
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+                        _ => (StatusCode::NOT_FOUND, r#"{"error":"not found"}"#),
+>>>>>>>
+<<<<<<<
+                    }
+=======
+    #[tokio::test]
+>>>>>>>
+<<<<<<<
+                },
+=======
+    async fn file_status_reads_the_status_field_and_maps_404_to_none() {
+>>>>>>>
+<<<<<<<
+            ),
+=======
+        // Pins the per-file status wire contract: GET the store-file object,
+>>>>>>>
+<<<<<<<
+        );
+=======
+        // read its `status` string (including one this client has never heard
+>>>>>>>
+<<<<<<<
+        // of), and fold a 404 into `None` rather than an error — a file deleted
+=======
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+>>>>>>>
+<<<<<<<
+            .await
+=======
+        // out from under a waiting caller is settled, not a failure.
+>>>>>>>
+<<<<<<<
+            .expect("bind");
+=======
+        let app = Router::new().route(
+>>>>>>>
+<<<<<<<
+            "/v1/stores/{store}/files/{file}",
+=======
+        let addr = listener.local_addr().expect("addr");
+>>>>>>>
+<<<<<<<
+            axum::routing::get(
+=======
+        tokio::spawn(async move {
+>>>>>>>
+<<<<<<<
+                |axum::extract::Path((_store, file)): axum::extract::Path<(String, String)>| async move {
+=======
+            axum::serve(listener, app).await.expect("serve");
+>>>>>>>
+<<<<<<<
+                    match file.as_str() {
+=======
+        });
+>>>>>>>
+<<<<<<<
+
+=======
+                        "queued" => (StatusCode::OK, r#"{"status":"pending"}"#),
+>>>>>>>
+<<<<<<<
+                        "embedding" => (StatusCode::OK, r#"{"status":"in_progress"}"#),
+=======
+        let client = Client::new(format!("http://{addr}"), "test-key").expect("client");
+>>>>>>>
+<<<<<<<
+                        "done" => (StatusCode::OK, r#"{"status":"completed"}"#),
+=======
+        let status = |id: &'static str| client.file_status("s", id);
+>>>>>>>
+<<<<<<<
+                        "novel" => (StatusCode::OK, r#"{"status":"some_future_state"}"#),
+=======
+        assert_eq!(status("queued").await.expect("get"), Some(FileStatus::Pending));
+>>>>>>>
+<<<<<<<
+                        _ => (StatusCode::NOT_FOUND, r#"{"error":"not found"}"#),
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+                    }
+=======
+            status("embedding").await.expect("get"),
+>>>>>>>
+<<<<<<<
+                },
+=======
+            Some(FileStatus::InProgress)
+>>>>>>>
+<<<<<<<
+            ),
+=======
+        );
+>>>>>>>
+<<<<<<<
+        );
+=======
+        assert_eq!(status("done").await.expect("get"), Some(FileStatus::Completed));
+>>>>>>>
+<<<<<<<
+        assert_eq!(status("novel").await.expect("get"), Some(FileStatus::Unknown));
+=======
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+>>>>>>>
+<<<<<<<
+            .await
+=======
+        assert_eq!(status("gone").await.expect("get"), None);
+>>>>>>>
+<<<<<<<
+
+=======
+            .expect("bind");
+>>>>>>>
+<<<<<<<
+        // The waiting contract: only the two live states keep a poll loop going.
+=======
+        let addr = listener.local_addr().expect("addr");
+>>>>>>>
+<<<<<<<
+        assert!(!FileStatus::Pending.is_settled());
+=======
+        tokio::spawn(async move {
+>>>>>>>
+<<<<<<<
+            axum::serve(listener, app).await.expect("serve");
+=======
+        assert!(!FileStatus::InProgress.is_settled());
+>>>>>>>
+<<<<<<<
+        assert!(FileStatus::Completed.is_settled());
+=======
+        });
+>>>>>>>
+<<<<<<<
+
+=======
+        assert!(FileStatus::Failed.is_settled());
+>>>>>>>
+<<<<<<<
+        assert!(FileStatus::Unknown.is_settled());
+=======
+        let client = Client::new(format!("http://{addr}"), "test-key").expect("client");
+>>>>>>>
+<<<<<<<
+        let status = |id: &'static str| client.file_status("s", id);
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+        assert_eq!(status("queued").await.expect("get"), Some(FileStatus::Pending));
+>>>>>>>
+<<<<<<<
+        assert_eq!(
+=======
+    #[tokio::test]
+>>>>>>>
+<<<<<<<
+            status("embedding").await.expect("get"),
+=======
+    async fn rerank_posts_documents_and_projects_index_score() {
+>>>>>>>
+<<<<<<<
+            Some(FileStatus::InProgress)
+=======
+        // Pins the /v1/reranking wire contract: the request carries the model,
+>>>>>>>
+<<<<<<<
+        );
+=======
+        // query, documents (`input`), top_k, and `return_input: false`; the
+>>>>>>>
+<<<<<<<
+        // response's `data` items project to (index, score) pairs pointing back
+=======
+        assert_eq!(status("done").await.expect("get"), Some(FileStatus::Completed));
+>>>>>>>
+<<<<<<<
+        // into the submitted slice.
+=======
+        assert_eq!(status("novel").await.expect("get"), Some(FileStatus::Unknown));
+>>>>>>>
+<<<<<<<
+        assert_eq!(status("gone").await.expect("get"), None);
+=======
+        let (base_url, captured) = post_fixture(
+>>>>>>>
+<<<<<<<
+
+=======
+            "/v1/reranking",
+>>>>>>>
+<<<<<<<
+            r#"{"data":[{"index":2,"score":0.91},{"index":0,"score":0.12}]}"#,
+=======
+        // The waiting contract: only the two live states keep a poll loop going.
+>>>>>>>
+<<<<<<<
+        )
+=======
+        assert!(!FileStatus::Pending.is_settled());
+>>>>>>>
+<<<<<<<
+        .await;
+=======
+        assert!(!FileStatus::InProgress.is_settled());
+>>>>>>>
+<<<<<<<
+
+=======
+        assert!(FileStatus::Completed.is_settled());
+>>>>>>>
+<<<<<<<
+        assert!(FileStatus::Failed.is_settled());
+=======
+        let client = Client::new(base_url, "test-key").expect("client");
+>>>>>>>
+<<<<<<<
+        assert!(FileStatus::Unknown.is_settled());
+=======
+        let docs = vec!["alpha".to_owned(), "beta".to_owned(), "gamma".to_owned()];
+>>>>>>>
+<<<<<<<
+        let hits = client
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+            .rerank(DEFAULT_RERANK_MODEL, "which greek letter", &docs, 2)
+>>>>>>>
+<<<<<<<
+            .await
+=======
+    #[tokio::test]
+>>>>>>>
+<<<<<<<
+            .expect("rerank");
+=======
+    async fn rerank_posts_documents_and_projects_index_score() {
+>>>>>>>
+<<<<<<<
+        // Pins the /v1/reranking wire contract: the request carries the model,
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+            hits.iter().map(|h| h.index).collect::<Vec<_>>(),
+=======
+        // query, documents (`input`), top_k, and `return_input: false`; the
+>>>>>>>
+<<<<<<<
+            vec![2, 0],
+=======
+        // response's `data` items project to (index, score) pairs pointing back
+>>>>>>>
+<<<<<<<
+            "hits keep the API's most-relevant-first order"
+=======
+        // into the submitted slice.
+>>>>>>>
+<<<<<<<
+        );
+=======
+        let PostFixture {
+>>>>>>>
+<<<<<<<
+            base_url,
+=======
+        assert!((hits[0].score - 0.91).abs() < 1e-6, "{}", hits[0].score);
+>>>>>>>
+<<<<<<<
+            captured,
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+            captured.lock().expect("lock").take().expect("request body"),
+=======
+        } = post_fixture(
+>>>>>>>
+<<<<<<<
+            "/v1/reranking",
+=======
+            serde_json::json!({
+>>>>>>>
+<<<<<<<
+                "model": DEFAULT_RERANK_MODEL,
+=======
+            r#"{"data":[{"index":2,"score":0.91},{"index":0,"score":0.12}]}"#,
+>>>>>>>
+<<<<<<<
+                "query": "which greek letter",
+=======
+        )
+>>>>>>>
+<<<<<<<
+                "input": ["alpha", "beta", "gamma"],
+=======
+        .await;
+>>>>>>>
+<<<<<<<
+
+=======
+                "top_k": 2,
+>>>>>>>
+<<<<<<<
+                "return_input": false,
+=======
+        let client = Client::new(base_url, "test-key").expect("client");
+>>>>>>>
+<<<<<<<
+            })
+=======
+        let docs = vec!["alpha".to_owned(), "beta".to_owned(), "gamma".to_owned()];
+>>>>>>>
+<<<<<<<
+        );
+=======
+        let hits = client
+>>>>>>>
+<<<<<<<
+            .rerank(DEFAULT_RERANK_MODEL, "which greek letter", &docs, 2)
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+            .await
+>>>>>>>
+<<<<<<<
+            .expect("rerank");
+=======
+    #[tokio::test]
+>>>>>>>
+<<<<<<<
+        assert_eq!(
+=======
+    async fn retries_429_then_succeeds() {
+>>>>>>>
+<<<<<<<
+            hits.iter().map(|h| h.index).collect::<Vec<_>>(),
+=======
+        let MockServer { base_url, calls } = spawn_mock(2).await;
+>>>>>>>
+<<<<<<<
+            vec![2, 0],
+=======
+        let client = Client::new(base_url, "test-key").expect("client");
+>>>>>>>
+<<<<<<<
+            "hits keep the API's most-relevant-first order"
+=======
+        client
+>>>>>>>
+<<<<<<<
+            .ensure_store("store")
+=======
+        );
+>>>>>>>
+<<<<<<<
+            .await
+=======
+        assert!((hits[0].score - 0.91).abs() < 1e-6, "{}", hits[0].score);
+>>>>>>>
+<<<<<<<
+            .expect("succeeds after retries");
+=======
+        assert_eq!(
+>>>>>>>
+<<<<<<<
+            captured.lock().expect("lock").take().expect("request body"),
+=======
+        // 2 rejected + 1 accepted.
+>>>>>>>
+<<<<<<<
+            serde_json::json!({
+=======
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+>>>>>>>
+<<<<<<<
+                "model": DEFAULT_RERANK_MODEL,
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+                "query": "which greek letter",
+>>>>>>>
+<<<<<<<
+                "input": ["alpha", "beta", "gamma"],
+=======
+    /// TCP server that drops the connection without a response for the first
+>>>>>>>
+<<<<<<<
+                "top_k": 2,
+=======
+    /// `fail_times` requests (a transport error, no HTTP status), then answers
+>>>>>>>
+<<<<<<<
+                "return_input": false,
+=======
+    /// `200`. Returns the base URL and a counter of accepted connections.
+>>>>>>>
+<<<<<<<
+            })
+=======
+    async fn spawn_flaky_tcp(fail_times: usize) -> MockServer {
+>>>>>>>
+<<<<<<<
+        );
+=======
+        use tokio::io::AsyncWriteExt as _;
+>>>>>>>
+<<<<<<<
+
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+        let calls = Arc::new(AtomicUsize::new(0));
+>>>>>>>
+<<<<<<<
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+=======
+    #[tokio::test]
+>>>>>>>
+<<<<<<<
+            .await
+=======
+    async fn retries_429_then_succeeds() {
+>>>>>>>
+<<<<<<<
+            .expect("bind");
+=======
+        let MockServer { base_url, calls } = spawn_mock(2).await;
+>>>>>>>
+<<<<<<<
+        let addr = listener.local_addr().expect("addr");
+=======
+        let client = Client::new(base_url, "test-key").expect("client");
+>>>>>>>
+<<<<<<<
+        client
+=======
+        let calls_task = Arc::clone(&calls);
+>>>>>>>
+<<<<<<<
+            .ensure_store("store")
+=======
+        tokio::spawn(async move {
+>>>>>>>
+<<<<<<<
+            .await
+=======
+            loop {
+>>>>>>>
+<<<<<<<
+                let Ok((mut sock, _)) = listener.accept().await else {
+=======
+            .expect("succeeds after retries");
+>>>>>>>
+<<<<<<<
+                    continue;
+=======
+        // 2 rejected + 1 accepted.
+>>>>>>>
+<<<<<<<
+                };
+=======
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+>>>>>>>
+<<<<<<<
+                let n = calls_task.fetch_add(1, Ordering::SeqCst);
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+                if n < fail_times {
+>>>>>>>
+<<<<<<<
+                    // Close immediately: the client sees the connection drop
+=======
+    /// TCP server that drops the connection without a response for the first
+>>>>>>>
+<<<<<<<
+                    // before a response, i.e. a transport error.
+=======
+    /// `fail_times` requests (a transport error, no HTTP status), then answers
+>>>>>>>
+<<<<<<<
+                    drop(sock);
+=======
+    /// `200`. Returns the base URL and a counter of accepted connections.
+>>>>>>>
+<<<<<<<
+                } else {
+=======
+    async fn spawn_flaky_tcp(fail_times: usize) -> MockServer {
+>>>>>>>
+<<<<<<<
+                    let _ = sock
+=======
+        use tokio::io::AsyncWriteExt as _;
+>>>>>>>
+<<<<<<<
+
+=======
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+>>>>>>>
+<<<<<<<
+                        .await;
+=======
+        let calls = Arc::new(AtomicUsize::new(0));
+>>>>>>>
+<<<<<<<
+                    let _ = sock.shutdown().await;
+=======
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+>>>>>>>
+<<<<<<<
+                }
+=======
+            .await
+>>>>>>>
+<<<<<<<
+            .expect("bind");
+=======
+            }
+>>>>>>>
+<<<<<<<
+        let addr = listener.local_addr().expect("addr");
+=======
+        });
+>>>>>>>
+<<<<<<<
+        MockServer {
+=======
+        let calls_task = Arc::clone(&calls);
+>>>>>>>
+<<<<<<<
+            base_url: format!("http://{addr}"),
+=======
+        tokio::spawn(async move {
+>>>>>>>
+<<<<<<<
+            calls,
+=======
+            loop {
+>>>>>>>
+<<<<<<<
+                let Ok((mut sock, _)) = listener.accept().await else {
+=======
+        }
+>>>>>>>
+<<<<<<<
+                    continue;
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+                };
+>>>>>>>
+<<<<<<<
+                let n = calls_task.fetch_add(1, Ordering::SeqCst);
+=======
+    /// TCP server that accepts and then holds the connection open without ever
+>>>>>>>
+<<<<<<<
+                if n < fail_times {
+=======
+    /// responding for the first `stall_times` connections, then answers `200`.
+>>>>>>>
+<<<<<<<
+                    // Close immediately: the client sees the connection drop
+=======
+    /// This is the wedge [`super::REQUEST_TIMEOUT`] exists for: the connection
+>>>>>>>
+<<<<<<<
+                    // before a response, i.e. a transport error.
+=======
+    /// stays ESTAB, no transport error fires on its own, and only a client-side
+>>>>>>>
+<<<<<<<
+                    drop(sock);
+=======
+    /// timeout can turn the stall into a retryable error. Returns the base URL
+>>>>>>>
+<<<<<<<
+                } else {
+=======
+    /// and a counter of accepted connections.
+>>>>>>>
+<<<<<<<
+                    let _ = sock
+=======
+    async fn spawn_stalling_tcp(stall_times: usize) -> MockServer {
+>>>>>>>
+<<<<<<<
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+=======
+        use tokio::io::AsyncWriteExt as _;
+>>>>>>>
+<<<<<<<
+
+=======
+                        .await;
+>>>>>>>
+<<<<<<<
+                    let _ = sock.shutdown().await;
+=======
+        let calls = Arc::new(AtomicUsize::new(0));
+>>>>>>>
+<<<<<<<
+                }
+=======
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+>>>>>>>
+<<<<<<<
+            .await
+=======
+            }
+>>>>>>>
+<<<<<<<
+            .expect("bind");
+=======
+        });
+>>>>>>>
+<<<<<<<
+        MockServer {
+=======
+        let addr = listener.local_addr().expect("addr");
+>>>>>>>
+<<<<<<<
+            base_url: format!("http://{addr}"),
+=======
+        let calls_task = Arc::clone(&calls);
+>>>>>>>
+<<<<<<<
+            calls,
+=======
+        tokio::spawn(async move {
+>>>>>>>
+<<<<<<<
+            loop {
+=======
+        }
+>>>>>>>
+<<<<<<<
+                let Ok((mut sock, _)) = listener.accept().await else {
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+                    continue;
+>>>>>>>
+<<<<<<<
+                };
+=======
+    /// TCP server that accepts and then holds the connection open without ever
+>>>>>>>
+<<<<<<<
+                let n = calls_task.fetch_add(1, Ordering::SeqCst);
+=======
+    /// responding for the first `stall_times` connections, then answers `200`.
+>>>>>>>
+<<<<<<<
+                // Each connection gets its own task: a stalled socket must stay
+=======
+    /// This is the wedge [`super::REQUEST_TIMEOUT`] exists for: the connection
+>>>>>>>
+<<<<<<<
+                // open (dropping it would be a transport error, a different
+=======
+    /// stays ESTAB, no transport error fires on its own, and only a client-side
+>>>>>>>
+<<<<<<<
+                // test) without blocking the accept loop.
+=======
+    /// timeout can turn the stall into a retryable error. Returns the base URL
+>>>>>>>
+<<<<<<<
+                tokio::spawn(async move {
+=======
+    /// and a counter of accepted connections.
+>>>>>>>
+<<<<<<<
+                    if n < stall_times {
+=======
+    async fn spawn_stalling_tcp(stall_times: usize) -> MockServer {
+>>>>>>>
+<<<<<<<
+                        tokio::time::sleep(Duration::from_hours(1)).await;
+=======
+        use tokio::io::AsyncWriteExt as _;
+>>>>>>>
+<<<<<<<
+
+=======
+                    } else {
+>>>>>>>
+<<<<<<<
+                        let _ = sock
+=======
+        let calls = Arc::new(AtomicUsize::new(0));
+>>>>>>>
+<<<<<<<
+                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+=======
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+>>>>>>>
+<<<<<<<
+                            .await;
+=======
+            .await
+>>>>>>>
+<<<<<<<
+                        let _ = sock.shutdown().await;
+=======
+            .expect("bind");
+>>>>>>>
+<<<<<<<
+                    }
+=======
+        let addr = listener.local_addr().expect("addr");
+>>>>>>>
+<<<<<<<
+                });
+=======
+        let calls_task = Arc::clone(&calls);
+>>>>>>>
+<<<<<<<
+            }
+=======
+        tokio::spawn(async move {
+>>>>>>>
+<<<<<<<
+            loop {
+=======
+        });
+>>>>>>>
+<<<<<<<
+                let Ok((mut sock, _)) = listener.accept().await else {
+=======
+        MockServer {
+>>>>>>>
+<<<<<<<
+                    continue;
+=======
+            base_url: format!("http://{addr}"),
+>>>>>>>
+<<<<<<<
+                };
+=======
+            calls,
+>>>>>>>
+<<<<<<<
+                let n = calls_task.fetch_add(1, Ordering::SeqCst);
+=======
+        }
+>>>>>>>
+<<<<<<<
+                // Each connection gets its own task: a stalled socket must stay
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+                // open (dropping it would be a transport error, a different
+>>>>>>>
+<<<<<<<
+                // test) without blocking the accept loop.
+=======
+    #[tokio::test]
+>>>>>>>
+<<<<<<<
+                tokio::spawn(async move {
+=======
+    async fn a_stalled_response_times_out_and_retries() {
+>>>>>>>
+<<<<<<<
+                    if n < stall_times {
+=======
+        // Pays real backoff (~1s), like the transport-error test below.
+>>>>>>>
+<<<<<<<
+                        tokio::time::sleep(Duration::from_hours(1)).await;
+=======
+        let MockServer { base_url, calls } = spawn_stalling_tcp(2).await;
+>>>>>>>
+<<<<<<<
+                    } else {
+=======
+        // Built directly rather than via `Client::new` so the stall is bounded
+>>>>>>>
+<<<<<<<
+                        let _ = sock
+=======
+        // by a test-sized timeout instead of the production REQUEST_TIMEOUT;
+>>>>>>>
+<<<<<<<
+                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+=======
+        // the retry path under test is identical.
+>>>>>>>
+<<<<<<<
+                            .await;
+=======
+        let client = Client {
+>>>>>>>
+<<<<<<<
+                        let _ = sock.shutdown().await;
+=======
+            http: HttpClient::builder()
+>>>>>>>
+<<<<<<<
+                    }
+=======
+                .timeout(Duration::from_millis(200))
+>>>>>>>
+<<<<<<<
+                .build()
+=======
+                });
+>>>>>>>
+<<<<<<<
+                .expect("client"),
+=======
+            }
+>>>>>>>
+<<<<<<<
+            base_url,
+=======
+        });
+>>>>>>>
+<<<<<<<
+            api_key: "test-key".into(),
+=======
+        MockServer {
+>>>>>>>
+<<<<<<<
+            base_url: format!("http://{addr}"),
+=======
+        };
+>>>>>>>
+<<<<<<<
+            calls,
+=======
+        client
+>>>>>>>
+<<<<<<<
+            .ensure_store("store")
+=======
+        }
+>>>>>>>
+<<<<<<<
+            .await
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+            .expect("succeeds after stalled attempts time out");
+>>>>>>>
+<<<<<<<
+        // 2 stalled connections + 1 answered.
+=======
+    #[tokio::test]
+>>>>>>>
+<<<<<<<
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+=======
+    async fn a_stalled_response_times_out_and_retries() {
+>>>>>>>
+<<<<<<<
+        // Pays real backoff (~1s), like the transport-error test below.
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+        let MockServer { base_url, calls } = spawn_stalling_tcp(2).await;
+>>>>>>>
+<<<<<<<
+        // Built directly rather than via `Client::new` so the stall is bounded
+=======
+    #[tokio::test]
+>>>>>>>
+<<<<<<<
+        // by a test-sized timeout instead of the production REQUEST_TIMEOUT;
+=======
+    async fn retries_transport_errors_then_succeeds() {
+>>>>>>>
+<<<<<<<
+        // Pays real backoff (~1s): transport errors carry no `Retry-After`, so
+=======
+        // the retry path under test is identical.
+>>>>>>>
+<<<<<<<
+        // don't raise `fail_times` expecting it to stay instant.
+=======
+        let client = Client {
+>>>>>>>
+<<<<<<<
+            http: HttpClient::builder()
+=======
+        let MockServer { base_url, calls } = spawn_flaky_tcp(2).await;
+>>>>>>>
+<<<<<<<
+                .timeout(Duration::from_millis(200))
+=======
+        let client = Client::new(base_url, "test-key").expect("client");
+>>>>>>>
+<<<<<<<
+                .build()
+=======
+        client
+>>>>>>>
+<<<<<<<
+                .expect("client"),
+=======
+            .ensure_store("store")
+>>>>>>>
+<<<<<<<
+            .await
+=======
+            base_url,
+>>>>>>>
+<<<<<<<
+            .expect("succeeds after transport retries");
+=======
+            api_key: "test-key".into(),
+>>>>>>>
+<<<<<<<
+        // 2 dropped connections + 1 accepted.
+=======
+        };
+>>>>>>>
+<<<<<<<
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+=======
+        client
+>>>>>>>
+<<<<<<<
+            .ensure_store("store")
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+            .await
+>>>>>>>
+<<<<<<<
+            .expect("succeeds after stalled attempts time out");
+=======
+    #[tokio::test]
+>>>>>>>
+<<<<<<<
+        // 2 stalled connections + 1 answered.
+=======
+    async fn gives_up_after_max_retries() {
+>>>>>>>
+<<<<<<<
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+=======
+        let MockServer { base_url, calls } = spawn_mock(usize::MAX).await;
+>>>>>>>
+<<<<<<<
+        let client = Client::new(base_url, "test-key").expect("client");
+=======
+    }
+>>>>>>>
+<<<<<<<
+
+=======
+        let err = client
+>>>>>>>
+<<<<<<<
+            .ensure_store("store")
+=======
+    #[tokio::test]
+>>>>>>>
+<<<<<<<
+            .await
+=======
+    async fn retries_transport_errors_then_succeeds() {
+>>>>>>>
+<<<<<<<
+            .expect_err("never succeeds");
+=======
+        // Pays real backoff (~1s): transport errors carry no `Retry-After`, so
+>>>>>>>
+<<<<<<<
+        // don't raise `fail_times` expecting it to stay instant.
+=======
+        assert!(matches!(err, Error::Api { status: 429, .. }), "got {err:?}");
+>>>>>>>
+<<<<<<<
+        // The initial attempt plus MAX_RETRIES retries.
+=======
+        let MockServer { base_url, calls } = spawn_flaky_tcp(2).await;
+>>>>>>>
+<<<<<<<
+        assert_eq!(calls.load(Ordering::SeqCst), (MAX_RETRIES + 1) as usize);
+=======
+        let client = Client::new(base_url, "test-key").expect("client");
+>>>>>>>
+<<<<<<<
+        client
+=======
+    }
+>>>>>>>
+<<<<<<<
+            .ensure_store("store")
+=======
+}
+>>>>>>>
             .await
             .expect("succeeds after transport retries");
         // 2 dropped connections + 1 accepted.

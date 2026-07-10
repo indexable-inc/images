@@ -238,7 +238,7 @@ fn turn(hit: SearchHit) -> DisplayHit {
 mod tests {
     use source_meta::Document;
 
-    use super::context;
+    use super::{ContextView, context};
     use crate::backend::{MemoryStore, Store as _};
 
     /// Upload one transcript turn: a `claude_history` record with a session
@@ -272,6 +272,23 @@ mod tests {
             .expect("upload");
     }
 
+    async fn put_session(store: &MemoryStore, count: i64) {
+        for (index, timestamp) in (1..=count).enumerate() {
+            put_turn(
+                store,
+                "sess-1",
+                &format!("uuid-{index}"),
+                &format!("turn {index}"),
+                timestamp,
+            )
+            .await;
+        }
+    }
+
+    fn timestamps(view: &ContextView) -> Vec<i64> {
+        view.turns.iter().filter_map(|turn| turn.timestamp).collect()
+    }
+
     /// Upload a sessionless record (a GitHub issue): context for it must fall
     /// back to the record's own chunks.
     async fn put_issue(store: &MemoryStore, external_id: &str, body: &str) {
@@ -303,9 +320,7 @@ mod tests {
     #[tokio::test]
     async fn context_windows_the_session_around_the_anchor() {
         let store = MemoryStore::new();
-        for (index, ts) in (1..=7).enumerate() {
-            put_turn(&store, "sess-1", &format!("uuid-{index}"), &format!("turn {index}"), ts).await;
-        }
+        put_session(&store, 7).await;
         // An unrelated session must never leak into the window.
         put_turn(&store, "sess-2", "other", "other session", 4).await;
 
@@ -314,7 +329,7 @@ mod tests {
             .await
             .expect("context");
 
-        let stamps: Vec<i64> = view.turns.iter().filter_map(|turn| turn.timestamp).collect();
+        let stamps = timestamps(&view);
         assert_eq!(stamps, vec![2, 3, 4, 5, 6], "ascending window around ts 4");
         assert_eq!(view.anchor, Some(2));
         assert_eq!(
@@ -332,16 +347,14 @@ mod tests {
     #[tokio::test]
     async fn context_window_clips_at_the_session_edges() {
         let store = MemoryStore::new();
-        for (index, ts) in (1..=3).enumerate() {
-            put_turn(&store, "sess-1", &format!("uuid-{index}"), &format!("turn {index}"), ts).await;
-        }
+        put_session(&store, 3).await;
 
         // Anchor at the first turn: nothing exists before it, and asking for
         // more after than the session holds returns what is there.
         let view = context(&store, "s", "claude:sess-1:uuid-0", 5, 5)
             .await
             .expect("context");
-        let stamps: Vec<i64> = view.turns.iter().filter_map(|turn| turn.timestamp).collect();
+        let stamps = timestamps(&view);
         assert_eq!(stamps, vec![1, 2, 3]);
         assert_eq!(view.anchor, Some(0));
     }
@@ -363,12 +376,10 @@ mod tests {
     #[tokio::test]
     async fn bare_session_id_lists_the_session_from_its_start() {
         let store = MemoryStore::new();
-        for (index, ts) in (1..=6).enumerate() {
-            put_turn(&store, "sess-1", &format!("uuid-{index}"), &format!("turn {index}"), ts).await;
-        }
+        put_session(&store, 6).await;
 
         let view = context(&store, "s", "sess-1", 1, 2).await.expect("context");
-        let stamps: Vec<i64> = view.turns.iter().filter_map(|turn| turn.timestamp).collect();
+        let stamps = timestamps(&view);
         // before + after + 1 caps the listing; it starts at the session head.
         assert_eq!(stamps, vec![1, 2, 3, 4]);
         assert_eq!(view.anchor, None);

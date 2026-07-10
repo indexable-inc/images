@@ -59,6 +59,25 @@ pub enum IntKind {
     Usize,
 }
 
+impl IntKind {
+    /// Canonical Rust spelling used by every generated backend and host type.
+    #[must_use]
+    pub const fn rust_name(self) -> &'static str {
+        match self {
+            Self::I8 => "i8",
+            Self::I16 => "i16",
+            Self::I32 => "i32",
+            Self::I64 => "i64",
+            Self::Isize => "isize",
+            Self::U8 => "u8",
+            Self::U16 => "u16",
+            Self::U32 => "u32",
+            Self::U64 => "u64",
+            Self::Usize => "usize",
+        }
+    }
+}
+
 /// Float width.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum FloatKind {
