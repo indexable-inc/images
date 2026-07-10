@@ -108,43 +108,25 @@ def test_phase0_store_roundtrip_against_real_weave(weave_server: str, tmp_path: 
     asyncio.run(check())
 
 
-def test_supervisor_spawn_and_reply_loop(weave_server: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    fake = tmp_path / "fake-harness.sh"
-    fake.write_text("#!/bin/sh\necho \"fake harness ran: $1\"\n")
-    fake.chmod(0o755)
+def test_delegate_writes_task_shape(weave_server: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("WEAVE_URL", weave_server)
-    monkeypatch.setenv("IX_WEAVE_HARNESS_BIN", str(fake))
+    monkeypatch.setenv("IX_WEAVE_AGENT", "agent:e2e")
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "weave"))
     import weave
-    from weave import supervisor
 
     async def main() -> None:
-        req = await weave.spawn("prefab:claude-worker", task="say hello", requested_by="agent:main")
-        assert any(r[0] == req for r in (await weave.query("?- open_spawn_request(R, P)."))["rows"])
-        sup = asyncio.create_task(supervisor.run(answer_main=False))
-        try:
-            agent = None
-            for _ in range(60):
-                rows = (await weave.query(f'?- fact(A, "fulfills", "{req}").'))["rows"]
-                if rows:
-                    agent = rows[0][0]
-                    break
-                await asyncio.sleep(0.5)
-            assert agent, "spawn request never fulfilled"
-            attrs = {r[0]: r[1] for r in (await weave.query(f'?- latest("{agent}", A, V).'))["rows"]}
-            assert attrs.get("spawned_by") == "agent:main"
-            assert not any(
-                r[0] == req for r in (await weave.query("?- open_spawn_request(R, P)."))["rows"]
-            )
-            await weave.chat("are you alive?", to=agent, author="hari")
-            for _ in range(60):
-                rows = (await weave.query(f'?- from(M, "{agent}"), text(M, T).'))["rows"]
-                if rows:
-                    assert "fake harness ran" in rows[0][1]
-                    return
-                await asyncio.sleep(0.5)
-            raise AssertionError("agent never replied to the direct message")
-        finally:
-            sup.cancel()
+        task = await weave.delegate("say hello to the weave world", name="greeter", model="haiku")
+        # The task shape any fulfiller (the weave app) dispatches on, straight
+        # datalog against the real server: latest-wins attrs on the task entity.
+        attrs = {r[0]: r[1] for r in (await weave.query(f'?- latest("{task}", A, V).'))["rows"]}
+        assert attrs.get("type") == "task"
+        assert attrs.get("agent") == "agent-greeter"
+        assert attrs.get("prompt") == "say hello to the weave world"
+        assert attrs.get("state") == "pending"
+        assert attrs.get("requested_by") == "agent:e2e"
+        agent_attrs = {r[0]: r[1] for r in (await weave.query('?- latest("agent-greeter", A, V).'))["rows"]}
+        assert agent_attrs.get("type") == "agent"
+        assert agent_attrs.get("name") == "greeter"
+        assert agent_attrs.get("model") == "haiku"
 
     asyncio.run(main())

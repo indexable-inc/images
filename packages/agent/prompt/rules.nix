@@ -661,8 +661,8 @@
       text = ''
         Delegate independent work to agents spawned through the index kernel:
         the harness subagent and task tools are absent by design, so
-        delegation means kernel-spawned coding agents (the how-to arrives
-        with the MCP instructions; `api('tui')` is the catalog entry),
+        delegation means `await weave.delegate('prompt')` in a kernel cell
+        (the weave app runs each task as a live, interruptible session),
         launched as background jobs by default so the main thread stays free,
         with completion notifying the session over the kernel channel. Split
         implementation by phase, fan independent questions (diagnostic

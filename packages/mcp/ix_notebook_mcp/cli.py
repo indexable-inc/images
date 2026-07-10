@@ -80,11 +80,6 @@ def main(argv: list[str] | None = None) -> int:
         help="Persistent session file: record every cell, its outputs, and a namespace "
         "checkpoint there; reopening an existing file restores the state",
     )
-    serve.add_argument(
-        "--supervise",
-        action="store_true",
-        help="Run the Weave supervisor task in this server (or set IX_WEAVE_SUPERVISE=1)",
-    )
     notebook = sub.add_parser(
         "notebook", help="Run the notebook engine alone (kernel + dashboard, no MCP transport)"
     )
@@ -92,11 +87,6 @@ def main(argv: list[str] | None = None) -> int:
         "session", nargs="?", metavar="FILE", help="Session file to create or reopen"
     )
     notebook.add_argument("--workdir", help="Directory the kernel runs in (default: cwd)")
-    notebook.add_argument(
-        "--supervise",
-        action="store_true",
-        help="Run the Weave supervisor task in this server (or set IX_WEAVE_SUPERVISE=1)",
-    )
     dash = sub.add_parser("dashboard", help="Print the Weave Constellation URL")
     dash.add_argument("--open", action="store_true", help="Open the URL in the default browser after printing it")
     sub.add_parser(
@@ -551,8 +541,6 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
     os.environ.setdefault("IX_WEAVE_AGENT", f"agent:{uuid.uuid5(uuid.NAMESPACE_URL, str(store_path)).hex[:8]}")
     os.environ["IX_MCP_DASHBOARD_URL"] = weave_url
     os.environ["IX_MCP_DATA_API_URL"] = cfg.dashboard_url()
-    if getattr(args, "supervise", False):
-        os.environ["IX_WEAVE_SUPERVISE"] = "1"
     os.environ["IPYTHONDIR"] = str(_prepare_ipython_startup(dashboard_port))
 
     # On macOS the process env inherits the empty Apple launchd SSH agent
@@ -616,10 +604,6 @@ async def _run(cfg: Config) -> None:
     (runtime_dir() / "dashboard-url").write_text(url)
     tools.set_dashboard_url(url)
     mesh_runner = await mesh.start(cfg, tools.session_names, url)
-    supervisor_task: asyncio.Task | None = None
-    if os.environ.get("IX_WEAVE_SUPERVISE", "").strip().lower() in ("1", "true", "yes", "on"):
-        from weave.supervisor import run as supervisor_run
-        supervisor_task = asyncio.ensure_future(supervisor_run())
     print(f"[ix-mcp] data API: {cfg.dashboard_url()}  (Weave UI: {url})", file=sys.stderr, flush=True)
     if cfg.session_path is not None:
         print(f"[ix-mcp] session file: {cfg.session_path}", file=sys.stderr, flush=True)
@@ -632,8 +616,6 @@ async def _run(cfg: Config) -> None:
         else:
             await transport.serve()
     finally:
-        if supervisor_task is not None and not supervisor_task.done():
-            supervisor_task.cancel()
         if restore_task is not None and not restore_task.done():
             restore_task.cancel()
         if cfg.session_path is not None:

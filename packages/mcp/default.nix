@@ -459,7 +459,7 @@
       cp -r ${meshPythonSource}/mesh/. "$site/"
     ''
   );
-  # Weave 2 async client/supervisor: facts, queries, blobs, chat, and verbs
+  # Weave 2 async client: facts, queries, blobs, chat, and delegation verbs
   # against the shared Weave journal. Pure Python over bundled httpx + polars.
   weavePythonSource = builtins.path {
     name = "ix-mcp-weave-python-source";
@@ -469,7 +469,7 @@
     pkgs.runCommand "ix-mcp-weave-python-module"
     {
       strictDeps = true;
-      meta.description = "Weave 2 async client and supervisor bundled into the ix-mcp interpreter";
+      meta.description = "Weave 2 async client bundled into the ix-mcp interpreter";
     }
     ''
       site="$out/${pkgs.python3.sitePackages}/weave"
