@@ -108,8 +108,8 @@ pub enum ExitState {
 /// Spawn-time terminal configuration.
 ///
 /// [`SpawnConfig::default`] is the single source of truth for the defaults:
-/// an 80x24 screen with 10,000 lines of scrollback.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// an 80x24 screen with 10,000 lines of scrollback and no extra environment.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpawnConfig {
     /// Terminal height in character rows.
     pub rows: u16,
@@ -117,6 +117,11 @@ pub struct SpawnConfig {
     pub cols: u16,
     /// Lines of history retained above the viewport.
     pub scrollback_lines: usize,
+    /// Extra environment for the child, applied in order on top of the
+    /// inherited environment. Carries per-session identity/config for spawned
+    /// agent harnesses. `TERM`/`COLORTERM` are forced by the crate after these
+    /// pairs, so they always win.
+    pub env: Vec<(String, String)>,
 }
 
 impl Default for SpawnConfig {
@@ -125,6 +130,7 @@ impl Default for SpawnConfig {
             rows: 24,
             cols: 80,
             scrollback_lines: 10_000,
+            env: Vec::new(),
         }
     }
 }

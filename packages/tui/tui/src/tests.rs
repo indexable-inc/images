@@ -123,6 +123,35 @@ fn spawn_config_sets_terminal_size() {
 }
 
 #[test]
+fn spawn_config_env_reaches_child_and_forced_term_wins() {
+    let manager = TuiManager::new();
+    let instance = manager
+        .spawn(
+            "sh".to_string(),
+            vec!["-c".to_string(), "echo \"$IX_TEST_VAR:$TERM\"".to_string()],
+            SpawnConfig {
+                // A caller TERM must lose to the crate-forced xterm-256color.
+                env: vec![
+                    ("IX_TEST_VAR".to_string(), "from-config".to_string()),
+                    ("TERM".to_string(), "dumb".to_string()),
+                ],
+                ..SpawnConfig::default()
+            },
+        )
+        .expect("spawn failed with env");
+
+    std::thread::sleep(Duration::from_millis(300));
+
+    let viewport = instance.read_viewport().expect("viewport read failed");
+    assert!(
+        viewport
+            .iter()
+            .any(|line| line.contains("from-config:xterm-256color")),
+        "caller env should reach the child and forced TERM should win, got {viewport:?}"
+    );
+}
+
+#[test]
 fn resize_changes_reported_size_and_emulator_width() {
     let manager = TuiManager::new();
     let instance = spawn(&manager, "cat", &[]);
