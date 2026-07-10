@@ -64,6 +64,11 @@ pub use mixedbread::{
 pub use source_meta::{Document, KNOWN_SOURCE_TAGS, RepoSlug, Source, SourceAdapter};
 
 /// Current wall clock as epoch seconds, clamped to the signed query timestamp range.
+///
+/// # Panics
+///
+/// Panics only if the positive `i64::MAX` constant cannot convert to `u64`, or
+/// if the explicitly capped seconds value cannot convert back to `i64`.
 #[must_use]
 pub fn epoch_now() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
