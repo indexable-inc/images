@@ -75,6 +75,24 @@ impl std::str::FromStr for MessageFormat {
     }
 }
 
+/// One page of `users.messages.list`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MessagesPage {
+    #[serde(default)]
+    messages: Vec<MessageStub>,
+    #[serde(default)]
+    next_page_token: Option<String>,
+}
+
+impl crate::ListPage for MessagesPage {
+    type Item = MessageStub;
+
+    fn into_parts(self) -> (Vec<Self::Item>, Option<String>) {
+        (self.messages, self.next_page_token)
+    }
+}
+
 /// `messages.list` returns only ids and thread ids on the page; the caller
 /// fetches each one's payload through `get_message`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,7 +124,7 @@ impl Client {
     /// # Errors
     /// Returns auth, transport, or API errors.
     pub async fn list_messages(&self, query: &MessageQuery) -> Result<Vec<MessageStub>> {
-        self.list_message_resources::<MessageStub>("messages", query)
+        self.list_message_resources::<MessagesPage>("messages", query)
             .await
     }
 

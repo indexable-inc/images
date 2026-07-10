@@ -8,6 +8,24 @@ use crate::messages::MessageFormat;
 use crate::model::{MessageQuery, Thread};
 use crate::{Client, Result, decode};
 
+/// One page of `users.threads.list`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadsPage {
+    #[serde(default)]
+    threads: Vec<ThreadStub>,
+    #[serde(default)]
+    next_page_token: Option<String>,
+}
+
+impl crate::ListPage for ThreadsPage {
+    type Item = ThreadStub;
+
+    fn into_parts(self) -> (Vec<Self::Item>, Option<String>) {
+        (self.threads, self.next_page_token)
+    }
+}
+
 /// `threads.list` returns only thread ids and snippets on the page; the
 /// caller fetches messages by calling `get_thread`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,7 +47,7 @@ impl Client {
     /// # Errors
     /// Returns auth, transport, or API errors.
     pub async fn list_threads(&self, query: &MessageQuery) -> Result<Vec<ThreadStub>> {
-        self.list_message_resources::<ThreadStub>("threads", query)
+        self.list_message_resources::<ThreadsPage>("threads", query)
             .await
     }
 
