@@ -91,22 +91,15 @@
     doCheck = false;
   });
 
-  # Personal-only Claude config, shipped through the index claude-code
-  # wrapper's read-only `--settings` (flagSettings) layer via `extraSettings`
-  # below. flagSettings merges per-key ABOVE the user settings.json and is a
-  # SEPARATE read-only layer, so nothing here ever has to symlink or copy the
-  # writable ~/.claude/settings.json the CLI churns at runtime; that sidesteps
-  # Claude Code's settings-symlink perms/perf bugs (anthropics/claude-code#3575,
-  # #58443, #55485) with no `install`/copy hack.
+  # Personal-only Claude config. Home Manager renders this into
+  # ~/.claude/settings.json, the application's native default layer.
   # House posture lives in the index wrapper itself now: attribution, worktree
   # baseRef, effort/fast/theme runtime-toggle defaults, auto-updates channel,
   # the version-aware statusline, the 1M/cron/autocompact clamps (typed
   # `features` argument), and the built-in tool deny rules all come from
-  # packages/agent/claude-code in indexable-inc/index (#2449); `extraSettings`
-  # merges over those defaults, so anything restated here is an override, and
-  # only what is genuinely personal (paths, plugins, marketplaces) belongs
-  # here. `model` lives in ~/.claude.json, not here, so the /model picker is
-  # unaffected. Lifecycle hooks are index-owned too (packages/agent/hooks.nix):
+  # packages/agent/claude-code in indexable-inc/index (#2449), so only what is
+  # genuinely personal (paths, plugins, marketplaces) belongs here. Lifecycle
+  # hooks are index-owned too (packages/agent/hooks.nix):
   # baked into the claude-code package (Claude) and exposed as
   # `codex.passthru.hooksJson` (Codex, delivered to ~/.codex/hooks.json below).
 
@@ -141,12 +134,10 @@
   # overrides the package default MCP set so Claude and Codex expose the same
   # house-approved servers. A user `--mcp-config` on the CLI or a project
   # `.mcp.json` still merges on top. The wrapper runs the default
-  # bypass-permissions posture. extraSettings ships our whole static config
-  # through the wrapper's read-only --settings layer (see claudeSettings
-  # above). The ix-mcp kernel binds loopback via the device-level IX_MCP_HOST
-  # session var (see home.sessionVariables), so Claude and Codex match.
+  # bypass-permissions posture. The ix-mcp kernel binds loopback via the
+  # device-level IX_MCP_HOST session var (see home.sessionVariables), so Claude
+  # and Codex match.
   claudeCode = indexPkgs.claude-code.override {
-    extraSettings = claudeSettings;
     # Shared registry rendered to Claude's MCP JSON, filtered below for local
     # tool policy.
     mcpServers = ixMcp.toClaudeJson agentMcpServers;
@@ -176,15 +167,21 @@
       indexCommand = lib.getExe indexPkgs.mcp;
     }
   ) ["exa"];
-  houseHttpServers =
-    lib.filterAttrs (
-      _: def:
-        (
-          def.transport or "stdio"
-        )
-        != "stdio"
-    )
-    agentMcpServers;
+  codexMcpServers = lib.mapAttrs (_: def:
+    if (def.transport or "stdio") == "stdio"
+    then
+      {
+        inherit (def) command;
+        default_tools_approval_mode = "approve";
+      }
+      // lib.optionalAttrs (def ? args) {inherit (def) args;}
+      // lib.optionalAttrs (def ? env) {inherit (def) env;}
+      // lib.optionalAttrs (def ? envVars) {env_vars = def.envVars;}
+    else {
+      inherit (def) url;
+      default_tools_approval_mode = "approve";
+    })
+  agentMcpServers;
 
   # Shared skill source: the index repo's SKILL.md bundles (open Agent-Skills
   # standard, `packages/agent/skills`). ONE directory, delivered to BOTH agents
@@ -196,69 +193,14 @@
   # attrset-of-skills vs directory mode, and a flake input is an attrset.
   skillsSrc = indexSkillsSrc;
 
-  # Our own Codex: the index codex wrapper (operational defaults + the stdio
-  # `index` MCP server baked in), re-`.override`n to carry THIS machine's
-  # declarative config as codex `-c` flags. Those flags are codex's
-  # highest-precedence layer (above ~/.codex/config.toml), so they are the
-  # nix-managed config layer and ~/.codex/config.toml is left as codex's own
-  # mutable runtime file (project trust, desktop settings, notices) rather than
-  # a repo symlink it churns into git.
-  #   - `settings` (soft): injected only when that exact key is absent from
-  #     config.toml, so the user can still change model/effort/etc. in the TUI
-  #     and have it persist.
-  #   - `forcedSettings`: applied on every run — wrapper invariants and the
-  #     safety posture that must not silently drift.
-  # Only scalar leaves can be baked (the package renders via toml.scalar, which
-  # rejects lists): `notify` (a list) and the `[notice]` migration keys (dots in
-  # the key names) stay in codex's mutable config.toml.
+  # The wrapper remains only for behavior that has no config-file equivalent:
+  # the shared hooks and system prompt plus package selection. Native Codex
+  # settings are declared on programs.codex below and rendered to config.toml.
   codexBase = indexPkgs.codex;
   codex = codexBase.override {
-    # Neutral defs; the package renders them itself (stdio baked, http filtered
-    # out and re-added via settings.mcp_servers below). Same set Claude bakes.
-    mcpServers = agentMcpServers;
-    settings = {
-      # index codex package defaults, restated (`.override` replaces the arg).
-      features.multi_agent_v2 = {
-        enabled = true;
-        max_concurrent_threads_per_session = 16;
-      };
-      agents.max_depth = 3;
-      # http MCP servers from the filtered shared registry. stdio `index` is
-      # already baked by codexBase.
-      mcp_servers = lib.mapAttrs (_: def: {inherit (def) url;}) houseHttpServers;
-      # Operational defaults the user may still override live in the TUI.
-      model = "gpt-5.5";
-      model_reasoning_effort = "low";
-      personality = "pragmatic";
-      service_tier = "fast";
-    };
-    forcedSettings = {
-      check_for_update_on_startup = false;
-      bypass_hook_trust = true;
-      sandbox_mode = "danger-full-access";
-      default_permissions = ":danger-full-access";
-      commit_attribution = "";
-      features = {
-        steer = true;
-        multi_agent = true;
-        apps = false;
-        plugins = false;
-        terminal_resize_reflow = true;
-        goals = true;
-        # Off: the "external config migration" is what silently injected the
-        # dead `ix → 127.0.0.1:55444` MCP server into config.toml. Disabling it
-        # stops codex rewriting MCP config behind our back (root-cause fix).
-        external_migration = false;
-        js_repl = false;
-      };
-      shell_environment_policy = {
-        "inherit" = "all";
-        ignore_default_excludes = true;
-        set = {
-          CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "1";
-        };
-      };
-    };
+    mcpServers = {};
+    settings = {};
+    forcedSettings = {};
   };
 in {
   # Personal-but-shareable workstation module hoisted into the `index` monorepo
@@ -998,13 +940,14 @@ in {
   # dir), delivered bare to ~/.claude/skills/<name> and invoked as `/<skill>`
   # (no `index:` namespace): the same source Codex gets via programs.codex
   # below. This replaces the old baked `--plugin-dir` plugin.
-  # settings.json / .claude.json are deliberately NOT routed through it (the
-  # module only touches settings.json when `settings` is set, which it is not
-  # here); app-owned writable state stays out-of-store below. CLAUDE.md is
-  # generation-owned from the tracked source because the app never rewrites it.
+  # settings.json is generation-owned from claudeSettings. .claude.json remains
+  # app-owned runtime state because Claude stores account and session metadata
+  # beside user choices there. CLAUDE.md is generation-owned from its tracked
+  # source because the app never rewrites it.
   programs.claude-code = {
     enable = true;
     package = claudeCode;
+    settings = claudeSettings;
     houseContext.enable = false;
     # All agents, BARE, sourced straight from the index repo (index's agents
     # package now holds my former personal agents too). Bare (not plugin) so
@@ -1020,33 +963,49 @@ in {
     # bakes one `--mcp-config=` flag from `agentMcpServers` above.
   };
 
-  # Codex, via the UPSTREAM home-manager programs.codex module (sibling to
-  # programs.claude-code). `package` is our index `codex` wrapper, already
-  # `.override`n with settings/forcedSettings that bake as `-c` flags; we
-  # deliberately leave the module's config-toml inputs UNSET so it writes NO
-  # ~/.codex/config.toml. The module writes config.toml only when
-  # `mergedSettings != {}`, i.e. when ANY of `settings`, `plugins`,
-  # `marketplaces`, or `enableMcpIntegration` is set; none are here, so codex
-  # keeps config.toml as its own mutable runtime file. (Do NOT set any of those
-  # on this module: a nix-written config.toml is read-only and codex errors
-  # trying to churn it.) The module installs the package on PATH, symlinks each
-  # skill dir into ~/.codex/skills/<name> (bare, coexisting with unmanaged
-  # skills; same `skillsSrc` as Claude), and writes AGENTS.md from `context`.
-  # hooks.json is the one thing it does not do; delivered separately below.
+  # Codex, via Home Manager. Static policy and defaults live in config.toml,
+  # where Codex and its desktop app can inspect the same source of truth. The
+  # wrapper carries only behavior without a native config-file representation.
   programs.codex = {
     enable = true;
     package = codex;
+    settings = {
+      check_for_update_on_startup = false;
+      bypass_hook_trust = true;
+      model = "gpt-5.5";
+      model_reasoning_effort = "low";
+      personality = "pragmatic";
+      service_tier = "fast";
+      sandbox_mode = "danger-full-access";
+      default_permissions = ":danger-full-access";
+      commit_attribution = "";
+      agents.max_depth = 3;
+      mcp_servers = codexMcpServers;
+      features = {
+        steer = true;
+        multi_agent = true;
+        multi_agent_v2 = {
+          enabled = true;
+          max_concurrent_threads_per_session = 16;
+        };
+        apps = false;
+        plugins = false;
+        terminal_resize_reflow = true;
+        goals = true;
+        # Prevent Codex from recreating stale externally discovered MCP entries.
+        external_migration = false;
+        js_repl = false;
+      };
+      shell_environment_policy = {
+        "inherit" = "all";
+        ignore_default_excludes = true;
+        set.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "1";
+      };
+    };
     skills = skillsSrc;
     context = repoFile "claude/global/CLAUDE.md";
   };
 
-  # NOTE: ~/.claude/settings.json is intentionally NOT managed here. All static
-  # config is declared in Nix (`claudeSettings`) and delivered through the
-  # wrapper's read-only `--settings` flagSettings layer, which outranks and is
-  # separate from this file. Leaving it unmanaged keeps it a real writable file
-  # the CLI can churn for runtime state, with no symlink (avoids #3575/#58443).
-  # OUT-OF-STORE on purpose: the keybindings UI / keybindings-help skill edit
-  # this file in place, so it must stay writable.
   # CLAUDE.md is read-only and generation-owned. `force` replaces any stale
   # real file or legacy out-of-store link at the target.
   home.file.".claude/CLAUDE.md" = {

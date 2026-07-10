@@ -174,7 +174,11 @@
       }).codex;
   };
   codexWithNotifications = codex.overrideAttrs (previousAttrs: {
-    version = "0.0.0";
+    # Upstream main keeps Cargo's workspace version at 0.0.0, but that value is
+    # not a usable package capability version: Home Manager treats versions
+    # below 0.2.0 as the retired config.yaml format. This rolling build tracks
+    # current main and supports every presently version-gated module feature.
+    version = "0.999.0-unstable";
     src = codexSrc;
     # `unpackPhase` names the unpacked dir after the src store path. The old
     # fork input unpacked to `source/`; the patched-src derivation unpacks to
