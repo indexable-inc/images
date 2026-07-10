@@ -192,10 +192,7 @@ fn diff_values(
             let added = new_map
                 .iter()
                 .filter(|(key, _)| !old_map.contains_key(*key))
-                .map(|(key, value)| Leaf {
-                    segment: key.clone(),
-                    value,
-                });
+                .map(|(key, item)| (key.clone(), item));
             push_leaf_ops(addr, path, ops, added, |path, value| Op::Add {
                 path,
                 value,
@@ -254,20 +251,17 @@ fn diff_arrays(
     }
 }
 
-struct Leaf<'v> {
-    segment: String,
-    value: &'v Value,
-}
+/// A rendered array-index segment paired with the element it addresses. A
+/// named alias (not a bare tuple) so `indexed`'s return type satisfies the
+/// workspace's `clippy::anonymous_tuple_return_type`.
+type IndexedItem<'v> = (String, &'v Value);
 
-fn indexed(items: &[Value], from: usize) -> impl DoubleEndedIterator<Item = Leaf<'_>> {
+fn indexed(items: &[Value], from: usize) -> impl DoubleEndedIterator<Item = IndexedItem<'_>> {
     items
         .iter()
         .enumerate()
         .skip(from)
-        .map(|(index, value)| Leaf {
-            segment: index.to_string(),
-            value,
-        })
+        .map(|(index, item)| (index.to_string(), item))
 }
 
 /// Emit one leaf op per `(segment, value)` pair, each addressed one level
@@ -277,12 +271,12 @@ fn push_leaf_ops<'v>(
     addr: Addressing,
     path: &mut Vec<String>,
     ops: &mut Vec<Op>,
-    items: impl Iterator<Item = Leaf<'v>>,
+    items: impl Iterator<Item = (String, &'v Value)>,
     make: fn(String, Value) -> Op,
 ) {
-    for leaf in items {
-        path.push(leaf.segment);
-        ops.push(make(render(addr, path), leaf.value.clone()));
+    for (segment, value) in items {
+        path.push(segment);
+        ops.push(make(render(addr, path), value.clone()));
         path.pop();
     }
 }
