@@ -41,7 +41,8 @@ fn content_hash_relations() {
         ),
     ];
     for (name, parse, left, right, equal) in cases {
-        let (left, right) = pair_hashes(parse, compute, left, right);
+        let pair = pair_hashes(parse, compute, left, right);
+        let (left, right) = (pair.left, pair.right);
         assert_eq!(left == right, equal, "{name}");
     }
 }
