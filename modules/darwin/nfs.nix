@@ -10,7 +10,6 @@
 {
   config,
   lib,
-  pkgs,
   ...
 }: let
   inherit
@@ -57,13 +56,14 @@
       _mountpoint = mkOption {
         type = types.str;
         internal = true;
-        default =
-          if lib.hasPrefix "/" name
-          then name
-          else "/${name}";
         description = "Absolute local mount point (the attribute name).";
       };
     };
+
+    config._mountpoint =
+      if lib.hasPrefix "/" name
+      then name
+      else "/${name}";
   });
 
   mounts = lib.attrValues cfg.automounts;
