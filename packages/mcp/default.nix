@@ -1,6 +1,8 @@
 {
   ix,
   lib,
+  nix,
+  updateScriptWriter ? null,
 }: let
   # The headless Nix build-tree emitter. The `nix` module's live-pane path spawns
   # it (`nix-web-monitor --emit ndjson`) so the parser stays the single owner of
@@ -15,13 +17,22 @@
   # callPackage would have auto-bound to a `pkgs` arg in the flake package set.
   inherit (ix) pkgs;
 
-  # PyPI source pins (version + sdist URL + SRI hash) for the interpreter
-  # overrides below, in the sibling pins.json (repo policy: no inline hash
-  # literals in tracked .nix). Each `url` is fetchPypi's canonical pypi.io
-  # source path (verified byte-identical to the pinned hashes). Re-pin after a
-  # version edit manually (rebuild, copy the `got:` hash): mcp carries no
-  # registry updateScript, so `nix run .#update` does not touch these pins.
+  # PyPI pins (version + URL + SRI hash) for the interpreter overrides below,
+  # in the sibling pins.json (repo policy: no inline hash literals in tracked
+  # .nix). `nix run .#mcp.updateScript` joins the registry update DAG and
+  # refreshes normal PyPI sdist pins from the JSON API. pins.json policy markers
+  # are `prefetch = "manual"` for hash-mode holds, `hold` for version holds, and
+  # `track` for version-line tracking, so the updater skips or narrows pins
+  # loudly instead of guessing.
   pypiPins = ix.pins.loadPins ./pins.json;
+  updateScript =
+    if updateScriptWriter == null
+    then null
+    else
+      import ./update.nix {
+        inherit nix;
+        writeNushellApplication = updateScriptWriter;
+      };
   # The PTY-driving `tui` package, baked into the pinned interpreter so every
   # session can `import tui` with no setup. The PyO3 cdylib comes from the same
   # shared workspace graph the binary is selected from, dropped next to the
@@ -1513,6 +1524,12 @@
     "tools.py"
     "mcp_ui.py"
   ];
+  zubanConfig = (pkgs.formats.ini {}).generate "ix-mcp-zuban.ini" {
+    mypy = {};
+    # Pygments builds public re-exports through module __getattr__, and several
+    # lexer/highlight helpers remain untyped in its partial stubs.
+    "mypy-pygments.*".disallow_untyped_calls = false;
+  };
   strictTypecheck = let
     # All src module package dirs go on MYPYPATH so first-party cross-imports
     # resolve; the green subset are the actual check targets.
@@ -1539,7 +1556,7 @@
       cp -r ${ixNotebookMcpSource} ix_notebook_mcp
       cp -r ${./src} src
       cp -r ${distillerPythonSource} distiller-src
-      cp ${./zuban.ini} zuban.ini
+      cp ${zubanConfig} zuban.ini
       chmod -R u+w ix_notebook_mcp src distiller-src
 
       export MYPYPATH=${lib.escapeShellArg mypypath}:.
@@ -2394,8 +2411,8 @@
     names = set(cat["name"].to_list())
     assert {"Result", "cells", "jobs", "nu", "api"} <= names, names
     assert "sh" not in names and "zsh" not in names, names
-    filt = ns["api"]("cells")
-    assert 1 <= filt.height <= cat.height, (filt.height, cat.height)
+    filt = cat.filter(cat["name"] == "cells")
+    assert filt.height == 1, filt
 
     # grep/find/spotlight (the fsearch search helpers) and view are pre-bound in
     # the namespace (no import needed), the way Result/cells/jobs are, so
@@ -2580,7 +2597,7 @@
         pkgs.fd
       ];
       strictDeps = true;
-      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + client-cancel interrupts in-flight run (#2387) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246) + claude-history session search (#2245) + per-serve kernel trace file (#2355) + builtin shadow restore (#2430) + failed-cell stale-binding note (#2526) + pr_watch instant-merge guard (#2532) + find glob-pattern autodetect (#2542) + nu input= routing past no-input statements (#2540)";
+      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + client-cancel interrupts in-flight run (#2387) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246) + claude-history session search (#2245) + per-serve kernel trace file (#2355) + builtin shadow restore (#2430) + failed-cell stale-binding note (#2526) + pr_watch instant-merge guard (#2532) + find glob-pattern autodetect (#2542) + nu input= routing past no-input statements (#2540) + kernel host seam: local child vs ray actor";
     }
     ''
       export HOME=$TMPDIR/home
@@ -2616,6 +2633,12 @@
       cp ${./tests/test_build_info.py} test_build_info.py
       # Issue #2355: per-serve kernel trace file + sweep of orphaned dumps.
       cp ${./tests/test_kernel_trace_path.py} test_kernel_trace_path.py
+      # The kernel host seam: local/ray selection, the actor's connection-info
+      # plumbing (str HMAC key), offset-scoped trace reads.
+      cp ${./tests/test_kernel_host.py} test_kernel_host.py
+      # The kernel's board lease: registration placement facts (kernel_host,
+      # node) and the writer's heartbeat_ms beat, agent idle-clock untouched.
+      cp ${./tests/test_store_kernel_lease.py} test_store_kernel_lease.py
       # Issue #2430: a cell rebinding/deleting a kernel builtin gets it restored.
       cp ${./tests/test_builtin_shadow_restore.py} test_builtin_shadow_restore.py
       # Issue #2526: a failed cell's traceback names the bindings it never reached.
@@ -2636,6 +2659,8 @@
         test_sh_module.py \
         test_build_info.py \
         test_kernel_trace_path.py \
+        test_kernel_host.py \
+        test_store_kernel_lease.py \
         test_builtin_shadow_restore.py \
         test_unexecuted_note.py \
         test_pr_watch_automerge.py \
@@ -3027,6 +3052,7 @@
 
     store_path = tempfile.mktemp(suffix=".db")
     os.environ["IX_MCP_STORE"] = store_path
+    os.environ["WEAVE_URL"] = "off"
 
     import polars as pl
 
@@ -3141,11 +3167,8 @@
         # A DataFrame result is stored with its text/html bundle.
         df_job = await run("Result.of(pl.DataFrame({'a': [1, 2], 'b': ['x', 'y']}))", budget=3.0, name="df")
         await df_job.task
-        conn = sqlite3.connect(store_path)
-        conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT status, outputs FROM executions WHERE id = ?", (df_job.id,)).fetchone()
-        assert row["status"] == "done", row["status"]
-        result_mimes = {mime for out in json.loads(row["outputs"]) for mime in out["data"]}
+        assert df_job.status == "done", df_job.status
+        result_mimes = {mime for out in runtime._job_outputs(df_job) for mime in out["data"]}
         assert "text/html" in result_mimes, ("result mimes", result_mimes)
 
         # An htpy element renders through the __html__ protocol: IPython's html
@@ -3155,10 +3178,7 @@
             "import htpy\nResult.of(htpy.div(class_='x')['<hi>'])", budget=3.0, name="htpy"
         )
         await htpy_job.task
-        htpy_outputs = conn.execute(
-            "SELECT outputs FROM executions WHERE id = ?", (htpy_job.id,)
-        ).fetchone()[0]
-        htpy_html = [out["data"].get("text/html") for out in json.loads(htpy_outputs)][-1]
+        htpy_html = [out["data"].get("text/html") for out in runtime._job_outputs(htpy_job)][-1]
         assert htpy_html == '<div class="x">&lt;hi&gt;</div>', htpy_html
 
         # A display() call made while a job runs is captured too.
@@ -3168,10 +3188,7 @@
             name="disp",
         )
         await disp_job.task
-        disp_outputs = conn.execute(
-            "SELECT outputs FROM executions WHERE id = ?", (disp_job.id,)
-        ).fetchone()[0]
-        disp_mimes = {mime for out in json.loads(disp_outputs) for mime in out["data"]}
+        disp_mimes = {mime for out in runtime._job_outputs(disp_job) for mime in out["data"]}
         assert "text/html" in disp_mimes, ("display mimes", disp_mimes)
 
         # A Result splits the human view (HTML on the dashboard) from the model
@@ -3180,8 +3197,7 @@
         from ix_notebook_mcp import outputs
         res_job = await run("Result(user_html='<b>hi</b>', llm_result='just-text')", budget=3.0, name="res")
         await res_job.task
-        res_outputs = conn.execute("SELECT outputs FROM executions WHERE id = ?", (res_job.id,)).fetchone()[0]
-        res_bundle = [out["data"] for out in json.loads(res_outputs)][-1]
+        res_bundle = [out["data"] for out in runtime._job_outputs(res_job)][-1]
         assert res_bundle.get("text/html") == "<b>hi</b>", res_bundle
         mcp = outputs.to_mcp([{"output_type": "execute_result", "data": res_bundle, "metadata": {}}])
         texts = [c.text for c in mcp if getattr(c, "text", None) is not None]
@@ -3192,22 +3208,16 @@
         # breaks nbformat -- and its keys reach the model text.
         dwim_job = await run("Result({'alpha': 1, 'beta': 2})", budget=3.0, name="dwim")
         await dwim_job.task
-        dwim_row = conn.execute(
-            "SELECT status, outputs FROM executions WHERE id = ?", (dwim_job.id,)
-        ).fetchone()
-        assert dwim_row["status"] == "done", dwim_row["status"]
-        dwim_bundle = [out["data"] for out in json.loads(dwim_row["outputs"])][-1]
+        assert dwim_job.status == "done", dwim_job.status
+        dwim_bundle = [out["data"] for out in runtime._job_outputs(dwim_job)][-1]
         assert isinstance(dwim_bundle.get("text/html"), str) and dwim_bundle["text/html"], dwim_bundle
         assert "alpha" in dwim_bundle.get("text/plain", "") and "beta" in dwim_bundle["text/plain"], dwim_bundle
 
         # Multiple values are ALL shown (not silently collapsed to the first).
         multi_job = await run("Result(True, [1, 2, 3])", budget=3.0, name="multi")
         await multi_job.task
-        multi_row = conn.execute(
-            "SELECT status, outputs FROM executions WHERE id = ?", (multi_job.id,)
-        ).fetchone()
-        assert multi_row["status"] == "done", multi_row["status"]
-        multi_text = [out["data"].get("text/plain", "") for out in json.loads(multi_row["outputs"])][-1]
+        assert multi_job.status == "done", multi_job.status
+        multi_text = [out["data"].get("text/plain", "") for out in runtime._job_outputs(multi_job)][-1]
         # Both values are shown: the bool by its repr, the list as its one-column
         # frame (NUON rows 1/2/3), not collapsed to just the first value.
         assert "true" in multi_text and "[[value]; [1], [2], [3]]" in multi_text, ("multi-value dropped a value", multi_text)
@@ -3236,6 +3246,7 @@
 
     store_path = tempfile.mktemp(suffix=".db")
     os.environ["IX_MCP_STORE"] = store_path
+    os.environ["WEAVE_URL"] = "off"
 
     from ix_notebook_mcp import outputs, runtime
 
@@ -3245,8 +3256,6 @@
 
 
     async def main():
-        conn = sqlite3.connect(store_path)
-        conn.row_factory = sqlite3.Row
 
         # A yielding cell streams multiple Results; its top-level names persist.
         code = (
@@ -3260,9 +3269,7 @@
         await job.task
         assert job.status == "done", (job.status, job.error)
         assert ns["acc"] == 3, ns.get("acc")
-        outs = json.loads(
-            conn.execute("SELECT outputs FROM executions WHERE id = ?", (job.id,)).fetchone()[0]
-        )
+        outs = runtime._job_outputs(job)
         htmls = [o["data"].get("text/html") for o in outs if "text/html" in o["data"]]
         assert len(htmls) == 4, ("expected 4 yielded results", len(htmls), outs)
 
@@ -3279,9 +3286,7 @@
         bare = await run("yield 123", budget=3.0, name="bare")
         await bare.task
         assert bare.status == "done", (bare.status, bare.error)
-        bare_outs = json.loads(
-            conn.execute("SELECT outputs FROM executions WHERE id = ?", (bare.id,)).fetchone()[0]
-        )
+        bare_outs = runtime._job_outputs(bare)
         bare_mcp = outputs.to_mcp(
             [{"output_type": "display_data", "data": o["data"], "metadata": {}} for o in bare_outs]
         )
@@ -3390,42 +3395,10 @@
     assert set(bound) == {"df", "n"}, bound
     assert bound["df"]["kind"] == "dataframe" and bound["n"]["summary"] == "7", bound
 
-    # Opening a pre-bindings store migrates it, and a second open (the kernel and
-    # dashboard each open the store) is a no-op rather than an error.
-    from ix_notebook_mcp import store as store_mod
-
-    legacy = tempfile.mktemp(suffix=".db")
-    seed = sqlite3.connect(legacy)
-    seed.execute(
-        "CREATE TABLE executions (id TEXT PRIMARY KEY, name TEXT, code TEXT NOT NULL, "
-        "status TEXT NOT NULL, started_at REAL NOT NULL, ended_at REAL, "
-        "output TEXT, result TEXT, error TEXT, outputs TEXT)"
-    )
-    seed.commit()
-    seed.close()
-    conn_a = store_mod.connect(legacy)
-    store_mod.connect(legacy)
-    migrated = {row[1] for row in conn_a.execute("PRAGMA table_info(executions)")}
-    assert "bindings" in migrated, migrated
-
-    # The duplicate-column race itself: a connection that observed the column
-    # missing (here forced via a shim) but runs ALTER after another connection
-    # already added it must swallow the error, not raise. This exercises the
-    # except branch the idempotency case above skips.
-    class _StaleSchema:
-        def __init__(self, conn):
-            self._conn = conn
-
-        def execute(self, sql, *args):
-            if sql.startswith("PRAGMA table_info"):
-                return [(0, "id"), (1, "name")]  # pretend bindings is still absent
-            return self._conn.execute(sql, *args)
-
-    store_mod._migrate(_StaleSchema(conn_a))  # ALTER -> duplicate column -> caught
-
-    # End to end: a finished job snapshots its bindings into the store row.
+    # End to end: a finished job snapshots the bindings that persistence emits.
     store_path = tempfile.mktemp(suffix=".db")
     os.environ["IX_MCP_STORE"] = store_path
+    os.environ["WEAVE_URL"] = "off"
 
     from IPython.core.interactiveshell import InteractiveShell
 
@@ -3441,10 +3414,7 @@
     async def main():
         job = await run("frame = pl.DataFrame({'a': [1, 2]})\nResult.ok('made it')", budget=3.0, name="bind")
         await job.task
-        conn = sqlite3.connect(store_path)
-        conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT bindings FROM executions WHERE id = ?", (job.id,)).fetchone()
-        stored = json.loads(row["bindings"])
+        stored = runtime._cell_bindings(job)
         assert stored.get("frame", {}).get("kind") == "dataframe", stored
         # `pl` is referenced and live, so it is described as a module.
         assert stored.get("pl", {}).get("kind") == "module", stored
@@ -5789,5 +5759,8 @@ in
               ghosttySmoke
               ;
           };
+      }
+      // lib.optionalAttrs (updateScript != null) {
+        inherit updateScript;
       };
   })

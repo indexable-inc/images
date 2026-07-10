@@ -81,6 +81,7 @@
     writeProcessComposeApplication
     ;
   netCidr = import ./util/net-cidr.nix {inherit lib;};
+  securityRoots = import ./security-roots.nix {inherit lib;};
   # Force `allowSubstitutes = true` on a trivial-builder derivation that must be
   # substitutable (darwin cross-lane eval-time IFD nodes). See its doc comment.
   evalTimeSubstitutable = import ./util/eval-time-substitutable.nix;
@@ -582,6 +583,43 @@
   macosSdk = import ./darwin/macos-sdk.nix {inherit pins;};
 
   /**
+  Verified Mac App Store `name -> numeric ID` catalog for nix-darwin
+  `homebrew.masApps`. Select entries with `lib.getAttrs [names] ix.masApps`
+  so a typo is an eval error instead of a zap-uninstall.
+  See [`lib/darwin/mas-apps.nix`](lib/darwin/mas-apps.nix).
+  */
+  masApps = import ./darwin/mas-apps.nix;
+
+  /**
+  Shared git policy lists: `astMergeAttributes` (one `<glob> merge=ast-merge`
+  line per supported language) and `globalIgnores` (editor/build/agent
+  droppings for `core.excludesfile`). Render with `lib.concatLines`.
+  See [`lib/util/git-defaults.nix`](lib/util/git-defaults.nix).
+  */
+  gitDefaults = import ./util/git-defaults.nix;
+
+  /**
+  Reusable "do not overlap" wrapper for scheduled agents (launchd or manual
+  runs): a non-blocking per-name flock(2) via /usr/bin/perl (macOS ships no
+  flock(1)); if the previous run still holds the lock the new fire exits 0
+  silently, and the lock always releases on exit including crash/kill.
+  `withLockFor pkgs` returns `{ package, wrap }` where
+  `wrap label args = ["<store>/bin/with-lock" label "--"] ++ args`, ready to
+  splice into a launchd agent's ProgramArguments.
+  See [`lib/util/with-lock.sh`](lib/util/with-lock.sh).
+  */
+  withLockFor = pkgs: let
+    bin = writeBashApplication pkgs {
+      name = "with-lock";
+      runtimeInputs = [pkgs.coreutils];
+      text = builtins.readFile ./util/with-lock.sh;
+    };
+  in {
+    package = bin;
+    wrap = label: args: ["${bin}/bin/with-lock" label "--"] ++ args;
+  };
+
+  /**
   zig + macOS SDK cross toolchain. `{ appleSdk, lib, pkgs, target }` returns
   `{ env, runtimeInputs, rustcArgsForPlatform }` consumed by
   `rustWorkspace.unitsFor`. See [`lib/darwin/apple-sdk-toolchain.nix`](lib/darwin/apple-sdk-toolchain.nix).
@@ -591,6 +629,7 @@
   # Single source of truth for the ix public binary cache identity (URL + the
   # `ix-workspace:` trusted key that verifies its narinfos). See ./cache.nix.
   cache = import ./cache.nix;
+  kdl = import ./formats/kdl.nix {inherit home-manager;};
 
   /**
   Helper surface shared by both the per-module `specialArgs.ix`
@@ -627,10 +666,13 @@
       forkPackages
       forkDagCheckSrc
       formatProvenance
+      gitDefaults
       goUnit
       hermes
       languages
+      kdl
       lists
+      masApps
       mcp
       minecraft
       mirrorPackages
@@ -655,12 +697,14 @@
       rustWorkspace
       rustWorkspaceFor
       secretRefs
+      securityRoots
       selfVersionFor
       skills
       systemdHardening
       toml
       unibind
       unibindFor
+      withLockFor
       writeBashApplication
       writeNushellApplication
       writeProcessComposeApplication

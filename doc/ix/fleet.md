@@ -44,7 +44,8 @@ nodes = {
 ```
 
 `mkFleet` returns, per node spec, a rendered `plan` plus one wrapped command per
-verb (`up`, `switch`, `replace`, `bootstrap`, `health`, `diff`, `down`); each
+verb (`up`, `switch`, `replace`, `bootstrap`, `health`, `status`, `logs`,
+`diff`, `down`); each
 command bakes in `--plan` so you run `nix run .#up` rather than passing the plan
 yourself (`lib/image/fleet.nix:405-426`). It also exposes
 `nixosConfigurations.<node>` (the bare node name -> that node's system) so
@@ -71,6 +72,8 @@ all, in plan order); `--dry-run` prints the steps without calling the API
 | `replace` | Like `up`, but always delete-then-create the node on the pushed image. |
 | `switch` | In-place NixOS system switch of running nodes (snapshots first). |
 | `health` | Run each selected node's health checks. |
+| `status` | One row per node: live STATUS, READY (health checks passed/total), ADDRESS. `-o wide` adds REGION and running vs desired IMAGE; `-o json` for scripts; `--watch [--interval N]` polls; `--no-checks` skips probes. Exits 1 if any node is unhealthy. |
+| `logs` | Pull journalctl output from selected nodes (`-u/--unit`, `-n/--lines`, `--since`), prefixing each line with `[node]` when more than one node is selected. |
 | `down` | Remove selected nodes in reverse plan order. |
 
 For up vs switch vs replace vs down and when to use each, see
@@ -83,7 +86,11 @@ You write the **authoring** surface (mkFleet); `ix-fleet` consumes the rendered
 defaults is in [../ix-fleet/overview.md](../ix-fleet/overview.md).
 
 Authoring (per node spec): `modules`/`module`, `deployment`, `tags`, `groups`,
-`dependsOn`, `replicas` (`lib/image/fleet.nix:109-114`). `deployment` accepts
+`dependsOn`, `replicas`, `updateStrategy` (`lib/image/fleet.nix:109-114`).
+`updateStrategy.maxUnavailable = k` (positive int; the only key) rolls a
+replicated node's replicas Kubernetes-RollingUpdate style: `up`/`replace`
+recreate at most `k` replicas concurrently, each gated on its health checks
+before the next starts (`lib/image/fleet.nix:139-165`). `deployment` accepts
 `bootstrapImage`, `destination`, `env`, `ipv4`, `l7ProxyPorts`,
 `noDefaultSecrets`, `recreateOnUp`, `region`, `secrets`, `switch` - and only
 those; unknown keys error (`lib/image/fleet.nix:77-102`). Health checks are not a
@@ -95,7 +102,8 @@ Rendered plan (pydantic, `__init__.py:34-146`): a `FleetPlan` is `order`, `nodes
 `switch` (`SwitchSpec`: `target`, `buildOn` auto|local|remote, `buildVm`,
 `sourceInstallable`, `overrideInputs`), `bootstrapImage`, `replacementImage`,
 `region`, `ipv4`, `snapshot`, `recreateOnUp`, `tags`, `groups`, `env`,
-`l7ProxyPorts`, `dependsOn`, `healthChecks`, `secrets`, `noDefaultSecrets`.
+`l7ProxyPorts`, `dependsOn`, `healthChecks`, `secrets`, `noDefaultSecrets`,
+`updateStrategy`.
 
 ## See also
 

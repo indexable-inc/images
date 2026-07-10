@@ -102,18 +102,7 @@ pub fn run(workspace: &Workspace, request: &Request) -> Result<()> {
 }
 
 fn fork_mapping(workspace: &Workspace, json: Option<&Path>) -> Result<Vec<Value>> {
-    let text = match json {
-        Some(path) => {
-            fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?
-        }
-        None => exec::run(
-            &workspace.root,
-            "nix",
-            &["eval", "--json", ".#lib.forkPackages"],
-        )?,
-    };
-    let value: Value = serde_json::from_str(&text).context("parsing forkPackages JSON")?;
-    value
+    exec::nix_json(workspace, json, "forkPackages")?
         .as_array()
         .cloned()
         .context("forkPackages JSON is not a list")

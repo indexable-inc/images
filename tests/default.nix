@@ -64,6 +64,24 @@
       dir: lib.removePrefix "${builtins.toString paths.packagesRoot}/" (builtins.toString dir)
     )
     packageRegistry.packageDirsWithoutMetadata;
+  securityRootArgs = {
+    attr = "packages.${pkgs.stdenv.hostPlatform.system}.hello";
+    name = "hello";
+    class = "distributed-cli";
+    owner = "indexable-inc/index";
+    environment = "none";
+    exposure = "local";
+    criticality = "low";
+    slaHours = 168;
+  };
+  securityRoot = ix.securityRoots.mkRoot securityRootArgs;
+  securityRootJson = builtins.fromJSON (
+    builtins.unsafeDiscardStringContext (builtins.toJSON securityRoot)
+  );
+  invalidSecurityRootClass =
+    builtins.tryEval (ix.securityRoots.mkRoot (securityRootArgs // {class = "package";})).class;
+  invalidSecurityRootSla =
+    builtins.tryEval (ix.securityRoots.mkRoot (securityRootArgs // {slaHours = 0;})).slaHours;
   fleetWrapperReadmes = [
     "hermes/agent"
     "hermes/api-server"
@@ -171,16 +189,15 @@
   # ix guest sidecars are opened by the shared platform base config.
   baseFirewallTcpPorts = [5001];
   baseFirewallUdpPorts = [8443];
-  sampleCodexMcpEntries = ix.mcp.toCodexEntries (
-    ix.mcp.defaultServers {
-      indexCommand = "/bin/ix-mcp";
-    }
-  );
-  sampleClaudeMcpServers = ix.mcp.toClaudeJson (
-    ix.mcp.defaultServers {
-      indexCommand = "/bin/ix-mcp";
-    }
-  );
+  googleOauthEnvVars = [
+    "GOOGLE_OAUTH_CLIENT_ID"
+    "GOOGLE_OAUTH_CLIENT_SECRET"
+  ];
+  sampleMcpServers = ix.mcp.defaultServers {
+    indexCommand = "/bin/ix-mcp";
+  };
+  sampleCodexMcpEntries = ix.mcp.toCodexEntries sampleMcpServers;
+  sampleClaudeMcpServers = ix.mcp.toClaudeJson sampleMcpServers;
   sampleCodexMcpEntriesWithoutIndex = ix.mcp.toCodexEntries (ix.mcp.defaultServers {});
   sampleCodexMcpEntry = key: lib.findFirst (entry: entry.key == key) null sampleCodexMcpEntries;
   sampleCodexMcpEntryWithoutIndex = key: lib.findFirst (entry: entry.key == key) null sampleCodexMcpEntriesWithoutIndex;
@@ -1760,6 +1777,7 @@
       worker = {
         replicas = 2;
         dependsOn = ["db"];
+        updateStrategy.maxUnavailable = 1;
         modules = [
           {
             services.remote-desktop.enable = true;
@@ -1892,6 +1910,33 @@
     true
   );
 
+  # `maxSurge` is Kubernetes vocabulary ix-fleet does not implement (there is
+  # no surplus capacity to surge into); a typo'd or aspirational key must fail
+  # eval rather than silently deploy with unbounded concurrency.
+  fleetUnknownUpdateStrategyKeyEval = builtins.tryEval (
+    builtins.deepSeq
+    (ix.mkFleet {
+      nodes.web = {
+        replicas = 2;
+        updateStrategy.maxSurge = 1;
+        modules = [{}];
+      };
+    }).planValue.nodes.web-0.updateStrategy
+    true
+  );
+
+  fleetInvalidMaxUnavailableEval = builtins.tryEval (
+    builtins.deepSeq
+    (ix.mkFleet {
+      nodes.web = {
+        replicas = 2;
+        updateStrategy.maxUnavailable = 0;
+        modules = [{}];
+      };
+    }).planValue.nodes.web-0.updateStrategy
+    true
+  );
+
   factionsExample = let
     fleet = import (paths.examples + "/minecraft/factions/ix.nix") {
       index = {
@@ -1973,6 +2018,34 @@
     inherit fleet config;
     cfg = config.services.ix-seaweedfs;
     plan = fleet.planValue.nodes.s3;
+  };
+
+  fleetHelloExample = let
+    fleet = import (paths.examples + "/fleet/hello/ix.nix") {
+      index = {
+        lib = ix;
+      };
+    };
+  in {
+    inherit fleet;
+    web.plan = fleet.planValue.nodes.web;
+    worker.plan = fleet.planValue.nodes.worker-0;
+  };
+
+  fleetMicroservicesExample = let
+    fleet = import (paths.examples + "/fleet/microservices/ix.nix") {
+      index = {
+        lib = ix;
+      };
+    };
+  in {
+    inherit fleet;
+    gateway = {
+      config = fleet.nodes.gateway;
+      plan = fleet.planValue.nodes.gateway;
+    };
+    api.plan = fleet.planValue.nodes.api-0;
+    cache.plan = fleet.planValue.nodes.cache;
   };
 
   observabilityStackExample = let
@@ -2541,6 +2614,14 @@
         healthChecks = {
           web.unit = "nginx";
           cron.unit = "backup.timer";
+          ready.http = {
+            port = 8080;
+            path = "/healthz";
+          };
+          peer.tcp = {
+            host = "svc-b";
+            port = 5432;
+          };
         };
       };
     }
@@ -2551,6 +2632,26 @@
       ix.healthChecks.bad = {
         unit = "nginx";
         command = ["true"];
+      };
+    }
+  ];
+
+  idiomaticMultiSugarFailures = failedAssertionsFor [
+    {
+      ix.healthChecks.bad = {
+        unit = "nginx";
+        http.port = 8080;
+      };
+    }
+  ];
+
+  # `http`/`tcp` sugar execs in-guest store paths, which do not exist on the
+  # operator's machine; host-side probes need an explicit command.
+  idiomaticHostProbeSugarFailures = failedAssertionsFor [
+    {
+      ix.healthChecks.bad = {
+        from = "host";
+        tcp.port = 5432;
       };
     }
   ];
@@ -2687,6 +2788,35 @@
   );
 
   groups = {
+    security-roots = [
+      {
+        assertion =
+          securityRootJson
+          == {
+            attr = "packages.${pkgs.stdenv.hostPlatform.system}.hello";
+            name = "hello";
+            class = "distributed-cli";
+            owner = "indexable-inc/index";
+            environment = "none";
+            exposure = "local";
+            criticality = "low";
+            slaHours = 168;
+          };
+        message = "security root policy should cross the nix eval JSON boundary without derivation state";
+      }
+      {
+        assertion = !invalidSecurityRootClass.success;
+        message = "security roots should reject unknown class values at evaluation";
+      }
+      {
+        assertion = !invalidSecurityRootSla.success;
+        message = "security roots should reject non-positive SLA hours at evaluation";
+      }
+      {
+        assertion = !(securityRootJson ? path);
+        message = "evaluated security root policy must not serialize an unrealized derivation path";
+      }
+    ];
     # efx terranix-port parity: the ported stacks under tests/efx must render
     # exactly the golden plan IR the efx CLI's tests parse, and everything the
     # translator cannot express must throw. See tests/efx-plan.nix.
@@ -2789,16 +2919,25 @@
       }
       {
         assertion =
-          sampleCodexMcpEntry "mcp_servers.index.env_vars"
-          == {
-            key = "mcp_servers.index.env_vars";
-            value = ''[ "GH_TOKEN", "GITHUB_TOKEN", "IX_TOKEN", "LINEAR_API_KEY", "NOTION_API_KEY", "SLACK_TOKEN", "SLACK_USER_TOKEN" ]'';
-          };
-        message = "Codex MCP entries should explicitly forward API environment variables to index MCP";
+          lib.all (name: builtins.elem name sampleMcpServers.index.envVars) googleOauthEnvVars;
+        message = "index MCP should declare the Google OAuth client environment variables";
       }
       {
-        assertion = sampleClaudeMcpServers.index.env.LINEAR_API_KEY == "\${LINEAR_API_KEY:-}";
-        message = "Claude MCP config should forward API environment variables to index MCP";
+        assertion = let
+          entry = sampleCodexMcpEntry "mcp_servers.index.env_vars";
+        in
+          entry
+          != null
+          && lib.all (name: lib.hasInfix (builtins.toJSON name) entry.value) googleOauthEnvVars;
+        message = "Codex MCP config should forward the Google OAuth client environment variables";
+      }
+      {
+        assertion =
+          lib.all (
+            name: sampleClaudeMcpServers.index.env.${name} == "\${${name}:-}"
+          )
+          googleOauthEnvVars;
+        message = "Claude MCP config should forward the Google OAuth client environment variables";
       }
       {
         assertion =
@@ -3122,6 +3261,49 @@
       {
         assertion = idiomaticUnitConflictFailures != [];
         message = "ix.healthChecks should reject setting both `unit` and a custom `command`";
+      }
+      {
+        assertion = let
+          command = idiomaticExpose.ix.healthChecks.ready.command;
+        in
+          lib.hasSuffix "/bin/curl" (builtins.head command)
+          && builtins.tail command
+          == [
+            "--fail"
+            "--silent"
+            "--show-error"
+            "http://127.0.0.1:8080/healthz"
+          ];
+        message = "ix.healthChecks.<name>.http should derive a curl --fail probe (httpGet semantics: any status >= 400 is unhealthy)";
+      }
+      {
+        assertion = let
+          command = idiomaticExpose.ix.healthChecks.peer.command;
+        in
+          lib.hasSuffix "/bin/nc" (builtins.head command)
+          && builtins.tail command
+          == [
+            "-z"
+            "svc-b"
+            "5432"
+          ];
+        message = "ix.healthChecks.<name>.tcp should derive an `nc -z` connect probe against the given host";
+      }
+      {
+        # The plan strips string context from check argv, so the probe
+        # binaries must ride the system closure explicitly.
+        assertion =
+          lib.any (p: (p.pname or "") == "curl") idiomaticExpose.environment.systemPackages
+          && lib.any (p: (p.pname or "") == "netcat-openbsd") idiomaticExpose.environment.systemPackages;
+        message = "declaring http/tcp probes should pin curl and nc into the image closure";
+      }
+      {
+        assertion = idiomaticMultiSugarFailures != [];
+        message = "ix.healthChecks should reject setting two probe sugars on one check";
+      }
+      {
+        assertion = idiomaticHostProbeSugarFailures != [];
+        message = "ix.healthChecks should reject http/tcp probe sugar on host-side checks";
       }
       {
         assertion = let
@@ -3531,6 +3713,120 @@
             "http://127.0.0.1/"
           ];
         message = "nginx-lifecycle fleet plan should prove the service unit and HTTP loopback path";
+      }
+    ];
+
+    fleet-hello = [
+      {
+        assertion =
+          fleetHelloExample.fleet.planValue.order
+          == [
+            "web"
+            "worker-0"
+            "worker-1"
+            "worker-2"
+          ]
+          && fleetHelloExample.worker.plan.dependsOn == ["web"];
+        message = "fleet-hello should expand three worker replicas that depend on the web node";
+      }
+      {
+        assertion = let
+          check = fleetHelloExample.web.plan.healthChecks.http-loopback;
+        in
+          check.from
+          == "guest"
+          && lib.hasSuffix "/bin/curl" (builtins.head check.command)
+          && lib.last check.command == "http://127.0.0.1:8080/";
+        message = "fleet-hello web should desugar its http probe into a loopback curl";
+      }
+      {
+        assertion = let
+          check = fleetHelloExample.worker.plan.healthChecks.web-reachable;
+        in
+          check.from == "guest" && lib.last check.command == "http://web:8080/";
+        message = "fleet-hello workers should probe the web endpoint resolved by node name";
+      }
+      {
+        assertion =
+          fleetHelloExample.worker.plan.updateStrategy.maxUnavailable
+          == 1
+          && fleetHelloExample.web.plan.updateStrategy == null;
+        message = "fleet-hello workers should roll one at a time while the singleton web node carries no strategy";
+      }
+    ];
+
+    fleet-microservices = [
+      {
+        assertion =
+          fleetMicroservicesExample.fleet.planValue.order
+          == [
+            "api-0"
+            "api-1"
+            "api-2"
+            "cache"
+            "gateway"
+          ]
+          && fleetMicroservicesExample.api.plan.dependsOn == ["cache"]
+          && fleetMicroservicesExample.gateway.plan.dependsOn
+          == [
+            "api-0"
+            "api-1"
+            "api-2"
+          ];
+        message = "fleet-microservices should expand the gateway's api dependency across every replica";
+      }
+      {
+        assertion = fleetMicroservicesExample.api.plan.updateStrategy.maxUnavailable == 1;
+        message = "fleet-microservices api replicas should carry the rolling-update window into the plan";
+      }
+      {
+        # The gateway enumerates api replicas at eval time, so raising
+        # `replicas` grows the upstream pool without touching gateway.nix.
+        assertion =
+          builtins.attrNames fleetMicroservicesExample.gateway.config.services.nginx.upstreams.api.servers
+          == [
+            "api-0:8080"
+            "api-1:8080"
+            "api-2:8080"
+          ];
+        message = "fleet-microservices gateway should discover every api replica into its nginx upstream pool";
+      }
+      {
+        assertion = let
+          checks = fleetMicroservicesExample.gateway.plan.healthChecks;
+        in
+          lib.last checks.upstream-api-0.command
+          == "http://api-0:8080/healthz"
+          && lib.last checks.upstream-api-1.command == "http://api-1:8080/healthz"
+          && lib.last checks.upstream-api-2.command == "http://api-2:8080/healthz"
+          && lib.last checks.proxies-to-api.command == "http://127.0.0.1:8080/";
+        message = "fleet-microservices gateway should generate one http probe per discovered api replica plus an end-to-end proxy probe";
+      }
+      {
+        assertion = let
+          check = fleetMicroservicesExample.api.plan.healthChecks.cache-reachable;
+        in
+          lib.hasSuffix "/bin/nc" (builtins.head check.command)
+          && builtins.tail check.command
+          == [
+            "-z"
+            "cache"
+            "6379"
+          ];
+        message = "fleet-microservices api replicas should tcp-probe the cache endpoint across nodes";
+      }
+      {
+        assertion = let
+          check = fleetMicroservicesExample.cache.plan.healthChecks.accepting-connections;
+        in
+          lib.hasSuffix "/bin/nc" (builtins.head check.command)
+          && builtins.tail check.command
+          == [
+            "-z"
+            "127.0.0.1"
+            "6379"
+          ];
+        message = "fleet-microservices cache should desugar tcp.port into a loopback nc probe";
       }
     ];
 
@@ -5333,6 +5629,22 @@
         message = "fleet replicas should expand into stable node identities";
       }
       {
+        assertion =
+          fleetPlan.worker-0.updateStrategy.maxUnavailable
+          == 1
+          && fleetPlan.worker-1.updateStrategy.maxUnavailable == 1
+          && fleetPlan.web.updateStrategy == null;
+        message = "fleet updateStrategy should flow into every replica's plan and default to null";
+      }
+      {
+        assertion = !fleetUnknownUpdateStrategyKeyEval.success;
+        message = "fleet plans should reject unknown updateStrategy keys during eval";
+      }
+      {
+        assertion = !fleetInvalidMaxUnavailableEval.success;
+        message = "fleet plans should reject a non-positive updateStrategy.maxUnavailable during eval";
+      }
+      {
         assertion = fleetPlan.worker-0.dependsOn == ["db"];
         message = "fleet replica dependencies should point at expanded node identities";
       }
@@ -5400,6 +5712,16 @@
   # --- Build-time checks ----------------------------------------------------
 
   buildScripts = {
+    security-roots = ''
+      root=${pkgs.hello}
+      case "$root" in
+        ${builtins.storeDir}/*) ;;
+        *)
+          echo "security root did not realize to a terminal store path: $root" >&2
+          exit 1
+          ;;
+      esac
+    '';
     factions = ''
       grep -q '^QuickShop-Hikari$' ${factionsExample.managed.dropins}/quickshop-hikari.jar.plugin-name
       grep -q '^Vault$' ${factionsExample.managed.dropins}/vaultunlocked.jar.plugin-name

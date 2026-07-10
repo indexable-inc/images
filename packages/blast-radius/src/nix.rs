@@ -108,9 +108,6 @@ fn has_ci_checks(repo: &str, rev: &str) -> bool {
             &flakeref,
             "--apply",
             "builtins.isAttrs",
-            "--option",
-            "accept-flake-config",
-            "true",
         ])
         .output()
         .is_ok_and(|out| out.status.success())
@@ -167,9 +164,6 @@ pub fn eval_checks(repo: &str, rev: &str, attr: &str) -> Result<EvalResult> {
         // shared runner (both jobs died together mid-eval).
         "--workers",
         "4",
-        "--option",
-        "accept-flake-config",
-        "true",
         // The base eval predates any `nixConfig` declaration, so enable the
         // content-addressed feature directly rather than via the flake config.
         "--option",

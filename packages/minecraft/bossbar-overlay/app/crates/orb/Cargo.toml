@@ -15,4 +15,3 @@ path = "src/main.rs"
 overlay-core.workspace = true
 glam.workspace = true
 rusqlite.workspace = true
-dirs.workspace = true

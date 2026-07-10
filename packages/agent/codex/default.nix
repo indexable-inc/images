@@ -6,13 +6,8 @@
   makeBinaryWrapper,
   runCommand,
   git,
-  nix,
   symlinkJoin,
   formats,
-  # Nushell writer for `passthru.updateScript`, pre-bound to the caller's pkgs
-  # on the flake path (lib/packages.nix); `null` on the overlay path, which is
-  # the signal to omit the fork updater (matches the pins.mkUpdater posture).
-  updateScriptWriter ? null,
   binName ? "codex",
   # Shell globs the (claude-only) worktree-guard protects, threaded into the
   # shared hook module so both wrappers feed it the same inputs. Unused in the
@@ -76,6 +71,11 @@
       max_concurrent_threads_per_session = 16;
     };
     agents.max_depth = 3;
+    # multi_agent_v2 is an under-development feature, so enabling it above
+    # makes Codex print an unstable-features warning on every startup. The
+    # wrapper opts into the feature deliberately, so it silences its own
+    # warning; a user who sets this key keeps their value.
+    suppress_unstable_features_warning = true;
   },
   # MCP servers rendered as soft Codex defaults. A user's own
   # `[mcp_servers.<name>]` config wins per-key through config-launch.
@@ -256,26 +256,11 @@ in
     '';
     # The codex hooks.json rendered from the shared declaration list, for a
     # consumer to deliver to `~/.codex/hooks.json` (see the `hooksJson` comment).
-    passthru =
-      {
-        inherit hooksJson spec specValue;
-        modelInstructionsFile = effectiveModelInstructionsFile;
-        permissions = sharedPermissions.codex;
-      }
-      # Fork updater (flake path only): bump codex-src and regenerate the patch
-      # series, so codex joins the registry-discovered `.#update` DAG. Omitted
-      # when the writer or rebase-patches sibling is out of scope (overlay path).
-      // lib.optionalAttrs (updateScriptWriter != null && repoPackages ? rebase-patches) {
-        updateScript =
-          ix.mkForkUpdater {
-            writeNushellApplication = updateScriptWriter;
-            inherit nix;
-            rebasePatches = repoPackages.rebase-patches;
-          } {
-            name = "codex";
-            input = "codex-src";
-          };
-      };
+    passthru = {
+      inherit hooksJson spec specValue;
+      modelInstructionsFile = effectiveModelInstructionsFile;
+      permissions = sharedPermissions.codex;
+    };
     meta =
       codexWithNotifications.meta
       // {

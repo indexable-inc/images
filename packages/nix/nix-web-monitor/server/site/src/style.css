@@ -498,10 +498,16 @@ main.dragging-v .splitter-v::after {
   font-variant-numeric: tabular-nums;
 }
 
-.side-pane > .daemon-panel {
+.side-pane > .daemon-panel,
+.side-pane > .global-panel,
+.side-pane > .activation-panel,
+.side-pane > .diff-panel {
   flex: 0 0 auto;
-  max-height: 45%;
   border-bottom: 1px solid var(--line);
+}
+
+.side-pane > .daemon-panel {
+  max-height: 45%;
 }
 
 .side-pane > .graph-panel {
@@ -511,12 +517,16 @@ main.dragging-v .splitter-v::after {
 
 /* ---------- daemon panel ---------- */
 
-.daemon-body {
+.daemon-body,
+.global-body {
   min-height: 0;
   overflow: auto;
   padding: 0.4rem 0.6rem;
   display: flex;
   flex-direction: column;
+}
+
+.daemon-body {
   gap: 0.4rem;
 }
 
@@ -644,18 +654,7 @@ main.dragging-v .splitter-v::after {
 /* Sits above the daemon panel in the side pane; caps its height so the daemon
  * panel and activity graph below stay visible. Self-hides on stock nix (the
  * component renders nothing when `detected` is false). */
-.side-pane > .global-panel {
-  flex: 0 0 auto;
-  max-height: 40%;
-  border-bottom: 1px solid var(--line);
-}
-
 .global-body {
-  min-height: 0;
-  overflow: auto;
-  padding: 0.4rem 0.6rem;
-  display: flex;
-  flex-direction: column;
   gap: 0.5rem;
 }
 
@@ -767,11 +766,10 @@ main.dragging-v .splitter-v::after {
 /* Both ride at the top of the side pane during a switch and cap their height so
  * the daemon panel and activity graph below stay visible; they self-hide on a
  * plain build (no activation, no diff). */
+.side-pane > .global-panel,
 .side-pane > .activation-panel,
 .side-pane > .diff-panel {
-  flex: 0 0 auto;
   max-height: 40%;
-  border-bottom: 1px solid var(--line);
 }
 
 .activation-body {

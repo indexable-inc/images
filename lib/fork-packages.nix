@@ -92,15 +92,13 @@
 {
   forkPackages = [
     {
-      # codex is cargoHash-coupled: the package vendors its Cargo dependencies
-      # behind a fixed `cargoHash`, and a rebase-patches run does not regenerate
-      # that hash, so a free-floating base desyncs the two the moment upstream's
-      # Cargo.lock changes. Worse, the desync also hits consumers that lock
-      # codex-src transitively (ix), where a routine `nix flake update` floated
-      # the base past our hash and broke every prod deploy for 13h on
-      # 2026-07-07. The input is pinned by rev in flake.nix; bump it by hand,
-      # then `nix run .#rebase-patches -- codex` and regenerate the cargoHash in
-      # the same change.
+      # Codex uses importCargoLock, but git dependencies still carry fixed
+      # output hashes in packages/agent/codex/default.nix. A free-floating base
+      # can move Cargo.lock past those hashes, including for downstream flakes
+      # that lock codex-src transitively; that broke every ix prod deploy for
+      # 13h on 2026-07-07. The input is pinned by rev in flake.nix. Bump it by
+      # hand, rebase the patches, then build Codex and refresh any git dependency
+      # hashes named by Nix.
       name = "codex";
       input = "codex-src";
       url = "https://github.com/openai/codex.git";
@@ -432,6 +430,17 @@
         "0012-fix-libstore-add-temp-root-for-floating-CA-scratch-o.patch" = {
           upstream = "hold";
           reason = "Companion to 0011: roots the floating-CA scratch output path during non-chroot builds (indexable-inc/index#2354). Upstream master has the same gap, but humans submit nix patches upstream per NixOS/nix#15984.";
+        };
+        # 0013: opt-in `forge-fetch-via-git` -- fetch github:/gitlab:/sourcehut:
+        # inputs through the Git smart protocol into the tarball cache (delta
+        # transfers via a per-repo negotiation ref) instead of downloading a
+        # full archive of every new revision. Bit-identical to the archive path
+        # (archive-compatible-tree check with automatic tarball fallback), so
+        # upstreamable in principle, but held like 0010: feature-sized fetcher
+        # changes should start as an upstream discussion, not a cold PR.
+        "0013-libfetchers-opt-in-incremental-fetching-of-forge-inp.patch" = {
+          upstream = "hold";
+          reason = "Feature-sized fetcher change; upstreaming paused per NixOS/nix#15984 and it should open as an upstream issue/discussion first (touches lock-file-adjacent fetch semantics).";
         };
       };
     }

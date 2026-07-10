@@ -226,49 +226,13 @@ impl UnibindMeta {
 
     /// Parse `ts(name = "...")`: the TypeScript-side rename.
     fn apply_ts(&mut self, entry: &syn::Meta) -> Result<()> {
-        let span = entry.span();
-        let syn::Meta::NameValue(pair) = entry else {
-            return Err(LowerError::new(span, "the `ts` option is name = \"...\""));
-        };
-        let syn::Expr::Lit(syn::ExprLit {
-            lit: syn::Lit::Str(value),
-            ..
-        }) = &pair.value
-        else {
-            return Err(LowerError::new(span, "`ts` options take string literals"));
-        };
-        if pair.path.is_ident("name") {
-            self.ts_name = Some(value.value());
-        } else {
-            return Err(LowerError::new(
-                span,
-                "unknown `ts` option; expected name = \"...\"",
-            ));
-        }
+        self.ts_name = Some(parse_backend_name(entry, "ts")?);
         Ok(())
     }
 
     /// Parse `ex(name = "...")`: the Elixir-side rename.
     fn apply_ex(&mut self, entry: &syn::Meta) -> Result<()> {
-        let span = entry.span();
-        let syn::Meta::NameValue(pair) = entry else {
-            return Err(LowerError::new(span, "the `ex` option is name = \"...\""));
-        };
-        let syn::Expr::Lit(syn::ExprLit {
-            lit: syn::Lit::Str(value),
-            ..
-        }) = &pair.value
-        else {
-            return Err(LowerError::new(span, "`ex` options take string literals"));
-        };
-        if pair.path.is_ident("name") {
-            self.ex_name = Some(value.value());
-        } else {
-            return Err(LowerError::new(
-                span,
-                "unknown `ex` option; expected name = \"...\"",
-            ));
-        }
+        self.ex_name = Some(parse_backend_name(entry, "ex")?);
         Ok(())
     }
 
@@ -316,73 +280,92 @@ impl UnibindMeta {
 
     /// Error out when a `default` was given somewhere it cannot apply.
     pub(crate) fn reject_default(&self, context: &str) -> Result<()> {
-        if self.default.is_some() {
-            return Err(LowerError::new(
-                self.span.unwrap_or_else(Span::call_site),
-                format!("`default` applies to function arguments, not {context}"),
-            ));
-        }
-        Ok(())
+        self.reject_if(
+            self.default.is_some(),
+            format!("`default` applies to function arguments, not {context}"),
+        )
     }
 
     /// Error out when a `py(base = ...)` was given somewhere it cannot apply.
     pub(crate) fn reject_py_base(&self, context: &str) -> Result<()> {
-        if self.py_base.is_some() {
-            return Err(LowerError::new(
-                self.span.unwrap_or_else(Span::call_site),
-                format!("`py(base = ...)` applies to #[unibind::error] enums, not {context}"),
-            ));
-        }
-        Ok(())
+        self.reject_if(
+            self.py_base.is_some(),
+            format!("`py(base = ...)` applies to #[unibind::error] enums, not {context}"),
+        )
     }
 
     /// Error out when a `resource` flag was given somewhere it cannot apply.
     pub(crate) fn reject_resource(&self, context: &str) -> Result<()> {
-        if self.resource {
-            return Err(LowerError::new(
-                self.span.unwrap_or_else(Span::call_site),
-                format!("`resource` applies to #[unibind::object] markers, not {context}"),
-            ));
-        }
-        Ok(())
+        self.reject_if(
+            self.resource,
+            format!("`resource` applies to #[unibind::object] markers, not {context}"),
+        )
     }
 
     /// Error out when a `constructor` flag was given somewhere it cannot
     /// apply.
     pub(crate) fn reject_constructor(&self, context: &str) -> Result<()> {
-        if self.constructor {
-            return Err(LowerError::new(
-                self.span.unwrap_or_else(Span::call_site),
-                format!(
-                    "`constructor` applies to associated functions in an \
-                     object impl block, not {context}"
-                ),
-            ));
-        }
-        Ok(())
+        self.reject_if(
+            self.constructor,
+            format!(
+                "`constructor` applies to associated functions in an \
+                 object impl block, not {context}"
+            ),
+        )
     }
 
     /// Error out when a `blocking` flag was given somewhere it cannot apply.
     pub(crate) fn reject_blocking(&self, context: &str) -> Result<()> {
-        if self.blocking {
-            return Err(LowerError::new(
-                self.span.unwrap_or_else(Span::call_site),
-                format!("`blocking` applies to exported functions and object methods, not {context}"),
-            ));
-        }
-        Ok(())
+        self.reject_if(
+            self.blocking,
+            format!("`blocking` applies to exported functions and object methods, not {context}"),
+        )
     }
 
     /// Error out when a `backends(...)` was given somewhere it cannot apply.
     pub(crate) fn reject_backends(&self, context: &str) -> Result<()> {
-        if self.backends.is_some() {
+        self.reject_if(
+            self.backends.is_some(),
+            format!("`backends(...)` applies to #[unibind::export], not {context}"),
+        )
+    }
+
+    fn reject_if(&self, rejected: bool, message: String) -> Result<()> {
+        if rejected {
             return Err(LowerError::new(
                 self.span.unwrap_or_else(Span::call_site),
-                format!("`backends(...)` applies to #[unibind::export], not {context}"),
+                message,
             ));
         }
         Ok(())
     }
+}
+
+fn parse_backend_name(entry: &syn::Meta, backend: &str) -> Result<String> {
+    let span = entry.span();
+    let syn::Meta::NameValue(pair) = entry else {
+        return Err(LowerError::new(
+            span,
+            format!("the `{backend}` option is name = \"...\""),
+        ));
+    };
+    let syn::Expr::Lit(syn::ExprLit {
+        lit: syn::Lit::Str(value),
+        ..
+    }) = &pair.value
+    else {
+        return Err(LowerError::new(
+            span,
+            format!("`{backend}` options take string literals"),
+        ));
+    };
+    if !pair.path.is_ident("name") {
+        return Err(LowerError::new(
+            span,
+            format!("unknown `{backend}` option; expected name = \"...\""),
+        ));
+    }
+    Ok(value.value())
 }
 
 fn unknown_option(span: Span) -> LowerError {

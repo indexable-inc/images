@@ -96,6 +96,10 @@ in {
           max_concurrent_threads_per_session = 16;
         };
         agents.max_depth = 3;
+        # Enabling multi_agent_v2 above trips Codex's unstable-features
+        # startup warning; suppress it alongside the opt-in (mirrors the
+        # wrapper default in packages/agent/codex/default.nix).
+        suppress_unstable_features_warning = true;
       };
       description = ''
         Lower-priority Codex config rendered through the wrapper's default
