@@ -9,25 +9,16 @@
 //! needed. Events carry a connection generation so a stale thread's messages
 //! are ignored after the main loop moved on.
 
-use std::io::{BufReader, BufWriter, ErrorKind, Read, Write};
-use std::net::{Shutdown, TcpListener, TcpStream};
-use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+use std::io::{BufReader, BufWriter};
 use std::sync::mpsc;
 use std::time::Duration;
 
 use anyhow::Context as _;
+use panes_guest_transport::{Acceptor, Conn};
+pub use panes_guest_transport::ListenSpec;
 use panes_protocol::{ToGuest, ToHost, read_msg, write_msg};
 use smithay::reexports::calloop::channel::Sender;
 use tracing::{debug, info, warn};
-use vsock::{VMADDR_CID_ANY, VsockListener, VsockStream};
-
-/// Where to accept the (single) host connection.
-pub enum ListenSpec {
-    Vsock(u32),
-    Unix(PathBuf),
-    Tcp(String),
-}
 
 /// Transport-side events delivered into the compositor event loop.
 pub enum HostEvent {
@@ -69,98 +60,6 @@ impl HostLink {
 
     pub fn close(&self) {
         self.conn.shutdown_conn();
-    }
-}
-
-/// Object-safe stream: vsock, unix, and TCP only share Read/Write, but the
-/// per-connection threads each need their own handle plus a shutdown lever.
-trait Conn: Read + Write + Send {
-    fn try_clone_conn(&self) -> std::io::Result<Box<dyn Conn>>;
-    fn shutdown_conn(&self);
-}
-
-impl Conn for TcpStream {
-    fn try_clone_conn(&self) -> std::io::Result<Box<dyn Conn>> {
-        Ok(Box::new(self.try_clone()?))
-    }
-    fn shutdown_conn(&self) {
-        let _ = self.shutdown(Shutdown::Both);
-    }
-}
-
-impl Conn for UnixStream {
-    fn try_clone_conn(&self) -> std::io::Result<Box<dyn Conn>> {
-        Ok(Box::new(self.try_clone()?))
-    }
-    fn shutdown_conn(&self) {
-        let _ = self.shutdown(Shutdown::Both);
-    }
-}
-
-impl Conn for VsockStream {
-    fn try_clone_conn(&self) -> std::io::Result<Box<dyn Conn>> {
-        Ok(Box::new(self.try_clone()?))
-    }
-    fn shutdown_conn(&self) {
-        let _ = self.shutdown(Shutdown::Both);
-    }
-}
-
-enum Acceptor {
-    Vsock(VsockListener),
-    Unix(UnixListener),
-    Tcp(TcpListener),
-}
-
-impl Acceptor {
-    fn bind(spec: &ListenSpec) -> anyhow::Result<Self> {
-        match spec {
-            ListenSpec::Vsock(port) => {
-                let listener = VsockListener::bind_with_cid_port(VMADDR_CID_ANY, *port)
-                    .with_context(|| format!("bind vsock port {port}"))?;
-                info!(port, "listening on vsock");
-                Ok(Self::Vsock(listener))
-            }
-            ListenSpec::Unix(path) => {
-                // A previous run's socket file would fail the bind with
-                // EADDRINUSE even though nothing is listening.
-                match std::fs::remove_file(path) {
-                    Ok(()) => {}
-                    Err(err) if err.kind() == ErrorKind::NotFound => {}
-                    Err(err) => {
-                        return Err(err)
-                            .with_context(|| format!("remove stale {}", path.display()));
-                    }
-                }
-                let listener = UnixListener::bind(path)
-                    .with_context(|| format!("bind unix socket {}", path.display()))?;
-                info!(path = %path.display(), "listening on unix socket");
-                Ok(Self::Unix(listener))
-            }
-            ListenSpec::Tcp(addr) => {
-                let listener =
-                    TcpListener::bind(addr).with_context(|| format!("bind tcp {addr}"))?;
-                info!(addr, "listening on tcp");
-                Ok(Self::Tcp(listener))
-            }
-        }
-    }
-
-    fn accept(&self) -> std::io::Result<Box<dyn Conn>> {
-        match self {
-            Self::Vsock(listener) => {
-                let (stream, _addr) = listener.accept()?;
-                Ok(Box::new(stream))
-            }
-            Self::Unix(listener) => {
-                let (stream, _addr) = listener.accept()?;
-                Ok(Box::new(stream))
-            }
-            Self::Tcp(listener) => {
-                let (stream, _addr) = listener.accept()?;
-                Ok(Box::new(stream))
-            }
-        }
     }
 }
 

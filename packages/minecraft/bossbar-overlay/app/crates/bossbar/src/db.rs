@@ -67,15 +67,7 @@ INSERT INTO bossbars (title, description, progress, color, overlay, position, si
 /// Resolve the database path: `BOSSBAR_DB` wins, otherwise the per-OS app-data
 /// path the `bossbar` CLI also computes.
 pub fn resolve_path() -> PathBuf {
-    if let Ok(p) = std::env::var("BOSSBAR_DB") {
-        if !p.trim().is_empty() {
-            return PathBuf::from(p);
-        }
-    }
-    let base = dirs::data_dir()
-        .or_else(dirs::home_dir)
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.join("bossbar-overlay").join("bossbars.db")
+    overlay_core::resolve_data_path("BOSSBAR_DB", "bossbar-overlay", "bossbars.db")
 }
 
 fn open(path: &Path) -> rusqlite::Result<Connection> {
@@ -195,6 +187,48 @@ mod tests {
         dir.join("bossbars.db")
     }
 
+    fn create_legacy_db(path: &Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let legacy = Connection::open(path).unwrap();
+        legacy
+            .execute_batch(
+                "CREATE TABLE bossbars (
+                   id       INTEGER PRIMARY KEY,
+                   title    TEXT    NOT NULL DEFAULT '',
+                   progress REAL    NOT NULL DEFAULT 1.0,
+                   color    TEXT    NOT NULL DEFAULT 'purple',
+                   overlay  TEXT    NOT NULL DEFAULT 'progress',
+                   visible  INTEGER NOT NULL DEFAULT 1,
+                   position INTEGER NOT NULL DEFAULT 0
+                 );
+                 INSERT INTO bossbars (title) VALUES ('old');",
+            )
+            .unwrap();
+    }
+
+    fn assert_optional_positive_column(
+        column: &str,
+        value: i64,
+        get: fn(&BossBar) -> Option<i64>,
+    ) {
+        let path = temp_db(column);
+        let conn = open(&path).unwrap();
+        conn.execute("DELETE FROM bossbars", []).unwrap();
+        conn.execute(
+            &format!(
+                "INSERT INTO bossbars (title, {column}) VALUES ('positive', ?1), ('zero', 0), ('null', NULL)"
+            ),
+            [value],
+        )
+        .unwrap();
+        let bars = read(&conn).unwrap();
+        let by = |title: &str| bars.iter().find(|bar| bar.title == title).unwrap();
+        assert_eq!(get(by("positive")), Some(value));
+        assert_eq!(get(by("zero")), None);
+        assert_eq!(get(by("null")), None);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
     #[test]
     fn fresh_db_seeds_and_reads_back() {
         let path = temp_db("seed");
@@ -234,54 +268,23 @@ mod tests {
     }
 
     #[test]
-    fn since_round_trips_and_nonpositive_reads_as_none() {
-        let path = temp_db("since");
-        let conn = open(&path).unwrap();
-        conn.execute("DELETE FROM bossbars", []).unwrap();
-        conn.execute(
-            "INSERT INTO bossbars (title, since) VALUES ('live', 1700000000), ('zero', 0), ('null', NULL)",
-            [],
-        )
-        .unwrap();
-        let bars = read(&conn).unwrap();
-        let by = |t: &str| bars.iter().find(|b| b.title == t).unwrap();
-        assert_eq!(by("live").since, Some(1_700_000_000));
-        // A 0 or NULL is "no counter", so the overlay shows a plain title.
-        assert_eq!(by("zero").since, None);
-        assert_eq!(by("null").since, None);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    fn optional_timestamps_round_trip_and_reject_nonpositive_values() {
+        assert_optional_positive_column("since", 1_700_000_000, |bar| bar.since);
+        assert_optional_positive_column("eta", 300, |bar| bar.eta);
     }
 
     #[test]
-    fn eta_round_trips_and_nonpositive_reads_as_none() {
-        let path = temp_db("eta");
+    fn display_options_round_trip_and_use_schema_defaults() {
+        let path = temp_db("display-options");
         let conn = open(&path).unwrap();
         conn.execute("DELETE FROM bossbars", []).unwrap();
         conn.execute(
-            "INSERT INTO bossbars (title, eta) VALUES ('timed', 300), ('zero', 0), ('null', NULL)",
+            "INSERT INTO bossbars (title, expandable, theme) VALUES
+             ('boxed', 1, 'wither'),
+             ('boxless', 0, '')",
             [],
         )
         .unwrap();
-        let bars = read(&conn).unwrap();
-        let by = |t: &str| bars.iter().find(|b| b.title == t).unwrap();
-        assert_eq!(by("timed").eta, Some(300));
-        // 0/NULL mean "no extrapolation", so the overlay uses the static progress.
-        assert_eq!(by("zero").eta, None);
-        assert_eq!(by("null").eta, None);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn expandable_round_trips_and_defaults_true() {
-        let path = temp_db("expandable");
-        let conn = open(&path).unwrap();
-        conn.execute("DELETE FROM bossbars", []).unwrap();
-        conn.execute(
-            "INSERT INTO bossbars (title, expandable) VALUES ('boxed', 1), ('boxless', 0)",
-            [],
-        )
-        .unwrap();
-        // A row that never set the column reads as expandable (default 1).
         conn.execute("INSERT INTO bossbars (title) VALUES ('default')", [])
             .unwrap();
         let bars = read(&conn).unwrap();
@@ -289,6 +292,9 @@ mod tests {
         assert!(by("boxed").expandable);
         assert!(!by("boxless").expandable, "expandable=0 reads as no box");
         assert!(by("default").expandable, "missing value defaults to a box");
+        assert_eq!(by("boxed").theme, "wither");
+        assert_eq!(by("boxless").theme, "");
+        assert_eq!(by("default").theme, "", "missing theme defaults to vanilla");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -298,24 +304,7 @@ mod tests {
         // y columns) must gain the column on open and read back as empty, then
         // accept a written description.
         let path = temp_db("legacy-desc");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        {
-            let legacy = Connection::open(&path).unwrap();
-            legacy
-                .execute_batch(
-                    "CREATE TABLE bossbars (
-                       id       INTEGER PRIMARY KEY,
-                       title    TEXT    NOT NULL DEFAULT '',
-                       progress REAL    NOT NULL DEFAULT 1.0,
-                       color    TEXT    NOT NULL DEFAULT 'purple',
-                       overlay  TEXT    NOT NULL DEFAULT 'progress',
-                       visible  INTEGER NOT NULL DEFAULT 1,
-                       position INTEGER NOT NULL DEFAULT 0
-                     );
-                     INSERT INTO bossbars (title) VALUES ('old');",
-                )
-                .unwrap();
-        }
+        create_legacy_db(&path);
 
         let conn = open(&path).unwrap();
         let bars = read(&conn).unwrap();
@@ -338,49 +327,11 @@ mod tests {
     }
 
     #[test]
-    fn theme_round_trips_and_defaults_empty() {
-        let path = temp_db("theme");
-        let conn = open(&path).unwrap();
-        conn.execute("DELETE FROM bossbars", []).unwrap();
-        conn.execute(
-            "INSERT INTO bossbars (title, theme) VALUES ('skinned', 'wither'), ('vanilla', '')",
-            [],
-        )
-        .unwrap();
-        // A row that never set the column reads as the vanilla renderer (empty).
-        conn.execute("INSERT INTO bossbars (title) VALUES ('default')", [])
-            .unwrap();
-        let bars = read(&conn).unwrap();
-        let by = |t: &str| bars.iter().find(|b| b.title == t).unwrap();
-        assert_eq!(by("skinned").theme, "wither");
-        assert_eq!(by("vanilla").theme, "");
-        assert_eq!(by("default").theme, "", "missing value defaults to vanilla");
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
     fn legacy_db_without_theme_is_migrated() {
         // A database created before `theme` shipped must gain the column on
         // open (the ADDED_COLUMNS migration) and read back as vanilla.
         let path = temp_db("legacy-theme");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        {
-            let legacy = Connection::open(&path).unwrap();
-            legacy
-                .execute_batch(
-                    "CREATE TABLE bossbars (
-                       id       INTEGER PRIMARY KEY,
-                       title    TEXT    NOT NULL DEFAULT '',
-                       progress REAL    NOT NULL DEFAULT 1.0,
-                       color    TEXT    NOT NULL DEFAULT 'purple',
-                       overlay  TEXT    NOT NULL DEFAULT 'progress',
-                       visible  INTEGER NOT NULL DEFAULT 1,
-                       position INTEGER NOT NULL DEFAULT 0
-                     );
-                     INSERT INTO bossbars (title) VALUES ('old');",
-                )
-                .unwrap();
-        }
+        create_legacy_db(&path);
 
         let conn = open(&path).unwrap();
         let bars = read(&conn).unwrap();

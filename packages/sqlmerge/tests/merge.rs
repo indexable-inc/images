@@ -82,6 +82,16 @@ fn read_text(db: &Path, sql: &str) -> String {
     conn.query_row(sql, [], |r| r.get(0)).expect("query")
 }
 
+fn assert_policy_conflict(fixture: &Fixture, policy: &str, message: &str) {
+    let error = fixture
+        .run_with(&policies(policy))
+        .expect_err(message);
+    let MergeError::Conflicts(conflicts) = error else {
+        panic!("expected Conflicts, got {error:?}");
+    };
+    assert_eq!(conflicts[0].table, "users");
+}
+
 const USERS_SCHEMA: &str =
     "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, score INTEGER NOT NULL);";
 
@@ -174,39 +184,33 @@ fn convergent_delete_merges_clean() {
 }
 
 #[test]
-fn delete_vs_update_conflicts() {
-    let f = seeded_users();
-    // theirs deletes alice; ours edited her. The changeset DELETE finds a row
-    // whose values differ from base (DATA conflict): a real conflict.
-    build(&f.ours, "UPDATE users SET score = 111 WHERE id = 1;");
-    build(&f.theirs, "DELETE FROM users WHERE id = 1;");
+fn delete_update_conflicts_are_symmetric_and_atomic() {
+    let cases = [
+        (
+            "UPDATE users SET score = 111 WHERE id = 1;",
+            "DELETE FROM users WHERE id = 1;",
+            "SELECT score FROM users WHERE id = 1",
+            111,
+        ),
+        (
+            "DELETE FROM users WHERE id = 1;",
+            "UPDATE users SET score = 222 WHERE id = 1;",
+            "SELECT count(*) FROM users WHERE id = 1",
+            0,
+        ),
+    ];
+    for (ours, theirs, unchanged_query, unchanged_value) in cases {
+        let f = seeded_users();
+        build(&f.ours, ours);
+        build(&f.theirs, theirs);
 
-    let err = f.run().expect_err("delete-vs-update should conflict");
-    let MergeError::Conflicts(conflicts) = err else {
-        panic!("expected Conflicts, got {err:?}");
-    };
-    assert_eq!(conflicts[0].table, "users");
-
-    // ours untouched by the aborted apply.
-    assert_eq!(read_int(&f.ours, "SELECT score FROM users WHERE id = 1"), 111);
-}
-
-#[test]
-fn update_vs_delete_conflicts() {
-    let f = seeded_users();
-    // theirs edits alice; ours deleted her. The changeset UPDATE finds no row
-    // (NOTFOUND on update): a real conflict, unlike the convergent delete.
-    build(&f.ours, "DELETE FROM users WHERE id = 1;");
-    build(&f.theirs, "UPDATE users SET score = 222 WHERE id = 1;");
-
-    let err = f.run().expect_err("update-vs-delete should conflict");
-    let MergeError::Conflicts(conflicts) = err else {
-        panic!("expected Conflicts, got {err:?}");
-    };
-    assert_eq!(conflicts[0].table, "users");
-
-    // ours untouched by the aborted apply: alice stays deleted.
-    assert_eq!(read_int(&f.ours, "SELECT count(*) FROM users WHERE id = 1"), 0);
+        let err = f.run().expect_err("delete/update divergence should conflict");
+        let MergeError::Conflicts(conflicts) = err else {
+            panic!("expected Conflicts, got {err:?}");
+        };
+        assert_eq!(conflicts[0].table, "users");
+        assert_eq!(read_int(&f.ours, unchanged_query), unchanged_value);
+    }
 }
 
 #[test]
@@ -386,24 +390,31 @@ fn theirs_policy_replaces_conflicting_insert() {
     assert_eq!(read_int(&f.ours, "SELECT score FROM users WHERE id = 7"), 77);
 }
 
-/// REPLACE is illegal for a NOTFOUND conflict (theirs updated a row ours
-/// deleted). Under `theirs`, that row must still abort rather than return an
-/// illegal REPLACE that would fail the whole apply with `SQLITE_MISUSE`.
 #[test]
-fn theirs_policy_aborts_on_notfound_update() {
-    let f = seeded_users();
-    build(&f.ours, "DELETE FROM users WHERE id = 1;");
-    build(&f.theirs, "UPDATE users SET score = 222 WHERE id = 1;");
-
-    let err = f
-        .run_with(&policies("[policies]\n\"users\" = \"theirs\"\n"))
-        .expect_err("theirs cannot REPLACE a NOTFOUND row");
-    let MergeError::Conflicts(conflicts) = err else {
-        panic!("expected Conflicts, got {err:?}");
-    };
-    assert_eq!(conflicts[0].table, "users");
-    // Aborted apply leaves ours untouched: alice stays deleted.
-    assert_eq!(read_int(&f.ours, "SELECT count(*) FROM users WHERE id = 1"), 0);
+fn policies_abort_conflicts_they_cannot_legally_resolve() {
+    let cases = [
+        (
+            "[policies]\n\"users\" = \"theirs\"\n",
+            "DELETE FROM users WHERE id = 1;",
+            "UPDATE users SET score = 222 WHERE id = 1;",
+            "SELECT count(*) FROM users WHERE id = 1",
+            0,
+        ),
+        (
+            "[policies]\n\"users\" = \"append-only\"\n",
+            "UPDATE users SET score = 111 WHERE id = 1;",
+            "UPDATE users SET score = 222 WHERE id = 1;",
+            "SELECT score FROM users WHERE id = 1",
+            111,
+        ),
+    ];
+    for (policy, ours, theirs, unchanged_query, unchanged_value) in cases {
+        let f = seeded_users();
+        build(&f.ours, ours);
+        build(&f.theirs, theirs);
+        assert_policy_conflict(&f, policy, "policy must abort an unsupported conflict");
+        assert_eq!(read_int(&f.ours, unchanged_query), unchanged_value);
+    }
 }
 
 /// Under `append-only`, a conflicting INSERT (same PK, different values) keeps
@@ -419,23 +430,6 @@ fn append_only_keeps_ours_on_conflicting_insert() {
 
     assert_eq!(read_text(&f.ours, "SELECT name FROM users WHERE id = 8"), "ours");
     assert_eq!(read_int(&f.ours, "SELECT count(*) FROM users WHERE id = 8"), 1);
-}
-
-/// Under `append-only`, a conflicting UPDATE still aborts: only inserts win.
-#[test]
-fn append_only_aborts_on_update_conflict() {
-    let f = seeded_users();
-    build(&f.ours, "UPDATE users SET score = 111 WHERE id = 1;");
-    build(&f.theirs, "UPDATE users SET score = 222 WHERE id = 1;");
-
-    let err = f
-        .run_with(&policies("[policies]\n\"users\" = \"append-only\"\n"))
-        .expect_err("append-only aborts an update conflict");
-    let MergeError::Conflicts(conflicts) = err else {
-        panic!("expected Conflicts, got {err:?}");
-    };
-    assert_eq!(conflicts[0].table, "users");
-    assert_eq!(read_int(&f.ours, "SELECT score FROM users WHERE id = 1"), 111);
 }
 
 /// A glob applies the policy to matching tables and leaves the rest on the

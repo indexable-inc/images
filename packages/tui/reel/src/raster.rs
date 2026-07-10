@@ -197,20 +197,7 @@ fn draw_terminal(
             canvas.rect(cell_x, cell_y, cell_x + cell_w, cell_y + cell_h, color);
         }
         if cell.character != ' ' {
-            let face = FontSet::face_index(cell.bold, cell.italic);
-            let glyph = font.glyph(cell.character, face);
-            let gx = cell_x as i32 + glyph.metrics.xmin;
-            let gy =
-                cell_y as i32 + baseline_off - glyph.metrics.ymin - glyph.metrics.height as i32;
-            blit(
-                canvas,
-                &glyph.coverage,
-                glyph.metrics.width,
-                glyph.metrics.height,
-                gx,
-                gy,
-                ink,
-            );
+            draw_cell_glyph(canvas, font, cell, cell_x, cell_y, baseline_off, ink);
         }
         if cell.underline {
             let y = cell_y + baseline_off as u32 + 1;
@@ -224,21 +211,33 @@ fn draw_terminal(
         canvas.rect(cur_x, cur_y, cur_x + cell_w, cur_y + cell_h, palette.accent);
         let cell = &cells[[cursor.row as usize, cursor.col as usize]];
         if cell.character != ' ' {
-            let face = FontSet::face_index(cell.bold, cell.italic);
-            let glyph = font.glyph(cell.character, face);
-            let gx = cur_x as i32 + glyph.metrics.xmin;
-            let gy = cur_y as i32 + baseline_off - glyph.metrics.ymin - glyph.metrics.height as i32;
-            blit(
-                canvas,
-                &glyph.coverage,
-                glyph.metrics.width,
-                glyph.metrics.height,
-                gx,
-                gy,
-                palette.bg,
-            );
+            draw_cell_glyph(canvas, font, cell, cur_x, cur_y, baseline_off, palette.bg);
         }
     }
+}
+
+fn draw_cell_glyph(
+    canvas: &mut Canvas,
+    font: &mut FontSet,
+    cell: &tui::StyledCell,
+    x: u32,
+    y: u32,
+    baseline: i32,
+    color: Rgb,
+) {
+    let face = FontSet::face_index(cell.bold, cell.italic);
+    let glyph = font.glyph(cell.character, face);
+    let glyph_x = x as i32 + glyph.metrics.xmin;
+    let glyph_y = y as i32 + baseline - glyph.metrics.ymin - glyph.metrics.height as i32;
+    blit(
+        canvas,
+        &glyph.coverage,
+        glyph.metrics.width,
+        glyph.metrics.height,
+        glyph_x,
+        glyph_y,
+        color,
+    );
 }
 
 /// Draw a centered title/subtitle/footer card.

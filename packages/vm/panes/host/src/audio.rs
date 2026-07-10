@@ -7,10 +7,7 @@
 //! main thread -- samples go straight from the reader into the jitter buffer
 //! the `CoreAudio` render callback drains, because every queue hop is latency.
 
-use std::io::{BufReader, Read, Write};
-use std::net::TcpStream;
-use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::io::{BufReader, Write};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,11 +17,7 @@ use panes_protocol::audio::{MAX_FRAME, SampleFormat, ToGuest, ToHost, VERSION_MA
 use panes_protocol::{read_msg_bounded, write_msg};
 
 use crate::jitter::JitterBuffer;
-
-pub enum Target {
-    Unix(PathBuf),
-    Tcp(String),
-}
+use crate::transport::{Stream, Target, connect};
 
 const BACKOFF_START: Duration = Duration::from_millis(250);
 const BACKOFF_MAX: Duration = Duration::from_secs(5);
@@ -62,29 +55,6 @@ fn supervise(target: &Target) -> ! {
         }
         std::thread::sleep(backoff);
         backoff = (backoff * 2).min(BACKOFF_MAX);
-    }
-}
-
-struct Stream {
-    read: Box<dyn Read + Send>,
-    write: Box<dyn Write + Send>,
-}
-
-fn connect(target: &Target) -> std::io::Result<Stream> {
-    match target {
-        Target::Unix(path) => {
-            let stream = UnixStream::connect(path)?;
-            let read = stream.try_clone()?;
-            Ok(Stream { read: Box::new(read), write: Box::new(stream) })
-        }
-        Target::Tcp(addr) => {
-            let stream = TcpStream::connect(addr.as_str())?;
-            // ~10 ms PCM chunks must not sit in Nagle's buffer waiting for a
-            // second chunk; that alone would double the transport latency.
-            stream.set_nodelay(true)?;
-            let read = stream.try_clone()?;
-            Ok(Stream { read: Box::new(read), write: Box::new(stream) })
-        }
     }
 }
 

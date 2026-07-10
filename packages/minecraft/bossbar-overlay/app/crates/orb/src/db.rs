@@ -39,15 +39,7 @@ INSERT INTO orb (id, amount, url) VALUES (1, 137, '');";
 
 /// Resolve the database path: `ORB_DB` wins, else the per-OS app-data path.
 pub fn resolve_path() -> PathBuf {
-    if let Ok(p) = std::env::var("ORB_DB") {
-        if !p.trim().is_empty() {
-            return PathBuf::from(p);
-        }
-    }
-    let base = dirs::data_dir()
-        .or_else(dirs::home_dir)
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.join("xp-orb-overlay").join("orb.db")
+    overlay_core::resolve_data_path("ORB_DB", "xp-orb-overlay", "orb.db")
 }
 
 fn open(path: &Path) -> rusqlite::Result<Connection> {

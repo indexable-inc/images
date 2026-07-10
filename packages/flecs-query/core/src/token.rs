@@ -183,19 +183,15 @@ fn skip_trivia(bytes: &[u8], mut pos: usize) -> Result<usize, ParseError> {
 }
 
 const fn punct(kind: TokenKind, start: usize, pos: &mut usize) -> Token {
-    *pos += 1;
-    Token {
-        kind,
-        text: String::new(),
-        span: Span {
-            start,
-            end: *pos,
-        },
-    }
+    punct_width(kind, start, pos, 1)
 }
 
 const fn wide_punct(kind: TokenKind, start: usize, pos: &mut usize) -> Token {
-    *pos += 2;
+    punct_width(kind, start, pos, 2)
+}
+
+const fn punct_width(kind: TokenKind, start: usize, pos: &mut usize, width: usize) -> Token {
+    *pos += width;
     Token {
         kind,
         text: String::new(),

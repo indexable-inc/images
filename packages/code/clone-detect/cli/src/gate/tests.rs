@@ -44,6 +44,7 @@ fn group(file: &str, start: usize, end: usize) -> CloneGroup {
             byte_range: ByteRange { start: 0, end: 0 },
             lines: LineRange { start, end },
             kind: "function_item".to_owned(),
+            generated: false,
         }],
     }
 }
@@ -100,6 +101,10 @@ fn diff_gate_all_changed_lines_duplicated() {
     );
     assert_eq!(g.changed_lines, 3);
     assert_eq!(g.duplicated_changed_lines, 3);
+    assert_eq!(
+        g.duplicated_changed_line_locations[&PathBuf::from("a.rs")],
+        BTreeSet::from([12, 13, 14])
+    );
     assert_eq!(g.diff_pct, 100.0);
     // 100% > 50% budget => fail.
     assert!(!g.pass);
@@ -160,6 +165,7 @@ fn report_passes_only_when_all_enabled_gates_pass() {
         base_sha: "s".into(),
         changed_lines: 10,
         duplicated_changed_lines: 9,
+        duplicated_changed_line_locations: BTreeMap::new(),
     };
 
     // No gates: nothing to fail.

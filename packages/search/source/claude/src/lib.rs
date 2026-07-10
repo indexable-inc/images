@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use snafu::ResultExt as _;
 
 pub use crate::error::Error;
-use crate::error::{HostNameSnafu, ReadDirSnafu, Result};
+use crate::error::{HostNameSnafu, Result};
 pub use crate::record::Message;
 use crate::record::MessageOrigin;
 
@@ -134,36 +134,7 @@ source_meta::impl_owned_source_adapter!(
 /// (not a silently empty success). Absence is normal: most homes have no Claude
 /// history, and the privileged fleet run walks many of them.
 fn collect_transcripts(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    // `read_dir` follows a symlinked `dir` (the explicitly named root); the
-    // per-entry `file_type` below reports the entry itself without following, so
-    // nothing reached through the tree can be a symlink.
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(error).context(ReadDirSnafu {
-                path: dir.to_path_buf(),
-            });
-        }
-    };
-    for entry in entries {
-        let entry = entry.context(ReadDirSnafu {
-            path: dir.to_path_buf(),
-        })?;
-        let file_type = entry.file_type().context(ReadDirSnafu {
-            path: dir.to_path_buf(),
-        })?;
-        if file_type.is_symlink() {
-            continue;
-        }
-        let path = entry.path();
-        if file_type.is_dir() {
-            collect_transcripts(&path, out)?;
-        } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == "jsonl") {
-            out.push(path);
-        }
-    }
-    Ok(())
+    source_meta::files::collect_jsonl_no_follow(dir, out, crate::error::read_dir)
 }
 
 /// Derive a file's fallback identity tags: project from the parent directory

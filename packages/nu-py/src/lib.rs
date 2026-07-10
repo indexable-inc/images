@@ -1088,34 +1088,20 @@ mod tests {
 
     #[test]
     fn undeliverable_input_fails_loudly() {
-        let (mut inner, interrupt) = test_inner();
-        let diagnostic = inner
-            .eval(
-                "def noop [] {}; def still-no-input [] {}",
-                Some(Value::string("hi", Span::unknown())),
-                None,
-                None,
-                &interrupt,
-                true,
-            )
-            .expect_err("input nothing can consume must error, not drop (issue #2540)");
-        assert!(diagnostic.contains("input="), "diagnostic: {diagnostic}");
-    }
-
-    #[test]
-    fn undeliverable_input_fails_loudly_for_a_single_statement() {
-        let (mut inner, interrupt) = test_inner();
-        let diagnostic = inner
-            .eval(
-                "def noop [] {}",
-                Some(Value::string("hi", Span::unknown())),
-                None,
-                None,
-                &interrupt,
-                true,
-            )
-            .expect_err("single-statement undeliverable input must error too");
-        assert!(diagnostic.contains("input="), "diagnostic: {diagnostic}");
+        for source in ["def noop [] {}", "def noop [] {}; def still-no-input [] {}"] {
+            let (mut inner, interrupt) = test_inner();
+            let diagnostic = inner
+                .eval(
+                    source,
+                    Some(Value::string("hi", Span::unknown())),
+                    None,
+                    None,
+                    &interrupt,
+                    true,
+                )
+                .expect_err("input nothing can consume must error, not drop (issue #2540)");
+            assert!(diagnostic.contains("input="), "diagnostic: {diagnostic}");
+        }
     }
 
     /// A statement whose FIRST element references `$in` makes the parser

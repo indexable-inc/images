@@ -400,11 +400,7 @@ async fn global_log(
             .into_response();
     };
     match global::read_log_tail(log_file).await {
-        Ok(text) => (
-            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-            text,
-        )
-            .into_response(),
+        Ok(text) => ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], text).into_response(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             (StatusCode::NOT_FOUND, "log not written yet").into_response()
         }
@@ -773,9 +769,16 @@ async fn run_switch(
             "--flake".to_owned(),
             switch.flake_dir.clone(),
         ];
-        let update_code = run_nix_build(update_args, terminal_output, nix_verbose, false, monitor, deltas)
-            .await?
-            .exit_code;
+        let update_code = run_nix_build(
+            update_args,
+            terminal_output,
+            nix_verbose,
+            false,
+            monitor,
+            deltas,
+        )
+        .await?
+        .exit_code;
         if update_code != Some(0) {
             monitor
                 .write()
@@ -797,7 +800,15 @@ async fn run_switch(
     let NixBuildOutcome {
         exit_code: build_code,
         stdout,
-    } = run_nix_build(build_args, terminal_output, nix_verbose, true, monitor, deltas).await?;
+    } = run_nix_build(
+        build_args,
+        terminal_output,
+        nix_verbose,
+        true,
+        monitor,
+        deltas,
+    )
+    .await?;
     if build_code != Some(0) {
         monitor
             .write()
@@ -967,7 +978,10 @@ async fn run_activation(
     stderr_task.await.context("joining activation stderr")??;
 
     let exit_code = status.code();
-    monitor.write().await.finish_activation(exit_code == Some(0));
+    monitor
+        .write()
+        .await
+        .finish_activation(exit_code == Some(0));
     broadcast_deltas(monitor, deltas).await?;
     Ok(exit_code)
 }
@@ -1357,6 +1371,18 @@ mod tests {
         }
     }
 
+    async fn get(uri: &str) -> axum::response::Response {
+        router(Path::new("/nonexistent-site"), test_state())
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds")
+    }
+
     /// `serve` must parse as the dedicated no-command subcommand -- not fall
     /// through to the external passthrough, which would exec a nonexistent
     /// `nix serve` -- and the shared network flags must still apply to it.
@@ -1385,15 +1411,7 @@ mod tests {
     /// shot without binding a socket or shipping a real site dir.
     #[tokio::test]
     async fn state_endpoint_serves_snapshot_json() {
-        let response = router(Path::new("/nonexistent-site"), test_state())
-            .oneshot(
-                Request::builder()
-                    .uri("/api/state")
-                    .body(Body::empty())
-                    .expect("request builds"),
-            )
-            .await
-            .expect("router responds");
+        let response = get("/api/state").await;
 
         assert_eq!(response.status(), StatusCode::OK);
 
@@ -1420,8 +1438,11 @@ mod tests {
         std::fs::write(&log_path, b"builder says hi\n").expect("write fixture log");
 
         let state = test_state();
-        state.monitor.write().await.set_global(
-            nix_web_monitor_parser::GlobalBuilds {
+        state
+            .monitor
+            .write()
+            .await
+            .set_global(nix_web_monitor_parser::GlobalBuilds {
                 detected: true,
                 builds: vec![nix_web_monitor_parser::GlobalBuild {
                     drv_path: Some("/nix/store/aaa-foo.drv".to_owned()),
@@ -1429,8 +1450,7 @@ mod tests {
                     ..nix_web_monitor_parser::GlobalBuild::default()
                 }],
                 status: "1 active".to_owned(),
-            },
-        );
+            });
         let app = router(Path::new("/nonexistent-site"), state);
 
         let found = app
@@ -1467,43 +1487,13 @@ mod tests {
         std::fs::remove_dir_all(&dir).expect("clean scratch dir");
     }
 
-    /// `/ws` must be a wired route that performs the WebSocket upgrade: a plain
-    /// GET without the upgrade headers is rejected, proving the handler expects
-    /// a real WebSocket handshake rather than serving the static fallback.
-    #[tokio::test]
-    async fn ws_route_requires_websocket_upgrade() {
-        let response = router(Path::new("/nonexistent-site"), test_state())
-            .oneshot(
-                Request::builder()
-                    .uri("/ws")
-                    .body(Body::empty())
-                    .expect("request builds"),
-            )
-            .await
-            .expect("router responds");
-
-        assert_eq!(
-            response.status(),
-            StatusCode::BAD_REQUEST,
-            "a non-upgrade GET to /ws is rejected by the WebSocket extractor"
-        );
-    }
-
     /// `/` must serve `index.html` with `Cache-Control: no-store`. Without it,
     /// the browser caches a stale `index.html` whose asset hashes a rebuilt
     /// server no longer has, producing the wrong-MIME load failure this header
     /// exists to prevent.
     #[tokio::test]
     async fn index_is_served_no_store() {
-        let response = router(Path::new("/nonexistent-site"), test_state())
-            .oneshot(
-                Request::builder()
-                    .uri("/")
-                    .body(Body::empty())
-                    .expect("request builds"),
-            )
-            .await
-            .expect("router responds");
+        let response = get("/").await;
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
@@ -1516,26 +1506,23 @@ mod tests {
         );
     }
 
-    /// A missing asset must 404, not fall back to `index.html`. Returning HTML
-    /// for a missing `/assets/*.js` is exactly what the browser rejects for the
-    /// wrong MIME type once a rebuild changes the asset hashes.
     #[tokio::test]
-    async fn missing_asset_404s_instead_of_html_fallback() {
-        let response = router(Path::new("/nonexistent-site"), test_state())
-            .oneshot(
-                Request::builder()
-                    .uri("/assets/index-deadbeef.js")
-                    .body(Body::empty())
-                    .expect("request builds"),
-            )
-            .await
-            .expect("router responds");
-
-        assert_eq!(
-            response.status(),
-            StatusCode::NOT_FOUND,
-            "a missing asset must 404 rather than serve index.html"
-        );
+    async fn invalid_route_requests_are_rejected_at_the_right_boundary() {
+        let cases = [
+            (
+                "/ws",
+                StatusCode::BAD_REQUEST,
+                "a non-upgrade GET is rejected by the WebSocket extractor",
+            ),
+            (
+                "/assets/index-deadbeef.js",
+                StatusCode::NOT_FOUND,
+                "a missing asset must not fall back to index.html",
+            ),
+        ];
+        for (uri, expected, message) in cases {
+            assert_eq!(get(uri).await.status(), expected, "{message}");
+        }
     }
 
     /// An encoded delta must decode back to an equal value: this is the exact

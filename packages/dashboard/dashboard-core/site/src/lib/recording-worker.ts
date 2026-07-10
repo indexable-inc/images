@@ -16,6 +16,7 @@
 // runtime import, matching how the main thread loads loro.
 import type { LoroDoc, OpId } from 'https://esm.sh/loro-crdt@1';
 import type { PaneRecord } from './types';
+import { lastAtOrBefore } from './timeline';
 
 // One change reduced to what scrubbing needs: the id of its last op (the version
 // to check out to land exactly after it) and its timestamp. Mirrors the shape the
@@ -87,20 +88,7 @@ function rebuildIndex(d: LoroDoc): void {
 
 // The version (frontier) at or before `ts`: the last mark at or before it.
 function frontierAt(ts: number): OpId[] {
-  let lo = 0;
-  let hi = marks.length - 1;
-  let best = -1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    if (marks[mid].ts <= ts) {
-      best = mid;
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
-    }
-  }
-  if (best < 0) best = 0;
-  const mark = marks[best];
+  const mark = lastAtOrBefore(marks, ts);
   return mark ? [{ peer: mark.peer, counter: mark.counter }] : [];
 }
 

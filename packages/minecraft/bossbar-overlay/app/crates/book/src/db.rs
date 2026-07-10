@@ -39,15 +39,7 @@ INSERT INTO pages (idx, body) VALUES
 
 /// Resolve the database path: `BOOK_DB` wins, else the per-OS app-data path.
 pub fn resolve_path() -> PathBuf {
-    if let Ok(p) = std::env::var("BOOK_DB") {
-        if !p.trim().is_empty() {
-            return PathBuf::from(p);
-        }
-    }
-    let base = dirs::data_dir()
-        .or_else(dirs::home_dir)
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.join("book-overlay").join("book.db")
+    overlay_core::resolve_data_path("BOOK_DB", "book-overlay", "book.db")
 }
 
 fn open(path: &Path) -> rusqlite::Result<Connection> {

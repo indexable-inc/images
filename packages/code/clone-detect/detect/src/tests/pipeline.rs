@@ -110,3 +110,35 @@ fn process(values: &[i32]) -> i32 {
         matches!(kind, crate::Kind::Sequence { .. })
     });
 }
+
+#[test]
+fn comments_do_not_form_statement_sequences() {
+    let dir = TempDir::new().unwrap();
+    create_temp_file(
+        &dir,
+        "first.rs",
+        "fn first() {\n// one\n// two\n// three\nlet left = 1;\n}\n",
+    );
+    create_temp_file(
+        &dir,
+        "second.rs",
+        "fn second() {\n// alpha\n// beta\n// gamma\nreturn;\n}\n",
+    );
+
+    let result = scan_and_run(
+        &dir,
+        &DetectConfig {
+            enable_sequences: true,
+            sequence_window_size: 2,
+            ..DetectConfig::default()
+        },
+    );
+
+    assert!(
+        result.instances.iter().filter(|group| matches!(group.clone_type, crate::Kind::Sequence { .. })).all(|group| {
+            group.fragments.iter().all(|fragment| fragment.lines.end - fragment.lines.start < 3)
+        }),
+        "comments inflated a sequence fragment: {:#?}",
+        result.instances,
+    );
+}

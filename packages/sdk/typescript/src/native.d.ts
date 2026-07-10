@@ -9,7 +9,23 @@
  * then, when you add a method on the Rust side, add it here too.
  */
 
-export type BranchStatus = 'Running' | 'Stopped' | 'Failed'
+import type {
+	BranchInfo,
+	BranchStatus,
+	DeleteSecretOptions,
+	FsEntry,
+	FsListOptions,
+	FsReadOptions,
+	FsReadResult,
+	FsWriteOptions,
+	FsWriteResult,
+	LogsOptions,
+	RegionInfo,
+	Secret,
+	SetSecretOptions
+} from './shared.js'
+
+export type * from './shared.js'
 
 export type RuntimeState =
 	| 'Unknown'
@@ -69,16 +85,6 @@ export interface BashOptions {
 	workingDir?: string
 }
 
-export interface FsReadOptions {
-	path: string
-}
-
-export interface FsWriteOptions {
-	path: string
-	text: string
-	mode?: number
-}
-
 export interface FsReadBytesOptions {
 	path: string
 	offset?: number
@@ -89,25 +95,6 @@ export interface FsWriteBytesOptions {
 	path: string
 	data: Uint8Array
 	mode?: number
-}
-
-export interface FsListOptions {
-	path: string
-}
-
-export interface LogsOptions {
-	limit: number
-	since?: number
-	stream?: string
-}
-
-export interface SetSecretOptions {
-	key: string
-	value: string
-}
-
-export interface DeleteSecretOptions {
-	key: string
 }
 
 export interface ShellOptions {
@@ -126,34 +113,6 @@ export interface SessionInfo {
 	command: string[]
 	attached: boolean
 	exited: boolean
-}
-
-export interface RegionInfo {
-	id: string
-	slug: string
-	displayName: string
-	status: string
-}
-
-export interface BranchInfo {
-	id: string
-	name: string
-	image: string
-	status: BranchStatus
-	ipv6: string
-	ipv4?: string
-	subdomain?: string
-	ephemeral: boolean
-	snapshotKey?: string
-	forkParentVmId?: string
-	forkBaseLsnNs?: string
-	startedAt?: number
-	stoppedAt?: number
-	failureReason?: string
-	createdAt: number
-	updatedAt: number
-	region?: RegionInfo
-	ownerId: string
 }
 
 export interface RuntimeStatusInfo {
@@ -176,23 +135,6 @@ export interface ExecResult {
 	stderr: string
 }
 
-export interface FsReadResult {
-	path: string
-	text: string
-}
-
-export interface FsWriteResult {
-	bytesWritten: number
-}
-
-export interface FsEntry {
-	name: string
-	size: number
-	mode: number
-	mtimeNs: number
-	isDir: boolean
-}
-
 export interface LogEntry {
 	timestamp: number
 	vmId: string
@@ -208,13 +150,6 @@ export interface Commit {
 	memoryMib: number
 	manifestKey?: string
 	createdAtMillis: number
-}
-
-export interface Secret {
-	id: string
-	name: string
-	createdAt: number
-	updatedAt: number
 }
 
 export interface MetricsInfo {
