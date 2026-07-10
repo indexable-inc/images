@@ -25,9 +25,11 @@ native asyncio coroutine bridged from a Rust future with no thread-pool hop.
 
 ## Layer 1: the extension (`src/`)
 
-- `TuiInstance` (`src/manager.rs:30`, `frozen`): constructor `(command, args=None,
-  rows=None, cols=None, scrollback_lines=None)` spawns into a single process-wide
-  `tui::TuiManager` held in a `OnceLock` (`src/manager.rs:13`). Sync accessors
+- `TuiInstance` (`src/manager.rs:31`, `frozen`): constructor `(command, args=None,
+  rows=None, cols=None, scrollback_lines=None, env=None)` spawns into a single
+  process-wide `tui::TuiManager` held in a `OnceLock` (`src/manager.rs:13`).
+  `env` pairs (per-session identity/config) are applied before the crate-forced
+  `TERM`/`COLORTERM`, so those two always win. Sync accessors
   (`id`, `command`, `args`, `rows`, `cols`, `scrollback_limit`, `is_alive`,
   `exit_code`); async coroutines `write_async`, `read_viewport_async`,
   `read_scrollback_async`, `read_full_async`, `read_blocking_async`,
@@ -43,7 +45,7 @@ native asyncio coroutine bridged from a Rust future with no thread-pool hop.
 
 ## Layer 2: the Python API (`python/tui/__init__.py`)
 
-`Tui` (`__init__.py:524`) is the workhorse. Construction and the cached accessors
+`Tui` (`__init__.py:528`) is the workhorse. Construction and the cached accessors
 (`id`, `command`, `args`, `size`, `is_alive`, `exit_code`) are synchronous;
 everything else is a coroutine. Highlights:
 
@@ -52,13 +54,13 @@ everything else is a coroutine. Highlights:
 - Reads: `read(timeout=None)`, `viewport()`, `scrollback()`, `text()`,
   `snapshot(styled=True) -> Snapshot`, `chars() -> NDArray[uint32]`,
   `styled_cells() -> list[list[StyledCell]]`.
-- `wait_for(pattern, timeout) -> Snapshot` (`__init__.py:697`): poll until a
+- `wait_for(pattern, timeout) -> Snapshot` (`__init__.py:704`): poll until a
   substring, compiled `re.Pattern`, or `Snapshot` predicate matches; raises
   `WaitTimeout` on the deadline. (The returned snapshot is text-only; the poll
   loop skips the styling read.)
 - Lifecycle: `resize`, `wait(timeout)`, `kill`, `close`; `async with` calls
   `close` on exit.
-- `Tui.list_all()` (sync, `__init__.py:583`).
+- `Tui.list_all()` (sync, `__init__.py:590`).
 
 Value types: `Snapshot` (`__init__.py:343`, frozen: viewport, scrollback, size,
 styled cells; supports `str()`, `in`, `.text`/`.full_text`, and a colored
