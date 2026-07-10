@@ -83,13 +83,14 @@
       _target = mkOption {
         type = types.str;
         internal = true;
-        default =
-          if lib.hasPrefix "/" name
-          then name
-          else "/${name}";
         description = "Resolved absolute target path.";
       };
     };
+
+    config._target =
+      if lib.hasPrefix "/" name
+      then name
+      else "/${name}";
   });
 
   files = lib.attrValues cfg.files;
