@@ -39,7 +39,10 @@ def deepmerge($a; $b):
 # Compare managed-leaf path sets (never feeds a bad path to getpath), prune the
 # paths we dropped, and leave the live shape untouched at any path delpaths
 # cannot follow (try/catch) instead of aborting the activation.
-( [ $last | managedLeaves([]) ] ) as $lastPaths
+($last | if type == "array" then .[0] else . end) as $last
+| ($live | if type == "array" then .[0] else . end) as $live
+| ($new | if type == "array" then .[0] else . end) as $new
+| ( [ $last | managedLeaves([]) ] ) as $lastPaths
 | ( [ $new | managedLeaves([]) ] ) as $newPaths
 | ( reduce ($lastPaths - $newPaths)[] as $p
       ($live; . as $acc | try delpaths([$p]) catch $acc)

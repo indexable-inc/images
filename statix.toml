@@ -1,0 +1,7 @@
+# These are Home Manager composition roots with many independent option
+# assignments. Astlog still enforces the repository's semantic Nix rules;
+# Statix's repeated-key heuristic is not useful across module option paths.
+ignore = [
+  "users/andrewgazelka/profiles/darwin-home.nix",
+  "users/andrewgazelka/profiles/workstation.nix",
+]

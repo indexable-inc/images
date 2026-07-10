@@ -1,0 +1,67 @@
+name: Approve self-owned user changes
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/scripts/approve-user-change.sh
+      - .github/scripts/approve-user-change-test.sh
+      - .github/user-owners.json
+      - .github/workflows/approve-user-change.yml
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: approve-user-change-${{ github.event.pull_request.number }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout pull request
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Test approval policy
+        run: |
+          bash -n \
+            .github/scripts/approve-user-change.sh \
+            .github/scripts/approve-user-change-test.sh
+          shellcheck -x \
+            .github/scripts/approve-user-change.sh \
+            .github/scripts/approve-user-change-test.sh
+          .github/scripts/approve-user-change-test.sh
+
+  approve:
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      (github.event.action != 'edited' || github.event.changes.base != null)
+    permissions:
+      contents: read
+      pull-requests: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # pull_request_target supplies a write token, so only trusted base-branch
+      # code may run. Never change this ref to the pull request head.
+      - name: Checkout trusted policy
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Approve current commit when the author owns every path
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_AUTHOR_ID: ${{ github.event.pull_request.user.id }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: .github/scripts/approve-user-change.sh

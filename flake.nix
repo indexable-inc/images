@@ -409,6 +409,70 @@
         "aarch64-darwin"
       ] (system: raw.${system} // (linuxDarwinAliases.${system} or {}));
     packages = withDarwinAliases (collect "packages");
+    indexPackages = system: packages.${system};
+    personalConfigRoot = ./users/andrewgazelka/config;
+    personalOptionsModule = ./users/andrewgazelka/options.nix;
+    claudeCodeHomeModule = import ./packages/agent/home-manager/claude-code.nix {
+      inherit indexPackages;
+      promptModule = ./packages/agent/prompt;
+    };
+    personalServicesModule = import ./users/andrewgazelka/home.nix {
+      inherit indexPackages ix;
+      claudeCodeModule = claudeCodeHomeModule;
+      portableServicesModule = ix.portableServices.homeModule;
+    };
+    symphonyHomeModule = import ./packages/agent/symphony/home-module.nix {
+      inherit indexPackages ix;
+      portableServicesModule = ix.portableServices.homeModule;
+      beamvmModule = import ./packages/beamvm/home-module.nix {
+        inherit indexPackages ix;
+        portableServicesModule = ix.portableServices.homeModule;
+      };
+    };
+    personalWorkstationModule = import ./users/andrewgazelka/profiles/workstation.nix {
+      inherit indexPackages personalServicesModule ix;
+      configRoot = personalConfigRoot;
+      mutableJsonModule = ix.mutableJson.homeModule;
+      provenanceModule = import ./modules/home/provenance.nix {inherit (ix) provenance;};
+      optionsModule = personalOptionsModule;
+      indexSkillsSrc = paths.skills;
+    };
+    personalDarwinHomeModule = import ./users/andrewgazelka/profiles/darwin-home.nix {
+      inherit indexPackages ix;
+      configRoot = personalConfigRoot;
+      ghosttyModule = ./users/andrewgazelka/config/home/ghostty.nix;
+      raycastModule = ./modules/home/raycast.nix;
+      optionsModule = personalOptionsModule;
+      symphonyModule = symphonyHomeModule;
+    };
+    personalLightProfile = system:
+      home-manager.lib.homeManagerConfiguration {
+        pkgs = import nixpkgs {
+          inherit system;
+          config = {};
+        };
+        extraSpecialArgs = {
+          inputs = throw "light personal profiles must not access consumer inputs";
+          self = throw "light personal profiles must not access the consuming flake";
+          indexPackages = throw "light personal profiles must not access index packages";
+        };
+        modules = [
+          ./users/andrewgazelka/profiles/portable.nix
+          (import ./users/andrewgazelka/profiles/development.nix {
+            agentLua = ./modules/profiles/base/nvim/agent.lua;
+            configRoot = personalConfigRoot;
+          })
+          {
+            home = {
+              username = "profile-test";
+              homeDirectory =
+                if lib.hasSuffix "darwin" system
+                then "/Users/profile-test"
+                else "/home/profile-test";
+            };
+          }
+        ];
+      };
   in {
     lib = ix;
     inherit (ix) nixosModules;
@@ -447,10 +511,7 @@
       provenance = import ./modules/home/provenance.nix {inherit (ix) provenance;};
       # Agent CLI modules: Home Manager is the user-facing configuration
       # surface, while the package wrappers remain the implementation detail.
-      claude-code = import ./packages/agent/home-manager/claude-code.nix {
-        indexPackages = system: packages.${system};
-        promptModule = ./packages/agent/prompt;
-      };
+      claude-code = claudeCodeHomeModule;
       codex = import ./packages/agent/home-manager/codex.nix {
         indexPackages = system: packages.${system};
         promptModule = ./packages/agent/prompt;
@@ -460,15 +521,13 @@
       # sound helper, all as portable services. Closed over the per-system
       # flake packages so it resolves bossbar / minecraft-sound for the host it
       # runs on. See users/andrewgazelka/home.nix.
-      andrewgazelka = import ./users/andrewgazelka/home.nix {
-        indexPackages = system: packages.${system};
-        portableServicesModule = ix.portableServices.homeModule;
-        claudeCodeModule = import ./packages/agent/home-manager/claude-code.nix {
-          indexPackages = system: packages.${system};
-          promptModule = ./packages/agent/prompt;
-        };
-        inherit ix;
+      andrewgazelka-portable = ./users/andrewgazelka/profiles/portable.nix;
+      andrewgazelka-development = import ./users/andrewgazelka/profiles/development.nix {
+        agentLua = ./modules/profiles/base/nvim/plugins/agent.lua;
+        configRoot = personalConfigRoot;
       };
+      andrewgazelka-workstation = personalWorkstationModule;
+      andrewgazelka-darwin = personalDarwinHomeModule;
       # Reusable workstation module: draw one Minecraft boss bar per in-flight
       # GitHub Actions run across a set of repos (green = running, filled by
       # elapsed / average duration; purple = queued/unpicked). Import it and set
@@ -494,20 +553,7 @@
       # by composing portable-services. Mirrors the NixOS module's option
       # vocabulary; point `packDir` at a mutable checkout for hot-reloaded
       # workflows and skills. See packages/agent/symphony/home-module.nix.
-      symphony = import ./packages/agent/symphony/home-module.nix {
-        indexPackages = system: packages.${system};
-        portableServicesModule = ix.portableServices.homeModule;
-        # The beamvm runtime (services.symphony.runtime = "beamvm", the
-        # default) hosts the compiled release in the persistent VM; the
-        # module composes it directly so importing homeModules.symphony
-        # alone is enough.
-        beamvmModule = import ./packages/beamvm/home-module.nix {
-          indexPackages = system: packages.${system};
-          portableServicesModule = ix.portableServices.homeModule;
-          inherit ix;
-        };
-        inherit ix;
-      };
+      symphony = symphonyHomeModule;
       # Workstation-facing module: persistent BEAM VMs as user services with
       # the OTP applications they host declared in Nix. Updating an app
       # hot-swaps its code in the running VM (no restart, no dropped
@@ -522,7 +568,13 @@
     overlays.default = ix.overlay;
     templates = {};
     inherit packages;
-    checks = collect "checks";
+    checks = lib.mapAttrs (
+      system: systemChecks:
+        systemChecks
+        // {
+          personal-light-profile = (personalLightProfile system).activationPackage;
+        }
+    ) (collect "checks");
     # Sharded keying of the same check derivations for the memory-bounded CI
     # evaluator (the `.#check` gate and blast-radius); see lib/per-system.nix
     # (ENG-2201). Kept separate from `checks` because its per-package
