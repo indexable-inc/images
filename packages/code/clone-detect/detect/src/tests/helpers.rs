@@ -33,9 +33,13 @@ pub fn assert_no_overlapping_fragments(
         for (index, left) in group.fragments.iter().enumerate() {
             for right in group.fragments.iter().skip(index + 1) {
                 let same_file = left.file == right.file;
-                let byte_ranges_overlap = left.byte_range.start < right.byte_range.end
-                    && right.byte_range.start < left.byte_range.end;
-                let overlaps = same_file && byte_ranges_overlap;
+                let left_starts_before_right_ends =
+                    left.byte_range.start < right.byte_range.end;
+                let right_starts_before_left_ends =
+                    right.byte_range.start < left.byte_range.end;
+                let overlaps = same_file
+                    && left_starts_before_right_ends
+                    && right_starts_before_left_ends;
                 assert!(!overlaps, "clone group compared overlapping fragments: {group:?}");
             }
         }
