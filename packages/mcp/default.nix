@@ -844,12 +844,12 @@
 
   # The vmkit binary `vmkit` spawns. Darwin-only; referenced lazily so a Linux
   # mcp build never forces it.
-  vmkitBin = ix.rustWorkspace.units.binaries."vmkit";
+  vmkitBin = ix.rustWorkspace.units.binaries.vmkit;
 
   # The gcal binary the calendar tools spawn with --json: the CLI surface of
   # the google-calendar crate (packages/google/calendar), so the MCP binding
   # carries no calendar logic of its own (RFC 0003).
-  gcalBin = ix.rustWorkspace.units.binaries."gcal";
+  gcalBin = ix.rustWorkspace.units.binaries.gcal;
 
   # The Svelte 5 -> one-IIFE-bundle compiler the `svelte` module spawns
   # (IX_SVELTE_BUNDLE_BIN): esbuild + esbuild-svelte from the lockfile pin in

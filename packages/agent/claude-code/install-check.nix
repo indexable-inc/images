@@ -29,7 +29,7 @@
 }: ''
     runHook preInstallCheck
 
-    launcher=${ix.rustWorkspace.units.binaries."config-launch"}/bin/config-launch
+    launcher=${ix.rustWorkspace.units.binaries.config-launch}/bin/config-launch
     stub="$PWD/stub"
     printf '%s\n' '#!${runtimeShell}' 'printf "%s\n" "$@"' > "$stub"
     chmod +x "$stub"

@@ -400,7 +400,7 @@ in {
     # and the tailnet is the module's stated trust boundary, so the tailscale
     # interface is exactly where these ports may open. `tailscale0` is
     # tailscaled's default (and the fleet's) interface name.
-    networking.firewall.interfaces."tailscale0" = mkIf cfg.openFirewall {
+    networking.firewall.interfaces.tailscale0 = mkIf cfg.openFirewall {
       allowedTCPPorts =
         [
           cfg.execPort

@@ -1352,7 +1352,7 @@
           # header; a regression in the zig/SDK wiring fails here on x86_64-linux CI
           # rather than silently shipping a wrong-arch binary.
           cross-darwin-smoke = pkgs.runCommand "cross-darwin-smoke" {nativeBuildInputs = [pkgs.file];} ''
-            bin=${crossPackages."dag-runner-aarch64-apple-darwin"}/bin/dag-runner
+            bin=${crossPackages.dag-runner-aarch64-apple-darwin}/bin/dag-runner
             info=$(file -b "$bin")
             echo "$info"
             case "$info" in
@@ -1367,7 +1367,7 @@
           cross-darwin-web-monitor-smoke =
             pkgs.runCommand "cross-darwin-web-monitor-smoke" {nativeBuildInputs = [pkgs.file];}
             ''
-              pkg=${crossPackages."nix-web-monitor-aarch64-apple-darwin"}
+              pkg=${crossPackages.nix-web-monitor-aarch64-apple-darwin}
               bin=$pkg/bin/.nix-web-monitor-unwrapped
               info=$(file -b "$bin")
               echo "$info"

@@ -8,7 +8,7 @@
   multicore) and split the library ecosystem in two.
   */
   ocamlPackagesFor = pkgs: {
-    "latest" = pkgs.ocaml-ng.ocamlPackages_latest;
+    latest = pkgs.ocaml-ng.ocamlPackages_latest;
     "4.14" = pkgs.ocaml-ng.ocamlPackages_4_14;
     "5.1" = pkgs.ocaml-ng.ocamlPackages_5_1;
     "5.2" = pkgs.ocaml-ng.ocamlPackages_5_2;

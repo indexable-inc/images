@@ -59,7 +59,7 @@ let
     {
       strictDeps = true;
       nativeBuildInputs = [
-        ix.rustWorkspace.units.binaries."unibind-gen"
+        ix.rustWorkspace.units.binaries.unibind-gen
         pkgs.mypy
       ];
       meta.description = "unibind-gen py host files for the conformance surface, strictly type-checked";

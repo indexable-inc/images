@@ -17,7 +17,7 @@
     rustWorkspace.units.libraries.${libraryKey}
       or (throw "unibind.lib.build: the shared workspace graph has no library unit `${libraryKey}` for `${crate}`; the crate needs a cdylib target and a package.nix with inRustWorkspace");
 
-  genBin = rustWorkspace.units.binaries."unibind-gen";
+  genBin = rustWorkspace.units.binaries.unibind-gen;
 
   # npm's `cpu`/`libc` fields gate installation. The addon is host-built, so
   # stamp the arch of this build; a nixpkgs build is always glibc. The npm

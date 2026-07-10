@@ -604,7 +604,7 @@ in
       # into the @helper@ placeholder, then point the launcher at the spec.
       install -m644 ${launchSpec} $out/share/claude-code-launch-spec.json
       substituteInPlace $out/share/claude-code-launch-spec.json --subst-var-by helper "$helper"
-      makeBinaryWrapper ${ix.rustWorkspace.units.binaries."config-launch"}/bin/config-launch \
+      makeBinaryWrapper ${ix.rustWorkspace.units.binaries.config-launch}/bin/config-launch \
         $out/bin/${binName} \
         --inherit-argv0 \
         --set IX_LAUNCH_SPEC $out/share/claude-code-launch-spec.json
