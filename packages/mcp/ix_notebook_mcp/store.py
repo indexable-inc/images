@@ -1,13 +1,8 @@
-"""The durable execution log: one append-only SQLite database of every
-``python_exec`` run plus its captured output, written by the kernel-side runtime
-and read by the dashboard.
+"""Weave-backed execution store facade.
 
-This is the single source of truth (RFC: write a fact once, derive each view).
-The kernel process owns the writes (a job appends its output tail as it runs and
-its final status when it ends); the dashboard process only reads. Both open the
-same file by the ``IX_MCP_STORE`` path, so the two never share Python objects,
-only rows. WAL mode lets the reader see in-flight writes without blocking the
-writer.
+Public functions keep the historical ``fn(conn, ...)`` surface. ``conn`` is now a
+:class:`WeaveStore` handle. Durable writes become Weave facts; tier-3 mailbox
+state is accessed through the serve data API.
 """
 
 from __future__ import annotations
@@ -15,12 +10,18 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
+import hashlib
 import json
-import sqlite3
+import os
+import sys
+import threading
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -29,813 +30,715 @@ if TYPE_CHECKING:
     _P = ParamSpec("_P")
 _T = TypeVar("_T")
 
+_DEFAULT_WEAVE_URL = "http://127.0.0.1:7677"
+_DEFAULT_DATA_API = "http://127.0.0.1:8765"
+_BATCH = 500
+_QUEUE_MAX = 10_000
+_WARNED_OFF = False
+
+def _http_json(method: str, url: str, *, body: object = None, content: bytes | None = None) -> object:
+    headers: dict[str, str] = {}
+    data: bytes | None = content
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = Request(url, data=data, headers=headers, method=method)  # noqa: S310 - configured local/Weave endpoint
+    with urlopen(req, timeout=10.0) as resp:  # noqa: S310
+        raw = resp.read()
+    if not raw:
+        return None
+    return json.loads(raw.decode("utf-8"))
+
+
+def _http_bytes(method: str, url: str, *, content: bytes | None = None) -> bytes:
+    req = Request(url, data=content, method=method)  # noqa: S310 - configured local/Weave endpoint
+    with urlopen(req, timeout=10.0) as resp:  # noqa: S310
+        return resp.read()
+
 
 def _now() -> float:
     return time.time()
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS executions (
-    id          TEXT PRIMARY KEY,
-    name        TEXT,
-    code        TEXT NOT NULL,
-    status      TEXT NOT NULL,
-    started_at  REAL NOT NULL,
-    ended_at    REAL,
-    budget      REAL NOT NULL DEFAULT 15,
-    output      TEXT NOT NULL DEFAULT '',
-    result      TEXT,
-    error       TEXT,
-    line        INTEGER,
-    error_line  INTEGER,
-    outputs     TEXT NOT NULL DEFAULT '[]',
-    bindings    TEXT NOT NULL DEFAULT '{}',
-    kind        TEXT NOT NULL DEFAULT 'cell',
-    namespace   TEXT NOT NULL DEFAULT '[]',
-    topic       TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX IF NOT EXISTS executions_started ON executions (started_at);
 
--- Session checkpoints: the kernel's user namespace, serialized (dill) after
--- executions finish, so reopening this file restores state instantly instead of
--- re-running every cell. Only the newest row is kept (save_snapshot prunes), so
--- a long session never grows the file by stale checkpoints.
-CREATE TABLE IF NOT EXISTS snapshots (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at  REAL NOT NULL,
-    blob        BLOB NOT NULL,
-    names       TEXT NOT NULL DEFAULT '[]',
-    skipped     TEXT NOT NULL DEFAULT '[]'
-);
-
-CREATE TABLE IF NOT EXISTS cells (
-    id          TEXT PRIMARY KEY,
-    title       TEXT NOT NULL DEFAULT '',
-    position    INTEGER NOT NULL,
-    outputs     TEXT NOT NULL DEFAULT '[]',
-    updated_at  REAL NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS resources (
-    id          TEXT PRIMARY KEY,
-    title       TEXT NOT NULL,
-    kind        TEXT NOT NULL DEFAULT 'html',
-    html        TEXT NOT NULL DEFAULT '',
-    status      TEXT NOT NULL DEFAULT 'live',
-    execution_id TEXT NOT NULL DEFAULT '',
-    created_at  REAL NOT NULL,
-    updated_at  REAL NOT NULL
-);
-
--- This MCP session's identity: one singleton row (id = 0). Every run in this
--- store belongs to one session (one MCP client talking to one `ix-mcp serve`
--- process); the dashboard groups runs by it and lists each session by `name`.
--- `name` is the effective label (the user-set name, else a default derived from
--- the connecting client and the kernel's workdir); `client` is the raw client
--- identity for display. The kernel is the sole writer (see runtime.Session).
-CREATE TABLE IF NOT EXISTS session (
-    id          INTEGER PRIMARY KEY CHECK (id = 0),
-    name        TEXT NOT NULL DEFAULT '',
-    client      TEXT NOT NULL DEFAULT '',
-    updated_at  REAL NOT NULL
-);
-
--- Input channels: the address registry behind interactive resources. The kernel
--- opens a channel when the agent creates an `Input`/`ask` (the rendered HTML's
--- `ixSubmit` posts to this id), and closes it when the input is done. The
--- dashboard's `/api/input` write path is the only OTHER process that touches this
--- table, and only to READ it: a POST is accepted only for an `open` channel, so a
--- submission for a finished or never-created channel never enters the queue. The
--- id is NOT a secret (it rides in the HTML the read endpoints serve); it is just
--- an address. `/api/input` authorizes by the network boundary (see dashboard.py).
-CREATE TABLE IF NOT EXISTS channels (
-    id          TEXT PRIMARY KEY,
-    title       TEXT NOT NULL DEFAULT '',
-    status      TEXT NOT NULL DEFAULT 'open',
-    created_at  REAL NOT NULL,
-    updated_at  REAL NOT NULL
-);
-
--- Inputs: the user's submissions, an append-only queue from the browser to the
--- kernel. The dashboard's `/api/input` appends one row per submission; the
--- kernel runtime drains them on its flush tick, delivers each to the awaiting
--- `Channel`, and DELETEs it (the row is a transient message, not history), so the
--- table stays empty between submissions. `seq` orders delivery; `channel` joins
--- to `channels`. This is the one place the two processes have a writer each on
--- the same table family (server inserts, kernel deletes); WAL keeps them honest.
-CREATE TABLE IF NOT EXISTS inputs (
-    seq         INTEGER PRIMARY KEY AUTOINCREMENT,
-    channel     TEXT NOT NULL,
-    payload     TEXT NOT NULL,
-    created_at  REAL NOT NULL
-);
-CREATE INDEX IF NOT EXISTS inputs_channel ON inputs (channel, seq);
-
--- Outbox: kernel -> agent push queue behind the Claude Code channel. The kernel's
--- `notify()` appends one row per event; the MCP transport drains them on its poll
--- tick and emits each as a `notifications/claude/channel` MCP notification, so
--- kernel code can wake the connected agent session. Same transient-message
--- discipline as `inputs`: the drain DELETEs what it delivers, so the table stays
--- empty between events. `meta` is a JSON object of identifier-keyed strings (they
--- become attributes on the client's <channel> tag). `session` addresses the row:
--- '' is a broadcast every pump may deliver (explicit notify() -- pr_watch, user
--- watch loops); a session id restricts delivery to the MCP session that started
--- the work (job lifecycle events, issue #2165), so one session's routine job
--- completions never wake another session's agent. Undeliverable addressed rows
--- (their session is gone, or the transport has no pump) are pruned by age on
--- write rather than lingering forever.
-CREATE TABLE IF NOT EXISTS outbox (
-    seq         INTEGER PRIMARY KEY AUTOINCREMENT,
-    content     TEXT NOT NULL,
-    meta        TEXT NOT NULL DEFAULT '{}',
-    session     TEXT NOT NULL DEFAULT '',
-    created_at  REAL NOT NULL
-);
-
--- Resource events: the kernel/server -> browser stream behind interactive
--- resources. Action results and errors (kernel) and agent `reply` messages (MCP
--- server) append here; the dashboard's SSE endpoint streams rows to every page
--- subscribed to that resource. Append-only with age-based pruning rather than
--- delete-on-read, because several pages may subscribe to one resource and each
--- reads forward from its own seq.
-CREATE TABLE IF NOT EXISTS events (
-    seq         INTEGER PRIMARY KEY AUTOINCREMENT,
-    resource    TEXT NOT NULL,
-    kind        TEXT NOT NULL,
-    body        TEXT NOT NULL,
-    created_at  REAL NOT NULL
-);
-CREATE INDEX IF NOT EXISTS events_resource ON events (resource, seq);
-"""
+def _ms(seconds: float | None = None) -> int:
+    return round((seconds if seconds is not None else _now()) * 1000)
 
 
-def connect(path: str | Path) -> sqlite3.Connection:
-    """Open (creating if needed) the store. WAL so a reader never blocks the
-    writer and sees committed in-flight rows; ``busy_timeout`` so the rare
-    writer/writer overlap waits rather than raising ``database is locked``."""
-    # The store is shared across processes (kernel writes, dashboard reads), so a
-    # real file path is required. Guard None explicitly: sqlite3.connect(str(None))
-    # would otherwise silently create a database in a file literally named "None"
-    # in the cwd instead of failing. See indexable-inc/index#1100.
-    if path is None:
-        raise ValueError("store path is required (got None)")
-    conn = sqlite3.connect(str(path), timeout=5.0, isolation_level=None)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
-    conn.executescript(_SCHEMA)
-    _migrate(conn)
-    return conn
+def _sec(ms: object) -> float | None:
+    if ms is None or ms == "":
+        return None
+    return int(ms) / 1000.0
+
+
+def _stable8(path: str | Path) -> str:
+    # blake3 is not a workspace dependency in ix-mcp; sha256 gives a stable
+    # path-derived id without adding a persistence-only dependency.
+    return hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:8]
+
+
+def _entity(prefix: str, id: str) -> str:
+    return id if id.startswith(f"{prefix}:") else f"{prefix}:{id}"
+
+
+class _HashRef(str):
+    """Marks a value as a CAS blob reference so it rides as a typed hash."""
+
+
+def _api_value(value: object) -> dict:
+    # bool must be checked before int (bool is an int subclass).
+    if isinstance(value, _HashRef):
+        return {"t": "hash", "v": str(value)}
+    if isinstance(value, bool):
+        return {"t": "bool", "v": value}
+    if isinstance(value, int):
+        return {"t": "int", "v": value}
+    if isinstance(value, float):
+        return {"t": "float", "v": value}
+    return {"t": "str", "v": str(value)}
+
+
+def _unwrap(cell: object) -> object:
+    if isinstance(cell, dict) and "t" in cell and "v" in cell:
+        return cell["v"]
+    return cell
+
+
+def _json_blob(value: object) -> bytes:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+class WeaveStore:
+    def __init__(self, path: str | Path) -> None:
+        if path is None:
+            raise ValueError("store path is required (got None)")
+        self.path = str(path)
+        suffix = _stable8(path)
+        self.weave_url = os.environ.get("WEAVE_URL", _DEFAULT_WEAVE_URL).rstrip("/")
+        self.disabled = self.weave_url.lower() == "off"
+        self.agent = os.environ.get("IX_WEAVE_AGENT") or f"agent:{suffix}"
+        self.kernel = f"kernel:{suffix}"
+        self.mailbox_base = os.environ.get("IX_MCP_DATA_API_URL", _DEFAULT_DATA_API).rstrip("/")
+        self._queue: deque[dict] = deque(maxlen=_QUEUE_MAX)
+        self._cv = threading.Condition()
+        self._closed = False
+        self._inflight = False
+        self._thread: threading.Thread | None = None
+        self._blob_cache: dict[str, str] = {}
+        self._last_values: dict[tuple[str, str], Any] = {}
+        global _WARNED_OFF
+        if self.disabled:
+            if not _WARNED_OFF:
+                print("ix-mcp store: WEAVE_URL=off, persistence writes are disabled", file=sys.stderr)
+                _WARNED_OFF = True
+        else:
+            self._thread = threading.Thread(target=self._writer, name="ix-weave-writer", daemon=True)
+            self._thread.start()
+            now = _ms()
+            self._enqueue_facts([
+                (self.agent, "type", "agent"),
+                (self.agent, "label", self.agent.removeprefix("agent:")),
+                (self.agent, "client", "ix-mcp"),
+                (self.agent, "connected_ms", now),
+                (self.agent, "last_active_ms", now),
+                (self.kernel, "type", "kernel"),
+                (self.kernel, "transport", "mcp"),
+                (self.kernel, "pid", os.getpid()),
+                (self.agent, "on_kernel", self.kernel),
+            ])
+
+    def close(self) -> None:
+        # Best-effort drain so queued facts do not die with the process.
+        self.flush(timeout=5.0)
+        self._closed = True
+        with self._cv:
+            self._cv.notify_all()
+
+    def flush(self, timeout: float = 10.0) -> bool:
+        """Block until the write-behind queue is fully drained (or timeout)."""
+        if self.disabled:
+            return True
+        deadline = time.monotonic() + timeout
+        with self._cv:
+            while (self._queue or self._inflight) and time.monotonic() < deadline:
+                self._cv.wait(timeout=0.1)
+            return not self._queue and not self._inflight
+
+    def _enqueue(self, item: dict) -> None:
+        if self.disabled:
+            return
+        with self._cv:
+            if len(self._queue) == self._queue.maxlen:
+                print("ix-mcp store: write-behind cache full, dropping oldest fact", file=sys.stderr)
+            self._queue.append(item)
+            self._cv.notify()
+
+    def _enqueue_facts(self, facts: list[tuple[str, str, Any]]) -> None:
+        if not facts:
+            return
+        facts = [*facts, (self.agent, "last_active_ms", _ms())]
+        for entity, attr, value in facts:
+            key = (entity, attr)
+            if self._last_values.get(key) == value:
+                continue
+            self._last_values[key] = value
+            self._enqueue({"fact": {"entity": _api_value(entity), "attr": attr, "value": _api_value(value)}})
+
+    def _enqueue_blob_fact(self, entity: str, attr: str, data: bytes) -> None:
+        """Queue one (entity, attr, <hash of data>) fact whose CAS put is
+        deferred to the writer thread (see _resolve_blob_item). The enqueue is
+        a plain list append, so bulk payloads (pty chunks) never block the
+        caller on a synchronous /api/blob round trip; FIFO keeps journal seq =
+        enqueue order. Deliberately NOT routed through _enqueue_facts: its
+        last-value dedupe would eat a repeated identical chunk, and replay
+        needs every flush."""
+        if self.disabled:
+            return
+        self._enqueue({"blob_fact": {"entity": entity, "attr": attr, "data": data}})
+
+    def put_blob(self, data: bytes) -> _HashRef:
+        if self.disabled:
+            return _HashRef(hashlib.sha256(data).hexdigest())
+        digest = hashlib.sha256(data).hexdigest()
+        cached = self._blob_cache.get(digest)
+        if cached:
+            return _HashRef(cached)
+        h = str(_http_json("POST", f"{self.weave_url}/api/blob", content=data)["hash"])
+        self._blob_cache[digest] = h
+        return _HashRef(h)
+
+    def get_blob(self, hash_: str) -> bytes:
+        if self.disabled or not hash_:
+            return b""
+        return _http_bytes("GET", f"{self.weave_url}/api/blob/{quote(hash_, safe='')}")
+
+    def _resolve_blob_item(self, item: dict) -> dict:
+        """blob_fact items defer their CAS put to the writer thread: PUT the
+        bytes (the server computes the blake3 hash) and rewrite the item into
+        a plain fact carrying the returned hash ref. A put failure raises into
+        _writer's retry path, which requeues the ORIGINAL items; put_blob's
+        digest cache makes the retry cheap."""
+        blob = item.get("blob_fact")
+        if blob is None:
+            return item
+        h = self.put_blob(blob["data"])
+        return {"fact": {"entity": _api_value(blob["entity"]), "attr": blob["attr"], "value": _api_value(h)}}
+
+    def _writer(self) -> None:
+        backoff = 0.25
+        while True:
+            with self._cv:
+                while not self._queue and not self._closed:
+                    self._cv.wait(timeout=1.0)
+                if not self._queue and self._closed:
+                    return
+                batch = [self._queue.popleft() for _ in range(min(_BATCH, len(self._queue)))]
+                self._inflight = True
+            try:
+                body = [self._resolve_blob_item(item) for item in batch]
+                _http_json("POST", f"{self.weave_url}/api/facts", body=body if len(body) != 1 else body[0])
+                backoff = 0.25
+                with self._cv:
+                    self._inflight = False
+                    self._cv.notify_all()
+            except Exception as exc:
+                print(f"ix-mcp store: weave write failed, retrying: {exc}", file=sys.stderr)
+                with self._cv:
+                    for item in reversed(batch):
+                        self._queue.appendleft(item)
+                    self._inflight = False
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 5.0)
+
+    def query(self, program: str, *, as_of: int | None = None) -> dict:
+        # Sync reads are only used from runtime worker paths or AsyncConn executor
+        # threads; they intentionally use blocking stdlib HTTP off the event loop.
+        if self.disabled:
+            return {"vars": [], "rows": [], "as_of": None}
+        # Read-your-writes: the sqlite store was synchronous, and callers
+        # (session restore, replay anchoring) depend on seeing their own
+        # writes. Drain the write-behind queue before answering.
+        self.flush(timeout=10.0)
+        payload: dict[str, Any] = {"program": program}
+        if as_of is not None:
+            payload["as_of"] = as_of
+        return _http_json("POST", f"{self.weave_url}/api/query", body=payload)
+
+    def mailbox(self, method: str, path: str, *, json_body: object = None) -> object:
+        try:
+            return _http_json(method, f"{self.mailbox_base}{path}", body=json_body)
+        except Exception:
+            from .mailbox import get_mailbox
+            box = get_mailbox()
+            if method == "POST" and path == "/api/input":
+                channel = str(json_body["channel"])
+                if not box.channel_open(channel):
+                    raise ValueError("no such open channel") from None
+                box.add_input(channel=channel, payload=json.dumps(json_body["payload"]))
+                return {"ok": True}
+            if method == "POST" and path == "/api/mailbox/outbox":
+                box.add_outbox(content=str(json_body.get("content", "")), meta=str(json_body.get("meta", "{}")), session=str(json_body.get("session", "")))
+                return {"ok": True}
+            if method == "POST" and path == "/api/mailbox/inputs/delete":
+                box.delete_inputs([int(s) for s in (json_body or {}).get("seqs", [])])
+                return {"ok": True}
+            if method == "GET" and path.startswith("/api/mailbox/inputs"):
+                rows = box.pending_inputs()
+                if "consume=1" in path:
+                    box.delete_inputs([row["seq"] for row in rows])
+                return rows
+            if method == "POST" and path == "/api/mailbox/events":
+                box.add_event(resource=str(json_body["resource"]), kind=str(json_body["kind"]), body=str(json_body["body"]))
+                return {"ok": True}
+            if method == "POST" and path == "/api/mailbox/channels":
+                if json_body.get("op") == "open":
+                    box.open_channel(id=str(json_body["id"]), title=str(json_body.get("title", "")))
+                else:
+                    box.close_channel(id=str(json_body["id"]))
+                return {"ok": True}
+            if method == "GET" and path.startswith("/api/mailbox/channels/"):
+                return {"open": box.channel_open(path.rsplit("/", 1)[-1])}
+            if method == "POST" and path == "/api/mailbox/reset":
+                box.reset()
+                return {"ok": True}
+            raise
+
+
+def connect(path: str | Path) -> WeaveStore:
+    return WeaveStore(path)
 
 
 class AsyncConn:
-    """The store for an asyncio host: the same file, every call confined to one
-    worker thread.
-
-    Serve-side consumers (the data API, the pane bridge, the outbox pump, the
-    reply tool) share the MCP transport's event loop. A store call there is
-    synchronous SQLite, and once a session's store carries multi-MB output rows
-    the blob reads block the loop long enough to starve MCP stdio -- from the
-    client that is indistinguishable from a kernel wedge (index#2348). Confining
-    the connection to a private single-thread executor makes a slow read cost
-    latency on its own caller only, and serializes access exactly as the shared
-    loop used to. The connection opens lazily on the worker thread itself, so
-    sqlite3's ``check_same_thread`` guard keeps enforcing the confinement.
-    """
-
     def __init__(self, path: str | Path) -> None:
-        # The connection opens lazily on the worker thread, so re-run connect()'s
-        # eager None guard here: a missing path must fail at construction (where
-        # `serve` startup surfaces it), not on the first request.
         if path is None:
             raise ValueError("store path is required (got None)")
         self._path = path
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ix-store")
-        self._conn: sqlite3.Connection | None = None
+        self._conn: WeaveStore | None = None
 
-    def _bound(self) -> sqlite3.Connection:
-        # Worker-thread only: the single-worker pool makes this race-free.
+    def _bound(self) -> WeaveStore:
         if self._conn is None:
             self._conn = connect(self._path)
         return self._conn
 
-    def _invoke(
-        self,
-        fn: Callable[Concatenate[sqlite3.Connection, _P], _T],
-        args: tuple,
-        kwargs: dict,
-    ) -> _T:
+    def _invoke(self, fn: Callable[Concatenate[WeaveStore, _P], _T], args: tuple, kwargs: dict) -> _T:
         return fn(self._bound(), *args, **kwargs)
 
-    async def run(
-        self,
-        fn: Callable[Concatenate[sqlite3.Connection, _P], _T],
-        /,
-        *args: _P.args,
-        **kwargs: _P.kwargs,
-    ) -> _T:
-        """Run ``fn(conn, *args, **kwargs)`` on the store's worker thread."""
+    async def run(self, fn: Callable[Concatenate[WeaveStore, _P], _T], /, *args: _P.args, **kwargs: _P.kwargs) -> _T:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            self._pool, functools.partial(self._invoke, fn, args, kwargs)
-        )
+        return await loop.run_in_executor(self._pool, functools.partial(self._invoke, fn, args, kwargs))
 
     async def close(self) -> None:
         def _close() -> None:
             if self._conn is not None:
                 self._conn.close()
                 self._conn = None
-
         await asyncio.get_running_loop().run_in_executor(self._pool, _close)
         self._pool.shutdown(wait=False)
 
 
-def _migrate(conn: sqlite3.Connection) -> None:
-    """Add columns introduced after a store may have first been created. ``CREATE
-    TABLE IF NOT EXISTS`` never alters an existing table, so a store written by an
-    older build is missing newer columns; add each idempotently."""
-    have = {row[1] for row in conn.execute("PRAGMA table_info(executions)")}
-    # The kernel and the dashboard open the store from two processes at startup,
-    # so both can see a column missing and race to add it; a duplicate-column
-    # error means the other won, which is fine. This is a logical error, not
-    # SQLITE_BUSY, so busy_timeout does not cover it.
-    if "bindings" not in have:
-        with contextlib.suppress(sqlite3.OperationalError):
-            conn.execute("ALTER TABLE executions ADD COLUMN bindings TEXT NOT NULL DEFAULT '{}'")
-    if "budget" not in have:
-        with contextlib.suppress(sqlite3.OperationalError):
-            conn.execute("ALTER TABLE executions ADD COLUMN budget REAL NOT NULL DEFAULT 15")
-    for column in ("line", "error_line"):
-        if column not in have:
-            with contextlib.suppress(sqlite3.OperationalError):
-                conn.execute(f"ALTER TABLE executions ADD COLUMN {column} INTEGER")
-    if "kind" not in have:
-        with contextlib.suppress(sqlite3.OperationalError):
-            conn.execute("ALTER TABLE executions ADD COLUMN kind TEXT NOT NULL DEFAULT 'cell'")
-    if "namespace" not in have:
-        with contextlib.suppress(sqlite3.OperationalError):
-            conn.execute("ALTER TABLE executions ADD COLUMN namespace TEXT NOT NULL DEFAULT '[]'")
-    if "topic" not in have:
-        with contextlib.suppress(sqlite3.OperationalError):
-            conn.execute("ALTER TABLE executions ADD COLUMN topic TEXT NOT NULL DEFAULT ''")
-    resource_have = {row[1] for row in conn.execute("PRAGMA table_info(resources)")}
-    if "execution_id" not in resource_have:
-        with contextlib.suppress(sqlite3.OperationalError):
-            conn.execute("ALTER TABLE resources ADD COLUMN execution_id TEXT NOT NULL DEFAULT ''")
-    outbox_have = {row[1] for row in conn.execute("PRAGMA table_info(outbox)")}
-    if "session" not in outbox_have:
-        with contextlib.suppress(sqlite3.OperationalError):
-            conn.execute("ALTER TABLE outbox ADD COLUMN session TEXT NOT NULL DEFAULT ''")
+def _blob(conn: WeaveStore, value: object) -> _HashRef:
+    return conn.put_blob(_json_blob(value))
 
 
-def start(
-    conn: sqlite3.Connection,
-    *,
-    id: str,
-    name: str,
-    code: str,
-    started_at: float,
-    budget: float = 15.0,
-    kind: str = "cell",
-    topic: str = "",
-) -> None:
-    conn.execute(
-        "INSERT OR REPLACE INTO executions (id, name, code, status, started_at, budget, output, kind, topic) "
-        "VALUES (?, ?, ?, 'running', ?, ?, '', ?, ?)",
-        (id, name, code, started_at, budget, kind, topic),
-    )
+def _blob_text(conn: WeaveStore, text: str) -> _HashRef:
+    return conn.put_blob(text.encode("utf-8"))
 
 
-def rename(conn: sqlite3.Connection, *, id: str, name: str) -> None:
-    """Update the display name for an execution already in the store."""
-    conn.execute("UPDATE executions SET name = ? WHERE id = ?", (name, id))
-
-
-def update_output(
-    conn: sqlite3.Connection,
-    id: str,
-    output: str,
-    outputs: list | None = None,
-    *,
-    line: int | None = None,
-) -> None:
-    """Persist a running job's live output and the cell ``line`` it is executing
-    right now (the dashboard's live line highlight; None clears it). When
-    ``outputs`` is given (rich display bundles captured so far), update that
-    column too so the dashboard can show a long job's in-progress tables/images,
-    not only its text."""
-    if outputs is None:
-        conn.execute(
-            "UPDATE executions SET output = ?, line = ? WHERE id = ?", (output, line, id)
-        )
-    else:
-        conn.execute(
-            "UPDATE executions SET output = ?, line = ?, outputs = ? WHERE id = ?",
-            (output, line, json.dumps(outputs), id),
-        )
-
-
-def finish(
-    conn: sqlite3.Connection,
-    *,
-    id: str,
-    status: str,
-    ended_at: float,
-    output: str,
-    result: str | None,
-    error: str | None,
-    error_line: int | None = None,
-    outputs: list | None = None,
-    bindings: dict | None = None,
-    namespace: list | None = None,
-) -> None:
-    # `line` (the live executing line) is cleared: a finished job has no current
-    # line, only -- when it failed -- the `error_line` it failed on. `namespace`
-    # is the kernel's user globals as of this finish; the newest one is the live
-    # namespace the dashboard's namespace pane shows.
-    conn.execute(
-        "UPDATE executions SET status = ?, ended_at = ?, output = ?, result = ?, error = ?, "
-        "error_line = ?, line = NULL, outputs = ?, bindings = ?, namespace = ? WHERE id = ?",
-        (
-            status,
-            ended_at,
-            output,
-            result,
-            error,
-            error_line,
-            json.dumps(outputs or []),
-            json.dumps(bindings or {}),
-            json.dumps(namespace or []),
-            id,
-        ),
-    )
-
-
-# The execution columns every reader projects, in one place so `recent` and
-# `get` return the identical shape (the embed contract in feed.py depends on it).
-_EXEC_COLUMNS = (
-    "id, name, code, status, started_at, ended_at, budget, output, result, error, "
-    "line, error_line, outputs, bindings, kind, topic"
-)
-
-
-def _exec_row(row: sqlite3.Row) -> dict:
-    """One execution row as a plain dict with its JSON columns decoded."""
-    d = dict(row)
-    d["outputs"] = json.loads(d.get("outputs") or "[]")
-    d["bindings"] = json.loads(d.get("bindings") or "{}")
-    return d
-
-
-def recent(conn: sqlite3.Connection, limit: int = 100) -> list[dict]:
-    """The most recent executions, newest first, as plain dicts for the dashboard."""
-    conn.row_factory = sqlite3.Row
-    # Running jobs sort first so a long-running job is never dropped by the limit
-    # (a finished-jobs backlog could otherwise push it past LIMIT); then newest.
-    rows = conn.execute(
-        f"SELECT {_EXEC_COLUMNS} "  # noqa: S608 -- _EXEC_COLUMNS is a module-level constant, not user input
-        "FROM executions ORDER BY (status = 'running') DESC, started_at DESC LIMIT ?",
-        (limit,),
-    ).fetchall()
-    return [_exec_row(r) for r in rows]
-
-
-def latest_namespace(conn: sqlite3.Connection) -> list[dict]:
-    """The kernel's user globals as of the most recently *finished* run — the live
-    namespace the dashboard's namespace pane shows.
-
-    Reads the newest execution with an ``ended_at`` (a running job has not written
-    its namespace yet, so it is excluded), regardless of whether that namespace is
-    empty. Reading the newest finished run rather than the newest *non-empty* one
-    is what keeps the pane honest: after a run clears the namespace (a reset, or
-    `del`-ing the last variable) the latest finished run records ``[]`` and the
-    pane drops, instead of pinning the last non-empty snapshot as stale data.
-    Empty before any run finishes."""
-    conn.row_factory = sqlite3.Row
-    row = conn.execute(
-        "SELECT namespace FROM executions "
-        "WHERE ended_at IS NOT NULL "
-        "ORDER BY ended_at DESC LIMIT 1"
-    ).fetchone()
-    if row is None:
-        return []
+def _load_json_blob(conn: WeaveStore, hash_: str, default: object) -> object:
+    if not hash_:
+        return default
     try:
-        return json.loads(row["namespace"] or "[]")
-    except (ValueError, TypeError):
-        return []
-
-
-def get(conn: sqlite3.Connection, id: str) -> dict | None:
-    """One execution by id (or None), same shape as a `recent` row. An embedder
-    joins this to the ``jobs['<id>']`` a ``python_exec`` tool result already names,
-    to render that run's rich outputs inline with the tool call."""
-    conn.row_factory = sqlite3.Row
-    row = conn.execute(
-        f"SELECT {_EXEC_COLUMNS} FROM executions WHERE id = ?", (id,)  # noqa: S608 -- _EXEC_COLUMNS is a module-level constant, not user input
-    ).fetchone()
-    return _exec_row(row) if row is not None else None
-
-
-# --------------------------------------------------------------------------- #
-# Session: this server's identity, grouping every run in the store.
-# --------------------------------------------------------------------------- #
-
-
-def set_session(conn: sqlite3.Connection, *, name: str, client: str) -> None:
-    """Write this session's effective label and client identity (the singleton
-    id-0 row). The kernel runtime is the sole writer; the dashboard reads it to
-    label the session in its selector."""
-    conn.execute(
-        "INSERT INTO session (id, name, client, updated_at) VALUES (0, ?, ?, ?) "
-        "ON CONFLICT(id) DO UPDATE SET "
-        "name = excluded.name, client = excluded.client, updated_at = excluded.updated_at",
-        (name, client, _now()),
-    )
-
-
-def get_session(conn: sqlite3.Connection) -> dict | None:
-    """This session's ``{name, client, updated_at}``, or None before it is set."""
-    conn.row_factory = sqlite3.Row
-    row = conn.execute(
-        "SELECT name, client, updated_at FROM session WHERE id = 0"
-    ).fetchone()
-    return dict(row) if row is not None else None
-
-
-# --------------------------------------------------------------------------- #
-# Cells: the agent's curated presentation pane.
-#
-# Unlike executions (append-only history) and resources (live, self-updating
-# views), cells are whatever the agent chooses to PRESENT: an ordered highlight
-# reel it rebuilds as the session evolves. The kernel mirrors the whole set on
-# change (it is small and order matters), so the store always holds the current
-# presentation and the dashboard just lists it.
-# --------------------------------------------------------------------------- #
-
-
-def replace_cells(conn: sqlite3.Connection, items: list[dict]) -> None:
-    """Replace the presentation with ``items`` (each ``{id, title, position,
-    outputs}``) in one transaction, so a reader never sees a half-written set."""
-    rows = [
-        (it["id"], it.get("title", ""), it["position"], json.dumps(it.get("outputs") or []), _now())
-        for it in items
-    ]
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        conn.execute("DELETE FROM cells")
-        if rows:
-            conn.executemany(
-                "INSERT INTO cells (id, title, position, outputs, updated_at) VALUES (?, ?, ?, ?, ?)",
-                rows,
-            )
-        conn.execute("COMMIT")
+        return json.loads(conn.get_blob(hash_).decode("utf-8"))
     except Exception:
-        conn.execute("ROLLBACK")
-        raise
+        return default
 
 
-def cells(conn: sqlite3.Connection) -> list[dict]:
-    """The current presentation, in display order, as plain dicts."""
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT id, title, position, outputs, updated_at FROM cells ORDER BY position ASC"
-    ).fetchall()
+def _load_text_blob(conn: WeaveStore, hash_: str) -> str:
+    if not hash_:
+        return ""
+    try:
+        return conn.get_blob(hash_).decode("utf-8")
+    except Exception:
+        return ""
+
+
+def _rows(result: dict) -> list[dict]:
+    vars_ = result.get("vars") or []
     out = []
-    for r in rows:
-        d = dict(r)
-        d["outputs"] = json.loads(d.get("outputs") or "[]")
-        out.append(d)
+    for row in result.get("rows") or []:
+        if isinstance(row, dict):
+            out.append({k: _unwrap(v) for k, v in row.items()})
+        else:
+            out.append({k: _unwrap(v) for k, v in zip(vars_, row, strict=False)})
     return out
 
 
-# --------------------------------------------------------------------------- #
-# Resources: live, self-updating views (a Tui's screen, a custom HTML widget).
-#
-# A resource is the long-lived counterpart to an execution: an execution is a
-# finished fact (one row, written once and amended to 'done'), while a resource
-# is a *living* thing the kernel keeps re-rendering to HTML for as long as it is
-# alive. The kernel upserts the latest HTML each flush tick and flips status to
-# 'closed' when the underlying object goes away; the dashboard sidebar reads the
-# still-live rows. Same single-writer / many-reader split as executions.
-# --------------------------------------------------------------------------- #
+def _pivot(conn: WeaveStore, program: str) -> dict[str, dict[str, Any]]:
+    """Run a `?- ... latest(E, A, V).` program and fold rows into
+    {entity: {attr: value}} - one round trip fetches every attribute,
+    optional attrs simply absent (a wide datalog join would drop rows)."""
+    entities: dict[str, dict[str, Any]] = {}
+    for row in _rows(conn.query(program)):
+        ent = str(row.get("E") or "")
+        if not ent:
+            continue
+        entities.setdefault(ent, {})[str(row.get("A"))] = row.get("V")
+    return entities
 
 
-def upsert_resource(
-    conn: sqlite3.Connection,
-    *,
-    id: str,
-    title: str,
-    kind: str,
-    html: str,
-    status: str,
-    created_at: float,
-    updated_at: float,
-    execution_id: str = "",
-) -> None:
-    """Insert a resource or refresh its rendered HTML/status in place."""
-    conn.execute(
-        "INSERT INTO resources (id, title, kind, html, status, execution_id, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-        "ON CONFLICT(id) DO UPDATE SET "
-        "title = excluded.title, kind = excluded.kind, html = excluded.html, "
-        "status = excluded.status, execution_id = excluded.execution_id, updated_at = excluded.updated_at",
-        (id, title, kind, html, status, execution_id, created_at, updated_at),
-    )
+def _children(conn: WeaveStore, types: tuple[str, ...]) -> dict[str, dict[str, Any]]:
+    attrs = _pivot(conn, f"?- child_of(E, {conn.agent}), latest(E, A, V).")
+    return {ent: a for ent, a in attrs.items() if a.get("type") in types}
 
 
-def close_resource(conn: sqlite3.Connection, *, id: str, updated_at: float) -> None:
-    """Mark a resource closed so it drops out of the live listings. The row is
-    kept (final HTML included) so `resource_live` can refuse a late reply with a
-    precise error instead of a not-found."""
-    conn.execute(
-        "UPDATE resources SET status = 'closed', updated_at = ? WHERE id = ?",
-        (updated_at, id),
-    )
+def _attrs_of(conn: WeaveStore, ent: str) -> dict[str, Any]:
+    """All latest attrs of one entity (the entity is a query constant, so
+    rows carry only A and V)."""
+    attrs: dict[str, Any] = {}
+    for row in _rows(conn.query(f"?- latest({ent}, A, V).")):
+        attrs[str(row.get("A"))] = row.get("V")
+    return attrs
 
 
-# --------------------------------------------------------------------------- #
-# Channels + inputs: the browser -> kernel write path behind interactive
-# resources. The kernel owns the `channels` lifecycle (open on create, closed on
-# done); the dashboard's `/api/input` reads `channels` to authorize a submission
-# and appends to `inputs`; the kernel drains `inputs` on its flush tick. See the
-# schema comments for the trust model (the channel id is a bearer capability).
-# --------------------------------------------------------------------------- #
+def _exec_from_attrs(conn: WeaveStore, ent: str, a: dict[str, Any]) -> dict:
+    return {
+        "id": str(ent).split(":", 1)[-1],
+        "name": a.get("desc") or "",
+        "code": _load_text_blob(conn, a.get("code") or ""),
+        "status": a.get("status") or "running",
+        "started_at": _sec(a.get("started_ms")),
+        "ended_at": _sec(a.get("ended_ms")),
+        "budget": float(a.get("budget") or 15.0),
+        "output": a.get("last_output") or "",
+        "result": _load_text_blob(conn, a["result"]) if a.get("result") else None,
+        "error": a.get("error"),
+        # The live line is meaningful only while running (derived, not
+        # cleared by a write: truth is derived, never stored - I2).
+        "line": a.get("line") if a.get("status") == "running" else None,
+        "error_line": a.get("error_line"),
+        "outputs": _load_json_blob(conn, a.get("outputs") or "", []),
+        "bindings": _load_json_blob(conn, a.get("bindings") or "", {}),
+        "kind": a.get("kind") or "cell",
+        "topic": a.get("topic") or "",
+    }
 
 
-def open_channel(conn: sqlite3.Connection, *, id: str, title: str) -> None:
-    """Open (or re-open) an input channel so `/api/input` accepts submissions for
-    it. Idempotent: re-opening a known id refreshes its title and `open` status."""
-    now = _now()
-    conn.execute(
-        "INSERT INTO channels (id, title, status, created_at, updated_at) "
-        "VALUES (?, ?, 'open', ?, ?) "
-        "ON CONFLICT(id) DO UPDATE SET title = excluded.title, status = 'open', "
-        "updated_at = excluded.updated_at",
-        (id, title, now, now),
-    )
+def start(conn: WeaveStore, *, id: str, name: str, code: str, started_at: float, budget: float = 15.0, kind: str = "cell", topic: str = "") -> None:
+    ent = _entity("run", id) if kind != "spawn" else _entity("proc", id)
+    conn._enqueue_facts([
+        (ent, "type", "process" if kind == "spawn" else "run"),
+        (ent, "child_of", conn.agent),
+        (ent, "on_kernel", conn.kernel),
+        (ent, "verb", "python_exec"),
+        (ent, "desc", name),
+        (ent, "topic", topic),
+        (ent, "code", _blob_text(conn, code)),
+        (ent, "status", "running"),
+        (ent, "started_ms", _ms(started_at)),
+        (ent, "budget", budget),
+        (ent, "kind", kind),
+    ])
 
 
-def close_channel(conn: sqlite3.Connection, *, id: str) -> None:
-    """Close a channel so `/api/input` rejects further submissions, and drop any
-    of its still-undelivered inputs (no awaiter remains to read them)."""
-    conn.execute(
-        "UPDATE channels SET status = 'closed', updated_at = ? WHERE id = ?", (_now(), id)
-    )
-    conn.execute("DELETE FROM inputs WHERE channel = ?", (id,))
+def rename(conn: WeaveStore, *, id: str, name: str) -> None:
+    conn._enqueue_facts([(_entity("run", id), "desc", name), (_entity("proc", id), "desc", name)])
 
 
-def channel_open(conn: sqlite3.Connection, id: str) -> bool:
-    """Whether ``id`` names a channel currently accepting input. The dashboard's
-    `/api/input` gate: an unknown or closed id is refused (so a submission for a
-    finished or never-created channel never enters the queue)."""
-    row = conn.execute("SELECT status FROM channels WHERE id = ?", (id,)).fetchone()
-    return row is not None and row[0] == "open"
+def update_output(conn: WeaveStore, id: str, output: str, outputs: list | None = None, *, line: int | None = None) -> None:
+    preview = output[-200:] if output else ""
+    facts: list[tuple[str, str, Any]] = [(_entity("run", id), "last_output", preview)]
+    if line is not None:
+        facts.append((_entity("run", id), "line", line))
+    if outputs is not None:
+        facts.append((_entity("run", id), "outputs", _blob(conn, outputs)))
+    conn._enqueue_facts(facts)
 
 
-def add_input(conn: sqlite3.Connection, *, channel: str, payload: str) -> None:
-    """Append one user submission (a JSON ``payload`` string) for ``channel``. The
-    dashboard is the sole inserter; the kernel drains and deletes."""
-    conn.execute(
-        "INSERT INTO inputs (channel, payload, created_at) VALUES (?, ?, ?)",
-        (channel, payload, _now()),
-    )
+def stream_open(conn: WeaveStore, *, id: str, kind: str = "cell") -> str:
+    """Mint the pty_stream entity for one run/process (weave2 n-pty; schema.dl
+    "PTY/CAS stream shapes"): (S, type, pty_stream) + (S, child_of, parent),
+    parent picked exactly like start() so the stream tombstones with its run.
+    Chunks carry no seq attr - the journal seq of each chunk fact anchors
+    replay order. Returns the stream entity id."""
+    ent = _entity("pty-stream", id)
+    parent = _entity("run", id) if kind != "spawn" else _entity("proc", id)
+    conn._enqueue_facts([(ent, "type", "pty_stream"), (ent, "child_of", parent)])
+    return ent
 
 
-def pending_inputs(conn: sqlite3.Connection) -> list[dict]:
-    """Every queued submission, oldest first, as ``{seq, channel, payload}`` dicts.
-    The kernel reads these on its flush tick, delivers each to the matching live
-    channel, and calls :func:`delete_inputs` with the seqs it handled."""
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT seq, channel, payload FROM inputs ORDER BY seq ASC"
-    ).fetchall()
-    return [dict(r) for r in rows]
+def stream_chunk(conn: WeaveStore, stream: str, data: bytes) -> None:
+    """One flushed output range: bytes ride CAS, the stream gets exactly one
+    (S, chunk, <hash>) fact (cardinality many, never deduped)."""
+    if data:
+        conn._enqueue_blob_fact(stream, "chunk", data)
 
 
-def delete_inputs(conn: sqlite3.Connection, seqs: list[int]) -> None:
-    """Remove the input rows the kernel just delivered (by ``seq``), so each
-    submission is delivered exactly once and the queue stays empty between them."""
-    if not seqs:
-        return
-    placeholders = ",".join("?" for _ in seqs)
-    conn.execute(f"DELETE FROM inputs WHERE seq IN ({placeholders})", seqs)  # noqa: S608 -- placeholders are bound params, seqs are the values
+def stream_snapshot(conn: WeaveStore, stream: str, data: bytes) -> None:
+    """Periodic emulator-state snapshot: (S, snapshot, <hash>). Optional - the
+    replay renderer treats a stream with no snapshots as replay-from-start."""
+    if data:
+        conn._enqueue_blob_fact(stream, "snapshot", data)
 
 
-# --------------------------------------------------------------------------- #
-# Outbox + events: the kernel -> agent and kernel/server -> browser push paths
-# behind the Claude Code channel and interactive resource actions. The kernel
-# writes `outbox` (notify()) and `events` (action results); the MCP transport
-# drains `outbox` into channel notifications; the MCP `reply` tool writes
-# `events`; the dashboard's SSE endpoint reads `events`.
-# --------------------------------------------------------------------------- #
-
-# Events older than this are pruned on write. The stream is a live feed, not
-# history: a page subscribes and reads forward, so a row only matters for as long
-# as a subscriber might still be catching up on a slow poll tick.
-_EVENT_MAX_AGE_SECONDS = 3600.0
-
-
-# Outbox rows older than this are pruned on write. A drained transport never
-# lets a deliverable row age this far (the pump polls sub-second); the cap only
-# reaps rows addressed to a session nothing serves (an HTTP session -- that
-# transport has no channel pump -- or a session that disconnected), so an
-# addressed queue cannot grow the store without bound.
-_OUTBOX_MAX_AGE_SECONDS = 3600.0
+def finish(conn: WeaveStore, *, id: str, status: str, ended_at: float, output: str, result: str | None, error: str | None, error_line: int | None = None, outputs: list | None = None, bindings: dict | None = None, namespace: list | None = None) -> None:
+    ent = _entity("run", id)
+    ended = _ms(ended_at)
+    facts: list[tuple[str, str, Any]] = [(ent, "status", status), (ent, "ended_ms", ended), (ent, "last_output", (output or "")[-200:]), (conn.agent, "last_output", (output or "")[-200:])]
+    if result is not None:
+        facts.append((ent, "result", _blob_text(conn, result)))
+    if error is not None:
+        facts.append((ent, "error", error))
+    if error_line is not None:
+        facts.append((ent, "error_line", error_line))
+    if outputs is not None:
+        facts.append((ent, "outputs", _blob(conn, outputs)))
+    if bindings is not None:
+        facts.append((ent, "bindings", _blob(conn, bindings)))
+    if namespace is not None:
+        facts.append((ent, "namespace", _blob(conn, namespace)))
+    conn._enqueue_facts(facts)
 
 
-def add_outbox(conn: sqlite3.Connection, *, content: str, meta: str, session: str = "") -> None:
-    """Queue one channel event (``meta`` is a JSON object of identifier-keyed
-    strings). ``session`` addresses delivery: '' broadcasts to every pump, a
-    session id restricts the row to that MCP session's pump (see
-    :func:`take_outbox`). The kernel is the sole inserter; the MCP transport
-    drains. Rows past the age cap are pruned on write (see
-    ``_OUTBOX_MAX_AGE_SECONDS``)."""
-    now = _now()
-    conn.execute(
-        "INSERT INTO outbox (content, meta, session, created_at) VALUES (?, ?, ?, ?)",
-        (content, meta, session, now),
-    )
-    conn.execute(
-        "DELETE FROM outbox WHERE created_at < ?", (now - _OUTBOX_MAX_AGE_SECONDS,)
-    )
+def save_tool_view(conn: WeaveStore, *, id: str, html: str, label: str) -> str | None:
+    """Persist one run's human HTML as a live weave view (weave2 n-toolviews).
 
-
-def take_outbox(conn: sqlite3.Connection, *, session: str = "") -> list[dict]:
-    """The queued channel events this ``session``'s pump may deliver -- broadcast
-    rows (``session = ''``) plus rows addressed to it -- oldest first, consuming
-    exactly the rows returned. Rows addressed to OTHER sessions are left queued
-    for their own pump (a job's lifecycle event reaches only the session that
-    started the job, issue #2165). Like ``_drain_inputs``: the rows are consumed
-    before delivering, so a crash between the delete and the send loses at most
-    one batch. The consume is a single ``DELETE ... RETURNING`` statement, not a
-    SELECT-then-DELETE: several pumps can share one store (serve processes
-    spawned with an inherited ``IX_MCP_STORE``/session file), and the statement
-    gap let two of them read the same row and each deliver it -- one session's
-    event waking every connected session (issue #2400). One statement means one
-    writer wins per row, so an event is emitted exactly once."""
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "DELETE FROM outbox WHERE session = '' OR session = ? "
-        "RETURNING seq, content, meta, session",
-        (session,),
-    ).fetchall()
-    # RETURNING order is unspecified; deliver oldest first, as the queue promises.
-    return sorted((dict(r) for r in rows), key=lambda row: row["seq"])
-
-
-def add_event(conn: sqlite3.Connection, *, resource: str, kind: str, body: str) -> None:
-    """Append one resource event (``body`` is a JSON object) and prune rows past
-    the age cap, so the live feed never grows the store without bound."""
-    now = _now()
-    conn.execute(
-        "INSERT INTO events (resource, kind, body, created_at) VALUES (?, ?, ?, ?)",
-        (resource, kind, body, now),
-    )
-    conn.execute(
-        "DELETE FROM events WHERE created_at < ?", (now - _EVENT_MAX_AGE_SECONDS,)
-    )
-
-
-def latest_event_seq(conn: sqlite3.Connection, resource: str) -> int:
-    """The newest event seq for ``resource`` (0 when none): where a fresh SSE
-    subscriber starts, so it streams new events only, never replayed history."""
-    row = conn.execute(
-        "SELECT MAX(seq) FROM events WHERE resource = ?", (resource,)
-    ).fetchone()
-    return int(row[0]) if row and row[0] is not None else 0
-
-
-def events_after(conn: sqlite3.Connection, resource: str, seq: int) -> list[dict]:
-    """The events for ``resource`` with seq > ``seq``, oldest first."""
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT seq, kind, body, created_at FROM events "
-        "WHERE resource = ? AND seq > ? ORDER BY seq ASC",
-        (resource, seq),
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def resource_live(conn: sqlite3.Connection, id: str) -> bool:
-    """Whether ``id`` names a resource not yet closed: the `reply` tool's gate, so
-    a reply to a finished or mistyped resource fails loudly instead of streaming
-    into a feed no page reads."""
-    row = conn.execute("SELECT status FROM resources WHERE id = ?", (id,)).fetchone()
-    return row is not None and row[0] != "closed"
-
-
-# --------------------------------------------------------------------------- #
-# Sessions: the pieces that make one store file a reopenable notebook.
-#
-# A session file carries three things: the execution log (the cells and their
-# outputs, already above), the latest namespace snapshot (instant state on
-# reopen), and the bookkeeping to catch up the gap -- cells that finished after
-# the snapshot was taken are re-run on open, ordered by start time.
-# --------------------------------------------------------------------------- #
-
-
-def save_snapshot(
-    conn: sqlite3.Connection,
-    *,
-    created_at: float,
-    blob: bytes,
-    names: list[str],
-    skipped: list[dict],
-) -> None:
-    """Persist a namespace checkpoint and prune older ones in the same
-    transaction, so the file holds exactly one snapshot and a reader never sees
-    zero or two."""
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        conn.execute(
-            "INSERT INTO snapshots (created_at, blob, names, skipped) VALUES (?, ?, ?, ?)",
-            (created_at, blob, json.dumps(names), json.dumps(skipped)),
-        )
-        conn.execute(
-            "DELETE FROM snapshots WHERE id != (SELECT MAX(id) FROM snapshots)"
-        )
-        conn.execute("COMMIT")
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
-
-
-def latest_snapshot(conn: sqlite3.Connection) -> dict | None:
-    """The newest namespace checkpoint, or None for a fresh session file."""
-    conn.row_factory = sqlite3.Row
-    row = conn.execute(
-        "SELECT created_at, blob, names, skipped FROM snapshots ORDER BY id DESC LIMIT 1"
-    ).fetchone()
-    if row is None:
+    Fact shape is the cas-html view contract pinned in weave views.dl: type
+    "view", renderer "cas-html", body = CAS hash of the html, label. Tool
+    views link lineage with child_of the run entity - not from_msg, which is
+    for chat-driven views answering a request message - so cascade cleanup
+    and sidebar lineage follow the run. Returns the view entity id, or None
+    when persistence is off (WEAVE_URL=off): the caller then attaches no
+    view to the tool result."""
+    if conn.disabled:
         return None
-    d = dict(row)
-    d["names"] = json.loads(d.get("names") or "[]")
-    d["skipped"] = json.loads(d.get("skipped") or "[]")
-    return d
+    ent = _entity("view", id)
+    conn._enqueue_facts([
+        (ent, "type", "view"),
+        (ent, "renderer", "cas-html"),
+        (ent, "body", _blob_text(conn, html)),
+        (ent, "label", label),
+        (ent, "child_of", _entity("run", id)),
+    ])
+    return ent
 
 
-def mark_interrupted(conn: sqlite3.Connection, *, ended_at: float) -> int:
-    """Close out rows left 'running' by a previous server (it died or was
-    killed mid-cell), so a reopened session reads honestly: those cells did not
-    finish and their effects are not in any snapshot."""
-    cur = conn.execute(
-        "UPDATE executions SET status = 'interrupted', ended_at = ?, line = NULL "
-        "WHERE status = 'running'",
-        (ended_at,),
-    )
-    # A live resource (a Tui screen, a widget) is a view over an object in the
-    # dead kernel; nothing can re-render it, so close it rather than show a
-    # frozen pane as live.
-    conn.execute(
-        "UPDATE resources SET status = 'closed', updated_at = ? WHERE status != 'closed'",
-        (ended_at,),
-    )
-    # An open input channel awaits a submission in a coroutine that died with the
-    # kernel; close it so a stale capability cannot accept input nobody reads, and
-    # drop any queued-but-undelivered submissions for the same reason.
-    conn.execute(
-        "UPDATE channels SET status = 'closed', updated_at = ? WHERE status != 'closed'",
-        (ended_at,),
-    )
-    conn.execute("DELETE FROM inputs")
-    # A dead kernel's undelivered channel pushes and its resources' event feed
-    # describe state that no longer exists; a reopened session must not fire
-    # stale notifications into a fresh agent session or replay them to a page.
-    conn.execute("DELETE FROM outbox")
-    conn.execute("DELETE FROM events")
-    return cur.rowcount
+def recent(conn: WeaveStore, limit: int = 100) -> list[dict]:
+    execs = _children(conn, ("run", "process"))
+    out = [_exec_from_attrs(conn, ent, a) for ent, a in execs.items()]
+    out.sort(key=lambda r: (r["status"] != "running", -(r["started_at"] or 0)))
+    return out[:limit]
 
 
-def replayable(conn: sqlite3.Connection, since: float | None) -> list[dict]:
-    """The cells a reopened session re-runs to catch the namespace up: original
-    (kind='cell') successful executions that finished after ``since`` (the latest
-    snapshot's timestamp; None replays the whole log, the no-snapshot fallback).
-    Replay rows themselves are excluded -- their effects are captured by the
-    snapshot taken right after a restore, so including them would double-run
-    every cell on the next reopen.
-
-    The anchor is ``ended_at``, not ``started_at``: a cell still running when the
-    snapshot was written has only partial effects in it, and re-running the cell
-    (it finished later, so ``ended_at`` > ``since``) overwrites the partial state
-    with the full result."""
-    conn.row_factory = sqlite3.Row
-    anchor = "" if since is None else " AND ended_at > ?"
-    params = () if since is None else (since,)
-    rows = conn.execute(
-        "SELECT id, name, code FROM executions "  # noqa: S608 -- anchor is one of "" or " AND ended_at > ?", not user input
-        f"WHERE status = 'done' AND kind = 'cell'{anchor} ORDER BY started_at ASC",
-        params,
-    ).fetchall()
-    return [dict(r) for r in rows]
+def latest_namespace(conn: WeaveStore) -> list[dict]:
+    execs = _children(conn, ("run", "process"))
+    done = [a for a in execs.values() if a.get("namespace") and a.get("ended_ms")]
+    if not done:
+        return []
+    newest = max(done, key=lambda a: int(a.get("ended_ms") or 0))
+    return _load_json_blob(conn, newest["namespace"], [])
 
 
-def live_resources(conn: sqlite3.Connection) -> list[dict]:
-    """The not-yet-closed resources, oldest first, as plain dicts for the
-    sidebar. Closed rows stay in the table (see `close_resource`) but are not
-    listed: every consumer of this feed (`/api/resources`, the dashboard panes,
-    `feed.snapshot`) presents resources as live, self-updating views, and a
-    closed one can never update again."""
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT id, title, kind, html, status, execution_id, created_at, updated_at "
-        "FROM resources WHERE status != 'closed' ORDER BY created_at ASC"
-    ).fetchall()
-    return [dict(r) for r in rows]
+def get(conn: WeaveStore, id: str) -> dict | None:
+    for prefix in ("run", "proc"):
+        ent = _entity(prefix, id)
+        attrs = _attrs_of(conn, ent)
+        if attrs:
+            return _exec_from_attrs(conn, ent, attrs)
+    return None
+
+
+def get_session(conn: WeaveStore) -> dict | None:
+    attrs = _attrs_of(conn, conn.agent)
+    if not attrs:
+        return None
+    return {
+        "name": attrs.get("label") or "",
+        "client": attrs.get("client") or "",
+        "updated_at": _sec(attrs.get("last_active_ms")) or _now(),
+    }
+
+
+def set_session(conn: WeaveStore, *, name: str, client: str) -> None:
+    conn._enqueue_facts([(conn.agent, "label", name), (conn.agent, "client", client), (conn.agent, "session", name)])
+
+
+def session_facts(conn: WeaveStore, *, id: str, status: str, client: str = "", connected_at: float | None = None) -> None:
+    """One MCP connection's session entity (weave2 session contract, docs 4.6).
+
+    status="connected" asserts the full shape; any other status re-asserts only
+    the status fact: cardinality one, latest wins, never retracted (a closed
+    session greys out on the board, it does not disappear). Re-asserting
+    "connected" with the same connected_at is idempotent per attr (the
+    write-behind queue drops unchanged values), so upgrading `client` once the
+    initialize handshake names the real client emits just that one fact.
+    """
+    ent = _entity("session", id)
+    if status != "connected":
+        conn._enqueue_facts([(ent, "status", status)])
+        return
+    conn._enqueue_facts([
+        (ent, "type", "session"),
+        (ent, "child_of", conn.agent),
+        (ent, "on_kernel", conn.kernel),
+        (ent, "client", client),
+        (ent, "connected_ms", _ms(connected_at)),
+        (ent, "status", "connected"),
+    ])
+
+
+def cells(conn: WeaveStore) -> list[dict]:
+    rows = _rows(conn.query(f"?- latest({conn.agent}, cells, C)."))
+    return _load_json_blob(conn, rows[0].get("C") or "", []) if rows else []
+
+
+def replace_cells(conn: WeaveStore, items: list[dict]) -> None:
+    conn._enqueue_facts([(conn.agent, "cells", _blob(conn, items))])
+
+
+
+def upsert_resource(conn: WeaveStore, *, id: str, title: str, kind: str, html: str, status: str, created_at: float, updated_at: float, execution_id: str = "") -> None:
+    ent = _entity("resource", id)
+    facts = [(ent, "type", "resource"), (ent, "child_of", conn.agent), (ent, "verb", kind), (ent, "label", title), (ent, "html", _blob_text(conn, html)), (ent, "status", status), (ent, "started_ms", _ms(created_at)), (ent, "last_active_ms", _ms(updated_at))]
+    if execution_id:
+        facts.append((ent, "of_run", _entity("run", execution_id)))
+    conn._enqueue_facts(facts)
+
+
+def close_resource(conn: WeaveStore, *, id: str, updated_at: float) -> None:
+    conn._enqueue_facts([(_entity("resource", id), "status", "closed"), (_entity("resource", id), "ended_ms", _ms(updated_at))])
+
+
+def open_channel(conn: WeaveStore, *, id: str, title: str) -> None:
+    conn.mailbox("POST", "/api/mailbox/channels", json_body={"op": "open", "id": id, "title": title})
+
+
+def close_channel(conn: WeaveStore, *, id: str) -> None:
+    conn.mailbox("POST", "/api/mailbox/channels", json_body={"op": "close", "id": id})
+
+
+def channel_open(conn: WeaveStore, id: str) -> bool:
+    return bool(conn.mailbox("GET", f"/api/mailbox/channels/{quote(id, safe='')}").get("open"))
+
+
+def add_input(conn: WeaveStore, *, channel: str, payload: str) -> None:
+    conn.mailbox("POST", "/api/input", json_body={"channel": channel, "payload": json.loads(payload)})
+
+
+def pending_inputs(conn: WeaveStore) -> list[dict]:
+    # Non-consuming, exactly like the sqlite store: the kernel's drain calls
+    # delete_inputs (delete-before-deliver, at-most-once) itself.
+    return list(conn.mailbox("GET", "/api/mailbox/inputs") or [])
+
+
+def delete_inputs(conn: WeaveStore, seqs: list[int]) -> None:
+    if seqs:
+        conn.mailbox("POST", "/api/mailbox/inputs/delete", json_body={"seqs": list(seqs)})
+
+
+def add_outbox(conn: WeaveStore, *, content: str, meta: str, session: str = "") -> None:
+    conn.mailbox("POST", "/api/mailbox/outbox", json_body={"content": content, "meta": meta, "session": session})
+
+
+def take_outbox(conn: WeaveStore, *, session: str = "") -> list[dict]:
+    from .mailbox import get_mailbox
+    return get_mailbox().take_outbox(session=session)
+
+
+def add_event(conn: WeaveStore, *, resource: str, kind: str, body: str) -> None:
+    conn.mailbox("POST", "/api/mailbox/events", json_body={"resource": resource, "kind": kind, "body": body})
+
+
+def latest_event_seq(conn: WeaveStore, resource: str) -> int:
+    from .mailbox import get_mailbox
+    return get_mailbox().latest_event_seq(resource)
+
+
+def events_after(conn: WeaveStore, resource: str, seq: int) -> list[dict]:
+    from .mailbox import get_mailbox
+    return get_mailbox().events_after(resource, seq)
+
+
+def resource_live(conn: WeaveStore, id: str) -> bool:
+    if conn.disabled:
+        # An empty answer would read as "dead"; without a journal the
+        # question is unanswerable, so raise and let callers fail open.
+        raise LookupError("weave persistence disabled; resource liveness unknowable")
+    rows = _rows(conn.query(f"?- latest({_entity('resource', id)}, status, S)."))
+    return bool(rows and rows[0].get("S") != "closed")
+
+
+def save_snapshot(conn: WeaveStore, *, created_at: float, blob: bytes, names: list[str], skipped: list[dict]) -> None:
+    h = conn.put_blob(blob)
+    ent = f"snapshot:{h[:16]}"
+    conn._enqueue_facts([(ent, "type", "snapshot"), (ent, "child_of", conn.agent), (ent, "created_ms", _ms(created_at)), (ent, "blob", h), (ent, "names", _blob(conn, names)), (ent, "skipped", _blob(conn, skipped)), (conn.agent, "snapshot", h)])
+
+
+def latest_snapshot(conn: WeaveStore) -> dict | None:
+    snaps = _pivot(conn, f"?- type(E, \"snapshot\"), child_of(E, {conn.agent}), latest(E, A, V).")
+    if not snaps:
+        return None
+    _ent, attrs = max(snaps.items(), key=lambda kv: int(kv[1].get("created_ms") or 0))
+    blob_hash = attrs.get("blob") or ""
+    if not blob_hash:
+        return None
+    return {
+        "created_at": _sec(attrs.get("created_ms")) or _now(),
+        "blob": conn.get_blob(blob_hash),
+        "names": _load_json_blob(conn, attrs.get("names") or "", []),
+        "skipped": _load_json_blob(conn, attrs.get("skipped") or "", []),
+    }
+
+
+def mark_interrupted(conn: WeaveStore, *, ended_at: float) -> int:
+    """Interrupt every running execution and close every live resource of
+    this agent (the sqlite store's resume semantics, 1:1); the in-process
+    mailbox (tier 3) resets wholesale."""
+    ended = _ms(ended_at)
+    children = _pivot(conn, f"?- child_of(E, {conn.agent}), latest(E, A, V).")
+    facts: list[tuple[str, str, Any]] = []
+    interrupted = 0
+    for ent, attrs in children.items():
+        typ = attrs.get("type")
+        if typ in ("run", "process") and attrs.get("status") == "running":
+            interrupted += 1
+            facts.append((ent, "status", "interrupted"))
+            facts.append((ent, "ended_ms", ended))
+        elif typ == "resource" and attrs.get("status") != "closed":
+            facts.append((ent, "status", "closed"))
+            facts.append((ent, "ended_ms", ended))
+    conn._enqueue_facts(facts)
+    with contextlib.suppress(Exception):
+        conn.mailbox("POST", "/api/mailbox/reset", json_body={})
+    return interrupted
+
+
+def replayable(conn: WeaveStore, since: float | None) -> list[dict]:
+    execs = _children(conn, ("run",))
+    out = []
+    for ent, attrs in execs.items():
+        if attrs.get("status") != "done" or (attrs.get("kind") or "cell") != "cell":
+            continue
+        item = _exec_from_attrs(conn, ent, attrs)
+        if since is None or (item.get("ended_at") or 0) > since:
+            out.append({"id": item["id"], "name": item["name"], "code": item["code"], "started_at": item["started_at"]})
+    out.sort(key=lambda r: r.get("started_at") or 0)
+    return [{"id": r["id"], "name": r["name"], "code": r["code"]} for r in out]
+
+
+def live_resources(conn: WeaveStore) -> list[dict]:
+    resources = _children(conn, ("resource",))
+    out = []
+    for ent, a in sorted(resources.items(), key=lambda kv: int(kv[1].get("started_ms") or 0)):
+        if a.get("status") == "closed":
+            continue
+        out.append({
+            "id": str(ent).split(":", 1)[-1],
+            "title": a.get("label") or "",
+            "kind": a.get("verb") or "html",
+            "html": _load_text_blob(conn, a.get("html") or ""),
+            "status": a.get("status") or "live",
+            "execution_id": str(a.get("of_run") or "").split(":", 1)[-1],
+            "created_at": _sec(a.get("started_ms")),
+            "updated_at": _sec(a.get("last_active_ms")),
+        })
+    return out

@@ -27,6 +27,12 @@ the human's view never costs tokens -- the same split ``Result(user_html,
 llm_result)`` already makes for the dashboard. A host that ignores the
 extension ignores the metadata too and the tool behaves exactly as before.
 
+The same ``_meta`` also names the run's live weave view when one was minted
+(:data:`WEAVE_VIEW_META_KEY`, weave2 n-toolviews): the same human HTML persists
+in the weave store as a cas-html view entity hanging off the run, so a
+weave-aware host resolves a shareable, versioned lens while everything above
+keeps working unchanged for hosts that cannot.
+
 The same document renders OUTSIDE an MCP host: :func:`embedded_html` bakes a
 result payload into the template (read from an inline ``application/json``
 script tag instead of ``ui/notifications/tool-result``), which is what the
@@ -64,6 +70,15 @@ VIEWER_URI = "ui://ix-mcp/tool-result-viewer"
 # `ui/notifications/tool-result` (its params ARE the CallToolResult); a
 # reverse-DNS-ish prefix keeps it clear of spec-owned keys.
 RESULT_META_KEY = "io.indexable.ix/ui"
+
+# Namespaced key for the live weave view entity backing a result (weave2
+# n-toolviews). The value is the view entity id (`view:<run id>`) asserted
+# through the store facade with renderer "cas-html" and the run's HTML as its
+# CAS body, child_of the run entity. A host that can resolve weave entities
+# opens the living, versioned lens; the embedded fragments under
+# :data:`RESULT_META_KEY` stay for hosts that cannot. Absent when persistence
+# is off (WEAVE_URL=off).
+WEAVE_VIEW_META_KEY = "io.indexable.ix/weave_view"
 
 # Total budget (chars) for the HTML fragments carried on one result's `_meta`.
 # claude.ai diverts tool results past ~150k chars out of the inline
@@ -182,6 +197,7 @@ def result_payload(
     fragments: Sequence[str] | None = None,
     title: str | None = None,
     budget: int = HTML_BUDGET,
+    weave_view: str | None = None,
 ) -> dict[str, Any]:
     """The CallToolResult-shaped dict the view renders, as plain JSON data.
 
@@ -189,7 +205,9 @@ def result_payload(
     result (the host relays it via ``ui/notifications/tool-result``);
     :func:`embedded_html` bakes it into the document for the room/data-API
     path. ``content`` is serialized with the wire aliases (``_meta`` etc.) so
-    both sides see the same shape the spec names.
+    both sides see the same shape the spec names. ``weave_view`` (the run's
+    live weave view entity id, when one was minted) rides in the same
+    ``_meta`` under :data:`WEAVE_VIEW_META_KEY`.
     """
     meta: dict[str, Any] = {}
     clipped = _clip_fragments(list(fragments or ()), budget)
@@ -200,6 +218,8 @@ def result_payload(
         if clipped:
             view["html"] = clipped
         meta[RESULT_META_KEY] = view
+    if weave_view:
+        meta[WEAVE_VIEW_META_KEY] = weave_view
     payload: dict[str, Any] = {
         "content": [block.model_dump(mode="json", by_alias=True, exclude_none=True) for block in content],
     }
@@ -214,17 +234,20 @@ def ui_result(
     fragments: Sequence[str] | None = None,
     title: str | None = None,
     budget: int = HTML_BUDGET,
+    weave_view: str | None = None,
 ) -> mcp_types.CallToolResult:
     """Wrap a tool's content blocks for an MCP Apps host.
 
     The blocks pass through UNCHANGED (the model sees exactly what it did
     before); the human view -- the run's HTML fragments -- rides in ``_meta``
     under :data:`RESULT_META_KEY`, which the host forwards to the view and
-    every other consumer ignores. FastMCP passes a returned ``CallToolResult``
+    every other consumer ignores, and ``weave_view`` (the run's live weave
+    view entity id, when one was minted) rides beside it under
+    :data:`WEAVE_VIEW_META_KEY`. FastMCP passes a returned ``CallToolResult``
     through verbatim (mcp>=1.26, ``FuncMetadata.convert_result``), so ``_meta``
     survives to the wire.
     """
-    meta = result_payload(content, fragments=fragments, title=title, budget=budget).get("_meta")
+    meta = result_payload(content, fragments=fragments, title=title, budget=budget, weave_view=weave_view).get("_meta")
     return mcp_types.CallToolResult(content=list(content), _meta=meta)
 
 

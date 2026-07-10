@@ -18,7 +18,7 @@
   repoRoot = configRoot;
   repoFile = rel: repoRoot + "/${rel}";
   structured = import (configRoot + "/settings/structured.nix");
-  textStructured = import (configRoot + "/settings/text.nix");
+  jsonFormat = pkgs.formats.json {};
   tomlFormat = pkgs.formats.toml {};
   cursorSettings = builtins.fromJSON (
     builtins.replaceStrings
@@ -494,11 +494,10 @@ in {
     };
   };
 
-  # Keybindings use JSONC and cannot use the JSON reconciler.
-  home.file."Library/Application Support/Cursor/User/keybindings.json".text =
-    textStructured.cursor-keybindings-json;
-  home.file."Library/Application Support/Code/User/keybindings.json".text =
-    textStructured.cursor-keybindings-json;
+  home.file."Library/Application Support/Cursor/User/keybindings.json".source =
+    jsonFormat.generate "andrewgazelka-cursor-keybindings.json" (import (configRoot + "/cursor/keybindings.nix"));
+  home.file."Library/Application Support/Code/User/keybindings.json".source =
+    jsonFormat.generate "andrewgazelka-vscode-keybindings.json" (import (configRoot + "/cursor/keybindings.nix"));
 
   # Bacon
   home.file."Library/Application Support/org.dystroy.bacon/prefs.toml".source =

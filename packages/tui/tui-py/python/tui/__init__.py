@@ -538,7 +538,9 @@ class Tui:
     The terminal opens at `rows` x `cols` (default 80x24) with `scrollback_lines`
     of history (default 10,000). Pass the shape as `size=(rows, cols)` (the same
     spelling the `.size` accessor returns) or as granular `rows=`/`cols=`, but not
-    both. A single process-wide tokio runtime drives every
+    both. `env=` adds per-session identity/config pairs to the child's
+    environment; the core forces `TERM`/`COLORTERM` after them, so those two
+    always win. A single process-wide tokio runtime drives every
     spawned PTY; each I/O method returns a native asyncio coroutine bridged
     through pyo3-async-runtimes, with no thread-pool hop. Construction and the
     shape accessors (`id`, `command`, `args`, `size`, `is_alive`, `exit_code`)
@@ -564,6 +566,7 @@ class Tui:
         rows: int | None = None,
         cols: int | None = None,
         scrollback_lines: int | None = None,
+        env: dict[str, str] | None = None,
     ) -> None:
         # `size=(rows, cols)` mirrors the `.size` accessor (a `Size` is also a
         # (rows, cols) iterable), so the shape can be read and set with the same
@@ -575,7 +578,7 @@ class Tui:
                 raise TypeError("pass either size=(rows, cols) or rows=/cols=, not both")
             rows, cols = size
         _ensure_autopublish()
-        self._raw = _RawTuiInstance(command, list(args), rows, cols, scrollback_lines)
+        self._raw = _RawTuiInstance(command, list(args), rows, cols, scrollback_lines, env)
 
     @classmethod
     def _from_raw(cls, raw: _RawTuiInstance) -> Self:
