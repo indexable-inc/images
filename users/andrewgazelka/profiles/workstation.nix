@@ -197,11 +197,18 @@
   # the shared hooks and system prompt plus package selection. Native Codex
   # settings are declared on programs.codex below and rendered to config.toml.
   codexBase = indexPkgs.codex;
-  codex = codexBase.override {
-    mcpServers = {};
-    settings = {};
-    forcedSettings = {};
-  };
+  codex =
+    (codexBase.override {
+      mcpServers = {};
+      settings = {};
+      forcedSettings = {};
+    })
+    // {
+      # Upstream main keeps Cargo's workspace version at 0.0.0. Home Manager
+      # interprets that as pre-TOML Codex and emits retired config.yaml, so
+      # advertise the rolling build's config capability at this boundary.
+      version = "0.999.0-unstable";
+    };
 in {
   # Personal-but-shareable workstation module hoisted into the `index` monorepo
   # (users/andrewgazelka): pr-watch, optimize-scan, lifelog, and shared

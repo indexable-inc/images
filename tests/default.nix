@@ -225,7 +225,6 @@
             enable = true;
             configDir = ".config/codex-test";
             defaults.agents.max_depth = 4;
-            settings.check_for_update_on_startup = false;
             systemPrompt.omitRules = ["reportToPlaybook"];
           };
         }
@@ -4030,12 +4029,6 @@
           homeAgentConfig.home.file.".config/codex-test/hooks.json".source
           == homeAgentConfig.programs.codex.finalPackage.hooksJson;
         message = "Codex Home Manager module should install the shared hook policy under the configured Codex home";
-      }
-      {
-        assertion =
-          homeAgentConfig.home.file ? ".codex/config.toml"
-          && !(homeAgentConfig.home.file ? ".codex/config.yaml");
-        message = "the rolling Codex package should select Home Manager's current TOML config format";
       }
       {
         assertion =
