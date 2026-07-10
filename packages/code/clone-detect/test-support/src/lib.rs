@@ -3,6 +3,11 @@
 use std::path::{Path, PathBuf};
 
 /// Write a fixture below `root`, creating any nested parent directories.
+///
+/// # Panics
+///
+/// Panics when the fixture directory or file cannot be written.
+#[must_use]
 pub fn write_file(root: &Path, relative: &str, content: &str) -> PathBuf {
     let path = root.join(relative);
     if let Some(parent) = path.parent() {
