@@ -64,6 +64,8 @@ struct Args {
     output: PathBuf,
 }
 
+// clone:ignore -- the repo-idiomatic clap entry point (parse, run, report
+// the error, exit nonzero); every CLI here spells it the same way.
 fn main() -> ExitCode {
     let args = Args::parse();
     match run(&args) {

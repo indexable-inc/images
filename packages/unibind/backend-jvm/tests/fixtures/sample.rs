@@ -27,6 +27,9 @@ mod _sample {
     /// Fetch rows.
     ///
     /// Docs become javadoc.
+    // clone:ignore -- fixtures deliberately parallel the other backends'
+    // (../../../backend-ex, ../../../backend-py) so snapshots stay
+    // comparable; syn drops line comments, so the IR is unaffected.
     pub fn rows(
         store: &str,
         #[unibind(default = 10)] limit: usize,

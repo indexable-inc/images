@@ -8,6 +8,11 @@
 //! surfaces as `PanicException` instead of tearing the process down, and
 //! defaulted arguments gain delegating overloads.
 
+// clone:ignore-file -- conformance surfaces are deliberately parallel
+// across backends (see ../../conformance-ex, ../../conformance-ts): each
+// declares the same records, errors, and echo functions so the per-backend
+// suites prove the same behaviors and stay comparable side by side.
+
 #![allow(
     clippy::needless_pass_by_value,
     reason = "arguments cross the jvm boundary owned; the echo surface exists to round-trip them"

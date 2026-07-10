@@ -12438,7 +12438,6 @@ dependencies = [
  "prettyplease",
  "proc-macro2",
  "quote",
- "serde_json",
  "syn 2.0.118",
  "unibind-core",
  "unibind-test-support",
@@ -12452,7 +12451,6 @@ dependencies = [
  "prettyplease",
  "proc-macro2",
  "quote",
- "serde_json",
  "syn 2.0.118",
  "unibind-core",
  "unibind-test-support",
@@ -12591,6 +12589,12 @@ dependencies = [
 [[package]]
 name = "unibind-test-support"
 version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "serde_json",
+ "syn 2.0.118",
+ "unibind-core",
+]
 
 [[package]]
 name = "unic-langid"

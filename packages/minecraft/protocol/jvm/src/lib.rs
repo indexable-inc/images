@@ -9,6 +9,12 @@
 //! shims here while `unibind-gen jvm` renders the single Java class
 //! (`McProtocolJvm`) that calls them through the FFM API.
 
+// clone:ignore-file -- deliberately parallel to ../../py/src/lib.rs: each
+// backend's boundary must be declared inside its own exported module in its
+// own crate (see the `backends(jvm)` note below), so the two declarations
+// are kept in lockstep by hand until unibind exports one module to several
+// backends per crate.
+
 // `backends(jvm)`: a whole-workspace build unifies unibind's backend
 // features across consumers, so pin this crate's glue to the backend whose
 // runtime deps it declares.

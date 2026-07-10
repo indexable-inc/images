@@ -15,9 +15,7 @@ use unibind_test_support::assert_snapshot;
 fn names(py: Option<&str>) -> ir::Names {
     ir::Names {
         py: py.map(str::to_owned),
-        ts: None,
-        ex: None,
-        jvm: None,
+        ..ir::Names::default()
     }
 }
 

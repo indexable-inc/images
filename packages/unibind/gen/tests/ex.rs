@@ -12,10 +12,8 @@ use unibind_test_support::assert_snapshot;
 
 fn names(ex: Option<&str>) -> ir::Names {
     ir::Names {
-        py: None,
-        ts: None,
         ex: ex.map(str::to_owned),
-        jvm: None,
+        ..ir::Names::default()
     }
 }
 

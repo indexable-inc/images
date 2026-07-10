@@ -61,36 +61,30 @@ pub fn write_record_ident(record_name: &str) -> Ident {
     format_ident!("__write_{}", record_name.to_snake_case())
 }
 
+/// The `Reader`/`Writer` method pair moving one integer kind.
+const fn int_methods(kind: ir::IntKind) -> (&'static str, &'static str) {
+    match kind {
+        ir::IntKind::I8 => ("read_i8", "write_i8"),
+        ir::IntKind::I16 => ("read_i16", "write_i16"),
+        ir::IntKind::I32 => ("read_i32", "write_i32"),
+        ir::IntKind::I64 => ("read_i64", "write_i64"),
+        ir::IntKind::Isize => ("read_isize", "write_isize"),
+        ir::IntKind::U8 => ("read_u8", "write_u8"),
+        ir::IntKind::U16 => ("read_u16", "write_u16"),
+        ir::IntKind::U32 => ("read_u32", "write_u32"),
+        ir::IntKind::U64 => ("read_u64", "write_u64"),
+        ir::IntKind::Usize => ("read_usize", "write_usize"),
+    }
+}
+
 /// The `Reader` method decoding one integer kind.
 const fn read_int_method(kind: ir::IntKind) -> &'static str {
-    match kind {
-        ir::IntKind::I8 => "read_i8",
-        ir::IntKind::I16 => "read_i16",
-        ir::IntKind::I32 => "read_i32",
-        ir::IntKind::I64 => "read_i64",
-        ir::IntKind::Isize => "read_isize",
-        ir::IntKind::U8 => "read_u8",
-        ir::IntKind::U16 => "read_u16",
-        ir::IntKind::U32 => "read_u32",
-        ir::IntKind::U64 => "read_u64",
-        ir::IntKind::Usize => "read_usize",
-    }
+    int_methods(kind).0
 }
 
 /// The `Writer` method encoding one integer kind.
 const fn write_int_method(kind: ir::IntKind) -> &'static str {
-    match kind {
-        ir::IntKind::I8 => "write_i8",
-        ir::IntKind::I16 => "write_i16",
-        ir::IntKind::I32 => "write_i32",
-        ir::IntKind::I64 => "write_i64",
-        ir::IntKind::Isize => "write_isize",
-        ir::IntKind::U8 => "write_u8",
-        ir::IntKind::U16 => "write_u16",
-        ir::IntKind::U32 => "write_u32",
-        ir::IntKind::U64 => "write_u64",
-        ir::IntKind::Usize => "write_usize",
-    }
+    int_methods(kind).1
 }
 
 /// An expression decoding one value of `ty` from `reader`, spelled at the

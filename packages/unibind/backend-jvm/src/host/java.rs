@@ -44,56 +44,37 @@ pub fn boxed(ty: &ir::Type, interface: &ir::Interface) -> String {
     }
 }
 
-/// Unsigned kinds reinterpret as the signed Java type of the same width;
-/// `isize`/`usize` travel as eight bytes and land as `long`.
-const fn primitive_int(kind: ir::IntKind) -> &'static str {
+/// The byte/short/int/long spelling for one integer kind. Unsigned kinds
+/// reinterpret as the signed Java type of the same width; `isize`/`usize`
+/// travel as eight bytes and land in the `long` slot.
+const fn int_width_name(kind: ir::IntKind, names: [&'static str; 4]) -> &'static str {
     match kind {
-        ir::IntKind::I8 | ir::IntKind::U8 => "byte",
-        ir::IntKind::I16 | ir::IntKind::U16 => "short",
-        ir::IntKind::I32 | ir::IntKind::U32 => "int",
+        ir::IntKind::I8 | ir::IntKind::U8 => names[0],
+        ir::IntKind::I16 | ir::IntKind::U16 => names[1],
+        ir::IntKind::I32 | ir::IntKind::U32 => names[2],
         ir::IntKind::I64
         | ir::IntKind::U64
         | ir::IntKind::Isize
-        | ir::IntKind::Usize => "long",
+        | ir::IntKind::Usize => names[3],
     }
 }
 
+const fn primitive_int(kind: ir::IntKind) -> &'static str {
+    int_width_name(kind, ["byte", "short", "int", "long"])
+}
+
 const fn boxed_int(kind: ir::IntKind) -> &'static str {
-    match kind {
-        ir::IntKind::I8 | ir::IntKind::U8 => "Byte",
-        ir::IntKind::I16 | ir::IntKind::U16 => "Short",
-        ir::IntKind::I32 | ir::IntKind::U32 => "Integer",
-        ir::IntKind::I64
-        | ir::IntKind::U64
-        | ir::IntKind::Isize
-        | ir::IntKind::Usize => "Long",
-    }
+    int_width_name(kind, ["Byte", "Short", "Integer", "Long"])
 }
 
 /// The reader method decoding one integer kind.
 const fn read_int_method(kind: ir::IntKind) -> &'static str {
-    match kind {
-        ir::IntKind::I8 | ir::IntKind::U8 => "readByte",
-        ir::IntKind::I16 | ir::IntKind::U16 => "readShort",
-        ir::IntKind::I32 | ir::IntKind::U32 => "readInt",
-        ir::IntKind::I64
-        | ir::IntKind::U64
-        | ir::IntKind::Isize
-        | ir::IntKind::Usize => "readLong",
-    }
+    int_width_name(kind, ["readByte", "readShort", "readInt", "readLong"])
 }
 
 /// The writer method encoding one integer kind.
 const fn write_int_method(kind: ir::IntKind) -> &'static str {
-    match kind {
-        ir::IntKind::I8 | ir::IntKind::U8 => "writeByte",
-        ir::IntKind::I16 | ir::IntKind::U16 => "writeShort",
-        ir::IntKind::I32 | ir::IntKind::U32 => "writeInt",
-        ir::IntKind::I64
-        | ir::IntKind::U64
-        | ir::IntKind::Isize
-        | ir::IntKind::Usize => "writeLong",
-    }
+    int_width_name(kind, ["writeByte", "writeShort", "writeInt", "writeLong"])
 }
 
 /// A Java expression decoding one value of `ty` from the reader named

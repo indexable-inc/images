@@ -139,61 +139,40 @@ impl UnibindMeta {
 
     fn apply(&mut self, entry: &syn::Meta) -> Result<()> {
         let span = entry.span();
-        if entry.path().is_ident("py") {
+        // Each backend's option list dispatches through the same list-parsing
+        // seam; only the hint (which options the backend accepts) and the
+        // per-option handler differ.
+        const BACKEND_OPTIONS: &[(&str, &str, fn(&mut UnibindMeta, &syn::Meta) -> Result<()>)] = &[
+            (
+                "py",
+                "py(name = \"...\") or py(base = \"...\")",
+                UnibindMeta::apply_py,
+            ),
+            ("ts", "ts(name = \"...\")", UnibindMeta::apply_ts),
+            ("ex", "ex(name = \"...\")", UnibindMeta::apply_ex),
+            (
+                "jvm",
+                "jvm(name = \"...\") or jvm(base = \"...\")",
+                UnibindMeta::apply_jvm,
+            ),
+        ];
+        for (backend, hint, apply_option) in BACKEND_OPTIONS {
+            if !entry.path().is_ident(backend) {
+                continue;
+            }
             let syn::Meta::List(list) = entry else {
                 return Err(LowerError::new(
                     span,
-                    "`py` takes a list: py(name = \"...\") or py(base = \"...\")",
+                    format!("`{backend}` takes a list: {hint}"),
                 ));
             };
             let parser =
                 syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated;
-            let entries = syn::parse::Parser::parse2(parser, list.tokens.clone())
-                .map_err(|error| LowerError::new(span, format!("bad `py` options: {error}")))?;
+            let entries = syn::parse::Parser::parse2(parser, list.tokens.clone()).map_err(
+                |error| LowerError::new(span, format!("bad `{backend}` options: {error}")),
+            )?;
             for nested in entries {
-                self.apply_py(&nested)?;
-            }
-            return Ok(());
-        }
-        if entry.path().is_ident("ts") {
-            let syn::Meta::List(list) = entry else {
-                return Err(LowerError::new(span, "`ts` takes a list: ts(name = \"...\")"));
-            };
-            let parser =
-                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated;
-            let entries = syn::parse::Parser::parse2(parser, list.tokens.clone())
-                .map_err(|error| LowerError::new(span, format!("bad `ts` options: {error}")))?;
-            for nested in entries {
-                self.apply_ts(&nested)?;
-            }
-            return Ok(());
-        }
-        if entry.path().is_ident("ex") {
-            let syn::Meta::List(list) = entry else {
-                return Err(LowerError::new(span, "`ex` takes a list: ex(name = \"...\")"));
-            };
-            let parser =
-                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated;
-            let entries = syn::parse::Parser::parse2(parser, list.tokens.clone())
-                .map_err(|error| LowerError::new(span, format!("bad `ex` options: {error}")))?;
-            for nested in entries {
-                self.apply_ex(&nested)?;
-            }
-            return Ok(());
-        }
-        if entry.path().is_ident("jvm") {
-            let syn::Meta::List(list) = entry else {
-                return Err(LowerError::new(
-                    span,
-                    "`jvm` takes a list: jvm(name = \"...\") or jvm(base = \"...\")",
-                ));
-            };
-            let parser =
-                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated;
-            let entries = syn::parse::Parser::parse2(parser, list.tokens.clone())
-                .map_err(|error| LowerError::new(span, format!("bad `jvm` options: {error}")))?;
-            for nested in entries {
-                self.apply_jvm(&nested)?;
+                apply_option(self, &nested)?;
             }
             return Ok(());
         }
@@ -226,32 +205,11 @@ impl UnibindMeta {
         Err(unknown_option(span))
     }
 
+    /// Parse `py(name = "...")` and `py(base = "...")`: the Python-side
+    /// rename, and the Python exception base class for `#[unibind::error]`
+    /// enums.
     fn apply_py(&mut self, entry: &syn::Meta) -> Result<()> {
-        let span = entry.span();
-        let syn::Meta::NameValue(pair) = entry else {
-            return Err(LowerError::new(
-                span,
-                "`py` options are name = \"...\" and base = \"...\"",
-            ));
-        };
-        let syn::Expr::Lit(syn::ExprLit {
-            lit: syn::Lit::Str(value),
-            ..
-        }) = &pair.value
-        else {
-            return Err(LowerError::new(span, "`py` options take string literals"));
-        };
-        if pair.path.is_ident("name") {
-            self.py_name = Some(value.value());
-        } else if pair.path.is_ident("base") {
-            self.py_base = Some(value.value());
-        } else {
-            return Err(LowerError::new(
-                span,
-                "unknown `py` option; expected name = \"...\" or base = \"...\"",
-            ));
-        }
-        Ok(())
+        parse_backend_name_or_base(entry, "py", &mut self.py_name, &mut self.py_base)
     }
 
     /// Parse `ts(name = "...")`: the TypeScript-side rename.
@@ -270,31 +228,7 @@ impl UnibindMeta {
     /// rename, and the Java exception base class for `#[unibind::error]`
     /// enums.
     fn apply_jvm(&mut self, entry: &syn::Meta) -> Result<()> {
-        let span = entry.span();
-        let syn::Meta::NameValue(pair) = entry else {
-            return Err(LowerError::new(
-                span,
-                "`jvm` options are name = \"...\" and base = \"...\"",
-            ));
-        };
-        let syn::Expr::Lit(syn::ExprLit {
-            lit: syn::Lit::Str(value),
-            ..
-        }) = &pair.value
-        else {
-            return Err(LowerError::new(span, "`jvm` options take string literals"));
-        };
-        if pair.path.is_ident("name") {
-            self.jvm_name = Some(value.value());
-        } else if pair.path.is_ident("base") {
-            self.jvm_base = Some(value.value());
-        } else {
-            return Err(LowerError::new(
-                span,
-                "unknown `jvm` option; expected name = \"...\" or base = \"...\"",
-            ));
-        }
-        Ok(())
+        parse_backend_name_or_base(entry, "jvm", &mut self.jvm_name, &mut self.jvm_base)
     }
 
     /// Parse `backends(py, ts, ex, jvm)`: which enabled backends an export
@@ -416,6 +350,45 @@ impl UnibindMeta {
         }
         Ok(())
     }
+}
+
+/// Parse one `name = "..."` / `base = "..."` pair into the backend's rename
+/// and base-class slots (`py` and `jvm` accept both options).
+fn parse_backend_name_or_base(
+    entry: &syn::Meta,
+    backend: &str,
+    name: &mut Option<String>,
+    base: &mut Option<String>,
+) -> Result<()> {
+    let span = entry.span();
+    let syn::Meta::NameValue(pair) = entry else {
+        return Err(LowerError::new(
+            span,
+            format!("`{backend}` options are name = \"...\" and base = \"...\""),
+        ));
+    };
+    let syn::Expr::Lit(syn::ExprLit {
+        lit: syn::Lit::Str(value),
+        ..
+    }) = &pair.value
+    else {
+        return Err(LowerError::new(
+            span,
+            format!("`{backend}` options take string literals"),
+        ));
+    };
+    let slot = if pair.path.is_ident("name") {
+        name
+    } else if pair.path.is_ident("base") {
+        base
+    } else {
+        return Err(LowerError::new(
+            span,
+            format!("unknown `{backend}` option; expected name = \"...\" or base = \"...\""),
+        ));
+    };
+    *slot = Some(value.value());
+    Ok(())
 }
 
 fn parse_backend_name(entry: &syn::Meta, backend: &str) -> Result<String> {

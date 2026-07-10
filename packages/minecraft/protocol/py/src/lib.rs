@@ -8,6 +8,12 @@
 //! `pyo3` glue (function wrappers, record classes, the exception hierarchy,
 //! and the module registration) from these declarations.
 
+// clone:ignore-file -- deliberately parallel to ../../jvm/src/lib.rs: each
+// backend's boundary must be declared inside its own exported module in its
+// own crate (see the `backends(py)` note below), so the two declarations are
+// kept in lockstep by hand until unibind exports one module to several
+// backends per crate.
+
 // `backends(py)`: a whole-workspace build unifies unibind's backend
 // features across consumers, so pin this crate's glue to the backend whose
 // runtime deps it declares.

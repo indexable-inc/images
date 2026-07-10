@@ -119,25 +119,27 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-fn run_py(args: &PyArgs) -> anyhow::Result<()> {
-    let embedded = artifact::read(&args.artifact)?;
-    let interface = single_interface(&args.artifact, &embedded, "py")?;
+/// Read the artifact's one interface and emit it: the whole run for every
+/// target whose emitter needs nothing else from the artifact path.
+fn run_host(artifact: &Path, out: &Path, emitter: &dyn HostEmitter) -> anyhow::Result<()> {
+    let embedded = artifact::read(artifact)?;
+    let interface = single_interface(artifact, &embedded, emitter.target())?;
+    emit_and_write(emitter, interface, out)
+}
 
+fn run_py(args: &PyArgs) -> anyhow::Result<()> {
     let emitter = PyEmitter {
         package: args.package.clone(),
         skip_init: args.skip_init,
     };
-    emit_and_write(&emitter, interface, &args.out)
+    run_host(&args.artifact, &args.out, &emitter)
 }
 
 fn run_ts(args: &TsArgs) -> anyhow::Result<()> {
-    let embedded = artifact::read(&args.artifact)?;
-    let interface = single_interface(&args.artifact, &embedded, "ts")?;
-
     let emitter = TsEmitter {
         addon: args.addon.clone(),
     };
-    emit_and_write(&emitter, interface, &args.out)
+    run_host(&args.artifact, &args.out, &emitter)
 }
 
 /// The one interface of `artifact_path`; every generator handles exactly
@@ -181,33 +183,13 @@ fn emit_and_write(
 }
 
 fn run_jvm(args: &JvmArgs) -> anyhow::Result<()> {
-    let embedded = artifact::read(&args.artifact)?;
-    let interface = single_interface(&args.artifact, &embedded, "jvm")?;
-
     let emitter = JvmEmitter {
         package: args.package.clone(),
     };
-    emit_and_write(&emitter, interface, &args.out)
+    run_host(&args.artifact, &args.out, &emitter)
 }
 
 fn run_ex(args: &ExArgs) -> anyhow::Result<()> {
-    let embedded = artifact::read(&args.artifact)?;
-    let interface = match embedded.interfaces.as_slice() {
-        [interface] => interface,
-        [] => bail!("{} embeds no unibind interface", args.artifact.display()),
-        several => bail!(
-            "{} embeds {} unibind interfaces ({}); the ex generator handles exactly one \
-             per artifact",
-            args.artifact.display(),
-            several.len(),
-            several
-                .iter()
-                .map(|interface| interface.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-    };
-
     let Some(nif_soname) = args.artifact.file_name() else {
         bail!(
             "{} has no file name to derive the NIF soname from",
@@ -217,13 +199,5 @@ fn run_ex(args: &ExArgs) -> anyhow::Result<()> {
     let emitter = ExEmitter {
         nif_soname: nif_soname.to_string_lossy().into_owned(),
     };
-    let files = emitter
-        .emit(interface)
-        .with_context(|| format!("emitting the {} host files", emitter.target()))?;
-    host::write_host_files(&args.out, &files)?;
-
-    for file in &files {
-        println!("{}", file.path);
-    }
-    Ok(())
+    run_host(&args.artifact, &args.out, &emitter)
 }

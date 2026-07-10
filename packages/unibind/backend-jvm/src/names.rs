@@ -156,16 +156,24 @@ pub fn component_name(record: &ir::Record, field: &ir::Field) -> Result<String, 
     )
 }
 
-/// The exception class carrying an error enum: the `jvm(name = ...)`
-/// override, else the Rust name with a trailing `Error` swapped for the
-/// customary `Exception` (`ProbeError` -> `ProbeException`).
+/// The `jvm(name = ...)` override, else the Rust name with a trailing
+/// `Error` swapped for the customary `Exception` (`ProbeError` ->
+/// `ProbeException`).
+fn exception_class(jvm_override: Option<&str>, rust_name: &str) -> String {
+    jvm_override.map_or_else(
+        || {
+            format!(
+                "{}Exception",
+                rust_name.strip_suffix("Error").unwrap_or(rust_name)
+            )
+        },
+        str::to_owned,
+    )
+}
+
+/// The exception class carrying an error enum.
 pub fn exception_name(error: &ir::ErrorType) -> String {
-    error.names.jvm.clone().unwrap_or_else(|| {
-        format!(
-            "{}Exception",
-            error.name.strip_suffix("Error").unwrap_or(&error.name)
-        )
-    })
+    exception_class(error.names.jvm.as_deref(), &error.name)
 }
 
 /// The exception class of the error declared with Rust name `name`.
@@ -179,12 +187,7 @@ pub fn exception_name_of(interface: &ir::Interface, name: &str) -> String {
 
 /// The nested exception class for one variant, inside its error's class.
 pub fn variant_exception_name(variant: &ir::ErrorVariant) -> String {
-    variant.names.jvm.clone().unwrap_or_else(|| {
-        format!(
-            "{}Exception",
-            variant.name.strip_suffix("Error").unwrap_or(&variant.name)
-        )
-    })
+    exception_class(variant.names.jvm.as_deref(), &variant.name)
 }
 
 /// The `SHOUTY_SNAKE` name of a function's `MethodHandle` constant; the
