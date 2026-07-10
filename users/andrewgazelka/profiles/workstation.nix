@@ -1187,6 +1187,7 @@ in {
     // import (configRoot + "/zellij") {
       inherit configRoot;
       inherit (pkgs) stdenvNoCC zellijPlugins;
+      xdgConfigHome = config.xdg.configHome;
     };
 
   programs.atuin = {

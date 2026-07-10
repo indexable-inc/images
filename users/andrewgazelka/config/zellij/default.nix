@@ -2,6 +2,7 @@
 {
   configRoot,
   stdenvNoCC,
+  xdgConfigHome,
   zellijPlugins,
 }: let
   minimalTabBar = stdenvNoCC.mkDerivation {
@@ -414,7 +415,7 @@ in {
     layout {
         default_tab_template {
             pane size=1 borderless=true {
-                plugin location="file:${config.xdg.configHome}/zellij/plugins/minimal-tab-bar.wasm"
+                plugin location="file:${xdgConfigHome}/zellij/plugins/minimal-tab-bar.wasm"
             }
             children
         }
