@@ -301,7 +301,11 @@
   # nix-fast-build is the repo-built nixpkgs 1.5.0 package with a patch that
   # makes --skip-cached skip a `local` (warm-store) output, not just a remotely
   # `cached` one. nix-eval-jobs is built against nixpkgs' Git Nix components so
-  # its CA-realisation protocol matches the fleet's rolling daemon.
+  # its CA-realisation protocol matches the fleet's rolling daemon. The eval
+  # cache is disabled for the parallel evaluator: all workers share one
+  # per-flake SQLite database, so writes contend and can fail with "database is
+  # busy" without providing useful hits on a fresh commit. See the $fast_build
+  # and $eval_jobs comments below.
   #
   # Step 2 (nix-eval-jobs) is the schema/eval gate over the package outputs,
   # broader than the `checks` set step 1 built. nix-eval-jobs is the same
@@ -387,6 +391,7 @@
               "--result-format" "json"
               "--result-file" "check-results.json"
               "--option" "accept-flake-config" "true"
+              "--option" "eval-cache" "false"
               "--option" "extra-experimental-features" "ca-derivations"
             ]
             false
