@@ -1,19 +1,11 @@
 {pkgs}: let
-  daemonNixSrc = pkgs.fetchFromGitHub {
-    owner = "NixOS";
-    repo = "nix";
-    rev = "ac94798c753e48fd0b36128a029ed8aecebe9b56";
-    hash = "sha256-lMvyBFy7jl8cnUI8efQuW8lxgIiwUhw6CHEmDpK0mfw=";
-  };
   # CA realisations are an unstable protocol. Build the evaluator from the
-  # exact Nix revision reported by the fleet daemon, while the interactive
-  # client remains on the stable release.
-  package =
-    (pkgs.nix-eval-jobs.override {
-      nixComponents = pkgs.nixVersions.nixComponents_git.overrideSource daemonNixSrc;
-    }).overrideAttrs (old: {
-      patches = (old.patches or []) ++ [./nix-master-api.patch];
-    });
+  # same pinned 2.34 component set as the fleet daemon. A separate fetch here
+  # previously drifted to Nix master while the daemon stayed on 2.34.7,
+  # breaking CA realisation negotiation.
+  package = pkgs.nix-eval-jobs.override {
+    nixComponents = pkgs.nixVersions.nixComponents_2_34;
+  };
 
   # The override's real risk is the C++ rebuild against nix's libstore linking
   # and the new symbols (staticOutputHashes, getDefaultSubstituters,
