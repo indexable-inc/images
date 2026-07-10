@@ -64,6 +64,15 @@ pub(crate) struct PageParts<T> {
     next_page_token: Option<String>,
 }
 
+impl<T> PageParts<T> {
+    fn new(items: Vec<T>, next_page_token: Option<String>) -> Self {
+        Self {
+            items,
+            next_page_token,
+        }
+    }
+}
+
 /// The Gmail / Google API error envelope:
 /// `{"error": {"code": …, "message": …, "status": …, "errors": [...]}}`.
 #[derive(Deserialize)]

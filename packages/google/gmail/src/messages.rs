@@ -89,10 +89,7 @@ impl crate::ListPage for MessagesPage {
     type Item = MessageStub;
 
     fn into_parts(self) -> crate::PageParts<Self::Item> {
-        crate::PageParts {
-            items: self.messages,
-            next_page_token: self.next_page_token,
-        }
+        crate::PageParts::new(self.messages, self.next_page_token)
     }
 }
 

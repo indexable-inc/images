@@ -6,13 +6,8 @@
   makeBinaryWrapper,
   runCommand,
   git,
-  nix,
   symlinkJoin,
   formats,
-  # Nushell writer for `passthru.updateScript`, pre-bound to the caller's pkgs
-  # on the flake path (lib/packages.nix); `null` on the overlay path, which is
-  # the signal to omit the fork updater (matches the pins.mkUpdater posture).
-  updateScriptWriter ? null,
   binName ? "codex",
   # Shell globs the (claude-only) worktree-guard protects, threaded into the
   # shared hook module so both wrappers feed it the same inputs. Unused in the
@@ -256,26 +251,11 @@ in
     '';
     # The codex hooks.json rendered from the shared declaration list, for a
     # consumer to deliver to `~/.codex/hooks.json` (see the `hooksJson` comment).
-    passthru =
-      {
-        inherit hooksJson spec specValue;
-        modelInstructionsFile = effectiveModelInstructionsFile;
-        permissions = sharedPermissions.codex;
-      }
-      # Fork updater (flake path only): bump codex-src and regenerate the patch
-      # series, so codex joins the registry-discovered `.#update` DAG. Omitted
-      # when the writer or rebase-patches sibling is out of scope (overlay path).
-      // lib.optionalAttrs (updateScriptWriter != null && repoPackages ? rebase-patches) {
-        updateScript =
-          ix.mkForkUpdater {
-            writeNushellApplication = updateScriptWriter;
-            inherit nix;
-            rebasePatches = repoPackages.rebase-patches;
-          } {
-            name = "codex";
-            input = "codex-src";
-          };
-      };
+    passthru = {
+      inherit hooksJson spec specValue;
+      modelInstructionsFile = effectiveModelInstructionsFile;
+      permissions = sharedPermissions.codex;
+    };
     meta =
       codexWithNotifications.meta
       // {

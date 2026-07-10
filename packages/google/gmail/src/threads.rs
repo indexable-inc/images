@@ -22,10 +22,7 @@ impl crate::ListPage for ThreadsPage {
     type Item = ThreadStub;
 
     fn into_parts(self) -> crate::PageParts<Self::Item> {
-        crate::PageParts {
-            items: self.threads,
-            next_page_token: self.next_page_token,
-        }
+        crate::PageParts::new(self.threads, self.next_page_token)
     }
 }
 
