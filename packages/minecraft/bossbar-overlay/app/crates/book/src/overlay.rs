@@ -52,7 +52,6 @@ enum Arrow {
     Back,
     Fwd,
 }
-
 struct WinState {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -147,14 +146,10 @@ impl App {
     /// display at a high scale) the offset clamps to zero, pinning it just below
     /// the menu bar rather than centering it under the bar.
     fn center_pos(&self) -> LogicalPosition<f64> {
-        let (w_px, h_px) = scene::spread_window_px(self.scale);
-        let wl = w_px as f64 / self.scale_factor;
-        let hl = h_px as f64 / self.scale_factor;
-        let (left, top, vw, vh) = ocwin::visible_frame_logical()
-            .unwrap_or((0.0, 0.0, self.mon_logical.0, self.mon_logical.1));
-        LogicalPosition::new(
-            left + ((vw - wl) * 0.5).max(0.0),
-            top + ((vh - hl) * 0.5).max(0.0),
+        ocwin::centered_position(
+            scene::spread_window_px(self.scale),
+            self.scale_factor,
+            self.mon_logical,
         )
     }
 
@@ -166,41 +161,24 @@ impl App {
             .map(|p| LogicalPosition::new(p.x, p.y))
             .unwrap_or_else(|| self.center_pos());
         let attrs = ocwin::float_attributes("Book", w_px, h_px, Some(pos));
-        let window = match event_loop.create_window(attrs) {
-            Ok(w) => Arc::new(w),
-            Err(e) => {
-                eprintln!("book-overlay: create window failed: {e}");
-                event_loop.exit();
-                return;
-            }
+        let Some(window) = ocwin::create_window(event_loop, attrs, "book-overlay: create window failed") else {
+            return;
         };
         // The book is an accessory (background) window, so hover only reaches it
         // with an always-active tracking area; without this the page-turn arrows
         // never highlight while another app is focused.
         ocwin::enable_background_hover(&window);
 
-        let surface = self
-            .instance
-            .create_surface(window.clone())
-            .expect("create surface");
-        let (adapter, device, queue) = ocwin::request_adapter_device(&self.instance, &surface);
-        let caps = surface.get_capabilities(&adapter);
-        let format = ocwin::srgb_format(&caps);
-        let alpha = ocwin::transparent_alpha_mode(&caps);
-
-        let mut gpu = Gpu::new(device, queue, format);
+        let setup = ocwin::setup_surface(&self.instance, window.clone());
+        let mut gpu = Gpu::new(setup.device, setup.queue, setup.format);
         let textures = scene::register(&mut gpu);
-
-        let size = window.inner_size();
-        let config = ocwin::surface_config(format, alpha, size.width, size.height);
-        surface.configure(gpu.device(), &config);
         window.request_redraw();
 
         self.gpu = Some(gpu);
         self.win = Some(WinState {
             window,
-            surface,
-            config,
+            surface: setup.surface,
+            config: setup.config,
             textures,
             gesture: DragClick::new(DRAG_THRESHOLD),
             hovered: false,
@@ -266,20 +244,14 @@ impl App {
         let Some(gpu) = self.gpu.as_ref() else {
             return;
         };
-        let frame = match win.surface.get_current_texture() {
-            Ok(f) => f,
-            Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
-                win.surface.configure(gpu.device(), &win.config);
-                return;
-            }
-            Err(e) => {
-                eprintln!("book-overlay: surface error: {e:?}");
-                return;
-            }
+        let Some((frame, view)) = ocwin::surface_frame(
+            &win.surface,
+            gpu.device(),
+            &win.config,
+            "book-overlay: surface error",
+        ) else {
+            return;
         };
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
         let quads = scene::build(
             gpu,
             &win.textures,
@@ -322,27 +294,13 @@ impl App {
         }
     }
 
-    fn on_moved(&mut self, pos: PhysicalPosition<i32>) {
-        let Some(win) = self.win.as_mut() else {
-            return;
-        };
-        let logical: LogicalPosition<f64> = pos.to_logical(win.window.scale_factor());
-        let echo = win
-            .self_set
-            .is_some_and(|ss| (ss.x - logical.x).abs() < 0.5 && (ss.y - logical.y).abs() < 0.5);
-        if echo {
-            return;
-        }
-        win.self_set = Some(logical);
-        if !win.gesture.dragging() {
-            return; // OS-initiated placement, not a user drag
-        }
-        win.last_move = Instant::now();
-        let dv = DVec2::new(logical.x, logical.y);
-        self.book.pos = Some(dv);
-        if let Err(e) = db::set_position(&self.db, dv) {
-            eprintln!("book-overlay: save position failed: {e}");
-        }
+    fn on_moved(&mut self, position: PhysicalPosition<i32>) {
+        let Some(window) = self.win.as_mut() else { return };
+        overlay_core::window::persist_dragged_position_logged(
+            &window.window, &window.gesture, &mut window.self_set, &mut window.last_move,
+            &mut self.book.pos, position, |position| db::set_position(&self.db, position),
+            "book-overlay: save position failed"
+        );
     }
 
     /// Move the book to follow a two-finger trackpad scroll, persisting the new
@@ -359,25 +317,22 @@ impl App {
         // drops the macOS momentum coast upstream, so this only sees the physical
         // finger drag (and the book stops on lift). `self_set` tracks where the
         // window sits and is set after create; measure the scroll from there.
-        if let Some(np) =
-            overlay_core::scroll_drag_position(win.self_set, delta, win.window.scale_factor())
-        {
-            win.self_set = Some(np);
-            // Move the window AND warp the pointer with it, so the pointer stays on
-            // the book like a press-drag rather than the book sliding out from under it.
-            ocwin::move_window_with_cursor(&win.window, np, win.gesture.cursor());
-            win.last_move = Instant::now();
-            self.book.pos = Some(DVec2::new(np.x, np.y));
-        }
+        let result = overlay_core::handle_scroll_drag(
+            &win.window,
+            win.gesture.cursor(),
+            &mut win.self_set,
+            &mut win.last_move,
+            delta,
+            phase,
+            |pos| self.book.pos = Some(DVec2::new(pos.x, pos.y)),
+            |pos| db::set_position(&self.db, DVec2::new(pos.x, pos.y)),
+        );
         // Persist only when the gesture settles, not per frame: a scroll emits a
         // burst of `MouseWheel` events, and writing on each would open a SQLite
         // connection per frame on the UI thread. The finger lift carries
         // `TouchPhase::Ended`; a discrete wheel notch (`LineDelta`) has no Ended
         // phase but is low-frequency, so save it directly.
-        if overlay_core::scroll_drag_settled(delta, phase)
-            && let Some(pos) = win.self_set
-            && let Err(e) = db::set_position(&self.db, DVec2::new(pos.x, pos.y))
-        {
+        if let Err(e) = result {
             eprintln!("book-overlay: save position failed: {e}");
         }
     }
@@ -419,13 +374,8 @@ impl ApplicationHandler<Book> for App {
         self.spread = self.spread.min(self.book.last_spread());
         // Honor an externally set position once the window has settled, skipping
         // the echo of our own drag.
-        if let (Some(p), Some(win)) = (self.book.pos, self.win.as_mut()) {
-            let lp = LogicalPosition::new(p.x, p.y);
-            let settled = Instant::now().duration_since(win.last_move) >= SETTLE;
-            if settled && win.self_set != Some(lp) {
-                win.window.set_outer_position(lp);
-                win.self_set = Some(lp);
-            }
+        if let Some(win) = self.win.as_mut() {
+            ocwin::apply_stored_position(&win.window, &mut win.self_set, win.last_move, SETTLE, self.book.pos);
         }
         if let Some(win) = self.win.as_ref() {
             win.window.request_redraw();
@@ -437,9 +387,7 @@ impl ApplicationHandler<Book> for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
                 if let (Some(gpu), Some(win)) = (self.gpu.as_ref(), self.win.as_mut()) {
-                    win.config.width = size.width.max(1);
-                    win.config.height = size.height.max(1);
-                    win.surface.configure(gpu.device(), &win.config);
+                    ocwin::resize_surface(&win.surface, gpu.device(), &mut win.config, size);
                 }
                 self.render();
             }

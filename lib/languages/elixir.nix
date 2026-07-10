@@ -9,7 +9,7 @@
   need to stay on a tested Elixir/OTP pairing.
   */
   toolchainsFor = pkgs: {
-    "latest" = pkgs.elixir;
+    latest = pkgs.elixir;
     "1.15" = pkgs.elixir_1_15;
     "1.16" = pkgs.elixir_1_16;
     "1.17" = pkgs.elixir_1_17;

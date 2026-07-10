@@ -1,181 +1,181 @@
 # Structured application configuration. Nix is the canonical source.
 {
-  "alacritty-alacritty" = {
+  alacritty-alacritty = {
     format = "toml";
     value = {
-      "font" = {
-        "size" = 12.0;
-        "normal" = {
-          "family" = "FiraCode Nerd Font";
-          "style" = "Regular";
+      font = {
+        size = 12.0;
+        normal = {
+          family = "FiraCode Nerd Font";
+          style = "Regular";
         };
-        "bold" = {
-          "family" = "FiraCode Nerd Font";
-          "style" = "Bold";
+        bold = {
+          family = "FiraCode Nerd Font";
+          style = "Bold";
         };
-        "italic" = {
-          "family" = "FiraCode Nerd Font";
-          "style" = "Italic";
+        italic = {
+          family = "FiraCode Nerd Font";
+          style = "Italic";
         };
-        "bold_italic" = {
-          "family" = "FiraCode Nerd Font";
-          "style" = "Bold Italic";
-          "builtin_box_drawing" = true;
-        };
-      };
-      "window" = {
-        "opacity" = 0.95;
-        "padding" = {
-          "x" = 5;
-          "y" = 5;
+        bold_italic = {
+          family = "FiraCode Nerd Font";
+          style = "Bold Italic";
+          builtin_box_drawing = true;
         };
       };
-      "colors" = {
-        "primary" = {
-          "background" = "#1e1e2e";
-          "foreground" = "#cdd6f4";
+      window = {
+        opacity = 0.95;
+        padding = {
+          x = 5;
+          y = 5;
+        };
+      };
+      colors = {
+        primary = {
+          background = "#1e1e2e";
+          foreground = "#cdd6f4";
         };
       };
     };
   };
-  "amp-settings" = {
+  amp-settings = {
     format = "json";
     value = {
       "amp.dangerouslyAllowAll" = true;
       "amp.experimental.autoHandoff" = {
-        "context" = 90;
+        context = 90;
       };
       "amp.terminal.theme" = "light";
     };
   };
-  "atuin-config" = {
+  atuin-config = {
     format = "toml";
     value = {
-      "auto_sync" = true;
-      "enter_accept" = true;
-      "style" = "compact";
-      "update_check" = false;
-      "search_mode" = "skim";
-      "workspaces" = true;
-      "network_timeout" = 30;
-      "network_connect_timeout" = 5;
-      "local_timeout" = 2;
-      "store_failed" = true;
-      "secrets_filter" = true;
-      "daemon" = {
-        "sync_frequency" = 15;
+      auto_sync = true;
+      enter_accept = true;
+      style = "compact";
+      update_check = false;
+      search_mode = "skim";
+      workspaces = true;
+      network_timeout = 30;
+      network_connect_timeout = 5;
+      local_timeout = 2;
+      store_failed = true;
+      secrets_filter = true;
+      daemon = {
+        sync_frequency = 15;
       };
-      "sync" = {
-        "records" = true;
+      sync = {
+        records = true;
       };
     };
   };
-  "bacon-prefs" = {
+  bacon-prefs = {
     format = "toml";
     value = {
-      "default_job" = "nextest";
-      "help_line" = false;
-      "on_change_strategy" = "wait_then_restart";
-      "exports" = {
-        "locations" = {
-          "auto" = false;
-          "exporter" = "locations";
-          "path" = ".bacon-locations";
-          "line_format" = "{kind} {path}:{line}:{column} {message}";
+      default_job = "nextest";
+      help_line = false;
+      on_change_strategy = "wait_then_restart";
+      exports = {
+        locations = {
+          auto = false;
+          exporter = "locations";
+          path = ".bacon-locations";
+          line_format = "{kind} {path}:{line}:{column} {message}";
         };
       };
-      "sound" = {
-        "enabled" = true;
-        "base_volume" = "40%";
+      sound = {
+        enabled = true;
+        base_volume = "40%";
       };
-      "keybindings" = {
-        "y" = "copy-unstyled-output";
+      keybindings = {
+        y = "copy-unstyled-output";
       };
     };
   };
-  "cargo-config" = {
+  cargo-config = {
     format = "toml";
     value = {
-      "unstable" = {
-        "checksum-freshness" = true;
-        "build-analysis" = true;
-        "gc" = true;
-        "gitoxide" = "fetch";
+      unstable = {
+        checksum-freshness = true;
+        build-analysis = true;
+        gc = true;
+        gitoxide = "fetch";
       };
-      "build" = {
-        "analysis" = {
-          "enabled" = true;
+      build = {
+        analysis = {
+          enabled = true;
         };
       };
-      "cache" = {
-        "global-clean" = {
-          "max-src-age" = "1 month";
-          "max-crate-age" = "3 months";
-          "max-git-co-age" = "1 month";
-          "max-git-db-age" = "3 months";
+      cache = {
+        global-clean = {
+          max-src-age = "1 month";
+          max-crate-age = "3 months";
+          max-git-co-age = "1 month";
+          max-git-db-age = "3 months";
         };
       };
-      "net" = {};
-      "env" = {
-        "RUST_BACKTRACE" = "1";
-        "SOURCE_DATE_EPOCH" = "0";
+      net = {};
+      env = {
+        RUST_BACKTRACE = "1";
+        SOURCE_DATE_EPOCH = "0";
       };
     };
   };
-  "claude-global-keybindings" = {
+  claude-global-keybindings = {
     format = "json";
     value = {
       "$schema" = "https://www.schemastore.org/claude-code-keybindings.json";
       "$docs" = "https://code.claude.com/docs/en/keybindings";
-      "bindings" = [
+      bindings = [
         {
-          "context" = "Footer";
-          "bindings" = {
+          context = "Footer";
+          bindings = {
             "ctrl+h" = "footer:up";
           };
         }
       ];
     };
   };
-  "cursor-cli-config" = {
+  cursor-cli-config = {
     format = "json";
     value = {
-      "version" = 1;
-      "editor" = {
-        "vimMode" = false;
+      version = 1;
+      editor = {
+        vimMode = false;
       };
-      "hasChangedDefaultModel" = false;
-      "permissions" = {
-        "allow" = [
+      hasChangedDefaultModel = false;
+      permissions = {
+        allow = [
           "Shell(ls)"
         ];
-        "deny" = [];
+        deny = [];
       };
     };
   };
-  "cursor-mcp" = {
+  cursor-mcp = {
     format = "json";
     value = {
-      "mcpServers" = {
-        "exa" = {
-          "url" = "https://mcp.exa.ai/mcp";
+      mcpServers = {
+        exa = {
+          url = "https://mcp.exa.ai/mcp";
         };
-        "blender" = {
-          "command" = "/Users/andrewgazelka/.nix-profile/bin/blender-mcp";
-          "env" = {
-            "DISABLE_TELEMETRY" = "true";
+        blender = {
+          command = "/Users/andrewgazelka/.nix-profile/bin/blender-mcp";
+          env = {
+            DISABLE_TELEMETRY = "true";
           };
         };
-        "blender-lab" = {
-          "command" = "/Users/andrewgazelka/.nix-profile/bin/blender-lab-mcp";
-          "env" = {
-            "BLENDER_MCP_PORT" = "9877";
+        blender-lab = {
+          command = "/Users/andrewgazelka/.nix-profile/bin/blender-lab-mcp";
+          env = {
+            BLENDER_MCP_PORT = "9877";
           };
         };
       };
     };
   };
-  "cursor-settings" = {
+  cursor-settings = {
     format = "json";
     value = {
       "[dockerfile]" = {
@@ -292,21 +292,21 @@
       "latex-workshop.latex.recipe.default" = "tectonic";
       "latex-workshop.latex.recipes" = [
         {
-          "name" = "tectonic";
-          "tools" = [
+          name = "tectonic";
+          tools = [
             "tectonic"
           ];
         }
       ];
       "latex-workshop.latex.tools" = [
         {
-          "args" = [
+          args = [
             "--synctex"
             "--keep-logs"
             "%DOC%.tex"
           ];
-          "command" = "tectonic";
-          "name" = "tectonic";
+          command = "tectonic";
+          name = "tectonic";
         }
       ];
       "latex-workshop.latexindent.path" = "latexindent";
@@ -348,46 +348,46 @@
       "terminal.integrated.fontSize" = 11;
       "terminal.integrated.profiles.osx" = {
         "/run/current-system/sw/bin/nu" = {
-          "args" = [
+          args = [
             "-l"
           ];
-          "path" = "/run/current-system/sw/bin/bash";
+          path = "/run/current-system/sw/bin/bash";
         };
-        "Nushell" = {
-          "args" = [
+        Nushell = {
+          args = [
             "-l"
           ];
-          "path" = "/run/current-system/sw/bin/bash";
+          path = "/run/current-system/sw/bin/bash";
         };
-        "bash" = {
-          "args" = [
+        bash = {
+          args = [
             "-l"
           ];
-          "icon" = "terminal-bash";
-          "path" = "bash";
+          icon = "terminal-bash";
+          path = "bash";
         };
-        "fish" = {
-          "args" = [
+        fish = {
+          args = [
             "-l"
           ];
-          "path" = "fish";
+          path = "fish";
         };
-        "nu" = {
-          "path" = "/run/current-system/sw/bin/nu";
+        nu = {
+          path = "/run/current-system/sw/bin/nu";
         };
-        "pwsh" = {
-          "icon" = "terminal-powershell";
-          "path" = "pwsh";
+        pwsh = {
+          icon = "terminal-powershell";
+          path = "pwsh";
         };
-        "tmux" = {
-          "icon" = "terminal-tmux";
-          "path" = "tmux";
+        tmux = {
+          icon = "terminal-tmux";
+          path = "tmux";
         };
-        "zsh" = {
-          "args" = [
+        zsh = {
+          args = [
             "-l"
           ];
-          "path" = "zsh";
+          path = "zsh";
         };
       };
       "vim.camelCaseMotion.enable" = true;
@@ -398,76 +398,76 @@
       "vim.leader" = "<space>";
       "vim.normalModeKeyBindingsNonRecursive" = [
         {
-          "after" = [
+          after = [
             "<leader>"
             "<leader>"
             "w"
           ];
-          "before" = [
+          before = [
             "f"
           ];
         }
         {
-          "after" = [
+          after = [
             "<leader>"
             "<leader>"
             "b"
           ];
-          "before" = [
+          before = [
             "F"
           ];
         }
         {
-          "after" = [
+          after = [
             "<leader>"
             "<leader>"
             "e"
           ];
-          "before" = [
+          before = [
             "<leader>"
             "e"
           ];
         }
         {
-          "after" = [
+          after = [
             "<leader>"
             "<leader>"
             "f"
           ];
-          "before" = [
+          before = [
             "<leader>"
             "f"
           ];
         }
         {
-          "after" = [
+          after = [
             "<leader>"
             "<leader>"
             "j"
           ];
-          "before" = [
+          before = [
             "<leader>"
             "j"
           ];
         }
         {
-          "after" = [
+          after = [
             "<leader>"
             "<leader>"
             "k"
           ];
-          "before" = [
+          before = [
             "<leader>"
             "k"
           ];
         }
         {
-          "after" = [
+          after = [
             "<leader>"
             "<leader>"
             "s"
           ];
-          "before" = [
+          before = [
             "<leader>"
             "s"
           ];
@@ -497,9 +497,9 @@
       "cursorpyright.analysis.inlayHints.genericTypes" = true;
       "git.blame.editorDecoration.enabled" = false;
       "git.showActionButton" = {
-        "commit" = false;
-        "publish" = false;
-        "sync" = false;
+        commit = false;
+        publish = false;
+        sync = false;
       };
       "git.showCommitInput" = false;
       "gitlens.blame.format" = "\${author|2?}";
@@ -537,9 +537,9 @@
       "jupyter.askForKernelRestart" = false;
       "window.commandCenter" = true;
       "remote.SSH.remotePlatform" = {
-        "main" = "linux";
-        "hc1" = "linux";
-        "hil-compute-1" = "linux";
+        main = "linux";
+        hc1 = "linux";
+        hil-compute-1 = "linux";
       };
       "rust-analyzer.server.path" = "rust-analyzer";
       "direnv.restart.automatic" = true;
@@ -559,21 +559,21 @@
       "nix.serverPath" = "nixd";
       "nix.formatterPath" = "nixfmt";
       "nix.serverSettings" = {
-        "nixd" = {
-          "formatting" = {
-            "command" = [
+        nixd = {
+          formatting = {
+            command = [
               "nixfmt"
             ];
           };
-          "options" = {
-            "nix-darwin" = {
-              "expr" = "(builtins.getFlake \"/Users/andrewgazelka/.config/nix\").darwinConfigurations.hydra.options";
+          options = {
+            nix-darwin = {
+              expr = "(builtins.getFlake \"/Users/andrewgazelka/.config/nix\").darwinConfigurations.hydra.options";
             };
-            "home-manager" = {
-              "expr" = "(builtins.getFlake \"/Users/andrewgazelka/.config/nix\").darwinConfigurations.hydra.options.home-manager.users.type.getSubOptions []";
+            home-manager = {
+              expr = "(builtins.getFlake \"/Users/andrewgazelka/.config/nix\").darwinConfigurations.hydra.options.home-manager.users.type.getSubOptions []";
             };
-            "nixpkgs" = {
-              "expr" = "import (builtins.getFlake \"/Users/andrewgazelka/.config/nix\").inputs.nixpkgs { }";
+            nixpkgs = {
+              expr = "import (builtins.getFlake \"/Users/andrewgazelka/.config/nix\").inputs.nixpkgs { }";
             };
           };
         };
@@ -588,79 +588,79 @@
       };
     };
   };
-  "direnv-direnv" = {
+  direnv-direnv = {
     format = "toml";
     value = {
-      "global" = {
-        "log_format" = "";
+      global = {
+        log_format = "";
       };
     };
   };
-  "iamb-config" = {
+  iamb-config = {
     format = "toml";
     value = {
-      "profiles" = {
-        "default" = {
-          "user_id" = "@andrewgazelka:matrix.org";
+      profiles = {
+        default = {
+          user_id = "@andrewgazelka:matrix.org";
         };
       };
-      "settings" = {
-        "reaction_display" = true;
-        "reaction_shortcode_display" = false;
-        "read_receipt_send" = true;
-        "read_receipt_display" = true;
-        "typing_notice_send" = true;
-        "typing_notice_display" = true;
-        "message_shortcode_display" = false;
-        "message_user_color" = true;
-        "default_room" = "";
+      settings = {
+        reaction_display = true;
+        reaction_shortcode_display = false;
+        read_receipt_send = true;
+        read_receipt_display = true;
+        typing_notice_send = true;
+        typing_notice_display = true;
+        message_shortcode_display = false;
+        message_user_color = true;
+        default_room = "";
       };
-      "dirs" = {};
-      "macros" = {};
+      dirs = {};
+      macros = {};
     };
   };
-  "jj-config" = {
+  jj-config = {
     format = "toml";
     value = {
-      "user" = {
-        "name" = "Andrew Gazelka";
-        "email" = "andrew.gazelka@gmail.com";
+      user = {
+        name = "Andrew Gazelka";
+        email = "andrew.gazelka@gmail.com";
       };
-      "ui" = {
-        "default-command" = "log";
-        "diff-formatter" = [
+      ui = {
+        default-command = "log";
+        diff-formatter = [
           "difft"
           "$left"
           "$right"
         ];
-        "pager" = "delta";
+        pager = "delta";
       };
-      "colors" = {
+      colors = {
         "diff removed" = {
-          "fg" = "red";
+          fg = "red";
         };
         "diff added" = {
-          "fg" = "green";
+          fg = "green";
         };
       };
-      "snapshot" = {
-        "max-new-file-size" = "50MiB";
+      snapshot = {
+        max-new-file-size = "50MiB";
       };
-      "merge-tools" = {
-        "difftastic" = {
-          "program" = "difft";
+      merge-tools = {
+        difftastic = {
+          program = "difft";
         };
       };
     };
   };
-  "tap-config" = {
+  tap-config = {
     format = "toml";
     value = {
-      "keybinds" = {
-        "editor" = "Alt-e";
+      keybinds = {
+        editor = "Alt-e";
       };
-      "timing" = {
-        "escape_timeout_ms" = 50;
+      timing = {
+        escape_timeout_ms = 50;
       };
     };
   };

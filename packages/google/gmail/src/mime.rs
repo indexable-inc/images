@@ -375,33 +375,24 @@ mod tests {
     }
 
     #[test]
-    fn header_injection_in_subject_is_refused() {
-        let err = build_raw(&OutgoingMessage {
-            to: vec!["a@example.com".to_owned()],
-            subject: "Hi\r\nBcc: secret@example.com".to_owned(),
-            body_text: Some("body".to_owned()),
-            ..OutgoingMessage::default()
-        })
-        .expect_err("rejects");
-        assert!(
-            matches!(err, Error::UnsafeHeader { header: "Subject" }),
-            "got {err:?}"
-        );
-    }
-
-    #[test]
-    fn header_injection_in_address_is_refused() {
-        let err = build_raw(&OutgoingMessage {
-            to: vec!["a@example.com\r\nBcc: leak@example.com".to_owned()],
-            subject: "Hi".to_owned(),
-            body_text: Some("body".to_owned()),
-            ..OutgoingMessage::default()
-        })
-        .expect_err("rejects");
-        assert!(
-            matches!(err, Error::UnsafeHeader { header: "To" }),
-            "got {err:?}"
-        );
+    fn header_injection_is_refused_in_every_user_controlled_header() {
+        let cases = [
+            ("Subject", vec!["a@example.com"], "Hi\r\nBcc: secret@example.com"),
+            ("To", vec!["a@example.com\r\nBcc: leak@example.com"], "Hi"),
+        ];
+        for (expected_header, to, subject) in cases {
+            let error = build_raw(&OutgoingMessage {
+                to: to.into_iter().map(ToOwned::to_owned).collect(),
+                subject: subject.to_owned(),
+                body_text: Some("body".to_owned()),
+                ..OutgoingMessage::default()
+            })
+            .expect_err("rejects");
+            assert!(
+                matches!(error, Error::UnsafeHeader { header } if header == expected_header),
+                "got {error:?}"
+            );
+        }
     }
 
     #[test]

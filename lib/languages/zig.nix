@@ -6,7 +6,7 @@
   a build out from under a project that pinned to 0.14 syntax.
   */
   toolchainsFor = pkgs: {
-    "latest" = pkgs.zig;
+    latest = pkgs.zig;
     "0.12" = pkgs.zig_0_12;
     "0.13" = pkgs.zig_0_13;
     "0.14" = pkgs.zig_0_14;

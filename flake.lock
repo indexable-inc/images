@@ -48,17 +48,17 @@
     "codex-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1783210073,
-        "narHash": "sha256-FA5J7bZNNN+wb0FwL/t6nI6Bwejb2ICwYEcOyKAa1Rc=",
+        "lastModified": 1783646935,
+        "narHash": "sha256-3T9DJZJymasf59Fa6nMFOdjLgEMRakXwbm/DMmmtkJM=",
         "owner": "openai",
         "repo": "codex",
-        "rev": "be33f80bc65159c094ecd06bf155afa3061ce23d",
+        "rev": "1f0566d3f59298d1bb88820a0d35294f1eeb07ea",
         "type": "github"
       },
       "original": {
         "owner": "openai",
         "repo": "codex",
-        "rev": "be33f80bc65159c094ecd06bf155afa3061ce23d",
+        "rev": "1f0566d3f59298d1bb88820a0d35294f1eeb07ea",
         "type": "github"
       }
     },
@@ -303,11 +303,11 @@
     "nushell-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1783609365,
-        "narHash": "sha256-KyShdIsey2MKurBwrQKWctczMY1cAEpTA7f2L+6XEJ4=",
+        "lastModified": 1783696074,
+        "narHash": "sha256-ADcCuRA8218b0QDo9FxKQslJwLGcQMiA2x5pSZ6RpHo=",
         "owner": "nushell",
         "repo": "nushell",
-        "rev": "69e3a66178d00b6eeeda089a904ee41531283b62",
+        "rev": "e8424fe6af516a78cc5fb833f8e91dcda9678148",
         "type": "github"
       },
       "original": {

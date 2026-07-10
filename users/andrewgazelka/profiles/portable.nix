@@ -1,9 +1,10 @@
 # Host-independent user policy shared by the macOS workstation and NixOS VM.
-{
-  lib,
-  pkgs,
-  ...
-}: {
+{lib, ...}: {
+  # Shared modern-CLI tool set (bat, delta, eza, fd, ripgrep, ...); the list
+  # itself is general and lives in modules/home/cli-baseline.nix.
+  imports = [../../../modules/home/cli-baseline.nix];
+  cliBaseline.enable = true;
+
   home = {
     stateVersion = "23.11";
     enableNixpkgsReleaseCheck = false;
@@ -13,24 +14,6 @@
       VISUAL = "nvim";
       PAGER = lib.mkDefault "less";
     };
-    packages = [
-      pkgs.bat
-      pkgs.curl
-      pkgs.delta
-      pkgs.difftastic
-      pkgs.duf
-      pkgs.dust
-      pkgs.eza
-      pkgs.fd
-      pkgs.htop
-      pkgs.jq
-      pkgs.ripgrep
-      pkgs.rsync
-      pkgs.tree
-      pkgs.unzip
-      pkgs.wget
-      pkgs.zstd
-    ];
   };
 
   programs.git = {

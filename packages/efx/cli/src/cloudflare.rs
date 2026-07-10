@@ -264,25 +264,36 @@ fn optional_str(request: &ExecuteRequest, key: &str) -> Option<String> {
 }
 
 fn optional_int(request: &ExecuteRequest, key: &str) -> Result<Option<i64>, ExecuteError> {
-    match request.inputs.get(key) {
-        None => Ok(None),
-        Some(Literal::Int(n)) => Ok(Some(*n)),
-        Some(other) => Err(ExecuteError::new(format!(
-            "`{}` input `{key}` must be an integer, got `{other}`",
-            request.kind
-        ))),
-    }
+    optional_typed(request, key, "integer", |value| match value {
+        Literal::Int(value) => Some(*value),
+        _ => None,
+    })
 }
 
 fn optional_bool(request: &ExecuteRequest, key: &str) -> Result<Option<bool>, ExecuteError> {
-    match request.inputs.get(key) {
-        None => Ok(None),
-        Some(Literal::Bool(b)) => Ok(Some(*b)),
-        Some(other) => Err(ExecuteError::new(format!(
-            "`{}` input `{key}` must be a boolean, got `{other}`",
-            request.kind
-        ))),
-    }
+    optional_typed(request, key, "boolean", |value| match value {
+        Literal::Bool(value) => Some(*value),
+        _ => None,
+    })
+}
+
+fn optional_typed<T>(
+    request: &ExecuteRequest,
+    key: &str,
+    expected: &str,
+    extract: impl FnOnce(&Literal) -> Option<T>,
+) -> Result<Option<T>, ExecuteError> {
+    request.inputs.get(key).map_or_else(
+        || Ok(None),
+        |value| {
+            extract(value).map(Some).ok_or_else(|| {
+                ExecuteError::new(format!(
+                    "`{}` input `{key}` must be {expected}, got `{value}`",
+                    request.kind
+                ))
+             })
+        },
+    )
 }
 
 fn str_field(value: &Json, field: &str) -> Result<String, ExecuteError> {

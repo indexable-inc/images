@@ -73,6 +73,11 @@ def test_register_viewer_declares_ui_resource() -> None:
     # restrictive default CSP applies without any csp metadata.
     assert "http://" not in document
     assert "https://" not in document
+    # The MCP Apps initialize schema uses appInfo, not the core MCP
+    # initialize field clientInfo. Hosts reject the view before rendering when
+    # this field is missing.
+    assert 'appInfo: { name: "ix-mcp tool result viewer", version: "1.0.0" }' in document
+    assert "clientInfo" not in document
     # The JS reads the same _meta key the Python side writes.
     assert mcp_ui.RESULT_META_KEY in document
 
@@ -400,4 +405,3 @@ async def _wire_roundtrip(server: FastMCP) -> None:
         # relays to the iframe as `ui/notifications/tool-result` params.
         assert result.meta is not None
         assert result.meta[mcp_ui.RESULT_META_KEY] == {"title": "show", "html": ["<p>hi</p>"]}
-

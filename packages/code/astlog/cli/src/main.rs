@@ -96,20 +96,7 @@ enum Error {
 }
 
 fn main() -> ExitCode {
-    match run(&Cli::parse()) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            let mut message = error.to_string();
-            let mut source = std::error::Error::source(&error);
-            while let Some(cause) = source {
-                message.push_str(": ");
-                message.push_str(&cause.to_string());
-                source = cause.source();
-            }
-            eprintln!("astlog: {message}");
-            ExitCode::FAILURE
-        }
-    }
+    error_chain::main("astlog", || run(&Cli::parse()))
 }
 
 fn run(cli: &Cli) -> Result<(), Error> {

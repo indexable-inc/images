@@ -18,7 +18,7 @@
   */
   compilersFor = pkgs: {
     gcc = {
-      "latest" = pkgs.gcc;
+      latest = pkgs.gcc;
       "9" = pkgs.gcc9;
       "10" = pkgs.gcc10;
       "11" = pkgs.gcc11;
@@ -28,7 +28,7 @@
       "15" = pkgs.gcc15;
     };
     clang = {
-      "latest" = pkgs.clang;
+      latest = pkgs.clang;
       "16" = pkgs.clang_16;
       "17" = pkgs.clang_17;
       "18" = pkgs.clang_18;

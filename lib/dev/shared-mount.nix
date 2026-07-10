@@ -49,9 +49,9 @@ in {
 
       settings = {
         global = {
-          "workgroup" = "WORKGROUP";
+          workgroup = "WORKGROUP";
           "server string" = "ix dev fleet identity volume";
-          "security" = "user";
+          security = "user";
           "map to guest" = "Bad User";
           "guest account" = "nobody";
 
@@ -63,10 +63,10 @@ in {
           # Mediate every byte-range lock in `smbd` rather than pushing it
           # down to the host kernel's local-fs locks, so two CIFS clients
           # coordinate `flock()`/`fcntl` locks against each other.
-          "locking" = "yes";
+          locking = "yes";
           "strict locking" = "yes";
           "posix locking" = "yes";
-          "oplocks" = "yes";
+          oplocks = "yes";
           "kernel oplocks" = "no";
 
           # Cross-client visibility over throughput: a credential refresh on
@@ -76,10 +76,10 @@ in {
         };
 
         ${shareName} = {
-          "path" = shareDir;
-          "browseable" = "yes";
+          path = shareDir;
+          browseable = "yes";
           "read only" = "no";
-          "writable" = "yes";
+          writable = "yes";
           "guest ok" =
             if guestOk
             then "yes"

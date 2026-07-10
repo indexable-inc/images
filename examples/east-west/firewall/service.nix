@@ -7,7 +7,7 @@
 in {
   services.nginx = {
     enable = true;
-    virtualHosts."east-west-firewall" = {
+    virtualHosts.east-west-firewall = {
       default = true;
       listen = [
         {

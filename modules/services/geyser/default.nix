@@ -28,50 +28,50 @@
           motd2
           port
           ;
-        "clone-remote-port" = cfg.bedrock.cloneRemotePort;
-        "server-name" = cfg.bedrock.serverName;
-        "compression-level" = cfg.bedrock.compressionLevel;
-        "enable-proxy-protocol" = cfg.bedrock.enableProxyProtocol;
+        clone-remote-port = cfg.bedrock.cloneRemotePort;
+        server-name = cfg.bedrock.serverName;
+        compression-level = cfg.bedrock.compressionLevel;
+        enable-proxy-protocol = cfg.bedrock.enableProxyProtocol;
       };
 
       remote = {
         inherit (cfg.remote) address port;
-        "auth-type" = cfg.remote.authType;
-        "use-proxy-protocol" = cfg.remote.useProxyProtocol;
-        "forward-hostname" = cfg.remote.forwardHostname;
+        auth-type = cfg.remote.authType;
+        use-proxy-protocol = cfg.remote.useProxyProtocol;
+        forward-hostname = cfg.remote.forwardHostname;
       };
 
-      "floodgate-key-file" = cfg.floodgateKeyFile;
-      "command-suggestions" = cfg.commandSuggestions;
-      "passthrough-motd" = cfg.passthrough.motd;
-      "passthrough-player-counts" = cfg.passthrough.playerCounts;
-      "legacy-ping-passthrough" = cfg.passthrough.legacyPing;
-      "ping-passthrough-interval" = cfg.passthrough.interval;
-      "forward-player-ping" = cfg.forwardPlayerPing;
-      "max-players" = cfg.maxPlayers;
-      "debug-mode" = cfg.debug;
-      "show-cooldown" = cfg.showCooldown;
-      "show-coordinates" = cfg.showCoordinates;
-      "disable-bedrock-scaffolding" = cfg.disableBedrockScaffolding;
-      "emote-offhand-workaround" = cfg.emoteOffhandWorkaround;
-      "cache-images" = cfg.cacheImages;
-      "allow-custom-skulls" = cfg.allowCustomSkulls;
-      "max-visible-custom-skulls" = cfg.maxVisibleCustomSkulls;
-      "custom-skull-render-distance" = cfg.customSkullRenderDistance;
-      "add-non-bedrock-items" = cfg.addNonBedrockItems;
-      "above-bedrock-nether-building" = cfg.aboveBedrockNetherBuilding;
-      "force-resource-packs" = cfg.forceResourcePacks;
-      "xbox-achievements-enabled" = cfg.xboxAchievements;
-      "log-player-ip-addresses" = cfg.logPlayerIpAddresses;
-      "notify-on-new-bedrock-update" = cfg.notifyOnNewBedrockUpdate;
-      "unusable-space-block" = cfg.unusableSpaceBlock;
+      floodgate-key-file = cfg.floodgateKeyFile;
+      command-suggestions = cfg.commandSuggestions;
+      passthrough-motd = cfg.passthrough.motd;
+      passthrough-player-counts = cfg.passthrough.playerCounts;
+      legacy-ping-passthrough = cfg.passthrough.legacyPing;
+      ping-passthrough-interval = cfg.passthrough.interval;
+      forward-player-ping = cfg.forwardPlayerPing;
+      max-players = cfg.maxPlayers;
+      debug-mode = cfg.debug;
+      show-cooldown = cfg.showCooldown;
+      show-coordinates = cfg.showCoordinates;
+      disable-bedrock-scaffolding = cfg.disableBedrockScaffolding;
+      emote-offhand-workaround = cfg.emoteOffhandWorkaround;
+      cache-images = cfg.cacheImages;
+      allow-custom-skulls = cfg.allowCustomSkulls;
+      max-visible-custom-skulls = cfg.maxVisibleCustomSkulls;
+      custom-skull-render-distance = cfg.customSkullRenderDistance;
+      add-non-bedrock-items = cfg.addNonBedrockItems;
+      above-bedrock-nether-building = cfg.aboveBedrockNetherBuilding;
+      force-resource-packs = cfg.forceResourcePacks;
+      xbox-achievements-enabled = cfg.xboxAchievements;
+      log-player-ip-addresses = cfg.logPlayerIpAddresses;
+      notify-on-new-bedrock-update = cfg.notifyOnNewBedrockUpdate;
+      unusable-space-block = cfg.unusableSpaceBlock;
       metrics.enabled = cfg.metrics.enable;
-      "scoreboard-packet-threshold" = cfg.scoreboardPacketThreshold;
-      "enable-proxy-connections" = cfg.enableProxyConnections;
+      scoreboard-packet-threshold = cfg.scoreboardPacketThreshold;
+      enable-proxy-connections = cfg.enableProxyConnections;
       inherit (cfg) mtu;
-      "use-direct-connection" = cfg.useDirectConnection;
-      "disable-compression" = cfg.disableCompression;
-      "config-version" = 4;
+      use-direct-connection = cfg.useDirectConnection;
+      disable-compression = cfg.disableCompression;
+      config-version = 4;
     }
     // cfg.settings;
 in {

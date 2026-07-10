@@ -4,6 +4,10 @@ use crate::{Dual, dual, hash as normalized};
 type Parser = fn(&str) -> ast_merge_ast::Tree;
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the cases form one readable normalization behavior table"
+)]
 fn normalized_hash_relations() {
     let cases: &[(&str, Parser, &str, &str, bool)] = &[
         (
@@ -108,7 +112,8 @@ fn normalized_hash_relations() {
     ];
 
     for &(name, parse, left, right, equal) in cases {
-        let (left, right) = pair_hashes(parse, normalized, left, right);
+        let pair = pair_hashes(parse, normalized, left, right);
+        let (left, right) = (pair.left, pair.right);
         assert_eq!(left == right, equal, "{name}");
     }
 }
