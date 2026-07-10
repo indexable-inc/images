@@ -7,9 +7,9 @@
     nixComponents = pkgs.nixVersions.nixComponents_2_34;
   };
 
-  # The override's real risk is the C++ rebuild against nix's libstore linking,
-  # so the smoke test runs the binary. `--help` exits 0 and prints usage without
-  # contacting a store daemon, which is absent in the sandbox.
+  # The override's real risk is silently relinking against nixpkgs' default
+  # Nix family after an update, so the smoke test checks both the executable
+  # and its propagated Nix component version.
   smoke =
     pkgs.runCommand "nix-eval-jobs-smoke"
     {
@@ -17,6 +17,13 @@
       strictDeps = true;
     }
     ''
+      case ${package.nixComponents.nix-cli.version} in
+        2.34.*) ;;
+        *)
+          echo "nix-eval-jobs is not linked to the fleet daemon's Nix 2.34 family" >&2
+          exit 1
+          ;;
+      esac
       help=$(nix-eval-jobs --help 2>&1) || true
       case "$help" in
         *"--check-cache-status"*) ;;
@@ -42,7 +49,7 @@ in
     meta =
       (old.meta or {})
       // {
-        description = "nix-eval-jobs built against the fleet daemon's Nix protocol generation";
+        description = "nix-eval-jobs built against the fleet daemon's stable Nix 2.34 protocol family";
         mainProgram = "nix-eval-jobs";
       };
   })

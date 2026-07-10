@@ -12,7 +12,7 @@ use vsock::{VMADDR_CID_ANY, VsockListener, VsockStream};
 
 /// Where a guest daemon accepts its single host connection.
 pub enum ListenSpec {
-    /// AF_VSOCK port in production. Binding it outside Linux returns an error.
+    /// `AF_VSOCK` port in production. Binding it outside Linux returns an error.
     Vsock(u32),
     /// Unix socket path for local development.
     Unix(PathBuf),
@@ -23,6 +23,10 @@ pub enum ListenSpec {
 /// Object-safe stream with cloning and whole-socket shutdown.
 pub trait Conn: Read + Write + Send {
     /// Clone a handle for an independent blocking reader or writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the operating system cannot duplicate the stream.
     fn try_clone_conn(&self) -> std::io::Result<Box<dyn Conn>>;
     /// Unblock every cloned handle and close both directions.
     fn shutdown_conn(&self);
