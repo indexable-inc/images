@@ -10,6 +10,7 @@
 name = "panes-audio"
 version = "0.1.0"
 edition = "2024"
+publish.workspace = true
 description = "Guest daemon shipping the PipeWire PCM mix to the macOS host over vsock"
 license = "MIT OR Apache-2.0"
 

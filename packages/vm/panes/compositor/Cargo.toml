@@ -9,6 +9,7 @@
 name = "panes-compositor"
 version = "0.1.0"
 edition = "2024"
+publish.workspace = true
 description = "Guest-side headless Wayland compositor exporting toplevels to a macOS host"
 license = "MIT OR Apache-2.0"
 

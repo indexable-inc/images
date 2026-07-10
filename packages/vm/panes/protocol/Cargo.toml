@@ -5,6 +5,7 @@
 name = "panes-protocol"
 version = "0.1.0"
 edition = "2024"
+publish.workspace = true
 description = "Wire protocol for seamless guest-Linux windows on a macOS host"
 license = "MIT OR Apache-2.0"
 
