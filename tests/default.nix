@@ -35,6 +35,13 @@
       home-manager
       ;
   };
+  darwinRemoteBuildersTest = import ./darwin-remote-builders.nix {
+    inherit
+      lib
+      pkgs
+      paths
+      ;
+  };
   # VM boot smoke test for the minecraft-blocks Paper plugin (ENG-2186). Not
   # part of the `eval` aggregate: it boots a qemu VM, so it is its own check
   # (`checks.<system>.minecraft-blocks-vm`).
@@ -6194,6 +6201,7 @@ in {
   portableServices = portableServicesTest;
   symphonyHomeModule = symphonyHomeModuleTest;
   provenance = provenanceTest;
+  darwinRemoteBuilders = darwinRemoteBuildersTest;
   minecraftBlocksVm = minecraftBlocksVmTest;
   inherit baseImageNixDb;
 
@@ -6207,6 +6215,7 @@ in {
       portableServicesTest
       symphonyHomeModuleTest
       provenanceTest
+      darwinRemoteBuildersTest
       cargoUnitPrebuiltTest
     ]
   );
