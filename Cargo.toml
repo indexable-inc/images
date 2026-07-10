@@ -101,14 +101,17 @@ members = [
   "packages/tui/tui-node",
   "packages/tui/tui-py",
   "packages/unibind/backend-ex",
+  "packages/unibind/backend-jvm",
   "packages/unibind/backend-py",
   "packages/unibind/backend-ts",
   "packages/unibind/conformance",
   "packages/unibind/conformance-ex",
+  "packages/unibind/conformance-jvm",
   "packages/unibind/conformance-ts",
   "packages/unibind/core",
   "packages/unibind/ex-runtime",
   "packages/unibind/gen",
+  "packages/unibind/jvm-runtime",
   "packages/unibind/macros",
   "packages/unibind/py-runtime",
   "packages/unibind/runtime",
@@ -372,11 +375,13 @@ tree-sitter-yaml = "0.7"
 tui = { path = "packages/tui/tui" }
 unibind = { path = "packages/unibind/macros" }
 unibind-backend-ex = { path = "packages/unibind/backend-ex" }
+unibind-backend-jvm = { path = "packages/unibind/backend-jvm" }
 unibind-backend-py = { path = "packages/unibind/backend-py" }
 unibind-backend-ts = { path = "packages/unibind/backend-ts" }
 unibind-core = { path = "packages/unibind/core" }
 unibind-test-support = { path = "packages/unibind/test-support" }
 unibind-ex-runtime = { path = "packages/unibind/ex-runtime" }
+unibind-jvm-runtime = { path = "packages/unibind/jvm-runtime" }
 unibind-py-runtime = { path = "packages/unibind/py-runtime" }
 unibind-runtime = { path = "packages/unibind/runtime" }
 url = { version = "2.5.8", default-features = false }

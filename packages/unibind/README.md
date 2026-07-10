@@ -9,8 +9,9 @@ Why should every language binding pay a C-ABI serialization tax when pyo3, napi-
 UniFFI-style tools settle for a C-ABI lowest common denominator: every value
 crosses a serialization shim, and async, cancellation, and resource cleanup
 are bolted on. unibind inverts that. The interface definition stays
-write-once, but each backend emits code for the best binding library in its
-ecosystem (pyo3 for Python, napi-rs for TypeScript, rustler for Elixir), so
+write-once, but each backend emits code for the best binding surface in its
+ecosystem (pyo3 for Python, napi-rs for TypeScript, rustler for Elixir, the
+FFM API for the JVM), so
 every language gets native semantics: real exception hierarchies, native
 async and cancellation, RAII-shaped resource cleanup, and types that flow end
 to end with no RustBuffer tax.
@@ -144,6 +145,10 @@ Crates:
   the Elixir section below.
 - `ex-runtime`: BEAM-side support the generated glue calls into: the
   shared tokio runtime, async reply plumbing, demand-driven streams.
+- `backend-jvm`: renders the IR into C-ABI shims plus one generated Java
+  class speaking the FFM API (JDK 22+); see the JVM section below.
+- `jvm-runtime`: the length-prefixed wire format both sides of the jvm
+  boundary encode into, and the `RawBuf` ownership handoff the shims fill.
 - `backend-py`: renders the IR into pyo3 0.28 (abi3-py311) code:
   `#[pyfunction]` wrappers with `#[pyo3(signature = ...)]` defaults,
   `#[pyclass]` records, `create_exception!` hierarchies plus a
@@ -253,6 +258,12 @@ types (the shared crate's `u64`/`usize` surface is BigInt-territory the ts
 backend still rejects) and runs as
 `checks.<system>.unibind-conformance-ts-node-conformance`.
 
+`packages/unibind/conformance-jvm` is the same idea for the jvm backend: a
+cdylib exporting the sync surface (functions, records, error hierarchies,
+defaults, renames) plus a dependency-free Java suite compiled
+warnings-as-errors and run against the real native library, in CI as
+`checks.<system>.unibind-conformance-jvm-run`.
+
 `packages/unibind/conformance-ex` is the same idea for the Elixir backend:
 a NIF crate mirroring that surface (minus binaries, an ex limitation) plus
 a zero-dep ExUnit suite asserting the wire contracts below from the BEAM,
@@ -328,3 +339,32 @@ self` never crosses on any backend: lowering rejects it), async fns cannot
 return streams (drive the stream from a plain fn), and `object(resource)`
 close()/with sugar stays Python-only; on the BEAM, cleanup is the
 GC-driven `Drop`.
+
+## JVM backend
+
+`unibind-backend-jvm` is the one backend with no incumbent binding library
+to lean on: the JVM's native story *is* a C boundary, so the backend renders
+its own — every exported function becomes one `extern "C"` symbol with the
+uniform shape `fn(args: *const u8, len: usize, out: *mut RawBuf)`, values
+cross in `unibind-jvm-runtime`'s length-prefixed wire format, and
+`unibind-gen jvm` emits a single generated `final class` (records as Java
+records, one exception class per error variant under a base named after the
+enum, the wire codec, and the FFM lookup/invoke plumbing) that any JDK 22+
+compiles with no dependencies. Symbol names and wire layouts are rendered by
+the same crate on both sides, so they cannot drift apart. Run with
+`--enable-native-access=ALL-UNNAMED` plus `-Dunibind.library.<key>=<path>`
+(or the native directory on `java.library.path`).
+
+The surface is the sync subset: functions, records, error hierarchies,
+defaults, and renames (`jvm(name = ...)`, `jvm(base = ...)`). Objects,
+async, and streams reject at render time with a pointer at what to use
+instead.
+
+On the nix side, `unibind.lib.build { crate; targets.jvm = { package;
+javaSource }; }` pairs the generated class (under its package's directory
+tree) with the native library staged under the exact
+`System.mapLibraryName` name, overlaying any hand-written `.java` sources
+into one compilable `java/` tree. `packages/unibind/conformance-jvm` is the
+reference consumer and CI gate; `packages/minecraft/minecraft/protocol/jvm`
++ `probe-kt` (Kotlin over the generated class) are the in-tree production
+consumers.

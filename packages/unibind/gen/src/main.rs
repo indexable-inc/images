@@ -14,6 +14,7 @@ use unibind_core::ir::Interface;
 use unibind_gen::artifact;
 use unibind_gen::ex::ExEmitter;
 use unibind_gen::host::{self, HostEmitter};
+use unibind_gen::jvm::JvmEmitter;
 use unibind_gen::py::PyEmitter;
 use unibind_gen::ts::TsEmitter;
 
@@ -38,6 +39,9 @@ enum Command {
     /// Emit the Elixir host files: `lib/<app>/native.ex` with the NIF
     /// stubs and the typespec'd `lib/<app>.ex` wrapper.
     Ex(ExArgs),
+    /// Emit the Java host file: a single `<Class>.java` wrapping the
+    /// C-ABI symbols through the FFM API.
+    Jvm(JvmArgs),
 }
 
 #[derive(clap::Args)]
@@ -87,6 +91,23 @@ struct ExArgs {
     out: PathBuf,
 }
 
+#[derive(clap::Args)]
+struct JvmArgs {
+    /// Compiled cdylib carrying the embedded IR.
+    #[arg(long)]
+    artifact: PathBuf,
+
+    /// Java package the class is declared in (`com.example.sample`); the
+    /// file lands under the matching directory tree. Omit for the unnamed
+    /// package at the output root.
+    #[arg(long)]
+    package: Option<String>,
+
+    /// Output root; files are written at paths relative to it.
+    #[arg(long)]
+    out: PathBuf,
+}
+
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -94,6 +115,7 @@ fn main() -> anyhow::Result<()> {
         Command::Py(args) => run_py(&args),
         Command::Ts(args) => run_ts(&args),
         Command::Ex(args) => run_ex(&args),
+        Command::Jvm(args) => run_jvm(&args),
     }
 }
 
@@ -156,6 +178,16 @@ fn emit_and_write(
         println!("{}", file.path);
     }
     Ok(())
+}
+
+fn run_jvm(args: &JvmArgs) -> anyhow::Result<()> {
+    let embedded = artifact::read(&args.artifact)?;
+    let interface = single_interface(&args.artifact, &embedded, "jvm")?;
+
+    let emitter = JvmEmitter {
+        package: args.package.clone(),
+    };
+    emit_and_write(&emitter, interface, &args.out)
 }
 
 fn run_ex(args: &ExArgs) -> anyhow::Result<()> {

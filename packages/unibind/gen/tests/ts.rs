@@ -15,6 +15,7 @@ fn names(py: Option<&str>, ts: Option<&str>) -> ir::Names {
         py: py.map(str::to_owned),
         ts: ts.map(str::to_owned),
         ex: None,
+        jvm: None,
     }
 }
 
@@ -170,6 +171,7 @@ fn sample_errors() -> Vec<ir::ErrorType> {
         names: names(None, None),
         docs: docs(&["Boundary failures."]),
         py_base: None,
+        jvm_base: None,
         variants: vec![
             ir::ErrorVariant {
                 name: "StoreGone".to_owned(),
