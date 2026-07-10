@@ -523,7 +523,7 @@
       # runs on. See users/andrewgazelka/home.nix.
       andrewgazelka-portable = ./users/andrewgazelka/profiles/portable.nix;
       andrewgazelka-development = import ./users/andrewgazelka/profiles/development.nix {
-        agentLua = ./modules/profiles/base/nvim/agent.lua;
+        agentLua = ./modules/profiles/base/nvim/plugins/agent.lua;
         configRoot = personalConfigRoot;
       };
       andrewgazelka-workstation = personalWorkstationModule;

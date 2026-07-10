@@ -13,7 +13,7 @@
     cp -R ${configRoot + "/nvim/lua"} "$out"
     chmod -R u+w "$out"
     mkdir -p "$out/agent"
-    install -Dm644 ${agentLua} "$out/agent/init.lua"
+    install -Dm644 ${agentLua} "$out/agent/shared.lua"
   '';
 in {
   xdg.configFile."nvim/lua".source = nvimLua;
