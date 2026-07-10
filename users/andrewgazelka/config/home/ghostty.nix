@@ -2,8 +2,10 @@
 #
 # Single source of truth: the `settings` attrset below. It is rendered in-store
 # by pkgs.formats.keyValue (the same generator home-manager's programs.ghostty
-# uses) and written to the macOS config path with an in-store source, so there
-# is no out-of-store symlink back into the repo. Edit Nix, switch, done.
+# uses) and seeded to the macOS config path as a plain writable file
+# (`mutable.files`, ephemeral): tweak the live file to experiment, and every
+# switch/login resets it to this render with the drift journaled. Edit Nix,
+# switch, done — or scribble on the deployed file and lift the keepers here.
 #
 # Repeated keybind/shader families (repo `cd` shortcuts, directional split
 # focus, shader stack) are built algebraically by mapping over data, so adding
@@ -146,12 +148,22 @@
     "ghostty-config"
     settings;
 in {
-  # In-store source (no mkOutOfStoreSymlink). Written to the macOS
-  # Application Support path Ghostty already loads; shaders/themes stay under
-  # ~/.config/ghostty (linked in profiles/workstation.nix). Only one config path is
-  # written so cumulative settings (e.g. custom-shader) are not double-applied.
-  home.file."Library/Application Support/com.mitchellh.ghostty/config" = {
+  # Written to the macOS Application Support path Ghostty already loads;
+  # shaders/themes stay under ~/.config/ghostty (linked in
+  # profiles/workstation.nix). Only one config path is written so cumulative
+  # settings (e.g. custom-shader) are not double-applied.
+  #
+  # Deployed as a writable mutable file (module imported in
+  # profiles/workstation.nix), NOT a store symlink: edit the live config to
+  # experiment (`cmd+shift+r` reloads it in place), and every activation and
+  # login resets it to this declared render — ephemeral, with the drift's
+  # logical keyvalue diff archived to `index-delta journal` first, so a tweak
+  # worth keeping can be lifted back into this file instead of being lost.
+  mutable.files."Library/Application Support/com.mitchellh.ghostty/config" = {
     source = configFile;
-    force = true;
+    format = "keyvalue";
+    # No `sourceFile`: the declaration is Nix, not raw keyvalue, so
+    # `apply-ops` cannot absorb drift mechanically — lift keepers by hand.
+    declaredAt = "users/andrewgazelka/config/home/ghostty.nix";
   };
 }

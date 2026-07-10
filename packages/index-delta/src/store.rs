@@ -251,6 +251,13 @@ pub fn write_creating_parents(path: &Path, bytes: &[u8]) -> Result<()> {
         fs::create_dir_all(parent)
             .with_context(|| format!("creating parent dirs for {}", path.display()))?;
     }
+    // The upper must be a plain regular file. A target that is still a
+    // symlink (typically a leftover home-manager link into the read-only
+    // store, from a config migrating `home.file` -> `mutable.files`) is
+    // replaced, never written through.
+    if fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        fs::remove_file(path).with_context(|| format!("unlinking symlink {}", path.display()))?;
+    }
     fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
@@ -297,5 +304,22 @@ mod tests {
 
         store.forget(&meta.path).expect("forget");
         assert!(store.meta(&meta.path).expect("load").is_none());
+    }
+
+    #[test]
+    fn write_replaces_symlink_instead_of_writing_through() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let linked = dir.path().join("generation-file");
+        fs::write(&linked, b"old").expect("write link target");
+        let target = dir.path().join("config");
+        std::os::unix::fs::symlink(&linked, &target).expect("symlink");
+
+        write_creating_parents(&target, b"new").expect("write");
+
+        let meta = fs::symlink_metadata(&target).expect("meta");
+        assert!(meta.file_type().is_file());
+        assert_eq!(fs::read(&target).expect("read"), b"new");
+        // The old link destination is untouched.
+        assert_eq!(fs::read(&linked).expect("read linked"), b"old");
     }
 }

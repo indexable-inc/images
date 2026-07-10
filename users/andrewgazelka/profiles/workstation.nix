@@ -4,7 +4,7 @@
   configRoot,
   indexPackages,
   ix,
-  mutableJsonModule,
+  mutableFilesModule,
   optionsModule,
   personalServicesModule,
   provenanceModule,
@@ -91,8 +91,10 @@
     doCheck = false;
   });
 
-  # Personal-only Claude config. Home Manager renders this into
-  # ~/.claude/settings.json, the application's native default layer.
+  # Personal-only Claude config, seeded into ~/.claude/settings.json as a
+  # writable mutable file (see `mutable.files` below): the app's native
+  # default layer, which Claude itself edits at runtime (/config, plugin
+  # toggles), so it must not be a read-only store symlink.
   # House posture lives in the index wrapper itself now: attribution, worktree
   # baseRef, effort/fast/theme runtime-toggle defaults, auto-updates channel,
   # the version-aware statusline, the 1M/cron/autocompact clamps (typed
@@ -183,6 +185,44 @@
     })
   agentMcpServers;
 
+  # Native Codex settings, seeded into ~/.codex/config.toml as a writable
+  # mutable file (see `mutable.files` below): Codex appends per-project trust
+  # decisions and runtime toggles to config.toml, which a read-only store
+  # symlink would reject.
+  codexSettings = {
+    check_for_update_on_startup = false;
+    bypass_hook_trust = true;
+    model = "gpt-5.5";
+    model_reasoning_effort = "low";
+    personality = "pragmatic";
+    service_tier = "fast";
+    sandbox_mode = "danger-full-access";
+    default_permissions = ":danger-full-access";
+    commit_attribution = "";
+    agents.max_depth = 3;
+    mcp_servers = codexMcpServers;
+    features = {
+      steer = true;
+      multi_agent = true;
+      multi_agent_v2 = {
+        enabled = true;
+        max_concurrent_threads_per_session = 16;
+      };
+      apps = false;
+      plugins = false;
+      terminal_resize_reflow = true;
+      goals = true;
+      # Prevent Codex from recreating stale externally discovered MCP entries.
+      external_migration = false;
+      js_repl = false;
+    };
+    shell_environment_policy = {
+      "inherit" = "all";
+      ignore_default_excludes = true;
+      set.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "1";
+    };
+  };
+
   # Shared skill source: the index repo's SKILL.md bundles (open Agent-Skills
   # standard, `packages/agent/skills`). ONE directory, delivered to BOTH agents
   # bare (no plugin namespace, so `/<skill>` on Claude and `$<skill>` / implicit
@@ -227,7 +267,11 @@ in {
     # defined them; `whence <path>` (below) reads it with zero eval.
     # indexable-inc/index#2418.
     provenanceModule
-    mutableJsonModule
+    # Declarative-but-writable files (index-delta): apps edit their config
+    # freely, drift is tracked as logical diffs and resolved explicitly.
+    # darwin-home.nix uses `mutable.files` too and relies on this import,
+    # the same way it always rode this profile's other shared modules.
+    mutableFilesModule
     tmuxModule
   ];
 
@@ -798,12 +842,24 @@ in {
     renderLines "andrewgazelka-gitattributes" (import (configRoot + "/git/attributes.nix"));
 
   # Zed (the macOS-only icon overrides live under ~/Library/Application Support).
-  home.file.".config/zed/keymap.json".source = jsonFormat.generate "andrewgazelka-zed-keymap.json" (
-    import (configRoot + "/zed/keymap.nix")
-  );
-  home.file.".config/zed/settings.json".source =
-    jsonFormat.generate "andrewgazelka-zed-settings.json"
-    (import (configRoot + "/zed/settings.nix"));
+  # Zed's settings UI rewrites both files in place, so they are declared as
+  # writable mutable files: the Nix render seeds them, in-app edits survive
+  # (durable) and queue as logical diffs in `index-delta status` when the
+  # declared base moves.
+  mutable.files.".config/zed/keymap.json" = {
+    source = jsonFormat.generate "andrewgazelka-zed-keymap.json" (
+      import (configRoot + "/zed/keymap.nix")
+    );
+    persistence = "durable";
+    declaredAt = "users/andrewgazelka/config/zed/keymap.nix";
+  };
+  mutable.files.".config/zed/settings.json" = {
+    source =
+      jsonFormat.generate "andrewgazelka-zed-settings.json"
+      (import (configRoot + "/zed/settings.nix"));
+    persistence = "durable";
+    declaredAt = "users/andrewgazelka/config/zed/settings.nix";
+  };
   home.file."Library/Application Support/Zed/extensions/installed/jetbrains-new-ui-icons/icons/andrew-folder-test-green.svg" = lib.mkIf pkgs.stdenv.isDarwin {
     source = repoFile "zed/icons/andrew-folder-test-green.svg";
   };
@@ -947,14 +1003,15 @@ in {
   # dir), delivered bare to ~/.claude/skills/<name> and invoked as `/<skill>`
   # (no `index:` namespace): the same source Codex gets via programs.codex
   # below. This replaces the old baked `--plugin-dir` plugin.
-  # settings.json is generation-owned from claudeSettings. .claude.json remains
-  # app-owned runtime state because Claude stores account and session metadata
-  # beside user choices there. CLAUDE.md is generation-owned from its tracked
-  # source because the app never rewrites it.
+  # settings.json is NOT declared here (the module would render it as a
+  # read-only store symlink): it is seeded writable from claudeSettings via
+  # `mutable.files` below, because Claude edits it at runtime. .claude.json
+  # remains app-owned runtime state because Claude stores account and session
+  # metadata beside user choices there. CLAUDE.md is generation-owned from its
+  # tracked source because the app never rewrites it.
   programs.claude-code = {
     enable = true;
     package = claudeCode;
-    settings = claudeSettings;
     houseContext.enable = false;
     # All agents, BARE, sourced straight from the index repo (index's agents
     # package now holds my former personal agents too). Bare (not plugin) so
@@ -973,44 +1030,31 @@ in {
   # Codex, via Home Manager. Static policy and defaults live in config.toml,
   # where Codex and its desktop app can inspect the same source of truth. The
   # wrapper carries only behavior without a native config-file representation.
+  # `settings` is deliberately NOT set here: the module would render
+  # config.toml as a read-only store symlink, and Codex writes to it at
+  # runtime (project trust, model switches). The same values are seeded
+  # writable from `codexSettings` via `mutable.files` below.
   programs.codex = {
     enable = true;
     package = codex;
-    settings = {
-      check_for_update_on_startup = false;
-      bypass_hook_trust = true;
-      model = "gpt-5.5";
-      model_reasoning_effort = "low";
-      personality = "pragmatic";
-      service_tier = "fast";
-      sandbox_mode = "danger-full-access";
-      default_permissions = ":danger-full-access";
-      commit_attribution = "";
-      agents.max_depth = 3;
-      mcp_servers = codexMcpServers;
-      features = {
-        steer = true;
-        multi_agent = true;
-        multi_agent_v2 = {
-          enabled = true;
-          max_concurrent_threads_per_session = 16;
-        };
-        apps = false;
-        plugins = false;
-        terminal_resize_reflow = true;
-        goals = true;
-        # Prevent Codex from recreating stale externally discovered MCP entries.
-        external_migration = false;
-        js_repl = false;
-      };
-      shell_environment_policy = {
-        "inherit" = "all";
-        ignore_default_excludes = true;
-        set.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "1";
-      };
-    };
     skills = skillsSrc;
     context = repoFile "claude/global/CLAUDE.md";
+  };
+
+  # Both agents edit their own config at runtime, so neither file can be a
+  # read-only store render. Durable: in-app changes survive activation and
+  # login; when the declared base moves under local edits, the file queues in
+  # `index-delta status --json` (both diffs as addressed ops) for an explicit
+  # discard / adopt / absorb-into-Nix via `index-delta apply-ops`.
+  mutable.files.".claude/settings.json" = {
+    source = jsonFormat.generate "andrewgazelka-claude-settings.json" claudeSettings;
+    persistence = "durable";
+    declaredAt = "users/andrewgazelka/profiles/workstation.nix";
+  };
+  mutable.files.".codex/config.toml" = {
+    source = tomlFormat.generate "andrewgazelka-codex-config.toml" codexSettings;
+    persistence = "durable";
+    declaredAt = "users/andrewgazelka/profiles/workstation.nix";
   };
 
   # CLAUDE.md is read-only and generation-owned. `force` replaces any stale
@@ -1067,31 +1111,45 @@ in {
     force = true;
   };
 
-  # Writable application configuration with declarative field ownership. The
-  # mutable-json module preserves application-added keys while reconciling the
-  # tracked declaration on activation.
-  home.mutableJsonFiles = {
-    claude-keybindings = {
-      target = ".claude/keybindings.json";
-      value = structured.claude-global-keybindings.value;
-    };
-    cursor-mcp = {
-      target = ".cursor/mcp.json";
-      value = builtins.fromJSON (
+  # Writable application configuration, seeded and drift-tracked by
+  # index-delta (replaces the old mutable-json last-applied merge, which
+  # silently auto-merged). Durable: the apps rewrite these files at runtime
+  # and those edits survive; base-vs-drift conflicts queue in
+  # `index-delta status`. A pre-existing file (including one previously
+  # managed by mutable-json, with app-added keys) is kept as day-one drift,
+  # never clobbered.
+  mutable.files.".claude/keybindings.json" = {
+    source =
+      jsonFormat.generate "andrewgazelka-claude-keybindings.json"
+      structured.claude-global-keybindings.value;
+    persistence = "durable";
+    declaredAt = "users/andrewgazelka/config/settings/structured.nix";
+  };
+  mutable.files.".cursor/mcp.json" = {
+    source = jsonFormat.generate "andrewgazelka-cursor-mcp.json" (
+      builtins.fromJSON (
         builtins.replaceStrings
         ["/Users/andrewgazelka"]
         [config.home.homeDirectory]
         (builtins.toJSON structured.cursor-mcp.value)
-      );
-    };
-    cursor-cli = {
-      target = ".cursor/cli-config.json";
-      value = structured.cursor-cli-config.value;
-    };
-    amp = {
-      target = ".config/amp/settings.json";
-      value = structured.amp-settings.value;
-    };
+      )
+    );
+    persistence = "durable";
+    declaredAt = "users/andrewgazelka/config/settings/structured.nix";
+  };
+  mutable.files.".cursor/cli-config.json" = {
+    source =
+      jsonFormat.generate "andrewgazelka-cursor-cli-config.json"
+      structured.cursor-cli-config.value;
+    persistence = "durable";
+    declaredAt = "users/andrewgazelka/config/settings/structured.nix";
+  };
+  mutable.files.".config/amp/settings.json" = {
+    source =
+      jsonFormat.generate "andrewgazelka-amp-settings.json"
+      structured.amp-settings.value;
+    persistence = "durable";
+    declaredAt = "users/andrewgazelka/config/settings/structured.nix";
   };
 
   # Cursor extensions sourced from github flake inputs. Dir name must match
