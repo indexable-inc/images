@@ -41,11 +41,14 @@ tool.overrideAttrs (old: {
       rnixVendor="''${cargoDepsCopy:-}"
       rnixConfig=""
       if [ -z "$rnixVendor" ]; then
-        # Recent generations write the vendored-sources config into
-        # $CARGO_HOME rather than the source root; check both homes.
+        # Generations differ on where the vendored-sources config lands:
+        # $CARGO_HOME, the source root's .cargo, or the build top's .cargo
+        # (one level above the source root -- cargo finds it by walking up
+        # parent directories).
         for rnixConfigCandidate in \
           ''${CARGO_HOME:+"$CARGO_HOME/config.toml" "$CARGO_HOME/config"} \
-          .cargo/config.toml .cargo/config; do
+          .cargo/config.toml .cargo/config \
+          "$NIX_BUILD_TOP/.cargo/config.toml" "$NIX_BUILD_TOP/.cargo/config"; do
           [ -f "$rnixConfigCandidate" ] || continue
           rnixVendor=$(sed -n 's/^[[:space:]]*directory[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$rnixConfigCandidate" | head -n 1)
           if [ -n "$rnixVendor" ]; then
@@ -56,9 +59,8 @@ tool.overrideAttrs (old: {
       fi
       if [ -z "$rnixVendor" ]; then
         echo "rnix-digit-separators: no cargoDepsCopy and no vendored-sources directory in any cargo config" >&2
-        echo "CARGO_HOME=''${CARGO_HOME:-unset}" >&2
-        ls "''${CARGO_HOME:-/nonexistent}" 2>/dev/null | head -4 >&2
-        ls .cargo 2>/dev/null | head -4 >&2
+        echo "CARGO_HOME=''${CARGO_HOME:-unset} cwd=$PWD" >&2
+        find "$NIX_BUILD_TOP" -maxdepth 4 -name "config*" -path "*cargo*" 2>/dev/null | head -5 >&2
         exit 1
       fi
       if [ ! -w "$rnixVendor" ]; then
