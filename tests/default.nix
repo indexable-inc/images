@@ -2673,8 +2673,30 @@
       // args);
   # Forcing `.patches` runs the eval-time selection + canonical assertions
   # without building anything.
+  patchedSrcSubset = patchedSrcFixture {patchNames = ["0001-canonical.patch"];};
+  patchedSrcAlternate = ix.patchedSrc {
+    name = "patched-src-alternate-fixture";
+    src = ./fixtures/patched-src;
+    patchDir = ./fixtures/patched-src-alternate;
+    patchNames = [
+      "0002-canonical.patch"
+      "0001-canonical.patch"
+    ];
+  };
   patchedSrcSubsetEval = builtins.tryEval (
-    builtins.deepSeq (patchedSrcFixture {patchNames = ["0001-canonical.patch"];}).patches true
+    builtins.deepSeq patchedSrcSubset.patches true
+  );
+  patchedSrcPatchSetEval = builtins.tryEval (
+    let
+      result = {
+        count = patchedSrcSubset.patchSet.count;
+        names = map (patch: patch.name) patchedSrcSubset.patchSet.patches;
+        hashLength = builtins.stringLength patchedSrcSubset.patchSet.digest;
+        hashChangesWithContent = patchedSrcSubset.patchSet.digest != patchedSrcAlternate.patchSet.digest;
+        alternateNames = map (patch: patch.name) patchedSrcAlternate.patchSet.patches;
+      };
+    in
+      builtins.deepSeq result result
   );
   patchedSrcSubsetNonCanonicalEval = builtins.tryEval (
     builtins.deepSeq (patchedSrcFixture {patchNames = ["0002-noncanonical.patch"];}).patches true
@@ -2731,6 +2753,22 @@
       {
         assertion = patchedSrcSubsetEval.success;
         message = "patchedSrc should accept a patchNames subset of the discovered series";
+      }
+      {
+        assertion =
+          patchedSrcPatchSetEval.success
+          && patchedSrcPatchSetEval.value
+          == {
+            count = 1;
+            names = ["0001-canonical.patch"];
+            hashLength = 64;
+            hashChangesWithContent = true;
+            alternateNames = [
+              "0001-canonical.patch"
+              "0002-canonical.patch"
+            ];
+          };
+        message = "patchedSrc should expose a content-sensitive SHA-256 identity for the selected series";
       }
       {
         assertion = !patchedSrcSubsetNonCanonicalEval.success;
