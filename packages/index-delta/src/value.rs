@@ -31,15 +31,11 @@ pub enum Format {
 
 impl fmt::Display for Format {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = match self {
-            Self::Json => "json",
-            Self::Toml => "toml",
-            Self::Yaml => "yaml",
-            Self::Plist => "plist",
-            Self::Keyvalue => "keyvalue",
-            Self::Text => "text",
-        };
-        f.write_str(name)
+        // Single source of truth for the lowercase names: the ValueEnum
+        // derive (which also keeps Display in sync with the CLI's accepted
+        // `--format` spellings and the serde rename above).
+        let value = clap::ValueEnum::to_possible_value(self).expect("no skipped variants");
+        f.write_str(value.get_name())
     }
 }
 

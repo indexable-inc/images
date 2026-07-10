@@ -189,16 +189,14 @@ fn diff_values(
                 }
                 path.pop();
             }
-            for (key, new_item) in new_map {
-                if !old_map.contains_key(key) {
-                    path.push(key.clone());
-                    ops.push(Op::Add {
-                        path: render(addr, path),
-                        value: new_item.clone(),
-                    });
-                    path.pop();
-                }
-            }
+            let added = new_map
+                .iter()
+                .filter(|(key, _)| !old_map.contains_key(*key))
+                .map(|(key, item)| (key.clone(), item));
+            push_leaf_ops(addr, path, ops, added, |path, value| Op::Add {
+                path,
+                value,
+            });
         }
         (Value::Array(old_items), Value::Array(new_items)) => {
             diff_arrays(addr, path, old_items, new_items, ops);
@@ -232,30 +230,49 @@ fn diff_arrays(
             path.pop();
         }
     } else if prefix_equal && new_items.len() > old_items.len() {
-        for (index, new_item) in new_items.iter().enumerate().skip(old_items.len()) {
-            path.push(index.to_string());
-            ops.push(Op::Add {
-                path: render(addr, path),
-                value: new_item.clone(),
-            });
-            path.pop();
-        }
+        let appended = indexed(new_items, old_items.len());
+        push_leaf_ops(addr, path, ops, appended, |path, value| Op::Add {
+            path,
+            value,
+        });
     } else if prefix_equal {
         // Descending so the ops stay valid when applied in order.
-        for (index, old_item) in old_items.iter().enumerate().skip(new_items.len()).rev() {
-            path.push(index.to_string());
-            ops.push(Op::Remove {
-                path: render(addr, path),
-                from: old_item.clone(),
-            });
-            path.pop();
-        }
+        let truncated = indexed(old_items, new_items.len()).rev();
+        push_leaf_ops(addr, path, ops, truncated, |path, from| Op::Remove {
+            path,
+            from,
+        });
     } else {
         ops.push(Op::Replace {
             path: render(addr, path),
             from: Value::Array(old_items.to_vec()),
             to: Value::Array(new_items.to_vec()),
         });
+    }
+}
+
+fn indexed(items: &[Value], from: usize) -> impl DoubleEndedIterator<Item = (String, &Value)> {
+    items
+        .iter()
+        .enumerate()
+        .skip(from)
+        .map(|(index, item)| (index.to_string(), item))
+}
+
+/// Emit one leaf op per `(segment, value)` pair, each addressed one level
+/// below the current `path`. Shared by object-key adds and array tail
+/// adds/removes so the push/render/pop dance lives in exactly one place.
+fn push_leaf_ops<'v>(
+    addr: Addressing,
+    path: &mut Vec<String>,
+    ops: &mut Vec<Op>,
+    items: impl Iterator<Item = (String, &'v Value)>,
+    make: fn(String, Value) -> Op,
+) {
+    for (segment, value) in items {
+        path.push(segment);
+        ops.push(make(render(addr, path), value.clone()));
+        path.pop();
     }
 }
 
