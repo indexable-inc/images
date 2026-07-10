@@ -5,7 +5,7 @@
   ...
 }: let
   cfg = config.programs.tmux.structured;
-  types = lib.types;
+  inherit (lib) types;
   renderValue = value: lib.escapeShellArg value;
   renderSettings = command: settings:
     lib.concatMap (name:
