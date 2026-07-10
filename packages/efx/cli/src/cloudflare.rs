@@ -291,7 +291,7 @@ fn optional_typed<T>(
                     "`{}` input `{key}` must be {expected}, got `{value}`",
                     request.kind
                 ))
-            })
+             })
         },
     )
 }

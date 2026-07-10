@@ -158,7 +158,7 @@ mod tests {
 
     fn assert_filter(spec: &FilterSpec, expected: &serde_json::Value) {
         let filter = build_filter(spec).expect("filter");
-        assert_eq!(serde_json::to_value(filter).expect("serialize filter"), *expected);
+        assert_eq!(&serde_json::to_value(filter).expect("serialize filter"), expected);
     }
 
     #[test]
