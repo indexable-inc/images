@@ -47,6 +47,7 @@
   }: let
     cfg = config.home.mutableJsonFiles;
     jsonFormat = pkgs.formats.json {};
+    emptyJson = jsonFormat.generate "mutable-json-empty.json" {};
     mergeProgram = ./mutable-json-merge.jq;
     stateDir = "${config.xdg.stateHome}/home-manager/mutable-json";
 
@@ -71,15 +72,20 @@
       # An absent (or unreadable) target/state file is treated as empty `{}`;
       # malformed JSON in either makes jq fail below and aborts the switch
       # rather than silently overwriting.
-      _live=$([ -f ${targetArg} ] && ${pkgs.coreutils}/bin/cat ${targetArg} || ${pkgs.coreutils}/bin/echo '{}')
-      _last=$([ -f ${stateArg} ] && ${pkgs.coreutils}/bin/cat ${stateArg} || ${pkgs.coreutils}/bin/echo '{}')
-      _merged=$(${pkgs.jq}/bin/jq -n \
-        --argjson last "$_last" \
-        --argjson live "$_live" \
-        --argjson new "$(${pkgs.coreutils}/bin/cat ${desired})" \
-        -f ${mergeProgram})
-      ${pkgs.coreutils}/bin/printf '%s\n' "$_merged" > ${targetArg}.hm-mutable-json-tmp
-      ${pkgs.coreutils}/bin/mv -f ${targetArg}.hm-mutable-json-tmp ${targetArg}
+      (
+        umask 077
+        _live_file=${emptyJson}
+        _last_file=${emptyJson}
+        [ ! -f ${targetArg} ] || _live_file=${targetArg}
+        [ ! -f ${stateArg} ] || _last_file=${stateArg}
+        _tmp=${targetArg}.hm-mutable-json-tmp.$$
+        ${pkgs.jq}/bin/jq -n \
+          --slurpfile last "$_last_file" \
+          --slurpfile live "$_live_file" \
+          --slurpfile new ${desired} \
+          -f ${mergeProgram} > "$_tmp"
+        ${pkgs.coreutils}/bin/mv -f "$_tmp" ${targetArg}
+      )
       ${pkgs.coreutils}/bin/install -m644 ${desired} ${stateArg}
     '';
   in {

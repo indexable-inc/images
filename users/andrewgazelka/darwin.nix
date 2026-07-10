@@ -59,7 +59,7 @@
       # RealVNC viewer: the ix fleet's headless remote desktop is wayvnc, which
       # offers only RFB security type "None" (no auth); macOS Screen Sharing.app
       # refuses no-auth servers, so a third-party client is required to reach
-      # `vnc://<host>.tail368802.ts.net:5900`. See ix nix/modules/desktop/remote-desktop.nix.
+      # `vnc://<host>.<tailnet>.ts.net:5900`. See ix nix/modules/desktop/remote-desktop.nix.
       "vnc-viewer"
       "zed@preview"
       "zoom"
