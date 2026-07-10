@@ -358,86 +358,16 @@ unibind-backend-ex = { path = "packages/unibind/backend-ex" }
 unibind-backend-py = { path = "packages/unibind/backend-py" }
 unibind-backend-ts = { path = "packages/unibind/backend-ts" }
 unibind-core = { path = "packages/unibind/core" }
-<<<<<<< LEFT
 unibind-test-support = { path = "packages/unibind/test-support" }
-||||||| BASE
-unibind-py-runtime = { path = "packages/unibind/py-runtime" }
-=======
 unibind-ex-runtime = { path = "packages/unibind/ex-runtime" }
->>>>>>> RIGHT
-<<<<<<< LEFT
-unibind-ex-runtime = { path = "packages/unibind/ex-runtime" }
-||||||| BASE
-unibind-runtime = { path = "packages/unibind/runtime" }
-=======
 unibind-py-runtime = { path = "packages/unibind/py-runtime" }
->>>>>>> RIGHT
-<<<<<<< LEFT
-unibind-py-runtime = { path = "packages/unibind/py-runtime" }
-||||||| BASE
-url = { version = "2.5.8", default-features = false }
-=======
 unibind-runtime = { path = "packages/unibind/runtime" }
->>>>>>> RIGHT
-<<<<<<< LEFT
-unibind-runtime = { path = "packages/unibind/runtime" }
-||||||| BASE
-uuid = "1"
-=======
 url = { version = "2.5.8", default-features = false }
->>>>>>> RIGHT
-<<<<<<< LEFT
-url = { version = "2.5.8", default-features = false }
-||||||| BASE
-webpki-roots = "1"
-=======
 uuid = "1"
->>>>>>> RIGHT
-<<<<<<< LEFT
-uuid = "1"
-||||||| BASE
-# `transparent` is a non-default feature: without it `with_transparent(true)`
-=======
 webpki-roots = "1"
->>>>>>> RIGHT
-<<<<<<< LEFT
-webpki-roots = "1"
-||||||| BASE
-# is a silent no-op and the webview paints an opaque canvas, hiding the
-=======
 # `transparent` is a non-default feature: without it `with_transparent(true)`
->>>>>>> RIGHT
-<<<<<<< LEFT
-# `transparent` is a non-default feature: without it `with_transparent(true)`
-||||||| BASE
-# ix-windows blur behind a flat card.
-=======
 # is a silent no-op and the webview paints an opaque canvas, hiding the
->>>>>>> RIGHT
-<<<<<<< LEFT
-# is a silent no-op and the webview paints an opaque canvas, hiding the
-||||||| BASE
-wry = { version = "0.55", features = ["transparent"] }
-=======
 # ix-windows blur behind a flat card.
->>>>>>> RIGHT
-<<<<<<< LEFT
-# ix-windows blur behind a flat card.
-||||||| BASE
-x509-parser = "0.18"
-=======
 wry = { version = "0.55", features = ["transparent"] }
->>>>>>> RIGHT
-<<<<<<< LEFT
-wry = { version = "0.55", features = ["transparent"] }
-||||||| BASE
-xxhash-rust = { version = "0.8", default-features = false }
-=======
 x509-parser = "0.18"
->>>>>>> RIGHT
-<<<<<<< LEFT
-x509-parser = "0.18"
-=======
-xxhash-rust = { version = "0.8", default-features = false }
->>>>>>> RIGHT
 xxhash-rust = { version = "0.8", default-features = false }
