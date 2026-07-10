@@ -7,8 +7,9 @@
 # gap: it boots a NixOS VM with `services.minestom.serverJar` pointed at the
 # spleef jar and asserts (1) the unit comes up, (2) Main logged its readiness
 # line, (3) the port is open, and (4) a real Minecraft server-list ping —
-# handshake + status request over the wire protocol — gets a well-formed
-# status JSON back.
+# `mc-probe`, the repo's SLP asserter (packages/minecraft/minecraft/probe),
+# the same tool the minecraft/velocity modules use for health checks —
+# answers with the pinned protocol version.
 #
 # Minestom needs no bootstrap step (no paperclip, no EULA, no world download),
 # so unlike tests/minecraft-blocks-vm.nix there is no build-time pre-patching:
@@ -19,7 +20,9 @@
   ix,
   paths,
 }: let
-  spleefJar = (ix.packageSetFor pkgs).minestom.spleefServerJar;
+  packages = ix.packageSetFor pkgs;
+  spleefJar = packages.minestom.spleefServerJar;
+  mcProbe = lib.getExe packages.mc-probe;
 in
   pkgs.testers.runNixOSTest {
     name = "minestom-spleef-boot";
@@ -72,9 +75,11 @@ in
       )
       server.wait_for_open_port(25565)
 
-      # End-to-end protocol proof: a real server-list ping (handshake +
-      # status request, varint framing and all) answered with status JSON.
-      server.succeed("${lib.getExe pkgs.python3} ${./minestom-spleef-vm/ping.py}")
+      # End-to-end protocol proof: a real server-list ping answered with a
+      # well-formed status. Protocol 775 = Minecraft 26.1.2, in lockstep with
+      # the Minestom pin in servers/spleef/build.gradle.kts; a version bump
+      # there moves this assertion too.
+      server.succeed("${mcProbe} 127.0.0.1:25565 --protocol-version 775 --timeout 30")
 
       server.shutdown()
     '';

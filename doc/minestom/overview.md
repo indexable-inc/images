@@ -84,4 +84,6 @@ loaders/mods/EULA. A consumer can make a runnable fleet by setting
 
 The spleef server is covered end-to-end by `checks.<system>.minestom-spleef-vm`
 (`tests/minestom-spleef-vm.nix`): a NixOS VM boots the jar under
-`services.minestom` and a real Minecraft server-list ping must answer.
+`services.minestom` and a real Minecraft server-list ping — `mc-probe`, the
+repo's SLP asserter (`packages/minecraft/minecraft/probe`) — must answer with
+the pinned protocol version.
