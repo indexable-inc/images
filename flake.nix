@@ -490,6 +490,17 @@
       # zero eval. Set `provenance.rev = self.rev or self.dirtyRev or null`
       # in the consuming flake. See modules/darwin/provenance.nix.
       provenance = import ./modules/darwin/provenance.nix {inherit (ix) provenance;};
+      # System-level (root, /etc) adapter for declarative-but-writable files:
+      # same model as homeModules.mutable-files, state under
+      # /var/db/index-delta, boot-time reseed daemon. See
+      # modules/darwin/mutable-files.nix.
+      mutable-files = import ./modules/darwin/mutable-files.nix {
+        indexPackages = system: packages.${system};
+      };
+      # Declarative NFS automounts via macOS autofs: each entry renders a
+      # direct-map line, /etc/auto_master gains the include idempotently, and
+      # activation reloads automountd. See modules/darwin/nfs.nix.
+      nfs = ./modules/darwin/nfs.nix;
     };
     homeModules = {
       # Workstation-facing home-manager module: declare a service once, get a
@@ -499,6 +510,17 @@
       # Declarative-but-writable JSON config files (last-applied 3-way merge),
       # for config an app rewrites at runtime. See lib/mutable-json.nix.
       mutable-json = ix.mutableJson.homeModule;
+      # Declarative-but-writable files with logical (format-aware) drift
+      # tracking and a model-oriented resolution queue — no auto-merge.
+      # Declared content seeds a plain writable file; ephemeral files reset
+      # at login (drift journaled), durable files queue base-vs-drift
+      # conflicts in `index-delta status --json` for discard / adopt /
+      # absorb-into-Nix via `index-delta apply-ops`. See
+      # modules/home/mutable-files.nix and packages/index-delta.
+      mutable-files = import ./modules/home/mutable-files.nix {
+        indexPackages = system: packages.${system};
+        portableServicesModule = ix.portableServices.homeModule;
+      };
       # Reusable workstation module (macOS): declare Raycast Focus session
       # defaults (title, filter mode, duration) and have them written to the
       # com.raycast.macos defaults domain at switch time. Import it and set
