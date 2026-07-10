@@ -103,6 +103,16 @@
       }
     ];
   };
+  storeKey = eval {
+    nix.remoteBuilders = [
+      {
+        name = "store-key";
+        hostName = "builder.example.com";
+        sshKey = "${builtins.storeDir}/test-private-key";
+        systems = ["aarch64-linux"];
+      }
+    ];
+  };
 
   sshConfig = configured.environment.etc."ssh/ssh_config.d/000-index-remote-builders.conf".text;
 
@@ -190,8 +200,12 @@
       message = "the SSH stanzas must render fixed safeguards, strict identity defaults, and caller data";
     }
     {
-      assertion = !(builtins.head duplicate.assertions).assertion;
+      assertion = lib.any (item: !item.assertion && item.message == "nix.remoteBuilders names must be unique") duplicate.assertions;
       message = "duplicate builder aliases must produce a failing module assertion";
+    }
+    {
+      assertion = lib.any (item: !item.assertion && item.message == "nix.remoteBuilders sshKey values must not point into the Nix store") storeKey.assertions;
+      message = "store-backed private keys must produce a failing module assertion";
     }
   ];
 
