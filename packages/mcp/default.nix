@@ -1,6 +1,8 @@
 {
   ix,
   lib,
+  nix,
+  updateScriptWriter ? null,
 }: let
   # The headless Nix build-tree emitter. The `nix` module's live-pane path spawns
   # it (`nix-web-monitor --emit ndjson`) so the parser stays the single owner of
@@ -15,13 +17,22 @@
   # callPackage would have auto-bound to a `pkgs` arg in the flake package set.
   inherit (ix) pkgs;
 
-  # PyPI source pins (version + sdist URL + SRI hash) for the interpreter
-  # overrides below, in the sibling pins.json (repo policy: no inline hash
-  # literals in tracked .nix). Each `url` is fetchPypi's canonical pypi.io
-  # source path (verified byte-identical to the pinned hashes). Re-pin after a
-  # version edit manually (rebuild, copy the `got:` hash): mcp carries no
-  # registry updateScript, so `nix run .#update` does not touch these pins.
+  # PyPI pins (version + URL + SRI hash) for the interpreter overrides below,
+  # in the sibling pins.json (repo policy: no inline hash literals in tracked
+  # .nix). `nix run .#mcp.updateScript` joins the registry update DAG and
+  # refreshes normal PyPI sdist pins from the JSON API. pins.json policy markers
+  # are `prefetch = "manual"` for hash-mode holds, `hold` for version holds, and
+  # `track` for version-line tracking, so the updater skips or narrows pins
+  # loudly instead of guessing.
   pypiPins = ix.pins.loadPins ./pins.json;
+  updateScript =
+    if updateScriptWriter == null
+    then null
+    else
+      import ./update.nix {
+        inherit nix;
+        writeNushellApplication = updateScriptWriter;
+      };
   # The PTY-driving `tui` package, baked into the pinned interpreter so every
   # session can `import tui` with no setup. The PyO3 cdylib comes from the same
   # shared workspace graph the binary is selected from, dropped next to the
@@ -5740,5 +5751,8 @@ in
               ghosttySmoke
               ;
           };
+      }
+      // lib.optionalAttrs (updateScript != null) {
+        inherit updateScript;
       };
   })
