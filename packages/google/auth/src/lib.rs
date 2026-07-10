@@ -462,6 +462,35 @@ struct CachedAccessToken {
 /// CLI mints one access token per invocation and tosses it; a long-lived
 /// process (the MCP server) holds one [`Authenticator`] for the process
 /// lifetime and refreshes transparently as tokens expire.
+/// Render the shared Gmail/Calendar logout result for human or JSON output.
+#[must_use]
+pub fn logout_message(removed: &[PathBuf], json: bool) -> String {
+    if json {
+        return serde_json::json!({
+            "signed_out": !removed.is_empty(),
+            "removed": removed
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>(),
+        })
+        .to_string();
+    }
+    if removed.is_empty() {
+        return "Already signed out: no stored Google token.".to_owned();
+    }
+
+    let mut message = removed
+        .iter()
+        .map(|path| format!("Removed {}", path.display()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    message.push_str(
+        "\nSigned out. To fully revoke access, also remove it at \
+         https://myaccount.google.com/permissions",
+    );
+    message
+}
+
 pub struct Authenticator {
     token: TokenClient,
     store: TokenStore,
@@ -860,7 +889,7 @@ pub fn http_client() -> Result<reqwest::Client> {
 mod tests {
     use tempfile::TempDir;
 
-    use super::{StoredToken, TokenStore, challenge_for};
+    use super::{StoredToken, TokenStore, challenge_for, logout_message};
     use crate::error::Error;
 
     #[test]
@@ -954,5 +983,20 @@ mod tests {
 
         // A second remove is a no-op, not an error: logout is idempotent.
         assert!(store.remove().expect("second remove").is_empty());
+    }
+
+    #[test]
+    fn logout_message_supports_human_and_json_output() {
+        let removed = [std::path::PathBuf::from("/tmp/token.json")];
+        assert_eq!(
+            logout_message(&[], false),
+            "Already signed out: no stored Google token."
+        );
+        assert!(logout_message(&removed, false).contains("Removed /tmp/token.json"));
+
+        let json: serde_json::Value =
+            serde_json::from_str(&logout_message(&removed, true)).expect("valid JSON");
+        assert_eq!(json["signed_out"], true);
+        assert_eq!(json["removed"][0], "/tmp/token.json");
     }
 }

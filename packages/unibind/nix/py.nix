@@ -8,6 +8,7 @@
   packageRegistry,
   rustWorkspace,
   buildPyStrictCheck,
+  wheelBuilder,
 }: {
   crate,
   # Import-package name (`import <package>`); generated files land under
@@ -191,10 +192,11 @@
         "$sanitized"
 
       mkdir -p "$out"
-      python3 ${./mkwheel.py} \
+      python3 ${wheelBuilder} \
         --package ${lib.escapeShellArg package} \
         --dist-name ${lib.escapeShellArg distName} \
         --so-name ${lib.escapeShellArg "${moduleName}.abi3.so"} \
+        --summary ${lib.escapeShellArg "PyO3 bindings imported as ${package}"} \
         --cdylib "$sanitized" \
         --python-src ${pythonSite} \
         --version ${lib.escapeShellArg workspaceVersion} \

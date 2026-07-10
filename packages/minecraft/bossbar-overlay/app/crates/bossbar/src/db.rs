@@ -7,7 +7,6 @@
 
 use std::{
     path::{Path, PathBuf},
-    thread,
     time::Duration,
 };
 
@@ -177,50 +176,14 @@ pub fn read_once(path: &Path) -> rusqlite::Result<Vec<BossBar>> {
 /// Background loop: re-read bars whenever the DB changes and hand them to
 /// `sink`. The loop exits as soon as `sink` returns `false`, which is how the
 /// UI thread signals the window has closed.
-pub fn spawn_watcher<F>(db: PathBuf, mut sink: F)
-where
-    F: FnMut(Vec<BossBar>) -> bool + Send + 'static,
-{
-    thread::spawn(move || {
-        let mut conn = match open(&db) {
-            Ok(c) => Some(c),
-            Err(e) => {
-                eprintln!("bossbar-overlay: failed to open {}: {e}", db.display());
-                None
-            }
-        };
-        let mut last_version: Option<i64> = None;
-
-        loop {
-            match conn.as_ref() {
-                Some(c) => match data_version(c) {
-                    Ok(v) if Some(v) != last_version => {
-                        last_version = Some(v);
-                        match read(c) {
-                            Ok(bars) => {
-                                if !sink(bars) {
-                                    return;
-                                }
-                            }
-                            Err(e) => eprintln!("bossbar-overlay: read failed: {e}"),
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        eprintln!("bossbar-overlay: poll failed, reopening: {e}");
-                        conn = None;
-                        last_version = None;
-                    }
-                },
-                None => {
-                    // DB went away or never opened: retry the open.
-                    conn = open(&db).ok();
-                }
-            }
-            thread::sleep(POLL);
-        }
-    });
-}
+overlay_core::define_data_watcher!(
+    Vec<BossBar>,
+    POLL,
+    "bossbar-overlay",
+    open,
+    data_version,
+    read
+);
 
 #[cfg(test)]
 mod tests {

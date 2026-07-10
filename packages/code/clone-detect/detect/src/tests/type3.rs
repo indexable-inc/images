@@ -1,6 +1,6 @@
 use tempfile::TempDir;
 
-use super::helpers::{create_temp_file, scan_and_run};
+use super::helpers::{assert_no_overlapping_fragments, create_temp_file, scan_and_run};
 use crate::{DetectConfig, DetectionResult, Kind, Type3Metric};
 
 /// The original function for the moderately-Type-3 fixture.
@@ -50,13 +50,13 @@ fn has_function_pair_group(result: &DetectionResult) -> bool {
     })
 }
 
-fn run_mt3(metric: Type3Metric) -> DetectionResult {
+fn run_mt3(metric: Type3Metric, threshold: f64) -> DetectionResult {
     let dir = TempDir::new().unwrap();
     create_temp_file(&dir, "orig.rs", MT3_ORIGINAL);
     create_temp_file(&dir, "edited.rs", MT3_EDITED);
     let config = DetectConfig {
         enable_type3: true,
-        type3_threshold: 0.7,
+        type3_threshold: threshold,
         type3_metric: metric,
         ..DetectConfig::default()
     };
@@ -69,13 +69,13 @@ fn run_mt3(metric: Type3Metric) -> DetectionResult {
 /// metric changed semantics.
 #[test]
 fn overlap_catches_inserted_statement_clone_jaccard_misses() {
-    let jaccard = run_mt3(Type3Metric::Jaccard);
+    let jaccard = run_mt3(Type3Metric::Jaccard, 0.7);
     assert!(
         !has_function_pair_group(&jaccard),
         "jaccard at 0.7 should miss the insert-heavy clone (that is its documented weakness)"
     );
 
-    let overlap = run_mt3(Type3Metric::Overlap);
+    let overlap = run_mt3(Type3Metric::Overlap, 0.7);
     assert!(
         has_function_pair_group(&overlap),
         "overlap at 0.7 must catch the insert-heavy clone"
@@ -86,7 +86,7 @@ fn overlap_catches_inserted_statement_clone_jaccard_misses() {
 /// its similarity score, so downstream consumers can interpret the number.
 #[test]
 fn type3_groups_carry_their_metric() {
-    let result = run_mt3(Type3Metric::Overlap);
+    let result = run_mt3(Type3Metric::Overlap, 0.7);
     for group in &result.instances {
         if let Kind::Type3 { metric, .. } = group.clone_type {
             assert_eq!(metric, Type3Metric::Overlap);
@@ -136,67 +136,38 @@ fn process_numbers(values: Vec<i32>) -> i32 {
 }
 
 #[test]
-fn enabled() {
-    let dir = TempDir::new().unwrap();
-
-    let code1 = r"
-fn process(items: Vec<i32>) -> i32 {
-    let mut sum = 0;
-    for item in items {
-        sum += item;
-    }
-    sum
-}
-";
-    let code2 = r"
-fn handle(values: Vec<i32>) -> i32 {
-    let mut total = 0;
-    for value in values {
-        total += value;
-    }
-    total
-}
-";
-    create_temp_file(&dir, "file1.rs", code1);
-    create_temp_file(&dir, "file2.rs", code2);
-
-    let config = DetectConfig {
-        enable_type3: true,
-        type3_threshold: 0.5,
-        ..DetectConfig::default()
-    };
-    let result = scan_and_run(&dir, &config);
-
-    let _ = result.stats.type3_groups;
+fn threshold_controls_type3_reporting() {
+    assert!(has_function_pair_group(&run_mt3(Type3Metric::Overlap, 0.7)));
+    assert!(!has_function_pair_group(&run_mt3(
+        Type3Metric::Overlap,
+        1.0
+    )));
 }
 
 #[test]
-fn high_threshold() {
+fn groups_never_compare_overlapping_regions_of_one_file() {
     let dir = TempDir::new().unwrap();
-
-    let code1 = r#"
-fn short_func() {
-    println!("hello");
+    let code = r#"
+fn process(values: &[i32]) -> i32 {
+    let mut total = 0;
+    for value in values {
+        if *value > 0 {
+            total += value;
+        }
+    }
+    total
 }
 "#;
-    let code2 = r#"
-fn long_func() {
-    println!("hello");
-    println!("world");
-    println!("more");
-    println!("stuff");
-    println!("here");
-}
-"#;
-    create_temp_file(&dir, "file1.rs", code1);
-    create_temp_file(&dir, "file2.rs", code2);
+    create_temp_file(&dir, "nested.rs", code);
 
-    let config = DetectConfig {
-        enable_type3: true,
-        type3_threshold: 0.95,
-        ..DetectConfig::default()
-    };
-    let result = scan_and_run(&dir, &config);
+    let result = scan_and_run(
+        &dir,
+        &DetectConfig {
+            enable_type3: true,
+            type3_threshold: 0.5,
+            ..DetectConfig::default()
+        },
+    );
 
-    let _ = result.stats.type3_groups;
+    assert_no_overlapping_fragments(&result, |kind| matches!(kind, Kind::Type3 { .. }));
 }

@@ -13,16 +13,12 @@
   # re-pins the hash.
   pin = ix.pins.loadPin ./pins.json "artifacts";
   inherit (pin) version;
-  updateScript =
-    if updateScriptWriter == null
-    then null
-    else
-      ix.pins.mkUpdater {
-        writeNushellApplication = updateScriptWriter;
-        inherit nix;
-        pname = "tonbo-artifacts";
-        relPath = "packages/tonbo-artifacts/pins.json";
-      };
+  updateScript = ix.pins.mkOptionalUpdater {
+    writeNushellApplication = updateScriptWriter;
+    inherit nix;
+    pname = "tonbo-artifacts";
+    relPath = "packages/tonbo-artifacts/pins.json";
+  };
 in
   stdenvNoCC.mkDerivation {
     pname = "tonbo-artifacts";

@@ -105,6 +105,7 @@ members = [
   "packages/unibind/macros",
   "packages/unibind/py-runtime",
   "packages/unibind/runtime",
+  "packages/unibind/test-support",
   "packages/vm/panes/audio",
   "packages/vm/panes/compositor",
   "packages/vm/panes/host",
@@ -356,6 +357,7 @@ unibind-backend-ex = { path = "packages/unibind/backend-ex" }
 unibind-backend-py = { path = "packages/unibind/backend-py" }
 unibind-backend-ts = { path = "packages/unibind/backend-ts" }
 unibind-core = { path = "packages/unibind/core" }
+unibind-test-support = { path = "packages/unibind/test-support" }
 unibind-ex-runtime = { path = "packages/unibind/ex-runtime" }
 unibind-py-runtime = { path = "packages/unibind/py-runtime" }
 unibind-runtime = { path = "packages/unibind/runtime" }

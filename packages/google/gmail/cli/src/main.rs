@@ -410,28 +410,7 @@ async fn run_auth(args: AuthArgs) -> anyhow::Result<()> {
 /// is a no-op, not an error.
 fn run_logout(json: bool) -> anyhow::Result<()> {
     let removed = TokenStore::new()?.remove()?;
-    if json {
-        println!(
-            "{}",
-            serde_json::json!({
-                "signed_out": !removed.is_empty(),
-                "removed": removed
-                    .iter()
-                    .map(|path| path.display().to_string())
-                    .collect::<Vec<_>>(),
-            })
-        );
-    } else if removed.is_empty() {
-        println!("Already signed out: no stored Google token.");
-    } else {
-        for path in &removed {
-            println!("Removed {}", path.display());
-        }
-        println!(
-            "Signed out. To fully revoke access, also remove it at \
-             https://myaccount.google.com/permissions"
-        );
-    }
+    println!("{}", google_auth::logout_message(&removed, json));
     Ok(())
 }
 

@@ -145,6 +145,42 @@ struct SyncOutcome {
 }
 
 impl<S: Store + Sync> MixedbreadReconciler<'_, S> {
+    async fn upload_and_wait(&self, documents: Vec<Document>) -> Result<usize> {
+        // The store is shared by every source, so only this batch's ids may
+        // gate its embedding wait (ENG-2699).
+        let uploaded_ids: Vec<String> = documents
+            .iter()
+            .map(|document| document.external_id.clone())
+            .collect();
+        let results: Vec<Result<()>> = stream::iter(documents)
+            .map(|document| async move {
+                self.store
+                    .upload(self.name, document)
+                    .await
+                    .context(StoreSnafu)
+            })
+            .buffer_unordered(UPLOAD_CONCURRENCY)
+            .collect()
+            .await;
+
+        for result in results {
+            result?;
+        }
+        let uploaded = uploaded_ids.len();
+        if uploaded != 0 {
+            wait_until_indexed(
+                self.store,
+                self.name,
+                &uploaded_ids,
+                self.index_timeout,
+                |_| {},
+            )
+            .await
+            .context(StoreSnafu)?;
+        }
+        Ok(uploaded)
+    }
+
     /// One source's upload half, shared by [`Reconciler::reconcile`] (which
     /// keeps remote absences) and [`Self::replace`] (which deletes them): list
     /// the source's remote records, upload the new or changed documents, and
@@ -186,37 +222,7 @@ impl<S: Store + Sync> MixedbreadReconciler<'_, S> {
 
         let skipped = documents.len() - to_upload.len();
 
-        // The embedding wait below is gated on exactly these ids, never the
-        // store-wide pending counts: the store is shared by every source, so
-        // another source's backlog must not block this source's pass (ENG-2699).
-        let uploaded_ids: Vec<String> = to_upload
-            .iter()
-            .map(|document| document.external_id.clone())
-            .collect();
-
-        let results: Vec<Result<()>> = stream::iter(to_upload)
-            .map(|document| async move {
-                self.store
-                    .upload(self.name, document)
-                    .await
-                    .context(StoreSnafu)?;
-                Ok(())
-            })
-            .buffer_unordered(UPLOAD_CONCURRENCY)
-            .collect()
-            .await;
-
-        let mut uploaded = 0;
-        for result in results {
-            result?;
-            uploaded += 1;
-        }
-
-        if uploaded > 0 {
-            wait_until_indexed(self.store, self.name, &uploaded_ids, self.index_timeout, |_| {})
-                .await
-                .context(StoreSnafu)?;
-        }
+        let uploaded = self.upload_and_wait(to_upload).await?;
 
         Ok(SyncOutcome {
             remote,
@@ -282,34 +288,7 @@ impl<S: Store + Sync> MixedbreadReconciler<'_, S> {
             .await
             .context(StoreSnafu)?;
 
-        // As in `sync_source`: wait on this delta's own ids, not the shared
-        // store's aggregate backlog (ENG-2699).
-        let upserted_ids: Vec<String> = upserts
-            .iter()
-            .map(|document| document.external_id.clone())
-            .collect();
-
-        let results: Vec<Result<()>> = stream::iter(upserts)
-            .map(|document| async move {
-                self.store
-                    .upload(self.name, document)
-                    .await
-                    .context(StoreSnafu)?;
-                Ok(())
-            })
-            .buffer_unordered(UPLOAD_CONCURRENCY)
-            .collect()
-            .await;
-        let mut uploaded = 0;
-        for result in results {
-            result?;
-            uploaded += 1;
-        }
-        if uploaded > 0 {
-            wait_until_indexed(self.store, self.name, &upserted_ids, self.index_timeout, |_| {})
-                .await
-                .context(StoreSnafu)?;
-        }
+        let uploaded = self.upload_and_wait(upserts).await?;
 
         let mut removed = 0;
         if !deletes.is_empty() {
@@ -362,7 +341,10 @@ impl<S: Store + Sync> MixedbreadReconciler<'_, S> {
 
         let plan = plan_gc(&records, produced);
         for key in &plan.deletes {
-            self.store.delete(self.name, key).await.context(StoreSnafu)?;
+            self.store
+                .delete(self.name, key)
+                .await
+                .context(StoreSnafu)?;
         }
 
         Ok(GcReport {
@@ -620,91 +602,143 @@ mod tests {
         assert_eq!(store.len(), 1, "only the other source's record remains");
     }
 
-    /// A store whose record listing drops the requested filter, standing in for
-    /// a backend that silently ignores an unrecognized filter parameter (the
-    /// production API did exactly this when the parameter was misnamed).
-    struct UnscopedStore(MemoryStore);
+    #[derive(Clone, Copy)]
+    enum TestStoreBehavior {
+        UnscopedListings,
+        PermanentBacklog,
+    }
 
-    impl search_core::Store for UnscopedStore {
+    struct TestStore {
+        inner: MemoryStore,
+        behavior: TestStoreBehavior,
+    }
+
+    impl TestStore {
+        fn unscoped(inner: MemoryStore) -> Self {
+            Self {
+                inner,
+                behavior: TestStoreBehavior::UnscopedListings,
+            }
+        }
+
+        fn backlogged(inner: MemoryStore) -> Self {
+            Self {
+                inner,
+                behavior: TestStoreBehavior::PermanentBacklog,
+            }
+        }
+
+        fn listing_filters<'a>(
+            &self,
+            filters: Option<&'a search_core::Filter>,
+        ) -> Option<&'a search_core::Filter> {
+            match self.behavior {
+                TestStoreBehavior::UnscopedListings => None,
+                TestStoreBehavior::PermanentBacklog => filters,
+            }
+        }
+    }
+
+    macro_rules! forward_store_method {
+        (ranked $method:ident, $query:ident, $options:ty, $output:ty) => {
+            async fn $method(
+                &self,
+                stores: &[String],
+                $query: &str,
+                top_k: usize,
+                options: $options,
+                filters: Option<&search_core::Filter>,
+            ) -> search_core::Result<$output> {
+                self.inner
+                    .$method(stores, $query, top_k, options, filters)
+                .await
+            }
+        };
+        (chunks) => {
+            async fn list_chunks(
+                &self,
+                stores: &[String],
+                top_k: usize,
+                filters: Option<&search_core::Filter>,
+                sort_by: Option<&search_core::SortBy>,
+            ) -> search_core::Result<Vec<search_core::SearchHit>> {
+                self.inner
+                    .list_chunks(stores, top_k, filters, sort_by)
+                    .await
+            }
+        };
+        (facets) => {
+            async fn facets(
+                &self,
+                stores: &[String],
+                keys: &[&str],
+                filters: Option<&search_core::Filter>,
+            ) -> search_core::Result<search_core::Facets> {
+                self.inner.facets(stores, keys, filters).await
+            }
+        };
+    }
+
+    impl search_core::Store for TestStore {
         async fn ensure_store(&self, name: &str) -> search_core::Result<()> {
-            self.0.ensure_store(name).await
+            self.inner.ensure_store(name).await
         }
         async fn list_external_ids(
             &self,
             store: &str,
-            _filters: Option<&search_core::Filter>,
+            filters: Option<&search_core::Filter>,
         ) -> search_core::Result<std::collections::HashSet<String>> {
-            self.0.list_external_ids(store, None).await
+            self.inner
+                .list_external_ids(store, self.listing_filters(filters))
+                .await
         }
         async fn list_records(
             &self,
             store: &str,
-            _filters: Option<&search_core::Filter>,
+            filters: Option<&search_core::Filter>,
         ) -> search_core::Result<Vec<search_core::StoredRecord>> {
-            self.0.list_records(store, None).await
+            self.inner
+                .list_records(store, self.listing_filters(filters))
+                .await
         }
         async fn upload(&self, store: &str, document: Document) -> search_core::Result<()> {
-            self.0.upload(store, document).await
+            self.inner.upload(store, document).await
         }
         async fn delete(&self, store: &str, external_id: &str) -> search_core::Result<()> {
-            self.0.delete(store, external_id).await
+            self.inner.delete(store, external_id).await
         }
-        async fn search(
-            &self,
-            stores: &[String],
-            query: &str,
-            top_k: usize,
-            options: search_core::SearchOptions,
-            filters: Option<&search_core::Filter>,
-        ) -> search_core::Result<Vec<search_core::SearchHit>> {
-            self.0.search(stores, query, top_k, options, filters).await
-        }
-        async fn grep(
-            &self,
-            stores: &[String],
-            pattern: &str,
-            top_k: usize,
-            options: search_core::GrepOptions,
-            filters: Option<&search_core::Filter>,
-        ) -> search_core::Result<Vec<search_core::SearchHit>> {
-            self.0.grep(stores, pattern, top_k, options, filters).await
-        }
-        async fn list_chunks(
-            &self,
-            stores: &[String],
-            top_k: usize,
-            filters: Option<&search_core::Filter>,
-            sort_by: Option<&search_core::SortBy>,
-        ) -> search_core::Result<Vec<search_core::SearchHit>> {
-            self.0.list_chunks(stores, top_k, filters, sort_by).await
-        }
-        async fn facets(
-            &self,
-            stores: &[String],
-            keys: &[&str],
-            filters: Option<&search_core::Filter>,
-        ) -> search_core::Result<search_core::Facets> {
-            self.0.facets(stores, keys, filters).await
-        }
-        async fn ask(
-            &self,
-            stores: &[String],
-            query: &str,
-            top_k: usize,
-            options: search_core::AskOptions,
-            filters: Option<&search_core::Filter>,
-        ) -> search_core::Result<search_core::Answer> {
-            self.0.ask(stores, query, top_k, options, filters).await
-        }
+        forward_store_method!(
+            ranked
+            search,
+            query,
+            search_core::SearchOptions,
+            Vec<search_core::SearchHit>
+        );
+        forward_store_method!(
+            ranked
+            grep,
+            pattern,
+            search_core::GrepOptions,
+            Vec<search_core::SearchHit>
+        );
+        forward_store_method!(chunks);
+        forward_store_method!(facets);
+        forward_store_method!(ranked ask, query, search_core::AskOptions, search_core::Answer);
         async fn store_status(&self, store: &str) -> search_core::Result<search_core::StoreStatus> {
-            self.0.store_status(store).await
+            match self.behavior {
+                TestStoreBehavior::UnscopedListings => self.inner.store_status(store).await,
+                TestStoreBehavior::PermanentBacklog => Ok(search_core::StoreStatus {
+                    pending: 999,
+                    in_progress: 0,
+                }),
+            }
         }
         async fn file_status(
             &self,
             store: &str,
             external_id: &str,
         ) -> search_core::Result<Option<search_core::FileStatus>> {
-            self.0.file_status(store, external_id).await
+            self.inner.file_status(store, external_id).await
         }
     }
 
@@ -724,7 +758,7 @@ mod tests {
             .await
             .expect("seed other");
 
-        let store = UnscopedStore(memory);
+        let store = TestStore::unscoped(memory);
         let err = MixedbreadReconciler {
             store: &store,
             name: "s",
@@ -733,108 +767,12 @@ mod tests {
         .replace(&Source::new("linear"), &[linear_doc("A", "a")])
         .await
         .expect_err("an unscoped listing must abort the replace");
-        assert!(
-            matches!(err, crate::Error::ScopeLeak { .. }),
-            "got {err:?}"
-        );
+        assert!(matches!(err, crate::Error::ScopeLeak { .. }), "got {err:?}");
         assert_eq!(
-            store.0.len(),
+            store.inner.len(),
             2,
             "nothing may be uploaded or deleted off a leaked listing"
         );
-    }
-
-    /// A store whose aggregate counts report a permanent backlog (another
-    /// source's documents, forever embedding) while every file actually stored
-    /// is already settled. Old behavior gated each source's post-upload wait on
-    /// the aggregate, so this store would stall every reconcile until its full
-    /// `index_timeout` elapsed.
-    struct BackloggedStore(MemoryStore);
-
-    impl search_core::Store for BackloggedStore {
-        async fn ensure_store(&self, name: &str) -> search_core::Result<()> {
-            self.0.ensure_store(name).await
-        }
-        async fn list_external_ids(
-            &self,
-            store: &str,
-            filters: Option<&search_core::Filter>,
-        ) -> search_core::Result<std::collections::HashSet<String>> {
-            self.0.list_external_ids(store, filters).await
-        }
-        async fn list_records(
-            &self,
-            store: &str,
-            filters: Option<&search_core::Filter>,
-        ) -> search_core::Result<Vec<search_core::StoredRecord>> {
-            self.0.list_records(store, filters).await
-        }
-        async fn upload(&self, store: &str, document: Document) -> search_core::Result<()> {
-            self.0.upload(store, document).await
-        }
-        async fn delete(&self, store: &str, external_id: &str) -> search_core::Result<()> {
-            self.0.delete(store, external_id).await
-        }
-        async fn search(
-            &self,
-            stores: &[String],
-            query: &str,
-            top_k: usize,
-            options: search_core::SearchOptions,
-            filters: Option<&search_core::Filter>,
-        ) -> search_core::Result<Vec<search_core::SearchHit>> {
-            self.0.search(stores, query, top_k, options, filters).await
-        }
-        async fn grep(
-            &self,
-            stores: &[String],
-            pattern: &str,
-            top_k: usize,
-            options: search_core::GrepOptions,
-            filters: Option<&search_core::Filter>,
-        ) -> search_core::Result<Vec<search_core::SearchHit>> {
-            self.0.grep(stores, pattern, top_k, options, filters).await
-        }
-        async fn list_chunks(
-            &self,
-            stores: &[String],
-            top_k: usize,
-            filters: Option<&search_core::Filter>,
-            sort_by: Option<&search_core::SortBy>,
-        ) -> search_core::Result<Vec<search_core::SearchHit>> {
-            self.0.list_chunks(stores, top_k, filters, sort_by).await
-        }
-        async fn facets(
-            &self,
-            stores: &[String],
-            keys: &[&str],
-            filters: Option<&search_core::Filter>,
-        ) -> search_core::Result<search_core::Facets> {
-            self.0.facets(stores, keys, filters).await
-        }
-        async fn ask(
-            &self,
-            stores: &[String],
-            query: &str,
-            top_k: usize,
-            options: search_core::AskOptions,
-            filters: Option<&search_core::Filter>,
-        ) -> search_core::Result<search_core::Answer> {
-            self.0.ask(stores, query, top_k, options, filters).await
-        }
-        async fn store_status(&self, _store: &str) -> search_core::Result<search_core::StoreStatus> {
-            Ok(search_core::StoreStatus {
-                pending: 999,
-                in_progress: 0,
-            })
-        }
-        async fn file_status(
-            &self,
-            store: &str,
-            external_id: &str,
-        ) -> search_core::Result<Option<search_core::FileStatus>> {
-            self.0.file_status(store, external_id).await
-        }
     }
 
     #[tokio::test]
@@ -844,7 +782,7 @@ mod tests {
         // permanent 999-file aggregate backlog and a deliberately long
         // index_timeout, the old store-wide gate would block for the full
         // timeout; the per-file gate returns as soon as our two uploads settle.
-        let store = BackloggedStore(MemoryStore::new());
+        let store = TestStore::backlogged(MemoryStore::new());
         let sink = MixedbreadReconciler {
             store: &store,
             name: "s",
@@ -934,7 +872,7 @@ mod tests {
             .await
             .expect("seed other");
 
-        let store = UnscopedStore(memory);
+        let store = TestStore::unscoped(memory);
         let produced: HashSet<String> = std::iter::once("linear:issue:A".to_owned()).collect();
         let err = MixedbreadReconciler {
             store: &store,
@@ -945,7 +883,11 @@ mod tests {
         .await
         .expect_err("an unscoped listing must abort the GC");
         assert!(matches!(err, crate::Error::ScopeLeak { .. }), "got {err:?}");
-        assert_eq!(store.0.len(), 2, "nothing may be deleted off a leaked listing");
+        assert_eq!(
+            store.inner.len(),
+            2,
+            "nothing may be deleted off a leaked listing"
+        );
     }
 
     /// A listed record with every identity field the GC policy reads.
@@ -1002,12 +944,25 @@ mod tests {
         // missing created_at sorts oldest, so the undated twin is condemned
         // ahead of the dated ones.
         let records = [
-            stored("A", "sha256:aa", Some("f-old"), Some("2026-06-10T00:00:00Z")),
-            stored("A", "sha256:aa", Some("f-new"), Some("2026-06-11T09:30:00Z")),
+            stored(
+                "A",
+                "sha256:aa",
+                Some("f-old"),
+                Some("2026-06-10T00:00:00Z"),
+            ),
+            stored(
+                "A",
+                "sha256:aa",
+                Some("f-new"),
+                Some("2026-06-11T09:30:00Z"),
+            ),
             stored("A", "sha256:aa", Some("f-undated"), None),
         ];
         let plan = plan_gc(&records, &produced(&["A"]));
-        assert_eq!(plan.deletes, vec!["f-undated".to_owned(), "f-old".to_owned()]);
+        assert_eq!(
+            plan.deletes,
+            vec!["f-undated".to_owned(), "f-old".to_owned()]
+        );
         assert_eq!(plan.vanished, 0);
         assert_eq!(plan.duplicates, 2);
     }

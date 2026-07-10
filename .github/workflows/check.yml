@@ -73,6 +73,20 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # The clone diff gate compares against the event's base commit.
+          fetch-depth: 0
+
+      # The global clone budget also runs inside `.#check`, but that derivation
+      # intentionally has no `.git`. Run the zero-tolerance changed-line gate
+      # in the checkout so a PR cannot add duplication while staying under the
+      # repository-wide percentage ratchet.
+      - name: Reject duplication on changed lines
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          nix run .#clone -- . --diff "${BASE_SHA}" > /dev/null
 
       # Run the full gate through the repo-owned `check` app (lib/per-system.nix),
       # so CI and a local `nix run .#check` execute the same two commands from one

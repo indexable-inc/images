@@ -195,7 +195,8 @@ async def _watch_client_name(session: ServerSession, upgrade: Callable[[str], No
     name declared in the initialize handshake. ``client_params`` is set before
     the session reports Initialized, so polling the same gate as the pump is
     sufficient; a client that never completes the handshake keeps the kind."""
-    while not _session_initialized(session):
+    # ServerSession exposes no initialization event, only this private state.
+    while not _session_initialized(session):  # noqa: ASYNC110
         await anyio.sleep(_OUTBOX_POLL_SECONDS)
     params = session.client_params
     if params is not None:
