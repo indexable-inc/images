@@ -343,6 +343,34 @@ def test_explicit_cwd_persists_like_cd(tmp_path: pathlib.Path) -> None:
         nu.reset()
 
 
+def test_relative_explicit_cwd_persists_as_absolute(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    monkeypatch.chdir(tmp_path)
+    try:
+        run(nu.value("2 + 2", cwd="target"))
+        assert run(nu.value("$env.PWD")) == str(target)
+    finally:
+        nu.reset()
+
+
+def test_setup_failure_preserves_cwd_and_env(tmp_path: pathlib.Path) -> None:
+    keep = tmp_path / "keep"
+    rejected = tmp_path / "rejected"
+    keep.mkdir()
+    rejected.mkdir()
+    try:
+        run(nu.value("2 + 2", cwd=keep))
+        with pytest.raises(nu.NuError):
+            run(nu.value("let =", cwd=rejected, env={"NU_SETUP_POISON": "yes"}))
+        assert run(nu.value("$env.PWD")) == str(keep)
+        assert run(nu.value("$env.NU_SETUP_POISON? == null")) is True
+    finally:
+        nu.reset()
+
+
 def test_nonexistent_explicit_cwd_is_rejected_at_the_boundary(tmp_path: pathlib.Path) -> None:
     with pytest.raises(ValueError, match="not a directory"):
         run(nu.value("2 + 2", cwd=tmp_path / "missing"))

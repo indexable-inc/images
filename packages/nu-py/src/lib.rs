@@ -146,9 +146,8 @@ impl EngineInner {
         // receive a signal aimed at the one currently running.
         engine_state.set_signals(Signals::new(Arc::clone(interrupt)));
 
-        if let Some(dir) = cwd {
-            stack.add_env_var("PWD".into(), Value::string(dir, Span::unknown()));
-        } else if let Some(pwd) = stack.get_env_var(engine_state, "PWD")
+        if cwd.is_none()
+            && let Some(pwd) = stack.get_env_var(engine_state, "PWD")
             && let Ok(pwd) = pwd.as_str()
             && !std::path::Path::new(pwd).is_dir()
         {
@@ -165,9 +164,6 @@ impl EngineInner {
                  somewhere real (it persists like `cd`), or nu.reset() \
                  for a fresh engine"
             ));
-        }
-        for (key, value) in env.into_iter().flatten() {
-            stack.add_env_var(key, Value::string(value, Span::unknown()));
         }
 
         let block = {
@@ -195,6 +191,16 @@ impl EngineInner {
                 .map_err(|error| render_shell_error(engine_state, stack, &error))?;
             block
         };
+
+        // Parse and compile before changing the persistent environment. A
+        // setup error must leave the previous PWD and variables intact so the
+        // next call starts from the last successfully configured state.
+        if let Some(dir) = cwd {
+            stack.add_env_var("PWD".into(), Value::string(dir, Span::unknown()));
+        }
+        for (key, value) in env.into_iter().flatten() {
+            stack.add_env_var(key, Value::string(value, Span::unknown()));
+        }
 
         // Bash redirection tokens the parser handed to an external as literal
         // argv (`2>/dev/null` and friends), detected up front and reported
