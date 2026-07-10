@@ -11,6 +11,11 @@ pub struct WalkError {
 
 /// Recursively collect matching regular files without following symlinks below
 /// the explicitly named root. A missing root is an empty corpus.
+///
+/// # Errors
+///
+/// Returns the path and I/O error when the traversal cannot read an entry or
+/// determine its file type.
 pub fn collect_no_follow(
     root: &Path,
     out: &mut Vec<PathBuf>,
@@ -49,6 +54,10 @@ pub fn collect_no_follow(
 }
 
 /// Collect JSONL files and adapt traversal failures to the caller's error type.
+///
+/// # Errors
+///
+/// Returns the traversal error after converting it with `map_error`.
 pub fn collect_jsonl_no_follow<E>(
     root: &Path,
     out: &mut Vec<PathBuf>,
