@@ -591,6 +591,7 @@
   # Single source of truth for the ix public binary cache identity (URL + the
   # `ix-workspace:` trusted key that verifies its narinfos). See ./cache.nix.
   cache = import ./cache.nix;
+  kdl = import ./formats/kdl.nix {inherit home-manager;};
 
   /**
   Helper surface shared by both the per-module `specialArgs.ix`
@@ -630,6 +631,7 @@
       goUnit
       hermes
       languages
+      kdl
       lists
       mcp
       minecraft

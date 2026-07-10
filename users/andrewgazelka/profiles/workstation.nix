@@ -1210,7 +1210,7 @@ in {
     }
     // import (configRoot + "/zellij") {
       inherit configRoot;
-      inherit (pkgs) stdenvNoCC zellijPlugins;
+      inherit (pkgs) lib stdenvNoCC zellijPlugins;
       xdgConfigHome = config.xdg.configHome;
     };
 

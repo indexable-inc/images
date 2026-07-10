@@ -36,7 +36,7 @@
   # up in the `lint` derivation build, not at `nix run` time.
   lintStage = ix.writeNushellApplication pkgs {
     name = "lint-stage";
-    meta.description = "One lint stage (alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | ruff | clone); driven by `lint`";
+    meta.description = "One lint stage (alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | filenames | ruff | clone); driven by `lint`";
     runtimeInputs = [
       pkgs.alejandra
       pkgs.deadnix
@@ -122,6 +122,62 @@
           astlog scan astlog-rules/elixir.astlog ...$files
         }
       }
+      # Repository configuration belongs in composable Nix expressions. Keep
+      # serialized files only where an external consumer owns the filename or
+      # the file is generated data, a lock, a fixture, or a protocol payload.
+      def "main filenames" [] {
+        let allowed = [
+          # Ecosystem-owned configuration and manifests.
+          '(^|/)Cargo\.toml$'
+          '(^|/)pyproject\.toml$'
+          '(^|/)rust-toolchain\.toml$'
+          '(^|/)mise\.toml$'
+          '(^|/)osv-scanner\.toml$'
+          '(^|/)ruff\.toml$'
+          '(^|/)statix\.toml$'
+          '(^|/)\.cargo/config\.toml$'
+          '^clone\.toml$'
+          '^packages/cve-scan/whitelist\.toml$'
+          '^\.github/.*\.ya?ml$'
+          '(^|/)docker-compose\.ya?ml$'
+          '(^|/)plugin\.yml$'
+          '^packages/agent/symphony/workflows/.*/repositories\.yaml$'
+          '^\.editorconfig$'
+          '^packages/agent/symphony/elixir/\.sobelow-conf$'
+          '^packages/minecraft/minestom/servers/hello/gradle\.properties$'
+          '^packages/minecraft/minestom/servers/hello/gradle/verification-metadata\.xml$'
+          '^packages/minecraft/minestom/servers/hello/src/main/resources/logback\.xml$'
+
+          # Generated manifests, locks, editor settings, and typed data.
+          '(^|/)(package|tsconfig)\.json$'
+          '(^|/)(package-lock|lock)\.json$'
+          '(^|/)(pins|manifest)\.json$'
+          '^\.(claude|vscode|zed)/settings\.json$'
+          '^\.vscode/extensions\.json$'
+          '^\.github/user-owners\.json$'
+          '(^|/)(dag|upstream-status)\.json$'
+          '(^|/)(fixtures?[^/]*|snapshots?|catalogs?|metadata|sounds|seeds)/.*\.json$'
+          '^examples/.*\.json$'
+          '^packages/agent/claude-code/system-prompts/models\.json$'
+          '^packages/agent/system-prompt-eval-viewer/src/sample\.json$'
+          '^packages/code/code-highlight/src/islands-theme\.json$'
+          '^tests/.*\.json$'
+        ]
+        let candidates = (
+          fd --hidden --type file
+          --extension toml --extension json --extension yaml --extension yml
+          --extension kdl --extension ini --extension conf --extension cfg --extension xml
+          --extension properties --extension editorconfig --extension sobelow-conf
+          --exclude .git --exclude .claude/worktrees
+          | lines
+        )
+        let denied = ($candidates | where {|path| not ($allowed | any {|pattern| $path =~ $pattern})})
+        if ($denied | is-not-empty) {
+          print --stderr "prefer .nix for repository-owned configuration; serialized files require an external filename or generated/data role:"
+          $denied | each {|path| print --stderr $"  ($path)" }
+          exit 1
+        }
+      }
       # Repo-wide Python lint: the shared ruff selector (bug-catchers + security +
       # pathlib + pytest + explicit annotations + no `typing.cast`; see
       # lib/ruff-ann.nix) over EVERY tracked .py, so non-package dirs
@@ -151,7 +207,7 @@
         clone . out> /dev/null
       }
       def main [] {
-        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | ruff | clone" }
+        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | filenames | ruff | clone" }
       }
     '';
   };
@@ -166,6 +222,7 @@
     "astlog"
     "astlog-rust"
     "astlog-elixir"
+    "filenames"
     "ruff"
     "clone"
   ];
@@ -241,13 +298,11 @@
   # (above nix-eval-jobs' 4 GiB default per worker, below the old 8 GiB), not a
   # workaround: the per-crate check split (see the `checks` block below) keeps
   # each worker's eval bounded by the largest single crate. Both binaries are
-  # repo-built patches of nixpkgs' 1.5.0 / v2.34.1 (same commits the flake refs
-  # used to pin): the patched nix-eval-jobs (--nix-eval-jobs) resolves floating-CA
-  # outputs so they report a real cacheStatus instead of always-uncached, and the
-  # patched nix-fast-build makes --skip-cached skip a `local` (warm-store) output,
-  # not just a remotely-`cached` one. Without both, --skip-cached re-realizes every
-  # floating-CA rust unit and image closure (~1450) on every warm run. The eval
-  # cache is disabled for this parallel evaluator too: all workers share one
+  # nix-fast-build is the repo-built nixpkgs 1.5.0 package with a patch that
+  # makes --skip-cached skip a `local` (warm-store) output, not just a remotely
+  # `cached` one. nix-eval-jobs is built against nixpkgs' Git Nix components so
+  # its CA-realisation protocol matches the fleet's rolling daemon. The eval
+  # cache is disabled for the parallel evaluator: all workers share one
   # per-flake SQLite database, so writes contend and can fail with "database is
   # busy" without providing useful hits on a fresh commit. See the $fast_build
   # and $eval_jobs comments below.
@@ -268,10 +323,8 @@
   # reports a per-attribute eval failure as a JSON `error` line and still exits 0,
   # so the gate is the error-line check; a startup or lock failure exits nonzero
   # and aborts the run (Nushell propagates external failures like bash
-  # `set -o pipefail`). Uses the repo-built patched nix-eval-jobs
-  # (packages/nix/nix-eval-jobs, nixpkgs' v2.34.1 + the CA cacheStatus patch),
-  # matching the host Nix 2.34.x; invoked directly by store path rather than
-  # `nix run`.
+  # `set -o pipefail`). Uses the repo-built nix-eval-jobs directly by store path
+  # rather than `nix run`.
   check = ix.writeNushellApplication pkgs {
     name = "check";
     meta.description = "Run the full CI gate: build .#ciChecks.x86_64-linux and eval-validate .#packages.x86_64-linux";
@@ -285,12 +338,9 @@
       # same commit (7f185e0) the flake ref used to pin, so this is a like-for-like
       # source swap plus the patch. Invoked directly by store path, not `nix run`.
       const fast_build = "${lib.getExe repoPackages.nix-fast-build}"
-      # Patched nix-eval-jobs (packages/nix/nix-eval-jobs): the stock binary
-      # reports `local`/`notBuilt` for floating content-addressed outputs even
-      # when they are in cache.ix.dev, so --skip-cached rebuilt every CA rust
-      # unit (~1434) on every run. The patch resolves the CA output realisation
-      # against the substituters so a warm unit reports `cached` and is skipped.
-      # See nix#12128 / nix-eval-jobs#403. Built for x86_64-linux (the CI gate
+      # nix-eval-jobs is linked to nixpkgs' Git Nix components because CA
+      # realisations changed wire format in Nix 2.35 and the fleet daemon rolls
+      # ahead of the interactive client. Built for x86_64-linux (the CI gate
       # system); `check` itself is x86_64-linux-only.
       const eval_jobs = "${lib.getExe repoPackages.nix-eval-jobs}"
 
@@ -323,9 +373,8 @@
           try {
             ^$fast_build ...[
               "--flake" ".#ciChecks.x86_64-linux"
-              # Drive nix-fast-build's evaluator with the patched nix-eval-jobs
-              # (CA cacheStatus fix) so --skip-cached actually skips warm CA
-              # units rather than rebuilding the lot.
+              # Drive nix-fast-build with the daemon-protocol-compatible
+              # evaluator rather than its nixpkgs default.
               "--nix-eval-jobs" $eval_jobs
               "--eval-max-memory-size" "6144"
               "--eval-workers" "16"
@@ -928,6 +977,13 @@
     fileset = fs.intersection (fs.gitTracked paths.root) (paths.root + "/astlog-rules");
   };
 
+  andrewZellij = import (paths.root + "/users/andrewgazelka/config/zellij") {
+    configRoot = paths.root + "/users/andrewgazelka/config";
+    inherit (pkgs) lib stdenvNoCC zellijPlugins;
+    xdgConfigHome = "/Users/andrewgazelka/.config";
+  };
+  andrewZellijConfig = pkgs.writeText "andrewgazelka-zellij.kdl" (ix.kdl.render andrewZellij.settings);
+
   tests = import paths.tests {
     inherit
       nixpkgs
@@ -984,7 +1040,7 @@
     import ./image/health-checks.nix
     {
       inherit lib pkgs;
-      inherit (ix) writeNushellApplication;
+      inherit (ix) kdl writeNushellApplication;
       dagRunner = repoPackages.dag-runner;
     }
     {
@@ -1321,6 +1377,28 @@
             cd source
             ${lib.getExe lint}
             mkdir -p "$out"
+          '';
+          filename-policy =
+            pkgs.runCommand "filename-policy-check"
+            {
+              nativeBuildInputs = [pkgs.coreutils];
+            }
+            ''
+              mkdir source
+              cd source
+              touch repository-config.json zellij-layout.kdl
+              if ${lib.getExe lintStage} filenames >output 2>&1; then
+                echo "filename policy accepted repository-config.json" >&2
+                exit 1
+              fi
+              grep -F "repository-config.json" output
+              grep -F "zellij-layout.kdl" output
+              touch "$out"
+            '';
+          zellij-config = pkgs.runCommand "zellij-config-check" {nativeBuildInputs = [pkgs.zellij];} ''
+            export HOME="$TMPDIR/home"
+            mkdir -p "$HOME" "$out"
+            zellij --config ${andrewZellijConfig} setup --check >"$out/check.txt"
           '';
           # Exercises the trusted half of the blast-radius PR comment: the
           # validate/render jq embedded in its workflow, extracted from the YAML so

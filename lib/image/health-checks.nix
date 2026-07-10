@@ -33,6 +33,7 @@ Returns an attrset with two front-ends over the same lifecycle scripts:
 {
   lib,
   pkgs,
+  kdl,
   writeNushellApplication,
   dagRunner,
 }: {
@@ -158,22 +159,19 @@ Returns an attrset with two front-ends over the same lifecycle scripts:
   # One tab with a pane per lifecycle so the whole run is visible at once.
   # Panes stay open after their command exits so the post-mortem output is
   # reachable; quit the session with Ctrl+q.
-  zellijLayout = pkgs.writeText "health-checks-layout.kdl" ''
-    layout {
-      tab name="health-checks" {
-    ${lib.concatStringsSep "\n" (
-      map (
-        name: let
-          lifecycle = lifecycles.${name};
-        in ''
-          pane name="${name}" command="${lib.getExe lifecycle}"
-        ''
-      )
-      exampleNames
-    )}
-      }
-    }
-  '';
+  zellijLayout = kdl.generate pkgs "health-checks-layout.kdl" {
+    layout.tab = {
+      _props.name = "health-checks";
+      _children =
+        map (name: {
+          pane._props = {
+            inherit name;
+            command = lib.getExe lifecycles.${name};
+          };
+        })
+        exampleNames;
+    };
+  };
 
   zellij = writeNushellApplication pkgs {
     name = "health-checks-zellij";
