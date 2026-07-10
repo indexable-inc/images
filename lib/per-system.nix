@@ -1468,6 +1468,7 @@
       inherit
         (pkgs)
         attic-client
+        coreutils
         curl
         jq
         findutils
