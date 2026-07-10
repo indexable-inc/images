@@ -638,7 +638,7 @@ impl Client {
         format!("{}{path}", self.base_url)
     }
 
-    async fn post_chunks<T: serde::Serialize + ?Sized>(
+    async fn post_chunks<T: serde::Serialize + Sync + ?Sized>(
         &self,
         path: &str,
         request: &T,

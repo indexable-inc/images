@@ -300,8 +300,8 @@
   # each worker's eval bounded by the largest single crate. Both binaries are
   # nix-fast-build is the repo-built nixpkgs 1.5.0 package with a patch that
   # makes --skip-cached skip a `local` (warm-store) output, not just a remotely
-  # `cached` one. nix-eval-jobs is built against the fleet daemon's exact Nix
-  # revision so its unstable CA-realisation protocol matches. The eval
+  # `cached` one. nix-eval-jobs is built against the fleet daemon's stable Nix
+  # 2.34 protocol family rather than nixpkgs' moving default. The eval
   # cache is disabled for the parallel evaluator: all workers share one
   # per-flake SQLite database, so writes contend and can fail with "database is
   # busy" without providing useful hits on a fresh commit. See the $fast_build
@@ -338,10 +338,9 @@
       # same commit (7f185e0) the flake ref used to pin, so this is a like-for-like
       # source swap plus the patch. Invoked directly by store path, not `nix run`.
       const fast_build = "${lib.getExe repoPackages.nix-fast-build}"
-      # nix-eval-jobs is linked to nixpkgs' Git Nix components because CA
-      # realisations changed wire format in Nix 2.35 and the fleet daemon rolls
-      # ahead of the interactive client. Built for x86_64-linux (the CI gate
-      # system); `check` itself is x86_64-linux-only.
+      # nix-eval-jobs is linked to the stable Nix 2.34 components the fleet
+      # daemon runs. Built for x86_64-linux (the CI gate system); `check` itself
+      # is x86_64-linux-only.
       const eval_jobs = "${lib.getExe repoPackages.nix-eval-jobs}"
 
       def main [] {
@@ -373,7 +372,7 @@
           try {
             ^$fast_build ...[
               "--flake" ".#ciChecks.x86_64-linux"
-              # Drive nix-fast-build with the daemon-protocol-compatible
+              # Drive nix-fast-build with the daemon-family-compatible
               # evaluator rather than its nixpkgs default.
               "--nix-eval-jobs" $eval_jobs
               "--eval-max-memory-size" "6144"
