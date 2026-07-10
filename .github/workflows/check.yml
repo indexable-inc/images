@@ -115,6 +115,8 @@ jobs:
           fi
 
           printf 'index check log: %s\n' "${check_log}"
+          nix --version
+          nix store info --json
           if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
             {
               printf "## index check\n\n"
