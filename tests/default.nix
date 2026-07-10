@@ -67,7 +67,6 @@
   securityRootArgs = {
     attr = "packages.${pkgs.stdenv.hostPlatform.system}.hello";
     name = "hello";
-    path = pkgs.hello;
     class = "distributed-cli";
     owner = "indexable-inc/index";
     environment = "none";
@@ -83,8 +82,6 @@
     builtins.tryEval (ix.securityRoots.mkRoot (securityRootArgs // {class = "package";})).class;
   invalidSecurityRootSla =
     builtins.tryEval (ix.securityRoots.mkRoot (securityRootArgs // {slaHours = 0;})).slaHours;
-  invalidSecurityRootPath =
-    builtins.tryEval (ix.securityRoots.mkRoot (securityRootArgs // {path = "/tmp/not-a-store-output";})).path;
   fleetWrapperReadmes = [
     "hermes/agent"
     "hermes/api-server"
@@ -2715,7 +2712,6 @@
           == {
             attr = "packages.${pkgs.stdenv.hostPlatform.system}.hello";
             name = "hello";
-            path = builtins.unsafeDiscardStringContext (builtins.toString pkgs.hello);
             class = "distributed-cli";
             owner = "indexable-inc/index";
             environment = "none";
@@ -2723,7 +2719,7 @@
             criticality = "low";
             slaHours = 168;
           };
-        message = "security roots should cross the nix eval JSON boundary with their output path and policy metadata intact";
+        message = "security root policy should cross the nix eval JSON boundary without derivation state";
       }
       {
         assertion = !invalidSecurityRootClass.success;
@@ -2734,8 +2730,8 @@
         message = "security roots should reject non-positive SLA hours at evaluation";
       }
       {
-        assertion = !invalidSecurityRootPath.success;
-        message = "security roots should reject paths that are not derivation outputs at evaluation";
+        assertion = !(securityRootJson ? path);
+        message = "evaluated security root policy must not serialize an unrealized derivation path";
       }
     ];
     # efx terranix-port parity: the ported stacks under tests/efx must render
@@ -5451,6 +5447,16 @@
   # --- Build-time checks ----------------------------------------------------
 
   buildScripts = {
+    security-roots = ''
+      root=${pkgs.hello}
+      case "$root" in
+        ${builtins.storeDir}/*) ;;
+        *)
+          echo "security root did not realize to a terminal store path: $root" >&2
+          exit 1
+          ;;
+      esac
+    '';
     factions = ''
       grep -q '^QuickShop-Hikari$' ${factionsExample.managed.dropins}/quickshop-hikari.jar.plugin-name
       grep -q '^Vault$' ${factionsExample.managed.dropins}/vaultunlocked.jar.plugin-name

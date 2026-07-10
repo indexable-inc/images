@@ -40,7 +40,6 @@
   mkRoot = {
     attr,
     name,
-    path,
     class,
     owner,
     environment,
@@ -49,14 +48,10 @@
     slaHours,
   }:
     assert lib.assertMsg (
-      lib.isDerivation path
-    ) "security root `path` must be a derivation output";
-    assert lib.assertMsg (
       builtins.isInt slaHours && slaHours > 0
     ) "security root `slaHours` must be a positive integer"; {
       attr = requireString "attr" attr;
       name = requireString "name" name;
-      inherit path;
       class = requireEnum "class" class;
       owner = requireString "owner" owner;
       environment = requireEnum "environment" environment;
