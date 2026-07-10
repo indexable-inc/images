@@ -1523,10 +1523,12 @@ mod tests {
 
     type CapturedRequest = Arc<std::sync::Mutex<Option<serde_json::Value>>>;
 
-    async fn post_fixture(
-        path: &'static str,
-        response: &'static str,
-    ) -> (String, CapturedRequest) {
+    struct PostFixture {
+        base_url: String,
+        captured: CapturedRequest,
+    }
+
+    async fn post_fixture(path: &'static str, response: &'static str) -> PostFixture {
         let captured: CapturedRequest = Arc::default();
         let app = Router::new().route(
             path,
@@ -1545,7 +1547,10 @@ mod tests {
         tokio::spawn(async move {
             axum::serve(listener, app).await.expect("serve");
         });
-        (format!("http://{addr}"), captured)
+        PostFixture {
+            base_url: format!("http://{addr}"),
+            captured,
+        }
     }
 
     #[test]
@@ -1624,7 +1629,10 @@ mod tests {
         // Round-trip through a real router: the request must hit
         // `/v1/stores/list-chunks` and the response decodes through the same
         // RawChunk -> Chunk projection search uses.
-        let (base_url, captured) = post_fixture(
+        let PostFixture {
+            base_url,
+            captured,
+        } = post_fixture(
             "/v1/stores/list-chunks",
             r#"{"data":[{"text":"gt sync","score":1.0,"metadata":{"source":"shell","timestamp":1781248268}}]}"#,
         )
@@ -1942,7 +1950,10 @@ mod tests {
         // Round-trip through a real router: the request must hit
         // `/v1/stores/queries/enhance` with the documented body, and the
         // response's one item decodes through the tagged EnhancedQuery enum.
-        let (base_url, captured) = post_fixture(
+        let PostFixture {
+            base_url,
+            captured,
+        } = post_fixture(
             "/v1/stores/queries/enhance",
             r#"{"items":[{"type":"query","query":"indexer slack messages","metadata_filters":[{"key":"source","operator":"eq","value":"slack"}],"filter_mode":"all","rank_by":null,"direction":null}]}"#,
         )
@@ -1981,7 +1992,10 @@ mod tests {
         // `/v1/stores/metadata-facets` with the documented body (facet keys,
         // scan caps, no nulls for unset caps) and the response decodes the
         // live `{key: {value: count}}` shape.
-        let (base_url, captured) = post_fixture(
+        let PostFixture {
+            base_url,
+            captured,
+        } = post_fixture(
             "/v1/stores/metadata-facets",
             r#"{"facets":{"source":{"shell":1154,"code":9644}}}"#,
         )
@@ -2262,7 +2276,10 @@ mod tests {
         // query, documents (`input`), top_k, and `return_input: false`; the
         // response's `data` items project to (index, score) pairs pointing back
         // into the submitted slice.
-        let (base_url, captured) = post_fixture(
+        let PostFixture {
+            base_url,
+            captured,
+        } = post_fixture(
             "/v1/reranking",
             r#"{"data":[{"index":2,"score":0.91},{"index":0,"score":0.12}]}"#,
         )

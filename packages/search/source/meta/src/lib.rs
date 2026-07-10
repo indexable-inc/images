@@ -231,9 +231,10 @@ pub trait SourceAdapter {
 }
 
 /// Implement [`SourceAdapter`] for an eagerly parsed collection whose elements
-/// convert into owned documents. Cloning the collection makes the returned
-/// iterator independent of `&self`, which is the shared lifetime contract for
-/// file and database adapters.
+/// convert into owned documents.
+///
+/// Cloning the collection makes the returned iterator independent of `&self`,
+/// which is the shared lifetime contract for file and database adapters.
 #[macro_export]
 macro_rules! impl_owned_source_adapter {
     ($adapter:ty, $error:ty, $source:expr, $field:ident, $convert:path) => {
