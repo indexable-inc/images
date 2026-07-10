@@ -71,6 +71,11 @@
       max_concurrent_threads_per_session = 16;
     };
     agents.max_depth = 3;
+    # multi_agent_v2 is an under-development feature, so enabling it above
+    # makes Codex print an unstable-features warning on every startup. The
+    # wrapper opts into the feature deliberately, so it silences its own
+    # warning; a user who sets this key keeps their value.
+    suppress_unstable_features_warning = true;
   },
   # MCP servers rendered as soft Codex defaults. A user's own
   # `[mcp_servers.<name>]` config wins per-key through config-launch.

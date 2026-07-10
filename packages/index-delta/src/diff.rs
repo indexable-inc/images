@@ -251,7 +251,12 @@ fn diff_arrays(
     }
 }
 
-fn indexed(items: &[Value], from: usize) -> impl DoubleEndedIterator<Item = (String, &Value)> {
+/// A rendered array-index segment paired with the element it addresses. A
+/// named alias (not a bare tuple) so `indexed`'s return type satisfies the
+/// workspace's `clippy::anonymous_tuple_return_type`.
+type IndexedItem<'v> = (String, &'v Value);
+
+fn indexed(items: &[Value], from: usize) -> impl DoubleEndedIterator<Item = IndexedItem<'_>> {
     items
         .iter()
         .enumerate()

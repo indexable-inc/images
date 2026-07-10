@@ -42,13 +42,11 @@ def test_result_guidance_preserves_structured_api_output() -> None:
     assert "``print`` converts it to Polars' terminal representation" in inspect.getdoc(rt.api)
 
 
-def test_api_filtered_miss_still_shows_build(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The row survives any filter: the staleness signal matters MOST when a
-    lookup comes back empty (the helper the docs promised is not deployed)."""
-    monkeypatch.setenv("IX_BUILD_REV", "7e42ccdb18827401226635")
-    frame = rt.api("no-helper-matches-this-9f3a")
-    assert frame.height == 1
-    assert frame.row(0, named=True)["name"] == "build"
+def test_api_has_one_dataframe_interface() -> None:
+    assert not inspect.signature(rt.api).parameters
+    frame = rt.api()
+    matches = frame.filter((frame["where"] == "kernel") & (frame["name"] == "api"))
+    assert matches.height == 1
 
 
 def _binding_error(fn: Callable[..., object]) -> TypeError:
