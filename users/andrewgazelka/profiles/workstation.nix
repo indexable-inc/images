@@ -828,8 +828,12 @@ in {
   home.file.".config/git/attributes".text = textStructured.gitattributes;
 
   # Zed (the macOS-only icon overrides live under ~/Library/Application Support).
-  home.file.".config/zed/keymap.json".source = renderStructured "zed-keymap";
-  home.file.".config/zed/settings.json".text = textStructured.zed-settings-json;
+  home.file.".config/zed/keymap.json".source = jsonFormat.generate "andrewgazelka-zed-keymap.json" (
+    import (configRoot + "/zed/keymap.nix")
+  );
+  home.file.".config/zed/settings.json".source =
+    jsonFormat.generate "andrewgazelka-zed-settings.json"
+    (import (configRoot + "/zed/settings.nix"));
   home.file."Library/Application Support/Zed/extensions/installed/jetbrains-new-ui-icons/icons/andrew-folder-test-green.svg" = lib.mkIf pkgs.stdenv.isDarwin {
     source = repoFile "zed/icons/andrew-folder-test-green.svg";
   };
