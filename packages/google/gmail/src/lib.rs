@@ -53,10 +53,16 @@ pub const USER_ME: &str = "me";
 /// `maxResults` at 500 per page; larger queries follow `nextPageToken`.
 pub(crate) const MAX_PAGE_SIZE: usize = 500;
 
-pub(crate) trait ListPage: serde::de::DeserializeOwned {
-    type Item;
-
-    fn into_parts(self) -> (Vec<Self::Item>, Option<String>);
+#[derive(Deserialize)]
+#[serde(
+    rename_all = "camelCase",
+    bound(deserialize = "T: serde::Deserialize<'de>"),
+)]
+struct ListPage<T> {
+    #[serde(default, alias = "messages", alias = "threads")]
+    items: Vec<T>,
+    #[serde(default)]
+    next_page_token: Option<String>,
 }
 
 /// The Gmail / Google API error envelope:
@@ -144,13 +150,13 @@ impl Client {
         Ok(self.http.get(url).bearer_auth(token))
     }
 
-    pub(crate) async fn list_message_resources<P>(
+    pub(crate) async fn list_message_resources<T>(
         &self,
         resource: &str,
         query: &MessageQuery,
-    ) -> Result<Vec<P::Item>>
+    ) -> Result<Vec<T>>
     where
-        P: ListPage,
+        T: serde::de::DeserializeOwned,
     {
         let mut items = Vec::new();
         let mut page_token: Option<String> = None;
@@ -176,7 +182,10 @@ impl Client {
             }
 
             let response = self.get(url).await?.send().await.context(HttpSnafu)?;
-            let (page_items, next_page_token) = decode::<P>(response).await?.into_parts();
+            let ListPage {
+                items: page_items,
+                next_page_token,
+            } = decode::<ListPage<T>>(response).await?;
             items.extend(page_items);
             match next_page_token {
                 Some(next) if items.len() < query.max_results => page_token = Some(next),
