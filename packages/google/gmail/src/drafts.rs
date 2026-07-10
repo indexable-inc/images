@@ -39,7 +39,7 @@ fn draft_request(message: &OutgoingMessage) -> Result<DraftRequest> {
     })
 }
 
-async fn send_json<T: Serialize, R: DeserializeOwned>(
+async fn send_json<T: Serialize + Sync, R: DeserializeOwned>(
     request: reqwest::RequestBuilder,
     body: &T,
 ) -> Result<R> {
