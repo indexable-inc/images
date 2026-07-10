@@ -6,9 +6,9 @@ use std::path::{Component, Path, PathBuf};
 use crate::hash;
 use crate::model::{Unit, UnitGraph, UnitMode};
 use crate::shell;
-use askama::Template as _;
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use serde::Deserialize;
+use url::Url;
 
 pub struct RenderOptions {
     pub workspace_root: PathBuf,
@@ -172,7 +172,6 @@ struct BuildScriptRun {
 struct SourceEntry {
     name: String,
     base: SourceBase,
-    scope: SourceScope,
     root: PathBuf,
     relative: String,
     include_relatives: Vec<String>,
@@ -213,6 +212,13 @@ impl SourceBase {
             Self::Workspace | Self::WorkspaceClosure => "workspace",
             Self::VendorPackage => "vendor-package",
             Self::VendorClosure => "vendor-closure",
+        }
+    }
+
+    const fn scope(self) -> SourceScope {
+        match self {
+            Self::Workspace | Self::VendorPackage => SourceScope::Package,
+            Self::WorkspaceClosure | Self::VendorClosure => SourceScope::Closure,
         }
     }
 }
@@ -260,64 +266,102 @@ impl SourceEntry {
     }
 }
 
-#[derive(askama::Template)]
-#[template(path = "units.nix.askama", escape = "none")]
-struct UnitsNixTemplate {
-    source_entries: String,
-    source_audit_entries: String,
-    unit_entries: String,
-    clippy_unit_entries: String,
-    clippy_unit_names_by_package: String,
-    panic_object_unit_entries: String,
-    policy_check_entries: String,
-    unused_crate_dependencies_by_package: String,
-    roots: String,
-    checked_roots: String,
-    package_entries: String,
-    binary_entries: String,
-    library_entries: String,
-    benchmark_entries: String,
-    test_entries: String,
-    doctest_entries: String,
-    test_target_entries: String,
-    doctest_target_entries: String,
-    benchmark_target_entries: String,
-    target_set_entries: String,
-    default_entry: String,
-}
+const UNITS_TEMPLATE: &str = include_str!("../templates/units.nix.in");
 
 pub fn render_units_nix(graph: &UnitGraph, options: &RenderOptions) -> Result<String> {
     graph.ensure_supported()?;
     let prepared = prepare_graph(graph, options)?;
-    let template = UnitsNixTemplate {
-        source_entries: render_source_entries(&prepared),
-        source_audit_entries: render_source_audit_entries(&prepared),
-        unit_entries: render_unit_entries(graph, options, &prepared)?,
-        clippy_unit_entries: render_clippy_unit_entries(graph, options, &prepared)?,
-        clippy_unit_names_by_package: render_clippy_unit_names_by_package(
-            graph, options, &prepared,
+    let slots = [
+        ("source_entries", render_source_entries(&prepared)),
+        (
+            "source_audit_entries",
+            render_source_audit_entries(&prepared),
         ),
-        panic_object_unit_entries: render_panic_object_unit_entries(graph, options, &prepared)?,
-        policy_check_entries: render_policy_check_entries(graph, options, &prepared)?,
-        unused_crate_dependencies_by_package: render_unused_crate_dependencies_by_package(
-            graph, options, &prepared,
+        (
+            "unit_entries",
+            render_unit_entries(graph, options, &prepared)?,
         ),
-        roots: render_roots(graph, &prepared),
-        checked_roots: render_checked_roots(graph, &prepared),
-        package_entries: render_root_entries(graph, &prepared, |_| true),
-        binary_entries: render_root_entries(graph, &prepared, Unit::is_bin),
-        library_entries: render_root_entries(graph, &prepared, Unit::is_library),
-        benchmark_entries: render_benchmark_entries(graph, &prepared),
-        test_entries: render_test_entries(graph, &prepared),
-        doctest_entries: render_doctest_entries(graph, &prepared),
-        test_target_entries: render_test_target_entries(graph, &prepared),
-        doctest_target_entries: render_doctest_target_entries(graph, &prepared)?,
-        benchmark_target_entries: render_benchmark_target_entries(graph, &prepared),
-        target_set_entries: render_target_sets(graph, &prepared),
-        default_entry: render_default_entry(graph, &prepared),
-    };
+        (
+            "clippy_unit_entries",
+            render_clippy_unit_entries(graph, options, &prepared)?,
+        ),
+        (
+            "clippy_unit_names_by_package",
+            render_clippy_unit_names_by_package(graph, &prepared),
+        ),
+        (
+            "panic_object_unit_entries",
+            render_panic_object_unit_entries(graph, options, &prepared)?,
+        ),
+        (
+            "policy_check_entries",
+            render_policy_check_entries(graph, options, &prepared)?,
+        ),
+        (
+            "unused_crate_dependencies_by_package",
+            render_unused_crate_dependencies_by_package(graph, options, &prepared),
+        ),
+        ("roots", render_roots(graph, &prepared)),
+        ("checked_roots", render_checked_roots(graph, &prepared)),
+        (
+            "package_entries",
+            render_root_entries(graph, &prepared, |_| true),
+        ),
+        (
+            "binary_entries",
+            render_root_entries(graph, &prepared, Unit::is_bin),
+        ),
+        (
+            "library_entries",
+            render_root_entries(graph, &prepared, Unit::is_library),
+        ),
+        (
+            "benchmark_entries",
+            render_benchmark_entries(graph, &prepared),
+        ),
+        ("test_entries", render_test_entries(graph, &prepared)),
+        ("doctest_entries", render_doctest_entries(graph, &prepared)),
+        (
+            "test_target_entries",
+            render_test_target_entries(graph, &prepared),
+        ),
+        (
+            "doctest_target_entries",
+            render_doctest_target_entries(graph, &prepared)?,
+        ),
+        (
+            "benchmark_target_entries",
+            render_benchmark_target_entries(graph, &prepared),
+        ),
+        ("target_set_entries", render_target_sets(graph, &prepared)),
+        ("default_entry", render_default_entry(graph, &prepared)),
+    ];
 
-    Ok(template.render()?)
+    Ok(fill_template(UNITS_TEMPLATE, &slots))
+}
+
+// The template's only syntax is `{{ slot }}` substitution -- no loops or
+// conditionals -- so a single pass is the whole engine. Spliced values are
+// never rescanned, matching template-engine semantics.
+fn fill_template(template: &str, slots: &[(&str, String)]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(start) = rest.find("{{") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let end = after
+            .find("}}")
+            .expect("template placeholder is unterminated");
+        let key = after[..end].trim();
+        let (_, value) = slots
+            .iter()
+            .find(|(slot, _)| *slot == key)
+            .unwrap_or_else(|| panic!("template placeholder {key} has no rendered slot"));
+        out.push_str(value);
+        rest = &after[end + 2..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn render_unit_entries(
@@ -363,7 +407,7 @@ fn render_clippy_unit_entries(
         }
         write!(
             entries,
-            "    {} = mkClippyUnit {};\n\n",
+            "    {} = mkUnit {};\n\n",
             prepared.unit_attr(index),
             render_clippy_unit(graph, options, prepared, index)?
         )?;
@@ -523,7 +567,7 @@ fn render_source_audit_entries(prepared: &PreparedGraph) -> String {
             "    {} = {{ base = {}; scope = {}; relative = {}; includeRelatives = {}; sourceKey = {}; }};",
             nix_attr(key),
             nix_attr(source.base.audit_label()),
-            nix_attr(source.scope.audit_label()),
+            nix_attr(source.base.scope().audit_label()),
             nix_attr(&source.relative),
             nix_string_list(&source.include_relatives),
             nix_attr(&source.source_key),
@@ -572,7 +616,7 @@ impl PreparedGraph {
 fn prepare_graph(graph: &UnitGraph, options: &RenderOptions) -> Result<PreparedGraph> {
     let mut hashes = vec![None; graph.units.len()];
     for index in 0..graph.units.len() {
-        compute_hash(graph, options, index, &mut hashes)?;
+        compute_hash(graph, options, index, &mut hashes);
     }
     let hashes: Vec<String> = hashes.into_iter().map(Option::unwrap).collect();
 
@@ -599,13 +643,13 @@ fn prepare_graph(graph: &UnitGraph, options: &RenderOptions) -> Result<PreparedG
         })
         .collect();
 
-    let transitive_unit_deps = (0..graph.units.len())
+    let transitive_unit_deps: Vec<BTreeSet<usize>> = (0..graph.units.len())
         .map(|index| {
             let mut deps = BTreeSet::new();
-            collect_transitive_unit_deps(graph, index, &mut deps)?;
-            Ok(deps)
+            collect_transitive_unit_deps(graph, index, &mut deps);
+            deps
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect();
 
     let mut source_refs = Vec::with_capacity(graph.units.len());
     let mut source_entries = BTreeMap::new();
@@ -666,21 +710,22 @@ fn prepare_graph(graph: &UnitGraph, options: &RenderOptions) -> Result<PreparedG
     })
 }
 
+// Infallible: `render_units_nix` validates the graph up front, so all indexes
+// are in bounds.
 fn compute_hash(
     graph: &UnitGraph,
     options: &RenderOptions,
     index: usize,
     hashes: &mut [Option<String>],
-) -> Result<String> {
+) -> String {
     if let Some(hash) = &hashes[index] {
-        return Ok(hash.clone());
+        return hash.clone();
     }
 
-    let unit = graph.unit(index)?;
+    let unit = &graph.units[index];
     let mut dependency_hashes = Vec::new();
     for dependency in &unit.dependencies {
-        let dependency_unit = graph.unit(dependency.index)?;
-        if dependency_unit.is_run_custom_build() {
+        if graph.units[dependency.index].is_run_custom_build() {
             continue;
         }
         dependency_hashes.push(format!(
@@ -688,32 +733,24 @@ fn compute_hash(
             dependency.extern_crate_name,
             dependency.public,
             dependency.noprelude,
-            compute_hash(graph, options, dependency.index, hashes)?
+            compute_hash(graph, options, dependency.index, hashes)
         ));
     }
 
     let hash = unit.identity_hash(&dependency_hashes, options.toolchain_id.as_deref());
     hashes[index] = Some(hash.clone());
-    Ok(hash)
+    hash
 }
 
-fn collect_transitive_unit_deps(
-    graph: &UnitGraph,
-    index: usize,
-    deps: &mut BTreeSet<usize>,
-) -> Result<()> {
-    let unit = graph.unit(index)?;
-    for dependency in &unit.dependencies {
-        let dependency_unit = graph.unit(dependency.index)?;
-        if dependency_unit.is_run_custom_build() {
+fn collect_transitive_unit_deps(graph: &UnitGraph, index: usize, deps: &mut BTreeSet<usize>) {
+    for dependency in &graph.units[index].dependencies {
+        if graph.units[dependency.index].is_run_custom_build() {
             continue;
         }
         if deps.insert(dependency.index) {
-            collect_transitive_unit_deps(graph, dependency.index, deps)?;
+            collect_transitive_unit_deps(graph, dependency.index, deps);
         }
     }
-
-    Ok(())
 }
 
 // `Rustc` produces the build artifacts (rlib, bin, test binary).
@@ -909,9 +946,11 @@ fn render_panic_object_unit(
             pname: format!("{}-panic-objects", graph.units[index].target.name),
             native_build_inputs: "[ rustToolchain ] ++ extraNativeBuildInputs",
             driver: Driver::ObjectEmit,
-            install_phase:
-                "mkdir -p $out\nfind build -maxdepth 1 -name '*.o' -exec cp {} \"$out/\" ';'\n"
-                    .to_string(),
+            // Content-addressed like the build unit, so it hits the same
+            // killed-build orphan `cp` failure (#2247); guard it identically.
+            install_phase: format!(
+                "{ORPHAN_OUTPUT_PRECHECK}mkdir -p $out\nfind build -maxdepth 1 -name '*.o' -exec cp {{}} \"$out/\" ';'\n"
+            ),
             package_name: None,
         },
     )
@@ -1021,8 +1060,9 @@ fn render_driver_build_phase(
         let run_ref = format!("${{units.{}}}", nix_attr(&prepared.names[run_index]));
         append_build_script_flag_reader(&mut script, &run_ref, unit);
     }
+    append_direct_dependency_metadata_exports(&mut script, graph, prepared, index)?;
 
-    push_rustc_args(&mut script, unit, &prepared.hashes[index]);
+    push_rustc_args(&mut script, unit, &prepared.hashes[index], driver);
     append_target_linker_arg(&mut script, unit);
     append_extra_rustc_args(&mut script, unit);
 
@@ -1069,7 +1109,7 @@ fn render_driver_build_phase(
 
     match driver {
         Driver::Rustc => {
-            if unit.is_bin() || unit.is_test() {
+            if uses_explicit_output_path(unit, driver) {
                 writeln!(
                     script,
                     "rustc_args+=( -o {} )",
@@ -1176,7 +1216,17 @@ fn collects_unused_crate_dependencies(unit: &Unit, options: &RenderOptions) -> b
     options.deny_unused_crate_dependencies && !unit.is_external()
 }
 
-fn push_rustc_args(script: &mut String, unit: &Unit, hash: &str) {
+// A root (bin) or test unit gets an explicit `-o build/<name>` path (see the
+// `Driver::Rustc` match arm below), which alone fixes the output filename.
+// `-C extra-filename` only matters for `--out-dir`-style outputs (libs, rlibs,
+// proc-macros) where multiple units can otherwise collide; combining both
+// flags is what makes rustc warn "ignoring -C extra-filename flag due to -o
+// flag" on every such build (index#1975).
+fn uses_explicit_output_path(unit: &Unit, driver: Driver) -> bool {
+    driver == Driver::Rustc && (unit.is_bin() || unit.is_test())
+}
+
+fn push_rustc_args(script: &mut String, unit: &Unit, hash: &str, driver: Driver) {
     push_arg(script, "--crate-name");
     push_arg(script, &unit.target.name.replace('-', "_"));
     push_arg(script, "--edition");
@@ -1235,7 +1285,13 @@ fn push_rustc_args(script: &mut String, unit: &Unit, hash: &str) {
         push_arg(script, "rpath=yes");
     }
     push_codegen(script, "metadata", hash);
-    push_codegen(script, "extra-filename", &format!("-{hash}"));
+    // rustc warns "ignoring -C extra-filename flag due to -o flag" when both
+    // are given; the explicit `-o build/<name>` path fully determines a bin/test
+    // unit's output name, so extra-filename (which only disambiguates
+    // `--out-dir`-style outputs) would be a no-op there anyway.
+    if !uses_explicit_output_path(unit, driver) {
+        push_codegen(script, "extra-filename", &format!("-{hash}"));
+    }
 
     for rustflag in &unit.profile.rustflags {
         push_arg(script, rustflag);
@@ -1314,11 +1370,31 @@ fn cargo_env_segment(value: &str) -> String {
 }
 
 fn append_extra_rustc_args(script: &mut String, unit: &Unit) {
+    let package_name = nix_attr(&unit.package_name());
     let platform = unit
         .platform
         .as_ref()
         .map_or_else(|| "null".to_string(), |platform| nix_attr(platform));
-    let _ = writeln!(script, "${{renderExtraRustcArgs {platform}}}");
+    if !unit.is_custom_build_compile() {
+        let _ = writeln!(
+            script,
+            "${{renderExtraRustcArgs {package_name} {platform}}}"
+        );
+    }
+    if unit_links(unit) {
+        let _ = writeln!(script, "${{renderExtraLinkRustcArgs {platform}}}");
+    }
+}
+
+fn unit_links(unit: &Unit) -> bool {
+    !unit.is_custom_build_compile()
+        && (unit.is_bin()
+            || unit.is_test()
+            || unit.is_benchmark()
+            || unit.is_proc_macro()
+            || unit.target.has_crate_type("cdylib")
+            || unit.target.has_crate_type("dylib")
+            || unit.target.has_crate_type("staticlib"))
 }
 
 fn append_build_script_flag_reader(script: &mut String, run_ref: &str, unit: &Unit) {
@@ -1353,7 +1429,14 @@ fn append_build_script_flag_reader(script: &mut String, run_ref: &str, unit: &Un
         script,
         "if [ -f {quoted_run_ref}/rustc-env ]; then\n  while IFS= read -r line; do\n    [ -n \"$line\" ] && export \"$line\"\n  done < {quoted_run_ref}/rustc-env\nfi",
     );
-    let _ = writeln!(script, "export OUT_DIR={quoted_run_ref}/out-dir\n");
+    let _ = writeln!(
+        script,
+        "if [ -f {quoted_run_ref}/cargo-metadata ]; then\n  cp {quoted_run_ref}/cargo-metadata build/cargo-metadata\nfi",
+    );
+    let _ = writeln!(
+        script,
+        "compile_out_dir=$(mktemp -d)\nif [ -d {quoted_run_ref}/out-dir ]; then\n  cp -R {quoted_run_ref}/out-dir/. \"$compile_out_dir\"/\nfi\nrustc_env+=( OUT_DIR=\"$compile_out_dir\" )\n"
+    );
 }
 
 fn append_link_arg_reader(script: &mut String, quoted_run_ref: &str, file: &str) {
@@ -1362,6 +1445,34 @@ fn append_link_arg_reader(script: &mut String, quoted_run_ref: &str, file: &str)
         "if [ -f {quoted_run_ref}/{file} ]; then\n  while IFS= read -r line; do\n    [ -n \"$line\" ] && build_script_flags+=( -C \"link-arg=$line\" )\n  done < {quoted_run_ref}/{file}\nfi",
     );
 }
+
+// A killed content-addressed build on a store without a build sandbox (the
+// darwin default) can leave its resolved output path behind in /nix/store as an
+// invalid directory owned by the `_nixbld` user that ran it. Nix does not remove
+// that orphan before a later rebuild of the same drv, so a fresh builder (a
+// different `_nixbld` uid) hits the pre-existing dir at `$out` and the artifact
+// `cp` below fails with a bare `cp: ... Permission denied` one phase after rustc
+// succeeded, which reads like a linker/OOM failure (#2247). Detect the orphan
+// first and fail with the path, its owner, and the recovery recipe. A valid
+// sealed store path is always root-owned and never pre-exists for a fresh build,
+// so an existing non-writable `$out` here is unambiguously a killed-build
+// leftover; we only detect and report it, never delete a store path from a
+// builder. A nix builder puts GNU coreutils `stat` first on PATH even on
+// darwin, so query the owner with GNU `-c '%U'` first; BSD `stat -f '%Su'` is
+// only the fallback (GNU stat would misparse `-f` as `--file-system`).
+const ORPHAN_OUTPUT_PRECHECK: &str = "\
+if [ -e \"$out\" ] && [ ! -w \"$out\" ]; then
+  echo >&2 \"error: refusing to install over a pre-existing, non-writable output path:\"
+  echo >&2 \"  $out\"
+  echo >&2 \"  owner: $(stat -c '%U' \"$out\" 2>/dev/null || stat -f '%Su' \"$out\" 2>/dev/null || echo '?')\"
+  echo >&2 \"This is an invalid orphan left by a killed content-addressed build (see index#2247).\"
+  echo >&2 \"Nix does not clear it before rebuilding, so this build cannot write its output.\"
+  echo >&2 \"Recover on the host (a valid store path is root-owned; an invalid one is not):\"
+  echo >&2 \"  nix-store --check-validity \\\"$out\\\"   # nonzero exit => invalid => safe to remove\"
+  echo >&2 \"  sudo rm -rf \\\"$out\\\"\"
+  exit 1
+fi
+";
 
 fn render_install_phase(unit: &Unit, options: &RenderOptions, hash: &str) -> String {
     let unused_crate_dependencies_install = if collects_unused_crate_dependencies(unit, options) {
@@ -1377,9 +1488,12 @@ fi
     if unit.is_bin() || unit.is_test() {
         format!(
             "\
-mkdir -p $out/bin $out/nix-support
+{ORPHAN_OUTPUT_PRECHECK}mkdir -p $out/bin $out/nix-support
 cp {} $out/bin/{}
 chmod 755 $out/bin/{}
+if [ -f build/cargo-metadata ]; then
+  cp build/cargo-metadata $out/nix-support/cargo-metadata
+fi
 {unused_crate_dependencies_install}
 ",
             shell::quote(&format!("build/{}", unit.target.name)),
@@ -1390,13 +1504,16 @@ chmod 755 $out/bin/{}
         let lib_name = unit.target.name.replace('-', "_");
         format!(
             "\
-mkdir -p $out/lib $out/nix-support
+{ORPHAN_OUTPUT_PRECHECK}mkdir -p $out/lib $out/nix-support
 for build_artifact in build/*; do
   case \"$build_artifact\" in
     *.dwo|*.dwp) continue ;;
   esac
   cp -R \"$build_artifact\" \"$out/lib/\"
 done
+if [ -f build/cargo-metadata ]; then
+  cp build/cargo-metadata $out/nix-support/cargo-metadata
+fi
 extern_path=\"\"
 for artifact in \\
   \"$out/lib/lib{lib_name}-{hash}.rlib\" \\
@@ -1538,15 +1655,25 @@ fn render_build_script_run_phase(
     let mut script = String::new();
     let source = prepared.source_entry(run_index)?;
     let compile_ref = format!("${{units.{}}}", nix_attr(&prepared.names[compile_index]));
+    let manifest_dir = source_path_expr(source, &crate_root_for_unit(run_unit))?;
 
-    script.push_str("mkdir -p $out/out-dir\n");
-    script.push_str("export OUT_DIR=$out/out-dir\n");
-    ensure_source_contains_unit(source, run_unit)?;
+    script.push_str("mkdir -p $out\n");
     writeln!(
         script,
-        "export CARGO_MANIFEST_DIR={}",
-        shell::double_quote(&source_path_expr(source, &crate_root_for_unit(run_unit))?)
+        "build_script_manifest_dir_source={}",
+        shell::double_quote(&manifest_dir)
     )?;
+    script.push_str("build_script_manifest_dir=$out/manifest-dir\n");
+    script.push_str("mkdir -p \"$build_script_manifest_dir\"\n");
+    script.push_str(
+        "cp -RL \"$build_script_manifest_dir_source\"/. \"$build_script_manifest_dir\"/\n",
+    );
+    script.push_str("chmod -R u+w \"$build_script_manifest_dir\"\n");
+    script.push_str("build_script_out_dir=$(mktemp -d)\n");
+    script.push_str("build_script_env=()\n");
+    script.push_str("export OUT_DIR=$build_script_out_dir\n");
+    ensure_source_contains_unit(source, run_unit)?;
+    script.push_str("export CARGO_MANIFEST_DIR=$build_script_manifest_dir\n");
     script.push_str("export RUSTC=\"$(type -p rustc)\"\n");
     script.push_str("HOST_TRIPLE=\"$($RUSTC -vV | sed -n 's/^host: //p')\"\n");
     script.push_str("export HOST=\"$HOST_TRIPLE\"\n");
@@ -1586,7 +1713,7 @@ fn render_build_script_run_phase(
     script.push_str("set +e\n");
     writeln!(
         script,
-        "{}/bin/{} > \"$build_script_stdout\" 2> \"$build_script_stderr\"",
+        "env \"''${{build_script_env[@]}}\" {}/bin/{} > \"$build_script_stdout\" 2> \"$build_script_stderr\"",
         compile_ref,
         shell::quote(&compile_unit.target.name)
     )?;
@@ -1597,9 +1724,21 @@ fn render_build_script_run_phase(
     script.push_str("  cat \"$build_script_stdout\" >&2\n");
     script.push_str("  exit \"$build_script_status\"\n");
     script.push_str("fi\n");
+    script.push_str("cp -R \"$build_script_out_dir\" \"$out/out-dir\"\n");
+    script.push_str(
+        r#"if [ -d "$out/out-dir" ]; then
+  while IFS= read -r -d "" build_script_output_file; do
+    if grep -Iq -- "$build_script_out_dir" "$build_script_output_file"; then
+      substituteInPlace "$build_script_output_file" --replace-fail "$build_script_out_dir" "$out/out-dir"
+    fi
+  done < <(find "$out/out-dir" -type f -print0)
+fi
+"#,
+    );
     script.push_str(
         r#"
 while IFS= read -r line; do
+  line="''${line//$build_script_out_dir/$out/out-dir}"
   case "$line" in
     cargo::*)
       normalized="cargo:''${line#cargo::}"
@@ -1740,11 +1879,7 @@ fn render_unused_crate_dependencies_by_package(
 // Maps each cargo package name to the attr names of its per-unit clippy
 // derivations, so the template can join just that package's clippy units into
 // one per-crate gate instead of one whole-workspace aggregate.
-fn render_clippy_unit_names_by_package(
-    graph: &UnitGraph,
-    _options: &RenderOptions,
-    prepared: &PreparedGraph,
-) -> String {
+fn render_clippy_unit_names_by_package(graph: &UnitGraph, prepared: &PreparedGraph) -> String {
     let mut by_package: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (index, unit) in graph.units.iter().enumerate() {
         if !is_clippy_unit_candidate(unit) {
@@ -1842,19 +1977,14 @@ fn shell_env_value(value: &str) -> String {
 }
 
 fn shell_double_quote_literal(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('"');
-    for ch in value.chars() {
-        match ch {
-            '"' | '\\' | '$' | '`' => {
-                out.push('\\');
-                out.push(ch);
-            }
-            _ => out.push(ch),
-        }
-    }
-    out.push('"');
-    out
+    format!(
+        "\"{}\"",
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('$', "\\$")
+            .replace('`', "\\`")
+    )
 }
 
 fn nix_indented_string_fragment(value: &str) -> String {
@@ -1983,6 +2113,45 @@ done < "$cargo_cfg_output"
     );
 }
 
+fn append_direct_dependency_metadata_exports(
+    script: &mut String,
+    graph: &UnitGraph,
+    prepared: &PreparedGraph,
+    index: usize,
+) -> Result<()> {
+    for dep in &graph.units[index].dependencies {
+        let dep_unit = &graph.units[dep.index];
+        if dep_unit.is_run_custom_build() {
+            continue;
+        }
+        let Some(links) =
+            optional_cargo_manifest_package(dep_unit)?.and_then(|package| package.links)
+        else {
+            continue;
+        };
+
+        let dep_ref = format!("${{units.{}}}", nix_attr(&prepared.names[dep.index]));
+        let env_prefix = cargo_links_env_prefix(&links);
+        let _ = writeln!(
+            script,
+            r#"# Cargo exposes dependency build-script metadata through DEP_<links>_*.
+if [ -f "{dep_ref}/nix-support/cargo-metadata" ]; then
+  while IFS= read -r cargo_metadata_line; do
+    case "$cargo_metadata_line" in
+      *=*)
+        cargo_metadata_key="''${{cargo_metadata_line%%=*}}"
+        cargo_metadata_value="''${{cargo_metadata_line#*=}}"
+        rustc_env+=( "DEP_{env_prefix}_$cargo_metadata_key=$cargo_metadata_value" )
+        ;;
+    esac
+  done < "{dep_ref}/nix-support/cargo-metadata"
+fi"#,
+        );
+    }
+
+    Ok(())
+}
+
 fn append_dependency_metadata_exports(
     script: &mut String,
     graph: &UnitGraph,
@@ -2007,7 +2176,8 @@ if [ -f "{dep_run_ref}/cargo-metadata" ]; then
       *=*)
         cargo_metadata_key="''${{cargo_metadata_line%%=*}}"
         cargo_metadata_value="''${{cargo_metadata_line#*=}}"
-        cargo_metadata_env="DEP_{env_prefix}_$(printf '%s' "$cargo_metadata_key" | tr '[:lower:]-' '[:upper:]_')"
+        build_script_env+=( "DEP_{env_prefix}_$cargo_metadata_key=$cargo_metadata_value" )
+        cargo_metadata_env="DEP_{env_prefix}_$(printf '%s' "$cargo_metadata_key" | tr '[:lower:]' '[:upper:]' | sed 's/[^[:alnum:]_]/_/g')"
         export "$cargo_metadata_env=$cargo_metadata_value"
         ;;
     esac
@@ -2079,7 +2249,6 @@ fn source_entry_for_unit(unit: &Unit, options: &RenderOptions) -> Result<SourceE
         return Ok(SourceEntry {
             name: source_name(base, unit, &source_key, &scoped.relative),
             base,
-            scope: scoped.scope,
             root: scoped.root,
             relative: scoped.relative,
             include_relatives: scoped.include_relatives,
@@ -2097,7 +2266,6 @@ fn source_entry_for_unit(unit: &Unit, options: &RenderOptions) -> Result<SourceE
             SourceScope::Package => SourceBase::Workspace,
             SourceScope::Closure => SourceBase::WorkspaceClosure,
         },
-        scope: scoped.scope,
         root: scoped.root,
         relative: scoped.relative,
         include_relatives: scoped.include_relatives,
@@ -2257,40 +2425,20 @@ fn external_source_from_pkg_id(pkg_id: &str) -> Option<String> {
 fn local_package_root_from_pkg_id(pkg_id: &str) -> Option<PathBuf> {
     if let Some(rest) = pkg_id.strip_prefix("path+file://") {
         let (path, _) = rest.split_once('#')?;
-        return percent_decode_path(path).map(PathBuf::from);
+        return file_url_path(path);
     }
 
     let (_, rest) = pkg_id.split_once("(path+file://")?;
     let (path, _) = rest.split_once(')')?;
-    percent_decode_path(path).map(PathBuf::from)
+    file_url_path(path)
 }
 
-fn percent_decode_path(path: &str) -> Option<String> {
-    let bytes = path.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            let hi = hex_value(*bytes.get(index + 1)?)?;
-            let lo = hex_value(*bytes.get(index + 2)?)?;
-            out.push((hi << 4) | lo);
-            index += 3;
-        } else {
-            out.push(bytes[index]);
-            index += 1;
-        }
-    }
-
-    String::from_utf8(out).ok()
-}
-
-const fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
+// `Url::to_file_path` percent-decodes the path from the package id.
+fn file_url_path(path: &str) -> Option<PathBuf> {
+    Url::parse(&format!("file://{path}"))
+        .ok()?
+        .to_file_path()
+        .ok()
 }
 
 fn source_closure_relatives(root: &Path, source_boundary: &Path) -> Result<Vec<String>> {
@@ -2448,7 +2596,7 @@ fn extract_include_macro_paths(source: &str) -> Vec<String> {
                 continue;
             };
             let tail = tail.trim_start();
-            if let Some((literal, _)) = parse_rust_string_literal(tail) {
+            if let Some(literal) = parse_rust_string_literal(tail) {
                 if !literal.is_empty() {
                     paths.push(literal);
                 }
@@ -2461,7 +2609,7 @@ fn extract_include_macro_paths(source: &str) -> Vec<String> {
             let Some(concat_body) = concat_tail.trim_start().strip_prefix('(') else {
                 continue;
             };
-            if let Some((literal, _)) = parse_rust_string_literal(concat_body.trim_start())
+            if let Some(literal) = parse_rust_string_literal(concat_body.trim_start())
                 && let Some(directory) = literal.strip_suffix('/')
                 && !directory.is_empty()
             {
@@ -2472,20 +2620,20 @@ fn extract_include_macro_paths(source: &str) -> Vec<String> {
     paths
 }
 
-fn parse_rust_string_literal(source: &str) -> Option<(String, &str)> {
+fn parse_rust_string_literal(source: &str) -> Option<String> {
     let (source, is_raw) = match source.strip_prefix('r') {
         Some(after_r) if after_r.starts_with('"') => (after_r, true),
         _ => (source, false),
     };
     let body = source.strip_prefix('"')?;
-    let mut chars = body.char_indices();
+    let mut chars = body.chars();
     let mut literal = String::new();
-    while let Some((index, c)) = chars.next() {
+    while let Some(c) = chars.next() {
         if c == '"' {
-            return Some((literal, &body[index + c.len_utf8()..]));
+            return Some(literal);
         }
         if c == '\\' && !is_raw {
-            match chars.next().map(|(_, escaped)| escaped) {
+            match chars.next() {
                 Some('n') => literal.push('\n'),
                 Some('t') => literal.push('\t'),
                 Some('r') => literal.push('\r'),
@@ -3180,6 +3328,44 @@ mod tests {
         }
     }
 
+    fn single_library_graph(pkg_id: &str, name: &str, src_path: &str, edition: &str) -> UnitGraph {
+        serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "units": [{
+                "pkg_id": pkg_id,
+                "target": {
+                    "kind": ["lib"],
+                    "crate_types": ["lib"],
+                    "name": name,
+                    "src_path": src_path,
+                    "edition": edition
+                },
+                "profile": { "name": "release", "opt_level": "3" },
+                "mode": "build",
+                "dependencies": []
+            }],
+            "roots": [0]
+        }))
+        .unwrap()
+    }
+
+    fn render_error(graph: &UnitGraph) -> String {
+        render_units_nix(
+            graph,
+            &RenderOptions {
+                workspace_root: PathBuf::from("/workspace"),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: false,
+                toolchain_id: None,
+                deny_unused_crate_dependencies: false,
+                deny_panics: false,
+            },
+        )
+        .unwrap_err()
+        .to_string()
+    }
+
     #[test]
     fn renders_one_derivation_per_build_unit() {
         let graph: UnitGraph = serde_json::from_str(
@@ -3235,13 +3421,14 @@ mod tests {
         assert!(rendered.contains("default = withPolicyChecks units."));
         assert!(rendered.contains("policyChecks"));
         assert!(rendered.contains("extraRustcArgs"));
+        assert!(rendered.contains("packageRustcArgs ? {}"));
         assert!(rendered.contains("tests ="));
         assert!(rendered.contains("--json=unused-externs-silent"));
         assert!(rendered.contains("withPolicyChecks"));
         // Per-unit clippy: the same local unit gets a sibling clippy-driver
         // derivation in `clippyUnits`, grouped per crate by `clippyByPackage`.
         assert!(rendered.contains("clippyUnits = rec"));
-        assert!(rendered.contains("mkClippyUnit"));
+        assert!(rendered.contains("pname = \"hello-clippy\""));
         assert!(rendered.contains("env \"''${rustc_env[@]}\" clippy-driver"));
         assert!(rendered.contains("extraClippyLintArgs"));
         assert!(rendered.contains("clippyByPackage ="));
@@ -3321,6 +3508,163 @@ mod tests {
         assert!(rendered.contains("cp \"$split_debuginfo_sidecar\" \"$out/lib/\""));
         assert!(rendered.contains("case \"$build_artifact\" in\n    *.dwo|*.dwp) continue ;;"));
         assert!(!rendered.contains("cp -R build/* $out/lib/"));
+    }
+
+    #[test]
+    fn omits_extra_filename_when_output_path_is_explicit() {
+        // Bin (and test) units get an explicit `-o build/<name>` path, which by
+        // itself fully determines the output filename. Also emitting
+        // `-C extra-filename` there is what makes rustc warn "ignoring -C
+        // extra-filename flag due to -o flag" on every such build (index#1975).
+        // Lib units use `--out-dir` instead, so they still need extra-filename
+        // to disambiguate same-named outputs.
+        let graph: UnitGraph = serde_json::from_str(
+            r#"{
+              "version": 1,
+              "units": [
+                {
+                  "pkg_id": "path+file:///workspace#hello@0.1.0",
+                  "target": {
+                    "kind": ["lib"],
+                    "crate_types": ["lib"],
+                    "name": "hello",
+                    "src_path": "/workspace/src/lib.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [],
+                  "mode": "build",
+                  "dependencies": []
+                },
+                {
+                  "pkg_id": "path+file:///workspace#hello@0.1.0",
+                  "target": {
+                    "kind": ["bin"],
+                    "crate_types": ["bin"],
+                    "name": "hello-cli",
+                    "src_path": "/workspace/src/main.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [],
+                  "mode": "build",
+                  "dependencies": []
+                }
+              ],
+              "roots": [0, 1]
+            }"#,
+        )
+        .unwrap();
+
+        let rendered = render_units_nix(
+            &graph,
+            &RenderOptions {
+                workspace_root: PathBuf::from("/workspace"),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: false,
+                toolchain_id: Some("rustc-test".to_string()),
+                deny_unused_crate_dependencies: false,
+                deny_panics: false,
+            },
+        )
+        .unwrap();
+
+        // The bin unit's rustc (link) invocation carries the explicit `-o`
+        // path immediately after the source-path arg, with no
+        // `extra-filename` anywhere in between -- that adjacency is exactly
+        // what makes rustc emit "ignoring -C extra-filename flag due to -o
+        // flag".
+        let bin_rustc_invocation = rendered
+            .split("rustc_args+=( \"$src/src/main.rs\" )")
+            .nth(1)
+            .and_then(|rest| rest.split("env \"''${rustc_env[@]}\" rustc").next())
+            .expect("bin unit's rustc build phase");
+        assert!(bin_rustc_invocation.contains("rustc_args+=( -o 'build/hello-cli' )"));
+        assert!(!bin_rustc_invocation.contains("extra-filename"));
+
+        // Sibling clippy-driver units still use `--out-dir` (never `-o`), so
+        // they keep extra-filename for both the lib and the bin target; only
+        // the bin's *rustc* link step drops it. Three occurrences total: the
+        // lib's rustc build, the lib's clippy build, and the bin's clippy
+        // build.
+        assert_eq!(rendered.matches("'extra-filename=").count(), 3);
+    }
+
+    #[test]
+    fn install_phase_guards_against_stale_orphan_output() {
+        // Every rustc build unit (both the lib and the bin here) must open its
+        // installPhase with the orphan-output pre-check before any mkdir/cp, so a
+        // killed content-addressed build's leftover output at `$out` fails loud
+        // with the recovery recipe instead of a bare `cp: Permission denied`
+        // (index#2247).
+        let graph: UnitGraph = serde_json::from_str(
+            r#"{
+              "version": 1,
+              "units": [
+                {
+                  "pkg_id": "path+file:///workspace#hello@0.1.0",
+                  "target": {
+                    "kind": ["lib"],
+                    "crate_types": ["lib"],
+                    "name": "hello",
+                    "src_path": "/workspace/src/lib.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [],
+                  "mode": "build",
+                  "dependencies": []
+                },
+                {
+                  "pkg_id": "path+file:///workspace#hello@0.1.0",
+                  "target": {
+                    "kind": ["bin"],
+                    "crate_types": ["bin"],
+                    "name": "hello-cli",
+                    "src_path": "/workspace/src/main.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [],
+                  "mode": "build",
+                  "dependencies": []
+                }
+              ],
+              "roots": [0, 1]
+            }"#,
+        )
+        .unwrap();
+
+        let rendered = render_units_nix(
+            &graph,
+            &RenderOptions {
+                workspace_root: PathBuf::from("/workspace"),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: true,
+                toolchain_id: Some("rustc-test".to_string()),
+                deny_unused_crate_dependencies: false,
+                deny_panics: false,
+            },
+        )
+        .unwrap();
+
+        // The guard fires on a pre-existing, non-writable `$out` (the killed-build
+        // orphan) and names the recovery recipe. One occurrence per build unit
+        // (the lib and the bin); it must land before the artifact `cp`.
+        assert_eq!(
+            rendered
+                .matches("refusing to install over a pre-existing, non-writable output path")
+                .count(),
+            2
+        );
+        assert!(rendered.contains("nix-store --check-validity"));
+        // The guard runs first: it is prepended directly to the installPhase
+        // mkdir in both the lib and the bin branches, so it must be immediately
+        // adjacent to (and hence before) the mkdir that precedes the artifact cp.
+        assert!(rendered.contains("exit 1\nfi\nmkdir -p $out/lib $out/nix-support"));
+        assert!(rendered.contains("exit 1\nfi\nmkdir -p $out/bin $out/nix-support"));
     }
 
     #[test]
@@ -3513,13 +3857,11 @@ mod tests {
         .unwrap();
 
         // `clippyUnits = rec { };` rendered empty proves no per-unit clippy
-        // derivations were emitted. The template's `mkClippyUnit` helper is
-        // template-literal and always present; the driver invocation only
-        // appears inside a rendered clippy unit's build phase, so it's the
-        // load-bearing tell.
+        // derivations were emitted; the driver invocation only appears inside a
+        // rendered clippy unit's build phase, so it's the load-bearing tell.
         assert!(rendered.contains("clippyUnits = rec {\n  };"));
         assert!(!rendered.contains("env \"''${rustc_env[@]}\" clippy-driver"));
-        assert!(!rendered.contains("mkClippyUnit {\n      pname ="));
+        assert!(!rendered.contains("pname = \"serde-clippy\""));
     }
 
     #[test]
@@ -4051,7 +4393,9 @@ version = "0.1.0"
         assert!(!rendered.contains("rustdoc_args+=( \"''${build_script_flags[@]}\" )"));
         assert!(rendered.contains("done < \"${units."));
         assert!(rendered.contains("/rustc-env"));
-        assert!(rendered.contains("export OUT_DIR=\"${units."));
+        assert!(rendered.contains("compile_out_dir=$(mktemp -d)"));
+        assert!(rendered.contains("/out-dir/. \"$compile_out_dir\"/"));
+        assert!(rendered.contains("rustc_env+=( OUT_DIR=\"$compile_out_dir\" )"));
         assert!(!rendered.contains("--test-args --exact"));
         assert!(rendered.contains("--test-args --include-ignored"));
         assert!(rendered.contains("^running 1 test$"));
@@ -4656,89 +5000,29 @@ version = "4.6.1"
     }
 
     #[test]
-    fn rejects_unscoped_local_sources() {
-        let graph: UnitGraph = serde_json::from_str(
-            r#"{
-              "version": 1,
-              "units": [
-                {
-                  "pkg_id": "path+file:///repo/crates/alpha#alpha@0.1.0",
-                  "target": {
-                    "kind": ["lib"],
-                    "crate_types": ["lib"],
-                    "name": "alpha",
-                    "src_path": "/repo/crates/alpha/src/lib.rs",
-                    "edition": "2024"
-                  },
-                  "profile": { "name": "release", "opt_level": "3" },
-                  "mode": "build",
-                  "dependencies": []
-                }
-              ],
-              "roots": [0]
-            }"#,
-        )
-        .unwrap();
+    fn rejects_sources_without_a_resolvable_owner() {
+        let cases = [
+            (
+                "path+file:///repo/crates/alpha#alpha@0.1.0",
+                "alpha",
+                "/repo/crates/alpha/src/lib.rs",
+                "2024",
+                "outside workspace root",
+            ),
+            (
+                "registry+https://github.com/rust-lang/crates.io-index#itoa@1.0.15",
+                "itoa",
+                "/vendor/itoa-1.0.15/src/lib.rs",
+                "2021",
+                "needs --vendor-root",
+            ),
+        ];
 
-        let error = render_units_nix(
-            &graph,
-            &RenderOptions {
-                workspace_root: PathBuf::from("/workspace"),
-                vendor_root: None,
-                cargo_lock_sources: CargoLockSources::default(),
-                content_addressed: false,
-                toolchain_id: None,
-                deny_unused_crate_dependencies: false,
-                deny_panics: false,
-            },
-        )
-        .unwrap_err()
-        .to_string();
-
-        assert!(error.contains("outside workspace root"));
-    }
-
-    #[test]
-    fn rejects_external_sources_without_vendor_root() {
-        let graph: UnitGraph = serde_json::from_str(
-            r#"{
-              "version": 1,
-              "units": [
-                {
-                  "pkg_id": "registry+https://github.com/rust-lang/crates.io-index#itoa@1.0.15",
-                  "target": {
-                    "kind": ["lib"],
-                    "crate_types": ["lib"],
-                    "name": "itoa",
-                    "src_path": "/vendor/itoa-1.0.15/src/lib.rs",
-                    "edition": "2021"
-                  },
-                  "profile": { "name": "release", "opt_level": "3" },
-                  "mode": "build",
-                  "dependencies": []
-                }
-              ],
-              "roots": [0]
-            }"#,
-        )
-        .unwrap();
-
-        let error = render_units_nix(
-            &graph,
-            &RenderOptions {
-                workspace_root: PathBuf::from("/workspace"),
-                vendor_root: None,
-                cargo_lock_sources: CargoLockSources::default(),
-                content_addressed: false,
-                toolchain_id: None,
-                deny_unused_crate_dependencies: false,
-                deny_panics: false,
-            },
-        )
-        .unwrap_err()
-        .to_string();
-
-        assert!(error.contains("needs --vendor-root"));
+        for (pkg_id, name, source, edition, expected) in cases {
+            let graph = single_library_graph(pkg_id, name, source, edition);
+            let error = render_error(&graph);
+            assert!(error.contains(expected), "{error}");
+        }
     }
 
     #[test]
@@ -4919,9 +5203,22 @@ version = "4.6.1"
                   "dependencies": [
                     { "index": 0, "extern_crate_name": "host" }
                   ]
+                },
+                {
+                  "pkg_id": "path+file:///workspace#build-helper@0.1.0",
+                  "target": {
+                    "kind": ["custom-build"],
+                    "crate_types": ["bin"],
+                    "name": "build-script-build",
+                    "src_path": "/workspace/build.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "mode": "build",
+                  "dependencies": []
                 }
               ],
-              "roots": [1]
+              "roots": [1, 2]
             }"#,
         )
         .unwrap();
@@ -4941,8 +5238,11 @@ version = "4.6.1"
         .unwrap();
 
         assert!(rendered.contains("extraRustcArgsForPlatform ? _platform: []"));
-        assert!(rendered.contains("${renderExtraRustcArgs null}"));
-        assert!(rendered.contains("${renderExtraRustcArgs \"x86_64-apple-darwin\"}"));
+        assert!(rendered.contains("${renderExtraRustcArgs \"host\" null}"));
+        assert!(rendered.contains("${renderExtraRustcArgs \"hello\" \"x86_64-apple-darwin\"}"));
+        assert!(rendered.contains("${renderExtraLinkRustcArgs \"x86_64-apple-darwin\"}"));
+        assert!(!rendered.contains("${renderExtraLinkRustcArgs null}"));
+        assert!(!rendered.contains("${renderExtraRustcArgs \"build-helper\" null}"));
     }
 
     #[test]
@@ -5163,8 +5463,14 @@ links = "nested_native"
         )
         .unwrap();
 
-        assert!(rendered.contains("export CARGO_MANIFEST_DIR=\"$src\""));
-        assert!(!rendered.contains("export CARGO_MANIFEST_DIR=\"$src/builder\""));
+        assert!(rendered.contains("build_script_manifest_dir_source=\"$src\""));
+        assert!(rendered.contains("build_script_manifest_dir=$out/manifest-dir"));
+        assert!(rendered.contains(
+            "cp -RL \"$build_script_manifest_dir_source\"/. \"$build_script_manifest_dir\"/"
+        ));
+        assert!(rendered.contains("chmod -R u+w \"$build_script_manifest_dir\""));
+        assert!(rendered.contains("export CARGO_MANIFEST_DIR=$build_script_manifest_dir"));
+        assert!(!rendered.contains("build_script_manifest_dir_source=\"$src/builder\""));
         assert!(rendered.contains("export CARGO_MANIFEST_LINKS=\"nested_native\""));
         fs::remove_dir_all(workspace).unwrap();
     }
@@ -5180,8 +5486,8 @@ links = "nested_native"
         ));
         let sys_root = workspace.join("native-sys");
         let app_root = workspace.join("app");
-        fs::create_dir_all(&sys_root).unwrap();
-        fs::create_dir_all(&app_root).unwrap();
+        fs::create_dir_all(sys_root.join("src")).unwrap();
+        fs::create_dir_all(app_root.join("src")).unwrap();
         fs::write(
             sys_root.join("Cargo.toml"),
             r#"[package]
@@ -5201,10 +5507,16 @@ version = "0.1.0"
         .unwrap();
         let sys_build_rs = sys_root.join("build.rs");
         let app_build_rs = app_root.join("build.rs");
+        let sys_lib_rs = sys_root.join("src").join("lib.rs");
+        let app_lib_rs = app_root.join("src").join("lib.rs");
         fs::write(&sys_build_rs, "fn main() {}\n").unwrap();
         fs::write(&app_build_rs, "fn main() {}\n").unwrap();
+        fs::write(&sys_lib_rs, "pub fn native() {}\n").unwrap();
+        fs::write(&app_lib_rs, "pub fn app() {}\n").unwrap();
         let sys_build_rs_path = sys_build_rs.to_string_lossy();
         let app_build_rs_path = app_build_rs.to_string_lossy();
+        let sys_lib_rs_path = sys_lib_rs.to_string_lossy();
+        let app_lib_rs_path = app_lib_rs.to_string_lossy();
         let sys_pkg_id = format!("path+file://{}#native-sys@0.1.0", sys_root.display());
         let app_pkg_id = format!("path+file://{}#app@0.1.0", app_root.display());
         let graph: UnitGraph = serde_json::from_value(serde_json::json!({
@@ -5266,6 +5578,36 @@ version = "0.1.0"
                         { "index": 2, "extern_crate_name": "build_script_build" },
                         { "index": 1, "extern_crate_name": "native_sys" }
                     ]
+                },
+                {
+                    "pkg_id": sys_pkg_id,
+                    "target": {
+                        "kind": ["lib"],
+                        "crate_types": ["lib"],
+                        "name": "native_sys",
+                        "src_path": sys_lib_rs_path,
+                        "edition": "2024"
+                    },
+                    "profile": { "name": "release", "opt_level": "3" },
+                    "mode": "build",
+                    "dependencies": [
+                        { "index": 1, "extern_crate_name": "build_script_build" }
+                    ]
+                },
+                {
+                    "pkg_id": app_pkg_id,
+                    "target": {
+                        "kind": ["lib"],
+                        "crate_types": ["lib"],
+                        "name": "app",
+                        "src_path": app_lib_rs_path,
+                        "edition": "2024"
+                    },
+                    "profile": { "name": "release", "opt_level": "3" },
+                    "mode": "build",
+                    "dependencies": [
+                        { "index": 4, "extern_crate_name": "native_sys" }
+                    ]
                 }
             ],
             "roots": []
@@ -5286,12 +5628,20 @@ version = "0.1.0"
         )
         .unwrap();
 
-        assert!(
-            rendered.contains(
-                "cargo_metadata_env=\"DEP_NATIVE_FFI_$(printf '%s' \"$cargo_metadata_key\""
-            )
-        );
+        assert!(rendered.contains(
+            "cargo_metadata_env=\"DEP_NATIVE_FFI_$(printf '%s' \"$cargo_metadata_key\" | tr '[:lower:]' '[:upper:]' | sed 's/[^[:alnum:]_]/_/g')\""
+        ));
+        assert!(rendered.contains(
+            "build_script_env+=( \"DEP_NATIVE_FFI_$cargo_metadata_key=$cargo_metadata_value\" )"
+        ));
         assert!(rendered.contains("export \"$cargo_metadata_env=$cargo_metadata_value\""));
+        assert!(rendered.contains("env \"''${build_script_env[@]}\""));
+        assert!(rendered.contains("/cargo-metadata build/cargo-metadata"));
+        assert!(rendered.contains("cp build/cargo-metadata $out/nix-support/cargo-metadata"));
+        assert!(rendered.contains("/nix-support/cargo-metadata\" ]; then"));
+        assert!(rendered.contains(
+            "rustc_env+=( \"DEP_NATIVE_FFI_$cargo_metadata_key=$cargo_metadata_value\" )"
+        ));
         fs::remove_dir_all(workspace).unwrap();
     }
 

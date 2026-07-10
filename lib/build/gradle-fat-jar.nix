@@ -1,27 +1,23 @@
 /**
-  Build a Gradle fat-jar with a pinned dependency-verification metadata file.
+Build a Gradle fat-jar with a pinned dependency-verification metadata file.
 
-  Wraps `pkgs.stdenv.mkDerivation` with Gradle as the build tool. The
-  dependency hashes come from a Gradle dependency-verification XML
-  reproduced into the build sandbox, so the build is fixed-output and
-  network-isolated. The selected Gradle task runs in offline mode.
+Wraps `pkgs.stdenv.mkDerivation` with Gradle as the build tool. The
+dependency hashes come from a Gradle dependency-verification XML
+reproduced into the build sandbox, so the build is fixed-output and
+network-isolated. The selected Gradle task runs in offline mode.
 
-  Arguments:
-  - `pname`, `version`, `src`: derivation identity and source.
-  - `verificationMetadata`: path to the Gradle verification XML.
-  - `javaPackage`, `gradle`: toolchain packages.
-  - `gradleBuildTask`, `gradleCheckTask`, `gradleFlags`: build invocation.
-  - `jarPath`: relative path of the produced jar inside the source tree.
-  - `installPhase`: override the default `cp ${jarPath} $out/...` phase.
-  - `doCheck`: run `gradleCheckTask` before the build task.
-  - Other standard `mkDerivation` args (`nativeBuildInputs`, `meta`,
-    `passthru`, `preConfigure`, etc.) are forwarded.
+Arguments:
+- `pname`, `version`, `src`: derivation identity and source.
+- `verificationMetadata`: path to the Gradle verification XML.
+- `javaPackage`, `gradle`: toolchain packages.
+- `gradleBuildTask`, `gradleCheckTask`, `gradleFlags`: build invocation.
+- `jarPath`: relative path of the produced jar inside the source tree.
+- `installPhase`: override the default `cp ${jarPath} $out/...` phase.
+- `doCheck`: run `gradleCheckTask` before the build task.
+- Other standard `mkDerivation` args (`nativeBuildInputs`, `meta`,
+  `passthru`, `preConfigure`, etc.) are forwarded.
 */
-{ lib }:
-
-pkgs:
-
-{
+{lib}: pkgs: {
   pname,
   version,
   src,
@@ -30,17 +26,16 @@ pkgs:
   gradle ? pkgs.gradle_9,
   gradleBuildTask ? "jar",
   gradleCheckTask ? "check",
-  gradleFlags ? [ ],
+  gradleFlags ? [],
   jarPath ? "build/libs/${pname}-${version}.jar",
-  nativeBuildInputs ? [ ],
+  nativeBuildInputs ? [],
   doCheck ? false,
   installPhase ? null,
-  meta ? { },
-  passthru ? { },
+  meta ? {},
+  passthru ? {},
   preConfigure ? "",
   ...
-}@args:
-let
+} @ args: let
   extraArgs = builtins.removeAttrs args [
     "pname"
     "version"
@@ -62,18 +57,17 @@ let
 
   lines = lib.splitString "\n" (builtins.readFile verificationMetadata);
 
-  attrFromLine =
-    attr: line:
-    let
-      match = builtins.match ''.* ${attr}="([^"]+)".*'' line;
-    in
-    if match == null then null else builtins.head match;
+  attrFromLine = attr: line: let
+    match = builtins.match ''.* ${attr}="([^"]+)".*'' line;
+  in
+    if match == null
+    then null
+    else builtins.head match;
 
   # Gradle records each artifact digest as a hex `value="<hex>"`. Convert it to
   # the self-describing SRI form the fetcher `hash` slot expects, rather than
   # carrying a legacy `sha256` attr.
-  hexToSri =
-    hex:
+  hexToSri = hex:
     builtins.convertHash {
       hash = hex;
       hashAlgo = "sha256";
@@ -90,9 +84,9 @@ let
   # signature line (sha512, sha1, md5, pgp, also-trust) is ignored, so a 128-hex
   # or 40-hex fingerprint never reaches `hexToSri`. Close tags clear the open
   # artifact/component so a stray digest line is never reattributed.
-  collect =
-    state: line:
-    if lib.hasInfix "<component " line then
+  collect = state: line:
+    if lib.hasInfix "<component " line
+    then
       state
       // {
         component = {
@@ -102,83 +96,84 @@ let
         };
         artifact = null;
       }
-    else if lib.hasInfix "</component>" line then
+    else if lib.hasInfix "</component>" line
+    then
       state
       // {
         component = null;
         artifact = null;
       }
-    else if lib.hasInfix ''<artifact name="'' line then
-      state // { artifact = attrFromLine "name" line; }
-    else if lib.hasInfix "</artifact>" line then
-      state // { artifact = null; }
-    else if
-      lib.hasInfix ''<sha256 value="'' line && state.component != null && state.artifact != null
+    else if lib.hasInfix ''<artifact name="'' line
+    then state // {artifact = attrFromLine "name" line;}
+    else if lib.hasInfix "</artifact>" line
+    then state // {artifact = null;}
+    else if lib.hasInfix ''<sha256 value="'' line && state.component != null && state.artifact != null
     then
       state
       // {
         # First digest wins: clear the artifact so a later digest line under the
         # same artifact cannot emit a second record for the same file.
         artifact = null;
-        results = state.results ++ [
-          (
-            state.component
-            // {
-              file = state.artifact;
-              hash = hexToSri (attrFromLine "value" line);
-            }
-          )
-        ];
+        results =
+          state.results
+          ++ [
+            (
+              state.component
+              // {
+                file = state.artifact;
+                hash = hexToSri (attrFromLine "value" line);
+              }
+            )
+          ];
       }
-    else
-      state;
+    else state;
 
   artifacts =
     (lib.foldl' collect {
-      component = null;
-      artifact = null;
-      results = [ ];
-    } lines).results;
+        component = null;
+        artifact = null;
+        results = [];
+      }
+      lines).results;
 
-  artifactUrl =
-    {
-      group,
-      name,
-      version,
-      file,
-      ...
-    }:
-    "https://repo.maven.apache.org/maven2/${
-      lib.replaceStrings [ "." ] [ "/" ] group
-    }/${name}/${version}/${file}";
+  artifactUrl = {
+    group,
+    name,
+    version,
+    file,
+    ...
+  }: "https://repo.maven.apache.org/maven2/${
+    lib.replaceStrings ["."] ["/"] group
+  }/${name}/${version}/${file}";
 
-  fetchedArtifacts = map (
-    artifact:
-    artifact
-    // {
-      src = pkgs.fetchurl {
-        url = artifactUrl artifact;
-        inherit (artifact) hash;
-      };
-    }
-  ) artifacts;
+  fetchedArtifacts =
+    map (
+      artifact:
+        artifact
+        // {
+          src = pkgs.fetchurl {
+            url = artifactUrl artifact;
+            inherit (artifact) hash;
+          };
+        }
+    )
+    artifacts;
 
-  mavenRepo = pkgs.runCommand "${pname}-maven-repository" { } (
+  mavenRepo = pkgs.runCommand "${pname}-maven-repository" {} (
     ''
       runHook preInstall
     ''
     + lib.concatMapStringsSep "\n" (
-      artifact:
-      let
+      artifact: let
         path = "${
-          lib.replaceStrings [ "." ] [ "/" ] artifact.group
+          lib.replaceStrings ["."] ["/"] artifact.group
         }/${artifact.name}/${artifact.version}/${artifact.file}";
-      in
-      ''
+      in ''
         mkdir -p "$out/${dirOf path}"
         ln -s ${artifact.src} "$out/${path}"
       ''
-    ) fetchedArtifacts
+    )
+    fetchedArtifacts
     + ''
 
       runHook postInstall
@@ -196,55 +191,59 @@ let
     }
   '';
 in
-pkgs.stdenvNoCC.mkDerivation (
-  _:
-  extraArgs
-  // {
-    inherit
-      pname
-      version
-      src
-      doCheck
-      gradleBuildTask
-      gradleCheckTask
-      passthru
-      ;
+  pkgs.stdenvNoCC.mkDerivation (
+    _:
+      extraArgs
+      // {
+        inherit
+          pname
+          version
+          src
+          doCheck
+          gradleBuildTask
+          gradleCheckTask
+          passthru
+          ;
 
-    strictDeps = true;
-    nativeBuildInputs = [ gradle ] ++ nativeBuildInputs;
+        strictDeps = true;
+        nativeBuildInputs = [gradle] ++ nativeBuildInputs;
 
-    gradleFlags = [
-      "-Dfile.encoding=utf-8"
-      "-Dorg.gradle.java.home=${javaPackage}"
-      "-Pix.mavenRepository=file://${mavenRepo}"
-    ]
-    ++ gradleFlags;
+        gradleFlags =
+          [
+            "-Dfile.encoding=utf-8"
+            "-Dorg.gradle.java.home=${javaPackage}"
+            "-Pix.mavenRepository=file://${mavenRepo}"
+          ]
+          ++ gradleFlags;
 
-    gradleInitScript = localMavenInitScript;
+        gradleInitScript = localMavenInitScript;
 
-    preConfigure = ''
-      # shell
-      ${preConfigure}
-      rm -rf .gradle build
-    '';
+        preConfigure = ''
+          # shell
+          ${preConfigure}
+          rm -rf .gradle build
+        '';
 
-    installPhase =
-      if installPhase == null then
-        ''
-          runHook preInstall
+        installPhase =
+          if installPhase == null
+          then ''
+            runHook preInstall
 
-          install -Dm444 ${lib.escapeShellArg jarPath} "$out"
+            install -Dm444 ${lib.escapeShellArg jarPath} "$out"
 
-          runHook postInstall
-        ''
-      else
-        installPhase;
+            runHook postInstall
+          ''
+          else installPhase;
 
-    meta = meta // {
-      sourceProvenance = (meta.sourceProvenance or [ ]) ++ [
-        lib.sourceTypes.fromSource
-        lib.sourceTypes.binaryBytecode
-      ];
-    };
-  }
-)
+        meta =
+          meta
+          // {
+            sourceProvenance =
+              (meta.sourceProvenance or [])
+              ++ [
+                lib.sourceTypes.fromSource
+                lib.sourceTypes.binaryBytecode
+              ];
+          };
+      }
+  )

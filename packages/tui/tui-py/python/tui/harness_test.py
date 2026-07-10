@@ -11,8 +11,12 @@ import re
 import unittest
 
 from .harness import (
+    Claude,
+    Codex,
+    Cursor,
     _gate_matches,
     _parse_claude_reply,
+    _parse_cursor_reply,
     _shquote,
     _submit_probe,
     _tail_delta,
@@ -64,6 +68,45 @@ class GateMatchTests(unittest.TestCase):
         assert _gate_matches(re.compile(r"hooks?\b"), "review hooks")
 
 
+class OneshotArgvTests(unittest.TestCase):
+    def test_claude_defaults(self) -> None:
+        assert Claude._oneshot_argv("q") == ["claude", "-p", "q"]
+
+    def test_claude_model(self) -> None:
+        assert Claude._oneshot_argv("q", model="haiku") == [
+            "claude",
+            "-p",
+            "--model",
+            "haiku",
+            "q",
+        ]
+
+    def test_codex_reply_goes_to_last_message_file(self) -> None:
+        argv = Codex._oneshot_argv("q", "/scratch/last.txt")
+        assert argv[:2] == ["codex", "exec"]
+        assert argv[-1] == "q"
+        assert argv[argv.index("--output-last-message") + 1] == "/scratch/last.txt"
+
+    def test_cursor_defaults(self) -> None:
+        argv = Cursor._oneshot_argv("q")
+        assert argv[:2] == ["cursor-agent", "-p"]
+        assert "--force" in argv
+        assert argv[-1] == "q"
+
+
+class ClaudeGateTests(unittest.TestCase):
+    # The dev-channels warning screen as rendered by claude 2.1.x launched with
+    # --dangerously-load-development-channels (#2508).
+    def test_dev_channels_screen_matches_a_gate(self) -> None:
+        screen = (
+            "  WARNING: Loading development channels\n\n"
+            "  Channels: server:index\n\n"
+            "  ❯ 1. I am using this for local development\n"
+            "    2. Exit\n"
+        )
+        assert any(_gate_matches(g.pattern, screen) for g in Claude.gates)
+
+
 class ClaudeReplyTests(unittest.TestCase):
     def test_extracts_last_marker_block(self) -> None:
         transcript = (
@@ -83,6 +126,54 @@ class ClaudeReplyTests(unittest.TestCase):
     def test_falls_back_when_no_marker(self) -> None:
         assert _parse_claude_reply("  plain text  ") == "plain text"
 
+
+class CursorReplyTests(unittest.TestCase):
+    # Grounded against a real cursor-agent 2026.06 session (issue #1987): the
+    # echoed prompt, a shell tool block, the answer, then the input-box footer.
+    def test_extracts_answer_after_tool_block(self) -> None:
+        transcript = (
+            "  Run `ls` in this directory, then reply with just the count.\n"
+            "\n"
+            "  $ ls -1 /private/tmp | wc -l 24s\n"
+            "    1894\n"
+            "\n"
+            "  1894\n"
+            "\n"
+            " ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n"
+            "  → Add a follow-up\n"
+            " ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+            "  Composer 2.5 Fast · 13%\n"
+            "  /private/tmp"
+        )
+        assert _parse_cursor_reply(transcript) == "1894"
+
+    def test_plain_turn_drops_prompt_echo(self) -> None:
+        transcript = (
+            "  Reply with exactly: hello from cursor.\n"
+            "\n"
+            " ⠘⠤ Composing\n"
+            "  hello from cursor\n"
+            "\n"
+            " ▄▄▄▄▄▄▄▄\n"
+            "  → Add a follow-up\n"
+            " ▀▀▀▀▀▀▀▀"
+        )
+        assert _parse_cursor_reply(transcript) == "hello from cursor"
+
+    def test_multi_paragraph_answer_survives(self) -> None:
+        transcript = (
+            "  question\n"
+            "\n"
+            "  first paragraph\n"
+            "\n"
+            "  second paragraph\n"
+            "\n"
+            " ▄▄▄▄▄▄▄▄"
+        )
+        assert _parse_cursor_reply(transcript) == "first paragraph\n\nsecond paragraph"
+
+    def test_falls_back_when_nothing_survives(self) -> None:
+        assert _parse_cursor_reply("  $ ls 1s\n    out\n") == "$ ls 1s\n    out"
 
 if __name__ == "__main__":
     unittest.main()

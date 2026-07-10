@@ -1,8 +1,13 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="the indexer writes code and fleet history into one corpus store; search queries it and returns ranked hits"></p>
+
 # search
 
-Read-only semantic and regex search over the shared `index` corpus: one
-[Mixedbread](https://www.mixedbread.com) store holding code plus agent/shell
-history across the fleet.
+Ever wished you could grep every repo, every agent transcript, and every shell
+session on the fleet at once? `search` is read-only semantic and regex search
+over the shared `index` corpus: one [Mixedbread](https://www.mixedbread.com)
+store holding code plus agent/shell history across the fleet. Ask in plain
+English, get ranked hits with provenance; it beats grep because it matches by
+meaning and covers history no local checkout contains.
 
 `search` never indexes. The separate [`indexer`](../indexer) owns all ingestion
 (code, Claude/Codex transcripts, shell history, Slack, Linear); this CLI only
@@ -14,6 +19,21 @@ with no domain logic; [`search-core`](../search-core) owns the query and filter
 logic behind a [`Store`] trait; this crate is the CLI over it, and
 [`search-py`](../search-py) is the PyO3 binding (`import search`, also bundled
 into the `ix-mcp` interpreter).
+
+## Install
+
+```sh
+nix run github:indexable-inc/index#search -- --help
+```
+
+Or build the binary from the monorepo with cargo:
+
+```sh
+cargo install --git https://github.com/indexable-inc/index search
+```
+
+From a clone (`git clone https://github.com/indexable-inc/index`), it is
+`nix run .#search`.
 
 ## Authentication
 
@@ -45,6 +65,10 @@ search --source claude_history --mine "deploy steps"
 
 # Only code, one repository.
 search --source code --repo indexable-inc/index "manifest reconcile"
+
+# Piped stdin switches to pipe-in mode: rank the piped lines against the
+# query semantically instead of searching the corpus.
+ls | search "build outputs"
 ```
 
 Flags mirror `mgrep search` where they overlap: `-c/--content`, `-m/--max-count`,
@@ -74,4 +98,4 @@ server-side (no local read). Repeatable, comma-joined values are accepted.
   exchange) need a real credential to exercise; the query and filter logic are
   covered by tests against an in-memory store.
 
-[`Store`]: src/backend.rs
+[`Store`]: ../search-core/src/backend.rs

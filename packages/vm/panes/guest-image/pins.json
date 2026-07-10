@@ -1,0 +1,52 @@
+{
+  "lwjgl": {
+    "version": "3.4.1",
+    "url": "https://repo1.maven.org/maven2/org/lwjgl/lwjgl/3.4.1/lwjgl-3.4.1-natives-linux-arm64.jar",
+    "hash": "sha256-ihES7nWZr/ld5DZK5wSDKdkpdTgBIsUZ/u4xNCvbZ4s="
+  },
+  "lwjgl-freetype": {
+    "version": "3.4.1",
+    "url": "https://repo1.maven.org/maven2/org/lwjgl/lwjgl-freetype/3.4.1/lwjgl-freetype-3.4.1-natives-linux-arm64.jar",
+    "hash": "sha256-cRd8TpVVHVD2mIa/I6Dr2TB+vJLgTCZooTt5f5J40Aw="
+  },
+  "lwjgl-glfw": {
+    "version": "3.4.1",
+    "url": "https://repo1.maven.org/maven2/org/lwjgl/lwjgl-glfw/3.4.1/lwjgl-glfw-3.4.1-natives-linux-arm64.jar",
+    "hash": "sha256-K5/YKf8mcibddodKR+u+odXHDnfksJ39i1B1U6WsrDQ="
+  },
+  "lwjgl-jemalloc": {
+    "version": "3.4.1",
+    "url": "https://repo1.maven.org/maven2/org/lwjgl/lwjgl-jemalloc/3.4.1/lwjgl-jemalloc-3.4.1-natives-linux-arm64.jar",
+    "hash": "sha256-RX2K3HxDiRslR102IYkQVOxprD5yPSVu6uM6CNQVvJI="
+  },
+  "lwjgl-opengl": {
+    "version": "3.4.1",
+    "url": "https://repo1.maven.org/maven2/org/lwjgl/lwjgl-opengl/3.4.1/lwjgl-opengl-3.4.1-natives-linux-arm64.jar",
+    "hash": "sha256-TBVnJoLYKsSu+fxGxj1ymvAFYP6TerJbDzpH+A2WazI="
+  },
+  "lwjgl-shaderc": {
+    "version": "3.4.1",
+    "url": "https://repo1.maven.org/maven2/org/lwjgl/lwjgl-shaderc/3.4.1/lwjgl-shaderc-3.4.1-natives-linux-arm64.jar",
+    "hash": "sha256-BIrklnzBk/g536FsFkPqt377Lucp6S8AuH/EeWFLhiw="
+  },
+  "lwjgl-spvc": {
+    "version": "3.4.1",
+    "url": "https://repo1.maven.org/maven2/org/lwjgl/lwjgl-spvc/3.4.1/lwjgl-spvc-3.4.1-natives-linux-arm64.jar",
+    "hash": "sha256-aYExZEhWZdncL+npe+tUkQaq0jzIYK4YYiWMBK3doQI="
+  },
+  "lwjgl-stb": {
+    "version": "3.4.1",
+    "url": "https://repo1.maven.org/maven2/org/lwjgl/lwjgl-stb/3.4.1/lwjgl-stb-3.4.1-natives-linux-arm64.jar",
+    "hash": "sha256-sWuOOZNoX2uTDVBbSqU0s53VUTlH9gPDn6GKNtowIE4="
+  },
+  "lwjgl-tinyfd": {
+    "version": "3.4.1",
+    "url": "https://repo1.maven.org/maven2/org/lwjgl/lwjgl-tinyfd/3.4.1/lwjgl-tinyfd-3.4.1-natives-linux-arm64.jar",
+    "hash": "sha256-y2G5t001C7hKrX1ApDQ9mj+WP/6StKMgG1kFttroPtQ="
+  },
+  "lwjgl-vma": {
+    "version": "3.4.1",
+    "url": "https://repo1.maven.org/maven2/org/lwjgl/lwjgl-vma/3.4.1/lwjgl-vma-3.4.1-natives-linux-arm64.jar",
+    "hash": "sha256-6iHfa/KxwFQ0orHTGhSjYJzjIvIcNPxbyLoNBxuBqNE="
+  }
+}

@@ -19,20 +19,19 @@
   # from the caller's PATH, where a host-level wrapper can inject conflicting
   # flags and extensions. Pass a derivation here to override.
   pi ? pi-coding-agent,
-}:
-{
+}: {
   name,
   description ? "pi harness",
   # Declarative model table: { alias = { provider; model; ... }; }.
   models,
   defaultModel ? "claude",
   # Entry extensions: each is copied next to the wrapper and loaded with `-e`.
-  extensions ? [ ],
+  extensions ? [],
   # Helper modules imported by the entry extensions (copied into share/<name>/lib).
-  libFiles ? [ ],
+  libFiles ? [],
   # Files copied next to the extensions but NOT auto-loaded (e.g. the turn-cap
   # extension that beam branches load by absolute path).
-  auxFiles ? [ ],
+  auxFiles ? [],
   # Posture knobs. lockdown=false is the whole point of these harnesses.
   lockdown ? false,
   session ? true,
@@ -40,14 +39,13 @@
   mode ? null,
   systemPrompt ? null,
   # Extra KEY=VALUE pairs exported in the wrapper environment.
-  env ? { },
+  env ? {},
   # Extra PATH entries available to the wrapper and any child `pi`.
-  runtimeInputs ? [ ],
+  runtimeInputs ? [],
   # Optional node `--test` files run at build time, plus the lib files they import.
-  checkFiles ? [ ],
-  checkLib ? [ ],
-}:
-let
+  checkFiles ? [],
+  checkLib ? [],
+}: let
   piBin = lib.getExe pi;
   path = lib.makeBinPath (
     [
@@ -78,11 +76,11 @@ let
 
   modelCase = lib.concatStringsSep "\n" (
     lib.mapAttrsToList (
-      alias: m:
-      "  ${alias}) PI_PROVIDER=${lib.escapeShellArg m.provider}; PI_MODEL=${lib.escapeShellArg m.model}; PI_THINKING=${
-          lib.escapeShellArg (m.thinking or "")
-        } ;;"
-    ) models
+      alias: m: "  ${alias}) PI_PROVIDER=${lib.escapeShellArg m.provider}; PI_MODEL=${lib.escapeShellArg m.model}; PI_THINKING=${
+        lib.escapeShellArg (m.thinking or "")
+      } ;;"
+    )
+    models
   );
 
   extEnv = lib.concatStringsSep "\n" (
@@ -91,60 +89,59 @@ let
 
   extBasenames = lib.concatStringsSep " " (map (e: lib.escapeShellArg (baseNameOf e)) extensions);
 
-  copyInto =
-    dest: files:
+  copyInto = dest: files:
     lib.concatMapStringsSep "\n" (f: ''install -Dm644 ${f} "${dest}/${baseNameOf f}"'') files;
 in
-stdenv.mkDerivation {
-  pname = name;
-  version = "0.1.0";
-  dontUnpack = true;
-  strictDeps = true;
-  nativeBuildInputs = [ bash ] ++ lib.optional (checkFiles != [ ]) nodejs;
-  doCheck = checkFiles != [ ];
+  stdenv.mkDerivation {
+    pname = name;
+    version = "0.1.0";
+    dontUnpack = true;
+    strictDeps = true;
+    nativeBuildInputs = [bash] ++ lib.optional (checkFiles != []) nodejs;
+    doCheck = checkFiles != [];
 
-  buildPhase = ''
-    # shell
-    runHook preBuild
-    mkdir -p share/${name}/lib
-    ${copyInto "share/${name}" extensions}
-    ${copyInto "share/${name}" auxFiles}
-    ${copyInto "share/${name}/lib" libFiles}
+    buildPhase = ''
+      # shell
+      runHook preBuild
+      mkdir -p share/${name}/lib
+      ${copyInto "share/${name}" extensions}
+      ${copyInto "share/${name}" auxFiles}
+      ${copyInto "share/${name}/lib" libFiles}
 
-    cp ${./wrapper.sh.in} wrapper.sh
-    substituteInPlace wrapper.sh \
-      --replace-fail '@PATH@' ${lib.escapeShellArg path} \
-      --replace-fail '@NAME@' ${lib.escapeShellArg name} \
-      --replace-fail '@DEFAULT_MODEL@' ${lib.escapeShellArg defaultModel} \
-      --replace-fail '@PI@' ${lib.escapeShellArg piBin} \
-      --replace-fail '@FLAGS@' ${lib.escapeShellArg flagsStr} \
-      --replace-fail '@EXT_BASENAMES@' ${lib.escapeShellArg extBasenames} \
-      --replace-fail '@MODEL_CASE@' ${lib.escapeShellArg modelCase} \
-      --replace-fail '@EXT_ENV@' ${lib.escapeShellArg extEnv}
-    runHook postBuild
-  '';
+      cp ${./wrapper.sh.in} wrapper.sh
+      substituteInPlace wrapper.sh \
+        --replace-fail '@PATH@' ${lib.escapeShellArg path} \
+        --replace-fail '@NAME@' ${lib.escapeShellArg name} \
+        --replace-fail '@DEFAULT_MODEL@' ${lib.escapeShellArg defaultModel} \
+        --replace-fail '@PI@' ${lib.escapeShellArg piBin} \
+        --replace-fail '@FLAGS@' ${lib.escapeShellArg flagsStr} \
+        --replace-fail '@EXT_BASENAMES@' ${lib.escapeShellArg extBasenames} \
+        --replace-fail '@MODEL_CASE@' ${lib.escapeShellArg modelCase} \
+        --replace-fail '@EXT_ENV@' ${lib.escapeShellArg extEnv}
+      runHook postBuild
+    '';
 
-  checkPhase = ''
-    # shell
-    runHook preCheck
-    cdir=$(mktemp -d)
-    ${copyInto "$cdir" checkLib}
-    ${copyInto "$cdir" checkFiles}
-    ( cd "$cdir" && node --test )
-    runHook postCheck
-  '';
+    checkPhase = ''
+      # shell
+      runHook preCheck
+      cdir=$(mktemp -d)
+      ${copyInto "$cdir" checkLib}
+      ${copyInto "$cdir" checkFiles}
+      ( cd "$cdir" && node --test )
+      runHook postCheck
+    '';
 
-  installPhase = ''
-    # shell
-    runHook preInstall
-    mkdir -p "$out/bin"
-    cp -r share "$out/share"
-    install -Dm755 wrapper.sh "$out/bin/${name}"
-    runHook postInstall
-  '';
+    installPhase = ''
+      # shell
+      runHook preInstall
+      mkdir -p "$out/bin"
+      cp -r share "$out/share"
+      install -Dm755 wrapper.sh "$out/bin/${name}"
+      runHook postInstall
+    '';
 
-  meta = {
-    inherit description;
-    mainProgram = name;
-  };
-}
+    meta = {
+      inherit description;
+      mainProgram = name;
+    };
+  }

@@ -1,0 +1,23 @@
+name: Install Determinate Nix
+description: >-
+  Determinate Nix pinned and configured for this repo: accept the flake's
+  nixConfig without a prompt, substitute from the ix cache, and enable
+  ca-derivations. Owns the install block so workflows cannot drift apart.
+
+runs:
+  using: composite
+  steps:
+    - name: Install Determinate Nix
+      uses: DeterminateSystems/determinate-nix-action@629b284231c2a82554b724e357e47fc6020833c8 # v3
+      with:
+        # `accept-flake-config` lets jobs consume the flake's nixConfig (the
+        # same cache.ix.dev substituter) without a prompt; pinning the
+        # substituter and key here keeps the install self-describing.
+        # ca-derivations because repo-owned artifacts (cargo-unit rlibs) are
+        # content-addressed and will not substitute without the feature
+        # enabled client-side.
+        extra-conf: |
+          accept-flake-config = true
+          extra-experimental-features = ca-derivations
+          extra-substituters = https://cache.ix.dev
+          extra-trusted-public-keys = ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI=

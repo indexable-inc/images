@@ -1,7 +1,4 @@
-{
-  pkgs,
-}:
-let
+{pkgs}: let
   inherit (pkgs.haskell.lib) compose;
 
   # `nom build` reads every .drv with the `nix-derivation` Haskell library. Its
@@ -33,38 +30,44 @@ let
     }
   );
 
-  package = pkgs.nix-output-monitor.override { inherit haskellPackages; };
+  package = pkgs.callPackage (pkgs.path + "/pkgs/by-name/ni/nix-output-monitor/package.nix") {
+    inherit haskellPackages;
+  };
 
   # The override's real risk is the Haskell rebuild linking at all, so the smoke
   # test runs the binary. `nom --help` exits 0 and prints usage without spawning
   # `nix` (`--version` shells out to `nix`, absent in the sandbox).
   smoke =
     pkgs.runCommand "nix-output-monitor-smoke"
-      {
-        nativeBuildInputs = [ package ];
-        strictDeps = true;
-      }
-      ''
-        help=$(nom --help 2>&1) || true
-        case "$help" in
-          *"nix-output-monitor usages"*) ;;
-          *)
-            echo "nom --help did not print usage" >&2
-            printf '%s\n' "$help" >&2
-            exit 1
-            ;;
-        esac
-        mkdir -p "$out"
-      '';
+    {
+      nativeBuildInputs = [package];
+      strictDeps = true;
+    }
+    ''
+      help=$(nom --help 2>&1) || true
+      case "$help" in
+        *"nix-output-monitor usages"*) ;;
+        *)
+          echo "nom --help did not print usage" >&2
+          printf '%s\n' "$help" >&2
+          exit 1
+          ;;
+      esac
+      mkdir -p "$out"
+    '';
 in
-package.overrideAttrs (old: {
-  passthru = (old.passthru or { }) // {
-    tests = {
-      inherit smoke;
-    };
-  };
-  meta = (old.meta or { }) // {
-    description = "nix-output-monitor with nix-derivation patched to parse content-addressed derivations";
-    mainProgram = "nom";
-  };
-})
+  package.overrideAttrs (old: {
+    passthru =
+      (old.passthru or {})
+      // {
+        tests = {
+          inherit smoke;
+        };
+      };
+    meta =
+      (old.meta or {})
+      // {
+        description = "nix-output-monitor with nix-derivation patched to parse content-addressed derivations";
+        mainProgram = "nom";
+      };
+  })

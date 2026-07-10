@@ -1,0 +1,7 @@
+{ lib, names }:
+''
+  script_names=(${lib.escapeShellArgs names})
+  for name in "''${script_names[@]}"; do
+    echo "$name"
+  done
+''

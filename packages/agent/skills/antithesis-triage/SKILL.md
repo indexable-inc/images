@@ -68,7 +68,7 @@ If the URL starts with `https://$TENANT.antithesis.com` then you are authenticat
 The triage skill makes heavy use of an injected runtime API. Inject the runtime into the current page after navigation completes:
 
 ```bash
-cat assets/antithesis-triage.js \
+cat ../antithesis/assets/browser-utils.js assets/antithesis-triage.js \
   | agent-browser --session "$SESSION" eval --stdin
 ```
 
@@ -89,7 +89,7 @@ use the same call pattern.
 to detect failures — no output parsing required. The error message describes
 what went wrong (e.g. wrong page, element not found, timeout).
 
-If `window.__antithesisTriage` is missing, inject `assets/antithesis-triage.js` and retry the method call.
+If `window.__antithesisTriage` is missing, rerun the combined injection command and retry the method call.
 
 NEVER run `agent-browser` calls in parallel. They are stateful calls with side-effects, thus parallel calls can break or return confusing results.
 
@@ -114,7 +114,7 @@ If you hit an authentication page, stop and reauthenticate before continuing.
 Then, inject the runtime:
 
 ```bash
-cat assets/antithesis-triage.js \
+cat ../antithesis/assets/browser-utils.js assets/antithesis-triage.js \
   | agent-browser --session "$SESSION" eval --stdin
 ```
 
@@ -203,7 +203,7 @@ mean all instances are cascades. The temporal query gives you the true count.
 
 - **Always ensure you are authenticated first.**
 - **Use disposable sessions.** Generate a unique `SESSION` for each triage run.
-- **Inject the runtime after navigation.** After every `open`, after link clicks that may change pages, and after reopening the report from a finding route, wait until `networkidle`, inject `assets/antithesis-triage.js`, then use the matching `*.waitForReady()` method before continuing.
+- **Inject the runtime after navigation.** After every `open`, after link clicks that may change pages, and after reopening the report from a finding route, wait until `networkidle`, rerun the combined injection command, then use the matching `*.waitForReady()` method before continuing.
 - **Never run `agent-browser` calls in parallel.**
 - **Retry missing-runtime errors by reinjecting.** If a command fails because `window.__antithesisTriage` is undefined or missing, inject the runtime and rerun the same method.
 - **Keep report evals on the main report view.** If you click into another page by accident, reopen the original report URL before using report queries again.

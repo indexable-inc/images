@@ -23,19 +23,21 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # The self-hosted runner's Nix daemon owns substituters (the indexable-inc
-  # Cachix plus the host's local cache), so the job only sets client-side eval
-  # knobs here rather than installing Nix or managing a GitHub Actions store
-  # cache.
+  # The self-hosted runner's Nix daemon owns substituters (cache.ix.dev plus the
+  # host's local cache), so the job only sets client-side eval knobs here rather
+  # than installing Nix or managing a GitHub Actions store cache.
   #
-  # `accept-flake-config`: consume the flake's nixConfig (the indexable-inc
-  # Cachix substituter) without an interactive prompt.
+  # `accept-flake-config = false`: the shared daemon already owns substituters,
+  # trusted keys, and experimental protocol features. The ephemeral runner UID
+  # is deliberately untrusted, so accepting the flake's restricted cache
+  # settings only produces ignored-setting warnings on every evaluator worker.
   #
-  # `extra-system-features = gccarch-znver5`: every image pins
-  # `nixpkgs.hostPlatform.gcc.arch = "znver5"`, marking each derivation in the
-  # closure as needing the `gccarch-znver5` system feature. The runner host
-  # must advertise it (daemon `system-features`); otherwise the build aborts
-  # with `missing system features ... Required features: {gccarch-znver5}`.
+  # We do NOT set `extra-system-features = gccarch-znver5` here: every image
+  # pins `nixpkgs.hostPlatform.gcc.arch = "znver5"`, so each derivation needs
+  # the `gccarch-znver5` system feature -- but the runner host advertises it
+  # daemon-side (ix hardware/znver5.nix), which is the layer Nix actually
+  # consults. As a restricted setting from the untrusted CI runner user it was
+  # ignored regardless, emitting only a "not a trusted user" warning.
   #
   # `max-jobs = auto` builds one derivation per core; `cores = 1` keeps each
   # build single-threaded. The closure is wide, so parallelism comes from
@@ -45,13 +47,11 @@ env:
   # `contentAddressed = true` (lib/rust/cargo-unit.nix), so evaluating the
   # check / package sets resolves floating content-addressed derivations.
   # Without the feature the evaluator aborts with "experimental Nix feature
-  # 'ca-derivations' is disabled". The flake's nixConfig also declares it (via
-  # accept-flake-config), but pinning it in the job env covers any sub-eval that
-  # does not inherit the flake config.
+  # 'ca-derivations' is disabled". Keep the client feature here because CI
+  # intentionally does not consume repository flake configuration.
   NIX_CONFIG: |-
     experimental-features = nix-command flakes ca-derivations
-    accept-flake-config = true
-    extra-system-features = gccarch-znver5
+    accept-flake-config = false
     max-jobs = auto
     cores = 1
 
@@ -73,7 +73,21 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # The clone diff gate compares against the event's base commit.
+          fetch-depth: 0
+
+      # The global clone budget also runs inside `.#check`, but that derivation
+      # intentionally has no `.git`. Run the zero-tolerance changed-line gate
+      # in the checkout so a PR cannot add duplication while staying under the
+      # repository-wide percentage ratchet.
+      - name: Reject duplication on changed lines
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          nix run .#clone -- . --diff "${BASE_SHA}" > /dev/null
 
       # Run the full gate through the repo-owned `check` app (lib/per-system.nix),
       # so CI and a local `nix run .#check` execute the same two commands from one
@@ -102,6 +116,8 @@ jobs:
           fi
 
           printf 'index check log: %s\n' "${check_log}"
+          nix --version
+          nix store info --json
           if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
             {
               printf "## index check\n\n"
@@ -109,7 +125,10 @@ jobs:
             } >>"${GITHUB_STEP_SUMMARY}"
           fi
 
-          nix run .#check >"${check_log}" 2>&1
+          if ! nix run .#check >"${check_log}" 2>&1; then
+            cat "${check_log}"
+            exit 1
+          fi
 
       # The `check` app writes nix-fast-build per-attr durations to
       # check-results.json in the workspace (see lib/per-system.nix). Upload it

@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 280" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13">
+  <style>
+    svg { color: #1f2328; }
+    .muted { fill: #656d76; }
+    .accent { stroke: #8250df; }
+    .accent-t { fill: #8250df; }
+    .box { stroke: currentColor; fill: none; }
+    text { fill: currentColor; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    .back { fill: none; stroke-dasharray: 5 4; marker-end: url(#arrow-accent); }
+    .lane { stroke: currentColor; fill: none; stroke-dasharray: 2 5; opacity: 0.6; }
+    .mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12px; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { stroke: #a371f7; }
+      .accent-t { fill: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+    </marker>
+    <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="accent-t" d="M 0 0 L 10 5 L 0 10 z"/>
+    </marker>
+  </defs>
+  <text class="muted" x="140" y="30" text-anchor="middle" font-size="11">aarch64-linux guest (libkrun, vmkit)</text>
+  <text class="muted" x="580" y="30" text-anchor="middle" font-size="11">macOS host</text>
+  <line class="lane" x1="360" y1="20" x2="360" y2="260"/>
+  <rect class="box" x="40" y="45" width="200" height="56" rx="6"/>
+  <text x="140" y="68" text-anchor="middle">Linux apps</text>
+  <text class="muted" x="140" y="88" text-anchor="middle" font-size="11">one nspawn container each</text>
+  <path class="edge" d="M 140 101 L 140 128"/>
+  <text class="muted" x="152" y="120" font-size="11">Wayland</text>
+  <rect class="box" x="40" y="130" width="200" height="56" rx="6"/>
+  <text class="mono" x="140" y="153" text-anchor="middle">panes-compositor</text>
+  <text class="muted" x="140" y="173" text-anchor="middle" font-size="11">headless, export-only</text>
+  <path class="edge" d="M 240 148 L 478 148"/>
+  <text class="muted" x="359" y="136" text-anchor="middle" font-size="11">vsock 7100: damage-tiled frames</text>
+  <path class="back accent" d="M 478 172 L 240 172"/>
+  <text class="accent-t" x="359" y="190" text-anchor="middle" font-size="11">input &#183; configure &#183; acks</text>
+  <rect class="box" x="480" y="130" width="200" height="56" rx="6"/>
+  <text class="mono" x="580" y="153" text-anchor="middle">panes-host</text>
+  <text class="muted" x="580" y="173" text-anchor="middle" font-size="11">AppKit + Metal agent</text>
+  <path class="edge" d="M 580 130 L 580 103"/>
+  <text class="muted" x="592" y="118" font-size="11">presents</text>
+  <rect class="box" x="480" y="45" width="200" height="56" rx="6"/>
+  <text x="580" y="68" text-anchor="middle">native NSWindows</text>
+  <text class="muted" x="580" y="88" text-anchor="middle" font-size="11">one per toplevel</text>
+  <rect class="box" x="40" y="215" width="200" height="45" rx="6"/>
+  <text class="mono" x="140" y="242" text-anchor="middle" font-size="12">panes-audio &#8592; PipeWire</text>
+  <path class="edge" d="M 240 237 L 478 237"/>
+  <text class="muted" x="359" y="225" text-anchor="middle" font-size="11">vsock 7102: s16le PCM</text>
+  <rect class="box" x="480" y="215" width="200" height="45" rx="6"/>
+  <text x="580" y="242" text-anchor="middle" font-size="12">CoreAudio out</text>
+</svg>

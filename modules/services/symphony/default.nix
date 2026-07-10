@@ -10,9 +10,9 @@
   lib,
   pkgs,
   ...
-}:
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     mkEnableOption
     mkIf
     mkOption
@@ -21,8 +21,7 @@ let
     ;
 
   cfg = config.services.symphony;
-in
-{
+in {
   options.services.symphony = {
     enable = mkEnableOption "Symphony runtime";
 
@@ -108,7 +107,7 @@ in
 
     extraEnvironment = mkOption {
       type = types.attrsOf types.str;
-      default = { };
+      default = {};
       description = ''
         Additional environment variables exported to the service. Use for
         non-secret config: LINEAR_WORKSPACE_SLUG, SYMPHONY_BOT_USERNAME,
@@ -156,12 +155,12 @@ in
 
     path = mkOption {
       type = types.listOf types.package;
-      default = [ ];
+      default = [];
       description = "Extra packages on the service PATH (e.g. pkgs.bws when using secretsCommand).";
     };
 
     hostRuntime = mkOption {
-      default = { };
+      default = {};
       description = ''
         The host codex placement. When enabled, a workflow node that
         declares `location: host` (or the run's resolved fallback) runs
@@ -252,7 +251,7 @@ in
     };
 
     users.groups = lib.mkIf (cfg.user == "symphony") {
-      symphony = { };
+      symphony = {};
     };
 
     systemd.tmpfiles.rules = [
@@ -264,9 +263,9 @@ in
 
     systemd.services.symphony = {
       description = "Symphony runtime";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "network-online.target" ];
-      wants = [ "network-online.target" ];
+      wantedBy = ["multi-user.target"];
+      after = ["network-online.target"];
+      wants = ["network-online.target"];
 
       path =
         cfg.path
@@ -276,78 +275,78 @@ in
           cfg.hostRuntime.roomServerPackage
         ];
 
-      environment = {
-        SYMPHONY_STATE_DIR = cfg.stateDir;
-        SYMPHONY_WORKSPACES_DIR = "${cfg.stateDir}/workspaces";
-        SYMPHONY_RUNS_DIR = "${cfg.stateDir}/runs";
-        SYMPHONY_LOGS_ROOT = "${cfg.stateDir}/log";
-        SYMPHONY_HTTP_PORT = toString cfg.httpPort;
-        SYMPHONY_WORKFLOW_PACK = cfg.workflowPack;
-      }
-      // (lib.optionalAttrs (cfg.primaryRepo != null) {
-        SYMPHONY_PRIMARY_REPO = toString cfg.primaryRepo;
-      })
-      // (lib.optionalAttrs (cfg.repoRoot != null) {
-        SYMPHONY_REPO_ROOT = toString cfg.repoRoot;
-      })
-      // (lib.optionalAttrs (cfg.packDir != null) {
-        SYMPHONY_PACK_DIR = toString cfg.packDir;
-      })
-      // (lib.optionalAttrs (cfg.roomRegistryUrl != null) {
-        SYMPHONY_ROOM_REGISTRY_URL = cfg.roomRegistryUrl;
-      })
-      // (lib.optionalAttrs (cfg.roomAdvertiseHost != null) {
-        SYMPHONY_ROOM_ADVERTISE_HOST = cfg.roomAdvertiseHost;
-      })
-      // (lib.optionalAttrs (cfg.roomServerUrl != null) {
-        SYMPHONY_ROOM_SERVER_URL = cfg.roomServerUrl;
-      })
-      // (lib.optionalAttrs cfg.hostRuntime.enable (
+      environment =
         {
-          SYMPHONY_HOST_USER = cfg.hostRuntime.user;
-          SYMPHONY_HOST_ROOM_SERVER_COMMAND = lib.getExe cfg.hostRuntime.roomServerPackage;
+          SYMPHONY_STATE_DIR = cfg.stateDir;
+          SYMPHONY_WORKSPACES_DIR = "${cfg.stateDir}/workspaces";
+          SYMPHONY_RUNS_DIR = "${cfg.stateDir}/runs";
+          SYMPHONY_LOGS_ROOT = "${cfg.stateDir}/log";
+          SYMPHONY_HTTP_PORT = toString cfg.httpPort;
+          SYMPHONY_WORKFLOW_PACK = cfg.workflowPack;
         }
-        // (lib.optionalAttrs (cfg.hostRuntime.group != null) {
-          SYMPHONY_HOST_GROUP = cfg.hostRuntime.group;
+        // (lib.optionalAttrs (cfg.primaryRepo != null) {
+          SYMPHONY_PRIMARY_REPO = toString cfg.primaryRepo;
         })
-        // (lib.optionalAttrs (cfg.hostRuntime.workspacesDir != null) {
-          SYMPHONY_HOST_WORKSPACES_DIR = toString cfg.hostRuntime.workspacesDir;
+        // (lib.optionalAttrs (cfg.repoRoot != null) {
+          SYMPHONY_REPO_ROOT = toString cfg.repoRoot;
         })
-        // (lib.optionalAttrs cfg.hostRuntime.keep {
-          SYMPHONY_HOST_KEEP = "true";
+        // (lib.optionalAttrs (cfg.packDir != null) {
+          SYMPHONY_PACK_DIR = toString cfg.packDir;
         })
-      ))
-      // cfg.extraEnvironment;
+        // (lib.optionalAttrs (cfg.roomRegistryUrl != null) {
+          SYMPHONY_ROOM_REGISTRY_URL = cfg.roomRegistryUrl;
+        })
+        // (lib.optionalAttrs (cfg.roomAdvertiseHost != null) {
+          SYMPHONY_ROOM_ADVERTISE_HOST = cfg.roomAdvertiseHost;
+        })
+        // (lib.optionalAttrs (cfg.roomServerUrl != null) {
+          SYMPHONY_ROOM_SERVER_URL = cfg.roomServerUrl;
+        })
+        // (lib.optionalAttrs cfg.hostRuntime.enable (
+          {
+            SYMPHONY_HOST_USER = cfg.hostRuntime.user;
+            SYMPHONY_HOST_ROOM_SERVER_COMMAND = lib.getExe cfg.hostRuntime.roomServerPackage;
+          }
+          // (lib.optionalAttrs (cfg.hostRuntime.group != null) {
+            SYMPHONY_HOST_GROUP = cfg.hostRuntime.group;
+          })
+          // (lib.optionalAttrs (cfg.hostRuntime.workspacesDir != null) {
+            SYMPHONY_HOST_WORKSPACES_DIR = toString cfg.hostRuntime.workspacesDir;
+          })
+          // (lib.optionalAttrs cfg.hostRuntime.keep {
+            SYMPHONY_HOST_KEEP = "true";
+          })
+        ))
+        // cfg.extraEnvironment;
 
-      serviceConfig = {
-        Type = "simple";
-        User = cfg.user;
-        Group = cfg.user;
-        ExecStart =
-          let
+      serviceConfig =
+        {
+          Type = "simple";
+          User = cfg.user;
+          Group = cfg.user;
+          ExecStart = let
             symphonyBin = "${cfg.package}/bin/symphony";
             wrapper = optionalString (cfg.secretsCommand != null) (
               lib.escapeShellArgs cfg.secretsCommand + " "
             );
-          in
-          "${wrapper}${symphonyBin}";
-        Restart = "on-failure";
-        RestartSec = "10s";
-        StateDirectory = lib.mkIf (lib.hasPrefix "/var/lib/" cfg.stateDir) (
-          lib.removePrefix "/var/lib/" cfg.stateDir
-        );
-        # Symphony spawns codex subprocesses and clones git repos, so
-        # most sandboxing options need to stay permissive. Only enable
-        # the cheap, safe ones.
-        NoNewPrivileges = true;
-        PrivateTmp = true;
-        ProtectKernelTunables = true;
-        ProtectKernelModules = true;
-        ProtectControlGroups = true;
-      }
-      // (lib.optionalAttrs (cfg.environmentFile != null) {
-        EnvironmentFile = cfg.environmentFile;
-      });
+          in "${wrapper}${symphonyBin}";
+          Restart = "on-failure";
+          RestartSec = "10s";
+          StateDirectory = lib.mkIf (lib.hasPrefix "/var/lib/" cfg.stateDir) (
+            lib.removePrefix "/var/lib/" cfg.stateDir
+          );
+          # Symphony spawns codex subprocesses and clones git repos, so
+          # most sandboxing options need to stay permissive. Only enable
+          # the cheap, safe ones.
+          NoNewPrivileges = true;
+          PrivateTmp = true;
+          ProtectKernelTunables = true;
+          ProtectKernelModules = true;
+          ProtectControlGroups = true;
+        }
+        // (lib.optionalAttrs (cfg.environmentFile != null) {
+          EnvironmentFile = cfg.environmentFile;
+        });
     };
   };
 }

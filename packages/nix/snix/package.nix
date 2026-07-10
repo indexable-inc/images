@@ -5,5 +5,6 @@
   # external fetched Cargo workspace, not a member of this repo's workspace.
   id = "snix";
   flake = true;
+  overlay = false;
   packageSet = true;
 }

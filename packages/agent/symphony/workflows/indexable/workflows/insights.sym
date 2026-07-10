@@ -1,0 +1,7 @@
+# Daily open-ended repo insights. The run notifier posts the script's
+# {"slack_summary": ...} output to Slack: allowlist "insights" in
+# SYMPHONY_SLACK_NOTIFY_CRON_WORKFLOWS and point SYMPHONY_SLACK_NOTIFY_CHANNEL
+# at the target channel. Zoned schedule: 9am Pacific year-round (DST-proof).
+workflow "insights" on cron "0 9 * * *" tz "America/Los_Angeles" {
+  insights <- exec "./scripts/insights.sh" timeout 3600
+}

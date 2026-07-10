@@ -1,7 +1,9 @@
 defmodule SymphonyElixir.WorkspaceTest do
   use ExUnit.Case, async: false
 
-  alias SymphonyElixir.{Config, RepositoryCatalog, Workspace.RepoCloner}
+  alias SymphonyElixir.Config
+  alias SymphonyElixir.RepositoryCatalog
+  alias SymphonyElixir.Workspace.RepoCloner
 
   setup do
     tmp_root = Path.join(System.tmp_dir!(), "symphony_workspace_test_#{System.unique_integer([:positive])}")

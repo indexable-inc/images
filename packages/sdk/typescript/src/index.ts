@@ -28,6 +28,23 @@ import init, {
 } from '../dist/ix_sdk.js'
 
 import type * as NativeBinding from './native.js'
+import type {
+	BranchInfo,
+	BranchStatus,
+	DeleteSecretOptions,
+	FsEntry,
+	FsListOptions,
+	FsReadOptions,
+	FsReadResult,
+	FsWriteOptions,
+	FsWriteResult,
+	LogsOptions,
+	RegionInfo,
+	Secret,
+	SetSecretOptions
+} from './shared.js'
+
+export type * from './shared.js'
 
 // ── Runtime detection ────────────────────────────────────────────
 
@@ -109,59 +126,6 @@ export interface ExecOptions {
 export interface BashOptions {
 	script: string
 	workingDir?: string
-}
-
-export interface LogsOptions {
-	limit: number
-	since?: number
-	stream?: string
-}
-
-export interface FsReadOptions {
-	path: string
-}
-
-export interface FsWriteOptions {
-	path: string
-	text: string
-	mode?: number
-}
-
-export interface FsListOptions {
-	path: string
-}
-
-export interface FsReadResult {
-	path: string
-	text: string
-}
-
-export interface FsWriteResult {
-	bytesWritten: number
-}
-
-export interface FsEntry {
-	name: string
-	size: number
-	mode: number
-	mtimeNs: number
-	isDir: boolean
-}
-
-export interface SetSecretOptions {
-	key: string
-	value: string
-}
-
-export interface DeleteSecretOptions {
-	key: string
-}
-
-export interface Secret {
-	id: string
-	name: string
-	createdAt: number
-	updatedAt: number
 }
 
 export interface ApiTokenScope {
@@ -467,36 +431,6 @@ export interface UserInfo {
 	createdAt: number
 	usernameChangedAt?: number
 	isAdmin: boolean
-}
-
-export interface RegionInfo {
-	id: string
-	slug: string
-	displayName: string
-	status: string
-}
-
-export type BranchStatus = 'Running' | 'Stopped' | 'Failed'
-
-export interface BranchInfo {
-	id: string
-	name: string
-	image: string
-	status: BranchStatus
-	ipv6: string
-	ipv4?: string
-	subdomain?: string
-	ephemeral: boolean
-	snapshotKey?: string
-	forkParentVmId?: string
-	forkBaseLsnNs?: string
-	startedAt?: number
-	stoppedAt?: number
-	failureReason?: string
-	createdAt: number
-	updatedAt: number
-	region?: RegionInfo
-	ownerId: string
 }
 
 export type RuntimeState =
@@ -1250,7 +1184,9 @@ export class Repl {
 		const before = raw.slice(0, idx).replace(/\r\n/g, '\n').replace(/\r/g, '')
 		const tail = raw.slice(idx + endPrefix.length)
 		const match = tail.match(/^(-?\d+)/)
-		const exitCode = match === null ? -1 : Number.parseInt(match[1], 10)
+		const exitCodeText = match?.[1]
+		const exitCode =
+			exitCodeText === undefined ? -1 : Number.parseInt(exitCodeText, 10)
 		return { output: before.replace(/\n$/, ''), exitCode }
 	}
 
@@ -1295,10 +1231,12 @@ export class Sandbox {
 		const region = await Sandbox.resolveRegion(client, options.region)
 		const branch = await client.create(image, {
 			region,
-			env: options.env,
-			name: options.name,
-			ipv4: options.ipv4,
-			l7ProxyPorts: options.l7ProxyPorts
+			...(options.env !== undefined && { env: options.env }),
+			...(options.name !== undefined && { name: options.name }),
+			...(options.ipv4 !== undefined && { ipv4: options.ipv4 }),
+			...(options.l7ProxyPorts !== undefined && {
+				l7ProxyPorts: options.l7ProxyPorts
+			})
 		})
 		return new Sandbox(client, branch)
 	}
@@ -1360,7 +1298,10 @@ export class Sandbox {
 
 	/** Fire-and-forget subprocess. No state persists between calls; each `exec` is a fresh process. */
 	exec(command: string[], opts: { cwd?: string } = {}): Promise<ExecResult> {
-		return this._branch.exec({ command, workingDir: opts.cwd })
+		return this._branch.exec({
+			command,
+			...(opts.cwd !== undefined && { workingDir: opts.cwd })
+		})
 	}
 
 	/**
@@ -1381,7 +1322,11 @@ export class Sandbox {
 	}
 
 	async write(path: string, text: string, mode?: number): Promise<number> {
-		const r = await this._branch.fs().write({ path, text, mode })
+		const r = await this._branch.fs().write({
+			path,
+			text,
+			...(mode !== undefined && { mode })
+		})
 		return r.bytesWritten
 	}
 
@@ -1437,7 +1382,10 @@ export class Sandbox {
 		const fromEnv = readEnv().IX_REGION
 		if (fromEnv !== undefined && fromEnv !== '') return fromEnv as Region
 		const regions = await client.regions()
-		if (regions.length === 0) throw new Error('ix API returned no regions')
-		return regions[0].slug as Region
+		const firstRegion = regions[0]
+		if (firstRegion === undefined) {
+			throw new Error('ix API returned no regions')
+		}
+		return firstRegion.slug as Region
 	}
 }

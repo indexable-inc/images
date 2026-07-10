@@ -1,10 +1,8 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="Anything that writes rows to a SQLite file drives three Minecraft-style desktop overlays within about 200ms"></p>
+
 # Minecraft Desktop Overlays
 
-Three transparent, always-on-top, click-through desktop overlays drawn in the
-Minecraft style with [`wgpu`](https://github.com/gfx-rs/wgpu): a **boss bar** HUD,
-an open **book**, and a floating **experience orb**. Each is driven entirely by a
-single SQLite file: write rows from anything (a shell, a script, a cron job,
-another program) and the change appears on screen within ~200ms.
+What if your desktop HUD were a Minecraft boss bar, and updating it were just a SQL `UPDATE`? These are three transparent, always-on-top, click-through desktop overlays drawn in the Minecraft style with [`wgpu`](https://github.com/gfx-rs/wgpu): a **boss bar** HUD, an open **book**, and a floating **experience orb**. Each is driven entirely by a single SQLite file: write rows from anything (a shell, a script, a cron job, another program) and the change appears on screen within ~200ms.
 
 They share one engine, [`overlay-core`](app/crates/overlay-core), which owns the
 float window (transparent, borderless, always-on-top, click-through, drag-to-move,
@@ -25,13 +23,15 @@ third-party mirror.
 ## Run
 
 ```sh
-nix run .#bossbar-overlay     # the boss bar HUD across the top of the screen
-nix run .#book-overlay        # a floating open book
-nix run .#xp-orb-overlay      # a floating, bobbing experience orb
+nix run github:indexable-inc/index#bossbar-overlay     # the boss bar HUD across the top of the screen
+nix run github:indexable-inc/index#book-overlay        # a floating open book
+nix run github:indexable-inc/index#xp-orb-overlay      # a floating, bobbing experience orb
 ```
 
-For local Rust development, populate the gitignored art once (it is copied out of
-the `minecraft-assets` derivation), then build with cargo:
+For local Rust development, clone the repo
+(`git clone https://github.com/indexable-inc/index`), populate the gitignored art
+once (it is copied out of the `minecraft-assets` derivation), then build with
+cargo:
 
 ```sh
 cd app
@@ -195,7 +195,7 @@ The workspace lives under `app/` as its own Cargo workspace (off the repo's main
 graph, so the GUI crates skip the strict workspace lints), with one vendored
 `Cargo.lock`. `app/default.nix` builds both binaries from it.
 
-- [`overlay-core`](app/crates/overlay-core) — the shared engine. `window.rs`: the
+- [`overlay-core`](app/crates/overlay-core): the shared engine. `window.rs`: the
   float window attributes, surface/adapter setup, transparent alpha-mode
   selection, and a non-activating raise (`-[NSWindow orderFrontRegardless]` on
   macOS). `gpu.rs`: one textured-quad pipeline with a texture registry, plus the
@@ -204,11 +204,11 @@ graph, so the GUI crates skip the strict workspace lints), with one vendored
   width = rightmost inked column + 1) the way the game does. `gesture.rs`: the
   press/drag/click state machine. `snapshot.rs`: the same engine rendered
   headlessly into a PNG.
-- [`bossbar`](app/crates/bossbar) — bars domain (`bars.rs`), the SQLite source
+- [`bossbar`](app/crates/bossbar): bars domain (`bars.rs`), the SQLite source
   (`db.rs`), the bar/panel scene builder, and the per-bar window loop.
-- [`book`](app/crates/book) — book domain (`book.rs`), its SQLite source
+- [`book`](app/crates/book): book domain (`book.rs`), its SQLite source
   (`db.rs`), the two-page spread scene builder, and the single-window loop.
-- [`minecraft-assets`](../minecraft-assets) — the reproducible Mojang extraction:
+- [`minecraft-assets`](../minecraft-assets): the reproducible Mojang extraction:
   `client.jar` pinned by Mojang's hash, unzipped to the textures and font sheet
   both overlays embed.
 

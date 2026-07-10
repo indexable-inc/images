@@ -34,7 +34,8 @@ def modules_index() -> str:
         f"any of them with no import (e.g. `await maps.nearby(...)` works directly). {preimported} "
         "load eagerly; the rest are bound lazily and import themselves on first use, so an unused "
         "one costs nothing. An explicit `import` still returns the same object. Each module's exact "
-        f"signatures come from `api('<name>')` / `help(<name>.<fn>)`, never from here. Modules: "
+        f"signatures come from `api()` (filter its `where` column) / `help(<name>.<fn>)`, "
+        "never from here. Modules: "
         f"{mods}. Also import-ready (these you DO `import`): {libs}."
     )
 
@@ -56,9 +57,12 @@ def credentials_note() -> str:
 NAMESPACE = (
     "The namespace persists across calls, so variables, functions, classes, and imports you "
     "define stay defined and are reusable by every later call: define a helper once and call it "
-    "again next turn. Bind expensive or large outputs to names (`out = await sh(...)`, "
+    "again next turn. Bind expensive or large outputs to names (`df = await nu(...)`, "
     "`df = ...`) instead of only printing or returning them, so later calls can inspect, filter, "
-    "or pass that same object to `read` without recomputing."
+    "or pass that same object to `read` without recomputing. Persistence cuts both ways: a "
+    "failed cell stops at the raise, so names its later lines would have rebound keep their old "
+    "values -- re-run those assignments before reusing them, never retry from possibly-stale "
+    "bindings."
 )
 
 JOBS = (
@@ -71,7 +75,9 @@ JOBS = (
     "before it backgrounds, so keep it small and poll: do NOT pass a huge budget to sit on a "
     "long `await jobs['ab12']` in the foreground — it blocks every other call for that whole "
     "time and is capped server-side anyway. Let the work background, then re-await or poll "
-    "`.done()` in a later cell."
+    "`.done()` in a later cell. `jobs.spawn(coro, name=...)` registers an awaitable you created "
+    "yourself as a first-class job with the same lifecycle (appears in `jobs`, notifies on "
+    "completion, result via `await jobs['<id>']`)."
 )
 
 PAGING = (
@@ -81,7 +87,7 @@ PAGING = (
     "it raises while the job is still running rather than return a misleading None, so `await "
     "jobs['<id>']` to wait for it; `.result` and `.result()` both work, and a finished Result's "
     "`.text` is its rendered text). Prefer assigning the result to a variable before producing a "
-    "small final expression, e.g. `log = await sh(...); log[-4000:]`, so both the named object and "
+    "small final expression, e.g. `df = await nu(...); df.head()`, so both the named object and "
     "the pageable job survive for follow-up calls; history() lists recent runs."
 )
 
@@ -91,26 +97,29 @@ BLOCKING = (
     "CPU-bound numpy op) freezes the WHOLE kernel: every other job and even your own next "
     "status-check cell stall behind it until it returns. So a blocking call MUST be made "
     "non-blocking: wrap it in `await asyncio.to_thread(...)`, or prefer an async API (`httpx`, "
-    "and the bundled `sh(cmd)` to shell out instead of `subprocess.run`; the search helpers "
-    "`grep`/`find`/`spotlight` shell out too, so `await` them), and run "
-    "anything slow as a background job you "
-    "poll, never inline. To shell out, reach for `sh()` rather than a hand-rolled "
-    "`asyncio.create_subprocess_exec/_shell` + `communicate()`: `sh()` runs the child in its own "
-    "session and enforces a timeout with a process-group kill, so it cannot sit in `running` "
-    "forever when the command has finished but a child left the merged stdout pipe open (a "
-    "`communicate()` that never returns) — the exact hang a raw async subprocess gives you."
+    "the bundled `nu(...)` for any command or pipeline — `await nu('^cmd ...')` runs an external "
+    "binary; the search helpers `grep`/`find`/`spotlight` shell out too, so `await` "
+    "them), and run anything slow as a background job you "
+    "poll, never inline. To shell out, reach for `nu(...)` rather than a hand-rolled "
+    "`asyncio.create_subprocess_exec/_shell` + `communicate()`, which runs synchronously on the "
+    "one loop and hands back ANSI-corrupted output. Run independent non-mutating commands "
+    "concurrently inside one cell with `asyncio.gather` or `asyncio.TaskGroup`."
 )
 
 RESULT_CONTRACT = (
     "Cells behave like a notebook: the last expression is the result, whatever its type (`2+2` "
-    "returns 4, `df` returns the styled table with compact CSV to you, a string returns "
-    "verbatim, a dict/list renders as a table), and anything the cell printed comes back with "
-    "it. A cell whose last statement is None (an assignment, a side-effecting call) returns its "
-    "stdout, or a quiet ok. `yield` streams: each yielded value reaches both the human and you "
-    "the moment it is produced, so yield as you go to report progress and partial results. "
-    "`Result` is the opt-in for splitting the two views, `Result(user_html=..., llm_result=..., "
-    "llm_images=...)`, when the human should see something rich that you should not pay tokens "
-    "for (note: an explicit Result suppresses the automatic stdout echo; page "
+    "returns 4, `df` returns the styled table with compact NUON to you, a string returns "
+    "verbatim, a dict/list renders as a table). Prefer returning a Polars DataFrame for "
+    "structured facts you expect to inspect, sort, filter, or show on the dashboard. Never "
+    "`print(df)` or interpolate a structured value into text: `print` calls the object's string "
+    "renderer before MCP sees it, irreversibly replacing its rows and types with a potentially "
+    "clipped terminal representation. Leave one structured value as the final expression. When "
+    "a cell has several, `yield` each value so it reaches both the human and you without losing "
+    "its type. Anything the cell printed comes back as plain stdout. A cell whose last statement "
+    "is None (an assignment, a side-effecting call) returns its stdout, or a quiet ok. `Result` "
+    "is the opt-in for splitting the two views, `Result(user_html=..., "
+    "llm_result=..., llm_images=...)`, when the human should see something rich that you should "
+    "not pay tokens for (note: an explicit Result suppresses the automatic stdout echo; page "
     "jobs['<id>'].output instead)."
 )
 
@@ -121,56 +130,123 @@ INTRO = (
 )
 
 SESSION = (
-    "First, name this session: `session.name = '<what you are working on>'` (in a "
-    "`python_exec` cell). Every run you make is grouped under this session on the live "
-    "dashboard, and a human may be watching several agents at once — a clear name is how "
-    "they tell yours apart. It defaults to the connecting client and working directory "
-    "(e.g. `claude-code · index`), which is ambiguous once agents share a repo, so set it. "
-    "Also pass a one-line `intent` on every `python_exec` (it is required): the intent titles "
-    "the run's card, so the board reads as a list of intents, not raw code."
+    "First, call `session_set_name` with a short label for what you are working on. "
+    "Acting tools are blocked until this MCP session is explicitly named. Every run "
+    "you make is grouped under this session on the live dashboard, and a human may "
+    "be watching several agents at once; a clear name is how they tell yours apart. "
+    "It defaults to the connecting client and working directory (e.g. `claude-code · index`), "
+    "which is ambiguous once agents share a repo, so name it. Then call `topic_set` "
+    "before the first `python_exec` call and whenever you switch phases. A topic "
+    "groups a handful of related runs under one fold in the dashboard, so use labels "
+    "like `inspect diff`, `patch sidebar`, or `validate build`, not one topic per "
+    "call. Also pass a one-line `intent` on every `python_exec` (it is required): "
+    "the intent titles the run's card, so the board reads as a list of intents, not raw code."
+)
+
+PR_WATCH = (
+    "For pull requests, use `pr_watch` instead of a hand-written polling loop. It creates a "
+    "live PR resource under the current task, shows each required check or action with elapsed "
+    "time, enables auto merge by default, and notifies the CLI when the PR merges, fails, or "
+    "times out. On an already-mergeable PR (no blocking required checks) it deliberately does "
+    "NOT arm auto merge, since arming would merge instantly before any watching; its result "
+    "says to merge explicitly once your own validation is green."
 )
 
 DISCOVER = (
-    "`api()` is your reference (always in the namespace, no import): it lists every helper — the "
-    "kernel builtins and each bundled module's public surface — with its live signature and a "
-    "one-line summary. Call `api()` to see what exists, `api('grep')` to filter by name/summary/"
-    "module, and `help(grep)` for a function's full doc. Take a name or a parameter from "
-    "`api()` / `help()` rather than guessing: these instructions deliberately never restate "
-    "signatures (so they cannot drift from the code), which makes the catalog the source of truth."
+    "`api()` is your reference (always in the namespace, no import): it returns one Polars "
+    "DataFrame containing every kernel builtin and each bundled module's public surface, with "
+    "live provenance, signatures, and summaries. Filter the `where`, `name`, or `summary` columns "
+    "with normal Polars expressions, for example `api().filter(pl.col('name') == 'grep')`, "
+    "then use `help(grep)` for the full doc. Take a name or parameter from `api()` / `help()` "
+    "rather than guessing: these instructions deliberately never restate signatures, so they "
+    "cannot drift from the code and the catalog remains the source of truth."
 )
 
 NO_SHELL = (
-    "Use the bundled search helpers, not raw shell: to grep content `await grep(pattern)`, "
-    "to find files `await find(...)`, and on macOS `await spotlight(query)` — "
-    "never hand-roll `ls`/`cat`/`grep`/`find`/`rg`/`fd` via `subprocess.run` or "
-    "`asyncio.create_subprocess_exec`. A bare `subprocess.run` is concretely worse, not just "
-    "off-style: it runs synchronously on the kernel's one event loop and freezes every other job "
-    "until it returns, and its piped output arrives corrupted (ANSI color codes get interleaved "
-    "into the matched text, silently mangling and truncating the very tokens you searched for). "
-    "The bundled `grep`/`find` wrap ripgrep/fd but run them through the async `sh` as a SEPARATE, "
-    "timeout-bounded process (a runaway is killed at the deadline, never wedging the kernel), "
-    "respect `.gitignore` by default, and return polars frames you compose "
-    "`.filter`/`.sort`/`.group_by`/`.head` on — so the human gets a styled table and you get a "
-    "clean, uncorrupted frame rather than an unstyled text dump. To list a directory use "
-    "`view.ls`/`view.tree`, never `os.walk` or `ls`; to read/edit a file use `view.cat` / "
-    "`view.edit(path, old, new)`, never blind. For meaning-based "
-    "recall across a corpus, `import search`. When you genuinely must shell out, use the async "
-    "`sh` (it runs off the loop, streams into the job's pageable output, and preserves clean "
-    "color); to run elsewhere pass `cwd=`, never a `cd X && ...` prefix. `sh` accepts either a "
-    "shell string (`await sh('git status --short')`) or an argv list (`await sh(['git', 'commit', "
-    "'-m', msg])`) that bypasses shell parsing. Use `await sh.zsh('setopt ...; ...')` only when "
-    "you intentionally need zsh syntax. And shell out for "
-    "DATA, not text: when the CLI has a JSON mode (`gh --json`, `cargo metadata`, `nix "
-    "--json`) use it and parse with `.json()` / `.jsonl()` / `.df()` on the Output (`.df()` "
-    "is a polars frame ready to filter and render), one command per `sh()` call -- never "
-    "`cmd1; echo ===; cmd2` chains scraped apart with string splitting. Never pass prose "
-    "through shell quoting: backticks in a string command run as command substitution even "
-    "inside Python repr'd strings (this is how a commit message once executed `ix-mcp "
-    "dashboard` and spliced its URL into the message), and a repr'd multi-line string loses "
-    "its newlines. For any argument that contains prose -- a commit message, a PR body -- "
-    "use the argv-list form `sh(['git', 'commit', '-m', msg])` so the argument bypasses "
-    "shell parsing entirely, or write the text to a temp file and use `git commit -F <file>`."
+    "Do NOT hand-roll shell through Python: never `subprocess.run`, `os.system`, or "
+    "`asyncio.create_subprocess_exec` for `ls`/`cat`/`grep`/`find`/`rg`/`fd` or any command whose "
+    "output you parse. A bare `subprocess.run` is concretely worse, not just off-style: it runs "
+    "synchronously on the kernel's one event loop and freezes every other job until it returns, "
+    "and its piped output arrives corrupted (ANSI color codes get interleaved into the text, "
+    "silently mangling and truncating the very tokens you parsed). The bundled tooling replaces "
+    "it: for filesystem work `view.ls`/`view.tree` to list, `view.cat`/`view.edit(path, old, "
+    "new)` to read and edit, `await grep(pattern)` / `await find(...)` to search (they wrap "
+    "ripgrep/fd, run OFF the loop as a separate timeout-bounded process a runaway can't wedge, "
+    "respect `.gitignore`, and return composable polars frames — `.filter`/`.sort`/`.group_by`/"
+    "`.head` — so the human gets a styled table and you get a clean, uncorrupted frame); on "
+    "macOS `await spotlight(query)`; for meaning-based recall across a corpus `import search`."
 )
+
+NU = (
+    "`nu` is the ONE shell-out path: running a command, a pipeline, "
+    "listing/filtering/transforming, reaching into files or the web all go through it (the old "
+    "`sh()`/`zsh()` are retired and now raise a migration hint). `await nu(\"ls | where size > "
+    "1kb | sort-by size\")` runs a real nushell pipeline and every tabular result comes back as a Polars "
+    "DataFrame, structured end to end (`ls`, `ps`, `sys`, `open Cargo.toml`, `from csv`, `http "
+    "get`, `where`, `group-by`, `select`) — no jq/awk/sed/cut text munging and no scraping "
+    "columns out of a text dump. A single record is a plain dict, so `(await nu('do -i { ^cmd } "
+    "| complete'))['exit_code']` reads directly; a scalar is a one-cell `value` column; dates "
+    "and durations arrive as real Datetime/Duration columns and filesize as bytes, so you filter "
+    "and sort on typed values, not strings. Run an external binary with `^cmd` "
+    "(`await nu('^git status --short')`, `await nu('^gh pr list --json number,title | from "
+    "json')`); pass arguments as separate tokens so nushell never re-parses prose. Externals "
+    "run color-free by default (the engine overrides NO_COLOR/CLICOLOR/CLICOLOR_FORCE/"
+    "FORCE_COLOR), so `--json` output decodes directly; a call that wants ANSI re-enables it "
+    "with `env=` or `with-env`. The engine is embedded and PERSISTENT, a REPL: a `let`, a `def`, "
+    "or a `cd` in one call is visible to the next, so bind an expensive fetch once (`let data = "
+    "http get ...`) and query it across calls; `nu.reset()` clears that state. PWD persists "
+    "per session like the rest (a `cd` sticks, and another agent's `cd` can never move "
+    "yours); if the remembered directory has been deleted, calls fail with a clear error "
+    "until you pass `cwd=` or `nu.reset()`. Pipe a polars "
+    "frame you already have THROUGH a pipeline with `await nu(\"where a > 1 | sort-by a\", "
+    "input=df)`. Use `await nu.value(code)` when you want the plain Python value (a scalar, a "
+    "list) rather than a frame. Multi-statement source returns the FINAL pipeline's "
+    "value; every earlier pipeline's output prints into the job's stdout (never silently "
+    "dropped), so capture what you need in the final pipeline or in separate calls. A failing "
+    "pipeline raises `NuError` carrying nushell's "
+    "own diagnostic (span + 'did you mean'), so read it and fix the pipeline. For a grep-style "
+    "pipeline where a non-zero exit is an answer (no match), pass `check=False`: instead of "
+    "raising, `nu(code, check=False)` returns `NuResult(result, exit_code)` with the output the "
+    "external did produce — no bash-wrapping needed. It evaluates off "
+    "the event loop (tokio's blocking pool), but its `timeout` only interrupts BETWEEN pipeline "
+    "elements and can't kill an external it already spawned, and calls against the shared engine "
+    "run one at a time — so run a genuinely long external as a background job you poll, or spawn "
+    "a separate `nu.Engine()`."
+)
+
+DELEGATE = (
+    "Delegate work to coding agents with the weave verbs. `task = await "
+    "weave.delegate('prompt', name='reviewer', model=..., system=...)` appends task facts to "
+    "the shared journal; the weave app fulfills them as a live interactive Claude session - "
+    "visible and interruptible in the Constellation - and the outcome folds back to "
+    "agent:main automatically. `await weave.result(task)` blocks until the task finishes and "
+    "returns its result text (`timeout=` to bound the wait). Run a long delegation as a "
+    "background job and push a channel event with `await notify(...)` when it finishes."
+)
+
+NIX = (
+    "For any `nix` command, use the bundled `nix` module — NEVER `nu('^nix ...')`. `await "
+    "nix.run(['build', '.#foo'])` (or the shorthand `await nix.build('.#foo')`) runs the build "
+    "through the nix-web-monitor emitter and, for free, publishes a LIVE build-tree pane to the "
+    "dashboard — every derivation with its phase and status, in-flight fetches with progress "
+    "bars, failures highlighted — that updates as the build runs and self-closes when it "
+    "finishes. The returned handle exposes `.ok`, `.errors`, and `.builds` (a polars frame), so "
+    "branch on the outcome directly. `await nix.eval('.#x', apply='...')` returns a native Python "
+    "value without hand-quoting a Nix function through the shell, and `await nix.attrs('.')` "
+    "catalogs a flake's buildable outputs as a frame. Run a long build as a background job and "
+    "sample the handle between turns. Drop to `nu('^nix ...')` for nix ONLY when you need its raw "
+    "stdout verbatim (e.g. `^nix eval --raw`)."
+)
+
+SSH = (
+    "To run a script on a fleet host over ssh, use `await fleet.ssh_run(host, script)` "
+    "(`sudo=` / `env=` / `timeout=` as needed): it ships the script base64-encoded into `bash` "
+    "on the host, so multi-line scripts and quoting survive every layer untouched, and returns "
+    "a typed exit_code/stdout/stderr result with fail-fast connect timeouts. Never hand-roll "
+    "`echo <b64> | base64 -d | bash` through `nu('^ssh ...')` quoting. For the same command "
+    "across MANY hosts, `fleet.scan` combines every host's output into one frame."
+)
+
 
 VERIFY = (
     "Verify a change by its actual effect, not by a proxy: when you change "
@@ -206,12 +282,12 @@ HTML = (
 OUTPUT_HTML = (
     "By default, when you give the human an output, write it to an HTML file and then open it: build "
     "the page with htpy, write it to a file (`from pathlib import Path; Path('out.html').write_text(str(el))`), and open it for "
-    "the viewer with `await sh(['open', 'out.html'])` so it lands in their browser. Reach past a plain "
+    "the viewer with `await nu('^open out.html')` so it lands in their browser. Reach past a plain "
     "text answer to this rendered page for anything worth seeing."
 )
 
 POLARS = (
-    "Prefer polars for any tabular data: return a DataFrame (or `Result.of(df)`) and the human "
+    "Prefer Polars for any tabular data: return a DataFrame (or `Result.of(df)`) and the human "
     "gets the styled HTML table for free while you get the frame as compact, untruncated CSV — so "
     "you never hand-build a table and a wide/long-stringed frame is never clipped to you. Use "
     "`pl`; pandas is not bundled. Even key/value data — environment variables, a config dict, "
@@ -253,6 +329,29 @@ READABLE = (
     "final `Result(...)` name what it returns rather than wrap one dense expression."
 )
 
+CHANNEL = (
+    "This server is also a Claude Code channel (research preview). When the client session was "
+    "launched with the channel enabled (`claude --channels "
+    "server:<name>`), kernel code can push events into the running agent session with `await "
+    "notify(content, **meta)`: each event arrives in the session as <channel source=\"...\" "
+    "key=\"val\">content</channel>, with each meta kwarg a tag attribute (identifier keys only). "
+    "Delivery is fire-and-forget — a session without the channel enabled drops events silently — "
+    "so never treat a notify as confirmed-read. Interactive resources close the loop: "
+    "`register_resource(render=..., actions={'name': handler})` serves the HTML with "
+    "`ix.act(name, payload)` (queues the payload for the named in-kernel handler) and "
+    "`ix.events(fn)` (subscribes the page to handler results, errors, and your replies) "
+    "pre-wired. Call `notify(..., resource=<id>)` in every action handler by default: without "
+    "it the page↔kernel loop runs silently and you only learn the human acted by polling kernel "
+    "state. Skip it only when a click is purely page-local (a filter toggle, a re-render). "
+    "When a <channel> tag carries a `resource` attribute, answer it with the `reply` tool, "
+    "passing that resource id — your transcript output never reaches the page. For any "
+    "non-trivial UI, author a real Svelte 5 component instead of hand-rolled HTML/JS strings: "
+    "`await svelte.component(\"Board.svelte\", id=..., state=..., actions=...)` (module "
+    "`svelte`) compiles it to one self-contained bundle; the component imports "
+    "`{ data, act } from 'ix'` and re-renders reactively from the dict each handler returns, "
+    "so there is one renderer and kernel state stays the single source of truth."
+)
+
 CELLS = (
     "Three dashboard panes show the session live: every running/finished run under executions, "
     "every live view (a terminal, a widget) under resources, and your curated highlight reel "
@@ -277,6 +376,32 @@ PYEXEC_INTRO = (
     "(inspect / await / cancel it via more python_exec on the `jobs` dict)."
 )
 
+# Developer note (NOT part of any tool description or the model-facing
+# instructions -- it documents server behavior for maintainers). When an MCP
+# client cancels an in-flight `python_exec` request -- MCP `notifications/cancelled`
+# for the request id, or a transport-level abort -- the SDK cancels this handler's
+# request scope, and `tools.python_exec` catches that cancellation and interrupts
+# the kernel job the call launched (the same path as `jobs['<id>'].cancel()`),
+# rather than leaving it to finish in the background and run its side effects after
+# the caller abandoned it (index#2387).
+#
+# LIMITATION: Claude Code does NOT send `notifications/cancelled` when a USER
+# REJECTS an in-flight tool call (clicks "No" on the permission prompt). Its
+# permission verdict is a client-local decision that never reaches the server, so
+# the server has nothing to cancel in that specific case: a call that was already
+# dispatched to the kernel before the (racing) rejection landed still runs to
+# completion. The cancellation wiring above therefore fires for spec-compliant MCP
+# clients and for Claude Code's own request-timeout cancellation, but not for a
+# rejected permission prompt. Fully closing the rejection gap needs a client-side
+# fix (Claude Code sending `notifications/cancelled` on rejection, or gating
+# dispatch behind the permission verdict); see index#2387.
+CANCELLATION_NOTE = (
+    "An MCP client that cancels an in-flight python_exec (notifications/cancelled "
+    "or transport abort) interrupts the kernel job it launched, on the same path as "
+    "jobs['<id>'].cancel(). Claude Code does not signal a user's REJECTION of an "
+    "in-flight call, so a rejected prompt is not covered (index#2387)."
+)
+
 SEE_INSTRUCTIONS = (
     "The server instructions cover the rest — the bundled tooling (grep / find / view / nix / "
     "fleet / polars / htpy), how to find and read things, and how to curate the dashboard's cells."
@@ -291,7 +416,9 @@ READ = (
     "as a file when it names an existing file, otherwise it is evaluated as a Python expression "
     "in the kernel namespace (e.g. `jobs['ab12'].output` to page a job, or a variable you bound "
     "earlier); an expression whose value is a string naming an existing file reads that file "
-    "too. Pass `start` / `end` for a 1-based inclusive line range."
+    "too. Pass `start` / `end` for a 1-based inclusive line range. When the kernel cannot execute "
+    "the read (wedged or dead), the tool ERRORS with 'kernel unavailable' rather than returning "
+    "empty output, so empty content always means the file or value is genuinely empty."
 )
 
 TRACE = (
@@ -301,6 +428,26 @@ TRACE = (
     "channel, so it returns while the loop is still frozen. Use it to see WHERE a wedged or slow "
     "cell is stuck, then fix the blocking call (wrap it in `await asyncio.to_thread(...)` and "
     "background it)."
+)
+
+RESTART = (
+    "Restart THIS server's kernel process on purpose: shut the child down, respawn it, restore "
+    "the session checkpoint (when serving a session file), and report the old pid, new pid, and "
+    "elapsed seconds. Scoped to your own connection's server -- other sessions' kernels on the "
+    "machine are untouched, so NEVER reach for `pkill -f ipykernel_launcher` (it kills every "
+    "session's kernel at once). Use it when the kernel is truly wedged (kernel_trace shows a "
+    "stuck frame and an interrupt cannot break it) or to adopt a fixed/updated kernel build "
+    "without restarting the MCP server (index#2209). It is disruptive: the namespace is rebuilt "
+    "(the checkpoint restore covers a session file's names; without one every variable is lost) "
+    "and running background jobs die with the process."
+)
+
+REPLY = (
+    "Send a message to the page behind an interactive resource. Use it to answer a channel event "
+    "that carries a resource attribute (<channel resource=\"...\">): pass that resource id and "
+    "your text, and the page receives it on its live event feed (`ix.events`). The page's viewer "
+    "reads the page, not this session — anything you want them to see must go through this tool; "
+    "your transcript output never reaches them. Fails when the resource is closed or unknown."
 )
 
 

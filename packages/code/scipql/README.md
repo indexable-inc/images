@@ -1,32 +1,32 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="a Rust project is indexed to index.scip, lowered to Soufflé facts keyed by moniker, and souffle-derived relations become either applied edits or polars tables"></p>
+
 # scipql
 
-Soufflé datalog + find/replace over a **SCIP semantic index**.
+Want to rename `net::Socket` without touching `mock::Socket`, or query your codebase by symbol identity instead of by string? scipql runs Soufflé datalog plus find/replace over a **SCIP semantic index**: every occurrence carries its SCIP **moniker**, so queries and rewrites operate on resolved identities, not text. Renaming one `Socket` never touches the other (or the struct's own `fd` field).
 
 Where [`astlog`](../astlog) runs datalog over tree-sitter *syntax*, scipql runs
-it over a *resolved* index: every occurrence carries its SCIP **moniker**, so a
-`net::Socket` and a `mock::Socket` are distinct symbols. Queries and rewrites
-operate on identities, not text, so renaming one `Socket` never touches the
-other (or the struct's own `fd` field).
+it over the *resolved* index rust-analyzer produces.
 
-```mermaid
-flowchart LR
-  src["Rust project"] -->|"rust-analyzer scip"| scip["index.scip"]
-  scip -->|"scip crate"| facts["Soufflé facts (by moniker)"]
-  facts --> souffle["souffle (your .dl)"]
-  souffle -->|"edit relation"| applier["edit-applier"]
-  souffle -->|"any relation"| out["tables / polars"]
-  applier -->|"default"| diff["unified diff (dry run)"]
-  applier -->|"--write"| disk["files on disk"]
+## Get it
+
+```sh
+nix run github:indexable-inc/index#scipql -- --help
 ```
+
+The nix package wraps the repo's pinned Rust toolchain (rust-analyzer,
+rust-src, cargo/rustc) and puts `souffle` on `PATH`. A bare
+`cargo install --git https://github.com/indexable-inc/index scipql` builds the
+same binary, but then `rust-analyzer` and `souffle` are yours to supply.
+Source: `git clone https://github.com/indexable-inc/index`.
 
 ## Layout
 
-- `core/` (`scipql-core`) — index (run `rust-analyzer scip`), lower the SCIP
+- `core/` (`scipql-core`): index (run `rust-analyzer scip`), lower the SCIP
   index to Soufflé facts, run queries, and apply the `edit` relation via the
   shared [`edit-applier`](../edit-applier) crate.
-- `cli/` (`scipql`) — the `scipql` binary, wrapped with the repo's pinned Rust
+- `cli/` (`scipql`): the `scipql` binary, wrapped with the repo's pinned Rust
   toolchain (rust-analyzer + rust-src + cargo/rustc) and `souffle` on `PATH`.
-- `py/` (`scipql-py`) — PyO3 bindings; `import scipql` in the ix-mcp kernel,
+- `py/` (`scipql-py`): PyO3 bindings; `import scipql` in the ix-mcp kernel,
   returning polars frames.
 
 ## CLI
@@ -68,7 +68,7 @@ columns (the schema is prepended automatically):
 ```
 
 `rename` is just a generated `fix` that suffix-matches the moniker; for anything
-more selective, write the `.dl` yourself — nothing is hidden.
+more selective, write the `.dl` yourself: nothing is hidden.
 
 ## Python (ix-mcp kernel)
 
@@ -88,5 +88,5 @@ CLI (which bakes the toolchain) rather than the kernel.
 ## Languages
 
 Rust today (via `rust-analyzer scip`). The facts/query/edit layers are
-language-agnostic — other SCIP indexers (`scip-typescript`, `scip-python`, …)
+language-agnostic: other SCIP indexers (`scip-typescript`, `scip-python`, ...)
 plug in by adding an indexer command.

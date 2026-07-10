@@ -15,13 +15,16 @@
 //! The returned awaitable is a native asyncio coroutine bridged through
 //! pyo3-async-runtimes, so callers `await` it on their own event loop.
 
+use std::future::Future;
+
+use file_search::{EphemeralSearch, SearchIndex, SearchIndexReader};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use search_core::{
     CodeScope, DEFAULT_STORE, DisplayHit, Filter, FilterSpec, GrepOptions, GrepTargets,
     KNOWN_SOURCE_TAGS, Manifest, MixedbreadStore, RenderMode, Rerank, SearchOptions, Source,
-    build_filter, parse_time_spec,
+    build_filter, epoch_now, parse_time_spec,
 };
 
 /// A `since=`/`until=` argument: epoch seconds as an int, or a string holding
@@ -44,19 +47,6 @@ fn resolve_time(value: Option<TimeSpec>) -> PyResult<Option<i64>> {
             .map(Some)
             .map_err(|error| PyValueError::new_err(error.to_string())),
     }
-}
-
-/// The current wall clock as epoch seconds, the reference point for relative
-/// `since`/`until` spans.
-fn epoch_now() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    // Clamp explicitly: a wall clock past i64::MAX epoch seconds is not a real
-    // input, and the clamp makes the conversion below infallible.
-    let capped = secs.min(u64::try_from(i64::MAX).expect("i64::MAX is positive"));
-    i64::try_from(capped).expect("capped at i64::MAX")
 }
 
 /// The projection mode for a `compact=` flag.
@@ -170,19 +160,7 @@ fn semantic(
         filter,
         mode: render_mode(compact),
     };
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let hits = run_search(args)
-            .await
-            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-
-        Python::attach(|py| {
-            let out = pyo3::types::PyList::empty(py);
-            for hit in &hits {
-                out.append(hit_to_dict(py, hit)?)?;
-            }
-            Ok(out.unbind())
-        })
-    })
+    hits_future(py, run_search(args))
 }
 
 /// Run a regular-expression grep over the same corpus chunks as [`semantic`].
@@ -244,19 +222,7 @@ fn grep(
         filter,
         mode: render_mode(compact),
     };
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let hits = run_grep(args)
-            .await
-            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-
-        Python::attach(|py| {
-            let out = pyo3::types::PyList::empty(py);
-            for hit in &hits {
-                out.append(hit_to_dict(py, hit)?)?;
-            }
-            Ok(out.unbind())
-        })
-    })
+    hits_future(py, run_grep(args))
 }
 
 /// List the newest corpus records (descending timestamp) matching the scope —
@@ -309,21 +275,12 @@ fn recent(
     let base = base_url.unwrap_or_else(|| mixedbread::DEFAULT_BASE_URL.to_owned());
     let filter = scope_filter(source, not_source, repo, user, host, project, since, until)?;
     let mode = render_mode(compact);
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let hits = async {
+    hits_future(py, async move {
+        async {
             let store = MixedbreadStore::from_login(base).await?;
             search_core::recent(&store, &store_name, top_k, filter.as_ref(), mode).await
         }
         .await
-        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-
-        Python::attach(|py| {
-            let out = pyo3::types::PyList::empty(py);
-            for hit in &hits {
-                out.append(hit_to_dict(py, hit)?)?;
-            }
-            Ok(out.unbind())
-        })
     })
 }
 
@@ -490,11 +447,222 @@ fn hit_to_dict<'py>(py: Python<'py>, hit: &DisplayHit) -> PyResult<Bound<'py, Py
     Ok(dict)
 }
 
+fn hits_future<'py, F>(py: Python<'py>, future: F) -> PyResult<Bound<'py, PyAny>>
+where
+    F: Future<Output = search_core::Result<Vec<DisplayHit>>> + Send + 'static,
+{
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let hits = future
+            .await
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        Python::attach(|py| {
+            let out = pyo3::types::PyList::empty(py);
+            for hit in &hits {
+                out.append(hit_to_dict(py, hit)?)?;
+            }
+            Ok(out.unbind())
+        })
+    })
+}
+
+/// Rerank a batch of texts against a query by BM25, in memory.
+///
+/// Builds a one-shot Tantivy index over `texts` and scores them against
+/// `query`, returning up to `limit` hits (default: every text) ranked best
+/// first. Each hit is a dict with `index` (the position in the input list),
+/// `score` (BM25), and `text` (the matched string). Texts that match nothing
+/// are omitted. Unlike [`semantic`]/[`grep`]/[`recent`], this does no network
+/// I/O and reads no corpus, so it is a plain synchronous function: it returns
+/// the list directly, not an awaitable.
+///
+/// Tokenization is inherited from `file_search` (the shared `code-tokenizer`
+/// stemmed tokenizer), so identifiers split on camelCase, snake_case,
+/// kebab-case, and whitespace before stemming: `"widget factory"` matches both
+/// `makeWidgetFactory` and `make_widget_factory`.
+///
+///     hits = search.bm25_rerank("retry backoff", candidate_texts, limit=5)
+#[pyfunction]
+#[pyo3(signature = (query, texts, limit = None))]
+fn bm25_rerank(
+    py: Python<'_>,
+    query: &str,
+    texts: Vec<String>,
+    limit: Option<usize>,
+) -> PyResult<Py<PyAny>> {
+    // Default to ranking the whole batch; the search never returns more hits
+    // than documents, so an oversized limit is harmless.
+    let limit = limit.unwrap_or(texts.len());
+    // The indexing + scoring is pure Rust CPU work; detach from the GIL so a
+    // caller's other threads (e.g. an asyncio loop) keep running.
+    let ranked = py
+        .detach(|| rerank(query, texts, limit))
+        .map_err(PyRuntimeError::new_err)?;
+
+    let out = pyo3::types::PyList::empty(py);
+    for hit in ranked {
+        let dict = PyDict::new(py);
+        dict.set_item("index", hit.index)?;
+        dict.set_item("score", hit.score)?;
+        dict.set_item("text", hit.text)?;
+        out.append(dict)?;
+    }
+    Ok(out.unbind().into_any())
+}
+
+/// Build (or update) an on-disk BM25 index over the files under `path`.
+///
+/// Walks `path` and indexes every text-shaped file into the Tantivy index at
+/// `index_dir`, creating it if absent — the same pipeline as the `file-search
+/// index` CLI subcommand, so it inherits the shared `code-tokenizer`. Honors
+/// `.gitignore` unless `no_gitignore=True`. Synchronous (local disk work, no
+/// network). Returns a dict with `files_indexed`, `files_skipped`, and
+/// `errors` (a list of `[path, message]` pairs for files that could not be
+/// read or parsed; these do not abort the walk).
+#[pyfunction]
+#[pyo3(signature = (path, index_dir, no_gitignore = false))]
+fn bm25_index(
+    py: Python<'_>,
+    path: &str,
+    index_dir: &str,
+    no_gitignore: bool,
+) -> PyResult<Py<PyAny>> {
+    // The walk + Tantivy indexing is blocking disk/CPU work; detach from the
+    // GIL so a caller's other threads (e.g. an asyncio loop) keep running.
+    let stats = py
+        .detach(|| {
+            let mut index = SearchIndex::open_or_create(index_dir)?;
+            index.index_directory(std::path::Path::new(path), !no_gitignore)
+        })
+        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+
+    let dict = PyDict::new(py);
+    dict.set_item("files_indexed", stats.files_indexed)?;
+    dict.set_item("files_skipped", stats.files_skipped)?;
+    let errors = pyo3::types::PyList::empty(py);
+    for (path, message) in &stats.errors {
+        let pair = pyo3::types::PyList::empty(py);
+        pair.append(path.to_string_lossy())?;
+        pair.append(message)?;
+        errors.append(pair)?;
+    }
+    dict.set_item("errors", errors)?;
+    Ok(dict.unbind().into_any())
+}
+
+/// Search an on-disk BM25 index built by [`bm25_index`].
+///
+/// Opens the index at `index_dir` read-only (no writer lock, so it can run
+/// alongside an indexing pass) and returns up to `limit` hits matching `query`
+/// in Tantivy query syntax, ranked best first — the `file-search search`
+/// subcommand. When `filter` is set, only files under that directory match.
+/// Synchronous. Each hit is a dict with `path`, `score`, `snippet`, and
+/// `chunk_offset`.
+#[pyfunction]
+#[pyo3(signature = (query, index_dir, limit = 10, filter = None))]
+fn bm25_search(
+    py: Python<'_>,
+    query: &str,
+    index_dir: &str,
+    limit: usize,
+    filter: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    // Opening and querying the index is blocking disk/CPU work; detach from
+    // the GIL so a caller's other threads (e.g. an asyncio loop) keep running.
+    let hits = py
+        .detach(|| {
+            let reader = SearchIndexReader::open(index_dir)?;
+            reader.search(query, limit, filter.map(std::path::Path::new))
+        })
+        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+
+    let out = pyo3::types::PyList::empty(py);
+    for hit in hits {
+        let dict = PyDict::new(py);
+        dict.set_item("path", hit.path)?;
+        dict.set_item("score", hit.score)?;
+        dict.set_item("snippet", hit.snippet)?;
+        dict.set_item("chunk_offset", hit.chunk_offset)?;
+        out.append(dict)?;
+    }
+    Ok(out.unbind().into_any())
+}
+
+/// One reranked text: its position in the input batch, BM25 score, and body.
+struct Reranked {
+    index: usize,
+    score: f32,
+    text: String,
+}
+
+/// Rank `texts` against `query` through `file_search`'s [`EphemeralSearch`],
+/// which registers the shared `code-tokenizer` on its in-memory index. Kept
+/// free of `pyo3` types so `#[cfg(test)]` can exercise the tokenizer
+/// inheritance without a Python interpreter.
+fn rerank(query: &str, texts: Vec<String>, limit: usize) -> Result<Vec<Reranked>, String> {
+    let search = EphemeralSearch::from_texts(texts.iter().cloned()).map_err(|e| e.to_string())?;
+    let ranked = search.search(query, limit).map_err(|e| e.to_string())?;
+    Ok(ranked
+        .into_iter()
+        .map(|hit| Reranked {
+            index: hit.id,
+            score: hit.score,
+            // `hit.id` indexes back into the batch we just built the index from.
+            text: texts[hit.id].clone(),
+        })
+        .collect())
+}
+
 #[pymodule]
 fn _search(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(semantic, module)?)?;
     module.add_function(wrap_pyfunction!(grep, module)?)?;
     module.add_function(wrap_pyfunction!(recent, module)?)?;
+    module.add_function(wrap_pyfunction!(bm25_rerank, module)?)?;
+    module.add_function(wrap_pyfunction!(bm25_index, module)?)?;
+    module.add_function(wrap_pyfunction!(bm25_search, module)?)?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rerank;
+
+    /// The binding routes through `file_search::EphemeralSearch`, so it inherits
+    /// the shared `code-tokenizer`: a query of two plain words matches an
+    /// identifier written in camelCase and one in snake_case. If a future change
+    /// bypassed `file_search` and built a raw Tantivy schema with the default
+    /// tokenizer, neither identifier would split and this would return no hits.
+    #[test]
+    fn rerank_inherits_code_tokenizer() {
+        let texts = vec![
+            "fn makeWidgetFactory() {}".to_owned(),
+            "def make_widget_factory(): pass".to_owned(),
+            "the quick brown fox".to_owned(),
+        ];
+        let hits = rerank("widget factory", texts, 10).expect("rerank succeeds");
+        let matched: Vec<usize> = hits.iter().map(|h| h.index).collect();
+        assert!(
+            matched.contains(&0),
+            "camelCase makeWidgetFactory should match; got {matched:?}"
+        );
+        assert!(
+            matched.contains(&1),
+            "snake_case make_widget_factory should match; got {matched:?}"
+        );
+        assert!(
+            !matched.contains(&2),
+            "unrelated text should not match; got {matched:?}"
+        );
+    }
+
+    /// `bm25_rerank(query, [])` defaults the limit to the batch size — zero.
+    /// Tantivy's `TopDocs::with_limit(0)` panics, which pyo3 would re-raise as
+    /// a `PanicException`; `file_search` guards it, so this must return an
+    /// empty list instead.
+    #[test]
+    fn rerank_empty_batch_returns_no_hits() {
+        let hits = rerank("anything", Vec::new(), 0).expect("empty batch must not panic");
+        assert!(hits.is_empty(), "empty batch should yield no hits");
+    }
 }

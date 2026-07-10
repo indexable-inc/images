@@ -16,8 +16,7 @@
   lib,
   pkgs,
   ix,
-}:
-let
+}: let
   inherit (ix) cargoUnit;
 
   # The exact toolchain the R2 `ix-sdk-wire` rlib was compiled with. The
@@ -26,15 +25,34 @@ let
   # `iz0mdcq43pxl3fmxmznc6n38sals6q0x-rust-default-1.98.0-nightly-2026-05-27`,
   # or the generated `ix-sdk-wire` unit hash diverges from the prebuilt's.
   #
+  # That store path folds the whole nixpkgs + rust-overlay evaluation, so it
+  # is only reproducible from the exact revs the artifact was published
+  # against, NOT from the repo's floating inputs: any flake bump would move
+  # the constructed id while the published manifest keeps the old one,
+  # deadlocking the hourly update-flake-lock PR on the eval assert below
+  # (#2131). The toolchain is therefore built from the rev-pinned
+  # `sdk-prebuilt-nixpkgs` + `sdk-prebuilt-rust-overlay` inputs (flake.nix),
+  # which a blanket `nix flake update` re-locks unchanged. A republication of
+  # the rlib bumps those revs together with pins.json and the ids in this
+  # file.
+  #
   # ix builds via `rust-bin.fromRustupToolchainFile rust-toolchain.toml`; the
   # equivalent is the index rust toolchain helper with ix's exact pin: the same
   # nightly date, the `default` rust-overlay profile, ix's extra components, and
   # ix's extra targets (ix rust-toolchain.toml added aarch64-apple-darwin in
   # ix#4278, which is what moved the toolchain id off `a2dj...`). The binding
   # constraint is that this resolves to wireToolchainId (the eval assert in
-  # mkPrebuiltLibraryUnit enforces it); verified on x86_64-linux at index's
-  # rust-overlay d286e969 that this yields the `iz0m...` id above.
-  rustToolchain = ix.languages.rust.toolchain pkgs {
+  # mkPrebuiltLibraryUnit enforces it); verified on x86_64-linux that the
+  # pinned context below yields the `iz0m...` id above.
+  toolchainPkgs = import ix.sdkPrebuiltNixpkgsSrc {
+    inherit (pkgs.stdenv.hostPlatform) system;
+    config = {};
+    # rust-overlay's default.nix is its overlay ("Overlay interface for
+    # non-flake Nix"), the same function its flake exports as
+    # `overlays.default`.
+    overlays = [(import ix.sdkPrebuiltRustOverlaySrc)];
+  };
+  rustToolchain = ix.languages.rust.toolchain toolchainPkgs {
     channel = "nightly";
     version = "2026-05-27";
     profile = "default";
@@ -59,23 +77,19 @@ let
   wireVersion = "0.1.0";
   wireHash = "a95096d6b0ee69a6";
   wireToolchainId = "iz0mdcq43pxl3fmxmznc6n38sals6q0x-rust-default-1.98.0-nightly-2026-05-27";
-  r2Base = "https://pub-559bccbc8be94bed84821cb943b580f3.r2.dev/rlib/ix-sdk-wire/${wireHash}";
-  wireManifest = pkgs.fetchurl {
-    url = "${r2Base}/manifest.json";
-    hash = "sha256-UV6/vT5zasDrJyIp9o2AvXoqS9H5X+VOvQykxAmaPco=";
-  };
+
+  # The R2 URLs + SRI hashes for the three published artifacts live in the
+  # sibling pins.json (repo policy: no inline hash literals). Each URL embeds
+  # `wireHash` above; a re-publication rewrites pins.json (all three entries)
+  # and, when the unit hash moved, `wireHash` in this file.
+  wirePins = ix.pins.loadPins ./pins.json;
 
   # Fixed-output fetches: the SRI hash is the store-path identity, so the URL
   # carries no secret and substituters can short-circuit. These are the actual
   # compiled artifacts produced in the ix repo, not rebuilt here.
-  wireRlib = pkgs.fetchurl {
-    url = "${r2Base}/libix_sdk_wire-${wireHash}.rlib";
-    hash = "sha256-JCv83V3NQeSuA/oG/zYoX3AmM5u9jKPOxSH6V6OQQDs=";
-  };
-  wireRmeta = pkgs.fetchurl {
-    url = "${r2Base}/libix_sdk_wire-${wireHash}.rmeta";
-    hash = "sha256-Bt37uG3ImMhjt9dPX3W+pIoNAQvUMAFVOIdNMvUcT3E=";
-  };
+  wireManifest = pkgs.fetchurl {inherit (wirePins.wire-manifest) url hash;};
+  wireRlib = pkgs.fetchurl {inherit (wirePins.wire-rlib) url hash;};
+  wireRmeta = pkgs.fetchurl {inherit (wirePins.wire-rmeta) url hash;};
 
   # Wrap the fetched rlib+rmeta as a cargo-unit library unit. The Cargo lib
   # TARGET name for package `ix-sdk-wire` is `ix_sdk_wire` (renderer underscores
@@ -125,7 +139,9 @@ let
       aarch64-linux = "aarch64-unknown-linux-gnu";
       aarch64-darwin = "aarch64-apple-darwin";
     }
-    .${pkgs.stdenv.hostPlatform.system}
+    .${
+      pkgs.stdenv.hostPlatform.system
+    }
       or (throw "packages/sdk/rust: unsupported host platform ${pkgs.stdenv.hostPlatform.system}");
 
   # Source string for the snafu git fork, keyed exactly as it appears in
@@ -134,8 +150,7 @@ let
   # (indexable-inc/ix nix/lib/workspace-cargo-unit.nix) so the resolved tree is
   # byte-identical to ix's.
   outputHashes = {
-    "git+https://github.com/shepmaster/snafu.git#ff50133848f39de1b1fd40c74daa9d781fdda544" =
-      "sha256-eSNVZr0TxDguSSu9c3L6S7rwqq45NemtmTvxHdiDRgM=";
+    "git+https://github.com/shepmaster/snafu.git#ff50133848f39de1b1fd40c74daa9d781fdda544" = "sha256-eSNVZr0TxDguSSu9c3L6S7rwqq45NemtmTvxHdiDRgM=";
   };
 
   commonArgs = {
@@ -148,7 +163,7 @@ let
     # cargo-unit-prebuilt fixture: plain path for workspaceRoot, filtered
     # `toSource` for src).
     workspaceRoot = ./.;
-    cargoArgs = [ "--workspace" ];
+    cargoArgs = ["--workspace"];
     # Match the profile the R2 rlib was built under; the profile is folded into
     # the unit hash, so this must equal ix's `public-rlib`.
     profile = "public-rlib";
@@ -186,8 +201,7 @@ let
   );
 
   consumer = injected.binaries.ix-sdk-wire-probe or injected.default;
-in
-{
+in {
   inherit
     consumer
     prebuiltWireUnit
@@ -203,85 +217,85 @@ in
   # index-built snafu/strum units produces E0460/E0463 metadata identity errors.
   artifactCheck =
     pkgs.runCommand "ix-sdk-rust-prebuilt-artifact-check"
-      {
-        nativeBuildInputs = [ pkgs.gnugrep ];
-      }
-      ''
-        test -f ${wireManifest}
-        grep -q '"crate": "ix-sdk-wire"' ${wireManifest}
-        grep -q '"toolchain-id": "${wireToolchainId}"' ${wireManifest}
-        grep -q '"unit-hash": "${wireHash}"' ${wireManifest}
-        grep -q '"sha256-JCv83V3NQeSuA/oG/zYoX3AmM5u9jKPOxSH6V6OQQDs="' ${wireManifest}
-        grep -q '"sha256-Bt37uG3ImMhjt9dPX3W+pIoNAQvUMAFVOIdNMvUcT3E="' ${wireManifest}
+    {
+      nativeBuildInputs = [pkgs.gnugrep];
+    }
+    ''
+      test -f ${wireManifest}
+      grep -q '"crate": "ix-sdk-wire"' ${wireManifest}
+      grep -q '"toolchain-id": "${wireToolchainId}"' ${wireManifest}
+      grep -q '"unit-hash": "${wireHash}"' ${wireManifest}
+      grep -q '"${wirePins.wire-rlib.hash}"' ${wireManifest}
+      grep -q '"${wirePins.wire-rmeta.hash}"' ${wireManifest}
 
-        test -f ${prebuiltWireUnit}/lib/libix_sdk_wire-${wireHash}.rlib
-        test -f ${prebuiltWireUnit}/lib/libix_sdk_wire-${wireHash}.rmeta
-        test -f ${prebuiltWireUnit}/nix-support/extern-path
-        grep -q '\.rlib$' ${prebuiltWireUnit}/nix-support/extern-path
+      test -f ${prebuiltWireUnit}/lib/libix_sdk_wire-${wireHash}.rlib
+      test -f ${prebuiltWireUnit}/lib/libix_sdk_wire-${wireHash}.rmeta
+      test -f ${prebuiltWireUnit}/nix-support/extern-path
+      grep -q '\.rlib$' ${prebuiltWireUnit}/nix-support/extern-path
 
-        echo "OK: public ix-sdk-wire prebuilt artifact pins and wrapper contract are valid"
-        mkdir -p "$out"
-      '';
+      echo "OK: public ix-sdk-wire prebuilt artifact pins and wrapper contract are valid"
+      mkdir -p "$out"
+    '';
 
   # The proof derivation. Build it on the fleet to verify end-to-end.
   proof =
     pkgs.runCommand "ix-sdk-rust-prebuilt-proof"
-      {
-        nativeBuildInputs = [ pkgs.gnugrep ];
-        # Export the consumer's full build-closure reference graph so we can
-        # assert the from-source stub lib unit drv is NOT among its inputs.
-        exportReferencesGraph = [
-          "consumer-graph"
-          consumer.drvPath
-        ];
-      }
-      ''
-        # (a) The injected unit IS the prebuilt, distinct from the from-source unit.
-        echo "prebuilt unit drv : ${prebuiltWireUnit.drvPath}"
-        echo "from-source unit  : ${fromSourceStubUnit.drvPath}"
-        if [ "${prebuiltWireUnit.drvPath}" = "${fromSourceStubUnit.drvPath}" ]; then
-          echo "error: injected unit equals the from-source unit" >&2
-          exit 1
-        fi
+    {
+      nativeBuildInputs = [pkgs.gnugrep];
+      # Export the consumer's full build-closure reference graph so we can
+      # assert the from-source stub lib unit drv is NOT among its inputs.
+      exportReferencesGraph = [
+        "consumer-graph"
+        consumer.drvPath
+      ];
+    }
+    ''
+      # (a) The injected unit IS the prebuilt, distinct from the from-source unit.
+      echo "prebuilt unit drv : ${prebuiltWireUnit.drvPath}"
+      echo "from-source unit  : ${fromSourceStubUnit.drvPath}"
+      if [ "${prebuiltWireUnit.drvPath}" = "${fromSourceStubUnit.drvPath}" ]; then
+        echo "error: injected unit equals the from-source unit" >&2
+        exit 1
+      fi
 
-        # The injected workspace's unit map resolves the key to the prebuilt.
-        if [ "${injected.units.${wireUnitKey}.drvPath}" != "${prebuiltWireUnit.drvPath}" ]; then
-          echo "error: extraUnits did not override the generated unit" >&2
-          exit 1
-        fi
+      # The injected workspace's unit map resolves the key to the prebuilt.
+      if [ "${injected.units.${wireUnitKey}.drvPath}" != "${prebuiltWireUnit.drvPath}" ]; then
+        echo "error: extraUnits did not override the generated unit" >&2
+        exit 1
+      fi
 
-        # (b) The prebuilt unit's $out matches the library-unit contract.
-        test -f ${prebuiltWireUnit}/lib/libix_sdk_wire-${wireHash}.rlib
-        test -f ${prebuiltWireUnit}/lib/libix_sdk_wire-${wireHash}.rmeta
-        test -f ${prebuiltWireUnit}/nix-support/extern-path
-        grep -q '\.rlib$' ${prebuiltWireUnit}/nix-support/extern-path
+      # (b) The prebuilt unit's $out matches the library-unit contract.
+      test -f ${prebuiltWireUnit}/lib/libix_sdk_wire-${wireHash}.rlib
+      test -f ${prebuiltWireUnit}/lib/libix_sdk_wire-${wireHash}.rmeta
+      test -f ${prebuiltWireUnit}/nix-support/extern-path
+      grep -q '\.rlib$' ${prebuiltWireUnit}/nix-support/extern-path
 
-        # (c) Runtime: the consumer links + runs the prebuilt rlib. The fn it
-        # calls lives only in the real crate (the stub has no such item), so a
-        # successful run with the expected output proves the prebuilt was linked.
-        ${consumer}/bin/ix-sdk-wire-probe > probe.out
-        cat probe.out
-        grep -q 'ix-sdk-wire linked: normalize(0)=0 normalize(MAX)=0' probe.out
+      # (c) Runtime: the consumer links + runs the prebuilt rlib. The fn it
+      # calls lives only in the real crate (the stub has no such item), so a
+      # successful run with the expected output proves the prebuilt was linked.
+      ${consumer}/bin/ix-sdk-wire-probe > probe.out
+      cat probe.out
+      grep -q 'ix-sdk-wire linked: normalize(0)=0 normalize(MAX)=0' probe.out
 
-        # (d) Closure exclusion (the source-less proof, mirroring #724 M1): the
-        # from-source stub lib unit's drv must NOT appear in the consumer build
-        # closure. exportReferencesGraph wrote the closure to ./consumer-graph as
-        # alternating "<path>\n<refcount>\n<ref>..." lines; a plain grep for the
-        # stub drv path is enough to assert absence.
-        echo "asserting from-source stub unit is absent from consumer closure"
-        if grep -qF "${fromSourceStubUnit.drvPath}" consumer-graph; then
-          echo "error: from-source ix-sdk-wire unit leaked into the consumer closure" >&2
-          exit 1
-        fi
-        # Sanity: the prebuilt unit (or its output) SHOULD be reachable, so the
-        # absence above is meaningful and not a path-format mismatch.
-        if ! grep -qF "${prebuiltWireUnit.drvPath}" consumer-graph \
-           && ! grep -qF "${prebuiltWireUnit.outPath}" consumer-graph; then
-          echo "error: prebuilt unit not found in consumer closure; grep may be mismatched" >&2
-          exit 1
-        fi
+      # (d) Closure exclusion (the source-less proof, mirroring #724 M1): the
+      # from-source stub lib unit's drv must NOT appear in the consumer build
+      # closure. exportReferencesGraph wrote the closure to ./consumer-graph as
+      # alternating "<path>\n<refcount>\n<ref>..." lines; a plain grep for the
+      # stub drv path is enough to assert absence.
+      echo "asserting from-source stub unit is absent from consumer closure"
+      if grep -qF "${fromSourceStubUnit.drvPath}" consumer-graph; then
+        echo "error: from-source ix-sdk-wire unit leaked into the consumer closure" >&2
+        exit 1
+      fi
+      # Sanity: the prebuilt unit (or its output) SHOULD be reachable, so the
+      # absence above is meaningful and not a path-format mismatch.
+      if ! grep -qF "${prebuiltWireUnit.drvPath}" consumer-graph \
+         && ! grep -qF "${prebuiltWireUnit.outPath}" consumer-graph; then
+        echo "error: prebuilt unit not found in consumer closure; grep may be mismatched" >&2
+        exit 1
+      fi
 
-        echo "OK: public ix-sdk links the R2-hosted prebuilt ix-sdk-wire rlib with no stub source in its closure"
-        mkdir -p "$out"
-      '';
+      echo "OK: public ix-sdk links the R2-hosted prebuilt ix-sdk-wire rlib with no stub source in its closure"
+      mkdir -p "$out"
+    '';
 }

@@ -29,6 +29,7 @@ pub fn record(cols: u16, rows: u16, fps: u32) -> Result<Vec<Frame>> {
                 rows,
                 cols,
                 scrollback_lines: 2000,
+                ..SpawnConfig::default()
             },
         )
         .wrap_err("spawn bash")?;

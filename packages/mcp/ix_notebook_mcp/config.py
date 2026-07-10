@@ -8,12 +8,156 @@ keeps the wiring simple. The object is frozen so nothing mutates after launch.
 
 from __future__ import annotations
 
+import datetime
+import ipaddress
 import json
 import os
 import socket
 import stat
+import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
+
+# Every tailscale IPv4 lives in the CGNAT range; anything else claiming to be
+# one is malformed or hostile output. See `is_tailnet_ipv4`.
+_TAILNET_V4 = ipaddress.ip_network("100.64.0.0/10")
+
+
+def is_tailnet_ipv4(value: str) -> bool:
+    """Whether ``value`` is an IPv4 literal in tailscale's CGNAT range
+    (100.64.0.0/10).
+
+    The defense-in-depth gate on every address taken from ``tailscale status``
+    output (index#1789 review): a malformed or spoofed status must not be able
+    to hand ``0.0.0.0`` or a LAN address to a bind or a peer probe. Real
+    parsing (``ipaddress``), not string sniffing, so ``0.0.0.0``, IPv6, and
+    junk all read as False.
+    """
+    try:
+        addr = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return isinstance(addr, ipaddress.IPv4Address) and addr in _TAILNET_V4
+
+
+# The well-known port every ix-mcp serves its tailnet `/mesh` discovery
+# endpoint on (index#1787), adjacent to the fleet's fixed `/api/exec` port 8799
+# (src/fleet/fleet/cluster.py EXEC_PORT). The one definition: the server bind
+# (ix_notebook_mcp.mesh) and the bundled `mesh` module's peer probes both read
+# it through :func:`mesh_port`, so the two sides cannot drift.
+DEFAULT_MESH_PORT = 8798
+
+
+def process_cwd() -> Path:
+    """The process working directory, self-healing a deleted one (index#2120).
+
+    A long-lived kernel can have its cwd removed under it (e.g. an auto-cleaned
+    ``.claude`` worktree a cell had ``os.chdir``'d into). From then on
+    ``Path.cwd()`` raises ``FileNotFoundError`` -- and because the per-cell type
+    checker resolves the cwd BEFORE user code runs, every subsequent cell
+    (including a repair ``os.chdir``) dies on that traceback until the server is
+    restarted. Every per-call cwd read goes through here instead: on a vanished
+    cwd the process moves itself to ``$HOME``, says so loudly on stderr (which
+    reaches journald), and carries on. One recovery, one warning; any other
+    error still propagates.
+    """
+    try:
+        return Path.cwd()
+    except FileNotFoundError:
+        home = Path.home()
+        os.chdir(home)
+        print(
+            f"[ix-mcp] working directory vanished (deleted under the process); moved to {home}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return home
+
+
+def mesh_port() -> int:
+    """The mesh port; ``IX_MCP_MESH_PORT`` overrides the well-known default."""
+    return int(os.environ.get("IX_MCP_MESH_PORT") or DEFAULT_MESH_PORT)
+
+
+def mesh_enabled() -> bool:
+    """Whether this server should advertise itself on the tailnet mesh.
+
+    Default ON: joining the mesh must need zero config (index#1787), so the env
+    var is an opt-out only. ``IX_MCP_MESH=0`` (or false/no/off) disables it.
+    """
+    return os.environ.get("IX_MCP_MESH", "").strip().lower() not in ("0", "false", "no", "off")
+
+
+def server_version() -> str:
+    """The build's source revision. The nix wrapper sets ``IX_BUILD_REV`` (the
+    shared build-stamp name every ix tool reads; see
+    ``doc/build-version/overview.md``) to the flake rev (``<commit>`` /
+    ``<commit>-dirty``); a bare run reads "dev". The MCP ``serverInfo.version``
+    (tools.py), the ``/mesh`` payload, and the kernel's ``api()`` catalog all
+    report this one value, so a client, a mesh peer, and an agent in a cell see
+    the same commit."""
+    return os.environ.get("IX_BUILD_REV") or "dev"
+
+
+def build_epoch() -> int | None:
+    """The build's commit time (unix epoch seconds, Nix's ``self.lastModified``)
+    from ``IX_BUILD_EPOCH``. ``None`` when unset, malformed, or the ``0``
+    non-git sentinel, so an unknown epoch never renders as 1970."""
+    raw = os.environ.get("IX_BUILD_EPOCH")
+    try:
+        epoch = int(raw) if raw else 0
+    except ValueError:
+        return None
+    return epoch or None
+
+
+# Abbreviated-revision length in the stamp; mirrors build-version's SHORT_REV_LEN
+# so the Python and Rust stamps read identically.
+_SHORT_REV_LEN = 12
+
+
+def _humanize_ago(seconds: int) -> str:
+    """``just now`` / ``5 minutes ago`` / ``2 days ago`` / ``1 year ago``; the
+    Python port of build-version's ``humanize_ago`` (same buckets, so ix tools
+    and the kernel phrase age identically). Spans under a minute and negative
+    spans (build clock ahead of ours) collapse to ``just now``."""
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        value, unit = seconds // 60, "minute"
+    elif seconds < 86400:
+        value, unit = seconds // 3600, "hour"
+    elif seconds < 7 * 86400:
+        value, unit = seconds // 86400, "day"
+    elif seconds < 30 * 86400:
+        value, unit = seconds // (7 * 86400), "week"
+    elif seconds < 365 * 86400:
+        value, unit = seconds // (30 * 86400), "month"
+    else:
+        value, unit = seconds // (365 * 86400), "year"
+    return f"{value} {unit}{'' if value == 1 else 's'} ago"
+
+
+def build_stamp(now: float | None = None) -> str:
+    """One line identifying this build, the shape build-version renders into
+    every ix tool's ``--version``: ``7e42ccdb1882 (2026-06-07, 2 days ago)``.
+    A reproducible build has no wall-clock build time, so the "when" is the
+    commit time, and the age is computed here at call time (against ``now``,
+    injectable for tests). Degrades to the bare short rev when the epoch is
+    unknown, and to ``dev`` outside the packaged wrapper.
+
+    This is the in-band staleness signal for agents (index#2110): a documented
+    helper or kwarg missing from a kernel whose stamp is days old points at a
+    stale deploy, not a phantom API."""
+    rev = server_version()
+    short = rev[:_SHORT_REV_LEN]
+    epoch = build_epoch()
+    if epoch is None:
+        return short
+    date = datetime.datetime.fromtimestamp(epoch, tz=datetime.UTC).strftime("%Y-%m-%d")
+    now_epoch = int(now if now is not None else time.time())
+    return f"{short} ({date}, {_humanize_ago(now_epoch - epoch)})"
 
 
 @dataclass(frozen=True)
@@ -53,6 +197,27 @@ class Config:
     # restore (load the checkpoint, replay the gap) before running new cells.
     session_resume: bool = False
 
+    # Where the kernel process runs: "local" (a direct child of this serve, the
+    # default) or "ray" (a KernelActor on the fleet's Ray cluster, one per
+    # serve; see kernel_host.py). Wired from the IX_MCP_KERNEL env var by the CLI.
+    kernel_host: str = "local"
+
+    # This machine's tailscale IPv4, resolved once by the CLI, or None when
+    # tailscale is absent or its backend is down. The `/mesh` endpoint binds
+    # ONLY this address (index#1787): the tailnet is the trust boundary, and
+    # with no tailnet there is nothing to mesh over, so mesh serving is skipped
+    # rather than widened to a LAN or wildcard bind.
+    mesh_host: str | None = None
+
+    # This server process's own MCP session id, minted per `ix-mcp serve` by the
+    # CLI (and exported to the kernel as IX_MCP_SERVER_SESSION). It identifies
+    # the one stdio client as a session for channel-event addressing: the
+    # transport pump delivers broadcast outbox rows plus rows addressed to this
+    # id, so a job lifecycle event reaches only the session that started the job
+    # (issue #2165). "" (an embedder without the CLI) disables addressing --
+    # every event is then a broadcast, the pre-#2165 behavior.
+    server_session_id: str = ""
+
     # "stdio" (the default; what an MCP client launches), "http", or "none"
     # (the standalone notebook engine: kernel + dashboard, no MCP transport).
     transport: str = "stdio"
@@ -71,6 +236,16 @@ class Config:
     # every node the same secret.
     exec_token: str | None = None
 
+    # Static API key gating the MCP streamable-HTTP transport: every request to
+    # it must carry this value in `X-Api-Key` (or `Authorization: Bearer`, for
+    # clients whose path preserves that header -- some egress proxies strip
+    # Authorization for allowlisted domains, which is why X-Api-Key is primary).
+    # None leaves HTTP unauthenticated, which the CLI only allows on a
+    # loopback/tailnet bind (see `cli._http_bind_error`). `GET /health` stays
+    # open either way so a fronting proxy can probe liveness without the
+    # secret. Sourced from IX_MCP_API_KEY(_FILE) by the CLI; stdio ignores it.
+    api_key: str | None = None
+
     # Trust the bound network (the tailnet) as the `/api/exec` auth boundary, so
     # `fleet.in_kernel` works without a token -- the same model Ray's own data
     # plane relies on. The endpoint honors this only when `host` is non-loopback
@@ -86,6 +261,12 @@ class Config:
     # report idle before treating it as wedged by a synchronous call, interrupting
     # the kernel, and returning an actionable summary. See ``kernel.python_exec``.
     wedge_grace: float = 15.0
+
+    # Per-cell static type checking (ty) before a cell executes: default on, so a
+    # type error is caught and returned instead of blowing up at runtime. The
+    # ``IX_MCP_TYPECHECK`` env var overrides this at the kernel (see
+    # ``runtime._typecheck_enabled``); set this False to disable it server-wide.
+    typecheck: bool = True
 
     # Hard ceiling on a single ``python_exec`` foreground ``budget``. The budget is
     # how long the ONE shared shell channel is held before the run backgrounds, so

@@ -8,7 +8,8 @@ defmodule SymphonyElixir.Engine.ContractFixturesTest do
   """
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.Engine.{Client, Envelope}
+  alias SymphonyElixir.Engine.Client
+  alias SymphonyElixir.Engine.Envelope
 
   # contracts/ sits at the repo root, four levels up from this test file.
   @fixtures Path.expand(Path.join([__DIR__, "..", "..", "..", "..", "contracts", "fixtures"]))

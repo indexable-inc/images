@@ -1,0 +1,631 @@
+name: Cache push
+
+# Publish packages to cache.ix.dev on push to main so consumers substitute
+# instead of rebuilding. Two lanes: `push` realises x86_64-linux (including the
+# Linux->Darwin cross packages) on the self-hosted pool (#1639), and
+# `darwin-build`/`darwin-push` relay the native aarch64-darwin variants from a
+# GitHub-hosted mac (#1890). `advance-cache-ready` moves the consumer pin only
+# after BOTH lanes land. Non-gating for merges.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      full_pass:
+        description: "Skip the already-cached probe: realise and push every root (heals holes left by partially-failed pushes)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# `ix up` pins arbitrary merged revs, so every merged commit must get pushed.
+concurrency:
+  group: cache-push
+  cancel-in-progress: false
+
+env:
+  # Shared with check.yml; restricted settings are daemon-owned and ignored here.
+  # `fallback` is push-only (not in check.yml): a poisoned substitute -- a
+  # truncated HTTP 200 NAR from a cache incident (ix#6139) -- otherwise aborts
+  # realising a push root, and that root silently never publishes. Run
+  # 28657772825 lost the cross-IFD `cargo-vendor-dir` root exactly this way,
+  # leaving Darwin consumers unable to eval cross packages (#1711). Falling
+  # back to a source build keeps every root publishable regardless of cache
+  # health. Remove once indexable-inc/ix#6139 closes with the cache serving
+  # verified-complete NARs (the migrate-guard root cause already landed in
+  # indexable-inc/ix#6149); the fallback-detection warning in the realise
+  # phase below goes with it.
+  NIX_CONFIG: |-
+    experimental-features = nix-command flakes ca-derivations
+    accept-flake-config = false
+    max-jobs = auto
+    cores = 1
+    fallback = true
+
+jobs:
+  push:
+    # Warm-store pool shared with check.yml. The dispatcher recognises
+    # `-cache-push` and attaches the push-only ix-public token as a per-job
+    # systemd credential (spawn.rs ix_public_push_eligible).
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-cache-push', github.run_id, github.run_attempt) }}"]
+    timeout-minutes: 180
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Publish all packages to cache.ix.dev
+        shell: bash
+        env:
+          FULL_PASS: ${{ inputs.full_pass && '1' || '' }}
+        run: |
+          set -euo pipefail
+
+          phase() { echo "::notice::cache-push phase '$1' took $(( SECONDS - $2 ))s"; }
+
+          # Attached to every main push; absence is a dispatcher regression.
+          cred="${CREDENTIALS_DIRECTORY:-}/${IX_PUBLIC_PUSH_CREDENTIAL_NAME:-}"
+          if [ ! -f "$cred" ]; then
+            echo "::error::ix-public push credential not delivered (see ci-dispatcher spawn.rs ix_public_push_eligible)"
+            exit 1
+          fi
+
+          set -a
+          # shellcheck disable=SC1090
+          . "$cred"
+          set +a
+          : "${ATTIC_IX_PUBLIC_PUSH_TOKEN:?credential file missing ATTIC_IX_PUBLIC_PUSH_TOKEN}"
+
+          # Token via config file, never `attic login`: argv is world-readable
+          # through /proc/<pid>/cmdline.
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "$workdir"' EXIT
+          export XDG_CONFIG_HOME="$workdir/config"
+          install -d -m700 "$XDG_CONFIG_HOME/attic"
+          ( umask 077
+            {
+              printf 'default-server = "ix-public-push"\n'
+              printf '[servers.ix-public-push]\n'
+              printf 'endpoint = "http://127.0.0.1:8070/"\n'
+              printf 'token = "%s"\n' "$ATTIC_IX_PUBLIC_PUSH_TOKEN"
+            } > "$XDG_CONFIG_HOME/attic/config.toml"
+          )
+
+          # Flake-pinned tools: runner PATH has nix + coreutils but no
+          # findutils. ^bin/^out pick one output from multi-output packages.
+          tools_t=$SECONDS
+          eval_jobs="$(nix build .#nix-eval-jobs --no-link --print-out-paths)/bin/nix-eval-jobs"
+          attic="$(nix build .#attic-client --no-link --print-out-paths)/bin/attic"
+          jq="$(nix build '.#jq^bin' --no-link --print-out-paths)/bin/jq"
+          xargs="$(nix build '.#findutils^out' --no-link --print-out-paths)/bin/xargs"
+          phase tools "$tools_t"
+
+          # cachePushRoots = packages minus the never-dedup *-oci.tar archives
+          # (lib/per-system.nix). Enumerate by drvPath: floating-CA outputs are
+          # null at eval time.
+          drvs="$workdir/drvs.txt"
+          outs="$workdir/outs.txt"
+          roots="$workdir/roots.tsv"
+          eval_t=$SECONDS
+          "$eval_jobs" \
+            --flake .#cachePushRoots.x86_64-linux \
+            --workers 16 \
+            --max-memory-size 6144 \
+            2>"$workdir/eval.err" \
+            | "$jq" -r 'select(.drvPath != null) | [.drvPath, (.outputs.out // "")] | @tsv' \
+            | sort -u > "$roots" || true
+          phase eval "$eval_t"
+
+          # Skip roots already pushed: makes the run O(changed), not O(full
+          # closure). Probe the atticd endpoint the push writes to, not
+          # cache.ix.dev (ncps in front 404s ix-public paths, which made every
+          # probe miss). Probe failure counts as a miss; CA roots have no
+          # eval-time path and always realise. FULL_PASS=1 re-realises
+          # everything to heal roots skipped over a failed dep push.
+          probe_t=$SECONDS
+          : > "$workdir/cached.txt"
+          if [ -z "${FULL_PASS:-}" ]; then
+            # shellcheck disable=SC2016  # $1 expands in the child bash, not here
+            cut -f2 "$roots" | sort -u \
+              | "$xargs" -r -P16 -n1 bash -c \
+                  'nix path-info --store http://127.0.0.1:8070/ix-public "$1" >/dev/null 2>&1 && printf "%s\n" "$1"' _ \
+              > "$workdir/cached.txt" || true
+          fi
+          declare -A cached=()
+          while IFS= read -r p; do [ -n "$p" ] && cached[$p]=1; done < "$workdir/cached.txt"
+          while IFS=$'\t' read -r drv out; do
+            if [ -z "$out" ] || [ -z "${cached[$out]:-}" ]; then
+              printf '%s\n' "$drv"
+            fi
+          done < "$roots" > "$drvs"
+          phase probe "$probe_t"
+          echo "::notice::cache-push probe: $(wc -l < "$drvs") of $(wc -l < "$roots") roots need realising"
+
+          # -n1, not one batch: a batched realise prints no paths at all if any
+          # single drv fails, which would publish nothing. The per-drv wrapper
+          # additionally records WHICH root failed (bare xargs only reports
+          # "something failed" via its exit status): nix does not cache
+          # failures, so a broken root re-realises and re-fails on every
+          # merge, and two such roots once taxed every run ~16 min while
+          # staying warning-level invisible (indexable-inc/index#1863). The
+          # error annotation below names them so a chronic failure is loud.
+          failed_roots="$workdir/failed-roots.txt"
+          : > "$failed_roots"
+          realise_t=$SECONDS
+          # shellcheck disable=SC2016  # $1/$2 expand in the child bash, not here
+          "$xargs" -a "$drvs" -r -P16 -n1 bash -c \
+              'nix-store --realise --keep-going "$2" || { printf "%s\n" "$2" >> "$1"; exit 1; }' _ "$failed_roots" \
+            > "$outs" 2>"$workdir/realise.err" \
+            || {
+              # Match any error line (nix phrases failures several ways); pure
+              # bash because the runner PATH has no grep/sed.
+              while IFS= read -r line; do
+                case $line in
+                  *error:*) printf '::warning::realise failed: %s\n' "${line#*error: }" ;;
+                esac
+              done < "$workdir/realise.err" | sort -u | head -n 20
+            }
+          phase realise "$realise_t"
+
+          if [ -s "$failed_roots" ]; then
+            # /nix/store/<hash>-<name>.drv -> <name>, joined on one line.
+            names=""
+            while IFS= read -r drv; do
+              name="${drv##*/}"
+              name="${name#*-}"
+              names="$names ${name%.drv}"
+            done < "$failed_roots"
+            echo "::error::cache-push: $(wc -l < "$failed_roots") root(s) failed to realise (rebuilt and re-failed on every merge until fixed):$names"
+          fi
+
+          # `fallback = true` engages silently: nix rebuilds a failed
+          # substitute from source with no distinct log line, so a degraded
+          # cache would surface only as slower runs. Every substitution
+          # failure does leave a download-error line in realise.err even when
+          # the realise itself then succeeds; count those and warn loudly.
+          # Pure bash (no grep on the runner PATH), same as the error loop
+          # above.
+          fallback_hits=0
+          while IFS= read -r line; do
+            case $line in
+              *"Transferred a partial file"* | *"unable to download"* | *"some substitutes for the outputs"*)
+                fallback_hits=$(( fallback_hits + 1 )) ;;
+            esac
+          done < "$workdir/realise.err"
+          if [ "$fallback_hits" -gt 0 ]; then
+            echo "::warning::cache-push: $fallback_hits substitution-failure line(s) during realise; nix fell back to source builds (cache health degraded, see indexable-inc/ix#6139)"
+          fi
+
+          if [ -s "$outs" ]; then
+            push_t=$SECONDS
+            "$xargs" -a "$outs" -r "$attic" push --jobs 16 ix-public \
+              || echo "::warning::some paths failed to push to ix-public"
+            phase push "$push_t"
+          elif [ -s "$drvs" ]; then
+            echo "::warning::no output paths resolved for ix-public; eval/realise logs follow"
+            tail -n 20 "$workdir/eval.err" "$workdir/realise.err" >&2 || true
+          elif [ ! -s "$roots" ]; then
+            echo "::warning::eval produced no roots; eval log follows"
+            tail -n 20 "$workdir/eval.err" >&2 || true
+          else
+            echo "::notice::every root already cached in ix-public; nothing to realise or push"
+          fi
+
+  # Native aarch64-darwin lane (#1890). The linux lane covers the cross-compiled
+  # packages, but the genuinely-native darwin artifacts (codex from the patched
+  # fork, btop, nix-output-monitor, the config-launch launcher units, the native
+  # cargo-unit IFD graph) were never published anywhere, so every darwin
+  # consumer compiled them locally. `cachePushRoots.aarch64-darwin` post-alias
+  # is the honest "what a darwin consumer can install" set; filtering the eval
+  # rows to `system == "aarch64-darwin"` drops the cross aliases, example-fleet
+  # system closures, and linux images that resolve to x86_64-linux drvs the
+  # `push` lane already publishes.
+  #
+  # A hosted runner cannot reach the attic push shim (127.0.0.1:8070 is fleet
+  # mTLS surface), so this job only realises the roots and stages the built
+  # closures as a `file://` binary cache uploaded as an artifact; `darwin-push`
+  # below (self-hosted, holding the push credential) relays it into ix-public.
+  # attic pushes NARs regardless of their platform.
+  darwin-build:
+    # GitHub-hosted arm64 macs are free on public repos; the fleet has no
+    # darwin runner. 3 cores / 7 GiB, so eval workers and realise parallelism
+    # stay small.
+    runs-on: macos-14
+    # The darwin roots' dependency closures overlap the linux lane (shared
+    # nixpkgs paths, and any x86_64-linux path a wrapper references):
+    # realising here substitutes them from cache.ix.dev, which only serves
+    # them after the linux push lands. Running after `push` turns those into
+    # downloads instead of doomed platform-mismatch builds.
+    needs: push
+    # A cold codex (full codex-rs workspace rustc build) is 40-80 min on this
+    # runner; warm runs are probe + substitution only. Since #1916 the roots
+    # also carry nix-ix (the full modular nixComponents_2_34 C++ closure):
+    # even with its test suites disabled (#1967), a cold nix-ix plus a cold
+    # codex plus the ~27 min eval can brush the old 240-minute budget on
+    # 3 cores, and run 28772327218 showed a timeout here silently freezes
+    # cache-ready. 330 leaves margin under GitHub's 360-minute job hard cap.
+    timeout-minutes: 330
+    env:
+      # Replaces the workflow-level NIX_CONFIG: `cores = 1` there fits the
+      # shared self-hosted pool, but this runner is dedicated, so each build
+      # may use every core. Substituters and trusted keys go through the
+      # installer step's extra-conf into /etc/nix/nix.conf instead, one
+      # config the daemon also trusts. `fallback` for the same reason as the
+      # linux lane (ix#6139).
+      NIX_CONFIG: |-
+        experimental-features = nix-command flakes ca-derivations
+        accept-flake-config = false
+        max-jobs = auto
+        fallback = true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Free scratch disk
+        # arm64 hosted macs ship ~14 GB free and a cold codex realise needs
+        # more than that in target-dir scratch alone: the first lane run died
+        # ENOSPC at 43 MB free (run 28762717645). The preinstalled Xcode
+        # bundles and simulator runtimes are dead weight here (nix brings its
+        # own SDK); reclaiming them buys tens of GB. Best-effort: a layout
+        # change in the runner image must not fail the lane.
+        run: |
+          df -h / | tail -n 1
+          sudo rm -rf /Applications/Xcode_*.app ~/Library/Developer/CoreSimulator || true
+          df -h / | tail -n 1
+
+      - name: Install Determinate Nix
+        uses: ./.github/actions/install-nix
+
+      - name: Realise darwin roots and stage the relay cache
+        shell: bash
+        env:
+          FULL_PASS: ${{ inputs.full_pass && '1' || '' }}
+        run: |
+          set -euo pipefail
+
+          phase() { echo "::notice::darwin-build phase '$1' took $(( SECONDS - $2 ))s"; }
+
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "$workdir"' EXIT
+
+          # nix-eval-jobs from the flake's locked nixpkgs (`--inputs-from .`),
+          # not the repo's patched `.#nix-eval-jobs`: the patch only changes the
+          # cacheStatus reporting nix-fast-build consumes (never read here), and
+          # the repo package is deliberately x86_64-linux-only to avoid the
+          # heavy libstore C++ rebuild -- the stock darwin binary substitutes
+          # straight from cache.nixos.org. jq/xargs/grep come from the hosted
+          # runner image (unlike the bare self-hosted pool PATH).
+          tools_t=$SECONDS
+          eval_jobs="$(nix build --inputs-from . nixpkgs#nix-eval-jobs --no-link --print-out-paths)/bin/nix-eval-jobs"
+          phase tools "$tools_t"
+
+          # The eval IFDs the native darwin cargo unit graph (vendor dir, unit
+          # graph JSON, rendered cargo-units.nix); those realise here -- this is
+          # a mac -- and are published as explicit roots (lib/per-system.nix
+          # `nativeIfdRoots`) because consumer evals force them too. Non-darwin
+          # rows are the `push` lane's responsibility and drop out. Eval errors
+          # surface as warnings, not failures: an attr can legitimately refuse
+          # to instantiate on darwin (linux-only module assertions), and the
+          # error row does not say which system the attr would have been.
+          #
+          # `--gc-roots-dir` roots every instantiated drv for the realise
+          # loop below: its per-root `nix store gc` otherwise deletes the
+          # not-yet-realised .drv files (nothing else roots them), so once
+          # the first root succeeded and gc'd, every remaining root died
+          # with "failed to obtain derivation" -- 109 of 110 roots on every
+          # merge (run 28883927791), which kept the cache empty and made
+          # each run re-attempt the full set.
+          roots="$workdir/roots.tsv"
+          mkdir -p "$workdir/gcroots"
+          eval_t=$SECONDS
+          "$eval_jobs" \
+            --flake .#cachePushRoots.aarch64-darwin \
+            --workers 2 \
+            --max-memory-size 2048 \
+            --gc-roots-dir "$workdir/gcroots" \
+            2>"$workdir/eval.err" \
+            | tee "$workdir/eval.jsonl" \
+            | jq -r 'select(.error == null and .system == "aarch64-darwin") | [.drvPath, (.outputs.out // "")] | @tsv' \
+            | sort -u > "$roots" || true
+          phase eval "$eval_t"
+
+          jq -r 'select(.error != null) | "::warning::darwin eval failed for \(.attr): \(.error | split("\n")[0])"' \
+            "$workdir/eval.jsonl" | sort -u | head -n 20
+
+          if [ ! -s "$roots" ]; then
+            echo "::error::eval produced no native darwin roots; eval log follows"
+            tail -n 40 "$workdir/eval.err" >&2 || true
+            exit 1
+          fi
+
+          # Skip roots already published. This probes the consumer endpoint
+          # (the atticd shim is unreachable from here), which can under-report
+          # -- ncps 404s paths it has not yet pulled even when atticd holds
+          # them. A false miss re-realises a root, where the substituters turn
+          # the "build" into a download and attic push dedups server-side:
+          # wasteful, never wrong. CA roots have no eval-time out path and
+          # always realise; their expensive input-addressed deps substitute.
+          # FULL_PASS=1 re-realises everything to heal partial pushes.
+          probe_t=$SECONDS
+          : > "$workdir/cached.txt"
+          if [ -z "${FULL_PASS:-}" ]; then
+            # shellcheck disable=SC2016  # $1 expands in the child bash, not here
+            cut -f2 "$roots" | grep -v '^$' | sort -u \
+              | xargs -P 8 -n 1 bash -c \
+                  'nix path-info --store https://cache.ix.dev "$1" >/dev/null 2>&1 && printf "%s\n" "$1"' _ \
+              > "$workdir/cached.txt" || true
+          fi
+          drvs="$workdir/drvs.txt"
+          while IFS=$'\t' read -r drv out; do
+            if [ -z "$out" ] || ! grep -Fxq -- "$out" "$workdir/cached.txt"; then
+              printf '%s\n' "$drv"
+            fi
+          done < "$roots" > "$drvs"
+          phase probe "$probe_t"
+          echo "::notice::darwin-build probe: $(wc -l < "$drvs") of $(wc -l < "$roots") roots need realising"
+
+          # -n1 per-drv realise, same reasoning as the linux lane: a batched
+          # realise prints no paths at all if any single drv fails, and the
+          # wrapper records WHICH root failed so a chronic failure is loud
+          # (#1863). Individual root failures warn without failing the job,
+          # matching the linux lane's temperament; job-level failures (empty
+          # eval, relay upload) are what block `cache-ready`.
+          #
+          # Each root is realised, copied into the relay cache, and then the
+          # store is GC'd when scratch runs low, so closures do not
+          # accumulate. The store grew monotonically before (realise all,
+          # copy all at the end): on the ~14 GB hosted mac the accumulated
+          # closures of ~100 roots plus a cold codex build's scratch overran
+          # the disk and every remaining root died ENOSPC (run 28770353669,
+          # 17 roots "failed" purely on `No space left`). The relay dir is a
+          # plain NAR directory, so once a root is copied there its store
+          # paths are redundant; gc reclaims everything except the pending
+          # drvs (rooted by the eval's --gc-roots-dir above), and any
+          # dependency a later root shares re-substitutes as a cheap
+          # download.
+          failed_roots="$workdir/failed-roots.txt"
+          : > "$failed_roots"
+          outs="$workdir/outs.txt"
+          : > "$outs"
+          relay_cache="file://$PWD/relay/cache?compression=zstd"
+          mkdir -p relay
+          realise_t=$SECONDS
+          if [ -s "$drvs" ]; then
+            # -P 1, not -P 3: the runner's scratch disk is the binding
+            # constraint, not cores. Three concurrent rust/npm builds each
+            # keep a full target dir on disk at once and the first lane run
+            # died ENOSPC with 43 MB free (run 28762717645); serial roots cap
+            # peak scratch at one build while `max-jobs`/`cores` still use
+            # every core inside it.
+            # shellcheck disable=SC2016  # positional args expand in the child
+            xargs -P 1 -n 1 bash -c '
+                failed="$1"; outs="$2"; relay="$3"; drv="$4"
+                # Realise, then immediately copy the closure into the relay
+                # and drop it from the store. A realise OR a relay-copy failure
+                # records the root as failed (the copy is what darwin-push
+                # relays, so a lost copy is as bad as a lost build).
+                if out="$(nix-store --realise --keep-going "$drv")" \
+                   && printf "%s\n" "$out" | xargs -r nix copy --to "$relay"; then
+                  printf "%s\n" "$out" >> "$outs"
+                  # gc only under disk pressure: an unconditional per-root gc
+                  # evicts the shared deps (toolchains, stdenv closures) that
+                  # every later root then re-downloads. The 20 GiB floor
+                  # covers the largest single-root scratch seen so far: a
+                  # cold codex build alone needs >14 GB of target dir (run
+                  # 28762717645). Pending drvs survive the sweep via the
+                  # eval gc roots.
+                  read -r _ _ _ avail _ < <(df -Pk /nix/store | tail -n 1)
+                  if [ "$avail" -lt $((20 * 1024 * 1024)) ]; then
+                    nix store gc >/dev/null 2>&1 || true
+                  fi
+                else
+                  printf "%s\n" "$drv" >> "$failed"
+                  exit 1
+                fi
+              ' _ "$failed_roots" "$outs" "$relay_cache" \
+              < "$drvs" 2>"$workdir/realise.err" \
+              || {
+                grep -F 'error:' "$workdir/realise.err" | sort -u | head -n 20 \
+                  | while IFS= read -r line; do
+                      printf '::warning::realise failed: %s\n' "${line#*error: }"
+                    done
+              }
+          fi
+          phase realise "$realise_t"
+
+          if [ -s "$failed_roots" ]; then
+            names=""
+            while IFS= read -r drv; do
+              name="${drv##*/}"
+              name="${name#*-}"
+              names="$names ${name%.drv}"
+            done < "$failed_roots"
+            echo "::error::darwin-build: $(wc -l < "$failed_roots") root(s) failed to realise (rebuilt and re-failed on every merge until fixed):$names"
+          fi
+
+          # Same silent-fallback detection as the linux lane (ix#6139).
+          fallback_hits=0
+          if [ -s "$workdir/realise.err" ]; then
+            fallback_hits="$(grep -cE 'Transferred a partial file|unable to download|some substitutes for the outputs' "$workdir/realise.err" || true)"
+          fi
+          if [ "$fallback_hits" -gt 0 ]; then
+            echo "::warning::darwin-build: $fallback_hits substitution-failure line(s) during realise; nix fell back to source builds (cache health degraded, see indexable-inc/ix#6139)"
+          fi
+
+          # Stage the relay: each realised root was already copied into the
+          # zstd file:// cache above (per-root, to keep the store flat), so
+          # here we only record the root list darwin-push feeds to attic. An
+          # empty roots.txt tells darwin-push there is nothing to relay.
+          sort -u "$outs" > relay/roots.txt
+          if [ -s relay/roots.txt ]; then
+            echo "::notice::relay cache size: $(du -sh relay | cut -f1)"
+          else
+            echo "::notice::every darwin root already cached; empty relay"
+          fi
+
+      - name: Upload relay artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: darwin-relay
+          path: relay/
+          # NARs are already zstd; zip recompression is pure CPU.
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+
+  darwin-push:
+    needs: darwin-build
+    # Its own dispatch-identity label: the dispatcher spawns one runner per
+    # `ix-ci-run-*` label, and the `-cache-push` SUFFIX (not the exact label)
+    # plus repo + main branch is what attaches the push-only ix-public token
+    # (ci-dispatcher spawn.rs ix_public_push_eligible), so this job gets the
+    # same credential as `push` on its own runner.
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-relay-cache-push', github.run_id, github.run_attempt) }}"]
+    timeout-minutes: 60
+    steps:
+      # Only for `nix build .#attic-client` / `.#findutils` below.
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Download relay artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: darwin-relay
+          path: relay/
+
+      - name: Push relayed darwin closures to cache.ix.dev
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          phase() { echo "::notice::darwin-push phase '$1' took $(( SECONDS - $2 ))s"; }
+
+          if [ ! -s relay/roots.txt ]; then
+            echo "::notice::darwin lane had nothing new; skipping push"
+            exit 0
+          fi
+
+          # Attached to every main push; absence is a dispatcher regression.
+          cred="${CREDENTIALS_DIRECTORY:-}/${IX_PUBLIC_PUSH_CREDENTIAL_NAME:-}"
+          if [ ! -f "$cred" ]; then
+            echo "::error::ix-public push credential not delivered (see ci-dispatcher spawn.rs ix_public_push_eligible)"
+            exit 1
+          fi
+
+          set -a
+          # shellcheck disable=SC1090
+          . "$cred"
+          set +a
+          : "${ATTIC_IX_PUBLIC_PUSH_TOKEN:?credential file missing ATTIC_IX_PUBLIC_PUSH_TOKEN}"
+
+          # Token via config file, never `attic login`: argv is world-readable
+          # through /proc/<pid>/cmdline.
+          workdir="$(mktemp -d)"
+          # `nix copy` writes the chroot store below with store permissions
+          # (read-only files and dirs), which a bare `rm -rf` cannot delete;
+          # run 28787288386 pushed all 2485 paths successfully and then FAILED
+          # on exactly this trap (~300k "Permission denied" lines), which
+          # skipped advance-cache-ready and kept the consumer pin frozen
+          # (#1968). chmod first; cleanup of the job-private tmpdir must never
+          # outweigh a completed push, so it warns instead of failing.
+          trap 'chmod -R u+w "$workdir" || true; rm -rf "$workdir" || echo "::warning::could not clean $workdir (job-private tmp, reaped with the runner unit)"' EXIT
+          export XDG_CONFIG_HOME="$workdir/config"
+          install -d -m700 "$XDG_CONFIG_HOME/attic"
+          ( umask 077
+            {
+              printf 'default-server = "ix-public-push"\n'
+              printf '[servers.ix-public-push]\n'
+              printf 'endpoint = "http://127.0.0.1:8070/"\n'
+              printf 'token = "%s"\n' "$ATTIC_IX_PUBLIC_PUSH_TOKEN"
+            } > "$XDG_CONFIG_HOME/attic/config.toml"
+          )
+
+          tools_t=$SECONDS
+          attic="$(nix build .#attic-client --no-link --print-out-paths)/bin/attic"
+          xargs="$(nix build '.#findutils^out' --no-link --print-out-paths)/bin/xargs"
+          phase tools "$tools_t"
+
+          # The runner user is not a nix trusted user, so the shared daemon
+          # refuses to import the relay's unsigned NARs (`--no-check-sigs` is a
+          # trusted-user right). A user-owned chroot store sidesteps the daemon
+          # entirely: nix and attic (whose libnixstore honours NIX_REMOTE) read
+          # it like any local store, and atticd re-signs served narinfos with
+          # the ix-workspace key server-side, exactly as for the linux lane.
+          rstore="$workdir/store"
+          import_t=$SECONDS
+          nix copy --all --no-check-sigs \
+            --from "file://$PWD/relay/cache" \
+            --to "local?root=$rstore"
+          phase import "$import_t"
+
+          # Unlike the linux lane's fail-open push, a failure here fails the
+          # job: relaying IS this job's one purpose, and darwin consumers
+          # pinning `cache-ready` rely on it (#1890).
+          push_t=$SECONDS
+          NIX_REMOTE="local?root=$rstore" \
+            "$xargs" -a relay/roots.txt -r "$attic" push --jobs 16 ix-public
+          phase push "$push_t"
+
+  # Consumers pinning `github:indexable-inc/index/main` can `nix flake update`
+  # inside the 15-25 min window between a merge and the push above finishing,
+  # locking a rev whose darwin cross closure is not yet on cache.ix.dev; the
+  # substitute-only darwin packages (RFC 0009) then fail with "Required
+  # system: 'x86_64-linux'" (indexable-inc/index#1862). Fast-forwarding
+  # `cache-ready` only after a successful push gives consumers a pin target
+  # whose closure is always published. Gated on BOTH lanes (#1890): darwin
+  # consumers pinning `cache-ready` rely on the native artifacts having been
+  # relayed, so a darwin lane failure must hold the pin back exactly like a
+  # linux one. Downstream of the lanes, so a failure here never gates the
+  # cache publish itself.
+  advance-cache-ready:
+    needs: [push, darwin-push]
+    # workflow_dispatch can target any ref; only main commits may move the
+    # consumer pin.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Fast-forward cache-ready to the pushed commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # Stderr stays on the job log: a 404 here is the expected first-run
+          # path, anything else explains itself in the log.
+          if ! current="$(gh api "repos/$REPOSITORY/git/ref/heads/cache-ready" --jq .object.sha)"; then
+            gh api -X POST "repos/$REPOSITORY/git/refs" \
+              -f ref=refs/heads/cache-ready -f "sha=$SHA" > /dev/null
+            echo "::notice::created cache-ready at $SHA"
+            exit 0
+          fi
+
+          if [ "$current" = "$SHA" ]; then
+            echo "::notice::cache-ready already at $SHA"
+            exit 0
+          fi
+
+          # force=false makes the update fast-forward-only: the API rejects
+          # any non-ancestor move, so a re-run of an older commit's workflow
+          # (or a full-pass dispatch racing a newer merge) can never drag the
+          # ref backwards past closures already published.
+          if gh api -X PATCH "repos/$REPOSITORY/git/refs/heads/cache-ready" \
+               -f "sha=$SHA" -F force=false > /dev/null; then
+            echo "::notice::cache-ready advanced: $current -> $SHA"
+            exit 0
+          fi
+
+          # Distinguish the expected rejection (this run's commit is already
+          # behind the ref) from a real failure that strands consumers.
+          status="$(gh api "repos/$REPOSITORY/compare/$SHA...cache-ready" --jq .status || echo unknown)"
+          if [ "$status" = "ahead" ] || [ "$status" = "identical" ]; then
+            echo "::notice::cache-ready ($current) is already at or past $SHA; not moving it backwards"
+          else
+            echo "::error::could not fast-forward cache-ready to $SHA (compare status: $status); darwin consumers tracking cache-ready stay pinned at $current (indexable-inc/index#1862)"
+            exit 1
+          fi

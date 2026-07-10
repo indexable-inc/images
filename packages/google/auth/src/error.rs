@@ -124,6 +124,15 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    /// Reading or writing the interactive CLI consent exchange failed.
+    #[snafu(display("failed while {action}: {source}"))]
+    ConsoleIo {
+        /// Operation being attempted.
+        action: &'static str,
+        /// Underlying terminal or pipe error.
+        source: std::io::Error,
+    },
+
     /// A pasted redirect could not be parsed as a URL.
     #[snafu(display("could not parse the OAuth redirect URL: {input:?}"))]
     RedirectParse {

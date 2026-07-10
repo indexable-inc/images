@@ -3,7 +3,9 @@ defmodule SymphonyElixirWeb.Layouts do
 
   use Phoenix.Component
 
-  @spec root(map()) :: Phoenix.LiveView.Rendered.t()
+  alias Phoenix.LiveView.Rendered
+
+  @spec root(map()) :: Rendered.t()
   def root(assigns) do
     assigns = assign(assigns, :csrf_token, Plug.CSRFProtection.get_csrf_token())
 
@@ -227,7 +229,7 @@ defmodule SymphonyElixirWeb.Layouts do
     """
   end
 
-  @spec app(map()) :: Phoenix.LiveView.Rendered.t()
+  @spec app(map()) :: Rendered.t()
   def app(assigns) do
     # Every call site passes active_tab explicitly; default to :ir if
     # someone forgets, using Map.put_new (not assign_new, which expects a

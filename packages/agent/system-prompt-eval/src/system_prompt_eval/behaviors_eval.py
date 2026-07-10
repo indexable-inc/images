@@ -22,6 +22,7 @@ NAME = "behaviors"
 def run(ctx: EvalContext, *, tasks_path: Path | None = None, behaviors_path: Path | None = None) -> EvalReport:
     behaviors = data.load_behaviors(behaviors_path)
     tasks = data.load_tasks(tasks_path)
+    data.validate_expects(tasks, behaviors)
     if ctx.limit is not None:
         tasks = tasks[: ctx.limit]
 

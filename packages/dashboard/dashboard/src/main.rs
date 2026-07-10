@@ -211,6 +211,7 @@ fn demo_panes(tick: u64) -> Vec<Pane> {
             alive: true,
             // A green "tick" line, exercising the SGR renderer.
             screen: format!("\x1b[32mtick {tick}\x1b[0m\n{bar}\nany resource is a pane"),
+            scrollback: format!("previous tick {}", tick.saturating_sub(1)),
             cursor_row: 0,
             cursor_col: 0,
             cursor_visible: false,
@@ -256,6 +257,9 @@ fn demo_panes(tick: u64) -> Vec<Pane> {
             running,
             ok: if running { None } else { Some(true) },
             duration_ms: if running { None } else { Some(420) },
+            topic: Some("demo".to_owned()),
+            line: if running { Some(2) } else { None },
+            error_line: None,
             // The loop's prints all come from the second source line.
             trace: if running {
                 Vec::new()

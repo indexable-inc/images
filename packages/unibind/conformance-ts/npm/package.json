@@ -1,0 +1,20 @@
+{
+  "name": "@indexable/unibind-conformance",
+  "version": "0.1.0",
+  "description": "Conformance addon for the unibind ts backend; test-only, never published.",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "native"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "linux"
+  ]
+}

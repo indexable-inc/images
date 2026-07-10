@@ -1,7 +1,8 @@
 defmodule SymphonyElixir.Statistics do
   @moduledoc "Builds deterministic assignment statistics from GitHub and Linear."
 
-  alias SymphonyElixir.{Config, Linear}
+  alias SymphonyElixir.Config
+  alias SymphonyElixir.Linear
 
   @github_graphql_endpoint "https://api.github.com/graphql"
   @github_page_size 100
@@ -124,7 +125,8 @@ defmodule SymphonyElixir.Statistics do
   end
 
   defp github_graphql(token, query, variables) do
-    Req.post(@github_graphql_endpoint,
+    @github_graphql_endpoint
+    |> Req.post(
       headers: [
         {"authorization", "Bearer " <> token},
         {"accept", "application/vnd.github+json"},

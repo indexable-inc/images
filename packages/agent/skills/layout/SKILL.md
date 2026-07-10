@@ -14,7 +14,7 @@ images/                                    # image modules plus optional version
 packages/                                  # repo-owned packages (Rust crates, apps, tools)
 users/<github-username>/                    # personal-but-shareable home-manager modules
 skills/                                    # Claude Code skills, one dir per skill
-agents/                                    # subagent system prompts, one .md per agent
+packages/agent/subagents.nix                 # bundled Claude subagent definitions
 astlog-rules/                              # astlog lint rules (nix + rust) and test fixtures
 ```
 

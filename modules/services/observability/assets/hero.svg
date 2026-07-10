@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 250" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    svg { color: #1f2328; }
+    .muted { fill: #656d76; }
+    .accent { fill: #8250df; }
+    .accent-stroke { stroke: #8250df; }
+    .box { stroke: currentColor; fill: none; }
+    text { fill: currentColor; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    .dashed { stroke: currentColor; fill: none; stroke-dasharray: 4 3; marker-end: url(#arrow); }
+    .arrowhead { fill: currentColor; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { fill: #a371f7; }
+      .accent-stroke { stroke: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arrowhead"/>
+    </marker>
+  </defs>
+
+  <rect class="box" x="20" y="26" width="160" height="34" rx="8"/>
+  <text x="100" y="48" text-anchor="middle" font-size="12">app SDK :4317</text>
+  <rect class="box" x="20" y="92" width="160" height="34" rx="8"/>
+  <text x="100" y="114" text-anchor="middle" font-size="12">hostmetrics</text>
+  <rect class="box" x="20" y="158" width="160" height="34" rx="8"/>
+  <text x="100" y="180" text-anchor="middle" font-size="12">filelog · journald</text>
+
+  <path class="edge" d="M 180 46 L 248 96"/>
+  <path class="edge" d="M 180 109 L 248 109"/>
+  <path class="edge" d="M 180 172 L 248 122"/>
+
+  <rect class="box" x="250" y="82" width="130" height="56" rx="8"/>
+  <text x="315" y="105" text-anchor="middle" font-size="12">agent Collector</text>
+  <text x="315" y="123" text-anchor="middle" font-size="11" class="muted">per app node</text>
+
+  <path class="edge" d="M 380 110 L 448 110"/>
+  <text x="414" y="98" text-anchor="middle" font-size="11" class="muted">OTLP/gRPC</text>
+
+  <rect class="box accent-stroke" x="450" y="82" width="120" height="56" rx="8"/>
+  <text x="510" y="105" text-anchor="middle" font-size="12" class="accent">gateway</text>
+  <text x="510" y="123" text-anchor="middle" font-size="11" class="muted">Collector</text>
+
+  <path class="edge" d="M 570 110 L 618 110"/>
+
+  <rect class="box" x="620" y="76" width="86" height="68" rx="8"/>
+  <text x="663" y="102" text-anchor="middle" font-size="12">ClickHouse</text>
+  <text x="663" y="120" text-anchor="middle" font-size="11" class="muted">otel_*</text>
+
+  <path class="edge" d="M 646 144 L 578 202"/>
+  <rect class="box" x="450" y="200" width="130" height="34" rx="8"/>
+  <text x="515" y="222" text-anchor="middle" font-size="12">Grafana :3000</text>
+
+  <path class="edge" d="M 674 144 L 668 198"/>
+  <rect class="box" x="608" y="200" width="106" height="34" rx="8"/>
+  <text x="661" y="222" text-anchor="middle" font-size="12">ix-observe</text>
+</svg>

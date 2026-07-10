@@ -1,47 +1,46 @@
 /**
-  Build the `health-checks` apps that bring every example fleet up in
-  parallel, verify the declared `ix.healthChecks` via the existing
-  `ix-fleet up` polling loop, and tear the VMs down on completion.
+Build the `health-checks` apps that bring every example fleet up in
+parallel, verify the declared `ix.healthChecks` via the existing
+`ix-fleet up` polling loop, and tear the VMs down on completion.
 
-  Each example contributes a Nushell lifecycle script that sanity-checks
-  for the `ix` binary, force-deletes any leftover VM with the same node
-  name, invokes `fleet.up`, then force-deletes the VM again so the next
-  run starts from scratch and an unrelated VM is never left running
-  after a test.
+Each example contributes a Nushell lifecycle script that sanity-checks
+for the `ix` binary, force-deletes any leftover VM with the same node
+name, invokes `fleet.up`, then force-deletes the VM again so the next
+run starts from scratch and an unrelated VM is never left running
+after a test.
 
-  The fleets passed in carry a `health-check-` prefix applied by
-  `withNodePrefix`, so the names this script force-deletes cannot collide
-  with a production VM that happens to share the example's natural name
-  (`nginx`, `factions`, `file-server`, ...). The prefix is a plan-level
-  rename: the VMs boot the same NixOS closures (and base hostnames) as the
-  unprefixed example fleet, so the two surfaces share one evaluation.
+The fleets passed in carry a `health-check-` prefix applied by
+`withNodePrefix`, so the names this script force-deletes cannot collide
+with a production VM that happens to share the example's natural name
+(`nginx`, `factions`, `file-server`, ...). The prefix is a plan-level
+rename: the VMs boot the same NixOS closures (and base hostnames) as the
+unprefixed example fleet, so the two surfaces share one evaluation.
 
-  Returns an attrset with two front-ends over the same lifecycle scripts:
+Returns an attrset with two front-ends over the same lifecycle scripts:
 
-  - `dag`: the default `nix run .#health-checks` entry point. Runs the
-    lifecycles in parallel via `dag-runner`, surfaces an inline indicatif
-    spinner per task on a TTY (line output otherwise), captures stdout
-    and stderr so failed nodes' logs are dumped at the end, and exits
-    with the worst node exit code. Pass `--output json` to get an NDJSON
-    event stream instead. This is the headless/CI path.
-  - `zellij`: the `nix run .#health-checks-zellij` entry point. Launches
-    a zellij session with one tab per example fleet so each lifecycle's
-    output stays in its own scrollback while it runs. No aggregated exit
-    code (zellij exits 0 when the operator quits the session), so reserve
-    this for interactive triage rather than pass/fail gating.
+- `dag`: the default `nix run .#health-checks` entry point. Runs the
+  lifecycles in parallel via `dag-runner`, surfaces an inline indicatif
+  spinner per task on a TTY (line output otherwise), captures stdout
+  and stderr so failed nodes' logs are dumped at the end, and exits
+  with the worst node exit code. Pass `--output json` to get an NDJSON
+  event stream instead. This is the headless/CI path.
+- `zellij`: the `nix run .#health-checks-zellij` entry point. Launches
+  a zellij session with one tab per example fleet so each lifecycle's
+  output stays in its own scrollback while it runs. No aggregated exit
+  code (zellij exits 0 when the operator quits the session), so reserve
+  this for interactive triage rather than pass/fail gating.
 */
 {
   lib,
   pkgs,
+  kdl,
   writeNushellApplication,
   dagRunner,
-}:
-{
+}: {
   exampleFleets,
   exampleNames ? lib.attrNames exampleFleets,
-}:
-let
-  jsonFormat = pkgs.formats.json { };
+}: let
+  jsonFormat = pkgs.formats.json {};
 
   ixTokenCheck = ''
     let ix_token = ($env.IX_TOKEN? | default "" | str trim)
@@ -66,18 +65,20 @@ let
     $env.IX_TOKEN = $ix_token
   '';
 
-  mkLifecycle =
-    name: fleet:
-    let
-      # Pin each node's OCI image as a build-time dep of the lifecycle script
-      # so `nix run .#health-checks` realises every image before the runner
-      # starts. Without this, `ix-fleet up` calls `nix-store --realise` on the
-      # image .drv at runtime, which then triggers an x86_64-linux build chain
-      # on whatever host launched the runner. Surfacing the realise step as a
-      # normal Nix build fails fast at one well-known boundary instead of five
-      # parallel runners independently rediscovering a broken remote builder.
-      pinnedImages = lib.attrValues fleet.packages;
-    in
+  mkLifecycle = name: fleet: let
+    # Pin each node's NixOS system closure as a build-time dep of the
+    # lifecycle script so `nix run .#health-checks` realises every closure
+    # before the runner starts. Without this, `ix-fleet up`'s runtime
+    # `nix build` of the replacement image triggers an x86_64-linux build
+    # chain on whatever host launched the runner. Surfacing the build as a
+    # normal Nix dep fails fast at one well-known boundary instead of five
+    # parallel runners independently rediscovering a broken remote builder.
+    # Deliberately the toplevels, NOT `fleet.packages`: the CAS images those
+    # hold need the ix-side `casImageBuilder` threaded in (cas-layer.nix),
+    # which this repo's example fleets do not have, and even referencing
+    # their outPaths here would force that eval during `nix flake check`.
+    pinnedSystems = lib.attrValues fleet.systemPackages;
+  in
     writeNushellApplication pkgs {
       name = "health-check-${name}";
       text = ''
@@ -100,11 +101,11 @@ let
 
           ${ixTokenCheck}
 
-          let pinned_images = ${builtins.toJSON pinnedImages}
+          let pinned_systems = ${builtins.toJSON pinnedSystems}
           let plan_data = (open ${fleet.plan})
           let nodes = $plan_data.order
 
-          print $"[${name}] ($pinned_images | length) image\(s) pinned in store; removing any pre-existing VMs: ($nodes | str join ', ')"
+          print $"[${name}] ($pinned_systems | length) system closure\(s) pinned in store; removing any pre-existing VMs: ($nodes | str join ', ')"
           for node_name in $nodes {
             do --ignore-errors { ^ix rm --force $node_name } | ignore
           }
@@ -127,14 +128,18 @@ let
     };
 
   lifecycles = lib.mapAttrs mkLifecycle exampleFleets;
-  lifecyclePackages = lib.mapAttrs' (
-    name: lifecycle: lib.nameValuePair "health-check-${name}" lifecycle
-  ) lifecycles;
+  lifecyclePackages =
+    lib.mapAttrs' (
+      name: lifecycle: lib.nameValuePair "health-check-${name}" lifecycle
+    )
+    lifecycles;
 
   spec = {
-    nodes = lib.mapAttrs (_name: lifecycle: {
-      command = [ (lib.getExe lifecycle) ];
-    }) lifecycles;
+    nodes =
+      lib.mapAttrs (_name: lifecycle: {
+        command = [(lib.getExe lifecycle)];
+      })
+      lifecycles;
   };
 
   specFile = jsonFormat.generate "health-checks-dag.json" spec;
@@ -142,7 +147,7 @@ let
   dag = writeNushellApplication pkgs {
     name = "health-checks";
     meta.description = "Boot every example fleet in parallel, run its health checks, and tear the VMs down";
-    runtimeInputs = [ dagRunner ];
+    runtimeInputs = [dagRunner];
     text = ''
       # nu
       def --wrapped main [...args] {
@@ -154,28 +159,24 @@ let
   # One tab with a pane per lifecycle so the whole run is visible at once.
   # Panes stay open after their command exits so the post-mortem output is
   # reachable; quit the session with Ctrl+q.
-  zellijLayout = pkgs.writeText "health-checks-layout.kdl" ''
-    layout {
-      tab name="health-checks" {
-    ${lib.concatStringsSep "\n" (
-      map (
-        name:
-        let
-          lifecycle = lifecycles.${name};
-        in
-        ''
-          pane name="${name}" command="${lib.getExe lifecycle}"
-        ''
-      ) exampleNames
-    )}
-      }
-    }
-  '';
+  zellijLayout = kdl.generate pkgs "health-checks-layout.kdl" {
+    layout.tab = {
+      _props.name = "health-checks";
+      _children =
+        map (name: {
+          pane._props = {
+            inherit name;
+            command = lib.getExe lifecycles.${name};
+          };
+        })
+        exampleNames;
+    };
+  };
 
   zellij = writeNushellApplication pkgs {
     name = "health-checks-zellij";
     meta.description = "Boot every example fleet, run its health checks, and view each in a zellij pane";
-    runtimeInputs = [ pkgs.zellij ];
+    runtimeInputs = [pkgs.zellij];
     text = ''
       # nu
       def main [] {
@@ -185,8 +186,7 @@ let
       }
     '';
   };
-in
-{
+in {
   inherit
     dag
     lifecyclePackages

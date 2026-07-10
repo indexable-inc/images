@@ -25,9 +25,14 @@
 
 # Index
 
-`index` is a shared, open-source monorepo of developer tools that anyone can
-modify. The bet: one repo everyone can edit is the fastest way for all of us to
-move. Add something useful, and everyone gets it.
+<p align="center">
+  <img src="doc/assets/hero.svg" width="760" alt="Three contributors commit tools into one shared Nix flake; everyone runs everything with nix run." />
+</p>
+
+Ever built a great little tool and watched it die on your laptop? `index` is a
+shared, open-source monorepo of developer tools that anyone can modify. The
+bet: one repo everyone can edit is the fastest way for all of us to move. Add
+something useful, and everyone gets it.
 
 It is one Nix flake holding ~45 packages (mostly Rust, with Python, Elixir,
 TypeScript, and Svelte where they fit), a corpus of NixOS modules, fleet
@@ -35,13 +40,29 @@ examples, and the agent infrastructure that ties them together. Most packages ha
 a from-source page under [`doc/`](doc/index.md). To explore, point Claude at
 this repo and ask whether anything here is useful for you.
 
+## Quickstart
+
+All you need is [Nix](https://nixos.org/download/) with flakes enabled:
+
+```sh
+git clone https://github.com/indexable-inc/index
+cd index
+nix flake show          # list every package, module, and check
+nix run .#lint          # alejandra, statix, deadnix, astlog (nix + rust)
+nix run .#reel          # regenerate the demo above
+nix build .#nginx-lifecycle-up   # realize one example fleet wrapper
+```
+
+`nix flake show` prints the whole map — every package, NixOS module, and
+check in the flake; the sections below are the guided tour of that same list.
+
 ## What's inside
 
 ### Agent infrastructure
 
 The harness, governance, and tuning loop that runs coding agents (Claude Code and
 Codex) across the fleet under one set of rules. The house system prompt is
-[`system-prompt.nix`](packages/agent/system-prompt.nix), an ordered set of named,
+[`prompt/rules.nix`](packages/agent/prompt/rules.nix), an ordered set of named,
 reviewable bindings rather than a text blob, so behavior changes land as PR diffs.
 
 | Package | What it does |
@@ -112,15 +133,6 @@ reusable, auto-discovered [NixOS modules](modules/) and declarative fleet helper
 | [`ix-fleet`](packages/ix-fleet/) | Drives declarative multi-VM rollouts |
 | [`dag-runner`](packages/dag-runner/) | Executes JSON task DAGs for parallel health checks |
 
-## Quick check
-
-```sh
-nix flake show          # list every package, module, and check
-nix run .#lint          # nixfmt, statix, deadnix, astlog (nix + rust)
-nix build .#nginx-lifecycle-up   # realize one example fleet wrapper
-nix run .#reel          # regenerate the demo above
-```
-
 ## Layout
 
 | Path | Contents |
@@ -134,7 +146,7 @@ nix run .#reel          # regenerate the demo above
 | [`lib/`](lib/) | Shared Nix APIs and reusable builders only; package-specific glue stays with its package |
 | [`doc/`](doc/index.md) | From-source documentation, one page per package |
 | [`examples/`](examples/) | Standalone consumer fleets and copyable `mkDev` composition patterns |
-| [`rfcs/`](rfcs/) | Architecture decision records |
+| [`packages/site/src/lib/rfcs/`](packages/site/src/lib/rfcs/) | Architecture decision records (RFCs, published on the site) |
 
 ## Feedback
 

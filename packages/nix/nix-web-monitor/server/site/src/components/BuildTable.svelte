@@ -84,8 +84,13 @@
 
   /// Placeholder shown when no build rows exist. A finished run gets a terminal
   /// message (everything substituted, or stopped before building) instead of a
-  /// "waiting" one that wrongly implies work is still pending.
+  /// "waiting" one that wrongly implies work is still pending. An empty command
+  /// label means serve mode (`nwm serve`): nothing is wrapped, the machine
+  /// panels are the content, so no build phase is ever coming. (The pre-seed
+  /// snapshot is also command-less, so a connecting client briefly shows the
+  /// same message; the seed replaces it.)
   const emptyLabel = $derived.by((): string => {
+    if (command === '') return 'no wrapped command';
     if (finished) return exitCode === 0 ? 'nothing to build' : 'stopped before building';
     if (expectedBuilds > 0) {
       return `waiting for ${String(expectedBuilds)} build${expectedBuilds === 1 ? '' : 's'}`;

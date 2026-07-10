@@ -1,0 +1,134 @@
+---
+id: 0001-router-vm
+number: '0001'
+title: User-built router VM for fleet networking policy
+status: Draft
+authors: andrewgazelka
+created: '2026-05-13'
+updated: '2026-05-13'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+---
+
+## Summary
+
+Let a fleet designate one node in a VM group as the group's router. ix wires the other members' default route through that node and turns their internet egress off; the router VM owns all networking policy (NAT, firewall, L7 termination, VPN, deep packet inspection, whatever) as ordinary NixOS config inside the guest. ix does not learn about ports, protocols, or L3+ semantics. A stock `services.ix-router` module covers the common "NAT + nftables allowlist" case so the first ten minutes are not "write nftables in Nix"; users override or replace for everything else.
+
+## Motivation
+
+Two forces meet:
+
+1. The repo's standing rule that **networking policy lives in the image, not in ix** (see `AGENTS.md` § VM networking, and the corresponding line in `ix/AGENTS.md` under "Architecture that must not drift"). ix exposes coarse primitives (group membership, internet ingress/egress on/off); per-port filtering, L7 rules, WAF, rate limiting, and mTLS termination are user concerns.
+2. The repo's **trust model** (`AGENTS.md` § Trust model). An agent inside a VM has root and is goal-optimizing. It can flip `networking.firewall.enable`. In-VM firewall config is convenience for a cooperative guest, not a containment boundary. Anything that must hold against a misbehaving in-VM process belongs outside the VM.
+
+Together, these say: when a port must stay closed against a rogue guest, the enforcement point is *another* VM the agent has no shell on. Today the repo documents the rule but does not provide a low-friction path to actually build such a node. Users who want the AWS-reflex "expose only 443" shape are on their own. PR #43 tried to fill the gap with a stock Caddy reverse-proxy image; that PR was closed in favor of this design because L7 is too narrow: a router VM also wants L4 NAT, conntrack, optional WireGuard, optional FRR/BGP for multi-group routing, and the same module shape should cover all of it.
+
+The opportunity is that **Linux already solves this problem**. If ix hands a router VM an ordinary ethernet interface into the group, every off-the-shelf piece of Linux networking software works against it (`nftables`, `iproute2`, `frr`, `bird`, `wireguard-tools`, `conntrackd`, custom eBPF). ix does not need to model any of it.
+
+## Detailed design
+
+### Fleet-layer primitive
+
+`lib/fleet.nix` learns a `router` field per group:
+
+```nix
+{
+  groups.web = {
+    nodes = [ "api" "db" "frontend" ];
+    router = "gw";
+    internet = "via-router";
+  };
+  nodes = {
+    gw = ./images/services/router;
+    api = ./images/services/api;
+    db = ./images/services/db;
+    frontend = ./images/services/frontend;
+  };
+}
+```
+
+Semantics when `router = "gw"` is set on a group:
+
+- `gw` joins the group like any other member (gets a group-local interface).
+- Non-router members of the group have their default route rendered to point at `gw`'s group-local address. Concretely this is a `networking.defaultGateway` (or equivalent `systemd-networkd` route) populated at fleet eval time. The address itself comes from ix's existing group-IP allocation; the fleet helper just reads it.
+- Non-router members get `internet egress = false` from ix (north-south is closed at the host primitive).
+- `gw` keeps `internet egress = true` so it can NAT outbound traffic for the group.
+- `internet = "via-router"` is the new value for the existing group-level internet flag, in addition to today's `on`/`off`.
+
+### services.ix-router module
+
+A new module under `modules/services/router.nix`, registered in `modules/default.nix`. Shape mirrors `services.gateway` (Caddy) one layer down:
+
+```nix
+services.ix-router = {
+  enable = true;
+  upstream = "eth0";
+  # Optional: forward allowlist. Anything not matched is dropped.
+  forward = {
+    "api" = { dst = "10.0.0.2"; ports = [ 443 ]; proto = "tcp"; };
+    "db"  = { dst = "10.0.0.3"; ports = [ 5432 ]; proto = "tcp"; };
+  };
+  masquerade = true;
+};
+```
+
+When enabled, the module:
+
+- Sets `boot.kernel.sysctl."net.ipv4.ip_forward" = 1` and the IPv6 equivalent.
+- Brings up `networking.nftables.enable = true` with a `forward` chain that defaults to drop and admits entries from `services.ix-router.forward` plus any `extraInputRules`-style escape hatch (typed where possible, freeform-submodule via `pkgs.formats.*` per RFC 0042; **no** stringly `extraConfig` on this module).
+- If `masquerade = true`, adds a `postrouting` rule that NATs the group's source range to `upstream`.
+- Loads `nf_conntrack` and tunes the conntrack table size; sets `net.netfilter.nf_conntrack_max` to something sane for the configured group size.
+
+The module is intentionally narrow. Users who want FRR for BGP, WireGuard for VPN egress, bird for OSPF, Suricata for IDS, or hand-rolled eBPF programs disable `services.ix-router` and write their own NixOS config against the same group interface. The fleet primitive (router designation) and the stock module are decoupled; the primitive does not assume the stock module is enabled.
+
+### Image
+
+`images/services/router/default.nix` ships as the stock router image: enables `services.ix-router` and exposes typical knobs through fleet overrides. Empty `forward = {}` by default so a freshly-tagged `latest` does not silently allow traffic.
+
+### Composition with services.gateway
+
+`services.gateway` (Caddy reverse proxy) and `services.ix-router` are orthogonal modules. Small fleets put both on the router node and run Caddy as the L7 face of the gateway. Larger fleets separate them: router node does L4/NAT only, a backend Caddy node behind it terminates TLS. Both shapes work without changes to either module because the gateway module already opens 80/443 and the router module already permits forward traffic to whatever its `forward` table allows.
+
+### Migration
+
+No existing callers. The closed PR #43 (`services.gateway`) lands or does not land independently; this RFC does not depend on it.
+
+## Drawbacks
+
+- **Single point of failure.** A router node going down severs north-south for the whole group. Mitigations (VRRP/keepalived, ECMP, two router nodes) work on top of this primitive but are explicitly out of scope for v1.
+- **Performance bottleneck.** All north-south traffic for the group funnels through one node's CPU. For most ix workloads this is fine; for high-throughput edge nodes the answer is again HA or sharding, not in-line firewall on every VM.
+- **Boot ordering.** Backend VMs that come up before the router cannot reach the internet. Solvable with `network-online.target` discipline and retries on the backend side; the router image should be the first node in the group's boot order where ix exposes that knob.
+- **Operator lockout.** A misconfigured router can lock the operator out of every VM in the group. Recovery path needed: ix CLI should provide a way to bypass the designated router for `ix shell`/`ix switch` traffic from the host. This is a real ask of the ix team and is the load-bearing open question below.
+- **Adds a network hop.** Tens of microseconds of latency inside the same datacenter. Acceptable for the use cases this is aimed at.
+
+## Alternatives
+
+- **ix host-side firewall driven by `networking.firewall.allowedTCPPorts`.** Rejected. Violates the "Architecture that must not drift" rule on the ix side and the trust model section in `AGENTS.md`. ix would have to learn per-port intent, which is the thing the repo has explicitly committed to not doing.
+- **TUN-style L3-only primitive.** Rejected. TUN drops ARP, broadcast, ethertype, and the ability to run any off-the-shelf Linux routing daemon. The "no special application-side logic" goal lands on TAP/L2. Users who specifically want an L3 tunnel can `ip tuntap add` inside their VM; ix does not need to model VPNs.
+- **Parallel ix option for exposed ports** (e.g. `ix.exposedPorts`). Rejected. The right way to declare "this VM uses port 25565" is `networking.firewall.allowedTCPPorts = [25565]`, the standard NixOS option, co-located with the service that needs the port. Inventing a parallel option forces users to keep two lists in sync.
+- **Stock Caddy reverse-proxy image only** (PR #43). Rejected as the primary path. L7 is too narrow; users also want L4 NAT, VPN egress, BGP, IDS. Caddy reverse-proxy is one valid composition on top of this design and can land as its own module later.
+- **Do nothing.** The trust-model section of `AGENTS.md` already names the gateway/router VM as the place where enforcement lives. Leaving users to assemble it from scratch every time is the current state and it is producing real PRs that try to fill the gap.
+
+## Prior art
+
+- **AWS NAT instance.** An ordinary EC2 instance plugged into a private subnet and a public subnet, with iptables for filtering and the private subnet's default route pointed at it. Exactly the shape proposed here, at AWS-flavored scale.
+- **OpenStack neutron router.** A VM with a routed interface per tenant network; OpenStack's L3 agent renders nftables/iptables into it. Similar split between platform primitive (network attachment) and tenant policy (rules inside the router).
+- **Proxmox + OPNsense.** The "buy a thin VM, run OPNsense or pfSense, point your other VMs at it" pattern. Same idea, with a heavier off-the-shelf appliance.
+- **Tailscale subnet routers.** A node in a Tailscale tailnet advertises one or more subnets and forwards traffic into them. Different mechanism (no NAT, identity-based ACL) but the same architectural shape: one designated node, ordinary OS userspace, no platform-side L3 policy.
+- **NixOS router cookbook entries.** Existing community write-ups for using NixOS as a home router give the basic systemd-networkd + nftables + ip_forward pattern; `services.ix-router` is essentially the curated repo-house version of that.
+
+## Unresolved questions
+
+1. **Granularity: per-group vs per-fleet.** Per-group lets each group have its own router and isolates blast radius. Per-fleet is simpler and probably covers 80% of users. Leaning per-group; want pushback before committing.
+2. **Underlying ix capability.** Does ix today actually allow a designated node to be the L2 next-hop for other nodes in a group? If groups today are fully ix-managed L2 segments with no escape hatch for "this member is special," the fleet-layer change is cheap; otherwise it is a conversation with the ix team and an ix-side primitive. Need to confirm before implementation.
+3. **Operator recovery path.** What is the supported way to reach a VM whose router is misconfigured? Probably host-side bypass for `ix shell`/`ix switch`, but that has to come from ix. The RFC depends on it.
+4. **IPv6.** All the above is written assuming v4. The mechanics translate (`net.ipv6.conf.all.forwarding`, nftables `ip6` chains, NAT66 only if you actually need it) but the fleet-layer wiring needs to allocate v6 too. Confirm ix exposes group-local v6 addresses before committing the design to dual-stack from day one.
+5. **Boot-order signaling.** Does the fleet layer have a way to say "boot `gw` before the other members of `web`"? If not, backend VMs need retry semantics on `network-online.target`, which is fine but should be called out in the stock image.
+
+## Future possibilities
+
+- **HA router pairs.** VRRP or ECMP across two router nodes. Independent design; fits on this primitive.
+- **East-west policy.** Today the proposal only governs north-south. A second router-VM-per-group could mediate cross-VM traffic for groups that want microsegmentation, but this is a v3 problem.
+- **L7 composition library.** Once the L4 router is the standard piece, common L7 patterns (TLS-terminating gateway, OIDC auth proxy, rate-limiter) ship as composable modules a user can drop into the router image or a sibling node.
+- **Out-of-fleet routers.** A router VM that lives in one fleet but is the designated north-south point for VMs in another fleet. Useful for shared-edge architectures. Out of scope for v1 but the primitive does not preclude it.

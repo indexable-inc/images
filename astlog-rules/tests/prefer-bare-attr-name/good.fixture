@@ -1,0 +1,11 @@
+{
+  core = {
+    threadedRendering = "1";
+    foo-bar = "2";
+    "needs space" = "3";
+    "${dynamic}" = "4";
+    "prefix-${dynamic}" = "5";
+    "1" = "6";
+    "if" = "7";
+  };
+}

@@ -9,6 +9,7 @@ text). The kernel-side runtime also emits a structured summary under the
 from __future__ import annotations
 
 import base64
+import json
 import os
 import re
 
@@ -49,6 +50,12 @@ JOB_MIME = "application/x-ix-job+json"
 # server unpacks it to real content blocks; it never reaches the dashboard.
 IX_LLM_MIME = "application/x-ix-llm+json"
 
+# The mime a Result uses to carry a structured human view: a
+# ``{"renderer": <name>, "data": <json>}`` spec that persists with the run's
+# stored outputs (a CAS blob on the run entity, see store.finish) for a
+# view-aware frontend to render with its matching component.
+IX_VIEW_MIME = "application/x-ix-view+json"
+
 Content = mcp_types.TextContent | mcp_types.ImageContent
 
 
@@ -82,6 +89,11 @@ def to_mcp(outputs: list[dict]) -> list[Content]:
             if IX_LLM_MIME in data:
                 # A Result's explicit model view: its text, then its images.
                 spec = data[IX_LLM_MIME]
+                if isinstance(spec, str):
+                    try:
+                        spec = json.loads(spec)
+                    except json.JSONDecodeError:
+                        spec = None
                 if isinstance(spec, dict):
                     if spec.get("text"):
                         content.append(text(spec["text"]))

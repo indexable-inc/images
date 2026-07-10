@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 230" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    svg { color: #1f2328; }
+    .muted { fill: #656d76; }
+    .accent { fill: #8250df; }
+    .box { stroke: currentColor; fill: none; }
+    text { fill: currentColor; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { fill: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+            orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <rect class="box" x="24" y="80" width="176" height="56" rx="8"/>
+  <text x="112" y="104" text-anchor="middle" font-size="13" font-weight="600">~/.claude transcripts</text>
+  <text x="112" y="122" text-anchor="middle" font-size="11" class="muted">projects/**/*.jsonl</text>
+
+  <line class="edge" x1="200" y1="108" x2="256" y2="108"/>
+  <text x="228" y="90" text-anchor="middle" font-size="11" class="muted">scan</text>
+
+  <rect class="box" x="258" y="80" width="146" height="56" rx="8"/>
+  <text x="331" y="104" text-anchor="middle" font-size="13" font-weight="600">claude -p</text>
+  <text x="331" y="122" text-anchor="middle" font-size="11" class="muted">distill + judge</text>
+
+  <line class="edge" x1="404" y1="94" x2="456" y2="66"/>
+  <text x="430" y="60" text-anchor="middle" font-size="11" class="muted">lessons</text>
+  <line class="edge" x1="404" y1="122" x2="456" y2="146"/>
+  <text x="434" y="156" text-anchor="middle" font-size="11" class="muted">verdicts</text>
+
+  <rect class="box" x="458" y="40" width="238" height="46" rx="8"/>
+  <text x="577" y="68" text-anchor="middle" font-size="12" font-weight="600">facts/&lt;user&gt;/&lt;project&gt;.md</text>
+
+  <rect class="box" x="458" y="122" width="238" height="58" rx="8"/>
+  <text x="577" y="145" text-anchor="middle" font-size="12" font-weight="600">corpus parquet slices</text>
+  <text x="577" y="164" text-anchor="middle" font-size="11" class="muted">distilled_facts · session_outcomes</text>
+
+  <line class="edge" x1="577" y1="180" x2="577" y2="204"/>
+  <text x="590" y="218" text-anchor="middle" font-size="12" class="accent">--upload → fold → search.semantic(...)</text>
+</svg>

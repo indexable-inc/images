@@ -1,0 +1,84 @@
+---
+id: 0003-mcp-composable-clis
+number: '0003'
+title: MCP capabilities as composable CLIs
+status: Draft
+authors: andrewgazelka
+created: '2026-06-02'
+updated: '2026-06-02'
+trackingIssue: '#598'
+supersedes: null
+supersededBy: null
+---
+
+## Summary
+
+Adopt a contract for every integration we reach over MCP: the behavior lives in a Rust core crate, and that crate is exposed through two thin surfaces, an MCP server binding and an `index` subcommand. Anything an agent can call as an MCP tool is then also a process that a human can pipe in a shell and a script can run in CI, with no second implementation. New integrations start as a core crate, not as an MCP-only server. The first concrete target is email, tracked separately in [#599](https://github.com/indexable-inc/index/issues/599).
+
+## Motivation
+
+The daily MCP set is roughly six servers: `exa`, `index`, `linear`, `notion`, `slack`, and `superhuman-mail`. They are uneven. `index` already ships its capability as a CLI and a tool: `search.semantic` is reachable as the `search_semantic` MCP tool and as `nix run .#search`, backed by one `search`/`search-core` crate. `notion` has the official `ntn` CLI. At the other end, `exa` and `superhuman-mail` are MCP-only: the capability exists solely behind the MCP transport.
+
+An MCP-only capability has three costs. It is not pipeable, so a human cannot compose it with the rest of the shell and a CI job cannot script it. It is awkward to test, because exercising the behavior means standing up an MCP client rather than running a binary and asserting on stdout. And it pushes us toward per-surface reimplementation: when we later want the same behavior on the command line, the path of least resistance is a second client against the same upstream rather than one owned core.
+
+This cuts against the repo's stated direction. `AGENTS.md` says to implement core logic once in Rust and expose it to other ecosystems through thin bindings that carry no domain logic of their own. `index`/`search` already proves the shape works for one capability. This RFC generalizes it so the next integration does not relearn it.
+
+## Detailed design
+
+### One core, two thin surfaces
+
+Each integration is one crate that owns the domain logic: the upstream API client, the request and response types, auth, retries, and error mapping. That crate exposes a typed in-process API and nothing user-facing. Two thin layers depend on it:
+
+- **CLI.** An `index` subcommand (for example `index mail`, `index web`) that parses arguments, calls the core, and prints human or machine-readable output per the `user-facing-commands` conventions. It carries no domain logic beyond argument shaping.
+- **MCP binding.** A server that maps each tool call onto the same core API. Tool input and output schemas are derived from the core types, so the tool surface and the CLI surface cannot drift.
+
+The rule for new work: write the core crate first. An MCP server or a CLI that contains domain logic directly, rather than wrapping a core crate, does not pass review. This mirrors how `search`/`search-core` is split today.
+
+### Composability is the point
+
+Once the capability is a process, it joins the shell. `index web "query" --json | jq ...` and `... | index linear create` become ordinary pipelines, and the same binary is callable from a CI step. The agent gains a choice rather than losing one: it can invoke the capability over MCP, or run the CLI through Bash, whichever fits the task. Notably, Claude Code streams Bash output live but collapses MCP output until the call returns (issues 31893, 51713), so for long-running or progress-heavy operations the CLI path is strictly better for the operator watching it.
+
+### Auth and secrets
+
+Both surfaces read the same credential from the same place, so there is one auth story per integration, not one per surface. Credentials follow the existing split: shared team keys in `rbw` (Vaultwarden), personal keys in `op` (1Password), referenced not inlined. Where an integration runs on the fleet, per-person identity follows the pattern the Slack MCP already uses (a per-user OAuth token) rather than a single shared bearer, unless a shared service identity is explicitly intended.
+
+### What changes for the existing six
+
+Nothing is forced to migrate at once. The contract applies to new integrations immediately and gives a ranking for retrofitting the current set. `index` already conforms. `exa` and `superhuman-mail` are the widest gaps because they have no CLI today, so they are the natural first retrofits. `linear`, `notion`, and `slack` have partial CLI stories already and can follow.
+
+### First concrete case: email
+
+Email is the motivating instance and is specified in its own issue, [#599](https://github.com/indexable-inc/index/issues/599), so this RFC does not duplicate it. In short: a `mail-core` crate over the Gmail and Calendar APIs with OAuth, a thin MCP binding matching the surface `superhuman-mail` exposes today, and an `index mail` CLI over the same crate. It is the proof that the contract in this RFC produces a real, dogfoodable integration and not just a principle.
+
+## Drawbacks
+
+- **More upfront cost per integration.** A core crate plus two bindings is more scaffolding than a single MCP server wrapping a vendor SDK. The payoff only arrives once the capability is used from more than one surface, which is not every integration.
+- **We own more code.** Going direct to an upstream API (rather than brokering through a vendor MCP) means we own the client, the auth refresh, and the error mapping. For a capability where a maintained vendor MCP already exists and we never want a CLI, wrapping it is genuinely cheaper, and the RFC should not pretend otherwise.
+- **Schema-derivation coupling.** Deriving MCP tool schemas from core types keeps the surfaces in sync but couples the tool wire format to internal type shape. Renaming a core field becomes a tool-surface change.
+
+## Alternatives
+
+- **Do nothing.** Keep adding MCP-only servers. Cheapest per server, but every capability stays locked behind the MCP transport, untestable as a binary and impossible to pipe, and the per-surface reimplementation pressure stays.
+- **CLI-only, no MCP.** Ship only the `index` subcommand and let the agent shell out. Simpler, and it preserves composability, but it gives up structured tool schemas, typed arguments, and the MCP affordances the agent already uses well for high-frequency calls.
+- **MCP-only, generate a CLI later if needed.** The status quo for `exa` and `superhuman-mail`. "Later" tends to mean a second client against the same upstream, which is the reimplementation this RFC exists to avoid.
+- **Wrap vendor MCPs uniformly.** Standardize on brokering every capability through a third-party MCP. Lowest code ownership, but no CLI, vendor in the hot path, and identity tied to the vendor account.
+
+## Prior art
+
+- **`search` / `search-core` in this repo.** One core crate, exposed as both the `search_semantic` MCP tool and `nix run .#search`. This RFC generalizes that existing split.
+- **RFC 0002.** The two-layer "generic primitive plus thin lowering modules" topology for third-party integrations is the same instinct applied to billable partner services: own the contract once, keep the per-provider surface thin.
+- **`ntn` (Notion) and the hosted Slack MCP.** Existing examples of the same capability reachable from more than one surface, and of the per-user-OAuth identity model on the fleet.
+- **The `git` and `gh` CLIs.** Long-lived proof that a capability exposed as a composable command outlives any single client wrapped around it.
+
+## Unresolved questions
+
+1. **Retrofit scope.** Do we commit to retrofitting `exa` and `superhuman-mail` to the contract, or only apply it to new integrations and leave the existing six as-is until each is touched for another reason?
+2. **Schema derivation.** Derive MCP tool schemas from core types automatically, accepting the coupling, or hand-write tool schemas per integration to decouple the wire format from internal types?
+3. **Crate granularity.** One core crate per integration, or per capability within a vendor (for example `mail-core` versus splitting calendar into its own crate)?
+4. **Fleet identity default.** Per-person OAuth by default for fleet-delivered integrations, or a shared service identity unless per-person is requested?
+
+## Future possibilities
+
+- A small shared helper crate for the MCP-binding boilerplate (tool registration, schema derivation, error mapping) so each integration's binding is only its tool list.
+- A conformance check that fails CI if an integration ships an MCP tool with no corresponding CLI subcommand, or vice versa, keeping the two surfaces honest over time.
+- Folding the resulting CLIs into the same machine-readable output conventions so agent and human pipelines share one parsing story.

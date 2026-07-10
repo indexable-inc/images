@@ -17,9 +17,9 @@
   lib,
   pkgs,
   ...
-}:
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     mkEnableOption
     mkIf
     mkOption
@@ -27,12 +27,11 @@ let
     types
     ;
   cfg = config.services.subagent-cache;
-in
-{
+in {
   options.services.subagent-cache = {
     enable = mkEnableOption "the content-validated subagent investigation cache daemon (ENG-4665)";
 
-    package = mkPackageOption pkgs "subagent-cache" { };
+    package = mkPackageOption pkgs "subagent-cache" {};
 
     bind = mkOption {
       type = types.str;
@@ -49,8 +48,8 @@ in
       # Runtime path strings, not `types.path`: these are provided at boot by a
       # secret mechanism outside the image, not build inputs.
       type = types.listOf types.str;
-      default = [ ];
-      example = [ "/run/subagent-cache/db.env" ];
+      default = [];
+      example = ["/run/subagent-cache/db.env"];
       description = ''
         systemd `EnvironmentFile` paths layered onto the daemon, for the two
         secrets it reads from the environment: `DATABASE_URL` (the Postgres
@@ -104,9 +103,9 @@ in
   config = mkIf cfg.enable {
     systemd.services.subagent-cache = {
       description = "Content-validated subagent investigation cache (ENG-4665)";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "network-online.target" ];
-      wants = [ "network-online.target" ];
+      wantedBy = ["multi-user.target"];
+      after = ["network-online.target"];
+      wants = ["network-online.target"];
       environment = {
         SUBAGENT_CACHE_BIND = cfg.bind;
         SUBAGENT_CACHE_TTL_DAYS = toString cfg.ttlDays;

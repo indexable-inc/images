@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>efx run report</title>
+<style>
+  :root {
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --border: rgba(11, 11, 11, 0.10);
+    --executed: #2a78d6;
+    --executed-wash: #e6f0fc;
+    --cached: #0ca30c;
+    --cached-wash: #e7f5e7;
+    --failed: #d03b3b;
+    --failed-wash: #fbe9e9;
+    --skipped: #898781;
+    --skipped-wash: #f0efec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #0d0d0d;
+      --surface: #1a1a19;
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --border: rgba(255, 255, 255, 0.10);
+      --executed: #3987e5;
+      --executed-wash: #14263d;
+      --cached: #0ca30c;
+      --cached-wash: #12280f;
+      --failed: #d03b3b;
+      --failed-wash: #331314;
+      --skipped: #898781;
+      --skipped-wash: #262624;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--ink);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 980px; margin: 0 auto; padding: 32px 24px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0; }
+  .subtitle { color: var(--ink-2); margin: 0 0 12px; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 0 0 20px; color: var(--ink-2); font-size: 13px; }
+  .key { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .executed .dot, .key.executed .dot { background: var(--executed); }
+  .cached .dot, .key.cached .dot { background: var(--cached); }
+  .failed .dot, .key.failed .dot { background: var(--failed); }
+  .skipped .dot, .key.skipped .dot { background: var(--skipped); }
+  .run {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin: 0 0 24px;
+  }
+  .run header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
+  .when { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .tiles { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+  .tile {
+    display: inline-flex; align-items: center; gap: 8px;
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 12px; background: var(--page);
+  }
+  .tile .value { font-size: 18px; font-weight: 650; }
+  .tile .label { color: var(--ink-2); font-size: 12px; }
+  .dag { overflow-x: auto; padding: 4px 0 8px; }
+  svg { display: block; }
+  .edge { fill: none; stroke: var(--grid); stroke-width: 1.5; }
+  .arrow { fill: var(--grid); stroke: none; }
+  .node .box { fill: var(--page); stroke: var(--border); }
+  .node.executed .box { fill: var(--executed-wash); stroke: var(--executed); }
+  .node.cached .box { fill: var(--cached-wash); stroke: var(--cached); }
+  .node.failed .box { fill: var(--failed-wash); stroke: var(--failed); }
+  .node.skipped .box { fill: var(--skipped-wash); stroke: var(--skipped); }
+  .node .accent { display: none; }
+  .node.executed .accent { display: block; fill: var(--executed); }
+  .node.cached .accent { display: block; fill: var(--cached); }
+  .node.failed .accent { display: block; fill: var(--failed); }
+  .node.skipped .accent { display: block; fill: var(--skipped); }
+  .node .name { font: 600 13px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--ink); }
+  .node .meta { font: 11px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--ink-2); }
+  .reasons { border-collapse: collapse; width: 100%; margin-top: 4px; font-size: 13px; }
+  .reasons th {
+    text-align: left; font-weight: 600; color: var(--muted);
+    border-bottom: 1px solid var(--grid); padding: 4px 12px 6px 0;
+  }
+  .reasons td { padding: 6px 12px 6px 0; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  .reasons tr:last-child td { border-bottom: none; }
+  .ename { font-weight: 600; }
+  .badge {
+    display: inline-flex; align-items: center;
+    border-radius: 999px; padding: 1px 9px; font-size: 12px;
+    border: 1px solid var(--border); color: var(--ink);
+  }
+  .badge.executed { background: var(--executed-wash); border-color: var(--executed); }
+  .badge.cached { background: var(--cached-wash); border-color: var(--cached); }
+  .badge.failed { background: var(--failed-wash); border-color: var(--failed); }
+  .badge.skipped { background: var(--skipped-wash); border-color: var(--skipped); }
+  .allcached { color: var(--ink-2); font-style: italic; }
+  code { background: var(--skipped-wash); border-radius: 4px; padding: 1px 5px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>efx run report</h1>
+  <p class="subtitle">%%RUNS%% run(s) recorded &middot; %%ENTRIES%% journal entr(ies) &middot; an effect re-executes only when its content-addressed identity changes</p>
+  <div class="legend">%%LEGEND%%</div>
+  %%BODY%%
+</main>
+</body>
+</html>

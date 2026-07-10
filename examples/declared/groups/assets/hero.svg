@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 160" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    svg { color: #1f2328; }
+    text { fill: currentColor; }
+    .muted { fill: #656d76; }
+    .box { stroke: currentColor; fill: none; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    .arrow { fill: #1f2328; }
+    .group { stroke: #8250df; fill: none; stroke-dasharray: 6 4; }
+    .accent { fill: #8250df; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .arrow { fill: #e6edf3; }
+      .group { stroke: #a371f7; }
+      .accent { fill: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="arrow"/>
+    </marker>
+  </defs>
+  <rect x="16" y="14" width="688" height="132" rx="10" class="group"/>
+  <text x="32" y="36" font-size="11" class="accent">declared-groups group (slug scoped to the deploying user)</text>
+  <rect x="70" y="56" width="220" height="60" rx="6" class="box"/>
+  <text x="180" y="80" font-size="13" text-anchor="middle">client</text>
+  <text x="180" y="98" font-size="11" text-anchor="middle" class="muted">groups declared in the fleet (ix.nix)</text>
+  <rect x="430" y="56" width="220" height="60" rx="6" class="box"/>
+  <text x="540" y="80" font-size="13" text-anchor="middle">api</text>
+  <text x="540" y="98" font-size="11" text-anchor="middle" class="muted">groups declared in the image (api.nix)</text>
+  <line x1="290" y1="86" x2="422" y2="86" class="edge"/>
+  <text x="356" y="78" font-size="11" text-anchor="middle" class="muted">curl http://api:8080/</text>
+  <text x="356" y="134" font-size="11" text-anchor="middle" class="muted">both sources union into one plan field</text>
+</svg>

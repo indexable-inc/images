@@ -1,23 +1,22 @@
 /**
-  The agent CLI layer: Claude Code and Codex, gated on `ix.dev.agents.*`.
+The agent CLI layer: Claude Code and Codex, gated on `ix.dev.agents.*`.
 
-  Single source of truth for "our versions of the agents." The dev base module
-  and `index.lib.mkDev` import this module, so the wrapped `claude` binary and
-  its managed-settings policy are defined once and cannot drift between a base
-  environment and a dev fleet. Importing the module twice is idempotent: it is
-  one module path, so there is exactly one wrapped `claude`, no `bin/claude`
-  collision.
+Single source of truth for "our versions of the agents." The dev base module
+and `index.lib.mkDev` import this module, so the wrapped `claude` binary and
+its managed-settings policy are defined once and cannot drift between a base
+environment and a dev fleet. Importing the module twice is idempotent: it is
+one module path, so there is exactly one wrapped `claude`, no `bin/claude`
+collision.
 
-  Defaults are on, so a dev fleet ships both agents from a plain import; a fork
-  turns one off with `ix.dev.agents.codex = false;`.
+Defaults are on, so a dev fleet ships both agents from a plain import; a fork
+turns one off with `ix.dev.agents.codex = false;`.
 */
 {
   lib,
   pkgs,
   config,
   ...
-}:
-let
+}: let
   cfg = config.ix.dev.agents;
 
   # Claude Code refuses bypass-permissions mode for the root user unless it is
@@ -35,25 +34,24 @@ let
   # upstream version so `lib.getName` stays "claude-code".
   claude-code =
     pkgs.runCommand "claude-code-${pkgs.claude-code.version}"
-      { nativeBuildInputs = [ pkgs.makeWrapper ]; }
-      ''
-        makeWrapper ${pkgs.claude-code}/bin/claude "$out/bin/claude" --set IS_SANDBOX 1
-      '';
-in
-{
-  imports = [ ./options.nix ];
+    {nativeBuildInputs = [pkgs.makeWrapper];}
+    ''
+      makeWrapper ${pkgs.claude-code}/bin/claude "$out/bin/claude" --set IS_SANDBOX 1
+    '';
+in {
+  imports = [./options.nix];
 
   config = lib.mkMerge [
     (lib.mkIf cfg.codex {
       # codex is Apache-2.0; no allowUnfree exception needed. It authenticates
       # at first use inside the VM, so no API keys are baked into the image.
-      environment.systemPackages = [ pkgs.codex ];
+      environment.systemPackages = [pkgs.codex];
     })
 
     (lib.mkIf cfg.claude {
       # `pkgs.claude-code` is unfree; the allow-by-name exception lives on the
       # shared image nixpkgs instance (lib/image/default.nix), not here.
-      environment.systemPackages = [ claude-code ];
+      environment.systemPackages = [claude-code];
 
       # Claude Code policy for dev images: enforce the bypass keys through
       # Claude's own managed-settings layer, not by writing the user's

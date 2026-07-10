@@ -1,15 +1,18 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="two eval tiers: gold-labeled queries score search rankings, and a one-tool claude agent's graded answers score downstream usefulness"></p>
+
 # search-eval
 
-Measure how good [`search`](../search) is, the way the search-eval community
-actually measures retrieval. `search-eval` runs a versioned query set against the
-real `search` engine over a fixed corpus and scores it, in two tiers that mirror
-how [Exa](https://exa.ai) runs its "open evals":
+Did that relevance tweak actually make [`search`](../search) better, or does
+it just feel better? `search-eval` runs a versioned query set against the real
+`search` engine over a fixed corpus and scores it, the way the search-eval
+community actually measures retrieval, in two tiers that mirror how
+[Exa](https://exa.ai) runs its "open evals":
 
-- **Tier A — retrieval grading.** Rank the corpus for each query and score the
+- **Tier A, retrieval grading.** Rank the corpus for each query and score the
   ranking against gold labels (nDCG@10, Recall@k, MRR), plus an optional
   label-free LLM relevance judge. This is the cheap, reproducible signal you can
   gate on.
-- **Tier B — agentic downstream.** Give a headless `claude -p` agent exactly one
+- **Tier B, agentic downstream.** Give a headless `claude -p` agent exactly one
   tool, a corpus-scoped search, and a question it cannot answer from memory; then
   grade whether it answered correctly. This is the "does our search actually help
   an agent" signal, Exa's RAG/SimpleQA mode.
@@ -27,6 +30,10 @@ nix run .#search-eval -- agentic
 # Both, plus write the JSON report.
 nix run .#search-eval -- all --json-out report.json
 ```
+
+Outside a clone the same commands run as
+`nix run github:indexable-inc/index#search-eval -- ...`; get the repo itself
+with `git clone https://github.com/indexable-inc/index`.
 
 ## What you need
 

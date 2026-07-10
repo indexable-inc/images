@@ -1,6 +1,6 @@
 # nix-web-monitor
 
-`packages/nix-web-monitor` runs a Nix command with quiet terminal output and a
+`packages/nix/nix-web-monitor` runs a Nix command with quiet terminal output and a
 live browser monitor: a build tree, log tail, activity DAG, store-optimisation
 totals, and a `nix-daemon` syscall panel, all on one HTTP port. It is two Rust
 workspace crates:
@@ -9,8 +9,9 @@ workspace crates:
   model for Nix's `internal-json` event stream. No I/O. Also exports the
   per-tracer syscall line parsers in its `daemon` module.
 - **`server`** (`nix-web-monitor`): the `axum` binary that spawns `nix`, feeds
-  stderr through the parser, resolves dependency edges, traces the daemon, and
-  streams deltas to browsers over a WebSocket. Wrapped with a built Svelte site.
+  stderr through the parser, resolves dependency edges, samples daemon syscall
+  hot paths, and streams deltas to browsers over a WebSocket. Wrapped with a
+  built Svelte site.
 
 The state-machine, transport, dependency-resolution, and daemon-tracing mechanics
 are in [internals](internals.md).
@@ -32,8 +33,30 @@ own origin, so off-host access (LAN/Tailscale) needs no certificate.
 ```
 nix-web-monitor [--host H] [--port N] [--exit-when-done]
                 [--terminal-output summary|logs|quiet] [--nix-verbose]
+                [--emit ndjson]
                 -- <nix args...>
+nix-web-monitor serve [--host H] [--port N]
 ```
+
+- `serve`: run the monitor as a standalone server with no wrapped Nix command,
+  until interrupted. The machine-wide panels (the nix-daemon syscall probe and
+  the machine-builds view fed by the patched-nix `nix store builds --json`
+  poller) are the content; the build tree shows a "no wrapped command"
+  placeholder instead of a fake command. This is the mode for a long-lived
+  login service (launchd/systemd) serving the machine build dashboard on
+  `:7532`. The per-command flags (`--exit-when-done`, `--terminal-output`,
+  `--nix-verbose`, `--emit`) do not apply.
+
+- `--emit ndjson` (`server/src/emit.rs`): run headless. Instead of serving the
+  web UI, spawn the nix command, feed the parser, and stream a compact
+  [`BuildView`](../../packages/nix/nix-web-monitor/parser/src/build_view.rs) as
+  one JSON object per line on stdout (throttled to ~2 Hz, plus a final
+  authoritative snapshot after nix exits). This is the machine-readable
+  counterpart to the browser feed, consumed by the kernel `nix` module's live
+  build pane; it keeps the parser the single owner of internal-json rather than
+  re-deriving the render model in Python. Only the passthrough `nix …` command
+  has a headless form (a switch is a UI-only orchestration); the process exits
+  with nix's status.
 
 - `--host` (default `0.0.0.0`, `:49`) / `--port` (default `7532`, `:53`): the UI,
   the `/api/state` JSON snapshot, and the `/ws` delta feed all share this port.
@@ -70,7 +93,8 @@ rather than serving HTML for the wrong MIME type).
 - `MonitorSnapshot` (`:958`) and `Delta` (`:248`): the seed-once / stream-deltas
   wire model the browser consumes. `BuildNode`/`BuildStatus` (`:1025`),
   `ActivityNode` (`:991`), `LogEntry` (`:1058`), `DerivationEdge` (`:984`),
-  `OptimiseStats` (`:229`), `DaemonInfo` (`daemon::DaemonInfo`).
+  `OptimiseStats` (`:229`), `DaemonInfo` (`daemon::DaemonInfo`, including
+  daemon syscall rates and hot paths).
 - `daemon` module (`parser/src/daemon.rs`): `OpClass::classify`,
   `parse_fs_usage_line` (macOS), `parse_strace_line` (Linux), and the rolling
   `DaemonTrace` -> `DaemonInfo` aggregator.

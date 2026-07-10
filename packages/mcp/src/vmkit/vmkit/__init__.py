@@ -512,6 +512,7 @@ def boot_linux(
     timeout: float | None = None,
     net: bool = False,
     ports: Sequence[tuple[int, int]] | None = None,
+    vsock_ports: Sequence[tuple[int, str]] | None = None,
 ) -> str:
     """Boot an aarch64 Linux guest headlessly from a raw EFI-bootable ``disk``
     via libkrun (Hypervisor.framework), returning the guest serial console
@@ -526,6 +527,14 @@ def boot_linux(
     the boot disk read-write, so a read-only image (e.g. a `/nix/store` build) is
     copied to a writable temp first. The headless, serial-only analogue of
     :func:`boot_linux_gui`. See the ``vmkit`` package's ``docs/linux-libkrun.md``.
+
+    ``vsock_ports`` exposes guest AF_VSOCK ports as host unix sockets: a list of
+    ``(guest_port, host_unix_path)`` pairs. For each pair, libkrun listens on
+    the host path and forwards each host ``connect()`` into the guest's vsock
+    port, so a guest service that listens on vsock (e.g. a compositor on port
+    7100) is reached from the host by connecting to the unix socket. Independent
+    of ``net``/``ports`` (vsock is its own device, not the NIC).
+
     Raises :class:`VmkitError` if the binary fails or does not stop within the
     deadline.
     """
@@ -552,6 +561,10 @@ def boot_linux(
             argv.append("--net")
         for host_port, guest_port in ports or []:
             argv += ["--port", f"{host_port}:{guest_port}"]
+        # Guest vsock ports exposed as host unix sockets; no --net needed
+        # (vsock is its own virtio device, not the NIC).
+        for guest_port, host_path in vsock_ports or []:
+            argv += ["--vsock-port", f"{guest_port}:{host_path}"]
         try:
             result = subprocess.run(
                 argv, capture_output=True, text=True, check=False, timeout=deadline
@@ -1198,6 +1211,7 @@ def run_oci(
     gui: bool = False,
     seconds: int | None = None,
     require_aarch64: bool = True,
+    vsock_ports: Sequence[tuple[int, str]] | None = None,
     **kwargs: object,
 ) -> str | Image.Image:
     """Boot a raw EFI-bootable Linux ``disk`` as a guest: the generic entry over
@@ -1213,8 +1227,11 @@ def run_oci(
     - ``gui=True``: boot the disk under Virtualization.framework (e.g. the
       ``vz-linux-guest`` image) and return a ``PIL.Image`` of the framebuffer.
 
-    Extra keyword arguments pass through to the underlying boot function. Raises
-    :class:`VmkitError` on an arch mismatch."""
+    ``vsock_ports`` (headless only) exposes guest AF_VSOCK ports as host unix
+    sockets, a list of ``(guest_port, host_unix_path)`` pairs passed through to
+    :func:`boot_linux`; the VZ GUI path has no vsock device, so combining it
+    with ``gui=True`` raises. Extra keyword arguments pass through to the
+    underlying boot function. Raises :class:`VmkitError` on an arch mismatch."""
     import platform
 
     if require_aarch64 and not platform.machine().lower().startswith(("arm64", "aarch64")):
@@ -1224,6 +1241,13 @@ def run_oci(
     extra = dict(kwargs)
     if seconds is not None:
         extra["seconds"] = seconds
+    if vsock_ports is not None:
+        if gui:
+            raise VmkitError(
+                "vsock_ports is headless-only (libkrun); the gui=True path "
+                "boots under VZ, which wires no vsock device"
+            )
+        extra["vsock_ports"] = vsock_ports
     if gui:
         return boot_linux_gui(disk, **extra)  # type: ignore[arg-type]
     return boot_linux(disk, **extra)  # type: ignore[arg-type]

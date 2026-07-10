@@ -13,6 +13,11 @@ The tracked pre-commit hook runs the same lint app. CI runs the same check
 through the flake. Keep one lint entry point so local and CI failures mean the
 same thing.
 
+For machine consumption (loading results as a dataframe rather than grepping
+the log), `nix run .#lint -- --json` prints one JSON array with a record per
+check — `{check, ok, output}`, where `output` carries the stage's diagnostics
+on failure — and still exits nonzero when any check fails.
+
 Always lint through `nix run .#lint` (or build the package), never an ad-hoc
 `nix shell nixpkgs#ruff -c ruff check`. The flake pins ruff and passes a fixed
 `--target-version`; an ambient ruff is a different version with a different

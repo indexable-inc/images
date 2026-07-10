@@ -1,7 +1,10 @@
 defmodule SymphonyElixir.IR.RecoveryTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.IR.{Attempt, Graph, Node, RunGraph}
+  alias SymphonyElixir.IR.Attempt
+  alias SymphonyElixir.IR.Graph
+  alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.IR.RunGraph
   alias SymphonyElixir.Runtime.Recovery
 
   defp node(id, opts) do
@@ -16,15 +19,13 @@ defmodule SymphonyElixir.IR.RecoveryTest do
     node(id, Keyword.merge([state: :running, attempts: [attempt]], opts))
   end
 
-  defp graph(nodes), do: RunGraph.new("r", "h", {:ast, []}) |> RunGraph.put_nodes(nodes)
+  defp graph(nodes), do: "r" |> RunGraph.new("h", {:ast, []}) |> RunGraph.put_nodes(nodes)
 
   describe "replay/2" do
     test "replaying an expansion log reproduces the same node set deterministically" do
       base = graph([node("root", state: :succeeded)])
 
-      log =
-        base
-        |> RunGraph.append_expansion({:fanout, "f"}, [:a, :b], ["child-a", "child-b"])
+      log = RunGraph.append_expansion(base, {:fanout, "f"}, [:a, :b], ["child-a", "child-b"])
 
       expand = fn {:fanout, "f"}, elements, _nodes ->
         Enum.map(elements, fn e -> node("child-#{e}", state: :pending) end)
@@ -33,7 +34,7 @@ defmodule SymphonyElixir.IR.RecoveryTest do
       one = Recovery.replay(log, expand)
       two = Recovery.replay(log, expand)
 
-      assert Map.keys(one.nodes) |> Enum.sort() == ["child-a", "child-b", "root"]
+      assert one.nodes |> Map.keys() |> Enum.sort() == ["child-a", "child-b", "root"]
       assert Map.keys(one.nodes) == Map.keys(two.nodes)
     end
 

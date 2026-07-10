@@ -1,7 +1,13 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="the signed vmkit CLI boots and drives macOS guests (Virtualization.framework) and Linux guests (libkrun) off-screen, returning framebuffer PNGs and serial consoles"></p>
+
 # vmkit
 
-Own a virtual machine's lifecycle from Rust, with one hypervisor backend per host
-and guest OS:
+How do you boot a macOS or Linux VM from Rust and drive it without it ever
+touching your screen? `vmkit` owns a virtual machine's lifecycle end to end:
+install, provision, boot, synthetic keyboard/mouse input, and framebuffer
+screenshots, all fully off-screen, so an agent can verify GUI rendering
+without the VM ever appearing on the operator's desktop or grabbing the
+cursor. One hypervisor backend per host and guest OS:
 
 - **macOS guests** (macOS host) run on Apple's [Virtualization.framework](https://developer.apple.com/documentation/virtualization)
   (via [`objc2-virtualization`](https://docs.rs/objc2-virtualization)): boot an
@@ -15,10 +21,8 @@ and guest OS:
 A small CLI fronts all of these, so other parts of the system can start and
 control a VM without holding the entitlements themselves.
 
-The motivating macOS use case: run a GUI app (for example the `bossbar-overlay`)
-inside a VM and inspect it remotely, so an agent can verify on-screen rendering
-without the app ever appearing on the operator's real desktop or grabbing the
-operator's cursor.
+The motivating macOS use case: launch a GUI app (for example the
+`bossbar-overlay`) inside a guest and screenshot it for verification, remotely.
 
 ```sh
 nix run .#vmkit -- info
@@ -30,6 +34,17 @@ nix run .#vmkit -- boot-linux --disk ./linux.raw --gpu
 # running a command as the guest init:
 nix run .#vmkit -- boot-linux --root ./rootfs -- /bin/busybox sh -c 'uname -a; ls /'
 ```
+
+## Install
+
+```sh
+nix run github:indexable-inc/index#vmkit -- info
+```
+
+The `nix run .#<attr>` forms above assume a clone:
+`git clone https://github.com/indexable-inc/index`. The build wires libkrun
+linkage and the entitlement self-signing, so Nix is the supported way to build
+it (a plain `cargo install` does not link libkrun).
 
 ## Status
 
@@ -60,7 +75,11 @@ What works today:
     command as the guest init, e.g. `boot-linux --root ./rootfs -- /bin/ls /`.
     Needs `/dev/kvm`; no EFI disk or firmware involved.
 
-  See [`docs/linux-libkrun.md`](docs/linux-libkrun.md).
+  On both hosts `--vsock-port GUEST_PORT:HOST_PATH` (repeatable) exposes a
+  guest AF_VSOCK port as a host unix socket: the guest service `listen()`s on
+  vsock and a host client `connect()`s to the unix path
+  (`krun_add_vsock_port2` with `listen = true`). See
+  [`docs/linux-libkrun.md`](docs/linux-libkrun.md).
 - `boot-linux-gui` boots an aarch64 **Linux GUI** guest from a raw EFI disk with
   a virtio-gpu display + USB keyboard/mouse, fully off-screen, and screenshots
   the guest framebuffer to PNGs (same IOSurface capture as `boot-macos`). The
@@ -105,11 +124,14 @@ app in, launch it, return a frame of the guest display). For Linux guests it
 adds `boot_linux` (boot a raw EFI disk headlessly under libkrun, `gpu=True` for a
 virtio-gpu device, return the serial console as a string), `boot_linux_gui` (boot
 a raw EFI disk off-screen under VZ, return a `PIL.Image` of the render),
-`drive_linux`, and `Driver(disk=...)`.
+`drive_linux`, and `Driver(disk=...)`. `boot_linux` (and the `run_oci`
+passthrough) takes `vsock_ports=[(guest_port, host_unix_path), ...]`, the
+Python spelling of `--vsock-port`.
 
 What is designed but not yet built (see [Roadmap](#roadmap)):
 
-- a vsock control channel and a long-lived `serve` mode.
+- a long-lived `serve` mode (the vsock guest-port <-> host-unix-socket mapping
+  itself exists: `--vsock-port`).
 
 ## Off-screen capture
 
@@ -385,7 +407,11 @@ here. See [`docs/linux-libkrun.md`](docs/linux-libkrun.md).
    rather than by driving the network-backed screens; `stage-binary` plus
    `run_app` cover launching a nix-built app. Vision OCR for locating controls
    from a frame is still open.
-5. vsock control channel + long-lived `serve` mode for IPC.
+5. vsock control channel + long-lived `serve` mode for IPC. The vsock leg is
+   done: `--vsock-port GUEST_PORT:HOST_PATH` maps a guest AF_VSOCK port to a
+   host unix socket (guest listens, host connects; see
+   [`docs/linux-libkrun.md`](docs/linux-libkrun.md)). The long-lived `serve`
+   mode on top of it is still open.
 6. ~~`vmkit` Python module bundled into ix-mcp (like `tui`/`screen`).~~ Done: the
    module exposes `info`, `install`, `provision`, `stage_binary`, `screenshot`,
    `screenshot_many`, `drive`, `Driver`, and `run_app`, returning PIL images that

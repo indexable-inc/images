@@ -2,34 +2,31 @@
   lib,
   writeNushellApplication,
 }:
-
 /**
-  Build libghostty-vt: ghostty's terminal VT engine as a standalone C library.
+Build libghostty-vt: ghostty's terminal VT engine as a standalone C library.
 
-  Ghostty's `build.zig` exposes a VT-only artifact through `-Demit-lib-vt=true`,
-  which skips the GUI app, xcframework, and docs and emits just the parser,
-  screen model, and render-state API. The result is a static `libghostty-vt.a`
-  plus a self-contained `libghostty-vt.<ver>.dylib`/`.so`, the `ghostty/` C
-  headers, and a pkg-config file.
+Ghostty's `build.zig` exposes a VT-only artifact through `-Demit-lib-vt=true`,
+which skips the GUI app, xcframework, and docs and emits just the parser,
+screen model, and render-state API. The result is a static `libghostty-vt.a`
+plus a self-contained `libghostty-vt.<ver>.dylib`/`.so`, the `ghostty/` C
+headers, and a pkg-config file.
 
-  Arguments:
-  - `pkgs`: package set to build against; the artifact is host-system specific.
-  - `ghosttySource`: ghostty source tree (the `ghostty` flake input). Must ship
-    `build.zig`, `build.zig.zon`, and `build.zig.zon.nix` (the zon2nix output
-    that vendors every lazy Zig dependency with SRI hashes for a network-free
-    build).
-  - `version`: derivation version. Defaults to the value in `build.zig.zon`.
+Arguments:
+- `pkgs`: package set to build against; the artifact is host-system specific.
+- `ghosttySource`: ghostty source tree (the `ghostty` flake input). Must ship
+  `build.zig`, `build.zig.zon`, and `build.zig.zon.nix` (the zon2nix output
+  that vendors every lazy Zig dependency with SRI hashes for a network-free
+  build).
+- `version`: derivation version. Defaults to the value in `build.zig.zon`.
 
-  The static archive does not bundle its C++ dependencies (`libhighway`,
-  `libsimdutf`, `libutfcpp`) and needs `-lc++`; the dylib is self-contained, so
-  `ix-vt-sys` links the dylib to avoid that archive dance.
+The static archive does not bundle its C++ dependencies (`libhighway`,
+`libsimdutf`, `libutfcpp`) and needs `-lc++`; the dylib is self-contained, so
+`ix-vt-sys` links the dylib to avoid that archive dance.
 */
-pkgs:
-{
+pkgs: {
   ghosttySource,
   version ? "1.3.2-dev",
-}:
-let
+}: let
   inherit (pkgs) stdenv;
 
   # zon2nix output checked into the ghostty tree. It materializes a link farm of
@@ -79,73 +76,75 @@ let
     xcodeSelectShim
   ];
 in
-stdenv.mkDerivation {
-  pname = "libghostty-vt";
-  inherit version;
+  stdenv.mkDerivation {
+    pname = "libghostty-vt";
+    inherit version;
 
-  src = builtins.path {
-    name = "ghostty-source";
-    path = ghosttySource;
-  };
+    src = builtins.path {
+      name = "ghostty-source";
+      path = ghosttySource;
+    };
 
-  strictDeps = true;
+    strictDeps = true;
 
-  nativeBuildInputs = [
-    pkgs.zig_0_15
-    pkgs.pkg-config
-  ]
-  ++ darwinSdkInputs;
+    nativeBuildInputs =
+      [
+        pkgs.zig_0_15
+        pkgs.pkg-config
+      ]
+      ++ darwinSdkInputs;
 
-  # `zlib` is consumed through `-fsys=zlib` so ghostty's framegen tool links the
-  # nixpkgs zlib instead of building the vendored copy (which would re-trigger
-  # the apple-sdk probe). `apple-sdk` is a buildInput on darwin so the linker
-  # resolves the system frameworks the C++ deps pull in.
-  buildInputs = [
-    pkgs.zlib
-  ]
-  ++ lib.optional isDarwin appleSdk;
+    # `zlib` is consumed through `-fsys=zlib` so ghostty's framegen tool links the
+    # nixpkgs zlib instead of building the vendored copy (which would re-trigger
+    # the apple-sdk probe). `apple-sdk` is a buildInput on darwin so the linker
+    # resolves the system frameworks the C++ deps pull in.
+    buildInputs =
+      [
+        pkgs.zlib
+      ]
+      ++ lib.optional isDarwin appleSdk;
 
-  dontConfigure = true;
-  dontBuild = true;
+    dontConfigure = true;
+    dontBuild = true;
 
-  installPhase = ''
-    # shell
-    runHook preInstall
+    installPhase = ''
+      # shell
+      runHook preInstall
 
-    export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
-    mkdir -p "$ZIG_GLOBAL_CACHE_DIR/p"
-    cp -R --no-preserve=mode ${deps}/. "$ZIG_GLOBAL_CACHE_DIR/p/"
+      export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
+      mkdir -p "$ZIG_GLOBAL_CACHE_DIR/p"
+      cp -R --no-preserve=mode ${deps}/. "$ZIG_GLOBAL_CACHE_DIR/p/"
 
-    ${lib.optionalString isDarwin ''
-      export SDKROOT="${appleSdkRoot}"
-      export DEVELOPER_DIR="${appleSdk}"
-    ''}
+      ${lib.optionalString isDarwin ''
+        export SDKROOT="${appleSdkRoot}"
+        export DEVELOPER_DIR="${appleSdk}"
+      ''}
 
-    buildCores=1
-    if [ "''${enableParallelBuilding-1}" ]; then
-      buildCores="$NIX_BUILD_CORES"
-    fi
+      buildCores=1
+      if [ "''${enableParallelBuilding-1}" ]; then
+        buildCores="$NIX_BUILD_CORES"
+      fi
 
-    zig build \
-      "-j$buildCores" \
-      --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR" \
-      --cache-dir "$TMPDIR/zig-local-cache" \
-      -Demit-lib-vt=true \
-      -Dcpu=baseline \
-      -Doptimize=ReleaseFast \
-      -fsys=zlib --search-prefix ${pkgs.zlib} \
-      --prefix "$out" \
-      --summary all
+      zig build \
+        "-j$buildCores" \
+        --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR" \
+        --cache-dir "$TMPDIR/zig-local-cache" \
+        -Demit-lib-vt=true \
+        -Dcpu=baseline \
+        -Doptimize=ReleaseFast \
+        -fsys=zlib --search-prefix ${pkgs.zlib} \
+        --prefix "$out" \
+        --summary all
 
-    runHook postInstall
-  '';
+      runHook postInstall
+    '';
 
-  doCheck = false;
+    doCheck = false;
 
-  meta = {
-    description = "Ghostty's terminal VT engine as a standalone C library (parser, screen, render state)";
-    homepage = "https://ghostty.org/";
-    license = lib.licenses.mit;
-    platforms = lib.platforms.unix;
-  };
-}
+    meta = {
+      description = "Ghostty's terminal VT engine as a standalone C library (parser, screen, render state)";
+      homepage = "https://ghostty.org/";
+      license = lib.licenses.mit;
+      platforms = lib.platforms.unix;
+    };
+  }

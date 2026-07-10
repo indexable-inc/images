@@ -1,7 +1,7 @@
 # Self-hosted GitHub Actions runners for this repository, meant to run on a
 # persistent NixOS host instead of an ephemeral cloud VM. The win is cache
-# locality: jobs reuse the host's global /nix/store and the indexable-inc
-# Cachix substituter, so `nix build .#...` pulls warm artifacts instead of
+# locality: jobs reuse the host's global /nix/store and the cache.ix.dev
+# public substituter, so `nix build .#...` pulls warm artifacts instead of
 # rebuilding from a cold store every run. The per-job work directory is still
 # wiped (see `ephemeral`); only the shared store survives, which is exactly the
 # state that is safe to keep between jobs.
@@ -13,9 +13,9 @@
   lib,
   pkgs,
   ...
-}:
-let
-  inherit (lib)
+}: let
+  inherit
+    (lib)
     mkEnableOption
     mkIf
     mkOption
@@ -23,8 +23,7 @@ let
     ;
   cfg = config.services.ci-runner;
   runnerNames = map (index: "index-${toString index}") (lib.range 1 cfg.count);
-in
-{
+in {
   options.services.ci-runner = {
     enable = mkEnableOption "self-hosted GitHub Actions runners for this repository";
 
@@ -63,7 +62,7 @@ in
 
     labels = mkOption {
       type = types.listOf types.str;
-      default = [ "nix" ];
+      default = ["nix"];
       description = ''
         Extra labels appended to every runner. A workflow opts in by setting
         {option}`runs-on` to `self-hosted` plus these labels.
@@ -84,11 +83,11 @@ in
 
     packages = mkOption {
       type = types.listOf types.package;
-      default = [ ];
+      default = [];
       example = lib.literalExpression "[ pkgs.gh pkgs.jq ]";
       description = ''
-        Extra packages on each job's PATH, on top of the git, Nix, and Cachix
-        tooling the module always provides.
+        Extra packages on each job's PATH, on top of the git and Nix tooling
+        the module always provides.
       '';
     };
   };
@@ -102,18 +101,23 @@ in
       extra-experimental-features = [
         "nix-command"
         "flakes"
+        # Repo-owned Rust units are floating content-addressed derivations. This
+        # is a daemon protocol capability, not something a workflow-side
+        # NIX_CONFIG can add for an untrusted runner user.
+        "ca-derivations"
       ];
-      # Consume the repo flake's nixConfig substituters without the interactive
-      # prompt; `nix flake check` otherwise stalls waiting for confirmation.
-      accept-flake-config = true;
-      extra-substituters = [ "https://indexable-inc.cachix.org" ];
+      # The daemon owns the same cache and key below. Runner users are
+      # untrusted, so consuming the flake's restricted copies only emits
+      # ignored-setting warnings and cannot change daemon policy.
+      accept-flake-config = false;
+      extra-substituters = ["https://cache.ix.dev"];
       extra-trusted-public-keys = [
-        "indexable-inc.cachix.org-1:HQ5mjdOyhgNjLVhjv0qgVMJ5YiO1zEEVMAtF9mTcpiI="
+        "ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI="
       ];
       # Index images pin `gcc.arch = znver5`, so every derivation in the closure
       # requires this builder feature; advertise it or the daemon refuses the
       # builds before they evaluate.
-      extra-system-features = [ "gccarch-znver5" ];
+      extra-system-features = ["gccarch-znver5"];
     };
 
     services.github-runners = lib.genAttrs runnerNames (_name: {
@@ -123,13 +127,13 @@ in
       # Re-register under the same name after a host config change instead of
       # failing on a name clash with the already-registered runner.
       replace = true;
-      extraPackages = [
-        pkgs.cachix
-        pkgs.gh
-        pkgs.git
-        config.nix.package
-      ]
-      ++ cfg.packages;
+      extraPackages =
+        [
+          pkgs.gh
+          pkgs.git
+          config.nix.package
+        ]
+        ++ cfg.packages;
     });
   };
 }

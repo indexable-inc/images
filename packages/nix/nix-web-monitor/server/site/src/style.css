@@ -498,10 +498,16 @@ main.dragging-v .splitter-v::after {
   font-variant-numeric: tabular-nums;
 }
 
-.side-pane > .daemon-panel {
+.side-pane > .daemon-panel,
+.side-pane > .global-panel,
+.side-pane > .activation-panel,
+.side-pane > .diff-panel {
   flex: 0 0 auto;
-  max-height: 45%;
   border-bottom: 1px solid var(--line);
+}
+
+.side-pane > .daemon-panel {
+  max-height: 45%;
 }
 
 .side-pane > .graph-panel {
@@ -511,12 +517,16 @@ main.dragging-v .splitter-v::after {
 
 /* ---------- daemon panel ---------- */
 
-.daemon-body {
+.daemon-body,
+.global-body {
   min-height: 0;
   overflow: auto;
   padding: 0.4rem 0.6rem;
   display: flex;
   flex-direction: column;
+}
+
+.daemon-body {
   gap: 0.4rem;
 }
 
@@ -568,10 +578,187 @@ main.dragging-v .splitter-v::after {
 
 /* The store path the daemon last touched -- the "currently working on" line. */
 .daemon-path {
+  display: flex;
+  gap: 0.4rem;
   color: var(--faint);
   white-space: nowrap;
+}
+
+.daemon-path-label {
+  flex: none;
+  color: var(--muted);
+}
+
+/* Head-side ellipsis for path readouts: the leaf carries the identity, so
+ * overflow must eat the prefix, never the tail (#2487). `direction: rtl`
+ * moves the line's overflow edge (and its ellipsis) to the left; the &lrm;
+ * marks wrapping the text in the markup keep the characters themselves in
+ * left-to-right order, so nothing visually reorders. */
+.daemon-path-value,
+.daemon-hot-path {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.daemon-path-value {
+  flex: 1 1 auto;
+}
+
+.daemon-hot {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding-top: 0.2rem;
+  border-top: 1px solid var(--line-soft);
+}
+
+.daemon-hot-title {
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* path | current rate | cumulative count. */
+.daemon-hot-row {
+  display: grid;
+  grid-template-columns: 1fr 3rem 3.5rem;
+  gap: 0.35rem;
+  align-items: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.daemon-hot-path {
+  color: var(--ink);
+}
+
+.daemon-hot-rate,
+.daemon-hot-count {
+  text-align: right;
+}
+
+.daemon-hot-rate {
+  color: var(--accent);
+}
+
+.daemon-hot-count {
+  color: var(--faint);
+}
+
+/* ---------- machine builds panel (patched nix only) ---------- */
+
+/* Sits above the daemon panel in the side pane; caps its height so the daemon
+ * panel and activity graph below stay visible. Self-hides on stock nix (the
+ * component renders nothing when `detected` is false). */
+.global-body {
+  gap: 0.5rem;
+}
+
+.global-status {
+  color: var(--muted);
+}
+
+/* The why-chain forest. Rows reuse the build-tree row language (guides,
+ * twirl, drv columns) at side-panel scale; the body already provides the
+ * horizontal padding, so rows drop their own. */
+.global-tree {
+  display: flex;
+  flex-direction: column;
+}
+
+.global-tree .activity-row {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.global-tree .activity-row:last-child {
+  border-bottom: none;
+}
+
+/* Skeleton ancestors: chain hops nothing is actively building, kept only to
+ * show where the active leaves hang. Dimmed so live goals read as the
+ * foreground. */
+.global-tree .global-tree-row.skeleton .drv-name {
+  color: var(--muted);
+}
+
+/* Requesting user as a per-row annotation, now that rows nest by why-chain
+ * instead of grouping by user. */
+.global-user {
+  flex: 0 0 auto;
+  max-width: 7rem;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.global-badge {
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--muted);
+}
+
+.global-badge-substitution {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+}
+
+/* Toggle for the row's inline log tail; styled as a quiet chip that fills with
+ * the accent while the drawer is open. */
+.global-log-toggle {
+  appearance: none;
+  flex: 0 0 auto;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 0.3rem;
+  font-family: inherit;
+  font-size: 0.72rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.global-log-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.global-log-toggle.open {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--panel);
+}
+
+/* Inline log tail under a row: a short fixed-height stream pinned to the
+ * newest lines, mirroring the main log drawer's look at panel scale. */
+.global-log-view {
+  margin: 0.15rem 0 0;
+  padding: 0.3rem 0.4rem;
+  max-height: 9rem;
+  overflow: auto;
+  background: var(--panel-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.global-log-note {
+  margin-top: 0.15rem;
+  color: var(--faint);
+  font-size: 0.8rem;
 }
 
 /* ---------- activation + diff panels (switch only) ---------- */
@@ -579,11 +766,10 @@ main.dragging-v .splitter-v::after {
 /* Both ride at the top of the side pane during a switch and cap their height so
  * the daemon panel and activity graph below stay visible; they self-hide on a
  * plain build (no activation, no diff). */
+.side-pane > .global-panel,
 .side-pane > .activation-panel,
 .side-pane > .diff-panel {
-  flex: 0 0 auto;
   max-height: 40%;
-  border-bottom: 1px solid var(--line);
 }
 
 .activation-body {

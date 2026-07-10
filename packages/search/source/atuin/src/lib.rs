@@ -2,7 +2,7 @@
 //! [`source_meta`] documents for the multi-source `search` store.
 //!
 //! # Grain
-//! One [`Document`] per recorded **command**. atuin keeps one sqlite history db
+//! One [`source_meta::Document`] per recorded **command**. atuin keeps one sqlite history db
 //! (default `~/.local/share/atuin/history.db`) capturing commands from every
 //! shell it wraps (nushell, zsh, bash), so they share one `shell` corpus rather
 //! than a per-shell source. `external_id = "atuin:{id}"` reuses atuin's own
@@ -23,7 +23,6 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags};
 use snafu::ResultExt as _;
-use source_meta::{Document, Source, SourceAdapter};
 
 pub use crate::error::Error;
 use crate::error::{OpenDbSnafu, QuerySnafu, Result, UninitializedDbSnafu};
@@ -42,7 +41,7 @@ const NANOS_PER_SEC: i64 = 1_000_000_000;
 ///
 /// Construct with [`AtuinHistory::open`], which reads the sqlite db read-only
 /// (so a live shell writing to it is never blocked). Parsing happens up front so
-/// [`SourceAdapter::documents`] is cheap to start.
+/// [`source_meta::SourceAdapter::documents`] is cheap to start.
 #[derive(Debug)]
 #[must_use]
 pub struct AtuinHistory {
@@ -117,19 +116,13 @@ impl AtuinHistory {
     }
 }
 
-impl SourceAdapter for AtuinHistory {
-    type Error = Error;
-
-    fn source(&self) -> Source {
-        Source::new(SOURCE_TAG)
-    }
-
-    fn documents(&self) -> impl Iterator<Item = Result<Document, Error>> + Send {
-        // Clone into an owned iterator so the result is `'static + Send`,
-        // independent of `&self` (mirrors the claude/codex/slack adapters).
-        self.entries.clone().into_iter().map(Entry::into_document)
-    }
-}
+source_meta::impl_owned_source_adapter!(
+    AtuinHistory,
+    Error,
+    SOURCE_TAG,
+    entries,
+    Entry::into_document
+);
 
 /// Whether the atuin `history` table exists. atuin creates the db file before
 /// its first migration runs, so a freshly-seen account can have a db with only

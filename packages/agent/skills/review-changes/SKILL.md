@@ -31,15 +31,26 @@ value with no logic). Say so in one line and stop.
 
    ```
    Workflow({
-     scriptPath: "/Users/andrewgazelka/.config/nix/claude/global/skills/review-changes/review.workflow.js",
+     scriptPath: "~/.claude/skills/review-changes/review.workflow.js",
      args: { cwd: "<repo root>" }
    })
    ```
 
+   The script ships next to this skill; expand `~` to the absolute home path.
    The workflow runs in the background and notifies on completion. It fans out
    one `code-reviewer` finder per dimension over the diff, pipelines each finding
    through an independent skeptic that tries to refute it, and returns the
    surviving findings ranked, with Correctness and Security marked as blockers.
+
+   **Fallback — Workflow tool unavailable.** Not every harness/session exposes
+   a `Workflow` tool. If the call fails because the tool does not exist, do not
+   stall or improvise a different review: run the same shape manually. Spawn one
+   `code-reviewer` agent per dimension — correctness, security, performance,
+   maintainability — over the same diff (`git diff` + `git diff --staged`,
+   falling back to `git show HEAD`), all in a single message so they run
+   concurrently, each restricted to its one dimension. Then adversarially verify
+   each finding yourself (try to refute it against the actual code) before
+   reporting, and keep the same ranking: Correctness and Security are blockers.
 
 3. When it completes, report the verdict to the user, blockers first. Fix the
    confirmed Correctness/Security findings in the same turn, or state plainly why

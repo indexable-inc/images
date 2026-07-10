@@ -1,0 +1,551 @@
+{
+  "version": 0,
+  "name": "sample_ts",
+  "names": {
+    "py": null
+  },
+  "docs": [
+    "A sample boundary exercising the ts surface."
+  ],
+  "functions": [
+    {
+      "name": "rows",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Fetch rows.",
+        "",
+        "Docs reach the generated `.d.ts`."
+      ],
+      "asyncness": "Sync",
+      "blocking": false,
+      "args": [
+        {
+          "name": "store",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "String": {
+              "owned": false
+            }
+          },
+          "default": null
+        },
+        {
+          "name": "limit",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Int": "U32"
+          },
+          "default": {
+            "Int": 10
+          }
+        },
+        {
+          "name": "root",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Option": {
+              "String": {
+                "owned": false
+              }
+            }
+          },
+          "default": null
+        }
+      ],
+      "ret": {
+        "Vec": {
+          "Named": "Row"
+        }
+      },
+      "throws": "SampleError"
+    },
+    {
+      "name": "touch",
+      "names": {
+        "py": null,
+        "ts": "touchPath"
+      },
+      "docs": [],
+      "asyncness": "Sync",
+      "blocking": false,
+      "args": [
+        {
+          "name": "path",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Path": {
+              "owned": false
+            }
+          },
+          "default": null
+        },
+        {
+          "name": "data",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Bytes": {
+              "owned": false
+            }
+          },
+          "default": null
+        },
+        {
+          "name": "ratio",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Float": "F64"
+          },
+          "default": {
+            "Float": 0.5
+          }
+        },
+        {
+          "name": "note",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "String": {
+              "owned": false
+            }
+          },
+          "default": {
+            "Str": "note"
+          }
+        }
+      ],
+      "ret": "Bool",
+      "throws": null
+    },
+    {
+      "name": "checksum",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Wrapping byte sum; `blocking` frees Python's GIL and renders as a",
+        "plain sync export for JavaScript."
+      ],
+      "asyncness": "Sync",
+      "blocking": true,
+      "args": [
+        {
+          "name": "data",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Bytes": {
+              "owned": false
+            }
+          },
+          "default": null
+        }
+      ],
+      "ret": {
+        "Int": "U32"
+      },
+      "throws": null
+    },
+    {
+      "name": "slow_add",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Add, slowly."
+      ],
+      "asyncness": "Async",
+      "blocking": false,
+      "args": [
+        {
+          "name": "a",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Int": "I64"
+          },
+          "default": null
+        },
+        {
+          "name": "b",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Int": "I64"
+          },
+          "default": null
+        }
+      ],
+      "ret": {
+        "Int": "I64"
+      },
+      "throws": null
+    },
+    {
+      "name": "fetch",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Fetch one row."
+      ],
+      "asyncness": "Async",
+      "blocking": false,
+      "args": [
+        {
+          "name": "store",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "String": {
+              "owned": true
+            }
+          },
+          "default": null
+        }
+      ],
+      "ret": {
+        "Named": "Row"
+      },
+      "throws": "SampleError"
+    },
+    {
+      "name": "tail",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Tail rows as a pull stream."
+      ],
+      "asyncness": "Sync",
+      "blocking": false,
+      "args": [
+        {
+          "name": "store",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "String": {
+              "owned": false
+            }
+          },
+          "default": null
+        }
+      ],
+      "ret": {
+        "Stream": {
+          "Named": "Row"
+        }
+      },
+      "throws": null
+    },
+    {
+      "name": "tail_later",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Tail rows once the store opens (an async stream function)."
+      ],
+      "asyncness": "Async",
+      "blocking": false,
+      "args": [
+        {
+          "name": "store",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "String": {
+              "owned": true
+            }
+          },
+          "default": null
+        }
+      ],
+      "ret": {
+        "Stream": {
+          "Named": "Row"
+        }
+      },
+      "throws": "SampleError"
+    },
+    {
+      "name": "open_counter",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Open a counter from a free function (the non-constructor path)."
+      ],
+      "asyncness": "Sync",
+      "blocking": false,
+      "args": [
+        {
+          "name": "start",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Int": "I64"
+          },
+          "default": null
+        }
+      ],
+      "ret": {
+        "Named": "Counter"
+      },
+      "throws": null
+    }
+  ],
+  "records": [
+    {
+      "name": "Row",
+      "names": {
+        "py": null,
+        "ts": "SampleRow"
+      },
+      "docs": [
+        "A row."
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "names": {
+            "py": null
+          },
+          "docs": [
+            "Identifier."
+          ],
+          "ty": {
+            "Int": "I64"
+          }
+        },
+        {
+          "name": "name",
+          "names": {
+            "py": "label",
+            "ts": "rowLabel"
+          },
+          "docs": [],
+          "ty": {
+            "String": {
+              "owned": true
+            }
+          }
+        },
+        {
+          "name": "tags",
+          "names": {
+            "py": null
+          },
+          "docs": [],
+          "ty": {
+            "Vec": {
+              "String": {
+                "owned": true
+              }
+            }
+          }
+        },
+        {
+          "name": "weights",
+          "names": {
+            "py": null
+          },
+          "docs": [],
+          "ty": {
+            "Map": {
+              "key": {
+                "String": {
+                  "owned": true
+                }
+              },
+              "value": {
+                "Float": "F64"
+              }
+            }
+          }
+        },
+        {
+          "name": "blob",
+          "names": {
+            "py": null
+          },
+          "docs": [],
+          "ty": {
+            "Bytes": {
+              "owned": true
+            }
+          }
+        },
+        {
+          "name": "home",
+          "names": {
+            "py": null
+          },
+          "docs": [],
+          "ty": {
+            "Option": {
+              "Path": {
+                "owned": true
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "enums": [],
+  "errors": [
+    {
+      "name": "SampleError",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Boundary failures."
+      ],
+      "py_base": null,
+      "variants": [
+        {
+          "name": "StoreGone",
+          "names": {
+            "py": null,
+            "ts": "StoreGoneError"
+          },
+          "docs": [
+            "The store is gone."
+          ]
+        },
+        {
+          "name": "Invalid",
+          "names": {
+            "py": null
+          },
+          "docs": [
+            "Bad input."
+          ]
+        }
+      ]
+    }
+  ],
+  "objects": [
+    {
+      "name": "Counter",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "A counter resource."
+      ],
+      "resource": true,
+      "constructor": {
+        "name": "new",
+        "names": {
+          "py": null
+        },
+        "docs": [
+          "Open a counter."
+        ],
+        "asyncness": "Sync",
+        "blocking": false,
+        "args": [
+          {
+            "name": "start",
+            "names": {
+              "py": null
+            },
+            "ty": {
+              "Int": "I64"
+            },
+            "default": {
+              "Int": 0
+            }
+          }
+        ],
+        "ret": null,
+        "throws": "SampleError"
+      },
+      "methods": [
+        {
+          "name": "value",
+          "names": {
+            "py": null
+          },
+          "docs": [
+            "Current value."
+          ],
+          "asyncness": "Sync",
+          "blocking": false,
+          "args": [],
+          "ret": {
+            "Int": "I64"
+          },
+          "throws": null
+        },
+        {
+          "name": "add",
+          "names": {
+            "py": null,
+            "ts": "addSlowly"
+          },
+          "docs": [
+            "Add and return the new value."
+          ],
+          "asyncness": "Async",
+          "blocking": false,
+          "args": [
+            {
+              "name": "amount",
+              "names": {
+                "py": null
+              },
+              "ty": {
+                "Int": "I64"
+              },
+              "default": null
+            }
+          ],
+          "ret": {
+            "Int": "I64"
+          },
+          "throws": "SampleError"
+        },
+        {
+          "name": "close",
+          "names": {
+            "py": null
+          },
+          "docs": [
+            "Release the counter."
+          ],
+          "asyncness": "Async",
+          "blocking": false,
+          "args": [],
+          "ret": null,
+          "throws": null
+        }
+      ]
+    }
+  ]
+}

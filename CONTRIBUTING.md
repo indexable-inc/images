@@ -10,7 +10,7 @@ Local verification is the gate that decides whether a change is safe to land, no
 nix run .#lint
 ```
 
-It checks Nix formatting (nixfmt), Statix, Deadnix, and the repo's astlog rules (`astlog-rules/nix.astlog` for Nix, `astlog-rules/rust.astlog` for the corpus/search Rust crates). CI runs the same derivation as a flake check, but treat that run as advisory signal rather than a landing gate.
+It checks Nix formatting (alejandra), Statix, Deadnix, and the repo's astlog rules (`astlog-rules/nix.astlog` for Nix, `astlog-rules/rust.astlog` for the corpus/search Rust crates). CI runs the same derivation as a flake check, but treat that run as advisory signal rather than a landing gate.
 
 The repo ships a tracked git pre-commit hook at `.githooks/pre-commit` that calls the lint app. To activate it locally, `direnv allow` in the repo root: `.envrc` exports `core.hooksPath` so git uses the tracked hook. No additional shell or framework is needed.
 
@@ -18,7 +18,7 @@ There is no `devShells.default` to enter for routine work. Reach for the per-pac
 
 ```sh
 nix develop .#minestom-hello-server-jar   # gives gradle + JDK 25
-nix develop nixpkgs#nixfmt                # nixfmt + its deps
+nix develop nixpkgs#alejandra             # alejandra + its deps
 ```
 
 ## Cargo Unit Test Runtime Inputs
@@ -173,6 +173,22 @@ The full style guide lives in [AGENTS.md](AGENTS.md). Skim the section that matc
 - [Dependency intake](AGENTS.md#dependency-intake) — how new external artifacts enter the repo (lockfiles, generated catalogs, fetcher choice).
 
 The lint app enforces the mechanical Nix rules. Reviewers enforce the prose and architecture rules.
+
+## READMEs
+
+A README is the front page a stranger judges the project by, so it is held to a higher bar than other prose: minimal, easy to understand, and it shows the thing working. The shape, top to bottom:
+
+1. **One-line pitch** — what it is and why it exists, in the first sentence.
+2. **What it does** — a short paragraph or two of the mental model. No feature laundry list.
+3. **Quickstart** — the smallest real, runnable example: the exact commands or code a reader copies to see the tool do its job, and one line saying what they should see. A README without a working example is a brochure.
+4. **Pointers** — where the deeper docs live (`doc/<package>/overview.md`), nothing duplicated from them.
+
+Prefer deleting a section to padding it. The repo root [README.md](README.md) is the exemplar of the shape at monorepo scale; [packages/sqlmerge](packages/sqlmerge/README.md) at single-package scale.
+
+Two rules are load-bearing rather than advisory:
+
+- A **mirror-enabled package** (a `mirror` attr in its `package.nix`, see [packages/mirror](packages/mirror/README.md)) must have a `README.md`: it becomes the standalone GitHub repo's front page, and the repo-metadata check (`.github/workflows/repo-metadata.yml`) fails without one.
+- The GitHub About sidebar (description, homepage, topics) is declared in nix — `mirror.description` / `mirror.topics` for mirrors, [lib/repo-metadata.nix](lib/repo-metadata.nix) for the monorepo — and synced by CI on every push to `main`. Don't edit it in the GitHub UI; the sync reverts manual edits.
 
 ## Commit messages
 

@@ -481,7 +481,7 @@ fn build_item(gpu: &Gpu, tex: &BarTextures, scale: f32, now_unix: i64, item: &Dr
             let shadow = with_alpha(SHADOW, p.text_alpha);
             let mut ty = inner_y + p.pad;
             let tx = inner_x + p.pad;
-            for line in wrap(gpu, &b.description, text_w, glyph_scale) {
+            for line in gpu.wrap_text(&b.description, text_w, glyph_scale) {
                 if !line.is_empty() {
                     let _ = gpu.text(&line, tx + shadow_off, ty + shadow_off, glyph_scale, shadow, quads);
                     let _ = gpu.text(&line, tx, ty, glyph_scale, fg, quads);
@@ -497,37 +497,6 @@ fn with_alpha(c: [f32; 4], mul: f32) -> [f32; 4] {
     [c[0], c[1], c[2], c[3] * mul]
 }
 
-/// Greedy word-wrap `text` to `max_w` (physical px) using the font's own metrics.
-/// Each `\n` ends a line; a blank segment (from `\n\n`) yields a blank line.
-fn wrap(gpu: &Gpu, text: &str, max_w: f32, scale: f32) -> Vec<String> {
-    let mut out = Vec::new();
-    for seg in text.split('\n') {
-        if seg.trim().is_empty() {
-            out.push(String::new());
-            continue;
-        }
-        let mut line = String::new();
-        for word in seg.split_whitespace() {
-            let trial = if line.is_empty() {
-                word.to_string()
-            } else {
-                format!("{line} {word}")
-            };
-            // Keep the word on this line if it fits, or if the line is empty (a
-            // single over-long word still has to go somewhere).
-            if line.is_empty() || gpu.measure(&trial, scale) <= max_w {
-                line = trial;
-            } else {
-                out.push(std::mem::take(&mut line));
-                line = word.to_string();
-            }
-        }
-        if !line.is_empty() {
-            out.push(line);
-        }
-    }
-    out
-}
 
 /// Panel metrics in physical pixels at `scale`: `(border, pad, font, line, gap)`.
 fn panel_metrics(scale: f32) -> (f32, f32, f32, f32, f32) {
@@ -551,7 +520,10 @@ fn panel_size(gpu: &Gpu, description: &str, scale: f32) -> Option<(f32, f32)> {
     let (border, pad, font_px, line_px, _gap) = panel_metrics(scale);
     let panel_w = BAR_W as f32 * scale.max(1.0);
     let text_w = (panel_w - 2.0 * (border + pad)).max(1.0);
-    let lines = wrap(gpu, description, text_w, font_px / 8.0).len().max(1);
+    let lines = gpu
+        .wrap_text(description, text_w, font_px / 8.0)
+        .len()
+        .max(1);
     let panel_h = 2.0 * (border + pad) + lines as f32 * line_px;
     Some((panel_w, panel_h))
 }

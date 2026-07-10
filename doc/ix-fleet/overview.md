@@ -22,13 +22,15 @@ lives in one module, `packages/ix-fleet/src/ix_fleet/__init__.py`.
 - The ix Python SDK is a prebuilt wheel fetched from R2
   ([ix-sdk-python](../ix-sdk-python/overview.md)), copied into the venv at
   `postInstall` rather than resolved by uv (`default.nix:9-11,61-67`).
-- The wrapper sets `IX_FLEET_DAG_RUNNER` to the
+- The wrapper sets a default `IX_FLEET_DAG_RUNNER` (via `--set-default`, so an
+  explicit env var wins) pointing at the
   [dag-runner](../dag-runner/overview.md) binary (`default.nix:69-70`),
   which the CLI uses to run per-node workflows in parallel.
-- Passthru test `dryRunUp` (`default.nix:50-59`) runs
-  `ix-fleet --plan <plan> up --skip-push --skip-health --dry-run` in the sandbox:
-  it exercises the dry-run control flow (no API, no network) and proves the
-  prebuilt SDK wheel imports from the built venv.
+- Passthru tests `dryRunUp`, `dryRunSwitch`, `dryRunStatus`, `dryRunLogs`, and
+  `rollingUpdateDag` (`default.nix`) run the corresponding subcommands with
+  `--dry-run` in the sandbox: they exercise the dry-run control flow (no API,
+  no network), prove the prebuilt SDK wheel imports from the built venv, and
+  check the rolling-update serialization edges in the emitted DAG spec.
 
 ## CLI surface (`__init__.py:897-990`)
 
@@ -46,10 +48,17 @@ subcommand would run without calling the API.
 | `replace` | Like `up` but always delete-then-create the node on the pushed image (`cmd_replace`, `:836`). |
 | `switch` | In-place NixOS system switch of running nodes (target or build-from-source), snapshotting first. Remote source builds go through the platform's native multi-VM `ix up` in dependency layers (`cmd_switch`). |
 | `health` | Run each selected node's health checks (`cmd_health`, `:876`). |
+| `status` | kubectl-get for the fleet: one row per selected node with NODE, STATUS, READY (health checks passed/total), ADDRESS; `-o wide` adds REGION, IMAGE, DESIRED-IMAGE; `-o json` emits machine-readable reports. Exits 1 when any selected node is unhealthy (`cmd_status`). |
+| `logs` | Pull journalctl output from selected nodes via the guest exec channel; lines are prefixed `[node]` when more than one node is selected (`cmd_logs`). |
 | `down` | Remove selected nodes in reverse plan order, collecting failures (`cmd_down`, `:886`). |
 
 `switch` flags: `--no-snapshot`, `--skip-health`, `--source-root`,
-`--source-workdir`. `up`/`replace` flags: `--skip-push`, `--skip-health`. The
+`--source-workdir`. `up`/`replace` flags: `--skip-push`, `--skip-health`.
+`status` flags: `-o/--output table|wide|json` (default `table`), `--watch`
+(re-render every `--interval` seconds, default 5), `--no-checks` (report
+control-plane status without running health probes). `logs` flags:
+`-u/--unit` (a systemd unit, else the full journal), `-n/--lines` (default
+100), `--since` (a systemd time spec, e.g. `-10m`). The
 hidden `_replace-node`/`_up-node` subparsers (`help=argparse.SUPPRESS`) take a
 single node positional plus the forwarded flags; they are what dag-runner
 invokes per node for `up`/`replace`, not for direct use. `switch` no longer has
@@ -57,16 +66,17 @@ a per-node subparser: it batches the switch in-process (see below).
 
 ## The plan schema (pydantic, `__init__.py:34-146`)
 
-A plan is a `FleetPlan`: `order` (list of node names), `nodes` (name -> `FleetNode`),
-and `secrets` (`FleetSecrets`). `validate_graph` (`:122`) enforces that `order`
+A plan is a `FleetPlan`: `order` (list of node names) and `nodes` (name -> `FleetNode`).
+`validate_graph` (`:122`) enforces that `order`
 has no duplicates, references only defined nodes, and covers every node; that
 each node key matches its `name`; and that every `dependsOn` names a real node.
 
 - **`FleetNode`** (`:68`): `name`, `baseName`, optional `replicaIndex`, `system`,
   a `switch` (`SwitchSpec`), `bootstrapImage`, a `replacementImage`
   (`ReplacementImage`), `region`, `ipv4`, `snapshot`, `recreateOnUp` (default
-  false), and the lists/maps `tags`, `groups`, `env`, `l7ProxyPorts`,
-  `dependsOn`, `healthChecks` (name -> `HealthCheck`).
+  false), an optional `updateStrategy` (`UpdateStrategy`: `maxUnavailable`,
+  int >= 1), and the lists/maps `tags`, `groups`, `env`, `secrets`,
+  `l7ProxyPorts`, `dependsOn`, `healthChecks` (name -> `HealthCheck`).
 - **`SwitchSpec`** (`:44`): `target`, `buildOn` (`auto`|`local`|`remote`,
   default `auto`), optional `buildVm`, `sourceInstallable`, `overrideInputs`.
   `sourceInstallable` defaults to the bare node name `.#<node>` (not
@@ -75,15 +85,20 @@ each node key matches its `name`; and that every `dependsOn` names a real node.
   the simple attr lets the native multi-VM `ix up .#a .#b --build-vm <builder>`
   derive each VM name. The `<node>-system` package stays as a build alias. Merge
   the fleet's `nixosConfigurations` into your flake's top-level
-  `nixosConfigurations` (see `examples/dev-fleet/default.nix`).
-- **`ReplacementImage`** (`:34`): `imageName`, `imageTag`, `destination`,
-  `source`, `sourceDrv` (the OCI image derivation to realise and push).
+  `nixosConfigurations` (see `examples/nixos/switch-multi/flake.nix` for a
+  direct `ix up` flake and `examples/dev/fleet/default.nix` for the mkDev
+  wrapper).
+- **`ReplacementImage`** (`:34`): `imageName`, `destination`,
+  `sourceInstallable` (the `.#<node>` flake attr of the node's CAS-manifest
+  image, built at push time; the plan never carries the image's out/drv path
+  because instantiating the manifest builder forces the whole system closure).
 - **`HealthCheck`** (`:54`): `description`, `command` (argv), `timeoutSec`,
   `attempts`, `intervalSec`, `requiresIpv4`, and `from` (`guest`|`host`, stored
   as `from_` since `from` is a keyword).
-- **`FleetSecrets`** (`:104`): a `provider` (`type`, `mountRoot`, plus arbitrary
-  extra keys) and `values` (name -> `SecretSpec`: `key`, `path`, extra keys).
-  Default provider is `runtime-directory` at `/run/secrets` (`:116-120`).
+- **`SecretAttachment`**: `name` is the lower snake_case key in the ix account
+  secret store, and `target` describes delivery for this VM: `injectAs = "env"`
+  with an env var name, or `injectAs = "file"` with a path under `/run/secrets`
+  plus optional `owner` and `mode`.
 
 ## Backend: the ix SDK control plane
 
@@ -95,8 +110,10 @@ uses. A node maps to an ix branch (`ix_sdk.BranchInfo`/`BranchStatus`:
 
 - create / delete / start a branch: `client().create(...)`, `branch.delete()`,
   `branch.start()` (`create_node` `:366`, `remove_node` `:509`).
-- image push: `client().image_push(source, destination, region)` after a
-  host-side `nix-store --realise` of `sourceDrv` (`push_replacement_image`, `:338`).
+- image push: a host-side `nix build` of `sourceInstallable`, then
+  `ix image push-manifest --locator <out>/locator.bin <out>/manifest.cas
+  <destination> --region <region>` (`push_replacement_image`, `:338`); the CLI
+  prints the pushed reference on stdout.
 - snapshot: `client().snapshot(name=...)` (`snapshot_node`, `:423`).
 - in-place switch: `client().switch_system(name, target, build_on)`
   (`switch_node`, `:430`).
@@ -119,11 +136,23 @@ are what `switch` is for.
   builds a spec `{"nodes": {name: {command, depends_on}}}` where each command
   re-invokes `ix-fleet ... _<verb>-node <name>` with the forwarded flags; it also
   adds a serialization edge between nodes that share a
-  `replacementImage.destination` so the same image tag is not pushed twice
+  `replacementImage.destination` so the same replacement image is not pushed twice
   concurrently. `run_dag_runner` resolves the runner from `IX_FLEET_DAG_RUNNER`
   or `dag-runner` on `PATH`, writes a temp spec, execs it, and turns a nonzero
   exit into the process exit status. `--dry-run` runs the per-node workflows
   inline instead (so child output is visible).
+- **`updateStrategy` rolls replicas as DAG edges.** For replicas that share a
+  `baseName` and declare `updateStrategy.maxUnavailable = k`,
+  `rolling_update_edges` chains replica *i* onto replica *i−k*, so the DAG holds
+  a sliding window of at most `k` concurrent recreations; because every
+  per-node workflow ends with its health checks, the window only advances as
+  recreated replicas come back healthy — Kubernetes RollingUpdate, expressed as
+  dependency edges. Nodes without a strategy keep the fully-concurrent
+  behavior.
+- **`status`/`logs` are read-only and skip the dependency closure.**
+  `selected_in_order` takes exactly the nodes you named with `--on` (all, in
+  plan order, when empty) without pulling in their `dependsOn`, since observing
+  a node needs nothing deployed first.
 - **`switch` batches in-process through the native multi-VM `ix up`.**
   `cmd_switch` walks `dependency_batches` layers in order (so `dependsOn` still
   gates the switch) and, within each layer, groups the batchable nodes by

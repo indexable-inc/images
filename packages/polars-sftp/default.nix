@@ -10,7 +10,7 @@
   python3,
 }:
 # Build the PyO3 cdylib (standalone crate, vendored Cargo.lock) and package it
-# plus the Python source into an abi3 wheel with wheel/mkwheel.py. ssh2 links the
+# plus the Python source into an abi3 wheel with the shared PyO3 wheel builder.
 # system libssh2/openssl from nix (no vendored C build): OPENSSL_NO_VENDOR makes
 # openssl-sys use the nix openssl, and LIBSSH2_SYS_USE_PKG_CONFIG makes
 # libssh2-sys link the nix libssh2 via pkg-config instead of compiling its own.
@@ -27,7 +27,9 @@ let
       x86_64-linux = "manylinux_2_34_x86_64";
       aarch64-linux = "manylinux_2_34_aarch64";
     }
-    .${stdenv.hostPlatform.system}
+    .${
+      stdenv.hostPlatform.system
+    }
       or (throw "polars-sftp: unsupported system ${stdenv.hostPlatform.system}");
 
   # Strict type + annotation gate over the Python source (zuban --strict + ruff
@@ -38,7 +40,7 @@ let
   pyStrictTest = ix.buildPyStrictCheck ix.pkgs {
     pname = "polars-sftp";
     pythonSrc = ./python;
-    pythonPackages = ps: [ ps.polars ];
+    pythonPackages = ps: [ps.polars];
   };
 
   wheel = rustPlatform.buildRustPackage {
@@ -54,7 +56,6 @@ let
         ./src
         ./python
         ./pyproject.toml
-        ./wheel
       ];
     };
 
@@ -89,7 +90,12 @@ let
         exit 1
       fi
       mkdir -p "$out"
-      python3 ${./wheel/mkwheel.py} \
+      python3 ${ix.paths.root}/lib/build/pyo3-wheel.py \
+        --package polars_sftp \
+        --dist-name polars-sftp \
+        --so-name _polars_sftp.abi3.so \
+        --summary ${lib.escapeShellArg "Polars IO source for remote files over SFTP, imported as polars_sftp"} \
+        --requires-dist ${lib.escapeShellArg "polars>=1.40,<1.41"} \
         --cdylib "$cdylib" \
         --python-src ${./python} \
         --version ${version} \
@@ -113,10 +119,14 @@ let
     };
   };
 in
-wheel.overrideAttrs (old: {
-  passthru = (old.passthru or { }) // {
-    tests = (old.passthru.tests or { }) // {
-      pyStrict = pyStrictTest;
-    };
-  };
-})
+  wheel.overrideAttrs (old: {
+    passthru =
+      (old.passthru or {})
+      // {
+        tests =
+          (old.passthru.tests or {})
+          // {
+            pyStrict = pyStrictTest;
+          };
+      };
+  })

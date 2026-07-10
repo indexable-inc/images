@@ -1,7 +1,13 @@
 {
+  // astlog rules are S-expressions (no dedicated grammar/LSP yet, #1703):
+  // Scheme gives paren matching + sexp highlighting via the auto-installed extension.
+  "auto_install_extensions": {
+    "scheme": true
+  },
   "file_types": {
     "Nu": ["nu"],
-    "JSONC": ["common.json", "*-mods.json"]
+    "JSONC": ["common.json", "*-mods.json"],
+    "Scheme": ["astlog"]
   },
   "languages": {
     "Nix": {

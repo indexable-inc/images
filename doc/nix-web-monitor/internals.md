@@ -93,16 +93,50 @@ the build (`copied_size`, `:516`).
 
 `run_daemon_probe` (`:43`) is the one view the internal-json stream cannot give:
 it attaches a platform tracer to the running `nix-daemon` so the silent
-`addToStore` phase is visible. It finds daemon pids via `pgrep` (`:72`), then
-spawns `fs_usage -w -f filesys nix-daemon` on macOS or `strace -f -p <pid>` on
-Linux (`tracer_command`, `:101`), wrapped in `sudo -n` when not root (`-n` never
-prompts, so a user without privilege gets a "needs root" status instead of a
-hang, `:98`). The tracer's stdout lines are parsed by the parser's
+`addToStore` phase is visible. The probe parks (publishing an "idle" status)
+until a dashboard client subscribes to the delta feed, and ends the tracer once
+the last client leaves: only the WebSocket clients consume the panel, and an
+unwatched tracer would monopolize the kernel's single machine-wide ktrace
+session. While watched it finds daemon pids via `pgrep`, then spawns
+`fs_usage -w -f filesys nix-daemon` on macOS or `strace -f -p <pid>` on Linux
+(`tracer_command`), wrapped in `sudo -n` when not root (`-n` never prompts, so a
+user without privilege gets a "needs root" status instead of a hang). The tracer
+runs under a babysitter shell whose stdin-EOF kill path both reaps orphans when
+the monitor dies and gives the gate its off switch. The tracer's stdout lines are parsed by the parser's
 `parse_fs_usage_line`/`parse_strace_line`, folded into a `DaemonTrace`, and a
 `DaemonInfo` is published every `SAMPLE_INTERVAL` (exactly 1s, so the per-window
-syscall delta is the per-second rate with no division, `:30`). Every failure path
-(no daemon, missing tracer, denied attach) degrades to a status string the panel
-shows and the loop retries after `RETRY_INTERVAL` (5s); the probe never returns
-an error (`:41`). `OpClass::classify` (`parser/src/daemon.rs:37`) groups
-syscalls so the panel shows work kind (Link/Rename dominate store optimisation,
-Write/Fsync dominate writing a path).
+syscall delta is the per-second rate with no division, `:30`). Path-bearing
+syscalls also update a one-second hot-path window; the panel lists the busiest
+paths by current rate, then cumulative count, so a silent build has a concrete
+\"what is doing the most\" readout instead of only the latest touched path. Every
+failure path (no daemon, missing tracer, denied attach) degrades to a status
+string the panel shows and the loop retries after `RETRY_INTERVAL` (5s); the
+probe never returns an error (`:41`). `OpClass::classify`
+(`parser/src/daemon.rs:37`) groups syscalls so the panel shows work kind
+(Link/Rename dominate store optimisation, Write/Fsync dominate writing a path).
+
+## Machine-wide build view (`server/src/global.rs`)
+
+Everything above watches *one* nix invocation; `run_global_probe` watches the
+whole machine. It polls the patched-nix `nix store builds --json` subcommand
+(the `build-status-dir` experimental feature: every active build/substitution
+goal writes a status file under `<nixStateDir>/status/`), whose entries carry
+the derivation, worker pid, start time, requesting client user/uid, on-disk log
+path, and a why-chain walked up the goal's waiters to the root goal the client
+asked for. Detection is by result: if no invocation variant parses as a JSON
+build array (stock nix prints an "unknown command" error), the view is marked
+undetected and the panel hides; the probe re-probes every 30s so a mid-session
+nix upgrade is picked up. The parser side (`parser/src/global.rs`) owns the
+tolerant wire types: unknown fields are ignored, missing optionals become
+`None`, and an unknown goal kind folds to `Other`, so C++-side schema drift
+degrades one field rather than the probe.
+
+The panel groups rows by requesting user and renders each goal's why-chain as a
+provenance trail ("for <root> via <hop> → <hop>"), so any leaf build is
+attributable to the top-level thing that wanted it. Each build row can expand a
+live log tail served by `/api/global-log?drv=<drvPath>`: the server resolves the
+drv against the *current* machine view (never a caller-supplied path), then
+reads and bzip2-decompresses the log itself. Nix compresses build logs while
+writing them, so a live log is a truncated stream `nix log` refuses;
+`decompress_prefix` keeps everything decoded before the truncation point and
+`tail_lines` bounds the response to the newest 64 KiB at a line boundary.

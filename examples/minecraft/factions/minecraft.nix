@@ -1,9 +1,7 @@
-{ lib, ... }:
-let
+{lib, ...}: let
   world = import ./world.nix;
-  plugins = import ./plugins.nix { inherit world; };
-in
-{
+  plugins = import ./plugins.nix {inherit world;};
+in {
   services.minecraft = {
     enable = true;
     version = "26.1.2";
@@ -31,9 +29,9 @@ in
 
     plugins = plugins.enabled;
 
-    datapacks."max-height" = {
+    datapacks.max-height = {
       inherit (world.height) dimensionTypes pack;
-      worlds = [ world.name ];
+      worlds = [world.name];
     };
 
     properties = {

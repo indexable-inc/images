@@ -24,7 +24,8 @@ defmodule SymphonyElixir.Runtime.HostRuntime do
   """
 
   alias SymphonyElixir.Codex.Provision
-  alias SymphonyElixir.{Command, Config}
+  alias SymphonyElixir.Command
+  alias SymphonyElixir.Config
 
   require Logger
 

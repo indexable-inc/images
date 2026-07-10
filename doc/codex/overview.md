@@ -47,10 +47,14 @@ Defaults bump multi-agent fan-out well above stock:
   the v2 feature because v2 rejects `agents.max_threads`.
 - `agents.max_depth = 3` (parent -> child -> grandchild -> great-grandchild),
   still read under v2.
+- `suppress_unstable_features_warning = true`: enabling `multi_agent_v2` is an
+  under-development-feature opt-in, which otherwise makes Codex print an
+  unstable-features warning on every startup. The wrapper silences the warning
+  it causes; a user's own value for the key still wins.
 
 ### Baked MCP servers (`default.nix:62-73`, `80`)
 
-The house MCP servers are added as soft `-c mcp_servers.*` defaults from the same
+The default MCP servers are added as soft `-c mcp_servers.*` defaults from the same
 `ix.mcp` registry the claude-code wrapper renders, so Codex gets only the
 `index` MCP server and the Exa MCP server. The `index` server is present only
 when the `mcp` sibling is in scope (the flake package set, not the overlay;

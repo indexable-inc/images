@@ -2,13 +2,17 @@ defmodule SymphonyElixir.IR.ViewTest do
   use ExUnit.Case, async: true
 
   alias SymphonyElixir.Engine.Envelope
-  alias SymphonyElixir.IR.{Attempt, Node, RunGraph, View}
+  alias SymphonyElixir.IR.Attempt
+  alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.IR.RunGraph
+  alias SymphonyElixir.IR.View
 
   defp agent_node do
     {:ok, env} = Envelope.validate(%Envelope{engine: :codex, model: "gpt-5.3-codex", effort: :high, location: :local})
 
     attempt =
-      Attempt.start(1, :codex, "thread-1")
+      1
+      |> Attempt.start(:codex, "thread-1")
       |> Attempt.finish(:succeeded, :ok)
       |> Map.put(:cost, %{usd: 0.42, tokens_in: 100, tokens_out: 20})
 
@@ -21,7 +25,8 @@ defmodule SymphonyElixir.IR.ViewTest do
   end
 
   defp graph do
-    RunGraph.new("run_v", "hash", nil)
+    "run_v"
+    |> RunGraph.new("hash", nil)
     |> RunGraph.put_nodes([agent_node()])
     |> Map.put(:status, :succeeded)
     |> RunGraph.append_audit(:retry_node, "a", "alice", %{})
@@ -37,7 +42,7 @@ defmodule SymphonyElixir.IR.ViewTest do
   end
 
   test "summary cost is nil when no attempt reported a cost" do
-    g = RunGraph.new("r", "h", nil) |> RunGraph.put_nodes([Node.new(id: "x", ast_origin: {:exec, "x"}, kind: :exec, inputs: %{})])
+    g = "r" |> RunGraph.new("h", nil) |> RunGraph.put_nodes([Node.new(id: "x", ast_origin: {:exec, "x"}, kind: :exec, inputs: %{})])
     assert View.summary(g)["cost_usd"] == nil
   end
 
@@ -158,13 +163,13 @@ defmodule SymphonyElixir.IR.ViewTest do
 
   describe "summary/1 trigger and placement fields" do
     test "summary includes trigger as a string label for a manual trigger" do
-      g = graph() |> Map.put(:trigger, %{kind: :manual})
+      g = Map.put(graph(), :trigger, %{kind: :manual})
       s = View.summary(g)
       assert s["trigger"] == "manual"
     end
 
     test "summary includes trigger label for a cron trigger" do
-      g = graph() |> Map.put(:trigger, %{kind: :cron, schedule: "0 * * * *"})
+      g = Map.put(graph(), :trigger, %{kind: :cron, schedule: "0 * * * *"})
       s = View.summary(g)
       assert s["trigger"] == "cron 0 * * * *"
     end
@@ -175,13 +180,13 @@ defmodule SymphonyElixir.IR.ViewTest do
     end
 
     test "summary includes placement with declared and effective as strings" do
-      g = graph() |> Map.put(:placement, %{declared: :ixvm, effective: :host})
+      g = Map.put(graph(), :placement, %{declared: :ixvm, effective: :host})
       s = View.summary(g)
       assert s["placement"] == %{"declared" => "ixvm", "effective" => "host"}
     end
 
     test "summary includes placement for an ixvm -> host fallback" do
-      g = graph() |> Map.put(:placement, %{declared: :ixvm, effective: :host})
+      g = Map.put(graph(), :placement, %{declared: :ixvm, effective: :host})
       s = View.summary(g)
       # A consumer can detect a fallback by comparing declared != effective.
       assert s["placement"]["declared"] == "ixvm"

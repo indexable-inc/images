@@ -1,0 +1,9 @@
+{
+  "blender-mcp": {
+    "version": "1.6.0",
+    "rev": "6e99eb5a442b83766a5796975ec7bb5bfc791341",
+    "url": "https://github.com/ahujasid/blender-mcp/archive/6e99eb5a442b83766a5796975ec7bb5bfc791341.tar.gz",
+    "prefetch": "unpack",
+    "hash": "sha256-X2kztoD64VBdZtUAVGRhD9+p9KZk8u1y2P6C+wxPz7A="
+  }
+}

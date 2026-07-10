@@ -20,24 +20,22 @@ defmodule SymphonyElixirWeb.ApiController do
 
     case Map.get(params, "workflow") || Map.get(params, "dag") do
       name when is_binary(name) and name != "" ->
-        Ingress.start_by_name(name, %{kind: :manual, input: input}, [])
+        name
+        |> Ingress.start_by_name(%{kind: :manual, input: input}, [])
         |> respond_started(conn)
 
       _ ->
-        Ingress.start_by_trigger(%{kind: :manual, input: input}, [])
+        %{kind: :manual, input: input}
+        |> Ingress.start_by_trigger([])
         |> respond_started(conn)
     end
   end
 
-  defp respond_started({:ok, %{run_id: run_id}}, conn),
-    do: conn |> put_status(:created) |> json(%{run_ids: [run_id]})
+  defp respond_started({:ok, %{run_id: run_id}}, conn), do: conn |> put_status(:created) |> json(%{run_ids: [run_id]})
 
-  defp respond_started({:ok, started}, conn) when is_list(started),
-    do: conn |> put_status(:created) |> json(%{run_ids: Enum.map(started, & &1.run_id)})
+  defp respond_started({:ok, started}, conn) when is_list(started), do: conn |> put_status(:created) |> json(%{run_ids: Enum.map(started, & &1.run_id)})
 
-  defp respond_started({:error, {:workflow_not_found, _}} = reason, conn),
-    do: conn |> put_status(:not_found) |> json(%{error: inspect(reason)})
+  defp respond_started({:error, {:workflow_not_found, _}} = reason, conn), do: conn |> put_status(:not_found) |> json(%{error: inspect(reason)})
 
-  defp respond_started({:error, reason}, conn),
-    do: conn |> put_status(:unprocessable_entity) |> json(%{error: inspect(reason)})
+  defp respond_started({:error, reason}, conn), do: conn |> put_status(:unprocessable_entity) |> json(%{error: inspect(reason)})
 end

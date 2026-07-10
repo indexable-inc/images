@@ -1,0 +1,21 @@
+[package]
+name = "unibind-conformance-ex"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Runtime conformance surface for the unibind Elixir backend: async replies, caller-exit cancellation, resource destructors, demand-driven streams"
+
+[lib]
+name = "unibind_conformance_ex"
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+futures.workspace = true
+rustler.workspace = true
+tokio = { workspace = true, features = ["time"] }
+unibind = { workspace = true, features = ["ex"] }
+unibind-ex-runtime.workspace = true
+unibind-runtime.workspace = true

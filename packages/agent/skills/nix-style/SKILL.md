@@ -17,7 +17,7 @@ defensive. The Nix-specific checks on top:
 
 ## Nix style (astlog enforced)
 
-Run `nix run .#lint` before committing. It runs nixfmt, Statix, Deadnix, and
+Run `nix run .#lint` before committing. It runs alejandra, Statix, Deadnix, and
 the repo's astlog rules (`astlog-rules/nix.astlog` for Nix and
 `astlog-rules/rust.astlog` for the corpus/search Rust crates, both gated with
 `astlog scan`). The lint app is the mechanical source of truth. A legitimate exception to an astlog rule is suppressed in

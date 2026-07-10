@@ -1,37 +1,50 @@
 {
+  ix,
+  lib,
+  nix,
   stdenvNoCC,
   fetchurl,
-}:
-
-let
-  version = "e16636b0e5ce";
+  # Writer for `passthru.updateScript` (flake-package path only); null on the
+  # overlay path.
+  updateScriptWriter ? null,
+}: let
+  # Version + URL and SRI hash live in the sibling pins.json, never inline
+  # (repo policy). Bump the version/url in pins.json, then `nix run .#update`
+  # re-pins the hash.
+  pin = ix.pins.loadPin ./pins.json "artifacts";
+  inherit (pin) version;
+  updateScript = ix.pins.mkOptionalUpdater {
+    writeNushellApplication = updateScriptWriter;
+    inherit nix;
+    pname = "tonbo-artifacts";
+    relPath = "packages/tonbo-artifacts/pins.json";
+  };
 in
-stdenvNoCC.mkDerivation {
-  pname = "tonbo-artifacts";
-  inherit version;
+  stdenvNoCC.mkDerivation {
+    pname = "tonbo-artifacts";
+    inherit version;
 
-  src = fetchurl {
-    url = "https://artifacts.tonbo.dev/release/${version}/artifacts";
-    hash = "sha256-sYSENVI+l1DOfRtpnROkPY0/hJQoOjP1EsagrXSwIWY=";
-  };
+    src = fetchurl {inherit (pin) url hash;};
 
-  dontUnpack = true;
-  dontBuild = true;
-  strictDeps = true;
+    passthru = lib.optionalAttrs (updateScript != null) {inherit updateScript;};
 
-  installPhase = ''
-    # shell
-    runHook preInstall
+    dontUnpack = true;
+    dontBuild = true;
+    strictDeps = true;
 
-    install -Dm755 "$src" "$out/bin/artifacts"
+    installPhase = ''
+      # shell
+      runHook preInstall
 
-    runHook postInstall
-  '';
+      install -Dm755 "$src" "$out/bin/artifacts"
 
-  meta = {
-    description = "Tonbo Artifacts CLI";
-    homepage = "https://artifacts.tonbo.io/docs/overview/";
-    mainProgram = "artifacts";
-    platforms = [ "x86_64-linux" ];
-  };
-}
+      runHook postInstall
+    '';
+
+    meta = {
+      description = "Tonbo Artifacts CLI";
+      homepage = "https://artifacts.tonbo.io/docs/overview/";
+      mainProgram = "artifacts";
+      platforms = ["x86_64-linux"];
+    };
+  }

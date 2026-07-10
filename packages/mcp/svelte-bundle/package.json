@@ -1,0 +1,13 @@
+{
+  "name": "ix-svelte-bundle",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Compile a Svelte 5 component into one self-contained IIFE bundle for sandboxed dashboard resources",
+  "bin": { "svelte-bundle": "cli.mjs" },
+  "dependencies": {
+    "esbuild": "^0.25.0",
+    "esbuild-svelte": "^0.9.3",
+    "svelte": "^5.0.0"
+  }
+}

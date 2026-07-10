@@ -7,7 +7,7 @@ links:
   - label: nix-cargo-unit
     href: https://github.com/indexable-inc/index/tree/main/packages/nix-cargo-unit
   - label: units template
-    href: https://github.com/indexable-inc/index/blob/main/packages/nix/nix-cargo-unit/templates/units.nix.askama
+    href: https://github.com/indexable-inc/index/blob/main/packages/nix/nix-cargo-unit/templates/units.nix.in
 ---
 
 `nix-cargo-unit` used to build one derivation per test binary; a single flaky case re-ran every test in the file and lost Nix scheduler parallelism. The generated `tests.<binary>` attrset now exposes `all` (legacy whole-binary behavior) plus `cases."mod::test_x"`, one `runCommand` per individual test, invoked with `--exact`.

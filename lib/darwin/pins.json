@@ -1,0 +1,7 @@
+{
+  "macos-sdk": {
+    "version": "15.4",
+    "url": "https://github.com/joseluisq/macosx-sdks/releases/download/15.4/MacOSX15.4.sdk.tar.xz",
+    "hash": "sha256-oLe2aRKsDaDkWzBKMyus2+WMoXIiCCDUJe2yghOWL4E="
+  }
+}

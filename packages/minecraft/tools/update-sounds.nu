@@ -53,7 +53,7 @@ def main [
 
   let system = (^nix eval --impure --raw --expr "builtins.currentSystem")
   let expr = $"let f = builtins.getFlake \"path:($root)\"; in f.inputs.nixpkgs.legacyPackages.\"($system)\".callPackage ($sounds_nix) { }"
-  print $"building sound pack for ($mc_version) to compute packHash (downloads from Mojang)..."
+  print $"building sound pack for ($mc_version) to compute packHash, downloads from Mojang..."
   let res = (do { ^nix build --impure --no-link --expr $expr } | complete)
 
   let got = (
