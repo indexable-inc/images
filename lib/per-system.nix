@@ -142,11 +142,19 @@
           '(^|/)docker-compose\.ya?ml$'
           '(^|/)plugin\.yml$'
           '^packages/agent/symphony/workflows/.*/repositories\.yaml$'
+          '^\.editorconfig$'
+          '^packages/agent/symphony/elixir/\.sobelow-conf$'
+          '^packages/minecraft/minestom/servers/hello/gradle\.properties$'
+          '^packages/minecraft/minestom/servers/hello/gradle/verification-metadata\.xml$'
+          '^packages/minecraft/minestom/servers/hello/src/main/resources/logback\.xml$'
 
           # Generated manifests, locks, editor settings, and typed data.
           '(^|/)(package|tsconfig)\.json$'
           '(^|/)(package-lock|lock)\.json$'
-          '(^|/)(pins|manifest|settings|extensions|user-owners)\.json$'
+          '(^|/)(pins|manifest)\.json$'
+          '^\.(claude|vscode|zed)/settings\.json$'
+          '^\.vscode/extensions\.json$'
+          '^\.github/user-owners\.json$'
           '(^|/)(dag|upstream-status)\.json$'
           '(^|/)(fixtures?[^/]*|snapshots?|catalogs?|metadata|sounds|seeds)/.*\.json$'
           '^examples/.*\.json$'
@@ -156,7 +164,10 @@
           '^tests/.*\.json$'
         ]
         let candidates = (
-          fd --hidden --type file --extension toml --extension json --extension yaml --extension yml
+          fd --hidden --type file
+          --extension toml --extension json --extension yaml --extension yml
+          --extension kdl --extension ini --extension conf --extension cfg --extension xml
+          --extension properties --extension editorconfig --extension sobelow-conf
           --exclude .git --exclude .claude/worktrees
           | lines
         )
@@ -970,6 +981,13 @@
     fileset = fs.intersection (fs.gitTracked paths.root) (paths.root + "/astlog-rules");
   };
 
+  andrewZellij = import (paths.root + "/users/andrewgazelka/config/zellij") {
+    configRoot = paths.root + "/users/andrewgazelka/config";
+    inherit (pkgs) lib stdenvNoCC zellijPlugins;
+    xdgConfigHome = "/Users/andrewgazelka/.config";
+  };
+  andrewZellijConfig = pkgs.writeText "andrewgazelka-zellij.kdl" (ix.kdl.render andrewZellij.settings);
+
   tests = import paths.tests {
     inherit
       nixpkgs
@@ -1026,7 +1044,7 @@
     import ./image/health-checks.nix
     {
       inherit lib pkgs;
-      inherit (ix) writeNushellApplication;
+      inherit (ix) kdl writeNushellApplication;
       dagRunner = repoPackages.dag-runner;
     }
     {
@@ -1372,14 +1390,20 @@
             ''
               mkdir source
               cd source
-              touch repository-config.json
+              touch repository-config.json zellij-layout.kdl
               if ${lib.getExe lintStage} filenames >output 2>&1; then
                 echo "filename policy accepted repository-config.json" >&2
                 exit 1
               fi
               grep -F "repository-config.json" output
+              grep -F "zellij-layout.kdl" output
               touch "$out"
             '';
+          zellij-config = pkgs.runCommand "zellij-config-check" {nativeBuildInputs = [pkgs.zellij];} ''
+            export HOME="$TMPDIR/home"
+            mkdir -p "$HOME" "$out"
+            zellij --config ${andrewZellijConfig} setup --check >"$out/check.txt"
+          '';
           # Exercises the trusted half of the blast-radius PR comment: the
           # validate/render jq embedded in its workflow, extracted from the YAML so
           # the test can't drift from what the trusted comment job runs. The

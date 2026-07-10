@@ -1513,6 +1513,12 @@
     "tools.py"
     "mcp_ui.py"
   ];
+  zubanConfig = (pkgs.formats.ini {}).generate "ix-mcp-zuban.ini" {
+    mypy = {};
+    # Pygments builds public re-exports through module __getattr__, and several
+    # lexer/highlight helpers remain untyped in its partial stubs.
+    "mypy-pygments.*".disallow_untyped_calls = false;
+  };
   strictTypecheck = let
     # All src module package dirs go on MYPYPATH so first-party cross-imports
     # resolve; the green subset are the actual check targets.
@@ -1539,7 +1545,7 @@
       cp -r ${ixNotebookMcpSource} ix_notebook_mcp
       cp -r ${./src} src
       cp -r ${distillerPythonSource} distiller-src
-      cp ${./zuban.ini} zuban.ini
+      cp ${zubanConfig} zuban.ini
       chmod -R u+w ix_notebook_mcp src distiller-src
 
       export MYPYPATH=${lib.escapeShellArg mypypath}:.
