@@ -281,7 +281,7 @@ fn try_make_group(scan: &Output, pair: &CandidatePair) -> Option<CloneGroup> {
     })
 }
 
-fn ranges_overlap(a: &std::ops::Range<usize>, b: &std::ops::Range<usize>) -> bool {
+const fn ranges_overlap(a: &std::ops::Range<usize>, b: &std::ops::Range<usize>) -> bool {
     a.start < b.end && b.start < a.end
 }
 

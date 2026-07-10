@@ -1,4 +1,4 @@
-use super::helpers::{pair_hashes, parse_js, parse_rust};
+use super::helpers::{HashPair, pair_hashes, parse_js, parse_rust};
 use crate::compute;
 
 #[test]
@@ -41,7 +41,7 @@ fn content_hash_relations() {
         ),
     ];
     for (name, parse, left, right, equal) in cases {
-        let (left, right) = pair_hashes(parse, compute, left, right);
+        let HashPair { left, right } = pair_hashes(parse, compute, left, right);
         assert_eq!(left == right, equal, "{name}");
     }
 }
