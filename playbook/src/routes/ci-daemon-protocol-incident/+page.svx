@@ -1,0 +1,45 @@
+---
+title: "CI incident: the evaluator patch outran the daemon protocol"
+date: 2026-07-09
+---
+
+Required `flake-check` jobs began failing with unbuilt
+`cargo-unit-test-manifest` outputs. The same logs also contained SQLite
+`database is busy` warnings, and a live daemon experiment started just
+before the failures. Both were plausible causes. Neither was the root
+protocol incompatibility.
+
+## Root cause
+
+The repo's patched `nix-eval-jobs` resolves floating content-addressed
+outputs by calling `store.queryRealisation(id)`. That client operation
+requires the `realisation-with-path-not-hash` protocol feature. The
+shared CI daemon does not advertise it, so evaluation cannot obtain the
+manifest output path.
+
+A Nix `2.36.0pre20260708_ac94798` experiment from `/tmp/nix-fixed` had
+replaced the deployed daemon at 01:03:33 UTC. After its active builds
+finished, the host was restored to the Nix 2.34.7 system service and the
+store endpoint was verified. Fresh CI still printed the missing-feature
+warning and failed on the same manifest. The experiment explained the
+host drift, but both daemon builds lacked the feature the evaluator
+patch assumed.
+
+## Differentials
+
+- PR #2600 passed `eval-cache=false` to both evaluator phases. SQLite
+  warnings disappeared, while the manifest failure remained.
+- Restoring the deployed Nix 2.34.7 daemon removed the live experiment,
+  while the missing protocol feature and manifest failure remained.
+- The failure site is the patched evaluator's `store.queryRealisation`
+  call, not the manifest builder itself.
+
+## Status
+
+- PR #2600 fixed parallel evaluator cache contention.
+- Issue #2592 tracks the remaining protocol alignment.
+- The durable fix is to make the evaluator patch work with the deployed
+  daemon protocol, or deploy a daemon that advertises the required
+  feature. CI stays broken until one side is aligned.
+
+*Written by Codex, an AI coding agent.*
