@@ -3022,6 +3022,7 @@
     import asyncio
     import json
     import os
+    import sqlite3
     import tempfile
 
     from IPython.core.interactiveshell import InteractiveShell
@@ -3030,24 +3031,13 @@
     # formatter path runs without booting a kernel.
     InteractiveShell.instance()
 
-    store_path = tempfile.mktemp(suffix=".ixnb")
+    store_path = tempfile.mktemp(suffix=".db")
     os.environ["IX_MCP_STORE"] = store_path
     os.environ["WEAVE_URL"] = "off"
 
     import polars as pl
 
-    from ix_notebook_mcp import runtime, store as store_mod
-
-    persisted = {}
-    original_finish = store_mod.finish
-
-
-    def capture_finish(conn, **kwargs):
-        persisted[kwargs["id"]] = kwargs
-        return original_finish(conn, **kwargs)
-
-
-    store_mod.finish = capture_finish
+    from ix_notebook_mcp import runtime
 
     # A bytes image payload must normalize to a base64 string: raw bytes would not
     # survive JSON storage or an <img> data URI.
@@ -3158,8 +3148,8 @@
         # A DataFrame result is stored with its text/html bundle.
         df_job = await run("Result.of(pl.DataFrame({'a': [1, 2], 'b': ['x', 'y']}))", budget=3.0, name="df")
         await df_job.task
-        assert df_job.status == "done", (df_job.status, df_job.error)
-        result_mimes = {mime for out in persisted[df_job.id]["outputs"] for mime in out["data"]}
+        assert df_job.status == "done", df_job.status
+        result_mimes = {mime for out in runtime._job_outputs(df_job) for mime in out["data"]}
         assert "text/html" in result_mimes, ("result mimes", result_mimes)
 
         # An htpy element renders through the __html__ protocol: IPython's html
@@ -3169,7 +3159,7 @@
             "import htpy\nResult.of(htpy.div(class_='x')['<hi>'])", budget=3.0, name="htpy"
         )
         await htpy_job.task
-        htpy_html = [out["data"].get("text/html") for out in persisted[htpy_job.id]["outputs"]][-1]
+        htpy_html = [out["data"].get("text/html") for out in runtime._job_outputs(htpy_job)][-1]
         assert htpy_html == '<div class="x">&lt;hi&gt;</div>', htpy_html
 
         # A display() call made while a job runs is captured too.
@@ -3179,7 +3169,7 @@
             name="disp",
         )
         await disp_job.task
-        disp_mimes = {mime for out in persisted[disp_job.id]["outputs"] for mime in out["data"]}
+        disp_mimes = {mime for out in runtime._job_outputs(disp_job) for mime in out["data"]}
         assert "text/html" in disp_mimes, ("display mimes", disp_mimes)
 
         # A Result splits the human view (HTML on the dashboard) from the model
@@ -3188,7 +3178,7 @@
         from ix_notebook_mcp import outputs
         res_job = await run("Result(user_html='<b>hi</b>', llm_result='just-text')", budget=3.0, name="res")
         await res_job.task
-        res_bundle = [out["data"] for out in persisted[res_job.id]["outputs"]][-1]
+        res_bundle = [out["data"] for out in runtime._job_outputs(res_job)][-1]
         assert res_bundle.get("text/html") == "<b>hi</b>", res_bundle
         mcp = outputs.to_mcp([{"output_type": "execute_result", "data": res_bundle, "metadata": {}}])
         texts = [c.text for c in mcp if getattr(c, "text", None) is not None]
@@ -3199,16 +3189,16 @@
         # breaks nbformat -- and its keys reach the model text.
         dwim_job = await run("Result({'alpha': 1, 'beta': 2})", budget=3.0, name="dwim")
         await dwim_job.task
-        assert persisted[dwim_job.id]["status"] == "done", persisted[dwim_job.id]["status"]
-        dwim_bundle = [out["data"] for out in persisted[dwim_job.id]["outputs"]][-1]
+        assert dwim_job.status == "done", dwim_job.status
+        dwim_bundle = [out["data"] for out in runtime._job_outputs(dwim_job)][-1]
         assert isinstance(dwim_bundle.get("text/html"), str) and dwim_bundle["text/html"], dwim_bundle
         assert "alpha" in dwim_bundle.get("text/plain", "") and "beta" in dwim_bundle["text/plain"], dwim_bundle
 
         # Multiple values are ALL shown (not silently collapsed to the first).
         multi_job = await run("Result(True, [1, 2, 3])", budget=3.0, name="multi")
         await multi_job.task
-        assert persisted[multi_job.id]["status"] == "done", persisted[multi_job.id]["status"]
-        multi_text = [out["data"].get("text/plain", "") for out in persisted[multi_job.id]["outputs"]][-1]
+        assert multi_job.status == "done", multi_job.status
+        multi_text = [out["data"].get("text/plain", "") for out in runtime._job_outputs(multi_job)][-1]
         # Both values are shown: the bool by its repr, the list as its one-column
         # frame (NUON rows 1/2/3), not collapsed to just the first value.
         assert "true" in multi_text and "[[value]; [1], [2], [3]]" in multi_text, ("multi-value dropped a value", multi_text)
@@ -3218,7 +3208,7 @@
     print("rich-ok")
   '';
   # Proves the yielding-cell behavior end to end: a cell that `yield`s streams
-  # every yielded value to the job display stream and to the model (to_mcp),
+  # every yielded value to the store (the dashboard) and to the model (to_mcp),
   # keeps its top-level names in the namespace like a normal cell, and a
   # non-Result yield renders through Result.of. A plain (non-yielding) cell is
   # unchanged. In process (a shell, the store), no kernel boot or network, so
@@ -3226,14 +3216,16 @@
   yieldTestPy = pkgs.writeText "ix-mcp-yield-test.py" ''
     # python
     import asyncio
+    import json
     import os
+    import sqlite3
     import tempfile
 
     from IPython.core.interactiveshell import InteractiveShell
 
     InteractiveShell.instance()
 
-    store_path = tempfile.mktemp(suffix=".ixnb")
+    store_path = tempfile.mktemp(suffix=".db")
     os.environ["IX_MCP_STORE"] = store_path
     os.environ["WEAVE_URL"] = "off"
 
@@ -3245,6 +3237,7 @@
 
 
     async def main():
+
         # A yielding cell streams multiple Results; its top-level names persist.
         code = (
             "acc = 0\n"
@@ -3257,7 +3250,7 @@
         await job.task
         assert job.status == "done", (job.status, job.error)
         assert ns["acc"] == 3, ns.get("acc")
-        outs = job._displays
+        outs = runtime._job_outputs(job)
         htmls = [o["data"].get("text/html") for o in outs if "text/html" in o["data"]]
         assert len(htmls) == 4, ("expected 4 yielded results", len(htmls), outs)
 
@@ -3274,7 +3267,7 @@
         bare = await run("yield 123", budget=3.0, name="bare")
         await bare.task
         assert bare.status == "done", (bare.status, bare.error)
-        bare_outs = bare._displays
+        bare_outs = runtime._job_outputs(bare)
         bare_mcp = outputs.to_mcp(
             [{"output_type": "display_data", "data": o["data"], "metadata": {}} for o in bare_outs]
         )
@@ -3345,7 +3338,9 @@
     # python
     import asyncio
     import inspect
+    import json
     import os
+    import sqlite3
     import tempfile
 
     import polars as pl
@@ -3381,24 +3376,8 @@
     assert set(bound) == {"df", "n"}, bound
     assert bound["df"]["kind"] == "dataframe" and bound["n"]["summary"] == "7", bound
 
-    # The Weave store has no SQLite schema migration surface. Capture the final
-    # fact payload at the store boundary so this smoke still proves that a
-    # finished job persists its bindings.
-    from ix_notebook_mcp import store as store_mod
-
-    persisted = {}
-    original_finish = store_mod.finish
-
-
-    def capture_finish(conn, **kwargs):
-        persisted.update(kwargs)
-        return original_finish(conn, **kwargs)
-
-
-    store_mod.finish = capture_finish
-
-    # End to end: a finished job sends its bindings through the store boundary.
-    store_path = tempfile.mktemp(suffix=".ixnb")
+    # End to end: a finished job snapshots the bindings that persistence emits.
+    store_path = tempfile.mktemp(suffix=".db")
     os.environ["IX_MCP_STORE"] = store_path
     os.environ["WEAVE_URL"] = "off"
 
@@ -3416,7 +3395,7 @@
     async def main():
         job = await run("frame = pl.DataFrame({'a': [1, 2]})\nResult.ok('made it')", budget=3.0, name="bind")
         await job.task
-        stored = persisted["bindings"]
+        stored = runtime._cell_bindings(job)
         assert stored.get("frame", {}).get("kind") == "dataframe", stored
         # `pl` is referenced and live, so it is described as a module.
         assert stored.get("pl", {}).get("kind") == "module", stored
