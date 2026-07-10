@@ -1,8 +1,8 @@
 {pkgs}: let
-  # nix-eval-jobs uses libstore's worker protocol directly. Build it against
-  # the same stable Nix family as the deployed fleet daemon, not nixpkgs'
-  # moving default components: a newer client can require protocol features
-  # the 2.34 daemon does not advertise and then fail floating-CA evaluation.
+  # CA realisations are an unstable protocol. Build the evaluator from the
+  # same pinned 2.34 component set as the fleet daemon. A separate fetch here
+  # previously drifted to Nix master while the daemon stayed on 2.34.7,
+  # breaking CA realisation negotiation.
   package = pkgs.nix-eval-jobs.override {
     nixComponents = pkgs.nixVersions.nixComponents_2_34;
   };
