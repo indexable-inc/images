@@ -9,7 +9,7 @@
 //! needed. Events carry a connection generation so a stale thread's messages
 //! are ignored after the main loop moved on.
 
-use std::io::{BufReader, BufWriter};
+use std::io::{BufReader, BufWriter, Write as _};
 use std::sync::mpsc;
 use std::time::Duration;
 
