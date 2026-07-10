@@ -9,7 +9,7 @@ index 22a2ae9..692e830 100644
  #include <nix/store/path-with-outputs.hh>
  #include <nix/store/store-api.hh>
  #include <nix/store/local-fs-store.hh>
-@@ -145,6 +147,104 @@ auto checkOutputsAvailable(
+@@ -145,6 +147,116 @@ auto checkOutputsAvailable(
      return infos.empty() ? Drv::CacheStatus::Local : Drv::CacheStatus::Cached;
  }
  
