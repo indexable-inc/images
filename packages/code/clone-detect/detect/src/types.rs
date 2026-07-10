@@ -185,7 +185,7 @@ impl CloneGroup {
     }
 }
 
-pub(crate) fn file_is_generated(file: &clone_scanner::File) -> bool {
+pub fn file_is_generated(file: &clone_scanner::File) -> bool {
     let snapshot_path = file
         .path
         .components()
@@ -193,7 +193,7 @@ pub(crate) fn file_is_generated(file: &clone_scanner::File) -> bool {
     snapshot_path || generated_header(&file.source)
 }
 
-pub(crate) fn generated_header(source: &str) -> bool {
+pub fn generated_header(source: &str) -> bool {
     const MAX_HEADER_BYTES: usize = 4096;
     const MARKERS: [&[u8]; 4] = [
         b"automatically generated",
@@ -218,7 +218,7 @@ pub(crate) fn generated_header(source: &str) -> bool {
     })
 }
 
-fn fragment_line_count(fragment: &Fragment) -> usize {
+const fn fragment_line_count(fragment: &Fragment) -> usize {
     fragment
         .lines
         .end

@@ -112,10 +112,9 @@ pub fn instances(scan: &Output, config: &DetectConfig) -> DetectionResult {
     }
 }
 
-/// Put the canonical fragment first in every group, rank authored groups ahead
-/// of generated output, then rank by estimated removable lines. Generated
-/// groups remain present and gated; the ordering only keeps actionable work at
-/// the top. Stable tie-breakers make JSON output reproducible.
+/// Rank clone groups by actionability and estimated impact.
+///
+/// Stable tie-breakers make JSON output reproducible.
 pub fn rank_by_impact(groups: &mut [CloneGroup]) {
     for group in groups.iter_mut() {
         group.fragments.sort_by(|left, right| {
@@ -137,7 +136,7 @@ pub fn rank_by_impact(groups: &mut [CloneGroup]) {
     });
 }
 
-fn fragment_line_count(fragment: &Fragment) -> usize {
+const fn fragment_line_count(fragment: &Fragment) -> usize {
     fragment
         .lines
         .end
@@ -145,17 +144,22 @@ fn fragment_line_count(fragment: &Fragment) -> usize {
         .saturating_add(1)
 }
 
-fn first_fragment_key(group: &CloneGroup) -> Option<(&std::path::Path, usize, usize)> {
-    group.fragments.first().map(|fragment| {
-        (
-            fragment.file.as_path(),
-            fragment.byte_range.start,
-            fragment.byte_range.end,
-        )
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
+struct FragmentKey<'a> {
+    file: &'a std::path::Path,
+    start: usize,
+    end: usize,
+}
+
+fn first_fragment_key(group: &CloneGroup) -> Option<FragmentKey<'_>> {
+    group.fragments.first().map(|fragment| FragmentKey {
+        file: fragment.file.as_path(),
+        start: fragment.byte_range.start,
+        end: fragment.byte_range.end,
     })
 }
 
-fn kind_rank(kind: Kind) -> u8 {
+const fn kind_rank(kind: Kind) -> u8 {
     match kind {
         Kind::Type1 => 0,
         Kind::Type2 => 1,
