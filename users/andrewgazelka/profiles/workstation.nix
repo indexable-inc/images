@@ -1,6 +1,7 @@
 # Full personal workstation profile. Index-owned dependencies are closed over
 # by the flake export; host-owned values arrive through typed options.nix.
 {
+  codexModule,
   configRoot,
   indexPackages,
   ix,
@@ -274,6 +275,12 @@ in {
   imports = [
     optionsModule
     personalServicesModule
+    # Declares `programs.codex.houseContext` (and the rest of the index codex
+    # options) that this profile sets below; home-manager's stock
+    # programs.codex module only carries enable/package/skills/context, so
+    # without this import the houseContext definitions fail eval (#2653
+    # regression).
+    codexModule
     # Per-generation provenance manifest: each HM generation carries
     # provenance.json mapping deployed files back to the nix file:line that
     # defined them; `whence <path>` (below) reads it with zero eval.
