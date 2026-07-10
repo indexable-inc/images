@@ -407,6 +407,29 @@
         "aarch64-darwin"
       ] (system: raw.${system} // (linuxDarwinAliases.${system} or {}));
     packages = withDarwinAliases (collect "packages");
+    rawSecurityRoots = collect "securityRoots";
+    rawSecurityRootPaths = collect "securityRootPaths";
+    securityRoots =
+      rawSecurityRoots
+      // {
+        aarch64-darwin =
+          rawSecurityRoots.aarch64-darwin
+          // lib.mapAttrs (
+            name: _:
+              (rawSecurityRoots.aarch64-darwin.${name} or rawSecurityRoots.x86_64-linux.${name})
+              // {
+                attr = "packages.aarch64-darwin.${name}";
+              }
+          )
+          (linuxDarwinAliases.aarch64-darwin or {});
+      };
+    securityRootPaths =
+      rawSecurityRootPaths
+      // {
+        aarch64-darwin =
+          rawSecurityRootPaths.aarch64-darwin
+          // (linuxDarwinAliases.aarch64-darwin or {});
+      };
     indexPackages = system: packages.${system};
     personalConfigRoot = ./users/andrewgazelka/config;
     personalOptionsModule = ./users/andrewgazelka/options.nix;
@@ -599,6 +622,12 @@
     # monolithic `*-oci.tar` archives, which nothing substitutes. Non-schema,
     # so surfaced through `collect` like `ciChecks`. See lib/per-system.nix.
     cachePushRoots = withDarwinAliases (collect "cachePushRoots");
+    # Typed security exposure roots consumed as JSON by the runtime DAG scanner.
+    # Unlike cachePushRoots, every entry carries policy metadata and names only
+    # a shipped runtime output or an example service closure. securityRootPaths
+    # carries the derivations separately so callers realize terminal store paths
+    # instead of trusting content-addressed placeholders from evaluation.
+    inherit securityRoots securityRootPaths;
     formatter = collect "formatter";
     apps = collect "apps";
     devShells = collect "devShells";

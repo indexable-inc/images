@@ -64,6 +64,24 @@
       dir: lib.removePrefix "${builtins.toString paths.packagesRoot}/" (builtins.toString dir)
     )
     packageRegistry.packageDirsWithoutMetadata;
+  securityRootArgs = {
+    attr = "packages.${pkgs.stdenv.hostPlatform.system}.hello";
+    name = "hello";
+    class = "distributed-cli";
+    owner = "indexable-inc/index";
+    environment = "none";
+    exposure = "local";
+    criticality = "low";
+    slaHours = 168;
+  };
+  securityRoot = ix.securityRoots.mkRoot securityRootArgs;
+  securityRootJson = builtins.fromJSON (
+    builtins.unsafeDiscardStringContext (builtins.toJSON securityRoot)
+  );
+  invalidSecurityRootClass =
+    builtins.tryEval (ix.securityRoots.mkRoot (securityRootArgs // {class = "package";})).class;
+  invalidSecurityRootSla =
+    builtins.tryEval (ix.securityRoots.mkRoot (securityRootArgs // {slaHours = 0;})).slaHours;
   fleetWrapperReadmes = [
     "hermes/agent"
     "hermes/api-server"
@@ -2687,6 +2705,35 @@
   );
 
   groups = {
+    security-roots = [
+      {
+        assertion =
+          securityRootJson
+          == {
+            attr = "packages.${pkgs.stdenv.hostPlatform.system}.hello";
+            name = "hello";
+            class = "distributed-cli";
+            owner = "indexable-inc/index";
+            environment = "none";
+            exposure = "local";
+            criticality = "low";
+            slaHours = 168;
+          };
+        message = "security root policy should cross the nix eval JSON boundary without derivation state";
+      }
+      {
+        assertion = !invalidSecurityRootClass.success;
+        message = "security roots should reject unknown class values at evaluation";
+      }
+      {
+        assertion = !invalidSecurityRootSla.success;
+        message = "security roots should reject non-positive SLA hours at evaluation";
+      }
+      {
+        assertion = !(securityRootJson ? path);
+        message = "evaluated security root policy must not serialize an unrealized derivation path";
+      }
+    ];
     # efx terranix-port parity: the ported stacks under tests/efx must render
     # exactly the golden plan IR the efx CLI's tests parse, and everything the
     # translator cannot express must throw. See tests/efx-plan.nix.
@@ -5400,6 +5447,16 @@
   # --- Build-time checks ----------------------------------------------------
 
   buildScripts = {
+    security-roots = ''
+      root=${pkgs.hello}
+      case "$root" in
+        ${builtins.storeDir}/*) ;;
+        *)
+          echo "security root did not realize to a terminal store path: $root" >&2
+          exit 1
+          ;;
+      esac
+    '';
     factions = ''
       grep -q '^QuickShop-Hikari$' ${factionsExample.managed.dropins}/quickshop-hikari.jar.plugin-name
       grep -q '^Vault$' ${factionsExample.managed.dropins}/vaultunlocked.jar.plugin-name

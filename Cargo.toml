@@ -29,6 +29,7 @@ members = [
   "packages/code/clone-detect/scanner",
   "packages/code/clone-detect/test-support",
   "packages/config-launch",
+  "packages/cve-scan",
   "packages/code/code-highlight",
   "packages/search/code-tokenizer",
   "packages/dag-runner",

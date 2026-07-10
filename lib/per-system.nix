@@ -505,46 +505,6 @@
   };
 
   # `nix run .#cve-scan`: scan the whole Nix closure of the repo's key outputs
-  # for known CVEs (issue #1697). cargoAudit (lib/rust/policy.nix) only covers the
-  # workspace Cargo.lock against RustSec; nothing scanned the closure for a
-  # vulnerable system lib, a stale OpenSSL in an image, or a C dependency of a
-  # tool. This wraps `vulnix` -- the Nix-native NVD closure scanner (chosen over
-  # sbomnix/vulnxscan: leaner, first-class `--json`, caches the NVD feed locally
-  # so only the first/refresh run needs network, and works on both x86_64-linux
-  # and aarch64-darwin). The scan target is `.#cachePushRoots.<system>`: the
-  # registry- and example-fleet-derived roots cache-push.yml publishes (every
-  # package, images as their `toplevel` closure, plus each example fleet node's
-  # system closure), so the closure list grows with the repo rather than being
-  # hardcoded, and it is exactly "the repo's key outputs" a consumer substitutes.
-  #
-  # Advisory data is impure and fresh, so this is an app plus a scheduled workflow
-  # that files a tracking issue (.github/workflows/cve-scan.yml), NOT a blocking
-  # flake check. `vulnix` needs `nix-store` (and `nix build`) on PATH; both come
-  # from the runtime `pkgs.nix`. The wrapper forces a UTF-8 locale (vulnix decodes
-  # NVD text and aborts under the C locale); see cve-scan.py.
-  cveScan = ix.writePythonApplication pkgs {
-    name = "cve-scan";
-    src = paths.tools.cveScan;
-    pyChecker = "zuban";
-    # The committed whitelist of acknowledged advisories is baked in as a store
-    # path so `nix run .#cve-scan` applies it from any working directory; extra
-    # `--whitelist` flags at the CLI add to it (argparse append). Masked
-    # advisories stay visible as a count (vulnix --show-whitelisted), never
-    # silently dropped.
-    args = [
-      "--whitelist"
-      "${paths.packagesRoot + "/cve-scan/whitelist.toml"}"
-    ];
-    runtimeInputs = [
-      pkgs.vulnix
-      pkgs.nix
-    ];
-    # pydantic validates vulnix's --json output at the boundary so an upstream
-    # schema drift fails with a path-precise error rather than a bare KeyError.
-    python = pkgs.python314.withPackages (ps: [ps.pydantic]);
-    meta.description = "Scan the Nix closure of the repo's key outputs for CVEs (vulnix)";
-  };
-
   # One symlink-free directory holding every skill under `skills/`, ready to
   # copy into `.claude/skills`.
   skillsDir = ix.skills.mkSkillsDir {inherit pkgs;};
@@ -1486,7 +1446,6 @@
       bench-filesystem = benchFilesystem;
       update-mods = updateMods;
       update-loaders = updateLoaders;
-      cve-scan = cveScan;
       inherit update;
       ix-shell-sync-ignored = ixShellSyncIgnored;
       mc-source = mcSource;
@@ -1494,19 +1453,22 @@
       agents = agentsDir;
       skills = skillsDir;
       claude-plugin = claudePluginDir;
-      # The attic binary cache client, jq, findutils (xargs), and gh, used by
-      # cache-push.yml (attic/jq/xargs) and cve-scan.yml (jq/gh). Pinned to the
-      # flake's nixpkgs so the workflows resolve them with `nix build .#<tool>`
-      # rather than depending on a tool being on the runner PATH or a floating
+      # CI tools are pinned to the flake's nixpkgs so workflows resolve exact
+      # executables with `nix build .#<tool>` instead of trusting runner PATH.
+      # cache-push uses attic/jq/xargs/gh; cve-scan uses curl/jq/tar.
+      # This avoids depending on a tool being on the runner PATH or a floating
       # `nixpkgs#` registry reference. The self-hosted runner PATH carries
       # coreutils + nix but not findutils, jq, or gh, so the bare commands are
       # `command not found` (cve-scan run 28598889924 died on exactly that).
       inherit
         (pkgs)
         attic-client
+        coreutils
+        curl
         jq
         findutils
         gh
+        gnutar
         ;
     }
     // lib.optionalAttrs (system == "x86_64-linux") {inherit check;}
@@ -1516,6 +1478,81 @@
     // nonNixExampleDescriptions
     // crossPackages
     // healthChecks.lifecyclePackages;
+  securityRootRegistry = let
+    mkRoot = ix.securityRoots.mkRoot;
+    owner = "indexable-inc/index";
+    cachePolicy = {
+      inherit owner;
+      class = "cache-only";
+      environment = "none";
+      exposure = "none";
+      criticality = "low";
+      slaHours = 168;
+    };
+    baseImagePolicy = {
+      inherit owner;
+      class = "base-image";
+      environment = "development";
+      exposure = "internal";
+      criticality = "medium";
+      slaHours = 72;
+    };
+    # Business exposure is never inferred from package metadata. Add a complete
+    # policy here only when a package is known to be deployed or distributed;
+    # every unspecified non-image output remains cache hygiene, not exposure.
+    securityRootPolicies = {};
+    packageEntries =
+      lib.mapAttrs (
+        name: package: let
+          isImage = package ? passthru.toplevel;
+          path = package.passthru.toplevel or (lib.getOutput package.outputName package);
+          policy =
+            if isImage
+            then baseImagePolicy
+            else securityRootPolicies.${name} or cachePolicy;
+        in {
+          inherit path;
+          root = mkRoot (
+            {
+              attr = "packages.${system}.${name}";
+              inherit name;
+            }
+            // policy
+          );
+        }
+      )
+      packageSet;
+    exampleEntries =
+      lib.concatMapAttrs (
+        fleetName: fleet:
+          lib.mapAttrs' (
+            node: path: let
+              name = "example-${fleetName}-${node}";
+            in
+              lib.nameValuePair name {
+                inherit path;
+                root = mkRoot {
+                  attr = "exampleFleets.${system}.${fleetName}.systemPackages.${node}";
+                  inherit name owner;
+                  class = "deployed-service";
+                  environment = "development";
+                  exposure = "internal";
+                  criticality = "medium";
+                  slaHours = 72;
+                };
+              }
+          )
+          fleet.systemPackages
+      )
+      exampleFleets;
+    entries =
+      if pkgs.stdenv.hostPlatform.isDarwin
+      then packageEntries
+      else packageEntries // exampleEntries;
+  in {
+    securityRoots = lib.mapAttrs (_: entry: entry.root) entries;
+    securityRootPaths = lib.mapAttrs (_: entry: entry.path) entries;
+  };
 in {
   packages = packageSet;
 
@@ -1585,6 +1622,11 @@ in {
     if pkgs.stdenv.hostPlatform.isDarwin
     then imagesAsClosures // nativeIfdRoots
     else imagesAsClosures // exampleNodeToplevels // crossIfdRoots;
+
+  # The policy manifest is safe to `nix eval --json`: derivations live in the
+  # separate securityRootPaths output and must be realized before their terminal
+  # store paths are trusted.
+  inherit (securityRootRegistry) securityRoots securityRootPaths;
 
   inherit darwinPackageAliases;
 
