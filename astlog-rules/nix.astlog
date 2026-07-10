@@ -1580,41 +1580,29 @@
 ;; or more consecutive digits is read by counting digits; group them in
 ;; threes with underscore separators (`10_000`, `0.000_001`), grouping the
 ;; integer part and the exponent from the right and the fraction from the
-;; left of the decimal point. The repo's patched nix accepts the syntax
+;; left of the decimal point. The toolchain speaks this dialect end to end:
+;; the patched nix lexer
 ;; (packages/nix/nix/patches/0014-libexpr-accept-underscore-digit-separators)
-;; and strips the separators before parsing the value. Two lints share the
-;; machinery:
+;; strips the separators before parsing the value, and the in-repo
+;; tree-sitter-nix fork (packages/code/tree-sitter-nix) lexes an underscore
+;; literal as one integer/float node, so these rules see whole literals.
+;; Two lints share the misgrouped-digits builtin (which binds the canonical
+;; regrouping), each with a rewrite so `astlog fix` repairs the literal:
 ;; - no-misgrouped-digit-separators (error): a literal that already carries
 ;;   separators must use exactly the canonical grouping (`1_0000` ->
-;;   `10_000`). Stock tree-sitter-nix splits an underscore literal into an
-;;   application chain (`1_0000` parses as `1` applied to `_0000`), so the
-;;   pattern also matches apply_expression and the misgrouped-digits builtin
-;;   validates that the node text really is one numeric literal.
+;;   `10_000`).
 ;; - prefer-digit-grouping (warning, advisory for now): a bare literal with
 ;;   five or more consecutive digits should gain separators (`10000` ->
-;;   `10_000`). Deliberately not an error yet: every tool that parses repo
-;;   .nix files (stock nix in CI, alejandra, statix, deadnix,
-;;   tree-sitter-nix) still rejects underscore literals, so the fix cannot
-;;   be applied to tracked files. Flip to error and run
-;;   `nix run .#astlog -- fix astlog-rules/nix.astlog . --write` once the
-;;   toolchain accepts the syntax.
-;; misgrouped-number: any node whose text is one numeric literal with
-;; non-canonical grouping, with the canonical regrouping bound to `fixed`.
-;; An underscore literal parses as nested applications, so every inner node
-;; of one literal would also match; misgrouped-number-inner marks nodes whose
-;; parent belongs to the same literal, and the lint rules keep only the
-;; outermost so one literal yields one finding and one edit.
+;;   `10_000`). Not yet an error: CI still evaluates and formats repo .nix
+;;   with stock nix / alejandra / statix / deadnix, which reject underscore
+;;   literals, so the fix cannot be applied to tracked files. Flip to error
+;;   and run `nix run .#astlog -- fix astlog-rules/nix.astlog . --write`
+;;   once the toolchain is patched throughout.
 (rule (misgrouped-number n fixed)
-  (match nix "[(integer_expression) (float_expression) (apply_expression)] @n")
-  (text-match n "^[0-9.]")
+  (match nix "[(integer_expression) (float_expression)] @n")
   (misgrouped-digits n fixed))
-(rule (misgrouped-number-inner n)
-  (misgrouped-number n fixed)
-  (parent p n)
-  (misgrouped-number p pfixed))
 (rule (no-misgrouped-digit-separators n fixed)
   (misgrouped-number n fixed)
-  (not (misgrouped-number-inner n))
   (text-match n "_"))
 (lint no-misgrouped-digit-separators error
   "underscore separators must group digits in threes (integer part and exponent from the right, fraction from the left); write `{fixed}`")
@@ -1622,7 +1610,6 @@
   (replace n "{fixed}"))
 (rule (prefer-digit-grouping n fixed)
   (misgrouped-number n fixed)
-  (not (misgrouped-number-inner n))
   (text-match n "^[^_]*$"))
 (lint prefer-digit-grouping warning
   "five or more consecutive digits are read by counting; group them in threes with underscore separators: `{fixed}` (advisory until the toolchain accepts underscore literals)")

@@ -657,14 +657,13 @@ fn no_descendant_is_strict() -> TestResult {
 #[test]
 fn misgrouped_digits_flags_and_regroups_nix_literals() -> TestResult {
     // Mirrors the shape of the repo's digit-grouping lints
-    // (astlog-rules/nix.astlog): bare literals are single
-    // integer/float_expression nodes, while an underscore literal parses as a
-    // nested application chain whose node text is exactly the literal, so the
-    // inner-node exclusion must leave one finding (and one edit) per literal.
+    // (astlog-rules/nix.astlog). The workspace's tree-sitter-nix fork lexes
+    // underscore literals as single integer/float nodes (matching the
+    // patched nix lexer), so one literal is one node, one finding, one edit.
     let source = r#"{
   ungrouped = 100000;
   misgrouped = 1_0000;
-  nested = 1_0000.000001;
+  misgroupedFrac = 1_0000.000001;
   fine = 10_000;
   short = 1000;
   frac = 0.000001;
@@ -673,16 +672,9 @@ fn misgrouped_digits_flags_and_regroups_nix_literals() -> TestResult {
 }
 "#;
     let rules = r#"
-(rule (misgrouped-number n fixed)
-  (match nix "[(integer_expression) (float_expression) (apply_expression)] @n")
-  (misgrouped-digits n fixed))
-(rule (misgrouped-number-inner n)
-  (misgrouped-number n fixed)
-  (parent p n)
-  (misgrouped-number p pfixed))
 (rule (needs-grouping n fixed)
-  (misgrouped-number n fixed)
-  (not (misgrouped-number-inner n)))
+  (match nix "[(integer_expression) (float_expression)] @n")
+  (misgrouped-digits n fixed))
 (lint needs-grouping error "group digits in threes: `{fixed}`")
 (rewrite regroup (needs-grouping n fixed)
   (replace n "{fixed}"))
@@ -712,12 +704,9 @@ fn misgrouped_digits_flags_and_regroups_nix_literals() -> TestResult {
     let content = &rewritten[0].content;
     assert!(content.contains("ungrouped = 100_000;"));
     assert!(content.contains("misgrouped = 10_000;"));
-    assert!(content.contains("nested = 10_000.000_001;"));
+    assert!(content.contains("misgroupedFrac = 10_000.000_001;"));
     assert!(content.contains("frac = 0.000_001;"));
-    assert!(
-        content.contains("fine = 10_000;"),
-        "grouped literal untouched"
-    );
+    assert!(content.contains("fine = 10_000;"), "grouped literal untouched");
     assert!(content.contains("short = 1000;"), "four digits stay bare");
     assert!(
         content.contains("fracFine = 1_000.000_1;"),
@@ -732,9 +721,9 @@ fn misgrouped_digits_flags_and_regroups_nix_literals() -> TestResult {
 
 #[test]
 fn misgrouped_digits_handles_exponents_and_rejects_non_numbers() -> TestResult {
-    // Exponent digits group from the right like the integer part; identifier
-    // application chains that merely look number-adjacent (`2.5e10_000` is
-    // canonical, `builtins.foo 100` is not a literal) stay clean.
+    // Exponent digits group from the right like the integer part; a call
+    // argument is still a literal of its own, and non-number text (the
+    // application node's text) never unifies.
     let source = "{
   expUngrouped = 2.5e1_0;
   expFine = 2.5e10_000;
@@ -772,7 +761,7 @@ fn misgrouped_digits_handles_exponents_and_rejects_non_numbers() -> TestResult {
             ("100000".to_owned(), "100_000".to_owned()),
             ("2.5e1_0".to_owned(), "2.5e10".to_owned()),
         ],
-        "the misgrouped exponent and the bare applied literal fire; the canonical exponent and the application node do not"
+        "the misgrouped exponent and the applied literal fire; the canonical exponent and the application node do not"
     );
     Ok(())
 }

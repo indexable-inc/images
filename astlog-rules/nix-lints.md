@@ -2554,9 +2554,9 @@ toward separators. Both share the `misgrouped-digits` builtin and an autofix
 
 **🔴 error**
 
-A literal that already carries underscore separators must use exactly the canonical grouping: threes, counted from the right for the integer part and the exponent and from the left of the decimal point for the fraction (`1_0000` is `10_000`, `1_000.00_001` is `1_000.000_01`). Stock tree-sitter-nix splits an underscore literal into an application chain (`1_0000` parses as `1` applied to `_0000`), so the rule also matches `apply_expression` nodes and the `misgrouped-digits` builtin validates that the node text really is one numeric literal; an inner-node exclusion keeps one finding (and one rewrite edit) per literal.
+A literal that already carries underscore separators must use exactly the canonical grouping: threes, counted from the right for the integer part and the exponent and from the left of the decimal point for the fraction (`1_0000` is `10_000`, `1_000.00_001` is `1_000.000_01`). The workspace's tree-sitter-nix fork (`packages/code/tree-sitter-nix`) lexes underscore literals as single integer/float nodes -- the same dialect the patched nix lexer accepts -- so one literal is one finding and one rewrite edit.
 
-*Matches:* `integer_expression` / `float_expression` / `apply_expression` · *predicates:* `text-match`, `misgrouped-digits`, `not` · *1 pattern variant* · *rewrite:* regroups the digits canonically
+*Matches:* `integer_expression` / `float_expression` · *predicates:* `text-match`, `misgrouped-digits` · *1 pattern variant* · *rewrite:* regroups the digits canonically
 
 <table><tr><th>flagged</th><th>ok</th></tr><tr><td>
 
@@ -2578,7 +2578,7 @@ A literal that already carries underscore separators must use exactly the canoni
 
 A bare literal with five or more consecutive digits is read by counting digits; group them in threes with underscore separators (`300000` is `300_000`, `0.000001` is `0.000_001`), which the repo's patched nix accepts. Four digits or fewer stay bare (`1000` is fine). Warning severity, deliberately: every other tool that parses repo `.nix` files (stock nix in CI, alejandra, statix, deadnix, tree-sitter-nix) still rejects underscore literals, so the fix cannot yet be applied to tracked files. Flip to `error` and run the autofix across the repo once the toolchain accepts the syntax.
 
-*Matches:* `integer_expression` / `float_expression` · *predicates:* `text-match`, `misgrouped-digits`, `not` · *1 pattern variant* · *rewrite:* inserts canonical separators
+*Matches:* `integer_expression` / `float_expression` · *predicates:* `text-match`, `misgrouped-digits` · *1 pattern variant* · *rewrite:* inserts canonical separators
 
 <table><tr><th>flagged</th><th>ok</th></tr><tr><td>
 
