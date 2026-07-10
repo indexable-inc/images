@@ -13,7 +13,8 @@
 
 use anyhow::{Context as _, Result, anyhow};
 use audio_blob::BlobHash;
-use loro::{ExportMode, LoroDoc, LoroMap, LoroValue, VersionVector};
+use loro::{ExportMode, LoroDoc, LoroMap, LoroValue};
+pub use loro::VersionVector;
 
 /// Root map holding session-wide settings (currently the sample rate).
 const SESSION: &str = "session";
