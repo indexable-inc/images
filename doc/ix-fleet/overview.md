@@ -48,7 +48,7 @@ subcommand would run without calling the API.
 | `replace` | Like `up` but always delete-then-create the node on the pushed image (`cmd_replace`, `:836`). |
 | `switch` | In-place NixOS system switch of running nodes (target or build-from-source), snapshotting first. Remote source builds go through the platform's native multi-VM `ix up` in dependency layers (`cmd_switch`). |
 | `health` | Run each selected node's health checks (`cmd_health`, `:876`). |
-| `status` | kubectl-get for the fleet: one row per selected node with NODE, STATUS, READY (health checks passed/total), ADDRESS; `-o wide` adds REGION, IMAGE, DESIRED-IMAGE; `-o json` emits machine-readable reports. Exits 1 when any selected node is unhealthy (`cmd_status`). |
+| `status` | kubectl-get for the fleet: one row per selected node with NODE, STATUS, READY (health checks passed/total), ADDRESS; `-o wide` adds REGION, IMAGE, DESIRED-IMAGE; `-o json` emits machine-readable reports. In one-shot mode, exits 1 when any selected node is unhealthy; `--watch` polls until interrupted (`cmd_status`). |
 | `logs` | Pull journalctl output from selected nodes via the guest exec channel; lines are prefixed `[node]` when more than one node is selected (`cmd_logs`). |
 | `down` | Remove selected nodes in reverse plan order, collecting failures (`cmd_down`, `:886`). |
 

@@ -224,12 +224,19 @@ def client() -> ix_sdk.Client:
 
 def status_str(status: ix_sdk.BranchStatus) -> str:
     """Render a BranchStatus as the lowercase string the `ix ls` JSON used, so
-    host health-check env vars (IX_NODE_STATUS) keep their previous shape."""
-    return {
-        ix_sdk.BranchStatus.RUNNING: "running",
-        ix_sdk.BranchStatus.STOPPED: "stopped",
-        ix_sdk.BranchStatus.FAILED: "failed",
-    }.get(status, str(status))
+    host health-check env vars (IX_NODE_STATUS) keep their previous shape.
+
+    Compares by equality, not a dict lookup: the darwin SDK wheel's
+    BranchStatus defines __eq__ without __hash__, so hashing it raises
+    TypeError on the very platform operators run ix-fleet from."""
+    for known, text in [
+        (ix_sdk.BranchStatus.RUNNING, "running"),
+        (ix_sdk.BranchStatus.STOPPED, "stopped"),
+        (ix_sdk.BranchStatus.FAILED, "failed"),
+    ]:
+        if status == known:
+            return text
+    return str(status)
 
 
 class CliError(RuntimeError):
@@ -1157,7 +1164,9 @@ async def status_check(node: FleetNode, name: str, check: HealthCheck) -> CheckR
     report should say."""
     try:
         detail = await attempt_health_check(node, check)
-    except ix_sdk.IxError as error:
+    except (ix_sdk.IxError, OSError) as error:
+        # OSError covers host checks whose binary is missing/unrunnable; one
+        # broken check must not abort the whole status table.
         detail = str(error)
     return CheckResult(name=name, healthy=detail is None, detail=detail)
 
@@ -1264,6 +1273,8 @@ async def cmd_status(plan: FleetPlan, args: argparse.Namespace) -> None:
         return
 
     if args.watch:
+        # kubectl-style: --watch re-renders until interrupted. The unhealthy
+        # exit-1 contract applies to one-shot mode only.
         while True:
             reports = await collect_status(plan, args)
             render_status(reports, args.output)
@@ -1285,11 +1296,21 @@ def logs_command(args: argparse.Namespace) -> list[str]:
     return command
 
 
+# The SDK exec RPC has no deadline of its own; without one, a single wedged
+# guest hangs `logs` for every node.
+LOGS_TIMEOUT_SEC = 60
+
+
 async def node_logs(node: FleetNode, command: list[str]) -> str:
     branch = await client().find_by_name(node.name)
     if branch is None:
         raise RuntimeError(f"{node.name} not found")
-    result = await branch.exec(list(command), check=False, quiet=True)
+    try:
+        result = await asyncio.wait_for(
+            branch.exec(list(command), check=False, quiet=True), LOGS_TIMEOUT_SEC
+        )
+    except TimeoutError:
+        raise RuntimeError(f"journalctl on {node.name} timed out after {LOGS_TIMEOUT_SEC}s") from None
     if result.exit_code != 0:
         detail = (result.stdout + result.stderr).strip()
         raise RuntimeError(f"journalctl on {node.name} failed: {detail or result.exit_code}")
@@ -1304,11 +1325,26 @@ async def cmd_logs(plan: FleetPlan, args: argparse.Namespace) -> None:
             step(f"+ logs {node.name}: exec {shlex.join(command)}")
         return
 
-    outputs = await asyncio.gather(*(node_logs(node, command) for node in nodes))
+    outputs = await asyncio.gather(
+        *(node_logs(node, command) for node in nodes), return_exceptions=True
+    )
     prefix = len(nodes) > 1
+    failures: list[str] = []
     for node, output in zip(nodes, outputs, strict=True):
+        if isinstance(output, BaseException):
+            failures.append(f"{node.name}: {output}")
+            continue
         for line in output.splitlines():
             print(f"[{node.name}] {line}" if prefix else line)
+    if failures:
+        raise RuntimeError("failed to fetch logs: " + "; ".join(failures))
+
+
+def positive_int(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"invalid value {text!r}: must be >= 1")
+    return value
 
 
 def parser() -> argparse.ArgumentParser:
@@ -1347,7 +1383,7 @@ def parser() -> argparse.ArgumentParser:
     add_common_options(status, defaults=False)
     status.add_argument("-o", "--output", choices=["table", "wide", "json"], default="table")
     status.add_argument("--watch", action="store_true")
-    status.add_argument("--interval", type=int, default=5, metavar="SECONDS")
+    status.add_argument("--interval", type=positive_int, default=5, metavar="SECONDS")
     status.add_argument("--no-checks", action="store_true")
     logs = sub.add_parser("logs")
     add_common_options(logs, defaults=False)

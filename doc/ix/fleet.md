@@ -72,7 +72,7 @@ all, in plan order); `--dry-run` prints the steps without calling the API
 | `replace` | Like `up`, but always delete-then-create the node on the pushed image. |
 | `switch` | In-place NixOS system switch of running nodes (snapshots first). |
 | `health` | Run each selected node's health checks. |
-| `status` | One row per node: live STATUS, READY (health checks passed/total), ADDRESS. `-o wide` adds REGION and running vs desired IMAGE; `-o json` for scripts; `--watch [--interval N]` polls; `--no-checks` skips probes. Exits 1 if any node is unhealthy. |
+| `status` | One row per node: live STATUS, READY (health checks passed/total), ADDRESS. `-o wide` adds REGION and running vs desired IMAGE; `-o json` for scripts; `--watch [--interval N]` polls until interrupted; `--no-checks` skips probes. In one-shot mode, exits 1 if any node is unhealthy. |
 | `logs` | Pull journalctl output from selected nodes (`-u/--unit`, `-n/--lines`, `--since`), prefixing each line with `[node]` when more than one node is selected. |
 | `down` | Remove selected nodes in reverse plan order. |
 
