@@ -57,6 +57,10 @@
     {
       "patch": "0013-libfetchers-opt-in-incremental-fetching-of-forge-inp.patch",
       "deps": []
+    },
+    {
+      "patch": "0014-libexpr-accept-underscore-digit-separators-in-numeri.patch",
+      "deps": []
     }
   ]
 }
