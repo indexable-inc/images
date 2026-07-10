@@ -8,12 +8,13 @@
 # apply this to the nixpkgs builds.
 #
 # Mechanics: nixpkgs vendors each tool's locked dependencies into a
-# fixed-output vendor dir, and the cargo setup hooks copy it to the writable
-# `$cargoDepsCopy` before the build compiles anything, so a `preBuild` can
-# patch the vendored rnix source in place with no new fixed-output hash
-# (`preBuild`, not `postPatch`: which phase performs the writable copy has
-# moved between nixpkgs vendorer generations, and pre-build is after every
-# variant while still before cargo reads a line of the crate). The
+# fixed-output vendor dir. Older vendorer generations copied it to a writable
+# `$cargoDepsCopy`; the current one points cargo's `.cargo/config.toml`
+# straight at the read-only store dir and exports only `$cargoDeps`. Handle
+# both from `preBuild` (after every cargo-setup variant, before cargo reads a
+# line of the crate): patch the writable copy when one exists, otherwise make
+# our own copy of the store vendor dir, patch that, and repoint the cargo
+# config -- either way no new fixed-output hash. The
 # tokenizer moved across rnix releases, so the patch is selected by the
 # vendored version, and an unknown version fails the build with instructions
 # (a nixpkgs bump onto a new rnix minor adds a flavor here, not silence).
@@ -31,8 +32,22 @@ tool.overrideAttrs (old: {
   preBuild =
     (old.preBuild or "")
     + ''
+      if [ -n "''${cargoDepsCopy:-}" ]; then
+        rnixVendor="$cargoDepsCopy"
+      else
+        rnixVendor="$NIX_BUILD_TOP/rnix-digit-separators-vendor"
+        cp -r --reflink=auto \
+          "''${cargoDeps:?rnix-digit-separators: build has neither cargoDepsCopy nor cargoDeps}" \
+          "$rnixVendor"
+        chmod -R u+w "$rnixVendor"
+        for rnixCargoConfig in .cargo/config.toml .cargo/config; do
+          if [ -f "$rnixCargoConfig" ]; then
+            sed -i "s|$cargoDeps|$rnixVendor|g" "$rnixCargoConfig"
+          fi
+        done
+      fi
       patchedRnix=0
-      for rnixDir in "$cargoDepsCopy"/rnix-*; do
+      for rnixDir in "$rnixVendor"/rnix-*; do
         [ -d "$rnixDir" ] || continue
         version=$(basename "$rnixDir")
         case "$version" in
@@ -54,7 +69,7 @@ tool.overrideAttrs (old: {
         patchedRnix=1
       done
       if [ "$patchedRnix" = 0 ]; then
-        echo "rnix-digit-separators: no vendored rnix-* crate found in $cargoDepsCopy;" >&2
+        echo "rnix-digit-separators: no vendored rnix-* crate found in $rnixVendor;" >&2
         echo "did ${old.pname or "the tool"} stop parsing nix with rnix?" >&2
         exit 1
       fi
