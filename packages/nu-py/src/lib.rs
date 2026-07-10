@@ -207,7 +207,7 @@ impl EngineInner {
             )));
         }
 
-        let block = {
+        let block = (|| -> Result<Arc<Block>, String> {
             let mut working_set = StateWorkingSet::new(engine_state);
             let block = nu_parser::parse(&mut working_set, Some("nu()"), code.as_bytes(), false);
             if let Some(error) = working_set.parse_errors.first() {
@@ -216,8 +216,7 @@ impl EngineInner {
                     &working_set,
                     error,
                     Some("nu::parser::error"),
-                )
-                .into());
+                ));
             }
             if let Some(error) = working_set.compile_errors.first() {
                 return Err(format_cli_error(
@@ -225,15 +224,14 @@ impl EngineInner {
                     &working_set,
                     error,
                     Some("nu::compile::error"),
-                )
-                .into());
+                ));
             }
             let delta = working_set.render();
             engine_state
                 .merge_delta(delta)
                 .map_err(|error| render_shell_error(engine_state, stack, &error))?;
-            block
-        };
+            Ok(block)
+        })()?;
 
         // Parse and compile before changing the persistent environment. A
         // setup error must leave the previous PWD and variables intact so the
