@@ -107,12 +107,11 @@ def test_transport_pump_drains_mailbox() -> None:
         box.add_outbox(content="hello", meta=json.dumps({"resource": "r"}), session="srv")
         set_config(Config(workdir=Path.cwd(), store_path=Path("x"), server_session_id="srv"))
 
-        class Session:
-            _initialization_state = transport.InitializationState.Initialized
-
+        initialized = anyio.Event()
+        initialized.set()
         send, recv = anyio.create_memory_object_stream[SessionMessage](10)
         async with send, recv, anyio.create_task_group() as tg:
-            tg.start_soon(transport.pump_outbox, send, Session())
+            tg.start_soon(transport.pump_outbox, send, initialized)
             msg = await recv.receive()
             tg.cancel_scope.cancel()
         notification = msg.message.root
