@@ -7892,6 +7892,7 @@ dependencies = [
  "panes-protocol",
  "tracing",
  "tracing-subscriber",
+ "vsock",
 ]
 
 [[package]]
