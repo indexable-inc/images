@@ -57,8 +57,9 @@ mod tests {
     }
 
     /// The fork's delta: underscore digit separators lex as part of one
-    /// number token instead of splitting into an application chain, while a
-    /// leading underscore still starts an identifier.
+    /// number token instead of splitting into an application chain, a
+    /// leading underscore still starts an identifier, and upstream lexing
+    /// is unchanged for separator-free literals.
     #[test]
     fn parses_underscore_literals_as_numbers() {
         assert_eq!(
@@ -70,11 +71,6 @@ mod tests {
                 "variable_expression",
             ]
         );
-    }
-
-    /// Upstream lexing is unchanged for separator-free literals.
-    #[test]
-    fn parses_plain_literals_as_before() {
         assert_eq!(
             binding_kinds("{ a = 10000; b = 1000.5; c = .27e13; d = 1.; }"),
             [
