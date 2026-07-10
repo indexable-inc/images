@@ -118,7 +118,7 @@ _DISABLED_MSG = (
     "which returns structured output as a polars DataFrame. Run an external binary "
     "from nushell with `^cmd` (e.g. `await nu('^git status')`), and for a CLI with a "
     "native --json mode let nushell decode it: `await nu('^gh pr list --json number | "
-    "from json')`. See `api('nu')`."
+    "from json')`. See `api().filter(pl.col('name') == 'nu')`."
 )
 
 # `Result` is the kernel runtime's human/model split. Importing it lets an

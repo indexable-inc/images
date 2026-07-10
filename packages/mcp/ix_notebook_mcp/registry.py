@@ -326,7 +326,7 @@ BUILTINS: tuple[Builtin, ...] = (
         "watch a GitHub PR as a live resource, show required checks with elapsed time, enable "
         "auto merge by default, and notify when it merges, fails, or times out",
     ),
-    Builtin("api", "the live catalog of every helper, as a polars frame (`api('grep')` to filter)"),
+    Builtin("api", "the complete live helper catalog as a Polars DataFrame; filter its columns directly"),
     Builtin(
         "read_stats",
         "this session's cumulative file-read counters ({total_reads, redundant_reads}); a "

@@ -34,7 +34,8 @@ def modules_index() -> str:
         f"any of them with no import (e.g. `await maps.nearby(...)` works directly). {preimported} "
         "load eagerly; the rest are bound lazily and import themselves on first use, so an unused "
         "one costs nothing. An explicit `import` still returns the same object. Each module's exact "
-        f"signatures come from `api('<name>')` / `help(<name>.<fn>)`, never from here. Modules: "
+        f"signatures come from `api()` (filter its `where` column) / `help(<name>.<fn>)`, "
+        "never from here. Modules: "
         f"{mods}. Also import-ready (these you DO `import`): {libs}."
     )
 
@@ -152,12 +153,13 @@ PR_WATCH = (
 )
 
 DISCOVER = (
-    "`api()` is your reference (always in the namespace, no import): it lists every helper — the "
-    "kernel builtins and each bundled module's public surface — with its live signature and a "
-    "one-line summary. Call `api()` to see what exists, `api('grep')` to filter by name/summary/"
-    "module, and `help(grep)` for a function's full doc. Take a name or a parameter from "
-    "`api()` / `help()` rather than guessing: these instructions deliberately never restate "
-    "signatures (so they cannot drift from the code), which makes the catalog the source of truth."
+    "`api()` is your reference (always in the namespace, no import): it returns one Polars "
+    "DataFrame containing every kernel builtin and each bundled module's public surface, with "
+    "live provenance, signatures, and summaries. Filter the `where`, `name`, or `summary` columns "
+    "with normal Polars expressions, for example `api().filter(pl.col('name') == 'grep')`, "
+    "then use `help(grep)` for the full doc. Take a name or parameter from `api()` / `help()` "
+    "rather than guessing: these instructions deliberately never restate signatures, so they "
+    "cannot drift from the code and the catalog remains the source of truth."
 )
 
 NO_SHELL = (
