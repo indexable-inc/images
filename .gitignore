@@ -13,6 +13,9 @@ result-*
 # Anchored to the repo root: ignores a real top-level build-output dir without
 # shadowing the tracked source dir lib/build/ (issue #1146).
 /build/
+# A global `build/` rule can still hide new helpers in this source directory.
+!/lib/build/
+!/lib/build/**
 target/
 target-*/
 buck-out/
