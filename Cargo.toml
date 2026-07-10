@@ -64,6 +64,7 @@ members = [
   "packages/search/lake/iceberg",
   "packages/minecraft/minecraft/nbt",
   "packages/minecraft/minecraft/protocol",
+  "packages/minecraft/minecraft/protocol/jvm",
   "packages/minecraft/minecraft/protocol/py",
   "packages/minecraft/minecraft/sound",
   "packages/minecraft/minecraft/sync-managed",

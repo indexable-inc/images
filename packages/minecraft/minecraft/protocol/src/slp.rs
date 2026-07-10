@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use crate::varint::{read_frame, read_varint, write_frame, write_varint};
+use crate::wire::write_string;
 
 /// Cap on the status-response frame. Vanilla status JSON with a favicon tops
 /// out well under 64 KiB; anything past 1 MiB is a misbehaving peer.
@@ -50,6 +51,37 @@ impl ServerAddress {
             host: host.to_owned(),
             port,
         })
+    }
+
+    /// Opens a TCP connection to this address, trying every resolved socket
+    /// address in order. `timeout` bounds the connect and is installed as the
+    /// stream's read and write timeout.
+    ///
+    /// # Errors
+    ///
+    /// The last connect failure when every resolved address fails,
+    /// [`io::ErrorKind::AddrNotAvailable`] when resolution yields none, or
+    /// whatever resolution itself fails with.
+    pub fn connect(&self, timeout: Duration) -> io::Result<TcpStream> {
+        let resolved: Vec<SocketAddr> =
+            (self.host.as_str(), self.port).to_socket_addrs()?.collect();
+        let mut last_error = None;
+        for socket_addr in resolved {
+            match TcpStream::connect_timeout(&socket_addr, timeout) {
+                Ok(stream) => {
+                    stream.set_read_timeout(Some(timeout))?;
+                    stream.set_write_timeout(Some(timeout))?;
+                    return Ok(stream);
+                }
+                Err(err) => last_error = Some(err),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::AddrNotAvailable,
+                format!("{}:{} resolved to no addresses", self.host, self.port),
+            )
+        }))
     }
 }
 
@@ -190,7 +222,7 @@ fn flatten_component(component: &Value, out: &mut String) {
 /// Connect/read/write failures pass through; a response that is not a valid
 /// status document surfaces as [`io::ErrorKind::InvalidData`].
 pub fn query(address: &ServerAddress, timeout: Duration) -> io::Result<SlpStatus> {
-    let mut stream = connect(address, timeout)?;
+    let mut stream = address.connect(timeout)?;
     write_frame(&mut stream, &handshake_payload(address))?;
     write_frame(&mut stream, &[0x00])?; // status request: empty body
     let raw_json = read_status_response(&mut stream)?;
@@ -212,28 +244,6 @@ pub fn query(address: &ServerAddress, timeout: Duration) -> io::Result<SlpStatus
     SlpStatus::from_status_json(&raw_json, latency)
 }
 
-fn connect(address: &ServerAddress, timeout: Duration) -> io::Result<TcpStream> {
-    let resolved: Vec<SocketAddr> =
-        (address.host.as_str(), address.port).to_socket_addrs()?.collect();
-    let mut last_error = None;
-    for socket_addr in resolved {
-        match TcpStream::connect_timeout(&socket_addr, timeout) {
-            Ok(stream) => {
-                stream.set_read_timeout(Some(timeout))?;
-                stream.set_write_timeout(Some(timeout))?;
-                return Ok(stream);
-            }
-            Err(err) => last_error = Some(err),
-        }
-    }
-    Err(last_error.unwrap_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::AddrNotAvailable,
-            format!("{}:{} resolved to no addresses", address.host, address.port),
-        )
-    }))
-}
-
 fn handshake_payload(address: &ServerAddress) -> Vec<u8> {
     let mut payload = Vec::new();
     write_varint(&mut payload, 0x00); // packet id: handshake
@@ -242,13 +252,6 @@ fn handshake_payload(address: &ServerAddress) -> Vec<u8> {
     payload.extend_from_slice(&address.port.to_be_bytes());
     write_varint(&mut payload, 1); // next state: status
     payload
-}
-
-fn write_string(out: &mut Vec<u8>, value: &str) {
-    // Only ever called with hostnames, which sit far below i32::MAX bytes.
-    let length = i32::try_from(value.len()).expect("string length exceeds i32::MAX");
-    write_varint(out, length);
-    out.extend_from_slice(value.as_bytes());
 }
 
 fn read_status_response(stream: &mut TcpStream) -> io::Result<String> {

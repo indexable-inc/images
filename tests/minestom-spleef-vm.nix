@@ -6,10 +6,14 @@
 # documented to run under (doc/minestom/overview.md). This test closes that
 # gap: it boots a NixOS VM with `services.minestom.serverJar` pointed at the
 # spleef jar and asserts (1) the unit comes up, (2) Main logged its readiness
-# line, (3) the port is open, and (4) a real Minecraft server-list ping —
-# `mc-probe`, the repo's SLP asserter (packages/minecraft/minecraft/probe),
-# the same tool the minecraft/velocity modules use for health checks —
-# answers with the pinned protocol version.
+# line, (3) the port is open, and (4) a real Minecraft server-list ping
+# answers with the pinned protocol version — twice, through both renderings
+# of the shared Rust `mc-protocol` crate: `mc-probe` (Python over the pyo3
+# unibind bindings, packages/minecraft/minecraft/probe, the same tool the
+# minecraft/velocity modules use for health checks) and `mc-probe-kt`
+# (Kotlin over the FFM/JVM unibind bindings,
+# packages/minecraft/minecraft/probe-kt), so the e2e path exercises every
+# binding surface against a live server.
 #
 # Minestom needs no bootstrap step (no paperclip, no EULA, no world download),
 # so unlike tests/minecraft-blocks-vm.nix there is no build-time pre-patching:
@@ -23,6 +27,7 @@
   packages = ix.packageSetFor pkgs;
   spleefJar = packages.minestom.spleefServerJar;
   mcProbe = lib.getExe packages.mc-probe;
+  mcProbeKt = lib.getExe packages.mc-probe-kt;
 in
   pkgs.testers.runNixOSTest {
     name = "minestom-spleef-boot";
@@ -78,8 +83,11 @@ in
       # End-to-end protocol proof: a real server-list ping answered with a
       # well-formed status. Protocol 775 = Minecraft 26.1.2, in lockstep with
       # the Minestom pin in servers/spleef/build.gradle.kts; a version bump
-      # there moves this assertion too.
+      # there moves these assertions too. Both probes run so both unibind
+      # renderings of mc-protocol (Python/pyo3, Kotlin/FFM) are proven
+      # against a live server, not just their conformance fixtures.
       server.succeed("${mcProbe} 127.0.0.1:25565 --protocol-version 775 --timeout 30")
+      server.succeed("${mcProbeKt} 127.0.0.1:25565 --protocol-version 775 --timeout 30")
 
       server.shutdown()
     '';

@@ -1,17 +1,23 @@
 # mc-protocol
 
 Minecraft Java Edition wire-protocol primitives: VarInt encoding and packet
-framing, the Server List Ping (SLP) status exchange, and legacy `§`/`&`
-format-code stripping for MOTD comparison.
+framing, length-prefixed strings, the Server List Ping (SLP) status
+exchange, and legacy `§`/`&` format-code stripping for MOTD comparison.
 
 The crate exists so the repo has exactly one implementation of the wire
 format, shared by every language a health check or test harness is written
 in:
 
 - **Rust** — this crate (`mc_protocol::query`, `::ServerAddress`,
-  `::strip_format_codes`).
+  `::strip_format_codes`, plus the `varint`/`wire` framing modules).
+  mc-bot (packages/minecraft/minecraft/bot), the headless replay-recording
+  client, builds its packet layer on the same primitives.
 - **Python** — `py/`, unibind-rendered bindings imported as `mc_protocol`;
   mc-probe (packages/minecraft/minecraft/probe) is the primary consumer.
+- **JVM** — `jvm/`, the same three-call surface rendered by unibind's jvm
+  backend into C-ABI shims plus one generated Java class (`McProtocolJvm`)
+  speaking the FFM API; mc-probe-kt (packages/minecraft/minecraft/probe-kt)
+  is the consumer.
 
 The SLP exchange is deliberately small: handshake (next state = status) →
 status request → status response carrying a JSON document → ping/pong round
