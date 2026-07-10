@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import io
+import json
 import types
 import typing
 import unittest
@@ -12,6 +15,7 @@ import pytest
 from pydantic import ValidationError
 
 import ix_fleet
+import ix_sdk
 
 
 def fleet_node(name: str, *, depends_on: list[str] | None = None) -> dict[str, typing.Any]:
@@ -230,84 +234,125 @@ class PushReplacementImageTests(unittest.TestCase):
                 asyncio.run(ix_fleet.push_replacement_image(node, dry_run=False))
 
 
+def branch_info(
+    name: str,
+    *,
+    status: typing.Any = None,  # noqa: ANN401
+    image: str = "registry.ix.dev/example/old:latest",
+    ipv4: str | None = None,
+    region: str | None = "us-west-1",
+) -> typing.Any:  # noqa: ANN401
+    """A BranchInfo-shaped row for patched `list_nodes` results. SimpleNamespace
+    (not the real SDK type) so tests don't depend on the cdylib's constructor."""
+    return types.SimpleNamespace(
+        name=name,
+        image=image,
+        status=status if status is not None else ix_sdk.BranchStatus.RUNNING,
+        ipv6="fd00::1",
+        ipv4=ipv4,
+        subdomain=None,
+        region=types.SimpleNamespace(slug=region) if region is not None else None,
+    )
+
+
+class FakeBranch:
+    def __init__(self, client: RecordingClient, name: str) -> None:
+        self._client = client
+        self.name = name
+
+    async def delete(self) -> None:
+        error = self._client.delete_errors.get(self.name)
+        if error is not None:
+            raise error
+        self._client.calls.append(("delete", self.name))
+
+    async def start(self) -> None:
+        self._client.calls.append(("start", self.name))
+
+    async def exec(self, command: list[str], *, check: bool, quiet: bool) -> typing.Any:  # noqa: ANN401
+        del check, quiet
+        self._client.calls.append(("exec", self.name, *command))
+        exit_code, stdout, stderr = self._client.exec_results.get(self.name, (0, "", ""))
+        return types.SimpleNamespace(exit_code=exit_code, stdout=stdout, stderr=stderr)
+
+
+class RecordingClient:
+    """A fake `ix_sdk.Client` recording the SDK surface ix_fleet drives."""
+
+    def __init__(self, present: list[str] | None = None) -> None:
+        self.present = set(present or [])
+        self.calls: list[tuple[str, ...]] = []
+        self.delete_errors: dict[str, Exception] = {}
+        self.exec_results: dict[str, tuple[int, str, str]] = {}
+
+    async def find_by_name(self, name: str) -> FakeBranch | None:
+        if name not in self.present:
+            return None
+        return FakeBranch(self, name)
+
+    async def create(self, image: str, **kwargs: typing.Any) -> None:  # noqa: ANN401
+        self.calls.append(("create", image, str(kwargs.get("name"))))
+
+    async def apply_vm_groups(self, vm: str, groups: list[str]) -> None:
+        self.calls.append(("apply_vm_groups", vm, *groups))
+
+
 class UpNodeTests(unittest.TestCase):
     def test_replaces_existing_running_node_with_uploaded_image(self) -> None:
-        calls: list[list[str]] = []
+        fake = RecordingClient(present=["web"])
         node = ix_fleet.FleetNode.model_validate(fleet_node("web"))
 
-        async def fake_list_nodes() -> list[dict[str, typing.Any]]:
-            return [{"name": "web", "status": "running"}]
-
-        async def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
-            del timeout
-            assert not dry_run
-            calls.append(command)
-            return ""
+        async def fake_list_nodes() -> list[typing.Any]:
+            return [branch_info("web")]
 
         with (
             patch.object(ix_fleet, "list_nodes", fake_list_nodes),
-            patch.object(ix_fleet, "run_cli", fake_run_cli),
+            patch.object(ix_fleet, "client", lambda: fake),
         ):
             asyncio.run(ix_fleet.up_node(node, "registry.ix.dev/example/web:new", dry_run=False))
 
-        assert calls == [
-            [
-                "ix",
-                "new",
-                "registry.ix.dev/example/web:new",
-                "--name",
-                "web",
-                "--region",
-                "us-west-1",
-                "--no-shell",
-            ]
+        # A new image cannot be applied in place: replace is delete-then-create.
+        assert fake.calls == [
+            ("delete", "web"),
+            ("create", "registry.ix.dev/example/web:new", "web"),
         ]
 
     def test_replaces_existing_stopped_node_instead_of_starting_old_image(self) -> None:
-        calls: list[list[str]] = []
+        fake = RecordingClient(present=["web"])
         node = ix_fleet.FleetNode.model_validate(fleet_node("web"))
 
-        async def fake_list_nodes() -> list[dict[str, typing.Any]]:
-            return [{"name": "web", "status": "stopped"}]
-
-        async def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
-            del timeout
-            assert not dry_run
-            calls.append(command)
-            return ""
+        async def fake_list_nodes() -> list[typing.Any]:
+            return [branch_info("web", status=ix_sdk.BranchStatus.STOPPED)]
 
         with (
             patch.object(ix_fleet, "list_nodes", fake_list_nodes),
-            patch.object(ix_fleet, "run_cli", fake_run_cli),
+            patch.object(ix_fleet, "client", lambda: fake),
         ):
             asyncio.run(ix_fleet.up_node(node, "registry.ix.dev/example/web:new", dry_run=False))
 
-        assert calls[0][:3] == ["ix", "new", "registry.ix.dev/example/web:new"]
-        assert ["ix", "start", "web"] not in calls
+        assert ("create", "registry.ix.dev/example/web:new", "web") in fake.calls
+        assert ("start", "web") not in fake.calls
 
     def test_dry_run_shows_possible_node_replacement_without_live_lookup(self) -> None:
-        calls: list[list[str]] = []
         steps: list[str] = []
         node = ix_fleet.FleetNode.model_validate(fleet_node("web"))
 
-        async def fail_list_nodes() -> list[dict[str, typing.Any]]:
+        async def fail_list_nodes() -> list[typing.Any]:
             self.fail("dry-run up should not require live node state")
 
-        async def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
-            del timeout
-            assert dry_run
-            calls.append(command)
-            return ""
+        def fail_client() -> typing.NoReturn:
+            self.fail("dry-run up should not touch the live client")
 
         with (
             patch.object(ix_fleet, "list_nodes", fail_list_nodes),
-            patch.object(ix_fleet, "run_cli", fake_run_cli),
+            patch.object(ix_fleet, "client", fail_client),
             patch.object(ix_fleet, "step", steps.append),
         ):
             asyncio.run(ix_fleet.up_node(node, "registry.ix.dev/example/web:new", dry_run=True))
 
-        assert steps == ["create or replace web from uploaded image registry.ix.dev/example/web:new"]
-        assert calls[0][:3] == ["ix", "new", "registry.ix.dev/example/web:new"]
+        assert steps[0] == "create or replace web from uploaded image registry.ix.dev/example/web:new"
+        assert steps[1] == "remove web"
+        assert steps[2].startswith("+ create web from registry.ix.dev/example/web:new")
 
 
 class EastWestGroupTests(unittest.TestCase):
@@ -375,42 +420,25 @@ class BootstrapTests(unittest.TestCase):
         assert calls == ["db", "web"]
 
     def test_bootstrap_uses_bootstrap_image_without_replacement_push(self) -> None:
-        calls: list[list[str]] = []
+        fake = RecordingClient()
         ready: list[str] = []
         node = ix_fleet.FleetNode.model_validate(fleet_node("api"))
 
-        async def fake_list_nodes() -> list[dict[str, typing.Any]]:
+        async def fake_list_nodes() -> list[typing.Any]:
             return []
 
         async def fake_wait_node_ready(node: ix_fleet.FleetNode, *, dry_run: bool) -> None:
             assert not dry_run
             ready.append(node.name)
 
-        async def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
-            del timeout
-            assert not dry_run
-            calls.append(command)
-            return ""
-
         with (
             patch.object(ix_fleet, "list_nodes", fake_list_nodes),
-            patch.object(ix_fleet, "run_cli", fake_run_cli),
+            patch.object(ix_fleet, "client", lambda: fake),
             patch.object(ix_fleet, "wait_node_ready", fake_wait_node_ready),
         ):
             asyncio.run(ix_fleet.bootstrap_node(node, dry_run=False))
 
-        assert calls == [
-            [
-                "ix",
-                "new",
-                "registry.ix.dev/ix/base:latest",
-                "--name",
-                "api",
-                "--region",
-                "us-west-1",
-                "--no-shell",
-            ],
-        ]
+        assert fake.calls == [("create", "registry.ix.dev/ix/base:latest", "api")]
         assert ready == ["api"]
 
 
@@ -587,34 +615,25 @@ class DownTests(unittest.TestCase):
         plan = ix_fleet.FleetPlan.model_validate(
             fleet_plan(["db", "web"], [fleet_node("db"), fleet_node("web")])
         )
-        calls: list[list[str]] = []
+        fake = RecordingClient(present=["db", "web"])
+        fake.delete_errors["web"] = ix_sdk.IxError("permission denied")
 
-        async def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
-            del dry_run, timeout
-            calls.append(command)
-            if command[-1] == "web":
-                raise ix_fleet.CliError(command, 1, "", "permission denied")
-            return ""
-
-        with patch.object(ix_fleet, "run_cli", fake_run_cli):
+        with patch.object(ix_fleet, "client", lambda: fake):
             args = argparse_namespace(on=[], dry_run=False)
-            with pytest.raises(RuntimeError, match="web: command failed"):
+            with pytest.raises(RuntimeError, match="web: permission denied"):
                 asyncio.run(ix_fleet.cmd_down(plan, args))
 
-        assert calls == [
-            ["ix", "rm", "--force", "web"],
-            ["ix", "rm", "--force", "db"],
-        ]
+        # web's failure must not stop db (reverse plan order) from being removed.
+        assert fake.calls == [("delete", "db")]
 
     def test_down_treats_missing_nodes_as_absent(self) -> None:
         node = ix_fleet.FleetNode.model_validate(fleet_node("api"))
+        fake = RecordingClient(present=[])
 
-        async def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
-            del dry_run, timeout
-            raise ix_fleet.CliError(command, 1, "", "VM not found")
-
-        with patch.object(ix_fleet, "run_cli", fake_run_cli):
+        with patch.object(ix_fleet, "client", lambda: fake):
             asyncio.run(ix_fleet.remove_node(node, dry_run=False))
+
+        assert fake.calls == []
 
 
 class SwitchSourceTests(unittest.TestCase):
@@ -973,6 +992,263 @@ class WaitNodeReadyTests(unittest.TestCase):
 
         with patch.object(ix_fleet, "client", fail_client):
             asyncio.run(ix_fleet.wait_node_ready(self._node(), dry_run=True))
+
+
+def guest_check(command: list[str], *, attempts: int = 3) -> dict[str, typing.Any]:
+    return {
+        "description": "service answers on loopback",
+        "command": command,
+        "timeoutSec": 5,
+        "attempts": attempts,
+        "intervalSec": 0,
+        "from": "guest",
+    }
+
+
+def replica_node(base: str, index: int, *, max_unavailable: int) -> dict[str, typing.Any]:
+    node = fleet_node(f"{base}-{index}")
+    node["baseName"] = base
+    node["replicaIndex"] = index
+    node["updateStrategy"] = {"maxUnavailable": max_unavailable}
+    return node
+
+
+class RollingUpdateTests(unittest.TestCase):
+    def test_rejects_non_positive_max_unavailable(self) -> None:
+        with pytest.raises(ValidationError, match="maxUnavailable"):
+            ix_fleet.FleetNode.model_validate(replica_node("api", 0, max_unavailable=0))
+
+    def test_edges_form_a_sliding_window_per_base_name(self) -> None:
+        plan = ix_fleet.FleetPlan.model_validate(
+            fleet_plan(
+                ["db", "api-0", "api-1", "api-2", "api-3"],
+                [fleet_node("db"), *(replica_node("api", i, max_unavailable=2) for i in range(4))],
+            )
+        )
+
+        edges = ix_fleet.rolling_update_edges(ix_fleet.selected_nodes(plan, []))
+
+        # Window of 2: replica i waits on replica i-2; the first window and
+        # strategy-less nodes stay unconstrained.
+        assert edges == {"api-2": "api-0", "api-3": "api-1"}
+
+    def test_up_dag_serializes_replicas_by_update_strategy(self) -> None:
+        plan = ix_fleet.FleetPlan.model_validate(
+            fleet_plan(
+                ["api-0", "api-1", "api-2"],
+                [replica_node("api", i, max_unavailable=1) for i in range(3)],
+            )
+        )
+
+        spec = captured_dag(
+            ix_fleet.cmd_up,
+            plan,
+            argparse_namespace(
+                plan=Path("fleet.json"),
+                on=[],
+                dry_run=False,
+                skip_push=True,
+                skip_health=True,
+            ),
+        )
+
+        assert spec["nodes"]["api-0"]["depends_on"] == []
+        assert spec["nodes"]["api-1"]["depends_on"] == ["api-0"]
+        assert spec["nodes"]["api-2"]["depends_on"] == ["api-1"]
+
+
+def status_args(**overrides: typing.Any) -> typing.Any:  # noqa: ANN401
+    defaults: dict[str, typing.Any] = {
+        "on": [],
+        "dry_run": False,
+        "output": "json",
+        "watch": False,
+        "interval": 5,
+        "no_checks": False,
+    }
+    defaults.update(overrides)
+    return argparse_namespace(**defaults)
+
+
+def run_status(
+    plan: ix_fleet.FleetPlan,
+    fake: RecordingClient,
+    rows: list[typing.Any],
+    args: typing.Any,  # noqa: ANN401
+) -> tuple[list[dict[str, typing.Any]], int]:
+    """Run cmd_status against a fake client, returning (parsed json, exit code)."""
+
+    async def fake_list_nodes() -> list[typing.Any]:
+        return rows
+
+    stdout = io.StringIO()
+    code = 0
+    with (
+        patch.object(ix_fleet, "list_nodes", fake_list_nodes),
+        patch.object(ix_fleet, "client", lambda: fake),
+        contextlib.redirect_stdout(stdout),
+    ):
+        try:
+            asyncio.run(ix_fleet.cmd_status(plan, args))
+        except SystemExit as raised:
+            code = int(raised.code or 0)
+    reports = json.loads(stdout.getvalue())
+    assert isinstance(reports, list)
+    return reports, code
+
+
+class StatusTests(unittest.TestCase):
+    def _plan(self, *, checks: bool) -> ix_fleet.FleetPlan:
+        node = fleet_node("web")
+        if checks:
+            node["healthChecks"] = {"http": guest_check(["curl", "--fail", "http://127.0.0.1:8080/"])}
+        return ix_fleet.FleetPlan.model_validate(fleet_plan(["web"], [node]))
+
+    def test_missing_node_reports_missing_and_exits_nonzero(self) -> None:
+        reports, code = run_status(self._plan(checks=False), RecordingClient(), [], status_args())
+
+        assert code == 1
+        assert reports[0]["status"] == "missing"
+        assert not reports[0]["healthy"]
+
+    def test_healthy_node_runs_each_check_exactly_once(self) -> None:
+        fake = RecordingClient(present=["web"])
+        reports, code = run_status(
+            self._plan(checks=True), fake, [branch_info("web", ipv4="192.0.2.7")], status_args()
+        )
+
+        assert code == 0
+        assert reports[0]["status"] == "running"
+        assert reports[0]["ready"] == "1/1"
+        assert reports[0]["address"] == "192.0.2.7"
+        assert reports[0]["healthy"]
+        # A status snapshot runs one attempt per check, never the deploy-time
+        # retry loop (attempts=3 in the plan).
+        assert fake.calls.count(("exec", "web", "curl", "--fail", "http://127.0.0.1:8080/")) == 1
+
+    def test_failing_check_carries_detail_and_exits_nonzero(self) -> None:
+        fake = RecordingClient(present=["web"])
+        fake.exec_results["web"] = (7, "", "connection refused")
+        reports, code = run_status(
+            self._plan(checks=True), fake, [branch_info("web")], status_args()
+        )
+
+        assert code == 1
+        assert reports[0]["ready"] == "0/1"
+        assert reports[0]["checks"][0]["detail"] == "connection refused"
+
+    def test_stopped_node_is_not_probed(self) -> None:
+        fake = RecordingClient(present=["web"])
+        rows = [branch_info("web", status=ix_sdk.BranchStatus.STOPPED)]
+        reports, code = run_status(self._plan(checks=True), fake, rows, status_args())
+
+        assert code == 1
+        assert reports[0]["checks"][0]["detail"] == "node is stopped"
+        assert all(call[0] != "exec" for call in fake.calls)
+
+    def test_no_checks_skips_probes_but_keeps_liveness(self) -> None:
+        fake = RecordingClient(present=["web"])
+        reports, code = run_status(
+            self._plan(checks=True), fake, [branch_info("web")], status_args(no_checks=True)
+        )
+
+        assert code == 0
+        assert reports[0]["ready"] == "-"
+        assert all(call[0] != "exec" for call in fake.calls)
+
+    def test_dry_run_reports_desired_state_without_live_calls(self) -> None:
+        steps: list[str] = []
+
+        def fail_client() -> typing.NoReturn:
+            self.fail("status --dry-run must not touch the live client")
+
+        with (
+            patch.object(ix_fleet, "client", fail_client),
+            patch.object(ix_fleet, "step", steps.append),
+        ):
+            asyncio.run(ix_fleet.cmd_status(self._plan(checks=True), status_args(dry_run=True)))
+
+        assert steps == [
+            "+ status web: image=registry.ix.dev/example/web:latest region=us-west-1 checks=http"
+        ]
+
+    def test_table_output_renders_kubectl_style_columns(self) -> None:
+        table = ix_fleet.render_status_table(
+            [
+                ix_fleet.NodeStatus(
+                    name="web",
+                    status="running",
+                    ready="1/1",
+                    address="192.0.2.7",
+                    region="us-west-1",
+                    image="registry.ix.dev/example/web:latest",
+                    desiredImage="registry.ix.dev/example/web:latest",
+                    checks=[ix_fleet.CheckResult(name="http", healthy=True)],
+                    healthy=True,
+                )
+            ],
+            wide=True,
+        )
+
+        lines = table.splitlines()
+        assert lines[0].split() == ["NODE", "STATUS", "READY", "ADDRESS", "REGION", "IMAGE", "DESIRED-IMAGE"]
+        assert lines[1].split() == [
+            "web",
+            "running",
+            "1/1",
+            "192.0.2.7",
+            "us-west-1",
+            "registry.ix.dev/example/web:latest",
+            "registry.ix.dev/example/web:latest",
+        ]
+
+
+class LogsTests(unittest.TestCase):
+    def test_logs_prefix_multi_node_output_and_forward_flags(self) -> None:
+        fake = RecordingClient(present=["db", "web"])
+        fake.exec_results["web"] = (0, "GET / 200\n", "")
+        fake.exec_results["db"] = (0, "ready to accept connections\n", "")
+        plan = ix_fleet.FleetPlan.model_validate(
+            fleet_plan(["db", "web"], [fleet_node("db"), fleet_node("web")])
+        )
+        args = argparse_namespace(on=[], dry_run=False, unit="app.service", lines=7, since=None)
+
+        stdout = io.StringIO()
+        with (
+            patch.object(ix_fleet, "client", lambda: fake),
+            contextlib.redirect_stdout(stdout),
+        ):
+            asyncio.run(ix_fleet.cmd_logs(plan, args))
+
+        expected_exec = ("exec", "web", "journalctl", "--no-pager", "-n", "7", "-u", "app.service")
+        assert expected_exec in fake.calls
+        assert stdout.getvalue().splitlines() == [
+            "[db] ready to accept connections",
+            "[web] GET / 200",
+        ]
+
+    def test_single_node_logs_are_unprefixed(self) -> None:
+        fake = RecordingClient(present=["web"])
+        fake.exec_results["web"] = (0, "GET / 200\n", "")
+        plan = ix_fleet.FleetPlan.model_validate(fleet_plan(["web"], [fleet_node("web")]))
+        args = argparse_namespace(on=["web"], dry_run=False, unit=None, lines=100, since=None)
+
+        stdout = io.StringIO()
+        with (
+            patch.object(ix_fleet, "client", lambda: fake),
+            contextlib.redirect_stdout(stdout),
+        ):
+            asyncio.run(ix_fleet.cmd_logs(plan, args))
+
+        assert stdout.getvalue() == "GET / 200\n"
+
+    def test_logs_selection_does_not_pull_in_dependencies(self) -> None:
+        # `logs --on worker` must not also fetch web's logs the way deploy
+        # selection pulls in the dependency closure.
+        plan = ix_fleet.FleetPlan.model_validate(
+            fleet_plan(["web", "worker"], [fleet_node("web"), fleet_node("worker", depends_on=["web"])])
+        )
+        assert [node.name for node in ix_fleet.selected_in_order(plan, ["worker"])] == ["worker"]
 
 
 if __name__ == "__main__":
