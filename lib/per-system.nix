@@ -1400,11 +1400,12 @@
     lib.optionalAttrs (system == ix.system) {
       base = baseImage;
       vcfs-guest-eval = vcfsGuestEvalImage;
+      inherit check;
     }
     // {
       health-checks = healthChecks.dag;
       health-checks-zellij = healthChecks.zellij;
-      inherit check lint site;
+      inherit lint site;
       site-dev = site.passthru.devServer;
       bench-filesystem = benchFilesystem;
       update-mods = updateMods;
