@@ -349,11 +349,38 @@
         # Realize the aggregate eval gate's IFD inputs sequentially before the
         # parallel evaluator fans out. This also verifies the daemon-matched
         # Nix client can complete CA realization before scheduling any builds.
-        ^nix eval ...[
-          "--raw" ".#ciChecks.x86_64-linux.eval.drvPath"
-          "--option" "accept-flake-config" "true"
-          "--option" "extra-experimental-features" "ca-derivations"
-        ] | ignore
+        mut pending_ifd = true
+        mut attempts = 0
+        while $pending_ifd {
+          let evaluated = (^nix eval ...[
+            "--raw" ".#ciChecks.x86_64-linux.eval.drvPath"
+            "--option" "accept-flake-config" "true"
+            "--option" "extra-experimental-features" "ca-derivations"
+          ] | complete)
+          if $evaluated.exit_code == 0 {
+            $pending_ifd = false
+          } else {
+            let drvs = (
+              $evaluated.stderr
+              | parse -r "(?<drv>/nix/store/[a-z0-9]{32}-[^' ]+\\.drv)"
+              | get --optional drv
+              | default []
+              | uniq
+            )
+            if ($drvs | is-empty) or $attempts >= 32 {
+              print --stderr $evaluated.stderr
+              error make {msg: "failed to realize aggregate eval IFD inputs"}
+            }
+            for drv in $drvs {
+              ^nix build $"($drv)^*" ...[
+                "--no-link"
+                "--option" "accept-flake-config" "true"
+                "--option" "extra-experimental-features" "ca-derivations"
+              ]
+            }
+            $attempts += 1
+          }
+        }
 
         # ca-derivations: the rust workspace units default to
         # `contentAddressed = true` (lib/rust/cargo-unit.nix), so evaluating
