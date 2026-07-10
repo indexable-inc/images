@@ -36,7 +36,7 @@
   # up in the `lint` derivation build, not at `nix run` time.
   lintStage = ix.writeNushellApplication pkgs {
     name = "lint-stage";
-    meta.description = "One lint stage (alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | ruff | clone); driven by `lint`";
+    meta.description = "One lint stage (alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | filenames | ruff | clone); driven by `lint`";
     runtimeInputs = [
       pkgs.alejandra
       pkgs.deadnix
@@ -122,6 +122,51 @@
           astlog scan astlog-rules/elixir.astlog ...$files
         }
       }
+      # Repository configuration belongs in composable Nix expressions. Keep
+      # serialized files only where an external consumer owns the filename or
+      # the file is generated data, a lock, a fixture, or a protocol payload.
+      def "main filenames" [] {
+        let allowed = [
+          # Ecosystem-owned configuration and manifests.
+          '(^|/)Cargo\.toml$'
+          '(^|/)pyproject\.toml$'
+          '(^|/)rust-toolchain\.toml$'
+          '(^|/)mise\.toml$'
+          '(^|/)osv-scanner\.toml$'
+          '(^|/)ruff\.toml$'
+          '(^|/)statix\.toml$'
+          '(^|/)\.cargo/config\.toml$'
+          '^clone\.toml$'
+          '^packages/cve-scan/whitelist\.toml$'
+          '^\.github/.*\.ya?ml$'
+          '(^|/)docker-compose\.ya?ml$'
+          '(^|/)plugin\.yml$'
+          '^packages/agent/symphony/workflows/.*/repositories\.yaml$'
+
+          # Generated manifests, locks, editor settings, and typed data.
+          '(^|/)(package|tsconfig)\.json$'
+          '(^|/)(package-lock|lock)\.json$'
+          '(^|/)(pins|manifest|settings|extensions|user-owners)\.json$'
+          '(^|/)(dag|upstream-status)\.json$'
+          '(^|/)(fixtures?[^/]*|snapshots?|catalogs?|metadata|sounds|seeds)/.*\.json$'
+          '^examples/.*\.json$'
+          '^packages/agent/claude-code/system-prompts/models\.json$'
+          '^packages/agent/system-prompt-eval-viewer/src/sample\.json$'
+          '^packages/code/code-highlight/src/islands-theme\.json$'
+          '^tests/.*\.json$'
+        ]
+        let candidates = (
+          fd --hidden --type file --extension toml --extension json --extension yaml --extension yml
+          --exclude .git --exclude .claude/worktrees
+          | lines
+        )
+        let denied = ($candidates | where {|path| not ($allowed | any {|pattern| $path =~ $pattern})})
+        if ($denied | is-not-empty) {
+          print --stderr "prefer .nix for repository-owned configuration; serialized files require an external filename or generated/data role:"
+          $denied | each {|path| print --stderr $"  ($path)" }
+          exit 1
+        }
+      }
       # Repo-wide Python lint: the shared ruff selector (bug-catchers + security +
       # pathlib + pytest + explicit annotations + no `typing.cast`; see
       # lib/ruff-ann.nix) over EVERY tracked .py, so non-package dirs
@@ -151,7 +196,7 @@
         clone . out> /dev/null
       }
       def main [] {
-        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | ruff | clone" }
+        error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | filenames | ruff | clone" }
       }
     '';
   };
@@ -166,6 +211,7 @@
     "astlog"
     "astlog-rust"
     "astlog-elixir"
+    "filenames"
     "ruff"
     "clone"
   ];
@@ -1318,6 +1364,22 @@
             ${lib.getExe lint}
             mkdir -p "$out"
           '';
+          filename-policy =
+            pkgs.runCommand "filename-policy-check"
+            {
+              nativeBuildInputs = [pkgs.coreutils];
+            }
+            ''
+              mkdir source
+              cd source
+              touch repository-config.json
+              if ${lib.getExe lintStage} filenames >output 2>&1; then
+                echo "filename policy accepted repository-config.json" >&2
+                exit 1
+              fi
+              grep -F "repository-config.json" output
+              touch "$out"
+            '';
           # Exercises the trusted half of the blast-radius PR comment: the
           # validate/render jq embedded in its workflow, extracted from the YAML so
           # the test can't drift from what the trusted comment job runs. The

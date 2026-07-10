@@ -29,8 +29,8 @@ export const usageStatsSchema = v.object({
 
 export type UsageStats = v.InferOutput<typeof usageStatsSchema>;
 
-// vm-config.json is the single source of truth shared with default.nix's
-// Rust stats writer. Edit values there; never inline a constant here.
+// default.nix generates vm-config.json from the module options before building
+// the site, which keeps these values aligned with the Rust stats writer.
 export const SERVER = vmConfig.server;
 export const BILLING = vmConfig.billing;
 
