@@ -3,7 +3,7 @@
 # for a future Linux GUI guest (the current hosts/vm guest is headless), so both
 # would tile with the same muscle memory. Only the WM-intrinsic, portable actions
 # live here (focus, move, workspaces); platform-only bits stay in each consumer —
-# macOS extras (on-window-detected, resize, join-with) in home/common.nix.
+# macOS extras (on-window-detected, resize, join-with) in profiles/workstation.nix.
 #
 # Per-platform primary modifier (chosen for idiomatic, conflict-free keys): the
 # `primary` token renders to Option/Alt on macOS and Super ($mod = Mod4) on sway.

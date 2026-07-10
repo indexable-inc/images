@@ -3,7 +3,7 @@
 // other subdomain is untouched. This is the browser-interaction layer of the
 // blocklist: unlike the /etc/hosts sinkhole it blocks only *being on the
 // site*, so apps, OAuth flows, and APIs talking to the same domain keep
-// working. Polled by the tab-blocklist launchd agent (home/darwin.nix).
+// working. Polled by the tab-blocklist launchd agent (profiles/darwin-home.nix).
 //
 // Reads every window's tab URLs in ONE batch Apple Event (w.tabs.url()) and
 // writes only matching tabs by index. Index access is also the only

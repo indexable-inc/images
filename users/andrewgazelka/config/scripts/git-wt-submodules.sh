@@ -1,4 +1,4 @@
-# Body of the `git-wt-submodules` writeShellApplication (see home/common.nix).
+# Body of the `git-wt-submodules` writeShellApplication (see profiles/workstation.nix).
 # No shebang / `set` line: writeShellApplication supplies bash + `set -euo pipefail`
 # and bakes git onto PATH via runtimeInputs.
 #

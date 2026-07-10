@@ -1,4 +1,4 @@
-# Body of the `with-lock` writeShellApplication (see home/darwin.nix).
+# Body of the `with-lock` writeShellApplication (see profiles/darwin-home.nix).
 # No shebang / `set` line: writeShellApplication supplies bash + `set -euo pipefail`
 # and bakes coreutils onto PATH via runtimeInputs.
 #

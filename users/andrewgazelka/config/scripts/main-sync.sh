@@ -1,4 +1,4 @@
-# Body of the `main-sync` writeShellApplication (see home/darwin.nix).
+# Body of the `main-sync` writeShellApplication (see profiles/darwin-home.nix).
 #
 # Keeps the shared main checkouts of ix and index fast-forwarded to
 # origin/main so worktrees branch from a fresh base. Conservative by design:
