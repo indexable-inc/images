@@ -20,8 +20,8 @@ or a ``cd`` in one call is visible to the next. Each kernel session has its
 own engine, so a ``cd`` here never moves another session's PWD (issue #2089:
 the per-call re-sync to the shared process cwd silently redirected bare git
 commands into other agents' worktrees). If the remembered directory has been
-deleted, the next call fails loudly until you pass ``cwd=`` or ``nu.reset()``
-(issue #1986)::
+deleted, the next call fails loudly and discards that engine; retrying starts
+fresh, while an explicit ``cwd=`` recovers in the same call (issue #2587)::
 
     await nu("let prs = (http get $url)")
     await nu("$prs | where author.login == 'andrewgazelka'")
@@ -119,12 +119,12 @@ import re
 import time
 from typing import TYPE_CHECKING, Literal, NamedTuple, overload
 
-from ._nu import Engine, NuError
+from ._nu import Engine, NuCwdError, NuError
 
 if TYPE_CHECKING:
     import polars as pl
 
-__all__ = ["Engine", "NuError", "NuResult", "nu", "reset", "value"]
+__all__ = ["Engine", "NuCwdError", "NuError", "NuResult", "nu", "reset", "value"]
 
 __version__ = "0.1.0"
 
@@ -304,14 +304,19 @@ class NuResult(NamedTuple):
     exit_code: int
 
 
-def _require_dir(cwd: str | os.PathLike) -> None:
-    """Reject an explicit ``cwd=`` that is not an existing directory. A bad
-    cwd would be written into the persistent stack and wedge every later call
-    (issue #1986's failure mode, self-inflicted); reject it at the boundary
-    instead. Sync on purpose: one local ``stat``, and keeping the path method
-    out of the ``async`` caller keeps it free of path methods (ASYNC240)."""
-    if not pathlib.Path(cwd).is_dir():
+def _resolve_dir(cwd: str | os.PathLike) -> str:
+    """Return an existing directory as an absolute path.
+
+    The engine persists PWD across calls, so a relative value would later be
+    interpreted against an unrelated process directory and poison the session.
+    Resolve and validate it before the persistent engine sees it. This stays
+    synchronous on purpose: it is one local filesystem lookup, and keeping the
+    path method out of the async caller avoids ASYNC240.
+    """
+    resolved = pathlib.Path(cwd).resolve()
+    if not resolved.is_dir():
         raise ValueError(f"cwd is not a directory: {os.fspath(cwd)!r}")
+    return os.fspath(resolved)
 
 
 async def _run(
@@ -329,8 +334,7 @@ async def _run(
     With ``check=True`` a non-zero trailing external raises inside the engine,
     so the exit code of anything that returns is 0.
     """
-    if cwd is not None:
-        _require_dir(cwd)
+    resolved_cwd = _resolve_dir(cwd) if cwd is not None else None
     if name is not None and _rename_current_job is not None and (
         _ix_current is not None and _ix_current.get() is not None
     ):
@@ -340,7 +344,7 @@ async def _run(
     loop = asyncio.get_running_loop()
     state: dict[str, object] = {
         "code": code,
-        "cwd": os.fspath(cwd) if cwd is not None else None,
+        "cwd": resolved_cwd,
         "status": "running",
         "result": None,
         "error": None,
@@ -351,7 +355,7 @@ async def _run(
     coroutine, handle = engine.eval(
         code,
         input=_serialize_input(input) if input is not None else None,
-        cwd=os.fspath(cwd) if cwd is not None else None,
+        cwd=resolved_cwd,
         env=env,
         check=check,
     )
@@ -385,6 +389,8 @@ async def _run(
             close()
         raise
     except Exception as exc:
+        if isinstance(exc, NuCwdError):
+            _discard_engine(engine)
         state["status"] = "failed"
         state["error"] = str(exc)
         state["ended"] = loop.time()
@@ -523,8 +529,9 @@ async def nu(
     first statement that accepts pipeline input (a leading ``cd``/``def``
     declares none and is skipped); when nothing can accept it the call
     raises instead of dropping the payload (issue #2540). ``cwd`` sets ``PWD``
-    and persists like ``cd``; if the remembered directory no longer exists
-    the call raises with the remedy instead of silently running elsewhere.
+    and persists like ``cd``; if the remembered directory no longer exists,
+    the call raises :class:`NuCwdError` instead of silently running elsewhere
+    and discards the stale engine so a retry starts fresh.
     ``env`` adds environment variables;
     ``timeout`` interrupts the evaluation and discards the engine state (see
     the module docstring); ``name`` labels the running job in the dashboard.
