@@ -6,7 +6,15 @@ members = [
   "packages/agent/claude-hooks",
   "packages/agent/claude-stories",
   "packages/agent/subagent-cache",
+  "packages/audio/app",
+  "packages/audio/blob",
+  "packages/audio/clock",
   "packages/audio/dsp",
+  "packages/audio/e2e",
+  "packages/audio/engine",
+  "packages/audio/instrument",
+  "packages/audio/net",
+  "packages/audio/score",
   "packages/code/ast-merge/ast",
   "packages/code/ast-merge/cli",
   "packages/code/ast-merge/diff",
@@ -163,7 +171,13 @@ anstyle = "1"
 anyhow = "1"
 arrow = "59"
 ast-merge-ast = { path = "packages/code/ast-merge/ast" }
+audio-blob = { path = "packages/audio/blob" }
+audio-clock = { path = "packages/audio/clock" }
 audio-dsp = { path = "packages/audio/dsp" }
+audio-engine = { path = "packages/audio/engine" }
+audio-instrument = { path = "packages/audio/instrument" }
+audio-net = { path = "packages/audio/net" }
+audio-score = { path = "packages/audio/score" }
 ast-merge-diff = { path = "packages/code/ast-merge/diff" }
 ast-merge-git = { path = "packages/code/ast-merge/git" }
 ast-merge-langs = { path = "packages/code/ast-merge/langs" }
@@ -382,6 +396,17 @@ webpki-roots = "1"
 # `transparent` is a non-default feature: without it `with_transparent(true)`
 # is a silent no-op and the webview paints an opaque canvas, hiding the
 # ix-windows blur behind a flat card.
+# Sandboxed deterministic runtime for shared-audio instrument modules
+# (packages/audio/instrument). Minimal feature set: Cranelift JIT, the
+# runtime itself, WAT text support for built-in/demo instruments, and the
+# std/signals/parallel-compilation platform features.
+wasmtime = { version = "46", default-features = false, features = [
+  "cranelift",
+  "runtime",
+  "wat",
+  "std",
+  "parallel-compilation",
+] }
 wry = { version = "0.55", features = ["transparent"] }
 x509-parser = "0.18"
 xxhash-rust = { version = "0.8", default-features = false }

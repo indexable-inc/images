@@ -1,0 +1,17 @@
+# The "score": one Loro CRDT document holding everything peers must agree
+# on (which instrument by content hash, live control values, schedule-ahead
+# events stamped in shared frames). Agreement on content only; agreement on
+# timing is audio-clock's job.
+[package]
+name = "audio-score"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Loro CRDT score for shared-audio: instrument reference, controls, scheduled events"
+
+[dependencies]
+audio-blob.workspace = true
+loro.workspace = true
+
+[lints]
+workspace = true

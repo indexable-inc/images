@@ -1,0 +1,26 @@
+# End-to-end proof of the shared-audio design: two in-process nodes over
+# loopback (static peers, no discovery), gossiping a WASM instrument by
+# hash, converging the score and the clock, and rendering bit-identical
+# audio for the same shared-frame range. Test-only crate: no library
+# surface.
+[package]
+name = "audio-e2e"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "End-to-end tests for shared-audio: gossip, clock convergence, bit-identical render"
+
+[dependencies]
+
+[dev-dependencies]
+audio-blob.workspace = true
+audio-clock.workspace = true
+audio-engine.workspace = true
+audio-instrument.workspace = true
+audio-net.workspace = true
+audio-score.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+
+[lints]
+workspace = true
