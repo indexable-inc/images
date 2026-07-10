@@ -73,23 +73,23 @@
 
   renderedSettings =
     {
-      "config-version" = "2.7";
+      config-version = "2.7";
       bind = "${cfg.address}:${toString cfg.port}";
       inherit
         (cfg)
         motd
         ;
-      "show-max-players" = cfg.showMaxPlayers;
-      "online-mode" = cfg.onlineMode;
-      "force-key-authentication" = cfg.forceKeyAuthentication;
-      "prevent-client-proxy-connections" = cfg.preventClientProxyConnections;
-      "player-info-forwarding-mode" = cfg.forwarding.mode;
-      "forwarding-secret-file" = "forwarding.secret";
-      "announce-forge" = cfg.announceForge;
-      "kick-existing-players" = cfg.kickExistingPlayers;
-      "ping-passthrough" = cfg.pingPassthrough;
-      "sample-players-in-ping" = cfg.samplePlayersInPing;
-      "enable-player-address-logging" = cfg.enablePlayerAddressLogging;
+      show-max-players = cfg.showMaxPlayers;
+      online-mode = cfg.onlineMode;
+      force-key-authentication = cfg.forceKeyAuthentication;
+      prevent-client-proxy-connections = cfg.preventClientProxyConnections;
+      player-info-forwarding-mode = cfg.forwarding.mode;
+      forwarding-secret-file = "forwarding.secret";
+      announce-forge = cfg.announceForge;
+      kick-existing-players = cfg.kickExistingPlayers;
+      ping-passthrough = cfg.pingPassthrough;
+      sample-players-in-ping = cfg.samplePlayersInPing;
+      enable-player-address-logging = cfg.enablePlayerAddressLogging;
 
       servers =
         cfg.servers
@@ -97,35 +97,35 @@
           inherit (cfg) try;
         };
 
-      "forced-hosts" = cfg.forcedHosts;
+      forced-hosts = cfg.forcedHosts;
 
       advanced = {
-        "compression-threshold" = cfg.advanced.compressionThreshold;
-        "compression-level" = cfg.advanced.compressionLevel;
-        "login-ratelimit" = cfg.advanced.loginRatelimit;
-        "connection-timeout" = cfg.advanced.connectionTimeout;
-        "read-timeout" = cfg.advanced.readTimeout;
-        "haproxy-protocol" = cfg.advanced.haproxyProtocol;
-        "tcp-fast-open" = cfg.advanced.tcpFastOpen;
-        "bungee-plugin-message-channel" = cfg.advanced.bungeePluginMessageChannel;
-        "show-ping-requests" = cfg.advanced.showPingRequests;
-        "failover-on-unexpected-server-disconnect" = cfg.advanced.failoverOnUnexpectedServerDisconnect;
-        "announce-proxy-commands" = cfg.advanced.announceProxyCommands;
-        "log-command-executions" = cfg.advanced.logCommandExecutions;
-        "log-player-connections" = cfg.advanced.logPlayerConnections;
-        "accepts-transfers" = cfg.advanced.acceptsTransfers;
-        "enable-reuse-port" = cfg.advanced.enableReusePort;
-        "command-rate-limit" = cfg.advanced.commandRateLimit;
-        "forward-commands-if-rate-limited" = cfg.advanced.forwardCommandsIfRateLimited;
-        "kick-after-rate-limited-commands" = cfg.advanced.kickAfterRateLimitedCommands;
-        "tab-complete-rate-limit" = cfg.advanced.tabCompleteRateLimit;
-        "kick-after-rate-limited-tab-completes" = cfg.advanced.kickAfterRateLimitedTabCompletes;
+        compression-threshold = cfg.advanced.compressionThreshold;
+        compression-level = cfg.advanced.compressionLevel;
+        login-ratelimit = cfg.advanced.loginRatelimit;
+        connection-timeout = cfg.advanced.connectionTimeout;
+        read-timeout = cfg.advanced.readTimeout;
+        haproxy-protocol = cfg.advanced.haproxyProtocol;
+        tcp-fast-open = cfg.advanced.tcpFastOpen;
+        bungee-plugin-message-channel = cfg.advanced.bungeePluginMessageChannel;
+        show-ping-requests = cfg.advanced.showPingRequests;
+        failover-on-unexpected-server-disconnect = cfg.advanced.failoverOnUnexpectedServerDisconnect;
+        announce-proxy-commands = cfg.advanced.announceProxyCommands;
+        log-command-executions = cfg.advanced.logCommandExecutions;
+        log-player-connections = cfg.advanced.logPlayerConnections;
+        accepts-transfers = cfg.advanced.acceptsTransfers;
+        enable-reuse-port = cfg.advanced.enableReusePort;
+        command-rate-limit = cfg.advanced.commandRateLimit;
+        forward-commands-if-rate-limited = cfg.advanced.forwardCommandsIfRateLimited;
+        kick-after-rate-limited-commands = cfg.advanced.kickAfterRateLimitedCommands;
+        tab-complete-rate-limit = cfg.advanced.tabCompleteRateLimit;
+        kick-after-rate-limited-tab-completes = cfg.advanced.kickAfterRateLimitedTabCompletes;
       };
 
       query = {
         enabled = cfg.query.enable;
         inherit (cfg.query) port map;
-        "show-plugins" = cfg.query.showPlugins;
+        show-plugins = cfg.query.showPlugins;
       };
     }
     // cfg.settings;

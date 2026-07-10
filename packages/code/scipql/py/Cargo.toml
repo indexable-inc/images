@@ -13,6 +13,7 @@ crate-type = ["cdylib"]
 workspace = true
 
 [dependencies]
+error-chain.workspace = true
 pyo3 = { workspace = true, features = ["extension-module"] }
 scipql-core.workspace = true
 unibind = { workspace = true, features = ["py"] }

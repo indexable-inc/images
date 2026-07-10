@@ -11,7 +11,7 @@
   cfg = config.services.minecraft;
   pluginCfg = cfg.plugins.terraformgenerator or null;
   pluginEnabled = pluginCfg != null && pluginCfg.enable;
-  defaultWorldName = cfg.properties."level-name" or "world";
+  defaultWorldName = cfg.properties.level-name or "world";
   worldNames =
     if pluginCfg == null
     then [defaultWorldName]

@@ -8,6 +8,7 @@ the callable is the kernel's own surface (never a user-defined one).
 """
 from __future__ import annotations
 
+import inspect
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -16,7 +17,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-import ix_notebook_mcp.runtime as rt
+from ix_notebook_mcp import guide, runtime as rt
 
 
 def test_api_first_row_is_build_stamp(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -31,13 +32,21 @@ def test_api_first_row_is_build_stamp(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "redeploy" in first["summary"]
 
 
-def test_api_filtered_miss_still_shows_build(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The row survives any filter: the staleness signal matters MOST when a
-    lookup comes back empty (the helper the docs promised is not deployed)."""
-    monkeypatch.setenv("IX_BUILD_REV", "7e42ccdb18827401226635")
-    frame = rt.api("no-helper-matches-this-9f3a")
-    assert frame.height == 1
-    assert frame.row(0, named=True)["name"] == "build"
+def test_result_guidance_preserves_structured_api_output() -> None:
+    rendered = guide.compose(guide.RESULT_CONTRACT)
+
+    assert "compact NUON" in rendered
+    assert "Never `print(df)`" in rendered
+    assert "before MCP sees it" in rendered
+    assert "`yield` each value so it reaches both the human and you" in rendered
+    assert "``print`` converts it to Polars' terminal representation" in inspect.getdoc(rt.api)
+
+
+def test_api_has_one_dataframe_interface() -> None:
+    assert not inspect.signature(rt.api).parameters
+    frame = rt.api()
+    matches = frame.filter((frame["where"] == "kernel") & (frame["name"] == "api"))
+    assert matches.height == 1
 
 
 def _binding_error(fn: Callable[..., object]) -> TypeError:

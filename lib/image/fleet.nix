@@ -133,7 +133,36 @@ rendered fleet plan, image attrset, and wrapped CLI app.
     "groups"
     "dependsOn"
     "replicas"
+    "updateStrategy"
   ];
+
+  # `updateStrategy` bounds how many of a node's replicas `ix-fleet up` /
+  # `replace` recreate concurrently (Kubernetes RollingUpdate semantics): with
+  # `maxUnavailable = k`, replica `i` waits for replica `i - k` to finish its
+  # whole workflow -- recreate, boot, health checks -- so at most `k` replicas
+  # are down at once and a failing health check halts the rollout before it
+  # takes the remaining replicas down. Default (null) keeps today's behavior:
+  # every replica converges in parallel.
+  knownUpdateStrategyKeys = ["maxUnavailable"];
+  checkedUpdateStrategy = name: strategy:
+    if strategy == null
+    then null
+    else let
+      unknown = lib.subtractLists knownUpdateStrategyKeys (attrNames (
+        assert lib.assertMsg (isAttrs strategy)
+        "fleet node '${name}': updateStrategy must be an attrset like { maxUnavailable = 1; }"; strategy
+      ));
+    in
+      assert lib.assertMsg (unknown == []) ''
+        fleet node '${name}' updateStrategy has unknown option(s): ${lib.concatStringsSep ", " unknown}
+          valid options: ${lib.concatStringsSep ", " knownUpdateStrategyKeys}
+      '';
+      assert lib.assertMsg (
+        isInt (strategy.maxUnavailable or null) && strategy.maxUnavailable > 0
+      )
+      "fleet node '${name}': updateStrategy.maxUnavailable must be a positive integer"; {
+        inherit (strategy) maxUnavailable;
+      };
 
   isWrappedNode = value: isAttrs value && lib.any (key: value ? "${key}") wrappedNodeKeys;
 
@@ -159,6 +188,7 @@ rendered fleet plan, image attrset, and wrapped CLI app.
     deployment = checkedDeployment name (mergeDeployments deploymentParts);
     dependsOn = toList (spec.dependsOn or []);
     replicas = spec.replicas or 1;
+    updateStrategy = checkedUpdateStrategy name (spec.updateStrategy or null);
   };
 
   expandReplicas = name: spec:
@@ -332,6 +362,10 @@ rendered fleet plan, image attrset, and wrapped CLI app.
           secrets = normalizeSecrets (deploy.secrets or {});
           dependsOn = expandedDependencies.${name};
           healthChecks = planHealthChecks config;
+          # Rolling-update window for this node's replica group; ix-fleet
+          # turns it into serialization edges among replicas sharing
+          # `baseName` (see checkedUpdateStrategy above).
+          inherit (spec) updateStrategy;
         }
     )
     checkedNodeSpecs;
@@ -435,7 +469,9 @@ rendered fleet plan, image attrset, and wrapped CLI app.
         "diff"
         "down"
         "health"
+        "logs"
         "replace"
+        "status"
         "switch"
         "up"
       ]
@@ -448,6 +484,8 @@ rendered fleet plan, image attrset, and wrapped CLI app.
       down
       replace
       health
+      logs
+      status
       switch
       up
       ;

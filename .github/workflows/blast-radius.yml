@@ -22,16 +22,16 @@ concurrency:
 
 env:
   # The self-hosted runner's Nix daemon owns substituters; the job only sets
-  # client-side eval knobs (matching check.yml). `accept-flake-config` consumes
-  # the flake's nixConfig (the cache.ix.dev substituter) without a
-  # prompt, which the inner nix-eval-jobs run needs to fetch the IFD closure.
+  # client-side eval knobs (matching check.yml). The daemon already owns the
+  # cache configuration, so this untrusted runner explicitly ignores restricted
+  # flake settings instead of warning once per evaluator worker.
   # `ca-derivations`: the rust units default to contentAddressed = true, so the
   # `.#checks` eval this job forces resolves content-addressed drvs. Without it
   # nix-eval-jobs aborts ("experimental Nix feature 'ca-derivations' is
   # disabled"). Mirrors check.yml.
   NIX_CONFIG: |-
     experimental-features = nix-command flakes ca-derivations
-    accept-flake-config = true
+    accept-flake-config = false
 
 jobs:
   # Untrusted half: runs this PR's own `.#blast-radius` flake code. It holds only

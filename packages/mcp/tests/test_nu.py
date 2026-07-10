@@ -324,9 +324,12 @@ def test_removed_cwd_fails_loudly_and_cwd_recovers(tmp_path: pathlib.Path) -> No
     try:
         run(nu(f"cd {target}"))
         target.rmdir()
-        with pytest.raises(nu.NuError, match="no longer exists"):
+        with pytest.raises(nu.NuCwdError, match="no longer exists"):
             run(nu.value("2 + 2"))
-        # An explicit cwd= both runs the call and repairs the engine.
+        # The typed failure discards only the stale engine, so a retry works
+        # without manual reset and never silently redirects the failed call.
+        assert run(nu.value("2 + 2")) == 4
+        # An explicit cwd= still selects and persists a deliberate directory.
         keep = tmp_path / "keep"
         keep.mkdir()
         assert run(nu.value("2 + 2", cwd=keep)) == 4
@@ -339,6 +342,34 @@ def test_explicit_cwd_persists_like_cd(tmp_path: pathlib.Path) -> None:
     try:
         run(nu.value("2 + 2", cwd=tmp_path))
         assert pathlib.Path(run(nu.value("$env.PWD"))).resolve() == tmp_path.resolve()
+    finally:
+        nu.reset()
+
+
+def test_relative_explicit_cwd_persists_as_absolute(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    monkeypatch.chdir(tmp_path)
+    try:
+        run(nu.value("2 + 2", cwd="target"))
+        assert run(nu.value("$env.PWD")) == str(target)
+    finally:
+        nu.reset()
+
+
+def test_setup_failure_preserves_cwd_and_env(tmp_path: pathlib.Path) -> None:
+    keep = tmp_path / "keep"
+    rejected = tmp_path / "rejected"
+    keep.mkdir()
+    rejected.mkdir()
+    try:
+        run(nu.value("2 + 2", cwd=keep))
+        with pytest.raises(nu.NuError):
+            run(nu.value("let =", cwd=rejected, env={"NU_SETUP_POISON": "yes"}))
+        assert run(nu.value("$env.PWD")) == str(keep)
+        assert run(nu.value("$env.NU_SETUP_POISON? == null")) is True
     finally:
         nu.reset()
 
