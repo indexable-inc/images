@@ -53,10 +53,15 @@ pub const USER_ME: &str = "me";
 /// `maxResults` at 500 per page; larger queries follow `nextPageToken`.
 pub(crate) const MAX_PAGE_SIZE: usize = 500;
 
+pub(crate) struct ListPageParts<T> {
+    items: Vec<T>,
+    next_page_token: Option<String>,
+}
+
 pub(crate) trait ListPage: serde::de::DeserializeOwned {
     type Item;
 
-    fn into_parts(self) -> (Vec<Self::Item>, Option<String>);
+    fn into_parts(self) -> ListPageParts<Self::Item>;
 }
 
 /// The Gmail / Google API error envelope:
@@ -176,7 +181,10 @@ impl Client {
             }
 
             let response = self.get(url).await?.send().await.context(HttpSnafu)?;
-            let (page_items, next_page_token) = decode::<P>(response).await?.into_parts();
+            let ListPageParts {
+                items: page_items,
+                next_page_token,
+            } = decode::<P>(response).await?.into_parts();
             items.extend(page_items);
             match next_page_token {
                 Some(next) if items.len() < query.max_results => page_token = Some(next),
