@@ -53,6 +53,10 @@
       "deps": [
         "0011-fix-libstore-add-temp-roots-for-CA-derivation-output.patch"
       ]
+    },
+    {
+      "patch": "0013-libfetchers-opt-in-incremental-fetching-of-forge-inp.patch",
+      "deps": []
     }
   ]
 }
