@@ -1,0 +1,44 @@
+# One std binary, three platform backends (see ../README.md):
+#
+#   linux   plain `cargo build` — std over glibc, the baseline.
+#   eyra    `--features eyra` — same code, but libc/crt0 are replaced by the
+#           pure-Rust Eyra implementation at link time (build.rs adds
+#           -nostartfiles), so the binary contains no C.
+#   hermit  `--target x86_64-unknown-hermit -Zbuild-std=std,panic_abort` —
+#           std's OS layer targets the Hermit unikernel; linking in the
+#           `hermit` crate below embeds the kernel (with its virtio-net driver
+#           and smoltcp stack) into the app image.
+#
+# The HTTP behavior itself lives in http-core, shared with the freestanding
+# `kernel` backend.
+[package]
+name = "httpd"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[features]
+eyra = ["dep:eyra"]
+
+[dependencies]
+http-core = { path = "../http-core" }
+eyra = { version = "0.22", optional = true }
+
+# Hermit's defaults minus `smp` and `fs`: the image runs single-vCPU in QEMU,
+# and mapping the SMP boot trampoline trips over the current hermit-loader's
+# huge-page mappings (kernel 0.12 vs loader main). pci + acpi discover the
+# NIC, virtio-net drives it (without it the kernel silently falls back to a
+# loopback interface); tcp/udp/dns/dhcpv4 are the network stack.
+[target.'cfg(target_os = "hermit")'.dependencies]
+hermit = { version = "0.12", default-features = false, features = [
+  "acpi",
+  "dhcpv4",
+  "dns",
+  "fsgsbase",
+  "kernel-stack",
+  "pci",
+  "pci-ids",
+  "tcp",
+  "udp",
+  "virtio-net",
+] }

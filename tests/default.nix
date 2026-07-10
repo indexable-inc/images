@@ -189,16 +189,15 @@
   # ix guest sidecars are opened by the shared platform base config.
   baseFirewallTcpPorts = [5001];
   baseFirewallUdpPorts = [8443];
-  sampleCodexMcpEntries = ix.mcp.toCodexEntries (
-    ix.mcp.defaultServers {
-      indexCommand = "/bin/ix-mcp";
-    }
-  );
-  sampleClaudeMcpServers = ix.mcp.toClaudeJson (
-    ix.mcp.defaultServers {
-      indexCommand = "/bin/ix-mcp";
-    }
-  );
+  googleOauthEnvVars = [
+    "GOOGLE_OAUTH_CLIENT_ID"
+    "GOOGLE_OAUTH_CLIENT_SECRET"
+  ];
+  sampleMcpServers = ix.mcp.defaultServers {
+    indexCommand = "/bin/ix-mcp";
+  };
+  sampleCodexMcpEntries = ix.mcp.toCodexEntries sampleMcpServers;
+  sampleClaudeMcpServers = ix.mcp.toClaudeJson sampleMcpServers;
   sampleCodexMcpEntriesWithoutIndex = ix.mcp.toCodexEntries (ix.mcp.defaultServers {});
   sampleCodexMcpEntry = key: lib.findFirst (entry: entry.key == key) null sampleCodexMcpEntries;
   sampleCodexMcpEntryWithoutIndex = key: lib.findFirst (entry: entry.key == key) null sampleCodexMcpEntriesWithoutIndex;
@@ -2920,16 +2919,25 @@
       }
       {
         assertion =
-          sampleCodexMcpEntry "mcp_servers.index.env_vars"
-          == {
-            key = "mcp_servers.index.env_vars";
-            value = ''[ "GH_TOKEN", "GITHUB_TOKEN", "IX_TOKEN", "LINEAR_API_KEY", "NOTION_API_KEY", "SLACK_TOKEN", "SLACK_USER_TOKEN" ]'';
-          };
-        message = "Codex MCP entries should explicitly forward API environment variables to index MCP";
+          lib.all (name: builtins.elem name sampleMcpServers.index.envVars) googleOauthEnvVars;
+        message = "index MCP should declare the Google OAuth client environment variables";
       }
       {
-        assertion = sampleClaudeMcpServers.index.env.LINEAR_API_KEY == "\${LINEAR_API_KEY:-}";
-        message = "Claude MCP config should forward API environment variables to index MCP";
+        assertion = let
+          entry = sampleCodexMcpEntry "mcp_servers.index.env_vars";
+        in
+          entry
+          != null
+          && lib.all (name: lib.hasInfix (builtins.toJSON name) entry.value) googleOauthEnvVars;
+        message = "Codex MCP config should forward the Google OAuth client environment variables";
+      }
+      {
+        assertion =
+          lib.all (
+            name: sampleClaudeMcpServers.index.env.${name} == "\${${name}:-}"
+          )
+          googleOauthEnvVars;
+        message = "Claude MCP config should forward the Google OAuth client environment variables";
       }
       {
         assertion =

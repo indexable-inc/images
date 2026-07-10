@@ -587,7 +587,7 @@ _VIEWER_HTML = (
   }
   request("ui/initialize", {
     protocolVersion: "2026-01-26",
-    clientInfo: { name: "ix-mcp tool result viewer", version: "1.0.0" },
+    appInfo: { name: "ix-mcp tool result viewer", version: "1.0.0" },
     capabilities: {},
     appCapabilities: { availableDisplayModes: ["inline"] }
   }).then(function (result) {

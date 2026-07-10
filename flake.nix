@@ -532,6 +532,11 @@
       # native launchd agent on macOS and native systemd user units on Linux.
       portable-services = ix.portableServices.homeModule;
       tmux = ./modules/home/tmux.nix;
+      # Shared modern-CLI package baseline (bat, delta, eza, fd, ripgrep, ...).
+      # Import it and set `cliBaseline.enable = true`; override
+      # `cliBaseline.packages` to trim or swap tools. See
+      # modules/home/cli-baseline.nix.
+      cli-baseline = ./modules/home/cli-baseline.nix;
       # Declarative-but-writable JSON config files (last-applied 3-way merge),
       # for config an app rewrites at runtime. See lib/mutable-json.nix.
       # Prefer `mutable-files` below for new config: it never auto-merges,

@@ -1,0 +1,14 @@
+# Build + e2e driver: `cargo xtask build <backend>` produces each image,
+# `cargo xtask e2e` boots them (host process or QEMU) and asserts an HTTP
+# response identifying the backend.
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Turns the compiled kernel ELF into a legacy-bootable disk image. BIOS only:
+# its build script compiles the boot-sector/stage binaries via `cargo install`
+# on first build, so no prebuilt blobs are checked in anywhere.
+bootloader = { version = "0.11.15", default-features = false, features = ["bios"] }
