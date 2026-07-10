@@ -208,7 +208,7 @@ If you get `TypeError: Cannot read properties of undefined`, the runtime
 has not been injected. Inject it first:
 
 ```bash
-cat assets/antithesis-query-logs.js \
+cat ../antithesis/assets/browser-utils.js assets/antithesis-query-logs.js \
   | agent-browser --session "$SESSION" eval --stdin
 ```
 

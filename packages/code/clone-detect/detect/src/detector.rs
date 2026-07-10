@@ -16,6 +16,7 @@ const PERCENT: f64 = 100.0;
 pub fn instances(scan: &Output, config: &DetectConfig) -> DetectionResult {
     let mut instances = Vec::new();
     let mut seen_type1: FxHashSet<u64> = FxHashSet::default();
+    let generated_files: Vec<bool> = scan.files.iter().map(crate::types::file_is_generated).collect();
 
     for candidate in scan.index.type1_candidates() {
         if candidate.locations.len() < 2 {
@@ -26,7 +27,7 @@ pub fn instances(scan: &Output, config: &DetectConfig) -> DetectionResult {
             continue;
         }
 
-        let fragments = locations_to_fragments(candidate.locations, scan);
+        let fragments = locations_to_fragments(candidate.locations, scan, &generated_files);
         if fragments.len() >= 2 {
             instances.push(CloneGroup {
                 clone_type: Kind::Type1,
@@ -52,7 +53,7 @@ pub fn instances(scan: &Output, config: &DetectConfig) -> DetectionResult {
             continue;
         }
 
-        let fragments = locations_to_fragments(candidate.locations, scan);
+        let fragments = locations_to_fragments(candidate.locations, scan, &generated_files);
         if fragments.len() >= 2 {
             instances.push(CloneGroup {
                 clone_type: Kind::Type2,
@@ -62,13 +63,13 @@ pub fn instances(scan: &Output, config: &DetectConfig) -> DetectionResult {
     }
 
     let type3_groups = if config.enable_type3 {
-        find(scan, config.type3_threshold, config.type3_metric)
+        find(scan, &generated_files, config.type3_threshold, config.type3_metric)
     } else {
         Vec::new()
     };
 
     let sequence_groups = if config.enable_sequences {
-        sequence_instances(scan, config.sequence_window_size)
+        sequence_instances(scan, &generated_files, config.sequence_window_size)
     } else {
         Vec::new()
     };
@@ -111,9 +112,10 @@ pub fn instances(scan: &Output, config: &DetectConfig) -> DetectionResult {
     }
 }
 
-/// Put the canonical fragment first in every group and rank groups by the
-/// estimated number of removable lines. Stable path/range tie-breakers make
-/// JSON output reproducible across hash-map and Rayon iteration order.
+/// Put the canonical fragment first in every group, rank authored groups ahead
+/// of generated output, then rank by estimated removable lines. Generated
+/// groups remain present and gated; the ordering only keeps actionable work at
+/// the top. Stable tie-breakers make JSON output reproducible.
 pub fn rank_by_impact(groups: &mut [CloneGroup]) {
     for group in groups.iter_mut() {
         group.fragments.sort_by(|left, right| {
@@ -126,9 +128,10 @@ pub fn rank_by_impact(groups: &mut [CloneGroup]) {
     }
 
     groups.sort_by(|left, right| {
-        right
-            .line_impact()
-            .cmp(&left.line_impact())
+        left
+            .is_generated()
+            .cmp(&right.is_generated())
+            .then_with(|| right.line_impact().cmp(&left.line_impact()))
             .then_with(|| first_fragment_key(left).cmp(&first_fragment_key(right)))
             .then_with(|| kind_rank(left.clone_type).cmp(&kind_rank(right.clone_type)))
     });
@@ -161,13 +164,17 @@ fn kind_rank(kind: Kind) -> u8 {
     }
 }
 
-fn locations_to_fragments(locations: &[Location], scan: &Output) -> Vec<Fragment> {
+fn locations_to_fragments(
+    locations: &[Location],
+    scan: &Output,
+    generated_files: &[bool],
+) -> Vec<Fragment> {
     locations
         .iter()
         .filter_map(|loc| {
             let file = scan.files.get(loc.file_id)?;
             let node = file.nodes.get(loc.node_idx)?;
-            Some(Fragment::from_node(file, node))
+            Some(Fragment::from_node(file, node, generated_files.get(loc.file_id).copied()?))
         })
         .collect()
 }

@@ -31,6 +31,8 @@ mod render;
 #[cfg(target_os = "macos")]
 mod trace;
 #[cfg(target_os = "macos")]
+mod transport;
+#[cfg(target_os = "macos")]
 mod view;
 #[cfg(target_os = "macos")]
 mod window;
@@ -118,11 +120,11 @@ fn run_host(cli: Cli) -> ExitCode {
                 std::process::exit(1);
             }
         });
-        conn::Target::Unix(path)
+        transport::Target::Unix(path)
     } else if let Some(path) = cli.connect {
-        conn::Target::Unix(path)
+        transport::Target::Unix(path)
     } else if let Some(addr) = cli.tcp {
-        conn::Target::Tcp(addr)
+        transport::Target::Tcp(addr)
     } else {
         eprintln!("panes-host: one of --connect, --tcp, --mock, --mock-serve is required");
         return ExitCode::FAILURE;
@@ -132,9 +134,9 @@ fn run_host(cli: Cli) -> ExitCode {
     // supervisor thread; window presentation neither waits for it nor learns
     // about it.
     if let Some(path) = cli.audio_connect {
-        audio::spawn(audio::Target::Unix(path));
+        audio::spawn(transport::Target::Unix(path));
     } else if let Some(addr) = cli.audio_tcp {
-        audio::spawn(audio::Target::Tcp(addr));
+        audio::spawn(transport::Target::Tcp(addr));
     }
 
     app::run(

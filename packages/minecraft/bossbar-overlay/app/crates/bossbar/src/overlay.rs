@@ -28,11 +28,12 @@ use overlay_core::winit::event::{
 };
 use overlay_core::winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use overlay_core::winit::window::{CursorIcon, Window, WindowId};
-use overlay_core::{anim, window as ocwin, DragClick, Gpu, HoverAnim, TexHandle};
+use overlay_core::{anim, window as ocwin, DragClick, HoverAnim, TexHandle};
 
 use crate::bars::BossBar;
 use crate::db;
-use crate::scene::{self, BarTextures};
+use crate::gpu_core::GpuCore;
+use crate::scene;
 use crate::theme;
 
 /// Top margin and vertical gap (logical points) for bars that have no pinned
@@ -82,7 +83,6 @@ fn now_unix() -> i64 {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
 }
-
 /// Open a bar's click URL with the platform's opener (a URL, file, or any URI it
 /// accepts), detached so the overlay never blocks on the browser launch. A spawn
 /// failure is reported but not fatal: a bad URL should not take down the HUD.
@@ -94,53 +94,6 @@ fn open_url(url: &str) {
     };
     if let Err(e) = std::process::Command::new(opener).arg(url).spawn() {
         eprintln!("bossbar-overlay: failed to open {url}: {e}");
-    }
-}
-
-/// GPU state shared by every bar window: one engine (device, pipeline, sprite
-/// textures, font) plus the chosen surface format and alpha mode. Each window
-/// only owns its surface.
-struct GpuCore {
-    gpu: Gpu,
-    textures: BarTextures,
-    format: wgpu::TextureFormat,
-    alpha_mode: wgpu::CompositeAlphaMode,
-    /// Icon path -> uploaded texture, memoized so a bar's avatar uploads once
-    /// rather than every reconcile. `None` records a path that did not exist or
-    /// failed to decode, so a broken icon is tried once and then skipped.
-    icon_cache: HashMap<String, Option<TexHandle>>,
-    /// Theme name -> uploaded texture set, same memoization story as the
-    /// icons (see `theme::ThemeCache` for the not-yet-imported retry rule).
-    theme_cache: theme::ThemeCache,
-}
-
-impl GpuCore {
-    /// Resolve an icon path to its texture, loading and caching on first use.
-    /// Empty path or a read/decode failure yields `None` (the bar draws without
-    /// an icon). Cached by path, so re-resolving across reconciles is free.
-    fn icon(&mut self, path: &str) -> Option<TexHandle> {
-        if path.is_empty() {
-            return None;
-        }
-        if let Some(cached) = self.icon_cache.get(path) {
-            return *cached;
-        }
-        // A read failure is transient (the writer may not have created the file
-        // yet), so do NOT cache it: returning None unmemoized lets a later
-        // reconcile pick the avatar up once it exists. A decode result (success or
-        // a genuinely undecodable file) is cached, since re-reading won't change it.
-        let Ok(bytes) = std::fs::read(path) else {
-            return None;
-        };
-        let handle = self.gpu.register_image_scaled(&bytes, scene::ICON_MAX_PX);
-        self.icon_cache.insert(path.to_string(), handle);
-        handle
-    }
-
-    /// Resolve a bar's `theme` name to its uploaded texture set. Empty,
-    /// unknown, or broken themes yield `None` (the bar draws vanilla).
-    fn theme(&mut self, name: &str) -> Option<theme::ThemeSprites> {
-        self.theme_cache.resolve(&mut self.gpu, name)
     }
 }
 
@@ -238,22 +191,7 @@ impl App {
             .expect("create surface");
 
         if self.core.is_none() {
-            let (adapter, device, queue) =
-                ocwin::request_adapter_device(&self.instance, &surface);
-            let caps = surface.get_capabilities(&adapter);
-            let format = ocwin::srgb_format(&caps);
-            let alpha_mode = ocwin::transparent_alpha_mode(&caps);
-
-            let mut gpu = Gpu::new(device, queue, format);
-            let textures = scene::register(&mut gpu);
-            self.core = Some(GpuCore {
-                gpu,
-                textures,
-                format,
-                alpha_mode,
-                icon_cache: HashMap::new(),
-                theme_cache: theme::ThemeCache::new(),
-            });
+            self.core = Some(GpuCore::new(&self.instance, &surface));
         }
 
         let core = self.core.as_ref().expect("core just initialized");
@@ -375,14 +313,7 @@ impl App {
                 // watcher reads it ~200ms behind), and forcing it would snap the
                 // window back. So only apply an external position once the window
                 // has been still for SETTLE, and skip the echo of our own move.
-                if let Some(p) = b.pos {
-                    let lp = LogicalPosition::new(p.x, p.y);
-                    let settled = Instant::now().duration_since(win.last_move) >= SETTLE;
-                    if settled && win.self_set != Some(lp) {
-                        win.window.set_outer_position(lp);
-                        win.self_set = Some(lp);
-                    }
-                }
+                ocwin::apply_stored_position(&win.window, &mut win.self_set, win.last_move, SETTLE, b.pos);
                 // A title or description change can alter the window size (wider for
                 // a longer title, taller for a panel). The settle pass in
                 // `about_to_wait` recomputes the target from the new bar and
@@ -520,25 +451,22 @@ impl App {
         // window sits and is set after create; measure the scroll from there, and
         // pin the bar (`bar.pos`) so the size-settle pass stops re-centering it,
         // exactly as a drag does.
-        if let Some(np) =
-            overlay_core::scroll_drag_position(win.self_set, delta, win.window.scale_factor())
-        {
-            win.self_set = Some(np);
-            // Move the window AND warp the pointer with it, so the pointer stays on
-            // the bar like a press-drag rather than the bar sliding out from under it.
-            ocwin::move_window_with_cursor(&win.window, np, win.gesture.cursor());
-            win.last_move = Instant::now();
-            win.bar.pos = Some(DVec2::new(np.x, np.y));
-        }
+        let result = overlay_core::handle_scroll_drag(
+            &win.window,
+            win.gesture.cursor(),
+            &mut win.self_set,
+            &mut win.last_move,
+            delta,
+            phase,
+            |pos| win.bar.pos = Some(DVec2::new(pos.x, pos.y)),
+            |pos| db::set_position(&self.db, id, DVec2::new(pos.x, pos.y)),
+        );
         // Persist only when the gesture settles, not per frame: a scroll emits a
         // burst of `MouseWheel` events, and writing on each would open a SQLite
         // connection per frame on the UI thread. The finger lift carries
         // `TouchPhase::Ended`; a discrete wheel notch (`LineDelta`) has no Ended
         // phase but is low-frequency, so save it directly.
-        if overlay_core::scroll_drag_settled(delta, phase)
-            && let Some(pos) = win.self_set
-            && let Err(e) = db::set_position(&self.db, id, DVec2::new(pos.x, pos.y))
-        {
+        if let Err(e) = result {
             eprintln!("bossbar-overlay: save position failed: {e}");
         }
     }

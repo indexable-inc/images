@@ -27,11 +27,13 @@ members = [
   "packages/code/clone-detect/hash",
   "packages/code/clone-detect/pragma",
   "packages/code/clone-detect/scanner",
+  "packages/code/clone-detect/test-support",
   "packages/config-launch",
   "packages/code/code-highlight",
   "packages/search/code-tokenizer",
   "packages/dag-runner",
   "packages/code/edit-applier",
+  "packages/code/error-chain",
   "packages/efx/cli",
   "packages/efx/engine",
   "packages/efx/ir",
@@ -62,6 +64,7 @@ members = [
   "packages/minecraft/minecraft/sound",
   "packages/minecraft/minecraft/sync-managed",
   "packages/mirror",
+  "packages/mcp/server-info",
   "packages/search/mixedbread",
   "packages/mynoise",
   "packages/nu-py",
@@ -109,6 +112,7 @@ members = [
   "packages/vm/panes/audio",
   "packages/vm/panes/compositor",
   "packages/vm/panes/host",
+  "packages/vm/panes/guest-transport",
   "packages/vm/panes/protocol",
   "packages/vm/vmkit",
   "packages/tui/vt/ix-vt",
@@ -182,6 +186,8 @@ clone-detect = { path = "packages/code/clone-detect/detect" }
 clone-hash = { path = "packages/code/clone-detect/hash" }
 clone-pragma = { path = "packages/code/clone-detect/pragma" }
 clone-scanner = { path = "packages/code/clone-detect/scanner" }
+clone-test-support = { path = "packages/code/clone-detect/test-support" }
+error-chain = { path = "packages/code/error-chain" }
 code-highlight = { path = "packages/code/code-highlight" }
 code-tokenizer = { path = "packages/search/code-tokenizer" }
 file-search = { path = "packages/search/file-search" }
@@ -254,13 +260,16 @@ objc2-quartz-core = "0.3"
 objc2-web-kit = "0.3"
 object = { version = "0.39", default-features = false, features = ["read"] }
 object_store = { version = "0.14", features = ["aws"] }
+mcp-server-info = { path = "packages/mcp/server-info" }
 panes-protocol = { path = "packages/vm/panes/protocol" }
+panes-guest-transport = { path = "packages/vm/panes/guest-transport" }
 parking_lot = "0.12"
 parquet = { version = "59", features = ["arrow"] }
 percent-encoding = "2"
 prettyplease = "0.2"
 proc-macro2 = "1"
 progress-style = { path = "packages/progress-style" }
+rmcp = { version = "2.0", default-features = false, features = ["server", "macros", "transport-io"] }
 protobuf = "3"
 pty-process = { version = "0.5", features = ["async"] }
 pyo3 = { version = "0.28", features = ["abi3-py311"] }

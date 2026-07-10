@@ -106,14 +106,10 @@ impl App {
     /// Auto-centered window position (logical points) within the screen's usable
     /// area so the orb clears the menu bar and Dock.
     fn center_pos(&self) -> LogicalPosition<f64> {
-        let (w_px, h_px) = scene::orb_window_px(self.scale);
-        let wl = w_px as f64 / self.scale_factor;
-        let hl = h_px as f64 / self.scale_factor;
-        let (left, top, vw, vh) = ocwin::visible_frame_logical()
-            .unwrap_or((0.0, 0.0, self.mon_logical.0, self.mon_logical.1));
-        LogicalPosition::new(
-            left + ((vw - wl) * 0.5).max(0.0),
-            top + ((vh - hl) * 0.5).max(0.0),
+        ocwin::centered_position(
+            scene::orb_window_px(self.scale),
+            self.scale_factor,
+            self.mon_logical,
         )
     }
 
@@ -125,40 +121,23 @@ impl App {
             .map(|p| LogicalPosition::new(p.x, p.y))
             .unwrap_or_else(|| self.center_pos());
         let attrs = ocwin::float_attributes("XP Orb", w_px, h_px, Some(pos));
-        let window = match event_loop.create_window(attrs) {
-            Ok(w) => Arc::new(w),
-            Err(e) => {
-                eprintln!("xp-orb-overlay: create window failed: {e}");
-                event_loop.exit();
-                return;
-            }
+        let Some(window) = ocwin::create_window(event_loop, attrs, "xp-orb-overlay: create window failed") else {
+            return;
         };
         // The orb is a background (accessory) window, so hover only reaches it with
         // an always-active tracking area.
         ocwin::enable_background_hover(&window);
 
-        let surface = self
-            .instance
-            .create_surface(window.clone())
-            .expect("create surface");
-        let (adapter, device, queue) = ocwin::request_adapter_device(&self.instance, &surface);
-        let caps = surface.get_capabilities(&adapter);
-        let format = ocwin::srgb_format(&caps);
-        let alpha = ocwin::transparent_alpha_mode(&caps);
-
-        let mut gpu = Gpu::new(device, queue, format);
+        let setup = ocwin::setup_surface(&self.instance, window.clone());
+        let mut gpu = Gpu::new(setup.device, setup.queue, setup.format);
         let texture = scene::register(&mut gpu);
-
-        let size = window.inner_size();
-        let config = ocwin::surface_config(format, alpha, size.width, size.height);
-        surface.configure(gpu.device(), &config);
         window.request_redraw();
 
         self.gpu = Some(gpu);
         self.win = Some(WinState {
             window,
-            surface,
-            config,
+            surface: setup.surface,
+            config: setup.config,
             texture,
             gesture: DragClick::new(DRAG_THRESHOLD),
             hovered: false,
@@ -190,20 +169,14 @@ impl App {
         let Some(gpu) = self.gpu.as_ref() else {
             return;
         };
-        let frame = match win.surface.get_current_texture() {
-            Ok(f) => f,
-            Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
-                win.surface.configure(gpu.device(), &win.config);
-                return;
-            }
-            Err(e) => {
-                eprintln!("xp-orb-overlay: surface error: {e:?}");
-                return;
-            }
+        let Some((frame, view)) = ocwin::surface_frame(
+            &win.surface,
+            gpu.device(),
+            &win.config,
+            "xp-orb-overlay: surface error",
+        ) else {
+            return;
         };
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
         let quads = scene::build(&win.texture, &self.orb, self.scale, cw, ch, hover, shimmer, bob);
         let _ = gpu.draw(&view, cw, ch, &quads);
         frame.present();
@@ -211,26 +184,13 @@ impl App {
 
     /// A window moved. Persist it only when the move came from a user drag;
     /// otherwise just record where the window sits so a later drag measures right.
-    fn on_moved(&mut self, pos: PhysicalPosition<i32>) {
-        let Some(win) = self.win.as_mut() else {
-            return;
-        };
-        let logical: LogicalPosition<f64> = pos.to_logical(win.window.scale_factor());
-        let echo = win
-            .self_set
-            .is_some_and(|ss| (ss.x - logical.x).abs() < 0.5 && (ss.y - logical.y).abs() < 0.5);
-        if echo {
-            return;
-        }
-        win.self_set = Some(logical);
-        if !win.gesture.dragging() {
-            return; // OS-initiated placement, not a user drag
-        }
-        win.last_move = Instant::now();
-        let dv = DVec2::new(logical.x, logical.y);
-        self.orb.pos = Some(dv);
-        if let Err(e) = db::set_position(&self.db, dv) {
-            eprintln!("xp-orb-overlay: save position failed: {e}");
+    fn on_moved(&mut self, position: PhysicalPosition<i32>) {
+        if let Some(window) = self.win.as_mut() {
+            overlay_core::window::persist_dragged_position_logged(
+                &window.window, &window.gesture, &mut window.self_set, &mut window.last_move,
+                &mut self.orb.pos, position, |position| db::set_position(&self.db, position),
+                "xp-orb-overlay: save position failed"
+            );
         }
     }
 
@@ -296,13 +256,8 @@ impl ApplicationHandler<Orb> for App {
         self.orb = orb;
         // Honor an externally set position once the window has settled, skipping
         // the echo of our own drag/scroll.
-        if let (Some(p), Some(win)) = (self.orb.pos, self.win.as_mut()) {
-            let lp = LogicalPosition::new(p.x, p.y);
-            let settled = Instant::now().duration_since(win.last_move) >= SETTLE;
-            if settled && win.self_set != Some(lp) {
-                win.window.set_outer_position(lp);
-                win.self_set = Some(lp);
-            }
+        if let Some(win) = self.win.as_mut() {
+            ocwin::apply_stored_position(&win.window, &mut win.self_set, win.last_move, SETTLE, self.orb.pos);
         }
         if let Some(win) = self.win.as_ref() {
             win.window.request_redraw();
@@ -314,9 +269,7 @@ impl ApplicationHandler<Orb> for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
                 if let (Some(gpu), Some(win)) = (self.gpu.as_ref(), self.win.as_mut()) {
-                    win.config.width = size.width.max(1);
-                    win.config.height = size.height.max(1);
-                    win.surface.configure(gpu.device(), &win.config);
+                    ocwin::resize_surface(&win.surface, gpu.device(), &mut win.config, size);
                 }
                 self.render();
             }
@@ -493,13 +446,12 @@ impl ApplicationHandler<()> for SelfTest {
         let (side, _) = scene::orb_window_px(scale);
         let pos = LogicalPosition::new(300.0, 400.0);
         let attrs = ocwin::float_attributes("XP Orb Self-Test", side, side, Some(pos));
-        let window = match event_loop.create_window(attrs) {
-            Ok(w) => Arc::new(w),
-            Err(e) => {
-                eprintln!("xp-orb-overlay: selftest window failed: {e}");
-                event_loop.exit();
-                return;
-            }
+        let Some(window) = ocwin::create_window(
+            event_loop,
+            attrs,
+            "xp-orb-overlay: selftest window failed",
+        ) else {
+            return;
         };
         // Pointer offset = the window centre (physical px); held across steps so the
         // pointer should ride along exactly as the window moves.

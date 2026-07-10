@@ -32,16 +32,20 @@ fn index_then_search_finds_path_by_filename() {
 }
 
 #[test]
-fn directory_filter_matches_subdirectory() {
+fn directory_filter_is_path_aware() {
     let workdir = TempDir::new().expect("workdir");
     let index_dir = TempDir::new().expect("index dir");
 
     let inside = workdir.path().join("inside");
+    let same_prefix = workdir.path().join("inside-old");
     let outside = workdir.path().join("outside");
     fs::create_dir(&inside).expect("mkdir inside");
+    fs::create_dir(&same_prefix).expect("mkdir same-prefix sibling");
     fs::create_dir(&outside).expect("mkdir outside");
 
     fs::write(inside.join("hit.rs"), "fn target() {}").expect("write inside");
+    fs::write(same_prefix.join("prefix-miss.rs"), "fn target() {}")
+        .expect("write same-prefix sibling");
     fs::write(outside.join("miss.rs"), "fn target() {}").expect("write outside");
 
     let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
@@ -91,33 +95,6 @@ fn reindex_removes_stale_and_deleted_file_chunks() {
         assert!(index.search("alpha", 5, None).expect("stale search").is_empty());
         assert!(index.search("charlie", 5, None).expect("deleted search").is_empty());
         assert!(!index.search("foxtrot", 5, None).expect("current search").is_empty());
-    }
-}
-
-#[test]
-fn directory_filter_excludes_same_prefix_siblings() {
-    let workdir = TempDir::new().expect("workdir");
-    let index_dir = TempDir::new().expect("index dir");
-
-    let src = workdir.path().join("src");
-    let src_old = workdir.path().join("src-old");
-    fs::create_dir(&src).expect("mkdir src");
-    fs::create_dir(&src_old).expect("mkdir src-old");
-    fs::write(src.join("kept.rs"), "fn target() {}").expect("write src");
-    fs::write(src_old.join("dropped.rs"), "fn target() {}").expect("write src-old");
-
-    let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
-    index.index_directory(workdir.path(), false).expect("index");
-
-    let hits = index
-        .search("target", 10, Some(src.as_path()))
-        .expect("filter src");
-    assert!(!hits.is_empty(), "filter for /src should match kept.rs");
-    for hit in &hits {
-        assert!(
-            !hit.path.contains("src-old"),
-            "filter for /src must not pull in /src-old: {hit:?}",
-        );
     }
 }
 

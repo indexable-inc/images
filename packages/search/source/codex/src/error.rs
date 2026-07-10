@@ -57,3 +57,10 @@ pub enum Error {
 
 /// Result alias defaulting to this crate's [`Error`].
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+pub(crate) fn read_dir(error: source_meta::files::WalkError) -> Error {
+    Error::ReadDir {
+        path: error.path,
+        source: error.source,
+    }
+}

@@ -40,7 +40,12 @@ struct IndexedNode<'a> {
     node: &'a NodeInfo,
 }
 
-pub fn find(scan: &Output, threshold: f64, metric: Type3Metric) -> Vec<CloneGroup> {
+pub fn find(
+    scan: &Output,
+    generated_files: &[bool],
+    threshold: f64,
+    metric: Type3Metric,
+) -> Vec<CloneGroup> {
     // Banding derived once from the threshold: shared by every kind group so the
     // LSH S-curve matches the configured similarity floor (see
     // `banding_for_threshold`).
@@ -148,6 +153,7 @@ pub fn find(scan: &Output, threshold: f64, metric: Type3Metric) -> Vec<CloneGrou
 
                 let Some(group) = try_make_group(
                     scan,
+                    generated_files,
                     &CandidatePair {
                         loc_a: pair.first,
                         loc_b: pair.second,
@@ -230,7 +236,11 @@ struct CandidatePair {
 
 /// Try to build a Type-3 clone group from two node locations.
 /// Returns `None` if they're already Type-1/Type-2 or below threshold.
-fn try_make_group(scan: &Output, pair: &CandidatePair) -> Option<CloneGroup> {
+fn try_make_group(
+    scan: &Output,
+    generated_files: &[bool],
+    pair: &CandidatePair,
+) -> Option<CloneGroup> {
     let file_a = scan.files.get(pair.loc_a.file_id)?;
     let file_b = scan.files.get(pair.loc_b.file_id)?;
     let node_a = file_a.nodes.get(pair.loc_a.node_idx)?;
@@ -275,8 +285,8 @@ fn try_make_group(scan: &Output, pair: &CandidatePair) -> Option<CloneGroup> {
             metric: pair.metric,
         },
         fragments: vec![
-            Fragment::from_node(file_a, node_a),
-            Fragment::from_node(file_b, node_b),
+            Fragment::from_node(file_a, node_a, *generated_files.get(pair.loc_a.file_id)?),
+            Fragment::from_node(file_b, node_b, *generated_files.get(pair.loc_b.file_id)?),
         ],
     })
 }

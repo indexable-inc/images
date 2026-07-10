@@ -18,6 +18,7 @@ const TOKEN_LITERAL: u64 = 0x9876_5432_CCCC_DDDD;
 /// Used for statement-sequence clone detection.
 #[derive(Debug, Clone)]
 pub struct ChildInfo {
+    pub kind: &'static str,
     pub normalized_hash: u64,
     pub byte_range: std::ops::Range<usize>,
     pub start_line: usize,
@@ -111,6 +112,7 @@ fn collect_children(tree: &Tree, node: tree_sitter::Node<'_>) -> Vec<ChildInfo> 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         children.push(ChildInfo {
+            kind: child.kind(),
             normalized_hash: normalize::hash(tree, child),
             byte_range: child.byte_range(),
             start_line: child.start_position().row,

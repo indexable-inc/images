@@ -42,7 +42,7 @@ pub fn check(ty: &ir::Type, what: &str) -> Result<(), RenderError> {
                     "{what} is `{}`, which napi only carries as a BigInt; \
                      BigInt mapping is a stage 2 follow-up of issue #1993, so \
                      use i64 (IEEE-double safe range) or u32 for now",
-                    int_name(*kind),
+                    kind.rust_name(),
                 )))
             }
             _ => Ok(()),
@@ -194,31 +194,13 @@ pub fn name_ident(name: &str) -> Result<Ident, RenderError> {
 
 fn int_tokens(kind: ir::IntKind) -> TokenStream {
     match kind {
-        ir::IntKind::I8 => quote!(i8),
-        ir::IntKind::I16 => quote!(i16),
-        ir::IntKind::I32 => quote!(i32),
-        ir::IntKind::I64 => quote!(i64),
-        ir::IntKind::U8 => quote!(u8),
-        ir::IntKind::U16 => quote!(u16),
-        ir::IntKind::U32 => quote!(u32),
         // Rejected by `check` before any of these spell into a signature.
         ir::IntKind::U64 | ir::IntKind::Usize | ir::IntKind::Isize => quote!(::core::compile_error!(
             "unreachable: BigInt-only integers are rejected at render time"
         )),
-    }
-}
-
-const fn int_name(kind: ir::IntKind) -> &'static str {
-    match kind {
-        ir::IntKind::I8 => "i8",
-        ir::IntKind::I16 => "i16",
-        ir::IntKind::I32 => "i32",
-        ir::IntKind::I64 => "i64",
-        ir::IntKind::Isize => "isize",
-        ir::IntKind::U8 => "u8",
-        ir::IntKind::U16 => "u16",
-        ir::IntKind::U32 => "u32",
-        ir::IntKind::U64 => "u64",
-        ir::IntKind::Usize => "usize",
+        supported => {
+            let ident = Ident::new(supported.rust_name(), Span::call_site());
+            quote!(#ident)
+        }
     }
 }

@@ -79,6 +79,30 @@ knowledge), and the agent's ANSWER. Classify the agent's answer:
 Judge meaning, not wording. Fill `verdict` then a one-line `evidence`."""
 
 
+def _grade_tool(
+    schema: dict[str, object], description: str
+) -> anthropic.types.ToolParam:
+    tool: anthropic.types.ToolParam = {
+        "name": "record_grade",
+        "description": description,
+        "input_schema": {
+            "type": "object",
+            "properties": schema,
+            "required": list(schema),
+        },
+    }
+    return tool
+
+
+def _tool_input(response: anthropic.types.Message) -> dict[str, object]:
+    for block in response.content:
+        if isinstance(block, anthropic.types.ToolUseBlock):
+            if not isinstance(block.input, dict):
+                raise RuntimeError(f"judge tool input was not a dict: {type(block.input)}")
+            return block.input
+    raise RuntimeError("judge returned no tool call")
+
+
 @dataclass(frozen=True, slots=True)
 class Judge:
     """A thin wrapper over the Anthropic Messages API for behavior grading."""
@@ -157,72 +181,44 @@ class Judge:
         return out.verdict, out.evidence
 
     def _call_schema(
-        self, system: str, user: str, schema: dict[str, object]
+        self,
+        system: str,
+        user: str,
+        schema: dict[str, object],
+        *,
+        max_tokens: int = 512,
+        description: str = "Record the verdict.",
     ) -> dict[str, object]:
-        resp = self._client().messages.create(
-            model=self.model,
-            max_tokens=512,
-            temperature=0,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-            tools=[
-                {
-                    "name": "record_grade",
-                    "description": "Record the verdict.",
-                    "input_schema": {
-                        "type": "object",
-                        "properties": schema,
-                        "required": list(schema.keys()),
-                    },
-                }
-            ],
-            tool_choice={"type": "tool", "name": "record_grade"},
+        return _tool_input(
+            self._client().messages.create(
+                model=self.model,
+                max_tokens=max_tokens,
+                temperature=0,
+                system=system,
+                messages=[{"role": "user", "content": user}],
+                tools=[_grade_tool(schema, description)],
+                tool_choice={"type": "tool", "name": "record_grade"},
+            )
         )
-        for block in resp.content:
-            if isinstance(block, anthropic.types.ToolUseBlock):
-                if not isinstance(block.input, dict):
-                    raise RuntimeError(f"judge tool input was not a dict: {type(block.input)}")
-                return block.input
-        raise RuntimeError("judge returned no tool call")
 
     def _call(self, system: str, user: str) -> dict[str, object]:
-        resp = self._client().messages.create(
-            model=self.model,
-            max_tokens=2048,
-            temperature=0,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-            tools=[
-                {
-                    "name": "record_grade",
-                    "description": "Record the per-behavior verdicts.",
-                    "input_schema": {
+        return self._call_schema(
+            system,
+            user,
+            {
+                "verdicts": {
+                    "type": "array",
+                    "items": {
                         "type": "object",
                         "properties": {
-                            "verdicts": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "behavior_id": {"type": "string"},
-                                        "present": {"type": "boolean"},
-                                        "evidence": {"type": "string"},
-                                    },
-                                    "required": ["behavior_id", "present", "evidence"],
-                                },
-                            }
+                            "behavior_id": {"type": "string"},
+                            "present": {"type": "boolean"},
+                            "evidence": {"type": "string"},
                         },
-                        "required": ["verdicts"],
+                        "required": ["behavior_id", "present", "evidence"],
                     },
                 }
-            ],
-            tool_choice={"type": "tool", "name": "record_grade"},
+            },
+            max_tokens=2048,
+            description="Record the per-behavior verdicts.",
         )
-        for block in resp.content:
-            if isinstance(block, anthropic.types.ToolUseBlock):
-                if not isinstance(block.input, dict):
-                    raise RuntimeError(
-                        f"judge tool input was not a dict: {type(block.input)}"
-                    )
-                return block.input
-        raise RuntimeError("judge returned no tool call")

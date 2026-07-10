@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import functools
 import fcntl
 import ipaddress
 import json
@@ -296,40 +297,24 @@ def _resolve_ssh_auth_sock(
     return op_sock
 
 
-def _exec_token() -> str | None:
-    """The shared secret gating `/api/exec` (a peer's `fleet.in_kernel`).
-
-    From ``IX_MCP_EXEC_TOKEN`` directly, or a file named by
-    ``IX_MCP_EXEC_TOKEN_FILE`` (the fleet service keeps the secret in a file and
-    points every node at it). Unset, the exec endpoint stays disabled.
-    """
-    token = os.environ.get("IX_MCP_EXEC_TOKEN")
-    if token:
-        return token.strip()
-    path = os.environ.get("IX_MCP_EXEC_TOKEN_FILE")
+def _secret_from_env_or_file(value_env: str, file_env: str) -> str | None:
+    value = os.environ.get(value_env)
+    if value:
+        return value.strip()
+    path = os.environ.get(file_env)
     if path and Path(path).exists():
         return Path(path).read_text().strip()
     return None
 
 
-def _api_key() -> str | None:
-    """The static API key gating the MCP streamable-HTTP transport.
-
-    From ``IX_MCP_API_KEY`` directly, or a file named by ``IX_MCP_API_KEY_FILE``
-    (a deployment keeps the secret in a root-only file or env unit and points
-    the server at it; the key is never baked into a config in the repo). Every
-    HTTP request must then carry it in ``X-Api-Key`` (or ``Authorization:
-    Bearer`` where that header survives the client's path). Unset, the HTTP
-    transport stays unauthenticated, which :func:`_http_bind_error` only allows
-    on a loopback/tailnet bind. stdio mode never reads this.
-    """
-    key = os.environ.get("IX_MCP_API_KEY")
-    if key:
-        return key.strip()
-    path = os.environ.get("IX_MCP_API_KEY_FILE")
-    if path and Path(path).exists():
-        return Path(path).read_text().strip()
-    return None
+# Exec and HTTP authentication use the same precedence: a direct environment
+# value, then a file named by its companion `*_FILE` variable.
+_exec_token = functools.partial(
+    _secret_from_env_or_file, "IX_MCP_EXEC_TOKEN", "IX_MCP_EXEC_TOKEN_FILE"
+)
+_api_key = functools.partial(
+    _secret_from_env_or_file, "IX_MCP_API_KEY", "IX_MCP_API_KEY_FILE"
+)
 
 
 def _http_bind_error(host: str, api_key: str | None) -> str | None:
@@ -571,7 +556,7 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
 
 async def _run(cfg: Config) -> None:
     from . import dashboard, mesh, tools, transport
-    from .kernel import Kernel, set_kernel
+    from .kernel import Kernel, restore_with_lock, set_kernel
 
     kernel = Kernel(cfg)
     await kernel.start()
@@ -586,17 +571,7 @@ async def _run(cfg: Config) -> None:
         # sees the restored state.
         locked = asyncio.Event()
 
-        async def _restore() -> None:
-            try:
-                summary = await kernel.restore_session(on_locked=locked.set)
-                if summary:
-                    print(f"[ix-mcp] {summary}", file=sys.stderr, flush=True)
-            except Exception as exc:
-                print(f"[ix-mcp] session restore failed: {exc!r}", file=sys.stderr, flush=True)
-            finally:
-                locked.set()  # a restore that died before locking must not hang serving
-
-        restore_task = asyncio.ensure_future(_restore())
+        restore_task = asyncio.ensure_future(restore_with_lock(kernel, locked, "session restore"))
         await locked.wait()
 
     runner = await dashboard.start(cfg)

@@ -51,10 +51,8 @@ fn bar() {
 }
 
 #[test]
-fn detects_duplicate_functions() {
-    let dir = tempfile::tempdir().unwrap();
-
-    let content = r"
+fn detects_exact_and_renamed_function_candidates() {
+    let exact = r"
 fn duplicate_function() {
     let x = 1;
     let y = 2;
@@ -62,38 +60,31 @@ fn duplicate_function() {
     z
 }
 ";
-    create_temp_file(dir.path(), "file1.rs", content);
-    create_temp_file(dir.path(), "file2.rs", content);
-
-    let scanner = Scanner::new(test_scan_config());
-    let result = scanner.directory(dir.path()).unwrap();
-
-    assert_eq!(result.files.len(), 2);
-    assert!(result.index.type1_candidates().next().is_some());
-}
-
-#[test]
-fn detects_renamed_functions() {
-    let dir = tempfile::tempdir().unwrap();
-
-    let content1 = r"
+    let renamed_left = r"
 fn add(a: i32, b: i32) -> i32 {
     let sum = a + b;
     sum
 }
 ";
-    let content2 = r"
+    let renamed_right = r"
 fn sum(x: i32, y: i32) -> i32 {
     let result = x + y;
     result
 }
 ";
-    create_temp_file(dir.path(), "file1.rs", content1);
-    create_temp_file(dir.path(), "file2.rs", content2);
+    for (left, right, exact_match) in [(exact, exact, true), (renamed_left, renamed_right, false)] {
+        let dir = tempfile::tempdir().unwrap();
+        create_temp_file(dir.path(), "file1.rs", left);
+        create_temp_file(dir.path(), "file2.rs", right);
+        let result = Scanner::new(test_scan_config())
+            .directory(dir.path())
+            .unwrap();
 
-    let scanner = Scanner::new(test_scan_config());
-    let result = scanner.directory(dir.path()).unwrap();
-
-    assert_eq!(result.files.len(), 2);
-    assert!(result.index.type2_candidates().next().is_some());
+        assert_eq!(result.files.len(), 2);
+        if exact_match {
+            assert!(result.index.type1_candidates().next().is_some());
+        } else {
+            assert!(result.index.type2_candidates().next().is_some());
+        }
+    }
 }

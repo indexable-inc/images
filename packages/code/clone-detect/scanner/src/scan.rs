@@ -31,6 +31,20 @@ pub struct Config {
     pub include_hidden: bool,
 }
 
+impl Config {
+    /// Small-fragment configuration used by scanner and detector tests.
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub const fn for_tests() -> Self {
+        Self {
+            min_lines: 1,
+            min_nodes: 1,
+            respect_gitignore: false,
+            include_hidden: false,
+        }
+    }
+}
+
 /// Minimum source lines for a fragment to be considered a clone candidate.
 const DEFAULT_MIN_LINES: usize = 5;
 
