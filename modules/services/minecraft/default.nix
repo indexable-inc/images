@@ -527,7 +527,7 @@
 
   serverFiles = cfg.serverFiles // pluginConfigFiles;
 
-  defaultWorldName = toString (cfg.properties."level-name" or "world");
+  defaultWorldName = toString (cfg.properties.level-name or "world");
   annotatedWorldNames = lib.unique (
     [defaultWorldName] ++ lib.attrNames cfg.worlds ++ datapackWorldNames
   );

@@ -694,6 +694,22 @@
 (lint no-types-unspecified error
   "`types.unspecified` accepts anything, including bottom; use a real type or `attrsOf <type>` / `oneOf [ ... ]`")
 
+;; prefer-bare-attr-name: quoted attribute names that are valid Nix
+;; identifiers are JSON-shaped noise. The full string check excludes escapes and
+;; interpolation; reserved words still require quotes in an attribute path.
+(rule (nix-reserved-attr-name name)
+  (match nix "(string_fragment) @name")
+  (text-match name "^(assert|else|if|in|inherit|let|rec|then|with)$"))
+(rule (prefer-bare-attr-name quoted name)
+  (match nix "(attrpath (string_expression (string_fragment) @name) @quoted)")
+  (text-match quoted "^\"[A-Za-z_][A-Za-z0-9_'-]*\"$")
+  (text-match name "^[A-Za-z_][A-Za-z0-9_'-]*$")
+  (not (nix-reserved-attr-name name)))
+(rewrite unquote-bare-attr-name (prefer-bare-attr-name quoted name)
+  (replace quoted "{name}"))
+(lint prefer-bare-attr-name error
+  "attribute name `{name}` is a valid bare identifier; remove the unnecessary quotes")
+
 ;; no-unquoted-splice: `legacyPackages.${system}` interpolates outside a
 ;; string. Prefer `import nixpkgs { inherit system; }` to get a package set;
 ;; if you must index dynamically, quote the antiquote:

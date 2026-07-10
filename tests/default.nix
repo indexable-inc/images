@@ -550,7 +550,7 @@
         {
           services.minecraft = {
             properties.level-name = "My World";
-            datapacks."max-height".dimensionTypes.overworld = {
+            datapacks.max-height.dimensionTypes.overworld = {
               min_y = -2032;
               height = 4064;
               logical_height = 4064;
@@ -576,7 +576,7 @@
         plugmanReloadEnabled = false;
         rconEnabled = false;
         ignoredPlugins = [];
-        datapackWorlds = config.services.minecraft.datapacks."max-height".worlds;
+        datapackWorlds = config.services.minecraft.datapacks.max-height.worlds;
         rconPort = config.services.minecraft.rcon.port;
         rconPasswordFile = "/build/minecraft-datapack-data/.ix-rcon-password";
         rconBroadcastToOps = false;
@@ -1340,7 +1340,7 @@
     (ix.goUnit.buildWorkspace {
       pname = "go-unit-missing-go-sum";
       src = goUnitMissingGoSumFixture;
-      vendorHash = pins."go-unit-fixture-vendor".hash;
+      vendorHash = pins.go-unit-fixture-vendor.hash;
       packages = ["."];
     }).packages
   );
@@ -1368,7 +1368,7 @@
       pname = "go-unit-missing-explicit-go-sum";
       src = goUnitMissingGoSumFixture;
       goSum = goUnitMissingGoSumFixture + "/go.sum";
-      vendorHash = pins."go-unit-fixture-vendor".hash;
+      vendorHash = pins.go-unit-fixture-vendor.hash;
       packages = ["."];
     }).packages
   );
@@ -1751,7 +1751,7 @@
           (
             {nodes, ...}: {
               services.remote-desktop.enable = true;
-              environment.etc."db-host".text = nodes.db.config.networking.hostName;
+              environment.etc.db-host.text = nodes.db.config.networking.hostName;
             }
           )
         ];
@@ -1782,7 +1782,7 @@
         modules = [
           (
             {nodes, ...}: {
-              environment.etc."api-host".text = nodes.api.config.networking.hostName;
+              environment.etc.api-host.text = nodes.api.config.networking.hostName;
             }
           )
         ];
@@ -1822,14 +1822,14 @@
     (ix.mkFleet {
       nodes.private.modules = [
         {
-          ix.healthChecks."public-reachability" = {
+          ix.healthChecks.public-reachability = {
             from = "host";
             requiresIpv4 = true;
             command = ["true"];
           };
         }
       ];
-    }).planValue.nodes.private.healthChecks."public-reachability"
+    }).planValue.nodes.private.healthChecks.public-reachability
     true
   );
 
@@ -2465,7 +2465,7 @@
   invalidSecretNameEval = builtins.tryEval (
     builtins.deepSeq
     (ix.mkFleet {
-      deployment.secrets."BAD_SECRET".env = "BAD_SECRET";
+      deployment.secrets.BAD_SECRET.env = "BAD_SECRET";
       nodes.web = {
         services.openssh.enable = true;
       };
@@ -2912,7 +2912,7 @@
         # (off-cluster `ray://` drivers), exec, and pinned inter-node ports --
         # on the tailscale interface only.
         assertion = let
-          ports = ixRayHead.networking.firewall.interfaces."tailscale0".allowedTCPPorts;
+          ports = ixRayHead.networking.firewall.interfaces.tailscale0.allowedTCPPorts;
         in
           builtins.elem 6379 ports
           && builtins.elem 10001 ports
@@ -2947,7 +2947,7 @@
         # A worker opens its inter-node + exec ports, but neither the GCS nor the
         # client-server port (only the head serves those).
         assertion = let
-          ports = ixRayWorker.networking.firewall.interfaces."tailscale0".allowedTCPPorts;
+          ports = ixRayWorker.networking.firewall.interfaces.tailscale0.allowedTCPPorts;
         in
           builtins.elem 8799 ports
           && builtins.elem 6380 ports
@@ -3051,7 +3051,7 @@
         # Connect (15002) and master RPC (7077) are opened on the master, on
         # the tailscale interface only.
         assertion = let
-          ports = ixSparkMaster.networking.firewall.interfaces."tailscale0".allowedTCPPorts;
+          ports = ixSparkMaster.networking.firewall.interfaces.tailscale0.allowedTCPPorts;
         in
           builtins.elem 15002 ports && builtins.elem 7077 ports;
         message = "ix-spark master should open the Connect (15002) and master (7077) ports on tailscale0";
@@ -3076,7 +3076,7 @@
         # A worker only runs a worker joining the remote master: no master, no
         # connect, and it must not open the master's ports.
         assertion = let
-          ports = ixSparkWorker.networking.firewall.interfaces."tailscale0".allowedTCPPorts;
+          ports = ixSparkWorker.networking.firewall.interfaces.tailscale0.allowedTCPPorts;
         in
           (ixSparkWorker.systemd.services ? spark-worker)
           && !(ixSparkWorker.systemd.services ? spark-master)
@@ -3233,7 +3233,7 @@
         assertion =
           factionsExample.cfg.worldBorder.enable
           && factionsExample.cfg.worldBorder.diameter == 12000
-          && factionsExample.cfg.properties."max-world-size" == 6000;
+          && factionsExample.cfg.properties.max-world-size == 6000;
         message = "factions example should declare a managed world border";
       }
       {
@@ -3333,7 +3333,7 @@
           && survivalExample.minecraft.version == "26.1.2"
           && survivalExample.minecraft.port == 25566
           && !survivalExample.minecraft.openFirewall
-          && !survivalExample.minecraft.properties."online-mode";
+          && !survivalExample.minecraft.properties.online-mode;
         message = "survival example should keep Paper behind the proxy";
       }
       {
@@ -4160,12 +4160,12 @@
         message = "default Minecraft module should follow versions.nix default runtime version";
       }
       {
-        assertion = minecraft.cfg.properties."max-players" == 100000;
+        assertion = minecraft.cfg.properties.max-players == 100000;
         message = "default Minecraft module should allow the large ix player ceiling";
       }
       {
         assertion =
-          minecraft.cfg.properties."online-mode" && minecraft.cfg.properties."enforce-secure-profile";
+          minecraft.cfg.properties.online-mode && minecraft.cfg.properties.enforce-secure-profile;
         message = "default Minecraft module should keep account authentication and secure profiles explicit";
       }
       {
@@ -4181,19 +4181,19 @@
         assertion =
           minecraft.cfg.properties.gamemode
           == "survival"
-          && !minecraft.cfg.properties."force-gamemode"
+          && !minecraft.cfg.properties.force-gamemode
           && minecraft.cfg.properties.pvp
           && !minecraft.cfg.properties.hardcore
-          && minecraft.cfg.properties."spawn-protection" == 16
-          && !minecraft.cfg.properties."allow-flight"
-          && !minecraft.cfg.properties."enable-command-block";
+          && minecraft.cfg.properties.spawn-protection == 16
+          && !minecraft.cfg.properties.allow-flight
+          && !minecraft.cfg.properties.enable-command-block;
         message = "default Minecraft module should keep conservative gameplay and command defaults";
       }
       {
         assertion =
-          minecraft.cfg.properties."view-distance"
+          minecraft.cfg.properties.view-distance
           == 32
-          && minecraft.cfg.properties."simulation-distance" == 32;
+          && minecraft.cfg.properties.simulation-distance == 32;
         message = "default Minecraft module should use the high-distance template defaults";
       }
       {
@@ -4354,7 +4354,7 @@
         message = "minecraft configFiles should accept readable SNBT files";
       }
       {
-        assertion = minecraft.datapacks.cfg.datapacks."max-height".worlds == ["My World"];
+        assertion = minecraft.datapacks.cfg.datapacks.max-height.worlds == ["My World"];
         message = "minecraft datapacks should default to the configured level-name world";
       }
       {
@@ -4428,9 +4428,9 @@
       }
       {
         assertion =
-          bedrock.cfg.settings."server-port"
+          bedrock.cfg.settings.server-port
           == bedrock.cfg.port
-          && bedrock.cfg.settings."server-portv6" == bedrock.cfg.portv6;
+          && bedrock.cfg.settings.server-portv6 == bedrock.cfg.portv6;
         message = "minecraft-bedrock server.properties should follow the configured UDP ports";
       }
       {
@@ -5189,7 +5189,7 @@
         message = "fleet nodes should expose their east-west host name through ix.networking";
       }
       {
-        assertion = fleet.nodes.web.environment.etc."db-host".text == "db";
+        assertion = fleet.nodes.web.environment.etc.db-host.text == "db";
         message = "fleet node modules should be able to reference nodes.<name>.config";
       }
       {
@@ -5329,11 +5329,11 @@
         message = "per-VM secret attachments should merge fleet-wide and node-level refs";
       }
       {
-        assertion = fleetPlan."worker-0".baseName == "worker" && fleetPlan."worker-1".replicaIndex == 1;
+        assertion = fleetPlan.worker-0.baseName == "worker" && fleetPlan.worker-1.replicaIndex == 1;
         message = "fleet replicas should expand into stable node identities";
       }
       {
-        assertion = fleetPlan."worker-0".dependsOn == ["db"];
+        assertion = fleetPlan.worker-0.dependsOn == ["db"];
         message = "fleet replica dependencies should point at expanded node identities";
       }
       {
@@ -5346,41 +5346,41 @@
         message = "withNodePrefix should rename every node in the plan order";
       }
       {
-        assertion = prefixedFleet.planValue.nodes."tprefix-worker".dependsOn == ["tprefix-api"];
+        assertion = prefixedFleet.planValue.nodes.tprefix-worker.dependsOn == ["tprefix-api"];
         message = "withNodePrefix should rewrite dependsOn references so the prefixed graph stays connected";
       }
       {
-        assertion = prefixedFleet.planValue.nodes."tprefix-worker".groups == ["tprefix-private-apps"];
+        assertion = prefixedFleet.planValue.nodes.tprefix-worker.groups == ["tprefix-private-apps"];
         message = "withNodePrefix should rewrite east-west group names so scratch fleets do not collide";
       }
       {
         assertion =
-          prefixedFleet.planValue.nodes."tprefix-api".replacementImage.destination == "tprefix-api:latest";
+          prefixedFleet.planValue.nodes.tprefix-api.replacementImage.destination == "tprefix-api:latest";
         message = "withNodePrefix should prefix the registry destination so scratch pushes cannot clobber the base tag";
       }
       {
-        assertion = prefixedFleet.nodes."tprefix-api".networking.hostName == "api";
+        assertion = prefixedFleet.nodes.tprefix-api.networking.hostName == "api";
         message = "withNodePrefix is a plan-level rename: guest hostname and image name stay base-named so the prefixed fleet shares the base fleet's closures";
       }
       {
         assertion =
-          prefixedFleet.planValue.nodes."tprefix-api".system
+          prefixedFleet.planValue.nodes.tprefix-api.system
           == prefixedFleetBase.planValue.nodes.api.system
-          && prefixedFleet.planValue.nodes."tprefix-api".replacementImage.sourceInstallable
+          && prefixedFleet.planValue.nodes.tprefix-api.replacementImage.sourceInstallable
           == ".#tprefix-api";
         message = "withNodePrefix must reuse the base fleet's system closure while re-deriving the replacement installable to the prefixed packages attr";
       }
       {
-        assertion = prefixedFleet.nodes."tprefix-worker".environment.etc."api-host".text == "api";
+        assertion = prefixedFleet.nodes.tprefix-worker.environment.etc.api-host.text == "api";
         message = "nodes module-arg should resolve by the example's base name even when prefixed";
       }
       {
-        assertion = prefixedFleet.planValue.nodes."tprefix-api".switch.sourceInstallable == ".#tprefix-api";
+        assertion = prefixedFleet.planValue.nodes.tprefix-api.switch.sourceInstallable == ".#tprefix-api";
         message = "withNodePrefix should re-derive the default `.#<node>` installable to the prefixed attr so the native multi-VM `ix up` names the prefixed VM";
       }
       {
         assertion =
-          prefixedFleet.nixosConfigurations."tprefix-api".config.system.build.toplevel
+          prefixedFleet.nixosConfigurations.tprefix-api.config.system.build.toplevel
           == prefixedFleetBase.nixosConfigurations.api.config.system.build.toplevel;
         message = "withNodePrefix should expose nixosConfigurations under the prefixed name while reusing the base closure (no second eval)";
       }
@@ -5391,7 +5391,7 @@
       {
         assertion =
           (explicitInstallableFleet.withNodePrefix "tprefix-")
-          .planValue.nodes."tprefix-svc".switch.sourceInstallable == ".#svc";
+          .planValue.nodes.tprefix-svc.switch.sourceInstallable == ".#svc";
         message = "an explicit sourceInstallable equal to the default must survive withNodePrefix unchanged (prefixing keys on provenance, not the rendered string)";
       }
     ];

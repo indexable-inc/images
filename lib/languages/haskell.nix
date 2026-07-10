@@ -11,7 +11,7 @@
   silently degrade to no completions in the editor.
   */
   compilersFor = pkgs: {
-    "latest" = pkgs.ghc;
+    latest = pkgs.ghc;
     "9.6" = pkgs.haskell.compiler.ghc96;
     "9.8" = pkgs.haskell.compiler.ghc98;
     "9.10" = pkgs.haskell.compiler.ghc910;

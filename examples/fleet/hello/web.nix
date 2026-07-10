@@ -7,7 +7,7 @@
 in {
   services.nginx = {
     enable = true;
-    virtualHosts."fleet-hello" = {
+    virtualHosts.fleet-hello = {
       default = true;
       listen = [
         {

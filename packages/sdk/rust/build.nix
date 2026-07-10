@@ -87,9 +87,9 @@
   # Fixed-output fetches: the SRI hash is the store-path identity, so the URL
   # carries no secret and substituters can short-circuit. These are the actual
   # compiled artifacts produced in the ix repo, not rebuilt here.
-  wireManifest = pkgs.fetchurl {inherit (wirePins."wire-manifest") url hash;};
-  wireRlib = pkgs.fetchurl {inherit (wirePins."wire-rlib") url hash;};
-  wireRmeta = pkgs.fetchurl {inherit (wirePins."wire-rmeta") url hash;};
+  wireManifest = pkgs.fetchurl {inherit (wirePins.wire-manifest) url hash;};
+  wireRlib = pkgs.fetchurl {inherit (wirePins.wire-rlib) url hash;};
+  wireRmeta = pkgs.fetchurl {inherit (wirePins.wire-rmeta) url hash;};
 
   # Wrap the fetched rlib+rmeta as a cargo-unit library unit. The Cargo lib
   # TARGET name for package `ix-sdk-wire` is `ix_sdk_wire` (renderer underscores
@@ -225,8 +225,8 @@ in {
       grep -q '"crate": "ix-sdk-wire"' ${wireManifest}
       grep -q '"toolchain-id": "${wireToolchainId}"' ${wireManifest}
       grep -q '"unit-hash": "${wireHash}"' ${wireManifest}
-      grep -q '"${wirePins."wire-rlib".hash}"' ${wireManifest}
-      grep -q '"${wirePins."wire-rmeta".hash}"' ${wireManifest}
+      grep -q '"${wirePins.wire-rlib.hash}"' ${wireManifest}
+      grep -q '"${wirePins.wire-rmeta.hash}"' ${wireManifest}
 
       test -f ${prebuiltWireUnit}/lib/libix_sdk_wire-${wireHash}.rlib
       test -f ${prebuiltWireUnit}/lib/libix_sdk_wire-${wireHash}.rmeta

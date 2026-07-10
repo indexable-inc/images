@@ -25,7 +25,7 @@
     rustWorkspace.units.libraries.${libraryKey}
       or (throw "unibind.lib.build: the shared workspace graph has no library unit `${libraryKey}` for `${crate}` (packages/${entry.relativePath})");
 
-  genBin = rustWorkspace.units.binaries."unibind-gen";
+  genBin = rustWorkspace.units.binaries.unibind-gen;
 
   # `:erlang.load_nif/2` appends the platform extension itself, and the BEAM
   # loads `.so` on every unix including darwin, so the library installs

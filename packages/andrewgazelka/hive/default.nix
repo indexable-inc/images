@@ -50,7 +50,7 @@
     };
     inherit elixir;
     mixEnv = "test";
-    inherit ((ix.pins.loadPins ./pins.json)."mix-deps") hash;
+    inherit ((ix.pins.loadPins ./pins.json).mix-deps) hash;
   };
 
   elixirCheck = ix.buildElixirCheck pkgs {

@@ -49,12 +49,24 @@
   # --select ANN` for explicit annotations. The checker resolves third-party
   # imports through a deps-only interpreter (no `distillerModule`, so `distiller`
   # is type-checked from source as a first-party package, not from the installed
-  # site-packages copy). mypy.ini scopes two dependency stub gaps (pyarrow
-  # re-exports / untyped writer, boto3's untyped `client`); see that file.
+  # site-packages copy). The generated mypy config scopes two dependency stub
+  # gaps: pyarrow re-exports/untyped writers and boto3's untyped `client`.
   typeCheckPython = pkgs.python3.withPackages pythonDeps;
-  mypyConfig = builtins.path {
-    name = "ix-distiller-mypy-ini";
-    path = ./mypy.ini;
+  mypyConfig = (pkgs.formats.ini {}).generate "ix-distiller-mypy.ini" {
+    mypy = {};
+    # pyarrow's bundled stubs omit explicit top-level re-exports and leave its
+    # writer/reader helpers untyped.
+    "mypy-pyarrow" = {
+      implicit_reexport = true;
+      disallow_untyped_calls = false;
+    };
+    "mypy-pyarrow.*" = {
+      implicit_reexport = true;
+      disallow_untyped_calls = false;
+    };
+    # Full typing requires per-service boto3 stubs outside the dependency set.
+    "mypy-boto3.*".disallow_untyped_calls = false;
+    "mypy-botocore.*".disallow_untyped_calls = false;
   };
   typeCheck =
     pkgs.runCommand "ix-distiller-typecheck"
@@ -69,7 +81,7 @@
       # zuban discovers mypy.ini from the working directory, so assemble a
       # tree holding the config beside the importable `distiller` package.
       cp -r ${distillerSource}/. ./
-      cp ${mypyConfig} ./mypy.ini
+      cp ${mypyConfig} mypy.ini
       zuban check --strict \
         --python-executable ${lib.getExe typeCheckPython} \
         --python-version ${pkgs.python3.pythonVersion} \
