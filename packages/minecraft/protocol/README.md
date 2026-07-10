@@ -10,13 +10,13 @@ in:
 
 - **Rust** — this crate (`mc_protocol::query`, `::ServerAddress`,
   `::strip_format_codes`, plus the `varint`/`wire` framing modules).
-  mc-bot (packages/minecraft/minecraft/bot), the headless replay-recording
+  mc-bot (packages/minecraft/bot), the headless replay-recording
   client, builds its packet layer on the same primitives.
 - **Python** — `py/`, unibind-rendered bindings imported as `mc_protocol`;
-  mc-probe (packages/minecraft/minecraft/probe) is the primary consumer.
+  mc-probe (packages/minecraft/probe) is the primary consumer.
 - **JVM** — `jvm/`, the same three-call surface rendered by unibind's jvm
   backend into C-ABI shims plus one generated Java class (`McProtocolJvm`)
-  speaking the FFM API; mc-probe-kt (packages/minecraft/minecraft/probe-kt)
+  speaking the FFM API; mc-probe-kt (packages/minecraft/probe-kt)
   is the consumer.
 
 The SLP exchange is deliberately small: handshake (next state = status) →

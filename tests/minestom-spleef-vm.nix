@@ -9,12 +9,12 @@
 # line, (3) the port is open, and (4) a real Minecraft server-list ping
 # answers with the pinned protocol version — twice, through both renderings
 # of the shared Rust `mc-protocol` crate: `mc-probe` (Python over the pyo3
-# unibind bindings, packages/minecraft/minecraft/probe, the same tool the
+# unibind bindings, packages/minecraft/probe, the same tool the
 # minecraft/velocity modules use for health checks) and `mc-probe-kt`
 # (Kotlin over the FFM/JVM unibind bindings,
-# packages/minecraft/minecraft/probe-kt), so the e2e path exercises every
+# packages/minecraft/probe-kt), so the e2e path exercises every
 # binding surface against a live server. Finally (5) `mc-bot`
-# (packages/minecraft/minecraft/bot) joins as a real offline-mode player —
+# (packages/minecraft/bot) joins as a real offline-mode player —
 # full login, registry configuration, play state — and records the session
 # as a ReplayMod .mcpr, which the test exports as an artifact: when a run
 # fails, the replay is the client-side trace to scrub through.

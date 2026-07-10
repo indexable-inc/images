@@ -14,7 +14,7 @@ checks (mc-probe) and integration tests::
     print(s.raw_json)                              # everything the server sent
 
 The protocol implementation lives in the Rust ``mc-protocol`` crate
-(packages/minecraft/minecraft/protocol); this module is its unibind-rendered
+(packages/minecraft/protocol); this module is its unibind-rendered
 binding, so Python, Rust, and any other bound language speak the wire format
 through one implementation. Failures raise ``SlpError`` (an ``OSError``, the
 family socket-level failures raise anyway) with ``InvalidInputError`` /

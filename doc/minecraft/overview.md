@@ -4,7 +4,10 @@
 several languages. The Rust members live in the repo's top-level Cargo
 workspace; the rest are Python scripts, a Kotlin CLI, and a Java agent. None
 of them run a server: they encode data, play sounds, reconcile files, probe a
-server, record a session, or hot-reload plugin classes. The wire-protocol
+server, record a session, or hot-reload plugin classes. The sibling subtrees
+`minestom/`, `bossbar-overlay/`, and `minecraft-assets/` are their own doc
+domains; `catalogs/` holds generated version catalogs and `tools/` their
+maintenance scripts. The wire-protocol
 logic they share lives in one Rust crate (`protocol`), rendered into Python
 and JVM bindings by unibind (`packages/unibind`). The NixOS modules and
 images that consume them are cross-referenced, not documented here (see

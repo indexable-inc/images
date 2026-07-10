@@ -9,7 +9,7 @@
 //! (tests/minestom-spleef-vm.nix records the spleef server this way).
 //!
 //! The wire primitives (framing, `VarInt`s, strings) come from mc-protocol
-//! (packages/minecraft/minecraft/protocol), the same crate under mc-probe's
+//! (packages/minecraft/protocol), the same crate under mc-probe's
 //! Python bindings and mc-probe-kt's JVM bindings; this binary adds only the
 //! state machine and the `.mcpr` container.
 

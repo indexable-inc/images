@@ -26,7 +26,7 @@ session alive — the configuration handshake (`SelectKnownPacks`,
 verbatim. Game content never gets parsed, so the recording is a faithful
 byte-level trace no matter what the server does. Wire primitives (`VarInt`
 framing, strings, address handling) come from mc-protocol
-(packages/minecraft/minecraft/protocol), the same single implementation
+(packages/minecraft/protocol), the same single implementation
 under mc-probe (Python) and mc-probe-kt (Kotlin); this crate adds the
 compression layer, the login/configuration/play state machine, and the
 `.mcpr` container.

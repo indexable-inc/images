@@ -1,7 +1,7 @@
 """Assert Minecraft Server List Ping responses.
 
 An exit-code-driven CLI over the ``mc_protocol`` bindings (the Rust
-``mc-protocol`` crate, packages/minecraft/minecraft/protocol): a zero exit
+``mc-protocol`` crate, packages/minecraft/protocol): a zero exit
 means the server answered the SLP exchange and every requested assertion
 held; any failure is named on stderr so health-check runners can surface it.
 

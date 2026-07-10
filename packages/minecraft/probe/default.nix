@@ -5,7 +5,7 @@
   # mc-probe imports `mc_protocol`, the unibind-rendered bindings of the Rust
   # mc-protocol crate, so the probe and the servers' tests speak the wire
   # format through one implementation. Same arguments as
-  # packages/minecraft/minecraft/protocol/py/default.nix (the wheel); keep the
+  # packages/minecraft/protocol/py/default.nix (the wheel); keep the
   # two call sites in sync.
   mcProtocolModule =
     (ix.unibind.build {
@@ -14,7 +14,7 @@
         package = "mc_protocol";
         pythonSource = builtins.path {
           name = "mc-protocol-py-python-source";
-          path = ix.paths.packagesRoot + "/minecraft/minecraft/protocol/py/python";
+          path = ix.paths.packagesRoot + "/minecraft/protocol/py/python";
         };
       };
     }).py.module;

@@ -365,6 +365,6 @@ javaSource }; }` pairs the generated class (under its package's directory
 tree) with the native library staged under the exact
 `System.mapLibraryName` name, overlaying any hand-written `.java` sources
 into one compilable `java/` tree. `packages/unibind/conformance-jvm` is the
-reference consumer and CI gate; `packages/minecraft/minecraft/protocol/jvm`
+reference consumer and CI gate; `packages/minecraft/protocol/jvm`
 + `probe-kt` (Kotlin over the generated class) are the in-tree production
 consumers.

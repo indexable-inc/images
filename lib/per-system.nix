@@ -546,7 +546,7 @@
   updateSounds = ix.writeNushellApplication pkgs {
     name = "update-sounds";
     text = builtins.readFile paths.tools.updateSounds;
-    meta.description = "Refresh the pinned Minecraft sound pack in packages/minecraft/minecraft/sound";
+    meta.description = "Refresh the pinned Minecraft sound pack in packages/minecraft/sound";
   };
 
   benchFilesystem = import (paths.bench.filesystem + "/build.nix") {inherit ix pkgs;};

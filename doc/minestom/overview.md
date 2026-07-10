@@ -87,6 +87,6 @@ The spleef server is covered end-to-end by `checks.<system>.minestom-spleef-vm`
 `services.minestom`, a real Minecraft server-list ping must answer with the
 pinned protocol version through both renderings of the shared `mc-protocol`
 crate — `mc-probe` (Python) and `mc-probe-kt` (Kotlin/FFM), both under
-`packages/minecraft/minecraft` — and `mc-bot` joins as a real offline-mode
+`packages/minecraft` — and `mc-bot` joins as a real offline-mode
 player and records the session as a ReplayMod `.mcpr`, exported as a test
 artifact so a failing run leaves the client-side trace to scrub through.

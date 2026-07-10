@@ -62,13 +62,13 @@ members = [
   "packages/ix-windows",
   "packages/terminal/kitty",
   "packages/search/lake/iceberg",
-  "packages/minecraft/minecraft/bot",
-  "packages/minecraft/minecraft/nbt",
-  "packages/minecraft/minecraft/protocol",
-  "packages/minecraft/minecraft/protocol/jvm",
-  "packages/minecraft/minecraft/protocol/py",
-  "packages/minecraft/minecraft/sound",
-  "packages/minecraft/minecraft/sync-managed",
+  "packages/minecraft/bot",
+  "packages/minecraft/nbt",
+  "packages/minecraft/protocol",
+  "packages/minecraft/protocol/jvm",
+  "packages/minecraft/protocol/py",
+  "packages/minecraft/sound",
+  "packages/minecraft/sync-managed",
   "packages/mirror",
   "packages/mcp/server-info",
   "packages/search/mixedbread",
@@ -270,7 +270,7 @@ objc2-quartz-core = "0.3"
 objc2-web-kit = "0.3"
 object = { version = "0.39", default-features = false, features = ["read"] }
 object_store = { version = "0.14", features = ["aws"] }
-mc-protocol = { path = "packages/minecraft/minecraft/protocol" }
+mc-protocol = { path = "packages/minecraft/protocol" }
 mcp-server-info = { path = "packages/mcp/server-info" }
 md-5 = "0.10"
 panes-protocol = { path = "packages/vm/panes/protocol" }
