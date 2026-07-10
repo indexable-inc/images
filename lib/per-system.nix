@@ -246,8 +246,11 @@
   # outputs so they report a real cacheStatus instead of always-uncached, and the
   # patched nix-fast-build makes --skip-cached skip a `local` (warm-store) output,
   # not just a remotely-`cached` one. Without both, --skip-cached re-realizes every
-  # floating-CA rust unit and image closure (~1450) on every warm run. See the
-  # $fast_build and $eval_jobs comments below.
+  # floating-CA rust unit and image closure (~1450) on every warm run. The eval
+  # cache is disabled for this parallel evaluator too: all workers share one
+  # per-flake SQLite database, so writes contend and can fail with "database is
+  # busy" without providing useful hits on a fresh commit. See the $fast_build
+  # and $eval_jobs comments below.
   #
   # Step 2 (nix-eval-jobs) is the schema/eval gate over the package outputs,
   # broader than the `checks` set step 1 built. nix-eval-jobs is the same
@@ -339,6 +342,7 @@
               "--result-format" "json"
               "--result-file" "check-results.json"
               "--option" "accept-flake-config" "true"
+              "--option" "eval-cache" "false"
               "--option" "extra-experimental-features" "ca-derivations"
             ]
             false
