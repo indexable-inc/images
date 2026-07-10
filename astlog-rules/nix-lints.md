@@ -2,7 +2,7 @@
 
 Complete reference for every house-style lint ASTLog enforces on Nix source in this
 repo. Reference for [`astlog-rules/nix.astlog`](./nix.astlog), the single source of
-truth. **102 lints total: 97 `error`, 5 `warning`.**
+truth. **102 lints total: 98 `error`, 4 `warning`.**
 
 ## How it works
 
@@ -123,7 +123,7 @@ truth. **102 lints total: 97 `error`, 5 `warning`.**
 | 99 | [`wait-for-unit-and-port`](#wait-for-unit-and-port) | err | curling a service after only `wait_for_unit` races on fast hosts; wait for `network-online.target`, the unit, and the open port |
 | 100 | [`minimize-with-scope`](#minimize-with-scope) | err | `with <expr>;` over any target other than a tightly-scoped `with pkgs;` obscures name origins; bind with `let`/`inherit` |
 | 101 | [`no-misgrouped-digit-separators`](#no-misgrouped-digit-separators) | err | underscore separators must group digits in threes (integer part and exponent from the right, fraction from the left) |
-| 102 | [`prefer-digit-grouping`](#prefer-digit-grouping) | warn | five or more consecutive digits are read by counting; group them in threes with underscore separators |
+| 102 | [`prefer-digit-grouping`](#prefer-digit-grouping) | err | five or more consecutive digits are read by counting; group them in threes with underscore separators |
 
 ## Rules by theme
 
@@ -2574,9 +2574,9 @@ A literal that already carries underscore separators must use exactly the canoni
 
 ### prefer-digit-grouping
 
-**🟡 warning**
+**🔴 error**
 
-A bare literal with five or more consecutive digits is read by counting digits; group them in threes with underscore separators (`300000` is `300_000`, `0.000001` is `0.000_001`), which the repo's patched nix accepts. Four digits or fewer stay bare (`1000` is fine). Warning severity, deliberately: every other tool that parses repo `.nix` files (stock nix in CI, alejandra, statix, deadnix, tree-sitter-nix) still rejects underscore literals, so the fix cannot yet be applied to tracked files. Flip to `error` and run the autofix across the repo once the toolchain accepts the syntax.
+A bare literal with five or more consecutive digits is read by counting digits; group them in threes with underscore separators (`300000` is `300_000`, `0.000001` is `0.000_001`). Four digits or fewer stay bare (`1000` is fine). The whole CI toolchain speaks the dialect -- the patched nix client and evaluator, the rnix-patched alejandra/statix/deadnix, and the tree-sitter-nix fork -- and the repo's literals were regrouped by the autofix when the lint became an error.
 
 *Matches:* `integer_expression` / `float_expression` · *predicates:* `text-match`, `misgrouped-digits` · *1 pattern variant* · *rewrite:* inserts canonical separators
 

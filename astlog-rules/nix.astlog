@@ -1591,13 +1591,11 @@
 ;; - no-misgrouped-digit-separators (error): a literal that already carries
 ;;   separators must use exactly the canonical grouping (`1_0000` ->
 ;;   `10_000`).
-;; - prefer-digit-grouping (warning, advisory for now): a bare literal with
-;;   five or more consecutive digits should gain separators (`10000` ->
-;;   `10_000`). Not yet an error: CI still evaluates and formats repo .nix
-;;   with stock nix / alejandra / statix / deadnix, which reject underscore
-;;   literals, so the fix cannot be applied to tracked files. Flip to error
-;;   and run `nix run .#astlog -- fix astlog-rules/nix.astlog . --write`
-;;   once the toolchain is patched throughout.
+;; - prefer-digit-grouping (error): a bare literal with five or more
+;;   consecutive digits must carry separators (`10000` -> `10_000`). The
+;;   whole CI toolchain speaks the dialect (patched nix client + evaluator,
+;;   rnix-patched alejandra/statix/deadnix, the tree-sitter fork), so the
+;;   repo's literals are grouped and the gate holds the line.
 (rule (misgrouped-number n fixed)
   (match nix "[(integer_expression) (float_expression)] @n")
   (misgrouped-digits n fixed))
@@ -1611,7 +1609,7 @@
 (rule (prefer-digit-grouping n fixed)
   (misgrouped-number n fixed)
   (text-match n "^[^_]*$"))
-(lint prefer-digit-grouping warning
-  "five or more consecutive digits are read by counting; group them in threes with underscore separators: `{fixed}` (advisory until the toolchain accepts underscore literals)")
+(lint prefer-digit-grouping error
+  "five or more consecutive digits are read by counting; group them in threes with underscore separators: `{fixed}`")
 (rewrite group-digit-literal (prefer-digit-grouping n fixed)
   (replace n "{fixed}"))
