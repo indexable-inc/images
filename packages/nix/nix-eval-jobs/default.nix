@@ -1,25 +1,14 @@
 {pkgs}: let
-  daemonNixSrc = pkgs.fetchFromGitHub {
-    owner = "NixOS";
-    repo = "nix";
-    rev = "ac94798c753e48fd0b36128a029ed8aecebe9b56";
-    hash = "sha256-lMvyBFy7jl8cnUI8efQuW8lxgIiwUhw6CHEmDpK0mfw=";
+  # CA realisations are an unstable protocol. Build the evaluator against the
+  # fleet daemon's Nix 2.34 protocol generation while the interactive client
+  # remains independently selectable.
+  package = pkgs.nix-eval-jobs.override {
+    nixComponents = pkgs.nixVersions.nixComponents_2_34;
   };
-  # CA realisations are an unstable protocol. Build the evaluator from the
-  # exact Nix revision reported by the fleet daemon, while the interactive
-  # client remains on the stable release.
-  package =
-    (pkgs.nix-eval-jobs.override {
-      nixComponents = pkgs.nixVersions.nixComponents_git.overrideSource daemonNixSrc;
-    }).overrideAttrs (old: {
-      patches = (old.patches or []) ++ [./nix-master-api.patch];
-    });
 
-  # The override's real risk is the C++ rebuild against nix's libstore linking
-  # and the new symbols (staticOutputHashes, getDefaultSubstituters,
-  # Store::queryRealisation) resolving at all, so the smoke test runs the
-  # binary. `--help` exits 0 and prints usage without touching a store or
-  # daemon (absent in the sandbox).
+  # The override's real risk is the C++ rebuild against nix's libstore linking,
+  # so the smoke test runs the binary. `--help` exits 0 and prints usage without
+  # contacting a store daemon, which is absent in the sandbox.
   smoke =
     pkgs.runCommand "nix-eval-jobs-smoke"
     {
