@@ -298,13 +298,10 @@
   # (above nix-eval-jobs' 4 GiB default per worker, below the old 8 GiB), not a
   # workaround: the per-crate check split (see the `checks` block below) keeps
   # each worker's eval bounded by the largest single crate. Both binaries are
-  # repo-built patches of nixpkgs' 1.5.0 / v2.34.1 (same commits the flake refs
-  # used to pin): the patched nix-eval-jobs (--nix-eval-jobs) resolves floating-CA
-  # outputs so they report a real cacheStatus instead of always-uncached, and the
-  # patched nix-fast-build makes --skip-cached skip a `local` (warm-store) output,
-  # not just a remotely-`cached` one. Without both, --skip-cached re-realizes every
-  # floating-CA rust unit and image closure (~1450) on every warm run. See the
-  # $fast_build and $eval_jobs comments below.
+  # nix-fast-build is the repo-built nixpkgs 1.5.0 package with a patch that
+  # makes --skip-cached skip a `local` (warm-store) output, not just a remotely
+  # `cached` one. nix-eval-jobs is built against nixpkgs' Git Nix components so
+  # its CA-realisation protocol matches the fleet's rolling daemon.
   #
   # Step 2 (nix-eval-jobs) is the schema/eval gate over the package outputs,
   # broader than the `checks` set step 1 built. nix-eval-jobs is the same
@@ -322,10 +319,8 @@
   # reports a per-attribute eval failure as a JSON `error` line and still exits 0,
   # so the gate is the error-line check; a startup or lock failure exits nonzero
   # and aborts the run (Nushell propagates external failures like bash
-  # `set -o pipefail`). Uses the repo-built patched nix-eval-jobs
-  # (packages/nix/nix-eval-jobs, nixpkgs' v2.34.1 + the CA cacheStatus patch),
-  # matching the host Nix 2.34.x; invoked directly by store path rather than
-  # `nix run`.
+  # `set -o pipefail`). Uses the repo-built nix-eval-jobs directly by store path
+  # rather than `nix run`.
   check = ix.writeNushellApplication pkgs {
     name = "check";
     meta.description = "Run the full CI gate: build .#ciChecks.x86_64-linux and eval-validate .#packages.x86_64-linux";
@@ -339,12 +334,9 @@
       # same commit (7f185e0) the flake ref used to pin, so this is a like-for-like
       # source swap plus the patch. Invoked directly by store path, not `nix run`.
       const fast_build = "${lib.getExe repoPackages.nix-fast-build}"
-      # Patched nix-eval-jobs (packages/nix/nix-eval-jobs): the stock binary
-      # reports `local`/`notBuilt` for floating content-addressed outputs even
-      # when they are in cache.ix.dev, so --skip-cached rebuilt every CA rust
-      # unit (~1434) on every run. The patch resolves the CA output realisation
-      # against the substituters so a warm unit reports `cached` and is skipped.
-      # See nix#12128 / nix-eval-jobs#403. Built for x86_64-linux (the CI gate
+      # nix-eval-jobs is linked to nixpkgs' Git Nix components because CA
+      # realisations changed wire format in Nix 2.35 and the fleet daemon rolls
+      # ahead of the interactive client. Built for x86_64-linux (the CI gate
       # system); `check` itself is x86_64-linux-only.
       const eval_jobs = "${lib.getExe repoPackages.nix-eval-jobs}"
 
@@ -377,9 +369,8 @@
           try {
             ^$fast_build ...[
               "--flake" ".#ciChecks.x86_64-linux"
-              # Drive nix-fast-build's evaluator with the patched nix-eval-jobs
-              # (CA cacheStatus fix) so --skip-cached actually skips warm CA
-              # units rather than rebuilding the lot.
+              # Drive nix-fast-build with the daemon-protocol-compatible
+              # evaluator rather than its nixpkgs default.
               "--nix-eval-jobs" $eval_jobs
               "--eval-max-memory-size" "6144"
               "--eval-workers" "16"
