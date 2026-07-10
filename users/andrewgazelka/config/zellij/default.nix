@@ -223,14 +223,14 @@ in {
     };
 
     plugins = {
-      "tab-bar"._props.location = "zellij:tab-bar";
-      "status-bar"._props.location = "zellij:status-bar";
+      tab-bar._props.location = "zellij:tab-bar";
+      status-bar._props.location = "zellij:status-bar";
       strider._props.location = "zellij:strider";
-      "compact-bar" = {
+      compact-bar = {
         _props.location = "zellij:compact-bar";
         tooltip = "F1";
       };
-      "session-manager"._props.location = "zellij:session-manager";
+      session-manager._props.location = "zellij:session-manager";
       filepicker = {
         _props.location = "zellij:strider";
         cwd = "/";

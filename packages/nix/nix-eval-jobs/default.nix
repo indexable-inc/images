@@ -1,10 +1,19 @@
 {pkgs}: let
-  # CA realisations changed wire format in Nix 2.35. Build the evaluator against
-  # nixpkgs' current Git components so it can communicate with the fleet's
-  # rolling daemon while the interactive client remains on the stable release.
-  package = pkgs.nix-eval-jobs.override {
-    nixComponents = pkgs.nixVersions.nixComponents_git;
+  daemonNixSrc = pkgs.fetchFromGitHub {
+    owner = "NixOS";
+    repo = "nix";
+    rev = "ac94798c753e48fd0b36128a029ed8aecebe9b56";
+    hash = "sha256-lMvyBFy7jl8cnUI8efQuW8lxgIiwUhw6CHEmDpK0mfw=";
   };
+  # CA realisations are an unstable protocol. Build the evaluator from the
+  # exact Nix revision reported by the fleet daemon, while the interactive
+  # client remains on the stable release.
+  package =
+    (pkgs.nix-eval-jobs.override {
+      nixComponents = pkgs.nixVersions.nixComponents_git.overrideSource daemonNixSrc;
+    }).overrideAttrs (old: {
+      patches = (old.patches or []) ++ [./nix-master-api.patch];
+    });
 
   # The override's real risk is the C++ rebuild against nix's libstore linking
   # and the new symbols (staticOutputHashes, getDefaultSubstituters,
