@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use objc2::rc::Retained;
@@ -29,6 +29,7 @@ use objc2_quartz_core::CAMetalDisplayLinkUpdate;
 use panes_protocol::{MINOR_KEY_REPEAT, MINOR_POINTER_LOCK, ToGuest, ToHost, WindowId};
 
 use crate::conn::{self, Event};
+use crate::send_queue::{SendQueue, SendQueueError};
 use crate::transport::Target;
 use crate::render::Renderer;
 use crate::window::{PaneWindow, WindowParams};
@@ -53,7 +54,7 @@ struct App {
     mtm: MainThreadMarker,
     renderer: Renderer,
     windows: HashMap<WindowId, PaneWindow>,
-    out: Option<mpsc::Sender<ToGuest>>,
+    out: Option<SendQueue>,
     options: RunOptions,
     quitting: bool,
     /// Per-window ack counters behind the periodic acks/s log: the real-path
@@ -297,7 +298,7 @@ fn screens_changed() {
             window.mark_dirty();
             let activated = window.ns.isKeyWindow();
             if let Some(out) = &app.out {
-                let _ = out.send(ToGuest::Configure {
+                queue_to_guest(out, ToGuest::Configure {
                     id: *id,
                     width: size.width,
                     height: size.height,
@@ -434,7 +435,7 @@ fn handle_msg(app: &mut App, msg: ToHost, recv: f64) -> Deferred {
                 // guest pacing, an ack held hostage to a texture we never
                 // made would wedge that window's frame loop forever.
                 if let Some(out) = &app.out {
-                    let _ = out.send(ToGuest::Ack { id, seq });
+                    queue_to_guest(out, ToGuest::Ack { id, seq });
                 }
                 return Deferred::default();
             }
@@ -498,7 +499,7 @@ fn send_key_repeat(app: &App) {
         interval_ms: whole_ms(NSEvent::keyRepeatInterval()),
     };
     eprintln!("panes-host: key repeat: {msg:?}");
-    let _ = out.send(msg);
+    queue_to_guest(out, msg);
 }
 
 /// Seconds (`NSTimeInterval`) to whole milliseconds. `as` saturates: a
@@ -589,12 +590,29 @@ fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
     APP.with(|slot| slot.borrow_mut().as_mut().map(f))
 }
 
+fn queue_to_guest(out: &SendQueue, msg: ToGuest) {
+    if !out.is_open() {
+        return;
+    }
+    match out.send(msg) {
+        Ok(()) => {}
+        Err(error) => {
+            let reason = match error {
+                SendQueueError::Full => "outgoing queue full",
+                SendQueueError::Disconnected => "outgoing queue disconnected",
+            };
+            eprintln!("panes-host: {reason}; disconnecting");
+            DispatchQueue::main().exec_async(|| on_event(Event::Disconnected));
+        }
+    }
+}
+
 /// Queue a message to the guest; silently dropped while disconnected (every
 /// caller is reacting to UI events that are meaningless without a guest).
 pub fn send(msg: ToGuest) {
     with_app(|app| {
         if let Some(out) = &app.out {
-            let _ = out.send(msg);
+            queue_to_guest(out, msg);
         }
     });
 }
@@ -621,7 +639,7 @@ pub fn display_tick(id: WindowId, update: &CAMetalDisplayLinkUpdate) {
                     window.max_drawable_count(),
                 );
             }
-            let _ = out.send(ToGuest::Ack { id, seq });
+            queue_to_guest(out, ToGuest::Ack { id, seq });
             let stat = app
                 .ack_stats
                 .entry(id)
@@ -648,7 +666,7 @@ pub fn window_should_close(id: WindowId) -> bool {
             return true;
         }
         if let Some(out) = &app.out {
-            let _ = out.send(ToGuest::CloseRequest { id });
+            queue_to_guest(out, ToGuest::CloseRequest { id });
         }
         // The guest decides: it unmaps and sends WindowGone, which closes
         // the NSWindow for real (the WSLg model: never desync window
@@ -716,7 +734,7 @@ pub fn window_geometry_changed(id: WindowId) {
         window.mark_dirty();
         let activated = window.ns.isKeyWindow();
         if let Some(out) = &app.out {
-            let _ = out.send(ToGuest::Configure {
+            queue_to_guest(out, ToGuest::Configure {
                 id,
                 width: size.width,
                 height: size.height,
@@ -756,7 +774,7 @@ pub fn window_activation(id: WindowId, activated: bool) {
         };
         let size = window.sync_layer_geometry();
         if let Some(out) = &app.out {
-            let _ = out.send(ToGuest::Configure {
+            queue_to_guest(out, ToGuest::Configure {
                 id,
                 width: size.width,
                 height: size.height,
@@ -788,7 +806,7 @@ pub fn request_quit() {
         app.capture = None;
         if let Some(out) = &app.out {
             for id in app.windows.keys() {
-                let _ = out.send(ToGuest::CloseRequest { id: *id });
+                queue_to_guest(out, ToGuest::CloseRequest { id: *id });
             }
         }
         false
