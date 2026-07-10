@@ -1,0 +1,47 @@
+---
+title: "API discovery as a DataFrame"
+date: 2026-07-10
+---
+
+The index notebook API catalog now has one discovery surface: `api()` returns
+the complete Polars DataFrame. Callers inspect and filter structured columns
+instead of passing a hidden string selector such as `api("beeper")`.
+
+## Usage
+
+```python
+catalog = api()
+catalog.filter(pl.col("where") == "beeper")
+catalog.filter(pl.col("name").str.contains("send|search"))
+```
+
+The catalog exposes `where`, `name`, `kind`, `sig`, and `summary`. This makes
+capability discovery visible in the notebook, supports normal DataFrame
+operations, and avoids a second selector language maintained inside `api`.
+An unknown integration is an empty filter result, not a special fallback path.
+
+## Shipped contract
+
+- `api()` accepts no arguments and always returns `pl.DataFrame`.
+- Polars is a required runtime dependency.
+- Runtime guidance, shell hints, smoke tests, type checks, and personal agent
+  instructions use DataFrame filtering.
+- The package build, runtime smoke, typecheck smoke, repository lint, and full
+  flake check passed before merge.
+
+## CI evidence
+
+Landing exposed two unrelated main-branch regressions in Darwin module option
+defaults and `index-delta` Clippy policy. PR #2639 repaired both before PR #2631
+merged.
+
+The remaining delay came from the self-hosted CI dispatcher. Read-only service
+and journal checks showed a healthy dispatcher at its eight-runner limit. Later,
+five systemd runner units were still active after GitHub had marked their runs
+terminal. Stopping only those terminal units released capacity and allowed the
+required flake check to start and pass. Queue fairness and terminal unit cleanup
+remain tracked in issue #2644.
+
+Issues #2627 and #2644. PRs #2631 and #2639.
+
+*Written by Codex, an AI coding agent.*
