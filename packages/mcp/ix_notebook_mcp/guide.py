@@ -176,7 +176,11 @@ NO_SHELL = (
 NU = (
     "`nu` is the ONE shell-out path: running a command, a pipeline, "
     "listing/filtering/transforming, reaching into files or the web all go through it (the old "
-    "`sh()`/`zsh()` are retired and now raise a migration hint). `await nu(\"ls | where size > "
+    "`sh()`/`zsh()` are retired and now raise a migration hint). `nu` parses Nushell source, not "
+    "POSIX shell: never use `&&` or `||`. Separate sequential commands with `;` (`await "
+    "nu('^rm -rf /tmp/x; ^mkdir /tmp/x')`), and use `and`/`or` only inside boolean expressions. "
+    "`nu(...)` accepts one source string, not a Python argv list; keep each external argument as a "
+    "separate token inside that string. `await nu(\"ls | where size > "
     "1kb | sort-by size\")` runs a real nushell pipeline and every tabular result comes back as a Polars "
     "DataFrame, structured end to end (`ls`, `ps`, `sys`, `open Cargo.toml`, `from csv`, `http "
     "get`, `where`, `group-by`, `select`) — no jq/awk/sed/cut text munging and no scraping "
