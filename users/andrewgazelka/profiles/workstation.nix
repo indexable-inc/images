@@ -501,7 +501,6 @@ in {
       gdb # GNU debugger. NOTE on Apple Silicon: gdb loads symbols and sets breakpoints but CANNOT run/attach to native arm64 Mach-O processes (`run` => "Don't know how to run"; upstream has no arm64 darwin-nat target, codesigning does not fix it). Use the system `lldb` for live arm64 debugging. gdb here is for remote/cross targets: gdbserver in a Linux ix VM, QEMU gdbstub, core files, and static symbol inspection.
 
       # Editors
-      neovim # Vim fork with Lua scripting and modern plugin ecosystem
       tree-sitter # incremental parser library + CLI (powers syntax highlighting)
 
       # Cloud and infrastructure
