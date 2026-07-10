@@ -116,8 +116,8 @@ in {
         enable = true;
         services.seed-nix-store = {
           description = "Seed the persistent Nix store from the immutable boot store";
-          requiredBy = ["initrd.target"];
-          before = ["initrd-switch-root.target"];
+          requiredBy = ["initrd-find-nixos-closure.service"];
+          before = ["initrd-find-nixos-closure.service"];
           unitConfig.RequiresMountsFor = [
             "/sysroot${nixRoot}"
             "/sysroot${bootStore}"
