@@ -89,7 +89,7 @@ in {
     # OVMF does not work with repart's default 4096-byte sector size.
     sectorSize = 512;
     partitions = {
-      "esp" = {
+      esp = {
         contents = let
           # aarch64-only image (see package.nix), so the EFI arch is fixed.
           # Avoids depending on `config.nixpkgs.hostPlatform` (unset under
@@ -108,7 +108,7 @@ in {
           SizeMinBytes = "256M";
         };
       };
-      "root" = {
+      root = {
         storePaths = [config.system.build.toplevel];
         repartConfig = {
           Type = "root";

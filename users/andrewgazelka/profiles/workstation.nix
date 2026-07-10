@@ -767,43 +767,43 @@ in {
         wm.aerospaceBindings
         // {
           # macOS-only extras (no clean sway equivalent), preserved verbatim.
-          "alt-tab" = "workspace-back-and-forth";
-          "alt-backtick" = "focus-back-and-forth";
-          "alt-a" = "layout tiles accordion";
-          "alt-shift-e" = "balance-sizes";
-          "alt-shift-minus" = "resize smart -50";
-          "alt-shift-equal" = "resize smart +50";
-          "ctrl-alt-shift-minus" = "resize smart-opposite -50";
-          "ctrl-alt-shift-equal" = "resize smart-opposite +50";
-          "alt-shift-h" = "join-with left";
-          "alt-shift-j" = "join-with down";
-          "alt-shift-k" = "join-with up";
-          "alt-shift-l" = "join-with right";
+          alt-tab = "workspace-back-and-forth";
+          alt-backtick = "focus-back-and-forth";
+          alt-a = "layout tiles accordion";
+          alt-shift-e = "balance-sizes";
+          alt-shift-minus = "resize smart -50";
+          alt-shift-equal = "resize smart +50";
+          ctrl-alt-shift-minus = "resize smart-opposite -50";
+          ctrl-alt-shift-equal = "resize smart-opposite +50";
+          alt-shift-h = "join-with left";
+          alt-shift-j = "join-with down";
+          alt-shift-k = "join-with up";
+          alt-shift-l = "join-with right";
         };
 
       on-window-detected = [
         {
-          "if"."app-id" = "com.microsoft.Excel";
+          "if".app-id = "com.microsoft.Excel";
           run = "layout tiling";
         }
         {
-          "if"."app-id" = "com.paulsolt.SuperEasyTimerMac";
+          "if".app-id = "com.paulsolt.SuperEasyTimerMac";
           run = "layout floating";
         }
         {
-          "if"."app-id" = "com.apple.FaceTime";
+          "if".app-id = "com.apple.FaceTime";
           run = "layout floating";
         }
         {
-          "if"."app-id" = "notion.id";
+          "if".app-id = "notion.id";
           run = "layout tiling";
         }
         {
-          "if"."app-id" = "com.linear";
+          "if".app-id = "com.linear";
           run = "layout tiling";
         }
         {
-          "if"."app-id" = "com.obsproject.obs-studio";
+          "if".app-id = "com.obsproject.obs-studio";
           run = "layout floating";
         }
         {
@@ -811,7 +811,7 @@ in {
           # always-on-top overlay card (transparent tao+wry, no bundle id). Match
           # on app name and force floating so AeroSpace leaves the overlay alone
           # instead of tiling it into the grid.
-          "if"."app-name-regex-substring" = "ix-windows";
+          "if".app-name-regex-substring = "ix-windows";
           run = "layout floating";
         }
       ];

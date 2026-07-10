@@ -42,7 +42,7 @@
     # crate's cdylib link (the per-crate build.rs replacement).
     else throw "unibind.lib.build: `${crate}` must set `pyExtension = true` in packages/${entry.relativePath}/package.nix";
 
-  genBin = rustWorkspace.units.binaries."unibind-gen";
+  genBin = rustWorkspace.units.binaries.unibind-gen;
 
   # Locate the built extension: the unit output may suffix the metadata hash,
   # and the extension differs per OS. Same loop the mcp module bundles use.
