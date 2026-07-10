@@ -144,9 +144,9 @@
           '^packages/agent/symphony/workflows/.*/repositories\.yaml$'
           '^\.editorconfig$'
           '^packages/agent/symphony/elixir/\.sobelow-conf$'
-          '^packages/minecraft/minestom/servers/hello/gradle\.properties$'
-          '^packages/minecraft/minestom/servers/hello/gradle/verification-metadata\.xml$'
-          '^packages/minecraft/minestom/servers/hello/src/main/resources/logback\.xml$'
+          '^packages/minecraft/minestom/servers/[^/]+/gradle\.properties$'
+          '^packages/minecraft/minestom/servers/[^/]+/gradle/verification-metadata\.xml$'
+          '^packages/minecraft/minestom/servers/[^/]+/src/main/resources/logback\.xml$'
 
           # Generated manifests, locks, editor settings, and typed data.
           '(^|/)(package|tsconfig)\.json$'
@@ -1074,6 +1074,11 @@
           # pre-run at build time so the VM never needs the network; see
           # tests/minecraft-blocks-vm.nix.
           minecraft-blocks-vm = tests.minecraftBlocksVm;
+          # Boots a NixOS VM running the Minestom spleef example server under
+          # `services.minestom` and asserts it serves the Minecraft protocol
+          # (readiness log line, open port, real server-list ping); see
+          # tests/minestom-spleef-vm.nix.
+          minestom-spleef-vm = tests.minestomSpleefVm;
           # Builds the base OCI archive and asserts its baked nix store DB
           # registers the pinned nixpkgs source as valid, so a fresh VM's first
           # `nix` command does not re-copy the tree through VCFS (ix
