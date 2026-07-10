@@ -130,6 +130,13 @@
     # package, Codex's come from `codexBase.passthru.hooksJson` below.
   };
 
+  # Personal context appended after the house context render (the shared
+  # generator, packages/agent/prompt in index) in BOTH agents' instruction
+  # files: ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md, via each module's
+  # `houseContext.extraText`. The house rules come from the generator; this
+  # tracked file holds only what is personal or additive to them.
+  personalContext = builtins.readFile (repoFile "claude/global/CLAUDE.md");
+
   # claude-code from the index FLAKE PACKAGE SET (packages/claude-code in the
   # indexable-inc/index monorepo), not the overlay's pkgs.claude-code: only the
   # package-set build can reach its `mcp` sibling (`repoPackages`). This config
@@ -1014,12 +1021,16 @@ in {
   # read-only store symlink): it is seeded writable from claudeSettings via
   # `mutable.files` below, because Claude edits it at runtime. .claude.json
   # remains app-owned runtime state because Claude stores account and session
-  # metadata beside user choices there. CLAUDE.md is generation-owned from its
-  # tracked source because the app never rewrites it.
+  # metadata beside user choices there. CLAUDE.md is generation-owned and
+  # module-rendered: the house context render (packages/agent/prompt) plus the
+  # personal appendix, so the shared rules never fork into a hand-rolled copy.
   programs.claude-code = {
     enable = true;
     package = claudeCode;
-    houseContext.enable = false;
+    houseContext = {
+      enable = true;
+      extraText = personalContext;
+    };
     # All agents, BARE, sourced straight from the index repo (index's agents
     # package now holds my former personal agents too). Bare (not plugin) so
     # `subagent_type code-reviewer` keeps resolving.
@@ -1045,7 +1056,9 @@ in {
     enable = true;
     package = codex;
     skills = skillsSrc;
-    context = repoFile "claude/global/CLAUDE.md";
+    # AGENTS.md rides the module's default house context render plus the same
+    # personal appendix Claude gets, so the two agents cannot drift.
+    houseContext.extraText = personalContext;
   };
 
   # Both agents edit their own config at runtime, so neither file can be a
@@ -1064,12 +1077,6 @@ in {
     declaredAt = "users/andrewgazelka/profiles/workstation.nix";
   };
 
-  # CLAUDE.md is read-only and generation-owned. `force` replaces any stale
-  # real file or legacy out-of-store link at the target.
-  home.file.".claude/CLAUDE.md" = {
-    source = repoFile "claude/global/CLAUDE.md";
-    force = true;
-  };
   # ~/.claude.json is entirely runtime-owned and intentionally unmanaged.
 
   # Authenticate Nix's GitHub API calls so `nix flake update` and `github:`
