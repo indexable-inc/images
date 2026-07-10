@@ -1,0 +1,45 @@
+name: Bootstrap patched Nix client
+description: >-
+  Put the fleet's patched Nix client (nix-ix, packages/nix/nix) first on
+  PATH for every later step. Repo .nix files use underscore digit separators
+  in numeric literals, which a stock client cannot parse, so every nix
+  invocation that evaluates this tree must go through the patched client
+  (builds still talk to the host daemon; the 2.34.7+ix client is
+  protocol-compatible with the fleet daemon family). Evaluating the current
+  tree to build that client would be circular, so the client is built from a
+  pinned separator-free rev and substituted from the warm store /
+  cache.ix.dev on repeat runs. Requires the repository to be checked out and
+  a nix client on PATH (the host daemon's on self-hosted runners, the
+  install-nix action's elsewhere).
+
+runs:
+  using: composite
+  steps:
+    - name: Build the patched Nix client from the pinned rev
+      shell: bash
+      env:
+        # The pinned bootstrap rev: the newest rev whose own eval closure is
+        # separator-free AND that carries the nix-ix lexer patch (0014,
+        # index#2666). Any such rev works; move it forward deliberately when
+        # the nix-ix closure changes shape (it is not wired to any update
+        # automation). The rev stays fetchable through the PR's head ref even
+        # after a squash merge.
+        BOOTSTRAP_REV: bf7a9b0d8577b32e542e8a3425ace8bb0c9bbaed
+      run: |
+        set -euo pipefail
+        if ! git rev-parse --verify --quiet "$BOOTSTRAP_REV^{commit}" >/dev/null; then
+          git fetch --depth 1 origin "$BOOTSTRAP_REV"
+        fi
+        # Materialize the pinned tree with `git archive` and build it as a
+        # `path:` flake: nix's git fetcher refuses the shallow clones most
+        # jobs check out, and a plain directory sidesteps every git-fetcher
+        # edge (shallowness, worktrees) at the cost of copying one small tree.
+        src="$RUNNER_TEMP/nix-ix-bootstrap"
+        mkdir -p "$src"
+        git archive "$BOOTSTRAP_REV" | tar -x -C "$src"
+        nix build \
+          --extra-experimental-features "nix-command flakes" \
+          --out-link "$RUNNER_TEMP/nix-ix" \
+          "path:$src#nix-ix"
+        echo "$RUNNER_TEMP/nix-ix/bin" >> "$GITHUB_PATH"
+        "$RUNNER_TEMP/nix-ix/bin/nix" --version
