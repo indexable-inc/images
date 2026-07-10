@@ -435,19 +435,3 @@ mod tests {
         assert!(check_metadata("slack:c:1", &meta).is_err());
     }
 }
-        assert_ne!(a, hash_body(b"hello worlds"));
-    }
-
-    #[test]
-    fn metadata_within_limits_passes() {
-        let meta = serde_json::json!({ "source": "code", "path": "a.rs" });
-        assert!(check_metadata("sha256:x", &meta).is_ok());
-    }
-
-    #[test]
-    fn oversized_metadata_is_rejected() {
-        let big = "x".repeat(super::MAX_METADATA_BYTES + 1);
-        let meta = serde_json::json!({ "source": "slack", "blob": big });
-        assert!(check_metadata("slack:c:1", &meta).is_err());
-    }
-}

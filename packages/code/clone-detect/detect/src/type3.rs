@@ -368,7 +368,3 @@ mod tests {
         assert_eq!(distinct_count(&[1, 1, 2, 3, 3]), 3);
     }
 }
-        assert_eq!(distinct_count(&[1, 1, 1]), 1);
-        assert_eq!(distinct_count(&[1, 1, 2, 3, 3]), 3);
-    }
-}
