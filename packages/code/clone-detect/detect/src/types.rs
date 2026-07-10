@@ -99,6 +99,15 @@ impl Fragment {
             generated,
         }
     }
+
+    /// Number of source lines covered by this fragment.
+    #[must_use]
+    pub const fn line_count(&self) -> usize {
+        self.lines
+            .end
+            .saturating_sub(self.lines.start)
+            .saturating_add(1)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -167,11 +176,11 @@ impl CloneGroup {
     /// deduplicates overlapping line ranges across every group.
     #[must_use]
     pub fn line_impact(&self) -> usize {
-        let total: usize = self.fragments.iter().map(fragment_line_count).sum();
+        let total: usize = self.fragments.iter().map(Fragment::line_count).sum();
         let original = self
             .fragments
             .iter()
-            .map(fragment_line_count)
+            .map(Fragment::line_count)
             .max()
             .unwrap_or_default();
         total.saturating_sub(original)
@@ -185,7 +194,7 @@ impl CloneGroup {
     }
 }
 
-pub(crate) fn file_is_generated(file: &clone_scanner::File) -> bool {
+pub fn file_is_generated(file: &clone_scanner::File) -> bool {
     let snapshot_path = file
         .path
         .components()
@@ -193,7 +202,7 @@ pub(crate) fn file_is_generated(file: &clone_scanner::File) -> bool {
     snapshot_path || generated_header(&file.source)
 }
 
-pub(crate) fn generated_header(source: &str) -> bool {
+pub fn generated_header(source: &str) -> bool {
     const MAX_HEADER_BYTES: usize = 4096;
     const MARKERS: [&[u8]; 4] = [
         b"automatically generated",
@@ -216,14 +225,6 @@ pub(crate) fn generated_header(source: &str) -> bool {
             .windows(marker.len())
             .any(|window| window.eq_ignore_ascii_case(marker))
     })
-}
-
-fn fragment_line_count(fragment: &Fragment) -> usize {
-    fragment
-        .lines
-        .end
-        .saturating_sub(fragment.lines.start)
-        .saturating_add(1)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
