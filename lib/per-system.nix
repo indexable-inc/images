@@ -482,6 +482,25 @@
             }
             print --stderr "::endgroup::"
           }
+          # One workflow error annotation per failed attr (EVAL and BUILD),
+          # carrying the recorded error text. check.yml cats this log to the
+          # step's stdout on failure, where the runner parses `::error::`
+          # lines into check-run annotations -- the only failure surface
+          # reachable when raw log downloads are blocked (annotations ride
+          # the checks API). Harmless plain text in a local run.
+          let annotated = (
+            open check-results.json
+            | get results
+            | where success == false
+          )
+          for f in $annotated {
+            let err = (
+              ($f | get -o error | default "")
+              | str replace --all "\n" " | "
+              | str substring 0..500
+            )
+            print $"::error title=($f.attr) ($f.type)::($err)"
+          }
         }
 
         if $build_failed {
