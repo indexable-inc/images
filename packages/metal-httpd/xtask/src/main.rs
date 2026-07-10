@@ -39,14 +39,12 @@ fn deadline(backend: Backend) -> Duration {
     }
 }
 
+/// Backend names, indexed by discriminant (declaration order above).
+const NAMES: [&str; 4] = ["linux", "eyra", "hermit", "bare"];
+
 impl Backend {
     fn name(self) -> &'static str {
-        match self {
-            Backend::Linux => "linux",
-            Backend::Eyra => "eyra",
-            Backend::Hermit => "hermit",
-            Backend::Bare => "bare",
-        }
+        NAMES[self as usize]
     }
 
     fn parse(s: &str) -> Option<Self> {
