@@ -1,7 +1,8 @@
 {pkgs}: let
-  # CA realisations are an unstable protocol. Build the evaluator against the
-  # fleet daemon's Nix 2.34 protocol generation while the interactive client
-  # remains independently selectable.
+  # CA realisations are an unstable protocol. Build the evaluator from the
+  # same pinned 2.34 component set as the fleet daemon. A separate fetch here
+  # previously drifted to Nix master while the daemon stayed on 2.34.7,
+  # breaking CA realisation negotiation.
   package = pkgs.nix-eval-jobs.override {
     nixComponents = pkgs.nixVersions.nixComponents_2_34;
   };

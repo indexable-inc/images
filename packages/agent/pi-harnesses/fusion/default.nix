@@ -18,6 +18,7 @@ in
     extensions = [./extension/fusion.ts];
     libFiles = [
       ./runner/sidekick.js
+      (shared + "/ext-lib/process.js")
     ];
 
     inherit models;
@@ -31,5 +32,8 @@ in
     runtimeInputs = [git];
 
     checkFiles = [./test/sidekick.test.mjs];
-    checkLib = [./runner/sidekick.js];
+    checkLib = [
+      ./runner/sidekick.js
+      (shared + "/ext-lib/process.js")
+    ];
   }

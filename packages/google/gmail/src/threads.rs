@@ -6,7 +6,7 @@ use snafu::ResultExt as _;
 use crate::error::HttpSnafu;
 use crate::messages::MessageFormat;
 use crate::model::{MessageQuery, Thread};
-use crate::{Client, Result, decode};
+use crate::{Client, ListPageParts, Result, decode};
 
 /// One page of `users.threads.list`.
 #[derive(Deserialize)]
@@ -21,8 +21,11 @@ struct ThreadsPage {
 impl crate::ListPage for ThreadsPage {
     type Item = ThreadStub;
 
-    fn into_parts(self) -> (Vec<Self::Item>, Option<String>) {
-        (self.threads, self.next_page_token)
+    fn into_parts(self) -> ListPageParts<Self::Item> {
+        ListPageParts {
+            items: self.threads,
+            next_page_token: self.next_page_token,
+        }
     }
 }
 

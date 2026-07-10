@@ -20,7 +20,7 @@ The simplified debugger uses the same runtime as advanced mode. Inject it after
 the page loads:
 
 ```bash
-cat assets/antithesis-debug.js \
+cat ../antithesis/assets/browser-utils.js assets/antithesis-debug.js \
   | agent-browser --session "$SESSION" eval --stdin
 ```
 

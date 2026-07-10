@@ -350,10 +350,10 @@
         # `.#ciChecks.x86_64-linux` resolves floating content-addressed drvs. The
         # evaluator (nix-eval-jobs, which nix-fast-build wraps) needs the
         # `ca-derivations` experimental feature, or it aborts with
-        # "experimental Nix feature 'ca-derivations' is disabled". The flake's
-        # nixConfig.extra-experimental-features carries it via
-        # accept-flake-config; `--option extra-experimental-features` here pins
-        # it for the build pool too so the gate is self-contained.
+        # "experimental Nix feature 'ca-derivations' is disabled". The caller
+        # owns cache policy: developers may accept the flake config, while
+        # self-hosted CI ignores its restricted cache settings. Pin only the CA
+        # feature here so nested evaluator processes remain self-contained.
         # --result-format json --result-file emits one record per attr per phase
         # ({attr, type: EVAL|BUILD, duration, success, error, outputs}) into the
         # cwd. blast-radius consumes this on a later PR via `--timings` to
@@ -390,7 +390,6 @@
               "--no-link"
               "--result-format" "json"
               "--result-file" "check-results.json"
-              "--option" "accept-flake-config" "true"
               "--option" "eval-cache" "false"
               "--option" "extra-experimental-features" "ca-derivations"
             ]
@@ -415,7 +414,6 @@
             # input-addressed checks like the browser smoke test).
             let drv = (
               ^nix eval --raw
-                --option accept-flake-config true
                 --option extra-experimental-features ca-derivations
                 $"($inst).drvPath"
               | complete
@@ -438,7 +436,6 @@
                   $inst
                   "-L"
                   "--no-link"
-                  "--option" "accept-flake-config" "true"
                   "--option" "extra-experimental-features" "ca-derivations"
                 ]
               } catch { }
@@ -458,7 +455,6 @@
             "--flake" ".#packages.x86_64-linux"
             "--workers" "16"
             "--gc-roots-dir" ($tmp | path join "flake-schema-eval-gc")
-            "--option" "accept-flake-config" "true"
             "--option" "eval-cache" "false"
             # See the ca-derivations note above: the package set also resolves
             # content-addressed rust units, so this eval needs the feature too.
@@ -1486,7 +1482,7 @@
     // {
       health-checks = healthChecks.dag;
       health-checks-zellij = healthChecks.zellij;
-      inherit check lint site;
+      inherit lint site;
       site-dev = site.passthru.devServer;
       bench-filesystem = benchFilesystem;
       update-mods = updateMods;
@@ -1514,6 +1510,7 @@
         gh
         ;
     }
+    // lib.optionalAttrs (system == "x86_64-linux") {inherit check;}
     // repoFlakePackages
     // examplePackages
     // nonNixExampleImages

@@ -28,7 +28,8 @@ use objc2_metal::MTLDrawable as _;
 use objc2_quartz_core::CAMetalDisplayLinkUpdate;
 use panes_protocol::{MINOR_KEY_REPEAT, MINOR_POINTER_LOCK, ToGuest, ToHost, WindowId};
 
-use crate::conn::{self, Event, Target};
+use crate::conn::{self, Event};
+use crate::transport::Target;
 use crate::render::Renderer;
 use crate::window::{PaneWindow, WindowParams};
 

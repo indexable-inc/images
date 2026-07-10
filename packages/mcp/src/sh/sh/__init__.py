@@ -336,39 +336,38 @@ class Output(_ResultBase):
         """Combined stdout+stderr with ANSI escape codes stripped."""
         return _strip_ansi(self.raw)
 
-    @property
-    def stdout(self) -> str:
-        """Alias for ``.text``: the merged stdout+stderr with ANSI codes stripped.
-
-        Streams are merged in emission order (terminal-style), so there is no
-        separate stderr channel. This alias exists so the conventional
-        subprocess attribute name works without a wasted AttributeError roundtrip;
-        ``.text`` and ``.stdout`` are identical. For separate streams, redirect
-        in the command, e.g. ``await _exec("cmd 2>err.txt")`` and read the file.
-        """
+    def _text_alias(self) -> str:
         return self.text
 
-    @property
-    def stderr(self) -> str:
-        """Alias for ``.text``: stdout and stderr are merged in emission order.
+    stdout = property(
+        _text_alias,
+        doc="""Alias for ``.text``: merged stdout+stderr with ANSI stripped.
+
+        Streams are merged in emission order. For separate streams, redirect
+        in the command, e.g. ``await _exec("cmd 2>err.txt")`` and read the file.
+        """,
+    )
+    stderr = property(
+        _text_alias,
+        doc="""Alias for ``.text``: stdout and stderr are merged in emission order.
 
         Returns the same value as ``.stdout`` and ``.text``. The streams cannot
         be separated after the fact; if you need stderr alone, redirect it in
         the command, e.g. ``await _exec("cmd 2>&1 1>/dev/null")``.
-        """
-        return self.text
-
-    @property
-    def output(self) -> str:
-        """Alias for ``.text``, matching ``jobs['<id>'].output`` on a live job.
+        """,
+    )
+    output = property(
+        _text_alias,
+        doc="""Alias for ``.text``, matching ``jobs['<id>'].output`` on a live job.
 
         The docstring above and the kernel instructions teach
         ``jobs['<id>'].output`` as the way to read a run's stdout; this alias
         makes the direct ``(await _exec(...))`` return symmetric so the same
         attribute works whether the call ran in the foreground or in a tracked
         background job.
-        """
-        return self.text
+        """,
+    )
+    del _text_alias
 
     def lines(self) -> list[str]:
         """The escape-stripped output split into lines (trailing newline dropped)."""

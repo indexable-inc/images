@@ -638,6 +638,19 @@ impl Client {
         format!("{}{path}", self.base_url)
     }
 
+    async fn post_chunks<T: serde::Serialize + ?Sized>(
+        &self,
+        path: &str,
+        request: &T,
+    ) -> Result<Vec<Chunk>> {
+        let url = self.url(path);
+        let response = self
+            .send_retrying(|| Ok(self.http.post(url.as_str()).json(request)))
+            .await?;
+        let response: SearchResponse = decode(response).await?;
+        Ok(response.data.into_iter().map(Chunk::from).collect())
+    }
+
     /// Send a request with bearer auth, retrying on `429`/`5xx` (with
     /// `Retry-After`-aware, jittered backoff) and on transport-level send
     /// failures (connection reset, HTTP/2 error, timeout) where no response
@@ -862,12 +875,7 @@ impl Client {
             filters,
             file_ids,
         };
-        let search_url = self.url("/v1/stores/search");
-        let resp = self
-            .send_retrying(|| Ok(self.http.post(search_url.as_str()).json(&request)))
-            .await?;
-        let response: SearchResponse = decode(resp).await?;
-        Ok(response.data.into_iter().map(Chunk::from).collect())
+        self.post_chunks("/v1/stores/search", &request).await
     }
 
     /// Grep one or more stores: run a regular expression over the same indexed
@@ -899,12 +907,7 @@ impl Client {
             targets,
             filters,
         };
-        let grep_url = self.url("/v1/stores/grep");
-        let resp = self
-            .send_retrying(|| Ok(self.http.post(grep_url.as_str()).json(&request)))
-            .await?;
-        let response: SearchResponse = decode(resp).await?;
-        Ok(response.data.into_iter().map(Chunk::from).collect())
+        self.post_chunks("/v1/stores/grep", &request).await
     }
 
     /// List chunks from one or more stores purely by metadata filters — no
@@ -935,12 +938,7 @@ impl Client {
             filters,
             sort_by,
         };
-        let list_url = self.url("/v1/stores/list-chunks");
-        let resp = self
-            .send_retrying(|| Ok(self.http.post(list_url.as_str()).json(&request)))
-            .await?;
-        let response: SearchResponse = decode(resp).await?;
-        Ok(response.data.into_iter().map(Chunk::from).collect())
+        self.post_chunks("/v1/stores/list-chunks", &request).await
     }
 
     /// Ask a natural-language question against one or more stores. `file_ids`

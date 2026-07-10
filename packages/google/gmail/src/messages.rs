@@ -6,7 +6,7 @@ use snafu::ResultExt as _;
 
 use crate::error::HttpSnafu;
 use crate::model::{Message, MessageQuery};
-use crate::{Client, Result, decode, send_no_body};
+use crate::{Client, ListPageParts, Result, decode, send_no_body};
 
 /// Gmail's `INBOX` system label. Removing it archives the message.
 pub const LABEL_INBOX: &str = "INBOX";
@@ -88,8 +88,11 @@ struct MessagesPage {
 impl crate::ListPage for MessagesPage {
     type Item = MessageStub;
 
-    fn into_parts(self) -> (Vec<Self::Item>, Option<String>) {
-        (self.messages, self.next_page_token)
+    fn into_parts(self) -> ListPageParts<Self::Item> {
+        ListPageParts {
+            items: self.messages,
+            next_page_token: self.next_page_token,
+        }
     }
 }
 

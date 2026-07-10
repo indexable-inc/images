@@ -1019,13 +1019,7 @@ async def cmd_replace(plan: FleetPlan, args: argparse.Namespace) -> None:
             await run_replace_node_workflow(node, args)
         return
 
-    await verify_secrets_available(plan, args.on, dry_run=args.dry_run)
-    extra_args: list[str] = []
-    if args.skip_push:
-        extra_args.append("--skip-push")
-    if args.skip_health:
-        extra_args.append("--skip-health")
-    await run_node_workflow_dag(plan, args, "_replace-node", extra_args)
+    await run_deploy_dag(plan, args, "_replace-node")
 
 
 async def cmd_up(plan: FleetPlan, args: argparse.Namespace) -> None:
@@ -1034,13 +1028,17 @@ async def cmd_up(plan: FleetPlan, args: argparse.Namespace) -> None:
             await run_up_node_workflow(node, args)
         return
 
+    await run_deploy_dag(plan, args, "_up-node")
+
+
+async def run_deploy_dag(plan: FleetPlan, args: argparse.Namespace, command: str) -> None:
     await verify_secrets_available(plan, args.on, dry_run=args.dry_run)
     extra_args: list[str] = []
     if args.skip_push:
         extra_args.append("--skip-push")
     if args.skip_health:
         extra_args.append("--skip-health")
-    await run_node_workflow_dag(plan, args, "_up-node", extra_args)
+    await run_node_workflow_dag(plan, args, command, extra_args)
 
 
 async def cmd_replace_node(plan: FleetPlan, args: argparse.Namespace) -> None:

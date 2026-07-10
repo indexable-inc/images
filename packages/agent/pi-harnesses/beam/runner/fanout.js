@@ -1,44 +1,14 @@
-import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { rank, scoreBranch } from "./scoring.js";
+import { countDiffLines, runProcess as sh } from "./process.js";
 
 // At runtime this file lives at share/<name>/lib/fanout.js, so the turn-cap
 // extension (an aux file) sits one directory up.
 const here = dirname(fileURLToPath(import.meta.url));
 const turnCapExt = join(here, "..", "turn-cap.js");
-
-function sh(cmd, args, opts = {}) {
-  return new Promise((resolve) => {
-    const child = spawn(cmd, args, opts);
-    let stdout = "";
-    let stderr = "";
-    child.stdout?.on("data", (d) => {
-      stdout += d;
-    });
-    child.stderr?.on("data", (d) => {
-      stderr += d;
-    });
-    child.on("error", (err) => resolve({ code: 127, stdout, stderr: String(err) }));
-    child.on("close", (code) => resolve({ code: code ?? 0, stdout, stderr }));
-  });
-}
-
-function countDiffLines(numstat) {
-  return numstat
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .reduce((total, line) => {
-      // numstat columns: added \t removed \t path. Binary files use "-".
-      const [added, removed] = line.split("\t");
-      const a = Number.parseInt(added, 10);
-      const r = Number.parseInt(removed, 10);
-      return total + (Number.isFinite(a) ? a : 0) + (Number.isFinite(r) ? r : 0);
-    }, 0);
-}
 
 // Run each approach on its own detached worktree off HEAD, under a soft turn
 // cap (turn-cap extension) and a hard wall-clock cap (`timeout`), then score by

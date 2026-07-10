@@ -40,7 +40,7 @@ env:
   # phase below goes with it.
   NIX_CONFIG: |-
     experimental-features = nix-command flakes ca-derivations
-    accept-flake-config = true
+    accept-flake-config = false
     max-jobs = auto
     cores = 1
     fallback = true
@@ -256,7 +256,7 @@ jobs:
       # linux lane (ix#6139).
       NIX_CONFIG: |-
         experimental-features = nix-command flakes ca-derivations
-        accept-flake-config = true
+        accept-flake-config = false
         max-jobs = auto
         fallback = true
     steps:

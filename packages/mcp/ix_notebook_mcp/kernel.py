@@ -610,18 +610,9 @@ class Kernel:
         await self._reapply_session()
         if self._config.session_resume:
             locked = asyncio.Event()
-
-            async def _restore() -> None:
-                try:
-                    summary = await self.restore_session(on_locked=locked.set)
-                    if summary:
-                        print(f"[ix-mcp] {summary}", file=sys.stderr, flush=True)
-                except Exception as exc:
-                    print(f"[ix-mcp] session restore after respawn failed: {exc!r}", file=sys.stderr, flush=True)
-                finally:
-                    locked.set()  # a restore that died before locking must not hold the death flag forever
-
-            self._restore_task = asyncio.ensure_future(_restore())
+            self._restore_task = asyncio.ensure_future(
+                restore_with_lock(self, locked, "session restore after respawn")
+            )
             await locked.wait()
         self._death = None
 
@@ -703,6 +694,17 @@ class Kernel:
         if self._trace_path is not None:
             self._trace_path.unlink(missing_ok=True)
             self._trace_path = None
+
+
+async def restore_with_lock(kernel: Kernel, locked: asyncio.Event, context: str) -> None:
+    try:
+        summary = await kernel.restore_session(on_locked=locked.set)
+        if summary:
+            print(f"[ix-mcp] {summary}", file=sys.stderr, flush=True)
+    except Exception as exc:
+        print(f"[ix-mcp] {context} failed: {exc!r}", file=sys.stderr, flush=True)
+    finally:
+        locked.set()
 
 
 _KERNEL: Kernel | None = None

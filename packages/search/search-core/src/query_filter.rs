@@ -156,6 +156,11 @@ mod tests {
     use super::{FilterSpec, build_filter, parse_time_spec};
     use source_meta::Source;
 
+    fn assert_filter(spec: &FilterSpec, expected: serde_json::Value) {
+        let filter = build_filter(spec).expect("filter");
+        assert_eq!(serde_json::to_value(filter).expect("serialize filter"), expected);
+    }
+
     #[test]
     fn empty_spec_builds_no_filter() {
         assert!(build_filter(&FilterSpec::default()).is_none());
@@ -227,11 +232,9 @@ mod tests {
             sources: vec![Source::new("slack")],
             ..FilterSpec::default()
         };
-        let filter = build_filter(&spec).expect("filter");
-        let value = serde_json::to_value(&filter).expect("ser");
-        assert_eq!(
-            value,
-            serde_json::json!({ "key": "source", "operator": "in", "value": ["slack"] })
+        assert_filter(
+            &spec,
+            serde_json::json!({ "key": "source", "operator": "in", "value": ["slack"] }),
         );
     }
 
@@ -241,11 +244,9 @@ mod tests {
             exclude_sources: vec![Source::new("slack")],
             ..FilterSpec::default()
         };
-        let filter = build_filter(&spec).expect("filter");
-        let value = serde_json::to_value(&filter).expect("ser");
-        assert_eq!(
-            value,
-            serde_json::json!({ "none": [ { "key": "source", "operator": "eq", "value": "slack" } ] })
+        assert_filter(
+            &spec,
+            serde_json::json!({ "none": [ { "key": "source", "operator": "eq", "value": "slack" } ] }),
         );
     }
 
@@ -255,11 +256,9 @@ mod tests {
             users: vec!["andrew".to_owned()],
             ..FilterSpec::default()
         };
-        let filter = build_filter(&spec).expect("filter");
-        let value = serde_json::to_value(&filter).expect("ser");
-        assert_eq!(
-            value,
-            serde_json::json!({ "key": "user", "operator": "in", "value": ["andrew"] })
+        assert_filter(
+            &spec,
+            serde_json::json!({ "key": "user", "operator": "in", "value": ["andrew"] }),
         );
     }
 

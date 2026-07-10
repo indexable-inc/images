@@ -73,25 +73,29 @@ fn backends(
     Ok(glue)
 }
 
-#[cfg(feature = "py")]
-fn backend_py(
-    interface: &unibind_core::ir::Interface,
-    module: &mut syn::ItemMod,
-    _explicit: bool,
-) -> Result<TokenStream, LowerError> {
-    let rendered = unibind_backend_py::render(interface).map_err(|error| LowerError {
-        span: proc_macro2::Span::call_site(),
-        message: error.message,
-    })?;
-    splice_record_attrs(
-        interface,
-        module,
-        rendered.records.iter().map(|record| RecordAttrs {
-            outer: &record.outer,
-            fields: &record.fields,
-        }),
-    );
-    Ok(rendered.glue)
+macro_rules! enabled_backend {
+    ($name:ident, $feature:literal, $render:path) => {
+        #[cfg(feature = $feature)]
+        fn $name(
+            interface: &unibind_core::ir::Interface,
+            module: &mut syn::ItemMod,
+            _explicit: bool,
+        ) -> Result<TokenStream, LowerError> {
+            let rendered = ($render)(interface).map_err(|error| LowerError {
+                span: proc_macro2::Span::call_site(),
+                message: error.message,
+            })?;
+            splice_record_attrs(
+                interface,
+                module,
+                rendered.records.iter().map(|record| RecordAttrs {
+                    outer: &record.outer,
+                    fields: &record.fields,
+                }),
+            );
+            Ok(rendered.glue)
+        }
+    };
 }
 
 macro_rules! disabled_backend {
@@ -120,29 +124,9 @@ macro_rules! disabled_backend {
     };
 }
 
+enabled_backend!(backend_py, "py", unibind_backend_py::render);
 disabled_backend!(backend_py, "py");
-
-#[cfg(feature = "ts")]
-fn backend_ts(
-    interface: &unibind_core::ir::Interface,
-    module: &mut syn::ItemMod,
-    _explicit: bool,
-) -> Result<TokenStream, LowerError> {
-    let rendered = unibind_backend_ts::render(interface).map_err(|error| LowerError {
-        span: proc_macro2::Span::call_site(),
-        message: error.message,
-    })?;
-    splice_record_attrs(
-        interface,
-        module,
-        rendered.records.iter().map(|record| RecordAttrs {
-            outer: &record.outer,
-            fields: &record.fields,
-        }),
-    );
-    Ok(rendered.glue)
-}
-
+enabled_backend!(backend_ts, "ts", unibind_backend_ts::render);
 disabled_backend!(backend_ts, "ts");
 
 #[cfg(feature = "ex")]
