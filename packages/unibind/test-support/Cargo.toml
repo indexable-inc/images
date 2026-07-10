@@ -1,0 +1,9 @@
+[package]
+name = "unibind-test-support"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Shared test assertions for Unibind crates"
+
+[lints]
+workspace = true

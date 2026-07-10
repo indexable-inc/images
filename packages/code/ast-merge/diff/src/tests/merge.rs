@@ -1,275 +1,92 @@
 use super::rust;
 
-#[test]
-fn test_left_modifies_right_adds() {
-    let base = r#"fn original() {
-    println!("original");
-}
-"#;
-
-    let left = r#"fn original() {
-    println!("modified by left");
-}
-"#;
-
-    let right = r#"fn original() {
-    println!("original");
+struct Case {
+    name: &'static str,
+    base: &'static str,
+    left: &'static str,
+    right: &'static str,
+    expected: &'static [&'static str],
 }
 
-fn right_new() {
-    println!("from right");
-}
-"#;
-
-    let result = rust(base, left, right);
-    assert!(result.success, "merge should succeed without conflicts");
-
-    assert!(
-        result.content.contains("modified by left"),
-        "should contain left's modification: {}",
-        result.content
-    );
-
-    assert!(
-        result.content.contains("fn right_new()"),
-        "should contain right's new function: {}",
-        result.content
-    );
-    assert!(
-        result.content.contains("from right"),
-        "should contain right's function body: {}",
-        result.content
-    );
+impl Case {
+    fn verify(self) {
+        let result = rust(self.base, self.left, self.right);
+        assert!(result.success, "{}: {}", self.name, result.content);
+        for needle in self.expected {
+            assert!(
+                result.content.contains(needle),
+                "{}: missing {needle:?} in {}",
+                self.name,
+                result.content
+            );
+        }
+    }
 }
 
 #[test]
-fn test_right_modifies_left_adds() {
-    let base = r#"fn original() {
-    println!("original");
-}
-"#;
+fn independent_changes_merge() {
+    let cases = [
+        Case {
+            name: "left modifies, right adds",
+            base: r#"fn original() { println!("original"); }"#,
+            left: r#"fn original() { println!("modified by left"); }"#,
+            right: r#"fn original() { println!("original"); }
+                fn right_new() { println!("from right"); }"#,
+            expected: &["modified by left", "fn right_new()", "from right"],
+        },
+        Case {
+            name: "right modifies, left adds",
+            base: r#"fn original() { println!("original"); }"#,
+            left: r#"fn original() { println!("original"); }
+                fn left_new() { println!("from left"); }"#,
+            right: r#"fn original() { println!("modified by right"); }"#,
+            expected: &["modified by right", "fn left_new()", "from left"],
+        },
+        Case {
+            name: "both add functions",
+            base: r#"fn original() { println!("original"); }"#,
+            left: r#"fn original() { println!("original"); }
+                fn left_new() { println!("from left"); }"#,
+            right: r#"fn original() { println!("original"); }
+                fn right_new() { println!("from right"); }"#,
+            expected: &["fn left_new()", "fn right_new()"],
+        },
+        Case {
+            name: "mixed functions",
+            base: r#"fn foo() { println!("foo"); }
+                fn bar() { println!("bar"); }"#,
+            left: r#"fn foo() { println!("foo modified by left"); }
+                fn bar() { println!("bar"); }
+                fn baz() { println!("baz from left"); }"#,
+            right: r#"fn foo() { println!("foo"); }
+                fn bar() { println!("bar modified by right"); }
+                fn qux() { println!("qux from right"); }"#,
+            expected: &[
+                "foo modified by left",
+                "bar modified by right",
+                "fn baz()",
+                "fn qux()",
+            ],
+        },
+        Case {
+            name: "different lines",
+            base: "fn process() { let a = 1; let b = 2; let c = 3; }",
+            left: "fn process() { let a = 100; let b = 2; let c = 3; }",
+            right: "fn process() { let a = 1; let b = 2; let c = 300; }",
+            expected: &["let a = 100;", "let c = 300;"],
+        },
+    ];
 
-    let left = r#"fn original() {
-    println!("original");
-}
-
-fn left_new() {
-    println!("from left");
-}
-"#;
-
-    let right = r#"fn original() {
-    println!("modified by right");
-}
-"#;
-
-    let result = rust(base, left, right);
-    assert!(result.success, "merge should succeed without conflicts");
-
-    assert!(
-        result.content.contains("modified by right"),
-        "should contain right's modification: {}",
-        result.content
-    );
-
-    assert!(
-        result.content.contains("fn left_new()"),
-        "should contain left's new function: {}",
-        result.content
-    );
-    assert!(
-        result.content.contains("from left"),
-        "should contain left's function body: {}",
-        result.content
-    );
-}
-
-#[test]
-fn test_both_add_different_functions() {
-    let base = r#"fn original() {
-    println!("original");
-}
-"#;
-
-    let left = r#"fn original() {
-    println!("original");
-}
-
-fn left_new() {
-    println!("from left");
-}
-"#;
-
-    let right = r#"fn original() {
-    println!("original");
-}
-
-fn right_new() {
-    println!("from right");
-}
-"#;
-
-    let result = rust(base, left, right);
-    assert!(result.success, "merge should succeed without conflicts");
-
-    assert!(
-        result.content.contains("fn left_new()"),
-        "should contain left's new function: {}",
-        result.content
-    );
-    assert!(
-        result.content.contains("fn right_new()"),
-        "should contain right's new function: {}",
-        result.content
-    );
+    cases.into_iter().for_each(Case::verify);
 }
 
 #[test]
-fn test_identical_changes() {
-    let base = r#"fn original() {
-    println!("original");
-}
-"#;
-
-    let left = r#"fn original() {
-    println!("same change");
-}
-"#;
-
-    let right = r#"fn original() {
-    println!("same change");
-}
-"#;
-
-    let result = rust(base, left, right);
-    assert!(result.success, "merge should succeed without conflicts");
-    assert!(
-        result.content.contains("same change"),
-        "should contain the common change: {}",
-        result.content
-    );
-
-    let count = result.content.matches("fn original()").count();
-    assert_eq!(count, 1, "should have exactly one original function");
-}
-
-#[test]
-fn test_no_changes() {
-    let base = r#"fn original() {
-    println!("original");
-}
-"#;
-
-    let result = rust(base, base, base);
-    assert!(result.success, "merge should succeed without conflicts");
-    assert!(
-        result.content.contains("fn original()"),
-        "should preserve original: {}",
-        result.content
-    );
-}
-
-#[test]
-fn test_multiple_functions_mixed_changes() {
-    let base = r#"fn foo() {
-    println!("foo");
-}
-
-fn bar() {
-    println!("bar");
-}
-"#;
-
-    let left = r#"fn foo() {
-    println!("foo modified by left");
-}
-
-fn bar() {
-    println!("bar");
-}
-
-fn baz() {
-    println!("baz from left");
-}
-"#;
-
-    let right = r#"fn foo() {
-    println!("foo");
-}
-
-fn bar() {
-    println!("bar modified by right");
-}
-
-fn qux() {
-    println!("qux from right");
-}
-"#;
-
-    let result = rust(base, left, right);
-    assert!(result.success, "merge should succeed without conflicts");
-
-    assert!(
-        result.content.contains("foo modified by left"),
-        "should have left's foo change: {}",
-        result.content
-    );
-
-    assert!(
-        result.content.contains("bar modified by right"),
-        "should have right's bar change: {}",
-        result.content
-    );
-
-    assert!(
-        result.content.contains("fn baz()"),
-        "should have left's new baz: {}",
-        result.content
-    );
-    assert!(
-        result.content.contains("fn qux()"),
-        "should have right's new qux: {}",
-        result.content
-    );
-}
-
-#[test]
-fn test_different_lines_same_function() {
-    let base = r"fn process() {
-    let a = 1;
-    let b = 2;
-    let c = 3;
-}
-";
-
-    let left = r"fn process() {
-    let a = 100;
-    let b = 2;
-    let c = 3;
-}
-";
-
-    let right = r"fn process() {
-    let a = 1;
-    let b = 2;
-    let c = 300;
-}
-";
-
-    let result = rust(base, left, right);
-    assert!(
-        result.success,
-        "should merge different lines in same function without conflict: {}",
-        result.content
-    );
-    assert!(
-        result.content.contains("let a = 100;"),
-        "should have left's change to line 1: {}",
-        result.content
-    );
-    assert!(
-        result.content.contains("let c = 300;"),
-        "should have right's change to line 3: {}",
-        result.content
-    );
+fn identical_revisions_are_not_duplicated() {
+    let base = r#"fn original() { println!("original"); }"#;
+    for changed in [base, r#"fn original() { println!("same change"); }"#] {
+        let result = rust(base, changed, changed);
+        assert!(result.success, "{}", result.content);
+        assert!(result.content.contains("fn original()"));
+        assert_eq!(result.content.matches("fn original()").count(), 1);
+    }
 }

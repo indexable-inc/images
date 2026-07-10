@@ -355,13 +355,13 @@ impl App {
         let Some(win) = self.win.as_mut() else {
             return;
         };
-        let (dx, dy) = overlay_core::scroll_drag_delta(delta, win.window.scale_factor());
         // Move the window live on each event. `ocwin::suppress_scroll_momentum`
         // drops the macOS momentum coast upstream, so this only sees the physical
         // finger drag (and the book stops on lift). `self_set` tracks where the
         // window sits and is set after create; measure the scroll from there.
-        if (dx != 0.0 || dy != 0.0) && let Some(cur) = win.self_set {
-            let np = LogicalPosition::new(cur.x + dx, cur.y + dy);
+        if let Some(np) =
+            overlay_core::scroll_drag_position(win.self_set, delta, win.window.scale_factor())
+        {
             win.self_set = Some(np);
             // Move the window AND warp the pointer with it, so the pointer stays on
             // the book like a press-drag rather than the book sliding out from under it.
@@ -374,8 +374,7 @@ impl App {
         // connection per frame on the UI thread. The finger lift carries
         // `TouchPhase::Ended`; a discrete wheel notch (`LineDelta`) has no Ended
         // phase but is low-frequency, so save it directly.
-        let settle = phase == TouchPhase::Ended || matches!(delta, MouseScrollDelta::LineDelta(..));
-        if settle
+        if overlay_core::scroll_drag_settled(delta, phase)
             && let Some(pos) = win.self_set
             && let Err(e) = db::set_position(&self.db, DVec2::new(pos.x, pos.y))
         {

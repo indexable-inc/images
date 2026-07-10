@@ -1,171 +1,49 @@
 use super::rust;
 
 #[test]
-fn test_both_add_statements_same_function() {
-    let base = r"fn process() {
-    let x = 1;
-}
-";
+fn independent_edits_merge() {
+    let cases: &[(&str, &str, &str, &str, &[&str])] = &[
+        (
+            "statements in one function",
+            "fn process() {\n    let x = 1;\n}\n",
+            "fn process() {\n    let x = 1;\n    let left_var = \"from left\";\n}\n",
+            "fn process() {\n    let x = 1;\n    let right_var = \"from right\";\n}\n",
+            &["left_var", "right_var"],
+        ),
+        (
+            "different struct fields",
+            "struct Config {\n    name: String,\n    value: i32,\n    enabled: bool,\n}\n",
+            "struct Config {\n    name: String,\n    value: i64,\n    enabled: bool,\n}\n",
+            "struct Config {\n    name: String,\n    value: i32,\n    enabled: Option<bool>,\n}\n",
+            &["value: i64", "enabled: Option<bool>"],
+        ),
+        (
+            "different methods",
+            "impl Foo {\n    fn method_a(&self) { println!(\"a\"); }\n    fn method_b(&self) { println!(\"b\"); }\n}\n",
+            "impl Foo {\n    fn method_a(&self) { println!(\"a modified by left\"); }\n    fn method_b(&self) { println!(\"b\"); }\n}\n",
+            "impl Foo {\n    fn method_a(&self) { println!(\"a\"); }\n    fn method_b(&self) { println!(\"b modified by right\"); }\n}\n",
+            &["a modified by left", "b modified by right"],
+        ),
+        (
+            "imports",
+            "use std::io;\n\nfn main() {}\n",
+            "use std::io;\nuse std::fs;\n\nfn main() {}\n",
+            "use std::io;\nuse std::path;\n\nfn main() {}\n",
+            &["use std::fs;", "use std::path;"],
+        ),
+    ];
 
-    let left = r#"fn process() {
-    let x = 1;
-    let left_var = "from left";
-}
-"#;
-
-    let right = r#"fn process() {
-    let x = 1;
-    let right_var = "from right";
-}
-"#;
-
-    let result = rust(base, left, right);
-    assert!(
-        result.success,
-        "should merge both additions to same function: {}",
-        result.content
-    );
-    assert!(
-        result.content.contains("left_var"),
-        "should have left's addition: {}",
-        result.content
-    );
-    assert!(
-        result.content.contains("right_var"),
-        "should have right's addition: {}",
-        result.content
-    );
-}
-
-#[test]
-fn test_nested_struct_fields() {
-    let base = r"struct Config {
-    name: String,
-    value: i32,
-    enabled: bool,
-}
-";
-
-    let left = r"struct Config {
-    name: String,
-    value: i64,
-    enabled: bool,
-}
-";
-
-    let right = r"struct Config {
-    name: String,
-    value: i32,
-    enabled: Option<bool>,
-}
-";
-
-    let result = rust(base, left, right);
-    assert!(
-        result.success,
-        "should merge different struct field changes: {}",
-        result.content
-    );
-    assert!(
-        result.content.contains("value: i64"),
-        "should have left's field change: {}",
-        result.content
-    );
-    assert!(
-        result.content.contains("enabled: Option<bool>"),
-        "should have right's field change: {}",
-        result.content
-    );
-}
-
-#[test]
-fn test_impl_block_different_methods() {
-    let base = r#"impl Foo {
-    fn method_a(&self) {
-        println!("a");
+    for &(name, base, left, right, expected) in cases {
+        let result = rust(base, left, right);
+        assert!(result.success, "{name}: {}", result.content);
+        for needle in expected {
+            assert!(
+                result.content.contains(needle),
+                "{name}: missing {needle:?} in {}",
+                result.content
+            );
+        }
     }
-
-    fn method_b(&self) {
-        println!("b");
-    }
-}
-"#;
-
-    let left = r#"impl Foo {
-    fn method_a(&self) {
-        println!("a modified by left");
-    }
-
-    fn method_b(&self) {
-        println!("b");
-    }
-}
-"#;
-
-    let right = r#"impl Foo {
-    fn method_a(&self) {
-        println!("a");
-    }
-
-    fn method_b(&self) {
-        println!("b modified by right");
-    }
-}
-"#;
-
-    let result = rust(base, left, right);
-    assert!(
-        result.success,
-        "should merge different method changes in same impl: {}",
-        result.content
-    );
-    assert!(
-        result.content.contains("a modified by left"),
-        "should have left's method_a change: {}",
-        result.content
-    );
-    assert!(
-        result.content.contains("b modified by right"),
-        "should have right's method_b change: {}",
-        result.content
-    );
-}
-
-#[test]
-fn test_reorderable_imports() {
-    let base = r"use std::io;
-
-fn main() {}
-";
-
-    let left = r"use std::io;
-use std::fs;
-
-fn main() {}
-";
-
-    let right = r"use std::io;
-use std::path;
-
-fn main() {}
-";
-
-    let result = rust(base, left, right);
-    assert!(
-        result.success,
-        "should merge different import additions: {}",
-        result.content
-    );
-    assert!(
-        result.content.contains("use std::fs;"),
-        "should have left's import: {}",
-        result.content
-    );
-    assert!(
-        result.content.contains("use std::path;"),
-        "should have right's import: {}",
-        result.content
-    );
 }
 
 /// Regression test: when both sides modify the same function body differently,

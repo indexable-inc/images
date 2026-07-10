@@ -1,30 +1,29 @@
 # Clone-detection config for this repo, consumed by `nix run .#clone`.
-# Thresholds match the ix defaults; the ignore globs drop vendored, generated,
-# build-output, and test-fixture trees so duplication numbers reflect
-# hand-written product code.
+# Build outputs and third-party trees are excluded. Authored tests, fixtures,
+# and snapshots stay in the scan so repeated test setup is subject to the same
+# ratchet as production code.
 min_lines = 8
 min_nodes = 15
+type3 = true
+threshold = 0.95
+sequences = true
+window_size = 15
 ignore = [
     "*/target/*",
     "*/node_modules/*",
     "*/.direnv/*",
     "*/vendored/*",
-    "*/tests/*",
-    "*/test/*",
-    "**/tests.rs",
-    "*/fixtures/*",
-    "*/snapshots/*",
 ]
 
 # Duplication budget consumed by `nix run .#clone` and enforced by the `clone`
 # lint stage. `global_pct` is the ceiling on whole-scan `duplication_pct`
 # (measured over the gated code, i.e. after the ignore globs above are applied).
 #
-# This is a RATCHET: the measured baseline is 0.729%, and this ceiling sits just
+# This is a RATCHET: the measured baseline is 0.842%, and this ceiling sits just
 # above it. Lower it as duplication is removed (re-measure with `nix run .#clone
 # -- . | jq .stats.duplication_pct`). Do NOT raise it without a written reason:
 # raising it silently admits new duplication.
 [budget]
-global_pct = 0.8
+global_pct = 0.85
 diff_pct = 0.0
 diff_base = "origin/main"

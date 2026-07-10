@@ -44,16 +44,12 @@
   # (repo policy). Bump the version/url in pins.json, then `nix run .#update`
   # re-pins the hash.
   pin = ix.pins.loadPin ./pins.json "spark";
-  updateScript =
-    if updateScriptWriter == null
-    then null
-    else
-      ix.pins.mkUpdater {
-        writeNushellApplication = updateScriptWriter;
-        inherit nix;
-        pname = "spark-hive";
-        relPath = "packages/spark/spark-hive/pins.json";
-      };
+  updateScript = ix.pins.mkOptionalUpdater {
+    writeNushellApplication = updateScriptWriter;
+    inherit nix;
+    pname = "spark-hive";
+    relPath = "packages/spark/spark-hive/pins.json";
+  };
 in
   stdenv.mkDerivation (finalAttrs: {
     pname = "spark-hive";

@@ -28,35 +28,31 @@
   # Content-Disposition filename the CDN returns (there is no appcast/manifest);
   # pass a version to pin an exact one. `nix store prefetch-file` downloads the
   # .dmg once and emits the SRI hash the fetcher pins.
-  updateScript =
-    if updateScriptWriter == null
-    then null
-    else
-      updateScriptWriter {
-        name = "dia-update";
-        runtimeInputs = [nix];
-        meta.description = "Refresh packages/dia/manifest.json to a Dia release";
-        text = ''
-          # nu
-          const base = "https://releases.diabrowser.com/release"
+  updateScriptArgs = {
+    name = "dia-update";
+    runtimeInputs = [nix];
+    meta.description = "Refresh packages/dia/manifest.json to a Dia release";
+    text = ''
+      # nu
+      const base = "https://releases.diabrowser.com/release"
 
-          # Run from the repo root: `nix run .#dia.updateScript -- [version]`.
-          def main [version?: string] {
-            let v = ($version | default (
-              http head $"($base)/Dia-latest.dmg"
-              | where name == "content-disposition"
-              | get value.0
-              | parse --regex 'filename="?Dia-(?<v>[^"]+)\.dmg'
-              | get v.0
-            ))
-            let url = $"($base)/Dia-($v).dmg"
-            let hash = (^nix store prefetch-file --json --hash-type sha256 $url | from json | get hash)
-            let out = "packages/dia/manifest.json"
-            { version: $v, hash: $hash } | to json --indent 2 | save --force $out
-            print $"updated ($out) to ($v)"
-          }
-        '';
-      };
+      # Run from the repo root: `nix run .#dia.updateScript -- [version]`.
+      def main [version?: string] {
+        let v = ($version | default (
+          http head $"($base)/Dia-latest.dmg"
+          | where name == "content-disposition"
+          | get value.0
+          | parse --regex 'filename="?Dia-(?<v>[^"]+)\.dmg'
+          | get v.0
+        ))
+        let url = $"($base)/Dia-($v).dmg"
+        let hash = (^nix store prefetch-file --json --hash-type sha256 $url | from json | get hash)
+        let out = "packages/dia/manifest.json"
+        { version: $v, hash: $hash } | to json --indent 2 | save --force $out
+        print $"updated ($out) to ($v)"
+      }
+    '';
+  };
 in
   stdenv.mkDerivation {
     pname = "dia";
@@ -87,8 +83,8 @@ in
       runHook postInstall
     '';
 
-    passthru = lib.optionalAttrs (updateScript != null) {
-      inherit updateScript;
+    passthru = lib.optionalAttrs (updateScriptWriter != null) {
+      updateScript = updateScriptWriter updateScriptArgs;
     };
 
     meta = {

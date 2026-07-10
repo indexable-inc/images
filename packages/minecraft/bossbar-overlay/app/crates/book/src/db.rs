@@ -5,7 +5,6 @@
 
 use std::{
     path::{Path, PathBuf},
-    thread,
     time::Duration,
 };
 
@@ -116,47 +115,14 @@ pub fn read_once(path: &Path) -> rusqlite::Result<Book> {
 
 /// Background loop: re-read the book whenever the DB changes and hand it to
 /// `sink`. Exits as soon as `sink` returns `false` (the window closed).
-pub fn spawn_watcher<F>(db: PathBuf, mut sink: F)
-where
-    F: FnMut(Book) -> bool + Send + 'static,
-{
-    thread::spawn(move || {
-        let mut conn = match open(&db) {
-            Ok(c) => Some(c),
-            Err(e) => {
-                eprintln!("book-overlay: failed to open {}: {e}", db.display());
-                None
-            }
-        };
-        let mut last_version: Option<i64> = None;
-
-        loop {
-            match conn.as_ref() {
-                Some(c) => match data_version(c) {
-                    Ok(v) if Some(v) != last_version => {
-                        last_version = Some(v);
-                        match read(c) {
-                            Ok(book) => {
-                                if !sink(book) {
-                                    return;
-                                }
-                            }
-                            Err(e) => eprintln!("book-overlay: read failed: {e}"),
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        eprintln!("book-overlay: poll failed, reopening: {e}");
-                        conn = None;
-                        last_version = None;
-                    }
-                },
-                None => conn = open(&db).ok(),
-            }
-            thread::sleep(POLL);
-        }
-    });
-}
+overlay_core::define_data_watcher!(
+    Book,
+    POLL,
+    "book-overlay",
+    open,
+    data_version,
+    read
+);
 
 #[cfg(test)]
 mod tests {

@@ -85,72 +85,69 @@ pub fn slice_2d(lines: &[String], row_range: RowRange, col_range: ColRange) -> R
 }
 
 fn validate_row_range(from: usize, to: usize, total_lines: usize) -> Result<()> {
-    if from == 0 {
-        return Err(Error::InvalidRowRange {
-            message: "row-from must be >= 1 (1-indexed)".into(),
-        });
-    }
-
-    if to == 0 {
-        return Err(Error::InvalidRowRange {
-            message: "row-to must be >= 1 (1-indexed)".into(),
-        });
-    }
-
-    if from > to {
-        return Err(Error::InvalidRowRange {
-            message: format!("row-from ({from}) must be <= row-to ({to})"),
-        });
-    }
-
-    if from > total_lines {
-        return Err(Error::RowIndexOutOfBounds {
-            index: from,
-            total_lines,
-        });
-    }
-
-    if to > total_lines {
-        return Err(Error::RowIndexOutOfBounds {
-            index: to,
-            total_lines,
-        });
-    }
-
-    Ok(())
+    validate_range(from, to, RangeAxis::Row { total_lines })
 }
 
 fn validate_col_range(from: usize, to: usize, line_len: usize) -> Result<()> {
+    validate_range(from, to, RangeAxis::Col { line_len })
+}
+
+#[derive(Clone, Copy)]
+enum RangeAxis {
+    Row { total_lines: usize },
+    Col { line_len: usize },
+}
+
+impl RangeAxis {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Row { .. } => "row",
+            Self::Col { .. } => "col",
+        }
+    }
+
+    const fn length(self) -> usize {
+        match self {
+            Self::Row { total_lines } => total_lines,
+            Self::Col { line_len } => line_len,
+        }
+    }
+
+    fn invalid(self, message: String) -> Error {
+        match self {
+            Self::Row { .. } => Error::InvalidRowRange { message },
+            Self::Col { .. } => Error::InvalidColRange { message },
+        }
+    }
+
+    const fn out_of_bounds(self, index: usize) -> Error {
+        match self {
+            Self::Row { total_lines } => Error::RowIndexOutOfBounds { index, total_lines },
+            Self::Col { line_len } => Error::ColIndexOutOfBounds { index, line_len },
+        }
+    }
+}
+
+fn validate_range(from: usize, to: usize, axis: RangeAxis) -> Result<()> {
+    let name = axis.name();
     if from == 0 {
-        return Err(Error::InvalidColRange {
-            message: "col-from must be >= 1 (1-indexed)".into(),
-        });
+        return Err(axis.invalid(format!("{name}-from must be >= 1 (1-indexed)")));
     }
 
     if to == 0 {
-        return Err(Error::InvalidColRange {
-            message: "col-to must be >= 1 (1-indexed)".into(),
-        });
+        return Err(axis.invalid(format!("{name}-to must be >= 1 (1-indexed)")));
     }
 
     if from > to {
-        return Err(Error::InvalidColRange {
-            message: format!("col-from ({from}) must be <= col-to ({to})"),
-        });
+        return Err(axis.invalid(format!("{name}-from ({from}) must be <= {name}-to ({to})")));
     }
 
-    if from > line_len {
-        return Err(Error::ColIndexOutOfBounds {
-            index: from,
-            line_len,
-        });
+    if from > axis.length() {
+        return Err(axis.out_of_bounds(from));
     }
 
-    if to > line_len {
-        return Err(Error::ColIndexOutOfBounds {
-            index: to,
-            line_len,
-        });
+    if to > axis.length() {
+        return Err(axis.out_of_bounds(to));
     }
 
     Ok(())

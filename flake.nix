@@ -460,7 +460,7 @@
         modules = [
           ./users/andrewgazelka/profiles/portable.nix
           (import ./users/andrewgazelka/profiles/development.nix {
-            agentLua = ./modules/profiles/base/nvim/plugins/agent.lua;
+            agentLua = ./modules/profiles/base/nvim/agent.lua;
             configRoot = personalConfigRoot;
           })
           {
@@ -525,7 +525,7 @@
       # runs on. See users/andrewgazelka/home.nix.
       andrewgazelka-portable = ./users/andrewgazelka/profiles/portable.nix;
       andrewgazelka-development = import ./users/andrewgazelka/profiles/development.nix {
-        agentLua = ./modules/profiles/base/nvim/plugins/agent.lua;
+        agentLua = ./modules/profiles/base/nvim/agent.lua;
         configRoot = personalConfigRoot;
       };
       andrewgazelka-workstation = personalWorkstationModule;

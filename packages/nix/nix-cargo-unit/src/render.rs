@@ -3328,6 +3328,44 @@ mod tests {
         }
     }
 
+    fn single_library_graph(pkg_id: &str, name: &str, src_path: &str, edition: &str) -> UnitGraph {
+        serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "units": [{
+                "pkg_id": pkg_id,
+                "target": {
+                    "kind": ["lib"],
+                    "crate_types": ["lib"],
+                    "name": name,
+                    "src_path": src_path,
+                    "edition": edition
+                },
+                "profile": { "name": "release", "opt_level": "3" },
+                "mode": "build",
+                "dependencies": []
+            }],
+            "roots": [0]
+        }))
+        .unwrap()
+    }
+
+    fn render_error(graph: &UnitGraph) -> String {
+        render_units_nix(
+            graph,
+            &RenderOptions {
+                workspace_root: PathBuf::from("/workspace"),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: false,
+                toolchain_id: None,
+                deny_unused_crate_dependencies: false,
+                deny_panics: false,
+            },
+        )
+        .unwrap_err()
+        .to_string()
+    }
+
     #[test]
     fn renders_one_derivation_per_build_unit() {
         let graph: UnitGraph = serde_json::from_str(
@@ -4962,89 +5000,29 @@ version = "4.6.1"
     }
 
     #[test]
-    fn rejects_unscoped_local_sources() {
-        let graph: UnitGraph = serde_json::from_str(
-            r#"{
-              "version": 1,
-              "units": [
-                {
-                  "pkg_id": "path+file:///repo/crates/alpha#alpha@0.1.0",
-                  "target": {
-                    "kind": ["lib"],
-                    "crate_types": ["lib"],
-                    "name": "alpha",
-                    "src_path": "/repo/crates/alpha/src/lib.rs",
-                    "edition": "2024"
-                  },
-                  "profile": { "name": "release", "opt_level": "3" },
-                  "mode": "build",
-                  "dependencies": []
-                }
-              ],
-              "roots": [0]
-            }"#,
-        )
-        .unwrap();
+    fn rejects_sources_without_a_resolvable_owner() {
+        let cases = [
+            (
+                "path+file:///repo/crates/alpha#alpha@0.1.0",
+                "alpha",
+                "/repo/crates/alpha/src/lib.rs",
+                "2024",
+                "outside workspace root",
+            ),
+            (
+                "registry+https://github.com/rust-lang/crates.io-index#itoa@1.0.15",
+                "itoa",
+                "/vendor/itoa-1.0.15/src/lib.rs",
+                "2021",
+                "needs --vendor-root",
+            ),
+        ];
 
-        let error = render_units_nix(
-            &graph,
-            &RenderOptions {
-                workspace_root: PathBuf::from("/workspace"),
-                vendor_root: None,
-                cargo_lock_sources: CargoLockSources::default(),
-                content_addressed: false,
-                toolchain_id: None,
-                deny_unused_crate_dependencies: false,
-                deny_panics: false,
-            },
-        )
-        .unwrap_err()
-        .to_string();
-
-        assert!(error.contains("outside workspace root"));
-    }
-
-    #[test]
-    fn rejects_external_sources_without_vendor_root() {
-        let graph: UnitGraph = serde_json::from_str(
-            r#"{
-              "version": 1,
-              "units": [
-                {
-                  "pkg_id": "registry+https://github.com/rust-lang/crates.io-index#itoa@1.0.15",
-                  "target": {
-                    "kind": ["lib"],
-                    "crate_types": ["lib"],
-                    "name": "itoa",
-                    "src_path": "/vendor/itoa-1.0.15/src/lib.rs",
-                    "edition": "2021"
-                  },
-                  "profile": { "name": "release", "opt_level": "3" },
-                  "mode": "build",
-                  "dependencies": []
-                }
-              ],
-              "roots": [0]
-            }"#,
-        )
-        .unwrap();
-
-        let error = render_units_nix(
-            &graph,
-            &RenderOptions {
-                workspace_root: PathBuf::from("/workspace"),
-                vendor_root: None,
-                cargo_lock_sources: CargoLockSources::default(),
-                content_addressed: false,
-                toolchain_id: None,
-                deny_unused_crate_dependencies: false,
-                deny_panics: false,
-            },
-        )
-        .unwrap_err()
-        .to_string();
-
-        assert!(error.contains("needs --vendor-root"));
+        for (pkg_id, name, source, edition, expected) in cases {
+            let graph = single_library_graph(pkg_id, name, source, edition);
+            let error = render_error(&graph);
+            assert!(error.contains(expected), "{error}");
+        }
     }
 
     #[test]

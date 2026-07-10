@@ -570,6 +570,7 @@
       inherit lib packageRegistry buildPyStrictCheck;
       pkgs = unibindPkgs;
       rustWorkspace = rustWorkspaceFor unibindPkgs;
+      wheelBuilder = paths.root + "/lib/build/pyo3-wheel.py";
     };
   unibind = unibindFor pkgs;
 

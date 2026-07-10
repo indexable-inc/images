@@ -24,11 +24,12 @@ pub mod gesture;
 pub mod gpu;
 pub mod menu;
 pub mod snapshot;
+pub mod watch;
 pub mod window;
 
 pub use anim::HoverAnim;
 pub use bitmap_font::BitmapFont;
-pub use gesture::{scroll_drag_delta, DragClick};
+pub use gesture::{scroll_drag_delta, scroll_drag_position, scroll_drag_settled, DragClick};
 pub use gpu::{Gpu, Quad, TexHandle, SHADOW};
 
 // Re-export the heavy deps so consumers name the exact versions this workspace

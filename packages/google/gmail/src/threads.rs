@@ -18,6 +18,14 @@ struct ThreadsPage {
     next_page_token: Option<String>,
 }
 
+impl crate::ListPage for ThreadsPage {
+    type Item = ThreadStub;
+
+    fn into_parts(self) -> (Vec<Self::Item>, Option<String>) {
+        (self.threads, self.next_page_token)
+    }
+}
+
 /// `threads.list` returns only thread ids and snippets on the page; the
 /// caller fetches messages by calling `get_thread`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,44 +47,8 @@ impl Client {
     /// # Errors
     /// Returns auth, transport, or API errors.
     pub async fn list_threads(&self, query: &MessageQuery) -> Result<Vec<ThreadStub>> {
-        let mut out: Vec<ThreadStub> = Vec::new();
-        let mut page_token: Option<String> = None;
-
-        while out.len() < query.max_results {
-            let remaining = query.max_results - out.len();
-            let mut url = self.user_url(["threads"]);
-            {
-                let mut pairs = url.query_pairs_mut();
-                pairs.append_pair(
-                    "maxResults",
-                    &remaining.min(crate::MAX_PAGE_SIZE).to_string(),
-                );
-                if query.include_spam_trash {
-                    pairs.append_pair("includeSpamTrash", "true");
-                }
-                if let Some(q) = &query.q {
-                    pairs.append_pair("q", q);
-                }
-                for label in &query.label_ids {
-                    pairs.append_pair("labelIds", label);
-                }
-                if let Some(next) = &page_token {
-                    pairs.append_pair("pageToken", next);
-                }
-            }
-
-            let response = self.get(url).await?.send().await.context(HttpSnafu)?;
-            let page: ThreadsPage = decode(response).await?;
-            out.extend(page.threads);
-
-            match page.next_page_token {
-                Some(next) if out.len() < query.max_results => page_token = Some(next),
-                _ => break,
-            }
-        }
-
-        out.truncate(query.max_results);
-        Ok(out)
+        self.list_message_resources::<ThreadsPage>("threads", query)
+            .await
     }
 
     /// Fetch one thread (with messages) by id.
