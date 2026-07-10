@@ -20,23 +20,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Install Determinate Nix
-        uses: DeterminateSystems/determinate-nix-action@9adf02b41cfdac2632e1c16f0480ff5bf3b05dd6 # v3
-        with:
-          extra-conf: |
-            accept-flake-config = true
-
-      - name: Set up Cachix
-        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
-        with:
-          name: indexable-inc
-          authToken: ${{ github.event_name == 'push' && secrets.CACHIX_AUTH_TOKEN || '' }}
+        uses: ./.github/actions/install-nix
 
       - name: Build site
         run: nix build .#site -L
 
+      # The site's closure is published to cache.ix.dev by the dedicated
+      # cache-push.yml workflow (which pushes the full `packages.x86_64-linux`
+      # build closure, a superset of this site's runtime closure), so Pages no
+      # longer pushes to the cache itself. See indexable-inc/index#1639.
       - name: Prepare Pages artifact
         run: |
           mkdir -p site-dist

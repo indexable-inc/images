@@ -1,0 +1,9 @@
+{
+  "name": "@ix/wrangler-cli",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Lockfile pin for the wrangler CLI. nixpkgs builds wrangler from source, which fails on darwin (tsup EBADF during the DTS build); the npm package ships prebuilt dist/, so installing it via importNpmLock sidesteps the compile entirely.",
+  "dependencies": {
+    "wrangler": "4.100.0"
+  }
+}

@@ -1,0 +1,23 @@
+# A tiny static page built from three effects:
+# cmd.run -> html.render -> file.write.
+
+let title = "hello from efx"
+let accent = "#2a78d6"
+
+effect stamp "cmd.run" {
+  command = "echo built by the efx demo"
+}
+
+# `{title}` / `{accent}` interpolate from the lets at compile time;
+# `{{stamp}}` survives as a literal `{stamp}` for html.render to fill in
+# with the upstream command output at execution time.
+effect page "html.render" {
+  template = "<!doctype html><html><head><meta charset=\"utf-8\"><title>{title}</title></head><body style=\"font-family: system-ui; margin: 4rem\"><h1 style=\"color: {accent}\">{title}</h1><p>{{stamp}}</p></body></html>"
+  stamp = ref("stamp").stdout
+}
+
+effect site "file.write" {
+  @rollback = "remove out/index.html"
+  path = "out/index.html"
+  content = ref("page").html
+}

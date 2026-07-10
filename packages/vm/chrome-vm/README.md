@@ -1,18 +1,23 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="one command boots a Linux guest that screenshots a page with headless Chromium and ships the PNG back over the serial console"></p>
+
 # chrome-vm
 
-Run headless Chromium inside a real Linux VM on a macOS host and get the
-screenshot back, in one command:
+Can a real browser really run inside a VM on your Mac, provably, with one
+command? `chrome-vm` boots headless Chromium inside a real Linux VM on a macOS
+host and gets the screenshot back:
 
 ```sh
 nix run github:indexable-inc/index#chrome-vm
-# or, from a checkout: nix run .#chrome-vm [out.png]
+# or, from a clone (git clone https://github.com/indexable-inc/index):
+nix run .#chrome-vm [out.png]
 ```
 
-It boots an aarch64 Linux guest under [`vmkit`](../vmkit)/libkrun (Hypervisor.framework),
-runs `chromium --headless` against a baked proof page, and opens the PNG the guest
-captured. The page prints the live Chromium user-agent, a fresh timestamp, and a
-canvas gradient drawn by JS, so the screenshot is proof that a real browser ran
-real JS in the guest, not a placeholder.
+It boots an aarch64 Linux guest under [`vmkit`](../vmkit)/libkrun
+(Hypervisor.framework), runs `chromium --headless` against a baked proof page,
+and opens the PNG the guest captured. The page prints the live Chromium
+user-agent, a fresh timestamp, and a canvas gradient drawn by JS, so the
+screenshot is proof that a real browser ran real JS in the guest, not a
+placeholder.
 
 Self-contained: the guest needs no network, no GPU, and no host directory
 sharing. The screenshot travels back as base64 over the guest's serial console,

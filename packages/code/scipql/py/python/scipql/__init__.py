@@ -25,20 +25,40 @@ modules and a rename touches only the real definition and its references::
 
 Results come back as polars DataFrames, like every other bundled kernel module.
 ``index``/``fix``/``rename`` return plain ``str`` (a path, or a unified diff).
-The same engine backs the ``scipql`` CLI.
+The same engine backs the ``scipql`` CLI. Failures raise ``ScipqlError`` (a
+``ValueError``), with ``IndexingError`` / ``SouffleError`` / ``EditError``
+subclasses per pipeline stage.
 """
 
 from __future__ import annotations
 
 import polars as pl
 
-from ._scipql import __version__, index
+from ._scipql import (
+    EditError,
+    IndexingError,
+    ScipqlError,
+    SouffleError,
+    __version__,
+    index,
+)
 from ._scipql import facts as _facts
 from ._scipql import fix as _fix
 from ._scipql import query as _query
 from ._scipql import rename as _rename
 
-__all__ = ["__version__", "facts", "fix", "index", "query", "rename"]
+__all__ = [
+    "EditError",
+    "IndexingError",
+    "ScipqlError",
+    "SouffleError",
+    "__version__",
+    "facts",
+    "fix",
+    "index",
+    "query",
+    "rename",
+]
 
 # A polars dtype as `pl.DataFrame(schema=...)` accepts it: the class (`pl.Utf8`)
 # or an instance. The schema tables below hold the classes.
@@ -67,14 +87,28 @@ def facts(index_path: str, root: str | None = None) -> dict[str, pl.DataFrame]:
     the index's project root.
     """
     raw = _facts(index_path, root)
-    # Pair each relation's row list (typed per-key on the `Facts` TypedDict) with
-    # its schema. Listed explicitly rather than indexed by a dynamic name so the
-    # rows keep their precise row-dict type instead of widening to `object`.
+    # The binding returns native record classes; flatten each relation back to
+    # row dicts, listed explicitly so every field keeps its precise type.
     relations: dict[str, list[dict[str, object]]] = {
-        "occurrence": [dict(row) for row in raw["occurrence"]],
-        "symbol_info": [dict(row) for row in raw["symbol_info"]],
-        "document": [dict(row) for row in raw["document"]],
-        "relationship": [dict(row) for row in raw["relationship"]],
+        "occurrence": [
+            {
+                "symbol": row.symbol,
+                "path": row.path,
+                "start": row.start,
+                "end": row.end,
+                "role": row.role,
+            }
+            for row in raw.occurrence
+        ],
+        "symbol_info": [
+            {"symbol": row.symbol, "kind": row.kind, "display_name": row.display_name}
+            for row in raw.symbol_info
+        ],
+        "document": [{"path": row.path} for row in raw.document],
+        "relationship": [
+            {"symbol": row.symbol, "related": row.related, "kind": row.kind}
+            for row in raw.relationship
+        ],
     }
     return {
         name: pl.DataFrame(relations[name], schema=schema)
@@ -90,10 +124,9 @@ def query(index_path: str, program: str, root: str | None = None) -> dict[str, p
     """
     out: dict[str, pl.DataFrame] = {}
     for name, relation in _query(index_path, program, root).items():
-        columns = relation["columns"]
         out[name] = pl.DataFrame(
-            relation["rows"],
-            schema=dict.fromkeys(columns, pl.Utf8),
+            relation.rows,
+            schema=dict.fromkeys(relation.columns, pl.Utf8),
         )
     return out
 

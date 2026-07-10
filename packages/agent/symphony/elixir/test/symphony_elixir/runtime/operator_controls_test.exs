@@ -7,12 +7,16 @@ defmodule SymphonyElixir.Runtime.OperatorControlsTest do
   use ExUnit.Case, async: false
 
   alias SymphonyElixir.Engine.Envelope
-  alias SymphonyElixir.IR.{Graph, Node, RunGraph, Store}
+  alias SymphonyElixir.IR.Graph
+  alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.IR.RunGraph
+  alias SymphonyElixir.IR.Store
   alias SymphonyElixir.Runtime
 
   @moduletag capture_log: true
 
   defmodule FakeEngine do
+    @moduledoc false
     @behaviour SymphonyElixir.Runtime.EngineClient
 
     @table :operator_controls_fake
@@ -68,7 +72,7 @@ defmodule SymphonyElixir.Runtime.OperatorControlsTest do
   defp chain_graph(run_id) do
     a = agent_node("a")
     b = agent_node("b", %{"x" => {:node, "a", []}})
-    RunGraph.new(run_id, "hash", nil) |> RunGraph.put_nodes([a, b]) |> Map.put(:status, :running)
+    run_id |> RunGraph.new("hash", nil) |> RunGraph.put_nodes([a, b]) |> Map.put(:status, :running)
   end
 
   defp wait_terminal(run_id, store_opts, attempts \\ 40) do
@@ -131,7 +135,7 @@ defmodule SymphonyElixir.Runtime.OperatorControlsTest do
     # A single independent node so the surgical retry can drive the run to a
     # clean terminal without an upstream_failed dependent lingering.
     node = agent_node("a")
-    graph = RunGraph.new("run_retry", "hash", nil) |> RunGraph.put_nodes([node]) |> Map.put(:status, :running)
+    graph = "run_retry" |> RunGraph.new("hash", nil) |> RunGraph.put_nodes([node]) |> Map.put(:status, :running)
 
     FakeEngine.program("a", {:error, :nope})
     {:ok, pid} = Runtime.start_link(graph, engine: FakeEngine, store_opts: store_opts)
@@ -151,7 +155,8 @@ defmodule SymphonyElixir.Runtime.OperatorControlsTest do
 
   test "audit log survives a store round-trip", %{store_opts: store_opts} do
     graph =
-      chain_graph("run_audit_rt")
+      "run_audit_rt"
+      |> chain_graph()
       |> RunGraph.append_audit(:clear_failed, nil, "dave", %{cleared: ["a"]})
       |> RunGraph.append_audit(:cancel, "b", :system, %{})
 

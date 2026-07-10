@@ -29,10 +29,12 @@ restates a tool by hand.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
 import os
+import re
 import uuid
 import weakref
 from typing import Annotated
@@ -44,17 +46,17 @@ from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData
 from pydantic import AnyUrl, Field
 
-from . import guide, outputs, resources_bridge
-from .config import config
+from . import guide, mailbox, mcp_ui, outputs, resources_bridge, store
+from .config import config, server_version
 from .kernel import current_kernel
 
 logger = logging.getLogger(__name__)
 
 # Order matters: clients truncate long instruction blocks from the tail, and a
 # 2026-06-10 session showed exactly that failure: the cut landed inside JOBS, so
-# NO_SHELL and POLARS never reached the model and it shelled out ls/grep and
-# scraped TSV all session. The rules that shape every single call (what to reach
-# for, what shape to return) come first; operational mechanics (job paging,
+# the shell/data rules and POLARS never reached the model and it shelled out
+# ls/grep and scraped TSV all session. The rules that shape every single call
+# (what to reach for, what shape to return) come first; operational mechanics (job paging,
 # blocking, rendering details) follow; the module index and dashboard niceties
 # close. Losing the tail degrades gracefully; losing the head does not.
 _KERNEL_GUIDE = guide.compose(
@@ -63,6 +65,10 @@ _KERNEL_GUIDE = guide.compose(
     guide.NAMESPACE,
     guide.DISCOVER,
     guide.NO_SHELL,
+    guide.NU,
+    guide.NIX,
+    guide.DELEGATE,
+    guide.SSH,
     guide.POLARS,
     guide.RESULT_CONTRACT,
     guide.JOBS,
@@ -78,26 +84,33 @@ _KERNEL_GUIDE = guide.compose(
     guide.RESULT_VARIANTS,
     guide.READABLE,
     guide.CELLS,
+    guide.CHANNEL,
 )
 
 
 mcp = FastMCP("ix-mcp")
 
+# MCP Apps (SEP-1865): the one shared `ui://` viewer resource, plus the
+# `_meta.ui.resourceUri` dict a tool passes as `meta=` to opt in. A host that
+# supports the extension (claude.ai, Claude Desktop) renders an opted-in tool's
+# reply as interactive HTML in the chat; every other host ignores the metadata
+# and sees the exact same content blocks as before. See `mcp_ui`.
+_UI_META = mcp_ui.register_viewer(mcp)
+
 # One short id per live MCP session, keyed weakly by the session object so an id
 # is stable for a client's whole session and the map never pins a closed one.
-_session_ids: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+# Keys are typed `object`: the session is only ever used as an identity key here
+# (see `_http_session`), never through the ServerSession API.
+_session_ids: weakref.WeakKeyDictionary[object, str] = weakref.WeakKeyDictionary()
 
 
-def _session_id(ctx: Context | None) -> str | None:
-    """The kernel-side namespace key for this call's MCP session, or None.
+def _http_session(ctx: Context | None) -> object | None:
+    """This call's live MCP session object under the HTTP transport, else None.
 
     Only the HTTP transport multiplexes several client sessions onto the one
-    shared kernel, so only there does each session get its own namespace (the
-    kernel runtime keys per-session globals on this id -- see
-    ``runtime._session_ns``). The stdio transport serves exactly one client per
-    process: its state stays in the shared user namespace, which is also what
-    session checkpoint/restore (``serve --session FILE``) covers, so that
-    contract is untouched.
+    shared kernel, so only there is the session object a useful key. The stdio
+    transport (and an embedder driving the tools directly, which has no config)
+    serves exactly one client per process, reported here as None.
     """
     try:
         if config().transport != "http":
@@ -106,10 +119,22 @@ def _session_id(ctx: Context | None) -> str | None:
         # No config (an embedder driving the tools directly): single client.
         return None
     try:
-        session = ctx.session if ctx is not None else None
+        return ctx.session if ctx is not None else None
     except ValueError:
         # No request context on this call.
-        session = None
+        return None
+
+
+def _session_id(ctx: Context | None) -> str | None:
+    """The kernel-side namespace key for this call's MCP session, or None.
+
+    Each HTTP session gets its own namespace (the kernel runtime keys
+    per-session globals on this id -- see ``runtime._session_ns``). The stdio
+    transport's state stays in the shared user namespace, which is also what
+    session checkpoint/restore (``serve --session FILE``) covers, so that
+    contract is untouched.
+    """
+    session = _http_session(ctx)
     if session is None:
         return None
     sid = _session_ids.get(session)
@@ -122,6 +147,110 @@ def _session_id(ctx: Context | None) -> str | None:
 # Set once the connecting client has been identified to the kernel, so the
 # session label defaults to it (see runtime.Session). A latch, not per-call work.
 _client_identified = False
+_dashboard_started = False
+# The label each client chose via `session_set_name`. A set label gates the
+# acting tools (a session must name itself once); the labels are what the
+# tailnet `/mesh` endpoint advertises (index#1787), read via `session_names`.
+# HTTP sessions are keyed WEAKLY by the live session object (like
+# `_session_ids` above), so a disconnected client's label vanishes with its
+# session instead of a long-lived `serve --http` advertising it forever
+# (index#1789 review). The one stdio/embedder client has no session object to
+# key on; its label lives in `_solo_session_name` and dies with the process.
+_session_labels: weakref.WeakKeyDictionary[object, str] = weakref.WeakKeyDictionary()
+_session_topics: weakref.WeakKeyDictionary[object, str] = weakref.WeakKeyDictionary()
+_solo_session_name: str | None = None
+_solo_topic: str | None = None
+
+
+def _session_label(ctx: Context | None) -> str | None:
+    """The label this call's session chose, or None until it names itself."""
+    session = _http_session(ctx)
+    if session is None:
+        return _solo_session_name
+    return _session_labels.get(session)
+
+
+def _set_session_label(ctx: Context | None, name: str) -> None:
+    global _solo_session_name
+    session = _http_session(ctx)
+    if session is None:
+        _solo_session_name = name
+    else:
+        _session_labels[session] = name
+
+
+
+
+def _session_topic(ctx: Context | None) -> str | None:
+    """The current fold topic this call's session chose."""
+    session = _http_session(ctx)
+    if session is None:
+        return _solo_topic
+    return _session_topics.get(session)
+
+
+def _set_session_topic(ctx: Context | None, topic: str) -> None:
+    global _solo_topic
+    session = _http_session(ctx)
+    if session is None:
+        _solo_topic = topic
+    else:
+        _session_topics[session] = topic
+
+
+def _topic_required() -> bool:
+    """Whether python_exec requires an explicit topic first."""
+    return os.environ.get("IX_MCP_REQUIRE_TOPIC", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
+def _missing_topic(ctx: Context | None, *, intent: str | None = None) -> str | None:
+    """The topic gate's error message, or None once this session has set one."""
+    if not _topic_required() or _session_topic(ctx) is not None:
+        return None
+    suggestion = f" Suggested topic from this call: {intent!r}." if intent else ""
+    return (
+        "Set a dashboard topic first: call topic_set with a short label for "
+        "the current cluster of related tool calls."
+        f"{suggestion}"
+    )
+
+
+def session_names() -> list[str]:
+    """The labels live MCP sessions gave themselves, for the mesh endpoint.
+
+    Names only, sorted and deduplicated -- never code, outputs, or session
+    keys. Labels set kernel-side (``session.name = ...`` in a cell) bypass this
+    tool-side map and are deliberately not included: the mesh card is the
+    server's own view of its clients (index#1787).
+    """
+    names = set(_session_labels.values())
+    if _solo_session_name:
+        names.add(_solo_session_name)
+    return sorted(names)
+
+
+async def _start_dashboard_once() -> None:
+    """Best-effort first-tool dashboard startup.
+
+    `serve` no longer owns a per-server hub, but a first real tool call is the
+    moment a human expects the website to exist. Reuse the shared singleton so
+    abnormal MCP exits do not leave one orphan hub per server.
+    """
+    global _dashboard_started
+    if _dashboard_started:
+        return
+    _dashboard_started = True
+    try:
+        from .cli import ensure_shared_dashboard
+
+        await asyncio.to_thread(ensure_shared_dashboard, open_browser=False)
+    except Exception:
+        logger.exception("dashboard autostart failed")
 
 
 def _client_label(ctx: Context | None) -> str:
@@ -163,6 +292,53 @@ async def _identify_client_once(ctx: Context | None) -> None:
     _client_identified = True  # latch before awaiting so a concurrent first call skips
     with contextlib.suppress(Exception):  # no kernel yet or transient error: label is a convenience
         await current_kernel().set_client(label)
+
+
+def _session_name_required() -> bool:
+    """Whether acting tools must be preceded by ``session_set_name``."""
+    return os.environ.get("IX_MCP_REQUIRE_SESSION_NAME", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
+def _missing_session_name(ctx: Context | None, *, intent: str | None = None) -> str | None:
+    """The session-name gate's error message, or None once this session is named."""
+    if not _session_name_required() or _session_label(ctx) is not None:
+        return None
+    suggestion = f" Suggested name from this call: {intent!r}." if intent else ""
+    return (
+        "Name this dashboard session first: call session_set_name with a "
+        "short human task label before using acting tools."
+        f"{suggestion}"
+    )
+
+
+async def _require_session_name(ctx: Context | None, *, intent: str | None = None) -> None:
+    """Fail fast until this MCP session has named its dashboard group."""
+    message = _missing_session_name(ctx, intent=intent)
+    if message is not None:
+        raise McpError(ErrorData(code=types.INVALID_REQUEST, message=message))
+
+
+async def _require_acting_gates(ctx: Context | None, *, intent: str | None = None) -> None:
+    """Fail fast until this MCP session has both named itself and set a topic.
+
+    Every unmet gate is reported in the ONE error, so a fresh session satisfies
+    both in a single corrective pass instead of tripping them serially -- one
+    rejected round trip per gate (index#1983)."""
+    missing = [
+        message
+        for message in (
+            _missing_session_name(ctx, intent=intent),
+            _missing_topic(ctx, intent=intent),
+        )
+        if message is not None
+    ]
+    if missing:
+        raise McpError(ErrorData(code=types.INVALID_REQUEST, message=" ".join(missing)))
 
 
 def _first_sentence(text: str) -> str:
@@ -214,13 +390,83 @@ def set_dashboard_url(url: str) -> None:
 _dashboard_url: str | None = None
 
 # Report the build's source revision as the MCP `serverInfo.version` so a client
-# can see exactly which commit of the server it is talking to. The nix wrapper
-# sets `IX_MCP_VERSION` to the flake rev (`<commit>` / `<commit>-dirty` / "dev");
-# FastMCP does not take a version, so stamp the low-level server directly. Absent
-# the env var (a bare `python -m ix_notebook_mcp`) it falls back to "dev".
-mcp._mcp_server.version = os.environ.get("IX_MCP_VERSION") or "dev"
+# can see exactly which commit of the server it is talking to. FastMCP does not
+# take a version, so stamp the low-level server directly. The derivation lives
+# in `config.server_version` so the `/mesh` endpoint reports the same value.
+mcp._mcp_server.version = server_version()
 
 Content = list[outputs.Content]
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Name this MCP connection's dashboard session. Call this before acting "
+        "tools such as python_exec, read, kernel_trace, or tui_act; the name "
+        "should be a short human task label, not code or secrets."
+    ),
+)
+async def session_set_name(
+    name: Annotated[
+        str,
+        Field(
+            description=(
+                "Short human task label for this dashboard session, 3 to 80 "
+                "characters, with no code or secrets"
+            )
+        ),
+    ],
+    ctx: Context | None = None,
+) -> Content:
+    await _start_dashboard_once()
+    await _identify_client_once(ctx)
+    clean = " ".join((name or "").split())
+    if not 3 <= len(clean) <= 80:
+        raise McpError(
+            ErrorData(
+                code=types.INVALID_PARAMS,
+                message="Session name must be 3 to 80 non-whitespace characters.",
+            )
+        )
+    await current_kernel().set_session_name(clean)
+    _set_session_label(ctx, clean)
+    return [outputs.text(f"dashboard session named: {clean}")]
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Set the current dashboard topic for this MCP connection. Call this before "
+        "a related cluster of python_exec calls, and change it when the work moves "
+        "to a new phase; runs fold under the topic inside the session."
+    ),
+)
+async def topic_set(
+    topic: Annotated[
+        str,
+        Field(
+            description=(
+                "Short label for the current cluster of related tool calls, 3 to "
+                "80 characters, with no code or secrets"
+            )
+        ),
+    ],
+    ctx: Context | None = None,
+) -> Content:
+    await _start_dashboard_once()
+    await _identify_client_once(ctx)
+    await _require_session_name(ctx, intent=topic)
+    clean = " ".join((topic or "").split())
+    if not 3 <= len(clean) <= 80:
+        raise McpError(
+            ErrorData(
+                code=types.INVALID_PARAMS,
+                message="Topic must be 3 to 80 non-whitespace characters.",
+            )
+        )
+    await current_kernel().set_topic(clean)
+    _set_session_topic(ctx, clean)
+    return [outputs.text(f"dashboard topic set: {clean}")]
 
 
 # Every tool sets structured_output=False: FastMCP otherwise derives an output
@@ -229,14 +475,22 @@ Content = list[outputs.Content]
 # as a real image, once as a wall of base64-in-text), which is what kept
 # blowing the host's per-result token cap. The content blocks ARE the reply;
 # there is no structured consumer.
+#
+# The UI-enabled tools return a `CallToolResult` built by `mcp_ui.ui_result`:
+# the same content blocks, with the run's human HTML riding in `_meta` for an
+# MCP Apps host's view. FastMCP passes a returned CallToolResult through
+# verbatim, and `structured_output=False` keeps the return annotation out of
+# schema derivation, so nothing about the model-facing reply changes.
 @mcp.tool(
     structured_output=False,
+    meta=_UI_META,
     description=guide.compose(
         guide.PYEXEC_INTRO,
         guide.PAGING,
         guide.NAMESPACE,
         guide.BLOCKING,
         guide.RESULT_CONTRACT,
+        guide.PR_WATCH,
         guide.SEE_INSTRUCTIONS,
     ),
 )
@@ -245,8 +499,10 @@ async def python_exec(
     intent: Annotated[str, Field(description="Required. A short plain-language description of what this run does, e.g. 'count rows per host' or 'fetch and parse the open PR list'. It titles the run's card in the dashboard feed (grouped under your session) so a human watching can follow your work — never the raw code. Keep it under ~8 words.")],
     budget: Annotated[float, Field(description="Seconds to wait before backgrounding the run (server-side cap: 120s; larger values are clamped and a notice is appended to the reply)")] = 15.0,
     ctx: Context | None = None,
-) -> Content:
+) -> types.CallToolResult:
+    await _start_dashboard_once()
     await _identify_client_once(ctx)
+    await _require_acting_gates(ctx, intent=intent)
     # A foreground budget is how long the run holds the one shared shell channel
     # before it backgrounds, so cap it: a giant budget (a 15-minute `await
     # jobs[...]`) would block every other call behind it. The clamp is surfaced
@@ -255,12 +511,35 @@ async def python_exec(
     effective_budget = min(budget, cap)
     # `intent` is the run's human label (the dashboard feed's title); it flows to
     # the kernel as the job name and lands in the store's `name` column.
-    cell_outputs, summary = await current_kernel().python_exec(
-        code, effective_budget, intent, session=_session_id(ctx)
-    )
+    sid = _session_id(ctx)
+    kernel = current_kernel()
+    try:
+        cell_outputs, summary = await kernel.python_exec(
+            code, effective_budget, intent, session=sid, topic=_session_topic(ctx)
+        )
+    except asyncio.CancelledError:
+        # The client cancelled this in-flight call (`notifications/cancelled` or a
+        # transport abort; the MCP SDK cancels this handler's request scope, which
+        # surfaces here as CancelledError). Without this the kernel job the call
+        # launched keeps running in the background and executes its side effects
+        # AFTER the caller abandoned it -- the permission-gate bypass in
+        # index#2387. Interrupt that job on the same path an explicit
+        # `jobs['<id>'].cancel()` takes, then re-raise so the cancellation still
+        # propagates. `shield` keeps the cancel poke itself from being torn down
+        # by the very cancellation we are handling. Note: Claude Code does not
+        # signal a USER REJECTION of an in-flight call, so this fires for
+        # spec-compliant cancels and Claude Code's own request timeout, not for a
+        # rejected prompt (documented in guide.CANCELLATION_NOTE).
+        with contextlib.suppress(Exception):  # best-effort: a cancel-time hiccup must not swallow the re-raise
+            await asyncio.shield(kernel.cancel_running(sid))
+        raise
     rendered = outputs.to_mcp(cell_outputs)
+    # The human view for an MCP Apps host: the same text/html fragments the
+    # dashboard and room render for this run, carried on the reply's `_meta`
+    # (host/view plumbing, never model context -- see mcp_ui).
+    ui_fragments = mcp_ui.html_fragments(cell_outputs)
     if summary is None:
-        return rendered
+        return mcp_ui.ui_result(rendered, fragments=ui_fragments, title=intent)
     header = outputs.text(
         json.dumps(
             {
@@ -317,7 +596,85 @@ async def python_exec(
                 f"stdout, jobs['{job_id}'].result the value; history() lists recent runs.]"
             )
         )
-    return parts
+    # The run's live weave view (minted kernel-side when the result had a
+    # human HTML view; see store.save_tool_view) rides the summary so a
+    # weave-aware host can resolve it from the result's `_meta`.
+    return mcp_ui.ui_result(parts, fragments=ui_fragments, title=intent, weave_view=summary.get("weave_view"))
+
+
+@mcp.tool(
+    structured_output=False,
+    meta=_UI_META,
+    description=(
+        "Watch a GitHub pull request in the dashboard. Creates a live PR resource "
+        "nested under this task, lists required checks and actions with elapsed "
+        "time, enables auto merge by default, and notifies the CLI when the PR "
+        "merges, fails, or times out. When the PR is already mergeable (no "
+        "blocking required checks), auto merge is NOT armed, since arming would "
+        "merge instantly before any watching: the result says so, and the caller "
+        "merges explicitly once its own validation is green. Use this instead of "
+        "hand-written PR polling."
+    ),
+)
+async def pr_watch(
+    pr: Annotated[
+        str,
+        Field(description="PR number, URL, or branch understood by gh, for example 1856."),
+    ],
+    cwd: Annotated[
+        str,
+        Field(description="Repository worktree where gh should run."),
+    ],
+    *,
+    auto_merge: Annotated[
+        bool,
+        Field(description="Enable gh auto merge for this PR before watching."),
+    ] = True,
+    interval: Annotated[
+        float,
+        Field(description="Seconds between GitHub status refreshes."),
+    ] = 15.0,
+    timeout: Annotated[
+        float,
+        Field(description="Seconds to watch before the resource closes as timed out."),
+    ] = 3600.0,
+    ctx: Context | None = None,
+) -> types.CallToolResult:
+    await _start_dashboard_once()
+    await _identify_client_once(ctx)
+    await _require_acting_gates(ctx, intent=f"watch PR {pr}")
+    code = (
+        "await watch_pr("
+        f"{pr!r}, cwd={cwd!r}, auto_merge={auto_merge!r}, "
+        f"interval={interval!r}, timeout={timeout!r}"
+        ")"
+    )
+    cell_outputs, summary = await current_kernel().python_exec(
+        code,
+        min(5.0, config().max_budget),
+        f"watch PR {pr}",
+        session=_session_id(ctx),
+        topic=_session_topic(ctx),
+    )
+    rendered = outputs.to_mcp(cell_outputs)
+    resource = f"pr-{re.sub(r'[^A-Za-z0-9._-]+', '-', str(pr)).strip('-')}"
+    header = outputs.text(
+        json.dumps(
+            {
+                "job": summary.get("id") if summary else None,
+                "status": summary.get("status") if summary else None,
+                "running": summary.get("running") if summary else None,
+                "elapsed_s": summary.get("elapsed_s") if summary else None,
+                "resource": resource,
+            }
+        )
+    )
+    return mcp_ui.ui_result(
+        [header, *(item for item in rendered if getattr(item, "text", None) != "(no output)")],
+        fragments=mcp_ui.html_fragments(cell_outputs),
+        title=f"watch PR {pr}",
+        weave_view=summary.get("weave_view") if summary else None,
+    )
 
 
 @mcp.tool(structured_output=False, description=guide.READ)
@@ -335,7 +692,9 @@ async def read(
     end: Annotated[int | None, Field(description="Last line to include (inclusive)")] = None,
     ctx: Context | None = None,
 ) -> Content:
+    await _start_dashboard_once()
     await _identify_client_once(ctx)
+    await _require_session_name(ctx, intent=f"read {target}")
     sid = _session_id(ctx)
     code = f"await __ix_read({target!r}, {start!r}, {end!r}, session={sid!r})"
     # Title the run by what it reads (with the line span when given) so its card
@@ -343,16 +702,112 @@ async def read(
     span = f":{start}-{end}" if start is not None and end is not None else (f":{start}" if start is not None else "")
     name = f"read {target}{span}"
     cell_outputs, summary = await current_kernel().python_exec(code, budget=30.0, name=name, session=sid)
-    if summary is not None and summary.get("status") == "error" and summary.get("error"):
+    status = summary.get("status") if summary is not None else None
+    if summary is not None and status == "error" and summary.get("error"):
+        # The in-kernel read itself raised (bad expression, unreadable path):
+        # the traceback is the useful answer, so return it as the content.
         return [outputs.text(summary["error"])]
+    if summary is not None and status == "wedged":
+        # The kernel bridge could not execute the read: a wedged cell holds the
+        # kernel's one event loop, so nothing was read. Fail loudly -- a quiet
+        # empty reply here is indistinguishable from reading an empty file, and
+        # was misread exactly that way (index#2381).
+        raise McpError(
+            ErrorData(
+                code=types.INTERNAL_ERROR,
+                message=(
+                    f"read {target}: kernel unavailable, nothing was read. "
+                    + str(summary.get("error") or "The kernel did not respond.")
+                ),
+            )
+        )
     rendered = outputs.to_mcp(cell_outputs)
     content = [item for item in rendered if getattr(item, "text", None) != "(no output)"]
-    return content or rendered
+    if content:
+        return content
+    if status == "done":
+        # The read COMPLETED and produced no text: the file or value is
+        # genuinely empty. Only this state may report emptiness (index#2381).
+        return rendered
+    if status == "running" and summary is not None and summary.get("id"):
+        # The kernel is healthy but the read outlived its foreground budget
+        # (a slow expression, a giant file): point at the live job instead of
+        # posing as empty output.
+        job_id = summary["id"]
+        return [
+            outputs.text(
+                f"[read {target} is still running as jobs[{job_id!r}] after its 30s "
+                f"foreground budget; await or page it via python_exec.]"
+            )
+        ]
+    # No output and no completed job summary: the in-kernel runtime never ran
+    # the read (dead bridge, cancelled run, stale build). Never report this as
+    # empty success (index#2381).
+    raise McpError(
+        ErrorData(
+            code=types.INTERNAL_ERROR,
+            message=(
+                f"read {target}: kernel unavailable, nothing was read "
+                "(the read produced no output and no completed job summary"
+                + (f"; status {status!r}" if status is not None else "")
+                + ")."
+            ),
+        )
+    )
 
 
 @mcp.tool(structured_output=False, description=guide.TRACE)
-async def kernel_trace() -> str:
+async def kernel_trace(ctx: Context | None = None) -> str:
+    await _start_dashboard_once()
+    await _identify_client_once(ctx)
+    await _require_session_name(ctx, intent="kernel trace")
     return await current_kernel().dump_trace()
+
+
+@mcp.tool(structured_output=False, description=guide.RESTART)
+async def kernel_restart(ctx: Context | None = None) -> str:
+    await _start_dashboard_once()
+    await _identify_client_once(ctx)
+    await _require_session_name(ctx, intent="kernel restart")
+    return json.dumps(await current_kernel().restart_now())
+
+
+# The reply tool runs in the serve process, so it writes directly to the
+# tier-3 mailbox singleton instead of round-tripping through the data API.
+
+
+@mcp.tool(structured_output=False, description=guide.REPLY)
+async def reply(
+    resource: Annotated[
+        str,
+        Field(description='The resource id from the channel event\'s resource="..." attribute'),
+    ],
+    text: Annotated[str, Field(description="The message to show on that resource's page")],
+    ctx: Context | None = None,
+) -> Content:
+    await _start_dashboard_once()
+    await _identify_client_once(ctx)
+    # Deliberately not gated on session_set_name: a reply answers a channel event
+    # (often the session's very first act) and creates no dashboard run to label.
+    box = mailbox.get_mailbox()
+    # Resource liveness is durable Weave state. If that check is unavailable,
+    # keep reply usable for same-process resources whose events mailbox is live.
+    live = True
+    with contextlib.suppress(Exception):
+        path = config().store_path
+        if path is not None:
+            db = store.AsyncConn(path)
+            live = await db.run(store.resource_live, resource)
+            await db.close()
+    if not live:
+        raise McpError(
+            ErrorData(
+                code=types.INVALID_PARAMS,
+                message=f"no live resource {resource!r}; pass the id from the <channel resource=...> attribute",
+            )
+        )
+    box.add_event(resource=resource, kind="reply", body=json.dumps({"text": text}))
+    return [outputs.text("sent")]
 
 
 # ---------------------------------------------------------------------------
@@ -428,7 +883,10 @@ async def _read_resource_handler(uri: AnyUrl) -> list[ReadResourceContents]:
         resource = None
     if resource is not None:
         content = await resource.read()
-        return [ReadResourceContents(content=content, mime_type=resource.mime_type)]
+        # Pass the resource's `_meta` through (as FastMCP's own read path does):
+        # an MCP Apps `ui://` resource may carry rendering metadata (CSP,
+        # prefersBorder) that the host reads off `resources/read`.
+        return [ReadResourceContents(content=content, mime_type=resource.mime_type, meta=resource.meta)]
     try:
         text, mime = await resources_bridge.read_resource(uri_str)
     except resources_bridge.ResourceNotFoundError as exc:
@@ -439,9 +897,13 @@ async def _read_resource_handler(uri: AnyUrl) -> list[ReadResourceContents]:
 
 
 # Register on the wrapped low-level server (overriding FastMCP's, which the
-# handlers above delegate back to for static resources).
-mcp._mcp_server.list_resources()(_list_resources_handler)
-mcp._mcp_server.read_resource()(_read_resource_handler)
+# handlers above delegate back to for static resources). The mcp SDK defines
+# these decorator factories with no annotations at all, so each call trips
+# disallow-untyped-calls under --strict; the handlers themselves are fully
+# typed and the returned decorators annotate their `func` parameter, so the
+# registration is still checked.
+mcp._mcp_server.list_resources()(_list_resources_handler)  # type: ignore[no-untyped-call]
+mcp._mcp_server.read_resource()(_read_resource_handler)  # type: ignore[no-untyped-call]
 
 
 @mcp.tool(
@@ -454,7 +916,7 @@ mcp._mcp_server.read_resource()(_read_resource_handler)
         "'C-c'). `peer` is an optional full endpoint URL (e.g. "
         "'https://<addr>/rpc') targeting one peer directly; omit it to probe the "
         "configured peers (IX_RESOURCE_PEERS) for the one advertising the uri. "
-        "Bridges to `ix resources act` and degrades clearly when `ix` is absent."
+        "Bridges to `ix-resource-cli act` and degrades clearly when the CLI is absent."
     ),
 )
 async def tui_act(
@@ -466,7 +928,9 @@ async def tui_act(
     ] = None,
     ctx: Context | None = None,
 ) -> Content:
+    await _start_dashboard_once()
     await _identify_client_once(ctx)
+    await _require_session_name(ctx, intent=f"drive {uri}")
     try:
         ack = await resources_bridge.act(uri, send_keys, peer=peer)
     except resources_bridge.ResourceNotFoundError as exc:

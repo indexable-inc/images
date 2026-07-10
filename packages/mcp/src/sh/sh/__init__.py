@@ -1,16 +1,21 @@
-"""Run a shell command on the kernel's async loop and render it two ways.
+"""The kernel's process runner: escape-stripped model text, colored dashboard HTML.
 
-Bundled like ``view``/``fff``/``fleet`` so every session can ``import sh`` with no
-setup. The point: when you genuinely need to shell out (a ``gh``/``git``/``nix``
-invocation with no Python binding), do it without blocking the one shared event
-loop and without leaking terminal escape codes into your own context.
+The public ``sh()`` / ``zsh()`` helpers are **disabled** (issue: retire ``sh`` in
+favour of ``nu``): calling either raises :class:`RuntimeError` naming the
+replacement, so an old transcript that reaches for ``await sh(...)`` fails loudly
+with a migration hint instead of quietly shelling out. The one shell-out path
+agents use is ``await nu('<pipeline>')`` (bundled nushell, structured output);
+external binaries run fine from nushell via ``^cmd``, and for a CLI with a native
+``--json`` mode ``nu`` decodes it end to end.
 
-    import sh
-    out = await sh("gh run list --limit 5")
-    out                       # last expr: dashboard shows the COLORED terminal
-                              # block, you get the escape-stripped plain text
+What remains here is :func:`_exec`, the private async process runner the kernel
+still owns for its own internals (the ripgrep/fd-backed ``grep``/``find``
+helpers, git worktree plumbing) — it is NOT part of the public namespace. It runs
+a child on the kernel's async loop and renders it two ways, without blocking the
+one shared event loop and without leaking terminal escape codes into model
+context.
 
-``sh`` is async (built on :func:`asyncio.create_subprocess_shell`), so it never
+``_exec`` is async (built on :func:`asyncio.create_subprocess_shell`), so it never
 freezes the kernel the way a bare ``subprocess.run`` does. The value it returns is
 an :class:`Output`, which is a ``Result`` subclass: ending a cell with it
 satisfies the kernel's Result contract directly, the human watching the dashboard
@@ -24,8 +29,8 @@ the cursor-movement noise a PTY would inject. Pass ``color=False`` to disable it
 
 The :class:`Output` also exposes the parts programmatically::
 
-    out.code     # exit status (int)
-    out.ok       # out.code == 0
+    out.code     # exit status (int); .exit_code / .returncode are aliases
+    out.ok       # out.code == 0 (also `bool(out)`: a failed Output is falsy)
     out.text     # combined stdout+stderr, escape codes stripped
     out.raw      # the same, with the original ANSI color preserved
     out.cmd      # the command that was run
@@ -33,34 +38,46 @@ The :class:`Output` also exposes the parts programmatically::
     out.json()   # parse out.text as one JSON document
     out.jsonl()  # parse out.text as JSON Lines (one value per line)
 
-For a command that emits structured output, decode it straight into a polars
-DataFrame without a hand-written ``json.loads``::
-
-    import polars as pl
-    prs = (await sh("gh pr list --json number,title,state", cwd=".")).json()
-    pl.DataFrame(prs)
-    # JSON Lines (cargo --message-format json, nix --log-format internal-json) -> .jsonl()
-    msgs = (await sh("cargo build --message-format json", cwd=".")).jsonl()
-
 ``json``/``jsonl`` raise :class:`ShellError` when the command failed, so a broken
-``gh ... --json`` surfaces its real error instead of a confusing decode failure.
+``--json`` invocation surfaces its real error instead of a confusing decode
+failure.
 
 An ``Output`` also behaves like its text for the common string operations
 (``out[-4000:]``, ``out + "..."``, ``"error" in out``, ``len(out)``,
 ``str(out)``), so composing command output needs no ``str(...)`` wrapping.
 
 stdout and stderr are merged in emission order (terminal-style). A non-zero exit
-is surfaced, never swallowed: the model view appends an ``[exit N]`` marker, and
-``await sh(cmd, check=True)`` raises :class:`ShellError` instead of returning.
+is surfaced, never swallowed (issue #1766: a dead 45-minute build once read as
+"still compiling" for 25 minutes because the failure lived only in the output
+text). The model view of a failed Output LEADS with a ``[exit N] command
+failed...`` line and always ENDS with a trailing ``[exit N]`` marker, so both a
+head-read and a tail-read of a long log see the failure; the same line is echoed
+into the streamed job stdout (``jobs['<id>'].output`` / ``.tail()``), so a
+watcher paging a backgrounded build sees the terminal state even when the Output
+value is never bound or rendered; a failed Output is falsy (``if not out:``);
+and ``await _exec(cmd, check=True)`` raises :class:`ShellError` instead of
+returning. ``.text`` stays the command's own output with no markers, so reading
+diagnostics off a failure (or a ``grep`` that legitimately exits 1) is
+unchanged. Everywhere a COMMAND string is rendered (the failure line, the
+ShellError message, the dashboard prompt) it passes through :func:`_redact`
+first: credential shapes (Bearer/Authorization values, ``token=``/``password=``
+style kwargs, known API-key prefixes, over-long opaque blobs) become
+``[redacted:<kind>]``, so a command built from secrets cannot leak them into
+model-visible or stored logs when it fails.
 
 **Never pass prose through shell quoting.** Backticks in a string command are
 run as command substitution by the shell even when the string was produced by
 Python ``repr()`` (the backticks survive the quoting), and a multi-line string
 repr'd as a single-quoted argument loses its newlines (they become literal
 ``\\n``). For any argument that contains prose -- a commit message, a PR body --
-use the argv-list form ``sh(['git', 'commit', '-m', msg])`` so the argument is
+use the argv-list form ``_exec(['git', 'commit', '-m', msg])`` so the argument is
 passed verbatim with no shell parsing, or write the text to a file and use
 ``git commit -F <file>``.
+
+Children read stdin from ``/dev/null`` (issue #1029): ``_exec`` never feeds
+stdin, and an inherited pipe made stdin-sniffing tools misbehave (``op`` parsed
+it as a JSON item template) and stdin-blocking ones hang. Pass ``stdin=`` an
+open file for the rare command that genuinely reads input.
 
 Inside the kernel the child's output also streams to the running cell's stdout
 as it arrives, so it lands in ``jobs['<id>'].output`` live: a long command's log
@@ -71,7 +88,7 @@ process group, never orphaning it.
 Pass ``name=`` to label the job in the dashboard and the ``jobs`` dict, mirroring
 the same parameter on ``python_exec``::
 
-    build = await sh("nix build .#mcp ...", cwd=wt, timeout=600, name="nix-build-mcp")
+    build = await _exec("nix build .#mcp ...", cwd=wt, timeout=600, name="nix-build-mcp")
 """
 
 from __future__ import annotations
@@ -86,10 +103,23 @@ import re
 import shlex
 import signal
 import sys
+import time
+from typing import IO
 
-__all__ = ["Output", "ShellError", "sh"]
+__all__ = ["Output", "ShellError", "sh", "zsh"]
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
+
+# The message every disabled entry point raises. Names the one supported
+# shell-out path (nushell) and how to run an external binary from it, so a stale
+# `await sh(...)` fails loudly with a migration hint rather than a bare NameError.
+_DISABLED_MSG = (
+    "sh() is disabled: use `await nu('<command>')` -- the bundled nushell engine, "
+    "which returns structured output as a polars DataFrame. Run an external binary "
+    "from nushell with `^cmd` (e.g. `await nu('^git status')`), and for a CLI with a "
+    "native --json mode let nushell decode it: `await nu('^gh pr list --json number | "
+    "from json')`. See `api().filter(pl.col('name') == 'nu')`."
+)
 
 # `Result` is the kernel runtime's human/model split. Importing it lets an
 # `Output` BE a Result, so a cell can end with `await sh(...)` and satisfy the
@@ -100,6 +130,7 @@ try:
     from ix_notebook_mcp.runtime import Result as _ResultBase
     from ix_notebook_mcp.runtime import _ANSI, _ansi_to_html, _ix_current, _strip_ansi
     from ix_notebook_mcp.runtime import _rename_current_job
+    from ix_notebook_mcp.runtime import register_resource as _register_resource
 
     _HAS_RESULT = True
 except Exception:  # pragma: no cover - exercised only outside the kernel
@@ -109,6 +140,7 @@ except Exception:  # pragma: no cover - exercised only outside the kernel
     _ResultBase = object
     _HAS_RESULT = False
     _ix_current = None
+    _register_resource = None
     _rename_current_job = None  # type: ignore[assignment]
     # SGR color only; the full escape grammar is the runtime's to own.
     _ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -132,6 +164,8 @@ _COLOR_ENV = {
 }
 
 _MONO = "ui-monospace,SFMono-Regular,Menlo,monospace"
+_RESOURCE_TAIL_CHARS = 160_000
+_resource_counts: dict[str, int] = {}
 
 
 # Local file listing / reading / searching has a bundled, polars-first owner.
@@ -152,25 +186,107 @@ _STRUCTURED_OWNER = {
 }
 
 
+# A pipe into one of these means the command is scraping text apart. The
+# bundled `nu` module owns that shape: a nushell pipeline is structured end to
+# end and lands as a polars frame.
+_TEXT_MUNGERS = re.compile(r"\|\s*(?:jq|awk|sed|cut|tr|sort|uniq|wc)\b")
+
+
 def _structured_hint(cmd: str | list[str]) -> str | None:
     """A redirect hint when ``cmd`` starts with a tool a bundled module owns."""
     if isinstance(cmd, str):
         first = cmd.strip().split(None, 1)[0] if cmd.strip() else ""
     else:
         first = str(cmd[0]) if cmd else ""
-    return _STRUCTURED_OWNER.get(first.rsplit("/", 1)[-1])
+    first = first.rsplit("/", 1)[-1]
+    owner = _STRUCTURED_OWNER.get(first)
+    if owner is not None:
+        return owner
+    # ssh runs the pipeline remotely, where the local nu cannot see the data.
+    if isinstance(cmd, str) and first != "ssh" and _TEXT_MUNGERS.search(cmd):
+        return (
+            "await nu('<pipeline>') runs a structured (nushell) pipeline and returns a "
+            "polars frame -- prefer it over scraping text apart with jq/awk/sed/cut"
+        )
+    return None
+
+
+# Credential shapes scrubbed from any RENDERED command text: the failure line
+# (model view + streamed job stdout), the ShellError message, and the dashboard
+# prompt. A command built from secret values (`curl -H "Authorization: Bearer
+# ..."`) must not leak them into model-visible or stored logs when it fails.
+# Mirrors the ingestion-side table in packages/search/source/meta/src/sanitize.rs:
+# conservative, prefixed, high-precision patterns, each match replaced by
+# `[redacted:<kind>]` (ordered so a recognizable token wins the precise label
+# before the generic header/kwarg catch-alls). The raw command stays available
+# programmatically on ``Output.cmd``; only renders are scrubbed.
+_SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (
+        re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", re.DOTALL),
+        "[redacted:private_key]",
+    ),
+    (re.compile(r"\blin_api_[A-Za-z0-9]+"), "[redacted:linear_api_key]"),
+    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}"), "[redacted:github_token]"),
+    (re.compile(r"\bgithub_pat_[A-Za-z0-9_]+"), "[redacted:github_pat]"),
+    (re.compile(r"\bsk-[A-Za-z0-9_-]{20,}"), "[redacted:sk_api_key]"),
+    (re.compile(r"\bxox[abprs]-[A-Za-z0-9-]+"), "[redacted:slack_token]"),
+    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[redacted:aws_access_key_id]"),
+    (
+        re.compile(r"\beyJ[A-Za-z0-9_-]{40,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"),
+        "[redacted:jwt]",
+    ),
+    (
+        re.compile(r"\bauthorization:\s*(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
+        "[redacted:authorization_header]",
+    ),
+    (
+        re.compile(r"\bauthorization:\s*[A-Za-z0-9._~+/=-]{20,}", re.IGNORECASE),
+        "[redacted:authorization_header]",
+    ),
+    # A bare scheme+token outside a header ("curl -H Bearer <tok>" split across
+    # argv, an env assignment echoed into a command); 16+ chars keeps prose
+    # ("bearer of bad news") out.
+    (re.compile(r"\bbearer\s+[A-Za-z0-9._~+/=-]{16,}", re.IGNORECASE), "[redacted:bearer_token]"),
+    # Generic credential-bearing kwargs/flags: keep the key (the command stays
+    # identifiable and debuggable), drop only the value.
+    (
+        re.compile(r"\b((?:api[_-]?key|access[_-]?key|secret|token|password|passwd|pwd|auth)[=:])\S+", re.IGNORECASE),
+        r"\1[redacted:credential]",
+    ),
+    (
+        re.compile(r"(--?(?:api-?key|access-token|token|secret|password|passwd|auth|bearer)\s+)\S+", re.IGNORECASE),
+        r"\1[redacted:credential]",
+    ),
+]
+
+# Whitespace-free runs longer than this collapse to `[blob N chars]` in rendered
+# command text: an inline base64 payload is both unreadable and a plausible
+# secret the table above has no prefix for. Same threshold as sanitize.rs.
+_BLOB_CHARS = 120
+_BLOB = re.compile(rf"\S{{{_BLOB_CHARS + 1},}}")
+
+
+def _redact(text: str) -> str:
+    """``text`` with credential shapes replaced by ``[redacted:<kind>]`` and
+    over-long opaque tokens collapsed to ``[blob N chars]``. Applied to every
+    rendered command string; never to the command actually executed."""
+    for pattern, replacement in _SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return _BLOB.sub(lambda m: f"[blob {len(m.group())} chars]", text)
 
 
 class ShellError(RuntimeError):
-    """Raised by ``await sh(cmd, check=True)`` when the command exits non-zero.
+    """Raised by ``await _exec(cmd, check=True)`` when the command exits non-zero.
 
     Carries the :class:`Output` so the failing command's text is still
-    inspectable: ``except ShellError as e: print(e.output.text)``.
+    inspectable: ``except ShellError as e: print(e.output.text)``. The message
+    renders the command through :func:`_redact`, so a secret-bearing command
+    cannot leak through a logged/model-visible exception.
     """
 
     def __init__(self, output: Output) -> None:
         self.output = output
-        super().__init__(f"command exited {output.code}: {output.cmd}")
+        super().__init__(f"command exited {output.code}: {_redact(output.cmd)}")
 
 
 class Output(_ResultBase):
@@ -202,43 +318,56 @@ class Output(_ResultBase):
         return self.code == 0
 
     @property
+    def exit_code(self) -> int:
+        """Alias for ``.code``: the child's exit status. Exists so the name a
+        watcher naturally keys on (issue #1766 asked for ``.exit_code``) works
+        without a wasted AttributeError roundtrip."""
+        return self.code
+
+    @property
+    def returncode(self) -> int:
+        """Alias for ``.code``, matching ``subprocess.CompletedProcess``: the
+        conventional attribute name works here too (same rationale as the
+        ``.stdout``/``.stderr`` aliases below)."""
+        return self.code
+
+    @property
     def text(self) -> str:
         """Combined stdout+stderr with ANSI escape codes stripped."""
         return _strip_ansi(self.raw)
 
-    @property
-    def stdout(self) -> str:
-        """Alias for ``.text``: the merged stdout+stderr with ANSI codes stripped.
-
-        Streams are merged in emission order (terminal-style), so there is no
-        separate stderr channel. This alias exists so the conventional
-        subprocess attribute name works without a wasted AttributeError roundtrip;
-        ``.text`` and ``.stdout`` are identical. For separate streams, redirect
-        in the command, e.g. ``await sh("cmd 2>err.txt")`` and read the file.
-        """
+    def _text_alias(self) -> str:
         return self.text
 
-    @property
-    def stderr(self) -> str:
-        """Alias for ``.text``: stdout and stderr are merged in emission order.
+    stdout = property(
+        _text_alias,
+        doc="""Alias for ``.text``: merged stdout+stderr with ANSI stripped.
+
+        Streams are merged in emission order. For separate streams, redirect
+        in the command, e.g. ``await _exec("cmd 2>err.txt")`` and read the file.
+        """,
+    )
+    stderr = property(
+        _text_alias,
+        doc="""Alias for ``.text``: stdout and stderr are merged in emission order.
 
         Returns the same value as ``.stdout`` and ``.text``. The streams cannot
         be separated after the fact; if you need stderr alone, redirect it in
-        the command, e.g. ``await sh("cmd 2>&1 1>/dev/null")``.
-        """
-        return self.text
-
-    @property
-    def output(self) -> str:
-        """Alias for ``.text``, matching ``jobs['<id>'].output`` on a live job.
+        the command, e.g. ``await _exec("cmd 2>&1 1>/dev/null")``.
+        """,
+    )
+    output = property(
+        _text_alias,
+        doc="""Alias for ``.text``, matching ``jobs['<id>'].output`` on a live job.
 
         The docstring above and the kernel instructions teach
         ``jobs['<id>'].output`` as the way to read a run's stdout; this alias
-        makes the direct ``(await sh(...))`` return symmetric so the same
+        makes the direct ``(await _exec(...))`` return symmetric so the same
         attribute works whether the call ran in the foreground or in a tracked
         background job.
-        """
-        return self.text
+        """,
+    )
+    del _text_alias
 
     def lines(self) -> list[str]:
         """The escape-stripped output split into lines (trailing newline dropped)."""
@@ -248,7 +377,7 @@ class Output(_ResultBase):
         """Parse the command's output (``.text``) as a single JSON document.
 
         For a tool with a JSON mode (``gh ... --json``, ``cargo metadata``,
-        ``nix eval --json``): ``(await sh(...)).json()`` hands back the decoded
+        ``nix eval --json``): ``(await _exec(...)).json()`` hands back the decoded
         Python value, ready for ``pl.DataFrame(...)``. Raises :class:`ShellError`
         if the command exited non-zero (so the real failure surfaces, not a
         :class:`json.JSONDecodeError` over an error message), and
@@ -280,7 +409,7 @@ class Output(_ResultBase):
         """The command's JSON output as a polars DataFrame: the one-liner for any
         CLI with a JSON mode.
 
-        ``(await sh("gh run list --json status,conclusion,displayTitle")).df()``
+        ``(await _exec("gh run list --json status,conclusion,displayTitle")).df()``
         hands back a frame ready to ``.filter`` / ``.sort`` / render, instead of
         TSV text to scrape. Accepts a top-level JSON array of objects, a single
         object (one row), or JSON Lines. Same non-zero guard as :meth:`json`, and
@@ -299,21 +428,46 @@ class Output(_ResultBase):
             value = [value]
         return pl.DataFrame(value)
 
+    def _failure_line(self) -> str:
+        """One loud line naming the failure: the exit code first, then how long
+        the command ran and what it was. It leads the model view and is echoed
+        into the streamed job stdout (see :func:`sh`), so a failed command can
+        never render as quiet success or as still-running (issue #1766).
+
+        The command is rendered through :func:`_redact` (a secret-bearing
+        command must not leak into model-visible/stored text on failure), with
+        whitespace runs collapsed so a multi-line snippet or heredoc stays ONE
+        line (a tail-read must land on a marker, not a command fragment), then
+        truncated. Redact before truncating, so truncation can never bisect a
+        secret into a surviving prefix."""
+        cmd = re.sub(r"\s+", " ", _redact(self.cmd)).strip()
+        if len(cmd) > 120:
+            cmd = cmd[:117] + "..."
+        return f"[exit {self.code}] command failed after {self.duration:.1f}s: {cmd}"
+
     def _render_text(self) -> str:
         body = self.text
-        if self.code != 0:
-            # Flag a failure so the model never reads non-zero output as success.
-            marker = f"[exit {self.code}]"
-            body = f"{body}\n{marker}" if body else marker
         if self.hint:
             # Model view only: the human's terminal block stays clean. The hint
             # teaches the structured alternative at the exact moment the weaker
-            # tool was reached for, which survives instruction truncation.
+            # tool was reached for, which survives instruction truncation. It
+            # rides INSIDE the failure markers (below), so a failed Output's
+            # model text still ends with `[exit N]` as documented.
             body = f"{body}\n[hint: {self.hint}]" if body else f"[hint: {self.hint}]"
+        if self.code != 0:
+            # Flag a failure at BOTH ends so the model never reads non-zero
+            # output as success: the leading line survives a head-read (and the
+            # head+tail clip a huge log gets in outputs.text), the trailing
+            # marker survives a tail-read. `.text` itself stays marker-free.
+            marker = f"[exit {self.code}]"
+            body = f"{self._failure_line()}\n{body}\n{marker}" if body else f"{self._failure_line()}\n{marker}"
         return body
 
     def _render_html(self) -> str:
         body = _ansi_to_html(self.raw)
+        # A failed command's block gets the failure color on its border too, so
+        # the human spots it while scrolling without reading the footer badge.
+        border_color = "#242427" if self.code == 0 else "#fc618d"
         badge_color = "#7bd88f" if self.code == 0 else "#fc618d"
         badge = (
             f'<span style="color:{badge_color}">exit {self.code}</span>'
@@ -322,7 +476,9 @@ class Output(_ResultBase):
         prompt = (
             f'<div style="color:#6a6a70;padding:6px 10px 0">'
             f'<span style="color:#7bd88f">$</span> '
-            f'{_html.escape(self.cmd)}</div>'
+            # The dashboard prompt persists in the session store; render the
+            # command through the same secret scrub as the failure line.
+            f'{_html.escape(_redact(self.cmd))}</div>'
         )
         out = (
             f'<pre style="margin:0;padding:6px 10px 10px;white-space:pre-wrap;'
@@ -330,7 +486,7 @@ class Output(_ResultBase):
         )
         foot = f'<div style="padding:0 10px 6px;font-size:11px">{badge}</div>'
         return (
-            f'<div style="background:#141416;border:1px solid #242427;border-radius:6px;'
+            f'<div style="background:#141416;border:1px solid {border_color};border-radius:6px;'
             f'color:#e6e6e6;font-family:{_MONO};font-size:12px;overflow:auto">'
             f"{prompt}{out}{foot}</div>"
         )
@@ -348,10 +504,13 @@ class Output(_ResultBase):
         return self.text
 
     def __bool__(self) -> bool:
-        # Defining __len__ would otherwise make an empty (but successful) output
-        # falsy; an Output is a result object, so it is always truthy -- test
-        # success with `.ok`, emptiness with `len(out)`.
-        return True
+        # Truthiness is SUCCESS, not emptiness: `if not out:` catches a failed
+        # command the way `if proc.returncode:` would, and an empty-but-
+        # successful output stays truthy (defining __len__ alone would have made
+        # it falsy). Test emptiness with `len(out)`. Before #1766 an Output was
+        # unconditionally truthy, so `if await sh('test -f x'):` read every
+        # failure as success.
+        return self.ok
 
     def __getitem__(self, key: int | slice) -> str:
         return self.text[key]
@@ -420,7 +579,88 @@ def _in_kernel_job() -> bool:
     return _ix_current is not None and _ix_current.get() is not None
 
 
-async def sh(
+def _next_resource_id(kind: str) -> str | None:
+    if _ix_current is None:
+        return None
+    job = _ix_current.get()
+    job_id = getattr(job, "id", None) if job is not None else None
+    if not job_id:
+        return None
+    key = str(job_id)
+    count = _resource_counts.get(key, 0) + 1
+    _resource_counts[key] = count
+    return f"{kind}-{key}-{count}"
+
+
+def _command_title(kind: str, shown: str) -> str:
+    clean = re.sub(r"\s+", " ", _redact(shown)).strip()
+    if len(clean) > 72:
+        clean = clean[:69] + "..."
+    return f"{kind}: {clean or 'command'}"
+
+
+def _sh_resource_html(state: dict[str, object]) -> str:
+    now = time.monotonic()
+    ended = state.get("ended")
+    end_time = ended if isinstance(ended, float) else now
+    started = state.get("started")
+    started_time = started if isinstance(started, float) else end_time
+    duration = max(0.0, end_time - started_time)
+    status = str(state.get("status") or "running")
+    code = state.get("code")
+    live_chunks = state.get("chunks")
+    if isinstance(live_chunks, list):
+        raw = "".join(str(chunk) for chunk in live_chunks)
+    else:
+        raw = str(state.get("raw") or "")
+    omitted = ""
+    if len(raw) > _RESOURCE_TAIL_CHARS:
+        omitted = f"... truncated to last {_RESOURCE_TAIL_CHARS:,} chars\n"
+        raw = raw[-_RESOURCE_TAIL_CHARS:]
+    body = _ansi_to_html(omitted + raw)
+    cmd = _html.escape(_redact(str(state.get("cmd") or "")))
+    cwd = state.get("cwd")
+    cwd_html = f'<span class="cwd">{_html.escape(os.fspath(cwd))}</span>' if cwd else ""
+    ok = status == "done" and code == 0
+    bad = status in {"failed", "timed out", "cancelled"} or (status == "done" and code != 0)
+    cls = "ok" if ok else "bad" if bad else "running"
+    code_html = "" if code is None else f'<span class="code">exit {code}</span>'
+    return (
+        "<style>"
+        "body{margin:0;background:#0f1117;color:#e5e7eb;font:12px ui-monospace,SFMono-Regular,Menlo,monospace}"
+        ".wrap{padding:10px}.meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}"
+        ".pill{border-radius:999px;padding:2px 8px;background:#334155}.ok{background:#064e3b;color:#a7f3d0}"
+        ".bad{background:#7f1d1d;color:#fecaca}.running{background:#78350f;color:#fde68a}"
+        ".cmd{color:#93c5fd;white-space:pre-wrap;word-break:break-word;margin-bottom:6px}"
+        ".cwd{color:#9ca3af}.code{color:#9ca3af}pre{margin:0;white-space:pre-wrap;word-break:break-word}"
+        "</style>"
+        '<div class="wrap">'
+        '<div class="meta">'
+        f'<span class="pill {cls}">{_html.escape(status)}</span>'
+        f'<span>{duration:.2f}s</span>{code_html}{cwd_html}'
+        "</div>"
+        f'<div class="cmd">$ {cmd}</div>'
+        f"<pre>{body}</pre>"
+        "</div>"
+    )
+
+
+def _register_sh_resource(state: dict[str, object]) -> object | None:
+    if _register_resource is None or not _in_kernel_job():
+        return None
+    rid = _next_resource_id("sh")
+    if rid is None:
+        return None
+    return _register_resource(
+        render=lambda: _sh_resource_html(state),
+        id=rid,
+        title=_command_title("sh", str(state.get("cmd") or "")),
+        kind="sh",
+        alive=lambda: state.get("status") == "running",
+    )
+
+
+async def _exec(
     cmd: str | list[str],
     *,
     cwd: str | os.PathLike | None = None,
@@ -430,8 +670,14 @@ async def sh(
     color: bool = True,
     echo: bool | None = None,
     name: str | None = None,
+    stdin: int | IO[bytes] | None = asyncio.subprocess.DEVNULL,
 ) -> Output:
     """Run ``cmd`` on the shared async loop and return its :class:`Output`.
+
+    PRIVATE: the kernel's own process runner. The public ``sh()`` is disabled
+    (agents use ``await nu(...)``); this backs the kernel-owned internals that
+    still shell out (the ``grep``/``find`` search helpers, git worktree plumbing).
+    Not bound into the user namespace and not in ``api()``.
 
     ``cmd`` is a string (run through the shell, so pipes and globs work) or an
     argv list (executed directly, no shell parsing). stdout and stderr are merged
@@ -440,10 +686,23 @@ async def sh(
     rejected, so the command string stays clean. ``env`` extends the environment;
     ``timeout`` (seconds) kills the child's whole process group and raises
     :class:`TimeoutError`; ``check=True`` raises :class:`ShellError` on a non-zero
-    exit; ``color=False`` suppresses the forced-color environment.
+    exit; ``color=False`` suppresses the forced-color environment. A non-zero
+    exit that is NOT checked still cannot pass silently: the returned Output is
+    falsy, its rendered text leads with the exit code and ends with an
+    ``[exit N]`` marker, and the failure line (command text redacted, see the
+    module docstring) is echoed into the streamed job stdout.
     ``name`` sets a human-readable label for the running job in the dashboard and
     the ``jobs`` dict (mirrors the same parameter on ``python_exec``); outside
     the kernel it is accepted and silently ignored.
+
+    The child's stdin is ``/dev/null`` by default (issue #1029): nothing here
+    ever feeds stdin, and an inherited pipe is pure downside -- tools that sniff
+    a piped stdin take the wrong path (``op`` tried to parse it as a JSON item
+    template, ``gh``/``fzf`` drop interactive detection), and a command that
+    blocks reading stdin would hang until the timeout kill instead of seeing
+    EOF. For the rare command that genuinely reads input, pass ``stdin=`` an
+    open file object or fd (the value goes straight to
+    ``asyncio.create_subprocess_exec``/``create_subprocess_shell``).
 
     Output STREAMS as it arrives: inside the kernel each chunk is echoed
     (escape-stripped) to the running cell's stdout, so a long command's log is in
@@ -473,34 +732,34 @@ async def sh(
     message repr'd as a single-quoted string loses its newlines (they become
     literal ``\\n``). For any command argument that contains prose -- a commit
     message, a PR body, a description -- use the argv-list form
-    ``sh(['git', 'commit', '-m', msg])`` so the argument is passed verbatim
+    ``_exec(['git', 'commit', '-m', msg])`` so the argument is passed verbatim
     with no shell parsing, or write the text to a temporary file and pass
     ``git commit -F <file>``.
     """
     if isinstance(cmd, str) and re.match(r"\s*cd\b", cmd):
         raise ValueError(
-            "sh() takes no `cd ...` prefix: pass the working directory as cwd= and keep "
-            "the command itself clean, e.g. await sh('ix trace <id>', cwd='/path/to/repo')."
+            "_exec() takes no `cd ...` prefix: pass the working directory as cwd= and keep "
+            "the command itself clean, e.g. await _exec('git status', cwd='/path/to/repo')."
         )
     if isinstance(cmd, str) and "`" in cmd:
         raise ValueError(
-            "sh(): backticks in a string command are shell command substitution -- they run "
+            "_exec(): backticks in a string command are shell command substitution -- they run "
             "even inside Python repr'd strings (the backticks survive repr quoting, then the "
             "shell executes them when it processes the argument). This is how `git commit -m "
             "{msg!r}` ended up executing `ix-mcp dashboard` and splicing its URL into the "
             "commit message. If you want $(...) substitution, write it as $(...) explicitly. "
             "If the backticks are prose (e.g. a commit message), use the argv-list form "
-            "instead: sh(['git', 'commit', '-m', msg]) runs with no shell parsing and passes "
+            "instead: _exec(['git', 'commit', '-m', msg]) runs with no shell parsing and passes "
             "msg verbatim, or write the message to a temp file and use git commit -F <file>."
         )
     if isinstance(cmd, str) and re.search(
         r"git\s+commit\b.*\s(-m|--message)\s*['\"].*(?:\\n|\n).*['\"]", cmd, re.DOTALL
     ):
         raise ValueError(
-            "sh(): a git commit -m/--message argument containing a newline (real or "
+            "_exec(): a git commit -m/--message argument containing a newline (real or "
             "escaped \\n) will be flattened by the shell into a single line full of literal "
             r"'\n' characters when passed through Python repr. Use the argv-list form "
-            "sh(['git', 'commit', '-m', msg]) to pass the message verbatim without shell "
+            "_exec(['git', 'commit', '-m', msg]) to pass the message verbatim without shell "
             "parsing, or write it to a temp file and use git commit -F <file>."
         )
     if name is not None and _in_kernel_job() and _rename_current_job is not None:
@@ -512,32 +771,57 @@ async def sh(
     if env:
         full_env.update(env)
 
-    if isinstance(cmd, (list, tuple)):
-        argv = [str(part) for part in cmd]
-        shown = shlex.join(argv)
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=cwd,
-            env=full_env,
-            start_new_session=True,
-        )
-    else:
-        shown = cmd
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=cwd,
-            env=full_env,
-            start_new_session=True,
-        )
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    argv: list[str] | None = [str(part) for part in cmd] if isinstance(cmd, (list, tuple)) else None
+    shown = shlex.join(argv) if argv is not None else str(cmd)
+    state: dict[str, object] = {
+        "cmd": shown,
+        "cwd": os.fspath(cwd) if cwd is not None else None,
+        "status": "running",
+        "code": None,
+        "raw": "",
+        "started": started,
+        "ended": None,
+    }
+    resource = _register_sh_resource(state)
+
+    try:
+        if argv is not None:
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
+                stdin=stdin,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=cwd,
+                env=full_env,
+                start_new_session=True,
+            )
+        else:
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdin=stdin,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=cwd,
+                env=full_env,
+                start_new_session=True,
+            )
+    except Exception as exc:
+        state["status"] = "failed"
+        state["code"] = -1
+        state["raw"] = f"{type(exc).__name__}: {exc}\n"
+        state["ended"] = loop.time()
+        close = getattr(resource, "close", None)
+        if callable(close):
+            close()
+        raise
 
     do_echo = _in_kernel_job() if echo is None else echo
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
     stripper = _EchoStripper()
     chunks: list[str] = []
+    state["chunks"] = chunks
 
     def _keep(text: str) -> None:
         chunks.append(text)
@@ -557,8 +841,6 @@ async def sh(
             sys.stdout.write(stripper.flush())
         await proc.wait()
 
-    loop = asyncio.get_running_loop()
-    started = loop.time()
     try:
         if timeout is not None:
             await asyncio.wait_for(_drain(), timeout)
@@ -570,43 +852,96 @@ async def sh(
         # bound it anyway so a wedged reap can never hang the job past its timeout.
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(proc.wait(), 2.0)
-        raise TimeoutError(f"command timed out after {timeout}s: {shown}") from None
+        exc = TimeoutError(f"command timed out after {timeout}s: {shown}")
+        # Attach whatever the child had already written before the deadline, so a
+        # caller catching the timeout can still recover partial results (fsearch
+        # parses this to return the matches found so far) instead of discarding a
+        # long scan's work. It is the same merged stdout+stderr text `.raw` holds.
+        exc.partial_output = "".join(chunks)  # type: ignore[attr-defined]
+        state["status"] = "timed out"
+        state["raw"] = exc.partial_output
+        state["ended"] = loop.time()
+        close = getattr(resource, "close", None)
+        if callable(close):
+            close()
+        raise exc from None
     except asyncio.CancelledError:
         # The awaiting task was cancelled (jobs['<id>'].cancel()): take the child
         # and its whole group down with it, so a cancelled cell never leaves an
         # orphan still running (and holding locks) in the background.
         _terminate(proc)
+        state["status"] = "cancelled"
+        state["ended"] = loop.time()
+        close = getattr(resource, "close", None)
+        if callable(close):
+            close()
         raise
 
     duration = loop.time() - started
+    code = proc.returncode if proc.returncode is not None else -1
+    state["status"] = "done" if code == 0 else "failed"
+    state["code"] = code
+    state["raw"] = "".join(chunks)
+    state["ended"] = loop.time()
+    close = getattr(resource, "close", None)
+    if callable(close):
+        close()
     out = Output(
         cmd=shown,
-        code=proc.returncode if proc.returncode is not None else -1,
-        raw="".join(chunks),
+        code=code,
+        raw=str(state["raw"]),
         duration=duration,
         hint=_structured_hint(cmd),
     )
+    if do_echo and not out.ok:
+        # The failure line also lands in the streamed stdout, so
+        # jobs['<id>'].output / .tail() carry the terminal state: a watcher
+        # paging a backgrounded build sees the death even when the Output value
+        # is never bound or rendered (issue #1766: a build dead on ENOSPC read
+        # as still-compiling for 25 minutes).
+        # Decide the separator from the STRIPPED tail: the echoed stream is
+        # escape-stripped, so raw ending in a bare color-reset escape (no
+        # newline) must not produce a spurious blank line before the marker.
+        tail = _strip_ansi(out.raw[-64:])
+        lead = "" if not tail or tail.endswith("\n") else "\n"
+        sys.stdout.write(lead + out._failure_line() + "\n")
     if check and not out.ok:
         raise ShellError(out)
     return out
 
 
-# Make the module itself callable, so the documented `import sh; await sh(cmd)`
-# works without reaching for `sh.sh`. The module object's class is swapped for a
-# ModuleType subclass that forwards a call to the sh() coroutine function. The
-# kernel binds this same module object as `sh` in the user namespace too (see
-# ix_notebook_mcp.runtime.install), so `await sh(...)` works with or without an
-# explicit import, while `sh.Output` / `sh.ShellError` stay reachable as attrs.
+# --- public entry points: disabled ---------------------------------------
+#
+# `sh()` and `zsh()` are retired. Agents shell out through `await nu(...)`
+# (bundled nushell, structured output); externals run from nushell via `^cmd`.
+# These names stay importable and callable so a stale `await sh(...)` in an old
+# transcript fails LOUDLY with a migration hint (`_DISABLED_MSG`) rather than a
+# bare NameError -- the same reason the module stays callable below. The private
+# `_exec` above is what the kernel's own internals (grep/find, worktree) use; it
+# is not bound into the namespace and not in api().
+
+
+def sh(*_args: object, **_kwargs: object) -> Output:
+    """Disabled. Use ``await nu('<command>')`` -- see :data:`_DISABLED_MSG`."""
+    raise RuntimeError(_DISABLED_MSG)
+
+
+def zsh(*_args: object, **_kwargs: object) -> Output:
+    """Disabled. Use ``await nu('<command>')`` -- see :data:`_DISABLED_MSG`."""
+    raise RuntimeError(_DISABLED_MSG)
+
+
+# The module stays callable so `await sh(cmd)` (with or without `import sh`)
+# hits the disabled path with the migration hint, not a NameError. `sh.Output`
+# and `sh.ShellError` remain reachable as attrs for the kernel-internal callers
+# that type against them.
 import types as _types
 
 
-import functools as _functools
-
-
 class _CallableModule(_types.ModuleType):
-    @_functools.wraps(sh)
-    def __call__(self, *args: object, **kwargs: object) -> object:
-        return sh(*args, **kwargs)
+    def __call__(self, *_args: object, **_kwargs: object) -> object:
+        raise RuntimeError(_DISABLED_MSG)
 
 
-sys.modules[__name__].__class__ = _CallableModule
+_module = sys.modules[__name__]
+_module.__class__ = _CallableModule

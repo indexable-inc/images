@@ -26,6 +26,11 @@ pub async fn collect_panes(manager: &crate::TuiManager) -> Vec<Pane> {
         let Ok(cells) = instance.read_styled_cells_async().await else {
             continue;
         };
+        let scrollback = instance
+            .read_scrollback_async()
+            .await
+            .map(|lines| lines.join("\n"))
+            .unwrap_or_default();
         // Cursor and exit are best-effort: a failed cursor read defaults to the
         // top-left, never dropping the whole pane.
         let cursor = instance
@@ -48,6 +53,7 @@ pub async fn collect_panes(manager: &crate::TuiManager) -> Vec<Pane> {
                 cols: instance.cols(),
                 alive: instance.is_alive(),
                 screen: sgr::encode(&rows),
+                scrollback,
                 cursor_row: cursor.row,
                 cursor_col: cursor.col,
                 cursor_visible: cursor.visible,

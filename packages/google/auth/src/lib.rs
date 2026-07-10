@@ -38,10 +38,10 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::error::{
-    ConsentDeniedSnafu, HttpSnafu, ListenSnafu, MissingClientIdSnafu, MissingClientSecretSnafu,
-    MissingCodeSnafu, MissingRefreshTokenSnafu, NoConfigDirSnafu, NoTokenSnafu, ParseTokenSnafu,
-    ReadTokenSnafu, RedirectParseSnafu, ScopeMissingSnafu, StateMismatchSnafu, TokenExchangeSnafu,
-    TokenRevokedSnafu, WriteTokenSnafu,
+    ConsoleIoSnafu, ConsentDeniedSnafu, HttpSnafu, ListenSnafu, MissingClientIdSnafu,
+    MissingClientSecretSnafu, MissingCodeSnafu, MissingRefreshTokenSnafu, NoConfigDirSnafu,
+    NoTokenSnafu, ParseTokenSnafu, ReadTokenSnafu, RedirectParseSnafu, ScopeMissingSnafu,
+    StateMismatchSnafu, TokenExchangeSnafu, TokenRevokedSnafu, WriteTokenSnafu,
 };
 
 /// Environment variable holding the OAuth client id.
@@ -462,6 +462,35 @@ struct CachedAccessToken {
 /// CLI mints one access token per invocation and tosses it; a long-lived
 /// process (the MCP server) holds one [`Authenticator`] for the process
 /// lifetime and refreshes transparently as tokens expire.
+/// Render the shared Gmail/Calendar logout result for human or JSON output.
+#[must_use]
+pub fn logout_message(removed: &[PathBuf], json: bool) -> String {
+    if json {
+        return serde_json::json!({
+            "signed_out": !removed.is_empty(),
+            "removed": removed
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>(),
+        })
+        .to_string();
+    }
+    if removed.is_empty() {
+        return "Already signed out: no stored Google token.".to_owned();
+    }
+
+    let mut message = removed
+        .iter()
+        .map(|path| format!("Removed {}", path.display()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    message.push_str(
+        "\nSigned out. To fully revoke access, also remove it at \
+         https://myaccount.google.com/permissions",
+    );
+    message
+}
+
 pub struct Authenticator {
     token: TokenClient,
     store: TokenStore,
@@ -685,6 +714,90 @@ pub async fn begin_consent(secrets: ClientSecrets, scopes: &[&str]) -> Result<Pe
     })
 }
 
+/// A stored CLI consent ready for the product-specific end-to-end probe.
+pub struct CliConsent {
+    /// OAuth client identity used to construct the product client.
+    pub secrets: ClientSecrets,
+    /// Store containing the newly persisted grant.
+    pub store: TokenStore,
+    token: StoredToken,
+    json: bool,
+}
+
+impl CliConsent {
+    /// Report that the product-specific API probe succeeded.
+    pub fn report_verified(&self, product: &str) {
+        if self.json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "signed_in": true,
+                    "scopes": self.token.scopes,
+                    "token_path": self.store.path().display().to_string(),
+                })
+            );
+        } else {
+            println!("Token saved to {}", self.store.path().display());
+            println!("Verified: the {product} API answers with this grant.");
+        }
+    }
+}
+
+/// Run the shared interactive/piped CLI consent exchange and persist its grant.
+/// Product CLIs perform their own cheapest real API probe, then call
+/// [`CliConsent::report_verified`].
+///
+/// # Errors
+/// Returns an error for missing client credentials, terminal I/O, malformed
+/// redirects, rejected consent, token exchange, or token persistence failures.
+pub async fn run_cli_consent(paste: bool, json: bool, scopes: &[&str]) -> Result<CliConsent> {
+    use std::io::Write as _;
+    use tokio::io::{AsyncBufReadExt as _, BufReader};
+
+    let secrets = ClientSecrets::from_env()?;
+    let store = TokenStore::new()?;
+    let pending = begin_consent(secrets.clone(), scopes).await?;
+
+    if json {
+        println!("{}", serde_json::json!({ "auth_url": pending.auth_url }));
+        std::io::stdout().flush().context(ConsoleIoSnafu {
+            action: "flushing the consent URL",
+        })?;
+    } else {
+        println!("Open this URL in your browser:\n\n  {}\n", pending.auth_url);
+    }
+
+    let code = if paste {
+        if !json {
+            println!("After consenting, the browser shows a connection error on the");
+            println!("http://127.0.0.1:… redirect; paste that full URL here and press enter.");
+        }
+        let mut pasted = String::new();
+        BufReader::new(tokio::io::stdin())
+            .read_line(&mut pasted)
+            .await
+            .context(ConsoleIoSnafu {
+                action: "reading the pasted redirect URL",
+            })?;
+        pending.code_from_redirect_url(pasted.trim())?
+    } else {
+        if !json {
+            println!("Waiting for the redirect on this machine's loopback listener.");
+            println!("Over SSH or in a VM, cancel and rerun with --paste.");
+        }
+        pending.wait_loopback().await?
+    };
+
+    let token = pending.exchange(code).await?;
+    store.save(&token)?;
+    Ok(CliConsent {
+        secrets,
+        store,
+        token,
+        json,
+    })
+}
+
 impl PendingConsent {
     /// Point at a different token endpoint (tests).
     #[must_use]
@@ -860,7 +973,7 @@ pub fn http_client() -> Result<reqwest::Client> {
 mod tests {
     use tempfile::TempDir;
 
-    use super::{StoredToken, TokenStore, challenge_for};
+    use super::{StoredToken, TokenStore, challenge_for, logout_message};
     use crate::error::Error;
 
     #[test]
@@ -954,5 +1067,20 @@ mod tests {
 
         // A second remove is a no-op, not an error: logout is idempotent.
         assert!(store.remove().expect("second remove").is_empty());
+    }
+
+    #[test]
+    fn logout_message_supports_human_and_json_output() {
+        let removed = [std::path::PathBuf::from("/tmp/token.json")];
+        assert_eq!(
+            logout_message(&[], false),
+            "Already signed out: no stored Google token."
+        );
+        assert!(logout_message(&removed, false).contains("Removed /tmp/token.json"));
+
+        let json: serde_json::Value =
+            serde_json::from_str(&logout_message(&removed, true)).expect("valid JSON");
+        assert_eq!(json["signed_out"], true);
+        assert_eq!(json["removed"][0], "/tmp/token.json");
     }
 }

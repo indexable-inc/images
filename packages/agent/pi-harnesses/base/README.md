@@ -1,7 +1,10 @@
+<p align="center"><img src="assets/hero.svg" width="560" alt="pi plus a small UX extension pack yields the same agent with a nicer cockpit"></p>
+
 # pi-base
 
-Pi with a small base UX pack - quality-of-life extensions that are a plus for
-any setup, with no behavior changes to the agent itself.
+What do you want in every pi session regardless of the task? pi-base is pi with
+a small base UX pack: quality-of-life extensions that are a plus for any setup,
+with no behavior changes to the agent itself.
 
 Adapted from [davis7dotsh/my-pi-setup](https://github.com/davis7dotsh/my-pi-setup)
 (MIT, (c) 2026 Benjamin Davis).
@@ -17,9 +20,9 @@ Adapted from [davis7dotsh/my-pi-setup](https://github.com/davis7dotsh/my-pi-setu
 
 ## Run
 
-```
-ANTHROPIC_API_KEY=... nix run .#pi-base -- "your task"
-PI_HARNESS_MODEL=codex OPENAI_API_KEY=... nix run .#pi-base
+```sh
+ANTHROPIC_API_KEY=... nix run github:indexable-inc/index#pi-base -- "your task"
+PI_HARNESS_MODEL=codex OPENAI_API_KEY=... nix run github:indexable-inc/index#pi-base
 ```
 
 The extension files also land in `share/pi-base/`, so they can be symlinked

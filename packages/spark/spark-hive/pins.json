@@ -1,0 +1,7 @@
+{
+  "spark": {
+    "version": "3.5.5",
+    "url": "https://archive.apache.org/dist/spark/spark-3.5.5/spark-3.5.5-bin-hadoop3.tgz",
+    "hash": "sha256-jao/f7CvJnD+Eb64oqx52QilNNcpg1PsR0YCWxAtXjE="
+  }
+}

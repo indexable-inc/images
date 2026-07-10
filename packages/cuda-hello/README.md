@@ -1,10 +1,8 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="One Rust source file compiles to PTX with cargo oxide, then launches on an NVIDIA GPU"></p>
+
 # cuda-hello
 
-A minimal CUDA kernel written in pure, idiomatic Rust and compiled to PTX with
-[cuda-oxide](https://github.com/NVlabs/cuda-oxide), NVIDIA's experimental
-Rust-to-CUDA compiler backend. Host and device code share one file
-([`src/main.rs`](src/main.rs)); the kernel writes `i*i` for each thread, the GPU
-"hello, world".
+Can you write a CUDA kernel in pure, idiomatic Rust? This crate is the proof: a minimal kernel compiled to PTX with [cuda-oxide](https://github.com/NVlabs/cuda-oxide), NVIDIA's experimental Rust-to-CUDA compiler backend. Host and device code share one file ([`src/main.rs`](src/main.rs)); the kernel writes `i*i` for each thread, the GPU "hello, world".
 
 This is the seed for first-class CUDA-in-Rust support in this repo. The kernel is
 written against cuda-oxide's real API (a faithful subset of upstream's `vecadd`
@@ -24,9 +22,11 @@ emitted PTX; you just cannot execute it.
 
 The crate-local [`flake.nix`](flake.nix) inherits cuda-oxide's dev shell, so you
 get the exact toolchain (the `cargo oxide` driver, the pinned nightly, LLVM 22
-with NVPTX, CUDA 13, and libclang) with no manual setup. From this directory:
+with NVPTX, CUDA 13, and libclang) with no manual setup:
 
 ```sh
+git clone https://github.com/indexable-inc/index
+cd index/packages/cuda-hello
 nix develop            # enter the cuda-oxide toolchain (Linux only)
 cargo oxide build      # compile to PTX (no GPU required)
 cargo oxide run        # compile to PTX, then launch on the GPU

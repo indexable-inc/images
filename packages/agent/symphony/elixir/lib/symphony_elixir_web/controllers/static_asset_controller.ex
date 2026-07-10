@@ -14,7 +14,7 @@ defmodule SymphonyElixirWeb.StaticAssetController do
   def phoenix_live_view(conn, _params), do: send_dep_js(conn, :phoenix_live_view, "priv/static/phoenix_live_view.js")
 
   defp send_dep_js(conn, app, relative_path) do
-    priv = :code.priv_dir(app) |> to_string()
+    priv = app |> :code.priv_dir() |> to_string()
     full = Path.join(Path.dirname(priv), relative_path)
 
     conn

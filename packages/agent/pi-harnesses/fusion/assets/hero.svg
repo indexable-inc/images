@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 180" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    svg { color: #1f2328; }
+    .muted { fill: #656d76; }
+    .accent { fill: #8250df; }
+    .box { stroke: currentColor; fill: none; }
+    text { fill: currentColor; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { fill: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+            orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <rect class="box" x="20" y="56" width="170" height="64" rx="8"/>
+  <text x="105" y="82" text-anchor="middle" font-size="13" font-weight="600">primary · fable-5</text>
+  <text x="105" y="102" text-anchor="middle" font-size="11" class="muted">plan · resolve · review</text>
+
+  <line class="edge" x1="190" y1="72" x2="388" y2="52"/>
+  <text x="289" y="42" text-anchor="middle" font-size="11" class="muted">delegate(task)</text>
+
+  <rect class="box" x="390" y="28" width="210" height="64" rx="8"/>
+  <text x="495" y="54" text-anchor="middle" font-size="13" font-weight="600">sidekick · gpt-5.5 low</text>
+  <text x="495" y="74" text-anchor="middle" font-size="11" class="muted">headless, isolated worktree</text>
+
+  <line class="edge" x1="390" y1="112" x2="192" y2="106"/>
+  <text x="291" y="132" text-anchor="middle" font-size="11" class="muted">summary + patch</text>
+  <rect class="box" x="390" y="100" width="210" height="24" rx="6"/>
+  <text x="495" y="116" text-anchor="middle" font-size="10" class="muted">bulk edits · inspection · test loops</text>
+
+  <text x="105" y="156" text-anchor="middle" font-size="11" class="accent">primary applies or revises</text>
+</svg>

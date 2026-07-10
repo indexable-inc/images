@@ -218,7 +218,7 @@ defmodule SymphonyElixirWeb.Components.IRGraph do
     # vertical height.
     real_max_per_layer =
       layer_groups
-      |> Map.drop([0])
+      |> Map.delete(0)
       |> Map.values()
       |> Enum.map(&length/1)
       |> Enum.max(fn -> 1 end)
@@ -254,7 +254,7 @@ defmodule SymphonyElixirWeb.Components.IRGraph do
     node_w = node_width(sizing)
     node_h = node_height(sizing)
 
-    positioned =
+    for_result =
       for {id, raw} <- node_index do
         layer = Map.get(layers, id, 0)
         pos_in_layer = Enum.find_index(layer_groups[layer], &(&1 == id)) || 0
@@ -267,7 +267,8 @@ defmodule SymphonyElixirWeb.Components.IRGraph do
 
         {id, %{x: x, y: y, raw: raw}}
       end
-      |> Map.new()
+
+    positioned = Map.new(for_result)
 
     # Build edge paths: one bezier per dep edge between real nodes.
     edges =
@@ -282,7 +283,8 @@ defmodule SymphonyElixirWeb.Components.IRGraph do
     # Find root real nodes (those with no real deps) to connect from trigger.
     root_ids =
       if trigger do
-        Enum.filter(nodes, fn n ->
+        nodes
+        |> Enum.filter(fn n ->
           known_deps = Enum.filter(n["deps"] || [], &Map.has_key?(node_index, &1))
           known_deps == []
         end)
@@ -483,8 +485,7 @@ defmodule SymphonyElixirWeb.Components.IRGraph do
     permissions = env["permissions"]
     location = location_line(env["location"], placement)
 
-    [engine_model, effort, permissions, location]
-    |> Enum.filter(fn value -> is_binary(value) and value != "" end)
+    Enum.filter([engine_model, effort, permissions, location], fn value -> is_binary(value) and value != "" end)
   end
 
   defp detail_lines(%{"kind" => "gate"}, _placement), do: ["gate"]
@@ -499,8 +500,7 @@ defmodule SymphonyElixirWeb.Components.IRGraph do
   # a typed string like `host:hil-compute-2`, so only the type before `:` is
   # compared. With no placement (a `/workflows` preview before any run) the
   # declared location is shown as-is.
-  defp location_line(location, %{"effective" => effective})
-       when is_binary(location) and is_binary(effective) do
+  defp location_line(location, %{"effective" => effective}) when is_binary(location) and is_binary(effective) do
     declared_type = location |> String.split(":") |> hd()
 
     if declared_type == effective do

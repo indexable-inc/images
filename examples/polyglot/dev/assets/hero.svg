@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 190" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    svg { color: #1f2328; }
+    .muted { fill: #656d76; }
+    .accent { fill: #8250df; }
+    text { fill: currentColor; }
+    .box { stroke: currentColor; fill: none; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { fill: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <rect class="box" x="20" y="68" width="170" height="56" rx="8"/>
+  <text x="105" y="91" text-anchor="middle" font-size="14" font-weight="600">ix.languages.*</text>
+  <text x="105" y="109" text-anchor="middle" font-size="11" class="muted">typed toolchain helpers</text>
+
+  <line class="edge" x1="190" y1="96" x2="268" y2="96"/>
+  <text x="229" y="86" text-anchor="middle" font-size="12" class="muted">compose</text>
+
+  <rect class="box" x="270" y="15" width="430" height="160" rx="8"/>
+  <text x="485" y="38" text-anchor="middle" font-size="13" font-weight="600">workbench VM: one PATH</text>
+
+  <rect class="box" x="288" y="52" width="126" height="40" rx="6"/>
+  <text x="351" y="69" text-anchor="middle" font-size="11">JVM</text>
+  <text x="351" y="84" text-anchor="middle" font-size="10" class="muted">kotlinc scala mvn</text>
+
+  <rect class="box" x="424" y="52" width="126" height="40" rx="6"/>
+  <text x="487" y="69" text-anchor="middle" font-size="11">native</text>
+  <text x="487" y="84" text-anchor="middle" font-size="10" class="muted">cargo gcc zig</text>
+
+  <rect class="box" x="560" y="52" width="126" height="40" rx="6"/>
+  <text x="623" y="69" text-anchor="middle" font-size="11">scripting</text>
+  <text x="623" y="84" text-anchor="middle" font-size="10" class="muted">python go node</text>
+
+  <rect class="box" x="288" y="102" width="126" height="40" rx="6"/>
+  <text x="351" y="119" text-anchor="middle" font-size="11">functional</text>
+  <text x="351" y="134" text-anchor="middle" font-size="10" class="muted">ghc ocaml dune</text>
+
+  <rect class="box" x="424" y="102" width="126" height="40" rx="6"/>
+  <text x="487" y="119" text-anchor="middle" font-size="11">BEAM</text>
+  <text x="487" y="134" text-anchor="middle" font-size="10" class="muted">erl mix gleam</text>
+
+  <rect class="box" x="560" y="102" width="126" height="40" rx="6"/>
+  <text x="623" y="119" text-anchor="middle" font-size="11">LSPs</text>
+  <text x="623" y="134" text-anchor="middle" font-size="10" class="muted">clangd gopls metals</text>
+
+  <text x="485" y="163" text-anchor="middle" font-size="11" class="accent">one JDK threaded through every JVM tool</text>
+</svg>

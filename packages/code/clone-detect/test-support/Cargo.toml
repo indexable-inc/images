@@ -1,0 +1,9 @@
+[package]
+name = "clone-test-support"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Shared filesystem fixtures for clone detector tests"
+
+[lints]
+workspace = true

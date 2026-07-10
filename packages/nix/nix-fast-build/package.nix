@@ -8,10 +8,10 @@
   # packages/nix/nix-eval-jobs. x86_64-linux only: it is the CI build system and
   # the only consumer is the x86_64-linux-only `check` app.
   packageSet = {
-    systems = [ "x86_64-linux" ];
+    systems = ["x86_64-linux"];
   };
   flake = {
-    systems = [ "x86_64-linux" ];
+    systems = ["x86_64-linux"];
   };
   passthruTests = true;
 }

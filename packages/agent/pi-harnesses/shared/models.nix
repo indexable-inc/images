@@ -23,4 +23,20 @@
     thinking = "medium";
     apiKeyEnv = "OPENAI_API_KEY";
   };
+
+  # Fable primary for fusion-style harnesses. Kept as a normal alias so model
+  # availability can move without changing harness logic.
+  fable = {
+    provider = "anthropic";
+    model = "fable-5";
+    apiKeyEnv = "ANTHROPIC_API_KEY";
+  };
+
+  # Cheap delegated worker for fusion-style harnesses.
+  codex-low = {
+    provider = "openai";
+    model = "gpt-5.5";
+    thinking = "low";
+    apiKeyEnv = "OPENAI_API_KEY";
+  };
 }

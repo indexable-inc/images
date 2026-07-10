@@ -109,7 +109,15 @@ defmodule SymphonyElixir.WorkflowCatalog do
       poll_ms: Keyword.get_lazy(opts, :poll_ms, fn -> Config.get().catalog_poll_ms end)
     }
 
-    schedule_scan(0)
+    # Scan synchronously before returning: start_link/start_supervised! must
+    # not hand back a catalog whose ETS tables can still be mutated by a
+    # scan racing the caller. An async boot scan let a caller's own
+    # scan/1 (called right after start_supervised! returns, as every test
+    # here does) interleave with this process's :scan handler on the same
+    # directory and tables, so whichever remove_missing/1 ran last could
+    # wipe entries the other had just inserted.
+    scan(state.workflows_dir)
+    schedule_scan(state.poll_ms)
     {:ok, state}
   end
 
@@ -142,7 +150,7 @@ defmodule SymphonyElixir.WorkflowCatalog do
       {:ok, raw} ->
         hash = :crypto.hash(:sha256, raw)
 
-        unless current_hash(name) == hash do
+        if current_hash(name) != hash do
           parse_and_store(name, path, raw, hash)
         end
 
@@ -195,7 +203,7 @@ defmodule SymphonyElixir.WorkflowCatalog do
     (table_names(@table) ++ table_names(@errors))
     |> Enum.uniq()
     |> Enum.each(fn name ->
-      unless MapSet.member?(seen, name) do
+      if !MapSet.member?(seen, name) do
         :ets.delete(@table, name)
         :ets.delete(@errors, name)
         Logger.info("WorkflowCatalog removed workflow=#{name} (file deleted)")

@@ -81,6 +81,33 @@ defmodule SymphonyElixir.GithubApp do
   end
 
   @doc """
+  Best-effort variant of `installation_token/0` for callers that inject the
+  bot identity opportunistically (exec env, placement opts): an unconfigured
+  App, a mint failure, or a missing Config/GithubApp process (dev laptops,
+  tests) all yield `:none` so the run proceeds with its ambient credentials
+  instead of crashing.
+  """
+  @spec best_effort_installation_token() :: {:ok, String.t()} | :none
+  def best_effort_installation_token do
+    if configured?() do
+      case installation_token() do
+        {:ok, token} ->
+          {:ok, token}
+
+        {:error, reason} ->
+          Logger.warning("GithubApp: token mint failed (#{inspect(reason)}); proceeding with ambient credentials")
+          :none
+      end
+    else
+      :none
+    end
+  rescue
+    error ->
+      Logger.warning("GithubApp: bot identity unavailable (#{inspect(error)}); proceeding with ambient credentials")
+      :none
+  end
+
+  @doc """
   True iff `SYMPHONY_GITHUB_APP_ID` and the private key are both configured.
   Used by the IR exec runner to decide whether to attempt token injection
   at all.
@@ -150,14 +177,11 @@ defmodule SymphonyElixir.GithubApp do
     end
   end
 
-  defp ensure_configured(%Config{github_app_id: id, github_app_private_key_pem: pem})
-       when is_binary(id) and is_binary(pem),
-       do: :ok
+  defp ensure_configured(%Config{github_app_id: id, github_app_private_key_pem: pem}) when is_binary(id) and is_binary(pem), do: :ok
 
   defp ensure_configured(_), do: {:error, :not_configured}
 
-  defp ensure_owner_repo(%Config{github_app_owner_repo: repo}) when is_binary(repo) and repo != "",
-    do: :ok
+  defp ensure_owner_repo(%Config{github_app_owner_repo: repo}) when is_binary(repo) and repo != "", do: :ok
 
   defp ensure_owner_repo(_), do: {:error, :missing_owner_repo}
 
@@ -232,8 +256,7 @@ defmodule SymphonyElixir.GithubApp do
     end
   end
 
-  defp parse_token_response(%{"token" => token, "expires_at" => expires_at_iso}, installation_id)
-       when is_binary(token) and is_binary(expires_at_iso) do
+  defp parse_token_response(%{"token" => token, "expires_at" => expires_at_iso}, installation_id) when is_binary(token) and is_binary(expires_at_iso) do
     case DateTime.from_iso8601(expires_at_iso) do
       {:ok, expires_at, _offset} ->
         {:ok, %{token: token, expires_at: expires_at, installation_id: installation_id}}

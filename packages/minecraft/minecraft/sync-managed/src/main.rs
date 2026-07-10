@@ -154,11 +154,25 @@ fn remove_if_present(path: &Path) -> Result<()> {
     }
 }
 
+/// How a managed file is placed into the mutable data dir.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Materialize {
+    /// Read-only symlink into the Nix store. Correct for content the server only
+    /// ever reads: plugin/mod jars and datapacks.
+    Symlink,
+    /// Writable copy of the store file. Required for config the server or its
+    /// plugins rewrite in place. Paper saves config atomically by writing a temp
+    /// beside the file's real path; for a store symlink that temp lands in the
+    /// read-only `/nix/store` and aborts startup (paper-global.yml, spigot.yml).
+    Copy,
+}
+
 fn sync_tree(
     source_dir: &Path,
     target_dir: &Path,
     manifest: &Path,
     preserve_removed: &BTreeSet<String>,
+    materialize: Materialize,
 ) -> Result<()> {
     fs::create_dir_all(target_dir).with_context(|| format!("creating {}", target_dir.display()))?;
     if let Some(parent) = manifest.parent() {
@@ -205,13 +219,29 @@ fn sync_tree(
             fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         }
         remove_if_present(&target_path)?;
-        symlink(&source_path, &target_path).with_context(|| {
-            format!(
-                "linking {} to {}",
-                target_path.display(),
-                source_path.display()
-            )
-        })?;
+        match materialize {
+            Materialize::Symlink => {
+                symlink(&source_path, &target_path).with_context(|| {
+                    format!(
+                        "linking {} to {}",
+                        target_path.display(),
+                        source_path.display()
+                    )
+                })?;
+            }
+            Materialize::Copy => {
+                fs::copy(&source_path, &target_path).with_context(|| {
+                    format!(
+                        "copying {} to {}",
+                        source_path.display(),
+                        target_path.display()
+                    )
+                })?;
+                // Store sources are read-only (0444) and `fs::copy` carries that
+                // mode over, so make the copy owner-writable for in-place rewrites.
+                set_owner_read_write(&target_path)?;
+            }
+        }
         writeln!(
             &mut manifest_lines,
             "{} {}",
@@ -713,6 +743,7 @@ fn main() -> Result<()> {
         plan_plugman_reload(&config)?;
     }
 
+    // Jars are read-only at runtime, so they stay symlinked into the store.
     sync_tree(
         &config.managed_root.join("managed-dropins"),
         &config.data_dir.join(&config.dropin_dir),
@@ -720,19 +751,26 @@ fn main() -> Result<()> {
             .data_dir
             .join(format!(".ix-managed-{}", config.dropin_dir)),
         &BTreeSet::new(),
+        Materialize::Symlink,
     )?;
+    // Paper and its plugins rewrite their config in place on boot, so these are
+    // copied as writable files rather than read-only store symlinks.
     sync_tree(
         &config.managed_root.join("managed-config"),
         &config.data_dir.join("config"),
         &config.data_dir.join(".ix-managed-config"),
         &BTreeSet::new(),
+        Materialize::Copy,
     )?;
     sync_tree(
         &config.managed_root.join("managed-server-files"),
         &config.data_dir,
         &config.data_dir.join(".ix-managed-server-files"),
         &BTreeSet::from(["ops.json".to_owned(), "whitelist.json".to_owned()]),
+        Materialize::Copy,
     )?;
+    // Datapacks are read-only and allowlisted past world validation, so they
+    // stay symlinked.
     for world in &config.datapack_worlds {
         validate_rel_path_shape(world).context("checking datapack world name safety")?;
         sync_tree(
@@ -740,6 +778,7 @@ fn main() -> Result<()> {
             &config.data_dir.join(world).join("datapacks"),
             &config.data_dir.join(world).join(".ix-managed-datapacks"),
             &BTreeSet::new(),
+            Materialize::Symlink,
         )?;
     }
     reconcile_access(&config)?;
@@ -849,5 +888,67 @@ mod tests {
                 entry("managed-added", "Added"),
             ]
         );
+    }
+
+    #[test]
+    fn copy_materializes_a_writable_regular_file() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let tmp = tempfile::tempdir()?;
+        let source = tmp.path().join("managed-config");
+        fs::create_dir_all(&source)?;
+        let src = source.join("paper-global.yml");
+        fs::write(&src, "verbose: false\n")?;
+        // Mimic the read-only Nix store source.
+        fs::set_permissions(&src, fs::Permissions::from_mode(0o444))?;
+
+        let target = tmp.path().join("config");
+        let manifest = tmp.path().join(".ix-managed-config");
+        sync_tree(
+            &source,
+            &target,
+            &manifest,
+            &BTreeSet::new(),
+            Materialize::Copy,
+        )?;
+
+        let dst = target.join("paper-global.yml");
+        let meta = fs::symlink_metadata(&dst)?;
+        assert!(
+            meta.file_type().is_file(),
+            "config must be a regular file Paper can rewrite, not a store symlink"
+        );
+        assert_eq!(fs::read_to_string(&dst)?, "verbose: false\n");
+        assert!(
+            meta.permissions().mode() & 0o200 != 0,
+            "copied config must be owner-writable"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn symlink_keeps_the_store_link() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let source = tmp.path().join("managed-dropins");
+        fs::create_dir_all(&source)?;
+        fs::write(source.join("Plugin.jar"), "jar")?;
+
+        let target = tmp.path().join("plugins");
+        let manifest = tmp.path().join(".ix-managed-plugins");
+        sync_tree(
+            &source,
+            &target,
+            &manifest,
+            &BTreeSet::new(),
+            Materialize::Symlink,
+        )?;
+
+        assert!(
+            fs::symlink_metadata(target.join("Plugin.jar"))?
+                .file_type()
+                .is_symlink(),
+            "jars must stay symlinked to the store"
+        );
+        Ok(())
     }
 }

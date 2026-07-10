@@ -14,6 +14,7 @@
 {
   ix,
   pkgs,
+  name ? "claude-code-extract-system-prompt",
   # The unwrapped upstream binary: this package's libexec helper, the stock
   # download (autopatchelfed on Linux) with NO baked --system-prompt-file, MCP
   # config, or settings.
@@ -21,10 +22,10 @@
   # The wrapped launcher (`bin/claude`): the config-launch wrapper that applies
   # the house --system-prompt-file (full prompt replacement), --mcp-config, and
   # --settings. Probing this shows what our daily-driver prompt collapses to.
-  wrappedBinary,
+  wrappedBinary ? "claude",
 }:
 ix.writePythonApplication pkgs {
-  name = "claude-code-extract-system-prompt";
+  inherit name;
   src = ./extract-system-prompt.py;
   # Bake both probe targets as defaults; a user-supplied --stock-binary /
   # --wrapped-binary on the CLI lands later in argv and overrides them.

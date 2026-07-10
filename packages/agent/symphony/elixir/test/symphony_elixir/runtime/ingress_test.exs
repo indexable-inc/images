@@ -2,13 +2,15 @@ defmodule SymphonyElixir.Runtime.IngressTest do
   use ExUnit.Case, async: false
 
   alias SymphonyElixir.DSL.Parser
-  alias SymphonyElixir.IR.{Node, Store}
+  alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.IR.Store
   alias SymphonyElixir.Runtime.Ingress
   alias SymphonyElixir.WorkflowCatalog
 
   @moduletag capture_log: true
 
   defmodule FakeEngine do
+    @moduledoc false
     @behaviour SymphonyElixir.Runtime.EngineClient
 
     @impl true

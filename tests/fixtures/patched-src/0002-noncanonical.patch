@@ -1,0 +1,14 @@
+From 1234567890abcdef1234567890abcdef12345678 Mon Sep 17 00:00:00 2001
+From: index tests <tests@indexable.dev>
+Date: Mon, 1 Jan 2026 00:00:00 +0000
+Subject: [PATCH] fixture: non-canonical patch shape
+
+Hand-exported patch whose From header carries a real commit hash.
+---
+diff --git a/file.txt b/file.txt
+index 0000000..2222222 100644
+--- a/file.txt
++++ b/file.txt
+@@ -1 +1 @@
+-old
++newer

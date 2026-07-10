@@ -51,12 +51,15 @@ enum Command {
     /// is a rootfs directory (`--root`) booted by libkrun's bundled kernel,
     /// running the trailing command as the guest init.
     BootLinux {
-        /// macOS host: path to a raw EFI-bootable disk image (a NixOS `raw-efi`
-        /// image or a Fedora CoreOS raw). The guest's own kernel/bootloader live
-        /// in it; libkrun's embedded OVMF firmware boots it.
+        /// macOS host: path to a raw disk image, repeatable. The first `--disk`
+        /// is the EFI boot disk (a NixOS `raw-efi` image or a Fedora CoreOS
+        /// raw) whose own kernel/bootloader libkrun's embedded OVMF firmware
+        /// boots; each further `--disk` attaches in order as an extra
+        /// virtio-blk device the guest sees as /dev/vdb, /dev/vdc, ... (e.g. a
+        /// persistent data disk that survives boot-image swaps).
         #[cfg(target_os = "macos")]
-        #[arg(long)]
-        disk: std::path::PathBuf,
+        #[arg(long = "disk", value_name = "DISK", required = true)]
+        disks: Vec<std::path::PathBuf>,
         /// Linux host: path to a rootfs directory, shared into the guest over
         /// virtiofs as `/` and booted by libkrun's bundled kernel.
         #[cfg(target_os = "linux")]
@@ -92,6 +95,15 @@ enum Command {
         /// NIC (gvproxy on macOS, TSI on Linux) that NATs to the host network.
         #[arg(long)]
         net: bool,
+        /// Expose a guest `AF_VSOCK` port as a host unix socket,
+        /// `GUEST_PORT:HOST_PATH`, repeatable (e.g. `--vsock-port
+        /// 7100:/tmp/guest.sock`). libkrun listens on `HOST_PATH` and forwards
+        /// each host `connect()` into the guest's vsock `GUEST_PORT`, so a guest
+        /// service that listens on vsock is reached from the host by connecting
+        /// to the unix socket. Independent of `--net`/`--port` (vsock is its own
+        /// device, not the NIC).
+        #[arg(long = "vsock-port", value_name = "GUEST_PORT:HOST_PATH")]
+        vsock_ports: Vec<String>,
         /// Capture the guest serial console to this file instead of the process's
         /// stdout (useful for a background/lockstep caller).
         #[arg(long)]
@@ -389,11 +401,14 @@ fn dispatch_linux(command: Command) -> Result<(), linuxkrun::Error> {
             memory_mib,
             ports,
             net,
+            vsock_ports,
             console_file,
             timeout_secs,
         } => {
             let net =
                 build_net(net, &ports).map_err(|message| linuxkrun::Error::Setup { message })?;
+            let vsock_ports = build_vsock_ports(&vsock_ports)
+                .map_err(|message| linuxkrun::Error::Setup { message })?;
             let timeout = (timeout_secs != 0).then(|| Duration::from_secs(timeout_secs));
             linuxkrun::boot_linux(&linuxkrun::BootLinux {
                 root,
@@ -402,6 +417,7 @@ fn dispatch_linux(command: Command) -> Result<(), linuxkrun::Error> {
                 cpus,
                 memory_mib,
                 net,
+                vsock_ports,
                 console_file,
                 timeout,
             })
@@ -438,6 +454,72 @@ fn build_net(net: bool, ports: &[String]) -> Result<Option<net::Net>, String> {
         forwards.push(net::Forward { host, guest });
     }
     Ok(Some(net::Net { forwards }))
+}
+
+/// Parse `--vsock-port GUEST_PORT:HOST_PATH` specs into [`linuxkrun::VsockPort`]
+/// mappings for [`linuxkrun::BootLinux::vsock_ports`]. Split at the *first* `:`
+/// only: a unix path is free to contain `:`. The `String` error is a user-facing
+/// CLI message the caller wraps in its host error type, as in [`build_net`].
+fn build_vsock_ports(specs: &[String]) -> Result<Vec<linuxkrun::VsockPort>, String> {
+    let mut ports = Vec::with_capacity(specs.len());
+    for spec in specs {
+        let (port, path) = spec
+            .split_once(':')
+            .ok_or_else(|| format!("--vsock-port {spec:?} must be GUEST_PORT:HOST_PATH"))?;
+        let port: u32 = port
+            .parse()
+            .map_err(|_| format!("--vsock-port {spec:?}: invalid guest port"))?;
+        // Port 0 and VMADDR_PORT_ANY are reserved; reject here with a legible
+        // message instead of deferring to a late libkrun -errno at boot.
+        if port == 0 || port == u32::MAX {
+            return Err(format!("--vsock-port {spec:?}: guest port must be 1..u32::MAX-1"));
+        }
+        if path.is_empty() {
+            return Err(format!("--vsock-port {spec:?} has an empty host socket path"));
+        }
+        ports.push(linuxkrun::VsockPort {
+            guest_port: port,
+            host_path: std::path::PathBuf::from(path),
+        });
+    }
+    Ok(ports)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::build_vsock_ports;
+    use super::linuxkrun::VsockPort;
+
+    #[test]
+    fn vsock_port_spec_parses_port_and_path() {
+        let specs = [String::from("7100:/tmp/guest.sock")];
+        let ports = build_vsock_ports(&specs).expect("a valid spec parses");
+        assert_eq!(
+            ports,
+            [VsockPort { guest_port: 7100, host_path: PathBuf::from("/tmp/guest.sock") }]
+        );
+    }
+
+    #[test]
+    fn vsock_port_path_keeps_later_colons() {
+        // Only the first `:` separates port from path; the rest is the path.
+        let specs = [String::from("7100:/tmp/a:b.sock")];
+        let ports = build_vsock_ports(&specs).expect("a colon in the path is legal");
+        assert_eq!(
+            ports,
+            [VsockPort { guest_port: 7100, host_path: PathBuf::from("/tmp/a:b.sock") }]
+        );
+    }
+
+    #[test]
+    fn vsock_port_rejects_malformed_specs() {
+        for bad in ["7100", "nope:/tmp/x.sock", "7100:", "-1:/tmp/x.sock", "0:/tmp/x.sock", "4294967295:/tmp/x.sock"] {
+            let specs = [String::from(bad)];
+            assert!(build_vsock_ports(&specs).is_err(), "{bad:?} must be rejected");
+        }
+    }
 }
 
 // The libkrun backend compiles on every host (its internals are cfg-split, and a
@@ -520,24 +602,28 @@ mod imp {
         match command {
             Command::Info => info(),
             Command::BootLinux {
-                disk,
+                disks,
                 gpu,
                 cpus,
                 memory_mib,
                 ports,
                 net,
+                vsock_ports,
                 console_file,
                 timeout_secs,
             } => {
                 let net =
                     crate::build_net(net, &ports).map_err(|message| Error::Args { message })?;
+                let vsock_ports = crate::build_vsock_ports(&vsock_ports)
+                    .map_err(|message| Error::Args { message })?;
                 let timeout = (timeout_secs != 0).then(|| Duration::from_secs(timeout_secs));
                 crate::linuxkrun::boot_linux(&crate::linuxkrun::BootLinux {
-                    disk,
+                    disks,
                     gpu,
                     cpus,
                     memory_mib,
                     net,
+                    vsock_ports,
                     console_file,
                     timeout,
                 })

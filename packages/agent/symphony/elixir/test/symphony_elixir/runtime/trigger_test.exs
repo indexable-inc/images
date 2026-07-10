@@ -4,12 +4,6 @@ defmodule SymphonyElixir.Runtime.TriggerTest do
   alias SymphonyElixir.Runtime.Trigger
 
   describe "matches?/2" do
-    test "cron matches on the declared schedule" do
-      declared = %{kind: :cron, schedule: "0 9 * * *", timezone: "UTC", input: %{}}
-      assert Trigger.matches?(declared, %{kind: :cron, schedule: "0 9 * * *"})
-      refute Trigger.matches?(declared, %{kind: :cron, schedule: "@daily"})
-    end
-
     test "linear matches when the declared label is on the event" do
       declared = %{kind: :linear, label: "[sym] triage"}
       assert Trigger.matches?(declared, %{kind: :linear, labels: ["a", "[sym] triage"]})
@@ -39,9 +33,9 @@ defmodule SymphonyElixir.Runtime.TriggerTest do
       assert Trigger.matches?(%{kind: :manual}, %{kind: :manual, input: %{}})
     end
 
-    test "a nil or mismatched declared trigger never matches" do
+    test "a nil or unknown declared trigger never matches" do
       refute Trigger.matches?(nil, %{kind: :manual})
-      refute Trigger.matches?(%{kind: :cron, schedule: "x"}, %{kind: :cron})
+      refute Trigger.matches?(%{kind: :unknown}, %{kind: :unknown})
     end
   end
 end

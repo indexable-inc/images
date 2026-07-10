@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Serve the live-rendered agent skills and subagents at session start.
+# Serve the prebuilt agent skills and subagents at session start.
 #
-# Skills and subagents are not committed (see .gitignore). The `skills` flake
-# package holds one directory per skill under skills/; the `agents` package
-# holds the rendered subagents. This hook builds those packages and copies them
+# Skills and subagents are not committed (see .gitignore). They are Nix-built by
+# the agent wrapper and exposed through IX_CLAUDE_SKILLS_DIR and
+# IX_CLAUDE_AGENTS_DIR. This hook only copies those already-built store paths
 # into .claude/skills + .claude/agents (Claude Code) / .agents/skills (Codex).
 #
 # Output is the SessionStart hook JSON envelope. Codex requires a JSON object
@@ -23,56 +23,44 @@ root=${CLAUDE_PROJECT_DIR:-}
 # destination layout below and whether to materialize subagents.
 target=${1:-claude-md}
 
-# jq builds the JSON envelope. Prefer one on PATH; fall back to nixpkgs so the
-# hook works before direnv loads the devshell.
-if command -v jq >/dev/null 2>&1; then
-  jq() { command jq "$@"; }
-else
-  jq() { nix run nixpkgs#jq -- "$@"; }
-fi
+copy_tree() {
+  local src=$1 dest=$2
+
+  if [ -z "$src" ] || [ ! -d "$src" ]; then
+    return 0
+  fi
+
+  rm -rf "$dest"
+  mkdir -p "$dest"
+  cp -R "$src"/. "$dest"/
+  chmod -R u+w "$dest"
+}
 
 # Copy the skills package onto disk. The package is symlink-free by build-time
 # assertion (see lib/skills.nix), but the destination directory itself must also
 # be real rather than a symlink to the store: Claude Code's `/`-autocomplete
 # discovery filters symlinks (anthropics/claude-code#36659) even though the skill
-# *loader* follows them fine. chmod because cp preserves the store's read-only
-# mode and the next session's rm -rf must succeed. Best-effort: a skills-build
-# failure must not abort the session, so guard the build and skip the copy if it
-# produces no path.
-skills_store=$(nix build --no-link --print-out-paths "$root#skills" 2>/dev/null || true)
-if [ -n "$skills_store" ]; then
-  case "$target" in
-  codex-md) dest="$root/.agents/skills" ;;
-  *)        dest="$root/.claude/skills" ;;
-  esac
-  rm -rf "$dest"
-  mkdir -p "$dest"
-  cp -R "$skills_store"/. "$dest"/
-  chmod -R u+w "$dest"
-fi
+# *loader* follows them fine. The wrapper, not this startup hook, owns the Nix
+# build so a stuck evaluator cannot block the first prompt.
+case "$target" in
+codex-md) copy_tree "${IX_CLAUDE_SKILLS_DIR:-}" "$root/.agents/skills" ;;
+*)        copy_tree "${IX_CLAUDE_SKILLS_DIR:-}" "$root/.claude/skills" ;;
+esac
 
 # Claude Code also discovers subagents from .claude/agents/*.md. Codex's
 # subagent model is config-driven (features.multi_agent_v2), not markdown
-# files, so materialize the rendered agents only for Claude. Same best-effort
-# guard and symlink-free copy as the skills block above.
+# files, so materialize the rendered agents only for Claude.
 if [ "$target" != codex-md ]; then
-  agents_store=$(nix build --no-link --print-out-paths "$root#agents" 2>/dev/null || true)
-  if [ -n "$agents_store" ]; then
-    dest="$root/.claude/agents"
-    rm -rf "$dest"
-    mkdir -p "$dest"
-    cp -R "$agents_store"/. "$dest"/
-    chmod -R u+w "$dest"
-  fi
+  copy_tree "${IX_CLAUDE_AGENTS_DIR:-}" "$root/.claude/agents"
 fi
 
 # Codex: emit an empty additionalContext, no reloadSkills field its parser
 # might reject.
 if [ "$target" = codex-md ]; then
-  jq -n '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: ""}}'
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":""}}'
   exit 0
 fi
 
 # Claude Code: reloadSkills so the freshly materialized .claude/skills is picked
 # up this session.
-jq -n '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: "", reloadSkills: true}}'
+printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"","reloadSkills":true}}'

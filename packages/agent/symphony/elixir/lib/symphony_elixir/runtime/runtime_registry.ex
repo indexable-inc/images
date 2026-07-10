@@ -57,8 +57,7 @@ defmodule SymphonyElixir.Runtime.RuntimeRegistry do
           optional(:labels) => [String.t()],
           optional(:capacity) => non_neg_integer()
         }) :: :ok
-  def register(%{worker_id: worker_id, pid: pid, address: address} = worker)
-      when is_binary(worker_id) and is_pid(pid) and is_binary(address) do
+  def register(%{worker_id: worker_id, pid: pid, address: address} = worker) when is_binary(worker_id) and is_pid(pid) and is_binary(address) do
     GenServer.call(__MODULE__, {:register, normalize(worker)})
   end
 
@@ -88,7 +87,7 @@ defmodule SymphonyElixir.Runtime.RuntimeRegistry do
   def list do
     case :ets.whereis(@table) do
       :undefined -> []
-      _tid -> :ets.tab2list(@table) |> Enum.map(fn {_id, worker} -> worker end)
+      _tid -> @table |> :ets.tab2list() |> Enum.map(fn {_id, worker} -> worker end)
     end
   end
 

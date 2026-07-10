@@ -12,24 +12,22 @@
   ix,
   lib,
   pkgs,
-}:
-
-let
+}: let
   distillerSource = builtins.path {
     name = "ix-distiller-python-source";
     path = ./src;
   };
   distillerModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-distiller-python-module"
-      {
-        strictDeps = true;
-        meta.description = "Claude Code transcript distiller package";
-      }
-      ''
-        site="$out/${pkgs.python3.sitePackages}/distiller"
-        mkdir -p "$site"
-        cp -r ${distillerSource}/distiller/. "$site/"
-      ''
+    {
+      strictDeps = true;
+      meta.description = "Claude Code transcript distiller package";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/distiller"
+      mkdir -p "$site"
+      cp -r ${distillerSource}/distiller/. "$site/"
+    ''
   );
 
   # polars: validation re-reader (a second parquet implementation so pyarrow
@@ -44,66 +42,78 @@ let
     ps.boto3
     ps.pydantic
   ];
-  distillerPython = pkgs.python3.withPackages (ps: pythonDeps ps ++ [ distillerModule ]);
+  distillerPython = pkgs.python3.withPackages (ps: pythonDeps ps ++ [distillerModule]);
 
   # Strict type-checking gate (ENG-3131), mirroring lib/build/uv-application.nix's
   # zuban branch: `zuban check --strict` for correctness plus `ruff check
   # --select ANN` for explicit annotations. The checker resolves third-party
   # imports through a deps-only interpreter (no `distillerModule`, so `distiller`
   # is type-checked from source as a first-party package, not from the installed
-  # site-packages copy). mypy.ini scopes two dependency stub gaps (pyarrow
-  # re-exports / untyped writer, boto3's untyped `client`); see that file.
+  # site-packages copy). The generated mypy config scopes two dependency stub
+  # gaps: pyarrow re-exports/untyped writers and boto3's untyped `client`.
   typeCheckPython = pkgs.python3.withPackages pythonDeps;
-  mypyConfig = builtins.path {
-    name = "ix-distiller-mypy-ini";
-    path = ./mypy.ini;
+  mypyConfig = (pkgs.formats.ini {}).generate "ix-distiller-mypy.ini" {
+    mypy = {};
+    # pyarrow's bundled stubs omit explicit top-level re-exports and leave its
+    # writer/reader helpers untyped.
+    mypy-pyarrow = {
+      implicit_reexport = true;
+      disallow_untyped_calls = false;
+    };
+    "mypy-pyarrow.*" = {
+      implicit_reexport = true;
+      disallow_untyped_calls = false;
+    };
+    # Full typing requires per-service boto3 stubs outside the dependency set.
+    "mypy-boto3.*".disallow_untyped_calls = false;
+    "mypy-botocore.*".disallow_untyped_calls = false;
   };
   typeCheck =
     pkgs.runCommand "ix-distiller-typecheck"
-      {
-        nativeBuildInputs = [
-          pkgs.zuban
-          pkgs.ruff
-        ];
-        strictDeps = true;
-      }
-      ''
-        # zuban discovers mypy.ini from the working directory, so assemble a
-        # tree holding the config beside the importable `distiller` package.
-        cp -r ${distillerSource}/. ./
-        cp ${mypyConfig} ./mypy.ini
-        zuban check --strict \
-          --python-executable ${lib.getExe typeCheckPython} \
-          --python-version ${pkgs.python3.pythonVersion} \
-          --platform linux \
-          distiller
-        ruff check --no-cache ${ix.ruffAnnArgs} distiller
-        mkdir -p "$out"
-      '';
+    {
+      nativeBuildInputs = [
+        pkgs.zuban
+        pkgs.ruff
+      ];
+      strictDeps = true;
+    }
+    ''
+      # zuban discovers mypy.ini from the working directory, so assemble a
+      # tree holding the config beside the importable `distiller` package.
+      cp -r ${distillerSource}/. ./
+      cp ${mypyConfig} mypy.ini
+      zuban check --strict \
+        --python-executable ${lib.getExe typeCheckPython} \
+        --python-version ${pkgs.python3.pythonVersion} \
+        --platform linux \
+        distiller
+      ruff check --no-cache ${ix.ruffAnnArgs} distiller
+      mkdir -p "$out"
+    '';
 
   package =
     pkgs.runCommand "ix-distiller"
-      {
-        nativeBuildInputs = [ pkgs.makeWrapper ];
-        strictDeps = true;
-        meta = {
-          description = "Distill Claude Code transcripts into searchable facts (distilled_facts corpus slices)";
-          mainProgram = "ix-distiller";
-        };
-      }
-      ''
-        mkdir -p $out/bin
-        makeWrapper ${lib.getExe distillerPython} $out/bin/ix-distiller \
-          --add-flags "-m distiller"
-      '';
+    {
+      nativeBuildInputs = [pkgs.makeWrapper];
+      strictDeps = true;
+      meta = {
+        description = "Distill Claude Code transcripts into searchable facts (distilled_facts corpus slices)";
+        mainProgram = "ix-distiller";
+      };
+    }
+    ''
+      mkdir -p $out/bin
+      makeWrapper ${lib.getExe distillerPython} $out/bin/ix-distiller \
+        --add-flags "-m distiller"
+    '';
 
   testPython = pkgs.python3.withPackages (
     ps:
-    pythonDeps ps
-    ++ [
-      distillerModule
-      ps.pytest
-    ]
+      pythonDeps ps
+      ++ [
+        distillerModule
+        ps.pytest
+      ]
   );
   testsSource = builtins.path {
     name = "ix-distiller-tests";
@@ -111,50 +121,59 @@ let
   };
   unitTests =
     pkgs.runCommand "ix-distiller-pytest"
-      {
-        nativeBuildInputs = [ testPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [testPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR
+      ${lib.getExe testPython} -m pytest ${testsSource} -q >stdout 2>stderr || {
+        echo "ix-distiller unit tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        export HOME=$TMPDIR
-        ${lib.getExe testPython} -m pytest ${testsSource} -q >stdout 2>stderr || {
-          echo "ix-distiller unit tests failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        cat stdout
-        mkdir -p "$out"
-      '';
+      cat stdout
+      mkdir -p "$out"
+    '';
   importTest =
     pkgs.runCommand "ix-distiller-import"
-      {
-        nativeBuildInputs = [ distillerPython ];
-        strictDeps = true;
+    {
+      nativeBuildInputs = [distillerPython];
+      strictDeps = true;
+    }
+    ''
+      ${lib.getExe distillerPython} -c '
+      import distiller, distiller.cli, distiller.corpus, distiller.distill
+      import distiller.markdown, distiller.state, distiller.transcripts, distiller.upload
+      parser = distiller.cli.build_parser()
+      args = parser.parse_args(["--days", "3", "--user", "u", "--host", "h"])
+      assert args.days == 3.0 and args.bucket == "ix-history"
+      print("distiller-ok", distiller.__version__)
+      ' >stdout 2>stderr || {
+        echo "ix-distiller import test failed:" >&2
+        cat stdout stderr >&2
+        exit 1
       }
-      ''
-        ${lib.getExe distillerPython} -c '
-        import distiller, distiller.cli, distiller.corpus, distiller.distill
-        import distiller.markdown, distiller.state, distiller.transcripts, distiller.upload
-        parser = distiller.cli.build_parser()
-        args = parser.parse_args(["--days", "3", "--user", "u", "--host", "h"])
-        assert args.days == 3.0 and args.bucket == "ix-history"
-        print("distiller-ok", distiller.__version__)
-        ' >stdout 2>stderr || {
-          echo "ix-distiller import test failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -q '^distiller-ok' stdout
-        mkdir -p "$out"
-      '';
+      grep -q '^distiller-ok' stdout
+      mkdir -p "$out"
+    '';
 in
-package.overrideAttrs (old: {
-  passthru = (old.passthru or { }) // {
-    python = distillerPython;
-    tests = (old.passthru.tests or { }) // {
-      pytest = unitTests;
-      import = importTest;
-      typecheck = typeCheck;
-    };
-  };
-})
+  package.overrideAttrs (old: {
+    passthru =
+      (old.passthru or {})
+      // {
+        python = distillerPython;
+        # The bare importable package and its source tree, for embedding the
+        # transcript reader into other interpreters without duplicating the
+        # recipe: packages/mcp bundles it for `claude_history` (issue #2245).
+        pythonModule = distillerModule;
+        pythonSource = distillerSource;
+        tests =
+          (old.passthru.tests or {})
+          // {
+            pytest = unitTests;
+            import = importTest;
+            typecheck = typeCheck;
+          };
+      };
+  })

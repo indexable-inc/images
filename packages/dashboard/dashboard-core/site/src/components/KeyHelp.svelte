@@ -17,17 +17,16 @@
     {
       title: 'Act',
       rows: [
-        ['o  ⏎  l', 'open / expand'],
-        ['h', 'collapse / parent'],
-        ['/', 'filter'],
-        ['esc', 'close / clear'],
+        ['o  ⏎  l', 'open resource / rich output'],
+        ['h', 'fold session'],
+        ['z a', 'toggle fold'],
       ],
     },
     {
-      title: 'Views',
+      title: 'Find',
       rows: [
-        ['1  2  3', 'jobs / namespace / board'],
-        ['[  ]', 'previous / next view'],
+        ['/', 'filter'],
+        ['esc', 'close / clear'],
         ['?', 'this help'],
       ],
     },
@@ -84,7 +83,7 @@
     position: relative;
     width: min(540px, calc(100vw - 48px));
     background: var(--elev, var(--panel));
-    border: 1px solid var(--line);
+    border: 1px solid var(--edge);
     border-radius: 12px;
     box-shadow: 0 18px 48px -18px rgba(0, 0, 0, 0.55);
     padding: 16px 18px 18px;

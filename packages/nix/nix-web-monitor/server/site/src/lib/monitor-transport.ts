@@ -39,6 +39,7 @@ type Working = {
   progress: MonitorSnapshot['progress'];
   optimise: MonitorSnapshot['optimise'];
   daemon: MonitorSnapshot['daemon'];
+  global: MonitorSnapshot['global'];
   activation: MonitorSnapshot['activation'];
   diff: MonitorSnapshot['diff'];
   expected: Record<string, number>;
@@ -64,8 +65,10 @@ function createWorking(): Working {
       workers: [],
       ops: { link: 0, rename: 0, open: 0, write: 0, fsync: 0, stat: 0, unlink: 0, other: 0 },
       opsPerSec: 0,
-      currentPath: null
+      currentPath: null,
+      hotPaths: []
     },
+    global: { detected: false, builds: [], status: '' },
     activation: { active: false, command: '', steps: [], status: '' },
     diff: null,
     expected: {},
@@ -106,6 +109,9 @@ export function applyDelta(working: Working, delta: Delta): Working {
     case 'daemonSet':
       working.daemon = delta.daemon;
       return working;
+    case 'globalSet':
+      working.global = delta.global;
+      return working;
     case 'activationSet':
       working.activation = delta.activation;
       return working;
@@ -145,6 +151,7 @@ function fromSnapshot(snapshot: MonitorSnapshot): Working {
     progress: snapshot.progress,
     optimise: snapshot.optimise,
     daemon: snapshot.daemon,
+    global: snapshot.global,
     activation: snapshot.activation,
     diff: snapshot.diff,
     expected: { ...snapshot.expected },
@@ -186,6 +193,7 @@ export function projectSnapshot(working: Working): MonitorSnapshot {
     progress: working.progress,
     optimise: working.optimise,
     daemon: working.daemon,
+    global: working.global,
     activation: working.activation,
     diff: working.diff,
     expected: { ...working.expected },

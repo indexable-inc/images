@@ -1,0 +1,12 @@
+[package]
+name = "unibind-runtime"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Language-free boundary types exported code references at runtime: UniStream"
+
+[lints]
+workspace = true
+
+[dependencies]
+futures.workspace = true

@@ -1,0 +1,4 @@
+{
+  id = "unibind";
+  inRustWorkspace = true;
+}

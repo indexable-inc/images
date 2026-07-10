@@ -1,0 +1,180 @@
+---
+id: 0007-dev-vm-environments
+number: '0007'
+title: Forkable dev VM environments
+status: Draft
+authors: hari
+created: '2026-06-15'
+updated: '2026-06-15'
+trackingIssue: null
+supersedes: null
+supersededBy: null
+description: 'One `dev.nix` a user owns and forks: the default config for new VMs, a declarative fleet, and an opt-in shared SMB volume that carries one Claude/ix login across the whole fleet.'
+---
+
+## Summary
+
+Add a single user-owned file, `dev.nix`, and a helper `index.lib.mkDev` that consumes it. The file is the user's personal VM environment (packages, dotfiles, plus our wrapped `claude-code` and `codex` by default). The same file does three jobs: it is the **default config new VMs boot from** (a single VM via `ix up`), it **declares a fleet** deployed with one `ix up`, and it can opt into a **shared SMB volume** that carries one `~/.claude` (and `~/.n` ix credentials) login across every VM in the fleet. The artifact is meant to be forked into the user's own git repo and edited over time. Every VM also gets `/ix` — the same config plus the `ix` CLI — so a VM can recursively bring up its own fleet from the same source.
+
+## Motivation
+
+Today there is no first-class "this is my dev environment" object. The pieces all exist but nobody has assembled them:
+
+- **Fleets** are `index.lib.mkFleet` ([`lib/image/fleet.nix`](https://github.com/indexable-inc/index/blob/main/lib/image/fleet.nix)): `defaults` are modules applied to every node, `nodes` carry `replicas`/`dependsOn`/`groups`, and the helper emits the `ix up` wrapper. This already does "fleet a group declaratively."
+- **Single-VM boot**: per the ix playbook, `ix up <installable>` expands a flake installable to `nixosConfigurations.<name>.config.system.build.toplevel`, nixos-rebuild style, and the CLI has a per-user config surface under `~/.n/`. Nothing wires a user's chosen config in as the default.
+- **Shared files**: [`examples/multi-client/file-sharing`](https://github.com/indexable-inc/index/tree/main/examples/multi-client/file-sharing) already serves an SMB share with correct cross-client locking (`strict locking`, `posix locking`, `strict sync`) and mounts it on replicas.
+- **Shared identity**: [`examples/synced-github/auth`](https://github.com/indexable-inc/index/tree/main/examples/synced-github/auth) gives a fleet one GitHub identity, and its README explicitly leaves open *"whether ix should also offer a config-sync primitive for the local dev-VM case"* ([#465](https://github.com/indexable-inc/index/issues/465)). This RFC is that primitive, scoped tightly.
+- **Agent CLIs**: [`images/dev/development-base`](https://github.com/indexable-inc/index/blob/main/images/dev/development-base/default.nix) already bakes our wrapped `claude-code` (`IS_SANDBOX=1` + a read-only `/etc/claude-code/managed-settings.json` policy) and `codex`, and treats `~/.claude/settings.json` as app-owned.
+
+The concrete pain: a user who wants "my agent box, three of them, all logged into the same Claude account, and let any of them spin up more" has to hand-write a fleet, copy the SMB example, reconcile it with the auth example, and manually re-run `claude login` on every replica. There is no forkable starting point and no way to make a chosen config the default a bare `ix up` uses.
+
+## Detailed design
+
+### The forkable repo
+
+The unit a user owns is a small flake. `ix dev init` scaffolds it; thereafter the user edits `dev.nix` and commits to their own git remote.
+
+```text
+my-ix-dev/                  # user-owned flake, in their git
+├── flake.nix               # boilerplate: inputs.index + outputs = index.lib.mkDev { module = ./dev.nix; src = self; }
+├── dev.nix                 # the only file normally edited
+└── README.md
+```
+
+`flake.nix` is fixed boilerplate; it maps the `mkDev` result under `packages.<system>` and threads the flake `self` in as `src` (what gets materialized at `/ix`). The user's `dev.nix` never mentions `src`.
+
+### `dev.nix`: an ordinary NixOS module
+
+`dev.nix` is a plain NixOS module. The environment is written at the top level the way any NixOS config is; `ix.dev.*` (declared in `lib/dev/options.nix`) describes the agents, the fleet, and the shared volume. This is the key DevEx property: a fork reads like a hand-authored config, not a framework struct. `mkDev` reads `ix.dev` once via a probe eval to plan the fleet (so the fleet/shared topology is not re-derived per node), then builds each node with the same module.
+
+```nix
+{ pkgs, ... }:
+{
+  # Your environment — applied to every VM (single or fleet). Normal NixOS config.
+  environment.systemPackages = [ pkgs.ripgrep pkgs.jq ];
+  programs.git.enable = true;
+
+  # Claude Code + Codex are installed by default; toggle either off:
+  # ix.dev.agents.codex = false;
+
+  # A fleet (omit for a single VM named `dev`):
+  ix.dev.fleet = {
+    agent.replicas = 3;
+    builder.dependsOn = [ "agent" ];
+  };
+
+  # One shared Claude (and ix) login for the fleet over SMB (opt-in):
+  ix.dev.shared = {
+    enable = true;
+    ix = true;                    # also share ~/.n (claude is shared by default)
+    excludeNodes = [ "builder" ]; # per-VM opt-out; default is every node in
+  };
+}
+```
+
+### `index.lib.mkDev`
+
+A helper at `lib/image/dev.nix`, exported from `lib/default.nix` next to `mkFleet`, layered *on top of* `mkFleet` (it does not modify it). It takes `{ module, src }`, reads `ix.dev` from `module` via a probe `evalImageConfig`, and returns the `mkFleet` result shape (`.up`, `.health`, `.diff`, `.down`, `withNodePrefix`, …).
+
+- **module + base + agents → `defaults`.** The user's module, `ix.dev.baseImage`, and the agent layer (`lib/dev/agents.nix`) become `mkFleet`'s `defaults`, so every node is the user's environment and ships the agents.
+- **`ix.dev.fleet` → `nodes`.** Empty `fleet` synthesizes a single node named `dev`. The single-VM default and the fleet are the same code path with a one-node degenerate case.
+- **`ix.dev.shared.enable` → a dedicated server node + injected client/identity modules.** `mkDev` adds a dedicated `file-server` node (the generalized [`server.nix`](https://github.com/indexable-inc/index/blob/main/examples/multi-client/file-sharing/server.nix)) and injects the CIFS client mount plus the `~/.claude`/`~/.n` binds into every node not in `excludeNodes`. It auto-joins the fleet to a private east-west `group` so the share is reachable as `//file-server/dev` by hostname and is never publicly exposed.
+
+A dedicated `file-server` is the default (not co-locating `smbd` on a workload node) so the canonical credentials' lifecycle is decoupled from the workload VMs: an `ix up` that recreates a workload node never blips the share. Co-locating `smbd` on an existing node stays available as an option for cost-sensitive single-replica fleets.
+
+### Mode 1 — default config for new VMs
+
+The fork exposes `nixosConfigurations.dev`. `ix up` already resolves an installable to `nixosConfigurations.<name>.config.system.build.toplevel`. The missing link is a default: `ix dev use .#dev` writes the chosen installable into `~/.n/config.toml` (e.g. a `[up]` `default_installable` key), and a bare `ix up` resolves it when no installable is passed. `ix dev use github:me/my-ix-dev#dev` works the same with a remote flake.
+
+### Mode 2 — declarative fleet
+
+With `fleet.nodes` set, the fork's flake outputs include `.up` / `.health` / `.diff` exactly as `mkFleet` produces them today. `ix up` (or `nix run .#up`) brings up the whole group, every node carrying the user's `env`. `dependsOn`, `replicas`, and `groups` are passed straight through to `mkFleet`.
+
+### Mode 3 — shared SMB identity volume
+
+The share is an *identity volume*, not a general scratch disk. On each participating node, `mkDev` binds:
+
+- `~/.claude` → `<mount>/claude` when `ix.dev.shared.claude` (default on) — one Claude login for the whole fleet; the first node to run `claude login` seeds it, every other node sees it immediately.
+- `~/.n` → `<mount>/n` when `ix.dev.shared.ix` — the ix CLI credentials, so a VM with the shared identity can itself create VMs (see recursion below).
+
+We share only `~/.claude` and `~/.n`, never the whole `~/.config` — directly answering the warning in the `synced-github-auth` README about blast radius. The image's `/etc/claude-code/managed-settings.json` policy layer is untouched and stays in the image; only Claude's app-owned credential/state under `~/.claude` lives on the share, so there is no collision with the managed layer.
+
+The SMB server reuses the example's locking knobs verbatim (`strict locking`, `posix locking`, `strict sync = yes`), which is what keeps `~/.claude/.credentials.json` honest when one node's token refresh writes while another reads. Unlike the example's demo share, the volume is **not guest-writable**: it is served behind a Samba user whose credentials reach the clients through a systemd `LoadCredential` (the same shape [`python-daily-scraper`](https://github.com/indexable-inc/index/tree/main/examples/python/daily-scraper) uses), and it is only reachable on the fleet's private east-west group.
+
+### The `/ix` directory and recursion
+
+When `selfSource` (default on), every VM gets `/ix` containing the `dev.nix` repo source plus the `ix` CLI on `PATH`, so a VM can `cd /ix && ix up` and bring up its own fleet from the *same* config. Two mechanics:
+
+- **Editability.** A `/nix/store` copy is read-only. When `shared.enable`, `/ix` lives on the share, so it is writable and edits propagate fleet-wide. Without a share, first-boot activation copies the source into `/ix` as a writable working tree (optionally `git init`) seeded from a read-only store copy.
+- **Credentials for recursion.** Creating VMs needs real ix credentials; `ix.dev.shared.ix` binding `~/.n` onto the share is what makes a guest able to do it. This is a separate opt-in from `ix.dev.shared.claude` precisely because it widens blast radius.
+
+The `ix` CLI is *not* in dev images today (`development-base` ships `claude-code`, `codex`, and a build toolchain only). Adding it to the dev base is a required piece of this RFC.
+
+### The agent layer
+
+Our wrapped `claude-code` (the `IS_SANDBOX=1` wrapper plus the read-only `/etc/claude-code/managed-settings.json` policy) and `codex` live in one reusable module, `lib/dev/agents.nix`, gated on `ix.dev.agents.{claude,codex}` (default on). Both `development-base` and `mkDev` import it, so the agents are defined once and cannot drift; importing it twice (mkDev on top of `development-base`) is idempotent, so there is exactly one wrapped `claude` binary and no `bin/claude` collision. This is what makes "ships with our claude and codex" both *visible* in `dev.nix` (the `ix.dev.agents` toggles) and *correct*. It lives in `lib/dev/`, not `modules/`, so it never adds `claude-code` to every image in the repo.
+
+### CLI surface
+
+- `ix dev init [dir]` — scaffold the forkable repo from a flake template (`templates/dev/`), `git init`, optionally seed `~/.claude` from the host's current login.
+- `ix dev use <installable>` — record the default installable for bare `ix up` in `~/.n/config.toml`.
+- `ix up` (no args) — boot a single VM from the recorded default.
+- `ix up` in a dev repo / `nix run .#up` — bring up the fleet if one is declared, else the single VM.
+
+### What gets built, and where
+
+**In `index` (this repo):**
+
+1. `lib/image/dev.nix` — the `mkDev` helper; export from `lib/default.nix`, add to the example shim in `lib/discovery.nix`.
+2. `lib/dev/options.nix` — the `ix.dev.*` option surface.
+3. `lib/dev/agents.nix` — the wrapped claude-code + codex + managed-settings layer, gated on `ix.dev.agents`; also consumed by `development-base`.
+4. `lib/dev/shared-mount.nix` — generalized SMB server + client modules (from the example).
+5. `lib/dev/identity.nix` — bind `~/.claude` / `~/.n` onto the share and materialize `/ix`.
+6. `templates/dev/` — the forkable `flake.nix` + `dev.nix` template, registered as `templates.dev`.
+7. `examples/dev/fleet/` — a runnable demo of all three modes.
+8. Add the `ix` CLI to the dev base image (for recursion).
+
+**In `ix` (sibling repo):**
+
+1. `ix up` reads a default installable from `~/.n/config.toml` when none is passed.
+2. `ix dev init` / `ix dev use` verbs.
+
+## Drawbacks
+
+- **Shared auth = shared blast radius.** Every VM in the fleet can read the fleet's `~/.claude` and (with `ix.dev.shared.ix`) `~/.n`. This is inherent to "one login for all VMs." It is bounded to a single user's own fleet on a private network, but a compromise of any node exposes the shared credentials. `ix.dev.shared.ix` is worse than `ix.dev.shared.claude`: it hands out the ability to create more VMs, so it is a distinct opt-in.
+- **Token-refresh races over SMB.** Concurrent writes to `~/.claude/.credentials.json` during refresh rely on the SMB locking config; this is a real edge even if the locking knobs are correct.
+- **Extra VM.** The dedicated `file-server` is one more VM to pay for and keep alive; it is also where the canonical creds live, so its availability matters more than a workload node's.
+- **Surface area.** A new helper, new lib modules, a flake template, and two new `ix` CLI verbs. `mkDev` is opinionated sugar over `mkFleet`; two ways to define a fleet now exist.
+- **Cross-repo coupling.** The "default for new VMs" and the `ix dev` verbs require changes in the `ix` repo, so this cannot ship entirely from `index`.
+
+## Alternatives
+
+- **Do nothing.** Users keep hand-assembling fleet + SMB + auth examples and re-running `claude login` per node. The pieces exist but the assembly cost and the missing "default VM" wiring are the whole point.
+- **Extend `mkFleet` instead of adding `mkDev`.** Rejected: `mkFleet` is the lower primitive and should stay minimal; the dev-flavored opinions (claude/codex injection, identity volume, `/ix`) belong in a layer above it.
+- **Co-locate `smbd` on a workload node by default.** Saves a VM but couples the canonical creds to a workload node's lifecycle, so an `ix up` that recreates that node blips the share. Kept as an option, not the default.
+- **Secret-ref auth (the `synced-github-auth` shape) instead of a shared mount.** More secure — each node holds its own materialized copy at `/run/secrets` — but it cannot express "one writable login that re-auth on any box updates for all," which is the explicit ask. Better for non-interactive service tokens; wrong for an interactive shared agent login.
+- **virtiofs from the host instead of SMB.** Works only for co-located local dev VMs (the `vmkit` path), not remote fleets. NFS was rejected by the requester; it also needs in-guest kernel NFS support not demonstrated here.
+
+## Prior art
+
+- [`lib/image/fleet.nix`](https://github.com/indexable-inc/index/blob/main/lib/image/fleet.nix) — the Colmena-style fleet evaluator `mkDev` wraps.
+- [`examples/multi-client/file-sharing`](https://github.com/indexable-inc/index/tree/main/examples/multi-client/file-sharing) — the SMB server/client pattern with cross-client locking.
+- [`examples/synced-github/auth`](https://github.com/indexable-inc/index/tree/main/examples/synced-github/auth) — fleet-wide single identity, and the open question ([#465](https://github.com/indexable-inc/index/issues/465)) this RFC answers.
+- [`examples/declared/groups`](https://github.com/indexable-inc/index/tree/main/examples/declared/groups) — private east-west group networking the share rides on.
+- [`images/dev/development-base`](https://github.com/indexable-inc/index/blob/main/images/dev/development-base/default.nix) — the wrapped `claude-code` + `codex` base and the managed-settings model.
+- Nix flake templates (`nix flake init -t`) and dotfiles repos as the "fork and own" pattern.
+
+## Unresolved questions
+
+- Exact `~/.n/config.toml` key for the default installable, and whether `ix dev use` should also accept a bare path vs only a flake ref.
+- First-login bootstrap: does `ix dev init` seed `~/.claude` from the host, or is the first `claude login` always done inside a VM? Seeding from the host is convenient but copies host creds onto the share.
+- Should `shared` support arbitrary extra paths beyond `~/.claude` / `~/.n`, or stay deliberately narrow to keep blast radius small?
+- Server election when the user does not name one: fixed synthesized `file-server` node vs electing the first node of the first node group.
+- Does the dedicated `file-server` need any of the user's `env` (it is not a workload box), or should it be a minimal image to cut attack surface?
+
+## Future possibilities
+
+- A registry of shareable `dev.nix` profiles (team baselines) a user layers their personal overrides on top of.
+- Per-agent scoped identities on the same fleet (split `~/.claude` per node-group) once the single-login case is solid.
+- Snapshotting the identity volume so a fleet can be torn down and brought back with its logins intact.
+- Promoting the shared identity volume to a general declarative-mount primitive on `mkFleet` once the dev-VM case proves the shape.

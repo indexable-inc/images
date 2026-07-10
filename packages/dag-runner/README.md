@@ -1,8 +1,20 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="a spec.json fans out into a validated DAG where independent nodes run in parallel and the runner exits with the worst outcome"></p>
+
 # dag-runner
 
-A tiny task runner that takes a JSON DAG of shell commands, runs nodes in parallel as their dependencies finish, and renders inline progress. It powers `nix run .#health-checks` today and is the planned replacement for [`ix-fleet`](../ix-fleet/)'s sequential per-node loops.
+Need to fan out a handful of shell commands with dependencies between them and get one honest exit code back? dag-runner takes a JSON DAG of commands, runs each node as soon as its dependencies succeed (independent nodes in parallel), renders inline progress, and exits with the worst outcome. It powers `nix run .#health-checks` today and is the planned replacement for [`ix-fleet`](../ix-fleet/)'s sequential per-node loops.
 
 The runner is meant for short, hands-off batches: spawn a fan-out of independent jobs, follow their progress, and exit with a worst-case status. It is not a long-running supervisor. For the design rationale (why not `process-compose`, why not `devenv-tasks`), see [the corresponding AGENTS.md section](../../AGENTS.md#why-dag-runner-and-not-process-compose-or-devenv-tasks).
+
+## Get it
+
+```sh
+cargo install --git https://github.com/indexable-inc/index dag-runner
+```
+
+Inside a clone of the monorepo it is also the `dag-runner` flake package
+(`nix run .#dag-runner`). Get the repo with
+`git clone https://github.com/indexable-inc/index`.
 
 ## Usage
 

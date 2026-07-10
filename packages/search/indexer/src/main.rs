@@ -215,11 +215,20 @@ type Mixedbread<'a> = MixedbreadReconciler<'a, MixedbreadStore>;
 /// soft skip is logged but never gates the run's exit code — only `failures`
 /// does — so one uninitialized per-user history db cannot degrade the whole
 /// indexing unit.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct Counts {
     indexed: usize,
     skipped: usize,
     failures: usize,
+}
+
+impl Counts {
+    fn failure() -> Self {
+        Self {
+            failures: 1,
+            ..Self::default()
+        }
+    }
 }
 
 /// A user account to index: its name (the `user` tag) and home directory.
@@ -502,11 +511,7 @@ async fn run_cursor_consume<S: Store + Sync>(
     path: &Path,
     mixedbread: MixedbreadReconciler<'_, S>,
 ) -> Counts {
-    let mut counts = Counts {
-        indexed: 0,
-        skipped: 0,
-        failures: 0,
-    };
+    let mut counts = Counts::default();
     let cursor = match read_cursor(path) {
         Ok(cursor) => cursor,
         Err(error) => {
@@ -818,11 +823,7 @@ async fn run_sources(
             .flatten()
     });
 
-    let mut counts = Counts {
-        indexed: 0,
-        skipped: 0,
-        failures: 0,
-    };
+    let mut counts = Counts::default();
     // The scan cursor gates only the history sources (claude, codex, shell
     // here; debug on the per-user path): those are the per-home trees the
     // hourly fleet run re-parses in full (ENG-2698). Exports, git logs, and
@@ -936,35 +937,36 @@ async fn run_static_exports(
     counts: &mut Counts,
 ) {
     if let Some(dir) = &cli.slack_export {
-        let result = async {
-            let adapter = source_slack::SlackExport::open(dir)
-                .with_context(|| format!("reading Slack export at {}", dir.display()))?;
-            let produced = run_source("slack", &adapter, mixedbread, parquet, lake).await?;
-            gc_source("slack", &adapter.source(), &produced, cli.gc, mixedbread, lake).await
-        }
-        .await;
+        let adapter = source_slack::SlackExport::open(dir)
+            .with_context(|| format!("reading Slack export at {}", dir.display()));
+        let result = run_static_export("slack", adapter, cli.gc, mixedbread, parquet, lake).await;
         record("slack", result, counts);
     }
     if let Some(dir) = &cli.linear_export {
-        let result = async {
-            let adapter = source_linear::LinearExport::open(dir)
-                .with_context(|| format!("reading Linear export at {}", dir.display()))?;
-            let produced = run_source("linear", &adapter, mixedbread, parquet, lake).await?;
-            gc_source("linear", &adapter.source(), &produced, cli.gc, mixedbread, lake).await
-        }
-        .await;
+        let adapter = source_linear::LinearExport::open(dir)
+            .with_context(|| format!("reading Linear export at {}", dir.display()));
+        let result = run_static_export("linear", adapter, cli.gc, mixedbread, parquet, lake).await;
         record("linear", result, counts);
     }
     if let Some(dir) = &cli.github_export {
-        let result = async {
-            let adapter = source_github::GithubExport::open(dir)
-                .with_context(|| format!("reading GitHub export at {}", dir.display()))?;
-            let produced = run_source("github", &adapter, mixedbread, parquet, lake).await?;
-            gc_source("github", &adapter.source(), &produced, cli.gc, mixedbread, lake).await
-        }
-        .await;
+        let adapter = source_github::GithubExport::open(dir)
+            .with_context(|| format!("reading GitHub export at {}", dir.display()));
+        let result = run_static_export("github", adapter, cli.gc, mixedbread, parquet, lake).await;
         record("github", result, counts);
     }
+}
+
+async fn run_static_export<A: SourceAdapter + Sync>(
+    label: &str,
+    adapter: anyhow::Result<A>,
+    gc: bool,
+    mixedbread: Option<Mixedbread<'_>>,
+    parquet: Option<&ParquetReconciler>,
+    lake: Option<&IcebergReconciler>,
+) -> anyhow::Result<()> {
+    let adapter = adapter?;
+    let produced = run_source(label, &adapter, mixedbread, parquet, lake).await?;
+    gc_source(label, &adapter.source(), &produced, gc, mixedbread, lake).await
 }
 
 /// Run every `--git-repo` source, accumulating into the shared counters.
@@ -1112,11 +1114,7 @@ async fn consume_parquet(config: &source_parquet::Config, mixedbread: Mixedbread
         Ok(documents) => documents,
         Err(error) => {
             eprintln!("[consume] failed to read the parquet corpus log: {error:#}");
-            return Counts {
-                indexed: 0,
-                skipped: 0,
-                failures: 1,
-            };
+            return Counts::failure();
         }
     };
     run_consume(documents, mixedbread).await
@@ -1141,11 +1139,7 @@ async fn fold_parquet_into_lake(
         Ok(slices) => slices,
         Err(error) => {
             eprintln!("[fold] failed to read the parquet corpus log: {error:#}");
-            return Counts {
-                indexed: 0,
-                skipped: 0,
-                failures: 1,
-            };
+            return Counts::failure();
         }
     };
     let mut counts = Counts {

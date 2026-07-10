@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 190" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    svg { color: #1f2328; }
+    .muted { fill: #656d76; }
+    .accent { fill: #8250df; }
+    .box { stroke: currentColor; fill: none; }
+    text { fill: currentColor; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { fill: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+            orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <rect class="box" x="28" y="70" width="152" height="52" rx="8"/>
+  <text x="104" y="92" text-anchor="middle" font-size="13" font-weight="600">claude-code</text>
+  <text x="104" y="110" text-anchor="middle" font-size="11" class="muted">pinned binary</text>
+
+  <line class="edge" x1="180" y1="96" x2="248" y2="96"/>
+  <text x="214" y="62" text-anchor="middle" font-size="11" class="muted">sends</text>
+  <text x="214" y="76" text-anchor="middle" font-size="11" class="muted">system prompt</text>
+
+  <rect class="box" x="250" y="70" width="180" height="52" rx="8"/>
+  <text x="340" y="92" text-anchor="middle" font-size="13" font-weight="600">capture server</text>
+  <text x="340" y="110" text-anchor="middle" font-size="11" class="muted">local ANTHROPIC_BASE_URL</text>
+
+  <line class="edge" x1="430" y1="96" x2="498" y2="96"/>
+  <text x="464" y="76" text-anchor="middle" font-size="11" class="muted">normalizes</text>
+
+  <rect class="box" x="500" y="40" width="192" height="112" rx="8"/>
+  <text x="596" y="64" text-anchor="middle" font-size="13" font-weight="600">snapshots</text>
+  <text x="596" y="86" text-anchor="middle" font-size="11" class="muted">sonnet.txt · opus.txt</text>
+  <text x="596" y="104" text-anchor="middle" font-size="11" class="muted">haiku.txt · fable.txt</text>
+  <text x="596" y="132" text-anchor="middle" font-size="12" class="accent">git diff = prompt diff</text>
+</svg>

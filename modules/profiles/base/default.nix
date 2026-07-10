@@ -9,11 +9,9 @@
   lib,
   pkgs,
   ...
-}:
-let
+}: let
   cfg = config.ix.profiles.base;
-in
-{
+in {
   options.ix.profiles.base = {
     enable = lib.mkEnableOption "base runtime tools";
 
@@ -37,6 +35,41 @@ in
   };
 
   config = lib.mkIf config.ix.profiles.base.enable {
+    # `cache.ix.dev` is the ix pull-through cache for guest Nix operations. Put
+    # it in the auto-enabled base profile so every image gets the same warm
+    # binary-cache path unless an image explicitly disables the profile.
+    #
+    # The matching `ix-workspace:` key has to be trusted alongside it. The
+    # guests keep `require-sigs` on, so without the key the daemon rejects every
+    # `cache.ix.dev` narinfo as unsigned ("ignoring substitute ... not signed by
+    # any of the keys in 'trusted-public-keys'") and silently rebuilds the whole
+    # system closure from source, which then dies on the guest's no-namespace
+    # sandbox and fails `ix up`. Both fields come from the one cache-identity
+    # source of truth (lib/cache.nix), exposed here as `ix.cache`.
+    nix.settings = {
+      substituters = lib.mkBefore [ix.cache.url];
+      trusted-public-keys = lib.mkAfter [ix.cache.publicKey];
+
+      # The guest's writable layer (`/`, incl. `/nix/var/nix/db`) is a virtiofs
+      # FUSE mount with no DAX cache capability, so a memory-mapped file is served
+      # through FUSE writeback rather than a coherent shared window. SQLite's WAL
+      # mode needs exactly that: an mmap'd `*-shm` for cross-connection shared
+      # state plus strict WAL/main fsync ordering on checkpoint. Neither holds on
+      # this layer, so the nix DB's WAL silently corrupts and `nix` degrades to
+      # `database disk image is malformed`. Rollback-journal mode drops the `-shm`
+      # mmap dependency and keeps the DB intact. Mitigation for the VCFS layer bug
+      # tracked in indexable-inc/ix#6259; drop this once that layer honors mmap+fsync.
+      use-sqlite-wal = false;
+    };
+
+    # Install terminfo for every common terminal emulator so ncurses tools
+    # (`clear`, `tmux`, `vim`, ...) work no matter what `$TERM` an operator's
+    # client propagates in. Without this, shelling in from Ghostty fails with
+    # `'xterm-ghostty': unknown terminal type.` because the guest only ships
+    # ncurses' built-in set. Pulls only the small `terminfo` outputs (ghostty,
+    # kitty, alacritty, wezterm, foot, ...), not the terminal binaries.
+    environment.enableAllTerminfo = true;
+
     # Cubic halves cwnd on any loss, so a residential last-mile at
     # 30 ms and a couple percent loss caps a single TCP flow far
     # below the path's real capacity. BBR models bottleneck bandwidth
@@ -104,6 +137,16 @@ in
         bash.enable = true;
         zsh.enable = true;
         fish.enable = true;
+        # fish 4.8.0 (current nixpkgs nixos-unstable) removed
+        # share/fish/tools/create_manpage_completions.py, which Home Manager's
+        # default `generateCompletions = true` invokes to derive completions
+        # from man pages. Every `<pkg>-fish-completions` derivation then fails
+        # ("python: can't open file …create_manpage_completions.py"), failing
+        # the whole system closure and breaking `ix up` for every fleet. The
+        # shell rc/integration wiring above is what we want from fish here;
+        # man-page completions are an orthogonal nicety.
+        # https://github.com/indexable-inc/index/issues/1632
+        fish.generateCompletions = false;
         # btop resource monitor, configured natively through the Home
         # Manager module (no opaque btop.conf to hand-maintain) so every
         # VM opens btop with the same tuned layout: 500 ms refresh, just
@@ -289,6 +332,16 @@ in
         # baked into every image.
         git = {
           enable = true;
+          # Route SQLite database files to the sqlmerge driver instead of
+          # mergiraf's global `* merge=mergiraf`. gitattributes resolves each
+          # attribute by the LAST matching line, and the mergiraf HM module
+          # contributes its wildcard line at default order, so pin these after
+          # it with mkAfter or the wildcard would win for .db files too.
+          attributes = lib.mkAfter [
+            "*.db merge=sqlite"
+            "*.sqlite merge=sqlite"
+            "*.sqlite3 merge=sqlite"
+          ];
           settings = {
             alias = {
               # Compact log: subject + short hash, one per line.
@@ -298,7 +351,29 @@ in
               # Delete local branches whose remote-tracking branch is gone.
               cleanup = "!git fetch --prune && git branch -vv | grep \": gone]\" | grep -v \"\\\\*\" | awk \"{print \\$1}\" | xargs -r git branch -d";
             };
-            init.defaultBranch = "main";
+            init = {
+              defaultBranch = "main";
+              # Git 3.0 flips new repos to SHA-256 objects; adopt ahead of the
+              # default flip. GitHub started hosting sha256 repos in mid-2026
+              # (actions/checkout and gh already handle them). The object
+              # format is per-repo and fixed at init, so existing SHA-1 clones
+              # are untouched.
+              defaultObjectFormat = "sha256";
+              # reftable (also the Git 3.0 direction) replaces the loose-file
+              # + packed-refs backend: atomic multi-ref transactions and no
+              # D/F or case-sensitivity ref-name collisions, which matters on
+              # VMs that script branch churn. Per-repo and fixed at init,
+              # like the object format.
+              defaultRefFormat = "reftable";
+            };
+            # Refuse to operate on a bare repository unless it is named
+            # explicitly (--git-dir / GIT_DIR). A cloned repo can embed a
+            # bare repo with a malicious config in a subdirectory; without
+            # this, any git command that walks into it executes that config's
+            # hooks and aliases (the attack safe.bareRepository was added
+            # for). Agents cd through untrusted checkouts constantly, so the
+            # hardening default is worth the rare explicit --git-dir.
+            safe.bareRepository = "explicit";
             pull.rebase = true;
             push = {
               autoSetupRemote = true;
@@ -326,6 +401,15 @@ in
               # three-way merge output; we set ff/renormalize alongside.
               ff = "only";
               renormalize = true;
+              # Three-way merge for SQLite database files (repo crate
+              # `packages/sqlmerge`, via the session extension). Without a
+              # driver a .db file is binary to git and every concurrent edit
+              # is a full-file conflict. The `attributes` lines above route
+              # *.db/*.sqlite/*.sqlite3 here; mergiraf keeps everything else.
+              sqlite = {
+                name = "SQLite three-way merge (sqlmerge)";
+                driver = "${lib.getExe pkgs.sqlmerge} %O %A %B";
+              };
             };
             diff = {
               algorithm = "histogram";
@@ -407,25 +491,35 @@ in
         viAlias = true;
         vimAlias = true;
         configure = {
-          customLuaRC = lib.concatMapStringsSep "\n" builtins.readFile [
-            ./nvim/init.lua
-            ./nvim/plugins/treesitter.lua
-            ./nvim/plugins/telescope.lua
-            ./nvim/plugins/gitsigns.lua
-            ./nvim/plugins/which-key.lua
-            ./nvim/plugins/oil.lua
-            # Pure-Lua Claude Code dispatcher (no nixpkgs plugin); shells out to
-            # the `claude` binary the dev images bake in. <leader>aa on a line.
-            ./nvim/plugins/agent.lua
-          ];
-          packages.ix.start = with pkgs.vimPlugins; [
-            nvim-treesitter.withAllGrammars
-            plenary-nvim
-            telescope-nvim
-            gitsigns-nvim
-            which-key-nvim
-            oil-nvim
-          ];
+          customLuaRC =
+            lib.concatMapStringsSep "\n" builtins.readFile [
+              ./nvim/init.lua
+              ./nvim/plugins/treesitter.lua
+              ./nvim/plugins/telescope.lua
+              ./nvim/plugins/gitsigns.lua
+              ./nvim/plugins/which-key.lua
+              ./nvim/plugins/oil.lua
+            ]
+            + ''
+              local agent = (function()
+              ${builtins.readFile ./nvim/agent.lua}
+              end)()
+              agent.setup()
+            '';
+          packages.ix.start =
+            [
+              pkgs.vimPlugins.nvim-treesitter.withAllGrammars
+            ]
+            ++ builtins.attrValues {
+              inherit
+                (pkgs.vimPlugins)
+                plenary-nvim
+                telescope-nvim
+                gitsigns-nvim
+                which-key-nvim
+                oil-nvim
+                ;
+            };
         };
         # ix-islands colorscheme, generated from the shared islands palette so
         # the editor and the search `-c` highlighter never drift. Both
@@ -436,43 +530,40 @@ in
         # andrewgazelka/vscode-islands for the VS Code variant); init.lua picks
         # the dark variant by default. Both are available via
         # `:colorscheme ix-islands-{dark,light}` at runtime.
-        runtime =
-          let
-            body = builtins.readFile ./nvim/islands-body.lua;
-            colorscheme =
-              variant: slots:
-              let
-                colorTable = lib.concatMapAttrsStringSep "\n" (slot: hex: ''${slot} = "${hex}",'') slots;
-              in
-              pkgs.writeText "ix-islands-${variant}.lua" ''
-                -- ix-islands-${variant}
-                --
-                -- Generated from packages/code/code-highlight/src/islands-theme.json
-                -- and nvim/islands-body.lua. Edit those, not this file.
-                vim.cmd("highlight clear")
-                if vim.fn.exists("syntax_on") == 1 then
-                  vim.cmd("syntax reset")
-                end
-                vim.o.background = "${variant}"
-                vim.g.colors_name = "ix-islands-${variant}"
-
-                local c = {
-                ${colorTable}
-                }
-
-                ${body}
-              '';
+        runtime = let
+          body = builtins.readFile ./nvim/islands-body.lua;
+          colorscheme = variant: slots: let
+            colorTable = lib.concatMapAttrsStringSep "\n" (slot: hex: ''${slot} = "${hex}",'') slots;
           in
-          {
-            "colors/ix-islands-dark.lua".source = colorscheme "dark" ix.islandsTheme.dark;
-            "colors/ix-islands-light.lua".source = colorscheme "light" ix.islandsTheme.light;
-          };
+            pkgs.writeText "ix-islands-${variant}.lua" ''
+              -- ix-islands-${variant}
+              --
+              -- Generated from packages/code/code-highlight/src/islands-theme.json
+              -- and nvim/islands-body.lua. Edit those, not this file.
+              vim.cmd("highlight clear")
+              if vim.fn.exists("syntax_on") == 1 then
+                vim.cmd("syntax reset")
+              end
+              vim.o.background = "${variant}"
+              vim.g.colors_name = "ix-islands-${variant}"
+
+              local c = {
+              ${colorTable}
+              }
+
+              ${body}
+            '';
+        in {
+          "colors/ix-islands-dark.lua".source = colorscheme "dark" ix.islandsTheme.dark;
+          "colors/ix-islands-light.lua".source = colorscheme "light" ix.islandsTheme.light;
+        };
       };
     };
 
     environment.systemPackages =
       (builtins.attrValues {
-        inherit (pkgs)
+        inherit
+          (pkgs)
           ast-grep
           bat
           bpftrace
@@ -529,6 +620,10 @@ in
           ripgrep
           strace
           tcpdump
+          # Complements ripgrep with what it lacks: boolean queries
+          # (-%), fuzzy match (-Z), and searching inside archives and
+          # compressed files (-z).
+          ugrep
           # Pane and tab multiplexer for one session. Connection survival
           # across SSH drops is handled by ix itself (AGENTS.md "VM
           # assumptions"), so zellij is shipped for splits, not reattach.

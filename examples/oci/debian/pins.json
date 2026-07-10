@@ -1,0 +1,8 @@
+{
+  "base": {
+    "imageName": "debian",
+    "finalImageTag": "12-slim",
+    "imageDigest": "sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb",
+    "hash": "sha256-7BIcwvTwDJeqbKT6wNQ86l4O936LjmrnEgzZesSHGuc="
+  }
+}

@@ -64,30 +64,6 @@ impl SearchIndexReader {
         })
     }
 
-    /// Search the index for the top `limit` hits matching `query`. When
-    /// `filter_directory` is set, only documents whose canonicalized parent
-    /// directory equals it or sits beneath it are returned.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the query cannot be parsed, the search fails, or
-    /// (when `filter_directory` is set) the filter path cannot be
-    /// canonicalized.
-    pub fn search(
-        &self,
-        query: &str,
-        limit: usize,
-        filter_directory: Option<&Path>,
-    ) -> Result<Vec<SearchResult>> {
-        search::search(
-            &self.index,
-            &self.reader,
-            &self.schema,
-            query,
-            limit,
-            filter_directory,
-        )
-    }
 }
 
 /// Read-write handle to a Tantivy index. Owns a writer (and therefore the
@@ -161,28 +137,38 @@ impl SearchIndex {
         indexing::index_directory(&mut self.writer, &self.schema, directory, respect_gitignore)
     }
 
-    /// Search the index for the top `limit` hits matching `query`. Same
-    /// behavior as [`SearchIndexReader::search`].
-    ///
-    /// # Errors
-    ///
-    /// Same conditions as [`SearchIndexReader::search`].
-    pub fn search(
-        &self,
-        query: &str,
-        limit: usize,
-        filter_directory: Option<&Path>,
-    ) -> Result<Vec<SearchResult>> {
-        search::search(
-            &self.index,
-            &self.reader,
-            &self.schema,
-            query,
-            limit,
-            filter_directory,
-        )
-    }
 }
+
+macro_rules! impl_search {
+    ($type:ty) => {
+        impl $type {
+            /// Search the index for the top `limit` hits matching `query`.
+            /// A directory filter includes that directory and its descendants.
+            ///
+            /// # Errors
+            /// Returns an error when parsing, searching, or canonicalizing the
+            /// optional directory filter fails.
+            pub fn search(
+                &self,
+                query: &str,
+                limit: usize,
+                filter_directory: Option<&Path>,
+            ) -> Result<Vec<SearchResult>> {
+                search::search(
+                    &self.index,
+                    &self.reader,
+                    &self.schema,
+                    query,
+                    limit,
+                    filter_directory,
+                )
+            }
+        }
+    };
+}
+
+impl_search!(SearchIndexReader);
+impl_search!(SearchIndex);
 
 fn build_reader(index: &Index) -> Result<IndexReader> {
     index

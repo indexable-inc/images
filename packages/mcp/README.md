@@ -1,20 +1,29 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="python_exec runs agent code on one persistent IPython kernel whose execution log feeds a live human dashboard"></p>
+
 # ix-mcp
 
-A Python execution MCP server. Its one general tool, `python_exec`, runs code on
-**one shared, persistent IPython kernel**. The namespace persists across calls,
-many executions run **concurrently** on the kernel's event loop, and work that
-outlives a short foreground budget keeps running in the background. Run one
-standalone dashboard (`nix run .#dashboard`) to see every running execution and
-its live output across all servers.
+What if your agent's Python tool never forgot a variable between calls? ix-mcp
+is an MCP server with one general tool, `python_exec`, that runs code on **one
+shared, persistent IPython kernel**: the namespace survives across calls, many
+executions run **concurrently** on the kernel's event loop, and work that
+outlives a short foreground budget keeps running as a background job. Run one
+standalone dashboard (`nix run .#dashboard`) to watch every execution and its
+live output across all servers.
 
 ## Quickstart
 
 ```
-nix run .#mcp -- serve                       # MCP over stdio (what an MCP client launches)
+nix run github:indexable-inc/index#mcp -- serve   # MCP over stdio (what an MCP client launches)
+```
+
+From a clone (`git clone https://github.com/indexable-inc/index`):
+
+```
+nix run .#mcp -- serve                       # MCP over stdio
 nix run .#mcp -- serve --http :8000          # MCP over streamable HTTP instead
 nix run .#mcp -- serve --session work.ixnb   # same, recorded in a reopenable session file
 nix run .#mcp -- notebook work.ixnb          # the engine alone: kernel + dashboard, no MCP
-nix run .#mcp -- dashboard                   # print/open this server's data-API URL (human UI: nix run .#dashboard)
+nix run .#mcp -- dashboard                   # print the shared dashboard URL without opening a browser
 nix run .#mcp -- eval '1 + 2'                # one-shot expression on a throwaway kernel
 ```
 
@@ -85,10 +94,47 @@ Result(user_html="<table>…</table>", llm_result="42 rows, mean 3.1")
 
 The dashboard renders `user_html` (a rich HTML view for the human) while your
 `python_exec` tool result receives only `llm_result` (concise text). It is a mime
-bundle under the hood (`text/html` for the dashboard, `text/plain` for you), so a
-large rendered view never costs you tokens. For an ordinary value the two
-audiences share one rendering: a bare trailing expression still shows its rich
-repr on the dashboard and its text to you.
+bundle under the hood (`text/html` for the dashboard, `application/x-ix-llm+json`
+for you), so a large rendered view never costs you tokens.
+
+Objects can opt in directly:
+
+```python
+class Summary:
+    def __ix_html__(self):
+        return "<strong>human table</strong>"
+
+    def __ix_llm__(self):
+        return {"rows": 42, "mean": 3.1}
+```
+
+Non-string `llm_result` / `__ix_llm__` values are serialized as Nushell NUON.
+Polars DataFrames default to compact NUON with shape, schema, columns, and rows,
+while the dashboard still gets the styled HTML table.
+
+## Interactive results in the chat: MCP Apps
+
+An MCP host that supports the [MCP Apps
+extension](https://github.com/modelcontextprotocol/ext-apps) (claude.ai, Claude
+Desktop) renders the human view INLINE in the conversation, not only in the
+dashboard. The mechanism (`mcp_ui.py`, spec 2026-01-26 / SEP-1865): the server
+declares one `ui://` resource with mimeType `text/html;profile=mcp-app` (a
+self-contained viewer document), and `python_exec` / `pr_watch` name it in
+their tool `_meta.ui.resourceUri`. The host mounts the viewer in a sandboxed
+iframe and hands it the tool's result; the run's `text/html` fragments (the
+same ones the dashboard shows) ride on the reply's `_meta`, so they never cost
+the model tokens. The viewer renders the status header as chips, collapses long
+text, inlines images, injects the rich HTML, and makes every table
+click-to-sort. Hosts without the extension ignore all of it: the model-facing
+content blocks are unchanged.
+
+The same document renders outside an MCP host: `GET /api/jobs/{id}/ui` on the
+data API serves it with the run's payload baked in, which is what the room's
+results panel mounts (sandboxed iframe) behind each run's `UI` toggle.
+
+Opting a new tool in is two calls: `meta = mcp_ui.register_viewer(mcp)` once,
+then `@mcp.tool(meta=meta)` and `return mcp_ui.ui_result(content,
+fragments=mcp_ui.html_fragments(cell_outputs))`.
 
 ## Asking the human: interactive input
 
@@ -171,24 +217,21 @@ rather than re-enumerated in this README so the list cannot drift.
 
 ## Embedding (the room server)
 
-The same rich feed the dashboard renders is the contract an embedder consumes.
-`ix_notebook_mcp/feed.py` is the single source of truth for the agent's
-presentation as structured data; the dashboard is one view of it, the room
-server is another. Read it two ways:
+The weave Constellation is now the human and embedder-facing presentation
+contract. Notebook execution state is emitted to weave as facts and blobs; the
+Constellation derives jobs, cells, resources, messages, and live status from
+queries rather than from the old local `feed.py` snapshot API.
 
-- In-process: `feed.snapshot(conn)` returns `{jobs, cells, resources, rev}`, and
-  `feed.job(conn, id)` returns one execution by id. `rev` is a cheap change
-  marker so a poller re-renders only when something moved.
-- Over HTTP (what an out-of-process embedder like the Rust room server uses):
-  `GET /api/snapshot` is the whole feed; `GET /api/jobs/{id}` is one run.
+Embedder integration should target the weave HTTP API:
 
-`jobs` carry rich `outputs` as nbformat-style mime bundles: `text/html` is the
-human view, `application/x-ix-llm+json` is what the model received. A
-`python_exec` tool result already names its run as `jobs['<id>']`, so an embedder
-parses that id and fetches `/api/jobs/{id}` to render that turn's tables, plots,
-and HTML inline beside the agent's text. `cells` is the agent's curated highlight
-reel (`cells.add(...)`), and `resources` are live, self-updating views. The JSON
-shape mirrors `site/src/lib/types.ts`.
+- Query facts through the weave server for derived Constellation state.
+- Fetch rich execution payloads from weave blobs by their recorded hashes.
+- Send user messages through `/api/chat` so they appear in the same fact graph as
+  agent replies and process/run updates.
+
+The previous room-server feed routes (`/api/snapshot`, `/api/jobs/{id}`) and the
+task-graph demo have been removed; the Constellation is the single supported
+surface for this view of MCP activity.
 
 ## The cluster: `import fleet`
 
@@ -276,6 +319,34 @@ contract you meant.
 - `IX_MCP_PUBLIC_HOST`: the host put into the dashboard URL.
 
 The default Tailscale-IP bind keeps the trust boundary at the tailnet.
+
+### MCP over HTTP
+
+`serve --http HOST:PORT` serves the MCP protocol itself over streamable HTTP at
+`http://HOST:PORT/mcp` (the transport an off-tailnet client -- e.g. a remotely
+hosted agent -- connects to). Auth is a static API key:
+
+- `IX_MCP_API_KEY` (or `IX_MCP_API_KEY_FILE`, a file holding the key -- how a
+  deployment keeps the secret out of the unit definition): when set, every
+  request must carry the key in an `X-Api-Key` header, or in
+  `Authorization: Bearer` for clients whose path preserves that header (some
+  egress proxies strip `Authorization` for allowlisted domains, which is why
+  `X-Api-Key` is the documented one). Anything else is refused 401.
+- `GET /health` is always unauthenticated, so a fronting proxy or uptime
+  monitor can probe liveness without holding the key.
+- Without a key the server refuses to bind beyond loopback/tailnet: an open
+  MCP endpoint is arbitrary code execution on this machine.
+
+Generate a key with `openssl rand -hex 32`; nothing in the repo ever contains
+a real one. Smoke test:
+
+```
+IX_MCP_API_KEY=$(openssl rand -hex 32) ix-mcp serve --http 127.0.0.1:8000
+curl -sS -X POST http://127.0.0.1:8000/mcp \
+  -H "X-Api-Key: $IX_MCP_API_KEY" \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}'
+```
 
 ## Bad fit if
 

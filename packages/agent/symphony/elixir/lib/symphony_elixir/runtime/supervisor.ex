@@ -19,7 +19,8 @@ defmodule SymphonyElixir.Runtime.Supervisor do
 
   use DynamicSupervisor
 
-  alias SymphonyElixir.IR.{RunGraph, Store}
+  alias SymphonyElixir.IR.RunGraph
+  alias SymphonyElixir.IR.Store
   alias SymphonyElixir.Runtime
   alias SymphonyElixir.Runtime.Placement
 

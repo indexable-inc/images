@@ -14,8 +14,8 @@ namespace has:
 Concurrency model (validated): each execution runs as an asyncio task on the
 kernel's own event loop, so many run at once and none blocks the others. Per-job
 stdout/stderr is captured by routing writes through a ``ContextVar`` set inside
-each task, so interleaved prints land in the right job. A blocking call (fff,
-numpy, a subprocess) stays non-blocking by going through ``asyncio.to_thread``
+each task, so interleaved prints land in the right job. A blocking call (numpy,
+a subprocess) stays non-blocking by going through ``asyncio.to_thread``
 (its GIL-releasing native work then runs off the loop).
 
 Every job also writes itself to the SQLite store at ``IX_MCP_STORE`` (start, a
@@ -32,9 +32,12 @@ import ast
 import asyncio
 import base64
 import binascii
+import collections
 import contextlib
 import contextvars
+import datetime
 import dataclasses
+import html as html_lib
 import inspect
 import json
 import os
@@ -47,10 +50,14 @@ import time
 import traceback
 import types
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any, overload
 
-from . import registry
+if TYPE_CHECKING:
+    import polars as pl
+
+from . import readstats, registry, typecheck
+from .config import build_stamp, process_cwd
 
 _ix_current: contextvars.ContextVar = contextvars.ContextVar("ix_current_job", default=None)
 
@@ -58,6 +65,107 @@ _ix_current: contextvars.ContextVar = contextvars.ContextVar("ix_current_job", d
 # and the dashboard). A chatty/runaway job keeps only the most recent slice, so
 # memory, store writes, and poll payloads all stay bounded.
 _MAX_OUTPUT_CHARS = 256_000
+
+# n-pty chunk-stream flush policy: bulk job output rides CAS as ~1 chunk fact
+# per flush instead of per-character facts. Flush when either
+# _STREAM_FLUSH_BYTES accumulate (size cap, checked at feed time) or
+# _STREAM_FLUSH_SECS elapse since the first unflushed byte (latency cap,
+# checked by the _flusher tick), whichever first. Volume math: a saturated
+# stream lands one fact per 4096 output bytes instead of 4096 per-character
+# facts (~4e3 fewer), and every avoided fact also carries fixed journal
+# framing (seq, entity, attr, value tagging) that dwarfs a 1-byte payload,
+# so total journal volume sits ~5 orders of magnitude under per-character
+# facts; an idle trickle is capped at 1 fact/s.
+_STREAM_FLUSH_BYTES = 4096
+_STREAM_FLUSH_SECS = 1.0
+
+# Bounded record of background-task failures, newest last; bound into the user
+# namespace as `task_errors`. asyncio only reports a failed, never-awaited task
+# at garbage collection, and never reports one a namespace variable keeps alive
+# -- which is exactly the fire-and-forget watcher pattern this kernel invites
+# (`asyncio.create_task(...)` bound to a name). One such watcher died on an
+# AttributeError on 2026-07-02 and starved its monitors for 90 minutes with no
+# trace anywhere. The task factory below reports at completion instead.
+task_errors: collections.deque[str] = collections.deque(maxlen=50)
+
+# The namespace-install flusher task (see _install), module-held so it cannot
+# be garbage-collected mid-flight.
+_flusher_task: asyncio.Task | None = None
+
+# Grace period between a task finishing with an exception and the failure being
+# reported: a parent that promptly retrieves it (`await task`, `gather`,
+# `.exception()`) wins the race and nothing is reported; a task nobody checks
+# within this window is treated as fire-and-forget and surfaced. A parent that
+# retrieves *later* still gets the exception raised normally -- it just also
+# left a (harmless) report behind.
+_TASK_FAILURE_GRACE_S = 2.0
+
+
+def _report_task_failure(task: asyncio.Task) -> None:
+    exc = task.exception()  # also clears the interpreter's own GC-time warning, which this report replaces
+    if exc is None:
+        return
+    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    coro = task.get_coro()
+    where = getattr(coro, "__qualname__", None) or repr(coro)
+    # "unretrieved after Ns", not "crashed": a parent that awaits this task
+    # later than the grace window still gets the exception raised normally --
+    # this report then just flagged it early, it is not a second failure.
+    msg = (
+        f"[task_errors] background task {task.get_name()!r} ({where}) failed and nothing "
+        f"retrieved the exception within {_TASK_FAILURE_GRACE_S:g}s (a later `await` "
+        f"still raises it):\n{tb}"
+    )
+    task_errors.append(msg)
+    # Tasks copy the spawning cell's context, so the job that created this task
+    # is reachable and its buffer is where the model will look first.
+    job = task.get_context().get(_ix_current)
+    if job is not None:
+        job._append(msg)
+        # The common fire-and-forget case dies AFTER its spawning cell
+        # finished, i.e. after _persist_final already wrote the store row; a
+        # bare _append would then be visible to `jobs[id].output` but never
+        # reach the dashboard card. Re-persist so the stored row carries it.
+        if not job.running():
+            _persist_final(job)
+    with contextlib.suppress(Exception):  # reporting must never take the loop down
+        print(msg, file=sys.__stderr__, flush=True)
+
+
+def _on_task_done(task: asyncio.Task) -> None:
+    if task.cancelled():
+        return
+
+    def check() -> None:
+        # `_log_traceback` is the interpreter's own "exception not yet
+        # retrieved" flag (cleared by `await`/`.result()`/`.exception()`);
+        # private, but it is precisely the signal CPython's GC-time warning
+        # keys on, and there is no public completion-time equivalent.
+        if getattr(task, "_log_traceback", False):
+            _report_task_failure(task)
+
+    with contextlib.suppress(RuntimeError):  # loop already closed: nowhere left to report
+        task.get_loop().call_later(_TASK_FAILURE_GRACE_S, check)
+
+
+def _install_task_failure_watch(loop: asyncio.AbstractEventLoop) -> None:
+    """Report every task that finishes with an unretrieved exception (see
+    `task_errors`). Installed as a task factory because a done-callback is the
+    only completion-time hook asyncio offers, and wrapping the factory is the
+    only way to attach one to every task, including ones third-party code
+    spawns. Idempotent: re-running `install()` on the same loop must not stack
+    watchers (each stack would double the per-task callback and 2s timer)."""
+    if getattr(loop.get_task_factory(), "_ix_task_watch", False):
+        return
+    prior = loop.get_task_factory()
+
+    def factory(loop: asyncio.AbstractEventLoop, coro: Any, **kwargs: Any) -> asyncio.Task:
+        task = prior(loop, coro, **kwargs) if prior is not None else asyncio.Task(coro, loop=loop, **kwargs)
+        task.add_done_callback(_on_task_done)
+        return task
+
+    factory._ix_task_watch = True  # our own sentinel, read back by the guard above
+    loop.set_task_factory(factory)
 
 # Longest edge (px) of an image returned to the model. A full-page screenshot or
 # hi-DPI figure otherwise spends vision tokens scaling with its resolution for no
@@ -91,6 +199,13 @@ JOB_MIME = "application/x-ix-job+json"
 # (it is not in _RICH_MIMES), so the human sees user_html and the model sees
 # this. Mirrors outputs.IX_LLM_MIME.
 IX_LLM_MIME = "application/x-ix-llm+json"
+
+# The custom mime a Result uses to carry a STRUCTURED human view — a
+# ``{"renderer": <name>, "data": <json>}`` spec a view-aware frontend routes
+# through its renderer registry instead of a baked HTML string in a sandboxed
+# frame; it persists with the run's stored outputs (see _normalize_bundle).
+# Mirrors outputs.IX_VIEW_MIME.
+IX_VIEW_MIME = "application/x-ix-view+json"
 
 # Rich display capture: which mimes we keep for the dashboard, and per-mime size
 # caps. Truncating a base64 image yields a corrupt data URI, so an oversize image
@@ -136,6 +251,86 @@ def _rename_current_job(name: str) -> None:
     if _store is not None and _store_conn is not None:
         with contextlib.suppress(Exception):  # best-effort: a store write must not abort user code
             _store.rename(_store_conn, id=job.id, name=name)
+
+
+class _StreamWriter:
+    """Full-fidelity job output -> CAS chunk stream (weave2 n-pty, index side).
+
+    ``Job._append`` feeds every write here besides the trimmed in-memory
+    buffer: the existing previews (``last_output``, ``line`` facts) stay the
+    cheap derived view, this stream keeps the complete bytes. On the first
+    byte the writer mints ``pty-stream:<job id8>`` child_of the run/process
+    entity; bytes then buffer locally and flush as ONE ``(S, chunk, <hash>)``
+    fact per the _STREAM_FLUSH_BYTES/_STREAM_FLUSH_SECS policy above, with a
+    final flush on job exit (``_persist_final``). Flushed bytes ride the
+    store's write-behind queue and the CAS put happens on its writer thread,
+    so a flush never blocks user prints on HTTP. With ``WEAVE_URL=off`` (or
+    no store at all) the writer is entirely inert: nothing buffers, nothing
+    is minted."""
+
+    __slots__ = ("_buf", "_buflen", "_ent", "_first_ts", "_job")
+
+    def __init__(self, job: Job) -> None:
+        self._job = job
+        self._ent: str | None = None
+        self._buf: list[bytes] = []
+        self._buflen = 0
+        self._first_ts = 0.0
+
+    def feed(self, s: str) -> None:
+        if _store is None or _store_conn is None or _store_conn.disabled or not s:
+            return
+        with contextlib.suppress(Exception):  # best-effort: a store write must not abort user code
+            if self._ent is None:
+                self._ent = _store.stream_open(_store_conn, id=self._job.id, kind=self._job.kind)
+            if not self._buf:
+                self._first_ts = time.monotonic()
+            data = s.encode("utf-8", "replace")
+            self._buf.append(data)
+            self._buflen += len(data)
+            if self._buflen >= _STREAM_FLUSH_BYTES:
+                self._flush()
+
+    def poll(self) -> None:
+        """Time-cap flush; the _flusher tick is this writer's only clock."""
+        if self._buf and time.monotonic() - self._first_ts >= _STREAM_FLUSH_SECS:
+            with contextlib.suppress(Exception):  # best-effort: a store write must not kill the loop
+                self._flush()
+
+    def close(self) -> None:
+        """Final flush on job exit, so the last partial chunk is never lost."""
+        if self._buf:
+            with contextlib.suppress(Exception):  # best-effort: persist during cleanup must not raise
+                self._flush()
+
+    def _flush(self) -> None:
+        # Swap-out, not clear-in-place: a concurrent feed (a to_thread print)
+        # lands either wholly in this chunk or wholly in the next.
+        buf, self._buf, self._buflen = self._buf, [], 0
+        _store.stream_chunk(_store_conn, self._ent, b"".join(buf))
+
+    def _snapshot(self, state_json: str) -> None:
+        """Documented seam, unused for now: assert (S, snapshot, <hash>) of a
+        terminal-emulator state so replay can seek instead of replaying from
+        the start. No emulator ships in this env (pyte is deliberately not a
+        dependency), so nothing calls this yet; the weave-side replay renderer
+        treats a stream with no snapshots as replay-from-start, so chunks
+        alone are complete. ``state_json`` contract (version 1):
+
+            {"v": 1, "cols": int, "rows": int,
+             "cursor": {"x": int, "y": int},
+             "lines": [{"text": str, "attrs": [[start, len, sgr]]?}]}
+
+        ``attrs`` is optional per line: [start, len, sgr] spans; ``sgr`` is
+        the semicolon-joined SGR parameter list exactly as it would appear in
+        CSI <params> m, applied to that span from a fresh default state
+        ("1;31" = bold red). Lines are padded/truncated to ``cols``. Agreed
+        with the weave-side vt100 replay renderer (viz/src/lib/vt/)."""
+        if _store is None or _store_conn is None or _store_conn.disabled:
+            return
+        if self._ent is None:
+            self._ent = _store.stream_open(_store_conn, id=self._job.id, kind=self._job.kind)
+        _store.stream_snapshot(_store_conn, self._ent, state_json.encode("utf-8"))
 
 
 class _Tee:
@@ -185,14 +380,39 @@ class JobStillRunning(RuntimeError):
     """
 
 
+class JobCancelled(RuntimeError):
+    """Raised by ``await jobs['<id>']`` when the awaited job was cancelled.
+
+    ``jobs`` is one kernel-wide registry, so several sessions may await the same
+    job. A cancelled job used to throw ``CancelledError`` into every awaiting
+    cell, which ``_runner`` then recorded as "cancelled" too -- one explicit
+    ``jobs['<id>'].cancel()`` silently killed other agents' waiter cells (issue
+    #2104). Raising an ordinary error instead keeps the awaiting cell alive and
+    names the job that was cancelled.
+    """
+
+
 class Job:
     """A single ``python_exec`` execution: an awaitable handle over the asyncio
     task running the code, with its captured output, result, and status."""
 
-    def __init__(self, code: str, name: str | None = None, budget: float = 15.0, kind: str = "cell") -> None:
+    def __init__(
+        self,
+        code: str,
+        name: str | None = None,
+        budget: float = 15.0,
+        kind: str = "cell",
+        topic: str = "",
+        session: str | None = None,
+    ) -> None:
         self.id = uuid.uuid4().hex[:8]
         self.code = code
         self.name = name or self.id
+        self.topic = topic
+        # The MCP session id this run belongs to (None = the shared namespace).
+        # Carried so a read helper running inside the cell can attribute its read
+        # to the right session's redundant-read counters (see readstats).
+        self.session = session
         # 'cell' for a normal execution; 'replay' for a re-run performed while
         # reopening a session file. Replays never feed future replays
         # (store.replayable filters on this), so a session cannot double-run
@@ -219,8 +439,20 @@ class Job:
         # than hand back a misleading None.
         self._result = None
         self.error: str | None = None
+        # The actual exception a failed cell raised, kept so `await jobs['<id>']`
+        # can re-raise it (with its original traceback) instead of handing back a
+        # misleading None -- the documented "raises rather than return a
+        # misleading None" contract. None while running, done, or cancelled.
+        # `_exc_tb` pins the traceback as captured at failure time: each re-raise
+        # restores it first, so awaiting the same failed job repeatedly does not
+        # keep growing the shared exception object's traceback chain.
+        self._exc: BaseException | None = None
+        self._exc_tb: types.TracebackType | None = None
         self._buf: list[str] = []
         self._buflen = 0
+        # Full-fidelity output -> CAS chunk stream (weave2 n-pty); inert
+        # unless a store is configured.
+        self._stream = _StreamWriter(self)
         # Rich outputs (mime bundles) display()-ed while this job runs.
         self._displays: list[dict] = []
         self.task: asyncio.Task | None = None
@@ -231,11 +463,21 @@ class Job:
         # a per-session namespace -- see _session_ns). Set by __ix_run so the
         # bindings snapshot reads the namespace the cell actually wrote to.
         self._ns: dict | None = None
+        # Set once __ix_run returns before the task finishes. When such a job
+        # reaches a terminal state later, notify the agent session.
+        self.backgrounded = False
+        # The live weave view entity backing this run's human HTML (weave2
+        # n-toolviews), set by _persist_final once the finished result is
+        # stored; rides the job summary so the server attaches it to the tool
+        # result's _meta. None while running, when the result carries no
+        # human HTML, or when persistence is off (WEAVE_URL=off).
+        self.weave_view: str | None = None
 
     def _append(self, s: str) -> None:
         """Append output, trimming to the most recent _MAX_OUTPUT_CHARS so a
         runaway job cannot grow the buffer (or the store row / poll payload)
         without bound."""
+        self._stream.feed(s)  # full bytes ride the chunk stream; the trim below only bounds the preview
         self._buf.append(s)
         self._buflen += len(s)
         if self._buflen > _MAX_OUTPUT_CHARS:
@@ -246,6 +488,18 @@ class Job:
     @property
     def output(self) -> str:
         return "".join(self._buf)
+
+    @property
+    def text(self) -> str:
+        """The finished run's model-facing result text (its `Result.llm_result`).
+
+        The sibling of `.output` (stdout): `sh()`'s Output and a `Result` both
+        answer `.text`, so a job handle does too, letting `jobs['id'].text` page
+        the returned value without first reaching through `.result`. Empty while
+        the job is still running (background it and `await jobs['id']` for the
+        value); on a failed job it is empty too (the failure is in `.error`, and
+        `await`-ing the job re-raises it)."""
+        return _result_text(self)
 
     @property
     def pageable(self) -> str:
@@ -355,7 +609,10 @@ class Job:
         ``Job.result`` is a **property** (not a method), but since ``Result``
         is callable, both ``job.result`` and ``job.result()`` hand back the
         value. The returned Result's ``.text`` attribute is the rendered model
-        text (same as ``.llm_result``), so ``job.result.text[-100:]`` pages it."""
+        text (same as ``.llm_result``), so ``job.result.text[-100:]`` pages it.
+        Its ``.value`` is the ORIGINAL trailing-expression value (the DataFrame
+        itself, not its rendered text), and subscripting delegates to it, so
+        ``jobs['<id>'].result[0, 0]`` reads the real cell (issue #2068)."""
         if self.running():
             dur = time.time() - self.started
             raise JobStillRunning(
@@ -382,9 +639,48 @@ class Job:
 
     def __await__(self) -> Any:
         # `await jobs['id']` should yield the job's result, but the runner task
-        # returns None, so wait for it then hand back the captured result.
+        # returns None (it swallows the cell's exception to keep the shared kernel
+        # alive), so wait for it then hand back the captured result -- or, if the
+        # cell FAILED, re-raise the exception it raised. Returning `self._result`
+        # unconditionally handed back None on a failed job, so `(await
+        # jobs[id]).text` then died with an opaque AttributeError; the documented
+        # contract is that awaiting raises rather than return a misleading None.
         async def _await_result() -> Result | None:
-            await self.task
+            if self.task is not None:
+                try:
+                    # Shield the job's task: ``jobs`` is one kernel-wide registry,
+                    # so several sessions may await the same job, and an awaiter's
+                    # own cancellation -- the common shape is an
+                    # ``asyncio.wait_for(jobs['<id>'], t)`` timeout -- must not
+                    # propagate INTO the shared task and kill the job for everyone
+                    # (issue #2104). Cancelling a job stays explicit:
+                    # ``jobs['<id>'].cancel()``.
+                    await asyncio.shield(self.task)
+                except asyncio.CancelledError:
+                    current = asyncio.current_task()
+                    if current is not None and current.cancelling():
+                        # The AWAITER itself is being cancelled (its cell was
+                        # cancelled, or its wait timed out): propagate that,
+                        # leaving the job running for its other awaiters.
+                        raise
+                    if self.task.cancelled():
+                        # The JOB was cancelled out from under this await. Surface
+                        # an ordinary error naming the job, so the awaiting cell
+                        # records what happened instead of dying "cancelled"
+                        # itself (the cross-session cascade in issue #2104).
+                        raise JobCancelled(
+                            f"job {self.id} ({self.name}) was cancelled while "
+                            f"awaited; jobs[{self.id!r}] holds its partial output"
+                        ) from None
+                    raise
+            if self._exc is not None:
+                # Re-raise the original exception object, so its type, message,
+                # and traceback (the cell's own frames) all reach the caller --
+                # the same failure they would have seen running the code inline.
+                # Restore the traceback captured at failure time first, so a
+                # repeated await re-raises from the same baseline instead of
+                # accreting one more raise-frame chain per await.
+                raise self._exc.with_traceback(self._exc_tb)
             return self._result
 
         return _await_result().__await__()
@@ -395,6 +691,61 @@ class Job:
         head = f"<Job {self.id} ({self.name}) [{self.status}{at}] {dur:.2f}s>"
         out = self.tail(800)
         return head + ("\n" + out if out else "")
+
+
+def _nuon_key(value: Any) -> str:
+    text = str(value)
+    return text if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", text) else json.dumps(text, ensure_ascii=False)
+
+
+def _nuon_table(columns: list[Any], rows: list[Mapping[Any, Any]], *, _depth: int = 0) -> str:
+    header = ", ".join(_nuon_key(c) for c in columns)
+    if not rows:
+        return f"[[{header}];]"
+    body = ", ".join(
+        "[" + ", ".join(_nuon(row.get(c), _depth=_depth + 1) for c in columns) + "]"
+        for row in rows
+    )
+    return f"[[{header}]; {body}]"
+
+
+def _nuon(value: Any, *, _depth: int = 0) -> str:
+    """A compact Nushell NUON subset for model-facing structured output."""
+    if _depth > 8:
+        return json.dumps(_safe_repr(value), ensure_ascii=False)
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    if isinstance(value, float):
+        if value == value and value not in (float("inf"), float("-inf")):
+            return repr(value)
+        return json.dumps(str(value), ensure_ascii=False)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, bytes):
+        return json.dumps(base64.b64encode(value).decode("ascii"), ensure_ascii=False)
+    if isinstance(value, Mapping):
+        return "{" + ", ".join(f"{_nuon_key(k)}: {_nuon(v, _depth=_depth + 1)}" for k, v in value.items()) + "}"
+    if isinstance(value, (list, tuple)):
+        if value and all(isinstance(v, Mapping) for v in value):
+            columns: list[Any] = []
+            seen: set[str] = set()
+            for row in value:
+                for key in row:
+                    text = str(key)
+                    if text not in seen:
+                        seen.add(text)
+                        columns.append(key)
+            return _nuon_table(columns, value, _depth=_depth)
+        return "[" + ", ".join(_nuon(v, _depth=_depth + 1) for v in value) + "]"
+    iso = getattr(value, "isoformat", None)
+    if callable(iso):
+        with contextlib.suppress(Exception):
+            return json.dumps(iso(), ensure_ascii=False)
+    return json.dumps(_safe_repr(value), ensure_ascii=False)
 
 
 def _llm_text(value: Any) -> str | None:
@@ -412,7 +763,29 @@ def _llm_text(value: Any) -> str | None:
     inner = getattr(value, "llm_result", None)
     if isinstance(inner, str):
         return inner
-    return _safe_repr(value)
+    return _nuon(value)
+
+
+def _call_value_hook(value: Any, *names: str) -> Any:
+    for name in names:
+        hook = getattr(value, name, None)
+        if hook is None:
+            continue
+        try:
+            return hook() if callable(hook) else hook
+        except Exception:
+            return None
+    return None
+
+
+def _html_output(value: Any) -> str | None:
+    html = _call_value_hook(value, "__ix_html__", "_ix_html_", "_repr_html_", "__html__")
+    return html if isinstance(html, str) else None
+
+
+def _llm_output(value: Any) -> str | None:
+    out = _call_value_hook(value, "__ix_llm__", "_ix_llm_", "_repr_llm_")
+    return _llm_text(out) if out is not None else None
 
 
 def _result_from_text(cls: type, value: Any, *, html: str | None = None) -> Result:
@@ -480,7 +853,11 @@ class Result:
     tokens at all. It is a mime bundle under the hood:
     ``text/html`` carries ``user_html`` and, when present, ``IX_LLM_MIME`` carries
     the model's text+images (unpacked by the server); ``text/plain`` carries the
-    text as a fallback for plain hosts.
+    text as a fallback for plain hosts. ``user_view`` is the structured
+    alternative to ``user_html``: a ``{"renderer": name, "data": ...}`` spec
+    (carried as ``IX_VIEW_MIME``) the dashboard renders with a native component
+    instead of a sandboxed HTML frame — prefer it when a registered renderer
+    (e.g. ``file-view``) fits.
 
     On an instance, ``.text`` returns the already-rendered model text (same as
     ``.llm_result``), so ``(await jobs['id']).text[-100:]`` works. On the class,
@@ -496,10 +873,18 @@ class Result:
     # value (so you never lose one to a silent positional). For full control give
     # the keywords, which always win: `Result(user_html=..., llm_result=...,
     # llm_images=[...])`.
-    def __init__(self, *values: Any, user_html: str | None = None, llm_result: str | None = None, llm_images: list | None = None) -> None:
+    def __init__(self, *values: Any, user_html: str | None = None, user_view: dict | None = None, llm_result: str | None = None, llm_images: list | None = None) -> None:
         llm_result = _llm_text(llm_result)
-        if user_html is not None:
-            self.user_html = user_html
+        self.user_view = user_view
+        # The original Python value this Result was built from (set by
+        # `Result.of`, which also auto-wraps a cell's trailing expression), so
+        # a finished job's REAL value -- the DataFrame itself, not its rendered
+        # text -- stays reachable: `jobs['<id>'].result.value`, and
+        # subscripting delegates to it (`jobs['<id>'].result[0, 0]`). None for
+        # a Result built purely from keyword views (issue #2068).
+        self.value: Any = None
+        if user_html is not None or user_view is not None:
+            self.user_html = user_html or ""
             self.llm_result = llm_result if llm_result is not None else ""
             self.llm_images = list(llm_images) if llm_images else []
             return
@@ -515,6 +900,8 @@ class Result:
             else _result_from_values(values, llm_result=llm_result)
         )
         self.user_html = built.user_html
+        self.user_view = built.user_view
+        self.value = built.value
         self.llm_result = built.llm_result
         self.llm_images = list(llm_images) if llm_images else built.llm_images
 
@@ -524,6 +911,17 @@ class Result:
     # returned the bound constructor, a guessing-game error when inspecting a
     # finished job.
     text = _TextDescriptor()
+
+    @property
+    def output(self) -> str:
+        """The rendered model text, under the name ``Job.output`` and ``sh()``'s
+        ``Output.output`` already answer to. ``await jobs['id']`` yields a
+        Result while the un-awaited handle is a Job, so paging code holding
+        "whichever one finished" reaches ``.output`` either way; before this
+        alias that exact access died with an AttributeError, and inside a
+        fire-and-forget watcher task it died silently (2026-07-02, 90 minutes
+        of starved monitors -- the incident behind ``task_errors``)."""
+        return self.llm_result or ""
 
     @classmethod
     def ok(cls, message: str = "done") -> Result:
@@ -538,9 +936,23 @@ class Result:
         """Wrap any value: render it richly for the human (a DataFrame as a
         table, a figure as an image, anything else as its display HTML or repr)
         and hand the model concise text. For a polars DataFrame the model text is
-        the frame as compact, untruncated CSV (the human still gets the styled
-        HTML table), so a wide or long-stringed frame is never clipped to the
-        agent the way the boxed text repr clips it. Override with ``llm_result``."""
+        compact NUON (the human still gets the styled HTML table), so a wide or
+        long-stringed frame is never clipped to the agent the way the boxed text
+        repr clips it. Override with ``llm_result`` or define ``__ix_llm__``.
+
+        The built Result also keeps ``value`` itself reachable as ``.value``
+        (and through subscripting), so the rendered wrapper never strands the
+        original: ``jobs['<id>'].result[0, 0]`` reads the real DataFrame cell
+        instead of dying inside the wrapper (issue #2068)."""
+        built = cls._of(value, llm_result=llm_result)
+        # A nested Result carries ITS original forward; anything else is the
+        # original itself.
+        built.value = value.value if isinstance(value, Result) else value
+        return built
+
+    @classmethod
+    def _of(cls, value: Any, *, llm_result: str | None = None) -> Result:
+        """The rendering body of :meth:`of` (which records ``.value`` on top)."""
         if isinstance(value, Result):
             # An existing Result is already split into its two views: copy it
             # faithfully (keeping llm_images) instead of rebuilding it from its
@@ -548,9 +960,17 @@ class Result:
             # preserves images when a nested Result is stacked below.
             return cls(
                 user_html=value.user_html,
+                user_view=value.user_view,
                 llm_result=value.llm_result if llm_result is None else llm_result,
                 llm_images=value.llm_images,
             )
+        if not _is_polars_df(value):
+            llm_hook = _llm_output(value)
+            html_hook = _html_output(value)
+            if html_hook is not None or llm_hook is not None:
+                text_view = llm_result if llm_result is not None else (llm_hook or _nuon(value))
+                user = html_hook if html_hook is not None else f'<pre class="ix-result">{_escape_html(text_view)}</pre>'
+                return cls(user_html=user, llm_result=text_view)
         image_mime = _image_bytes_mime(value)
         if image_mime is not None:
             # Raw PNG/JPEG bytes (e.g. `await page.screenshot()`): show the human
@@ -596,9 +1016,9 @@ class Result:
             return _result_from_values(list(value), llm_result=llm_result)
         frame = _frame_view(value)
         if frame is not None:
-            # A rich result type (fff GrepResult/SearchResult) that exposes a
+            # A rich result type (anything with ``_ix_to_frame_``) that exposes a
             # polars frame: render that frame the same as a bare DataFrame -- a
-            # styled table for the human, compact CSV for the model -- so the
+            # styled table for the human, compact NUON for the model -- so the
             # model reads the real rows, not a one-line summary repr.
             text_view = llm_result if llm_result is not None else _df_llm_text(frame)
             try:
@@ -614,11 +1034,11 @@ class Result:
         elif _is_polars_df(value):
             text_view = _df_llm_text(value)
         else:
-            text_view = _safe_repr(value)
+            text_view = _nuon(value)
         if _is_polars_df(value):
             # A frame (incl. a dict/records value coerced above) renders as the
             # dashboard's styled table directly -- a table for the human, compact
-            # CSV for you -- and works even without the IPython display formatter.
+            # NUON for you -- and works even without the IPython display formatter.
             try:
                 import view as _view
 
@@ -628,6 +1048,18 @@ class Result:
                 return cls(user_html=user, llm_result=text_view)
         bundle = _result_bundle(value)
         data = (bundle or {}).get("data", {})
+        # Preserve a structured view riding the value's display bundle (e.g. a
+        # view.Code as the cell's trailing expression), so wrapping in Result
+        # never downgrades the dashboard render to the HTML fallback. The
+        # normalized bundle JSON-encodes custom mimes.
+        view_spec = data.get(IX_VIEW_MIME)
+        if isinstance(view_spec, str):
+            try:
+                view_spec = json.loads(view_spec)
+            except json.JSONDecodeError:
+                view_spec = None
+        if not isinstance(view_spec, dict):
+            view_spec = None
         if "text/html" in data:
             user = data["text/html"]
         elif "image/png" in data:
@@ -636,17 +1068,35 @@ class Result:
             user = data["image/svg+xml"]
         else:
             user = f'<pre class="ix-result">{_escape_html(text_view)}</pre>'
-        return cls(user_html=user, llm_result=text_view)
+        return cls(user_html=user, user_view=view_spec, llm_result=text_view)
 
     def _repr_mimebundle_(self, **_kwargs: Any) -> dict:
         # IPython's display protocol: html is the human view (the dashboard
-        # prefers it); IX_LLM_MIME carries the model's text+images, which the
-        # server unpacks and the dashboard ignores; text/plain is the fallback.
-        bundle: dict = {"text/html": self.user_html, "text/plain": self.llm_result or ""}
+        # prefers it); IX_VIEW_MIME carries a structured human view the
+        # dashboard renders natively (preferred over the html when present);
+        # IX_LLM_MIME carries the model's text+images, which the server unpacks
+        # and the dashboard ignores; text/plain is the fallback. An EMPTY html
+        # view is omitted, not advertised — a host that ranks text/html above
+        # text/plain would otherwise render a blank result.
+        bundle: dict = {"text/plain": self.llm_result or ""}
+        if self.user_html:
+            bundle["text/html"] = self.user_html
+        if self.user_view is not None:
+            bundle[IX_VIEW_MIME] = self.user_view
         images = [img for img in (_coerce_image(i) for i in self.llm_images) if img]
-        if images:
-            bundle[IX_LLM_MIME] = {"text": self.llm_result or "", "images": images}
+        bundle[IX_LLM_MIME] = {"text": self.llm_result or "", "images": images}
         return bundle
+
+    @property
+    def output(self) -> str:
+        """Alias for the model text (same as ``.text`` / ``.llm_result``).
+
+        A live/errored job handle exposes ``.output`` (its captured stdout) and
+        ``sh()``'s Output exposes ``.output`` too; a finished ``Result`` is the
+        third thing an agent pages, so it answers the same attribute -- reading a
+        result via ``.output`` returns its model text instead of dying with an
+        AttributeError and a guessing game about which surface owns which name."""
+        return self.llm_result or ""
 
     def __call__(self) -> Result:
         """Calling a Result returns it unchanged. ``Job.result`` is a property,
@@ -654,6 +1104,18 @@ class Result:
         polling a finished job -- used to die with "'Result' object is not
         callable". Property and call now both hand over the value."""
         return self
+
+    def __getitem__(self, key: Any) -> Any:
+        """Subscript through to the wrapped original value: ``jobs['<id>']
+        .result[0, 0]`` -- the natural way to reach a finished cell's DataFrame
+        cell -- reads the real value instead of dying on the rendered-text
+        wrapper (issue #2068). A Result that carries no original (built purely
+        from keyword views) raises a TypeError that points at ``.text``."""
+        if self.value is not None:
+            return self.value[key]
+        raise TypeError(
+            "this Result wraps no subscriptable value; read `.text` for its rendered text"
+        )
 
     def __repr__(self) -> str:
         # Plain-text fallback (the stored result repr, non-rich hosts): the model
@@ -664,7 +1126,7 @@ class Result:
 def _as_frame_if_tabular(value: Any) -> Any:
     """A mapping (a config dict, counts) or a list of mappings (records) is
     tabular: render it as a polars frame -- a styled table for the human, compact
-    CSV for you -- rather than a raw dict/list repr. Anything else is returned
+    NUON for you -- rather than a raw dict/list repr. Anything else is returned
     unchanged. Keeps `Result({...})` from shoving a dict under text/html (invalid)
     and from collapsing to a bare repr."""
     try:
@@ -692,7 +1154,7 @@ def _as_frame_if_tabular(value: Any) -> Any:
             return value
     if isinstance(value, (list, tuple)) and value:
         # A plain list/tuple of scalars is tabular too: one styled `value` column
-        # for the human, compact CSV for you. (Lists of mappings are records above.)
+        # for the human, compact NUON for you. (Lists of mappings are records above.)
         try:
             return pl.DataFrame({"value": list(value)})
         except Exception:
@@ -743,27 +1205,55 @@ class Resource:
     widget, anything with a current HTML representation. Register one with
     :func:`register_resource`; while it stays alive the runtime mirrors its
     latest HTML to the store every flush tick and the dashboard sidebar shows
-    all live resources updating in place. The resource closes itself (leaves the
-    sidebar) when its ``alive`` predicate reports the source is gone.
+    all resources updating in place. The resource closes itself (switches to a
+    closed indicator while keeping its final pane) when its ``alive`` predicate
+    reports the source is gone.
+
+    Pass ``actions={"name": handler}`` to make the resource interactive: its HTML
+    gets ``ix.act(name, payload)`` and ``ix.events(fn)`` injected (see
+    :attr:`script`), each ``act`` runs the named in-kernel handler, and every
+    handler result/error -- plus any agent ``reply`` -- streams back to the page
+    over the resource's live event feed.
     """
 
-    def __init__(self, id: str, title: str, kind: str, render: Any, alive: Any = None) -> None:
+    def __init__(
+        self,
+        id: str,
+        title: str,
+        kind: str,
+        render: Any,
+        alive: Any = None,
+        actions: Mapping[str, Any] | None = None,
+        execution_id: str = "",
+    ) -> None:
         self.id = id
         self.title = title
         self.kind = kind
+        self.execution_id = execution_id
         self._render = render
         self._alive = alive
         self.status = "live"
         self.created = time.time()
         self.html = ""
         self.error: str | None = None
+        self.actions: dict[str, Any] = dict(actions) if actions else {}
+        self._action_channel: Input | None = None
+        self._dispatcher: asyncio.Task | None = None
+        if self.actions:
+            self._start_actions()
 
     def closed(self) -> bool:
         return self.status == "closed"
 
     def close(self) -> Resource:
-        """Close the resource so the sidebar drops it on the next tick."""
+        """Close the resource and tear down any action channel/dispatcher."""
         self.status = "closed"
+        if self._dispatcher is not None:
+            self._dispatcher.cancel()
+            self._dispatcher = None
+        if self._action_channel is not None:
+            self._action_channel.close()
+            self._action_channel = None
         return self
 
     def alive(self) -> bool:
@@ -777,19 +1267,142 @@ class Resource:
             # A source whose liveness check raises is treated as gone.
             return False
 
-    async def render_html(self) -> str:
-        """The current HTML for this resource (awaits the render if it is async)."""
+    async def _render_out(self) -> Any:
+        """Invoke the render, awaiting it if it is a coroutine. The raw output,
+        before any HTML coercion: an html resource stringifies it, a `data`
+        resource keeps the structure (a ``{"renderer", "data"}`` spec)."""
         out = self._render() if callable(self._render) else self._render
         if inspect.iscoroutine(out):
             out = await out
-        return out if isinstance(out, str) else str(out)
+        return out
+
+    async def render_html(self) -> str:
+        """The current HTML for this resource (awaits the render if it is async).
+        An interactive resource gets its wiring script prepended, so the page's
+        markup can call ``ix.act``/``ix.events`` without including anything."""
+        out = await self._render_out()
+        html = out if isinstance(out, str) else str(out)
+        script = self.script
+        return script + html if script else html
+
+    async def render_view(self) -> dict:
+        """The current structured view for a ``kind="data"`` resource: a
+        ``{"renderer": name, "data": <json>}`` spec the dashboard renders with a
+        native component (via the frontend renderer registry) instead of a
+        sandboxed HTML frame. The counterpart to :meth:`render_html`, for a live,
+        self-updating pane that wants a real renderer rather than baked markup
+        (e.g. the `nix` module's live build tree). The render must return that
+        dict; anything else is an error the sweep surfaces on the pane."""
+        out = await self._render_out()
+        if not (isinstance(out, dict) and isinstance(out.get("renderer"), str) and "data" in out):
+            raise TypeError(
+                "a data resource's render must return {'renderer': str, 'data': ...}; "
+                f"got {type(out).__name__}"
+            )
+        return out
+
+    @property
+    def script(self) -> str:
+        """The ``<script>`` an interactive resource's HTML is served with ("" for
+        a plain resource). It extends the shared ``window.ix`` object with:
+
+        - ``ix.act(name, payload) -> Promise``: queue ``payload`` for the named
+          in-kernel action handler (rides the existing ``/api/input`` write path,
+          so it shares that endpoint's network-boundary authorization). Resolves
+          with ``{ok, call}``; the handler's return value arrives on the event
+          feed as ``{kind: 'action_result', call, value}``.
+        - ``ix.events(fn) -> EventSource``: subscribe to this resource's live
+          feed (action results, errors, and agent ``reply`` messages), invoking
+          ``fn(event)`` per event.
+        """
+        channel = self._action_channel
+        if channel is None:
+            return ""
+        base = os.environ.get("IX_MCP_DATA_API_URL", "").rstrip("/")
+        events_url = f"{base}/api/resources/{self.id}/events"
+        # These interpolate into a <script> body. channel.endpoint is env-derived
+        # and channel.id is a secrets token; self.id is validated to [A-Za-z0-9._-]
+        # at register_resource (an interactive resource), so none can carry a
+        # `</script>` breakout. json.dumps still quotes them as JS string literals.
+        return (
+            "<script>(function(){"
+            f"var E={json.dumps(channel.endpoint)},C={json.dumps(channel.id)},"
+            f"S={json.dumps(events_url)};"
+            "var x=(window.ix=window.ix||{});"
+            "x.act=function(a,p){var id=Math.random().toString(36).slice(2,10);"
+            "return fetch(E,{method:'POST',"
+            "headers:{'Content-Type':'text/plain;charset=UTF-8'},"
+            "body:JSON.stringify({channel:C,payload:{action:a,call:id,"
+            "payload:p===undefined?null:p}})})"
+            ".then(function(r){return r.json();})"
+            ".then(function(j){j.call=id;return j;});};"
+            "x.events=function(f){var s=new EventSource(S);"
+            "s.onmessage=function(e){try{f(JSON.parse(e.data));}catch(_){}};"
+            "return s;};"
+            "})();</script>"
+        )
+
+    def _start_actions(self) -> None:
+        """Open the action channel and start the dispatcher consuming it."""
+        self._action_channel = Input(title=f"{self.title} actions")
+        with contextlib.suppress(RuntimeError):  # no loop (sync test context): actions need the kernel loop
+            self._dispatcher = asyncio.get_event_loop().create_task(self._dispatch_actions())
+
+    def _emit_event(self, kind: str, body: dict) -> None:
+        """Append one event to this resource's live feed (best-effort: the page
+        stream is a convenience; a store failure must not abort the handler)."""
+        if _store is None or _store_conn is None:
+            return
+        with contextlib.suppress(Exception):  # best-effort: a store write must not abort user code
+            _store.add_event(
+                _store_conn,
+                resource=self.id,
+                kind=kind,
+                body=json.dumps(body, default=_safe_repr),
+            )
+
+    async def _dispatch_actions(self) -> None:
+        """Consume the action channel: run each queued ``ix.act`` submission's
+        handler and stream its result (or error) back on the event feed."""
+        channel = self._action_channel
+        if channel is None:
+            return
+        async for submission in channel:
+            name = submission.get("action") if isinstance(submission, dict) else None
+            call = submission.get("call") if isinstance(submission, dict) else None
+            handler = self.actions.get(name)
+            if handler is None:
+                self._emit_event("error", {"action": name, "call": call, "error": f"no such action {name!r}"})
+                continue
+            try:
+                out = handler(submission.get("payload") if isinstance(submission, dict) else None)
+                if inspect.isawaitable(out):
+                    out = await out
+            except Exception as exc:
+                self._emit_event(
+                    "error",
+                    {
+                        "action": name,
+                        "call": call,
+                        "error": "".join(traceback.format_exception_only(type(exc), exc)).strip(),
+                    },
+                )
+                continue
+            self._emit_event("action_result", {"action": name, "call": call, "value": out})
 
     def __repr__(self) -> str:
         return f"<Resource {self.id} ({self.title}) [{self.status}] {self.kind}>"
 
 
 def register_resource(
-    source: Any = None, *, title: str | None = None, render: Any = None, id: str | None = None, kind: str = "html", alive: Any = None
+    source: Any = None,
+    *,
+    title: str | None = None,
+    render: Any = None,
+    id: str | None = None,
+    kind: str = "html",
+    alive: Any = None,
+    actions: Mapping[str, Any] | None = None,
 ) -> Resource:
     """Register a live HTML resource: a view the dashboard shows in its sidebar.
 
@@ -810,7 +1423,7 @@ def register_resource(
       updating one view), instead of spawning a new pane each call. Omitted -> a
       random id, i.e. a new resource every time.
     - ``alive``: optional predicate; when it returns False the resource closes
-      itself and leaves the sidebar. Else call ``.close()`` on the returned handle.
+      itself but keeps its final pane. Else call ``.close()`` on the returned handle.
 
     Viewing it as a native overlay window (macOS): besides the web dashboard, the
     ``ix-windows`` consumer renders each live resource as its own floating, blurred,
@@ -822,11 +1435,52 @@ def register_resource(
     close. Move one by dragging its card chrome (the padding around the content);
     it is not resizable (size follows the content).
 
-    Interactive (a form the human fills in): pair the resource with an
-    :class:`Input`, drop its ``.script`` into the HTML, and ``await`` the reply --
-    or just use :func:`ask` for a ready-made form. A cross-origin ``fetch`` to the
-    data API DOES work from the sandbox (that is how input flows back); only
-    *same-origin* access to the embedding page is blocked.
+    STYLING: write content, not a page. The host (dashboard pane and overlay
+    window alike) already provides the card: a translucent, rounded surface that
+    on macOS blurs whatever is behind the window, plus the close control and the
+    system font (SF via ``-apple-system``, antialiased; ``code``/``pre`` are
+    monospace). For a native look:
+
+    - Do NOT set a background on ``html``/``body`` or paint a full-bleed
+      wrapper: an opaque background covers the blur and the card reads as a flat
+      rectangle. Leave the page transparent; tint only small elements
+      (badges, rows) and prefer translucent tints (``rgba``) over solid fills.
+    - Do NOT add your own card chrome: no page-level ``border-radius``,
+      ``box-shadow``, or outer border; the host draws those.
+    - Add your own padding (the host renders content edge to edge), size
+      intrinsically (the window auto-fits the content; avoid ``100vw``/fixed
+      page widths), and inherit the host font instead of restating one.
+
+    Interactive (buttons/forms that run python): pass ``actions`` -- a dict of
+    name -> handler (sync or async, called with the submitted payload). The HTML
+    is served with ``ix.act(name, payload)`` and ``ix.events(fn)`` pre-wired.
+    For any non-trivial UI prefer ``svelte.component(...)`` (module ``svelte``)
+    over hand-written HTML/JS strings: it compiles a real Svelte 5 component to
+    a self-contained bundle over this same wiring, with one reactive renderer
+    instead of a server template plus a hand-rolled ``ix.events`` redraw. ::
+
+        async def on_deploy(payload):
+            run = await start_deploy(payload["env"])
+            await notify(f"deploy requested: {run}", resource="deploy-panel")
+            return {"run": run}
+
+        register_resource(
+            render=lambda: '<button onclick="ix.act(\\'deploy\\', {env: \\'prod\\'})">ship</button>',
+            id="deploy-panel", actions={"deploy": on_deploy},
+        )
+
+    Each ``ix.act`` queues its payload for the handler; the handler's return value
+    (or error) streams back to the page as ``{kind: 'action_result', call, value}``
+    on the feed ``ix.events(fn)`` subscribes to, alongside any agent ``reply``.
+    Call :func:`notify` (with ``resource=<id>``) in every handler by default, as
+    above: it is the only way the agent session learns the human acted (the
+    page<->kernel loop runs without the agent, so an unwired handler means the
+    agent must poll kernel state). Skip it only for purely page-local
+    interactions. For a
+    simple one-question form, :func:`ask` is still the shortcut; the lower-level
+    :class:`Input` + ``.script`` path also still works. A cross-origin ``fetch``
+    to the data API DOES work from the sandbox (that is how input flows back);
+    only *same-origin* access to the embedding page is blocked.
 
     Prefer SELF-CONTAINED HTML. The body is rendered inside a sandboxed,
     opaque-origin ``<iframe>`` (``sandbox="allow-scripts"``, no
@@ -860,13 +1514,86 @@ def register_resource(
             type(source).__name__ if source is not None else "resource"
         )
     rid = id or uuid.uuid4().hex[:8]
-    res = Resource(rid, str(title), kind, render, alive)
+    # An interactive resource's id is interpolated into the injected <script> and
+    # into its `/api/resources/{id}/events` SSE route, so it must be a safe token:
+    # `json.dumps` does NOT escape `</script>` or `/`, so an id carrying `</script>`
+    # would break out of the script tag (XSS in the pane), and a `/` would silently
+    # miss the SSE route. Restrict it to url/path-safe characters -- random ids
+    # (uuid hex) and Input tokens (`secrets.token_urlsafe`) already satisfy this;
+    # an agent-supplied id built from external data (a repo/branch/chat id) is the
+    # one that could smuggle markup. Non-interactive resources never reach either
+    # sink, so they keep accepting any id.
+    if actions and not _RESOURCE_ID_RE.fullmatch(rid):
+        raise ValueError(
+            f"an interactive resource id must match [A-Za-z0-9._-]+ (it is embedded "
+            f"in a <script> and a URL path); got {rid!r}"
+        )
+    # Re-registering an id REPLACES that resource; close the old one first so its
+    # action channel/dispatcher never outlives the pane it served.
+    old = resources.get(rid)
+    if old is not None:
+        old.close()
+    current = _ix_current.get()
+    execution_id = getattr(current, "id", "") if current is not None else ""
+    res = Resource(rid, str(title), kind, render, alive, actions=actions, execution_id=execution_id)
     resources[rid] = res
     return res
 
 
-jobs: dict[str, Job] = {}
+class Jobs(dict[str, Job]):
+    """The kernel-wide run registry (``jobs``): every execution this kernel has
+    run, keyed by job id. Beyond the dict surface, :meth:`spawn` registers an
+    ad-hoc awaitable as a first-class background job, so work an agent started
+    itself (a coroutine, a Task) gets the same lifecycle as a backgrounded cell:
+    a dashboard card, a completion notification, and a pageable/awaitable
+    ``jobs['<id>']`` handle (issue #2164)."""
+
+    def spawn(self, aw: Awaitable[Any], *, name: str | None = None, topic: str | None = None) -> Job:
+        """Register ``aw`` (any awaitable: a coroutine, Task, or Future) as a
+        first-class background job and return its :class:`Job` handle at once.
+
+        The awaitable gets the full job lifecycle: it appears in ``jobs`` /
+        ``history()`` and on the dashboard, its completion pushes a channel
+        notification exactly like a backgrounded cell, and its value is
+        retrieved with ``await jobs['<id>']`` (or ``.result`` once done; a
+        failure re-raises there, like any other job). ``name`` labels the job
+        (defaults to the coroutine's qualname); ``topic`` files it under a
+        dashboard topic (defaults to the session's current one). Must be called
+        with the kernel's event loop running (i.e. from inside a cell)."""
+        if not inspect.isawaitable(aw):
+            raise TypeError(
+                f"jobs.spawn() needs an awaitable (coroutine, Task, or Future), got {type(aw).__name__}"
+            )
+        # Raises RuntimeError outside the loop, BEFORE the job is registered, so
+        # a misuse never leaves a forever-"running" phantom in the registry.
+        loop = asyncio.get_running_loop()
+        parent = _ix_current.get()
+        label = name or getattr(aw, "__qualname__", None) or type(aw).__name__
+        job = Job(
+            f"jobs.spawn({label!r})",
+            name=label,
+            # No foreground wait: a spawned job is background from birth, so
+            # there is no budget window to draw (0 is /api/exec's floor too).
+            budget=0.0,
+            kind="spawn",
+            topic=topic or session.topic,
+            session=parent.session if parent is not None else None,
+        )
+        # Background from birth: completion notifies the agent session the same
+        # way a budget-expired cell does (see the runners' shared finally tail).
+        job.backgrounded = True
+        self[job.id] = job
+        job.task = loop.create_task(_spawn_runner(job, aw))
+        return job
+
+
+jobs: Jobs = Jobs()
 resources: dict[str, Resource] = {}
+
+# A safe id for an INTERACTIVE resource: it is interpolated into the injected
+# <script> body and into the `/api/resources/{id}/events` URL path, so it must
+# carry no HTML/JS or path metacharacters (see register_resource).
+_RESOURCE_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
 
 
 # --------------------------------------------------------------------------- #
@@ -1009,7 +1736,7 @@ def _ask_form_html(
     submit_label: str,
 ) -> str:
     """The self-contained form HTML :func:`ask` renders: a prompt, the inputs, and
-    a wiring script that gathers the values and calls ``ixSubmit``. Themed for the
+    a wiring script that gathers the values and calls ``ixSubmit``. Arranged for the
     dashboard's light/dark surface; every agent-supplied string is escaped."""
     if choices is not None:
         body = "".join(
@@ -1114,6 +1841,351 @@ async def ask(
     if fields is None and isinstance(payload, dict) and set(payload) == {"value"}:
         return payload["value"]
     return payload
+
+
+# Claude Code drops <channel> tag attributes whose keys are not identifiers
+# ([A-Za-z0-9_]) -- silently. Validate at the source instead, so a typo'd key is
+# a loud ValueError here rather than a missing attribute there.
+_META_KEY_RE = re.compile(r"[A-Za-z0-9_]+")
+
+
+async def notify(content: str, **meta: Any) -> None:
+    """Push a channel event into the connected agent session.
+
+    This server is a Claude Code channel (research preview): when the client
+    session was launched with the channel enabled (``claude
+    --channels server:<name>``), the event lands in
+    the agent's context as ``<channel source="<name>" key="val">content</channel>``
+    and wakes it. Each keyword becomes a tag attribute (values are stringified)::
+
+        await notify("CI run 1234 failed on main", severity="high", run_id="1234")
+
+    Pass ``resource=<id>`` when the event belongs to an interactive resource, so
+    the agent knows to answer with the ``reply`` tool (its text streams back to
+    that resource's page).
+
+    Fire-and-forget: delivery is not acknowledged, and a client session running
+    WITHOUT the channel enabled drops events silently (Claude Code's documented
+    behavior), so never treat a notify as confirmed-read. Keys must be
+    identifiers (``[A-Za-z0-9_]``); anything else raises here rather than being
+    silently dropped client-side.
+
+    Explicit notify() is a broadcast: an armed watch (``pr_watch``, a slack/CI
+    watch loop) must reach its agent regardless of which session runs the
+    watcher. Automatic job lifecycle events do NOT go through here -- they are
+    addressed to the session that started the job (see
+    :func:`_notify_job_finished`), so one session's routine background jobs
+    cannot wake another session's agent (issue #2165).
+    """
+    _queue_channel_event(str(content), meta, session="")
+
+
+def _queue_channel_event(content: str, meta: dict[str, Any], *, session: str) -> None:
+    """Validate and queue one channel event on the store outbox.
+
+    ``session`` is the delivery address: '' broadcasts (every transport pump may
+    deliver it), a session id restricts the row to that MCP session's pump. The
+    shared write path behind :func:`notify` (broadcast) and
+    :func:`_notify_job_finished` (addressed).
+    """
+    bad = [key for key in meta if not _META_KEY_RE.fullmatch(key)]
+    if bad:
+        raise ValueError(
+            f"notify() meta keys must match [A-Za-z0-9_]+ (Claude Code silently "
+            f"drops others); got {bad!r}"
+        )
+    if _store is None or _store_conn is None:
+        raise RuntimeError(
+            "notify() needs the server-managed kernel (no store is configured), "
+            "so there is no channel to deliver to"
+        )
+    _store.add_outbox(
+        _store_conn,
+        content=content,
+        meta=json.dumps({key: str(value) for key, value in meta.items()}),
+        session=session,
+    )
+
+
+def _server_session() -> str:
+    """This server process's own MCP session id, or '' when unmanaged.
+
+    ``IX_MCP_SERVER_SESSION`` is minted per ``ix-mcp serve`` process (see
+    ``cli._serve``) and inherited by the kernel: it identifies the one stdio
+    client as a session, so jobs it starts can be addressed back to it and only
+    it. An embedder driving the runtime without the CLI has no id; '' degrades
+    an addressed event to a broadcast, today's pre-#2165 behavior.
+    """
+    return os.environ.get("IX_MCP_SERVER_SESSION", "")
+
+
+def _notify_job_finished(job: Job) -> None:
+    """Queue the job's terminal lifecycle event, addressed to the session that
+    started it.
+
+    Only a backgrounded real cell notifies: a job that finished within its
+    budget already returned its summary in the tool reply, and a replay is
+    history, not news. The address is the job's own MCP session
+    (``job.session``, set for HTTP-transport sessions) falling back to this
+    server's session id (the stdio client), so the wake reaches the session
+    that started the job and no other -- the dashboard still shows every job
+    globally from the executions table (issue #2165).
+
+    Known limit (issue #2400): one Claude Code process multiplexes its parent
+    conversation and in-process subagents onto a single stdio MCP session, and
+    the client sends no per-agent identity on tool calls (only
+    ``claudecode/toolUseId``, see anthropics/claude-code#32514), so a
+    subagent's job wake still lands in the parent conversation. That split
+    needs the client to expose the caller; the addressing here is where it
+    will slot in.
+    """
+    if not job.backgrounded or job.kind == "replay":
+        return
+    _queue_channel_event(
+        f"Background job {job.name} finished with status {job.status}.",
+        {
+            "job_id": job.id,
+            "job_name": job.name,
+            "status": job.status,
+            "topic": job.topic,
+        },
+        session=job.session or _server_session(),
+    )
+
+
+def _parse_github_time(value: Any) -> datetime.datetime | None:
+    if not isinstance(value, str) or not value or value.startswith("0001-"):
+        return None
+    try:
+        return datetime.datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _format_duration(seconds: float | None) -> str:
+    if seconds is None:
+        return ""
+    seconds = max(0, int(seconds))
+    minutes, sec = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {sec}s"
+    return f"{sec}s"
+
+
+def _pr_check_duration(check: Mapping[str, Any], now: datetime.datetime) -> str:
+    started = _parse_github_time(check.get("startedAt"))
+    if started is None:
+        return ""
+    completed = _parse_github_time(check.get("completedAt"))
+    end = completed or now
+    return _format_duration((end - started).total_seconds())
+
+
+def _pr_resource_html(state: Mapping[str, Any]) -> str:
+    pr = html_lib.escape(str(state.get("pr") or ""))
+    title = html_lib.escape(str(state.get("title") or "PR"))
+    url = html_lib.escape(str(state.get("url") or "#"))
+    status = html_lib.escape(str(state.get("status") or "starting"))
+    merge = html_lib.escape(str(state.get("merge_state") or ""))
+    elapsed = html_lib.escape(str(state.get("elapsed") or ""))
+    auto = html_lib.escape(str(state.get("auto_merge") or ""))
+    error = state.get("error")
+    now = datetime.datetime.now(datetime.UTC)
+    rows = []
+    for check in state.get("checks") or []:
+        name = html_lib.escape(str(check.get("name") or check.get("workflowName") or "check"))
+        raw_state = str(check.get("conclusion") or check.get("status") or "pending")
+        css_state = re.sub(r"[^a-z0-9_-]+", "-", raw_state.lower())
+        shown_state = html_lib.escape(raw_state.lower())
+        duration = html_lib.escape(_pr_check_duration(check, now))
+        rows.append(
+            "<tr>"
+            f"<td>{name}</td>"
+            f"<td><span class=\"state {css_state}\">{shown_state}</span></td>"
+            f"<td>{duration}</td>"
+            "</tr>"
+        )
+    if not rows:
+        rows.append('<tr><td colspan="3" class="empty">waiting for checks</td></tr>')
+    error_html = ""
+    if error:
+        error_html = f'<div class="error">{html_lib.escape(str(error))}</div>'
+    return (
+        "<style>"
+        "body{margin:0;font:13px ui-sans-serif,system-ui;color:#e5e7eb;background:#111827}"
+        ".card{padding:14px;min-width:360px}.top{display:flex;gap:10px;align-items:baseline}"
+        "a{color:#93c5fd;text-decoration:none}.title{font-weight:650}.meta{color:#9ca3af;margin:8px 0 12px}"
+        "table{border-collapse:collapse;width:100%}td,th{padding:6px 8px;border-top:1px solid #374151;text-align:left}"
+        "th{font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em}.state{border-radius:999px;padding:2px 7px;background:#374151}"
+        ".completed,.success{background:#064e3b;color:#a7f3d0}.in_progress,.queued,.pending{background:#78350f;color:#fde68a}"
+        ".failure,.cancelled,.timed_out,.action_required{background:#7f1d1d;color:#fecaca}.empty{color:#9ca3af;text-align:center}"
+        ".error{margin-top:10px;color:#fecaca;background:#7f1d1d;padding:8px;border-radius:6px;white-space:pre-wrap}"
+        "</style>"
+        "<div class=\"card\">"
+        f"<div class=\"top\"><a href=\"{url}\" target=\"_blank\">PR {pr}</a><span class=\"title\">{title}</span></div>"
+        f"<div class=\"meta\">{status} {merge} {elapsed} {auto}</div>"
+        "<table><thead><tr><th>required action</th><th>state</th><th>time</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table>{error_html}</div>"
+    )
+
+
+# GitHub mergeStateStatus values under which `gh pr merge --auto` merges the
+# PR the moment it is armed (#2532): nothing blocking remains, either because
+# the repo has no required checks or because they already passed, so "arm,
+# then watch, then merge" silently degrades to "merge now". UNSTABLE is
+# mergeable with failing or pending NON-required checks; those never block.
+_INSTANT_MERGE_STATES: frozenset[str] = frozenset({"CLEAN", "UNSTABLE", "HAS_HOOKS"})
+_MERGEABILITY_POLL_S: float = 2.0
+_MERGEABILITY_TIMEOUT_S: float = 30.0
+
+
+async def watch_pr(
+    pr: str | int,
+    *,
+    cwd: str | None = None,
+    auto_merge: bool = True,
+    merge_method: str = "squash",
+    delete_branch: bool = True,
+    interval: float = 15.0,
+    timeout: float = 3600.0,
+) -> dict[str, Any]:
+    """Watch a GitHub PR, mirror required checks as a resource, and optionally enable auto merge."""
+    clean_pr = str(pr).strip()
+    if not clean_pr:
+        raise ValueError("pr must be a number, URL, or branch understood by gh")
+    if merge_method not in {"merge", "squash", "rebase"}:
+        raise ValueError("merge_method must be merge, squash, or rebase")
+    safe_id = re.sub(r"[^A-Za-z0-9._-]+", "-", clean_pr).strip("-") or uuid.uuid4().hex[:8]
+    state: dict[str, Any] = {
+        "pr": clean_pr,
+        "title": "",
+        "url": "",
+        "status": "starting",
+        "merge_state": "",
+        "checks": [],
+        "auto_merge": "",
+        "error": "",
+        "elapsed": "",
+    }
+    started = time.time()
+    auto_merge_note = ""
+    resource = register_resource(
+        render=lambda: _pr_resource_html(state),
+        id=f"pr-{safe_id}",
+        title=f"PR {clean_pr}",
+        kind="pr",
+        alive=lambda: state.get("status") not in {"merged", "closed", "failed", "timed out"},
+    )
+    import nu as nu_call
+
+    async def run_nu(code: str) -> Any:
+        return await nu_call(
+            code,
+            cwd=cwd,
+            env={"PR": clean_pr},
+            timeout=60,
+        )
+
+    async def refresh() -> dict[str, Any]:
+        # `from json` on a gh object yields a nu record, which nu() returns as
+        # a plain dict (issue #2390).
+        row: dict[str, Any] = await run_nu(
+            'gh pr view $env.PR --json number,title,state,mergeStateStatus,statusCheckRollup,'
+            'url,autoMergeRequest,isDraft,reviewDecision | complete | get stdout | from json'
+        )
+        checks = row.get("statusCheckRollup") or []
+        title = row.get("title") or f"PR {row.get('number') or clean_pr}"
+        state.update(
+            {
+                "pr": row.get("number") or clean_pr,
+                "title": title,
+                "url": row.get("url") or "",
+                "status": str(row.get("state") or "").lower(),
+                "merge_state": row.get("mergeStateStatus") or "",
+                "checks": checks,
+                "auto_merge": (
+                    "auto merge skipped: already mergeable"
+                    if auto_merge_note
+                    else ("auto merge on" if row.get("autoMergeRequest") else "auto merge off")
+                ),
+                "elapsed": _format_duration(time.time() - started),
+                "error": "",
+            }
+        )
+        return row
+
+    if auto_merge:
+        # Arming auto merge on an already-mergeable PR merges it instantly,
+        # before any watching happens (#2532): branch-protection endpoints
+        # need admin and gh's statusCheckRollup carries no isRequired, so
+        # mergeStateStatus is the one read-accessible "would merge right now"
+        # signal. A fresh PR reports UNKNOWN while GitHub computes
+        # mergeability, so poll briefly for a real answer first.
+        row = await refresh()
+        deadline = time.time() + _MERGEABILITY_TIMEOUT_S
+        while (
+            row.get("state") == "OPEN"
+            and str(row.get("mergeStateStatus") or "UNKNOWN") == "UNKNOWN"
+            and time.time() < deadline
+        ):
+            await asyncio.sleep(_MERGEABILITY_POLL_S)
+            row = await refresh()
+        if str(row.get("mergeStateStatus") or "") in _INSTANT_MERGE_STATES:
+            auto_merge_note = (
+                f"auto merge NOT armed: PR {clean_pr} is already mergeable "
+                f"(mergeStateStatus={row.get('mergeStateStatus')}: no blocking "
+                f"required checks remain), so arming would merge it immediately, "
+                f"before any watching. Merge explicitly "
+                f"(gh pr merge {clean_pr} --{merge_method}) once your own gate is green."
+            )
+            print(auto_merge_note, flush=True)
+            await notify(auto_merge_note, resource=resource.id, pr=clean_pr)
+        else:
+            flag = f"--{merge_method}"
+            delete = "--delete-branch" if delete_branch else ""
+            # `| complete` yields a nu record: a plain dict, not a 1-row frame
+            # (issue #2390).
+            merge: dict[str, Any] = await run_nu(
+                f"gh pr merge $env.PR --auto {flag} {delete} | complete"
+            )
+            if int(merge["exit_code"]) != 0:
+                state["error"] = str(merge["stderr"] or merge["stdout"])
+
+    def finished(result: dict[str, Any]) -> dict[str, Any]:
+        """Carry the skipped-auto-merge note onto the returned summary."""
+        if auto_merge_note:
+            result["auto_merge"] = auto_merge_note
+        return result
+
+    last: dict[str, Any] = {}
+    while True:
+        last = await refresh()
+        checks = last.get("statusCheckRollup") or []
+        failures = [
+            check
+            for check in checks
+            if check.get("conclusion") in {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"}
+        ]
+        if last.get("state") != "OPEN":
+            state["status"] = "merged" if last.get("state") == "MERGED" else "closed"
+            resource.close()
+            await notify(f"PR {clean_pr} finished with state {last.get('state')}", resource=resource.id, pr=clean_pr)
+            return finished({"state": last.get("state"), "url": last.get("url"), "checks": len(checks)})
+        if failures:
+            state["status"] = "failed"
+            state["error"] = "One or more required actions failed."
+            resource.close()
+            await notify(f"PR {clean_pr} has failing checks", resource=resource.id, pr=clean_pr)
+            return finished({"state": "failed", "url": last.get("url"), "failures": failures})
+        if time.time() - started > timeout:
+            state["status"] = "timed out"
+            resource.close()
+            await notify(f"PR {clean_pr} watch timed out", resource=resource.id, pr=clean_pr)
+            return finished({"state": "timed out", "url": last.get("url"), "checks": len(checks)})
+        await asyncio.sleep(interval)
 
 
 @dataclasses.dataclass
@@ -1271,6 +2343,7 @@ class Session:
         self._name = ""  # explicit, user-set via `session.name = ...`
         self._client = ""  # the connecting MCP client's reported identity
         self._workdir = ""  # this kernel's cwd basename, for the default label
+        self._topic = ""  # current fold group for runs in this session
         self._rev = 0
         self._synced = -1
 
@@ -1288,6 +2361,16 @@ class Session:
         self._rev += 1
 
     @property
+    def topic(self) -> str:
+        """The current dashboard fold group for future runs."""
+        return self._topic or "unfiled"
+
+    @topic.setter
+    def topic(self, value: str) -> None:
+        self._topic = " ".join((value or "").split())
+        self._rev += 1
+
+    @property
     def client(self) -> str:
         """The connecting MCP client's reported identity (read-only)."""
         return self._client
@@ -1302,7 +2385,8 @@ class Session:
 
     def __repr__(self) -> str:
         tail = f" · {self._client}" if self._client and self._client != self.name else ""
-        return f"<Session {self.name!r}{tail}>"
+        topic = f" topic={self.topic!r}" if self._topic else ""
+        return f"<Session {self.name!r}{tail}{topic}>"
 
     def _sync(self) -> None:
         """Mirror the session label to the store when it has changed, so the
@@ -1410,11 +2494,15 @@ def _merge_stdout(job: Job, result: Result) -> Result:
     text = _strip_ansi(body)
     if not text.endswith("\n"):
         text += "\n"
-    return Result(
+    merged = Result(
         user_html=f'<pre class="ix-result">{_ansi_to_html(body)}</pre>' + result.user_html,
         llm_result=text + (result.llm_result or ""),
         llm_images=result.llm_images,
     )
+    # Merging stdout replaces the WRAPPER, not the value: keep the trailing
+    # expression's original reachable (`jobs['<id>'].result.value` / `[i, j]`).
+    merged.value = result.value
+    return merged
 
 
 # Cap on the stdout an auto-returned Result (see _auto_result) hands the model.
@@ -1550,8 +2638,95 @@ def _error_line(exc: BaseException, job: Job) -> int | None:
     return line
 
 
+def _cell_stop_line(exc: BaseException, job: Job) -> int | None:
+    """The top-level cell line executing when ``exc`` escaped: the shallowest
+    traceback frame in this job's pseudo-file. Distinct from :func:`_error_line`
+    (the deepest cell frame, for the dashboard's highlight): a failure inside a
+    function the cell defined stops the cell at the call site, and it is the
+    call site that decides which later top-level statements never ran."""
+    target = f"<job {job.id}>"
+    tb = exc.__traceback__
+    while tb is not None:
+        if tb.tb_frame.f_code.co_filename == target:
+            return tb.tb_lineno
+        tb = tb.tb_next
+    return None
+
+
+def _unexecuted_note(exc: BaseException, job: Job) -> str:
+    """A one-line warning naming the bindings the failed cell never reached
+    (issue #2526). A cell that raises partway through leaves every assignment
+    at/after the failing statement unexecuted while the namespace keeps the old
+    values, so a retry cell that reuses those names silently operates on stale
+    state (the incident: a rebuilt email reused the previous run's ``body`` and
+    sent a duplicate). Static and best-effort (see
+    :func:`introspect.unexecuted_bindings`); empty when nothing at/after the
+    failure binds a name."""
+    line = _cell_stop_line(exc, job)
+    if line is None:
+        return ""
+    try:
+        from .introspect import unexecuted_bindings
+
+        names = unexecuted_bindings(job.code, line)
+    except Exception:
+        # Best-effort: a failure here just means no note.
+        return ""
+    if not names:
+        return ""
+    return (
+        "\nNOTE: this cell failed before updating: "
+        + ", ".join(names)
+        + " (their current values, if any, predate this cell; rebuild them "
+        + "before reuse)."
+    )
+
+
+def _typecheck_enabled() -> bool:
+    """Whether per-cell type checking runs. Default ON; the escape hatch is the
+    ``IX_MCP_TYPECHECK`` env var (``0``/``false``/``no``/``off`` disables it) or,
+    when a Config is set, its ``typecheck`` flag. The env var wins if present, so
+    a session can toggle it without a config rebuild."""
+    raw = os.environ.get("IX_MCP_TYPECHECK")
+    if raw is not None:
+        return raw.strip().lower() not in ("0", "false", "no", "off")
+    try:
+        from . import config as _config_mod
+
+        return _config_mod.config().typecheck
+    except Exception:
+        # No config set (one-shot eval, bare kernel, tests): default on.
+        return True
+
+
+def _restore_clobbered_builtins(ns: dict, job: Job) -> None:
+    """Re-inject every kernel builtin the finished cell rebound or deleted
+    (issue #2430). A cell that assigned to a builtin name (``api = ...``,
+    ``json = json.loads(...)``) used to silently destroy that helper for every
+    later cell in the session -- and ``del`` could not bring it back, because
+    the injected binding was gone rather than shadowed. Called from the
+    runner's ``finally`` so error and cancel paths restore too; the warning
+    lands in the job's output, naming the builtin so the author picks a
+    different name on the retry."""
+    for name, canonical in _protected_builtins.items():
+        if ns.get(name, _ABSENT) is canonical:
+            continue
+        ns[name] = canonical
+        job._append(
+            f"[ix] '{name}' is a kernel builtin; this cell rebound or deleted "
+            f"it, so the builtin was restored (the cell's own '{name}' value "
+            "was discarded) -- use a different name\n"
+        )
+
+
 async def _runner(job: Job, ns: dict) -> None:
     token = _ix_current.set(job)
+    # (Re-)arm the task-failure watch on the loop actually running jobs.
+    # `install()` may have run in a sync context where `get_event_loop()`
+    # handed back a dormant default loop that is not this one; installing
+    # here (idempotent, sentinel-guarded) guarantees every task a cell spawns
+    # is watched regardless of how the kernel was embedded.
+    _install_task_failure_watch(asyncio.get_running_loop())
     if _store is not None and _store_conn is not None:
         with contextlib.suppress(Exception):  # best-effort: store write must not abort the job
             _store.start(
@@ -1562,8 +2737,30 @@ async def _runner(job: Job, ns: dict) -> None:
                 started_at=job.started,
                 budget=job.budget,
                 kind=job.kind,
+                topic=job.topic,
             )
     try:
+        # Static type check BEFORE running (default on; IX_MCP_TYPECHECK=0 or the
+        # `typecheck` config flag disables it). A type error is caught here and
+        # returned as the result -- the cell never executes -- so the agent fixes
+        # it and retries instead of hitting it three lines into a side-effecting
+        # cell. The checker's own failures never block a cell (see typecheck.check).
+        # Replays are exempt: a session reopen re-runs cells that ALREADY executed
+        # successfully (kind="replay", see store.replayable), and blocking one on
+        # a checker finding would silently drop its bindings from the restored
+        # namespace -- the check already had its chance when the cell first ran.
+        if job.kind != "replay" and _typecheck_enabled():
+            verdict = await typecheck.check(job.code, ns)
+            if not verdict.ok:
+                # Record it like any other failed cell: `error` (the dashboard's
+                # error highlight, and what the summary carries), and the report as
+                # the result so the model's reply is the diagnostic to fix. No
+                # `_exc`: the agent should read and fix the diagnostic, not have
+                # `await jobs['<id>']` raise an opaque error.
+                job.status = "error"
+                job.error = verdict.report
+                job._result = Result.of(verdict.report)
+                return
         # Compile inside the runner so a SyntaxError is recorded as a job error
         # (status + traceback in the store/dashboard) instead of escaping __ix_run.
         mode, code_obj = _compile(job.code, f"<job {job.id}>")
@@ -1629,11 +2826,17 @@ async def _runner(job: Job, ns: dict) -> None:
                 "it in `await asyncio.to_thread(...)` or use an async API, and run "
                 "anything slow as a background job."
             )
+            # Keep the interrupt as the job's exception (with the actionable
+            # message) so `await jobs['<id>']` re-raises rather than yielding None.
+            job._exc = _kexc
+            _kexc.args = (job.error,)
         else:
             # The user's own code raised KeyboardInterrupt; keep its real
             # traceback (trimmed to the cell's frames) and the failing line.
-            job.error = _user_traceback(_kexc)
+            job.error = _user_traceback(_kexc) + _unexecuted_note(_kexc, job)
             job.error_line = _error_line(_kexc, job)
+            job._exc = _kexc
+        job._exc_tb = _kexc.__traceback__
         job._append(job.error)
     except (Exception, SystemExit) as _exc:
         # Isolate user code from the kernel: a job's SyntaxError, exception, or
@@ -1647,18 +2850,30 @@ async def _runner(job: Job, ns: dict) -> None:
         tb = _user_traceback(_exc)
         job.error_line = _error_line(_exc, job)
         hint = _type_error_hint(_exc) if isinstance(_exc, TypeError) else ""
-        job.error = tb + hint
+        job.error = tb + hint + _unexecuted_note(_exc, job)
+        # Keep the exception object itself, so `await jobs['<id>']` re-raises it
+        # (type + message + the cell's own traceback) instead of yielding None.
+        job._exc = _exc
+        job._exc_tb = _exc.__traceback__
         job._append(job.error)
     finally:
         job.ended = time.time()
+        # Before persisting: the restore warning must ride the job's stored
+        # output, and the namespace snapshot must see the restored builtin,
+        # not the clobbered value.
+        _restore_clobbered_builtins(ns, job)
         _ix_current.reset(token)
         _persist_final(job)
         _mark_snapshot_dirty()
+        with contextlib.suppress(Exception):  # best-effort wake; the job row is already persisted
+            _notify_job_finished(job)
 
 
 def _persist_final(job: Job) -> None:
     if _store is None or _store_conn is None:
         return
+    # Final chunk flush first: the stream tail lands before the finish facts.
+    job._stream.close()
     # Record this run's name references first, so the snapshot below already shows
     # the just-finished job among each name's assigned_in/used_in.
     _record_refs(job)
@@ -1677,6 +2892,86 @@ def _persist_final(job: Job) -> None:
             bindings=_cell_bindings(job),
             namespace=_namespace_snapshot(job),
         )
+    # A finished cell whose result carries a human HTML view becomes a live
+    # weave view entity (weave2 n-toolviews): the html goes to CAS once and
+    # the view hangs off the run entity for lineage and cascade cleanup; the
+    # id rides the job summary so the server attaches it to the tool result's
+    # _meta. Replays and spawns mint none -- a reopened session would
+    # otherwise duplicate views for cells that already have theirs.
+    html = getattr(job._result, "user_html", "") if job.kind == "cell" else ""
+    if html:
+        with contextlib.suppress(Exception):  # best-effort, like the writes above
+            job.weave_view = _store.save_tool_view(_store_conn, id=job.id, html=html, label=job.name)
+
+
+async def _spawn_runner(job: Job, aw: Awaitable[Any]) -> None:
+    """:func:`_runner`'s sibling for :meth:`Jobs.spawn`: there is no cell code
+    to typecheck or compile -- just await the registered awaitable -- but the
+    rest of the lifecycle is identical: prints captured under the job, the value
+    wrapped like a trailing expression, the same persistence, and the same
+    completion notification a backgrounded cell sends."""
+    token = _ix_current.set(job)
+    _install_task_failure_watch(asyncio.get_running_loop())
+    if _store is not None and _store_conn is not None:
+        with contextlib.suppress(Exception):  # best-effort: store write must not abort the job
+            _store.start(
+                _store_conn,
+                id=job.id,
+                name=job.name,
+                code=job.code,
+                started_at=job.started,
+                budget=job.budget,
+                kind=job.kind,
+                topic=job.topic,
+            )
+    try:
+        value = await aw
+        if value is None:
+            # Same contract as a None-valued cell: the captured stdout (or a
+            # quiet ok) is the result, so a print-only awaitable reports what
+            # it printed.
+            result = _auto_result(job)
+        elif isinstance(value, Result):
+            # An explicit Result is the author's full statement of both views;
+            # stdout stays out of it (page jobs['<id>'].output), like a cell's.
+            result = value
+        else:
+            result = _merge_stdout(job, Result.of(value))
+        job._result = result
+        job.status = "done"
+    except asyncio.CancelledError:
+        job.status = "cancelled"
+        # `job.cancel()` cancels THIS runner; a pre-created Task/Future keeps
+        # running unless the cancellation is forwarded to it. Forward it, so
+        # cancelling the job cancels the work whatever shape was registered.
+        if isinstance(aw, asyncio.Future):
+            aw.cancel()
+        raise
+    except (Exception, KeyboardInterrupt, SystemExit) as _exc:
+        # Isolate like _runner: a failed awaitable becomes a failed job
+        # (traceback captured, `await jobs['<id>']` re-raises) instead of
+        # escaping the task and dying as an unretrieved background failure.
+        job.status = "error"
+        job.error = _user_traceback(_exc)
+        job._exc = _exc
+        job._exc_tb = _exc.__traceback__
+        job._append(job.error)
+    finally:
+        job.ended = time.time()
+        _ix_current.reset(token)
+        _persist_final(job)
+        _mark_snapshot_dirty()
+        # Spawned jobs are backgrounded by construction, so completion always
+        # notifies (the suppress mirrors _runner: a session without the channel
+        # has nothing to deliver to, and that must not fail the job's cleanup).
+        with contextlib.suppress(Exception):
+            await notify(
+                f"Background job {job.name} finished with status {job.status}.",
+                job_id=job.id,
+                job_name=job.name,
+                status=job.status,
+                topic=job.topic,
+            )
 
 
 def _cell_bindings(job: Job) -> dict:
@@ -1796,26 +3091,31 @@ def _ansi_to_html(text: str) -> str:
 
 # How many rows of a DataFrame the model-facing text carries. The human's HTML
 # table is unaffected (it renders the whole frame, paged); this only bounds the
-# CSV handed back to the agent so a million-row frame cannot flood its context.
+# NUON handed back to the agent so a million-row frame cannot flood its context.
 _DF_LLM_ROWS = 200
 
 
 def _is_polars_df(value: Any) -> bool:
-    """True for a polars DataFrame, by duck typing. runtime.py stays import-light
-    (polars is the user's to bring), so it never imports polars to check."""
+    """True for a polars DataFrame, by duck typing.
+
+    runtime.py stays import-light (polars is the user's to bring), and Nix-built
+    wheels may expose extension-backed classes whose module is not simply
+    ``polars.*``.
+    """
     return (
-        type(value).__module__.split(".", 1)[0] == "polars"
-        and hasattr(value, "write_csv")
+        hasattr(value, "iter_rows")
         and hasattr(value, "columns")
+        and hasattr(value, "dtypes")
+        and hasattr(value, "shape")
         and hasattr(value, "height")
     )
 
 
 def _frame_view(value: Any) -> Any:
     """A non-DataFrame value that opts into the table protocol by exposing
-    ``_ix_to_frame_()`` returning a polars DataFrame (e.g. an fff ``GrepResult``
-    or ``SearchResult``). Returns that frame, else None. Lets a rich result type
-    render as the styled table for the human and compact CSV for the model,
+    ``_ix_to_frame_()`` returning a polars DataFrame. Returns that frame, else
+    None. Lets a rich result type
+    render as the styled table for the human and compact NUON for the model,
     instead of falling back to its one-line summary repr."""
     hook = getattr(value, "_ix_to_frame_", None)
     if hook is None:
@@ -1828,19 +3128,40 @@ def _frame_view(value: Any) -> Any:
 
 
 def _df_llm_text(df: Any) -> str:
-    """A polars DataFrame as compact text for the model: a shape + dtype header
-    then CSV, with cell values never truncated (only the row count is bounded by
-    ``_DF_LLM_ROWS``). CSV is denser than the boxed repr and drops no value, so
-    the agent reads the real data instead of a width-clipped table."""
+    """A polars DataFrame as compact NUON for the model.
+
+    The shape + dtype header orients the reader; the body is a Nushell table
+    literal with headers listed once. Values are never width-truncated (only the
+    row count is bounded by ``_DF_LLM_ROWS``), so the agent reads the real data
+    instead of a boxed repr. A 1x1 string frame is the exception: its body is
+    the string verbatim, not a one-cell table.
+    """
     try:
-        schema = ", ".join(f"{name}:{dtype}" for name, dtype in zip(df.columns, df.dtypes, strict=False))
         rows, cols = df.shape
-        body = df.head(_DF_LLM_ROWS).write_csv().rstrip("\n")
+        head = df.head(_DF_LLM_ROWS)
+        schema = ", ".join(f"{name}:{dtype}" for name, dtype in zip(df.columns, df.dtypes, strict=False))
+        if rows == 1 and cols == 1 and isinstance(only := head.to_dicts()[0][head.columns[0]], str):
+            # A 1x1 string frame is text, not a table -- `await nu("^cat f.toml")`
+            # or `^git remote -v` frames the whole capture as one scalar cell.
+            # Hand the model the string verbatim (real newlines, terminal escapes
+            # stripped: the plain-str treatment), not one JSON-escaped NUON cell
+            # it can only read by re-fetching with .item() (#1976).
+            body = _strip_ansi(only)
+        else:
+            body = _nuon_table(list(head.columns), head.to_dicts())
         more = f"\n... ({rows - _DF_LLM_ROWS} more rows)" if rows > _DF_LLM_ROWS else ""
+        # A frame flagging an incomplete scan (fsearch's PartialFrame: `truncated`
+        # + `reason`, duck-typed so the runtime stays decoupled) must SAY so in
+        # the model text: this NUON render is what the agent reads, and its repr
+        # banner never reaches this path, so without the note a timed-out search
+        # would read as a complete result.
+        if getattr(df, "truncated", False):
+            reason = getattr(df, "reason", "") or "scan incomplete"
+            return f"[partial results: {reason}]\nshape: ({rows}, {cols}) | {schema}\n{body}{more}"
         return f"shape: ({rows}, {cols}) | {schema}\n{body}{more}"
     except Exception:
-        # An exotic frame that resists write_csv falls back to its plain repr.
-        return _safe_repr(df)
+        # An exotic frame that resists row iteration falls back to safe NUON text.
+        return _nuon(_safe_repr(df))
 
 
 def _png_bytes(img: Any) -> bytes:
@@ -2048,6 +3369,16 @@ def _normalize_bundle(data: dict, metadata: dict | None = None) -> dict:
         if len(encoded) > _MAX_IMAGE_BUNDLE:
             encoded = json.dumps({"text": text, "images": []})
         out[IX_LLM_MIME] = encoded
+    # Carry the structured human view (IX_VIEW_MIME) so it persists with the
+    # run's stored outputs for native `data`-pane rendering. JSON cannot be
+    # clipped without corrupting it, so an oversize spec is dropped whole and
+    # the text/html fallback renders instead; producers keep their payloads
+    # under the cap (see _READ_CONTEXT_MAX).
+    view = data.get(IX_VIEW_MIME)
+    if isinstance(view, dict):
+        encoded = json.dumps(view)
+        if len(encoded) <= _MAX_TEXT_BUNDLE:
+            out[IX_VIEW_MIME] = encoded
     return {"data": out, "metadata": metadata or {}}
 
 
@@ -2278,7 +3609,8 @@ def doc(obj: Any) -> Result:
     Result -- so the documented "everything through Result" path also works for
     reading docs. ``help()`` only writes to stdout (not your channel) and returns
     ``None``, so ``Result(help(x))`` shows nothing; use ``doc(grep)`` instead.
-    Pair it with `api()`: `api('grep')` to find a name, `doc(grep)` to read it."""
+    Pair it with `api()`: filter its frame to find a name, then use
+    `doc(grep)` to read it."""
     name = getattr(obj, "__name__", None) or type(obj).__name__
     sig = ""
     if callable(obj):
@@ -2290,34 +3622,61 @@ def doc(obj: Any) -> Result:
     return Result.text(f"{sig}\n\n{body}" if sig else body)
 
 
-def api(filter: str | None = None) -> Any:
+def _build_row() -> dict:
+    """The catalog's header row: which build this kernel IS. The in-band
+    staleness signal (index#2110): when an agent's docs promise a helper or
+    kwarg this catalog lacks, the stamp attributes the gap to a stale deploy
+    instead of a phantom API."""
+    return {
+        "where": "kernel",
+        "name": "build",
+        "kind": "build",
+        "sig": f"ix-mcp {build_stamp()}",
+        "summary": "this kernel's build rev and commit age; a documented helper or "
+        "kwarg missing below means the running deploy predates it -- redeploy ix-mcp",
+    }
+
+
+def api() -> pl.DataFrame:
     """A live catalog of every helper the kernel gives you: the always-present
     namespace builtins (`Result`, `cells`, `jobs`, `sh`, ...) and the public
     surface of each bundled module (`view`, `nix`, `fleet`, ...), each with
-    its signature and a one-line summary. Call `api()` to discover what exists
-    instead of guessing names or grepping source; pass `filter` to match a
-    substring against the name, summary, or module.
+    its provenance, signature, and a one-line summary. Call `api()` to discover
+    what exists instead of guessing names or grepping source. Filter and sort the
+    returned Polars DataFrame directly, for example
+    `api().filter(pl.col("where") == "view")`. The first row is always the
+    kernel's own build stamp (rev, commit date, age), so a catalog that lacks
+    something your docs describe is attributable to a stale deploy.
 
-    Returns a polars DataFrame (filter/sort it further, e.g.
-    `api().filter(pl.col("where") == "view")`), or plain text if polars is absent.
+    Leave the frame as the cell's final expression or yield it. Passing it to
+    ``print`` converts it to Polars' terminal representation before MCP can render
+    the structured result.
     """
-    rows = _api_rows()
-    if filter:
-        q = filter.lower()
-        rows = [
-            r for r in rows
-            if q in r["name"].lower() or q in r["summary"].lower() or q in r["where"].lower()
-        ]
-    try:
-        import polars as _pl
+    import polars as pl
 
-        return _pl.DataFrame(
-            rows,
-            schema={"where": _pl.Utf8, "name": _pl.Utf8, "kind": _pl.Utf8, "sig": _pl.Utf8, "summary": _pl.Utf8},
-        )
-    except Exception:
-        width = max((len(r["sig"]) for r in rows), default=0)
-        return "\n".join(f'{r["where"]:>6}  {r["sig"]:<{width}}  {r["summary"]}' for r in rows)
+    rows = [_build_row(), *_api_rows()]
+    return pl.DataFrame(
+        rows,
+        schema={
+            "where": pl.Utf8,
+            "name": pl.Utf8,
+            "kind": pl.Utf8,
+            "sig": pl.Utf8,
+            "summary": pl.Utf8,
+        },
+    )
+
+
+def read_stats() -> dict[str, int]:
+    """This session's cumulative file-read counters: ``total_reads`` and
+    ``redundant_reads`` (a redundant read is the same file with byte-identical
+    content read earlier in this session -- with perfect memory you would not
+    have needed it again). Use it to check your own redundancy rate; the KPI is
+    ``redundant_reads / total_reads < 1%`` (indexable-inc/ix#6440). The same
+    counters are emitted to the service journal as ``mcp_read_stats`` lines."""
+    job = _ix_current.get()
+    session = job.session if job is not None else None
+    return readstats.tracker().snapshot(session)
 
 
 _TYPEERROR_CALL_RE = re.compile(
@@ -2333,12 +3692,18 @@ def _type_error_hint(exc: TypeError) -> str:
       - ``grep() missing 1 required keyword-only argument: 'mode'``
 
     Looks the callable up in the user namespace (and a set of well-known module
-    prefixes like ``fff.``) so the hint shows the live signature. Returns an
+    prefixes like ``view.``) so the hint shows the live signature. Returns an
     empty string on any failure so callers can unconditionally append it.
     """
     try:
         msg = str(exc)
         m = _TYPEERROR_CALL_RE.match(msg)
+        if m is None and msg.startswith("sh() takes 1 positional argument"):
+            return (
+                "\nHint: sh takes one command argument. Use sh(['git', 'status']) for "
+                "argv-list execution with no shell parsing, or sh('git status') when "
+                "shell parsing is intended; pass cwd= instead of cd."
+            )
         if not m:
             return ""
         func_name = m.group(1)
@@ -2359,9 +3724,34 @@ def _type_error_hint(exc: TypeError) -> str:
         if obj is None or not callable(obj):
             return ""
         sig = inspect.signature(obj)
-        return f"\nHint: the signature is {func_name}{sig}; see doc({func_name})."
+        hint = f"\nHint: the signature is {func_name}{sig}; see doc({func_name})."
+        if _is_kernel_surface(func_name, obj):
+            # The exact confusion of index#2110: a binding error against a
+            # bundled helper reads identically whether the kwarg never existed
+            # or the running kernel predates it. Only OUR surface can be stale
+            # relative to an agent's docs, so user-defined callables get no
+            # stamp.
+            hint += (
+                f" Kernel build: {build_stamp()}; if your docs describe a newer"
+                f" {func_name}(), this deploy predates them -- redeploy ix-mcp."
+            )
+        return hint
     except Exception:
         return ""
+
+
+def _is_kernel_surface(func_name: str, obj: Any) -> bool:
+    """Whether a callable is part of the kernel's own catalog surface (a
+    namespace builtin like ``grep``, a bundled module like ``nu``, or anything
+    defined in this package), as opposed to something the user defined in a
+    cell. Checks the resolved name's first segment against the registry and the
+    object's defining module root, either signal suffices."""
+    first = func_name.split(".", 1)[0]
+    if first in _API_BUILTINS or first in _API_MODULES:
+        return True
+    mod = getattr(obj, "__module__", None) or getattr(type(obj), "__module__", None) or ""
+    root = mod.split(".", 1)[0]
+    return root == "ix_notebook_mcp" or root in _API_MODULES
 
 
 async def _sweep_resources() -> None:
@@ -2373,14 +3763,52 @@ async def _sweep_resources() -> None:
     now = time.time()
     for res in list(resources.values()):
         if not res.alive():
+            # close() also tears down an interactive resource's action channel
+            # and dispatcher, so a dead pane cannot keep accepting ix.act posts.
+            res.close()
+            try:
+                # Very short-lived resources can open and close between flush
+                # ticks. Render one terminal snapshot before closing so they
+                # still appear under the job that created them.
+                if res.kind == "data":
+                    spec = await asyncio.wait_for(res.render_view(), timeout=2.0)
+                    res.html = json.dumps(spec, default=_safe_repr)
+                else:
+                    res.html = await asyncio.wait_for(res.render_html(), timeout=2.0)
+                res.error = None
+            except Exception as exc:
+                res.error = "".join(traceback.format_exception_only(type(exc), exc)).strip()
+                res.html = (
+                    '<pre style="color:#f7768e;margin:0">resource render failed:\n'
+                    + _escape_html(res.error)
+                    + "</pre>"
+                )
             with contextlib.suppress(Exception):  # best-effort: store write must not kill the loop
+                _store.upsert_resource(
+                    _store_conn,
+                    id=res.id,
+                    title=res.title,
+                    kind=res.kind,
+                    html=res.html,
+                    status="closed",
+                    created_at=res.created,
+                    updated_at=now,
+                    execution_id=res.execution_id,
+                )
                 _store.close_resource(_store_conn, id=res.id, updated_at=now)
             resources.pop(res.id, None)
             continue
         status = "live"
         try:
             # Bound each render so one wedged source cannot stall the whole loop.
-            res.html = await asyncio.wait_for(res.render_html(), timeout=2.0)
+            # A `data` resource renders a structured {renderer, data} spec, stored
+            # as JSON in the same `html` column (the pane bridge decodes it into a
+            # native `data` pane); an html resource renders markup as before.
+            if res.kind == "data":
+                spec = await asyncio.wait_for(res.render_view(), timeout=2.0)
+                res.html = json.dumps(spec, default=_safe_repr)
+            else:
+                res.html = await asyncio.wait_for(res.render_html(), timeout=2.0)
             res.error = None
         except Exception as exc:
             status = "error"
@@ -2400,6 +3828,7 @@ async def _sweep_resources() -> None:
                 status=status,
                 created_at=res.created,
                 updated_at=now,
+                execution_id=res.execution_id,
             )
 
 
@@ -2437,12 +3866,19 @@ def _drain_inputs() -> None:
             channel._deliver(payload)
 
 
+# When the flusher last emitted the redundant-read stats, so it fires on the
+# readstats.EMIT_WINDOW_S cadence rather than every flusher tick.
+_last_readstats_emit = 0.0
+
+
 async def _flusher() -> None:
     """Throttled background loop: persist every running job's output tail and
     re-render every live resource to the store so the dashboard shows both live.
     One loop for all jobs and resources (cheap)."""
     if _store is None or _store_conn is None:
         return
+    global _last_readstats_emit
+    _last_readstats_emit = time.time()
     while True:
         await asyncio.sleep(0.5)
         for job in list(jobs.values()):
@@ -2452,10 +3888,16 @@ async def _flusher() -> None:
                     _store.update_output(
                         _store_conn, job.id, job.output, job._displays or None, line=job.line
                     )
+                job._stream.poll()  # time-cap chunk flush (weave2 n-pty)
         await _sweep_resources()
         _drain_inputs()
         cells._sync()
         session._sync()
+        now = time.time()
+        if now - _last_readstats_emit >= readstats.EMIT_WINDOW_S:
+            _last_readstats_emit = now
+            with contextlib.suppress(Exception):  # best-effort: a stats emit must not kill the loop
+                readstats.tracker().emit_changed()
         if _SESSION and _snapshot_dirty and not _snapshot_busy and not _restoring:
             # Fire-and-forget so a multi-second dump of a big namespace never
             # stalls the live-output mirroring this loop exists for.
@@ -2815,16 +4257,19 @@ async def __ix_run(
     name: str | None = None,
     kind: str = "cell",
     session: str | None = None,
+    topic: str | None = None,
 ) -> Job:
     """Run ``code`` as a task; wait up to ``budget`` for it; return the Job either
     way (done, or still running in the background). ``session`` selects the
     namespace the code runs in (see :func:`_session_ns`)."""
     ns = _session_ns(session)
-    job = Job(code, name, budget=budget, kind=kind)
+    job = Job(code, name, budget=budget, kind=kind, topic=topic or globals()["session"].topic, session=session)
     job._ns = ns
     jobs[job.id] = job
     job.task = asyncio.ensure_future(_runner(job, ns))
     await asyncio.wait({job.task}, timeout=budget)
+    if not job.task.done():
+        job.backgrounded = True
     return job
 
 
@@ -2857,6 +4302,7 @@ def _job_summary(job: Job) -> dict:
     return {
         "id": job.id,
         "name": job.name,
+        "topic": job.topic,
         "status": job.status,
         "running": job.running(),
         "output": job.tail(_SUMMARY_CHARS),
@@ -2872,6 +4318,10 @@ def _job_summary(job: Job) -> dict:
         # Where a still-running job is right now (cell line), so a budget-expired
         # reply can say not just "running" but "running, on line N".
         "line": _current_line(job) if job.running() else None,
+        # The run's live weave view entity (weave2 n-toolviews, set by
+        # _persist_final), so the server can attach it to the tool result's
+        # _meta. None while running or when no view was minted.
+        "weave_view": job.weave_view,
     }
 
 
@@ -2911,13 +4361,64 @@ def _emit(job: Job) -> None:
 
 
 async def __ix_exec(
-    code: str, budget: float = 15.0, name: str | None = None, session: str | None = None
+    code: str,
+    budget: float = 15.0,
+    name: str | None = None,
+    session: str | None = None,
+    topic: str | None = None,
 ) -> None:
     """The MCP server's per-call entrypoint: run with a budget, emit the summary.
     ``session`` is the caller's MCP session id (per-session namespace; None for
     the shared one)."""
-    job = await __ix_run(code, budget=budget, name=name, session=session)
+    job = await __ix_run(code, budget=budget, name=name, session=session, topic=topic)
     _emit(job)
+
+
+def __ix_cancel_running(session: str | None = None, exclude: str | None = None) -> list[str]:
+    """Cancel the run this session's in-flight ``python_exec`` launched, so an
+    abandoned call stops instead of finishing in the background.
+
+    The MCP server calls this when the client cancels an in-flight
+    ``python_exec`` request (``notifications/cancelled`` or a transport abort):
+    the tool coroutine is cancelled server-side, but the kernel job it started
+    keeps running as a background task -- executing side effects the caller
+    already abandoned (index#2387). Cancelling that job here is the SAME path as
+    an explicit ``jobs['<id>'].cancel()``, so it drains and records cleanly.
+
+    Only the single most recently started still-running ``python_exec`` run
+    (``kind == "cell"``) for ``session`` is cancelled: that is the one the
+    abandoned call launched. Crucially, jobs the call itself detached with
+    ``jobs.spawn`` (``kind == "spawn"``, newer-started than the parent run but
+    inheriting its session) are NOT candidates -- the user asked for those to
+    outlive the call, so cancelling the abandoned foreground run must leave them
+    running. Legitimate earlier runs the same session did not abandon also keep
+    running. ``exclude`` skips a job id -- the raw cancel request's own frame is
+    never a ``jobs`` entry, but the guard keeps the helper honest if that ever
+    changes. Returns the ids cancelled (empty when the run already finished, the
+    common race: a fast call completes before the cancellation lands)."""
+    candidates = [
+        job
+        for job in jobs.values()
+        if job.session == session
+        and job.kind == "cell"
+        and job.running()
+        and job.id != exclude
+    ]
+    if not candidates:
+        return []
+    # Newest-started cell wins: `jobs` is insertion-ordered, and the abandoned
+    # call is the last foreground run this session launched.
+    target = max(candidates, key=lambda job: job.started)
+    target.cancel()
+    return [target.id]
+
+
+def __ix_emit_read_stats_final() -> None:
+    """Emit every session's final ``mcp_read_stats`` line. The server calls this
+    in-kernel from its shutdown ``finally`` block, BEFORE it kills the kernel with
+    ``shutdown_kernel(now=True)`` (a SIGKILL, which no atexit hook survives), so
+    the counts accrued since the last periodic emit are flushed to the journal."""
+    readstats.tracker().emit_final()
 
 
 def _existing_file(value: Any) -> pathlib.Path | None:
@@ -2945,72 +4446,49 @@ def _tilde(path: Any) -> str:
     return text
 
 
-# File-type icons for the read note, rendered as inline SVG so the dashboard
-# (which trusts agent HTML/SVG -- see RichOutput.svelte) shows a real document
-# glyph with the extension on a colored ribbon, not an emoji. The color is keyed
-# by lowercased extension; any unknown extension still gets the document shape
-# with a neutral ribbon, so every file reads as a file.
-_EXT_COLORS = {
-    "py": "#3776ab", "rs": "#dea584", "go": "#00add8",
-    "js": "#f1e05a", "mjs": "#f1e05a", "cjs": "#f1e05a",
-    "ts": "#3178c6", "tsx": "#3178c6", "jsx": "#f1e05a",
-    "json": "#cbcb41", "jsonl": "#cbcb41", "ndjson": "#cbcb41",
-    "toml": "#9c4221", "yaml": "#cb171e", "yml": "#cb171e",
-    "ini": "#8a8a92", "cfg": "#8a8a92", "conf": "#8a8a92", "env": "#8a8a92",
-    "nix": "#7e7eff",
-    "md": "#519aba", "rst": "#519aba", "txt": "#9aa0a6",
-    "sh": "#89e051", "bash": "#89e051", "zsh": "#89e051", "fish": "#89e051", "nu": "#3aa675",
-    "html": "#e44d26", "htm": "#e44d26", "xml": "#e37933",
-    "css": "#563d7c", "scss": "#c6538c",
-    "csv": "#41b883", "tsv": "#41b883", "parquet": "#41b883",
-    "log": "#9aa0a6", "lock": "#e3c15b", "sql": "#dad8d8", "pdf": "#e02d2d",
-    "png": "#a074c4", "jpg": "#a074c4", "jpeg": "#a074c4",
-    "gif": "#a074c4", "svg": "#ffb13b", "webp": "#a074c4",
-}
-_NAMED_EXTS = {"dockerfile": "docker", "makefile": "make"}
-_DEFAULT_EXT_COLOR = "#8a8a92"
+# Cap on the highlight context shipped to the dashboard for one read. The
+# frontend tokenizes the WHOLE file so a mid-file slice still highlights
+# correctly (open strings, nested blocks); past this size only the slice
+# travels, so a huge file never rides every dashboard poll. Stays under
+# _MAX_TEXT_BUNDLE even after JSON escaping so _normalize_bundle never drops it.
+_READ_CONTEXT_MAX = 128 * 1024
+
+# Well-known extensionless files -> highlight grammar. Anything else hints its
+# bare extension; the frontend aliases (py -> python) and falls back to plain.
+_NAMED_LANGS = {"dockerfile": "docker", "makefile": "make"}
 
 
-def _file_icon_svg(path: Any, *, px: int = 16) -> str:
-    """An inline-SVG file icon for the read note: a document with a folded corner
-    and the extension on a category-colored ribbon. Works for any extension."""
-    name = pathlib.Path(path).name
-    ext = (_NAMED_EXTS.get(name.lower()) or pathlib.Path(name).suffix.lstrip(".") or "txt").lower()
-    color = _EXT_COLORS.get(ext, _DEFAULT_EXT_COLOR)
-    label = _escape_html(ext[:4].upper())
-    width = round(px * 0.8)
-    return (
-        f'<svg width="{width}" height="{px}" viewBox="0 0 40 50" fill="none" '
-        f'xmlns="http://www.w3.org/2000/svg" style="vertical-align:-3px;flex:none">'
-        f'<path d="M5 2h21l9 9v35a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" '
-        f'fill="#23232a" stroke="#3a3a42" stroke-width="1.5"/>'
-        f'<path d="M26 2l9 9h-9z" fill="#3a3a42"/>'
-        f'<rect x="3" y="30" width="34" height="14" rx="2" fill="{color}"/>'
-        f'<text x="20" y="40.5" font-family="ui-monospace,Menlo,monospace" font-size="11" '
-        f'font-weight="700" text-anchor="middle" fill="#111">{label}</text></svg>'
-    )
+def _read_lang(path: Any) -> str | None:
+    """The dashboard highlight hint for a file: a named grammar for well-known
+    extensionless files, else the lowercased bare extension."""
+    name = pathlib.Path(path).name.lower()
+    return _NAMED_LANGS.get(name) or pathlib.Path(name).suffix.lstrip(".").lower() or None
 
 
-def _value_icon_svg(*, px: int = 16) -> str:
-    """An inline-SVG icon for a read of a kernel value (not a file): braces, to
-    distinguish a value/object dump from a file read."""
-    width = round(px * 0.8)
-    return (
-        f'<svg width="{width}" height="{px}" viewBox="0 0 40 50" fill="none" '
-        f'xmlns="http://www.w3.org/2000/svg" style="vertical-align:-3px;flex:none">'
-        f'<rect x="3" y="6" width="34" height="38" rx="4" fill="#23232a" '
-        f'stroke="#3a3a42" stroke-width="1.5"/>'
-        f'<text x="20" y="33" font-family="ui-monospace,Menlo,monospace" font-size="18" '
-        f'font-weight="700" text-anchor="middle" fill="#9aa0a6">{{ }}</text></svg>'
-    )
+def _clip_lines(lines: list[str], budget: int) -> list[str]:
+    """The longest line-boundary prefix whose joined size fits ``budget``. When
+    even the first line alone exceeds the budget (minified JSON, a giant log
+    line), a character prefix of it is returned rather than nothing, so a
+    clipped view is never blank."""
+    out: list[str] = []
+    used = 0
+    for line in lines:
+        used += len(line) + 1
+        if used > budget:
+            break
+        out.append(line)
+    if not out and lines:
+        out.append(lines[0][:budget])
+    return out
 
 
 async def __ix_read(target: Any, start: int | None = None, end: int | None = None, session: str | None = None) -> Result:
     """Read a file (or evaluate a kernel value) FOR THE MODEL, quietly.
 
     Returns a Result whose ``llm_result`` is the full text the model receives and
-    whose ``user_html`` is a one-line note the human sees, so a large read informs
-    the model without flooding the dashboard. ``target`` is read as a file when it
+    whose ``user_view`` is a structured ``file-view`` spec the dashboard renders
+    natively (highlighted card with the read span), so a large read informs the
+    model without flooding the dashboard. ``target`` is read as a file when it
     names an existing file, otherwise evaluated as a Python expression in the user
     namespace (e.g. ``jobs['ab12'].output``, a variable you bound). ``start`` and
     ``end`` select a 1-based inclusive line range. ``session`` evaluates the
@@ -3032,25 +4510,72 @@ async def __ix_read(target: Any, start: int | None = None, end: int | None = Non
         # freezes every other job on the shared event loop.
         full = await asyncio.to_thread(path.read_text, errors="replace")
         label = _tilde(path)
-        icon = _file_icon_svg(path)
+        lang = _read_lang(path)
     else:
         full = value if isinstance(value, str) else _safe_repr(value)
         label = target if isinstance(target, str) else _safe_repr(target)
-        icon = _value_icon_svg()
-    lines = full.splitlines()
+        lang = None
+    # '\n' is the ONE line boundary, matching the renderer's split — str.splitlines
+    # would also break on \f/\v/\x85/U+2028..., desyncing the gutter numbers and
+    # span meta from the rows actually displayed. A trailing newline is a
+    # terminator, not a phantom last line.
+    lines = full.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
     total = len(lines)
     if start is not None or end is not None:
         lo = max((start or 1) - 1, 0)
         hi = total if end is None else min(end, total)
         selected = lines[lo:hi]
         body = "\n".join(selected)
-        span = f"lines {lo + 1}-{lo + len(selected)} of {total}"
+        first, last = lo + 1, lo + len(selected)
     else:
+        selected = lines
         body = full
-        span = f"{total} lines"
-    note = f"read {label} \u00b7 {span}, {len(body)} chars"
-    user = f'<div class="ix-ok">{icon} {_escape_html(note)}</div>'
-    return Result(user_html=user, llm_result=body)
+        first, last = 1, total
+    if path is not None:
+        # Track this read for the redundant-read KPI. Hash the payload the agent
+        # actually RECEIVED (`body`, i.e. the line slice for a ranged read), not
+        # the whole file -- so reading lines 1-100 then 101-200 is two novel reads,
+        # not a false redundancy. Hashing is CPU-bound and `body` can be large, so
+        # it runs off the event loop (like the read itself); only the fast set
+        # lookup + counter update lands back on the loop. Never a second disk read.
+        _digest = await asyncio.to_thread(readstats.digest, path, body)
+        readstats.tracker().record_digest(session, _digest)
+    # Display context: the whole file when it fits, else the slice, else a
+    # line-clipped head of the slice. `start`/`end`/`total`/`chars` always
+    # describe what the model received; `text`+`context_start` describe display,
+    # and `truncated` marks a display copy that omits part of the read span so
+    # the card never silently poses as the full range.
+    truncated = False
+    if len(full) <= _READ_CONTEXT_MAX:
+        text, context_start = full, 1
+    elif len(body) <= _READ_CONTEXT_MAX:
+        text, context_start = body, first
+    else:
+        text, context_start = "\n".join(_clip_lines(selected, _READ_CONTEXT_MAX)), first
+        truncated = True
+    return Result(
+        user_view={
+            "renderer": "file-view",
+            "data": {
+                "label": label,
+                "file": path is not None,
+                "lang": lang,
+                "text": text,
+                "context_start": context_start,
+                "start": first,
+                "end": last,
+                "total": total,
+                "chars": len(body),
+                "truncated": truncated,
+            },
+        },
+        # Plain-HTML fallback for hosts (and the mixed-rich-output pane path)
+        # that do not render the structured view; the display context, escaped.
+        user_html=f'<pre class="ix-result">{_escape_html(text)}</pre>',
+        llm_result=body,
+    )
 
 
 
@@ -3104,13 +4629,24 @@ def _register_rich_formatters(shell: Any) -> None:
 
 _user_ns: dict | None = None
 
+# Every name install() binds into the namespace (jobs, nu, api, ...), keyed to
+# its canonical object. A cell that rebound or deleted one (``api = ...``,
+# ``del nu``) used to silently brick that helper for the rest of the session,
+# and ``del`` could not bring it back (issue #2430): the runner re-injects
+# these after every cell (see _restore_clobbered_builtins).
+_protected_builtins: dict[str, Any] = {}
+
+# Sentinel distinguishing "name deleted" from any real value (None included)
+# when checking the namespace for clobbered builtins.
+_ABSENT: Any = object()
+
 
 def _install_signal_handlers() -> None:
     """Wire the two operator signals the MCP server uses to inspect or rescue a
     kernel whose event loop is blocked by a synchronous call.
 
     SIGUSR1: faulthandler dumps every thread's Python stack to the file named by
-    ``IX_MCP_KERNEL_TRACE`` (kept by ``kernel.TRACE_ENV``). The handler is C-level
+    ``IX_MCP_KERNEL_TRACE`` (kept by ``kernel_host.TRACE_ENV``). The handler is C-level
     so it runs even while the main thread is parked in a blocking call; the
     ``kernel_trace`` tool reads the file back.
 
@@ -3220,38 +4756,54 @@ def install(user_ns: dict | None = None) -> None:
             _store_conn = None
 
     target = user_ns if user_ns is not None else globals()
-    target["jobs"] = jobs
-    target["history"] = history
-    target["doc"] = doc
-    target["Job"] = Job
-    target["Result"] = Result
-    target["cells"] = cells
-    target["Cells"] = Cells
-    target["session"] = session
+
+    def _bind(name: str, value: Any) -> None:
+        """Bind one runtime builtin and register it for post-cell restore: every
+        name bound through here is re-injected by the runner when a cell rebinds
+        or deletes it (issue #2430)."""
+        target[name] = value
+        _protected_builtins[name] = value
+
+    _protected_builtins.clear()
+    _bind("jobs", jobs)
+    _bind("history", history)
+    _bind("doc", doc)
+    _bind("Job", Job)
+    _bind("Result", Result)
+    _bind("cells", cells)
+    _bind("Cells", Cells)
+    _bind("session", session)
     # Seed the default session label with this kernel's working directory; the
     # connecting client's identity is folded in later (see Kernel.set_client).
     with contextlib.suppress(OSError):
-        session._workdir = pathlib.Path.cwd().name or ""
+        session._workdir = process_cwd().name or ""
         session._rev += 1  # ensure the first flush mirrors the default to the store
-    target["resources"] = resources
-    target["Resource"] = Resource
-    target["register_resource"] = register_resource
-    target["Input"] = Input
-    target["ask"] = ask
-    target["input_channels"] = input_channels
-    target["__ix_run"] = __ix_run
-    target["__ix_exec"] = __ix_exec
-    target["__ix_read"] = __ix_read
-    target["__ix_snapshot"] = __ix_snapshot
-    target["__ix_restore"] = __ix_restore
-    target["DASHBOARD_URL"] = os.environ.get("IX_MCP_DASHBOARD_URL", "")
-    # `sh` is a bundled, callable module (see packages/mcp/src/sh). Bind it here
-    # so `await sh(cmd)` works with no import, the way Result/cells/jobs do; an
-    # explicit `import sh` returns the same object, so both styles agree.
+    _bind("resources", resources)
+    _bind("Resource", Resource)
+    _bind("register_resource", register_resource)
+    _bind("Input", Input)
+    _bind("ask", ask)
+    _bind("notify", notify)
+    _bind("watch_pr", watch_pr)
+    _bind("input_channels", input_channels)
+    _bind("__ix_run", __ix_run)
+    _bind("__ix_exec", __ix_exec)
+    _bind("__ix_cancel_running", __ix_cancel_running)
+    _bind("__ix_read", __ix_read)
+    _bind("__ix_emit_read_stats_final", __ix_emit_read_stats_final)
+    _bind("__ix_snapshot", __ix_snapshot)
+    _bind("__ix_restore", __ix_restore)
+    _bind("DASHBOARD_URL", os.environ.get("IX_MCP_DASHBOARD_URL", ""))
+    # `sh`/`zsh` are RETIRED (agents shell out through `await nu(...)`; the sh
+    # module's public entry points now raise a migration hint). Bind them anyway
+    # so a stale `await sh(cmd)` in an old transcript fails LOUDLY with that hint
+    # rather than a bare NameError. The kernel's own internals reach the private
+    # runner via `from sh import _exec`, which is never bound into the namespace.
     with contextlib.suppress(Exception):  # sh may be absent outside the bundled interpreter; skip it
         import sh as _sh_module
 
-        target["sh"] = _sh_module
+        _bind("sh", _sh_module)
+        _bind("zsh", _sh_module.zsh)
     # Bind the filesystem-search helpers as top-level callables (`await grep(...)`
     # / `find(...)` / `spotlight(...)`) the way `sh` is bound, so the most common
     # search/listing actions need no import. They live in the bundled `fsearch`
@@ -3260,9 +4812,9 @@ def install(user_ns: dict | None = None) -> None:
     with contextlib.suppress(Exception):  # fsearch may be absent outside the bundled interpreter; skip it
         import fsearch as _fsearch_module
 
-        target["grep"] = _fsearch_module.grep
-        target["find"] = _fsearch_module.find
-        target["spotlight"] = _fsearch_module.spotlight
+        _bind("grep", _fsearch_module.grep)
+        _bind("find", _fsearch_module.find)
+        _bind("spotlight", _fsearch_module.spotlight)
     # Pre-bind the most-reached-for bundled module so `view.ls(...)` works with no
     # import, the way Result/cells/jobs/sh do (an explicit `import view` returns
     # the same object). It is already imported at startup (01-ix-polars installs
@@ -3270,19 +4822,23 @@ def install(user_ns: dict | None = None) -> None:
     # fleet, search) stay import-on-demand to keep the namespace lean.
     for _mod_name in registry.preimport_names():
         with contextlib.suppress(Exception):  # best-effort per-module import; continue on missing modules
-            target[_mod_name] = __import__(_mod_name)
+            _bind(_mod_name, __import__(_mod_name))
     # The kernel is async-first and polars-first: nearly every session reaches
     # for asyncio (ensure_future / sleep), json (every CLI's --json output), and
     # pl within its first cells, and a NameError on `asyncio` in an async kernel
     # is pure friction (observed twice in one 2026-06-10 session). Bound like
-    # sh/fff/view; an explicit import returns the same module.
-    target["asyncio"] = asyncio
-    target["json"] = json
-    with contextlib.suppress(Exception):  # polars may be absent; skip binding pl
-        import polars as _polars_mod
+    # sh/view; an explicit import returns the same module.
+    _bind("asyncio", asyncio)
+    _bind("json", json)
+    import polars as _polars_mod
 
-        target["pl"] = _polars_mod
-    target["api"] = api
+    _bind("pl", _polars_mod)
+    _bind("api", api)
+    _bind("read_stats", read_stats)
+    # Failures of fire-and-forget tasks, newest last (see the deque's comment).
+    # A report also lands in the spawning job's output, tagged `[task_errors]`,
+    # which is how the name advertises itself.
+    _bind("task_errors", task_errors)
 
     # Everything in the namespace up to here is the runtime's own surface plus
     # the kernel preamble -- not user state. Session checkpoints cover only the
@@ -3290,7 +4846,7 @@ def install(user_ns: dict | None = None) -> None:
     global _baseline_names, _lazy_module_names
     _baseline_names = frozenset(target)
     # Bind every other bundled module behind a lazy proxy, so `await maps.nearby(...)`
-    # works with no `import maps` just like fff/view -- but deferring the import to
+    # works with no `import maps` just like sh/view -- but deferring the import to
     # first use, so framework-heavy modules (maps pulls in MapKit + CoreLocation,
     # ~120ms) and platform-absent ones cost nothing at startup. Bound AFTER the
     # baseline snapshot on purpose: these names must NOT count as runtime surface,
@@ -3306,5 +4862,11 @@ def install(user_ns: dict | None = None) -> None:
     # user names; refs accumulate as runs touch them).
     _name_refs.clear()
 
-    with contextlib.suppress(RuntimeError):  # no event loop yet (sync context): flusher is optional
-        asyncio.get_event_loop().create_task(_flusher())
+    with contextlib.suppress(RuntimeError):  # no event loop yet (sync context): flusher and task watch are optional
+        loop = asyncio.get_event_loop()
+        # Watch first, then spawn: the flusher must itself be a watched task,
+        # and its module-global reference (which prevents GC, RUF006) is
+        # exactly what would otherwise keep a crashed flusher silent forever.
+        _install_task_failure_watch(loop)
+        global _flusher_task
+        _flusher_task = loop.create_task(_flusher())

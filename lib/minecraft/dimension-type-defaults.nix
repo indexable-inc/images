@@ -1,7 +1,7 @@
 # Vanilla dimension-type JSON snapshots, keyed by Minecraft resource id.
 #
 # Schema target: Minecraft Java 1.21.10+ (the `attributes` map shape), matching
-# the default `services.minecraft.version` in `images/games/minecraft/versions.nix`.
+# the default `services.minecraft.version` in `packages/minecraft/catalogs/versions.nix`.
 # The height knobs (`min_y`, `height`, `logical_height`) are deliberately omitted
 # so callers can supply them and have `ix.minecraft.dimensionType.withBase` merge
 # the rest in.

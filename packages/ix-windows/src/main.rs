@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use clap::Parser;
 use dashboard_core::{ProducerEvent, discovery_dir, subscribe};
@@ -33,6 +33,11 @@ struct Cli {
     #[arg(long, default_value_t = 500)]
     rescan_ms: u64,
 }
+
+/// How often to re-check the cursor against hovered windows' frames
+/// ([`WindowManager::sweep_hover`]). Only ticks while a close control is
+/// revealed; the loop is otherwise fully event-driven.
+const HOVER_SWEEP: Duration = Duration::from_millis(200);
 
 fn main() {
     let cli = Cli::parse();
@@ -95,7 +100,25 @@ fn main() {
             } => {
                 manager.window_closed(window_id);
             }
+            // The page saw pointer activity: reveal the close control. The OFF
+            // edge is the sweep below, not a page event (see `UserEvent::Hover`;
+            // tao's CursorEntered/CursorLeft never fire for these never-key
+            // background windows, verified empirically).
+            Event::UserEvent(UserEvent::Hover { window }) => {
+                manager.set_hovered(window, true);
+            }
             _ => {}
         }
+        // While any close control is revealed, wake on a short timer and clear
+        // the ones the cursor has left; otherwise idle indefinitely. Every wake
+        // (timer or event) sweeps, so a stale reveal survives at most one tick.
+        if manager.any_hovered() {
+            manager.sweep_hover();
+        }
+        *control_flow = if manager.any_hovered() {
+            ControlFlow::WaitUntil(Instant::now() + HOVER_SWEEP)
+        } else {
+            ControlFlow::Wait
+        };
     });
 }

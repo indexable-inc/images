@@ -41,9 +41,13 @@ defense in depth, ``in_kernel`` carries it automatically.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import os
 import shutil
+import socket
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 from collections.abc import Callable, Sequence
@@ -74,6 +78,23 @@ EXEC_PORT = int(os.environ.get("IX_FLEET_EXEC_PORT", "8799"))
 # `fleet.spark` client dials `sc://<master>:<this>`.
 SPARK_CONNECT_PORT = int(os.environ.get("IX_FLEET_SPARK_CONNECT_PORT", "15002"))
 
+# The Ray Client server on the fleet head (`ray://<head>:<this>`): the
+# supported path for an off-cluster box (e.g. darwin, which cannot join the
+# linux cluster as a raylet -- mixed-OS clusters are unsupported by Ray).
+RAY_CLIENT_PORT = 10001
+
+
+def _ray_client_port() -> int:
+    """The Ray Client port the tailnet probe checks AND the resolved
+    ``ray://`` target dials -- one port for both on purpose, because a
+    connectable Client port is the liveness signal for the exact endpoint we
+    would use. Probing the GCS (6379) instead was wrong: redis defaults to
+    6379, so any redis on a tag:server host read as a Ray head, and two of
+    them silently disabled zero-config connect fleet-wide (index#1789 review).
+    Read per call, not at import, so tests can point the probe at a fake
+    listener via ``IX_FLEET_RAY_CLIENT_PORT``."""
+    return int(os.environ.get("IX_FLEET_RAY_CLIENT_PORT", str(RAY_CLIENT_PORT)))
+
 
 class ClusterError(Exception):
     """A cluster operation could not be carried out (Ray unreachable, a peer
@@ -81,6 +102,104 @@ class ClusterError(Exception):
 
 
 # --- Ray bootstrap ---------------------------------------------------------
+
+
+def _tailscale_status_sync(timeout: float = 1.0) -> dict[str, Any] | None:
+    """``tailscale status --json`` synchronously, or None when unavailable.
+
+    :func:`connect` is a sync function whose ``ray.init`` already blocks, so
+    its pre-probe shells out directly (with a hard timeout) instead of going
+    through the async helper below.
+    """
+    try:
+        # _find_tailscale inside the try too: its /usr fallback probe raises
+        # PermissionError under the darwin nix sandbox (stat on /usr is
+        # denied), and the probe must degrade to "no tailscale", never crash.
+        binary = _find_tailscale()
+        if not binary:
+            return None
+        out = subprocess.run(
+            [binary, "status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=True,
+        ).stdout
+        parsed: dict[str, Any] | None = json.loads(out) if out else None
+        return parsed
+    except Exception:
+        return None
+
+
+def _probe_ray_heads(budget: float = 1.5) -> list[str]:
+    """Tailscale IPs of online ``tag:server`` peers with a listening Ray
+    Client port.
+
+    The zero-config leg of :func:`connect`'s resolution (index#1787): with no
+    explicit address and no env var, sweep the fleet's server-tagged tailnet
+    peers for a Ray Client listener, concurrently, spending at most ``budget``
+    seconds in total. Only ``tag:server`` peers are probed: that is how the
+    fleet marks its service hosts on the tailnet, and probing every phone and
+    laptop would waste the budget on guaranteed misses.
+    """
+    status = _tailscale_status_sync()
+    if not status:
+        return []
+    candidates: list[str] = []
+    peers_field = status.get("Peer") or {}
+    if isinstance(peers_field, dict):
+        for peer in peers_field.values():
+            if not isinstance(peer, dict) or not peer.get("Online"):
+                continue
+            if "tag:server" not in (peer.get("Tags") or []):
+                continue
+            ip = _ipv4(peer.get("TailscaleIPs"))
+            if ip:
+                candidates.append(ip)
+    if not candidates:
+        return []
+    port = _ray_client_port()
+
+    def client_port_open(ip: str) -> bool:
+        try:
+            with socket.create_connection((ip, port), timeout=budget):
+                return True
+        except OSError:
+            return False
+
+    # Threads, not asyncio: connect() runs synchronously (possibly ON the
+    # kernel's loop, where asyncio.run is unusable), and the pool is torn down
+    # without joining so a straggler socket never stretches past the budget.
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(len(candidates), 32))
+    try:
+        futures = {pool.submit(client_port_open, ip): ip for ip in candidates}
+        done, _not_done = concurrent.futures.wait(futures, timeout=budget)
+        return sorted(futures[f] for f in done if f.result())
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _resolve_auto_target(budget: float = 1.5) -> tuple[str | None, str]:
+    """The tailnet-probed Ray Client target, or ``(None, why-not)``.
+
+    Split from :func:`connect` so the zero-config resolution is testable
+    against a fake GCS listener without importing (or starting) Ray.
+
+    An AMBIGUOUS probe (several heads, i.e. several clusters) raises instead
+    of returning ``None``: the no-target fallback chain ends in a private
+    local Ray, and silently computing on one laptop in exactly the case where
+    the operator has two clusters to choose from is the worst possible guess
+    (index#1789 review). The operator must pick via ``IX_FLEET_RAY_ADDRESS``.
+    """
+    heads = _probe_ray_heads(budget=budget)
+    if len(heads) == 1:
+        return f"ray://{heads[0]}:{_ray_client_port()}", ""
+    if heads:
+        raise RuntimeError(
+            f"tailnet probe found {len(heads)} Ray heads ({', '.join(heads)}); "
+            "set IX_FLEET_RAY_ADDRESS to pick one"
+        )
+    return None, "tailnet probe found no tag:server peer with a listening Ray Client port"
 
 
 def connect(address: str | None = None, *, local: bool = False, **kw: Any) -> None:  # noqa: ANN401 -- forwarded to ray.init
@@ -91,11 +210,18 @@ def connect(address: str | None = None, *, local: bool = False, **kw: Any) -> No
     off-cluster box -- e.g. a laptop -- so it drives the fleet via the Ray
     Client, the supported thin cross-environment path); else ``RAY_ADDRESS``
     (the fleet's NixOS service sets this to the head GCS, since the daemon's
-    non-default temp-dir defeats ``"auto"`` discovery); else ``"auto"``, which on
-    a fleet node attaches to the local raylet. With ``local=True``, or if the
-    target is unreachable, a private single-node Ray is started so the same code
-    still runs on a box with no fleet. Safe to call repeatedly; the Ray-using
-    functions here call it for you.
+    non-default temp-dir defeats ``"auto"`` discovery); else a tailnet
+    auto-probe (index#1787): online ``tag:server`` peers are TCP-probed on the
+    Ray Client port, and exactly one hit becomes ``ray://<ip>:10001`` -- the
+    Ray Client path, since an off-cluster box cannot join as a raylet; else ``"auto"``,
+    which on a fleet node attaches to the local raylet. With ``local=True``, or
+    if the target is unreachable, a private single-node Ray is started (with
+    one loud stderr line saying so and why) so the same code still runs on a
+    box with no fleet. The one hard failure: a probe that finds SEVERAL Ray
+    heads raises (``RuntimeError`` naming every hit) rather than fall back --
+    a silent local Ray is the worst answer to "which of my clusters?"; set
+    ``IX_FLEET_RAY_ADDRESS`` to pick one. Safe to call repeatedly; the
+    Ray-using functions here call it for you.
     """
     import ray
 
@@ -106,18 +232,27 @@ def connect(address: str | None = None, *, local: bool = False, **kw: Any) -> No
     if local:
         ray.init(**common)
         return
-    target = (
-        address
-        or os.environ.get("IX_FLEET_RAY_ADDRESS")
-        or os.environ.get("RAY_ADDRESS")
-        or "auto"
-    )
+    target = address or os.environ.get("IX_FLEET_RAY_ADDRESS") or os.environ.get("RAY_ADDRESS")
+    probe_note = ""
+    if not target:
+        target, probe_note = _resolve_auto_target()
+    if not target:
+        target = "auto"
     try:
         ray.init(address=target, **common)
-    except Exception:
+    except Exception as error:
         # No cluster to attach to (a dev box, the head is down, or a `ray://`
         # client could not reach it): fall back to a local Ray so `fleet.run`
-        # still works rather than hard-failing.
+        # still works rather than hard-failing -- but LOUDLY (index#1787): a
+        # silent single-node Ray looks exactly like the fleet until a job runs
+        # on one machine instead of twelve.
+        detail = f"; {probe_note}" if probe_note else ""
+        print(
+            f"[fleet] no reachable Ray cluster (address={target!r}: "
+            f"{type(error).__name__}){detail}; started a private single-node Ray",
+            file=sys.stderr,
+            flush=True,
+        )
         ray.init(**common)
 
 

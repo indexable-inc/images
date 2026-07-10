@@ -1,11 +1,13 @@
 {
   lib,
   ix,
+  stdenv,
   protobuf,
   pkg-config,
   cmake,
   perl,
   makeWrapper,
+  pkgsStatic,
   runCommand,
 }:
 # snix is the Rust reimplementation of Nix (TVL depot `git.snix.dev/snix/snix`).
@@ -29,7 +31,7 @@ let
     # tests/default.nix).
     workspaceRoot = snixDir;
     cargoLock = snixDir + "/Cargo.lock";
-    cargoArgs = [ "--workspace" ];
+    cargoArgs = ["--workspace"];
 
     # snix is third-party: build it, do not lint or audit it. Same relaxed
     # posture as `cargoUnitRealWorkspacePolicy` in tests/default.nix.
@@ -63,16 +65,27 @@ let
       PROTO_ROOT = "${ix.snixSrc}";
     };
 
+    # snix-build resolves its sandbox shell at rustc time:
+    # `const SANDBOX_SHELL: &str = env!("SNIX_BUILD_SANDBOX_SHELL")` in
+    # build/src/buildservice/{bwrap,oci}.rs, so the crate does not compile
+    # without it and every merge re-built the whole dependency graph up to this
+    # unit only to fail (indexable-inc/index#1863). Mirror upstream's crate
+    # override (snix/utils.nix): a static busybox `sh` on Linux (copied into
+    # the build sandbox, so it must not carry runtime deps), the system shell
+    # on darwin. Scoped to the one package so the busybox store path does not
+    # perturb every other unit's identity.
+    packageBuildEnv.snix-build.SNIX_BUILD_SANDBOX_SHELL =
+      if stdenv.hostPlatform.isLinux
+      then "${pkgsStatic.busybox}/bin/sh"
+      else "/bin/sh";
+
     # Git dependencies pinned in snix's Cargo.lock, keyed by the exact lock
     # source string. Refresh with `nix flake update snix-src` then rebuild and
     # copy the corrected hashes from the fetchgit mismatch errors.
     outputHashes = {
-      "git+https://github.com/arianvp/hyper.git?branch=push-ktssyytnyrru#e071325cc75549b37bbcd5be591e93c4c974b4a2" =
-        "sha256-XnUOQYfPa+LKOx7aKz5wv4tL9hXirJ7UkrMBiM7bHb4=";
-      "git+https://github.com/edef1c/tonic.git?branch=push-rosuyzxnysvw#f03397b816b834f78c8b9e1a271c23ac4265d750" =
-        "sha256-bf88XZMzeplglunUDOU5XWFgKpbzoVV1r4Sj3qvhOHQ=";
-      "git+https://github.com/tvlfyi/wu-manber.git#0d5b22bea136659f7de60b102a7030e0daaa503d" =
-        "sha256-7YIttaQLfFC/32utojh2DyOHVsZiw8ul/z0lvOhAE/4=";
+      "git+https://github.com/flokli/grpc-rust.git?rev=292ed1a6aa8011208f685e9e116ea205d3156256#292ed1a6aa8011208f685e9e116ea205d3156256" = "sha256-tl2Zqbt26+PfNE5TO/7ITH3VXhf3KUpr26rgennfhj4=";
+      "git+https://github.com/flokli/hyper.git?rev=554050c2ac5057110dc76a71022d7f6a7a8c9e2e#554050c2ac5057110dc76a71022d7f6a7a8c9e2e" = "sha256-5Jwxx+cafnawCBV+6VS461uL2TGht8k6xPBf2tAhcO0=";
+      "git+https://github.com/tvlfyi/wu-manber.git#0d5b22bea136659f7de60b102a7030e0daaa503d" = "sha256-7YIttaQLfFC/32utojh2DyOHVsZiw8ul/z0lvOhAE/4=";
     };
   };
 
@@ -92,10 +105,10 @@ let
     "snix-store"
   ];
 in
-runCommand "snix"
+  runCommand "snix"
   {
-    nativeBuildInputs = [ makeWrapper ];
-    passthru = { inherit workspace; };
+    nativeBuildInputs = [makeWrapper];
+    passthru = {inherit workspace;};
     meta = {
       description = "Rust reimplementation of Nix (snix `default` CLI), built via cargo-unit";
       homepage = "https://snix.dev";
@@ -107,8 +120,9 @@ runCommand "snix"
   ''
     mkdir -p "$out/bin" "$out/libexec"
     ${lib.concatMapStringsSep "\n" (
-      name: ''ln -s ${workspace.binaries.${name}}/bin/${name} "$out/libexec/${name}"''
-    ) subcommands}
+        name: ''ln -s ${workspace.binaries.${name}}/bin/${name} "$out/libexec/${name}"''
+      )
+      subcommands}
     makeWrapper ${workspace.binaries.snix}/bin/snix "$out/bin/snix" \
       --suffix SNIX_LIBEXEC_PATH : "$out/libexec"
   ''

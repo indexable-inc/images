@@ -5,55 +5,61 @@
   cargoUnitFor,
   goUnitFor,
   rustWorkspaceFor,
-  clippy-fork,
+  clippy-src,
   ghostty,
-}:
-pkgs:
-let
+}: pkgs: let
   packageSystem = pkgs.stdenv.hostPlatform.system;
-  ixForPackages = ixSpecialArgs // {
-    inherit pkgs;
-    # Rebind the language unit builders to the caller's pkgs so repo
-    # packages built through packageSetFor compile for the host system
-    # instead of the x86_64-linux pkgs the top-level ixSpecialArgs bundle
-    # is bound to.
-    cargoUnit = cargoUnitFor pkgs;
-    goUnit = goUnitFor pkgs;
-    rustWorkspace = rustWorkspaceFor pkgs;
-  };
+  ixForPackages =
+    ixSpecialArgs
+    // {
+      inherit pkgs;
+      # Rebind the language unit builders to the caller's pkgs so repo
+      # packages built through packageSetFor compile for the host system
+      # instead of the x86_64-linux pkgs the top-level ixSpecialArgs bundle
+      # is bound to.
+      cargoUnit = cargoUnitFor pkgs;
+      goUnit = goUnitFor pkgs;
+      rustWorkspace = rustWorkspaceFor pkgs;
+      # unibind build glue bound to the caller's pkgs, for the same reason as
+      # rustWorkspace above.
+      unibind = ixSpecialArgs.unibindFor pkgs;
+      # Patched-source builder bound to the caller's pkgs, so codex / btop /
+      # llm-clippy apply their patch series against a source that builds for the
+      # consuming system rather than the top-level x86_64-linux one.
+      patchedSrc = ixSpecialArgs.patchedSrcFor pkgs;
+    };
   context = {
     inherit
       pkgs
       packageSystem
-      clippy-fork
+      clippy-src
       ghostty
       ixForPackages
       ;
     ix = ixForPackages;
-    # Pre-applied to the caller's pkgs so flake-output packages can build a
-    # `passthru.updateScript` without re-threading `ix` through callPackage.
+    # The Nushell writer pre-applied to the caller's pkgs, for packages that
+    # build a checked Nushell command directly (e.g. chrome-vm, astlog scan).
     writeNushellApplication = ixForPackages.writeNushellApplication pkgs;
+    # Same writer, exposed under a capability-oriented name for the nullable
+    # updateScript path: a writer the package can use to build its
+    # `passthru.updateScript`, pre-applied to the caller's pkgs so flake-output
+    # packages need not re-thread `ix` through callPackage. The overlay path
+    # leaves it unset, which is the signal to omit the updater.
+    updateScriptWriter = ixForPackages.writeNushellApplication pkgs;
   };
-  inherit (import ./util/deep-merge.nix { inherit lib; }) strictList;
-  buildEntry =
-    entry:
-    let
-      # `repoPackages` is the package set itself (a lazy fix-point), so an
-      # entry can depend on a sibling by id (e.g. packages/agent/claude-code reads
-      # `repoPackages.mcp`). Threaded under one name rather than merged flat
-      # into autoArgs: a flat merge would let ids that shadow nixpkgs attrs
-      # (`btop`, `kitty`, ...) hijack other packages' arguments, and a
-      # same-named nixpkgs override would resolve to itself.
-      autoArgs =
-        pkgs
-        // context
-        // {
-          inherit entry;
-          repoPackages = packageSet;
-        };
-    in
-    lib.callPackageWith autoArgs entry.path { };
-  packageTreeFor = entry: lib.setAttrByPath entry.packageSet.attrPath (buildEntry entry);
-  packageSet = strictList (map packageTreeFor (packageRegistry.packageSetEntriesFor packageSystem));
+  mkPackageSet = import ./mk-package-set.nix {inherit lib;};
 in
-packageSet
+  # index's own package set, assembled through the shared registry-driven loop
+  # (`lib/mk-package-set.nix`). The only index-specific part is `autoArgsFor`:
+  # `repoPackages` is threaded under one name (not merged flat) so ids that
+  # shadow nixpkgs attrs (`btop`, `kitty`, ...) cannot hijack another package's
+  # arguments and a same-named nixpkgs override does not resolve to itself.
+  mkPackageSet {
+    inherit packageRegistry pkgs;
+    autoArgsFor = entry: repoPackages:
+      pkgs
+      // context
+      // {
+        inherit entry repoPackages;
+      };
+  }

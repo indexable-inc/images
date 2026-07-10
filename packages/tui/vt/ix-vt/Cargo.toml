@@ -5,6 +5,9 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/indexable-inc/index"
+readme = "README.md"
+keywords = ["terminal", "vt", "ghostty"]
+categories = ["command-line-interface"]
 publish = true
 
 [dependencies]

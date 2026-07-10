@@ -42,4 +42,12 @@ defmodule SymphonyElixir.GithubAppTest do
       refute GithubApp.configured?(%{})
     end
   end
+
+  describe "best_effort_installation_token/0" do
+    # The test env never sets the App credentials, so this exercises the
+    # unconfigured path shared by Runtime and ExecRunner: no token, no crash.
+    test "returns :none when the app is unconfigured" do
+      assert GithubApp.best_effort_installation_token() == :none
+    end
+  end
 end
