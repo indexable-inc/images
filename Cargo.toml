@@ -141,7 +141,9 @@ warnings = "deny"
 # Cargo emits `lint_groups_priority` errors otherwise.
 all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
-nursery = { level = "deny", priority = -1 }
+# Nursery membership and behavior change between Clippy releases. Keep those
+# diagnostics visible without letting a routine toolchain bump redefine CI.
+nursery = { level = "warn", priority = -1 }
 cargo = { level = "deny", priority = -1 }
 multiple_crate_versions = "allow"
 # Restriction lint (off even in `all`): forbid anonymous tuple return types so a
