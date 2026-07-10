@@ -437,6 +437,11 @@
       inherit indexPackages;
       portableServicesModule = ix.portableServices.homeModule;
     };
+    # One instance shared by every wiring site (the workstation profile and
+    # homeModules.provenance); the module's `key` also dedups the instances a
+    # consumer combines, but there is no reason to make them re-apply the
+    # walker.
+    provenanceHomeModule = import ./modules/home/provenance.nix {inherit (ix) provenance;};
     claudeCodeHomeModule = import ./packages/agent/home-manager/claude-code.nix {
       inherit indexPackages;
       promptModule = ./packages/agent/prompt;
@@ -458,7 +463,7 @@
       inherit indexPackages personalServicesModule ix;
       configRoot = personalConfigRoot;
       mutableFilesModule = mutableFilesHomeModule;
-      provenanceModule = import ./modules/home/provenance.nix {inherit (ix) provenance;};
+      provenanceModule = provenanceHomeModule;
       optionsModule = personalOptionsModule;
       indexSkillsSrc = paths.skills;
       tmuxModule = ./modules/home/tmux.nix;
@@ -581,7 +586,7 @@
       # file:line that defined them, and `whence <path>` reads it with zero
       # eval. Set `provenance.rev = self.rev or self.dirtyRev or null` in
       # the consuming flake. See modules/home/provenance.nix.
-      provenance = import ./modules/home/provenance.nix {inherit (ix) provenance;};
+      provenance = provenanceHomeModule;
       # Agent CLI modules: Home Manager is the user-facing configuration
       # surface, while the package wrappers remain the implementation detail.
       claude-code = claudeCodeHomeModule;
