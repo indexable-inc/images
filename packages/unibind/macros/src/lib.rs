@@ -61,6 +61,10 @@ pub fn export(args: TokenStream, item: TokenStream) -> TokenStream {
     expand::export(args.into(), item.into()).into()
 }
 
+fn marker_outside_export(item: TokenStream, message: &'static str) -> TokenStream {
+    expand::marker_outside_export(item.into(), message).into()
+}
+
 /// Mark a plain-data struct inside a `#[unibind::export]` module.
 ///
 /// The struct crosses the boundary by value: Python sees a native class
@@ -69,12 +73,11 @@ pub fn export(args: TokenStream, item: TokenStream) -> TokenStream {
 /// field. The struct needs `Clone` for attribute access from Python.
 #[proc_macro_attribute]
 pub fn record(_args: TokenStream, item: TokenStream) -> TokenStream {
-    expand::marker_outside_export(
-        item.into(),
+    marker_outside_export(
+        item,
         "#[unibind::record] only takes effect inside a #[unibind::export] \
          module; declare the struct inside the exported module",
     )
-    .into()
 }
 
 /// Mark an error enum inside a `#[unibind::export]` module.
@@ -85,12 +88,11 @@ pub fn record(_args: TokenStream, item: TokenStream) -> TokenStream {
 /// extends (`Exception` by default); the enum must implement `Display`.
 #[proc_macro_attribute]
 pub fn error(_args: TokenStream, item: TokenStream) -> TokenStream {
-    expand::marker_outside_export(
-        item.into(),
+    marker_outside_export(
+        item,
         "#[unibind::error] only takes effect inside a #[unibind::export] \
          module; declare the enum inside the exported module",
     )
-    .into()
 }
 
 /// Mark a stateful handle inside a `#[unibind::export]` module.
@@ -105,10 +107,9 @@ pub fn error(_args: TokenStream, item: TokenStream) -> TokenStream {
 /// `Arc`, so it must be `Send + Sync`.
 #[proc_macro_attribute]
 pub fn object(_args: TokenStream, item: TokenStream) -> TokenStream {
-    expand::marker_outside_export(
-        item.into(),
+    marker_outside_export(
+        item,
         "#[unibind::object] only takes effect inside a #[unibind::export] \
          module; declare the struct inside the exported module",
     )
-    .into()
 }

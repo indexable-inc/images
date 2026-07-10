@@ -103,40 +103,27 @@ impl Feed {
         let pos = LogicalPosition::new(left, top);
         let attrs = ocwin::float_attributes("Merge Feed", w_px, h_px, Some(pos))
             .with_inner_size(PhysicalSize::new(w_px, h_px));
-        let window = match event_loop.create_window(attrs) {
-            Ok(w) => Arc::new(w),
-            Err(e) => {
-                eprintln!("xp-orb-overlay: create feed window failed: {e}");
-                event_loop.exit();
-                return;
-            }
+        let Some(window) = ocwin::create_window(
+            event_loop,
+            attrs,
+            "xp-orb-overlay: create feed window failed",
+        ) else {
+            return;
         };
         // Pure output: never intercept the desktop. The whole window is
         // click-through, so pointer events fall to whatever is behind it.
         let _ = window.set_cursor_hittest(false);
         ocwin::raise_to_front(&window);
 
-        let surface = self
-            .instance
-            .create_surface(window.clone())
-            .expect("create surface");
-        let (adapter, device, queue) = ocwin::request_adapter_device(&self.instance, &surface);
-        let caps = surface.get_capabilities(&adapter);
-        let format = ocwin::srgb_format(&caps);
-        let alpha = ocwin::transparent_alpha_mode(&caps);
-
-        let mut gpu = Gpu::new(device, queue, format);
+        let setup = ocwin::setup_surface(&self.instance, window.clone());
+        let mut gpu = Gpu::new(setup.device, setup.queue, setup.format);
         let texture = scene::register(&mut gpu);
-
-        let size = window.inner_size();
-        let config = ocwin::surface_config(format, alpha, size.width, size.height);
-        surface.configure(gpu.device(), &config);
 
         self.gpu = Some(gpu);
         self.win = Some(WinState {
             window,
-            surface,
-            config,
+            surface: setup.surface,
+            config: setup.config,
             texture,
         });
     }
@@ -233,20 +220,14 @@ impl Feed {
             );
         }
 
-        let frame = match win.surface.get_current_texture() {
-            Ok(f) => f,
-            Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
-                win.surface.configure(gpu.device(), &win.config);
-                return;
-            }
-            Err(e) => {
-                eprintln!("xp-orb-overlay: feed surface error: {e:?}");
-                return;
-            }
+        let Some((frame, view)) = ocwin::surface_frame(
+            &win.surface,
+            gpu.device(),
+            &win.config,
+            "xp-orb-overlay: feed surface error",
+        ) else {
+            return;
         };
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
         let _ = gpu.draw(&view, cw, ch, &quads);
         frame.present();
     }
@@ -279,9 +260,7 @@ impl ApplicationHandler<()> for Feed {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
                 if let (Some(gpu), Some(win)) = (self.gpu.as_ref(), self.win.as_mut()) {
-                    win.config.width = size.width.max(1);
-                    win.config.height = size.height.max(1);
-                    win.surface.configure(gpu.device(), &win.config);
+                    ocwin::resize_surface(&win.surface, gpu.device(), &mut win.config, size);
                 }
                 self.render();
             }

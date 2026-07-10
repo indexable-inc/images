@@ -64,6 +64,28 @@ wrong value is incorrect.
 Fill `reasoning` first with one sentence, then `passed` (true/false)."""
 
 
+def _grade_tool(schema: dict[str, object]) -> anthropic.types.ToolParam:
+    tool: anthropic.types.ToolParam = {
+        "name": "record_grade",
+        "description": "Record the grading verdict.",
+        "input_schema": {
+            "type": "object",
+            "properties": schema,
+            "required": list(schema),
+        },
+    }
+    return tool
+
+
+def _tool_input(response: anthropic.types.Message) -> dict[str, object]:
+    for block in response.content:
+        if isinstance(block, anthropic.types.ToolUseBlock):
+            if not isinstance(block.input, dict):
+                raise RuntimeError(f"judge tool input was not a dict: {type(block.input)}")
+            return block.input
+    raise RuntimeError("judge returned no tool call")
+
+
 @dataclass(frozen=True, slots=True)
 class Judge:
     """A thin wrapper over the Anthropic Messages API for grading."""
@@ -87,27 +109,10 @@ class Judge:
             temperature=0,
             system=system,
             messages=[{"role": "user", "content": user}],
-            tools=[
-                {
-                    "name": "record_grade",
-                    "description": "Record the grading verdict.",
-                    "input_schema": {
-                        "type": "object",
-                        "properties": schema,
-                        "required": list(schema.keys()),
-                    },
-                }
-            ],
+            tools=[_grade_tool(schema)],
             tool_choice={"type": "tool", "name": "record_grade"},
         )
-        for block in resp.content:
-            if isinstance(block, anthropic.types.ToolUseBlock):
-                if not isinstance(block.input, dict):
-                    raise RuntimeError(
-                        f"judge tool input was not a dict: {type(block.input)}"
-                    )
-                return block.input
-        raise RuntimeError("judge returned no tool call")
+        return _tool_input(resp)
 
     def grade_relevance(self, query: str, hit: Hit) -> RelevanceGrade:
         """Pointwise relevance of one hit to the query (Tier A)."""

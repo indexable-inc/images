@@ -23,6 +23,7 @@
 //! client.
 
 pub mod keys;
+pub mod files;
 pub mod sanitize;
 
 use std::fmt;

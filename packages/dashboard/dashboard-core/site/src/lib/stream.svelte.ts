@@ -18,6 +18,7 @@
 import { LoroDoc } from 'https://esm.sh/loro-crdt@1';
 import { paneScope, SCOPE_SEP } from './scope.ts';
 import type { PaneRecord } from './types';
+import { lastAtOrBefore } from './timeline';
 import RecordingWorker from './recording-worker.ts?worker&inline';
 import type { RecordingRequest, RecordingResponse } from './recording-worker.ts';
 
@@ -77,20 +78,7 @@ let pendingSeek: number | null = null;
 // The version (frontier) at or before `ts`: the last mark at or before it. The
 // aggregator is the sole editor, so that mark fully describes the state there.
 function frontierAt(marks: Mark[], ts: number): { peer: string; counter: number }[] {
-  let lo = 0;
-  let hi = marks.length - 1;
-  let best = -1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    if (marks[mid].ts <= ts) {
-      best = mid;
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
-    }
-  }
-  if (best < 0) best = 0;
-  const mark = marks[best];
+  const mark = lastAtOrBefore(marks, ts);
   return mark ? [{ peer: mark.peer, counter: mark.counter }] : [];
 }
 

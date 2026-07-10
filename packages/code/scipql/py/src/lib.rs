@@ -103,14 +103,7 @@ mod _scipql {
     /// Flatten a core error and its source chain into one message, matching
     /// the text the hand-written binding put on its `ValueError`.
     fn chain(error: &scipql_core::Error) -> String {
-        let mut message = error.to_string();
-        let mut source = std::error::Error::source(error);
-        while let Some(cause) = source {
-            message.push_str(": ");
-            message.push_str(&cause.to_string());
-            source = cause.source();
-        }
-        message
+        error_chain::format(error)
     }
 
     /// Sort a core error into the boundary's exception classes.

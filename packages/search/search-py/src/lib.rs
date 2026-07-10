@@ -15,6 +15,8 @@
 //! The returned awaitable is a native asyncio coroutine bridged through
 //! pyo3-async-runtimes, so callers `await` it on their own event loop.
 
+use std::future::Future;
+
 use file_search::{EphemeralSearch, SearchIndex, SearchIndexReader};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -22,7 +24,7 @@ use pyo3::types::PyDict;
 use search_core::{
     CodeScope, DEFAULT_STORE, DisplayHit, Filter, FilterSpec, GrepOptions, GrepTargets,
     KNOWN_SOURCE_TAGS, Manifest, MixedbreadStore, RenderMode, Rerank, SearchOptions, Source,
-    build_filter, parse_time_spec,
+    build_filter, epoch_now, parse_time_spec,
 };
 
 /// A `since=`/`until=` argument: epoch seconds as an int, or a string holding
@@ -45,19 +47,6 @@ fn resolve_time(value: Option<TimeSpec>) -> PyResult<Option<i64>> {
             .map(Some)
             .map_err(|error| PyValueError::new_err(error.to_string())),
     }
-}
-
-/// The current wall clock as epoch seconds, the reference point for relative
-/// `since`/`until` spans.
-fn epoch_now() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    // Clamp explicitly: a wall clock past i64::MAX epoch seconds is not a real
-    // input, and the clamp makes the conversion below infallible.
-    let capped = secs.min(u64::try_from(i64::MAX).expect("i64::MAX is positive"));
-    i64::try_from(capped).expect("capped at i64::MAX")
 }
 
 /// The projection mode for a `compact=` flag.
@@ -171,19 +160,7 @@ fn semantic(
         filter,
         mode: render_mode(compact),
     };
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let hits = run_search(args)
-            .await
-            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-
-        Python::attach(|py| {
-            let out = pyo3::types::PyList::empty(py);
-            for hit in &hits {
-                out.append(hit_to_dict(py, hit)?)?;
-            }
-            Ok(out.unbind())
-        })
-    })
+    hits_future(py, run_search(args))
 }
 
 /// Run a regular-expression grep over the same corpus chunks as [`semantic`].
@@ -245,19 +222,7 @@ fn grep(
         filter,
         mode: render_mode(compact),
     };
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let hits = run_grep(args)
-            .await
-            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-
-        Python::attach(|py| {
-            let out = pyo3::types::PyList::empty(py);
-            for hit in &hits {
-                out.append(hit_to_dict(py, hit)?)?;
-            }
-            Ok(out.unbind())
-        })
-    })
+    hits_future(py, run_grep(args))
 }
 
 /// List the newest corpus records (descending timestamp) matching the scope —
@@ -310,21 +275,12 @@ fn recent(
     let base = base_url.unwrap_or_else(|| mixedbread::DEFAULT_BASE_URL.to_owned());
     let filter = scope_filter(source, not_source, repo, user, host, project, since, until)?;
     let mode = render_mode(compact);
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let hits = async {
+    hits_future(py, async move {
+        async {
             let store = MixedbreadStore::from_login(base).await?;
             search_core::recent(&store, &store_name, top_k, filter.as_ref(), mode).await
         }
         .await
-        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-
-        Python::attach(|py| {
-            let out = pyo3::types::PyList::empty(py);
-            for hit in &hits {
-                out.append(hit_to_dict(py, hit)?)?;
-            }
-            Ok(out.unbind())
-        })
     })
 }
 
@@ -489,6 +445,24 @@ fn hit_to_dict<'py>(py: Python<'py>, hit: &DisplayHit) -> PyResult<Bound<'py, Py
         }
     }
     Ok(dict)
+}
+
+fn hits_future<'py, F>(py: Python<'py>, future: F) -> PyResult<Bound<'py, PyAny>>
+where
+    F: Future<Output = search_core::Result<Vec<DisplayHit>>> + Send + 'static,
+{
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let hits = future
+            .await
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        Python::attach(|py| {
+            let out = pyo3::types::PyList::empty(py);
+            for hit in &hits {
+                out.append(hit_to_dict(py, hit)?)?;
+            }
+            Ok(out.unbind())
+        })
+    })
 }
 
 /// Rerank a batch of texts against a query by BM25, in memory.

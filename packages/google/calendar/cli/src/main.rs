@@ -14,7 +14,6 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use google_calendar::{
     ALL_KNOWN_SCOPES, Attendee, AttendeeDraft, Authenticator, Client, ClientSecrets, EVENTS_SCOPE,
     Event, EventDraft, EventQuery, EventTime, PRIMARY_CALENDAR, SendUpdates, TokenStore,
-    begin_consent,
 };
 
 /// Command-line arguments.
@@ -264,48 +263,15 @@ fn client() -> anyhow::Result<Client> {
 }
 
 async fn run_auth(args: AuthArgs) -> anyhow::Result<()> {
-    use std::io::Write as _;
-
-    let secrets = ClientSecrets::from_env()?;
-    let store = TokenStore::new()?;
-    // Consent to every scope the repo knows about so one consent flow
-    // covers calendar + gmail; the per-binary scope check at runtime is
-    // what enforces least privilege.
-    let pending = begin_consent(secrets.clone(), ALL_KNOWN_SCOPES).await?;
-
-    if args.json {
-        // NDJSON line 1: the consent URL. Flush it before blocking on the
-        // redirect so a driver (the Python `login()` helper) can open a
-        // browser while this process waits.
-        println!("{}", serde_json::json!({ "auth_url": pending.auth_url }));
-        std::io::stdout().flush().context("flushing the consent URL")?;
-    } else {
-        println!("Open this URL in your browser:\n\n  {}\n", pending.auth_url);
-    }
-
-    let code = if args.paste {
-        if !args.json {
-            println!("After consenting, the browser shows a connection error on the");
-            println!("http://127.0.0.1:… redirect; paste that full URL here and press enter.");
-        }
-        let pasted = read_stdin_line()
-            .await
-            .context("reading the pasted redirect URL from stdin")?;
-        pending.code_from_redirect_url(pasted.trim())?
-    } else {
-        if !args.json {
-            println!("Waiting for the redirect on this machine's loopback listener.");
-            println!("Over SSH or in a VM, cancel and rerun with --paste.");
-        }
-        pending.wait_loopback().await?
-    };
-
-    let token = pending.exchange(code).await?;
-    store.save(&token)?;
+    let consent = google_auth::run_cli_consent(args.paste, args.json, ALL_KNOWN_SCOPES).await?;
 
     // Prove the grant end to end with the cheapest real read, so a scope or
     // clock problem surfaces now rather than on the first scripted call.
-    let client = Client::new(Authenticator::new(secrets, store.clone(), &[EVENTS_SCOPE])?)?;
+    let client = Client::new(Authenticator::new(
+        consent.secrets.clone(),
+        consent.store.clone(),
+        &[EVENTS_SCOPE],
+    )?)?;
     let probe = EventQuery {
         time_min: Some(Local::now().fixed_offset()),
         time_max: None,
@@ -314,20 +280,7 @@ async fn run_auth(args: AuthArgs) -> anyhow::Result<()> {
     };
     client.list_events(PRIMARY_CALENDAR, &probe).await?;
 
-    if args.json {
-        // NDJSON line 2: the grant is stored and verified.
-        println!(
-            "{}",
-            serde_json::json!({
-                "signed_in": true,
-                "scopes": token.scopes,
-                "token_path": store.path().display().to_string(),
-            })
-        );
-    } else {
-        println!("Token saved to {}", store.path().display());
-        println!("Verified: the Calendar API answers with this grant.");
-    }
+    consent.report_verified("Calendar");
     Ok(())
 }
 
@@ -337,16 +290,6 @@ fn run_logout(json: bool) -> anyhow::Result<()> {
     let removed = TokenStore::new()?.remove()?;
     println!("{}", google_auth::logout_message(&removed, json));
     Ok(())
-}
-
-async fn read_stdin_line() -> std::io::Result<String> {
-    use tokio::io::{AsyncBufReadExt as _, BufReader};
-
-    let mut line = String::new();
-    BufReader::new(tokio::io::stdin())
-        .read_line(&mut line)
-        .await?;
-    Ok(line)
 }
 
 async fn run_list(args: ListArgs) -> anyhow::Result<()> {

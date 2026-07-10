@@ -16,14 +16,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 fn to_py_err(error: &astlog_core::Error) -> PyErr {
-    let mut message = error.to_string();
-    let mut source = std::error::Error::source(error);
-    while let Some(cause) = source {
-        message.push_str(": ");
-        message.push_str(&cause.to_string());
-        source = cause.source();
-    }
-    PyValueError::new_err(message)
+    PyValueError::new_err(error_chain::format(error))
 }
 
 fn run(rules: &str, paths: &[PathBuf]) -> PyResult<Analysis> {

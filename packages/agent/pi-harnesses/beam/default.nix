@@ -19,6 +19,7 @@ in
     libFiles = [
       ./runner/fanout.js
       (shared + "/ext-lib/scoring.js")
+      (shared + "/ext-lib/process.js")
     ];
     # Branch subprocesses load this by absolute path; it must NOT be auto-loaded
     # into the main executor (which is not turn-capped).
@@ -34,5 +35,8 @@ in
     runtimeInputs = [git];
 
     checkFiles = [./test/scoring.test.mjs];
-    checkLib = [(shared + "/ext-lib/scoring.js")];
+    checkLib = [
+      (shared + "/ext-lib/scoring.js")
+      (shared + "/ext-lib/process.js")
+    ];
   }

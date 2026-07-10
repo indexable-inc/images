@@ -1,30 +1,10 @@
 (function () {
   var VERSION = "0.2.0";
-
-  function clean(text) {
-    return (text || "").replace(/\s+/g, " ").trim();
-  }
-
-  function wait(ms) {
-    return new Promise(function (resolve) {
-      setTimeout(resolve, ms);
-    });
-  }
-
-  function click(el) {
-    if (!el) return false;
-    ["pointerdown", "mousedown", "mouseup", "click"].forEach(function (type) {
-      el.dispatchEvent(
-        new MouseEvent(type, {
-          bubbles: true,
-          cancelable: true,
-          composed: true,
-          view: window,
-        }),
-      );
-    });
-    return true;
-  }
+  var utils = window.__antithesisBrowserUtils;
+  if (!utils) throw new Error("inject antithesis browser-utils.js first");
+  var clean = utils.clean;
+  var wait = utils.wait;
+  var click = utils.click;
 
   function setTextareaValue(textarea, value) {
     if (!textarea) return false;
@@ -238,7 +218,25 @@
   // Standalone URL builder — available without full runtime or page context
   // -------------------------------------------------------------------------
 
-  window.__antithesisQueryBuilder = {
+  function failureConditions(assertionMessage) {
+    return [
+      { field: "assertion.message", op: "contains", value: assertionMessage },
+      { field: "assertion.status", op: "matches", value: "failing" },
+    ];
+  }
+
+  function buildTemporalFailureQueryUrl(
+    sessionId, assertionMessage, temporalType, field, value, tenant
+  ) {
+    return buildSearchUrl(buildQuery({
+      sessionId: sessionId,
+      conditions: failureConditions(assertionMessage),
+      temporalType: temporalType,
+      temporalConditions: [{ field: field, op: "contains", value: value }],
+    }), tenant);
+  }
+
+  var builderApi = {
     buildQuery: function (options) {
       return buildQuery(options);
     },
@@ -255,42 +253,22 @@
     buildFailureQueryUrl: function (sessionId, assertionMessage, tenant) {
       var query = buildQuery({
         sessionId: sessionId,
-        conditions: [
-          { field: "assertion.message", op: "contains", value: assertionMessage },
-          { field: "assertion.status", op: "matches", value: "failing" },
-        ],
+        conditions: failureConditions(assertionMessage),
       });
       return buildSearchUrl(query, tenant);
     },
     buildNotPrecededByUrl: function (sessionId, assertionMessage, precededByField, precededByValue, tenant) {
-      var query = buildQuery({
-        sessionId: sessionId,
-        conditions: [
-          { field: "assertion.message", op: "contains", value: assertionMessage },
-          { field: "assertion.status", op: "matches", value: "failing" },
-        ],
-        temporalType: "not_preceded_by",
-        temporalConditions: [
-          { field: precededByField, op: "contains", value: precededByValue },
-        ],
-      });
-      return buildSearchUrl(query, tenant);
+      return buildTemporalFailureQueryUrl(
+        sessionId, assertionMessage, "not_preceded_by", precededByField, precededByValue, tenant
+      );
     },
     buildNotFollowedByUrl: function (sessionId, assertionMessage, followedByField, followedByValue, tenant) {
-      var query = buildQuery({
-        sessionId: sessionId,
-        conditions: [
-          { field: "assertion.message", op: "contains", value: assertionMessage },
-          { field: "assertion.status", op: "matches", value: "failing" },
-        ],
-        temporalType: "not_followed_by",
-        temporalConditions: [
-          { field: followedByField, op: "contains", value: followedByValue },
-        ],
-      });
-      return buildSearchUrl(query, tenant);
+      return buildTemporalFailureQueryUrl(
+        sessionId, assertionMessage, "not_followed_by", followedByField, followedByValue, tenant
+      );
     },
   };
+  window.__antithesisQueryBuilder = builderApi;
 
   // -------------------------------------------------------------------------
   // Query builder interactions (fallback UI approach)
@@ -426,80 +404,46 @@
   // Temporal query controls (UI fallback)
   // -------------------------------------------------------------------------
 
-  function clickPrecededBy() {
-    var el = findClickableByText("Preceded by");
-    if (el) {
-      click(el);
-      return true;
-    }
-    return false;
+  function clickNamed(text) {
+    var element = findClickableByText(text);
+    return element ? click(element) : false;
   }
 
-  function clickFollowedBy() {
-    var el = findClickableByText("Followed by");
-    if (el) {
-      click(el);
-      return true;
+  async function switchTemporalMode(currentLabel, targetLabel) {
+    var dropdowns = Array.from(
+      document.querySelectorAll(".select_container"),
+    );
+    for (var d of dropdowns) {
+      var text = clean(d.textContent);
+      if (text.includes(currentLabel) && !text.includes("event_search_run")) {
+        click(d);
+        await wait(500);
+        var options = Array.from(
+          document.querySelectorAll(
+            ".select_option, [class*=select_option]",
+          ),
+        );
+        var target = options.find(function (el) {
+          return clean(el.textContent) === targetLabel;
+        });
+        if (target) {
+          click(target);
+          await wait(300);
+          return true;
+        }
+        break;
+      }
     }
     return false;
   }
 
   async function switchToNotPrecededBy() {
-    // After clicking Preceded by, a dropdown appears.
-    // Find the dropdown that has "Preceded by" / "Not preceded by" options.
-    var dropdowns = Array.from(
-      document.querySelectorAll(".select_container"),
-    );
-    for (var d of dropdowns) {
-      var text = clean(d.textContent);
-      if (text.includes("Preceded by") && !text.includes("event_search_run")) {
-        click(d);
-        await wait(500);
-        var options = Array.from(
-          document.querySelectorAll(
-            ".select_option, [class*=select_option]",
-          ),
-        );
-        var notPreceded = options.find(function (el) {
-          return clean(el.textContent) === "Not preceded by";
-        });
-        if (notPreceded) {
-          click(notPreceded);
-          await wait(300);
-          return true;
-        }
-        break;
-      }
-    }
-    return false;
+    // After clicking Preceded by, choose its negative temporal operator.
+    return switchTemporalMode("Preceded by", "Not preceded by");
   }
 
   async function switchToNotFollowedBy() {
-    var dropdowns = Array.from(
-      document.querySelectorAll(".select_container"),
-    );
-    for (var d of dropdowns) {
-      var text = clean(d.textContent);
-      if (text.includes("Followed by") && !text.includes("event_search_run")) {
-        click(d);
-        await wait(500);
-        var options = Array.from(
-          document.querySelectorAll(
-            ".select_option, [class*=select_option]",
-          ),
-        );
-        var notFollowed = options.find(function (el) {
-          return clean(el.textContent) === "Not followed by";
-        });
-        if (notFollowed) {
-          click(notFollowed);
-          await wait(300);
-          return true;
-        }
-        break;
-      }
-    }
-    return false;
+    return switchTemporalMode("Followed by", "Not followed by");
   }
 
   // -------------------------------------------------------------------------
@@ -521,48 +465,13 @@
     },
 
     // Build a search URL for a simple assertion failure query
-    buildFailureQueryUrl: function (sessionId, assertionMessage) {
-      var query = buildQuery({
-        sessionId: sessionId,
-        conditions: [
-          { field: "assertion.message", op: "contains", value: assertionMessage },
-          { field: "assertion.status", op: "matches", value: "failing" },
-        ],
-      });
-      return buildSearchUrl(query);
-    },
+    buildFailureQueryUrl: builderApi.buildFailureQueryUrl,
 
     // Build a search URL with a NOT PRECEDED BY temporal filter
-    buildNotPrecededByUrl: function (sessionId, assertionMessage, precededByField, precededByValue) {
-      var query = buildQuery({
-        sessionId: sessionId,
-        conditions: [
-          { field: "assertion.message", op: "contains", value: assertionMessage },
-          { field: "assertion.status", op: "matches", value: "failing" },
-        ],
-        temporalType: "not_preceded_by",
-        temporalConditions: [
-          { field: precededByField, op: "contains", value: precededByValue },
-        ],
-      });
-      return buildSearchUrl(query);
-    },
+    buildNotPrecededByUrl: builderApi.buildNotPrecededByUrl,
 
     // Build a search URL with a NOT FOLLOWED BY temporal filter
-    buildNotFollowedByUrl: function (sessionId, assertionMessage, followedByField, followedByValue) {
-      var query = buildQuery({
-        sessionId: sessionId,
-        conditions: [
-          { field: "assertion.message", op: "contains", value: assertionMessage },
-          { field: "assertion.status", op: "matches", value: "failing" },
-        ],
-        temporalType: "not_followed_by",
-        temporalConditions: [
-          { field: followedByField, op: "contains", value: followedByValue },
-        ],
-      });
-      return buildSearchUrl(query);
-    },
+    buildNotFollowedByUrl: builderApi.buildNotFollowedByUrl,
 
     // Build a fully custom query URL
     buildCustomQueryUrl: function (options) {
@@ -621,14 +530,14 @@
     addPrecededBy: function () {
       var error = requireLogsExplorer();
       if (error) return error;
-      return { ok: clickPrecededBy() };
+      return { ok: clickNamed("Preceded by") };
     },
 
     // Add a "Followed by" temporal block
     addFollowedBy: function () {
       var error = requireLogsExplorer();
       if (error) return error;
-      return { ok: clickFollowedBy() };
+      return { ok: clickNamed("Followed by") };
     },
 
     // Switch the temporal mode to "Not preceded by"

@@ -12,6 +12,7 @@ pollster.workspace = true
 bytemuck.workspace = true
 image.workspace = true
 glam.workspace = true
+dirs.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2.workspace = true

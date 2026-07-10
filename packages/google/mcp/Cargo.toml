@@ -19,7 +19,8 @@ chrono = { workspace = true, features = ["alloc", "clock", "serde"] }
 google-auth.workspace = true
 google-calendar.workspace = true
 google-gmail.workspace = true
-rmcp = { version = "2.0", default-features = false, features = ["server", "macros", "transport-io"] }
+mcp-server-info.workspace = true
+rmcp.workspace = true
 schemars = "1"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

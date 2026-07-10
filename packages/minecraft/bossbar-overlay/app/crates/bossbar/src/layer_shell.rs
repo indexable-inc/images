@@ -27,11 +27,12 @@ use layershellev::{
 use overlay_core::glam::DVec2;
 use overlay_core::wgpu;
 use overlay_core::winit::dpi::PhysicalPosition;
-use overlay_core::{DragClick, Gpu, HoverAnim, TexHandle, anim, window as ocwin};
+use overlay_core::{DragClick, HoverAnim, TexHandle, anim, window as ocwin};
 
 use crate::bars::BossBar;
 use crate::db;
-use crate::scene::{self, BarTextures};
+use crate::gpu_core::GpuCore;
+use crate::scene;
 use crate::theme;
 
 const AUTO_TOP: f64 = 40.0;
@@ -57,46 +58,6 @@ struct Pos {
 impl Pos {
     fn new(x: f64, y: f64) -> Self {
         Self { x, y }
-    }
-}
-
-struct GpuCore {
-    gpu: Gpu,
-    textures: BarTextures,
-    format: wgpu::TextureFormat,
-    alpha_mode: wgpu::CompositeAlphaMode,
-    /// Icon path -> uploaded texture, memoized so a bar's avatar uploads once.
-    /// `None` records a path that failed to load, so it is tried once then skipped.
-    icon_cache: HashMap<String, Option<TexHandle>>,
-    /// Theme name -> uploaded texture set, same memoization story as the
-    /// icons (see `theme::ThemeCache` for the not-yet-imported retry rule).
-    theme_cache: theme::ThemeCache,
-}
-
-impl GpuCore {
-    /// Resolve an icon path to its texture, loading and caching on first use.
-    fn icon(&mut self, path: &str) -> Option<TexHandle> {
-        if path.is_empty() {
-            return None;
-        }
-        if let Some(cached) = self.icon_cache.get(path) {
-            return *cached;
-        }
-        // Read failure is transient (writer may not have created the file yet) so
-        // is not cached; a decode result is cached. This is what lets the
-        // `reconcile` retry below actually pick up an avatar that appeared late.
-        let Ok(bytes) = std::fs::read(path) else {
-            return None;
-        };
-        let handle = self.gpu.register_image_scaled(&bytes, scene::ICON_MAX_PX);
-        self.icon_cache.insert(path.to_string(), handle);
-        handle
-    }
-
-    /// Resolve a bar's `theme` name to its uploaded texture set. Empty,
-    /// unknown, or broken themes yield `None` (the bar draws vanilla).
-    fn theme(&mut self, name: &str) -> Option<theme::ThemeSprites> {
-        self.theme_cache.resolve(&mut self.gpu, name)
     }
 }
 
@@ -600,21 +561,7 @@ impl App {
         };
 
         if self.core.is_none() {
-            let (adapter, device, queue) = ocwin::request_adapter_device(&self.instance, &surface);
-            let caps = surface.get_capabilities(&adapter);
-            let format = ocwin::srgb_format(&caps);
-            let alpha_mode = ocwin::transparent_alpha_mode(&caps);
-
-            let mut gpu = Gpu::new(device, queue, format);
-            let textures = scene::register(&mut gpu);
-            self.core = Some(GpuCore {
-                gpu,
-                textures,
-                format,
-                alpha_mode,
-                icon_cache: HashMap::new(),
-                theme_cache: theme::ThemeCache::new(),
-            });
+            self.core = Some(GpuCore::new(&self.instance, &surface));
         }
 
         let core = self.core.as_ref().expect("core just initialized");

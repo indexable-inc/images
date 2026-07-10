@@ -142,6 +142,20 @@ async def _stream_to_result(stream: ExecOutputStream) -> ExecResult:
     )
 
 
+def _checked_result(
+    command: str | list[str], result: ExecResult, *, check: bool, streamed: bool
+) -> ExecResult:
+    if check and result.exit_code != 0:
+        raise CommandError(
+            command,
+            result.exit_code,
+            result.stdout,
+            result.stderr,
+            streamed=streamed,
+        )
+    return result
+
+
 @dataclasses.dataclass
 class ProgressEvent:
     stage: str
@@ -601,15 +615,7 @@ class Branch:
             result = await self._inner.bash(script, working_dir)
         else:
             result = await _stream_to_result(self._inner.bash_stream(script, working_dir))
-        if check and result.exit_code != 0:
-            raise CommandError(
-                script,
-                result.exit_code,
-                result.stdout,
-                result.stderr,
-                streamed=not quiet,
-            )
-        return result
+        return _checked_result(script, result, check=check, streamed=not quiet)
 
     async def spawn(self, command: list[str], *, working_dir: str | None = None) -> int:
         return await self._inner.spawn(command, working_dir)
@@ -626,15 +632,7 @@ class Branch:
             result = await self._inner.exec(command, working_dir)
         else:
             result = await _stream_to_result(self._inner.exec_stream(command, working_dir))
-        if check and result.exit_code != 0:
-            raise CommandError(
-                command,
-                result.exit_code,
-                result.stdout,
-                result.stderr,
-                streamed=not quiet,
-            )
-        return result
+        return _checked_result(command, result, check=check, streamed=not quiet)
 
     def exec_stream(
         self,

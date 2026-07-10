@@ -10,6 +10,7 @@ fn fragment(file: &str, start: usize, end: usize) -> Fragment {
         byte_range: ByteRange { start: 0, end: 0 },
         lines: LineRange { start, end },
         kind: "function_item".to_owned(),
+        generated: false,
     }
 }
 

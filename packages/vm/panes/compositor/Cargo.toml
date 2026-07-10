@@ -23,6 +23,7 @@ lz4_flex = { version = "0.13", default-features = false, features = [
   "safe-decode",
 ] }
 panes-protocol.workspace = true
+panes-guest-transport.workspace = true
 # Band-parallel damage diff + LZ4 (src/frame.rs): the encode runs on the
 # event-loop thread inside the per-frame ack budget, and banding was designed
 # for this fan-out.

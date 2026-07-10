@@ -527,7 +527,7 @@ class NodeWorkflowDagTests(unittest.TestCase):
 
 
 class SingleNodeWorkflowTests(unittest.TestCase):
-    def test_up_node_workflow_runs_the_existing_up_sequence(self) -> None:
+    def test_image_node_workflows_run_their_existing_sequences(self) -> None:
         plan = ix_fleet.FleetPlan.model_validate(fleet_plan(["api"], [fleet_node("api")]))
         args = argparse_namespace(
             node="api",
@@ -535,45 +535,28 @@ class SingleNodeWorkflowTests(unittest.TestCase):
             skip_push=False,
             skip_health=False,
         )
-        calls: list[str] = []
+        for command, operation, expected_calls in [
+            ("cmd_up_node", "up_node", ["push", "up", "ready", "groups", "health"]),
+            ("cmd_replace_node", "replace_node", ["push", "replace", "groups", "health"]),
+        ]:
+            with self.subTest(command=command):
+                calls: list[str] = []
+                with (
+                    patch.object(
+                        ix_fleet,
+                        "push_replacement_image",
+                        async_recorder(calls, "push", "registry.ix.dev/example/api:pushed"),
+                    ),
+                    patch.object(ix_fleet, operation, async_recorder(calls, expected_calls[1])),
+                    patch.object(ix_fleet, "wait_node_ready", async_recorder(calls, "ready")),
+                    patch.object(ix_fleet, "ensure_node_groups", async_recorder(calls, "groups")),
+                    patch.object(
+                        ix_fleet, "run_node_health_checks", async_recorder(calls, "health")
+                    ),
+                ):
+                    asyncio.run(getattr(ix_fleet, command)(plan, args))
 
-        with (
-            patch.object(
-                ix_fleet,
-                "push_replacement_image",
-                async_recorder(calls, "push", "registry.ix.dev/example/api:pushed"),
-            ),
-            patch.object(ix_fleet, "up_node", async_recorder(calls, "up")),
-            patch.object(ix_fleet, "ensure_node_groups", async_recorder(calls, "groups")),
-            patch.object(ix_fleet, "run_node_health_checks", async_recorder(calls, "health")),
-        ):
-            asyncio.run(ix_fleet.cmd_up_node(plan, args))
-
-        assert calls == ["push", "up", "groups", "health"]
-
-    def test_replace_node_workflow_runs_the_existing_replace_sequence(self) -> None:
-        plan = ix_fleet.FleetPlan.model_validate(fleet_plan(["api"], [fleet_node("api")]))
-        args = argparse_namespace(
-            node="api",
-            dry_run=False,
-            skip_push=False,
-            skip_health=False,
-        )
-        calls: list[str] = []
-
-        with (
-            patch.object(
-                ix_fleet,
-                "push_replacement_image",
-                async_recorder(calls, "push", "registry.ix.dev/example/api:pushed"),
-            ),
-            patch.object(ix_fleet, "replace_node", async_recorder(calls, "replace")),
-            patch.object(ix_fleet, "ensure_node_groups", async_recorder(calls, "groups")),
-            patch.object(ix_fleet, "run_node_health_checks", async_recorder(calls, "health")),
-        ):
-            asyncio.run(ix_fleet.cmd_replace_node(plan, args))
-
-        assert calls == ["push", "replace", "groups", "health"]
+                assert calls == expected_calls
 
     def test_switch_node_workflow_runs_the_existing_switch_sequence(self) -> None:
         plan = ix_fleet.FleetPlan.model_validate(fleet_plan(["api"], [fleet_node("api")]))
@@ -650,28 +633,12 @@ class SwitchSourceTests(unittest.TestCase):
         }
         node = ix_fleet.FleetNode.model_validate(node_data)
 
-        async def fake_run_cli(
-            command: list[str],
-            *,
-            dry_run: bool,
-            timeout: int | None = None,
-            cwd: Path | None = None,
-        ) -> str:
-            del timeout
-            assert not dry_run
-            calls.append(command)
-            cwds.append(cwd)
-            return ""
-
-        with patch.object(ix_fleet, "run_cli", fake_run_cli):
-            asyncio.run(
-                ix_fleet.switch_node_from_source(
-                    node,
-                    Path("/source"),
-                    Path("/source/subdir"),
-                    dry_run=False,
-                )
-            )
+        run_with_cli(
+            cli_recorder(calls, cwds),
+            ix_fleet.switch_node_from_source(
+                node, Path("/source"), Path("/source/subdir"), dry_run=False
+            ),
+        )
 
         assert calls == [
             [
@@ -702,17 +669,15 @@ class SwitchSourceTests(unittest.TestCase):
             del args, kwargs
             raise AssertionError("run_cli should not be reached")
 
-        with (
-            patch.object(ix_fleet, "run_cli", fail_run_cli),
-            pytest.raises(ValueError, match="outside source root"),
-        ):
-            asyncio.run(
+        with pytest.raises(ValueError, match="outside source root"):
+            run_with_cli(
+                fail_run_cli,
                 ix_fleet.switch_node_from_source(
                     node,
                     Path("/source"),
                     Path("/elsewhere/subdir"),
                     dry_run=False,
-                )
+                ),
             )
 
 
@@ -726,6 +691,33 @@ def remote_node(
     node["switch"]["buildOn"] = "remote"
     node["switch"]["buildVm"] = build_vm
     return node
+
+
+def cli_recorder(
+    calls: list[list[str]], cwds: list[Path | None]
+) -> typing.Callable[..., typing.Coroutine[typing.Any, typing.Any, str]]:
+    async def record(
+        command: list[str],
+        *,
+        dry_run: bool,
+        timeout: int | None = None,
+        cwd: Path | None = None,
+    ) -> str:
+        del timeout
+        assert not dry_run
+        calls.append(command)
+        cwds.append(cwd)
+        return ""
+
+    return record
+
+
+def run_with_cli(
+    fake: typing.Callable[..., typing.Any],
+    operation: typing.Coroutine[typing.Any, typing.Any, typing.Any],
+) -> None:
+    with patch.object(ix_fleet, "run_cli", fake):
+        asyncio.run(operation)
 
 
 class SwitchBatchTests(unittest.TestCase):
@@ -770,28 +762,12 @@ class SwitchBatchTests(unittest.TestCase):
         calls: list[list[str]] = []
         cwds: list[Path | None] = []
 
-        async def fake_run_cli(
-            command: list[str],
-            *,
-            dry_run: bool,
-            timeout: int | None = None,
-            cwd: Path | None = None,
-        ) -> str:
-            del timeout
-            assert not dry_run
-            calls.append(command)
-            cwds.append(cwd)
-            return ""
-
-        with patch.object(ix_fleet, "run_cli", fake_run_cli):
-            asyncio.run(
-                ix_fleet.switch_nodes_from_source(
-                    nodes,
-                    Path("/source"),
-                    Path("/source/subdir"),
-                    dry_run=False,
-                )
-            )
+        run_with_cli(
+            cli_recorder(calls, cwds),
+            ix_fleet.switch_nodes_from_source(
+                nodes, Path("/source"), Path("/source/subdir"), dry_run=False
+            ),
+        )
 
         # One native multi-VM `ix up`: every installable, one shared --build-vm,
         # and no --name (multi derives each VM name from its installable attr).
