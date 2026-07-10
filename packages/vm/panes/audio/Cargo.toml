@@ -17,6 +17,7 @@ license = "MIT OR Apache-2.0"
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }
 panes-protocol.workspace = true
+panes-guest-transport.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 

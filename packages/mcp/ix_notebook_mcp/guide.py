@@ -107,16 +107,18 @@ BLOCKING = (
 
 RESULT_CONTRACT = (
     "Cells behave like a notebook: the last expression is the result, whatever its type (`2+2` "
-    "returns 4, `df` returns the styled table with compact CSV to you, a string returns "
+    "returns 4, `df` returns the styled table with compact NUON to you, a string returns "
     "verbatim, a dict/list renders as a table). Prefer returning a Polars DataFrame for "
-    "structured facts you expect to inspect, sort, filter, or show on the dashboard. Anything "
-    "the cell printed comes back with "
-    "it. A cell whose last statement is None (an assignment, a side-effecting call) returns its "
-    "stdout, or a quiet ok. `yield` streams: each yielded value reaches both the human and you "
-    "the moment it is produced, so yield as you go to report progress and partial results. "
-    "`Result` is the opt-in for splitting the two views, `Result(user_html=..., llm_result=..., "
-    "llm_images=...)`, when the human should see something rich that you should not pay tokens "
-    "for (note: an explicit Result suppresses the automatic stdout echo; page "
+    "structured facts you expect to inspect, sort, filter, or show on the dashboard. Never "
+    "`print(df)` or interpolate a structured value into text: `print` calls the object's string "
+    "renderer before MCP sees it, irreversibly replacing its rows and types with a potentially "
+    "clipped terminal representation. Leave one structured value as the final expression. When "
+    "a cell has several, `yield` each value so it reaches both the human and you without losing "
+    "its type. Anything the cell printed comes back as plain stdout. A cell whose last statement "
+    "is None (an assignment, a side-effecting call) returns its stdout, or a quiet ok. `Result` "
+    "is the opt-in for splitting the two views, `Result(user_html=..., "
+    "llm_result=..., llm_images=...)`, when the human should see something rich that you should "
+    "not pay tokens for (note: an explicit Result suppresses the automatic stdout echo; page "
     "jobs['<id>'].output instead)."
 )
 

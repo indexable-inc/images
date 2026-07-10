@@ -8,6 +8,7 @@ the callable is the kernel's own surface (never a user-defined one).
 """
 from __future__ import annotations
 
+import inspect
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -16,7 +17,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-import ix_notebook_mcp.runtime as rt
+from ix_notebook_mcp import guide, runtime as rt
 
 
 def test_api_first_row_is_build_stamp(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -29,6 +30,16 @@ def test_api_first_row_is_build_stamp(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "7e42ccdb1882" in first["sig"]
     assert "1970-01-02" in first["sig"]
     assert "redeploy" in first["summary"]
+
+
+def test_result_guidance_preserves_structured_api_output() -> None:
+    rendered = guide.compose(guide.RESULT_CONTRACT)
+
+    assert "compact NUON" in rendered
+    assert "Never `print(df)`" in rendered
+    assert "before MCP sees it" in rendered
+    assert "`yield` each value so it reaches both the human and you" in rendered
+    assert "``print`` converts it to Polars' terminal representation" in inspect.getdoc(rt.api)
 
 
 def test_api_filtered_miss_still_shows_build(monkeypatch: pytest.MonkeyPatch) -> None:

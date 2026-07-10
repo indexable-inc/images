@@ -142,21 +142,7 @@ impl<'a> GumTree<'a> {
                     matching,
                 );
             } else {
-                siblings::by_position(
-                    &siblings::Input {
-                        a: SiblingNodes {
-                            ids: a_ids,
-                            nodes: nodes_a,
-                        },
-                        b: SiblingNodes {
-                            ids: b_ids,
-                            nodes: nodes_b,
-                        },
-                        root_a: self.tree_a.root_node(),
-                        root_b: self.tree_b.root_node(),
-                    },
-                    matching,
-                );
+                self.match_siblings(a_ids, b_ids, nodes_a, nodes_b, matching);
             }
         }
     }
@@ -201,22 +187,27 @@ impl<'a> GumTree<'a> {
                     matching.add_match(a_id, b_id);
                 }
             } else {
-                siblings::by_position(
-                    &siblings::Input {
-                        a: SiblingNodes {
-                            ids: a_ids,
-                            nodes: nodes_a,
-                        },
-                        b: SiblingNodes {
-                            ids: b_ids,
-                            nodes: nodes_b,
-                        },
-                        root_a: self.tree_a.root_node(),
-                        root_b: self.tree_b.root_node(),
-                    },
-                    matching,
-                );
+                self.match_siblings(a_ids, b_ids, nodes_a, nodes_b, matching);
             }
         }
+    }
+
+    fn match_siblings(
+        &self,
+        a_ids: &[usize],
+        b_ids: &[usize],
+        nodes_a: &[tree_sitter::Node<'a>],
+        nodes_b: &[tree_sitter::Node<'a>],
+        matching: &mut Map,
+    ) {
+        siblings::by_position(
+            &siblings::Input {
+                a: SiblingNodes { ids: a_ids, nodes: nodes_a },
+                b: SiblingNodes { ids: b_ids, nodes: nodes_b },
+                root_a: self.tree_a.root_node(),
+                root_b: self.tree_b.root_node(),
+            },
+            matching,
+        );
     }
 }

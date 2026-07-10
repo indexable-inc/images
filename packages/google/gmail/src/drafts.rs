@@ -1,6 +1,7 @@
 //! `users.drafts.*` and `users.messages.send`: compose, save, update, list,
 //! delete, and send.
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt as _;
 
@@ -23,6 +24,27 @@ struct MessageRaw {
     /// Existing thread id when replying.
     #[serde(skip_serializing_if = "Option::is_none")]
     thread_id: Option<String>,
+}
+
+fn message_raw(message: &OutgoingMessage) -> Result<MessageRaw> {
+    Ok(MessageRaw {
+        raw: build_raw(message)?,
+        thread_id: message.thread_id.clone(),
+    })
+}
+
+fn draft_request(message: &OutgoingMessage) -> Result<DraftRequest> {
+    Ok(DraftRequest {
+        message: message_raw(message)?,
+    })
+}
+
+async fn send_json<T: Serialize, R: DeserializeOwned>(
+    request: reqwest::RequestBuilder,
+    body: &T,
+) -> Result<R> {
+    let response = request.json(body).send().await.context(HttpSnafu)?;
+    decode(response).await
 }
 
 /// One page of `users.drafts.list`.
@@ -64,17 +86,7 @@ impl Client {
     /// inputs, plus auth, transport, and API errors.
     pub async fn send_message(&self, message: &OutgoingMessage) -> Result<Message> {
         let url = self.user_url(["messages", "send"]);
-        let response = self
-            .post(url)
-            .await?
-            .json(&MessageRaw {
-                raw: build_raw(message)?,
-                thread_id: message.thread_id.clone(),
-            })
-            .send()
-            .await
-            .context(HttpSnafu)?;
-        decode(response).await
+        send_json(self.post(url).await?, &message_raw(message)?).await
     }
 
     /// Save a draft. The returned draft carries the id used by
@@ -85,19 +97,7 @@ impl Client {
     /// inputs, plus auth, transport, and API errors.
     pub async fn create_draft(&self, message: &OutgoingMessage) -> Result<Draft> {
         let url = self.user_url(["drafts"]);
-        let response = self
-            .post(url)
-            .await?
-            .json(&DraftRequest {
-                message: MessageRaw {
-                    raw: build_raw(message)?,
-                    thread_id: message.thread_id.clone(),
-                },
-            })
-            .send()
-            .await
-            .context(HttpSnafu)?;
-        decode(response).await
+        send_json(self.post(url).await?, &draft_request(message)?).await
     }
 
     /// Replace a draft's contents with a fresh outgoing message.
@@ -107,19 +107,7 @@ impl Client {
     /// inputs, plus auth, transport, and API errors.
     pub async fn update_draft(&self, draft_id: &str, message: &OutgoingMessage) -> Result<Draft> {
         let url = self.user_url(["drafts", draft_id]);
-        let response = self
-            .put(url)
-            .await?
-            .json(&DraftRequest {
-                message: MessageRaw {
-                    raw: build_raw(message)?,
-                    thread_id: message.thread_id.clone(),
-                },
-            })
-            .send()
-            .await
-            .context(HttpSnafu)?;
-        decode(response).await
+        send_json(self.put(url).await?, &draft_request(message)?).await
     }
 
     /// Fetch one draft by id.

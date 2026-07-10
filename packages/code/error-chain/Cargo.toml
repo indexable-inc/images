@@ -1,0 +1,9 @@
+[package]
+name = "error-chain"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Render a Rust error and its sources as one operator-facing message"
+
+[lints]
+workspace = true

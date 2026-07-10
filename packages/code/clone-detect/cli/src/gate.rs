@@ -64,6 +64,10 @@ pub struct DiffGate {
     pub changed_lines: usize,
     /// Of those, how many a surviving clone fragment covers.
     pub duplicated_changed_lines: usize,
+    /// Exact duplicated changed lines, keyed by canonical source path.
+    /// This makes a strict-gate failure actionable without a second scan.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub duplicated_changed_line_locations: BTreeMap<PathBuf, BTreeSet<usize>>,
 }
 
 impl DiffGate {
@@ -82,13 +86,20 @@ impl DiffGate {
         let covered = covered_lines(result);
 
         let mut changed_total = 0_usize;
-        let mut duplicated = 0_usize;
+        let mut duplicated_changed_line_locations = BTreeMap::new();
         for (file, lines) in &changed.0 {
             changed_total += lines.len();
             if let Some(covered_in_file) = covered.get(file) {
-                duplicated += lines.intersection(covered_in_file).count();
+                let overlap: BTreeSet<_> = lines.intersection(covered_in_file).copied().collect();
+                if !overlap.is_empty() {
+                    duplicated_changed_line_locations.insert(file.clone(), overlap);
+                }
             }
         }
+        let duplicated = duplicated_changed_line_locations
+            .values()
+            .map(BTreeSet::len)
+            .sum();
 
         // Ratio in percent; guard the zero-changed-lines case so an empty diff
         // reports 0% rather than NaN.
@@ -106,6 +117,7 @@ impl DiffGate {
             base_sha,
             changed_lines: changed_total,
             duplicated_changed_lines: duplicated,
+            duplicated_changed_line_locations,
         }
     }
 }

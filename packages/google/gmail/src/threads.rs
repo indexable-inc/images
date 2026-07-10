@@ -21,8 +21,8 @@ struct ThreadsPage {
 impl crate::ListPage for ThreadsPage {
     type Item = ThreadStub;
 
-    fn into_parts(self) -> (Vec<Self::Item>, Option<String>) {
-        (self.threads, self.next_page_token)
+    fn into_parts(self) -> crate::PageParts<Self::Item> {
+        crate::PageParts::new(self.threads, self.next_page_token)
     }
 }
 

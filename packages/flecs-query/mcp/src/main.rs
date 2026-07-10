@@ -8,11 +8,18 @@
 use rmcp::ServiceExt as _;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{ErrorCode, ErrorData, ServerCapabilities, ServerInfo};
+use rmcp::model::{ErrorCode, ErrorData, ServerInfo};
 use rmcp::transport::stdio;
 use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+const SERVER: mcp_server_info::ToolServer = mcp_server_info::ToolServer {
+    name: "ix-flecs-query-mcp",
+    instructions: "Parse, canonicalize, and validate Flecs Query Language expressions. \
+                   Parsing is world-independent: it checks form, not whether identifiers resolve \
+                   in any particular flecs world.",
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -127,19 +134,7 @@ fn parse_expr(expr: &str) -> Result<flecs_query_core::Query, ErrorData> {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for FlecsQueryMcp {
     fn get_info(&self) -> ServerInfo {
-        // ServerInfo and Implementation are #[non_exhaustive]: start from a
-        // Default and patch the fields we care about.
-        let mut info = ServerInfo::default();
-        info.capabilities = ServerCapabilities::builder().enable_tools().build();
-        "ix-flecs-query-mcp".clone_into(&mut info.server_info.name);
-        env!("CARGO_PKG_VERSION").clone_into(&mut info.server_info.version);
-        info.instructions = Some(
-            "Parse, canonicalize, and validate Flecs Query Language \
-             expressions. Parsing is world-independent: it checks form, not \
-             whether identifiers resolve in any particular flecs world."
-                .to_owned(),
-        );
-        info
+        SERVER.info(env!("CARGO_PKG_VERSION"))
     }
 }
 

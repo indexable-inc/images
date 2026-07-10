@@ -209,7 +209,7 @@ You have been invoked in the following environment:
  - Primary working directory: /private/tmp/claude-extract-cwd
  - Is a git repository: false
  - Platform: darwin
- - Shell: /run/current-system/sw/bin/nu
+ - Shell: bash
  - OS Version: Darwin 25.5.0
  - You are powered by the model named Haiku 4.5. The exact model ID is claude-haiku-4-5-20251001.
  - Assistant knowledge cutoff is February 2025.

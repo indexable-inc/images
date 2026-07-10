@@ -4,9 +4,67 @@
 //! no overlay window sits, because there is simply no window there to intercept
 //! the pointer.
 
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use winit::dpi::{LogicalPosition, PhysicalPosition, PhysicalSize};
-use winit::event_loop::EventLoop;
+
+use winit::event::{MouseScrollDelta, TouchPhase};
+use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowAttributes, WindowLevel};
+
+/// Apply an externally stored position once local movement has settled.
+/// Returns whether the window moved, while suppressing echoes of our own write.
+pub fn apply_external_position(
+    window: &Window,
+    self_set: &mut Option<LogicalPosition<f64>>,
+    last_move: Instant,
+    settle: Duration,
+    external: LogicalPosition<f64>,
+) -> bool {
+    if last_move.elapsed() < settle || *self_set == Some(external) {
+        return false;
+    }
+    window.set_outer_position(external);
+    *self_set = Some(external);
+    true
+}
+
+/// Apply an optional persisted model position after local movement settles.
+pub fn apply_stored_position(
+    window: &Window,
+    self_set: &mut Option<LogicalPosition<f64>>,
+    last_move: Instant,
+    settle: Duration,
+    stored: Option<glam::DVec2>,
+) -> bool {
+    stored.is_some_and(|position| {
+        apply_external_position(
+            window,
+            self_set,
+            last_move,
+            settle,
+            LogicalPosition::new(position.x, position.y),
+        )
+    })
+}
+
+/// Classify and persist one window move, logging a domain-specific error.
+pub fn persist_dragged_position_logged<E: std::fmt::Display>(
+    window: &Window,
+    gesture: &crate::DragClick,
+    self_set: &mut Option<LogicalPosition<f64>>,
+    last_move: &mut Instant,
+    stored: &mut Option<glam::DVec2>,
+    position: PhysicalPosition<i32>,
+    persist: impl FnOnce(glam::DVec2) -> Result<(), E>,
+    error_context: &str,
+) {
+    if let Err(error) = persist_dragged_position(
+        window, gesture, self_set, last_move, stored, position, persist,
+    ) {
+        eprintln!("{error_context}: {error}");
+    }
+}
 
 /// Move `window` to `new_pos` (logical points) and warp the pointer so it stays
 /// glued to the same spot on the window.
@@ -48,6 +106,80 @@ pub fn move_window_with_cursor(
     {
         let _ = window.set_cursor_position(c);
     }
+}
+
+/// Apply a scroll drag to the common window position/timing state and move it.
+fn move_window_for_scroll(
+    window: &Window,
+    cursor: Option<PhysicalPosition<f64>>,
+    position: &mut Option<LogicalPosition<f64>>,
+    last_move: &mut Instant,
+    delta: MouseScrollDelta,
+) -> Option<LogicalPosition<f64>> {
+    let next = crate::scroll_drag_position(*position, delta, window.scale_factor())?;
+    *position = Some(next);
+    move_window_with_cursor(window, next, cursor);
+    *last_move = Instant::now();
+    Some(next)
+}
+
+/// Classify a move event and return a user-dragged logical position to persist.
+pub fn dragged_position(
+    window: &Window,
+    gesture: &crate::DragClick,
+    self_set: &mut Option<LogicalPosition<f64>>,
+    last_move: &mut Instant,
+    position: PhysicalPosition<i32>,
+) -> Option<glam::DVec2> {
+    let logical: LogicalPosition<f64> = position.to_logical(window.scale_factor());
+    let echo = self_set
+        .is_some_and(|own| (own.x - logical.x).abs() < 0.5 && (own.y - logical.y).abs() < 0.5);
+    if echo {
+        return None;
+    }
+    *self_set = Some(logical);
+    if !gesture.dragging() {
+        return None;
+    }
+    *last_move = Instant::now();
+    Some(glam::DVec2::new(logical.x, logical.y))
+}
+
+/// Apply a move event to drag state and persist only genuine user drags.
+pub fn persist_dragged_position<E>(
+    window: &Window,
+    gesture: &crate::DragClick,
+    self_set: &mut Option<LogicalPosition<f64>>,
+    last_move: &mut Instant,
+    stored: &mut Option<glam::DVec2>,
+    position: PhysicalPosition<i32>,
+    persist: impl FnOnce(glam::DVec2) -> Result<(), E>,
+) -> Result<(), E> {
+    if let Some(position) = dragged_position(window, gesture, self_set, last_move, position) {
+        *stored = Some(position);
+        persist(position)?;
+    }
+    Ok(())
+}
+
+/// Drive one complete scroll-drag event, including settle-only persistence.
+pub fn handle_scroll_drag<E>(
+    window: &Window,
+    cursor: Option<PhysicalPosition<f64>>,
+    position: &mut Option<LogicalPosition<f64>>,
+    last_move: &mut Instant,
+    delta: MouseScrollDelta,
+    phase: TouchPhase,
+    on_move: impl FnOnce(LogicalPosition<f64>),
+    persist: impl FnOnce(LogicalPosition<f64>) -> Result<(), E>,
+) -> Result<(), E> {
+    if let Some(next) = move_window_for_scroll(window, cursor, position, last_move, delta) {
+        on_move(next);
+    }
+    if let Some(settled) = crate::gesture::settled_scroll_position(*position, delta, phase) {
+        persist(settled)?;
+    }
+    Ok(())
 }
 
 /// Warp the pointer to global display point `(x, y)` (top-left origin, points).
@@ -209,6 +341,38 @@ pub fn float_attributes(
     }
 }
 
+/// Create an `Arc`-owned window or report the contextual failure and stop the loop.
+pub fn create_window(
+    event_loop: &ActiveEventLoop,
+    attributes: WindowAttributes,
+    context: &str,
+) -> Option<Arc<Window>> {
+    match event_loop.create_window(attributes) {
+        Ok(window) => Some(Arc::new(window)),
+        Err(error) => {
+            eprintln!("{context}: {error}");
+            event_loop.exit();
+            None
+        }
+    }
+}
+
+/// Center a physical-pixel window inside the usable logical display frame.
+pub fn centered_position(
+    window_px: (u32, u32),
+    scale_factor: f64,
+    fallback_display: (f64, f64),
+) -> LogicalPosition<f64> {
+    let width = window_px.0 as f64 / scale_factor;
+    let height = window_px.1 as f64 / scale_factor;
+    let (left, top, visible_width, visible_height) = visible_frame_logical()
+        .unwrap_or((0.0, 0.0, fallback_display.0, fallback_display.1));
+    LogicalPosition::new(
+        left + ((visible_width - width) * 0.5).max(0.0),
+        top + ((visible_height - height) * 0.5).max(0.0),
+    )
+}
+
 /// Pick an sRGB surface format, falling back to the first offered.
 pub fn srgb_format(caps: &wgpu::SurfaceCapabilities) -> wgpu::TextureFormat {
     caps.formats
@@ -279,6 +443,70 @@ pub fn request_adapter_device(
     (adapter, device, queue)
 }
 
+pub struct SurfaceSetup {
+    pub surface: wgpu::Surface<'static>,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+    pub format: wgpu::TextureFormat,
+    pub config: wgpu::SurfaceConfiguration,
+}
+
+/// Create and configure a window surface with the overlay GPU defaults.
+pub fn setup_surface(instance: &wgpu::Instance, window: Arc<Window>) -> SurfaceSetup {
+    let surface = instance.create_surface(window.clone()).expect("create surface");
+    let (adapter, device, queue) = request_adapter_device(instance, &surface);
+    let caps = surface.get_capabilities(&adapter);
+    let format = srgb_format(&caps);
+    let alpha = transparent_alpha_mode(&caps);
+    let size = window.inner_size();
+    let config = surface_config(format, alpha, size.width, size.height);
+    surface.configure(&device, &config);
+    SurfaceSetup {
+        surface,
+        device,
+        queue,
+        format,
+        config,
+    }
+}
+
+/// Acquire the next configured frame and its default view.
+pub fn surface_frame(
+    surface: &wgpu::Surface<'_>,
+    device: &wgpu::Device,
+    config: &wgpu::SurfaceConfiguration,
+    context: &str,
+) -> Option<(wgpu::SurfaceTexture, wgpu::TextureView)> {
+    let frame = match surface.get_current_texture() {
+        Ok(frame) => frame,
+        Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
+            surface.configure(device, config);
+            return None;
+        }
+        Err(error) => {
+            eprintln!("{context}: {error:?}");
+            return None;
+        }
+    };
+    let view = frame
+        .texture
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    Some((frame, view))
+}
+
+/// Resize and reconfigure a surface, clamping minimized zero-sized windows to
+/// wgpu's valid one-pixel minimum.
+pub fn resize_surface(
+    surface: &wgpu::Surface<'_>,
+    device: &wgpu::Device,
+    config: &mut wgpu::SurfaceConfiguration,
+    size: PhysicalSize<u32>,
+) {
+    config.width = size.width.max(1);
+    config.height = size.height.max(1);
+    surface.configure(device, config);
+}
+
 /// Build the overlay event loop with a user-event channel of type `T`. On macOS,
 /// accessory activation keeps the overlay windows but drops the Dock icon and
 /// app-switcher entry, so a background HUD takes no Dock slot.
@@ -347,8 +575,8 @@ pub fn raise_to_front(_window: &Window) {}
 /// area track the view's visible rect, so it follows resizes with no re-add.
 #[cfg(target_os = "macos")]
 pub fn enable_background_hover(window: &Window) {
-    use objc2::runtime::AnyObject;
     use objc2::ClassType;
+    use objc2::runtime::AnyObject;
     use objc2_app_kit::{NSTrackingArea, NSTrackingAreaOptions, NSView};
     use objc2_foundation::{NSPoint, NSRect, NSSize};
     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -419,7 +647,12 @@ pub fn visible_frame_logical() -> Option<(f64, f64, f64, f64)> {
     // Cocoa frames use a bottom-left origin; convert the visible region's top edge
     // to a top-left inset (the menu bar height) for winit's coordinate space.
     let top = full.size.height - (visible.origin.y + visible.size.height);
-    Some((visible.origin.x, top, visible.size.width, visible.size.height))
+    Some((
+        visible.origin.x,
+        top,
+        visible.size.width,
+        visible.size.height,
+    ))
 }
 
 #[cfg(not(target_os = "macos"))]

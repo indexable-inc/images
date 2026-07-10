@@ -3646,6 +3646,9 @@ def api(filter: str | None = None) -> Any:
 
     Returns a polars DataFrame (filter/sort it further, e.g.
     `api().filter(pl.col("where") == "view")`), or plain text if polars is absent.
+    Leave the frame as the cell's final expression or yield it. Passing it to
+    ``print`` converts it to Polars' terminal representation before MCP can render
+    the structured result.
     """
     rows = _api_rows()
     if filter:
