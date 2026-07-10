@@ -56,6 +56,7 @@ members = [
   "packages/google/gmail/cli",
   "packages/google/mcp",
   "packages/google/py",
+  "packages/index-delta",
   "packages/indexbench",
   "packages/ix-dev-diagnose",
   "packages/ix-windows",
@@ -267,6 +268,10 @@ panes-guest-transport = { path = "packages/vm/panes/guest-transport" }
 parking_lot = "0.12"
 parquet = { version = "59", features = ["arrow"] }
 percent-encoding = "2"
+# Apple property lists for index-delta's logical-diff engines: macOS `defaults`
+# domains and LaunchAgents are plists (XML and binary), so drift in them must be
+# diffed as parsed values, not bytes.
+plist = "1"
 prettyplease = "0.2"
 proc-macro2 = "1"
 progress-style = { path = "packages/progress-style" }
