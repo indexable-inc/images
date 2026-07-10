@@ -10,6 +10,7 @@
 //! are ignored after the main loop moved on.
 
 use std::io::{BufReader, BufWriter, Write as _};
+use std::io::Write as _;
 use std::sync::mpsc;
 use std::time::Duration;
 
