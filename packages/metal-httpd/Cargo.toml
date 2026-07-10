@@ -1,0 +1,34 @@
+# Standalone workspace: deliberately NOT a member of the index cargo workspace.
+#
+# metal-httpd builds the same HTTP server for targets the root workspace can't
+# express in one build graph: x86_64-unknown-none (freestanding kernel),
+# x86_64-unknown-hermit (unikernel, needs -Zbuild-std), and Eyra (libc replaced
+# by Rust, needs -nostartfiles). Excluding it keeps the root lockfile and the
+# nix-cargo-unit graph from pulling in bare-metal-only dependencies; see
+# README.md for the backend matrix and `cargo xtask e2e` for the boot tests.
+[workspace]
+members = ["http-core", "httpd", "kernel", "xtask"]
+# `kernel` only builds for x86_64-unknown-none (it has a panic handler and no
+# main), so a plain `cargo build` skips it; xtask builds it with an explicit
+# --target.
+default-members = ["http-core", "httpd", "xtask"]
+resolver = "3"
+
+# The crates-io c-scape/c-gull 0.22.3 (Eyra's libc implementation) pin
+# printf-compat 0.3, which predates this toolchain's `VaList` API and no
+# longer compiles; upstream main already moved to printf-compat 0.4 without
+# releasing. Drop this patch when c-ward publishes > 0.22.3.
+[patch.crates-io]
+c-scape = { git = "https://github.com/sunfishcode/c-ward", rev = "ac7e0f124aa678a7045d549aceb7e28ac233fe0f" }
+c-gull = { git = "https://github.com/sunfishcode/c-ward", rev = "ac7e0f124aa678a7045d549aceb7e28ac233fe0f" }
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[profile.release]
+# The kernel backend is a single-purpose image: abort-on-panic keeps the
+# freestanding binary free of unwinding machinery, and the userspace backends
+# have no cleanup worth unwinding for.
+panic = "abort"
