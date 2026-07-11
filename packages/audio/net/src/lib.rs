@@ -15,6 +15,7 @@
 
 pub mod wire;
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -57,6 +58,9 @@ pub struct NodeHandle {
     pub udp_addr: SocketAddr,
     clock: watch::Receiver<SharedClock>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
+    /// Per-connection tasks spawned by the accept loop; aborted on drop so
+    /// a stopped node cannot keep gossiping (or keep its sockets alive).
+    conn_tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 }
 
 impl NodeHandle {
@@ -81,6 +85,9 @@ impl Drop for NodeHandle {
         for task in &self.tasks {
             task.abort();
         }
+        for task in self.conn_tasks.lock().expect("conn tasks lock").drain(..) {
+            task.abort();
+        }
     }
 }
 
@@ -93,6 +100,10 @@ struct Node {
     estimator: Mutex<OffsetEstimator>,
     /// The leader we currently follow, if any (smaller id than ours).
     leader: Mutex<Option<Leader>>,
+    /// Every peer with a live connection, keyed by id; the election in
+    /// [`Node::elect`] follows the smallest one, and a peer leaving
+    /// (connection count hitting zero) triggers a re-election.
+    peers: Mutex<BTreeMap<PeerId, PeerEntry>>,
     udp: UdpSocket,
 }
 
@@ -101,6 +112,14 @@ struct Leader {
     peer_id: PeerId,
     epoch_micros: i64,
     ping_addr: SocketAddr,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PeerEntry {
+    ping_addr: SocketAddr,
+    epoch_micros: i64,
+    /// Live connections carrying this peer (we may both dial and accept).
+    connections: usize,
 }
 
 /// Spawn a node: listen, dial `config.peers`, gossip, and serve pings.
@@ -128,25 +147,38 @@ pub async fn spawn(
         clock: clock_tx,
         estimator: Mutex::new(OffsetEstimator::new(16)),
         leader: Mutex::new(None),
+        peers: Mutex::new(BTreeMap::new()),
         udp,
     });
 
+    let conn_tasks = Arc::new(Mutex::new(Vec::new()));
     let mut tasks = Vec::new();
-    tasks.push(tokio::spawn(accept_loop(Arc::clone(&node), listener)));
+    tasks.push(tokio::spawn(accept_loop(
+        Arc::clone(&node),
+        listener,
+        Arc::clone(&conn_tasks),
+    )));
     for peer in node.config.peers.clone() {
         tasks.push(tokio::spawn(dial_loop(Arc::clone(&node), peer)));
     }
     tasks.push(tokio::spawn(ping_loop(Arc::clone(&node))));
 
-    Ok(NodeHandle { tcp_addr, udp_addr, clock: clock_rx, tasks })
+    Ok(NodeHandle { tcp_addr, udp_addr, clock: clock_rx, tasks, conn_tasks })
 }
 
-async fn accept_loop(node: Arc<Node>, listener: TcpListener) {
+async fn accept_loop(
+    node: Arc<Node>,
+    listener: TcpListener,
+    conn_tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+) {
     loop {
         match listener.accept().await {
             Ok((stream, addr)) => {
                 debug!(%addr, "peer connected");
-                tokio::spawn(serve_connection(Arc::clone(&node), stream));
+                let task = tokio::spawn(serve_connection(Arc::clone(&node), stream));
+                let mut tasks = conn_tasks.lock().expect("conn tasks lock");
+                tasks.retain(|task| !task.is_finished());
+                tasks.push(task);
             }
             Err(error) => {
                 warn!(%error, "accept failed");
@@ -186,7 +218,9 @@ async fn drive_connection(node: Arc<Node>, mut stream: TcpStream, peer: SocketAd
     let hello = Message::Hello(Hello {
         peer_id: node.config.peer_id.0,
         udp_port: node.udp.local_addr()?.port(),
-        epoch_micros: node.clock.borrow().epoch_micros(),
+        // The epoch on *our* local clock: peers ping this node's clock, so
+        // a follower must translate the leader's epoch, not parrot it.
+        epoch_micros: node.clock.borrow().local_epoch_micros(),
         sample_rate: node.config.sample_rate,
     });
     hello.write_to(&mut stream).await?;
@@ -197,8 +231,15 @@ async fn drive_connection(node: Arc<Node>, mut stream: TcpStream, peer: SocketAd
     let Message::Hello(remote) = first else {
         anyhow::bail!("peer spoke before Hello");
     };
-    node.consider_leader(&remote, peer);
+    node.peer_connected(&remote, peer);
+    let result = gossip_loop(&node, &mut stream).await;
+    node.peer_disconnected(PeerId(remote.peer_id));
+    result
+}
 
+/// The steady-state half of [`drive_connection`], bracketed by peer
+/// registration so a vanished peer always triggers a re-election.
+async fn gossip_loop(node: &Node, stream: &mut TcpStream) -> Result<()> {
     // Track what the remote has seen; start from empty so the first gossip
     // tick sends the full history (cheap: scores are tiny).
     let mut sent = audio_score::VersionVector::new();
@@ -218,7 +259,7 @@ async fn drive_connection(node: Arc<Node>, mut stream: TcpStream, peer: SocketAd
                     }
                 };
                 if let Some(update) = update {
-                    Message::ScoreUpdate(update).write_to(&mut stream).await?;
+                    Message::ScoreUpdate(update).write_to(&mut *stream).await?;
                 }
                 // Fetch the instrument blob as soon as the score names one
                 // we do not hold.
@@ -229,12 +270,12 @@ async fn drive_connection(node: Arc<Node>, mut stream: TcpStream, peer: SocketAd
                 if let Some(hash) = missing
                     && !node.store.contains(&hash)
                 {
-                    Message::BlobRequest(hash).write_to(&mut stream).await?;
+                    Message::BlobRequest(hash).write_to(&mut *stream).await?;
                 }
             }
-            message = Message::read_from(&mut stream) => {
+            message = Message::read_from(&mut *stream) => {
                 let Some(message) = message? else { return Ok(()) };
-                node.apply(message, &mut stream).await?;
+                node.apply(message, &mut *stream).await?;
             }
         }
     }
@@ -271,23 +312,84 @@ impl Node {
         Ok(())
     }
 
-    /// Adopt `remote` as leader when its id is smaller than ours and any
-    /// current leader's.
-    fn consider_leader(&self, remote: &Hello, tcp_addr: SocketAddr) {
+    /// Register a peer whose `Hello` arrived on a live connection, then
+    /// re-run the election.
+    fn peer_connected(&self, remote: &Hello, tcp_addr: SocketAddr) {
         let remote_id = PeerId(remote.peer_id);
-        if remote_id >= self.config.peer_id {
+        {
+            let mut peers = self.peers.lock().expect("peers lock");
+            let entry = peers.entry(remote_id).or_insert(PeerEntry {
+                ping_addr: SocketAddr::new(tcp_addr.ip(), remote.udp_port),
+                epoch_micros: remote.epoch_micros,
+                connections: 0,
+            });
+            entry.connections += 1;
+        }
+        self.elect();
+    }
+
+    /// Drop one connection's claim on a peer; when the last one goes, the
+    /// peer has left the session and the election reruns.
+    fn peer_disconnected(&self, remote_id: PeerId) {
+        {
+            let mut peers = self.peers.lock().expect("peers lock");
+            if let Some(entry) = peers.get_mut(&remote_id) {
+                entry.connections = entry.connections.saturating_sub(1);
+                if entry.connections == 0 {
+                    peers.remove(&remote_id);
+                }
+            }
+        }
+        self.elect();
+    }
+
+    /// Follow the smallest connected peer, or lead when none is smaller.
+    /// Leadership changes keep the timeline continuous: a new leader adopts
+    /// the shared "now" instead of restarting at frame zero.
+    fn elect(&self) {
+        let mut leader = self.leader.lock().expect("leader lock");
+        let next = {
+            let peers = self.peers.lock().expect("peers lock");
+            peers
+                .iter()
+                .next()
+                .filter(|(id, _)| **id < self.config.peer_id)
+                .map(|(id, entry)| Leader {
+                    peer_id: *id,
+                    epoch_micros: entry.epoch_micros,
+                    ping_addr: entry.ping_addr,
+                })
+        };
+        let changed = match (*leader, next) {
+            (Some(old), Some(new)) => old.peer_id != new.peer_id,
+            (None, None) => false,
+            _ => true,
+        };
+        if !changed {
             return;
         }
-        let mut leader = self.leader.lock().expect("leader lock");
-        if leader.is_none_or(|current| remote_id < current.peer_id) {
-            let ping_addr = SocketAddr::new(tcp_addr.ip(), remote.udp_port);
-            *leader = Some(Leader {
-                peer_id: remote_id,
-                epoch_micros: remote.epoch_micros,
-                ping_addr,
-            });
-            debug!(leader = remote.peer_id, %ping_addr, "following new leader");
+        // Offsets measured against the old leader say nothing about the new
+        // clock we are about to ping.
+        self.estimator.lock().expect("estimator lock").clear();
+        match next {
+            Some(new) => debug!(leader = new.peer_id.0, ping = %new.ping_addr, "following new leader"),
+            None => {
+                // We are the smallest peer left: keep the shared timeline
+                // running from where it is and lead it ourselves.
+                let now = self.config.time.now_micros();
+                self.clock.send_if_modified(|clock| {
+                    let adopted = clock.adopt_lead(now);
+                    if *clock == adopted {
+                        false
+                    } else {
+                        *clock = adopted;
+                        true
+                    }
+                });
+                debug!("no smaller peer connected; leading the timeline");
+            }
         }
+        *leader = next;
     }
 }
 

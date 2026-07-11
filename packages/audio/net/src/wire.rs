@@ -21,7 +21,10 @@ pub struct Hello {
     pub peer_id: u64,
     /// UDP port the sender answers clock pings on.
     pub udp_port: u16,
-    /// The sender's clock epoch, meaningful only when the sender leads.
+    /// The session epoch on the *sender's* local clock. A follower
+    /// translates its leader's epoch (`SharedClock::local_epoch_micros`),
+    /// so a peer that can only reach a follower still converges on the
+    /// session timeline by pinging that follower's clock.
     pub epoch_micros: i64,
     /// Sample rate the sender's session runs at.
     pub sample_rate: u32,

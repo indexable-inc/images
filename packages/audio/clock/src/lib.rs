@@ -102,6 +102,12 @@ impl OffsetEstimator {
         }
     }
 
+    /// Forget every sample, e.g. after a leader change: offsets measured
+    /// against the old leader's clock say nothing about the new one.
+    pub fn clear(&mut self) {
+        self.samples.clear();
+    }
+
     /// Record one measurement.
     pub fn record(&mut self, sample: PingSample) {
         if self.samples.len() == self.capacity {
@@ -180,6 +186,14 @@ impl SharedClock {
     #[must_use]
     pub const fn epoch_micros(&self) -> i64 {
         self.epoch_micros
+    }
+
+    /// Session epoch translated onto *this* peer's local clock: what this
+    /// peer should advertise to others, since they ping our local clock.
+    /// While leading (zero offset) it equals [`Self::epoch_micros`].
+    #[must_use]
+    pub const fn local_epoch_micros(&self) -> i64 {
+        self.epoch_micros - self.offset_micros
     }
 
     /// Micros elapsed on the shared timeline at local instant
@@ -337,6 +351,20 @@ mod tests {
             leader.frame_at(3_000_000, SAMPLE_RATE),
             follower.frame_at(2_750_000, SAMPLE_RATE)
         );
+    }
+
+    #[test]
+    fn chained_follower_agrees_via_local_epoch() {
+        // A leads; B follows A; C only sees B and follows B's *local*
+        // epoch, pinging B's local clock.
+        let a = SharedClock::lead(1_000_000);
+        // A's clock runs 250_000 us ahead of B's.
+        let b = SharedClock::follow(250_000, a.epoch_micros());
+        // B's clock runs 100_000 us ahead of C's.
+        let c = SharedClock::follow(100_000, b.local_epoch_micros());
+        // Same physical instant on all three clocks.
+        assert_eq!(a.frame_at(3_000_000, SAMPLE_RATE), b.frame_at(2_750_000, SAMPLE_RATE));
+        assert_eq!(a.frame_at(3_000_000, SAMPLE_RATE), c.frame_at(2_650_000, SAMPLE_RATE));
     }
 
     #[test]
