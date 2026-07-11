@@ -40,7 +40,7 @@ impl ServerAddress {
     ///
     /// [`io::ErrorKind::InvalidInput`] on an empty host or unparseable port.
     pub fn parse(address: &str) -> io::Result<Self> {
-        let (host, port) = split_host_port(address)?;
+        let HostPort { host, port } = split_host_port(address)?;
         if host.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -85,7 +85,15 @@ impl ServerAddress {
     }
 }
 
-fn split_host_port(address: &str) -> io::Result<(&str, u16)> {
+/// A `host[:port]` split, borrowing the host from the input. Named (rather
+/// than a bare tuple) to satisfy the workspace's
+/// `clippy::anonymous_tuple_return_type`.
+struct HostPort<'a> {
+    host: &'a str,
+    port: u16,
+}
+
+fn split_host_port(address: &str) -> io::Result<HostPort<'_>> {
     let parse_port = |raw: &str| {
         raw.parse::<u16>().map_err(|_| {
             io::Error::new(
@@ -112,13 +120,22 @@ fn split_host_port(address: &str) -> io::Result<(&str, u16)> {
                 ));
             }
         };
-        return Ok((host, port));
+        return Ok(HostPort { host, port });
     }
     match address.rsplit_once(':') {
         // More than one colon without brackets is a bare IPv6 address.
-        Some((host, _)) if host.contains(':') => Ok((address, DEFAULT_PORT)),
-        Some((host, raw_port)) => Ok((host, parse_port(raw_port)?)),
-        None => Ok((address, DEFAULT_PORT)),
+        Some((host, _)) if host.contains(':') => Ok(HostPort {
+            host: address,
+            port: DEFAULT_PORT,
+        }),
+        Some((host, raw_port)) => Ok(HostPort {
+            host,
+            port: parse_port(raw_port)?,
+        }),
+        None => Ok(HostPort {
+            host: address,
+            port: DEFAULT_PORT,
+        }),
     }
 }
 
@@ -130,7 +147,7 @@ pub const DEFAULT_PORT: u16 = 25565;
 pub struct SlpStatus {
     /// Display name of the server version, e.g. `"1.21.11"`.
     pub version_name: String,
-    /// Numeric protocol version, e.g. 775 for Minecraft 26.1.2.
+    /// Numeric protocol version, e.g. 776 for Minecraft 26.2.
     pub protocol_version: i32,
     pub players_online: i64,
     pub players_max: i64,
@@ -321,7 +338,7 @@ mod tests {
     }
 
     const VANILLA_STATUS: &str = r#"{
-        "version": {"name": "26.1.2", "protocol": 775},
+        "version": {"name": "26.2", "protocol": 776},
         "players": {"online": 3, "max": 20},
         "description": "§6Spleef§r arena"
     }"#;
@@ -330,8 +347,8 @@ mod tests {
     fn parses_vanilla_status() {
         let status =
             SlpStatus::from_status_json(VANILLA_STATUS, Duration::ZERO).expect("parse");
-        assert_eq!(status.version_name, "26.1.2");
-        assert_eq!(status.protocol_version, 775);
+        assert_eq!(status.version_name, "26.2");
+        assert_eq!(status.protocol_version, 776);
         assert_eq!(status.players_online, 3);
         assert_eq!(status.players_max, 20);
         assert_eq!(status.motd, "\u{a7}6Spleef\u{a7}r arena");
@@ -407,8 +424,8 @@ mod tests {
         let status = query(&address, Duration::from_secs(5)).expect("query");
         server.join().expect("server thread").expect("server io");
 
-        assert_eq!(status.version_name, "26.1.2");
-        assert_eq!(status.protocol_version, 775);
+        assert_eq!(status.version_name, "26.2");
+        assert_eq!(status.protocol_version, 776);
         assert_eq!(status.players_online, 3);
         assert_eq!(status.players_max, 20);
         assert_eq!(

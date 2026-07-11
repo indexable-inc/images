@@ -4,7 +4,7 @@ A headless Minecraft client that joins a server (offline-mode login) and
 records the session as a ReplayMod `.mcpr` replay.
 
 ```
-mc-bot 127.0.0.1:25565 --protocol-version 775 --mc-version 26.1.2 \
+mc-bot 127.0.0.1:25565 --protocol-version 776 --mc-version 26.2 \
     --record-seconds 10 --output session.mcpr
 ```
 
@@ -32,7 +32,7 @@ compression layer, the login/configuration/play state machine, and the
 `.mcpr` container.
 
 Packet ids are per-state ordinals transcribed from the pinned Minestom's
-packet registry (protocol 775 = Minecraft 26.1.2, in lockstep with
+packet registry (protocol 776 = Minecraft 26.2, in lockstep with
 packages/minecraft/minestom/servers/spleef). A protocol bump moves them:
 update `src/packets.rs` alongside the server pin, and pass the new
 `--protocol-version`/`--mc-version` at the call sites.

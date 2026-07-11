@@ -33,9 +33,9 @@ mod _mc_protocol {
     #[unibind::record]
     #[derive(Clone)]
     pub struct SlpStatus {
-        /// Display name of the server version, e.g. `"26.1.2"`.
+        /// Display name of the server version, e.g. `"26.2"`.
         pub version_name: String,
-        /// Numeric protocol version, e.g. 775 for Minecraft 26.1.2.
+        /// Numeric protocol version, e.g. 776 for Minecraft 26.2.
         pub protocol_version: i32,
         pub players_online: i64,
         pub players_max: i64,

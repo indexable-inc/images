@@ -6,9 +6,13 @@ plugins {
 group = "dev.ix"
 version = "0.1.0"
 
+base {
+    archivesName = "minestom-spleef"
+}
+
 dependencies {
-    implementation("net.minestom:minestom:2026.07.01-26.1.2")
-    implementation("ch.qos.logback:logback-classic:1.5.38")
+    implementation(libs.minestom)
+    implementation(libs.logback.classic)
 }
 
 java {
@@ -19,10 +23,6 @@ java {
 
 application {
     mainClass = "dev.ix.minestom.spleef.Main"
-}
-
-dependencyLocking {
-    lockAllConfigurations()
 }
 
 tasks.withType<JavaCompile>().configureEach {

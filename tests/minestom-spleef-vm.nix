@@ -86,13 +86,13 @@ in
       server.wait_for_open_port(25565)
 
       # End-to-end protocol proof: a real server-list ping answered with a
-      # well-formed status. Protocol 775 = Minecraft 26.1.2, in lockstep with
+      # well-formed status. Protocol 776 = Minecraft 26.2, in lockstep with
       # the Minestom pin in servers/spleef/build.gradle.kts; a version bump
       # there moves these assertions too. Both probes run so both unibind
       # renderings of mc-protocol (Python/pyo3, Kotlin/FFM) are proven
       # against a live server, not just their conformance fixtures.
-      server.succeed("${mcProbe} 127.0.0.1:25565 --protocol-version 775 --timeout 30")
-      server.succeed("${mcProbeKt} 127.0.0.1:25565 --protocol-version 775 --timeout 30")
+      server.succeed("${mcProbe} 127.0.0.1:25565 --protocol-version 776 --timeout 30")
+      server.succeed("${mcProbeKt} 127.0.0.1:25565 --protocol-version 776 --timeout 30")
 
       # Join as a real player and record the session. mc-bot walks the whole
       # protocol — offline login, registry configuration, spawn into the
@@ -100,10 +100,10 @@ in
       # admits a client. The recorded ReplayMod .mcpr is exported as a test
       # artifact; open it in ReplayMod to see exactly what a client saw.
       server.succeed(
-          "${mcBot} 127.0.0.1:25565 --protocol-version 775 --mc-version 26.1.2"
+          "${mcBot} 127.0.0.1:25565 --protocol-version 776 --mc-version 26.2"
           + " --record-seconds 8 --timeout 30 --output /tmp/spleef.mcpr"
       )
-      server.copy_from_vm("/tmp/spleef.mcpr")
+      server.copy_from_machine("/tmp/spleef.mcpr")
 
       server.shutdown()
     '';

@@ -47,7 +47,7 @@ struct Args {
     protocol_version: i32,
 
     /// Version display name written to the replay's metaData.json
-    /// ("mcversion"), e.g. 26.1.2; `ReplayMod` shows it in the replay list.
+    /// ("mcversion"), e.g. 26.2; `ReplayMod` shows it in the replay list.
     #[arg(long)]
     mc_version: String,
 
