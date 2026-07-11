@@ -177,10 +177,10 @@
             IdentityAgent none
             IdentitiesOnly yes
             Port 22
+            ProxyCommand /run/current-system/sw/bin/vm-net-connect
             StrictHostKeyChecking accept-new
             User root
             IdentityFile /etc/nix/builder_ed25519
-            ProxyCommand /run/current-system/sw/bin/vm-net-connect
           Host cluster-builder
             BatchMode yes
             ConnectTimeout 10
@@ -191,6 +191,7 @@
             IdentityAgent none
             IdentitiesOnly yes
             Port 9999
+            ProxyCommand none
             StrictHostKeyChecking yes
             User builder
             IdentityFile /etc/nix/cluster_ed25519
