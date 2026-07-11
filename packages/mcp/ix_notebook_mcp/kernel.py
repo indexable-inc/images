@@ -231,7 +231,7 @@ class Kernel:
             try:
                 try:
                     await asyncio.shield(asyncio.wait({task, died}, return_when=asyncio.FIRST_COMPLETED))
-                except asyncio.CancelledError:
+                except asyncio.CancelledError as cancelled:
                     try:
                         await task
                     except TimeoutError:
@@ -245,6 +245,14 @@ class Kernel:
                         # Any other drain error: we only need the socket read to
                         # finish before releasing the lock.
                         pass
+                    # The drain above ran `on_iopub`, so `summary` now holds the
+                    # launched job's summary (with its id) when the reply arrived
+                    # before the cancel. Attach it to the exception so the caller
+                    # can cancel STRICTLY that job by id rather than guess which
+                    # background job the abandoned call started (index#2406). It
+                    # stays None when the cancel landed before any iopub, and the
+                    # by-id cancel then does nothing rather than guess.
+                    cancelled.ix_drained_summary = summary  # type: ignore[attr-defined]
                     raise
                 if not task.done():
                     # The kernel died with this request in flight: the reply can
@@ -296,6 +304,18 @@ class Kernel:
         deadline = float(budget) + grace
         try:
             return await self._execute(wrapper, timeout=deadline)
+        except asyncio.CancelledError as cancelled:
+            # The client abandoned this call. `_execute` drained the exec reply
+            # under the shell lock before re-raising, so its summary (with the
+            # launched job's id) rides on the exception. Lift that id to the
+            # attribute the server reads, so the cancel poke targets STRICTLY the
+            # run this call launched rather than guessing (index#2406). Absent
+            # when the cancel landed before any iopub -- the by-id cancel then
+            # does nothing rather than kill an unrelated background job.
+            summary = getattr(cancelled, "ix_drained_summary", None)
+            job_id = summary.get("id") if isinstance(summary, dict) else None
+            cancelled.ix_launched_job_id = job_id  # type: ignore[attr-defined]
+            raise
         except TimeoutError:
             # A dead kernel also never replies: if the death watch flagged one
             # while this request waited, report that precise cause, never a wedge.
@@ -333,25 +353,35 @@ class Kernel:
                     outcome = "restart_pending"
             return [], _wedged_summary(budget, grace, deadline, outcome=outcome)
 
-    async def cancel_running(self, session: str | None) -> list[str]:
-        """Cancel the run this ``session``'s abandoned ``python_exec`` launched.
+    async def cancel_running(
+        self, session: str | None, job_id: str | None = None
+    ) -> list[str]:
+        """Cancel the specific run this ``session``'s abandoned ``python_exec``
+        launched, identified by ``job_id``.
 
         The server calls this when a client cancels an in-flight ``python_exec``
         (``notifications/cancelled`` or a transport abort): the tool coroutine is
         cancelled server-side, but the job it started keeps running in the kernel
         as a background task, executing side effects the caller already abandoned
-        (index#2387). This pokes ``__ix_cancel_running`` on the raw shell channel
-        (no job/card, like ``set_client``), which cancels the same job an explicit
-        ``jobs['<id>'].cancel()`` would. Best-effort: a cancel arriving after the
-        run finished (the common race) cancels nothing, and a failure here must
-        never mask the original cancellation the caller is propagating. Returns
-        the ids cancelled (parsed from the raw reply; empty on any hiccup)."""
-        if self._pid is None:
+        (index#2387). ``job_id`` is that launched run's id, read off the drained
+        exec reply and passed through by the server (index#2406); this pokes
+        ``__ix_cancel_running`` on the raw shell channel (no job/card, like
+        ``set_client``), which cancels STRICTLY that job on the same path an
+        explicit ``jobs['<id>'].cancel()`` would -- never a heuristic guess.
+        ``job_id`` is None when the cancel landed before the launched job's
+        summary was drained; the poke then cancels nothing rather than kill an
+        unrelated background job. Best-effort: a cancel arriving after the run
+        finished (the common race) cancels nothing, and a failure here must never
+        mask the original cancellation the caller is propagating. Returns the ids
+        cancelled (parsed from the raw reply; empty on any hiccup)."""
+        if self._pid is None or job_id is None:
             return []
         session_arg = "None" if session is None else repr(session)
+        job_id_arg = repr(job_id)
         try:
             outputs, _ = await self._execute(
-                f"print(__ix_cancel_running(session={session_arg}))", timeout=10.0
+                f"print(__ix_cancel_running(session={session_arg}, job_id={job_id_arg}))",
+                timeout=10.0,
             )
         except BaseException:  # cancel is best-effort; never mask the caller's own cancellation
             return []
