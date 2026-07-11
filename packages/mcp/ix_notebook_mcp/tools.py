@@ -518,21 +518,28 @@ async def python_exec(
         cell_outputs, summary = await kernel.python_exec(
             code, effective_budget, intent, session=sid, topic=_session_topic(ctx)
         )
-    except asyncio.CancelledError:
+    except asyncio.CancelledError as cancelled:
         # The client cancelled this in-flight call (`notifications/cancelled` or a
         # transport abort; the MCP SDK cancels this handler's request scope, which
         # surfaces here as CancelledError). Without this the kernel job the call
         # launched keeps running in the background and executes its side effects
         # AFTER the caller abandoned it -- the permission-gate bypass in
-        # index#2387. Interrupt that job on the same path an explicit
-        # `jobs['<id>'].cancel()` takes, then re-raise so the cancellation still
-        # propagates. `shield` keeps the cancel poke itself from being torn down
-        # by the very cancellation we are handling. Note: Claude Code does not
-        # signal a USER REJECTION of an in-flight call, so this fires for
-        # spec-compliant cancels and Claude Code's own request timeout, not for a
-        # rejected prompt (documented in guide.CANCELLATION_NOTE).
+        # index#2387. Interrupt STRICTLY that job (its id rode out on the
+        # exception from `kernel.python_exec`, read off the drained exec reply --
+        # index#2406) on the same path an explicit `jobs['<id>'].cancel()` takes,
+        # then re-raise so the cancellation still propagates. Cancelling by id,
+        # not a "newest running job" heuristic, avoids killing an unrelated
+        # background job the same session started earlier (the wrong-job kill in
+        # index#2406); the id is None when the cancel landed before the launched
+        # job's summary was drained, and the poke then cancels nothing. `shield`
+        # keeps the cancel poke itself from being torn down by the very
+        # cancellation we are handling. Note: Claude Code does not signal a USER
+        # REJECTION of an in-flight call, so this fires for spec-compliant cancels
+        # and Claude Code's own request timeout, not for a rejected prompt
+        # (documented in guide.CANCELLATION_NOTE).
+        launched_job_id = getattr(cancelled, "ix_launched_job_id", None)
         with contextlib.suppress(Exception):  # best-effort: a cancel-time hiccup must not swallow the re-raise
-            await asyncio.shield(kernel.cancel_running(sid))
+            await asyncio.shield(kernel.cancel_running(sid, job_id=launched_job_id))
         raise
     rendered = outputs.to_mcp(cell_outputs)
     # The human view for an MCP Apps host: the same text/html fragments the
