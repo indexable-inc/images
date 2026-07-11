@@ -28,13 +28,13 @@ fn primary(function: &ir::Function, interface: &ir::Interface) -> Result<String,
     let params = params(function, interface)?;
     let signature = params
         .iter()
-        .map(|(ty, name)| format!("{ty} {name}"))
+        .map(|Param { ty, name }| format!("{ty} {name}"))
         .collect::<Vec<_>>()
         .join(", ");
 
     let mut body = String::from("UnibindWire args = new UnibindWire();\n");
-    for (arg, (_, name)) in function.args.iter().zip(&params) {
-        body.push_str(&java::encode(&arg.ty, interface, name, "args", 0));
+    for (arg, param) in function.args.iter().zip(&params) {
+        body.push_str(&java::encode(&arg.ty, interface, &param.name, "args", 0));
         body.push('\n');
     }
     let _ = writeln!(body, "UnibindReader reply = call({handle}, args);");
@@ -93,7 +93,7 @@ fn overloads(
         .map_or_else(|| "void".to_owned(), |ret| java::declared(ret, interface));
     let raw_types = all
         .iter()
-        .map(|(ty, _)| java::strip_generics(ty))
+        .map(|param| java::strip_generics(&param.ty))
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -102,11 +102,13 @@ fn overloads(
         let kept = function.args.len() - dropped;
         let signature = all[..kept]
             .iter()
-            .map(|(ty, name)| format!("{ty} {name}"))
+            .map(|Param { ty, name }| format!("{ty} {name}"))
             .collect::<Vec<_>>()
             .join(", ");
-        let mut forwarded: Vec<String> =
-            all[..kept].iter().map(|(_, name)| name.clone()).collect();
+        let mut forwarded: Vec<String> = all[..kept]
+            .iter()
+            .map(|param| param.name.clone())
+            .collect();
         for arg in &function.args[kept..] {
             forwarded.push(default_literal(arg)?);
         }
@@ -199,15 +201,24 @@ fn float_literal(value: f64, kind: ir::FloatKind) -> String {
     }
 }
 
-/// The declared Java parameter list: `(type, name)` per argument.
-fn params(
-    function: &ir::Function,
-    interface: &ir::Interface,
-) -> Result<Vec<(String, String)>, RenderError> {
+/// A declared Java parameter: its type and name. Named (rather than a bare
+/// tuple) to satisfy the workspace's `clippy::anonymous_tuple_return_type`.
+struct Param {
+    ty: String,
+    name: String,
+}
+
+/// The declared Java parameter list, one [`Param`] per argument.
+fn params(function: &ir::Function, interface: &ir::Interface) -> Result<Vec<Param>, RenderError> {
     function
         .args
         .iter()
-        .map(|arg| Ok((java::declared(&arg.ty, interface), names::arg_name(arg)?)))
+        .map(|arg| {
+            Ok(Param {
+                ty: java::declared(&arg.ty, interface),
+                name: names::arg_name(arg)?,
+            })
+        })
         .collect()
 }
 

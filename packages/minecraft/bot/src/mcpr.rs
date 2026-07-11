@@ -57,7 +57,10 @@ impl Recorder {
     pub fn record(&mut self, packet: &[u8]) {
         let epoch = *self.epoch.get_or_insert_with(Instant::now);
         self.last_offset = epoch.elapsed();
-        let millis = u32::try_from(self.last_offset.as_millis()).unwrap_or(u32::MAX);
+        let millis = saturating_millis(self.last_offset);
+        // The wire framing caps packets far below 4 GiB; pinning is the
+        // contract, not a silent default.
+        #[allow(clippy::fallible_int_fallback)]
         let length = u32::try_from(packet.len()).unwrap_or(u32::MAX);
         self.stream.extend_from_slice(&millis.to_be_bytes());
         self.stream.extend_from_slice(&length.to_be_bytes());
@@ -103,16 +106,20 @@ impl Recorder {
     }
 
     fn metadata(&self, info: &ReplayInfo) -> serde_json::Value {
-        let duration = u32::try_from(self.duration().as_millis()).unwrap_or(u32::MAX);
-        let date = SystemTime::now()
+        let duration = saturating_millis(self.duration());
+        let since_epoch = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map(|since| since.as_millis())
             .unwrap_or_default();
+        // Pinning is the contract: a clock past year 584_556_019 beats a
+        // panic or a missing mandatory field.
+        #[allow(clippy::fallible_int_fallback)]
+        let date = u64::try_from(since_epoch).unwrap_or(u64::MAX);
         serde_json::json!({
             "singleplayer": false,
             "serverName": info.server_name,
             "duration": duration,
-            "date": u64::try_from(date).unwrap_or(u64::MAX),
+            "date": date,
             "mcversion": info.mc_version,
             "fileFormat": "MCPR",
             "fileFormatVersion": 14,
@@ -126,6 +133,15 @@ impl Recorder {
             "players": [],
         })
     }
+}
+
+/// A duration as whole milliseconds in the format's u32 fields, pinned to
+/// `u32::MAX`.
+// Clamping is the contract (see `Recorder::record`): a ~50-day recording has
+// bigger problems than a pinned timestamp.
+#[allow(clippy::fallible_int_fallback)]
+fn saturating_millis(duration: Duration) -> u32 {
+    u32::try_from(duration.as_millis()).unwrap_or(u32::MAX)
 }
 
 #[cfg(test)]
