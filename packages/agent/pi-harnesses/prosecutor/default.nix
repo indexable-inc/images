@@ -31,7 +31,7 @@ in
     lockdown = false;
     session = true;
 
-    # The prosecutor reuses the active executor model (opus-4-8 / gpt-5.5 medium)
+    # The prosecutor reuses the active executor model (opus-4-8 / gpt-5.6-sol medium)
     # by default - context isolation, not a weaker model, is what stops the two
     # agents laundering each other's hallucinations. Override per-run with
     # PI_PROSECUTOR_PROVIDER / PI_PROSECUTOR_MODEL / PI_PROSECUTOR_THINKING.
