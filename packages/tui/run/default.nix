@@ -7,6 +7,20 @@
     if pkgs.stdenv.hostPlatform.isLinux
     then lib.getExe' pkgs.util-linux "scriptreplay"
     else "scriptreplay";
+  # #2759: Rust links libiconv through the raw Darwin compiler, which does not
+  # consume NIX_LDFLAGS from the surrounding profile.
+  wrapperArgs =
+    [
+      "--set"
+      "IX_RUN_SCRIPTREPLAY"
+      scriptreplay
+    ]
+    ++ lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
+      "--prefix"
+      "LIBRARY_PATH"
+      ":"
+      "${lib.getLib pkgs.libiconv}/lib"
+    ];
   unwrapped = ix.writePythonApplication pkgs {
     name = "run-unwrapped";
     src = ./run.py;
@@ -26,7 +40,7 @@
     ''
       mkdir -p $out/bin
       makeWrapper ${lib.getExe unwrapped} $out/bin/run \
-        --set IX_RUN_SCRIPTREPLAY ${lib.escapeShellArg scriptreplay}
+        ${lib.escapeShellArgs wrapperArgs}
     '';
   recordsSession =
     pkgs.runCommand "run-records-session"
@@ -180,13 +194,41 @@
 
       mkdir -p "$out"
     '';
+  darwinLibiconv =
+    pkgs.runCommand "run-darwin-libiconv"
+    {
+      nativeBuildInputs = [package];
+      strictDeps = true;
+    }
+    ''
+      cat >link-environment-probe <<'EOF'
+      #!${lib.getExe pkgs.bash}
+      IFS=:
+      for directory in $LIBRARY_PATH; do
+        if [ -f "$directory/libiconv.dylib" ]; then
+          exit 0
+        fi
+      done
+      echo "LIBRARY_PATH has no linkable libiconv" >&2
+      exit 1
+      EOF
+      chmod +x link-environment-probe
+
+      export IX_RUN_DIR="$TMPDIR/runs"
+      LIBRARY_PATH= run "$PWD/link-environment-probe"
+      mkdir -p "$out"
+    '';
 in
   package.overrideAttrs (old: {
     passthru =
       (old.passthru or {})
       // {
-        tests = {
-          inherit recordsSession;
-        };
+        tests =
+          {
+            inherit recordsSession;
+          }
+          // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
+            inherit darwinLibiconv;
+          };
       };
   })
