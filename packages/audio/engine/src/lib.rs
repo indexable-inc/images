@@ -26,13 +26,22 @@ pub struct Renderer {
     score: Arc<Mutex<Score>>,
     store: Arc<BlobStore>,
     loaded: Option<(BlobHash, Instrument)>,
+    /// The score's named instrument, loaded and waiting for its activation
+    /// frame; promoted to `loaded` when a render reaches `at_frame`.
+    staged: Option<Staged>,
+}
+
+struct Staged {
+    hash: BlobHash,
+    instrument: Instrument,
+    at_frame: u64,
 }
 
 impl Renderer {
     /// A renderer over a shared score and blob store.
     #[must_use]
     pub fn new(score: Arc<Mutex<Score>>, store: Arc<BlobStore>) -> Self {
-        Self { score, store, loaded: None }
+        Self { score, store, loaded: None, staged: None }
     }
 
     /// Channel count of the loaded instrument, or 1 before any loads.
@@ -42,8 +51,11 @@ impl Renderer {
     }
 
     /// (Re)load the instrument when the score names a module whose bytes we
-    /// hold and it differs from the loaded one. Returns whether an
-    /// instrument is loaded after the refresh.
+    /// hold and it differs from the loaded one. The new module is *staged*,
+    /// not swapped in: the previous instrument keeps playing until a render
+    /// reaches the score's activation frame, so every peer switches at the
+    /// same shared frame no matter when its bytes arrived. Returns whether
+    /// an instrument is loaded or staged after the refresh.
     ///
     /// # Errors
     /// Fails when the named module bytes are present but invalid.
@@ -54,6 +66,13 @@ impl Renderer {
         };
         let Some(wanted) = wanted else { return Ok(self.loaded.is_some()) };
         if self.loaded.as_ref().is_some_and(|(hash, _)| *hash == wanted.hash) {
+            self.staged = None;
+            return Ok(true);
+        }
+        if let Some(staged) = &mut self.staged
+            && staged.hash == wanted.hash
+        {
+            staged.at_frame = wanted.at_frame;
             return Ok(true);
         }
         let Some(bytes) = self.store.get(&wanted.hash)? else {
@@ -62,9 +81,27 @@ impl Renderer {
         };
         let instrument = Instrument::load(&bytes)
             .with_context(|| format!("load instrument {}", wanted.hash))?;
-        info!(hash = %wanted.hash, "instrument loaded");
-        self.loaded = Some((wanted.hash, instrument));
+        info!(hash = %wanted.hash, at_frame = wanted.at_frame, "instrument staged");
+        self.staged = Some(Staged { hash: wanted.hash, instrument, at_frame: wanted.at_frame });
         Ok(true)
+    }
+
+    /// Swap in the staged instrument once `frame` reaches its activation
+    /// frame.
+    fn promote_due(&mut self, frame: u64) {
+        if self.staged.as_ref().is_some_and(|staged| staged.at_frame <= frame) {
+            let staged = self.staged.take().expect("staged instrument present");
+            info!(hash = %staged.hash, at_frame = staged.at_frame, "instrument activated");
+            self.loaded = Some((staged.hash, staged.instrument));
+        }
+    }
+
+    /// The next staged activation strictly after `frame`, if any.
+    fn next_switch_after(&self, frame: u64) -> Option<u64> {
+        self.staged
+            .as_ref()
+            .map(|staged| staged.at_frame)
+            .filter(|&at_frame| at_frame > frame)
     }
 
     /// Render shared-timeline frames `start_frame .. start_frame + frames`
@@ -84,11 +121,12 @@ impl Renderer {
         out: &mut [f32],
     ) -> Result<()> {
         self.refresh()?;
-        let Some((_, instrument)) = &mut self.loaded else {
+        self.promote_due(start_frame);
+        if self.loaded.is_none() && self.staged.is_none() {
             out.fill(0.0);
             return Ok(());
-        };
-        let channels = instrument.channels() as usize;
+        }
+        let channels = self.channels() as usize;
         anyhow::ensure!(
             out.len() == frames * channels,
             "out has {} samples, range needs {}",
@@ -115,24 +153,38 @@ impl Renderer {
             }
         }
 
-        // Walk the range, splitting at event frames and the ABI block cap.
+        // Walk the range, splitting at event frames, staged instrument
+        // activation frames, and the ABI block cap.
         let end_frame = start_frame + frames as u64;
         let mut frame = start_frame;
         let mut cursor = 0;
         while frame < end_frame {
+            self.promote_due(frame);
             let next_event = pending
                 .peek()
                 .map_or(end_frame, |event| event.at_frame.min(end_frame));
-            let block_end = next_event.max(frame + 1).min(frame + MAX_BLOCK_FRAMES as u64);
+            let next_switch = self
+                .next_switch_after(frame)
+                .map_or(end_frame, |at_frame| at_frame.min(end_frame));
+            let block_end = next_event
+                .min(next_switch)
+                .max(frame + 1)
+                .min(frame + MAX_BLOCK_FRAMES as u64);
             let block_frames = usize::try_from(block_end - frame).expect("block fits usize");
             let samples = block_frames * channels;
-            instrument.render(
-                frame,
-                block_frames,
-                sample_rate,
-                &state,
-                &mut out[cursor..cursor + samples],
-            )?;
+            match &mut self.loaded {
+                Some((_, instrument)) => render_block(
+                    instrument,
+                    frame,
+                    block_frames,
+                    sample_rate,
+                    &state,
+                    &mut out[cursor..cursor + samples],
+                    channels,
+                )?,
+                // Silence until the first instrument activates.
+                None => out[cursor..cursor + samples].fill(0.0),
+            }
             frame = block_end;
             cursor += samples;
             while let Some(event) = pending.next_if(|event| event.at_frame <= frame) {
@@ -143,6 +195,33 @@ impl Renderer {
         }
         Ok(())
     }
+}
+
+/// Render one block, adapting the instrument's native channel count to the
+/// range's layout when a mid-range switch changes it: mono duplicates
+/// outward, extra channels drop. Deterministic either way, so converged
+/// peers still agree bit-for-bit.
+fn render_block(
+    instrument: &mut Instrument,
+    frame: u64,
+    block_frames: usize,
+    sample_rate: u32,
+    state: &[f32; CONTROL_COUNT],
+    out: &mut [f32],
+    out_channels: usize,
+) -> Result<()> {
+    let native = instrument.channels() as usize;
+    if native == out_channels {
+        return instrument.render(frame, block_frames, sample_rate, state, out);
+    }
+    let mut scratch = vec![0.0_f32; block_frames * native];
+    instrument.render(frame, block_frames, sample_rate, state, &mut scratch)?;
+    for (chunk, source) in out.chunks_exact_mut(out_channels).zip(scratch.chunks_exact(native)) {
+        for (index, slot) in chunk.iter_mut().enumerate() {
+            *slot = source[index.min(native - 1)];
+        }
+    }
+    Ok(())
 }
 
 /// Local listener volume: linear gain plus a mute flag. Lives outside the
@@ -321,6 +400,7 @@ fn render_stereo(
 ) -> Result<()> {
     let frames = out.len() / 2;
     renderer.refresh()?;
+    renderer.promote_due(start_frame);
     if renderer.channels() == 2 {
         return renderer.render_range(start_frame, frames, sample_rate, out);
     }
@@ -411,6 +491,28 @@ mod tests {
 )
 "#;
 
+    /// Mono instrument that outputs controls[0] + 1.0 on every frame, so a
+    /// switch away from [`CONST_WAT`] is visible in the samples.
+    const SHIFT_WAT: &str = r#"
+(module
+  (memory (export "memory") 2)
+  (func (export "sa_abi_version") (result i32) (i32.const 1))
+  (func (export "sa_channels") (result i32) (i32.const 1))
+  (func (export "sa_controls_ptr") (result i32) (i32.const 0))
+  (func (export "sa_out_ptr") (result i32) (i32.const 256))
+  (func (export "sa_render") (param $start i64) (param $n i32) (param $sr i32)
+    (local $i i32)
+    (block $done
+      (loop $loop
+        (br_if $done (i32.ge_s (local.get $i) (local.get $n)))
+        (f32.store
+          (i32.add (i32.const 256) (i32.mul (local.get $i) (i32.const 4)))
+          (f32.add (f32.load (i32.const 0)) (f32.const 1)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop))))
+)
+"#;
+
     fn fixture() -> Result<(Arc<Mutex<Score>>, Renderer, tempfile::TempDir)> {
         let dir = tempfile::tempdir()?;
         let store = Arc::new(BlobStore::open(dir.path())?);
@@ -464,6 +566,41 @@ mod tests {
         let whole: Vec<u32> = whole.iter().map(|sample| sample.to_bits()).collect();
         let pieces: Vec<u32> = pieces.iter().map(|sample| sample.to_bits()).collect();
         assert_eq!(whole, pieces);
+        Ok(())
+    }
+
+    #[test]
+    fn instrument_switches_at_its_activation_frame() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let store = Arc::new(BlobStore::open(dir.path())?);
+        let hash_a = store.put(CONST_WAT.as_bytes())?;
+        let hash_b = store.put(SHIFT_WAT.as_bytes())?;
+        let score = Arc::new(Mutex::new(Score::new()));
+        {
+            let score = score.lock().expect("lock");
+            score.set_instrument(&hash_a, 0)?;
+            score.set_control(0, 0.25)?;
+        }
+        let mut renderer = Renderer::new(Arc::clone(&score), Arc::clone(&store));
+        let mut out = vec![0.0; 8];
+        renderer.render_range(0, 8, 48_000, &mut out)?;
+        assert!(out.iter().all(|&sample| (sample - 0.25).abs() < f32::EPSILON));
+
+        // Publish the successor: bytes already held, but it must not sound
+        // before its activation frame.
+        score.lock().expect("lock").set_instrument(&hash_b, 100)?;
+        let mut out = vec![0.0; 200];
+        renderer.render_range(0, 200, 48_000, &mut out)?;
+        assert!(out[..100].iter().all(|&sample| (sample - 0.25).abs() < f32::EPSILON));
+        assert!(out[100..].iter().all(|&sample| (sample - 1.25).abs() < f32::EPSILON));
+
+        // A peer that never held the old module stays silent until the
+        // shared switch point instead of jumping ahead.
+        let mut fresh = Renderer::new(Arc::clone(&score), store);
+        let mut out = vec![1.0; 200];
+        fresh.render_range(0, 200, 48_000, &mut out)?;
+        assert!(out[..100].iter().all(|&sample| sample == 0.0));
+        assert!(out[100..].iter().all(|&sample| (sample - 1.25).abs() < f32::EPSILON));
         Ok(())
     }
 
