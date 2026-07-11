@@ -12,10 +12,13 @@ protocol incompatibility.
 ## Root cause
 
 The repo's patched `nix-eval-jobs` resolves floating content-addressed
-outputs by calling `store.queryRealisation(id)`. That client operation
-requires the `realisation-with-path-not-hash` protocol feature. The
-shared CI daemon does not advertise it, so evaluation cannot obtain the
-manifest output path.
+outputs by calling `store.queryRealisation(id)`. The call itself is
+fine; the problem was a client/daemon mismatch. The evaluator's Nix
+libraries had drifted to a Nix-master component set whose
+`queryRealisation` client demands the `realisation-with-path-not-hash`
+protocol feature, while the shared CI daemon runs the Nix 2.34 family,
+which does not advertise it. With mismatched families, evaluation
+cannot obtain the manifest output path.
 
 A Nix `2.36.0pre20260708_ac94798` experiment from `/tmp/nix-fixed` had
 replaced the deployed daemon at 01:03:33 UTC. After its active builds
