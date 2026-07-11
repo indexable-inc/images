@@ -44,7 +44,7 @@ enum Command {
     /// Set a shared instrument control for everyone.
     SetControl { control: u16, value: f32 },
     /// Schedule a shared control change at an exact shared frame.
-    Schedule { at_frame: u16, control: u16, value: f32 },
+    Schedule { at_frame: u64, control: u16, value: f32 },
     /// macOS menu-bar volume item (talks to the local daemon).
     Tray,
 }
@@ -92,11 +92,7 @@ fn main() -> Result<()> {
             client::run(&control::Request::SetControl { control, value })
         }
         Command::Schedule { at_frame, control, value } => {
-            client::run(&control::Request::Schedule {
-                at_frame: u64::from(at_frame),
-                control,
-                value,
-            })
+            client::run(&control::Request::Schedule { at_frame, control, value })
         }
         Command::Tray => tray::run(),
     }

@@ -122,11 +122,22 @@ async fn run_async(opts: Opts) -> Result<()> {
 
     tokio::spawn(persist_loop(Arc::clone(&score), score_path));
 
-    let socket_path = control::socket_path();
+    let socket_path = control::socket_path_in(&state_dir);
     if let Some(parent) = socket_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let _ = std::fs::remove_file(&socket_path);
+    // Only remove a *stale* socket file: a live daemon answers a connect,
+    // and stealing its pathname would silently reroute every client.
+    match tokio::net::UnixStream::connect(&socket_path).await {
+        Ok(_) => anyhow::bail!(
+            "another daemon is already serving {}",
+            socket_path.display()
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => {
+            let _ = std::fs::remove_file(&socket_path);
+        }
+    }
     let listener = UnixListener::bind(&socket_path)
         .with_context(|| format!("bind control socket {}", socket_path.display()))?;
     info!(socket = %socket_path.display(), "control socket ready");

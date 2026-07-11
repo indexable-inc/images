@@ -3,7 +3,7 @@
 //! One serde-rendered shape for every client (CLI, macOS tray, the MCP
 //! kernel's python module); nothing hand-assembles these strings.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -22,8 +22,15 @@ pub fn state_dir() -> PathBuf {
 /// Where the control socket lives: `$SHARED_AUDIO_SOCKET` or the state dir.
 #[must_use]
 pub fn socket_path() -> PathBuf {
+    socket_path_in(&state_dir())
+}
+
+/// The control socket under a specific state directory (a `--state-dir`
+/// override); `$SHARED_AUDIO_SOCKET` still wins.
+#[must_use]
+pub fn socket_path_in(state_dir: &Path) -> PathBuf {
     std::env::var_os(SOCKET_ENV)
-        .map_or_else(|| state_dir().join("control.sock"), PathBuf::from)
+        .map_or_else(|| state_dir.join("control.sock"), PathBuf::from)
 }
 
 /// A single client request; one JSON object per line.
