@@ -503,6 +503,8 @@
       '{"tool_name":"Bash","tool_input":{"command":"worktree_path=/private/tmp/worktree; git status"}}'
     pre_guard bash-habits-guard "path argument allowed" allow \
       '{"tool_name":"Bash","tool_input":{"command":"echo path=/private/tmp/worktree"}}'
+    pre_guard bash-habits-guard "double quoted backticks denied" deny \
+      '{"tool_name":"Bash","tool_input":{"command":"rg -n \"literal `:ixvm` pattern\" ."}}'
 
     pre_guard search-guard "Search tool denied" deny '{"tool_name":"Search"}'
     pre_guard search-guard "WebSearch not denied" allow '{"tool_name":"WebSearch"}'

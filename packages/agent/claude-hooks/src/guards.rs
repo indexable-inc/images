@@ -189,8 +189,30 @@ fn has_zsh_path_binding(command: &str) -> bool {
     bash_syntax_matches(command, is_zsh_path_binding)
 }
 
+fn is_double_quoted_backtick_substitution(node: Node<'_>, source: &str) -> bool {
+    if node.kind() != "command_substitution"
+        || !node_text(node, source).is_some_and(|text| text.starts_with('`'))
+    {
+        return false;
+    }
+
+    let mut ancestor = node.parent();
+    while let Some(node) = ancestor {
+        if node.kind() == "string" {
+            return true;
+        }
+        ancestor = node.parent();
+    }
+    false
+}
+
+fn has_double_quoted_backtick_substitution(command: &str) -> bool {
+    bash_syntax_matches(command, is_double_quoted_backtick_substitution)
+}
+
 /// `PreToolUse(Bash)`: block recurring bad command shapes (output-to-/dev/null,
-/// recursive `grep -r`, `--no-verify`, lowercase zsh `path` bindings).
+/// recursive `grep -r`, `--no-verify`, lowercase zsh `path` bindings, and
+/// double-quoted backticks).
 /// Quote/escape-aware so a literal mention inside a commit message or `echo` is
 /// not a false positive.
 pub fn bash_habits_guard() {
@@ -200,6 +222,7 @@ pub fn bash_habits_guard() {
     }
     let raw = command_of(&payload);
     let zsh_path_binding = has_zsh_path_binding(&raw);
+    let double_quoted_backticks = has_double_quoted_backtick_substitution(&raw);
 
     // Match operators, not literal text inside a quoted string. Neutralize
     // escaped chars, then drop quoted substrings (a real `2>/dev/null` /
@@ -267,6 +290,17 @@ pub fn bash_habits_guard() {
              as `worktree_path` instead. (bash-habits-guard hook)"
                 .to_owned(),
         );
+        return;
+    }
+
+    if double_quoted_backticks {
+        deny(
+            "Backticks inside double quotes trigger shell command substitution, so literal \
+             text can execute and disappear before the command runs. Use single quotes for \
+             literal text and search patterns, escape each backtick when interpolation is \
+             required, or use `$()` for intentional substitution. (bash-habits-guard hook)"
+                .to_owned(),
+        );
     }
 }
 
@@ -289,7 +323,10 @@ pub fn search_guard() {
 
 #[cfg(test)]
 mod tests {
-    use super::{grep_walks_tree, has_zsh_path_binding, is_recursive_flag};
+    use super::{
+        grep_walks_tree, has_double_quoted_backtick_substitution, has_zsh_path_binding,
+        is_recursive_flag,
+    };
 
     #[test]
     fn recursive_flag_detection() {
@@ -342,6 +379,34 @@ mod tests {
             "typeset -p path",
         ] {
             assert!(!has_zsh_path_binding(command), "{command:?}");
+        }
+    }
+
+    #[test]
+    fn double_quoted_backtick_substitution_detection() {
+        for command in [
+            r#"rg -n "literal `:ixvm` pattern" ."#,
+            r#"query="`printf literal`"; rg "$query" ."#,
+            "printf '%s\\n' \"first line\\n`printf second`\\nthird line\"",
+        ] {
+            assert!(
+                has_double_quoted_backtick_substitution(command),
+                "{command:?}"
+            );
+        }
+
+        for command in [
+            r"rg -n 'literal `:ixvm` pattern' .",
+            r#"rg -n "literal \`:ixvm\` pattern" ."#,
+            r#"printf '%s\n' "$(pwd)""#,
+            r"printf '%s\n' `pwd`",
+            "# Markdown `code` in a comment",
+            "cat <<'EOF'\\nMarkdown `code`\\nEOF",
+        ] {
+            assert!(
+                !has_double_quoted_backtick_substitution(command),
+                "{command:?}"
+            );
         }
     }
 }
