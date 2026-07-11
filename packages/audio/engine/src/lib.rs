@@ -313,7 +313,7 @@ impl Player {
         time: Arc<dyn MonotonicTime>,
         sample_rate: u32,
         volume: Volume,
-    ) -> (Self, TimelineSource) {
+    ) -> PlayerSpawn {
         let stop = Arc::new(AtomicBool::new(false));
         let (sender, receiver) = std::sync::mpsc::sync_channel(BLOCK_BUFFER);
         let thread = std::thread::Builder::new()
@@ -330,8 +330,16 @@ impl Player {
             sample_rate,
             volume,
         };
-        (Self { stop, thread: Some(thread) }, source)
+        PlayerSpawn { player: Self { stop, thread: Some(thread) }, source }
     }
+}
+
+/// [`Player::spawn`] result.
+pub struct PlayerSpawn {
+    /// Handle whose drop stops the render thread.
+    pub player: Player,
+    /// Source to feed an output mixer.
+    pub source: TimelineSource,
 }
 
 impl Drop for Player {
@@ -358,7 +366,7 @@ fn render_loop(
     while !stop.load(Ordering::Relaxed) {
         let now = clock();
         let due_micros = now.local_micros_of_frame(frame, sample_rate);
-        let lead = due_micros - i64::try_from(time.now_micros()).unwrap_or(i64::MAX);
+        let lead = due_micros - i64::try_from(time.now_micros()).expect("monotonic micros fit i64");
         if lead.abs() > RESYNC_MICROS {
             let target = playhead(&now, time, sample_rate);
             warn!(drift_micros = lead, from = frame, to = target, "resyncing to shared clock");
@@ -521,7 +529,13 @@ mod tests {
 )
 "#;
 
-    fn fixture() -> Result<(Arc<Mutex<Score>>, Renderer, tempfile::TempDir)> {
+    struct Fixture {
+        score: Arc<Mutex<Score>>,
+        renderer: Renderer,
+        _dir: tempfile::TempDir,
+    }
+
+    fn fixture() -> Result<Fixture> {
         let dir = tempfile::tempdir()?;
         let blobs = Arc::new(BlobStore::open(dir.path())?);
         let hash = blobs.put(CONST_WAT.as_bytes())?;
@@ -532,12 +546,12 @@ mod tests {
             score.set_control(0, 0.25)?;
         }
         let renderer = Renderer::new(Arc::clone(&score), blobs);
-        Ok((score, renderer, dir))
+        Ok(Fixture { score, renderer, _dir: dir })
     }
 
     #[test]
     fn events_apply_at_exact_frames() -> Result<()> {
-        let (score, mut renderer, _dir) = fixture()?;
+        let Fixture { score, mut renderer, _dir } = fixture()?;
         score
             .lock()
             .expect("lock")
@@ -552,12 +566,12 @@ mod tests {
 
     #[test]
     fn any_block_split_is_bit_exact() -> Result<()> {
-        let (score, mut a, _dir) = fixture()?;
+        let Fixture { score, renderer: mut a, _dir } = fixture()?;
         score
             .lock()
             .expect("lock")
             .schedule(Event { at_frame: 37, control: 0, value: 0.5 })?;
-        let (score_b, mut b, _dir_b) = fixture()?;
+        let Fixture { score: score_b, renderer: mut b, _dir: _dir_b } = fixture()?;
         score_b
             .lock()
             .expect("lock")
@@ -626,7 +640,7 @@ mod tests {
 
     #[test]
     fn volume_scales_playback_but_never_rendering() -> Result<()> {
-        let (_score, mut renderer, _dir) = fixture()?;
+        let Fixture { score: _score, mut renderer, _dir } = fixture()?;
         let volume = Volume::default();
         volume.set_gain(0.0);
         let mut out = vec![0.0; 16];

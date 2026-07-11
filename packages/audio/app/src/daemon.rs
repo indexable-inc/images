@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use audio_blob::BlobStore;
 use audio_clock::{MonotonicTime, PeerId, ProcessTime, SAMPLE_RATE};
-use audio_engine::{Player, Renderer, Volume};
+use audio_engine::{Player, PlayerSpawn, Renderer, Volume};
 use audio_instrument::Instrument;
 use audio_net::NodeHandle;
 use audio_score::Score;
@@ -164,10 +164,10 @@ fn start_audio(
     time: &Arc<dyn MonotonicTime>,
     sample_rate: u32,
     volume: &Volume,
-) -> Result<(Player, rodio::MixerDeviceSink, rodio::Player)> {
+) -> Result<AudioStack> {
     let renderer = Renderer::new(Arc::clone(score), Arc::clone(blobs));
     let clock_node = Arc::clone(node);
-    let (player, source) = Player::spawn(
+    let PlayerSpawn { player, source } = Player::spawn(
         renderer,
         move || clock_node.clock(),
         Arc::clone(time),
@@ -180,7 +180,15 @@ fn start_audio(
     device.log_on_drop(false);
     let sink = rodio::Player::connect_new(device.mixer());
     sink.append(source);
-    Ok((player, device, sink))
+    Ok(AudioStack { _player: player, _device: device, _sink: sink })
+}
+
+/// Live audio output held by the daemon for its lifetime; dropping it stops
+/// the render thread and closes the output device.
+struct AudioStack {
+    _player: Player,
+    _device: rodio::MixerDeviceSink,
+    _sink: rodio::Player,
 }
 
 async fn shutdown_signal() {
@@ -326,7 +334,12 @@ fn one_second_out(state: &State) -> u64 {
 mod tests {
     use super::*;
 
-    async fn test_state() -> Result<(Arc<State>, tempfile::TempDir)> {
+    struct TestState {
+        state: Arc<State>,
+        _dir: tempfile::TempDir,
+    }
+
+    async fn test_state() -> Result<TestState> {
         let dir = tempfile::tempdir()?;
         let blobs = Arc::new(BlobStore::open(dir.path().join("blobs"))?);
         let score = Arc::new(Mutex::new(Score::new()));
@@ -347,8 +360,8 @@ mod tests {
             )
             .await?,
         );
-        Ok((
-            Arc::new(State {
+        Ok(TestState {
+            state: Arc::new(State {
                 score,
                 store: blobs,
                 volume: Volume::default(),
@@ -357,13 +370,13 @@ mod tests {
                 peer_id,
                 sample_rate: SAMPLE_RATE,
             }),
-            dir,
-        ))
+            _dir: dir,
+        })
     }
 
     #[tokio::test]
     async fn volume_requests_never_touch_the_score() -> Result<()> {
-        let (state, _dir) = test_state().await?;
+        let TestState { state, _dir } = test_state().await?;
         let before = state.score.lock().expect("lock").version();
         let response = handle(
             &state,
@@ -379,7 +392,7 @@ mod tests {
 
     #[tokio::test]
     async fn publish_rejects_invalid_modules() -> Result<()> {
-        let (state, _dir) = test_state().await?;
+        let TestState { state, _dir } = test_state().await?;
         let bogus = base64::engine::general_purpose::STANDARD.encode(b"not wasm");
         let response = handle(
             &state,
