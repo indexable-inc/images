@@ -282,11 +282,13 @@ let
     {
       # Keep transcripts and wrapper debug logs long enough for troubleshooting.
       cleanupPeriodDays = 365;
-      # No AI-attribution trailers on commits/PRs; outward disclosure is handled
-      # by the house prompt's discloseAi rule instead.
+      # No AI-attribution trailers on commits/PRs, and no Claude-Session links
+      # from web/Remote Control launches (sessionUrl defaults to true); outward
+      # disclosure is handled by the house prompt's discloseAi rule instead.
       attribution = {
         commit = "";
         pr = "";
+        sessionUrl = false;
       };
       # Worktrees branch from origin/<default>, not the local HEAD, so agent
       # branches never inherit a machine's drifted checkout state. Restates the

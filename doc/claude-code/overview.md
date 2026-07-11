@@ -99,8 +99,8 @@ wrapper injects its defaults file only `unless_present` a caller `--settings`
 (`default.nix:226-293`):
 
 - `cleanupPeriodDays = 365`: keep transcripts and `--debug` logs ~1yr.
-- `attribution` (empty `commit`/`pr`): no AI trailers; outward disclosure is
-  the house prompt's `discloseAi` rule.
+- `attribution` (empty `commit`/`pr`, `sessionUrl = false`): no AI trailers or
+  session links; outward disclosure is the house prompt's `discloseAi` rule.
 - `worktree.baseRef = "fresh"` and `autoMemoryEnabled = true`: drift-guards
   restating the upstream defaults (memory directory stays per-machine via
   `autoMemoryDirectory` in a consumer's `extraSettings`).
