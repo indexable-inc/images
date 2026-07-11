@@ -301,6 +301,10 @@ in {
       message = "users.andrewgazelka.packages.typenix must be set for the workstation profile.";
     }
     {
+      assertion = cfg.packages.noxLsp != null;
+      message = "users.andrewgazelka.packages.noxLsp must be set for the workstation profile.";
+    }
+    {
       assertion = cfg.paths.vscodeIslands != null;
       message = "users.andrewgazelka.paths.vscodeIslands must be set for the workstation profile.";
     }
@@ -651,6 +655,13 @@ in {
           exec ${cfg.packages.typenix}/bin/typenix --lsp --stdio "$@"
         '';
       })
+      # nox-lsp: Nix language server over the nox arena evaluator (nox
+      # docs/lsp.md) — eval-backed hovers/completions, embedded-language
+      # delegation, provenance jumps. Zed's Nix language points at it
+      # (config/zed/settings.nix); supplied host-native by the consuming
+      # flake like typenix above.
+      cfg.packages.noxLsp
+      bash-language-server # nox-lsp delegates embedded bash strings to it (must be on PATH)
       # Experimental: MLsub/SimpleSub type checker LSP for Nix (Nix-native).
       # https://github.com/JRMurr/tix — Cursor/Zed point at tix-lsp.
       # inputs.tix.packages.${pkgs.stdenv.hostPlatform.system}.default
