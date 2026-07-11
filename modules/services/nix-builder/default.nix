@@ -84,7 +84,9 @@ in {
         # unrelated volumes.
         volumes = lib.mkBefore [
           {
-            autoCreate = false;
+            # The runner creates a sparse image on first start; the guest
+            # formats it via fileSystems."/nix".autoFormat below.
+            autoCreate = true;
             image = cfg.storage.image;
             mountPoint = nixRoot;
             fsType = "xfs";

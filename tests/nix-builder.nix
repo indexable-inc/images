@@ -119,13 +119,13 @@
       assertion =
         builtins.head config.microvm.volumes
         == {
-          autoCreate = false;
+          autoCreate = true;
           fsType = "xfs";
           image = "cache.img";
           mountPoint = "/nix";
           size = 4096;
         };
-      message = "the module must declare the configured manual XFS volume";
+      message = "the module must declare the configured auto-created XFS volume";
     }
     {
       assertion = config.microvm.storeOnDisk && config.microvm.storeDiskType == "erofs";
