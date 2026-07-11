@@ -1,6 +1,7 @@
 # Full personal workstation profile. Index-owned dependencies are closed over
 # by the flake export; host-owned values arrive through typed options.nix.
 {
+  codexModule,
   configRoot,
   indexPackages,
   ix,
@@ -274,6 +275,12 @@ in {
   imports = [
     optionsModule
     personalServicesModule
+    # Declares `programs.codex.houseContext` (and the rest of the index codex
+    # options) that this profile sets below; home-manager's stock
+    # programs.codex module only carries enable/package/skills/context, so
+    # without this import the houseContext definitions fail eval (#2653
+    # regression).
+    codexModule
     # Per-generation provenance manifest: each HM generation carries
     # provenance.json mapping deployed files back to the nix file:line that
     # defined them; `whence <path>` (below) reads it with zero eval.
@@ -1070,6 +1077,12 @@ in {
     # AGENTS.md rides the module's default house context render plus the same
     # personal appendix Claude gets, so the two agents cannot drift.
     houseContext.extraText = personalContext;
+    # hooks.json stays owned by the manual home.file declaration below (from
+    # `codexBase.passthru.hooksJson`, matching the package on PATH). Without
+    # this the imported codex module also claims ~/.codex/hooks.json with
+    # `finalPackage.hooksJson`, and the two sources conflict as soon as any
+    # hook-affecting option diverges from the wrapper defaults.
+    installHooks = false;
   };
 
   # Both agents edit their own config at runtime, so neither file can be a
@@ -1123,7 +1136,8 @@ in {
     ''
   );
 
-  # Codex hooks (the one thing the programs.codex module above does NOT deliver;
+  # Codex hooks, delivered manually (the module's own delivery is switched off
+  # via `installHooks = false` above so this stays the single owner;
   # config.toml/AGENTS.md/skills rationale lives there). Rendered from the SAME
   # declaration list as Claude's, owned by the index repo
   # (packages/agent/hooks.nix) and exposed as the codex package's
