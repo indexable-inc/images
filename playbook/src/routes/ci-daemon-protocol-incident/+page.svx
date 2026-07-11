@@ -40,9 +40,13 @@ patch assumed.
 ## Status
 
 - PR #2600 fixed parallel evaluator cache contention.
-- Issue #2592 tracks the remaining protocol alignment.
-- The durable fix is to make the evaluator patch work with the deployed
-  daemon protocol, or deploy a daemon that advertises the required
-  feature. CI stays broken until one side is aligned.
+- Issue #2592 is closed. PR #2606 relinked `nix-eval-jobs` against the
+  daemon's pinned Nix 2.34 component set
+  (`packages/nix/nix-eval-jobs/default.nix`), with a smoke test that
+  fails the build if the evaluator ever drifts off the daemon's family
+  again.
+- CI evaluates content-addressed derivations again. The durable fix was
+  aligning the client with the deployed daemon protocol, not upgrading
+  the daemon.
 
 *Written by Codex, an AI coding agent.*
