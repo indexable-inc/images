@@ -139,11 +139,13 @@
         };
       };
       language_servers = [
-        # nox-lsp (nox docs/lsp.md): eval-backed Nix LSP. typenix stays
-        # installed behind the nixd slot below; revert by swapping this list.
-        "nox-lsp"
+        # nox-lsp (nox docs/lsp.md): eval-backed Nix LSP, run through the
+        # registered nil adapter slot (Zed's Nix extension only registers
+        # nil/nixd; an lsp entry alone can't add a new adapter). typenix
+        # stays installed behind the nixd slot below; revert by swapping
+        # this list.
+        "nil"
         "!nixd"
-        "!nil"
       ];
     };
     Nu = {
@@ -197,13 +199,8 @@
         };
       };
     };
-    nixd = {
-      binary = {
-        arguments = [];
-        path = "typenix-lsp";
-      };
-    };
-    nox-lsp = {
+    # nil adapter slot repointed at nox-lsp (see languages.Nix above).
+    nil = {
       binary = {
         arguments = [];
         path = "nox-lsp";
@@ -217,6 +214,12 @@
             ];
           };
         };
+      };
+    };
+    nixd = {
+      binary = {
+        arguments = [];
+        path = "typenix-lsp";
       };
     };
     rust-analyzer = {
