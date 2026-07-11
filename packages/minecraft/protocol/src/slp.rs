@@ -40,7 +40,7 @@ impl ServerAddress {
     ///
     /// [`io::ErrorKind::InvalidInput`] on an empty host or unparseable port.
     pub fn parse(address: &str) -> io::Result<Self> {
-        let (host, port) = split_host_port(address)?;
+        let HostPort { host, port } = split_host_port(address)?;
         if host.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -85,7 +85,15 @@ impl ServerAddress {
     }
 }
 
-fn split_host_port(address: &str) -> io::Result<(&str, u16)> {
+/// A `host[:port]` split, borrowing the host from the input. Named (rather
+/// than a bare tuple) to satisfy the workspace's
+/// `clippy::anonymous_tuple_return_type`.
+struct HostPort<'a> {
+    host: &'a str,
+    port: u16,
+}
+
+fn split_host_port(address: &str) -> io::Result<HostPort<'_>> {
     let parse_port = |raw: &str| {
         raw.parse::<u16>().map_err(|_| {
             io::Error::new(
@@ -112,13 +120,22 @@ fn split_host_port(address: &str) -> io::Result<(&str, u16)> {
                 ));
             }
         };
-        return Ok((host, port));
+        return Ok(HostPort { host, port });
     }
     match address.rsplit_once(':') {
         // More than one colon without brackets is a bare IPv6 address.
-        Some((host, _)) if host.contains(':') => Ok((address, DEFAULT_PORT)),
-        Some((host, raw_port)) => Ok((host, parse_port(raw_port)?)),
-        None => Ok((address, DEFAULT_PORT)),
+        Some((host, _)) if host.contains(':') => Ok(HostPort {
+            host: address,
+            port: DEFAULT_PORT,
+        }),
+        Some((host, raw_port)) => Ok(HostPort {
+            host,
+            port: parse_port(raw_port)?,
+        }),
+        None => Ok(HostPort {
+            host: address,
+            port: DEFAULT_PORT,
+        }),
     }
 }
 
