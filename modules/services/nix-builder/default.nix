@@ -71,6 +71,14 @@ in {
             == 1;
           message = "services.nix-builder must be the only microvm volume mounted at /nix";
         }
+        {
+          # microvm.nix folds share mounts over volume mounts, so a /nix share
+          # would silently replace the persistent XFS store.
+          assertion =
+            builtins.all (share: share.mountPoint != nixRoot && share.mountPoint != physicalStore)
+            (config.microvm.shares or []);
+          message = "services.nix-builder does not allow microvm shares mounted at /nix or /nix/store";
+        }
       ];
 
       microvm = {

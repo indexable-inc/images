@@ -44,6 +44,16 @@
         });
         default = [];
       };
+      shares = lib.mkOption {
+        type = lib.types.listOf (lib.types.submodule {
+          options = {
+            source = lib.mkOption {type = lib.types.str;};
+            mountPoint = lib.mkOption {type = lib.types.str;};
+            tag = lib.mkOption {type = lib.types.str;};
+          };
+        });
+        default = [];
+      };
     };
 
     config = lib.mkIf config.microvm.storeOnDisk {
@@ -61,7 +71,7 @@
     };
   };
 
-  eval = storage:
+  evalWith = extraModule: storage:
     (nixpkgs.lib.nixosSystem {
       system = pkgs.stdenv.hostPlatform.system;
       modules = [
@@ -86,8 +96,10 @@
           ];
           system.stateVersion = "26.05";
         }
+        extraModule
       ];
     }).config;
+  eval = evalWith {};
 
   config = eval {
     minFree = 1024;
@@ -97,6 +109,19 @@
     minFree = 4096;
     maxFree = 2048;
   };
+  invalidShare =
+    evalWith {
+      microvm.shares = [
+        {
+          source = "/var/lib/shared-nix";
+          mountPoint = "/nix";
+          tag = "nix";
+        }
+      ];
+    } {
+      minFree = 1024;
+      maxFree = 2048;
+    };
   missingMicrovm =
     (nixpkgs.lib.nixosSystem {
       system = pkgs.stdenv.hostPlatform.system;
@@ -199,6 +224,14 @@
     {
       assertion = lib.any (item: !item.assertion) invalidPressure.assertions;
       message = "invalid pressure GC thresholds must fail a NixOS assertion";
+    }
+    {
+      assertion =
+        lib.any (
+          item: !item.assertion && lib.hasInfix "shares mounted at /nix" item.message
+        )
+        invalidShare.assertions;
+      message = "a microvm share mounted at /nix must fail a NixOS assertion";
     }
     {
       assertion =
