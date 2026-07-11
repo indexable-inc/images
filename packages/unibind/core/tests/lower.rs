@@ -185,7 +185,7 @@ fn export_backends_parses_and_rejects() {
 
     let args: TokenStream = "backends(rb)".parse().expect("tokens");
     let error = unibind_core::export_backends(args).expect_err("unknown backend");
-    assert!(error.message.contains("expected `py` or `ts`"), "{}", error.message);
+    assert!(error.message.contains("expected `py`, `rs`, or `ts`"), "{}", error.message);
 
     let error = error_message(
         "mod m { pub fn go(#[unibind(backends(py))] value: bool) {} }",
