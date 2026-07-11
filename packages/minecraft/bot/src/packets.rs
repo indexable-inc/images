@@ -2,7 +2,7 @@
 //!
 //! Ids are per-state ordinals; these are transcribed from the packet
 //! registry of the pinned Minestom (net.minestom.server.network.packet
-//! .`PacketRegistry`, 2026.07.01-26.1.2 = protocol 775, the same pin as
+//! .`PacketRegistry`, Minecraft 26.2 = protocol 776, the same pin as
 //! packages/minecraft/minestom/servers/spleef). A protocol bump reshuffles
 //! them, so they live in one table here rather than scattered as literals.
 
@@ -128,10 +128,10 @@ mod tests {
 
     #[test]
     fn handshake_wire_format() {
-        let bytes = handshake(775, "localhost", 25565);
+        let bytes = handshake(776, "localhost", 25565);
         let mut expected = vec![
             0x00, // packet id
-            0x87, 0x06, // protocol 775
+            0x88, 0x06, // protocol 776
             9,    // host length
         ];
         expected.extend_from_slice(b"localhost");

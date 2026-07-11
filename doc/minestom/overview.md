@@ -61,10 +61,10 @@ main class):
 
 - `application` + `java` plugins; main class `dev.ix.minestom.spleef.Main`
   (`build.gradle.kts:21`).
-- Dependencies: `net.minestom:minestom:2026.07.01-26.1.2` and
+- Dependencies: `net.minestom:minestom:master-20260710.231954-25` and
   `ch.qos.logback:logback-classic:1.5.38` (`build.gradle.kts:9`). The Minestom
-  version string encodes the targeted Minecraft protocol (`26.1.2`); hello
-  still pins `2026.04.13-1.21.11`.
+  The timestamped snapshot is byte-pinned to Minestom's Minecraft `26.2`
+  support while its stable Maven Central release still targets `26.1.2`.
 - Java toolchain 25, `options.release = 25` (`build.gradle.kts:14`).
 - `dependencyLocking { lockAllConfigurations() }` (`build.gradle.kts:24`) and the
   `jar` task assembles a fat jar by zipping the runtime classpath

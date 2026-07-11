@@ -7,8 +7,8 @@ group = "dev.ix"
 version = "0.1.0"
 
 dependencies {
-    implementation("net.minestom:minestom:2026.04.13-1.21.11")
-    implementation("ch.qos.logback:logback-classic:1.5.32")
+    implementation(libs.minestom)
+    implementation(libs.logback.classic)
 }
 
 java {
@@ -23,6 +23,7 @@ application {
 
 dependencyLocking {
     lockAllConfigurations()
+    ignoredDependencies.add("net.minestom:minestom")
 }
 
 tasks.withType<JavaCompile>().configureEach {

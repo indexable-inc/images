@@ -130,7 +130,7 @@ pub const DEFAULT_PORT: u16 = 25565;
 pub struct SlpStatus {
     /// Display name of the server version, e.g. `"1.21.11"`.
     pub version_name: String,
-    /// Numeric protocol version, e.g. 775 for Minecraft 26.1.2.
+    /// Numeric protocol version, e.g. 776 for Minecraft 26.2.
     pub protocol_version: i32,
     pub players_online: i64,
     pub players_max: i64,
@@ -321,7 +321,7 @@ mod tests {
     }
 
     const VANILLA_STATUS: &str = r#"{
-        "version": {"name": "26.1.2", "protocol": 775},
+        "version": {"name": "26.2", "protocol": 776},
         "players": {"online": 3, "max": 20},
         "description": "§6Spleef§r arena"
     }"#;
@@ -330,8 +330,8 @@ mod tests {
     fn parses_vanilla_status() {
         let status =
             SlpStatus::from_status_json(VANILLA_STATUS, Duration::ZERO).expect("parse");
-        assert_eq!(status.version_name, "26.1.2");
-        assert_eq!(status.protocol_version, 775);
+        assert_eq!(status.version_name, "26.2");
+        assert_eq!(status.protocol_version, 776);
         assert_eq!(status.players_online, 3);
         assert_eq!(status.players_max, 20);
         assert_eq!(status.motd, "\u{a7}6Spleef\u{a7}r arena");
@@ -407,8 +407,8 @@ mod tests {
         let status = query(&address, Duration::from_secs(5)).expect("query");
         server.join().expect("server thread").expect("server io");
 
-        assert_eq!(status.version_name, "26.1.2");
-        assert_eq!(status.protocol_version, 775);
+        assert_eq!(status.version_name, "26.2");
+        assert_eq!(status.protocol_version, 776);
         assert_eq!(status.players_online, 3);
         assert_eq!(status.players_max, 20);
         assert_eq!(

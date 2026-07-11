@@ -147,6 +147,11 @@
           '^packages/minecraft/minestom/servers/[^/]+/gradle\.properties$'
           '^packages/minecraft/minestom/servers/[^/]+/gradle/verification-metadata\.xml$'
           '^packages/minecraft/minestom/servers/[^/]+/src/main/resources/logback\.xml$'
+          # Gradle owns these root-build names; the catalog and verification
+          # metadata are generated inputs shared by the Minestom subprojects.
+          '^packages/minecraft/minestom/gradle\.properties$'
+          '^packages/minecraft/minestom/gradle/libs\.versions\.toml$'
+          '^packages/minecraft/minestom/gradle/verification-metadata\.xml$'
 
           # Generated manifests, locks, editor settings, and typed data.
           '(^|/)(package|tsconfig)\.json$'

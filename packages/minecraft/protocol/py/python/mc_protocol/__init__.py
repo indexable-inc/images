@@ -7,7 +7,7 @@ checks (mc-probe) and integration tests::
     import mc_protocol
 
     s = mc_protocol.status("localhost:25565", timeout_seconds=5.0)
-    print(s.version_name, s.protocol_version)      # "26.1.2" 775
+    print(s.version_name, s.protocol_version)      # "26.2" 776
     print(s.players_online, s.players_max)         # 0 16
     print(mc_protocol.strip_format_codes(s.motd))  # codes removed
     print(s.latency_seconds)                       # ping/pong round-trip

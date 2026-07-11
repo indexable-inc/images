@@ -24,9 +24,9 @@ use zip::write::{SimpleFileOptions, ZipWriter};
 pub struct ReplayInfo {
     /// `host:port` the session was recorded from.
     pub server_name: String,
-    /// Display name of the Minecraft version, e.g. `"26.1.2"`.
+    /// Display name of the Minecraft version, e.g. `"26.2"`.
     pub mc_version: String,
-    /// Numeric protocol version, e.g. 775. Mandatory since file format 13.
+    /// Numeric protocol version, e.g. 776. Mandatory since file format 13.
     pub protocol_version: i32,
 }
 
@@ -157,8 +157,8 @@ mod tests {
         let path = dir.path().join("session.mcpr");
         let info = ReplayInfo {
             server_name: "127.0.0.1:25565".to_owned(),
-            mc_version: "26.1.2".to_owned(),
-            protocol_version: 775,
+            mc_version: "26.2".to_owned(),
+            protocol_version: 776,
         };
         recorder.write(&path, &info).expect("write");
 
@@ -167,8 +167,8 @@ mod tests {
             serde_json::from_slice(&read_entry(&mut archive, "metaData.json")).expect("json");
         assert_eq!(meta["fileFormat"], "MCPR");
         assert_eq!(meta["fileFormatVersion"], 14);
-        assert_eq!(meta["protocol"], 775);
-        assert_eq!(meta["mcversion"], "26.1.2");
+        assert_eq!(meta["protocol"], 776);
+        assert_eq!(meta["mcversion"], "26.2");
         assert_eq!(meta["serverName"], "127.0.0.1:25565");
 
         let stream = read_entry(&mut archive, "recording.tmcpr");

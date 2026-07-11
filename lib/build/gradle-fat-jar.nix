@@ -9,6 +9,7 @@ network-isolated. The selected Gradle task runs in offline mode.
 Arguments:
 - `pname`, `version`, `src`: derivation identity and source.
 - `verificationMetadata`: path to the Gradle verification XML.
+- `mavenSnapshotRepository`: repository that owns timestamped Maven snapshots.
 - `javaPackage`, `gradle`: toolchain packages.
 - `gradleBuildTask`, `gradleCheckTask`, `gradleFlags`: build invocation.
 - `jarPath`: relative path of the produced jar inside the source tree.
@@ -22,6 +23,7 @@ Arguments:
   version,
   src,
   verificationMetadata,
+  mavenSnapshotRepository ? "https://central.sonatype.com/repository/maven-snapshots",
   javaPackage ? pkgs.jdk25,
   gradle ? pkgs.gradle_9,
   gradleBuildTask ? "jar",
@@ -41,6 +43,7 @@ Arguments:
     "version"
     "src"
     "verificationMetadata"
+    "mavenSnapshotRepository"
     "javaPackage"
     "gradle"
     "gradleBuildTask"
@@ -142,9 +145,19 @@ Arguments:
     version,
     file,
     ...
-  }: "https://repo.maven.apache.org/maven2/${
+  }: let
+    timestampedSnapshot = builtins.match ''(.*)-[0-9]{8}\.[0-9]{6}-[0-9]+'' version;
+    repository =
+      if timestampedSnapshot == null
+      then "https://repo.maven.apache.org/maven2"
+      else mavenSnapshotRepository;
+    repositoryVersion =
+      if timestampedSnapshot == null
+      then version
+      else "${builtins.head timestampedSnapshot}-SNAPSHOT";
+  in "${lib.removeSuffix "/" repository}/${
     lib.replaceStrings ["."] ["/"] group
-  }/${name}/${version}/${file}";
+  }/${name}/${repositoryVersion}/${file}";
 
   fetchedArtifacts =
     map (
