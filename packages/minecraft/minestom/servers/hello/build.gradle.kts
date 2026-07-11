@@ -6,9 +6,13 @@ plugins {
 group = "dev.ix"
 version = "0.1.0"
 
+base {
+    archivesName = "minestom-hello"
+}
+
 dependencies {
-    implementation("net.minestom:minestom:2026.04.13-1.21.11")
-    implementation("ch.qos.logback:logback-classic:1.5.32")
+    implementation(libs.minestom)
+    implementation(libs.logback.classic)
 }
 
 java {
@@ -19,10 +23,6 @@ java {
 
 application {
     mainClass = "dev.ix.minestom.Main"
-}
-
-dependencyLocking {
-    lockAllConfigurations()
 }
 
 tasks.withType<JavaCompile>().configureEach {

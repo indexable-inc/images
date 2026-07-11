@@ -1,0 +1,18 @@
+[package]
+name = "mc-protocol-py"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Python bindings for mc-protocol: Minecraft Server List Ping and format-code stripping"
+
+[lib]
+name = "mc_protocol_py"
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+mc-protocol.workspace = true
+pyo3 = { workspace = true, features = ["extension-module"] }
+unibind = { workspace = true, features = ["py"] }

@@ -3,7 +3,7 @@ name: Fuzz minecraft-nbt
 on:
   pull_request:
     paths:
-      - "packages/minecraft/minecraft/nbt/**"
+      - "packages/minecraft/nbt/**"
       - ".github/workflows/fuzz-nbt.yml"
       - "rust-toolchain.toml"
       - "Cargo.toml"
@@ -31,7 +31,7 @@ jobs:
         run: cargo install cargo-fuzz --version 0.13.1
 
       - name: Fuzz decode_document for 60 seconds
-        working-directory: packages/minecraft/minecraft/nbt/fuzz
+        working-directory: packages/minecraft/nbt/fuzz
         run: |
           cargo fetch --locked
           mkdir -p corpus/decode_document

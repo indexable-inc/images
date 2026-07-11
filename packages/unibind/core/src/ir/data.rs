@@ -67,6 +67,12 @@ pub struct ErrorType {
     /// Python base exception from `py(base = "...")`; `None` means
     /// `Exception`.
     pub py_base: Option<String>,
+    /// Java base exception from `jvm(base = "...")`; `None` means
+    /// `RuntimeException`. Additive to the serialized layout: absent in
+    /// older IR payloads (and skipped when unset), so readers on either
+    /// side of the change agree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jvm_base: Option<String>,
     /// Variants in declaration order, each an exception subclass.
     pub variants: Vec<ErrorVariant>,
 }
