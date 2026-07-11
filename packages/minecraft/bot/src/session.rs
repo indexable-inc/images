@@ -64,11 +64,19 @@ pub fn run(address: &ServerAddress, config: &Config, recorder: &mut Recorder) ->
     Ok(())
 }
 
+/// A logical packet split into its `VarInt` id and body. Named (rather than
+/// a bare tuple) to satisfy the workspace's
+/// `clippy::anonymous_tuple_return_type`.
+struct SplitPacket<'a> {
+    id: i32,
+    body: &'a [u8],
+}
+
 /// Splits a logical packet into its `VarInt` id and body.
-fn split_id(packet: &[u8]) -> io::Result<(i32, &[u8])> {
+fn split_id(packet: &[u8]) -> io::Result<SplitPacket<'_>> {
     let mut cursor = packet;
     let id = read_varint(&mut cursor)?;
-    Ok((id, cursor))
+    Ok(SplitPacket { id, body: cursor })
 }
 
 /// Drives the login state until `LoginSuccess` is acknowledged. Recording
@@ -81,7 +89,7 @@ fn login(framed: &mut Framed<TcpStream>, recorder: &mut Recorder) -> anyhow::Res
     use clientbound::login as cb;
     loop {
         let packet = framed.recv()?;
-        let (id, mut body) = split_id(&packet)?;
+        let SplitPacket { id, mut body } = split_id(&packet)?;
         match id {
             cb::SET_COMPRESSION => {
                 let threshold = read_varint(&mut body)?;
@@ -121,7 +129,7 @@ fn configure(framed: &mut Framed<TcpStream>, recorder: &mut Recorder) -> anyhow:
     loop {
         let packet = framed.recv()?;
         recorder.record(&packet);
-        let (id, body) = split_id(&packet)?;
+        let SplitPacket { id, body } = split_id(&packet)?;
         match id {
             cb::SELECT_KNOWN_PACKS => framed.send(&packets::select_known_packs_none())?,
             cb::KEEP_ALIVE => framed.send(&packets::packet(serverbound::config::KEEP_ALIVE, body))?,
@@ -168,7 +176,7 @@ fn play(
             Err(err) => return Err(err.into()),
         };
         recorder.record(&packet);
-        let (id, body) = split_id(&packet)?;
+        let SplitPacket { id, body } = split_id(&packet)?;
         match id {
             cb::KEEP_ALIVE => framed.send(&packets::packet(serverbound::play::KEEP_ALIVE, body))?,
             cb::PING => framed.send(&packets::packet(serverbound::play::PONG, body))?,
