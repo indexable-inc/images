@@ -103,7 +103,7 @@ in
           "${mcBot} 127.0.0.1:25565 --protocol-version 776 --mc-version 26.2"
           + " --record-seconds 8 --timeout 30 --output /tmp/spleef.mcpr"
       )
-      server.copy_from_vm("/tmp/spleef.mcpr")
+      server.copy_from_machine("/tmp/spleef.mcpr")
 
       server.shutdown()
     '';
