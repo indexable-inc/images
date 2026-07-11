@@ -119,6 +119,12 @@ def test_validate_expects_rejects_unknown_id() -> None:
     assert "typo_id" in str(error)
 
 
+def test_behavior_ids_are_unique() -> None:
+    """Guards the actual catalog: a duplicate id would let one rubric shadow another."""
+    ids = [b.id for b in load_behaviors()]
+    assert len(ids) == len(set(ids)), f"duplicate behavior id in behaviors.jsonl: {ids}"
+
+
 def test_committed_tasks_expect_only_cataloged_behaviors() -> None:
     """Guards the actual datasets: a bad id here would silently score wrong."""
     validate_expects(load_tasks(), load_behaviors())  # must not raise

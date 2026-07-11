@@ -280,6 +280,32 @@
     };
   }
   {
+    testsDefault = {
+      text = ''
+        Make tests a default part of every substantive code change, not an
+        afterthought someone has to request: writing the test is part of the
+        change. When you add or change behavior (a new function, a bug fix, a
+        changed contract), add or extend an automated test that fails before
+        your change and passes after, and actually run it to watch that
+        red-to-green transition rather than assuming it: a regression test that
+        encodes the reproduced failure for a bug, or a unit, property, or
+        integration test for new behavior. Wire it where this repo already runs
+        tests (a Rust `#[test]` / `cargo nextest` case, a Python check the
+        build exercises, a Nix `passthru.tests.<name>` / flake `check`) so it
+        keeps running. Test behavior across a real boundary, never restate a
+        constant against itself (see the `tests` skill), and never delete or
+        weaken a test just to make CI pass. A substantive change that ships no
+        test needs an explicit reason in the PR; skip only genuinely untestable
+        or throwaway edits (pure docs, comments, formatting, a pure rename).
+      '';
+      reason = ''
+        Agents in this repo under-wrote tests, treating a test as an
+        afterthought someone has to ask for (index#1417); changes landed with
+        no behavior-defending test unless explicitly requested.
+      '';
+    };
+  }
+  {
     promptEval = {
       text = ''
         After editing a prompt or instruction, render or parse it and reread the
