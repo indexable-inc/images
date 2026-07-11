@@ -3222,7 +3222,7 @@
     print("rich-ok")
   '';
   # Proves the yielding-cell behavior end to end: a cell that `yield`s streams
-  # every yielded value to the job display stream and to the model (to_mcp),
+  # every yielded value to the persisted output stream and to the model (to_mcp),
   # keeps its top-level names in the namespace like a normal cell, and a
   # non-Result yield renders through Result.of. A plain (non-yielding) cell is
   # unchanged. In process (a shell, the store), no kernel boot or network, so
@@ -3241,7 +3241,23 @@
     os.environ["IX_MCP_STORE"] = store_path
     os.environ["WEAVE_URL"] = "off"
 
-    from ix_notebook_mcp import outputs, runtime
+    from ix_notebook_mcp import outputs, runtime, store as store_mod
+
+    # Assert against the persisted output stream, not the in-memory job state:
+    # capture what _persist_final hands to store.finish, and only after the
+    # real finish succeeds (it suppresses store exceptions, so recording first
+    # would mask a persistence regression).
+    persisted = {}
+    original_finish = store_mod.finish
+
+
+    def capture_finish(conn, **kwargs):
+        result = original_finish(conn, **kwargs)
+        persisted[kwargs["id"]] = kwargs
+        return result
+
+
+    store_mod.finish = capture_finish
 
     ns = {}
     runtime.install(ns)
@@ -3261,7 +3277,7 @@
         await job.task
         assert job.status == "done", (job.status, job.error)
         assert ns["acc"] == 3, ns.get("acc")
-        outs = job._displays
+        outs = persisted[job.id]["outputs"]
         htmls = [o["data"].get("text/html") for o in outs if "text/html" in o["data"]]
         assert len(htmls) == 4, ("expected 4 yielded results", len(htmls), outs)
 
@@ -3278,7 +3294,7 @@
         bare = await run("yield 123", budget=3.0, name="bare")
         await bare.task
         assert bare.status == "done", (bare.status, bare.error)
-        bare_outs = bare._displays
+        bare_outs = persisted[bare.id]["outputs"]
         bare_mcp = outputs.to_mcp(
             [{"output_type": "display_data", "data": o["data"], "metadata": {}} for o in bare_outs]
         )
