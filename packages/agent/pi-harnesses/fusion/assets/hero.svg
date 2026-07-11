@@ -28,7 +28,7 @@
   <text x="289" y="42" text-anchor="middle" font-size="11" class="muted">delegate(task)</text>
 
   <rect class="box" x="390" y="28" width="210" height="64" rx="8"/>
-  <text x="495" y="54" text-anchor="middle" font-size="13" font-weight="600">sidekick · gpt-5.5 low</text>
+  <text x="495" y="54" text-anchor="middle" font-size="13" font-weight="600">sidekick · gpt-5.6-sol low</text>
   <text x="495" y="74" text-anchor="middle" font-size="11" class="muted">headless, isolated worktree</text>
 
   <line class="edge" x1="390" y1="112" x2="192" y2="106"/>
