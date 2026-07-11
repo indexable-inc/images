@@ -200,7 +200,7 @@
   codexSettings = {
     check_for_update_on_startup = false;
     bypass_hook_trust = true;
-    model = "gpt-5.5";
+    model = "gpt-5.6-sol";
     model_reasoning_effort = "low";
     personality = "pragmatic";
     service_tier = "fast";
