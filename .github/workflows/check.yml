@@ -83,6 +83,10 @@ jobs:
       # in the checkout so a PR cannot add duplication while staying under the
       # repository-wide percentage ratchet.
       - name: Reject duplication on changed lines
+        # Warm runs finish in minutes; the only way this step reaches double
+        # digits is a wedged nix daemon (index#2750 ate the whole 60-minute job
+        # limit across every PR). Fail fast and loudly instead.
+        timeout-minutes: 15
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
         run: |
