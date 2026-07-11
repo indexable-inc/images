@@ -74,6 +74,14 @@
     // optionalOverride (cfg.systemPrompt.source == "house") "omitRules" cfg.systemPrompt.omitRules;
   finalPackage = cfg.basePackage.override packageOverrides;
 in {
+  # Stable module-system identity: this module is anonymous (imported as a
+  # value, not a path), and it reaches configs through two routes — the
+  # `homeModules.codex` flake export and the workstation profile's nested
+  # import. Without a key, the module system assigns each route a distinct
+  # fallback key and then rejects the doubled `programs.codex.*` option
+  # declarations; with one, the copies deduplicate.
+  key = "indexable-inc/index#homeModules.codex";
+
   options.programs.codex = {
     basePackage = lib.mkOption {
       type = lib.types.package;
