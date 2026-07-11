@@ -40,11 +40,11 @@ while the dashboard pane shows the tree growing live as it builds.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import html as _html
 import json as _json
 import os
 import re
+import signal
 import time
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
@@ -99,6 +99,83 @@ RESULT_TYPES = {
 }
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+async def _defer_cancellation[T](task: asyncio.Task[T]) -> T:
+    """Await ``task`` while deferring cancellation of the current task."""
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue
+    return task.result()
+
+
+def _kill_group(proc: asyncio.subprocess.Process) -> None:
+    """Kill the isolated process group led by ``proc``.
+
+    Every process this module owns starts a new session, so the stable group id
+    is the direct child's pid even if that child has already exited while one of
+    its descendants still holds a captured pipe open.
+    """
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        if proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            except PermissionError as exc:
+                raise RuntimeError(f"could not kill nix process {proc.pid}: {exc}") from exc
+    except PermissionError as exc:
+        raise RuntimeError(f"could not kill nix process group {proc.pid}: {exc}") from exc
+
+
+async def _kill_and_reap(proc: asyncio.subprocess.Process) -> int:
+    _kill_group(proc)
+    # communicate() drains captured pipes as it waits. A cancelled reader may
+    # have paused its transport at the high-water mark, in which case wait()
+    # alone cannot observe the subprocess transport closing even after SIGKILL.
+    await _defer_cancellation(asyncio.create_task(proc.communicate()))
+    if proc.returncode is None:
+        raise RuntimeError(f"nix process group {proc.pid} survived SIGKILL")
+    return proc.returncode
+
+
+async def _spawn(
+    *argv: str,
+    cwd: str | None,
+    stderr: int | None,
+) -> asyncio.subprocess.Process:
+    pending = asyncio.create_task(
+        asyncio.create_subprocess_exec(
+            *argv,
+            cwd=cwd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=stderr,
+            start_new_session=True,
+        )
+    )
+    try:
+        return await asyncio.shield(pending)
+    except asyncio.CancelledError:
+        # Process creation can yield after fork but before returning the handle.
+        # Recover that handle before propagating cancellation, then own its tree.
+        proc = await _defer_cancellation(pending)
+        await _kill_and_reap(proc)
+        raise
+
+
+async def _communicate(proc: asyncio.subprocess.Process) -> tuple[bytes, bytes]:
+    try:
+        out, err = await proc.communicate()
+    except BaseException:
+        await _kill_and_reap(proc)
+        raise
+    assert out is not None
+    assert err is not None
+    return out, err
 
 # Stable schema so `.events` is a well-typed frame even with zero rows.
 _EVENT_SCHEMA = {
@@ -542,14 +619,13 @@ async def run(
     """
     run_state = BuildRun(label=label or (args[1] if len(args) > 1 else args[0] if args else "nix"))
     try:
-        proc = await asyncio.create_subprocess_exec(
+        proc = await _spawn(
             _nix_web_monitor_bin(),
             "--emit",
             "ndjson",
             "--",
             *args,
             cwd=cwd,
-            stdout=asyncio.subprocess.PIPE,
             # The emitter routes nix's own stdout to its stderr; keep it out of our
             # NDJSON parse by draining it to the parent's stderr (not merged into
             # stdout, which carries the BuildView lines).
@@ -572,8 +648,8 @@ async def run(
     assert proc.stdout is not None
     # Read raw chunks and split on newlines ourselves: a build-log line folded
     # into a BuildView can exceed asyncio's default 64 KiB StreamReader limit,
-    # which would make `readline` raise and abort mid-stream. `finally` reaps the
-    # process and lets the live resource self-close (`alive` keys off `done`).
+    # which would make `readline` raise and abort mid-stream. The protected wait
+    # below reaps the process before `done` lets the live resource self-close.
     buf = b""
     try:
         while True:
@@ -586,15 +662,13 @@ async def run(
                 run_state.feed(line.decode(errors="replace"))
         if buf:
             run_state.feed(buf.decode(errors="replace"))
-    finally:
-        # On cancellation (or any early exit) the child must be signaled, not just
-        # awaited: a bare `await proc.wait()` would let a cancelled build keep
-        # running to completion while this coroutine parks in the finally. Kill it
-        # if it has not already exited, then reap.
-        if proc.returncode is None:
-            with contextlib.suppress(ProcessLookupError):
-                proc.terminate()
         run_state.returncode = await proc.wait()
+    except BaseException:
+        # The monitor owns the nix child beneath it. Kill their isolated group so
+        # cancellation cannot reap only the monitor and orphan the real build.
+        run_state.returncode = await _kill_and_reap(proc)
+        raise
+    finally:
         run_state.done = True
     return run_state
 
@@ -674,7 +748,7 @@ async def attrs(flake: str = ".", *, system: str | None = None, cwd: str | None 
     sub-attributes.
     """
     system = system or _current_system()
-    proc = await asyncio.create_subprocess_exec(
+    proc = await _spawn(
         "nix",
         "flake",
         "show",
@@ -682,10 +756,9 @@ async def attrs(flake: str = ".", *, system: str | None = None, cwd: str | None 
         "--no-warn-dirty",
         flake,
         cwd=cwd,
-        stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    out, err = await proc.communicate()
+    out, err = await _communicate(proc)
     if proc.returncode != 0:
         raise RuntimeError(f"nix flake show failed: {err.decode('utf-8', 'replace').strip()}")
     return pl.DataFrame(
@@ -741,14 +814,13 @@ async def eval(
     exit with nix's own stderr.
     """
     args = _eval_args(installable, apply=apply, system=system, raw=raw)
-    proc = await asyncio.create_subprocess_exec(
+    proc = await _spawn(
         "nix",
         *args,
         cwd=cwd,
-        stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    out, err = await proc.communicate()
+    out, err = await _communicate(proc)
     if proc.returncode != 0:
         raise RuntimeError(f"nix eval failed: {err.decode('utf-8', 'replace').strip()}")
     text = out.decode("utf-8", "replace")
