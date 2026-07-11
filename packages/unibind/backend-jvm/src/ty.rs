@@ -61,9 +61,17 @@ pub fn write_record_ident(record_name: &str) -> Ident {
     format_ident!("__write_{}", record_name.to_snake_case())
 }
 
+/// A `Reader`/`Writer` method pair moving one integer kind. Named (rather
+/// than a bare tuple) to satisfy the workspace's
+/// `clippy::anonymous_tuple_return_type`.
+struct IntMethods {
+    read: &'static str,
+    write: &'static str,
+}
+
 /// The `Reader`/`Writer` method pair moving one integer kind.
-const fn int_methods(kind: ir::IntKind) -> (&'static str, &'static str) {
-    match kind {
+const fn int_methods(kind: ir::IntKind) -> IntMethods {
+    let (read, write) = match kind {
         ir::IntKind::I8 => ("read_i8", "write_i8"),
         ir::IntKind::I16 => ("read_i16", "write_i16"),
         ir::IntKind::I32 => ("read_i32", "write_i32"),
@@ -74,17 +82,18 @@ const fn int_methods(kind: ir::IntKind) -> (&'static str, &'static str) {
         ir::IntKind::U32 => ("read_u32", "write_u32"),
         ir::IntKind::U64 => ("read_u64", "write_u64"),
         ir::IntKind::Usize => ("read_usize", "write_usize"),
-    }
+    };
+    IntMethods { read, write }
 }
 
 /// The `Reader` method decoding one integer kind.
 const fn read_int_method(kind: ir::IntKind) -> &'static str {
-    int_methods(kind).0
+    int_methods(kind).read
 }
 
 /// The `Writer` method encoding one integer kind.
 const fn write_int_method(kind: ir::IntKind) -> &'static str {
-    int_methods(kind).1
+    int_methods(kind).write
 }
 
 /// An expression decoding one value of `ty` from `reader`, spelled at the
