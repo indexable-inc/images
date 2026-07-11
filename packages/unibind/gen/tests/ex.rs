@@ -12,9 +12,8 @@ use unibind_test_support::assert_snapshot;
 
 fn names(ex: Option<&str>) -> ir::Names {
     ir::Names {
-        py: None,
-        ts: None,
         ex: ex.map(str::to_owned),
+        ..ir::Names::default()
     }
 }
 
@@ -145,6 +144,7 @@ fn sample_interface() -> ir::Interface {
         names: names(Some("SampleFault")),
         docs: docs(&["Boundary failures."]),
         py_base: None,
+        jvm_base: None,
         variants: vec![
             ir::ErrorVariant {
                 name: "StoreGone".to_owned(),

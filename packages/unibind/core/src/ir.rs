@@ -44,7 +44,8 @@ pub struct Interface {
 }
 
 /// Per-language name overrides, from `#[unibind(py(name = "..."))]`,
-/// `#[unibind(ts(name = "..."))]`, and `#[unibind(ex(name = "..."))]`.
+/// `#[unibind(ts(name = "..."))]`, `#[unibind(ex(name = "..."))]`, and
+/// `#[unibind(jvm(name = "..."))]`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Names {
     /// Python name override.
@@ -58,6 +59,9 @@ pub struct Names {
     /// side of the change agree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ex: Option<String>,
+    /// JVM name override. Additive to the serialized layout, like `ex`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jvm: Option<String>,
 }
 
 /// How a function suspends.
