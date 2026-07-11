@@ -91,7 +91,8 @@ impl BlobStore {
         self.dir.join(hash.to_string())
     }
 
-    /// Store `bytes`, returning their content address. Idempotent.
+    /// Store `bytes`, returning their content address. Idempotent, and the
+    /// atomic rewrite repairs a corrupt or partial file of the same name.
     ///
     /// # Errors
     ///
@@ -99,9 +100,6 @@ impl BlobStore {
     pub fn put(&self, bytes: &[u8]) -> io::Result<BlobHash> {
         let hash = BlobHash::of(bytes);
         let path = self.path_of(&hash);
-        if path.exists() {
-            return Ok(hash);
-        }
         let tmp = self.dir.join(format!("{hash}.tmp"));
         fs::write(&tmp, bytes)?;
         fs::rename(&tmp, &path)?;
@@ -130,10 +128,12 @@ impl BlobStore {
         }
     }
 
-    /// Whether the store currently holds `hash`.
+    /// Whether the store currently holds a *valid* blob for `hash`. A
+    /// corrupt or partial file does not count, so callers keep fetching (or
+    /// re-`put`ting) until the verified bytes are on disk.
     #[must_use]
     pub fn contains(&self, hash: &BlobHash) -> bool {
-        self.path_of(hash).exists()
+        matches!(self.get(hash), Ok(Some(_)))
     }
 }
 
@@ -170,6 +170,11 @@ mod tests {
         let hash = store.put(b"good bytes").expect("put");
         std::fs::write(dir.path().join(hash.to_string()), b"tampered").expect("tamper");
         assert!(store.get(&hash).is_err());
+        // A corrupt file is not "present", and a re-put repairs it.
+        assert!(!store.contains(&hash));
+        assert_eq!(store.put(b"good bytes").expect("re-put"), hash);
+        assert!(store.contains(&hash));
+        assert_eq!(store.get(&hash).expect("get"), Some(b"good bytes".to_vec()));
     }
 
     #[test]
