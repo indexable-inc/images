@@ -39,6 +39,16 @@ check); the advisory lane is a local `make quality` run. Sobelow, deps.audit,
 Dialyzer, and coveralls all want network access or large mutable caches, so a
 sandboxed derivation is a bad fit for them today.
 
+Build the required lane explicitly from the repository root:
+
+```sh
+nix build .#checks.x86_64-linux.symphony-elixir --no-link -L
+```
+
+The canonical flake-check attribute is under `checks.x86_64-linux`, regardless
+of the caller's host system. Building it from another system requires access to
+an `x86_64-linux` builder.
+
 ## Phased rollout
 
 The gate ships in two phases so it never blocks PRs while the codebase is still
