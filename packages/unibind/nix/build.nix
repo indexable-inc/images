@@ -23,10 +23,15 @@
     inherit lib pkgs packageRegistry rustWorkspace;
   };
 
+  buildJvm = import ./jvm.nix {
+    inherit lib pkgs rustWorkspace;
+  };
+
   supportedTargets = [
     "py"
     "ts"
     "ex"
+    "jvm"
   ];
 in {
   /**
@@ -41,15 +46,19 @@ in {
     packages/unibind/conformance-ex/build.rs).
   - `targets.<language>`: selects and configures each language target: `py`
     (see [./py.nix](./py.nix) for its arguments), `ts` (see
-    [./ts.nix](./ts.nix)), and `ex` (see [./ex.nix](./ex.nix)).
+    [./ts.nix](./ts.nix)), `ex` (see [./ex.nix](./ex.nix)), and `jvm` (see
+    [./jvm.nix](./jvm.nix)).
 
   Returns one attrset per requested target; `py` is
   `{ wheel; module; pythonSite; library; tests.pyStrict; }` (`wheel` is
   Linux-only and throws when forced on darwin), `ts` is `{ npm; library; }`
-  (`npm` is Linux-only, same policy as the wheel), and `ex` is
+  (`npm` is Linux-only, same policy as the wheel), `ex` is
   `{ mixPackage; generated; library; soname; }` (`mixPackage` is the
   mix-importable tree: generated `lib/`, `priv/native/<soname>`, and the
-  caller's mix project overlaid).
+  caller's mix project overlaid), and `jvm` is
+  `{ jvmPackage; generated; library; libraryKey; soname; }` (`jvmPackage`
+  is the compilable tree: generated + hand-written sources under `java/`
+  and the native library under `native/<soname>`).
   */
   build = {
     crate,
@@ -68,5 +77,8 @@ in {
       }
       // lib.optionalAttrs (targets ? ex) {
         ex = buildEx ({inherit crate;} // targets.ex);
+      }
+      // lib.optionalAttrs (targets ? jvm) {
+        jvm = buildJvm ({inherit crate;} // targets.jvm);
       };
 }
