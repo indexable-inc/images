@@ -68,6 +68,7 @@ jobs:
           private-key: ${{ secrets.app-private-key }}
 
       - name: Update flake.lock
+        id: update
         uses: DeterminateSystems/update-flake-lock@834c491b2ece4de0bbd00d85214bb5e83b4da5c6 # v28
         with:
           base: main
@@ -78,3 +79,20 @@ jobs:
           # scopes this to avoid fetching private inputs it can't auth for.
           inputs: ${{ inputs.flake-inputs }}
           token: ${{ steps.app-token.outputs.token || github.token }}
+
+      # Arm native auto-merge so the PR lands the moment its only required
+      # check (`flake-check`) passes; the non-required `approve` red X never
+      # blocks. Squash is the only merge method main's ruleset allows. Uses
+      # the same token identity that opened the PR, and a failure here fails
+      # the run: no silent fall-through to manual merge. Gated to index's own
+      # runs: in a reusable workflow `github.repository` is the CALLER's repo,
+      # so a cross-repo caller (ix) keeps its own merge policy.
+      - name: Enable auto-merge
+        if: >-
+          github.repository == 'indexable-inc/index' &&
+          (steps.update.outputs.pull-request-operation == 'created' ||
+           steps.update.outputs.pull-request-operation == 'updated')
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          PR_URL: ${{ steps.update.outputs.pull-request-url }}
+        run: gh pr merge --auto --squash "$PR_URL"
