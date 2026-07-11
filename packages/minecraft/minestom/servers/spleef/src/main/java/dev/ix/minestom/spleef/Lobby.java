@@ -1,0 +1,115 @@
+package dev.ix.minestom.spleef;
+
+import java.time.Duration;
+import net.kyori.adventure.bossbar.BossBar;
+import net.kyori.adventure.sound.Sound;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.title.Title;
+import net.minestom.server.MinecraftServer;
+import net.minestom.server.coordinate.Point;
+import net.minestom.server.coordinate.Pos;
+import net.minestom.server.entity.GameMode;
+import net.minestom.server.entity.Player;
+import net.minestom.server.event.instance.AddEntityToInstanceEvent;
+import net.minestom.server.event.instance.RemoveEntityFromInstanceEvent;
+import net.minestom.server.instance.InstanceContainer;
+import net.minestom.server.instance.LightingChunk;
+import net.minestom.server.instance.block.Block;
+import net.minestom.server.sound.SoundEvent;
+import net.minestom.server.timer.TaskSchedule;
+
+/**
+ * The waiting room: a floating quartz platform in an otherwise empty world.
+ * A once-a-second heartbeat drives the whole waiting → countdown → launch
+ * state machine off the live player count, so there is no event-ordering to
+ * get wrong: join/leave listeners only groom the individual player (game
+ * mode, inventory, boss bar) and the tick decides everything else.
+ */
+final class Lobby {
+    private static final int PLATFORM_Y = 64;
+    private static final int PLATFORM_HALF_SIZE = 12;
+    private static final int MIN_PLAYERS = 2;
+    private static final int COUNTDOWN_SECONDS = 10;
+
+    static final Pos SPAWN = new Pos(0.5, PLATFORM_Y + 1, 0.5);
+
+    private final InstanceContainer instance;
+    private final BossBar status =
+        BossBar.bossBar(Component.text("Waiting for players…"), 1f, BossBar.Color.WHITE, BossBar.Overlay.PROGRESS);
+    private int secondsLeft = COUNTDOWN_SECONDS;
+
+    Lobby() {
+        instance = MinecraftServer.getInstanceManager().createInstanceContainer();
+        instance.setChunkSupplier(LightingChunk::new);
+        // Generate only where a chunk overlaps the platform square; the rest of
+        // the world stays void, which is also what makes falling in a Game fatal.
+        instance.setGenerator(unit -> {
+            Point start = unit.absoluteStart();
+            Point end = unit.absoluteEnd();
+            int minX = (int) Math.max(start.x(), -PLATFORM_HALF_SIZE);
+            int maxX = (int) Math.min(end.x(), PLATFORM_HALF_SIZE + 1);
+            int minZ = (int) Math.max(start.z(), -PLATFORM_HALF_SIZE);
+            int maxZ = (int) Math.min(end.z(), PLATFORM_HALF_SIZE + 1);
+            for (int x = minX; x < maxX; x++) {
+                for (int z = minZ; z < maxZ; z++) {
+                    unit.modifier().setBlock(x, PLATFORM_Y, z, Block.SMOOTH_QUARTZ);
+                }
+            }
+        });
+
+        // Instance-scoped listeners: fire for exactly the players in the lobby,
+        // whether they arrive from a fresh connection or back from an arena.
+        var events = instance.eventNode();
+        events.addListener(AddEntityToInstanceEvent.class, event -> {
+            if (event.getEntity() instanceof Player player) onEnter(player);
+        });
+        events.addListener(RemoveEntityFromInstanceEvent.class, event -> {
+            if (event.getEntity() instanceof Player player) player.hideBossBar(status);
+        });
+
+        instance.scheduler().buildTask(this::tick).repeat(TaskSchedule.seconds(1)).schedule();
+    }
+
+    InstanceContainer instance() {
+        return instance;
+    }
+
+    private void onEnter(Player player) {
+        player.setRespawnPoint(SPAWN);
+        player.setGameMode(GameMode.ADVENTURE);
+        player.getInventory().clear();
+        player.showBossBar(status);
+        player.sendMessage(Component.text(
+            "Dig the snow out from under the other players — last one standing wins.", NamedTextColor.GRAY));
+    }
+
+    private void tick() {
+        var players = instance.getPlayers();
+        if (players.size() < MIN_PLAYERS) {
+            secondsLeft = COUNTDOWN_SECONDS;
+            status.name(Component.text("Waiting for players (%d/%d)".formatted(players.size(), MIN_PLAYERS)));
+            status.progress(1f);
+            status.color(BossBar.Color.WHITE);
+            return;
+        }
+
+        secondsLeft--;
+        if (secondsLeft <= 0) {
+            secondsLeft = COUNTDOWN_SECONDS;
+            Game.start(this, players);
+            return;
+        }
+
+        status.name(Component.text("Starting in %ds".formatted(secondsLeft)));
+        status.progress((float) secondsLeft / COUNTDOWN_SECONDS);
+        status.color(BossBar.Color.GREEN);
+        if (secondsLeft <= 5) {
+            instance.showTitle(Title.title(
+                Component.text(secondsLeft, NamedTextColor.GOLD),
+                Component.empty(),
+                Title.Times.times(Duration.ZERO, Duration.ofMillis(900), Duration.ofMillis(100))));
+            instance.playSound(Sound.sound(SoundEvent.BLOCK_NOTE_BLOCK_PLING, Sound.Source.MASTER, 1f, 1f));
+        }
+    }
+}
