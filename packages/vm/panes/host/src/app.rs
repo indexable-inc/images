@@ -32,7 +32,7 @@ use crate::conn::{self, Event};
 use crate::send_queue::{SendQueue, SendQueueError};
 use crate::transport::Target;
 use crate::render::Renderer;
-use crate::window::{PaneWindow, WindowParams};
+use crate::window::{PaneWindow, SurfaceSize, WindowParams};
 
 /// Presentation and input policy from the CLI.
 pub struct RunOptions {
@@ -298,13 +298,7 @@ fn screens_changed() {
             window.mark_dirty();
             let activated = window.ns.isKeyWindow();
             if let Some(out) = &app.out {
-                queue_to_guest(out, ToGuest::Configure {
-                    id: *id,
-                    width: size.width,
-                    height: size.height,
-                    scale: size.scale,
-                    activated,
-                });
+                queue_configure(out, *id, size, activated);
             }
         }
     });
@@ -607,6 +601,21 @@ fn queue_to_guest(out: &SendQueue, msg: ToGuest) {
     }
 }
 
+fn queue_configure(
+    out: &SendQueue,
+    id: WindowId,
+    size: SurfaceSize,
+    activated: bool,
+) {
+    queue_to_guest(out, ToGuest::Configure {
+        id,
+        width: size.width,
+        height: size.height,
+        scale: size.scale,
+        activated,
+    });
+}
+
 /// Queue a message to the guest; silently dropped while disconnected (every
 /// caller is reacting to UI events that are meaningless without a guest).
 pub fn send(msg: ToGuest) {
@@ -734,13 +743,7 @@ pub fn window_geometry_changed(id: WindowId) {
         window.mark_dirty();
         let activated = window.ns.isKeyWindow();
         if let Some(out) = &app.out {
-            queue_to_guest(out, ToGuest::Configure {
-                id,
-                width: size.width,
-                height: size.height,
-                scale: size.scale,
-                activated,
-            });
+            queue_configure(out, id, size, activated);
         }
     });
 }
@@ -774,13 +777,7 @@ pub fn window_activation(id: WindowId, activated: bool) {
         };
         let size = window.sync_layer_geometry();
         if let Some(out) = &app.out {
-            queue_to_guest(out, ToGuest::Configure {
-                id,
-                width: size.width,
-                height: size.height,
-                scale: size.scale,
-                activated,
-            });
+            queue_configure(out, id, size, activated);
         }
         // Key-window changes gate the cursor capture: resign releases it,
         // become re-engages it when the guest still holds the lock.
