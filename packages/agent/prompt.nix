@@ -19,11 +19,16 @@ let
       authorship in outward-facing messages, say Codex.
     '';
   };
+  # Rules about Claude Code features other runtimes do not have; dropped from
+  # every non-claude prompt so e.g. Codex is never told about agent teams
+  # (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS) it cannot spawn.
+  claudeOnlyRules = [ "agentTeams" ];
   systemPromptFor =
     provider:
     lib.concatStringsSep "\n\n" [
       (import ./system-prompt.nix {
-        inherit lib omitRules;
+        inherit lib;
+        omitRules = omitRules ++ lib.optionals (provider != "claude") claudeOnlyRules;
         agentName = providerNames.${provider};
       })
       extraSystemPrompts.${provider}

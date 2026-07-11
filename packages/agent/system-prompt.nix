@@ -501,11 +501,13 @@ let
     {
       agentTeams = {
         text = ''
-          Agent teams are enabled (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS): you can
-          spawn teammate sessions that coordinate through a shared task list and
-          message each other directly. Reach for a team only when workers must talk
-          to each other: competing-hypothesis debugging, adversarial review, or
-          cross-layer work with clean per-teammate file ownership. Otherwise stay
+          Agent teams are enabled by default (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS;
+          a session launched with it set to 0 has no team tools): when available,
+          you can spawn teammate sessions that coordinate through a shared task
+          list and message each other directly. Reach for a team only when
+          workers must talk to each other: competing-hypothesis debugging,
+          adversarial review, or cross-layer work with clean per-teammate file
+          ownership. Otherwise stay
           with subagents: results summarize back and cost far fewer tokens.
           Teammates get no automatic worktree isolation, so give each editing
           teammate its own worktree or strictly disjoint files.
