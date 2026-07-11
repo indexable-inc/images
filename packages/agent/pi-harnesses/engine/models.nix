@@ -15,11 +15,11 @@
     apiKeyEnv = "ANTHROPIC_API_KEY";
   };
 
-  # GPT-5.5 (the model behind Codex) via the OpenAI API. `gpt-5.5` is the API
-  # model id - there is no separate `-codex` suffix on the API surface.
+  # GPT-5.6 Sol (the model behind Codex) via the OpenAI API.
+  # `gpt-5.6-sol` is the API model id; there is no separate `-codex` suffix.
   codex = {
     provider = "openai";
-    model = "gpt-5.5";
+    model = "gpt-5.6-sol";
     apiKeyEnv = "OPENAI_API_KEY";
   };
 }

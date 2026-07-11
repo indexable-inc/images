@@ -546,7 +546,7 @@ class Codex(Agent):
     ready = re.compile(r"[›❯>]\s*$", re.MULTILINE)
     busy_marker = None
     #: Defaults shared by the TUI constructor and the headless one-shot.
-    default_model: ClassVar[str] = "gpt-5.5"
+    default_model: ClassVar[str] = "gpt-5.6-sol"
     default_reasoning_effort: ClassVar[str] = "low"
     default_sandbox: ClassVar[str] = "danger-full-access"
 
