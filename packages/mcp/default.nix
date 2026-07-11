@@ -3043,8 +3043,12 @@
 
 
     def capture_finish(conn, **kwargs):
+        # Record only after the real finish succeeds: _persist_final suppresses
+        # store exceptions, so capturing first would let this smoke pass even
+        # when the payload never reached the store.
+        result = original_finish(conn, **kwargs)
         persisted[kwargs["id"]] = kwargs
-        return original_finish(conn, **kwargs)
+        return result
 
 
     store_mod.finish = capture_finish
@@ -3391,8 +3395,12 @@
 
 
     def capture_finish(conn, **kwargs):
+        # Record only after the real finish succeeds: _persist_final suppresses
+        # store exceptions, so capturing first would let this smoke pass even
+        # when the bindings never reached the store.
+        result = original_finish(conn, **kwargs)
         persisted.update(kwargs)
-        return original_finish(conn, **kwargs)
+        return result
 
 
     store_mod.finish = capture_finish
