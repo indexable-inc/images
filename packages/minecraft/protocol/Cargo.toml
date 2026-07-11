@@ -1,0 +1,12 @@
+[package]
+name = "mc-protocol"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Minecraft Java Edition wire-protocol primitives: VarInt framing and Server List Ping"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde_json.workspace = true
