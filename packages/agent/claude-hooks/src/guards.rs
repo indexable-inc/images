@@ -9,6 +9,7 @@
 //! returns with no output and the call proceeds.
 
 use serde_json::Value;
+use tree_sitter::{Node, Parser};
 
 use crate::DenyOutput;
 
@@ -109,15 +110,52 @@ fn grep_walks_tree(stage: &str) -> bool {
     false
 }
 
+fn node_text<'a>(node: Node<'_>, source: &'a str) -> Option<&'a str> {
+    source.get(node.byte_range())
+}
+
+fn is_zsh_path_assignment(node: Node<'_>, source: &str) -> bool {
+    node.kind() == "variable_assignment"
+        && node
+            .child_by_field_name("name")
+            .and_then(|name| node_text(name, source))
+            == Some("path")
+}
+
+fn syntax_tree_has_zsh_path_assignment(node: Node<'_>, source: &str) -> bool {
+    if is_zsh_path_assignment(node, source) {
+        return true;
+    }
+
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .any(|child| syntax_tree_has_zsh_path_assignment(child, source))
+}
+
+fn has_zsh_path_assignment(command: &str) -> bool {
+    let mut parser = Parser::new();
+    if parser
+        .set_language(&tree_sitter_bash::LANGUAGE.into())
+        .is_err()
+    {
+        return false;
+    }
+    parser
+        .parse(command, None)
+        .is_some_and(|tree| syntax_tree_has_zsh_path_assignment(tree.root_node(), command))
+}
+
 /// `PreToolUse(Bash)`: block recurring bad command shapes (output-to-/dev/null,
-/// recursive `grep -r`, `--no-verify`). Quote/escape-aware so a literal mention
-/// inside a commit message or `echo` is not a false positive.
+/// recursive `grep -r`, `--no-verify`, lowercase zsh `path` assignments).
+/// Quote/escape-aware so a literal mention inside a commit message or `echo` is
+/// not a false positive.
 pub fn bash_habits_guard() {
     let Some(payload) = payload() else { return };
     if payload.get("tool_name").and_then(Value::as_str) != Some("Bash") {
         return;
     }
     let raw = command_of(&payload);
+    let zsh_path_assignment = has_zsh_path_assignment(&raw);
 
     // Match operators, not literal text inside a quoted string. Neutralize
     // escaped chars, then drop quoted substrings (a real `2>/dev/null` /
@@ -173,6 +211,18 @@ pub fn bash_habits_guard() {
              yourself outside the agent. (bash-habits-guard hook)"
                 .to_owned(),
         );
+        return;
+    }
+
+    // In zsh, lowercase `path` is tied to `PATH`. Parse assignment nodes so
+    // harmless arguments such as `echo path=/tmp` remain allowed.
+    if zsh_path_assignment {
+        deny(
+            "In zsh, lowercase `path` is tied to `PATH`, so assigning `path=...` \
+             replaces the command search path. Use a descriptive name such as \
+             `worktree_path` instead. (bash-habits-guard hook)"
+                .to_owned(),
+        );
     }
 }
 
@@ -195,7 +245,7 @@ pub fn search_guard() {
 
 #[cfg(test)]
 mod tests {
-    use super::{grep_walks_tree, is_recursive_flag};
+    use super::{grep_walks_tree, has_zsh_path_assignment, is_recursive_flag};
 
     #[test]
     fn recursive_flag_detection() {
@@ -219,5 +269,29 @@ mod tests {
         assert!(!grep_walks_tree("grep foo"));
         // -- ends flags
         assert!(!grep_walks_tree("grep -- -r"));
+    }
+
+    #[test]
+    fn zsh_path_assignment_detection() {
+        for command in [
+            "path=/private/tmp/worktree; git status",
+            "path=(/private/tmp/worktree /bin); git status",
+            "f() { local path=/private/tmp/worktree; git status; }; f",
+            "FOO=bar path=/private/tmp/worktree git status",
+            "result=$(path=/private/tmp/worktree; git status)",
+        ] {
+            assert!(has_zsh_path_assignment(command), "{command:?}");
+        }
+
+        for command in [
+            "worktree_path=/private/tmp/worktree; git status",
+            "PATH=/private/tmp/worktree git status",
+            "echo path=/private/tmp/worktree",
+            "env path=/private/tmp/worktree git status",
+            "bash -c 'path=/private/tmp/worktree; git status'",
+            "cat <<'EOF'\npath=/private/tmp/worktree\nEOF",
+        ] {
+            assert!(!has_zsh_path_assignment(command), "{command:?}");
+        }
     }
 }
