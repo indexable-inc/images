@@ -27,6 +27,11 @@ pub struct UnibindMeta {
     pub(crate) backends: Option<Vec<Backend>>,
 }
 
+/// One backend's option handler: applies a single parsed `backend(...)`
+/// entry to the accumulated meta. Aliased to keep the dispatch table's
+/// element type within `clippy::type_complexity`.
+type ApplyBackendOption = fn(&mut UnibindMeta, &syn::Meta) -> Result<()>;
+
 impl UnibindMeta {
     /// Parse one argument token stream, as carried by the attribute itself.
     pub(crate) fn parse(tokens: TokenStream, span: Span) -> Result<Self> {
@@ -138,11 +143,10 @@ impl UnibindMeta {
     }
 
     fn apply(&mut self, entry: &syn::Meta) -> Result<()> {
-        let span = entry.span();
         // Each backend's option list dispatches through the same list-parsing
         // seam; only the hint (which options the backend accepts) and the
         // per-option handler differ.
-        const BACKEND_OPTIONS: &[(&str, &str, fn(&mut UnibindMeta, &syn::Meta) -> Result<()>)] = &[
+        const BACKEND_OPTIONS: &[(&str, &str, ApplyBackendOption)] = &[
             (
                 "py",
                 "py(name = \"...\") or py(base = \"...\")",
@@ -156,6 +160,7 @@ impl UnibindMeta {
                 UnibindMeta::apply_jvm,
             ),
         ];
+        let span = entry.span();
         for (backend, hint, apply_option) in BACKEND_OPTIONS {
             if !entry.path().is_ident(backend) {
                 continue;
