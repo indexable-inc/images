@@ -70,6 +70,9 @@ fn backends(
     if selects(unibind_core::Backend::Ex) {
         glue.extend(backend_ex(interface, module, selected.is_some())?);
     }
+    if selects(unibind_core::Backend::Jvm) {
+        glue.extend(backend_jvm(interface, module, selected.is_some())?);
+    }
     Ok(glue)
 }
 
@@ -128,6 +131,8 @@ enabled_backend!(backend_py, "py", unibind_backend_py::render);
 disabled_backend!(backend_py, "py");
 enabled_backend!(backend_ts, "ts", unibind_backend_ts::render);
 disabled_backend!(backend_ts, "ts");
+enabled_backend!(backend_jvm, "jvm", unibind_backend_jvm::render);
+disabled_backend!(backend_jvm, "jvm");
 
 #[cfg(feature = "ex")]
 fn backend_ex(
@@ -161,7 +166,7 @@ disabled_backend!(backend_ex, "ex");
 
 /// One record's backend-rendered attributes, index-aligned with the
 /// record's fields.
-#[cfg(any(feature = "py", feature = "ts", feature = "ex"))]
+#[cfg(any(feature = "py", feature = "ts", feature = "ex", feature = "jvm"))]
 struct RecordAttrs<'a> {
     outer: &'a [syn::Attribute],
     fields: &'a [Vec<syn::Attribute>],
@@ -171,7 +176,7 @@ struct RecordAttrs<'a> {
 /// `#[derive(NifStruct)]`-shaped attributes to the record structs the IR
 /// was lowered from. Records and rendered attribute sets are index-aligned
 /// by construction.
-#[cfg(any(feature = "py", feature = "ts", feature = "ex"))]
+#[cfg(any(feature = "py", feature = "ts", feature = "ex", feature = "jvm"))]
 fn splice_record_attrs<'a>(
     interface: &unibind_core::ir::Interface,
     module: &mut syn::ItemMod,

@@ -9,7 +9,7 @@
 id = "RUSTSEC-2024-0436"
 reason = """
 paste 1.0.15 is unmaintained. Pulled in as a transitive dev-dep of hegeltest
-0.14.6 (packages/minecraft/minecraft/nbt), which declares `paste = "1.0"` at the crate
+0.14.6 (packages/minecraft/nbt), which declares `paste = "1.0"` at the crate
 root. Tracked upstream at hegeldev/hegel-rust; remove this ignore when
 hegeltest drops the dep.
 """

@@ -326,7 +326,7 @@
           # sandbox has no curl otherwise, so the executors fail spawning it.
           efx = [workspacePkgs.curl];
         };
-        # `rodio` (packages/minecraft/minecraft/sound) pulls `cpal`/`alsa-sys`, whose build
+        # `rodio` (packages/minecraft/sound) pulls `cpal`/`alsa-sys`, whose build
         # script needs ALSA's pkg-config metadata to link `libasound` on Linux.
         #
         # `pkg-config` + `PKG_CONFIG_PATH` let `alsa-sys`'s build script find ALSA

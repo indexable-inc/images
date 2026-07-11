@@ -22,24 +22,19 @@ from __future__ import annotations
 import ast
 import asyncio
 import contextlib
-import os
 import signal
 import sys
-from pathlib import Path
 
-from .config import Config, runtime_dir
+from .config import Config
+from .kernel_host import KernelHost, make_kernel_host
 from .outputs import job_summary, output_from_message
 
 _READY_TIMEOUT = 60.0
 
-# Env var carrying the path the kernel's faulthandler writes all-thread stacks to
-# on SIGUSR1. The server sets it before launching the kernel and reads it back in
-# ``dump_trace``; the kernel-side runtime registers the handler (``runtime``).
-TRACE_ENV = "IX_MCP_KERNEL_TRACE"
-
 # How often the death watch polls the kernel child (a waitpid(WNOHANG) via the
-# provisioner: cheap). Small enough that an external kill surfaces as the precise
-# death error within the same breath, not after a 35s transport timeout.
+# host's liveness primitive: cheap locally, one small actor call on ray). Small
+# enough that an external kill surfaces as the precise death error within the
+# same breath, not after a 35s transport timeout.
 _WATCH_INTERVAL = 0.5
 
 
@@ -60,31 +55,6 @@ def _describe_exit(returncode: int | None) -> str:
         except ValueError:
             return f"signal {-returncode}"
     return f"exit code {returncode}"
-
-
-def trace_path_for(server_pid: int) -> Path:
-    """The faulthandler dump target for the serve owning ``server_pid``. One
-    file per serve, not one machine-wide name: concurrent kernels sharing a
-    path truncate and interleave each other's dumps (index#2355)."""
-    return runtime_dir() / f"kernel-trace-{server_pid}.txt"
-
-
-def _sweep_stale_traces() -> None:
-    """Drop trace files orphaned by serves that are gone: a SIGKILLed serve
-    never reaches shutdown(), so its file would linger in runtime_dir()
-    forever. The legacy fixed-name ``kernel-trace.txt`` (no pid suffix) is
-    left alone for still-running older builds."""
-    for path in runtime_dir().glob("kernel-trace-*.txt"):
-        try:
-            pid = int(path.stem.rsplit("-", 1)[-1])
-        except ValueError:
-            continue
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            path.unlink(missing_ok=True)
-        except PermissionError:
-            continue  # a live process we cannot signal: not ours to sweep
 
 
 # What the wedge rescue actually achieved, verified rather than assumed
@@ -146,11 +116,10 @@ def _wedged_summary(budget: float, grace: float, deadline: float, *, outcome: st
 class Kernel:
     def __init__(self, config: Config) -> None:
         self._config = config
-        self._km = None
+        self._host: KernelHost = make_kernel_host(config.kernel_host)
         self._kc = None
         self._lock = asyncio.Lock()
         self._trace_lock = asyncio.Lock()
-        self._trace_path: Path | None = None
         self._pid: int | None = None
         # Death-watch state: `_death` is the rendered cause while the kernel is
         # down (entry guard), `_death_event` fails calls already in flight, and
@@ -171,73 +140,47 @@ class Kernel:
         self._restarting = False
 
     async def start(self) -> None:
-        from jupyter_client.manager import AsyncKernelManager
-
-        # Point the kernel's faulthandler at a private file before launch; the
-        # kernel inherits this env and registers the SIGUSR1 dump handler. The
-        # name carries this server's pid: every serve on the machine shares
-        # runtime_dir(), and one fixed name had concurrent kernels truncating
-        # and interleaving each other's dumps, so kernel_trace could return a
-        # different session's stacks (index#2355).
-        self._trace_path = trace_path_for(os.getpid())
-        os.environ[TRACE_ENV] = str(self._trace_path)
-        _sweep_stale_traces()
-
-        self._km = AsyncKernelManager(kernel_name="python3")
-        await self._km.start_kernel(cwd=str(self._config.workdir))
-        self._pid = self._kernel_pid()
-        self._kc = self._km.client()
+        await self._host.start(self._config.workdir)
+        self._pid = self._host.pid
+        self._kc = self._host.client()
         self._kc.start_channels()
         await self._kc.wait_for_ready(timeout=_READY_TIMEOUT)
         # Watch the child we just spawned so an external kill is noticed the
         # moment it happens, not at the next execute's timeout (index#2339).
         self._watch_task = asyncio.ensure_future(self._watch())
 
-    def _kernel_pid(self) -> int | None:
-        """The kernel process's pid, so a trace signal targets that process alone
-        (not the kernel's process group, whose default SIGUSR1 would terminate
-        user-launched subprocesses)."""
-        provisioner = getattr(self._km, "provisioner", None)
-        pid = getattr(provisioner, "pid", None)
-        if pid is None:
-            pid = getattr(getattr(self._km, "kernel", None), "pid", None)
-        return pid
-
     async def dump_trace(self, timeout: float = 5.0) -> str:
         """All-thread Python stack of the kernel, captured via faulthandler on
         SIGUSR1. Works even when a synchronous call has wedged the event loop:
         the C-level handler runs in signal context, so it dumps while the main
         thread is still parked in the blocking call. Returns the newest dump."""
-        if self._km is None or self._trace_path is None or self._pid is None:
+        if not self._host.running or self._pid is None:
             return "kernel is not running"
         if self._death is not None:
             return f"kernel process is gone: {self._death}"
-        path = self._trace_path
         # Serialize dumps: two concurrent traces share the same `before` offset and
         # would each read both appended dumps. The lock keeps each dump clean.
         async with self._trace_lock:
-            before = path.stat().st_size if path.exists() else 0
-            try:
-                os.kill(self._pid, signal.SIGUSR1)
-            except ProcessLookupError:
+            before = await self._host.trace_size()
+            if not await self._host.send_signal(signal.SIGUSR1):
                 return "kernel process is not alive"
             loop = asyncio.get_running_loop()
             deadline = loop.time() + timeout
             while loop.time() < deadline:
                 await asyncio.sleep(0.05)
                 # The signal may have gone to a zombie (a killed child not yet
-                # reaped): os.kill succeeds but nothing can ever dump. The death
+                # reaped): delivery succeeds but nothing can ever dump. The death
                 # watch reaps and flags it within its poll interval; report the
                 # death instead of waiting out the deadline (index#2339).
                 if self._death is not None:
                     return f"kernel process is gone: {self._death}"
-                if path.exists() and path.stat().st_size > before:
+                if await self._host.trace_size() > before:
                     # A short settle so the whole multi-thread dump has flushed.
                     await asyncio.sleep(0.05)
-                    return path.read_text()[before:].strip() or "(empty trace)"
+                    return (await self._host.trace_read(before)).strip() or "(empty trace)"
         # No dump and no flagged death: distinguish a gone process (say so
         # plainly) from a live kernel that cannot service signals.
-        if self._death is not None or not await self._km.is_alive():
+        if self._death is not None or not await self._host.is_alive():
             return "kernel process is gone: " + (self._death or f"kernel died (pid {self._pid})")
         return (
             f"No trace was produced within {timeout:.0f}s. The kernel may not have "
@@ -288,7 +231,7 @@ class Kernel:
             try:
                 try:
                     await asyncio.shield(asyncio.wait({task, died}, return_when=asyncio.FIRST_COMPLETED))
-                except asyncio.CancelledError:
+                except asyncio.CancelledError as cancelled:
                     try:
                         await task
                     except TimeoutError:
@@ -302,6 +245,14 @@ class Kernel:
                         # Any other drain error: we only need the socket read to
                         # finish before releasing the lock.
                         pass
+                    # The drain above ran `on_iopub`, so `summary` now holds the
+                    # launched job's summary (with its id) when the reply arrived
+                    # before the cancel. Attach it to the exception so the caller
+                    # can cancel STRICTLY that job by id rather than guess which
+                    # background job the abandoned call started (index#2406). It
+                    # stays None when the cancel landed before any iopub, and the
+                    # by-id cancel then does nothing rather than guess.
+                    cancelled.ix_drained_summary = summary  # type: ignore[attr-defined]
                     raise
                 if not task.done():
                     # The kernel died with this request in flight: the reply can
@@ -353,6 +304,18 @@ class Kernel:
         deadline = float(budget) + grace
         try:
             return await self._execute(wrapper, timeout=deadline)
+        except asyncio.CancelledError as cancelled:
+            # The client abandoned this call. `_execute` drained the exec reply
+            # under the shell lock before re-raising, so its summary (with the
+            # launched job's id) rides on the exception. Lift that id to the
+            # attribute the server reads, so the cancel poke targets STRICTLY the
+            # run this call launched rather than guessing (index#2406). Absent
+            # when the cancel landed before any iopub -- the by-id cancel then
+            # does nothing rather than kill an unrelated background job.
+            summary = getattr(cancelled, "ix_drained_summary", None)
+            job_id = summary.get("id") if isinstance(summary, dict) else None
+            cancelled.ix_launched_job_id = job_id  # type: ignore[attr-defined]
+            raise
         except TimeoutError:
             # A dead kernel also never replies: if the death watch flagged one
             # while this request waited, report that precise cause, never a wedge.
@@ -390,25 +353,35 @@ class Kernel:
                     outcome = "restart_pending"
             return [], _wedged_summary(budget, grace, deadline, outcome=outcome)
 
-    async def cancel_running(self, session: str | None) -> list[str]:
-        """Cancel the run this ``session``'s abandoned ``python_exec`` launched.
+    async def cancel_running(
+        self, session: str | None, job_id: str | None = None
+    ) -> list[str]:
+        """Cancel the specific run this ``session``'s abandoned ``python_exec``
+        launched, identified by ``job_id``.
 
         The server calls this when a client cancels an in-flight ``python_exec``
         (``notifications/cancelled`` or a transport abort): the tool coroutine is
         cancelled server-side, but the job it started keeps running in the kernel
         as a background task, executing side effects the caller already abandoned
-        (index#2387). This pokes ``__ix_cancel_running`` on the raw shell channel
-        (no job/card, like ``set_client``), which cancels the same job an explicit
-        ``jobs['<id>'].cancel()`` would. Best-effort: a cancel arriving after the
-        run finished (the common race) cancels nothing, and a failure here must
-        never mask the original cancellation the caller is propagating. Returns
-        the ids cancelled (parsed from the raw reply; empty on any hiccup)."""
-        if self._pid is None:
+        (index#2387). ``job_id`` is that launched run's id, read off the drained
+        exec reply and passed through by the server (index#2406); this pokes
+        ``__ix_cancel_running`` on the raw shell channel (no job/card, like
+        ``set_client``), which cancels STRICTLY that job on the same path an
+        explicit ``jobs['<id>'].cancel()`` would -- never a heuristic guess.
+        ``job_id`` is None when the cancel landed before the launched job's
+        summary was drained; the poke then cancels nothing rather than kill an
+        unrelated background job. Best-effort: a cancel arriving after the run
+        finished (the common race) cancels nothing, and a failure here must never
+        mask the original cancellation the caller is propagating. Returns the ids
+        cancelled (parsed from the raw reply; empty on any hiccup)."""
+        if self._pid is None or job_id is None:
             return []
         session_arg = "None" if session is None else repr(session)
+        job_id_arg = repr(job_id)
         try:
             outputs, _ = await self._execute(
-                f"print(__ix_cancel_running(session={session_arg}))", timeout=10.0
+                f"print(__ix_cancel_running(session={session_arg}, job_id={job_id_arg}))",
+                timeout=10.0,
             )
         except BaseException:  # cancel is best-effort; never mask the caller's own cancellation
             return []
@@ -475,11 +448,7 @@ class Kernel:
         (index#2375). Callers must verify with :meth:`_probe_idle`."""
         if self._pid is None:
             return False
-        try:
-            os.kill(self._pid, signal.SIGUSR2)
-        except ProcessLookupError:
-            return False
-        return True
+        return await self._host.send_signal(signal.SIGUSR2)
 
     async def _probe_idle(self, timeout: float | None = None) -> bool:
         """Whether the kernel answers a trivial execute, i.e. a rescue attempt
@@ -527,14 +496,6 @@ class Kernel:
         if self._death is not None:
             raise KernelDiedError(self._death)
 
-    def _exit_code(self) -> int | None:
-        """The dead kernel's returncode (negative: killed by that signal), read
-        from the Popen the provisioner's liveness poll reaped."""
-        provisioner = getattr(self._km, "provisioner", None)
-        process = getattr(provisioner, "process", None)
-        code = getattr(process, "returncode", None)
-        return code if isinstance(code, int) else None
-
     async def _watch(self) -> None:
         """Notice the kernel child exiting the moment it happens.
 
@@ -547,17 +508,16 @@ class Kernel:
         journald), and respawn immediately."""
         while True:
             await asyncio.sleep(_WATCH_INTERVAL)
-            km = self._km
-            if km is None:
+            if not self._host.running:
                 return
             try:
-                alive = await km.is_alive()
+                alive = await self._host.is_alive()
             except Exception:  # noqa: S112 -- a transient introspection error must not end the lifetime watch
                 continue
             if alive:
                 continue
             pid = self._pid
-            cause = _describe_exit(self._exit_code())
+            cause = _describe_exit(await self._host.exit_code())
             self._death = f"kernel died (pid {pid}, {cause}); respawning"
             self._death_event.set()
             print(f"[ix-mcp] {self._death}", file=sys.stderr, flush=True)
@@ -592,14 +552,14 @@ class Kernel:
         directory having been deleted since (index#2120). The new kernel re-runs
         install() and re-opens the trace file.
         """
-        if self._km is None:
+        if not self._host.running:
             return
         async with self._lock:
-            await self._km.restart_kernel(now=True, cwd=str(self._config.workdir))
-            self._pid = self._kernel_pid()
+            await self._host.restart(self._config.workdir)
+            self._pid = self._host.pid
             if self._kc is not None:
                 self._kc.stop_channels()
-            self._kc = self._km.client()
+            self._kc = self._host.client()
             self._kc.start_channels()
             await self._kc.wait_for_ready(timeout=_READY_TIMEOUT)
         # The new process is alive: in-flight racing stops now (fresh event); the
@@ -634,7 +594,7 @@ class Kernel:
         blocked, where the snapshot attempt would only burn its timeout.
         Returns the old pid, the new pid, and the elapsed seconds.
         """
-        if self._km is None:
+        if not self._host.running:
             raise RuntimeError("the kernel is not running")
         if self._restarting:
             raise RuntimeError("a kernel restart is already in progress")
@@ -686,14 +646,7 @@ class Kernel:
             self._watch_task = None
         if self._kc is not None:
             self._kc.stop_channels()
-        if self._km is not None:
-            await self._km.shutdown_kernel(now=True)
-        # This serve owns its trace file (the name carries our pid): remove it
-        # so clean exits leave nothing behind; SIGKILLed serves are covered by
-        # the sweep at the next start().
-        if self._trace_path is not None:
-            self._trace_path.unlink(missing_ok=True)
-            self._trace_path = None
+        await self._host.shutdown()
 
 
 async def restore_with_lock(kernel: Kernel, locked: asyncio.Event, context: str) -> None:

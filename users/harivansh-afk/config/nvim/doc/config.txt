@@ -1,0 +1,209 @@
+*config.txt*  hari's nvim configuration
+
+CONTENTS                                                    *config-contents*
+
+    1. Overview .............. |config-overview|
+    2. Installation .......... |config-install|
+    3. Structure ............. |config-structure|
+    4. Plugins ............... |config-plugins|
+    5. Keymaps ............... |config-keymaps|
+    6. LSP ................... |config-lsp|
+
+==============================================================================
+1. OVERVIEW                                                 *config-overview*
+
+Neovim config built on vim.pack and lz.n. Cozybox provides the colorscheme,
+and a small native Lua statusline handles the editor state.
+
+Global helpers defined in init.lua:
+>lua
+    map(mode, lhs, rhs, opts)   -- vim.keymap.set wrapper, silent by default
+    bmap(mode, lhs, rhs, opts)  -- same but scoped to current buffer
+<
+
+==============================================================================
+2. INSTALLATION                                             *config-install*
+
+Default (no LSP, no completion): >bash
+    curl -fsSL https://git.harivan.sh/harivansh-afk/nvim/raw/branch/main/install.sh | bash
+<
+Full install (LSP + completion): >bash
+    curl -fsSL https://git.harivan.sh/harivansh-afk/nvim/raw/branch/main/install.sh | bash -s -- --bells-and-whistles
+<
+Options: >
+    --skip-nvim           Config only, skip nvim install
+    --skip-config         Nvim only, skip config install
+    --no-path             Don't modify shell rc files
+<
+
+==============================================================================
+3. STRUCTURE                                                *config-structure*
+
+>
+    init.lua                    Leader, helpers, vim.pack/lz.n bootstrap
+    plugin/
+      options.lua               Vim options
+      keymaps.lua               Global keymaps
+      autocmds.lua              Autocommands
+      completion.lua            Native automatic completion
+    lua/
+      config/
+        completion.lua          Native completefunc providers
+        lsp.lua                 Shared on_attach
+      lsp/
+        lua_ls.lua              Per-server settings
+        pyright.lua
+        rust_analyzer.lua
+        ts_ls.lua
+      plugins/
+        editor.lua              Autopairs, surround, ufo, preview
+        fzf.lua                 Fzf-lua fuzzy finder
+        git.lua                 Fugitive, gitsigns, diffs.nvim
+        lsp.lua                 nvim-lspconfig
+        canola.lua              Canola file explorer
+        treesitter.lua          Treesitter + textobjects
+        ui.lua                  Cozybox, statusline, nonicons
+      statusline.lua            Native statusline renderer
+    after/
+      plugin/
+        lsp.lua                 LSP server enable loop
+      ftplugin/
+        fugitive.lua            Tab remapped to = in fugitive
+        go.lua                  Hard tabs, tabstop 4
+        lua.lua                 Tabstop 4, shiftwidth 4
+        markdown.lua            Wrap, textwidth 80, conceallevel 2
+        python.lua              makeprg = python %
+        rust.lua                makeprg = cargo run
+<
+
+==============================================================================
+4. PLUGINS                                                  *config-plugins*
+
+Plugins are declared with vim.pack and loaded through lz.n.
+
+    Plugin                          Purpose ~
+    https://git.harivan.sh/harivansh-afk/cozybox.nvim      Colorscheme
+    barrettruth/nonicons.nvim       File icons
+    nvim-tree/nvim-web-devicons     Icon provider
+
+    ibhagwan/fzf-lua                Fuzzy finder
+    barrettruth/canola.nvim         File explorer
+    barrettruth/canola-collection   Canola extensions
+
+    neovim/nvim-lspconfig           LSP configuration
+    nvim-treesitter/nvim-treesitter Syntax highlighting
+    nvim-treesitter-textobjects     Select/move by treesitter nodes
+
+    tpope/vim-fugitive              Git commands
+    lewis6991/gitsigns.nvim         Git gutter signs
+    barrettruth/diffs.nvim          Diff highlighting
+
+    windwp/nvim-autopairs           Auto-close brackets
+    kylechui/nvim-surround          Surround operations
+    kevinhwang91/nvim-ufo           Code folding
+    Native Neovim completion        LSP, path, buffer, snippets, env vars
+
+==============================================================================
+5. KEYMAPS                                                  *config-keymaps*
+
+Leader is <Space>.
+
+GENERAL ~
+    <leader>w           Save
+    <leader>q           Quit
+    <leader>t           Toggle wrap
+    <Esc>               Clear search highlight
+    J                   Join lines, keep cursor
+    x  (visual)         Delete without yanking
+    p  (visual)         Paste without yanking
+
+BUFFERS ~
+    <Tab>               Next buffer
+    <S-Tab>             Previous buffer
+    <leader>x           Close buffer
+    <leader>b           New buffer
+
+WINDOWS ~
+    <C-h/j/k/l>        Navigate windows
+
+GIT ~
+    <C-g>               Git status fullscreen
+    <leader>gg          Git status fullscreen
+    <leader>gc          Git commit
+    <leader>gp          Git push
+    <leader>gl          Git pull
+    <leader>gb          Git blame
+    <leader>gd          Vertical diff split
+    <leader>gr          Git checkout file
+    <leader>gw          Git add file
+    <leader>ghs         Stage hunk
+    <leader>ghr         Reset hunk
+    <leader>ghp         Preview hunk
+    <leader>gB          Toggle line blame
+    ]g / [g             Next/prev hunk
+
+FZF ~
+    <C-f>               Find files (git-aware)
+    <leader>ff          Files
+    <leader>fg          Live grep
+    <leader>fb          Buffers
+    <leader>fh          Help tags
+    <leader>fr          Resume last search
+    <leader>fo          Recent files
+    <leader>fc          Commands
+    <leader>fk          Keymaps
+    <leader>f/          Search history
+    <leader>f:          Command history
+    <leader>fe          Config files
+    gq                  Quickfix
+    gl                  Loclist
+    <leader>GB          Git branches
+    <leader>Gc          Git commits
+    <leader>Gs          Git status
+    <leader>Gp          GitHub PRs
+    <leader>Gi          GitHub issues
+
+CANOLA ~
+    -                   Open Canola
+    <leader>e           Open Canola
+
+FOLDS ~
+    zR                  Open all folds
+    zM                  Close all folds
+
+TREESITTER TEXTOBJECTS ~
+    af/if               Function outer/inner
+    ac/ic               Class outer/inner
+    aa/ia               Parameter outer/inner
+    ai/ii               Conditional outer/inner
+    al/il               Loop outer/inner
+    ab/ib               Block outer/inner
+    ]f / [f             Next/prev function
+    ]c / [c             Next/prev class
+    ]a / [a             Next/prev parameter
+    <leader>sn          Swap parameter next
+    <leader>sp          Swap parameter prev
+
+==============================================================================
+6. LSP                                                      *config-lsp*
+
+Servers are configured in `lua/lsp/` and enabled in `after/plugin/lsp.lua`.
+Adding a new server: create `lua/lsp/<name>.lua` returning a settings table,
+then add the name to the list in `after/plugin/lsp.lua`.
+
+Enabled servers: lua_ls, pyright, ts_ls, rust_analyzer, gopls, clangd,
+bashls, jsonls, html, cssls.
+
+Buffer keymaps (set on LspAttach): >
+    gd                  Go to definition
+    gD                  Go to declaration
+    <C-]>               Go to definition
+    gi                  Go to implementation
+    gr                  Go to references
+    K                   Hover documentation
+    <leader>rn          Rename symbol
+    <leader>ca          Code action
+    <leader>f           Format buffer
+<
+
+ vim:tw=78:ts=8:ft=help:norl:
