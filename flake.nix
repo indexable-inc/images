@@ -439,6 +439,10 @@
       inherit indexPackages;
       promptModule = ./packages/agent/prompt;
     };
+    codexHomeModule = import ./packages/agent/home-manager/codex.nix {
+      inherit indexPackages;
+      promptModule = ./packages/agent/prompt;
+    };
     personalServicesModule = import ./users/andrewgazelka/home.nix {
       inherit indexPackages ix;
       claudeCodeModule = claudeCodeHomeModule;
@@ -454,6 +458,7 @@
     };
     personalWorkstationModule = import ./users/andrewgazelka/profiles/workstation.nix {
       inherit indexPackages personalServicesModule ix;
+      codexModule = codexHomeModule;
       configRoot = personalConfigRoot;
       mutableFilesModule = mutableFilesHomeModule;
       provenanceModule = provenanceHomeModule;
@@ -583,10 +588,7 @@
       # Agent CLI modules: Home Manager is the user-facing configuration
       # surface, while the package wrappers remain the implementation detail.
       claude-code = claudeCodeHomeModule;
-      codex = import ./packages/agent/home-manager/codex.nix {
-        indexPackages = system: packages.${system};
-        promptModule = ./packages/agent/prompt;
-      };
+      codex = codexHomeModule;
       # Personal-but-shareable workstation module for github:andrewgazelka: the
       # ix.dev downtime watcher + boss bar overlay + the shared say-detached
       # sound helper, all as portable services. Closed over the per-system
