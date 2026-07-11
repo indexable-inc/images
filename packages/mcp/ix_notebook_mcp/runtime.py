@@ -4374,9 +4374,13 @@ async def __ix_exec(
     _emit(job)
 
 
-def __ix_cancel_running(session: str | None = None, exclude: str | None = None) -> list[str]:
-    """Cancel the run this session's in-flight ``python_exec`` launched, so an
-    abandoned call stops instead of finishing in the background.
+def __ix_cancel_running(
+    session: str | None = None,
+    job_id: str | None = None,
+    exclude: str | None = None,
+) -> list[str]:
+    """Cancel the specific run this session's in-flight ``python_exec`` launched,
+    so an abandoned call stops instead of finishing in the background.
 
     The MCP server calls this when the client cancels an in-flight
     ``python_exec`` request (``notifications/cancelled`` or a transport abort):
@@ -4385,30 +4389,34 @@ def __ix_cancel_running(session: str | None = None, exclude: str | None = None) 
     already abandoned (index#2387). Cancelling that job here is the SAME path as
     an explicit ``jobs['<id>'].cancel()``, so it drains and records cleanly.
 
-    Only the single most recently started still-running ``python_exec`` run
-    (``kind == "cell"``) for ``session`` is cancelled: that is the one the
-    abandoned call launched. Crucially, jobs the call itself detached with
-    ``jobs.spawn`` (``kind == "spawn"``, newer-started than the parent run but
-    inheriting its session) are NOT candidates -- the user asked for those to
-    outlive the call, so cancelling the abandoned foreground run must leave them
-    running. Legitimate earlier runs the same session did not abandon also keep
-    running. ``exclude`` skips a job id -- the raw cancel request's own frame is
-    never a ``jobs`` entry, but the guard keeps the helper honest if that ever
-    changes. Returns the ids cancelled (empty when the run already finished, the
-    common race: a fast call completes before the cancellation lands)."""
-    candidates = [
-        job
-        for job in jobs.values()
-        if job.session == session
-        and job.kind == "cell"
-        and job.running()
-        and job.id != exclude
-    ]
-    if not candidates:
+    ``job_id`` is the id of the run the abandoned call launched, read off the
+    drained exec reply's summary and plumbed through by the server (index#2406).
+    We cancel STRICTLY that job: never a heuristic "newest running job for the
+    session", because the abandoned call's reply is drained under the shell lock
+    before this poke runs, so by the time we get here the launched run has either
+    backgrounded (still running -- cancel it) or finished within budget (nothing
+    to do). Guessing "newest" in the finished case would deterministically kill
+    an unrelated background job the same session started earlier and did NOT
+    abandon (the wrong-job kill in the issue). Targeting by id also inherently
+    spares jobs the call detached with ``jobs.spawn`` (index#2387): a spawned
+    child has its own id, so it is never the target. So:
+
+      - ``job_id`` absent (an old cancel path with no summary, e.g. a cancel that
+        landed before any iopub): cancel NOTHING rather than guess.
+      - the target is unknown, belongs to another session, or already finished:
+        cancel NOTHING (the common race is a fast call that completed in budget).
+      - otherwise cancel exactly that one job.
+
+    The ``session`` guard is kept so a stray/forged ``job_id`` can never reach
+    across sessions. ``exclude`` skips a job id -- the raw cancel request's own
+    frame is never a ``jobs`` entry, but the guard keeps the helper honest if
+    that ever changes. Returns the ids cancelled (empty when there was nothing to
+    cancel)."""
+    if job_id is None or job_id == exclude:
         return []
-    # Newest-started cell wins: `jobs` is insertion-ordered, and the abandoned
-    # call is the last foreground run this session launched.
-    target = max(candidates, key=lambda job: job.started)
+    target = jobs.get(job_id)
+    if target is None or target.session != session or not target.running():
+        return []
     target.cancel()
     return [target.id]
 
