@@ -14,7 +14,7 @@
 #      run's executions into exactly that file and cell_update events flow.
 #
 # Needs network + an API key for the selected model (ANTHROPIC_API_KEY by
-# default; set PI_HARNESS_MODEL=codex + OPENAI_API_KEY for gpt-5.5). Run it
+# default; set PI_HARNESS_MODEL=codex + OPENAI_API_KEY for gpt-5.6-sol). Run it
 # yourself - first build can exceed a couple of minutes.
 #
 #   ANTHROPIC_API_KEY=... ./packages/agent/pi-harnesses/engine/smoke/run.sh

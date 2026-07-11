@@ -14,7 +14,7 @@ prosecutor verifies it against the real repo.
    claim: `claim({ statement, verify })`. Until it does, the `tool_call` gate
    blocks every other tool.
 3. The claim is handed to a **prosecutor**: a fresh `pi --print --no-session`
-   process on the same executor-class model (opus-4-8 / gpt-5.5 medium) with NO
+   process on the same executor-class model (opus-4-8 / gpt-5.6-sol medium) with NO
    access to the executor's transcript. It runs the suggested check plus its
    own probes and returns `VERDICT: UPHELD` or `VERDICT: BROKEN <evidence>`.
    The asymmetry that matters is context isolation, not a weaker model.
@@ -36,7 +36,7 @@ hallucinations: the supervisor only ever sees the claim and the repo.
 ## Config
 
 - `PI_HARNESS_MODEL` - executor model alias (default `claude` = opus-4-8;
-  `codex` = gpt-5.5 medium).
+  `codex` = gpt-5.6-sol medium).
 - `PI_PROSECUTOR_PROVIDER` / `PI_PROSECUTOR_MODEL` / `PI_PROSECUTOR_THINKING` -
   override the prosecutor model; defaults to the active executor model.
 - `PI_PROSECUTOR_GOAL` - objective for the prosecutor to judge against; if

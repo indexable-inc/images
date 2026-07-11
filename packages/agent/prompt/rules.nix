@@ -671,7 +671,7 @@
         on orchestration, quick replies, and trivial one-step work. Match
         agent model strength to task difficulty: strongest for hard
         reasoning, planning, and high-stakes decisions; cheaper tiers (Codex
-        on `gpt-5.5` with low reasoning) for mechanical edits, search, and
+        on `gpt-5.6-sol` with low reasoning) for mechanical edits, search, and
         settled execution.
         When a request branches off the current conversation (a side task,
         fix, or change that is not the thread's main line), dispatch it to a
