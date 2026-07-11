@@ -13,6 +13,7 @@ description = "End-to-end tests for shared-audio: gossip, clock convergence, bit
 [dependencies]
 
 [dev-dependencies]
+anyhow.workspace = true
 audio-blob.workspace = true
 audio-clock.workspace = true
 audio-engine.workspace = true
