@@ -62,9 +62,13 @@ members = [
   "packages/ix-windows",
   "packages/terminal/kitty",
   "packages/search/lake/iceberg",
-  "packages/minecraft/minecraft/nbt",
-  "packages/minecraft/minecraft/sound",
-  "packages/minecraft/minecraft/sync-managed",
+  "packages/minecraft/bot",
+  "packages/minecraft/nbt",
+  "packages/minecraft/protocol",
+  "packages/minecraft/protocol/jvm",
+  "packages/minecraft/protocol/py",
+  "packages/minecraft/sound",
+  "packages/minecraft/sync-managed",
   "packages/mirror",
   "packages/mcp/server-info",
   "packages/search/mixedbread",
@@ -99,14 +103,17 @@ members = [
   "packages/tui/tui-node",
   "packages/tui/tui-py",
   "packages/unibind/backend-ex",
+  "packages/unibind/backend-jvm",
   "packages/unibind/backend-py",
   "packages/unibind/backend-ts",
   "packages/unibind/conformance",
   "packages/unibind/conformance-ex",
+  "packages/unibind/conformance-jvm",
   "packages/unibind/conformance-ts",
   "packages/unibind/core",
   "packages/unibind/ex-runtime",
   "packages/unibind/gen",
+  "packages/unibind/jvm-runtime",
   "packages/unibind/macros",
   "packages/unibind/py-runtime",
   "packages/unibind/runtime",
@@ -212,6 +219,7 @@ efx-engine = { path = "packages/efx/engine" }
 efx-ir = { path = "packages/efx/ir" }
 efx-lang = { path = "packages/efx/lang" }
 file-language = { path = "packages/code/file-language" }
+flate2 = "1"
 flecs-query-core = { path = "packages/flecs-query/core" }
 fontdue = "0.9"
 futures = "0.3"
@@ -262,7 +270,9 @@ objc2-quartz-core = "0.3"
 objc2-web-kit = "0.3"
 object = { version = "0.39", default-features = false, features = ["read"] }
 object_store = { version = "0.14", features = ["aws"] }
+mc-protocol = { path = "packages/minecraft/protocol" }
 mcp-server-info = { path = "packages/mcp/server-info" }
+md-5 = "0.10"
 panes-protocol = { path = "packages/vm/panes/protocol" }
 panes-guest-transport = { path = "packages/vm/panes/guest-transport" }
 parking_lot = "0.12"
@@ -369,11 +379,13 @@ tree-sitter-yaml = "0.7"
 tui = { path = "packages/tui/tui" }
 unibind = { path = "packages/unibind/macros" }
 unibind-backend-ex = { path = "packages/unibind/backend-ex" }
+unibind-backend-jvm = { path = "packages/unibind/backend-jvm" }
 unibind-backend-py = { path = "packages/unibind/backend-py" }
 unibind-backend-ts = { path = "packages/unibind/backend-ts" }
 unibind-core = { path = "packages/unibind/core" }
 unibind-test-support = { path = "packages/unibind/test-support" }
 unibind-ex-runtime = { path = "packages/unibind/ex-runtime" }
+unibind-jvm-runtime = { path = "packages/unibind/jvm-runtime" }
 unibind-py-runtime = { path = "packages/unibind/py-runtime" }
 unibind-runtime = { path = "packages/unibind/runtime" }
 url = { version = "2.5.8", default-features = false }
@@ -385,3 +397,7 @@ webpki-roots = "1"
 wry = { version = "0.55", features = ["transparent"] }
 x509-parser = "0.18"
 xxhash-rust = { version = "0.8", default-features = false }
+# Container format only (ReplayMod .mcpr archives); the compression backends
+# are opted into per consumer, so the default heavyweight codecs (zstd, lzma,
+# bzip2) stay out of the build graph.
+zip = { version = "7", default-features = false }

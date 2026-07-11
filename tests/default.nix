@@ -46,6 +46,16 @@
       paths
       ;
   };
+  # VM boot + protocol smoke test for the Minestom spleef example server. Same
+  # deal: qemu VM, so its own check (`checks.<system>.minestom-spleef-vm`).
+  minestomSpleefVmTest = import ./minestom-spleef-vm.nix {
+    inherit
+      lib
+      pkgs
+      ix
+      paths
+      ;
+  };
   # Public Rust SDK: validates the prebuilt, R2-hosted ix-sdk-wire artifact
   # pins. The old end-to-end link proof needs a matching published rustc
   # dependency closure before it can be a reliable CI gate.
@@ -6233,6 +6243,7 @@ in {
   symphonyHomeModule = symphonyHomeModuleTest;
   provenance = provenanceTest;
   minecraftBlocksVm = minecraftBlocksVmTest;
+  minestomSpleefVm = minestomSpleefVmTest;
   inherit baseImageNixDb;
 
   # Aggregate. Pulls every group test into one derivation so
