@@ -18,7 +18,7 @@ package, you get a `pi-harness` command that launches Pi already locked down.
 
 ```sh
 nix run github:indexable-inc/index#pi-harness -- "your prompt"      # claude (opus-4-8), JSON event stream
-PI_HARNESS_MODEL=codex pi-harness "..."                             # gpt-5.5 via OpenAI
+PI_HARNESS_MODEL=codex pi-harness "..."                             # gpt-5.6-sol via OpenAI
 ```
 
 ## How the lockdown works
