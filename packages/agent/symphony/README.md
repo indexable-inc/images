@@ -46,9 +46,10 @@ and [.env.example](.env.example) cover the full configuration surface.
 ## Neighbors
 
 - The room stack symphony drives over HTTP (`room-server` and the room UI)
-  lives in the ix monorepo (`crates/room`, `packages/room`).
-- `location: ixvm` placements provision VMs through ix's fleet path. TODO:
-  restore `room-server` on PATH once the ix<->index flake cycle is resolved.
+  lives in the ix monorepo (`crates/room`, `packages/room`); index
+  intentionally packages only the Elixir runtime, not room-server.
+- `location: ixvm` placements provision VMs through ix's fleet path, where
+  the ix deploy provides room-server at runtime.
 - Deployment goes through the
   [`symphony` NixOS module](../../../modules/services/symphony/)
   (`services.symphony.*`), with secrets supplied via `environmentFile` or
