@@ -41,7 +41,7 @@ new file mode 100644
 index 000000000..db87b6fe2
 --- /dev/null
 +++ b/src/libstore/build/goal-graph.cc
-@@ -0,0 +1,269 @@
+@@ -0,0 +1,286 @@
 +#include "nix/store/build/goal-graph.hh"
 +
 +#include "nix/store/build/derivation-building-goal.hh"
@@ -178,10 +178,28 @@ index 000000000..db87b6fe2
 +           failure is the fact worth keeping. */
 +        entry.success = inserted ? success : (entry.success && success);
 +        entry.kind = isSubstitution(goal) ? "substitution" : "build";
-+        for (auto & weak : goal.waiters)
-+            if (auto waiter = weak.lock())
-+                if (auto wid = goalId(store, *waiter); wid && *wid != *id)
++        /* Attribute waiter edges, tunneling through id-less goals (resolution,
++           drv-output substitution) to the nearest identified ancestor, as
++           flush() does for the live graph. */
++        std::vector<std::shared_ptr<Goal>> pending;
++        std::set<const Goal *> seen;
++        auto pushWaiters = [&](const Goal & g) {
++            for (auto & weak : g.waiters)
++                if (auto waiter = weak.lock())
++                    pending.push_back(std::move(waiter));
++        };
++        pushWaiters(goal);
++        while (!pending.empty()) {
++            auto waiter = std::move(pending.back());
++            pending.pop_back();
++            if (!seen.insert(waiter.get()).second)
++                continue;
++            if (auto wid = goalId(store, *waiter)) {
++                if (*wid != *id)
 +                    entry.waiters.insert(*wid);
++            } else
++                pushWaiters(*waiter);
++        }
 +        auto outputs = goalOutputs(goal);
 +        entry.outputs.insert(outputs.begin(), outputs.end());
 +        markDirty();
@@ -212,7 +230,6 @@ index 000000000..db87b6fe2
 +        };
 +
 +        std::map<std::string, Node> nodes;
-+        std::set<std::string> roots;
 +
 +        /* Walk the live goal graph from the top goals down through waitees.
 +           Each frame carries the nearest identified ancestor, so edges tunnel
@@ -333,7 +350,7 @@ new file mode 100644
 index 000000000..6a0169788
 --- /dev/null
 +++ b/src/libstore/include/nix/store/build/goal-graph.hh
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,156 @@
 +#pragma once
 +///@file
 +
@@ -436,6 +453,13 @@ index 000000000..6a0169788
 +    };
 +
 +    std::map<std::string, Finished> finished;
++
++    /**
++     * Ids of the requested root goals seen this session. Accumulated rather
++     * than rebuilt from the live top goals, so a root that completed while
++     * another root is still running stays in the reported graph.
++     */
++    std::set<std::string> roots;
 +
 +    GoalGraph();
 +
