@@ -35,9 +35,11 @@ pub struct InstrumentRef {
     pub at_frame: u64,
 }
 
-/// A scheduled control change: at shared-timeline frame `at_frame`, control
-/// `control` becomes `value`. Events are appended concurrently by any peer;
-/// [`Score::events`] returns them in one deterministic order everywhere.
+/// A scheduled control change.
+///
+/// At shared-timeline frame `at_frame`, control `control` becomes `value`.
+/// Events are appended concurrently by any peer; [`Score::events`] returns
+/// them in one deterministic order everywhere.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Event {
     /// Shared-timeline frame the change applies at.
@@ -48,13 +50,33 @@ pub struct Event {
     pub value: f32,
 }
 
+/// [`Event::sort_key`] result.
+///
+/// Field order is the derived comparison order: frame, then control, then
+/// value bits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct EventKey {
+    frame: u64,
+    control: u16,
+    value_bits: u32,
+}
+
 impl Event {
     /// Total order used everywhere so concurrent schedules resolve
-    /// identically on every peer: by frame, then control, then value bits.
+    /// identically on every peer.
     #[must_use]
-    pub fn sort_key(&self) -> (u64, u16, u32) {
-        (self.at_frame, self.control, self.value.to_bits())
+    pub const fn sort_key(&self) -> EventKey {
+        EventKey { frame: self.at_frame, control: self.control, value_bits: self.value.to_bits() }
     }
+}
+
+/// A control's current value, one element of [`Score::controls`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ControlValue {
+    /// Instrument control index.
+    pub control: u16,
+    /// Current value.
+    pub value: f32,
 }
 
 /// The shared score document. Cheap to create; wrap in `Arc<Mutex<_>>` (or
@@ -143,18 +165,18 @@ impl Score {
 
     /// Current control values, sparse and sorted by control index.
     #[must_use]
-    pub fn controls(&self) -> Vec<(u16, f32)> {
+    pub fn controls(&self) -> Vec<ControlValue> {
         let value = self.doc.get_map(CONTROLS).get_deep_value();
         let LoroValue::Map(map) = value else {
             return Vec::new();
         };
-        let mut controls: Vec<(u16, f32)> = map
+        let mut controls: Vec<ControlValue> = map
             .iter()
             .filter_map(|(key, value)| {
-                Some((key.parse().ok()?, as_f32(value)?))
+                Some(ControlValue { control: key.parse().ok()?, value: as_f32(value)? })
             })
             .collect();
-        controls.sort_unstable_by_key(|&(control, _)| control);
+        controls.sort_unstable_by_key(|control| control.control);
         controls
     }
 
@@ -222,7 +244,7 @@ fn frame_to_i64(frame: u64) -> Result<i64> {
     i64::try_from(frame).map_err(|_| anyhow!("frame {frame} exceeds i64::MAX"))
 }
 
-fn as_i64(value: &LoroValue) -> Option<i64> {
+const fn as_i64(value: &LoroValue) -> Option<i64> {
     if let LoroValue::I64(value) = value {
         Some(*value)
     } else {
@@ -235,7 +257,7 @@ fn as_i64(value: &LoroValue) -> Option<i64> {
     clippy::cast_possible_truncation,
     reason = "controls are f32 at the instrument ABI; narrowing is the contract"
 )]
-fn as_f32(value: &LoroValue) -> Option<f32> {
+const fn as_f32(value: &LoroValue) -> Option<f32> {
     if let LoroValue::Double(value) = value {
         Some(*value as f32)
     } else {
@@ -291,7 +313,13 @@ mod tests {
         let instrument = score.instrument()?.expect("instrument set");
         assert_eq!(instrument.hash, hash());
         assert_eq!(instrument.at_frame, 96_000);
-        assert_eq!(score.controls(), vec![(0, 440.0), (1, 0.5)]);
+        assert_eq!(
+            score.controls(),
+            vec![
+                ControlValue { control: 0, value: 440.0 },
+                ControlValue { control: 1, value: 0.5 }
+            ]
+        );
         assert_eq!(
             score.events(),
             vec![Event { at_frame: 48_000, control: 0, value: 660.0 }]

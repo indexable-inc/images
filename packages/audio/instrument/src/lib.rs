@@ -1,7 +1,7 @@
 //! Deterministic WASM instrument host.
 //!
 //! An instrument is a sandboxed pure function `(controls, time) -> samples`
-//! compiled to WASM (from FunDSP, hand-written WAT, or anything else). Every
+//! compiled to WASM (from `FunDSP`, hand-written WAT, or anything else). Every
 //! peer runs the same module bytes over the same shared timeline, so audio
 //! is identical everywhere without ever sending it.
 //!
@@ -115,7 +115,7 @@ impl Instrument {
 
     /// Output channel count (1 = mono, 2 = interleaved stereo).
     #[must_use]
-    pub fn channels(&self) -> u32 {
+    pub const fn channels(&self) -> u32 {
         self.channels
     }
 
@@ -126,6 +126,10 @@ impl Instrument {
     /// # Errors
     /// Fails when `frames` exceeds [`MAX_BLOCK_FRAMES`], `out` is missized,
     /// or the module traps.
+    ///
+    /// # Panics
+    /// Never: `frames` is checked against [`MAX_BLOCK_FRAMES`] before the
+    /// `i32` conversion.
     pub fn render(
         &mut self,
         start_frame: u64,

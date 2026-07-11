@@ -21,7 +21,7 @@ pub fn request(request: &Request) -> Result<Response> {
     stream.write_all(payload.as_bytes())?;
     let mut line = String::new();
     BufReader::new(stream).read_line(&mut line)?;
-    Ok(serde_json::from_str(&line).context("parse daemon reply")?)
+    serde_json::from_str(&line).context("parse daemon reply")
 }
 
 /// Send a request, pretty-print the reply, and fail on daemon errors.

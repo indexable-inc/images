@@ -13,7 +13,7 @@ use audio_blob::BlobStore;
 use audio_clock::{MonotonicTime, PeerId, ProcessTime, SAMPLE_RATE};
 use audio_engine::Renderer;
 use audio_net::{Config, NodeHandle};
-use audio_score::{Event, Score};
+use audio_score::{ControlValue, Event, Score};
 
 /// Stateless mono instrument: `sample = fract(frame / 1000) * controls[1] +
 /// controls[0]`. Pure in the absolute frame, so any peer and any block
@@ -60,7 +60,7 @@ async fn spawn_peer(
     time: &Arc<dyn MonotonicTime>,
 ) -> Result<Peer> {
     let dir = tempfile::tempdir()?;
-    let store = Arc::new(BlobStore::open(dir.path())?);
+    let blobs = Arc::new(BlobStore::open(dir.path())?);
     let score = Arc::new(Mutex::new(Score::new()));
     let node = audio_net::spawn(
         Config {
@@ -72,10 +72,10 @@ async fn spawn_peer(
             time: Arc::clone(time),
         },
         Arc::clone(&score),
-        Arc::clone(&store),
+        Arc::clone(&blobs),
     )
     .await?;
-    Ok(Peer { score, store, node, _dir: dir })
+    Ok(Peer { score, store: blobs, node, _dir: dir })
 }
 
 /// Poll `condition` until it holds or the deadline blows.
@@ -157,7 +157,8 @@ async fn edits_flow_both_ways() -> Result<()> {
 
     let both = |score: &Arc<Mutex<Score>>| {
         let controls = score.lock().expect("lock").controls();
-        controls.contains(&(3, 0.75)) && controls.contains(&(4, 0.25))
+        controls.contains(&ControlValue { control: 3, value: 0.75 })
+            && controls.contains(&ControlValue { control: 4, value: 0.25 })
     };
     converge("A to see both controls", || both(&a.score)).await;
     converge("B to see both controls", || both(&b.score)).await;

@@ -18,7 +18,7 @@ use anyhow::{Context as _, Result};
 use audio_blob::{BlobHash, BlobStore};
 use audio_clock::{MonotonicTime, SharedClock};
 use audio_instrument::{CONTROL_COUNT, Instrument, MAX_BLOCK_FRAMES};
-use audio_score::Score;
+use audio_score::{ControlValue, Score};
 use tracing::{info, warn};
 
 /// Renders any span of the shared timeline from the score, deterministically.
@@ -40,8 +40,8 @@ struct Staged {
 impl Renderer {
     /// A renderer over a shared score and blob store.
     #[must_use]
-    pub fn new(score: Arc<Mutex<Score>>, store: Arc<BlobStore>) -> Self {
-        Self { score, store, loaded: None, staged: None }
+    pub const fn new(score: Arc<Mutex<Score>>, blobs: Arc<BlobStore>) -> Self {
+        Self { score, store: blobs, loaded: None, staged: None }
     }
 
     /// Channel count of the loaded instrument, or 1 before any loads.
@@ -59,6 +59,9 @@ impl Renderer {
     ///
     /// # Errors
     /// Fails when the named module bytes are present but invalid.
+    ///
+    /// # Panics
+    /// Panics when the score mutex is poisoned.
     pub fn refresh(&mut self) -> Result<bool> {
         let wanted = {
             let score = self.score.lock().expect("score lock");
@@ -113,6 +116,9 @@ impl Renderer {
     ///
     /// # Errors
     /// Fails when `out` is missized or the instrument traps.
+    ///
+    /// # Panics
+    /// Panics when the score mutex is poisoned.
     pub fn render_range(
         &mut self,
         start_frame: u64,
@@ -141,7 +147,7 @@ impl Renderer {
             (score.controls(), score.events())
         };
         let mut state = [0.0_f32; CONTROL_COUNT];
-        for (control, value) in controls {
+        for ControlValue { control, value } in controls {
             if let Some(slot) = state.get_mut(control as usize) {
                 *slot = value;
             }
@@ -298,6 +304,8 @@ impl Player {
     /// Start rendering ahead of `clock` and return the source to feed an
     /// output mixer. `clock` is a snapshot getter so the player always
     /// chases the freshest network estimate.
+    /// # Panics
+    /// Panics when the render thread cannot be spawned.
     #[must_use]
     pub fn spawn(
         mut renderer: Renderer,
@@ -515,15 +523,15 @@ mod tests {
 
     fn fixture() -> Result<(Arc<Mutex<Score>>, Renderer, tempfile::TempDir)> {
         let dir = tempfile::tempdir()?;
-        let store = Arc::new(BlobStore::open(dir.path())?);
-        let hash = store.put(CONST_WAT.as_bytes())?;
+        let blobs = Arc::new(BlobStore::open(dir.path())?);
+        let hash = blobs.put(CONST_WAT.as_bytes())?;
         let score = Arc::new(Mutex::new(Score::new()));
         {
             let score = score.lock().expect("lock");
             score.set_instrument(&hash, 0)?;
             score.set_control(0, 0.25)?;
         }
-        let renderer = Renderer::new(Arc::clone(&score), store);
+        let renderer = Renderer::new(Arc::clone(&score), blobs);
         Ok((score, renderer, dir))
     }
 
@@ -572,16 +580,16 @@ mod tests {
     #[test]
     fn instrument_switches_at_its_activation_frame() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let store = Arc::new(BlobStore::open(dir.path())?);
-        let hash_a = store.put(CONST_WAT.as_bytes())?;
-        let hash_b = store.put(SHIFT_WAT.as_bytes())?;
+        let blobs = Arc::new(BlobStore::open(dir.path())?);
+        let hash_a = blobs.put(CONST_WAT.as_bytes())?;
+        let hash_b = blobs.put(SHIFT_WAT.as_bytes())?;
         let score = Arc::new(Mutex::new(Score::new()));
         {
             let score = score.lock().expect("lock");
             score.set_instrument(&hash_a, 0)?;
             score.set_control(0, 0.25)?;
         }
-        let mut renderer = Renderer::new(Arc::clone(&score), Arc::clone(&store));
+        let mut renderer = Renderer::new(Arc::clone(&score), Arc::clone(&blobs));
         let mut out = vec![0.0; 8];
         renderer.render_range(0, 8, 48_000, &mut out)?;
         assert!(out.iter().all(|&sample| (sample - 0.25).abs() < f32::EPSILON));
@@ -596,7 +604,7 @@ mod tests {
 
         // A peer that never held the old module stays silent until the
         // shared switch point instead of jumping ahead.
-        let mut fresh = Renderer::new(Arc::clone(&score), store);
+        let mut fresh = Renderer::new(Arc::clone(&score), blobs);
         let mut out = vec![1.0; 200];
         fresh.render_range(0, 200, 48_000, &mut out)?;
         assert!(out[..100].iter().all(|&sample| sample == 0.0));
@@ -607,9 +615,9 @@ mod tests {
     #[test]
     fn silence_before_any_instrument() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let store = Arc::new(BlobStore::open(dir.path())?);
+        let blobs = Arc::new(BlobStore::open(dir.path())?);
         let score = Arc::new(Mutex::new(Score::new()));
-        let mut renderer = Renderer::new(score, store);
+        let mut renderer = Renderer::new(score, blobs);
         let mut out = vec![1.0; 64];
         renderer.render_range(0, 64, 48_000, &mut out)?;
         assert!(out.iter().all(|&sample| sample == 0.0));

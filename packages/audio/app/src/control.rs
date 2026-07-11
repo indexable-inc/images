@@ -73,7 +73,7 @@ pub struct Response {
 
 impl Response {
     #[must_use]
-    pub fn ok() -> Self {
+    pub const fn ok() -> Self {
         Self { ok: true, error: None, status: None }
     }
 

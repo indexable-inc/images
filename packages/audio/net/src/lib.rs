@@ -129,7 +129,7 @@ struct PeerEntry {
 pub async fn spawn(
     config: Config,
     score: Arc<Mutex<Score>>,
-    store: Arc<BlobStore>,
+    blobs: Arc<BlobStore>,
 ) -> Result<NodeHandle> {
     let listener = TcpListener::bind(config.tcp_bind).await.context("bind TCP")?;
     let tcp_addr = listener.local_addr()?;
@@ -143,7 +143,7 @@ pub async fn spawn(
     let node = Arc::new(Node {
         config,
         score,
-        store,
+        store: blobs,
         clock: clock_tx,
         estimator: Mutex::new(OffsetEstimator::new(16)),
         leader: Mutex::new(None),
@@ -254,6 +254,7 @@ async fn gossip_loop(node: &Node, stream: &mut TcpStream) -> Result<()> {
                         None
                     } else {
                         let update = score.export_updates(&sent)?;
+                        drop(score);
                         sent = current;
                         Some(update)
                     }
@@ -316,15 +317,16 @@ impl Node {
     /// re-run the election.
     fn peer_connected(&self, remote: &Hello, tcp_addr: SocketAddr) {
         let remote_id = PeerId(remote.peer_id);
-        {
-            let mut peers = self.peers.lock().expect("peers lock");
-            let entry = peers.entry(remote_id).or_insert(PeerEntry {
+        let mut peers = self.peers.lock().expect("peers lock");
+        peers
+            .entry(remote_id)
+            .or_insert_with(|| PeerEntry {
                 ping_addr: SocketAddr::new(tcp_addr.ip(), remote.udp_port),
                 epoch_micros: remote.epoch_micros,
                 connections: 0,
-            });
-            entry.connections += 1;
-        }
+            })
+            .connections += 1;
+        drop(peers);
         self.elect();
     }
 
@@ -371,23 +373,22 @@ impl Node {
         // Offsets measured against the old leader say nothing about the new
         // clock we are about to ping.
         self.estimator.lock().expect("estimator lock").clear();
-        match next {
-            Some(new) => debug!(leader = new.peer_id.0, ping = %new.ping_addr, "following new leader"),
-            None => {
-                // We are the smallest peer left: keep the shared timeline
-                // running from where it is and lead it ourselves.
-                let now = self.config.time.now_micros();
-                self.clock.send_if_modified(|clock| {
-                    let adopted = clock.adopt_lead(now);
-                    if *clock == adopted {
-                        false
-                    } else {
-                        *clock = adopted;
-                        true
-                    }
-                });
-                debug!("no smaller peer connected; leading the timeline");
-            }
+        if let Some(new) = next {
+            debug!(leader = new.peer_id.0, ping = %new.ping_addr, "following new leader");
+        } else {
+            // We are the smallest peer left: keep the shared timeline
+            // running from where it is and lead it ourselves.
+            let now = self.config.time.now_micros();
+            self.clock.send_if_modified(|clock| {
+                let adopted = clock.adopt_lead(now);
+                if *clock == adopted {
+                    false
+                } else {
+                    *clock = adopted;
+                    true
+                }
+            });
+            debug!("no smaller peer connected; leading the timeline");
         }
         *leader = next;
     }

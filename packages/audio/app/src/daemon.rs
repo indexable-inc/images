@@ -67,7 +67,7 @@ async fn run_async(opts: Opts) -> Result<()> {
     let state_dir = opts.state_dir.unwrap_or_else(control::state_dir);
     std::fs::create_dir_all(&state_dir)
         .with_context(|| format!("create state dir {}", state_dir.display()))?;
-    let store = Arc::new(BlobStore::open(state_dir.join("blobs"))?);
+    let blobs = Arc::new(BlobStore::open(state_dir.join("blobs"))?);
 
     let score_path = state_dir.join("score.loro");
     let score = Score::new();
@@ -76,7 +76,7 @@ async fn run_async(opts: Opts) -> Result<()> {
         info!(path = %score_path.display(), "restored score snapshot");
     }
     if score.instrument()?.is_none() {
-        let hash = store.put(DEFAULT_INSTRUMENT_WAT.as_bytes())?;
+        let hash = blobs.put(DEFAULT_INSTRUMENT_WAT.as_bytes())?;
         score.set_instrument(&hash, 0)?;
         info!(%hash, "seeded default instrument");
     }
@@ -97,7 +97,7 @@ async fn run_async(opts: Opts) -> Result<()> {
                 time: Arc::clone(&time),
             },
             Arc::clone(&score),
-            Arc::clone(&store),
+            Arc::clone(&blobs),
         )
         .await?,
     );
@@ -107,12 +107,12 @@ async fn run_async(opts: Opts) -> Result<()> {
     let _audio = if opts.no_audio {
         None
     } else {
-        Some(start_audio(&score, &store, &node, &time, sample_rate, &volume)?)
+        Some(start_audio(&score, &blobs, &node, &time, sample_rate, &volume)?)
     };
 
     let state = Arc::new(State {
         score: Arc::clone(&score),
-        store,
+        store: blobs,
         volume,
         node,
         time,
@@ -148,7 +148,7 @@ async fn run_async(opts: Opts) -> Result<()> {
                 let (stream, _) = accepted?;
                 tokio::spawn(serve_client(stream, Arc::clone(&state)));
             }
-            _ = shutdown_signal() => break,
+            () = shutdown_signal() => break,
         }
     }
     let _ = std::fs::remove_file(&socket_path);
@@ -159,13 +159,13 @@ async fn run_async(opts: Opts) -> Result<()> {
 /// Open the default output device and start the schedule-ahead player.
 fn start_audio(
     score: &Arc<Mutex<Score>>,
-    store: &Arc<BlobStore>,
+    blobs: &Arc<BlobStore>,
     node: &Arc<NodeHandle>,
     time: &Arc<dyn MonotonicTime>,
     sample_rate: u32,
     volume: &Volume,
 ) -> Result<(Player, rodio::MixerDeviceSink, rodio::Player)> {
-    let renderer = Renderer::new(Arc::clone(score), Arc::clone(store));
+    let renderer = Renderer::new(Arc::clone(score), Arc::clone(blobs));
     let clock_node = Arc::clone(node);
     let (player, source) = Player::spawn(
         renderer,
@@ -264,7 +264,11 @@ fn try_handle(state: &State, request: Request) -> Result<Response> {
                     gain: state.volume.gain(),
                     muted: state.volume.muted(),
                     instrument: score.instrument()?.map(|i| i.hash.to_string()),
-                    controls: score.controls(),
+                    controls: score
+                        .controls()
+                        .into_iter()
+                        .map(|c| (c.control, c.value))
+                        .collect(),
                     events: score.events().len(),
                 }),
             })
@@ -324,7 +328,7 @@ mod tests {
 
     async fn test_state() -> Result<(Arc<State>, tempfile::TempDir)> {
         let dir = tempfile::tempdir()?;
-        let store = Arc::new(BlobStore::open(dir.path().join("blobs"))?);
+        let blobs = Arc::new(BlobStore::open(dir.path().join("blobs"))?);
         let score = Arc::new(Mutex::new(Score::new()));
         let time: Arc<dyn MonotonicTime> = Arc::new(ProcessTime::default());
         let peer_id = PeerId(7);
@@ -339,14 +343,14 @@ mod tests {
                     time: Arc::clone(&time),
                 },
                 Arc::clone(&score),
-                Arc::clone(&store),
+                Arc::clone(&blobs),
             )
             .await?,
         );
         Ok((
             Arc::new(State {
                 score,
-                store,
+                store: blobs,
                 volume: Volume::default(),
                 node,
                 time,

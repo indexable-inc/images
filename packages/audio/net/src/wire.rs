@@ -146,10 +146,11 @@ fn hash_of(bytes: &[u8]) -> Result<BlobHash> {
     Ok(BlobHash::from_bytes(bytes))
 }
 
-/// A clock ping over UDP: request carries the sender's send time; the reply
-/// echoes it plus the responder's receive and reply times, the four
-/// timestamps NTP-style offset estimation needs (the fourth is stamped by
-/// the requester on arrival).
+/// A clock ping over UDP.
+///
+/// The request carries the sender's send time; the reply echoes it plus the
+/// responder's receive and reply times, the four timestamps NTP-style offset
+/// estimation needs (the fourth is stamped by the requester on arrival).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ping {
     /// `t0`: requester's local send time in microseconds.
@@ -194,6 +195,10 @@ impl Ping {
     ///
     /// # Errors
     /// Fails on a corrupt packet that carries our magic but a bad tag.
+    ///
+    /// # Panics
+    /// Never: the eight-byte reads sit at fixed offsets inside the
+    /// length-checked packet.
     pub fn decode(packet: &[u8]) -> Result<Option<Self>> {
         if packet.len() != PING_PACKET_BYTES || packet[..4] != PING_MAGIC {
             return Ok(None);
