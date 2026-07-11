@@ -280,12 +280,7 @@ mod tests {
     use super::*;
 
     const fn sample(t0: u64, t1: u64, t2: u64, t3: u64) -> PingSample {
-        PingSample {
-            request_sent: t0,
-            peer_received: t1,
-            peer_replied: t2,
-            response_received: t3,
-        }
+        PingSample { request_sent: t0, peer_received: t1, peer_replied: t2, response_received: t3 }
     }
 
     #[test]

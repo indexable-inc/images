@@ -265,34 +265,33 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn rejects_wrong_abi_version() {
-        let wat = r#"
+    /// A do-nothing module with parameterized ABI-probe exports, for
+    /// exercising `Instrument::load` validation failures.
+    fn stub_wat(abi_version: i32, memory_pages: u32, out_ptr: u32) -> String {
+        format!(
+            r#"
 (module
-  (memory (export "memory") 2)
-  (func (export "sa_abi_version") (result i32) (i32.const 2))
+  (memory (export "memory") {memory_pages})
+  (func (export "sa_abi_version") (result i32) (i32.const {abi_version}))
   (func (export "sa_channels") (result i32) (i32.const 1))
   (func (export "sa_controls_ptr") (result i32) (i32.const 0))
-  (func (export "sa_out_ptr") (result i32) (i32.const 256))
+  (func (export "sa_out_ptr") (result i32) (i32.const {out_ptr}))
   (func (export "sa_render") (param i64) (param i32) (param i32)))
-"#;
-        let error = Instrument::load(wat.as_bytes()).expect_err("ABI v2 must be rejected");
+"#
+        )
+    }
+
+    #[test]
+    fn rejects_wrong_abi_version() {
+        let error = Instrument::load(stub_wat(2, 2, 256).as_bytes()).expect_err("ABI v2 rejected");
         assert!(error.to_string().contains("ABI"));
     }
 
     #[test]
     fn rejects_buffers_outside_memory() {
         // One 64 KiB page cannot hold an out buffer at page end.
-        let wat = r#"
-(module
-  (memory (export "memory") 1)
-  (func (export "sa_abi_version") (result i32) (i32.const 1))
-  (func (export "sa_channels") (result i32) (i32.const 1))
-  (func (export "sa_controls_ptr") (result i32) (i32.const 0))
-  (func (export "sa_out_ptr") (result i32) (i32.const 65000))
-  (func (export "sa_render") (param i64) (param i32) (param i32)))
-"#;
-        let error = Instrument::load(wat.as_bytes()).expect_err("oversized buffers rejected");
+        let error = Instrument::load(stub_wat(1, 1, 65_000).as_bytes())
+            .expect_err("oversized buffers rejected");
         assert!(error.to_string().contains("memory"));
     }
 
