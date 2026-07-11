@@ -197,25 +197,39 @@
   darwinLibiconv =
     pkgs.runCommand "run-darwin-libiconv"
     {
-      nativeBuildInputs = [package];
+      nativeBuildInputs = [
+        package
+        pkgs.darwin.binutils
+        pkgs.llvmPackages.clang-unwrapped
+      ];
       strictDeps = true;
     }
     ''
-      cat >link-environment-probe <<'EOF'
-      #!${lib.getExe pkgs.bash}
-      IFS=:
-      for directory in $LIBRARY_PATH; do
-        if [ -f "$directory/libiconv.dylib" ]; then
-          exit 0
-        fi
-      done
-      echo "LIBRARY_PATH has no linkable libiconv" >&2
-      exit 1
+      cat >main.c <<'EOF'
+      extern void *iconv_open(const char *, const char *);
+      void *probe(void) { return iconv_open("UTF-8", "UTF-8"); }
       EOF
-      chmod +x link-environment-probe
+
+      cat >link-iconv <<'EOF'
+      #!${lib.getExe pkgs.bash}
+      ${lib.getExe' pkgs.coreutils "env"} -i \
+        HOME="$TMPDIR" \
+        LIBRARY_PATH="$LIBRARY_PATH" \
+        PATH="$PATH" \
+        TMPDIR="$TMPDIR" \
+        ${lib.getExe pkgs.llvmPackages.clang-unwrapped} \
+          -shared -nostdlib main.c -liconv -o iconv-smoke.dylib \
+          2>"$TMPDIR/link-iconv.stderr"
+      EOF
+      chmod +x link-iconv
 
       export IX_RUN_DIR="$TMPDIR/runs"
-      LIBRARY_PATH= run "$PWD/link-environment-probe"
+      if ! LIBRARY_PATH= run "$PWD/link-iconv"; then
+        cat "$TMPDIR/link-iconv.stderr" >&2
+        exit 1
+      fi
+      ${lib.getExe' pkgs.darwin.cctools "otool"} -L iconv-smoke.dylib \
+        | ${lib.getExe' pkgs.gnugrep "grep"} -F ${lib.escapeShellArg "${lib.getLib pkgs.libiconv}/lib/libiconv.2.dylib"}
       mkdir -p "$out"
     '';
 in
