@@ -107,7 +107,12 @@ impl<S> StreamAdapter<S> {
     }
 }
 
-impl<S: futures_core::Stream> RawStream for StreamAdapter<S>
+// `Unpin` keeps the impl safe: the adapter is public, so a caller could
+// poll it and then move it before boxing, which `Pin::new_unchecked` on the
+// field would make unsound for a `!Unpin` stream. [`UniStream`] (the only
+// shape the generated glue wraps) pins its inner stream on the heap and is
+// itself `Unpin`.
+impl<S: futures_core::Stream + Unpin> RawStream for StreamAdapter<S>
 where
     S::Item: IDeterminantProvider<()>,
 {
@@ -118,10 +123,7 @@ where
         if self.done {
             return Option::None();
         }
-        // SAFETY: mirrors stabby's blanket `Future` impl. The adapter lives
-        // behind a stable `Box` inside a `Dyn` pointer, which never moves
-        // its pointee, so pinning the field here is sound.
-        let stream = unsafe { core::pin::Pin::new_unchecked(&mut self.stream) };
+        let stream = core::pin::Pin::new(&mut self.stream);
         let polled = waker.with_waker(|waker| {
             futures_core::Stream::poll_next(stream, &mut core::task::Context::from_waker(waker))
         });
@@ -137,6 +139,41 @@ where
 
     extern "C" fn is_done(&self) -> bool {
         self.done
+    }
+}
+
+/// Maps each item of an inner stream through a conversion.
+///
+/// The generated glue wraps a [`UniStream`] in one of these (inside the
+/// [`StreamAdapter`]) whenever the exported item type is not already its
+/// ABI-stable spelling, so items convert as they cross the boundary.
+pub struct MapItems<S, F> {
+    stream: S,
+    map: F,
+}
+
+impl<S, F> MapItems<S, F> {
+    /// Wrap `stream`, converting each item through `map`.
+    pub const fn new(stream: S, map: F) -> Self {
+        Self { stream, map }
+    }
+}
+
+impl<S, F, T> futures_core::Stream for MapItems<S, F>
+where
+    S: futures_core::Stream + Unpin,
+    F: FnMut(S::Item) -> T + Unpin,
+{
+    type Item = T;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<core::option::Option<T>> {
+        let this = self.get_mut();
+        Pin::new(&mut this.stream)
+            .poll_next(context)
+            .map(|item| item.map(&mut this.map))
     }
 }
 
