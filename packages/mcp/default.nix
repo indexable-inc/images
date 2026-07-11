@@ -5484,6 +5484,12 @@
     assert rf.schema["createdAt"] == mercury._TS, rf.schema
     assert rf.schema["meta"] == pl.Utf8, rf.schema  # nested object flattened to JSON text
     assert mercury._records_frame([]).height == 0
+    # Regression: a timestamp-named column whose every value is empty must not
+    # raise (polars format inference has no sample) -- it becomes a typed null
+    # column instead, mirroring _frame.
+    blank = mercury._records_frame([{"id": "1", "paidAt": ""}, {"id": "2", "paidAt": ""}])
+    assert blank.schema["paidAt"] == mercury._TS, blank.schema
+    assert blank.get_column("paidAt").to_list() == [None, None], blank
     # The list envelope unwraps both the bare-array and the wrapped-object shapes.
     assert mercury._envelope_items({"recipients": [{"id": "r"}]}, "recipients") == [{"id": "r"}]
     assert mercury._envelope_items([{"id": "x"}]) == [{"id": "x"}]

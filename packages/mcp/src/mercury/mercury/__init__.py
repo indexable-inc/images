@@ -487,10 +487,19 @@ def _records_frame(records: list[dict[str, Any]]) -> pl.DataFrame:
         rows.append(row)
     df = pl.DataFrame(rows, infer_schema_length=None)
     time_cols = [c for c in df.columns if _is_time_key(c) and df.schema[c] == pl.Utf8]
-    if time_cols:
-        df = df.with_columns(
-            pl.col(c).str.to_datetime(time_zone="UTC", strict=False).alias(c) for c in time_cols
+    for c in time_cols:
+        # Mirror _frame: with no parseable sample (every value empty/missing),
+        # polars' format inference raises ComputeError even under strict=False,
+        # so emit a typed null column instead of calling str.to_datetime.
+        has_value = bool(
+            (df.get_column(c).str.strip_chars().str.len_chars().fill_null(0) > 0).any()
         )
+        if has_value:
+            df = df.with_columns(
+                pl.col(c).str.to_datetime(time_zone="UTC", strict=False).alias(c)
+            )
+        else:
+            df = df.with_columns(pl.lit(None, dtype=_TS).alias(c))
     return df
 
 
@@ -682,6 +691,7 @@ async def all_transactions(
     status: str | None = None,
     start: str | None = None,
     end: str | None = None,
+    newest_first: bool = True,
 ) -> pl.DataFrame:
     """Transactions across ALL accounts, as a polars DataFrame (``GET /transactions``).
 
@@ -689,8 +699,14 @@ async def all_transactions(
     organization-wide feed. Generic columns (the API's own field names);
     timestamp columns are parsed to UTC datetimes. ``limit`` caps the rows;
     narrow with ``status`` and ``start`` / ``end`` (``YYYY-MM-DD`` or ISO 8601).
+    Newest first by default, matching :func:`transactions` (the API's own default
+    is oldest-first, which would silently page in stale history); pass
+    ``newest_first=False`` for oldest-first.
     """
-    params: dict[str, Any] = {"limit": max(1, min(limit, 1000))}
+    params: dict[str, Any] = {
+        "limit": max(1, min(limit, 1000)),
+        "order": "desc" if newest_first else "asc",
+    }
     if status:
         params["status"] = status
     if start:
@@ -710,15 +726,33 @@ async def cards(account_id: str | None = None) -> pl.DataFrame:
     return await _list_frame(f"/account/{acct}/cards", "cards")
 
 
-# A single card is read by scanning its account's cards (Mercury has no
-# get-card-by-id endpoint), so `card` is a filter over `cards`, returned as a
-# 1-row frame for the matched id (empty frame if not found).
+# A single card is read by scanning cards (Mercury has no get-card-by-id
+# endpoint), so `card` is a filter over `cards`, returned as a 1-row frame for
+# the matched id (empty frame if not found). Without an account_id every
+# account's cards are searched, since the cards API is per-account and the card
+# may hang off any of them.
 async def card(card_id: str, *, account_id: str | None = None) -> pl.DataFrame:
-    """One card by id as a 1-row polars DataFrame (filtered from :func:`cards`)."""
-    frame = await cards(account_id=account_id)
-    if frame.height and "id" in frame.columns:
-        return frame.filter(pl.col("id") == card_id)
-    return frame.clear()
+    """One card by id as a 1-row polars DataFrame (filtered from :func:`cards`).
+
+    ``account_id`` scopes the search to one account; when omitted, all accounts
+    are searched in order.
+    """
+    if account_id:
+        frame = await cards(account_id=account_id)
+        if frame.height and "id" in frame.columns:
+            return frame.filter(pl.col("id") == card_id)
+        return frame.clear()
+    resp = await _request("GET", "/accounts")
+    parsed = _AccountsResponse.model_validate(resp.json())
+    last = pl.DataFrame()
+    for a in parsed.accounts:
+        frame = await cards(account_id=a.id)
+        if frame.height and "id" in frame.columns:
+            match = frame.filter(pl.col("id") == card_id)
+            if match.height:
+                return match
+            last = frame
+    return last.clear()
 
 
 async def statements(account_id: str | None = None) -> pl.DataFrame:
