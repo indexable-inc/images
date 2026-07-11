@@ -13,7 +13,7 @@
 in
   mkPiHarness {
     name = "pi-fusion";
-    description = "Pi primary agent with a delegated gpt-5.5-low sidekick.";
+    description = "Pi primary agent with a delegated gpt-5.6-sol sidekick at low reasoning.";
 
     extensions = [./extension/fusion.ts];
     libFiles = [
