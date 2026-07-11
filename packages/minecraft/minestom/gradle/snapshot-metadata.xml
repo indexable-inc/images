@@ -1,0 +1,30 @@
+<?xml version='1.0' encoding='UTF-8' ?>
+<metadata modelVersion="1.1.0">
+  <groupId>net.minestom</groupId>
+  <artifactId>minestom</artifactId>
+  <versioning>
+    <lastUpdated>20260710231954</lastUpdated>
+    <snapshot>
+      <timestamp>20260710.231954</timestamp>
+      <buildNumber>25</buildNumber>
+    </snapshot>
+    <snapshotVersions>
+      <snapshotVersion>
+        <extension>jar</extension>
+        <value>master-20260710.231954-25</value>
+        <updated>20260710231954</updated>
+      </snapshotVersion>
+      <snapshotVersion>
+        <extension>pom</extension>
+        <value>master-20260710.231954-25</value>
+        <updated>20260710231954</updated>
+      </snapshotVersion>
+      <snapshotVersion>
+        <extension>module</extension>
+        <value>master-20260710.231954-25</value>
+        <updated>20260710231954</updated>
+      </snapshotVersion>
+    </snapshotVersions>
+  </versioning>
+  <version>master-SNAPSHOT</version>
+</metadata>

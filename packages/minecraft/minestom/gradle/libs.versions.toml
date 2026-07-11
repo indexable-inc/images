@@ -1,0 +1,7 @@
+[versions]
+logback = "1.5.38"
+minestom = "master-20260710.231954-25"
+
+[libraries]
+logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+minestom = { module = "net.minestom:minestom", version.ref = "minestom" }
