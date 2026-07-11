@@ -181,3 +181,18 @@ fn test_ranges_overlap() {
     assert!(!ranges_overlap(&(0..10), &(10..20)));
     assert!(!ranges_overlap(&(0..10), &(20..30)));
 }
+
+#[test]
+fn ignore_spanning_several_comment_lines() {
+    // The pragma's justification continues onto further comment lines; the
+    // ignore must land on the item after the comment block, not on a
+    // continuation comment's delimiter token.
+    let source = "// clone:ignore -- reason spanning\n// a second comment line.\nfn main() {\n    let a = 1;\n    let b = 2;\n    let c = 3;\n}\n";
+    let info = scan_source(source, Lang::Rust);
+    let fn_start = source.find("fn main").expect("fn main exists");
+    assert!(
+        info.is_ignored(&(fn_start..source.len() - 1)),
+        "fn main not ignored: {:?}",
+        info.ignored_ranges
+    );
+}
