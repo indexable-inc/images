@@ -203,6 +203,12 @@
         value = builder.user;
       }
     ]
+    ++ lib.optional (builder.publicHostKey != null) {
+      # Nix records publicHostKey under the alias, but OpenSSH looks keys up
+      # by the rewritten HostName; alias the lookup so the declared key wins.
+      name = "HostKeyAlias";
+      value = builder.name;
+    }
     ++ lib.optional (builder.sshKey != null) {
       name = "IdentityFile";
       value = builder.sshKey;

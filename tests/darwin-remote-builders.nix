@@ -194,6 +194,7 @@
             ProxyCommand none
             StrictHostKeyChecking yes
             User builder
+            HostKeyAlias cluster-builder
             IdentityFile /etc/nix/cluster_ed25519
             ServerAliveInterval 15
             ServerAliveCountMax 12
