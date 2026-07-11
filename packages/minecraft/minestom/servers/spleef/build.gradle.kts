@@ -6,6 +6,10 @@ plugins {
 group = "dev.ix"
 version = "0.1.0"
 
+base {
+    archivesName = "minestom-spleef"
+}
+
 dependencies {
     implementation(libs.minestom)
     implementation(libs.logback.classic)
