@@ -161,14 +161,21 @@
     {
       assertion =
         seedService.requiredBy
-        == ["initrd-find-nixos-closure.service"]
-        && seedService.before == ["initrd-find-nixos-closure.service"]
+        == [
+          "initrd-find-nixos-closure.service"
+          "initrd.target"
+        ]
+        && seedService.before
+        == [
+          "initrd-find-nixos-closure.service"
+          "initrd-switch-root.target"
+        ]
         && seedService.unitConfig.RequiresMountsFor
         == [
           "/sysroot/nix"
           "/sysroot/nix/.boot-store"
         ];
-      message = "the seed must run after both filesystems mount and before closure discovery";
+      message = "the seed must run after both filesystems mount and before closure discovery and switch-root";
     }
     {
       assertion =

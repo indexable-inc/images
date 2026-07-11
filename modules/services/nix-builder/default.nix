@@ -118,8 +118,17 @@ in {
         enable = true;
         services.seed-nix-store = {
           description = "Seed the persistent Nix store from the immutable boot store";
-          requiredBy = ["initrd-find-nixos-closure.service"];
-          before = ["initrd-find-nixos-closure.service"];
+          # nixos-init boots never create initrd-find-nixos-closure.service, so
+          # the seed is also pulled in via initrd.target and ordered before
+          # switch-root, which both boot flavours pass through.
+          requiredBy = [
+            "initrd-find-nixos-closure.service"
+            "initrd.target"
+          ];
+          before = [
+            "initrd-find-nixos-closure.service"
+            "initrd-switch-root.target"
+          ];
           unitConfig.RequiresMountsFor = [
             "/sysroot${nixRoot}"
             "/sysroot${bootStore}"
