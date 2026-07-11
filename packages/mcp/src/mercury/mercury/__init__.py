@@ -22,6 +22,9 @@ the ``MERCURY_API_TOKEN`` (or ``MERCURY_TOKEN``) environment variable, or from a
 user-only file at ``~/.config/mercury/token`` (written mode 0600 by
 :func:`login`). No token is baked into the repo. Mint one in the Mercury
 dashboard under Settings -> API Tokens; it includes the ``secret-token:`` prefix.
+In a shared (multiplayer) room (``IX_MCP_SHARED`` set) every data call raises
+before the token is read or any network request is made, so bank data never
+reaches state other participants can see.
 
 Raises :exc:`MercuryError` when no token is configured (the message names
 ``mercury.login(token)``) or when the API cannot be reached.
@@ -80,6 +83,12 @@ __version__ = "0.1.0"
 # Environment variables checked for a token, in resolution order. MERCURY_API_TOKEN
 # is the primary name; MERCURY_TOKEN is accepted as a common alias.
 _TOKEN_ENV_VARS = ("MERCURY_API_TOKEN", "MERCURY_TOKEN")
+
+# A shared (multiplayer) room marks the MCP it replicates across participants
+# with this env var. Mercury reads bank balances and transaction history with a
+# per-user token, so -- like the other personal-credential modules here -- it is
+# confined to incognito sessions; only a truthy value refuses access.
+SHARED_ENV = "IX_MCP_SHARED"
 
 # The per-user token file path (mode 0600).
 _TOKEN_FILE = pathlib.Path.home() / ".config" / "mercury" / "token"
@@ -226,6 +235,23 @@ class MercuryError(RuntimeError):
     """
 
 
+def _require_incognito() -> None:
+    """Refuse to access Mercury data in a shared (multiplayer) room.
+
+    Mercury calls return bank balances, transaction history, and account/routing
+    numbers, so a shared room would leak one person's finances into state
+    everyone can see. A shared room sets ``IX_MCP_SHARED``; only then is access
+    refused -- before the token is read or any request is sent.
+    """
+    if os.environ.get(SHARED_ENV):
+        raise MercuryError(
+            "Mercury is not available in a shared (multiplayer) room "
+            "(IX_MCP_SHARED is set), because it would expose personal bank "
+            "accounts and transactions to everyone in the room. Use it from an "
+            "incognito chat instead; its transcript stays private to you."
+        )
+
+
 def _base_url() -> str:
     """The Mercury REST API base URL (no trailing slash)."""
     val = os.environ.get(_BASE_URL_ENV, "").strip()
@@ -266,9 +292,11 @@ async def _request(
     """Call the Mercury REST API and return the response, or raise MercuryError.
 
     The token goes in an ``Authorization: Bearer`` header (never the URL), so it
-    stays out of logs. Raises :exc:`MercuryError` on a transport failure or an
-    HTTP error status; a 401/403 names the re-login step.
+    stays out of logs. Refused outright in a shared (multiplayer) room, before
+    the token is even read. Raises :exc:`MercuryError` on a transport failure or
+    an HTTP error status; a 401/403 names the re-login step.
     """
+    _require_incognito()
     token = _token()
     url = f"{_base_url()}{path}"
     try:

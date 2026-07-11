@@ -5439,8 +5439,8 @@
   # The `mercury` helper imports and exposes its public surface. A real API call
   # needs a token, so the sandbox-safe assertions are: the module imports, the
   # public callables exist, an unconfigured session raises MercuryError naming the
-  # token, status() answers configured=False instead of raising, and the typed
-  # empty-frame schema holds.
+  # token, IX_MCP_SHARED=1 refuses access, status() answers configured=False
+  # instead of raising, and the typed empty-frame schema holds.
   mercuryBundled = importTest "mercury" ''
     import os
 
@@ -5488,8 +5488,23 @@
     assert mercury._envelope_items({"recipients": [{"id": "r"}]}, "recipients") == [{"id": "r"}]
     assert mercury._envelope_items([{"id": "x"}]) == [{"id": "x"}]
 
-    # Unconfigured (no env token, no token file): data calls raise MercuryError
-    # naming the token, the same not-configured UX as the other modules.
+    # In a shared (multiplayer) room Mercury is refused before the token is read
+    # or any network call is made, so bank data never reaches state other
+    # participants can see.
+    os.environ["IX_MCP_SHARED"] = "1"
+    try:
+        _asyncio.run(mercury.accounts())
+    except mercury.MercuryError as exc:
+        assert "shared" in str(exc).lower(), exc
+    else:
+        raise SystemExit("expected MercuryError in a shared room")
+
+    # Incognito is the default: with IX_MCP_SHARED unset the shared guard passes,
+    # so the next failure is a missing token -- proving the guard was the only
+    # thing that blocked it above. Unconfigured (no env token, no token file):
+    # data calls raise MercuryError naming the token, the same not-configured UX
+    # as the other modules.
+    os.environ.pop("IX_MCP_SHARED", None)
     os.environ.pop("MERCURY_API_TOKEN", None)
     os.environ.pop("MERCURY_TOKEN", None)
     try:
