@@ -32,7 +32,7 @@ function sidekickSelection() {
   return {
     alias,
     provider: process.env.PI_FUSION_SIDEKICK_PROVIDER ?? "openai",
-    model: process.env.PI_FUSION_SIDEKICK_MODEL ?? "gpt-5.5",
+    model: process.env.PI_FUSION_SIDEKICK_MODEL ?? "gpt-5.6-sol",
     thinking: process.env.PI_FUSION_SIDEKICK_THINKING ?? "low",
   };
 }
