@@ -117,9 +117,10 @@ impl Engine {
     ///(the future wakes itself and completes on the second poll).
     ///
     ///The returned [`DelayedDoubleFuture`] resolves the call; dropping it before completion cancels the engine-side future.
-    pub fn delayed_double(&self, x: i64) -> DelayedDoubleFuture {
+    pub fn delayed_double(&self, x: i64) -> DelayedDoubleFuture<'_> {
         DelayedDoubleFuture {
             inner: (self.delayed_double)(x),
+            _engine: ::core::marker::PhantomData,
         }
     }
     ///Never completes; holds a guard whose `Drop` flips the cancellation
@@ -127,18 +128,20 @@ impl Engine {
     ///that guard through the ABI vtable.
     ///
     ///The returned [`HangUntilDroppedFuture`] resolves the call; dropping it before completion cancels the engine-side future.
-    pub fn hang_until_dropped(&self) -> HangUntilDroppedFuture {
+    pub fn hang_until_dropped(&self) -> HangUntilDroppedFuture<'_> {
         HangUntilDroppedFuture {
             inner: (self.hang_until_dropped)(),
+            _engine: ::core::marker::PhantomData,
         }
     }
     ///Count `0..limit`, returning `Pending` (with a wake) between items,
     ///so every element exercises the cross-ABI waker path.
     ///
     ///The returned [`CountToStream`] yields the items; dropping it before the end drops the engine-side stream.
-    pub fn count_to(&self, limit: u64) -> CountToStream {
+    pub fn count_to(&self, limit: u64) -> CountToStream<'_> {
         CountToStream {
             inner: (self.count_to)(limit),
+            _engine: ::core::marker::PhantomData,
         }
     }
     ///Clear the cancellation witness before a new observation.
@@ -152,12 +155,13 @@ impl Engine {
         (self.cancel_witnessed)()
     }
 }
-///Future returned by [`Engine::delayed_double`]. Dropping it before completion drops the engine-side future through the ABI vtable, cancelling it inside the engine.
+///Future returned by [`Engine::delayed_double`]. Dropping it before completion drops the engine-side future through the ABI vtable, cancelling it inside the engine. Borrows the [`Engine`], so the library stays mapped while the future's vtable can still run.
 #[must_use = "futures do nothing unless polled"]
-pub struct DelayedDoubleFuture {
+pub struct DelayedDoubleFuture<'engine> {
     inner: ::stabby::future::DynFuture<'static, i64>,
+    _engine: ::core::marker::PhantomData<&'engine Engine>,
 }
-impl ::core::future::Future for DelayedDoubleFuture {
+impl ::core::future::Future for DelayedDoubleFuture<'_> {
     type Output = i64;
     fn poll(
         self: ::core::pin::Pin<&mut Self>,
@@ -170,12 +174,13 @@ impl ::core::future::Future for DelayedDoubleFuture {
         }
     }
 }
-///Future returned by [`Engine::hang_until_dropped`]. Dropping it before completion drops the engine-side future through the ABI vtable, cancelling it inside the engine.
+///Future returned by [`Engine::hang_until_dropped`]. Dropping it before completion drops the engine-side future through the ABI vtable, cancelling it inside the engine. Borrows the [`Engine`], so the library stays mapped while the future's vtable can still run.
 #[must_use = "futures do nothing unless polled"]
-pub struct HangUntilDroppedFuture {
+pub struct HangUntilDroppedFuture<'engine> {
     inner: ::stabby::future::DynFuture<'static, u64>,
+    _engine: ::core::marker::PhantomData<&'engine Engine>,
 }
-impl ::core::future::Future for HangUntilDroppedFuture {
+impl ::core::future::Future for HangUntilDroppedFuture<'_> {
     type Output = u64;
     fn poll(
         self: ::core::pin::Pin<&mut Self>,
@@ -188,12 +193,13 @@ impl ::core::future::Future for HangUntilDroppedFuture {
         }
     }
 }
-///Stream returned by [`Engine::count_to`]. Dropping it before the end drops the engine-side stream through the ABI vtable, cancelling it inside the engine.
+///Stream returned by [`Engine::count_to`]. Dropping it before the end drops the engine-side stream through the ABI vtable, cancelling it inside the engine. Borrows the [`Engine`], so the library stays mapped while the stream's vtable can still run.
 #[must_use = "streams do nothing unless polled"]
-pub struct CountToStream {
+pub struct CountToStream<'engine> {
     inner: ::unibind_stream::DynStream<'static, u64>,
+    _engine: ::core::marker::PhantomData<&'engine Engine>,
 }
-impl ::futures_core::Stream for CountToStream {
+impl ::futures_core::Stream for CountToStream<'_> {
     type Item = u64;
     fn poll_next(
         self: ::core::pin::Pin<&mut Self>,

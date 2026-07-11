@@ -180,10 +180,15 @@ pub fn to_plain(expr: &TokenStream, ty: &ir::Type, paths: &Paths) -> TokenStream
     match ty {
         ir::Type::Bool | ir::Type::Int(_) | ir::Type::Float(_) => expr.clone(),
         ir::Type::String { .. } => quote!(::std::string::String::from(#expr)),
+        // `from_vec` spells its `OsString` receiver explicitly: `PathBuf`
+        // has several `From<_>` impls, so a bare `OsStringExt::from_vec`
+        // leaves the intermediate type ambiguous (E0283).
         ir::Type::Path { .. } => quote! {
-            ::std::path::PathBuf::from(::std::os::unix::ffi::OsStringExt::from_vec(
-                #expr.into_iter().collect::<::std::vec::Vec<u8>>(),
-            ))
+            ::std::path::PathBuf::from(
+                <::std::ffi::OsString as ::std::os::unix::ffi::OsStringExt>::from_vec(
+                    #expr.into_iter().collect::<::std::vec::Vec<u8>>(),
+                ),
+            )
         },
         ir::Type::Bytes { .. } => quote!(#expr.into_iter().collect::<::std::vec::Vec<u8>>()),
         ir::Type::Option(inner) => {
@@ -281,7 +286,9 @@ fn int_tokens(kind: ir::IntKind) -> TokenStream {
 }
 
 /// An identifier for an IR-provided name. IR names come from parsed Rust
-/// identifiers, so this cannot fail for lowered interfaces.
+/// identifiers and raw identifiers are rejected up front (see
+/// `module::reject_unrendered`), so this cannot fail for rendered
+/// interfaces.
 pub fn name_ident(name: &str) -> Ident {
     Ident::new(name, Span::call_site())
 }

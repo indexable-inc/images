@@ -129,6 +129,37 @@
       "throws": null
     },
     {
+      "name": "flush",
+      "names": {
+        "py": null
+      },
+      "docs": [
+        "Flush pending work; unit success plus a nested optional borrow."
+      ],
+      "asyncness": "Sync",
+      "blocking": false,
+      "args": [
+        {
+          "name": "annotation",
+          "names": {
+            "py": null
+          },
+          "ty": {
+            "Option": {
+              "Option": {
+                "String": {
+                  "owned": false
+                }
+              }
+            }
+          },
+          "default": null
+        }
+      ],
+      "ret": null,
+      "throws": "SampleError"
+    },
+    {
       "name": "delayed_double",
       "names": {
         "py": null

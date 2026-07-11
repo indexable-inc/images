@@ -252,9 +252,12 @@ fn method(func: &ir::Function, paths: &Paths) -> TokenStream {
             #docs
             ///
             #[doc = #wrapper_doc]
-            pub fn #ident(&self, #(#params),*) -> #wrapper {
+            pub fn #ident(&self, #(#params),*) -> #wrapper<'_> {
                 #(#conversions)*
-                #wrapper { inner: #call }
+                #wrapper {
+                    inner: #call,
+                    _engine: ::core::marker::PhantomData,
+                }
             }
         };
     }
@@ -276,9 +279,12 @@ fn method(func: &ir::Function, paths: &Paths) -> TokenStream {
                 #docs
                 ///
                 #[doc = #wrapper_doc]
-                pub fn #ident(&self, #(#params),*) -> #wrapper {
+                pub fn #ident(&self, #(#params),*) -> #wrapper<'_> {
                     #(#conversions)*
-                    #wrapper { inner: #call }
+                    #wrapper {
+                        inner: #call,
+                        _engine: ::core::marker::PhantomData,
+                    }
                 }
             }
         }
@@ -359,6 +365,7 @@ fn sync_method(func: &ir::Function, paths: &Paths, parts: &SyncMethodParts) -> T
                         #[doc = #errors_doc]
                     }
                 });
+            let ok_pattern = function::ok_pattern(ret.as_ref());
             quote! {
                 #docs
                 #errors_section
@@ -368,7 +375,7 @@ fn sync_method(func: &ir::Function, paths: &Paths, parts: &SyncMethodParts) -> T
                 ) -> ::std::result::Result<#ok, crate::error::#error_ident> {
                     #(#conversions)*
                     match ::std::result::Result::from(#call) {
-                        ::std::result::Result::Ok(out) => #ok_value,
+                        ::std::result::Result::Ok(#ok_pattern) => #ok_value,
                         ::std::result::Result::Err(error) => ::std::result::Result::Err(
                             crate::error::#error_ident::from(error),
                         ),
@@ -393,7 +400,8 @@ fn stream_wrapper(func: &ir::Function, paths: &Paths) -> TokenStream {
     let doc = format!(
         "Stream returned by [`Engine::{ident}`]. Dropping it before the end \
          drops the engine-side stream through the ABI vtable, cancelling it \
-         inside the engine."
+         inside the engine. Borrows the [`Engine`], so the library stays \
+         mapped while the stream's vtable can still run."
     );
     // `to_plain` is the identity for primitive items, so this covers both.
     let converted = ty::to_plain(&quote!(out), item, paths);
@@ -402,11 +410,12 @@ fn stream_wrapper(func: &ir::Function, paths: &Paths) -> TokenStream {
     quote! {
         #[doc = #doc]
         #[must_use = "streams do nothing unless polled"]
-        pub struct #wrapper {
+        pub struct #wrapper<'engine> {
             inner: ::unibind_stream::DynStream<'static, #stable_item>,
+            _engine: ::core::marker::PhantomData<&'engine Engine>,
         }
 
-        impl ::futures_core::Stream for #wrapper {
+        impl ::futures_core::Stream for #wrapper<'_> {
             type Item = #plain_item;
 
             fn poll_next(
@@ -439,7 +448,8 @@ fn future_wrapper(func: &ir::Function, paths: &Paths) -> TokenStream {
     let doc = format!(
         "Future returned by [`Engine::{ident}`]. Dropping it before \
          completion drops the engine-side future through the ABI vtable, \
-         cancelling it inside the engine."
+         cancelling it inside the engine. Borrows the [`Engine`], so the \
+         library stays mapped while the future's vtable can still run."
     );
 
     let (output, converted) = match (&func.throws, &func.ret) {
@@ -460,11 +470,12 @@ fn future_wrapper(func: &ir::Function, paths: &Paths) -> TokenStream {
                     quote!(::std::result::Result::Ok(#converted))
                 },
             );
+            let ok_pattern = function::ok_pattern(ret.as_ref());
             (
                 quote!(::std::result::Result<#ok, crate::error::#error_ident>),
                 quote! {
                     match ::std::result::Result::from(out) {
-                        ::std::result::Result::Ok(out) => #ok_value,
+                        ::std::result::Result::Ok(#ok_pattern) => #ok_value,
                         ::std::result::Result::Err(error) => ::std::result::Result::Err(
                             crate::error::#error_ident::from(error),
                         ),
@@ -477,11 +488,12 @@ fn future_wrapper(func: &ir::Function, paths: &Paths) -> TokenStream {
     quote! {
         #[doc = #doc]
         #[must_use = "futures do nothing unless polled"]
-        pub struct #wrapper {
+        pub struct #wrapper<'engine> {
             inner: #inner,
+            _engine: ::core::marker::PhantomData<&'engine Engine>,
         }
 
-        impl ::core::future::Future for #wrapper {
+        impl ::core::future::Future for #wrapper<'_> {
             type Output = #output;
 
             fn poll(

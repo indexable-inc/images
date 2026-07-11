@@ -94,7 +94,7 @@ impl ::core::convert::From<Row> for crate::records::Row {
                 .match_owned(
                     |inner| ::std::option::Option::Some(
                         ::std::path::PathBuf::from(
-                            ::std::os::unix::ffi::OsStringExt::from_vec(
+                            <::std::ffi::OsString as ::std::os::unix::ffi::OsStringExt>::from_vec(
                                 inner.into_iter().collect::<::std::vec::Vec<u8>>(),
                             ),
                         ),
@@ -146,4 +146,3 @@ pub struct SampleErrorStable {
     /// The variant's `Display` text.
     pub message: ::stabby::string::String,
 }
-

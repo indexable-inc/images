@@ -116,10 +116,20 @@ fn render_result(function: &ir::Function, call: &TokenStream, paths: &Paths) -> 
         (None, None) => call,
         // A stream return boxes the user's `impl Stream` into the shared
         // dynptr shape through `unibind-stream`'s adapter (which tracks
-        // termination for the two-call raw protocol).
-        (None, Some(ir::Type::Stream(_))) => quote! {
-            ::stabby::boxed::Box::new(::unibind_stream::StreamAdapter::new(#call)).into()
-        },
+        // termination for the two-call raw protocol). Non-identity items
+        // convert to their stable spelling first, so the boxed item type
+        // matches the declared `DynStream` item.
+        (None, Some(ir::Type::Stream(item))) => {
+            let adapted = if ty::is_identity(item) {
+                call
+            } else {
+                let converted = ty::to_stable(&quote!(item), item, paths);
+                quote!(::unibind_stream::MapItems::new(#call, |item| #converted))
+            };
+            quote! {
+                ::stabby::boxed::Box::new(::unibind_stream::StreamAdapter::new(#adapted)).into()
+            }
+        }
         (None, Some(ret)) => {
             let plain = ty::owned_plain_type(ret, paths);
             let converted = ty::to_stable(&quote!(out), ret, paths);
@@ -138,9 +148,12 @@ fn render_result(function: &ir::Function, call: &TokenStream, paths: &Paths) -> 
                     quote!(::stabby::result::Result::Ok(#converted))
                 },
             );
+            // A unit success matches `()`; binding `out` unused would trip
+            // the workspace's warnings-as-errors.
+            let ok_pattern = ok_pattern(ret.as_ref());
             quote! {
                 match #call {
-                    ::std::result::Result::Ok(out) => #ok,
+                    ::std::result::Result::Ok(#ok_pattern) => #ok,
                     ::std::result::Result::Err(error) => {
                         ::stabby::result::Result::Err(#mirror #error::from(error))
                     }
@@ -150,18 +163,34 @@ fn render_result(function: &ir::Function, call: &TokenStream, paths: &Paths) -> 
     }
 }
 
+/// The `Ok` pattern for a fallible function's success arm: the converted
+/// value binds `out`; a unit success matches `()` (binding `out` unused
+/// would trip warnings-as-errors on both sides of the boundary).
+pub fn ok_pattern(ret: Option<&ir::Type>) -> TokenStream {
+    ret.map_or_else(|| quote!(()), |_| quote!(out))
+}
+
 /// How a converted, owned local is handed to a plain function: borrowed
-/// types re-borrow, `Option`s of borrowed types go through `as_deref`.
+/// types re-borrow, `Option`s of borrowed types go through `as_deref`
+/// (nested `Option`s re-borrow level by level).
 fn call_arg(ty: &ir::Type, ident: &proc_macro2::Ident) -> TokenStream {
+    reborrow(&quote!(#ident), ty).unwrap_or_else(|| quote!(#ident))
+}
+
+/// The re-borrowing adaptor from an owned local to the plain (possibly
+/// borrowed) argument spelling; `None` when the owned local passes as-is.
+fn reborrow(expr: &TokenStream, ty: &ir::Type) -> Option<TokenStream> {
     if ty::is_borrowed(ty) {
-        return quote!(&#ident);
+        return Some(quote!(&#expr));
     }
-    if let ir::Type::Option(inner) = ty
-        && ty::is_borrowed(inner)
-    {
-        return quote!(#ident.as_deref());
+    let ir::Type::Option(inner) = ty else {
+        return None;
+    };
+    if ty::is_borrowed(inner) {
+        return Some(quote!(#expr.as_deref()));
     }
-    quote!(#ident)
+    let converted = reborrow(&quote!(inner), inner)?;
+    Some(quote!(#expr.as_ref().map(|inner| #converted)))
 }
 
 /// A future-wrapper type name for one async function: `delayed_double` ->

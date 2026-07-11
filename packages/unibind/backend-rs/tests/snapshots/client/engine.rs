@@ -3,7 +3,7 @@ use ::stabby::libloading::StabbyLibrary as _;
 use crate::error::LoadError;
 /// Hex SHA-256 of the interface IR this client was generated from,
 /// compared against the engine's handshake symbol at load time.
-const EXPECTED_IR_SHA256: &str = "c6f40ed284d07ffd4de459686b4fdf633578410c2dffa14379d4ffecc0c8b0c8";
+const EXPECTED_IR_SHA256: &str = "c2a77eeca7732374e824507914648c4ea2b17ce7e737abe622e5e2bdee79c565";
 /// A loaded engine with every export resolved and typed.
 ///
 /// The `Engine` keeps the library mapped for its whole lifetime and
@@ -23,6 +23,9 @@ pub struct Engine {
     >,
     touch: extern "C" fn(::stabby::vec::Vec<u8>, ::stabby::vec::Vec<u8>, f64) -> bool,
     reset: extern "C" fn(),
+    flush: extern "C" fn(
+        ::stabby::option::Option<::stabby::option::Option<::stabby::string::String>>,
+    ) -> ::stabby::result::Result<(), crate::abi::SampleErrorStable>,
     delayed_double: extern "C" fn(i64) -> ::stabby::future::DynFuture<'static, i64>,
     fetch_row: extern "C" fn(
         ::stabby::string::String,
@@ -70,6 +73,7 @@ impl Engine {
         let rows = resolve_rows(&library)?;
         let touch = resolve_touch(&library)?;
         let reset = resolve_reset(&library)?;
+        let flush = resolve_flush(&library)?;
         let delayed_double = resolve_delayed_double(&library)?;
         let fetch_row = resolve_fetch_row(&library)?;
         let labels = resolve_labels(&library)?;
@@ -78,6 +82,7 @@ impl Engine {
             rows,
             touch,
             reset,
+            flush,
             delayed_double,
             fetch_row,
             labels,
@@ -134,39 +139,74 @@ impl Engine {
     pub fn reset(&self) {
         (self.reset)();
     }
+    ///Flush pending work; unit success plus a nested optional borrow.
+    ///
+    /// # Errors
+    ///
+    ///Returns the engine's [`SampleError`](crate::error::SampleError) when the call fails.
+    pub fn flush(
+        &self,
+        annotation: ::std::option::Option<::std::option::Option<&str>>,
+    ) -> ::std::result::Result<(), crate::error::SampleError> {
+        let annotation: ::stabby::option::Option<
+            ::stabby::option::Option<::stabby::string::String>,
+        > = annotation
+            .map_or_else(
+                ::stabby::option::Option::None,
+                |inner| ::stabby::option::Option::Some(
+                    inner
+                        .map_or_else(
+                            ::stabby::option::Option::None,
+                            |inner| ::stabby::option::Option::Some(
+                                ::stabby::string::String::from(inner),
+                            ),
+                        ),
+                ),
+            );
+        match ::std::result::Result::from((self.flush)(annotation)) {
+            ::std::result::Result::Ok(()) => ::std::result::Result::Ok(()),
+            ::std::result::Result::Err(error) => {
+                ::std::result::Result::Err(crate::error::SampleError::from(error))
+            }
+        }
+    }
     ///Double after yielding.
     ///
     ///The returned [`DelayedDoubleFuture`] resolves the call; dropping it before completion cancels the engine-side future.
-    pub fn delayed_double(&self, x: i64) -> DelayedDoubleFuture {
+    pub fn delayed_double(&self, x: i64) -> DelayedDoubleFuture<'_> {
         DelayedDoubleFuture {
             inner: (self.delayed_double)(x),
+            _engine: ::core::marker::PhantomData,
         }
     }
     ///An async call that can fail.
     ///
     ///The returned [`FetchRowFuture`] resolves the call; dropping it before completion cancels the engine-side future.
-    pub fn fetch_row(&self, name: ::std::string::String) -> FetchRowFuture {
+    pub fn fetch_row(&self, name: ::std::string::String) -> FetchRowFuture<'_> {
         let name: ::stabby::string::String = ::stabby::string::String::from(name);
         FetchRowFuture {
             inner: (self.fetch_row)(name),
+            _engine: ::core::marker::PhantomData,
         }
     }
     ///A stream of labels.
     ///
     ///The returned [`LabelsStream`] yields the items; dropping it before the end drops the engine-side stream.
-    pub fn labels(&self, prefix: ::std::string::String) -> LabelsStream {
+    pub fn labels(&self, prefix: ::std::string::String) -> LabelsStream<'_> {
         let prefix: ::stabby::string::String = ::stabby::string::String::from(prefix);
         LabelsStream {
             inner: (self.labels)(prefix),
+            _engine: ::core::marker::PhantomData,
         }
     }
 }
-///Future returned by [`Engine::delayed_double`]. Dropping it before completion drops the engine-side future through the ABI vtable, cancelling it inside the engine.
+///Future returned by [`Engine::delayed_double`]. Dropping it before completion drops the engine-side future through the ABI vtable, cancelling it inside the engine. Borrows the [`Engine`], so the library stays mapped while the future's vtable can still run.
 #[must_use = "futures do nothing unless polled"]
-pub struct DelayedDoubleFuture {
+pub struct DelayedDoubleFuture<'engine> {
     inner: ::stabby::future::DynFuture<'static, i64>,
+    _engine: ::core::marker::PhantomData<&'engine Engine>,
 }
-impl ::core::future::Future for DelayedDoubleFuture {
+impl ::core::future::Future for DelayedDoubleFuture<'_> {
     type Output = i64;
     fn poll(
         self: ::core::pin::Pin<&mut Self>,
@@ -179,15 +219,16 @@ impl ::core::future::Future for DelayedDoubleFuture {
         }
     }
 }
-///Future returned by [`Engine::fetch_row`]. Dropping it before completion drops the engine-side future through the ABI vtable, cancelling it inside the engine.
+///Future returned by [`Engine::fetch_row`]. Dropping it before completion drops the engine-side future through the ABI vtable, cancelling it inside the engine. Borrows the [`Engine`], so the library stays mapped while the future's vtable can still run.
 #[must_use = "futures do nothing unless polled"]
-pub struct FetchRowFuture {
+pub struct FetchRowFuture<'engine> {
     inner: ::stabby::future::DynFuture<
         'static,
         ::stabby::result::Result<crate::abi::Row, crate::abi::SampleErrorStable>,
     >,
+    _engine: ::core::marker::PhantomData<&'engine Engine>,
 }
-impl ::core::future::Future for FetchRowFuture {
+impl ::core::future::Future for FetchRowFuture<'_> {
     type Output = ::std::result::Result<crate::records::Row, crate::error::SampleError>;
     fn poll(
         self: ::core::pin::Pin<&mut Self>,
@@ -213,12 +254,13 @@ impl ::core::future::Future for FetchRowFuture {
         }
     }
 }
-///Stream returned by [`Engine::labels`]. Dropping it before the end drops the engine-side stream through the ABI vtable, cancelling it inside the engine.
+///Stream returned by [`Engine::labels`]. Dropping it before the end drops the engine-side stream through the ABI vtable, cancelling it inside the engine. Borrows the [`Engine`], so the library stays mapped while the stream's vtable can still run.
 #[must_use = "streams do nothing unless polled"]
-pub struct LabelsStream {
+pub struct LabelsStream<'engine> {
     inner: ::unibind_stream::DynStream<'static, ::stabby::string::String>,
+    _engine: ::core::marker::PhantomData<&'engine Engine>,
 }
-impl ::futures_core::Stream for LabelsStream {
+impl ::futures_core::Stream for LabelsStream<'_> {
     type Item = ::std::string::String;
     fn poll_next(
         self: ::core::pin::Pin<&mut Self>,
@@ -296,6 +338,28 @@ fn resolve_reset(
         library.get_stabbied::<extern "C" fn()>(b"unibind_sample_reset")
     }
         .map_err(|error| symbol_error("unibind_sample_reset", error.as_ref()))?;
+    ::std::result::Result::Ok(*resolved)
+}
+///Resolve `unibind_sample_flush` through stabby's report check.
+fn resolve_flush(
+    library: &::libloading::Library,
+) -> ::std::result::Result<
+    extern "C" fn(
+        ::stabby::option::Option<::stabby::option::Option<::stabby::string::String>>,
+    ) -> ::stabby::result::Result<(), crate::abi::SampleErrorStable>,
+    LoadError,
+> {
+    let resolved = unsafe {
+        library
+            .get_stabbied::<
+                extern "C" fn(
+                    ::stabby::option::Option<
+                        ::stabby::option::Option<::stabby::string::String>,
+                    >,
+                ) -> ::stabby::result::Result<(), crate::abi::SampleErrorStable>,
+            >(b"unibind_sample_flush")
+    }
+        .map_err(|error| symbol_error("unibind_sample_flush", error.as_ref()))?;
     ::std::result::Result::Ok(*resolved)
 }
 ///Resolve `unibind_sample_delayed_double` through stabby's report check.
@@ -383,4 +447,3 @@ fn symbol_error(
         }
     }
 }
-

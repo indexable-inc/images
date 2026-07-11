@@ -3,6 +3,7 @@
     clippy::all,
     clippy::pedantic,
     clippy::nursery,
+    dead_code,
     unused_qualifications,
     improper_ctypes_definitions
 )]
@@ -102,7 +103,7 @@ mod __unibind_rs_sample {
                     .match_owned(
                         |inner| ::std::option::Option::Some(
                             ::std::path::PathBuf::from(
-                                ::std::os::unix::ffi::OsStringExt::from_vec(
+                                <::std::ffi::OsString as ::std::os::unix::ffi::OsStringExt>::from_vec(
                                     inner.into_iter().collect::<::std::vec::Vec<u8>>(),
                                 ),
                             ),
@@ -200,7 +201,7 @@ mod __unibind_rs_sample {
         ratio: f64,
     ) -> bool {
         let path: ::std::path::PathBuf = ::std::path::PathBuf::from(
-            ::std::os::unix::ffi::OsStringExt::from_vec(
+            <::std::ffi::OsString as ::std::os::unix::ffi::OsStringExt>::from_vec(
                 path.into_iter().collect::<::std::vec::Vec<u8>>(),
             ),
         );
@@ -214,6 +215,34 @@ mod __unibind_rs_sample {
     #[::stabby::export]
     pub extern "C" fn unibind_sample_reset() {
         super::sample::reset()
+    }
+    #[::stabby::export]
+    pub extern "C" fn unibind_sample_flush(
+        annotation: ::stabby::option::Option<
+            ::stabby::option::Option<::stabby::string::String>,
+        >,
+    ) -> ::stabby::result::Result<(), SampleErrorStable> {
+        let annotation: ::std::option::Option<
+            ::std::option::Option<::std::string::String>,
+        > = annotation
+            .match_owned(
+                |inner| ::std::option::Option::Some(
+                    inner
+                        .match_owned(
+                            |inner| ::std::option::Option::Some(
+                                ::std::string::String::from(inner),
+                            ),
+                            || ::std::option::Option::None,
+                        ),
+                ),
+                || ::std::option::Option::None,
+            );
+        match super::sample::flush(annotation.as_ref().map(|inner| inner.as_deref())) {
+            ::std::result::Result::Ok(()) => ::stabby::result::Result::Ok(()),
+            ::std::result::Result::Err(error) => {
+                ::stabby::result::Result::Err(SampleErrorStable::from(error))
+            }
+        }
     }
     #[::stabby::export]
     pub extern "C" fn unibind_sample_delayed_double(
@@ -252,15 +281,19 @@ mod __unibind_rs_sample {
     ) -> ::unibind_stream::DynStream<'static, ::stabby::string::String> {
         let prefix: ::std::string::String = ::std::string::String::from(prefix);
         ::stabby::boxed::Box::new(
-                ::unibind_stream::StreamAdapter::new(super::sample::labels(prefix)),
+                ::unibind_stream::StreamAdapter::new(
+                    ::unibind_stream::MapItems::new(
+                        super::sample::labels(prefix),
+                        |item| ::stabby::string::String::from(item),
+                    ),
+                ),
             )
             .into()
     }
     #[::stabby::export]
     pub extern "C" fn unibind_sample_ir_sha256() -> ::stabby::str::Str<'static> {
         ::stabby::str::Str::from(
-            "c6f40ed284d07ffd4de459686b4fdf633578410c2dffa14379d4ffecc0c8b0c8",
+            "c2a77eeca7732374e824507914648c4ea2b17ce7e737abe622e5e2bdee79c565",
         )
     }
 }
-

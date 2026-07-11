@@ -52,13 +52,16 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
     // The wrapper bodies are macro-generated (hence lint-exempt like the
     // Python glue); `improper_ctypes_definitions` is allowed because stabby's
     // repr(C) types are FFI-sound by construction and its own macros silence
-    // the same lint.
+    // the same lint. `dead_code` is allowed because every annotated record
+    // gets a mirror even when no export mentions it, and the mirrors live in
+    // this private module.
     let glue = quote! {
         #[doc(hidden)]
         #[allow(
             clippy::all,
             clippy::pedantic,
             clippy::nursery,
+            dead_code,
             unused_qualifications,
             improper_ctypes_definitions
         )]
@@ -104,11 +107,15 @@ fn handshake(interface: &ir::Interface) -> Result<TokenStream, RenderError> {
     })
 }
 
-/// Refuse the IR surface the Rust backend does not render yet. Objects and
-/// data enums are whole shapes; streams are supported only as a sync
-/// function's plain return (`fn f(..) -> UniStream<T>`), because the
-/// `async` and `Result` compositions need dedicated wrapper designs.
+/// Refuse the IR surface the Rust backend does not render yet, plus the
+/// names its generated code claims for itself. Objects and data enums are
+/// whole shapes; streams are supported only as a sync function's plain
+/// return (`fn f(..) -> UniStream<T>`), because the `async` and `Result`
+/// compositions need dedicated wrapper designs.
 pub fn reject_unrendered(interface: &ir::Interface) -> Result<(), RenderError> {
+    reject_raw_names(interface)?;
+    reject_reserved_names(interface)?;
+    reject_wrapper_collisions(interface)?;
     if let Some(object) = interface.objects.first() {
         return Err(RenderError::new(format!(
             "`{}` is a #[unibind::object]; the Rust backend does not render \
@@ -139,6 +146,100 @@ pub fn reject_unrendered(interface: &ir::Interface) -> Result<(), RenderError> {
                 "`{}` returns Result<UniStream<_>, _>; the Rust backend \
                  renders infallible stream returns only",
                 function.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Refuse raw identifiers (`r#type`, `r#match`, ...) anywhere on the
+/// boundary: the backend derives exported symbol strings, carrier names,
+/// and wrapper names from these names, and a `r#` prefix survives none of
+/// those derivations.
+fn reject_raw_names(interface: &ir::Interface) -> Result<(), RenderError> {
+    let function_names = interface.functions.iter().flat_map(|func| {
+        std::iter::once(&func.name).chain(func.args.iter().map(|arg| &arg.name))
+    });
+    let record_names = interface.records.iter().flat_map(|rec| {
+        std::iter::once(&rec.name).chain(rec.fields.iter().map(|field| &field.name))
+    });
+    let error_names = interface.errors.iter().flat_map(|err| {
+        std::iter::once(&err.name).chain(err.variants.iter().map(|var| &var.name))
+    });
+    for name in function_names.chain(record_names).chain(error_names) {
+        if name.starts_with("r#") {
+            return Err(RenderError::new(format!(
+                "`{name}` is a raw identifier; the Rust backend derives symbol \
+                 and type names from boundary names, so raw identifiers cannot \
+                 cross — rename it"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Refuse the names the generated glue and client claim for themselves:
+/// the handshake export, `Engine::load`, the `Engine`/`LoadError` support
+/// types, and the `<Error>Stable` carrier structs.
+fn reject_reserved_names(interface: &ir::Interface) -> Result<(), RenderError> {
+    for function in &interface.functions {
+        if function.name == "ir_sha256" {
+            return Err(RenderError::new(
+                "`ir_sha256` is reserved: the Rust backend exports the IR-hash \
+                 handshake as `unibind_<module>_ir_sha256`; rename the function",
+            ));
+        }
+        if function.name == "load" {
+            return Err(RenderError::new(
+                "`load` is reserved: the generated Rust client already has \
+                 `Engine::load`; rename the function",
+            ));
+        }
+    }
+    for name in interface
+        .records
+        .iter()
+        .map(|rec| &rec.name)
+        .chain(interface.errors.iter().map(|err| &err.name))
+    {
+        if name == "Engine" || name == "LoadError" {
+            return Err(RenderError::new(format!(
+                "`{name}` is reserved: the generated Rust client already \
+                 exports a support type with that name; rename it"
+            )));
+        }
+    }
+    for error in &interface.errors {
+        let carrier = format!("{}Stable", error.name);
+        if interface.records.iter().any(|rec| rec.name == carrier) {
+            return Err(RenderError::new(format!(
+                "record `{carrier}` collides with the ABI carrier the Rust \
+                 backend generates for error `{}`; rename one of them",
+                error.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Refuse function pairs whose generated future/stream wrapper names
+/// collide: pascal-casing collapses consecutive underscores, so `foo_bar`
+/// and `foo__bar` would both produce `FooBarFuture`.
+fn reject_wrapper_collisions(interface: &ir::Interface) -> Result<(), RenderError> {
+    let mut seen: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
+    for func in &interface.functions {
+        let wrapper = if matches!(func.asyncness, ir::Asyncness::Async) {
+            function::future_wrapper_ident(func).to_string()
+        } else if function::returns_stream(func) {
+            function::stream_wrapper_ident(func).to_string()
+        } else {
+            continue;
+        };
+        if let Some(previous) = seen.insert(wrapper.clone(), func.name.as_str()) {
+            return Err(RenderError::new(format!(
+                "`{previous}` and `{}` both generate a wrapper named \
+                 `{wrapper}`; rename one so the pascal-cased names differ",
+                func.name
             )));
         }
     }

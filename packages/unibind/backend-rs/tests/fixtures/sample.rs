@@ -58,6 +58,12 @@ mod sample {
     /// Reset a counter.
     pub fn reset() {}
 
+    /// Flush pending work; unit success plus a nested optional borrow.
+    pub fn flush(annotation: Option<Option<&str>>) -> Result<(), SampleError> {
+        let _ = annotation;
+        Ok(())
+    }
+
     /// Double after yielding.
     pub async fn delayed_double(x: i64) -> i64 {
         x * 2
