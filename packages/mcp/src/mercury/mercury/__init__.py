@@ -593,13 +593,16 @@ async def transactions(
 async def transaction(id: str, *, account_id: str | None = None) -> pl.DataFrame:
     """One Mercury transaction by id, as a single-row polars DataFrame.
 
-    Same columns as :func:`transactions`. ``account_id`` defaults to the first
-    Mercury deposit account (Mercury's get-transaction endpoint is per-account).
-    Raises :exc:`MercuryError` when no token is configured, the id is not found,
-    or the API is unreachable.
+    Same columns as :func:`transactions`. Without ``account_id`` this uses the
+    org-wide ``GET /transaction/{id}`` lookup, so the id is found no matter which
+    account it belongs to; pass ``account_id`` to scope the lookup to one account
+    (``GET /account/{account_id}/transaction/{id}``). Raises :exc:`MercuryError`
+    when no token is configured, the id is not found, or the API is unreachable.
     """
-    acct = account_id or await _first_account_id()
-    resp = await _request("GET", f"/account/{acct}/transaction/{id}")
+    if account_id:
+        resp = await _request("GET", f"/account/{account_id}/transaction/{id}")
+    else:
+        resp = await _request("GET", f"/transaction/{id}")
     parsed = _Transaction.model_validate(resp.json())
     return _frame([_tx_row(parsed)], _TRANSACTIONS_SCHEMA)
 
@@ -786,8 +789,8 @@ async def users() -> pl.DataFrame:
 
 
 async def user(id: str) -> dict[str, Any]:
-    """One user by id, as a dict (``GET /user/{id}``)."""
-    resp = await _request("GET", f"/user/{id}")
+    """One user by id, as a dict (``GET /users/{id}``)."""
+    resp = await _request("GET", f"/users/{id}")
     body: dict[str, Any] = resp.json()
     return body
 
@@ -809,36 +812,36 @@ async def events(*, limit: int = 100) -> pl.DataFrame:
 
 
 async def event(id: str) -> dict[str, Any]:
-    """One event by id, as a dict (``GET /event/{id}``)."""
-    resp = await _request("GET", f"/event/{id}")
+    """One event by id, as a dict (``GET /events/{id}``)."""
+    resp = await _request("GET", f"/events/{id}")
     body: dict[str, Any] = resp.json()
     return body
 
 
 async def customers(*, limit: int = 500) -> pl.DataFrame:
-    """Accounts-receivable customers, as a polars DataFrame (``GET /customers``)."""
+    """Accounts-receivable customers, as a polars DataFrame (``GET /ar/customers``)."""
     return await _list_frame(
-        "/customers", "customers", params={"limit": max(1, min(limit, 1000))}
+        "/ar/customers", "customers", params={"limit": max(1, min(limit, 1000))}
     )
 
 
 async def customer(id: str) -> dict[str, Any]:
-    """One customer by id, as a dict (``GET /customer/{id}``)."""
-    resp = await _request("GET", f"/customer/{id}")
+    """One customer by id, as a dict (``GET /ar/customers/{id}``)."""
+    resp = await _request("GET", f"/ar/customers/{id}")
     body: dict[str, Any] = resp.json()
     return body
 
 
 async def invoices(*, limit: int = 500) -> pl.DataFrame:
-    """Accounts-receivable invoices, as a polars DataFrame (``GET /invoices``)."""
+    """Accounts-receivable invoices, as a polars DataFrame (``GET /ar/invoices``)."""
     return await _list_frame(
-        "/invoices", "invoices", params={"limit": max(1, min(limit, 1000))}
+        "/ar/invoices", "invoices", params={"limit": max(1, min(limit, 1000))}
     )
 
 
 async def invoice(id: str) -> dict[str, Any]:
-    """One invoice by id, as a dict (``GET /invoice/{id}``)."""
-    resp = await _request("GET", f"/invoice/{id}")
+    """One invoice by id, as a dict (``GET /ar/invoices/{id}``)."""
+    resp = await _request("GET", f"/ar/invoices/{id}")
     body: dict[str, Any] = resp.json()
     return body
 
@@ -855,8 +858,7 @@ async def send_money_approval_requests(
 ) -> pl.DataFrame:
     """Send-money approval requests, as a polars DataFrame.
 
-    ``GET /send-money-approval-requests``; narrow with ``account_id`` and
-    ``status``.
+    ``GET /request-send-money``; narrow with ``account_id`` and ``status``.
     """
     params: dict[str, Any] = {}
     if account_id:
@@ -864,7 +866,7 @@ async def send_money_approval_requests(
     if status:
         params["status"] = status
     return await _list_frame(
-        "/send-money-approval-requests",
+        "/request-send-money",
         "requests",
         "approvalRequests",
         params=params or None,
