@@ -6387,6 +6387,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-bot"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "flate2",
+ "mc-protocol",
+ "md-5 0.10.6",
+ "serde_json",
+ "tempfile",
+ "zip",
+]
+
+[[package]]
+name = "mc-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "mc-protocol-jvm"
+version = "0.1.0"
+dependencies = [
+ "mc-protocol",
+ "unibind",
+ "unibind-jvm-runtime",
+]
+
+[[package]]
+name = "mc-protocol-py"
+version = "0.1.0"
+dependencies = [
+ "mc-protocol",
+ "pyo3",
+ "unibind",
+]
+
+[[package]]
 name = "mcp-server-info"
 version = "0.1.0"
 dependencies = [
@@ -12738,6 +12777,7 @@ dependencies = [
  "quote",
  "syn 2.0.118",
  "unibind-backend-ex",
+ "unibind-backend-jvm",
  "unibind-backend-py",
  "unibind-backend-ts",
  "unibind-core",
@@ -12751,7 +12791,19 @@ dependencies = [
  "prettyplease",
  "proc-macro2",
  "quote",
- "serde_json",
+ "syn 2.0.118",
+ "unibind-core",
+ "unibind-test-support",
+]
+
+[[package]]
+name = "unibind-backend-jvm"
+version = "0.1.0"
+dependencies = [
+ "heck 0.5.0",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
  "syn 2.0.118",
  "unibind-core",
  "unibind-test-support",
@@ -12808,6 +12860,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "unibind-conformance-jvm"
+version = "0.1.0"
+dependencies = [
+ "unibind",
+ "unibind-jvm-runtime",
+]
+
+[[package]]
 name = "unibind-conformance-ts"
 version = "0.1.0"
 dependencies = [
@@ -12848,11 +12908,18 @@ dependencies = [
  "anyhow",
  "clap",
  "object 0.39.1",
+ "proc-macro2",
  "serde_json",
+ "syn 2.0.118",
  "unibind-backend-ex",
+ "unibind-backend-jvm",
  "unibind-core",
  "unibind-test-support",
 ]
+
+[[package]]
+name = "unibind-jvm-runtime"
+version = "0.1.0"
 
 [[package]]
 name = "unibind-py-runtime"
@@ -12875,6 +12942,12 @@ dependencies = [
 [[package]]
 name = "unibind-test-support"
 version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "serde_json",
+ "syn 2.0.118",
+ "unibind-core",
+]
 
 [[package]]
 name = "unic-langid"

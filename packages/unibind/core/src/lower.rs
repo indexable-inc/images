@@ -44,6 +44,8 @@ pub enum Backend {
     Ts,
     /// The rustler backend (`unibind-backend-ex`, cargo feature `ex`).
     Ex,
+    /// The C-ABI/FFM backend (`unibind-backend-jvm`, cargo feature `jvm`).
+    Jvm,
 }
 
 /// The backends `#[unibind::export(backends(...))]` selected; `None` when
@@ -89,6 +91,7 @@ pub fn lower_module(
     let meta = attrs::UnibindMeta::parse(module_args, module.span())?;
     meta.reject_default("a module")?;
     meta.reject_py_base("a module")?;
+    meta.reject_jvm_base("a module")?;
     meta.reject_resource("a module")?;
     meta.reject_constructor("a module")?;
     meta.reject_blocking("a module")?;
