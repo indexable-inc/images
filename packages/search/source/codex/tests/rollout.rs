@@ -39,7 +39,7 @@ fn full_session_renders_messages_and_folded_tool_calls() {
     let temp = tempfile::tempdir().expect("tempdir");
     let lines = [
         session_meta("s-full", "/home/u/proj"),
-        r#"{"timestamp":"2026-05-31T10:00:01.000Z","type":"turn_context","payload":{"cwd":"/home/u/proj","model":"gpt-5.5"}}"#.to_owned(),
+        r#"{"timestamp":"2026-05-31T10:00:01.000Z","type":"turn_context","payload":{"cwd":"/home/u/proj","model":"gpt-5.6-sol"}}"#.to_owned(),
         // Developer boilerplate: never indexed.
         r#"{"timestamp":"2026-05-31T10:00:02.000Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>\nsandbox stuff\n</permissions instructions>"}]}}"#.to_owned(),
         // User prompt with an injected context block that must be dropped.
@@ -97,7 +97,7 @@ fn full_session_renders_messages_and_folded_tool_calls() {
     assert_eq!(call.meta_json["record_type"], "function_call");
     assert_eq!(call.meta_json["role"], "assistant");
     assert_eq!(call.meta_json["tool_name"], "exec_command");
-    assert_eq!(call.meta_json["model"], "gpt-5.5");
+    assert_eq!(call.meta_json["model"], "gpt-5.6-sol");
 
     let answer = &docs[2];
     assert_eq!(answer.meta_json["role"], "assistant");

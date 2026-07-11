@@ -6,7 +6,7 @@
     default_model = {
       effort = "medium";
       enable_thinking = true;
-      model = "gpt-5.5";
+      model = "gpt-5.6-sol";
       provider = "openai";
     };
     dock = "right";
