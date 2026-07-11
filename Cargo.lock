@@ -947,6 +947,7 @@ dependencies = [
  "audio-instrument",
  "audio-net",
  "audio-score",
+ "base64",
  "clap",
  "dirs 6.0.0",
  "objc2",
@@ -988,6 +989,7 @@ dependencies = [
 name = "audio-e2e"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "audio-blob",
  "audio-clock",
  "audio-engine",
@@ -1020,6 +1022,10 @@ dependencies = [
  "audio-blob",
  "wasmtime",
 ]
+
+[[package]]
+name = "audio-melody"
+version = "0.1.0"
 
 [[package]]
 name = "audio-net"
