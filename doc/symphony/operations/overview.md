@@ -124,9 +124,14 @@ LiveView dashboard (`router.ex:25-40`):
 
 JSON API under `/api/v1` (`router.ex:42-61`):
 
-- `POST /runs` - manual-trigger enqueue: `{"workflow": "..", "input": {..}}`
-  starts that `.sym`; without `workflow` it fires every `on manual` workflow
-  (`controllers/api_controller.ex:1-29`).
+- `POST /runs`: manual-trigger enqueue. A body with `{"workflow": "..",
+  "input": {..}, "run_id": ".."}` starts that `.sym`. `run_id` is optional
+  and lets a caller record the id before sending, then cancel the run even if
+  the create response is lost. It is 1 to 128 lowercase ASCII letters, digits,
+  or hyphens, with a letter or digit at each end. Every replay of an owned id
+  returns 409, even when the workflow and input match. Without `workflow`, the
+  route fires every `on manual` workflow and rejects `run_id` because one id
+  cannot name the fan-out (`controllers/api_controller.ex:1-58`).
 - `GET /ir/schema` - the runtime enum vocabulary (drives form option lists).
 - `GET /ir/runs`, `POST /ir/runs`, `GET /ir/runs/:run_id` - list/create/read runs.
 - `POST /ir/runs/:run_id/{cancel,rerun,clear-failed}` and

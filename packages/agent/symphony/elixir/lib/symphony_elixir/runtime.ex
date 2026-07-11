@@ -193,19 +193,25 @@ defmodule SymphonyElixir.Runtime do
     # An invalid dynamically-emitted envelope fails the run rather than
     # crashing init, so a bad child surfaces as a failed run, not a
     # supervisor restart loop.
-    case Materializer.expand_dynamic(state.graph) do
-      {:ok, expanded, _new_ids} ->
-        state = %{state | graph: expanded}
-        # Persist before the first scheduling pass so a producer that
-        # navigates to /ir/:run_id the moment start_run returns finds the
-        # run on disk, even while a slow placement acquire is still in
-        # flight. The run shows :running with :pending nodes; the broadcast
-        # also lands so the index row appears without a navigation.
-        persist(expanded, state)
-        {:ok, state, {:continue, :advance}}
+    case claim_run_id(state.graph, state, opts) do
+      :ok ->
+        case Materializer.expand_dynamic(state.graph) do
+          {:ok, expanded, _new_ids} ->
+            state = %{state | graph: expanded}
+            # Persist before the first scheduling pass so a producer that
+            # navigates to /ir/:run_id the moment start_run returns finds the
+            # run on disk, even while a slow placement acquire is still in
+            # flight. The run shows :running with :pending nodes; the broadcast
+            # also lands so the index row appears without a navigation.
+            persist(expanded, state)
+            {:ok, state, {:continue, :advance}}
+
+          {:error, reason} ->
+            {:ok, %{state | graph: fail_run(state.graph, reason, state.store_opts)}, {:continue, :advance}}
+        end
 
       {:error, reason} ->
-        {:ok, %{state | graph: fail_run(state.graph, reason, state.store_opts)}, {:continue, :advance}}
+        {:stop, reason}
     end
   end
 
@@ -744,6 +750,26 @@ defmodule SymphonyElixir.Runtime do
   end
 
   # --- helpers --------------------------------------------------------
+
+  # Ingress marks fresh runs for an exclusive durable claim. Claim before
+  # expansion so every init path, including an invalid expansion, either owns
+  # the id or stops without replacing another run's graph.
+  defp claim_run_id(%RunGraph{} = graph, state, opts) do
+    if Keyword.get(opts, :claim_run_id, false) do
+      case Store.create(graph, state.store_opts) do
+        :ok ->
+          :ok
+
+        {:error, :already_exists} ->
+          {:error, {:run_id_conflict, graph.run_id}}
+
+        {:error, reason} ->
+          {:error, {:run_store_create_failed, graph.run_id, reason}}
+      end
+    else
+      :ok
+    end
+  end
 
   # Dispatch one attempt by node kind. Only `:agent` nodes are engine
   # turns and go through the injected engine client; `:exec` runs a pack

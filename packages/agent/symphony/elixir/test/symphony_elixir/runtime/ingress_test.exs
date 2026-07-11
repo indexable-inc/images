@@ -98,6 +98,47 @@ defmodule SymphonyElixir.Runtime.IngressTest do
     assert wait_terminal("fixed-id", store_opts).status == :succeeded
   end
 
+  test "generated and caller-supplied ids share one path-safe grammar", %{store_opts: store_opts} do
+    long_name = String.duplicate("Long workflow ", 30)
+    e = entry(~s|workflow "#{long_name}" on manual { a <- agent { engine: codex, model: "m", prompt: inline "go" } }|)
+
+    assert {:ok, %{run_id: generated}} =
+             Ingress.start_workflow(e, nil, engine: FakeEngine, store_opts: store_opts)
+
+    assert {:ok, ^generated} = Ingress.validate_run_id(generated)
+    assert byte_size(generated) <= 128
+
+    for invalid <- ["", "-leading", "trailing-", "UPPER", "../escape", "has_underscore", String.duplicate("a", 129)] do
+      assert {:error, {:invalid_run_id, ^invalid}} = Ingress.validate_run_id(invalid)
+    end
+  end
+
+  test "a completed run keeps durable ownership of its explicit id", %{store_opts: store_opts} do
+    first = entry(~s|workflow "first" on manual { a <- agent { engine: codex, model: "m", prompt: inline "go" } }|)
+    second = entry(~s|workflow "second" on manual { b <- agent { engine: codex, model: "m", prompt: inline "go" } }|)
+    run_id = "durable-owner"
+
+    assert {:ok, %{run_id: ^run_id}} =
+             Ingress.start_workflow(first, %{kind: :manual, input: %{"owner" => "first"}},
+               run_id: run_id,
+               engine: FakeEngine,
+               store_opts: store_opts
+             )
+
+    assert wait_terminal(run_id, store_opts).status == :succeeded
+
+    assert {:error, {:run_id_conflict, ^run_id}} =
+             Ingress.start_workflow(second, %{kind: :manual, input: %{"owner" => "second"}},
+               run_id: run_id,
+               engine: FakeEngine,
+               store_opts: store_opts
+             )
+
+    assert {:ok, graph} = Store.load(run_id, store_opts)
+    assert graph.source_hash == first.hash
+    assert graph.trigger == %{kind: :manual, input: %{"owner" => "first"}}
+  end
+
   test "start_by_trigger fans out to every workflow matching the event", %{store_opts: store_opts, workflows_dir: dir} do
     write_sym!(dir, "label-a", ~s|workflow "label-a" on github_pr_label repo "acme/app" label "ship" { a <- agent { engine: codex, model: "m", prompt: inline "go" } }|)
     write_sym!(dir, "label-b", ~s|workflow "label-b" on github_pr_label repo "acme/app" label "ship" { b <- agent { engine: codex, model: "m", prompt: inline "go" } }|)
