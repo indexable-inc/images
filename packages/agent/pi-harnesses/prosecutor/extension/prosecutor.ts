@@ -112,7 +112,7 @@ export default function (pi: ExtensionAPI): void {
         const res = await runIsolatedPi({
           prompt,
           systemPrompt,
-          // The prosecutor reuses the executor's model (opus-4-8 / gpt-5.5
+          // The prosecutor reuses the executor's model (opus-4-8 / gpt-5.6-sol
           // medium) by default; the asymmetry that matters is context isolation,
           // not a weaker model. Override per-run with PI_PROSECUTOR_* if desired.
           provider: process.env.PI_PROSECUTOR_PROVIDER ?? process.env.PI_PROVIDER,
