@@ -308,9 +308,9 @@ let
       # tmux wrapper with matching defaults (packages/tmux). Per session:
       # `claude --teammate-mode in-process` (the flag outranks this layer).
       teammateMode = "tmux";
-      # House docs plugins and the marketplaces they resolve from.
+      # House docs plugin and the marketplaces it resolves from. The ix
+      # marketplace (indexable-inc/docs) ships exactly one plugin, `ix`.
       enabledPlugins = {
-        "ix-docs@ix" = true;
         "ix@ix" = true;
       };
       extraKnownMarketplaces = {

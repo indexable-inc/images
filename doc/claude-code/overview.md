@@ -109,9 +109,9 @@ wrapper injects its defaults file only `unless_present` a caller `--settings`
 - `teammateMode = "tmux"`: agent-team teammates open in split panes (tmux or
   iTerm2) instead of in-process; override per session with
   `claude --teammate-mode in-process`.
-- `enabledPlugins` (`ix@ix`, `ix-docs@ix`) + `extraKnownMarketplaces`
-  (Mixedbread-Grep, antithesis-skills, ix): house docs plugins and where they
-  resolve from.
+- `enabledPlugins` (`ix@ix`) + `extraKnownMarketplaces`
+  (Mixedbread-Grep, antithesis-skills, ix): the house docs plugin and where it
+  resolves from.
 - `skipDangerousModePermissionPrompt = true` (when
   `dangerouslySkipPermissions`): pre-accept the one-time dangerous-mode warning
   the flag alone does not suppress.
