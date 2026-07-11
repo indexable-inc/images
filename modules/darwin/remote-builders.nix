@@ -186,6 +186,15 @@
         value = builder.ssh.port;
       }
       {
+        # "none" pins direct builders to a direct connection; without it a
+        # later Host * ProxyCommand from the system config would still apply.
+        name = "ProxyCommand";
+        value =
+          if builder.ssh.proxyCommand != null
+          then builder.ssh.proxyCommand
+          else "none";
+      }
+      {
         name = "StrictHostKeyChecking";
         value = builder.ssh.strictHostKeyChecking;
       }
@@ -197,10 +206,6 @@
     ++ lib.optional (builder.sshKey != null) {
       name = "IdentityFile";
       value = builder.sshKey;
-    }
-    ++ lib.optional (builder.ssh.proxyCommand != null) {
-      name = "ProxyCommand";
-      value = builder.ssh.proxyCommand;
     }
     ++ lib.optional (builder.ssh.serverAliveInterval != null) {
       name = "ServerAliveInterval";
