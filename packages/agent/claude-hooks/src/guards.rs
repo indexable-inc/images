@@ -9,6 +9,7 @@
 //! returns with no output and the call proceeds.
 
 use serde_json::Value;
+use tree_sitter::{Node, Parser};
 
 use crate::DenyOutput;
 
@@ -109,9 +110,124 @@ fn grep_walks_tree(stage: &str) -> bool {
     false
 }
 
+fn node_text<'a>(node: Node<'_>, source: &'a str) -> Option<&'a str> {
+    source.get(node.byte_range())
+}
+
+fn is_plain_scalar_expansion(node: Node<'_>, source: &str) -> bool {
+    let Some(variable) = node.named_child(0) else {
+        return false;
+    };
+    if variable.kind() != "variable_name" {
+        return false;
+    }
+    let Some(variable) = node_text(variable, source) else {
+        return false;
+    };
+    let Some(expansion) = node_text(node, source) else {
+        return false;
+    };
+
+    match node.kind() {
+        "simple_expansion" => expansion.strip_prefix('$') == Some(variable),
+        "expansion" => {
+            expansion
+                .strip_prefix("${")
+                .and_then(|inner| inner.strip_suffix('}'))
+                == Some(variable)
+        }
+        _ => false,
+    }
+}
+
+/// Match the exact command shape, excluding quoted scalars, arrays, and extra
+/// arguments. The syntax tree keeps comments and command substitutions precise.
+fn command_sets_positional_parameters_from_scalar(node: Node<'_>, source: &str) -> bool {
+    if node.kind() != "command" {
+        return false;
+    }
+    let mut cursor = node.walk();
+    let children: Vec<_> = node.named_children(&mut cursor).collect();
+    let [name, separator, scalar] = children.as_slice() else {
+        return false;
+    };
+
+    node_text(*name, source) == Some("set")
+        && node_text(*separator, source) == Some("--")
+        && is_plain_scalar_expansion(*scalar, source)
+}
+
+/// Extract a single-quoted script passed directly after a zsh `-c` option.
+fn inline_zsh_script<'a>(node: Node<'_>, source: &'a str) -> Option<&'a str> {
+    if node.kind() != "command" {
+        return None;
+    }
+    let mut cursor = node.walk();
+    let children: Vec<_> = node.named_children(&mut cursor).collect();
+    let name = node_text(*children.first()?, source)?;
+    if name.rsplit('/').next() != Some("zsh") {
+        return None;
+    }
+
+    let mut expects_script = false;
+    for child in &children[1..] {
+        let text = node_text(*child, source)?;
+        if expects_script {
+            if child.kind() != "raw_string" {
+                return None;
+            }
+            return text.strip_prefix('\'')?.strip_suffix('\'');
+        }
+        let flags = text.strip_prefix('-')?;
+        if flags.starts_with('-') || !flags.chars().all(|flag| flag.is_ascii_alphabetic()) {
+            return None;
+        }
+        expects_script = flags.contains('c');
+    }
+    None
+}
+
+fn syntax_tree_has_zsh_scalar_split(parser: &mut Parser, node: Node<'_>, source: &str) -> bool {
+    if command_sets_positional_parameters_from_scalar(node, source) {
+        return true;
+    }
+    if inline_zsh_script(node, source)
+        .is_some_and(|script| parsed_shell_has_zsh_scalar_split(parser, script))
+    {
+        return true;
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if syntax_tree_has_zsh_scalar_split(parser, child, source) {
+            return true;
+        }
+    }
+    false
+}
+
+fn parsed_shell_has_zsh_scalar_split(parser: &mut Parser, source: &str) -> bool {
+    let Some(tree) = parser.parse(source, None) else {
+        return false;
+    };
+    syntax_tree_has_zsh_scalar_split(parser, tree.root_node(), source)
+}
+
+fn has_zsh_scalar_positional_split(command: &str) -> bool {
+    let mut parser = Parser::new();
+    if parser
+        .set_language(&tree_sitter_bash::LANGUAGE.into())
+        .is_err()
+    {
+        return false;
+    }
+    parsed_shell_has_zsh_scalar_split(&mut parser, command)
+}
+
 /// `PreToolUse(Bash)`: block recurring bad command shapes (output-to-/dev/null,
-/// recursive `grep -r`, `--no-verify`). Quote/escape-aware so a literal mention
-/// inside a commit message or `echo` is not a false positive.
+/// recursive `grep -r`, `--no-verify`, zsh scalar word splitting).
+/// Quote/escape-aware so a literal mention inside a commit message or `echo` is
+/// not a false positive.
 pub fn bash_habits_guard() {
     let Some(payload) = payload() else { return };
     if payload.get("tool_name").and_then(Value::as_str) != Some("Bash") {
@@ -126,7 +242,7 @@ pub fn bash_habits_guard() {
     let strip = |re: &str, s: String| {
         regex::Regex::new(re).map_or_else(|_| s.clone(), |r| r.replace_all(&s, " ").into_owned())
     };
-    let cmd = strip(r#""[^"]*""#, strip(r"'[^']*'", strip(r"\\.", raw)));
+    let cmd = strip(r#""[^"]*""#, strip(r"'[^']*'", strip(r"\\.", raw.clone())));
 
     // 1. stderr-to-null / all-to-null / the `>/dev/null 2>&1` idiom.
     let to_null = [
@@ -173,6 +289,19 @@ pub fn bash_habits_guard() {
              yourself outside the agent. (bash-habits-guard hook)"
                 .to_owned(),
         );
+        return;
+    }
+
+    // 4. zsh does not split an unquoted scalar into multiple arguments.
+    if has_zsh_scalar_positional_split(&raw) {
+        deny(
+            "zsh does not word-split unquoted scalar expansions: `set -- $scalar` \
+             creates one positional argument. Use an array \
+             (`parts=(\"$repo\" \"$run\"); set -- \"${parts[@]}\"`) or read an \
+             explicit delimiter (`IFS=' ' read -r repo run <<< \"$scalar\"`). \
+             (bash-habits-guard hook)"
+                .to_owned(),
+        );
     }
 }
 
@@ -195,7 +324,7 @@ pub fn search_guard() {
 
 #[cfg(test)]
 mod tests {
-    use super::{grep_walks_tree, is_recursive_flag};
+    use super::{grep_walks_tree, has_zsh_scalar_positional_split, is_recursive_flag};
 
     #[test]
     fn recursive_flag_detection() {
@@ -219,5 +348,33 @@ mod tests {
         assert!(!grep_walks_tree("grep foo"));
         // -- ends flags
         assert!(!grep_walks_tree("grep -- -r"));
+    }
+
+    #[test]
+    fn zsh_scalar_positional_split_detection() {
+        for command in [
+            "set -- $spec",
+            "for spec in $specs; do\n  set -- ${spec}\n  repo=$1\ndone",
+            "set -- $spec # unpack",
+            r#"count="$(set -- $spec; printf %s "$#")""#,
+            "zsh -fc 'set -- $spec; print $#'",
+        ] {
+            assert!(has_zsh_scalar_positional_split(command), "{command:?}");
+        }
+
+        for command in [
+            "set -- \"$spec\"",
+            "set -- ${parts[@]}",
+            "parts=(\"$repo\" \"$run\"); set -- \"${parts[@]}\"",
+            "set -- ${=spec}",
+            "echo set -- $spec",
+            "set -- $spec tail",
+            "args=(set -- $spec)",
+            "bash -c 'set -- $spec'",
+            "echo 'set -- $spec'",
+            "echo \"zsh -fc 'set -- $spec'\"",
+        ] {
+            assert!(!has_zsh_scalar_positional_split(command), "{command:?}");
+        }
     }
 }

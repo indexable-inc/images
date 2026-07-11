@@ -486,6 +486,20 @@
       '{"tool_name":"Bash","tool_input":{"command":"grep -r foo ."}}'
     pre_guard bash-habits-guard "no-verify denied" deny \
       '{"tool_name":"Bash","tool_input":{"command":"git commit --no-verify"}}'
+    pre_guard bash-habits-guard "zsh scalar positional split denied" deny \
+      '{"tool_name":"Bash","tool_input":{"command":"set -- $spec"}}'
+    pre_guard bash-habits-guard "zsh scalar split before a comment denied" deny \
+      '{"tool_name":"Bash","tool_input":{"command":"set -- $spec # unpack"}}'
+    pre_guard bash-habits-guard "nested zsh scalar positional split denied" deny \
+      "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"zsh -fc 'set -- \$spec; print \$#'\"}}"
+    pre_guard bash-habits-guard "command substitution scalar split denied" deny \
+      '{"tool_name":"Bash","tool_input":{"command":"count=\"$(set -- $spec; print $#)\""}}'
+    pre_guard bash-habits-guard "quoted scalar positional argument allowed" allow \
+      '{"tool_name":"Bash","tool_input":{"command":"set -- \"$spec\""}}'
+    pre_guard bash-habits-guard "array positional arguments allowed" allow \
+      '{"tool_name":"Bash","tool_input":{"command":"set -- \"''${parts[@]}\""}}'
+    pre_guard bash-habits-guard "array literal words allowed" allow \
+      '{"tool_name":"Bash","tool_input":{"command":"args=(set -- $spec)"}}'
     pre_guard bash-habits-guard "quoted mention not a false positive" allow \
       "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo '2>/dev/null'\"}}"
 
