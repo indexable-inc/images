@@ -49,9 +49,10 @@ for page architecture and apply these visual rules inside it; the two compose.
    box-drawing characters (`│ ┆ ┬ ╪ ┴`), they drift and misalign.
 
 8. **Motion only when it means something.** No autoplaying or looping animation.
-   Interactivity is welcome when it teaches: hover a token to light the thing it
-   refers to, hover a control to preview its effect (a close that shrinks the
-   window). Trigger on hover, keep it still otherwise.
+   Interactivity is welcome when it teaches: hover, focus, or tap a token to
+   light the thing it refers to, or activate a control to preview its effect (a
+   close that shrinks the window). Give every hover affordance a keyboard-focus
+   and touch/click equivalent; keep it still otherwise.
 
 9. **Proper, colored icons.** Use the host app's existing icon system and real
    brand marks, not monochrome glyphs where a colored one exists. In a project
