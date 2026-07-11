@@ -1,11 +1,11 @@
 #!/usr/bin/env nu
 
-# Refresh the pinned Minecraft sound pack for `packages/minecraft/minecraft/sound`.
+# Refresh the pinned Minecraft sound pack for `packages/minecraft/sound`.
 #
 # Resolves a Minecraft version from Mojang's launcher manifest, pins its asset
 # index (the file that lists every sound object and its content hash), then
 # rebuilds the fixed-output `sounds.nix` derivation to recompute the aggregate
-# `packHash`. All three pins land in `packages/minecraft/minecraft/sound/sounds/lock.json`.
+# `packHash`. All three pins land in `packages/minecraft/sound/sounds/lock.json`.
 #
 # The sounds themselves are Mojang's proprietary assets and are never vendored
 # in the repo; only the manifest pins live here. See sounds.nix for the
@@ -15,8 +15,8 @@ def main [
   --version (-v): string  # MC version id (defaults to the latest release)
 ] {
   let root = (^git rev-parse --show-toplevel | str trim)
-  let lock_path = ($root | path join "packages/minecraft/minecraft/sound/sounds/lock.json")
-  let sounds_nix = ($root | path join "packages/minecraft/minecraft/sound/sounds.nix")
+  let lock_path = ($root | path join "packages/minecraft/sound/sounds/lock.json")
+  let sounds_nix = ($root | path join "packages/minecraft/sound/sounds.nix")
 
   let manifest_url = "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json"
   print "fetching launcher manifest..."
