@@ -40,6 +40,11 @@ in {
         default = null;
         description = "Host-native Mercury CLI supplied by the consuming flake.";
       };
+      noxLsp = lib.mkOption {
+        type = lib.types.nullOr lib.types.package;
+        default = null;
+        description = "Host-native nox-lsp (Nix language server) supplied by the consuming flake.";
+      };
       typenix = lib.mkOption {
         type = lib.types.nullOr lib.types.package;
         default = null;
