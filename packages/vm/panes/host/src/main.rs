@@ -28,6 +28,8 @@ mod jitter;
 mod keymap;
 #[cfg(target_os = "macos")]
 mod render;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod send_queue;
 #[cfg(target_os = "macos")]
 mod trace;
 #[cfg(target_os = "macos")]
