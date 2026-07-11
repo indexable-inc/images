@@ -12,8 +12,10 @@ import net.minestom.server.coordinate.Point;
 import net.minestom.server.coordinate.Pos;
 import net.minestom.server.entity.GameMode;
 import net.minestom.server.entity.Player;
+import net.minestom.server.event.entity.EntityDamageEvent;
 import net.minestom.server.event.instance.AddEntityToInstanceEvent;
 import net.minestom.server.event.instance.RemoveEntityFromInstanceEvent;
+import net.minestom.server.event.player.PlayerMoveEvent;
 import net.minestom.server.instance.InstanceContainer;
 import net.minestom.server.instance.LightingChunk;
 import net.minestom.server.instance.block.Block;
@@ -30,17 +32,21 @@ import net.minestom.server.timer.TaskSchedule;
 final class Lobby {
     private static final int PLATFORM_Y = 64;
     private static final int PLATFORM_HALF_SIZE = 12;
-    private static final int MIN_PLAYERS = 2;
-    private static final int COUNTDOWN_SECONDS = 10;
+    private static final int RESCUE_Y = PLATFORM_Y - 6;
 
     static final Pos SPAWN = new Pos(0.5, PLATFORM_Y + 1, 0.5);
 
     private final InstanceContainer instance;
+    private final int minPlayers;
+    private final int countdownSeconds;
     private final BossBar status =
         BossBar.bossBar(Component.text("Lobby: waiting for players"), 1f, BossBar.Color.WHITE, BossBar.Overlay.PROGRESS);
-    private int secondsLeft = COUNTDOWN_SECONDS;
+    private int secondsLeft;
 
-    Lobby() {
+    Lobby(int minPlayers, int countdownSeconds) {
+        this.minPlayers = minPlayers;
+        this.countdownSeconds = countdownSeconds;
+        this.secondsLeft = countdownSeconds;
         instance = MinecraftServer.getInstanceManager().createInstanceContainer();
         instance.setChunkSupplier(LightingChunk::new);
         // Generate only where a chunk overlaps the platform square; the rest of
@@ -54,7 +60,10 @@ final class Lobby {
             int maxZ = (int) Math.min(end.z(), PLATFORM_HALF_SIZE + 1);
             for (int x = minX; x < maxX; x++) {
                 for (int z = minZ; z < maxZ; z++) {
-                    unit.modifier().setBlock(x, PLATFORM_Y, z, Block.SMOOTH_QUARTZ);
+                    boolean border = Math.abs(x) == PLATFORM_HALF_SIZE || Math.abs(z) == PLATFORM_HALF_SIZE;
+                    boolean lamp = border && Math.floorMod(x + z, 4) == 0;
+                    Block block = lamp ? Block.SEA_LANTERN : border ? Block.CYAN_CONCRETE : Block.SMOOTH_QUARTZ;
+                    unit.modifier().setBlock(x, PLATFORM_Y, z, block);
                 }
             }
         });
@@ -68,6 +77,10 @@ final class Lobby {
         events.addListener(RemoveEntityFromInstanceEvent.class, event -> {
             if (event.getEntity() instanceof Player player) player.hideBossBar(status);
         });
+        events.addListener(EntityDamageEvent.class, event -> event.setCancelled(true));
+        events.addListener(PlayerMoveEvent.class, event -> {
+            if (event.getNewPosition().y() < RESCUE_Y) event.getPlayer().teleport(SPAWN);
+        });
 
         instance.scheduler().buildTask(this::tick).repeat(TaskSchedule.seconds(1)).schedule();
     }
@@ -79,8 +92,17 @@ final class Lobby {
     private void onEnter(Player player) {
         player.setRespawnPoint(SPAWN);
         player.setGameMode(GameMode.ADVENTURE);
+        player.setInvulnerable(true);
+        player.setHealth(20f);
+        player.setFood(20);
+        player.setFoodSaturation(20f);
+        player.setExp(0f);
+        player.setLevel(0);
         player.getInventory().clear();
         player.showBossBar(status);
+        player.sendPlayerListHeaderAndFooter(
+            Component.text("IX SPLEEF", NamedTextColor.AQUA, TextDecoration.BOLD),
+            Component.text("Lobby | Minecraft 26.2", NamedTextColor.GRAY));
         player.showTitle(Title.title(
             Component.text("SPLEEF LOBBY", NamedTextColor.AQUA, TextDecoration.BOLD),
             Component.text("Adventure mode protects this waiting platform", NamedTextColor.GRAY),
@@ -96,25 +118,35 @@ final class Lobby {
 
     private void tick() {
         var players = instance.getPlayers();
-        if (players.size() < MIN_PLAYERS) {
-            secondsLeft = COUNTDOWN_SECONDS;
+        if (players.size() < minPlayers) {
+            secondsLeft = countdownSeconds;
             status.name(Component.text(
-                "Lobby: waiting for players (%d/%d)".formatted(players.size(), MIN_PLAYERS)));
-            status.progress(1f);
+                "Lobby: waiting for players (%d/%d)".formatted(players.size(), minPlayers)));
+            status.progress(Math.min(1f, (float) players.size() / minPlayers));
             status.color(BossBar.Color.WHITE);
+            for (Player player : players) {
+                player.sendActionBar(Component.text(
+                    "Waiting for %d more player%s"
+                        .formatted(minPlayers - players.size(), minPlayers - players.size() == 1 ? "" : "s"),
+                    NamedTextColor.YELLOW));
+            }
             return;
         }
 
         secondsLeft--;
         if (secondsLeft <= 0) {
-            secondsLeft = COUNTDOWN_SECONDS;
+            secondsLeft = countdownSeconds;
             Game.start(this, players);
             return;
         }
 
         status.name(Component.text("Lobby: snow arena starts in %ds".formatted(secondsLeft)));
-        status.progress((float) secondsLeft / COUNTDOWN_SECONDS);
+        status.progress((float) secondsLeft / countdownSeconds);
         status.color(BossBar.Color.GREEN);
+        for (Player player : players) {
+            player.sendActionBar(Component.text(
+                "Snow arena starts in %ds".formatted(secondsLeft), NamedTextColor.GREEN));
+        }
         if (secondsLeft <= 5) {
             instance.showTitle(Title.title(
                 Component.text(secondsLeft, NamedTextColor.GOLD),
