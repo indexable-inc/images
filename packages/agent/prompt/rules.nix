@@ -663,8 +663,10 @@
         the harness subagent and task tools are absent by design, so
         delegation means `await weave.delegate('prompt')` in a kernel cell
         (the weave app runs each task as a live, interruptible session),
-        launched as background jobs by default so the main thread stays free,
-        with completion notifying the session over the kernel channel. Split
+        then `jobs.spawn(weave.result(task), name='delegate: <name>')` by default
+        so the main thread stays free. The durable task result is authoritative;
+        its automatic addressed channel wake is best-effort, not exactly-once,
+        so do not add a manual notification. Split
         implementation by phase, fan independent questions (diagnostic
         differentials, research legs, per-component checks) out in parallel,
         and give each editing agent its own worktree. Keep the main session
