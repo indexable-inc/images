@@ -1,0 +1,17 @@
+[package]
+name = "unibind-conformance-jvm"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Runtime conformance surface for the unibind jvm backend: wire round trips, exception mapping, panic envelopes, defaulted-argument overloads"
+
+[lib]
+name = "unibind_conformance_jvm"
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+unibind = { workspace = true, features = ["jvm"] }
+unibind-jvm-runtime.workspace = true

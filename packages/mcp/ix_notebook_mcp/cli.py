@@ -508,6 +508,7 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
         exec_token=_exec_token(),
         exec_trust_network=_exec_trust_network(),
         server_session_id=server_session_id,
+        kernel_host=os.environ.get("IX_MCP_KERNEL", "local"),
     )
     set_config(cfg)
 

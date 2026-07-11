@@ -139,6 +139,10 @@ fn scan_recursive(ctx: &mut ScanContext<'_>, node: tree_sitter::Node<'_>) {
                 }
             }
         }
+        // Some grammars give comments inner token children (`//`, the
+        // text); descending into them would let a pending `ignore` land on
+        // a comment's delimiter token instead of the next real node.
+        return;
     }
 
     let mut cursor = node.walk();

@@ -13,6 +13,7 @@ import functools
 import hashlib
 import json
 import os
+import socket
 import sys
 import threading
 import time
@@ -34,6 +35,13 @@ _DEFAULT_WEAVE_URL = "http://127.0.0.1:7677"
 _DEFAULT_DATA_API = "http://127.0.0.1:8765"
 _BATCH = 500
 _QUEUE_MAX = 10_000
+# How often the writer thread renews the kernel's board lease while this
+# process lives (weave prelude.dl: three missed beats, ~3 min, expire the
+# kernel entity and its sessions). The store rides INSIDE the kernel
+# process, so a beat is honest liveness: a crashed kernel, a reaped ray
+# actor, or a SIGKILLed serve's child all stop beating with no shutdown
+# hook needed.
+_BEAT_S = 60.0
 _WARNED_OFF = False
 
 def _http_json(method: str, url: str, *, body: object = None, content: bytes | None = None) -> object:
@@ -143,6 +151,12 @@ class WeaveStore:
                 (self.kernel, "type", "kernel"),
                 (self.kernel, "transport", "mcp"),
                 (self.kernel, "pid", os.getpid()),
+                # Where this kernel process runs: the host kind the serve chose
+                # (ix-mcp Config.kernel_host via IX_MCP_KERNEL: "ray" = a
+                # KernelActor on the fleet cluster) and the node it landed on.
+                (self.kernel, "kernel_host", os.environ.get("IX_MCP_KERNEL", "local")),
+                (self.kernel, "node", socket.gethostname()),
+                (self.kernel, "heartbeat_ms", now),
                 (self.agent, "on_kernel", self.kernel),
             ])
 
@@ -225,12 +239,22 @@ class WeaveStore:
 
     def _writer(self) -> None:
         backoff = 0.25
+        next_beat = time.monotonic() + _BEAT_S
         while True:
             with self._cv:
-                while not self._queue and not self._closed:
+                while not self._queue and not self._closed and time.monotonic() < next_beat:
                     self._cv.wait(timeout=1.0)
                 if not self._queue and self._closed:
                     return
+                if time.monotonic() >= next_beat:
+                    # Renew the kernel's board lease. Enqueued directly, NOT via
+                    # _enqueue_facts: a beat is process liveness, and its agent
+                    # last_active_ms ride-along would un-idle an agent that has
+                    # not done anything.
+                    next_beat = time.monotonic() + _BEAT_S
+                    self._queue.append(
+                        {"fact": {"entity": _api_value(self.kernel), "attr": "heartbeat_ms", "value": _api_value(_ms())}}
+                    )
                 batch = [self._queue.popleft() for _ in range(min(_BATCH, len(self._queue)))]
                 self._inflight = True
             try:

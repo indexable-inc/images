@@ -197,6 +197,11 @@ class Config:
     # restore (load the checkpoint, replay the gap) before running new cells.
     session_resume: bool = False
 
+    # Where the kernel process runs: "local" (a direct child of this serve, the
+    # default) or "ray" (a KernelActor on the fleet's Ray cluster, one per
+    # serve; see kernel_host.py). Wired from the IX_MCP_KERNEL env var by the CLI.
+    kernel_host: str = "local"
+
     # This machine's tailscale IPv4, resolved once by the CLI, or None when
     # tailscale is absent or its backend is down. The `/mesh` endpoint binds
     # ONLY this address (index#1787): the tailnet is the trust boundary, and
