@@ -152,6 +152,7 @@
           '^packages/minecraft/minestom/gradle\.properties$'
           '^packages/minecraft/minestom/gradle/libs\.versions\.toml$'
           '^packages/minecraft/minestom/gradle/verification-metadata\.xml$'
+          '^packages/minecraft/minestom/gradle/snapshot-metadata\.xml$'
 
           # Generated manifests, locks, editor settings, and typed data.
           '(^|/)(package|tsconfig)\.json$'

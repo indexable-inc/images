@@ -21,11 +21,6 @@ application {
     mainClass = "dev.ix.minestom.spleef.Main"
 }
 
-dependencyLocking {
-    lockAllConfigurations()
-    ignoredDependencies.add("net.minestom:minestom")
-}
-
 tasks.withType<JavaCompile>().configureEach {
     options.release = 25
 }

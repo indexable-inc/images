@@ -10,6 +10,7 @@ Arguments:
 - `pname`, `version`, `src`: derivation identity and source.
 - `verificationMetadata`: path to the Gradle verification XML.
 - `mavenSnapshotRepository`: repository that owns timestamped Maven snapshots.
+- `mavenSnapshotMetadata`: pinned Maven metadata installed for snapshot resolution.
 - `javaPackage`, `gradle`: toolchain packages.
 - `gradleBuildTask`, `gradleCheckTask`, `gradleFlags`: build invocation.
 - `jarPath`: relative path of the produced jar inside the source tree.
@@ -24,6 +25,7 @@ Arguments:
   src,
   verificationMetadata,
   mavenSnapshotRepository ? "https://central.sonatype.com/repository/maven-snapshots",
+  mavenSnapshotMetadata ? [],
   javaPackage ? pkgs.jdk25,
   gradle ? pkgs.gradle_9,
   gradleBuildTask ? "jar",
@@ -44,6 +46,7 @@ Arguments:
     "src"
     "verificationMetadata"
     "mavenSnapshotRepository"
+    "mavenSnapshotMetadata"
     "javaPackage"
     "gradle"
     "gradleBuildTask"
@@ -139,6 +142,13 @@ Arguments:
       }
       lines).results;
 
+  repositoryVersion = version: let
+    timestampedSnapshot = builtins.match ''(.*)-[0-9]{8}\.[0-9]{6}-[0-9]+'' version;
+  in
+    if timestampedSnapshot == null
+    then version
+    else "${builtins.head timestampedSnapshot}-SNAPSHOT";
+
   artifactUrl = {
     group,
     name,
@@ -146,18 +156,14 @@ Arguments:
     file,
     ...
   }: let
-    timestampedSnapshot = builtins.match ''(.*)-[0-9]{8}\.[0-9]{6}-[0-9]+'' version;
+    resolvedVersion = repositoryVersion version;
     repository =
-      if timestampedSnapshot == null
+      if resolvedVersion == version
       then "https://repo.maven.apache.org/maven2"
       else mavenSnapshotRepository;
-    repositoryVersion =
-      if timestampedSnapshot == null
-      then version
-      else "${builtins.head timestampedSnapshot}-SNAPSHOT";
   in "${lib.removeSuffix "/" repository}/${
     lib.replaceStrings ["."] ["/"] group
-  }/${name}/${repositoryVersion}/${file}";
+  }/${name}/${resolvedVersion}/${file}";
 
   fetchedArtifacts =
     map (
@@ -180,13 +186,23 @@ Arguments:
       artifact: let
         path = "${
           lib.replaceStrings ["."] ["/"] artifact.group
-        }/${artifact.name}/${artifact.version}/${artifact.file}";
+        }/${artifact.name}/${repositoryVersion artifact.version}/${artifact.file}";
       in ''
         mkdir -p "$out/${dirOf path}"
         ln -s ${artifact.src} "$out/${path}"
       ''
     )
     fetchedArtifacts
+    + lib.concatMapStringsSep "\n" (
+      metadata: let
+        path = "${
+          lib.replaceStrings ["."] ["/"] metadata.group
+        }/${metadata.name}/${metadata.version}/maven-metadata.xml";
+      in ''
+        install -Dm444 ${metadata.src} "$out/${path}"
+      ''
+    )
+    mavenSnapshotMetadata
     + ''
 
       runHook postInstall
