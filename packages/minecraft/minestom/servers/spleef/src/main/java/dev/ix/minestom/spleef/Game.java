@@ -105,7 +105,7 @@ final class Game {
             if (freezeLeft > 0) {
                 arena.showTitle(Title.title(
                     Component.text(freezeLeft, NamedTextColor.RED),
-                    Component.text("Get ready…", NamedTextColor.GRAY),
+                    Component.text("Snow arena: get ready", NamedTextColor.GRAY),
                     Title.Times.times(Duration.ZERO, Duration.ofMillis(900), Duration.ofMillis(100))));
                 arena.playSound(Sound.sound(SoundEvent.BLOCK_NOTE_BLOCK_PLING, Sound.Source.MASTER, 1f, 1f));
                 freezeLeft--;
@@ -148,8 +148,8 @@ final class Game {
             player.setHeldItemSlot((byte) 0);
         }
         arena.showTitle(Title.title(
-            Component.text("DIG!", NamedTextColor.GREEN, TextDecoration.BOLD),
-            Component.empty(),
+            Component.text("DIG THE SNOW!", NamedTextColor.GREEN, TextDecoration.BOLD),
+            Component.text("Last player standing wins", NamedTextColor.GRAY),
             Title.Times.times(Duration.ZERO, Duration.ofMillis(700), Duration.ofMillis(300))));
         arena.playSound(Sound.sound(SoundEvent.BLOCK_NOTE_BLOCK_PLING, Sound.Source.MASTER, 1f, 2f));
     }

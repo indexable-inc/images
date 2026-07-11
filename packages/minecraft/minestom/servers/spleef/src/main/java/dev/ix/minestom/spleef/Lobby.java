@@ -5,6 +5,7 @@ import net.kyori.adventure.bossbar.BossBar;
 import net.kyori.adventure.sound.Sound;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextDecoration;
 import net.kyori.adventure.title.Title;
 import net.minestom.server.MinecraftServer;
 import net.minestom.server.coordinate.Point;
@@ -36,7 +37,7 @@ final class Lobby {
 
     private final InstanceContainer instance;
     private final BossBar status =
-        BossBar.bossBar(Component.text("Waiting for players…"), 1f, BossBar.Color.WHITE, BossBar.Overlay.PROGRESS);
+        BossBar.bossBar(Component.text("Lobby: waiting for players"), 1f, BossBar.Color.WHITE, BossBar.Overlay.PROGRESS);
     private int secondsLeft = COUNTDOWN_SECONDS;
 
     Lobby() {
@@ -80,15 +81,25 @@ final class Lobby {
         player.setGameMode(GameMode.ADVENTURE);
         player.getInventory().clear();
         player.showBossBar(status);
+        player.showTitle(Title.title(
+            Component.text("SPLEEF LOBBY", NamedTextColor.AQUA, TextDecoration.BOLD),
+            Component.text("Adventure mode protects this waiting platform", NamedTextColor.GRAY),
+            Title.Times.times(Duration.ofMillis(200), Duration.ofSeconds(3), Duration.ofMillis(500))));
+        player.sendMessage(Component.text("Lobby: ", NamedTextColor.AQUA, TextDecoration.BOLD)
+            .append(Component.text(
+                "wait for 2 players, then you will move to the snow arena. Adventure mode protects this platform.",
+                NamedTextColor.GRAY)));
         player.sendMessage(Component.text(
-            "Dig the snow out from under the other players — last one standing wins.", NamedTextColor.GRAY));
+            "In the arena, dig the snow out from under the other player. Last one standing wins.",
+            NamedTextColor.GRAY));
     }
 
     private void tick() {
         var players = instance.getPlayers();
         if (players.size() < MIN_PLAYERS) {
             secondsLeft = COUNTDOWN_SECONDS;
-            status.name(Component.text("Waiting for players (%d/%d)".formatted(players.size(), MIN_PLAYERS)));
+            status.name(Component.text(
+                "Lobby: waiting for players (%d/%d)".formatted(players.size(), MIN_PLAYERS)));
             status.progress(1f);
             status.color(BossBar.Color.WHITE);
             return;
@@ -101,13 +112,13 @@ final class Lobby {
             return;
         }
 
-        status.name(Component.text("Starting in %ds".formatted(secondsLeft)));
+        status.name(Component.text("Lobby: snow arena starts in %ds".formatted(secondsLeft)));
         status.progress((float) secondsLeft / COUNTDOWN_SECONDS);
         status.color(BossBar.Color.GREEN);
         if (secondsLeft <= 5) {
             instance.showTitle(Title.title(
                 Component.text(secondsLeft, NamedTextColor.GOLD),
-                Component.empty(),
+                Component.text("Entering the snow arena", NamedTextColor.GRAY),
                 Title.Times.times(Duration.ZERO, Duration.ofMillis(900), Duration.ofMillis(100))));
             instance.playSound(Sound.sound(SoundEvent.BLOCK_NOTE_BLOCK_PLING, Sound.Source.MASTER, 1f, 1f));
         }
