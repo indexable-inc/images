@@ -1066,6 +1066,12 @@ in {
     # AGENTS.md rides the module's default house context render plus the same
     # personal appendix Claude gets, so the two agents cannot drift.
     houseContext.extraText = personalContext;
+    # hooks.json stays owned by the manual home.file declaration below (from
+    # `codexBase.passthru.hooksJson`, matching the package on PATH). Without
+    # this the imported codex module also claims ~/.codex/hooks.json with
+    # `finalPackage.hooksJson`, and the two sources conflict as soon as any
+    # hook-affecting option diverges from the wrapper defaults.
+    installHooks = false;
   };
 
   # Both agents edit their own config at runtime, so neither file can be a
@@ -1119,7 +1125,8 @@ in {
     ''
   );
 
-  # Codex hooks (the one thing the programs.codex module above does NOT deliver;
+  # Codex hooks, delivered manually (the module's own delivery is switched off
+  # via `installHooks = false` above so this stays the single owner;
   # config.toml/AGENTS.md/skills rationale lives there). Rendered from the SAME
   # declaration list as Claude's, owned by the index repo
   # (packages/agent/hooks.nix) and exposed as the codex package's
