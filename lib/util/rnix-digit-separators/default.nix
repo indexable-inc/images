@@ -87,7 +87,10 @@ tool.overrideAttrs (old: {
         rnixVendor="$rnixWritable"
       fi
       patchedRnix=0
-      for rnixDir in "$rnixVendor"/rnix-*; do
+      # fetchCargoVendor lays crates out one level down, under one directory
+      # per source (source-registry-0, source-git-*); older vendorers kept
+      # them flat at the vendor root. Glob both levels.
+      for rnixDir in "$rnixVendor"/rnix-* "$rnixVendor"/*/rnix-*; do
         [ -d "$rnixDir" ] || continue
         version=$(basename "$rnixDir")
         case "$version" in
