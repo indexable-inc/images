@@ -120,6 +120,14 @@ struct Route {
     ping_addr: SocketAddr,
 }
 
+impl Route {
+    fn has_same_measurement_path(self, other: Self) -> bool {
+        self.leader_id == other.leader_id
+            && self.proxy_id == other.proxy_id
+            && self.ping_addr == other.ping_addr
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct PeerEntry {
     ping_addr: SocketAddr,
@@ -612,6 +620,16 @@ impl Node {
         if *leader == next {
             return;
         }
+        if let (Some(current), Some(new)) = (*leader, next)
+            && current.has_same_measurement_path(new)
+        {
+            *leader = next;
+            drop(leader);
+            if let Some(offset) = self.estimator.lock().expect("estimator lock").estimate() {
+                self.publish_following_clock(offset, new.epoch_micros);
+            }
+            return;
+        }
         self.estimator.lock().expect("estimator lock").clear();
         if let Some(new) = next {
             *self.clock_ready.lock().expect("clock ready lock") = false;
@@ -705,6 +723,18 @@ fn reply_matches(
 }
 
 impl Node {
+    fn publish_following_clock(&self, offset: i64, epoch_micros: i64) {
+        self.clock.send_if_modified(|clock| {
+            let next = SharedClock::follow(offset, epoch_micros);
+            if *clock == next {
+                false
+            } else {
+                *clock = next;
+                true
+            }
+        });
+    }
+
     /// Fold one completed ping into the estimator and republish the clock.
     fn fold_ping(&self, sample: PingSample) {
         let offset = {
@@ -717,15 +747,7 @@ impl Node {
         else {
             return;
         };
-        let next = SharedClock::follow(offset, leader.epoch_micros);
-        self.clock.send_if_modified(|clock| {
-            if *clock == next {
-                false
-            } else {
-                *clock = next;
-                true
-            }
-        });
+        self.publish_following_clock(offset, leader.epoch_micros);
         *self.clock_ready.lock().expect("clock ready lock") = true;
 
         let mut takeover = self.takeover.lock().expect("takeover lock");
@@ -862,21 +884,24 @@ mod tests {
         assert_eq!(leader.leader_id, PeerId(1));
         assert_eq!(leader.proxy_id, PeerId(3));
 
-        node.estimator.lock().expect("estimator lock").record(PingSample {
+        node.fold_ping(PingSample {
             request_sent: 0,
             peer_received: 10,
             peer_replied: 10,
             response_received: 20,
         });
+        assert!(node.advertised_clock().ready);
         node.peer_clock(
             PeerId(3),
             Clock { leader_id: 1, epoch_micros: 450_000, ready: true },
         );
-        assert!(node.estimator.lock().expect("estimator lock").is_empty());
+        assert_eq!(node.estimator.lock().expect("estimator lock").len(), 1);
         assert_eq!(
             node.leader.lock().expect("leader lock").expect("leader").epoch_micros,
             450_000
         );
+        assert_eq!(node.clock.borrow().epoch_micros(), 450_000);
+        assert!(node.advertised_clock().ready);
         node.peer_disconnected(PeerId(3));
         assert_eq!(*node.leader.lock().expect("leader lock"), None);
         assert!(node.advertised_clock().ready);
