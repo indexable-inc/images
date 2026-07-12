@@ -5315,8 +5315,9 @@ links = 5
         );
     }
 
-    #[test]
-    fn build_script_runs_receive_cargo_target_cfg_and_feature_environment() {
+    /// Renders the build-script fixture used by
+    /// `build_script_runs_receive_cargo_target_cfg_and_feature_environment`.
+    fn render_build_script_cfg_and_feature_fixture() -> String {
         let workspace = std::env::temp_dir().join(format!(
             "nix-cargo-unit-render-test-{}",
             std::time::SystemTime::now()
@@ -5396,6 +5397,13 @@ links = "native_ffi"
             },
         )
         .unwrap();
+        fs::remove_dir_all(workspace).unwrap();
+        rendered
+    }
+
+    #[test]
+    fn build_script_runs_receive_cargo_target_cfg_and_feature_environment() {
+        let rendered = render_build_script_cfg_and_feature_fixture();
 
         assert!(rendered.contains("export TARGET='x86_64-unknown-linux-gnu'"));
         assert!(rendered.contains("export CARGO_PKG_VERSION_PRE=\"alpha.1\""));
@@ -5423,7 +5431,6 @@ links = "native_ffi"
         assert!(
             rendered.contains("export \"$cargo_cfg_env=''${!cargo_cfg_env},$cargo_cfg_value\"")
         );
-        fs::remove_dir_all(workspace).unwrap();
     }
 
     #[test]
