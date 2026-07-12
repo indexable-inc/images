@@ -5316,6 +5316,7 @@ links = 5
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn build_script_runs_receive_cargo_target_cfg_and_feature_environment() {
         let workspace = std::env::temp_dir().join(format!(
             "nix-cargo-unit-render-test-{}",
