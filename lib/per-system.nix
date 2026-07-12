@@ -1539,9 +1539,6 @@
               test -f "$pkg/share/nix-web-monitor/index.html"
               mkdir -p "$out"
             '';
-          site-case-tests = pkgs.linkFarm "site-case-tests" (
-            lib.mapAttrsToList (name: path: {inherit name path;}) siteTests.cases
-          );
           site-test = siteTests.all;
         };
         checkNameCollisions = lib.intersectLists (lib.attrNames explicitChecks) (lib.attrNames rustChecks);
@@ -1572,11 +1569,14 @@
       claude-plugin = claudePluginDir;
       # CI tools are pinned to the flake's nixpkgs so workflows resolve exact
       # executables with `nix build .#<tool>` instead of trusting runner PATH.
-      # cache-push uses attic/jq/xargs/gh; cve-scan uses curl/jq/tar.
+      # cache-push uses attic/jq/xargs/gh; cve-scan uses curl/jq/tar, and its
+      # PR gate uses node for ratchet-cli.mjs.
       # This avoids depending on a tool being on the runner PATH or a floating
       # `nixpkgs#` registry reference. The self-hosted runner PATH carries
-      # coreutils + nix but not findutils, jq, or gh, so the bare commands are
-      # `command not found` (cve-scan run 28598889924 died on exactly that).
+      # coreutils + nix but not findutils, jq, gh, or node, so the bare
+      # commands are `command not found` (cve-scan run 28598889924 died on
+      # exactly that; the regression gate's ratchet step died the same way on
+      # bare `node` in run 29196909666).
       inherit
         (pkgs)
         attic-client
@@ -1586,6 +1586,7 @@
         findutils
         gh
         gnutar
+        nodejs
         ;
     }
     // lib.optionalAttrs (system == "x86_64-linux") {inherit check;}
