@@ -30,7 +30,7 @@
 //! host and architecture.
 
 use anyhow::{Context as _, Result, ensure};
-use wasmtime::{Engine, Instance, Memory, Module, Store, TypedFunc};
+use wasmtime::{Engine, Instance, Module, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
 
 /// The ABI revision this host speaks.
 pub const ABI_VERSION: i32 = 1;
@@ -39,11 +39,21 @@ pub const CONTROL_COUNT: usize = 64;
 /// Upper bound on frames per `sa_render` call; callers split larger spans.
 pub const MAX_BLOCK_FRAMES: usize = 4096;
 
+/// Maximum linear memory available to a peer-supplied instrument.
+const MAX_MEMORY_BYTES: usize = 8 * 1024 * 1024;
+/// Fuel available to module start functions and ABI probes.
+const LOAD_FUEL: u64 = 1_000_000;
+/// Fuel available per rendered frame, plus [`LOAD_FUEL`] for setup.
+const FUEL_PER_FRAME: u64 = 100_000;
+
+struct StoreState {
+    limits: StoreLimits,
+}
+
 /// A loaded, validated instrument module, ready to render.
 pub struct Instrument {
-    store: Store<()>,
-    memory: Memory,
-    render: TypedFunc<(i64, i32, i32), ()>,
+    engine: Engine,
+    module: Module,
     controls_ptr: usize,
     out_ptr: usize,
     channels: u32,
@@ -74,12 +84,13 @@ impl Instrument {
         let module = Module::new(&engine, bytes)
             .map_err(anyhow::Error::from)
             .context("compile instrument module")?;
-        let mut store = Store::new(&engine, ());
+        let mut store = new_store(&engine, LOAD_FUEL)?;
         let instance = Instance::new(&mut store, &module, &[])
             .map_err(anyhow::Error::from)
             .context("instantiate instrument module")?;
 
         let abi: TypedFunc<(), i32> = instance.get_typed_func(&mut store, "sa_abi_version")?;
+        store.set_fuel(LOAD_FUEL)?;
         let abi = abi.call(&mut store, ())?;
         ensure!(
             abi == ABI_VERSION,
@@ -87,6 +98,7 @@ impl Instrument {
         );
 
         let channels: TypedFunc<(), i32> = instance.get_typed_func(&mut store, "sa_channels")?;
+        store.set_fuel(LOAD_FUEL)?;
         let channels = u32::try_from(channels.call(&mut store, ())?)
             .ok()
             .filter(|&channels| (1..=2).contains(&channels))
@@ -97,19 +109,19 @@ impl Instrument {
             .context("instrument exports no `memory`")?;
         let controls_ptr = read_ptr(&instance, &mut store, "sa_controls_ptr")?;
         let out_ptr = read_ptr(&instance, &mut store, "sa_out_ptr")?;
-        let render = instance.get_typed_func(&mut store, "sa_render")?;
+        let _: TypedFunc<(i64, i32, i32), ()> =
+            instance.get_typed_func(&mut store, "sa_render")?;
 
         let instrument = Self {
-            store,
-            memory,
-            render,
+            engine,
+            module,
             controls_ptr,
             out_ptr,
             channels,
             controls_bytes: vec![0; CONTROL_COUNT * 4],
             out_bytes: vec![0; MAX_BLOCK_FRAMES * channels as usize * 4],
         };
-        instrument.check_bounds()?;
+        instrument.check_bounds(memory.data_size(&store))?;
         Ok(instrument)
     }
 
@@ -121,7 +133,8 @@ impl Instrument {
 
     /// Render `frames` frames starting at absolute shared-timeline frame
     /// `start_frame` into `out` (interleaved, `frames * channels` samples),
-    /// with `controls` visible to the module. Allocation-free after load.
+    /// with `controls` visible to the module. Every call starts from a fresh
+    /// instance so guest state cannot leak across timeline ranges.
     ///
     /// # Errors
     /// Fails when `frames` exceeds [`MAX_BLOCK_FRAMES`], `out` is missized,
@@ -154,19 +167,32 @@ impl Instrument {
         for (slot, value) in self.controls_bytes.chunks_exact_mut(4).zip(controls) {
             slot.copy_from_slice(&value.to_le_bytes());
         }
-        self.memory
-            .write(&mut self.store, self.controls_ptr, &self.controls_bytes)?;
-
         let start = i64::try_from(start_frame).context("frame exceeds i64::MAX")?;
         let frames_i32 = i32::try_from(frames).expect("frames <= MAX_BLOCK_FRAMES fits i32");
         let sample_rate = i32::try_from(sample_rate).context("sample rate exceeds i32::MAX")?;
-        self.render
-            .call(&mut self.store, (start, frames_i32, sample_rate))
+
+        // Each call gets a fresh instance. This makes output independent of
+        // prior block boundaries even when a module contains mutable memory
+        // or globals.
+        let fuel = LOAD_FUEL.saturating_add(FUEL_PER_FRAME.saturating_mul(frames as u64));
+        let mut store = new_store(&self.engine, fuel)?;
+        let instance = Instance::new(&mut store, &self.module, &[])
+            .map_err(anyhow::Error::from)
+            .context("instantiate instrument module")?;
+        let memory = instance
+            .get_memory(&mut store, "memory")
+            .context("instrument exports no `memory`")?;
+        let render: TypedFunc<(i64, i32, i32), ()> =
+            instance.get_typed_func(&mut store, "sa_render")?;
+        memory.write(&mut store, self.controls_ptr, &self.controls_bytes)?;
+        store.set_fuel(fuel)?;
+        render
+            .call(&mut store, (start, frames_i32, sample_rate))
             .map_err(anyhow::Error::from)
             .context("instrument render trapped")?;
 
         let bytes = &mut self.out_bytes[..samples * 4];
-        self.memory.read(&self.store, self.out_ptr, bytes)?;
+        memory.read(&store, self.out_ptr, bytes)?;
         for (sample, chunk) in out.iter_mut().zip(bytes.chunks_exact(4)) {
             *sample = f32::from_le_bytes(chunk.try_into().expect("chunks_exact(4)"));
         }
@@ -175,8 +201,7 @@ impl Instrument {
 
     /// Reject modules whose declared buffers escape linear memory, once at
     /// load time, so renders never do bounds arithmetic.
-    fn check_bounds(&self) -> Result<()> {
-        let size = self.memory.data_size(&self.store);
+    fn check_bounds(&self, size: usize) -> Result<()> {
         let controls_end = self.controls_ptr + CONTROL_COUNT * 4;
         let out_end = self.out_ptr + MAX_BLOCK_FRAMES * self.channels as usize * 4;
         ensure!(
@@ -192,11 +217,30 @@ fn deterministic_config() -> wasmtime::Config {
     let mut config = wasmtime::Config::new();
     config.cranelift_nan_canonicalization(true);
     config.wasm_relaxed_simd(false);
+    config.consume_fuel(true);
     config
 }
 
-fn read_ptr(instance: &Instance, store: &mut Store<()>, name: &str) -> Result<usize> {
+fn new_store(engine: &Engine, fuel: u64) -> Result<Store<StoreState>> {
+    let limits = StoreLimitsBuilder::new()
+        .memory_size(MAX_MEMORY_BYTES)
+        .memories(1)
+        .instances(1)
+        .tables(1)
+        .build();
+    let mut store = Store::new(engine, StoreState { limits });
+    store.limiter(|state| &mut state.limits);
+    store.set_fuel(fuel)?;
+    Ok(store)
+}
+
+fn read_ptr(
+    instance: &Instance,
+    store: &mut Store<StoreState>,
+    name: &str,
+) -> Result<usize> {
     let func: TypedFunc<(), i32> = instance.get_typed_func(&mut *store, name)?;
+    store.set_fuel(LOAD_FUEL)?;
     let ptr = func.call(&mut *store, ())?;
     usize::try_from(ptr).with_context(|| format!("{name} returned negative pointer {ptr}"))
 }
@@ -269,6 +313,67 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn mutable_guest_state_does_not_cross_render_calls() -> Result<()> {
+        let wat = r#"
+(module
+  (memory (export "memory") 2)
+  (global $calls (mut i32) (i32.const 0))
+  (func (export "sa_abi_version") (result i32) (i32.const 1))
+  (func (export "sa_channels") (result i32) (i32.const 1))
+  (func (export "sa_controls_ptr") (result i32) (i32.const 0))
+  (func (export "sa_out_ptr") (result i32) (i32.const 256))
+  (func (export "sa_render") (param i64) (param i32) (param i32)
+    (global.set $calls (i32.add (global.get $calls) (i32.const 1)))
+    (f32.store (i32.const 256) (f32.convert_i32_s (global.get $calls)))))
+"#;
+        let mut instrument = Instrument::load(wat.as_bytes())?;
+        let controls = [0.0; CONTROL_COUNT];
+        let mut first = [0.0];
+        let mut second = [0.0];
+
+        instrument.render(0, 1, 48_000, &controls, &mut first)?;
+        instrument.render(0, 1, 48_000, &controls, &mut second)?;
+
+        assert_eq!(first, [1.0]);
+        assert_eq!(second, first);
+        Ok(())
+    }
+
+    #[test]
+    fn traps_runaway_render() -> Result<()> {
+        let wat = r#"
+(module
+  (memory (export "memory") 2)
+  (func (export "sa_abi_version") (result i32) (i32.const 1))
+  (func (export "sa_channels") (result i32) (i32.const 1))
+  (func (export "sa_controls_ptr") (result i32) (i32.const 0))
+  (func (export "sa_out_ptr") (result i32) (i32.const 256))
+  (func (export "sa_render") (param i64) (param i32) (param i32)
+    (loop $forever (br $forever))))
+"#;
+        let mut instrument = Instrument::load(wat.as_bytes())?;
+        let controls = [0.0; CONTROL_COUNT];
+        let error = instrument
+            .render(0, 1, 48_000, &controls, &mut [0.0])
+            .expect_err("runaway render must exhaust fuel");
+
+        assert!(error.to_string().contains("instrument render trapped"));
+        Ok(())
+    }
+
+    #[test]
+    fn traps_runaway_abi_probe() {
+        let wat = r#"
+(module
+  (memory (export "memory") 2)
+  (func (export "sa_abi_version") (result i32)
+    (loop $forever (br $forever))
+    (i32.const 1)))
+"#;
+        assert!(Instrument::load(wat.as_bytes()).is_err());
+    }
+
     /// A do-nothing module with parameterized ABI-probe exports, for
     /// exercising `Instrument::load` validation failures.
     fn stub_wat(abi_version: i32, memory_pages: u32, out_ptr: u32) -> String {
@@ -297,6 +402,13 @@ mod tests {
         let error = Instrument::load(stub_wat(1, 1, 65_000).as_bytes())
             .expect_err("oversized buffers rejected");
         assert!(error.to_string().contains("memory"));
+    }
+
+    #[test]
+    fn rejects_memory_above_store_limit() {
+        let error = Instrument::load(stub_wat(1, 129, 256).as_bytes())
+            .expect_err("memory above 8 MiB rejected");
+        assert!(error.to_string().contains("instantiate"));
     }
 
     #[test]
