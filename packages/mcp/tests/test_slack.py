@@ -214,19 +214,28 @@ def test_send_without_delivery_channel_reports_not_watching(
     assert slack._watches == {}
 
 
+def _serve_messages(
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    messages: list[dict[str, Any]],
+) -> None:
+    """Swap in an api serving `messages` from `method` (plus auth.test identity)."""
+
+    def fake_api(called: str, token: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        if called == "auth.test":
+            return {"ok": True, "user_id": _SELF_USER}
+        assert called == method
+        return {"ok": True, "messages": messages}
+
+    monkeypatch.setattr(slack, "_api_call", fake_api)
+
+
 def _poll(
     monkeypatch: pytest.MonkeyPatch,
     replies: list[dict[str, Any]],
 ) -> None:
-    """Swap in a replies-serving api and run one poll pass."""
-
-    def fake_api(method: str, token: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        if method == "auth.test":
-            return {"ok": True, "user_id": _SELF_USER}
-        assert method == "conversations.replies"
-        return {"ok": True, "messages": replies}
-
-    monkeypatch.setattr(slack, "_api_call", fake_api)
+    """Serve `replies` and run one thread poll pass."""
+    _serve_messages(monkeypatch, "conversations.replies", replies)
     asyncio.run(slack._poll_watches_once())
 
 
@@ -298,20 +307,9 @@ def test_poll_notify_failure_keeps_cursor_for_retry(
         raise RuntimeError("notify channel down")
 
     monkeypatch.setattr(slack, "_resolve_notify", lambda: boom)
-
-    def fake_api(method: str, token: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        if method == "auth.test":
-            return {"ok": True, "user_id": _SELF_USER}
-        assert method == "conversations.replies"
-        return {
-            "ok": True,
-            "messages": [{"ts": "1781739999.000001", "user": "U0OTHER0000", "text": "hi"}],
-        }
-
-    monkeypatch.setattr(slack, "_api_call", fake_api)
     # The failure is contained (the watch loop must survive to retry), the
     # cursor stays put, and the watch is kept.
-    asyncio.run(slack._poll_watches_once())
+    _poll(monkeypatch, [{"ts": "1781739999.000001", "user": "U0OTHER0000", "text": "hi"}])
     assert slack._watches[(_CHANNEL_ID, root)].last_seen_ts == before
 
 
@@ -577,15 +575,8 @@ def _arm_channel(
 
 
 def _poll_channel(monkeypatch: pytest.MonkeyPatch, messages: list[dict[str, Any]]) -> None:
-    """Swap in a history-serving api and run one channel poll pass."""
-
-    def fake_api(method: str, token: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        if method == "auth.test":
-            return {"ok": True, "user_id": _SELF_USER}
-        assert method == "conversations.history"
-        return {"ok": True, "messages": messages}
-
-    monkeypatch.setattr(slack, "_api_call", fake_api)
+    """Serve `messages` and run one channel poll pass."""
+    _serve_messages(monkeypatch, "conversations.history", messages)
     asyncio.run(slack._poll_channel_watches_once())
 
 
@@ -783,19 +774,8 @@ def test_channel_poll_notify_failure_keeps_cursor_for_retry(
         raise RuntimeError("notify channel down")
 
     monkeypatch.setattr(slack, "_resolve_notify", lambda: boom)
-
-    def fake_api(method: str, token: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        if method == "auth.test":
-            return {"ok": True, "user_id": _SELF_USER}
-        assert method == "conversations.history"
-        return {
-            "ok": True,
-            "messages": [{"ts": "1781740100.000001", "user": "U0OTHER0000", "text": "hi"}],
-        }
-
-    monkeypatch.setattr(slack, "_api_call", fake_api)
-    asyncio.run(slack._poll_channel_watches_once())
     # Cursor unchanged, so the undelivered message redelivers next cycle.
+    _poll_channel(monkeypatch, [{"ts": "1781740100.000001", "user": "U0OTHER0000", "text": "hi"}])
     assert slack._channel_watches[_CHANNEL_ID].last_seen_ts == before
 
 
