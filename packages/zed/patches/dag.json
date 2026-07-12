@@ -9,6 +9,10 @@
     {
       "patch": "0002-nix-expose-stable-application-package.patch",
       "deps": []
+    },
+    {
+      "patch": "0003-editor-navigate-directly-to-a-single-reference.patch",
+      "deps": []
     }
   ]
 }
