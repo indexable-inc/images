@@ -87,7 +87,7 @@ in {
         atexit.register(write_history)
       '';
 
-      "wgetrc".text = ''
+      wgetrc.text = ''
         hsts_file = ~/.local/state/wget-hsts
       '';
     };
