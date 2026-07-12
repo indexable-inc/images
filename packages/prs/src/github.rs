@@ -19,6 +19,8 @@ const THREAD_PAGE: usize = 100;
 
 /// Find a token: `GH_TOKEN` / `GITHUB_TOKEN`, else `gh auth token`. `None`
 /// means the caller degrades to showing patches without live status.
+// clone:ignore -- the idiomatic env-then-`gh auth token` bootstrap; resembles
+// git-log-pretty's avatar fetcher, which has no shareable library home.
 pub fn token() -> Option<String> {
     for var in ["GH_TOKEN", "GITHUB_TOKEN"] {
         if let Ok(value) = std::env::var(var) {

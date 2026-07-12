@@ -43,6 +43,8 @@ pub enum PrState {
     Closed,
 }
 
+// clone:ignore -- the repo-idiomatic const label() enum-to-str match; it only
+// resembles unrelated enums (gmail's MessageFormat, subagent-cache's Outcome).
 impl PrState {
     pub const fn label(self) -> &'static str {
         match self {
@@ -62,6 +64,8 @@ pub enum CiState {
     Pending,
 }
 
+// clone:ignore -- same idiomatic label() shape as PrState above; three tiny
+// enums each mapping variants to display words, not shared logic to extract.
 impl CiState {
     pub const fn label(self) -> &'static str {
         match self {
@@ -80,6 +84,7 @@ pub enum ReviewState {
     ReviewRequired,
 }
 
+// clone:ignore -- same idiomatic label() shape as PrState above.
 impl ReviewState {
     pub const fn label(self) -> &'static str {
         match self {
