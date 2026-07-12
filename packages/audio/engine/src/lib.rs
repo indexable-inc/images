@@ -18,7 +18,7 @@ use anyhow::{Context as _, Result};
 use audio_blob::{BlobHash, BlobStore};
 use audio_clock::{MonotonicTime, SharedClock};
 use audio_instrument::{CONTROL_COUNT, Instrument, MAX_BLOCK_FRAMES};
-use audio_score::{ControlValue, Score};
+use audio_score::Score;
 use tracing::{info, warn};
 
 /// Renders any span of the shared timeline from the score, deterministically.
@@ -242,18 +242,13 @@ impl Renderer {
             frames * 2
         );
 
-        // Control state at `start_frame`: base controls, then every event at
-        // or before it, in the deterministic event order.
-        let (controls, events) = {
+        // Control state at `start_frame`: replay the single ordered event
+        // log so later immediate updates supersede older scheduled values.
+        let events = {
             let score = self.score.lock().expect("score lock");
-            (score.controls(), score.events())
+            score.events()
         };
         let mut state = [0.0_f32; CONTROL_COUNT];
-        for ControlValue { control, value } in controls {
-            if let Some(slot) = state.get_mut(control as usize) {
-                *slot = value;
-            }
-        }
         let mut pending = events.iter().peekable();
         while let Some(event) = pending.next_if(|event| event.at_frame <= start_frame) {
             if let Some(slot) = state.get_mut(event.control as usize) {
@@ -670,7 +665,7 @@ mod tests {
         {
             let score = score.lock().expect("lock");
             score.set_instrument(&hash, 0)?;
-            score.set_control(0, 0.25)?;
+            score.set_control(0, 0.25, 0)?;
         }
         let renderer = Renderer::new(Arc::clone(&score), blobs);
         Ok(Fixture { score, renderer, _dir: dir })
@@ -698,6 +693,21 @@ mod tests {
         renderer.render_range(0, 200, 48_000, &mut out)?;
         assert!(out[..100].iter().all(|&sample| (sample - 0.25).abs() < f32::EPSILON));
         assert!(out[100..].iter().all(|&sample| (sample - 0.75).abs() < f32::EPSILON));
+        Ok(())
+    }
+
+    #[test]
+    fn later_immediate_control_overrides_past_schedule() -> Result<()> {
+        let Fixture { score, mut renderer, _dir } = fixture()?;
+        let score = score.lock().expect("lock");
+        score.schedule(Event { at_frame: 100, control: 0, value: 0.5 })?;
+        score.set_control(0, 0.7, 200)?;
+        drop(score);
+        let mut out = vec![0.0; 8];
+
+        renderer.render_range(200, 8, 48_000, &mut out)?;
+
+        assert!(out.iter().all(|&sample| (sample - 0.7).abs() < f32::EPSILON));
         Ok(())
     }
 
@@ -738,7 +748,7 @@ mod tests {
         {
             let score = score.lock().expect("lock");
             score.set_instrument(&hash_a, 0)?;
-            score.set_control(0, 0.25)?;
+            score.set_control(0, 0.25, 0)?;
         }
         let mut renderer = Renderer::new(Arc::clone(&score), Arc::clone(&blobs));
         let mut out = vec![0.0; 8];
