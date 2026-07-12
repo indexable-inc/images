@@ -1663,7 +1663,11 @@ fn render_build_script_run_phase(
         "build_script_manifest_dir_source={}",
         shell::double_quote(&manifest_dir)
     )?;
-    script.push_str("build_script_manifest_dir=$out/manifest-dir\n");
+    writeln!(
+        script,
+        "build_script_manifest_dir=$out/{}",
+        shell::quote(source.package_root())
+    )?;
     script.push_str("mkdir -p \"$build_script_manifest_dir\"\n");
     script.push_str(
         "cp -RL \"$build_script_manifest_dir_source\"/. \"$build_script_manifest_dir\"/\n",
@@ -5428,9 +5432,10 @@ links = "native_ffi"
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |duration| duration.as_nanos())
         ));
-        fs::create_dir_all(workspace.join("builder")).unwrap();
+        let package_root = workspace.join("crates/nested-native");
+        fs::create_dir_all(package_root.join("builder")).unwrap();
         fs::write(
-            workspace.join("Cargo.toml"),
+            package_root.join("Cargo.toml"),
             r#"[package]
 name = "nested-native"
 version = "0.1.0"
@@ -5438,10 +5443,10 @@ links = "nested_native"
 "#,
         )
         .unwrap();
-        let build_rs = workspace.join("builder").join("main.rs");
+        let build_rs = package_root.join("builder").join("main.rs");
         fs::write(&build_rs, "fn main() {}\n").unwrap();
         let build_rs_path = build_rs.to_string_lossy();
-        let pkg_id = format!("path+file://{}#nested-native@0.1.0", workspace.display());
+        let pkg_id = format!("path+file://{}#nested-native@0.1.0", package_root.display());
         let graph: UnitGraph = serde_json::from_value(serde_json::json!({
             "version": 1,
             "units": [
@@ -5493,7 +5498,7 @@ links = "nested_native"
         .unwrap();
 
         assert!(rendered.contains("build_script_manifest_dir_source=\"$src\""));
-        assert!(rendered.contains("build_script_manifest_dir=$out/manifest-dir"));
+        assert!(rendered.contains("build_script_manifest_dir=$out/'crates/nested-native'"));
         assert!(rendered.contains(
             "cp -RL \"$build_script_manifest_dir_source\"/. \"$build_script_manifest_dir\"/"
         ));
