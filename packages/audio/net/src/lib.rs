@@ -631,6 +631,7 @@ impl Node {
             let waiting = takeover.is_some_and(|id| {
                 peers.get(&id).is_some_and(|entry| !entry.ready)
             });
+            drop(peers);
             (next, waiting)
         };
         if *leader == next {
@@ -647,7 +648,8 @@ impl Node {
         {
             *leader = next;
             drop(leader);
-            if let Some(offset) = self.estimator.lock().expect("estimator lock").estimate() {
+            let offset = self.estimator.lock().expect("estimator lock").estimate();
+            if let Some(offset) = offset {
                 self.publish_following_clock(offset, new.epoch_micros);
             }
             return;
