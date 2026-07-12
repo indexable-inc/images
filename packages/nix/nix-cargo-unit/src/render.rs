@@ -5315,8 +5315,7 @@ links = 5
         );
     }
 
-    #[test]
-    fn build_script_runs_receive_cargo_target_cfg_and_feature_environment() {
+    fn build_script_environment_fixture() -> (PathBuf, UnitGraph) {
         let workspace = std::env::temp_dir().join(format!(
             "nix-cargo-unit-render-test-{}",
             std::time::SystemTime::now()
@@ -5344,7 +5343,7 @@ links = "native_ffi"
         fs::write(&build_rs, "fn main() {}\n").unwrap();
         let build_rs_path = build_rs.to_string_lossy();
         let pkg_id = format!("path+file://{}#native@0.1.0-alpha.1", workspace.display());
-        let graph: UnitGraph = serde_json::from_value(serde_json::json!({
+        let graph = serde_json::from_value(serde_json::json!({
             "version": 1,
             "units": [
                 {
@@ -5382,6 +5381,13 @@ links = "native_ffi"
             "roots": []
         }))
         .unwrap();
+
+        (workspace, graph)
+    }
+
+    #[test]
+    fn build_script_runs_receive_cargo_target_cfg_and_feature_environment() {
+        let (workspace, graph) = build_script_environment_fixture();
 
         let rendered = render_units_nix(
             &graph,
