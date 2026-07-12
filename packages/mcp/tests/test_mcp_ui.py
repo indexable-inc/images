@@ -332,6 +332,7 @@ def test_api_job_ui_serves_embedded_view(tmp_path: Path, monkeypatch: pytest.Mon
     store.finish(
         conn,
         id="ab12",
+        kind="cell",
         status="done",
         ended_at=2.0,
         output="",
