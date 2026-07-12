@@ -22,7 +22,10 @@
       lists
       pins
       ;
-    writePythonApplication = writers.writePythonApplication pkgs;
+    # The owner repository type-checks these scripts. Consumers should not
+    # rebuild that policy closure with their unrelated nixpkgs revision.
+    writePythonApplication = args:
+      writers.writePythonApplication pkgs (args // {check = false;});
     evalTimeSubstitutable = import (repoRoot + "/lib/util/eval-time-substitutable.nix");
   };
 
