@@ -1713,7 +1713,7 @@ fn render_build_script_run_phase(
         "${{renderCargoEncodedRustflags {package_name} {platform}}}"
     )?;
     script.push_str(
-        "export CARGO_ENCODED_RUSTFLAGS=\"$(IFS=$'\\x1f'; printf '%s' \"${cargo_encoded_rustflags[*]}\")\"\n",
+        "export CARGO_ENCODED_RUSTFLAGS=\"$(IFS=$'\\x1f'; printf '%s' \"''${cargo_encoded_rustflags[*]}\")\"\n",
     );
     writeln!(
         script,
