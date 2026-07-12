@@ -13,6 +13,14 @@ stdio-only by contract (Claude Code spawns the channel server as a subprocess
 and a session opts in per-entry via ``--channels``), so the HTTP transport does
 not grow one. A client that did not opt in ignores both the capability and the
 notifications, so this costs nothing when unused.
+
+Under a Weave-driven session (``Config.channel_delivery == "weave-chat"``,
+set via IX_MCP_CHANNEL_DELIVERY by weave's session_env) the pump does NOT
+emit channel notifications: a self-woken Claude turn is out-of-band to Weave
+(its hook callbacks are rejected 401 and its work never reaches the journal).
+Each outbox row is instead posted to Weave's chat ingress (POST
+``{WEAVE_URL}/api/chat`` addressed to IX_WEAVE_AGENT), where Weave's observer
+opens a normal run and prompts the session itself.
 """
 
 from __future__ import annotations
@@ -26,6 +34,8 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable, Iterator, MutableMapping
 from contextlib import AsyncExitStack, contextmanager
+
+from xml.sax.saxutils import quoteattr
 
 import anyio
 from anyio.abc import ObjectSendStream
@@ -220,10 +230,18 @@ async def pump_outbox(
     write stream -- the same bytes ``ServerSession.send_notification`` would
     produce. Holds every send on the initialization event, so a startup/replay
     ``notify()`` never emits a notification before the handshake completes.
+
+    Under ``channel_delivery == "weave-chat"`` rows go to Weave's chat ingress
+    instead of the client (see the module docstring): ``take_outbox`` is
+    destructive, so undelivered rows ride a local ``pending`` buffer until a
+    2xx acknowledges them, each keeping the one message id minted for it so a
+    retry after an ambiguous failure lands on the same message entity.
     """
     await initialized.wait()
     cfg = config()
     box = mailbox.get_mailbox()
+    weave_chat = _weave_chat_target() if cfg.channel_delivery == "weave-chat" else None
+    pending: list[dict] = []
     while True:
         try:
             # Serve only this session's mail: broadcast rows (explicit
@@ -234,6 +252,11 @@ async def pump_outbox(
             rows = box.take_outbox(session=cfg.server_session_id)
         except Exception:
             rows = []  # best-effort: a read error this tick just retries next tick
+        if weave_chat is not None:
+            pending.extend({**row, "msg_id": f"msg-ixch-{uuid.uuid4().hex[:12]}"} for row in rows)
+            pending = await _deliver_weave_chat(weave_chat, pending)
+            await anyio.sleep(_OUTBOX_POLL_SECONDS)
+            continue
         for row in rows:
             try:
                 meta = json.loads(row["meta"] or "{}")
@@ -252,6 +275,73 @@ async def pump_outbox(
             except (anyio.ClosedResourceError, anyio.BrokenResourceError):
                 return
         await anyio.sleep(_OUTBOX_POLL_SECONDS)
+
+
+def _weave_chat_target() -> tuple[str, str] | None:
+    """The (weave_url, agent) a weave-chat pump posts to, or None when the
+    environment cannot support the mode -- the pump then falls back loudly to
+    client notifications rather than silently dropping events."""
+    url = os.environ.get("WEAVE_URL", "").rstrip("/")
+    agent = os.environ.get("IX_WEAVE_AGENT", "")
+    if not url or url.lower() == "off" or not agent:
+        logger.warning(
+            "channel_delivery=weave-chat needs WEAVE_URL and IX_WEAVE_AGENT; "
+            "falling back to client notifications"
+        )
+        return None
+    return url, agent
+
+
+def _channel_chat_text(row: dict) -> str:
+    """Render one outbox row in the same ``<channel ...>content</channel>``
+    shape Claude Code gives channel notifications, so the agent reads identical
+    provenance whichever way the event reached it."""
+    try:
+        meta = json.loads(row["meta"] or "{}")
+    except ValueError:
+        meta = {}
+    attrs = "".join(f" {key}={quoteattr(str(value))}" for key, value in meta.items())
+    return f'<channel source="ix-mcp"{attrs}>{row["content"]}</channel>'
+
+
+async def _deliver_weave_chat(target: tuple[str, str], pending: list[dict]) -> list[dict]:
+    """POST pending rows to Weave's chat ingress, oldest first, in order.
+
+    Returns the rows still undelivered: the first failure keeps its row and
+    everything behind it queued for the next tick, preserving order. Weave's
+    /api/chat ``id`` is idempotent (one message entity per id; an answered or
+    claimed message never re-dispatches), so retrying a POST whose response
+    was lost cannot double-run the agent. Rows older than the outbox TTL are
+    dropped with an error line -- the same bound the mailbox itself enforces
+    -- so a long Weave outage cannot grow the buffer without limit."""
+    url, agent = target
+    cutoff = time.time() - mailbox._OUTBOX_MAX_AGE_SECONDS
+    expired = [row for row in pending if row["created_at"] < cutoff]
+    if expired:
+        logger.error(
+            "dropping %d channel event(s) undelivered to weave past the outbox TTL",
+            len(expired),
+        )
+    kept = [row for row in pending if row["created_at"] >= cutoff]
+    for index, row in enumerate(kept):
+        body = {
+            "author": "ix-mcp",
+            "to": agent,
+            "role": "user",
+            "id": row["msg_id"],
+            "text": _channel_chat_text(row),
+        }
+        try:
+            # store._http_json is the one seam every Weave HTTP call in this
+            # process goes through (and what tests stub); blocking stdlib
+            # urllib, so run it off the event loop.
+            await anyio.to_thread.run_sync(
+                functools.partial(store._http_json, "POST", f"{url}/api/chat", body=body)
+            )
+        except Exception as exc:
+            logger.warning("weave chat delivery failed, retrying next tick: %s", exc)
+            return kept[index:]
+    return []
 
 # ASGI plumbing types for the HTTP transport's auth gate. `object` values (not
 # Any) keep the wrapper honestly typed; only our own literal dicts flow through.

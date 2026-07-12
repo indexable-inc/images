@@ -18,6 +18,8 @@
   snix-src,
   clippy-src,
   codex-src,
+  zed-src,
+  zed-upstream,
   nix-src,
   ghostty,
   mesa-src,
@@ -310,10 +312,15 @@
     buildRustPackage
     ;
   cargoUnit = cargoUnitFor pkgs;
+  cargoUnitExternal = import ./rust/external.nix {repoRoot = paths.root;};
   # Default patched-source builder, bound to the top-level x86_64-linux pkgs for
   # image/module eval; `ixForPackages` / the overlay context rebind it to the
   # consuming pkgs so a patched source builds for its own system.
   patchedSrc = patchedSrcFor pkgs;
+  # Patch the vendored rnix inside a rust tool so it lexes underscore digit
+  # separators in nix numeric literals; the alejandra/statix/deadnix package
+  # dirs under packages/nix/ consume this. See its doc comment.
+  rnixDigitSeparators = import ./util/rnix-digit-separators;
   goUnitFor = pkgs:
     import ./build/go-unit.nix {
       inherit lib pkgs;
@@ -526,6 +533,7 @@
       rustWorkspaceFor
       clippy-src
       ghostty
+      zed-src
       ;
   };
 
@@ -693,6 +701,7 @@
       publicArtifactsFor
       relativePath
       repoMetadata
+      rnixDigitSeparators
       ruffAnnArgs
       rustWorkspace
       rustWorkspaceFor
@@ -715,6 +724,7 @@
     nushell = nushell-src;
     nushellSrc = nushell-src;
     codexSrc = codex-src;
+    zedSrc = zed-upstream;
     clippySrc = clippy-src;
     nixSrc = nix-src;
     drgnSrc = drgn-src;
@@ -795,6 +805,7 @@
         appleSdkToolchain
         bunLockFor
         cargoUnitFor
+        cargoUnitExternal
         discoverModules
         discoverTree
         errors

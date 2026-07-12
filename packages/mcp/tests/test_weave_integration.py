@@ -75,11 +75,14 @@ def test_phase0_store_roundtrip_against_real_weave(weave_server: str, tmp_path: 
     store.start(ws, id="run-1", name="smoke import", code="print('hello weave')",
                 started_at=now, budget=15.0, kind="cell", topic="swap-e2e")
     store.update_output(ws, "run-1", "hello weave\n", line=1)
-    store.finish(ws, id="run-1", status="done", ended_at=now + 2.5,
+    store.finish(ws, id="run-1", kind="cell", status="done", ended_at=now + 2.5,
                  output="hello weave\n", result="'ok'", error=None,
                  outputs=[], bindings={}, namespace=[])
     store.start(ws, id="job-1", name="background watcher", code="watch()",
                 started_at=now, budget=0.0, kind="spawn", topic="swap-e2e")
+    store.finish(ws, id="job-1", kind="spawn", status="done", ended_at=now + 3.0,
+                 output="", result="'finished'", error=None,
+                 outputs=[], bindings={}, namespace=[])
     store.save_snapshot(ws, created_at=now, blob=b"snapshot-bytes" * 10,
                         names=["x", "y"], skipped=[])
     assert ws.flush(timeout=15.0), "write queue failed to drain"
@@ -87,6 +90,7 @@ def test_phase0_store_roundtrip_against_real_weave(weave_server: str, tmp_path: 
     got = {r["id"]: r for r in store.recent(ws, limit=10)}
     assert got["run-1"]["status"] == "done"
     assert got["run-1"]["code"] == "print('hello weave')"
+    assert got["job-1"]["status"] == "done"
     assert store.get_session(ws)["name"] == "e2e demo session"
     snap = store.latest_snapshot(ws)
     assert snap is not None
@@ -104,6 +108,7 @@ def test_phase0_store_roundtrip_against_real_weave(weave_server: str, tmp_path: 
         kinds = {tuple(r) for r in (await weave_mod.query('?- child_of(R, "agent:e2e"), type(R, T).'))["rows"]}
         assert ("run:run-1", "run") in kinds
         assert ("proc:job-1", "process") in kinds
+        assert not (await weave_mod.query('?- latest("run:job-1", A, V).'))["rows"]
 
     asyncio.run(check())
 
@@ -121,6 +126,7 @@ def test_delegate_writes_task_shape(weave_server: str, monkeypatch: pytest.Monke
         attrs = {r[0]: r[1] for r in (await weave.query(f'?- latest("{task}", A, V).'))["rows"]}
         assert attrs.get("type") == "task"
         assert attrs.get("agent") == "agent-greeter"
+        assert attrs.get("harness") == "claude"
         assert attrs.get("prompt") == "say hello to the weave world"
         assert attrs.get("state") == "pending"
         assert attrs.get("requested_by") == "agent:e2e"
@@ -128,5 +134,19 @@ def test_delegate_writes_task_shape(weave_server: str, monkeypatch: pytest.Monke
         assert agent_attrs.get("type") == "agent"
         assert agent_attrs.get("name") == "greeter"
         assert agent_attrs.get("model") == "haiku"
+        assert agent_attrs.get("harness") == "claude"
+
+        # A codex dispatch mirrors harness/model/effort onto the task entity.
+        codex_task = await weave.delegate(
+            "greet in codex", name="codex-greeter", harness="codex", model="gpt-5.6-sol", effort="max"
+        )
+        codex_attrs = {r[0]: r[1] for r in (await weave.query(f'?- latest("{codex_task}", A, V).'))["rows"]}
+        assert codex_attrs.get("harness") == "codex"
+        assert codex_attrs.get("model") == "gpt-5.6-sol"
+        assert codex_attrs.get("effort") == "max"
+
+        # 'omp' is reserved: it raises before any fact is written.
+        with pytest.raises(NotImplementedError):
+            await weave.delegate("noop", harness="omp")
 
     asyncio.run(main())

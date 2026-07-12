@@ -126,6 +126,17 @@
       flake = false;
     };
 
+    # The maintained fork is the application source. Its own flake owns the
+    # Rust lock, toolchain, and platform build.
+    zed-src.url = "github:indexable-inc/zed/ix-patched";
+
+    # Unmodified upstream base for validating and regenerating the patch series
+    # that produces zed-src's ix-patched branch.
+    zed-upstream = {
+      url = "github:zed-industries/zed/v1.10.x";
+      flake = false;
+    };
+
     # Upstream NixOS/nix, patched in-repo (packages/nix/nix/patches). Pinned BY
     # REV at tag 2.34.7, the version the hydra daemon runs (`nix store info` ->
     # `Version: 2.34.7`): nix is our daemon toolchain, so the patched package
@@ -221,13 +232,6 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # TODO: re-add the `symphony` flake input that provided
-    # `pkgs.symphony-room-server`. room-server's real home is the ix monorepo
-    # (`crates/room`, `ix#packages.x86_64-linux.room-server`), but ix already
-    # inputs index (`ix/flake.nix`), so index cannot source it from ix without a
-    # circular flake dependency. Pin removed for now; re-add once that cycle is
-    # resolved or room-server moves into this repo.
-
     # Ghostty's terminal VT engine, consumed as a source tree (not a flake) so
     # `packages/tui/vt/libghostty-vt` owns the build. Pinned to the commit the
     # local clone validated against; `requireZig` in `build.zig.zon` is exact
@@ -281,6 +285,8 @@
     snix-src,
     clippy-src,
     codex-src,
+    zed-src,
+    zed-upstream,
     nix-src,
     ghostty,
     mesa-src,
@@ -368,6 +374,8 @@
         snix-src
         clippy-src
         codex-src
+        zed-src
+        zed-upstream
         nix-src
         ghostty
         mesa-src
@@ -437,7 +445,16 @@
       inherit indexPackages;
       portableServicesModule = ix.portableServices.homeModule;
     };
+    # One instance shared by every wiring site (the workstation profile and
+    # homeModules.provenance); the module's `key` also dedups the instances a
+    # consumer combines, but there is no reason to make them re-apply the
+    # walker.
+    provenanceHomeModule = import ./modules/home/provenance.nix {inherit (ix) provenance;};
     claudeCodeHomeModule = import ./packages/agent/home-manager/claude-code.nix {
+      inherit indexPackages;
+      promptModule = ./packages/agent/prompt;
+    };
+    codexHomeModule = import ./packages/agent/home-manager/codex.nix {
       inherit indexPackages;
       promptModule = ./packages/agent/prompt;
     };
@@ -456,9 +473,10 @@
     };
     personalWorkstationModule = import ./users/andrewgazelka/profiles/workstation.nix {
       inherit indexPackages personalServicesModule ix;
+      codexModule = codexHomeModule;
       configRoot = personalConfigRoot;
       mutableFilesModule = mutableFilesHomeModule;
-      provenanceModule = import ./modules/home/provenance.nix {inherit (ix) provenance;};
+      provenanceModule = provenanceHomeModule;
       optionsModule = personalOptionsModule;
       indexSkillsSrc = paths.skills;
       tmuxModule = ./modules/home/tmux.nix;
@@ -577,14 +595,11 @@
       # file:line that defined them, and `whence <path>` reads it with zero
       # eval. Set `provenance.rev = self.rev or self.dirtyRev or null` in
       # the consuming flake. See modules/home/provenance.nix.
-      provenance = import ./modules/home/provenance.nix {inherit (ix) provenance;};
+      provenance = provenanceHomeModule;
       # Agent CLI modules: Home Manager is the user-facing configuration
       # surface, while the package wrappers remain the implementation detail.
       claude-code = claudeCodeHomeModule;
-      codex = import ./packages/agent/home-manager/codex.nix {
-        indexPackages = system: packages.${system};
-        promptModule = ./packages/agent/prompt;
-      };
+      codex = codexHomeModule;
       # Personal-but-shareable workstation module for github:andrewgazelka: the
       # ix.dev downtime watcher + boss bar overlay + the shared say-detached
       # sound helper, all as portable services. Closed over the per-system

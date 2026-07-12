@@ -29,6 +29,11 @@ jobs:
       - name: Install Determinate Nix
         uses: ./.github/actions/install-nix
 
+      # Underscore digit separators: every nix invocation that evaluates this
+      # tree must go through the patched client (see the action's description).
+      - name: Bootstrap patched Nix client
+        uses: ./.github/actions/bootstrap-patched-nix
+
       # Per-attempt-patch closure build gates (RFC 0010 A3, #2098): for each
       # fork opted in via `closureGates = true` and each attempt-marked patch,
       # build the fork package with the series restricted to that patch's

@@ -1,6 +1,7 @@
 # Full personal workstation profile. Index-owned dependencies are closed over
 # by the flake export; host-owned values arrive through typed options.nix.
 {
+  codexModule,
   configRoot,
   indexPackages,
   ix,
@@ -199,7 +200,7 @@
   codexSettings = {
     check_for_update_on_startup = false;
     bypass_hook_trust = true;
-    model = "gpt-5.5";
+    model = "gpt-5.6-sol";
     model_reasoning_effort = "low";
     personality = "pragmatic";
     service_tier = "fast";
@@ -274,6 +275,12 @@ in {
   imports = [
     optionsModule
     personalServicesModule
+    # Declares `programs.codex.houseContext` (and the rest of the index codex
+    # options) that this profile sets below; home-manager's stock
+    # programs.codex module only carries enable/package/skills/context, so
+    # without this import the houseContext definitions fail eval (#2653
+    # regression).
+    codexModule
     # Per-generation provenance manifest: each HM generation carries
     # provenance.json mapping deployed files back to the nix file:line that
     # defined them; `whence <path>` (below) reads it with zero eval.
@@ -299,6 +306,10 @@ in {
     {
       assertion = cfg.packages.typenix != null;
       message = "users.andrewgazelka.packages.typenix must be set for the workstation profile.";
+    }
+    {
+      assertion = cfg.packages.noxLsp != null;
+      message = "users.andrewgazelka.packages.noxLsp must be set for the workstation profile.";
     }
     {
       assertion = cfg.paths.vscodeIslands != null;
@@ -651,6 +662,13 @@ in {
           exec ${cfg.packages.typenix}/bin/typenix --lsp --stdio "$@"
         '';
       })
+      # nox-lsp: Nix language server over the nox arena evaluator (nox
+      # docs/lsp.md) — eval-backed hovers/completions, embedded-language
+      # delegation, provenance jumps. Zed's Nix language points at it
+      # (config/zed/settings.nix); supplied host-native by the consuming
+      # flake like typenix above.
+      cfg.packages.noxLsp
+      bash-language-server # nox-lsp delegates embedded bash strings to it (must be on PATH)
       # Experimental: MLsub/SimpleSub type checker LSP for Nix (Nix-native).
       # https://github.com/JRMurr/tix — Cursor/Zed point at tix-lsp.
       # inputs.tix.packages.${pkgs.stdenv.hostPlatform.system}.default
@@ -730,6 +748,7 @@ in {
       # wezterm # GPU terminal emulator; disabled 2026-07-01: aarch64-darwin output was absent from cache.nixos.org and rebuilt locally for ~46m during a routine flake update. Use Alacritty or `nix run nixpkgs#wezterm -- ...` when needed.
       cfg.packages.mercuryCli # Mercury CLI (custom flake input)
       indexPkgs.elevenlabs-say # ElevenLabs say-style TTS CLI (-r/-v, streaming); key via ELEVENLABS_API_KEY
+      indexPkgs.zed # Maintained fork carries reference filtering unavailable upstream.
       # vfkit guest helpers intentionally not installed: they force the
       # aarch64-linux microvm system into every Home Manager switch, so a stale
       # or stopped VM remote builder breaks unrelated macOS profile updates.
@@ -1059,6 +1078,12 @@ in {
     # AGENTS.md rides the module's default house context render plus the same
     # personal appendix Claude gets, so the two agents cannot drift.
     houseContext.extraText = personalContext;
+    # hooks.json stays owned by the manual home.file declaration below (from
+    # `codexBase.passthru.hooksJson`, matching the package on PATH). Without
+    # this the imported codex module also claims ~/.codex/hooks.json with
+    # `finalPackage.hooksJson`, and the two sources conflict as soon as any
+    # hook-affecting option diverges from the wrapper defaults.
+    installHooks = false;
   };
 
   # Both agents edit their own config at runtime, so neither file can be a
@@ -1112,7 +1137,8 @@ in {
     ''
   );
 
-  # Codex hooks (the one thing the programs.codex module above does NOT deliver;
+  # Codex hooks, delivered manually (the module's own delivery is switched off
+  # via `installHooks = false` above so this stays the single owner;
   # config.toml/AGENTS.md/skills rationale lives there). Rendered from the SAME
   # declaration list as Claude's, owned by the index repo
   # (packages/agent/hooks.nix) and exposed as the codex package's
@@ -1464,10 +1490,10 @@ in {
         };
         protocol.version = 2;
         http = {
-          postBuffer = 524288000;
+          postBuffer = 524_288_000;
           maxRequestBuffer = "100M";
           lowSpeedLimit = 0;
-          lowSpeedTime = 999999;
+          lowSpeedTime = 999_999;
         };
         transfer.fsckObjects = false;
         receive.fsckObjects = false;

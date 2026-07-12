@@ -9,6 +9,6 @@
 # /var/lib/minecraft/.ix-rcon-password on the minecraft node (the seed
 # only writes when the file is absent).
 {
-  port = 25575;
+  port = 25_575;
   password = "ix-hermes-operator-rcon-change-me";
 }

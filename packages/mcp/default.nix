@@ -1,6 +1,8 @@
 {
   ix,
   lib,
+  nix,
+  updateScriptWriter ? null,
 }: let
   # The headless Nix build-tree emitter. The `nix` module's live-pane path spawns
   # it (`nix-web-monitor --emit ndjson`) so the parser stays the single owner of
@@ -15,13 +17,22 @@
   # callPackage would have auto-bound to a `pkgs` arg in the flake package set.
   inherit (ix) pkgs;
 
-  # PyPI source pins (version + sdist URL + SRI hash) for the interpreter
-  # overrides below, in the sibling pins.json (repo policy: no inline hash
-  # literals in tracked .nix). Each `url` is fetchPypi's canonical pypi.io
-  # source path (verified byte-identical to the pinned hashes). Re-pin after a
-  # version edit manually (rebuild, copy the `got:` hash): mcp carries no
-  # registry updateScript, so `nix run .#update` does not touch these pins.
+  # PyPI pins (version + URL + SRI hash) for the interpreter overrides below,
+  # in the sibling pins.json (repo policy: no inline hash literals in tracked
+  # .nix). `nix run .#mcp.updateScript` joins the registry update DAG and
+  # refreshes normal PyPI sdist pins from the JSON API. pins.json policy markers
+  # are `prefetch = "manual"` for hash-mode holds, `hold` for version holds, and
+  # `track` for version-line tracking, so the updater skips or narrows pins
+  # loudly instead of guessing.
   pypiPins = ix.pins.loadPins ./pins.json;
+  updateScript =
+    if updateScriptWriter == null
+    then null
+    else
+      import ./update.nix {
+        inherit nix;
+        writeNushellApplication = updateScriptWriter;
+      };
   # The PTY-driving `tui` package, baked into the pinned interpreter so every
   # session can `import tui` with no setup. The PyO3 cdylib comes from the same
   # shared workspace graph the binary is selected from, dropped next to the
@@ -425,6 +436,26 @@
     name = "ix-mcp-nix-python-source";
     path = ./src/nix;
   };
+  # `sharedaudio`: drive the local shared-audio daemon (packages/audio) over
+  # its unix control socket: status, local volume, and publishing WASM
+  # instruments / control changes to every peer. Pure stdlib JSON-lines
+  # client, cross-platform, so every session can `import sharedaudio`.
+  sharedaudioPythonSource = builtins.path {
+    name = "ix-mcp-sharedaudio-python-source";
+    path = ./src/sharedaudio;
+  };
+  sharedaudioModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-sharedaudio-python-module"
+    {
+      strictDeps = true;
+      meta.description = "shared-audio daemon control client bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/sharedaudio"
+      mkdir -p "$site"
+      cp -r ${sharedaudioPythonSource}/sharedaudio/. "$site/"
+    ''
+  );
   nixModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-nix-python-module"
     {
@@ -1334,6 +1365,7 @@
       ixNotebookMcpModule
       viewModule
       nixModule
+      sharedaudioModule
       fleetModule
       meshModule
       weaveModule
@@ -2586,7 +2618,7 @@
         pkgs.fd
       ];
       strictDeps = true;
-      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + client-cancel interrupts in-flight run (#2387) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246) + claude-history session search (#2245) + per-serve kernel trace file (#2355) + builtin shadow restore (#2430) + failed-cell stale-binding note (#2526) + pr_watch instant-merge guard (#2532) + find glob-pattern autodetect (#2542) + nu input= routing past no-input statements (#2540)";
+      meta.description = "per-cell type check (ty) + issue #1754 bug 1-3 regressions + sh exit surfacing (#1766) + Result.value reachability (#2068) + find glob= filter (#1366) + in-band build stamp (#2110) + session-scoped job cancellation (#2104) + client-cancel interrupts in-flight run (#2387) + jobs.spawn ad-hoc awaitables (#2164) + grep files_only (#2246) + claude-history session search (#2245) + per-serve kernel trace file (#2355) + builtin shadow restore (#2430) + failed-cell stale-binding note (#2526) + pr_watch instant-merge guard (#2532) + find glob-pattern autodetect (#2542) + nu input= routing past no-input statements (#2540) + kernel host seam: local child vs ray actor";
     }
     ''
       export HOME=$TMPDIR/home
@@ -2606,6 +2638,8 @@
       cp ${./tests/test_cancel_running.py} test_cancel_running.py
       # Issue #2164: jobs.spawn registers an ad-hoc awaitable as a first-class job.
       cp ${./tests/test_jobs_spawn.py} test_jobs_spawn.py
+      # A spawned job starts and finishes the same proc entity; no detached run phantom.
+      cp ${./tests/test_spawn_store_lifecycle.py} test_spawn_store_lifecycle.py
       cp ${./tests/test_fsearch_partial.py} test_fsearch_partial.py
       cp ${./tests/test_fsearch_glob.py} test_fsearch_glob.py
       # Issue #2542: find('*.py') auto-detects a glob-shaped non-regex pattern.
@@ -2622,6 +2656,12 @@
       cp ${./tests/test_build_info.py} test_build_info.py
       # Issue #2355: per-serve kernel trace file + sweep of orphaned dumps.
       cp ${./tests/test_kernel_trace_path.py} test_kernel_trace_path.py
+      # The kernel host seam: local/ray selection, the actor's connection-info
+      # plumbing (str HMAC key), offset-scoped trace reads.
+      cp ${./tests/test_kernel_host.py} test_kernel_host.py
+      # The kernel's board lease: registration placement facts (kernel_host,
+      # node) and the writer's heartbeat_ms beat, agent idle-clock untouched.
+      cp ${./tests/test_store_kernel_lease.py} test_store_kernel_lease.py
       # Issue #2430: a cell rebinding/deleting a kernel builtin gets it restored.
       cp ${./tests/test_builtin_shadow_restore.py} test_builtin_shadow_restore.py
       # Issue #2526: a failed cell's traceback names the bindings it never reached.
@@ -2634,6 +2674,7 @@
         test_typecheck.py test_job_await_errors.py test_job_cancel_scope.py \
         test_cancel_running.py \
         test_jobs_spawn.py \
+        test_spawn_store_lifecycle.py \
         test_fsearch_partial.py \
         test_fsearch_glob.py \
         test_fsearch_glob_pattern.py \
@@ -2642,6 +2683,8 @@
         test_sh_module.py \
         test_build_info.py \
         test_kernel_trace_path.py \
+        test_kernel_host.py \
+        test_store_kernel_lease.py \
         test_builtin_shadow_restore.py \
         test_unexecuted_note.py \
         test_pr_watch_automerge.py \
@@ -5740,5 +5783,8 @@ in
               ghosttySmoke
               ;
           };
+      }
+      // lib.optionalAttrs (updateScript != null) {
+        inherit updateScript;
       };
   })

@@ -34,6 +34,7 @@ pub const BUILTINS: &[(&str, usize)] = &[
     ("same-text", 2),
     ("same-file", 2),
     ("text-match", 2),
+    ("misgrouped-digits", 2),
     ("no-descendant", 3),
     ("attached-sibling", 3),
 ];

@@ -653,3 +653,115 @@ fn no_descendant_is_strict() -> TestResult {
     assert_eq!(rows.len(), 1, "the identifier has no matching descendant");
     Ok(())
 }
+
+#[test]
+fn misgrouped_digits_flags_and_regroups_nix_literals() -> TestResult {
+    // Mirrors the shape of the repo's digit-grouping lints
+    // (astlog-rules/nix.astlog). The workspace's tree-sitter-nix fork lexes
+    // underscore literals as single integer/float nodes (matching the
+    // patched nix lexer), so one literal is one node, one finding, one edit.
+    let source = r#"{
+  ungrouped = 100000;
+  misgrouped = 1_0000;
+  misgroupedFrac = 1_0000.000001;
+  fine = 10_000;
+  short = 1000;
+  frac = 0.000001;
+  fracFine = 1_000.000_1;
+  quoted = "100000";
+}
+"#;
+    let rules = r#"
+(rule (needs-grouping n fixed)
+  (match nix "[(integer_expression) (float_expression)] @n")
+  (misgrouped-digits n fixed))
+(lint needs-grouping error "group digits in threes: `{fixed}`")
+(rewrite regroup (needs-grouping n fixed)
+  (replace n "{fixed}"))
+"#;
+    let dir = tempfile::tempdir()?;
+    write_sample(&dir, "sample.nix", source)?;
+    let analysis = analyze(rules, &[dir.path().to_path_buf()])?;
+
+    let findings = analysis.findings()?;
+    let texts: Vec<(&str, &str)> = findings
+        .iter()
+        .map(|finding| (finding.text.as_str(), finding.message.as_str()))
+        .collect();
+    assert_eq!(
+        texts,
+        vec![
+            ("100000", "group digits in threes: `100_000`"),
+            ("1_0000", "group digits in threes: `10_000`"),
+            ("1_0000.000001", "group digits in threes: `10_000.000_001`"),
+            ("0.000001", "group digits in threes: `0.000_001`"),
+        ],
+        "one finding per literal, none for grouped/short/string literals"
+    );
+
+    let rewritten = analysis.rewritten();
+    assert_eq!(rewritten.len(), 1);
+    let content = &rewritten[0].content;
+    assert!(content.contains("ungrouped = 100_000;"));
+    assert!(content.contains("misgrouped = 10_000;"));
+    assert!(content.contains("misgroupedFrac = 10_000.000_001;"));
+    assert!(content.contains("frac = 0.000_001;"));
+    assert!(content.contains("fine = 10_000;"), "grouped literal untouched");
+    assert!(content.contains("short = 1000;"), "four digits stay bare");
+    assert!(
+        content.contains("fracFine = 1_000.000_1;"),
+        "grouped fraction untouched"
+    );
+    assert!(
+        content.contains("quoted = \"100000\";"),
+        "string contents untouched"
+    );
+    Ok(())
+}
+
+#[test]
+fn misgrouped_digits_handles_exponents_and_rejects_non_numbers() -> TestResult {
+    // Exponent digits group from the right like the integer part; a call
+    // argument is still a literal of its own, and non-number text (the
+    // application node's text) never unifies.
+    let source = "{
+  expUngrouped = 2.5e1_0;
+  expFine = 2.5e10_000;
+  applied = builtins.trace 100000 true;
+}
+";
+    let rules = r#"
+(rule (misgrouped-number n fixed)
+  (match nix "[(integer_expression) (float_expression) (apply_expression)] @n")
+  (misgrouped-digits n fixed))
+"#;
+    let dir = tempfile::tempdir()?;
+    write_sample(&dir, "sample.nix", source)?;
+    let analysis = analyze(rules, &[dir.path().to_path_buf()])?;
+    let rows = analysis.database.relations["misgrouped-number"].rows();
+    let mut derived: Vec<(String, String)> = rows
+        .iter()
+        .map(|row| {
+            let Value::Node(node) = &row[0] else {
+                panic!("misgrouped-number column 0 should be a node");
+            };
+            let Value::Text(fixed) = &row[1] else {
+                panic!("misgrouped-number column 1 should be text");
+            };
+            (
+                analysis.corpus.node_text(*node).to_owned(),
+                fixed.to_string(),
+            )
+        })
+        .collect();
+    derived.sort();
+    assert_eq!(
+        derived,
+        vec![
+            ("100000".to_owned(), "100_000".to_owned()),
+            ("2.5e1_0".to_owned(), "2.5e10".to_owned()),
+        ],
+        "the misgrouped exponent and the applied literal fire; the canonical exponent and the application node do not"
+    );
+    Ok(())
+}

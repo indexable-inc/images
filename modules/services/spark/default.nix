@@ -279,7 +279,7 @@ in {
       };
       port = mkOption {
         type = types.port;
-        default = 15002;
+        default = 15_002;
         description = "Spark Connect gRPC bind port.";
       };
     };
