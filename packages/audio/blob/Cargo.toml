@@ -1,0 +1,20 @@
+# Content-addressed blob store shared by the score (which references an
+# instrument module by hash), the wasm host (which loads its bytes), and the
+# network layer (which fetches missing blobs from peers). Keeping the hash
+# type here keeps those crates decoupled from each other.
+[package]
+name = "audio-blob"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Content-addressed blob naming and on-disk store for shared-audio instrument modules"
+
+[dependencies]
+hex.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
