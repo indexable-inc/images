@@ -37,6 +37,8 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const SCORE_CHUNK_BYTES: usize = 1024 * 1024;
 const MAX_SCORE_SYNC_BYTES: usize = 512 * 1024 * 1024;
 const OUTBOUND_MESSAGES: usize = 8;
+/// Bound retries to two seconds per missing blob on each connection.
+const BLOB_RETRY_MICROS: u64 = 2_000_000;
 
 /// Everything a node needs to join a session.
 pub struct Config {
@@ -138,6 +140,12 @@ struct Handshake {
 struct ClockProposal {
     clock: Clock,
     takeover: bool,
+}
+
+#[derive(Clone, Copy)]
+struct PendingBlob {
+    hash: audio_blob::BlobHash,
+    sent_micros: u64,
 }
 
 /// Spawn a node: listen, dial `config.peers`, gossip, and serve pings.
@@ -308,7 +316,7 @@ async fn read_loop(
     mut reader: tokio::net::tcp::OwnedReadHalf,
     remote_id: PeerId,
     outbound: mpsc::Sender<Message>,
-    requested: Arc<Mutex<Option<audio_blob::BlobHash>>>,
+    requested: Arc<Mutex<Option<PendingBlob>>>,
 ) -> Result<()> {
     let mut score = Vec::new();
     while let Some(message) = Message::read_from(&mut reader).await? {
@@ -336,7 +344,7 @@ async fn read_loop(
 async fn gossip_loop(
     node: &Node,
     outbound: mpsc::Sender<Message>,
-    requested: Arc<Mutex<Option<audio_blob::BlobHash>>>,
+    requested: Arc<Mutex<Option<PendingBlob>>>,
 ) -> Result<()> {
     let mut sent = None;
     let mut advertised = None;
@@ -374,20 +382,40 @@ async fn gossip_loop(
             .flatten()
             .map(|instrument| instrument.hash)
             .filter(|hash| !node.store.contains(hash));
-        let should_request = {
+        let next_hash = {
             let mut pending = requested.lock().expect("requested blob lock");
-            let changed = if *pending == missing {
-                false
-            } else {
-                *pending = missing;
-                missing.is_some()
-            };
+            let next_hash = next_blob_request(
+                &mut pending,
+                missing,
+                node.config.time.now_micros(),
+            );
             drop(pending);
-            changed
+            next_hash
         };
-        if should_request {
-            outbound.send(Message::BlobRequest(missing.expect("missing hash"))).await?;
+        if let Some(hash) = next_hash {
+            outbound.send(Message::BlobRequest(hash)).await?;
         }
+    }
+}
+
+fn next_blob_request(
+    pending: &mut Option<PendingBlob>,
+    missing: Option<audio_blob::BlobHash>,
+    now_micros: u64,
+) -> Option<audio_blob::BlobHash> {
+    let Some(hash) = missing else {
+        *pending = None;
+        return None;
+    };
+    let due = pending.is_none_or(|request| {
+        request.hash != hash
+            || now_micros.saturating_sub(request.sent_micros) >= BLOB_RETRY_MICROS
+    });
+    if due {
+        *pending = Some(PendingBlob { hash, sent_micros: now_micros });
+        Some(hash)
+    } else {
+        None
     }
 }
 
@@ -456,7 +484,7 @@ impl Node {
         message: Message,
         remote_id: PeerId,
         outbound: &mpsc::Sender<Message>,
-        requested: &Mutex<Option<audio_blob::BlobHash>>,
+        requested: &Mutex<Option<PendingBlob>>,
     ) -> Result<()> {
         match message {
             Message::Hello(_) | Message::ScoreChunk { .. } => {
@@ -469,7 +497,15 @@ impl Node {
                 }
             }
             Message::Blob(hash, bytes) => {
-                let expected = requested.lock().expect("requested blob lock").take() == Some(hash);
+                let expected = {
+                    let mut pending = requested.lock().expect("requested blob lock");
+                    let matches = pending.is_some_and(|request| request.hash == hash);
+                    if matches {
+                        *pending = None;
+                    }
+                    drop(pending);
+                    matches
+                };
                 let referenced = self
                     .score
                     .lock()
@@ -1009,6 +1045,27 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn unanswered_blob_requests_retry_at_bounded_interval() {
+        let hash = audio_blob::BlobHash::of(b"instrument");
+        let replacement = audio_blob::BlobHash::of(b"replacement");
+        let mut pending = None;
+
+        assert_eq!(next_blob_request(&mut pending, Some(hash), 10), Some(hash));
+        assert_eq!(
+            next_blob_request(&mut pending, Some(hash), 10 + BLOB_RETRY_MICROS - 1),
+            None
+        );
+        assert_eq!(
+            next_blob_request(&mut pending, Some(hash), 10 + BLOB_RETRY_MICROS),
+            Some(hash)
+        );
+        assert_eq!(
+            next_blob_request(&mut pending, Some(replacement), 11 + BLOB_RETRY_MICROS),
+            Some(replacement)
+        );
+    }
+
     #[tokio::test]
     async fn unsolicited_blobs_are_not_persisted() -> Result<()> {
         let test = test_node(10, "blob-request").await;
@@ -1022,7 +1079,8 @@ mod tests {
             .await?;
         assert!(!node.store.contains(&hash));
 
-        *requested.lock().expect("requested blob lock") = Some(hash);
+        *requested.lock().expect("requested blob lock") =
+            Some(PendingBlob { hash, sent_micros: 0 });
         node.apply(Message::Blob(hash, bytes), PeerId(1), &outbound, &requested).await?;
         assert!(node.store.contains(&hash));
         Ok(())
