@@ -143,6 +143,9 @@
   precedence (`target.<triple>.rustflags` over `build.rustflags`); `cfg(...)`
   target sections and the `[env]` table are not honored. Default off.
 
+  `packageSourceIncludes.<package> = [ "path" ];` adds workspace-relative
+  paths required by compile-time macros without widening every package source.
+
   Returns the generated attrset with `sourceAudit`, `units`, `roots`, `checkedRoots`,
   `packages`, `binaries`, `libraries`, `benchmarks`, `coverageReport`, `default`,
   `policyChecks`, plus the intermediate `unitGraphJson`, `unitsNix`, and `vendorDir`
@@ -440,6 +443,7 @@
             packageTestEnv
             ;
           packageBuildEnv = rawArgs.packageBuildEnv or {};
+          packageSourceIncludes = rawArgs.packageSourceIncludes or {};
           packageRustcArgs = rawArgs.packageRustcArgs or {};
           inherit extraRustcArgsForPlatform extraLinkRustcArgsForPlatform;
           # Manifest-derived flags come first so per-call `policy.clippy`

@@ -173,6 +173,7 @@ struct BuildScriptRun {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SourceEntry {
     name: String,
+    package_name: String,
     base: SourceBase,
     root: PathBuf,
     relative: String,
@@ -249,14 +250,16 @@ impl SourceEntry {
     fn nix_expr(&self) -> String {
         match self.base {
             SourceBase::Workspace => format!(
-                "scopedWorkspaceSource {} {}",
+                "scopedWorkspaceSource {} {} {}",
                 nix_attr(&self.name),
-                nix_attr(&self.relative)
+                nix_attr(&self.relative),
+                nix_attr(&self.package_name)
             ),
             SourceBase::WorkspaceClosure => format!(
-                "scopedWorkspaceClosureSource {} {}",
+                "scopedWorkspaceClosureSource {} {} {}",
                 nix_attr(&self.name),
-                nix_string_list(&self.include_relatives)
+                nix_string_list(&self.include_relatives),
+                nix_attr(&self.package_name)
             ),
             SourceBase::VendorPackage => format!("vendorSources.{}", nix_attr(&self.source_key)),
             SourceBase::VendorClosure => format!(
@@ -2293,6 +2296,7 @@ fn source_entry_for_unit(unit: &Unit, options: &RenderOptions) -> Result<SourceE
 
         return Ok(SourceEntry {
             name: source_name(base, unit, &source_key, &scoped.relative),
+            package_name: unit.package_name().into_owned(),
             base,
             root: scoped.root,
             relative: scoped.relative,
@@ -2307,6 +2311,7 @@ fn source_entry_for_unit(unit: &Unit, options: &RenderOptions) -> Result<SourceE
 
     Ok(SourceEntry {
         name: source_name(SourceBase::Workspace, unit, &source_key, &scoped.relative),
+        package_name: unit.package_name().into_owned(),
         base: match scoped.scope {
             SourceScope::Package => SourceBase::Workspace,
             SourceScope::Closure => SourceBase::WorkspaceClosure,

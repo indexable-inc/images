@@ -24,6 +24,9 @@
   # for values that change often (e.g. a git commit baked into one crate) so the
   # churn invalidates that one package's units, not the whole dependency closure.
   packageBuildEnv ? {},
+  # Workspace-relative paths needed by compile-time macros outside a package
+  # directory, keyed by Cargo package name.
+  packageSourceIncludes ? {},
   # Per-package rustc args, keyed by Cargo package name. Merged onto that
   # package's own compile units only. Use this for native libraries required by
   # one package so pure dependency crates do not inherit unrelated link flags.
@@ -124,15 +127,24 @@ let
     };
 
   scopedWorkspaceSource =
-    name: relative:
-    builtins.path {
-      inherit name;
-      # Use a package-shaped source root for each local unit so one workspace
-      # crate edit does not invalidate its siblings.
-      path = sourceRootPath workspaceRoot + pkgs.lib.optionalString (relative != "") "/${relative}";
-    };
+    name: relative: packageName:
+    let
+      extraIncludes = packageSourceIncludes.${packageName} or [ ];
+    in
+    if extraIncludes == [ ] then
+      builtins.path {
+        inherit name;
+        # Use a package-shaped source root for each local unit so one workspace
+        # crate edit does not invalidate its siblings.
+        path = sourceRootPath workspaceRoot + pkgs.lib.optionalString (relative != "") "/${relative}";
+      }
+    else
+      scopedClosureSource workspaceRoot name ([ relative ] ++ extraIncludes)
+      + pkgs.lib.optionalString (relative != "") "/${relative}";
 
-  scopedWorkspaceClosureSource = name: includes: scopedClosureSource workspaceRoot name includes;
+  scopedWorkspaceClosureSource =
+    name: includes: packageName:
+    scopedClosureSource workspaceRoot name (includes ++ (packageSourceIncludes.${packageName} or [ ]));
 
   scopedVendorClosureSource =
     name: includes:
