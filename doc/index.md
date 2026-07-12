@@ -83,12 +83,12 @@ User-facing guides for the hosted `ix` platform. Start at
 | [mcp](mcp/overview.md) | `packages/mcp` is `ix-mcp` (the `ix_notebook_mcp` Python package): a Python execution MCP server. |
 | [minecraft](minecraft/overview.md) | `packages/minecraft` is a directory of small, single-purpose Minecraft tools in three languages. |
 | [minecraft-assets](minecraft-assets/overview.md) | `packages/minecraft-assets` is a Nix-only package (no Rust, no source code of its own) that produces authentic Minecraft GUI textures and the vanilla bitmap font by extracting them straig... |
-| [minestom](minestom/overview.md) | `packages/minestom` packages a minimal, from-scratch Minecraft server built on Minestom, the Java server library. |
+| [minestom](minestom/overview.md) | `packages/minestom` packages from-scratch Minecraft servers built on Minestom, the Java server library. |
 | [mixedbread](mixedbread/overview.md) | `packages/mixedbread` (crate `mixedbread`) is a minimal async Rust client for the Mixedbread vector store API. |
 | [mynoise](mynoise/overview.md) | `packages/mynoise` plays myNoise.net generators from the CLI by streaming and mixing their band loops locally. |
 | [nix-cargo-unit](nix-cargo-unit/overview.md) | `packages/nix-cargo-unit` renders a Cargo unit graph into composable Nix derivations: one `stdenv.mkDerivation` per rustc invocation, wired into a graph that mirrors Cargo's own. |
 | [nix-output-monitor](nix-output-monitor/overview.md) | `packages/nix-output-monitor` is the upstream `nix-output-monitor` (`nom`), re-packaged with one patch so it parses content-addressed derivations. |
-| [nix-web-monitor](nix-web-monitor/overview.md) | `packages/nix-web-monitor` runs a Nix command with quiet terminal output and a live browser monitor: a build tree, log tail, activity DAG, store-optimisation totals, and a `nix-daemon` sy... |
+| [nix-web-monitor](nix-web-monitor/overview.md) | `packages/nix/nix-web-monitor` runs a Nix command with quiet terminal output and a live browser monitor: a build tree, log tail, activity DAG, store-optimisation totals, and a `nix-daemon` sy... |
 | [oci-image-builder](oci-image-builder/overview.md) | `packages/oci-image-builder` turns a `dockerTools.streamLayeredImage` layer plan into an OCI image. |
 | [pi-harnesses](pi-harnesses/overview.md) | `packages/pi-harnesses` is a collection of Pi-based agent harnesses. |
 | [polars-mixedbread](polars-mixedbread/overview.md) | `packages/polars-mixedbread` is a Polars IO source backed by Mixedbread store search. |

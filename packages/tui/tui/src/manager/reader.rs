@@ -62,55 +62,22 @@ pub(super) async fn resize(
     .await
 }
 
-pub(super) async fn read_viewport(
-    id: Uuid,
-    command_tx: &mpsc::Sender<PtyCommand>,
-) -> Result<Vec<String>> {
-    request(id, command_tx, |response| PtyCommand::ReadViewport {
-        response,
-    })
-    .await
+macro_rules! read_request {
+    ($name:ident, $variant:ident, $output:ty) => {
+        pub(super) async fn $name(
+            id: Uuid,
+            command_tx: &mpsc::Sender<PtyCommand>,
+        ) -> Result<$output> {
+            request(id, command_tx, |response| PtyCommand::$variant { response }).await
+        }
+    };
 }
 
-pub(super) async fn read_scrollback(
-    id: Uuid,
-    command_tx: &mpsc::Sender<PtyCommand>,
-) -> Result<Vec<String>> {
-    request(id, command_tx, |response| PtyCommand::ReadScrollback {
-        response,
-    })
-    .await
-}
-
-pub(super) async fn read_chars(
-    id: Uuid,
-    command_tx: &mpsc::Sender<PtyCommand>,
-) -> Result<Vec<Vec<char>>> {
-    request(id, command_tx, |response| PtyCommand::ReadChars {
-        response,
-    })
-    .await
-}
-
-pub(super) async fn read_styled_cells(
-    id: Uuid,
-    command_tx: &mpsc::Sender<PtyCommand>,
-) -> Result<Array2<StyledCell>> {
-    request(id, command_tx, |response| PtyCommand::ReadStyledCells {
-        response,
-    })
-    .await
-}
-
-pub(super) async fn read_cursor(
-    id: Uuid,
-    command_tx: &mpsc::Sender<PtyCommand>,
-) -> Result<CursorPos> {
-    request(id, command_tx, |response| PtyCommand::ReadCursor {
-        response,
-    })
-    .await
-}
+read_request!(read_viewport, ReadViewport, Vec<String>);
+read_request!(read_scrollback, ReadScrollback, Vec<String>);
+read_request!(read_chars, ReadChars, Vec<Vec<char>>);
+read_request!(read_styled_cells, ReadStyledCells, Array2<StyledCell>);
+read_request!(read_cursor, ReadCursor, CursorPos);
 
 pub(super) async fn read_full(
     id: Uuid,

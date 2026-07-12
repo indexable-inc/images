@@ -23,6 +23,7 @@
 //! client.
 
 pub mod keys;
+pub mod files;
 pub mod sanitize;
 
 use std::fmt;
@@ -228,6 +229,31 @@ pub trait SourceAdapter {
 
     /// The current desired-state documents for this corpus.
     fn documents(&self) -> impl Iterator<Item = Result<Document, Self::Error>> + Send;
+}
+
+/// Implement [`SourceAdapter`] for an eagerly parsed collection whose elements
+/// convert into owned documents.
+///
+/// Cloning the collection makes the returned
+/// iterator independent of `&self`, which is the shared lifetime contract for
+/// file and database adapters.
+#[macro_export]
+macro_rules! impl_owned_source_adapter {
+    ($adapter:ty, $error:ty, $source:expr, $field:ident, $convert:path) => {
+        impl $crate::SourceAdapter for $adapter {
+            type Error = $error;
+
+            fn source(&self) -> $crate::Source {
+                $crate::Source::new($source)
+            }
+
+            fn documents(
+                &self,
+            ) -> impl Iterator<Item = Result<$crate::Document, $error>> + Send {
+                self.$field.clone().into_iter().map($convert)
+            }
+        }
+    };
 }
 
 /// Converges one external view to a source's current desired-state document set.

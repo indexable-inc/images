@@ -18,7 +18,7 @@ touch "$notes"
 prompt_file="$PWD/prompts/overseer.md"
 last_msg="$(mktemp)"
 workdir="$(mktemp -d)" # empty cwd for codex; --skip-git-repo-check below
-cleanup() { rm -rf "$last_msg" "$workdir" "${report_file:-}" "${data_json:-}"; }
+cleanup() { rm -rf "$last_msg" "$last_msg.envelope" "$workdir" "${report_file:-}" "${data_json:-}"; }
 trap cleanup EXIT
 
 now_iso="$(date +%Y-%m-%dT%H:%M:%S%z)"
@@ -28,10 +28,10 @@ now_iso="$(date +%Y-%m-%dT%H:%M:%S%z)"
 # Every process, parsed into fields once; agent/hot/stall views are jq
 # filters over this. tty="??" separates headless (launchd, cron, exec
 # nodes) from interactive terminal sessions.
-ps_json="$(ps axo pid=,pcpu=,etime=,tty=,args= | jq -Rs '
+ps_json="$(ps axo pid=,ppid=,pcpu=,etime=,tty=,args= | jq -Rs '
   [split("\n")[]
-   | capture("^ *(?<pid>[0-9]+) +(?<pcpu>[0-9.]+) +(?<etime>[0-9:-]+) +(?<tty>[^ ]+) +(?<args>.*)$")?
-   | .pid |= tonumber | .pcpu |= tonumber
+   | capture("^ *(?<pid>[0-9]+) +(?<ppid>[0-9]+) +(?<pcpu>[0-9.]+) +(?<etime>[0-9:-]+) +(?<tty>[^ ]+) +(?<args>.*)$")?
+   | .pid |= tonumber | .ppid |= tonumber | .pcpu |= tonumber
    | .args |= .[0:220]
    # elapsed minutes from etime (mm:ss, hh:mm:ss, or d-hh:mm:ss)
    | .minutes = (.etime | capture("^((?<d>[0-9]+)-)?((?<h>[0-9]+):)?(?<m>[0-9]+):(?<s>[0-9]+)$")?
@@ -51,12 +51,24 @@ cwd_map="$(
 )"
 agents="$(jq --argjson cwds "$cwd_map" 'map(. + {cwd: ($cwds[.pid | tostring] // null)})' <<<"$agents")"
 
-hot="$(jq '[.[] | select(.pcpu >= 30)] | sort_by(-.pcpu) | .[0:8]' <<<"$ps_json")"
+# parent_chain: ancestor command lines, child-first. Root helpers show as
+# bare "(name)" with no args, so ancestry is the only evidence of ownership
+# the judge gets (#2169: a root fs_usage owned by nix-web-monitor was
+# flagged as an orphan and a fixer was dispatched to kill it).
+parents_def='def parents($by): [.ppid | tostring | $by[.]? // empty
+  | recurse($by[.ppid | tostring]? // empty) | .args] | .[0:5];'
+hot="$(jq "$parents_def"'
+  INDEX(.pid | tostring) as $by
+  | [.[] | select(.pcpu >= 30) | . + {parent_chain: parents($by)}]
+  | sort_by(-.pcpu) | .[0:8]' <<<"$ps_json")"
 
 # Wedge heuristic (#2011 signature): a headless agent process idling at
 # ~0% CPU for a long time. Interactive agents idle at 0% legitimately
 # (waiting on the human), so only tty-less processes qualify.
-stalled="$(jq '[.[] | select(.tty == "??" and .pcpu < 1 and .minutes >= 15)]' <<<"$agents")"
+stalled="$(jq --argjson all "$ps_json" "$parents_def"'
+  INDEX($all[]; .pid | tostring) as $by
+  | [.[] | select(.tty == "??" and .pcpu < 1 and .minutes >= 15)
+     | . + {parent_chain: parents($by)}]' <<<"$agents")"
 
 # Claude Code sessions active in the last 12h: cwd and texts come from
 # the transcript itself (the dir-name encoding is lossy). age_min against
@@ -97,9 +109,30 @@ codex_sessions="$(
 
 # Symphony runs from the local runtime. An unreachable API is itself a
 # finding, so the failure is recorded in the snapshot, never swallowed.
+# The API lists runs grouped by workflow, oldest-first; sort to keep the
+# NEWEST runs, or the window freezes in the past as the store grows and
+# the judge sees phantom cron outages (#2183).
 symphony_runs="$(curl -s --max-time 5 http://127.0.0.1:4040/api/v1/ir/runs |
-  jq '[.runs[] | {run_id, status, states, trigger, created_at, updated_at}] | .[0:12]' ||
+  jq '[.runs[] | {run_id, status, states, trigger, created_at, updated_at}]
+      | sort_by(.created_at) | reverse | .[0:12]' ||
   echo '{"error": "symphony runtime unreachable on 127.0.0.1:4040"}')"
+
+# Sleep/wake context. A cron run that straddles a sleep window dies by
+# wall-clock timeout (#2216) or by DNS-retry exhaustion (a DarkWake has
+# no SSID), and the run record alone cannot show that: without this
+# signal the judge diagnosed "failures while awake" on a host pmset
+# shows was in Clamshell Sleep for the whole window and dispatched a
+# fixer on that phantom premise. Last transitions only; the grep streams
+# the full pmset log (~seconds), so keep this the only pass over it.
+power="$(
+  {
+    pmset -g batt | head -1
+    # A host that has not slept since boot greps empty; that is a real,
+    # non-fatal state under pipefail.
+    pmset -g log | grep -E 'Entering Sleep|DarkWake|Wake from' | tail -25 || true
+  } | jq -Rs 'split("\n") | map(select(length > 0) | gsub(" +$"; "") | .[0:160])
+              | {batt: .[0], transitions: .[1:]}'
+)"
 
 loadavg="$(sysctl -n vm.loadavg | tr -d '{}' | awk '{print $1}')"
 ncpu="$(sysctl -n hw.ncpu)"
@@ -114,32 +147,66 @@ jq -n \
   --argjson cpu_pct "$cpu_pct" --argjson mem_pct "$mem_pct" \
   --argjson agents "$agents" --argjson hot "$hot" --argjson stalled "$stalled" \
   --argjson claude_sessions "$claude_sessions" --argjson codex_sessions "$codex_sessions" \
-  --argjson symphony_runs "$symphony_runs" \
+  --argjson symphony_runs "$symphony_runs" --argjson power "$power" \
   '{now: $now, load_1m: ($loadavg | tonumber), ncpu: $ncpu, cpu_pct: $cpu_pct, mem_pct: $mem_pct,
     agent_processes: $agents, hot_processes: $hot, stalled_suspects: $stalled,
     claude_sessions: $claude_sessions, codex_sessions: $codex_sessions,
-    symphony_runs: $symphony_runs}' > "$snap"
+    symphony_runs: $symphony_runs, power: $power}' > "$snap"
 
 # ---- digest: headless codex over the snapshot --------------------------
 
 # Same secret scrub as insights.sh: ExecRunner inherits the full BEAM env;
 # codex only needs its own API key.
+# The judge is the claude harness on fable at high effort. Plain `claude`
+# from PATH (the pack unit provides upstream claude-code), NOT the
+# operator's ~/.local/bin wrapper: the wrapper bakes ix-mcp bootstrap
+# argv that wedges and chats on stdout in unattended launchd runs, the
+# same reason insights.sh pins plain codex. No tools: the whole world it
+# needs is in the prompt, so --allowedTools "" doubles as the read-only
+# sandbox. The -p JSON envelope is checked before the reply is trusted:
+# an is_error envelope carries a partial .result (the 04:30Z truncation),
+# which must fail the tick with the envelope's own error.
+# --settings '{"hooks":{}}': the tick judge is a pure function call, not an
+# agent session. Without it the nix claude wrapper injects the default
+# settings (Stop hooks included), so every tick's meta-transcript was sliced
+# by the friction-report hook and fed to the extractor (index#2275).
 (
   cd "$workdir"
   env -u SLACK_BOT_OAUTH_TOKEN -u SLACK_SIGNING_SECRET \
     -u GH_TOKEN -u GITHUB_TOKEN -u GITHUB_WEBHOOK_SECRET \
     -u LINEAR_API_KEY -u LINEAR_WEBHOOK_SECRET \
     -u SYMPHONY_GITHUB_APP_PRIVATE_KEY_BASE64 -u SYMPHONY_ROOM_REGISTRY_TOKEN \
-    codex exec --sandbox read-only --ignore-user-config \
-    --skip-git-repo-check \
-    --output-last-message "$last_msg" \
+    claude -p --model fable --effort high \
+    --allowedTools "" --output-format json \
+    --settings '{"hooks":{}}' \
     "$(cat "$prompt_file")
 
 Your notes from previous ticks:
 $(cat "$notes")
 
 Snapshot ($now_iso):
-$(cat "$snap")" </dev/null # codex reads a non-tty stdin to EOF; the runner pipe never closes (#2011)
+$(cat "$snap")" </dev/null > "$last_msg.envelope" || claude_status=$?
+  # set -e must not abort the subshell on a nonzero claude exit (the
+  # bare line-203 failures: no ERR trap inside a subshell); a nonzero
+  # exit that still wrote an envelope proceeds to the shape gate.
+  [ "${claude_status:-0}" -eq 0 ] || [ -s "$last_msg.envelope" ] || {
+    echo "claude -p exited ${claude_status} with no output (API unreachable?)" >&2
+    exit 5
+  }
+  # An empty envelope (claude killed mid-run, e.g. host slept) makes
+  # jq -e exit 1 with no message (the bare line-191 failures of
+  # 2026-07-08); name the cause instead.
+  [ -s "$last_msg.envelope" ] || { echo "claude -p produced no output" >&2; exit 5; }
+  # Name every envelope shape: is_error, and the null-result envelope the
+  # 12:30Z API-drop tick produced (jq -e exits 1 silently on null). Keep
+  # the envelope as evidence whenever the gate rejects it.
+  jq -er 'if (.is_error // false) then error("claude -p errored: " + (.subtype // "unknown"))
+          elif (.result // "") == "" then error("claude -p envelope has no result (subtype: " + (.subtype // "none") + ")")
+          else .result end' "$last_msg.envelope" > "$last_msg" || {
+    cp "$last_msg.envelope" "$HOME/.local/share/symphony/overseer/last-envelope.rejected"
+    echo "overseer: bad claude envelope; saved to last-envelope.rejected" >&2
+    exit 5
+  }
 )
 
 # The reply must be the {digest, attention, agents, notes} JSON object;
@@ -147,6 +214,17 @@ $(cat "$snap")" </dev/null # codex reads a non-tty stdin to EOF; the runner pipe
 report_file="$(mktemp)"
 tr -d '\000-\010\013\014\016-\037' < "$last_msg" > "$last_msg.clean"
 mv "$last_msg.clean" "$last_msg"
+# Models sporadically fence the JSON despite the prompt (2026-07-08 00:10Z
+# rejected reply was exactly that); unwrap one fence pair, stay strict
+# about everything inside it.
+sed -e '1{/^```[a-z]*$/d;}' -e '${/^```$/d;}' "$last_msg" > "$last_msg.unfenced"
+mv "$last_msg.unfenced" "$last_msg"
+# On a bad reply, keep the raw bytes as evidence before failing loudly.
+if ! jq -e . "$last_msg" > /dev/null 2>&1; then
+  cp "$last_msg" "$state_dir/last-reply.rejected"
+  echo "overseer: reply is not valid JSON; saved to $state_dir/last-reply.rejected" >&2
+  exit 5
+fi
 jq -e '{digest: .digest, attention: (.attention // []), agents: (.agents // [])}' "$last_msg" > "$report_file"
 jq -er '.notes' "$last_msg" > "$notes"
 
@@ -163,16 +241,47 @@ while IFS=$'\t' read -r key title action; do
   last="$(jq -r --arg k "$key" '.[$k].at // 0' "$dispatched")"
   if [ $((now_epoch - last)) -lt 21600 ]; then continue; fi
   agent_name="overseer-fix-$(printf '%s' "$key" | head -c 12)"
-  if out="$("$HOME/.local/bin/claude" --bg -p "You are $agent_name, dispatched by the overseer. Problem: $title. Suggested action: $action. Investigate, fix it properly (worktree + PR when it is a repo change), and report." 2>&1)"; then
-    note="dispatched $agent_name"
+  # </dev/null: claude reads stdin, which inside this while-read loop is
+  # the remaining TSV problem rows; without it the first dispatch swallows
+  # every later row (index#2157). cd "$HOME": fixers inherit this script's
+  # cwd (the pack dir), so their sessions showed up in later snapshots as
+  # claude sessions inside workflows/indexable and the judge re-diagnosed
+  # its own just-spawned fixers as a silent workflow agent (index#2188).
+  session=""
+  if out="$(cd "$HOME" && "$HOME/.local/bin/claude" --bg -p "You are $agent_name, dispatched by the overseer. Problem: $title. Suggested action: $action. Investigate, fix it properly (worktree + PR when it is a repo change), and report." </dev/null 2>&1)"; then
+    # `claude --bg` prints "backgrounded · <session-id>". That id plus the
+    # exact $agent_name label IS the dispatch handle; record it verbatim.
+    # Tick-time tracking joins on this recorded handle, never on a label
+    # the judge restates in its own notes: a self-invented label was
+    # declared "never materialized" for two ticks while the real fixer
+    # ran and finished, and a duplicate was dispatched (index#2288).
+    session="$(printf '%s\n' "$out" | awk '/backgrounded/ {print $NF; exit}')"
+    note="dispatched $agent_name session=${session:-unknown}"
   else
     note="dispatch failed: $(printf '%s' "$out" | head -c 120)"
   fi
   jq --arg k "$key" --argjson at "$now_epoch" --arg note "$note" \
-    '.[$k] = {at: $at, note: $note}' "$dispatched" > "$dispatched.tmp"
+    --arg agent "$agent_name" --arg session "$session" \
+    '.[$k] = {at: $at, note: $note, agent: $agent,
+              session: (if $session == "" then null else $session end)}' \
+    "$dispatched" > "$dispatched.tmp"
   mv "$dispatched.tmp" "$dispatched"
 done < <(jq -r '.attention[]? | select(.severity == "fix")
   | [(.title | ascii_downcase | gsub("[^a-z0-9]+"; "-")), .title, .action] | @tsv' "$report_file")
+
+# Append the dispatch ledger to the notes mechanically. The notes are
+# otherwise model-authored, and a restated label drifts (index#2288), so
+# the authoritative handles (exact label + spawned session id) are
+# re-derived from dispatched.json on every tick and appended after the
+# judge's own text; the next tick joins fixer tracking on these handles.
+ledger="$(jq -r --argjson now "$now_epoch" '
+  to_entries
+  | map(select($now - .value.at < 86400))
+  | sort_by(-.value.at)
+  | .[] | "- \(.value.at | todate) \(.value.note) [key: \(.key)]"' "$dispatched")"
+if [ -n "$ledger" ]; then
+  printf '\n\nDISPATCH LEDGER (machine-written by overseer.sh; the authoritative record of dispatched fixers -- do not restate):\n%s\n' "$ledger" >> "$notes"
+fi
 
 # fold the dispatch notes into the report the page renders
 jq --slurpfile d "$dispatched" '.attention = [.attention[]?

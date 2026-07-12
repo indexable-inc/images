@@ -10,7 +10,9 @@
 //! integration tests can exercise the parsing and emission seams directly.
 
 pub mod artifact;
+pub mod ex;
 pub mod host;
+pub mod jvm;
 pub mod py;
 pub mod rs;
 pub mod ts;

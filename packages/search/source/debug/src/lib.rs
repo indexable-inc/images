@@ -2,7 +2,7 @@
 //! [`source_meta`] documents for the multi-source `search` store.
 //!
 //! # Grain
-//! One [`Document`] per session debug file. Claude Code writes one
+//! One [`source_meta::Document`] per session debug file. Claude Code writes one
 //! `~/.claude/debug/<session-id>.txt` per session when run with `--debug`, a
 //! line-oriented `TIMESTAMP [LEVEL] message` log of API/MCP/init/timing events.
 //! `external_id = "claude_debug:{session_id}"`, so a re-sync re-uploads a log
@@ -30,7 +30,6 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use snafu::ResultExt as _;
-use source_meta::{Document, Source, SourceAdapter};
 
 pub use crate::error::Error;
 use crate::error::{ReadDirSnafu, ReadFileSnafu, Result};
@@ -136,19 +135,7 @@ impl DebugLogs {
     }
 }
 
-impl SourceAdapter for DebugLogs {
-    type Error = Error;
-
-    fn source(&self) -> Source {
-        Source::new(SOURCE_TAG)
-    }
-
-    fn documents(&self) -> impl Iterator<Item = Result<Document, Error>> + Send {
-        // Clone into an owned iterator so the result is `'static + Send`,
-        // independent of `&self` (mirrors the other source adapters).
-        self.entries.clone().into_iter().map(Entry::into_document)
-    }
-}
+source_meta::impl_owned_source_adapter!(DebugLogs, Error, SOURCE_TAG, entries, Entry::into_document);
 
 /// A file's mtime as epoch seconds, when it is representable.
 fn mtime_secs(meta: &std::fs::Metadata) -> Option<i64> {

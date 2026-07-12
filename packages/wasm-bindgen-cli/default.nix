@@ -19,16 +19,12 @@
   # version/url in pins.json, then `nix run .#update` re-pins the hash.
   pin = ix.pins.loadPin ./pins.json "wasm-bindgen-cli";
   inherit (pin) version;
-  updateScript =
-    if updateScriptWriter == null
-    then null
-    else
-      ix.pins.mkUpdater {
-        writeNushellApplication = updateScriptWriter;
-        inherit nix;
-        pname = "wasm-bindgen-cli";
-        relPath = "packages/wasm-bindgen-cli/pins.json";
-      };
+  updateScript = ix.pins.mkOptionalUpdater {
+    writeNushellApplication = updateScriptWriter;
+    inherit nix;
+    pname = "wasm-bindgen-cli";
+    relPath = "packages/wasm-bindgen-cli/pins.json";
+  };
   src = fetchCrate {
     pname = "wasm-bindgen-cli";
     inherit (pin) version url hash;

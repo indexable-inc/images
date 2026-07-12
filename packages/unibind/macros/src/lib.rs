@@ -5,7 +5,8 @@
 //! into one language-agnostic interface (see `unibind-core`), embeds the
 //! serialized interface in the built artifact, and renders binding code for
 //! every backend enabled by cargo features (`py` renders `pyo3`, `rs`
-//! renders a stabby-ABI client crate, `ts` renders `napi-rs`).
+//! renders a stabby-ABI client crate, `ts` renders `napi-rs`, `ex` renders
+//! `rustler`).
 //!
 //! ```ignore
 //! #[unibind::export]
@@ -42,16 +43,17 @@ use proc_macro::TokenStream;
 /// Every `pub fn` in the module is exported; private items pass through
 /// untouched. The attribute accepts `py(name = "...")` to rename the Python
 /// module (it defaults to the Rust module name, which also names the
-/// `PyInit_` symbol of the built extension), and `backends(py, rs)` to pin
-/// which backends render glue. Without `backends(...)` every
+/// `PyInit_` symbol of the built extension), and `backends(py, rs, ts, ex)`
+/// to pin which backends render glue. Without `backends(...)` every
 /// feature-enabled backend renders; a whole-workspace cargo build unifies
 /// features across every unibind consumer, so a crate in a workspace that
 /// mixes backend features names its own backends explicitly (the ones
 /// whose runtime dependencies it declares).
 ///
 /// Glue for async functions, `UniStream` returns, and `#[unibind::object]`
-/// types calls into `unibind_runtime::py`, so a crate exporting any of
-/// those adds `unibind-runtime` with the `py` feature to its dependencies;
+/// types calls into `unibind_py_runtime`, so a crate exporting any of
+/// those adds `unibind-runtime` and `unibind-py-runtime` to its
+/// dependencies (the Elixir glue calls `unibind_ex_runtime` instead);
 /// under the `rs` backend, stream returns box through `unibind-stream` and
 /// the crate adds `stabby` plus `unibind-stream`.
 /// The ts backend's consumers depend on `napi` (`napi6` + `tokio_rt`),
@@ -62,6 +64,10 @@ pub fn export(args: TokenStream, item: TokenStream) -> TokenStream {
     expand::export(args.into(), item.into()).into()
 }
 
+fn marker_outside_export(item: TokenStream, message: &'static str) -> TokenStream {
+    expand::marker_outside_export(item.into(), message).into()
+}
+
 /// Mark a plain-data struct inside a `#[unibind::export]` module.
 ///
 /// The struct crosses the boundary by value: Python sees a native class
@@ -70,12 +76,11 @@ pub fn export(args: TokenStream, item: TokenStream) -> TokenStream {
 /// field. The struct needs `Clone` for attribute access from Python.
 #[proc_macro_attribute]
 pub fn record(_args: TokenStream, item: TokenStream) -> TokenStream {
-    expand::marker_outside_export(
-        item.into(),
+    marker_outside_export(
+        item,
         "#[unibind::record] only takes effect inside a #[unibind::export] \
          module; declare the struct inside the exported module",
     )
-    .into()
 }
 
 /// Mark an error enum inside a `#[unibind::export]` module.
@@ -86,12 +91,11 @@ pub fn record(_args: TokenStream, item: TokenStream) -> TokenStream {
 /// extends (`Exception` by default); the enum must implement `Display`.
 #[proc_macro_attribute]
 pub fn error(_args: TokenStream, item: TokenStream) -> TokenStream {
-    expand::marker_outside_export(
-        item.into(),
+    marker_outside_export(
+        item,
         "#[unibind::error] only takes effect inside a #[unibind::export] \
          module; declare the enum inside the exported module",
     )
-    .into()
 }
 
 /// Mark a stateful handle inside a `#[unibind::export]` module.
@@ -106,10 +110,9 @@ pub fn error(_args: TokenStream, item: TokenStream) -> TokenStream {
 /// `Arc`, so it must be `Send + Sync`.
 #[proc_macro_attribute]
 pub fn object(_args: TokenStream, item: TokenStream) -> TokenStream {
-    expand::marker_outside_export(
-        item.into(),
+    marker_outside_export(
+        item,
         "#[unibind::object] only takes effect inside a #[unibind::export] \
          module; declare the struct inside the exported module",
     )
-    .into()
 }

@@ -92,11 +92,18 @@
 {
   forkPackages = [
     {
+      # Codex uses importCargoLock, but git dependencies still carry fixed
+      # output hashes in packages/agent/codex/default.nix. A free-floating base
+      # can move Cargo.lock past those hashes, including for downstream flakes
+      # that lock codex-src transitively; that broke every ix prod deploy for
+      # 13h on 2026-07-07. The input is pinned by rev in flake.nix. Bump it by
+      # hand, rebase the patches, then build Codex and refresh any git dependency
+      # hashes named by Nix.
       name = "codex";
       input = "codex-src";
       url = "https://github.com/openai/codex.git";
       patchDir = "packages/agent/codex/patches";
-      autoUpdate = true;
+      autoUpdate = false;
       upstreamPolicy = {
         # Codex is invitation-only: unsolicited PRs are closed without review, so
         # `prsWelcome = false` and the tool never opens a PR here regardless of
@@ -142,6 +149,30 @@
         "0002-proc-show-kernel-working-directory-cwd-in-the-detail.patch" = {
           upstream = "hold";
           reason = "General feature (show process cwd in detail view); wants a quality pass and a discussion issue first.";
+        };
+      };
+    }
+    {
+      name = "nushell";
+      input = "nushell-src";
+      url = "https://github.com/nushell/nushell.git";
+      patchDir = "packages/nushell/patches";
+      autoUpdate = true;
+      upstreamPolicy = {
+        prsWelcome = true;
+        aiPrsAllowed = "unknown";
+        citation = "https://github.com/nushell/nushell/blob/main/CONTRIBUTING.md";
+        notes = "PRs welcome for focused changes; CONTRIBUTING has no AI-specific policy as of 2026-07-07. Include tests and user-facing release-note context.";
+      };
+      patches = {
+        "0001-Add-xattrs-column-to-ls-l.patch" = {
+          upstream = "attempt";
+          reason = "General filesystem feature requested in nushell/nushell#7106; prior PR #7158 was abandoned and explicitly left open for takeover.";
+          prExtra = "Related issue: nushell/nushell#7106. Prior closed attempt: nushell/nushell#7158.";
+        };
+        "0002-Derive-feature-list-for-cargo-unit-builds.patch" = {
+          upstream = "never";
+          reason = "Repo-specific: cargo-unit does not export Cargo's aggregate CARGO_CFG_FEATURE env var, so the package derives it from CARGO_FEATURE_* for ix builds.";
         };
       };
     }
@@ -300,59 +331,83 @@
       closureGates = true;
       upstreamPolicy = {
         prsWelcome = true;
-        # NixOS/nix has no explicit AI policy (unknown). PRs are generally welcome
-        # with a structured maintainer review; first-timers are steered toward
-        # tightly-scoped fixes. `unknown` does not block the tool (only an explicit
-        # `false` does), so the strong bug-fix and build-status candidates proceed
-        # with a loud "AI policy unstated" note in the plan.
-        aiPrsAllowed = "unknown";
-        citation = "https://github.com/NixOS/nix/blob/master/CONTRIBUTING.md";
-        notes = "No explicit AI policy. PRs welcome via a structured review; first-timers steered to tightly-scoped fixes. Feature series encouraged to discuss/open an issue first.";
+        # NixOS/nix now has an explicit AI/automation policy (NixOS/nix#15984,
+        # adapted from nixpkgs' with EXTRA constraints on human communication).
+        # Its three operative constraints all cut against an agent opening PRs
+        # here: (1) HUMAN COMMUNICATION -- a responsible human in the loop must
+        # author the PR text and comments (hallucinated slop comments were the
+        # motivating harm); (2) NO UNREVIEWED AUTOMATED SUBMISSIONS -- an agent
+        # may not file the PR itself; a human reviews and submits; (3) ASSISTED-BY
+        # DISCLOSURE -- AI-assisted work must be disclosed with an `Assisted-by:`
+        # commit trailer. So `aiPrsAllowed = false`: the tool refuses to open ANY
+        # nix PR at the repo level (defense in depth on top of the per-patch
+        # `hold`). Contribution here is a human-driven act -- Andrew submits, the
+        # patches carry `Assisted-by` trailers, and the tool only ever plans and
+        # tracks, never opens.
+        aiPrsAllowed = "false";
+        citation = "https://github.com/NixOS/nix/pull/15984";
+        notes = "AI policy (#15984): human must author PR communication, no unreviewed automated submissions, disclose AI assistance with an Assisted-by trailer. Agent-filed PRs are out; a human submits with the patches' Assisted-by trailers.";
       };
+      # All nix patches are HOLD: the repo-level `aiPrsAllowed = false` (see the
+      # policy above) already blocks the outward act, and the per-patch marks
+      # record the human follow-up each needs so nothing reads as agent-ready.
+      # The commit-message body is still the source of truth for each PR; the
+      # human handoff kit (drafts + submission plan) lives outside nix.
       patches = {
-        # Two clean, self-contained daemon/eval bug fixes: strong attempt.
+        # 0001: reworked to the `catch (BaseError&)` shape (widen the existing
+        # handler rather than a blanket `catch (...)`), the narrowing Andrew
+        # proposed in the #15963 discussion after xokdvium objected to swallowing
+        # all exceptions. Ready in shape but a human (Andrew) reopens/submits it.
         "0001-fix-libstore-don-t-crash-the-daemon-when-a-GC-roots-.patch" = {
-          upstream = "attempt";
-          reason = "Clean self-contained daemon crash fix (GC roots client); a straightforward upstream bug-fix PR.";
+          upstream = "hold";
+          reason = "Reworked to catch (BaseError&) per the #15963 review (xokdvium: `catch (...)` swallows too much); a human (Andrew) resubmits, referencing #15963/#15962/#13438. Fixes NixOS/nix#15962.";
         };
+        # 0002: the cleanest single-file candidate -- a regression restoration.
+        # #8240 made nix's default-path probing EPERM/EACCES-tolerant on the
+        # macOS sandbox (treat permission-denied like absent); the later
+        # std::filesystem migration reintroduced the throwing exists() overload
+        # that #5884 first flagged and #8485 still tracks. A human submits it
+        # framed as restoring that lost behavior.
         "0002-fix-libexpr-treat-inaccessible-default-lookup-path-e.patch" = {
-          upstream = "attempt";
-          reason = "Clean self-contained libexpr fix (inaccessible default lookup-path entries); a straightforward upstream bug-fix PR.";
+          upstream = "hold";
+          reason = "Cleanest candidate: restores the EPERM-tolerant default-path probing of #8240 lost in the std::filesystem migration (see #5884, still-open #8485). Human submits, framed as a regression fix.";
         };
-        # The build-status directory series: the user flagged this as a strong
-        # attempt candidate. It is a coherent feature (experimental feature flag,
-        # writer, daemon plumbing, command, tests, release note) so the PR is the
-        # whole series (the DAG closure drags the ancestors), which is the honest
-        # shape of the contribution.
+        # The build-status directory series (0003-0009): DO NOT file a competing
+        # series. edolstra's active #15979 (`nix ps`) covers the same
+        # build-observability ground from the live process-tree side. Engage
+        # THERE with our complementary daemon-less, file-based angle (honors
+        # NIX_STATE_DIR, works when the daemon is wedged / the store lock is
+        # contended -- exactly where `nix ps` hangs) rather than opening a rival
+        # PR. Held pending that conversation.
         "0003-libutil-add-build-status-dir-experimental-feature.patch" = {
-          upstream = "attempt";
-          reason = "Build-status-dir feature series (user-flagged strong candidate); the experimental-feature flag that gates the rest.";
+          upstream = "hold";
+          reason = "Build-status series overlaps edolstra's active #15979 (nix ps); engage there with the daemon-less file-based angle instead of filing a competing series.";
         };
         "0004-libstore-add-build-status-directory-writer.patch" = {
-          upstream = "attempt";
-          reason = "Build-status-dir feature series: the status-directory writer.";
+          upstream = "hold";
+          reason = "Build-status series: engage on #15979 rather than open a competing PR.";
         };
         "0005-libstore-write-status-files-from-build-and-substitut.patch" = {
-          upstream = "attempt";
-          reason = "Build-status-dir feature series: write status files from build and substitution.";
+          upstream = "hold";
+          reason = "Build-status series: engage on #15979 rather than open a competing PR.";
         };
         "0006-libstore-daemon-record-client-uid-and-user-for-build.patch" = {
-          upstream = "attempt";
-          reason = "Build-status-dir feature series: daemon records client uid/user for build attribution.";
+          upstream = "hold";
+          reason = "Build-status series: engage on #15979 rather than open a competing PR.";
         };
         "0007-nix-add-nix-store-builds-command.patch" = {
-          upstream = "attempt";
-          reason = "Build-status-dir feature series: the `nix store builds` command surfacing the status dir.";
+          upstream = "hold";
+          reason = "Build-status series: engage on #15979 rather than open a competing PR.";
         };
         "0008-tests-functional-test-build-status-directory.patch" = {
-          upstream = "attempt";
-          reason = "Build-status-dir feature series: functional tests for the feature.";
+          upstream = "hold";
+          reason = "Build-status series: engage on #15979 rather than open a competing PR.";
         };
         "0009-doc-release-note-for-build-status-directory-and-nix-.patch" = {
-          upstream = "attempt";
-          reason = "Build-status-dir feature series: release note for the feature.";
+          upstream = "hold";
+          reason = "Build-status series: engage on #15979 rather than open a competing PR.";
         };
-        # Structured git history export (RFC 0010). Designed to be
+        # Structured git history export (RFC 0011). Designed to be
         # upstreamable (deterministic, opt-in, experimental-feature gated,
         # never in lock files -- it dodges the objections that sank
         # leaveDotGit-for-flakes), but held: repo-wide upstreaming pause
@@ -361,6 +416,31 @@
         "0010-libfetchers-add-opt-in-structured-commit-history-exp.patch" = {
           upstream = "hold";
           reason = "Feature-sized change; upstreaming paused per NixOS/nix#15984 and it should open as an upstream issue/RFC first.";
+        };
+        # 0011: temp roots for in-flight CA build outputs, closing the min-free
+        # auto-GC race that broke wide cargo-unit graphs (index#2334).
+        "0011-fix-libstore-add-temp-roots-for-CA-derivation-output.patch" = {
+          upstream = "hold";
+          reason = "Fix for min-free auto-GC deleting in-flight CA build outputs (indexable-inc/index#2334). Hold: humans submit nix patches upstream per NixOS/nix#15984; overlaps the still-open upstream discussion NixOS/nix#15613 / NixOS/nix#15719.";
+        };
+        # 0012: temp root for the floating-CA scratch output path itself
+        # (makeFallbackPath), the residual GC window 0011 left open: a
+        # non-chroot builder writes the unregistered scratch path directly,
+        # and a concurrent GC deletes it mid-build (index#2354).
+        "0012-fix-libstore-add-temp-root-for-floating-CA-scratch-o.patch" = {
+          upstream = "hold";
+          reason = "Companion to 0011: roots the floating-CA scratch output path during non-chroot builds (indexable-inc/index#2354). Upstream master has the same gap, but humans submit nix patches upstream per NixOS/nix#15984.";
+        };
+        # 0013: opt-in `forge-fetch-via-git` -- fetch github:/gitlab:/sourcehut:
+        # inputs through the Git smart protocol into the tarball cache (delta
+        # transfers via a per-repo negotiation ref) instead of downloading a
+        # full archive of every new revision. Bit-identical to the archive path
+        # (archive-compatible-tree check with automatic tarball fallback), so
+        # upstreamable in principle, but held like 0010: feature-sized fetcher
+        # changes should start as an upstream discussion, not a cold PR.
+        "0013-libfetchers-opt-in-incremental-fetching-of-forge-inp.patch" = {
+          upstream = "hold";
+          reason = "Feature-sized fetcher change; upstreaming paused per NixOS/nix#15984 and it should open as an upstream issue/discussion first (touches lock-file-adjacent fetch semantics).";
         };
       };
     }

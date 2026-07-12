@@ -1,0 +1,12 @@
+[package]
+name = "mcp-server-info"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Shared rmcp server metadata construction for ix MCP servers"
+
+[lints]
+workspace = true
+
+[dependencies]
+rmcp.workspace = true

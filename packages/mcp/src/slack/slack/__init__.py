@@ -62,11 +62,13 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from functools import partial
 from typing import Any
 from collections.abc import Awaitable, Callable
 
 import polars as pl
 from pydantic import BaseModel, ConfigDict
+from private_session import SHARED_ENV, find_token, require_private_session
 
 __all__ = [
     "SlackError",
@@ -91,8 +93,6 @@ __version__ = "0.4.0"
 # across participants. Incognito is the default: an unset (or empty) value means
 # access is permitted; only a truthy value marks the session shared and refuses
 # access, keeping personal Slack data out of synced room state.
-SHARED_ENV = "IX_MCP_SHARED"
-
 # Environment variables checked for a token, in order.
 _TOKEN_ENV_VARS = ("SLACK_USER_TOKEN", "SLACK_TOKEN")
 
@@ -523,20 +523,12 @@ class SlackTransientError(SlackError):
     scope, thread gone)."""
 
 
-def _require_incognito() -> None:
-    """Refuse to access Slack data in a shared (multiplayer) room.
-
-    Slack messages include DMs and private channel history, so a shared room
-    would leak one person's workspace into state everyone can see. A shared room
-    sets ``IX_MCP_SHARED``; only then is access refused.
-    """
-    if os.environ.get(SHARED_ENV):
-        raise SlackError(
-            "Slack is not available in a shared (multiplayer) room "
-            "(IX_MCP_SHARED is set), because it would expose personal Slack "
-            "messages and channels to everyone in the room. Use it from an "
-            "incognito chat instead; its transcript stays private to you."
-        )
+_require_incognito = partial(
+    require_private_session,
+    "Slack",
+    "personal Slack messages and channels",
+    SlackError,
+)
 
 
 def _token() -> str:
@@ -545,14 +537,8 @@ def _token() -> str:
     Resolution order: ``SLACK_USER_TOKEN`` env, ``SLACK_TOKEN`` env, then
     ``~/.config/slack/token`` (written by :func:`login`).
     """
-    for var in _TOKEN_ENV_VARS:
-        val = os.environ.get(var, "").strip()
-        if val:
-            return val
-    if _TOKEN_FILE.exists():
-        val = _TOKEN_FILE.read_text().strip()
-        if val:
-            return val
+    if token := find_token(_TOKEN_ENV_VARS, _TOKEN_FILE):
+        return token
     raise SlackError(
         "No Slack token is configured for this session. "
         "Call `slack.login(token)` with your Slack user token "

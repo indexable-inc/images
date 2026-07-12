@@ -9,8 +9,9 @@ Why should every language binding pay a C-ABI serialization tax when pyo3, napi-
 UniFFI-style tools settle for a C-ABI lowest common denominator: every value
 crosses a serialization shim, and async, cancellation, and resource cleanup
 are bolted on. unibind inverts that. The interface definition stays
-write-once, but each backend emits code for the best binding library in its
-ecosystem (pyo3 for Python, napi-rs for TypeScript, rustler for Elixir), so
+write-once, but each backend emits code for the best binding surface in its
+ecosystem (pyo3 for Python, napi-rs for TypeScript, rustler for Elixir, the
+FFM API for the JVM), so
 every language gets native semantics: real exception hierarchies, native
 async and cancellation, RAII-shaped resource cleanup, and types that flow end
 to end with no RustBuffer tax.
@@ -28,7 +29,11 @@ pyo3 = { workspace = true, features = ["extension-module"] }
 ```
 
 (`packages/code/scipql/py` is the reference consumer.) The workspace lives in
-the monorepo: `git clone https://github.com/indexable-inc/index`.
+the monorepo: `git clone https://github.com/indexable-inc/index`. Cargo
+unifies the macro crate's features across a workspace build, so once any
+workspace member enables another backend, every export names its own
+targets: `#[unibind::export(backends(py))]` (or `backends(ex)`); the
+attribute without the option renders every enabled backend.
 
 ## Surface
 
@@ -125,15 +130,25 @@ Crates:
   embed. Phase 2 turned on async, streams, and
   objects; plain (non-error) enums still wait for their phase.
 - `gen`: the `unibind-gen` binary. Reads the embedded IR out of a compiled
-  artifact and emits the host-language files above (`py` and `ts`
+  artifact and emits the host-language files above (`py`, `ts`, and `ex`
   subcommands); run at build time by `unibind.lib.build`, never at macro
   time.
 - `macros`: the `unibind` proc-macro crate. Parse once to IR, dispatch to
-  the backends the consuming crate enabled through features (`py`, `ts`).
-  `#[unibind::export(backends(...))]` pins which enabled backends render: a
-  whole-workspace cargo build unifies unibind's features across every
-  consumer, so a crate in a workspace that mixes backend features names the
-  backends whose runtime deps it declares.
+  the backends the consuming crate enabled through features (`py`, `ts`,
+  `ex`). `#[unibind::export(backends(...))]` pins which enabled backends
+  render: a whole-workspace cargo build unifies unibind's features across
+  every consumer, so a crate in a workspace that mixes backend features
+  names the backends whose runtime deps it declares.
+- `backend-ex`: renders the IR into rustler 0.38 glue (`#[rustler::nif]`
+  wrappers, `NifStruct` records, error-term structs, resource
+  registrations) plus the Elixir host modules `unibind-gen ex` writes; see
+  the Elixir section below.
+- `ex-runtime`: BEAM-side support the generated glue calls into: the
+  shared tokio runtime, async reply plumbing, demand-driven streams.
+- `backend-jvm`: renders the IR into C-ABI shims plus one generated Java
+  class speaking the FFM API (JDK 22+); see the JVM section below.
+- `jvm-runtime`: the length-prefixed wire format both sides of the jvm
+  boundary encode into, and the `RawBuf` ownership handoff the shims fill.
 - `backend-py`: renders the IR into pyo3 0.28 (abi3-py311) code:
   `#[pyfunction]` wrappers with `#[pyo3(signature = ...)]` defaults,
   `#[pyclass]` records, `create_exception!` hierarchies plus a
@@ -195,8 +210,11 @@ rules (argument vs return position included) from the untouched IR.
   `bytes`, `bytearray`, and contiguous `memoryview` all alias the caller's
   memory for the duration of the call.
 - A crate exporting async functions, streams, or objects adds
-  `unibind-runtime` with the `py` feature next to its `unibind` dependency;
-  sync-only crates (scipql-py) do not need it.
+  `unibind-runtime` plus `unibind-py-runtime` next to its `unibind`
+  dependency; sync-only crates (scipql-py) need neither. The split is
+  load-bearing: features unify across a workspace build, so the pyo3 glue
+  lives in its own crate instead of a `py` feature that would leak `Py*`
+  symbols into every NIF in the workspace.
 
 ## The TypeScript surface
 
@@ -240,6 +258,19 @@ types (the shared crate's `u64`/`usize` surface is BigInt-territory the ts
 backend still rejects) and runs as
 `checks.<system>.unibind-conformance-ts-node-conformance`.
 
+`packages/unibind/conformance-jvm` is the same idea for the jvm backend: a
+cdylib exporting the sync surface (functions, records, error hierarchies,
+defaults, renames) plus a dependency-free Java suite compiled
+warnings-as-errors and run against the real native library, in CI as
+`checks.<system>.unibind-conformance-jvm-run`.
+
+`packages/unibind/conformance-ex` is the same idea for the Elixir backend:
+a NIF crate mirroring that surface (minus binaries, an ex limitation) plus
+a zero-dep ExUnit suite asserting the wire contracts below from the BEAM,
+including caller-exit cancellation observed through a drop counter and
+GC-run resource destructors. It runs in CI as
+`checks.<system>.unibind-conformance-ex-run`.
+
 ## Phases
 
 | Phase | Issue | Scope |
@@ -249,7 +280,7 @@ backend still rejects) and runs as
 | 2     | #1992 | async, cancellation, streams, resources/objects (Python backend); proven by `packages/unibind/conformance` |
 | 3     | #1993 | TypeScript backend (napi-rs): render crate + `ts(name = ...)` renames, `unibind-gen ts` host files (`index.js`/`index.d.ts`), npm packaging in `unibind.lib.build`, Node conformance gate |
 | 4     | #1994 | Rust client backend over a stable ABI |
-| 5     | #1995 | Elixir backend (rustler, generated `.ex`, `@spec`) |
+| 5     | #1995 | Elixir backend (rustler, generated `.ex`, `@spec`); proven by `packages/unibind/conformance-ex` |
 | 6     | #1996 | adopt for ix-sdk, delete sdk-py and sdk-ts |
 
 ## Phase 4: the Rust client backend
@@ -310,3 +341,79 @@ module above plus record and error declarations. The exception surface
 stays compatible (`ScipqlError` extends `ValueError`, which is what the
 hand-written binding raised), and `packages/unibind/backend-py/tests`
 snapshots the exact code the macro generates.
+
+## Elixir backend (phase 5)
+
+`unibind-backend-ex` renders the IR into rustler 0.38 glue plus the Elixir
+host modules (`<Ns>.Native` NIF stubs and a typespec'd `<Ns>` wrapper, via
+`host_files`). Records derive `NifStruct`, error enums cross as
+`%<Ns>.<Error>{variant: atom, message: String.t()}` structs, and
+`#[unibind::object]` structs register as BEAM resources (opaque
+references; `Drop` runs on garbage collection). `#[unibind(blocking)]`
+schedules a NIF on a dirty IO scheduler. `unibind-ex-runtime` carries the
+pieces generated code cannot: one shared tokio runtime, async replies, and
+demand-driven streams. Streams are the shared `UniStream<T>` from
+`unibind-runtime` (the same type the Python backend iterates), legal only
+as the whole return type of a plain (non-async) fn on this backend.
+
+The wire protocol pairs every async call and stream with a caller-made
+reference:
+
+- async: `Native.f(ref, args...)` returns an in-flight handle; the reply is
+  one `{:unibind, ref, {:ok, value} | {:error, error}}` message. The
+  generated wrapper blocks on `receive` for it.
+- stream: `Native.f(ref, args...)` returns a stream handle consumed as an
+  `Enumerable`: the wrapper grants one credit per step through
+  `Native.unibind_demand(handle, 1)` and receives
+  `{:unibind_stream, ref, {:item, value}}` per item, then
+  `{:unibind_stream, ref, :done}`. No items flow without demand. Stage 1
+  emits no error leg: a throwing stream function fails before the stream
+  exists (`{:error, _}` from the call itself).
+
+Both spawns monitor the calling process and abort the tokio task when it
+exits, so a crashed caller never leaks a future or a producer; the user
+code observes cancellation only as its `Drop` impls running.
+
+On the nix side, `unibind.lib.build { crate; targets.ex = { mixSource }; }`
+assembles the mix-importable package from the crate's already-built NIF
+library: generated `lib/<app>/native.ex` + `lib/<app>.ex`, the library at
+`priv/native/lib<crate>.so` (one canonical name on both OSes; darwin link
+flags come from the crate's build.rs), and the caller's hand-written mix
+project (`mix.exs`, tests) overlaid. `packages/unibind/conformance-ex` is
+the reference consumer and the CI gate.
+
+Known limits of the backend today: binary payloads (`Vec<u8>` / `&[u8]`)
+do not cross (carry text for now), object members must be sync (`&mut
+self` never crosses on any backend: lowering rejects it), async fns cannot
+return streams (drive the stream from a plain fn), and `object(resource)`
+close()/with sugar stays Python-only; on the BEAM, cleanup is the
+GC-driven `Drop`.
+
+## JVM backend
+
+`unibind-backend-jvm` is the one backend with no incumbent binding library
+to lean on: the JVM's native story *is* a C boundary, so the backend renders
+its own — every exported function becomes one `extern "C"` symbol with the
+uniform shape `fn(args: *const u8, len: usize, out: *mut RawBuf)`, values
+cross in `unibind-jvm-runtime`'s length-prefixed wire format, and
+`unibind-gen jvm` emits a single generated `final class` (records as Java
+records, one exception class per error variant under a base named after the
+enum, the wire codec, and the FFM lookup/invoke plumbing) that any JDK 22+
+compiles with no dependencies. Symbol names and wire layouts are rendered by
+the same crate on both sides, so they cannot drift apart. Run with
+`--enable-native-access=ALL-UNNAMED` plus `-Dunibind.library.<key>=<path>`
+(or the native directory on `java.library.path`).
+
+The surface is the sync subset: functions, records, error hierarchies,
+defaults, and renames (`jvm(name = ...)`, `jvm(base = ...)`). Objects,
+async, and streams reject at render time with a pointer at what to use
+instead.
+
+On the nix side, `unibind.lib.build { crate; targets.jvm = { package;
+javaSource }; }` pairs the generated class (under its package's directory
+tree) with the native library staged under the exact
+`System.mapLibraryName` name, overlaying any hand-written `.java` sources
+into one compilable `java/` tree. `packages/unibind/conformance-jvm` is the
+reference consumer and CI gate; `packages/minecraft/protocol/jvm`
++ `probe-kt` (Kotlin over the generated class) are the in-tree production
+consumers.

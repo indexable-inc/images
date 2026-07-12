@@ -133,7 +133,36 @@ rendered fleet plan, image attrset, and wrapped CLI app.
     "groups"
     "dependsOn"
     "replicas"
+    "updateStrategy"
   ];
+
+  # `updateStrategy` bounds how many of a node's replicas `ix-fleet up` /
+  # `replace` recreate concurrently (Kubernetes RollingUpdate semantics): with
+  # `maxUnavailable = k`, replica `i` waits for replica `i - k` to finish its
+  # whole workflow -- recreate, boot, health checks -- so at most `k` replicas
+  # are down at once and a failing health check halts the rollout before it
+  # takes the remaining replicas down. Default (null) keeps today's behavior:
+  # every replica converges in parallel.
+  knownUpdateStrategyKeys = ["maxUnavailable"];
+  checkedUpdateStrategy = name: strategy:
+    if strategy == null
+    then null
+    else let
+      unknown = lib.subtractLists knownUpdateStrategyKeys (attrNames (
+        assert lib.assertMsg (isAttrs strategy)
+        "fleet node '${name}': updateStrategy must be an attrset like { maxUnavailable = 1; }"; strategy
+      ));
+    in
+      assert lib.assertMsg (unknown == []) ''
+        fleet node '${name}' updateStrategy has unknown option(s): ${lib.concatStringsSep ", " unknown}
+          valid options: ${lib.concatStringsSep ", " knownUpdateStrategyKeys}
+      '';
+      assert lib.assertMsg (
+        isInt (strategy.maxUnavailable or null) && strategy.maxUnavailable > 0
+      )
+      "fleet node '${name}': updateStrategy.maxUnavailable must be a positive integer"; {
+        inherit (strategy) maxUnavailable;
+      };
 
   isWrappedNode = value: isAttrs value && lib.any (key: value ? "${key}") wrappedNodeKeys;
 
@@ -159,6 +188,7 @@ rendered fleet plan, image attrset, and wrapped CLI app.
     deployment = checkedDeployment name (mergeDeployments deploymentParts);
     dependsOn = toList (spec.dependsOn or []);
     replicas = spec.replicas or 1;
+    updateStrategy = checkedUpdateStrategy name (spec.updateStrategy or null);
   };
 
   expandReplicas = name: spec:
@@ -308,11 +338,16 @@ rendered fleet plan, image attrset, and wrapped CLI app.
             overrideInputs = deploy.switch.overrideInputs or {};
           };
           inherit (deploy) bootstrapImage;
+          # The plan carries only the `.#<node>` installable string (the
+          # fleet's `packages.<node>` attr, the node's CAS image): ix-fleet
+          # `nix build`s it at push time, mirroring `switch.sourceInstallable`.
+          # Never put the image's outPath/drvPath here: the CAS manifest
+          # builder reads its closure at eval (IFD), so forcing either would
+          # build every node's system closure just to render this plan.
           replacementImage = {
             inherit imageName;
             destination = replacementDestination;
-            source = unsafeDiscardStringContext "${config.ix.build.ociImage}";
-            sourceDrv = unsafeDiscardStringContext config.ix.build.ociImage.drvPath;
+            sourceInstallable = ".#${name}";
           };
           inherit (deploy) region;
           inherit (deploy) ipv4;
@@ -327,6 +362,10 @@ rendered fleet plan, image attrset, and wrapped CLI app.
           secrets = normalizeSecrets (deploy.secrets or {});
           dependsOn = expandedDependencies.${name};
           healthChecks = planHealthChecks config;
+          # Rolling-update window for this node's replica group; ix-fleet
+          # turns it into serialization edges among replicas sharing
+          # `baseName` (see checkedUpdateStrategy above).
+          inherit (spec) updateStrategy;
         }
     )
     checkedNodeSpecs;
@@ -338,12 +377,12 @@ rendered fleet plan, image attrset, and wrapped CLI app.
 
   # Rename a fleet's external identities without re-evaluating any NixOS
   # closure: only plan data (node names, `dependsOn`, east-west `groups`, the
-  # registry `destination` the replacement image is pushed to, and the default
-  # `switch.sourceInstallable` attr) carries the prefix, while `system`/`switch`
-  # `target` and the OCI image `source`/`sourceDrv` keep pointing at the shared
-  # base closures. The prefixed `sourceInstallable` (`.#${prefix}${name}`) still
-  # resolves to the shared base closure because `nixosConfigurations.<external>`
-  # is a thin `{ config }` wrapper over the once-evaluated `nodeConfigs.<name>`
+  # registry `destination` the replacement image is pushed to, and the two
+  # installable attrs) carries the prefix, while `system`/`switch` `target`
+  # keep pointing at the shared base closures. The prefixed installables
+  # (`.#${prefix}${name}`) still resolve to the shared base closure because
+  # `nixosConfigurations.<external>` and `packages.<external>` are thin
+  # renames over the once-evaluated `nodeConfigs.<name>`
   # (see `resultFor`), so the native multi-VM `ix up` can name the prefixed VM
   # without a second eval. The health-check
   # runner relies on this so the 10 example fleets are evaluated once per
@@ -370,6 +409,10 @@ rendered fleet plan, image attrset, and wrapped CLI app.
                 node.replacementImage
                 // {
                   destination = prefixName node.replacementImage.destination;
+                  # Always re-derived: unlike `switch.sourceInstallable` there
+                  # is no user-facing override, the installable is defined as
+                  # this fleet's `packages.<external>` attr.
+                  sourceInstallable = ".#${prefixName name}";
                 };
               # Re-derive only the default installable to the prefixed attr, keyed
               # on whether the user set `switch.sourceInstallable` in the spec (not
@@ -426,7 +469,9 @@ rendered fleet plan, image attrset, and wrapped CLI app.
         "diff"
         "down"
         "health"
+        "logs"
         "replace"
+        "status"
         "switch"
         "up"
       ]
@@ -439,6 +484,8 @@ rendered fleet plan, image attrset, and wrapped CLI app.
       down
       replace
       health
+      logs
+      status
       switch
       up
       ;
@@ -449,7 +496,11 @@ rendered fleet plan, image attrset, and wrapped CLI app.
     planValue = planValueFor;
     nodes = externalKeyed nodeConfigs;
     meta = externalKeyed checkedNodeSpecs;
-    packages = externalKeyed (lib.mapAttrs (_: config: config.ix.build.ociImage) nodeConfigs);
+    # Each node's CAS-manifest image, the target of the plan's
+    # `replacementImage.sourceInstallable`; merge into a flake's top-level
+    # `packages` so `nix build .#<node>` resolves it. Lazy: forcing one
+    # requires the ix-side `ix.build.casImageBuilder` module (cas-layer.nix).
+    packages = externalKeyed (lib.mapAttrs (_: config: config.ix.build.casImage) nodeConfigs);
     systemPackages =
       lib.mapAttrs' (
         name: config: lib.nameValuePair "${externalName name}-system" config.system.build.toplevel

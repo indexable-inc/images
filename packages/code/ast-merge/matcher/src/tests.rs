@@ -14,26 +14,31 @@ fn parse_rust(source: &str) -> ast_merge_ast::Tree {
 }
 
 #[test]
-fn test_matching_identical_trees() {
-    let source = "fn foo() {}";
-    let tree_a = parse_rust(source);
-    let tree_b = parse_rust(source);
+fn structurally_related_trees_have_matches() {
+    let cases = [
+        ("identical", "fn foo() {}", "fn foo() {}"),
+        ("renamed", "fn foo() {}", "fn bar() {}"),
+        (
+            "addition",
+            "fn foo() {}",
+            "fn foo() {} fn bar() {}",
+        ),
+        (
+            "deletion",
+            "fn foo() {} fn bar() {}",
+            "fn foo() {}",
+        ),
+        (
+            "reordering",
+            "fn foo() {} fn bar() {}",
+            "fn bar() {} fn foo() {}",
+        ),
+    ];
 
-    let matching = compute(&tree_a, &tree_b);
-
-    assert!(!matching.is_empty());
-}
-
-#[test]
-fn test_matching_different_trees() {
-    let source_a = "fn foo() {}";
-    let source_b = "fn bar() {}";
-    let tree_a = parse_rust(source_a);
-    let tree_b = parse_rust(source_b);
-
-    let matching = compute(&tree_a, &tree_b);
-
-    assert!(!matching.is_empty());
+    for (name, source_a, source_b) in cases {
+        let matching = compute(&parse_rust(source_a), &parse_rust(source_b));
+        assert!(!matching.is_empty(), "{name}");
+    }
 }
 
 #[test]
@@ -94,40 +99,4 @@ fn test_config_default() {
     assert_eq!(config.min_height, 2);
     assert!((config.dice_threshold - 0.5).abs() < f64::EPSILON);
     assert_eq!(config.max_ted_size, 100);
-}
-
-#[test]
-fn test_matching_with_additions() {
-    let source_a = "fn foo() {}";
-    let source_b = "fn foo() {} fn bar() {}";
-    let tree_a = parse_rust(source_a);
-    let tree_b = parse_rust(source_b);
-
-    let matching = compute(&tree_a, &tree_b);
-
-    assert!(!matching.is_empty());
-}
-
-#[test]
-fn test_matching_with_deletions() {
-    let source_a = "fn foo() {} fn bar() {}";
-    let source_b = "fn foo() {}";
-    let tree_a = parse_rust(source_a);
-    let tree_b = parse_rust(source_b);
-
-    let matching = compute(&tree_a, &tree_b);
-
-    assert!(!matching.is_empty());
-}
-
-#[test]
-fn test_matching_reordered() {
-    let source_a = "fn foo() {} fn bar() {}";
-    let source_b = "fn bar() {} fn foo() {}";
-    let tree_a = parse_rust(source_a);
-    let tree_b = parse_rust(source_b);
-
-    let matching = compute(&tree_a, &tree_b);
-
-    assert!(!matching.is_empty());
 }

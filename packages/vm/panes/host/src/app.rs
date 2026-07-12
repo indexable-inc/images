@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use objc2::rc::Retained;
@@ -19,7 +19,7 @@ use objc2::runtime::ProtocolObject;
 use objc2::{MainThreadMarker, MainThreadOnly, define_class};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSCursor, NSEvent,
-    NSScreen, NSWindow,
+    NSEventMask, NSEventModifierFlags, NSScreen, NSWindow,
 };
 use dispatch2::DispatchQueue;
 use objc2_core_graphics::{CGAssociateMouseAndMouseCursorPosition, CGError};
@@ -28,9 +28,23 @@ use objc2_metal::MTLDrawable as _;
 use objc2_quartz_core::CAMetalDisplayLinkUpdate;
 use panes_protocol::{MINOR_KEY_REPEAT, MINOR_POINTER_LOCK, ToGuest, ToHost, WindowId};
 
-use crate::conn::{self, Event, Target};
+use crate::conn::{self, Event};
+use crate::send_queue::{SendQueue, SendQueueError};
+use crate::transport::Target;
 use crate::render::Renderer;
-use crate::window::{PaneWindow, WindowParams};
+use crate::window::{PaneWindow, SurfaceSize, WindowParams};
+
+/// Presentation and input policy from the CLI.
+pub struct RunOptions {
+    /// Prefix prepended to every window title.
+    pub title_prefix: String,
+    /// Stock macOS chrome instead of the default hidden-titlebar style (see
+    /// `window::apply_hidden_titlebar`).
+    pub native_titlebar: bool,
+    /// Translate macOS editing chords to Linux equivalents (default; see
+    /// `view::translate_chord`). `--no-chord-translation` clears it.
+    pub chord_translation: bool,
+}
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -40,11 +54,8 @@ struct App {
     mtm: MainThreadMarker,
     renderer: Renderer,
     windows: HashMap<WindowId, PaneWindow>,
-    out: Option<mpsc::Sender<ToGuest>>,
-    title_prefix: String,
-    /// `--native-titlebar`: stock macOS chrome instead of the default
-    /// hidden-titlebar style (see `window::apply_hidden_titlebar`).
-    native_titlebar: bool,
+    out: Option<SendQueue>,
+    options: RunOptions,
     quitting: bool,
     /// Per-window ack counters behind the periodic acks/s log: the real-path
     /// equivalent of mock's rate line, and the 120Hz-genlock evidence
@@ -148,7 +159,7 @@ impl Deferred {
     }
 }
 
-pub fn run(target: Target, title_prefix: String, native_titlebar: bool) -> ExitCode {
+pub fn run(target: Target, options: RunOptions) -> ExitCode {
     let Some(mtm) = MainThreadMarker::new() else {
         eprintln!("panes-host: must start on the main thread");
         return ExitCode::FAILURE;
@@ -178,8 +189,7 @@ pub fn run(target: Target, title_prefix: String, native_titlebar: bool) -> ExitC
             renderer,
             windows: HashMap::new(),
             out: None,
-            title_prefix,
-            native_titlebar,
+            options,
             quitting: false,
             ack_stats: HashMap::new(),
             peer_minor: 0,
@@ -194,6 +204,8 @@ pub fn run(target: Target, title_prefix: String, native_titlebar: bool) -> ExitC
     // hook (see `screens_changed`).
     let delegate = AppDelegate::new(mtm);
     ns_app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+
+    install_key_up_monitor(mtm);
 
     conn::spawn(target, host_info);
 
@@ -286,16 +298,43 @@ fn screens_changed() {
             window.mark_dirty();
             let activated = window.ns.isKeyWindow();
             if let Some(out) = &app.out {
-                let _ = out.send(ToGuest::Configure {
-                    id: *id,
-                    width: size.width,
-                    height: size.height,
-                    scale: size.scale,
-                    activated,
-                });
+                queue_configure(out, *id, size, activated);
             }
         }
     });
+}
+
+/// Un-swallow Cmd keyUps. `NSApplication.sendEvent` routes a keyUp with Cmd
+/// held into key-equivalent processing and never delivers it to the key
+/// window -- above `NSWindow`, so a window-level `sendEvent` override alone
+/// never sees it -- leaving the guest with the chorded key stuck down and
+/// auto-repeating forever (one Cmd-Backspace deleted "like an animation"
+/// until the next focus change). A local event monitor observes every event
+/// before that dispatch: re-deliver Cmd keyUps to the key window ourselves,
+/// exactly GLFW's workaround (`cocoa_init.m` `keyUpMonitor`). The window's
+/// `sendEvent` override routes them on to the view, and the view's held-key
+/// map dedupes if `AppKit` ever delivers the original too.
+fn install_key_up_monitor(mtm: MainThreadMarker) {
+    let block = block2::RcBlock::new(
+        move |event: core::ptr::NonNull<NSEvent>| -> *mut NSEvent {
+            // SAFETY: AppKit passes a valid event; local monitors run on the
+            // main thread.
+            let ev = unsafe { event.as_ref() };
+            if ev.modifierFlags().contains(NSEventModifierFlags::Command)
+                && let Some(window) = NSApplication::sharedApplication(mtm).keyWindow()
+            {
+                window.sendEvent(ev);
+            }
+            // Hand the event back so normal dispatch continues unchanged.
+            event.as_ptr()
+        },
+    );
+    // SAFETY: the block returns the pointer it was handed (valid, non-null).
+    let monitor =
+        unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyUp, &block) };
+    // Intentionally never removed: the monitor must live as long as the app,
+    // and dropping the token would not uninstall it anyway.
+    std::mem::forget(monitor);
 }
 
 /// Entry point for supervisor events, always on the main queue.
@@ -347,15 +386,14 @@ fn handle_msg(app: &mut App, msg: ToHost, recv: f64) -> Deferred {
                 app.mtm,
                 &app.renderer,
                 &params,
-                &app.title_prefix,
-                app.native_titlebar,
+                &app.options,
             );
             app.windows.insert(id, window);
             Deferred::default()
         }
         ToHost::WindowTitle { id, title } => {
             if let Some(window) = app.windows.get(&id) {
-                window.set_title(&app.title_prefix, &title);
+                window.set_title(&app.options.title_prefix, &title);
             }
             Deferred::default()
         }
@@ -391,7 +429,7 @@ fn handle_msg(app: &mut App, msg: ToHost, recv: f64) -> Deferred {
                 // guest pacing, an ack held hostage to a texture we never
                 // made would wedge that window's frame loop forever.
                 if let Some(out) = &app.out {
-                    let _ = out.send(ToGuest::Ack { id, seq });
+                    queue_to_guest(out, ToGuest::Ack { id, seq });
                 }
                 return Deferred::default();
             }
@@ -455,7 +493,7 @@ fn send_key_repeat(app: &App) {
         interval_ms: whole_ms(NSEvent::keyRepeatInterval()),
     };
     eprintln!("panes-host: key repeat: {msg:?}");
-    let _ = out.send(msg);
+    queue_to_guest(out, msg);
 }
 
 /// Seconds (`NSTimeInterval`) to whole milliseconds. `as` saturates: a
@@ -546,12 +584,44 @@ fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
     APP.with(|slot| slot.borrow_mut().as_mut().map(f))
 }
 
+fn queue_to_guest(out: &SendQueue, msg: ToGuest) {
+    if !out.is_open() {
+        return;
+    }
+    match out.send(msg) {
+        Ok(()) => {}
+        Err(error) => {
+            let reason = match error {
+                SendQueueError::Full => "outgoing queue full",
+                SendQueueError::Disconnected => "outgoing queue disconnected",
+            };
+            eprintln!("panes-host: {reason}; disconnecting");
+            DispatchQueue::main().exec_async(|| on_event(Event::Disconnected));
+        }
+    }
+}
+
+fn queue_configure(
+    out: &SendQueue,
+    id: WindowId,
+    size: SurfaceSize,
+    activated: bool,
+) {
+    queue_to_guest(out, ToGuest::Configure {
+        id,
+        width: size.width,
+        height: size.height,
+        scale: size.scale,
+        activated,
+    });
+}
+
 /// Queue a message to the guest; silently dropped while disconnected (every
 /// caller is reacting to UI events that are meaningless without a guest).
 pub fn send(msg: ToGuest) {
     with_app(|app| {
         if let Some(out) = &app.out {
-            let _ = out.send(msg);
+            queue_to_guest(out, msg);
         }
     });
 }
@@ -578,7 +648,7 @@ pub fn display_tick(id: WindowId, update: &CAMetalDisplayLinkUpdate) {
                     window.max_drawable_count(),
                 );
             }
-            let _ = out.send(ToGuest::Ack { id, seq });
+            queue_to_guest(out, ToGuest::Ack { id, seq });
             let stat = app
                 .ack_stats
                 .entry(id)
@@ -605,7 +675,7 @@ pub fn window_should_close(id: WindowId) -> bool {
             return true;
         }
         if let Some(out) = &app.out {
-            let _ = out.send(ToGuest::CloseRequest { id });
+            queue_to_guest(out, ToGuest::CloseRequest { id });
         }
         // The guest decides: it unmaps and sends WindowGone, which closes
         // the NSWindow for real (the WSLg model: never desync window
@@ -673,13 +743,7 @@ pub fn window_geometry_changed(id: WindowId) {
         window.mark_dirty();
         let activated = window.ns.isKeyWindow();
         if let Some(out) = &app.out {
-            let _ = out.send(ToGuest::Configure {
-                id,
-                width: size.width,
-                height: size.height,
-                scale: size.scale,
-                activated,
-            });
+            queue_configure(out, id, size, activated);
         }
     });
 }
@@ -713,13 +777,7 @@ pub fn window_activation(id: WindowId, activated: bool) {
         };
         let size = window.sync_layer_geometry();
         if let Some(out) = &app.out {
-            let _ = out.send(ToGuest::Configure {
-                id,
-                width: size.width,
-                height: size.height,
-                scale: size.scale,
-                activated,
-            });
+            queue_configure(out, id, size, activated);
         }
         // Key-window changes gate the cursor capture: resign releases it,
         // become re-engages it when the guest still holds the lock.
@@ -745,7 +803,7 @@ pub fn request_quit() {
         app.capture = None;
         if let Some(out) = &app.out {
             for id in app.windows.keys() {
-                let _ = out.send(ToGuest::CloseRequest { id: *id });
+                queue_to_guest(out, ToGuest::CloseRequest { id: *id });
             }
         }
         false

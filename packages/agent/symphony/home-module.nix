@@ -17,6 +17,7 @@
 {
   indexPackages,
   portableServicesModule,
+  beamvmModule,
   ix,
 }: {
   config,
@@ -65,7 +66,10 @@
       '';
   };
 in {
-  imports = [portableServicesModule];
+  imports = [
+    portableServicesModule
+    beamvmModule
+  ];
 
   options.services.symphony = {
     enable = mkEnableOption "the Symphony runtime as a user service";
@@ -75,6 +79,38 @@ in {
       default = defaultPackage;
       defaultText = lib.literalExpression "index.packages.\${system}.symphony";
       description = "Symphony package to run (this flake's launcher around bin/run-nix).";
+    };
+
+    runtime = mkOption {
+      type = types.enum [
+        "beamvm"
+        "standalone"
+      ];
+      default = "beamvm";
+      description = ''
+        How the runtime is hosted.
+
+        "beamvm" (the default) runs the compiled release inside the
+        persistent BEAM VM (services.beamvm): no compile at boot, and a
+        symphony update hot-swaps code in the running VM at switch time --
+        no restart, no dropped LiveView sockets or in-flight runs. Only a
+        beamvm/toolchain update restarts the VM.
+
+        "standalone" is the original path: a dedicated unit whose launcher
+        stages the source tree and runs `mix run --no-halt`, recompiling at
+        every start. Updates restart the unit.
+      '';
+    };
+
+    releasePackage = mkOption {
+      type = types.nullOr types.package;
+      default = null;
+      defaultText = lib.literalExpression "config.services.symphony.package.release";
+      description = ''
+        Compiled mix release the beamvm runtime code-loads. Null follows
+        `package` (its passthru.release), so overriding `package` alone
+        keeps code and catalogs from the same build.
+      '';
     };
 
     stateDir = mkOption {
@@ -190,35 +226,88 @@ in {
     };
   };
 
-  config = mkIf cfg.enable {
-    services.symphony.launcher = launcher;
+  config = mkIf cfg.enable (lib.mkMerge [
+    {services.symphony.launcher = launcher;}
+    (mkIf (cfg.runtime == "beamvm") {
+      # Catalog tree indirection: home-manager retargets this symlink at
+      # switch, so the VM (whose unit env carries only the stable path)
+      # reads updated catalogs without a unit change.
+      xdg.configFile."symphony/root".source = cfg.package.root;
 
-    services.portable.symphony = {
-      description = "Symphony runtime";
-      command = [(lib.getExe launcher)];
-      environment =
-        {
-          SYMPHONY_HTTP_PORT = toString cfg.httpPort;
-          SYMPHONY_WORKFLOW_PACK = cfg.workflowPack;
-        }
-        // optionalAttrs (cfg.stateDir != null) {
-          SYMPHONY_STATE_DIR = toString cfg.stateDir;
-        }
-        // optionalAttrs (cfg.primaryRepo != null) {
-          SYMPHONY_PRIMARY_REPO = toString cfg.primaryRepo;
-        }
-        // optionalAttrs (cfg.repoRoot != null) {
-          SYMPHONY_REPO_ROOT = toString cfg.repoRoot;
-        }
-        // optionalAttrs (cfg.packDir != null) {
-          SYMPHONY_PACK_DIR = toString cfg.packDir;
-        }
-        // cfg.extraEnvironment;
-      # The BEAM is the scheduler: cron triggers live inside the runtime, so
-      # the unit's whole job is to keep it up from login onward. No interval;
-      # a poller here would fight the long-running daemon.
-      restart = "always";
-      runAtLoad = true;
-    };
-  };
+      # The persistent-VM runtime: SYMPHONY_* env parity with bin/run-nix,
+      # except SYMPHONY_ROOT points read-only at the store catalogs (the
+      # release needs no writable staging copy) and every writable dir is
+      # anchored explicitly under the state dir -- config.ex mkdir_p!'s its
+      # dirs, which must never resolve to a store default.
+      services.beamvm.vms.symphony = {
+        apps.symphony_elixir.package =
+          if cfg.releasePackage != null
+          then cfg.releasePackage
+          else cfg.package.release;
+        inherit (cfg) environmentFile secretsCommand;
+        # The package's own runtime tool set first (ExecRunner inherits this
+        # PATH for workflow scripts; the bundled pack shells out to git/gh/
+        # jq), then deployment extras (codex lives there).
+        extraPath = cfg.package.runtimeTools ++ cfg.extraPath;
+        environment = let
+          stateDir =
+            if cfg.stateDir != null
+            then toString cfg.stateDir
+            else "${config.xdg.stateHome}/symphony";
+        in
+          {
+            # Via the stable config symlink (written below), NOT the store
+            # path: a store path in the unit environment would change the
+            # unit on every symphony update and restart the VM, defeating
+            # the hot-reload contract this runtime exists for.
+            SYMPHONY_ROOT = "${config.xdg.configHome}/symphony/root";
+            SYMPHONY_STATE_DIR = stateDir;
+            SYMPHONY_WORKSPACES_DIR = "${stateDir}/workspaces";
+            SYMPHONY_RUNS_DIR = "${stateDir}/runs";
+            SYMPHONY_LOGS_ROOT = "${stateDir}/log";
+            SYMPHONY_HTTP_PORT = toString cfg.httpPort;
+            SYMPHONY_WORKFLOW_PACK = cfg.workflowPack;
+          }
+          // optionalAttrs (cfg.primaryRepo != null) {
+            SYMPHONY_PRIMARY_REPO = toString cfg.primaryRepo;
+          }
+          // optionalAttrs (cfg.repoRoot != null) {
+            SYMPHONY_REPO_ROOT = toString cfg.repoRoot;
+          }
+          // optionalAttrs (cfg.packDir != null) {
+            SYMPHONY_PACK_DIR = toString cfg.packDir;
+          }
+          // cfg.extraEnvironment;
+      };
+    })
+    (mkIf (cfg.runtime == "standalone") {
+      services.portable.symphony = {
+        description = "Symphony runtime";
+        command = [(lib.getExe launcher)];
+        environment =
+          {
+            SYMPHONY_HTTP_PORT = toString cfg.httpPort;
+            SYMPHONY_WORKFLOW_PACK = cfg.workflowPack;
+          }
+          // optionalAttrs (cfg.stateDir != null) {
+            SYMPHONY_STATE_DIR = toString cfg.stateDir;
+          }
+          // optionalAttrs (cfg.primaryRepo != null) {
+            SYMPHONY_PRIMARY_REPO = toString cfg.primaryRepo;
+          }
+          // optionalAttrs (cfg.repoRoot != null) {
+            SYMPHONY_REPO_ROOT = toString cfg.repoRoot;
+          }
+          // optionalAttrs (cfg.packDir != null) {
+            SYMPHONY_PACK_DIR = toString cfg.packDir;
+          }
+          // cfg.extraEnvironment;
+        # The BEAM is the scheduler: cron triggers live inside the runtime,
+        # so the unit's whole job is to keep it up from login onward. No
+        # interval; a poller here would fight the long-running daemon.
+        restart = "always";
+        runAtLoad = true;
+      };
+    })
+  ]);
 }

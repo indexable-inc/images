@@ -122,7 +122,7 @@ def test_sync_cell_has_no_current_line() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_store_round_trips_line_and_error_line(tmp_path: Path) -> None:
+def test_store_round_trips_line_and_error_line(tmp_path: Path, fake_weave: object) -> None:
     conn = store.connect(tmp_path / "exec.sqlite")
     store.start(conn, id="j1", name="j1", code="x", started_at=0.0)
     store.update_output(conn, "j1", "out", line=3)
@@ -130,6 +130,7 @@ def test_store_round_trips_line_and_error_line(tmp_path: Path) -> None:
     store.finish(
         conn,
         id="j1",
+        kind="cell",
         status="error",
         ended_at=1.0,
         output="out",

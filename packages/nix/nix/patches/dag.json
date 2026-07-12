@@ -43,6 +43,20 @@
       "deps": [
         "0003-libutil-add-build-status-dir-experimental-feature.patch"
       ]
+    },
+    {
+      "patch": "0011-fix-libstore-add-temp-roots-for-CA-derivation-output.patch",
+      "deps": []
+    },
+    {
+      "patch": "0012-fix-libstore-add-temp-root-for-floating-CA-scratch-o.patch",
+      "deps": [
+        "0011-fix-libstore-add-temp-roots-for-CA-derivation-output.patch"
+      ]
+    },
+    {
+      "patch": "0013-libfetchers-opt-in-incremental-fetching-of-forge-inp.patch",
+      "deps": []
     }
   ]
 }

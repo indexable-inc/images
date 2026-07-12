@@ -56,31 +56,17 @@ mod tests {
     }
 
     #[test]
-    fn test_content_hash_same_content() {
-        let source1 = "fn foo() {}";
-        let source2 = "fn foo() {}";
-
-        let result1 = tree(source1, &get_rust_language()).unwrap();
-        let result2 = tree(source2, &get_rust_language()).unwrap();
-
-        let hash1 = compute(&result1.tree, result1.tree.root_node());
-        let hash2 = compute(&result2.tree, result2.tree.root_node());
-
-        assert_eq!(hash1, hash2);
-    }
-
-    #[test]
-    fn test_content_hash_different_content() {
-        let source1 = "fn foo() {}";
-        let source2 = "fn bar() {}";
-
-        let result1 = tree(source1, &get_rust_language()).unwrap();
-        let result2 = tree(source2, &get_rust_language()).unwrap();
-
-        let hash1 = compute(&result1.tree, result1.tree.root_node());
-        let hash2 = compute(&result2.tree, result2.tree.root_node());
-
-        assert_ne!(hash1, hash2);
+    fn content_hash_tracks_source_content() {
+        for (left, right, equal) in [
+            ("fn foo() {}", "fn foo() {}", true),
+            ("fn foo() {}", "fn bar() {}", false),
+        ] {
+            let left = tree(left, &get_rust_language()).unwrap();
+            let right = tree(right, &get_rust_language()).unwrap();
+            let left_hash = compute(&left.tree, left.tree.root_node());
+            let right_hash = compute(&right.tree, right.tree.root_node());
+            assert_eq!(left_hash == right_hash, equal);
+        }
     }
 
     #[test]

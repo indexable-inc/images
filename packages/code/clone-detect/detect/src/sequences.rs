@@ -36,13 +36,22 @@ struct SeqLocPair {
 
 /// Detect duplicated statement sequences using sliding-window k-grams.
 #[must_use]
-pub fn sequence_instances(scan: &Output, window_size: usize) -> Vec<CloneGroup> {
+pub fn sequence_instances(
+    scan: &Output,
+    generated_files: &[bool],
+    window_size: usize,
+) -> Vec<CloneGroup> {
     let window_size = window_size.max(MIN_WINDOW_SIZE);
     let mut kgram_index: FxHashMap<u64, Vec<SeqLoc>> = FxHashMap::default();
 
     for (file_id, file) in scan.files.iter().enumerate() {
         for (node_idx, node) in file.nodes.iter().enumerate() {
-            let child_hashes: Vec<u64> = node.children.iter().map(|c| c.normalized_hash).collect();
+            let child_hashes: Vec<u64> = node
+                .children
+                .iter()
+                .filter(|child| !child.kind.contains("comment"))
+                .map(|child| child.normalized_hash)
+                .collect();
 
             if child_hashes.len() < window_size {
                 continue;
@@ -95,26 +104,24 @@ pub fn sequence_instances(scan: &Output, window_size: usize) -> Vec<CloneGroup> 
                 }
 
                 let extended = extend_match(scan, loc_a, loc_b);
-
-                for pos in extended.first.start..extended.first.end {
-                    used.insert(SeqKey {
-                        file_id: extended.first.file_id,
-                        node_idx: extended.first.node_idx,
-                        position: pos,
-                    });
-                }
-                for pos in extended.second.start..extended.second.end {
-                    used.insert(SeqKey {
-                        file_id: extended.second.file_id,
-                        node_idx: extended.second.node_idx,
-                        position: pos,
-                    });
-                }
-
-                let frag_a = sequence_to_fragment(scan, &extended.first);
-                let frag_b = sequence_to_fragment(scan, &extended.second);
+                let frag_a = sequence_to_fragment(scan, generated_files, &extended.first);
+                let frag_b = sequence_to_fragment(scan, generated_files, &extended.second);
 
                 if let (Some(fa), Some(fb)) = (frag_a, frag_b) {
+                    // Different AST parents can expose overlapping child
+                    // sequences for the same source bytes. That is one region
+                    // viewed at two nesting levels, not duplicated code.
+                    if fa.file == fb.file
+                        && ranges_overlap(
+                            fa.byte_range.start..fa.byte_range.end,
+                            fb.byte_range.start..fb.byte_range.end,
+                        )
+                    {
+                        continue;
+                    }
+
+                    mark_used(&mut used, &extended.first);
+                    mark_used(&mut used, &extended.second);
                     groups.push(CloneGroup {
                         clone_type: Kind::Sequence {
                             statements: extended.first.end - extended.first.start,
@@ -127,6 +134,16 @@ pub fn sequence_instances(scan: &Output, window_size: usize) -> Vec<CloneGroup> 
     }
 
     groups
+}
+
+fn mark_used(used: &mut FxHashSet<SeqKey>, location: &SeqLoc) {
+    for position in location.start..location.end {
+        used.insert(SeqKey {
+            file_id: location.file_id,
+            node_idx: location.node_idx,
+            position,
+        });
+    }
 }
 
 /// Extend a matching window in both directions as long as child hashes match.
@@ -160,8 +177,18 @@ fn extend_match(scan: &Output, loc_a: &SeqLoc, loc_b: &SeqLoc) -> SeqLocPair {
         };
     };
 
-    let children_a: Vec<u64> = node_a.children.iter().map(|c| c.normalized_hash).collect();
-    let children_b: Vec<u64> = node_b.children.iter().map(|c| c.normalized_hash).collect();
+    let children_a: Vec<u64> = node_a
+        .children
+        .iter()
+        .filter(|child| !child.kind.contains("comment"))
+        .map(|child| child.normalized_hash)
+        .collect();
+    let children_b: Vec<u64> = node_b
+        .children
+        .iter()
+        .filter(|child| !child.kind.contains("comment"))
+        .map(|child| child.normalized_hash)
+        .collect();
 
     let mut start_a = loc_a.start;
     let mut start_b = loc_b.start;
@@ -196,12 +223,21 @@ fn extend_match(scan: &Output, loc_a: &SeqLoc, loc_b: &SeqLoc) -> SeqLocPair {
     }
 }
 
-fn sequence_to_fragment(scan: &Output, loc: &SeqLoc) -> Option<Fragment> {
+fn sequence_to_fragment(
+    scan: &Output,
+    generated_files: &[bool],
+    loc: &SeqLoc,
+) -> Option<Fragment> {
     let file = scan.files.get(loc.file_id)?;
     let node = file.nodes.get(loc.node_idx)?;
 
-    let first_child = node.children.get(loc.start)?;
-    let last_child = node.children.get(loc.end.checked_sub(1)?)?;
+    let mut code_children = node.children.iter().filter(|child| !child.kind.contains("comment"));
+    let first_child = code_children.nth(loc.start)?;
+    let last_child = node
+        .children
+        .iter()
+        .filter(|child| !child.kind.contains("comment"))
+        .nth(loc.end.checked_sub(1)?)?;
 
     Some(Fragment {
         file: file.path.clone(),
@@ -214,6 +250,7 @@ fn sequence_to_fragment(scan: &Output, loc: &SeqLoc) -> Option<Fragment> {
             end: last_child.end_line,
         },
         kind: node.kind.to_owned(),
+        generated: *generated_files.get(loc.file_id)?,
     })
 }
 

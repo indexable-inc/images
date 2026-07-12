@@ -47,44 +47,40 @@
   # only proves the pinned bytes fetch and patch on x86_64-linux, not that they
   # are authentic, so the real gate is human review of the hash changes in the
   # auto-bump PR. Same posture as packages/yc.
-  updateScript =
-    if updateScriptWriter == null
-    then null
-    else
-      updateScriptWriter {
-        name = "humanlayer-update";
-        runtimeInputs = [nix];
-        meta.description = "Refresh packages/humanlayer/manifest.json to the latest HumanLayer CLI release";
-        text = ''
-          # nu
-          const base = "https://registry.npmjs.org/@humanlayer"
-          const slugs = {
-            "x86_64-linux": "linux-x64",
-            "aarch64-linux": "linux-arm64",
-            "aarch64-darwin": "darwin-arm64",
-            "x86_64-darwin": "darwin-x64"
-          }
+  updateScriptArgs = {
+    name = "humanlayer-update";
+    runtimeInputs = [nix];
+    meta.description = "Refresh packages/humanlayer/manifest.json to the latest HumanLayer CLI release";
+    text = ''
+      # nu
+      const base = "https://registry.npmjs.org/@humanlayer"
+      const slugs = {
+        "x86_64-linux": "linux-x64",
+        "aarch64-linux": "linux-arm64",
+        "aarch64-darwin": "darwin-arm64",
+        "x86_64-darwin": "darwin-x64"
+      }
 
-          # Run from the repo root: `nix run .#humanlayer.updateScript -- [version]`.
-          # Without a version argument it tracks the upstream npm `latest` tag.
-          def main [version?: string] {
-            let v = ($version | default (http get $"($base)/cli/latest" | get version))
-            let cli_hash = (^nix store prefetch-file --json $"($base)/cli/-/cli-($v).tgz" | from json | get hash)
-            let platforms = (
-              $slugs
-              | transpose system slug
-              | reduce --fold {} {|row acc|
-                  let url = $"($base)/cli-($row.slug)/-/cli-($row.slug)-($v).tgz"
-                  let sri = (^nix store prefetch-file --json $url | from json | get hash)
-                  $acc | insert $row.system { slug: $row.slug, hash: $sri }
-                }
-            )
-            let out = "packages/humanlayer/manifest.json"
-            { version: $v, cliHash: $cli_hash, platforms: $platforms } | to json --indent 2 | save --force $out
-            print $"updated ($out) to ($v)"
-          }
-        '';
-      };
+      # Run from the repo root: `nix run .#humanlayer.updateScript -- [version]`.
+      # Without a version argument it tracks the upstream npm `latest` tag.
+      def main [version?: string] {
+        let v = ($version | default (http get $"($base)/cli/latest" | get version))
+        let cli_hash = (^nix store prefetch-file --json $"($base)/cli/-/cli-($v).tgz" | from json | get hash)
+        let platforms = (
+          $slugs
+          | transpose system slug
+          | reduce --fold {} {|row acc|
+              let url = $"($base)/cli-($row.slug)/-/cli-($row.slug)-($v).tgz"
+              let sri = (^nix store prefetch-file --json $url | from json | get hash)
+              $acc | insert $row.system { slug: $row.slug, hash: $sri }
+            }
+        )
+        let out = "packages/humanlayer/manifest.json"
+        { version: $v, cliHash: $cli_hash, platforms: $platforms } | to json --indent 2 | save --force $out
+        print $"updated ($out) to ($v)"
+      }
+    '';
+  };
 in
   stdenvNoCC.mkDerivation {
     pname = "humanlayer";
@@ -123,8 +119,8 @@ in
       runHook postInstall
     '';
 
-    passthru = lib.optionalAttrs (updateScript != null) {
-      inherit updateScript;
+    passthru = lib.optionalAttrs (updateScriptWriter != null) {
+      updateScript = updateScriptWriter updateScriptArgs;
     };
 
     meta = {

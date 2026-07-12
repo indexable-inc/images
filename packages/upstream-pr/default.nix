@@ -284,7 +284,7 @@ in
       def "ensure fork" [slug: record] {
         let exists = (do { gh repo view $"($org)/($slug.repo)" } | complete)
         if $exists.exit_code == 0 { return }
-        print $"upstream-pr: forking ($slug.owner)/($slug.repo) into ($org) (one-time)..."
+        print $"upstream-pr: forking ($slug.owner)/($slug.repo) into ($org) once..."
         gh repo fork $"($slug.owner)/($slug.repo)" --org $org --clone=false
       }
 

@@ -11,6 +11,10 @@ in
       worker = {
         replicas = 3;
         dependsOn = ["web"];
+        # Roll workers one at a time: `up` recreates at most one replica
+        # concurrently, and each must pass its health checks before the
+        # next one is touched.
+        updateStrategy.maxUnavailable = 1;
         groups = [eastWestGroup];
         modules = [./worker.nix];
       };

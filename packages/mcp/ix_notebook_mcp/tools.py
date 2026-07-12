@@ -35,7 +35,6 @@ import json
 import logging
 import os
 import re
-import sqlite3
 import uuid
 import weakref
 from typing import Annotated
@@ -47,7 +46,7 @@ from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData
 from pydantic import AnyUrl, Field
 
-from . import guide, mcp_ui, outputs, resources_bridge
+from . import guide, mailbox, mcp_ui, outputs, resources_bridge, store
 from .config import config, server_version
 from .kernel import current_kernel
 
@@ -68,6 +67,8 @@ _KERNEL_GUIDE = guide.compose(
     guide.NO_SHELL,
     guide.NU,
     guide.NIX,
+    guide.DELEGATE,
+    guide.SSH,
     guide.POLARS,
     guide.RESULT_CONTRACT,
     guide.JOBS,
@@ -247,7 +248,7 @@ async def _start_dashboard_once() -> None:
     try:
         from .cli import ensure_shared_dashboard
 
-        await asyncio.to_thread(ensure_shared_dashboard, open_browser=True)
+        await asyncio.to_thread(ensure_shared_dashboard, open_browser=False)
     except Exception:
         logger.exception("dashboard autostart failed")
 
@@ -510,9 +511,35 @@ async def python_exec(
     effective_budget = min(budget, cap)
     # `intent` is the run's human label (the dashboard feed's title); it flows to
     # the kernel as the job name and lands in the store's `name` column.
-    cell_outputs, summary = await current_kernel().python_exec(
-        code, effective_budget, intent, session=_session_id(ctx), topic=_session_topic(ctx)
-    )
+    sid = _session_id(ctx)
+    kernel = current_kernel()
+    try:
+        cell_outputs, summary = await kernel.python_exec(
+            code, effective_budget, intent, session=sid, topic=_session_topic(ctx)
+        )
+    except asyncio.CancelledError as cancelled:
+        # The client cancelled this in-flight call (`notifications/cancelled` or a
+        # transport abort; the MCP SDK cancels this handler's request scope, which
+        # surfaces here as CancelledError). Without this the kernel job the call
+        # launched keeps running in the background and executes its side effects
+        # AFTER the caller abandoned it -- the permission-gate bypass in
+        # index#2387. Interrupt STRICTLY that job (its id rode out on the
+        # exception from `kernel.python_exec`, read off the drained exec reply --
+        # index#2406) on the same path an explicit `jobs['<id>'].cancel()` takes,
+        # then re-raise so the cancellation still propagates. Cancelling by id,
+        # not a "newest running job" heuristic, avoids killing an unrelated
+        # background job the same session started earlier (the wrong-job kill in
+        # index#2406); the id is None when the cancel landed before the launched
+        # job's summary was drained, and the poke then cancels nothing. `shield`
+        # keeps the cancel poke itself from being torn down by the very
+        # cancellation we are handling. Note: Claude Code does not signal a USER
+        # REJECTION of an in-flight call, so this fires for spec-compliant cancels
+        # and Claude Code's own request timeout, not for a rejected prompt
+        # (documented in guide.CANCELLATION_NOTE).
+        launched_job_id = getattr(cancelled, "ix_launched_job_id", None)
+        with contextlib.suppress(Exception):  # best-effort: a cancel-time hiccup must not swallow the re-raise
+            await asyncio.shield(kernel.cancel_running(sid, job_id=launched_job_id))
+        raise
     rendered = outputs.to_mcp(cell_outputs)
     # The human view for an MCP Apps host: the same text/html fragments the
     # dashboard and room render for this run, carried on the reply's `_meta`
@@ -576,7 +603,10 @@ async def python_exec(
                 f"stdout, jobs['{job_id}'].result the value; history() lists recent runs.]"
             )
         )
-    return mcp_ui.ui_result(parts, fragments=ui_fragments, title=intent)
+    # The run's live weave view (minted kernel-side when the result had a
+    # human HTML view; see store.save_tool_view) rides the summary so a
+    # weave-aware host can resolve it from the result's `_meta`.
+    return mcp_ui.ui_result(parts, fragments=ui_fragments, title=intent, weave_view=summary.get("weave_view"))
 
 
 @mcp.tool(
@@ -586,7 +616,11 @@ async def python_exec(
         "Watch a GitHub pull request in the dashboard. Creates a live PR resource "
         "nested under this task, lists required checks and actions with elapsed "
         "time, enables auto merge by default, and notifies the CLI when the PR "
-        "merges, fails, or times out. Use this instead of hand-written PR polling."
+        "merges, fails, or times out. When the PR is already mergeable (no "
+        "blocking required checks), auto merge is NOT armed, since arming would "
+        "merge instantly before any watching: the result says so, and the caller "
+        "merges explicitly once its own validation is green. Use this instead of "
+        "hand-written PR polling."
     ),
 )
 async def pr_watch(
@@ -646,6 +680,7 @@ async def pr_watch(
         [header, *(item for item in rendered if getattr(item, "text", None) != "(no output)")],
         fragments=mcp_ui.html_fragments(cell_outputs),
         title=f"watch PR {pr}",
+        weave_view=summary.get("weave_view") if summary else None,
     )
 
 
@@ -674,11 +709,58 @@ async def read(
     span = f":{start}-{end}" if start is not None and end is not None else (f":{start}" if start is not None else "")
     name = f"read {target}{span}"
     cell_outputs, summary = await current_kernel().python_exec(code, budget=30.0, name=name, session=sid)
-    if summary is not None and summary.get("status") == "error" and summary.get("error"):
+    status = summary.get("status") if summary is not None else None
+    if summary is not None and status == "error" and summary.get("error"):
+        # The in-kernel read itself raised (bad expression, unreadable path):
+        # the traceback is the useful answer, so return it as the content.
         return [outputs.text(summary["error"])]
+    if summary is not None and status == "wedged":
+        # The kernel bridge could not execute the read: a wedged cell holds the
+        # kernel's one event loop, so nothing was read. Fail loudly -- a quiet
+        # empty reply here is indistinguishable from reading an empty file, and
+        # was misread exactly that way (index#2381).
+        raise McpError(
+            ErrorData(
+                code=types.INTERNAL_ERROR,
+                message=(
+                    f"read {target}: kernel unavailable, nothing was read. "
+                    + str(summary.get("error") or "The kernel did not respond.")
+                ),
+            )
+        )
     rendered = outputs.to_mcp(cell_outputs)
     content = [item for item in rendered if getattr(item, "text", None) != "(no output)"]
-    return content or rendered
+    if content:
+        return content
+    if status == "done":
+        # The read COMPLETED and produced no text: the file or value is
+        # genuinely empty. Only this state may report emptiness (index#2381).
+        return rendered
+    if status == "running" and summary is not None and summary.get("id"):
+        # The kernel is healthy but the read outlived its foreground budget
+        # (a slow expression, a giant file): point at the live job instead of
+        # posing as empty output.
+        job_id = summary["id"]
+        return [
+            outputs.text(
+                f"[read {target} is still running as jobs[{job_id!r}] after its 30s "
+                f"foreground budget; await or page it via python_exec.]"
+            )
+        ]
+    # No output and no completed job summary: the in-kernel runtime never ran
+    # the read (dead bridge, cancelled run, stale build). Never report this as
+    # empty success (index#2381).
+    raise McpError(
+        ErrorData(
+            code=types.INTERNAL_ERROR,
+            message=(
+                f"read {target}: kernel unavailable, nothing was read "
+                "(the read produced no output and no completed job summary"
+                + (f"; status {status!r}" if status is not None else "")
+                + ")."
+            ),
+        )
+    )
 
 
 @mcp.tool(structured_output=False, description=guide.TRACE)
@@ -689,29 +771,16 @@ async def kernel_trace(ctx: Context | None = None) -> str:
     return await current_kernel().dump_trace()
 
 
-# The reply tool's store connection, opened lazily on first reply. The tool runs
-# in the server process (the kernel's `events` writes come from its own
-# connection), so it needs its own handle on the shared WAL store.
-_reply_conn: sqlite3.Connection | None = None
+@mcp.tool(structured_output=False, description=guide.RESTART)
+async def kernel_restart(ctx: Context | None = None) -> str:
+    await _start_dashboard_once()
+    await _identify_client_once(ctx)
+    await _require_session_name(ctx, intent="kernel restart")
+    return json.dumps(await current_kernel().restart_now())
 
 
-def _reply_store() -> sqlite3.Connection:
-    global _reply_conn
-    if _reply_conn is None:
-        # `store_path` is None outside `serve` (e.g. an embedder driving the
-        # tools directly), which needs the same error as having no config at all.
-        try:
-            path = config().store_path
-        except RuntimeError:
-            path = None
-        if path is None:
-            raise McpError(
-                ErrorData(code=types.INTERNAL_ERROR, message="no store configured; reply needs `ix-mcp serve`")
-            )
-        from . import store
-
-        _reply_conn = store.connect(path)
-    return _reply_conn
+# The reply tool runs in the serve process, so it writes directly to the
+# tier-3 mailbox singleton instead of round-tripping through the data API.
 
 
 @mcp.tool(structured_output=False, description=guide.REPLY)
@@ -727,17 +796,24 @@ async def reply(
     await _identify_client_once(ctx)
     # Deliberately not gated on session_set_name: a reply answers a channel event
     # (often the session's very first act) and creates no dashboard run to label.
-    from . import store
-
-    conn = _reply_store()
-    if not store.resource_live(conn, resource):
+    box = mailbox.get_mailbox()
+    # Resource liveness is durable Weave state. If that check is unavailable,
+    # keep reply usable for same-process resources whose events mailbox is live.
+    live = True
+    with contextlib.suppress(Exception):
+        path = config().store_path
+        if path is not None:
+            db = store.AsyncConn(path)
+            live = await db.run(store.resource_live, resource)
+            await db.close()
+    if not live:
         raise McpError(
             ErrorData(
                 code=types.INVALID_PARAMS,
                 message=f"no live resource {resource!r}; pass the id from the <channel resource=...> attribute",
             )
         )
-    store.add_event(conn, resource=resource, kind="reply", body=json.dumps({"text": text}))
+    box.add_event(resource=resource, kind="reply", body=json.dumps({"text": text}))
     return [outputs.text("sent")]
 
 

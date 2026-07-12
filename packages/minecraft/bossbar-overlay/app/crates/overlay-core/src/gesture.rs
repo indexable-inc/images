@@ -12,8 +12,8 @@
 //! delta into the logical-point translation the caller adds to the window's
 //! position.
 
-use winit::dpi::PhysicalPosition;
-use winit::event::MouseScrollDelta;
+use winit::dpi::{LogicalPosition, PhysicalPosition};
+use winit::event::{MouseScrollDelta, TouchPhase};
 
 /// Logical points to move per `LineDelta` notch, for a notched mouse wheel (a
 /// trackpad reports precise `PixelDelta` instead). One notch nudges the window a
@@ -41,6 +41,35 @@ pub fn scroll_drag_delta(delta: MouseScrollDelta, scale_factor: f64) -> (f64, f6
         MouseScrollDelta::PixelDelta(p) => (-p.x / scale_factor, -p.y / scale_factor),
         MouseScrollDelta::LineDelta(x, y) => (-(x as f64) * LINE_POINTS, -(y as f64) * LINE_POINTS),
     }
+}
+/// Apply one scroll event to a window's last known logical position.
+#[must_use]
+pub fn scroll_drag_position(
+    current: Option<LogicalPosition<f64>>,
+    delta: MouseScrollDelta,
+    scale_factor: f64,
+) -> Option<LogicalPosition<f64>> {
+    let current = current?;
+    let (dx, dy) = scroll_drag_delta(delta, scale_factor);
+    (dx != 0.0 || dy != 0.0).then(|| LogicalPosition::new(current.x + dx, current.y + dy))
+}
+
+/// Whether this event is the persistence boundary for a scroll drag.
+#[must_use]
+pub fn scroll_drag_settled(delta: MouseScrollDelta, phase: TouchPhase) -> bool {
+    phase == TouchPhase::Ended || matches!(delta, MouseScrollDelta::LineDelta(..))
+}
+
+/// Return the current position exactly when a scroll gesture should persist it.
+#[must_use]
+pub(crate) fn settled_scroll_position(
+    current: Option<LogicalPosition<f64>>,
+    delta: MouseScrollDelta,
+    phase: TouchPhase,
+) -> Option<LogicalPosition<f64>> {
+    scroll_drag_settled(delta, phase)
+        .then_some(current)
+        .flatten()
 }
 
 /// Tracks one window's left-button gesture.
@@ -137,7 +166,10 @@ mod tests {
         let mut g = DragClick::new(5.0);
         g.cursor_moved(at(10.0, 10.0));
         g.pressed();
-        assert!(g.cursor_moved(at(20.0, 10.0)), "crossing threshold starts the drag");
+        assert!(
+            g.cursor_moved(at(20.0, 10.0)),
+            "crossing threshold starts the drag"
+        );
         assert!(g.dragging());
         assert!(!g.released(), "a drag is not a click");
         assert!(!g.dragging(), "release clears the drag");
@@ -148,8 +180,7 @@ mod tests {
         // A trackpad PixelDelta is physical px; dividing by the scale factor gives
         // the logical points the window position is in. The sign is negated so the
         // window tracks the scroll gesture rather than the content direction.
-        let (dx, dy) =
-            scroll_drag_delta(MouseScrollDelta::PixelDelta(at(20.0, -8.0)), 2.0);
+        let (dx, dy) = scroll_drag_delta(MouseScrollDelta::PixelDelta(at(20.0, -8.0)), 2.0);
         assert_eq!((dx, dy), (-10.0, 4.0));
     }
 
@@ -157,9 +188,11 @@ mod tests {
     fn window_moves_opposite_the_reported_scroll() {
         // A winit scroll delta points the way the content would scroll; the window
         // moves the other way so it follows the gesture (grab-and-move).
-        let (dx, dy) =
-            scroll_drag_delta(MouseScrollDelta::PixelDelta(at(5.0, 7.0)), 1.0);
-        assert!(dx < 0.0 && dy < 0.0, "window moves opposite the content-scroll delta");
+        let (dx, dy) = scroll_drag_delta(MouseScrollDelta::PixelDelta(at(5.0, 7.0)), 1.0);
+        assert!(
+            dx < 0.0 && dy < 0.0,
+            "window moves opposite the content-scroll delta"
+        );
     }
 
     #[test]
@@ -168,5 +201,19 @@ mod tests {
         // LineDelta is in lines, independent of the scale factor; sign negated.
         assert_eq!(dx, 0.0);
         assert_eq!(dy, LINE_POINTS);
+    }
+
+    #[test]
+    fn scroll_position_and_persistence_boundary_are_shared() {
+        let delta = MouseScrollDelta::PixelDelta(at(4.0, -6.0));
+        let moved = scroll_drag_position(Some(LogicalPosition::new(10.0, 20.0)), delta, 2.0)
+            .expect("non-zero delta moves");
+        assert_eq!(moved, LogicalPosition::new(8.0, 23.0));
+        assert!(!scroll_drag_settled(delta, TouchPhase::Moved));
+        assert!(scroll_drag_settled(delta, TouchPhase::Ended));
+        assert!(scroll_drag_settled(
+            MouseScrollDelta::LineDelta(0.0, 1.0),
+            TouchPhase::Moved
+        ));
     }
 }

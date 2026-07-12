@@ -389,7 +389,7 @@
     # so the injection guards below can compare against the real generated keys
     # without a second IFD (the import is memoized; only the function call
     # differs). See mkPrebuiltLibraryUnit.
-    importUnits = seam: let
+    importUnits = rustToolchain: seam: let
       # The renderer passes `null` for host units (build scripts, proc-macros)
       # that have no `--target`; resolve that to the host triple before handing
       # it to the policy hook, which deliberately rejects a non-triple platform.
@@ -419,7 +419,8 @@
       import unitsNix (
         {
           inherit pkgs vendorDir vendorSources;
-          inherit (args) src rustToolchain;
+          inherit (args) src;
+          inherit rustToolchain;
           extraRustcArgs = rawArgs.extraRustcArgs or [];
           inherit workspaceRoot;
           # Scanner for the opt-in panic-freedom policy. The rendered check
@@ -456,7 +457,7 @@
 
     # The from-source units / libraries, before any prebuilt injection. Used
     # only to validate the injection keys; never built unless referenced.
-    generatedView = importUnits {
+    generatedView = importUnits args.rustToolchain {
       extraUnits = {};
       extraLibraries = {};
     };
@@ -543,7 +544,25 @@
       "cargoUnit.buildWorkspace: invalid prebuilt-unit injection:\n"
       + lib.concatStringsSep "\n" injectionProblems
     );
-      importUnits {inherit extraUnits extraLibraries;};
+      importUnits args.rustToolchain {inherit extraUnits extraLibraries;};
+    # Clippy is a rustc_private binary tied to its pinned nightly. Import a
+    # separate graph with that exact toolchain so every dependency rlib it reads
+    # was produced by the same rustc ABI. The normal build and test graph keeps
+    # the repository toolchain and its prebuilt injections.
+    clippyUnits =
+      if perUnitClippyEnabled
+      then
+        importUnits args.policy.clippy.package.toolchain {
+          extraUnits = {};
+          extraLibraries = {};
+        }
+      else {};
+    workspaceUnits =
+      units
+      // lib.optionalAttrs perUnitClippyEnabled {
+        inherit (clippyUnits) clippyByPackage;
+      };
+
     targetSetNames = let
       targetCount = length cargoTargets;
     in
@@ -673,7 +692,7 @@
         echo "ran ''${#target_names[@]} cargo-unit test targets" > "$out/result"
       '';
   in
-    units
+    workspaceUnits
     // {
       inherit
         unitGraphJson

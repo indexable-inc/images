@@ -42,10 +42,16 @@ let
   # nixpkgs' own whole-source patches for this version: currently just the
   # aarch64-darwin flaky-test skip (empty on every other system). `overrideSource`
   # resets the scope's `patches` to `[]`, so re-apply them here to match a stock
-  # `nix_2_34` build; our own delta rides in `patchedSrc`, not here.
-  patchesCommon = lib.optional pkgs.stdenv.hostPlatform.isDarwin (
-    pkgs.path + "/pkgs/tools/package-management/nix/patches/skip-flaky-darwin-tests.patch"
-  );
+  # `nix_2_34` build; our own delta rides in `patchedSrc`, not here. Gated on
+  # existence because the patch lives in the consumer's nixpkgs tree, not ours:
+  # nixpkgs 26.11pre dropped it, and a flake that instantiates this package
+  # with such a nixpkgs must still evaluate (we already skip test suites on
+  # darwin, so losing the flaky-test skip changes nothing we run).
+  flakySkipPatch = pkgs.path + "/pkgs/tools/package-management/nix/patches/skip-flaky-darwin-tests.patch";
+  patchesCommon =
+    lib.optional
+    (pkgs.stdenv.hostPlatform.isDarwin && builtins.pathExists flakySkipPatch)
+    flakySkipPatch;
 
   # The whole patched pipeline as a function of the applied series, so the
   # per-attempt-patch closure gates below rebuild the SAME logic with a

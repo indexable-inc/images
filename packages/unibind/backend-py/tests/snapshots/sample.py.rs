@@ -100,7 +100,7 @@ mod __unibind_py_sample {
         id: u64,
         timeout_ms: u64,
     ) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::PyAny>> {
-        ::unibind_runtime::py::future_into_py(
+        ::unibind_py_runtime::future_into_py(
             py,
             async move {
                 super::sample::fetch_row(id, timeout_ms)
@@ -115,7 +115,7 @@ mod __unibind_py_sample {
     fn head<'py>(
         py: ::pyo3::Python<'py>,
     ) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::PyAny>> {
-        ::unibind_runtime::py::future_into_py(
+        ::unibind_py_runtime::future_into_py(
             py,
             async move { ::pyo3::PyResult::Ok(super::sample::head().await) },
         )
@@ -160,7 +160,7 @@ mod __unibind_py_sample {
         py: ::pyo3::Python<'py>,
         store: ::std::string::String,
     ) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::PyAny>> {
-        ::unibind_runtime::py::future_into_py(
+        ::unibind_py_runtime::future_into_py(
             py,
             async move {
                 super::sample::follow(store)
@@ -176,7 +176,7 @@ mod __unibind_py_sample {
     fn cursor<'py>(
         py: ::pyo3::Python<'py>,
     ) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::PyAny>> {
-        ::unibind_runtime::py::future_into_py(
+        ::unibind_py_runtime::future_into_py(
             py,
             async move {
                 ::pyo3::PyResult::Ok(
@@ -222,7 +222,7 @@ mod __unibind_py_sample {
             id: u64,
         ) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::PyAny>> {
             let inner = ::std::sync::Arc::clone(&self.inner);
-            ::unibind_runtime::py::future_into_py(
+            ::unibind_py_runtime::future_into_py(
                 py,
                 async move { inner.get(id).await.map_err(::pyo3::PyErr::from) },
             )
@@ -240,7 +240,7 @@ mod __unibind_py_sample {
         ) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::PyAny>> {
             let first = !self.closed.swap(true, ::std::sync::atomic::Ordering::SeqCst);
             let inner = ::std::sync::Arc::clone(&self.inner);
-            ::unibind_runtime::py::future_into_py(
+            ::unibind_py_runtime::future_into_py(
                 py,
                 async move {
                     if first {
@@ -256,7 +256,7 @@ mod __unibind_py_sample {
         ) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::PyAny>> {
             let py = slf.py();
             let owned: ::pyo3::Py<Self> = slf.unbind();
-            ::unibind_runtime::py::future_into_py(
+            ::unibind_py_runtime::future_into_py(
                 py,
                 async move { ::pyo3::PyResult::Ok(owned) },
             )
@@ -271,7 +271,7 @@ mod __unibind_py_sample {
         ) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::PyAny>> {
             let first = !self.closed.swap(true, ::std::sync::atomic::Ordering::SeqCst);
             let inner = ::std::sync::Arc::clone(&self.inner);
-            ::unibind_runtime::py::future_into_py(
+            ::unibind_py_runtime::future_into_py(
                 py,
                 async move {
                     if first {
@@ -323,12 +323,12 @@ mod __unibind_py_sample {
     ///Pull-based: each `__anext__` polls exactly one item, so the producer only runs as fast as the consumer awaits.
     #[::pyo3::pyclass(name = "TicksStream", frozen)]
     struct UnibindStreamTicks {
-        stream: ::unibind_runtime::py::SharedStream<u64>,
+        stream: ::unibind_py_runtime::SharedStream<u64>,
     }
     impl UnibindStreamTicks {
         fn __unibind_wrap(stream: ::unibind_runtime::UniStream<u64>) -> Self {
             Self {
-                stream: ::unibind_runtime::py::SharedStream::new(stream),
+                stream: ::unibind_py_runtime::SharedStream::new(stream),
             }
         }
     }
@@ -342,7 +342,7 @@ mod __unibind_py_sample {
             py: ::pyo3::Python<'py>,
         ) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::PyAny>> {
             let next = self.stream.next();
-            ::unibind_runtime::py::future_into_py(
+            ::unibind_py_runtime::future_into_py(
                 py,
                 async move {
                     match next.await {
@@ -362,14 +362,14 @@ mod __unibind_py_sample {
     ///Pull-based: each `__anext__` polls exactly one item, so the producer only runs as fast as the consumer awaits.
     #[::pyo3::pyclass(name = "FollowStream", frozen)]
     struct UnibindStreamFollow {
-        stream: ::unibind_runtime::py::SharedStream<super::sample::Row>,
+        stream: ::unibind_py_runtime::SharedStream<super::sample::Row>,
     }
     impl UnibindStreamFollow {
         fn __unibind_wrap(
             stream: ::unibind_runtime::UniStream<super::sample::Row>,
         ) -> Self {
             Self {
-                stream: ::unibind_runtime::py::SharedStream::new(stream),
+                stream: ::unibind_py_runtime::SharedStream::new(stream),
             }
         }
     }
@@ -383,7 +383,7 @@ mod __unibind_py_sample {
             py: ::pyo3::Python<'py>,
         ) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::PyAny>> {
             let next = self.stream.next();
-            ::unibind_runtime::py::future_into_py(
+            ::unibind_py_runtime::future_into_py(
                 py,
                 async move {
                     match next.await {

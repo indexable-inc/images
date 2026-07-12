@@ -1,4 +1,4 @@
-# Demo for the `exportHistory` git-fetcher patch (RFC 0010): render a
+# Demo for the `exportHistory` git-fetcher patch (RFC 0011): render a
 # Markdown changelog for one subtree of an input, entirely from eval data.
 #
 # Run with the patched nix (the stock daemon/client lacks the feature):

@@ -16,7 +16,8 @@ one that never consults the lookup path.
 Switch to the non-throwing overload: an entry that cannot be stat'd is
 simply not offered as a default lookup path, matching how a missing entry
 already behaves.
----
+
+Assisted-by: Claude <noreply@anthropic.com>
 
 diff --git a/src/libexpr/eval-settings.cc b/src/libexpr/eval-settings.cc
 index 5cf0ae0..69c2494 100644

@@ -1,46 +1,11 @@
 (function () {
   var VERSION = "2.0.0";
-
-  // ---------------------------------------------------------------------------
-  // Shared utilities
-  // ---------------------------------------------------------------------------
-
-  function clean(text) {
-    return (text || "").replace(/\s+/g, " ").trim();
-  }
-
-  function wait(ms) {
-    return new Promise(function (resolve) {
-      setTimeout(resolve, ms);
-    });
-  }
-
-  function isVisible(el) {
-    if (!el || typeof el.getBoundingClientRect !== "function") return false;
-
-    var rect = el.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return false;
-
-    var style = window.getComputedStyle(el);
-    return style.display !== "none" && style.visibility !== "hidden";
-  }
-
-  function click(el) {
-    if (!el) return false;
-
-    ["pointerdown", "mousedown", "mouseup", "click"].forEach(function (type) {
-      el.dispatchEvent(
-        new MouseEvent(type, {
-          bubbles: true,
-          cancelable: true,
-          composed: true,
-          view: window,
-        }),
-      );
-    });
-
-    return true;
-  }
+  var utils = window.__antithesisBrowserUtils;
+  if (!utils) throw new Error("inject antithesis browser-utils.js first");
+  var clean = utils.clean;
+  var wait = utils.wait;
+  var isVisible = utils.isVisible;
+  var click = utils.click;
 
   function setNativeValue(el, value) {
     var proto = el instanceof HTMLTextAreaElement
@@ -219,17 +184,7 @@
       };
     },
 
-    waitForReady: function (options) {
-      return waitForReady(
-        function () {
-          return simplifiedApi.loadingFinished();
-        },
-        function () {
-          return simplifiedApi.loadingStatus();
-        },
-        options,
-      );
-    },
+    waitForReady: utils.readiness(waitForReady, function () { return simplifiedApi; }),
 
     getMoment: function () {
       var modeError = requireSimplifiedMode();
@@ -555,17 +510,7 @@
       };
     },
 
-    waitForReady: function (options) {
-      return waitForReady(
-        function () {
-          return notebookApi.loadingFinished();
-        },
-        function () {
-          return notebookApi.loadingStatus();
-        },
-        options,
-      );
-    },
+    waitForReady: utils.readiness(waitForReady, function () { return notebookApi; }),
 
     getSource: function () {
       if (!window.editor || typeof window.editor.getValue !== "function") {

@@ -2,7 +2,7 @@
 //! [`source_meta`] documents for the multi-source `search` store.
 //!
 //! # Grain
-//! One [`Document`] per transcript **message** (a `user`/`assistant` line that
+//! One [`source_meta::Document`] per transcript **message** (a `user`/`assistant` line that
 //! carries content). `external_id = "claude:{session_id}:{uuid}"`, so an
 //! append-only transcript re-ingests only its new messages: the content-hash
 //! reconcile in `search-core` skips everything already uploaded.
@@ -28,10 +28,9 @@ mod transcript;
 use std::path::{Path, PathBuf};
 
 use snafu::ResultExt as _;
-use source_meta::{Document, Source, SourceAdapter};
 
 pub use crate::error::Error;
-use crate::error::{HostNameSnafu, ReadDirSnafu, Result};
+use crate::error::{HostNameSnafu, Result};
 pub use crate::record::Message;
 use crate::record::MessageOrigin;
 
@@ -42,7 +41,7 @@ pub const SOURCE_TAG: &str = "claude_history";
 ///
 /// Construct with [`ClaudeHistoryExport::open`], which recursively reads every
 /// `*.jsonl` transcript under a directory (e.g. `~/.claude/projects`). Parsing
-/// happens up front so [`SourceAdapter::documents`] is cheap to start.
+/// happens up front so [`source_meta::SourceAdapter::documents`] is cheap to start.
 #[derive(Debug)]
 #[must_use]
 pub struct ClaudeHistoryExport {
@@ -100,29 +99,20 @@ impl ClaudeHistoryExport {
 
     /// The parsed messages, in transcript order across all sessions. The R2
     /// parquet sink consumes these as rows; the Mixedbread sink uses the
-    /// [`SourceAdapter`] projection instead.
+    /// [`source_meta::SourceAdapter`] projection instead.
     #[must_use]
     pub fn messages(&self) -> &[Message] {
         &self.messages
     }
 }
 
-impl SourceAdapter for ClaudeHistoryExport {
-    type Error = Error;
-
-    fn source(&self) -> Source {
-        Source::new(SOURCE_TAG)
-    }
-
-    fn documents(&self) -> impl Iterator<Item = Result<Document, Error>> + Send {
-        // Clone into an owned iterator so the result is `'static + Send`,
-        // independent of `&self` (mirrors the slack/linear adapters).
-        self.messages
-            .clone()
-            .into_iter()
-            .map(Message::into_document)
-    }
-}
+source_meta::impl_owned_source_adapter!(
+    ClaudeHistoryExport,
+    Error,
+    SOURCE_TAG,
+    messages,
+    Message::into_document
+);
 
 /// Recursively collect `*.jsonl` transcript files under `dir`.
 ///
@@ -144,36 +134,7 @@ impl SourceAdapter for ClaudeHistoryExport {
 /// (not a silently empty success). Absence is normal: most homes have no Claude
 /// history, and the privileged fleet run walks many of them.
 fn collect_transcripts(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    // `read_dir` follows a symlinked `dir` (the explicitly named root); the
-    // per-entry `file_type` below reports the entry itself without following, so
-    // nothing reached through the tree can be a symlink.
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(error).context(ReadDirSnafu {
-                path: dir.to_path_buf(),
-            });
-        }
-    };
-    for entry in entries {
-        let entry = entry.context(ReadDirSnafu {
-            path: dir.to_path_buf(),
-        })?;
-        let file_type = entry.file_type().context(ReadDirSnafu {
-            path: dir.to_path_buf(),
-        })?;
-        if file_type.is_symlink() {
-            continue;
-        }
-        let path = entry.path();
-        if file_type.is_dir() {
-            collect_transcripts(&path, out)?;
-        } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == "jsonl") {
-            out.push(path);
-        }
-    }
-    Ok(())
+    source_meta::files::collect_jsonl_no_follow(dir, out, crate::error::read_dir)
 }
 
 /// Derive a file's fallback identity tags: project from the parent directory

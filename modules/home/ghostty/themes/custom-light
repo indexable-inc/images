@@ -1,0 +1,32 @@
+# Custom Light Theme (based on iTerm2 colors)
+# Light background with dark text
+
+# Main colors
+background = f9f9f9
+foreground = 2a2c33
+
+# ANSI color palette
+palette = 0=000000
+palette = 1=db3f39
+palette = 2=42933e
+palette = 3=855504
+palette = 4=325eee
+palette = 5=930093
+palette = 6=0e70ae
+palette = 7=8f9096
+palette = 8=2a2c33
+palette = 9=db3f39
+palette = 10=42933e
+palette = 11=855504
+palette = 12=325eee
+palette = 13=930093
+palette = 14=0e70ae
+palette = 15=ffffff
+
+# Cursor colors
+cursor-color = bbbbbb
+cursor-text = 2a2c33
+
+# Selection colors
+selection-background = e9e9e9
+selection-foreground = 332c2a

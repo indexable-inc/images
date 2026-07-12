@@ -20,32 +20,8 @@ fn state_dir() -> PathBuf {
         .map_or_else(|| crate::home().join(".claude/.review-state"), PathBuf::from)
 }
 
-/// `session_id` is interpolated into a file path; accept only a plain filename
-/// component so a crafted value cannot escape the state dir.
-fn safe_session(payload: &Value) -> Option<String> {
-    let session = payload.get("session_id").and_then(Value::as_str)?;
-    if session.is_empty() || session == "." || session == ".." || session.contains('/') {
-        return None;
-    }
-    Some(session.to_owned())
-}
-
 fn marker_path(session: &str) -> PathBuf {
     state_dir().join(format!("{session}.changed"))
-}
-
-/// True when this hook payload fired inside a subagent (Task tool) rather than
-/// the main thread. Claude Code populates `agent_id` ONLY inside a subagent call
-/// (`PostToolUse` carries it; the docs call it the way to "distinguish subagent
-/// hook calls from main-thread calls"), so its presence is the authoritative
-/// author signal. A subagent's `PostToolUse` reuses the PARENT `session_id`, so
-/// without this check its work-in-progress lands in the parent's marker and the
-/// Stop gate blames the main session for edits it never made.
-fn is_subagent(payload: &Value) -> bool {
-    payload
-        .get("agent_id")
-        .and_then(Value::as_str)
-        .is_some_and(|id| !id.is_empty())
 }
 
 /// `PostToolUse(Write|Edit|MultiEdit|NotebookEdit)`: record the edited path.
@@ -62,10 +38,10 @@ pub fn review_log_edit() {
     // its own diff, and a still-running background subagent's WIP must not arm the
     // parent's gate. Drop subagent-authored edits here so the gate counts only the
     // main session's own tool calls.
-    if is_subagent(&payload) {
+    if crate::is_subagent(&payload) {
         return;
     }
-    let Some(session) = safe_session(&payload) else {
+    let Some(session) = crate::safe_session(&payload) else {
         return;
     };
     // Write/Edit/MultiEdit use file_path; NotebookEdit uses notebook_path.
@@ -152,7 +128,7 @@ pub fn review_gate() {
     let Ok(payload) = serde_json::from_str::<Value>(&input) else {
         return;
     };
-    let Some(session) = safe_session(&payload) else {
+    let Some(session) = crate::safe_session(&payload) else {
         return;
     };
     let marker = marker_path(&session);
@@ -220,7 +196,8 @@ pub fn review_gate() {
 
 #[cfg(test)]
 mod tests {
-    use super::{GateAction, gate_action, is_subagent, safe_session};
+    use super::{GateAction, gate_action};
+    use crate::{is_subagent, safe_session};
     use serde_json::json;
 
     #[test]

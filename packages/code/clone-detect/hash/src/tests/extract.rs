@@ -47,8 +47,11 @@ fn only_small_functions() {
 }
 
 #[test]
-fn with_impl_block() {
-    let source = r"
+fn significant_nodes_cover_rust_impls_and_python_classes() {
+    let cases = [
+        (
+            parse_rust as fn(&str) -> ast_merge_ast::Tree,
+            r"
 impl Foo {
     fn method1(&self) {
         let x = 1;
@@ -62,11 +65,32 @@ impl Foo {
         a * b
     }
 }
-";
+",
+        ),
+        (
+            parse_python as fn(&str) -> ast_merge_ast::Tree,
+            r"
+def small():
+    pass
 
-    let tree = parse_rust(source);
-    let nodes = significant_nodes(&tree, 3, 5);
-    assert!(!nodes.is_empty());
+def larger():
+    x = 1
+    y = 2
+    z = x + y
+    return z
+
+class Foo:
+    def __init__(self):
+        self.a = 1
+        self.b = 2
+",
+        ),
+    ];
+
+    for (parse, source) in cases {
+        let tree = parse(source);
+        assert!(!significant_nodes(&tree, 3, 5).is_empty());
+    }
 }
 
 #[test]
@@ -91,26 +115,4 @@ fn test_function() {
     assert!(node.byte_range.start < node.byte_range.end);
     assert!(node.start_line <= node.end_line);
     assert!(node.node_count > 0);
-}
-
-#[test]
-fn python_significant_nodes() {
-    let source = r"
-def small():
-    pass
-
-def larger():
-    x = 1
-    y = 2
-    z = x + y
-    return z
-
-class Foo:
-    def __init__(self):
-        self.a = 1
-        self.b = 2
-";
-    let tree = parse_python(source);
-    let nodes = significant_nodes(&tree, 3, 5);
-    assert!(!nodes.is_empty());
 }

@@ -55,7 +55,7 @@ After the page loads, inject the debugger runtime. This is required for **both**
 simplified and advanced modes:
 
 ```bash
-cat assets/antithesis-debug.js \
+cat ../antithesis/assets/browser-utils.js assets/antithesis-debug.js \
   | agent-browser --session "$SESSION" eval --stdin
 ```
 
@@ -63,7 +63,7 @@ This registers methods on `window.__antithesisDebug` with three namespaces:
 `simplified`, `notebook`, and `actions`.
 
 If `window.__antithesisDebug` is missing after a navigation or page reload,
-reinject `assets/antithesis-debug.js` and retry.
+rerun the combined injection command and retry.
 
 ## Detecting and switching modes
 

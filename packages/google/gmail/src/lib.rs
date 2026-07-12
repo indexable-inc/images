@@ -53,6 +53,26 @@ pub const USER_ME: &str = "me";
 /// `maxResults` at 500 per page; larger queries follow `nextPageToken`.
 pub(crate) const MAX_PAGE_SIZE: usize = 500;
 
+pub(crate) trait ListPage: serde::de::DeserializeOwned {
+    type Item;
+
+    fn into_parts(self) -> PageParts<Self::Item>;
+}
+
+pub(crate) struct PageParts<T> {
+    items: Vec<T>,
+    next_page_token: Option<String>,
+}
+
+impl<T> PageParts<T> {
+    const fn new(items: Vec<T>, next_page_token: Option<String>) -> Self {
+        Self {
+            items,
+            next_page_token,
+        }
+    }
+}
+
 /// The Gmail / Google API error envelope:
 /// `{"error": {"code": …, "message": …, "status": …, "errors": [...]}}`.
 #[derive(Deserialize)]
@@ -136,6 +156,50 @@ impl Client {
     pub(crate) async fn get(&self, url: Url) -> Result<reqwest::RequestBuilder> {
         let token = self.auth.access_token().await?;
         Ok(self.http.get(url).bearer_auth(token))
+    }
+
+    pub(crate) async fn list_message_resources<P>(
+        &self,
+        resource: &str,
+        query: &MessageQuery,
+    ) -> Result<Vec<P::Item>>
+    where
+        P: ListPage,
+    {
+        let mut items = Vec::new();
+        let mut page_token: Option<String> = None;
+
+        while items.len() < query.max_results {
+            let remaining = query.max_results - items.len();
+            let mut url = self.user_url([resource]);
+            {
+                let mut pairs = url.query_pairs_mut();
+                pairs.append_pair("maxResults", &remaining.min(MAX_PAGE_SIZE).to_string());
+                if query.include_spam_trash {
+                    pairs.append_pair("includeSpamTrash", "true");
+                }
+                if let Some(text) = &query.q {
+                    pairs.append_pair("q", text);
+                }
+                for label in &query.label_ids {
+                    pairs.append_pair("labelIds", label);
+                }
+                if let Some(next) = &page_token {
+                    pairs.append_pair("pageToken", next);
+                }
+            }
+
+            let response = self.get(url).await?.send().await.context(HttpSnafu)?;
+            let page = decode::<P>(response).await?.into_parts();
+            items.extend(page.items);
+            match page.next_page_token {
+                Some(next) if items.len() < query.max_results => page_token = Some(next),
+                _ => break,
+            }
+        }
+
+        items.truncate(query.max_results);
+        Ok(items)
     }
 
     /// A bearer-authenticated `POST` builder against `url`.

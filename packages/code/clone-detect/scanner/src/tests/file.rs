@@ -26,42 +26,37 @@ fn foo() {
 }
 
 #[test]
-fn javascript() {
-    let dir = tempfile::tempdir().unwrap();
-    let content = r"
+fn scans_javascript_and_python() {
+    let cases = [
+        (
+            "test.js",
+            r"
 function calculate(a, b) {
     const sum = a + b;
     const product = a * b;
     return sum + product;
 }
-";
-    let path = create_temp_file(dir.path(), "test.js", content);
-
-    let scanner = Scanner::with_defaults();
-    let result = scanner.file(&path).unwrap();
-
-    assert!(result.is_some());
-    let scanned_file = result.unwrap();
-    assert_eq!(scanned_file.language, Lang::JavaScript);
-}
-
-#[test]
-fn python() {
-    let dir = tempfile::tempdir().unwrap();
-    let content = r"
+",
+            Lang::JavaScript,
+        ),
+        (
+            "test.py",
+            r"
 def calculate(a, b):
     sum_val = a + b
     product = a * b
     return sum_val + product
-";
-    let path = create_temp_file(dir.path(), "test.py", content);
+",
+            Lang::Python,
+        ),
+    ];
 
-    let scanner = Scanner::with_defaults();
-    let result = scanner.file(&path).unwrap();
-
-    assert!(result.is_some());
-    let scanned_file = result.unwrap();
-    assert_eq!(scanned_file.language, Lang::Python);
+    for (name, content, language) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        let path = create_temp_file(dir.path(), name, content);
+        let scanned = Scanner::with_defaults().file(&path).unwrap().unwrap();
+        assert_eq!(scanned.language, language);
+    }
 }
 
 #[test]

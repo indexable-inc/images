@@ -6,5 +6,8 @@
     "version": "0.1.10",
     "url": "https://github.com/dashbitco/lazy_html/releases/download/v0.1.10/lazy_html-nif-2.16-x86_64-linux-gnu-0.1.10.tar.gz",
     "hash": "sha256-Ni0JKbP6OJqQ8rT08VnF/KWjiyigoVUjqSZ3LRU9dBo="
+  },
+  "mix-deps-prod": {
+    "hash": "sha256-gLhEvh0FK4EdUUnp0498bKFcBZx2cRSRMG4aAEsyR44="
   }
 }

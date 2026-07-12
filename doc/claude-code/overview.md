@@ -56,7 +56,21 @@ agent content from Nix outputs instead of invoking `nix build` interactively.
 `env_defaults` are applied only if the user has not set them
 (`default.nix:147-152`, `382`): `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` keeps every
 session on the standard 200K window instead of the silently auto-upgraded 1M
-window (uncached, slower per turn). Re-enable per machine with
+window (uncached, slower per turn, ~5x the input price; past-the-window work
+belongs in subagents, and the smaller window makes auto-compaction trigger
+sooner). Verified against 2.1.197, the flag gates every 1M path in the CLI:
+the explicit `[1m]` model suffix, the silent auto-upgrade on eligible models,
+honoring a `context-1m` beta header, and the built-in `[1m]` rows in `/model`.
+One cosmetic residual: server-pushed model options
+(`additionalModelOptionsCache` in `~/.claude.json`, e.g. an org-offered row
+valued `claude-fable-5[1m]`) can still appear in the picker — selecting one
+still runs at the standard window when the disable flag is active.
+
+The wrapper also bakes the same knobs into the read-only `--settings` `env`
+layer (`CLAUDE_CODE_DISABLE_1M_CONTEXT=1`,
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000`) so `/context` and autocompact stay
+on the ~300K working window even if launch-time `env_defaults` are missing.
+Install checks assert both paths. Re-enable 1M per machine with
 `export CLAUDE_CODE_DISABLE_1M_CONTEXT=`.
 
 ### Prepended flags (`wrapperFlags`, `default.nix:353-361`)
@@ -70,6 +84,9 @@ positional). Both rules are learned from real breakage; see the long comment at
 - `--debug`: writes operational telemetry to `~/.claude/debug/` (pruned on the
   `cleanupPeriodDays` sweep). It is an optional-value flag, so it cannot take
   `=`; it is safe only because `--thinking-display` follows it.
+- `--dangerously-load-development-channels server:index`: lets the baked
+  `index` MCP server push channel events into the running session without
+  Claude's approved-channel allowlist error.
 - `--thinking-display=summarized`: forces visible reasoning. The API default
   flipped to "omitted" on Opus 4.7/4.8, hiding thinking in the UI and
   transcript; this hidden flag is the only lever that restores it (verified on
@@ -103,6 +120,10 @@ wrapper injects its defaults file only `unless_present` a caller `--settings`
 - `permissions.deny` `WebSearch` / `WebFetch`: one web surface, not two; use
   Exa MCP for live web research. Deny rules are enforced in every
   permission mode.
+- `permissions.deny` for `systemTools`: the `defaultSystemTools` table in
+  `default.nix` is the source of truth for Claude Code orchestration and
+  hosted-service tool posture. Override with
+  `systemTools.<ToolName> = true` when that surface earns its context cost.
 - `hooks` (below).
 
 ### MCP servers (`--mcp-config`, `default.nix:90-94`, `295-297`)
@@ -118,7 +139,7 @@ Defaults to the default pair, additions only:
 - `exa`: Exa's hosted web-search server over streamable HTTP at
   `https://mcp.exa.ai/mcp` (keyless, rate-limited).
 
-### System prompt (`system-prompt.nix`)
+### System prompt (`packages/agent/prompt/`)
 
 `systemPrompt` is baked as the session's system prompt, REPLACING the stock one
 rather than appending to it (`default.nix:95-113`). The text is the shokunin craft ethos plus
@@ -126,7 +147,7 @@ fleet engineering rules: pre-v1 no-backward-compatibility, one-concept-one-
 implementation, always work in a git worktree, spawn background subagents for
 independent work, do work through the index Python kernel and `search` priors,
 gate admin/force merges on a fresh local build, never use em dashes, and more
-(`system-prompt.nix:7-37`). Set to `null` to ship the stock prompt alone.
+(`packages/agent/prompt/rules.nix`). Set to `null` to ship the stock prompt alone.
 
 ### Hooks (`packages/agent/policy/hook-runner.nix`, `default.nix:209-285`)
 
@@ -157,8 +178,8 @@ and on Linux the sandbox helpers `bubblewrap` and `socat`.
 ## Overrides
 
 `default.nix` exposes these args: `binName` (default `claude`),
-`dangerouslySkipPermissions`, `extraSettings`, `primaryCheckouts`, `mcpServers`,
-`systemPrompt`. Example: `claude-code.override { dangerouslySkipPermissions = false; }`.
+`dangerouslySkipPermissions`, `extraSettings`, `systemTools`, `primaryCheckouts`,
+`mcpServers`, `systemPrompt`. Example: `claude-code.override { systemTools.AskUserQuestion = true; }`.
 
 ## Build and wiring
 

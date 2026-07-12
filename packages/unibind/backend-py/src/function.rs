@@ -154,7 +154,7 @@ fn async_item(
             #(#params),*
         ) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::PyAny>> {
             #clone_inner
-            ::unibind_runtime::py::future_into_py(py, async move { #future_body })
+            ::unibind_py_runtime::future_into_py(py, async move { #future_body })
         }
     }
 }

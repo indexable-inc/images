@@ -7,10 +7,10 @@
   `gen_statem` API changes between majors).
   */
   toolchainsFor = pkgs: {
-    "latest" = pkgs.erlang;
+    latest = pkgs.erlang;
     "26" = pkgs.erlang_26;
     "27" = pkgs.erlang_27;
-    "28" = pkgs.erlang_28;
+    "28" = pkgs.beam28Packages.erlang;
   };
 in {
   /**

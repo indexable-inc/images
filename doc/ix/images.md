@@ -69,10 +69,10 @@ A fleet node carries two images (`lib/image/fleet.nix:291-300`):
   missing node. Defaults to the shared NixOS bootstrap image under
   `registry.ix.dev/...` (`lib/image/fleet.nix:48-49`,
   `lib/image/default.nix:104-107`).
-- **`replacementImage`** (`{ imageName, destination, source,
-  sourceDrv }`) - the image `up`/`replace` build and push from your config
-  (`lib/image/fleet.nix:311-316`). `destination` defaults to
-  `<imageName>:latest` (`lib/image/fleet.nix:269`).
+- **`replacementImage`** (`{ imageName, destination, sourceInstallable }`) -
+  the CAS-manifest image `up`/`replace` build (via the `.#<node>` flake attr)
+  and push from your config (`lib/image/fleet.nix:311-322`). `destination`
+  defaults to `<imageName>:latest` (`lib/image/fleet.nix:269`).
 
 See [fleet.md](fleet.md) for the authoring surface.
 

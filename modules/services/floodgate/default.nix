@@ -30,30 +30,30 @@
   playerLinkConfig = {
     inherit (cfg.playerLink) allowed type;
     enabled = cfg.playerLink.enable;
-    "require-link" = cfg.playerLink.requireLink;
-    "enable-own-linking" = cfg.playerLink.enableOwnLinking;
-    "link-code-timeout" = cfg.playerLink.linkCodeTimeout;
-    "enable-global-linking" = cfg.playerLink.enableGlobalLinking;
+    require-link = cfg.playerLink.requireLink;
+    enable-own-linking = cfg.playerLink.enableOwnLinking;
+    link-code-timeout = cfg.playerLink.linkCodeTimeout;
+    enable-global-linking = cfg.playerLink.enableGlobalLinking;
   };
 
   renderedConfig =
     {
-      "key-file-name" = cfg.keyFileName;
-      "username-prefix" = cfg.usernamePrefix;
-      "replace-spaces" = cfg.replaceSpaces;
+      key-file-name = cfg.keyFileName;
+      username-prefix = cfg.usernamePrefix;
+      replace-spaces = cfg.replaceSpaces;
       disconnect = {
-        "invalid-key" = cfg.disconnect.invalidKey;
-        "invalid-arguments-length" = cfg.disconnect.invalidArgumentsLength;
+        invalid-key = cfg.disconnect.invalidKey;
+        invalid-arguments-length = cfg.disconnect.invalidArgumentsLength;
       };
-      "player-link" = playerLinkConfig;
+      player-link = playerLinkConfig;
       metrics = metricsConfig;
-      "config-version" = 3;
+      config-version = 3;
     }
     // cfg.settings;
 
   renderedProxyConfig =
     {
-      "send-floodgate-data" = cfg.sendFloodgateData;
+      send-floodgate-data = cfg.sendFloodgateData;
     }
     // cfg.proxySettings;
 in {

@@ -93,11 +93,16 @@ the build (`copied_size`, `:516`).
 
 `run_daemon_probe` (`:43`) is the one view the internal-json stream cannot give:
 it attaches a platform tracer to the running `nix-daemon` so the silent
-`addToStore` phase is visible. It finds daemon pids via `pgrep` (`:72`), then
-spawns `fs_usage -w -f filesys nix-daemon` on macOS or `strace -f -p <pid>` on
-Linux (`tracer_command`, `:101`), wrapped in `sudo -n` when not root (`-n` never
-prompts, so a user without privilege gets a "needs root" status instead of a
-hang, `:98`). The tracer's stdout lines are parsed by the parser's
+`addToStore` phase is visible. The probe parks (publishing an "idle" status)
+until a dashboard client subscribes to the delta feed, and ends the tracer once
+the last client leaves: only the WebSocket clients consume the panel, and an
+unwatched tracer would monopolize the kernel's single machine-wide ktrace
+session. While watched it finds daemon pids via `pgrep`, then spawns
+`fs_usage -w -f filesys nix-daemon` on macOS or `strace -f -p <pid>` on Linux
+(`tracer_command`), wrapped in `sudo -n` when not root (`-n` never prompts, so a
+user without privilege gets a "needs root" status instead of a hang). The tracer
+runs under a babysitter shell whose stdin-EOF kill path both reaps orphans when
+the monitor dies and gives the gate its off switch. The tracer's stdout lines are parsed by the parser's
 `parse_fs_usage_line`/`parse_strace_line`, folded into a `DaemonTrace`, and a
 `DaemonInfo` is published every `SAMPLE_INTERVAL` (exactly 1s, so the per-window
 syscall delta is the per-second rate with no division, `:30`). Path-bearing

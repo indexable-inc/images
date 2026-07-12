@@ -24,15 +24,67 @@
     };
   };
 
-  # Eval-only stand-in for the symphony package: lib.getExe only constructs
-  # the /bin path string, so the stub is instantiated but never built.
-  symphonyStub = pkgs.runCommand "symphony" {meta.mainProgram = "symphony";} ''
-    mkdir -p "$out/bin"
+  # Eval-only stand-ins: lib.getExe and the manifest render only construct
+  # store-path strings, so the stubs are instantiated but never built. The
+  # release/root passthrus mirror the real package's (home-module defaults
+  # dereference them).
+  releaseStub = pkgs.runCommand "symphony-release" {} ''
+    mkdir -p "$out"
   '';
+  symphonyStub =
+    pkgs.runCommand "symphony" {
+      meta.mainProgram = "symphony";
+      passthru = {
+        release = releaseStub;
+        root = "/stub/symphony-root";
+        runtimeTools = [pkgs.jq];
+      };
+    } ''
+      mkdir -p "$out/bin"
+    '';
+
+  # Options-only stand-in for the beamvm home-module, mirroring
+  # portableDecl: the mapping from services.symphony onto services.beamvm is
+  # what this test owns; the beamvm module's own rendering (manifest, unit,
+  # activation) is exercised by its package checks and real home-manager
+  # evals.
+  beamvmDecl = {
+    options.services.beamvm = {
+      package = lib.mkOption {
+        type = lib.types.package;
+        default = pkgs.hello;
+      };
+      vms = lib.mkOption {
+        type = lib.types.attrsOf lib.types.anything;
+        default = {};
+      };
+    };
+  };
+
+  # The beamvm branch anchors the default state dir at xdg.stateHome and
+  # writes the catalog symlink through xdg.configFile, both of which
+  # home-manager normally declares.
+  xdgDecl = {
+    options.xdg = {
+      stateHome = lib.mkOption {
+        type = lib.types.str;
+        default = "/home/dev/.local/state";
+      };
+      configHome = lib.mkOption {
+        type = lib.types.str;
+        default = "/home/dev/.config";
+      };
+      configFile = lib.mkOption {
+        type = lib.types.attrsOf lib.types.anything;
+        default = {};
+      };
+    };
+  };
 
   homeModule = import (paths.root + "/packages/agent/symphony/home-module.nix") {
     indexPackages = _system: {symphony = symphonyStub;};
     portableServicesModule = portableDecl;
+    beamvmModule = beamvmDecl;
     inherit ix;
   };
 
@@ -42,6 +94,7 @@
         # Inject `pkgs` the way home-manager does (a module arg), not via
         # specialArgs.
         {_module.args.pkgs = pkgs;}
+        xdgDecl
         homeModule
         {services.symphony = settings;}
       ];
@@ -50,6 +103,9 @@
   # Full configuration: every knob that changes the rendered units.
   full = evalSymphony {
     enable = true;
+    # These assertions cover the dedicated-unit render; the beamvm mapping
+    # has its own set below.
+    runtime = "standalone";
     httpPort = 4141;
     stateDir = "/home/dev/.local/state/symphony";
     primaryRepo = "/home/dev/src/index";
@@ -66,7 +122,14 @@
 
   # Defaults: only enable set, so the launcher owns state-dir and pack
   # resolution and the wrapper is a bare exec.
-  minimal = evalSymphony {enable = true;};
+  minimal = evalSymphony {
+    enable = true;
+    runtime = "standalone";
+  };
+
+  # The default runtime: the compiled release hosted in the persistent VM.
+  beamvm = evalSymphony {enable = true;};
+  beamvmVm = beamvm.services.beamvm.vms.symphony;
 
   fullSpec = full.services.portable.symphony;
   fullLaunchd = ps.toLaunchdConfig fullSpec;
@@ -162,6 +225,45 @@
         hasDrvInfix "exec ${symphonyStub}/bin/symphony \"$@\"" minimalLauncher.text
         && !(lib.hasInfix "set -a" minimalLauncher.text);
       message = "without environmentFile/secretsCommand the wrapper should be a bare exec";
+    }
+
+    # --- beamvm runtime (the default): mapping onto services.beamvm ---
+    {
+      assertion = !(beamvm.services.portable ? symphony);
+      message = "beamvm runtime should not also render the standalone unit";
+    }
+    {
+      assertion = beamvmVm.apps.symphony_elixir.package == releaseStub;
+      message = "beamvm runtime should host the compiled release (package.release)";
+    }
+    {
+      # The stable config symlink, NOT the store path: a store path in the
+      # unit environment would restart the VM on every symphony update.
+      assertion = beamvmVm.environment.SYMPHONY_ROOT == "/home/dev/.config/symphony/root";
+      message = "SYMPHONY_ROOT should go through the stable config symlink";
+    }
+    {
+      assertion = beamvm.xdg.configFile."symphony/root".source == "/stub/symphony-root";
+      message = "the catalog symlink should retarget to the package root at switch";
+    }
+    {
+      assertion = lib.elem pkgs.jq beamvmVm.extraPath;
+      message = "the package's runtimeTools should reach the VM PATH (workflow scripts shell out)";
+    }
+    {
+      # config.ex mkdir_p!'s these; a store-rooted default would crash, so
+      # every writable dir must be anchored explicitly under the state dir.
+      assertion =
+        beamvmVm.environment.SYMPHONY_STATE_DIR
+        == "/home/dev/.local/state/symphony"
+        && beamvmVm.environment.SYMPHONY_WORKSPACES_DIR == "/home/dev/.local/state/symphony/workspaces"
+        && beamvmVm.environment.SYMPHONY_RUNS_DIR == "/home/dev/.local/state/symphony/runs"
+        && beamvmVm.environment.SYMPHONY_LOGS_ROOT == "/home/dev/.local/state/symphony/log";
+      message = "beamvm runtime should anchor every writable dir under the state dir";
+    }
+    {
+      assertion = beamvmVm.environment.SYMPHONY_HTTP_PORT == "4040";
+      message = "beamvm runtime should keep env parity for the HTTP port";
     }
   ];
 

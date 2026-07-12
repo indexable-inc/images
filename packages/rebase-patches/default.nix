@@ -15,7 +15,9 @@
 # dag-lib.nu.
 #
 # No fallbacks: an unresolved conflict stops loudly, printing the scratch repo
-# path and the conflicting patch, for a human to resolve once and re-export.
+# path and a resume command. The resume path owns `git rebase --continue`, rerere
+# export, patch serialization, and DAG regeneration, so a manual resolution
+# cannot get stranded in the temporary repo.
 # Committed rerere: a resolution cache per fork package (packages/<name>/rerere/,
 # git rr-cache format) is seeded into the scratch repo before rebasing and
 # exported back after a manual resolution, so a conflict resolved once replays on
@@ -34,6 +36,7 @@
   ix,
   formats,
   writeNushellApplication,
+  runCommand,
   git,
   mergiraf,
 }: let
@@ -45,8 +48,7 @@
   # path and sourced by both this tool and the `patch-dag-<name>` flake check so
   # the two can never disagree on how a DAG is derived or validated.
   dagLib = ./dag-lib.nu;
-in
-  writeNushellApplication {
+  package = writeNushellApplication {
     name = "rebase-patches";
     meta = {
       description = "Regenerate a de-forked package's patch series via a real git rebase when its upstream base moves, and its dependency DAG";
@@ -128,6 +130,9 @@ in
           let dest = ($rr_committed | path join $key)
           if ($dest | path exists) { rm --recursive --force $dest }
           cp --recursive ($rr_scratch | path join $key) $dest
+          # `thisimage` is Git's transient current-conflict snapshot. Replaying a
+          # resolution needs only the numbered or unnumbered pre/postimage pairs.
+          rm --force ...(glob ($dest | path join "thisimage*"))
         }
         print $"(ansi yellow)rebase-patches: ($fork.name): exported (($resolved | length)) rerere resolution\(s\) to ($fork.patchDir)/rerere: (($resolved) | str join ', ')(ansi reset)"
       }
@@ -192,6 +197,40 @@ in
         rm --recursive --force $scratch
       }
 
+      def "rebase state-file" [scratch: string]: nothing -> string {
+        $scratch | path join ".git" "rebase-patches-state.json"
+      }
+
+      def "rebase write-state" [fork: record, scratch: string, old: string, new: string] {
+        {fork: $fork.name, old: $old, new: $new}
+        | to json --indent 2
+        | save --force (rebase state-file $scratch)
+      }
+
+      def "rebase unresolved" [fork: record, scratch: string, new: string] {
+        let conflicts = (git -C $scratch diff --name-only --diff-filter=U | lines)
+        if ($conflicts | is-empty) { return }
+        rerere export $fork $scratch
+        error make {
+          msg: $"rebase-patches: ($fork.name): rebase onto ($new) has unresolved conflicts in [($conflicts | str join ', ')]; resolve them in ($scratch), `git -C ($scratch) add <files>`, then `nix run .#rebase-patches -- resume ($fork.name) ($scratch)`"
+        }
+      }
+
+      def "rebase publish" [fork: record, scratch: string, new: string] {
+        let based_on_new = (do { git -C $scratch merge-base --is-ancestor $new HEAD } | complete)
+        if $based_on_new.exit_code != 0 {
+          error make { msg: $"rebase-patches: ($fork.name): scratch HEAD is not based on expected upstream rev ($new): ($scratch)" }
+        }
+
+        let patch_dir = ($fork.patchDir | path expand)
+        rm --recursive --force ...(glob ($patch_dir | path join "*.patch"))
+        git -C $scratch format-patch --zero-commit --no-signature --no-stat -N -o $patch_dir $"($new)..HEAD"
+        print $"(ansi green)rebase-patches: ($fork.name): regenerated (glob ($patch_dir | path join '*.patch') | length) patches in ($fork.patchDir)(ansi reset)"
+
+        rm --recursive --force $scratch
+        regen dag $fork $new
+      }
+
       # Regenerate one fork package's patch series. `old` / `new` are the base
       # revs from the committed vs working-tree flake.lock; skip when unchanged.
       def "rebase one" [fork: record, old: string, new: string] {
@@ -205,7 +244,7 @@ in
         }
 
         let scratch = (scratch init $fork)
-
+        rebase write-state $fork $scratch $old $new
         # Blobless fetch of just the two revs we round-trip between.
         git -C $scratch fetch --quiet --filter=blob:none $fork.url $old $new
         git -C $scratch checkout --quiet --detach $old
@@ -232,10 +271,8 @@ in
           $stops += 1
           if (not ($conflict | is-empty)) or $stops > 100 {
             rerere report-replays $fork $scratch $rebase_log
-            # Persist any resolutions recorded so far so a human's earlier fixes are
-            # not lost, then leave the scratch repo conflicted for them to finish.
-            rerere export $fork $scratch
-            error make { msg: $"rebase-patches: ($fork.name): rebase onto ($new) hit an unresolved conflict in [($conflict | str join ', ')]; resolve in the scratch repo then `git rebase --continue` and re-run, or fix the offending patch. Scratch repo: ($scratch)" }
+            rebase unresolved $fork $scratch $new
+            error make { msg: $"rebase-patches: ($fork.name): rebase onto ($new) stopped without an unresolved path after ($stops) continuation attempts: ($rebase_log)" }
           }
           # rerere replayed and staged a recorded resolution for every conflicted
           # path; git still stops so a human could review, but the committed cache
@@ -247,19 +284,50 @@ in
         # Loudly report and persist any rerere resolutions that fired.
         rerere report-replays $fork $scratch $rebase_log
         rerere export $fork $scratch
+        rebase publish $fork $scratch $new
+      }
 
-        # Wipe and re-serialize with the deterministic flag set: fresh context
-        # and line numbers, zeroed commit ids, no signature/version trailer, so
-        # the PR diff shows only real drift.
-        rm --recursive --force ...(glob ($patch_dir | path join "*.patch"))
-        git -C $scratch format-patch --zero-commit --no-signature --no-stat -N -o $patch_dir $"($new)..HEAD"
-        print $"(ansi green)rebase-patches: ($fork.name): regenerated (glob ($patch_dir | path join '*.patch') | length) patches in ($fork.patchDir)(ansi reset)"
+      # Continue a stopped rebase in place, then publish the same artifacts as a
+      # conflict-free run. The state file binds the temporary repo to the fork
+      # and target revision, preventing an arbitrary checkout from being
+      # serialized into a package's patch directory.
+      def "main resume" [
+        name: string
+        scratch: string
+        --mapping: string
+      ] {
+        let fork = (fork select $name $mapping | first)
+        let state_file = (rebase state-file $scratch)
+        if not ($state_file | path exists) {
+          error make { msg: $"rebase-patches: resume state missing from scratch repo: ($state_file)" }
+        }
+        let state = (open $state_file)
+        let new_lock = (open --raw flake.lock | from json)
+        let new = ($new_lock.nodes | get $fork.input | get locked | get rev)
+        if $state.fork != $fork.name or $state.new != $new {
+          error make { msg: $"rebase-patches: resume state does not match ($fork.name) at ($new): ($state | to json)" }
+        }
 
-        rm --recursive --force $scratch
+        rebase unresolved $fork $scratch $new
+        let rebase_dir = ($scratch | path join ".git" "rebase-merge")
+        if ($rebase_dir | path exists) {
+          mut resumed = (do { git -C $scratch -c core.editor=true rebase --continue } | complete)
+          mut log = ($resumed.stdout + $resumed.stderr)
+          mut stops = 0
+          while $resumed.exit_code != 0 {
+            $stops += 1
+            rebase unresolved $fork $scratch $new
+            if $stops > 100 {
+              error make { msg: $"rebase-patches: ($fork.name): resume exceeded 100 continuation attempts: ($log)" }
+            }
+            $resumed = (do { git -C $scratch -c core.editor=true rebase --continue } | complete)
+            $log = ($log + $resumed.stdout + $resumed.stderr)
+          }
+          rerere report-replays $fork $scratch $log
+        }
 
-        # A rebase can change dependencies, so the DAG is regenerated against the
-        # new base at the end of every run.
-        regen dag $fork $new
+        rerere export $fork $scratch
+        rebase publish $fork $scratch $new
       }
 
       # `dag` subcommand: regenerate dag.json for one or all fork packages against
@@ -323,4 +391,18 @@ in
         }
       }
     '';
-  }
+  };
+  resumeTest = runCommand "rebase-patches-resume-test" {
+    nativeBuildInputs = [
+      git
+      package
+    ];
+  } (builtins.readFile ./resume-test.sh);
+in
+  package.overrideAttrs (old: {
+    passthru =
+      (old.passthru or {})
+      // {
+        tests = (old.passthru.tests or {}) // {resume = resumeTest;};
+      };
+  })

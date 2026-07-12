@@ -360,6 +360,49 @@ fn static_and_conditional_flags_prepend_before_argv() {
 }
 
 #[test]
+fn introspection_prints_value_and_never_execs_target() {
+    let tmp = TempDir::new().unwrap();
+    let stub = write_stub(&tmp);
+    let spec = write_json_spec(
+        &tmp,
+        &serde_json::json!({
+            "target": stub.to_str().unwrap(),
+            "flags": ["--debug"],
+            "introspection": [
+                { "flag": "--which-settings", "value": "/nix/store/settings.json" }
+            ],
+        }),
+    );
+
+    // Flag present: the launcher answers itself; the stub's argv echo (which
+    // would start with --debug) must not appear.
+    let out = Command::new(BIN)
+        .env("IX_LAUNCH_SPEC", &spec)
+        .arg("--which-settings")
+        .output()
+        .expect("run");
+    assert!(out.status.success(), "introspection should exit 0");
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "/nix/store/settings.json\n",
+        "introspection must print exactly the paired value"
+    );
+
+    // Flag absent: normal launch, argv passthrough via the stub.
+    let out2 = Command::new(BIN)
+        .env("IX_LAUNCH_SPEC", &spec)
+        .args(["mcp", "list"])
+        .output()
+        .expect("run");
+    let lines2: Vec<String> = String::from_utf8(out2.stdout)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(lines2, vec!["--debug", "mcp", "list"]);
+}
+
+#[test]
 fn missing_spec_env_exits_78() {
     let output = Command::new(BIN)
         .env_remove("IX_LAUNCH_SPEC")

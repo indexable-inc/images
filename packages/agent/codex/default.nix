@@ -2,16 +2,12 @@
   lib,
   ix,
   codex,
+  rustPlatform,
   makeBinaryWrapper,
   runCommand,
   git,
-  nix,
   symlinkJoin,
   formats,
-  # Nushell writer for `passthru.updateScript`, pre-bound to the caller's pkgs
-  # on the flake path (lib/packages.nix); `null` on the overlay path, which is
-  # the signal to omit the fork updater (matches the pins.mkUpdater posture).
-  updateScriptWriter ? null,
   binName ? "codex",
   # Shell globs the (claude-only) worktree-guard protects, threaded into the
   # shared hook module so both wrappers feed it the same inputs. Unused in the
@@ -75,6 +71,11 @@
       max_concurrent_threads_per_session = 16;
     };
     agents.max_depth = 3;
+    # multi_agent_v2 is an under-development feature, so enabling it above
+    # makes Codex print an unstable-features warning on every startup. The
+    # wrapper opts into the feature deliberately, so it silences its own
+    # warning; a user who sets this key keeps their value.
+    suppress_unstable_features_warning = true;
   },
   # MCP servers rendered as soft Codex defaults. A user's own
   # `[mcp_servers.<name>]` config wins per-key through config-launch.
@@ -106,7 +107,7 @@
   # (a baked JSON file describing the target binary, config path, forced flags,
   # and soft defaults), performs per-key TOML presence detection against the
   # user's config.toml, then exec's the target preserving argv0.
-  launcher = ix.rustWorkspace.units.binaries."config-launch";
+  launcher = ix.rustWorkspace.units.binaries.config-launch;
   entriesOf = flat:
     lib.mapAttrsToList (key: v: {
       inherit key;
@@ -172,7 +173,7 @@
           ;
       }).codex;
   };
-  codexWithNotifications = codex.overrideAttrs (finalAttrs: previousAttrs: {
+  codexWithNotifications = codex.overrideAttrs (previousAttrs: {
     version = "0.0.0";
     src = codexSrc;
     # `unpackPhase` names the unpacked dir after the src store path. The old
@@ -180,18 +181,42 @@
     # its own name (`codex-patched`), so derive the sourceRoot from the src's
     # name rather than hardcoding `source/`.
     sourceRoot = "${codexSrc.name}/codex-rs";
-    cargoHash = "sha256-mLpfLi5Wu/t/D8il/5xkDqCTHIeaJZ2OYMZmMIsg7E0=";
-    # buildRustPackage carries cargoDeps through overrideAttrs, so retarget the
-    # nested fixed-output staging derivation when swapping the upstream source.
-    cargoDeps = previousAttrs.cargoDeps.overrideAttrs (_: previousCargoAttrs: {
-      vendorStaging = previousCargoAttrs.vendorStaging.overrideAttrs (_: {
-        inherit (finalAttrs) src sourceRoot;
-        outputHash = finalAttrs.cargoHash;
-      });
-    });
+    # No cargoHash: an inlined vendor FOD hash goes stale on every codex-src
+    # bump the flake-update bot makes (index #2233 broke every ix deploy this
+    # way). importCargoLock needs no aggregate hash: crates.io checksums come
+    # from Cargo.lock itself and git deps are fetched by their locked revs.
+    # The lockfile is read from the RAW codex-src input (an eval-time store
+    # path, so no IFD), not the patched src: no patch touches Cargo.lock
+    # today, and if one ever does, cargoSetupPostPatchHook's lock-consistency
+    # check fails the build loudly rather than vendoring the wrong set.
+    #
+    # Git dependencies pinned in codex's Cargo.lock, keyed by "<name>-<version>"
+    # (rustPlatform.importCargoLock resolves the key to a locked commit SHA
+    # internally, so any one name-version sharing a SHA is enough; the
+    # rust-sdks monorepo contributes 4 crates from the same commit here).
+    # Refresh after a codex-src bump by rebuilding and copying the corrected
+    # hashes from the fetchgit mismatch errors; NOT allowBuiltinFetchGit,
+    # which would let builtins.fetchGit run at evaluation time (index#2255).
+    cargoDeps = rustPlatform.importCargoLock {
+      lockFile = ix.codexSrc + "/codex-rs/Cargo.lock";
+      outputHashes = {
+        "runfiles-0.1.0" = "sha256-uJpVLcQh8wWZA3GPv9D8Nt43EOirajfDJ7eq/FB+tek=";
+        "nucleo-0.5.0" = "sha256-Hm4SxtTSBrcWpXrtSqeO0TACbUxq3gizg1zD/6Yw/sI=";
+        "webrtc-sys-0.3.24" = "sha256-0HPuwaGcqpuG+Pp6z79bCuDu/DyE858VZSYr3DKZD9o=";
+        "crossterm-0.28.1" = "sha256-6qCtfSMuXACKFb9ATID39XyFDIEMFDmbx6SSmNe+728=";
+        "ratatui-0.29.0" = "sha256-HBvT5c8GsiCxMffNjJGLmHnvG77A6cqEL+1ARurBXho=";
+        "tokio-tungstenite-0.28.0" = "sha256-V1xmnrfRWOcZZogelZEA4vvyMj2awCfHVA5/glQ6KAI=";
+        "tungstenite-0.27.0" = "sha256-VVHhk7l9J/sEmG3q/UuV/sQ3f+fGsmq5vumSy8vbMvw=";
+      };
+    };
     postPatch = ''
       # shell
-      substituteInPlace $cargoDepsCopy/*/webrtc-sys-*/build.rs \
+      # importCargoLock vendors one top-level dir per crate (name-version),
+      # unlike fetchCargoVendor's extra nesting level. Version-anchor the glob
+      # so the sibling crate webrtc-sys-build-* can never match if a future
+      # rust-sdks rev gives it a build.rs (that would break --replace-fail on
+      # the next codex-src bump, the breakage class this file just eliminated).
+      substituteInPlace $cargoDepsCopy/webrtc-sys-[0-9]*/build.rs \
         --replace-fail "cargo:rustc-link-lib=static=webrtc" "cargo:rustc-link-lib=dylib=webrtc"
       substituteInPlace Cargo.toml \
         --replace-fail 'lto = "thin"' "" \
@@ -231,26 +256,11 @@ in
     '';
     # The codex hooks.json rendered from the shared declaration list, for a
     # consumer to deliver to `~/.codex/hooks.json` (see the `hooksJson` comment).
-    passthru =
-      {
-        inherit hooksJson spec specValue;
-        modelInstructionsFile = effectiveModelInstructionsFile;
-        permissions = sharedPermissions.codex;
-      }
-      # Fork updater (flake path only): bump codex-src and regenerate the patch
-      # series, so codex joins the registry-discovered `.#update` DAG. Omitted
-      # when the writer or rebase-patches sibling is out of scope (overlay path).
-      // lib.optionalAttrs (updateScriptWriter != null && repoPackages ? rebase-patches) {
-        updateScript =
-          ix.mkForkUpdater {
-            writeNushellApplication = updateScriptWriter;
-            inherit nix;
-            rebasePatches = repoPackages.rebase-patches;
-          } {
-            name = "codex";
-            input = "codex-src";
-          };
-      };
+    passthru = {
+      inherit hooksJson spec specValue;
+      modelInstructionsFile = effectiveModelInstructionsFile;
+      permissions = sharedPermissions.codex;
+    };
     meta =
       codexWithNotifications.meta
       // {

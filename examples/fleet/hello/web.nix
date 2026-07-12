@@ -1,13 +1,9 @@
-{
-  lib,
-  pkgs,
-  ...
-}: let
+{...}: let
   httpPort = 8080;
 in {
   services.nginx = {
     enable = true;
-    virtualHosts."fleet-hello" = {
+    virtualHosts.fleet-hello = {
       default = true;
       listen = [
         {
@@ -29,15 +25,11 @@ in {
   ix.healthChecks = {
     nginx.unit = "nginx";
 
+    # An httpGet-style probe: `http` desugars to a curl command that treats
+    # any >= 400 status as unhealthy, and the probe binary rides the image.
     http-loopback = {
       description = "hello HTTP service answers locally";
-      command = [
-        (lib.getExe pkgs.curl)
-        "--fail"
-        "--silent"
-        "--show-error"
-        "http://127.0.0.1:${toString httpPort}/"
-      ];
+      http.port = httpPort;
     };
   };
 }

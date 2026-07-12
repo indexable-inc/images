@@ -1,6 +1,6 @@
 # nix-web-monitor
 
-`packages/nix-web-monitor` runs a Nix command with quiet terminal output and a
+`packages/nix/nix-web-monitor` runs a Nix command with quiet terminal output and a
 live browser monitor: a build tree, log tail, activity DAG, store-optimisation
 totals, and a `nix-daemon` syscall panel, all on one HTTP port. It is two Rust
 workspace crates:
@@ -35,7 +35,17 @@ nix-web-monitor [--host H] [--port N] [--exit-when-done]
                 [--terminal-output summary|logs|quiet] [--nix-verbose]
                 [--emit ndjson]
                 -- <nix args...>
+nix-web-monitor serve [--host H] [--port N]
 ```
+
+- `serve`: run the monitor as a standalone server with no wrapped Nix command,
+  until interrupted. The machine-wide panels (the nix-daemon syscall probe and
+  the machine-builds view fed by the patched-nix `nix store builds --json`
+  poller) are the content; the build tree shows a "no wrapped command"
+  placeholder instead of a fake command. This is the mode for a long-lived
+  login service (launchd/systemd) serving the machine build dashboard on
+  `:7532`. The per-command flags (`--exit-when-done`, `--terminal-output`,
+  `--nix-verbose`, `--emit`) do not apply.
 
 - `--emit ndjson` (`server/src/emit.rs`): run headless. Instead of serving the
   web UI, spawn the nix command, feed the parser, and stream a compact

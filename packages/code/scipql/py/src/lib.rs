@@ -10,9 +10,9 @@
 //! and the module registration) from these declarations.
 
 // `backends(py)`: a whole-workspace build unifies unibind's backend
-// features across consumers (the ts conformance crate enables `ts`, the
-// conformance engine enables `rs`), so pin this crate's glue to the backend
-// whose runtime deps it declares.
+// features across consumers (the ts and ex conformance crates enable `ts`
+// and `ex`, the conformance engine enables `rs`), so pin this crate's glue
+// to the backend whose runtime deps it declares.
 #[unibind::export(backends(py))]
 mod _scipql {
     use std::collections::HashMap;
@@ -103,14 +103,7 @@ mod _scipql {
     /// Flatten a core error and its source chain into one message, matching
     /// the text the hand-written binding put on its `ValueError`.
     fn chain(error: &scipql_core::Error) -> String {
-        let mut message = error.to_string();
-        let mut source = std::error::Error::source(error);
-        while let Some(cause) = source {
-            message.push_str(": ");
-            message.push_str(&cause.to_string());
-            source = cause.source();
-        }
-        message
+        error_chain::format(error)
     }
 
     /// Sort a core error into the boundary's exception classes.
