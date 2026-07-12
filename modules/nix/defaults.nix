@@ -19,6 +19,21 @@
     ;
 
   cfg = config.nix;
+
+  registryReference = input:
+    {
+      type = "path";
+      path = input.outPath;
+    }
+    // lib.filterAttrs (
+      name: _:
+        lib.elem name [
+          "lastModified"
+          "narHash"
+          "rev"
+        ]
+    )
+    input;
 in {
   options.nix = {
     daemonDefaults.enable = mkEnableOption "shared Nix daemon defaults: experimental features, keep-* retention, automatic GC";
@@ -38,7 +53,7 @@ in {
   };
 
   config.nix = {
-    registry = lib.mapAttrs (_: input: {flake = input;}) cfg.registryPins;
+    registry = lib.mapAttrs (_: input: {to = registryReference input;}) cfg.registryPins;
 
     # Nix daemon settings shared verbatim by both platforms.
     settings = mkIf cfg.daemonDefaults.enable {

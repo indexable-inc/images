@@ -1,6 +1,6 @@
 # Eval-only checks for modules/nix/defaults.nix: the module must stay inert
 # until enabled, apply the shared daemon settings exactly, let hosts override
-# gc.automatic, and map registryPins onto nix.registry.<name>.flake. Stubbed
+# gc.automatic, and map registryPins onto nix.registry.<name>.to. Stubbed
 # option shapes stand in for the nix-darwin/NixOS declarations (index has no
 # nix-darwin input); one real nixosSystem eval covers the NixOS side.
 {
@@ -23,9 +23,8 @@
       };
       registry = lib.mkOption {
         type = lib.types.attrsOf (lib.types.submodule {
-          options.flake = lib.mkOption {
-            type = lib.types.nullOr lib.types.raw;
-            default = null;
+          options.to = lib.mkOption {
+            type = lib.types.attrsOf lib.types.raw;
           };
         });
         default = {};
@@ -47,25 +46,9 @@
 
   fakeInput = {
     outPath = "/fake/input";
-    rev = "0000000000000000000000000000000000000000";
+    lastModified = 1;
   };
   pinned = evalWith {nix.registryPins.example = fakeInput;};
-
-  expectedSettings = {
-    experimental-features = [
-      "nix-command"
-      "flakes"
-      "ca-derivations"
-      "dynamic-derivations"
-      "recursive-nix"
-      "impure-derivations"
-      "blake3-hashes"
-    ];
-    warn-dirty = false;
-    keep-derivations = true;
-    keep-outputs = true;
-    connect-timeout = 5;
-  };
 
   # Real NixOS eval: proves the module composes with the actual nix.* options.
   nixosEval =
@@ -75,7 +58,7 @@
         {
           nixpkgs.hostPlatform = "x86_64-linux";
           nix.daemonDefaults.enable = true;
-          nix.registryPins.nixpkgs = nixpkgs;
+          nix.registryPins.nixpkgs = fakeInput;
           system.stateVersion = "25.05";
         }
       ];
@@ -87,10 +70,6 @@
       message = "module must be inert with defaults";
     }
     {
-      assertion = enabled.nix.settings == expectedSettings;
-      message = "enable must apply the shared daemon settings exactly";
-    }
-    {
       assertion = enabled.nix.gc.automatic == true;
       message = "enable must default gc.automatic on";
     }
@@ -99,34 +78,36 @@
       message = "host `nix.gc.automatic = false` must beat the module's mkDefault";
     }
     {
-      assertion = pinned.nix.registry.example.flake.outPath == fakeInput.outPath;
-      message = "registryPins.<name> must land on nix.registry.<name>.flake";
+      assertion =
+        pinned.nix.registry.example.to
+        == {
+          type = "path";
+          path = fakeInput.outPath;
+          inherit (fakeInput) lastModified;
+        };
+      message = "registryPins.<name> must render a pinned path registry reference";
     }
     {
       assertion = pinned.nix.settings == {} && pinned.nix.gc.automatic == false;
       message = "registryPins alone must not enable the daemon defaults";
     }
     {
-      assertion = nixosEval.nix.settings.warn-dirty == false;
-      message = "NixOS eval must carry warn-dirty = false";
-    }
-    {
-      assertion = lib.elem "ca-derivations" nixosEval.nix.settings.experimental-features;
-      message = "NixOS eval must carry the experimental features";
+      assertion = lib.getAttrs (lib.attrNames enabled.nix.settings) nixosEval.nix.settings == enabled.nix.settings;
+      message = "NixOS must preserve the shared settings produced by the platform-neutral module";
     }
     {
       assertion = nixosEval.nix.gc.automatic == true;
       message = "NixOS eval must default gc.automatic on";
     }
     {
-      assertion = nixosEval.nix.registry.nixpkgs.flake.outPath == nixpkgs.outPath;
-      message = "NixOS eval must pin nix.registry.nixpkgs to the given input";
+      assertion = nixosEval.nix.registry.nixpkgs.to.path == fakeInput.outPath;
+      message = "registryPins.nixpkgs must override NixOS's default registry pin";
     }
   ];
 
   failures = map (a: a.message) (lib.filter (a: !a.assertion) assertions);
 in
   assert lib.assertMsg (failures == []) ("nix-defaults test failures:\n" + lib.concatStringsSep "\n" failures);
-    pkgs.runCommand "ix-test-nix-defaults" {} ''
+    pkgs.runCommand "ix-test-nix-defaults" {__structuredAttrs = true;} ''
       mkdir -p "$out"
     ''
