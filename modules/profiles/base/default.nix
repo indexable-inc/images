@@ -299,6 +299,12 @@ in {
           enableBashIntegration = true;
           enableZshIntegration = true;
           enableFishIntegration = true;
+          # Yield Ctrl+R to atuin (see above). fzf and atuin both bind
+          # Ctrl+R; atuin is sourced after fzf and wins, but Home Manager
+          # now warns on the double binding. Empty the history widget
+          # command to drop fzf's binding explicitly instead of relying on
+          # source order.
+          historyWidget.command = "";
         };
         # AST-aware merge driver. Parses 30+ languages (Nix, Rust,
         # Python, TS/JS, Go, Java, ...) and resolves structural conflicts
