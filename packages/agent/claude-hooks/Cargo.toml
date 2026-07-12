@@ -9,30 +9,33 @@ description = "Claude Code/Codex hook commands (session-digest, worktree-guard, 
 workspace = true
 
 [dependencies]
-# retro-gate ships the session transcript to the ix-mcp kernel as chunked
-# base64 python_exec cells (and encodes the delegate prompt the same way).
+# The shared kernel dispatch (mcp_dispatch, used by retro-gate and
+# friction-report) ships payloads as chunked base64 python_exec cells and
+# encodes the delegate prompt the same way.
 base64.workspace = true
 # `clock` for chrono::Local (friction-report/retro-gate log timestamps).
 chrono = { workspace = true, features = ["alloc", "clock"] }
-# retro-gate gzips the transcript before upload; large sessions are tens of MB.
+# mcp_dispatch gzips payloads before upload; retro-gate's full transcripts run
+# tens of MB (friction-report's condensed deltas are tiny).
 flate2.workspace = true
 glob.workspace = true
-# friction-report files to Linear over HTTPS, and the subagent-cache hooks POST
-# to their daemon. A blocking client keeps these short-lived sync hooks a plain
-# synchronous process (no async runtime).
+# mcp_dispatch speaks streamable-HTTP MCP to the ix-mcp kernel, and the
+# subagent-cache hooks POST to their daemon. A blocking client keeps these
+# short-lived sync hooks a plain synchronous process (no async runtime).
 reqwest = { workspace = true, features = ["blocking"] }
-# friction-report's single-flight flock, detached-session spawn (setsid), and
-# process-group SIGKILL on model timeout.
+# friction-report's single-flight flock and the detached-worker spawn
+# (setsid) shared with retro-gate.
 libc.workspace = true
 regex.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-# friction-report routes the model child's stdout to a real temp file (not a
-# pipe), and the subagent-cache tests use it too.
-tempfile.workspace = true
 # xxh64 (seed 0) for the subagent-cache freshness hash; matches mgrep and the
 # hashes other developers' hooks wrote into the shared cache.
 xxhash-rust = { workspace = true, features = ["xxh64"] }
+
+[dev-dependencies]
+# temp dirs/files in the subagent-cache and mcp_dispatch tests.
+tempfile.workspace = true
 
 [[bin]]
 name = "claude-hooks"
