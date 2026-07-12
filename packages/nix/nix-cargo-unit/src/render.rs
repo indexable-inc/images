@@ -1680,6 +1680,11 @@ fn render_build_script_run_phase(
     // current derivation so native generators such as cxxbridge can write it.
     script.push_str("build_script_out_dir=$NIX_BUILD_TOP/build-script-out\n");
     script.push_str("mkdir -p \"$build_script_out_dir\"\n");
+    // Cargo's target directory gives build helpers a writable shared scratch
+    // root. Without it cxx-build falls back to scratch's compile-time OUT_DIR,
+    // which belongs to the build user that compiled the helper dependency.
+    script.push_str("export CARGO_TARGET_DIR=$NIX_BUILD_TOP/cargo-target\n");
+    script.push_str("mkdir -p \"$CARGO_TARGET_DIR\"\n");
     script.push_str("build_script_env=()\n");
     script.push_str("export OUT_DIR=$build_script_out_dir\n");
     ensure_source_contains_unit(source, run_unit)?;
@@ -5422,6 +5427,10 @@ links = "native_ffi"
         assert!(
             rendered.contains("build_script_out_dir=$NIX_BUILD_TOP/build-script-out"),
             "build-script OUT_DIR must belong to the run derivation's build user"
+        );
+        assert!(
+            rendered.contains("export CARGO_TARGET_DIR=$NIX_BUILD_TOP/cargo-target"),
+            "build helpers must not fall back to another build user's scratch directory"
         );
         assert!(rendered.contains("export CARGO_MANIFEST_LINKS=\"native_ffi\""));
         assert!(rendered.contains("export RUSTDOC=\"$(type -p rustdoc)\""));
