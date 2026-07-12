@@ -56,7 +56,7 @@ struct Peer {
 
 async fn spawn_peer(
     id: u64,
-    peers: Vec<std::net::SocketAddr>,
+    peers: Vec<String>,
     time: &Arc<dyn MonotonicTime>,
 ) -> Result<Peer> {
     let dir = tempfile::tempdir()?;
@@ -92,7 +92,7 @@ async fn publish_converges_to_bit_identical_audio() -> Result<()> {
     let time: Arc<dyn MonotonicTime> = Arc::new(ProcessTime::default());
     // Smaller peer id wins leadership: A leads, B follows.
     let a = spawn_peer(1, vec![], &time).await?;
-    let b = spawn_peer(2, vec![a.node.tcp_addr], &time).await?;
+    let b = spawn_peer(2, vec![a.node.tcp_addr.to_string()], &time).await?;
 
     // Publish on A only: module bytes into A's store, hash + controls +
     // scheduled events into A's score.
@@ -150,7 +150,7 @@ async fn publish_converges_to_bit_identical_audio() -> Result<()> {
 async fn edits_flow_both_ways() -> Result<()> {
     let time: Arc<dyn MonotonicTime> = Arc::new(ProcessTime::default());
     let a = spawn_peer(1, vec![], &time).await?;
-    let b = spawn_peer(2, vec![a.node.tcp_addr], &time).await?;
+    let b = spawn_peer(2, vec![a.node.tcp_addr.to_string()], &time).await?;
 
     a.score.lock().expect("lock").set_control(3, 0.75, 0)?;
     b.score.lock().expect("lock").set_control(4, 0.25, 0)?;

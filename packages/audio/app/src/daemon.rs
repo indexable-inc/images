@@ -2,8 +2,6 @@
 //! timeline, and serves the control socket. Designed to run under
 //! launchd/systemd (see this repo's `homeModules.portable-services`).
 
-use std::collections::BTreeSet;
-use std::net::SocketAddr;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -93,14 +91,13 @@ async fn run_async(opts: Opts) -> Result<()> {
 
     let peer_id = load_or_create_peer_id(&state_dir)?;
     let time: Arc<dyn MonotonicTime> = Arc::new(ProcessTime::default());
-    let peers = resolve_peers(&opts.peers).await?;
     let node = Arc::new(
         audio_net::spawn(
             audio_net::Config {
                 peer_id,
                 tcp_bind: opts.tcp_bind,
                 udp_bind: opts.udp_bind,
-                peers,
+                peers: opts.peers,
                 sample_rate,
                 time: Arc::clone(&time),
             },
@@ -178,17 +175,6 @@ fn seed_default_instrument(
     let hash = blobs.put(DEFAULT_INSTRUMENT_WAT.as_bytes())?;
     score.set_instrument(&hash, 0)?;
     Ok(Some(hash))
-}
-
-async fn resolve_peers(peers: &[String]) -> Result<Vec<SocketAddr>> {
-    let mut resolved = BTreeSet::new();
-    for peer in peers {
-        let addresses = tokio::net::lookup_host(peer)
-            .await
-            .with_context(|| format!("resolve peer {peer}"))?;
-        resolved.extend(addresses);
-    }
-    Ok(resolved.into_iter().collect())
 }
 
 fn load_or_create_peer_id(state_dir: &Path) -> Result<PeerId> {
@@ -640,14 +626,6 @@ mod tests {
         let first = load_or_create_peer_id(dir.path())?;
         let second = load_or_create_peer_id(dir.path())?;
         assert_eq!(first, second);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn hostname_peers_resolve() -> Result<()> {
-        let peers = resolve_peers(&["localhost:7648".to_owned()]).await?;
-        assert!(!peers.is_empty());
-        assert!(peers.iter().all(|peer| peer.port() == 7648));
         Ok(())
     }
 

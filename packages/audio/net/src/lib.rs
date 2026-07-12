@@ -48,8 +48,8 @@ pub struct Config {
     pub tcp_bind: SocketAddr,
     /// UDP address for clock pings (`127.0.0.1:0` for an ephemeral port).
     pub udp_bind: SocketAddr,
-    /// Known peers to dial (their TCP addresses). Injected, not discovered.
-    pub peers: Vec<SocketAddr>,
+    /// Known peers to dial (`host:port`). Injected, not discovered.
+    pub peers: Vec<String>,
     /// Session sample rate advertised in `Hello`.
     pub sample_rate: u32,
     /// Time source; [`audio_clock::ProcessTime`] outside tests.
@@ -221,13 +221,20 @@ async fn accept_loop(node: Arc<Node>, listener: TcpListener) {
 }
 
 /// Keep one outbound connection alive to a configured peer.
-async fn dial_loop(node: Arc<Node>, peer: SocketAddr) {
+async fn dial_loop(node: Arc<Node>, peer: String) {
     loop {
-        match TcpStream::connect(peer).await {
+        match TcpStream::connect(&peer).await {
             Ok(stream) => {
                 debug!(%peer, "dialed peer");
-                if let Err(error) = drive_connection(Arc::clone(&node), stream, peer).await {
-                    warn!(%peer, %error, "peer connection ended");
+                match stream.peer_addr() {
+                    Ok(remote) => {
+                        if let Err(error) =
+                            drive_connection(Arc::clone(&node), stream, remote).await
+                        {
+                            warn!(%peer, %error, "peer connection ended");
+                        }
+                    }
+                    Err(error) => warn!(%peer, %error, "read peer address failed; will retry"),
                 }
             }
             Err(error) => debug!(%peer, %error, "dial failed; will retry"),
@@ -1015,7 +1022,7 @@ mod tests {
                 peer_id: PeerId(2),
                 tcp_bind: "127.0.0.1:0".parse()?,
                 udp_bind: "127.0.0.1:0".parse()?,
-                peers: vec![a.tcp_addr],
+                peers: vec![a.tcp_addr.to_string()],
                 sample_rate: 48_000,
                 time: Arc::new(TestTime::default()),
             },
@@ -1029,6 +1036,29 @@ mod tests {
         let rebound = UdpSocket::bind(udp_addr).await?;
         drop(rebound);
         drop(b);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unresolved_hostname_does_not_block_node_startup() -> Result<()> {
+        let dir = TestDir::new("unresolved-hostname");
+        let score = Arc::new(Mutex::new(Score::new()));
+        let blobs = Arc::new(BlobStore::open(&dir.0)?);
+        let node = spawn(
+            Config {
+                peer_id: PeerId(1),
+                tcp_bind: "127.0.0.1:0".parse()?,
+                udp_bind: "127.0.0.1:0".parse()?,
+                peers: vec!["unresolvable.invalid:7648".to_owned()],
+                sample_rate: 48_000,
+                time: Arc::new(TestTime::default()),
+            },
+            score,
+            blobs,
+        )
+        .await?;
+
+        assert_ne!(node.tcp_addr.port(), 0);
         Ok(())
     }
 
