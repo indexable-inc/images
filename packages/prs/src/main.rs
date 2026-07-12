@@ -67,13 +67,24 @@ fn main() -> Result<()> {
             note = Some("no patch references an upstream PR yet".to_owned());
         } else {
             eprintln!("fetching status for {} PRs...", prs.len());
-            let statuses = github::fetch(&prs, &found)?;
-            for row in &mut rows {
-                row.status = row
-                    .pr
-                    .as_ref()
-                    .and_then(|pr| statuses.get(&pr.url))
-                    .cloned();
+            // A failed fetch (network, rate limit, bad token) degrades to the
+            // same no-status listing the tokenless path shows, instead of
+            // aborting before anything renders.
+            match github::fetch(&prs, &found) {
+                Ok(statuses) => {
+                    for row in &mut rows {
+                        row.status = row
+                            .pr
+                            .as_ref()
+                            .and_then(|pr| statuses.get(&pr.url))
+                            .cloned();
+                    }
+                }
+                Err(err) => {
+                    note = Some(format!(
+                        "PR status fetch failed ({err}); showing patches without live status"
+                    ));
+                }
             }
         }
         token = Some(found);

@@ -116,8 +116,9 @@ pub struct PatchRow {
     pub fork: String,
     /// Patch file name (the stable identity the series and dag.json share).
     pub file: String,
-    /// Declared upstream intent (`attempt` / `hold` / `never`); `None` for
-    /// loose patches, which carry no registry entry.
+    /// Declared upstream intent (`attempt` / `hold` / `never`); a registered
+    /// patch without a mapping entry defaults to `hold` (the registry
+    /// fail-safe); `None` for loose patches, which carry no registry entry.
     pub intent: Option<String>,
     pub pr: Option<PrRef>,
     pub pr_source: Option<PrSource>,

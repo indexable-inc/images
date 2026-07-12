@@ -232,7 +232,14 @@ fn registry_rows(root: Option<&Path>, fork: &Fork) -> Vec<PatchRow> {
                 .filter(|path| path.is_file());
             PatchRow {
                 fork: fork.name.clone(),
-                intent: fork.patches.get(&file).map(|entry| entry.upstream.clone()),
+                // A registered patch with no mapping entry is `hold` with an
+                // "unclassified" reason per the registry fail-safe (see
+                // lib/fork-packages.nix); only loose patches carry no intent.
+                intent: Some(
+                    fork.patches
+                        .get(&file)
+                        .map_or_else(|| "hold".to_owned(), |entry| entry.upstream.clone()),
+                ),
                 pr: found.as_ref().map(|found| found.pr.clone()),
                 pr_source: found.map(|found| found.source),
                 status: None,
