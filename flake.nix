@@ -549,7 +549,7 @@
       # vhost registry whose Caddyfile is validated at build time. Optional
       # Wi-Fi DNS takeover behind `setWifiDns`. See
       # modules/darwin/localhost-proxy.nix.
-      localhost-proxy = ./modules/darwin/localhost-proxy.nix;
+      localhost-proxy = import ./modules/darwin/localhost-proxy.nix {inherit (ix) writeBashApplication;};
     };
     homeModules = {
       # Workstation-facing home-manager module: declare a service once, get a

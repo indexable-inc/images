@@ -3,13 +3,61 @@
 # answers *.localhost with loopback addresses (RFC 6761 reserves .localhost
 # for exactly this) and Caddy on loopback :80 routes by Host header. Adding
 # a service is one line in `services.localhostProxy.services`.
-{
+{writeBashApplication}: {
   config,
   lib,
   pkgs,
   ...
 }: let
   cfg = config.services.localhostProxy;
+  dnsmasq = lib.getExe pkgs.dnsmasq;
+
+  # Keep the persistent networksetup mutation inside the launchd job that
+  # needs it. launchd sends SIGTERM when unloading a job, so disabling the
+  # option or removing the module restores automatic DNS as dnsmasq stops.
+  dnsmasqWithWifiDns = writeBashApplication pkgs {
+    name = "dnsmasq-with-wifi-dns";
+    runtimeInputs = [pkgs.dnsmasq];
+    text = ''
+      restore_dns() {
+        /usr/sbin/networksetup -setdnsservers Wi-Fi Empty
+      }
+
+      terminate() {
+        if [ -n "$dnsmasq_pid" ]; then
+          kill -TERM "$dnsmasq_pid"
+          wait "$dnsmasq_pid"
+        fi
+        exit 0
+      }
+
+      dnsmasq_pid=
+      trap restore_dns EXIT
+      trap terminate HUP INT TERM
+      /usr/sbin/networksetup -setdnsservers Wi-Fi 127.0.0.1 ::1
+      dnsmasq "$@" &
+      dnsmasq_pid=$!
+      wait "$dnsmasq_pid"
+    '';
+  };
+  dnsmasqWithWifiDnsExe = lib.getExe dnsmasqWithWifiDns;
+
+  dnsmasqArgs = [
+    "--keep-in-foreground"
+    "--listen-address=127.0.0.1"
+    "--listen-address=::1"
+    "--port=53"
+    "--no-resolv"
+    "--bogus-priv"
+    "--cache-size=1000"
+    "--server=100.100.100.100"
+    # Keep every RR type for *.localhost inside the local resolver. Since
+    # dnsmasq 2.86, --address alone forwards non-A/AAAA queries upstream:
+    # https://thekelleys.org.uk/dnsmasq/docs/dnsmasq-man.html
+    "--local=/localhost/"
+    "--address=/localhost/127.0.0.1"
+    "--address=/localhost/::1"
+  ];
 
   # Rendered and parse-checked at build time so a bad Caddyfile fails the
   # switch, not the running daemon. http:// + auto_https off keep Caddy from
@@ -30,7 +78,10 @@
       ${lib.concatStrings (lib.mapAttrsToList site cfg.services)}
     '';
   in
-    pkgs.runCommandLocal "Caddyfile" {nativeBuildInputs = [pkgs.caddy];} ''
+    pkgs.runCommandLocal "Caddyfile" {
+      strictDeps = true;
+      nativeBuildInputs = [pkgs.caddy];
+    } ''
       HOME=$TMPDIR caddy validate --config ${rendered} --adapter caddyfile
       cp ${rendered} $out
     '';
@@ -57,11 +108,12 @@ in {
       type = lib.types.bool;
       default = false;
       description = ''
-        Point Wi-Fi DNS at the local dnsmasq (127.0.0.1, ::1) at activation
-        time. Only safe AFTER setting global nameservers in the Tailscale
-        admin panel (DNS tab): otherwise Tailscale's MagicDNS forwards
-        non-tailnet queries through the system resolver, which is dnsmasq,
-        which sends them back to MagicDNS: loop.
+        Point Wi-Fi DNS at the local dnsmasq (127.0.0.1, ::1) while its
+        launchd job is running. Unloading the job restores automatic DNS.
+        Only safe AFTER setting global nameservers in the Tailscale admin
+        panel (DNS tab): otherwise Tailscale's MagicDNS forwards non-tailnet
+        queries through the system resolver, which sends them back to
+        MagicDNS in a loop.
 
         Prerequisite: Tailscale admin -> DNS -> add global nameservers
         (e.g. 1.1.1.1, 8.8.8.8) and enable "Override local DNS". This makes
@@ -87,21 +139,15 @@ in {
     launchd.daemons.dnsmasq = {
       serviceConfig = {
         Label = "org.nixos.dnsmasq";
-        ProgramArguments = [
-          "${pkgs.dnsmasq}/bin/dnsmasq"
-          "--keep-in-foreground"
-          "--listen-address=127.0.0.1"
-          "--listen-address=::1"
-          "--port=53"
-          "--no-resolv"
-          "--bogus-priv"
-          "--domain-needed"
-          "--cache-size=1000"
-          "--server=100.100.100.100"
-          # *.localhost -> loopback, for the Caddy vhosts (cfg.services).
-          "--address=/localhost/127.0.0.1"
-          "--address=/localhost/::1"
-        ];
+        ProgramArguments =
+          [
+            (
+              if cfg.setWifiDns
+              then dnsmasqWithWifiDnsExe
+              else dnsmasq
+            )
+          ]
+          ++ dnsmasqArgs;
         KeepAlive = true;
         RunAtLoad = true;
         StandardErrorPath = "/var/log/dnsmasq.log";
@@ -114,7 +160,7 @@ in {
       serviceConfig = {
         Label = "org.nixos.caddy";
         ProgramArguments = [
-          "${pkgs.caddy}/bin/caddy"
+          (lib.getExe pkgs.caddy)
           "run"
           "--config"
           "${caddyfile}"
@@ -129,12 +175,5 @@ in {
         StandardErrorPath = "/var/log/caddy.log";
       };
     };
-
-    # postActivation, not an arbitrary `system.activationScripts.<name>`:
-    # nix-darwin executes only its fixed set of activation hooks, so a
-    # freestanding name is declared but never runs.
-    system.activationScripts.postActivation.text = lib.mkIf cfg.setWifiDns (lib.mkAfter ''
-      /usr/sbin/networksetup -setdnsservers Wi-Fi 127.0.0.1 ::1
-    '');
   };
 }

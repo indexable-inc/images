@@ -44,6 +44,7 @@
       pkgs
       paths
       ;
+    inherit (ix) writeBashApplication;
   };
   # VM boot smoke test for the minecraft-blocks Paper plugin (ENG-2186). Not
   # part of the `eval` aggregate: it boots a qemu VM, so it is its own check
