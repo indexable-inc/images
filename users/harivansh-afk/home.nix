@@ -24,13 +24,13 @@
 # checked-bash launcher, the language-toolchain handles in ./neovim.nix),
 # mirroring how users/andrewgazelka/home.nix is wired in flake.nix.
 {ix}: {lib, ...}: let
-  muxModule = import ../../modules/home/mux.nix {inherit ix;};
+  muxModule = import (ix.paths.modules + "/home/mux.nix") {inherit ix;};
   neovimModule = import ./neovim.nix {inherit ix;};
 in {
   imports = [
-    ../../modules/home/cli-baseline.nix
-    ../../modules/home/xdg-tidy.nix
-    ../../modules/home/zsh-vi-cursor.nix
+    (ix.paths.modules + "/home/cli-baseline.nix")
+    (ix.paths.modules + "/home/xdg-tidy.nix")
+    (ix.paths.modules + "/home/zsh-vi-cursor.nix")
     ./git.nix
     ./shell.nix
     muxModule
