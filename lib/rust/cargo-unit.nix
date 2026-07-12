@@ -703,6 +703,7 @@
         testChecksByTarget
         testChecksAll
         ;
+      cargoConfigScript = context.configScript;
       targetSets = namedTargetSets;
       inherit (args) policy;
     };

@@ -1663,7 +1663,11 @@ fn render_build_script_run_phase(
         "build_script_manifest_dir_source={}",
         shell::double_quote(&manifest_dir)
     )?;
-    script.push_str("build_script_manifest_dir=$out/manifest-dir\n");
+    writeln!(
+        script,
+        "build_script_manifest_dir=$out/{}",
+        shell::quote(source.package_root())
+    )?;
     script.push_str("mkdir -p \"$build_script_manifest_dir\"\n");
     script.push_str(
         "cp -RL \"$build_script_manifest_dir_source\"/. \"$build_script_manifest_dir\"/\n",
@@ -1675,6 +1679,7 @@ fn render_build_script_run_phase(
     ensure_source_contains_unit(source, run_unit)?;
     script.push_str("export CARGO_MANIFEST_DIR=$build_script_manifest_dir\n");
     script.push_str("export RUSTC=\"$(type -p rustc)\"\n");
+    script.push_str("export RUSTDOC=\"$(type -p rustdoc)\"\n");
     script.push_str("HOST_TRIPLE=\"$($RUSTC -vV | sed -n 's/^host: //p')\"\n");
     script.push_str("export HOST=\"$HOST_TRIPLE\"\n");
     if let Some(platform) = &run_unit.platform {
@@ -1692,6 +1697,29 @@ fn render_build_script_run_phase(
         "export OPT_LEVEL={}",
         shell::quote(&run_unit.profile.opt_level)
     )?;
+    let package_name = nix_attr(&run_unit.package_name());
+    let platform = run_unit
+        .platform
+        .as_ref()
+        .map_or_else(|| "null".to_string(), |platform| nix_attr(platform));
+    writeln!(
+        script,
+        "cargo_encoded_rustflags=( {} )",
+        run_unit
+            .profile
+            .rustflags
+            .iter()
+            .map(|flag| shell::quote(flag))
+            .collect::<Vec<_>>()
+            .join(" ")
+    )?;
+    writeln!(
+        script,
+        "${{renderCargoEncodedRustflags {package_name} {platform}}}"
+    )?;
+    script.push_str(
+        "export CARGO_ENCODED_RUSTFLAGS=\"$(IFS=$'\\x1f'; printf '%s' \"''${cargo_encoded_rustflags[*]}\")\"\n",
+    );
     writeln!(
         script,
         "export DEBUG={}",
@@ -5328,7 +5356,7 @@ links = "native_ffi"
                         "src_path": build_rs_path,
                         "edition": "2024"
                     },
-                    "profile": { "name": "release", "opt_level": "3" },
+                    "profile": { "name": "release", "opt_level": "3", "rustflags": ["-C", "target-cpu=native"] },
                     "features": ["arch", "simd-support"],
                     "mode": "build",
                     "dependencies": []
@@ -5342,7 +5370,7 @@ links = "native_ffi"
                         "src_path": build_rs_path,
                         "edition": "2024"
                     },
-                    "profile": { "name": "release", "opt_level": "3" },
+                    "profile": { "name": "release", "opt_level": "3", "rustflags": ["-C", "target-cpu=native"] },
                     "features": ["arch", "simd-support"],
                     "mode": "run-custom-build",
                     "platform": "x86_64-unknown-linux-gnu",
@@ -5381,8 +5409,15 @@ links = "native_ffi"
         assert!(rendered.contains("export CARGO_PKG_LICENSE_FILE=\"LICENSE\""));
         assert!(rendered.contains("export CARGO_PKG_RUST_VERSION=\"1.85\""));
         assert!(rendered.contains("export CARGO_MANIFEST_LINKS=\"native_ffi\""));
+        assert!(rendered.contains("export RUSTDOC=\"$(type -p rustdoc)\""));
         assert!(rendered.contains("export CARGO_FEATURE_ARCH=1"));
         assert!(rendered.contains("export CARGO_FEATURE_SIMD_SUPPORT=1"));
+        assert!(rendered.contains("cargo_encoded_rustflags=( '-C' 'target-cpu=native' )"));
+        assert!(
+            rendered
+                .contains("${renderCargoEncodedRustflags \"native\" \"x86_64-unknown-linux-gnu\"}")
+        );
+        assert!(rendered.contains("export CARGO_ENCODED_RUSTFLAGS="));
         assert!(rendered.contains("\"$RUSTC\" --print cfg --target \"$TARGET\""));
         assert!(rendered.contains("cargo_cfg_env=\"CARGO_CFG_$(printf '%s' \"$cargo_cfg_key\""));
         assert!(
@@ -5399,9 +5434,10 @@ links = "native_ffi"
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |duration| duration.as_nanos())
         ));
-        fs::create_dir_all(workspace.join("builder")).unwrap();
+        let package_root = workspace.join("crates/nested-native");
+        fs::create_dir_all(package_root.join("builder")).unwrap();
         fs::write(
-            workspace.join("Cargo.toml"),
+            package_root.join("Cargo.toml"),
             r#"[package]
 name = "nested-native"
 version = "0.1.0"
@@ -5409,10 +5445,10 @@ links = "nested_native"
 "#,
         )
         .unwrap();
-        let build_rs = workspace.join("builder").join("main.rs");
+        let build_rs = package_root.join("builder").join("main.rs");
         fs::write(&build_rs, "fn main() {}\n").unwrap();
         let build_rs_path = build_rs.to_string_lossy();
-        let pkg_id = format!("path+file://{}#nested-native@0.1.0", workspace.display());
+        let pkg_id = format!("path+file://{}#nested-native@0.1.0", package_root.display());
         let graph: UnitGraph = serde_json::from_value(serde_json::json!({
             "version": 1,
             "units": [
@@ -5464,7 +5500,7 @@ links = "nested_native"
         .unwrap();
 
         assert!(rendered.contains("build_script_manifest_dir_source=\"$src\""));
-        assert!(rendered.contains("build_script_manifest_dir=$out/manifest-dir"));
+        assert!(rendered.contains("build_script_manifest_dir=$out/'crates/nested-native'"));
         assert!(rendered.contains(
             "cp -RL \"$build_script_manifest_dir_source\"/. \"$build_script_manifest_dir\"/"
         ));
