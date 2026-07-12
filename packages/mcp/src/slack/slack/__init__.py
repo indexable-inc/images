@@ -1340,72 +1340,83 @@ async def search(
 # docstring names the OAuth scope the call needs.
 
 
-async def react(channel: str, ts: str, emoji: str) -> dict[str, Any]:
-    """Add an emoji reaction to a message.
+def _emoji_name(emoji: str) -> str:
+    """The bare emoji name (surrounding colons stripped); raises on empty."""
+    name = emoji.strip().strip(":")
+    if not name:
+        raise SlackError("emoji must not be empty")
+    return name
+
+
+async def _apply_tolerant(
+    method: str,
+    channel: str,
+    params: dict[str, Any],
+    tolerated: str,
+) -> tuple[str, bool]:
+    """Resolve ``channel`` and call the mutating ``method``, treating the Slack
+    errors named in ``tolerated`` (space-separated) as "already in the requested
+    state" rather than failures -- Slack reports an idempotent mutation
+    (re-adding a reaction, re-pinning a message) as ``ok=false``. Shared by
+    :func:`react` / :func:`unreact` / :func:`pin` / :func:`unpin` so the
+    resolve-call-tolerate shape lives once.
+
+    Returns ``(channel_id, applied)``; ``applied=False`` means the state was
+    already there (or already gone). Transient errors (429/5xx) propagate
+    unchanged so callers can retry instead of misreading a rate limit as
+    "already done".
+    """
+    _require_incognito()
+    token = _token()
+    channel_id = await asyncio.to_thread(_resolve_channel, channel, token)
+    applied = True
+    try:
+        await asyncio.to_thread(
+            _api_call, method, token, {"channel": channel_id, **params}
+        )
+    except SlackTransientError:
+        raise
+    except SlackError as exc:
+        if not any(t in str(exc) for t in tolerated.split()):
+            raise
+        applied = False
+    return channel_id, applied
+
+
+async def react(channel: str, ts: str, emoji: str, *, remove: bool = False) -> dict[str, Any]:
+    """Add (or with ``remove=True``, take back) an emoji reaction on a message.
 
     ``channel`` resolves like :func:`messages`; ``ts`` is the message's Slack
     timestamp (from :func:`messages` / :func:`thread` / :func:`send`);
     ``emoji`` is the emoji name, with or without colons (``"thumbsup"`` or
-    ``":thumbsup:"``).
+    ``":thumbsup:"``). :func:`unreact` is the readable spelling of
+    ``remove=True``.
 
-    Idempotent: reacting again with the same emoji returns ``added=False``
-    instead of raising. Returns ``{"ok": True, "added": bool, "channel": id,
-    "ts": ts, "emoji": name}``. Needs the ``reactions:write`` scope. Raises
-    :exc:`SlackError` on other failures or in a shared room.
-    """
-    _require_incognito()
-    token = _token()
-    name = emoji.strip().strip(":")
-    if not name:
-        raise SlackError("emoji must not be empty")
-    channel_id = await asyncio.to_thread(_resolve_channel, channel, token)
-    added = True
-    try:
-        await asyncio.to_thread(
-            _api_call,
-            "reactions.add",
-            token,
-            {"channel": channel_id, "timestamp": ts, "name": name},
-        )
-    except SlackTransientError:
-        raise
-    except SlackError as exc:
-        if "already_reacted" not in str(exc):
-            raise
-        added = False
-    return {"ok": True, "added": added, "channel": channel_id, "ts": ts, "emoji": name}
-
-
-async def unreact(channel: str, ts: str, emoji: str) -> dict[str, Any]:
-    """Remove your own emoji reaction from a message.
-
-    Arguments as in :func:`react`. Idempotent: removing a reaction you never
-    added returns ``removed=False`` instead of raising. Returns ``{"ok": True,
-    "removed": bool, "channel": id, "ts": ts, "emoji": name}``. Needs the
+    Idempotent both ways: reacting again with the same emoji returns
+    ``added=False`` instead of raising, and removing a reaction you never added
+    returns ``removed=False``. Returns ``{"ok": True, "added" | "removed":
+    bool, "channel": id, "ts": ts, "emoji": name}``. Needs the
     ``reactions:write`` scope. Raises :exc:`SlackError` on other failures or in
     a shared room.
     """
-    _require_incognito()
-    token = _token()
-    name = emoji.strip().strip(":")
-    if not name:
-        raise SlackError("emoji must not be empty")
-    channel_id = await asyncio.to_thread(_resolve_channel, channel, token)
-    removed = True
-    try:
-        await asyncio.to_thread(
-            _api_call,
-            "reactions.remove",
-            token,
-            {"channel": channel_id, "timestamp": ts, "name": name},
-        )
-    except SlackTransientError:
-        raise
-    except SlackError as exc:
-        if "no_reaction" not in str(exc):
-            raise
-        removed = False
-    return {"ok": True, "removed": removed, "channel": channel_id, "ts": ts, "emoji": name}
+    name = _emoji_name(emoji)
+    method, tolerated, flag = (
+        ("reactions.remove", "no_reaction", "removed")
+        if remove
+        else ("reactions.add", "already_reacted", "added")
+    )
+    channel_id, applied = await _apply_tolerant(
+        method, channel, {"timestamp": ts, "name": name}, tolerated
+    )
+    return {"ok": True, flag: applied, "channel": channel_id, "ts": ts, "emoji": name}
+
+
+async def unreact(channel: str, ts: str, emoji: str) -> dict[str, Any]:
+    """Remove your own emoji reaction from a message: ``react(...,
+    remove=True)`` under a nicer name, with the same arguments, idempotence
+    (``removed=False`` when there was nothing to remove), return shape, and
+    ``reactions:write`` scope."""
+    return await react(channel, ts, emoji, remove=True)
 
 
 async def reactions(channel: str, ts: str) -> pl.DataFrame:
@@ -1824,56 +1835,31 @@ async def pins(channel: str) -> pl.DataFrame:
     return pl.DataFrame(rows, schema_overrides=_PINS_SCHEMA).select(list(_PINS_SCHEMA))
 
 
-async def pin(channel: str, ts: str) -> dict[str, Any]:
-    """Pin a message to its conversation.
+async def pin(channel: str, ts: str, *, remove: bool = False) -> dict[str, Any]:
+    """Pin a message to its conversation (or with ``remove=True``, unpin it).
 
     ``channel`` resolves like :func:`messages`; ``ts`` is the message's Slack
-    timestamp. Idempotent: pinning an already-pinned message returns
-    ``pinned=False`` instead of raising. Returns ``{"ok": True, "pinned":
-    bool, "channel": id, "ts": ts}``. Needs the ``pins:write`` scope. Raises
-    :exc:`SlackError` on other failures or in a shared room.
+    timestamp. :func:`unpin` is the readable spelling of ``remove=True``.
+    Idempotent both ways: pinning an already-pinned message returns
+    ``pinned=False`` instead of raising, and unpinning a message that is not
+    pinned returns ``removed=False``. Returns ``{"ok": True, "pinned" |
+    "removed": bool, "channel": id, "ts": ts}``. Needs the ``pins:write``
+    scope. Raises :exc:`SlackError` on other failures or in a shared room.
     """
-    _require_incognito()
-    token = _token()
-    channel_id = await asyncio.to_thread(_resolve_channel, channel, token)
-    pinned = True
-    try:
-        await asyncio.to_thread(
-            _api_call, "pins.add", token, {"channel": channel_id, "timestamp": ts}
-        )
-    except SlackTransientError:
-        raise
-    except SlackError as exc:
-        if "already_pinned" not in str(exc):
-            raise
-        pinned = False
-    return {"ok": True, "pinned": pinned, "channel": channel_id, "ts": ts}
+    method, tolerated, flag = (
+        ("pins.remove", "no_pin not_pinned", "removed")
+        if remove
+        else ("pins.add", "already_pinned", "pinned")
+    )
+    channel_id, applied = await _apply_tolerant(method, channel, {"timestamp": ts}, tolerated)
+    return {"ok": True, flag: applied, "channel": channel_id, "ts": ts}
 
 
 async def unpin(channel: str, ts: str) -> dict[str, Any]:
-    """Unpin a message from its conversation.
-
-    Arguments as in :func:`pin`. Idempotent: unpinning a message that is not
-    pinned returns ``removed=False`` instead of raising. Returns ``{"ok":
-    True, "removed": bool, "channel": id, "ts": ts}``. Needs the
-    ``pins:write`` scope. Raises :exc:`SlackError` on other failures or in a
-    shared room.
-    """
-    _require_incognito()
-    token = _token()
-    channel_id = await asyncio.to_thread(_resolve_channel, channel, token)
-    removed = True
-    try:
-        await asyncio.to_thread(
-            _api_call, "pins.remove", token, {"channel": channel_id, "timestamp": ts}
-        )
-    except SlackTransientError:
-        raise
-    except SlackError as exc:
-        if "no_pin" not in str(exc) and "not_pinned" not in str(exc):
-            raise
-        removed = False
-    return {"ok": True, "removed": removed, "channel": channel_id, "ts": ts}
+    """Unpin a message from its conversation: ``pin(..., remove=True)`` under a
+    nicer name, with the same idempotence (``removed=False`` when it was not
+    pinned), return shape, and ``pins:write`` scope."""
+    return await pin(channel, ts, remove=True)
 
 
 async def mark_read(channel: str, ts: str) -> dict[str, Any]:
