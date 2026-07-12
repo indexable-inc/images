@@ -26,11 +26,11 @@ def test_latest_namespace_is_not_stale_after_clear(tmp_path: Path, fake_weave: o
     conn = store.connect(tmp_path / "ns.db")
     x = [{"name": "x", "type": "int", "kind": "scalar", "repr": "4", "size": 28, "shape": ""}]
     store.start(conn, id="j1", name="", code="x = 4", started_at=100.0)
-    store.finish(conn, id="j1", status="done", ended_at=100.1, output="", result="4", error=None, namespace=x)
+    store.finish(conn, id="j1", kind="cell", status="done", ended_at=100.1, output="", result="4", error=None, namespace=x)
     assert store.latest_namespace(conn) == x
     # A later run clears the namespace: the pane must go empty, not stay on `x`.
     store.start(conn, id="j2", name="", code="reset", started_at=101.0)
-    store.finish(conn, id="j2", status="done", ended_at=101.1, output="", result=None, error=None, namespace=[])
+    store.finish(conn, id="j2", kind="cell", status="done", ended_at=101.1, output="", result=None, error=None, namespace=[])
     assert store.latest_namespace(conn) == []
     # A running job (no ended_at) is excluded; the last finished value still holds.
     store.start(conn, id="j3", name="", code="while True:\n    pass", started_at=102.0)
@@ -62,7 +62,7 @@ def test_mark_interrupted_closes_running_rows_and_live_resources(tmp_path: Path,
     conn = store.connect(tmp_path / "s.ixnb")
     store.start(conn, id="dead", name="dead", code="x", started_at=1.0)
     store.start(conn, id="fine", name="fine", code="y", started_at=1.0)
-    store.finish(conn, id="fine", status="done", ended_at=2.0, output="", result=None, error=None)
+    store.finish(conn, id="fine", kind="cell", status="done", ended_at=2.0, output="", result=None, error=None)
     store.upsert_resource(
         conn, id="r1", title="t", kind="tui", html="", status="live", created_at=1.0, updated_at=1.0
     )
@@ -77,19 +77,19 @@ def test_replayable_anchors_on_ended_at_and_excludes_replays(tmp_path: Path, fak
     conn = store.connect(tmp_path / "s.ixnb")
     # Finished before the checkpoint: captured by it, not replayed.
     store.start(conn, id="old", name="old", code="a = 1", started_at=1.0)
-    store.finish(conn, id="old", status="done", ended_at=2.0, output="", result=None, error=None)
+    store.finish(conn, id="old", kind="cell", status="done", ended_at=2.0, output="", result=None, error=None)
     # Started before but FINISHED after the checkpoint: partial effects in the
     # checkpoint, so it must replay.
     store.start(conn, id="straddle", name="straddle", code="b = 2", started_at=1.5)
-    store.finish(conn, id="straddle", status="done", ended_at=6.0, output="", result=None, error=None)
+    store.finish(conn, id="straddle", kind="cell", status="done", ended_at=6.0, output="", result=None, error=None)
     # Finished after the checkpoint: replays.
     store.start(conn, id="new", name="new", code="c = 3", started_at=7.0)
-    store.finish(conn, id="new", status="done", ended_at=8.0, output="", result=None, error=None)
+    store.finish(conn, id="new", kind="cell", status="done", ended_at=8.0, output="", result=None, error=None)
     # Failed and replay-kind rows never replay.
     store.start(conn, id="bad", name="bad", code="boom", started_at=7.0)
-    store.finish(conn, id="bad", status="error", ended_at=8.0, output="", result=None, error="x")
+    store.finish(conn, id="bad", kind="cell", status="error", ended_at=8.0, output="", result=None, error="x")
     store.start(conn, id="rep", name="rep", code="d = 4", started_at=7.0, kind="replay")
-    store.finish(conn, id="rep", status="done", ended_at=8.0, output="", result=None, error=None)
+    store.finish(conn, id="rep", kind="replay", status="done", ended_at=8.0, output="", result=None, error=None)
 
     assert [r["id"] for r in store.replayable(conn, since=5.0)] == ["straddle", "new"]
     # No checkpoint at all: the whole successful original log, oldest first.
