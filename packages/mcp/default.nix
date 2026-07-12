@@ -680,6 +680,25 @@
     ''
   );
 
+  # Typed GitHub operations for the kernel. The runner lookup checks every
+  # applicable Actions scope through gh's JSON API before reporting no match.
+  githubPythonSource = builtins.path {
+    name = "ix-mcp-github-python-source";
+    path = ./src/github;
+  };
+  githubModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-github-python-module"
+    {
+      strictDeps = true;
+      meta.description = "Typed GitHub operations bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/github"
+      mkdir -p "$site"
+      cp -r ${githubPythonSource}/github/. "$site/"
+    ''
+  );
+
   # Local Claude Code history search (issue #2245): `await
   # claude_history.search(pattern)` returns one polars row per matching session
   # under ~/.claude/projects -- session id, un-munged cwd, start/end
@@ -1372,6 +1391,7 @@
       shModule
       svelteModule
       worktreeModule
+      githubModule
       claudeHistoryModule
       distillerModule
       browserModule
@@ -1455,6 +1475,7 @@
         lib.makeBinPath [
           pkgs.ripgrep
           pkgs.fd
+          pkgs.gh
         ]
       } \
         ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_VMKIT_BIN ${lib.escapeShellArg "${vmkitBin}/bin/vmkit"}"}
@@ -1478,6 +1499,7 @@
         lib.makeBinPath [
           pkgs.ripgrep
           pkgs.fd
+          pkgs.gh
         ]
       } \
         ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_VMKIT_BIN ${lib.escapeShellArg "${vmkitBin}/bin/vmkit"}"}
@@ -1533,6 +1555,7 @@
     "beeper"
     "view"
     "worktree"
+    "github"
     "mesh"
     "claude_history"
   ];
@@ -5372,6 +5395,34 @@
   meshBundled = importTest "mesh" "import mesh, asyncio; print('mesh-ok', all(asyncio.iscoroutinefunction(getattr(mesh, n)) for n in ('peers', 'sessions')), mesh.__version__)";
   linearBundled = importTest "linear" "import linear; print('linear-ok', all(callable(getattr(linear, n)) for n in ('issue', 'issue_update', 'issue_create', 'issue_search', 'comment_create', 'project_create')), linear.__version__)";
   notionBundled = importTest "notion" "import notion, asyncio; print('notion-ok', all(asyncio.iscoroutinefunction(getattr(notion, n)) for n in ('search', 'page', 'blocks', 'db_query', 'page_create', 'blocks_append', 'page_update')), notion.__version__)";
+  githubBundled = importTest "github" "import github, asyncio; print('github-ok', asyncio.iscoroutinefunction(github.runner), github.__version__)";
+  githubTestPython = pkgs.python3.withPackages (ps: [
+    ps.pytest
+    ps.pydantic
+    githubModule
+  ]);
+  githubTestSource = builtins.path {
+    name = "ix-mcp-github-test";
+    path = ./tests/test_github_runner.py;
+  };
+  githubTests =
+    pkgs.runCommand "ix-mcp-github-tests"
+    {
+      nativeBuildInputs = [githubTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${githubTestSource} "$TMPDIR/test_github_runner.py"
+      ${lib.getExe githubTestPython} -m pytest "$TMPDIR/test_github_runner.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp github tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      cat stdout
+      mkdir -p "$out"
+    '';
   notionTestPython = pkgs.python3.withPackages (ps: [
     ps.pytest
     ps.httpx
@@ -5720,6 +5771,8 @@ in
               resourcesBridgeTests
               meshBundled
               meshTests
+              githubBundled
+              githubTests
               beeperBundled
               requirementsSmoke
               engineBundled
