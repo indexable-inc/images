@@ -78,6 +78,11 @@ jobs:
           # The clone diff gate compares against the event's base commit.
           fetch-depth: 0
 
+      # Underscore digit separators: every nix invocation that evaluates this
+      # tree must go through the patched client (see the action's description).
+      - name: Bootstrap patched Nix client
+        uses: ./.github/actions/bootstrap-patched-nix
+
       # The global clone budget also runs inside `.#check`, but that derivation
       # intentionally has no `.git`. Run the zero-tolerance changed-line gate
       # in the checkout so a PR cannot add duplication while staying under the

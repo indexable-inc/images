@@ -4,7 +4,7 @@
 
   border = {
     radius = 6000;
-    diameter = 12000;
+    diameter = 12_000;
   };
 
   height = import ./world-height.nix;

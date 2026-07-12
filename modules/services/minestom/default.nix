@@ -69,7 +69,7 @@ in {
 
     port = mkOption {
       type = types.port;
-      default = 25565;
+      default = 25_565;
     };
 
     openFirewall = mkOption {

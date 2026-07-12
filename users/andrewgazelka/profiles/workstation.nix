@@ -1490,10 +1490,10 @@ in {
         };
         protocol.version = 2;
         http = {
-          postBuffer = 524288000;
+          postBuffer = 524_288_000;
           maxRequestBuffer = "100M";
           lowSpeedLimit = 0;
-          lowSpeedTime = 999999;
+          lowSpeedTime = 999_999;
         };
         transfer.fsckObjects = false;
         receive.fsckObjects = false;

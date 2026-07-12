@@ -316,6 +316,10 @@
   # image/module eval; `ixForPackages` / the overlay context rebind it to the
   # consuming pkgs so a patched source builds for its own system.
   patchedSrc = patchedSrcFor pkgs;
+  # Patch the vendored rnix inside a rust tool so it lexes underscore digit
+  # separators in nix numeric literals; the alejandra/statix/deadnix package
+  # dirs under packages/nix/ consume this. See its doc comment.
+  rnixDigitSeparators = import ./util/rnix-digit-separators;
   goUnitFor = pkgs:
     import ./build/go-unit.nix {
       inherit lib pkgs;
@@ -696,6 +700,7 @@
       publicArtifactsFor
       relativePath
       repoMetadata
+      rnixDigitSeparators
       ruffAnnArgs
       rustWorkspace
       rustWorkspaceFor
