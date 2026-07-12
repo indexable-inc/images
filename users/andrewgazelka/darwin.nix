@@ -75,7 +75,6 @@ in {
       # refuses no-auth servers, so a third-party client is required to reach
       # `vnc://<host>.<tailnet>.ts.net:5900`. See ix nix/modules/desktop/remote-desktop.nix.
       "vnc-viewer"
-      "zed"
       "zoom"
     ];
 

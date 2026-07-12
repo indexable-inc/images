@@ -18,6 +18,8 @@
   snix-src,
   clippy-src,
   codex-src,
+  zed-src,
+  zed-upstream,
   nix-src,
   ghostty,
   mesa-src,
@@ -530,6 +532,7 @@
       rustWorkspaceFor
       clippy-src
       ghostty
+      zed-src
       ;
   };
 
@@ -720,6 +723,7 @@
     nushell = nushell-src;
     nushellSrc = nushell-src;
     codexSrc = codex-src;
+    zedSrc = zed-upstream;
     clippySrc = clippy-src;
     nixSrc = nix-src;
     drgnSrc = drgn-src;
