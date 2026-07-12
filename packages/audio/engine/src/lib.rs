@@ -109,6 +109,7 @@ impl Renderer {
             .iter()
             .any(|loaded| loaded.hash == wanted.hash && loaded.at_frame == wanted.at_frame)
         {
+            self.loaded.retain(|loaded| loaded.at_frame <= wanted.at_frame);
             self.staged = None;
             self.loading = None;
             return Ok(true);
@@ -850,6 +851,26 @@ mod tests {
         renderer.render_range(0, 1, 48_000, &mut out)?;
 
         assert_eq!(out, [0.25]);
+        Ok(())
+    }
+
+    #[test]
+    fn reverting_to_loaded_instrument_discards_successor_history() -> Result<()> {
+        let Fixture { score, mut renderer, _dir } = fixture()?;
+        let hash_a = score.lock().expect("lock").instrument()?.expect("instrument").hash;
+        let hash_b = renderer.store.put(SHIFT_WAT.as_bytes())?;
+        let mut out = vec![0.0; 1];
+        renderer.render_range(0, 1, 48_000, &mut out)?;
+        score.lock().expect("lock").set_instrument(&hash_b, 100)?;
+        wait_for_staged(&mut renderer, hash_b)?;
+        renderer.render_range(100, 1, 48_000, &mut out)?;
+        assert_eq!(out, [1.25]);
+
+        score.lock().expect("lock").set_instrument(&hash_a, 0)?;
+        renderer.render_range(100, 1, 48_000, &mut out)?;
+
+        assert_eq!(out, [0.25]);
+        assert_eq!(renderer.loaded.len(), 1);
         Ok(())
     }
 
