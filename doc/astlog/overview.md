@@ -42,7 +42,8 @@ and matches with tree-sitter's `Query` engine; it does not use `ast-merge-ast`.
 
 Builtins, with arity (`core/src/program.rs:29-38`, `BUILTINS`): `ancestor/2`,
 `parent/2`, `text/2`, `kind/2`, `same-text/2`, `same-file/2`, `text-match/2`
-(regex, compiled once), `no-descendant/3`. No general negation or aggregates in
+(regex, compiled once), `misgrouped-digits/2` (canonical underscore digit
+grouping for numeric literals), `no-descendant/3`, `attached-sibling/3`. No general negation or aggregates in
 v0.
 
 ## core (`astlog-core`)

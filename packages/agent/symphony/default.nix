@@ -7,8 +7,8 @@
 # did from the standalone flake's `packages.default`.
 #
 # The room stack symphony drives over HTTP (room-server and the room UI)
-# lives in the ix monorepo. TODO: re-add the `room-server` binary once the
-# ix<->index flake cycle is resolved. Only the runtime moved here.
+# lives in the ix monorepo (`crates/room`, `packages/room`). Index
+# intentionally packages only the Elixir runtime, not room-server.
 {
   lib,
   pkgs,

@@ -260,7 +260,7 @@ in {
 
     clientServerPort = mkOption {
       type = types.port;
-      default = 10001;
+      default = 10_001;
       description = ''
         Head Ray Client server port. Off-cluster drivers reach the cluster at
         `ray://<headAddress>:<this>` (what `fleet.connect()` uses via
@@ -282,13 +282,13 @@ in {
 
     workerPortLow = mkOption {
       type = types.port;
-      default = 10002;
+      default = 10_002;
       description = "Low end of the pinned per-worker port range (inter-node worker RPC).";
     };
 
     workerPortHigh = mkOption {
       type = types.port;
-      default = 10031;
+      default = 10_031;
       description = "High end of the pinned per-worker port range.";
     };
 
@@ -318,7 +318,7 @@ in {
     objectStoreMemory = mkOption {
       type = types.nullOr types.ints.positive;
       default = null;
-      example = 8000000000;
+      example = 8_000_000_000;
       description = ''
         Bytes of RAM for this node's object store (Plasma). Null lets Ray
         autodetect (~30% of RAM). Either way Ray spills to disk under

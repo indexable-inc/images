@@ -91,6 +91,16 @@ let
   in
     nixEverything.overrideAttrs (old: {
       version = "2.34.7+ix";
+      passthru =
+        (old.passthru or {})
+        // {
+          # The patched modular component set, for tools that must link the
+          # same patched libexpr this daemon-compatible client uses
+          # (packages/nix/nix-eval-jobs: the CI evaluator has to parse the
+          # same language the client does, underscore digit separators
+          # included).
+          components = patchedComponents;
+        };
       # The aggregate's `doCheck = true` gates the build on `checkInputs`: the
       # five component unit-test runners plus the entire upstream functional
       # suite. Those dominate a cold build of this closure and re-validate

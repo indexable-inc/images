@@ -75,6 +75,6 @@ Scaffold with `cargo fuzz init` so targets land in
 hand-picked seeds under `fuzz/seeds/<target>/`, gitignore `fuzz/corpus/`, and
 minimize crashes with `cargo fuzz cmin <target>` or
 `cargo fuzz tmin <target> <path>` before committing the reduced input as a
-regression seed. `packages/minecraft/minecraft/nbt/fuzz/` is the worked example; see
+regression seed. `packages/minecraft/nbt/fuzz/` is the worked example; see
 [the cargo-fuzz book](https://rust-fuzz.github.io/book/cargo-fuzz.html) for
 the libFuzzer flag surface.

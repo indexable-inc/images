@@ -25,8 +25,8 @@
     "modules/services/resource-monitor/stats-writer/Cargo.toml",
     "packages/dag-runner/Cargo.toml",
     "packages/loop/Cargo.toml",
-    "packages/minecraft/minecraft/nbt/Cargo.toml",
-    "packages/minecraft/minecraft/sync-managed/Cargo.toml",
+    "packages/minecraft/nbt/Cargo.toml",
+    "packages/minecraft/sync-managed/Cargo.toml",
     "packages/nix/nix-cargo-unit/Cargo.toml",
     "packages/nix/oci-image-builder/Cargo.toml",
     "tests/fixtures/cargo-unit-hello/Cargo.toml"

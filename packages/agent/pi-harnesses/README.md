@@ -21,7 +21,7 @@ pi-harnesses/
   base/                   # id: pi-base       - base UX pack: live tok/s, git widget, /diff, /lg
   prosecutor/             # id: pi-prosecutor - executor under a skeptical, earned-trust supervisor
   beam/                   # id: pi-beam       - executor with beam search over isolated worktree branches
-  fusion/                 # id: pi-fusion     - primary agent delegating to a gpt-5.5-low sidekick
+  fusion/                 # id: pi-fusion     - primary agent delegating to a gpt-5.6-sol sidekick at low reasoning
   omp/                    # id: omp           - oh-my-pi: pinned upstream release binary + Claude bridges (not mk-pi-harness)
 ```
 
@@ -51,8 +51,8 @@ work and the child agents must probe real state.
 ```sh
 nix run github:indexable-inc/index#pi-prosecutor -- "your task"   # opus-4-8 executor + prosecutor (same model)
 nix run github:indexable-inc/index#pi-beam       -- "your task"
-nix run github:indexable-inc/index#pi-fusion     -- "your task"   # fable-5 primary + gpt-5.5-low sidekick
-PI_HARNESS_MODEL=codex nix run github:indexable-inc/index#pi-prosecutor -- "..."   # gpt-5.5 medium
+nix run github:indexable-inc/index#pi-fusion     -- "your task"   # fable-5 primary + gpt-5.6-sol sidekick at low reasoning
+PI_HARNESS_MODEL=codex nix run github:indexable-inc/index#pi-prosecutor -- "..."   # gpt-5.6-sol medium
 ```
 
 API keys come from the caller's environment (`ANTHROPIC_API_KEY` /

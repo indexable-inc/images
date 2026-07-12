@@ -196,7 +196,7 @@ in {
           roomServerPackage = mkOption {
             type = types.nullOr types.package;
             default = null;
-            description = "Package providing the codex-wrapped room-server launched as the host user (this flake's room-server output). Used by the per-run host placement.";
+            description = "Package providing the codex-wrapped room-server launched as the host user. Used by the per-run host placement; index does not provide this package.";
           };
 
           keep = mkOption {

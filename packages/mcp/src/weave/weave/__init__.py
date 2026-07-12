@@ -24,6 +24,8 @@ if TYPE_CHECKING:
 __all__ = [
     "HashRef",
     "QueryResult",
+    "TaskCancelledError",
+    "TaskFailedError",
     "Weave",
     "assert_fact",
     "assert_facts",
@@ -45,6 +47,8 @@ __version__ = "0.1.0"
 _DEFAULT_URL = "http://127.0.0.1:7677"
 _HASH_RE = re.compile(r"^(?:blake3:)?[0-9a-fA-F]{64}$")
 _BATCH = 500
+_HARNESSES = ("claude", "codex", "omp")
+_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
 
 
 @dataclass(frozen=True)
@@ -52,6 +56,14 @@ class HashRef:
     """Explicit marker for a Weave hash value."""
 
     value: str
+
+
+class TaskFailedError(RuntimeError):
+    """A delegated Weave task published the terminal ``failed`` state."""
+
+
+class TaskCancelledError(RuntimeError):
+    """A delegated Weave task published the terminal ``cancelled`` state."""
 
 
 def hashref(h: str) -> HashRef:
@@ -246,19 +258,42 @@ class Weave:
         system: str | None = None,
         topic: str | None = None,
         thread: str = "thread.main",
+        harness: str = "claude",
+        effort: str | None = None,
     ) -> str:
         """Append agent + task facts to the journal; return the task entity id.
 
         One ``assert_facts`` batch, in order: the agent entity ``agent-<name>``
-        (``name`` defaults to ``worker-<6hex>``) with type/name plus
-        model/system/topic when given, then the task entity ``task-<8hex>``
-        with type/agent/prompt/name/thread/requested_by, then
-        ``(task, state, "pending")`` strictly last. The pending fact is what
-        dispatches, so a half-written task never runs. The weave app fulfills
-        each pending task as a live interactive session attributed to the
-        agent entity; ``requested_by`` is this kernel's own agent id
-        (IX_WEAVE_AGENT, ``agent:main`` when unset).
+        (``name`` defaults to ``worker-<6hex>``) with type/name/harness plus
+        model/system/topic/effort when given, then the task entity
+        ``task-<8hex>`` with type/agent/harness/prompt/name/thread/requested_by
+        (plus model/effort when given), then ``(task, state, "pending")``
+        strictly last. The pending fact is what dispatches, so a half-written
+        task never runs. The weave app fulfills each pending task as a live
+        interactive session attributed to the agent entity; ``requested_by``
+        is this kernel's own agent id (IX_WEAVE_AGENT, ``agent:main`` when
+        unset).
+
+        ``harness`` picks the CLI per dispatch: ``'claude'`` (default) or
+        ``'codex'`` (the OpenAI Codex CLI); ``'omp'`` is reserved and raises
+        NotImplementedError for now. ``effort`` sets the codex reasoning effort
+        (one of low/medium/high/xhigh/max/ultra) and is codex-only: passing it
+        with any other harness raises. The per-dispatch harness/model/effort are
+        mirrored on the task entity (authoritative for the fulfiller) as well as
+        on the agent entity.
         """
+
+        if harness not in _HARNESSES:
+            raise ValueError(f"unknown harness {harness!r}: expected one of {', '.join(_HARNESSES)}")
+        if harness == "omp":
+            raise NotImplementedError(
+                "harness 'omp' is accepted in the API but not implemented yet: "
+                "use 'claude' (the default) or 'codex'"
+            )
+        if effort is not None and harness != "codex":
+            raise ValueError("effort= is codex-only for now: omit it for harness='claude' or switch to harness='codex'")
+        if effort is not None and effort not in _EFFORTS:
+            raise ValueError(f"unknown effort {effort!r}: expected one of {', '.join(_EFFORTS)}")
 
         name = name or f"worker-{secrets.token_hex(3)}"
         agent = f"agent-{name}"
@@ -266,11 +301,16 @@ class Weave:
         facts: list[tuple[str, str, Any]] = [
             (agent, "type", "agent"),
             (agent, "name", name),
+            (agent, "harness", harness),
         ]
-        facts += [(agent, attr, value) for attr, value in (("model", model), ("system", system), ("topic", topic)) if value is not None]
+        facts += [(agent, attr, value) for attr, value in (("model", model), ("system", system), ("topic", topic), ("effort", effort)) if value is not None]
         facts += [
             (task, "type", "task"),
             (task, "agent", agent),
+            (task, "harness", harness),
+        ]
+        facts += [(task, attr, value) for attr, value in (("model", model), ("effort", effort)) if value is not None]
+        facts += [
             (task, "prompt", prompt),
             (task, "name", " ".join(prompt.split()[:5])),
             (task, "thread", thread),
@@ -283,18 +323,31 @@ class Weave:
     async def result(self, task: str, *, timeout: float | None = None) -> str:
         """Block until ``task`` finishes; return its ``result`` fact text.
 
-        Polls ``latest(task, state)`` every 0.5s until it reaches done,
-        failed, or cancelled, then returns the task's ``result`` fact text
-        ("" when the fulfiller wrote none). Raises TimeoutError once
-        ``timeout`` seconds pass without a terminal state.
+        Polls ``latest(task, state)`` every 0.5s. ``done`` returns the durable
+        ``result`` fact ("" when the fulfiller wrote none); ``failed`` and
+        ``cancelled`` raise :class:`TaskFailedError` and
+        :class:`TaskCancelledError` with the published terminal detail.
+        Raises TimeoutError once ``timeout`` seconds pass without a terminal
+        state. This journal read is completion authority; any channel wake is
+        only a best-effort hint to inspect the durable result.
         """
 
         deadline = None if timeout is None else time.monotonic() + timeout
         while True:
             rows = (await self.query(f'?- latest("{task}", state, S).'))["rows"]
-            if rows and rows[0][0] in ("done", "failed", "cancelled"):
-                out = (await self.query(f'?- latest("{task}", result, R).'))["rows"]
-                return out[0][0] if out else ""
+            if rows:
+                state = rows[0][0]
+                if state == "done":
+                    out = (await self.query(f'?- latest("{task}", result, R).'))["rows"]
+                    return out[0][0] if out else ""
+                if state == "failed":
+                    out = (await self.query(f'?- latest("{task}", error, R).'))["rows"]
+                    detail = out[0][0] if out else ""
+                    raise TaskFailedError(f"task failed: {task}" + (f": {detail}" if detail else ""))
+                if state == "cancelled":
+                    out = (await self.query(f'?- latest("{task}", result, R).'))["rows"]
+                    detail = out[0][0] if out else ""
+                    raise TaskCancelledError(f"task cancelled: {task}" + (f": {detail}" if detail else ""))
             if deadline is not None and time.monotonic() >= deadline:
                 raise TimeoutError(f"task not finished after {timeout}s: {task}")
             await asyncio.sleep(0.5)
@@ -356,8 +409,12 @@ async def delegate(
     system: str | None = None,
     topic: str | None = None,
     thread: str = "thread.main",
+    harness: str = "claude",
+    effort: str | None = None,
 ) -> str:
-    return await _default.delegate(prompt, name=name, model=model, system=system, topic=topic, thread=thread)
+    return await _default.delegate(
+        prompt, name=name, model=model, system=system, topic=topic, thread=thread, harness=harness, effort=effort
+    )
 
 
 async def result(task: str, *, timeout: float | None = None) -> str:

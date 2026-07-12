@@ -68,6 +68,11 @@ jobs:
         with:
           ref: ${{ steps.pr.outputs.ref }}
 
+      # Underscore digit separators: every nix invocation that evaluates this
+      # tree must go through the patched client (see the action's description).
+      - name: Bootstrap patched Nix client
+        uses: ./.github/actions/bootstrap-patched-nix
+
       # `claude` must be on PATH for the rollouts; the package resolves it there.
       # Dispatch inputs go through env, not `${{ }}` string interpolation, so a
       # crafted value cannot break out of the shell (CWE-94).

@@ -2,7 +2,7 @@
 
 Complete reference for every house-style lint ASTLog enforces on Nix source in this
 repo. Reference for [`astlog-rules/nix.astlog`](./nix.astlog), the single source of
-truth. **100 lints total: 96 `error`, 4 `warning`.**
+truth. **102 lints total: 98 `error`, 4 `warning`.**
 
 ## How it works
 
@@ -122,6 +122,8 @@ truth. **100 lints total: 96 `error`, 4 `warning`.**
 | 98 | [`separate-host-guest-pkgs`](#separate-host-guest-pkgs) | err | referencing the host's `pkgs` inside a test node breaks when host and guest platforms differ; take `pkgs` from the node module function |
 | 99 | [`wait-for-unit-and-port`](#wait-for-unit-and-port) | err | curling a service after only `wait_for_unit` races on fast hosts; wait for `network-online.target`, the unit, and the open port |
 | 100 | [`minimize-with-scope`](#minimize-with-scope) | err | `with <expr>;` over any target other than a tightly-scoped `with pkgs;` obscures name origins; bind with `let`/`inherit` |
+| 101 | [`no-misgrouped-digit-separators`](#no-misgrouped-digit-separators) | err | underscore separators must group digits in threes (integer part and exponent from the right, fraction from the left) |
+| 102 | [`prefer-digit-grouping`](#prefer-digit-grouping) | err | five or more consecutive digits are read by counting; group them in threes with underscore separators |
 
 ## Rules by theme
 
@@ -141,6 +143,7 @@ truth. **100 lints total: 96 `error`, 4 `warning`.**
 - **NixOS modules (Nixcademy)** — [`parametrize-with-options`](#parametrize-with-options), [`avoid-specialargs`](#avoid-specialargs)
 - **NixOS tests (Nixcademy)** — [`separate-host-guest-pkgs`](#separate-host-guest-pkgs), [`wait-for-unit-and-port`](#wait-for-unit-and-port)
 - **Scoping (Nixcademy)** — [`minimize-with-scope`](#minimize-with-scope)
+- **Number literals** — [`no-misgrouped-digit-separators`](#no-misgrouped-digit-separators), [`prefer-digit-grouping`](#prefer-digit-grouping)
 
 ## Purity & reproducibility
 
@@ -2533,6 +2536,60 @@ with import nixpkgs { }; with lib; [ (getLib hello) ]
 
 ```nix
 { pkgs }: let inherit (pkgs) lib; in [ (lib.getLib pkgs.hello) ]
+```
+
+</td></tr></table>
+
+## Number literals
+
+Digit grouping in numeric literals, following the Rust convention. The repo's
+patched nix (`packages/nix/nix/patches/0014-libexpr-accept-underscore-digit-separators-in-numeri.patch`)
+accepts underscore digit separators between digits (`10_000`, `1_000.000_1`,
+`2.5e1_0`) and strips them before the value is parsed; these lints enforce that
+separators, where present, group digits in threes, and nudge long bare literals
+toward separators. Both share the `misgrouped-digits` builtin and an autofix
+(`nix run .#astlog -- fix ...`).
+
+### no-misgrouped-digit-separators
+
+**🔴 error**
+
+A literal that already carries underscore separators must use exactly the canonical grouping: threes, counted from the right for the integer part and the exponent and from the left of the decimal point for the fraction (`1_0000` is `10_000`, `1_000.00_001` is `1_000.000_01`). The workspace's tree-sitter-nix fork (`packages/code/tree-sitter-nix`) lexes underscore literals as single integer/float nodes -- the same dialect the patched nix lexer accepts -- so one literal is one finding and one rewrite edit.
+
+*Matches:* `integer_expression` / `float_expression` · *predicates:* `text-match`, `misgrouped-digits` · *1 pattern variant* · *rewrite:* regroups the digits canonically
+
+<table><tr><th>flagged</th><th>ok</th></tr><tr><td>
+
+```nix
+{ port = 1_0000; timeout = 1_000.00_001; }
+```
+
+</td><td>
+
+```nix
+{ port = 10_000; timeout = 1_000.000_1; exponent = 2.5e10_000; }
+```
+
+</td></tr></table>
+
+### prefer-digit-grouping
+
+**🔴 error**
+
+A bare literal with five or more consecutive digits is read by counting digits; group them in threes with underscore separators (`300000` is `300_000`, `0.000001` is `0.000_001`). Four digits or fewer stay bare (`1000` is fine). The whole CI toolchain speaks the dialect -- the patched nix client and evaluator, the rnix-patched alejandra/statix/deadnix, and the tree-sitter-nix fork -- and the repo's literals were regrouped by the autofix when the lint became an error.
+
+*Matches:* `integer_expression` / `float_expression` · *predicates:* `text-match`, `misgrouped-digits` · *1 pattern variant* · *rewrite:* inserts canonical separators
+
+<table><tr><th>flagged</th><th>ok</th></tr><tr><td>
+
+```nix
+{ timeout = 300000; epsilon = 0.000001; }
+```
+
+</td><td>
+
+```nix
+{ port = 9999; timeout = 300_000; epsilon = 0.000_001; pi = 3.1415; }
 ```
 
 </td></tr></table>

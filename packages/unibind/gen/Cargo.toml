@@ -22,7 +22,10 @@ clap = { workspace = true, features = ["derive"] }
 object.workspace = true
 serde_json.workspace = true
 unibind-backend-ex.workspace = true
+unibind-backend-jvm.workspace = true
 unibind-core.workspace = true
 
 [dev-dependencies]
+proc-macro2.workspace = true
+syn.workspace = true
 unibind-test-support.workspace = true
