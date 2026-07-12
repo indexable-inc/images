@@ -126,6 +126,17 @@
       flake = false;
     };
 
+    # The maintained fork is the application source. Its own flake owns the
+    # Rust lock, toolchain, and platform build.
+    zed-src.url = "github:indexable-inc/zed/ix-patched";
+
+    # Unmodified upstream base for validating and regenerating the patch series
+    # that produces zed-src's ix-patched branch.
+    zed-upstream = {
+      url = "github:zed-industries/zed/v1.10.x";
+      flake = false;
+    };
+
     # Upstream NixOS/nix, patched in-repo (packages/nix/nix/patches). Pinned BY
     # REV at tag 2.34.7, the version the hydra daemon runs (`nix store info` ->
     # `Version: 2.34.7`): nix is our daemon toolchain, so the patched package
@@ -274,6 +285,8 @@
     snix-src,
     clippy-src,
     codex-src,
+    zed-src,
+    zed-upstream,
     nix-src,
     ghostty,
     mesa-src,
@@ -361,6 +374,8 @@
         snix-src
         clippy-src
         codex-src
+        zed-src
+        zed-upstream
         nix-src
         ghostty
         mesa-src

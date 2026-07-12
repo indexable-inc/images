@@ -18,6 +18,8 @@
   snix-src,
   clippy-src,
   codex-src,
+  zed-src,
+  zed-upstream,
   nix-src,
   ghostty,
   mesa-src,
@@ -310,6 +312,7 @@
     buildRustPackage
     ;
   cargoUnit = cargoUnitFor pkgs;
+  cargoUnitExternal = import ./rust/external.nix {repoRoot = paths.root;};
   # Default patched-source builder, bound to the top-level x86_64-linux pkgs for
   # image/module eval; `ixForPackages` / the overlay context rebind it to the
   # consuming pkgs so a patched source builds for its own system.
@@ -530,6 +533,7 @@
       rustWorkspaceFor
       clippy-src
       ghostty
+      zed-src
       ;
   };
 
@@ -720,6 +724,7 @@
     nushell = nushell-src;
     nushellSrc = nushell-src;
     codexSrc = codex-src;
+    zedSrc = zed-upstream;
     clippySrc = clippy-src;
     nixSrc = nix-src;
     drgnSrc = drgn-src;
@@ -800,6 +805,7 @@
         appleSdkToolchain
         bunLockFor
         cargoUnitFor
+        cargoUnitExternal
         discoverModules
         discoverTree
         errors

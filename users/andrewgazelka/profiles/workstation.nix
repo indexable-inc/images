@@ -748,6 +748,7 @@ in {
       # wezterm # GPU terminal emulator; disabled 2026-07-01: aarch64-darwin output was absent from cache.nixos.org and rebuilt locally for ~46m during a routine flake update. Use Alacritty or `nix run nixpkgs#wezterm -- ...` when needed.
       cfg.packages.mercuryCli # Mercury CLI (custom flake input)
       indexPkgs.elevenlabs-say # ElevenLabs say-style TTS CLI (-r/-v, streaming); key via ELEVENLABS_API_KEY
+      indexPkgs.zed # Maintained fork carries reference filtering unavailable upstream.
       # vfkit guest helpers intentionally not installed: they force the
       # aarch64-linux microvm system into every Home Manager switch, so a stale
       # or stopped VM remote builder breaks unrelated macOS profile updates.
@@ -946,8 +947,8 @@ in {
 
   # Ghostty themes and shaders (cross-platform location); the assets are
   # shared, not per-user, so they live in modules/home/ghostty.
-  home.file.".config/ghostty/themes".source = ../../../modules/home/ghostty/themes;
-  home.file.".config/ghostty/shaders".source = ../../../modules/home/ghostty/shaders;
+  home.file.".config/ghostty/themes".source = ix.paths.modules + "/home/ghostty/themes";
+  home.file.".config/ghostty/shaders".source = ix.paths.modules + "/home/ghostty/shaders";
 
   # Alacritty
   home.file.".config/alacritty/alacritty.toml".source = renderStructured "alacritty-alacritty";
