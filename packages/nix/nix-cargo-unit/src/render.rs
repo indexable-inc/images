@@ -1679,6 +1679,7 @@ fn render_build_script_run_phase(
     ensure_source_contains_unit(source, run_unit)?;
     script.push_str("export CARGO_MANIFEST_DIR=$build_script_manifest_dir\n");
     script.push_str("export RUSTC=\"$(type -p rustc)\"\n");
+    script.push_str("export RUSTDOC=\"$(type -p rustdoc)\"\n");
     script.push_str("HOST_TRIPLE=\"$($RUSTC -vV | sed -n 's/^host: //p')\"\n");
     script.push_str("export HOST=\"$HOST_TRIPLE\"\n");
     if let Some(platform) = &run_unit.platform {
@@ -5408,6 +5409,7 @@ links = "native_ffi"
         assert!(rendered.contains("export CARGO_PKG_LICENSE_FILE=\"LICENSE\""));
         assert!(rendered.contains("export CARGO_PKG_RUST_VERSION=\"1.85\""));
         assert!(rendered.contains("export CARGO_MANIFEST_LINKS=\"native_ffi\""));
+        assert!(rendered.contains("export RUSTDOC=\"$(type -p rustdoc)\""));
         assert!(rendered.contains("export CARGO_FEATURE_ARCH=1"));
         assert!(rendered.contains("export CARGO_FEATURE_SIMD_SUPPORT=1"));
         assert!(rendered.contains("cargo_encoded_rustflags=( '-C' 'target-cpu=native' )"));
