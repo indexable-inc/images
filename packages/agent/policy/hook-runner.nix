@@ -34,8 +34,8 @@
   primaryCheckouts,
   repoPackages,
 }:
-runCommand "claude-hooks-wrapped" { nativeBuildInputs = [ makeBinaryWrapper ]; } ''
-  makeBinaryWrapper ${ix.rustWorkspace.units.binaries."claude-hooks"}/bin/claude-hooks \
+runCommand "claude-hooks-wrapped" {nativeBuildInputs = [makeBinaryWrapper];} ''
+  makeBinaryWrapper ${ix.rustWorkspace.units.binaries.claude-hooks}/bin/claude-hooks \
     $out/bin/claude-hooks \
     --set IX_GIT ${lib.getExe git} \
     --set IX_DEFAULT_PRIMARY_CHECKOUTS ${lib.escapeShellArg (lib.concatStringsSep ":" primaryCheckouts)} \

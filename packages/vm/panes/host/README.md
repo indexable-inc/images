@@ -1,9 +1,23 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="panes-host decodes guest frames into one Metal-backed NSWindow per toplevel, acks each present back to the guest, and forwards NSEvents as evdev input"></p>
+
 # panes-host
 
-macOS window agent for seamless guest-Linux windows (index#1686): connects to
-the guest compositor's stream (unix socket today, fronted by the libkrun vsock
-port map later), presents each guest toplevel as a real `NSWindow`, and
-forwards input back. The wire contract lives in `packages/vm/panes/protocol`.
+What turns a guest Linux toplevel into a real Mac window, at 120 Hz, with your
+keyboard and mouse working? `panes-host` is the macOS agent of
+[panes](../README.md) (index#1686): it connects to the guest compositor's
+stream (unix socket today, fronted by the libkrun vsock port map), presents
+each guest toplevel as a real `NSWindow`, and forwards input back as evdev
+events. The wire contract lives in [`../protocol`](../protocol).
+
+## Install
+
+```sh
+nix run github:indexable-inc/index#panes-host -- --mock   # demo, no VM needed
+```
+
+Apple Silicon only (`aarch64-darwin`). From a clone
+(`git clone https://github.com/indexable-inc/index`): `nix run .#panes-host`.
+For the full VM boot line see [the panes README](../README.md).
 
 ## Architecture
 
@@ -86,13 +100,35 @@ compositor).
 - **Keyboard**: `keyDown`/`keyUp` map `NSEvent.keyCode` (kVK) to evdev codes
   via `src/keymap.rs`, generated from the keycodemapdb project by
   `tools/gen_keymap.py` (same dataset QEMU/libvirt use). `isARepeat` events
-  are dropped: guests auto-repeat from `wl_keyboard.repeat_info`.
-  `flagsChanged` turns into modifier press/release by toggling a held-set
-  keyed on kVK; caps lock (one event per toggle) synthesizes press+release.
-  On resign-key every held modifier is released guest-side and the set
-  cleared (AppKit stops delivering flagsChanged to a non-key window).
+  are dropped: guests auto-repeat from `wl_keyboard.repeat_info`, and the
+  user's actual macOS repeat timing is shipped once per connection
+  (`ToGuest::KeyRepeat`, from `NSEvent.keyRepeatDelay/Interval`; protocol
+  1.2) so guest repeat matches System Settings exactly.
+  `flagsChanged` turns into modifier press/release by checking the event's
+  device-independent class flag against a held-set keyed on kVK: a key we
+  saw press is releasing, an unseen key with its class down is pressing,
+  and an unseen key with its class up is the release of a press from
+  before this window had focus and is dropped (the old membership toggle
+  guessed "press" there, latching the modifier in the guest's xkb state so
+  text input went dead until the next focus loss). Caps lock (one event
+  per toggle) synthesizes press+release.
+  Forwarded key presses are tracked in a map recording exactly what went
+  on the wire: keyUps release precisely that, only for tracked keys, and
+  on resign-key everything held is released guest-side (AppKit stops
+  delivering keyUp/flagsChanged to a non-key window; a key stuck down
+  guest-side auto-repeats forever). `NSApplication.sendEvent` discards
+  keyUps while Cmd is held (key-equivalent processing, above the window),
+  so a local event monitor re-delivers them to the key window (GLFW's
+  workaround) whose `sendEvent` override hands them to the view; when Cmd
+  itself goes up, any key still marked as pressed-during-the-chord is
+  released defensively.
   Cmd+W (CloseRequest) and Cmd+Q (CloseRequest to all, then exit) stay
-  host-side; other Cmd chords are forwarded.
+  host-side. Other Cmd chords are translated to their Linux equivalents by
+  default (Cmd+A/C/V/X/Z -> Ctrl+same via one synthetic left-ctrl,
+  Cmd+Backspace -> Ctrl+Backspace, Cmd+Left/Right -> Home/End; Shift rides
+  along, unmapped Cmd chords are swallowed and Super never reaches the
+  guest). `--no-chord-translation` restores raw Super-chord forwarding for
+  Linux-native muscle memory.
 - **Pointer**: the view is flipped (top-left origin) and multiplies points
   by `backingScaleFactor`, so protocol coordinates are buffer pixels.
   Buttons map to evdev (`BTN_LEFT` 0x110, `BTN_RIGHT` 0x111, `BTN_MIDDLE`
@@ -116,7 +152,14 @@ compositor).
   dissociated. A lock for a non-key window is remembered (`wants_lock`) and
   engages when the window becomes key. AppKit delivers each mouseMoved twice
   (first responder + tracking area); relative deltas dedupe by event
-  identity, absolute coordinates never cared.
+  identity, absolute coordinates never cared. macOS spontaneously unhides a
+  hidden cursor on paths of its own (right-mouse-down menu preparation --
+  holding right-click in a pointer-locked game showed the cursor -- plus
+  screenshot mode and dock hover, glfw#2648/#2656), so while captured every
+  button event re-checks `CGCursorIsVisible` and re-hides, immediately and
+  once more from the back of the main queue; release unhides until the
+  cursor is actually visible, so the (undocumented) hide-nesting counter can
+  never strand a hidden cursor.
 
 ## Mock guest
 

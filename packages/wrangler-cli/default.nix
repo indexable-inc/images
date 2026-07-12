@@ -8,8 +8,7 @@
 {
   ix,
   pkgs,
-}:
-let
+}: let
   inherit (pkgs) lib;
   packageJson = lib.importJSON ./package.json;
   nodeModules = pkgs.importNpmLock.buildNodeModules {
@@ -22,11 +21,11 @@ let
     };
   };
 in
-ix.writeBashApplication pkgs {
-  name = "wrangler";
-  runtimeInputs = [ pkgs.nodejs_22 ];
-  text = ''
-    exec node ${nodeModules}/node_modules/wrangler/bin/wrangler.js "$@"
-  '';
-  meta.description = "Cloudflare wrangler CLI (npm dist, not built from source)";
-}
+  ix.writeBashApplication pkgs {
+    name = "wrangler";
+    runtimeInputs = [pkgs.nodejs_22];
+    text = ''
+      exec node ${nodeModules}/node_modules/wrangler/bin/wrangler.js "$@"
+    '';
+    meta.description = "Cloudflare wrangler CLI (npm dist, not built from source)";
+  }

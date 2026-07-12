@@ -2,6 +2,7 @@
   import type { Eval } from './types';
   import Score from './ui/Score.svelte';
   import CostChips from './CostChips.svelte';
+  import ModelChips from './ModelChips.svelte';
   import BehaviorPanel from './BehaviorPanel.svelte';
   import RolloutCard from './RolloutCard.svelte';
 
@@ -14,11 +15,12 @@
     <h2>{name}</h2>
     <Score value={ev.headline} />
   </div>
+  <ModelChips summary={ev.summary} />
   <CostChips summary={ev.summary} />
   <BehaviorPanel {ev} {eid} />
   <h3>rollouts</h3>
   {#each ev.cases as c, j}
-    <RolloutCard {c} anchor={`${eid}-${j}`} />
+    <RolloutCard {c} anchor={`${eid}-${j}`} model={ev.summary.agent_model} effort={ev.summary.effort} />
   {/each}
 </section>
 

@@ -13,18 +13,23 @@
   ix,
   git,
   jq,
+  nushell,
   repoPackages,
   hookRunner,
   launchSpec,
   settingsDefaultsFile,
   wrapperFlags,
+  wrapperEnvDefaults,
+  featureSettingsEnv,
+  houseSettingsRender,
+  statuslineCommand,
+  disabledSystemTools,
   python3,
   binName,
-}:
-''
+}: ''
     runHook preInstallCheck
 
-    launcher=${ix.rustWorkspace.units.binaries."config-launch"}/bin/config-launch
+    launcher=${ix.rustWorkspace.units.binaries.config-launch}/bin/config-launch
     stub="$PWD/stub"
     printf '%s\n' '#!${runtimeShell}' 'printf "%s\n" "$@"' > "$stub"
     chmod +x "$stub"
@@ -42,13 +47,126 @@
       exit 1
     fi
     ${lib.optionalString (repoPackages ? mcp) ''
-      agents_dir="$(spec_env IX_CLAUDE_AGENTS_DIR)"
-      if [ ! -d "$agents_dir" ] || [ -z "$(find "$agents_dir" -maxdepth 1 -name '*.md' -print -quit)" ]; then
-        printf 'claude launcher env check failed: IX_CLAUDE_AGENTS_DIR has no agent markdown files: %s\n' \
-          "$agents_dir" >&2
+    agents_dir="$(spec_env IX_CLAUDE_AGENTS_DIR)"
+    if [ ! -d "$agents_dir" ] || [ -z "$(find "$agents_dir" -maxdepth 1 -name '*.md' -print -quit)" ]; then
+      printf 'claude launcher env check failed: IX_CLAUDE_AGENTS_DIR has no agent markdown files: %s\n' \
+        "$agents_dir" >&2
+      exit 1
+    fi
+  ''}
+
+    # Every disabled typed feature (see the wrapper's `features` arg) must ride
+    # the launch spec as an env_default, never plain env, so a caller export
+    # can still re-enable it per session.
+    check_env_default() {
+      local key="$1" got
+      got="$(${lib.getExe jq} -r --arg key "$key" \
+        '.env_defaults[] | select(.key == $key) | .value' \
+        "$PWD/test-spec.json")"
+      if [ "$got" != 1 ]; then
+        printf 'claude launcher env check failed: %s env_default is %s, want 1\n' \
+          "$key" "$got" >&2
         exit 1
       fi
-    ''}
+    }
+    feature_envs=(${lib.escapeShellArgs (builtins.attrNames wrapperEnvDefaults)})
+    for feature_env in "''${feature_envs[@]}"
+    do
+      check_env_default "$feature_env"
+    done
+
+    disabled_system_tools=(${lib.escapeShellArgs disabledSystemTools})
+    for tool in "''${disabled_system_tools[@]}"
+    do
+      if ! ${lib.getExe jq} -e --arg tool "$tool" '.permissions.deny | index($tool)' \
+        ${settingsDefaultsFile} >/dev/null; then
+        printf 'system tool deny check failed: %s is not denied in settings defaults\n' "$tool" >&2
+        exit 1
+      fi
+    done
+
+    if ${lib.getExe jq} -e --argjson names ${lib.escapeShellArg (builtins.toJSON (builtins.attrNames wrapperEnvDefaults))} \
+      '.env[] | select(.key as $k | $names | index($k))' \
+      "$PWD/test-spec.json"; then
+      printf 'claude launcher env check failed: disabled-feature vars must be env_defaults, not env\n' >&2
+      exit 1
+    fi
+    ${lib.optionalString (wrapperEnvDefaults ? CLAUDE_CODE_DISABLE_1M_CONTEXT) ''
+    envstub="$PWD/envstub"
+    printf '%s\n' '#!${runtimeShell}' 'printf "%s\n" "''${CLAUDE_CODE_DISABLE_1M_CONTEXT-unset}"' > "$envstub"
+    chmod +x "$envstub"
+    sed "s|@helper@|$envstub|" ${launchSpec} > "$PWD/env-spec.json"
+    got="$(env -u CLAUDE_CODE_DISABLE_1M_CONTEXT IX_LAUNCH_SPEC="$PWD/env-spec.json" "$launcher")"
+    if [ "$got" != 1 ]; then
+      printf '1M-context guard check failed: unset caller env must get the default, got %s\n' "$got" >&2
+      exit 1
+    fi
+    got="$(env CLAUDE_CODE_DISABLE_1M_CONTEXT= IX_LAUNCH_SPEC="$PWD/env-spec.json" "$launcher")"
+    if [ "$got" != "" ]; then
+      printf '1M-context guard check failed: caller re-enable (empty value) must win, got %s\n' "$got" >&2
+      exit 1
+    fi
+  ''}
+
+    # The typed feature render must land verbatim in the baked settings env
+    # (read at CC startup even when the launch env is missing), and the house
+    # posture layer (post-extraSettings merge, minus controlled keys) must
+    # land key-for-key in the settings file. Both expectations are derived
+    # from the same nix values that build the file, so they hold for
+    # overridden builds too.
+    if ! ${lib.getExe jq} -e --argjson want ${lib.escapeShellArg (builtins.toJSON featureSettingsEnv)} \
+      '.env as $env | $want | to_entries | all($env[.key] == .value)' \
+      ${settingsDefaultsFile} >/dev/null; then
+      printf 'feature settings env check failed: want %s within .env of %s\n' \
+        ${lib.escapeShellArg (builtins.toJSON featureSettingsEnv)} ${settingsDefaultsFile} >&2
+      exit 1
+    fi
+    if ! ${lib.getExe jq} -e --argjson want ${lib.escapeShellArg (builtins.toJSON houseSettingsRender)} \
+      '. as $doc | $want | to_entries | all($doc[.key] == .value)' \
+      ${settingsDefaultsFile} >/dev/null; then
+      printf 'house settings default check failed: want %s within %s\n' \
+        ${lib.escapeShellArg (builtins.toJSON houseSettingsRender)} ${settingsDefaultsFile} >&2
+      exit 1
+    fi
+
+    # House statusline, driven through the exact command string the house
+    # defaults bake (so the store paths inside it are exercised; the render
+    # check above proves the settings file carries it, extraSettings aside).
+    # Offline by construction: the seeded run finds a fresh cache and never
+    # fetches; the cold run's fetch fails in the sandbox and must degrade to a
+    # plain version segment. The seeded latest (1.2.10 vs current 1.2.3) also
+    # guards the numeric per-segment compare a string compare would get
+    # backwards.
+    statusline_cmd=${lib.escapeShellArg statuslineCommand}
+    if [ "$(${lib.getExe nushell} --no-config-file -c "nu-check '${./statusline.nu}'")" != true ]; then
+      printf 'statusline check failed: nu-check rejected statusline.nu\n' >&2
+      exit 1
+    fi
+    statusline_payload='{"version":"1.2.3","model":{"display_name":"TestModel"},"context_window":{"context_window_size":200000,"current_usage":{"input_tokens":100000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}'
+    mkdir -p sl-home/.cache/ix-claude-statusline sl-cold-home
+    printf '1.2.10' > sl-home/.cache/ix-claude-statusline/latest
+    got="$(printf '%s' "$statusline_payload" \
+      | HOME="$PWD/sl-home" XDG_CACHE_HOME="$PWD/sl-home/.cache" ${runtimeShell} -c "$statusline_cmd")"
+    case "$got" in
+    *'⟡ 𝒊𝒙 | █████░░░░░ | TestModel | high | v1.2.3 '*'↑1.2.10'*) : ;;
+    *)
+      printf 'statusline check failed (seeded cache): want bar/model/effort/version/update marker, got:\n%s\n' "$got" >&2
+      exit 1
+      ;;
+    esac
+    got="$(printf '%s' "$statusline_payload" \
+      | HOME="$PWD/sl-cold-home" XDG_CACHE_HOME="$PWD/sl-cold-home/.cache" ${runtimeShell} -c "$statusline_cmd")"
+    case "$got" in
+    *'↑'*)
+      printf 'statusline check failed (cold cache): update marker must not render offline, got:\n%s\n' "$got" >&2
+      exit 1
+      ;;
+    *'⟡ 𝒊𝒙 | █████░░░░░ | TestModel | high | v1.2.3'*) : ;;
+    *)
+      printf 'statusline check failed (cold cache): want plain version segment, got:\n%s\n' "$got" >&2
+      exit 1
+      ;;
+    esac
 
     check() {
       local desc="$1" expected="$2"
@@ -64,33 +182,57 @@
 
     check "flags prepend; settings injected when caller passes none" \
       ${
-        lib.escapeShellArg (
-          lib.concatStringsSep "\n" (
-            wrapperFlags
-            ++ [
-              "--settings=${settingsDefaultsFile}"
-              "mcp"
-              "list"
-            ]
-          )
-        )
-      } \
+    lib.escapeShellArg (
+      lib.concatStringsSep "\n" (
+        wrapperFlags
+        ++ [
+          "--settings=${settingsDefaultsFile}"
+          "mcp"
+          "list"
+        ]
+      )
+    )
+  } \
       mcp list
 
     check "caller --settings wins; package defaults stay out" \
       ${
-        lib.escapeShellArg (
-          lib.concatStringsSep "\n" (
-            wrapperFlags
-            ++ [
-              "--settings=/dev/null"
-              "-p"
-              "hi"
-            ]
-          )
-        )
-      } \
+    lib.escapeShellArg (
+      lib.concatStringsSep "\n" (
+        wrapperFlags
+        ++ [
+          "--settings=/dev/null"
+          "-p"
+          "hi"
+        ]
+      )
+    )
+  } \
       --settings=/dev/null -p hi
+
+    # `--which-settings` is answered by the launcher itself (exit 0, no exec):
+    # the output is exactly the injected settings store path, with none of the
+    # baked flags the stub would echo on a real launch.
+    check "--which-settings prints the injected settings path" \
+      ${lib.escapeShellArg "${settingsDefaultsFile}"} \
+      --which-settings
+
+    # After `--` the same token is a positional for the CLI, so the launch
+    # proceeds normally (flags, injected settings, then the user argv).
+    check "--which-settings after -- stays a positional" \
+      ${
+    lib.escapeShellArg (
+      lib.concatStringsSep "\n" (
+        wrapperFlags
+        ++ [
+          "--settings=${settingsDefaultsFile}"
+          "--"
+          "--which-settings"
+        ]
+      )
+    )
+  } \
+      -- --which-settings
 
     # addDirs/pluginDirs render as single, prepended `=` tokens. `--add-dir` is
     # variadic in the CLI, so a space-form token would swallow the next positional
@@ -103,19 +245,19 @@
       "$PWD/test-spec.json" > "$PWD/dirs-spec.json"
     dirs_got="$(IX_LAUNCH_SPEC="$PWD/dirs-spec.json" "$launcher" mcp list)"
     dirs_want=${
-      lib.escapeShellArg (
-        lib.concatStringsSep "\n" (
-          wrapperFlags
-          ++ [
-            "--add-dir=/nix/store/sample-skills"
-            "--plugin-dir=/nix/store/sample-plugin"
-            "--settings=${settingsDefaultsFile}"
-            "mcp"
-            "list"
-          ]
-        )
+    lib.escapeShellArg (
+      lib.concatStringsSep "\n" (
+        wrapperFlags
+        ++ [
+          "--add-dir=/nix/store/sample-skills"
+          "--plugin-dir=/nix/store/sample-plugin"
+          "--settings=${settingsDefaultsFile}"
+          "mcp"
+          "list"
+        ]
       )
-    }
+    )
+  }
     if [ "$dirs_got" != "$dirs_want" ]; then
       printf 'claude launcher argv check failed: add-dir/plugin-dir tokens\nexpected:\n%s\ngot:\n%s\n' \
         "$dirs_want" "$dirs_got" >&2
@@ -179,7 +321,7 @@
           r"\x1b\[[0-?]*[ -/]*[@-~]", "", output.decode("utf-8", "replace")
       )
       compact_loop = re.sub(r"\s+", "", plain_loop)
-      if "Diagnostics" in compact_loop and "Search:OK" in compact_loop:
+      if "Running:native" in compact_loop and "Search:OK" in compact_loop:
           proc.terminate()
           try:
               proc.wait(timeout=2)
@@ -202,7 +344,7 @@
   raw = b"".join(chunks).decode("utf-8", "replace")
   plain = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw)
   compact = re.sub(r"\s+", "", plain)
-  for needle in ("Diagnostics", "Search:OK"):
+  for needle in ("Running:native", "Search:OK"):
       if needle not in compact:
           sys.stderr.write(f"claude doctor check failed: missing {needle!r}\n")
           sys.stderr.write(plain[-4000:])
@@ -234,29 +376,29 @@
     fi
     ${lib.optionalString (repoPackages ? search) ''
 
-      # Fail-open net for the prompt-priors hook: every skip path must exit 0
-      # with NO output (anything else would block or pollute the prompt).
-      # Offline by construction: each input is rejected by a pre-flight gate
-      # (short, no fleet noun, no credential, malformed JSON) before the
-      # network-touching search would run. HOME points at an empty dir so the
-      # credential gate cannot find a real mgrep token.
-      mkdir -p no-home
-      hook_silent() {
-        local desc="$1" input="$2" got
-        if ! got="$(printf '%s' "$input" | HOME="$PWD/no-home" ${hookRunner}/bin/claude-hooks prompt-priors)" \
-          || [ -n "$got" ]; then
-          printf 'prompt-priors hook check failed (%s): expected silent exit 0, got:\n%s\n' \
-            "$desc" "$got" >&2
-          exit 1
-        fi
-      }
-      hook_silent "short prompt skipped" '{"prompt":"fix this typo"}'
-      hook_silent "no fleet noun skipped" \
-        '{"prompt":"please rename this function to something clearer for readability"}'
-      hook_silent "no credential fails open" \
-        '{"prompt":"how do we deploy the fleet with colmena to every host"}'
-      hook_silent "malformed payload fails open" 'not json'
-    ''}
+    # Fail-open net for the prompt-priors hook: every skip path must exit 0
+    # with NO output (anything else would block or pollute the prompt).
+    # Offline by construction: each input is rejected by a pre-flight gate
+    # (short, no fleet noun, no credential, malformed JSON) before the
+    # network-touching search would run. HOME points at an empty dir so the
+    # credential gate cannot find a real mgrep token.
+    mkdir -p no-home
+    hook_silent() {
+      local desc="$1" input="$2" got
+      if ! got="$(printf '%s' "$input" | HOME="$PWD/no-home" ${hookRunner}/bin/claude-hooks prompt-priors)" \
+        || [ -n "$got" ]; then
+        printf 'prompt-priors hook check failed (%s): expected silent exit 0, got:\n%s\n' \
+          "$desc" "$got" >&2
+        exit 1
+      fi
+    }
+    hook_silent "short prompt skipped" '{"prompt":"fix this typo"}'
+    hook_silent "no fleet noun skipped" \
+      '{"prompt":"please rename this function to something clearer for readability"}'
+    hook_silent "no credential fails open" \
+      '{"prompt":"how do we deploy the fleet with colmena to every host"}'
+    hook_silent "malformed payload fails open" 'not json'
+  ''}
 
     # Behavioral net for the worktree guard: a real primary checkout plus a
     # linked worktree, built in the sandbox, with the protected-glob env

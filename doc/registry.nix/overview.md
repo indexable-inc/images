@@ -38,6 +38,15 @@ hard assertion failure (`assertKnownKeys`, `:41-49`). Recognized keys:
   `normalizePackageSet`, `:83`).
 - `inRustWorkspace`: a member of the root Cargo workspace (built through
   [nix-cargo-unit](../nix-cargo-unit/overview.md) via `ix.cargoUnit`) (`:134`).
+- `pyExtension`: marks a pyo3 extension-module cdylib crate; the shared Rust
+  workspace injects the darwin `-undefined dynamic_lookup` link args for it
+  (`lib/rust/workspace.nix`) and `unibind.lib.build` requires the mark.
+  Requires `inRustWorkspace`.
+- `isolatedFeatures`: the crate roots its own `-p` cargo invocation in the
+  shared unit graph instead of riding the `--workspace` resolve, so its
+  dependency features resolve from its own manifest alone (e.g. a Node addon
+  that must not inherit unibind-runtime's workspace-unified `py` feature).
+  Requires `inRustWorkspace`.
 - `passthruTests`: expose passthru tests under a prefix (default `rust-<id>`;
   `normalizePassthruTests`, `:102`).
 - `updateScript`: marks a package exposing a `passthru.updateScript`, driving the

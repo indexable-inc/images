@@ -53,8 +53,8 @@ or Nix (the wrapper in `lib/rust/cargo-unit.nix` runs Cargo and the IFD).
 
 ## The `units.nix` it emits
 
-`render_units_nix` (`src/render.rs:289`) fills one Askama template
-(`templates/units.nix.askama`) whose output is a Nix function. The function takes
+`render_units_nix` (`src/render.rs:271`) fills the template
+(`templates/units.nix.in`, filled by plain `{{ slot }}` substitution) whose output is a Nix function. The function takes
 `pkgs`, `rustToolchain`, `src`, `workspaceRoot`, and many optional knobs
 (`vendorSources`, `extraEnv`, `packageBuildEnv`, `extraUnits`, `clippyEnabled`,
 `includeIgnored`, ...), and returns an attrset. The load-bearing outputs
@@ -73,7 +73,7 @@ or Nix (the wrapper in `lib/rust/cargo-unit.nix` runs Cargo and the IFD).
 
 Each unit is built with `dontUnpack`/`dontConfigure` and an `env` merged from the
 unit's own env, workspace `extraEnv`, and per-package `packageBuildEnv`
-(`units.nix.askama:153`). A render-time `packageName` tag lets per-package env
+(`units.nix.in:161`). A render-time `packageName` tag lets per-package env
 target a package's own compile and build-script-run units without touching the
 shared dependency closure.
 
@@ -107,11 +107,11 @@ in [internals](internals.md).
   (two IFD stages), imports the resulting `units.nix`, and exposes the result as
   `ix.cargoUnit` / `ix.rustWorkspace.units`. The `--deny-panics` check calls back
   into this same package as the `scan-panics` scanner
-  (`src/render.rs:489`).
+  (`src/render.rs:509`).
 
 ## Dependencies
 
-`askama` (template), `clap` (CLI), `color-eyre` (errors), `object` (rlib/object
+`clap` (CLI), `color-eyre` (errors), `object` (rlib/object
 parsing for the panic scan), `serde`/`serde_json` (unit graph), `sha2` (identity
 hashing), `toml` (`Cargo.lock` and manifests), `url` (package-id parsing).
 

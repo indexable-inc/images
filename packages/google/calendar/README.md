@@ -1,18 +1,28 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="Three thin surfaces (CLI, MCP tools, Python) drive one Rust Calendar client that talks OAuth and the Calendar v3 API"></p>
+
 # google-calendar
 
-Google Calendar for agents and shells: one Rust crate owns the
-[Calendar v3 events API](https://developers.google.com/workspace/calendar/api/v3/reference/events)
-(list, get, create, cancel). OAuth lives in the shared
-[`packages/google/auth`](../auth) crate, which the gmail integration also
-uses; three thin surfaces expose this client per
+Need your shell or your agent to read and write Google Calendar without clicking through a browser? This is Google Calendar for agents and shells: one Rust crate owns the [Calendar v3 events API](https://developers.google.com/workspace/calendar/api/v3/reference/events) (list, get, create, cancel), and three thin surfaces expose it, so the CLI, the MCP tools, and the Python binding all return the same wire types.
+
+OAuth lives in the shared [`packages/google/auth`](../auth) crate, which the
+gmail integration also uses. The three surfaces, per
 [RFC 0003](../../site/src/lib/rfcs/0003-mcp-composable-clis.svx): the `gcal` CLI
-in [`cli/`](./cli), the `calendar_*` tools in the `ix-google-mcp` Rust
-server in [`packages/google/mcp`](../mcp), and the
-`ix_google.calendar.Client` Python class in
-[`packages/google/py`](../py). Tracks
-[#643](https://github.com/indexable-inc/index/issues/643); the auth
-extraction landed alongside gmail
+in [`cli/`](./cli), the `calendar_*` tools in the `ix-google-mcp` Rust server in
+[`packages/google/mcp`](../mcp), and the `ix_google.calendar.Client` Python class
+in [`packages/google/py`](../py). Tracks
+[#643](https://github.com/indexable-inc/index/issues/643); the auth extraction
+landed alongside gmail
 ([#644](https://github.com/indexable-inc/index/issues/644)).
+
+## Get it
+
+```sh
+nix run github:indexable-inc/index#gcal -- --help
+```
+
+From a clone (`git clone https://github.com/indexable-inc/index`): `nix run .#gcal`.
+The crate itself (`google-calendar`) is an unmirrored workspace library; consume it
+through Nix or one of the three surfaces above.
 
 ## One-time team setup: the OAuth client
 

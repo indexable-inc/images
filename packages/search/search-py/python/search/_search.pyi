@@ -39,6 +39,30 @@ class Hit(TypedDict, total=False):
     repo: str
     project: str
 
+class RerankHit(TypedDict):
+    """One reranked text from ``bm25_rerank``: its position in the input batch,
+    BM25 score, and body."""
+
+    index: int
+    score: float
+    text: str
+
+class FileHit(TypedDict):
+    """One hit from ``bm25_search`` over an on-disk index."""
+
+    path: str
+    score: float
+    snippet: str
+    chunk_offset: int
+
+class IndexStats(TypedDict):
+    """The outcome of a ``bm25_index`` run. ``errors`` pairs each skipped file
+    with the reason it could not be indexed."""
+
+    files_indexed: int
+    files_skipped: int
+    errors: list[list[str]]
+
 def semantic(
     query: str,
     top_k: int = ...,
@@ -88,3 +112,22 @@ def recent(
     until: int | str | None = ...,
     compact: bool = ...,
 ) -> Awaitable[list[Hit]]: ...
+
+# The BM25 (`file-search`) bindings are synchronous: no network I/O, so they
+# return their results directly rather than an awaitable.
+def bm25_rerank(
+    query: str,
+    texts: list[str],
+    limit: int | None = ...,
+) -> list[RerankHit]: ...
+def bm25_index(
+    path: str,
+    index_dir: str,
+    no_gitignore: bool = ...,
+) -> IndexStats: ...
+def bm25_search(
+    query: str,
+    index_dir: str,
+    limit: int = ...,
+    filter: str | None = ...,
+) -> list[FileHit]: ...

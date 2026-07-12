@@ -173,7 +173,7 @@ defmodule SymphonyElixirWeb.Components.IRGraphTest do
     end
 
     test "node without label field falls back to the id" do
-      node = mk_node("fallback-id") |> Map.delete("label")
+      node = "fallback-id" |> mk_node() |> Map.delete("label")
       %{nodes: nodes} = IRGraph.layout([node])
       [n] = nodes
       assert n.label == "fallback-id"
@@ -184,7 +184,7 @@ defmodule SymphonyElixirWeb.Components.IRGraphTest do
     test "agent node with full envelope produces engine/model, effort, permissions, location lines" do
       node =
         mk_agent("agent-0", "codex",
-          model: "gpt-5.5",
+          model: "gpt-5.6-sol",
           effort: "high",
           permissions: "danger_full_access",
           location: "ixvm",
@@ -193,7 +193,7 @@ defmodule SymphonyElixirWeb.Components.IRGraphTest do
 
       %{nodes: nodes} = IRGraph.layout([node])
       [n] = nodes
-      assert "codex gpt-5.5" in n.detail_lines
+      assert "codex gpt-5.6-sol" in n.detail_lines
       assert "high" in n.detail_lines
       assert "danger_full_access" in n.detail_lines
       assert "ixvm" in n.detail_lines
@@ -287,7 +287,7 @@ defmodule SymphonyElixirWeb.Components.IRGraphTest do
     test "node height grows to fit the full envelope block" do
       node =
         mk_agent("agent-0", "codex",
-          model: "gpt-5.5",
+          model: "gpt-5.6-sol",
           effort: "high",
           permissions: "danger_full_access",
           location: "ixvm",
@@ -363,7 +363,7 @@ defmodule SymphonyElixirWeb.Components.IRGraphTest do
     test "layout contains trigger label, skill name, engine+model, effort, permissions, location" do
       node =
         mk_agent("agent-0", "codex",
-          model: "gpt-5.5",
+          model: "gpt-5.6-sol",
           effort: "high",
           permissions: "danger_full_access",
           location: "ixvm",
@@ -384,7 +384,7 @@ defmodule SymphonyElixirWeb.Components.IRGraphTest do
       assert agent.id == "agent-0"
 
       # Envelope detail lines contain engine+model, effort, permissions, location
-      assert "codex gpt-5.5" in agent.detail_lines
+      assert "codex gpt-5.6-sol" in agent.detail_lines
       assert "high" in agent.detail_lines
       assert "danger_full_access" in agent.detail_lines
       assert "ixvm" in agent.detail_lines

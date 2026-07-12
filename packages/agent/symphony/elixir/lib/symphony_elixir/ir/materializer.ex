@@ -28,9 +28,11 @@ defmodule SymphonyElixir.IR.Materializer do
   cold replay produce identical graphs.
   """
 
-  alias SymphonyElixir.DSL.{AST, Interpreter}
+  alias SymphonyElixir.DSL.AST
+  alias SymphonyElixir.DSL.Interpreter
   alias SymphonyElixir.Engine.Envelope
-  alias SymphonyElixir.IR.{Node, RunGraph}
+  alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.IR.RunGraph
 
   @doc """
   Build the initial `RunGraph` for a run from its AST. Expands against no
@@ -51,7 +53,8 @@ defmodule SymphonyElixir.IR.Materializer do
 
     with {:ok, validated} <- validate_envelopes(nodes) do
       graph =
-        RunGraph.new(run_id, source_hash, ast)
+        run_id
+        |> RunGraph.new(source_hash, ast)
         |> RunGraph.put_nodes(validated)
         |> put_log(log)
         |> Map.put(:status, :running)
@@ -155,7 +158,8 @@ defmodule SymphonyElixir.IR.Materializer do
   # is idempotent across re-expansions. The first invalid envelope fails
   # the whole pass with the offending node id.
   defp validate_envelopes(nodes) do
-    Enum.reduce_while(nodes, {:ok, []}, fn node, {:ok, acc} ->
+    nodes
+    |> Enum.reduce_while({:ok, []}, fn node, {:ok, acc} ->
       case lower_envelope(node) do
         {:ok, lowered} -> {:cont, {:ok, [lowered | acc]}}
         {:error, _} = err -> {:halt, err}

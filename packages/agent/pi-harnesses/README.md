@@ -1,8 +1,12 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="the shared mk-pi-harness builder wraps the pinned pi binary into six harness packages, one posture each"></p>
+
 # pi-harnesses
 
-A collection of Pi-based agent harnesses. Each harness is a thin, declarative
-wrapper around [`pi`](https://pi.dev) with a fixed posture and (optionally) one
-or more bundled extensions, shipped as its own Nix package.
+How do you ship six different agent postures without six forks of the coding
+agent? Each harness here is a thin, declarative wrapper around
+[`pi`](https://pi.dev) with a fixed posture and (optionally) one or more
+bundled extensions, shipped as its own Nix package. One shared builder owns the
+wrapping; each harness owns only its flags and extensions.
 
 ## Layout
 
@@ -17,7 +21,8 @@ pi-harnesses/
   base/                   # id: pi-base       - base UX pack: live tok/s, git widget, /diff, /lg
   prosecutor/             # id: pi-prosecutor - executor under a skeptical, earned-trust supervisor
   beam/                   # id: pi-beam       - executor with beam search over isolated worktree branches
-  fusion/                 # id: pi-fusion     - primary agent delegating to a gpt-5.5-low sidekick
+  fusion/                 # id: pi-fusion     - primary agent delegating to a gpt-5.6-sol sidekick at low reasoning
+  omp/                    # id: omp           - oh-my-pi: pinned upstream release binary + Claude bridges (not mk-pi-harness)
 ```
 
 `engine/` is the original `packages/pi-harness` (ENG-2261/2262), moved here
@@ -41,13 +46,13 @@ work and the child agents must probe real state.
 | child agents | none | isolated `pi` subprocesses |
 | posture set by | hardened C launcher | `mk-pi-harness.nix` (`lockdown = false`) |
 
-## Building
+## Run
 
-```
-nix run .#pi-prosecutor -- "your task"          # opus-4-8 executor + prosecutor (same model)
-nix run .#pi-beam       -- "your task"
-nix run .#pi-fusion     -- "your task"          # fable-5 primary + gpt-5.5-low sidekick
-PI_HARNESS_MODEL=codex nix run .#pi-prosecutor -- "..."   # gpt-5.5 medium
+```sh
+nix run github:indexable-inc/index#pi-prosecutor -- "your task"   # opus-4-8 executor + prosecutor (same model)
+nix run github:indexable-inc/index#pi-beam       -- "your task"
+nix run github:indexable-inc/index#pi-fusion     -- "your task"   # fable-5 primary + gpt-5.6-sol sidekick at low reasoning
+PI_HARNESS_MODEL=codex nix run github:indexable-inc/index#pi-prosecutor -- "..."   # gpt-5.6-sol medium
 ```
 
 API keys come from the caller's environment (`ANTHROPIC_API_KEY` /
@@ -64,3 +69,6 @@ extensions); swap it with `.override { pi = ...; }`.
 2. Put the entry extension under `<name>/extension/`, shared helpers in
    `shared/ext-lib/` (passed as `libFiles`).
 3. The registry auto-discovers it; no central list to edit.
+
+Working in-repo assumes a clone:
+`git clone https://github.com/indexable-inc/index`.

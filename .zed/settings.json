@@ -1,25 +1,12 @@
 {
   // astlog rules are S-expressions (no dedicated grammar/LSP yet, #1703):
-  // Scheme gives paren matching + sexp highlighting via the auto-installed extension.
-  "auto_install_extensions": {
-    "scheme": true
-  },
+  // The Scheme extension gives paren matching + sexp highlighting.
   "file_types": {
     "Nu": ["nu"],
     "JSONC": ["common.json", "*-mods.json"],
     "Scheme": ["astlog"]
   },
   "languages": {
-    "Nix": {
-      "language_servers": ["nixd", "!nil"],
-      "formatter": {
-        "external": {
-          "command": "nixfmt",
-          "arguments": []
-        }
-      },
-      "format_on_save": "on"
-    },
     "Rust": {
       "formatter": "language_server",
       "format_on_save": "on"
@@ -63,8 +50,8 @@
           "modules/services/resource-monitor/stats-writer/Cargo.toml",
           "packages/dag-runner/Cargo.toml",
           "packages/loop/Cargo.toml",
-          "packages/minecraft/minecraft/nbt/Cargo.toml",
-          "packages/minecraft/minecraft/sync-managed/Cargo.toml",
+          "packages/minecraft/nbt/Cargo.toml",
+          "packages/minecraft/sync-managed/Cargo.toml",
           "packages/nix/nix-cargo-unit/Cargo.toml",
           "packages/nix/oci-image-builder/Cargo.toml",
           "tests/fixtures/cargo-unit-hello/Cargo.toml"

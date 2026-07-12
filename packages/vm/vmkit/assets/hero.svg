@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 270" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13">
+  <style>
+    svg { color: #1f2328; }
+    .muted { fill: #656d76; }
+    .accent { stroke: #8250df; }
+    .accent-t { fill: #8250df; }
+    .box { stroke: currentColor; fill: none; }
+    text { fill: currentColor; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    .back { fill: none; stroke-dasharray: 5 4; marker-end: url(#arrow-accent); }
+    .mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12px; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { stroke: #a371f7; }
+      .accent-t { fill: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+    </marker>
+    <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="accent-t" d="M 0 0 L 10 5 L 0 10 z"/>
+    </marker>
+  </defs>
+  <rect class="box" x="30" y="105" width="170" height="64" rx="6"/>
+  <text class="mono" x="115" y="130" text-anchor="middle">vmkit</text>
+  <text class="muted" x="115" y="150" text-anchor="middle" font-size="11">signed Rust CLI</text>
+  <path class="edge" d="M 200 122 C 280 122 320 75 428 68"/>
+  <text class="muted" x="300" y="72" text-anchor="middle" font-size="11">boot &#183; drive (keys, mouse)</text>
+  <rect class="box" x="430" y="35" width="260" height="64" rx="6"/>
+  <text x="560" y="60" text-anchor="middle">macOS guest</text>
+  <text class="muted" x="560" y="80" text-anchor="middle" font-size="11">Virtualization.framework, off-screen</text>
+  <path class="back accent" d="M 430 90 C 330 108 290 130 202 133"/>
+  <text class="accent-t" x="305" y="112" text-anchor="middle" font-size="11">framebuffer PNG</text>
+  <path class="edge" d="M 200 152 C 280 152 320 195 428 202"/>
+  <text class="muted" x="300" y="200" text-anchor="middle" font-size="11">boot-linux &#183; vsock ports</text>
+  <rect class="box" x="430" y="172" width="260" height="64" rx="6"/>
+  <text x="560" y="197" text-anchor="middle">Linux guest</text>
+  <text class="muted" x="560" y="217" text-anchor="middle" font-size="11">libkrun: EFI + GPU on macOS, KVM on Linux</text>
+  <path class="back accent" d="M 430 226 C 320 240 240 210 190 172"/>
+  <text class="accent-t" x="310" y="248" text-anchor="middle" font-size="11">serial console</text>
+  <text class="muted" x="115" y="195" text-anchor="middle" font-size="11">host cursor never moves,</text>
+  <text class="muted" x="115" y="211" text-anchor="middle" font-size="11">nothing on the desktop</text>
+</svg>

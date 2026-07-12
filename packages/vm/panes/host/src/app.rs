@@ -10,7 +10,8 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::process::ExitCode;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use objc2::rc::Retained;
@@ -18,17 +19,32 @@ use objc2::runtime::ProtocolObject;
 use objc2::{MainThreadMarker, MainThreadOnly, define_class};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSCursor, NSEvent,
-    NSScreen, NSWindow,
+    NSEventMask, NSEventModifierFlags, NSScreen, NSWindow,
 };
+use dispatch2::DispatchQueue;
 use objc2_core_graphics::{CGAssociateMouseAndMouseCursorPosition, CGError};
 use objc2_foundation::{NSNotification, NSObjectProtocol};
 use objc2_metal::MTLDrawable as _;
 use objc2_quartz_core::CAMetalDisplayLinkUpdate;
-use panes_protocol::{MINOR_POINTER_LOCK, ToGuest, ToHost, WindowId};
+use panes_protocol::{MINOR_KEY_REPEAT, MINOR_POINTER_LOCK, ToGuest, ToHost, WindowId};
 
-use crate::conn::{self, Event, HostInfo, Target};
+use crate::conn::{self, Event};
+use crate::send_queue::{SendQueue, SendQueueError};
+use crate::transport::Target;
 use crate::render::Renderer;
-use crate::window::{PaneWindow, WindowParams};
+use crate::window::{PaneWindow, SurfaceSize, WindowParams};
+
+/// Presentation and input policy from the CLI.
+pub struct RunOptions {
+    /// Prefix prepended to every window title.
+    pub title_prefix: String,
+    /// Stock macOS chrome instead of the default hidden-titlebar style (see
+    /// `window::apply_hidden_titlebar`).
+    pub native_titlebar: bool,
+    /// Translate macOS editing chords to Linux equivalents (default; see
+    /// `view::translate_chord`). `--no-chord-translation` clears it.
+    pub chord_translation: bool,
+}
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -38,11 +54,8 @@ struct App {
     mtm: MainThreadMarker,
     renderer: Renderer,
     windows: HashMap<WindowId, PaneWindow>,
-    out: Option<mpsc::Sender<ToGuest>>,
-    title_prefix: String,
-    /// `--native-titlebar`: stock macOS chrome instead of the default
-    /// hidden-titlebar style (see `window::apply_hidden_titlebar`).
-    native_titlebar: bool,
+    out: Option<SendQueue>,
+    options: RunOptions,
     quitting: bool,
     /// Per-window ack counters behind the periodic acks/s log: the real-path
     /// equivalent of mock's rate line, and the 120Hz-genlock evidence
@@ -55,6 +68,10 @@ struct App {
     /// whole engage/release mechanism: dropping the old value restores the
     /// cursor (see [`CursorCapture`]).
     capture: Option<CursorCapture>,
+    /// Shared with the connection supervisor, which reads it for each
+    /// (re)connect's Hello; rewritten by [`screens_changed`] so the facts
+    /// track the live screen table.
+    host_info: Arc<conn::HostInfo>,
 }
 
 /// An engaged pointer capture: cursor hidden and dissociated from mouse
@@ -95,7 +112,21 @@ impl Drop for CursorCapture {
         if err != CGError::Success {
             eprintln!("panes-host: window {}: cursor re-association failed: {err:?}", self.id);
         }
-        NSCursor::unhide();
+        // NSCursor.hide nests, and the engage-side re-hides
+        // (`reassert_capture_cursor`) may have raised the count past one:
+        // whether the OS-forced show on right-mouse-down decrements the
+        // counter is undocumented, so a single unhide here could strand the
+        // cursor hidden system-wide, the worst failure this struct exists to
+        // prevent. Unhide until the cursor is actually visible; bounded as
+        // paranoia against a wedged visibility query, and stopping at
+        // visible avoids driving the counter needlessly negative.
+        #[allow(deprecated)] // CGCursorIsVisible: see reassert_capture_cursor.
+        for _ in 0..16 {
+            NSCursor::unhide();
+            if objc2_core_graphics::CGCursorIsVisible() {
+                break;
+            }
+        }
     }
 }
 
@@ -128,7 +159,7 @@ impl Deferred {
     }
 }
 
-pub fn run(target: Target, title_prefix: String, native_titlebar: bool) -> ExitCode {
+pub fn run(target: Target, options: RunOptions) -> ExitCode {
     let Some(mtm) = MainThreadMarker::new() else {
         eprintln!("panes-host: must start on the main thread");
         return ExitCode::FAILURE;
@@ -138,12 +169,12 @@ pub fn run(target: Target, title_prefix: String, native_titlebar: bool) -> ExitC
     // presence and Cmd-Tab participation.
     ns_app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
 
-    let screen = NSScreen::mainScreen(mtm);
-    let max_fps = screen.as_ref().map_or(60, |screen| screen.maximumFramesPerSecond());
-    let backing = screen.as_ref().map_or(2.0, |screen| screen.backingScaleFactor());
-    eprintln!(
-        "panes-host: main screen maximumFramesPerSecond={max_fps} backingScaleFactor={backing}"
-    );
+    log_screens(mtm);
+    let facts = read_screen_facts(mtm);
+    let host_info = Arc::new(conn::HostInfo {
+        refresh_mhz: AtomicU32::new(facts.refresh_mhz),
+        scale: AtomicU32::new(facts.scale),
+    });
 
     let renderer = match Renderer::new() {
         Ok(renderer) => renderer,
@@ -158,33 +189,152 @@ pub fn run(target: Target, title_prefix: String, native_titlebar: bool) -> ExitC
             renderer,
             windows: HashMap::new(),
             out: None,
-            title_prefix,
-            native_titlebar,
+            options,
             quitting: false,
             ack_stats: HashMap::new(),
             peer_minor: 0,
             capture: None,
+            host_info: host_info.clone(),
         });
     });
 
     // App activation delegate: a deactivated app must never hold the user's
     // cursor hostage, so capture is released on resign-active and re-engaged
-    // (if the guest still wants it) on reactivation.
+    // (if the guest still wants it) on reactivation. Also the screen-change
+    // hook (see `screens_changed`).
     let delegate = AppDelegate::new(mtm);
     ns_app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
 
+    install_key_up_monitor(mtm);
+
+    conn::spawn(target, host_info);
+
+    ns_app.run();
+    ExitCode::SUCCESS
+}
+
+/// One line per attached screen with the facts presentation depends on
+/// (backing scale, max refresh, frame, which one is main); logged at startup
+/// and again on every screen-parameters change. Replaces a one-shot startup
+/// summary that kept being read as current truth hours later: a live 1x/60Hz
+/// incident was misdiagnosed as a bad `NSScreen` read when the host had
+/// simply been launched while a 1x external display was the main screen
+/// (index#1686).
+fn log_screens(mtm: MainThreadMarker) {
+    // Frame equality marks the main screen: screens never overlap exactly,
+    // and it avoids leaning on NSScreen instance identity across the two
+    // accessors.
+    let main_frame = NSScreen::mainScreen(mtm).map(|screen| screen.frame());
+    for screen in NSScreen::screens(mtm) {
+        let frame = screen.frame();
+        eprintln!(
+            "panes-host: screen {}x{} at ({}, {}): backingScaleFactor={} \
+             maximumFramesPerSecond={}{}",
+            frame.size.width,
+            frame.size.height,
+            frame.origin.x,
+            frame.origin.y,
+            screen.backingScaleFactor(),
+            screen.maximumFramesPerSecond(),
+            if main_frame == Some(frame) { " (main)" } else { "" },
+        );
+    }
+}
+
+/// Snapshot of the screen-derived facts [`ToGuest::Hello`] advertises.
+struct ScreenFacts {
+    refresh_mhz: u32,
+    scale: u32,
+}
+
+/// Facts [`ToGuest::Hello`] advertises, from the current screen table:
+/// refresh from the main screen, scale = the HIGHEST `backingScaleFactor` of
+/// any attached display, not the main screen's. A host launched (or
+/// reconnecting) while a 1x display is frontmost must not pin every guest
+/// client to 1x buffers stretched over Retina drawables (seen live with
+/// GLFW/Minecraft, index#1686); windows that land on a lower-scale screen
+/// are corrected per window by their Configure. Fallback 2.0 (headless / no
+/// screens) errs toward sharp.
+fn read_screen_facts(mtm: MainThreadMarker) -> ScreenFacts {
+    let max_fps =
+        NSScreen::mainScreen(mtm).map_or(60, |screen| screen.maximumFramesPerSecond());
+    let backing = NSScreen::screens(mtm)
+        .iter()
+        .map(|screen| screen.backingScaleFactor())
+        .fold(0.0_f64, f64::max);
+    let backing = if backing > 0.0 { backing } else { 2.0 };
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let host = HostInfo {
+    ScreenFacts {
         // Clamped into u32 range explicitly: no real panel exceeds 1000Hz,
         // and the clamp makes the (impossible) fallback a visible policy
         // rather than a silent unwrap_or.
         refresh_mhz: u32::try_from(max_fps.clamp(1, 1000)).expect("clamped to 1..=1000") * 1000,
         scale: (backing.round().max(1.0)) as u32,
-    };
-    conn::spawn(target, host);
+    }
+}
 
-    ns_app.run();
-    ExitCode::SUCCESS
+/// `applicationDidChangeScreenParameters:`: displays attach, detach, or
+/// change mode/scale in place, with no reliable per-window signal
+/// (`windowDidChangeScreen:` only fires when a window lands on a different
+/// screen object; an in-place mode switch fires nothing window-level). Seen
+/// live (index#1686): a window left on the built-in panel after a 1x/60Hz
+/// external detached kept ticking at ~60 acks/s. Re-derive everything
+/// screen-dependent: refresh the Hello facts for future reconnects, re-pin
+/// every window's stream rate, and re-sync layer geometry so the guest gets
+/// a Configure with the window's current backing scale.
+fn screens_changed() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    log_screens(mtm);
+    let facts = read_screen_facts(mtm);
+    with_app(|app| {
+        // Relaxed matches the reader (conn.rs): independent u32 facts.
+        app.host_info.refresh_mhz.store(facts.refresh_mhz, Ordering::Relaxed);
+        app.host_info.scale.store(facts.scale, Ordering::Relaxed);
+        for (id, window) in &mut app.windows {
+            window.refresh_stream_rate(mtm);
+            let size = window.sync_layer_geometry();
+            window.mark_dirty();
+            let activated = window.ns.isKeyWindow();
+            if let Some(out) = &app.out {
+                queue_configure(out, *id, size, activated);
+            }
+        }
+    });
+}
+
+/// Un-swallow Cmd keyUps. `NSApplication.sendEvent` routes a keyUp with Cmd
+/// held into key-equivalent processing and never delivers it to the key
+/// window -- above `NSWindow`, so a window-level `sendEvent` override alone
+/// never sees it -- leaving the guest with the chorded key stuck down and
+/// auto-repeating forever (one Cmd-Backspace deleted "like an animation"
+/// until the next focus change). A local event monitor observes every event
+/// before that dispatch: re-deliver Cmd keyUps to the key window ourselves,
+/// exactly GLFW's workaround (`cocoa_init.m` `keyUpMonitor`). The window's
+/// `sendEvent` override routes them on to the view, and the view's held-key
+/// map dedupes if `AppKit` ever delivers the original too.
+fn install_key_up_monitor(mtm: MainThreadMarker) {
+    let block = block2::RcBlock::new(
+        move |event: core::ptr::NonNull<NSEvent>| -> *mut NSEvent {
+            // SAFETY: AppKit passes a valid event; local monitors run on the
+            // main thread.
+            let ev = unsafe { event.as_ref() };
+            if ev.modifierFlags().contains(NSEventModifierFlags::Command)
+                && let Some(window) = NSApplication::sharedApplication(mtm).keyWindow()
+            {
+                window.sendEvent(ev);
+            }
+            // Hand the event back so normal dispatch continues unchanged.
+            event.as_ptr()
+        },
+    );
+    // SAFETY: the block returns the pointer it was handed (valid, non-null).
+    let monitor =
+        unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyUp, &block) };
+    // Intentionally never removed: the monitor must live as long as the app,
+    // and dropping the token would not uninstall it anyway.
+    std::mem::forget(monitor);
 }
 
 /// Entry point for supervisor events, always on the main queue.
@@ -199,6 +349,7 @@ pub fn on_event(event: Event) {
         }
         Event::Hello { minor } => {
             app.peer_minor = minor;
+            send_key_repeat(app);
             Deferred::default()
         }
         Event::Disconnected => {
@@ -235,15 +386,14 @@ fn handle_msg(app: &mut App, msg: ToHost, recv: f64) -> Deferred {
                 app.mtm,
                 &app.renderer,
                 &params,
-                &app.title_prefix,
-                app.native_titlebar,
+                &app.options,
             );
             app.windows.insert(id, window);
             Deferred::default()
         }
         ToHost::WindowTitle { id, title } => {
             if let Some(window) = app.windows.get(&id) {
-                window.set_title(&app.title_prefix, &title);
+                window.set_title(&app.options.title_prefix, &title);
             }
             Deferred::default()
         }
@@ -279,7 +429,7 @@ fn handle_msg(app: &mut App, msg: ToHost, recv: f64) -> Deferred {
                 // guest pacing, an ack held hostage to a texture we never
                 // made would wedge that window's frame loop forever.
                 if let Some(out) = &app.out {
-                    let _ = out.send(ToGuest::Ack { id, seq });
+                    queue_to_guest(out, ToGuest::Ack { id, seq });
                 }
                 return Deferred::default();
             }
@@ -316,7 +466,77 @@ fn handle_msg(app: &mut App, msg: ToHost, recv: f64) -> Deferred {
             sync_capture(app);
             Deferred::default()
         }
+        ToHost::WindowScale { id, scale } => {
+            if let Some(window) = app.windows.get_mut(&id) {
+                window.set_guest_scale(scale);
+            }
+            Deferred::default()
+        }
     }
+}
+
+/// Tell the guest the user's actual macOS key-repeat timing (System
+/// Settings, via `NSEvent`'s class getters) so `wl_keyboard.repeat_info`
+/// matches the host exactly. The host drops `isARepeat` keyDowns, so this
+/// advertisement is the guest's only repeat authority. Sent once per
+/// connection (a mid-session System Settings change applies on reconnect);
+/// gated on the guest speaking 1.2, postcard cannot skip an unknown variant.
+fn send_key_repeat(app: &App) {
+    if app.peer_minor < MINOR_KEY_REPEAT {
+        return;
+    }
+    let Some(out) = &app.out else {
+        return;
+    };
+    let msg = ToGuest::KeyRepeat {
+        delay_ms: whole_ms(NSEvent::keyRepeatDelay()),
+        interval_ms: whole_ms(NSEvent::keyRepeatInterval()),
+    };
+    eprintln!("panes-host: key repeat: {msg:?}");
+    queue_to_guest(out, msg);
+}
+
+/// Seconds (`NSTimeInterval`) to whole milliseconds. `as` saturates: a
+/// negative or NaN interval becomes 0 (the guest disables repeat for it, see
+/// `panes_protocol::wl_repeat_info`), and macOS "Key Repeat: Off" reports a
+/// minutes-long interval that stays finite here.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn whole_ms(seconds: f64) -> u32 {
+    (seconds * 1000.0).round() as u32
+}
+
+/// Re-hide the cursor when macOS revealed it behind an engaged capture's
+/// back, now and once more after `AppKit` finishes the current event.
+/// `AppKit` spontaneously unhides a hidden cursor on paths of its own -- the
+/// right-mouse-down menu-preparation path is the one guests actually hit
+/// (holding right-click in a pointer-locked game showed the cursor); GLFW
+/// catalogs more (screenshot mode, dock hover: glfw#2648, glfw#2656). Each
+/// such show may or may not decrement the `NSCursor.hide` nesting counter
+/// (undocumented), so the guard only re-hides while the cursor is actually
+/// visible, and the capture's `Drop` symmetrically unhides until visible:
+/// correct under either counter semantic, and release can never strand a
+/// hidden cursor.
+/// The deferred second look exists because the OS unhide lands during event
+/// processing, ordered unpredictably against the view handler that calls
+/// this; the back of the main queue is reliably after both.
+pub fn reassert_capture_cursor() {
+    fn rehide_if_visible(app: &mut App) {
+        if app.capture.is_none() {
+            return;
+        }
+        // CGCursorIsVisible is deprecated without a replacement, and there
+        // is no event for "the OS unhid your cursor": visibility can only
+        // be polled. GLFW ships the same call for the same reason.
+        #[allow(deprecated)]
+        if objc2_core_graphics::CGCursorIsVisible() {
+            eprintln!("panes-host: OS unhid the cursor while captured; re-hiding");
+            NSCursor::hide();
+        }
+    }
+    with_app(rehide_if_visible);
+    DispatchQueue::main().exec_async(|| {
+        with_app(rehide_if_visible);
+    });
 }
 
 /// Reconcile the engaged cursor capture with what the guest wants and what
@@ -351,6 +571,12 @@ fn sync_capture(app: &mut App) {
     {
         window.view_handle().set_relative(true);
         app.capture = Some(CursorCapture::engage(id));
+        // macOS ignores a hide issued while the cursor hovers the dock
+        // (glfw#2656: refocus-over-dock), so double-check once this engage's
+        // event settles. Deferred: we are inside the APP borrow here.
+        DispatchQueue::main().exec_async(|| {
+            reassert_capture_cursor();
+        });
     }
 }
 
@@ -358,12 +584,44 @@ fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
     APP.with(|slot| slot.borrow_mut().as_mut().map(f))
 }
 
+fn queue_to_guest(out: &SendQueue, msg: ToGuest) {
+    if !out.is_open() {
+        return;
+    }
+    match out.send(msg) {
+        Ok(()) => {}
+        Err(error) => {
+            let reason = match error {
+                SendQueueError::Full => "outgoing queue full",
+                SendQueueError::Disconnected => "outgoing queue disconnected",
+            };
+            eprintln!("panes-host: {reason}; disconnecting");
+            DispatchQueue::main().exec_async(|| on_event(Event::Disconnected));
+        }
+    }
+}
+
+fn queue_configure(
+    out: &SendQueue,
+    id: WindowId,
+    size: SurfaceSize,
+    activated: bool,
+) {
+    queue_to_guest(out, ToGuest::Configure {
+        id,
+        width: size.width,
+        height: size.height,
+        scale: size.scale,
+        activated,
+    });
+}
+
 /// Queue a message to the guest; silently dropped while disconnected (every
 /// caller is reacting to UI events that are meaningless without a guest).
 pub fn send(msg: ToGuest) {
     with_app(|app| {
         if let Some(out) = &app.out {
-            let _ = out.send(msg);
+            queue_to_guest(out, msg);
         }
     });
 }
@@ -390,7 +648,7 @@ pub fn display_tick(id: WindowId, update: &CAMetalDisplayLinkUpdate) {
                     window.max_drawable_count(),
                 );
             }
-            let _ = out.send(ToGuest::Ack { id, seq });
+            queue_to_guest(out, ToGuest::Ack { id, seq });
             let stat = app
                 .ack_stats
                 .entry(id)
@@ -417,7 +675,7 @@ pub fn window_should_close(id: WindowId) -> bool {
             return true;
         }
         if let Some(out) = &app.out {
-            let _ = out.send(ToGuest::CloseRequest { id });
+            queue_to_guest(out, ToGuest::CloseRequest { id });
         }
         // The guest decides: it unmaps and sends WindowGone, which closes
         // the NSWindow for real (the WSLg model: never desync window
@@ -485,13 +743,7 @@ pub fn window_geometry_changed(id: WindowId) {
         window.mark_dirty();
         let activated = window.ns.isKeyWindow();
         if let Some(out) = &app.out {
-            let _ = out.send(ToGuest::Configure {
-                id,
-                width: size.width,
-                height: size.height,
-                scale: size.scale,
-                activated,
-            });
+            queue_configure(out, id, size, activated);
         }
     });
 }
@@ -510,13 +762,13 @@ pub fn window_live_resize(id: WindowId, active: bool) {
 
 pub fn window_activation(id: WindowId, activated: bool) {
     if !activated {
-        // Held modifiers must not outlive key status: AppKit stops sending
-        // flagsChanged after resign-key, so release them guest-side before
-        // the deactivated Configure. Outside the with_app borrow because the
-        // view sends protocol messages through app state.
+        // Held keys must not outlive key status: AppKit stops sending
+        // flagsChanged and keyUp after resign-key, so release them
+        // guest-side before the deactivated Configure. Outside the with_app
+        // borrow because the view sends protocol messages through app state.
         let view = with_app(|app| app.windows.get(&id).map(PaneWindow::view_handle)).flatten();
         if let Some(view) = view {
-            view.release_held_modifiers();
+            view.release_held_keys();
         }
     }
     with_app(|app| {
@@ -525,13 +777,7 @@ pub fn window_activation(id: WindowId, activated: bool) {
         };
         let size = window.sync_layer_geometry();
         if let Some(out) = &app.out {
-            let _ = out.send(ToGuest::Configure {
-                id,
-                width: size.width,
-                height: size.height,
-                scale: size.scale,
-                activated,
-            });
+            queue_configure(out, id, size, activated);
         }
         // Key-window changes gate the cursor capture: resign releases it,
         // become re-engages it when the guest still holds the lock.
@@ -557,7 +803,7 @@ pub fn request_quit() {
         app.capture = None;
         if let Some(out) = &app.out {
             for id in app.windows.keys() {
-                let _ = out.send(ToGuest::CloseRequest { id: *id });
+                queue_to_guest(out, ToGuest::CloseRequest { id: *id });
             }
         }
         false
@@ -592,6 +838,11 @@ define_class!(
         #[unsafe(method(applicationDidBecomeActive:))]
         fn application_did_become_active(&self, _notification: &NSNotification) {
             with_app(sync_capture);
+        }
+
+        #[unsafe(method(applicationDidChangeScreenParameters:))]
+        fn application_did_change_screen_parameters(&self, _notification: &NSNotification) {
+            screens_changed();
         }
     }
 );

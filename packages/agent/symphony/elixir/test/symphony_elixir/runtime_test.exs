@@ -3,7 +3,11 @@ defmodule SymphonyElixir.RuntimeTest do
 
   alias SymphonyElixir.DSL.Parser
   alias SymphonyElixir.Engine.Envelope
-  alias SymphonyElixir.IR.{Attempt, Materializer, Node, RunGraph, Store}
+  alias SymphonyElixir.IR.Attempt
+  alias SymphonyElixir.IR.Materializer
+  alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.IR.RunGraph
+  alias SymphonyElixir.IR.Store
   alias SymphonyElixir.Runtime
 
   # The #90 crash tests deliberately kill executor tasks, which logs the
@@ -15,6 +19,7 @@ defmodule SymphonyElixir.RuntimeTest do
   # to an instruction. The table name is fixed but rows are cleared in
   # setup, so `async: false` keeps tests from racing each other.
   defmodule FakeEngine do
+    @moduledoc false
     @behaviour SymphonyElixir.Runtime.EngineClient
 
     @table :runtime_test_fake
@@ -87,6 +92,7 @@ defmodule SymphonyElixir.RuntimeTest do
   # can assert the runtime threads the checkout path into an agent turn
   # without provisioning a real room-server.
   defmodule CwdPlacement do
+    @moduledoc false
     def acquire(_run_id, _location, _opts), do: {:ok, "http://stub.test"}
     def resolved(_run_id), do: {:ok, %{location: :host, base_url: "http://stub.test"}}
     def workspace_cwd(_run_id, _opts), do: {:ok, "/checkout/run/example"}
@@ -97,6 +103,7 @@ defmodule SymphonyElixir.RuntimeTest do
   # test process (the `:test_pid` is threaded through `placement_opts`), so a
   # test can assert the runtime minted and passed a GitHub App `:bot_token`.
   defmodule RecordingPlacement do
+    @moduledoc false
     def acquire(_run_id, _location, opts) do
       if pid = Keyword.get(opts, :test_pid), do: send(pid, {:acquire_opts, opts})
       {:ok, "http://stub.test"}
@@ -131,7 +138,7 @@ defmodule SymphonyElixir.RuntimeTest do
       :ets.delete_all_objects(table)
     end
 
-    unless Process.whereis(SymphonyElixir.Runtime.Supervisor) do
+    if !Process.whereis(SymphonyElixir.Runtime.Supervisor) do
       start_supervised!(SymphonyElixir.Runtime.Supervisor)
     end
 
@@ -159,7 +166,7 @@ defmodule SymphonyElixir.RuntimeTest do
     Node.new(base ++ Keyword.take(opts, [:state, :attempts]))
   end
 
-  defp graph(run_id, nodes), do: RunGraph.new(run_id, "h", {:ast, []}) |> RunGraph.put_nodes(nodes)
+  defp graph(run_id, nodes), do: run_id |> RunGraph.new("h", {:ast, []}) |> RunGraph.put_nodes(nodes)
 
   # Materialize a `.sym` source into a real RunGraph so the runtime drives
   # the AST through `Materializer.expand_dynamic/1` on each success. The
@@ -207,7 +214,7 @@ defmodule SymphonyElixir.RuntimeTest do
   end
 
   defp settled_failed?(pid) do
-    Process.alive?(pid) and SymphonyElixir.Runtime.graph(pid).status == :failed
+    Process.alive?(pid) and Runtime.graph(pid).status == :failed
   catch
     :exit, _ -> true
   end
@@ -580,7 +587,8 @@ defmodule SymphonyElixir.RuntimeTest do
 
     test "restart recovery harvests a completed subrun child instead of deadlocking the parent", %{dir: dir} do
       child =
-        graph("child-after-restart", [
+        "child-after-restart"
+        |> graph([
           node("c", state: :succeeded)
         ])
         |> put_in([Access.key!(:nodes), "c", Access.key!(:output)], %{done: true})

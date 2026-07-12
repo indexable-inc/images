@@ -67,26 +67,48 @@ MODULES: tuple[Module, ...] = (
     ),
     Module(
         "nu",
-        "structured shell (an embedded, persistent nushell engine): run a pipeline and get a "
-        'polars DataFrame back, always -- `await nu("ls | where size > 1kb | sort-by size")`, '
-        "`open Cargo.toml`, `from csv`, `http get`; `let`/`def`/`cd` persist across calls like "
-        "a REPL; `input=df` pipes a frame through a pipeline; a failure raises NuError carrying "
-        "nushell's own diagnostic. Prefer it over `sh` + jq/awk/sed whenever you want a "
-        "command's data",
+        "structured shell, the ONE shell-out path (an embedded, persistent nushell "
+        "engine): run a pipeline and get a polars DataFrame back -- "
+        '`await nu("ls | where size > 1kb | sort-by size")`, `open Cargo.toml`, `from csv`, '
+        "`http get`; run an external binary with `^cmd` (`^git status`, `^gh pr list --json .. "
+        "| from json`); a single record (a `| complete` result, `open Cargo.toml | get package`) "
+        "returns as a plain dict, so `res['exit_code']` reads directly; a lone string result "
+        "(an external's plain stdout) returns as the full "
+        "`str`, never a clipped 1x1 frame; `let`/`def`/`cd` persist across calls like a REPL "
+        "(per session -- one agent's `cd` never moves another's PWD); "
+        "`input=df` pipes a frame through a pipeline; `nu.value(code)` returns the plain Python "
+        "value; a failure raises NuError carrying nushell's own diagnostic, and `check=False` "
+        "returns `NuResult(result, exit_code)` instead of raising when a trailing external "
+        "exits non-zero (grep with no match). Replaces jq/awk/sed text munging and the retired "
+        "`sh`",
         preimport=True,
     ),
     Module(
         "nix",
-        "run a nix build and get its internals as polars (`.events` / `.activities`) plus a live "
-        "build DAG; `nix.attrs()` catalogs the flake's buildable attrs",
+        "run a nix build with a live dashboard build-tree pane; the returned BuildRun exposes "
+        "`.ok` / `.errors` / `.builds` (a polars frame). `nix.eval()` returns a flake value and "
+        "`nix.attrs()` catalogs the flake's buildable attrs; `nix.parse()` folds a captured "
+        "internal-json log into polars frames",
     ),
-    Module("fleet", "async polars SSH fan-out across hosts (`read_ndjson` / `scan`)"),
+    Module(
+        "fleet",
+        "async polars SSH fan-out across hosts (`read_ndjson` / `scan`), plus "
+        "`await fleet.ssh_run(host, script, sudo=, env=, timeout=)` to run one "
+        "multi-line bash script on one host (shipped base64-encoded, so no shell "
+        "quoting) returning a typed exit_code/stdout/stderr result",
+    ),
     Module(
         "mesh",
         "tailnet mesh of live ix-mcp servers, zero config: `await mesh.peers()` is one polars "
         "row per reachable server (host, version, named sessions, dashboard URL) discovered "
         "via tailscale; `await mesh.sessions()` flattens to one row per (host, session)",
         preimport=True,
+    ),
+    Module(
+        "weave",
+        "one shared world - facts, queries, verbs against the weave journal; "
+        "`await weave.delegate('prompt')` is THE delegation verb: the weave app "
+        "runs each task as a live session",
     ),
     Module(
         "search",
@@ -105,6 +127,13 @@ MODULES: tuple[Module, ...] = (
             login="run `mgrep login`",
             url="https://www.mixedbread.com",
         ),
+    ),
+    Module(
+        "claude_history",
+        "find past local Claude Code sessions by content: `await claude_history.search(pattern)` "
+        "greps every transcript under ~/.claude/projects and returns one polars row per matching "
+        "session (session id, un-munged project cwd, start/end timestamps, hit count, first real "
+        "user message with meta / tool-result / pasted-TUI noise skipped), ranked by hit count",
     ),
     Module(
         "astlog",
@@ -161,10 +190,6 @@ MODULES: tuple[Module, ...] = (
         "network-enabled (see the iphone-control skill)",
     ),
     Module(
-        "tasks",
-        "generate and read the task-graph demo's SQLite DAG (`tasks.seed` / `load` / `frame`)",
-    ),
-    Module(
         "mcp_client",
         "call any MCP server's tools from Python: `await mcp_client.connect(url_or_command)` "
         "returns a live server whose `.tools` is a polars frame and whose `await srv.call(tool, "
@@ -187,7 +212,9 @@ MODULES: tuple[Module, ...] = (
     Module(
         "google_auth",
         "Google for your own account: read and send Gmail, and manage Calendar, over the "
-        "official googleapiclient (`google_auth.gmail()` / `.calendar()`); "
+        "official googleapiclient (`google_auth.gmail()` / `.calendar()`); `await "
+        "google_auth.send(to, subject, body)` sends mail (MIME assembly, reply threading via "
+        "`reply_to_message_id=`, and delivered-body readback handled for you); "
         "`await google_auth.login()` signs in through your browser and `status()` / `logout()` "
         "manage the grant. Incognito sessions only (a personal mailbox never reaches a shared room)",
         # The bundled `gcal` binary owns the grant; the stored refresh token
@@ -268,7 +295,10 @@ BUILTINS: tuple[Builtin, ...] = (
     Builtin("Result", "split a cell's value into the human view and your view; a cell must end with or yield one"),
     Builtin("cells", "curate the dashboard's highlight reel (`cells.add` / `set` / `remove` / `clear`)"),
     Builtin("session", "this session's dashboard identity — set `session.name = '...'` first so a human can tell your runs apart"),
-    Builtin("jobs", "the background-run registry (inspect / await / cancel / page each run)"),
+    Builtin(
+        "jobs",
+        "the background-run registry (inspect / await / cancel / page each run); `jobs.spawn(coro, name=...)` registers your own awaitable as a first-class job (dashboard card + completion notification + awaitable result)",
+    ),
     Builtin("history", "list recent runs"),
     Builtin("doc", "the signature + docstring of any object, returned as a Result (help() only prints and returns None)"),
     Builtin("resources", "the live, self-updating views (a terminal, a widget)"),
@@ -292,17 +322,17 @@ BUILTINS: tuple[Builtin, ...] = (
         "enabled drops it silently",
     ),
     Builtin(
-        "sh",
-        "shell out on the loop; use sh([...]) for argv-list/no shell parsing and sh('...') "
-        "only when shell parsing is intended; the Output IS a Result (ANSI as HTML for the "
-        "human, `.text`/`.code`/`.ok` for you), and `.json()`/`.jsonl()`/`.df()` parse a "
-        "JSON-mode CLI straight to data / a polars frame: ask the tool for --json, never scrape TSV",
+        "watch_pr",
+        "watch a GitHub PR as a live resource, show required checks with elapsed time, enable "
+        "auto merge by default, and notify when it merges, fails, or times out",
     ),
+    Builtin("api", "the complete live helper catalog as a Polars DataFrame; filter its columns directly"),
     Builtin(
-        "zsh",
-        "explicit zsh -lc escape hatch for zsh-only shell syntax; prefer sh([...]) for normal commands",
+        "read_stats",
+        "this session's cumulative file-read counters ({total_reads, redundant_reads}); a "
+        "redundant read is a file re-read with byte-identical content -- check your own "
+        "redundancy rate (KPI: redundant/total < 1%)",
     ),
-    Builtin("api", "the live catalog of every helper, as a polars frame (`api('grep')` to filter)"),
     Builtin(
         "grep",
         "content search backed by ripgrep (process-isolated + timeout, so it can't wedge the "
@@ -361,6 +391,18 @@ LIBRARIES: tuple[Library, ...] = (
             service="Exa",
             env=("EXA_API_KEY",),
             url="https://dashboard.exa.ai/api-keys",
+        ),
+    ),
+    Library(
+        "cursor_sdk",
+        # Cursor's official agent SDK: run the same agent as the Cursor IDE/CLI
+        # (local or cloud) from a cell, e.g. Composer as a cheap delegated
+        # codebase-search agent. No key is bundled; local runs also honor a
+        # logged-in `cursor-agent`.
+        credential=Credential(
+            service="Cursor",
+            env=("CURSOR_API_KEY",),
+            url="https://cursor.com/dashboard",
         ),
     ),
 )

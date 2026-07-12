@@ -16,7 +16,10 @@ defmodule SymphonyElixir.Workspace do
   PRs in any repository included in the catalog.
   """
 
-  alias SymphonyElixir.{Config, PathSafety, Workspace.RepoCloner}
+  alias SymphonyElixir.Config
+  alias SymphonyElixir.PathSafety
+  alias SymphonyElixir.Workspace.RepoCloner
+
   require Logger
 
   @spec create(String.t()) :: {:ok, Path.t()} | {:error, term()}
@@ -56,9 +59,10 @@ defmodule SymphonyElixir.Workspace do
   end
 
   defp ensure_workspace_absent(path) do
-    case File.exists?(path) do
-      false -> :ok
-      true -> {:error, {:workspace_already_exists, path}}
+    if File.exists?(path) do
+      {:error, {:workspace_already_exists, path}}
+    else
+      :ok
     end
   end
 

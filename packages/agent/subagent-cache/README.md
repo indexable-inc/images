@@ -1,19 +1,22 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="a lookup must clear FTS recall, a Haiku judge, and a client-side freshness check to serve a cached finding; any miss falls back to a cold run that repopulates the cache"></p>
+
 # subagent-cache
 
-A small axum + Postgres daemon (lib `subagent_cache`, bin `subagent-cache`,
-ENG-4665) that serves a repeated read-only subagent investigation from a prior
-finding while every file that finding read is still byte-for-byte unchanged. It
-is developer tooling for the Claude Code investigation subagents: tailnet-only,
-fail-open, with no production data path. A daemon outage is invisible to
-developers (silent cold run).
+Why re-run the same read-only investigation when nothing it read has changed?
+subagent-cache is a small axum + Postgres daemon (lib `subagent_cache`, bin
+`subagent-cache`, ENG-4665) that serves a repeated subagent investigation from
+a prior finding while every file that finding read is still byte-for-byte
+unchanged. It is developer tooling for the Claude Code investigation subagents:
+tailnet-only, fail-open, with no production data path. A daemon outage is
+invisible to developers (silent cold run).
 
 ## How the cache works
 
 A cache hit must clear three gates. The daemon owns the first two; the client
 hook owns the third, because only the client can see its working tree.
 
-1. **Stage 1 recall (daemon, `store::recall`).** Postgres full-text search ranks
-   non-expired rows of the same `agent_type` and persona by
+1. **Stage 1 recall (daemon, `store::recall`).** Postgres full-text search
+   ranks non-expired rows of the same `agent_type` and persona by
    `ts_rank(question_tsv, plainto_tsquery(...))`, returning the top-K above the
    recall floor, best-first.
 2. **Stage 2 judge (daemon, `judge::judge`).** A single Haiku-class Anthropic
@@ -26,24 +29,9 @@ hook owns the third, because only the client can see its working tree.
    hash drops the candidate to a cold run. The daemon never touches the
    filesystem, so `file_deps` hashes are opaque strings to it.
 
-A finished cold investigation is upserted back via `POST /populate`, so the next
-identical question can hit. The client hooks own all working-tree hashing and
-speak the same xxh64 freshness language as the mgrep search index.
-
-```mermaid
-flowchart TD
-    A[Subagent dispatch] --> B[lookup hook]
-    B -->|POST /lookup| C{Stage 1: FTS recall}
-    C -->|no candidate| MISS[Cold run]
-    C -->|top-K candidates| D{Stage 2: Haiku judge}
-    D -->|none answer| MISS
-    D -->|judge-positive| E{Stage 3: freshness}
-    E -->|file_deps hash changed| MISS
-    E -->|all hashes match| HIT[Serve cached findings]
-    MISS --> F[Run investigation]
-    F -->|POST /populate| G[(subagent_cache Postgres)]
-    C -.reads.-> G
-```
+A finished cold investigation is upserted back via `POST /populate`, so the
+next identical question can hit. The client hooks own all working-tree hashing
+and speak the same xxh64 freshness language as the mgrep search index.
 
 ## HTTP API
 
@@ -60,6 +48,18 @@ Every error variant maps to a 500 with a generic body; the hook fails open, so
 detail is for operators (logs), not the client. Lookups log to the
 `subagent_cache.lookup` target with `recalled`/`judged`/`result` for hit-rate
 measurement.
+
+## Run
+
+```sh
+nix run github:indexable-inc/index#subagent-cache -- --help
+```
+
+As a Rust binary via cargo:
+
+```sh
+cargo install --git https://github.com/indexable-inc/index subagent-cache
+```
 
 ## Config
 
@@ -86,8 +86,8 @@ false-hit rates.
 A dedicated `standalone` Postgres role and database `subagent_cache`,
 deliberately separate from the user-facing database so a disposable dev-tooling
 cache never shares a process with production data. The daemon applies
-`schema.sql` idempotently on startup (`store::bootstrap`); it is not part of the
-prod migration runner. One table, `subagent_cache`, with a generated
+`schema.sql` idempotently on startup (`store::bootstrap`); it is not part of
+the prod migration runner. One table, `subagent_cache`, with a generated
 `question_tsv` column (gin-indexed for Stage-1 recall), a `(agent_type,
 agent_def_hash, expires_at)` recall index, and a unique `(agent_type, question,
 agent_def_hash)` key that `populate` upserts onto.

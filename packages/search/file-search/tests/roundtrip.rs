@@ -32,49 +32,20 @@ fn index_then_search_finds_path_by_filename() {
 }
 
 #[test]
-fn reindexing_removes_old_chunks() {
-    let workdir = TempDir::new().expect("workdir");
-    let index_dir = TempDir::new().expect("index dir");
-
-    let file = workdir.path().join("subject.md");
-    fs::write(&file, "alpha bravo charlie").expect("write v1");
-
-    {
-        let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
-        index
-            .index_directory(workdir.path(), false)
-            .expect("index v1");
-        let hits = index.search("alpha", 5, None).expect("search v1");
-        assert!(!hits.is_empty(), "v1 should match `alpha`");
-    }
-
-    fs::write(&file, "delta echo foxtrot").expect("write v2");
-    {
-        let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
-        index
-            .index_directory(workdir.path(), false)
-            .expect("index v2");
-        let alpha_hits = index.search("alpha", 5, None).expect("search alpha");
-        assert!(
-            alpha_hits.is_empty(),
-            "stale chunk should be gone after re-index: {alpha_hits:?}",
-        );
-        let delta_hits = index.search("delta", 5, None).expect("search delta");
-        assert!(!delta_hits.is_empty(), "v2 should match `delta`");
-    }
-}
-
-#[test]
-fn directory_filter_matches_subdirectory() {
+fn directory_filter_is_path_aware() {
     let workdir = TempDir::new().expect("workdir");
     let index_dir = TempDir::new().expect("index dir");
 
     let inside = workdir.path().join("inside");
+    let same_prefix = workdir.path().join("inside-old");
     let outside = workdir.path().join("outside");
     fs::create_dir(&inside).expect("mkdir inside");
+    fs::create_dir(&same_prefix).expect("mkdir same-prefix sibling");
     fs::create_dir(&outside).expect("mkdir outside");
 
     fs::write(inside.join("hit.rs"), "fn target() {}").expect("write inside");
+    fs::write(same_prefix.join("prefix-miss.rs"), "fn target() {}")
+        .expect("write same-prefix sibling");
     fs::write(outside.join("miss.rs"), "fn target() {}").expect("write outside");
 
     let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
@@ -96,64 +67,34 @@ fn directory_filter_matches_subdirectory() {
 }
 
 #[test]
-fn reindex_removes_deleted_file_chunks() {
+fn reindex_removes_stale_and_deleted_file_chunks() {
     let workdir = TempDir::new().expect("workdir");
     let index_dir = TempDir::new().expect("index dir");
 
     let kept = workdir.path().join("kept.md");
     let removed = workdir.path().join("gone.md");
-    fs::write(&kept, "alpha bravo").expect("write kept");
-    fs::write(&removed, "alpha charlie").expect("write removed");
+    fs::write(&kept, "alpha bravo").expect("write kept v1");
+    fs::write(&removed, "charlie delta").expect("write removed");
 
     {
         let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
         index
             .index_directory(workdir.path(), false)
             .expect("index v1");
-        let hits = index.search("charlie", 5, None).expect("search v1");
-        assert!(!hits.is_empty(), "removed file should be searchable in v1");
+        assert!(!index.search("alpha", 5, None).expect("search kept v1").is_empty());
+        assert!(!index.search("charlie", 5, None).expect("search removed v1").is_empty());
     }
 
+    fs::write(&kept, "echo foxtrot").expect("write kept v2");
     fs::remove_file(&removed).expect("rm removed");
     {
         let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
         index
             .index_directory(workdir.path(), false)
             .expect("index v2");
-        let hits = index.search("charlie", 5, None).expect("search v2");
-        assert!(
-            hits.is_empty(),
-            "chunks for deleted file should be gone: {hits:?}",
-        );
-        let alpha_hits = index.search("alpha", 5, None).expect("search alpha");
-        assert!(!alpha_hits.is_empty(), "surviving file should still match");
-    }
-}
-
-#[test]
-fn directory_filter_excludes_same_prefix_siblings() {
-    let workdir = TempDir::new().expect("workdir");
-    let index_dir = TempDir::new().expect("index dir");
-
-    let src = workdir.path().join("src");
-    let src_old = workdir.path().join("src-old");
-    fs::create_dir(&src).expect("mkdir src");
-    fs::create_dir(&src_old).expect("mkdir src-old");
-    fs::write(src.join("kept.rs"), "fn target() {}").expect("write src");
-    fs::write(src_old.join("dropped.rs"), "fn target() {}").expect("write src-old");
-
-    let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
-    index.index_directory(workdir.path(), false).expect("index");
-
-    let hits = index
-        .search("target", 10, Some(src.as_path()))
-        .expect("filter src");
-    assert!(!hits.is_empty(), "filter for /src should match kept.rs");
-    for hit in &hits {
-        assert!(
-            !hit.path.contains("src-old"),
-            "filter for /src must not pull in /src-old: {hit:?}",
-        );
+        assert!(index.search("alpha", 5, None).expect("stale search").is_empty());
+        assert!(index.search("charlie", 5, None).expect("deleted search").is_empty());
+        assert!(!index.search("foxtrot", 5, None).expect("current search").is_empty());
     }
 }
 
@@ -186,4 +127,31 @@ fn ephemeral_reranks_matching_text_higher() {
     let results = search.search("fibonacci", 3).expect("search");
     let top = results.first().expect("at least one hit");
     assert_eq!(top.id, 1, "expected the fibonacci text to win: {results:?}");
+}
+
+#[test]
+fn search_limit_zero_returns_empty() {
+    let workdir = TempDir::new().expect("workdir");
+    let index_dir = TempDir::new().expect("index dir");
+
+    fs::write(workdir.path().join("note.md"), "alpha bravo charlie").expect("write");
+
+    let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
+    index.index_directory(workdir.path(), false).expect("index");
+
+    // Tantivy's `TopDocs::with_limit(0)` panics; a zero limit must instead
+    // return no hits.
+    let hits = index.search("alpha", 0, None).expect("limit 0 search");
+    assert!(hits.is_empty(), "limit 0 should return no hits: {hits:?}");
+}
+
+#[test]
+fn ephemeral_limit_zero_returns_empty() {
+    let search =
+        EphemeralSearch::from_texts(["alpha bravo charlie".to_string()]).expect("build ephemeral");
+
+    // Tantivy's `TopDocs::with_limit(0)` panics; a zero limit must instead
+    // return no hits. Reranking an empty batch defaults to this limit.
+    let hits = search.search("alpha", 0).expect("limit 0 search");
+    assert!(hits.is_empty(), "limit 0 should return no hits: {hits:?}");
 }

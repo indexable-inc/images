@@ -88,7 +88,10 @@ async fn resolve_one(
         }
     };
 
-    monitor.write().await.record_closure(derivation.clone(), closure);
+    monitor
+        .write()
+        .await
+        .record_closure(derivation.clone(), closure);
     broadcast_deltas(monitor, deltas).await?;
 
     // If this derivation is a root cause (all its inputs are cache hits, so it is

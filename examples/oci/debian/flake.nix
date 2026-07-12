@@ -9,13 +9,10 @@
     };
   };
 
-  outputs =
-    { index, ... }:
-    let
-      image = import ./ix.nix { inherit index; };
-    in
-    {
-      ix.images.default = image;
-      packages.x86_64-linux.default = image;
-    };
+  outputs = {index, ...}: let
+    image = import ./ix.nix {inherit index;};
+  in {
+    ix.images.default = image;
+    packages.x86_64-linux.default = image;
+  };
 }

@@ -1,8 +1,7 @@
 # The audio daemon binary out of the shared workspace unit graph (dag-runner
 # pattern): package.nix carries the registry metadata, this file only selects
 # the target. Same selection pattern as ../compositor.
-{ ix, ... }:
-
+{ix, ...}:
 ix.cargoUnit.selectBinaryWithTests ix.rustWorkspace.units {
   binary = "panes-audio";
   meta = {

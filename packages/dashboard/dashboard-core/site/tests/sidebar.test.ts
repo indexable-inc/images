@@ -60,6 +60,20 @@ describe('buildSidebar', () => {
     assert.equal(model.runCount, 3);
     assert.equal(model.sessions.length, 2);
   });
+
+  it('orders sessions by newest run, newest first', () => {
+    // Session B's newest run (210) beats A's newest run (130), so B sorts first.
+    assert.deepEqual(
+      model.sessions.map((s) => s.scope),
+      [T, S],
+    );
+  });
+
+  it('sets lastActivity to the newest run, not an output attachment', () => {
+    const a = model.sessions.find((s) => s.scope === S);
+    // A's newest *run* is r2 at 130 — the r2/out attachment at 131 does not count.
+    assert.equal(a?.lastActivity, 130);
+  });
 });
 
 describe('flattenVisible', () => {
@@ -70,10 +84,11 @@ describe('flattenVisible', () => {
 
   it('walks runs, resources, then recordings in render order', () => {
     const rows = flattenVisible(model, allOpen);
+    // Session B (newest activity) comes before A; runs stay oldest-first within.
     assert.deepEqual(rows.map((r) => r.selection), [
+      { kind: 'run', key: `${T}${SCOPE_SEP}r1` },
       { kind: 'run', key: `${S}${SCOPE_SEP}r1` },
       { kind: 'run', key: `${S}${SCOPE_SEP}r2` },
-      { kind: 'run', key: `${T}${SCOPE_SEP}r1` },
       { kind: 'resource', key: `${S}${SCOPE_SEP}resource/term` },
       { kind: 'recording', id: 'rec1' },
     ]);

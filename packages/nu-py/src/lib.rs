@@ -19,14 +19,17 @@
 //! `list`. The `nu` Python package turns those into polars frames.
 
 use std::collections::HashMap;
+use std::fmt;
+use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, FixedOffset, TimeDelta, Utc};
+use nu_protocol::ast::{Block, Expr, Expression, ListItem, Pipeline, RecordItem};
 use nu_protocol::debugger::WithoutDebug;
 use nu_protocol::engine::{EngineState, Stack, StateWorkingSet};
 use nu_protocol::{
-    ErrorStyle, PipelineData, Record, ShellError, Signals, Span, Value,
+    ByteStreamSource, ErrorStyle, PipelineData, Record, ShellError, Signals, Span, Type, Value,
     report_error::format_cli_error,
 };
 use pyo3::create_exception;
@@ -40,6 +43,46 @@ create_exception!(
     pyo3::exceptions::PyException,
     "A nushell pipeline failed; the message is nushell's own rendered diagnostic."
 );
+create_exception!(
+    _nu,
+    NuCwdError,
+    NuError,
+    "The persistent engine's working directory was removed."
+);
+
+#[derive(Debug)]
+enum EvalError {
+    Diagnostic(String),
+    RemovedCwd(String),
+}
+
+impl EvalError {
+    fn diagnostic(&self) -> &str {
+        match self {
+            Self::Diagnostic(diagnostic) | Self::RemovedCwd(diagnostic) => diagnostic,
+        }
+    }
+}
+
+impl Deref for EvalError {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.diagnostic()
+    }
+}
+
+impl fmt::Display for EvalError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.diagnostic())
+    }
+}
+
+impl From<String> for EvalError {
+    fn from(diagnostic: String) -> Self {
+        Self::Diagnostic(diagnostic)
+    }
+}
 
 /// The engine state a fresh [`Engine`] starts from: the full shell command
 /// set, the host environment, and REPL-free configuration.
@@ -68,8 +111,32 @@ fn initial_engine_state() -> EngineState {
 
     // The host environment, so `$env`, externals, and path lookups behave like
     // a normal shell session. PWD seeds cwd-relative commands (`ls`, `open`).
+    // GH_FORCE_TTY is the one exclusion: it makes gh render TTY-style output
+    // (color, truncation) into a captured pipe, so it never crosses over.
     for (key, value) in std::env::vars() {
+        if key == "GH_FORCE_TTY" {
+            continue;
+        }
         engine_state.add_env_var(key, Value::string(value, Span::unknown()));
+    }
+    // Color-free externals by default (issue #2051): the host process often
+    // forces color (e.g. Claude Code exports FORCE_COLOR=1 / CLICOLOR_FORCE=1),
+    // and pipeline output here is parsed rather than displayed, so inherited
+    // forcing breaks `^gh ... --json | from json` with ANSI-wrapped JSON.
+    // Overriding the values (not merely unsetting them) beats every CLI color
+    // convention; a caller that wants ANSI back re-enables it for one call via
+    // `env=` (the per-eval stack shadows these) or `with-env`.
+    // GH_PROMPT_DISABLED (issue #2163): output here is parsed, never a
+    // terminal, so gh must fail fast with a usable error instead of ever
+    // attempting an interactive prompt.
+    for (key, value) in [
+        ("NO_COLOR", "1"),
+        ("CLICOLOR", "0"),
+        ("CLICOLOR_FORCE", "0"),
+        ("FORCE_COLOR", "0"),
+        ("GH_PROMPT_DISABLED", "1"),
+    ] {
+        engine_state.add_env_var(key.into(), Value::string(value, Span::unknown()));
     }
     if let Ok(current_dir) = std::env::current_dir() {
         engine_state.add_env_var(
@@ -89,8 +156,18 @@ struct EngineInner {
 
 impl EngineInner {
     /// Parse and evaluate `code` against the persistent state, returning the
-    /// pipeline's collected output value. Every error path returns nushell's
-    /// rendered diagnostic (span, label, help) as the message.
+    /// intermediate pipelines' collected output values (for the caller to
+    /// print: script-style visibility, issue #2391), the FINAL pipeline's
+    /// collected output value, and the trailing external's exit code. Every
+    /// error path returns nushell's rendered diagnostic (span, label, help)
+    /// as the message.
+    ///
+    /// `check` mirrors `subprocess.run`: when true (the default), a trailing
+    /// external that exits non-zero is an error like any other; when false,
+    /// its collected output comes back as the value and the exit code is
+    /// reported instead of raised (grep-style pipelines where exit 1 means
+    /// "no match", not failure). Only exit-status semantics are affected --
+    /// parse errors and runtime shell errors raise either way.
     fn eval(
         &mut self,
         code: &str,
@@ -98,7 +175,8 @@ impl EngineInner {
         cwd: Option<String>,
         env: Option<HashMap<String, String>>,
         interrupt: &Arc<AtomicBool>,
-    ) -> Result<Value, String> {
+        check: bool,
+    ) -> Result<(Vec<Value>, Value, i64), EvalError> {
         let Self {
             engine_state,
             stack,
@@ -110,14 +188,26 @@ impl EngineInner {
         // receive a signal aimed at the one currently running.
         engine_state.set_signals(Signals::new(Arc::clone(interrupt)));
 
-        if let Some(dir) = cwd {
-            stack.add_env_var("PWD".into(), Value::string(dir, Span::unknown()));
-        }
-        for (key, value) in env.into_iter().flatten() {
-            stack.add_env_var(key, Value::string(value, Span::unknown()));
+        if cwd.is_none()
+            && let Some(pwd) = stack.get_env_var(engine_state, "PWD")
+            && let Ok(pwd) = pwd.as_str()
+            && !std::path::Path::new(pwd).is_dir()
+        {
+            // PWD persists across evals like the rest of the stack (REPL
+            // semantics; issue #2089 restored this after #1999 re-synced it to
+            // the embedding process's cwd -- the kernel's launch dir, i.e. some
+            // OTHER agent's worktree -- silently redirecting bare git commands
+            // across worktrees). A `cd` target that has since been removed
+            // (issue #1986) must fail loudly with the remedy, not be silently
+            // redirected somewhere else.
+            return Err(EvalError::RemovedCwd(format!(
+                "the engine's working directory `{pwd}` no longer exists \
+                 (a previous `cd` target was removed); this engine was \
+                 discarded, so retry the call or pass cwd= explicitly"
+            )));
         }
 
-        let block = {
+        let block = (|| -> Result<Arc<Block>, String> {
             let mut working_set = StateWorkingSet::new(engine_state);
             let block = nu_parser::parse(&mut working_set, Some("nu()"), code.as_bytes(), false);
             if let Some(error) = working_set.parse_errors.first() {
@@ -140,26 +230,371 @@ impl EngineInner {
             engine_state
                 .merge_delta(delta)
                 .map_err(|error| render_shell_error(engine_state, stack, &error))?;
-            block
-        };
+            Ok(block)
+        })()?;
 
-        let input = input.map_or_else(PipelineData::empty, |value| PipelineData::value(value, None));
-        // eval_ir_block, NOT eval_block: eval_block maps a user's `exit` to
-        // std::process::exit, which would take the whole embedding process
-        // (the kernel) down. Here `exit` surfaces as ShellError::Exit and
-        // becomes a raised NuError like any other failure.
-        let executed =
-            nu_engine::eval_ir_block::<WithoutDebug>(engine_state, stack, &block, input)
-                .map_err(|error| render_shell_error(engine_state, stack, &error))?;
-        let value = executed
-            .body
-            .into_value(Span::unknown())
-            .map_err(|error| render_shell_error(engine_state, stack, &error))?;
-        if let Value::Error { error, .. } = value {
-            return Err(render_shell_error(engine_state, stack, &error));
+        // Parse and compile before changing the persistent environment. A
+        // setup error must leave the previous PWD and variables intact so the
+        // next call starts from the last successfully configured state.
+        if let Some(dir) = cwd {
+            stack.add_env_var("PWD".into(), Value::string(dir, Span::unknown()));
         }
-        Ok(value)
+        for (key, value) in env.into_iter().flatten() {
+            stack.add_env_var(key, Value::string(value, Span::unknown()));
+        }
+
+        // Bash redirection tokens the parser handed to an external as literal
+        // argv (`2>/dev/null` and friends), detected up front and reported
+        // only if the evaluation then fails. The failing span is deliberately
+        // not matched to the external: when a pipeline fails while such a
+        // token sits in an external's argv, the bash-ism is almost certainly
+        // the mistake, and the downstream error ("ls: cannot access
+        // '2>/dev/null'") never names it (issue #2111).
+        let bash_redirections = bash_redirection_args(engine_state, &block);
+        let mut result = run_block(engine_state, stack, &block, input, check);
+        if let (Err(diagnostic), Some(token)) = (result.as_mut(), bash_redirections.first()) {
+            diagnostic.push('\n');
+            diagnostic.push_str(&bash_redirection_hint(token));
+        }
+        result.map_err(EvalError::from)
     }
+}
+
+/// Evaluate an already-parsed block against the persistent state: the
+/// post-parse half of [`EngineInner::eval`], split out so `eval` can append
+/// the bash-redirection hint to whatever diagnostic a failure renders.
+///
+/// Multi-statement source runs pipeline by pipeline (each top-level pipeline
+/// as its own IR-compiled block) so that every intermediate pipeline's output
+/// is COLLECTED and returned for the caller to print, instead of nushell's
+/// block semantics where an intermediate value is drained away silently and
+/// an intermediate external writes to the host process stdio -- under the MCP
+/// stdio transport, the protocol stream (issue #2391). Only the final
+/// pipeline's value becomes the eval's result, and only its trailing external
+/// is subject to `check`; an intermediate failure still aborts the eval.
+///
+/// Caveat: source where a statement STARTS with `$in` is collect-wrapped by
+/// the parser into one pipeline (parse_block), so it takes the
+/// single-pipeline path and keeps nushell's block semantics (intermediates
+/// drain); same for intermediates nested inside subexpressions and blocks.
+fn run_block(
+    engine_state: &mut EngineState,
+    stack: &mut Stack,
+    block: &Block,
+    input: Option<Value>,
+    check: bool,
+) -> Result<(Vec<Value>, Value, i64), String> {
+    // input= routing (issue #2540): deliver the input to the FIRST pipeline
+    // that can accept pipeline input. Nushell's own block semantics feed the
+    // first pipeline unconditionally, so a leading no-input statement (`cd
+    // /tmp; ^cat` -- cd declares `nothing` input) drained the payload
+    // silently and the external read empty stdin with exit code 0 (`gh
+    // ... --body-file -` then failed on a blank body). When NO pipeline can
+    // accept it, fail loudly instead of dropping it.
+    let deliver_to = match input {
+        None => None,
+        Some(_) => Some(
+            block
+                .pipelines
+                .iter()
+                .position(|pipeline| pipeline_accepts_input(engine_state, pipeline))
+                .ok_or_else(|| {
+                    "input= was provided but no statement in this source accepts pipeline \
+                     input (each one, like `cd` or `def`, declares `nothing` input), so \
+                     the input cannot be delivered; consume it (e.g. `$in | ...`) or drop \
+                     input="
+                        .to_owned()
+                })?,
+        ),
+    };
+
+    // One pipeline: evaluate the parse-compiled block as-is (the historical
+    // fast path; nothing intermediate exists to surface).
+    if block.pipelines.len() <= 1 {
+        let (value, exit_code) = run_pipeline(engine_state, stack, block, input, check)?;
+        return Ok((Vec::new(), value, exit_code));
+    }
+
+    // Compile each top-level pipeline into its own block. The parse already
+    // merged every parse-time definition (`def`, aliases) into the engine
+    // state, and `let`/`cd` live on the persistent stack, so evaluating the
+    // pipelines one at a time is observationally the block's own REPL
+    // semantics -- except that each pipeline is now in trailing position, so
+    // its output collects (`OutDest::Value`) instead of draining.
+    let span = block.span.unwrap_or(Span::unknown());
+    let mut sub_blocks: Vec<Block> = block
+        .pipelines
+        .iter()
+        .map(|pipeline| {
+            let mut sub = Block::new();
+            sub.span = block.span;
+            sub.pipelines.push(pipeline.clone());
+            sub
+        })
+        .collect();
+    {
+        let working_set = StateWorkingSet::new(engine_state);
+        for sub in &mut sub_blocks {
+            match nu_engine::compile(&working_set, sub) {
+                Ok(ir_block) => sub.ir_block = Some(ir_block),
+                Err(error) => {
+                    return Err(format_cli_error(
+                        Some(stack),
+                        &working_set,
+                        &error,
+                        Some("nu::compile::error"),
+                    ));
+                }
+            }
+        }
+    }
+
+    let last_index = sub_blocks.len() - 1;
+    let mut intermediates = Vec::with_capacity(last_index);
+    let mut input = input;
+    for (index, sub) in sub_blocks.iter().enumerate() {
+        let is_last = index == last_index;
+        if index > 0 {
+            // eval_ir_block checks signals between elements of one pipeline;
+            // this is the same ctrl-c point between the pipelines themselves.
+            engine_state
+                .signals()
+                .check(&span)
+                .map_err(|error| render_shell_error(engine_state, stack, &error))?;
+        }
+        let pipeline_input = if deliver_to == Some(index) {
+            input.take()
+        } else {
+            None
+        };
+        // `check` governs only the final pipeline's trailing external
+        // (documented NuResult semantics); an intermediate external that
+        // fails aborts the eval either way.
+        let (value, exit_code) =
+            run_pipeline(engine_state, stack, sub, pipeline_input, if is_last { check } else { true })?;
+        if is_last {
+            return Ok((intermediates, value, exit_code));
+        }
+        intermediates.push(value);
+    }
+    unreachable!("the loop returns at the last pipeline and the block is non-empty");
+}
+
+/// True when `pipeline` can receive pipeline input: its head is an external
+/// (stdin), a plain expression (a `$in`-referencing element arrives
+/// collect-wrapped, never as a bare call), or a call whose declared input
+/// types include something other than `nothing`. `cd` and `def` declare
+/// `(nothing, nothing)`, so [`run_block`]'s input routing skips them (issue
+/// #2540); `let`/`mut` declare `any` and keep receiving input (their RHS may
+/// read `$in`). An empty declaration list is treated as accepting: dropping
+/// input on an unknown signature would be the very bug being fixed.
+fn pipeline_accepts_input(engine_state: &EngineState, pipeline: &Pipeline) -> bool {
+    let Some(element) = pipeline.elements.first() else {
+        return false;
+    };
+    match &element.expr.expr {
+        Expr::Call(call) => {
+            let signature = engine_state.get_decl(call.decl_id).signature();
+            signature.input_output_types.is_empty()
+                || signature
+                    .input_output_types
+                    .iter()
+                    .any(|(input, _)| !matches!(input, Type::Nothing))
+        }
+        _ => true,
+    }
+}
+
+/// Evaluate one compiled block (a whole single-pipeline eval, or one
+/// pipeline of a multi-statement eval) against the persistent state.
+fn run_pipeline(
+    engine_state: &mut EngineState,
+    stack: &mut Stack,
+    block: &Block,
+    input: Option<Value>,
+    check: bool,
+) -> Result<(Value, i64), String> {
+    let input = input.map_or_else(PipelineData::empty, |value| {
+        PipelineData::value(value, None)
+    });
+    // eval_ir_block, NOT eval_block: eval_block maps a user's `exit` to
+    // std::process::exit, which would take the whole embedding process
+    // (the kernel) down. Here `exit` surfaces as ShellError::Exit and
+    // becomes a raised NuError like any other failure.
+    let mut executed = nu_engine::eval_ir_block::<WithoutDebug>(engine_state, stack, block, input)
+        .map_err(|error| render_shell_error(engine_state, stack, &error))?;
+    // check=false: the raise-on-non-zero happens inside into_value
+    // (ChildProcess::into_bytes collects stdout and THEN checks the exit
+    // status, dropping the output on the error path), so flip the child's
+    // ignore_error flag before collecting and read the status afterwards
+    // through a cloned handle -- the future caches Finished once
+    // into_bytes has waited, so the second wait is a lookup, not a block.
+    let mut exit_status = None;
+    if !check {
+        if let PipelineData::ByteStream(stream, _) = &mut executed.body {
+            if let ByteStreamSource::Child(child) = stream.source_mut() {
+                child.ignore_error(true);
+                exit_status = Some((child.clone_exit_status_future(), child.span()));
+            }
+        }
+    }
+    let value = executed
+        .body
+        .into_value(Span::unknown())
+        .map_err(|error| render_shell_error(engine_state, stack, &error))?;
+    if let Value::Error { error, .. } = value {
+        return Err(render_shell_error(engine_state, stack, &error));
+    }
+    // ExitStatus::code() follows the subprocess convention: a plain exit
+    // is its code, a signal-terminated child is the negative signal.
+    let exit_code = match exit_status {
+        Some((future, span)) => i64::from(
+            future
+                .lock()
+                .map_err(|_| {
+                    "a previous eval panicked while waiting on an external; \
+                     create a fresh Engine"
+                        .to_owned()
+                })?
+                .wait(span)
+                .map_err(|error| render_shell_error(engine_state, stack, &error))?
+                .code(),
+        ),
+        None => 0,
+    };
+    Ok((value, exit_code))
+}
+
+/// True when a literal external argv element looks like a bash redirection
+/// token: `2>/dev/null`, `2>&1`, `>>log`, `>out`, `&>all`. Nushell has no
+/// bash-style redirection (it spells these `err>`, `out>`, `out+err>|`), so
+/// such a token reaches the external verbatim and the failure surfaces as
+/// the external's own confusing error (issue #2111).
+fn is_bash_redirection_token(arg: &str) -> bool {
+    // Optional bash fd prefix: `2>`, `12>`, or `&>` (both streams).
+    let rest = arg
+        .strip_prefix('&')
+        .unwrap_or_else(|| arg.trim_start_matches(|c: char| c.is_ascii_digit()));
+    let Some(target) = rest.strip_prefix('>') else {
+        return false;
+    };
+    // `>>` appends; peel it so the target check sees the path/fd part.
+    let target = target.strip_prefix('>').unwrap_or(target);
+    // `>=` is a comparison, not a redirection (`^jq "select(.n >= 1)"` style
+    // arguments must not trip the hint).
+    !target.starts_with('=')
+}
+
+/// Collect the literal external-argv tokens in `block` that look like bash
+/// redirections, in source order and deduplicated. Walks every external call
+/// reachable from the block: pipelines, subexpressions, blocks, closures, and
+/// command arguments. Best-effort by design -- expression kinds that cannot
+/// plausibly carry an external call are skipped, and a missed one only costs
+/// the hint, never correctness.
+fn bash_redirection_args(engine_state: &EngineState, block: &Block) -> Vec<String> {
+    let mut found = Vec::new();
+    collect_block(engine_state, block, &mut found);
+    found
+}
+
+fn collect_block(engine_state: &EngineState, block: &Block, found: &mut Vec<String>) {
+    for pipeline in &block.pipelines {
+        for element in &pipeline.elements {
+            collect_expression(engine_state, &element.expr, found);
+        }
+    }
+}
+
+fn collect_expression(
+    engine_state: &EngineState,
+    expression: &Expression,
+    found: &mut Vec<String>,
+) {
+    match &expression.expr {
+        Expr::ExternalCall(head, args) => {
+            collect_expression(engine_state, head, found);
+            for arg in args.iter() {
+                let arg = arg.expr();
+                if let Expr::String(val) | Expr::GlobPattern(val, _) | Expr::RawString(val) =
+                    &arg.expr
+                    && is_bash_redirection_token(val)
+                    && !found.contains(val)
+                {
+                    found.push(val.clone());
+                }
+                collect_expression(engine_state, arg, found);
+            }
+        }
+        Expr::Call(call) => {
+            for arg in &call.arguments {
+                if let Some(arg) = arg.expr() {
+                    collect_expression(engine_state, arg, found);
+                }
+            }
+        }
+        Expr::AttributeBlock(attributed) => {
+            collect_expression(engine_state, &attributed.item, found);
+        }
+        Expr::Block(id) | Expr::Closure(id) | Expr::Subexpression(id) | Expr::RowCondition(id) => {
+            collect_block(engine_state, engine_state.get_block(*id), found);
+        }
+        Expr::UnaryNot(inner) | Expr::Collect(_, inner) => {
+            collect_expression(engine_state, inner, found);
+        }
+        Expr::BinaryOp(lhs, op, rhs) => {
+            collect_expression(engine_state, lhs, found);
+            collect_expression(engine_state, op, found);
+            collect_expression(engine_state, rhs, found);
+        }
+        Expr::FullCellPath(cell_path) => {
+            collect_expression(engine_state, &cell_path.head, found);
+        }
+        Expr::Keyword(keyword) => {
+            collect_expression(engine_state, &keyword.expr, found);
+        }
+        Expr::List(items) => {
+            for item in items {
+                let (ListItem::Item(item) | ListItem::Spread(_, item)) = item;
+                collect_expression(engine_state, item, found);
+            }
+        }
+        Expr::Record(items) => {
+            for item in items {
+                match item {
+                    RecordItem::Pair(key, val) => {
+                        collect_expression(engine_state, key, found);
+                        collect_expression(engine_state, val, found);
+                    }
+                    RecordItem::Spread(_, spread) => {
+                        collect_expression(engine_state, spread, found);
+                    }
+                }
+            }
+        }
+        Expr::StringInterpolation(parts) | Expr::GlobInterpolation(parts, _) => {
+            for part in parts {
+                collect_expression(engine_state, part, found);
+            }
+        }
+        Expr::MatchBlock(arms) => {
+            for (_, arm) in arms {
+                collect_expression(engine_state, arm, found);
+            }
+        }
+        // Leaves (literals, variables, operators) and kinds that cannot carry
+        // an external call.
+        _ => {}
+    }
+}
+
+/// The one-line hint appended to a failing eval's rendered diagnostic when an
+/// external's argv carries a bash redirection token.
+fn bash_redirection_hint(token: &str) -> String {
+    format!(
+        "hint: '{token}' was passed to the external as a literal argument; nushell spells \
+         redirection err> /dev/null (stderr), out> (stdout), or out+err>| (pipe both), not \
+         bash's 2>/dev/null / 2>&1"
+    )
 }
 
 /// Render a `ShellError` exactly the way the nushell CLI would (minus color:
@@ -347,11 +782,13 @@ impl Engine {
         Self {
             inner: Arc::new(Mutex::new(EngineInner {
                 engine_state: initial_engine_state(),
-                // collect_value marks the last command's stdout as
-                // OutDest::Value: a trailing external (or `print`) collects
-                // into the returned value instead of writing to the host
+                // collect_value marks the trailing command's stdout as
+                // OutDest::Value: an external in trailing position collects
+                // into the pipeline's value instead of writing to the host
                 // process stdio, which under MCP stdio transport IS the
-                // protocol stream.
+                // protocol stream. run_block evaluates every top-level
+                // pipeline in trailing position, so this applies to
+                // intermediate statements too (issue #2391).
                 stack: Stack::new().collect_value(),
             })),
         }
@@ -359,13 +796,25 @@ impl Engine {
 
     /// Evaluate nushell source against the persistent state.
     ///
-    /// Returns `(awaitable, handle)`: the awaitable resolves to the pipeline's
-    /// output as native Python objects; `handle.interrupt()` stops this eval
-    /// (and only this eval) the way ctrl-c would. `input` becomes the
-    /// pipeline's `$in`; `cwd`/`env` set `PWD` / environment variables for
-    /// this and later calls (the stack is persistent). Raises `NuError` with
-    /// nushell's rendered diagnostic.
-    #[pyo3(signature = (code, input=None, cwd=None, env=None))]
+    /// Returns `(awaitable, handle)`: the awaitable resolves to an
+    /// `(intermediates, value, exit_code)` triple of native Python objects --
+    /// `intermediates` holds each non-final pipeline's collected output (for
+    /// the wrapper to print, issue #2391) and `value` is the final
+    /// pipeline's output; `handle.interrupt()` stops this eval (and only
+    /// this eval) the way ctrl-c would. `input` becomes the
+    /// pipeline's `$in`, delivered to the first pipeline that can accept
+    /// pipeline input (a leading `cd`/`def` declares `nothing` input and is
+    /// skipped; undeliverable input raises instead of dropping, issue
+    /// #2540); `cwd`/`env` set `PWD` / environment variables for
+    /// this and later calls (the stack is persistent). When `cwd` is omitted
+    /// the persistent PWD is validated first: a directory that no longer
+    /// exists raises with the remedy instead of running somewhere unintended.
+    /// Raises `NuError` with nushell's rendered diagnostic.
+    ///
+    /// `check=False` (subprocess.run semantics) stops the FINAL pipeline's
+    /// trailing external's non-zero exit from raising; `exit_code` then
+    /// carries its exit status (it is always 0 under `check=True`).
+    #[pyo3(signature = (code, input=None, cwd=None, env=None, check=true))]
     fn eval<'py>(
         &self,
         py: Python<'py>,
@@ -373,6 +822,7 @@ impl Engine {
         input: Option<Bound<'py, PyAny>>,
         cwd: Option<String>,
         env: Option<HashMap<String, String>>,
+        check: bool,
     ) -> PyResult<(Bound<'py, PyAny>, EvalHandle)> {
         // Convert under the GIL now; the blocking task must not touch Python.
         let input = input.as_ref().map(py_to_value).transpose()?;
@@ -384,13 +834,26 @@ impl Engine {
                 let mut guard = inner
                     .lock()
                     .map_err(|_| "a previous eval panicked; create a fresh Engine".to_owned())?;
-                guard.eval(&code, input, cwd, env, &interrupt)
+                guard.eval(&code, input, cwd, env, &interrupt, check)
             })
             .await
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
             match result {
-                Ok(value) => Python::attach(|py| value_to_py(py, value)),
-                Err(diagnostic) => Err(NuError::new_err(diagnostic)),
+                Ok((intermediates, value, exit_code)) => Python::attach(|py| {
+                    let intermediates = intermediates
+                        .into_iter()
+                        .map(|item| value_to_py(py, item))
+                        .collect::<PyResult<Vec<_>>>()?;
+                    let value = value_to_py(py, value)?;
+                    // Uniform (intermediates, value, exit_code) shape; with
+                    // check=true the exit code is always 0 (non-zero raised).
+                    Ok((intermediates, value, exit_code)
+                        .into_pyobject(py)?
+                        .unbind()
+                        .into_any())
+                }),
+                Err(EvalError::Diagnostic(diagnostic)) => Err(NuError::new_err(diagnostic)),
+                Err(EvalError::RemovedCwd(diagnostic)) => Err(NuCwdError::new_err(diagnostic)),
             }
         })?;
         Ok((future, EvalHandle { flag }))
@@ -399,9 +862,299 @@ impl Engine {
 
 #[pymodule]
 fn _nu(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Nushell's experimental `pipefail` option is ON by default (OptOut since
+    // 0.107), and its try/catch collection path (`Instruction::TryCollect` ->
+    // eval_ir.rs `collect`) waits on an external's exit status BEFORE draining
+    // its stdout pipe. A child with more output pending than the OS pipe
+    // buffer (64 KiB) can then never exit: it blocks in write(2), no EPIPE
+    // ever arrives because this process still holds the read end, and the
+    // eval deadlocks in waitpid -- wedging the engine's mutex and with it
+    // every later `nu()` call in the session (indexable-inc/index#2015;
+    // upstream ordering discussed in nushell/nushell#17571 / #17764, which
+    // fixed the sibling `collect_reg` path but left `TryCollect` checking
+    // first). Externals still fail loudly without pipefail: trailing and
+    // statement externals raise through ByteStream's own consume-then-wait
+    // checks, and these bindings drop the pipeline's exit-guard vector at the
+    // boundary anyway, so the option bought nothing observable here.
+    //
+    // SAFETY: `set` is unsafe only to discourage mid-run flips; this runs
+    // once at module import, before any `Engine` can exist.
+    unsafe { nu_experimental::PIPE_FAIL.set(false) };
     module.add_class::<Engine>()?;
     module.add_class::<EvalHandle>()?;
     module.add("NuError", module.py().get_type::<NuError>())?;
+    module.add("NuCwdError", module.py().get_type::<NuCwdError>())?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bash_redirection_tokens_are_detected() {
+        for token in [
+            "2>/dev/null",
+            "2>&1",
+            "1>>build.log",
+            ">>build.log",
+            ">out.txt",
+            "&>/dev/null",
+            ">",
+            ">>",
+        ] {
+            assert!(is_bash_redirection_token(token), "should flag {token:?}");
+        }
+    }
+
+    #[test]
+    fn ordinary_arguments_are_not_flagged() {
+        for arg in [
+            "", "2", "-2", "--flag", "a>b", "->", "=>", ">=", ">=5", "&1", "file.txt",
+        ] {
+            assert!(!is_bash_redirection_token(arg), "should not flag {arg:?}");
+        }
+    }
+
+    /// Parse a snippet the way [`EngineInner::eval`] does and return the
+    /// collected redirection tokens.
+    fn tokens_in(code: &str) -> Vec<String> {
+        let mut engine_state = initial_engine_state();
+        let block = {
+            let mut working_set = StateWorkingSet::new(&engine_state);
+            let block = nu_parser::parse(&mut working_set, Some("test"), code.as_bytes(), false);
+            assert!(
+                working_set.parse_errors.is_empty(),
+                "{:?}",
+                working_set.parse_errors
+            );
+            let delta = working_set.render();
+            engine_state.merge_delta(delta).expect("merge delta");
+            block
+        };
+        bash_redirection_args(&engine_state, &block)
+    }
+
+    #[test]
+    fn external_argv_redirections_are_collected_from_the_parsed_block() {
+        assert_eq!(
+            tokens_in("^ls -d ./missing 2>/dev/null"),
+            ["2>/dev/null"],
+            "the motivating case from issue #2111"
+        );
+    }
+
+    // `2>&1` is absent here on purpose: nushell's parser already rejects it
+    // (`ShellOutErrRedirect`, with its own out+err> hint) before it could
+    // reach an external's argv. This walk covers the tokens the parser lets
+    // through as barewords.
+    #[test]
+    fn nested_and_repeated_redirections_are_collected_once_in_source_order() {
+        assert_eq!(
+            tokens_in("if true { ^cat missing 2>/dev/null } else { do { ^ls 2>/dev/null >>log } }"),
+            ["2>/dev/null", ">>log"]
+        );
+    }
+
+    #[test]
+    fn clean_externals_and_internal_pipelines_collect_nothing() {
+        assert!(tokens_in("^ls -la | lines | where $it != ''").is_empty());
+    }
+
+    #[test]
+    fn eval_failure_with_redirection_argv_appends_the_hint() {
+        let mut inner = EngineInner {
+            engine_state: initial_engine_state(),
+            stack: Stack::new().collect_value(),
+        };
+        let interrupt = Arc::new(AtomicBool::new(false));
+        // `error make` fails before the external ever runs, so the test needs
+        // no subprocess; the hint keys off the parsed argv, not the failing
+        // span (see the comment in `EngineInner::eval`).
+        let diagnostic = inner
+            .eval(
+                "error make {msg: 'boom'}; ^ls 2>/dev/null",
+                None,
+                None,
+                None,
+                &interrupt,
+                true,
+            )
+            .expect_err("error make must fail the eval");
+        assert!(
+            diagnostic.contains("out+err>|"),
+            "hint missing: {diagnostic}"
+        );
+        assert!(
+            diagnostic.contains("2>/dev/null"),
+            "token missing: {diagnostic}"
+        );
+    }
+
+    /// A fresh inner engine + interrupt flag for behavior tests.
+    fn test_inner() -> (EngineInner, Arc<AtomicBool>) {
+        (
+            EngineInner {
+                engine_state: initial_engine_state(),
+                stack: Stack::new().collect_value(),
+            },
+            Arc::new(AtomicBool::new(false)),
+        )
+    }
+
+    #[test]
+    fn intermediate_pipeline_values_are_returned_not_dropped() {
+        let (mut inner, interrupt) = test_inner();
+        let (intermediates, value, exit_code) = inner
+            .eval("'a'; 'b' | str upcase; 'final'", None, None, None, &interrupt, true)
+            .expect("multi-statement eval");
+        assert_eq!(intermediates.len(), 2, "one value per non-final pipeline");
+        assert!(matches!(&intermediates[0], Value::String { val, .. } if val == "a"));
+        assert!(matches!(&intermediates[1], Value::String { val, .. } if val == "B"));
+        assert!(matches!(&value, Value::String { val, .. } if val == "final"));
+        assert_eq!(exit_code, 0);
+    }
+
+    #[test]
+    fn single_pipeline_has_no_intermediates() {
+        let (mut inner, interrupt) = test_inner();
+        let (intermediates, value, _) = inner
+            .eval("'only'", None, None, None, &interrupt, true)
+            .expect("single-statement eval");
+        assert!(intermediates.is_empty());
+        assert!(matches!(&value, Value::String { val, .. } if val == "only"));
+    }
+
+    #[test]
+    fn bindings_and_defs_span_pipelines_within_one_eval() {
+        let (mut inner, interrupt) = test_inner();
+        let (intermediates, value, _) = inner
+            .eval(
+                "def double [x: int] { $x * 2 }; let n = 5; double $n",
+                None,
+                None,
+                None,
+                &interrupt,
+                true,
+            )
+            .expect("def + let + call in one eval");
+        assert_eq!(intermediates.len(), 2);
+        assert!(matches!(intermediates[0], Value::Nothing { .. }));
+        assert!(matches!(intermediates[1], Value::Nothing { .. }));
+        assert!(matches!(value, Value::Int { val: 10, .. }));
+    }
+
+    #[test]
+    fn input_feeds_the_first_accepting_pipeline() {
+        let (mut inner, interrupt) = test_inner();
+        let (intermediates, value, _) = inner
+            .eval(
+                "str upcase; 'done'",
+                Some(Value::string("hi", Span::unknown())),
+                None,
+                None,
+                &interrupt,
+                true,
+            )
+            .expect("input piped into the first pipeline");
+        assert!(matches!(&intermediates[0], Value::String { val, .. } if val == "HI"));
+        assert!(matches!(&value, Value::String { val, .. } if val == "done"));
+    }
+
+    #[test]
+    fn input_routes_past_no_input_statements_to_the_consumer() {
+        // Issue #2540's shape: `cd /tmp; ^cat` fed the input to `cd`
+        // (declared `nothing` input), which drained it, and the external
+        // read empty stdin with exit 0. Routing must skip `cd` and deliver.
+        // The consumer is an external on purpose: nushell's parser already
+        // rejects an internal command mid-block unless it accepts `nothing`
+        // input (nu::parser::input_type_mismatch), so externals are the
+        // consumers this routing exists for.
+        let (mut inner, interrupt) = test_inner();
+        let (intermediates, value, _) = inner
+            .eval(
+                &format!("cd {}; ^cat", std::env::temp_dir().display()),
+                Some(Value::string("hi", Span::unknown())),
+                None,
+                None,
+                &interrupt,
+                true,
+            )
+            .expect("input routed past cd (issue #2540)");
+        assert!(matches!(&intermediates[0], Value::Nothing { .. }));
+        assert!(matches!(&value, Value::String { val, .. } if val == "hi"));
+    }
+
+    #[test]
+    fn undeliverable_input_fails_loudly() {
+        for source in ["def noop [] {}", "def noop [] {}; def still-no-input [] {}"] {
+            let (mut inner, interrupt) = test_inner();
+            let diagnostic = inner
+                .eval(
+                    source,
+                    Some(Value::string("hi", Span::unknown())),
+                    None,
+                    None,
+                    &interrupt,
+                    true,
+                )
+                .expect_err("input nothing can consume must error, not drop (issue #2540)");
+            assert!(diagnostic.contains("input="), "diagnostic: {diagnostic}");
+        }
+    }
+
+    /// A statement whose FIRST element references `$in` makes the parser
+    /// collect-wrap the WHOLE block into one pipeline (parse_block), so the
+    /// eval takes the single-pipeline path and keeps nushell's own block
+    /// semantics: intermediates drain, the block's value comes back. Pinned
+    /// so the limitation is a decision, not an accident.
+    #[test]
+    fn dollar_in_source_is_block_collected_without_intermediates() {
+        let (mut inner, interrupt) = test_inner();
+        let (intermediates, value, _) = inner
+            .eval(
+                "$in | str upcase; 'done'",
+                Some(Value::string("hi", Span::unknown())),
+                None,
+                None,
+                &interrupt,
+                true,
+            )
+            .expect("$in source evals");
+        assert!(intermediates.is_empty(), "block-collected: no intermediates");
+        assert!(matches!(&value, Value::String { val, .. } if val == "done"));
+    }
+
+    #[test]
+    fn intermediate_failure_aborts_the_eval() {
+        let (mut inner, interrupt) = test_inner();
+        let diagnostic = inner
+            .eval("error make {msg: 'boom'}; 'after'", None, None, None, &interrupt, true)
+            .expect_err("an intermediate failure must abort");
+        assert!(diagnostic.contains("boom"), "diagnostic: {diagnostic}");
+    }
+
+    #[test]
+    fn eval_failure_without_redirection_argv_stays_unannotated() {
+        let mut inner = EngineInner {
+            engine_state: initial_engine_state(),
+            stack: Stack::new().collect_value(),
+        };
+        let interrupt = Arc::new(AtomicBool::new(false));
+        let diagnostic = inner
+            .eval(
+                "error make {msg: 'boom'}",
+                None,
+                None,
+                None,
+                &interrupt,
+                true,
+            )
+            .expect_err("error make must fail the eval");
+        assert!(
+            !diagnostic.contains("out+err>|"),
+            "spurious hint: {diagnostic}"
+        );
+    }
 }

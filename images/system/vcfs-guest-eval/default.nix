@@ -1,6 +1,5 @@
 # Runtime image for ix's VCFS guest benchmark controller.
-{ pkgs, ... }:
-{
+{pkgs, ...}: {
   ix.image.name = "ix/vcfs-guest-eval";
 
   environment.systemPackages = [

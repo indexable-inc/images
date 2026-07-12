@@ -45,7 +45,7 @@ jobs:
     env:
       NIX_CONFIG: |-
         experimental-features = nix-command flakes ca-derivations
-        accept-flake-config = true
+        accept-flake-config = false
       # The agent (claude -p) and the LLM judge both read this. Without it the
       # job cannot run; set it as a repo/org Actions secret.
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

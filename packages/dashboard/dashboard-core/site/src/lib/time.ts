@@ -74,3 +74,43 @@ export function humanClock(ms: number): string {
   if (!ms) return '—';
   return new Date(ms).toLocaleTimeString();
 }
+
+// A calendar-date label ("today", "yesterday", "Jun 30", "Jun 30 2025") for a
+// recording's start, so the recordings list reads as dated sessions rather than
+// bare ids. `refMs` is the current wall-clock (for the today/yesterday window).
+export function humanDate(ms: number, refMs: number): string {
+  if (!ms) return '';
+  const start = new Date(ms);
+  const now = new Date(refMs);
+  // Count whole calendar days between the two local dates. Project each local
+  // Y/M/D onto a UTC midnight so the subtraction is an exact multiple of 24h;
+  // subtracting local midnights directly would be off by an hour across a DST
+  // boundary (a spring-forward day is only 23h), which floors "yesterday" to
+  // "today".
+  const dayNumber = (d: Date) => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86_400_000;
+  const days = dayNumber(now) - dayNumber(start);
+  if (days === 0) return 'today';
+  if (days === 1) return 'yesterday';
+  const sameYear = start.getFullYear() === now.getFullYear();
+  return start.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    ...(sameYear ? {} : { year: 'numeric' }),
+  });
+}
+
+// The label for a saved recording: when it started and how long the session ran,
+// e.g. "today 14:32 · 47m" or "Jun 30 · 2m". Reads as a dated session replay
+// instead of an opaque id, so a user grasps what a recording is at a glance.
+export function recordingLabel(startedMs: number, updatedMs: number, refMs: number): string {
+  const clock = new Date(startedMs).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  const ran = Math.max(0, updatedMs - startedMs);
+  // Sub-second "durations" are just a single snapshot; show only the start then.
+  const span = ran >= 1000 ? humanDuration(ran) : '';
+  const when = `${humanDate(startedMs, refMs)} ${clock}`.trim();
+  return span ? `${when} · ${span}` : when;
+}

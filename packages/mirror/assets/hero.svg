@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 250" role="img" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13">
+  <style>
+    svg { color: #1f2328; }
+    text { fill: currentColor; }
+    .muted { fill: #656d76; }
+    .box { stroke: currentColor; fill: none; stroke-width: 1.2; }
+    .accent { stroke: #8250df; fill: none; stroke-width: 1.4; }
+    .edge { stroke: currentColor; fill: none; stroke-width: 1.2; marker-end: url(#arrow); }
+    .head { fill: currentColor; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { stroke: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="head"/>
+    </marker>
+  </defs>
+  <rect class="box" x="25" y="103" width="150" height="44" rx="6"/>
+  <text x="100" y="121" text-anchor="middle">monorepo</text>
+  <text class="muted" x="100" y="139" text-anchor="middle" font-size="11">packages/&lt;pkg&gt;</text>
+
+  <path class="edge" d="M175,115 C215,110 215,62 246,62"/>
+  <text class="muted" x="212" y="42" text-anchor="middle" font-size="11">crate + dep closure,</text>
+  <text class="muted" x="212" y="56" text-anchor="middle" font-size="11">pruned lock</text>
+
+  <path class="edge" d="M175,135 C215,140 215,188 246,188"/>
+  <text class="muted" x="212" y="216" text-anchor="middle" font-size="11">flake.lock pin</text>
+  <text class="muted" x="212" y="230" text-anchor="middle" font-size="11">+ patches/</text>
+
+  <rect class="accent" x="250" y="45" width="160" height="34" rx="6"/>
+  <text x="330" y="66" text-anchor="middle">mirror gen + publish</text>
+
+  <rect class="accent" x="250" y="171" width="160" height="34" rx="6"/>
+  <text x="330" y="192" text-anchor="middle">mirror fork-branch</text>
+
+  <path class="edge" d="M410,62 L516,62"/>
+  <text class="muted" x="463" y="48" text-anchor="middle" font-size="11">sync on main</text>
+
+  <path class="edge" d="M410,188 L516,188"/>
+  <text class="muted" x="463" y="174" text-anchor="middle" font-size="11">git am --3way, push</text>
+
+  <rect class="box" x="520" y="45" width="180" height="34" rx="6"/>
+  <text x="610" y="66" text-anchor="middle">read-only mirror repo</text>
+  <rect class="box" x="520" y="171" width="180" height="34" rx="6"/>
+  <text x="610" y="192" text-anchor="middle">fork repo, ix-patched</text>
+</svg>

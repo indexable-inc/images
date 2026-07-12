@@ -8,7 +8,7 @@
 # `astlog scan`; the binary's exit code is the gate.
 #
 # Index's own `lib/per-system.nix` keeps using `lintStage` for the
-# four-stage local lint run (nixfmt | statix | deadnix | astlog | astlog-rust);
+# four-stage local lint run (alejandra | statix | deadnix | astlog | astlog-rust);
 # this package is the externally consumable surface.
 {
   ix,
@@ -16,29 +16,28 @@
   astlog,
   fd,
   git,
-}:
-let
+}: let
   rules = ix.paths.root + "/astlog-rules/nix.astlog";
 in
-writeNushellApplication {
-  name = "astlog-scan";
-  runtimeInputs = [
-    astlog
-    fd
-    git
-  ];
-  meta = {
-    description = "Scan a Nix tree with the index-owned astlog Nix lint rules";
-    mainProgram = "astlog-scan";
-  };
-  text = ''
-    # nu
-    def main [] {
-      let repo_root = (^git rev-parse --show-toplevel | str trim)
-      cd $repo_root
-      let nix_files = (^fd --hidden --extension nix --type file | lines)
-      if ($nix_files | is-empty) { return }
-      ^astlog scan ${rules} ...$nix_files
-    }
-  '';
-}
+  writeNushellApplication {
+    name = "astlog-scan";
+    runtimeInputs = [
+      astlog
+      fd
+      git
+    ];
+    meta = {
+      description = "Scan a Nix tree with the index-owned astlog Nix lint rules";
+      mainProgram = "astlog-scan";
+    };
+    text = ''
+      # nu
+      def main [] {
+        let repo_root = (^git rev-parse --show-toplevel | str trim)
+        cd $repo_root
+        let nix_files = (^fd --hidden --extension nix --type file | lines)
+        if ($nix_files | is-empty) { return }
+        ^astlog scan ${rules} ...$nix_files
+      }
+    '';
+  }

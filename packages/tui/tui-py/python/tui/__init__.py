@@ -21,7 +21,7 @@ its methods cell by cell, and `await t.close()` when done. Evaluating
 color via `Snapshot._repr_html_`.
 
 Every spawned terminal auto-shows in the web dashboard. The first `Tui(...)`
-binds a process-global producer, so running `nix run .#tui-dashboard` (it
+binds a process-global producer, so running `nix run .#dashboard` (it
 watches `socket_dir()`) renders this process's terminals with no explicit
 `tui.publish()`. Opt out by setting `IX_TUI_AUTOPUBLISH=0`.
 
@@ -75,6 +75,7 @@ __all__ = [
     "Claude",
     "Codex",
     "Color",
+    "Cursor",
     "Dashboard",
     "Key",
     "Pattern",
@@ -86,6 +87,7 @@ __all__ = [
     "Tui",
     "WaitTimeout",
     "__version__",
+    "delegate",
     "publish",
     "serve",
     "socket_dir",
@@ -510,7 +512,7 @@ def _build_predicate(pattern: Pattern) -> Callable[[Snapshot], bool]:
 def _ensure_autopublish() -> None:
     """Bind the process-global dashboard producer once, on first `Tui(...)`.
 
-    Spawned terminals then appear in `nix run .#tui-dashboard` with no explicit
+    Spawned terminals then appear in `nix run .#dashboard` with no explicit
     `tui.publish()`. Idempotency (bind at most once per process) and the
     `IX_TUI_AUTOPUBLISH=0` opt-out both live in the Rust `ensure_published`, so
     this stays a thin call into it rather than re-implementing either guard here.
@@ -536,14 +538,16 @@ class Tui:
     The terminal opens at `rows` x `cols` (default 80x24) with `scrollback_lines`
     of history (default 10,000). Pass the shape as `size=(rows, cols)` (the same
     spelling the `.size` accessor returns) or as granular `rows=`/`cols=`, but not
-    both. A single process-wide tokio runtime drives every
+    both. `env=` adds per-session identity/config pairs to the child's
+    environment; the core forces `TERM`/`COLORTERM` after them, so those two
+    always win. A single process-wide tokio runtime drives every
     spawned PTY; each I/O method returns a native asyncio coroutine bridged
     through pyo3-async-runtimes, with no thread-pool hop. Construction and the
     shape accessors (`id`, `command`, `args`, `size`, `is_alive`, `exit_code`)
     are the only synchronous surface; everything else is a coroutine to await.
 
     The first `Tui(...)` auto-publishes this process to the web dashboard, so
-    `nix run .#tui-dashboard` shows the terminal without an explicit
+    `nix run .#dashboard` shows the terminal without an explicit
     `tui.publish()`. Set `IX_TUI_AUTOPUBLISH=0` to opt out.
 
     `kill()` sends SIGKILL; `interrupt()` sends a cooperative Ctrl+C; `close()`
@@ -562,6 +566,7 @@ class Tui:
         rows: int | None = None,
         cols: int | None = None,
         scrollback_lines: int | None = None,
+        env: dict[str, str] | None = None,
     ) -> None:
         # `size=(rows, cols)` mirrors the `.size` accessor (a `Size` is also a
         # (rows, cols) iterable), so the shape can be read and set with the same
@@ -573,7 +578,7 @@ class Tui:
                 raise TypeError("pass either size=(rows, cols) or rows=/cols=, not both")
             rows, cols = size
         _ensure_autopublish()
-        self._raw = _RawTuiInstance(command, list(args), rows, cols, scrollback_lines)
+        self._raw = _RawTuiInstance(command, list(args), rows, cols, scrollback_lines, env)
 
     @classmethod
     def _from_raw(cls, raw: _RawTuiInstance) -> Self:
@@ -942,4 +947,6 @@ from .harness import (
     Agent as Agent,
     Claude as Claude,
     Codex as Codex,
+    Cursor as Cursor,
+    delegate as delegate,
 )

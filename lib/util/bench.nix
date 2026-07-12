@@ -23,9 +23,7 @@
 {
   lib,
   writeNushellApplication,
-}:
-pkgs:
-{
+}: pkgs: {
   # Suite name; becomes the `suite` field on every recorded run.
   name,
   # The built `indexbench` package (from `packages.<system>.indexbench`).
@@ -33,7 +31,7 @@ pkgs:
   # Macro benches: a list of `{ name, command }`, where `command` is the shell
   # string run N times by the perf job. Each may print `@bench` lines to report
   # custom metrics.
-  macros ? [ ],
+  macros ? [],
   # Optional deterministic allocation check. Set to
   # `{ bench = <exePath>; budgets = { <metric> = <max>; ... }; }`:
   #   - `bench` (e.g. `lib.getExe someBenchBinary`) must install `indexbench`'s
@@ -44,13 +42,14 @@ pkgs:
   allocCheck ? null,
   # Runs per macro command in the perf job.
   runs ? 5,
-}:
-let
+}: let
   exe = lib.getExe indexbench;
 
-  cmdFlags = lib.concatMapStringsSep " " (
-    entry: "--cmd ${lib.escapeShellArg entry.command} --cmd-name ${lib.escapeShellArg entry.name}"
-  ) macros;
+  cmdFlags =
+    lib.concatMapStringsSep " " (
+      entry: "--cmd ${lib.escapeShellArg entry.command} --cmd-name ${lib.escapeShellArg entry.name}"
+    )
+    macros;
 
   app = writeNushellApplication pkgs {
     name = "bench-${name}";
@@ -71,33 +70,33 @@ let
   };
 
   budgetFlag = metric: max: "--max ${lib.escapeShellArg "${metric}=${toString max}"}";
-  budgetFlags = lib.concatMapAttrsStringSep " " budgetFlag (allocCheck.budgets or { });
+  budgetFlags = lib.concatMapAttrsStringSep " " budgetFlag (allocCheck.budgets or {});
 
   check =
-    if allocCheck == null then
-      null
+    if allocCheck == null
+    then null
     else
       pkgs.runCommand "bench-${name}-alloc-check"
-        {
-          nativeBuildInputs = [ indexbench ];
-          # The consumer's bench executable must be reproducible (deterministic
-          # alloc count); its store path is referenced here so the closure pins
-          # the exact binary the gate runs.
-          inherit (allocCheck) bench;
-        }
-        ''
-          # Run the bench once and assert each metric is within its budget.
-          # `--runs 1` keeps the allocation count deterministic (no distribution
-          # folding); the budget is a fixed number, so this is a real hermetic
-          # gate — an added allocation exceeds the budget and fails the build,
-          # while timing/RSS (non-reproducible in the sandbox) are simply not
-          # budgeted here and live in the apps.bench perf job instead.
-          ${exe} assert --cmd "$bench" --runs 1 ${budgetFlags}
+      {
+        nativeBuildInputs = [indexbench];
+        # The consumer's bench executable must be reproducible (deterministic
+        # alloc count); its store path is referenced here so the closure pins
+        # the exact binary the gate runs.
+        inherit (allocCheck) bench;
+      }
+      ''
+        # Run the bench once and assert each metric is within its budget.
+        # `--runs 1` keeps the allocation count deterministic (no distribution
+        # folding); the budget is a fixed number, so this is a real hermetic
+        # gate — an added allocation exceeds the budget and fails the build,
+        # while timing/RSS (non-reproducible in the sandbox) are simply not
+        # budgeted here and live in the apps.bench perf job instead.
+        ${exe} assert --cmd "$bench" --runs 1 ${budgetFlags}
 
-          mkdir -p "$out"
-        '';
+        mkdir -p "$out"
+      '';
 in
-{
-  inherit app;
-}
-// lib.optionalAttrs (check != null) { inherit check; }
+  {
+    inherit app;
+  }
+  // lib.optionalAttrs (check != null) {inherit check;}

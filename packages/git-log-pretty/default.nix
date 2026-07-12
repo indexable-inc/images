@@ -1,5 +1,8 @@
-{ ix, lib, ... }:
-
+{
+  ix,
+  lib,
+  ...
+}:
 ix.cargoUnit.selectBinaryWithTests ix.rustWorkspace.units {
   binary = "git-log-pretty";
   meta = {

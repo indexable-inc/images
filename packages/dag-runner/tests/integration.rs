@@ -10,17 +10,25 @@ struct RunResult {
 }
 
 fn run_binary(spec: &str) -> RunResult {
+    run_binary_configured(spec, |_| {})
+}
+
+fn run_binary_configured(spec: &str, configure: impl FnOnce(&mut Command)) -> RunResult {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("spec.json");
     std::fs::write(&path, spec).unwrap();
     let bin = env!("CARGO_BIN_EXE_dag-runner");
-    let output = Command::new(bin)
-        .arg("--output")
-        .arg("json")
-        .arg(&path)
-        .output()
-        .expect("spawn dag-runner");
+    let mut command = Command::new(bin);
+    command.arg("--output").arg("json").arg(&path);
+    configure(&mut command);
+    let output = command.output().expect("spawn dag-runner");
     RunResult { output, _dir: dir }
+}
+
+fn run_binary_with_env(spec: &str, key: &str, value: &str) -> RunResult {
+    run_binary_configured(spec, |command| {
+        command.env(key, value);
+    })
 }
 
 fn parse_events(stdout: &[u8]) -> Vec<Value> {
@@ -32,6 +40,14 @@ fn parse_events(stdout: &[u8]) -> Vec<Value> {
         .collect()
 }
 
+fn assert_success(output: &std::process::Output) {
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn all_succeed_produces_zero_exit_and_finished_events() {
     let spec = r#"{"nodes":{
@@ -39,11 +55,7 @@ fn all_succeed_produces_zero_exit_and_finished_events() {
         "b":{"command":["true"],"depends_on":["a"]}
     }}"#;
     let RunResult { output, _dir } = run_binary(spec);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert_success(&output);
     let events = parse_events(&output.stdout);
 
     let summary = events
@@ -119,11 +131,7 @@ fn env_overlay_is_visible_to_child() {
         "a":{"command":["sh","-c","test \"$DAG_RUNNER_TEST\" = wired"],"env":{"DAG_RUNNER_TEST":"wired"}}
     }}"#;
     let RunResult { output, _dir } = run_binary(spec);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert_success(&output);
 }
 
 #[test]
@@ -131,22 +139,8 @@ fn env_overlay_shadows_parent() {
     let spec = r#"{"nodes":{
         "a":{"command":["sh","-c","test \"$DAG_RUNNER_TEST\" = child"],"env":{"DAG_RUNNER_TEST":"child"}}
     }}"#;
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("spec.json");
-    std::fs::write(&path, spec).unwrap();
-    let bin = env!("CARGO_BIN_EXE_dag-runner");
-    let output = Command::new(bin)
-        .arg("--output")
-        .arg("json")
-        .arg(&path)
-        .env("DAG_RUNNER_TEST", "parent")
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let RunResult { output, _dir } = run_binary_with_env(spec, "DAG_RUNNER_TEST", "parent");
+    assert_success(&output);
 }
 
 #[test]
@@ -154,22 +148,8 @@ fn parent_env_inherited_when_no_overlay() {
     let spec = r#"{"nodes":{
         "a":{"command":["sh","-c","test \"$DAG_RUNNER_TEST\" = parent"]}
     }}"#;
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("spec.json");
-    std::fs::write(&path, spec).unwrap();
-    let bin = env!("CARGO_BIN_EXE_dag-runner");
-    let output = Command::new(bin)
-        .arg("--output")
-        .arg("json")
-        .arg(&path)
-        .env("DAG_RUNNER_TEST", "parent")
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let RunResult { output, _dir } = run_binary_with_env(spec, "DAG_RUNNER_TEST", "parent");
+    assert_success(&output);
 }
 
 #[test]
@@ -178,11 +158,7 @@ fn env_value_with_equals_is_preserved() {
         "a":{"command":["sh","-c","test \"$DAG_RUNNER_TEST\" = 'a=b=c'"],"env":{"DAG_RUNNER_TEST":"a=b=c"}}
     }}"#;
     let RunResult { output, _dir } = run_binary(spec);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert_success(&output);
 }
 
 #[test]
@@ -217,11 +193,7 @@ fn node_completes_before_timeout_succeeds() {
         "a":{"command":["true"],"timeout_secs":30}
     }}"#;
     let RunResult { output, _dir } = run_binary(spec);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert_success(&output);
 }
 
 #[test]
@@ -326,11 +298,7 @@ fn only_runs_just_the_named_nodes_and_skips_spawning_the_rest() {
         .arg(&path)
         .output()
         .expect("spawn dag-runner");
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert_success(&output);
 
     let events = parse_events(&output.stdout);
     let summary = events.iter().find(|e| e["event"] == "summary").unwrap();

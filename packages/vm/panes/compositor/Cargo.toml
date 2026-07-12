@@ -9,6 +9,7 @@
 name = "panes-compositor"
 version = "0.1.0"
 edition = "2024"
+publish.workspace = true
 description = "Guest-side headless Wayland compositor exporting toplevels to a macOS host"
 license = "MIT OR Apache-2.0"
 
@@ -23,6 +24,11 @@ lz4_flex = { version = "0.13", default-features = false, features = [
   "safe-decode",
 ] }
 panes-protocol.workspace = true
+panes-guest-transport.workspace = true
+# Band-parallel damage diff + LZ4 (src/frame.rs): the encode runs on the
+# event-loop thread inside the per-frame ack budget, and banding was designed
+# for this fan-out.
+rayon.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 

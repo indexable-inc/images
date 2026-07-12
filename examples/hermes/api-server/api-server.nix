@@ -9,8 +9,7 @@ let
   # LobeChat/Open WebUI snippets). Stated here so the preset, not a
   # default buried in the shared composition, owns the number.
   port = 9119;
-in
-{
+in {
   _module.args.hermes = {
     apiServer = true;
     apiServerPort = port;

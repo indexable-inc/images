@@ -6,6 +6,7 @@ separate process through the async :mod:`sh` helper, and each returns a
 table while you get a frame to ``.filter`` / ``.sort`` / ``.group_by`` / ``.head``.
 
     rows = await grep("TODO", "src")           # ripgrep -> path, line_number, col, match, line, abs_offset
+    hits = await grep("TODO", files_only=True) # ripgrep -> path, count (one row per matching file)
     files = await find(ext="py", root="src")   # fd       -> path, name, type, size, mtime
     docs = await spotlight("invoice", "~")     # mdfind   -> path, name, type, size, mtime (macOS only)
 
@@ -25,8 +26,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import fnmatch as _fnmatch
 import json as _json
 import os
+import re
 import signal
 import stat as _stat
 import sys
@@ -35,7 +38,7 @@ from pathlib import Path
 from typing import Any
 
 import polars as pl
-from sh import sh as _sh  # the bundled async shell-out helper; `sh.sh` is the function
+from sh import _exec as _sh  # the kernel-private process runner (public sh() is disabled; agents use nu)
 
 __all__ = ["FsearchError", "PartialFrame", "find", "grep", "spotlight"]
 
@@ -55,6 +58,10 @@ _GREP_SCHEMA = {
     "match": pl.Utf8,
     "line": pl.Utf8,
     "abs_offset": pl.Int64,
+}
+_GREP_FILES_SCHEMA = {
+    "path": pl.Utf8,
+    "count": pl.Int64,
 }
 _FIND_SCHEMA = {
     "path": pl.Utf8,
@@ -104,6 +111,36 @@ def _expand(root: str | os.PathLike[str]) -> str:
     only reads ``$HOME`` / the passwd db (no event-loop I/O), and keeping it out
     of the ``async`` callers is what lets them stay free of path methods (ASYNC240)."""
     return str(Path(root).expanduser())
+
+
+def _dir_root(pattern: str) -> str | None:
+    """The expanded path when a ``find`` pattern is really a search root: it
+    contains a path separator (which fd rejects in a pattern outright) AND names
+    an existing directory. ``None`` otherwise — a plain name like ``"src"``
+    stays a pattern even if a ``src/`` directory exists, so name matching is
+    never hijacked. Sync on purpose, like :func:`_expand` (one local ``stat``;
+    keeps path methods out of the async caller, ASYNC240)."""
+    if os.sep not in pattern:
+        return None
+    path = Path(pattern).expanduser()
+    return str(path) if path.is_dir() else None
+
+
+def _glob_shaped(pattern: str) -> bool:
+    """Whether a ``find`` pattern that is not a valid regex reads as a glob: it
+    contains a glob metacharacter (``*``/``?``/``[``) and fails to compile as a
+    regex, so ``find("*.py")`` flips to glob matching instead of surfacing fd's
+    regex parse error (#2542). A valid regex always keeps its regex reading,
+    even a glob-plausible one like ``[abc].py``. Python's ``re`` stands in for
+    fd's Rust regex dialect here; the two agree on the glob-shaped failures
+    (a bare leading repetition operator is invalid in both)."""
+    if not any(ch in pattern for ch in "*?["):
+        return False
+    try:
+        re.compile(pattern)
+    except re.error:
+        return True
+    return False
 
 
 async def _run(argv: list[str], *, timeout: float, ok_codes: tuple[int, ...] = (0,)) -> tuple[str, bool]:
@@ -201,14 +238,20 @@ async def grep(
     multiline: bool = False,
     hidden: bool = False,
     no_ignore: bool = False,
+    files_only: bool = False,
     limit: int = DEFAULT_LIMIT,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> pl.DataFrame:
     """Content search via ripgrep, one row per match. Respects ``.gitignore`` by
     default (``no_ignore=True`` to override) and searches ``root`` (cwd by
     default). Columns: ``path, line_number, col, match, line, abs_offset``.
-    ``col``/``abs_offset`` are byte offsets. ``fixed`` = literal (no regex)."""
-    argv = ["rg", "--json"]
+    ``col``/``abs_offset`` are byte offsets. ``fixed`` = literal (no regex).
+    ``files_only=True`` lists the matching *files* instead (``rg
+    --count-matches``): columns ``path, count``, one row per file, where
+    ``count`` is that file's number of individual matches -- so listing which
+    files match never materializes every match row, and ``limit`` caps files,
+    not matches."""
+    argv = ["rg", "--count-matches", "--null"] if files_only else ["rg", "--json"]
     if ignore_case:
         argv.append("-i")
     if fixed:
@@ -222,6 +265,8 @@ async def grep(
     if glob:
         argv += ["-g", glob]
     argv += ["--", pattern, _expand(root)]
+    if files_only:
+        return await _grep_files_only(argv, limit=limit, timeout=timeout)
     rows, timed_out, hit_limit = await _stream_rg(argv, limit=limit, timeout=timeout)
     if timed_out:
         return PartialFrame(
@@ -239,6 +284,49 @@ async def grep(
             reason=f"stopped at limit={limit}; raise limit= to scan further",
         )
     return pl.DataFrame(rows, schema=_GREP_SCHEMA)
+
+
+def _count_rows(text: str) -> list[dict[str, Any]]:
+    """Parse ``rg --count-matches --null`` output (one ``<path>NUL<count>`` line
+    per matching file) into files-only rows. ``--null`` makes the path/count
+    separator a NUL byte, so a ``:`` in a path cannot corrupt the split; a line
+    without a NUL (e.g. a stderr warning ``sh`` merged into the stream) is
+    skipped, which drops the noise without losing hits."""
+    rows: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        path, sep, num = line.rpartition("\0")
+        if not sep:
+            continue  # no NUL separator: a stderr line, not a count line
+        try:
+            count = int(num)
+        except ValueError:
+            continue  # NUL but no trailing integer: also not a count line
+        rows.append({"path": path, "count": count})
+    return rows
+
+
+async def _grep_files_only(argv: list[str], *, limit: int, timeout: float) -> pl.DataFrame:
+    """The ``files_only=True`` tail of :func:`grep`: run ``rg --count-matches``
+    to completion and parse the per-file counts. Counting inherently scans every
+    file (there is no early limit-kill like :func:`_stream_rg`; the output is
+    one line per matching file, so it stays small either way), and the
+    ``timeout`` process-group kill still bounds a runaway scan. rg exits 1 on
+    "no matches" -- a legitimate empty frame, not a failure."""
+    text, timed_out = await _run(argv, timeout=timeout, ok_codes=(0, 1))
+    rows = _count_rows(text)
+    hit_limit = len(rows) > limit
+    frame = pl.DataFrame(rows[:limit], schema=_GREP_FILES_SCHEMA)
+    if timed_out:
+        return PartialFrame(
+            frame,
+            reason=f"rg timed out after {timeout}s; {frame.height} file(s) counted before the deadline",
+        )
+    if hit_limit:
+        return PartialFrame(
+            frame,
+            reason=f"stopped at limit={limit}; raise limit= to see every matching file",
+        )
+    return frame
 
 
 def _parse_rg_match(event: dict[str, Any]) -> list[dict[str, Any]]:
@@ -367,13 +455,42 @@ def _kill_group(proc: asyncio.subprocess.Process) -> None:
         os.killpg(proc.pid, signal.SIGKILL)
 
 
-async def _paths_frame(text: str, *, limit: int, timed_out: bool, tool: str, timeout: float) -> pl.DataFrame:
+def _glob_filter(frame: pl.DataFrame, glob: str, root: str) -> pl.DataFrame:
+    """The rows of a find/spotlight frame whose path matches ``glob``, following
+    :func:`grep`'s ``glob=`` convention: a glob without ``/`` matches the file
+    *name*, one with ``/`` matches the path relative to ``root``. Matching is
+    ``fnmatch``-based and case-sensitive; note ``*`` in a path glob also crosses
+    ``/`` (fnmatch has no ``**``/``*`` distinction)."""
+    if "/" in glob:
+        mask = [_fnmatch.fnmatchcase(os.path.relpath(p, root), glob) for p in frame["path"]]
+    else:
+        mask = [_fnmatch.fnmatchcase(n, glob) for n in frame["name"]]
+    return frame.filter(pl.Series(mask, dtype=pl.Boolean))
+
+
+async def _paths_frame(
+    text: str,
+    *,
+    limit: int,
+    timed_out: bool,
+    tool: str,
+    timeout: float,
+    glob: str | None = None,
+    root: str | None = None,
+) -> pl.DataFrame:
     """The shared tail of ``find``/``spotlight``: parse the tool's NUL-separated
     paths, lstat them off the event loop into the find/spotlight frame, cap at
     ``limit``, and wrap it as a :class:`PartialFrame` when the scan timed out (so
-    the paths found before the deadline are returned, flagged, not discarded)."""
+    the paths found before the deadline are returned, flagged, not discarded).
+    A ``glob`` (with the ``root`` it is relative to) filters the rows *before*
+    the cap, so ``limit`` counts surviving matches."""
     paths = [p for p in text.split("\0") if p]
-    frame = (await asyncio.to_thread(_lstat_rows, paths)).head(limit)
+    frame = await asyncio.to_thread(_lstat_rows, paths)
+    if glob:
+        if root is None:
+            raise ValueError("a glob filter needs the root it is relative to")
+        frame = _glob_filter(frame, glob, root)
+    frame = frame.head(limit)
     if timed_out:
         return PartialFrame(
             frame,
@@ -388,7 +505,7 @@ async def find(
     *,
     kind: str | None = None,
     ext: str | None = None,
-    glob: bool = False,
+    glob: bool | str = False,
     fixed: bool = False,
     hidden: bool = False,
     no_ignore: bool = False,
@@ -397,15 +514,39 @@ async def find(
     timeout: float = DEFAULT_TIMEOUT,
 ) -> pl.DataFrame:
     """Find files via fd, one row per path. ``pattern`` is a regex by default
-    (``glob=True`` for glob, ``fixed=True`` for a literal); ``kind`` ∈
-    file/dir/symlink; ``ext`` filters by extension. Respects ``.gitignore`` by
-    default. Columns: ``path, name, type, size, mtime``."""
+    (``glob=True`` for glob, ``fixed=True`` for a literal), but a glob-shaped
+    pattern that is not a valid regex — ``find("*.py")`` — is treated as a glob
+    automatically; ``kind`` ∈ file/dir/symlink; ``ext`` filters by extension. A *string* ``glob`` is a
+    path filter, same meaning as on :func:`grep`: the pattern keeps its
+    regex/literal reading and only paths matching the glob are returned (no
+    ``/`` in the glob matches the file name; with ``/`` it matches the path
+    relative to ``root``). A first positional that is the path of an existing
+    directory is taken as the search root instead — ``find("/some/dir",
+    max_depth=2)`` lists that tree. Respects ``.gitignore`` by default.
+    Columns: ``path, name, type, size, mtime``."""
+    # Listing a directory tree is the most common call, and the natural spelling
+    # is `find("/some/dir")` — but the first positional is the pattern, and fd
+    # rejects any pattern containing a path separator. So a path-shaped first
+    # arg naming an existing directory becomes the root (with the match-all
+    # default pattern), unless an explicit `root` already claims that slot.
+    if root == "." and (dir_root := _dir_root(pattern)) is not None:
+        pattern, root = ".", dir_root
+    # `find("*.py")` is a natural call shape but not a valid regex; instead of
+    # surfacing fd's regex parse error it flips to glob mode (#2542). Explicit
+    # modes are never second-guessed: glob=True/glob="..." and fixed=True keep
+    # their reading.
+    if glob is False and not fixed and _glob_shaped(pattern):
+        glob = True
+    # `glob` is a mode flag (True: the pattern IS a glob) or, for parity with
+    # grep's glob=, a filter string; without this split a string would truthily
+    # flip the mode and silently glob-match `pattern` instead of filtering.
+    path_glob = glob if isinstance(glob, str) else None
     argv = ["fd", "--print0"]
     if kind:
         argv += ["--type", _KIND_FLAG.get(kind, kind)]
     if ext:
         argv += ["--extension", ext]
-    if glob:
+    if path_glob is None and glob:
         argv.append("--glob")
     if fixed:
         argv.append("--fixed-strings")
@@ -415,10 +556,32 @@ async def find(
         argv.append("--no-ignore")
     if max_depth is not None:
         argv += ["--max-depth", str(max_depth)]
-    argv += ["--max-results", str(limit)]  # cap at the source (limit applies to real hits)
+    if not path_glob:
+        # Cap at the source (limit applies to real hits). With a glob filter the
+        # cap moves to _paths_frame instead: fd has no include-glob independent
+        # of the pattern, so a source cap would count pre-filter hits and
+        # silently starve the filtered result. The scan stays bounded by
+        # `timeout` either way.
+        argv += ["--max-results", str(limit)]
     argv += ["--", pattern, _expand(root)]
-    text, timed_out = await _run(argv, timeout=timeout)
-    return await _paths_frame(text, limit=limit, timed_out=timed_out, tool="fd", timeout=timeout)
+    try:
+        text, timed_out = await _run(argv, timeout=timeout)
+    except FsearchError as exc:
+        # The pattern was read as a regex and fd rejected it; name the escape
+        # hatches so the caller is steered before reaching for the fd docs.
+        if glob is not True and not fixed and "regex parse error" in str(exc):
+            msg = f"{exc}\n(find patterns are regexes by default; pass glob=True for a glob, or fixed=True for a literal)"
+            raise FsearchError(msg) from exc
+        raise
+    return await _paths_frame(
+        text,
+        limit=limit,
+        timed_out=timed_out,
+        tool="fd",
+        timeout=timeout,
+        glob=path_glob,
+        root=_expand(root),
+    )
 
 
 async def spotlight(

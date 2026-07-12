@@ -47,22 +47,22 @@ every root and dependency index is in range before and after merge.
 
 A unit's source is emitted as one `sources.<name>` entry, not the whole tree, so
 editing one crate does not invalidate its siblings. `SourceEntry`
-(`src/render.rs:171`) carries a `SourceBase` and `SourceScope`:
+(`src/render.rs:172`) carries a `SourceBase`; its `SourceScope` is derived from the base:
 
 - `SourceBase` (`src/render.rs:182`): `Workspace` / `WorkspaceClosure` /
   `VendorPackage` / `VendorClosure` selects which Nix helper builds the source
   (`scopedWorkspaceSource`, `scopedWorkspaceClosureSource`,
   `vendorSources.<key>`, `scopedVendorClosureSource`; rendered in
-  `nix_expr`, `src/render.rs:241`).
+  `nix_expr`, `src/render.rs:247`).
 - `SourceScope` (`src/render.rs:190`): `Package` (one crate dir) vs `Closure` (a
   crate plus the sibling paths it includes, for a workspace member that reaches
   outside its own dir).
 
 The template's `scopedWorkspaceSource` builds a package-shaped `builtins.path`
-rooted at `workspaceRoot/<relative>` (`units.nix.askama:105`), and the closure
+rooted at `workspaceRoot/<relative>` (`units.nix.in:118`), and the closure
 variants use a `filter` that keeps only the include set
-(`sourceClosureFilter`, `units.nix.askama:90`). A vendor closure asserts
-`vendorDir != null` (`units.nix.askama:121`). The external-source map is built
+(`sourceClosureFilter`, `units.nix.in:103`). A vendor closure asserts
+`vendorDir != null` (`units.nix.in:131`). The external-source map is built
 from `Cargo.lock` (`CargoLockSources::from_path`, `src/render.rs:73`);
 `source_for_unit` (`src/render.rs:102`) matches a unit's package id against the
 lock to pick the exact source, erroring on a missing or ambiguous match so a
@@ -76,8 +76,8 @@ workspace Rust, so it keeps clippy) and a `run-custom-build` unit that executes
 the script. `prepare_graph` folds these into a `BuildScriptRun`
 (`src/render.rs:166`) so the run unit depends on the compile unit and its own
 dependency runs, and the renderer emits the run unit before the rustc units
-(`render_unit_entries`, `src/render.rs:327`). The run unit is named
-`<pkg>-build-script-run-<version>-<hash>` (`src/render.rs:582`).
+(`render_unit_entries`, `src/render.rs:367`). The run unit is named
+`<pkg>-build-script-run-<version>-<hash>` (`src/render.rs:630`).
 
 ## Panic-freedom scan (`src/panic_scan.rs`)
 
@@ -98,7 +98,7 @@ Key points:
   codegened where it is instantiated, so a panic in it carries the library's
   crate token in the consumer's object. Scanning every production unit and scoping
   findings to the whole workspace crate set
-  (`workspace_crate_names`, `src/render.rs:446`) attributes it back to the
+  (`workspace_crate_names`, `src/render.rs:492`) attributes it back to the
   defining crate. `crate_token` (`src/panic_scan.rs:78`) is the length-prefixed,
   dash-normalized crate name shared by legacy and v0 mangling.
 - **Panic sinks** (`PANIC_SINKS`, `src/panic_scan.rs:202`): `core::panicking` and
@@ -109,10 +109,10 @@ Key points:
 - **Fail closed** (`src/main.rs:144`, `src/panic_scan.rs:107`): finding no
   artifacts to scan, or an artifact that is neither an archive nor a parseable
   object, is an error, not a pass.
-- **Scope** (`is_panic_freedom_candidate`, `src/render.rs:433`): only non-external,
+- **Scope** (`is_panic_freedom_candidate`, `src/render.rs:479`): only non-external,
   non-proc-macro, non-build-script, non-test, non-bench units are scanned: test
   and bench bodies legitimately panic. The rendered check
-  (`render_panic_freedom_check`, `src/render.rs:463`) builds one scan derivation
+  (`render_panic_freedom_check`, `src/render.rs:509`) builds one scan derivation
   per candidate unit (so a touched unit re-scans only itself), joined under one
   aggregate, and asserts the `cargoUnit` scanner package is non-null.
 

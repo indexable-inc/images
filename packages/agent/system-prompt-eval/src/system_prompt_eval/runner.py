@@ -35,7 +35,12 @@ def run_eval(
     max_workers: int = 4,
     progress: Progress = _noop,
 ) -> list[RolloutResult]:
-    """Run ``rollouts`` fresh agents per task, capture transcripts, then judge."""
+    """Run ``rollouts`` fresh agents per task, capture transcripts, then judge.
+
+    Assumes every task's ``expects`` id is present in ``behaviors``; callers load
+    both through :mod:`data` and validate with ``data.validate_expects`` first, so
+    an unknown id here is a bug in the caller, not dataset drift to swallow.
+    """
     by_id = {b.id: b for b in behaviors}
     jobs = _jobs(tasks, rollouts)
 
@@ -65,7 +70,7 @@ def run_eval(
     for result in captured:
         if result.error is not None:
             continue
-        expected = [by_id[bid] for bid in expects_by_id[result.case_id] if bid in by_id]
+        expected = [by_id[bid] for bid in expects_by_id[result.case_id]]
         progress(f"judge {result.case_id}#{result.rollout}")
         try:
             result.verdicts = judge.grade(

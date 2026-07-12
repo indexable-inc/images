@@ -1,10 +1,15 @@
 defmodule SymphonyElixirWeb.IRRunControllerTest do
   use ExUnit.Case, async: false
-  import Plug.{Conn, Test}
 
-  alias SymphonyElixir.DSL.{Parser, Schema}
+  import Plug.Conn
+  import Plug.Test
+
+  alias SymphonyElixir.DSL.Parser
+  alias SymphonyElixir.DSL.Schema
   alias SymphonyElixir.Engine.Envelope
-  alias SymphonyElixir.IR.{Node, RunGraph, Store}
+  alias SymphonyElixir.IR.Node
+  alias SymphonyElixir.IR.RunGraph
+  alias SymphonyElixir.IR.Store
 
   @opts SymphonyElixirWeb.Endpoint.init([])
 
@@ -15,7 +20,7 @@ defmodule SymphonyElixirWeb.IRRunControllerTest do
     # The Runtime.Registry must exist for operator routes to resolve a run
     # name; a run that is not registered then yields the :noproc the
     # controller translates to 409. Start it if the Application is not up.
-    unless Process.whereis(SymphonyElixir.Runtime.Registry) do
+    if !Process.whereis(SymphonyElixir.Runtime.Registry) do
       start_supervised!({Registry, keys: :unique, name: SymphonyElixir.Runtime.Registry})
     end
 
@@ -24,11 +29,11 @@ defmodule SymphonyElixirWeb.IRRunControllerTest do
     # Application is not running (auto_start: false in test).
     ensure_workflow_catalog_table()
 
-    unless Process.whereis(SymphonyElixir.TaskSupervisor) do
+    if !Process.whereis(SymphonyElixir.TaskSupervisor) do
       start_supervised!({Task.Supervisor, name: SymphonyElixir.TaskSupervisor})
     end
 
-    unless Process.whereis(SymphonyElixir.Runtime.Supervisor) do
+    if !Process.whereis(SymphonyElixir.Runtime.Supervisor) do
       start_supervised!(SymphonyElixir.Runtime.Supervisor)
     end
 
@@ -59,7 +64,7 @@ defmodule SymphonyElixirWeb.IRRunControllerTest do
 
   defp persist_run(run_id, status) do
     node = %{Node.new(id: "a", ast_origin: {:exec, "a"}, kind: :exec, inputs: %{}) | state: :succeeded, output: %{"v" => 1}}
-    graph = RunGraph.new(run_id, "hash", nil) |> RunGraph.put_nodes([node]) |> Map.put(:status, status)
+    graph = run_id |> RunGraph.new("hash", nil) |> RunGraph.put_nodes([node]) |> Map.put(:status, status)
     :ok = Store.persist(graph)
   end
 

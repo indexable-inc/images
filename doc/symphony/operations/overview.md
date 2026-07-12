@@ -147,7 +147,11 @@ kinds and their `.sym` `on` syntax are in [dsl](../dsl/overview.md#triggers-the-
   `systemd Persistent=true` semantic, `triggers/cron.ex:8-22`). Schedules are
   parsed by `CronExpression` (`cron_expression.ex:1-30`): standard 5-field cron
   with `*`, lists, ranges, and `*/n` steps, plus `@yearly`/`@monthly`/`@weekly`/
-  `@daily`/`@hourly` nicknames, all in UTC.
+  `@daily`/`@hourly` nicknames. Each schedule is evaluated against wall-clock
+  time in the workflow's `tz "..."` zone (default `"UTC"`), so a 9am-local job
+  does not drift across DST; a spring-forward gap fires at the first valid
+  instant after it, a fall-back repeat fires once, and an unknown zone is a
+  logged skip (see the `Triggers.Cron` moduledoc).
 - **Webhooks** - `LinearWebhookController`, `GithubWebhookController`, and
   `SlackEventsController` verify the inbound signature against
   `LINEAR_WEBHOOK_SECRET`/`GITHUB_WEBHOOK_SECRET`/`SLACK_SIGNING_SECRET` (absent
@@ -186,6 +190,46 @@ services.symphony = {
   environmentFile = "/run/secrets/symphony.env";
 };
 ```
+
+## home-manager module (`packages/agent/symphony/home-module.nix`)
+
+`homeModules.symphony` runs the runtime as a user service: one declarative
+instance renders a native launchd agent on macOS and a native systemd user unit
+on Linux by composing `homeModules.portable-services`. It mirrors the NixOS
+module's vocabulary (`package`, `stateDir`, `httpPort`, `primaryRepo`,
+`repoRoot`, `workflowPack`/`packDir`, `extraEnvironment`, `environmentFile`,
+`secretsCommand`) minus the system-level pieces (no `user`, tmpfiles, or
+polkit); `bin/run-nix` creates the state dirs itself and defaults `stateDir` to
+`~/.local/state/symphony`. `packDir` is the hot-reload surface: point it at a
+mutable checkout and the runtime picks up edited `.sym` workflows and skills
+without a restart. Two knobs are home-specific: `extraPath` prepends packages
+to the service PATH (this is where deployers add their host-owned `codex`,
+plus `jq`/`gh` for workflows), and because launchd has no `EnvironmentFile`,
+secrets are loaded by a rendered launch wrapper that sources `environmentFile`
+and execs under `secretsCommand`. The unit is `restart = "always"` with no
+interval: the BEAM is the scheduler, cron triggers live inside it.
+
+```nix
+# home.nix on a workstation (e.g. hydra)
+{
+  imports = [index.homeModules.symphony];
+
+  services.symphony = {
+    enable = true;
+    primaryRepo = "/Users/andrewgazelka/Projects/indexable-inc/index";
+    packDir = "/Users/andrewgazelka/Projects/indexable-inc/symphony-pack";
+    environmentFile = "/Users/andrewgazelka/.config/symphony/secrets.env";
+    extraPath = [
+      pkgs.codex
+      pkgs.jq
+      pkgs.gh
+    ];
+  };
+}
+```
+
+Eval coverage (rendered plist, user unit, wrapper) lives in
+`tests/symphony-home-module.nix`, bundled into the `eval` flake check.
 
 ## Quality gates
 

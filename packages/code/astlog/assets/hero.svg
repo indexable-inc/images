@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 230" role="img" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13">
+  <style>
+    svg { color: #1f2328; }
+    text { fill: currentColor; }
+    .muted { fill: #656d76; }
+    .box { stroke: currentColor; fill: none; stroke-width: 1.2; }
+    .accent { stroke: #8250df; fill: none; stroke-width: 1.4; }
+    .edge { stroke: currentColor; fill: none; stroke-width: 1.2; marker-end: url(#arrow); }
+    .head { fill: currentColor; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { stroke: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="head"/>
+    </marker>
+  </defs>
+  <rect class="box" x="20" y="98" width="110" height="34" rx="6"/>
+  <text x="75" y="119" text-anchor="middle">source files</text>
+
+  <path class="edge" d="M130,115 L196,115"/>
+  <text class="muted" x="163" y="100" text-anchor="middle" font-size="12">match</text>
+  <text class="muted" x="163" y="146" text-anchor="middle" font-size="11">tree-sitter query</text>
+
+  <rect class="box" x="200" y="98" width="110" height="34" rx="6"/>
+  <text x="255" y="119" text-anchor="middle">relations</text>
+
+  <path class="edge" d="M310,115 L396,115"/>
+  <text class="muted" x="353" y="100" text-anchor="middle" font-size="12">join</text>
+  <text class="muted" x="353" y="146" text-anchor="middle" font-size="11">Datalog rules</text>
+
+  <rect class="accent" x="400" y="98" width="125" height="34" rx="6"/>
+  <text x="462" y="119" text-anchor="middle">derived rows</text>
+
+  <path class="edge" d="M525,106 C570,98 570,61 596,59"/>
+  <path class="edge" d="M525,124 C570,132 570,169 596,171"/>
+  <text class="muted" x="560" y="52" text-anchor="middle" font-size="12">scan / lint</text>
+  <text class="muted" x="560" y="192" text-anchor="middle" font-size="12">rewrite</text>
+
+  <rect class="box" x="600" y="42" width="100" height="34" rx="6"/>
+  <text x="650" y="63" text-anchor="middle">findings</text>
+  <rect class="box" x="600" y="154" width="100" height="34" rx="6"/>
+  <text x="650" y="175" text-anchor="middle">edits</text>
+</svg>

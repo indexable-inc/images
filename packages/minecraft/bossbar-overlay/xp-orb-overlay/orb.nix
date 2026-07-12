@@ -11,13 +11,15 @@
 # workspace. Instead this is a trivial symlink derivation depending on the
 # already-built package, so there is genuinely no second build.
 runCommand "xp-orb-overlay"
-  {
-    meta = bossbar-overlay.meta // {
+{
+  meta =
+    bossbar-overlay.meta
+    // {
       description = "Minecraft-style floating experience-orb desktop overlay (wgpu, SQLite-driven)";
       mainProgram = "xp-orb-overlay";
     };
-  }
-  ''
-    mkdir -p "$out/bin"
-    ln -s ${lib.getExe' bossbar-overlay "xp-orb-overlay"} "$out/bin/xp-orb-overlay"
-  ''
+}
+''
+  mkdir -p "$out/bin"
+  ln -s ${lib.getExe' bossbar-overlay "xp-orb-overlay"} "$out/bin/xp-orb-overlay"
+''

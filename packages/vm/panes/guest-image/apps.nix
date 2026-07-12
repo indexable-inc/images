@@ -22,8 +22,7 @@
 #   autoStart : bool        start the container (and thus map its window) at
 #                           boot; default true. Debug scaffolding sets false
 #                           and is started on demand from the guest console.
-{ pkgs }:
-let
+{pkgs}: let
   inherit (pkgs) lib;
 
   # portablemc's default wrapper bundles four full OpenJDKs (25/21/17/8,
@@ -31,7 +30,7 @@ let
   # MC 26.2 requires Java SE 25 minimum, so ship exactly jdk25 (the full JDK,
   # not headless: the client needs the AWT/X11 libs headless builds drop).
   portablemc = pkgs.portablemc.override {
-    jvms = [ pkgs.jdk25 ];
+    jvms = [pkgs.jdk25];
     # Keep flite OUT of the wrapper's LD_LIBRARY_PATH: MC's narrator speaks
     # through flite -> pulse, and with no audio stack in the guest
     # pa_simple_write aborts the whole client (validated live). Dropping the
@@ -119,8 +118,7 @@ let
     '';
     meta.description = "Minecraft ${mcVersion} launcher forcing the Vulkan startup backend (index#1686)";
   };
-in
-{
+in {
   # Software (wl_shm) client: proves compositor + container + socket plumbing
   # with zero GPU involvement. weston-flower exists because nixpkgs builds
   # weston with -Ddemo-clients=true (weston-simple-shm does not: the pin sets
@@ -130,8 +128,8 @@ in
   # `systemctl start container@demo` when debugging the shm path.
   demo = {
     command = "${pkgs.weston}/bin/weston-flower";
-    env = { };
-    binds = [ ];
+    env = {};
+    binds = [];
     gpu = false;
     autoStart = false;
   };
@@ -142,8 +140,8 @@ in
   # interactive terminal window into the guest.
   term = {
     command = "${pkgs.foot}/bin/foot";
-    env = { };
-    binds = [ ];
+    env = {};
+    binds = [];
     gpu = false;
     autoStart = false;
   };
@@ -168,9 +166,10 @@ in
       VK_DRIVER_FILES = "${pkgs.mesa}/share/vulkan/icd.d/virtio_icd.aarch64.json";
       MESA_VK_DEVICE_SELECT = "1af4:1050!";
       # 26.2's Vulkan backend hard-requires VK_KHR_synchronization2. The
-      # guest mesa (indexable-inc/mesa fork, see ../guest-image/default.nix
-      # and index#1742) now exposes sync2 natively by handling temporary sync
-      # fd semaphore imports driver-side, so Khronos' emulation layer is a
+      # guest mesa (upstream mesa + the in-repo venus patch series, see
+      # ../guest-image/default.nix and index#1742/#1894) now exposes sync2
+      # natively by handling temporary sync fd semaphore imports driver-side,
+      # so Khronos' emulation layer is a
       # passthrough no-op here: with force_enable unset it self-retires when
       # the driver advertises the extension. It stays wired as the fallback
       # if the driver ever masks sync2 again (e.g. a mesa bump without the
@@ -198,7 +197,7 @@ in
       #   LIBGL_ALWAYS_SOFTWARE = "1";
       #   GALLIUM_DRIVER = "llvmpipe";
     };
-    binds = [ "/var/lib/minecraft" ];
+    binds = ["/var/lib/minecraft"];
     gpu = true;
     files = {
       # Pre-seed the instance options. Seeded by a tmpfiles `C` rule, so

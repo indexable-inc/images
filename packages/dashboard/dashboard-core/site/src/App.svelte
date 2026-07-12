@@ -11,7 +11,7 @@
   import { onThemeChange } from '$lib/ansi';
   import { seedDemo } from '$lib/demo';
   import { paneScope } from '$lib/scope';
-  import { buildSidebar } from '$lib/sidebar';
+  import { sidebarModel } from '$lib/sidebar-model.svelte';
   import { withKey, kindOf } from '$lib/run';
   import { rendererFor } from '$lib/renderers';
   import Sidebar from '$components/Sidebar.svelte';
@@ -39,7 +39,7 @@
     };
   });
 
-  const model = $derived(buildSidebar(store.panes, timeline.recordings));
+  const model = $derived(sidebarModel());
 
   // Resolve the selection into the pane the center stage shows (a run or a
   // resource) plus its scope, so the rail can inspect the same session.

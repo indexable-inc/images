@@ -1,22 +1,26 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="client joins the group via the fleet spec, api via its image; both union into one east-west network"></p>
+
 # Declared groups
 
-A two-VM fleet sharing one east-west network, where the group membership is
-declared in the image definition instead of at runtime. The `api` image sets
+Should a VM's group membership live in the image or in the fleet? Both work,
+and this two-VM fleet shows each source. The `api` image sets
 `ix.networking.groups = [ "declared-groups" ]` in its own module, so any fleet
-deploying that image joins the deployer's `declared-groups` network. The
-`client` shows the other source: a fleet-level `nodes.client.groups` entry on a
+deploying that image joins the deployer's `declared-groups` network; the
+`client` joins through a fleet-level `nodes.client.groups` entry on a
 group-agnostic image. Both sources union into the same plan field.
 
 ## Run
 
 ```sh
+# From the index repo root.
 nix run .#declared-groups-up
 nix run .#declared-groups-health
 ```
 
 The fleet wrapper get-or-creates the `declared-groups` group under your
 account, adds both VMs, then runs the health checks: the client curls the api
-over the private group network.
+over the private group network. Need the repo first?
+`git clone https://github.com/indexable-inc/index`.
 
 ## Verify manually
 

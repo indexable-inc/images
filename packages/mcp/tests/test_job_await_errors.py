@@ -11,6 +11,12 @@ Bug 2: a live/errored ``Job`` exposes ``.output``; a finished ``Result`` exposes
 ``.text``. Each now also answers its sibling (``Result.output``, ``Job.text``), so
 an agent paging a returned value does not have to guess which surface owns which
 name.
+
+Issue #2068: the Result wrapper used to STRAND the original value -- a cell whose
+trailing expression was a DataFrame kept only the rendered text, so
+``jobs[id].result[0, 0]`` died on the wrapper and the real cell string was
+unrecoverable. ``Result.of`` now records the original as ``.value`` and
+subscripting delegates to it, surviving the stdout merge.
 """
 
 from __future__ import annotations
@@ -83,6 +89,40 @@ def test_job_text_is_the_result_text(monkeypatch: pytest.MonkeyPatch) -> None:
     # `.text` is the sibling of `.output` (stdout): the finished run's result text.
     assert job.text == "rendered"
     assert job.output == ""  # the cell printed nothing to stdout
+
+
+def test_trailing_dataframe_stays_reachable_through_the_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Issue #2068: `print()` renders a frame width-clipped, and the wrapper used
+    # to be the ONLY thing a finished job kept -- the original value was gone.
+    # The trailing expression must stay reachable (including when stdout rode
+    # along via _merge_stdout) so `jobs[id].result[0, 0]` reads the real cell.
+    _wire(monkeypatch, {})
+    cell = (
+        "import polars as pl\n"
+        "print('some stdout noise that rides along with the result')\n"
+        "pl.DataFrame({'value': ['x' * 500]})"
+    )
+    job = _run(cell)
+    assert job.status == "done"
+    result = job.result
+    assert result is not None
+    # .value is the original frame, not a repr of it.
+    assert result.value is not None
+    assert result.value.shape == (1, 1)
+    # Subscripting delegates to the original: the FULL cell string comes back.
+    assert result[0, 0] == "x" * 500
+
+
+def test_view_only_result_subscript_points_at_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A Result built purely from keyword views wraps no original value;
+    # subscripting it must fail with a pointer at `.text`, not a bare
+    # "'Result' object is not subscriptable".
+    _wire(monkeypatch, {"Result": runtime.Result})
+    job = _run("Result.text('hello')")
+    result = job.result
+    assert result is not None
+    with pytest.raises(TypeError, match=r"`\.text`"):
+        result[0]
 
 
 def test_a_watchdog_interrupt_reraises_with_the_actionable_message(monkeypatch: pytest.MonkeyPatch) -> None:

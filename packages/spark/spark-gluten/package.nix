@@ -8,8 +8,8 @@
   # stays unconditional and lazy: `pkgs.spark-gluten` is only forced inside an
   # x86_64-linux closure (the spark service module), mirroring how `drgn` does
   # the same for its Linux-only binary.
-  packageSet.systems = [ "x86_64-linux" ];
-  flake.systems = [ "x86_64-linux" ];
+  packageSet.systems = ["x86_64-linux"];
+  flake.systems = ["x86_64-linux"];
   overlay = true;
   updateScript = true;
 }

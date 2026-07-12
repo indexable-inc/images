@@ -1,6 +1,4 @@
-{ world }:
-
-{
+{world}: {
   autoReloadIgnored = [
     "Vault"
     "LuckPerms"
@@ -21,28 +19,28 @@
   ];
 
   enabled = {
-    luckperms = { };
-    teams-api = { };
-    placeholderapi = { };
-    vaultunlocked = { };
-    essentialsx = { };
-    essentialsx-spawn = { };
-    coreprotect = { };
-    eternaleconomy = { };
-    quickshop-hikari = { };
-    tradepost = { };
-    worldedit = { };
-    worldguard = { };
+    luckperms = {};
+    teams-api = {};
+    placeholderapi = {};
+    vaultunlocked = {};
+    essentialsx = {};
+    essentialsx-spawn = {};
+    coreprotect = {};
+    eternaleconomy = {};
+    quickshop-hikari = {};
+    tradepost = {};
+    worldedit = {};
+    worldguard = {};
     terraformgenerator.worlds = [
       world.name
       "${world.name}_nether"
       "${world.name}_the_end"
     ];
-    pvpindex-factions = { };
-    combatlogplugin = { };
-    simple-voice-chat = { };
-    distant-horizons-support = { };
-    bluemap = { };
-    skript = { };
+    pvpindex-factions = {};
+    combatlogplugin = {};
+    simple-voice-chat = {};
+    distant-horizons-support = {};
+    bluemap = {};
+    skript = {};
   };
 }

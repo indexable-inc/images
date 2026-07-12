@@ -20,16 +20,6 @@ fn state_dir() -> PathBuf {
         .map_or_else(|| crate::home().join(".claude/.review-state"), PathBuf::from)
 }
 
-/// `session_id` is interpolated into a file path; accept only a plain filename
-/// component so a crafted value cannot escape the state dir.
-fn safe_session(payload: &Value) -> Option<String> {
-    let session = payload.get("session_id").and_then(Value::as_str)?;
-    if session.is_empty() || session == "." || session == ".." || session.contains('/') {
-        return None;
-    }
-    Some(session.to_owned())
-}
-
 fn marker_path(session: &str) -> PathBuf {
     state_dir().join(format!("{session}.changed"))
 }
@@ -43,7 +33,15 @@ pub fn review_log_edit() {
     let Ok(payload) = serde_json::from_str::<Value>(&input) else {
         return;
     };
-    let Some(session) = safe_session(&payload) else {
+    // Attribute edits to the MAIN session only. A subagent's edits carry the
+    // parent's `session_id` but also an `agent_id`; the subagent owns and reviews
+    // its own diff, and a still-running background subagent's WIP must not arm the
+    // parent's gate. Drop subagent-authored edits here so the gate counts only the
+    // main session's own tool calls.
+    if crate::is_subagent(&payload) {
+        return;
+    }
+    let Some(session) = crate::safe_session(&payload) else {
         return;
     };
     // Write/Edit/MultiEdit use file_path; NotebookEdit uses notebook_path.
@@ -75,6 +73,53 @@ struct StopBlock {
     reason: String,
 }
 
+/// True when the turn ended with background work still running. `background_tasks`
+/// (Stop/SubagentStop input, v2.1.145+) lists the bash commands and subagents
+/// still in flight; the element shape is version-dependent, so presence of any
+/// entry is the only signal relied on. A missing or non-array field reads as idle.
+fn background_active(payload: &Value) -> bool {
+    payload
+        .get("background_tasks")
+        .and_then(Value::as_array)
+        .is_some_and(|tasks| !tasks.is_empty())
+}
+
+/// What the Stop gate should do this turn, decided from the payload alone (no I/O).
+#[derive(Debug, PartialEq, Eq)]
+enum GateAction {
+    /// Allow the Stop and clear the marker (loop guard: forced continuation).
+    ClearAndAllow,
+    /// Allow the Stop but PRESERVE the marker, so the review still fires on a
+    /// later Stop. Used while the session's own background work is still running.
+    AllowKeepMarker,
+    /// Read the marker and, if there are unreviewed edits, consume it and block.
+    Evaluate,
+}
+
+/// Pure gate policy over the Stop payload. Keeps the two false-positive fixes
+/// (loop guard, background-work suppression) testable without stdin/stdout or
+/// filesystem state.
+fn gate_action(payload: &Value) -> GateAction {
+    // Loop guard: this Stop is already a forced continuation from a prior block.
+    // Clear the marker and allow, so the next genuine change-set can trigger again.
+    if payload
+        .get("stop_hook_active")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return GateAction::ClearAndAllow;
+    }
+    // Don't gate while the main session's own background work is still in flight:
+    // a non-empty `background_tasks` means a builder or scaffold subagent is
+    // mid-edit. Firing now would blame the parent for work-in-progress and re-fire
+    // on every Stop until the builder drains. Allow WITHOUT consuming the marker,
+    // so the review still fires on the next genuine Stop once nothing is running.
+    if background_active(payload) {
+        return GateAction::AllowKeepMarker;
+    }
+    GateAction::Evaluate
+}
+
 /// Stop: block once per change-set if there are unreviewed edits.
 pub fn review_gate() {
     let Some(input) = crate::read_stdin() else {
@@ -83,20 +128,18 @@ pub fn review_gate() {
     let Ok(payload) = serde_json::from_str::<Value>(&input) else {
         return;
     };
-    let Some(session) = safe_session(&payload) else {
+    let Some(session) = crate::safe_session(&payload) else {
         return;
     };
     let marker = marker_path(&session);
 
-    // Loop guard: this Stop is already a forced continuation from a prior block.
-    // Clear the marker and allow, so the next genuine change-set can trigger again.
-    if payload
-        .get("stop_hook_active")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        let _ = std::fs::remove_file(&marker);
-        return;
+    match gate_action(&payload) {
+        GateAction::ClearAndAllow => {
+            let _ = std::fs::remove_file(&marker);
+            return;
+        }
+        GateAction::AllowKeepMarker => return,
+        GateAction::Evaluate => {}
     }
 
     let Ok(contents) = std::fs::read_to_string(&marker) else {
@@ -153,7 +196,8 @@ pub fn review_gate() {
 
 #[cfg(test)]
 mod tests {
-    use super::safe_session;
+    use super::{GateAction, gate_action};
+    use crate::{is_subagent, safe_session};
     use serde_json::json;
 
     #[test]
@@ -164,5 +208,84 @@ mod tests {
         assert!(safe_session(&json!({"session_id": "."})).is_none());
         assert!(safe_session(&json!({"session_id": ""})).is_none());
         assert!(safe_session(&json!({})).is_none());
+    }
+
+    // Attribution: a subagent's PostToolUse reuses the parent `session_id` but
+    // carries an `agent_id`. That marks it NOT the main session's own edit, so
+    // the logger must drop it and never arm the parent's gate.
+    #[test]
+    fn subagent_edit_is_attributed_to_subagent() {
+        // Main-thread edit: no agent_id.
+        assert!(!is_subagent(&json!({
+            "session_id": "s1",
+            "tool_input": {"file_path": "/repo/src/a.rs"},
+        })));
+        // Subagent edit: agent_id present (parent session_id reused).
+        assert!(is_subagent(&json!({
+            "session_id": "s1",
+            "agent_id": "agent-xyz",
+            "agent_type": "general-purpose",
+            "tool_input": {"file_path": "/repo/src/scaffold.rs"},
+        })));
+        // Empty agent_id is treated as main-thread (defensive).
+        assert!(!is_subagent(&json!({"session_id": "s1", "agent_id": ""})));
+    }
+
+    #[test]
+    fn gate_evaluates_a_plain_main_session_stop() {
+        assert_eq!(gate_action(&json!({"session_id": "s1"})), GateAction::Evaluate);
+    }
+
+    #[test]
+    fn gate_clears_and_allows_on_forced_continuation() {
+        // Loop guard: a Stop that is itself a forced continuation clears the marker.
+        assert_eq!(
+            gate_action(&json!({"session_id": "s1", "stop_hook_active": true})),
+            GateAction::ClearAndAllow,
+        );
+    }
+
+    // Regression: a background subagent (e.g. an in-progress scaffold across many
+    // files) is still running when the main turn ends. The gate must NOT fire and
+    // must PRESERVE the marker so the review still runs once the builder drains.
+    #[test]
+    fn gate_defers_while_background_work_runs() {
+        assert_eq!(
+            gate_action(&json!({
+                "session_id": "s1",
+                "background_tasks": [
+                    {"type": "subagent", "agent_type": "general-purpose", "status": "running"},
+                ],
+            })),
+            GateAction::AllowKeepMarker,
+        );
+    }
+
+    #[test]
+    fn gate_evaluates_when_background_tasks_drained() {
+        // Empty or absent background_tasks reads as idle -> normal evaluation.
+        assert_eq!(
+            gate_action(&json!({"session_id": "s1", "background_tasks": []})),
+            GateAction::Evaluate,
+        );
+        assert_eq!(
+            gate_action(&json!({"session_id": "s1", "background_tasks": "notanarray"})),
+            GateAction::Evaluate,
+        );
+    }
+
+    // The loop guard outranks the background-work check: a forced continuation
+    // must always clear the marker even if a background task is still listed, so
+    // the gate can never wedge into a permanent block.
+    #[test]
+    fn loop_guard_outranks_background_work() {
+        assert_eq!(
+            gate_action(&json!({
+                "session_id": "s1",
+                "stop_hook_active": true,
+                "background_tasks": [{"type": "bash", "status": "running"}],
+            })),
+            GateAction::ClearAndAllow,
+        );
     }
 }

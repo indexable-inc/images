@@ -51,8 +51,9 @@ JOB_MIME = "application/x-ix-job+json"
 IX_LLM_MIME = "application/x-ix-llm+json"
 
 # The mime a Result uses to carry a structured human view: a
-# ``{"renderer": <name>, "data": <json>}`` spec pane_bridge republishes as a
-# `data` pane, rendered by the dashboard's matching frontend component.
+# ``{"renderer": <name>, "data": <json>}`` spec that persists with the run's
+# stored outputs (a CAS blob on the run entity, see store.finish) for a
+# view-aware frontend to render with its matching component.
 IX_VIEW_MIME = "application/x-ix-view+json"
 
 Content = mcp_types.TextContent | mcp_types.ImageContent

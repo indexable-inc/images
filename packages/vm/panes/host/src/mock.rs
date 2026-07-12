@@ -121,6 +121,12 @@ fn read_host(stream: UnixStream, tx: &mpsc::Sender<HostEvent>) {
                 HostEvent::Close
             }
             Ok(ToGuest::Ping { nonce }) => HostEvent::Ping(nonce),
+            Ok(ToGuest::KeyRepeat { delay_ms, interval_ms }) => {
+                // Functional evidence the 1.2 negotiation ran: the host only
+                // sends this after our Hello advertised minor >= 2.
+                eprintln!("mock: key repeat: delay {delay_ms} ms, interval {interval_ms} ms");
+                continue;
+            }
             // The point of the mock: prove input arrives, with coordinates.
             Ok(input) => {
                 eprintln!("mock: input: {input:?}");

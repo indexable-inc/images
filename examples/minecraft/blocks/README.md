@@ -1,15 +1,15 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="block placements flow from the Paper producer through a Kafka log into a ClickHouse spatial view; telemetry takes a separate collector path"></p>
+
 # Minecraft Blocks
 
-Watch a single block placement flow from a Minecraft server to a 3D spatial
-query. A player places a block, the placement becomes a durable fact in a log,
-the log materializes into a ClickHouse table ordered by a space-filling curve,
-and a bounding-box query over that table scans only the storage it needs.
-
-This example is a working tour of the data architecture: a producer, one
-durable log, and a view derived from that log. It also shows the contrast that
-the architecture turns on: a block placement is a domain fact and travels the
-log path, while the server's own telemetry travels a separate collector path
-into the same database.
+What happens to a block placement after the click? Here it becomes a durable
+fact: the placement lands in a Kafka log, the log materializes into a
+ClickHouse table ordered by a space-filling curve, and a bounding-box query
+over that table scans only the storage it needs. Three VMs carry the tour
+(`producer`, `log`, `view`), and the fleet also shows the contrast the
+architecture turns on: a block placement is a domain fact and travels the log
+path, while the server's own telemetry travels a separate collector path into
+the same database.
 
 ## Run
 
@@ -19,7 +19,8 @@ nix run .#minecraft-blocks-up
 
 That brings up three VMs: `log` (the Kafka broker), `view` (ClickHouse, the
 OTel collector, and Grafana), and `producer` (the Paper server with the
-block-events plugin). Grafana is on port `3000` through the example's L7 proxy.
+block-events plugin). Grafana is on port `3000` through the example's L7 proxy. The wrapper
+lives on the index root flake: `git clone https://github.com/indexable-inc/index`.
 
 Query the spatial view from inside the view VM:
 

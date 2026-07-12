@@ -1,9 +1,7 @@
-{ ix, ... }:
-let
+{ix, ...}: let
   forwardingSecret = "ix-survival-example-forwarding-secret-change-me";
   tags = ix.minecraft.nbt;
-in
-{
+in {
   services = {
     velocity = {
       enable = true;
@@ -11,10 +9,10 @@ in
       # Velocity renders MiniMessage tags into plain text before answering
       # SLP. Substring matching here proves the proxy is actually the one
       # responding on 25565, not a stray backend or stale image.
-      health.motdContains = [ "ix Survival" ];
+      health.motdContains = ["ix Survival"];
       forwarding.secret = forwardingSecret;
       servers.survival = "127.0.0.1:25566";
-      try = [ "survival" ];
+      try = ["survival"];
     };
 
     geyser = {
@@ -84,7 +82,7 @@ in
         ];
 
         palette = [
-          { Name = tags.string "minecraft:spawner"; }
+          {Name = tags.string "minecraft:spawner";}
         ];
 
         blocks = [
@@ -119,7 +117,7 @@ in
           }
         ];
 
-        entities = [ ];
+        entities = [];
       };
     };
   };

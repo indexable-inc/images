@@ -8,11 +8,16 @@ export interface PaneRecord {
   kind?: string;
   title?: string;
   subtitle?: string;
+  // Optional parent pane id within the same producer, used to nest resources
+  // under the run that created them.
+  parent?: string;
   // Milliseconds since the epoch, stamped once when the pane first appears. Every
   // pane has it; the card renders it as a human age.
   created_at?: number;
   // The one large mutable field for terminal/html/data, interpreted by `kind`.
   body?: string;
+  // terminal-only: plain scrollback above the styled viewport in `body`.
+  scrollback?: string;
   // terminal-only geometry, cursor, and exit state
   rows?: number;
   cols?: number;
@@ -33,6 +38,11 @@ export interface PaneRecord {
   // exec-only: wall-clock the run took, in milliseconds, set when it finishes. The
   // feed shows this instead of an age so a row reads as "how long it took".
   duration_ms?: number;
+  // exec-only: fold group inside the session.
+  topic?: string;
+  // exec-only: 1-based source line currently executing or where an error raised.
+  line?: number;
+  error_line?: number;
   // Inline-trace execution: a JSON-encoded array of `{line, text}` (the hub stores
   // it as canonical text like the data body, so the frontend parses it). Each
   // entry pairs a captured stdout chunk with the 1-based source line that emitted

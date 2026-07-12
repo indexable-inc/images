@@ -11,7 +11,8 @@ defmodule SymphonyElixir.DSL.Schema do
   its owner flows to the UI without a form edit.
   """
 
-  alias SymphonyElixir.DSL.{AST, Parser}
+  alias SymphonyElixir.DSL.AST
+  alias SymphonyElixir.DSL.Parser
   alias SymphonyElixir.Engine.Envelope
   alias SymphonyElixir.IR.Node
 

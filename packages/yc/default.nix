@@ -9,8 +9,7 @@
   # `nix run .#yc.updateScript` resolves; the overlay path leaves it null, so
   # `pkgs.yc` carries no updateScript. Same pattern as claude-code.
   updateScriptWriter ? null,
-}:
-let
+}: let
   # Slug map and pinned hashes live in manifest.json as the single owner; this
   # file only reads them back. Refresh with `nix run .#yc.updateScript` (see the
   # updateScript below). Mirrors the packages/agent/claude-code layout.
@@ -40,12 +39,12 @@ let
   # auto-bump PR. The S3 bucket denies ListBucket, hence the `latest` pointer
   # rather than enumerating versions.
   updateScript =
-    if updateScriptWriter == null then
-      null
+    if updateScriptWriter == null
+    then null
     else
       updateScriptWriter {
         name = "yc-update";
-        runtimeInputs = [ nix ];
+        runtimeInputs = [nix];
         meta.description = "Refresh packages/yc/manifest.json to the latest YC CLI release";
         text = ''
           # nu
@@ -77,35 +76,35 @@ let
         '';
       };
 in
-stdenv.mkDerivation {
-  pname = "yc";
-  inherit version src;
-  dontUnpack = true;
+  stdenv.mkDerivation {
+    pname = "yc";
+    inherit version src;
+    dontUnpack = true;
 
-  # The Linux binaries are dynamically linked against a generic libc; patch their
-  # interpreter to the Nix store. Darwin binaries need no patching.
-  nativeBuildInputs = lib.optional stdenv.hostPlatform.isLinux autoPatchelfHook;
+    # The Linux binaries are dynamically linked against a generic libc; patch their
+    # interpreter to the Nix store. Darwin binaries need no patching.
+    nativeBuildInputs = lib.optional stdenv.hostPlatform.isLinux autoPatchelfHook;
 
-  installPhase = ''
-    # shell
-    runHook preInstall
-    install -Dm755 $src $out/bin/yc
-    runHook postInstall
-  '';
+    installPhase = ''
+      # shell
+      runHook preInstall
+      install -Dm755 $src $out/bin/yc
+      runHook postInstall
+    '';
 
-  passthru = lib.optionalAttrs (updateScript != null) {
-    inherit updateScript;
-  };
+    passthru = lib.optionalAttrs (updateScript != null) {
+      inherit updateScript;
+    };
 
-  meta = {
-    description = "YC CLI: search Bookface and chat with the YC Agent from the terminal";
-    homepage = "https://bookface.ycombinator.com";
-    # License omitted rather than `licenses.unfree` so the per-system flake
-    # package set (which evaluates nixpkgs without `allowUnfree`) can still
-    # `nix run .#yc`. Same posture as packages/agent/claude-code. Distribution terms
-    # are Y Combinator's; this flake only repackages the published binaries.
-    mainProgram = "yc";
-    platforms = builtins.attrNames manifest.platforms;
-    sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
-  };
-}
+    meta = {
+      description = "YC CLI: search Bookface and chat with the YC Agent from the terminal";
+      homepage = "https://bookface.ycombinator.com";
+      # License omitted rather than `licenses.unfree` so the per-system flake
+      # package set (which evaluates nixpkgs without `allowUnfree`) can still
+      # `nix run .#yc`. Same posture as packages/agent/claude-code. Distribution terms
+      # are Y Combinator's; this flake only repackages the published binaries.
+      mainProgram = "yc";
+      platforms = builtins.attrNames manifest.platforms;
+      sourceProvenance = [lib.sourceTypes.binaryNativeCode];
+    };
+  }

@@ -1,0 +1,17 @@
+[package]
+name = "unibind-ex-runtime"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "BEAM-side support for unibind's rustler backend: the shared tokio runtime, async reply plumbing, and demand-driven streams"
+
+[lints]
+workspace = true
+
+[dependencies]
+rustler.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
+unibind-runtime.workspace = true
+
+[dev-dependencies]
+futures.workspace = true

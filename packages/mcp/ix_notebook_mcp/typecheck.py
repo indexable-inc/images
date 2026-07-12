@@ -41,6 +41,8 @@ import tempfile
 from collections.abc import Iterator
 from dataclasses import dataclass
 
+from .config import process_cwd
+
 # A name is stubbed with its real type only for these simple, always-importable
 # builtins; every other value (a module, a helper, an instance of some class) is
 # stubbed as ``Any``. Real types here are what make prior-cell scalars actually
@@ -399,9 +401,11 @@ async def check(code: str, namespace: dict, *, timeout: float = 10.0) -> TypeChe
             # with the kernel's working directory on sys.path: a first-party
             # module sitting next to the notebook (`import mymodule`) resolves at
             # runtime, so it must resolve for the checker too or a valid import
-            # would be flagged unresolved.
+            # would be flagged unresolved. process_cwd (not Path.cwd) because
+            # this runs BEFORE every cell: an unhandled FileNotFoundError from a
+            # deleted cwd here bricked the whole kernel (index#2120).
             "--extra-search-path",
-            str(pathlib.Path.cwd()),
+            str(process_cwd()),
             "--output-format",
             "concise",
             "--no-progress",

@@ -88,81 +88,44 @@ fn test_slice_2d_empty_lines() {
 }
 
 #[test]
-fn test_slice_2d_row_out_of_bounds() {
-    let lines = vec!["line1".to_string(), "line2".to_string()];
+fn test_slice_2d_rejects_invalid_ranges() {
+    let lines = ["line1".to_string(), "line2".to_string()];
+    let cases = [
+        (
+            "row out of bounds",
+            RowRange::new(Some(1), Some(5)),
+            ColRange::new(None, None),
+        ),
+        (
+            "column out of bounds",
+            RowRange::new(None, None),
+            ColRange::new(Some(1), Some(10)),
+        ),
+        (
+            "reversed rows",
+            RowRange::new(Some(2), Some(1)),
+            ColRange::new(None, None),
+        ),
+        (
+            "reversed columns",
+            RowRange::new(None, None),
+            ColRange::new(Some(3), Some(1)),
+        ),
+        (
+            "zero row",
+            RowRange::new(Some(0), Some(1)),
+            ColRange::new(None, None),
+        ),
+        (
+            "zero column",
+            RowRange::new(None, None),
+            ColRange::new(Some(0), Some(2)),
+        ),
+    ];
 
-    let result = slice_2d(
-        &lines,
-        RowRange::new(Some(1), Some(5)),
-        ColRange::new(None, None),
-    );
-
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_slice_2d_col_out_of_bounds() {
-    let lines = vec!["test".to_string()];
-
-    let result = slice_2d(
-        &lines,
-        RowRange::new(None, None),
-        ColRange::new(Some(1), Some(10)),
-    );
-
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_slice_2d_invalid_row_order() {
-    let lines = vec!["line1".to_string(), "line2".to_string()];
-
-    let result = slice_2d(
-        &lines,
-        RowRange::new(Some(2), Some(1)),
-        ColRange::new(None, None),
-    );
-
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_slice_2d_invalid_col_order() {
-    let lines = vec!["test".to_string()];
-
-    let result = slice_2d(
-        &lines,
-        RowRange::new(None, None),
-        ColRange::new(Some(3), Some(1)),
-    );
-
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_slice_2d_zero_row_index() {
-    let lines = vec!["test".to_string()];
-
-    let result = slice_2d(
-        &lines,
-        RowRange::new(Some(0), Some(1)),
-        ColRange::new(None, None),
-    );
-
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_slice_2d_zero_col_index() {
-    let lines = vec!["test".to_string()];
-
-    let result = slice_2d(
-        &lines,
-        RowRange::new(None, None),
-        ColRange::new(Some(0), Some(2)),
-    );
-
-    assert!(result.is_err());
+    for (case, rows, columns) in cases {
+        assert!(slice_2d(&lines, rows, columns).is_err(), "{case}");
+    }
 }
 
 #[test]

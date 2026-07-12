@@ -1,7 +1,9 @@
 defmodule SymphonyElixir.DSL.SchemaTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.DSL.{AST, Parser, Schema}
+  alias SymphonyElixir.DSL.AST
+  alias SymphonyElixir.DSL.Parser
+  alias SymphonyElixir.DSL.Schema
   alias SymphonyElixir.Engine.Envelope
   alias SymphonyElixir.IR.Node
 

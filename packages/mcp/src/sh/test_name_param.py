@@ -1,6 +1,8 @@
-"""Regression tests for sh() name= parameter (ENG-2486).
+"""Regression tests for the kernel runner's name= parameter (ENG-2486).
 
-These tests run standalone without the kernel runtime.
+The public ``sh()`` is retired; the runner is the private ``_exec``, which the
+kernel's own internals (grep/find, worktree) call. These tests run standalone
+without the kernel runtime.
 
 Run with:
     python packages/mcp/src/sh/test_name_param.py
@@ -15,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / "sh"))
 import sh as _sh_module
 
-sh = _sh_module.sh
+sh = _sh_module._exec
 
 
 def run(coro: object) -> object:

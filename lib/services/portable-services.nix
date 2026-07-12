@@ -20,9 +20,12 @@
 # a fully-defaulted spec so they can be golden-tested without evaluating a
 # whole home-manager configuration. The home-manager module is a thin
 # platform-dispatching wrapper around them.
-{ lib, deepMerge }:
-let
-  inherit (lib)
+{
+  lib,
+  deepMerge,
+}: let
+  inherit
+    (lib)
     types
     mkOption
     optionalAttrs
@@ -30,16 +33,15 @@ let
   inherit (deepMerge) rhs;
 
   /**
-    Submodule type for a single portable service.
+  Submodule type for a single portable service.
 
-    The option set is deliberately the *portable subset*: every field maps
-    onto both launchd and systemd. Platform-specific keys go through the
-    `launchd.config` / `systemd.service` escape hatches, which are merged
-    over the generated unit and therefore always win.
+  The option set is deliberately the *portable subset*: every field maps
+  onto both launchd and systemd. Platform-specific keys go through the
+  `launchd.config` / `systemd.service` escape hatches, which are merged
+  over the generated unit and therefore always win.
   */
   serviceSubmodule = types.submodule (
-    { name, ... }:
-    {
+    {name, ...}: {
       options = {
         enable = mkOption {
           type = types.bool;
@@ -70,7 +72,7 @@ let
 
         environment = mkOption {
           type = types.attrsOf types.str;
-          default = { };
+          default = {};
           description = "Environment variables for the process.";
         };
 
@@ -153,7 +155,7 @@ let
           # attrset of plist values, so this is a typed freeform escape hatch
           # rather than `types.attrs` (which loses merge semantics and docs).
           type = types.attrsOf types.anything;
-          default = { };
+          default = {};
           example = {
             ProcessType = "Background";
             Nice = 5;
@@ -170,10 +172,10 @@ let
           # nested attrset (`Unit` / `Service` / `Install`), so this is a typed
           # freeform escape hatch rather than `types.attrs`.
           type = types.attrsOf types.anything;
-          default = { };
+          default = {};
           example = {
             Service.MemoryMax = "512M";
-            Unit.After = [ "network-online.target" ];
+            Unit.After = ["network-online.target"];
           };
           description = ''
             Raw systemd unit sections (`Unit` / `Service` / `Install`),
@@ -186,163 +188,158 @@ let
   );
 
   /**
-    Render a defaulted service spec to a launchd agent's `config` attrset
-    (the plist body home-manager writes for `launchd.agents.<name>.config`).
+  Render a defaulted service spec to a launchd agent's `config` attrset
+  (the plist body home-manager writes for `launchd.agents.<name>.config`).
   */
-  toLaunchdConfig =
-    svc:
-    let
-      keepAlive =
-        if svc.restart == "always" then
-          true
-        else if svc.restart == "on-failure" then
-          { SuccessfulExit = false; }
-        else
-          null;
+  toLaunchdConfig = svc: let
+    keepAlive =
+      if svc.restart == "always"
+      then true
+      else if svc.restart == "on-failure"
+      then {SuccessfulExit = false;}
+      else null;
 
-      generated = {
+    generated =
+      {
         Label = svc.label;
         ProgramArguments = svc.command;
       }
-      // optionalAttrs (svc.environment != { }) { EnvironmentVariables = svc.environment; }
-      // optionalAttrs (svc.workingDirectory != null) { WorkingDirectory = svc.workingDirectory; }
+      // optionalAttrs (svc.environment != {}) {EnvironmentVariables = svc.environment;}
+      // optionalAttrs (svc.workingDirectory != null) {WorkingDirectory = svc.workingDirectory;}
       # RunAtLoad fires an immediate run on load. For an interval service this
       # rides alongside StartInterval (load now, then every interval); the older
       # behavior of suppressing it for interval services forced every poller to
       # re-add RunAtLoad through the escape hatch.
-      // optionalAttrs svc.runAtLoad { RunAtLoad = true; }
-      // optionalAttrs (keepAlive != null) { KeepAlive = keepAlive; }
-      // optionalAttrs (svc.interval != null) { StartInterval = svc.interval; }
-      // optionalAttrs (svc.standardOutPath != null) { StandardOutPath = svc.standardOutPath; }
-      // optionalAttrs (svc.standardErrorPath != null) { StandardErrorPath = svc.standardErrorPath; };
-    in
+      // optionalAttrs svc.runAtLoad {RunAtLoad = true;}
+      // optionalAttrs (keepAlive != null) {KeepAlive = keepAlive;}
+      // optionalAttrs (svc.interval != null) {StartInterval = svc.interval;}
+      // optionalAttrs (svc.standardOutPath != null) {StandardOutPath = svc.standardOutPath;}
+      // optionalAttrs (svc.standardErrorPath != null) {StandardErrorPath = svc.standardErrorPath;};
+  in
     rhs generated svc.launchd.config;
 
   /**
-    Render one argv element to a systemd `ExecStart` token.
+  Render one argv element to a systemd `ExecStart` token.
 
-    systemd does not use a shell, so `lib.escapeShellArgs` is wrong here: its
-    POSIX `'\''` idiom for embedded quotes would be mis-parsed. Tokens made of
-    a conservative safe set pass through unquoted; anything else is
-    double-quoted with `"` and `\` backslash-escaped, which systemd's own
-    parser understands.
+  systemd does not use a shell, so `lib.escapeShellArgs` is wrong here: its
+  POSIX `'\''` idiom for embedded quotes would be mis-parsed. Tokens made of
+  a conservative safe set pass through unquoted; anything else is
+  double-quoted with `"` and `\` backslash-escaped, which systemd's own
+  parser understands.
 
-    Known gap: systemd expands `%`-specifiers even inside quotes, so an argv
-    element containing `%` is not represented faithfully. Pass such commands
-    through the `systemd.service` escape hatch.
+  Known gap: systemd expands `%`-specifiers even inside quotes, so an argv
+  element containing `%` is not represented faithfully. Pass such commands
+  through the `systemd.service` escape hatch.
   */
-  systemdQuoteArg =
-    arg:
-    if builtins.match "[[:alnum:]_./:=@+-]+" arg != null then
-      arg
-    else
-      "\"" + lib.escape [ "\\" "\"" ] arg + "\"";
+  systemdQuoteArg = arg:
+    if builtins.match "[[:alnum:]_./:=@+-]+" arg != null
+    then arg
+    else "\"" + lib.escape ["\\" "\""] arg + "\"";
 
   renderExecStart = command: lib.concatMapStringsSep " " systemdQuoteArg command;
 
   /**
-    Render a defaulted service spec to systemd user units. Returns
-    `{ service; timer; }` where `service` is always a unit attrset
-    (`{ Unit; Service; Install; }`) and `timer` is null unless `interval`
-    is set.
+  Render a defaulted service spec to systemd user units. Returns
+  `{ service; timer; }` where `service` is always a unit attrset
+  (`{ Unit; Service; Install; }`) and `timer` is null unless `interval`
+  is set.
   */
-  toSystemdUnits =
-    svc:
-    let
-      isTimer = svc.interval != null;
+  toSystemdUnits = svc: let
+    isTimer = svc.interval != null;
 
-      generatedService = {
-        Unit = {
-          Description = svc.description;
-        };
-        Service = {
+    generatedService = {
+      Unit = {
+        Description = svc.description;
+      };
+      Service =
+        {
           ExecStart = renderExecStart svc.command;
           Restart = svc.restart;
         }
-        // optionalAttrs (svc.environment != { }) {
+        // optionalAttrs (svc.environment != {}) {
           Environment = lib.mapAttrsToList (key: value: "${key}=${value}") svc.environment;
         }
-        // optionalAttrs (svc.workingDirectory != null) { WorkingDirectory = svc.workingDirectory; }
-        // optionalAttrs isTimer { Type = "oneshot"; }
-        // optionalAttrs (svc.standardOutPath != null) { StandardOutput = "append:${svc.standardOutPath}"; }
+        // optionalAttrs (svc.workingDirectory != null) {WorkingDirectory = svc.workingDirectory;}
+        // optionalAttrs isTimer {Type = "oneshot";}
+        // optionalAttrs (svc.standardOutPath != null) {StandardOutput = "append:${svc.standardOutPath}";}
         // optionalAttrs (svc.standardErrorPath != null) {
           StandardError = "append:${svc.standardErrorPath}";
         };
-        # A timer-driven service is started by its `.timer`, not wanted by a
-        # target directly; a runAtLoad service is wanted by the session.
-        Install = optionalAttrs (svc.runAtLoad && !isTimer) {
-          WantedBy = [ "default.target" ];
-        };
+      # A timer-driven service is started by its `.timer`, not wanted by a
+      # target directly; a runAtLoad service is wanted by the session.
+      Install = optionalAttrs (svc.runAtLoad && !isTimer) {
+        WantedBy = ["default.target"];
       };
-
-      generatedTimer =
-        if isTimer then
-          {
-            Unit = {
-              Description = "Timer for ${svc.description}";
-            };
-            Timer = {
-              OnUnitActiveSec = svc.interval;
-            }
-            // (
-              # runAtLoad => fire ~immediately after the timer activates at login
-              # (portable analogue of launchd RunAtLoad); otherwise wait one full
-              # interval from boot before the first run.
-              if svc.runAtLoad then { OnActiveSec = "1s"; } else { OnBootSec = svc.interval; }
-            );
-            Install = {
-              WantedBy = [ "timers.target" ];
-            };
-          }
-        else
-          null;
-    in
-    {
-      service = rhs generatedService svc.systemd.service;
-      timer = generatedTimer;
     };
+
+    generatedTimer =
+      if isTimer
+      then {
+        Unit = {
+          Description = "Timer for ${svc.description}";
+        };
+        Timer =
+          {
+            OnUnitActiveSec = svc.interval;
+          }
+          // (
+            # runAtLoad => fire ~immediately after the timer activates at login
+            # (portable analogue of launchd RunAtLoad); otherwise wait one full
+            # interval from boot before the first run.
+            if svc.runAtLoad
+            then {OnActiveSec = "1s";}
+            else {OnBootSec = svc.interval;}
+          );
+        Install = {
+          WantedBy = ["timers.target"];
+        };
+      }
+      else null;
+  in {
+    service = rhs generatedService svc.systemd.service;
+    timer = generatedTimer;
+  };
 
   /**
-    home-manager module exposing `services.portable.<name>`.
+  home-manager module exposing `services.portable.<name>`.
 
-    On Darwin it populates `launchd.agents`; on Linux it populates
-    `systemd.user.services` (plus `systemd.user.timers` for interval
-    services). The inactive platform's tree is simply not emitted.
+  On Darwin it populates `launchd.agents`; on Linux it populates
+  `systemd.user.services` (plus `systemd.user.timers` for interval
+  services). The inactive platform's tree is simply not emitted.
   */
-  homeModuleFn =
-    {
-      config,
-      pkgs,
-      ...
-    }:
-    let
-      enabled = lib.filterAttrs (_: svc: svc.enable) config.services.portable;
-      timed = lib.filterAttrs (_: svc: svc.interval != null) enabled;
-    in
-    {
-      options.services.portable = mkOption {
-        type = types.attrsOf serviceSubmodule;
-        default = { };
-        description = ''
-          Portable user services. Each entry renders to a native launchd
-          agent on macOS and native systemd user units on Linux from a
-          single declarative spec.
-        '';
-      };
+  homeModuleFn = {
+    config,
+    pkgs,
+    ...
+  }: let
+    enabled = lib.filterAttrs (_: svc: svc.enable) config.services.portable;
+    timed = lib.filterAttrs (_: svc: svc.interval != null) enabled;
+  in {
+    options.services.portable = mkOption {
+      type = types.attrsOf serviceSubmodule;
+      default = {};
+      description = ''
+        Portable user services. Each entry renders to a native launchd
+        agent on macOS and native systemd user units on Linux from a
+        single declarative spec.
+      '';
+    };
 
-      config = lib.mkMerge [
-        (lib.mkIf (pkgs.stdenv.hostPlatform.isDarwin && enabled != { }) {
-          launchd.agents = lib.mapAttrs (_: svc: {
+    config = lib.mkMerge [
+      (lib.mkIf (pkgs.stdenv.hostPlatform.isDarwin && enabled != {}) {
+        launchd.agents =
+          lib.mapAttrs (_: svc: {
             enable = true;
             config = toLaunchdConfig svc;
-          }) enabled;
-        })
-        (lib.mkIf (pkgs.stdenv.hostPlatform.isLinux && enabled != { }) {
-          systemd.user.services = lib.mapAttrs (_: svc: (toSystemdUnits svc).service) enabled;
-          systemd.user.timers = lib.mapAttrs (_: svc: (toSystemdUnits svc).timer) timed;
-        })
-      ];
-    };
+          })
+          enabled;
+      })
+      (lib.mkIf (pkgs.stdenv.hostPlatform.isLinux && enabled != {}) {
+        systemd.user.services = lib.mapAttrs (_: svc: (toSystemdUnits svc).service) enabled;
+        systemd.user.timers = lib.mapAttrs (_: svc: (toSystemdUnits svc).timer) timed;
+      })
+    ];
+  };
 
   # A stable `key` so the module system collapses duplicate imports into one
   # declaration. Without it, two composed modules that each `imports` this one
@@ -353,10 +350,9 @@ let
   homeModule = {
     _file = "ix.portableServices.homeModule";
     key = "ix.portableServices.homeModule";
-    imports = [ homeModuleFn ];
+    imports = [homeModuleFn];
   };
-in
-{
+in {
   inherit
     serviceSubmodule
     toLaunchdConfig

@@ -9,8 +9,7 @@
 # This is an ordinary NixOS module: `services.*`, `users.*`, and `systemd.*` all
 # work here. Per-VM differences in this example come from the package list in
 # `flake.nix`; share everything else from here.
-{ modulesPath, ... }:
-{
+{modulesPath, ...}: {
   imports = [
     "${modulesPath}/virtualisation/docker-image.nix"
   ];

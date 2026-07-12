@@ -40,6 +40,10 @@ pub struct Pane {
     /// Optional one-line subtitle (args, a status, a URL). Empty hides it.
     #[serde(default)]
     pub subtitle: String,
+    /// Optional parent pane id within the same producer, used to nest resources
+    /// under the run that created them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
     /// The pane body, tagged by `kind` on the wire.
     pub view: View,
 }
@@ -54,6 +58,7 @@ impl Pane {
             id: id.into(),
             title,
             subtitle,
+            parent: None,
             view: View::Terminal(view),
         }
     }
@@ -65,6 +70,7 @@ impl Pane {
             id: id.into(),
             title: title.into(),
             subtitle: String::new(),
+            parent: None,
             view: View::Html(HtmlView { html: html.into() }),
         }
     }
@@ -80,6 +86,7 @@ impl Pane {
             id: id.into(),
             title,
             subtitle: String::new(),
+            parent: None,
             view: View::Exec(view),
         }
     }
@@ -97,6 +104,7 @@ impl Pane {
             id: id.into(),
             title: title.into(),
             subtitle: String::new(),
+            parent: None,
             view: View::Data(DataView {
                 renderer: renderer.into(),
                 data,
@@ -153,6 +161,9 @@ pub struct TerminalView {
     /// encoding per-cell color and attributes. The dashboard parses the SGR
     /// back into styled spans; a plain reader still sees the text.
     pub screen: String,
+    /// Plain scrollback lines that have moved above the visible viewport.
+    #[serde(default)]
+    pub scrollback: String,
     // These fields were added after the first wire shape. `#[serde(default)]`
     // keeps a mixed-version dashboard working: a producer built before this
     // change streams views without them, and the aggregator drops a snapshot
@@ -225,6 +236,15 @@ pub struct ExecView {
     /// shows it instead of an age so a row reads as "how long it took".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+    /// Fold group label inside the producer session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic: Option<String>,
+    /// 1-based source line currently executing while running.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    /// 1-based source line where a failed run raised, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_line: Option<u32>,
     /// Inline-trace execution: each chunk of captured stdout paired with the
     /// 1-based `source` line that emitted it, in emission order, so the view can
     /// render output beside the line that produced it. This is the "inline
@@ -330,6 +350,7 @@ mod tests {
             cols: 80,
             alive: true,
             screen: screen.to_owned(),
+            scrollback: String::new(),
             cursor_row: 0,
             cursor_col: 0,
             cursor_visible: true,
@@ -378,6 +399,9 @@ mod tests {
                         running: false,
                         ok: Some(true),
                         duration_ms: Some(12),
+                        topic: Some("test".to_owned()),
+                        line: None,
+                        error_line: None,
                         trace: Vec::new(),
                     },
                 ),
@@ -409,6 +433,9 @@ mod tests {
                 running: true,
                 ok: None,
                 duration_ms: None,
+                topic: None,
+                line: None,
+                error_line: None,
                 trace: Vec::new(),
             },
         );

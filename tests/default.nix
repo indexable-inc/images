@@ -5,8 +5,7 @@
   ix,
   paths,
   home-manager,
-}:
-let
+}: let
   inherit (nixpkgs) lib;
   inherit (ix) pkgs;
   fs = lib.fileset;
@@ -15,7 +14,27 @@ let
   # shared go-unit vendor hash) live in the sibling pins.json, never inline
   # (repo policy: no hash literals in tracked .nix).
   pins = ix.pins.loadPins ./pins.json;
-  portableServicesTest = import ./portable-services.nix { inherit lib pkgs ix; };
+  portableServicesTest = import ./portable-services.nix {inherit lib pkgs ix;};
+  symphonyHomeModuleTest = import ./symphony-home-module.nix {
+    inherit
+      lib
+      pkgs
+      ix
+      paths
+      ;
+  };
+  # Provenance walker + home module (whence, #2413): asserts the manifest of
+  # a real home-manager eval links deployed paths to their defining sites,
+  # so it takes the home-manager flake input rather than option stubs.
+  provenanceTest = import ./provenance.nix {
+    inherit
+      lib
+      pkgs
+      ix
+      paths
+      home-manager
+      ;
+  };
   # VM boot smoke test for the minecraft-blocks Paper plugin (ENG-2186). Not
   # part of the `eval` aggregate: it boots a qemu VM, so it is its own check
   # (`checks.<system>.minecraft-blocks-vm`).
@@ -27,22 +46,52 @@ let
       paths
       ;
   };
+  # VM boot + protocol smoke test for the Minestom spleef example server. Same
+  # deal: qemu VM, so its own check (`checks.<system>.minestom-spleef-vm`).
+  minestomSpleefVmTest = import ./minestom-spleef-vm.nix {
+    inherit
+      lib
+      pkgs
+      ix
+      paths
+      ;
+  };
   # Public Rust SDK: validates the prebuilt, R2-hosted ix-sdk-wire artifact
   # pins. The old end-to-end link proof needs a matching published rustc
   # dependency closure before it can be a reliable CI gate.
-  sdkRust = import (paths.root + "/packages/sdk/rust/build.nix") { inherit lib pkgs ix; };
+  sdkRust = import (paths.root + "/packages/sdk/rust/build.nix") {inherit lib pkgs ix;};
   # Public Python SDK: strict zuban + ruff ANN gate over the shipped ix_sdk
   # sources (ENG-3131). setuptools-built, so it has no pyChecker knob; the check
   # derivation runs the same strict gates as buildUvApplication's zuban mode.
-  sdkPython = import (paths.root + "/packages/sdk/python/build.nix") { inherit lib pkgs ix; };
+  sdkPython = import (paths.root + "/packages/sdk/python/build.nix") {inherit lib pkgs ix;};
   packageRegistry = import (paths.packagesRoot + "/registry.nix") {
     inherit lib;
     root = paths.packagesRoot;
     inherit (ix.lists) findDuplicates;
   };
-  missingPackageMetadata = map (
-    dir: lib.removePrefix "${builtins.toString paths.packagesRoot}/" (builtins.toString dir)
-  ) packageRegistry.packageDirsWithoutMetadata;
+  missingPackageMetadata =
+    map (
+      dir: lib.removePrefix "${builtins.toString paths.packagesRoot}/" (builtins.toString dir)
+    )
+    packageRegistry.packageDirsWithoutMetadata;
+  securityRootArgs = {
+    attr = "packages.${pkgs.stdenv.hostPlatform.system}.hello";
+    name = "hello";
+    class = "distributed-cli";
+    owner = "indexable-inc/index";
+    environment = "none";
+    exposure = "local";
+    criticality = "low";
+    slaHours = 168;
+  };
+  securityRoot = ix.securityRoots.mkRoot securityRootArgs;
+  securityRootJson = builtins.fromJSON (
+    builtins.unsafeDiscardStringContext (builtins.toJSON securityRoot)
+  );
+  invalidSecurityRootClass =
+    builtins.tryEval (ix.securityRoots.mkRoot (securityRootArgs // {class = "package";})).class;
+  invalidSecurityRootSla =
+    builtins.tryEval (ix.securityRoots.mkRoot (securityRootArgs // {slaHours = 0;})).slaHours;
   fleetWrapperReadmes = [
     "hermes/agent"
     "hermes/api-server"
@@ -66,20 +115,21 @@ let
   defaultMinecraftVersion = versions.default;
   defaultMinecraftModule = versions.${defaultMinecraftVersion};
 
-  minecraftModule =
-    { ix, lib, ... }:
-    let
-      commonCatalog = ix.artifacts.minecraft.modCatalogs.common;
-    in
-    {
-      ix.image.name = "minecraft";
+  minecraftModule = {
+    ix,
+    lib,
+    ...
+  }: let
+    commonCatalog = ix.artifacts.minecraft.modCatalogs.common;
+  in {
+    ix.image.name = "minecraft";
 
-      services.minecraft = {
-        enable = true;
-        properties.motd = "ix-powered Minecraft";
-        mods = lib.genAttrs (lib.attrNames commonCatalog) (_: { });
-      };
+    services.minecraft = {
+      enable = true;
+      properties.motd = "ix-powered Minecraft";
+      mods = lib.genAttrs (lib.attrNames commonCatalog) (_: {});
     };
+  };
 
   minecraftBedrockModule = _: {
     ix.image.name = "minecraft-bedrock";
@@ -93,38 +143,36 @@ let
     };
   };
 
-  remoteDesktopImageModule =
-    { pkgs, ... }:
-    {
-      ix.image.name = "ix-remote-desktop";
+  remoteDesktopImageModule = {pkgs, ...}: {
+    ix.image.name = "ix-remote-desktop";
 
-      environment.systemPackages = [
-        pkgs.xterm
-        pkgs.firefox
-      ];
+    environment.systemPackages = [
+      pkgs.xterm
+      pkgs.firefox
+    ];
 
-      services.remote-desktop = {
-        enable = true;
-        openFirewall = true;
-        allowUnauthenticated = true;
-      };
+    services.remote-desktop = {
+      enable = true;
+      openFirewall = true;
+      allowUnauthenticated = true;
     };
+  };
 
   rustToolchainFile = lib.importTOML (paths.root + "/rust-toolchain.toml");
   rustPinnedNightlyDate = lib.removePrefix "nightly-" rustToolchainFile.toolchain.channel;
 
   # Thin wrapper to keep call sites as plain lists; delegates to ix.evalImageConfig
   # so tests exercise the same evaluation path as production image builds.
-  evalConfig = modules: ix.evalImageConfig { inherit modules; };
+  evalConfig = modules: ix.evalImageConfig {inherit modules;};
   # The portable fleet modules (services.ix-ray / services.ix-spark) take the
   # index lib as `indexLib` (not `ix`, which a host binds to its own specialArg).
   # In index's own eval the `ix` specialArg already IS the index lib, so re-expose
   # it under that name for those modules.
-  withIndexLib = { ix, ... }: { _module.args.indexLib = ix; };
+  withIndexLib = {ix, ...}: {_module.args.indexLib = ix;};
   plainPkgs = import nixpkgs {
     inherit (pkgs.stdenv.hostPlatform) system;
-    config = { };
-    overlays = [ ];
+    config = {};
+    overlays = [];
   };
   # Evaluates the JVM profile against a PLAIN nixpkgs package set (no repo
   # overlay) to prove it resolves its JDK from stock nixpkgs. `ix` is supplied as
@@ -143,39 +191,37 @@ let
       }
     ];
   };
-  failedAssertionsFor =
-    modules:
-    let
-      config = evalConfig modules;
-    in
+  failedAssertionsFor = modules: let
+    config = evalConfig modules;
+  in
     builtins.filter (assertion: !assertion.assertion) config.assertions;
   samePorts = left: right: lib.sort (a: b: a < b) left == lib.sort (a: b: a < b) right;
   # ix guest sidecars are opened by the shared platform base config.
-  baseFirewallTcpPorts = [ 5001 ];
-  baseFirewallUdpPorts = [ 8443 ];
-  sampleCodexMcpEntries = ix.mcp.toCodexEntries (
-    ix.mcp.defaultServers {
-      indexCommand = "/bin/ix-mcp";
-    }
-  );
-  sampleClaudeMcpServers = ix.mcp.toClaudeJson (
-    ix.mcp.defaultServers {
-      indexCommand = "/bin/ix-mcp";
-    }
-  );
-  sampleCodexMcpEntriesWithoutIndex = ix.mcp.toCodexEntries (ix.mcp.defaultServers { });
+  baseFirewallTcpPorts = [5001];
+  baseFirewallUdpPorts = [8443];
+  googleOauthEnvVars = [
+    "GOOGLE_OAUTH_CLIENT_ID"
+    "GOOGLE_OAUTH_CLIENT_SECRET"
+  ];
+  sampleMcpServers = ix.mcp.defaultServers {
+    indexCommand = "/bin/ix-mcp";
+  };
+  sampleCodexMcpEntries = ix.mcp.toCodexEntries sampleMcpServers;
+  sampleClaudeMcpServers = ix.mcp.toClaudeJson sampleMcpServers;
+  sampleCodexMcpEntriesWithoutIndex = ix.mcp.toCodexEntries (ix.mcp.defaultServers {});
   sampleCodexMcpEntry = key: lib.findFirst (entry: entry.key == key) null sampleCodexMcpEntries;
-  sampleCodexMcpEntryWithoutIndex =
-    key: lib.findFirst (entry: entry.key == key) null sampleCodexMcpEntriesWithoutIndex;
-  agentCommon = import (paths.packagesRoot + "/agent/common.nix") { inherit lib ix repoPackages; };
+  sampleCodexMcpEntryWithoutIndex = key: lib.findFirst (entry: entry.key == key) null sampleCodexMcpEntriesWithoutIndex;
+  agentCommon = import (paths.packagesRoot + "/agent/common.nix") {inherit lib ix repoPackages;};
   sampleClaudeSystemPrompt = agentCommon.systemPromptFor "claude";
   sampleCodexSystemPrompt = agentCommon.systemPromptFor "codex";
+  sampleClaudeContextPrompt = agentCommon.contextFor "claude";
+  sampleCodexContextPrompt = agentCommon.contextFor "codex";
   homeAgentPkgs = import nixpkgs {
     inherit (pkgs.stdenv.hostPlatform) system;
     config = {
       allowUnfreePredicate = pkg: lib.getName pkg == "claude-code";
     };
-    overlays = [ ix.overlay ];
+    overlays = [ix.overlay];
   };
   homeAgentIndexPackages = _: ix.packageSetFor homeAgentPkgs;
   homeAgentConfig =
@@ -184,9 +230,11 @@ let
       modules = [
         (import (paths.packagesRoot + "/agent/home-manager/claude-code.nix") {
           indexPackages = homeAgentIndexPackages;
+          promptModule = paths.packagesRoot + "/agent/prompt";
         })
         (import (paths.packagesRoot + "/agent/home-manager/codex.nix") {
           indexPackages = homeAgentIndexPackages;
+          promptModule = paths.packagesRoot + "/agent/prompt";
         })
         {
           home = {
@@ -196,500 +244,457 @@ let
           };
           programs.claude-code = {
             enable = true;
-            systemPrompt.omitRules = [ "reportToPlaybook" ];
+            systemPrompt.omitRules = ["reportToPlaybook"];
+            houseContext.enable = true;
             personalStartupContext = true;
           };
           programs.codex = {
             enable = true;
             configDir = ".config/codex-test";
             defaults.agents.max_depth = 4;
-            systemPrompt.omitRules = [ "reportToPlaybook" ];
+            systemPrompt.omitRules = ["reportToPlaybook"];
           };
         }
       ];
     }).config;
 
-  minecraft =
-    let
+  minecraft = let
+    config = evalConfig [
+      minecraftModule
+      defaultMinecraftModule
+    ];
+  in {
+    inherit config;
+    cfg = config.services.minecraft;
+    service = let
+      unit = config.systemd.services.minecraft;
+    in {
+      inherit unit;
+      config = unit.serviceConfig;
+    };
+
+    paper = let
       config = evalConfig [
         minecraftModule
-        defaultMinecraftModule
+        versions."1.21.11-paper"
       ];
-    in
-    {
+    in {
       inherit config;
       cfg = config.services.minecraft;
-      service =
-        let
-          unit = config.systemd.services.minecraft;
-        in
-        {
-          inherit unit;
-          config = unit.serviceConfig;
-        };
-
-      paper =
-        let
-          config = evalConfig [
-            minecraftModule
-            versions."1.21.11-paper"
-          ];
-        in
-        {
-          inherit config;
-          cfg = config.services.minecraft;
-          service =
-            let
-              unit = config.systemd.services.minecraft;
-            in
-            {
-              inherit unit;
-              config = unit.serviceConfig;
-            };
-          managed = {
-            serverFiles = config.environment.etc."minecraft/managed-server-files".source;
-            dropins = config.environment.etc."minecraft/managed-dropins".source;
-          };
-        };
-
-      rcon =
-        let
-          config = evalConfig [
-            minecraftModule
-            defaultMinecraftModule
-            {
-              services.minecraft.rcon.enable = true;
-            }
-          ];
-        in
-        {
-          inherit config;
-          cfg = config.services.minecraft;
-          managed.serverFiles = config.environment.etc."minecraft/managed-server-files".source;
-
-          openFirewall =
-            let
-              config = evalConfig [
-                minecraftModule
-                defaultMinecraftModule
-                {
-                  services.minecraft.rcon = {
-                    enable = true;
-                    port = 25576;
-                    openFirewall = true;
-                  };
-                }
-              ];
-            in
-            {
-              inherit config;
-              cfg = config.services.minecraft;
-            };
-        };
-
-      worldBorder =
-        let
-          config = evalConfig [
-            minecraftModule
-            defaultMinecraftModule
-            {
-              services.minecraft.worldBorder = {
-                enable = true;
-                center = {
-                  x = 100;
-                  z = -50;
-                };
-                diameter = 8000;
-              };
-            }
-          ];
-          service = config.systemd.services.minecraft-world-border;
-        in
-        {
-          inherit config service;
-          cfg = config.services.minecraft;
-        };
-
-      paperPlugins =
-        let
-          config = evalConfig [
-            minecraftModule
-            versions."26.1.2-paper"
-            {
-              services.minecraft.plugins = {
-                pvpindex-factions = { };
-                simple-voice-chat.port = 24455;
-                terraformgenerator.worlds = [
-                  "factions"
-                  "factions_nether"
-                  "factions_the_end"
-                ];
-                worldedit = { };
-              };
-              services.minecraft.properties.level-name = "factions";
-            }
-          ];
-        in
-        {
-          inherit config;
-          cfg = config.services.minecraft;
-        };
-
-      nestedProperties =
-        let
-          config = evalConfig [
-            minecraftModule
-            defaultMinecraftModule
-            {
-              services.minecraft.properties = {
-                query = {
-                  port = 25565;
-                };
-                rcon = {
-                  port = 25575;
-                };
-              };
-            }
-          ];
-        in
-        {
-          inherit config;
-          managed.serverFiles = config.environment.etc."minecraft/managed-server-files".source;
-        };
-
-      access =
-        let
-          json = pkgs.formats.json { };
-          config = evalConfig [
-            minecraftModule
-            defaultMinecraftModule
-            {
-              services.minecraft = {
-                whitelist.enable = true;
-                players = {
-                  Alice = {
-                    uuid = "00000000-0000-0000-0000-000000000001";
-                    whitelist = true;
-                    operator = {
-                      enable = true;
-                      level = 3;
-                      bypassesPlayerLimit = true;
-                    };
-                  };
-
-                  Bob = {
-                    uuid = "00000000-0000-0000-0000-000000000002";
-                    whitelist = true;
-                  };
-                };
-              };
-            }
-          ];
-        in
-        {
-          inherit config;
-          cfg = config.services.minecraft;
-          fixtures = {
-            whitelist = {
-              current = json.generate "minecraft-whitelist-current.json" [
-                {
-                  uuid = "00000000-0000-0000-0000-000000000001";
-                  name = "OldAlice";
-                }
-                {
-                  uuid = "00000000-0000-0000-0000-000000000003";
-                  name = "Manual";
-                }
-                {
-                  uuid = "00000000-0000-0000-0000-000000000004";
-                  name = "Removed";
-                }
-              ];
-
-              previous = json.generate "minecraft-whitelist-previous.json" [
-                {
-                  uuid = "00000000-0000-0000-0000-000000000001";
-                  name = "OldAlice";
-                }
-                {
-                  uuid = "00000000-0000-0000-0000-000000000004";
-                  name = "Removed";
-                }
-              ];
-            };
-
-            operators = {
-              current = json.generate "minecraft-operators-current.json" [
-                {
-                  uuid = "00000000-0000-0000-0000-000000000001";
-                  name = "OldAlice";
-                  level = 1;
-                  bypassesPlayerLimit = false;
-                }
-                {
-                  uuid = "00000000-0000-0000-0000-000000000005";
-                  name = "ManualOp";
-                  level = 4;
-                  bypassesPlayerLimit = false;
-                }
-                {
-                  uuid = "00000000-0000-0000-0000-000000000006";
-                  name = "RemovedOp";
-                  level = 4;
-                  bypassesPlayerLimit = false;
-                }
-              ];
-
-              previous = json.generate "minecraft-operators-previous.json" [
-                {
-                  uuid = "00000000-0000-0000-0000-000000000001";
-                  name = "OldAlice";
-                  level = 1;
-                  bypassesPlayerLimit = false;
-                }
-                {
-                  uuid = "00000000-0000-0000-0000-000000000006";
-                  name = "RemovedOp";
-                  level = 4;
-                  bypassesPlayerLimit = false;
-                }
-              ];
-            };
-          };
-          service =
-            let
-              unit = config.systemd.services.minecraft;
-            in
-            {
-              inherit unit;
-              config = unit.serviceConfig;
-            };
-          managed = {
-            access = config.environment.etc."minecraft/managed-access".source;
-            serverFiles = config.environment.etc."minecraft/managed-server-files".source;
-          };
-          syncManaged = ix.mkMinecraftSyncManaged {
-            inherit pkgs;
-            inherit (config.services.minecraft) dropinDir;
-            dataDir = "/build/minecraft-access-data";
-            managedRoot = "/build/minecraft-managed-root";
-            plugmanReloadEnabled = false;
-            rconEnabled = false;
-            ignoredPlugins = [ ];
-            datapackWorlds = [ ];
-            rconPort = config.services.minecraft.rcon.port;
-            rconPasswordFile = "/build/minecraft-access-data/.ix-rcon-password";
-            rconBroadcastToOps = false;
-          };
-        };
-
-      nbt =
-        let
-          tags = ix.minecraft.nbt;
-          config = evalConfig [
-            minecraftModule
-            defaultMinecraftModule
-            {
-              services.minecraft = {
-                serverFiles = {
-                  "generated/example.snbt" = tags.compound {
-                    DataVersion = tags.int 4325;
-                    Enabled = tags.bool true;
-                    Health = tags.short 20;
-                    Angle = tags.float 0.5;
-                    Precise = tags.double 12.25;
-                    Flags = tags.byteArray [
-                      1
-                      0
-                      (-1)
-                    ];
-                    Spawn = tags.compound {
-                      Dimension = tags.string "minecraft:overworld";
-                      Pos = tags.list [
-                        (tags.double 1.5)
-                        (tags.double 65.25)
-                        (tags.double (-30.5))
-                      ];
-                    };
-                  };
-
-                  "generated/example.nbt" = tags.root "ix" (
-                    tags.compound {
-                      Name = tags.string "binary";
-                      Values = tags.intArray [
-                        1
-                        2
-                        3
-                      ];
-                    }
-                  );
-
-                  "generated/example.nbt.gz" = tags.compound {
-                    Name = tags.string "compressed";
-                  };
-                };
-
-                configFiles."generated/client.snbt" = tags.compound {
-                  Side = tags.string "config";
-                };
-              };
-            }
-          ];
-        in
-        {
-          inherit config;
-          cfg = config.services.minecraft;
-          managed = {
-            config = config.environment.etc."minecraft/managed-config".source;
-            serverFiles = config.environment.etc."minecraft/managed-server-files".source;
-          };
-        };
-
-      datapacks =
-        let
-          config = evalConfig [
-            minecraftModule
-            defaultMinecraftModule
-            {
-              services.minecraft = {
-                properties.level-name = "My World";
-                datapacks."max-height".dimensionTypes.overworld = {
-                  min_y = -2032;
-                  height = 4064;
-                  logical_height = 4064;
-                };
-              };
-            }
-          ];
-        in
-        {
-          inherit config;
-          cfg = config.services.minecraft;
-          service =
-            let
-              unit = config.systemd.services.minecraft;
-            in
-            {
-              inherit unit;
-              config = unit.serviceConfig;
-            };
-          managed.datapacks = config.environment.etc."minecraft/managed-datapacks".source;
-          syncManaged = ix.mkMinecraftSyncManaged {
-            inherit pkgs;
-            inherit (config.services.minecraft) dropinDir;
-            dataDir = "/build/minecraft-datapack-data";
-            managedRoot = "/build/minecraft-datapack-managed-root";
-            plugmanReloadEnabled = false;
-            rconEnabled = false;
-            ignoredPlugins = [ ];
-            datapackWorlds = config.services.minecraft.datapacks."max-height".worlds;
-            rconPort = config.services.minecraft.rcon.port;
-            rconPasswordFile = "/build/minecraft-datapack-data/.ix-rcon-password";
-            rconBroadcastToOps = false;
-          };
-        };
-    };
-
-  bedrock =
-    let
-      config = evalConfig [ minecraftBedrockModule ];
-    in
-    {
-      inherit config;
-      cfg = config.services.minecraft-bedrock;
-      service =
-        let
-          unit = config.systemd.services.minecraft-bedrock;
-        in
-        {
-          inherit unit;
-          config = unit.serviceConfig;
-        };
-    };
-
-  remoteDesktop =
-    let
-      config = evalConfig [ remoteDesktopImageModule ];
-    in
-    {
-      inherit config;
-      cfg = config.services.remote-desktop;
-      service =
-        let
-          unit = config.systemd.services.remote-desktop;
-        in
-        {
-          inherit unit;
-          config = unit.serviceConfig;
-        };
-    };
-
-  remoteDesktopModuleDefault =
-    let
-      config = evalConfig [
-        {
-          services.remote-desktop.enable = true;
-        }
-      ];
-    in
-    {
-      inherit config;
-      cfg = config.services.remote-desktop;
-    };
-
-  resourceMonitor =
-    let
-      config = evalConfig [
-        {
-          services.resource-monitor = {
-            enable = true;
-            runtimeDirectory = "/run/ix/resource-monitor";
-          };
-        }
-      ];
-      unit = config.systemd.services.resource-monitor;
-    in
-    {
-      inherit config;
-      cfg = config.services.resource-monitor;
-      service = {
+      service = let
+        unit = config.systemd.services.minecraft;
+      in {
         inherit unit;
         config = unit.serviceConfig;
       };
+      managed = {
+        serverFiles = config.environment.etc."minecraft/managed-server-files".source;
+        dropins = config.environment.etc."minecraft/managed-dropins".source;
+      };
     };
 
-  developmentBase =
-    let
-      config = evalConfig [ (paths.root + "/lib/dev/base") ];
-    in
-    {
+    rcon = let
+      config = evalConfig [
+        minecraftModule
+        defaultMinecraftModule
+        {
+          services.minecraft.rcon.enable = true;
+        }
+      ];
+    in {
       inherit config;
-      # Outer pkgs has no allowUnfree, so forcing pkgs.claude-code here would
-      # throw at eval; use lib.getName over the rendered systemPackages list.
-      packageNames = map lib.getName config.environment.systemPackages;
+      cfg = config.services.minecraft;
+      managed.serverFiles = config.environment.etc."minecraft/managed-server-files".source;
+
+      openFirewall = let
+        config = evalConfig [
+          minecraftModule
+          defaultMinecraftModule
+          {
+            services.minecraft.rcon = {
+              enable = true;
+              port = 25576;
+              openFirewall = true;
+            };
+          }
+        ];
+      in {
+        inherit config;
+        cfg = config.services.minecraft;
+      };
     };
+
+    worldBorder = let
+      config = evalConfig [
+        minecraftModule
+        defaultMinecraftModule
+        {
+          services.minecraft.worldBorder = {
+            enable = true;
+            center = {
+              x = 100;
+              z = -50;
+            };
+            diameter = 8000;
+          };
+        }
+      ];
+      service = config.systemd.services.minecraft-world-border;
+    in {
+      inherit config service;
+      cfg = config.services.minecraft;
+    };
+
+    paperPlugins = let
+      config = evalConfig [
+        minecraftModule
+        versions."26.1.2-paper"
+        {
+          services.minecraft.plugins = {
+            pvpindex-factions = {};
+            simple-voice-chat.port = 24455;
+            terraformgenerator.worlds = [
+              "factions"
+              "factions_nether"
+              "factions_the_end"
+            ];
+            worldedit = {};
+          };
+          services.minecraft.properties.level-name = "factions";
+        }
+      ];
+    in {
+      inherit config;
+      cfg = config.services.minecraft;
+    };
+
+    nestedProperties = let
+      config = evalConfig [
+        minecraftModule
+        defaultMinecraftModule
+        {
+          services.minecraft.properties = {
+            query = {
+              port = 25565;
+            };
+            rcon = {
+              port = 25575;
+            };
+          };
+        }
+      ];
+    in {
+      inherit config;
+      managed.serverFiles = config.environment.etc."minecraft/managed-server-files".source;
+    };
+
+    access = let
+      json = pkgs.formats.json {};
+      config = evalConfig [
+        minecraftModule
+        defaultMinecraftModule
+        {
+          services.minecraft = {
+            whitelist.enable = true;
+            players = {
+              Alice = {
+                uuid = "00000000-0000-0000-0000-000000000001";
+                whitelist = true;
+                operator = {
+                  enable = true;
+                  level = 3;
+                  bypassesPlayerLimit = true;
+                };
+              };
+
+              Bob = {
+                uuid = "00000000-0000-0000-0000-000000000002";
+                whitelist = true;
+              };
+            };
+          };
+        }
+      ];
+    in {
+      inherit config;
+      cfg = config.services.minecraft;
+      fixtures = {
+        whitelist = {
+          current = json.generate "minecraft-whitelist-current.json" [
+            {
+              uuid = "00000000-0000-0000-0000-000000000001";
+              name = "OldAlice";
+            }
+            {
+              uuid = "00000000-0000-0000-0000-000000000003";
+              name = "Manual";
+            }
+            {
+              uuid = "00000000-0000-0000-0000-000000000004";
+              name = "Removed";
+            }
+          ];
+
+          previous = json.generate "minecraft-whitelist-previous.json" [
+            {
+              uuid = "00000000-0000-0000-0000-000000000001";
+              name = "OldAlice";
+            }
+            {
+              uuid = "00000000-0000-0000-0000-000000000004";
+              name = "Removed";
+            }
+          ];
+        };
+
+        operators = {
+          current = json.generate "minecraft-operators-current.json" [
+            {
+              uuid = "00000000-0000-0000-0000-000000000001";
+              name = "OldAlice";
+              level = 1;
+              bypassesPlayerLimit = false;
+            }
+            {
+              uuid = "00000000-0000-0000-0000-000000000005";
+              name = "ManualOp";
+              level = 4;
+              bypassesPlayerLimit = false;
+            }
+            {
+              uuid = "00000000-0000-0000-0000-000000000006";
+              name = "RemovedOp";
+              level = 4;
+              bypassesPlayerLimit = false;
+            }
+          ];
+
+          previous = json.generate "minecraft-operators-previous.json" [
+            {
+              uuid = "00000000-0000-0000-0000-000000000001";
+              name = "OldAlice";
+              level = 1;
+              bypassesPlayerLimit = false;
+            }
+            {
+              uuid = "00000000-0000-0000-0000-000000000006";
+              name = "RemovedOp";
+              level = 4;
+              bypassesPlayerLimit = false;
+            }
+          ];
+        };
+      };
+      service = let
+        unit = config.systemd.services.minecraft;
+      in {
+        inherit unit;
+        config = unit.serviceConfig;
+      };
+      managed = {
+        access = config.environment.etc."minecraft/managed-access".source;
+        serverFiles = config.environment.etc."minecraft/managed-server-files".source;
+      };
+      syncManaged = ix.mkMinecraftSyncManaged {
+        inherit pkgs;
+        inherit (config.services.minecraft) dropinDir;
+        dataDir = "/build/minecraft-access-data";
+        managedRoot = "/build/minecraft-managed-root";
+        plugmanReloadEnabled = false;
+        rconEnabled = false;
+        ignoredPlugins = [];
+        datapackWorlds = [];
+        rconPort = config.services.minecraft.rcon.port;
+        rconPasswordFile = "/build/minecraft-access-data/.ix-rcon-password";
+        rconBroadcastToOps = false;
+      };
+    };
+
+    nbt = let
+      tags = ix.minecraft.nbt;
+      config = evalConfig [
+        minecraftModule
+        defaultMinecraftModule
+        {
+          services.minecraft = {
+            serverFiles = {
+              "generated/example.snbt" = tags.compound {
+                DataVersion = tags.int 4325;
+                Enabled = tags.bool true;
+                Health = tags.short 20;
+                Angle = tags.float 0.5;
+                Precise = tags.double 12.25;
+                Flags = tags.byteArray [
+                  1
+                  0
+                  (-1)
+                ];
+                Spawn = tags.compound {
+                  Dimension = tags.string "minecraft:overworld";
+                  Pos = tags.list [
+                    (tags.double 1.5)
+                    (tags.double 65.25)
+                    (tags.double (-30.5))
+                  ];
+                };
+              };
+
+              "generated/example.nbt" = tags.root "ix" (
+                tags.compound {
+                  Name = tags.string "binary";
+                  Values = tags.intArray [
+                    1
+                    2
+                    3
+                  ];
+                }
+              );
+
+              "generated/example.nbt.gz" = tags.compound {
+                Name = tags.string "compressed";
+              };
+            };
+
+            configFiles."generated/client.snbt" = tags.compound {
+              Side = tags.string "config";
+            };
+          };
+        }
+      ];
+    in {
+      inherit config;
+      cfg = config.services.minecraft;
+      managed = {
+        config = config.environment.etc."minecraft/managed-config".source;
+        serverFiles = config.environment.etc."minecraft/managed-server-files".source;
+      };
+    };
+
+    datapacks = let
+      config = evalConfig [
+        minecraftModule
+        defaultMinecraftModule
+        {
+          services.minecraft = {
+            properties.level-name = "My World";
+            datapacks.max-height.dimensionTypes.overworld = {
+              min_y = -2032;
+              height = 4064;
+              logical_height = 4064;
+            };
+          };
+        }
+      ];
+    in {
+      inherit config;
+      cfg = config.services.minecraft;
+      service = let
+        unit = config.systemd.services.minecraft;
+      in {
+        inherit unit;
+        config = unit.serviceConfig;
+      };
+      managed.datapacks = config.environment.etc."minecraft/managed-datapacks".source;
+      syncManaged = ix.mkMinecraftSyncManaged {
+        inherit pkgs;
+        inherit (config.services.minecraft) dropinDir;
+        dataDir = "/build/minecraft-datapack-data";
+        managedRoot = "/build/minecraft-datapack-managed-root";
+        plugmanReloadEnabled = false;
+        rconEnabled = false;
+        ignoredPlugins = [];
+        datapackWorlds = config.services.minecraft.datapacks.max-height.worlds;
+        rconPort = config.services.minecraft.rcon.port;
+        rconPasswordFile = "/build/minecraft-datapack-data/.ix-rcon-password";
+        rconBroadcastToOps = false;
+      };
+    };
+  };
+
+  bedrock = let
+    config = evalConfig [minecraftBedrockModule];
+  in {
+    inherit config;
+    cfg = config.services.minecraft-bedrock;
+    service = let
+      unit = config.systemd.services.minecraft-bedrock;
+    in {
+      inherit unit;
+      config = unit.serviceConfig;
+    };
+  };
+
+  remoteDesktop = let
+    config = evalConfig [remoteDesktopImageModule];
+  in {
+    inherit config;
+    cfg = config.services.remote-desktop;
+    service = let
+      unit = config.systemd.services.remote-desktop;
+    in {
+      inherit unit;
+      config = unit.serviceConfig;
+    };
+  };
+
+  remoteDesktopModuleDefault = let
+    config = evalConfig [
+      {
+        services.remote-desktop.enable = true;
+      }
+    ];
+  in {
+    inherit config;
+    cfg = config.services.remote-desktop;
+  };
+
+  resourceMonitor = let
+    config = evalConfig [
+      {
+        services.resource-monitor = {
+          enable = true;
+          runtimeDirectory = "/run/ix/resource-monitor";
+        };
+      }
+    ];
+    unit = config.systemd.services.resource-monitor;
+  in {
+    inherit config;
+    cfg = config.services.resource-monitor;
+    service = {
+      inherit unit;
+      config = unit.serviceConfig;
+    };
+  };
+
+  developmentBase = let
+    config = evalConfig [(paths.root + "/lib/dev/base")];
+  in {
+    inherit config;
+    # Outer pkgs has no allowUnfree, so forcing pkgs.claude-code here would
+    # throw at eval; use lib.getName over the rendered systemPackages list.
+    packageNames = map lib.getName config.environment.systemPackages;
+  };
 
   # The symphony control-plane module (modules/services/symphony) evaluated
   # standalone, the way ix's host modules consume it. `package` only needs a
   # /bin path shape at eval, so hello stands in for the launcher.
-  symphonyService =
-    let
-      config = evalConfig [
-        {
-          ix.image.name = "test/symphony-module";
-          services.symphony = {
-            enable = true;
-            package = pkgs.hello;
-            primaryRepo = "/srv/checkouts/index";
-            environmentFile = "/run/secrets/symphony.env";
-          };
-        }
-      ];
-    in
-    {
-      inherit config;
-      unit = config.systemd.services.symphony;
-    };
+  symphonyService = let
+    config = evalConfig [
+      {
+        ix.image.name = "test/symphony-module";
+        services.symphony = {
+          enable = true;
+          package = pkgs.hello;
+          primaryRepo = "/srv/checkouts/index";
+          environmentFile = "/run/secrets/symphony.env";
+        };
+      }
+    ];
+  in {
+    inherit config;
+    unit = config.systemd.services.symphony;
+  };
 
   pythonAppClosureProbe = ix.writePythonApplication pkgs {
     name = "python-app-closure-probe";
@@ -710,7 +715,7 @@ let
 
   bashApplicationProbe = ix.writeBashApplication pkgs {
     name = "bash-application-probe";
-    runtimeInputs = [ pkgs.hello ];
+    runtimeInputs = [pkgs.hello];
     text = ''
       hello
     '';
@@ -729,7 +734,7 @@ let
     pname = "zig-app-fixture";
     version = "0.1.0";
     src = zigAppFixture;
-    zig = ix.languages.zig.toolchain pkgs { version = "0.14"; };
+    zig = ix.languages.zig.toolchain pkgs {version = "0.14";};
     testSteps = {
       lib = "test-lib";
       exe = "test-exe";
@@ -749,7 +754,7 @@ let
     pname = "zig-deps-fixture";
     version = "0.1.0";
     src = zigDepsFixture;
-    zig = ix.languages.zig.toolchain pkgs { version = "0.14"; };
+    zig = ix.languages.zig.toolchain pkgs {version = "0.14";};
     zigDepsHash = "sha256-2eURmY4iF5iG5CdYiI7cKbrT3ymqb9UFUxO22LmsZ9s=";
   };
 
@@ -772,7 +777,7 @@ let
       "test"
       "bench"
     ];
-    packageTestInputs.cargo-unit-hello = [ pkgs.hello ];
+    packageTestInputs.cargo-unit-hello = [pkgs.hello];
     packageTestEnv.cargo-unit-hello.CARGO_UNIT_FIXTURE_ENV = "ok";
     # Drive the packageBuildEnv -> build.rs -> rustc-env path: the build script
     # reads CARGO_UNIT_BUILD_ENV and re-exposes it; the fixture test compares the
@@ -780,7 +785,7 @@ let
     packageBuildEnv.cargo-unit-hello.CARGO_UNIT_BUILD_ENV = "build-ok";
     packageTestEnv.cargo-unit-hello.CARGO_UNIT_BUILD_ENV_EXPECTED = "build-ok";
     cargoTargets = [
-      [ "--workspace" ]
+      ["--workspace"]
       [
         "--workspace"
         "--tests"
@@ -801,13 +806,13 @@ let
   cargoUnitSubsetWorkspace = ix.cargoUnit.buildWorkspace {
     src = cargoUnitFixture;
     workspaceRoot = ./fixtures/cargo-unit-hello;
-    packageTestInputs.cargo-unit-hello = [ pkgs.hello ];
+    packageTestInputs.cargo-unit-hello = [pkgs.hello];
     packageTestEnv.cargo-unit-hello.CARGO_UNIT_FIXTURE_ENV = "ok";
     # Mirror cargoUnitWorkspace exactly except cargoTargets so the byte-identical
     # root assertion (a packageBuildEnv-tagged unit must narrow identically) holds.
     packageBuildEnv.cargo-unit-hello.CARGO_UNIT_BUILD_ENV = "build-ok";
     packageTestEnv.cargo-unit-hello.CARGO_UNIT_BUILD_ENV_EXPECTED = "build-ok";
-    cargoTargets = [ [ "--workspace" ] ];
+    cargoTargets = [["--workspace"]];
   };
 
   cargoUnitCoverageRustToolchain = ix.languages.rust.toolchain pkgs {
@@ -831,8 +836,8 @@ let
       "--tests"
     ];
     profile = "dev";
-    extraRustcArgs = [ "-Cinstrument-coverage" ];
-    packageTestInputs.cargo-unit-hello = [ pkgs.hello ];
+    extraRustcArgs = ["-Cinstrument-coverage"];
+    packageTestInputs.cargo-unit-hello = [pkgs.hello];
     packageTestEnv.cargo-unit-hello.CARGO_UNIT_FIXTURE_ENV = "ok";
     policy = {
       denyUnusedCrateDependencies = false;
@@ -862,7 +867,7 @@ let
     src = cargoUnitCargoConfigFixture;
     workspaceRoot = ./fixtures/cargo-unit-cargo-config;
     cargoConfigRustflags = true;
-    cargoArgs = [ "--workspace" ];
+    cargoArgs = ["--workspace"];
     policy = {
       denyUnusedCrateDependencies = false;
       cargoAudit.enable = false;
@@ -886,7 +891,8 @@ let
   };
 
   cargoUnitBinaries = {
-    inherit (cargoUnitWorkspace.targetSets.build.binaries)
+    inherit
+      (cargoUnitWorkspace.targetSets.build.binaries)
       cargo-unit-goodbye
       cargo-unit-hello
       ;
@@ -929,7 +935,7 @@ let
   # of 42. Same package name/version/edition/deps, so cargo-unit computes the
   # same unit key; only the function body (source bytes, which the key ignores)
   # differs. This stands in for "a prebuilt artifact compiled elsewhere".
-  cargoUnitPrebuiltVariantSource = pkgs.runCommand "cargo-unit-prebuilt-variant-source" { } ''
+  cargoUnitPrebuiltVariantSource = pkgs.runCommand "cargo-unit-prebuilt-variant-source" {} ''
     cp -R ${cargoUnitPrebuiltFixture}/. "$out"
     chmod -R u+w "$out"
     sed -i 's/^    42$/    99/' "$out/crates/prebuilt-lib/src/lib.rs"
@@ -946,7 +952,7 @@ let
   # Shared args for the prebuilt-seam fixture workspaces.
   cargoUnitPrebuiltCommon = {
     workspaceRoot = ./fixtures/cargo-unit-prebuilt;
-    cargoArgs = [ "--workspace" ];
+    cargoArgs = ["--workspace"];
     policy = cargoUnitPrebuiltPolicy;
   };
 
@@ -967,16 +973,13 @@ let
   # dashes and the version is a fixed literal, so stripping the prefix leaves
   # the hash. Exactly one match is asserted so a manifest or profile drift
   # fails here, not downstream.
-  cargoUnitPrebuiltUnitByPrefix =
-    workspace: prefix:
-    let
-      names = builtins.filter (lib.hasPrefix prefix) (builtins.attrNames workspace.units);
-      key = builtins.head names;
-    in
+  cargoUnitPrebuiltUnitByPrefix = workspace: prefix: let
+    names = builtins.filter (lib.hasPrefix prefix) (builtins.attrNames workspace.units);
+    key = builtins.head names;
+  in
     assert lib.assertMsg (
       builtins.length names == 1
-    ) "expected exactly one ${prefix}* unit, found ${lib.concatStringsSep ", " names}";
-    {
+    ) "expected exactly one ${prefix}* unit, found ${lib.concatStringsSep ", " names}"; {
       inherit key;
       hash = lib.removePrefix prefix key;
       unit = workspace.units.${key};
@@ -1013,38 +1016,38 @@ let
     rlib = "${cargoUnitPrebuiltVariantMid.unit}/lib/libprebuilt_mid-${cargoUnitPrebuiltVariantMid.hash}.rlib";
     rmeta = "${cargoUnitPrebuiltVariantMid.unit}/lib/libprebuilt_mid-${cargoUnitPrebuiltVariantMid.hash}.rmeta";
     toolchainId = ix.cargoUnit.defaultToolchainId;
-    depUnits = [ cargoUnitPrebuiltLibUnit ];
+    depUnits = [cargoUnitPrebuiltLibUnit];
   };
 
   # Negative arm: a wrong toolchain id must fail at eval (not at link time).
   # `tryEval` should report `success = false`.
   cargoUnitPrebuiltToolchainMismatchEval = builtins.tryEval (
     builtins.seq
-      (ix.cargoUnit.mkPrebuiltLibraryUnit {
-        pname = "prebuilt_lib";
-        version = "0.1.0";
-        inherit (cargoUnitPrebuiltVariantLib) hash;
-        rlib = "${cargoUnitPrebuiltVariantLib.unit}/lib/libprebuilt_lib-${cargoUnitPrebuiltVariantLib.hash}.rlib";
-        rmeta = "${cargoUnitPrebuiltVariantLib.unit}/lib/libprebuilt_lib-${cargoUnitPrebuiltVariantLib.hash}.rmeta";
-        toolchainId = "definitely-not-the-toolchain";
-      }).drvPath
-      true
+    (ix.cargoUnit.mkPrebuiltLibraryUnit {
+      pname = "prebuilt_lib";
+      version = "0.1.0";
+      inherit (cargoUnitPrebuiltVariantLib) hash;
+      rlib = "${cargoUnitPrebuiltVariantLib.unit}/lib/libprebuilt_lib-${cargoUnitPrebuiltVariantLib.hash}.rlib";
+      rmeta = "${cargoUnitPrebuiltVariantLib.unit}/lib/libprebuilt_lib-${cargoUnitPrebuiltVariantLib.hash}.rmeta";
+      toolchainId = "definitely-not-the-toolchain";
+    }).drvPath
+    true
   );
 
   # Negative arm: depUnits entries that carry no `passthru.unitKey` could never
   # be auto-injected; mkPrebuiltLibraryUnit must reject them at construction.
   cargoUnitPrebuiltBadDepEval = builtins.tryEval (
     builtins.seq
-      (ix.cargoUnit.mkPrebuiltLibraryUnit {
-        pname = "prebuilt_mid";
-        version = "0.1.0";
-        inherit (cargoUnitPrebuiltVariantMid) hash;
-        rlib = "${cargoUnitPrebuiltVariantMid.unit}/lib/libprebuilt_mid-${cargoUnitPrebuiltVariantMid.hash}.rlib";
-        rmeta = "${cargoUnitPrebuiltVariantMid.unit}/lib/libprebuilt_mid-${cargoUnitPrebuiltVariantMid.hash}.rmeta";
-        toolchainId = ix.cargoUnit.defaultToolchainId;
-        depUnits = [ (pkgs.runCommand "not-a-prebuilt-unit" { } ''mkdir "$out"'') ];
-      }).drvPath
-      true
+    (ix.cargoUnit.mkPrebuiltLibraryUnit {
+      pname = "prebuilt_mid";
+      version = "0.1.0";
+      inherit (cargoUnitPrebuiltVariantMid) hash;
+      rlib = "${cargoUnitPrebuiltVariantMid.unit}/lib/libprebuilt_mid-${cargoUnitPrebuiltVariantMid.hash}.rlib";
+      rmeta = "${cargoUnitPrebuiltVariantMid.unit}/lib/libprebuilt_mid-${cargoUnitPrebuiltVariantMid.hash}.rmeta";
+      toolchainId = ix.cargoUnit.defaultToolchainId;
+      depUnits = [(pkgs.runCommand "not-a-prebuilt-unit" {} ''mkdir "$out"'')];
+    }).drvPath
+    true
   );
 
   # (c) Build the consumer workspace from its OWN source (lib answer = 42), but
@@ -1134,7 +1137,7 @@ let
     rlib = "${cargoUnitPrebuiltVariantLib.unit}/lib/libprebuilt_lib-${cargoUnitPrebuiltVariantLib.hash}.rlib";
     rmeta = "${cargoUnitPrebuiltVariantLib.unit}/lib/libprebuilt_lib-${cargoUnitPrebuiltVariantLib.hash}.rmeta";
     toolchainId = ix.cargoUnit.defaultToolchainId;
-    depUnits = [ cargoUnitPrebuiltPhantomDep ];
+    depUnits = [cargoUnitPrebuiltPhantomDep];
   };
 
   # Explicit override of an auto-injected dep: the caller pins the leaf key to
@@ -1158,7 +1161,7 @@ let
           rlib = "${cargoUnitPrebuiltVariantMid.unit}/lib/libprebuilt_mid-${cargoUnitPrebuiltVariantMid.hash}.rlib";
           rmeta = "${cargoUnitPrebuiltVariantMid.unit}/lib/libprebuilt_mid-${cargoUnitPrebuiltVariantMid.hash}.rmeta";
           toolchainId = ix.cargoUnit.defaultToolchainId;
-          depUnits = [ cargoUnitPrebuiltLibUnitWithPhantomDep ];
+          depUnits = [cargoUnitPrebuiltLibUnitWithPhantomDep];
         };
         ${cargoUnitPrebuiltVariantLib.key} = cargoUnitPrebuiltLibUnitFromPlain;
       };
@@ -1168,7 +1171,8 @@ let
   # C4 negative arm: one root recording two different derivations for the same
   # dep unit key, with no explicit pin to break the tie, must fail at eval.
   cargoUnitPrebuiltDepConflictEval = builtins.tryEval (
-    builtins.seq (builtins.attrNames
+    builtins.seq (
+      builtins.attrNames
       (ix.cargoUnit.buildWorkspace (
         cargoUnitPrebuiltCommon
         // {
@@ -1190,14 +1194,16 @@ let
           };
         }
       )).units
-    ) true
+    )
+    true
   );
 
   # C3 negative arm: injecting a prebuilt under a key that disagrees with its
   # own recorded unitKey must fail at eval. The mid's generated key exists in
   # the graph and the toolchain matches, so only the key-mismatch guard fires.
   cargoUnitPrebuiltKeyMismatchEval = builtins.tryEval (
-    builtins.seq (builtins.attrNames
+    builtins.seq (
+      builtins.attrNames
       (ix.cargoUnit.buildWorkspace (
         cargoUnitPrebuiltCommon
         // {
@@ -1208,14 +1214,16 @@ let
           };
         }
       )).units
-    ) true
+    )
+    true
   );
 
   # M1 / C1 negative arm: a mis-keyed injection (a key absent from the generated
   # graph) must now fail loud, not silently build from source. `tryEval` over the
   # workspace's unit-set attribute names should report `success = false`.
   cargoUnitPrebuiltMiskeyEval = builtins.tryEval (
-    builtins.seq (builtins.attrNames
+    builtins.seq (
+      builtins.attrNames
       (ix.cargoUnit.buildWorkspace (
         cargoUnitPrebuiltCommon
         // {
@@ -1227,7 +1235,8 @@ let
           };
         }
       )).units
-    ) true
+    )
+    true
   );
 
   goUnitFixture = fs.toSource {
@@ -1245,7 +1254,7 @@ let
     pname = "go-unit-hello";
     src = goUnitFixture;
     env.GOFLAGS = "-mod=readonly";
-    packages = [ "." ];
+    packages = ["."];
   };
 
   goUnitNestedFixture = fs.toSource {
@@ -1257,7 +1266,7 @@ let
     pname = "go-unit-nested";
     src = goUnitNestedFixture;
     modRoot = "module";
-    packages = [ "." ];
+    packages = ["."];
   };
 
   goUnitStdlibFixture = fs.toSource {
@@ -1288,10 +1297,10 @@ let
     pname = "go-unit-stdlib";
     src = goUnitStdlibFixture;
     vendorHash = null;
-    packages = [ "." ];
+    packages = ["."];
   };
 
-  goUnitDerivedStdlibSource = pkgs.runCommand "go-unit-stdlib-source" { } ''
+  goUnitDerivedStdlibSource = pkgs.runCommand "go-unit-stdlib-source" {} ''
     cp -R ${goUnitStdlibFixture}/. "$out"
   '';
 
@@ -1300,9 +1309,9 @@ let
     src = goUnitDerivedStdlibSource;
     goMod = ./fixtures/go-unit-stdlib/go.mod;
     vendorHash = null;
-    packages = [ "." ];
+    packages = ["."];
   };
-  goUnitDerivedSource = pkgs.runCommand "go-unit-hello-source" { } ''
+  goUnitDerivedSource = pkgs.runCommand "go-unit-hello-source" {} ''
     cp -R ${goUnitFixture}/. "$out"
   '';
   goUnitDerivedWorkspaceWithVendorHashFile = ix.goUnit.buildWorkspace {
@@ -1311,27 +1320,26 @@ let
     goMod = ./fixtures/go-unit-hello/go.mod;
     goSum = ./fixtures/go-unit-hello/go.sum;
     vendorHashFile = ./fixtures/go-unit-hello/go-modules.nix;
-    packages = [ "." ];
+    packages = ["."];
   };
   goUnitDerivedUnreadableNoSumEval = builtins.tryEval (
     builtins.attrNames
-      (ix.goUnit.buildWorkspace {
-        pname = "go-unit-hello-derived-no-sum";
-        src = goUnitDerivedSource;
-        vendorHash = null;
-        packages = [ "." ];
-      }).packages
+    (ix.goUnit.buildWorkspace {
+      pname = "go-unit-hello-derived-no-sum";
+      src = goUnitDerivedSource;
+      vendorHash = null;
+      packages = ["."];
+    }).packages
   );
-  goUnitDerivedMissingGoSumKeyEval =
-    let
-      workspace = ix.goUnit.buildWorkspace {
-        pname = "go-unit-hello-derived-missing-go-sum";
-        src = goUnitDerivedSource;
-        goMod = ./fixtures/go-unit-hello/go.mod;
-        vendorHashFile = ./fixtures/go-unit-hello/go-modules.nix;
-        packages = [ "." ];
-      };
-    in
+  goUnitDerivedMissingGoSumKeyEval = let
+    workspace = ix.goUnit.buildWorkspace {
+      pname = "go-unit-hello-derived-missing-go-sum";
+      src = goUnitDerivedSource;
+      goMod = ./fixtures/go-unit-hello/go.mod;
+      vendorHashFile = ./fixtures/go-unit-hello/go-modules.nix;
+      packages = ["."];
+    };
+  in
     builtins.tryEval workspace.default.drvPath;
   goUnitMissingGoModFixture = fs.toSource {
     root = ./fixtures/go-unit-hello;
@@ -1339,69 +1347,69 @@ let
   };
   goUnitMissingGoModEval =
     builtins.tryEval
-      (ix.goUnit.buildWorkspace {
-        pname = "go-unit-missing-go-mod";
-        src = goUnitMissingGoModFixture;
-        vendorHash = null;
-        packages = [ "." ];
-      }).vendorHashKey;
+    (ix.goUnit.buildWorkspace {
+      pname = "go-unit-missing-go-mod";
+      src = goUnitMissingGoModFixture;
+      vendorHash = null;
+      packages = ["."];
+    }).vendorHashKey;
   goUnitMissingGoModPackagesEval = builtins.tryEval (
     builtins.attrNames
-      (ix.goUnit.buildWorkspace {
-        pname = "go-unit-missing-go-mod";
-        src = goUnitMissingGoModFixture;
-        vendorHash = null;
-        packages = [ "." ];
-      }).packages
+    (ix.goUnit.buildWorkspace {
+      pname = "go-unit-missing-go-mod";
+      src = goUnitMissingGoModFixture;
+      vendorHash = null;
+      packages = ["."];
+    }).packages
   );
   goUnitMissingGoSumEval = builtins.tryEval (
     builtins.attrNames
-      (ix.goUnit.buildWorkspace {
-        pname = "go-unit-missing-go-sum";
-        src = goUnitMissingGoSumFixture;
-        vendorHash = pins."go-unit-fixture-vendor".hash;
-        packages = [ "." ];
-      }).packages
+    (ix.goUnit.buildWorkspace {
+      pname = "go-unit-missing-go-sum";
+      src = goUnitMissingGoSumFixture;
+      vendorHash = pins.go-unit-fixture-vendor.hash;
+      packages = ["."];
+    }).packages
   );
   goUnitMissingGoSumNoSumEval = builtins.tryEval (
     builtins.attrNames
-      (ix.goUnit.buildWorkspace {
-        pname = "go-unit-missing-go-sum-no-sum";
-        src = goUnitMissingGoSumFixture;
-        vendorHash = null;
-        packages = [ "." ];
-      }).packages
+    (ix.goUnit.buildWorkspace {
+      pname = "go-unit-missing-go-sum-no-sum";
+      src = goUnitMissingGoSumFixture;
+      vendorHash = null;
+      packages = ["."];
+    }).packages
   );
   goUnitRequireNoSpaceNoSumEval = builtins.tryEval (
     builtins.attrNames
-      (ix.goUnit.buildWorkspace {
-        pname = "go-unit-require-nospace-no-sum";
-        src = goUnitRequireNoSpaceFixture;
-        vendorHash = null;
-        packages = [ "." ];
-      }).packages
+    (ix.goUnit.buildWorkspace {
+      pname = "go-unit-require-nospace-no-sum";
+      src = goUnitRequireNoSpaceFixture;
+      vendorHash = null;
+      packages = ["."];
+    }).packages
   );
   goUnitMissingExplicitGoSumEval = builtins.tryEval (
     builtins.attrNames
-      (ix.goUnit.buildWorkspace {
-        pname = "go-unit-missing-explicit-go-sum";
-        src = goUnitMissingGoSumFixture;
-        goSum = goUnitMissingGoSumFixture + "/go.sum";
-        vendorHash = pins."go-unit-fixture-vendor".hash;
-        packages = [ "." ];
-      }).packages
+    (ix.goUnit.buildWorkspace {
+      pname = "go-unit-missing-explicit-go-sum";
+      src = goUnitMissingGoSumFixture;
+      goSum = goUnitMissingGoSumFixture + "/go.sum";
+      vendorHash = pins.go-unit-fixture-vendor.hash;
+      packages = ["."];
+    }).packages
   );
 
   goUnitPackageCollisionEval =
     builtins.tryEval
-      (ix.goUnit.buildWorkspace {
-        pname = "go-unit-collision";
-        src = goUnitFixture;
-        packages = [
-          "a.b"
-          "a/b"
-        ];
-      }).packages;
+    (ix.goUnit.buildWorkspace {
+      pname = "go-unit-collision";
+      src = goUnitFixture;
+      packages = [
+        "a.b"
+        "a/b"
+      ];
+    }).packages;
 
   cargoUnitScopePolicy = {
     denyUnusedCrateDependencies = false;
@@ -1428,23 +1436,22 @@ let
     ];
   };
 
-  cargoUnitScopeLockChangedFixture = pkgs.runCommand "cargo-unit-workspace-scope-lock-changed" { } ''
+  cargoUnitScopeLockChangedFixture = pkgs.runCommand "cargo-unit-workspace-scope-lock-changed" {} ''
     cp -R ${cargoUnitScopeFixture}/. "$out"
     chmod -R u+w "$out"
     cp ${./fixtures/cargo-unit-workspace-scope/Cargo.itoa-1.0.14.lock} "$out/Cargo.lock"
   '';
 
-  cargoUnitScopeWorkspace =
-    {
-      name,
-      src,
-      workspaceRoot ? ./fixtures/cargo-unit-workspace-scope,
-    }:
+  cargoUnitScopeWorkspace = {
+    name,
+    src,
+    workspaceRoot ? ./fixtures/cargo-unit-workspace-scope,
+  }:
     ix.cargoUnit.buildWorkspace {
       pname = "cargo-unit-workspace-scope-${name}";
       inherit src;
       inherit workspaceRoot;
-      cargoArgs = [ "--workspace" ];
+      cargoArgs = ["--workspace"];
       policy = cargoUnitScopePolicy;
     };
 
@@ -1464,15 +1471,13 @@ let
     };
   };
 
-  cargoUnitScopeUnit =
-    workspace: prefix:
-    let
-      matches = lib.filterAttrs (name: _: lib.hasPrefix prefix name) workspace.units;
-      names = builtins.attrNames matches;
-    in
+  cargoUnitScopeUnit = workspace: prefix: let
+    matches = lib.filterAttrs (name: _: lib.hasPrefix prefix name) workspace.units;
+    names = builtins.attrNames matches;
+  in
     assert lib.assertMsg (builtins.length names == 1)
-      "expected exactly one cargo-unit unit with prefix ${prefix}, found ${lib.concatStringsSep ", " names}";
-    matches.${builtins.head names};
+    "expected exactly one cargo-unit unit with prefix ${prefix}, found ${lib.concatStringsSep ", " names}";
+      matches.${builtins.head names};
 
   cargoUnitScope = {
     base = {
@@ -1500,75 +1505,71 @@ let
     clippy.enable = false;
   };
 
-  cargoUnitRealWorkspaceSource =
-    {
-      name,
-      upstream,
-      lockFile,
-    }:
-    pkgs.runCommand "cargo-unit-${name}-source-with-lock" { } ''
+  cargoUnitRealWorkspaceSource = {
+    name,
+    upstream,
+    lockFile,
+  }:
+    pkgs.runCommand "cargo-unit-${name}-source-with-lock" {} ''
       cp -R ${upstream}/. "$out"
       chmod -R u+w "$out"
       cp ${lockFile} "$out/Cargo.lock"
     '';
 
-  cargoUnitRealWorkspace =
-    {
-      name,
-      owner,
-      repo,
-      rev,
-      hash,
-      lockFile,
-      buildArgs ? [ "--workspace" ],
-      testArgs ? null,
-    }:
-    let
-      upstream = pkgs.fetchFromGitHub {
-        inherit
-          owner
-          repo
-          rev
-          hash
-          ;
-      };
-      src = cargoUnitRealWorkspaceSource {
-        inherit name upstream lockFile;
-      };
-      commonArgs = {
-        pname = "cargo-unit-real-workspace-${name}";
-        inherit src;
-        cargoLock = lockFile;
-        workspaceRoot = src;
-        policy = cargoUnitRealWorkspacePolicy;
-      };
-      buildWorkspace = ix.cargoUnit.buildWorkspace (commonArgs // { cargoArgs = buildArgs; });
-      testWorkspace =
-        if testArgs == null then
-          null
-        else
-          ix.cargoUnit.buildWorkspace (
-            commonArgs
-            // {
-              pname = "cargo-unit-real-workspace-${name}-tests";
-              cargoArgs = testArgs;
-            }
-          );
-    in
-    {
-      inherit buildWorkspace testWorkspace;
-      buildRoots = pkgs.linkFarmFromDrvs "cargo-unit-real-workspace-${name}-roots" buildWorkspace.roots;
-      testRoots =
-        if testWorkspace == null then
-          null
-        else
-          pkgs.linkFarmFromDrvs "cargo-unit-real-workspace-${name}-tests" (
-            # `tests.<binary>` is now `{ all; cases; }` after the per-#[test]
-            # split (854b662); `.all` keeps the link-farm at one entry per
-            # test binary, the same shape this script expects.
-            map (entry: entry.all) (builtins.attrValues testWorkspace.tests)
-          );
+  cargoUnitRealWorkspace = {
+    name,
+    owner,
+    repo,
+    rev,
+    hash,
+    lockFile,
+    buildArgs ? ["--workspace"],
+    testArgs ? null,
+  }: let
+    upstream = pkgs.fetchFromGitHub {
+      inherit
+        owner
+        repo
+        rev
+        hash
+        ;
     };
+    src = cargoUnitRealWorkspaceSource {
+      inherit name upstream lockFile;
+    };
+    commonArgs = {
+      pname = "cargo-unit-real-workspace-${name}";
+      inherit src;
+      cargoLock = lockFile;
+      workspaceRoot = src;
+      policy = cargoUnitRealWorkspacePolicy;
+    };
+    buildWorkspace = ix.cargoUnit.buildWorkspace (commonArgs // {cargoArgs = buildArgs;});
+    testWorkspace =
+      if testArgs == null
+      then null
+      else
+        ix.cargoUnit.buildWorkspace (
+          commonArgs
+          // {
+            pname = "cargo-unit-real-workspace-${name}-tests";
+            cargoArgs = testArgs;
+          }
+        );
+  in {
+    inherit buildWorkspace testWorkspace;
+    buildRoots = pkgs.linkFarmFromDrvs "cargo-unit-real-workspace-${name}-roots" buildWorkspace.roots;
+    testRoots =
+      if testWorkspace == null
+      then null
+      else
+        pkgs.linkFarmFromDrvs "cargo-unit-real-workspace-${name}-tests" (
+          # `tests.<binary>` is now `{ all; cases; }` after the per-#[test]
+          # split (854b662); `.all` keeps the link-farm at one entry per
+          # test binary, the same shape this script expects.
+          map (entry: entry.all) (builtins.attrValues testWorkspace.tests)
+        );
+  };
 
   # These upstream workspaces currently do not commit Cargo.lock. The fixture
   # locks make the check exercise the same frozen/offline path as downstream
@@ -1576,7 +1577,8 @@ let
   cargoUnitRealWorkspaces = {
     serde = cargoUnitRealWorkspace {
       name = "serde";
-      inherit (pins.serde)
+      inherit
+        (pins.serde)
         owner
         repo
         rev
@@ -1587,7 +1589,8 @@ let
 
     thiserror = cargoUnitRealWorkspace {
       name = "thiserror";
-      inherit (pins.thiserror)
+      inherit
+        (pins.thiserror)
         owner
         repo
         rev
@@ -1598,7 +1601,8 @@ let
 
     indexmap = cargoUnitRealWorkspace {
       name = "indexmap";
-      inherit (pins.indexmap)
+      inherit
+        (pins.indexmap)
         owner
         repo
         rev
@@ -1613,7 +1617,8 @@ let
 
     regex = cargoUnitRealWorkspace {
       name = "regex";
-      inherit (pins.regex)
+      inherit
+        (pins.regex)
         owner
         repo
         rev
@@ -1723,13 +1728,31 @@ let
   };
 
   uvLockedDistribution = builtins.head uvApplication.uvWheelhouse.lock.distributions;
-  uvWheelhouseDistributionNames = map (
-    distribution: distribution.fileName
-  ) uvApplication.uvWheelhouse.distributions;
+  uvWheelhouseDistributionNames =
+    map (
+      distribution: distribution.fileName
+    )
+    uvApplication.uvWheelhouse.distributions;
 
   mcpPackage = (ix.packageSetFor pkgs).mcp;
 
   fleet = ix.mkFleet {
+    # Stand-in for the ix-side CAS manifest builder (the cas-layer.nix
+    # contract): a directory with manifest.cas + locator.bin, carrying
+    # passthru.toplevel. Only this fixture threads a builder; the other fleet
+    # fixtures deliberately leave it unset, proving plan eval never forces
+    # `casImage`.
+    defaults = [
+      (
+        {pkgs, ...}: {
+          ix.build.casImageBuilder = {toplevel}:
+            pkgs.runCommand "cas-image-stub" {passthru = {inherit toplevel;};} ''
+              mkdir -p "$out"
+              touch "$out/manifest.cas" "$out/locator.bin"
+            '';
+        }
+      )
+    ];
     deployment.region = "us-west-1";
     # Fleet-wide per-VM user-store secret attachment; merges with per-node refs.
     deployment.secrets = {
@@ -1744,8 +1767,8 @@ let
       };
 
       web = {
-        tags = [ "public" ];
-        groups = [ "public-apps" ];
+        tags = ["public"];
+        groups = ["public-apps"];
         deployment = {
           destination = "fleet-web:latest";
           ipv4 = true;
@@ -1753,10 +1776,9 @@ let
         };
         modules = [
           (
-            { nodes, ... }:
-            {
+            {nodes, ...}: {
               services.remote-desktop.enable = true;
-              environment.etc."db-host".text = nodes.db.config.networking.hostName;
+              environment.etc.db-host.text = nodes.db.config.networking.hostName;
             }
           )
         ];
@@ -1764,7 +1786,8 @@ let
 
       worker = {
         replicas = 2;
-        dependsOn = [ "db" ];
+        dependsOn = ["db"];
+        updateStrategy.maxUnavailable = 1;
         modules = [
           {
             services.remote-desktop.enable = true;
@@ -1782,13 +1805,12 @@ let
         services.openssh.enable = true;
       };
       worker = {
-        dependsOn = [ "api" ];
-        groups = [ "private-apps" ];
+        dependsOn = ["api"];
+        groups = ["private-apps"];
         modules = [
           (
-            { nodes, ... }:
-            {
-              environment.etc."api-host".text = nodes.api.config.networking.hostName;
+            {nodes, ...}: {
+              environment.etc.api-host.text = nodes.api.config.networking.hostName;
             }
           )
         ];
@@ -1798,13 +1820,18 @@ let
 
   prefixedFleet = prefixedFleetBase.withNodePrefix "tprefix-";
 
+  # No casImageBuilder is threaded into prefixedFleetBase, so forcing a CAS
+  # image must abort with the module system's "used but not defined" error
+  # rather than falling back to anything.
+  fleetMissingCasBuilderEval = builtins.tryEval (builtins.seq prefixedFleetBase.packages.api true);
+
   # A local-build node: its source switch runs a plain `nix build`, so the
   # default installable must be the `.#<node>-system` package alias, not the
   # bare `.#<node>` (which only `ix up`'s resolver expands).
   localBuildFleet = ix.mkFleet {
     nodes.svc = {
       deployment.switch.buildOn = "local";
-      modules = [ { } ];
+      modules = [{}];
     };
   };
 
@@ -1814,39 +1841,39 @@ let
   explicitInstallableFleet = ix.mkFleet {
     nodes.svc = {
       deployment.switch.sourceInstallable = ".#svc";
-      modules = [ { } ];
+      modules = [{}];
     };
   };
 
   fleetIpv4HealthCheckEval = builtins.tryEval (
     builtins.deepSeq
-      (ix.mkFleet {
-        nodes.private.modules = [
-          {
-            ix.healthChecks."public-reachability" = {
-              from = "host";
-              requiresIpv4 = true;
-              command = [ "true" ];
-            };
-          }
-        ];
-      }).planValue.nodes.private.healthChecks."public-reachability"
-      true
+    (ix.mkFleet {
+      nodes.private.modules = [
+        {
+          ix.healthChecks.public-reachability = {
+            from = "host";
+            requiresIpv4 = true;
+            command = ["true"];
+          };
+        }
+      ];
+    }).planValue.nodes.private.healthChecks.public-reachability
+    true
   );
 
   fleetUnknownDependencyEval = builtins.tryEval (
     builtins.deepSeq
-      (ix.mkFleet {
-        nodes.web = {
-          dependsOn = [ "db" ];
-          modules = [
-            {
-              services.remote-desktop.enable = true;
-            }
-          ];
-        };
-      }).planValue.nodes.web.dependsOn
-      true
+    (ix.mkFleet {
+      nodes.web = {
+        dependsOn = ["db"];
+        modules = [
+          {
+            services.remote-desktop.enable = true;
+          }
+        ];
+      };
+    }).planValue.nodes.web.dependsOn
+    true
   );
 
   # `deployment.healthChecks` was historically written as if it selected
@@ -1855,215 +1882,252 @@ let
   # silently dropped.
   fleetDeploymentHealthChecksEval = builtins.tryEval (
     builtins.deepSeq
-      (ix.mkFleet {
-        nodes.web = {
-          deployment.healthChecks = [ "nginx" ];
-          modules = [ { } ];
-        };
-      }).planValue.nodes.web.region
-      true
+    (ix.mkFleet {
+      nodes.web = {
+        deployment.healthChecks = ["nginx"];
+        modules = [{}];
+      };
+    }).planValue.nodes.web.region
+    true
   );
 
   fleetUnknownDeploymentKeyEval = builtins.tryEval (
     builtins.deepSeq
-      (ix.mkFleet {
-        nodes.web = {
-          deployment.regoin = "us-west-1";
-          modules = [ { } ];
-        };
-      }).planValue.nodes.web.region
-      true
+    (ix.mkFleet {
+      nodes.web = {
+        deployment.regoin = "us-west-1";
+        modules = [{}];
+      };
+    }).planValue.nodes.web.region
+    true
   );
 
   fleetDependencyCycleEval = builtins.tryEval (
     builtins.deepSeq
-      (ix.mkFleet {
-        nodes = {
-          api = {
-            dependsOn = [ "worker" ];
-            modules = [ { } ];
-          };
-
-          worker = {
-            dependsOn = [ "api" ];
-            modules = [ { } ];
-          };
+    (ix.mkFleet {
+      nodes = {
+        api = {
+          dependsOn = ["worker"];
+          modules = [{}];
         };
-      }).planValue.nodes
-      true
+
+        worker = {
+          dependsOn = ["api"];
+          modules = [{}];
+        };
+      };
+    }).planValue.nodes
+    true
   );
 
-  factionsExample =
-    let
-      fleet = import (paths.examples + "/minecraft/factions/ix.nix") {
-        index = {
-          lib = ix;
-        };
+  # `maxSurge` is Kubernetes vocabulary ix-fleet does not implement (there is
+  # no surplus capacity to surge into); a typo'd or aspirational key must fail
+  # eval rather than silently deploy with unbounded concurrency.
+  fleetUnknownUpdateStrategyKeyEval = builtins.tryEval (
+    builtins.deepSeq
+    (ix.mkFleet {
+      nodes.web = {
+        replicas = 2;
+        updateStrategy.maxSurge = 1;
+        modules = [{}];
       };
-      config = fleet.nodes.factions;
-      service = config.systemd.services.minecraft-world-border;
-    in
-    {
-      inherit fleet config service;
-      cfg = config.services.minecraft;
-      managed = {
-        config = config.environment.etc."minecraft/managed-config".source;
-        datapacks = config.environment.etc."minecraft/managed-datapacks".source;
-        dropins = config.environment.etc."minecraft/managed-dropins".source;
-        serverFiles = config.environment.etc."minecraft/managed-server-files".source;
+    }).planValue.nodes.web-0.updateStrategy
+    true
+  );
+
+  fleetInvalidMaxUnavailableEval = builtins.tryEval (
+    builtins.deepSeq
+    (ix.mkFleet {
+      nodes.web = {
+        replicas = 2;
+        updateStrategy.maxUnavailable = 0;
+        modules = [{}];
+      };
+    }).planValue.nodes.web-0.updateStrategy
+    true
+  );
+
+  factionsExample = let
+    fleet = import (paths.examples + "/minecraft/factions/ix.nix") {
+      index = {
+        lib = ix;
       };
     };
+    config = fleet.nodes.factions;
+    service = config.systemd.services.minecraft-world-border;
+  in {
+    inherit fleet config service;
+    cfg = config.services.minecraft;
+    managed = {
+      config = config.environment.etc."minecraft/managed-config".source;
+      datapacks = config.environment.etc."minecraft/managed-datapacks".source;
+      dropins = config.environment.etc."minecraft/managed-dropins".source;
+      serverFiles = config.environment.etc."minecraft/managed-server-files".source;
+    };
+  };
 
-  survivalExample =
-    let
-      fleet = import (paths.examples + "/minecraft/survival/ix.nix") {
-        index = {
-          lib = ix;
-        };
-      };
-      config = fleet.nodes.survival;
-    in
-    {
-      inherit fleet config;
-      inherit (config.services)
-        floodgate
-        geyser
-        minecraft
-        velocity
-        ;
-      managed = {
-        minecraftConfig = config.environment.etc."minecraft/managed-config".source;
-        minecraftServerFiles = config.environment.etc."minecraft/managed-server-files".source;
-        velocityConfig = config.environment.etc."velocity/managed-config".source;
-        velocityPlugins = config.environment.etc."velocity/managed-plugins".source;
+  survivalExample = let
+    fleet = import (paths.examples + "/minecraft/survival/ix.nix") {
+      index = {
+        lib = ix;
       };
     };
-
-  dailyScraperExample =
-    let
-      fleet = import (paths.examples + "/python/daily-scraper/ix.nix") {
-        index = {
-          lib = ix;
-        };
-      };
-      config = fleet.nodes.scraper;
-    in
-    {
-      inherit fleet config;
-      plan = fleet.planValue.nodes.scraper;
-      service = config.systemd.services.daily-scraper;
-      timer = config.systemd.timers.daily-scraper;
+    config = fleet.nodes.survival;
+  in {
+    inherit fleet config;
+    inherit
+      (config.services)
+      floodgate
+      geyser
+      minecraft
+      velocity
+      ;
+    managed = {
+      minecraftConfig = config.environment.etc."minecraft/managed-config".source;
+      minecraftServerFiles = config.environment.etc."minecraft/managed-server-files".source;
+      velocityConfig = config.environment.etc."velocity/managed-config".source;
+      velocityPlugins = config.environment.etc."velocity/managed-plugins".source;
     };
+  };
 
-  nginxLifecycleExample =
-    let
-      fleet = import (paths.examples + "/nginx/lifecycle/ix.nix") {
-        index = {
-          lib = ix;
-        };
+  dailyScraperExample = let
+    fleet = import (paths.examples + "/python/daily-scraper/ix.nix") {
+      index = {
+        lib = ix;
       };
-      config = fleet.nodes.nginx;
-    in
-    {
-      inherit fleet config;
-      cfg = config.services.nginx;
-      plan = fleet.planValue.nodes.nginx;
     };
+    config = fleet.nodes.scraper;
+  in {
+    inherit fleet config;
+    plan = fleet.planValue.nodes.scraper;
+    service = config.systemd.services.daily-scraper;
+    timer = config.systemd.timers.daily-scraper;
+  };
 
-  s3StorageExample =
-    let
-      fleet = import (paths.examples + "/s3/storage/ix.nix") {
-        index = {
-          lib = ix;
-        };
+  nginxLifecycleExample = let
+    fleet = import (paths.examples + "/nginx/lifecycle/ix.nix") {
+      index = {
+        lib = ix;
       };
-      config = fleet.nodes.s3;
-    in
-    {
-      inherit fleet config;
-      cfg = config.services.ix-seaweedfs;
-      plan = fleet.planValue.nodes.s3;
     };
+    config = fleet.nodes.nginx;
+  in {
+    inherit fleet config;
+    cfg = config.services.nginx;
+    plan = fleet.planValue.nodes.nginx;
+  };
 
-  observabilityStackExample =
-    let
-      fleet = import (paths.examples + "/observability/stack/ix.nix") {
-        index = {
-          lib = ix;
-        };
+  s3StorageExample = let
+    fleet = import (paths.examples + "/s3/storage/ix.nix") {
+      index = {
+        lib = ix;
       };
-      queryTool =
-        config:
-        lib.findFirst (
-          package: (package.meta.mainProgram or null) == "ix-observe"
-        ) null config.environment.systemPackages;
-    in
-    {
-      inherit fleet;
-      observability =
-        let
-          config = fleet.nodes.observability;
-        in
-        {
-          inherit config;
-          cfg = config.services.ix-observability;
-          collector = config.services.opentelemetry-collector.settings;
-          grafana = config.services.grafana;
-          plan = fleet.planValue.nodes.observability;
-          queryTool = queryTool config;
-          dashboardPath =
-            (builtins.elemAt config.services.grafana.provision.dashboards.settings.providers 0).options.path;
-        };
-      app =
-        let
-          config = fleet.nodes.app;
-        in
-        {
-          inherit config;
-          cfg = config.services.ix-observability;
-          collector = config.services.opentelemetry-collector.settings;
-          plan = fleet.planValue.nodes.app;
-        };
     };
+    config = fleet.nodes.s3;
+  in {
+    inherit fleet config;
+    cfg = config.services.ix-seaweedfs;
+    plan = fleet.planValue.nodes.s3;
+  };
 
-  dailyScraperS3 =
-    let
-      config = evalConfig [
-        (paths.examples + "/python/daily-scraper/service.nix")
-        {
-          _module.args.dailyScraper = {
-            s3 = {
-              uri = "s3://andrew-scraper-output/github";
-              deleteRemoved = true;
-              awsEnvironmentFile = "/run/secrets/daily-scraper/aws.env";
-            };
-          };
-        }
-      ];
-    in
-    {
+  fleetHelloExample = let
+    fleet = import (paths.examples + "/fleet/hello/ix.nix") {
+      index = {
+        lib = ix;
+      };
+    };
+  in {
+    inherit fleet;
+    web.plan = fleet.planValue.nodes.web;
+    worker.plan = fleet.planValue.nodes.worker-0;
+  };
+
+  fleetMicroservicesExample = let
+    fleet = import (paths.examples + "/fleet/microservices/ix.nix") {
+      index = {
+        lib = ix;
+      };
+    };
+  in {
+    inherit fleet;
+    gateway = {
+      config = fleet.nodes.gateway;
+      plan = fleet.planValue.nodes.gateway;
+    };
+    api.plan = fleet.planValue.nodes.api-0;
+    cache.plan = fleet.planValue.nodes.cache;
+  };
+
+  observabilityStackExample = let
+    fleet = import (paths.examples + "/observability/stack/ix.nix") {
+      index = {
+        lib = ix;
+      };
+    };
+    queryTool = config:
+      lib.findFirst (
+        package: (package.meta.mainProgram or null) == "ix-observe"
+      )
+      null
+      config.environment.systemPackages;
+  in {
+    inherit fleet;
+    observability = let
+      config = fleet.nodes.observability;
+    in {
       inherit config;
-      service = config.systemd.services.daily-scraper;
+      cfg = config.services.ix-observability;
+      collector = config.services.opentelemetry-collector.settings;
+      grafana = config.services.grafana;
+      plan = fleet.planValue.nodes.observability;
+      queryTool = queryTool config;
+      dashboardPath =
+        (builtins.elemAt config.services.grafana.provision.dashboards.settings.providers 0).options.path;
     };
-
-  extendedAttributes =
-    let
-      config = evalConfig [
-        {
-          ix.extendedAttributes."/build/ix-xattr-test" = {
-            create = true;
-            attributes = {
-              "user.ix.kind" = "test.path";
-              "user.ix.owner" = "ix";
-            };
-          };
-        }
-      ];
-    in
-    {
+    app = let
+      config = fleet.nodes.app;
+    in {
       inherit config;
-      activationScript = config.system.activationScripts.ix-extended-attributes.text;
+      cfg = config.services.ix-observability;
+      collector = config.services.opentelemetry-collector.settings;
+      plan = fleet.planValue.nodes.app;
     };
+  };
+
+  dailyScraperS3 = let
+    config = evalConfig [
+      (paths.examples + "/python/daily-scraper/service.nix")
+      {
+        _module.args.dailyScraper = {
+          s3 = {
+            uri = "s3://andrew-scraper-output/github";
+            deleteRemoved = true;
+            awsEnvironmentFile = "/run/secrets/daily-scraper/aws.env";
+          };
+        };
+      }
+    ];
+  in {
+    inherit config;
+    service = config.systemd.services.daily-scraper;
+  };
+
+  extendedAttributes = let
+    config = evalConfig [
+      {
+        ix.extendedAttributes."/build/ix-xattr-test" = {
+          create = true;
+          attributes = {
+            "user.ix.kind" = "test.path";
+            "user.ix.owner" = "ix";
+          };
+        };
+      }
+    ];
+  in {
+    inherit config;
+    activationScript = config.system.activationScripts.ix-extended-attributes.text;
+  };
 
   portClaimConflictFailures = failedAssertionsFor [
     {
@@ -2110,19 +2174,17 @@ let
     }
   ];
 
-  resourceMonitorRuntimeDirectoryFailures =
-    let
-      failuresFor =
-        runtimeDirectory:
-        failedAssertionsFor [
-          {
-            services.resource-monitor = {
-              enable = true;
-              inherit runtimeDirectory;
-            };
-          }
-        ];
-    in
+  resourceMonitorRuntimeDirectoryFailures = let
+    failuresFor = runtimeDirectory:
+      failedAssertionsFor [
+        {
+          services.resource-monitor = {
+            enable = true;
+            inherit runtimeDirectory;
+          };
+        }
+      ];
+  in
     map failuresFor [
       "/var/lib/resource-monitor"
       "/run//resource-monitor"
@@ -2135,14 +2197,14 @@ let
     defaultMinecraftModule
     {
       services.minecraft = {
-        configFiles."client//bad.toml" = { };
-        configFiles."/absolute/bad.toml" = { };
+        configFiles."client//bad.toml" = {};
+        configFiles."/absolute/bad.toml" = {};
         properties.level-name = "../bad-world";
-        serverFiles."plugins/../bukkit.yml" = { };
-        serverFiles."$(bad).json" = { };
+        serverFiles."plugins/../bukkit.yml" = {};
+        serverFiles."$(bad).json" = {};
         datapacks.bad = {
           fileName = "../bad";
-          files."data/../bad.json" = { };
+          files."data/../bad.json" = {};
         };
       };
     }
@@ -2152,7 +2214,7 @@ let
     {
       services.velocity = {
         enable = true;
-        configFiles."plugins/../bad.toml" = { };
+        configFiles."plugins/../bad.toml" = {};
         plugins.bad = {
           src = pkgs.writeText "velocity-test-plugin.jar" "";
           fileName = "nested/bad.jar";
@@ -2222,28 +2284,150 @@ let
     }
   ];
 
-  base =
-    let
-      config = evalConfig [ ];
-      imageConfig = evalConfig [ (paths.root + "/images/system/base") ];
-    in
-    {
-      inherit config imageConfig;
-      cfg = config.ix.profiles.base;
-    };
+  base = let
+    config = evalConfig [];
+    imageConfig = evalConfig [(paths.root + "/images/system/base")];
+  in {
+    inherit config imageConfig;
+    cfg = config.ix.profiles.base;
+  };
+
+  # Regression fence for the guest-nix-slowness bug family. Do NOT delete as
+  # redundant with the registry-pin assertion: this is the THIRD regression in
+  # the same family, each of which passed the prior guard yet still left a fresh
+  # VM re-ingesting a ~45k-file source tree through VCFS on first `nix`:
+  #   1. missing narHash  — unlocked path: pin, re-hashed every eval (#1748/#1749)
+  #   2. missing validity — narHash added, but narHash only short-circuits a path
+  #      nix already considers VALID (#1815)
+  #   3. missing DB       — the OCI image baked no /nix/var/nix/db/db.sqlite at
+  #      all, so the pinned source (present in the image) was never valid; fixed
+  #      by `includeNixDB = true` in oci-layer.nix
+  #   4. wrong journal mode — the DB was baked WAL-marked (build nix defaults
+  #      `use-sqlite-wal = true`) while the image's nix.conf set it false; the
+  #      guest's shm-less dotfile-VFS open then fails outright and every
+  #      nix-daemon connection resets (ix#6563)
+  # The boundary this defends: the built base OCI archive must ship a populated
+  # /nix/var/nix/db/db.sqlite whose ValidPaths includes EVERY source the image
+  # bakes for in-guest eval — otherwise the first in-guest `nix` re-ingests it —
+  # and whose journal mode the image's own nix.conf can actually open.
+  # Two classes of baked source, both covered here:
+  #   - flake registry pins (nixpkgs and, once baked, index), read off
+  #     `nix.registry.*.to.path`; and
+  #   - sources baked WITHOUT a registry pin via `system.extraDependencies`
+  #     (rust-overlay — forced when index's flake evaluates under `nix run`,
+  #     but reached through no registry row), read off that option. The
+  #     registry-derived projection cannot catch these, precisely because they
+  #     are not registry pins, so they need their own list.
+  # A bare db.sqlite, or the registry pin alone, is not enough. Deriving the
+  # required paths from the image's OWN config (the registry and
+  # `system.extraDependencies`) means a future pin or baked source is covered
+  # automatically and this can never silently drift from what ships. This check
+  # builds the real base archive and asserts exactly that, so it also proves the
+  # DB survives oci-image-builder's re-streaming. It builds an OCI image, so it
+  # is its own check (not the pure-eval `eval` aggregate) and runs on Linux.
+  # It also defends the self-contained invariant: every layer blob the manifest
+  # references must be embedded in the archive as a regular file. The builder
+  # once wrote the customisation blob as a symlink into /nix/store, so the
+  # archive depended on out-of-tar store state and this check failed whenever
+  # the referenced path was not visible at read time (index#2058).
+  baseImageNixDb = let
+    # Every `path`-type registry pin the image ships. Guard on the type so a
+    # non-path entry (e.g. a default indirect/github registry row) can't break
+    # the projection; those don't bake a source and aren't what this defends.
+    registryPaths = lib.pipe base.imageConfig.nix.registry [
+      builtins.attrValues
+      (builtins.filter (entry: (entry.to.type or null) == "path" && entry.to ? path))
+      (map (entry: entry.to.path))
+    ];
+    # Sources baked into the system closure without a registry pin (the
+    # `extraBakedSources` list in lib/image/default.nix). `toString` so a path
+    # value renders as its store path for the sqlite lookup below.
+    extraBakedPaths = map toString base.imageConfig.system.extraDependencies;
+  in
+    pkgs.runCommand "ix-test-base-image-nix-db" {
+      nativeBuildInputs = [
+        pkgs.gnutar
+        pkgs.sqlite
+        pkgs.gnugrep
+        pkgs.coreutils
+        pkgs.jq
+      ];
+      archive = base.imageConfig.ix.build.ociImage;
+      requiredPaths = registryPaths ++ extraBakedPaths;
+      # SQLite header bytes 18/19 (file-format versions): "1 1" = rollback
+      # journal, "2 2" = WAL. Derived from the image's OWN nix.conf so the
+      # assertion tracks the setting instead of hardcoding a mode.
+      expectedDbFormat =
+        if base.imageConfig.nix.settings.use-sqlite-wal or true
+        then "2 2"
+        else "1 1";
+    } ''
+      mkdir extract db
+      tar -C extract -xf "$archive"
+      # Walk only the layer blobs the manifest declares: config/manifest JSON
+      # blobs share blobs/sha256/ and are not tars, so globbing the dir would
+      # need tar errors suppressed, and that suppression is what let a dangling
+      # store-symlink blob read as "db not here" instead of failing (index#2058).
+      manifest_digest=$(jq -r '.manifests[0].digest' extract/index.json | cut -d: -f2)
+      layer_digests=$(jq -r '.layers[].digest' "extract/blobs/sha256/$manifest_digest" | cut -d: -f2)
+      found=
+      for digest in $layer_digests; do
+        blob="extract/blobs/sha256/$digest"
+        if [ -L "$blob" ] || [ ! -f "$blob" ]; then
+          echo "error: layer blob sha256:$digest is missing or not a regular file; the archive is not self-contained (index#2058)" >&2
+          exit 1
+        fi
+        # No stderr suppression: a layer that cannot be listed is a corrupt
+        # archive and must fail loudly, not read as "db not here".
+        listing=$(tar -tf "$blob")
+        if grep -qx './nix/var/nix/db/db.sqlite' <<< "$listing"; then
+          tar -C db -xf "$blob" ./nix/var/nix/db/db.sqlite
+          found=1
+        fi
+      done
+      if [ -z "$found" ]; then
+        echo "error: no OCI layer contains nix/var/nix/db/db.sqlite; the image ships no store DB (includeNixDB off?)" >&2
+        exit 1
+      fi
+      dbfile=db/nix/var/nix/db/db.sqlite
+      # Every registry-pinned source must be a VALID path in the shipped DB, or
+      # the guest re-ingests it on first eval.
+      for src in $requiredPaths; do
+        count=$(sqlite3 "$dbfile" \
+          "SELECT count(*) FROM ValidPaths WHERE path = '$src';")
+        if [ "$count" != "1" ]; then
+          echo "error: registry-pinned source $src is not registered valid in the image nix DB (found $count rows)" >&2
+          echo "ValidPaths sample:" >&2
+          sqlite3 "$dbfile" "SELECT path FROM ValidPaths LIMIT 20;" >&2
+          exit 1
+        fi
+      done
+      # Journal-mode agreement (regression 4, ix#6563). A complete ValidPaths
+      # is worthless if the guest cannot open the DB at all: with
+      # `use-sqlite-wal = false` nix opens it on SQLite's unix-dotfile VFS (no
+      # shared memory), which refuses WAL-marked databases (SQLITE_CANTOPEN),
+      # and every nix-daemon connection dies with "Connection reset by peer".
+      format=$(od -An -tu1 -j18 -N2 "$dbfile")
+      format=$(echo $format)
+      if [ "$format" != "$expectedDbFormat" ]; then
+        echo "error: baked db.sqlite header format is '$format' but the image's use-sqlite-wal setting requires '$expectedDbFormat'; the guest cannot open this DB (ix#6563)" >&2
+        exit 1
+      fi
+      mkdir -p "$out"
+    '';
 
   # --- Language helpers -----------------------------------------------------
 
   languages = {
     pythonMissingVersion = builtins.tryEval (
-      builtins.deepSeq (ix.languages.python.interpreter pkgs { }).pythonVersion true
+      builtins.deepSeq (ix.languages.python.interpreter pkgs {}).pythonVersion true
     );
     pythonUnknown = builtins.tryEval (
-      builtins.deepSeq (ix.languages.python.interpreter pkgs { version = "3.99"; }).pythonVersion true
+      builtins.deepSeq (ix.languages.python.interpreter pkgs {version = "3.99";}).pythonVersion true
     );
 
     rustMissingVersion = builtins.tryEval (
-      builtins.deepSeq (ix.languages.rust.toolchain pkgs { channel = "nightly"; }).name true
+      builtins.deepSeq (ix.languages.rust.toolchain pkgs {channel = "nightly";}).name true
     );
     rustPinnedNightly = ix.languages.rust.toolchain pkgs {
       channel = "nightly";
@@ -2261,121 +2445,115 @@ let
       ];
     };
     rustBadChannel = builtins.tryEval (
-      builtins.deepSeq (ix.languages.rust.toolchain pkgs { channel = "nighty"; }).name true
+      builtins.deepSeq (ix.languages.rust.toolchain pkgs {channel = "nighty";}).name true
     );
     rustBadProfile = builtins.tryEval (
-      builtins.deepSeq (ix.languages.rust.toolchain pkgs { profile = "extreme"; }).name true
+      builtins.deepSeq (ix.languages.rust.toolchain pkgs {profile = "extreme";}).name true
     );
 
     javaMissingDistribution = builtins.tryEval (
-      builtins.deepSeq (ix.languages.java.jdk pkgs { version = "21"; }).name true
+      builtins.deepSeq (ix.languages.java.jdk pkgs {version = "21";}).name true
     );
     javaBadDistribution = builtins.tryEval (
       builtins.deepSeq
-        (ix.languages.java.jdk pkgs {
-          version = "21";
-          distribution = "openjdkk";
-        }).name
-        true
+      (ix.languages.java.jdk pkgs {
+        version = "21";
+        distribution = "openjdkk";
+      }).name
+      true
     );
     javaBadVersion = builtins.tryEval (
       builtins.deepSeq
-        (ix.languages.java.jdk pkgs {
-          version = "22";
-          distribution = "temurin";
-        }).name
-        true
+      (ix.languages.java.jdk pkgs {
+        version = "22";
+        distribution = "temurin";
+      }).name
+      true
     );
   };
 
   # --- Minestom + YourKit wiring -------------------------------------------
 
-  minestomYourkit =
-    let
-      yourkitConfig = evalConfig [
-        {
-          services.minestom = {
+  minestomYourkit = let
+    yourkitConfig = evalConfig [
+      {
+        services.minestom = {
+          enable = true;
+          serverJar = pkgs.runCommand "fake-minestom.jar" {} "touch $out";
+          yourkit = {
             enable = true;
-            serverJar = pkgs.runCommand "fake-minestom.jar" { } "touch $out";
-            yourkit = {
-              enable = true;
-              listen = "all";
-              openFirewall = true;
-              sessionName = "minestom-eval-test";
-            };
+            listen = "all";
+            openFirewall = true;
+            sessionName = "minestom-eval-test";
           };
-        }
-      ];
-      unit = yourkitConfig.systemd.services.minestom;
-    in
-    {
-      inherit yourkitConfig;
-      execStart = unit.serviceConfig.ExecStart;
-      firewallTcpPorts = yourkitConfig.networking.firewall.allowedTCPPorts;
-      portClaim = yourkitConfig.ix.networking.portClaims.minestom-yourkit or null;
-    };
-
-  minestomNoYourkit =
-    let
-      noYourkitConfig = evalConfig [
-        {
-          services.minestom = {
-            enable = true;
-            serverJar = pkgs.runCommand "fake-minestom.jar" { } "touch $out";
-          };
-        }
-      ];
-      unit = noYourkitConfig.systemd.services.minestom;
-    in
-    {
-      inherit noYourkitConfig;
-      execStart = unit.serviceConfig.ExecStart;
-      portClaim = noYourkitConfig.ix.networking.portClaims.minestom-yourkit or null;
-    };
-
-  minecraftBlocksExample =
-    let
-      fleet = import (paths.examples + "/minecraft/blocks/ix.nix") {
-        index = {
-          lib = ix;
         };
-      };
-      # The buildable artifacts (plugin jar, integration check) built directly
-      # so the integration check can be pulled into the `eval` aggregate via
-      # `helperScript`.
-      packages = import (paths.examples + "/minecraft/blocks/packages.nix") { inherit ix pkgs; };
-      schema = import (paths.examples + "/minecraft/blocks/schema.nix") { inherit lib; };
-    in
-    {
-      inherit fleet packages schema;
-      log = {
-        config = fleet.nodes.log;
-        plan = fleet.planValue.nodes.log;
-        kafka = fleet.nodes.log.services.apache-kafka;
-      };
-      view = {
-        config = fleet.nodes.view;
-        plan = fleet.planValue.nodes.view;
-        obs = fleet.nodes.view.services.ix-observability;
-        initUnit = fleet.nodes.view.systemd.services.mc-blocks-view-init;
-      };
-      producer = {
-        config = fleet.nodes.producer;
-        plan = fleet.planValue.nodes.producer;
-        minecraft = fleet.nodes.producer.services.minecraft;
-        agent = fleet.nodes.producer.services.ix-observability;
-        shipUnit = fleet.nodes.producer.systemd.services.mc-blocks-ship;
+      }
+    ];
+    unit = yourkitConfig.systemd.services.minestom;
+  in {
+    inherit yourkitConfig;
+    execStart = unit.serviceConfig.ExecStart;
+    firewallTcpPorts = yourkitConfig.networking.firewall.allowedTCPPorts;
+    portClaim = yourkitConfig.ix.networking.portClaims.minestom-yourkit or null;
+  };
+
+  minestomNoYourkit = let
+    noYourkitConfig = evalConfig [
+      {
+        services.minestom = {
+          enable = true;
+          serverJar = pkgs.runCommand "fake-minestom.jar" {} "touch $out";
+        };
+      }
+    ];
+    unit = noYourkitConfig.systemd.services.minestom;
+  in {
+    inherit noYourkitConfig;
+    execStart = unit.serviceConfig.ExecStart;
+    portClaim = noYourkitConfig.ix.networking.portClaims.minestom-yourkit or null;
+  };
+
+  minecraftBlocksExample = let
+    fleet = import (paths.examples + "/minecraft/blocks/ix.nix") {
+      index = {
+        lib = ix;
       };
     };
+    # The buildable artifacts (plugin jar, integration check) built directly
+    # so the integration check can be pulled into the `eval` aggregate via
+    # `helperScript`.
+    packages = import (paths.examples + "/minecraft/blocks/packages.nix") {inherit ix pkgs;};
+    schema = import (paths.examples + "/minecraft/blocks/schema.nix") {inherit lib;};
+  in {
+    inherit fleet packages schema;
+    log = {
+      config = fleet.nodes.log;
+      plan = fleet.planValue.nodes.log;
+      kafka = fleet.nodes.log.services.apache-kafka;
+    };
+    view = {
+      config = fleet.nodes.view;
+      plan = fleet.planValue.nodes.view;
+      obs = fleet.nodes.view.services.ix-observability;
+      initUnit = fleet.nodes.view.systemd.services.mc-blocks-view-init;
+    };
+    producer = {
+      config = fleet.nodes.producer;
+      plan = fleet.planValue.nodes.producer;
+      minecraft = fleet.nodes.producer.services.minecraft;
+      agent = fleet.nodes.producer.services.ix-observability;
+      shipUnit = fleet.nodes.producer.systemd.services.mc-blocks-ship;
+    };
+  };
   invalidSecretNameEval = builtins.tryEval (
     builtins.deepSeq
-      (ix.mkFleet {
-        deployment.secrets."BAD_SECRET".env = "BAD_SECRET";
-        nodes.web = {
-          services.openssh.enable = true;
-        };
-      }).planValue
-      true
+    (ix.mkFleet {
+      deployment.secrets.BAD_SECRET.env = "BAD_SECRET";
+      nodes.web = {
+        services.openssh.enable = true;
+      };
+    }).planValue
+    true
   );
 
   # --- wrapPackage typed argument surface (RFC 0008) -------------------------
@@ -2388,15 +2566,15 @@ let
     env.WRAP_FIXTURE = "literal $HOME `code` \"quoted\"";
     # Exercises the PATH line; the helpers check asserts the wrapper defers
     # `$PATH` to runtime instead of baking the build sandbox PATH.
-    pathSuffix = [ pkgs.hello ];
+    pathSuffix = [pkgs.hello];
   };
   wrapPackageTypoEval = builtins.tryEval (
     builtins.seq
-      (ix.wrapPackage pkgs {
-        package = pkgs.hello;
-        symlinkz.hello-alias = "hello";
-      }).drvPath
-      true
+    (ix.wrapPackage pkgs {
+      package = pkgs.hello;
+      symlinkz.hello-alias = "hello";
+    }).drvPath
+    true
   );
   # A minimal fixture (not an overridden `hello`) so the only reachable throw
   # when forcing the wrapper drvPath is the builder's own missing-`mainProgram`
@@ -2404,19 +2582,22 @@ let
   # vacuously.
   wrapPackageNoMainProgramEval = builtins.tryEval (
     builtins.seq
-      (ix.wrapPackage pkgs {
-        package = pkgs.stdenv.mkDerivation {
-          pname = "wrap-package-no-main-fixture";
-          version = "0";
-          strictDeps = true;
-          dontUnpack = true;
-        };
-      }).drvPath
-      true
+    (ix.wrapPackage pkgs {
+      package = pkgs.stdenv.mkDerivation {
+        pname = "wrap-package-no-main-fixture";
+        version = "0";
+        strictDeps = true;
+        dontUnpack = true;
+      };
+    }).drvPath
+    true
   );
-  wrapPackageMainProgramDoc = lib.findFirst (
-    opt: opt.name == "mainProgram"
-  ) null ix.wrapPackage.optionsDoc;
+  wrapPackageMainProgramDoc =
+    lib.findFirst (
+      opt: opt.name == "mainProgram"
+    )
+    null
+    ix.wrapPackage.optionsDoc;
 
   # --- Module and example assertion groups ----------------------------------
 
@@ -2443,6 +2624,14 @@ let
         healthChecks = {
           web.unit = "nginx";
           cron.unit = "backup.timer";
+          ready.http = {
+            port = 8080;
+            path = "/healthz";
+          };
+          peer.tcp = {
+            host = "svc-b";
+            port = 5432;
+          };
         };
       };
     }
@@ -2452,7 +2641,27 @@ let
     {
       ix.healthChecks.bad = {
         unit = "nginx";
-        command = [ "true" ];
+        command = ["true"];
+      };
+    }
+  ];
+
+  idiomaticMultiSugarFailures = failedAssertionsFor [
+    {
+      ix.healthChecks.bad = {
+        unit = "nginx";
+        http.port = 8080;
+      };
+    }
+  ];
+
+  # `http`/`tcp` sugar execs in-guest store paths, which do not exist on the
+  # operator's machine; host-side probes need an explicit command.
+  idiomaticHostProbeSugarFailures = failedAssertionsFor [
+    {
+      ix.healthChecks.bad = {
+        from = "host";
+        tcp.port = 5432;
       };
     }
   ];
@@ -2478,8 +2687,7 @@ let
   ixRayHead = evalConfig [
     withIndexLib
     (
-      { pkgs, ... }:
-      {
+      {pkgs, ...}: {
         services.ix-ray = {
           enable = true;
           role = "head";
@@ -2492,8 +2700,7 @@ let
   ixRayWorker = evalConfig [
     withIndexLib
     (
-      { pkgs, ... }:
-      {
+      {pkgs, ...}: {
         services.ix-ray = {
           enable = true;
           role = "worker";
@@ -2528,7 +2735,159 @@ let
     }
   ];
 
+  # --- fork closure gates (RFC 0010 A3, #2098) -------------------------------
+  # Pure-eval facts about the per-attempt-patch closure machinery: the dag.json
+  # closure computation (`ix.forkClosureGates.closureOf`) and `patchedSrc`'s
+  # optional series restriction. The gate derivations themselves are heavy
+  # full-package builds owned by the scheduled fork-closure-gates workflow,
+  # never checks; nothing here forces one (attrNames stays shallow).
+  syntheticDagNodes = [
+    {
+      patch = "0001-a.patch";
+      deps = [];
+    }
+    {
+      patch = "0002-b.patch";
+      deps = ["0001-a.patch"];
+    }
+    {
+      patch = "0003-c.patch";
+      deps = [];
+    }
+    {
+      patch = "0004-d.patch";
+      deps = [
+        "0002-b.patch"
+        "0003-c.patch"
+      ];
+    }
+  ];
+  # The committed clippy DAG is the known fork with real transitive chains
+  # (0014 -> 0005 -> 0003 -> 0002 and 0014 -> 0009 -> 0008 -> 0007), so it
+  # exercises closure computation against live data, not just the synthetic
+  # fixture. A rebase that reshapes these edges legitimately updates this
+  # expectation.
+  clippyDag = lib.importJSON (paths.packagesRoot + "/llm-clippy/patches/dag.json");
+  nixAttemptPatches = lib.attrNames (
+    lib.filterAttrs (_: mark: (mark.upstream or "hold") == "attempt")
+    (
+      lib.findFirst (fork: fork.name == "nix") (throw "no nix fork entry") ix.forkPackages
+    )
+    .patches
+  );
+  patchedSrcFixture = args:
+    ix.patchedSrc ({
+        name = "patched-src-fixture";
+        src = ./fixtures/patched-src;
+        patchDir = ./fixtures/patched-src;
+      }
+      // args);
+  # Forcing `.patches` runs the eval-time selection + canonical assertions
+  # without building anything.
+  patchedSrcSubsetEval = builtins.tryEval (
+    builtins.deepSeq (patchedSrcFixture {patchNames = ["0001-canonical.patch"];}).patches true
+  );
+  patchedSrcSubsetNonCanonicalEval = builtins.tryEval (
+    builtins.deepSeq (patchedSrcFixture {patchNames = ["0002-noncanonical.patch"];}).patches true
+  );
+  patchedSrcSubsetUnknownEval = builtins.tryEval (
+    builtins.deepSeq (patchedSrcFixture {patchNames = ["9999-missing.patch"];}).patches true
+  );
+  patchedSrcDefaultEval = builtins.tryEval (
+    builtins.deepSeq (patchedSrcFixture {}).patches true
+  );
+
   groups = {
+    security-roots = [
+      {
+        assertion =
+          securityRootJson
+          == {
+            attr = "packages.${pkgs.stdenv.hostPlatform.system}.hello";
+            name = "hello";
+            class = "distributed-cli";
+            owner = "indexable-inc/index";
+            environment = "none";
+            exposure = "local";
+            criticality = "low";
+            slaHours = 168;
+          };
+        message = "security root policy should cross the nix eval JSON boundary without derivation state";
+      }
+      {
+        assertion = !invalidSecurityRootClass.success;
+        message = "security roots should reject unknown class values at evaluation";
+      }
+      {
+        assertion = !invalidSecurityRootSla.success;
+        message = "security roots should reject non-positive SLA hours at evaluation";
+      }
+      {
+        assertion = !(securityRootJson ? path);
+        message = "evaluated security root policy must not serialize an unrealized derivation path";
+      }
+    ];
+    # efx terranix-port parity: the ported stacks under tests/efx must render
+    # exactly the golden plan IR the efx CLI's tests parse, and everything the
+    # translator cannot express must throw. See tests/efx-plan.nix.
+    efx = import ./efx-plan.nix {inherit lib ix paths;};
+    fork-closure-gates = [
+      {
+        assertion =
+          ix.forkClosureGates.closureOf syntheticDagNodes "0004-d.patch"
+          == [
+            "0001-a.patch"
+            "0002-b.patch"
+            "0003-c.patch"
+            "0004-d.patch"
+          ];
+        message = "closureOf should return the patch plus its transitive dag deps in NNNN order";
+      }
+      {
+        assertion = ix.forkClosureGates.closureOf syntheticDagNodes "0001-a.patch" == ["0001-a.patch"];
+        message = "closureOf of a root patch should be just the patch itself";
+      }
+      {
+        assertion =
+          ix.forkClosureGates.closureOf clippyDag.nodes "0014-Add-anonymous-tuple-return-type-lint.patch"
+          == [
+            "0002-Add-module_file_count-lint.patch"
+            "0003-Add-excessive_file_length-lint.patch"
+            "0005-Add-underscore_in_module_filename-lint.patch"
+            "0007-Add-fallible_int_fallback-lint.patch"
+            "0008-Add-magic_number-lint.patch"
+            "0009-Add-drop_must_use-lint.patch"
+            "0014-Add-anonymous-tuple-return-type-lint.patch"
+          ];
+        message = "closureOf should reproduce the committed clippy dag.json transitive closure of 0014";
+      }
+      {
+        # Crosses the fork-packages.nix intent <-> package passthru boundary:
+        # the nix package must expose exactly one gate per attempt-marked
+        # patch (attrNames only; forcing a gate would eval a full package).
+        assertion = lib.attrNames repoPackages.nix-ix.closureGates == nixAttemptPatches;
+        message = "nix-ix should expose one closure gate per attempt-marked patch in lib/fork-packages.nix";
+      }
+      {
+        assertion = patchedSrcSubsetEval.success;
+        message = "patchedSrc should accept a patchNames subset of the discovered series";
+      }
+      {
+        assertion = !patchedSrcSubsetNonCanonicalEval.success;
+        message = "patchedSrc should still assert canonical patch format on a selected subset";
+      }
+      {
+        assertion = !patchedSrcSubsetUnknownEval.success;
+        message = "patchedSrc should reject a patchNames entry naming no patch file in the series";
+      }
+      {
+        # The default (null) selection must keep discovering the WHOLE dir:
+        # the fixture dir contains a non-canonical patch, so full discovery
+        # can only succeed by skipping files, which would be the regression.
+        assertion = !patchedSrcDefaultEval.success;
+        message = "patchedSrc default discovery should still walk every patch file (and thus trip on the non-canonical fixture)";
+      }
+    ];
     wrap-package = [
       {
         assertion = !wrapPackageTypoEval.success;
@@ -2552,7 +2911,8 @@ let
         # keeps a missing entry a clean assertion failure instead of an
         # attribute-selection crash inside mkTest.
         assertion =
-          wrapPackageMainProgramDoc != null
+          wrapPackageMainProgramDoc
+          != null
           && wrapPackageMainProgramDoc.default.text == "package.meta.mainProgram";
         message = "wrapPackage optionsDoc should render the computed mainProgram default via defaultText";
       }
@@ -2560,7 +2920,8 @@ let
     mcp = [
       {
         assertion =
-          sampleCodexMcpEntry "mcp_servers.index.default_tools_approval_mode" == {
+          sampleCodexMcpEntry "mcp_servers.index.default_tools_approval_mode"
+          == {
             key = "mcp_servers.index.default_tools_approval_mode";
             value = "\"approve\"";
           };
@@ -2568,19 +2929,30 @@ let
       }
       {
         assertion =
-          sampleCodexMcpEntry "mcp_servers.index.env_vars" == {
-            key = "mcp_servers.index.env_vars";
-            value = ''[ "GH_TOKEN", "GITHUB_TOKEN", "IX_TOKEN", "LINEAR_API_KEY", "NOTION_API_KEY", "SLACK_TOKEN", "SLACK_USER_TOKEN" ]'';
-          };
-        message = "Codex MCP entries should explicitly forward API environment variables to index MCP";
+          lib.all (name: builtins.elem name sampleMcpServers.index.envVars) googleOauthEnvVars;
+        message = "index MCP should declare the Google OAuth client environment variables";
       }
       {
-        assertion = sampleClaudeMcpServers.index.env.LINEAR_API_KEY == "\${LINEAR_API_KEY:-}";
-        message = "Claude MCP config should forward API environment variables to index MCP";
+        assertion = let
+          entry = sampleCodexMcpEntry "mcp_servers.index.env_vars";
+        in
+          entry
+          != null
+          && lib.all (name: lib.hasInfix (builtins.toJSON name) entry.value) googleOauthEnvVars;
+        message = "Codex MCP config should forward the Google OAuth client environment variables";
       }
       {
         assertion =
-          sampleCodexMcpEntry "mcp_servers.exa.url" == {
+          lib.all (
+            name: sampleClaudeMcpServers.index.env.${name} == "\${${name}:-}"
+          )
+          googleOauthEnvVars;
+        message = "Claude MCP config should forward the Google OAuth client environment variables";
+      }
+      {
+        assertion =
+          sampleCodexMcpEntry "mcp_servers.exa.url"
+          == {
             key = "mcp_servers.exa.url";
             value = "\"https://mcp.exa.ai/mcp\"";
           };
@@ -2588,7 +2960,8 @@ let
       }
       {
         assertion =
-          sampleCodexMcpEntryWithoutIndex "mcp_servers.exa.url" == {
+          sampleCodexMcpEntryWithoutIndex "mcp_servers.exa.url"
+          == {
             key = "mcp_servers.exa.url";
             value = "\"https://mcp.exa.ai/mcp\"";
           };
@@ -2598,16 +2971,34 @@ let
         assertion =
           ix.mcp.houseServers {
             indexCommand = "/bin/ix-mcp";
-          } == ix.mcp.defaultServers {
+          }
+          == ix.mcp.defaultServers {
             indexCommand = "/bin/ix-mcp";
           };
         message = "MCP registry should keep houseServers as a compatibility alias for defaultServers";
       }
       {
-        assertion = lib.all (
-          entry: lib.hasPrefix "mcp_servers.index." entry.key || lib.hasPrefix "mcp_servers.exa." entry.key
-        ) sampleCodexMcpEntries;
+        assertion =
+          lib.all (
+            entry: lib.hasPrefix "mcp_servers.index." entry.key || lib.hasPrefix "mcp_servers.exa." entry.key
+          )
+          sampleCodexMcpEntries;
         message = "Codex MCP entries should be limited to index and Exa when index MCP is available";
+      }
+      {
+        assertion =
+          (ix.mcp.toClaudeJson (ix.mcp.optionalServers {blenderMcp = "/bin/blender-mcp";})).blender.command
+          == "/bin/blender-mcp";
+        message = "Opt-in Blender MCP server should render for Claude with the consumer's binary";
+      }
+      {
+        assertion = let
+          servers = ix.mcp.optionalServers {blenderLabMcp = "/bin/blender-lab-mcp";};
+        in
+          builtins.attrNames servers
+          == ["blender-lab"]
+          && servers.blender-lab.env.BLENDER_MCP_PORT == "9877";
+        message = "Opt-in Blender Lab server should render alone with its non-default port";
       }
     ];
 
@@ -2632,6 +3023,31 @@ let
           && !(lib.hasInfix "via Codex" sampleClaudeSystemPrompt);
         message = "Claude prompt should disclose outward messages as Claude Code, not Codex";
       }
+      {
+        # `system`-tagged rules (identity, harness basics) belong only to the
+        # full system-prompt render; a context file rides on the stock prompt.
+        assertion =
+          !(lib.hasInfix "You are Claude Code" sampleClaudeContextPrompt)
+          && !(lib.hasInfix "You are Codex" sampleCodexContextPrompt);
+        message = "Context renders should drop system-tagged identity rules";
+      }
+      {
+        # Runtime tags survive independently of the kind axis: the
+        # claude-code-tagged build-observability rule stays in both Claude
+        # renders and never reaches Codex.
+        assertion =
+          lib.hasInfix "nix store builds --json" sampleClaudeSystemPrompt
+          && lib.hasInfix "nix store builds --json" sampleClaudeContextPrompt
+          && !(lib.hasInfix "nix store builds --json" sampleCodexSystemPrompt);
+        message = "Runtime-tagged rules should follow their runtime across kinds";
+      }
+      {
+        # Untagged rules render everywhere, including context files.
+        assertion =
+          lib.hasInfix "shokunin" sampleClaudeContextPrompt
+          && lib.hasInfix "shokunin" sampleCodexContextPrompt;
+        message = "Untagged rules should render into context files";
+      }
     ];
 
     ix-ray = [
@@ -2642,25 +3058,46 @@ let
       }
       {
         # The head opens the GCS (workers join), the Ray Client server
-        # (off-cluster `ray://` drivers), exec, and pinned inter-node ports.
-        assertion =
-          let
-            ports = ixRayHead.networking.firewall.allowedTCPPorts;
-          in
+        # (off-cluster `ray://` drivers), exec, and pinned inter-node ports --
+        # on the tailscale interface only.
+        assertion = let
+          ports = ixRayHead.networking.firewall.interfaces.tailscale0.allowedTCPPorts;
+        in
           builtins.elem 6379 ports
           && builtins.elem 10001 ports
           && builtins.elem 8799 ports
           && builtins.elem 6380 ports
           && builtins.elem 6381 ports;
-        message = "ix-ray head should open the GCS, client-server, exec, and inter-node manager ports";
+        message = "ix-ray head should open the GCS, client-server, exec, and inter-node manager ports on tailscale0";
+      }
+      {
+        # Ray's GCS and Client server are unauthenticated (reaching them is
+        # arbitrary code execution), so NOTHING may open them on the global
+        # firewall: a fleet host can also face the internet, and a global
+        # `allowedTCPPorts` would have published `ray://<public-ip>:10001`
+        # (index#1800 review).
+        assertion = let
+          globalPorts = ixRayHead.networking.firewall.allowedTCPPorts;
+          globalRanges = ixRayHead.networking.firewall.allowedTCPPortRanges;
+          rayPorts = [
+            6379
+            6380
+            6381
+            8798
+            8799
+            10001
+          ];
+        in
+          builtins.all (p: !(builtins.elem p globalPorts)) rayPorts
+          && builtins.all (r: !(r.from == 10002 && r.to == 10031)) globalRanges;
+        message = "ix-ray must never open its ports on the global firewall, only on tailscale0";
       }
       {
         # A worker opens its inter-node + exec ports, but neither the GCS nor the
         # client-server port (only the head serves those).
-        assertion =
-          let
-            ports = ixRayWorker.networking.firewall.allowedTCPPorts;
-          in
+        assertion = let
+          ports = ixRayWorker.networking.firewall.interfaces.tailscale0.allowedTCPPorts;
+        in
           builtins.elem 8799 ports
           && builtins.elem 6380 ports
           && !(builtins.elem 6379 ports)
@@ -2676,18 +3113,17 @@ let
       }
       {
         # notebook.enable (the default) requires a notebookPackage to run the engine.
-        assertion =
-          let
-            failures = failedAssertionsFor [
-              withIndexLib
-              {
-                services.ix-ray = {
-                  enable = true;
-                  role = "head";
-                };
-              }
-            ];
-          in
+        assertion = let
+          failures = failedAssertionsFor [
+            withIndexLib
+            {
+              services.ix-ray = {
+                enable = true;
+                role = "head";
+              };
+            }
+          ];
+        in
           builtins.any (a: lib.hasInfix "notebookPackage" a.message) failures;
         message = "ix-ray should fail evaluation when notebook.enable has no notebookPackage";
       }
@@ -2695,45 +3131,56 @@ let
         # The Ray daemon must use the short /run temp-dir so its plasma AF_UNIX
         # socket path stays under the 108-byte sun_path limit, and must keep the
         # object store mappable from an attaching kernel (PrivateDevices off).
-        assertion =
-          let
-            unit = ixRayHead.systemd.services.ix-ray.serviceConfig;
-          in
+        assertion = let
+          unit = ixRayHead.systemd.services.ix-ray.serviceConfig;
+        in
           unit.RuntimeDirectory == "ray" && unit.PrivateDevices == false && unit.PrivateUsers == false;
         message = "ix-ray daemon should use /run/ray and leave the shared-memory object store mappable";
       }
       {
+        # Both roles must exec `ray start <flags>`: the launcher builds its arg
+        # list from `["start"] ++ modeArgs`, so the rendered script must carry
+        # the `start` subcommand ahead of the mode flag. Regressed once when the
+        # list began with `--head`/`--address` and Ray crash-looped on
+        # `No such option: --head` (index#1800 crash-loop).
+        assertion = let
+          headScript = builtins.readFile ixRayHead.systemd.services.ix-ray.serviceConfig.ExecStart;
+          workerScript = builtins.readFile ixRayWorker.systemd.services.ix-ray.serviceConfig.ExecStart;
+        in
+          lib.hasInfix "\"start\" \"--head\"" headScript
+          && lib.hasInfix "\"start\" \"--address\"" workerScript;
+        message = "ix-ray launcher must exec `ray start` (the `start` subcommand ahead of --head/--address), never `ray --head`";
+      }
+      {
         # A worker with no headAddress cannot know where to join: fail eval.
-        assertion =
-          let
-            failures = failedAssertionsFor [
-              withIndexLib
-              {
-                services.ix-ray = {
-                  enable = true;
-                  role = "worker";
-                };
-              }
-            ];
-          in
+        assertion = let
+          failures = failedAssertionsFor [
+            withIndexLib
+            {
+              services.ix-ray = {
+                enable = true;
+                role = "worker";
+              };
+            }
+          ];
+        in
           builtins.any (a: lib.hasInfix "headAddress" a.message) failures;
         message = "ix-ray worker should fail evaluation without a headAddress";
       }
       {
         # The head must not set headAddress (it IS the address).
-        assertion =
-          let
-            failures = failedAssertionsFor [
-              withIndexLib
-              {
-                services.ix-ray = {
-                  enable = true;
-                  role = "head";
-                  headAddress = "100.64.0.1";
-                };
-              }
-            ];
-          in
+        assertion = let
+          failures = failedAssertionsFor [
+            withIndexLib
+            {
+              services.ix-ray = {
+                enable = true;
+                role = "head";
+                headAddress = "100.64.0.1";
+              };
+            }
+          ];
+        in
           builtins.any (a: lib.hasInfix "headAddress" a.message) failures;
         message = "ix-ray head should fail evaluation when headAddress is set";
       }
@@ -2750,21 +3197,36 @@ let
         message = "ix-spark master should run master + worker + connect daemons";
       }
       {
-        # Connect (15002) and master RPC (7077) are opened on the master.
-        assertion =
-          let
-            ports = ixSparkMaster.networking.firewall.allowedTCPPorts;
-          in
+        # Connect (15002) and master RPC (7077) are opened on the master, on
+        # the tailscale interface only.
+        assertion = let
+          ports = ixSparkMaster.networking.firewall.interfaces.tailscale0.allowedTCPPorts;
+        in
           builtins.elem 15002 ports && builtins.elem 7077 ports;
-        message = "ix-spark master should open the Connect (15002) and master (7077) ports";
+        message = "ix-spark master should open the Connect (15002) and master (7077) ports on tailscale0";
+      }
+      {
+        # Spark's master RPC and Connect server are unauthenticated (a job
+        # submission is code execution), so nothing may open them on the GLOBAL
+        # firewall -- same exposure class as ix-ray (index#1800 review).
+        assertion = let
+          globalPorts = ixSparkMaster.networking.firewall.allowedTCPPorts;
+        in
+          builtins.all (p: !(builtins.elem p globalPorts)) [
+            7077
+            7078
+            7079
+            7080
+            15002
+          ];
+        message = "ix-spark must never open its ports on the global firewall, only on tailscale0";
       }
       {
         # A worker only runs a worker joining the remote master: no master, no
         # connect, and it must not open the master's ports.
-        assertion =
-          let
-            ports = ixSparkWorker.networking.firewall.allowedTCPPorts;
-          in
+        assertion = let
+          ports = ixSparkWorker.networking.firewall.interfaces.tailscale0.allowedTCPPorts;
+        in
           (ixSparkWorker.systemd.services ? spark-worker)
           && !(ixSparkWorker.systemd.services ? spark-master)
           && !(ixSparkWorker.systemd.services ? spark-connect)
@@ -2774,18 +3236,17 @@ let
       }
       {
         # A worker with no masterAddress cannot know where to join: fail eval.
-        assertion =
-          let
-            failures = failedAssertionsFor [
-              withIndexLib
-              {
-                services.ix-spark = {
-                  enable = true;
-                  role = "worker";
-                };
-              }
-            ];
-          in
+        assertion = let
+          failures = failedAssertionsFor [
+            withIndexLib
+            {
+              services.ix-spark = {
+                enable = true;
+                role = "worker";
+              };
+            }
+          ];
+        in
           builtins.any (a: lib.hasInfix "masterAddress" a.message) failures;
         message = "ix-spark worker should fail evaluation without a masterAddress";
       }
@@ -2794,7 +3255,8 @@ let
     idiomatic-fleet-api = [
       {
         assertion =
-          idiomaticExpose.ix.healthChecks.web.command == [
+          idiomaticExpose.ix.healthChecks.web.command
+          == [
             (lib.getExe' idiomaticExpose.systemd.package "systemctl")
             "is-active"
             "--quiet"
@@ -2807,39 +3269,79 @@ let
         message = "ix.healthChecks.<name>.unit should keep an explicit unit type suffix (.timer)";
       }
       {
-        assertion = idiomaticUnitConflictFailures != [ ];
+        assertion = idiomaticUnitConflictFailures != [];
         message = "ix.healthChecks should reject setting both `unit` and a custom `command`";
       }
       {
+        assertion = let
+          command = idiomaticExpose.ix.healthChecks.ready.command;
+        in
+          lib.hasSuffix "/bin/curl" (builtins.head command)
+          && builtins.tail command
+          == [
+            "--fail"
+            "--silent"
+            "--show-error"
+            "http://127.0.0.1:8080/healthz"
+          ];
+        message = "ix.healthChecks.<name>.http should derive a curl --fail probe (httpGet semantics: any status >= 400 is unhealthy)";
+      }
+      {
+        assertion = let
+          command = idiomaticExpose.ix.healthChecks.peer.command;
+        in
+          lib.hasSuffix "/bin/nc" (builtins.head command)
+          && builtins.tail command
+          == [
+            "-z"
+            "svc-b"
+            "5432"
+          ];
+        message = "ix.healthChecks.<name>.tcp should derive an `nc -z` connect probe against the given host";
+      }
+      {
+        # The plan strips string context from check argv, so the probe
+        # binaries must ride the system closure explicitly.
         assertion =
-          let
-            c = idiomaticExpose.ix.networking.portClaims;
-          in
+          lib.any (p: (p.pname or "") == "curl") idiomaticExpose.environment.systemPackages
+          && lib.any (p: (p.pname or "") == "netcat-openbsd") idiomaticExpose.environment.systemPackages;
+        message = "declaring http/tcp probes should pin curl and nc into the image closure";
+      }
+      {
+        assertion = idiomaticMultiSugarFailures != [];
+        message = "ix.healthChecks should reject setting two probe sugars on one check";
+      }
+      {
+        assertion = idiomaticHostProbeSugarFailures != [];
+        message = "ix.healthChecks should reject http/tcp probe sugar on host-side checks";
+      }
+      {
+        assertion = let
+          c = idiomaticExpose.ix.networking.portClaims;
+        in
           c.web.port == 8080 && c.web.protocol == "tcp" && c.metrics.port == 9090 && c.dns.protocol == "udp";
         message = "ix.networking.expose should register a port claim per listener";
       }
       {
-        assertion =
-          let
-            fw = idiomaticExpose.networking.firewall;
-          in
+        assertion = let
+          fw = idiomaticExpose.networking.firewall;
+        in
           builtins.elem 8080 fw.allowedTCPPorts
           && !(builtins.elem 9090 fw.allowedTCPPorts)
           && builtins.elem 53 fw.allowedUDPPorts;
         message = "ix.networking.expose should open the firewall by default, skip it when firewall = false, and use the listener's protocol";
       }
       {
-        assertion = idiomaticExposeCollisionFailures != [ ];
+        assertion = idiomaticExposeCollisionFailures != [];
         message = "ix.networking.expose should feed the port-claim registry so it collides with a conflicting portClaim";
       }
       {
-        assertion =
-          let
-            e = ix.endpoint {
-              host = "db";
-              port = 5432;
-            };
-          in
+        assertion = let
+          e = ix.endpoint {
+            host = "db";
+            port = 5432;
+          };
+        in
           "${e}" == "db:5432" && e.host == "db" && e.port == 5432 && e.authority == "db:5432";
         message = "ix.endpoint should stringify to host:port and expose its parts";
       }
@@ -2850,11 +3352,12 @@ let
             port = 80;
             scheme = "http";
             path = "/x";
-          }).url == "http://h:80/x";
+          }).url
+          == "http://h:80/x";
         message = "ix.endpoint should build a scheme URL when given a scheme";
       }
       {
-        assertion = "${ix.endpointOf { config = idiomaticExpose; } "web"}" == "svc-a:8080";
+        assertion = "${ix.endpointOf {config = idiomaticExpose;} "web"}" == "svc-a:8080";
         message = "ix.endpointOf should resolve a peer's exposed listener to its east-west host:port";
       }
     ];
@@ -2869,25 +3372,26 @@ let
         message = "base profile should make root land in nushell (via platform users.defaultUserShell)";
       }
       {
-        assertion = lib.any (
-          rule: lib.hasPrefix "d ${base.cfg.shellWorkspace.directory} " rule
-        ) base.config.systemd.tmpfiles.rules;
+        assertion =
+          lib.any (
+            rule: lib.hasPrefix "d ${base.cfg.shellWorkspace.directory} " rule
+          )
+          base.config.systemd.tmpfiles.rules;
         message = "base profile should pre-create the workspace directory via systemd-tmpfiles";
       }
       {
-        assertion =
-          let
-            firewall = base.config.networking.firewall;
-          in
+        assertion = let
+          firewall = base.config.networking.firewall;
+        in
           builtins.elem 5001 firewall.allowedTCPPorts && builtins.elem 8443 firewall.allowedUDPPorts;
         message = "base profile should expose ix guest sidecar ports through the in-guest firewall";
       }
       {
-        assertion =
-          let
-            claims = base.config.ix.networking.portClaims;
-          in
-          claims.ix-console.protocol == "tcp"
+        assertion = let
+          claims = base.config.ix.networking.portClaims;
+        in
+          claims.ix-console.protocol
+          == "tcp"
           && claims.ix-console.port == 5001
           && claims.ix-console.address == "*"
           && claims.ix-agent.protocol == "udp"
@@ -2904,11 +3408,11 @@ let
         message = "base profile should route Nix through cache.ix.dev before fallback substituters";
       }
       {
-        assertion =
-          let
-            pin = base.config.nix.registry.nixpkgs.to;
-          in
-          pin.type == "path"
+        assertion = let
+          pin = base.config.nix.registry.nixpkgs.to;
+        in
+          pin.type
+          == "path"
           && pin.path == nixpkgs.outPath
           && pin.narHash == nixpkgs.narHash
           && builtins.isString pin.path;
@@ -2921,14 +3425,13 @@ let
         assertion =
           factionsExample.cfg.worldBorder.enable
           && factionsExample.cfg.worldBorder.diameter == 12000
-          && factionsExample.cfg.properties."max-world-size" == 6000;
+          && factionsExample.cfg.properties.max-world-size == 6000;
         message = "factions example should declare a managed world border";
       }
       {
-        assertion =
-          let
-            ports = factionsExample.config.networking.firewall.allowedTCPPorts;
-          in
+        assertion = let
+          ports = factionsExample.config.networking.firewall.allowedTCPPorts;
+        in
           builtins.elem factionsExample.cfg.port ports
           && builtins.elem 8100 ports
           && !(builtins.elem factionsExample.cfg.rcon.port ports);
@@ -2939,10 +3442,9 @@ let
         message = "factions example should expose Simple Voice Chat on the default UDP port";
       }
       {
-        assertion =
-          let
-            claims = factionsExample.config.ix.networking.portClaims;
-          in
+        assertion = let
+          claims = factionsExample.config.ix.networking.portClaims;
+        in
           lib.all (claim: builtins.hasAttr claim claims) [
             "minecraft"
             "minecraft-rcon"
@@ -2954,48 +3456,49 @@ let
         message = "factions example should register every service listener in ix.networking.portClaims";
       }
       {
-        assertion =
-          let
-            checks = factionsExample.fleet.planValue.nodes.factions.healthChecks;
-            mcProbe = lib.getExe repoPackages.mc-probe;
-            systemctl = lib.getExe' factionsExample.config.systemd.package "systemctl";
-          in
-          checks.minecraft.from == "guest"
+        assertion = let
+          checks = factionsExample.fleet.planValue.nodes.factions.healthChecks;
+          mcProbe = lib.getExe repoPackages.mc-probe;
+          systemctl = lib.getExe' factionsExample.config.systemd.package "systemctl";
+        in
+          checks.minecraft.from
+          == "guest"
           && checks.minecraft.attempts == 30
-          &&
-            checks.minecraft.command == [
-              systemctl
-              "is-active"
-              "--quiet"
-              "minecraft.service"
-            ]
+          && checks.minecraft.command
+          == [
+            systemctl
+            "is-active"
+            "--quiet"
+            "minecraft.service"
+          ]
           # The SLP check is the interesting one: it proves the Minecraft
           # protocol speaker is up (not just the unit), and asserts the MOTD
           # so a misrouted image lands as a check failure instead of silently
           # serving Survival players a Factions world.
           && checks.minecraft-status.from == "guest"
-          &&
-            checks.minecraft-status.command == [
-              mcProbe
-              "127.0.0.1:25565"
-              "--motd-contains"
-              "ix Factions | territory, raids, shops"
-            ]
+          && checks.minecraft-status.command
+          == [
+            mcProbe
+            "127.0.0.1:25565"
+            "--motd-contains"
+            "ix Factions | territory, raids, shops"
+          ]
           # factions exposes Java publicly, so the host-side reachability
           # probe is what catches firewall or routing regressions.
           && checks.minecraft-reachable.from == "host"
-          &&
-            checks.minecraft-reachable.command == [
-              "nc"
-              "-z"
-              "-w"
-              "5"
-              "$IX_NODE_IPV4"
-              "25565"
-            ]
+          && checks.minecraft-reachable.command
+          == [
+            "nc"
+            "-z"
+            "-w"
+            "5"
+            "$IX_NODE_IPV4"
+            "25565"
+          ]
           && lib.any (
             package: lib.getName package == "mc-probe"
-          ) factionsExample.config.environment.systemPackages;
+          )
+          factionsExample.config.environment.systemPackages;
         message = "factions should layer systemctl + SLP-with-MOTD + host TCP probes";
       }
     ];
@@ -3005,7 +3508,7 @@ let
         assertion =
           survivalExample.velocity.enable
           && survivalExample.velocity.servers.survival == "127.0.0.1:25566"
-          && survivalExample.velocity.try == [ "survival" ]
+          && survivalExample.velocity.try == ["survival"]
           && survivalExample.velocity.forwarding.mode == "modern";
         message = "survival example should route Velocity to the local Paper backend";
       }
@@ -3022,14 +3525,13 @@ let
           && survivalExample.minecraft.version == "26.1.2"
           && survivalExample.minecraft.port == 25566
           && !survivalExample.minecraft.openFirewall
-          && !survivalExample.minecraft.properties."online-mode";
+          && !survivalExample.minecraft.properties.online-mode;
         message = "survival example should keep Paper behind the proxy";
       }
       {
-        assertion =
-          let
-            ports = survivalExample.config.networking.firewall.allowedTCPPorts;
-          in
+        assertion = let
+          ports = survivalExample.config.networking.firewall.allowedTCPPorts;
+        in
           builtins.elem 25565 ports
           && !(builtins.elem 25566 ports)
           && !(builtins.elem survivalExample.minecraft.rcon.port ports);
@@ -3040,10 +3542,9 @@ let
         message = "survival example should expose Geyser's Bedrock UDP listener";
       }
       {
-        assertion =
-          let
-            claims = survivalExample.config.ix.networking.portClaims;
-          in
+        assertion = let
+          claims = survivalExample.config.ix.networking.portClaims;
+        in
           lib.all (claim: builtins.hasAttr claim claims) [
             "velocity"
             "minecraft"
@@ -3057,47 +3558,48 @@ let
         message = "survival example should register proxy, backend, RCON, and Bedrock listeners";
       }
       {
-        assertion =
-          let
-            checks = survivalExample.fleet.planValue.nodes.survival.healthChecks;
-            mcProbe = lib.getExe repoPackages.mc-probe;
-          in
-          checks.velocity.from == "guest"
+        assertion = let
+          checks = survivalExample.fleet.planValue.nodes.survival.healthChecks;
+          mcProbe = lib.getExe repoPackages.mc-probe;
+        in
+          checks.velocity.from
+          == "guest"
           && checks.minecraft.from == "guest"
           # Velocity faces the public network in this topology, so it gets a
           # host TCP probe. The Paper backend stays openFirewall = false, so
           # its only host-observable signal is via Velocity itself.
           && checks.velocity-reachable.from == "host"
-          &&
-            checks.velocity-reachable.command == [
-              "nc"
-              "-z"
-              "-w"
-              "5"
-              "$IX_NODE_IPV4"
-              "25565"
-            ]
+          && checks.velocity-reachable.command
+          == [
+            "nc"
+            "-z"
+            "-w"
+            "5"
+            "$IX_NODE_IPV4"
+            "25565"
+          ]
           && !(checks ? minecraft-reachable)
           && lib.any (
             package: lib.getName package == "mc-probe"
-          ) survivalExample.config.environment.systemPackages
+          )
+          survivalExample.config.environment.systemPackages
           # SLP checks on both: Velocity proves the proxy answers; the
           # backend SLP proves the actual game server isn't dead behind a
           # healthy proxy.
-          &&
-            checks.velocity-status.command == [
-              mcProbe
-              "127.0.0.1:25565"
-              "--motd-contains"
-              "ix Survival"
-            ]
-          &&
-            checks.minecraft-status.command == [
-              mcProbe
-              "127.0.0.1:25566"
-              "--motd-contains"
-              "ix Survival"
-            ];
+          && checks.velocity-status.command
+          == [
+            mcProbe
+            "127.0.0.1:25565"
+            "--motd-contains"
+            "ix Survival"
+          ]
+          && checks.minecraft-status.command
+          == [
+            mcProbe
+            "127.0.0.1:25566"
+            "--motd-contains"
+            "ix Survival"
+          ];
         message = "survival should expose layered guest/host probes with MOTD-aware SLP on both proxy and backend";
       }
     ];
@@ -3107,13 +3609,15 @@ let
         assertion =
           builtins.any (
             package: (package.meta.mainProgram or null) == "daily-scraper"
-          ) dailyScraperExample.config.environment.systemPackages
+          )
+          dailyScraperExample.config.environment.systemPackages
           && lib.hasInfix "--repo indexable-inc/index" dailyScraperExample.service.serviceConfig.ExecStart;
         message = "python-daily-scraper example should package and enable the scraper";
       }
       {
         assertion =
-          dailyScraperExample.service.serviceConfig.Type == "oneshot"
+          dailyScraperExample.service.serviceConfig.Type
+          == "oneshot"
           && dailyScraperExample.service.serviceConfig.DynamicUser
           && dailyScraperExample.service.serviceConfig.StateDirectory == "daily-scraper"
           && dailyScraperExample.service.serviceConfig.WorkingDirectory == "/var/lib/daily-scraper";
@@ -3133,25 +3637,26 @@ let
       }
       {
         assertion =
-          dailyScraperExample.timer.timerConfig.OnCalendar == "*-*-* 03:17:00 UTC"
+          dailyScraperExample.timer.timerConfig.OnCalendar
+          == "*-*-* 03:17:00 UTC"
           && dailyScraperExample.timer.timerConfig.Persistent
           && dailyScraperExample.timer.timerConfig.RandomizedDelaySec == "20m"
           && dailyScraperExample.timer.timerConfig.Unit == "daily-scraper.service";
         message = "python-daily-scraper example should run from a persistent daily timer";
       }
       {
-        assertion =
-          let
-            check = dailyScraperExample.plan.healthChecks.daily-scraper;
-          in
-          check.from == "guest"
-          &&
-            check.command == [
-              (lib.getExe' dailyScraperExample.config.systemd.package "systemctl")
-              "is-active"
-              "--quiet"
-              "daily-scraper.timer"
-            ];
+        assertion = let
+          check = dailyScraperExample.plan.healthChecks.daily-scraper;
+        in
+          check.from
+          == "guest"
+          && check.command
+          == [
+            (lib.getExe' dailyScraperExample.config.systemd.package "systemctl")
+            "is-active"
+            "--quiet"
+            "daily-scraper.timer"
+          ];
         # No listener for the operator to probe, so the guest unit check is
         # the whole story. The explicit `from = "guest"` rules out a future
         # default-flip accidentally turning this into an unrunnable host check.
@@ -3164,10 +3669,10 @@ let
       {
         assertion =
           lib.hasInfix "s3 sync --only-show-errors /var/lib/daily-scraper/parquet s3://andrew-scraper-output/github --delete" dailyScraperS3.service.serviceConfig.ExecStartPost
-          &&
-            dailyScraperS3.service.serviceConfig.LoadCredential == [
-              "aws-env:/run/secrets/daily-scraper/aws.env"
-            ]
+          && dailyScraperS3.service.serviceConfig.LoadCredential
+          == [
+            "aws-env:/run/secrets/daily-scraper/aws.env"
+          ]
           && dailyScraperS3.service.serviceConfig.EnvironmentFile == "%d/aws-env";
         message = "python-daily-scraper service should support S3 sync through systemd credentials";
       }
@@ -3181,44 +3686,157 @@ let
       {
         assertion =
           nginxLifecycleExample.cfg.enable
-          &&
-            nginxLifecycleExample.cfg.virtualHosts.localhost.locations."/".return
-            == "200 'ix nginx lifecycle ok\n'";
+          && nginxLifecycleExample.cfg.virtualHosts.localhost.locations."/".return
+          == "200 'ix nginx lifecycle ok\n'";
         message = "nginx-lifecycle example should serve a fixed HTTP success body";
       }
       {
-        assertion =
-          let
-            claims = nginxLifecycleExample.config.ix.networking.portClaims;
-          in
-          claims.nginx.protocol == "tcp"
+        assertion = let
+          claims = nginxLifecycleExample.config.ix.networking.portClaims;
+        in
+          claims.nginx.protocol
+          == "tcp"
           && claims.nginx.port == 80
           && builtins.elem 80 nginxLifecycleExample.config.networking.firewall.allowedTCPPorts;
         message = "nginx-lifecycle example should declare and open its HTTP listener";
       }
       {
-        assertion =
-          let
-            checks = nginxLifecycleExample.plan.healthChecks;
-          in
-          checks.nginx.from == "guest"
-          &&
-            checks.nginx.command == [
-              (lib.getExe' nginxLifecycleExample.config.systemd.package "systemctl")
-              "is-active"
-              "--quiet"
-              "nginx.service"
-            ]
+        assertion = let
+          checks = nginxLifecycleExample.plan.healthChecks;
+        in
+          checks.nginx.from
+          == "guest"
+          && checks.nginx.command
+          == [
+            (lib.getExe' nginxLifecycleExample.config.systemd.package "systemctl")
+            "is-active"
+            "--quiet"
+            "nginx.service"
+          ]
           && checks.nginx-http.from == "guest"
           && lib.hasSuffix "/bin/curl" (builtins.head checks.nginx-http.command)
-          &&
-            builtins.tail checks.nginx-http.command == [
-              "--fail"
-              "--silent"
-              "--show-error"
-              "http://127.0.0.1/"
-            ];
+          && builtins.tail checks.nginx-http.command
+          == [
+            "--fail"
+            "--silent"
+            "--show-error"
+            "http://127.0.0.1/"
+          ];
         message = "nginx-lifecycle fleet plan should prove the service unit and HTTP loopback path";
+      }
+    ];
+
+    fleet-hello = [
+      {
+        assertion =
+          fleetHelloExample.fleet.planValue.order
+          == [
+            "web"
+            "worker-0"
+            "worker-1"
+            "worker-2"
+          ]
+          && fleetHelloExample.worker.plan.dependsOn == ["web"];
+        message = "fleet-hello should expand three worker replicas that depend on the web node";
+      }
+      {
+        assertion = let
+          check = fleetHelloExample.web.plan.healthChecks.http-loopback;
+        in
+          check.from
+          == "guest"
+          && lib.hasSuffix "/bin/curl" (builtins.head check.command)
+          && lib.last check.command == "http://127.0.0.1:8080/";
+        message = "fleet-hello web should desugar its http probe into a loopback curl";
+      }
+      {
+        assertion = let
+          check = fleetHelloExample.worker.plan.healthChecks.web-reachable;
+        in
+          check.from == "guest" && lib.last check.command == "http://web:8080/";
+        message = "fleet-hello workers should probe the web endpoint resolved by node name";
+      }
+      {
+        assertion =
+          fleetHelloExample.worker.plan.updateStrategy.maxUnavailable
+          == 1
+          && fleetHelloExample.web.plan.updateStrategy == null;
+        message = "fleet-hello workers should roll one at a time while the singleton web node carries no strategy";
+      }
+    ];
+
+    fleet-microservices = [
+      {
+        assertion =
+          fleetMicroservicesExample.fleet.planValue.order
+          == [
+            "api-0"
+            "api-1"
+            "api-2"
+            "cache"
+            "gateway"
+          ]
+          && fleetMicroservicesExample.api.plan.dependsOn == ["cache"]
+          && fleetMicroservicesExample.gateway.plan.dependsOn
+          == [
+            "api-0"
+            "api-1"
+            "api-2"
+          ];
+        message = "fleet-microservices should expand the gateway's api dependency across every replica";
+      }
+      {
+        assertion = fleetMicroservicesExample.api.plan.updateStrategy.maxUnavailable == 1;
+        message = "fleet-microservices api replicas should carry the rolling-update window into the plan";
+      }
+      {
+        # The gateway enumerates api replicas at eval time, so raising
+        # `replicas` grows the upstream pool without touching gateway.nix.
+        assertion =
+          builtins.attrNames fleetMicroservicesExample.gateway.config.services.nginx.upstreams.api.servers
+          == [
+            "api-0:8080"
+            "api-1:8080"
+            "api-2:8080"
+          ];
+        message = "fleet-microservices gateway should discover every api replica into its nginx upstream pool";
+      }
+      {
+        assertion = let
+          checks = fleetMicroservicesExample.gateway.plan.healthChecks;
+        in
+          lib.last checks.upstream-api-0.command
+          == "http://api-0:8080/healthz"
+          && lib.last checks.upstream-api-1.command == "http://api-1:8080/healthz"
+          && lib.last checks.upstream-api-2.command == "http://api-2:8080/healthz"
+          && lib.last checks.proxies-to-api.command == "http://127.0.0.1:8080/";
+        message = "fleet-microservices gateway should generate one http probe per discovered api replica plus an end-to-end proxy probe";
+      }
+      {
+        assertion = let
+          check = fleetMicroservicesExample.api.plan.healthChecks.cache-reachable;
+        in
+          lib.hasSuffix "/bin/nc" (builtins.head check.command)
+          && builtins.tail check.command
+          == [
+            "-z"
+            "cache"
+            "6379"
+          ];
+        message = "fleet-microservices api replicas should tcp-probe the cache endpoint across nodes";
+      }
+      {
+        assertion = let
+          check = fleetMicroservicesExample.cache.plan.healthChecks.accepting-connections;
+        in
+          lib.hasSuffix "/bin/nc" (builtins.head check.command)
+          && builtins.tail check.command
+          == [
+            "-z"
+            "127.0.0.1"
+            "6379"
+          ];
+        message = "fleet-microservices cache should desugar tcp.port into a loopback nc probe";
       }
     ];
 
@@ -3235,23 +3853,23 @@ let
         # Defends the module's headline claim: only the S3 port is exposed.
         # `samePorts` (not `elem`) fails if the master/volume/filer ports
         # ever leak into the firewall alongside the base sidecar ports.
-        assertion =
-          let
-            claims = s3StorageExample.config.ix.networking.portClaims;
-          in
-          claims.ix-seaweedfs.protocol == "tcp"
+        assertion = let
+          claims = s3StorageExample.config.ix.networking.portClaims;
+        in
+          claims.ix-seaweedfs.protocol
+          == "tcp"
           && claims.ix-seaweedfs.port == 8333
           && samePorts s3StorageExample.config.networking.firewall.allowedTCPPorts (
-            baseFirewallTcpPorts ++ [ 8333 ]
+            baseFirewallTcpPorts ++ [8333]
           );
         message = "s3-storage example should open only the S3 port, not master/volume/filer";
       }
       {
-        assertion =
-          let
-            check = s3StorageExample.plan.healthChecks.ix-seaweedfs;
-          in
-          check.from == "guest"
+        assertion = let
+          check = s3StorageExample.plan.healthChecks.ix-seaweedfs;
+        in
+          check.from
+          == "guest"
           && lib.hasSuffix "/bin/curl" (builtins.head check.command)
           && lib.last check.command == "http://127.0.0.1:8333/healthz";
         message = "s3-storage health check should probe the unauthenticated S3 /healthz route";
@@ -3259,16 +3877,15 @@ let
       {
         # The module must refuse an S3 endpoint with neither credentials nor
         # an explicit anonymous opt-in, rather than silently serving open.
-        assertion =
-          let
-            failures = failedAssertionsFor [ { services.ix-seaweedfs.enable = true; } ];
-          in
+        assertion = let
+          failures = failedAssertionsFor [{services.ix-seaweedfs.enable = true;}];
+        in
           builtins.any (a: lib.hasInfix "configFile" a.message) failures;
         message = "ix-seaweedfs should fail evaluation when run with no credentials and no allowAnonymous";
       }
       {
         # The example supplies a configFile, so it must clear that gate.
-        assertion = failedAssertionsFor [ (paths.examples + "/s3/storage/service.nix") ] == [ ];
+        assertion = failedAssertionsFor [(paths.examples + "/s3/storage/service.nix")] == [];
         message = "s3-storage example should satisfy the ix-seaweedfs credentials assertion";
       }
     ];
@@ -3294,9 +3911,8 @@ let
           observabilityStackExample.observability.collector.receivers.otlp.protocols.grpc.endpoint
           == "0.0.0.0:4317"
           && observabilityStackExample.observability.collector.exporters.clickhouse.database == "otel"
-          &&
-            observabilityStackExample.observability.collector.exporters.clickhouse.traces_table_name
-            == "otel_traces"
+          && observabilityStackExample.observability.collector.exporters.clickhouse.traces_table_name
+          == "otel_traces"
           # The corpus moved off the OTel bus to its own Parquet log (#736), so the
           # logs pipeline is telemetry-only again: ClickHouse (plus forward on an
           # agent). Assert ClickHouse is an exporter rather than pinning the exact
@@ -3305,11 +3921,11 @@ let
         message = "observability-stack collector should receive OTLP and export logs/traces/metrics to ClickHouse";
       }
       {
-        assertion =
-          let
-            datasource = builtins.head observabilityStackExample.observability.grafana.provision.datasources.settings.datasources;
-          in
-          datasource.uid == "ix-clickhouse"
+        assertion = let
+          datasource = builtins.head observabilityStackExample.observability.grafana.provision.datasources.settings.datasources;
+        in
+          datasource.uid
+          == "ix-clickhouse"
           && datasource.type == "grafana-clickhouse-datasource"
           && datasource.jsonData.traces.defaultTable == "otel_traces"
           && datasource.jsonData.logs.defaultTable == "otel_logs";
@@ -3317,7 +3933,8 @@ let
       }
       {
         assertion =
-          observabilityStackExample.observability.plan.l7ProxyPorts == [ 3000 ]
+          observabilityStackExample.observability.plan.l7ProxyPorts
+          == [3000]
           && builtins.elem 3000 observabilityStackExample.observability.config.networking.firewall.allowedTCPPorts
           && builtins.elem 4317 observabilityStackExample.observability.config.networking.firewall.allowedTCPPorts
           && builtins.elem 9000 observabilityStackExample.observability.config.networking.firewall.allowedTCPPorts;
@@ -3325,22 +3942,22 @@ let
       }
       {
         assertion =
-          observabilityStackExample.app.cfg.stack.enable == false
+          observabilityStackExample.app.cfg.stack.enable
+          == false
           && observabilityStackExample.app.cfg.agent.enable
           && observabilityStackExample.app.cfg.agent.endpoint == "observability:4317"
           && observabilityStackExample.app.collector.exporters.otlp.endpoint == "observability:4317"
-          &&
-            observabilityStackExample.app.collector.receivers."filelog/app".include
-            == [ "/var/log/ix-observability-demo/app.log" ]
-          && observabilityStackExample.app.collector.service.pipelines.logs.exporters == [ "otlp" ];
+          && observabilityStackExample.app.collector.receivers."filelog/app".include
+          == ["/var/log/ix-observability-demo/app.log"]
+          && observabilityStackExample.app.collector.service.pipelines.logs.exporters == ["otlp"];
         message = "observability-stack app node should run an agent collector that forwards file logs and OTLP";
       }
       {
-        assertion =
-          let
-            checks = observabilityStackExample.app.plan.healthChecks;
-          in
-          checks.observability-demo.from == "guest"
+        assertion = let
+          checks = observabilityStackExample.app.plan.healthChecks;
+        in
+          checks.observability-demo.from
+          == "guest"
           && checks.observability-ingested.attempts == 60
           && checks.observability-ingested.timeoutSec == 10;
         message = "observability-stack app node should prove local emission and ClickHouse ingestion";
@@ -3358,20 +3975,20 @@ let
         assertion =
           minecraftBlocksExample.log.kafka.enable
           && minecraftBlocksExample.log.kafka.formatLogDirs
-          &&
-            minecraftBlocksExample.log.kafka.settings."process.roles" == [
-              "broker"
-              "controller"
-            ];
+          && minecraftBlocksExample.log.kafka.settings."process.roles"
+          == [
+            "broker"
+            "controller"
+          ];
         message = "minecraft-blocks log node should run a KRaft Kafka broker as the durable log";
       }
       {
         # Only the broker port is exposed, and it is claimed.
-        assertion =
-          let
-            claims = minecraftBlocksExample.log.config.ix.networking.portClaims;
-          in
-          claims.kafka.port == 9092
+        assertion = let
+          claims = minecraftBlocksExample.log.config.ix.networking.portClaims;
+        in
+          claims.kafka.port
+          == 9092
           && builtins.elem 9092 minecraftBlocksExample.log.config.networking.firewall.allowedTCPPorts;
         message = "minecraft-blocks log node should expose and claim the Kafka broker port";
       }
@@ -3388,20 +4005,18 @@ let
       {
         # The view-init oneshot creates the minecraft DB, table, Kafka queue,
         # and MV after ClickHouse is up.
-        assertion =
-          let
-            unit = minecraftBlocksExample.view.initUnit;
-          in
+        assertion = let
+          unit = minecraftBlocksExample.view.initUnit;
+        in
           unit.serviceConfig.Type == "oneshot" && builtins.elem "clickhouse.service" unit.requires;
         message = "minecraft-blocks view node should initialize the spatial view once ClickHouse is up";
       }
       {
         # The view health check confirms all three minecraft objects exist
         # (table, Kafka queue, materialized view).
-        assertion =
-          let
-            check = minecraftBlocksExample.view.plan.healthChecks.mc-blocks-view;
-          in
+        assertion = let
+          check = minecraftBlocksExample.view.plan.healthChecks.mc-blocks-view;
+        in
           check.from == "guest" && check.attempts == 60;
         message = "minecraft-blocks view node should health-check the spatial view, queue, and MV";
       }
@@ -3421,16 +4036,16 @@ let
         # Kafka, and the OTel agent forwards server telemetry to the collector.
         # Telemetry is collected from the journal (the minecraft service stdout),
         # not by tailing the server's private, DynamicUser-unreadable log file.
-        assertion =
-          let
-            ship = minecraftBlocksExample.producer.shipUnit;
-            agent = minecraftBlocksExample.producer.agent;
-          in
-          ship.serviceConfig.Restart == "always"
+        assertion = let
+          ship = minecraftBlocksExample.producer.shipUnit;
+          agent = minecraftBlocksExample.producer.agent;
+        in
+          ship.serviceConfig.Restart
+          == "always"
           && agent.stack.enable == false
           && agent.agent.enable
           && agent.agent.journal.enable
-          && agent.agent.filelog.paths == [ ]
+          && agent.agent.filelog.paths == []
           && agent.resourceAttributes."ix.app" == "minecraft-blocks";
         message = "minecraft-blocks producer should run both the Kafka transport and the journal-based telemetry agent";
       }
@@ -3438,11 +4053,11 @@ let
         # The schema is the single source of truth: the Morton ORDER BY, the
         # signed-coordinate offset, and the per-axis minmax skip indexes (which
         # are what actually prune the bounding-box query) all come from it.
-        assertion =
-          let
-            inherit (minecraftBlocksExample) schema;
-          in
-          schema.coordOffset == 1048576
+        assertion = let
+          inherit (minecraftBlocksExample) schema;
+        in
+          schema.coordOffset
+          == 1048576
           && lib.hasInfix "mortonEncode" schema.createTableSql
           && lib.hasInfix "toUInt32(x + 1048576)" schema.mortonExpr
           && builtins.length schema.mortonFields == 3
@@ -3457,10 +4072,9 @@ let
         # transport re-sending a record collapses it back to one row. The dedup
         # key is the same ORDER BY tuple the spatial query relies on, so this
         # engine choice never changes the query path, it only folds duplicates.
-        assertion =
-          let
-            inherit (minecraftBlocksExample) schema;
-          in
+        assertion = let
+          inherit (minecraftBlocksExample) schema;
+        in
           lib.hasInfix "ReplacingMergeTree" schema.createTableSql
           && !lib.hasInfix "ENGINE = MergeTree" schema.createTableSql
           && lib.hasInfix "ORDER BY (world, ${schema.mortonExpr}, timestamp)" schema.createTableSql;
@@ -3471,17 +4085,17 @@ let
         # Nix schema's derived predicate, and the integration check, so the
         # asserted in-box count cannot drift from a fixture edit. The derived SQL
         # predicate must be half-open per axis and bound to the box's world.
-        assertion =
-          let
-            inherit (minecraftBlocksExample) schema;
-            inherit (schema) box;
-          in
-          box.world == "overworld"
-          &&
-            box.x == [
-              0
-              16
-            ]
+        assertion = let
+          inherit (minecraftBlocksExample) schema;
+          inherit (schema) box;
+        in
+          box.world
+          == "overworld"
+          && box.x
+          == [
+            0
+            16
+          ]
           && lib.hasInfix "world = 'overworld'" schema.boxPredicate
           && lib.hasInfix "x >= 0 AND x < 16" schema.boxPredicate
           && lib.hasInfix "z >= 0 AND z < 16" schema.boxPredicate;
@@ -3491,17 +4105,19 @@ let
 
     networking = [
       {
-        assertion = lib.any (
-          failure: lib.hasInfix "ix.networking.portClaims has same-namespace port collisions" failure.message
-        ) portClaimConflictFailures;
+        assertion =
+          lib.any (
+            failure: lib.hasInfix "ix.networking.portClaims has same-namespace port collisions" failure.message
+          )
+          portClaimConflictFailures;
         message = "ix.networking.portClaims should fail eval when two services claim the same-namespace socket";
       }
       {
-        assertion = portClaimNamespaceAllowedFailures == [ ];
+        assertion = portClaimNamespaceAllowedFailures == [];
         message = "ix.networking.portClaims should allow the same port in separate network namespaces";
       }
       {
-        assertion = portClaimAddressFamilyAllowedFailures == [ ];
+        assertion = portClaimAddressFamilyAllowedFailures == [];
         message = "ix.networking.portClaims should allow the same UDP port on separate IPv4 and IPv6 bind addresses";
       }
     ];
@@ -3526,14 +4142,20 @@ let
         message = "ix.relativePath shell helpers should quote safe relative paths and reject unsafe paths";
       }
       {
-        assertion =
-          let
-            failure = lib.findFirst (
+        assertion = let
+          failure =
+            lib.findFirst (
               f: lib.hasInfix "services.minecraft managed paths must be relative paths" f.message
-            ) null minecraftUnsafeManagedPathFailures;
-            msg = if failure != null then failure.message else "";
-          in
-          failure != null
+            )
+            null
+            minecraftUnsafeManagedPathFailures;
+          msg =
+            if failure != null
+            then failure.message
+            else "";
+        in
+          failure
+          != null
           && lib.hasInfix "services.minecraft.configFiles.client//bad.toml" msg
           && lib.hasInfix "services.minecraft.configFiles./absolute/bad.toml" msg
           && lib.hasInfix "services.minecraft.serverFiles.plugins/../bukkit.yml" msg
@@ -3544,22 +4166,28 @@ let
         message = "minecraft managed file options should reject unsafe relative paths at eval time";
       }
       {
-        assertion = lib.any (
-          failure: lib.hasInfix "services.velocity.configFiles contains unsafe relative paths" failure.message
-        ) velocityUnsafeManagedPathFailures;
+        assertion =
+          lib.any (
+            failure: lib.hasInfix "services.velocity.configFiles contains unsafe relative paths" failure.message
+          )
+          velocityUnsafeManagedPathFailures;
         message = "velocity managed config files should reject unsafe relative paths at eval time";
       }
       {
-        assertion = lib.any (
-          failure: lib.hasInfix "services.velocity.plugins contains unsafe plugin file names" failure.message
-        ) velocityUnsafeManagedPathFailures;
+        assertion =
+          lib.any (
+            failure: lib.hasInfix "services.velocity.plugins contains unsafe plugin file names" failure.message
+          )
+          velocityUnsafeManagedPathFailures;
         message = "velocity plugin file names should reject nested or unsafe paths at eval time";
       }
       {
-        assertion = lib.any (
-          failure:
-          lib.hasInfix "services.velocity.plugins contains duplicate plugin file names" failure.message
-        ) velocityDuplicatePluginFileNameFailures;
+        assertion =
+          lib.any (
+            failure:
+              lib.hasInfix "services.velocity.plugins contains duplicate plugin file names" failure.message
+          )
+          velocityDuplicatePluginFileNameFailures;
         message = "velocity plugin file names should reject duplicate managed jar names at eval time";
       }
     ];
@@ -3570,9 +4198,11 @@ let
         message = "generic ix.extendedAttributes should expose absolute runtime paths";
       }
       {
-        assertion = builtins.any (
-          p: (p.pname or null) == "attr"
-        ) extendedAttributes.config.environment.systemPackages;
+        assertion =
+          builtins.any (
+            p: (p.pname or null) == "attr"
+          )
+          extendedAttributes.config.environment.systemPackages;
         message = "generic ix.extendedAttributes should add attr tools for runtime inspection";
       }
       {
@@ -3609,55 +4239,75 @@ let
         message = "dev base should keep unrelated unfree CLIs out of the image";
       }
       {
-        assertion =
-          let
-            policy = import (paths.packagesRoot + "/agent/policy/permissions.nix") {
-              inherit lib;
-              mcpServers = { };
-            };
-          in
-          policy.claude.deniedToolPatterns == [
+        assertion = let
+          policy = gates:
+            import (paths.packagesRoot + "/agent/policy/permissions.nix") ({inherit lib;} // gates);
+          # The overlay build's real gate combination: exa is baked
+          # unconditionally by the default server set, the kernel is not
+          # (repoPackages.mcp is out of scope there).
+          overlay = policy {exaSearchBaked = true;};
+          baked = policy {
+            indexKernelBaked = true;
+            exaSearchBaked = true;
+          };
+        in
+          # Without the kernel only the merge protections and the
+          # exa-superseded web pair remain: the stock shell/file/search tools
+          # are that agent's whole surface.
+          overlay.claude.deniedToolPatterns
+          == [
             "Bash(gh pr merge*--admin*)"
             "Bash(gh pr merge*--force*)"
             "WebSearch"
             "WebFetch"
           ]
-          &&
-            policy.codex.forcedSettings.features == {
-              browser_use = false;
-              browser_use_external = false;
-              computer_use = false;
-              image_generation = false;
-              in_app_browser = false;
-              shell_tool = false;
-              standalone_web_search = false;
-              unified_exec = false;
-            };
-        message = "agent policy should always disable built-in web search tools";
+          && !(overlay.codex.forcedSettings.features ? shell_tool)
+          && overlay.codex.forcedSettings.features.standalone_web_search == false
+          # With the index kernel + exa baked, every superseded native tool is
+          # folded in, in each agent's own vocabulary.
+          && builtins.all (tool: builtins.elem tool baked.claude.deniedToolPatterns) [
+            "Bash"
+            "Read"
+            "Write"
+            "Edit"
+            "NotebookEdit"
+            "Glob"
+            "Grep"
+            "Monitor"
+            "CronCreate"
+            "CronDelete"
+            "CronList"
+            "WebSearch"
+            "WebFetch"
+          ]
+          && baked.codex.forcedSettings.features.shell_tool == false
+          && baked.codex.forcedSettings.features.unified_exec == false
+          && baked.codex.forcedSettings.features.standalone_web_search == false;
+        message = "agent policy should gate kernel/exa-superseded native tools on the baked MCP servers";
       }
       {
-        assertion =
-          let
-            forced = repoPackages.codex.passthru.specValue.forced;
-          in
+        assertion = let
+          forced = repoPackages.codex.passthru.specValue.forced;
+        in
           lib.all
-            (
-              key:
+          (
+            key:
               builtins.elem {
                 key = "features.${key}";
                 value = "false";
-              } forced
-            )
-            [
-              "browser_use"
-              "browser_use_external"
-              "computer_use"
-              "image_generation"
-              "in_app_browser"
-              "shell_tool"
-              "standalone_web_search"
-              "unified_exec"
-            ];
+              }
+              forced
+          )
+          [
+            "browser_use"
+            "browser_use_external"
+            "computer_use"
+            "image_generation"
+            "in_app_browser"
+            "shell_tool"
+            "standalone_web_search"
+            "unified_exec"
+          ];
         message = "Codex wrapper should render built-in tool disables into forced launch config";
       }
       {
@@ -3666,12 +4316,11 @@ let
         # leaving ~/.claude/settings.json app-owned. Pin both keys so a refactor
         # that drops them can't silently restore per-tool prompts. `.text` is a
         # plain string (no IFD) so fromJSON can read it in eval.
-        assertion =
-          let
-            managed =
-              builtins.fromJSON
-                developmentBase.config.environment.etc."claude-code/managed-settings.json".text;
-          in
+        assertion = let
+          managed =
+            builtins.fromJSON
+            developmentBase.config.environment.etc."claude-code/managed-settings.json".text;
+        in
           managed.permissions.defaultMode == "bypassPermissions" && managed.skipDangerousModePermissionPrompt;
         message = "dev base should enforce root's Claude Code bypass via managed-settings.json";
       }
@@ -3688,10 +4337,12 @@ let
         message = "Codex Home Manager module should install the shared hook policy under the configured Codex home";
       }
       {
-        assertion = builtins.elem {
-          key = "agents.max_depth";
-          value = "4";
-        } homeAgentConfig.programs.codex.finalPackage.passthru.specValue.soft;
+        assertion =
+          builtins.elem {
+            key = "agents.max_depth";
+            value = "4";
+          }
+          homeAgentConfig.programs.codex.finalPackage.passthru.specValue.soft;
         message = "Codex Home Manager module should pass soft settings through the package wrapper";
       }
       {
@@ -3701,39 +4352,59 @@ let
           );
         message = "Codex Home Manager module should thread systemPrompt.omitRules into the package wrapper";
       }
+      {
+        # When explicitly enabled, the native `context` option carries the
+        # context render (house rules without the system-tagged basics).
+        assertion =
+          lib.hasInfix "shokunin" homeAgentConfig.programs.claude-code.context
+          && !(lib.hasInfix "You are Claude Code" homeAgentConfig.programs.claude-code.context)
+          && lib.hasInfix "shokunin" homeAgentConfig.programs.codex.context
+          && !(lib.hasInfix "You are Codex" homeAgentConfig.programs.codex.context);
+        message = "agent Home Manager modules should default the global context files to the house context render";
+      }
+      {
+        # housePlugin defaults on: Codex gets the plugin as config-declared
+        # local-marketplace soft settings.
+        assertion =
+          builtins.any (
+            entry: entry.key == "plugins.index@index.enabled" && entry.value == "true"
+          )
+          homeAgentConfig.programs.codex.finalPackage.passthru.specValue.soft;
+        message = "Codex Home Manager module should declare the index plugin through soft settings";
+      }
     ];
 
-    subagent-cache =
-      let
-        svc =
-          (evalConfig [
-            {
-              services.subagent-cache = {
-                enable = true;
-                bind = "100.64.0.1:3013";
-                environmentFiles = [ "/run/subagent-cache/db.env" ];
-                ttlDays = 14;
-              };
-            }
-          ]).systemd.services.subagent-cache;
-      in
-      [
-        {
-          assertion =
-            svc.environment.SUBAGENT_CACHE_BIND == "100.64.0.1:3013"
-            && svc.environment.SUBAGENT_CACHE_TTL_DAYS == "14";
-          message = "subagent-cache module should pass bind and ttlDays through to the daemon env";
-        }
-        {
-          # Secrets ride EnvironmentFile, never the unit environment (which lands
-          # in the world-readable store).
-          assertion =
-            svc.serviceConfig.EnvironmentFile == [ "/run/subagent-cache/db.env" ]
-            && !(svc.environment ? DATABASE_URL)
-            && !(svc.environment ? ANTHROPIC_API_KEY);
-          message = "subagent-cache module must deliver secrets via EnvironmentFile, not the unit environment";
-        }
-      ];
+    subagent-cache = let
+      svc =
+        (evalConfig [
+          {
+            services.subagent-cache = {
+              enable = true;
+              bind = "100.64.0.1:3013";
+              environmentFiles = ["/run/subagent-cache/db.env"];
+              ttlDays = 14;
+            };
+          }
+        ]).systemd.services.subagent-cache;
+    in [
+      {
+        assertion =
+          svc.environment.SUBAGENT_CACHE_BIND
+          == "100.64.0.1:3013"
+          && svc.environment.SUBAGENT_CACHE_TTL_DAYS == "14";
+        message = "subagent-cache module should pass bind and ttlDays through to the daemon env";
+      }
+      {
+        # Secrets ride EnvironmentFile, never the unit environment (which lands
+        # in the world-readable store).
+        assertion =
+          svc.serviceConfig.EnvironmentFile
+          == ["/run/subagent-cache/db.env"]
+          && !(svc.environment ? DATABASE_URL)
+          && !(svc.environment ? ANTHROPIC_API_KEY);
+        message = "subagent-cache module must deliver secrets via EnvironmentFile, not the unit environment";
+      }
+    ];
 
     vitest = [
       {
@@ -3741,19 +4412,22 @@ let
         message = "vitest workspace fixture should enumerate one case per project";
       }
       {
-        assertion = lib.all (
-          case:
-          case.testProject != null
-          && case.testFile == "src/shared.test.js"
-          &&
-            case.vitestArgs == [
-              "src/shared.test.js"
-              "--project"
+        assertion =
+          lib.all (
+            case:
               case.testProject
-              "--testNamePattern"
-              "^shared project case$"
-            ]
-        ) vitestWorkspaceCases;
+              != null
+              && case.testFile == "src/shared.test.js"
+              && case.vitestArgs
+              == [
+                "src/shared.test.js"
+                "--project"
+                case.testProject
+                "--testNamePattern"
+                "^shared project case$"
+              ]
+          )
+          vitestWorkspaceCases;
         message = "vitest per-case checks should filter project-specific manifest entries by project";
       }
     ];
@@ -3792,17 +4466,18 @@ let
         message = "default Minecraft module should follow versions.nix default runtime version";
       }
       {
-        assertion = minecraft.cfg.properties."max-players" == 100000;
+        assertion = minecraft.cfg.properties.max-players == 100000;
         message = "default Minecraft module should allow the large ix player ceiling";
       }
       {
         assertion =
-          minecraft.cfg.properties."online-mode" && minecraft.cfg.properties."enforce-secure-profile";
+          minecraft.cfg.properties.online-mode && minecraft.cfg.properties.enforce-secure-profile;
         message = "default Minecraft module should keep account authentication and secure profiles explicit";
       }
       {
         assertion =
-          velocityConcreteAddress.ix.healthChecks.velocity-status.command == [
+          velocityConcreteAddress.ix.healthChecks.velocity-status.command
+          == [
             (lib.getExe repoPackages.mc-probe)
             "10.0.0.5:25570"
           ];
@@ -3810,19 +4485,21 @@ let
       }
       {
         assertion =
-          minecraft.cfg.properties.gamemode == "survival"
-          && !minecraft.cfg.properties."force-gamemode"
+          minecraft.cfg.properties.gamemode
+          == "survival"
+          && !minecraft.cfg.properties.force-gamemode
           && minecraft.cfg.properties.pvp
           && !minecraft.cfg.properties.hardcore
-          && minecraft.cfg.properties."spawn-protection" == 16
-          && !minecraft.cfg.properties."allow-flight"
-          && !minecraft.cfg.properties."enable-command-block";
+          && minecraft.cfg.properties.spawn-protection == 16
+          && !minecraft.cfg.properties.allow-flight
+          && !minecraft.cfg.properties.enable-command-block;
         message = "default Minecraft module should keep conservative gameplay and command defaults";
       }
       {
         assertion =
-          minecraft.cfg.properties."view-distance" == 32
-          && minecraft.cfg.properties."simulation-distance" == 32;
+          minecraft.cfg.properties.view-distance
+          == 32
+          && minecraft.cfg.properties.simulation-distance == 32;
         message = "default Minecraft module should use the high-distance template defaults";
       }
       {
@@ -3883,18 +4560,16 @@ let
         assertion =
           minecraft.config.ix.extendedAttributes."/var/lib/minecraft/world/region".attributes."user.ix.kind"
           == "minecraft.region-directory"
-          &&
-            minecraft.config.ix.extendedAttributes."/var/lib/minecraft/world/region".attributes."user.ix.minecraft.dimension"
-            == "overworld";
+          && minecraft.config.ix.extendedAttributes."/var/lib/minecraft/world/region".attributes."user.ix.minecraft.dimension"
+          == "overworld";
         message = "minecraft should label overworld region directories through the generic xattr module";
       }
       {
         assertion =
           minecraft.config.ix.extendedAttributes."/var/lib/minecraft/world/DIM-1/region".attributes."user.ix.minecraft.dimension"
           == "nether"
-          &&
-            minecraft.config.ix.extendedAttributes."/var/lib/minecraft/world/DIM1/region".attributes."user.ix.minecraft.dimension"
-            == "end";
+          && minecraft.config.ix.extendedAttributes."/var/lib/minecraft/world/DIM1/region".attributes."user.ix.minecraft.dimension"
+          == "end";
         message = "minecraft should label Nether and End region directories through the generic xattr module";
       }
       # rcon coverage stays on the minecraft default module because the option
@@ -3909,7 +4584,7 @@ let
       }
       {
         assertion = samePorts minecraft.rcon.config.networking.firewall.allowedTCPPorts (
-          baseFirewallTcpPorts ++ [ minecraft.rcon.cfg.port ]
+          baseFirewallTcpPorts ++ [minecraft.rcon.cfg.port]
         );
         message = "typed minecraft RCON should keep the RCON port private by default";
       }
@@ -3929,7 +4604,8 @@ let
       }
       {
         assertion =
-          minecraft.worldBorder.cfg.worldBorder.center.x == 100
+          minecraft.worldBorder.cfg.worldBorder.center.x
+          == 100
           && minecraft.worldBorder.cfg.worldBorder.center.z == -50
           && minecraft.worldBorder.cfg.worldBorder.diameter == 8000;
         message = "typed minecraft world border should keep center and diameter settings";
@@ -3940,14 +4616,15 @@ let
       }
       {
         assertion = samePorts minecraft.worldBorder.config.networking.firewall.allowedTCPPorts (
-          baseFirewallTcpPorts ++ [ minecraft.worldBorder.cfg.port ]
+          baseFirewallTcpPorts ++ [minecraft.worldBorder.cfg.port]
         );
         message = "typed minecraft world border should keep the RCON port private";
       }
       {
         assertion =
-          minecraft.worldBorder.service.after == [ "minecraft.service" ]
-          && minecraft.worldBorder.service.requires == [ "minecraft.service" ];
+          minecraft.worldBorder.service.after
+          == ["minecraft.service"]
+          && minecraft.worldBorder.service.requires == ["minecraft.service"];
         message = "typed minecraft world border should run after the Minecraft service is required";
       }
       {
@@ -3983,7 +4660,7 @@ let
         message = "minecraft configFiles should accept readable SNBT files";
       }
       {
-        assertion = minecraft.datapacks.cfg.datapacks."max-height".worlds == [ "My World" ];
+        assertion = minecraft.datapacks.cfg.datapacks.max-height.worlds == ["My World"];
         message = "minecraft datapacks should default to the configured level-name world";
       }
       {
@@ -4011,7 +4688,7 @@ let
       }
       {
         assertion = samePorts minecraft.paper.config.networking.firewall.allowedTCPPorts (
-          baseFirewallTcpPorts ++ [ minecraft.paper.cfg.port ]
+          baseFirewallTcpPorts ++ [minecraft.paper.cfg.port]
         );
         message = "Paper minecraft should not expose the local RCON reload port through the firewall";
       }
@@ -4034,14 +4711,16 @@ let
       }
       {
         assertion =
-          minecraft.paperPlugins.cfg.worlds.factions.generator == "TerraformGenerator"
+          minecraft.paperPlugins.cfg.worlds.factions.generator
+          == "TerraformGenerator"
           && minecraft.paperPlugins.cfg.worlds.factions_nether.generator == "TerraformGenerator"
           && minecraft.paperPlugins.cfg.worlds.factions_the_end.generator == "TerraformGenerator";
         message = "TerraformGenerator should bind every configured world to its generator";
       }
       {
         assertion =
-          minecraft.paperPlugins.cfg.bukkit.worlds.factions.generator == "TerraformGenerator"
+          minecraft.paperPlugins.cfg.bukkit.worlds.factions.generator
+          == "TerraformGenerator"
           && minecraft.paperPlugins.cfg.bukkit.worlds.factions_nether.generator == "TerraformGenerator"
           && minecraft.paperPlugins.cfg.bukkit.worlds.factions_the_end.generator == "TerraformGenerator";
         message = "Minecraft worlds should render to bukkit.yml world generator entries";
@@ -4055,8 +4734,9 @@ let
       }
       {
         assertion =
-          bedrock.cfg.settings."server-port" == bedrock.cfg.port
-          && bedrock.cfg.settings."server-portv6" == bedrock.cfg.portv6;
+          bedrock.cfg.settings.server-port
+          == bedrock.cfg.port
+          && bedrock.cfg.settings.server-portv6 == bedrock.cfg.portv6;
         message = "minecraft-bedrock server.properties should follow the configured UDP ports";
       }
       {
@@ -4101,24 +4781,30 @@ let
         message = "remote-desktop module default should leave only ix sidecar TCP ports open";
       }
       {
-        assertion = lib.any (
-          failure:
-          lib.hasInfix "rendered Xpra auth = \"none\" requires services.remote-desktop.allowUnauthenticated = true" failure.message
-        ) remoteDesktopUnauthenticatedFirewallFailures;
+        assertion =
+          lib.any (
+            failure:
+              lib.hasInfix "rendered Xpra auth = \"none\" requires services.remote-desktop.allowUnauthenticated = true" failure.message
+          )
+          remoteDesktopUnauthenticatedFirewallFailures;
         message = "remote-desktop should reject unauthenticated firewall exposure unless it is explicit";
       }
       {
-        assertion = lib.any (
-          failure:
-          lib.hasInfix "rendered Xpra auth = \"none\" requires services.remote-desktop.allowUnauthenticated = true" failure.message
-        ) remoteDesktopSettingsAuthFirewallFailures;
+        assertion =
+          lib.any (
+            failure:
+              lib.hasInfix "rendered Xpra auth = \"none\" requires services.remote-desktop.allowUnauthenticated = true" failure.message
+          )
+          remoteDesktopSettingsAuthFirewallFailures;
         message = "remote-desktop should check settings.auth overrides before opening the firewall";
       }
       {
-        assertion = lib.any (
-          failure:
-          lib.hasInfix "settings.bind-tcp must match services.remote-desktop.bindAddress" failure.message
-        ) remoteDesktopBindTcpDriftFailures;
+        assertion =
+          lib.any (
+            failure:
+              lib.hasInfix "settings.bind-tcp must match services.remote-desktop.bindAddress" failure.message
+          )
+          remoteDesktopBindTcpDriftFailures;
         message = "remote-desktop should reject a bind-tcp override that disagrees with the claimed listener";
       }
       {
@@ -4127,7 +4813,7 @@ let
       }
       {
         assertion = samePorts remoteDesktop.config.networking.firewall.allowedTCPPorts (
-          baseFirewallTcpPorts ++ [ remoteDesktop.cfg.port ]
+          baseFirewallTcpPorts ++ [remoteDesktop.cfg.port]
         );
         message = "remote-desktop firewall should open only the configured browser port plus ix sidecar ports";
       }
@@ -4173,20 +4859,23 @@ let
         message = "resource-monitor nginx should serve stats from the configured runtime directory";
       }
       {
-        assertion = lib.all (
-          failures:
-          lib.any (
-            failure:
-            lib.hasInfix "services.resource-monitor.runtimeDirectory must be a managed /run subdirectory" failure.message
-          ) failures
-        ) resourceMonitorRuntimeDirectoryFailures;
+        assertion =
+          lib.all (
+            failures:
+              lib.any (
+                failure:
+                  lib.hasInfix "services.resource-monitor.runtimeDirectory must be a managed /run subdirectory" failure.message
+              )
+              failures
+          )
+          resourceMonitorRuntimeDirectoryFailures;
         message = "resource-monitor should reject runtime directories outside /run and unsafe /run segments";
       }
     ];
 
     helpers = [
       {
-        assertion = missingPackageMetadata == [ ];
+        assertion = missingPackageMetadata == [];
         message =
           "packages with default.nix should declare package.nix metadata entries: "
           + lib.concatStringsSep ", " missingPackageMetadata;
@@ -4196,7 +4885,7 @@ let
         message = "exported JVM profile should evaluate with plain nixpkgs and no repo overlay";
       }
       {
-        assertion = cargoUnitWorkspace.unusedCrateDependenciesByPackage != { };
+        assertion = cargoUnitWorkspace.unusedCrateDependenciesByPackage != {};
         message = "cargo-unit workspaces should expose per-crate unused dependency policy checks by default";
       }
       {
@@ -4228,7 +4917,7 @@ let
       {
         assertion =
           goUnitWorkspace.packages.root.goUnit.goToolchain
-          == ix.languages.go.toolchain pkgs { version = "latest"; };
+          == ix.languages.go.toolchain pkgs {version = "latest";};
         message = "go-unit package derivations should use the selected Go toolchain";
       }
       {
@@ -4323,7 +5012,7 @@ let
       {
         # Clippy is a per-crate gate (clippyByPackage), not one workspace
         # aggregate, so editing one crate rebuilds only its clippy check.
-        assertion = cargoUnitWorkspace.clippyByPackage != { };
+        assertion = cargoUnitWorkspace.clippyByPackage != {};
         message = "cargo-unit workspaces should expose per-crate clippy gates";
       }
       {
@@ -4359,11 +5048,10 @@ let
         message = "cargo-unit clippy checks should use llm-clippy by default";
       }
       {
-        assertion =
-          let
-            denied = cargoUnitWorkspace.policy.clippy.deniedLints;
-          in
-          denied == [ ];
+        assertion = let
+          denied = cargoUnitWorkspace.policy.clippy.deniedLints;
+        in
+          denied == [];
         message = "cargo-unit clippy policy should defer default lint levels to Cargo.toml";
       }
       {
@@ -4411,7 +5099,8 @@ let
       }
       {
         assertion =
-          cargoUnitWorkspace.nextestByTarget.cargo_unit_hello.NEXTEST_HIDE_PROGRESS_BAR == "true"
+          cargoUnitWorkspace.nextestByTarget.cargo_unit_hello.NEXTEST_HIDE_PROGRESS_BAR
+          == "true"
           && cargoUnitWorkspace.nextestByTarget.cargo_unit_hello.NEXTEST_NO_INPUT_HANDLER == "true"
           && cargoUnitWorkspace.nextestByTarget.cargo_unit_hello.NEXTEST_SHOW_PROGRESS == "none";
         message = "cargo-unit cargo-nextest checks should force non-interactive reporter environment";
@@ -4421,11 +5110,11 @@ let
         message = "cargo-unit workspaces should expose an aggregate test-check derivation";
       }
       {
-        assertion = cargoUnitWorkspace.doctests != { };
+        assertion = cargoUnitWorkspace.doctests != {};
         message = "cargo-unit workspaces should expose doctest targets as separate checks";
       }
       {
-        assertion = cargoUnitWorkspace.targetSets.build.doctests != { };
+        assertion = cargoUnitWorkspace.targetSets.build.doctests != {};
         message = "cargo-unit target sets should expose doctest targets next to build roots";
       }
       {
@@ -4469,8 +5158,17 @@ let
         message = "narrowing cargoTargets must yield identical root derivations; select roots lazily from the multi-target workspace instead of a subset buildWorkspace";
       }
       {
-        assertion = cargoUnitPolicyDisabledWorkspace.policyChecks == { };
+        assertion = cargoUnitPolicyDisabledWorkspace.policyChecks == {};
         message = "cargo-unit policy checks should be disableable for generated workspaces";
+      }
+      {
+        # A Darwin consumer forces the (x86_64-linux) vendor dir at eval
+        # through the cross lane's IFD and can only ever satisfy it by
+        # substitution; linkFarm's `allowSubstitutes = false` default made
+        # that impossible (#1711). Pin the override so a vendor-dir refactor
+        # cannot silently regress Darwin eval of cross packages.
+        assertion = cargoUnitWorkspace.vendorDir.allowSubstitutes or false;
+        message = "the aggregate cargo vendor dir must set allowSubstitutes = true; Darwin cross consumers can only substitute it (#1711)";
       }
       {
         assertion = cargoUnitScope.base.alpha.drvPath != cargoUnitScope.alphaChanged.alpha.drvPath;
@@ -4505,9 +5203,10 @@ let
       {
         assertion = builtins.any (
           source:
-          source.base == "vendor-package"
-          && source.scope == "package"
-          && source.sourceKey == "registry+https://github.com/rust-lang/crates.io-index#itoa@1.0.18"
+            source.base
+            == "vendor-package"
+            && source.scope == "package"
+            && source.sourceKey == "registry+https://github.com/rust-lang/crates.io-index#itoa@1.0.18"
         ) (builtins.attrValues cargoUnitScopeWorkspaces.base.sourceAudit);
         message = "cargo-unit source audit should record full dependency source identity";
       }
@@ -4545,11 +5244,10 @@ let
         message = "repo Rust clippy checks should use llm-clippy by default";
       }
       {
-        assertion =
-          let
-            denied = repoPackages.minecraft-nbt.passthru.policy.clippy.deniedLints;
-          in
-          denied == [ ];
+        assertion = let
+          denied = repoPackages.minecraft-nbt.passthru.policy.clippy.deniedLints;
+        in
+          denied == [];
         message = "repo Rust clippy policy should defer default lint levels to Cargo.toml";
       }
       {
@@ -4591,14 +5289,16 @@ let
       }
       {
         assertion =
-          bunLockPackage.name == "clsx"
+          bunLockPackage.name
+          == "clsx"
           && bunLockPackage.version == "2.1.1"
           && lib.hasPrefix "sha512-" bunLockPackage.integrity;
         message = "bun lock helper should derive registry fetch metadata from bun.lock";
       }
       {
         assertion =
-          uvLockedDistribution.name == "click"
+          uvLockedDistribution.name
+          == "click"
           && uvLockedDistribution.version == "8.1.7"
           && lib.hasPrefix "sha256-" uvLockedDistribution.hash;
         message = "uv lock helper should derive registry fetch metadata from uv.lock";
@@ -4612,18 +5312,19 @@ let
       {
         assertion =
           ix.deepMerge.strict
-            {
-              a = {
-                x = 1;
-              };
-              b = 2;
-            }
-            {
-              a = {
-                y = 3;
-              };
-              c = 4;
-            } == {
+          {
+            a = {
+              x = 1;
+            };
+            b = 2;
+          }
+          {
+            a = {
+              y = 3;
+            };
+            c = 4;
+          }
+          == {
             a = {
               x = 1;
               y = 3;
@@ -4635,24 +5336,25 @@ let
       }
       {
         assertion =
-          !(builtins.tryEval (builtins.deepSeq (ix.deepMerge.strict { a.b = 1; } { a.b = 2; }) null)).success;
+          !(builtins.tryEval (builtins.deepSeq (ix.deepMerge.strict {a.b = 1;} {a.b = 2;}) null)).success;
         message = "deepMerge.strict should throw on a colliding leaf";
       }
       {
         assertion =
           ix.deepMerge.rhs
-            {
-              Service = {
-                ExecStart = "/run/wrapped";
-                Restart = "on-failure";
-              };
-            }
-            {
-              Service = {
-                Restart = "always";
-                MemoryMax = "512M";
-              };
-            } == {
+          {
+            Service = {
+              ExecStart = "/run/wrapped";
+              Restart = "on-failure";
+            };
+          }
+          {
+            Service = {
+              Restart = "always";
+              MemoryMax = "512M";
+            };
+          }
+          == {
             Service = {
               ExecStart = "/run/wrapped";
               Restart = "always";
@@ -4663,23 +5365,24 @@ let
       }
       {
         assertion =
-          ix.deepMerge.rhs { pkg = pkgs.hello; } { pkg = pkgs.coreutils; } == { pkg = pkgs.coreutils; };
+          ix.deepMerge.rhs {pkg = pkgs.hello;} {pkg = pkgs.coreutils;} == {pkg = pkgs.coreutils;};
         message = "deepMerge.rhs should treat derivations as atomic leaves";
       }
       {
         assertion =
           !(builtins.tryEval (
-            builtins.deepSeq (ix.deepMerge.strict { pkg = pkgs.hello; } { pkg = pkgs.coreutils; }) null
+            builtins.deepSeq (ix.deepMerge.strict {pkg = pkgs.hello;} {pkg = pkgs.coreutils;}) null
           )).success;
         message = "deepMerge.strict should throw on a derivation collision instead of recursing into it";
       }
       {
         assertion =
           ix.deepMerge.strictList [
-            { a.x = 1; }
-            { a.y = 2; }
-            { b = 3; }
-          ] == {
+            {a.x = 1;}
+            {a.y = 2;}
+            {b = 3;}
+          ]
+          == {
             a = {
               x = 1;
               y = 2;
@@ -4773,13 +5476,14 @@ let
         message = "dev-fleet should expose ix.nix as the mkDev entrypoint and dev.nix as the editable module";
       }
       {
-        assertion = lib.all (
-          rel:
-          let
-            text = builtins.readFile (paths.examples + "/${rel}/README.md");
-          in
-          lib.hasInfix "nix run .#" text && !(lib.hasInfix "\nix up\n" text)
-        ) fleetWrapperReadmes;
+        assertion =
+          lib.all (
+            rel: let
+              text = builtins.readFile (paths.examples + "/${rel}/README.md");
+            in
+              lib.hasInfix "nix run .#" text && !(lib.hasInfix "\nix up\n" text)
+          )
+          fleetWrapperReadmes;
         message = "fleet-wrapper examples should point at generated nix run .#<example>-up commands, not bare ix up";
       }
       {
@@ -4791,7 +5495,7 @@ let
         message = "fleet nodes should expose their east-west host name through ix.networking";
       }
       {
-        assertion = fleet.nodes.web.environment.etc."db-host".text == "db";
+        assertion = fleet.nodes.web.environment.etc.db-host.text == "db";
         message = "fleet node modules should be able to reference nodes.<name>.config";
       }
       {
@@ -4821,36 +5525,39 @@ let
         message = "fleet should expose nixosConfigurations.<node> so `ix up .#<node>` (native multi-VM switch) resolves the node toplevel";
       }
       {
-        assertion = fleet.packages.web == fleet.nodes.web.ix.build.ociImage;
-        message = "fleet replacement package outputs should keep node names";
+        assertion = fleet.packages.web == fleet.nodes.web.ix.build.casImage;
+        message = "fleet replacement package outputs should keep node names and resolve to the CAS image";
       }
       {
         assertion =
-          fleetPlan.web.switch == {
+          fleetPlan.web.switch
+          == {
             target = builtins.unsafeDiscardStringContext fleet.nodes.web.system.build.toplevel.drvPath;
             buildOn = "remote";
             buildVm = null;
             sourceInstallable = ".#web";
-            overrideInputs = { };
+            overrideInputs = {};
           };
         message = "fleet plans should default to local eval and remote build switch metadata";
       }
       {
-        assertion =
-          fleetPlan.web.replacementImage.sourceDrv
-          == builtins.unsafeDiscardStringContext fleet.nodes.web.ix.build.ociImage.drvPath;
-        message = "fleet plans should expose replacement image derivations without forcing local image builds";
+        assertion = fleetPlan.web.replacementImage.sourceInstallable == ".#web";
+        message = "fleet plans should reference the replacement image only by flake installable; forcing the CAS image at plan eval would IFD-build every node's system closure";
+      }
+      {
+        assertion = !fleetMissingCasBuilderEval.success;
+        message = "forcing a node's CAS image without the ix-side casImageBuilder must abort eval, never fall back";
       }
       {
         assertion = fleetPlan.web.region == "us-west-1";
         message = "fleet nodes should inherit the top-level deployment region";
       }
       {
-        assertion = fleetPlan.web.tags == [ "public" ];
+        assertion = fleetPlan.web.tags == ["public"];
         message = "fleet wrapped-node tags should flow into the generated plan";
       }
       {
-        assertion = fleetPlan.web.groups == [ "public-apps" ];
+        assertion = fleetPlan.web.groups == ["public-apps"];
         message = "fleet wrapped-node east-west groups should flow into the generated plan";
       }
       {
@@ -4858,21 +5565,21 @@ let
         message = "fleet wrapped-node deployment overrides should flow into the generated plan";
       }
       {
-        assertion =
-          let
-            check = fleetPlan.db.healthChecks.ix-postgresql;
-            pgIsReady = lib.getExe' fleet.nodes.db.services.postgresql.package "pg_isready";
-          in
-          check.from == "guest"
-          &&
-            check.command == [
-              pgIsReady
-              "--quiet"
-              "--host"
-              "/run/postgresql"
-              "--port"
-              "5432"
-            ]
+        assertion = let
+          check = fleetPlan.db.healthChecks.ix-postgresql;
+          pgIsReady = lib.getExe' fleet.nodes.db.services.postgresql.package "pg_isready";
+        in
+          check.from
+          == "guest"
+          && check.command
+          == [
+            pgIsReady
+            "--quiet"
+            "--host"
+            "/run/postgresql"
+            "--port"
+            "5432"
+          ]
           && check.timeoutSec == 30;
         message = "fleet plans should carry pg_isready-backed Postgres readiness checks";
       }
@@ -4898,7 +5605,8 @@ let
       }
       {
         assertion =
-          fleetPlan.web.secrets == [
+          fleetPlan.web.secrets
+          == [
             {
               name = "fleet_default";
               target = {
@@ -4914,70 +5622,87 @@ let
               };
             }
           ]
-          &&
-            fleetPlan.db.secrets == [
-              {
-                name = "fleet_default";
-                target = {
-                  name = "FLEET_DEFAULT";
-                  injectAs = "env";
-                };
-              }
-            ];
+          && fleetPlan.db.secrets
+          == [
+            {
+              name = "fleet_default";
+              target = {
+                name = "FLEET_DEFAULT";
+                injectAs = "env";
+              };
+            }
+          ];
         message = "per-VM secret attachments should merge fleet-wide and node-level refs";
       }
       {
-        assertion = fleetPlan."worker-0".baseName == "worker" && fleetPlan."worker-1".replicaIndex == 1;
+        assertion = fleetPlan.worker-0.baseName == "worker" && fleetPlan.worker-1.replicaIndex == 1;
         message = "fleet replicas should expand into stable node identities";
       }
       {
-        assertion = fleetPlan."worker-0".dependsOn == [ "db" ];
+        assertion =
+          fleetPlan.worker-0.updateStrategy.maxUnavailable
+          == 1
+          && fleetPlan.worker-1.updateStrategy.maxUnavailable == 1
+          && fleetPlan.web.updateStrategy == null;
+        message = "fleet updateStrategy should flow into every replica's plan and default to null";
+      }
+      {
+        assertion = !fleetUnknownUpdateStrategyKeyEval.success;
+        message = "fleet plans should reject unknown updateStrategy keys during eval";
+      }
+      {
+        assertion = !fleetInvalidMaxUnavailableEval.success;
+        message = "fleet plans should reject a non-positive updateStrategy.maxUnavailable during eval";
+      }
+      {
+        assertion = fleetPlan.worker-0.dependsOn == ["db"];
         message = "fleet replica dependencies should point at expanded node identities";
       }
       {
         assertion =
-          prefixedFleet.planValue.order == [
+          prefixedFleet.planValue.order
+          == [
             "tprefix-api"
             "tprefix-worker"
           ];
         message = "withNodePrefix should rename every node in the plan order";
       }
       {
-        assertion = prefixedFleet.planValue.nodes."tprefix-worker".dependsOn == [ "tprefix-api" ];
+        assertion = prefixedFleet.planValue.nodes.tprefix-worker.dependsOn == ["tprefix-api"];
         message = "withNodePrefix should rewrite dependsOn references so the prefixed graph stays connected";
       }
       {
-        assertion = prefixedFleet.planValue.nodes."tprefix-worker".groups == [ "tprefix-private-apps" ];
+        assertion = prefixedFleet.planValue.nodes.tprefix-worker.groups == ["tprefix-private-apps"];
         message = "withNodePrefix should rewrite east-west group names so scratch fleets do not collide";
       }
       {
         assertion =
-          prefixedFleet.planValue.nodes."tprefix-api".replacementImage.destination == "tprefix-api:latest";
+          prefixedFleet.planValue.nodes.tprefix-api.replacementImage.destination == "tprefix-api:latest";
         message = "withNodePrefix should prefix the registry destination so scratch pushes cannot clobber the base tag";
       }
       {
-        assertion = prefixedFleet.nodes."tprefix-api".networking.hostName == "api";
+        assertion = prefixedFleet.nodes.tprefix-api.networking.hostName == "api";
         message = "withNodePrefix is a plan-level rename: guest hostname and image name stay base-named so the prefixed fleet shares the base fleet's closures";
       }
       {
         assertion =
-          prefixedFleet.planValue.nodes."tprefix-api".system == prefixedFleetBase.planValue.nodes.api.system
-          &&
-            prefixedFleet.planValue.nodes."tprefix-api".replacementImage.source
-            == prefixedFleetBase.planValue.nodes.api.replacementImage.source;
-        message = "withNodePrefix must reuse the base fleet's system closure and image source, not re-evaluate them";
+          prefixedFleet.planValue.nodes.tprefix-api.system
+          == prefixedFleetBase.planValue.nodes.api.system
+          && prefixedFleet.planValue.nodes.tprefix-api.replacementImage.sourceInstallable
+          == ".#tprefix-api";
+        message = "withNodePrefix must reuse the base fleet's system closure while re-deriving the replacement installable to the prefixed packages attr";
       }
       {
-        assertion = prefixedFleet.nodes."tprefix-worker".environment.etc."api-host".text == "api";
+        assertion = prefixedFleet.nodes.tprefix-worker.environment.etc.api-host.text == "api";
         message = "nodes module-arg should resolve by the example's base name even when prefixed";
       }
       {
-        assertion = prefixedFleet.planValue.nodes."tprefix-api".switch.sourceInstallable == ".#tprefix-api";
+        assertion = prefixedFleet.planValue.nodes.tprefix-api.switch.sourceInstallable == ".#tprefix-api";
         message = "withNodePrefix should re-derive the default `.#<node>` installable to the prefixed attr so the native multi-VM `ix up` names the prefixed VM";
       }
       {
         assertion =
-          prefixedFleet.nixosConfigurations."tprefix-api".config.system.build.toplevel
+          prefixedFleet.nixosConfigurations.tprefix-api.config.system.build.toplevel
           == prefixedFleetBase.nixosConfigurations.api.config.system.build.toplevel;
         message = "withNodePrefix should expose nixosConfigurations under the prefixed name while reusing the base closure (no second eval)";
       }
@@ -4988,7 +5713,7 @@ let
       {
         assertion =
           (explicitInstallableFleet.withNodePrefix "tprefix-")
-          .planValue.nodes."tprefix-svc".switch.sourceInstallable == ".#svc";
+          .planValue.nodes.tprefix-svc.switch.sourceInstallable == ".#svc";
         message = "an explicit sourceInstallable equal to the default must survive withNodePrefix unchanged (prefixing keys on provenance, not the rendered string)";
       }
     ];
@@ -4997,6 +5722,16 @@ let
   # --- Build-time checks ----------------------------------------------------
 
   buildScripts = {
+    security-roots = ''
+      root=${pkgs.hello}
+      case "$root" in
+        ${builtins.storeDir}/*) ;;
+        *)
+          echo "security root did not realize to a terminal store path: $root" >&2
+          exit 1
+          ;;
+      esac
+    '';
     factions = ''
       grep -q '^QuickShop-Hikari$' ${factionsExample.managed.dropins}/quickshop-hikari.jar.plugin-name
       grep -q '^Vault$' ${factionsExample.managed.dropins}/vaultunlocked.jar.plugin-name
@@ -5424,39 +6159,36 @@ let
 
   # --- Test derivation builder ----------------------------------------------
 
-  mkTest =
-    name: assertions: extraScript:
-    let
-      failures = map (a: a.message) (lib.filter (a: !a.assertion) assertions);
-    in
-    assert lib.assertMsg (failures == [ ]) (
+  mkTest = name: assertions: extraScript: let
+    failures = map (a: a.message) (lib.filter (a: !a.assertion) assertions);
+  in
+    assert lib.assertMsg (failures == []) (
       "ix-test-${name}:\n  " + lib.concatStringsSep "\n  " failures
     );
-    pkgs.runCommand "ix-test-${name}" { nativeBuildInputs = [ pkgs.gnugrep ]; } ''
-      ${extraScript}
-      mkdir -p "$out"
-    '';
+      pkgs.runCommand "ix-test-${name}" {nativeBuildInputs = [pkgs.gnugrep];} ''
+        ${extraScript}
+        mkdir -p "$out"
+      '';
 
   groupTests = lib.mapAttrs (name: assertions: mkTest name assertions (buildScripts.${name} or "")) (
-    removeAttrs groups [ "fleet" ]
+    removeAttrs groups ["fleet"]
   );
 
   fleetTest = mkTest "fleet" groups.fleet "";
 
-  helperTest = pkgs.runCommand "ix-test-helpers" { nativeBuildInputs = [ pkgs.gnugrep ]; } ''
+  helperTest = pkgs.runCommand "ix-test-helpers" {nativeBuildInputs = [pkgs.gnugrep];} ''
     ${helperScript}
     mkdir -p "$out"
   '';
 
   cargoUnitRealWorkspacesTest =
     mkTest "cargo-unit-real-workspaces" cargoUnitRealWorkspaceAssertions
-      cargoUnitRealWorkspaceScript;
+    cargoUnitRealWorkspaceScript;
 
   cargoUnitPrebuiltTest =
     mkTest "cargo-unit-prebuilt-library" cargoUnitPrebuiltAssertions
-      cargoUnitPrebuiltScript;
-in
-{
+    cargoUnitPrebuiltScript;
+in {
   inherit
     groupTests
     groups
@@ -5470,7 +6202,11 @@ in
   # Strict type + annotation gate over the public ix-sdk Python sources.
   sdkPythonStrict = sdkPython.strictCheck;
   portableServices = portableServicesTest;
+  symphonyHomeModule = symphonyHomeModuleTest;
+  provenance = provenanceTest;
   minecraftBlocksVm = minecraftBlocksVmTest;
+  minestomSpleefVm = minestomSpleefVmTest;
+  inherit baseImageNixDb;
 
   # Aggregate. Pulls every group test into one derivation so
   # `nix flake check` covers the whole suite.
@@ -5480,6 +6216,8 @@ in
       fleetTest
       helperTest
       portableServicesTest
+      symphonyHomeModuleTest
+      provenanceTest
       cargoUnitPrebuiltTest
     ]
   );

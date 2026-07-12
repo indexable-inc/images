@@ -1,25 +1,28 @@
 /**
-  The `ix.dev.*` option surface (RFC 0007).
+The `ix.dev.*` option surface (RFC 0007).
 
-  This is what lets a forked `ix.nix` read like an ordinary NixOS module: you
-  write `environment.systemPackages` and `programs.git.enable` at the top level
-  as usual, and reach for `ix.dev.*` only to describe the agents, the fleet
-  shape, and the shared identity volume. `mkDev` reads these options to plan the
-  fleet; the per-node build consumes `ix.dev.agents` to install the agent CLIs.
+This is what lets a forked `ix.nix` read like an ordinary NixOS module: you
+write `environment.systemPackages` and `programs.git.enable` at the top level
+as usual, and reach for `ix.dev.*` only to describe the agents, the fleet
+shape, and the shared identity volume. `mkDev` reads these options to plan the
+fleet; the per-node build consumes `ix.dev.agents` to install the agent CLIs.
 
-  Declared in `lib/dev/` (not `modules/`) so it is only in scope where the dev
-  base imports it. It must not add `claude-code` to every image in the repo.
+Declared in `lib/dev/` (not `modules/`) so it is only in scope where the dev
+base imports it. It must not add `claude-code` to every image in the repo.
 */
-{ lib, pkgs, ... }:
-let
-  inherit (lib)
+{
+  lib,
+  pkgs,
+  ...
+}: let
+  inherit
+    (lib)
     mkOption
     mkEnableOption
     types
     literalExpression
     ;
-in
-{
+in {
   options.ix.dev = {
     agents = {
       claude = mkOption {
@@ -74,7 +77,7 @@ in
 
         targets = mkOption {
           type = types.listOf types.str;
-          default = [ ];
+          default = [];
           description = "Extra rustc targets installed with the profile toolchain.";
         };
 
@@ -139,24 +142,24 @@ in
             };
             dependsOn = mkOption {
               type = types.listOf types.str;
-              default = [ ];
+              default = [];
               description = "Node names that must be up before this node.";
             };
             groups = mkOption {
               type = types.listOf types.str;
-              default = [ ];
+              default = [];
               description = "Extra private east-west groups this node joins.";
             };
             modules = mkOption {
               type = types.listOf types.raw;
-              default = [ ];
+              default = [];
               description = "Extra NixOS modules applied to this node only.";
             };
           };
         }
       );
       default = {
-        dev = { };
+        dev = {};
       };
       example = literalExpression ''
         {
@@ -200,7 +203,7 @@ in
 
       excludeNodes = mkOption {
         type = types.listOf types.str;
-        default = [ ];
+        default = [];
         example = literalExpression ''[ "builder" ]'';
         description = "Nodes that opt out of the volume entirely (no mount, no shared identity).";
       };

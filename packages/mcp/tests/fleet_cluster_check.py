@@ -133,7 +133,7 @@ def check_exec_auth() -> None:
             exec_token=token,
             exec_trust_network=trust,
         )
-        app = dashboard.build_app(cfg, conn)
+        app = dashboard.build_app(cfg, store.AsyncConn(cfg.store_path))
         async with TestClient(TestServer(app)) as client:
             headers = {"Authorization": auth} if auth else {}
             resp = await client.post("/api/exec", json=payload, headers=headers)

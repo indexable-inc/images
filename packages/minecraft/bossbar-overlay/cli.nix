@@ -17,7 +17,7 @@ stdenvNoCC.mkDerivation {
   dontUnpack = true;
 
   strictDeps = true;
-  nativeBuildInputs = [ makeWrapper ];
+  nativeBuildInputs = [makeWrapper];
 
   installPhase = ''
     # shell
@@ -26,11 +26,11 @@ stdenvNoCC.mkDerivation {
     patchShebangs $out/bin/bossbar
     wrapProgram $out/bin/bossbar \
       --prefix PATH : ${
-        lib.makeBinPath [
-          sqlite
-          coreutils
-        ]
-      }
+      lib.makeBinPath [
+        sqlite
+        coreutils
+      ]
+    }
     runHook postInstall
   '';
 

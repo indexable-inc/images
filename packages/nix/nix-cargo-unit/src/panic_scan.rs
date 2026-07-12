@@ -95,7 +95,7 @@ fn scan_bytes(
             // Archives carry non-object members (rmeta, symbol index); those are
             // not objects and are skipped, but a member that claims to be an
             // object and fails to parse is a real error.
-            if is_object_member(member.name()) {
+            if member.name().ends_with(b".o") {
                 let object = object::File::parse(member_data)
                     .wrap_err("parsing rlib object member for panic scan")?;
                 scan_object(&object, crate_tokens, findings);
@@ -110,10 +110,6 @@ fn scan_bytes(
         .wrap_err("artifact is neither an rlib archive nor a parseable object")?;
     scan_object(&object, crate_tokens, findings);
     Ok(())
-}
-
-fn is_object_member(name: &[u8]) -> bool {
-    name.ends_with(b".o") || name.ends_with(b".rcgu.o")
 }
 
 struct FunctionRange {

@@ -1,0 +1,14 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: index tests <tests@indexable.dev>
+Date: Mon, 1 Jan 2026 00:00:00 +0000
+Subject: [PATCH] fixture: canonical patch shape
+
+The reason of record for the canonical fixture patch.
+---
+diff --git a/file.txt b/file.txt
+index 0000000..1111111 100644
+--- a/file.txt
++++ b/file.txt
+@@ -1 +1 @@
+-old
++new

@@ -4,8 +4,7 @@
   pkgs,
   nodes,
   ...
-}:
-let
+}: let
   headHost = nodes.ray-head.config.ix.networking.eastWest.hostName;
   gcsPort = 6379;
   clientPort = 10001;
@@ -23,8 +22,7 @@ let
   # health check should wait for. Bumping `ray-worker.replicas` in ix.nix
   # raises this automatically.
   expectedNodes = builtins.length (builtins.attrNames nodes);
-in
-{
+in {
   imports = [
     (import ./cluster-node.nix {
       inherit

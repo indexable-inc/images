@@ -1,9 +1,7 @@
-_:
-let
+_: let
   sambaPort = 445;
   shareDir = "/var/lib/file-share";
-in
-{
+in {
   # Userspace `smbd` rather than in-kernel `ksmbd`: ix images are
   # `boot.isContainer = true` and share the host `linux-ix` kernel, so
   # the SMB server has to live in userspace. Linux clients still use
@@ -16,9 +14,9 @@ in
 
     settings = {
       global = {
-        "workgroup" = "WORKGROUP";
+        workgroup = "WORKGROUP";
         "server string" = "ix multi-client file share";
-        "security" = "user";
+        security = "user";
         "map to guest" = "Bad User";
         "guest account" = "nobody";
 
@@ -32,10 +30,10 @@ in
         # otherwise contend through the server's POSIX lock manager,
         # which Linux maps onto fcntl byte-range locks only — `flock()`
         # over CIFS would lose coordination across clients.
-        "locking" = "yes";
+        locking = "yes";
         "strict locking" = "yes";
         "posix locking" = "yes";
-        "oplocks" = "yes";
+        oplocks = "yes";
         "kernel oplocks" = "no";
 
         # Cross-client visibility over throughput: a write from
@@ -45,10 +43,10 @@ in
       };
 
       share = {
-        "path" = shareDir;
-        "browseable" = "yes";
+        path = shareDir;
+        browseable = "yes";
         "read only" = "no";
-        "writable" = "yes";
+        writable = "yes";
         "guest ok" = "yes";
         "force user" = "nobody";
         "force group" = "nogroup";

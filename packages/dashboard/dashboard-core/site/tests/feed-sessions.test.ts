@@ -15,28 +15,30 @@ function sessionPane(title: string, created_at: number): PaneRecord {
 }
 
 describe('feedSessions', () => {
-  it('sorts sessions by creation time', () => {
+  it('groups every scope and resolves its session label', () => {
     const panes: Record<string, PaneRecord> = {
-      [`late${SCOPE_SEP}session`]: sessionPane('A label sorts first', 300),
-      [`early${SCOPE_SEP}session`]: sessionPane('Z label sorts last', 100),
-      [`middle${SCOPE_SEP}run`]: { kind: 'exec', title: 'run', created_at: 200 },
+      [`alpha${SCOPE_SEP}session`]: sessionPane('Alpha', 100),
+      [`alpha${SCOPE_SEP}r1`]: { kind: 'exec', title: 'run', created_at: 200 },
+      // A scope with no session-label pane falls back to a short scope.
+      [`bravo${SCOPE_SEP}r1`]: { kind: 'exec', title: 'run', created_at: 150 },
     };
 
-    assert.deepEqual(
-      feedSessions(panes).map((s) => s.scope),
-      ['early', 'middle', 'late'],
-    );
+    assert.deepEqual(feedSessions(panes), [
+      { scope: 'alpha', label: 'Alpha' },
+      { scope: 'bravo', label: 'bravo' },
+    ]);
   });
 
-  it('uses scope as the stable tie-break', () => {
+  it('orders by scope (a stable default; the sidebar re-orders by activity)', () => {
     const panes: Record<string, PaneRecord> = {
-      [`bravo${SCOPE_SEP}session`]: sessionPane('Bravo', 100),
-      [`alpha${SCOPE_SEP}session`]: sessionPane('Alpha', 100),
+      [`charlie${SCOPE_SEP}session`]: sessionPane('C', 300),
+      [`alpha${SCOPE_SEP}session`]: sessionPane('A', 100),
+      [`bravo${SCOPE_SEP}session`]: sessionPane('B', 200),
     };
 
     assert.deepEqual(
       feedSessions(panes).map((s) => s.scope),
-      ['alpha', 'bravo'],
+      ['alpha', 'bravo', 'charlie'],
     );
   });
 });

@@ -5,8 +5,7 @@
   nodes,
   pkgs,
   ...
-}:
-let
+}: let
   observability = {
     host = nodes.observability.config.ix.networking.eastWest.hostName;
     clickhousePort = nodes.observability.config.services.ix-observability.clickhouse.nativePort;
@@ -46,14 +45,13 @@ let
       '';
     }
   );
-in
-{
+in {
   services.ix-observability = {
     stack.enable = false;
     agent = {
       enable = true;
       endpoint = "${collector}";
-      filelog.paths = [ logPath ];
+      filelog.paths = [logPath];
     };
     environment = "example";
     resourceAttributes."ix.example" = "observability-stack";
@@ -74,8 +72,8 @@ in
       "network-online.target"
       "opentelemetry-collector.service"
     ];
-    wants = [ "network-online.target" ];
-    wantedBy = [ "multi-user.target" ];
+    wants = ["network-online.target"];
+    wantedBy = ["multi-user.target"];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
@@ -94,7 +92,7 @@ in
       attempts = 60;
       intervalSec = 5;
       timeoutSec = 10;
-      command = [ "${checkTelemetry}" ];
+      command = ["${checkTelemetry}"];
     };
   };
 }

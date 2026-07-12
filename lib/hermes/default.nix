@@ -1,6 +1,4 @@
-_:
-
-{
+_: {
   # Shared Hermes agent profile consumed by examples and downstream fleets.
   profile = ./profile.nix;
 

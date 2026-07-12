@@ -7,8 +7,7 @@
   nodes,
   pkgs,
   ...
-}:
-let
+}: let
   rcon = import ./rcon.nix;
 
   # The minecraft node's east-west name; resolvable because both nodes
@@ -28,8 +27,7 @@ let
     pyChecker = "zuban";
     meta.description = "MCP stdio server exposing Minecraft RCON as a typed run_command tool";
   };
-in
-{
+in {
   services.hermes-agent = {
     mcpServers.minecraft = {
       command = lib.getExe rconMcp;

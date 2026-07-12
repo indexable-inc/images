@@ -13,23 +13,18 @@
   # Writer for `passthru.updateScript` (flake-package path only); null on the
   # overlay path.
   updateScriptWriter ? null,
-}:
-let
+}: let
   # Version + crate URL and SRI hash live in the sibling pins.json, never inline
   # (repo policy). Keep in sync with the `wasm-bindgen` Cargo dep; bump the
   # version/url in pins.json, then `nix run .#update` re-pins the hash.
   pin = ix.pins.loadPin ./pins.json "wasm-bindgen-cli";
   inherit (pin) version;
-  updateScript =
-    if updateScriptWriter == null then
-      null
-    else
-      ix.pins.mkUpdater {
-        writeNushellApplication = updateScriptWriter;
-        inherit nix;
-        pname = "wasm-bindgen-cli";
-        relPath = "packages/wasm-bindgen-cli/pins.json";
-      };
+  updateScript = ix.pins.mkOptionalUpdater {
+    writeNushellApplication = updateScriptWriter;
+    inherit nix;
+    pname = "wasm-bindgen-cli";
+    relPath = "packages/wasm-bindgen-cli/pins.json";
+  };
   src = fetchCrate {
     pname = "wasm-bindgen-cli";
     inherit (pin) version url hash;
@@ -44,10 +39,10 @@ let
     lockFile = src + "/Cargo.lock";
   };
 in
-(buildWasmBindgenCli {
-  inherit version src cargoDeps;
-}).overrideAttrs
+  (buildWasmBindgenCli {
+    inherit version src cargoDeps;
+  }).overrideAttrs
   (old: {
     passthru =
-      (old.passthru or { }) // lib.optionalAttrs (updateScript != null) { inherit updateScript; };
+      (old.passthru or {}) // lib.optionalAttrs (updateScript != null) {inherit updateScript;};
   })

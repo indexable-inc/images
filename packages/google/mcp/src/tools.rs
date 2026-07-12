@@ -12,7 +12,7 @@ use std::sync::Arc;
 use chrono::{DateTime, FixedOffset};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{ErrorCode, ErrorData, ServerCapabilities, ServerInfo};
+use rmcp::model::{ErrorCode, ErrorData, ServerInfo};
 use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -22,6 +22,13 @@ use google_calendar::{
     AttendeeDraft, EventDraft, EventQuery, EventTime, PRIMARY_CALENDAR, SendUpdates,
 };
 use google_gmail::{Attachment, MessageFormat, MessageQuery, OutgoingMessage};
+
+const SERVER: mcp_server_info::ToolServer = mcp_server_info::ToolServer {
+    name: "ix-google-mcp",
+    instructions: "Gmail and Google Calendar via the shared google-auth grant. Run `gmail auth` \
+                   (or `gcal auth`) on the host once to mint the refresh token before invoking \
+                   any tool.",
+};
 
 /// The MCP server. Holds the two API clients shared across tool calls.
 #[derive(Clone)]
@@ -46,6 +53,39 @@ impl GoogleMcp {
             tool_router: Self::tool_router(),
         })
     }
+
+    async fn delete_draft(&self, id: &str) -> Result<String, ErrorData> {
+        acknowledged(self.gmail.delete_draft(id).await, "deleted", id)
+    }
+
+    async fn list_messages(&self, query: MessageQuery) -> Result<String, ErrorData> {
+        let messages = self
+            .gmail
+            .list_messages(&query)
+            .await
+            .map_err(into_tool_error)?;
+        json_string(&messages)
+    }
+
+    async fn mutate_message(
+        &self,
+        id: &str,
+        mutation: MessageMutation,
+    ) -> Result<String, ErrorData> {
+        match mutation {
+            MessageMutation::Trash => {
+                acknowledged(self.gmail.trash_message(id).await, "trashed", id)
+            }
+            MessageMutation::Untrash => {
+                acknowledged(self.gmail.untrash_message(id).await, "untrashed", id)
+            }
+        }
+    }
+}
+
+enum MessageMutation {
+    Trash,
+    Untrash,
 }
 
 #[tool_router(router = tool_router)]
@@ -169,18 +209,7 @@ impl GoogleMcp {
         &self,
         Parameters(args): Parameters<MailSearchArgs>,
     ) -> Result<String, ErrorData> {
-        let query = MessageQuery {
-            q: Some(args.query),
-            label_ids: args.label_ids.unwrap_or_default(),
-            include_spam_trash: args.include_spam_trash.unwrap_or(false),
-            max_results: args.max_results.unwrap_or(20),
-        };
-        let stubs = self
-            .gmail
-            .list_messages(&query)
-            .await
-            .map_err(into_tool_error)?;
-        json_string(&stubs)
+        self.list_messages(args.into_query()).await
     }
 
     #[tool(description = "List Gmail messages by filter (no free-text query). \
@@ -189,18 +218,7 @@ impl GoogleMcp {
         &self,
         Parameters(args): Parameters<MailListMessagesArgs>,
     ) -> Result<String, ErrorData> {
-        let query = MessageQuery {
-            q: args.q,
-            label_ids: args.label_ids.unwrap_or_default(),
-            include_spam_trash: args.include_spam_trash.unwrap_or(false),
-            max_results: args.max_results.unwrap_or(20),
-        };
-        let stubs = self
-            .gmail
-            .list_messages(&query)
-            .await
-            .map_err(into_tool_error)?;
-        json_string(&stubs)
+        self.list_messages(args.into_query()).await
     }
 
     #[tool(description = "Fetch one Gmail message by id. format=full (default) \
@@ -224,15 +242,9 @@ impl GoogleMcp {
         &self,
         Parameters(args): Parameters<MailSearchArgs>,
     ) -> Result<String, ErrorData> {
-        let query = MessageQuery {
-            q: Some(args.query),
-            label_ids: args.label_ids.unwrap_or_default(),
-            include_spam_trash: args.include_spam_trash.unwrap_or(false),
-            max_results: args.max_results.unwrap_or(20),
-        };
         let threads = self
             .gmail
-            .list_threads(&query)
+            .list_threads(&args.into_query())
             .await
             .map_err(into_tool_error)?;
         json_string(&threads)
@@ -306,12 +318,7 @@ impl GoogleMcp {
         &self,
         Parameters(args): Parameters<MailDraftIdArgs>,
     ) -> Result<String, ErrorData> {
-        let draft = self
-            .gmail
-            .get_draft(&args.draft_id)
-            .await
-            .map_err(into_tool_error)?;
-        json_string(&draft)
+        json_tool_result(self.gmail.get_draft(&args.draft_id).await)
     }
 
     #[tool(description = "List Gmail drafts.")]
@@ -319,12 +326,7 @@ impl GoogleMcp {
         &self,
         Parameters(args): Parameters<MailDraftListArgs>,
     ) -> Result<String, ErrorData> {
-        let drafts = self
-            .gmail
-            .list_drafts(args.max_results.unwrap_or(20))
-            .await
-            .map_err(into_tool_error)?;
-        json_string(&drafts)
+        json_tool_result(self.gmail.list_drafts(args.max_results.unwrap_or(20)).await)
     }
 
     #[tool(description = "Delete a Gmail draft by id.")]
@@ -332,11 +334,7 @@ impl GoogleMcp {
         &self,
         Parameters(args): Parameters<MailDraftIdArgs>,
     ) -> Result<String, ErrorData> {
-        self.gmail
-            .delete_draft(&args.draft_id)
-            .await
-            .map_err(into_tool_error)?;
-        Ok(json!({ "deleted": args.draft_id }).to_string())
+        self.delete_draft(&args.draft_id).await
     }
 
     #[tool(description = "Send a previously saved Gmail draft by id.")]
@@ -344,12 +342,7 @@ impl GoogleMcp {
         &self,
         Parameters(args): Parameters<MailDraftIdArgs>,
     ) -> Result<String, ErrorData> {
-        let sent = self
-            .gmail
-            .send_draft(&args.draft_id)
-            .await
-            .map_err(into_tool_error)?;
-        json_string(&sent)
+        json_tool_result(self.gmail.send_draft(&args.draft_id).await)
     }
 
     // -----------------------------------------------------------------
@@ -361,12 +354,7 @@ impl GoogleMcp {
         &self,
         Parameters(args): Parameters<MailMessageIdArgs>,
     ) -> Result<String, ErrorData> {
-        let message = self
-            .gmail
-            .archive_message(&args.message_id)
-            .await
-            .map_err(into_tool_error)?;
-        json_string(&message)
+        json_tool_result(self.gmail.archive_message(&args.message_id).await)
     }
 
     #[tool(description = "Move a Gmail message to Trash.")]
@@ -374,11 +362,8 @@ impl GoogleMcp {
         &self,
         Parameters(args): Parameters<MailMessageIdArgs>,
     ) -> Result<String, ErrorData> {
-        self.gmail
-            .trash_message(&args.message_id)
+        self.mutate_message(&args.message_id, MessageMutation::Trash)
             .await
-            .map_err(into_tool_error)?;
-        Ok(json!({ "trashed": args.message_id }).to_string())
     }
 
     #[tool(description = "Restore a Gmail message from Trash.")]
@@ -386,11 +371,8 @@ impl GoogleMcp {
         &self,
         Parameters(args): Parameters<MailMessageIdArgs>,
     ) -> Result<String, ErrorData> {
-        self.gmail
-            .untrash_message(&args.message_id)
+        self.mutate_message(&args.message_id, MessageMutation::Untrash)
             .await
-            .map_err(into_tool_error)?;
-        Ok(json!({ "untrashed": args.message_id }).to_string())
     }
 
     #[tool(description = "Mark a Gmail message read (remove UNREAD).")]
@@ -398,12 +380,7 @@ impl GoogleMcp {
         &self,
         Parameters(args): Parameters<MailMessageIdArgs>,
     ) -> Result<String, ErrorData> {
-        let message = self
-            .gmail
-            .mark_message_read(&args.message_id)
-            .await
-            .map_err(into_tool_error)?;
-        json_string(&message)
+        json_tool_result(self.gmail.mark_message_read(&args.message_id).await)
     }
 
     #[tool(description = "Mark a Gmail message unread (add UNREAD).")]
@@ -411,12 +388,7 @@ impl GoogleMcp {
         &self,
         Parameters(args): Parameters<MailMessageIdArgs>,
     ) -> Result<String, ErrorData> {
-        let message = self
-            .gmail
-            .mark_message_unread(&args.message_id)
-            .await
-            .map_err(into_tool_error)?;
-        json_string(&message)
+        json_tool_result(self.gmail.mark_message_unread(&args.message_id).await)
     }
 
     // -----------------------------------------------------------------
@@ -487,19 +459,7 @@ impl GoogleMcp {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for GoogleMcp {
     fn get_info(&self) -> ServerInfo {
-        // Both ServerInfo and Implementation are #[non_exhaustive], so
-        // start from a Default and patch the fields we care about.
-        let mut info = ServerInfo::default();
-        info.capabilities = ServerCapabilities::builder().enable_tools().build();
-        "ix-google-mcp".clone_into(&mut info.server_info.name);
-        env!("CARGO_PKG_VERSION").clone_into(&mut info.server_info.version);
-        info.instructions = Some(
-            "Gmail and Google Calendar via the shared google-auth grant. \
-             Run `gmail auth` (or `gcal auth`) on the host once to mint \
-             the refresh token before invoking any tool."
-                .to_owned(),
-        );
-        info
+        SERVER.info(env!("CARGO_PKG_VERSION"))
     }
 }
 
@@ -584,6 +544,17 @@ pub struct MailSearchArgs {
     pub max_results: Option<usize>,
 }
 
+impl MailSearchArgs {
+    fn into_query(self) -> MessageQuery {
+        message_query(
+            Some(self.query),
+            self.label_ids,
+            self.include_spam_trash,
+            self.max_results,
+        )
+    }
+}
+
 #[derive(Deserialize, JsonSchema)]
 pub struct MailListMessagesArgs {
     /// Optional Gmail search query. If omitted, the call returns the most
@@ -596,6 +567,17 @@ pub struct MailListMessagesArgs {
     pub include_spam_trash: Option<bool>,
     #[serde(default)]
     pub max_results: Option<usize>,
+}
+
+impl MailListMessagesArgs {
+    fn into_query(self) -> MessageQuery {
+        message_query(
+            self.q,
+            self.label_ids,
+            self.include_spam_trash,
+            self.max_results,
+        )
+    }
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -688,6 +670,20 @@ pub struct MailAttachmentGetArgs {
 // Helpers shared across tools
 // ---------------------------------------------------------------------
 
+fn message_query(
+    q: Option<String>,
+    label_ids: Option<Vec<String>>,
+    include_spam_trash: Option<bool>,
+    max_results: Option<usize>,
+) -> MessageQuery {
+    MessageQuery {
+        q,
+        label_ids: label_ids.unwrap_or_default(),
+        include_spam_trash: include_spam_trash.unwrap_or(false),
+        max_results: max_results.unwrap_or(20),
+    }
+}
+
 fn json_string<T: serde::Serialize>(value: &T) -> Result<String, ErrorData> {
     serde_json::to_string(value).map_err(|err| {
         ErrorData::new(
@@ -696,6 +692,24 @@ fn json_string<T: serde::Serialize>(value: &T) -> Result<String, ErrorData> {
             None,
         )
     })
+}
+
+fn json_tool_result<T, E>(result: Result<T, E>) -> Result<String, ErrorData>
+where
+    T: serde::Serialize,
+    E: std::fmt::Display,
+{
+    let value = result.map_err(into_tool_error)?;
+    json_string(&value)
+}
+
+fn acknowledged<E>(result: Result<(), E>, action: &str, id: &str) -> Result<String, ErrorData>
+where
+    E: std::fmt::Display,
+{
+    result.map_err(into_tool_error)?;
+    let payload = serde_json::Map::from_iter([(action.to_owned(), json!(id))]);
+    Ok(serde_json::Value::Object(payload).to_string())
 }
 
 fn into_tool_error<E: std::fmt::Display>(err: E) -> ErrorData {

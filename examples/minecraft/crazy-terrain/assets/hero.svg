@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 160" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <style>
+    svg { color: #1f2328; }
+    text { fill: currentColor; }
+    .muted { fill: #656d76; }
+    .box { stroke: currentColor; fill: none; }
+    .edge { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    .arrow { fill: #1f2328; }
+    .group { stroke: #8250df; fill: none; stroke-dasharray: 6 4; }
+    .accent { fill: #8250df; }
+    .terrain { stroke: #8250df; fill: none; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .arrow { fill: #e6edf3; }
+      .group { stroke: #a371f7; }
+      .accent { fill: #a371f7; }
+      .terrain { stroke: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="arrow"/>
+    </marker>
+  </defs>
+  <rect x="40" y="56" width="180" height="52" rx="6" class="box"/>
+  <text x="130" y="78" font-size="13" text-anchor="middle">terrain-diffusion</text>
+  <text x="130" y="95" font-size="11" text-anchor="middle" class="muted">neural generator</text>
+  <rect x="300" y="24" width="250" height="112" rx="6" class="box"/>
+  <text x="425" y="44" font-size="13" text-anchor="middle">crazy-terrain VM (Fabric)</text>
+  <text x="425" y="60" font-size="11" text-anchor="middle" class="muted">min_y -2032, top y 2031, scale 6</text>
+  <polyline points="316,126 346,84 372,104 404,68 436,110 466,74 496,118 534,126" class="terrain"/>
+  <line x1="220" y1="82" x2="292" y2="82" class="edge"/>
+  <text x="256" y="74" font-size="11" text-anchor="middle" class="muted">generates</text>
+  <rect x="610" y="56" width="80" height="52" rx="6" class="box"/>
+  <text x="650" y="86" font-size="13" text-anchor="middle">players</text>
+  <line x1="610" y1="82" x2="558" y2="82" class="edge"/>
+  <text x="584" y="74" font-size="11" text-anchor="middle" class="muted">:25565</text>
+</svg>

@@ -1,5 +1,8 @@
-{ ix, pkgs, ... }:
-let
+{
+  ix,
+  pkgs,
+  ...
+}: let
   L = ix.languages;
 
   # One JDK threaded through every JVM tool below so Java, Maven, Gradle,
@@ -15,12 +18,12 @@ let
 
   jvm = {
     inherit jdk;
-    kotlin = L.kotlin.compiler pkgs { target = "jvm"; };
+    kotlin = L.kotlin.compiler pkgs {target = "jvm";};
     scala = L.scala.compiler pkgs {
       version = "3";
       inherit jdk;
     };
-    maven = L.java.maven pkgs { inherit jdk; };
+    maven = L.java.maven pkgs {inherit jdk;};
     gradle = L.java.gradle pkgs {
       version = "9";
       inherit jdk;
@@ -48,33 +51,33 @@ let
       vendor = "gcc";
       version = "latest";
     };
-    cmake = L.cpp.cmake pkgs { };
-    ninja = L.cpp.ninja pkgs { };
-    zig = L.zig.toolchain pkgs { version = "latest"; };
+    cmake = L.cpp.cmake pkgs {};
+    ninja = L.cpp.ninja pkgs {};
+    zig = L.zig.toolchain pkgs {version = "latest";};
   };
 
   scripting = {
-    python = L.python.interpreter pkgs { version = "3.14"; };
-    go = L.go.toolchain pkgs { version = "latest"; };
-    node = L.javascript.node pkgs { version = "24"; };
-    bun = L.javascript.bun pkgs { };
-    deno = L.javascript.deno pkgs { };
-    typescript = L.javascript.typescript pkgs { };
+    python = L.python.interpreter pkgs {version = "3.14";};
+    go = L.go.toolchain pkgs {version = "latest";};
+    node = L.javascript.node pkgs {version = "24";};
+    bun = L.javascript.bun pkgs {};
+    deno = L.javascript.deno pkgs {};
+    typescript = L.javascript.typescript pkgs {};
   };
 
   functional = {
-    haskell = L.haskell.compiler pkgs { version = "latest"; };
-    cabal = L.haskell.cabal pkgs { };
-    ocaml = L.ocaml.compiler pkgs { version = "latest"; };
-    dune = L.ocaml.dune pkgs { version = "latest"; };
+    haskell = L.haskell.compiler pkgs {version = "latest";};
+    cabal = L.haskell.cabal pkgs {};
+    ocaml = L.ocaml.compiler pkgs {version = "latest";};
+    dune = L.ocaml.dune pkgs {version = "latest";};
   };
 
   beam = {
-    erlang = L.erlang.toolchain pkgs { version = "latest"; };
-    elixir = L.elixir.toolchain pkgs { version = "latest"; };
+    erlang = L.erlang.toolchain pkgs {version = "latest";};
+    elixir = L.elixir.toolchain pkgs {version = "latest";};
     # Gleam is the BEAM-targeting statically-typed cousin whose compiler
     # itself is written in Rust; pairs with `erlang` above for the runtime.
-    gleam = L.gleam.compiler pkgs { };
+    gleam = L.gleam.compiler pkgs {};
   };
 
   # Language servers stay together so an editor inside the VM finds the
@@ -84,18 +87,17 @@ let
   # compiler-version-coupled so it takes the same OCaml version as the
   # `compiler` above; the rest are JDK- and version-independent.
   languageServers = [
-    (L.cpp.languageServer pkgs { })
-    (L.go.languageServer pkgs { })
-    (L.haskell.languageServer pkgs { })
-    (L.java.languageServer pkgs { })
-    (L.javascript.languageServer pkgs { })
-    (L.kotlin.languageServer pkgs { })
-    (L.ocaml.languageServer pkgs { version = "latest"; })
-    (L.scala.languageServer pkgs { inherit jdk; })
-    (L.zig.languageServer pkgs { })
+    (L.cpp.languageServer pkgs {})
+    (L.go.languageServer pkgs {})
+    (L.haskell.languageServer pkgs {})
+    (L.java.languageServer pkgs {})
+    (L.javascript.languageServer pkgs {})
+    (L.kotlin.languageServer pkgs {})
+    (L.ocaml.languageServer pkgs {version = "latest";})
+    (L.scala.languageServer pkgs {inherit jdk;})
+    (L.zig.languageServer pkgs {})
   ];
-in
-{
+in {
   # The runtime JVM profile sets JAVA_HOME from the package it gets, so
   # passing the same `jdk` here makes `java -version`, `javac`, and
   # every JAR launched without an explicit `-Djava.home=...` line up
@@ -106,7 +108,7 @@ in
   };
 
   environment.systemPackages =
-    (builtins.attrValues (builtins.removeAttrs jvm [ "jdk" ]))
+    (builtins.attrValues (builtins.removeAttrs jvm ["jdk"]))
     ++ builtins.attrValues native
     ++ builtins.attrValues scripting
     ++ builtins.attrValues functional

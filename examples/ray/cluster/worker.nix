@@ -4,13 +4,11 @@
   pkgs,
   nodes,
   ...
-}:
-let
+}: let
   headHost = nodes.ray-head.config.ix.networking.eastWest.hostName;
   gcsPort = 6379;
   rayAddress = "${headHost}:${toString gcsPort}";
-in
-{
+in {
   imports = [
     (import ./cluster-node.nix {
       inherit

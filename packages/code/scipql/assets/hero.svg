@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 250" role="img" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="13">
+  <style>
+    svg { color: #1f2328; }
+    text { fill: currentColor; }
+    .muted { fill: #656d76; }
+    .box { stroke: currentColor; fill: none; stroke-width: 1.2; }
+    .accent { stroke: #8250df; fill: none; stroke-width: 1.4; }
+    .edge { stroke: currentColor; fill: none; stroke-width: 1.2; marker-end: url(#arrow); }
+    .head { fill: currentColor; }
+    @media (prefers-color-scheme: dark) {
+      svg { color: #e6edf3; }
+      .muted { fill: #8b949e; }
+      .accent { stroke: #a371f7; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="head"/>
+    </marker>
+  </defs>
+  <rect class="box" x="20" y="108" width="110" height="34" rx="6"/>
+  <text x="75" y="129" text-anchor="middle">Rust project</text>
+
+  <path class="edge" d="M130,125 L186,125"/>
+  <text class="muted" x="158" y="110" text-anchor="middle" font-size="11">rust-analyzer scip</text>
+
+  <rect class="box" x="190" y="108" width="105" height="34" rx="6"/>
+  <text x="242" y="129" text-anchor="middle">index.scip</text>
+
+  <path class="edge" d="M295,125 L356,125"/>
+  <text class="muted" x="326" y="110" text-anchor="middle" font-size="11">lower by moniker</text>
+
+  <rect class="accent" x="360" y="108" width="115" height="34" rx="6"/>
+  <text x="417" y="129" text-anchor="middle">Soufflé facts</text>
+
+  <path class="edge" d="M475,117 C520,108 520,64 546,62"/>
+  <path class="edge" d="M475,133 C520,142 520,186 546,188"/>
+  <text class="muted" x="520" y="50" text-anchor="middle" font-size="11">edit relation</text>
+  <text class="muted" x="520" y="212" text-anchor="middle" font-size="11">any relation</text>
+
+  <rect class="box" x="550" y="45" width="150" height="34" rx="6"/>
+  <text x="625" y="66" text-anchor="middle">diff / --write</text>
+  <rect class="box" x="550" y="171" width="150" height="34" rx="6"/>
+  <text x="625" y="192" text-anchor="middle">tables / polars</text>
+
+  <text class="muted" x="417" y="88" text-anchor="middle" font-size="11">souffle runs your .dl</text>
+</svg>

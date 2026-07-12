@@ -10,7 +10,6 @@
   gnumake,
   gcc,
 }:
-
 python3.pkgs.buildPythonApplication (finalAttrs: {
   pname = "drgn";
   version = "0.2.0";
@@ -18,7 +17,7 @@ python3.pkgs.buildPythonApplication (finalAttrs: {
 
   src = ix.drgnSrc;
 
-  build-system = [ python3.pkgs.setuptools ];
+  build-system = [python3.pkgs.setuptools];
 
   # setup.py shells out to autotools (`autoreconf -i`, `./configure`, `make`)
   # via build_ext, so the autoconf/automake/libtool/pkg-config quartet plus
@@ -36,7 +35,7 @@ python3.pkgs.buildPythonApplication (finalAttrs: {
     pkg-config
   ];
 
-  buildInputs = [ elfutils ];
+  buildInputs = [elfutils];
 
   meta = {
     description = "Programmable debugger for live processes and kernels";

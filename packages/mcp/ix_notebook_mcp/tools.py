@@ -34,7 +34,7 @@ import contextlib
 import json
 import logging
 import os
-import sqlite3
+import re
 import uuid
 import weakref
 from typing import Annotated
@@ -46,7 +46,7 @@ from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData
 from pydantic import AnyUrl, Field
 
-from . import guide, outputs, resources_bridge
+from . import guide, mailbox, mcp_ui, outputs, resources_bridge, store
 from .config import config, server_version
 from .kernel import current_kernel
 
@@ -54,9 +54,9 @@ logger = logging.getLogger(__name__)
 
 # Order matters: clients truncate long instruction blocks from the tail, and a
 # 2026-06-10 session showed exactly that failure: the cut landed inside JOBS, so
-# NO_SHELL and POLARS never reached the model and it shelled out ls/grep and
-# scraped TSV all session. The rules that shape every single call (what to reach
-# for, what shape to return) come first; operational mechanics (job paging,
+# the shell/data rules and POLARS never reached the model and it shelled out
+# ls/grep and scraped TSV all session. The rules that shape every single call
+# (what to reach for, what shape to return) come first; operational mechanics (job paging,
 # blocking, rendering details) follow; the module index and dashboard niceties
 # close. Losing the tail degrades gracefully; losing the head does not.
 _KERNEL_GUIDE = guide.compose(
@@ -66,6 +66,9 @@ _KERNEL_GUIDE = guide.compose(
     guide.DISCOVER,
     guide.NO_SHELL,
     guide.NU,
+    guide.NIX,
+    guide.DELEGATE,
+    guide.SSH,
     guide.POLARS,
     guide.RESULT_CONTRACT,
     guide.JOBS,
@@ -87,9 +90,18 @@ _KERNEL_GUIDE = guide.compose(
 
 mcp = FastMCP("ix-mcp")
 
+# MCP Apps (SEP-1865): the one shared `ui://` viewer resource, plus the
+# `_meta.ui.resourceUri` dict a tool passes as `meta=` to opt in. A host that
+# supports the extension (claude.ai, Claude Desktop) renders an opted-in tool's
+# reply as interactive HTML in the chat; every other host ignores the metadata
+# and sees the exact same content blocks as before. See `mcp_ui`.
+_UI_META = mcp_ui.register_viewer(mcp)
+
 # One short id per live MCP session, keyed weakly by the session object so an id
 # is stable for a client's whole session and the map never pins a closed one.
-_session_ids: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+# Keys are typed `object`: the session is only ever used as an identity key here
+# (see `_http_session`), never through the ServerSession API.
+_session_ids: weakref.WeakKeyDictionary[object, str] = weakref.WeakKeyDictionary()
 
 
 def _http_session(ctx: Context | None) -> object | None:
@@ -144,8 +156,10 @@ _dashboard_started = False
 # session instead of a long-lived `serve --http` advertising it forever
 # (index#1789 review). The one stdio/embedder client has no session object to
 # key on; its label lives in `_solo_session_name` and dies with the process.
-_session_labels: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_session_labels: weakref.WeakKeyDictionary[object, str] = weakref.WeakKeyDictionary()
+_session_topics: weakref.WeakKeyDictionary[object, str] = weakref.WeakKeyDictionary()
 _solo_session_name: str | None = None
+_solo_topic: str | None = None
 
 
 def _session_label(ctx: Context | None) -> str | None:
@@ -163,6 +177,47 @@ def _set_session_label(ctx: Context | None, name: str) -> None:
         _solo_session_name = name
     else:
         _session_labels[session] = name
+
+
+
+
+def _session_topic(ctx: Context | None) -> str | None:
+    """The current fold topic this call's session chose."""
+    session = _http_session(ctx)
+    if session is None:
+        return _solo_topic
+    return _session_topics.get(session)
+
+
+def _set_session_topic(ctx: Context | None, topic: str) -> None:
+    global _solo_topic
+    session = _http_session(ctx)
+    if session is None:
+        _solo_topic = topic
+    else:
+        _session_topics[session] = topic
+
+
+def _topic_required() -> bool:
+    """Whether python_exec requires an explicit topic first."""
+    return os.environ.get("IX_MCP_REQUIRE_TOPIC", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
+def _missing_topic(ctx: Context | None, *, intent: str | None = None) -> str | None:
+    """The topic gate's error message, or None once this session has set one."""
+    if not _topic_required() or _session_topic(ctx) is not None:
+        return None
+    suggestion = f" Suggested topic from this call: {intent!r}." if intent else ""
+    return (
+        "Set a dashboard topic first: call topic_set with a short label for "
+        "the current cluster of related tool calls."
+        f"{suggestion}"
+    )
 
 
 def session_names() -> list[str]:
@@ -193,7 +248,7 @@ async def _start_dashboard_once() -> None:
     try:
         from .cli import ensure_shared_dashboard
 
-        await asyncio.to_thread(ensure_shared_dashboard, open_browser=True)
+        await asyncio.to_thread(ensure_shared_dashboard, open_browser=False)
     except Exception:
         logger.exception("dashboard autostart failed")
 
@@ -249,21 +304,41 @@ def _session_name_required() -> bool:
     )
 
 
+def _missing_session_name(ctx: Context | None, *, intent: str | None = None) -> str | None:
+    """The session-name gate's error message, or None once this session is named."""
+    if not _session_name_required() or _session_label(ctx) is not None:
+        return None
+    suggestion = f" Suggested name from this call: {intent!r}." if intent else ""
+    return (
+        "Name this dashboard session first: call session_set_name with a "
+        "short human task label before using acting tools."
+        f"{suggestion}"
+    )
+
+
 async def _require_session_name(ctx: Context | None, *, intent: str | None = None) -> None:
     """Fail fast until this MCP session has named its dashboard group."""
-    if not _session_name_required() or _session_label(ctx) is not None:
-        return
-    suggestion = f" Suggested name from this call: {intent!r}." if intent else ""
-    raise McpError(
-        ErrorData(
-            code=types.INVALID_REQUEST,
-            message=(
-                "Name this dashboard session first: call session_set_name with a "
-                "short human task label before using acting tools."
-                f"{suggestion}"
-            ),
+    message = _missing_session_name(ctx, intent=intent)
+    if message is not None:
+        raise McpError(ErrorData(code=types.INVALID_REQUEST, message=message))
+
+
+async def _require_acting_gates(ctx: Context | None, *, intent: str | None = None) -> None:
+    """Fail fast until this MCP session has both named itself and set a topic.
+
+    Every unmet gate is reported in the ONE error, so a fresh session satisfies
+    both in a single corrective pass instead of tripping them serially -- one
+    rejected round trip per gate (index#1983)."""
+    missing = [
+        message
+        for message in (
+            _missing_session_name(ctx, intent=intent),
+            _missing_topic(ctx, intent=intent),
         )
-    )
+        if message is not None
+    ]
+    if missing:
+        raise McpError(ErrorData(code=types.INVALID_REQUEST, message=" ".join(missing)))
 
 
 def _first_sentence(text: str) -> str:
@@ -358,20 +433,64 @@ async def session_set_name(
     return [outputs.text(f"dashboard session named: {clean}")]
 
 
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Set the current dashboard topic for this MCP connection. Call this before "
+        "a related cluster of python_exec calls, and change it when the work moves "
+        "to a new phase; runs fold under the topic inside the session."
+    ),
+)
+async def topic_set(
+    topic: Annotated[
+        str,
+        Field(
+            description=(
+                "Short label for the current cluster of related tool calls, 3 to "
+                "80 characters, with no code or secrets"
+            )
+        ),
+    ],
+    ctx: Context | None = None,
+) -> Content:
+    await _start_dashboard_once()
+    await _identify_client_once(ctx)
+    await _require_session_name(ctx, intent=topic)
+    clean = " ".join((topic or "").split())
+    if not 3 <= len(clean) <= 80:
+        raise McpError(
+            ErrorData(
+                code=types.INVALID_PARAMS,
+                message="Topic must be 3 to 80 non-whitespace characters.",
+            )
+        )
+    await current_kernel().set_topic(clean)
+    _set_session_topic(ctx, clean)
+    return [outputs.text(f"dashboard topic set: {clean}")]
+
+
 # Every tool sets structured_output=False: FastMCP otherwise derives an output
 # schema from the return annotation and DUPLICATES the entire reply as
 # `structuredContent` JSON, so each image block went to the client twice (once
 # as a real image, once as a wall of base64-in-text), which is what kept
 # blowing the host's per-result token cap. The content blocks ARE the reply;
 # there is no structured consumer.
+#
+# The UI-enabled tools return a `CallToolResult` built by `mcp_ui.ui_result`:
+# the same content blocks, with the run's human HTML riding in `_meta` for an
+# MCP Apps host's view. FastMCP passes a returned CallToolResult through
+# verbatim, and `structured_output=False` keeps the return annotation out of
+# schema derivation, so nothing about the model-facing reply changes.
 @mcp.tool(
     structured_output=False,
+    meta=_UI_META,
     description=guide.compose(
         guide.PYEXEC_INTRO,
         guide.PAGING,
         guide.NAMESPACE,
         guide.BLOCKING,
         guide.RESULT_CONTRACT,
+        guide.PR_WATCH,
         guide.SEE_INSTRUCTIONS,
     ),
 )
@@ -380,10 +499,10 @@ async def python_exec(
     intent: Annotated[str, Field(description="Required. A short plain-language description of what this run does, e.g. 'count rows per host' or 'fetch and parse the open PR list'. It titles the run's card in the dashboard feed (grouped under your session) so a human watching can follow your work — never the raw code. Keep it under ~8 words.")],
     budget: Annotated[float, Field(description="Seconds to wait before backgrounding the run (server-side cap: 120s; larger values are clamped and a notice is appended to the reply)")] = 15.0,
     ctx: Context | None = None,
-) -> Content:
+) -> types.CallToolResult:
     await _start_dashboard_once()
     await _identify_client_once(ctx)
-    await _require_session_name(ctx, intent=intent)
+    await _require_acting_gates(ctx, intent=intent)
     # A foreground budget is how long the run holds the one shared shell channel
     # before it backgrounds, so cap it: a giant budget (a 15-minute `await
     # jobs[...]`) would block every other call behind it. The clamp is surfaced
@@ -392,12 +511,42 @@ async def python_exec(
     effective_budget = min(budget, cap)
     # `intent` is the run's human label (the dashboard feed's title); it flows to
     # the kernel as the job name and lands in the store's `name` column.
-    cell_outputs, summary = await current_kernel().python_exec(
-        code, effective_budget, intent, session=_session_id(ctx)
-    )
+    sid = _session_id(ctx)
+    kernel = current_kernel()
+    try:
+        cell_outputs, summary = await kernel.python_exec(
+            code, effective_budget, intent, session=sid, topic=_session_topic(ctx)
+        )
+    except asyncio.CancelledError as cancelled:
+        # The client cancelled this in-flight call (`notifications/cancelled` or a
+        # transport abort; the MCP SDK cancels this handler's request scope, which
+        # surfaces here as CancelledError). Without this the kernel job the call
+        # launched keeps running in the background and executes its side effects
+        # AFTER the caller abandoned it -- the permission-gate bypass in
+        # index#2387. Interrupt STRICTLY that job (its id rode out on the
+        # exception from `kernel.python_exec`, read off the drained exec reply --
+        # index#2406) on the same path an explicit `jobs['<id>'].cancel()` takes,
+        # then re-raise so the cancellation still propagates. Cancelling by id,
+        # not a "newest running job" heuristic, avoids killing an unrelated
+        # background job the same session started earlier (the wrong-job kill in
+        # index#2406); the id is None when the cancel landed before the launched
+        # job's summary was drained, and the poke then cancels nothing. `shield`
+        # keeps the cancel poke itself from being torn down by the very
+        # cancellation we are handling. Note: Claude Code does not signal a USER
+        # REJECTION of an in-flight call, so this fires for spec-compliant cancels
+        # and Claude Code's own request timeout, not for a rejected prompt
+        # (documented in guide.CANCELLATION_NOTE).
+        launched_job_id = getattr(cancelled, "ix_launched_job_id", None)
+        with contextlib.suppress(Exception):  # best-effort: a cancel-time hiccup must not swallow the re-raise
+            await asyncio.shield(kernel.cancel_running(sid, job_id=launched_job_id))
+        raise
     rendered = outputs.to_mcp(cell_outputs)
+    # The human view for an MCP Apps host: the same text/html fragments the
+    # dashboard and room render for this run, carried on the reply's `_meta`
+    # (host/view plumbing, never model context -- see mcp_ui).
+    ui_fragments = mcp_ui.html_fragments(cell_outputs)
     if summary is None:
-        return rendered
+        return mcp_ui.ui_result(rendered, fragments=ui_fragments, title=intent)
     header = outputs.text(
         json.dumps(
             {
@@ -454,7 +603,85 @@ async def python_exec(
                 f"stdout, jobs['{job_id}'].result the value; history() lists recent runs.]"
             )
         )
-    return parts
+    # The run's live weave view (minted kernel-side when the result had a
+    # human HTML view; see store.save_tool_view) rides the summary so a
+    # weave-aware host can resolve it from the result's `_meta`.
+    return mcp_ui.ui_result(parts, fragments=ui_fragments, title=intent, weave_view=summary.get("weave_view"))
+
+
+@mcp.tool(
+    structured_output=False,
+    meta=_UI_META,
+    description=(
+        "Watch a GitHub pull request in the dashboard. Creates a live PR resource "
+        "nested under this task, lists required checks and actions with elapsed "
+        "time, enables auto merge by default, and notifies the CLI when the PR "
+        "merges, fails, or times out. When the PR is already mergeable (no "
+        "blocking required checks), auto merge is NOT armed, since arming would "
+        "merge instantly before any watching: the result says so, and the caller "
+        "merges explicitly once its own validation is green. Use this instead of "
+        "hand-written PR polling."
+    ),
+)
+async def pr_watch(
+    pr: Annotated[
+        str,
+        Field(description="PR number, URL, or branch understood by gh, for example 1856."),
+    ],
+    cwd: Annotated[
+        str,
+        Field(description="Repository worktree where gh should run."),
+    ],
+    *,
+    auto_merge: Annotated[
+        bool,
+        Field(description="Enable gh auto merge for this PR before watching."),
+    ] = True,
+    interval: Annotated[
+        float,
+        Field(description="Seconds between GitHub status refreshes."),
+    ] = 15.0,
+    timeout: Annotated[
+        float,
+        Field(description="Seconds to watch before the resource closes as timed out."),
+    ] = 3600.0,
+    ctx: Context | None = None,
+) -> types.CallToolResult:
+    await _start_dashboard_once()
+    await _identify_client_once(ctx)
+    await _require_acting_gates(ctx, intent=f"watch PR {pr}")
+    code = (
+        "await watch_pr("
+        f"{pr!r}, cwd={cwd!r}, auto_merge={auto_merge!r}, "
+        f"interval={interval!r}, timeout={timeout!r}"
+        ")"
+    )
+    cell_outputs, summary = await current_kernel().python_exec(
+        code,
+        min(5.0, config().max_budget),
+        f"watch PR {pr}",
+        session=_session_id(ctx),
+        topic=_session_topic(ctx),
+    )
+    rendered = outputs.to_mcp(cell_outputs)
+    resource = f"pr-{re.sub(r'[^A-Za-z0-9._-]+', '-', str(pr)).strip('-')}"
+    header = outputs.text(
+        json.dumps(
+            {
+                "job": summary.get("id") if summary else None,
+                "status": summary.get("status") if summary else None,
+                "running": summary.get("running") if summary else None,
+                "elapsed_s": summary.get("elapsed_s") if summary else None,
+                "resource": resource,
+            }
+        )
+    )
+    return mcp_ui.ui_result(
+        [header, *(item for item in rendered if getattr(item, "text", None) != "(no output)")],
+        fragments=mcp_ui.html_fragments(cell_outputs),
+        title=f"watch PR {pr}",
+        weave_view=summary.get("weave_view") if summary else None,
+    )
 
 
 @mcp.tool(structured_output=False, description=guide.READ)
@@ -482,11 +709,58 @@ async def read(
     span = f":{start}-{end}" if start is not None and end is not None else (f":{start}" if start is not None else "")
     name = f"read {target}{span}"
     cell_outputs, summary = await current_kernel().python_exec(code, budget=30.0, name=name, session=sid)
-    if summary is not None and summary.get("status") == "error" and summary.get("error"):
+    status = summary.get("status") if summary is not None else None
+    if summary is not None and status == "error" and summary.get("error"):
+        # The in-kernel read itself raised (bad expression, unreadable path):
+        # the traceback is the useful answer, so return it as the content.
         return [outputs.text(summary["error"])]
+    if summary is not None and status == "wedged":
+        # The kernel bridge could not execute the read: a wedged cell holds the
+        # kernel's one event loop, so nothing was read. Fail loudly -- a quiet
+        # empty reply here is indistinguishable from reading an empty file, and
+        # was misread exactly that way (index#2381).
+        raise McpError(
+            ErrorData(
+                code=types.INTERNAL_ERROR,
+                message=(
+                    f"read {target}: kernel unavailable, nothing was read. "
+                    + str(summary.get("error") or "The kernel did not respond.")
+                ),
+            )
+        )
     rendered = outputs.to_mcp(cell_outputs)
     content = [item for item in rendered if getattr(item, "text", None) != "(no output)"]
-    return content or rendered
+    if content:
+        return content
+    if status == "done":
+        # The read COMPLETED and produced no text: the file or value is
+        # genuinely empty. Only this state may report emptiness (index#2381).
+        return rendered
+    if status == "running" and summary is not None and summary.get("id"):
+        # The kernel is healthy but the read outlived its foreground budget
+        # (a slow expression, a giant file): point at the live job instead of
+        # posing as empty output.
+        job_id = summary["id"]
+        return [
+            outputs.text(
+                f"[read {target} is still running as jobs[{job_id!r}] after its 30s "
+                f"foreground budget; await or page it via python_exec.]"
+            )
+        ]
+    # No output and no completed job summary: the in-kernel runtime never ran
+    # the read (dead bridge, cancelled run, stale build). Never report this as
+    # empty success (index#2381).
+    raise McpError(
+        ErrorData(
+            code=types.INTERNAL_ERROR,
+            message=(
+                f"read {target}: kernel unavailable, nothing was read "
+                "(the read produced no output and no completed job summary"
+                + (f"; status {status!r}" if status is not None else "")
+                + ")."
+            ),
+        )
+    )
 
 
 @mcp.tool(structured_output=False, description=guide.TRACE)
@@ -497,25 +771,16 @@ async def kernel_trace(ctx: Context | None = None) -> str:
     return await current_kernel().dump_trace()
 
 
-# The reply tool's store connection, opened lazily on first reply. The tool runs
-# in the server process (the kernel's `events` writes come from its own
-# connection), so it needs its own handle on the shared WAL store.
-_reply_conn: sqlite3.Connection | None = None
+@mcp.tool(structured_output=False, description=guide.RESTART)
+async def kernel_restart(ctx: Context | None = None) -> str:
+    await _start_dashboard_once()
+    await _identify_client_once(ctx)
+    await _require_session_name(ctx, intent="kernel restart")
+    return json.dumps(await current_kernel().restart_now())
 
 
-def _reply_store() -> sqlite3.Connection:
-    global _reply_conn
-    if _reply_conn is None:
-        try:
-            path = config().store_path
-        except RuntimeError as exc:
-            raise McpError(
-                ErrorData(code=types.INTERNAL_ERROR, message="no store configured; reply needs `ix-mcp serve`")
-            ) from exc
-        from . import store
-
-        _reply_conn = store.connect(path)
-    return _reply_conn
+# The reply tool runs in the serve process, so it writes directly to the
+# tier-3 mailbox singleton instead of round-tripping through the data API.
 
 
 @mcp.tool(structured_output=False, description=guide.REPLY)
@@ -531,17 +796,24 @@ async def reply(
     await _identify_client_once(ctx)
     # Deliberately not gated on session_set_name: a reply answers a channel event
     # (often the session's very first act) and creates no dashboard run to label.
-    from . import store
-
-    conn = _reply_store()
-    if not store.resource_live(conn, resource):
+    box = mailbox.get_mailbox()
+    # Resource liveness is durable Weave state. If that check is unavailable,
+    # keep reply usable for same-process resources whose events mailbox is live.
+    live = True
+    with contextlib.suppress(Exception):
+        path = config().store_path
+        if path is not None:
+            db = store.AsyncConn(path)
+            live = await db.run(store.resource_live, resource)
+            await db.close()
+    if not live:
         raise McpError(
             ErrorData(
                 code=types.INVALID_PARAMS,
                 message=f"no live resource {resource!r}; pass the id from the <channel resource=...> attribute",
             )
         )
-    store.add_event(conn, resource=resource, kind="reply", body=json.dumps({"text": text}))
+    box.add_event(resource=resource, kind="reply", body=json.dumps({"text": text}))
     return [outputs.text("sent")]
 
 
@@ -618,7 +890,10 @@ async def _read_resource_handler(uri: AnyUrl) -> list[ReadResourceContents]:
         resource = None
     if resource is not None:
         content = await resource.read()
-        return [ReadResourceContents(content=content, mime_type=resource.mime_type)]
+        # Pass the resource's `_meta` through (as FastMCP's own read path does):
+        # an MCP Apps `ui://` resource may carry rendering metadata (CSP,
+        # prefersBorder) that the host reads off `resources/read`.
+        return [ReadResourceContents(content=content, mime_type=resource.mime_type, meta=resource.meta)]
     try:
         text, mime = await resources_bridge.read_resource(uri_str)
     except resources_bridge.ResourceNotFoundError as exc:
@@ -629,9 +904,13 @@ async def _read_resource_handler(uri: AnyUrl) -> list[ReadResourceContents]:
 
 
 # Register on the wrapped low-level server (overriding FastMCP's, which the
-# handlers above delegate back to for static resources).
-mcp._mcp_server.list_resources()(_list_resources_handler)
-mcp._mcp_server.read_resource()(_read_resource_handler)
+# handlers above delegate back to for static resources). The mcp SDK defines
+# these decorator factories with no annotations at all, so each call trips
+# disallow-untyped-calls under --strict; the handlers themselves are fully
+# typed and the returned decorators annotate their `func` parameter, so the
+# registration is still checked.
+mcp._mcp_server.list_resources()(_list_resources_handler)  # type: ignore[no-untyped-call]
+mcp._mcp_server.read_resource()(_read_resource_handler)  # type: ignore[no-untyped-call]
 
 
 @mcp.tool(

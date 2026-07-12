@@ -6,7 +6,7 @@ import type { Selection } from './sidebar';
 
 // Re-export the pure time formatters so components keep one import site (`ui`)
 // for both the reactive clock and the labels it drives.
-export { humanAge, humanTime, humanDuration, runTooltip, humanClock } from './time';
+export { humanAge, humanTime, humanDuration, runTooltip, humanClock, humanDate, recordingLabel } from './time';
 
 // ----- fold state (persisted) --------------------------------------------
 // One boolean per fold key: a section id ('sessions'/'resources'/'recordings')

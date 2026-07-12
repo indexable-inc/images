@@ -58,6 +58,7 @@ pub(super) fn spawn_tui(
         rows,
         cols,
         scrollback_lines,
+        env,
     } = config;
     let display = format!("{command} {}", args.join(" "));
 
@@ -72,9 +73,12 @@ pub(super) fn spawn_tui(
         // it is driving. With no TERM the child inherits the host's, so curses
         // and terminfo capabilities (e.g. `curs_set`) silently fail or differ
         // by machine. ix-vt implements an xterm-256color superset, so advertise
-        // that plus truecolor for a consistent, capable default.
+        // that plus truecolor for a consistent, capable default. Caller pairs
+        // (per-session identity/config) go first so the crate-forced
+        // TERM/COLORTERM always win.
         let child = pty_process::Command::new(&command)
             .args(&args)
+            .envs(env)
             .env("TERM", "xterm-256color")
             .env("COLORTERM", "truecolor")
             .spawn(pty_slave)

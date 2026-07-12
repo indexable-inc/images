@@ -8,8 +8,7 @@
 {
   ix,
   pkgs,
-}:
-let
+}: let
   nodeModules = pkgs.importNpmLock.buildNodeModules {
     npmRoot = ./.;
     nodejs = pkgs.nodejs_22;
@@ -18,18 +17,18 @@ let
       strictDeps = true;
     };
   };
-  source = pkgs.runCommand "svelte-bundle-src" { strictDeps = true; } ''
+  source = pkgs.runCommand "svelte-bundle-src" {strictDeps = true;} ''
     mkdir -p "$out"
     cp ${./cli.mjs} "$out/cli.mjs"
     cp ${./ix.js} "$out/ix.js"
     ln -s ${nodeModules}/node_modules "$out/node_modules"
   '';
 in
-ix.writeBashApplication pkgs {
-  name = "svelte-bundle";
-  runtimeInputs = [ pkgs.nodejs_22 ];
-  text = ''
-    exec node ${source}/cli.mjs "$@"
-  '';
-  meta.description = "Svelte 5 component -> one self-contained IIFE bundle for dashboard resources";
-}
+  ix.writeBashApplication pkgs {
+    name = "svelte-bundle";
+    runtimeInputs = [pkgs.nodejs_22];
+    text = ''
+      exec node ${source}/cli.mjs "$@"
+    '';
+    meta.description = "Svelte 5 component -> one self-contained IIFE bundle for dashboard resources";
+  }

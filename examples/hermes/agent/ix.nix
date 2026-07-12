@@ -1,7 +1,5 @@
-{ index }:
-
+{index}:
 index.lib.mkFleet {
-
   nodes.hermes = {
     deployment.secrets.hermes_env = {
       file = "hermes.env";

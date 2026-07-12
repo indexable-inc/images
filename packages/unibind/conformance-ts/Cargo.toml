@@ -1,0 +1,30 @@
+[package]
+name = "unibind-conformance-ts"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Conformance addon for the unibind ts backend: every construct the backend renders, exercised end to end from Node"
+
+[lib]
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+futures.workspace = true
+napi.workspace = true
+napi-derive.workspace = true
+tokio = { workspace = true, features = ["macros", "sync", "time"] }
+unibind = { workspace = true, features = ["ts"] }
+unibind-runtime.workspace = true
+
+[build-dependencies]
+napi-build.workspace = true
+
+# napi-build is used only in build.rs (`napi_build::setup()`), which cargo-machete
+# with --with-metadata does not attribute, so it false-positives as unused. The
+# dep is load-bearing: setup() emits the link args (including macOS
+# `-undefined dynamic_lookup`) the cdylib needs.
+[package.metadata.cargo-machete]
+ignored = ["napi-build"]

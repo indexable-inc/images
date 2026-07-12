@@ -4,8 +4,7 @@
 # non-Nix base. The rootfs is debian's userland; `hello` is added at
 # `/bin/hello` from a Nix layer. The base is pinned by digest for a
 # reproducible, network-free-at-build image.
-{ index }:
-let
+{index}: let
   inherit (index.lib) pkgs;
 
   # Base-image digest + fetch hash live in the sibling pins.json, never inline
@@ -18,12 +17,12 @@ let
     inherit (pin) finalImageTag;
   };
 in
-index.lib.mkNonNixImage {
-  name = "ix/debian-base";
-  tag = "12-slim";
-  baseImage = base;
-  contents = [ pkgs.hello ];
-  config = {
-    Cmd = [ "/bin/bash" ];
-  };
-}
+  index.lib.mkNonNixImage {
+    name = "ix/debian-base";
+    tag = "12-slim";
+    baseImage = base;
+    contents = [pkgs.hello];
+    config = {
+      Cmd = ["/bin/bash"];
+    };
+  }

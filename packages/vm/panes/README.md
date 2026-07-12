@@ -1,26 +1,15 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="guest apps render into a headless Wayland compositor whose frames cross vsock to a macOS agent that presents each toplevel as its own native window, with audio on a second vsock port"></p>
+
 # panes: seamless guest-Linux windows on macOS
 
-Run Linux GUI apps in a lightweight VM on Apple Silicon and give each app its
-own **native macOS window**, WSLg-style, instead of one big "VM screen".
-Tracking issue: [index#1686](https://github.com/indexable-inc/index/issues/1686).
+What if Linux GUI apps ran on your Mac as ordinary Mac windows, not one big
+"VM screen"? `panes` runs them in a lightweight VM on Apple Silicon and gives
+each app its own **native macOS window**, WSLg-style: a headless guest
+Wayland compositor exports every toplevel over vsock, and a host agent
+presents each one as a real `NSWindow` and forwards input back. Tracking
+issue: [index#1686](https://github.com/indexable-inc/index/issues/1686).
 
-## How it fits together
-
-```
-macOS host                          aarch64-linux guest (libkrun-efi, vmkit)
-+------------------+   vsock 7100   +--------------------------------------+
-| panes-host       |<-------------->| panes-compositor (headless Wayland)  |
-|  one NSWindow    |  panes-protocol|   socket: /run/panes/wayland-1       |
-|  per toplevel,   |  postcard      +--------------------------------------+
-|  input forwarded |  frames        | nspawn containers, one per app       |
-|                  |                |   demo | term | minecraft | ...      |
-|  CoreAudio out   |   vsock 7102   |   each binds /run/panes + /dev/dri   |
-|  (jitter buffer) |<---------------|     + /run/pipewire                  |
-+------------------+   s16le PCM    +--------------------------------------+
-                                    | pipewire (system-wide): null sink    |
-                                    |   "panes-sink" -> panes-audio pump   |
-                                    +--------------------------------------+
-```
+## The pieces
 
 - [`protocol/`](protocol/) (`panes-protocol`): the wire format. One duplex
   byte stream (guest vsock port 7100 to a host unix socket) carrying
@@ -186,8 +175,11 @@ autostarted nspawn container that bind-mounts the compositor socket
 
 ## Status
 
-The protocol crate is real; `panes-compositor` and `panes-host` are stubs
-being filled in (M2/M3 in index#1686). The guest image already wires the
-compositor service and the app containers, so it boots today with a legible
-"not yet implemented" from the compositor unit on the serial console, and the
-containers retry until the socket appears.
+All five pieces are implemented and boot end to end: the compositor exports
+damage-tiled LZ4 frames and honors pointer lock, the host presents at the
+panel rate (measured 120 acks/s on ProMotion) with lockstep acks, and audio
+plays through the jitter buffer. Remaining gaps live where the work is:
+[`compositor/`](compositor/) lists its v1 protocol gaps (popups and
+subsurfaces are not exported, client cursors are not serialized), and the
+shipped guest image still builds the compositor without the `gpu` cargo
+feature (see the gap note above), so window content is shm-rendered.

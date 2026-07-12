@@ -6,23 +6,21 @@
   lib,
   pkgs,
   ix,
-}:
-let
+}: let
   ps = ix.portableServices;
 
   # Evaluate a set of service specs through `attrsOf serviceSubmodule` so
   # every default is applied exactly as a real consumer would see it.
-  evalServices =
-    services:
+  evalServices = services:
     (lib.evalModules {
       modules = [
         {
           options.services.portable = lib.mkOption {
             type = lib.types.attrsOf ps.serviceSubmodule;
-            default = { };
+            default = {};
           };
         }
-        { services.portable = services; }
+        {services.portable = services;}
       ];
     }).config.services.portable;
 
@@ -42,7 +40,7 @@ let
 
     # A one-shot triggered every 300s, plus an escape-hatch key per platform.
     poller = {
-      command = [ "/run/current-system/sw/bin/poll" ];
+      command = ["/run/current-system/sw/bin/poll"];
       interval = 300;
       restart = "on-failure";
       launchd.config.ProcessType = "Background";
@@ -60,7 +58,7 @@ let
     # runAtLoad = false on an interval service + an explicit label override:
     # exercises the negative path of both portable improvements.
     quiet = {
-      command = [ "/run/current-system/sw/bin/q" ];
+      command = ["/run/current-system/sw/bin/q"];
       interval = 600;
       runAtLoad = false;
       label = "com.example.quiet";
@@ -79,7 +77,8 @@ let
     # --- daemon: launchd ---
     {
       assertion =
-        daemonLaunchd.ProgramArguments == [
+        daemonLaunchd.ProgramArguments
+        == [
           "/run/current-system/sw/bin/demo"
           "--serve"
         ];
@@ -98,7 +97,7 @@ let
       message = "daemon restart=always should map to launchd KeepAlive = true";
     }
     {
-      assertion = daemonLaunchd.EnvironmentVariables == { RUST_LOG = "info"; };
+      assertion = daemonLaunchd.EnvironmentVariables == {RUST_LOG = "info";};
       message = "daemon launchd EnvironmentVariables mismatch";
     }
     {
@@ -120,11 +119,11 @@ let
       message = "daemon restart=always should map to systemd Restart = always";
     }
     {
-      assertion = daemonSystemd.service.Service.Environment == [ "RUST_LOG=info" ];
+      assertion = daemonSystemd.service.Service.Environment == ["RUST_LOG=info"];
       message = "daemon systemd Environment should be K=V list";
     }
     {
-      assertion = daemonSystemd.service.Install.WantedBy == [ "default.target" ];
+      assertion = daemonSystemd.service.Install.WantedBy == ["default.target"];
       message = "runAtLoad non-timer service should be WantedBy default.target";
     }
     {
@@ -142,7 +141,7 @@ let
       message = "interval service should honor runAtLoad (default true) alongside StartInterval";
     }
     {
-      assertion = pollerLaunchd.KeepAlive == { SuccessfulExit = false; };
+      assertion = pollerLaunchd.KeepAlive == {SuccessfulExit = false;};
       message = "restart=on-failure should map to launchd KeepAlive.SuccessfulExit = false";
     }
     {
@@ -156,7 +155,7 @@ let
       message = "interval service should be systemd Type = oneshot";
     }
     {
-      assertion = !(pollerSystemd.service ? Install) || pollerSystemd.service.Install == { };
+      assertion = !(pollerSystemd.service ? Install) || pollerSystemd.service.Install == {};
       message = "interval service must not be WantedBy default.target (driven by timer)";
     }
     {
@@ -169,7 +168,7 @@ let
       message = "runAtLoad interval service: timer fires promptly via OnActiveSec, not OnBootSec";
     }
     {
-      assertion = pollerSystemd.timer.Install.WantedBy == [ "timers.target" ];
+      assertion = pollerSystemd.timer.Install.WantedBy == ["timers.target"];
       message = "poller timer should be WantedBy timers.target";
     }
     {
@@ -201,9 +200,9 @@ let
 
   failures = map (a: a.message) (lib.filter (a: !a.assertion) assertions);
 in
-assert lib.assertMsg (failures == [ ]) (
-  "portable-services:\n  " + lib.concatStringsSep "\n  " failures
-);
-pkgs.runCommand "ix-test-portable-services" { } ''
-  mkdir -p "$out"
-''
+  assert lib.assertMsg (failures == []) (
+    "portable-services:\n  " + lib.concatStringsSep "\n  " failures
+  );
+    pkgs.runCommand "ix-test-portable-services" {} ''
+      mkdir -p "$out"
+    ''

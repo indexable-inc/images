@@ -1,13 +1,15 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="a diffusion model generates neural terrain inside one Fabric VM that players join on 25565"></p>
+
 # Crazy Terrain
 
-One ix fleet node running a Fabric `1.21.11` server with
+What does Minecraft terrain look like when a diffusion model generates it at
+the absolute Java height limit? This is one ix fleet node running a Fabric
+`1.21.11` server with
 [`terrain-diffusion`](https://github.com/xandergos/terrain-diffusion-mc), a
-diffusion-model world generator that replaces vanilla noise with neural
-terrain. The server is set up so generation runs against the absolute Java
-max world height: every dimension is built at `min_y = -2032`, `height =
-4064` (top `y = 2031`), and the mod's per-world `World Scale` is locked to
-its `MAX_SCALE` of `6`, which puts the diffusion pipeline's `10 km` peak at
-roughly `y ~2060`.
+world generator that replaces vanilla noise with neural terrain. Every
+dimension is built at `min_y = -2032`, `height = 4064` (top `y = 2031`), and
+the mod's per-world `World Scale` is locked to its `MAX_SCALE` of `6`, which
+puts the diffusion pipeline's `10 km` peak at roughly `y ~2060`.
 
 ## Run
 
@@ -15,6 +17,8 @@ roughly `y ~2060`.
 # From the index repo root.
 nix run .#minecraft-crazy-terrain-up
 ```
+
+Need the repo first? `git clone https://github.com/indexable-inc/index`.
 
 ## Shape
 

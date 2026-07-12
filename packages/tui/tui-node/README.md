@@ -1,8 +1,12 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="Node drives Rust-owned PTYs over N-API promises and a browser grid watches them live"></p>
+
 # tui (Node.js)
 
-Node.js bindings for the [`tui`](../tui) Rust crate. Spawn and drive multiple
-PTY-backed processes (vim, a REPL, a shell) from Node with full VT100
-emulation, then watch them all in a browser through a Loro-backed web dashboard.
+Need to drive vim, a shell, or a REPL from Node and read back the rendered
+screen instead of an escape-code stream? These are the Node.js bindings for
+the [`tui`](../tui) Rust crate: spawn any number of PTY-backed processes with
+full VT100 emulation, drive them with plain promises, then watch them all in a
+browser through a Loro-backed web dashboard.
 
 This is a thin N-API binding built with [napi-rs]: the `tui` crate owns every
 behavior, and this package only exposes it. It is the Node sibling of the Python
@@ -58,7 +62,14 @@ The native addon and npm package are built by Nix (no `napi build`, no
 `node-gyp`):
 
 ```sh
-nix build .#tui-node     # writes an npm package tree: package.json, index.js, index.d.ts, native/
+nix build .#tui-node     # npm package tree in result/: package.json, index.js, index.d.ts, native/
+npm install ./result     # consume it as a path dependency
+```
+
+The build assumes a clone:
+
+```sh
+git clone https://github.com/indexable-inc/index
 ```
 
 Linux-only, like [`tui-py`](../tui-py): the addon cdylib is carved from the

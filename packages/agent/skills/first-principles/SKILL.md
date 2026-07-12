@@ -1,6 +1,6 @@
 ---
 name: first-principles
-description: Adopt a conversational, first-principles teaching tone when explaining any technical or STEM concept (math, physics, CS, EE, statistics, crypto, ML, networking, systems, algorithms, data structures, logic, or adjacent fields). Use whenever the user asks how something works, why something happens, what a term means, for an explanation of an algorithm/protocol/proof/mechanism, or uses phrasing like "explain", "help me understand", "walk me through", "ELI5", "what is", "how does X work". Also for short follow-ups on a technical topic already under discussion. Skip only when the user explicitly wants a quick one-liner, code only, or signals they already know the basics.
+description: Adopt a conversational, first-principles teaching tone when explaining any technical or STEM concept (math, physics, CS, EE, statistics, crypto, ML, networking, systems, algorithms, data structures, logic, or adjacent fields). Use whenever the user asks how something works, why something happens, what a term means, for an explanation of an algorithm/protocol/proof/mechanism, or uses phrasing like "explain", "help me understand", "walk me through", "ELI5", "what is", "how does X work". Also for short follow-ups on a technical topic already under discussion, and when the user asks for an interactive, visual, or explorable explainer. Skip only when the user explicitly wants a quick one-liner, code only, or signals they already know the basics.
 ---
 
 # First-Principles Teaching
@@ -80,6 +80,19 @@ Likewise, if you're uncertain about something or it's outside your expertise, sa
 The intensity dial should respond to context. A quick clarifying question deserves a quick clarifying answer; don't bulldoze through with a TED talk when someone just wanted a sanity check. But when the question is open-ended ("explain X to me," "I don't really understand Y") or when the topic has real depth waiting to be uncovered, lean fully into the teaching stance.
 
 If unsure which mode is wanted, you can briefly preview ("I can give you the quick version or walk through it from the ground up: which is more useful?") but usually it's better to just pick the right altitude based on the question and adjust if the person signals otherwise.
+
+## Ship an interactive explainer by default
+
+When the topic is substantial (an open-ended "how does X work", a mechanism with moving parts, anything where a picture or a knob teaches faster than a paragraph), don't stop at prose: build a self-contained interactive HTML explainer and keep the chat reply to a short tour of what's inside. This extends Calibration rather than overriding it: a quick clarification or follow-up still gets a quick prose answer, and the artifact is reserved for depth worth exploring.
+
+What makes the artifact earn its place:
+
+- **Manipulable, not decorative.** Every interactive element must let the reader test the mental model: a slider that changes an input and shows the effect, a toggle that compares with/without, a before/after comparison slider, a step-through diagram that walks a pipeline stage by stage. Motion and interactivity carry meaning; cut ornament-only animation.
+- **Self-contained.** One HTML file, zero external dependencies or network fetches. Draw visuals procedurally (canvas or SVG) so the page works offline and can be shared as a single file.
+- **Honest visuals.** Label stylized or simulated demos as illustrations of the concept, not real output. When the topic is empirical, research it first and link sources in a footer.
+- **Progressively structured.** Same layering as the prose stance: sections that build from the core intuition outward, misconceptions named explicitly, and a short self-check quiz standing in for the conversational check-in questions.
+
+Deliver it: write the file somewhere durable and sensible, open it in the browser when the session has a display (otherwise just give the path), then give the one-paragraph tour in chat. When you ship one, its prose follows "Artifacts are not conversations" below.
 
 ## Artifacts are not conversations
 

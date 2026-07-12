@@ -13,14 +13,11 @@ implementation):
 1. Selector integrity: every non-group node's non-empty selector resolves to
    exactly one element (the central promise Playwright relies on).
 2. Exclusion: no sentinel inside a display:none / visibility:hidden /
-   aria-hidden / <script> / <style> subtree, nor an element with opacity:0 set
-   directly on it, surfaces as a node DERIVED FROM the excluded element (its own
-   tag+name) or on any interactive node. (Text from an excluded child CAN leak
-   into an ancestor landmark's innerText-derived accessible name; that is
-   documented behavior and is not asserted away. opacity:0 on an *ancestor* is
-   deliberately NOT in the excluded set -- see indexable-inc/index#1077, where
-   the implementation keeps such subtrees; asserting their exclusion would be
-   dishonest, so this test pins opacity:0 only when set directly on the element.)
+   aria-hidden / opacity:0 / <script> / <style> subtree, nor an element with
+   opacity:0 set directly on it, surfaces as a node DERIVED FROM the excluded
+   element (its own tag+name) or on any interactive node. (Text from an excluded
+   child CAN leak into an ancestor landmark's innerText-derived accessible name;
+   that is documented behavior and is not asserted away.)
 3. Name clamping: every node name and attrs value is <= max_text (default 120),
    and a smaller max_text is honored.
 4. Ref contiguity & lookup: non-group nodes are numbered 1..N in document order
@@ -145,9 +142,9 @@ _HEADINGS = ["h1", "h2", "h3"]
 #  - display:none / visibility:hidden / aria-hidden wrappers cascade to the
 #    descendant's own computed state, so the child <a> is dropped.
 #  - <script>/<style> tags are in SKIP_TAGS.
-#  - opacity:0 set DIRECTLY on the element zeroes its own computed opacity.
-# opacity:0 on an *ancestor* is intentionally absent: it is NOT pruned today
-# (indexable-inc/index#1077), so including it would assert a false guarantee.
+#  - opacity:0, whether set directly on the element or on a wrapper: opacity does
+#    not cascade into descendants' computed style, so the snapshot walk tracks it
+#    through ancestors explicitly (indexable-inc/index#1077).
 def _excluded_subtree(sid: int) -> object:
     sent = f"SENTINEL{sid}X"
 
@@ -160,6 +157,7 @@ def _excluded_subtree(sid: int) -> object:
     options = [
         link("none", "display:none"),
         link("vishidden", "visibility:hidden"),
+        link("opacitywrap", "opacity:0"),
         (
             f"<div aria-hidden='true'><a href='/e{sid}'>{sent}ariahidden</a></div>",
             {f"{sent}ariahidden": "ariahidden"},

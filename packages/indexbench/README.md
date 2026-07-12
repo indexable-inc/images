@@ -1,12 +1,23 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="micro closures, macro commands, and @bench lines all produce metric Runs that append to the bench-history branch and feed a comparator that exits non-zero on regression"></p>
+
 # indexbench
 
-A metric-centric continuous-benchmarking framework for the index repo.
+How do you gate CI on performance without the gate flaking every time the runner has a noisy neighbor? indexbench is a metric-centric continuous-benchmarking framework: harnesses produce named metrics, history lives on an orphan git branch, and a comparator applies the right test per metric kind (a statistical test for timings, an exact compare for deterministic counts), exiting non-zero only on a real regression.
 
 The core abstraction is a **Metric**, not a time. A metric is any named number
 with a unit and a direction (`lower_is_better`): wall-clock nanoseconds, peak RSS
 bytes, allocation counts, a match rate, NAR bytes, force-resolve steps. Harnesses
 produce metrics; the comparator and reporter consume them. Adding a new kind of
 measurement never touches the schema.
+
+## Get it
+
+```sh
+nix run github:indexable-inc/index#indexbench -- --help
+```
+
+Suites, history, and the profiling shell assume a checkout:
+`git clone https://github.com/indexable-inc/index`.
 
 ## Schema
 
@@ -23,8 +34,8 @@ that form is the contract.
 ## Three metric sources
 
 - **Micro harness** (`micro`): times a Rust closure with a warm-up + batched
-  sampling loop (distributional `wall_clock`), and — behind the
-  `CountingAllocator` `#[global_allocator]` shim — reports a deterministic
+  sampling loop (distributional `wall_clock`), and, behind the
+  `CountingAllocator` `#[global_allocator]` shim, reports a deterministic
   `allocations` count.
 - **Macro harness** (`macro_harness`): runs an external command N times, reading
   `wall_clock` in the parent and `max_rss` from `libc::wait4`'s **per-child**
@@ -75,7 +86,7 @@ Default baseline: the previous run on the same machine (override with
   that reports an identical peak each run): the effect-size threshold alone
   decides, so a sub-threshold environmental wobble does not trip the gate.
 - **Deterministic** metrics (no `samples`, e.g. an allocation count): exact
-  compare. Any worsening is a regression — there is no noise to absorb.
+  compare. Any worsening is a regression: there is no noise to absorb.
 
 The CLI exits non-zero on any regression (the CI gate).
 
@@ -83,34 +94,34 @@ The CLI exits non-zero on any regression (the CI gate).
 
 ```sh
 # Run the built-in self-demo suite, record to history, compare to the previous run:
-nix run index#bench               # the apps.bench perf job
-nix run index#indexbench -- run   # the bare CLI
+nix run .#bench               # the apps.bench perf job
+nix run .#indexbench -- run   # the bare CLI
 
 # Run an ad-hoc macro bench, 10 runs, gate on regression vs the previous run:
-nix run index#indexbench -- run --suite mysuite --cmd "my-tool --work" --runs 10
+nix run .#indexbench -- run --suite mysuite --cmd "my-tool --work" --runs 10
 
 # Compare against a fixed commit instead of the previous run:
-nix run index#indexbench -- run --suite mysuite --cmd "my-tool" --baseline <sha>
+nix run .#indexbench -- run --suite mysuite --cmd "my-tool" --baseline <sha>
 
 # Gate only on deterministic (reproducible) metrics, comparing to history:
-nix run index#indexbench -- run --cmd "my-tool" --gate deterministic
+nix run .#indexbench -- run --cmd "my-tool" --gate deterministic
 
 # Gate a metric against a fixed budget with NO history (the hermetic flake-check
 # path): fails if the measured allocation count exceeds 64.
-nix run index#indexbench -- assert --cmd "my-tool" --runs 1 --max allocations=64
+nix run .#indexbench -- assert --cmd "my-tool" --runs 1 --max allocations=64
 
 # JSON output for CI / the (stubbed) viewer:
-nix run index#indexbench -- run --output-json
+nix run .#indexbench -- run --output-json
 
 # Inspect history:
-nix run index#indexbench -- history --suite mysuite --bench my-tool
+nix run .#indexbench -- history --suite mysuite --bench my-tool
 ```
 
 By default runs record to the `bench-history` git branch; pass `--store local
 --local-dir <dir>` for a directory-backed store. `assert` needs no store: it
 compares each measured metric against a fixed `--max` budget, which is what makes
 a reproducible metric (an allocation count) usable as a hermetic `nix flake
-check` — a self-comparing run could only ever compare a binary against itself.
+check`. A self-comparing run could only ever compare a binary against itself.
 
 ## Declaring a suite (Nix)
 
@@ -145,7 +156,7 @@ suite description.
 ## Profiling shell
 
 ```sh
-nix develop index#bench   # indexbench + hyperfine + valgrind + samply + jemalloc
+nix develop .#bench   # indexbench + hyperfine + valgrind + samply + jemalloc
 ```
 
 `tango-bench` is already a workspace dependency for paired A/B micro comparisons

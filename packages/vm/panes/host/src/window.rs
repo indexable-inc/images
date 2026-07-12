@@ -14,8 +14,9 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{AllocAnyThread, DefinedClass, MainThreadOnly, define_class};
 use objc2_app_kit::{
-    NSBackingStoreType, NSView, NSWindow, NSWindowButton, NSWindowDelegate,
-    NSWindowOcclusionState, NSWindowStyleMask, NSWindowTabbingMode, NSWindowTitleVisibility,
+    NSBackingStoreType, NSEvent, NSEventModifierFlags, NSEventType, NSView, NSWindow,
+    NSWindowButton, NSWindowDelegate, NSWindowOcclusionState, NSWindowStyleMask,
+    NSWindowTabbingMode, NSWindowTitleVisibility,
 };
 use objc2_foundation::{
     MainThreadMarker, NSNotification, NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSSize,
@@ -72,6 +73,62 @@ pub struct WindowParams {
     pub width: u32,
     pub height: u32,
     pub scale: u32,
+}
+
+define_class!(
+    // `NSWindow` subclass whose only job is routing Cmd keyUps to the view.
+    // AppKit discards those during key-equivalent processing in
+    // `NSApplication.sendEvent` -- ABOVE this window, so this override alone
+    // never fires on the normal path; `app::install_key_up_monitor`
+    // re-delivers the event to the key window and lands here. Hand it to the
+    // content view like any other key event; the view's held-key map drops
+    // the ones whose press the guest never saw.
+    #[unsafe(super(NSWindow))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "PanesWindow"]
+    struct PanesNSWindow;
+
+    impl PanesNSWindow {
+        #[unsafe(method(sendEvent:))]
+        fn send_event(&self, event: &NSEvent) {
+            if event.r#type() == NSEventType::KeyUp
+                && event.modifierFlags().contains(NSEventModifierFlags::Command)
+                && let Some(view) = self.contentView()
+            {
+                view.keyUp(event);
+                // No super on purpose: AppKit's key-equivalent path would
+                // swallow this keyUp anyway, and the view is its only
+                // intended consumer.
+                return;
+            }
+            let _: () = unsafe { objc2::msg_send![super(self), sendEvent: event] };
+        }
+    }
+);
+
+impl PanesNSWindow {
+    /// Returns the upcast `NSWindow`: callers only need the base interface
+    /// (the subclass adds behavior, not API).
+    fn new_ns_window(
+        mtm: MainThreadMarker,
+        content: NSRect,
+        style: NSWindowStyleMask,
+    ) -> Retained<NSWindow> {
+        let this = Self::alloc(mtm).set_ivars(());
+        // SAFETY: NSWindow's designated initializer on our subclass;
+        // `defer: false` so the window backing exists immediately (the Metal
+        // layer needs a real backing scale).
+        let window: Retained<Self> = unsafe {
+            objc2::msg_send![
+                super(this),
+                initWithContentRect: content,
+                styleMask: style,
+                backing: NSBackingStoreType::Buffered,
+                defer: false,
+            ]
+        };
+        Retained::into_super(window)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -206,9 +263,10 @@ pub struct PaneWindow {
     _win_delegate: Retained<WinDelegate>,
     _link_delegate: Retained<LinkDelegate>,
     surface: Option<Surface>,
-    /// Scale from `WindowNew`: the fixed unit for this window's protocol
-    /// min/max sizes (protocol contract; the guest converts `WindowMinMax`
-    /// at the same announced scale even if the client rescales later).
+    /// The unit for this window's protocol min/max sizes: seeded by
+    /// `WindowNew`, re-announced by `WindowScale` when a 1.3 guest's client
+    /// re-renders at a new buffer scale (a 1.2 guest keeps it frozen for the
+    /// connection, the old contract).
     guest_scale: u32,
     pending_ack: Option<u64>,
     dirty: bool,
@@ -240,9 +298,10 @@ impl PaneWindow {
         mtm: MainThreadMarker,
         renderer: &Renderer,
         params: &WindowParams,
-        title_prefix: &str,
-        native_titlebar: bool,
+        options: &crate::app::RunOptions,
     ) -> Self {
+        let title_prefix = &options.title_prefix;
+        let native_titlebar = options.native_titlebar;
         let scale = f64::from(params.scale.max(1));
         let content = NSRect::new(
             NSPoint::new(0.0, 0.0),
@@ -264,17 +323,7 @@ impl PaneWindow {
         if !native_titlebar {
             style |= NSWindowStyleMask::FullSizeContentView;
         }
-        // SAFETY: standard initializer; `defer: false` so the window backing
-        // exists immediately (the Metal layer needs a real backing scale).
-        let ns = unsafe {
-            NSWindow::initWithContentRect_styleMask_backing_defer(
-                mtm.alloc(),
-                content,
-                style,
-                NSBackingStoreType::Buffered,
-                false,
-            )
-        };
+        let ns = PanesNSWindow::new_ns_window(mtm, content, style);
         // SAFETY: `true` (the default for titled windows) would free the
         // ObjC object under our `Retained` on close.
         unsafe { ns.setReleasedWhenClosed(false) };
@@ -291,7 +340,7 @@ impl PaneWindow {
         ns.setAcceptsMouseMovedEvents(true);
         ns.center();
 
-        let view = PanesView::new(mtm, params.id, content);
+        let view = PanesView::new(mtm, params.id, content, options.chord_translation);
         let layer = CAMetalLayer::new();
         layer.setDevice(Some(&renderer.device));
         layer.setPixelFormat(objc2_metal::MTLPixelFormat::BGRA8Unorm);
@@ -415,6 +464,12 @@ impl PaneWindow {
         if !self.native_titlebar {
             apply_hidden_titlebar(&self.ns);
         }
+    }
+
+    /// Adopt a `ToHost::WindowScale` re-announcement (protocol minor 3):
+    /// every later `WindowMinMax` for this window arrives in this unit.
+    pub fn set_guest_scale(&mut self, scale: u32) {
+        self.guest_scale = scale.max(1);
     }
 
     pub fn set_min_max(&self, min: Option<(u32, u32)>, max: Option<(u32, u32)>) {

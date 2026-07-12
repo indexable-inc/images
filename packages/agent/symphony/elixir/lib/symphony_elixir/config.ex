@@ -82,14 +82,8 @@ defmodule SymphonyElixir.Config do
                               "none" leaves the run to fail against the
                               missing placement with no fallback.
 
-  Claude models (any node whose model is a Claude model, e.g.
-  claude-opus-4-8, runs through Claude Code instead of codex):
+  Catalog hot-reload:
 
-      ANTHROPIC_API_KEY       Anthropic API key billed for Claude Code turns.
-                              Required for any Claude-model node; absent fails
-                              the node with :anthropic_api_key_not_configured.
-      SYMPHONY_CLAUDE_COMMAND defaults to "claude"; the Claude Code CLI invoked
-                              non-interactively (`--print`).
       SYMPHONY_CATALOG_POLL_MS defaults to 1000
 
   Integrations:
@@ -107,7 +101,7 @@ defmodule SymphonyElixir.Config do
       SYMPHONY_SLACK_POLL_MS  defaults to 60000
       SYMPHONY_SLACK_NOTIFY_CHANNEL optional; set empty to disable post-run notifications
       SYMPHONY_SLACK_NOTIFY_CRON_FAILURES post failed cron runs to Slack; defaults to true
-      SYMPHONY_SLACK_NOTIFY_CRON_WORKFLOWS comma-separated workflow names whose cron successes also post, or "*" for every cron success; defaults to none
+      SYMPHONY_SLACK_NOTIFY_CRON_WORKFLOWS comma-separated workflow names whose cron successes also post, or "*" for every cron success; defaults to none. Notifying runs also post their sink nodes' reserved "slack_summary" output as content (IR.RunNotifier)
       SYMPHONY_ROOM_REGISTRY_URL central room.ix.dev a run's room-server registers with; also the Slack run-detail link base
       SYMPHONY_ROOM_REGISTRY_TOKEN optional bearer token for room backend registration writes
       SYMPHONY_ROOM_ADVERTISE_HOST optional; address a provisioned room-server binds/advertises so room.ix.dev can reach it
@@ -185,8 +179,6 @@ defmodule SymphonyElixir.Config do
     # `:worker` role is read from the env in Application, not from here.
     :worker,
     :worker_select_label,
-    :anthropic_api_key,
-    :claude_command,
     :catalog_poll_ms,
     :linear_api_key,
     :linear_endpoint,
@@ -255,8 +247,6 @@ defmodule SymphonyElixir.Config do
             worker_room_host: String.t() | nil
           },
           worker_select_label: String.t() | nil,
-          anthropic_api_key: String.t() | nil,
-          claude_command: String.t(),
           catalog_poll_ms: pos_integer(),
           linear_api_key: String.t() | nil,
           linear_endpoint: String.t(),
@@ -404,9 +394,6 @@ defmodule SymphonyElixir.Config do
 
     worker_select_label = empty_to_nil(Keyword.get(opts, :worker_select_label) || System.get_env("SYMPHONY_WORKER_SELECT_LABEL"))
 
-    anthropic_api_key = empty_to_nil(Keyword.get(opts, :anthropic_api_key) || System.get_env("ANTHROPIC_API_KEY"))
-    claude_command = string_env(opts, :claude_command, "SYMPHONY_CLAUDE_COMMAND", "claude")
-
     catalog_poll_ms = int_env(opts, :catalog_poll_ms, "SYMPHONY_CATALOG_POLL_MS", 1_000)
 
     linear_api_key = Keyword.get(opts, :linear_api_key) || System.get_env("LINEAR_API_KEY")
@@ -495,8 +482,6 @@ defmodule SymphonyElixir.Config do
       placement_fallback: placement_fallback,
       worker: worker,
       worker_select_label: worker_select_label,
-      anthropic_api_key: anthropic_api_key,
-      claude_command: claude_command,
       catalog_poll_ms: catalog_poll_ms,
       linear_api_key: empty_to_nil(linear_api_key),
       linear_endpoint: linear_endpoint,
@@ -563,13 +548,13 @@ defmodule SymphonyElixir.Config do
   end
 
   defp validate_pack_asset_dir!(env_name, path) do
-    unless File.dir?(path) do
+    if !File.dir?(path) do
       raise "#{env_name} must point at an existing directory, got #{inspect(path)}"
     end
   end
 
   defp validate_pack_asset_file!(env_name, path) do
-    unless File.regular?(path) do
+    if !File.regular?(path) do
       raise "#{env_name} must point at an existing file, got #{inspect(path)}"
     end
   end
@@ -592,7 +577,7 @@ defmodule SymphonyElixir.Config do
 
   defp repo_root_env(opts, primary_repo) do
     case Keyword.get(opts, :repo_root) || System.get_env("SYMPHONY_REPO_ROOT") do
-      nil -> if is_binary(primary_repo), do: Path.dirname(primary_repo), else: nil
+      nil -> if is_binary(primary_repo), do: Path.dirname(primary_repo)
       "" -> nil
       value -> Path.expand(value)
     end

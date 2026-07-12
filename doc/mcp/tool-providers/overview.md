@@ -20,12 +20,12 @@ so it imports with no `pip`/`uv install` step.
 - Two return audiences. Providers follow the kernel's `Result` contract: a human
   watching the dashboard gets a rich render (a styled polars table, a
   syntax-highlighted file, ANSI color as HTML) while the model gets concise text.
-  `sh` returns an `Output` that IS a `Result`; `view`/`fff`/`nix`/`fleet` return
+  the `sh._exec` runner returns an `Output` that IS a `Result`; `view`/`fff`/`nix`/`fleet` return
   polars frames the global `_repr_html_` renders. See
   [runtime](../runtime/overview.md#result-runtimepy442).
 - Async where it touches the network or a subprocess. The kernel is one shared
   event loop, so anything that would block (`ssh`, HTTP, a child process) is
-  `async def` and awaited, or runs off-loop via `asyncio.to_thread`. `sh`,
+  `async def` and awaited, or runs off-loop via `asyncio.to_thread`. `nu`,
   `fleet`, `slack`, `linear`, `x`, `browser`, `nix`, `worktree`, `mcp_client` are
   async; `fff`/`view` are sync-but-fast (a cached, file-watching index).
 - Credentials are declarative and fail-fast. A credentialed provider's env/token
@@ -43,7 +43,7 @@ so it imports with no `pip`/`uv install` step.
 | --- | --- | --- | --- |
 | [`fff`](../../../packages/mcp/src/fff/fff/__init__.py) | typo-tolerant fuzzy file find + SIMD content grep over an in-memory index, bound to the `fff-c` cdylib via ctypes | `find`, `grep`, `tree`, `map` (+ async `afind`/`agrep`/`atree`/`amap`), `FileFinder` | pre-imported; results are dataclasses with a `.df` polars frame; cdylib from `packages/fff` |
 | [`view`](../../../packages/mcp/src/view/view/__init__.py) | pretty composable file/listing/search views: directories as polars frames, files as syntax-highlighted renders | `ls`, `tree`, `cat`/`read`, `head`, `tail`, `json`, `diff`, `edit`, `img` | pre-imported; installs the global `DataFrame._repr_html_` (`df_html`) every frame renders through |
-| [`sh`](../../../packages/mcp/src/sh/sh/__init__.py) | run a shell command on the async loop, rendered two ways | `await sh(cmd)` -> `Output` (a `Result`); `.text`/`.code` (alias `.exit_code`)/`.ok`, `.json()`/`.jsonl()`/`.df()` | a builtin (pre-bound, no import); ANSI color captured to HTML for the human, stripped for the model; process-group kill on timeout; a non-zero exit renders loudly (leading `[exit N]` failure line, trailing `[exit N]` marker, falsy Output, failure line echoed to the job stream); rendered command text is secret-redacted (`[redacted:<kind>]`) |
+| [`sh`](../../../packages/mcp/src/sh/sh/__init__.py) | the kernel's process runner; the public `sh()`/`zsh()` are RETIRED (agents shell out through `await nu(...)`) and raise a migration hint | private `sh._exec(cmd)` -> `Output` (a `Result`); `.text`/`.code` (alias `.exit_code`)/`.ok`, `.json()`/`.jsonl()`/`.df()` | not in the namespace/catalog; used by the `grep`/`find` helpers and `worktree`; ANSI color captured to HTML for the human, stripped for the model; process-group kill on timeout; a non-zero exit renders loudly (leading `[exit N]` failure line, trailing `[exit N]` marker, falsy Output, failure line echoed to the job stream); rendered command text is secret-redacted (`[redacted:<kind>]`) |
 | [`nix`](../../../packages/mcp/src/nix/nix/__init__.py) | parse a `nix --log-format internal-json` stream into polars and a live build DAG | `run`, `build`, `attrs`, `eval`, `parse`; `NixLog.events`/`.activities` | pure Python over polars; publishes a live build-DAG dashboard resource |
 | [`fleet`](../../../packages/mcp/src/fleet/fleet/__init__.py) | the tailnet as one cluster: SSH fan-out, Ray, Spark Connect, and a peer's live kernel | `scan`/`read_text`/`read_ndjson`; `nodes`/`run`/`submit`/`get`/`put`/`in_kernel`/`spark` (`cluster.py`) | all async; drives Ray + Spark Connect; `in_kernel` calls a peer's `/api/exec` |
 | [`browser`](../../../packages/mcp/src/browser/browser/__init__.py) | drive a running browser over CDP with Playwright (debug port 9222 by default) | `get_or_create_browser`, `goto`, `shot`, `read`, `vdom`, `page`, `connect`, `close` | launches a VISIBLE, never-headless window; publishes a live page resource; `vdom()` is a filtered virtual DOM map |

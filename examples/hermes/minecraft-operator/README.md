@@ -1,23 +1,18 @@
+<p align="center"><img src="assets/hero.svg" width="720" alt="players reach the Paper server over public ipv4; the hermes agent reaches only its RCON console over the east-west group"></p>
+
 # Hermes Minecraft Operator
 
-A [Hermes agent](../agent/) operating a Paper Minecraft server. Two nodes in one east-west group:
+What if your Minecraft server's admin was an agent you could just message? Here a [Hermes agent](../agent/) operates a Paper server: two nodes in one east-west group, where players reach the game over public ipv4 and the agent reaches only the console. Its single game-facing capability is a typed `run_command(command) -> response` MCP tool that speaks RCON ([`mcp/rcon_mcp.py`](mcp/rcon_mcp.py)), so "whitelist my friend", "shrink the world border to 2000", or a daily player-count report become chat requests instead of console sessions.
 
-```
-players ──ipv4──> minecraft (Paper 26.1.2 + RCON)
-                      ^
-                      | RCON (east-west only)
-                  hermes (agent + MCP `run_command` tool)
-```
-
-The agent gets exactly one game-facing capability: a typed `run_command(command) -> response` MCP tool that speaks RCON to the server console ([`mcp/rcon_mcp.py`](mcp/rcon_mcp.py)). "Whitelist my friend", "shrink the world border to 2000", or a daily player-count report become chat requests instead of console sessions, and the tool's schema is the whole attack surface: one console-command string, parsed by the Minecraft server's own grammar and permission model — no argv, no shell, no file access on the game node.
+The tool's schema is the whole attack surface: one console-command string, parsed by the Minecraft server's own grammar and permission model. No argv, no shell, no file access on the game node.
 
 ## Shape
 
-- [`ix.nix`](ix.nix) — the two-node fleet. Players reach the game over public ipv4; RCON is only routable inside the `hermes-minecraft` group.
-- [`minecraft.nix`](minecraft.nix) — Paper with `rcon.enable = true` and whitelist enforcement from first boot.
-- [`operator.nix`](operator.nix) — layers the MCP server and an operator persona on the shared `ix.hermes.profile` composition. The RCON host/port are read off the minecraft node's evaluated config, so they cannot drift.
-- [`rcon.nix`](rcon.nix) — the shared RCON credential. Committed plaintext like the survival example's forwarding secret: east-west-scoped, obviously a change-me.
-- [`documents/SOUL.md`](documents/SOUL.md) — the persona: read-before-write, quote real server responses, destructive commands only on explicit request.
+- [`ix.nix`](ix.nix): the two-node fleet. Players reach the game over public ipv4; RCON is only routable inside the `hermes-minecraft` group.
+- [`minecraft.nix`](minecraft.nix): Paper with `rcon.enable = true` and whitelist enforcement from first boot.
+- [`operator.nix`](operator.nix): layers the MCP server and an operator persona on the shared `ix.hermes.profile` composition. The RCON host/port are read off the minecraft node's evaluated config, so they cannot drift.
+- [`rcon.nix`](rcon.nix): the shared RCON credential. Committed plaintext like the survival example's forwarding secret: east-west-scoped, obviously a change-me.
+- [`documents/SOUL.md`](documents/SOUL.md): the persona; read-before-write, quote real server responses, destructive commands only on explicit request.
 
 ## Run
 
@@ -25,6 +20,8 @@ The agent gets exactly one game-facing capability: a typed `run_command(command)
 # From the index repo root.
 nix run .#hermes-minecraft-operator-up
 ```
+
+Need the repo first? `git clone https://github.com/indexable-inc/index`.
 
 Store the model key env file, bring the fleet up, and open a chat:
 
@@ -48,7 +45,7 @@ World-border tweaks:
 
 > **you:** shrink the border to 2000 blocks over 10 minutes
 >
-> **hermes:** Current border is 60000 wide. Running `worldborder set 2000 600` — server replied `Setting the border to 2000.0 blocks wide over 600 seconds`. I announced it in-game first with `say`.
+> **hermes:** Current border is 60000 wide. Running `worldborder set 2000 600`; the server replied `Setting the border to 2000.0 blocks wide over 600 seconds`. I announced it in-game first with `say`.
 
 The daily player-count report:
 
@@ -56,7 +53,7 @@ The daily player-count report:
 >
 > **hermes:** Scheduled: a cron job at 19:00 runs `list` and posts the result here. You can check it with `hermes cron` from a shell, or just ask me.
 
-The cron job lives in Hermes' own scheduler (`$HERMES_HOME/cron/jobs.json`), created conversationally — nothing to deploy.
+The cron job lives in Hermes' own scheduler (`$HERMES_HOME/cron/jobs.json`), created conversationally, nothing to deploy.
 
 ## The credential, honestly
 

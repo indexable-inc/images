@@ -18,7 +18,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use panes_protocol::{
-    Encoding, MINOR_POINTER_LOCK, ToGuest, ToHost, VERSION_MAJOR, VERSION_MINOR, WindowId,
+    Encoding, MINOR_POINTER_LOCK, MINOR_WINDOW_SCALE, ToGuest, ToHost, VERSION_MAJOR,
+    VERSION_MINOR, WindowId, wl_repeat_info,
 };
 use smithay::input::{Seat, SeatState};
 use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
@@ -100,12 +101,42 @@ struct Pane {
     max: Option<(u32, u32)>,
     /// Buffer scale of the last commit (forwarded in `WindowNew`).
     scale: u32,
-    /// The scale `WindowNew` carried on the current connection: the fixed
-    /// unit for this window's wire min/max (protocol contract). Kept apart
-    /// from `scale` because a client may change buffer scale mid-connection
-    /// (e.g. re-render 2x after the host's Hello raised the output scale)
-    /// and the wire has no per-window scale update to tell the host.
+    /// The unit this window's wire min/max are in: seeded by its `WindowNew`
+    /// and re-announced by `ToHost::WindowScale` whenever `scale` changes
+    /// afterwards (1.3+ host). Against a pre-1.3 host it stays frozen at the
+    /// `WindowNew` value for the connection (the protocol's old contract),
+    /// which is why it is kept apart from `scale`.
     announced_scale: u32,
+    /// This window's `NSWindow` `backingScaleFactor` from the host's last
+    /// `Configure`: the live per-window unit of every wire pixel coordinate
+    /// the host sends for it (pointer motion/deltas, sizes). `None` until
+    /// the first Configure; input mapping then falls back to the global
+    /// Hello scale. Kept per window because displays mix scales: dividing a
+    /// 1x-screen window's coordinates by a global scale of 2 halves its
+    /// cursor position (the index#1686 mixed-scale skew).
+    configured_scale: Option<u32>,
+    /// Latest committed dmabuf, not yet read back. GPU readback is deferred
+    /// to send time (see [`App::absorb_pending_gpu`]): a mailbox client
+    /// (mesa's Wayland WSI commits once per `vkQueuePresentKHR`) can commit
+    /// hundreds of frames a second, and a per-commit readback of a 2x buffer
+    /// saturates the event-loop thread -- measured live with Minecraft
+    /// (index#1686): internal render at ~347fps, wire cadence collapsed to a
+    /// tick-quantized ~30 acks/s. Held unreleased so the client cannot write
+    /// into it while a readback may still happen; a superseding commit
+    /// releases it untouched (that frame is simply never sent, which is
+    /// mailbox semantics).
+    #[cfg(feature = "gpu")]
+    pending_gpu: Option<HeldGpuBuffer>,
+}
+
+/// A committed-but-not-yet-read-back dmabuf (see [`Pane::pending_gpu`]).
+#[cfg(feature = "gpu")]
+struct HeldGpuBuffer {
+    buffer: smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer,
+    dmabuf: smithay::backend::allocator::dmabuf::Dmabuf,
+    /// The commit's buffer scale; applied to [`Pane::scale`] when absorbed,
+    /// so the scale always describes the pixels actually on the wire.
+    scale: u32,
 }
 
 impl Pane {
@@ -125,6 +156,9 @@ impl Pane {
             max: None,
             scale: 1,
             announced_scale: 1,
+            configured_scale: None,
+            #[cfg(feature = "gpu")]
+            pending_gpu: None,
         }
     }
 }
@@ -288,11 +322,16 @@ impl App {
             layout: &cli.xkb_layout,
             ..smithay::input::keyboard::XkbConfig::default()
         };
-        // repeat_info(delay=400ms, rate=30/s): the host never forwards OS key
-        // repeats, so clients must auto-repeat from this advertisement.
-        if let Err(err) = seat.add_keyboard(xkb, 400, 30) {
+        // The host never forwards OS key repeats, so clients auto-repeat
+        // from this advertisement alone. A 1.2 host overwrites it with the
+        // user's actual macOS timing (`ToGuest::KeyRepeat` ->
+        // `on_key_repeat`); until then, and for a 1.1 host forever, advertise
+        // the macOS factory defaults (delay 375ms, 90ms interval = 11/s)
+        // rather than a Linux-flavored 25-30/s that no Mac keyboard uses.
+        let repeat = wl_repeat_info(375, 90);
+        if let Err(err) = seat.add_keyboard(xkb, repeat.delay, repeat.rate) {
             warn!(%err, layout = %cli.xkb_layout, "xkb keymap failed; falling back to defaults");
-            seat.add_keyboard(smithay::input::keyboard::XkbConfig::default(), 400, 30)
+            seat.add_keyboard(smithay::input::keyboard::XkbConfig::default(), repeat.delay, repeat.rate)
                 .expect("default xkb keymap must compile");
         }
         seat.add_pointer();
@@ -413,6 +452,86 @@ impl App {
         });
     }
 
+    /// Ratchet the advertised output scale up to `scale` and re-advertise per
+    /// surface. The host's Hello scale is read once at its startup from the
+    /// then-main screen, so it can undershoot the screen a window actually
+    /// lands on (host launched while a 1x display was frontmost); the
+    /// per-window Configure scale is live truth from that window's own
+    /// `NSWindow`, so a higher value corrects the global advertisement.
+    /// Monotonic within a connection (a window dragged to a 1x display must
+    /// not flip every other client back to 1x); a fresh Hello resets it.
+    fn raise_output_scale(&self, scale: u32) {
+        let scale = clamp_i32(scale.max(1));
+        if scale <= self.output.current_scale().integer_scale() {
+            return;
+        }
+        info!(scale, "output scale raised by per-window configure");
+        self.output.change_current_state(None, None, Some(Scale::Integer(scale)), None);
+        for pane in &self.panes {
+            self.send_preferred_scale(pane.toplevel.wl_surface());
+        }
+    }
+
+    /// Re-announce `panes[idx]`'s wire unit when its buffer scale drifted
+    /// from the last announcement (the client re-rendered at a new scale,
+    /// e.g. adopting a raised output scale). A 1.3+ host takes
+    /// `ToHost::WindowScale` and re-interprets later `WindowMinMax` sizes in
+    /// the new unit; against an older host nothing is sent and
+    /// `announced_scale` stays frozen at the `WindowNew` value, the old
+    /// protocol contract.
+    fn sync_window_scale(&mut self, idx: usize) {
+        let pane = &mut self.panes[idx];
+        if !pane.announced || pane.scale == pane.announced_scale {
+            return;
+        }
+        let Some(host) = self
+            .host
+            .as_ref()
+            .filter(|h| h.ready && h.minor >= MINOR_WINDOW_SCALE)
+        else {
+            return;
+        };
+        pane.announced_scale = pane.scale;
+        info!(id = pane.id, scale = pane.scale, "window scale re-announced");
+        host.send(ToHost::WindowScale {
+            id: pane.id,
+            scale: pane.scale,
+        });
+    }
+
+    /// One readback per WIRE frame: take the newest held dmabuf (see
+    /// [`Pane::pending_gpu`]) into the frame store, releasing the buffer to
+    /// its client. Called only when pacing allows a send, so however many
+    /// commits piled up while a frame was in flight, exactly the newest one
+    /// pays for a GPU readback.
+    #[cfg(feature = "gpu")]
+    fn absorb_pending_gpu(&mut self, idx: usize) {
+        let Some(held) = self.panes[idx].pending_gpu.take() else {
+            return;
+        };
+        let frame = self.gpu.as_mut().and_then(|gpu| match gpu.readback(&held.dmabuf) {
+            Ok(frame) => Some(frame),
+            Err(err) => {
+                warn!(%err, "dmabuf readback failed; skipping frame");
+                None
+            }
+        });
+        // Released only now: the client was not allowed to write into the
+        // buffer while a readback could still sample it.
+        held.buffer.release();
+        if let Some(frame) = frame {
+            let pane = &mut self.panes[idx];
+            pane.scale = held.scale;
+            pane.store.commit(frame.bgra, frame.width, frame.height);
+        }
+        // The absorbed commit may carry a new buffer scale; re-announce the
+        // wire unit before the frame this pump is about to send.
+        self.sync_window_scale(idx);
+    }
+
+    #[cfg(not(feature = "gpu"))]
+    fn absorb_pending_gpu(&mut self, _idx: usize) {}
+
     /// Try to move one frame onto the wire for `panes[idx]`, announcing the
     /// window first if this connection has not seen it. When there is
     /// nothing to send, release the window's frame callbacks instead: no
@@ -421,10 +540,21 @@ impl App {
     /// (that is the throttle; the ack or its watchdog releases them).
     fn pump(&mut self, idx: usize) {
         let now = self.now_ms();
+        if self.host.as_ref().is_none_or(|h| !h.ready) {
+            // No ready host: the 10Hz fallback tick paces this pane.
+            return;
+        }
+        if self.panes[idx].inflight.is_some() {
+            // A frame is pacing the wire. Any held dmabuf stays held (and
+            // keeps being superseded by newer commits) so the readback below
+            // captures the newest content once the ack lands.
+            return;
+        }
+        // Pacing allows a send: absorb the newest held dmabuf now.
+        self.absorb_pending_gpu(idx);
         let Self { host, panes, .. } = self;
         let pane = &mut panes[idx];
         let Some(host) = host.as_ref().filter(|h| h.ready) else {
-            // No ready host: the 10Hz fallback tick paces this pane.
             return;
         };
         if !pane.store.has_content() {
@@ -434,13 +564,10 @@ impl App {
             fire_frame_callbacks(pane.toplevel.wl_surface(), now);
             return;
         }
-        if pane.inflight.is_some() {
-            return;
-        }
         if !pane.announced {
             // This connection's WindowNew scale is the unit every later
-            // WindowMinMax for this window is converted at (the host divides
-            // by it; there is no per-window scale update message).
+            // WindowMinMax for this window is converted at, until a
+            // WindowScale re-announces it (1.3+; see sync_window_scale).
             pane.announced_scale = pane.scale;
             host.send(ToHost::WindowNew {
                 id: pane.id,
@@ -516,6 +643,10 @@ impl App {
                         // old one says nothing about it.
                         pane.watchdog_ticks = INFLIGHT_WATCHDOG_TICKS;
                         pane.announced = false;
+                        // The next host's Configures speak for its own
+                        // NSWindows; a scale from the dead connection must
+                        // not map its input.
+                        pane.configured_scale = None;
                         pane.store.invalidate();
                     }
                     info!("host disconnected; windows re-announce on reconnect");
@@ -567,6 +698,7 @@ impl App {
                     host.send(ToHost::Pong { nonce });
                 }
             }
+            ToGuest::KeyRepeat { delay_ms, interval_ms } => self.on_key_repeat(delay_ms, interval_ms),
             other => {
                 input::handle(self, &other);
                 // Pointer focus may have moved: activate a pending lock that
@@ -632,6 +764,18 @@ impl App {
         self.sync_pointer_lock();
     }
 
+    /// The host user's macOS repeat timing -> `wl_keyboard.repeat_info` for
+    /// every keyboard client, current and future (smithay re-announces on
+    /// bind). Makes the host's System Settings the one repeat authority:
+    /// clients auto-repeat with exactly the Mac's delay and rate.
+    fn on_key_repeat(&mut self, delay_ms: u32, interval_ms: u32) {
+        let repeat = wl_repeat_info(delay_ms, interval_ms);
+        info!(delay_ms, interval_ms, rate = repeat.rate, delay = repeat.delay, "key repeat timing from host");
+        if let Some(keyboard) = self.seat.get_keyboard() {
+            keyboard.change_repeat_info(repeat.rate, repeat.delay);
+        }
+    }
+
     fn on_ack(&mut self, id: WindowId, seq: u64) {
         let now = self.now_ms();
         let Some(idx) = self.pane_index(id) else {
@@ -671,14 +815,22 @@ impl App {
         // the window's scale or a Retina client that honors the advertised
         // output scale renders a buffer scale^2 the drawable. div_ceil keeps a
         // stray pixel row covered rather than letterboxed.
-        // Scale advertisement stays global (wl_output + preferred_buffer_scale
-        // both derive from Hello): a per-window Configure scale that differs
-        // (window dragged to a non-Retina external display) is not re-echoed
-        // per surface, so that window's content is host-rescaled until it
+        // Scale advertisement stays global (wl_output + preferred_buffer_scale),
+        // seeded by Hello and ratcheted UP by any higher per-window Configure
+        // scale (raise_output_scale): a stale Hello scale=1 with Retina
+        // Configures at scale=2 otherwise pins every client to buffer scale 1,
+        // rendering half the drawable forever (measured live with
+        // GLFW/Minecraft, index#1686). A LOWER per-window scale (window
+        // dragged to a non-Retina external display) is not re-echoed per
+        // surface, so that window's content is host-rescaled until it
         // returns. Fractional scale is out of scope by design: macOS backing
         // factors are 1 or 2, and wp_fractional_scale would buy softness at
         // readback bandwidth the vsock budget cannot spare.
         let scale = scale.max(1);
+        // Live per-window unit for the host's pixel coordinates (input
+        // mapping divides by it; see `Pane::configured_scale`).
+        self.panes[idx].configured_scale = Some(scale);
+        self.raise_output_scale(scale);
         let size_valid = width > 0 && height > 0;
         self.panes[idx].toplevel.with_pending_state(|state| {
             if size_valid {
