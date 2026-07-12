@@ -12,8 +12,7 @@ in {
   ix.healthChecks.web-reachable = {
     description = "web service is reachable from this worker";
     http = {
-      host = web.host;
-      port = web.port;
+      inherit (web) host port;
     };
   };
 }
