@@ -11,7 +11,9 @@
 }: {
   imports = [./common.nix];
   config = lib.mkIf (config.networking.blockedHosts != []) {
-    system.activationScripts.extraActivation.text = ''
+    # nix-darwin's networking activation may restore a migration backup over
+    # /etc/hosts, so write the managed file after that step.
+    system.activationScripts.postActivation.text = ''
       echo "Updating /etc/hosts..."
       cat > /etc/hosts << 'EOF'
       ##

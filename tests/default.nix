@@ -2810,10 +2810,12 @@
         {
           # Stub of the nix-darwin option the branch writes; just enough
           # surface to observe the rendered /etc/hosts content.
-          options.system.activationScripts.extraActivation.text = lib.mkOption {
-            type = lib.types.lines;
-            default = "";
-          };
+          options.system.activationScripts = lib.genAttrs ["extraActivation" "postActivation"] (_: {
+            text = lib.mkOption {
+              type = lib.types.lines;
+              default = "";
+            };
+          });
         }
         {networking.blockedHosts = hosts;}
       ];
@@ -2836,15 +2838,19 @@
       {
         assertion =
           lib.hasInfix "127.0.0.1\twww.example.com"
-          blocklistDarwin.system.activationScripts.extraActivation.text;
-        message = "darwin branch should write the sinkhole lines into /etc/hosts";
+          blocklistDarwin.system.activationScripts.postActivation.text;
+        message = "darwin branch should write the sinkhole lines after networking activation";
       }
       {
-        assertion = lib.hasInfix "127.0.0.1\tlocalhost" blocklistDarwin.system.activationScripts.extraActivation.text;
+        assertion = blocklistDarwin.system.activationScripts.extraActivation.text == "";
+        message = "darwin branch should not write /etc/hosts before networking activation";
+      }
+      {
+        assertion = lib.hasInfix "127.0.0.1\tlocalhost" blocklistDarwin.system.activationScripts.postActivation.text;
         message = "darwin branch should keep the localhost block when rewriting /etc/hosts";
       }
       {
-        assertion = blocklistDarwinEmpty.system.activationScripts.extraActivation.text == "";
+        assertion = blocklistDarwinEmpty.system.activationScripts.postActivation.text == "";
         message = "darwin branch should be a no-op when networking.blockedHosts is empty";
       }
     ];
