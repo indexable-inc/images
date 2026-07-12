@@ -2024,6 +2024,9 @@
     + "from ix_notebook_mcp import registry; instr = mcp._mcp_server.instructions; "
     + "assert 'root=' not in instr, 'a parameter/signature leaked into the instructions'; "
     + "assert '(query:' not in instr and '(path:' not in instr, 'a signature leaked into the instructions'; "
+    + "from ix_notebook_mcp import tools; tools.set_dashboard_url('http://127.0.0.1:58430/'); "
+    + "assert mcp._mcp_server.instructions == instr, 'connection URL mutated reusable instructions'; "
+    + "assert '58430' not in instr, 'connection URL leaked into reusable instructions'; "
     + "missing = [m.name for m in registry.MODULES if ('`' + m.name + '`') not in instr]; "
     + "assert not missing, ('registry modules missing from instructions: %r' % (missing,)); "
     + "print('server-ok', len(names))"
@@ -2872,8 +2875,12 @@
             else:
                 raise AssertionError("python_exec ran before the session was named")
 
+            tools.set_dashboard_url("http://127.0.0.1:7677/")
             named = await tools.session_set_name("wedge smoke")
-            assert "wedge smoke" in " ".join(getattr(c, "text", "") or "" for c in named), named
+            named_text = " ".join(getattr(c, "text", "") or "" for c in named)
+            assert "wedge smoke" in named_text, named
+            assert "http://127.0.0.1:7677/" in named_text, named
+            assert "58430" not in named_text, named
             topic = await tools.topic_set("wedge validation")
             assert "wedge validation" in " ".join(getattr(c, "text", "") or "" for c in topic), topic
 
