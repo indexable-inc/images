@@ -60,6 +60,8 @@ struct CargoManifestPackage {
     license_file: Option<toml::Value>,
     #[serde(default, rename = "rust-version")]
     rust_version: Option<toml::Value>,
+    #[serde(default)]
+    readme: Option<toml::Value>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1976,6 +1978,7 @@ fn cargo_package_exports(unit: &Unit) -> Result<String> {
         ("CARGO_PKG_LICENSE", metadata.license.as_str()),
         ("CARGO_PKG_LICENSE_FILE", metadata.license_file.as_str()),
         ("CARGO_PKG_RUST_VERSION", metadata.rust_version.as_str()),
+        ("CARGO_PKG_README", metadata.readme.as_str()),
     ] {
         let _ = writeln!(script, "export {name}={}", shell_env_value(value));
     }
@@ -2032,6 +2035,7 @@ struct CargoManifestPackageMetadata {
     license: String,
     license_file: String,
     rust_version: String,
+    readme: String,
 }
 
 fn cargo_manifest_package_metadata(package: &CargoManifestPackage) -> CargoManifestPackageMetadata {
@@ -2043,6 +2047,7 @@ fn cargo_manifest_package_metadata(package: &CargoManifestPackage) -> CargoManif
         license: manifest_string(package.license.as_ref()),
         license_file: manifest_string(package.license_file.as_ref()),
         rust_version: manifest_string(package.rust_version.as_ref()),
+        readme: manifest_string(package.readme.as_ref()),
     }
 }
 
@@ -5336,6 +5341,7 @@ repository = "https://example.com/native.git"
 license = "MIT"
 license-file = "LICENSE"
 rust-version = "1.85"
+readme = "README.md"
 links = "native_ffi"
 "#,
         )
@@ -5408,6 +5414,7 @@ links = "native_ffi"
         assert!(rendered.contains("export CARGO_PKG_LICENSE=\"MIT\""));
         assert!(rendered.contains("export CARGO_PKG_LICENSE_FILE=\"LICENSE\""));
         assert!(rendered.contains("export CARGO_PKG_RUST_VERSION=\"1.85\""));
+        assert!(rendered.contains("export CARGO_PKG_README=\"README.md\""));
         assert!(rendered.contains("export CARGO_MANIFEST_LINKS=\"native_ffi\""));
         assert!(rendered.contains("export RUSTDOC=\"$(type -p rustdoc)\""));
         assert!(rendered.contains("export CARGO_FEATURE_ARCH=1"));
