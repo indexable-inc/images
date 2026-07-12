@@ -18,7 +18,7 @@ use anyhow::{Context as _, Result};
 use audio_blob::{BlobHash, BlobStore};
 use audio_clock::{MonotonicTime, SharedClock};
 use audio_instrument::{CONTROL_COUNT, Instrument, MAX_BLOCK_FRAMES};
-use audio_score::Score;
+use audio_score::{InstrumentRef, Score};
 use tracing::{info, warn};
 
 /// Renders any span of the shared timeline from the score, deterministically.
@@ -31,6 +31,7 @@ pub struct Renderer {
     staged: Option<Staged>,
     loading: Option<Loading>,
     rejected: Option<BlobHash>,
+    publication: Option<InstrumentRef>,
 }
 
 struct Loaded {
@@ -64,6 +65,7 @@ impl Renderer {
             staged: None,
             loading: None,
             rejected: None,
+            publication: None,
         };
         if let Err(error) = renderer.refresh_blocking() {
             warn!(%error, "initial instrument load failed");
@@ -81,9 +83,10 @@ impl Renderer {
     /// (Re)load the instrument when the score names a module whose bytes we
     /// hold and it differs from the loaded one. The new module is *staged*,
     /// not swapped in: the previous instrument keeps playing until a render
-    /// reaches the score's activation frame, so every peer switches at the
-    /// same shared frame no matter when its bytes arrived. Returns whether
-    /// an instrument is loaded or staged after the refresh.
+    /// reaches the score's activation frame. Rendering stays silent after
+    /// that frame until the successor is ready, rather than extending the
+    /// predecessor beyond its published range. Returns whether an instrument
+    /// is loaded or staged after the refresh.
     ///
     /// # Errors
     /// Fails on blob-store I/O or when the compiler worker cannot start or
@@ -104,6 +107,7 @@ impl Renderer {
                 return Ok(!self.loaded.is_empty() || self.staged.is_some());
             }
         };
+        self.publication = wanted;
         let Some(wanted) = wanted else { return Ok(!self.loaded.is_empty()) };
         if self
             .loaded
@@ -177,6 +181,7 @@ impl Renderer {
             let score = self.score.lock().expect("score lock");
             score.instrument()?
         };
+        self.publication = wanted;
         let Some(wanted) = wanted else { return Ok(false) };
         let Some(bytes) = self.store.get(&wanted.hash)? else { return Ok(false) };
         let instrument = Instrument::load(&bytes)
@@ -204,12 +209,25 @@ impl Renderer {
         }
     }
 
-    /// The next staged activation strictly after `frame`, if any.
+    /// The next published activation strictly after `frame`, if any.
     fn next_switch_after(&self, frame: u64) -> Option<u64> {
-        self.staged
-            .as_ref()
-            .map(|staged| staged.at_frame)
+        self.publication
+            .map(|publication| publication.at_frame)
             .filter(|&at_frame| at_frame > frame)
+    }
+
+    fn loaded_at(&mut self, frame: u64) -> Option<&mut Loaded> {
+        let publication = self.publication;
+        let rejected = self.rejected;
+        self.loaded.iter_mut().rfind(|loaded| {
+            loaded.at_frame <= frame
+                && publication.is_none_or(|publication| {
+                    frame < publication.at_frame
+                        || rejected == Some(publication.hash)
+                        || (loaded.hash == publication.hash
+                            && loaded.at_frame == publication.at_frame)
+                })
+        })
     }
 
     /// Render shared-timeline frames `start_frame .. start_frame + frames`
@@ -281,11 +299,7 @@ impl Renderer {
                 .min(frame + MAX_BLOCK_FRAMES as u64);
             let block_frames = usize::try_from(block_end - frame).expect("block fits usize");
             let samples = block_frames * channels;
-            match self
-                .loaded
-                .iter_mut()
-                .rfind(|loaded| loaded.at_frame <= frame)
-            {
+            match self.loaded_at(frame) {
                 Some(loaded) => render_block(
                     &mut loaded.instrument,
                     frame,
@@ -821,16 +835,17 @@ mod tests {
     }
 
     #[test]
-    fn successor_compiles_off_the_render_path() -> Result<()> {
+    fn pending_successor_silences_at_its_activation_frame() -> Result<()> {
         let Fixture { score, mut renderer, _dir } = fixture()?;
         let successor = renderer.store.put(SHIFT_WAT.as_bytes())?;
         let mut out = vec![0.0; 1];
         renderer.render_range(0, 1, 48_000, &mut out)?;
         score.lock().expect("lock").set_instrument(&successor, 1)?;
 
-        renderer.render_range(1, 1, 48_000, &mut out)?;
+        let mut transition = vec![0.0; 2];
+        renderer.render_range(0, 2, 48_000, &mut transition)?;
 
-        assert_eq!(out, [0.25]);
+        assert_eq!(transition, [0.25, 0.0]);
         assert_eq!(renderer.loading.as_ref().map(|loading| loading.hash), Some(successor));
         wait_for_staged(&mut renderer, successor)?;
         renderer.render_range(1, 1, 48_000, &mut out)?;
