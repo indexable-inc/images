@@ -2040,6 +2040,40 @@ def _pr_resource_html(state: Mapping[str, Any]) -> str:
 _INSTANT_MERGE_STATES: frozenset[str] = frozenset({"CLEAN", "UNSTABLE", "HAS_HOOKS"})
 _MERGEABILITY_POLL_S: float = 2.0
 _MERGEABILITY_TIMEOUT_S: float = 30.0
+_PASSING_CHECK_STATES: frozenset[str] = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
+# Match gh v2.96 aggregateChecks: STALE remains pending because branch
+# protection still needs a fresh result, even though that CheckRun is complete.
+_FAILING_CHECK_STATES: frozenset[str] = frozenset(
+    {"ERROR", "FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "CANCELLED", "STARTUP_FAILURE"}
+)
+_PASSING_CHECK_BUCKETS: frozenset[str] = frozenset({"pass", "skipping"})
+_FAILING_CHECK_BUCKETS: frozenset[str] = frozenset({"fail", "cancel"})
+_NO_REQUIRED_CHECKS = re.compile(r"^no required checks reported on the '.+' branch$")
+
+
+def _pr_check_state(check: Mapping[str, Any]) -> str:
+    """Normalize CheckRun and legacy StatusContext outcomes."""
+    return str(check.get("conclusion") or check.get("state") or check.get("status") or "").upper()
+
+
+def _pr_check_is_terminal(check: Mapping[str, Any]) -> bool:
+    """Whether a CheckRun or legacy StatusContext has reached an outcome."""
+    check_state = _pr_check_state(check)
+    bucket = str(check.get("bucket") or "")
+    return (
+        check_state in _PASSING_CHECK_STATES
+        or check_state in _FAILING_CHECK_STATES
+        or bucket in _PASSING_CHECK_BUCKETS
+        or bucket in _FAILING_CHECK_BUCKETS
+    )
+
+
+def _pr_check_failed(check: Mapping[str, Any]) -> bool:
+    """Whether a terminal CheckRun or legacy StatusContext did not pass."""
+    return (
+        _pr_check_state(check) in _FAILING_CHECK_STATES
+        or str(check.get("bucket") or "") in _FAILING_CHECK_BUCKETS
+    )
 
 
 async def watch_pr(
@@ -2117,13 +2151,35 @@ async def watch_pr(
         )
         return row
 
+    async def required_checks() -> list[dict[str, Any]]:
+        # gh's JSON output omits isRequired, while `pr checks --required`
+        # evaluates GitHub's CheckRun.isRequired field and deduplicates reruns.
+        result: dict[str, Any] = await run_nu(
+            "gh pr checks $env.PR --required "
+            "--json bucket,completedAt,link,name,startedAt,state,workflow | complete"
+        )
+        stdout = str(result.get("stdout") or "").strip()
+        if stdout:
+            parsed = json.loads(stdout)
+            if not isinstance(parsed, list) or not all(isinstance(check, dict) for check in parsed):
+                raise RuntimeError("gh pr checks --required returned non-list JSON")
+            return parsed
+        stderr = str(result.get("stderr") or "").strip()
+        exit_code = int(result.get("exit_code") or 0)
+        # index#3059: cli/cli v2.96 reports an empty required set only as this
+        # stderr error. Keep that domain outcome distinct from API/auth failures.
+        if exit_code == 1 and _NO_REQUIRED_CHECKS.fullmatch(stderr):
+            print(f"pr_watch: {stderr}", flush=True)
+            return []
+        raise RuntimeError(
+            f"gh pr checks --required failed with exit code {exit_code}: {stderr or 'no error text'}"
+        )
+
     if auto_merge:
         # Arming auto merge on an already-mergeable PR merges it instantly,
-        # before any watching happens (#2532): branch-protection endpoints
-        # need admin and gh's statusCheckRollup carries no isRequired, so
-        # mergeStateStatus is the one read-accessible "would merge right now"
-        # signal. A fresh PR reports UNKNOWN while GitHub computes
-        # mergeability, so poll briefly for a real answer first.
+        # before any watching happens (#2532). mergeStateStatus accounts for
+        # every blocker, including checks, reviews, and conflicts. A fresh PR
+        # reports UNKNOWN while GitHub computes it, so poll briefly first.
         row = await refresh()
         deadline = time.time() + _MERGEABILITY_TIMEOUT_S
         while (
@@ -2164,27 +2220,48 @@ async def watch_pr(
     while True:
         last = await refresh()
         checks = last.get("statusCheckRollup") or []
-        failures = [
-            check
-            for check in checks
-            if check.get("conclusion") in {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"}
-        ]
+        failures = [check for check in checks if _pr_check_failed(check)]
+        required: list[dict[str, Any]] | None = None
         if last.get("state") != "OPEN":
             state["status"] = "merged" if last.get("state") == "MERGED" else "closed"
             resource.close()
             await notify(f"PR {clean_pr} finished with state {last.get('state')}", resource=resource.id, pr=clean_pr)
             return finished({"state": last.get("state"), "url": last.get("url"), "checks": len(checks)})
         if failures:
-            state["status"] = "failed"
-            state["error"] = "One or more required actions failed."
-            resource.close()
-            await notify(f"PR {clean_pr} has failing checks", resource=resource.id, pr=clean_pr)
-            return finished({"state": "failed", "url": last.get("url"), "failures": failures})
+            required = await required_checks()
+            required_failures = [check for check in required if _pr_check_failed(check)]
+            required_pending = [check for check in required if not _pr_check_is_terminal(check)]
+            if required_failures and not required_pending:
+                state["status"] = "failed"
+                state["error"] = "One or more required actions failed."
+                resource.close()
+                await notify(f"PR {clean_pr} has failing checks", resource=resource.id, pr=clean_pr)
+                return finished(
+                    {"state": "failed", "url": last.get("url"), "failures": required_failures}
+                )
+            if required_failures:
+                state["status"] = "waiting for checks"
+                state["error"] = (
+                    f"{len(required_failures)} required action(s) failed; waiting for "
+                    f"{len(required_pending)} required action(s) still running."
+                )
         if time.time() - started > timeout:
+            if required is None:
+                required = await required_checks()
+            required_failures = [check for check in required if _pr_check_failed(check)]
+            required_pending = [check for check in required if not _pr_check_is_terminal(check)]
             state["status"] = "timed out"
             resource.close()
             await notify(f"PR {clean_pr} watch timed out", resource=resource.id, pr=clean_pr)
-            return finished({"state": "timed out", "url": last.get("url"), "checks": len(checks)})
+            return finished(
+                {
+                    "state": "timed out",
+                    "url": last.get("url"),
+                    "checks": len(checks),
+                    "failures": required_failures,
+                    "pending": required_pending,
+                }
+            )
         await asyncio.sleep(interval)
 
 
