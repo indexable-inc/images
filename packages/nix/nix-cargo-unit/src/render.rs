@@ -1280,14 +1280,20 @@ fn push_rustc_args(script: &mut String, unit: &Unit, hash: &str, driver: Driver)
         push_arg(script, "-C");
         push_arg(script, &format!("split-debuginfo={split_debuginfo}"));
     }
-    // Proc-macro libtest executables inherit `prefer-dynamic`. Cargo normally
-    // supplies the rustc sysroot through the runner environment, but
-    // cargo-unit installs tests across a Nix derivation boundary. Embed rustc's
-    // library path so the installed test retains the toolchain closure and
-    // remains directly runnable.
-    if unit.profile.rpath || (driver == Driver::Rustc && unit.is_proc_macro() && unit.is_test()) {
+    if unit.profile.rpath {
         push_arg(script, "-C");
         push_arg(script, "rpath=yes");
+    }
+    // Proc-macro libtest executables inherit `prefer-dynamic`. Cargo normally
+    // supplies the rustc sysroot through the runner environment, but
+    // cargo-unit installs tests across a Nix derivation boundary. An ordinary
+    // `-C rpath=yes` records a loader-relative path for `build/<test>` that is
+    // wrong after installation under `$out/bin`, so embed the store path.
+    if driver == Driver::Rustc && unit.is_proc_macro() && unit.is_test() {
+        push_arg(script, "-C");
+        script.push_str(
+            "rustc_args+=( \"link-arg=-Wl,-rpath,${rustToolchain}/lib/rustlib/${hostRustTarget}/lib\" )\n",
+        );
     }
     push_codegen(script, "metadata", hash);
     // rustc warns "ignoring -C extra-filename flag due to -o flag" when both
@@ -3996,7 +4002,10 @@ mod tests {
         .unwrap();
 
         assert!(rendered.contains("'prefer-dynamic'"));
-        assert!(rendered.contains("'rpath=yes'"));
+        assert!(
+            rendered
+                .contains("link-arg=-Wl,-rpath,${rustToolchain}/lib/rustlib/${hostRustTarget}/lib")
+        );
     }
 
     #[test]
