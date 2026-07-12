@@ -1545,7 +1545,7 @@ class Jobs(dict[str, Job]):
     run, keyed by job id. Beyond the dict surface, :meth:`spawn` registers an
     ad-hoc awaitable as a first-class background job, so work an agent started
     itself (a coroutine, a Task) gets the same lifecycle as a backgrounded cell:
-    a dashboard card, a completion notification, and a pageable/awaitable
+    a dashboard card, a best-effort completion wake, and a pageable/awaitable
     ``jobs['<id>']`` handle (issue #2164)."""
 
     def spawn(self, aw: Awaitable[Any], *, name: str | None = None, topic: str | None = None) -> Job:
@@ -1554,7 +1554,7 @@ class Jobs(dict[str, Job]):
 
         The awaitable gets the full job lifecycle: it appears in ``jobs`` /
         ``history()`` and on the dashboard, its completion pushes a channel
-        notification exactly like a backgrounded cell, and its value is
+        notification addressed to the session that spawned it, and its value is
         retrieved with ``await jobs['<id>']`` (or ``.result`` once done; a
         failure re-raises there, like any other job). ``name`` labels the job
         (defaults to the coroutine's qualname); ``topic`` files it under a
@@ -2882,6 +2882,7 @@ def _persist_final(job: Job) -> None:
         _store.finish(
             _store_conn,
             id=job.id,
+            kind=job.kind,
             status=job.status,
             ended_at=job.ended or time.time(),
             output=job.output,
@@ -2961,17 +2962,11 @@ async def _spawn_runner(job: Job, aw: Awaitable[Any]) -> None:
         _ix_current.reset(token)
         _persist_final(job)
         _mark_snapshot_dirty()
-        # Spawned jobs are backgrounded by construction, so completion always
-        # notifies (the suppress mirrors _runner: a session without the channel
-        # has nothing to deliver to, and that must not fail the job's cleanup).
+        # The durable job row above is the completion authority. The addressed
+        # channel wake is intentionally best-effort, not exactly-once: it may be
+        # lost, but must never be broadcast elsewhere or fail job cleanup.
         with contextlib.suppress(Exception):
-            await notify(
-                f"Background job {job.name} finished with status {job.status}.",
-                job_id=job.id,
-                job_name=job.name,
-                status=job.status,
-                topic=job.topic,
-            )
+            _notify_job_finished(job)
 
 
 def _cell_bindings(job: Job) -> dict:
@@ -4374,9 +4369,13 @@ async def __ix_exec(
     _emit(job)
 
 
-def __ix_cancel_running(session: str | None = None, exclude: str | None = None) -> list[str]:
-    """Cancel the run this session's in-flight ``python_exec`` launched, so an
-    abandoned call stops instead of finishing in the background.
+def __ix_cancel_running(
+    session: str | None = None,
+    job_id: str | None = None,
+    exclude: str | None = None,
+) -> list[str]:
+    """Cancel the specific run this session's in-flight ``python_exec`` launched,
+    so an abandoned call stops instead of finishing in the background.
 
     The MCP server calls this when the client cancels an in-flight
     ``python_exec`` request (``notifications/cancelled`` or a transport abort):
@@ -4385,30 +4384,34 @@ def __ix_cancel_running(session: str | None = None, exclude: str | None = None) 
     already abandoned (index#2387). Cancelling that job here is the SAME path as
     an explicit ``jobs['<id>'].cancel()``, so it drains and records cleanly.
 
-    Only the single most recently started still-running ``python_exec`` run
-    (``kind == "cell"``) for ``session`` is cancelled: that is the one the
-    abandoned call launched. Crucially, jobs the call itself detached with
-    ``jobs.spawn`` (``kind == "spawn"``, newer-started than the parent run but
-    inheriting its session) are NOT candidates -- the user asked for those to
-    outlive the call, so cancelling the abandoned foreground run must leave them
-    running. Legitimate earlier runs the same session did not abandon also keep
-    running. ``exclude`` skips a job id -- the raw cancel request's own frame is
-    never a ``jobs`` entry, but the guard keeps the helper honest if that ever
-    changes. Returns the ids cancelled (empty when the run already finished, the
-    common race: a fast call completes before the cancellation lands)."""
-    candidates = [
-        job
-        for job in jobs.values()
-        if job.session == session
-        and job.kind == "cell"
-        and job.running()
-        and job.id != exclude
-    ]
-    if not candidates:
+    ``job_id`` is the id of the run the abandoned call launched, read off the
+    drained exec reply's summary and plumbed through by the server (index#2406).
+    We cancel STRICTLY that job: never a heuristic "newest running job for the
+    session", because the abandoned call's reply is drained under the shell lock
+    before this poke runs, so by the time we get here the launched run has either
+    backgrounded (still running -- cancel it) or finished within budget (nothing
+    to do). Guessing "newest" in the finished case would deterministically kill
+    an unrelated background job the same session started earlier and did NOT
+    abandon (the wrong-job kill in the issue). Targeting by id also inherently
+    spares jobs the call detached with ``jobs.spawn`` (index#2387): a spawned
+    child has its own id, so it is never the target. So:
+
+      - ``job_id`` absent (an old cancel path with no summary, e.g. a cancel that
+        landed before any iopub): cancel NOTHING rather than guess.
+      - the target is unknown, belongs to another session, or already finished:
+        cancel NOTHING (the common race is a fast call that completed in budget).
+      - otherwise cancel exactly that one job.
+
+    The ``session`` guard is kept so a stray/forged ``job_id`` can never reach
+    across sessions. ``exclude`` skips a job id -- the raw cancel request's own
+    frame is never a ``jobs`` entry, but the guard keeps the helper honest if
+    that ever changes. Returns the ids cancelled (empty when there was nothing to
+    cancel)."""
+    if job_id is None or job_id == exclude:
         return []
-    # Newest-started cell wins: `jobs` is insertion-ordered, and the abandoned
-    # call is the last foreground run this session launched.
-    target = max(candidates, key=lambda job: job.started)
+    target = jobs.get(job_id)
+    if target is None or target.session != session or not target.running():
+        return []
     target.cancel()
     return [target.id]
 
@@ -4646,7 +4649,7 @@ def _install_signal_handlers() -> None:
     kernel whose event loop is blocked by a synchronous call.
 
     SIGUSR1: faulthandler dumps every thread's Python stack to the file named by
-    ``IX_MCP_KERNEL_TRACE`` (kept by ``kernel.TRACE_ENV``). The handler is C-level
+    ``IX_MCP_KERNEL_TRACE`` (kept by ``kernel_host.TRACE_ENV``). The handler is C-level
     so it runs even while the main thread is parked in a blocking call; the
     ``kernel_trace`` tool reads the file back.
 

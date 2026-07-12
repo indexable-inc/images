@@ -17,6 +17,7 @@ workspace = true
 
 [features]
 ex = ["dep:unibind-backend-ex"]
+jvm = ["dep:unibind-backend-jvm"]
 py = ["dep:unibind-backend-py"]
 ts = ["dep:unibind-backend-ts"]
 
@@ -25,6 +26,7 @@ proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
 unibind-backend-ex = { workspace = true, optional = true }
+unibind-backend-jvm = { workspace = true, optional = true }
 unibind-backend-py = { workspace = true, optional = true }
 unibind-backend-ts = { workspace = true, optional = true }
 unibind-core.workspace = true

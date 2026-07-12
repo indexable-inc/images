@@ -126,6 +126,30 @@
       };
     }
     {
+      name = "zed";
+      input = "zed-upstream";
+      url = "https://github.com/zed-industries/zed.git";
+      patchDir = "packages/zed/patches";
+      autoUpdate = false;
+      forkRepo = "indexable-inc/zed";
+      upstreamPolicy = {
+        prsWelcome = true;
+        aiPrsAllowed = "false";
+        citation = "https://github.com/zed-industries/zed/blob/main/CONTRIBUTING.md#ai-policy";
+        notes = "Zed permits human-directed LLM assistance but rejects autonomous-agent contributions; keep this patch in the maintained fork unless a human takes it upstream.";
+      };
+      patches = {
+        "0001-editor-optionally-exclude-the-invocation-reference.patch" = {
+          upstream = "never";
+          reason = "Useful general editor behavior, but Zed's contribution policy rejects autonomous-agent submissions.";
+        };
+        "0002-nix-expose-stable-application-package.patch" = {
+          upstream = "never";
+          reason = "Required to install the stable app from Zed's own flake, but Zed's contribution policy rejects autonomous-agent submissions.";
+        };
+      };
+    }
+    {
       name = "btop";
       input = "btop-src";
       url = "https://github.com/aristocratos/btop.git";
@@ -441,6 +465,17 @@
         "0013-libfetchers-opt-in-incremental-fetching-of-forge-inp.patch" = {
           upstream = "hold";
           reason = "Feature-sized fetcher change; upstreaming paused per NixOS/nix#15984 and it should open as an upstream issue/discussion first (touches lock-file-adjacent fetch semantics).";
+        };
+        # 0014: underscore digit separators in numeric literals (`1_000`,
+        # `1_000.000_1`, `2.5e1_0`), Rust-shaped (between digits only; a
+        # leading underscore is still an identifier), stripped before the
+        # value is parsed. Repo `.nix` files stay separator-free until the
+        # whole toolchain (stock nix, alejandra/statix/deadnix, tree-sitter)
+        # accepts the syntax; astlog's digit-grouping lints track that
+        # backlog (astlog-rules/nix.astlog).
+        "0014-libexpr-accept-underscore-digit-separators-in-numeri.patch" = {
+          upstream = "hold";
+          reason = "Language syntax change; must start as an upstream issue/RFC, and humans submit nix patches upstream per NixOS/nix#15984.";
         };
       };
     }

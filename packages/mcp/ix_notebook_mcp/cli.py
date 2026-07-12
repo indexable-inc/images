@@ -360,6 +360,22 @@ def _exec_trust_network() -> bool:
     )
 
 
+def _channel_delivery() -> str:
+    """Where the transport pump delivers channel outbox events (see
+    ``Config.channel_delivery``). An unknown ``IX_MCP_CHANNEL_DELIVERY`` value
+    falls back loudly to "client" rather than silently swallowing events under
+    a mode this build does not know.
+    """
+    value = os.environ.get("IX_MCP_CHANNEL_DELIVERY", "client").strip() or "client"
+    if value not in ("client", "weave-chat"):
+        print(
+            f"ix-mcp: unknown IX_MCP_CHANNEL_DELIVERY {value!r}; using 'client'",
+            file=sys.stderr,
+        )
+        return "client"
+    return value
+
+
 def _auto_dashboard() -> bool:
     """Legacy flag retained for environment compatibility.
 
@@ -508,6 +524,8 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
         exec_token=_exec_token(),
         exec_trust_network=_exec_trust_network(),
         server_session_id=server_session_id,
+        kernel_host=os.environ.get("IX_MCP_KERNEL", "local"),
+        channel_delivery=_channel_delivery(),
     )
     set_config(cfg)
 

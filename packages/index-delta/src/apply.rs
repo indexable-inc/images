@@ -457,11 +457,10 @@ fn set_keyvalue(lines: &mut Vec<String>, path: &str, value: &Value) -> Result<()
         }
         return Ok(());
     }
-    if let Some(name) = &address.section
-        && section_body(lines, Some(name)).start >= lines.len()
-    {
-        lines.push(format!("[{name}]"));
-    }
+    // `parse_kv_address` only sets `address.section` when a matching header
+    // already exists, so the section is never missing here — an earlier
+    // `start >= lines.len()` guard "created" it, which duplicated the header
+    // whenever the section was the file's last line (empty trailing body).
     let body = section_body(lines, address.section.as_deref());
     let found = occurrences(lines, &body, &address.key);
     match (address.index, value) {
@@ -585,9 +584,14 @@ fn unhex(text: &str) -> Option<Vec<u8>> {
     if !text.len().is_multiple_of(2) || text.is_empty() {
         return None;
     }
+    // `get` (not a raw byte slice) so a multibyte char that straddles a pair
+    // boundary yields None instead of panicking; hex is ASCII anyway.
     (0..text.len())
         .step_by(2)
-        .map(|at| u8::from_str_radix(&text[at..at + 2], 16).ok())
+        .map(|at| {
+            text.get(at..at + 2)
+                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+        })
         .collect()
 }
 
@@ -702,6 +706,28 @@ mod tests {
         assert!(
             diff_bytes(Format::Keyvalue, out.as_bytes(), edited.as_bytes()).is_empty(),
             "not logically equal after apply: {out}"
+        );
+    }
+
+    #[test]
+    fn keyvalue_set_into_trailing_empty_section_keeps_one_header() {
+        // A section header as the file's last line (empty body) must not be
+        // duplicated when a key is written into it.
+        let mut lines: Vec<String> = "[sec]".lines().map(str::to_owned).collect();
+        set_keyvalue(&mut lines, "sec.k", &json!("v")).expect("set");
+        assert_eq!(lines, vec!["[sec]".to_owned(), "k = v".to_owned()]);
+    }
+
+    #[test]
+    fn unhex_rejects_multibyte_string_without_panic() {
+        // A "hex:" string carrying a multibyte char must fall back to a plain
+        // string, not panic slicing mid-codepoint.
+        assert_eq!(unhex("€x"), None);
+        let root = json!({ "blob": "hex:€x" });
+        let back = json_to_plist(&root).expect("convert");
+        assert_eq!(
+            back.as_dictionary().and_then(|dict| dict.get("blob")),
+            Some(&plist::Value::String("hex:€x".to_owned()))
         );
     }
 

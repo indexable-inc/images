@@ -61,5 +61,5 @@ and rendered.
 
 Note: this package extracts the GUI/font art for overlays; the separate Mojang
 sound pack the overlays play through `minecraft-sound` is a different
-fixed-output derivation (`packages/minecraft/minecraft/sound/sounds.nix`, see
+fixed-output derivation (`packages/minecraft/sound/sounds.nix`, see
 [minecraft tools](../minecraft/overview.md)).

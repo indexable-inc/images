@@ -1,0 +1,52 @@
+--- a/src/tokenizer.rs
++++ b/src/tokenizer.rs
+@@ -93,6 +93,27 @@
+         SmolStr::new(&past.input[past.offset..self.state.offset])
+     }
+ 
++    /// Consume a run of digits, allowing `_` digit separators strictly
++    /// between digits (`1_000`, never leading or trailing). `digits` counts
++    /// digits the caller already consumed (the number arm matches the first
++    /// one); returns the total.
++    fn consume_digits(&mut self, mut digits: usize) -> usize {
++        loop {
++            digits += self.consume(|c| c >= '0' && c <= '9');
++            if digits == 0 {
++                break;
++            }
++            let separators = self.remaining().chars().take_while(|c| *c == '_').count();
++            let separated = self.remaining()[separators..].chars().next();
++            if separators == 0 || !separated.map_or(false, |c| c >= '0' && c <= '9') {
++                break;
++            }
++            for _ in 0..separators {
++                self.next().unwrap();
++            }
++        }
++        digits
++    }
+     fn consume<F>(&mut self, mut f: F) -> usize
+     where
+         F: FnMut(char) -> bool,
+@@ -438,10 +459,10 @@
+                 Some((TOKEN_STRING_START, self.string_since(start)))
+             }
+             '0'..='9' => {
+-                self.consume(|c| c >= '0' && c <= '9');
++                self.consume_digits(1);
+                 if self.peek() == Some('.') {
+                     self.next().unwrap();
+-                    if self.consume(|c| c >= '0' && c <= '9') == 0 {
++                    if self.consume_digits(0) == 0 {
+                         return Some((TOKEN_ERROR, self.string_since(start)));
+                     }
+                     if self.peek() == Some('e') || self.peek() == Some('E') {
+@@ -449,7 +470,7 @@
+                         if self.peek() == Some('-') {
+                             self.next().unwrap();
+                         }
+-                        if self.consume(|c| c >= '0' && c <= '9') == 0 {
++                        if self.consume_digits(0) == 0 {
+                             return Some((TOKEN_ERROR, self.string_since(start)));
+                         }
+                     }

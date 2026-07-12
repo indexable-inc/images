@@ -20,6 +20,11 @@
       inherit pkgs;
       modules = [
         (import (paths.root + "/modules/home/provenance.nix") {inherit (ix) provenance;})
+        # Second distinct instance (a bundled profile plus homeModules.provenance,
+        # say): each application of the walker is an anonymous attrset the module
+        # system cannot dedup by path, so without the module's explicit `key`
+        # this eval dies with "provenance.enable already declared".
+        (import (paths.root + "/modules/home/provenance.nix") {inherit (ix) provenance;})
         ./fixtures/provenance-home.nix
         {
           provenance = {
