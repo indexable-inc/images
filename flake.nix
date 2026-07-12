@@ -519,7 +519,15 @@
       };
   in {
     lib = ix;
-    inherit (ix) nixosModules;
+    nixosModules =
+      ix.nixosModules
+      // {
+        # Cross-platform Nix daemon defaults + flake registry pins (#2992):
+        # shared nix.settings/gc via `nix.daemonDefaults.enable`, registry
+        # aliases via `nix.registryPins` mapped to the consumer's own inputs.
+        # Same file as darwinModules.nix-defaults. See modules/nix/defaults.nix.
+        nix-defaults = ./modules/nix/defaults.nix;
+      };
     darwinModules = {
       # Personal-but-shareable nix-darwin module for github:andrewgazelka: the
       # Homebrew package set (GUI casks, the `mas` brew, Mac App Store apps).
@@ -544,6 +552,10 @@
       # direct-map line, /etc/auto_master gains the include idempotently, and
       # activation reloads automountd. See modules/darwin/nfs.nix.
       nfs = ./modules/darwin/nfs.nix;
+      # Cross-platform Nix daemon defaults + flake registry pins (#2992): the
+      # same module as nixosModules.nix-defaults; it only touches option paths
+      # both platforms declare identically. See modules/nix/defaults.nix.
+      nix-defaults = ./modules/nix/defaults.nix;
     };
     homeModules = {
       # Workstation-facing home-manager module: declare a service once, get a
