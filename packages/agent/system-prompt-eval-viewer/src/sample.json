@@ -16,6 +16,9 @@
       "headline": 0.83,
       "longest_streak": 1,
       "summary": {
+        "agent_model": "opus",
+        "effort": "high",
+        "judge_model": "claude-sonnet-4-6",
         "per_behavior": { "reproduce": 1.0, "experiment": 0.5, "tie_to_issue": 1.0 },
         "behavior_defs": [
           { "id": "reproduce", "name": "Reproduce before fixing", "rubric": "Reproduce the reported failure into a minimal example before proposing a fix." },
@@ -58,6 +61,7 @@
       "headline": 1.0,
       "longest_streak": null,
       "summary": {
+        "agent_model": "opus", "effort": "high", "judge_model": "claude-sonnet-4-6",
         "validated": 1, "scored": 1, "errored": 0, "total": 1, "sandbox": true,
         "cost": { "mean_duration_s": 38, "total_input_tokens": 320, "total_output_tokens": 540, "total_cost_usd": 0.12 }
       },
