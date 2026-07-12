@@ -1280,7 +1280,12 @@ fn push_rustc_args(script: &mut String, unit: &Unit, hash: &str, driver: Driver)
         push_arg(script, "-C");
         push_arg(script, &format!("split-debuginfo={split_debuginfo}"));
     }
-    if unit.profile.rpath {
+    // Proc-macro targets use `prefer-dynamic`, including their libtest
+    // executables. Cargo normally supplies the rustc sysroot through the
+    // runner environment, but cargo-unit installs each output across a Nix
+    // derivation boundary. Embed rustc's library path so the installed output
+    // retains the toolchain closure and remains directly runnable.
+    if unit.profile.rpath || (driver == Driver::Rustc && unit.is_proc_macro()) {
         push_arg(script, "-C");
         push_arg(script, "rpath=yes");
     }
@@ -3947,6 +3952,51 @@ mod tests {
         assert!(rendered.contains("testManifestDrv ="));
         assert!(rendered.contains("cargo-unit-test-manifest"));
         assert!(rendered.contains("failed to list tests for"));
+    }
+
+    #[test]
+    fn proc_macro_test_executable_embeds_rust_runtime_rpath() {
+        let graph: UnitGraph = serde_json::from_str(
+            r#"{
+              "version": 1,
+              "units": [
+                {
+                  "pkg_id": "path+file:///workspace#fixture-macro@0.1.0",
+                  "target": {
+                    "kind": ["proc-macro"],
+                    "crate_types": ["proc-macro"],
+                    "name": "fixture_macro",
+                    "src_path": "/workspace/src/lib.rs",
+                    "edition": "2024",
+                    "test": true
+                  },
+                  "profile": { "name": "test", "opt_level": "0", "rpath": false },
+                  "features": [],
+                  "mode": "test",
+                  "dependencies": []
+                }
+              ],
+              "roots": [0]
+            }"#,
+        )
+        .unwrap();
+
+        let rendered = render_units_nix(
+            &graph,
+            &RenderOptions {
+                workspace_root: PathBuf::from("/workspace"),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: false,
+                toolchain_id: None,
+                deny_unused_crate_dependencies: false,
+                deny_panics: false,
+            },
+        )
+        .unwrap();
+
+        assert!(rendered.contains("'prefer-dynamic'"));
+        assert!(rendered.contains("'rpath=yes'"));
     }
 
     #[test]
