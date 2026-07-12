@@ -772,6 +772,27 @@
       cp -r ${notionPythonSource}/notion/. "$site/"
     ''
   );
+  # Sourcegraph global code-search client: `import sourcegraph`, then
+  # `await sourcegraph.search("lang:rust unsafe fn")` returns a polars frame,
+  # one row per match. Pure Python over the already-bundled httpx + polars;
+  # anonymous against public sourcegraph.com by default, SRC_ACCESS_TOKEN /
+  # SRC_ENDPOINT read from the environment at call time. Cross-platform.
+  sourcegraphPythonSource = builtins.path {
+    name = "ix-mcp-sourcegraph-python-source";
+    path = ./src/sourcegraph;
+  };
+  sourcegraphModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-sourcegraph-python-module"
+    {
+      strictDeps = true;
+      meta.description = "Sourcegraph code-search client bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/sourcegraph"
+      mkdir -p "$site"
+      cp -r ${sourcegraphPythonSource}/sourcegraph/. "$site/"
+    ''
+  );
   # `nox_autotriage`: nox-aware adapter that converts a nox conformance report
   # into linear.triage Findings and files them to Linear.  Depends on
   # linearModule (for linear.triage).  Entry point: python -m nox_autotriage.
@@ -1380,6 +1401,7 @@
       beeperModule
       linearModule
       notionModule
+      sourcegraphModule
       noxAutotriageModule
       mcpClientModule
       # pymobiledevice3 9.27.0 (defined above) + the `iphone` wrapper that drives
@@ -1528,6 +1550,7 @@
     "nox_autotriage"
     "linear"
     "notion"
+    "sourcegraph"
     "google_auth"
     "slack"
     "beeper"
@@ -5401,6 +5424,35 @@
       cat stdout
       mkdir -p "$out"
     '';
+  sourcegraphBundled = importTest "sourcegraph" "import sourcegraph, asyncio; print('sourcegraph-ok', asyncio.iscoroutinefunction(sourcegraph.search), sourcegraph.__version__)";
+  sourcegraphTestPython = pkgs.python3.withPackages (ps: [
+    ps.pytest
+    ps.httpx
+    ps.polars
+    sourcegraphModule
+  ]);
+  sourcegraphTestSource = builtins.path {
+    name = "ix-mcp-sourcegraph-test";
+    path = ./tests/test_sourcegraph.py;
+  };
+  sourcegraphTests =
+    pkgs.runCommand "ix-mcp-sourcegraph-tests"
+    {
+      nativeBuildInputs = [sourcegraphTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${sourcegraphTestSource} "$TMPDIR/test_sourcegraph.py"
+      ${lib.getExe sourcegraphTestPython} -m pytest "$TMPDIR/test_sourcegraph.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp sourcegraph tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      cat stdout
+      mkdir -p "$out"
+    '';
   nuBundled = importTest "nu" "import nu; print('nu-ok', callable(nu), callable(nu.value), nu.NuError.__name__ == 'NuError', nu.__version__)";
   # Behavior tests for the embedded nushell engine: the normalization matrix,
   # persistent REPL state, native datetime/duration crossing, the NuError
@@ -5762,6 +5814,8 @@ in
               linearTriageTests
               notionBundled
               notionTests
+              sourcegraphBundled
+              sourcegraphTests
               noxAutotriageBundled
               noxAutotriageTests
               iphoneBundled

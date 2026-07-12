@@ -277,6 +277,15 @@ MODULES: tuple[Module, ...] = (
         ),
     ),
     Module(
+        "sourcegraph",
+        "global public code search (GitHub and beyond) over the Sourcegraph GraphQL API: "
+        "`await sourcegraph.search('lang:rust unsafe fn')` returns a polars frame, one row per "
+        "match (kind/repo/stars/path/line/content/commit/url), with `repo:`/`lang:`/`type:repo`/"
+        "`patterntype:regexp` filters passing straight through; anonymous against sourcegraph.com "
+        "by default, `SRC_ACCESS_TOKEN` + `SRC_ENDPOINT` opt into an authenticated or private "
+        "instance",
+    ),
+    Module(
         "notion",
         "Notion pages, databases, and blocks over the REST API using NOTION_API_KEY: "
         "`await notion.search(query)` / `page(page_id)` / `blocks(block_id)` / "
