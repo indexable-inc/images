@@ -1,26 +1,31 @@
 ---
 name: linting
-description: "Running the repo lint (nix run .#lint) and that the pre-commit hook and CI share the entry point. Use before committing or when a lint check fails."
+description: "Running each repository's authoritative lint gate. Use before committing or when a lint check fails."
 ---
 
 ## Linting
+
+In `index`, run:
 
 ```sh
 nix run .#lint
 ```
 
-The tracked pre-commit hook runs the same lint app. CI runs the same check
-through the flake. Keep one lint entry point so local and CI failures mean the
-same thing.
+Its tracked pre-commit hook and CI use the same lint app.
 
-For machine consumption (loading results as a dataframe rather than grepping
-the log), `nix run .#lint -- --json` prints one JSON array with a record per
-check — `{check, ok, output}`, where `output` carries the stage's diagnostics
-on failure — and still exits nonzero when any check fails.
+For machine consumption, `nix run .#lint -- --json` prints one JSON array with
+a `{check, ok, output}` record per check and still exits nonzero when any check
+fails. `output` carries each failed stage's diagnostics.
 
-Always lint through `nix run .#lint` (or build the package), never an ad-hoc
-`nix shell nixpkgs#ruff -c ruff check`. The flake pins ruff and passes a fixed
-`--target-version`; an ambient ruff is a different version with a different
-default target, so version-gated rules (e.g. `UP041`, `PERF203`) fire in one and
-not the other. A check that passes ad-hoc can still fail the gate, and vice
-versa.
+In `ix`, build the system-qualified Linux package that its CI lint phase uses:
+
+```sh
+nix build -L --no-link .#packages.x86_64-linux.ci-lint-checks
+```
+
+The explicit system is intentional on Darwin: the configured remote builder
+executes the Linux gate.
+
+Do not replace either gate with ambient tools such as
+`nix shell nixpkgs#ruff -c ruff check`. The flakes pin their tools and flags, so
+an ad hoc check can disagree with the repository gate.
