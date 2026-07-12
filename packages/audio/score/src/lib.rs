@@ -11,6 +11,8 @@
 //! (`export_updates` / `import_updates`) and converge to the same score, so
 //! every peer renders identical audio from it.
 
+use std::collections::BTreeMap;
+
 use anyhow::{Context as _, Result, anyhow};
 use audio_blob::BlobHash;
 use loro::{ExportMode, LoroDoc, LoroMap, LoroValue};
@@ -21,8 +23,6 @@ pub use loro::VersionVector;
 const SESSION: &str = "session";
 /// Root map holding the active instrument publication.
 const INSTRUMENT: &str = "instrument";
-/// Root map of control values keyed by decimal control index.
-const CONTROLS: &str = "controls";
 /// Root list of schedule-ahead [`Event`]s.
 const EVENTS: &str = "events";
 
@@ -77,12 +77,12 @@ impl Event {
     }
 }
 
-/// A control's current value, one element of [`Score::controls`].
+/// A control's value at a requested shared-timeline frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ControlValue {
     /// Instrument control index.
     pub control: u16,
-    /// Current value.
+    /// Value in effect at the requested frame.
     pub value: f32,
 }
 
@@ -159,38 +159,28 @@ impl Score {
         Ok(Some(InstrumentRef { hash, at_frame }))
     }
 
-    /// Set a control to a value, effective immediately. For a change at a
-    /// specific future frame, [`schedule`](Self::schedule) an [`Event`].
+    /// Set a control to a value at the current shared-timeline frame.
+    ///
+    /// Immediate and scheduled changes share one event log so renderers can
+    /// reconstruct control state for any historical range.
     ///
     /// # Errors
-    /// Fails only on a Loro document error.
-    pub fn set_control(&self, control: u16, value: f32) -> Result<()> {
-        self.doc
-            .get_map(CONTROLS)
-            .insert(control.to_string().as_str(), f64::from(value))?;
-        self.doc.commit();
-        Ok(())
+    /// Fails on a Loro document error or a frame beyond `i64::MAX`.
+    pub fn set_control(&self, control: u16, value: f32, at_frame: u64) -> Result<()> {
+        self.schedule(Event { at_frame, control, value })
     }
 
-    /// Current control values, sparse and sorted by control index.
+    /// Control values in effect at `at_frame`, sorted by control index.
     #[must_use]
-    pub fn controls(&self) -> Vec<ControlValue> {
-        let value = self.doc.get_map(CONTROLS).get_deep_value();
-        let LoroValue::Map(map) = value else {
-            return Vec::new();
-        };
-        let mut controls: Vec<ControlValue> = map
-            .iter()
-            .filter_map(|(key, value)| {
-                let control: u16 = key.parse().ok()?;
-                if key != &control.to_string() {
-                    return None;
-                }
-                Some(ControlValue { control, value: as_f32(value)? })
-            })
-            .collect();
-        controls.sort_unstable_by_key(|control| control.control);
+    pub fn controls_at(&self, at_frame: u64) -> Vec<ControlValue> {
+        let mut controls = BTreeMap::new();
+        for event in self.events().into_iter().take_while(|event| event.at_frame <= at_frame) {
+            controls.insert(event.control, event.value);
+        }
         controls
+            .into_iter()
+            .map(|(control, value)| ControlValue { control, value })
+            .collect()
     }
 
     /// Append a schedule-ahead event.
@@ -265,19 +255,6 @@ const fn as_i64(value: &LoroValue) -> Option<i64> {
     }
 }
 
-/// Controls are `f32` at the instrument ABI; `f64` is the document scalar.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "controls are f32 at the instrument ABI; narrowing is the contract"
-)]
-const fn as_f32(value: &LoroValue) -> Option<f32> {
-    if let LoroValue::Double(value) = value {
-        Some(*value as f32)
-    } else {
-        None
-    }
-}
-
 fn as_str(value: &LoroValue) -> Option<&str> {
     if let LoroValue::String(value) = value {
         Some(value)
@@ -318,8 +295,8 @@ mod tests {
         let score = Score::new();
         score.set_sample_rate(48_000)?;
         score.set_instrument(&hash(), 96_000)?;
-        score.set_control(0, 440.0)?;
-        score.set_control(1, 0.5)?;
+        score.set_control(0, 440.0, 0)?;
+        score.set_control(1, 0.5, 0)?;
         score.schedule(Event { at_frame: 48_000, control: 0, value: 660.0 })?;
 
         assert_eq!(score.sample_rate(), Some(48_000));
@@ -327,15 +304,19 @@ mod tests {
         assert_eq!(instrument.hash, hash());
         assert_eq!(instrument.at_frame, 96_000);
         assert_eq!(
-            score.controls(),
+            score.events(),
+            vec![
+                Event { at_frame: 0, control: 0, value: 440.0 },
+                Event { at_frame: 0, control: 1, value: 0.5 },
+                Event { at_frame: 48_000, control: 0, value: 660.0 }
+            ]
+        );
+        assert_eq!(
+            score.controls_at(0),
             vec![
                 ControlValue { control: 0, value: 440.0 },
                 ControlValue { control: 1, value: 0.5 }
             ]
-        );
-        assert_eq!(
-            score.events(),
-            vec![Event { at_frame: 48_000, control: 0, value: 660.0 }]
         );
         Ok(())
     }
@@ -344,19 +325,18 @@ mod tests {
     fn concurrent_edits_converge() -> Result<()> {
         let a = Score::new();
         let b = Score::new();
-        a.set_control(0, 1.0)?;
+        a.set_control(0, 1.0, 0)?;
         b.schedule(Event { at_frame: 10, control: 2, value: 0.25 })?;
         b.schedule(Event { at_frame: 5, control: 1, value: 0.75 })?;
 
         b.import(&a.export_updates(&VersionVector::new())?)?;
         a.import(&b.export_updates(&VersionVector::new())?)?;
 
-        assert_eq!(a.controls(), b.controls());
         assert_eq!(a.events(), b.events());
         // Deterministic order: sorted by frame regardless of insert order.
         assert_eq!(
             a.events().iter().map(|event| event.at_frame).collect::<Vec<_>>(),
-            vec![5, 10]
+            vec![0, 5, 10]
         );
         Ok(())
     }
@@ -399,14 +379,20 @@ mod tests {
     }
 
     #[test]
-    fn controls_ignore_noncanonical_keys() -> Result<()> {
+    fn immediate_controls_follow_older_scheduled_events() -> Result<()> {
         let score = Score::new();
-        let controls = score.doc.get_map(CONTROLS);
-        controls.insert("1", 0.75)?;
-        controls.insert("01", 0.25)?;
-        score.doc.commit();
+        score.schedule(Event { at_frame: 100, control: 1, value: 0.25 })?;
+        score.set_control(1, 0.75, 200)?;
 
-        assert_eq!(score.controls(), vec![ControlValue { control: 1, value: 0.75 }]);
+        assert_eq!(
+            score.events(),
+            vec![
+                Event { at_frame: 100, control: 1, value: 0.25 },
+                Event { at_frame: 200, control: 1, value: 0.75 }
+            ]
+        );
+        assert_eq!(score.controls_at(150), vec![ControlValue { control: 1, value: 0.25 }]);
+        assert_eq!(score.controls_at(200), vec![ControlValue { control: 1, value: 0.75 }]);
         Ok(())
     }
 
@@ -414,14 +400,14 @@ mod tests {
     fn delta_export_carries_only_new_operations() -> Result<()> {
         let a = Score::new();
         let b = Score::new();
-        a.set_control(0, 1.0)?;
+        a.set_control(0, 1.0, 0)?;
         b.import(&a.export_updates(&b.version())?)?;
         let synced = b.version();
 
-        a.set_control(1, 2.0)?;
+        a.set_control(1, 2.0, 1)?;
         let delta = a.export_updates(&synced)?;
         b.import(&delta)?;
-        assert_eq!(a.controls(), b.controls());
+        assert_eq!(a.events(), b.events());
         Ok(())
     }
 
@@ -430,7 +416,7 @@ mod tests {
         // Locality by construction: the API simply has no volume surface.
         // Guard the document keys so a future field does not sneak one in.
         let score = Score::new();
-        score.set_control(0, 1.0).expect("set control");
+        score.set_control(0, 1.0, 0).expect("set control");
         let json = format!("{:?}", score.doc.get_deep_value());
         assert!(!json.to_lowercase().contains("volume"));
     }
