@@ -1,0 +1,18 @@
+# Example Rust instrument for shared-audio: proof that anyone can author a
+# module in plain Rust. The pure render function is unit-tested on the host
+# (bit-exactness under block splits); shipping it means compiling this same
+# crate to wasm32-unknown-unknown and publishing the .wasm (see README.md).
+[package]
+name = "audio-melody"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Example shared-audio instrument in Rust: deterministic pentatonic melody"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+
+[lints]
+workspace = true
