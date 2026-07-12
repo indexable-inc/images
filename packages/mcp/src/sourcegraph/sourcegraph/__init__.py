@@ -75,6 +75,11 @@ _SEARCH_SCHEMA: dict[str, pl.DataType | type[pl.DataType]] = {
 }
 
 
+def _error_messages(errors: list[dict[str, Any]]) -> str:
+    """Flatten a GraphQL ``errors`` list into one ``;``-joined message string."""
+    return "; ".join(str(err.get("message", err)) for err in errors)
+
+
 class SourcegraphError(RuntimeError):
     """Raised when the Sourcegraph GraphQL response contains an ``errors`` field.
 
@@ -83,9 +88,8 @@ class SourcegraphError(RuntimeError):
     """
 
     def __init__(self, errors: list[dict[str, Any]]) -> None:
+        super().__init__(f"Sourcegraph API error: {_error_messages(errors)}")
         self.errors = errors
-        msgs = "; ".join(str(e.get("message", e)) for e in errors)
-        super().__init__(f"Sourcegraph API error: {msgs}")
 
 
 def _endpoint() -> str:

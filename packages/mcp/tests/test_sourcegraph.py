@@ -49,18 +49,20 @@ def test_public_funcs_are_async() -> None:
         assert asyncio.iscoroutinefunction(func), f"{func.__name__} is not async"
 
 
-def test_type_hints_explicit() -> None:
+@pytest.mark.parametrize("func", _PUBLIC_FUNCS, ids=lambda f: str(f.__name__))
+def test_type_hints_explicit(func: Callable[..., object]) -> None:
     # Mirrors the ruff ANN gate: every public function fully annotates its params
     # and return type.
-    for func in _PUBLIC_FUNCS:
-        sig = inspect.signature(func)
-        assert sig.return_annotation is not inspect.Signature.empty, (
-            f"{func.__name__} missing return annotation"
-        )
-        for pname, param in sig.parameters.items():
-            assert param.annotation is not inspect.Parameter.empty, (
-                f"{func.__name__}({pname}) missing annotation"
-            )
+    sig = inspect.signature(func)
+    unannotated = [
+        pname
+        for pname, param in sig.parameters.items()
+        if param.annotation is inspect.Parameter.empty
+    ]
+    assert not unannotated, f"{func.__name__} params missing annotations: {unannotated}"
+    assert sig.return_annotation is not inspect.Signature.empty, (
+        f"{func.__name__} missing return annotation"
+    )
 
 
 def _envelope(results: list[dict[str, Any]], *, match_count: int | None = None) -> dict[str, Any]:
