@@ -25,7 +25,7 @@ The returned frame has a fixed schema, one row per match::
     line    -- 1-based line number for content matches
     content -- the matched line / repo description / commit subject
     commit  -- commit OID the match was found at
-    url     -- Sourcegraph URL of the match
+    url     -- absolute Sourcegraph URL of the match (on the configured endpoint)
 
 ``search`` is async (kernel-loop style: no blocking network calls on the
 shared event loop) and wraps the Sourcegraph GraphQL search API
@@ -95,6 +95,19 @@ class SourcegraphError(RuntimeError):
 def _endpoint() -> str:
     """The instance base URL: ``SRC_ENDPOINT`` or public sourcegraph.com."""
     return os.environ.get("SRC_ENDPOINT", "").rstrip("/") or _DEFAULT_ENDPOINT
+
+
+def _absolute_url(url: str | None) -> str | None:
+    """Absolutize an instance-relative match URL against :func:`_endpoint`.
+
+    The GraphQL API returns ``url`` values relative to the instance (e.g.
+    ``/github.com/owner/repo/-/blob/...``); prefixing the configured endpoint
+    keeps them clickable outside that instance.  Already-absolute URLs (and
+    ``None``) pass through untouched.
+    """
+    if url and url.startswith("/"):
+        return _endpoint() + url
+    return url
 
 
 # _client is module-level so tests can replace it with a factory that injects
@@ -210,7 +223,7 @@ def _rows_from_file_match(result: dict[str, Any]) -> list[dict[str, Any]]:
         "stars": repository.get("stars"),
         "path": file.get("path"),
         "commit": commit,
-        "url": file.get("url"),
+        "url": _absolute_url(file.get("url")),
     }
     line_matches: list[dict[str, Any]] = result.get("lineMatches") or []
     if not line_matches:
@@ -237,7 +250,7 @@ def _row_from_repository(result: dict[str, Any]) -> dict[str, Any]:
         "line": None,
         "content": result.get("description"),
         "commit": None,
-        "url": result.get("url"),
+        "url": _absolute_url(result.get("url")),
     }
 
 
@@ -252,7 +265,7 @@ def _row_from_commit(result: dict[str, Any]) -> dict[str, Any]:
         "line": None,
         "content": commit.get("subject"),
         "commit": commit.get("oid"),
-        "url": result.get("url"),
+        "url": _absolute_url(result.get("url")),
     }
 
 

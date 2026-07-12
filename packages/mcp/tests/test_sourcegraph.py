@@ -4,8 +4,9 @@ These never reach sourcegraph.com: every code path is exercised with an
 ``httpx.MockTransport`` injected via the module's ``_client`` hook, so there is
 no network and no token. They cover: anonymous-by-default auth (and the
 ``SRC_ACCESS_TOKEN`` header when set), the ``count:`` append/preserve rule, the
-FileMatch/Repository/CommitSearchResult row shapes, the fixed empty-frame
-schema, the error-envelope to SourcegraphError mapping, and the 5xx retry.
+FileMatch/Repository/CommitSearchResult row shapes, the relative-to-absolute
+``url`` normalization, the fixed empty-frame schema, the error-envelope to
+SourcegraphError mapping, and the 5xx retry.
 """
 
 from __future__ import annotations
@@ -151,6 +152,7 @@ def _install_handler(
 
 def test_search_rows_and_schema(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SRC_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("SRC_ENDPOINT", raising=False)
     seen = _install_handler(
         monkeypatch,
         lambda _req: httpx.Response(
@@ -172,13 +174,19 @@ def test_search_rows_and_schema(monkeypatch: pytest.MonkeyPatch) -> None:
     assert row["line"] == 42  # 0-based lineNumber 41 -> 1-based
     assert "transmute" in row["content"]
     assert row["commit"].startswith("abc123")
+    # The API's instance-relative url is absolutized against the endpoint.
+    assert row["url"] == (
+        "https://sourcegraph.com/github.com/rust-lang/rust/-/blob/library/core/src/mem/mod.rs"
+    )
     repo_row = df.filter(pl.col("kind") == "repo").row(0, named=True)
     assert repo_row["repo"] == "github.com/pola-rs/polars"
     assert repo_row["path"] is None
     assert "Dataframes" in repo_row["content"]
+    assert repo_row["url"] == "https://sourcegraph.com/github.com/pola-rs/polars"
     commit_row = df.filter(pl.col("kind") == "commit").row(0, named=True)
     assert commit_row["commit"].startswith("feedface")
     assert commit_row["content"] == "Stabilize transmute in const fn"
+    assert commit_row["url"] == "https://sourcegraph.com/github.com/rust-lang/rust/-/commit/feedface"
 
     # The request went to the GraphQL endpoint, anonymously.
     (request,) = seen
@@ -219,6 +227,26 @@ def test_endpoint_override(monkeypatch: pytest.MonkeyPatch) -> None:
     (request,) = seen
     assert request.url.host == "sourcegraph.example.com"
     assert request.url.path == "/.api/graphql"  # trailing slash stripped, no `//`
+
+
+def test_urls_absolutized_against_custom_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Relative API urls resolve against the configured instance, not the
+    # sourcegraph.com default; already-absolute urls pass through untouched.
+    monkeypatch.delenv("SRC_ACCESS_TOKEN", raising=False)
+    monkeypatch.setenv("SRC_ENDPOINT", "https://sourcegraph.example.com/")
+    absolute_repo = {**_REPO_MATCH, "url": "https://mirror.example.net/github.com/pola-rs/polars"}
+    _install_handler(
+        monkeypatch,
+        lambda _req: httpx.Response(200, json=_envelope([_COMMIT_MATCH, absolute_repo])),
+    )
+
+    df = asyncio.run(sourcegraph.search("foo"))
+
+    urls = dict(zip(df["kind"], df["url"], strict=True))
+    assert urls["commit"] == (
+        "https://sourcegraph.example.com/github.com/rust-lang/rust/-/commit/feedface"
+    )
+    assert urls["repo"] == "https://mirror.example.net/github.com/pola-rs/polars"
 
 
 def test_empty_results_keep_schema(monkeypatch: pytest.MonkeyPatch) -> None:
