@@ -5,7 +5,7 @@
   import VerdictTable from './VerdictTable.svelte';
   import Timeline from './Timeline.svelte';
 
-  let { c, anchor }: { c: Case; anchor: string } = $props();
+  let { c, anchor, model, effort }: { c: Case; anchor: string; model?: string; effort?: string } = $props();
   let open = $state(false);
   const st = $derived(statusOf(c));
   const dur = $derived(c.duration_ms ? `${Math.round(c.duration_ms / 1000)}s` : '-');
@@ -19,6 +19,7 @@
     <Badge kind={st.kind} text={st.label} />
     <span class="title">{c.case_id}</span>
     <span class="roll">#{c.rollout}</span>
+    {#if model}<span class="model">{model}{#if effort} · {effort}{/if}</span>{/if}
     <span class="meta">{dur} · {(c.output_tokens ?? 0).toLocaleString()} tok · ${(c.cost_usd ?? 0).toFixed(2)}</span>
   </summary>
   {#if open}
@@ -39,6 +40,7 @@
   summary::-webkit-details-marker { display: none; }
   .title { font-weight: 600; }
   .roll { color: var(--dim); }
+  .model { font-size: 11px; color: var(--accent); background: var(--chip); border-radius: 4px; padding: 1px 7px; }
   .meta { margin-left: auto; color: var(--dim); font: 12px var(--mono); }
   .inner { padding: 4px 14px 16px; }
   .errline { color: var(--bad); font: 12px/1.5 var(--mono); }
