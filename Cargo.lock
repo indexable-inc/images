@@ -1048,6 +1048,8 @@ dependencies = [
  "anyhow",
  "audio-blob",
  "loro",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

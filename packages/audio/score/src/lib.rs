@@ -14,11 +14,12 @@
 use anyhow::{Context as _, Result, anyhow};
 use audio_blob::BlobHash;
 use loro::{ExportMode, LoroDoc, LoroMap, LoroValue};
+use serde::{Deserialize, Serialize};
 pub use loro::VersionVector;
 
 /// Root map holding session-wide settings (currently the sample rate).
 const SESSION: &str = "session";
-/// Root map naming the active instrument module and its switch frame.
+/// Root map holding the active instrument publication.
 const INSTRUMENT: &str = "instrument";
 /// Root map of control values keyed by decimal control index.
 const CONTROLS: &str = "controls";
@@ -33,6 +34,12 @@ pub struct InstrumentRef {
     pub hash: BlobHash,
     /// Shared-timeline frame at which peers switch to this module.
     pub at_frame: u64,
+}
+
+#[derive(Deserialize, Serialize)]
+struct StoredInstrument {
+    hash: String,
+    at_frame: i64,
 }
 
 /// A scheduled control change.
@@ -123,9 +130,13 @@ impl Score {
     /// # Errors
     /// Fails on a Loro document error or a frame beyond `i64::MAX`.
     pub fn set_instrument(&self, hash: &BlobHash, at_frame: u64) -> Result<()> {
+        let instrument = StoredInstrument {
+            hash: hash.to_string(),
+            at_frame: frame_to_i64(at_frame)?,
+        };
+        let instrument = serde_json::to_string(&instrument)?;
         let map = self.doc.get_map(INSTRUMENT);
-        map.insert("hash", hash.to_string().as_str())?;
-        map.insert("at_frame", frame_to_i64(at_frame)?)?;
+        map.insert("publication", instrument.as_str())?;
         self.doc.commit();
         Ok(())
     }
@@ -133,20 +144,18 @@ impl Score {
     /// The active instrument reference, if one has been published.
     ///
     /// # Errors
-    /// Fails when the stored hash is not valid hex (a malformed document).
+    /// Fails when the stored publication is malformed.
     pub fn instrument(&self) -> Result<Option<InstrumentRef>> {
         let map = self.doc.get_map(INSTRUMENT);
-        let Some(hash) = map.get("hash") else {
+        let Some(instrument) = map.get("publication") else {
             return Ok(None);
         };
-        let hash = hash.get_deep_value();
-        let hash = as_str(&hash).context("instrument hash is not a string")?;
-        let hash = BlobHash::parse_hex(hash)?;
-        let at_frame = map
-            .get("at_frame")
-            .and_then(|value| as_i64(&value.get_deep_value()))
-            .and_then(|frame| u64::try_from(frame).ok())
-            .unwrap_or(0);
+        let instrument = instrument.get_deep_value();
+        let instrument = as_str(&instrument).context("instrument publication is not a string")?;
+        let instrument: StoredInstrument = serde_json::from_str(instrument)?;
+        let hash = BlobHash::parse_hex(&instrument.hash)?;
+        let at_frame = u64::try_from(instrument.at_frame)
+            .context("instrument frame must be nonnegative")?;
         Ok(Some(InstrumentRef { hash, at_frame }))
     }
 
@@ -173,7 +182,11 @@ impl Score {
         let mut controls: Vec<ControlValue> = map
             .iter()
             .filter_map(|(key, value)| {
-                Some(ControlValue { control: key.parse().ok()?, value: as_f32(value)? })
+                let control: u16 = key.parse().ok()?;
+                if key != &control.to_string() {
+                    return None;
+                }
+                Some(ControlValue { control, value: as_f32(value)? })
             })
             .collect();
         controls.sort_unstable_by_key(|control| control.control);
@@ -345,6 +358,55 @@ mod tests {
             a.events().iter().map(|event| event.at_frame).collect::<Vec<_>>(),
             vec![5, 10]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_instrument_publications_remain_atomic() -> Result<()> {
+        let a = Score::new();
+        let b = Score::new();
+        let a_ref = InstrumentRef { hash: BlobHash::of(b"module a"), at_frame: 1_000 };
+        let b_ref = InstrumentRef { hash: BlobHash::of(b"module b"), at_frame: 2_000 };
+        a.set_instrument(&a_ref.hash, a_ref.at_frame)?;
+        b.set_instrument(&b_ref.hash, b_ref.at_frame)?;
+        let a_update = a.export_updates(&VersionVector::new())?;
+        let b_update = b.export_updates(&VersionVector::new())?;
+
+        a.import(&b_update)?;
+        b.import(&a_update)?;
+
+        let converged = a.instrument()?.expect("instrument set");
+        assert_eq!(b.instrument()?, Some(converged));
+        assert!(converged == a_ref || converged == b_ref);
+        Ok(())
+    }
+
+    #[test]
+    fn rejected_instrument_frame_does_not_edit_the_score() -> Result<()> {
+        let score = Score::new();
+        let original = hash();
+        score.set_instrument(&original, 96_000)?;
+        let version = score.version();
+
+        let rejected = BlobHash::of(b"rejected module");
+        assert!(score.set_instrument(&rejected, i64::MAX as u64 + 1).is_err());
+        assert_eq!(score.version(), version);
+        assert_eq!(
+            score.instrument()?,
+            Some(InstrumentRef { hash: original, at_frame: 96_000 })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn controls_ignore_noncanonical_keys() -> Result<()> {
+        let score = Score::new();
+        let controls = score.doc.get_map(CONTROLS);
+        controls.insert("1", 0.75)?;
+        controls.insert("01", 0.25)?;
+        score.doc.commit();
+
+        assert_eq!(score.controls(), vec![ControlValue { control: 1, value: 0.75 }]);
         Ok(())
     }
 
