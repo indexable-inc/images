@@ -312,6 +312,7 @@
     buildRustPackage
     ;
   cargoUnit = cargoUnitFor pkgs;
+  cargoUnitExternal = import ./rust/external.nix {repoRoot = paths.root;};
   # Default patched-source builder, bound to the top-level x86_64-linux pkgs for
   # image/module eval; `ixForPackages` / the overlay context rebind it to the
   # consuming pkgs so a patched source builds for its own system.
@@ -804,6 +805,7 @@
         appleSdkToolchain
         bunLockFor
         cargoUnitFor
+        cargoUnitExternal
         discoverModules
         discoverTree
         errors
