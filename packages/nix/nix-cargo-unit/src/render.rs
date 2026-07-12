@@ -1280,12 +1280,12 @@ fn push_rustc_args(script: &mut String, unit: &Unit, hash: &str, driver: Driver)
         push_arg(script, "-C");
         push_arg(script, &format!("split-debuginfo={split_debuginfo}"));
     }
-    // Proc-macro targets use `prefer-dynamic`, including their libtest
-    // executables. Cargo normally supplies the rustc sysroot through the
-    // runner environment, but cargo-unit installs each output across a Nix
-    // derivation boundary. Embed rustc's library path so the installed output
-    // retains the toolchain closure and remains directly runnable.
-    if unit.profile.rpath || (driver == Driver::Rustc && unit.is_proc_macro()) {
+    // Proc-macro libtest executables inherit `prefer-dynamic`. Cargo normally
+    // supplies the rustc sysroot through the runner environment, but
+    // cargo-unit installs tests across a Nix derivation boundary. Embed rustc's
+    // library path so the installed test retains the toolchain closure and
+    // remains directly runnable.
+    if unit.profile.rpath || (driver == Driver::Rustc && unit.is_proc_macro() && unit.is_test()) {
         push_arg(script, "-C");
         push_arg(script, "rpath=yes");
     }
