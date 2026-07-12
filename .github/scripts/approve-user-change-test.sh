@@ -25,8 +25,22 @@ expect_owned() {
 }
 
 expect_invalid_login() {
-  if valid_login "$1"; then
-    echo "expected invalid login: $1" >&2
+  local github_type="$1"
+  local login="$2"
+  if principal_kind "$login" "$github_type" >/dev/null; then
+    echo "expected invalid principal: $github_type $login" >&2
+    exit 1
+  fi
+}
+
+expect_principal() {
+  local expected_kind="$1"
+  local github_type="$2"
+  local login="$3"
+  local actual_kind
+  actual_kind="$(principal_kind "$login" "$github_type")"
+  if [ "$actual_kind" != "$expected_kind" ]; then
+    echo "expected $login to be a $expected_kind principal, got $actual_kind" >&2
     exit 1
   fi
 }
@@ -51,10 +65,16 @@ expect_rejected alice '[[{"filename":"users/alice-evil/home.nix"}]]'
 expect_rejected alice '[[{"filename":"users/alice/new.nix","previous_filename":"flake.nix"}]]'
 expect_rejected alice '[[{"filename":"users/alice/home.nix"},{"filename":"README.md"}]]'
 
-valid_login alice
-valid_login Alice-7
-expect_invalid_login --alice
-expect_invalid_login 'alice/bob'
-expect_invalid_login 'alice_'
+expect_principal user User alice
+expect_principal user User Alice-7
+expect_principal app Bot 'dependabot[bot]'
+expect_principal app Bot 'claude[bot]'
+expect_invalid_login User --alice
+expect_invalid_login User 'alice/bob'
+expect_invalid_login User 'alice_'
+expect_invalid_login Bot '[bot]'
+expect_invalid_login Bot 'alice_[bot]'
+expect_invalid_login User 'dependabot[bot]'
+expect_invalid_login Bot alice
 
 echo "approve-user-change tests passed"

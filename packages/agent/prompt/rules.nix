@@ -402,7 +402,8 @@
         in one batch at the user's prompt, by which point the concrete
         evidence had to be reconstructed from memory. Filing at the moment of
         discovery, while the command, error, and context are live, is the
-        fix; the session-retro skill and its Stop gate then sweep for
+        fix; the session-retro skill and its Stop gate (which dispatches an
+        out-of-band fleet retro over the finished transcript) then sweep for
         anything missed.
       '';
     };
