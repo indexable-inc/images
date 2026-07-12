@@ -40,6 +40,19 @@ tool.overrideAttrs (old: {
       # only when a generation still exports it.
       rnixVendor="''${cargoDepsCopy:-}"
       rnixConfig=""
+      if [ -z "$rnixVendor" ] && [ -n "''${cargoDeps:-}" ]; then
+        # The current generation still copies the vendor tree to
+        # $NIX_BUILD_TOP/<stripped-cargoDeps-name> (the alejandra build log
+        # shows /build/alejandra-4.0.0-vendor: cargoSetupPostUnpackHook ran,
+        # and cargoSetupPostPatchHook validates that copy's Cargo.lock) but
+        # keeps the variable local to the hook. Reconstruct the copy's path
+        # the way the hook names it; cargo is already pointed at it, so
+        # patching in place needs no config rewrite.
+        rnixHookCopy="$NIX_BUILD_TOP/$(stripHash "$cargoDeps")"
+        if [ -d "$rnixHookCopy" ]; then
+          rnixVendor="$rnixHookCopy"
+        fi
+      fi
       if [ -z "$rnixVendor" ]; then
         # Generations differ on where the vendored-sources config lands:
         # $CARGO_HOME, the source root's .cargo, or the build top's .cargo
