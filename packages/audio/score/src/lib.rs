@@ -23,6 +23,8 @@ pub use loro::VersionVector;
 const SESSION: &str = "session";
 /// Root map holding the active instrument publication.
 const INSTRUMENT: &str = "instrument";
+/// Root map used by scores written before controls moved into the event log.
+const LEGACY_CONTROLS: &str = "controls";
 /// Root list of schedule-ahead [`Event`]s.
 const EVENTS: &str = "events";
 
@@ -59,21 +61,20 @@ pub struct Event {
 
 /// [`Event::sort_key`] result.
 ///
-/// Field order is the derived comparison order: frame, then control, then
-/// value bits.
+/// Field order is the derived comparison order: frame, then control. Equal
+/// keys retain the converged Loro list order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EventKey {
     frame: u64,
     control: u16,
-    value_bits: u32,
 }
 
 impl Event {
-    /// Total order used everywhere so concurrent schedules resolve
-    /// identically on every peer.
+    /// Ordering key used everywhere. Equal keys retain Loro's converged list
+    /// order so later same-frame writes remain later.
     #[must_use]
     pub const fn sort_key(&self) -> EventKey {
-        EventKey { frame: self.at_frame, control: self.control, value_bits: self.value.to_bits() }
+        EventKey { frame: self.at_frame, control: self.control }
     }
 }
 
@@ -188,9 +189,10 @@ impl Score {
     /// # Errors
     /// Fails on a Loro document error or a frame beyond `i64::MAX`.
     pub fn schedule(&self, event: Event) -> Result<()> {
+        let at_frame = frame_to_i64(event.at_frame)?;
         let list = self.doc.get_list(EVENTS);
         let map = list.insert_container(list.len(), LoroMap::new())?;
-        map.insert("at", frame_to_i64(event.at_frame)?)?;
+        map.insert("at", at_frame)?;
         map.insert("control", i64::from(event.control))?;
         map.insert("value", f64::from(event.value))?;
         self.doc.commit();
@@ -206,7 +208,7 @@ impl Score {
             return Vec::new();
         };
         let mut events: Vec<Event> = items.iter().filter_map(event_of).collect();
-        events.sort_unstable_by_key(Event::sort_key);
+        events.sort_by_key(Event::sort_key);
         events
     }
 
@@ -238,6 +240,60 @@ impl Score {
     /// Fails when the bytes are not a valid Loro export.
     pub fn import(&self, bytes: &[u8]) -> Result<()> {
         self.doc.import(bytes)?;
+        self.migrate_legacy()?;
+        Ok(())
+    }
+
+    fn migrate_legacy(&self) -> Result<()> {
+        let instrument = self.doc.get_map(INSTRUMENT);
+        let legacy_hash = instrument.get("hash");
+        if instrument.get("publication").is_none()
+            && let Some(hash) = &legacy_hash
+        {
+            let hash = hash.get_deep_value();
+            let hash = as_str(&hash).context("legacy instrument hash is not a string")?;
+            let at_frame = instrument
+                .get("at_frame")
+                .and_then(|value| as_i64(&value.get_deep_value()))
+                .filter(|frame| *frame >= 0)
+                .unwrap_or(0);
+            let publication = serde_json::to_string(&StoredInstrument {
+                hash: hash.to_owned(),
+                at_frame,
+            })?;
+            instrument.insert("publication", publication.as_str())?;
+        }
+        if legacy_hash.is_some() {
+            instrument.delete("hash")?;
+        }
+        if instrument.get("at_frame").is_some() {
+            instrument.delete("at_frame")?;
+        }
+
+        let controls = self.doc.get_map(LEGACY_CONTROLS);
+        let legacy = controls.get_deep_value();
+        if let LoroValue::Map(legacy) = legacy {
+            for (key, value) in legacy.iter() {
+                let Some(control) = key.parse::<u16>().ok() else {
+                    continue;
+                };
+                if key != &control.to_string() {
+                    continue;
+                }
+                let Some(value) = as_f32(value) else {
+                    continue;
+                };
+                let list = self.doc.get_list(EVENTS);
+                let event = list.insert_container(0, LoroMap::new())?;
+                event.insert("at", 0_i64)?;
+                event.insert("control", i64::from(control))?;
+                event.insert("value", f64::from(value))?;
+            }
+            for key in legacy.keys() {
+                controls.delete(key)?;
+            }
+        }
+        self.doc.commit();
         Ok(())
     }
 }
@@ -250,6 +306,18 @@ fn frame_to_i64(frame: u64) -> Result<i64> {
 const fn as_i64(value: &LoroValue) -> Option<i64> {
     if let LoroValue::I64(value) = value {
         Some(*value)
+    } else {
+        None
+    }
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "controls are f32 at the instrument ABI; narrowing is the contract"
+)]
+const fn as_f32(value: &LoroValue) -> Option<f32> {
+    if let LoroValue::Double(value) = value {
+        Some(*value as f32)
     } else {
         None
     }
@@ -393,6 +461,81 @@ mod tests {
         );
         assert_eq!(score.controls_at(150), vec![ControlValue { control: 1, value: 0.25 }]);
         assert_eq!(score.controls_at(200), vec![ControlValue { control: 1, value: 0.75 }]);
+        Ok(())
+    }
+
+    #[test]
+    fn same_frame_control_updates_follow_write_order() -> Result<()> {
+        let source = Score::new();
+        source.set_control(1, 1.0, 200)?;
+        source.set_control(1, 0.5, 200)?;
+        let restored = Score::new();
+        restored.import(&source.export_snapshot()?)?;
+
+        assert_eq!(
+            restored.events(),
+            vec![
+                Event { at_frame: 200, control: 1, value: 1.0 },
+                Event { at_frame: 200, control: 1, value: 0.5 }
+            ]
+        );
+        assert_eq!(
+            restored.controls_at(200),
+            vec![ControlValue { control: 1, value: 0.5 }]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn import_migrates_legacy_instrument_publication() -> Result<()> {
+        let legacy = Score::new();
+        let instrument = legacy.doc.get_map(INSTRUMENT);
+        instrument.insert("hash", hash().to_string().as_str())?;
+        instrument.insert("at_frame", 96_000_i64)?;
+        legacy.doc.commit();
+
+        let restored = Score::new();
+        restored.import(&legacy.export_snapshot()?)?;
+
+        assert_eq!(
+            restored.instrument()?,
+            Some(InstrumentRef { hash: hash(), at_frame: 96_000 })
+        );
+        let instrument = restored.doc.get_map(INSTRUMENT);
+        assert!(instrument.get("publication").is_some());
+        assert!(instrument.get("hash").is_none());
+        assert!(instrument.get("at_frame").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn import_migrates_legacy_controls_before_new_events() -> Result<()> {
+        let legacy = Score::new();
+        legacy.doc.get_map(LEGACY_CONTROLS).insert("1", 0.25_f64)?;
+        legacy.doc.commit();
+        legacy.schedule(Event { at_frame: 100, control: 1, value: 0.5 })?;
+
+        let restored = Score::new();
+        restored.import(&legacy.export_snapshot()?)?;
+        restored.set_control(1, 0.75, 200)?;
+
+        assert_eq!(
+            restored.controls_at(50),
+            vec![ControlValue { control: 1, value: 0.25 }]
+        );
+        assert_eq!(
+            restored.controls_at(100),
+            vec![ControlValue { control: 1, value: 0.5 }]
+        );
+        assert_eq!(
+            restored.controls_at(200),
+            vec![ControlValue { control: 1, value: 0.75 }]
+        );
+        assert!(restored.doc.get_map(LEGACY_CONTROLS).get("1").is_none());
+
+        let reimported = Score::new();
+        reimported.import(&restored.export_snapshot()?)?;
+        assert_eq!(reimported.events(), restored.events());
         Ok(())
     }
 
