@@ -2,6 +2,11 @@
 {lib, ...}: {
   # Shared modern-CLI tool set (bat, delta, eza, fd, ripgrep, ...); the list
   # itself is general and lives in modules/home/cli-baseline.nix.
+  # This profile is deliberately light: it is imported as a bare path (flake
+  # `darwinModules.andrewgazelka-portable` and the light personal profiles,
+  # whose specialArgs throw) with no `ix` in scope, so the shared module can
+  # only be reached relatively.
+  # astlog-ignore: no-parent-path
   imports = [../../../modules/home/cli-baseline.nix];
   cliBaseline.enable = true;
 

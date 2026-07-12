@@ -1,4 +1,4 @@
-{...}: let
+_: let
   httpPort = 8080;
 in {
   services.nginx = {
