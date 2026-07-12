@@ -75,7 +75,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # The clone diff gate compares against the event's base commit.
+          # The clone diff gate reads both parents of the checked-out merge.
           fetch-depth: 0
 
       # Underscore digit separators: every nix invocation that evaluates this
@@ -93,10 +93,18 @@ jobs:
         # limit across every PR). Fail fast and loudly instead.
         timeout-minutes: 15
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
         run: |
           set -euo pipefail
-          nix run .#clone -- . --diff "${BASE_SHA}" > /dev/null
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            # index#3038: the event base can predate the synthetic merge that
+            # checkout regenerates after main advances. Its first parent is the
+            # base whose tree the checked-out PR contribution was merged into.
+            base_sha="$(git rev-parse --verify HEAD^1)"
+          else
+            base_sha="${EVENT_BASE_SHA}"
+          fi
+          nix run .#clone -- . --diff "${base_sha}" > /dev/null
 
       # Run the full gate through the repo-owned `check` app (lib/per-system.nix),
       # so CI and a local `nix run .#check` execute the same two commands from one
