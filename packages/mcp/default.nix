@@ -2646,6 +2646,8 @@
       cp ${./tests/test_cancel_running.py} test_cancel_running.py
       # Issue #2164: jobs.spawn registers an ad-hoc awaitable as a first-class job.
       cp ${./tests/test_jobs_spawn.py} test_jobs_spawn.py
+      # A spawned job starts and finishes the same proc entity; no detached run phantom.
+      cp ${./tests/test_spawn_store_lifecycle.py} test_spawn_store_lifecycle.py
       cp ${./tests/test_fsearch_partial.py} test_fsearch_partial.py
       cp ${./tests/test_fsearch_glob.py} test_fsearch_glob.py
       # Issue #2542: find('*.py') auto-detects a glob-shaped non-regex pattern.
@@ -2680,6 +2682,7 @@
         test_typecheck.py test_job_await_errors.py test_job_cancel_scope.py \
         test_cancel_running.py \
         test_jobs_spawn.py \
+        test_spawn_store_lifecycle.py \
         test_fsearch_partial.py \
         test_fsearch_glob.py \
         test_fsearch_glob_pattern.py \
