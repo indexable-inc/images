@@ -31,6 +31,9 @@ export interface BehaviorDef {
 }
 
 export interface Summary {
+  agent_model?: string;
+  effort?: string;
+  judge_model?: string;
   per_behavior?: Record<string, number>;
   behavior_defs?: BehaviorDef[];
   longest_streak?: number;
