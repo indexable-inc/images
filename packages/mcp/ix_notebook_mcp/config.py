@@ -218,6 +218,18 @@ class Config:
     # every event is then a broadcast, the pre-#2165 behavior.
     server_session_id: str = ""
 
+    # Where the transport pump delivers channel outbox events. "client" (the
+    # default) emits notifications/claude/channel on the MCP transport, waking
+    # the connected client session. "weave-chat" instead posts each event as a
+    # chat message to the Weave agent (POST {WEAVE_URL}/api/chat, addressed to
+    # IX_WEAVE_AGENT): a Weave-driven Claude session must never be woken
+    # out-of-band (its turns are Weave-initiated; a self-woken turn's hook
+    # callbacks are rejected 401 and its work never reaches the journal), so
+    # Weave opens a normal run for the message and prompts the session itself.
+    # Sourced from IX_MCP_CHANNEL_DELIVERY by the CLI; Weave sets it in the
+    # env of every session it spawns (weave session_env).
+    channel_delivery: str = "client"
+
     # "stdio" (the default; what an MCP client launches), "http", or "none"
     # (the standalone notebook engine: kernel + dashboard, no MCP transport).
     transport: str = "stdio"
