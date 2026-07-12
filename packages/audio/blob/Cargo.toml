@@ -12,8 +12,6 @@ description = "Content-addressed blob naming and on-disk store for shared-audio 
 [dependencies]
 hex.workspace = true
 sha2.workspace = true
-
-[dev-dependencies]
 tempfile.workspace = true
 
 [lints]
