@@ -12,8 +12,8 @@
     collapsed: SvelteSet<string>;
     ontoggle: (path: string) => void;
     now: number;
-    /// Which goal's log drawer is open, keyed `<path>:<pid>`. One at a time
-    /// across the whole panel keeps it compact.
+    /// Which goal's log drawer is open, keyed `<path>:<pid>:<startTime>`. One
+    /// at a time across the whole panel keeps it compact.
     openLog: string | null;
     ontogglelog: (key: string) => void;
     /// Vertical-line flags for each ancestor column (true = ancestor has a
@@ -128,7 +128,7 @@
       >{formatBytes(primary.rssBytes)}</span
     >
   {/if}
-  {#if primary !== undefined && primary.drvPath !== null && primary.pid !== null && primary.logFile !== null}
+  {#if primary !== undefined && primary.drvPath !== null && primary.pid !== null && primary.startTime !== null && primary.logFile !== null}
     <button
       type="button"
       class="global-log-toggle"
@@ -147,8 +147,8 @@
   <span class="activity-dur">{primary === undefined ? '' : elapsed(primary)}</span>
 </div>
 
-{#if primary !== undefined && primary.drvPath !== null && primary.pid !== null && openLog === goalKey(primary)}
-  <GlobalLogView drvPath={primary.drvPath} pid={primary.pid} />
+{#if primary !== undefined && primary.drvPath !== null && primary.pid !== null && primary.startTime !== null && openLog === goalKey(primary)}
+  <GlobalLogView drvPath={primary.drvPath} pid={primary.pid} startTime={primary.startTime} />
 {/if}
 
 {#if !isCollapsed}

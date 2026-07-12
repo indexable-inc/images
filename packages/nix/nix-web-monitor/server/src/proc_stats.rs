@@ -64,6 +64,11 @@ impl BuildStatSampler {
     /// First sight of a pid records a baseline and reports rss only; the next
     /// poll (two seconds later) starts reporting cpu.
     pub fn annotate(&mut self, builds: &mut [GlobalBuild]) {
+        if !builds.iter().any(|build| build.pid.is_some()) {
+            self.previous.clear();
+            return;
+        }
+
         let now = Instant::now();
         let table = read_proc_table();
         let children = children_by_parent(&table);
@@ -83,9 +88,9 @@ impl BuildStatSampler {
                 .filter_map(|p| table.get(p))
                 .map(|stat| stat.cpu_ticks)
                 .sum();
-            let rss: u64 = subtree.iter().filter_map(|p| read_rss_bytes(*p)).sum();
+            let rss = aggregate_rss(&subtree, read_rss_bytes);
 
-            build.rss_bytes = Some(rss);
+            build.rss_bytes = rss;
             build.cpu_percent = self.cpu_percent_for(identity, ticks, now);
             next.insert(
                 identity,
@@ -116,6 +121,18 @@ impl BuildStatSampler {
             elapsed,
         ))
     }
+}
+
+/// Sum the readable resident sizes in a process subtree. `None` distinguishes
+/// an unreadable/restricted procfs snapshot from a measured zero-byte total.
+fn aggregate_rss(
+    subtree: &[i64],
+    mut read_rss: impl FnMut(i64) -> Option<u64>,
+) -> Option<u64> {
+    subtree
+        .iter()
+        .filter_map(|pid| read_rss(*pid))
+        .reduce(|total, rss| total + rss)
 }
 
 /// Ticks spent over wall seconds, as whole percent of one core.
@@ -324,6 +341,38 @@ mod tests {
         assert_eq!(
             sampler.cpu_percent_for(recycled, 1050, one_second_later),
             None
+        );
+    }
+
+    #[test]
+    fn idle_sample_clears_baselines_without_procfs_work() {
+        let identity = ProcessIdentity {
+            pid: 42,
+            start_ticks: 100,
+        };
+        let mut sampler = BuildStatSampler {
+            previous: HashMap::from([(
+                identity,
+                CpuBaseline {
+                    cpu_ticks: 1000,
+                    sampled_at: Instant::now(),
+                },
+            )]),
+        };
+        let mut pidless = vec![GlobalBuild::default()];
+
+        sampler.annotate(&mut pidless);
+
+        assert!(sampler.previous.is_empty());
+    }
+
+    #[test]
+    fn rss_is_absent_when_every_status_read_fails() {
+        let subtree = [10, 11, 12];
+        assert_eq!(aggregate_rss(&subtree, |_| None), None);
+        assert_eq!(
+            aggregate_rss(&subtree, |pid| (pid != 11).then_some(pid.unsigned_abs())),
+            Some(22)
         );
     }
 

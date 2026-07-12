@@ -19,10 +19,10 @@ export function goalPath(build: GlobalBuild): string {
 }
 
 /// Stable per-goal identity for UI state (open log drawers): the status dir
-/// keys entries by `<path>-<pid>`, so the path alone would collide across
-/// daemon workers building the same derivation.
+/// keys entries by `<path>-<pid>`, and start time distinguishes a later worker
+/// after Linux recycles the same pid.
 export function goalKey(build: GlobalBuild): string {
-  return `${goalPath(build)}:${String(build.pid ?? 0)}`;
+  return `${goalPath(build)}:${String(build.pid ?? 0)}:${String(build.startTime ?? 0)}`;
 }
 
 /// Tooltip for one goal row: the full store path plus the identity details

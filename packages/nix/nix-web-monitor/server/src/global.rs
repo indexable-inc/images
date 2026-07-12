@@ -20,7 +20,8 @@
 //! `/nix/var/log/nix/drvs/…` path each build is writing, and the UI fetches a
 //! tail of it through `/api/global-log`.
 
-use std::io::Read;
+use std::fs::File;
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -146,6 +147,7 @@ pub async fn log_file_for(
     monitor: &Arc<RwLock<MonitorState>>,
     drv_path: &str,
     pid: i64,
+    start_time: i64,
 ) -> Option<PathBuf> {
     monitor
         .read()
@@ -153,7 +155,11 @@ pub async fn log_file_for(
         .global
         .builds
         .iter()
-        .find(|build| build.drv_path.as_deref() == Some(drv_path) && build.pid == Some(pid))
+        .find(|build| {
+            build.drv_path.as_deref() == Some(drv_path)
+                && build.pid == Some(pid)
+                && build.start_time == Some(start_time)
+        })
         .and_then(|build| build.log_file.as_deref().map(PathBuf::from))
 }
 
@@ -172,14 +178,11 @@ pub async fn log_file_for(
 /// flush creates it).
 pub async fn read_log_tail(path: PathBuf) -> std::io::Result<String> {
     tokio::task::spawn_blocking(move || {
-        let bytes = std::fs::read(&path)?;
+        let file = File::open(&path)?;
         let decoded = if path.extension().is_some_and(|extension| extension == "bz2") {
-            decompress_prefix(&bytes)
+            decompress_prefix(BufReader::new(file))
         } else {
-            DecodedTail {
-                bytes,
-                prefix_dropped: false,
-            }
+            read_plain_tail(file)?
         };
         Ok(tail_lines(
             &decoded.bytes,
@@ -215,8 +218,26 @@ struct DecodedTail {
     prefix_dropped: bool,
 }
 
-fn decompress_prefix(bytes: &[u8]) -> DecodedTail {
-    let mut decoder = bzip2::read::BzDecoder::new(bytes);
+/// Read at most the final [`LOG_TAIL_BYTES`] from an uncompressed log. Seeking
+/// first keeps both I/O and memory bounded even when a build has emitted
+/// hundreds of megabytes.
+fn read_plain_tail(mut file: File) -> std::io::Result<DecodedTail> {
+    let length = file.metadata()?.len();
+    let keep = u64::try_from(LOG_TAIL_BYTES).expect("log tail cap fits u64");
+    let start = length.saturating_sub(keep);
+    file.seek(SeekFrom::Start(start))?;
+
+    let capacity = usize::try_from(length - start).expect("bounded log tail length fits usize");
+    let mut bytes = Vec::with_capacity(capacity);
+    file.take(keep).read_to_end(&mut bytes)?;
+    Ok(DecodedTail {
+        bytes,
+        prefix_dropped: start > 0,
+    })
+}
+
+fn decompress_prefix(reader: impl Read) -> DecodedTail {
+    let mut decoder = bzip2::read::BzDecoder::new(reader);
     let mut out = Vec::new();
     let mut dropped = false;
     let mut chunk = vec![0_u8; 64 * 1024];
@@ -342,7 +363,8 @@ mod tests {
     #[test]
     fn bz2_log_round_trips_and_tails() {
         let text = "configuring\nbuilding\ninstalling\n";
-        let decoded = decompress_prefix(&compress_bzip2(text, 9));
+        let compressed = compress_bzip2(text, 9);
+        let decoded = decompress_prefix(compressed.as_slice());
         assert_eq!(decoded.bytes, text.as_bytes());
         assert!(!decoded.prefix_dropped, "a small log keeps its whole prefix");
         assert_eq!(tail_lines(text.as_bytes(), 1 << 20, false), text);
@@ -385,7 +407,7 @@ mod tests {
     /// Garbage that is not bzip2 at all decodes to nothing rather than failing.
     #[test]
     fn non_bzip2_bytes_decode_to_empty() {
-        assert!(decompress_prefix(b"error: not a log").bytes.is_empty());
+        assert!(decompress_prefix(&b"error: not a log"[..]).bytes.is_empty());
     }
 
     /// The tail is bounded and opens on a line boundary, never mid-line.
@@ -423,12 +445,14 @@ mod tests {
         let with_log = GlobalBuild {
             drv_path: Some("/nix/store/aaa-foo.drv".to_owned()),
             pid: Some(11),
+            start_time: Some(100),
             log_file: Some("/nix/var/log/nix/drvs/ab/cdfoo.drv.bz2".to_owned()),
             ..GlobalBuild::default()
         };
         let other_worker = GlobalBuild {
             drv_path: Some("/nix/store/aaa-foo.drv".to_owned()),
             pid: Some(12),
+            start_time: Some(200),
             log_file: Some("/nix/var/log/nix/drvs/ab/cdfoo.drv.2.bz2".to_owned()),
             ..GlobalBuild::default()
         };
@@ -445,16 +469,47 @@ mod tests {
         let monitor = Arc::new(RwLock::new(state));
 
         assert_eq!(
-            log_file_for(&monitor, "/nix/store/aaa-foo.drv", 11).await,
+            log_file_for(&monitor, "/nix/store/aaa-foo.drv", 11, 100).await,
             Some(PathBuf::from("/nix/var/log/nix/drvs/ab/cdfoo.drv.bz2"))
         );
         assert_eq!(
-            log_file_for(&monitor, "/nix/store/aaa-foo.drv", 12).await,
+            log_file_for(&monitor, "/nix/store/aaa-foo.drv", 12, 200).await,
             Some(PathBuf::from("/nix/var/log/nix/drvs/ab/cdfoo.drv.2.bz2"))
         );
-        assert_eq!(log_file_for(&monitor, "/nix/store/aaa-foo.drv", 13).await, None);
-        assert_eq!(log_file_for(&monitor, "/nix/store/bbb-bar.drv", 11).await, None);
-        assert_eq!(log_file_for(&monitor, "/etc/passwd", 11).await, None);
+        assert_eq!(
+            log_file_for(&monitor, "/nix/store/aaa-foo.drv", 11, 101).await,
+            None,
+            "a recycled pid must not resolve its predecessor's log"
+        );
+        assert_eq!(
+            log_file_for(&monitor, "/nix/store/aaa-foo.drv", 13, 100).await,
+            None
+        );
+        assert_eq!(
+            log_file_for(&monitor, "/nix/store/bbb-bar.drv", 11, 100).await,
+            None
+        );
+        assert_eq!(
+            log_file_for(&monitor, "/etc/passwd", 11, 100).await,
+            None
+        );
+    }
+
+    /// A large plain log is read from its end and still opens on a whole line.
+    #[tokio::test]
+    async fn read_log_tail_seeks_to_plain_file_tail() {
+        let dir = std::env::temp_dir().join(format!("nwm-global-plain-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        let path = dir.join("test.drv");
+        let prefix = "old line\n".repeat(LOG_TAIL_BYTES);
+        std::fs::write(&path, format!("{prefix}newest line\n")).expect("write fixture log");
+
+        let tail = read_log_tail(path).await.expect("fixture log reads");
+        assert!(tail.len() <= LOG_TAIL_BYTES);
+        assert!(tail.starts_with("old line\n"), "tail starts at a line boundary");
+        assert!(tail.ends_with("newest line\n"));
+
+        std::fs::remove_dir_all(&dir).expect("clean scratch dir");
     }
 
     /// Reading a real compressed file end-to-end through the async entry point.
