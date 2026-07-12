@@ -130,6 +130,7 @@ def test_store_round_trips_line_and_error_line(tmp_path: Path, fake_weave: objec
     store.finish(
         conn,
         id="j1",
+        kind="cell",
         status="error",
         ended_at=1.0,
         output="out",
