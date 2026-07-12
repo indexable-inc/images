@@ -26,9 +26,15 @@ const TICKS_PER_SECOND: f64 = 100.0;
 
 /// One process as read from `/proc/<pid>/stat`: enough to build the process
 /// tree and integrate cpu time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ProcessIdentity {
+    pid: i64,
+    start_ticks: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ProcStat {
-    pid: i64,
+    identity: ProcessIdentity,
     ppid: i64,
     /// `utime + stime + cutime + cstime` in clock ticks: the process's own
     /// cpu plus that of exited children it has already waited for, so
@@ -36,11 +42,17 @@ struct ProcStat {
     cpu_ticks: u64,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct CpuBaseline {
+    cpu_ticks: u64,
+    sampled_at: Instant,
+}
+
 /// Stateful sampler: remembers each build pid's subtree cpu ticks from the
 /// previous poll so the next poll can turn the delta into a rate.
 #[derive(Debug, Default)]
 pub struct BuildStatSampler {
-    previous: HashMap<i64, (u64, Instant)>,
+    previous: HashMap<ProcessIdentity, CpuBaseline>,
 }
 
 impl BuildStatSampler {
@@ -59,12 +71,13 @@ impl BuildStatSampler {
 
         for build in builds.iter_mut() {
             let Some(pid) = build.pid else { continue };
-            let subtree = subtree_pids(pid, &children);
-            if !table.contains_key(&pid) {
+            let Some(root) = table.get(&pid) else {
                 // Builder already gone (or no procfs): nothing to report, and
                 // drop any stale baseline.
                 continue;
-            }
+            };
+            let identity = root.identity;
+            let subtree = subtree_pids(pid, &children);
             let ticks: u64 = subtree
                 .iter()
                 .filter_map(|p| table.get(p))
@@ -73,18 +86,35 @@ impl BuildStatSampler {
             let rss: u64 = subtree.iter().filter_map(|p| read_rss_bytes(*p)).sum();
 
             build.rss_bytes = Some(rss);
-            build.cpu_percent = self.previous.get(&pid).and_then(|(then_ticks, then)| {
-                let elapsed = now.duration_since(*then).as_secs_f64();
-                if elapsed <= 0.0 {
-                    return None;
-                }
-                Some(cpu_percent(ticks.saturating_sub(*then_ticks), elapsed))
-            });
-            next.insert(pid, (ticks, now));
+            build.cpu_percent = self.cpu_percent_for(identity, ticks, now);
+            next.insert(
+                identity,
+                CpuBaseline {
+                    cpu_ticks: ticks,
+                    sampled_at: now,
+                },
+            );
         }
         // Keep baselines only for pids still active, so a recycled pid never
         // inherits a stale counter.
         self.previous = next;
+    }
+
+    fn cpu_percent_for(
+        &self,
+        identity: ProcessIdentity,
+        cpu_ticks: u64,
+        now: Instant,
+    ) -> Option<u32> {
+        let baseline = self.previous.get(&identity)?;
+        let elapsed = now.duration_since(baseline.sampled_at).as_secs_f64();
+        if elapsed <= 0.0 {
+            return None;
+        }
+        Some(cpu_percent(
+            cpu_ticks.saturating_sub(baseline.cpu_ticks),
+            elapsed,
+        ))
     }
 }
 
@@ -120,14 +150,16 @@ fn read_proc_table() -> HashMap<i64, ProcStat> {
     table
 }
 
-/// Parse one `/proc/<pid>/stat` line into pid/ppid/cpu ticks.
+/// Parse one `/proc/<pid>/stat` line into identity, parent, and cpu ticks.
 ///
 /// The second field is `(comm)` and may itself contain spaces and parentheses
 /// (`(tokio-runtime-w)`, even `(a) b)`), so split on the *last* `)` before
 /// counting fields. After the comm, 1-indexed field 3 is the state, 4 the
 /// ppid, 14/15 utime/stime, 16/17 cutime/cstime -- i.e. rest[1], rest[11],
-/// rest[12], rest[13], rest[14]. The child fields are signed in proc(5), so
-/// they parse as `i64` and clamp at zero.
+/// rest[12], rest[13], rest[14]. Field 22 is the process start time in kernel
+/// ticks, or rest[19], which distinguishes a reused pid from its predecessor.
+/// The child fields are signed in proc(5), so they parse as `i64` and clamp at
+/// zero.
 fn parse_stat_line(pid: i64, line: &str) -> Option<ProcStat> {
     let rest = line.rsplit_once(')')?.1;
     let fields: Vec<&str> = rest.split_whitespace().collect();
@@ -136,11 +168,12 @@ fn parse_stat_line(pid: i64, line: &str) -> Option<ProcStat> {
     let stime = fields.get(12)?.parse::<u64>().ok()?;
     let child_user = fields.get(13)?.parse::<i64>().ok()?;
     let child_system = fields.get(14)?.parse::<i64>().ok()?;
+    let start_ticks = fields.get(19)?.parse::<u64>().ok()?;
     // Clamp-then-convert is infallible: `max(0)` makes `unsigned_abs` the
     // identity, so a (never observed in practice) negative field counts as 0.
     let child_ticks = child_user.max(0).unsigned_abs() + child_system.max(0).unsigned_abs();
     Some(ProcStat {
-        pid,
+        identity: ProcessIdentity { pid, start_ticks },
         ppid: parent,
         cpu_ticks: utime + stime + child_ticks,
     })
@@ -165,7 +198,10 @@ fn parse_vmrss_bytes(status: &str) -> Option<u64> {
 fn children_by_parent(table: &HashMap<i64, ProcStat>) -> HashMap<i64, Vec<i64>> {
     let mut children: HashMap<i64, Vec<i64>> = HashMap::new();
     for stat in table.values() {
-        children.entry(stat.ppid).or_default().push(stat.pid);
+        children
+            .entry(stat.ppid)
+            .or_default()
+            .push(stat.identity.pid);
     }
     children
 }
@@ -196,12 +232,15 @@ mod tests {
     fn stat_line_parses_despite_hostile_comm() {
         // pid (comm) state ppid pgrp session tty tpgid flags minflt cminflt
         // majflt cmajflt utime stime cutime cstime ...
-        let line = "4242 (a) b (c)) R 100 4242 4242 0 -1 4194304 1 0 0 0 700 42 5 3 20 0 1 0";
+        let line = "4242 (a) b (c)) R 100 4242 4242 0 -1 4194304 1 0 0 0 700 42 5 3 20 0 1 0 9000";
         let stat = parse_stat_line(4242, line).expect("hostile comm parses");
         assert_eq!(
             stat,
             ProcStat {
-                pid: 4242,
+                identity: ProcessIdentity {
+                    pid: 4242,
+                    start_ticks: 9000,
+                },
                 ppid: 100,
                 // utime + stime + cutime + cstime: waited-for children count.
                 cpu_ticks: 750
@@ -229,7 +268,10 @@ mod tests {
     fn subtree_covers_descendants_and_tolerates_cycles() {
         fn stat(pid: i64, parent: i64, cpu_ticks: u64) -> ProcStat {
             ProcStat {
-                pid,
+                identity: ProcessIdentity {
+                    pid,
+                    start_ticks: pid.unsigned_abs(),
+                },
                 ppid: parent,
                 cpu_ticks,
             }
@@ -251,6 +293,38 @@ mod tests {
         let mut subtree = subtree_pids(10, &children);
         subtree.sort_unstable();
         assert_eq!(subtree, vec![10, 11, 12, 13]);
+    }
+
+    #[test]
+    fn recycled_pid_does_not_inherit_cpu_baseline() {
+        let sampled_at = Instant::now();
+        let original = ProcessIdentity {
+            pid: 42,
+            start_ticks: 100,
+        };
+        let recycled = ProcessIdentity {
+            pid: 42,
+            start_ticks: 200,
+        };
+        let sampler = BuildStatSampler {
+            previous: HashMap::from([(
+                original,
+                CpuBaseline {
+                    cpu_ticks: 1000,
+                    sampled_at,
+                },
+            )]),
+        };
+        let one_second_later = sampled_at + std::time::Duration::from_secs(1);
+
+        assert_eq!(
+            sampler.cpu_percent_for(original, 1050, one_second_later),
+            Some(50)
+        );
+        assert_eq!(
+            sampler.cpu_percent_for(recycled, 1050, one_second_later),
+            None
+        );
     }
 
     /// End-to-end on the live procfs: sampling our own pid twice yields a

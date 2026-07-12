@@ -375,10 +375,11 @@ async fn state_snapshot(State(state): State<AppState>) -> Json<MonitorSnapshot> 
     Json(state.monitor.read().await.snapshot())
 }
 
-/// Which machine build's log `/api/global-log` should tail, by derivation path.
+/// Which machine build's log `/api/global-log` should tail, by exact worker.
 #[derive(serde::Deserialize)]
 struct GlobalLogQuery {
     drv: String,
+    pid: i64,
 }
 
 /// Tail of one machine build's on-disk log, as plain text.
@@ -393,7 +394,7 @@ async fn global_log(
     State(state): State<AppState>,
     Query(query): Query<GlobalLogQuery>,
 ) -> Response {
-    let Some(log_file) = global::log_file_for(&state.monitor, &query.drv).await else {
+    let Some(log_file) = global::log_file_for(&state.monitor, &query.drv, query.pid).await else {
         return (
             StatusCode::NOT_FOUND,
             "not an active machine build with a recorded log",
@@ -1447,6 +1448,7 @@ mod tests {
                 detected: true,
                 builds: vec![nix_web_monitor_parser::GlobalBuild {
                     drv_path: Some("/nix/store/aaa-foo.drv".to_owned()),
+                    pid: Some(42),
                     log_file: Some(log_path.to_string_lossy().into_owned()),
                     ..nix_web_monitor_parser::GlobalBuild::default()
                 }],
@@ -1458,7 +1460,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv")
+                    .uri("/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv&pid=42")
                     .body(Body::empty())
                     .expect("request builds"),
             )
@@ -1470,10 +1472,26 @@ mod tests {
             .expect("body collects");
         assert_eq!(&body[..], b"builder says hi\n");
 
+        let wrong_worker = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/global-log?drv=%2Fnix%2Fstore%2Faaa-foo.drv&pid=43")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(
+            wrong_worker.status(),
+            StatusCode::NOT_FOUND,
+            "a different worker for the same drv must not resolve to this log"
+        );
+
         let unknown = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/global-log?drv=%2Fetc%2Fpasswd")
+                    .uri("/api/global-log?drv=%2Fetc%2Fpasswd&pid=42")
                     .body(Body::empty())
                     .expect("request builds"),
             )

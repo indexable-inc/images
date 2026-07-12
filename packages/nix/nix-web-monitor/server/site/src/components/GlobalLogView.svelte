@@ -5,12 +5,13 @@
   /// a collapsed log costs nothing.
 
   type Props = {
-    /// Derivation whose log to tail. The server resolves it to the on-disk log
-    /// path recorded in the machine-wide build view.
+    /// Exact active worker whose log to tail. The server resolves this pair to
+    /// the on-disk path recorded in the machine-wide build view.
     drvPath: string;
+    pid: number;
   };
 
-  const { drvPath }: Props = $props();
+  const { drvPath, pid }: Props = $props();
 
   /// Refetch cadence while open; matches the global probe's two-second poll,
   /// so the tail is as live as the row it belongs to.
@@ -20,9 +21,10 @@
   let note = $state<string | null>('loading log…');
   let stream = $state<HTMLPreElement | null>(null);
 
-  async function fetchTail(target: string): Promise<void> {
+  async function fetchTail(targetDrvPath: string, targetPid: number): Promise<void> {
     try {
-      const response = await fetch(`/api/global-log?drv=${encodeURIComponent(target)}`);
+      const query = new URLSearchParams({ drv: targetDrvPath, pid: String(targetPid) });
+      const response = await fetch(`/api/global-log?${query.toString()}`);
       if (!response.ok) {
         // Keep showing a stale tail over a placeholder: a 404 mid-build just
         // means the builder has not flushed (or the entry blinked); the next
@@ -47,8 +49,8 @@
   $effect(() => {
     // Fetch on mount / re-target, then poll. The interval dies with the
     // component, so collapsing the row stops the traffic.
-    void fetchTail(drvPath);
-    const timer = setInterval(() => void fetchTail(drvPath), POLL_MS);
+    void fetchTail(drvPath, pid);
+    const timer = setInterval(() => void fetchTail(drvPath, pid), POLL_MS);
     return () => {
       clearInterval(timer);
     };

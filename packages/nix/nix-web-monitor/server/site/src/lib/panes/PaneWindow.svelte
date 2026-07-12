@@ -4,6 +4,7 @@
   /// WebSocket store, so the window stays in-page and shares that state; the
   /// dock button folds it back into a tab group.
 
+  import { untrack } from 'svelte';
   import { getDockContext } from '$lib/panes/context';
   import type { FloatingPane } from '$lib/panes/types';
 
@@ -25,10 +26,41 @@
 
   function bounds(): { width: number; height: number } {
     const root = dock.dockElement();
-    return root === null
-      ? { width: window.innerWidth, height: window.innerHeight }
-      : { width: root.clientWidth, height: root.clientHeight };
+    if (root === null) throw new Error('pane dock root unavailable');
+    return { width: root.clientWidth, height: root.clientHeight };
   }
+
+  function clampToDock(): void {
+    const box = bounds();
+    const width = Math.max(MIN_WIDTH, Math.min(floating.width, box.width));
+    const height = Math.max(MIN_HEIGHT, Math.min(floating.height, box.height));
+    const x = Math.max(48 - width, Math.min(floating.x, box.width - 48));
+    const y = Math.max(0, Math.min(floating.y, box.height - 32));
+    if (
+      x === floating.x &&
+      y === floating.y &&
+      width === floating.width &&
+      height === floating.height
+    ) {
+      return;
+    }
+    dock.state.moveFloating(floating.id, x, y);
+    dock.state.resizeFloating(floating.id, width, height);
+    dock.state.persist();
+  }
+
+  $effect(() => {
+    const root = dock.dockElement();
+    if (root === null) return;
+    untrack(clampToDock);
+    const observer = new ResizeObserver(() => {
+      untrack(clampToDock);
+    });
+    observer.observe(root);
+    return () => {
+      observer.disconnect();
+    };
+  });
 
   function start(event: PointerEvent, kind: DragKind): void {
     // A drag from an interactive control (the dock button, pane controls)

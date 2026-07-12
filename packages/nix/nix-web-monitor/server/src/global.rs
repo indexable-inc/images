@@ -137,19 +137,23 @@ async fn publish(
     let _ = broadcast_deltas(monitor, deltas).await;
 }
 
-/// Resolve an active machine build's recorded log file by its derivation path.
+/// Resolve an active machine build's recorded log file by exact worker.
 ///
 /// This is the gate on `/api/global-log`: the server only ever opens paths the
 /// status directory itself advertised for a *currently active* build, so the
 /// endpoint cannot be steered at arbitrary files.
-pub async fn log_file_for(monitor: &Arc<RwLock<MonitorState>>, drv_path: &str) -> Option<PathBuf> {
+pub async fn log_file_for(
+    monitor: &Arc<RwLock<MonitorState>>,
+    drv_path: &str,
+    pid: i64,
+) -> Option<PathBuf> {
     monitor
         .read()
         .await
         .global
         .builds
         .iter()
-        .find(|build| build.drv_path.as_deref() == Some(drv_path))
+        .find(|build| build.drv_path.as_deref() == Some(drv_path) && build.pid == Some(pid))
         .and_then(|build| build.log_file.as_deref().map(PathBuf::from))
 }
 
@@ -418,7 +422,14 @@ mod tests {
     async fn log_file_for_resolves_only_active_builds() {
         let with_log = GlobalBuild {
             drv_path: Some("/nix/store/aaa-foo.drv".to_owned()),
+            pid: Some(11),
             log_file: Some("/nix/var/log/nix/drvs/ab/cdfoo.drv.bz2".to_owned()),
+            ..GlobalBuild::default()
+        };
+        let other_worker = GlobalBuild {
+            drv_path: Some("/nix/store/aaa-foo.drv".to_owned()),
+            pid: Some(12),
+            log_file: Some("/nix/var/log/nix/drvs/ab/cdfoo.drv.2.bz2".to_owned()),
             ..GlobalBuild::default()
         };
         let without_log = GlobalBuild {
@@ -428,17 +439,22 @@ mod tests {
         let mut state = MonitorState::default();
         state.set_global(GlobalBuilds {
             detected: true,
-            builds: vec![with_log, without_log],
-            status: "2 active".to_owned(),
+            builds: vec![with_log, other_worker, without_log],
+            status: "3 active".to_owned(),
         });
         let monitor = Arc::new(RwLock::new(state));
 
         assert_eq!(
-            log_file_for(&monitor, "/nix/store/aaa-foo.drv").await,
+            log_file_for(&monitor, "/nix/store/aaa-foo.drv", 11).await,
             Some(PathBuf::from("/nix/var/log/nix/drvs/ab/cdfoo.drv.bz2"))
         );
-        assert_eq!(log_file_for(&monitor, "/nix/store/bbb-bar.drv").await, None);
-        assert_eq!(log_file_for(&monitor, "/etc/passwd").await, None);
+        assert_eq!(
+            log_file_for(&monitor, "/nix/store/aaa-foo.drv", 12).await,
+            Some(PathBuf::from("/nix/var/log/nix/drvs/ab/cdfoo.drv.2.bz2"))
+        );
+        assert_eq!(log_file_for(&monitor, "/nix/store/aaa-foo.drv", 13).await, None);
+        assert_eq!(log_file_for(&monitor, "/nix/store/bbb-bar.drv", 11).await, None);
+        assert_eq!(log_file_for(&monitor, "/etc/passwd", 11).await, None);
     }
 
     /// Reading a real compressed file end-to-end through the async entry point.

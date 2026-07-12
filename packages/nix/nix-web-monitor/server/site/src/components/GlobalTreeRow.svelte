@@ -128,7 +128,7 @@
       >{formatBytes(primary.rssBytes)}</span
     >
   {/if}
-  {#if primary !== undefined && primary.drvPath !== null && primary.logFile !== null}
+  {#if primary !== undefined && primary.drvPath !== null && primary.pid !== null && primary.logFile !== null}
     <button
       type="button"
       class="global-log-toggle"
@@ -147,8 +147,8 @@
   <span class="activity-dur">{primary === undefined ? '' : elapsed(primary)}</span>
 </div>
 
-{#if primary !== undefined && primary.drvPath !== null && openLog === goalKey(primary)}
-  <GlobalLogView drvPath={primary.drvPath} />
+{#if primary !== undefined && primary.drvPath !== null && primary.pid !== null && openLog === goalKey(primary)}
+  <GlobalLogView drvPath={primary.drvPath} pid={primary.pid} />
 {/if}
 
 {#if !isCollapsed}
