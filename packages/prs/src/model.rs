@@ -1,6 +1,8 @@
 //! Row model shared by discovery ([`crate::discover`]), the GitHub fetch
 //! ([`crate::github`]), and both renderers.
 
+use std::path::PathBuf;
+
 /// A GitHub pull request reference parsed out of a URL.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PrRef {
@@ -120,6 +122,13 @@ pub struct PatchRow {
     pub pr: Option<PrRef>,
     pub pr_source: Option<PrSource>,
     pub status: Option<PrStatus>,
+    /// The patch file on disk, for the TUI's edit (`e`) and diff-preview
+    /// (`d`) keys. `None` when the row exists only as a mapping key (baked
+    /// mapping, run outside a checkout).
+    pub path: Option<PathBuf>,
+    /// The directory holding the patch: the fork's series directory, or a
+    /// loose patch's parent. For the TUI's edit-directory (`E`) key.
+    pub dir: Option<PathBuf>,
 }
 
 impl PatchRow {

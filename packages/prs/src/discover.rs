@@ -226,12 +226,18 @@ fn registry_rows(root: Option<&Path>, fork: &Fork) -> Vec<PatchRow> {
         .into_iter()
         .map(|file| {
             let found = registry_pr(fork, dir.as_deref(), &tracked, &file);
+            let path = dir
+                .as_deref()
+                .map(|dir| dir.join(&file))
+                .filter(|path| path.is_file());
             PatchRow {
                 fork: fork.name.clone(),
                 intent: fork.patches.get(&file).map(|entry| entry.upstream.clone()),
                 pr: found.as_ref().map(|found| found.pr.clone()),
                 pr_source: found.map(|found| found.source),
                 status: None,
+                path,
+                dir: dir.clone().filter(|dir| dir.is_dir()),
                 file,
             }
         })
@@ -279,6 +285,8 @@ fn loose_rows(root: &Path, forks: &[Fork]) -> Vec<PatchRow> {
             pr_source: pr.as_ref().map(|_| PrSource::PatchHeader),
             pr,
             status: None,
+            path: Some(path.to_path_buf()),
+            dir: Some(parent.to_path_buf()),
         });
     }
     rows.sort_by(|a, b| a.fork.cmp(&b.fork).then_with(|| a.file.cmp(&b.file)));

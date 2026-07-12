@@ -9,6 +9,8 @@ description = "Unified viewer for the repo's vendored-dependency patches and the
 workspace = true
 
 [dependencies]
+# OSC 52 clipboard payloads for the TUI's yank key.
+base64.workspace = true
 clap = { workspace = true, features = ["derive"] }
 color-eyre.workspace = true
 ignore.workspace = true

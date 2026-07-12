@@ -27,7 +27,11 @@ mod tui;
 #[derive(Parser)]
 #[command(
     name = "prs",
-    about = "View the repo's vendored-dependency patches and their upstream PR status"
+    about = "View the repo's vendored-dependency patches and their upstream PR status",
+    after_help = "TUI keys:\n  \
+        j/k move, gg/G jump, / filter, Enter/o open the PR in the browser,\n  \
+        e edit the patch in $EDITOR, E open its directory, d preview the diff,\n  \
+        y copy the PR URL (OSC 52), r refresh PR status, ? help, q quit"
 )]
 struct Cli {
     /// Print a plain table instead of the interactive TUI.
@@ -53,15 +57,17 @@ fn main() -> Result<()> {
     let mut rows = discover::collect(root.as_deref(), &forks);
 
     let mut note = None;
+    // Kept around for the TUI's `r` (refresh) key.
+    let mut token = None;
     if cli.offline {
         note = Some("offline: PR status not fetched".to_owned());
-    } else if let Some(token) = github::token() {
+    } else if let Some(found) = github::token() {
         let prs: Vec<model::PrRef> = rows.iter().filter_map(|row| row.pr.clone()).collect();
         if prs.is_empty() {
             note = Some("no patch references an upstream PR yet".to_owned());
         } else {
             eprintln!("fetching status for {} PRs...", prs.len());
-            let statuses = github::fetch(&prs, &token)?;
+            let statuses = github::fetch(&prs, &found)?;
             for row in &mut rows {
                 row.status = row
                     .pr
@@ -70,6 +76,7 @@ fn main() -> Result<()> {
                     .cloned();
             }
         }
+        token = Some(found);
     } else {
         note = Some(
             "no GitHub token (set GITHUB_TOKEN/GH_TOKEN or `gh auth login`); \
@@ -86,5 +93,5 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
-    tui::run(rows, note)
+    tui::run(rows, note, token)
 }
