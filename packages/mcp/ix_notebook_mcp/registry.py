@@ -108,7 +108,8 @@ MODULES: tuple[Module, ...] = (
         "weave",
         "one shared world - facts, queries, verbs against the weave journal; "
         "`await weave.delegate('prompt')` is THE delegation verb: the weave app "
-        "runs each task as a live session",
+        "runs each task as a live session, and `harness='codex'` dispatches the "
+        "OpenAI Codex CLI instead of Claude",
     ),
     Module(
         "search",
