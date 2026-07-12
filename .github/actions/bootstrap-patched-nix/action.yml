@@ -83,5 +83,10 @@ runs:
           echo "::error title=bootstrap-patched-nix::nix build failed: $short"
           exit 1
         fi
+        client="$RUNNER_TEMP/nix-ix/bin/nix"
+        if [[ "$("$client" eval --raw --expr 'toString 25_565')" != 25565 ]]; then
+          echo "::error title=bootstrap-patched-nix::built client does not accept underscore digit separators"
+          exit 1
+        fi
         echo "$RUNNER_TEMP/nix-ix/bin" >> "$GITHUB_PATH"
-        echo "::notice title=bootstrap-patched-nix::$("$RUNNER_TEMP/nix-ix/bin/nix" --version) on PATH"
+        echo "::notice title=bootstrap-patched-nix::$("$client" --version) on PATH"
