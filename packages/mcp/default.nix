@@ -436,6 +436,26 @@
     name = "ix-mcp-nix-python-source";
     path = ./src/nix;
   };
+  # `sharedaudio`: drive the local shared-audio daemon (packages/audio) over
+  # its unix control socket: status, local volume, and publishing WASM
+  # instruments / control changes to every peer. Pure stdlib JSON-lines
+  # client, cross-platform, so every session can `import sharedaudio`.
+  sharedaudioPythonSource = builtins.path {
+    name = "ix-mcp-sharedaudio-python-source";
+    path = ./src/sharedaudio;
+  };
+  sharedaudioModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-sharedaudio-python-module"
+    {
+      strictDeps = true;
+      meta.description = "shared-audio daemon control client bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/sharedaudio"
+      mkdir -p "$site"
+      cp -r ${sharedaudioPythonSource}/sharedaudio/. "$site/"
+    ''
+  );
   nixModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-nix-python-module"
     {
@@ -1345,6 +1365,7 @@
       ixNotebookMcpModule
       viewModule
       nixModule
+      sharedaudioModule
       fleetModule
       meshModule
       weaveModule
