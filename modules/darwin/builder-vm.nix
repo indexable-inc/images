@@ -32,6 +32,9 @@
   inherit (lib) mkDefault mkEnableOption mkIf mkOption types;
 
   cfg = config.services.builder-vm;
+  hasGuestImage = cfg.guest.image != null;
+  hasGuestImageFileName = cfg.guest.imageFileName != null;
+  hasInstallImage = hasGuestImage && hasGuestImageFileName;
 
   vfkitArgs = lib.escapeShellArgs [
     "--cpus"
@@ -103,33 +106,75 @@
     '';
   };
 
+  growImage = writeBashApplication pkgs {
+    name = "vm-grow-image";
+    runtimeInputs = [pkgs.coreutils];
+    text = ''
+      image=$1
+      minimumSize=$2
+      truncate -s ">$minimumSize" "$image"
+    '';
+  };
+
+  growImageTest =
+    pkgs.runCommand "ix-test-vm-grow-image" {
+      nativeBuildInputs = [
+        growImage
+        pkgs.coreutils
+      ];
+      strictDeps = true;
+    } ''
+      image="$TMPDIR/root.img"
+      truncate -s 2M "$image"
+      vm-grow-image "$image" 1M
+      test "$(wc -c < "$image")" -eq 2097152
+      vm-grow-image "$image" 3M
+      test "$(wc -c < "$image")" -eq 3145728
+      mkdir -p "$out"
+    '';
+
   # `vm-install [--reinstall]`: provision the disk from the built image. The
   # ONLY package that references the guest closure, so only installs (never
   # routine darwin switches) wait for an aarch64-linux image build; bootstrap
   # with an ad hoc builder if no guest is running yet, e.g.
   #   --builders 'ssh-ng://root@<ip>?ssh-key=<sshKey> aarch64-linux'
-  vmInstall = writeBashApplication pkgs {
-    name = "vm-install";
-    runtimeInputs = [pkgs.coreutils];
-    text = ''
-      stateDir="''${VM_STATE_DIR:-${cfg.stateDir}}"
-      if [ -e "$stateDir/root.img" ] && [ "''${1:-}" != "--reinstall" ]; then
-        echo "vm-install: $stateDir/root.img already exists; pass --reinstall to DESTROY it (store, home, host keys)" >&2
-        exit 1
-      fi
-      umask 077
-      install -d -m 0700 "$stateDir"
-      rm -f "$stateDir/root.img" "$stateDir/efi-variable-store"
-      # Copy then grow: the image ships minimized; the guest's initrd
-      # repart + growfs (nixosModules.builder-vm) claim the rest of the disk
-      # on boot.
-      cp ${cfg.guest.image}/${cfg.guest.imageFileName} "$stateDir/root.img.tmp"
-      chmod 0600 "$stateDir/root.img.tmp"
-      truncate -s ${toString cfg.diskGiB}G "$stateDir/root.img.tmp"
-      mv "$stateDir/root.img.tmp" "$stateDir/root.img"
-      echo "vm-install: installed ${cfg.guest.imageFileName} into $stateDir/root.img (${toString cfg.diskGiB}G); boot with the launchd daemon or 'vm'"
-    '';
-  };
+  vmInstall =
+    (writeBashApplication pkgs {
+      name = "vm-install";
+      runtimeInputs = [
+        growImage
+        pkgs.coreutils
+      ];
+      text = ''
+        stateDir="''${VM_STATE_DIR:-${cfg.stateDir}}"
+        if [ -e "$stateDir/root.img" ] && [ "''${1:-}" != "--reinstall" ]; then
+          echo "vm-install: $stateDir/root.img already exists; pass --reinstall to DESTROY it (store, home, host keys)" >&2
+          exit 1
+        fi
+        umask 077
+        install -d -m 0700 "$stateDir"
+        rm -f "$stateDir/root.img" "$stateDir/efi-variable-store"
+        # Copy then grow: the image ships minimized; the guest's initrd
+        # repart + growfs (nixosModules.builder-vm) claim the rest of the disk
+        # on boot. The configured size is a minimum so a larger image is
+        # never truncated and corrupted when the guest closure grows.
+        cp ${cfg.guest.image}/${cfg.guest.imageFileName} "$stateDir/root.img.tmp"
+        chmod 0600 "$stateDir/root.img.tmp"
+        vm-grow-image "$stateDir/root.img.tmp" ${toString cfg.diskGiB}G
+        mv "$stateDir/root.img.tmp" "$stateDir/root.img"
+        echo "vm-install: installed ${cfg.guest.imageFileName} into $stateDir/root.img (at least ${toString cfg.diskGiB}G); boot with the launchd daemon or 'vm'"
+      '';
+    }).overrideAttrs (old: {
+      passthru =
+        (old.passthru or {})
+        // {
+          tests =
+            (old.passthru.tests or {})
+            // {
+              grow-only = growImageTest;
+            };
+        };
+    });
 
   # `vm-deploy`: standard remote NixOS deploy of the guest. Evaluation and
   # builds happen on the darwin host (the aarch64-linux drvs dispatch to the
@@ -288,8 +333,8 @@ in {
     diskGiB = mkOption {
       type = types.ints.positive;
       description = ''
-        Virtual-disk capacity. The image ships minimized; `vm-install`
-        truncates the installed copy up to this size and the guest's initrd
+        Minimum virtual-disk capacity. The image ships minimized; `vm-install`
+        grows the installed copy to at least this size and the guest's initrd
         repart + growfs claim the space on boot (nixosModules.builder-vm).
       '';
     };
@@ -417,7 +462,7 @@ in {
           vm-ssh = vmSsh;
           vm-net-connect = vmNetConnect;
         }
-        // lib.optionalAttrs (cfg.guest.image != null) {vm-install = vmInstall;}
+        // lib.optionalAttrs hasInstallImage {vm-install = vmInstall;}
         // lib.optionalAttrs (cfg.deploy.flake != null) {vm-deploy = vmDeploy;};
 
       remoteBuilder = {
@@ -444,6 +489,13 @@ in {
         };
       };
     };
+
+    assertions = [
+      {
+        assertion = hasGuestImage == hasGuestImageFileName;
+        message = "services.builder-vm.guest.image and services.builder-vm.guest.imageFileName must be set together";
+      }
+    ];
 
     # The runner is pure virtual hardware: it never references the guest
     # closure, so darwin switches don't need a Linux builder (only

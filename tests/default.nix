@@ -324,7 +324,7 @@
           {
             services.minecraft.rcon = {
               enable = true;
-              port = 25 _576;
+              port = 25_576;
               openFirewall = true;
             };
           }
@@ -363,7 +363,7 @@
         {
           services.minecraft.plugins = {
             pvpindex-factions = {};
-            simple-voice-chat.port = 24 _455;
+            simple-voice-chat.port = 24_455;
             terraformgenerator.worlds = [
               "factions"
               "factions_nether"
@@ -386,10 +386,10 @@
         {
           services.minecraft.properties = {
             query = {
-              port = 25 _565;
+              port = 25_565;
             };
             rcon = {
-              port = 25 _575;
+              port = 25_575;
             };
           };
         }
@@ -2257,7 +2257,7 @@
       services.velocity = {
         enable = true;
         address = "10.0.0.5";
-        port = 25 _570;
+        port = 25_570;
         openFirewall = false;
       };
     }
@@ -2289,8 +2289,8 @@
     {
       services.minecraft-bedrock = {
         enable = true;
-        port = 19 _132;
-        portv6 = 19 _132;
+        port = 19_132;
+        portv6 = 19_132;
       };
     }
   ];
@@ -3075,7 +3075,7 @@
           ports = ixRayHead.networking.firewall.interfaces.tailscale0.allowedTCPPorts;
         in
           builtins.elem 6379 ports
-          && builtins.elem 10 _001 ports
+          && builtins.elem 10_001 ports
           && builtins.elem 8799 ports
           && builtins.elem 6380 ports
           && builtins.elem 6381 ports;
@@ -3096,12 +3096,11 @@
             6381
             8798
             8799
-            10
-            _001
+            10_001
           ];
         in
           builtins.all (p: !(builtins.elem p globalPorts)) rayPorts
-          && builtins.all (r: !(r.from == 10 _002 && r.to == 10 _031)) globalRanges;
+          && builtins.all (r: !(r.from == 10_002 && r.to == 10_031)) globalRanges;
         message = "ix-ray must never open its ports on the global firewall, only on tailscale0";
       }
       {
@@ -3113,7 +3112,7 @@
           builtins.elem 8799 ports
           && builtins.elem 6380 ports
           && !(builtins.elem 6379 ports)
-          && !(builtins.elem 10 _001 ports);
+          && !(builtins.elem 10_001 ports);
         message = "ix-ray worker should open exec + manager ports but not the GCS/client ports";
       }
       {
@@ -3214,7 +3213,7 @@
         assertion = let
           ports = ixSparkMaster.networking.firewall.interfaces.tailscale0.allowedTCPPorts;
         in
-          builtins.elem 15 _002 ports && builtins.elem 7077 ports;
+          builtins.elem 15_002 ports && builtins.elem 7077 ports;
         message = "ix-spark master should open the Connect (15002) and master (7077) ports on tailscale0";
       }
       {
@@ -3229,8 +3228,7 @@
             7078
             7079
             7080
-            15
-            _002
+            15_002
           ];
         message = "ix-spark must never open its ports on the global firewall, only on tailscale0";
       }
@@ -3244,7 +3242,7 @@
           && !(ixSparkWorker.systemd.services ? spark-master)
           && !(ixSparkWorker.systemd.services ? spark-connect)
           && !(builtins.elem 7077 ports)
-          && !(builtins.elem 15 _002 ports);
+          && !(builtins.elem 15_002 ports);
         message = "ix-spark worker should run only a worker and open no master/connect ports";
       }
       {
@@ -3437,7 +3435,7 @@
       {
         assertion =
           factionsExample.cfg.worldBorder.enable
-          && factionsExample.cfg.worldBorder.diameter == 12 _000
+          && factionsExample.cfg.worldBorder.diameter == 12_000
           && factionsExample.cfg.properties.max-world-size == 6000;
         message = "factions example should declare a managed world border";
       }
@@ -3451,7 +3449,7 @@
         message = "factions example should keep RCON private while exposing Minecraft and BlueMap";
       }
       {
-        assertion = builtins.elem 24 _454 factionsExample.config.networking.firewall.allowedUDPPorts;
+        assertion = builtins.elem 24_454 factionsExample.config.networking.firewall.allowedUDPPorts;
         message = "factions example should expose Simple Voice Chat on the default UDP port";
       }
       {
@@ -3465,7 +3463,7 @@
             "simple-voice-chat"
           ]
           && claims.simple-voice-chat.protocol == "udp"
-          && claims.simple-voice-chat.port == 24 _454;
+          && claims.simple-voice-chat.port == 24_454;
         message = "factions example should register every service listener in ix.networking.portClaims";
       }
       {
@@ -3536,7 +3534,7 @@
         assertion =
           survivalExample.minecraft.paper.enable
           && survivalExample.minecraft.version == "26.1.2"
-          && survivalExample.minecraft.port == 25 _566
+          && survivalExample.minecraft.port == 25_566
           && !survivalExample.minecraft.openFirewall
           && !survivalExample.minecraft.properties.online-mode;
         message = "survival example should keep Paper behind the proxy";
@@ -3545,13 +3543,13 @@
         assertion = let
           ports = survivalExample.config.networking.firewall.allowedTCPPorts;
         in
-          builtins.elem 25 _565 ports
-          && !(builtins.elem 25 _566 ports)
+          builtins.elem 25_565 ports
+          && !(builtins.elem 25_566 ports)
           && !(builtins.elem survivalExample.minecraft.rcon.port ports);
         message = "survival example should expose Velocity while keeping backend and RCON private";
       }
       {
-        assertion = builtins.elem 19 _132 survivalExample.config.networking.firewall.allowedUDPPorts;
+        assertion = builtins.elem 19_132 survivalExample.config.networking.firewall.allowedUDPPorts;
         message = "survival example should expose Geyser's Bedrock UDP listener";
       }
       {
@@ -3564,10 +3562,10 @@
             "minecraft-rcon"
             "geyser"
           ]
-          && claims.velocity.port == 25 _565
-          && claims.minecraft.port == 25 _566
+          && claims.velocity.port == 25_565
+          && claims.minecraft.port == 25_566
           && claims.geyser.protocol == "udp"
-          && claims.geyser.port == 19 _132;
+          && claims.geyser.port == 19_132;
         message = "survival example should register proxy, backend, RCON, and Bedrock listeners";
       }
       {
@@ -4070,7 +4068,7 @@
           inherit (minecraftBlocksExample) schema;
         in
           schema.coordOffset
-          == 1 _048_576
+          == 1_048_576
           && lib.hasInfix "mortonEncode" schema.createTableSql
           && lib.hasInfix "toUInt32(x + 1048576)" schema.mortonExpr
           && builtins.length schema.mortonFields == 3
@@ -4479,7 +4477,7 @@
         message = "default Minecraft module should follow versions.nix default runtime version";
       }
       {
-        assertion = minecraft.cfg.properties.max-players == 100 _000;
+        assertion = minecraft.cfg.properties.max-players == 100_000;
         message = "default Minecraft module should allow the large ix player ceiling";
       }
       {
@@ -4713,13 +4711,13 @@
         message = "Paper minecraft should seed pluginCatalog from the generated 26.1.2 Paper catalog";
       }
       {
-        assertion = builtins.elem 24 _455 minecraft.paperPlugins.config.networking.firewall.allowedUDPPorts;
+        assertion = builtins.elem 24_455 minecraft.paperPlugins.config.networking.firewall.allowedUDPPorts;
         message = "Simple Voice Chat should open its UDP port when installed as a Paper plugin";
       }
       {
         assertion =
           minecraft.paperPlugins.cfg.serverFiles."plugins/voicechat/voicechat-server.properties".port
-          == 24 _455;
+          == 24_455;
         message = "Simple Voice Chat should render Paper plugin config under plugins/voicechat";
       }
       {
@@ -5460,11 +5458,11 @@
         message = "services.minestom.yourkit.sessionName should appear in the agent options";
       }
       {
-        assertion = builtins.elem 10 _001 minestomYourkit.firewallTcpPorts;
+        assertion = builtins.elem 10_001 minestomYourkit.firewallTcpPorts;
         message = "services.minestom.yourkit.openFirewall should open the YourKit port in the firewall";
       }
       {
-        assertion = minestomYourkit.portClaim != null && minestomYourkit.portClaim.port == 10 _001;
+        assertion = minestomYourkit.portClaim != null && minestomYourkit.portClaim.port == 10_001;
         message = "services.minestom.yourkit.enable should register a portClaim for the YourKit port";
       }
       {

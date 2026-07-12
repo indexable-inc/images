@@ -85,13 +85,17 @@ in {
           "virtio_pci"
           "virtio_blk"
         ];
-        systemd.enable = true;
-        # vm-install truncates the installed image up to the full virtual-disk
-        # size; claim that space on boot: repart grows the root *partition* in
-        # the initrd, autoResize (above) grows the *filesystem* into it. Both
-        # are no-ops once grown, so this stays enabled and costs nothing.
-        systemd.repart.enable = true;
-        systemd.repart.device = "/dev/vda";
+        systemd = {
+          enable = true;
+          # vm-install grows the installed image to the minimum virtual-disk
+          # size; claim that space on boot: repart grows the root *partition*
+          # in the initrd, autoResize (above) grows the *filesystem* into it.
+          # Both are no-ops once grown, so this stays enabled.
+          repart = {
+            enable = true;
+            device = "/dev/vda";
+          };
+        };
       };
 
       loader.systemd-boot.enable = true;

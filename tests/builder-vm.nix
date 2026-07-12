@@ -37,6 +37,10 @@
         type = lib.types.attrsOf lib.types.raw;
         default = {};
       };
+      assertions = lib.mkOption {
+        type = lib.types.listOf lib.types.raw;
+        default = [];
+      };
     };
   };
 
@@ -71,6 +75,14 @@
 
   disabled = evalHost {
     services.builder-vm = spec;
+  };
+
+  partialGuest = evalHost {
+    services.builder-vm =
+      spec
+      // {
+        guest.image = darwinPkgs.emptyDirectory;
+      };
   };
 
   builder = enabled.services.builder-vm.remoteBuilder;
@@ -141,6 +153,18 @@
     }
     {
       assertion =
+        !(partialGuest.services.builder-vm.packages ? vm-install)
+        && lib.any (
+          item:
+            !item.assertion
+            && item.message
+            == "services.builder-vm.guest.image and services.builder-vm.guest.imageFileName must be set together"
+        )
+        partialGuest.assertions;
+      message = "a partial guest image configuration should produce a clear assertion without evaluating vm-install";
+    }
+    {
+      assertion =
         guest.fileSystems."/".device
         == "/dev/disk/by-partlabel/root"
         && guest.fileSystems."/".autoResize;
@@ -189,6 +213,7 @@ in
       # the darwin leg of CI can realize them; the linux leg stays eval-only.
       scripts = lib.optionals (pkgs.stdenv.hostPlatform.system == "aarch64-darwin") (
         builtins.attrValues withGuest.services.builder-vm.packages
+        ++ [withGuest.services.builder-vm.packages.vm-install.tests.grow-only]
       );
     } ''
       mkdir -p "$out"
