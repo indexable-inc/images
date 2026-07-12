@@ -660,14 +660,9 @@
     patchedSrcFor = ix.patchedSrcFor pkgs;
     inherit (ix) forkPackages;
     dagCheckSrc = ix.forkDagCheckSrc;
-    forkSrcInputs = {
-      codex = ix.codexSrc;
-      btop = ix.btopSrc;
-      clippy = ix.clippySrc;
-      mesa = ix.mesaSrc;
-      nix = ix.nixSrc;
-      nushell = ix.nushellSrc;
-    };
+    forkSrcInputs = lib.genAttrs (map (fork: fork.name) ix.forkPackages) (
+      name: ix."${name}Src"
+    );
     patchesRoot = paths.root;
     flakeLock = lib.importJSON (paths.root + "/flake.lock");
   };

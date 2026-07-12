@@ -90,6 +90,7 @@
   diff_view_style = "split";
   excerpt_context_lines = 2;
   expand_excerpt_lines = 5;
+  find_all_references_include_current = false;
   file_types = {
     Nu = ["nu"];
     Scheme = ["astlog"];
