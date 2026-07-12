@@ -1,6 +1,5 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import PanelHeader from '$lib/PanelHeader.svelte';
   import { splitDerivation } from '$lib/format';
   import { LOG_LEVEL_FILTERS, type LogEntry, type LogLevelFilter } from '$lib/types';
 
@@ -11,16 +10,11 @@
     /// instead of an opaque activity id. Null when nothing is selected.
     selectedDrv: string | null;
     onclearselection: () => void;
-    /// Drawer collapse state, owned by the shell. The panel only renders the
-    /// caret and reports clicks; the shell resizes the drawer around it.
-    collapsed: boolean;
-    oncollapse: () => void;
   };
 
   const RECENT_LOG_LIMIT = 500;
 
-  const { logs, selectedActivityId, selectedDrv, onclearselection, collapsed, oncollapse }: Props =
-    $props();
+  const { logs, selectedActivityId, selectedDrv, onclearselection }: Props = $props();
 
   /// Package name of the pinned build, for the selection chip.
   const selectedName = $derived(selectedDrv === null ? null : splitDerivation(selectedDrv).name);
@@ -133,17 +127,10 @@
 
 <svelte:window onkeydown={onWindowKeydown} />
 
+<!-- Collapsing/expanding the drawer is the pane system's job now; this panel
+     only owns the stream and its filters. -->
 <section class="panel logs-panel">
-  <PanelHeader title="logs">
-    <button
-      type="button"
-      class="twirl logs-collapse"
-      onclick={oncollapse}
-      title={collapsed ? 'show logs' : 'hide logs'}
-      aria-expanded={!collapsed}
-    >
-      {collapsed ? '▸' : '▾'}
-    </button>
+  <div class="pane-toolbar">
     <div class="log-controls">
       <div class="filter-chips" role="tablist" aria-label="log level filter">
         {#each LOG_LEVEL_FILTERS as choice (choice)}
@@ -181,7 +168,7 @@
         {String(visible.length)}{#if hiddenCount > 0} / {String(logs.length)}{/if}
       </span>
     </div>
-  </PanelHeader>
+  </div>
   <div class="log-stream" bind:this={stream} onscroll={onScroll}>
     {#each visible as log (log.index)}
       <div class="line {lineClass(log.level)}">

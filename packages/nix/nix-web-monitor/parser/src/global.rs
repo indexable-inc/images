@@ -93,6 +93,16 @@ pub struct GlobalBuild {
     pub log_file: Option<String>,
     /// The want-chain and cause that scheduled this goal.
     pub why: GlobalWhy,
+    /// CPU usage of the builder's process tree, in whole percent of one core
+    /// (can exceed 100 on a parallel build). Not part of the `nix store
+    /// builds` payload: the server samples `/proc/<pid>/stat` between polls
+    /// and annotates the row. `None` until two samples exist, when `pid` is
+    /// missing, or on a platform without procfs.
+    pub cpu_percent: Option<u32>,
+    /// Resident set size of the builder's process tree in bytes, sampled by
+    /// the server from `/proc/<pid>/status` (`VmRSS`). `None` under the same
+    /// conditions as `cpu_percent`.
+    pub rss_bytes: Option<u64>,
 }
 
 /// Wire-friendly snapshot of the machine-wide build view.

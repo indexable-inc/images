@@ -102,7 +102,14 @@ export const globalBuildSchema = v.object({
   user: v.nullable(v.string()),
   uid: v.nullable(v.number()),
   logFile: v.nullable(v.string()),
-  why: globalWhySchema
+  why: globalWhySchema,
+  /// Server-sampled cpu usage of the builder's process tree, in whole percent
+  /// of one core (can exceed 100 on a parallel build). Null until the server
+  /// has two procfs samples for the pid, and always null on platforms
+  /// without procfs.
+  cpuPercent: v.nullable(v.number()),
+  /// Server-sampled resident set size of the builder's process tree, bytes.
+  rssBytes: v.nullable(v.number())
 });
 
 /// Machine-wide build view. `detected` is false on stock nix (the subcommand is

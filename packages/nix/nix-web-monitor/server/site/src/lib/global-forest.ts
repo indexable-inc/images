@@ -18,6 +18,31 @@ export function goalPath(build: GlobalBuild): string {
   return build.drvPath ?? build.storePath ?? '(unknown)';
 }
 
+/// Stable per-goal identity for UI state (open log drawers): the status dir
+/// keys entries by `<path>-<pid>`, so the path alone would collide across
+/// daemon workers building the same derivation.
+export function goalKey(build: GlobalBuild): string {
+  return `${goalPath(build)}:${String(build.pid ?? 0)}`;
+}
+
+/// Tooltip for one goal row: the full store path plus the identity details
+/// (outputs, worker pid, requesting user/uid, cause) that would crowd the row
+/// itself. Shared by the why-chain tree rows and the flat sorted rows.
+export function goalTitle(build: GlobalBuild): string {
+  const lines = [goalPath(build)];
+  if (build.outputs.length > 0) lines.push(`outputs: ${build.outputs.join(', ')}`);
+  if (build.pid !== null) lines.push(`worker pid ${String(build.pid)}`);
+  if (build.user !== null) {
+    lines.push(
+      build.uid === null
+        ? `requested by ${build.user}`
+        : `requested by ${build.user} (uid ${String(build.uid)})`
+    );
+  }
+  if (build.why.cause !== null) lines.push(`cause: ${build.why.cause}`);
+  return lines.join('\n');
+}
+
 export type GlobalForest = Readonly<{
   /// Active goals per node, oldest first. A path with no entry here is a
   /// skeleton ancestor: a chain hop nothing is actively building.

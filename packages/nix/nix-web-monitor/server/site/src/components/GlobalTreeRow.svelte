@@ -2,9 +2,9 @@
   import type { SvelteSet } from 'svelte/reactivity';
   import Self from '$components/GlobalTreeRow.svelte';
   import GlobalLogView from '$components/GlobalLogView.svelte';
-  import { formatDuration, shortHash, splitDerivation } from '$lib/format';
-  import { goalPath, type GlobalForest } from '$lib/global-forest';
-  import type { GlobalBuild, GlobalBuildKind } from '$lib/types';
+  import { formatBytes, formatDuration, shortHash, splitDerivation } from '$lib/format';
+  import { goalKey, goalTitle, type GlobalForest } from '$lib/global-forest';
+  import type { GlobalBuildKind } from '$lib/types';
 
   type Props = {
     path: string;
@@ -62,39 +62,21 @@
   const childGuideLines = $derived(isRoot ? [] : [...guideLines, !isLast]);
   const childAncestors = $derived(new Set([...ancestors, path]));
 
-  /// Stable per-goal key for the log drawer: the status dir keys entries by
-  /// `<path>-<pid>`, so the path alone would collide across workers.
-  function goalKey(goal: GlobalBuild): string {
-    return `${goalPath(goal)}:${String(goal.pid ?? 0)}`;
-  }
-
   /// Live elapsed label from the goal's start. `startTime` is unix *seconds*
   /// (unlike the rest of the monitor's ms timestamps), so scale to ms before
   /// diffing against the reactive clock. Empty when the source gave no start.
-  function elapsed(goal: GlobalBuild): string {
+  function elapsed(goal: { startTime: number | null }): string {
     if (goal.startTime === null) return '';
     return formatDuration(now - goal.startTime * 1000);
   }
 
-  /// Row tooltip: the full store path plus the identity details (outputs,
-  /// worker pid, requesting user/uid, cause) that would crowd the row itself.
-  /// A skeleton hop instead explains why it has no affordances.
+  /// Row tooltip: goal identity details, or -- for a skeleton hop -- why the
+  /// row has no affordances.
   function rowTitle(): string {
     if (primary === undefined) {
       return `${path}\nancestor of an active goal below, not itself active`;
     }
-    const lines = [path];
-    if (primary.outputs.length > 0) lines.push(`outputs: ${primary.outputs.join(', ')}`);
-    if (primary.pid !== null) lines.push(`worker pid ${String(primary.pid)}`);
-    if (primary.user !== null) {
-      lines.push(
-        primary.uid === null
-          ? `requested by ${primary.user}`
-          : `requested by ${primary.user} (uid ${String(primary.uid)})`
-      );
-    }
-    if (primary.why.cause !== null) lines.push(`cause: ${primary.why.cause}`);
-    return lines.join('\n');
+    return goalTitle(primary);
   }
 </script>
 
@@ -135,6 +117,16 @@
   {/if}
   {#if primary !== undefined && primary.user !== null}
     <span class="global-user" title="requested by {primary.user}">{primary.user}</span>
+  {/if}
+  {#if primary !== undefined && primary.cpuPercent !== null}
+    <span class="global-stat" title="cpu across the builder's process tree"
+      >{String(primary.cpuPercent)}%</span
+    >
+  {/if}
+  {#if primary !== undefined && primary.rssBytes !== null}
+    <span class="global-stat" title="resident memory across the builder's process tree"
+      >{formatBytes(primary.rssBytes)}</span
+    >
   {/if}
   {#if primary !== undefined && primary.drvPath !== null && primary.logFile !== null}
     <button

@@ -1,6 +1,5 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity';
-  import PanelHeader from '$lib/PanelHeader.svelte';
   import BuildTree from '$components/BuildTree.svelte';
   import { shortHash, splitDerivation } from '$lib/format';
   import { durationLabel, isRemote, whereLabel } from '$lib/build-row';
@@ -233,7 +232,7 @@
 <svelte:window onkeydown={onWindowKeydown} />
 
 <section class="panel builds-panel">
-  <PanelHeader title="builds">
+  <div class="pane-toolbar">
     <div class="filter-chips">
       <button type="button" class="chip" class:active={layout === 'flat'} onclick={() => (layout = 'flat')}>
         flat
@@ -251,7 +250,7 @@
     <span class="panel-meta">
       {String(builds.length)}{#if expectedBuilds > 0} / {String(expectedBuilds)}{/if}
     </span>
-  </PanelHeader>
+  </div>
   <div class="build-table" class:tree={layout === 'tree'} bind:this={tableEl}>
     {#if layout === 'tree'}
       {#each tree.roots as rootDrv, index (rootDrv)}

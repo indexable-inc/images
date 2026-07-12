@@ -32,6 +32,7 @@ use tokio::process::Command;
 use tokio::sync::{RwLock, broadcast};
 
 use crate::broadcast_deltas;
+use crate::proc_stats::BuildStatSampler;
 
 /// How often the machine-wide build view is re-polled once detected. Slower than
 /// the daemon tracer's one-second sample: this shells out to `nix` each tick, so
@@ -55,8 +56,12 @@ const LOG_TAIL_BYTES: usize = 64 * 1024;
 /// the global view is a best-effort overlay, so any failure becomes a status the
 /// panel shows (or a hidden panel) and the loop retries.
 pub async fn run_global_probe(monitor: Arc<RwLock<MonitorState>>, deltas: broadcast::Sender<Bytes>) {
+    // Between polls, the sampler turns each build's pid into live cpu/rss
+    // figures from procfs (see `proc_stats`); the two-second poll interval is
+    // also the cpu averaging window.
+    let mut sampler = BuildStatSampler::new();
     loop {
-        let Some(builds) = poll_builds().await else {
+        let Some(mut builds) = poll_builds().await else {
             // Undetected: publish the undetected view once (its `Default` carries
             // the "not available" status) so a later detection can flip the panel
             // on, then back off before re-probing.
@@ -64,6 +69,7 @@ pub async fn run_global_probe(monitor: Arc<RwLock<MonitorState>>, deltas: broadc
             tokio::time::sleep(RETRY_INTERVAL).await;
             continue;
         };
+        sampler.annotate(&mut builds);
         let status = format!("{} active", builds.len());
         let global = GlobalBuilds {
             detected: true,

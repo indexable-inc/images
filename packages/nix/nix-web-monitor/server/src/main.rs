@@ -29,6 +29,7 @@ mod daemon;
 mod dependencies;
 mod emit;
 mod global;
+mod proc_stats;
 mod reasons;
 use daemon::run_daemon_probe;
 use dependencies::resolve_dependencies;
