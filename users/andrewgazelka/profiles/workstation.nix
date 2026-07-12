@@ -947,8 +947,8 @@ in {
 
   # Ghostty themes and shaders (cross-platform location); the assets are
   # shared, not per-user, so they live in modules/home/ghostty.
-  home.file.".config/ghostty/themes".source = ../../../modules/home/ghostty/themes;
-  home.file.".config/ghostty/shaders".source = ../../../modules/home/ghostty/shaders;
+  home.file.".config/ghostty/themes".source = ix.paths.modules + "/home/ghostty/themes";
+  home.file.".config/ghostty/shaders".source = ix.paths.modules + "/home/ghostty/shaders";
 
   # Alacritty
   home.file.".config/alacritty/alacritty.toml".source = renderStructured "alacritty-alacritty";

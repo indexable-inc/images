@@ -144,9 +144,11 @@ def test_transport_pump_weave_chat_posts_instead_of_notifying(monkeypatch: pytes
         box.add_outbox(content="job done", meta=json.dumps({"job_id": "42"}), session="srv")
         _weave_chat_pump_config(monkeypatch)
         posts: list[tuple] = []
+        posted = anyio.Event()
 
         def fake_http(method: str, url: str, *, body: object = None, content: bytes | None = None) -> object:
             posts.append((method, url, body))
+            anyio.from_thread.run_sync(posted.set)
             return {"id": body["id"], "seq": 1}
 
         monkeypatch.setattr(store, "_http_json", fake_http)
@@ -156,8 +158,7 @@ def test_transport_pump_weave_chat_posts_instead_of_notifying(monkeypatch: pytes
         async with send, recv, anyio.create_task_group() as tg:
             tg.start_soon(transport.pump_outbox, send, initialized)
             with anyio.fail_after(2):
-                while not posts:
-                    await anyio.sleep(0.01)
+                await posted.wait()
             # The client is never woken: no channel notification is emitted.
             with anyio.move_on_after(0.05) as scope:
                 await recv.receive()
@@ -180,11 +181,13 @@ def test_transport_pump_weave_chat_retries_failed_post_with_same_id(monkeypatch:
         box.add_outbox(content="flaky", meta="{}", session="srv")
         _weave_chat_pump_config(monkeypatch)
         attempts: list[str] = []
+        retried = anyio.Event()
 
         def fake_http(method: str, url: str, *, body: object = None, content: bytes | None = None) -> object:
             attempts.append(body["id"])
             if len(attempts) == 1:
                 raise ConnectionError("weave down")
+            anyio.from_thread.run_sync(retried.set)
             return {"id": body["id"], "seq": 1}
 
         monkeypatch.setattr(store, "_http_json", fake_http)
@@ -194,8 +197,7 @@ def test_transport_pump_weave_chat_retries_failed_post_with_same_id(monkeypatch:
         async with send, recv, anyio.create_task_group() as tg:
             tg.start_soon(transport.pump_outbox, send, initialized)
             with anyio.fail_after(2):
-                while len(attempts) < 2:
-                    await anyio.sleep(0.01)
+                await retried.wait()
             tg.cancel_scope.cancel()
         # The retry reuses the id minted for the row, so an ambiguous failure
         # (response lost after the write landed) cannot double-deliver.

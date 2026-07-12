@@ -14,8 +14,8 @@ in {
   services.nginx = {
     enable = true;
 
-    upstreams.api.servers = lib.listToAttrs (
-      map (endpoint: lib.nameValuePair "${endpoint.host}:${toString endpoint.port}" {}) apiEndpoints
+    upstreams.api.servers = lib.genAttrs' apiEndpoints (
+      endpoint: lib.nameValuePair "${endpoint.host}:${toString endpoint.port}" {}
     );
 
     virtualHosts.gateway = {
@@ -49,16 +49,14 @@ in {
     }
     # One probe per discovered replica: the fleet's status/health commands
     # report each api node's reachability from the gateway individually.
-    // lib.listToAttrs (
-      map (endpoint:
+    // lib.genAttrs' apiEndpoints (
+      endpoint:
         lib.nameValuePair "upstream-${endpoint.host}" {
           description = "api replica ${endpoint.host} answers from the gateway";
           http = {
-            host = endpoint.host;
-            port = endpoint.port;
+            inherit (endpoint) host port;
             path = "/healthz";
           };
-        })
-      apiEndpoints
+        }
     );
 }
