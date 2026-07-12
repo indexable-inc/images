@@ -592,6 +592,11 @@ struct McpClient {
     next_id: u64,
 }
 
+struct HttpReply {
+    status: u16,
+    text: String,
+}
+
 impl McpClient {
     fn connect(url: &str, key: &str) -> Option<Self> {
         let http = reqwest::blocking::Client::builder()
@@ -621,7 +626,7 @@ impl McpClient {
         Some(client)
     }
 
-    fn post(&mut self, body: &Value) -> Option<(u16, String)> {
+    fn post(&mut self, body: &Value) -> Option<HttpReply> {
         let mut req = self
             .http
             .post(&self.url)
@@ -649,7 +654,7 @@ impl McpClient {
         }
         let status = resp.status().as_u16();
         let text = resp.text().unwrap_or_default();
-        Some((status, text))
+        Some(HttpReply { status, text })
     }
 
     /// One JSON-RPC request; returns the `result` value or logs and None.
@@ -657,7 +662,7 @@ impl McpClient {
         let id = self.next_id;
         self.next_id += 1;
         let body = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
-        let (status, text) = self.post(&body)?;
+        let HttpReply { status, text } = self.post(&body)?;
         if !(200..300).contains(&status) {
             log(&format!(
                 "{method} -> HTTP {status}: {}",
