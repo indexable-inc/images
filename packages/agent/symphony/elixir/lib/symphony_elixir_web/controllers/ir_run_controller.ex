@@ -56,6 +56,9 @@ defmodule SymphonyElixirWeb.IRRunController do
       {:error, {:workflow_not_found, _}} = reason ->
         conn |> put_status(:not_found) |> json(%{error: inspect(reason)})
 
+      {:error, {:run_id_conflict, run_id}} ->
+        conn |> put_status(:conflict) |> json(%{error: "run id already exists: #{run_id}"})
+
       {:error, reason} ->
         conn |> put_status(:unprocessable_entity) |> json(%{error: inspect(reason)})
     end

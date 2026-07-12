@@ -111,6 +111,34 @@ defmodule SymphonyElixir.IR.StoreTest do
     assert {:error, :not_found} = Store.load("nope", dir: dir)
   end
 
+  test "create gives the first graph durable ownership of a run id", %{dir: dir} do
+    first = sample_graph()
+    second = %{first | trigger: %{kind: :manual, input: %{"owner" => "second"}}}
+
+    assert :ok = Store.create(first, dir: dir)
+    assert {:error, :already_exists} = Store.create(second, dir: dir)
+    assert {:ok, loaded} = Store.load(first.run_id, dir: dir)
+    assert loaded.trigger == first.trigger
+  end
+
+  test "concurrent creates publish exactly one owner", %{dir: dir} do
+    attempts =
+      ["first", "second"]
+      |> Task.async_stream(
+        fn owner ->
+          graph = %{sample_graph() | trigger: %{kind: :manual, input: %{"owner" => owner}}}
+          {owner, Store.create(graph, dir: dir)}
+        end,
+        ordered: false
+      )
+      |> Enum.map(fn {:ok, result} -> result end)
+
+    assert Enum.sort(Enum.map(attempts, &elem(&1, 1))) == [:ok, {:error, :already_exists}]
+    {owner, :ok} = Enum.find(attempts, &(elem(&1, 1) == :ok))
+    assert {:ok, loaded} = Store.load("run-store-1", dir: dir)
+    assert loaded.trigger == %{kind: :manual, input: %{"owner" => owner}}
+  end
+
   test "round-trips a graph with a placement map (ixvm declared, host effective)", %{dir: dir} do
     graph =
       "run-placement"

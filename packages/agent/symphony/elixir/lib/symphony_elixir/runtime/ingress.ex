@@ -23,30 +23,57 @@ defmodule SymphonyElixir.Runtime.Ingress do
   alias SymphonyElixir.Runtime.Trigger
   alias SymphonyElixir.WorkflowCatalog
 
+  @run_id_max_length 128
+  @run_id_pattern ~r/\A[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\z/
+
   @typedoc "A started run: its generated id and the supervised runtime pid."
   @type started :: %{run_id: String.t(), pid: pid()}
 
   @doc """
   Materialize a catalog entry and start it. `trigger_context` is the event
-  payload (`nil` for an operator-started run); `opts` forwards `:engine`,
-  `:store_opts`, and an optional `:run_id` to the supervisor.
+  payload (`nil` for an operator-started run); `opts` forwards `:engine`
+  and `:store_opts` to the supervisor. An optional `:run_id` is validated
+  here, then claimed atomically by the runtime before the run starts. An id
+  already owned by a live or persisted run returns `{:run_id_conflict, id}`.
   """
   @spec start_workflow(WorkflowCatalog.entry(), map() | nil, keyword()) :: {:ok, started()} | {:error, term()}
   def start_workflow(entry, trigger_context \\ nil, opts \\ [])
 
   def start_workflow(%{ast: ast, hash: hash} = entry, trigger_context, opts) do
-    run_id = Keyword.get_lazy(opts, :run_id, fn -> generate_run_id(entry) end)
-    start_opts = Keyword.delete(opts, :run_id)
+    start_opts = opts |> Keyword.delete(:run_id) |> Keyword.put(:claim_run_id, true)
 
-    with {:ok, graph} <- Materializer.materialize(run_id, hash, ast) do
+    with {:ok, run_id} <- select_run_id(entry, opts),
+         {:ok, graph} <- Materializer.materialize(run_id, hash, ast) do
       graph = %{graph | trigger: trigger_context}
 
       case Runtime.Supervisor.start_run(graph, start_opts) do
         {:ok, pid} -> {:ok, %{run_id: run_id, pid: pid}}
+        {:error, {:already_started, _pid}} -> {:error, {:run_id_conflict, run_id}}
         {:error, _} = err -> err
       end
     end
   end
+
+  @doc """
+  Validate the run id grammar shared by generated and caller-supplied ids.
+
+  A run id is 1 to 128 lowercase ASCII letters, digits, or hyphens. It must
+  start and end with a letter or digit. This keeps the id safe as the shared
+  Store filename, workspace and state directory, git branch suffix, and URL
+  path component.
+  """
+  @spec validate_run_id(term()) :: {:ok, String.t()} | {:error, {:invalid_run_id, term()}}
+  def validate_run_id(run_id)
+
+  def validate_run_id(run_id) when is_binary(run_id) and byte_size(run_id) <= @run_id_max_length do
+    if Regex.match?(@run_id_pattern, run_id) do
+      {:ok, run_id}
+    else
+      {:error, {:invalid_run_id, run_id}}
+    end
+  end
+
+  def validate_run_id(run_id), do: {:error, {:invalid_run_id, run_id}}
 
   @doc """
   Resolve every `.sym` workflow that declared interest in this trigger
@@ -120,9 +147,15 @@ defmodule SymphonyElixir.Runtime.Ingress do
     |> Enum.any?(fn graph -> match_fun.({graph.status, graph.trigger}) end)
   end
 
+  defp select_run_id(entry, opts) do
+    opts
+    |> Keyword.get_lazy(:run_id, fn -> generate_run_id(entry) end)
+    |> validate_run_id()
+  end
+
   # A readable, collision-resistant run id: the workflow slug, the wall
-  # clock, and a monotonic counter. Ids are opaque to the store; the slug is
-  # only there to make a runs listing scannable.
+  # clock, and a monotonic counter. Keep the suffix intact and bound only the
+  # display slug so generated ids obey the same public grammar as caller ids.
   defp generate_run_id(%{name: name}) do
     slug =
       name
@@ -131,7 +164,18 @@ defmodule SymphonyElixir.Runtime.Ingress do
       |> String.replace(~r/[^a-z0-9]+/, "-")
       |> String.trim("-")
 
-    slug = if slug == "", do: "workflow", else: slug
-    "#{slug}-#{System.system_time(:millisecond)}-#{System.unique_integer([:positive, :monotonic])}"
+    suffix = "#{System.system_time(:millisecond)}-#{System.unique_integer([:positive, :monotonic])}"
+    max_slug_length = @run_id_max_length - byte_size(suffix) - 1
+
+    slug =
+      slug
+      |> String.slice(0, max_slug_length)
+      |> String.trim("-")
+      |> case do
+        "" -> "workflow"
+        bounded -> bounded
+      end
+
+    "#{slug}-#{suffix}"
   end
 end

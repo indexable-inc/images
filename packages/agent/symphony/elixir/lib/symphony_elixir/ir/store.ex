@@ -93,6 +93,34 @@ defmodule SymphonyElixir.IR.Store do
   end
 
   @doc """
+  Persist a new RunGraph only when its run id has no durable owner.
+
+  The completed temporary file is hard-linked into place, so the ownership
+  check and publication are one filesystem operation. A competing creator
+  receives {:error, :already_exists} and cannot replace the first graph.
+  """
+  @spec create(RunGraph.t(), keyword()) :: :ok | {:error, term()}
+  def create(%RunGraph{} = graph, opts \\ []) do
+    store_dir = dir(opts)
+    File.mkdir_p!(store_dir)
+    path = run_path(store_dir, graph.run_id)
+    tmp = path <> ".create-#{System.unique_integer([:positive, :monotonic])}.tmp"
+
+    try do
+      with {:ok, encoded} <- Jason.encode(encode(graph), pretty: true),
+           :ok <- File.write(tmp, encoded, [:exclusive]) do
+        case File.ln(tmp, path) do
+          :ok -> :ok
+          {:error, :eexist} -> {:error, :already_exists}
+          {:error, _} = error -> error
+        end
+      end
+    after
+      _ = File.rm(tmp)
+    end
+  end
+
+  @doc """
   Append a dynamic-expansion event and persist. A thin wrapper over
   `RunGraph.append_expansion/4` plus `persist/2`, so the append-only log
   that drives replay is never updated without hitting disk.
