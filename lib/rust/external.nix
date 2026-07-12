@@ -31,10 +31,7 @@
   checkedCargoUnit = rust.buildPackage {
     pname = manifest.package.name;
     inherit (manifest.package) version;
-    src = lib.fileset.toSource {
-      root = sourceRoot;
-      fileset = sourceRoot;
-    };
+    src = sourceRoot;
     policy = rust.policyPresets.pureBuild;
   };
   nixCargoUnit = checkedCargoUnit.passthru.unchecked;
