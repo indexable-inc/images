@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import functools
 import hashlib
 import json
@@ -90,6 +91,14 @@ def _entity(prefix: str, id: str) -> str:
 
 class _HashRef(str):
     """Marks a value as a CAS blob reference so it rides as a typed hash."""
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _PendingBlob:
+    """Blob bytes whose CAS put belongs to the write-behind thread."""
+
+    data: bytes
+    digest: str
 
 
 def _api_value(value: object) -> dict:
@@ -192,12 +201,26 @@ class WeaveStore:
         facts = [*facts, (self.agent, "last_active_ms", _ms())]
         for entity, attr, value in facts:
             key = (entity, attr)
-            if self._last_values.get(key) == value:
+            dedupe_value = ("blob", value.digest) if isinstance(value, _PendingBlob) else value
+            if self._last_values.get(key) == dedupe_value:
                 continue
-            self._last_values[key] = value
-            self._enqueue({"fact": {"entity": _api_value(entity), "attr": attr, "value": _api_value(value)}})
+            self._last_values[key] = dedupe_value
+            if isinstance(value, _PendingBlob):
+                self._enqueue_blob_fact(entity, attr, value.data, digest=value.digest)
+            else:
+                self._enqueue(
+                    {
+                        "fact": {
+                            "entity": _api_value(entity),
+                            "attr": attr,
+                            "value": _api_value(value),
+                        }
+                    }
+                )
 
-    def _enqueue_blob_fact(self, entity: str, attr: str, data: bytes) -> None:
+    def _enqueue_blob_fact(
+        self, entity: str, attr: str, data: bytes, *, digest: str | None = None
+    ) -> None:
         """Queue one (entity, attr, <hash of data>) fact whose CAS put is
         deferred to the writer thread (see _resolve_blob_item). The enqueue is
         a plain list append, so bulk payloads (pty chunks) never block the
@@ -207,12 +230,21 @@ class WeaveStore:
         needs every flush."""
         if self.disabled:
             return
-        self._enqueue({"blob_fact": {"entity": entity, "attr": attr, "data": data}})
+        self._enqueue(
+            {
+                "blob_fact": {
+                    "entity": entity,
+                    "attr": attr,
+                    "data": data,
+                    "digest": digest,
+                }
+            }
+        )
 
-    def put_blob(self, data: bytes) -> _HashRef:
+    def put_blob(self, data: bytes, *, digest: str | None = None) -> _HashRef:
         if self.disabled:
-            return _HashRef(hashlib.sha256(data).hexdigest())
-        digest = hashlib.sha256(data).hexdigest()
+            return _HashRef(digest or hashlib.sha256(data).hexdigest())
+        digest = digest or hashlib.sha256(data).hexdigest()
         cached = self._blob_cache.get(digest)
         if cached:
             return _HashRef(cached)
@@ -234,7 +266,7 @@ class WeaveStore:
         blob = item.get("blob_fact")
         if blob is None:
             return item
-        h = self.put_blob(blob["data"])
+        h = self.put_blob(blob["data"], digest=blob["digest"])
         return {"fact": {"entity": _api_value(blob["entity"]), "attr": blob["attr"], "value": _api_value(h)}}
 
     def _writer(self) -> None:
@@ -265,7 +297,15 @@ class WeaveStore:
                     self._inflight = False
                     self._cv.notify_all()
             except Exception as exc:
-                print(f"ix-mcp store: weave write failed, retrying: {exc}", file=sys.stderr)
+                pending = ", ".join(_item_label(item) for item in batch[:8])
+                if len(batch) > 8:
+                    pending += f", +{len(batch) - 8} more"
+                print(
+                    "ix-mcp store: weave persistence failed; "
+                    f"queued facts will retry in {backoff:g}s; pending={pending}; "
+                    f"error={type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
                 with self._cv:
                     for item in reversed(batch):
                         self._queue.appendleft(item)
@@ -360,12 +400,25 @@ class AsyncConn:
         self._pool.shutdown(wait=False)
 
 
-def _blob(conn: WeaveStore, value: object) -> _HashRef:
-    return conn.put_blob(_json_blob(value))
+def _item_label(item: dict) -> str:
+    """Compact entity.attr handle for a failed write batch."""
+    blob = item.get("blob_fact")
+    if blob is not None:
+        return f"{blob['entity']}.{blob['attr']}"
+    fact = item["fact"]
+    return f"{_unwrap(fact['entity'])}.{fact['attr']}"
 
 
-def _blob_text(conn: WeaveStore, text: str) -> _HashRef:
-    return conn.put_blob(text.encode("utf-8"))
+def _blob(value: object) -> _PendingBlob:
+    return _pending_blob(_json_blob(value))
+
+
+def _blob_text(text: str) -> _PendingBlob:
+    return _pending_blob(text.encode("utf-8"))
+
+
+def _pending_blob(data: bytes) -> _PendingBlob:
+    return _PendingBlob(data=data, digest=hashlib.sha256(data).hexdigest())
 
 
 def _load_json_blob(conn: WeaveStore, hash_: str, default: object) -> object:
@@ -456,7 +509,7 @@ def start(conn: WeaveStore, *, id: str, name: str, code: str, started_at: float,
         (ent, "verb", "python_exec"),
         (ent, "desc", name),
         (ent, "topic", topic),
-        (ent, "code", _blob_text(conn, code)),
+        (ent, "code", _blob_text(code)),
         (ent, "status", "running"),
         (ent, "started_ms", _ms(started_at)),
         (ent, "budget", budget),
@@ -474,7 +527,7 @@ def update_output(conn: WeaveStore, id: str, output: str, outputs: list | None =
     if line is not None:
         facts.append((_entity("run", id), "line", line))
     if outputs is not None:
-        facts.append((_entity("run", id), "outputs", _blob(conn, outputs)))
+        facts.append((_entity("run", id), "outputs", _blob(outputs)))
     conn._enqueue_facts(facts)
 
 
@@ -512,17 +565,17 @@ def finish(conn: WeaveStore, *, id: str, kind: str, status: str, ended_at: float
     ended = _ms(ended_at)
     facts: list[tuple[str, str, Any]] = [(ent, "status", status), (ent, "ended_ms", ended), (ent, "last_output", (output or "")[-200:]), (conn.agent, "last_output", (output or "")[-200:])]
     if result is not None:
-        facts.append((ent, "result", _blob_text(conn, result)))
+        facts.append((ent, "result", _blob_text(result)))
     if error is not None:
         facts.append((ent, "error", error))
     if error_line is not None:
         facts.append((ent, "error_line", error_line))
     if outputs is not None:
-        facts.append((ent, "outputs", _blob(conn, outputs)))
+        facts.append((ent, "outputs", _blob(outputs)))
     if bindings is not None:
-        facts.append((ent, "bindings", _blob(conn, bindings)))
+        facts.append((ent, "bindings", _blob(bindings)))
     if namespace is not None:
-        facts.append((ent, "namespace", _blob(conn, namespace)))
+        facts.append((ent, "namespace", _blob(namespace)))
     conn._enqueue_facts(facts)
 
 
@@ -542,7 +595,7 @@ def save_tool_view(conn: WeaveStore, *, id: str, html: str, label: str) -> str |
     conn._enqueue_facts([
         (ent, "type", "view"),
         (ent, "renderer", "cas-html"),
-        (ent, "body", _blob_text(conn, html)),
+        (ent, "body", _blob_text(html)),
         (ent, "label", label),
         (ent, "child_of", _entity("run", id)),
     ])
@@ -619,13 +672,13 @@ def cells(conn: WeaveStore) -> list[dict]:
 
 
 def replace_cells(conn: WeaveStore, items: list[dict]) -> None:
-    conn._enqueue_facts([(conn.agent, "cells", _blob(conn, items))])
+    conn._enqueue_facts([(conn.agent, "cells", _blob(items))])
 
 
 
 def upsert_resource(conn: WeaveStore, *, id: str, title: str, kind: str, html: str, status: str, created_at: float, updated_at: float, execution_id: str = "") -> None:
     ent = _entity("resource", id)
-    facts = [(ent, "type", "resource"), (ent, "child_of", conn.agent), (ent, "verb", kind), (ent, "label", title), (ent, "html", _blob_text(conn, html)), (ent, "status", status), (ent, "started_ms", _ms(created_at)), (ent, "last_active_ms", _ms(updated_at))]
+    facts = [(ent, "type", "resource"), (ent, "child_of", conn.agent), (ent, "verb", kind), (ent, "label", title), (ent, "html", _blob_text(html)), (ent, "status", status), (ent, "started_ms", _ms(created_at)), (ent, "last_active_ms", _ms(updated_at))]
     if execution_id:
         facts.append((ent, "of_run", _entity("run", execution_id)))
     conn._enqueue_facts(facts)
@@ -694,10 +747,27 @@ def resource_live(conn: WeaveStore, id: str) -> bool:
     return bool(rows and rows[0].get("S") != "closed")
 
 
-def save_snapshot(conn: WeaveStore, *, created_at: float, blob: bytes, names: list[str], skipped: list[dict]) -> None:
-    h = conn.put_blob(blob)
-    ent = f"snapshot:{h[:16]}"
-    conn._enqueue_facts([(ent, "type", "snapshot"), (ent, "child_of", conn.agent), (ent, "created_ms", _ms(created_at)), (ent, "blob", h), (ent, "names", _blob(conn, names)), (ent, "skipped", _blob(conn, skipped)), (conn.agent, "snapshot", h)])
+def save_snapshot(
+    conn: WeaveStore,
+    *,
+    created_at: float,
+    blob: bytes,
+    names: list[str],
+    skipped: list[dict],
+) -> None:
+    pending = _pending_blob(blob)
+    ent = f"snapshot:{pending.digest[:16]}"
+    conn._enqueue_facts(
+        [
+            (ent, "type", "snapshot"),
+            (ent, "child_of", conn.agent),
+            (ent, "created_ms", _ms(created_at)),
+            (ent, "blob", pending),
+            (ent, "names", _blob(names)),
+            (ent, "skipped", _blob(skipped)),
+            (conn.agent, "snapshot", pending),
+        ]
+    )
 
 
 def latest_snapshot(conn: WeaveStore) -> dict | None:
