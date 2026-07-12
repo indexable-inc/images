@@ -1774,6 +1774,8 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tree-sitter",
+ "tree-sitter-bash",
  "xxhash-rust",
 ]
 

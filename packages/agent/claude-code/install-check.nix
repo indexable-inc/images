@@ -480,6 +480,14 @@
 
     pre_guard bash-habits-guard "stderr to /dev/null denied" deny \
       '{"tool_name":"Bash","tool_input":{"command":"make 2>/dev/null"}}'
+    pre_guard bash-habits-guard "heredoc documentation allowed" allow \
+      '{"tool_name":"Bash","tool_input":{"command":"gh issue create --body-file - <<\u0027EOF\u0027\nCommand: make 2>/dev/null\nEOF"}}'
+    pre_guard bash-habits-guard "stderr after heredoc denied" deny \
+      '{"tool_name":"Bash","tool_input":{"command":"cat <<EOF\nnotes\nEOF\nmake 2>/dev/null"}}'
+    pre_guard bash-habits-guard "backtick substitution in heredoc denied" deny \
+      '{"tool_name":"Bash","tool_input":{"command":"cat <<EOF\n\u0060make 2>/dev/null\u0060\nEOF"}}'
+    pre_guard bash-habits-guard "stderr after multiple heredocs denied" deny \
+      '{"tool_name":"Bash","tool_input":{"command":"cat <<A | cat <<B\nleft\nA\nright\nB\nmake 2>/dev/null"}}'
     pre_guard bash-habits-guard "plain stdout /dev/null allowed" allow \
       '{"tool_name":"Bash","tool_input":{"command":"make >/dev/null"}}'
     pre_guard bash-habits-guard "recursive grep denied" deny \

@@ -35,8 +35,7 @@ fn command_of(payload: &Value) -> String {
 
 /// True when `word` is a shell env-assignment prefix like `FOO=bar`.
 fn is_env_assignment(word: &str) -> bool {
-    regex::Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*=")
-        .is_ok_and(|re| re.is_match(word))
+    regex::Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*=").is_ok_and(|re| re.is_match(word))
 }
 
 /// `PreToolUse(Bash)`: block bare `cargo <sub>` inside indexable-inc/index|ix
@@ -47,10 +46,13 @@ pub fn cargo_guard() {
     if payload.get("tool_name").and_then(Value::as_str) != Some("Bash") {
         return;
     }
-    let cwd = payload.get("cwd").and_then(Value::as_str).unwrap_or_default();
+    let cwd = payload
+        .get("cwd")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     // The `(/|$)` keeps `ix` from also matching `index`.
-    let in_monorepo = regex::Regex::new(r"/indexable-inc/(index|ix)(/|$)")
-        .is_ok_and(|re| re.is_match(cwd));
+    let in_monorepo =
+        regex::Regex::new(r"/indexable-inc/(index|ix)(/|$)").is_ok_and(|re| re.is_match(cwd));
     if !in_monorepo {
         return;
     }
@@ -109,9 +111,88 @@ fn grep_walks_tree(stage: &str) -> bool {
     false
 }
 
+fn heredoc_is_quoted(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<bool> {
+    let parent = node.parent()?;
+    let mut cursor = parent.walk();
+    let start = parent
+        .children(&mut cursor)
+        .find(|child| child.kind() == "heredoc_start")?;
+    Some(
+        source
+            .get(start.byte_range())?
+            .iter()
+            .any(|byte| matches!(*byte, b'\'' | b'"' | b'\\')),
+    )
+}
+
+fn mask_quoted_heredoc_literals(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    masked: &mut [u8],
+) -> Option<()> {
+    if node.kind() == "heredoc_body" && heredoc_is_quoted(node, source)? {
+        // Keep line boundaries because the remaining guards split statements on
+        // newlines after this pass.
+        for byte in masked.get_mut(node.byte_range())? {
+            if !matches!(*byte, b'\n' | b'\r') {
+                *byte = b' ';
+            }
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        mask_quoted_heredoc_literals(child, source, masked)?;
+    }
+    Some(())
+}
+
+fn without_quoted_heredoc_literals(command: &str) -> String {
+    if !command.contains("<<") {
+        return command.to_owned();
+    }
+
+    let mut parser = tree_sitter::Parser::new();
+    let language = tree_sitter_bash::LANGUAGE.into();
+    if parser.set_language(&language).is_err() {
+        return command.to_owned();
+    }
+    let Some(tree) = parser.parse(command, None) else {
+        return command.to_owned();
+    };
+    if tree.root_node().has_error() {
+        // Error recovery can extend a here-doc body over later executable commands.
+        return command.to_owned();
+    }
+    let mut masked = command.as_bytes().to_vec();
+    if mask_quoted_heredoc_literals(tree.root_node(), command.as_bytes(), &mut masked).is_none() {
+        return command.to_owned();
+    }
+    String::from_utf8(masked).unwrap_or_else(|_| command.to_owned())
+}
+
+fn executable_shell_text(command: &str) -> String {
+    let command = without_quoted_heredoc_literals(command);
+
+    let strip = |re: &str, s: String| {
+        regex::Regex::new(re).map_or_else(|_| s.clone(), |r| r.replace_all(&s, " ").into_owned())
+    };
+    strip(r#""[^"]*""#, strip(r"'[^']*'", strip(r"\\.", command)))
+}
+
+fn suppresses_stderr(shell_text: &str) -> bool {
+    [
+        r"2\s*>>?\s*/dev/null",
+        r"&\s*>>?\s*/dev/null",
+        r">\s*/dev/null\s+2\s*>\s*&\s*1",
+    ]
+    .iter()
+    .any(|re| regex::Regex::new(re).is_ok_and(|r| r.is_match(shell_text)))
+}
+
 /// `PreToolUse(Bash)`: block recurring bad command shapes (output-to-/dev/null,
 /// recursive `grep -r`, `--no-verify`). Quote/escape-aware so a literal mention
-/// inside a commit message or `echo` is not a false positive.
+/// inside a commit message, `echo`, or a quoted here-doc body is not a false positive.
 pub fn bash_habits_guard() {
     let Some(payload) = payload() else { return };
     if payload.get("tool_name").and_then(Value::as_str) != Some("Bash") {
@@ -119,24 +200,12 @@ pub fn bash_habits_guard() {
     }
     let raw = command_of(&payload);
 
-    // Match operators, not literal text inside a quoted string. Neutralize
-    // escaped chars, then drop quoted substrings (a real `2>/dev/null` /
-    // `grep -r` is never quoted). Accepted miss: a redirection genuinely wrapped
-    // in quotes or a heredoc body.
-    let strip = |re: &str, s: String| {
-        regex::Regex::new(re).map_or_else(|_| s.clone(), |r| r.replace_all(&s, " ").into_owned())
-    };
-    let cmd = strip(r#""[^"]*""#, strip(r"'[^']*'", strip(r"\\.", raw)));
+    // Match operators, not literal text. Tree-sitter identifies quoted here-doc
+    // bodies, then quoted and escaped text is removed.
+    let cmd = executable_shell_text(&raw);
 
     // 1. stderr-to-null / all-to-null / the `>/dev/null 2>&1` idiom.
-    let to_null = [
-        r"2\s*>>?\s*/dev/null",
-        r"&\s*>>?\s*/dev/null",
-        r">\s*/dev/null\s+2\s*>\s*&\s*1",
-    ]
-    .iter()
-    .any(|re| regex::Regex::new(re).is_ok_and(|r| r.is_match(&cmd)));
-    if to_null {
+    if suppresses_stderr(&cmd) {
         deny(
             "Don't discard stderr/output to /dev/null - you won't see why a command \
              failed, and 223 such calls in your history silently ate the error. \
@@ -195,7 +264,7 @@ pub fn search_guard() {
 
 #[cfg(test)]
 mod tests {
-    use super::{grep_walks_tree, is_recursive_flag};
+    use super::{executable_shell_text, grep_walks_tree, is_recursive_flag, suppresses_stderr};
 
     #[test]
     fn recursive_flag_detection() {
@@ -219,5 +288,35 @@ mod tests {
         assert!(!grep_walks_tree("grep foo"));
         // -- ends flags
         assert!(!grep_walks_tree("grep -- -r"));
+    }
+
+    #[test]
+    fn quoted_heredoc_documentation_does_not_suppress_stderr() {
+        for command in [
+            "gh issue create --body-file - <<'EOF'\nCommand: make 2>/dev/null\nEOF",
+            "cat <<-'EOF'\n\tmake 2>/dev/null\n\tEOF",
+            "cat <<OUTER\n$(cat <<'INNER'\nmake 2>/dev/null\nINNER\n)\nOUTER",
+        ] {
+            assert!(!command_suppresses_stderr(command), "{command}");
+        }
+    }
+
+    #[test]
+    fn executable_stderr_suppression_is_detected() {
+        for command in [
+            "make 2>/dev/null",
+            "cat <<'EOF'\nnotes\nEOF\nmake 2>/dev/null",
+            "cat <<EOF\n$(make 2>/dev/null)\nEOF",
+            "cat <<EOF\n`make 2>/dev/null`\nEOF",
+            "cat <<A | cat <<B\nleft\nA\nright\nB\nmake 2>/dev/null",
+            "cat <<E'OF'\nnotes\nEOF\nmake 2>/dev/null",
+        ] {
+            assert!(command_suppresses_stderr(command), "{command}");
+        }
+    }
+
+    fn command_suppresses_stderr(command: &str) -> bool {
+        let shell_text = executable_shell_text(command);
+        suppresses_stderr(&shell_text)
     }
 }
