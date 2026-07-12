@@ -1,15 +1,18 @@
-# `nix run .#upstream-pr -- <pkg> <patch> [--open] [--dry-run]`: contribute ONE
-# of our fork patches upstream without carrying the rest of the series.
+# `nix run .#upstream-pr -- <pkg> <patch>... [--open] [--dry-run]
+# [--message-from <patch>]`: contribute one fork patch (or a multi-patch feature
+# series as ONE PR) upstream without carrying the rest of the series.
 #
 # We keep a de-forked patch series (packages/<pkg>/patches, see
-# lib/util/patched-src.nix) pinned at an OLDER upstream base. To send a single
-# patch upstream, we cannot just push our whole branch: it drags in every other
-# patch and is based on a stale rev. So this tool:
+# lib/util/patched-src.nix) pinned at an OLDER upstream base. To send a
+# contribution upstream, we cannot just push our whole branch: it drags in every
+# other patch and is based on a stale rev. So this tool:
 #
-#   1. Reads the patch's ancestor closure from dag.json (the derived dependency
+#   1. Reads each target's ancestor closure from dag.json (the derived dependency
 #      graph). A truly independent patch contributes just itself; a patch with
 #      real deps drags its closure, and we warn listing the extra patches so the
-#      author knows the upstream PR is not single-commit.
+#      author knows the upstream PR is not single-commit. Multiple targets (a
+#      feature series, e.g. an intent `prSeries` group) become one branch and one
+#      PR carrying every member.
 #   2. Fetches the upstream repo's DEFAULT branch tip (not our pinned base), so
 #      the contribution targets current upstream.
 #   3. `git am --3way` the closure onto that tip. The 3-way merge absorbs
@@ -26,10 +29,12 @@
 # The PR's title and body come FROM THE PATCH ITSELF: subject = title, commit
 # message body = PR body (one fact, one home; the fork mapping deliberately has
 # no duplicate description field), plus AI attribution and a link back to the
-# patch file of record. An optional `patches.<patch>.prExtra` in the mapping is
-# appended after the body for upstream-specific PR-template content (issue refs,
-# checklists) that does not belong in a commit message. A body-less commit is
-# refused; the `patch-dag-<name>` check enforces the same for every
+# patch file of record (pinned to the invoking repo's HEAD sha). For a series the
+# describing patch is `--message-from` (the user-facing member; the rest are
+# visible as the PR's commits). An optional `patches.<patch>.prExtra` in the
+# mapping is appended after the body for upstream-specific PR-template content
+# (issue refs, checklists) that does not belong in a commit message. A body-less
+# commit is refused; the `patch-dag-<name>` check enforces the same for every
 # attempt-marked patch so the failure happens in CI, not mid-contribution.
 #
 # `--dry-run` runs the whole flow (closure, fetch, am, branch) but skips the
@@ -100,9 +105,11 @@ in
 
       # The https blob URL of the patch file of record in the INVOKING repo (so a
       # downstream mapping links to its own repo), derived from the `origin`
-      # remote in either ssh or https form. Returns null with a loud note when
-      # origin is absent or not a github URL: the PR body then omits the link
-      # rather than fabricating one.
+      # remote in either ssh or https form. Pinned to the CURRENT HEAD sha, not a
+      # branch name: run from a feature branch, a `main` link could point at a
+      # missing or older file, and a sha permalink stays honest forever. Returns
+      # null with a loud note when origin is absent or not a github URL: the PR
+      # body then omits the link rather than fabricating one.
       def "origin blob-link" [patch_dir: string, patch: string]: nothing -> any {
         let res = (do { git remote get-url origin } | complete)
         if $res.exit_code != 0 {
@@ -116,7 +123,8 @@ in
           return null
         }
         let o = ($m | first)
-        $"https://github.com/($o.owner)/($o.repo)/blob/main/($patch_dir)/($patch)"
+        let head = (git rev-parse HEAD | str trim)
+        $"https://github.com/($o.owner)/($o.repo)/blob/($head)/($patch_dir)/($patch)"
       }
 
       # A filesystem/branch-safe slug from a patch file name: drop the NNNN- prefix
@@ -131,12 +139,16 @@ in
       }
 
       def main [
-        pkg: string    # fork package name (codex | btop | clippy)
-        patch: string  # patch file name (or its NNNN prefix / unique substring)
-        --open         # also open a DRAFT PR upstream (outward act; default: prepare only)
-        --dry-run      # run the whole flow but skip push + PR (validate content)
-        --mapping: string # fork-package JSON to drive (default: index's baked-in list)
+        pkg: string          # fork package name (codex | btop | clippy)
+        ...patches: string   # one or more patch file names (or NNNN prefixes / unique substrings); several = one PR carrying them all (a feature series)
+        --open               # also open a DRAFT PR upstream (outward act; default: prepare only)
+        --dry-run            # run the whole flow but skip push + PR (validate content)
+        --message-from: string # patch whose commit message titles/describes the PR (default: the last target); a series' PR reads best from its user-facing member
+        --mapping: string    # fork-package JSON to drive (default: index's baked-in list)
       ] {
+        if ($patches | is-empty) {
+          error make { msg: "upstream-pr: at least one patch is required" }
+        }
         let fork = (fork by-name $pkg $mapping)
         let patch_dir = ($fork.patchDir | path expand)
         let dag_file = ($patch_dir | path join "dag.json")
@@ -146,26 +158,39 @@ in
         let doc = (open --raw $dag_file | from json)
         let all_patches = ($doc.nodes | get patch)
 
-        # Resolve the requested patch to an exact node name (exact, then prefix,
-        # then unique substring).
-        let target = (resolve patch $patch $all_patches)
-        print $"(ansi cyan)upstream-pr: ($pkg): target patch ($target)(ansi reset)"
-
-        # Ancestor closure from the DAG, in NNNN order, plus the target last.
-        let deps_of = ($doc.nodes | reduce --fold {} {|nd, acc| $acc | insert $nd.patch $nd.deps })
-        let closure = (dag closure $deps_of $target)
+        # Resolve each requested patch to an exact node name (exact, then prefix,
+        # then unique substring; ambiguity errors before any outward act).
+        let targets = ($patches | each {|p| patch resolve $p $all_patches } | uniq)
+        print $"(ansi cyan)upstream-pr: ($pkg): target patch\(es\): (($targets | str join ', '))(ansi reset)"
+        # The commit whose message becomes the PR title/body: the explicit
+        # --message-from, else the last target in NNNN order.
         let pos = ($all_patches | enumerate | reduce --fold {} {|it, acc| $acc | insert $it.item $it.index })
-        let ordered = (($closure | append $target) | uniq | sort-by {|p| $pos | get $p })
+        let targets_ordered = ($targets | sort-by {|p| $pos | get $p })
+        let message_from = (
+          if $message_from == null { $targets_ordered | last } else { patch resolve $message_from $all_patches }
+        )
+        if $message_from not-in $targets {
+          error make { msg: $"upstream-pr: --message-from ($message_from) is not among the target patches" }
+        }
+
+        # Union of ancestor closures from the DAG, plus the targets, in NNNN order.
+        let deps_of = ($doc.nodes | reduce --fold {} {|nd, acc| $acc | insert $nd.patch $nd.deps })
+        let closure = ($targets | each {|t| dag closure $deps_of $t } | flatten | uniq | where {|p| $p not-in $targets })
+        let ordered = (($closure | append $targets) | uniq | sort-by {|p| $pos | get $p })
         if ($closure | is-not-empty) {
-          print $"(ansi yellow)upstream-pr: ($pkg): ($target) is NOT independent; its upstream contribution drags (($closure | length)) ancestor patch\(es\):(ansi reset)"
+          print $"(ansi yellow)upstream-pr: ($pkg): the target set is NOT independent; its upstream contribution drags (($closure | length)) ancestor patch\(es\):(ansi reset)"
           for c in ($closure | sort-by {|p| $pos | get $p }) { print $"  - ($c)" }
           print $"(ansi yellow)upstream-pr: consider splitting, or send the closure as one PR.(ansi reset)"
+        } else if ($targets | length) == 1 {
+          print $"upstream-pr: ($pkg): (($targets | first)) is independent; contributing it alone."
         } else {
-          print $"upstream-pr: ($pkg): ($target) is independent; contributing it alone."
+          print $"upstream-pr: ($pkg): contributing (($targets | length)) patches as one PR."
         }
 
         let slug = (url slug $fork.url)
-        let branch = $"upstream-pr/($pkg)/(patch slug $target)"
+        # Branch named after the message-from patch: the series' user-facing
+        # member, so the branch name reads as the feature.
+        let branch = $"upstream-pr/($pkg)/(patch slug $message_from)"
 
         # Scratch repo: fetch the upstream DEFAULT branch tip and `git am` the
         # closure onto it with 3-way. Deterministic config so a developer's
@@ -228,30 +253,35 @@ in
 
         if $open {
           # The outward act, gated behind --open. Draft only. Title and body come
-          # from the patch's own commit message (one fact, one home: nix carries
-          # no duplicate description field), so a body-less commit is refused
-          # loudly; the `patch-dag-<name>` check enforces the same for
-          # attempt-marked patches before it ever gets here.
-          let title = (git -C $scratch log -1 --format='%s' HEAD | str trim)
-          let commit_body = (git -C $scratch log -1 --format='%b' HEAD | str trim)
+          # from the message-from patch's own commit message (one fact, one home:
+          # nix carries no duplicate description field), so a body-less commit is
+          # refused loudly; the `patch-dag-<name>` check enforces the same for
+          # attempt-marked patches before it ever gets here. The commit is found
+          # by position: rev-list --reverse of the applied range matches the
+          # NNNN-ordered patch list one-to-one.
+          let applied = (git -C $scratch rev-list --reverse $"($tip)..HEAD" | lines)
+          let mf_idx = ($ordered | enumerate | where item == $message_from | first | get index)
+          let mf_commit = ($applied | get $mf_idx)
+          let title = (git -C $scratch log -1 --format='%s' $mf_commit | str trim)
+          let commit_body = (git -C $scratch log -1 --format='%b' $mf_commit | str trim)
           if ($commit_body | is-empty) {
-            error make { msg: $"upstream-pr: ($pkg): ($target) has no commit-message body; write the why in the commit body \(it becomes the upstream PR description\)." }
+            error make { msg: $"upstream-pr: ($pkg): ($message_from) has no commit-message body; write the why in the commit body \(it becomes the upstream PR description\)." }
           }
           # Optional upstream-specific PR-template content (issue refs,
           # checklists) that does not belong in a commit message, declared as
           # `patches.<patch>.prExtra` in the fork mapping.
-          let pr_extra = ($fork | get -o patches | default {} | get -o $target | default {} | get -o prExtra)
+          let pr_extra = ($fork | get -o patches | default {} | get -o $message_from | default {} | get -o prExtra)
           # Link back to the patch file of record in OUR repo, derived from the
           # invoking repo's origin remote so a downstream mapping links to its
           # own repo. Best-effort but loud: no parseable origin means no link.
-          let patch_link = (origin blob-link $fork.patchDir $target)
+          let patch_link = (origin blob-link $fork.patchDir $message_from)
           let attribution = (
             [
               "---"
               (if $patch_link != null {
                 $"Contributed from a maintained fork patch series; the patch of record is ($patch_link)."
               } else {
-                $"Contributed from a maintained fork patch series \(patch ($target)\)."
+                $"Contributed from a maintained fork patch series \(patch ($message_from)\)."
               })
               "Prepared with AI assistance (Claude); directed and reviewed by a human maintainer."
             ] | str join "\n\n"
@@ -288,19 +318,5 @@ in
         gh repo fork $"($slug.owner)/($slug.repo)" --org $org --clone=false
       }
 
-      # Resolve a user-provided patch reference to an exact node name: exact match,
-      # else unique NNNN-prefix, else unique substring.
-      def "resolve patch" [ref: string, names: list<string>] {
-        if $ref in $names { return $ref }
-        let by_prefix = ($names | where {|n| $n | str starts-with $ref })
-        if ($by_prefix | length) == 1 { return ($by_prefix | first) }
-        let by_sub = ($names | where {|n| $n | str contains $ref })
-        if ($by_sub | length) == 1 { return ($by_sub | first) }
-        let candidates = (($by_prefix | append $by_sub) | uniq)
-        if ($candidates | is-empty) {
-          error make { msg: $"upstream-pr: no patch matching '($ref)'. Known: (($names) | str join ', ')" }
-        }
-        error make { msg: $"upstream-pr: '($ref)' is ambiguous; matches: (($candidates) | str join ', ')" }
-      }
     '';
   }
