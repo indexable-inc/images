@@ -1,0 +1,27 @@
+# The wire: peer gossip for shared-audio. Length-framed TCP carries Loro
+# score updates and content-addressed instrument blobs; a tiny UDP protocol
+# carries the four-timestamp clock pings audio-clock turns into an offset.
+# Peer discovery is injected (static lists work everywhere, including test
+# sandboxes with loopback only).
+[package]
+name = "audio-net"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "P2P gossip, blob transfer, and clock pings for shared-audio"
+
+[dependencies]
+anyhow.workspace = true
+audio-blob.workspace = true
+audio-clock.workspace = true
+audio-score.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "net", "sync", "time", "io-util", "macros"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+[lints]
+workspace = true
