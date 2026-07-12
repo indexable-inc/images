@@ -571,7 +571,10 @@ fn file_issue(key: &str, item: &Item, session: &str, cwd: &str) -> bool {
     false
 }
 
-fn hostname() -> String {
+/// Shared with `retro.rs` (its dispatch stamps the origin host into the
+/// delegated retro prompt). `pub`, not `pub(crate)`: the module is private, so
+/// the two are equivalent and clippy's `redundant_pub_crate` prefers `pub`.
+pub fn hostname() -> String {
     Command::new("hostname")
         .output()
         .ok()
@@ -879,8 +882,9 @@ fn detach_analyze(payload: &Value) {
 
 /// `start_new_session=True` equivalent: call `setsid()` in the child between
 /// fork and exec, putting it in a brand-new session and process group (pgid ==
-/// pid), detached from the controlling terminal.
-fn set_new_session(cmd: &mut Command) {
+/// pid), detached from the controlling terminal. Shared with `retro.rs`, whose
+/// dispatch worker detaches the same way.
+pub fn set_new_session(cmd: &mut Command) {
     // SAFETY: setsid is async-signal-safe and the only thing we do in the
     // child before exec; no allocation, no shared-state mutation.
     unsafe {
