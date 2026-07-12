@@ -10,7 +10,7 @@
 //!   never inside the deterministic core and never in the score.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
+use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -25,10 +25,18 @@ use tracing::{info, warn};
 pub struct Renderer {
     score: Arc<Mutex<Score>>,
     store: Arc<BlobStore>,
-    loaded: Option<(BlobHash, Instrument)>,
+    loaded: Vec<Loaded>,
     /// The score's named instrument, loaded and waiting for its activation
     /// frame; promoted to `loaded` when a render reaches `at_frame`.
     staged: Option<Staged>,
+    loading: Option<Loading>,
+    rejected: Option<BlobHash>,
+}
+
+struct Loaded {
+    hash: BlobHash,
+    instrument: Instrument,
+    at_frame: u64,
 }
 
 struct Staged {
@@ -37,17 +45,35 @@ struct Staged {
     at_frame: u64,
 }
 
+struct Loading {
+    hash: BlobHash,
+    at_frame: u64,
+    receiver: Receiver<Result<Instrument>>,
+}
+
 impl Renderer {
     /// A renderer over a shared score and blob store.
     #[must_use]
-    pub const fn new(score: Arc<Mutex<Score>>, blobs: Arc<BlobStore>) -> Self {
-        Self { score, store: blobs, loaded: None, staged: None }
+    pub fn new(score: Arc<Mutex<Score>>, blobs: Arc<BlobStore>) -> Self {
+        let mut renderer = Self {
+            score,
+            store: blobs,
+            loaded: Vec::new(),
+            staged: None,
+            loading: None,
+            rejected: None,
+        };
+        if let Err(error) = renderer.refresh_blocking() {
+            warn!(%error, "initial instrument load failed");
+        }
+        renderer
     }
 
-    /// Channel count of the loaded instrument, or 1 before any loads.
+    /// Stable session channel count. Instruments are adapted to stereo at
+    /// the render boundary so timeline layout never changes mid-session.
     #[must_use]
-    pub fn channels(&self) -> u32 {
-        self.loaded.as_ref().map_or(1, |(_, instrument)| instrument.channels())
+    pub const fn channels(&self) -> u32 {
+        2
     }
 
     /// (Re)load the instrument when the score names a module whose bytes we
@@ -63,13 +89,24 @@ impl Renderer {
     /// # Panics
     /// Panics when the score mutex is poisoned.
     pub fn refresh(&mut self) -> Result<bool> {
-        let wanted = {
+        let wanted = match {
             let score = self.score.lock().expect("score lock");
-            score.instrument()?
+            score.instrument()
+        } {
+            Ok(wanted) => wanted,
+            Err(error) => {
+                warn!(%error, "ignoring malformed instrument reference");
+                return Ok(!self.loaded.is_empty() || self.staged.is_some());
+            }
         };
-        let Some(wanted) = wanted else { return Ok(self.loaded.is_some()) };
-        if self.loaded.as_ref().is_some_and(|(hash, _)| *hash == wanted.hash) {
+        let Some(wanted) = wanted else { return Ok(!self.loaded.is_empty()) };
+        if self
+            .loaded
+            .iter()
+            .any(|loaded| loaded.hash == wanted.hash && loaded.at_frame == wanted.at_frame)
+        {
             self.staged = None;
+            self.loading = None;
             return Ok(true);
         }
         if let Some(staged) = &mut self.staged
@@ -78,14 +115,71 @@ impl Renderer {
             staged.at_frame = wanted.at_frame;
             return Ok(true);
         }
+        self.staged = None;
+        if let Some(loading) = &mut self.loading
+            && loading.hash == wanted.hash
+        {
+            loading.at_frame = wanted.at_frame;
+            match loading.receiver.try_recv() {
+                Ok(Ok(instrument)) => {
+                    info!(hash = %loading.hash, at_frame = loading.at_frame, "instrument staged");
+                    self.staged = Some(Staged {
+                        hash: loading.hash,
+                        instrument,
+                        at_frame: loading.at_frame,
+                    });
+                    self.loading = None;
+                    return Ok(true);
+                }
+                Ok(Err(error)) => {
+                    warn!(%error, hash = %loading.hash, "ignoring invalid instrument module");
+                    self.rejected = Some(loading.hash);
+                    self.loading = None;
+                    return Ok(!self.loaded.is_empty());
+                }
+                Err(TryRecvError::Empty) => return Ok(!self.loaded.is_empty()),
+                Err(TryRecvError::Disconnected) => {
+                    anyhow::bail!("instrument compiler exited without a result")
+                }
+            }
+        }
+        self.loading = None;
+        if self.rejected == Some(wanted.hash) {
+            return Ok(!self.loaded.is_empty());
+        }
+        self.rejected = None;
         let Some(bytes) = self.store.get(&wanted.hash)? else {
             // Bytes still in flight; keep playing the previous module.
-            return Ok(self.loaded.is_some());
+            return Ok(!self.loaded.is_empty());
         };
+        let hash = wanted.hash;
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name("shared-audio-compile".into())
+            .spawn(move || {
+                let result = Instrument::load(&bytes)
+                    .with_context(|| format!("load instrument {hash}"));
+                let _ = sender.send(result);
+            })
+            .context("spawn instrument compiler")?;
+        self.loading = Some(Loading { hash, at_frame: wanted.at_frame, receiver });
+        Ok(!self.loaded.is_empty())
+    }
+
+    fn refresh_blocking(&mut self) -> Result<bool> {
+        let wanted = {
+            let score = self.score.lock().expect("score lock");
+            score.instrument()?
+        };
+        let Some(wanted) = wanted else { return Ok(false) };
+        let Some(bytes) = self.store.get(&wanted.hash)? else { return Ok(false) };
         let instrument = Instrument::load(&bytes)
             .with_context(|| format!("load instrument {}", wanted.hash))?;
-        info!(hash = %wanted.hash, at_frame = wanted.at_frame, "instrument staged");
-        self.staged = Some(Staged { hash: wanted.hash, instrument, at_frame: wanted.at_frame });
+        self.staged = Some(Staged {
+            hash: wanted.hash,
+            instrument,
+            at_frame: wanted.at_frame,
+        });
         Ok(true)
     }
 
@@ -95,7 +189,12 @@ impl Renderer {
         if self.staged.as_ref().is_some_and(|staged| staged.at_frame <= frame) {
             let staged = self.staged.take().expect("staged instrument present");
             info!(hash = %staged.hash, at_frame = staged.at_frame, "instrument activated");
-            self.loaded = Some((staged.hash, staged.instrument));
+            self.loaded.retain(|loaded| loaded.at_frame < staged.at_frame);
+            self.loaded.push(Loaded {
+                hash: staged.hash,
+                instrument: staged.instrument,
+                at_frame: staged.at_frame,
+            });
         }
     }
 
@@ -108,7 +207,9 @@ impl Renderer {
     }
 
     /// Render shared-timeline frames `start_frame .. start_frame + frames`
-    /// into `out` (interleaved, `frames * channels()` samples).
+    /// into mono or stereo `out`. Instruments are adapted to the caller's
+    /// fixed layout; [`channels`](Self::channels) returns the stable stereo
+    /// session layout used by playback.
     ///
     /// Pure with respect to `(score, start_frame, frames)`: control state is
     /// rebuilt from the score every call and events split blocks at their
@@ -128,16 +229,17 @@ impl Renderer {
     ) -> Result<()> {
         self.refresh()?;
         self.promote_due(start_frame);
-        if self.loaded.is_none() && self.staged.is_none() {
+        if self.loaded.is_empty() && self.staged.is_none() {
             out.fill(0.0);
             return Ok(());
         }
-        let channels = self.channels() as usize;
+        let channels = out.len().checked_div(frames).unwrap_or(0);
         anyhow::ensure!(
-            out.len() == frames * channels,
-            "out has {} samples, range needs {}",
+            (frames == 0 && out.is_empty())
+                || ((1..=2).contains(&channels) && out.len() == frames * channels),
+            "out has {} samples, range needs {frames} mono or {} stereo samples",
             out.len(),
-            frames * channels
+            frames * 2
         );
 
         // Control state at `start_frame`: base controls, then every event at
@@ -178,9 +280,13 @@ impl Renderer {
                 .min(frame + MAX_BLOCK_FRAMES as u64);
             let block_frames = usize::try_from(block_end - frame).expect("block fits usize");
             let samples = block_frames * channels;
-            match &mut self.loaded {
-                Some((_, instrument)) => render_block(
-                    instrument,
+            match self
+                .loaded
+                .iter_mut()
+                .rfind(|loaded| loaded.at_frame <= frame)
+            {
+                Some(loaded) => render_block(
+                    &mut loaded.instrument,
                     frame,
                     block_frames,
                     sample_rate,
@@ -327,6 +433,7 @@ impl Player {
             receiver,
             block: Vec::new(),
             cursor: 0,
+            silence_remaining: 0,
             sample_rate,
             volume,
         };
@@ -399,10 +506,11 @@ fn render_loop(
     }
 }
 
-/// Where the playhead should be right now, plus the buffer lead.
+/// Where the output playhead should be right now. The channel's capacity is
+/// render-ahead capacity, not a timeline offset: rodio consumes its first
+/// queued sample immediately.
 fn playhead(clock: &SharedClock, time: &dyn MonotonicTime, sample_rate: u32) -> i64 {
-    let lead = i64::try_from(BLOCK_FRAMES * BLOCK_BUFFER).expect("lead fits i64");
-    clock.frame_at(time.now_micros(), sample_rate) + lead
+    clock.frame_at(time.now_micros(), sample_rate)
 }
 
 /// Render one stereo block, adapting the instrument's channel count (mono
@@ -415,18 +523,7 @@ fn render_stereo(
     out: &mut [f32],
 ) -> Result<()> {
     let frames = out.len() / 2;
-    renderer.refresh()?;
-    renderer.promote_due(start_frame);
-    if renderer.channels() == 2 {
-        return renderer.render_range(start_frame, frames, sample_rate, out);
-    }
-    let mut mono = vec![0.0_f32; frames];
-    renderer.render_range(start_frame, frames, sample_rate, &mut mono)?;
-    for (pair, sample) in out.chunks_exact_mut(2).zip(&mono) {
-        pair[0] = *sample;
-        pair[1] = *sample;
-    }
-    Ok(())
+    renderer.render_range(start_frame, frames, sample_rate, out)
 }
 
 /// The rodio source end of a [`Player`]: interleaved stereo `f32`.
@@ -434,6 +531,7 @@ pub struct TimelineSource {
     receiver: Receiver<Vec<f32>>,
     block: Vec<f32>,
     cursor: usize,
+    silence_remaining: usize,
     sample_rate: u32,
     volume: Volume,
 }
@@ -442,6 +540,10 @@ impl Iterator for TimelineSource {
     type Item = f32;
 
     fn next(&mut self) -> Option<f32> {
+        if self.silence_remaining > 0 {
+            self.silence_remaining -= 1;
+            return Some(0.0);
+        }
         if self.cursor >= self.block.len() {
             match self.receiver.recv_timeout(Duration::from_millis(100)) {
                 Ok(block) => {
@@ -449,8 +551,10 @@ impl Iterator for TimelineSource {
                     self.cursor = 0;
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    // Underrun: keep the stream alive with silence and let
-                    // the render loop resync.
+                    // Emit a whole block after one deadline. Waiting once
+                    // per sample would turn a short underrun into minutes
+                    // of mixer stalls.
+                    self.silence_remaining = BLOCK_FRAMES * 2 - 1;
                     return Some(0.0);
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return None,
@@ -529,6 +633,29 @@ mod tests {
 )
 "#;
 
+    const STEREO_WAT: &str = r#"
+(module
+  (memory (export "memory") 2)
+  (func (export "sa_abi_version") (result i32) (i32.const 1))
+  (func (export "sa_channels") (result i32) (i32.const 2))
+  (func (export "sa_controls_ptr") (result i32) (i32.const 0))
+  (func (export "sa_out_ptr") (result i32) (i32.const 256))
+  (func (export "sa_render") (param $start i64) (param $n i32) (param $sr i32)
+    (local $i i32)
+    (block $done
+      (loop $loop
+        (br_if $done (i32.ge_s (local.get $i) (local.get $n)))
+        (f32.store
+          (i32.add (i32.const 256) (i32.mul (local.get $i) (i32.const 8)))
+          (f32.load (i32.const 0)))
+        (f32.store
+          (i32.add (i32.const 260) (i32.mul (local.get $i) (i32.const 8)))
+          (f32.add (f32.load (i32.const 0)) (f32.const 1)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop))))
+)
+"#;
+
     struct Fixture {
         score: Arc<Mutex<Score>>,
         renderer: Renderer,
@@ -547,6 +674,16 @@ mod tests {
         }
         let renderer = Renderer::new(Arc::clone(&score), blobs);
         Ok(Fixture { score, renderer, _dir: dir })
+    }
+
+    fn wait_for_staged(renderer: &mut Renderer, hash: BlobHash) -> Result<()> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while renderer.staged.as_ref().map(|staged| staged.hash) != Some(hash) {
+            renderer.refresh()?;
+            anyhow::ensure!(std::time::Instant::now() < deadline, "instrument compile timed out");
+            std::thread::yield_now();
+        }
+        Ok(())
     }
 
     #[test]
@@ -611,6 +748,7 @@ mod tests {
         // Publish the successor: bytes already held, but it must not sound
         // before its activation frame.
         score.lock().expect("lock").set_instrument(&hash_b, 100)?;
+        wait_for_staged(&mut renderer, hash_b)?;
         let mut out = vec![0.0; 200];
         renderer.render_range(0, 200, 48_000, &mut out)?;
         assert!(out[..100].iter().all(|&sample| (sample - 0.25).abs() < f32::EPSILON));
@@ -624,6 +762,131 @@ mod tests {
         assert!(out[..100].iter().all(|&sample| sample == 0.0));
         assert!(out[100..].iter().all(|&sample| (sample - 1.25).abs() < f32::EPSILON));
         Ok(())
+    }
+
+    #[test]
+    fn superseded_staged_instrument_never_activates() -> Result<()> {
+        let Fixture { score, mut renderer, _dir } = fixture()?;
+        let hash_b = renderer.store.put(SHIFT_WAT.as_bytes())?;
+        let missing = BlobHash::of(b"not present");
+        let mut out = vec![0.0; 8];
+        renderer.render_range(0, 8, 48_000, &mut out)?;
+
+        score.lock().expect("lock").set_instrument(&hash_b, 100)?;
+        wait_for_staged(&mut renderer, hash_b)?;
+        assert_eq!(renderer.staged.as_ref().map(|staged| staged.hash), Some(hash_b));
+        score.lock().expect("lock").set_instrument(&missing, 200)?;
+
+        renderer.render_range(100, 8, 48_000, &mut out)?;
+        assert!(out.iter().all(|&sample| (sample - 0.25).abs() < f32::EPSILON));
+        assert!(renderer.staged.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_successor_keeps_previous_instrument() -> Result<()> {
+        let Fixture { score, mut renderer, _dir } = fixture()?;
+        let mut out = vec![0.0; 1];
+        renderer.render_range(0, 1, 48_000, &mut out)?;
+        let bad = renderer.store.put(b"not wasm")?;
+        score.lock().expect("lock").set_instrument(&bad, 1)?;
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while renderer.rejected != Some(bad) {
+            renderer.refresh()?;
+            anyhow::ensure!(std::time::Instant::now() < deadline, "instrument rejection timed out");
+            std::thread::yield_now();
+        }
+        renderer.render_range(1, 1, 48_000, &mut out)?;
+
+        assert_eq!(out, [0.25]);
+        assert_eq!(renderer.rejected, Some(bad));
+        Ok(())
+    }
+
+    #[test]
+    fn successor_compiles_off_the_render_path() -> Result<()> {
+        let Fixture { score, mut renderer, _dir } = fixture()?;
+        let successor = renderer.store.put(SHIFT_WAT.as_bytes())?;
+        let mut out = vec![0.0; 1];
+        renderer.render_range(0, 1, 48_000, &mut out)?;
+        score.lock().expect("lock").set_instrument(&successor, 1)?;
+
+        renderer.render_range(1, 1, 48_000, &mut out)?;
+
+        assert_eq!(out, [0.25]);
+        assert_eq!(renderer.loading.as_ref().map(|loading| loading.hash), Some(successor));
+        wait_for_staged(&mut renderer, successor)?;
+        renderer.render_range(1, 1, 48_000, &mut out)?;
+        assert_eq!(out, [1.25]);
+        Ok(())
+    }
+
+    #[test]
+    fn earlier_ranges_keep_the_predecessor_after_promotion() -> Result<()> {
+        let Fixture { score, mut renderer, _dir } = fixture()?;
+        let hash_b = renderer.store.put(SHIFT_WAT.as_bytes())?;
+        let mut out = vec![0.0; 1];
+        renderer.render_range(0, 1, 48_000, &mut out)?;
+        score.lock().expect("lock").set_instrument(&hash_b, 100)?;
+        wait_for_staged(&mut renderer, hash_b)?;
+        renderer.render_range(100, 1, 48_000, &mut out)?;
+        assert_eq!(out, [1.25]);
+
+        renderer.render_range(0, 1, 48_000, &mut out)?;
+
+        assert_eq!(out, [0.25]);
+        Ok(())
+    }
+
+    #[test]
+    fn channel_layout_stays_stereo_across_instrument_switches() -> Result<()> {
+        let Fixture { score, mut renderer, _dir } = fixture()?;
+        let stereo = renderer.store.put(STEREO_WAT.as_bytes())?;
+        let mut warmup = vec![0.0; 2];
+        renderer.render_range(0, 1, 48_000, &mut warmup)?;
+        score.lock().expect("lock").set_instrument(&stereo, 2)?;
+        wait_for_staged(&mut renderer, stereo)?;
+
+        let mut whole = vec![0.0; 8];
+        renderer.render_range(0, 4, 48_000, &mut whole)?;
+
+        assert_eq!(whole, [0.25, 0.25, 0.25, 0.25, 0.25, 1.25, 0.25, 1.25]);
+        Ok(())
+    }
+
+    #[test]
+    fn underrun_waits_once_then_emits_a_silent_block() {
+        let (_sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let mut source = TimelineSource {
+            receiver,
+            block: Vec::new(),
+            cursor: 0,
+            silence_remaining: 0,
+            sample_rate: 48_000,
+            volume: Volume::default(),
+        };
+
+        assert_eq!(source.next(), Some(0.0));
+        assert_eq!(source.silence_remaining, BLOCK_FRAMES * 2 - 1);
+        assert_eq!(source.next(), Some(0.0));
+        assert_eq!(source.silence_remaining, BLOCK_FRAMES * 2 - 2);
+    }
+
+    struct FixedTime(u64);
+
+    impl MonotonicTime for FixedTime {
+        fn now_micros(&self) -> u64 {
+            self.0
+        }
+    }
+
+    #[test]
+    fn playhead_matches_current_output_frame() {
+        let time = FixedTime(2_000_000);
+        let clock = SharedClock::lead(1_000_000);
+
+        assert_eq!(playhead(&clock, &time, 48_000), 48_000);
     }
 
     #[test]
