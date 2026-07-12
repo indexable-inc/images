@@ -215,10 +215,10 @@ mod tests {
     /// parent cycle without looping.
     #[test]
     fn subtree_covers_descendants_and_tolerates_cycles() {
-        fn stat(pid: i64, ppid: i64, cpu_ticks: u64) -> ProcStat {
+        fn stat(pid: i64, parent: i64, cpu_ticks: u64) -> ProcStat {
             ProcStat {
                 pid,
-                ppid,
+                ppid: parent,
                 cpu_ticks,
             }
         }
