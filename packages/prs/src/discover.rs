@@ -225,10 +225,10 @@ fn registry_rows(root: Option<&Path>, fork: &Fork) -> Vec<PatchRow> {
     // mapping keys are only a fallback for the no-series-dir case (mapping
     // baked by nix, run outside a checkout). Never merge the two: a stale
     // mapping entry for a removed patch must not render a phantom row.
-    let mut names: Vec<String> = match dir.as_deref().filter(|dir| dir.is_dir()) {
-        Some(dir) => patch_files(dir),
-        None => fork.patches.keys().cloned().collect(),
-    };
+    let mut names: Vec<String> = dir
+        .as_deref()
+        .filter(|dir| dir.is_dir())
+        .map_or_else(|| fork.patches.keys().cloned().collect(), patch_files);
     names.sort();
     names
         .into_iter()
