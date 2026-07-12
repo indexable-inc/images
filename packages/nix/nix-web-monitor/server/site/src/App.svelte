@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount, type Snippet } from 'svelte';
+  import { onDestroy, onMount, tick, type Snippet } from 'svelte';
   import ActivationPanel from '$components/ActivationPanel.svelte';
   import ActivityGraph from '$components/ActivityGraph.svelte';
   import BuildTable from '$components/BuildTable.svelte';
@@ -59,9 +59,13 @@
     if (id !== null) dock?.reveal('logs');
   }
 
-  function inspectError(text: string): void {
-    logPanel?.inspect(text);
+  /// Reveal first: a logs pane hidden behind another tab or a collapsed group
+  /// is unmounted (`logPanel` is null), so surface it and wait for the mount
+  /// to flush before driving the filter.
+  async function inspectError(text: string): Promise<void> {
     dock?.reveal('logs');
+    await tick();
+    logPanel?.inspect(text);
   }
 
   onMount(() => {

@@ -4,9 +4,11 @@
 //! what that process is doing to the machine. This module fills the gap
 //! without any nix change: between polls the global probe samples procfs for
 //! every reported pid's *process subtree* (builders fork compilers, which fork
-//! more) and annotates each goal with cpu percent (delta of `utime+stime` from
-//! `/proc/<pid>/stat` over wall time) and resident memory (`VmRSS` from
-//! `/proc/<pid>/status`).
+//! more) and annotates each goal with cpu percent (delta of
+//! `utime+stime+cutime+cstime` from `/proc/<pid>/stat` over wall time) and
+//! resident memory (`VmRSS` from `/proc/<pid>/status`). The waited-child
+//! fields matter: compilers that fork and exit between two polls would
+//! otherwise vanish from the live subtree sum and under-report the build.
 //!
 //! Best-effort like the rest of the global view: a pid that exits mid-sample,
 //! an unreadable `/proc` entry, or a non-Linux host just leaves the fields
@@ -28,7 +30,9 @@ const TICKS_PER_SECOND: f64 = 100.0;
 struct ProcStat {
     pid: i64,
     ppid: i64,
-    /// `utime + stime` in clock ticks.
+    /// `utime + stime + cutime + cstime` in clock ticks: the process's own
+    /// cpu plus that of exited children it has already waited for, so
+    /// short-lived compilers reaped between polls still count.
     cpu_ticks: u64,
 }
 
@@ -121,17 +125,24 @@ fn read_proc_table() -> HashMap<i64, ProcStat> {
 /// The second field is `(comm)` and may itself contain spaces and parentheses
 /// (`(tokio-runtime-w)`, even `(a) b)`), so split on the *last* `)` before
 /// counting fields. After the comm, 1-indexed field 3 is the state, 4 the
-/// ppid, 14/15 utime/stime -- i.e. rest[1], rest[11], rest[12].
+/// ppid, 14/15 utime/stime, 16/17 cutime/cstime -- i.e. rest[1], rest[11],
+/// rest[12], rest[13], rest[14]. The child fields are signed in proc(5), so
+/// they parse as `i64` and clamp at zero.
 fn parse_stat_line(pid: i64, line: &str) -> Option<ProcStat> {
     let rest = line.rsplit_once(')')?.1;
     let fields: Vec<&str> = rest.split_whitespace().collect();
     let parent = fields.get(1)?.parse::<i64>().ok()?;
     let utime = fields.get(11)?.parse::<u64>().ok()?;
     let stime = fields.get(12)?.parse::<u64>().ok()?;
+    let child_user = fields.get(13)?.parse::<i64>().ok()?;
+    let child_system = fields.get(14)?.parse::<i64>().ok()?;
+    // Clamp-then-convert is infallible: `max(0)` makes `unsigned_abs` the
+    // identity, so a (never observed in practice) negative field counts as 0.
+    let child_ticks = child_user.max(0).unsigned_abs() + child_system.max(0).unsigned_abs();
     Some(ProcStat {
         pid,
         ppid: parent,
-        cpu_ticks: utime + stime,
+        cpu_ticks: utime + stime + child_ticks,
     })
 }
 
@@ -184,15 +195,16 @@ mod tests {
     #[test]
     fn stat_line_parses_despite_hostile_comm() {
         // pid (comm) state ppid pgrp session tty tpgid flags minflt cminflt
-        // majflt cmajflt utime stime ...
-        let line = "4242 (a) b (c)) R 100 4242 4242 0 -1 4194304 1 0 0 0 700 42 0 0 20 0 1 0";
+        // majflt cmajflt utime stime cutime cstime ...
+        let line = "4242 (a) b (c)) R 100 4242 4242 0 -1 4194304 1 0 0 0 700 42 5 3 20 0 1 0";
         let stat = parse_stat_line(4242, line).expect("hostile comm parses");
         assert_eq!(
             stat,
             ProcStat {
                 pid: 4242,
                 ppid: 100,
-                cpu_ticks: 742
+                // utime + stime + cutime + cstime: waited-for children count.
+                cpu_ticks: 750
             }
         );
     }
