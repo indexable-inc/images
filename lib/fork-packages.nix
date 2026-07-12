@@ -442,6 +442,10 @@
           upstream = "hold";
           reason = "Feature-sized fetcher change; upstreaming paused per NixOS/nix#15984 and it should open as an upstream issue/discussion first (touches lock-file-adjacent fetch semantics).";
         };
+        "0014-fix-libcmd-preserve-repeated-installable-cardinality.patch" = {
+          upstream = "hold";
+          reason = "Fixes repeated installables multiplying `nix build --json` results (indexable-inc/index#2633). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
       };
     }
   ];
