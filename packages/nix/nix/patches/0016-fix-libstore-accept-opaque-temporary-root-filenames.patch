@@ -38,13 +38,14 @@ diff --git a/tests/functional/gc.sh b/tests/functional/gc.sh
 index c58f47021..576bb546c 100755
 --- a/tests/functional/gc.sh
 +++ b/tests/functional/gc.sh
-@@ -6,6 +6,14 @@ TODO_NixOS
+@@ -6,6 +6,15 @@ TODO_NixOS
  
  clearStore
  
 +# A newer Nix may share this store and use an opaque, per-instance temporary
 +# root filename. GC must treat the filename as diagnostic data rather than
 +# assuming that every non-hidden entry is a decimal PID.
++mkdir -p "$NIX_STATE_DIR/temproots"
 +futureTempRoot="$NIX_STATE_DIR/temproots/temproots-123-456"
 +touch "$futureTempRoot"
 +nix-store --gc --print-roots
