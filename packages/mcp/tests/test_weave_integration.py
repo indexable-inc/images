@@ -126,6 +126,7 @@ def test_delegate_writes_task_shape(weave_server: str, monkeypatch: pytest.Monke
         attrs = {r[0]: r[1] for r in (await weave.query(f'?- latest("{task}", A, V).'))["rows"]}
         assert attrs.get("type") == "task"
         assert attrs.get("agent") == "agent-greeter"
+        assert attrs.get("harness") == "claude"
         assert attrs.get("prompt") == "say hello to the weave world"
         assert attrs.get("state") == "pending"
         assert attrs.get("requested_by") == "agent:e2e"
@@ -133,5 +134,19 @@ def test_delegate_writes_task_shape(weave_server: str, monkeypatch: pytest.Monke
         assert agent_attrs.get("type") == "agent"
         assert agent_attrs.get("name") == "greeter"
         assert agent_attrs.get("model") == "haiku"
+        assert agent_attrs.get("harness") == "claude"
+
+        # A codex dispatch mirrors harness/model/effort onto the task entity.
+        codex_task = await weave.delegate(
+            "greet in codex", name="codex-greeter", harness="codex", model="gpt-5.6-sol", effort="max"
+        )
+        codex_attrs = {r[0]: r[1] for r in (await weave.query(f'?- latest("{codex_task}", A, V).'))["rows"]}
+        assert codex_attrs.get("harness") == "codex"
+        assert codex_attrs.get("model") == "gpt-5.6-sol"
+        assert codex_attrs.get("effort") == "max"
+
+        # 'omp' is reserved: it raises before any fact is written.
+        with pytest.raises(NotImplementedError):
+            await weave.delegate("noop", harness="omp")
 
     asyncio.run(main())
