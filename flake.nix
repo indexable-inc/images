@@ -544,6 +544,14 @@
       # direct-map line, /etc/auto_master gains the include idempotently, and
       # activation reloads automountd. See modules/darwin/nfs.nix.
       nfs = ./modules/darwin/nfs.nix;
+      # Always-on headless aarch64-linux builder VM (vfkit / Virtualization
+      # .framework): launchd daemon runs the guest from one persistent disk,
+      # host tools (vm, vm-ssh, vm-install, vm-deploy, vm-net-connect) and a
+      # ready-made remote-builder record come out of typed options. Pair the
+      # guest with nixosModules.builder-vm. See modules/darwin/builder-vm.nix.
+      builder-vm = import ./modules/darwin/builder-vm.nix {
+        inherit (ix) writeBashApplication;
+      };
     };
     homeModules = {
       # Workstation-facing home-manager module: declare a service once, get a
