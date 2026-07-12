@@ -637,6 +637,28 @@
       cp -r ${slackPythonSource}/slack/. "$site/"
     ''
   );
+  # Discord: read guilds, channels, threads, and messages; send as the team bot;
+  # watch a channel and push human replies back into the agent session -- REST
+  # v10 polling only (no gateway). Pure Python over stdlib urllib + polars.
+  # Credential: DISCORD_BOT_TOKEN env or ~/.config/discord/token (mode 0600,
+  # written by discord.login(token)); a shared team bot token, not a personal
+  # account, so no incognito guard. Cross-platform.
+  discordPythonSource = builtins.path {
+    name = "ix-mcp-discord-python-source";
+    path = ./src/discord;
+  };
+  discordModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-discord-python-module"
+    {
+      strictDeps = true;
+      meta.description = "Discord bot channels/messages/reply-watching bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/discord"
+      mkdir -p "$site"
+      cp -r ${discordPythonSource}/discord/. "$site/"
+    ''
+  );
   # Beeper: read chats and messages across every connected network, search, and
   # send -- a polars-shaped wrapper over the local Beeper Desktop HTTP API
   # (default http://localhost:23373). Pure Python over the bundled httpx + polars.
@@ -1377,6 +1399,7 @@
       browserModule
       xModule
       slackModule
+      discordModule
       beeperModule
       linearModule
       notionModule
@@ -1530,6 +1553,7 @@
     "notion"
     "google_auth"
     "slack"
+    "discord"
     "beeper"
     "view"
     "worktree"
@@ -1891,6 +1915,42 @@
     assert state["configured"] is False, state
     print("slack-ok")
   '';
+  # The `discord` helper imports and exposes its public surface. A real API call
+  # needs DISCORD_BOT_TOKEN + network, so the sandbox-safe assertions are: the
+  # module imports, the public callables exist, an unconfigured session raises
+  # DiscordError with a helpful message, and status() answers instead of raising.
+  # (No shared-room check: the credential is the team bot's, not personal.)
+  discordBundled = importTest "discord" ''
+    import os
+
+    import discord
+
+    assert callable(discord.login) and callable(discord.logout) and callable(discord.status)
+    import asyncio as _asyncio
+
+    assert _asyncio.iscoroutinefunction(discord.guilds)
+    assert _asyncio.iscoroutinefunction(discord.channels)
+    assert _asyncio.iscoroutinefunction(discord.dms)
+    assert _asyncio.iscoroutinefunction(discord.messages)
+    assert _asyncio.iscoroutinefunction(discord.thread)
+    assert _asyncio.iscoroutinefunction(discord.send)
+    assert _asyncio.iscoroutinefunction(discord.watch)
+
+    # Ensure no token env var or file is present.
+    os.environ.pop("DISCORD_BOT_TOKEN", None)
+    try:
+        _asyncio.run(discord.channels())
+    except discord.DiscordError as exc:
+        assert "token" in str(exc).lower(), exc
+        assert "discord.login" in str(exc), exc
+    else:
+        raise SystemExit("expected DiscordError when no token is configured")
+
+    # status() answers instead of raising when not configured.
+    state = discord.status()
+    assert state["configured"] is False, state
+    print("discord-ok")
+  '';
   # The `beeper` helper imports and exposes its public surface. A real API call
   # needs BEEPER_ACCESS_TOKEN + a running Beeper Desktop, so the sandbox-safe
   # assertions are: the module imports, the public callables exist, an
@@ -1962,6 +2022,7 @@
     from pathlib import Path
 
     import beeper
+    import discord
     import slack
     from ix_notebook_mcp import registry, requirements
 
@@ -1970,6 +2031,8 @@
     assert Path(creds["slack"].token_path).expanduser() == slack._TOKEN_FILE, creds["slack"].token_path
     assert creds["beeper"].env == tuple(beeper._TOKEN_ENV_VARS), creds["beeper"].env
     assert Path(creds["beeper"].token_path).expanduser() == beeper._TOKEN_FILE, creds["beeper"].token_path
+    assert creds["discord"].env == tuple(discord._TOKEN_ENV_VARS), creds["discord"].env
+    assert Path(creds["discord"].token_path).expanduser() == discord._TOKEN_FILE, creds["discord"].token_path
 
     by_name = {s.name: s for s in requirements.statuses()}
     assert set(by_name) == set(creds), sorted(by_name)
@@ -5573,6 +5636,39 @@
       mkdir -p "$out"
     '';
 
+  # Network-free unit tests for the `discord` helper: module shape, token
+  # resolution, message normalization, the send payloads (plain post vs. inline
+  # reply), the channel watcher's poll-and-notify loop, and the X-RateLimit
+  # backoff (stubbing the one network primitive).
+  discordTestPython = pkgs.python3.withPackages (ps: [
+    ps.pytest
+    ps.polars
+    privateSessionModule
+    discordModule
+  ]);
+  discordTestSource = builtins.path {
+    name = "ix-mcp-discord-test";
+    path = ./tests/test_discord.py;
+  };
+  discordTests =
+    pkgs.runCommand "ix-mcp-discord-tests"
+    {
+      nativeBuildInputs = [discordTestPython];
+      strictDeps = true;
+    }
+    ''
+      export HOME=$TMPDIR/home
+      mkdir -p "$HOME"
+      cp ${discordTestSource} "$TMPDIR/test_discord.py"
+      ${lib.getExe discordTestPython} -m pytest "$TMPDIR/test_discord.py" -q -p no:cacheprovider >stdout 2>stderr || {
+        echo "ix-mcp discord tests failed:" >&2
+        cat stdout stderr >&2
+        exit 1
+      }
+      cat stdout
+      mkdir -p "$out"
+    '';
+
   # Network-free unit tests for the `google_auth` mail sender (issue #2523):
   # MIME assembly, reply threading (threadId + In-Reply-To/References), and the
   # delivered-body readback, driven against a stub Gmail Resource. Only the
@@ -5717,6 +5813,8 @@ in
               ixGoogleBundled
               slackBundled
               slackTests
+              discordBundled
+              discordTests
               resourcesBridgeTests
               meshBundled
               meshTests
