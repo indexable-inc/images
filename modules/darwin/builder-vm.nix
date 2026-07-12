@@ -187,7 +187,7 @@
     text = ''
       connect=${lib.getExe vmNetConnect}
       export NIX_SSHOPTS="-o ProxyCommand=$connect -o StrictHostKeyChecking=accept-new"
-      exec nixos-rebuild switch --flake ${cfg.deploy.flake} --target-host root@vm "$@"
+      exec nixos-rebuild switch --flake ${lib.escapeShellArg cfg.deploy.flake} --target-host root@vm "$@"
     '';
   };
 
@@ -264,9 +264,9 @@
       iface=''${addr##* }
       net="''${ip%.*}.0/24"
       if [ "$(id -u)" = 0 ]; then
-        /sbin/route -n add -net "$net" -interface "$iface" >/dev/null 2>&1 || true
+        /sbin/route -n change -net "$net" -interface "$iface" >/dev/null
       else
-        /usr/bin/sudo -n /sbin/route -n add -net "$net" -interface "$iface" >/dev/null 2>&1 || true
+        /usr/bin/sudo -n /sbin/route -n change -net "$net" -interface "$iface" >/dev/null
       fi
       exec /usr/bin/nc "$ip" 22
     '';
@@ -472,6 +472,9 @@ in {
         # protocol streams.
         name = "vm-builder";
         hostName = "vm";
+        # The restricted builder key forces nix-daemon --stdio, the ssh-ng
+        # protocol endpoint rather than the legacy SSH store protocol.
+        protocol = "ssh-ng";
         user = "root";
         inherit
           (cfg)

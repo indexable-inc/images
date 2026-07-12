@@ -214,6 +214,8 @@ in {
     };
 
     nix.settings = {
+      # The host advertises this builder for content-addressed derivations.
+      extra-experimental-features = ["ca-derivations"];
       # This box exists to build; never fall back to unsandboxed builds.
       sandbox-fallback = false;
       # Collect only under storage pressure (nix.gc.automatic stays off,

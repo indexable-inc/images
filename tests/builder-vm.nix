@@ -16,8 +16,19 @@
   darwinPkgs = import nixpkgs {
     system = "aarch64-darwin";
     config = {};
-    overlays = [];
+    overlays = [
+      (final: _: {
+        nixos-rebuild-ng = ix.writeBashApplication final {
+          name = "nixos-rebuild";
+          text = ''
+            : "''${VM_DEPLOY_ARGS:?}"
+            printf '%s\n' "$@" > "$VM_DEPLOY_ARGS"
+          '';
+        };
+      })
+    ];
   };
+  deployFlake = "/tmp/index builder?ref=main&rev=1#vm";
   spec = {
     mac = "5a:94:ef:2b:17:0c";
     cpus = 8;
@@ -69,7 +80,7 @@
           image = darwinPkgs.emptyDirectory;
           imageFileName = "vm.raw";
         };
-        deploy.flake = "github:example/config#vm";
+        deploy.flake = deployFlake;
       };
   };
 
@@ -136,6 +147,10 @@
       message = "the remote-builder record should keep the vm-builder/vm alias split (ssh multiplexing hazard)";
     }
     {
+      assertion = builder.protocol == "ssh-ng";
+      message = "the forced nix-daemon --stdio builder key requires the ssh-ng protocol";
+    }
+    {
       assertion = builder.systems == ["aarch64-linux"] && builder.maxJobs == spec.cpus;
       message = "the remote-builder record should advertise aarch64-linux with one job per vCPU";
     }
@@ -199,6 +214,10 @@
         !guest.nix.settings.sandbox-fallback && guest.nix.settings.sync-before-registering;
       message = "the guest nix daemon should keep the build-box hardening settings";
     }
+    {
+      assertion = lib.elem "ca-derivations" guest.nix.settings.extra-experimental-features;
+      message = "the guest nix daemon should enable every advertised experimental system feature";
+    }
   ];
 
   failures = map (a: a.message) (lib.filter (a: !a.assertion) assertions);
@@ -216,5 +235,17 @@ in
         ++ [withGuest.services.builder-vm.packages.vm-install.tests.grow-only]
       );
     } ''
+      ${lib.optionalString (pkgs.stdenv.hostPlatform.system == "aarch64-darwin") ''
+        export VM_DEPLOY_ARGS="$TMPDIR/vm-deploy-args"
+        ${lib.getExe withGuest.services.builder-vm.packages.vm-deploy}
+        printf '%s\n' \
+          switch \
+          --flake \
+          ${lib.escapeShellArg deployFlake} \
+          --target-host \
+          root@vm \
+          > "$TMPDIR/vm-deploy-expected"
+        cmp "$TMPDIR/vm-deploy-expected" "$VM_DEPLOY_ARGS"
+      ''}
       mkdir -p "$out"
     ''
