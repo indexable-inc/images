@@ -1,0 +1,370 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 12 Jul 2026 09:44:19 +0000
+Subject: [PATCH] Parse external command output through a binary-declared lens
+
+Compiled binaries can carry linking metadata: a small versioned JSON blob
+({"v":1,"stdout":{"lens":"json"}}) embedded at link time in a dedicated
+ELF section (.ix.link) naming the lens -- a shell-owned parsing
+strategy -- that applies to the binary's stdout. Today users hand-write
+`^tool | from json` or keep per-tool wrappers; with the section present,
+run-external reads the declaration without executing anything and applies
+the lens automatically, so a bare `^tool` comes back structured.
+
+Reading is best-effort: a missing section, an unreadable or non-ELF
+binary, a malformed blob, or an unknown lens name leaves behavior exactly
+as it is today. Output merged with stderr (o+e>|) or redirected to a file
+or the null device is never lensed, since raw bytes are the point there.
+Only the "json" lens is implemented; the schema is versioned so more
+metadata (stderr format, completions, ...) can ride the same section
+later.
+
+The producer side (a Rust macro embedding the blob) lives in
+indexable-inc/index under packages/link-meta.
+
+diff --git a/crates/nu-command/src/system/ix_link.rs b/crates/nu-command/src/system/ix_link.rs
+new file mode 100644
+index 000000000..e3f3f8d60
+--- /dev/null
++++ b/crates/nu-command/src/system/ix_link.rs
+@@ -0,0 +1,264 @@
++//! Linking metadata: lens declarations embedded in external command binaries.
++//!
++//! A compiled binary can declare, at link time, how a shell should interpret
++//! its output: a small versioned JSON blob such as
++//! `{"v":1,"stdout":{"lens":"json"}}` stored in a dedicated section of the
++//! binary (ELF: `.ix.link`). The binary only *names* the lens that applies to
++//! its stdout; the shell owns the lens implementations. This lets
++//! `run-external` read the declaration without executing anything and parse
++//! the command's output into structured data automatically, instead of
++//! requiring a hand-written `| from json` or a per-tool wrapper.
++//!
++//! The producer side (a Rust macro that embeds the blob) lives in
++//! indexable-inc/index under `packages/link-meta`, which also documents the
++//! section name and schema.
++//!
++//! Everything here is best-effort by design: a missing section, an unreadable
++//! or non-ELF binary, a malformed blob, or an unknown lens name all yield
++//! `None`, and the external command behaves exactly as it does today.
++
++use nu_protocol::{IntoPipelineData, PipelineData, ShellError, Span, Value, engine::EngineState};
++use std::fs::File;
++use std::io::{Read, Seek, SeekFrom};
++use std::path::Path;
++
++/// The ELF section holding the metadata blob.
++const ELF_SECTION: &[u8] = b".ix.link";
++
++/// Upper bound on the metadata blob; anything bigger is not ours.
++const MAX_META_LEN: u64 = 64 * 1024;
++
++/// Upper bound on the section-name string table we are willing to load.
++const MAX_STRTAB_LEN: u64 = 1024 * 1024;
++
++/// The stdout lens named by `executable`'s embedded linking metadata, if any.
++pub(super) fn stdout_lens(executable: &Path) -> Option<String> {
++    let raw = read_link_section(executable)?;
++    parse_stdout_lens(&raw)
++}
++
++/// Apply a stdout `lens` to the output of an external command.
++///
++/// Only the `json` lens is implemented for now. An unknown lens name (say,
++/// from a binary built against a newer schema) and output that fails to parse
++/// both fall back to the plain output the command would have produced anyway.
++pub(super) fn apply_stdout_lens(
++    lens: &str,
++    data: PipelineData,
++    engine_state: &EngineState,
++    span: Span,
++) -> Result<PipelineData, ShellError> {
++    if lens != "json" {
++        return Ok(data);
++    }
++    let value = data.into_value(span)?;
++    let Value::String { val: ref text, .. } = value else {
++        // Non-UTF-8 output cannot be JSON; pass it through.
++        return Ok(value.into_pipeline_data());
++    };
++    match crate::try_json_str_to_value(text, span, false, engine_state.signals()) {
++        Ok(parsed) => Ok(parsed.into_pipeline_data()),
++        Err(_) => Ok(value.into_pipeline_data()),
++    }
++}
++
++/// Extract the `stdout.lens` name from a raw metadata blob.
++///
++/// The blob is versioned JSON: `{"v":1,"stdout":{"lens":"<name>"}}`. Only
++/// `v == 1` is understood; other keys are reserved for future metadata
++/// (completions, stderr format, ...) and are ignored.
++fn parse_stdout_lens(raw: &[u8]) -> Option<String> {
++    let text = std::str::from_utf8(raw)
++        .ok()?
++        .trim_matches(|c: char| c == '\0' || c.is_whitespace());
++    let doc: serde_json::Value = serde_json::from_str(text).ok()?;
++    if doc.get("v")?.as_u64()? != 1 {
++        return None;
++    }
++    Some(doc.get("stdout")?.get("lens")?.as_str()?.to_owned())
++}
++
++/// Read the contents of the `.ix.link` section from an ELF binary at `path`.
++///
++/// This is a deliberately minimal section-header walk (64-bit little-endian
++/// ELF only, which covers the platforms nushell targets on Linux) so that no
++/// object-file dependency is pulled into nu-command. Any structural surprise
++/// returns `None`.
++fn read_link_section(path: &Path) -> Option<Vec<u8>> {
++    let mut file = File::open(path).ok()?;
++    let mut ehdr = [0u8; 64];
++    file.read_exact(&mut ehdr).ok()?;
++    if ehdr[0..4] != [0x7f, b'E', b'L', b'F'] {
++        return None;
++    }
++    // EI_CLASS == ELFCLASS64, EI_DATA == ELFDATA2LSB.
++    if ehdr[4] != 2 || ehdr[5] != 1 {
++        return None;
++    }
++    let shoff = u64::from_le_bytes(ehdr[0x28..0x30].try_into().ok()?);
++    let shentsize = u64::from(u16::from_le_bytes(ehdr[0x3a..0x3c].try_into().ok()?));
++    let shnum = u64::from(u16::from_le_bytes(ehdr[0x3c..0x3e].try_into().ok()?));
++    let shstrndx = u64::from(u16::from_le_bytes(ehdr[0x3e..0x40].try_into().ok()?));
++    if shoff == 0 || shentsize < 64 || shnum == 0 || shstrndx >= shnum {
++        return None;
++    }
++
++    let read_shdr = |file: &mut File, index: u64| -> Option<[u8; 64]> {
++        let mut buf = [0u8; 64];
++        let pos = shoff.checked_add(index.checked_mul(shentsize)?)?;
++        file.seek(SeekFrom::Start(pos)).ok()?;
++        file.read_exact(&mut buf).ok()?;
++        Some(buf)
++    };
++
++    // Load the section-name string table.
++    let strtab_hdr = read_shdr(&mut file, shstrndx)?;
++    let strtab_off = u64::from_le_bytes(strtab_hdr[0x18..0x20].try_into().ok()?);
++    let strtab_len = u64::from_le_bytes(strtab_hdr[0x20..0x28].try_into().ok()?);
++    if strtab_len == 0 || strtab_len > MAX_STRTAB_LEN {
++        return None;
++    }
++    let mut strtab = vec![0u8; usize::try_from(strtab_len).ok()?];
++    file.seek(SeekFrom::Start(strtab_off)).ok()?;
++    file.read_exact(&mut strtab).ok()?;
++
++    for index in 0..shnum {
++        let shdr = read_shdr(&mut file, index)?;
++        let name_off = usize::try_from(u32::from_le_bytes(shdr[0..4].try_into().ok()?)).ok()?;
++        let Some(name) = strtab.get(name_off..) else {
++            continue;
++        };
++        let name = &name[..name.iter().position(|&b| b == 0)?];
++        if name != ELF_SECTION {
++            continue;
++        }
++        const SHT_NOBITS: u32 = 8;
++        let sh_type = u32::from_le_bytes(shdr[4..8].try_into().ok()?);
++        if sh_type == SHT_NOBITS {
++            return None;
++        }
++        let off = u64::from_le_bytes(shdr[0x18..0x20].try_into().ok()?);
++        let size = u64::from_le_bytes(shdr[0x20..0x28].try_into().ok()?);
++        if size == 0 || size > MAX_META_LEN {
++            return None;
++        }
++        let mut raw = vec![0u8; usize::try_from(size).ok()?];
++        file.seek(SeekFrom::Start(off)).ok()?;
++        file.read_exact(&mut raw).ok()?;
++        return Some(raw);
++    }
++    None
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::io::Write;
++
++    /// Build a minimal ELF64 (little-endian) image containing a single named
++    /// section with `payload` plus the mandatory null section and the section
++    /// name string table.
++    fn minimal_elf(section_name: &[u8], payload: &[u8]) -> Vec<u8> {
++        let mut strtab = vec![0u8];
++        let name_off = strtab.len() as u32;
++        strtab.extend_from_slice(section_name);
++        strtab.push(0);
++        let shstrtab_name_off = strtab.len() as u32;
++        strtab.extend_from_slice(b".shstrtab");
++        strtab.push(0);
++
++        let payload_off = 64u64;
++        let strtab_off = payload_off + payload.len() as u64;
++        let shoff = strtab_off + strtab.len() as u64;
++
++        let mut out = Vec::new();
++        // ELF header.
++        out.extend_from_slice(&[0x7f, b'E', b'L', b'F', 2, 1, 1, 0]);
++        out.extend_from_slice(&[0u8; 8]); // rest of e_ident
++        out.extend_from_slice(&2u16.to_le_bytes()); // e_type = ET_EXEC
++        out.extend_from_slice(&62u16.to_le_bytes()); // e_machine = EM_X86_64
++        out.extend_from_slice(&1u32.to_le_bytes()); // e_version
++        out.extend_from_slice(&0u64.to_le_bytes()); // e_entry
++        out.extend_from_slice(&0u64.to_le_bytes()); // e_phoff
++        out.extend_from_slice(&shoff.to_le_bytes()); // e_shoff
++        out.extend_from_slice(&0u32.to_le_bytes()); // e_flags
++        out.extend_from_slice(&64u16.to_le_bytes()); // e_ehsize
++        out.extend_from_slice(&0u16.to_le_bytes()); // e_phentsize
++        out.extend_from_slice(&0u16.to_le_bytes()); // e_phnum
++        out.extend_from_slice(&64u16.to_le_bytes()); // e_shentsize
++        out.extend_from_slice(&3u16.to_le_bytes()); // e_shnum
++        out.extend_from_slice(&2u16.to_le_bytes()); // e_shstrndx
++        assert_eq!(out.len(), 64);
++
++        out.extend_from_slice(payload);
++        out.extend_from_slice(&strtab);
++
++        let shdr = |name: u32, sh_type: u32, off: u64, size: u64| {
++            let mut h = Vec::with_capacity(64);
++            h.extend_from_slice(&name.to_le_bytes());
++            h.extend_from_slice(&sh_type.to_le_bytes());
++            h.extend_from_slice(&0u64.to_le_bytes()); // sh_flags
++            h.extend_from_slice(&0u64.to_le_bytes()); // sh_addr
++            h.extend_from_slice(&off.to_le_bytes());
++            h.extend_from_slice(&size.to_le_bytes());
++            h.extend_from_slice(&0u32.to_le_bytes()); // sh_link
++            h.extend_from_slice(&0u32.to_le_bytes()); // sh_info
++            h.extend_from_slice(&0u64.to_le_bytes()); // sh_addralign
++            h.extend_from_slice(&0u64.to_le_bytes()); // sh_entsize
++            h
++        };
++        out.extend_from_slice(&shdr(0, 0, 0, 0)); // SHN_UNDEF
++        out.extend_from_slice(&shdr(name_off, 1, payload_off, payload.len() as u64));
++        out.extend_from_slice(&shdr(shstrtab_name_off, 3, strtab_off, strtab.len() as u64));
++        out
++    }
++
++    fn write_temp(bytes: &[u8], tag: &str) -> std::path::PathBuf {
++        let path = std::env::temp_dir().join(format!(
++            "nu-ix-link-test-{}-{tag}.bin",
++            std::process::id()
++        ));
++        let mut f = File::create(&path).expect("create temp file");
++        f.write_all(bytes).expect("write temp file");
++        path
++    }
++
++    #[test]
++    fn reads_json_lens_from_elf_section() {
++        let elf = minimal_elf(b".ix.link", br#"{"v":1,"stdout":{"lens":"json"}}"#);
++        let path = write_temp(&elf, "json-lens");
++        assert_eq!(stdout_lens(&path), Some("json".into()));
++        let _ = std::fs::remove_file(path);
++    }
++
++    #[test]
++    fn missing_section_is_none() {
++        let elf = minimal_elf(b".other", br#"{"v":1,"stdout":{"lens":"json"}}"#);
++        let path = write_temp(&elf, "missing-section");
++        assert_eq!(stdout_lens(&path), None);
++        let _ = std::fs::remove_file(path);
++    }
++
++    #[test]
++    fn unknown_version_is_none() {
++        let elf = minimal_elf(b".ix.link", br#"{"v":2,"stdout":{"lens":"json"}}"#);
++        let path = write_temp(&elf, "unknown-version");
++        assert_eq!(stdout_lens(&path), None);
++        let _ = std::fs::remove_file(path);
++    }
++
++    #[test]
++    fn malformed_blob_is_none() {
++        let elf = minimal_elf(b".ix.link", b"not json at all");
++        let path = write_temp(&elf, "malformed-blob");
++        assert_eq!(stdout_lens(&path), None);
++        let _ = std::fs::remove_file(path);
++    }
++
++    #[test]
++    fn non_elf_file_is_none() {
++        let path = write_temp(b"#!/bin/sh\necho hi\n", "non-elf");
++        assert_eq!(stdout_lens(&path), None);
++        let _ = std::fs::remove_file(path);
++    }
++}
+diff --git a/crates/nu-command/src/system/mod.rs b/crates/nu-command/src/system/mod.rs
+index 81c8b3191..c1dd7f8a3 100644
+--- a/crates/nu-command/src/system/mod.rs
++++ b/crates/nu-command/src/system/mod.rs
+@@ -1,5 +1,6 @@
+ mod complete;
+ mod exec;
++mod ix_link;
+ mod nu_check;
+ #[cfg(any(
+     target_os = "android",
+diff --git a/crates/nu-command/src/system/run_external.rs b/crates/nu-command/src/system/run_external.rs
+index aee014049..c37d25496 100644
+--- a/crates/nu-command/src/system/run_external.rs
++++ b/crates/nu-command/src/system/run_external.rs
+@@ -1,3 +1,4 @@
++use super::ix_link;
+ use itertools::Itertools;
+ use nu_cmd_base::hook::eval_hook;
+ use nu_engine::{command_prelude::*, env_to_strings};
+@@ -207,6 +208,24 @@ If you create a custom command with this name, that will be used instead."
+         // we'll set up a pipe that merges two streams into one.
+         let stdout = stack.stdout();
+         let stderr = stack.stderr();
++
++        // Linking metadata (see system/ix_link.rs): a binary may declare, in
++        // an embedded `.ix.link` section, which lens applies to its stdout
++        // (e.g. `{"v":1,"stdout":{"lens":"json"}}`). When one is declared we
++        // capture stdout and parse it into structured data instead of passing
++        // raw bytes through. Lookup is best-effort: no section, an unreadable
++        // binary, or an unknown lens mean `None`, i.e. exactly today's
++        // behavior. Skipped when stdout is merged with stderr (`o+e>|`) or
++        // redirected to a file or the null device, where raw bytes are the
++        // point.
++        let stdout_lens = if (matches!(stdout, OutDest::Pipe) && matches!(stderr, OutDest::Pipe))
++            || matches!(stdout, OutDest::Null | OutDest::File(_))
++        {
++            None
++        } else {
++            ix_link::stdout_lens(executable.as_path())
++        };
++
+         let merged_stream = if matches!(stdout, OutDest::Pipe) && matches!(stderr, OutDest::Pipe) {
+             let (reader, writer) =
+                 os_pipe::pipe().map_err(|err| IoError::new(err, call.head, None))?;
+@@ -218,7 +237,13 @@ If you create a custom command with this name, that will be used instead."
+             command.stderr(writer);
+             Some(reader)
+         } else {
+-            if engine_state.is_background_job()
++            if stdout_lens.is_some() {
++                // The lens collects and parses stdout, so pipe it regardless
++                // of the requested destination. This is what turns a bare
++                // `^tool` at the REPL into structured output rather than a
++                // raw byte stream to the terminal.
++                command.stdout(Stdio::piped());
++            } else if engine_state.is_background_job()
+                 && matches!(stdout, OutDest::Inherit | OutDest::Print)
+             {
+                 command.stdout(Stdio::null());
+@@ -344,10 +369,11 @@ If you create a custom command with this name, that will be used instead."
+             )),
+         )?;
+ 
+-        Ok(PipelineData::byte_stream(
+-            ByteStream::child(child, call.head),
+-            None,
+-        ))
++        let output = PipelineData::byte_stream(ByteStream::child(child, call.head), None);
++        match stdout_lens {
++            Some(lens) => ix_link::apply_stdout_lens(&lens, output, engine_state, call.head),
++            None => Ok(output),
++        }
+     }
+ 
+     fn examples(&self) -> Vec<Example<'_>> {

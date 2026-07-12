@@ -59,7 +59,7 @@ in
     meta =
       (old.meta or {})
       // {
-        description = "Nushell with index's xattr-aware ls patch";
+        description = "Nushell with index's patch series (xattr-aware ls, linking-metadata stdout lenses)";
         homepage = "https://github.com/nushell/nushell";
         license = lib.licenses.mit;
         mainProgram = "nu";

@@ -9,6 +9,10 @@
     {
       "patch": "0002-Derive-feature-list-for-cargo-unit-builds.patch",
       "deps": []
+    },
+    {
+      "patch": "0003-Parse-external-command-output-through-a-binary-decla.patch",
+      "deps": []
     }
   ]
 }

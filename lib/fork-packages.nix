@@ -198,6 +198,10 @@
           upstream = "never";
           reason = "Repo-specific: cargo-unit does not export Cargo's aggregate CARGO_CFG_FEATURE env var, so the package derives it from CARGO_FEATURE_* for ix builds.";
         };
+        "0003-Parse-external-command-output-through-a-binary-decla.patch" = {
+          upstream = "hold";
+          reason = "Linking-metadata lens prototype (indexable-inc/index packages/link-meta): a feature of this shape should start as an upstream discussion (schema, section name, lens registry), not a cold PR.";
+        };
       };
     }
     {
