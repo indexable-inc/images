@@ -172,6 +172,38 @@ def test_result_returns_on_done(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("state", "attr", "detail", "error"),
+    [
+        ("failed", "error", "worker process exited", weave.TaskFailedError),
+        ("cancelled", "result", "stopped by user", weave.TaskCancelledError),
+    ],
+)
+def test_result_raises_terminal_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    state: str,
+    attr: str,
+    detail: str,
+    error: type[RuntimeError],
+) -> None:
+    programs: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        program = weave.json.loads(req.read())["program"]
+        programs.append(program)
+        value = state if ", state, " in program else detail
+        variable = "S" if ", state, " in program else "R"
+        return httpx.Response(200, json={"vars": [variable], "rows": [[{"t": "str", "v": value}]], "as_of": 1})
+
+    install_transport(monkeypatch, handler)
+    with pytest.raises(error, match=rf"task {state}: task-abcd1234: {detail}"):
+        run(weave.result("task-abcd1234"))
+    assert programs == [
+        '?- latest("task-abcd1234", state, S).',
+        f'?- latest("task-abcd1234", {attr}, R).',
+    ]
+
+
 def test_result_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"vars": ["S"], "rows": [[{"t": "str", "v": "pending"}]], "as_of": 1})

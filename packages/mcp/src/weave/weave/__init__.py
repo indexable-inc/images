@@ -24,6 +24,8 @@ if TYPE_CHECKING:
 __all__ = [
     "HashRef",
     "QueryResult",
+    "TaskCancelledError",
+    "TaskFailedError",
     "Weave",
     "assert_fact",
     "assert_facts",
@@ -52,6 +54,14 @@ class HashRef:
     """Explicit marker for a Weave hash value."""
 
     value: str
+
+
+class TaskFailedError(RuntimeError):
+    """A delegated Weave task published the terminal ``failed`` state."""
+
+
+class TaskCancelledError(RuntimeError):
+    """A delegated Weave task published the terminal ``cancelled`` state."""
 
 
 def hashref(h: str) -> HashRef:
@@ -283,18 +293,31 @@ class Weave:
     async def result(self, task: str, *, timeout: float | None = None) -> str:
         """Block until ``task`` finishes; return its ``result`` fact text.
 
-        Polls ``latest(task, state)`` every 0.5s until it reaches done,
-        failed, or cancelled, then returns the task's ``result`` fact text
-        ("" when the fulfiller wrote none). Raises TimeoutError once
-        ``timeout`` seconds pass without a terminal state.
+        Polls ``latest(task, state)`` every 0.5s. ``done`` returns the durable
+        ``result`` fact ("" when the fulfiller wrote none); ``failed`` and
+        ``cancelled`` raise :class:`TaskFailedError` and
+        :class:`TaskCancelledError` with the published terminal detail.
+        Raises TimeoutError once ``timeout`` seconds pass without a terminal
+        state. This journal read is completion authority; any channel wake is
+        only a best-effort hint to inspect the durable result.
         """
 
         deadline = None if timeout is None else time.monotonic() + timeout
         while True:
             rows = (await self.query(f'?- latest("{task}", state, S).'))["rows"]
-            if rows and rows[0][0] in ("done", "failed", "cancelled"):
-                out = (await self.query(f'?- latest("{task}", result, R).'))["rows"]
-                return out[0][0] if out else ""
+            if rows:
+                state = rows[0][0]
+                if state == "done":
+                    out = (await self.query(f'?- latest("{task}", result, R).'))["rows"]
+                    return out[0][0] if out else ""
+                if state == "failed":
+                    out = (await self.query(f'?- latest("{task}", error, R).'))["rows"]
+                    detail = out[0][0] if out else ""
+                    raise TaskFailedError(f"task failed: {task}" + (f": {detail}" if detail else ""))
+                if state == "cancelled":
+                    out = (await self.query(f'?- latest("{task}", result, R).'))["rows"]
+                    detail = out[0][0] if out else ""
+                    raise TaskCancelledError(f"task cancelled: {task}" + (f": {detail}" if detail else ""))
             if deadline is not None and time.monotonic() >= deadline:
                 raise TimeoutError(f"task not finished after {timeout}s: {task}")
             await asyncio.sleep(0.5)
