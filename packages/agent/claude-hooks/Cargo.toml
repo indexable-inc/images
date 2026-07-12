@@ -9,8 +9,13 @@ description = "Claude Code/Codex hook commands (session-digest, worktree-guard, 
 workspace = true
 
 [dependencies]
-# `clock` for chrono::Local (friction-report log timestamps).
+# retro-gate ships the session transcript to the ix-mcp kernel as chunked
+# base64 python_exec cells (and encodes the delegate prompt the same way).
+base64.workspace = true
+# `clock` for chrono::Local (friction-report/retro-gate log timestamps).
 chrono = { workspace = true, features = ["alloc", "clock"] }
+# retro-gate gzips the transcript before upload; large sessions are tens of MB.
+flate2.workspace = true
 glob.workspace = true
 # friction-report files to Linear over HTTPS, and the subagent-cache hooks POST
 # to their daemon. A blocking client keeps these short-lived sync hooks a plain

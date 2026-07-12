@@ -61,6 +61,10 @@
     {
       "patch": "0014-libexpr-accept-underscore-digit-separators-in-numeri.patch",
       "deps": []
+    },
+    {
+      "patch": "0015-fix-libcmd-preserve-repeated-installable-cardinality.patch",
+      "deps": []
     }
   ]
 }
