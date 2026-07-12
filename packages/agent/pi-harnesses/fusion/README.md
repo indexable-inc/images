@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/hero.svg" width="620" alt="a fable-5 primary delegates bounded work to a headless gpt-5.5-low sidekick in an isolated worktree, which returns a summary and a patch"></p>
+<p align="center"><img src="assets/hero.svg" width="620" alt="a fable-5 primary delegates bounded work to a headless gpt-5.6-sol sidekick at low reasoning in an isolated worktree, which returns a summary and a patch"></p>
 
 # pi-fusion
 
@@ -13,7 +13,7 @@ ambiguity-resolution, monitoring, and final review.
    `fable` (`fable-5`).
 2. The primary delegates bounded work with
    `delegate({ task, acceptance?, mode?, timeoutSec? })`.
-3. The sidekick runs as a headless Pi worker, defaulting to OpenAI `gpt-5.5`
+3. The sidekick runs as a headless Pi worker, defaulting to OpenAI `gpt-5.6-sol`
    with `thinking=low`.
 4. The sidekick works in an isolated git worktree off `HEAD`, returns a concise
    summary plus a patch, and the primary decides whether to apply or revise it.
@@ -25,7 +25,7 @@ inspection, mechanical edits, and test loops.
 ## Config
 
 - `PI_HARNESS_MODEL` - primary model alias; defaults to `fable`.
-- `PI_FUSION_SIDEKICK_MODEL` - sidekick model id; defaults to `gpt-5.5`.
+- `PI_FUSION_SIDEKICK_MODEL` - sidekick model id; defaults to `gpt-5.6-sol`.
 - `PI_FUSION_SIDEKICK_PROVIDER` - sidekick provider; defaults to `openai`.
 - `PI_FUSION_SIDEKICK_THINKING` - sidekick thinking level; defaults to `low`.
 - `PI_FUSION_GOAL` - optional explicit goal; otherwise captured from the first

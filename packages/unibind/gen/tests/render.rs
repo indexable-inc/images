@@ -15,8 +15,7 @@ use unibind_test_support::assert_snapshot;
 fn names(py: Option<&str>) -> ir::Names {
     ir::Names {
         py: py.map(str::to_owned),
-        ts: None,
-        ex: None,
+        ..ir::Names::default()
     }
 }
 
@@ -170,6 +169,7 @@ fn sample_errors() -> Vec<ir::ErrorType> {
         names: names(None),
         docs: docs(&["Everything the sample boundary raises."]),
         py_base: Some("ValueError".to_owned()),
+        jvm_base: None,
         variants: vec![
             ir::ErrorVariant {
                 name: "Parse".to_owned(),

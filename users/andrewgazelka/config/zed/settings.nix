@@ -6,7 +6,7 @@
     default_model = {
       effort = "medium";
       enable_thinking = true;
-      model = "gpt-5.5";
+      model = "gpt-5.6-sol";
       provider = "openai";
     };
     dock = "right";
@@ -139,8 +139,13 @@
         };
       };
       language_servers = [
-        "nixd"
-        "!nil"
+        # nox-lsp (nox docs/lsp.md): eval-backed Nix LSP, run through the
+        # registered nil adapter slot (Zed's Nix extension only registers
+        # nil/nixd; an lsp entry alone can't add a new adapter). typenix
+        # stays installed behind the nixd slot below; revert by swapping
+        # this list.
+        "nil"
+        "!nixd"
       ];
     };
     Nu = {
@@ -190,6 +195,23 @@
         Lua = {
           diagnostics = {
             globals = ["vim"];
+          };
+        };
+      };
+    };
+    # nil adapter slot repointed at nox-lsp (see languages.Nix above).
+    nil = {
+      binary = {
+        arguments = [];
+        path = "nox-lsp";
+      };
+      initialization_options = {
+        embedded = {
+          commands = {
+            bash = [
+              "bash-language-server"
+              "start"
+            ];
           };
         };
       };

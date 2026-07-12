@@ -221,13 +221,6 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # TODO: re-add the `symphony` flake input that provided
-    # `pkgs.symphony-room-server`. room-server's real home is the ix monorepo
-    # (`crates/room`, `ix#packages.x86_64-linux.room-server`), but ix already
-    # inputs index (`ix/flake.nix`), so index cannot source it from ix without a
-    # circular flake dependency. Pin removed for now; re-add once that cycle is
-    # resolved or room-server moves into this repo.
-
     # Ghostty's terminal VT engine, consumed as a source tree (not a flake) so
     # `packages/tui/vt/libghostty-vt` owns the build. Pinned to the commit the
     # local clone validated against; `requireZig` in `build.zig.zon` is exact
@@ -437,7 +430,16 @@
       inherit indexPackages;
       portableServicesModule = ix.portableServices.homeModule;
     };
+    # One instance shared by every wiring site (the workstation profile and
+    # homeModules.provenance); the module's `key` also dedups the instances a
+    # consumer combines, but there is no reason to make them re-apply the
+    # walker.
+    provenanceHomeModule = import ./modules/home/provenance.nix {inherit (ix) provenance;};
     claudeCodeHomeModule = import ./packages/agent/home-manager/claude-code.nix {
+      inherit indexPackages;
+      promptModule = ./packages/agent/prompt;
+    };
+    codexHomeModule = import ./packages/agent/home-manager/codex.nix {
       inherit indexPackages;
       promptModule = ./packages/agent/prompt;
     };
@@ -456,9 +458,10 @@
     };
     personalWorkstationModule = import ./users/andrewgazelka/profiles/workstation.nix {
       inherit indexPackages personalServicesModule ix;
+      codexModule = codexHomeModule;
       configRoot = personalConfigRoot;
       mutableFilesModule = mutableFilesHomeModule;
-      provenanceModule = import ./modules/home/provenance.nix {inherit (ix) provenance;};
+      provenanceModule = provenanceHomeModule;
       optionsModule = personalOptionsModule;
       indexSkillsSrc = paths.skills;
       tmuxModule = ./modules/home/tmux.nix;
@@ -537,6 +540,22 @@
       # `cliBaseline.packages` to trim or swap tools. See
       # modules/home/cli-baseline.nix.
       cli-baseline = ./modules/home/cli-baseline.nix;
+      # Per-project nvim-server multiplexer (tmux replacement): one headless
+      # nvim server per git root, `mux` attaches with --remote-ui, and the
+      # optional zsh integration makes bare `ssh <host>`/`mosh <host>`
+      # auto-attach the remote's mux. Import it and set
+      # `programs.mux.enable = true`; needs an nvim config shipping a `mux`
+      # lua module. See modules/home/mux.nix.
+      mux = import ./modules/home/mux.nix {inherit ix;};
+      # XDG hygiene: point tool state/caches/config (cargo, go, npm/pnpm,
+      # python, docker, aws, psql/sqlite histories, wget/less) at the XDG
+      # base directories instead of $HOME. Import it and set
+      # `xdgTidy.enable = true`. See modules/home/xdg-tidy.nix.
+      xdg-tidy = ./modules/home/xdg-tidy.nix;
+      # Cursor-shape feedback for zsh vi mode (beam insert, block command,
+      # reset around every prompt/command). Import it and set
+      # `zshViCursor.enable = true`. See modules/home/zsh-vi-cursor.nix.
+      zsh-vi-cursor = ./modules/home/zsh-vi-cursor.nix;
       # Declarative-but-writable JSON config files (last-applied 3-way merge),
       # for config an app rewrites at runtime. See lib/mutable-json.nix.
       # Prefer `mutable-files` below for new config: it never auto-merges,
@@ -561,14 +580,11 @@
       # file:line that defined them, and `whence <path>` reads it with zero
       # eval. Set `provenance.rev = self.rev or self.dirtyRev or null` in
       # the consuming flake. See modules/home/provenance.nix.
-      provenance = import ./modules/home/provenance.nix {inherit (ix) provenance;};
+      provenance = provenanceHomeModule;
       # Agent CLI modules: Home Manager is the user-facing configuration
       # surface, while the package wrappers remain the implementation detail.
       claude-code = claudeCodeHomeModule;
-      codex = import ./packages/agent/home-manager/codex.nix {
-        indexPackages = system: packages.${system};
-        promptModule = ./packages/agent/prompt;
-      };
+      codex = codexHomeModule;
       # Personal-but-shareable workstation module for github:andrewgazelka: the
       # ix.dev downtime watcher + boss bar overlay + the shared say-detached
       # sound helper, all as portable services. Closed over the per-system
@@ -581,6 +597,14 @@
       };
       andrewgazelka-workstation = personalWorkstationModule;
       andrewgazelka-darwin = personalDarwinHomeModule;
+      # Personal-but-shareable server module for github:harivansh-afk: the
+      # dotfiles hari runs as the `hari` user on hari-compute-1 (zsh, git,
+      # neovim plus the mux nvim multiplexer, and the CLI tool set around
+      # them), ported from his personal nix repo. Consumes the shared
+      # cli-baseline, mux, xdg-tidy, and zsh-vi-cursor modules above; the
+      # source repo's secrets/theme machinery is deliberately absent. See
+      # users/harivansh-afk/home.nix.
+      harivansh-afk = import ./users/harivansh-afk/home.nix {inherit ix;};
       # Reusable workstation module: draw one Minecraft boss bar per in-flight
       # GitHub Actions run across a set of repos (green = running, filled by
       # elapsed / average duration; purple = queued/unpicked). Import it and set
