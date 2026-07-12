@@ -1545,7 +1545,7 @@ class Jobs(dict[str, Job]):
     run, keyed by job id. Beyond the dict surface, :meth:`spawn` registers an
     ad-hoc awaitable as a first-class background job, so work an agent started
     itself (a coroutine, a Task) gets the same lifecycle as a backgrounded cell:
-    a dashboard card, a completion notification, and a pageable/awaitable
+    a dashboard card, a best-effort completion wake, and a pageable/awaitable
     ``jobs['<id>']`` handle (issue #2164)."""
 
     def spawn(self, aw: Awaitable[Any], *, name: str | None = None, topic: str | None = None) -> Job:
@@ -1554,7 +1554,7 @@ class Jobs(dict[str, Job]):
 
         The awaitable gets the full job lifecycle: it appears in ``jobs`` /
         ``history()`` and on the dashboard, its completion pushes a channel
-        notification exactly like a backgrounded cell, and its value is
+        notification addressed to the session that spawned it, and its value is
         retrieved with ``await jobs['<id>']`` (or ``.result`` once done; a
         failure re-raises there, like any other job). ``name`` labels the job
         (defaults to the coroutine's qualname); ``topic`` files it under a
@@ -2882,6 +2882,7 @@ def _persist_final(job: Job) -> None:
         _store.finish(
             _store_conn,
             id=job.id,
+            kind=job.kind,
             status=job.status,
             ended_at=job.ended or time.time(),
             output=job.output,
@@ -2961,17 +2962,11 @@ async def _spawn_runner(job: Job, aw: Awaitable[Any]) -> None:
         _ix_current.reset(token)
         _persist_final(job)
         _mark_snapshot_dirty()
-        # Spawned jobs are backgrounded by construction, so completion always
-        # notifies (the suppress mirrors _runner: a session without the channel
-        # has nothing to deliver to, and that must not fail the job's cleanup).
+        # The durable job row above is the completion authority. The addressed
+        # channel wake is intentionally best-effort, not exactly-once: it may be
+        # lost, but must never be broadcast elsewhere or fail job cleanup.
         with contextlib.suppress(Exception):
-            await notify(
-                f"Background job {job.name} finished with status {job.status}.",
-                job_id=job.id,
-                job_name=job.name,
-                status=job.status,
-                topic=job.topic,
-            )
+            _notify_job_finished(job)
 
 
 def _cell_bindings(job: Job) -> dict:
