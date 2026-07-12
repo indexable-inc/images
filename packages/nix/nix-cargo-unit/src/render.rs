@@ -3962,48 +3962,23 @@ mod tests {
 
     #[test]
     fn proc_macro_test_executable_embeds_rust_runtime_rpath() {
-        let graph: UnitGraph = serde_json::from_str(
-            r#"{
-              "version": 1,
-              "units": [
-                {
-                  "pkg_id": "path+file:///workspace#fixture-macro@0.1.0",
-                  "target": {
-                    "kind": ["proc-macro"],
-                    "crate_types": ["proc-macro"],
-                    "name": "fixture_macro",
-                    "src_path": "/workspace/src/lib.rs",
-                    "edition": "2024",
-                    "test": true
-                  },
-                  "profile": { "name": "test", "opt_level": "0", "rpath": false },
-                  "features": [],
-                  "mode": "test",
-                  "dependencies": []
-                }
-              ],
-              "roots": [0]
-            }"#,
-        )
-        .unwrap();
+        let mut graph = single_library_graph(
+            "path+file:///workspace#fixture-macro@0.1.0",
+            "fixture_macro",
+            "/workspace/src/lib.rs",
+            "2024",
+        );
+        let unit = &mut graph.units[0];
+        unit.target.kind = vec!["proc-macro".to_string()];
+        unit.target.crate_types = vec!["proc-macro".to_string()];
+        unit.mode = UnitMode::Test;
 
-        let rendered = render_units_nix(
-            &graph,
-            &RenderOptions {
-                workspace_root: PathBuf::from("/workspace"),
-                vendor_root: None,
-                cargo_lock_sources: CargoLockSources::default(),
-                content_addressed: false,
-                toolchain_id: None,
-                deny_unused_crate_dependencies: false,
-                deny_panics: false,
-            },
-        )
-        .unwrap();
+        let mut script = String::new();
+        push_rustc_args(&mut script, unit, "hash", Driver::Rustc);
 
-        assert!(rendered.contains("'prefer-dynamic'"));
+        assert!(script.contains("'prefer-dynamic'"));
         assert!(
-            rendered
+            script
                 .contains("link-arg=-Wl,-rpath,${rustToolchain}/lib/rustlib/${hostRustTarget}/lib")
         );
     }
