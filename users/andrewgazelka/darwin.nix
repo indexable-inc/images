@@ -18,6 +18,10 @@
   # Shared verified name -> MAS ID catalog; this module only picks which apps
   # this user installs. `lib.getAttrs` throws on an unknown name, so a typo
   # here is an eval error instead of a silent zap-uninstall.
+  # This module is exported as a bare path (flake `darwinModules.andrewgazelka`)
+  # so external darwin hosts can import it without `ix` in their module args;
+  # the catalog can only be reached relatively here.
+  # astlog-ignore: no-parent-path
   masCatalog = import ../../lib/darwin/mas-apps.nix;
 in {
   homebrew = {

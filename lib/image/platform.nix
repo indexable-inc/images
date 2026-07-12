@@ -531,11 +531,11 @@ in {
           ix.healthChecks set more than one of `unit`, `http`, and `tcp`, which
           conflict (each derives the check's command):
             ${
-          lib.concatMapAttrsStringSep ", " (
-            name: check: "${name} (${lib.concatStringsSep " + " (probeSugars check)})"
-          )
-          multiSugarHealthChecks
-        }
+            lib.concatMapAttrsStringSep ", " (
+              name: check: "${name} (${lib.concatStringsSep " + " (probeSugars check)})"
+            )
+            multiSugarHealthChecks
+          }
 
           Pick the one probe that proves readiness, or write an explicit
           `command` when a single probe is not enough.
