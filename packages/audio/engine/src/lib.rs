@@ -93,10 +93,11 @@ impl Renderer {
     /// # Panics
     /// Panics when the score mutex is poisoned.
     pub fn refresh(&mut self) -> Result<bool> {
-        let wanted = match {
+        let wanted = {
             let score = self.score.lock().expect("score lock");
             score.instrument()
-        } {
+        };
+        let wanted = match wanted {
             Ok(wanted) => wanted,
             Err(error) => {
                 warn!(%error, "ignoring malformed instrument reference");
