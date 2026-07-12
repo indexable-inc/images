@@ -357,6 +357,7 @@ impl<'a> Evaluator<'a> {
                 let matched = regex.is_match(self.corpus.value_text(&value));
                 Ok(matched.then(|| env.clone()).into_iter().collect())
             }
+            "misgrouped-digits" => self.misgrouped_digits(app, env),
             "no-descendant" => {
                 let root = bound_node(app, env, 0)?;
                 let kind = bound_value(app, env, 1)?;
@@ -389,6 +390,20 @@ impl<'a> Evaluator<'a> {
             }
             .fail(),
         }
+    }
+
+    /// `(misgrouped-digits <node-or-text> <fixed>)`: holds when the value's
+    /// text is a decimal numeric literal whose underscore digit grouping is
+    /// not canonical (see [`regroup_digits`]), unifying `<fixed>` with the
+    /// canonical regrouping.
+    fn misgrouped_digits(&self, app: &AppAtom, env: &Env) -> Result<Vec<Env>, Error> {
+        let value = bound_value(app, env, 0)?;
+        Ok(regroup_digits(self.corpus.value_text(&value))
+            .and_then(|fixed| {
+                unify_term(env, &app.args[1], &Value::Text(Arc::from(fixed.as_str())))
+            })
+            .into_iter()
+            .collect())
     }
 
     /// Whether any named sibling attached above `node` has a descendant with
@@ -452,6 +467,98 @@ impl<'a> Evaluator<'a> {
         }
         false
     }
+}
+
+/// Canonical underscore digit grouping for a numeric-literal text, following
+/// the Rust convention: a digit run of five or more digits is grouped in
+/// threes with `_` (integer part and exponent from the right, fractional part
+/// from the left of the decimal point), and a run that already carries
+/// separators must use exactly that grouping. Returns `Some(canonical)` iff
+/// `text` is a decimal numeric literal (underscores between digits allowed,
+/// like `10000`, `1_0000`, `1_000.000_1`, `2.5e1_0`) whose canonical grouping
+/// DIFFERS from `text` -- i.e. the literal is ungrouped or misgrouped -- and
+/// `None` for well-grouped literals and non-numeric text alike. Backs the
+/// `misgrouped-digits` builtin.
+fn regroup_digits(text: &str) -> Option<String> {
+    /// Longest digit run that may stay bare; five or more digits must group.
+    const MAX_UNGROUPED: usize = 4;
+    // Split off an exponent (`e`/`E`, optional sign), then the fraction.
+    let (mantissa, exponent) = text
+        .find(['e', 'E'])
+        .map_or((text, None), |at| (&text[..at], Some(&text[at..])));
+    let (int_part, frac_part) = mantissa.find('.').map_or((mantissa, None), |at| {
+        (&mantissa[..at], Some(&mantissa[at + 1..]))
+    });
+    // A digit run is digits with underscores strictly between digits. The
+    // integer part may be absent (`.5`) and the fraction empty (`1.`), but
+    // the mantissa needs at least one digit overall.
+    let run_ok = |run: &str| {
+        !run.is_empty()
+            && run.starts_with(|c: char| c.is_ascii_digit())
+            && run.ends_with(|c: char| c.is_ascii_digit())
+            && run.chars().all(|c| c.is_ascii_digit() || c == '_')
+    };
+    if int_part.is_empty() && frac_part.is_none_or(str::is_empty) {
+        return None;
+    }
+    if !(int_part.is_empty() || run_ok(int_part)) {
+        return None;
+    }
+    if !frac_part.is_none_or(|frac| frac.is_empty() || run_ok(frac)) {
+        return None;
+    }
+    let exp_run = match exponent {
+        None => None,
+        Some(exp) => {
+            let body = &exp[1..];
+            let run = body.strip_prefix(['+', '-']).unwrap_or(body);
+            if !run_ok(run) {
+                return None;
+            }
+            Some(run)
+        }
+    };
+    // Regroup a run iff it already carries separators or is long enough to
+    // need them; four digits or fewer stay bare (`1000` is fine as-is).
+    let canonical = |run: &str, from_left: bool| {
+        let digits: String = run.chars().filter(|c| *c != '_').collect();
+        if run.contains('_') || digits.len() > MAX_UNGROUPED {
+            group_digits(&digits, from_left)
+        } else {
+            digits
+        }
+    };
+    let mut fixed = canonical(int_part, false);
+    if let Some(frac) = frac_part {
+        fixed.push('.');
+        fixed.push_str(&canonical(frac, true));
+    }
+    if let (Some(exp), Some(run)) = (exponent, exp_run) {
+        let marker_and_sign = &exp[..exp.len() - run.len()];
+        fixed.push_str(marker_and_sign);
+        fixed.push_str(&canonical(run, false));
+    }
+    (fixed != text).then_some(fixed)
+}
+
+/// Insert `_` group separators into a bare digit string, every three digits
+/// counted from the right (integer part, exponent) or from the left of the
+/// decimal point (fractional part).
+fn group_digits(digits: &str, from_left: bool) -> String {
+    const GROUP: usize = 3;
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / GROUP);
+    for (index, c) in digits.chars().enumerate() {
+        let at_boundary = if from_left {
+            index.is_multiple_of(GROUP)
+        } else {
+            (digits.len() - index).is_multiple_of(GROUP)
+        };
+        if index > 0 && at_boundary {
+            grouped.push('_');
+        }
+        grouped.push(c);
+    }
+    grouped
 }
 
 fn bound_value(app: &AppAtom, env: &Env, arg: usize) -> Result<Value, Error> {

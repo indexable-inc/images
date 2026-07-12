@@ -1,0 +1,29 @@
+[package]
+name = "mc-bot"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Headless Minecraft client: joins a server and records the session as a ReplayMod .mcpr replay"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive"] }
+# zlib packet compression: servers enable it during login (Minestom's default
+# threshold is 256 bytes) and the registry payloads that follow exceed it.
+flate2.workspace = true
+mc-protocol.workspace = true
+# Vanilla offline-mode profile ids are `md5("OfflinePlayer:" + name)` with
+# UUID v3 bits; matching them keeps the recorded session indistinguishable
+# from a real client's.
+md-5.workspace = true
+serde_json.workspace = true
+# `deflate-flate2` (not the umbrella `deflate`, which drags in zopfli) keeps
+# the archive on the same flate2 the packet layer already compiles; the
+# .mcpr container needs nothing else from the format.
+zip = { workspace = true, features = ["deflate-flate2"] }
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -436,6 +436,26 @@
     name = "ix-mcp-nix-python-source";
     path = ./src/nix;
   };
+  # `sharedaudio`: drive the local shared-audio daemon (packages/audio) over
+  # its unix control socket: status, local volume, and publishing WASM
+  # instruments / control changes to every peer. Pure stdlib JSON-lines
+  # client, cross-platform, so every session can `import sharedaudio`.
+  sharedaudioPythonSource = builtins.path {
+    name = "ix-mcp-sharedaudio-python-source";
+    path = ./src/sharedaudio;
+  };
+  sharedaudioModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-sharedaudio-python-module"
+    {
+      strictDeps = true;
+      meta.description = "shared-audio daemon control client bundled into the ix-mcp interpreter";
+    }
+    ''
+      site="$out/${pkgs.python3.sitePackages}/sharedaudio"
+      mkdir -p "$site"
+      cp -r ${sharedaudioPythonSource}/sharedaudio/. "$site/"
+    ''
+  );
   nixModule = pkgs.python3.pkgs.toPythonModule (
     pkgs.runCommand "ix-mcp-nix-python-module"
     {
@@ -1345,6 +1365,7 @@
       ixNotebookMcpModule
       viewModule
       nixModule
+      sharedaudioModule
       fleetModule
       meshModule
       weaveModule
@@ -2617,6 +2638,8 @@
       cp ${./tests/test_cancel_running.py} test_cancel_running.py
       # Issue #2164: jobs.spawn registers an ad-hoc awaitable as a first-class job.
       cp ${./tests/test_jobs_spawn.py} test_jobs_spawn.py
+      # A spawned job starts and finishes the same proc entity; no detached run phantom.
+      cp ${./tests/test_spawn_store_lifecycle.py} test_spawn_store_lifecycle.py
       cp ${./tests/test_fsearch_partial.py} test_fsearch_partial.py
       cp ${./tests/test_fsearch_glob.py} test_fsearch_glob.py
       # Issue #2542: find('*.py') auto-detects a glob-shaped non-regex pattern.
@@ -2651,6 +2674,7 @@
         test_typecheck.py test_job_await_errors.py test_job_cancel_scope.py \
         test_cancel_running.py \
         test_jobs_spawn.py \
+        test_spawn_store_lifecycle.py \
         test_fsearch_partial.py \
         test_fsearch_glob.py \
         test_fsearch_glob_pattern.py \

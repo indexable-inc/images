@@ -504,8 +504,11 @@ def stream_snapshot(conn: WeaveStore, stream: str, data: bytes) -> None:
         conn._enqueue_blob_fact(stream, "snapshot", data)
 
 
-def finish(conn: WeaveStore, *, id: str, status: str, ended_at: float, output: str, result: str | None, error: str | None, error_line: int | None = None, outputs: list | None = None, bindings: dict | None = None, namespace: list | None = None) -> None:
-    ent = _entity("run", id)
+def finish(conn: WeaveStore, *, id: str, kind: str, status: str, ended_at: float, output: str, result: str | None, error: str | None, error_line: int | None = None, outputs: list | None = None, bindings: dict | None = None, namespace: list | None = None) -> None:
+    # This must select the same entity as start(): spawned awaitables are
+    # processes, not runs. Finishing a spawn under run:<id> leaves proc:<id>
+    # permanently running and creates a detached phantom run.
+    ent = _entity("proc", id) if kind == "spawn" else _entity("run", id)
     ended = _ms(ended_at)
     facts: list[tuple[str, str, Any]] = [(ent, "status", status), (ent, "ended_ms", ended), (ent, "last_output", (output or "")[-200:]), (conn.agent, "last_output", (output or "")[-200:])]
     if result is not None:

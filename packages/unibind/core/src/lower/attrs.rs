@@ -8,9 +8,9 @@ use crate::ir;
 
 /// The options a `#[unibind(...)]` attribute (or marker argument list) can
 /// carry: `py(name = "...")`, `py(base = "...")`, `ts(name = "...")`,
-/// `ex(name = "...")`, `default = ...`, the bare flags `resource`,
-/// `constructor`, and `blocking`, and (on `#[unibind::export]` only)
-/// `backends(...)`.
+/// `ex(name = "...")`, `jvm(name = "...")`, `jvm(base = "...")`,
+/// `default = ...`, the bare flags `resource`, `constructor`, and
+/// `blocking`, and (on `#[unibind::export]` only) `backends(...)`.
 #[derive(Debug, Default)]
 pub struct UnibindMeta {
     pub(crate) span: Option<Span>,
@@ -18,12 +18,19 @@ pub struct UnibindMeta {
     pub(crate) py_base: Option<String>,
     pub(crate) ts_name: Option<String>,
     pub(crate) ex_name: Option<String>,
+    pub(crate) jvm_name: Option<String>,
+    pub(crate) jvm_base: Option<String>,
     pub(crate) default: Option<ir::Literal>,
     pub(crate) resource: bool,
     pub(crate) constructor: bool,
     pub(crate) blocking: bool,
     pub(crate) backends: Option<Vec<Backend>>,
 }
+
+/// One backend's option handler: applies a single parsed `backend(...)`
+/// entry to the accumulated meta. Aliased to keep the dispatch table's
+/// element type within `clippy::type_complexity`.
+type ApplyBackendOption = fn(&mut UnibindMeta, &syn::Meta) -> Result<()>;
 
 impl UnibindMeta {
     /// Parse one argument token stream, as carried by the attribute itself.
@@ -89,6 +96,18 @@ impl UnibindMeta {
             }
             self.ex_name = other.ex_name;
         }
+        if other.jvm_name.is_some() {
+            if self.jvm_name.is_some() {
+                return Err(LowerError::new(span, "duplicate unibind `jvm(name = ...)`"));
+            }
+            self.jvm_name = other.jvm_name;
+        }
+        if other.jvm_base.is_some() {
+            if self.jvm_base.is_some() {
+                return Err(LowerError::new(span, "duplicate unibind `jvm(base = ...)`"));
+            }
+            self.jvm_base = other.jvm_base;
+        }
         if other.default.is_some() {
             if self.default.is_some() {
                 return Err(LowerError::new(span, "duplicate unibind `default`"));
@@ -124,46 +143,41 @@ impl UnibindMeta {
     }
 
     fn apply(&mut self, entry: &syn::Meta) -> Result<()> {
+        // Each backend's option list dispatches through the same list-parsing
+        // seam; only the hint (which options the backend accepts) and the
+        // per-option handler differ.
+        const BACKEND_OPTIONS: &[(&str, &str, ApplyBackendOption)] = &[
+            (
+                "py",
+                "py(name = \"...\") or py(base = \"...\")",
+                UnibindMeta::apply_py,
+            ),
+            ("ts", "ts(name = \"...\")", UnibindMeta::apply_ts),
+            ("ex", "ex(name = \"...\")", UnibindMeta::apply_ex),
+            (
+                "jvm",
+                "jvm(name = \"...\") or jvm(base = \"...\")",
+                UnibindMeta::apply_jvm,
+            ),
+        ];
         let span = entry.span();
-        if entry.path().is_ident("py") {
+        for (backend, hint, apply_option) in BACKEND_OPTIONS {
+            if !entry.path().is_ident(backend) {
+                continue;
+            }
             let syn::Meta::List(list) = entry else {
                 return Err(LowerError::new(
                     span,
-                    "`py` takes a list: py(name = \"...\") or py(base = \"...\")",
+                    format!("`{backend}` takes a list: {hint}"),
                 ));
             };
             let parser =
                 syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated;
-            let entries = syn::parse::Parser::parse2(parser, list.tokens.clone())
-                .map_err(|error| LowerError::new(span, format!("bad `py` options: {error}")))?;
+            let entries = syn::parse::Parser::parse2(parser, list.tokens.clone()).map_err(
+                |error| LowerError::new(span, format!("bad `{backend}` options: {error}")),
+            )?;
             for nested in entries {
-                self.apply_py(&nested)?;
-            }
-            return Ok(());
-        }
-        if entry.path().is_ident("ts") {
-            let syn::Meta::List(list) = entry else {
-                return Err(LowerError::new(span, "`ts` takes a list: ts(name = \"...\")"));
-            };
-            let parser =
-                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated;
-            let entries = syn::parse::Parser::parse2(parser, list.tokens.clone())
-                .map_err(|error| LowerError::new(span, format!("bad `ts` options: {error}")))?;
-            for nested in entries {
-                self.apply_ts(&nested)?;
-            }
-            return Ok(());
-        }
-        if entry.path().is_ident("ex") {
-            let syn::Meta::List(list) = entry else {
-                return Err(LowerError::new(span, "`ex` takes a list: ex(name = \"...\")"));
-            };
-            let parser =
-                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated;
-            let entries = syn::parse::Parser::parse2(parser, list.tokens.clone())
-                .map_err(|error| LowerError::new(span, format!("bad `ex` options: {error}")))?;
-            for nested in entries {
-                self.apply_ex(&nested)?;
+                apply_option(self, &nested)?;
             }
             return Ok(());
         }
@@ -196,32 +210,11 @@ impl UnibindMeta {
         Err(unknown_option(span))
     }
 
+    /// Parse `py(name = "...")` and `py(base = "...")`: the Python-side
+    /// rename, and the Python exception base class for `#[unibind::error]`
+    /// enums.
     fn apply_py(&mut self, entry: &syn::Meta) -> Result<()> {
-        let span = entry.span();
-        let syn::Meta::NameValue(pair) = entry else {
-            return Err(LowerError::new(
-                span,
-                "`py` options are name = \"...\" and base = \"...\"",
-            ));
-        };
-        let syn::Expr::Lit(syn::ExprLit {
-            lit: syn::Lit::Str(value),
-            ..
-        }) = &pair.value
-        else {
-            return Err(LowerError::new(span, "`py` options take string literals"));
-        };
-        if pair.path.is_ident("name") {
-            self.py_name = Some(value.value());
-        } else if pair.path.is_ident("base") {
-            self.py_base = Some(value.value());
-        } else {
-            return Err(LowerError::new(
-                span,
-                "unknown `py` option; expected name = \"...\" or base = \"...\"",
-            ));
-        }
-        Ok(())
+        parse_backend_name_or_base(entry, "py", &mut self.py_name, &mut self.py_base)
     }
 
     /// Parse `ts(name = "...")`: the TypeScript-side rename.
@@ -236,10 +229,21 @@ impl UnibindMeta {
         Ok(())
     }
 
-    /// Parse `backends(py, ts, ex)`: which enabled backends an export renders.
+    /// Parse `jvm(name = "...")` and `jvm(base = "...")`: the JVM-side
+    /// rename, and the Java exception base class for `#[unibind::error]`
+    /// enums.
+    fn apply_jvm(&mut self, entry: &syn::Meta) -> Result<()> {
+        parse_backend_name_or_base(entry, "jvm", &mut self.jvm_name, &mut self.jvm_base)
+    }
+
+    /// Parse `backends(py, ts, ex, jvm)`: which enabled backends an export
+    /// renders.
     fn apply_backends(&mut self, entry: &syn::Meta, span: Span) -> Result<()> {
         let syn::Meta::List(list) = entry else {
-            return Err(LowerError::new(span, "`backends` takes a list: backends(py, ts, ex)"));
+            return Err(LowerError::new(
+                span,
+                "`backends` takes a list: backends(py, ts, ex, jvm)",
+            ));
         };
         let parser = syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated;
         let entries = syn::parse::Parser::parse2(parser, list.tokens.clone())
@@ -252,10 +256,12 @@ impl UnibindMeta {
                 Backend::Ts
             } else if path.is_ident("ex") {
                 Backend::Ex
+            } else if path.is_ident("jvm") {
+                Backend::Jvm
             } else {
                 return Err(LowerError::new(
                     path.span(),
-                    "unknown backend; expected `py`, `ts`, or `ex`",
+                    "unknown backend; expected `py`, `ts`, `ex`, or `jvm`",
                 ));
             };
             if backends.contains(&backend) {
@@ -275,6 +281,7 @@ impl UnibindMeta {
             py: self.py_name.clone(),
             ts: self.ts_name.clone(),
             ex: self.ex_name.clone(),
+            jvm: self.jvm_name.clone(),
         }
     }
 
@@ -291,6 +298,15 @@ impl UnibindMeta {
         self.reject_if(
             self.py_base.is_some(),
             format!("`py(base = ...)` applies to #[unibind::error] enums, not {context}"),
+        )
+    }
+
+    /// Error out when a `jvm(base = ...)` was given somewhere it cannot
+    /// apply.
+    pub(crate) fn reject_jvm_base(&self, context: &str) -> Result<()> {
+        self.reject_if(
+            self.jvm_base.is_some(),
+            format!("`jvm(base = ...)` applies to #[unibind::error] enums, not {context}"),
         )
     }
 
@@ -341,6 +357,45 @@ impl UnibindMeta {
     }
 }
 
+/// Parse one `name = "..."` / `base = "..."` pair into the backend's rename
+/// and base-class slots (`py` and `jvm` accept both options).
+fn parse_backend_name_or_base(
+    entry: &syn::Meta,
+    backend: &str,
+    name: &mut Option<String>,
+    base: &mut Option<String>,
+) -> Result<()> {
+    let span = entry.span();
+    let syn::Meta::NameValue(pair) = entry else {
+        return Err(LowerError::new(
+            span,
+            format!("`{backend}` options are name = \"...\" and base = \"...\""),
+        ));
+    };
+    let syn::Expr::Lit(syn::ExprLit {
+        lit: syn::Lit::Str(value),
+        ..
+    }) = &pair.value
+    else {
+        return Err(LowerError::new(
+            span,
+            format!("`{backend}` options take string literals"),
+        ));
+    };
+    let slot = if pair.path.is_ident("name") {
+        name
+    } else if pair.path.is_ident("base") {
+        base
+    } else {
+        return Err(LowerError::new(
+            span,
+            format!("unknown `{backend}` option; expected name = \"...\" or base = \"...\""),
+        ));
+    };
+    *slot = Some(value.value());
+    Ok(())
+}
+
 fn parse_backend_name(entry: &syn::Meta, backend: &str) -> Result<String> {
     let span = entry.span();
     let syn::Meta::NameValue(pair) = entry else {
@@ -373,7 +428,8 @@ fn unknown_option(span: Span) -> LowerError {
         span,
         "unknown unibind option; expected py(name = \"...\"), \
          py(base = \"...\"), ts(name = \"...\"), ex(name = \"...\"), \
-         backends(...), default = ..., resource, constructor, or blocking",
+         jvm(name = \"...\"), jvm(base = \"...\"), backends(...), \
+         default = ..., resource, constructor, or blocking",
     )
 }
 
