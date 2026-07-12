@@ -212,13 +212,16 @@ def test_count_appended_and_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
     asyncio.run(sourcegraph.search("foo", first=7))
     asyncio.run(sourcegraph.search("foo count:all"))
     asyncio.run(sourcegraph.search('"retry count:3"', first=11))
+    asyncio.run(sourcegraph.search("'retry count:3'", first=13))
 
     first_query = json.loads(seen[0].content)["variables"]["query"]
     second_query = json.loads(seen[1].content)["variables"]["query"]
     quoted_query = json.loads(seen[2].content)["variables"]["query"]
+    single_quoted_query = json.loads(seen[3].content)["variables"]["query"]
     assert first_query == "foo count:7"
     assert second_query == "foo count:all"  # caller's count: wins, nothing appended
     assert quoted_query == '"retry count:3" count:11'
+    assert single_quoted_query == "'retry count:3' count:13"
 
 
 def test_request_timeout_outlives_sourcegraph_search(

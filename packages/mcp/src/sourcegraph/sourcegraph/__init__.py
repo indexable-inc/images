@@ -225,7 +225,7 @@ async def _gql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
 
 def _has_count_filter(query: str) -> bool:
     """Return whether an unquoted query token starts with ``count:``."""
-    in_quotes = False
+    quote: str | None = None
     escaped = False
     at_token_start = True
     for index, char in enumerate(query):
@@ -237,11 +237,14 @@ def _has_count_filter(query: str) -> bool:
             escaped = True
             at_token_start = False
             continue
-        if char == '"':
-            in_quotes = not in_quotes
+        if quote is not None:
+            if char == quote:
+                quote = None
             at_token_start = False
             continue
-        if in_quotes:
+        if char in {'"', "'"}:
+            quote = char
+            at_token_start = False
             continue
         if char.isspace():
             at_token_start = True
