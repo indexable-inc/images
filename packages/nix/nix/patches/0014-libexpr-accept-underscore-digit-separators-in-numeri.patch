@@ -1,0 +1,134 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrew Gazelka <andrew@ix.dev>
+Date: Fri, 10 Jul 2026 18:09:35 +0000
+Subject: [PATCH] libexpr: accept underscore digit separators in numeric
+ literals
+
+Large numeric literals in Nix expressions are hard to read: fleet
+configuration writes byte sizes and timeouts like 8000000000, and a
+reader has to count digits to tell billions from hundreds of millions.
+Every neighboring language in this codebase (Rust, Python, TypeScript,
+Go, Elixir) accepts underscore digit separators; Nix rejects them, so
+the language that holds the fleet's numbers is the one where they are
+least readable.
+
+Accept underscores between the digits of numeric literals, with the
+same shape as Rust's literals: one or more separators may appear
+between any two digits of the integer part, the fractional part, and
+the exponent (1_000, 1_000_000.000_1, 2.5e1_0), never leading (a
+leading underscore still starts an identifier, so _1_000 stays a
+variable), trailing, or adjacent to the decimal point, exponent
+marker, or sign. The separators are purely visual: the lexer strips
+them before the value is parsed, so 1_000 == 1000 holds and printed
+values never contain underscores.
+
+Tokenization of existing expressions is unchanged except for inputs
+that were previously guaranteed eval errors: 1_000 used to lex as the
+application `1 _000` (an integer is not callable) and now lexes as
+one INT token.
+
+Assisted-by: Claude <noreply@anthropic.com>
+
+diff --git a/doc/manual/source/language/syntax.md b/doc/manual/source/language/syntax.md
+index 80046d484..5b108f139 100644
+--- a/doc/manual/source/language/syntax.md
++++ b/doc/manual/source/language/syntax.md
+@@ -19,6 +19,10 @@ See [String literals](string-literals.md).
+ 
+   [two's complement]: https://en.wikipedia.org/wiki/Two%27s_complement
+ 
++  Underscores may be used as digit separators in numeric literals, in the integer part, the fractional part, and the exponent (like `1_000`, `1_000_000.000_1` or `2.5e1_0`).
++  They are purely visual and are ignored when the value is parsed.
++  One or more underscores may appear between any two digits, but not anywhere else: a literal cannot begin with an underscore (a leading underscore starts an identifier, so `_1_000` is a variable name), and an underscore cannot be adjacent to the decimal point, the exponent marker, or the sign.
++
+   Note that negative numeric literals are actually parsed as unary negation of positive numeric literals.
+   This means that the minimum integer `-9223372036854775808` cannot be written as-is as a literal, since the positive number `9223372036854775808` is one past the maximum range.
+ 
+diff --git a/src/libexpr/lexer.l b/src/libexpr/lexer.l
+index 5bdb5335b..b2efa3414 100644
+--- a/src/libexpr/lexer.l
++++ b/src/libexpr/lexer.l
+@@ -72,6 +72,20 @@ static StringToken unescapeStr(char * const s, size_t length, std::function<Pos(
+     return {s, size_t(t - s)};
+ }
+ 
++/* Underscore digit separators in numeric literals (`1_000`, `1_000.000_1`,
++   `2.5e1_0`) are purely visual: the lexer admits them between digits only (a
++   leading underscore still starts an identifier) and drops them here before
++   the value is parsed. */
++static std::string stripUnderscores(std::string_view s)
++{
++    std::string digits;
++    digits.reserve(s.size());
++    for (char c : s)
++        if (c != '_')
++            digits += c;
++    return digits;
++}
++
+ static void requireExperimentalFeature(const ExperimentalFeature & feature, const Pos & pos)
+ {
+     if (!experimentalFeatureSettings.isEnabled(feature))
+@@ -101,8 +115,10 @@ using YYLTYPE = nix::Parser::location_type;
+ 
+ ANY         .|\n
+ ID          [a-zA-Z\_][a-zA-Z0-9\_\'\-]*
+-INT         [0-9]+
+-FLOAT       (([1-9][0-9]*\.[0-9]*)|(0?\.[0-9]+))([Ee][+-]?[0-9]+)?
++DIGITS      [0-9](\_*[0-9])*
++DIGITS_NZ   [1-9](\_*[0-9])*
++INT         {DIGITS}
++FLOAT       (({DIGITS_NZ}\.{DIGITS}?)|(0?\.{DIGITS}))([Ee][+-]?{DIGITS})?
+ PATH_CHAR   [a-zA-Z0-9\.\_\-\+]
+ PATH        {PATH_CHAR}*(\/{PATH_CHAR}+)+\/?
+ PATH_SEG    {PATH_CHAR}*\/
+@@ -152,7 +168,7 @@ or          { return OR_KW; }
+ 
+ {ID}        { yylval->emplace<StringToken>(yytext, (size_t) yyleng); return ID; }
+ {INT}       { errno = 0;
+-              std::optional<int64_t> numMay = string2Int<int64_t>(yytext);
++              std::optional<int64_t> numMay = string2Int<int64_t>(stripUnderscores(yytext));
+               if (numMay.has_value()) {
+                   yylval->emplace<NixInt>(*numMay);
+               } else {
+@@ -164,7 +180,7 @@ or          { return OR_KW; }
+               return INT_LIT;
+             }
+ {FLOAT}     { errno = 0;
+-              yylval->emplace<NixFloat>(strtod(yytext, 0));
++              yylval->emplace<NixFloat>(strtod(stripUnderscores(yytext).c_str(), 0));
+               if (errno != 0)
+                   throw ParseError(ErrorInfo{
+                       .msg = HintFmt("invalid float '%1%'", yytext),
+diff --git a/tests/functional/lang/eval-okay-underscore-digit-separators.exp b/tests/functional/lang/eval-okay-underscore-digit-separators.exp
+new file mode 100644
+index 000000000..3f8905e9b
+--- /dev/null
++++ b/tests/functional/lang/eval-okay-underscore-digit-separators.exp
+@@ -0,0 +1 @@
++[ true true true true true true true true true true true ]
+diff --git a/tests/functional/lang/eval-okay-underscore-digit-separators.nix b/tests/functional/lang/eval-okay-underscore-digit-separators.nix
+new file mode 100644
+index 000000000..c038509e0
+--- /dev/null
++++ b/tests/functional/lang/eval-okay-underscore-digit-separators.nix
+@@ -0,0 +1,19 @@
++# Underscore digit separators in numeric literals are purely visual: they are
++# admitted between digits only and stripped before the value is parsed. A
++# leading underscore still starts an identifier, so `_1_000` is a variable.
++let
++  _1_000 = 7;
++in
++[
++  (1_000 == 1000)
++  (1_000_000 == 1000000)
++  (1_0_0 == 100)
++  (1__0 == 10)
++  (9_223_372_036_854_775_806 == 9223372036854775806)
++  (1_000.000_1 == 1000.0001)
++  (0.000_100 == 0.0001)
++  (.5_0 == 0.50)
++  (2.5e1_0 == 2.5e10)
++  (6.674_30e-1_1 == 6.67430e-11)
++  (_1_000 == 7)
++]

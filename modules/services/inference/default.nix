@@ -139,7 +139,7 @@ in {
 
     port = lib.mkOption {
       type = lib.types.port;
-      default = 18080;
+      default = 18_080;
       description = "Port the server listens on.";
     };
 
@@ -174,7 +174,7 @@ in {
       type = lib.types.attrsOf settingsValueType;
       default = {};
       example = {
-        "ctx-size" = 65536;
+        "ctx-size" = 65_536;
         "n-gpu-layers" = 99;
         mlock = true;
         "flash-attn" = "on";

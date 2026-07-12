@@ -100,7 +100,7 @@ in {
 
       port = mkOption {
         type = types.port;
-        default = 19132;
+        default = 19_132;
         description = "UDP port Geyser binds for Bedrock clients.";
       };
 
@@ -156,7 +156,7 @@ in {
 
       port = mkOption {
         type = types.port;
-        default = 25565;
+        default = 25_565;
         description = "Java server port Geyser connects to when address is explicit.";
       };
 

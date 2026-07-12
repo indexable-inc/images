@@ -14,7 +14,7 @@
   modEnabled = modCfg != null && modCfg.enable;
   pluginEnabled = pluginCfg != null && pluginCfg.enable;
   defaults = {
-    port = 24454;
+    port = 24_454;
   };
   modSettings =
     if modCfg == null
