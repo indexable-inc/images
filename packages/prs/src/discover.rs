@@ -222,14 +222,13 @@ fn registry_rows(root: Option<&Path>, fork: &Fork) -> Vec<PatchRow> {
     let dir = root.map(|root| root.join(&fork.patch_dir));
     let tracked = dir.as_deref().map_or_else(BTreeMap::new, tracked_prs);
     // The on-disk series is the source of truth for which patches exist; the
-    // mapping keys cover the no-repo-tree case (mapping baked by nix, run
-    // outside a checkout).
-    let mut names: Vec<String> = dir.as_deref().map_or_else(Vec::new, patch_files);
-    for name in fork.patches.keys() {
-        if !names.contains(name) {
-            names.push(name.clone());
-        }
-    }
+    // mapping keys are only a fallback for the no-series-dir case (mapping
+    // baked by nix, run outside a checkout). Never merge the two: a stale
+    // mapping entry for a removed patch must not render a phantom row.
+    let mut names: Vec<String> = match dir.as_deref().filter(|dir| dir.is_dir()) {
+        Some(dir) => patch_files(dir),
+        None => fork.patches.keys().cloned().collect(),
+    };
     names.sort();
     names
         .into_iter()
@@ -324,7 +323,43 @@ pub fn collect(root: Option<&Path>, forks: &[Fork]) -> Vec<PatchRow> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_pr_url, patch_header};
+    use super::{Fork, parse_pr_url, patch_header, registry_rows};
+
+    fn fork_with_two_entries() -> Fork {
+        serde_json::from_value(serde_json::json!({
+            "name": "demo",
+            "patchDir": "series",
+            "patches": {
+                "a.patch": { "upstream": "attempt" },
+                "removed.patch": { "upstream": "hold" },
+            },
+        }))
+        .expect("fork")
+    }
+
+    #[test]
+    fn checkout_series_dir_is_source_of_truth() {
+        let root =
+            std::env::temp_dir().join(format!("prs-discover-registry-test-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("series")).expect("mkdir");
+        std::fs::write(root.join("series/a.patch"), "Subject: x\n").expect("write");
+        let rows = registry_rows(Some(&root), &fork_with_two_entries());
+        // The stale `removed.patch` mapping entry must not render a phantom row.
+        assert_eq!(
+            rows.iter().map(|row| row.file.as_str()).collect::<Vec<_>>(),
+            ["a.patch"],
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn mapping_keys_cover_the_no_checkout_case() {
+        let rows = registry_rows(None, &fork_with_two_entries());
+        assert_eq!(
+            rows.iter().map(|row| row.file.as_str()).collect::<Vec<_>>(),
+            ["a.patch", "removed.patch"],
+        );
+    }
 
     #[test]
     fn format_patch_header_stops_at_first_diff() {
