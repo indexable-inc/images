@@ -23,8 +23,8 @@ with `git clone https://github.com/indexable-inc/index`.
 
 ## Not fleets
 
-The other entries under `examples/` are NixOS fleets driven by `mkFleet`,
-each exposing generated `<name>-up` / `<name>-health` wrapper packages. The
+The other entries under `examples/` are NixOS fleets driven by `mkFleet` and
+deployed with `ix up`. The
 [`ubuntu`](ubuntu/) and [`debian`](debian/) directories here return images
 instead of fleet plans, so example fleet discovery skips them; they surface
 as the opt-in `non-nix-*` packages above instead.

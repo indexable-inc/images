@@ -13,8 +13,8 @@ firewall; only the proxy listeners are public.
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#minecraft-survival-up
+cd examples/minecraft/survival
+ix up
 ```
 
 Need the repo first? `git clone https://github.com/indexable-inc/index`.

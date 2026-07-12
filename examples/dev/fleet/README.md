@@ -15,10 +15,8 @@ agent logs in the whole fleet.
 ix up
 ```
 
-Run that from a copied example flake. In this repo root
-(`git clone https://github.com/indexable-inc/index`), the aggregate example
-wrapper still exposes `nix run .#dev-fleet-up`; the standalone example shape is
-what `ix up` consumes.
+Run that from this example flake or a copy of it. `ix up` consumes the
+declared fleet directly.
 
 This example declares a multi-node `ix.dev.fleet`. Omit that block and the same
 `dev.nix` is a **single VM named `dev`** that `index.lib.mkDev` builds and

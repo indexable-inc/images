@@ -59,20 +59,13 @@ require `--file`.
 Re-run `ix secret set NAME` with the new value. The store is updated, but VMs that
 already attached the old value keep it: attached copies are materialized at boot
 and persist until the VM is recreated. To pick up a rotated
-value, recreate the VM (delete and `ix new` again, or use a fleet `up`/`replace`).
+value, recreate an imperative VM or rerun `ix up` for a declared fleet.
 
 ## Fleet plans
 
-A [fleet plan](../ix-fleet/overview.md) references secrets by name, never by
-value: plaintext stays in your account store, only the names live in the plan
-(`packages/ix-fleet/src/ix_fleet/__init__.py:85-89`). Each node lists `secrets:
-[NAME, ...]` and may set `noDefaultSecrets: true`, the exact equivalents of `ix
-new --secret NAME` and `--no-default-secrets` (`__init__.py:89-92`). Before any
-work, the CLI verifies every referenced secret exists in the store, mirroring `ix
-secret check`, and tells you to `ix secret set NAME` if one is missing
-(`__init__.py:374-394`). The plan's optional `secrets.provider` defaults to type
-`runtime-directory` with `mountRoot` `/run/secrets`, so file-mounted secrets land
-under `/run/secrets/<name>` (`__init__.py:124-128`).
+A fleet plan references secrets by name, never by value. Plaintext stays in
+your account store. Before changing a VM, `ix up` verifies that each referenced
+secret exists and reports the missing name.
 
 ## How platform services are wired (not your path)
 
@@ -86,6 +79,6 @@ platform plumbing; your path is `ix secret` plus fleet `secrets` above.
 ## See also
 
 - [cli.md](cli.md): the `ix` CLI surface.
-- [fleet.md](fleet.md) and [ix-fleet overview](../ix-fleet/overview.md): declarative fleet plans.
+- [fleet.md](fleet.md): declarative fleet plans.
 - [services.md](services.md): running and wiring your service in the guest.
 - [networking.md](networking.md): VM connectivity and ingress.

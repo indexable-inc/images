@@ -17,8 +17,8 @@ The tool's schema is the whole attack surface: one console-command string, parse
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#hermes-minecraft-operator-up
+cd examples/hermes/minecraft-operator
+ix up
 ```
 
 Need the repo first? `git clone https://github.com/indexable-inc/index`.
@@ -27,7 +27,7 @@ Store the model key env file, bring the fleet up, and open a chat:
 
 ```sh
 printf 'OPENROUTER_API_KEY=%s\n' "$OPENROUTER_API_KEY" | ix secret set hermes_env
-nix run .#hermes-minecraft-operator-up
+ix up
 ix shell hermes -- hermes chat
 ```
 
@@ -57,7 +57,7 @@ The cron job lives in Hermes' own scheduler (`$HERMES_HOME/cron/jobs.json`), cre
 
 ## The credential, honestly
 
-RCON is password-authenticated and the password is committed in [`rcon.nix`](rcon.nix). That is acceptable here because the RCON port is only reachable inside the fleet's east-west group (the public internet sees the game port, not the console), and it keeps the generated up wrapper working with zero manual steps. To rotate: edit `rcon.nix`, `ix fleet switch`, then delete `/var/lib/minecraft/.ix-rcon-password` on the minecraft node and restart it (the seed only writes when the file is absent).
+RCON is password-authenticated and the password is committed in [`rcon.nix`](rcon.nix). That is acceptable here because the RCON port is only reachable inside the fleet's east-west group. To rotate, edit `rcon.nix`, run `ix up`, then delete `/var/lib/minecraft/.ix-rcon-password` on the minecraft node and restart it. The seed writes only when the file is absent.
 
 ## Bad fit if
 

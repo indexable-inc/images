@@ -1,20 +1,17 @@
 /**
 Build the `health-checks` apps that bring every example fleet up in
-parallel, verify the declared `ix.healthChecks` via the existing
-`ix-fleet up` polling loop, and tear the VMs down on completion.
+parallel through `ix up`, verify the declared `ix.healthChecks`, and tear
+the VMs down on completion.
 
 Each example contributes a Nushell lifecycle script that sanity-checks
 for the `ix` binary, force-deletes any leftover VM with the same node
-name, invokes `fleet.up`, then force-deletes the VM again so the next
+name, invokes `ix up`, then force-deletes the VM again so the next
 run starts from scratch and an unrelated VM is never left running
 after a test.
 
-The fleets passed in carry a `health-check-` prefix applied by
-`withNodePrefix`, so the names this script force-deletes cannot collide
-with a production VM that happens to share the example's natural name
-(`nginx`, `factions`, `file-server`, ...). The prefix is a plan-level
-rename: the VMs boot the same NixOS closures (and base hostnames) as the
-unprefixed example fleet, so the two surfaces share one evaluation.
+`ix up --name-prefix health-check-` isolates the external VM and group
+identities from production while each build still resolves the example's
+unprefixed `nixosConfigurations.<node>` output.
 
 Returns an attrset with two front-ends over the same lifecycle scripts:
 
@@ -38,6 +35,7 @@ Returns an attrset with two front-ends over the same lifecycle scripts:
   dagRunner,
 }: {
   exampleFleets,
+  exampleSources,
   exampleNames ? lib.attrNames exampleFleets,
 }: let
   jsonFormat = pkgs.formats.json {};
@@ -66,18 +64,9 @@ Returns an attrset with two front-ends over the same lifecycle scripts:
   '';
 
   mkLifecycle = name: fleet: let
-    # Pin each node's NixOS system closure as a build-time dep of the
-    # lifecycle script so `nix run .#health-checks` realises every closure
-    # before the runner starts. Without this, `ix-fleet up`'s runtime
-    # `nix build` of the replacement image triggers an x86_64-linux build
-    # chain on whatever host launched the runner. Surfacing the build as a
-    # normal Nix dep fails fast at one well-known boundary instead of five
-    # parallel runners independently rediscovering a broken remote builder.
-    # Deliberately the toplevels, NOT `fleet.packages`: the CAS images those
-    # hold need the ix-side `casImageBuilder` threaded in (cas-layer.nix),
-    # which this repo's example fleets do not have, and even referencing
-    # their outPaths here would force that eval during `nix flake check`.
-    pinnedSystems = lib.attrValues fleet.systemPackages;
+    prefix = "health-check-";
+    nodes = map (node: prefix + node) fleet.planValue.order;
+    source = exampleSources.${name};
   in
     writeNushellApplication pkgs {
       name = "health-check-${name}";
@@ -101,19 +90,23 @@ Returns an attrset with two front-ends over the same lifecycle scripts:
 
           ${ixTokenCheck}
 
-          let pinned_systems = ${builtins.toJSON pinnedSystems}
-          let plan_data = (open ${fleet.plan})
-          let nodes = $plan_data.order
+          let up_help = (^ix up --help | complete)
+          if $up_help.exit_code != 0 or not ($up_help.stdout | str contains "--name-prefix") {
+            print -e "health-checks requires ix#7059: ix up must support --name-prefix before any VM is changed"
+            exit 1
+          }
 
-          print $"[${name}] ($pinned_systems | length) system closure\(s) pinned in store; removing any pre-existing VMs: ($nodes | str join ', ')"
+          let nodes = ${builtins.toJSON nodes}
+
+          print $"[${name}] removing any pre-existing VMs: ($nodes | str join ', ')"
           for node_name in $nodes {
             do --ignore-errors { ^ix rm --force $node_name } | ignore
           }
 
           print $"[${name}] booting and running health checks"
-          # Stream ix-fleet so dag-runner can show the live per-node step.
+          cd ${source}
           try {
-            ^${lib.getExe fleet.up}
+            ^ix up --name-prefix ${prefix}
           } catch { }
           let exit_code = ($env.LAST_EXIT_CODE? | default 1)
 

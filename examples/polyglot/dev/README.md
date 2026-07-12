@@ -13,8 +13,8 @@ whatever `java` and `javac` end up on PATH.
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#polyglot-dev-up
+cd examples/polyglot/dev
+ix up
 ix shell workbench
 ```
 

@@ -8,8 +8,6 @@
   overlays,
   ixSpecialArgs,
   moduleList,
-  writeNushellApplication,
-  packageSetFor,
   # The index flake's own `self`, for the guest `index` registry pin (see the
   # `nix.registry.index` module below). `null` when `lib` is imported without a
   # flake; the pin is then omitted.
@@ -183,42 +181,27 @@
     tag = "zstd-tools-2026-05-12";
   };
 
-  /**
-  Build a fleet plan helper for a given host system. Returns a function
-  that takes a fleet spec and produces the plan/commands tooling consumes.
-  `mkFleet` is the default-system shortcut.
-  */
-  mkFleetFor = hostSystem: let
-    hostPkgs = nixpkgs.legacyPackages."${hostSystem}";
-  in
-    import ./fleet.nix {
-      inherit
-        lib
-        evalImageConfig
-        writeNushellApplication
-        bootstrapImage
-        ;
-      pkgs = hostPkgs;
-      ixFleet = (packageSetFor hostPkgs).ix-fleet;
-    };
-
-  mkFleet = mkFleetFor system;
+  mkFleet = import ./fleet.nix {
+    inherit
+      lib
+      evalImageConfig
+      bootstrapImage
+      ;
+  };
 
   # Dev-fleet layer over `mkFleet` (RFC 0007): consumes the forkable `ix.nix`
-  # spec. Curried like `mkFleetFor` so example/flake eval can target a host
-  # system.
+  # spec and returns the same declarative surface.
   inherit
     (import ./dev.nix {
       inherit
         lib
         paths
-        mkFleetFor
+        mkFleet
         evalImageConfig
         ;
     })
-    mkDevFor
+    mkDev
     ;
-  mkDev = mkDevFor system;
 
   # Non-NixOS OCI images are built standalone (no `nixosSystem`), so they need a
   # plain package set carrying the ix overlay for `oci-image-builder`. Reusing
@@ -242,9 +225,7 @@ in {
     mkImage
     mkNonNixImage
     bootstrapImage
-    mkFleetFor
     mkFleet
-    mkDevFor
     mkDev
     ;
 }

@@ -2,8 +2,7 @@
 `mkDev`: an opinionated dev-fleet layer over `mkFleet` (RFC 0007).
 
 Consumes one user-owned NixOS module (the forkable `ix.nix`) and returns the
-same result shape `mkFleet` does (`.up`, `.health`, `.diff`, `withNodePrefix`,
-…), so it drops straight into the flake/example plumbing.
+same declarative result shape as `mkFleet`, so `ix up` consumes it directly.
 
 The user's `ix.nix` is an ordinary NixOS module: `environment.systemPackages`
 and friends at the top level, plus `ix.dev.*` (see `lib/dev/options.nix`) to
@@ -21,15 +20,13 @@ a probe eval to plan the fleet, then builds each node with the same module:
 - `ix.dev.selfSource` materializes `/ix` (the dev source) on every node, on
   the volume when one exists, else a local writable copy.
 
-Curried `mkDevFor hostSystem { module, src }` so flake/example evaluation can
-build the wrapper derivations for the requested system, mirroring `mkFleetFor`.
 `src` is the flake `self`, threaded in by the template's `flake.nix`; it is
 what gets materialized at `/ix`. The user's `ix.nix` never mentions it.
 */
 {
   lib,
   paths,
-  mkFleetFor,
+  mkFleet,
   evalImageConfig,
 }: let
   inherit
@@ -56,7 +53,7 @@ what gets materialized at `/ix`. The user's `ix.nix` never mentions it.
   shareDir = "/var/lib/ix-dev-share";
   shareName = "dev";
 
-  mkDevFor = hostSystem: {
+  mkDev = {
     module,
     src ? null,
   }: let
@@ -163,7 +160,7 @@ what gets materialized at `/ix`. The user's `ix.nix` never mentions it.
 
     nodes = workloadNodes // lib.optionalAttrs enable serverSpec;
   in
-    (mkFleetFor hostSystem) {inherit defaults nodes;};
+    mkFleet {inherit defaults nodes;};
 in {
-  inherit mkDevFor;
+  inherit mkDev;
 }

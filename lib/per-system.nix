@@ -986,50 +986,7 @@
       ;
   };
 
-  exampleFleets = ix.exampleFleetsFor {hostSystem = system;};
-
-  # Same fleets with "health-check-" prepended to every external name, so the
-  # lifecycle scripts that force-delete VMs by name can never clobber an
-  # unrelated production VM that happens to share the example's node name
-  # (`nginx`, `factions`, ...). `withNodePrefix` only rewrites plan data, so
-  # both surfaces share one NixOS closure evaluation per node instead of
-  # evaluating every example fleet twice (ENG-2411).
-  healthCheckExampleFleets =
-    lib.mapAttrs (
-      _name: fleet: fleet.withNodePrefix "health-check-"
-    )
-    exampleFleets;
-
-  # Surface every example's `ix fleet <sub>` wrapper as a flake package.
-  # Each example contributes `packages.<system>.<example>-{up,health,...}`,
-  # which lets `nix run .#nginx-lifecycle-up` invoke the existing fleet
-  # plumbing through the wrapper's `meta.mainProgram`, and
-  # `nix build .#nginx-lifecycle-up` produce the wrapper script on disk.
-  examplePackages = let
-    fleetSubs = [
-      "up"
-      "health"
-      "status"
-      "logs"
-      "replace"
-      "switch"
-      "diff"
-    ];
-  in
-    lib.concatMapAttrs (
-      name: fleet:
-        lib.genAttrs' fleetSubs (sub: {
-          name = "${name}-${sub}";
-          value = fleet.${sub}.overrideAttrs (old: {
-            meta =
-              (old.meta or {})
-              // {
-                description = "Run `ix fleet ${sub}` against the ${name} example fleet";
-              };
-          });
-        })
-    )
-    exampleFleets;
+  inherit (ix) exampleFleets;
 
   healthChecks =
     import ./image/health-checks.nix
@@ -1039,7 +996,8 @@
       dagRunner = repoPackages.dag-runner;
     }
     {
-      exampleFleets = healthCheckExampleFleets;
+      inherit exampleFleets;
+      exampleSources = ix.exampleFleetSources;
       exampleNames = lib.attrNames exampleFleets;
     };
 
@@ -1541,7 +1499,6 @@
     }
     // lib.optionalAttrs (system == "x86_64-linux") {inherit check;}
     // repoFlakePackages
-    // examplePackages
     // nonNixExampleImages
     // nonNixExampleDescriptions
     // crossPackages
@@ -1594,13 +1551,14 @@
       lib.concatMapAttrs (
         fleetName: fleet:
           lib.mapAttrs' (
-            node: path: let
+            node: nixos: let
               name = "example-${fleetName}-${node}";
+              path = nixos.config.system.build.toplevel;
             in
               lib.nameValuePair name {
                 inherit path;
                 root = mkRoot {
-                  attr = "exampleFleets.${system}.${fleetName}.systemPackages.${node}";
+                  attr = "exampleFleets.${system}.${fleetName}.nixosConfigurations.${node}.config.system.build.toplevel";
                   inherit name owner;
                   class = "deployed-service";
                   environment = "development";
@@ -1610,7 +1568,7 @@
                 };
               }
           )
-          fleet.systemPackages
+          fleet.nixosConfigurations
       )
       exampleFleets;
     entries =
@@ -1637,11 +1595,8 @@ in {
   #      `ix up` substitutes (consumers reconstruct the archive on demand via
   #      streamLayeredImage). Non-image packages, and non-NixOS OCI images (which
   #      expose no `toplevel`), pass through unchanged. See lib/image/oci-layer.nix.
-  #   2. The `health-check-*` packages (and the `health-checks{,-zellij}` runners)
-  #      pin every fleet node's `toplevel` closure as a build dep
-  #      (lib/image/health-checks.nix). Drop the wrapper scripts and add the
-  #      fleet node `toplevel` closures directly, so the closures those checks
-  #      drag in stay cached without pushing the per-fleet script derivations.
+  #   2. Example fleet node `toplevel` closures are explicit roots so deployments
+  #      can substitute them without building locally.
   #   3. The cross lane's eval-time IFD outputs (`crossIfdRoots`): the rendered
   #      `cargo-units.nix`, its `cargo-unit-graph.json`, and the vendor dir a Mac
   #      forces at eval when it substitutes a Darwin cross output. These are
@@ -1661,15 +1616,14 @@ in {
     imagesAsClosures = lib.mapAttrs (_: p: p.passthru.toplevel or p) (
       lib.filterAttrs (name: _: !isHealthCheck name) packageSet
     );
-    # `fleet.systemPackages` keys each node's toplevel as `<node>-system`; the
-    # fleet-name prefix keeps nodes sharing a name across fleets distinct.
+    # The fleet-name prefix keeps nodes sharing a name across fleets distinct.
     exampleNodeToplevels =
       lib.concatMapAttrs (
         fleetName: fleet:
           lib.mapAttrs' (
-            node: toplevel: lib.nameValuePair "${fleetName}-${node}" toplevel
+            node: nixos: lib.nameValuePair "${fleetName}-${node}" nixos.config.system.build.toplevel
           )
-          fleet.systemPackages
+          fleet.nixosConfigurations
       )
       exampleFleets;
     # Native analog of `crossIfdRoots` (adjustment 4). `crossWorkspace` with no

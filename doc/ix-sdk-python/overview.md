@@ -67,8 +67,7 @@ For a supported system (`default.nix:61-124`):
 `importTest` builds a real `python3.withPackages` environment and runs
 `assertSurface` through it, so the `toPythonModule` wiring cannot silently
 regress (`default.nix:104-116`). `assertSurface` (`default.nix:94-102`) imports
-`ix_sdk`, checks `__version__`, and asserts the attributes `ix_sdk` depends on
-downstream:
+`ix_sdk`, checks `__version__`, and asserts its public lifecycle surface:
 
 - module-level `Client`, `Group`, `GroupMember`;
 - `Client` methods `create_group`, `add_group_member`, `create`, `branches`.
@@ -79,10 +78,3 @@ present in the source-available `packages/sdk/python/ix_sdk/__init__.py` in this
 newer/fuller private `crates/ix/sdk-py`. The packaging test therefore validates
 the wheel's surface, which is a superset of the public source mirror. See the
 domain NOTES.
-
-## Consumers
-
-`packages/ix-fleet` is the in-repo consumer: it calls `pkgs.callPackage
-../ix-sdk-python { }` and copies the unpacked `ix_sdk` into its uv-built venv
-site-packages, since the SDK is a prebuilt wheel rather than a uv/PyPI
-dependency (`packages/ix-fleet/default.nix:7-11`, `60-66`).

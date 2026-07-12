@@ -13,8 +13,8 @@ S3. The Python stays ordinary Python; the ix-specific parts are
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#python-daily-scraper-up
+cd examples/python/daily-scraper
+ix up
 ```
 
 Get the repo with `git clone https://github.com/indexable-inc/index`.

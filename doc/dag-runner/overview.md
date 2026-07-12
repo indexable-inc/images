@@ -3,7 +3,7 @@
 `packages/dag-runner` is a tiny task runner: it takes a JSON DAG of shell
 commands, runs each node as soon as its dependencies finish (so graph shape, not
 fixed "levels", determines parallelism), and renders inline progress. It powers
-`nix run .#health-checks` and is the planned replacement for `ix-fleet`'s
+`nix run .#health-checks` and replaces ad hoc
 sequential per-node loops (`README.md`). It is meant for short, hands-off
 batches, not a long-running supervisor; rationale (why not `process-compose`/
 `devenv-tasks`) is in the `why-dag-runner` skill

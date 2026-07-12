@@ -64,21 +64,21 @@ fleet-injected ones such as `IX_MCP_EXEC_TOKEN` and `IX_MCP_SHARED` are omitted.
 ## Health-check context (read-only)
 
 These are **injected by the platform into host health checks, not set by you.**
-`ix-fleet` populates them per node before running a check on the operator's
+`ix up` populates them per node before running a check on the operator's
 machine; the check script reads them to learn about the node under test. Setting
 them yourself has no effect on the fleet. See
 [health-checks.md](health-checks.md).
 
-| var | meaning | source path |
-| --- | --- | --- |
-| `IX_NODE` | Fleet node name. Always set. | `packages/ix-fleet/src/ix_fleet/__init__.py` |
-| `IX_NODE_NAME` | Branch name reported by the API. | `packages/ix-fleet/src/ix_fleet/__init__.py` |
-| `IX_NODE_IMAGE` | Image the node is running. | `packages/ix-fleet/src/ix_fleet/__init__.py` |
-| `IX_NODE_STATUS` | Node status string. | `packages/ix-fleet/src/ix_fleet/__init__.py` |
-| `IX_NODE_IPV6` | Node IPv6 address. | `packages/ix-fleet/src/ix_fleet/__init__.py` |
-| `IX_NODE_IPV4` | Node IPv4 address, when assigned. | `packages/ix-fleet/src/ix_fleet/__init__.py` |
-| `IX_NODE_SUBDOMAIN` | Node subdomain, when assigned. | `packages/ix-fleet/src/ix_fleet/__init__.py` |
-| `IX_NODE_REGION` | Node region slug, when known. | `packages/ix-fleet/src/ix_fleet/__init__.py` |
+| var | meaning |
+| --- | --- |
+| `IX_NODE` | Fleet node name. Always set. |
+| `IX_NODE_NAME` | VM name reported by the API. |
+| `IX_NODE_IMAGE` | Image the node is running. |
+| `IX_NODE_STATUS` | Node status string. |
+| `IX_NODE_IPV6` | Node IPv6 address. |
+| `IX_NODE_IPV4` | Node IPv4 address, when assigned. |
+| `IX_NODE_SUBDOMAIN` | Node subdomain, when assigned. |
+| `IX_NODE_REGION` | Node region slug, when known. |
 
 ## See also
 

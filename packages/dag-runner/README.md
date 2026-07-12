@@ -2,7 +2,7 @@
 
 # dag-runner
 
-Need to fan out a handful of shell commands with dependencies between them and get one honest exit code back? dag-runner takes a JSON DAG of commands, runs each node as soon as its dependencies succeed (independent nodes in parallel), renders inline progress, and exits with the worst outcome. It powers `nix run .#health-checks` today and is the planned replacement for [`ix-fleet`](../ix-fleet/)'s sequential per-node loops.
+Need to fan out a handful of shell commands with dependencies between them and get one honest exit code back? dag-runner takes a JSON DAG of commands, runs each node as soon as its dependencies succeed (independent nodes in parallel), renders inline progress, and exits with the worst outcome. It powers `nix run .#health-checks` today.
 
 The runner is meant for short, hands-off batches: spawn a fan-out of independent jobs, follow their progress, and exit with a worst-case status. It is not a long-running supervisor. For the design rationale (why not `process-compose`, why not `devenv-tasks`), see [the corresponding AGENTS.md section](../../AGENTS.md#why-dag-runner-and-not-process-compose-or-devenv-tasks).
 

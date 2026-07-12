@@ -14,7 +14,7 @@ Two repos, one boundary:
 - **`index` (this repo, MIT).** The open tooling: the NixOS library that builds
   VM images and fleet plans (`lib/`), the ready-made service modules
   (`modules/services/`), the base images (`images/`), and a large set of
-  standalone tools (search, mcp, tui, dashboard, `ix-fleet`, ...) under
+  standalone tools (search, mcp, tui, dashboard, and others) under
   `packages/`. Shared Nix primitives live here too: checked script writers,
   generic check constructors, PostgreSQL packages such as `postgresql_18_ix`,
   and reusable `bw://folder/item/field` reference grammar. You can read, fork,
@@ -26,8 +26,7 @@ Two repos, one boundary:
 
 Rule of thumb: if it builds an image, defines a service, or is a tool you run
 locally, it is open and lives here. If it creates, runs, or bills a VM, that is
-the hosted platform behind the `ix` CLI. `ix-fleet` is open (it renders plans),
-but it reaches the VMs through the hosted control plane.
+the hosted platform behind the `ix` CLI.
 
 ## Get a first VM
 
@@ -58,7 +57,7 @@ Start here, then follow the page that matches the question:
 | --- | --- |
 | [cli.md](cli.md) | The `ix` verb map and mental model. For flags, run `ix <verb> --help`. |
 | [lifecycle.md](lifecycle.md) | "I want to X" -> command: create, run, converge, stop, snapshot, destroy. |
-| [fleet.md](fleet.md) | Declarative multi-VM fleets via the separate `ix-fleet` tool. |
+| [fleet.md](fleet.md) | Declarative multi-VM fleets via `ix up`. |
 | [images.md](images.md) | Build an image, tag/push to `registry.ix.dev`, boot a VM from it. |
 | [networking.md](networking.md) | Expose ports, private VM-to-VM groups, `<host>.ix.internal`, public ingress. |
 | [secrets.md](secrets.md) | Declare a secret, attach it to a VM, materialize it in the guest. |
@@ -67,13 +66,12 @@ Start here, then follow the page that matches the question:
 | [environment.md](environment.md) | The user-facing `IX_*` and credential environment variables. |
 | [glossary.md](glossary.md) | Disambiguate overloaded names (search, run, mcp, fleet, dashboard, index). |
 
-For the package-level "from source" reference behind these pages, see the
-per-package docs under [`doc/`](../index.md), for example the
-[ix-fleet overview](../ix-fleet/overview.md).
+For package-level references behind these pages, see the per-package docs under
+[`doc/`](../index.md).
 
 ## See also
 
 - [cli.md](cli.md): the `ix` verb map and mental model.
 - [lifecycle.md](lifecycle.md): which command for create, run, converge, snapshot, destroy.
-- [fleet.md](fleet.md): declarative multi-VM fleets via `ix-fleet`.
+- [fleet.md](fleet.md): declarative multi-VM fleets via `ix up`.
 - [glossary.md](glossary.md): disambiguating overloaded names.

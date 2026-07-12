@@ -46,10 +46,9 @@ Supported platforms: `aarch64-darwin` and `x86_64-linux`.
   long-running VM; `run` boots a fresh VM, runs one command,
   streams its output, and leaves the VM up. Reach for `up`
   for a config you own and re-converge; reach for `new`/`run` for a quick image.
-- **Fleets are a separate tool.** Multi-VM declarative fleets live in `ix-fleet`
-  (`nix run .#ix-fleet -- --plan plan.json <verb>`), not in `ix`. See
-  [fleet.md](fleet.md). There is no `ix down`, `ix health`, `ix diff`, or
-  `ix fleet`. Single-VM teardown is `ix rm` (or `ix stop` to keep it).
+- **`ix up` owns fleets too.** With no explicit targets, it reads
+  `ix.fleets.default` and converges every declared VM. See [fleet.md](fleet.md).
+  Single-VM teardown is `ix rm` (or `ix stop` to keep it).
 
 ## Verbs
 
@@ -60,7 +59,7 @@ actions show as `verb <action>`.
 | --- | --- | --- |
 | Provision | `new [image]` | Boot an OCI image (default `ix/base:latest`) as a long-running VM, or warm-restore a snapshot UUID. |
 | | `run -- <cmd>` | Boot a fresh VM, run `<cmd>`, stream output, leave the VM up; exits with the command's code. |
-| | `up [targets]` | Declaratively build + converge VMs from your NixOS config, like `nixos-rebuild switch`. |
+| | `up [target]` | Declaratively converge one explicit NixOS target or the default fleet. |
 | | `init` | Write a minimal `flake.nix` + `ix.nix` in the current dir; existing files untouched. |
 | Inventory | `ls` | List your VMs: name, state, region, address, usage. Read-only inventory. |
 | | `start <vm>` | Resume stopped VMs; does not create or change the image. |
@@ -102,7 +101,7 @@ current flag list on any verb. Four global flags apply everywhere:
 
 ## See also
 
-- [fleet.md](fleet.md): multi-VM declarative fleets via the separate `ix-fleet`.
+- [fleet.md](fleet.md): multi-VM declarative fleets via `ix up`.
 - [lifecycle.md](lifecycle.md): provision -> run -> stop -> snapshot -> rm.
 - [networking.md](networking.md): groups, the overlay, and shares.
 - [secrets.md](secrets.md): the write-only secret store and default attachment.

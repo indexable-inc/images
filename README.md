@@ -50,7 +50,7 @@ cd index
 nix flake show          # list every package, module, and check
 nix run .#lint          # alejandra, statix, deadnix, astlog (nix + rust)
 nix run .#reel          # regenerate the demo above
-nix build .#nginx-lifecycle-up   # realize one example fleet wrapper
+nix build .#base       # build the base VM image
 ```
 
 `nix flake show` prints the whole map — every package, NixOS module, and
@@ -130,7 +130,6 @@ reusable, auto-discovered [NixOS modules](modules/) and declarative fleet helper
 | --- | --- |
 | [`vmkit`](packages/vm/vmkit/) | Spawns guests on macOS Virtualization.framework or Linux libkrun from one binary |
 | [`chrome-vm`](packages/vm/chrome-vm/) | Runs headless Chromium inside a real VM |
-| [`ix-fleet`](packages/ix-fleet/) | Drives declarative multi-VM rollouts |
 | [`dag-runner`](packages/dag-runner/) | Executes JSON task DAGs for parallel health checks |
 
 ## Layout

@@ -757,16 +757,12 @@
         overlays
         ixSpecialArgs
         moduleList
-        writeNushellApplication
-        packageSetFor
         ;
     })
     evalImageConfig
     mkImage
     mkNonNixImage
-    mkFleetFor
     mkFleet
-    mkDevFor
     mkDev
     ;
 
@@ -775,17 +771,16 @@
       inherit
         lib
         paths
-        mkFleetFor
-        mkDevFor
         ixReturn
         ;
     })
     discoverTree
     discoverModules
-    exampleFleetsFor
+    exampleFleetSources
+    exampleFleets
     ;
 
-  # Self-reference (let-bindings are mutually recursive): `exampleFleetsFor`
+  # Self-reference (let-bindings are mutually recursive): `exampleFleets`
   # passes `ixReturn` back into examples as `index.lib`. Forced only when
   # an example actually reads from it.
   ixReturn =
@@ -799,13 +794,12 @@
         discoverTree
         errors
         evalImageConfig
-        exampleFleetsFor
+        exampleFleetSources
+        exampleFleets
         goUnitFor
         macosSdk
         mkDev
-        mkDevFor
         mkFleet
-        mkFleetFor
         mkImage
         mkNonNixImage
         mkPackageRegistry

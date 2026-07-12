@@ -25,7 +25,7 @@ User-facing guides for the hosted `ix` platform. Start at
 | [ix/overview.md](ix/overview.md) | The platform map: open-source vs hosted boundary, a first VM, and where each "how do I" lives. |
 | [ix/cli.md](ix/cli.md) | The `ix` verb map and mental model; flags live in `ix <verb> --help`. |
 | [ix/lifecycle.md](ix/lifecycle.md) | "I want to X" -> command: create, run, converge, stop, snapshot, destroy (single VM and fleet). |
-| [ix/fleet.md](ix/fleet.md) | Declarative multi-VM fleets via the separate `ix-fleet` tool. |
+| [ix/fleet.md](ix/fleet.md) | Declarative multi-VM fleets via `ix up`. |
 | [ix/images.md](ix/images.md) | Build an image, tag and push to `registry.ix.dev`, boot a VM from it. |
 | [ix/networking.md](ix/networking.md) | Expose ports, private VM-to-VM groups, `<host>.ix.internal`, and public ingress. |
 | [ix/secrets.md](ix/secrets.md) | Declare a secret, attach it to a VM, materialize it in the guest. |
@@ -73,7 +73,6 @@ User-facing guides for the hosted `ix` platform. Start at
 | [indexbench](indexbench/overview.md) | `packages/indexbench` is a metric-centric continuous-benchmarking framework for the index repo. |
 | [indexer](indexer/overview.md) | `packages/indexer` syncs every configured corpus source into Mixedbread (the semantic search index) and a durable corpus log (the S3/R2 parquet archive and/or the Iceberg lake). |
 | [ix-dev-diagnose](ix-dev-diagnose/overview.md) | `packages/ix-dev-diagnose` probes `https://ix.dev/` (or any HTTPS URL) from the caller's network path and writes a single JSON diagnostic capturing every layer of the request: system DNS... |
-| [ix-fleet](ix-fleet/overview.md) | `packages/ix-fleet` renders and executes declarative **fleet plans**: a single JSON document describes a set of remote ix VMs (nodes) and their images, NixOS switch targets, east-west gro... |
 | [ix-sdk-python](ix-sdk-python/overview.md) | `packages/ix-sdk-python` is the Nix package that makes the precompiled Python SDK bindings available in-repo as `pkgs.ix-sdk-python` / `nix build .#ix-sdk-python`. |
 | [ix-windows](ix-windows/overview.md) | `packages/ix-windows` renders each live MCP resource as its own floating, blurred overlay webview window that auto-sizes to its content. |
 | [kitty](kitty/overview.md) | `packages/kitty` is an encoder for the kitty terminal graphics protocol: it turns image bytes into the `APC _G ... |
@@ -123,4 +122,3 @@ User-facing guides for the hosted `ix` platform. Start at
 | [vt](vt/overview.md) | `packages/vt` is the VT engine: drive a terminal state machine with raw bytes and snapshot its render state. |
 | [vz-linux-guest](vz-linux-guest/overview.md) | `packages/vz-linux-guest` is the raw EFI-bootable aarch64 NixOS disk image that vmkit's `boot-linux-gui` / `drive-linux` path boots under Apple's Virtualization.framework (VZ) on Apple Si... |
 | [yc](yc/overview.md) | `packages/yc` packages the Y Combinator CLI (`yc`: search Bookface and chat with the YC Agent from the terminal), installing the upstream prebuilt per-platform binaries. |
-

@@ -2,7 +2,6 @@
   ix,
   lib,
   pkgs,
-  # Match the interpreter of any consumer (ix-fleet builds on pkgs.python3).
   # The wheel is abi3 (cp313+), so a 3.13+ interpreter is required.
   python3 ? pkgs.python3,
 }: let
@@ -18,8 +17,7 @@
   # pins.json. Each URL path embeds the wheel's nix-store hash so distinct
   # builds never collide.
   #
-  # Published for x86_64-linux (health-checks runner) and aarch64-darwin
-  # (operators run ix-fleet on their Macs). The darwin wheel repoints its one
+  # Published for x86_64-linux and aarch64-darwin. The darwin wheel repoints its one
   # nix-store dylib (libiconv) at /usr/lib so it loads off-nix; see ix's
   # workspace-sdks.nix. Other systems fall through to the loud placeholder below.
   catalog = ix.pins.loadPins ./pins.json;
@@ -80,8 +78,8 @@ in
       ''
     );
 
-    # The surface ix-fleet depends on, asserted once so a bad wheel fails the
-    # check rather than ix-fleet at runtime.
+    # Assert the public lifecycle, group, and secret surface at the package
+    # boundary so a bad wheel fails during its own check.
     assertSurface = ''
       import inspect
       import ix_sdk
@@ -90,8 +88,7 @@ in
           assert hasattr(ix_sdk, name), f"missing ix_sdk.{name}"
       for method in ("create_group", "add_group_member", "create", "branches", "list_secrets"):
           assert hasattr(ix_sdk.Client, method), f"missing Client.{method}"
-      # ix-fleet declares per-VM secrets through these create kwargs; assert the
-      # packaged wheel accepts them so a stale wheel fails here, not at deploy.
+      # Per-VM secret delivery depends on these create kwargs.
       for kwarg in ("secrets", "no_default_secrets"):
           for method in ("create", "create_with_progress"):
               params = inspect.signature(getattr(ix_sdk.Client, method)).parameters

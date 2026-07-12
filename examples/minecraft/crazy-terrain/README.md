@@ -14,8 +14,8 @@ puts the diffusion pipeline's `10 km` peak at roughly `y ~2060`.
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#minecraft-crazy-terrain-up
+cd examples/minecraft/crazy-terrain
+ix up
 ```
 
 Need the repo first? `git clone https://github.com/indexable-inc/index`.

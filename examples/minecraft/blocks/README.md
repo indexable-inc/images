@@ -14,13 +14,13 @@ the same database.
 ## Run
 
 ```sh
-nix run .#minecraft-blocks-up
+cd examples/minecraft/blocks
+ix up
 ```
 
 That brings up three VMs: `log` (the Kafka broker), `view` (ClickHouse, the
 OTel collector, and Grafana), and `producer` (the Paper server with the
-block-events plugin). Grafana is on port `3000` through the example's L7 proxy. The wrapper
-lives on the index root flake: `git clone https://github.com/indexable-inc/index`.
+block-events plugin). Grafana is on port `3000` through the example's L7 proxy.
 
 Query the spatial view from inside the view VM:
 
