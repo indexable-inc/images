@@ -31,6 +31,7 @@ pub const DEFAULT_INSTRUMENT_WAT: &str = include_str!("default_instrument.wat");
 const PERSIST_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Largest blob that fits the wire's tag, SHA-256 hash, and frame cap.
+#[expect(clippy::cast_lossless, reason = "Unix usize is at least 32 bits")]
 const MAX_INSTRUMENT_BYTES: usize = audio_net::wire::MAX_FRAME_BYTES as usize - 1 - 32;
 
 #[derive(Debug, clap::Args)]
@@ -117,7 +118,7 @@ async fn run_async(opts: Opts) -> Result<()> {
         Some(start_audio(&score, &blobs, &node, &time, sample_rate, &volume)?)
     };
 
-    let pending_session_clock = joining_session.then(|| node.clock());
+    let pending_session_clock = joining_session.then_some(node.clock());
     let state = Arc::new(State {
         score: Arc::clone(&score),
         store: blobs,
@@ -485,7 +486,7 @@ mod tests {
             )
             .await?,
         );
-        let pending_session_clock = pending_clock.then(|| node.clock());
+        let pending_session_clock = pending_clock.then_some(node.clock());
         Ok(TestState {
             state: Arc::new(State {
                 score,
