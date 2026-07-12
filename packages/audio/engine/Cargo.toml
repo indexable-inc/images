@@ -1,0 +1,25 @@
+# The player: turns (score, clock, instrument) into a sample stream. The
+# deterministic core renders any absolute frame range; the streaming path
+# wraps it in a rodio Source with schedule-ahead buffering and a local
+# volume gain that never enters the CRDT.
+[package]
+name = "audio-engine"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Deterministic render pipeline and local playback for shared-audio"
+
+[dependencies]
+anyhow.workspace = true
+audio-blob.workspace = true
+audio-clock.workspace = true
+audio-instrument.workspace = true
+audio-score.workspace = true
+rodio = { workspace = true, default-features = false }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
