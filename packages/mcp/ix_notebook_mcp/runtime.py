@@ -2048,7 +2048,7 @@ _FAILING_CHECK_STATES: frozenset[str] = frozenset(
 )
 _PASSING_CHECK_BUCKETS: frozenset[str] = frozenset({"pass", "skipping"})
 _FAILING_CHECK_BUCKETS: frozenset[str] = frozenset({"fail", "cancel"})
-_NO_REQUIRED_CHECKS = re.compile(r"^no required checks reported on the '.+' branch$")
+_NO_REQUIRED_CHECKS = re.compile(r"^no (?:required )?checks reported on the '.+' branch$")
 
 
 def _pr_check_state(check: Mapping[str, Any]) -> str:

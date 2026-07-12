@@ -25,11 +25,11 @@ class _ScriptedNu:
         views: list[dict[str, object]],
         required: list[list[dict[str, object]]] | None = None,
         *,
-        no_required: bool = False,
+        empty_error: str | None = None,
     ) -> None:
         self._views = list(views)
         self._required = list(required or [[]])
-        self._no_required = no_required
+        self._empty_error = empty_error
         self.merges: list[str] = []
         self.view_calls = 0
 
@@ -45,11 +45,11 @@ class _ScriptedNu:
             self.merges.append(code)
             return {"exit_code": 0, "stdout": "", "stderr": ""}
         if "gh pr checks" in code:
-            if self._no_required:
+            if self._empty_error is not None:
                 return {
                     "exit_code": 1,
                     "stdout": "",
-                    "stderr": "no required checks reported on the 'feature' branch",
+                    "stderr": self._empty_error,
                 }
             checks = self._required.pop(0) if len(self._required) > 1 else self._required[0]
             if any(check.get("bucket") == "pending" for check in checks):
@@ -88,9 +88,9 @@ def _watch(
     views: list[dict[str, object]],
     required: list[list[dict[str, object]]] | None = None,
     *,
-    no_required: bool = False,
+    empty_error: str | None = None,
 ) -> tuple[dict[str, object], _ScriptedNu, list[str]]:
-    fake = _ScriptedNu(views, required, no_required=no_required)
+    fake = _ScriptedNu(views, required, empty_error=empty_error)
     monkeypatch.setitem(sys.modules, "nu", fake)
     notified: list[str] = []
 
@@ -197,10 +197,17 @@ def test_startup_failure_is_terminal() -> None:
     assert runtime._pr_check_failed(check)
 
 
-def test_optional_failure_with_no_required_checks_keeps_watching(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "empty_error",
+    [
+        "no checks reported on the 'feature' branch",
+        "no required checks reported on the 'feature' branch",
+    ],
+)
+def test_optional_failure_with_empty_required_set_keeps_watching(
+    monkeypatch: pytest.MonkeyPatch, empty_error: str
 ) -> None:
-    """gh reports an empty required set as stderr, not JSON (#3059)."""
+    """gh reports both empty check-set outcomes as stderr, not JSON (#3059)."""
     initial = _view(9106, "OPEN", "BLOCKED")
     failing = _view(9106, "OPEN", "BLOCKED")
     failing["statusCheckRollup"] = [
@@ -212,7 +219,7 @@ def test_optional_failure_with_no_required_checks_keeps_watching(
         monkeypatch,
         9106,
         [initial, failing, merged],
-        no_required=True,
+        empty_error=empty_error,
     )
 
     assert fake.view_calls == 3
