@@ -167,6 +167,14 @@ def _run(args: argparse.Namespace) -> int:
         _progress(f"== eval: {name} ==")
         reports.append(_run_one(name, ctx))
 
+    # Stamp the model config onto each eval's summary so the viewer can show, per
+    # eval and per rollout, exactly which agent/judge/effort produced the scores
+    # (a matrix run sets these per eval).
+    for rep in reports:
+        rep.summary["agent_model"] = args.model
+        rep.summary["effort"] = args.effort
+        rep.summary["judge_model"] = args.judge_model
+
     for rep in reports:
         print(f"\n== {rep.name} ==")
         print(rep.table)
