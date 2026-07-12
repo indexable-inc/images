@@ -13,13 +13,19 @@ description: >-
   PATH (the host daemon's on self-hosted runners, the install-nix action's
   elsewhere).
 
+inputs:
+  source-repository:
+    description: Repository that owns the pinned nix-ix bootstrap revision.
+    required: false
+    default: indexable-inc/index
+
 runs:
   using: composite
   steps:
     - name: Build the patched Nix client from the pinned rev
       shell: bash
       env:
-        ACTION_REPOSITORY: ${{ github.action_repository }}
+        SOURCE_REPOSITORY: ${{ inputs.source-repository }}
         # The pinned bootstrap rev: the newest rev whose own eval closure is
         # separator-free AND that carries the nix-ix lexer patch (0014,
         # index#2666). Any such rev works; move it forward deliberately when
@@ -33,12 +39,12 @@ runs:
         # must explain themselves through annotations: name the command that
         # died and where.
         trap 'echo "::error title=bootstrap-patched-nix::failed at line $LINENO: $BASH_COMMAND"' ERR
-        if [[ -z "$ACTION_REPOSITORY" ]]; then
-          echo "::error title=bootstrap-patched-nix::GitHub did not identify the action repository"
+        if [[ -z "$SOURCE_REPOSITORY" ]]; then
+          echo "::error title=bootstrap-patched-nix::source-repository is empty"
           exit 1
         fi
         source_repo="$GITHUB_WORKSPACE"
-        if [[ "$GITHUB_REPOSITORY" == "$ACTION_REPOSITORY" ]]; then
+        if [[ "$GITHUB_REPOSITORY" == "$SOURCE_REPOSITORY" ]]; then
           if ! git -C "$source_repo" rev-parse --verify --quiet "$BOOTSTRAP_REV^{commit}" >/dev/null; then
             echo "::notice title=bootstrap-patched-nix::pinned rev not in checkout; fetching $BOOTSTRAP_REV"
             git -C "$source_repo" fetch --depth 1 origin "$BOOTSTRAP_REV"
@@ -51,11 +57,11 @@ runs:
           git init -q "$source_repo"
           git -C "$source_repo" fetch \
             --depth 1 \
-            "https://github.com/$ACTION_REPOSITORY.git" \
+            "https://github.com/$SOURCE_REPOSITORY.git" \
             "$BOOTSTRAP_REV"
         fi
         if ! git -C "$source_repo" rev-parse --verify --quiet "$BOOTSTRAP_REV^{commit}" >/dev/null; then
-          echo "::error title=bootstrap-patched-nix::pinned rev $BOOTSTRAP_REV is unavailable from $ACTION_REPOSITORY"
+          echo "::error title=bootstrap-patched-nix::pinned rev $BOOTSTRAP_REV is unavailable from $SOURCE_REPOSITORY"
           exit 1
         fi
         # Materialize the pinned tree with `git archive` and build it from a
