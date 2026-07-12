@@ -21,7 +21,7 @@ publish.workspace = true
 eyra = ["dep:eyra"]
 
 [dependencies]
-http-core = { path = "../http-core" }
+http-core.workspace = true
 eyra = { version = "0.22", optional = true }
 
 # Hermit's defaults minus `smp` and `fs`: the image runs single-vCPU in QEMU,

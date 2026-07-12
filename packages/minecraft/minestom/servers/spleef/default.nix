@@ -19,6 +19,7 @@ in
     mavenSnapshotMetadata = [
       {
         group = "net.minestom";
+        # astlog-ignore: pname-with-version (Maven artifact coordinate data, not a derivation)
         name = "minestom";
         version = "master-SNAPSHOT";
         src = minestomRoot + "/gradle/snapshot-metadata.xml";
