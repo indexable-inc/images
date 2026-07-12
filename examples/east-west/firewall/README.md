@@ -11,12 +11,11 @@ same URL fails.
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#east-west-firewall-up
-nix run .#east-west-firewall-health
+cd examples/east-west/firewall
+ix up
 ```
 
-The fleet wrapper creates the `east-west-firewall` group, adds `service` and
+`ix up` creates the `east-west-firewall` group, adds `service` and
 `allowed-client`, then runs the health checks. Need the repo first?
 `git clone https://github.com/indexable-inc/index`.
 

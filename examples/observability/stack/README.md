@@ -15,8 +15,8 @@ For how the telemetry pipeline works end to end, with diagrams, see the
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#observability-stack-up
+cd examples/observability/stack
+ix up
 ```
 
 Grafana is on port `3000` through the example's L7 proxy. The

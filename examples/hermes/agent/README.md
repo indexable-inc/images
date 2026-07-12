@@ -7,15 +7,15 @@ What does it take to run a long-lived AI agent as a boring system service? This 
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#hermes-agent-up
+cd examples/hermes/agent
+ix up
 ```
 
 Store the env file first, then bring the VM up and open a chat:
 
 ```sh
 printf 'OPENROUTER_API_KEY=%s\n' "$OPENROUTER_API_KEY" | ix secret set hermes_env
-nix run .#hermes-agent-up
+ix up
 ix shell hermes -- hermes chat
 ```
 

@@ -5,7 +5,7 @@
 # Committed plaintext is deliberate and matches the survival example's
 # forwarding secret: RCON is only reachable inside this fleet's
 # east-west group, and the value is obviously a change-me. Rotate it by
-# editing here, `ix fleet switch`, and deleting
+# editing here, running `ix up`, and deleting
 # /var/lib/minecraft/.ix-rcon-password on the minecraft node (the seed
 # only writes when the file is absent).
 {

@@ -6,9 +6,7 @@ description: "Why the repo uses its own dag-runner instead of process-compose or
 ## Why `dag-runner` (and not `process-compose` or `devenv-tasks`)
 
 The repo-owned [`dag-runner`](packages/dag-runner/) is the task runner that
-powers `nix run .#health-checks` and is the planned replacement for the
-sequential per-node loops in [`ix-fleet`](packages/ix-fleet/src/ix_fleet/__init__.py)
-(`cmd_up`, `cmd_switch`, `cmd_replace`). It exists despite the
+powers the parallel `nix run .#health-checks` lifecycle jobs. It exists despite the
 ecosystem-already-provides rule because neither upstream candidate fits the use
 case cleanly.
 

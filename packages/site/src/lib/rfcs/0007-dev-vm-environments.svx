@@ -20,7 +20,7 @@ Add a single user-owned file, `dev.nix`, and a helper `index.lib.mkDev` that con
 
 Today there is no first-class "this is my dev environment" object. The pieces all exist but nobody has assembled them:
 
-- **Fleets** are `index.lib.mkFleet` ([`lib/image/fleet.nix`](https://github.com/indexable-inc/index/blob/main/lib/image/fleet.nix)): `defaults` are modules applied to every node, `nodes` carry `replicas`/`dependsOn`/`groups`, and the helper emits the `ix up` wrapper. This already does "fleet a group declaratively."
+- **Fleets** are `index.lib.mkFleet` ([`lib/image/fleet.nix`](https://github.com/indexable-inc/index/blob/main/lib/image/fleet.nix)): `defaults` are modules applied to every node, `nodes` carry `replicas`/`dependsOn`/`groups`, and `ix up` consumes the result. This already does "fleet a group declaratively."
 - **Single-VM boot**: per the ix playbook, `ix up <installable>` expands a flake installable to `nixosConfigurations.<name>.config.system.build.toplevel`, nixos-rebuild style, and the CLI has a per-user config surface under `~/.n/`. Nothing wires a user's chosen config in as the default.
 - **Shared files**: [`examples/multi-client/file-sharing`](https://github.com/indexable-inc/index/tree/main/examples/multi-client/file-sharing) already serves an SMB share with correct cross-client locking (`strict locking`, `posix locking`, `strict sync`) and mounts it on replicas.
 - **Shared identity**: [`examples/synced-github/auth`](https://github.com/indexable-inc/index/tree/main/examples/synced-github/auth) gives a fleet one GitHub identity, and its README explicitly leaves open *"whether ix should also offer a config-sync primitive for the local dev-VM case"* ([#465](https://github.com/indexable-inc/index/issues/465)). This RFC is that primitive, scoped tightly.
@@ -74,7 +74,7 @@ my-ix-dev/                  # user-owned flake, in their git
 
 ### `index.lib.mkDev`
 
-A helper at `lib/image/dev.nix`, exported from `lib/default.nix` next to `mkFleet`, layered *on top of* `mkFleet` (it does not modify it). It takes `{ module, src }`, reads `ix.dev` from `module` via a probe `evalImageConfig`, and returns the `mkFleet` result shape (`.up`, `.health`, `.diff`, `.down`, `withNodePrefix`, …).
+A helper at `lib/image/dev.nix`, exported from `lib/default.nix` next to `mkFleet`, layered *on top of* `mkFleet` (it does not modify it). It takes `{ module, src }`, reads `ix.dev` from `module` via a probe `evalImageConfig`, and returns the same declarative result shape as `mkFleet`.
 
 - **module + base + agents → `defaults`.** The user's module, `ix.dev.baseImage`, and the agent layer (`lib/dev/agents.nix`) become `mkFleet`'s `defaults`, so every node is the user's environment and ships the agents.
 - **`ix.dev.fleet` → `nodes`.** Empty `fleet` synthesizes a single node named `dev`. The single-VM default and the fleet are the same code path with a one-node degenerate case.
@@ -88,7 +88,7 @@ The fork exposes `nixosConfigurations.dev`. `ix up` already resolves an installa
 
 ### Mode 2 — declarative fleet
 
-With `fleet.nodes` set, the fork's flake outputs include `.up` / `.health` / `.diff` exactly as `mkFleet` produces them today. `ix up` (or `nix run .#up`) brings up the whole group, every node carrying the user's `env`. `dependsOn`, `replicas`, and `groups` are passed straight through to `mkFleet`.
+With `fleet.nodes` set, `ix up` brings up the whole group, every node carrying the user's `env`. `dependsOn`, `replicas`, and `groups` are passed straight through to `mkFleet`.
 
 ### Mode 3 — shared SMB identity volume
 

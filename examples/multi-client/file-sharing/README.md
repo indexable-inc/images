@@ -12,13 +12,11 @@ lock taken on `client-0` blocks `client-1`.
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#multi-client-file-sharing-up
+cd examples/multi-client/file-sharing
+ix up
 ```
 
-`nix run .#multi-client-file-sharing-health` re-runs the health checks (smbd
-active, CIFS mounted on both clients). Get the repo with
-`git clone https://github.com/indexable-inc/index`.
+`ix up` enforces the declared health checks, including smbd and both CIFS mounts.
 
 ## Shape
 
@@ -51,7 +49,7 @@ path via `fcntl` byte-range locks.
 
 ## Tradeoffs
 
-- The share is **guest-writable** so the generated up wrapper works without
+- The share is **guest-writable** so the example works without
   secrets plumbing. Real deployments should drop `guest ok = yes` from
   [`server.nix`](server.nix), add a Samba user with `smbpasswd`, and pass
   `credentials=` to the CIFS mount through a systemd `LoadCredential` (the

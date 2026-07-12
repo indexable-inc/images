@@ -7,16 +7,15 @@ one Nix file? This is the smallest multi-node fleet: one `web` node serving a
 static page and three `worker` replicas that resolve it by name with
 `ix.endpointOf nodes.web "http"` and probe it as their health check — an
 `httpGet`-style probe declared as `http = { host; port; }`, no hand-written
-curl. Workers roll with `updateStrategy.maxUnavailable = 1`, so `up`
-recreates one replica at a time and each must pass its checks before the
-next is touched. The generated up wrapper reports healthy only once every
-worker can reach the web node.
+curl. Workers roll with `updateStrategy.maxUnavailable = 1`, so `ix up`
+updates one replica at a time and each must pass its checks before the next
+is touched.
 
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#fleet-hello-up
+cd examples/fleet/hello
+ix up
 ```
 
 Need the repo first? `git clone https://github.com/indexable-inc/index`.
@@ -39,16 +38,14 @@ Need the repo first? `git clone https://github.com/indexable-inc/index`.
 # kubectl-get for the fleet: one row per node with STATUS, READY (checks
 # passed/total), and ADDRESS; add -o wide for region and running vs desired
 # image, --watch to poll, -o json for machines.
-nix run .#fleet-hello-status
+ix ls
 
 ix shell worker-0 -- curl --fail http://web:8080/
 ```
 
 Replicas are numbered `worker-0` through `worker-2`; each reaches `web` by
-its node name over the east-west network. `nix run .#fleet-hello-logs --
---unit nginx --on web` pulls the nginx journal from the web node; without
-`--on` the logs verb streams from every node, prefixing each line with
-`[node]`.
+its node name over the east-west network. `ix logs web --unit nginx` pulls
+the nginx journal from the web node.
 
 ## Scale
 

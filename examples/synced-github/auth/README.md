@@ -10,8 +10,8 @@ file on demand. Adding a replica needs no extra auth step.
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#synced-github-auth-up
+cd examples/synced-github/auth
+ix up
 ```
 
 Get the repo with `git clone https://github.com/indexable-inc/index`.

@@ -63,34 +63,17 @@ ix new registry.ix.dev/<you>/hello:v1 --name hello
 
 ## Images in a fleet
 
-A fleet node carries two images (`lib/image/fleet.nix:291-300`):
-
-- **`bootstrapImage`** - the create-time image used to first materialize a
-  missing node. Defaults to the shared NixOS bootstrap image under
-  `registry.ix.dev/...` (`lib/image/fleet.nix:48-49`,
-  `lib/image/default.nix:104-107`).
-- **`replacementImage`** (`{ imageName, destination, sourceInstallable }`) -
-  the CAS-manifest image `up`/`replace` build (via the `.#<node>` flake attr)
-  and push from your config (`lib/image/fleet.nix:311-322`). `destination`
-  defaults to `<imageName>:latest` (`lib/image/fleet.nix:269`).
+A fleet node's `bootstrapImage` is the create-time image used to materialize a
+missing VM. It defaults to the shared NixOS bootstrap image under
+`registry.ix.dev/...`. After creation, `ix up` builds and activates the node's
+`nixosConfigurations.<name>` directly on that VM.
 
 See [fleet.md](fleet.md) for the authoring surface.
-
-## Swapping a VM's image recreates it
-
-Each VM boots one image, and image swap is delete-then-create, not in-place:
-`client.create` inserts against a `UNIQUE (owner, name)` constraint, so
-changing a node's image removes and recreates it
-(`doc/ix-fleet/overview.md:107-109`). In a fleet, `replace` always does this,
-and `deployment.recreateOnUp = true` makes `up` do it too (see
-`examples/nginx-lifecycle/default.nix:7`). For when this recreate happens across
-create/replace/switch, see [lifecycle.md](lifecycle.md); the full lifecycle
-reference is [../ix-fleet/overview.md](../ix-fleet/overview.md).
 
 ## See also
 
 - [cli.md](cli.md) - `ix new`, `ix up`, and the VM verbs.
 - [lifecycle.md](lifecycle.md) - when an image swap recreates the VM.
 - [services.md](services.md) - the ready-made service modules you compose into an image.
-- [fleet.md](fleet.md) - multi-VM plans, bootstrap vs replacement images.
+- [fleet.md](fleet.md) - multi-VM plans and bootstrap images.
 - [secrets.md](secrets.md) - attaching secrets to a VM at boot.

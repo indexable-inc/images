@@ -86,7 +86,7 @@
         description = lib.mkOption {
           type = lib.types.str;
           default = name;
-          description = "Human-readable check name shown by fleet health commands.";
+          description = "Human-readable check name shown by ix up.";
         };
 
         unit = lib.mkOption {
@@ -414,8 +414,7 @@ in {
         or from the operator host (`from = "host"`); host checks are how you
         prove public reachability, firewall correctness, and external routing,
         not just that systemd thinks the unit is active. Fleet plans expose
-        these so `ix-fleet health` and the post-deploy waits in `up`,
-        `replace`, and `switch` can use them.
+        these so `ix up` can enforce post-deploy health gates.
       '';
     };
 
@@ -531,11 +530,11 @@ in {
           ix.healthChecks set more than one of `unit`, `http`, and `tcp`, which
           conflict (each derives the check's command):
             ${
-          lib.concatMapAttrsStringSep ", " (
-            name: check: "${name} (${lib.concatStringsSep " + " (probeSugars check)})"
-          )
-          multiSugarHealthChecks
-        }
+            lib.concatMapAttrsStringSep ", " (
+              name: check: "${name} (${lib.concatStringsSep " + " (probeSugars check)})"
+            )
+            multiSugarHealthChecks
+          }
 
           Pick the one probe that proves readiness, or write an explicit
           `command` when a single probe is not enough.

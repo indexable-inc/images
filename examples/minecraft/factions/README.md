@@ -12,8 +12,8 @@ real player UUIDs and spawn/claim policy before using it with real players.
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#minecraft-factions-up
+cd examples/minecraft/factions
+ix up
 ```
 
 Need the repo first? `git clone https://github.com/indexable-inc/index`.

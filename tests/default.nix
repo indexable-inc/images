@@ -92,22 +92,6 @@
     builtins.tryEval (ix.securityRoots.mkRoot (securityRootArgs // {class = "package";})).class;
   invalidSecurityRootSla =
     builtins.tryEval (ix.securityRoots.mkRoot (securityRootArgs // {slaHours = 0;})).slaHours;
-  fleetWrapperReadmes = [
-    "hermes/agent"
-    "hermes/api-server"
-    "hermes/minecraft-operator"
-    "hermes/telegram"
-    "minecraft/blocks"
-    "minecraft/crazy-terrain"
-    "minecraft/factions"
-    "minecraft/survival"
-    "multi-client/file-sharing"
-    "polyglot/dev"
-    "python/daily-scraper"
-    "ray/cluster"
-    "synced-github/auth"
-  ];
-
   versions = import (paths.minecraftCatalogs + "/versions.nix") {
     inherit lib;
     inherit (ix) artifacts;
@@ -1737,22 +1721,6 @@
   mcpPackage = (ix.packageSetFor pkgs).mcp;
 
   fleet = ix.mkFleet {
-    # Stand-in for the ix-side CAS manifest builder (the cas-layer.nix
-    # contract): a directory with manifest.cas + locator.bin, carrying
-    # passthru.toplevel. Only this fixture threads a builder; the other fleet
-    # fixtures deliberately leave it unset, proving plan eval never forces
-    # `casImage`.
-    defaults = [
-      (
-        {pkgs, ...}: {
-          ix.build.casImageBuilder = {toplevel}:
-            pkgs.runCommand "cas-image-stub" {passthru = {inherit toplevel;};} ''
-              mkdir -p "$out"
-              touch "$out/manifest.cas" "$out/locator.bin"
-            '';
-        }
-      )
-    ];
     deployment.region = "us-west-1";
     # Fleet-wide per-VM user-store secret attachment; merges with per-node refs.
     deployment.secrets = {
@@ -1770,7 +1738,6 @@
         tags = ["public"];
         groups = ["public-apps"];
         deployment = {
-          destination = "fleet-web:latest";
           ipv4 = true;
           secrets.github_token.env = "GH_TOKEN";
         };
@@ -1798,52 +1765,6 @@
   };
 
   fleetPlan = fleet.planValue.nodes;
-
-  prefixedFleetBase = ix.mkFleet {
-    nodes = {
-      api = {
-        services.openssh.enable = true;
-      };
-      worker = {
-        dependsOn = ["api"];
-        groups = ["private-apps"];
-        modules = [
-          (
-            {nodes, ...}: {
-              environment.etc.api-host.text = nodes.api.config.networking.hostName;
-            }
-          )
-        ];
-      };
-    };
-  };
-
-  prefixedFleet = prefixedFleetBase.withNodePrefix "tprefix-";
-
-  # No casImageBuilder is threaded into prefixedFleetBase, so forcing a CAS
-  # image must abort with the module system's "used but not defined" error
-  # rather than falling back to anything.
-  fleetMissingCasBuilderEval = builtins.tryEval (builtins.seq prefixedFleetBase.packages.api true);
-
-  # A local-build node: its source switch runs a plain `nix build`, so the
-  # default installable must be the `.#<node>-system` package alias, not the
-  # bare `.#<node>` (which only `ix up`'s resolver expands).
-  localBuildFleet = ix.mkFleet {
-    nodes.svc = {
-      deployment.switch.buildOn = "local";
-      modules = [{}];
-    };
-  };
-
-  # An explicit `sourceInstallable` that happens to equal the bare default must
-  # survive `withNodePrefix` unchanged: prefixing keys on provenance (user-set
-  # vs defaulted), not on the rendered string.
-  explicitInstallableFleet = ix.mkFleet {
-    nodes.svc = {
-      deployment.switch.sourceInstallable = ".#svc";
-      modules = [{}];
-    };
-  };
 
   fleetIpv4HealthCheckEval = builtins.tryEval (
     builtins.deepSeq
@@ -1920,7 +1841,7 @@
     true
   );
 
-  # `maxSurge` is Kubernetes vocabulary ix-fleet does not implement (there is
+  # `maxSurge` is Kubernetes vocabulary `ix up` does not implement (there is
   # no surplus capacity to surge into); a typo'd or aspirational key must fail
   # eval rather than silently deploy with unbounded concurrency.
   fleetUnknownUpdateStrategyKeyEval = builtins.tryEval (
@@ -2002,19 +1923,6 @@
     plan = fleet.planValue.nodes.scraper;
     service = config.systemd.services.daily-scraper;
     timer = config.systemd.timers.daily-scraper;
-  };
-
-  nginxLifecycleExample = let
-    fleet = import (paths.examples + "/nginx/lifecycle/ix.nix") {
-      index = {
-        lib = ix;
-      };
-    };
-    config = fleet.nodes.nginx;
-  in {
-    inherit fleet config;
-    cfg = config.services.nginx;
-    plan = fleet.planValue.nodes.nginx;
   };
 
   s3StorageExample = let
@@ -3678,54 +3586,6 @@
       }
     ];
 
-    nginx-lifecycle = [
-      {
-        assertion = nginxLifecycleExample.plan.recreateOnUp;
-        message = "nginx-lifecycle fleet plan should recreate the VM on every ix-fleet up run";
-      }
-      {
-        assertion =
-          nginxLifecycleExample.cfg.enable
-          && nginxLifecycleExample.cfg.virtualHosts.localhost.locations."/".return
-          == "200 'ix nginx lifecycle ok\n'";
-        message = "nginx-lifecycle example should serve a fixed HTTP success body";
-      }
-      {
-        assertion = let
-          claims = nginxLifecycleExample.config.ix.networking.portClaims;
-        in
-          claims.nginx.protocol
-          == "tcp"
-          && claims.nginx.port == 80
-          && builtins.elem 80 nginxLifecycleExample.config.networking.firewall.allowedTCPPorts;
-        message = "nginx-lifecycle example should declare and open its HTTP listener";
-      }
-      {
-        assertion = let
-          checks = nginxLifecycleExample.plan.healthChecks;
-        in
-          checks.nginx.from
-          == "guest"
-          && checks.nginx.command
-          == [
-            (lib.getExe' nginxLifecycleExample.config.systemd.package "systemctl")
-            "is-active"
-            "--quiet"
-            "nginx.service"
-          ]
-          && checks.nginx-http.from == "guest"
-          && lib.hasSuffix "/bin/curl" (builtins.head checks.nginx-http.command)
-          && builtins.tail checks.nginx-http.command
-          == [
-            "--fail"
-            "--silent"
-            "--show-error"
-            "http://127.0.0.1/"
-          ];
-        message = "nginx-lifecycle fleet plan should prove the service unit and HTTP loopback path";
-      }
-    ];
-
     fleet-hello = [
       {
         assertion =
@@ -3844,10 +3704,6 @@
       {
         assertion = s3StorageExample.cfg.enable && s3StorageExample.cfg.configFile != null;
         message = "s3-storage example should enable SeaweedFS with an S3 identities config";
-      }
-      {
-        assertion = !(s3StorageExample.plan.recreateOnUp or false);
-        message = "s3-storage node should persist data across ix-fleet up, not recreate";
       }
       {
         # Defends the module's headline claim: only the S3 port is exposed.
@@ -5478,13 +5334,13 @@
       {
         assertion =
           lib.all (
-            rel: let
-              text = builtins.readFile (paths.examples + "/${rel}/README.md");
+            source: let
+              text = builtins.readFile (source + "/README.md");
             in
-              lib.hasInfix "nix run .#" text && !(lib.hasInfix "\nix up\n" text)
+              lib.hasInfix "ix up" text && !(lib.hasInfix "nix run .#" text)
           )
-          fleetWrapperReadmes;
-        message = "fleet-wrapper examples should point at generated nix run .#<example>-up commands, not bare ix up";
+          (builtins.attrValues (builtins.intersectAttrs ix.exampleFleets ix.exampleFleetSources));
+        message = "fleet examples should deploy through ix up rather than generated wrappers";
       }
       {
         assertion = fleet.nodes.db.networking.hostName == "db";
@@ -5505,48 +5361,12 @@
       {
         assertion =
           fleetPlan.web.bootstrapImage == "registry.ix.dev/ix/test-cluster-bootstrap:zstd-tools-2026-05-12";
-        message = "fleet switches should create missing nodes from the shared NixOS bootstrap image";
-      }
-      {
-        assertion = fleetPlan.web.replacementImage.destination == "fleet-web:latest";
-        message = "fleet wrapped-node deployment destination should flow into the replacement image plan";
-      }
-      {
-        assertion = fleetPlan.web.system == "${fleet.nodes.web.system.build.toplevel}";
-        message = "fleet plans should expose the NixOS system closure for switch";
-      }
-      {
-        assertion = fleet.systemPackages.web-system == fleet.nodes.web.system.build.toplevel;
-        message = "fleet system package outputs should match default source switch installables";
+        message = "ix up should create missing nodes from the shared NixOS bootstrap image";
       }
       {
         assertion =
           fleet.nixosConfigurations.web.config.system.build.toplevel == fleet.nodes.web.system.build.toplevel;
-        message = "fleet should expose nixosConfigurations.<node> so `ix up .#<node>` (native multi-VM switch) resolves the node toplevel";
-      }
-      {
-        assertion = fleet.packages.web == fleet.nodes.web.ix.build.casImage;
-        message = "fleet replacement package outputs should keep node names and resolve to the CAS image";
-      }
-      {
-        assertion =
-          fleetPlan.web.switch
-          == {
-            target = builtins.unsafeDiscardStringContext fleet.nodes.web.system.build.toplevel.drvPath;
-            buildOn = "remote";
-            buildVm = null;
-            sourceInstallable = ".#web";
-            overrideInputs = {};
-          };
-        message = "fleet plans should default to local eval and remote build switch metadata";
-      }
-      {
-        assertion = fleetPlan.web.replacementImage.sourceInstallable == ".#web";
-        message = "fleet plans should reference the replacement image only by flake installable; forcing the CAS image at plan eval would IFD-build every node's system closure";
-      }
-      {
-        assertion = !fleetMissingCasBuilderEval.success;
-        message = "forcing a node's CAS image without the ix-side casImageBuilder must abort eval, never fall back";
+        message = "fleet should expose nixosConfigurations.<node> for ix up to build on the target VM";
       }
       {
         assertion = fleetPlan.web.region == "us-west-1";
@@ -5657,64 +5477,6 @@
       {
         assertion = fleetPlan.worker-0.dependsOn == ["db"];
         message = "fleet replica dependencies should point at expanded node identities";
-      }
-      {
-        assertion =
-          prefixedFleet.planValue.order
-          == [
-            "tprefix-api"
-            "tprefix-worker"
-          ];
-        message = "withNodePrefix should rename every node in the plan order";
-      }
-      {
-        assertion = prefixedFleet.planValue.nodes.tprefix-worker.dependsOn == ["tprefix-api"];
-        message = "withNodePrefix should rewrite dependsOn references so the prefixed graph stays connected";
-      }
-      {
-        assertion = prefixedFleet.planValue.nodes.tprefix-worker.groups == ["tprefix-private-apps"];
-        message = "withNodePrefix should rewrite east-west group names so scratch fleets do not collide";
-      }
-      {
-        assertion =
-          prefixedFleet.planValue.nodes.tprefix-api.replacementImage.destination == "tprefix-api:latest";
-        message = "withNodePrefix should prefix the registry destination so scratch pushes cannot clobber the base tag";
-      }
-      {
-        assertion = prefixedFleet.nodes.tprefix-api.networking.hostName == "api";
-        message = "withNodePrefix is a plan-level rename: guest hostname and image name stay base-named so the prefixed fleet shares the base fleet's closures";
-      }
-      {
-        assertion =
-          prefixedFleet.planValue.nodes.tprefix-api.system
-          == prefixedFleetBase.planValue.nodes.api.system
-          && prefixedFleet.planValue.nodes.tprefix-api.replacementImage.sourceInstallable
-          == ".#tprefix-api";
-        message = "withNodePrefix must reuse the base fleet's system closure while re-deriving the replacement installable to the prefixed packages attr";
-      }
-      {
-        assertion = prefixedFleet.nodes.tprefix-worker.environment.etc.api-host.text == "api";
-        message = "nodes module-arg should resolve by the example's base name even when prefixed";
-      }
-      {
-        assertion = prefixedFleet.planValue.nodes.tprefix-api.switch.sourceInstallable == ".#tprefix-api";
-        message = "withNodePrefix should re-derive the default `.#<node>` installable to the prefixed attr so the native multi-VM `ix up` names the prefixed VM";
-      }
-      {
-        assertion =
-          prefixedFleet.nixosConfigurations.tprefix-api.config.system.build.toplevel
-          == prefixedFleetBase.nixosConfigurations.api.config.system.build.toplevel;
-        message = "withNodePrefix should expose nixosConfigurations under the prefixed name while reusing the base closure (no second eval)";
-      }
-      {
-        assertion = localBuildFleet.planValue.nodes.svc.switch.sourceInstallable == ".#svc-system";
-        message = "a local-build node should default to the `.#<node>-system` package alias, since its plain `nix build` has no `ix up` rewrite";
-      }
-      {
-        assertion =
-          (explicitInstallableFleet.withNodePrefix "tprefix-")
-          .planValue.nodes.tprefix-svc.switch.sourceInstallable == ".#svc";
-        message = "an explicit sourceInstallable equal to the default must survive withNodePrefix unchanged (prefixing keys on provenance, not the rendered string)";
       }
     ];
   };

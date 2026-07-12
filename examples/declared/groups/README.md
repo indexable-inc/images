@@ -12,12 +12,11 @@ group-agnostic image. Both sources union into the same plan field.
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#declared-groups-up
-nix run .#declared-groups-health
+cd examples/declared/groups
+ix up
 ```
 
-The fleet wrapper get-or-creates the `declared-groups` group under your
+`ix up` creates or reuses the `declared-groups` group under your
 account, adds both VMs, then runs the health checks: the client curls the api
 over the private group network. Need the repo first?
 `git clone https://github.com/indexable-inc/index`.

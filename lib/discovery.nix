@@ -1,8 +1,6 @@
 {
   lib,
   paths,
-  mkFleetFor,
-  mkDevFor,
   ixReturn,
 }: let
   inherit (import ./util/deep-merge.nix {inherit lib;}) strictList;
@@ -120,60 +118,53 @@
     strictList (map entryAsTree entries);
 
   /**
-  Discovered example fleets, built for a given host system. Discovery
-  walks the hierarchical `examples/<category>/<name>/ix.nix` layout.
+  Discovered example fleets. Discovery walks the hierarchical
+  `examples/<category>/<name>/ix.nix` layout.
   Keys in the returned attrset join the category and name with `-`, so
   `examples/hermes/api-server` contributes `hermes-api-server`. Each
-  fleet is imported with `{ index = { lib = ix; }; }` to match
-  the contract examples already use, with `mkFleet` swapped for the
-  host-system variant so the wrapper derivations under
-  `.up`/`.health`/`.replace` build for the requested system rather
-  than always pinning to the default.
+  fleet is imported with `{ index = { lib = ix; }; }` to match the contract
+  examples already use.
 
   Adding an example is `mkdir examples/<category>/<name> + edit
   ix.nix`; this aggregator picks it up on the next eval, no
   registry edits.
   */
-  exampleFleetsFor = {hostSystem}: let
-    indexShim = {
-      lib =
-        ixReturn
-        // {
-          mkFleet = mkFleetFor hostSystem;
-          mkDev = mkDevFor hostSystem;
-        };
-    };
+  exampleFleetEntries = discoverTree {
+    root = paths.examples;
+    requiredFiles = [
+      "flake.nix"
+      "ix.nix"
+    ];
+    validate = {metadata, ...}:
+      assert lib.assertMsg (builtins.length metadata.segments == 2)
+      "exampleFleets: expected examples/<category>/<name>/ix.nix, got examples/${metadata.relativePath}"; {
+        name = lib.concatStringsSep "-" metadata.segments;
+      };
+  };
 
-    discovered = discoverTree {
-      root = paths.examples;
-      requiredFiles = ["ix.nix"];
-      validate = {metadata, ...}:
-        assert lib.assertMsg (builtins.length metadata.segments == 2)
-        "exampleFleetsFor: expected examples/<category>/<name>/ix.nix, got examples/${metadata.relativePath}"; {
-          name = lib.concatStringsSep "-" metadata.segments;
-        };
-    };
-  in
-    lib.filterAttrs (_: fleet: fleet != null) (
-      lib.mapAttrs (
-        _: entry: let
-          load = import (entry.path + "/ix.nix");
-          args = builtins.functionArgs load;
-          value =
-            if args ? index
-            then load {index = indexShim;}
-            else null;
-        in
-          if value != null && value ? nodes && value ? planValue
-          then value
-          else null
-      )
-      discovered
-    );
+  exampleFleetSources = lib.mapAttrs (_: entry: entry.path) exampleFleetEntries;
+
+  exampleFleets = lib.filterAttrs (_: fleet: fleet != null) (
+    lib.mapAttrs (
+      _: entry: let
+        load = import (entry.path + "/ix.nix");
+        args = builtins.functionArgs load;
+        value =
+          if args ? index
+          then load {index.lib = ixReturn;}
+          else null;
+      in
+        if value != null && value ? nodes && value ? planValue
+        then value
+        else null
+    )
+    exampleFleetEntries
+  );
 in {
   inherit
     discoverTree
     discoverModules
-    exampleFleetsFor
+    exampleFleetSources
+    exampleFleets
     ;
 }

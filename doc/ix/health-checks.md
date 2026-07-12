@@ -1,6 +1,6 @@
 # health checks
 
-A health check is a command that proves one of your image's services is actually ready, not just that systemd launched it. You declare checks in a NixOS module under `ix.healthChecks.<name>`, and the fleet runs them after a deploy: `ix-fleet --plan plan.json health`, and automatically as the post-deploy wait inside `up`, `replace`, and `switch`. A check either runs inside the VM (`from = "guest"`, the default) to prove the service is live locally, or on your own machine (`from = "host"`) to prove the node is reachable from outside. A check passes when its command exits 0; it is retried up to `attempts` times until it does, or the deploy fails.
+A health check proves one of your image's services is ready, not just that systemd launched it. Declare checks under `ix.healthChecks.<name>`; `ix up` enforces them after activation. A check either runs inside the VM (`from = "guest"`, the default) or on the caller (`from = "host"`). It passes when its command exits 0 within the configured attempts.
 
 ## Declaring a check
 
@@ -16,7 +16,7 @@ ix.healthChecks.api = {
 
 | field | type | default | meaning |
 | --- | --- | --- | --- |
-| `description` | string | the attr name | label shown in fleet health output (`platform.nix:24`) |
+| `description` | string | the attr name | label shown in `ix up` health output (`platform.nix:24`) |
 | `unit` | string or null | `null` | sugar: probe a systemd unit (see below) (`platform.nix:30`) |
 | `http` | `{ port; path ? "/"; host ? "127.0.0.1"; }` or null | `null` | sugar: HTTP GET probe, unhealthy on any >= 400 status (see below) |
 | `tcp` | `{ port; host ? "127.0.0.1"; }` or null | `null` | sugar: TCP connect probe (see below) |
@@ -59,14 +59,14 @@ Point `host` at a peer node's east-west hostname (pair well with `ix.endpointOf`
 
 ## Guest vs host
 
-`from = "guest"` (default) runs the argv inside the VM through the SDK exec channel (`__init__.py:600`). Use it for anything observable from inside the node: a unit is active, a port is listening, a database accepts connections.
+`from = "guest"` (default) runs the argv inside the VM. Use it for anything observable from inside the node: a unit is active, a port is listening, a database accepts connections.
 
 ```nix
 # Guest: the nginx unit is active inside the VM.
 ix.healthChecks.nginx.unit = "nginx";
 ```
 
-`from = "host"` runs the command on your machine as a subprocess (`__init__.py:630`). Before running, the fleet injects the node's facts as environment variables and `$VAR`-substitutes them into your argv (`__init__.py:563`, `:579`, `:628`): `IX_NODE`, `IX_NODE_NAME`, `IX_NODE_IMAGE`, `IX_NODE_STATUS`, `IX_NODE_IPV6`, and, when the node has reported them, `IX_NODE_IPV4`, `IX_NODE_SUBDOMAIN`, `IX_NODE_REGION`. Use host checks for what only an outside observer can see: public reachability, DNS, the gateway path. The tool you call must be on your own `PATH`.
+`from = "host"` runs the command on your machine. `ix up` injects the node facts documented in [environment.md](environment.md). Use host checks for public reachability, DNS, and gateway paths. The tool you call must be on your own `PATH`.
 
 ```nix
 # Host: the node is reachable at its public subdomain over TLS.
@@ -78,7 +78,7 @@ ix.healthChecks.public = {
 
 ## How and when they run
 
-Each check is attempted up to `attempts` times, `intervalSec` apart, with each attempt bounded by `timeoutSec` (`__init__.py:599`). The first exit-0 attempt passes; if none do, the check fails and reports the last command output (`__init__.py:653`). Run all checks for a plan with `ix-fleet --plan plan.json health`, or let them run automatically as the readiness wait at the end of `up`, `replace`, and `switch` (`__init__.py:869`, `:879`, `:889`). `--plan` is required (`__init__.py:1054`).
+Each check is attempted up to `attempts` times, `intervalSec` apart, with each attempt bounded by `timeoutSec`. The first successful attempt passes. If none do, `ix up` fails and reports the check output.
 
 ## See also
 

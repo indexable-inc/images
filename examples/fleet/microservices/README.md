@@ -13,8 +13,8 @@ here, declared next to the software they describe:
 | Service discovery / DNS           | `ix.endpointOf nodes.cache "redis"` by node name        |
 | `httpGet` readiness probe         | `ix.healthChecks.ready.http = { port; path; }`          |
 | `tcpSocket` probe                 | `ix.healthChecks.cache-reachable.tcp = { host; port; }` |
-| `kubectl get pods` / describe     | `nix run .#fleet-microservices-status`                  |
-| `kubectl logs`                    | `nix run .#fleet-microservices-logs`                    |
+| `kubectl get pods` / describe     | `ix ls`                                                 |
+| `kubectl logs`                    | `ix logs <node>`                                        |
 | Ingress / LoadBalancer            | the `gateway` node's nginx upstream pool                |
 
 Unlike a Kubernetes manifest (or a Nomad job), the fleet definition *is* the
@@ -26,8 +26,8 @@ anything deploys.
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#fleet-microservices-up
+cd examples/fleet/microservices
+ix up
 ```
 
 Need the repo first? `git clone https://github.com/indexable-inc/index`.
@@ -50,7 +50,7 @@ serving traffic.
   `/healthz` and a cross-node `tcp` probe that the cache is reachable.
 - [`gateway.nix`](gateway.nix) — nginx upstream pool built by discovering
   every `api-*` node at eval time, plus one generated `http` probe per
-  replica, so fleet health names the exact replica the gateway cannot reach.
+  replica, so `ix up` names the exact replica the gateway cannot reach.
 
 ## Verify
 
@@ -58,19 +58,16 @@ serving traffic.
 # kubectl-get for the fleet: one row per node with STATUS, READY (checks
 # passed/total), and ADDRESS. -o wide adds region and running vs desired
 # image; --watch polls; -o json feeds scripts and dashboards.
-nix run .#fleet-microservices-status
-nix run .#fleet-microservices-status -- -o wide
+ix ls
 
 # Round-robin through the replicas via the gateway:
 ix shell gateway -- curl --silent http://127.0.0.1:8080/  # {"service":"api","node":"api-1"}
 
-# Journals, kubectl-logs style; without --on it streams every node.
-nix run .#fleet-microservices-logs -- --on cache --unit redis-cache --lines 50
+# Read one node's journal.
+ix logs cache --unit redis-cache --lines 50
 ```
 
-Every health check is also a standing claim: `nix run
-.#fleet-microservices-health` re-runs all of them on demand, and `status`
-shows per-node READY as checks-passed/total.
+Every health check is a standing claim enforced by `ix up`.
 
 ## Scale
 

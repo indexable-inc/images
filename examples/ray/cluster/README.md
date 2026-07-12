@@ -18,8 +18,8 @@ The Python stays ordinary Ray. The ix-specific parts are
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#ray-cluster-up
+cd examples/ray/cluster
+ix up
 ```
 
 Get the repo with `git clone https://github.com/indexable-inc/index`.

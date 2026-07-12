@@ -38,5 +38,5 @@
   <text x="617" y="91" text-anchor="middle" font-size="11" class="accent">activated in place</text>
 
   <path class="edge" d="M617 106 C 600 150, 160 150, 113 108"/>
-  <text x="367" y="145" text-anchor="middle" font-size="12" class="muted">edit, run ix up .#devbox again, converge</text>
+  <text x="367" y="145" text-anchor="middle" font-size="12" class="muted">edit, run ix up again, converge</text>
 </svg>

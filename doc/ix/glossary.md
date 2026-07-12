@@ -58,11 +58,9 @@ Three unrelated things:
 
 ## fleet
 
-- **`.#ix-fleet`** - the CLI/tool that renders and executes fleet plans
-  (`packages/ix-fleet/Cargo.toml:2,4`).
-- A **fleet** - the set of remote ix VMs a plan describes.
-- A node in that fleet is called a **branch** by the ix SDK (`ix_sdk.BranchStatus`)
-  (`packages/ix-fleet/src/ix_fleet/__init__.py:221`).
+- A **fleet** is the set of remote ix VMs declared by `ix.fleets.default`.
+- `mkFleet` is the Nix authoring helper. `ix up` consumes its data and
+  converges the VMs.
 
 ## dashboard
 

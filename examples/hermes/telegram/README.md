@@ -20,8 +20,8 @@ Want an agent in your pocket without opening a single inbound port? This is the 
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#hermes-telegram-up
+cd examples/hermes/telegram
+ix up
 ```
 
 Need the repo first? `git clone https://github.com/indexable-inc/index`.
@@ -34,7 +34,7 @@ OPENROUTER_API_KEY=sk-or-...
 TELEGRAM_BOT_TOKEN=123456789:ABC...
 TELEGRAM_ALLOWED_USERS=123456789
 EOF
-nix run .#hermes-telegram-up
+ix up
 ```
 
 `TELEGRAM_ALLOWED_USERS` is a comma-separated allowlist of numeric Telegram user IDs. It is the only authentication layer: anyone not on the list is ignored, and anyone on it talks to an agent with root in this VM. Keep it to IDs you control. To add a second user later, append the ID and restart the unit.

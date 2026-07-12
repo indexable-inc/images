@@ -15,8 +15,8 @@ Unlike every other hermes preset this one is inbound: the node claims TCP `9119`
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#hermes-api-server-up
+cd examples/hermes/api-server
+ix up
 ```
 
 Need the repo first? `git clone https://github.com/indexable-inc/index`.
@@ -28,7 +28,7 @@ ix secret set hermes_env <<EOF
 OPENROUTER_API_KEY=sk-or-...
 API_SERVER_KEY=$(openssl rand -hex 32)
 EOF
-nix run .#hermes-api-server-up
+ix up
 ```
 
 Smoke-test from inside the VM:

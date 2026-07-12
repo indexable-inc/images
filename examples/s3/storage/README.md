@@ -13,8 +13,8 @@ port `8333` and read/write buckets.
 ## Run
 
 ```sh
-# From the index repo root.
-nix run .#s3-storage-up
+cd examples/s3/storage
+ix up
 ```
 
 The node holds object data, so it persists across `up` runs instead of being
