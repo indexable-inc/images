@@ -1,12 +1,12 @@
 """``jobs.spawn`` registers an ad-hoc awaitable as a first-class background job
 (issue #2164).
 
-The kernel's job lifecycle (dashboard card, completion notification, pageable
+The kernel's job lifecycle (dashboard card, best-effort addressed completion wake, pageable
 ``jobs['<id>']`` handle, ``await`` yields the value / re-raises the failure) used
 to be reachable only through ``python_exec`` cells; an awaitable an agent created
 itself (a coroutine, a Task) had none of it. ``jobs.spawn(coro, name=...)`` gives
-any awaitable the same lifecycle: it appears in ``jobs``, its completion sends
-the same channel notification a backgrounded cell sends, and its result follows
+any awaitable the same lifecycle: it appears in ``jobs``, its completion queues
+the same addressed channel wake a backgrounded cell sends, and its result follows
 the existing Job contract (``.result`` raises while running, a failure re-raises
 on ``await``, cancel works).
 """
@@ -160,14 +160,19 @@ def test_cancelling_a_spawned_task_shape_cancels_the_work(monkeypatch: pytest.Mo
     asyncio.run(drive())
 
 
-def test_completion_sends_the_backgrounded_job_notification(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_completion_sends_the_addressed_backgrounded_job_notification(monkeypatch: pytest.MonkeyPatch) -> None:
     _wire(monkeypatch, {})
-    sent: list[tuple[str, dict]] = []
+    sent: list[runtime.Job] = []
+    broadcasts: list[str] = []
 
-    async def fake_notify(content: str, **meta: object) -> None:
-        sent.append((content, meta))
+    def fake_notify(job: runtime.Job) -> None:
+        sent.append(job)
 
-    monkeypatch.setattr(runtime, "notify", fake_notify)
+    async def fake_broadcast(content: str, **_meta: object) -> None:
+        broadcasts.append(content)
+
+    monkeypatch.setattr(runtime, "_notify_job_finished", fake_notify)
+    monkeypatch.setattr(runtime, "notify", fake_broadcast)
 
     async def work() -> int:
         return 7
@@ -179,12 +184,8 @@ def test_completion_sends_the_backgrounded_job_notification(monkeypatch: pytest.
 
     job = asyncio.run(drive())
     assert job.status == "done"
-    assert len(sent) == 1
-    content, meta = sent[0]
-    assert "notified" in content
-    assert "done" in content
-    assert meta["job_id"] == job.id
-    assert meta["status"] == "done"
+    assert sent == [job]
+    assert broadcasts == []
 
 
 def test_spawn_rejects_a_non_awaitable(monkeypatch: pytest.MonkeyPatch) -> None:
