@@ -477,6 +477,10 @@
           upstream = "hold";
           reason = "Language syntax change; must start as an upstream issue/RFC, and humans submit nix patches upstream per NixOS/nix#15984.";
         };
+        "0015-fix-libcmd-preserve-repeated-installable-cardinality.patch" = {
+          upstream = "hold";
+          reason = "Fixes repeated installables multiplying `nix build --json` results (indexable-inc/index#2633). Hold: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
       };
     }
   ];
