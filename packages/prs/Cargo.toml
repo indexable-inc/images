@@ -1,0 +1,23 @@
+[package]
+name = "prs"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Unified viewer for the repo's vendored-dependency patches and their upstream PR status"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+color-eyre.workspace = true
+ignore.workspace = true
+lazy-regex.workspace = true
+ratatui.workspace = true
+# Blocking client: the whole fetch is one or two batched GraphQL requests made
+# before the UI starts, so an async runtime buys nothing here. Native roots on
+# top of the workspace's webpki set so a TLS-intercepting proxy's CA
+# (SSL_CERT_FILE) is honored.
+reqwest = { workspace = true, features = ["blocking", "rustls-tls-native-roots"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
