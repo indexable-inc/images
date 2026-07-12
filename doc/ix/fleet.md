@@ -46,6 +46,8 @@ Deployment data supports `bootstrapImage`, `region`, `ipv4`, `snapshot`,
 `mkFleet` returns:
 
 - `planValue`: serializable topology and deployment data for `ix up`.
+  `schemaVersion = 1` is the typed ix/index compatibility boundary; `ix up`
+  rejects versions it does not understand.
 - `nodes`: evaluated node configurations for Nix authors.
 - `meta`: normalized node specifications.
 - `nixosConfigurations`: the systems `ix up` realizes on their target VMs.

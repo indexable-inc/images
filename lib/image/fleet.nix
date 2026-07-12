@@ -316,6 +316,9 @@ declarative fleet plan and evaluated NixOS configurations.
     checkedNodeSpecs;
 
   planValue = {
+    # Version the serialized ix/index boundary before either side evolves it.
+    # `ix up` must reject versions it does not understand.
+    schemaVersion = 1;
     order = attrNames checkedNodeSpecs;
     nodes = nodePlan;
   };

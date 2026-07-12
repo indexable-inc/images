@@ -5322,6 +5322,19 @@
 
     fleet = [
       {
+        assertion =
+          fleet.planValue.schemaVersion
+          == 1
+          && builtins.attrNames fleet
+          == [
+            "meta"
+            "nixosConfigurations"
+            "nodes"
+            "planValue"
+          ];
+        message = "mkFleet should expose the versioned ix plan boundary and only its four declarative outputs";
+      }
+      {
         assertion = builtins.pathExists (paths.examples + "/nixos/switch/flake.nix");
         message = "native ix up examples should include the flake.nix entrypoint the CLI resolves";
       }
